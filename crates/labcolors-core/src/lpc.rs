@@ -25,6 +25,7 @@ pub(crate) fn cam16_jch_from_xyz(xyz: [f64; 3], vc: &ViewingConditions) -> (f64,
 
 /// Chroma exponent in the Hellwig 2022 H-K lightness term
 /// `J_HK = J + f(h) * C^0.587` (source: see [`hk_coeff`]).
+#[cfg(test)]
 const HK_CHROMA_EXPONENT: f64 = 0.587;
 
 /// Hue-dependent Helmholtz-Kohlrausch coefficient `f(h)`, `h_cam_deg` in degrees.
@@ -38,6 +39,7 @@ const HK_CHROMA_EXPONENT: f64 = 0.587;
 /// `pub(crate)` so the external-reference-vector suite (`reference_vectors_deep`)
 /// can pin the RHS coefficients directly to the Hellwig 2022 publication; not
 /// part of the public API.
+#[cfg(test)]
 pub(crate) fn hk_coeff(h_cam_deg: f64) -> f64 {
     let h_cam = h_cam_deg.to_radians();
     -0.160 * h_cam.cos() + 0.132 * (2.0 * h_cam).cos() - 0.405 * h_cam.sin()
@@ -49,6 +51,7 @@ pub(crate) fn hk_coeff(h_cam_deg: f64) -> f64 {
 ///
 /// LPC supplies an H-K-adjusted `J` target; the physical inversion itself is
 /// shared appearance geometry in [`cam16::gray_y`].
+#[cfg(test)]
 pub(crate) fn y_hk(j_hk: f64, vc: &ViewingConditions) -> f64 {
     cam16::gray_y(j_hk, vc)
 }
@@ -236,6 +239,7 @@ pub(crate) fn contrast_core(y_fg: f64, y_bg: f64) -> f64 {
 
 /// Hellwig 2022 H-K-corrected lightness for an XYZ stimulus:
 /// `J_HK = J + f(h) * C^0.587`, with the chroma correlate `C = M / F_L^0.25`.
+#[cfg(test)]
 pub(crate) fn j_hk_from_xyz(xyz: [f64; 3], vc: &ViewingConditions) -> f64 {
     let (j, m, h) = cam16_jch_from_xyz(xyz, vc);
     j_hk_from_cam16(j, m, h, vc)
@@ -246,6 +250,7 @@ pub(crate) fn j_hk_from_xyz(xyz: [f64; 3], vc: &ViewingConditions) -> f64 {
 /// that already ran [`cam16::forward`] (e.g. [`crate::solve`]'s `finish`, which
 /// also needs the `LcsColor`) derive `J_HK` from the same forward pass instead
 /// of running a second identical one on the same stimulus.
+#[cfg(test)]
 pub(crate) fn j_hk_from_cam16(j: f64, m: f64, h: f64, vc: &ViewingConditions) -> f64 {
     // `vc.fl_pow_025` == инлайновый `vc.fl.powf(0.25)` (пер-VC константа,
     // вынесенная в `ViewingConditions::build`), так что `chroma` байт-идентична.
@@ -337,8 +342,8 @@ pub(crate) fn apparent_contrast_candidate_hex_with_vc_for_test(
 ///
 /// ADR-0003: Ys candidate score движка
 /// считает именно в этом домене — `solve::finish`/`meets_floor`, интервал фона,
-/// recheck-примитивы (`semantic::measure_contrast`, `recheck_against*`) и белая
-/// сторона кроссовера пары (`pair::pair_side`). Сам движок зовёт
+/// recheck-примитивы (`semantic::measure_contrast`, `recheck_against*`) и
+/// joint WCAG constraints. Сам движок зовёт
 /// [`contrast_core`] + [`crate::wcag::relative_luminance`] напрямую на уже
 /// готовых скалярах; эта функция — только test-reference той же формулы (те же
 /// функции, ноль новых констант). `Y_hk` остаётся отдельной appearance-

@@ -1162,13 +1162,6 @@ impl ModeledSrgb8PointOccurrence {
         self.visible
     }
 
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "shipped exact evaluator reads visible; backdrop is consumed by the test-private WCAG adapter"
-        )
-    )]
     pub(crate) fn backdrop(self) -> [u8; 3] {
         self.backdrop
     }

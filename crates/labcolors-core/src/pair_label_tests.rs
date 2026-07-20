@@ -1,456 +1,223 @@
-//! Характеризация boundary-адаптера `RoleSpec::PairLabel`.
-//!
-//! Класс, который закрывают эти тесты: контраст `label ↔ tinted-fill` у бейджа
-//! на тинт-фоне был ЭМЕРДЖЕНТНЫМ, не гарантированным. Обычные `label-*` роли
-//! решаются против ФОНА СТРАНИЦЫ и достигают своего WCAG-пола там; тинт-бейдж
-//! (`labui/lab-badge.ts`, `type=tinted`) кладёт их на `fill-*-primary` (@12
-//! семейный тинт) — на этой подложке контраст ниже, и для warning/success
-//! «цветной» лейбл (доля 0.4757, как `label-*-tertiary`) оседает к ~2.9:1 < 3:1.
-//! `PairLabel` решает оттеночный лейбл ПРОТИВ тинт-поверхности, поэтому пол
-//! гарантирован по построению; при недостижимости тон клампится (флаг
-//! `compressed`), а не молча выдаётся за точное выполнение контракта.
-//!
-//! Appearance-граф описывает только физическую цепочку заливки:
-//! solid paint → opacity paint → occurrence на контексте → derived surface.
-//! Downstream-солвер
-//! лейбла получает эту подложку без изменения своей математики. Тесты
-//! доказывают точность этой границы подложки, но не заявляют наличие
-//! финального label paint/occurrence или публичного recipe-контракта.
-//!
-//! Четыре группы:
-//!  1. `shipped_*` — реальный контракт labui (`label-<fam>-primary` на
-//!     `fill-<fam>-primary`) держит UI-пол на тинте во всех темах (гвардит то,
-//!     что уже отгружено, — near-black лейбл сейчас даёт 13–18:1).
-//!  2. `pair_label_*` — новая роль держит пол против тинт-поверхности во всех
-//!     client-defined families × light/dark (± IC).
-//!  3. `pair_label_beats_page_resolved_label` — дифференциальный RED-proof:
-//!     ТОТ ЖЕ контракт (доля 0.4757, `AaUi`), решённый против страницы
-//!     (`label-<fam>-tertiary`), проваливает 3:1 на тинте у warning/success,
-//!     а `PairLabel` (против поверхности) — держит. Разница ТОЛЬКО в подложке
-//!     резолва: если бы `resolve_pair_label` целил фон страницы, тест бы упал.
-//!  4. `fill_occurrence_backdrop_*` / `pair_fill_output_*` — appearance-путь
-//!     подложки байт-идентичен замороженному
-//!     ручному composite-oracle (матрица 5 семей × 4 режима × 6 фонов + property), включая
-//!     типизированный отказ выбранной alpha-ветви; поверхность PairLabel НЕ является
-//!     эмитированным PairFill (санитарный witness против ложного ребра).
+//! P1 acceptance tests: frozen Pair authoring lowers one-way into the common
+//! point graph. These tests intentionally do not reproduce the deleted
+//! `PairSide`/Oklab/H-K heuristic or a second compositing oracle.
 
-use proptest::prelude::*;
+use crate::Srgb8;
+use crate::composition::AdmittedOpacityV1;
+use crate::joint::JointConstraintDecisionV1;
+use crate::ladder::{LadderPosition, LadderTint};
+use crate::pair::{PairLabelRequirementV1, PairLoweringErrorV1, lower_fill, verify_label};
+use crate::semantic::{NamedRoleTable, Resolved, RoleChroma, RoleSpec, resolve_named_set};
+use crate::solve::{BgInput, Floor, SolveFailure};
+use crate::spaces::vc::ViewingConditions;
+use crate::wcag22::Wcag22CriterionV1;
 
-use crate::config::fixture::labui_reference;
-use crate::semantic::{resolve_pair_label, resolve_pair_label_manual_composite_oracle};
-use crate::solve::Floor;
-use crate::{
-    BgInput, LadderSource, LadderTint, Resolved, RoleRecipe, RoleSpec, SolveFailure,
-    ViewingConditions, resolve_named_set,
-};
-
-/// (имя семьи, источник лестницы) — 5 цветных семей тинт-бейджа labui
-/// (нейтраль/статики используют `label-primary`/семейный примитив, покрыты
-/// отдельно) .
-fn families() -> [(&'static str, LadderSource); 5] {
-    [
-        ("brand", LadderSource::Brand),
-        ("danger", LadderSource::Family("red".to_string())),
-        ("warning", LadderSource::Family("orange".to_string())),
-        ("success", LadderSource::Family("green".to_string())),
-        ("info", LadderSource::Family("blue".to_string())),
-    ]
+fn admitted(value: f64) -> AdmittedOpacityV1 {
+    AdmittedOpacityV1::new(value).expect("test opacity is admitted")
 }
 
-/// Четыре режима labui: тема (фон) × VC-пресет.
-fn themes() -> [(&'static str, &'static str, ViewingConditions); 4] {
-    [
-        ("light", "#FFFFFF", ViewingConditions::srgb()),
-        (
-            "light-ic",
-            "#FFFFFF",
-            ViewingConditions::srgb_high_contrast(),
-        ),
-        ("dark", "#101012", ViewingConditions::dim_surround()),
-        (
-            "dark-ic",
-            "#101012",
-            ViewingConditions::dim_surround_high_contrast(),
-        ),
-    ]
+fn tint(bytes: [u8; 3]) -> LadderTint {
+    let encoded = bytes.map(|byte| f64::from(byte) / 255.0);
+    LadderTint::new([encoded; 4]).expect("exact byte tint is valid")
 }
 
-/// Объявленный UI-пол из SSOT-контракта [`Floor::AaUi`]. Локальная
-/// копия числа запрещена: тест проверяет тот же пол, который энфорсит
-/// резолвер, и не дублирует его политику в фикстуре.
-fn ui_floor() -> f64 {
-    Floor::AaUi
-        .min_ratio()
-        .expect("AaUi несёт числовой юр. пол")
+fn bytes(hex: &str) -> Srgb8 {
+    Srgb8::new(crate::srgb8::hex_bytes(hex).expect("resolver emits #RRGGBB"))
 }
-
-fn enc(hex: &str) -> [f64; 3] {
-    crate::spaces::srgb::srgb_encoded_from_hex(hex).expect("тестовый hex валиден")
-}
-
-/// Тинт-поверхность семьи = композит `fill-<fam>-primary` (то, во что складывается
-/// `fill-*-tinted`).
-fn surface_hex(set: &[(String, Resolved)], fam: &str) -> String {
-    set.iter()
-        .find(|(n, _)| n == &format!("fill-{fam}-primary"))
-        .and_then(|(_, r)| r.translucent())
-        .map(|t| t.composite_hex().to_string())
-        .unwrap_or_else(|| panic!("fill-{fam}-primary — тинт-поверхность"))
-}
-
-/// Solved-hex цветной роли (лейбл).
-fn solid_hex(set: &[(String, Resolved)], role: &str) -> String {
-    set.iter()
-        .find(|(n, _)| n == role)
-        .and_then(|(_, r)| r.solved())
-        .map(|s| s.hex().to_string())
-        .unwrap_or_else(|| panic!("роль `{role}` обязана решиться цветом"))
-}
-
-/// WCAG-контраст роли против тинт-поверхности своей семьи.
-fn ratio_on_tint(set: &[(String, Resolved)], role: &str, fam: &str) -> f64 {
-    crate::wcag::contrast_ratio(enc(&solid_hex(set, role)), enc(&surface_hex(set, fam)))
-}
-
-/// Конфиг labui + добавленные роли `badge-label-<fam>` (`PairLabel`, доля
-/// 0.47572199 «цветного» уровня = `label-*-tertiary`, пол `AaUi`) — форма,
-/// которую тинт-бейдж должен потреблять.
-fn labui_with_badge_labels() -> crate::NamedRoleTable {
-    let mut cfg = labui_reference();
-    for (fam, source) in families() {
-        cfg.roles.push((
-            format!("badge-label-{fam}"),
-            RoleRecipe::PairLabel {
-                source,
-                fraction: 0.47572199,
-                floor: Floor::AaUi,
-            },
-        ));
-    }
-    cfg.compile_named_role_table()
-        .expect("labui + badge-label компилируется")
-}
-
-// ── 1. Отгруженный контракт: label-<fam>-primary на fill-<fam>-primary ────────
 
 #[test]
-fn shipped_tinted_badge_label_clears_ui_floor_on_tint_all_families_and_themes() {
-    let floor = ui_floor();
-    let table = labui_reference().compile_named_role_table().unwrap();
-    for (tname, bg_hex, vc) in themes() {
-        let bg = BgInput::solid(bg_hex).unwrap();
-        let set = resolve_named_set(&bg, &table, &vc)
-            .expect("валидный labui-контракт обязан резолвиться");
-        for (fam, _) in families() {
-            let r = ratio_on_tint(&set, &format!("label-{fam}-primary"), fam);
-            assert!(
-                r >= floor,
-                "[{tname}] отгруженный тинт-бейдж `label-{fam}-primary` на \
-                 `fill-{fam}-primary` обязан держать {floor}:1, получено {r:.2}:1"
-            );
-        }
-    }
-}
+fn pair_fill_is_one_real_source_over_occurrence() {
+    crate::composition::reset_source_over_evaluation_count();
+    let fill = lower_fill(
+        Srgb8::new([255, 0, 0]),
+        admitted(0.5),
+        Srgb8::new([0, 0, 255]),
+    );
 
-// ── 2. PairLabel: жёсткий пол против тинт-поверхности, все семьи × темы ────────
+    assert_eq!(crate::composition::source_over_evaluation_count(), 1);
+    assert_eq!(fill.paint().source(), Srgb8::new([255, 0, 0]));
+    assert_eq!(fill.paint().opacity(), admitted(0.5));
+    assert_eq!(fill.occurrence().certificate().backdrop_rgb(), [0, 0, 255]);
+    assert_eq!(fill.visible(), Srgb8::new([128, 0, 128]));
+}
 
 #[test]
-fn pair_label_clears_ui_floor_against_tinted_surface_all_families_and_themes() {
-    let floor = ui_floor();
-    let table = labui_with_badge_labels();
-    for (tname, bg_hex, vc) in themes() {
-        let bg = BgInput::solid(bg_hex).unwrap();
-        let set = resolve_named_set(&bg, &table, &vc)
-            .expect("валидный PairLabel-контракт обязан резолвиться");
-        for (fam, _) in families() {
-            let role = format!("badge-label-{fam}");
-            // Решается цветом (не SolveFailure/None) и держит пол на тинте.
-            let r = ratio_on_tint(&set, &role, fam);
-            assert!(
-                r >= floor,
-                "[{tname}] `{role}` обязан держать {floor}:1 против тинт-поверхности \
-                 `fill-{fam}-primary`, получено {r:.2}:1"
-            );
-        }
-    }
+fn pair_label_fresh_evidence_binds_upper_backdrop_to_emitted_fill() {
+    crate::composition::reset_source_over_evaluation_count();
+    let verified = verify_label(
+        Srgb8::new([255, 0, 0]),
+        admitted(0.5),
+        Srgb8::new([255, 255, 255]),
+        Srgb8::new([0, 0, 255]),
+        PairLabelRequirementV1::Exact(Srgb8::new([255, 255, 255])),
+    )
+    .expect("opaque label exactly satisfies identity requirement");
+
+    // Full report executes lower+upper once; mandatory fresh recheck repeats both.
+    assert_eq!(crate::composition::source_over_evaluation_count(), 4);
+    assert_eq!(verified.fill_occurrence().visible(), [128, 0, 128]);
+    assert_eq!(
+        verified.label_occurrence().certificate().backdrop_rgb(),
+        verified.fill_occurrence().visible()
+    );
+    assert_eq!(verified.label_occurrence().visible(), [255, 255, 255]);
+    assert_eq!(verified.evidence().fresh_executions().len(), 1);
+    assert_eq!(verified.evidence().fresh_cells().len(), 1);
 }
 
-/// Лейбл тинт-бейджа эмитит другой байтовый цвет, чем основной label семьи.
 #[test]
-fn pair_label_bytes_differ_from_primary_label() {
-    let table = labui_with_badge_labels();
-    let bg = BgInput::solid("#FFFFFF").unwrap();
-    let set = resolve_named_set(&bg, &table, &ViewingConditions::srgb())
-        .expect("валидный PairLabel-контракт обязан резолвиться");
-    for (fam, _) in families() {
-        let role = format!("badge-label-{fam}");
-        let res = &set.iter().find(|(n, _)| n == &role).unwrap().1;
-        let Resolved::Color { solved, .. } = res else {
-            panic!("`{role}` обязан решиться цветом");
-        };
-        // Здесь проверяется только различие представления; перцептивный порог из
-        // одного `assert_ne!` не выводится.
-        let primary = solid_hex(&set, &format!("label-{fam}-primary"));
-        assert_ne!(
-            solved.hex(),
-            primary,
-            "`{role}` не должен совпасть байт-в-байт с `label-{fam}-primary`"
-        );
-    }
-}
+fn wcag_is_checked_against_fill_surface_not_page_background() {
+    // White label would be 21:1 against the black page, but only ~3.95:1
+    // against the emitted 50%-white fill. AaText must therefore fail.
+    let error = verify_label(
+        Srgb8::new([255, 255, 255]),
+        admitted(0.5),
+        Srgb8::new([255, 255, 255]),
+        Srgb8::new([0, 0, 0]),
+        PairLabelRequirementV1::Wcag22(Wcag22CriterionV1::Sc143TextDefault),
+    )
+    .expect_err("actual fill surface does not satisfy 4.5:1");
 
-// ── 3. Дифференциальный RED-proof: подложка резолва — и есть констрейнт ────────
-
-/// ТОТ ЖЕ контракт (доля 0.4757, `AaUi`), решённый против СТРАНИЦЫ
-/// (`label-<fam>-tertiary`), проваливает 3:1 на тинте у warning/success в light;
-/// `PairLabel` (против ПОВЕРХНОСТИ) — держит. Единственная разница — подложка
-/// резолва: если `resolve_pair_label` целил бы фон страницы, «after» совпал бы с
-/// «before» и упал. Кусающийся тест, не green-from-birth.
-#[test]
-fn pair_label_beats_page_resolved_label_on_failing_families() {
-    let floor = ui_floor();
-    let table = labui_with_badge_labels();
-    let bg = BgInput::solid("#FFFFFF").unwrap();
-    let set = resolve_named_set(&bg, &table, &ViewingConditions::srgb())
-        .expect("валидный PairLabel-контракт обязан резолвиться");
-
-    // warning/success — семьи, где предпосылку о провале страничного
-    // `label-*-tertiary` на собственном тинте проверяет первый assert ниже.
-    for fam in ["warning", "success"] {
-        let before = ratio_on_tint(&set, &format!("label-{fam}-tertiary"), fam);
-        let after = ratio_on_tint(&set, &format!("badge-label-{fam}"), fam);
-        assert!(
-            before < floor,
-            "предпосылка класса: страничный `label-{fam}-tertiary` обязан \
-             проваливать {floor}:1 на тинте (иначе тест не о том), получено {before:.2}:1"
-        );
-        assert!(
-            after >= floor,
-            "`badge-label-{fam}` (тот же контракт, но против поверхности) обязан \
-             держать {floor}:1, получено {after:.2}:1"
-        );
-        assert!(
-            after > before,
-            "резолв против поверхности обязан ПОДНЯТЬ контраст на тинте: \
-             {fam} before={before:.2} after={after:.2}"
-        );
-    }
-}
-
-// ── 4. Fill occurrence-derived backdrop == замороженный oracle ──
-
-/// Скомпилированные параметры `RoleSpec::PairLabel` конкретной роли таблицы —
-/// вход обоих путей differential-а (appearance-путь и ручной oracle получают
-/// РОВНО одни аргументы, различие только в реализации).
-fn pair_label_spec(
-    table: &crate::NamedRoleTable,
-    role: &str,
-) -> (LadderTint, f64, Floor, f64, f64) {
-    let spec = table
-        .entries()
-        .iter()
-        .find(|(name, _)| name == role)
-        .map(|(_, spec)| spec)
-        .unwrap_or_else(|| panic!("роль `{role}` обязана существовать в таблице"));
-    match spec {
-        RoleSpec::PairLabel {
-            tint,
-            fraction,
-            floor,
-            surface_alpha_light,
-            surface_alpha_dark,
-        } => (
-            *tint,
-            *fraction,
-            *floor,
-            *surface_alpha_light,
-            *surface_alpha_dark,
-        ),
-        other => panic!("`{role}` обязан компилироваться в PairLabel, получено {other:?}"),
-    }
-}
-
-/// Шесть контекстных фонов differential-матрицы — coverage-выборка с
-/// подписанным происхождением каждой точки, НЕ production-правило:
-///
-/// * `#000000` / `#FFFFFF` — границы sRGB-куба; белый одновременно является
-///   отгруженным фоном светлых labui-тем (классы совпадают в этой дизайн-
-///   системе по факту фикстуры);
-/// * `#101012` — отгруженный фон тёмных labui-тем (фикстура);
-/// * `#767676` — опубликованная WCAG-граница серого (≈4.54:1 к белому),
-///   напрямую закреплённая
-///   `tests/reference_vectors.rs::wcag_published_ratios_via_public_api`;
-/// * `#FFF4E0` — хроматический светлый witness: точная warning-поверхность
-///   из graph-тестов (`appearance_graph_tests`);
-/// * `#0000FF` — насыщенный хроматический угол куба (sRGB primary).
-fn differential_backgrounds() -> [&'static str; 6] {
-    [
-        "#000000", "#101012", "#767676", "#FFF4E0", "#0000FF", "#FFFFFF",
-    ]
-}
-
-/// Appearance-путь вычисляет fill occurrence и derived backdrop, после чего
-/// неизменённый downstream-солвер обязан дать тот же `Resolved`, что и
-/// замороженный oracle: вариант,
-/// финальные байты, флаги, unreachable-причины. Никакого approximate equality:
-/// `assert_eq!` по `PartialEq` сравнивает и все числовые поля (одинаковые биты
-/// по построению одного downstream-солвера), а hex сверяется отдельно, чтобы
-/// байтовая эмиссия оставалась закреплённой даже при эволюции `PartialEq`.
-/// Это differential-доказательство границы подложки, а не наличия финального
-/// label occurrence в appearance-графе.
-#[test]
-fn fill_occurrence_backdrop_matrix_matches_frozen_pair_label_oracle_exactly() {
-    let table = labui_with_badge_labels();
-    let mut resolved_hits = 0usize;
-    for (tname, _, vc) in themes() {
-        for bg_hex in differential_backgrounds() {
-            let bg = BgInput::solid(bg_hex).unwrap();
-            for (fam, _) in families() {
-                let role = format!("badge-label-{fam}");
-                let (tint, fraction, floor, alpha_light, alpha_dark) =
-                    pair_label_spec(&table, &role);
-                let production =
-                    resolve_pair_label(&bg, tint, fraction, floor, alpha_light, alpha_dark, &vc);
-                let oracle = resolve_pair_label_manual_composite_oracle(
-                    &bg,
-                    tint,
-                    fraction,
-                    floor,
-                    alpha_light,
-                    alpha_dark,
-                    &vc,
-                );
-                assert_eq!(
-                    production, oracle,
-                    "[{tname}/{bg_hex}] `{role}`: production-граф обязан быть \
-                     идентичен замороженному ручному composite-oracle по всем полям"
-                );
-                for outcome in [&production, &oracle] {
-                    assert!(
-                        !matches!(
-                            outcome,
-                            Err(SolveFailure::InvalidInput(_)
-                                | SolveFailure::GamutUnsupported
-                                | SolveFailure::InternalInvariant(_))
-                        ),
-                        "[{tname}/{bg_hex}] `{role}`: a valid sRGB fixture produced a non-physical error: {outcome:?}"
-                    );
-                }
-                if let (
-                    Ok(Resolved::Color { solved: p, .. }),
-                    Ok(Resolved::Color { solved: o, .. }),
-                ) = (&production, &oracle)
-                {
-                    resolved_hits += 1;
-                    assert_eq!(
-                        p.hex(),
-                        o.hex(),
-                        "[{tname}/{bg_hex}] `{role}`: финальные байты эмиссии"
-                    );
-                }
-            }
-        }
-    }
-    assert!(
-        resolved_hits > 0,
-        "differential matrix must exercise successful colour resolution"
+    let PairLoweringErrorV1::Infeasible(report) = error else {
+        panic!("valid negative decision must be Infeasible, not a protocol error");
+    };
+    assert_eq!(report.executions()[0].lower_visible(), Srgb8::new([128; 3]));
+    assert_eq!(report.cells().len(), 1);
+    assert!(matches!(
+        report.cells()[0].decision(),
+        JointConstraintDecisionV1::Wcag22Violation(_)
+    ));
+    assert_eq!(
+        report.cells()[0].decision().target(),
+        Srgb8::new([128; 3]),
+        "WCAG evidence background is the emitted fill"
     );
 }
 
-/// Внутренний resolver обязан типизированно отклонять невалидную выбранную
-/// альфу до начала физического поиска. Публичный `NamedRoleTable` дополнительно
-/// валидирует обе theme-ветви при компиляции конфига.
 #[test]
-fn fill_occurrence_backdrop_path_rejects_selected_invalid_alpha_exactly() {
-    let table = labui_with_badge_labels();
-    let (tint, fraction, floor, _, _) = pair_label_spec(&table, "badge-label-warning");
-    for bad_alpha in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, -0.1, 1.5] {
-        for (bg_hex, vc, light, dark) in [
-            ("#FFFFFF", ViewingConditions::srgb(), bad_alpha, 0.122),
+fn exact_mismatch_is_infeasible_not_fault() {
+    let error = verify_label(
+        Srgb8::new([0, 0, 0]),
+        AdmittedOpacityV1::OPAQUE,
+        Srgb8::new([1, 2, 3]),
+        Srgb8::new([255, 255, 255]),
+        PairLabelRequirementV1::Exact(Srgb8::new([9, 9, 9])),
+    )
+    .expect_err("identity mismatch is a lawful hard violation");
+    assert!(matches!(error, PairLoweringErrorV1::Infeasible(_)));
+}
+
+#[test]
+fn named_pair_frontend_uses_the_same_fill_occurrence_end_to_end() {
+    let vc = ViewingConditions::srgb();
+    let source = Srgb8::new([96; 3]);
+    let source_tint = tint(source.bytes());
+    let (alpha_light, alpha_dark) = LadderPosition::FillPrimary.alpha_pair();
+    let table = NamedRoleTable::new(
+        vec![
+            ("pair-fill".into(), RoleSpec::PairFill { tint: source_tint }),
             (
-                "#101012",
-                ViewingConditions::dim_surround(),
-                0.122,
-                bad_alpha,
+                "pair-label".into(),
+                RoleSpec::PairLabel {
+                    tint: source_tint,
+                    fraction: 0.9,
+                    floor: Floor::AaText,
+                    surface_alpha_light: alpha_light,
+                    surface_alpha_dark: alpha_dark,
+                },
             ),
-        ] {
-            let bg = BgInput::solid(bg_hex).unwrap();
-            let production = resolve_pair_label(&bg, tint, fraction, floor, light, dark, &vc);
-            let oracle = resolve_pair_label_manual_composite_oracle(
-                &bg, tint, fraction, floor, light, dark, &vc,
-            );
-            assert_eq!(
-                production, oracle,
-                "theme-selected alpha branch must stay exact for alpha={bad_alpha}"
-            );
-            assert!(matches!(production, Err(SolveFailure::InvalidInput(_))));
-        }
-    }
+        ],
+        vec![],
+        RoleChroma::Neutral,
+    )
+    .expect("canonical Pair frontend compiles");
+    let page = BgInput::solid("#FFFFFF").unwrap();
+    let set = resolve_named_set(&page, &table, &vc).expect("canonical Pair resolves");
+
+    let fill = set
+        .iter()
+        .find(|(name, _)| name == "pair-fill")
+        .and_then(|(_, resolved)| resolved.translucent())
+        .expect("PairFill emits a translucent Paint");
+    let label = set
+        .iter()
+        .find(|(name, _)| name == "pair-label")
+        .and_then(|(_, resolved)| resolved.solved())
+        .expect("PairLabel emits a verified Color");
+
+    let opacity = admitted(LadderPosition::FillPrimary.alpha_for_vc(&vc));
+    let lowered = lower_fill(source, opacity, Srgb8::new([255; 3]));
+    assert_eq!(fill.tint_hex(), source.to_hex());
+    assert_eq!(fill.alpha().to_bits(), opacity.value().to_bits());
+    assert_eq!(fill.composite_hex(), lowered.visible().to_hex());
+    assert!(label.wcag_ratio() >= 4.5);
+
+    let verified = verify_label(
+        source,
+        opacity,
+        bytes(label.hex()),
+        Srgb8::new([255; 3]),
+        PairLabelRequirementV1::Wcag22(Wcag22CriterionV1::Sc143TextDefault),
+    )
+    .expect("semantic proposal passes the same joint contract");
+    assert_eq!(verified.fill_occurrence(), lowered.occurrence());
+    assert_eq!(verified.label_paint().source(), bytes(label.hex()));
 }
 
-/// Санитарный witness против ложного ребра `PairFill → PairLabel`: эмитированный
-/// `PairFill` — отдельно
-/// сдвинутый солид, он НЕ равен тинт-поверхности (композиту `fill-*-primary`),
-/// против которой решается `PairLabel`. Подмена derived backdrop эмитированным
-/// PairFill разойдётся с differential-матрицей именно потому, что эти значения
-/// различны.
 #[test]
-fn pair_fill_output_differs_from_fill_occurrence_derived_backdrop() {
-    let mut cfg = labui_reference();
-    for (fam, source) in families() {
-        cfg.roles
-            .push((format!("pair-fill-{fam}"), RoleRecipe::PairFill { source }));
-    }
-    let table = cfg
-        .compile_named_role_table()
-        .expect("labui + pair-fill компилируется");
-    let bg = BgInput::solid("#FFFFFF").unwrap();
-    let set = resolve_named_set(&bg, &table, &ViewingConditions::srgb())
-        .expect("валидный PairFill-контракт обязан резолвиться");
-    for (fam, _) in families() {
-        let pair_fill_composite = set
-            .iter()
-            .find(|(name, _)| name == &format!("pair-fill-{fam}"))
-            .and_then(|(_, resolved)| resolved.translucent())
-            .map(|t| t.composite_hex().to_string())
-            .unwrap_or_else(|| panic!("pair-fill-{fam} обязан решиться"));
-        let surface = surface_hex(&set, fam);
-        assert_ne!(
-            pair_fill_composite, surface,
-            "{fam}: эмитированный PairFill не является поверхностью PairLabel"
-        );
-    }
+fn pair_label_transport_alpha_cannot_fork_physical_semantics() {
+    let source = tint([96; 3]);
+    let (light, dark) = LadderPosition::FillPrimary.alpha_pair();
+    let error = NamedRoleTable::new(
+        vec![(
+            "pair-label".into(),
+            RoleSpec::PairLabel {
+                tint: source,
+                fraction: 0.9,
+                floor: Floor::AaText,
+                surface_alpha_light: f64::from_bits(light.to_bits() + 1),
+                surface_alpha_dark: dark,
+            },
+        )],
+        vec![],
+        RoleChroma::Neutral,
+    )
+    .expect_err("noncanonical Pair surface alpha must fail at compilation");
+    assert!(matches!(
+        error,
+        SolveFailure::InvalidInput(message)
+            if message.contains("code-owned by FillPrimary")
+    ));
 }
 
-// Property-differential: произвольные источник/контекст/альфы/доля/пол/режим
-// проверяют точную замену пути подложки. Downstream-солвер в обоих путях
-// один и тот же.
-proptest! {
-    #[test]
-    fn fill_occurrence_backdrop_property_matches_frozen_pair_label_oracle(
-        source in any::<[u8; 3]>(),
-        context in any::<[u8; 3]>(),
-        alpha_light in 0.0f64..=1.0,
-        alpha_dark in 0.0f64..=1.0,
-        fraction in 0.01f64..1.0,
-        floor_pick in 0usize..3,
-        theme_pick in 0usize..4,
-    ) {
-        let encoded = source.map(|channel| f64::from(channel) / 255.0);
-        let tint = LadderTint::new([encoded; 4]).expect("byte/255 всегда в домене");
-        let context_hex = format!(
-            "#{:02X}{:02X}{:02X}",
-            context[0], context[1], context[2]
-        );
-        let bg = BgInput::solid(&context_hex).expect("байтовый hex валиден");
-        let floor = [Floor::AaText, Floor::AaUi, Floor::None][floor_pick];
-        let (_, _, vc) = themes()[theme_pick];
-        let production = resolve_pair_label(
-            &bg, tint, fraction, floor, alpha_light, alpha_dark, &vc,
-        );
-        let oracle = resolve_pair_label_manual_composite_oracle(
-            &bg, tint, fraction, floor, alpha_light, alpha_dark, &vc,
-        );
-        prop_assert_eq!(production, oracle);
-    }
+#[test]
+fn pair_frontend_has_only_color_or_translucent_terminal_shapes() {
+    let source = tint([96; 3]);
+    let (light, dark) = LadderPosition::FillPrimary.alpha_pair();
+    let table = NamedRoleTable::new(
+        vec![
+            ("fill".into(), RoleSpec::PairFill { tint: source }),
+            (
+                "label".into(),
+                RoleSpec::PairLabel {
+                    tint: source,
+                    fraction: 0.9,
+                    floor: Floor::AaText,
+                    surface_alpha_light: light,
+                    surface_alpha_dark: dark,
+                },
+            ),
+        ],
+        vec![],
+        RoleChroma::Neutral,
+    )
+    .unwrap();
+    let results = resolve_named_set(
+        &BgInput::solid("#FFFFFF").unwrap(),
+        &table,
+        &ViewingConditions::srgb(),
+    )
+    .unwrap();
+    assert!(matches!(results[0].1, Resolved::Translucent(_)));
+    assert!(matches!(results[1].1, Resolved::Color { .. }));
 }

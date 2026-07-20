@@ -17,7 +17,7 @@
 //! * `LABUI_ANCHORS` — 49 РЕАЛЬНЫХ якорей labui (замороженный паспорт
 //!   `crates/labcolors-wasm/tests/data/labui.config.json`).
 
-use crate::spaces::srgb::{srgb_encoded_from_hex, srgb_gamma_inv};
+use crate::spaces::srgb::srgb_encoded_from_hex;
 
 /// 49 реальных якорей Lab UI (бренд, семейства и нейтрали) из паспорта.
 /// Дедуп-набор всех hex-литералов паспорта — «реальные входы» экспозиции.
@@ -48,21 +48,6 @@ pub(crate) fn rgb_cube(mut f: impl FnMut([u8; 3])) {
 pub(crate) fn grid_size() -> usize {
     let n = (0u16..256).step_by(8).count();
     n * n * n
-}
-
-/// WCAG-люминанс (Rec.709) кодированного 8-битного цвета.
-pub(crate) fn wcag_y(rgb: [u8; 3]) -> f64 {
-    let e = [
-        rgb[0] as f64 / 255.0,
-        rgb[1] as f64 / 255.0,
-        rgb[2] as f64 / 255.0,
-    ];
-    let l = [
-        srgb_gamma_inv(e[0]),
-        srgb_gamma_inv(e[1]),
-        srgb_gamma_inv(e[2]),
-    ];
-    0.2126 * l[0] + 0.7152 * l[1] + 0.0722 * l[2]
 }
 
 /// 8-битные каналы hex-якоря.

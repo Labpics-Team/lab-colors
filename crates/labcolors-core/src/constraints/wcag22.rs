@@ -1,5 +1,8 @@
 use crate::appearance::ModeledSrgb8PointOccurrence;
-use crate::constraints::{Evaluator, HardClassifier, HardDecision, private};
+use crate::constraints::{
+    Evaluator, HardClassifier, HardDecision, VisiblePointPassEvidence,
+    VisiblePointViolationEvidence, private,
+};
 use crate::numerics::NumericalDecisionEvidenceV1;
 use crate::wcag22::{
     Wcag22ApplicableDecisionV1, Wcag22AssessmentV1, Wcag22ClientDeclaredNotApplicableV1,
@@ -17,7 +20,7 @@ pub(crate) struct Wcag22Srgb8EvaluatorIdentityV1;
 
 /// Applicable-only WCAG measurement. Private fields make report-only
 /// `NotEvaluated` and a mismatched criterion unrepresentable after refinement.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct ApplicableWcag22MeasurementV1 {
     profile_id: Wcag22ProfileIdV1,
     criterion: Wcag22CriterionV1,
@@ -27,10 +30,12 @@ pub(crate) struct ApplicableWcag22MeasurementV1 {
 }
 
 impl ApplicableWcag22MeasurementV1 {
+    #[cfg(test)]
     pub(crate) const fn profile_id(&self) -> Wcag22ProfileIdV1 {
         self.profile_id
     }
 
+    #[cfg(test)]
     pub(crate) const fn criterion(&self) -> Wcag22CriterionV1 {
         self.criterion
     }
@@ -39,10 +44,12 @@ impl ApplicableWcag22MeasurementV1 {
         &self.measurement
     }
 
+    #[cfg(test)]
     pub(crate) const fn decision(&self) -> Wcag22ApplicableDecisionV1 {
         self.decision
     }
 
+    #[cfg(test)]
     pub(crate) const fn evidence(&self) -> &NumericalDecisionEvidenceV1 {
         &self.evidence
     }
@@ -105,6 +112,9 @@ pub(crate) struct Wcag22PassV1(());
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Wcag22ViolationV1(());
+
+pub(crate) type Wcag22PassEvidenceV1 = VisiblePointPassEvidence<Wcag22Srgb8V1>;
+pub(crate) type Wcag22ViolationEvidenceV1 = VisiblePointViolationEvidence<Wcag22Srgb8V1>;
 
 impl private::EvaluatorSealed for Wcag22Srgb8V1 {}
 impl private::HardClassifierSealed for Wcag22Srgb8V1 {}

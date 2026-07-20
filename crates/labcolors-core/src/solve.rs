@@ -225,7 +225,7 @@ impl BgInput {
     /// число) and the CAM16-UCS lightness `J'_bg` (needed only by the dJ'
     /// roles). Бывший третий скаляр — H-K-люминанс `Y_hk` — не входит в
     /// candidate-score путь и живёт только на яркостной оси
-    /// ([`bg_luma`]: сторона пары, свечение, семейные цветовые операции). Verified by an
+    /// ([`bg_luma`]: свечение и явно brightness-scoped семейные операции). Verified by an
     /// exhaustive trace of every `bg` read on the `resolve_set_live` path.
     /// The representation stays an interval so a future field background can
     /// supply bounded endpoints without changing the solver contract.
@@ -1338,18 +1338,6 @@ fn meets_floor(solved: &Solved, y_bg: f64, target: f64, _vc: &ViewingConditions)
     let y_fg = wcag::relative_luminance(disp);
     let lc = lpc::contrast_core(y_fg, y_bg);
     meets_floor_lc(lc, target)
-}
-
-/// H-K-corrected luminance (`Y_hk`) of a linear-sRGB stimulus — воспринимаемая
-/// ЯРКОСТЬ поверхности (Гельмгольц–Кольрауш, серый эквивалент `J_HK`).
-///
-/// После ADR-0003 Ys candidate-score путь это НЕ читает: контракт
-/// контраста, полы и recheck меряются в `Ys`. Потребители — яркостная ось:
-/// выбор стороны внутренней pair-эвристики (`pair_side` — H-K-сдвиг кроссовера на
-/// насыщенных фонах) и яркостные подсистемы.
-pub(crate) fn bg_luma(rgb: [f64; 3], vc: &ViewingConditions) -> f64 {
-    let j_hk = lpc::j_hk_from_xyz(srgb_to_xyz(rgb), vc).max(0.0);
-    lpc::y_hk(j_hk, vc)
 }
 
 /// Test-only examined-candidate log (#297 local-search truth): both local
