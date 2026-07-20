@@ -1,27 +1,36 @@
-//! Приватная typed-связка physical target и evaluator-а.
+//! Приватная typed-связка physical measurement, hard-classifier и evidence.
 //!
-//! Модуль не является public registry: он лишь гарантирует, что assessment
-//! сохраняет identity физического evidence и release реально вызванного
+//! Evaluator только измеряет modeled occurrence. Hard verdict появляется один
+//! раз в sealed classifier-е, после чего source-specific binder атомарно
+//! связывает результат с physical occurrence и metadata реально вызванного
 //! evaluator-а.
 
+use crate::Srgb8;
 use crate::appearance::{ModeledSrgb8PointOccurrence, ResolvedOccurrence, VisiblePointBindingV1};
 
 mod exact;
 pub(crate) use exact::{
-    ExactConstraintIdentityV1, ExactIdentityAssessmentV1, ExactIdentityCapabilityV1,
-    ExactIdentityMismatchV1, ExactIdentityReleaseV1, ExactSrgb8IdentityV1,
+    ExactConstraintIdentityV1, ExactIdentityCapabilityV1, ExactIdentityReleaseV1,
+    ExactPassEvidenceV1, ExactSrgb8IdentityV1, ExactViolationEvidenceV1,
 };
+
+#[cfg(test)]
+pub(crate) use exact::ExactIdentityPassV1;
 
 #[cfg(test)]
 mod wcag22;
 
 #[cfg(test)]
-pub(crate) use wcag22::{Wcag22Srgb8CapabilityV1, Wcag22Srgb8EvaluatorIdentityV1, Wcag22Srgb8V1};
+pub(crate) use wcag22::{
+    ApplicableWcag22EvaluationErrorV1, ApplicableWcag22MeasurementV1, Wcag22PassV1, Wcag22Srgb8V1,
+    Wcag22ViolationV1,
+};
 
-/// Marker-ы недоступны внешним crate-ам: новые target/evaluator families
+/// Seals недоступны внешним crate-ам: новые evaluator/classifier families
 /// добавляются только вместе с code-owned physical adapter-ом.
 mod private {
     pub trait EvaluatorSealed {}
+    pub trait HardClassifierSealed {}
 }
 
 pub(crate) trait Evaluator<Target>: private::EvaluatorSealed {
@@ -29,7 +38,7 @@ pub(crate) trait Evaluator<Target>: private::EvaluatorSealed {
     type Identity;
     type Release;
     type Capability;
-    type Assessment;
+    type Measurement;
     type Error;
 
     fn identity(&self) -> Self::Identity;
@@ -42,24 +51,24 @@ pub(crate) trait Evaluator<Target>: private::EvaluatorSealed {
         &self,
         target: &Target,
         invocation: &Self::Invocation,
-    ) -> Result<Self::Assessment, Self::Error>;
+    ) -> Result<Self::Measurement, Self::Error>;
 }
 
-/// Один outcome вместе с exact physical binding и metadata действительно
-/// вызванного evaluator-а. Один и тот же carrier используется для PASS и FAIL,
-/// поэтому отказ не теряет provenance и не восстанавливает её вручную.
+/// Одно измерение вместе с exact physical binding и metadata действительно
+/// вызванного evaluator-а. Поля закрыты: binding создаёт только адаптер того
+/// physical source, из которого одновременно получены target и certificate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct BoundEvidence<Binding, Identity, Release, Capability, Invocation, Outcome> {
+pub(crate) struct BoundEvidence<Binding, Identity, Release, Capability, Invocation, Measurement> {
     binding: Binding,
     identity: Identity,
     release: Release,
     capability: Capability,
     invocation: Invocation,
-    outcome: Outcome,
+    measurement: Measurement,
 }
 
-impl<Binding, Identity, Release, Capability, Invocation, Outcome>
-    BoundEvidence<Binding, Identity, Release, Capability, Invocation, Outcome>
+impl<Binding, Identity, Release, Capability, Invocation, Measurement>
+    BoundEvidence<Binding, Identity, Release, Capability, Invocation, Measurement>
 {
     pub(crate) fn binding(&self) -> &Binding {
         &self.binding
@@ -81,124 +90,227 @@ impl<Binding, Identity, Release, Capability, Invocation, Outcome>
         &self.invocation
     }
 
-    pub(crate) fn outcome(&self) -> &Outcome {
-        &self.outcome
-    }
-
-    pub(crate) fn into_outcome(self) -> Outcome {
-        self.outcome
+    #[cfg(test)]
+    pub(crate) fn measurement(&self) -> &Measurement {
+        &self.measurement
     }
 }
 
-pub(crate) type BoundAssessment<Binding, Identity, Release, Capability, Invocation, Assessment> =
-    BoundEvidence<Binding, Identity, Release, Capability, Invocation, Assessment>;
-
-pub(crate) type BoundFailure<Binding, Identity, Release, Capability, Invocation, Error> =
-    BoundEvidence<Binding, Identity, Release, Capability, Invocation, Error>;
-
+/// Raw measurement, доказанно отнесённое classifier-ом ровно к одному
+/// несовместимому исходу. Закрытый payload подтверждает решение classifier-а,
+/// но не может заменить исходное measurement.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum BoundVerdict<Binding, Identity, Release, Capability, Invocation, Assessment, Error>
-{
-    Pass(BoundAssessment<Binding, Identity, Release, Capability, Invocation, Assessment>),
-    Fail(BoundFailure<Binding, Identity, Release, Capability, Invocation, Error>),
+pub(crate) struct ClassifiedMeasurement<Measurement, Classification> {
+    measurement: Measurement,
+    classification: Classification,
 }
 
-pub(crate) type AssessmentResult<Evaluation> = BoundVerdict<
+impl<Measurement, Classification> ClassifiedMeasurement<Measurement, Classification> {
+    fn new(measurement: Measurement, classification: Classification) -> Self {
+        Self {
+            measurement,
+            classification,
+        }
+    }
+
+    pub(crate) fn value(&self) -> &Measurement {
+        &self.measurement
+    }
+}
+
+/// Два несовместимых hard-решения после успешного измерения. Ошибка evaluator-а
+/// остаётся внешним `Result::Err`: отдельный `Fault` появится только вместе с
+/// первым реальным fallible consumer и его исполняемым контрактом.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum HardDecision<Pass, Violation> {
+    Pass(Pass),
+    Violation(Violation),
+}
+
+/// Sealed hard-classifier — единственный слой, которому разрешено превращать
+/// raw measurement и invocation в Pass/Violation.
+pub(crate) trait HardClassifier<Invocation, Measurement>:
+    private::HardClassifierSealed
+{
+    type Pass;
+    type Violation;
+
+    fn classify(
+        &self,
+        invocation: &Invocation,
+        measurement: &Measurement,
+    ) -> HardDecision<Self::Pass, Self::Violation>;
+}
+
+type PointInvocation<Evaluation> =
+    <Evaluation as Evaluator<ModeledSrgb8PointOccurrence>>::Invocation;
+type PointMeasurement<Evaluation> =
+    <Evaluation as Evaluator<ModeledSrgb8PointOccurrence>>::Measurement;
+type PointPass<Evaluation> =
+    <Evaluation as HardClassifier<PointInvocation<Evaluation>, PointMeasurement<Evaluation>>>::Pass;
+type PointViolation<Evaluation> = <Evaluation as HardClassifier<
+    PointInvocation<Evaluation>,
+    PointMeasurement<Evaluation>,
+>>::Violation;
+
+type BoundVisiblePointMeasurement<Evaluation, Measurement> = BoundEvidence<
     VisiblePointBindingV1,
     <Evaluation as Evaluator<ModeledSrgb8PointOccurrence>>::Identity,
     <Evaluation as Evaluator<ModeledSrgb8PointOccurrence>>::Release,
     <Evaluation as Evaluator<ModeledSrgb8PointOccurrence>>::Capability,
     <Evaluation as Evaluator<ModeledSrgb8PointOccurrence>>::Invocation,
-    <Evaluation as Evaluator<ModeledSrgb8PointOccurrence>>::Assessment,
-    <Evaluation as Evaluator<ModeledSrgb8PointOccurrence>>::Error,
+    Measurement,
 >;
 
-pub(crate) fn assess<Evaluation>(
+pub(crate) type VisiblePointPassEvidence<Evaluation> = BoundVisiblePointMeasurement<
+    Evaluation,
+    ClassifiedMeasurement<PointMeasurement<Evaluation>, PointPass<Evaluation>>,
+>;
+
+pub(crate) type VisiblePointViolationEvidence<Evaluation> = BoundVisiblePointMeasurement<
+    Evaluation,
+    ClassifiedMeasurement<PointMeasurement<Evaluation>, PointViolation<Evaluation>>,
+>;
+
+/// Единственный binder hard-classifier-а для final visible point. Modeled
+/// target и binding берутся из одного occurrence; metadata связывается только
+/// после успешного measurement и классификации.
+pub(crate) fn assess_visible_point_hard<Evaluation>(
     source: &ResolvedOccurrence,
     evaluator: &Evaluation,
-    invocation: Evaluation::Invocation,
-) -> AssessmentResult<Evaluation>
+    invocation: PointInvocation<Evaluation>,
+) -> Result<
+    HardDecision<VisiblePointPassEvidence<Evaluation>, VisiblePointViolationEvidence<Evaluation>>,
+    <Evaluation as Evaluator<ModeledSrgb8PointOccurrence>>::Error,
+>
 where
-    Evaluation: Evaluator<ModeledSrgb8PointOccurrence>,
+    Evaluation: Evaluator<ModeledSrgb8PointOccurrence>
+        + HardClassifier<PointInvocation<Evaluation>, PointMeasurement<Evaluation>>,
 {
     let target = source.modeled_srgb8_point();
     let binding = source.visible_point_binding();
-    let verdict = evaluator.evaluate(&target, &invocation);
+    let measurement = evaluator.evaluate(&target, &invocation)?;
+    let classification = evaluator.classify(&invocation, &measurement);
     let identity = evaluator.identity();
     let release = evaluator.release();
     let capability = evaluator.capability();
-    match verdict {
-        Ok(outcome) => BoundVerdict::Pass(BoundEvidence {
+
+    Ok(match classification {
+        HardDecision::Pass(payload) => HardDecision::Pass(BoundEvidence {
             binding,
             identity,
             release,
             capability,
             invocation,
-            outcome,
+            measurement: ClassifiedMeasurement::new(measurement, payload),
         }),
-        Err(outcome) => BoundVerdict::Fail(BoundEvidence {
+        HardDecision::Violation(payload) => HardDecision::Violation(BoundEvidence {
             binding,
             identity,
             release,
             capability,
             invocation,
-            outcome,
+            measurement: ClassifiedMeasurement::new(measurement, payload),
         }),
+    })
+}
+
+impl<Binding, Identity, Release, Capability, Classification>
+    BoundEvidence<
+        Binding,
+        Identity,
+        Release,
+        Capability,
+        Srgb8,
+        ClassifiedMeasurement<Srgb8, Classification>,
+    >
+{
+    pub(crate) fn target(&self) -> Srgb8 {
+        self.invocation
+    }
+
+    pub(crate) fn actual(&self) -> Srgb8 {
+        *self.measurement.value()
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{BoundVerdict, Evaluator, ModeledSrgb8PointOccurrence, assess, private};
+    use super::{
+        Evaluator, HardClassifier, HardDecision, ModeledSrgb8PointOccurrence,
+        assess_visible_point_hard, private,
+    };
+    use crate::Srgb8;
     use crate::appearance::PointOpacityOverSurfaceV1;
+    use core::convert::Infallible;
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-    struct SentinelError;
+    struct SentinelPass(());
 
-    struct FailingEvaluator;
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    struct SentinelViolation(());
 
-    impl private::EvaluatorSealed for FailingEvaluator {}
+    struct SubstitutionAttemptEvaluator {
+        measured: Srgb8,
+        attempted_replacement: Srgb8,
+    }
 
-    impl Evaluator<ModeledSrgb8PointOccurrence> for FailingEvaluator {
-        type Invocation = ();
-        type Identity = &'static str;
-        type Release = &'static str;
-        type Capability = &'static str;
-        type Assessment = ();
-        type Error = SentinelError;
+    impl private::EvaluatorSealed for SubstitutionAttemptEvaluator {}
+    impl private::HardClassifierSealed for SubstitutionAttemptEvaluator {}
 
-        fn identity(&self) -> Self::Identity {
-            "sentinel-law"
-        }
+    impl Evaluator<ModeledSrgb8PointOccurrence> for SubstitutionAttemptEvaluator {
+        type Invocation = Srgb8;
+        type Identity = ();
+        type Release = ();
+        type Capability = ();
+        type Measurement = Srgb8;
+        type Error = Infallible;
 
-        fn release(&self) -> Self::Release {
-            "sentinel-v1"
-        }
+        fn identity(&self) {}
 
-        fn capability(&self) -> Self::Capability {
-            "sentinel-point"
-        }
+        fn release(&self) {}
+
+        fn capability(&self) {}
 
         fn evaluate(
             &self,
             _target: &ModeledSrgb8PointOccurrence,
             _invocation: &Self::Invocation,
-        ) -> Result<Self::Assessment, Self::Error> {
-            Err(SentinelError)
+        ) -> Result<Self::Measurement, Self::Error> {
+            Ok(self.measured)
+        }
+    }
+
+    impl HardClassifier<Srgb8, Srgb8> for SubstitutionAttemptEvaluator {
+        type Pass = SentinelPass;
+        type Violation = SentinelViolation;
+
+        fn classify(
+            &self,
+            _invocation: &Srgb8,
+            measurement: &Srgb8,
+        ) -> HardDecision<Self::Pass, Self::Violation> {
+            assert_eq!(*measurement, self.measured);
+            let _forbidden_substitute = self.attempted_replacement;
+            HardDecision::Pass(SentinelPass(()))
         }
     }
 
     #[test]
-    fn evaluator_error_is_returned_without_report_or_fallback() {
+    fn classifier_payload_cannot_replace_the_evaluator_measurement() {
         let occurrence = PointOpacityOverSurfaceV1::evaluate([1, 2, 3], 0.5, [4, 5, 6])
             .unwrap_or_else(|error| panic!("valid point occurrence rejected: {}", error.message()));
-        let BoundVerdict::Fail(error) = assess(&occurrence, &FailingEvaluator, ()) else {
-            panic!("failing evaluator unexpectedly passed");
+        let evaluator = SubstitutionAttemptEvaluator {
+            measured: Srgb8::new([0x80; 3]),
+            attempted_replacement: Srgb8::new([0x00; 3]),
         };
-        assert_eq!(error.outcome(), &SentinelError);
-        assert_eq!(error.identity(), &"sentinel-law");
-        assert_eq!(error.release(), &"sentinel-v1");
-        assert_eq!(error.capability(), &"sentinel-point");
-        assert_eq!(error.invocation(), &());
+        let Ok(HardDecision::Pass(evidence)) =
+            assess_visible_point_hard(&occurrence, &evaluator, Srgb8::new([0x80; 3]))
+        else {
+            panic!("control classifier must return Pass");
+        };
+
+        assert_eq!(evidence.actual(), evaluator.measured);
+        assert_ne!(evidence.actual(), evaluator.attempted_replacement);
     }
 }

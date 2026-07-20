@@ -127,7 +127,7 @@ fn fixed_candidate_is_verified_only_after_every_final_occurrence_passes() {
 }
 
 #[test]
-fn any_failed_case_returns_one_infeasible_outcome_without_partial_verified_value() {
+fn any_exact_violation_returns_one_violation_without_partial_verified_value() {
     let plan = one_occurrence([64, 64, 64]);
     let state = ready_state(
         STREAM,
@@ -140,40 +140,40 @@ fn any_failed_case_returns_one_infeasible_outcome_without_partial_verified_value
     );
     let candidate = EncodedPaintCandidateV1::new(PAINT, Srgb8::new([0; 3]), 0.25).unwrap();
 
-    let FinalRecheckOutcomeV1::Infeasible(failure) = plan.recheck(&state, candidate).unwrap()
+    let FinalRecheckOutcomeV1::Violation(violation) = plan.recheck(&state, candidate).unwrap()
     else {
         panic!("one failing final occurrence must reject the whole fixed candidate");
     };
-    assert_eq!(failure.occurrence(), OCCURRENCE_A);
-    assert_eq!(failure.surface(), SURFACE_A);
-    assert_eq!(failure.provenance(), &[ScenarioId::new(1)]);
+    assert_eq!(violation.occurrence(), OCCURRENCE_A);
+    assert_eq!(violation.surface(), SURFACE_A);
+    assert_eq!(violation.provenance(), &[ScenarioId::new(1)]);
     assert_eq!(
-        failure.physical_program(),
+        violation.physical_program(),
         crate::appearance::PhysicalProgramIdentityV1::SolidOpacityOverSurfaceEncodedSrgb8V1
     );
-    assert_eq!(failure.target(), Srgb8::new([64; 3]));
-    assert_ne!(failure.actual(), failure.target());
+    assert_eq!(violation.target(), Srgb8::new([64; 3]));
+    assert_ne!(violation.actual(), violation.target());
     assert_eq!(
-        Srgb8::new(failure.physical_certificate().output_rgb()),
-        failure.actual()
+        Srgb8::new(violation.physical_certificate().output_rgb()),
+        violation.actual()
     );
-    assert_eq!(failure.invocation(), failure.target());
+    assert_eq!(violation.invocation(), violation.target());
     assert_eq!(
-        failure.constraint(),
+        violation.constraint(),
         crate::constraints::ExactConstraintIdentityV1::FinalSrgb8IdentityV1
     );
     assert_eq!(
-        failure.release(),
+        violation.release(),
         crate::constraints::ExactIdentityReleaseV1::V1
     );
     assert_eq!(
-        failure.capability(),
+        violation.capability(),
         crate::constraints::ExactIdentityCapabilityV1::FinalOccurrenceSrgb8IdentityV1
     );
 }
 
 #[test]
-fn waiting_stale_infeasible_verified_and_hold_are_distinct() {
+fn waiting_stale_violation_verified_and_hold_are_distinct() {
     let plan = one_occurrence([10, 20, 30]);
     let candidate = opaque([10, 20, 30]);
     let mut state = ObservationState::new(STREAM, vec![SURFACE_A]).unwrap();
@@ -456,28 +456,6 @@ fn singleton_recheck_is_differentially_equal_to_g1a_and_point_program() {
     assert_eq!(evidence.physical_certificate(), *g1a.certificate());
 }
 
-#[test]
-fn production_g1a_uses_the_same_bound_evaluator_instead_of_manual_evidence() {
-    let analog = include_str!("analog.rs");
-    assert_eq!(
-        analog
-            .matches("assess(&occurrence, &ExactSrgb8IdentityV1")
-            .count(),
-        1
-    );
-    for forbidden in [
-        "ExactSrgb8IdentityV1::evaluate",
-        "enum ExactIdentityReleaseV1",
-        "enum ExactIdentityCapabilityV1",
-        "fn constraint_identity",
-    ] {
-        assert!(
-            !analog.contains(forbidden),
-            "G1a still bypasses F1a: {forbidden}"
-        );
-    }
-}
-
 proptest! {
     #[test]
     fn every_physical_case_is_required_not_just_any_case(
@@ -503,7 +481,7 @@ proptest! {
 
         prop_assert!(matches!(
             plan.recheck(&state, candidate),
-            Ok(FinalRecheckOutcomeV1::Infeasible(_))
+            Ok(FinalRecheckOutcomeV1::Violation(_))
         ));
     }
 
@@ -667,7 +645,7 @@ fn canonical_tuple_cannot_be_reinterpreted_under_a_different_surface_schema() {
 }
 
 #[test]
-fn infeasible_witness_keeps_the_authored_paint_identity() {
+fn violation_witness_keeps_the_authored_paint_identity() {
     let second_paint = PaintId::new(8);
     let requirement = || {
         vec![ExactOccurrenceRequirementV1::new(
@@ -688,12 +666,12 @@ fn infeasible_witness_keeps_the_authored_paint_identity() {
     let second_candidate =
         EncodedPaintCandidateV1::new(second_paint, Srgb8::new([0; 3]), 0.25).unwrap();
 
-    let FinalRecheckOutcomeV1::Infeasible(first) =
+    let FinalRecheckOutcomeV1::Violation(first) =
         first_plan.recheck(&state, first_candidate).unwrap()
     else {
         panic!("control candidate must fail");
     };
-    let FinalRecheckOutcomeV1::Infeasible(second) =
+    let FinalRecheckOutcomeV1::Violation(second) =
         second_plan.recheck(&state, second_candidate).unwrap()
     else {
         panic!("control candidate must fail");

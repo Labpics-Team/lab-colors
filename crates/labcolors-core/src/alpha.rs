@@ -455,8 +455,31 @@ pub fn resolve_alpha_analog_hex(
         target,
         requested_alpha,
         backdrop,
-    )?;
+    )
+    .map_err(resolve_verified_error_message)?;
     Ok((verified.tint().to_hex(), verified.alpha()))
+}
+
+fn resolve_verified_error_message(error: crate::analog::ResolveVerifiedErrorV1) -> String {
+    match error {
+        crate::analog::ResolveVerifiedErrorV1::Proposal(error) => match error {
+            crate::analog::AlphaAnalogProposalErrorV1::InvalidRequestedAlpha { bits } => {
+                let requested_alpha = f64::from_bits(bits);
+                format!("requested_alpha вне конечного [0,1]: {requested_alpha}")
+            }
+            crate::analog::AlphaAnalogProposalErrorV1::DerivedAlphaOutsideUnitInterval => {
+                "выведенная alpha вышла из конечного [0,1]".to_owned()
+            }
+            crate::analog::AlphaAnalogProposalErrorV1::MissingTintAtFirstAlpha => {
+                "первая sRGB8-alpha не дала допустимый byte-тинт".to_owned()
+            }
+        },
+        crate::analog::ResolveVerifiedErrorV1::ConstraintViolation(witness) => format!(
+            "alpha-analog не воспроизвёл sRGB8-цель: target={:?}, actual={:?}",
+            witness.violation().target().bytes(),
+            witness.violation().actual().bytes()
+        ),
+    }
 }
 
 #[cfg(test)]
@@ -578,7 +601,10 @@ mod tests {
                         backdrop,
                     )
                     .unwrap_or_else(|error| {
-                        panic!("solid={solid}, bg={bg}, requested={requested_alpha}: {error}")
+                        panic!(
+                            "solid={solid}, bg={bg}, requested={requested_alpha}: {}",
+                            resolve_verified_error_message(error)
+                        )
                     });
                     let tint = verified.tint().bytes();
                     let actual_alpha = verified.alpha();
@@ -982,6 +1008,44 @@ mod tests {
                 resolve_alpha_analog_hex("#808080", bad, "#808080").is_err(),
                 "hex-граница обязана вернуть Err для α={bad}"
             );
+        }
+    }
+
+    #[test]
+    fn public_hex_boundary_stringifies_typed_proposal_failure() {
+        let error = resolve_alpha_analog_hex("#000000", -0.25, "#FFFFFF")
+            .expect_err("public hex boundary must preserve proposal rejection");
+        assert!(error.contains("requested_alpha вне конечного [0,1]"));
+    }
+
+    #[test]
+    fn public_string_boundary_omits_authored_routing_identity() {
+        let message_for = |declaration_ordinal| {
+            let error = crate::analog::ExactAlphaProgramV1::evaluate(
+                crate::analog::AuthoredAlphaBindingIdV1::Named {
+                    declaration_ordinal,
+                },
+                crate::Srgb8::new([0; 3]),
+                crate::Srgb8::new([255; 3]),
+                crate::composition::AdmittedOpacityV1::new(0.5).unwrap(),
+                crate::Srgb8::new([0; 3]),
+            )
+            .expect_err("control candidate must violate exact identity");
+            let witness = error;
+            resolve_verified_error_message(
+                crate::analog::ResolveVerifiedErrorV1::ConstraintViolation(witness),
+            )
+        };
+
+        let first = message_for(2);
+        let second = message_for(9);
+        assert_eq!(first, second, "routing identity must remain typed-only");
+        assert_eq!(
+            first,
+            "alpha-analog не воспроизвёл sRGB8-цель: target=[0, 0, 0], actual=[128, 128, 128]"
+        );
+        for forbidden in ["Standalone", "Named", "ordinal", "declaration_ordinal"] {
+            assert!(!first.contains(forbidden));
         }
     }
 

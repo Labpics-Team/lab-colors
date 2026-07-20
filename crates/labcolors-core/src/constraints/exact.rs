@@ -1,6 +1,10 @@
 use crate::Srgb8;
 use crate::appearance::ModeledSrgb8PointOccurrence;
-use crate::constraints::{Evaluator, private};
+use crate::constraints::{
+    Evaluator, HardClassifier, HardDecision, VisiblePointPassEvidence,
+    VisiblePointViolationEvidence, private,
+};
+use core::convert::Infallible;
 
 /// Структурная identity общего exact-закона финального point occurrence.
 /// Она не содержит client ID, target bytes или выбранную alpha: эти значения
@@ -23,29 +27,16 @@ pub(crate) enum ExactIdentityCapabilityV1 {
     FinalOccurrenceSrgb8IdentityV1,
 }
 
-/// PASS-marker без дублирования bytes: invocation хранит target, а physical
-/// binding — actual. Создать marker может только sealed evaluator после exact
-/// equality, поэтому несовпадающая success-пара непредставима и в памяти.
+/// Закрытые ZST payload-типы делают Pass и Violation несовместимыми, но не
+/// позволяют classifier-у вернуть другое measurement.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct ExactIdentityAssessmentV1(());
+pub(crate) struct ExactIdentityPassV1(());
 
-/// Типизированный отказ exact-гейта. Он несёт только диагностическую пару и
-/// никогда не выдаёт частично «проверенный» occurrence/evidence.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct ExactIdentityMismatchV1 {
-    target: Srgb8,
-    actual: Srgb8,
-}
+pub(crate) struct ExactIdentityViolationV1(());
 
-impl ExactIdentityMismatchV1 {
-    pub(crate) const fn target(self) -> Srgb8 {
-        self.target
-    }
-
-    pub(crate) const fn actual(self) -> Srgb8 {
-        self.actual
-    }
-}
+pub(crate) type ExactPassEvidenceV1 = VisiblePointPassEvidence<ExactSrgb8IdentityV1>;
+pub(crate) type ExactViolationEvidenceV1 = VisiblePointViolationEvidence<ExactSrgb8IdentityV1>;
 
 pub(crate) struct ExactSrgb8IdentityV1;
 
@@ -55,14 +46,15 @@ impl ExactSrgb8IdentityV1 {
 }
 
 impl private::EvaluatorSealed for ExactSrgb8IdentityV1 {}
+impl private::HardClassifierSealed for ExactSrgb8IdentityV1 {}
 
 impl Evaluator<ModeledSrgb8PointOccurrence> for ExactSrgb8IdentityV1 {
     type Invocation = Srgb8;
     type Identity = ExactConstraintIdentityV1;
     type Release = ExactIdentityReleaseV1;
     type Capability = ExactIdentityCapabilityV1;
-    type Assessment = ExactIdentityAssessmentV1;
-    type Error = ExactIdentityMismatchV1;
+    type Measurement = Srgb8;
+    type Error = Infallible;
 
     fn identity(&self) -> Self::Identity {
         Self::IDENTITY
@@ -79,15 +71,26 @@ impl Evaluator<ModeledSrgb8PointOccurrence> for ExactSrgb8IdentityV1 {
     fn evaluate(
         &self,
         occurrence: &ModeledSrgb8PointOccurrence,
-        target: &Self::Invocation,
-    ) -> Result<ExactIdentityAssessmentV1, ExactIdentityMismatchV1> {
-        let actual = Srgb8::new(occurrence.visible());
-        if actual != *target {
-            return Err(ExactIdentityMismatchV1 {
-                target: *target,
-                actual,
-            });
+        _invocation: &Self::Invocation,
+    ) -> Result<Self::Measurement, Self::Error> {
+        Ok(Srgb8::new(occurrence.visible()))
+    }
+}
+
+impl HardClassifier<Srgb8, Srgb8> for ExactSrgb8IdentityV1 {
+    type Pass = ExactIdentityPassV1;
+    type Violation = ExactIdentityViolationV1;
+
+    fn classify(
+        &self,
+        invocation: &Srgb8,
+        measurement: &Srgb8,
+    ) -> HardDecision<Self::Pass, Self::Violation> {
+        let actual = *measurement;
+        if actual == *invocation {
+            HardDecision::Pass(ExactIdentityPassV1(()))
+        } else {
+            HardDecision::Violation(ExactIdentityViolationV1(()))
         }
-        Ok(ExactIdentityAssessmentV1(()))
     }
 }
