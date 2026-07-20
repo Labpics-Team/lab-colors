@@ -2,19 +2,19 @@
 //!
 //! Proposal выбирает `(tint, alpha)`, но не сертифицирует себя. Этот модуль
 //! материализует ровно один финальный occurrence общей point-программой,
-//! применяет exact identity constraint и только после PASS создаёт verified
+//! применяет exact identity constraint и только после `Pass` создаёт verified
 //! value. Никакого результата с частичным evidence при mismatch не существует.
 
 use crate::Srgb8;
 use crate::appearance::{
     PhysicalProgramIdentityV1, PointOpacityOverSurfaceV1, ProgramOccurrenceBindingV1,
-    SourceOverCertificateV1, VisiblePointBindingV1,
+    SourceOverCertificateV1,
 };
 use crate::composition::AdmittedOpacityV1;
 use crate::constraints::{
-    BoundAssessment, BoundVerdict, ExactConstraintIdentityV1, ExactIdentityAssessmentV1,
-    ExactIdentityCapabilityV1, ExactIdentityMismatchV1, ExactIdentityReleaseV1,
-    ExactSrgb8IdentityV1, assess,
+    ExactConstraintIdentityV1, ExactIdentityCapabilityV1, ExactIdentityReleaseV1,
+    ExactPassEvidenceV1, ExactSrgb8IdentityV1, ExactViolationEvidenceV1, HardDecision,
+    assess_visible_point_hard,
 };
 
 /// Opaque identity authored invocation-а. Standalone helper не притворяется
@@ -41,14 +41,7 @@ pub(crate) struct ExactIdentityEvidenceV1 {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct VerifiedAlphaAnalogV1 {
     authored: AuthoredAlphaBindingIdV1,
-    assessment: BoundAssessment<
-        VisiblePointBindingV1,
-        ExactConstraintIdentityV1,
-        ExactIdentityReleaseV1,
-        ExactIdentityCapabilityV1,
-        Srgb8,
-        ExactIdentityAssessmentV1,
-    >,
+    evidence: ExactPassEvidenceV1,
 }
 
 impl VerifiedAlphaAnalogV1 {
@@ -61,22 +54,22 @@ impl VerifiedAlphaAnalogV1 {
     }
 
     pub(crate) fn certificate(&self) -> &SourceOverCertificateV1 {
-        self.assessment.binding().occurrence_ref()
+        self.evidence.binding().occurrence_ref()
     }
 
     pub(crate) fn evidence(&self) -> ExactIdentityEvidenceV1 {
-        let binding = *self.assessment.binding();
+        let binding = *self.evidence.binding();
         let occurrence = binding.occurrence();
         ExactIdentityEvidenceV1 {
             physical: ExactAlphaProgramV1::physical_identity(),
             authored: self.authored,
-            constraint: *self.assessment.identity(),
-            capability: *self.assessment.capability(),
-            release: *self.assessment.release(),
+            constraint: *self.evidence.identity(),
+            capability: *self.evidence.capability(),
+            release: *self.evidence.release(),
             program_occurrence: binding.program_occurrence(),
             occurrence,
-            target: *self.assessment.invocation(),
-            actual: Srgb8::new(occurrence.output_rgb()),
+            target: self.evidence.target(),
+            actual: self.evidence.actual(),
         }
     }
 }
@@ -202,18 +195,21 @@ fn propose(
     target: Srgb8,
     requested_alpha: f64,
     backdrop: Srgb8,
-) -> Result<(Srgb8, AdmittedOpacityV1), String> {
-    let requested = AdmittedOpacityV1::new(requested_alpha)
-        .map_err(|_| format!("requested_alpha вне конечного [0,1]: {requested_alpha}"))?;
+) -> Result<(Srgb8, AdmittedOpacityV1), AlphaAnalogProposalErrorV1> {
+    let requested = AdmittedOpacityV1::new(requested_alpha).map_err(|_| {
+        AlphaAnalogProposalErrorV1::InvalidRequestedAlpha {
+            bits: requested_alpha.to_bits(),
+        }
+    })?;
     if let Some(tint) = tint_at_alpha(target, requested.value(), backdrop) {
         return Ok((tint, requested));
     }
 
     let alpha = AdmittedOpacityV1::new(first_alpha(target, backdrop))
-        .map_err(|_| "выведенная alpha вышла из конечного [0,1]".to_owned())?;
+        .map_err(|_| AlphaAnalogProposalErrorV1::DerivedAlphaOutsideUnitInterval)?;
     debug_assert!(alpha.value() > requested.value());
     let tint = tint_at_alpha(target, alpha.value(), backdrop)
-        .ok_or_else(|| "первая sRGB8-alpha не дала допустимый byte-тинт".to_owned())?;
+        .ok_or(AlphaAnalogProposalErrorV1::MissingTintAtFirstAlpha)?;
     Ok((tint, alpha))
 }
 
@@ -223,26 +219,39 @@ pub(crate) fn resolve_verified(
     target: Srgb8,
     requested_alpha: f64,
     backdrop: Srgb8,
-) -> Result<VerifiedAlphaAnalogV1, String> {
-    let (tint, alpha) = propose(target, requested_alpha, backdrop)?;
+) -> Result<VerifiedAlphaAnalogV1, ResolveVerifiedErrorV1> {
+    let (tint, alpha) =
+        propose(target, requested_alpha, backdrop).map_err(ResolveVerifiedErrorV1::Proposal)?;
     ExactAlphaProgramV1::evaluate(authored, target, tint, alpha, backdrop)
-        .map_err(|error| error.message())
+        .map_err(ResolveVerifiedErrorV1::ConstraintViolation)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum ExactAlphaProgramErrorV1 {
-    IdentityMismatch(ExactIdentityMismatchV1),
+pub(crate) enum ResolveVerifiedErrorV1 {
+    Proposal(AlphaAnalogProposalErrorV1),
+    // Нынешний exact byte-grid proposal не может попасть сюда, но coordinator
+    // не имеет права стирать authored witness, если его построитель изменится.
+    ConstraintViolation(AlphaAnalogViolationV1),
 }
 
-impl ExactAlphaProgramErrorV1 {
-    pub(crate) fn message(&self) -> String {
-        match self {
-            Self::IdentityMismatch(mismatch) => format!(
-                "alpha-analog не воспроизвёл sRGB8-цель: target={:?}, actual={:?}",
-                mismatch.target().bytes(),
-                mismatch.actual().bytes()
-            ),
-        }
+/// Typed отказ proposal до materialization occurrence. Binary64 хранится
+/// битами, чтобы transport-строка оставалась обязанностью публичной границы.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AlphaAnalogProposalErrorV1 {
+    InvalidRequestedAlpha { bits: u64 },
+    DerivedAlphaOutsideUnitInterval,
+    MissingTintAtFirstAlpha,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct AlphaAnalogViolationV1 {
+    authored: AuthoredAlphaBindingIdV1,
+    violation: ExactViolationEvidenceV1,
+}
+
+impl AlphaAnalogViolationV1 {
+    pub(crate) const fn violation(&self) -> &ExactViolationEvidenceV1 {
+        &self.violation
     }
 }
 
@@ -261,21 +270,20 @@ impl ExactAlphaProgramV1 {
         tint: Srgb8,
         alpha: AdmittedOpacityV1,
         backdrop: Srgb8,
-    ) -> Result<VerifiedAlphaAnalogV1, ExactAlphaProgramErrorV1> {
+    ) -> Result<VerifiedAlphaAnalogV1, AlphaAnalogViolationV1> {
         let occurrence =
             PointOpacityOverSurfaceV1::evaluate_admitted(tint.bytes(), alpha, backdrop.bytes());
-        let assessment = match assess(&occurrence, &ExactSrgb8IdentityV1, target) {
-            BoundVerdict::Pass(assessment) => assessment,
-            BoundVerdict::Fail(failure) => {
-                return Err(ExactAlphaProgramErrorV1::IdentityMismatch(
-                    failure.into_outcome(),
-                ));
+        let evidence = match assess_visible_point_hard(&occurrence, &ExactSrgb8IdentityV1, target) {
+            Ok(HardDecision::Pass(evidence)) => evidence,
+            Ok(HardDecision::Violation(violation)) => {
+                return Err(AlphaAnalogViolationV1 {
+                    authored,
+                    violation,
+                });
             }
+            Err(error) => match error {},
         };
-        let verified = VerifiedAlphaAnalogV1 {
-            authored,
-            assessment,
-        };
+        let verified = VerifiedAlphaAnalogV1 { authored, evidence };
         debug_assert_eq!(
             verified.evidence().actual,
             Srgb8::new(verified.certificate().output_rgb())
@@ -366,17 +374,20 @@ mod tests {
         let target = Srgb8::new([1, 0, 0]);
         let backdrop = Srgb8::new([0; 3]);
         for requested_alpha in [-0.25, 1.25] {
-            let error = resolve_verified(
+            let error: ResolveVerifiedErrorV1 = resolve_verified(
                 AuthoredAlphaBindingIdV1::Standalone,
                 target,
                 requested_alpha,
                 backdrop,
             )
             .expect_err("invalid alpha must not be silently moved onto the exact frontier");
-            assert!(
-                error.contains("requested_alpha вне конечного [0,1]"),
-                "unexpected rejection boundary: {error}"
-            );
+            let ResolveVerifiedErrorV1::Proposal(
+                AlphaAnalogProposalErrorV1::InvalidRequestedAlpha { bits },
+            ) = error
+            else {
+                panic!("invalid requested alpha must fail at the proposal boundary")
+            };
+            assert_eq!(bits, requested_alpha.to_bits());
         }
     }
 
@@ -392,14 +403,35 @@ mod tests {
             Srgb8::new([0, 0, 0]),
         )
         .expect_err("wrong final bytes must not mint VerifiedAlphaAnalogV1");
-        let message = error.message();
-        assert!(message.contains("target=[0, 0, 0]"), "{message}");
-        assert!(message.contains("actual=[128, 128, 128]"), "{message}");
-
-        let ExactAlphaProgramErrorV1::IdentityMismatch(mismatch) = error;
-        assert_eq!(mismatch.target(), target);
-        assert_eq!(mismatch.actual(), Srgb8::new([128, 128, 128]));
+        let witness = error;
+        fn requires_violation(_: ExactViolationEvidenceV1) {}
+        assert_eq!(witness.authored, AuthoredAlphaBindingIdV1::Standalone);
+        assert_eq!(witness.violation().target(), target);
+        assert_eq!(witness.violation().actual(), Srgb8::new([128; 3]));
+        requires_violation(witness.violation);
         assert_eq!(crate::composition::source_over_evaluation_count(), 1);
+    }
+
+    #[test]
+    fn equal_violation_physics_under_distinct_named_bindings_keeps_distinct_witnesses() {
+        let evaluate = |declaration_ordinal| {
+            ExactAlphaProgramV1::evaluate(
+                AuthoredAlphaBindingIdV1::Named {
+                    declaration_ordinal,
+                },
+                Srgb8::new([0, 0, 0]),
+                Srgb8::new([255, 255, 255]),
+                admitted(0.5),
+                Srgb8::new([0, 0, 0]),
+            )
+            .expect_err("control candidate must violate exact identity")
+        };
+        let first = evaluate(2);
+        let second = evaluate(9);
+
+        assert_eq!(first.violation(), second.violation());
+        assert_ne!(first.authored, second.authored);
+        assert_ne!(first, second);
     }
 
     #[test]
@@ -414,6 +446,8 @@ mod tests {
             Srgb8::new([255, 255, 255]),
         )
         .unwrap();
+        fn requires_pass(_: ExactPassEvidenceV1) {}
+        requires_pass(verified.evidence);
         let evidence = verified.evidence();
 
         assert_eq!(
@@ -427,7 +461,7 @@ mod tests {
         assert_eq!(evidence.target, evidence.actual);
         assert_eq!(
             evidence.program_occurrence,
-            verified.assessment.binding().program_occurrence()
+            verified.evidence.binding().program_occurrence()
         );
         assert_eq!(evidence.occurrence.output_rgb(), evidence.actual.bytes());
         assert_eq!(
