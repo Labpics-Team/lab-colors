@@ -1312,43 +1312,32 @@ fn value_test_bites_on_alpha_mutation() {
     );
 }
 
-/// Сторона пары — идентичность семьи НА РЕЗОЛВ-УРОВНЕ. Носитель класса —
-/// БРЕНД под dark-IC: источник Brand несёт сырые якоря, и его dark-ic
-/// (#409CFF, Y = 0.321) пересекает кроссовер 0.30. Семейные якоря (включая
-/// info) разведены солвером и порог не straddle-ят — на них мутация
-/// «сторона от vc» поведенчески неразличима (выживший мутант M3
-/// верификатора). Мутация semantic.rs srgb→vc обязана уронить ЭТОТ тест.
+/// PairFill больше не классифицирует «сторону семьи» и не двигает source.
+/// Его единственная физика — code-owned FillPrimary alpha + общий sRGB8 Over.
 #[test]
-fn pair_side_is_family_stable_across_themes_at_resolve_level() {
+fn pair_fill_is_canonical_fill_primary_occurrence_across_themes() {
     let table = labui_reference().compile_named_role_table().unwrap();
-    let bg_dark = BgInput::solid("#101012").unwrap();
-    let set = resolve_named_set(
-        &bg_dark,
-        &table,
-        &ViewingConditions::dim_surround_high_contrast(),
-    )
-    .expect("валидная pair-side fixture обязана резолвиться");
-    let (_, res) = set
-        .iter()
-        .find(|(n, _)| n == "badge-fill-brand")
-        .expect("паспорт несёт badge-fill-brand");
-    let fill = res
-        .translucent()
-        .expect("заливка пары эмитится лестничной сантехникой");
-    // Светлая сторона семьи: тёмная заливка (белый строго выигрывает
-    // штатную полярность — Y ниже выведенной границы WCAG).
-    let enc =
-        crate::spaces::srgb::srgb_encoded_from_hex(fill.tint_hex()).expect("эмиссия валидный hex");
-    let lin = [
-        crate::spaces::srgb::srgb_gamma_inv(enc[0]),
-        crate::spaces::srgb::srgb_gamma_inv(enc[1]),
-        crate::spaces::srgb::srgb_gamma_inv(enc[2]),
-    ];
-    let y = 0.2126 * lin[0] + 0.7152 * lin[1] + 0.0722 * lin[2];
-    assert!(
-        y < 0.17913,
-        "badge-fill-brand в dark-IC обязан быть утемнён под светлую сторону семьи (Y={y:.4})"
-    );
+    for (bg_hex, vc) in [
+        ("#FFFFFF", ViewingConditions::srgb()),
+        ("#101012", ViewingConditions::dim_surround_high_contrast()),
+    ] {
+        let bg = BgInput::solid(bg_hex).unwrap();
+        let set =
+            resolve_named_set(&bg, &table, &vc).expect("canonical PairFill fixture must resolve");
+        let fill = set
+            .iter()
+            .find(|(name, _)| name == "badge-fill-brand")
+            .and_then(|(_, resolved)| resolved.translucent())
+            .expect("badge-fill-brand is a translucent PairFill");
+        let expected_alpha = LadderPosition::FillPrimary.alpha_for_vc(&vc);
+        assert_eq!(fill.alpha().to_bits(), expected_alpha.to_bits());
+
+        let tint = crate::srgb8::hex_bytes(fill.tint_hex()).unwrap();
+        let backdrop = crate::srgb8::hex_bytes(bg_hex).unwrap();
+        let expected = crate::alpha::composite_over_srgb8(tint, expected_alpha, backdrop)
+            .expect("code-owned Pair inputs are admitted");
+        assert_eq!(fill.composite_hex(), crate::Srgb8::new(expected).to_hex());
+    }
 }
 
 /// Дубликаты ключей всех словарей отвергаются (повтор имени = неоднозначный

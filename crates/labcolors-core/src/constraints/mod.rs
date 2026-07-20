@@ -17,14 +17,15 @@ pub(crate) use exact::{
 #[cfg(test)]
 pub(crate) use exact::ExactIdentityPassV1;
 
-#[cfg(test)]
 mod wcag22;
 
-#[cfg(test)]
 pub(crate) use wcag22::{
-    ApplicableWcag22EvaluationErrorV1, ApplicableWcag22MeasurementV1, Wcag22PassV1, Wcag22Srgb8V1,
-    Wcag22ViolationV1,
+    ApplicableWcag22EvaluationErrorV1, Wcag22PassEvidenceV1, Wcag22Srgb8V1,
+    Wcag22ViolationEvidenceV1,
 };
+
+#[cfg(test)]
+pub(crate) use wcag22::{ApplicableWcag22MeasurementV1, Wcag22PassV1, Wcag22ViolationV1};
 
 /// Seals недоступны внешним crate-ам: новые evaluator/classifier families
 /// добавляются только вместе с code-owned physical adapter-ом.
@@ -90,7 +91,6 @@ impl<Binding, Identity, Release, Capability, Invocation, Measurement>
         &self.invocation
     }
 
-    #[cfg(test)]
     pub(crate) fn measurement(&self) -> &Measurement {
         &self.measurement
     }

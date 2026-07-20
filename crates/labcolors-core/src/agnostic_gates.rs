@@ -419,7 +419,7 @@ fn a_second_company_config_compiles_and_emits_a_valid_system() {
         );
 
         // Лейбл тинт-бейджа — агностичный жёсткий контраст: решается цветом и
-        // держит свой UI-пол (3:1) ПРОТИВ тинт-поверхности бренда (композит
+        // держит свой UI-пол (3:1) против emitted PairFill Surface (композит
         // brand-fill), а не против фона страницы. Тот же движок, чужой конфиг.
         let badge_label = set.iter().find(|(n, _)| n == "badge-label").unwrap();
         let Resolved::Color { solved, .. } = &badge_label.1 else {

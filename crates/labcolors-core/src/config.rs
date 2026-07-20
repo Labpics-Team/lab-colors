@@ -435,28 +435,27 @@ pub enum RoleRecipe {
         /// Обязательный numerical-decision profile; implicit legacy запрещён.
         decision_profile: crate::glow::GlowDecisionProfileV1,
     },
-    /// Переходная solid-эмиссия пары (внутренний модуль `pair`). Текущий heuristic
-    /// выбирает сторону и при необходимости сдвигает светлоту источника; это не
-    /// валидированный перцептивный закон. Результат не является поверхностью
-    /// [`PairLabel`](Self::PairLabel) и удаляется вместе с pair façade.
+    /// Frozen frontend пары до C7c. Источник становится Paint закрытой позиции
+    /// `FillPrimary`; её alpha и source-over на page Surface принадлежат общей
+    /// point graph algebra. Эмитируемый композит — единственная поверхность,
+    /// которую затем потребляет [`PairLabel`](Self::PairLabel).
     PairFill {
         /// Источник якоря: бренд, семейство или нейтраль.
         source: LadderSource,
     },
-    /// Переходный foreground пары. Он решается против внутренне синтезированной
-    /// tint-поверхности с alpha закрытой позиции `FillPrimary`, а не против
-    /// страницы и не против эмитированного [`PairFill`](Self::PairFill).
-    /// Наличие двух несвязанных поверхностей является известным разрывом SSOT;
-    /// target occurrence-граф заменяет оба варианта одной композицией.
+    /// Frozen foreground frontend пары до C7c. Кандидат label решается и
+    /// проверяется против фактического emitted [`PairFill`](Self::PairFill)
+    /// Surface через общий joint hard-report и fresh recheck. Отдельной Pair-
+    /// физики, собственного compositor-а или выбора стороны больше нет.
     PairLabel {
         /// Источник физической цветовой идентичности: бренд, семейство или нейтраль.
         source: LadderSource,
-        /// Доля максимума контраста тинт-поверхности `(0, 1]` (как у
+        /// Доля максимума контраста emitted fill Surface `(0, 1]` (как у
         /// [`TextAnchor`](Self::TextAnchor)): низкая доля оставляет больше места
         /// для хромы источника у пола, высокая тянет к контрастному пределу.
         /// Точный серый source при любой доле остаётся нейтральным.
         fraction: f64,
-        /// WCAG-пол, энфорсимый ПРОТИВ тинт-поверхности (а не фона страницы).
+        /// WCAG-пол, проверяемый против emitted fill Surface, не страницы.
         floor: Floor,
     },
     /// Альфа-аналог solid-источника через точечную композит-инверсию
@@ -952,7 +951,7 @@ impl ThemeConfig {
                     *fraction,
                     FRACTION_MIN_EXCLUSIVE,
                     FRACTION_MAX_INCLUSIVE,
-                    "0 < fraction ≤ 1 (доля максимального контраста тинт-поверхности бейджа)",
+                    "0 < fraction ≤ 1 (доля максимального контраста emitted PairFill Surface)",
                 )
             }
             RoleRecipe::AlphaAnalog { of, alpha } => {

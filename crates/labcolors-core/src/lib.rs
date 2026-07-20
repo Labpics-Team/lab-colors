@@ -312,7 +312,7 @@ pub struct NoPrematureScalarLpcApi;
 /// публичный extension point.
 ///
 /// ```compile_fail
-/// use labcolors_core::pair::pair_side;
+/// use labcolors_core::pair::lower_fill;
 /// ```
 #[cfg(doctest)]
 pub struct NoPublicPairRecipeApi;
