@@ -13,13 +13,16 @@ test("effective-background math stays internal to the browser shell", () => {
   const rootRuntime = read("packages", "colors", "index.js");
   const rootTypes = read("packages", "colors", "index.d.ts");
   const backdropRuntime = read("packages", "colors", "effective-bg.js");
+  const observationRuntime = read("packages", "colors", "background-observation.js");
   const releaseVerifier = read("scripts", "verify-package-release.mjs");
 
   assert.equal(manifest.exports["./effective-bg"], undefined);
+  assert.equal(manifest.exports["./background-observation"], undefined);
   assert.doesNotMatch(releaseVerifier, /from "@labpics\/colors\/effective-bg"/u);
   assert.match(releaseVerifier, /import\("@labpics\/colors\/effective-bg"\)/u);
   for (const name of [
     "effectiveBackground",
+    "observePointBackground",
     "parseCssColor",
     "compositeOver",
     "compositeStackToHex",
@@ -32,10 +35,16 @@ test("effective-background math stays internal to the browser shell", () => {
   }
   assert.ok(
     manifest.files.includes("effective-bg.js"),
-    "watch/adapt still need the internal estimate until occurrence cutover",
+    "controllers still need package-private parsing and interpolation helpers",
+  );
+  assert.ok(
+    manifest.files.includes("background-observation.js"),
+    "controllers need the package-private Point | Unknown bridge in the tarball",
   );
   assert.equal(manifest.exports["./pkg/labcolors.js"], undefined);
-  assert.match(backdropRuntime, /__over/u);
+  assert.doesNotMatch(backdropRuntime, /__over|effectiveBackground/u);
+  assert.match(observationRuntime, /__over/u);
+  assert.match(observationRuntime, /export function observePointBackground/u);
   assert.doesNotMatch(
     backdropRuntime,
     /export function compositeOver|function compositeOver|compositeStackToHex/u,

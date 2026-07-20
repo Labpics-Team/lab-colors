@@ -8,23 +8,26 @@ export interface WatchThemeOptions {
   /** Theme name. */
   theme: ThemeName;
   /**
-   * Explicit reference background, overriding the ancestor estimate. A hex
-   * sampled from image/gradient/blur content remains one declared point, not an
-   * observation of the whole field. Явное значение обязано быть непустой
-   * строкой; невалидное значение не подменяется fallback-оценкой.
+   * Explicit point background evidence, overriding computed-CSS observation. A
+   * hex sampled from image/gradient/blur content remains one declared point, not
+   * an observation of the whole field. The value must be a non-empty string;
+   * invalid explicit evidence is rejected instead of being reinterpreted.
    */
   background?: string | (() => string);
   /** Element to write the `--lab-*` variables onto. Defaults to the watched element. */
   target?: HTMLElement;
-  /** Непрозрачная поддерживаемая база полностью прозрачной цепочки. По умолчанию `"#FFFFFF"`. */
-  fallback?: string;
+  /**
+   * Caller-declared opaque page canvas used only when the supported ancestor
+   * chain is fully translucent. Without it that state is `Unknown`; no white
+   * canvas is invented. The value must be an opaque supported CSS colour.
+   */
+  canvas?: string;
   /** Auto-refresh on `style`/`class` attribute changes in the observed subtree. Default `true`. */
   observe?: boolean;
   /**
-   * Получает отказы observer-обновлений и startup-отказы после захвата
-   * observer. Явные `refresh()` и `setTheme()` синхронны и бросают вызывающему.
-   * Без обработчика host сообщает об исключении через `reportError`/своё
-   * error-событие.
+   * Receives failures from observer updates and startup after observer
+   * acquisition. A typed computed-CSS `Unknown` is not an error and causes no
+   * resolve or DOM write. Explicit `refresh()`/`setTheme()` failures still throw.
    */
   onError?: (error: unknown) => void;
   /** Mutation-observer root. Defaults to the document element. */
@@ -39,31 +42,24 @@ export interface WatchThemeOptions {
 
 export interface WatchController {
   /**
-   * Re-resolve and re-apply if the background/reference input (or theme) changed;
-   * `force` re-applies unconditionally. Returns the now-applied result, or the
-   * cached one when nothing changed. Returns `null` only when observer
-   * acquisition preceded a failed startup, so no snapshot exists yet.
+   * Re-resolve and re-apply when a supported Point observation or theme changes.
+   * `force` re-applies a known Point unconditionally. On computed-CSS `Unknown`,
+   * no engine/DOM update occurs and the last committed result is returned.
    */
   refresh(force?: boolean): ResolvedTheme | null;
-  /** Switch theme and re-apply; a rejected candidate keeps the committed theme. */
+  /** Switch theme intent; a rejected candidate keeps the committed theme/output. */
   setTheme(theme: ThemeName): void;
-  /** The background/reference hex last committed, or `null` before any commit. */
+  /** The point background last committed, or `null` before any successful commit. */
   background(): string | null;
   /** Disconnect observers and stop watching. */
   stop(): void;
 }
 
 /**
- * Согласует `--lab-*` элемента с явной подложкой или поддерживаемой оценкой по
- * цепочке предков.
- *
- * Изменения атрибутов `style`/`class` в наблюдаемом поддереве планируют refresh;
- * непрерывные входы обновляются вызовом `refresh()` из цикла
- * `requestAnimationFrame`. Конфликт отклоняется до изменения DOM или состояния
- * контроллера, поэтому то же наблюдение можно повторить. Изменения пикселей и
- * раскладки не отслеживаются. До захвата observer startup-ошибка синхронна;
- * после захвата функция сначала возвращает владельца ресурса, затем сообщает
- * ошибку через `onError`/host error channel.
+ * Aligns an element's `--lab-*` variables with explicit point evidence or the
+ * package-private strict computed-CSS `Point | Unknown` observation gate.
+ * Unsupported colours/effects, a translucent root without `canvas`, cycles and
+ * depth exhaustion never become an invented hex and never call the resolver.
  */
 export declare function watchTheme(
   element: HTMLElement,

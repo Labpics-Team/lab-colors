@@ -12,12 +12,8 @@
 // standard-derived thresholds. Coordinate interpolation is presentation only;
 // it does not verify a constraint on every intermediate frame.
 
-import {
-  effectiveBackground,
-  oklabLerp,
-  compileLerpPair,
-  lerpPairHex,
-} from "./effective-bg.js";
+import { oklabLerp, compileLerpPair, lerpPairHex } from "./effective-bg.js";
+import { observePointBackground } from "./background-observation.js";
 import { admitSnapshot, writeVars } from "./snapshot.js";
 
 const CANCELLED = Symbol("adaptTheme.cancelled");
@@ -75,7 +71,7 @@ function segHex(seg, t) {
  *   sample must be a non-empty string; invalid explicit evidence is rejected
  *   without coercion or fallback.
  * @param {*} [options.target=element]  element to write vars onto
- * @param {string} [options.fallback="#FFFFFF"] Opaque supported base for a fully-translucent chain.
+ * @param {string} [options.canvas] Caller-declared opaque page canvas.
  * @param {number} [options.dropFraction=0.2]  surplus fraction lost before re-solve
  * @param {number} [options.sustainMs=120]  breach must persist this long
  * @param {number} [options.dwellMs=250]  minimum between re-solves
@@ -83,8 +79,8 @@ function segHex(seg, t) {
  * @param {boolean} [options.reducedMotion]  override; default reads matchMedia
  * @param {() => number} [options.now]  clock (default performance.now/Date.now)
  * @param {*} [options.win=globalThis]
- * @param {(el:*)=>*} [options.getStyle]  effectiveBackground seam (testing)
- * @param {(el:*)=>*} [options.parentOf]  effectiveBackground seam (testing)
+ * @param {(el:*)=>*} [options.getStyle]  strict point-observation seam (testing)
+ * @param {(el:*)=>*} [options.parentOf]  strict point-observation seam (testing)
  * @returns {AdaptController}
  */
 export function adaptTheme(element, options) {
@@ -125,7 +121,7 @@ export function adaptTheme(element, options) {
       ? stableGlowPointNoopCapability.bind(colors)
       : null;
   const target = options.target ?? element;
-  const fallback = options.fallback ?? "#FFFFFF";
+  const canvas = options.canvas;
   const backgroundSource = options.background;
   const getStyle = options.getStyle;
   const parentOf = options.parentOf;
@@ -202,15 +198,15 @@ export function adaptTheme(element, options) {
       return value;
     }
     if (backgroundSource !== undefined) return backgroundSource;
-    const value = effectiveBackground(element, {
-      fallback,
+    const observation = observePointBackground(element, {
+      canvas,
       getStyle,
       parentOf,
       checkpoint,
       checkpointToken: owner,
     });
     checkpoint(owner);
-    return value;
+    return observation;
   };
 
   // The background is a SET of samples. A solid surface is one sample; a varying
@@ -219,8 +215,12 @@ export function adaptTheme(element, options) {
   // against EVERY sample, and we re-solve against the HARDEST sample. With one
   // sample this collapses to plain single-background behaviour, bit-for-bit.
   const readSamples = (owner) => {
-    const value = readBackground(owner);
+    let value = readBackground(owner);
     checkpoint(owner);
+    if (backgroundSource === undefined) {
+      if (value?.kind === "unknown") return null;
+      if (value?.kind === "point") value = value.hex;
+    }
     if (!Array.isArray(value)) {
       if (typeof value !== "string" || value.length === 0) {
         throw new TypeError("adaptTheme: background[0] must be a non-empty string");
@@ -800,9 +800,28 @@ export function adaptTheme(element, options) {
     if (!ownsOperation(owner)) return;
     const now = finiteTime(rawNow);
     const samples = readSamples(owner);
-    if (!ownsOperation(owner)) return;
+    if (!ownsOperation(owner) || samples === null) return;
     const key = samples.join("|");
     if (!ownsOperation(owner)) return;
+
+    // A Session that started on Unknown has no committed roles. The first Point
+    // is a bootstrap solve, not a glow-only or unchanged-sample fast path.
+    if (lastKey === null) {
+      const prepared = solveWorstCandidate(samples, now, theme, owner);
+      const candidate = withStableGlowReconciliation(
+        prepared.candidate,
+        samples,
+        theme,
+        prepared.sample0Result,
+        owner,
+      );
+      if (!commitResolved(candidate, owner)) return;
+      lastKey = key;
+      easing = new Map();
+      applyRolesDirect(owner);
+      return;
+    }
+
     const hasEase = easing.size > 0;
 
     // Завершившийся ease на неизменном idle-образце не содержит fallible-
@@ -993,28 +1012,30 @@ export function adaptTheme(element, options) {
     }
   };
 
-  // Apply the initial set immediately (against the worst sample of the backdrop).
+  // Apply immediately only when the strict observation gate yields Point.
   {
     const owner = beginOperation();
     const samples = readSamples(owner);
-    const nextKey = samples.join("|");
-    checkpoint(owner);
-    const rawNow = clock();
-    checkpoint(owner);
-    const now = finiteTime(rawNow);
-    const prepared = solveWorstCandidate(samples, now, theme, owner);
-    let candidate = withStableGlowReconciliation(
-      prepared.candidate,
-      samples,
-      theme,
-      prepared.sample0Result,
-      owner,
-    );
-    if (!commitResolved(candidate, owner)) {
-      throw new Error("adaptTheme: initial operation lost ownership");
+    if (samples !== null) {
+      const nextKey = samples.join("|");
+      checkpoint(owner);
+      const rawNow = clock();
+      checkpoint(owner);
+      const now = finiteTime(rawNow);
+      const prepared = solveWorstCandidate(samples, now, theme, owner);
+      const candidate = withStableGlowReconciliation(
+        prepared.candidate,
+        samples,
+        theme,
+        prepared.sample0Result,
+        owner,
+      );
+      if (!commitResolved(candidate, owner)) {
+        throw new Error("adaptTheme: initial operation lost ownership");
+      }
+      lastKey = nextKey;
+      applyRolesDirect(owner);
     }
-    lastKey = nextKey;
-    applyRolesDirect(owner);
   }
 
   const pendingOperations = [];
@@ -1103,6 +1124,13 @@ export function adaptTheme(element, options) {
   const runSetThemeOwned = (next, owner) => {
     const samples = readSamples(owner);
     if (!ownsOperation(owner)) return;
+    if (samples === null) {
+      theme = next;
+      // Force one bootstrap solve when Point evidence returns, even if its bytes
+      // equal the last committed sample from the previous theme.
+      lastKey = null;
+      return;
+    }
     const nextKey = samples.join("|");
     if (!ownsOperation(owner)) return;
     const rawNow = clock();

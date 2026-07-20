@@ -10,12 +10,7 @@ import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
 
 import { initSync } from "../pkg/labcolors.js";
-import {
-  parseCssColor,
-  toHex,
-  effectiveBackground,
-  oklabLerp,
-} from "../effective-bg.js";
+import { parseCssColor, toHex, oklabLerp } from "../effective-bg.js";
 import { applyTheme } from "../apply-theme.js";
 import { watchTheme } from "../watch-theme.js";
 
@@ -373,89 +368,6 @@ test("oklabLerp falls back to the valid endpoint on unparseable input", () => {
   assert.equal(oklabLerp("#123456", "garbage", 0.7), "#123456");
 });
 
-test("effective background rounds every declared point occurrence", () => {
-  const { leaf, getStyle, parentOf } = fakeTree([
-    "rgba(0, 0, 0, 0.5)",
-    "rgba(1, 0, 0, 0.5)",
-    "rgb(0, 0, 0)",
-  ]);
-  // Point-граф материализует нижний occurrence в байт 1, затем верхний снова
-  // в байт 1. Старый JS-stack сохранял дробный 0.5 между рёбрами и округлял
-  // только общий итог 0.25 до нуля — это была другая физическая программа.
-  assert.equal(effectiveBackground(leaf, { getStyle, parentOf }), "#010000");
-});
-
-test("effective background preserves front-to-back layer order", () => {
-  const { leaf, getStyle, parentOf } = fakeTree([
-    "rgba(255, 0, 0, 0.5)",
-    "rgba(0, 0, 255, 0.5)",
-    "rgb(0, 0, 0)",
-  ]);
-  assert.equal(effectiveBackground(leaf, { getStyle, parentOf }), "#800040");
-});
-
-test("effective background quantises fractional CSS channels by nearest byte", () => {
-  const { leaf, getStyle, parentOf } = fakeTree(["rgb(0.5 127.5 254.5)"]);
-  assert.equal(effectiveBackground(leaf, { getStyle, parentOf }), "#0180FF");
-});
-
-test("effective background never reinterprets a translucent fallback as opaque", () => {
-  const { leaf, getStyle, parentOf } = fakeTree(["rgba(0, 0, 0, 0.5)"]);
-
-  assert.throws(
-    () => effectiveBackground(leaf, {
-      fallback: "rgba(255, 0, 0, 0.5)",
-      getStyle,
-      parentOf,
-    }),
-    /fallback must be an opaque supported colour/u,
-  );
-  for (const fallback of ["#FZFFFF", "oklch(50% 1e308 0)", "oklch(50% 0.1 1e308)"]) {
-    assert.throws(
-      () => effectiveBackground(leaf, {
-        fallback,
-        getStyle,
-        parentOf,
-      }),
-      /fallback must be an opaque supported colour/u,
-      fallback,
-    );
-  }
-});
-
-// A tiny fake element tree for effectiveBackground: each node carries a
-// background-color string and a parent. The injected getStyle/parentOf read it.
-function fakeTree(chain) {
-  // chain: array of bg strings, index 0 = leaf, last = root.
-  const nodes = chain.map((bg) => ({ bg, parent: null }));
-  for (let i = 0; i < nodes.length - 1; i++) nodes[i].parent = nodes[i + 1];
-  const getStyle = (el) => ({ getPropertyValue: () => el.bg });
-  const parentOf = (el) => el.parent;
-  return { leaf: nodes[0], getStyle, parentOf };
-}
-
-test("effectiveBackground stops at the first opaque ancestor", () => {
-  const { leaf, getStyle, parentOf } = fakeTree([
-    "rgba(0, 0, 0, 0)", // leaf transparent
-    "rgba(255, 255, 255, 0.5)", // translucent panel
-    "rgb(0, 0, 0)", // opaque black base
-    "rgb(255, 0, 0)", // (never reached — behind the opaque)
-  ]);
-  // 50% white over black → #808080; the red below the opaque black is ignored.
-  assert.equal(effectiveBackground(leaf, { getStyle, parentOf }), "#808080");
-});
-
-test("effectiveBackground falls back to white when the chain is fully translucent", () => {
-  const { leaf, getStyle, parentOf } = fakeTree(["transparent", "rgba(0,0,0,0)"]);
-  assert.equal(effectiveBackground(leaf, { getStyle, parentOf }), "#FFFFFF");
-  const tinted = fakeTree(["rgba(0, 0, 0, 0.5)"]);
-  // 50% black over the default white fallback → #808080.
-  assert.equal(
-    effectiveBackground(tinted.leaf, { getStyle: tinted.getStyle, parentOf: tinted.parentOf }),
-    "#808080",
-  );
-});
-
 // A fake LabColors engine + element for watchTheme.
 function fakeEngine() {
   const calls = [];
@@ -489,7 +401,9 @@ test("watchTheme applies on creation and re-resolves only when the bg changes", 
     colors,
     theme: "light",
     observe: false, // no DOM observer in node
-    getStyle: (e) => ({ getPropertyValue: () => e.bg }),
+    getStyle: (e) => ({
+      getPropertyValue: (property) => (property === "background-color" ? e.bg : ""),
+    }),
     parentOf: () => null,
   });
 
@@ -755,6 +669,7 @@ test("watchTheme acquires no observer when its initial resolve fails", () => {
           },
         },
         theme: "light",
+        background: "#FFFFFF",
         win,
       }),
     /initial resolve failed/u,
@@ -837,7 +752,12 @@ test("watchTheme returns the observer owner before reporting an observe failure"
     },
   };
 
-  const controller = watchTheme(element, { colors: fakeEngine(), theme: "light", win });
+  const controller = watchTheme(element, {
+    colors: fakeEngine(),
+    theme: "light",
+    background: "#FFFFFF",
+    win,
+  });
   assert.deepEqual(reported, [], "reporting must happen after the controller is returned");
   assert.equal(disconnects, 1, "a partially-acquired observer must be released");
   assert.equal(writes, 0, "observe failure must precede the initial DOM commit");
@@ -877,6 +797,7 @@ test("watchTheme returns the observer owner and cancels queued work when initial
   const controller = watchTheme(element, {
     colors,
     theme: "light",
+    background: "#FFFFFF",
     onError: (error) => errors.push(error),
     win,
   });
@@ -917,6 +838,7 @@ test("watchTheme retains an acquired observer when apply, disconnect and reporti
   const controller = watchTheme(element, {
     colors: fakeEngine(),
     theme: "light",
+    background: "#FFFFFF",
     onError(error) {
       errors.push(error);
       throw reportingFailure;
@@ -975,6 +897,7 @@ test("watchTheme never entrusts startup error reporting to the injected schedule
     controller = watchTheme(element, {
       colors: fakeEngine(),
       theme: "light",
+      background: "#FFFFFF",
       onError: (error) => reports.push({ error, ownerReachable: controller !== undefined }),
       win: {
         MutationObserver: RetriableObserver,
@@ -1292,7 +1215,9 @@ test("watchTheme: stop() cancels a refresh already scheduled by a mutation", asy
     theme: "light",
     win,
     onError: (error) => errors.push(error),
-    getStyle: (e) => ({ getPropertyValue: () => e.bg }),
+    getStyle: (e) => ({
+      getPropertyValue: (property) => (property === "background-color" ? e.bg : ""),
+    }),
     parentOf: () => null,
   });
   assert.equal(colors.calls.length, 1); // applied on creation
@@ -1865,6 +1790,7 @@ test("watchTheme: owner loss inside the implicit backdrop walk cancels later sea
     theme: "initial",
     target: element,
     observe: false,
+    canvas: "#FFFFFF",
     getStyle() {
       calls.push("style");
       if (armed) {
@@ -1874,7 +1800,19 @@ test("watchTheme: owner loss inside the implicit backdrop walk cancels later sea
       } else {
         staleWalk = false;
       }
-      return { getPropertyValue: () => "transparent" };
+      return {
+        getPropertyValue(property) {
+          if (property === "background-color") return "transparent";
+          if (property === "background-blend-mode" || property === "mix-blend-mode") {
+            return "normal";
+          }
+          if (property === "background-clip") return "border-box";
+          if (property === "opacity") return "1";
+          if (property === "display") return "block";
+          if (property === "visibility" || property === "content-visibility") return "visible";
+          return "none";
+        },
+      };
     },
     parentOf() {
       calls.push("parent");
