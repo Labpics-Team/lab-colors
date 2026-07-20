@@ -1001,23 +1001,45 @@ impl AppearanceBindings {
     }
 }
 
-/// Материализованный point Paint. Тип alpha делает повторную admission перед
-/// каждым occurrence невозможной; его биты без потерь переходят в certificate.
+/// Материализованный encoded point Paint вне зависимости от стадии владения.
+///
+/// Graph materialization и downstream recheck разделяют это одно физическое
+/// значение. Тип alpha делает повторную admission перед каждым occurrence
+/// невозможной; его биты без потерь переходят в certificate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct ResolvedPaint {
+pub(crate) struct EncodedPointPaintV1 {
     id: PaintId,
-    rgb: Srgb8,
+    source: Srgb8,
     opacity: crate::composition::AdmittedOpacityV1,
 }
 
-impl ResolvedPaint {
-    #[cfg(test)]
-    pub(crate) fn rgb(&self) -> [u8; 3] {
-        self.rgb.bytes()
+impl EncodedPointPaintV1 {
+    pub(crate) const fn from_admitted(
+        id: PaintId,
+        source: Srgb8,
+        opacity: crate::composition::AdmittedOpacityV1,
+    ) -> Self {
+        Self {
+            id,
+            source,
+            opacity,
+        }
+    }
+
+    pub(crate) const fn id(self) -> PaintId {
+        self.id
+    }
+
+    pub(crate) const fn source(self) -> Srgb8 {
+        self.source
+    }
+
+    pub(crate) const fn opacity(self) -> crate::composition::AdmittedOpacityV1 {
+        self.opacity
     }
 
     #[cfg(test)]
-    pub(crate) fn opacity_bits(&self) -> u64 {
+    pub(crate) const fn opacity_bits(self) -> u64 {
         self.opacity.bits()
     }
 }
@@ -1179,14 +1201,14 @@ impl VisiblePointBindingV1 {
 #[cfg(test)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct AppearanceEvaluation {
-    paints: Vec<ResolvedPaint>,
+    paints: Vec<EncodedPointPaintV1>,
     surfaces: Vec<(SurfaceId, Srgb8)>,
     occurrences: Vec<ResolvedOccurrence>,
 }
 
 #[cfg(test)]
 impl AppearanceEvaluation {
-    pub(crate) fn paint(&self, id: PaintId) -> Option<&ResolvedPaint> {
+    pub(crate) fn paint(&self, id: PaintId) -> Option<&EncodedPointPaintV1> {
         self.paints
             .binary_search_by_key(&id, |paint| paint.id)
             .ok()
@@ -1332,7 +1354,7 @@ impl CompiledAppearanceProgram<'_> {
                 .unwrap_or_else(|_| unreachable!("opacity bindings were admitted before execution"))
         };
 
-        let mut resolved_paints: Vec<Option<ResolvedPaint>> = vec![None; self.paints.len()];
+        let mut resolved_paints: Vec<Option<EncodedPointPaintV1>> = vec![None; self.paints.len()];
         let mut resolved_surfaces: Vec<Option<Srgb8>> = vec![None; self.surfaces.len()];
         let mut resolved_occurrences: Vec<Option<ResolvedOccurrence>> =
             vec![None; self.occurrences.len()];
@@ -1382,7 +1404,7 @@ impl CompiledAppearanceProgram<'_> {
         color_value: C,
         surface_value: S,
         opacity_value: O,
-        resolved_paints: &mut [Option<ResolvedPaint>],
+        resolved_paints: &mut [Option<EncodedPointPaintV1>],
         resolved_surfaces: &mut [Option<Srgb8>],
         resolved_occurrences: &mut [Option<ResolvedOccurrence>],
     ) where
@@ -1396,22 +1418,24 @@ impl CompiledAppearanceProgram<'_> {
 
         for &index in self.paint_topo {
             let paint = match self.paints[index] {
-                CompiledPaintSpec::Solid { id, color } => ResolvedPaint {
+                CompiledPaintSpec::Solid { id, color } => EncodedPointPaintV1::from_admitted(
                     id,
-                    rgb: color_value(color),
-                    opacity: crate::composition::AdmittedOpacityV1::OPAQUE,
-                },
+                    color_value(color),
+                    crate::composition::AdmittedOpacityV1::OPAQUE,
+                ),
                 CompiledPaintSpec::Opacity {
                     id,
                     source,
                     opacity,
                 } => {
+                    // Валидированный `paint_topo` всегда материализует source
+                    // раньше зависимого Opacity-узла.
                     let source = resolved_paints[source].unwrap_or_else(|| unreachable!());
-                    ResolvedPaint {
+                    EncodedPointPaintV1::from_admitted(
                         id,
-                        rgb: source.rgb,
-                        opacity: source.opacity.multiply(opacity_value(opacity)),
-                    }
+                        source.source,
+                        source.opacity.multiply(opacity_value(opacity)),
+                    )
                 }
             };
             resolved_paints[index] = Some(paint);
@@ -1436,13 +1460,13 @@ impl CompiledAppearanceProgram<'_> {
                     let backdrop =
                         resolved_surfaces[spec.against].unwrap_or_else(|| unreachable!());
                     let visible = spec.profile.composite(
-                        subject.rgb.bytes(),
+                        subject.source.bytes(),
                         subject.opacity,
                         backdrop.bytes(),
                     );
                     let certificate = SourceOverCertificateV1 {
                         profile: spec.profile,
-                        subject_rgb: subject.rgb.bytes(),
+                        subject_rgb: subject.source.bytes(),
                         subject_opacity: subject.opacity,
                         backdrop_rgb: backdrop.bytes(),
                         output_rgb: visible,

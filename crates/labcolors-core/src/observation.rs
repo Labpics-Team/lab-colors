@@ -6,6 +6,7 @@
 //! Unknown никогда не изобретает поверхность.
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use crate::Srgb8;
 use crate::appearance::SurfaceInputPortId;
@@ -86,7 +87,7 @@ pub(crate) struct ObservationUpdateInput {
 }
 
 /// Одна уникальная физическая tuple в порядке compiled schema.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 pub(crate) struct PhysicalScenario {
     bindings: Box<[Srgb8]>,
     provenance: Box<[ScenarioId]>,
@@ -105,7 +106,7 @@ impl PhysicalScenario {
 /// Sealed canonical value: nonempty unique physical cases без скрытой редукции.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ObservedScenarioSet {
-    cases: Box<[PhysicalScenario]>,
+    cases: Arc<[PhysicalScenario]>,
 }
 
 impl ObservedScenarioSet {
@@ -118,6 +119,37 @@ impl ObservedScenarioSet {
             .iter()
             .map(|case| case.bindings.to_vec())
             .collect()
+    }
+}
+
+/// Sealed revision-bound evidence только для текущего `Observed` head.
+///
+/// Schema и полный canonical set разделяют immutable backing с admission-state:
+/// snapshot и его clone не копируют tuples или provenance. Производный `Eq`
+/// при этом сравнивает содержимое, а не адреса shared backing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RevisionBoundObservationV1 {
+    stream: ObservationStreamId,
+    schema: Arc<[SurfaceInputPortId]>,
+    revision: Revision,
+    set: ObservedScenarioSet,
+}
+
+impl RevisionBoundObservationV1 {
+    pub(crate) const fn stream(&self) -> ObservationStreamId {
+        self.stream
+    }
+
+    pub(crate) fn schema(&self) -> &[SurfaceInputPortId] {
+        &self.schema
+    }
+
+    pub(crate) const fn revision(&self) -> Revision {
+        self.revision
+    }
+
+    pub(crate) const fn set(&self) -> &ObservedScenarioSet {
+        &self.set
     }
 }
 
@@ -197,7 +229,7 @@ pub(crate) enum Availability {
 /// Один атомарный borrow текущей availability и всего evidence, которое ей
 /// соответствует. Consumer не может прочитать state двумя вызовами и случайно
 /// связать revision с другим payload после будущего interior-mutable adapter-а.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ObservationSnapshot<'a> {
     Waiting {
         stream: ObservationStreamId,
@@ -205,10 +237,7 @@ pub(crate) enum ObservationSnapshot<'a> {
         revision: Option<Revision>,
     },
     Ready {
-        stream: ObservationStreamId,
-        schema: &'a [SurfaceInputPortId],
-        revision: Revision,
-        set: &'a ObservedScenarioSet,
+        observation: RevisionBoundObservationV1,
     },
     Stale {
         stream: ObservationStreamId,
@@ -271,7 +300,7 @@ enum CanonicalPayload {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ObservationState {
     stream: ObservationStreamId,
-    compiled_surface_input_schema: Box<[SurfaceInputPortId]>,
+    compiled_surface_input_schema: Arc<[SurfaceInputPortId]>,
     head: ObservationHead,
 }
 
@@ -294,7 +323,9 @@ impl ObservationState {
         }
         Ok(Self {
             stream,
-            compiled_surface_input_schema: compiled_surface_input_schema.into_boxed_slice(),
+            compiled_surface_input_schema: Arc::from(
+                compiled_surface_input_schema.into_boxed_slice(),
+            ),
             head: ObservationHead::Empty,
         })
     }
@@ -343,10 +374,12 @@ impl ObservationState {
                 revision: Some(*revision),
             },
             ObservationHead::Observed { revision, set } => ObservationSnapshot::Ready {
-                stream: self.stream,
-                schema: &self.compiled_surface_input_schema,
-                revision: *revision,
-                set,
+                observation: RevisionBoundObservationV1 {
+                    stream: self.stream,
+                    schema: Arc::clone(&self.compiled_surface_input_schema),
+                    revision: *revision,
+                    set: set.clone(),
+                },
             },
             ObservationHead::Unknown {
                 revision,
@@ -492,13 +525,13 @@ fn admit_scenarios(
         grouped.entry(tuple).or_default().push(scenario.id);
     }
 
-    let cases = grouped
+    let cases: Arc<[PhysicalScenario]> = grouped
         .into_iter()
         .map(|(bindings, provenance)| PhysicalScenario {
             bindings: bindings.into_boxed_slice(),
             provenance: provenance.into_boxed_slice(),
         })
         .collect::<Vec<_>>()
-        .into_boxed_slice();
+        .into();
     Ok(ObservedScenarioSet { cases })
 }
