@@ -1742,6 +1742,7 @@ test("owner loss inside the implicit backdrop walk cancels its later seams", () 
     target: el,
     now: () => 1,
     win: {},
+    canvas: "#FFFFFF",
     getStyle() {
       calls.push("style");
       if (armed) {
@@ -1751,7 +1752,19 @@ test("owner loss inside the implicit backdrop walk cancels its later seams", () 
       } else {
         staleWalk = false;
       }
-      return { getPropertyValue: () => "transparent" };
+      return {
+        getPropertyValue(property) {
+          if (property === "background-color") return "transparent";
+          if (property === "background-blend-mode" || property === "mix-blend-mode") {
+            return "normal";
+          }
+          if (property === "background-clip") return "border-box";
+          if (property === "opacity") return "1";
+          if (property === "display") return "block";
+          if (property === "visibility" || property === "content-visibility") return "visible";
+          return "none";
+        },
+      };
     },
     parentOf() {
       calls.push("parent");

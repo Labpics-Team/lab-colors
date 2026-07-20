@@ -13,11 +13,11 @@
 //     inside its own `requestAnimationFrame` loop. `refresh()` re-resolves only
 //     when the supplied/reference background string changes.
 //
-// The fallback estimate alpha-composites the supported ancestor
-// `background-color` chain (`effective-bg.js`). For images/gradients/blur, pass
-// an explicit reference hex; one sample does not represent the whole field.
+// Omitted input passes through the strict package-private Point | Unknown
+// observation gate. Unsupported effects or missing canvas evidence never become
+// a fallback hex and never invoke the resolver.
 
-import { effectiveBackground } from "./effective-bg.js";
+import { observePointBackground } from "./background-observation.js";
 import { admitSnapshot, writeVars } from "./snapshot.js";
 
 const CANCELLED = Symbol("watchTheme.cancelled");
@@ -74,7 +74,7 @@ const deferOutsideInjectedHost = (callback) => {
  *   When supplied, it must be a non-empty string; invalid explicit evidence is
  *   rejected instead of being reinterpreted as the omitted-input fallback.
  * @param {*} [options.target=element]  Element to write the variables onto.
- * @param {string} [options.fallback="#FFFFFF"]  Opaque supported base for a fully-translucent chain.
+ * @param {string} [options.canvas]  Caller-declared opaque page canvas.
  * @param {boolean} [options.observe=true]  Auto-refresh on `style`/`class`
  *   attribute changes in the observed subtree.
  * @param {(error: unknown) => void} [options.onError]  Receives failures from
@@ -82,8 +82,8 @@ const deferOutsideInjectedHost = (callback) => {
  *   `refresh`/`setTheme` по-прежнему бросают.
  * @param {*} [options.root]  Mutation-observer root (default: the document element).
  * @param {*} [options.win=globalThis]  Window-like host (for MutationObserver).
- * @param {(el:*)=>*} [options.getStyle]  Injection seam for `effectiveBackground`.
- * @param {(el:*)=>*} [options.parentOf]  Injection seam for `effectiveBackground`.
+ * @param {(el:*)=>*} [options.getStyle]  Injection seam for strict point observation.
+ * @param {(el:*)=>*} [options.parentOf]  Injection seam for strict point observation.
  * @returns {WatchController}
  */
 export function watchTheme(element, options) {
@@ -101,7 +101,7 @@ export function watchTheme(element, options) {
   }
 
   const target = options.target ?? element;
-  const fallback = options.fallback ?? "#FFFFFF";
+  const canvas = options.canvas;
   const backgroundSource = options.background;
   const getStyle = options.getStyle;
   const parentOf = options.parentOf;
@@ -175,32 +175,38 @@ export function watchTheme(element, options) {
     return value;
   };
 
-  const readBackground = (owner) => {
+  const readObservation = (owner) => {
     if (typeof backgroundSource === "function") {
       const value = backgroundSource();
       checkpoint(owner);
-      return requireBackground(value);
+      return { kind: "point", hex: requireBackground(value) };
     }
-    if (backgroundSource !== undefined) return requireBackground(backgroundSource);
-    const value = effectiveBackground(element, {
-      fallback,
+    if (backgroundSource !== undefined) {
+      return { kind: "point", hex: requireBackground(backgroundSource) };
+    }
+    const observation = observePointBackground(element, {
+      canvas,
       getStyle,
       parentOf,
       checkpoint,
       checkpointToken: owner,
     });
     checkpoint(owner);
-    return value;
+    return observation;
   };
 
   const prepareFor = (candidateTheme, force, owner) => {
-    const bg = readBackground(owner);
+    const observation = readObservation(owner);
     checkpoint(owner);
+    if (observation.kind === "unknown") {
+      return { kind: "unknown", candidateTheme, reason: observation.reason };
+    }
+    const bg = observation.hex;
     if (!force && bg === lastBg && candidateTheme === lastTheme) {
       // Прошлое CSSOM-исключение могло оставить inline-стиль записанным
       // частично. Переиспользуем закоммиченный физический снимок: чинить
       // императивную оболочку резолвером не нужно.
-      return dirty ? { bg, candidateTheme, result: lastResult } : null;
+      return dirty ? { kind: "point", bg, candidateTheme, result: lastResult } : null;
     }
     // Допуск принадлежит prepare-фазе: конфликт ещё не затронул DOM или
     // controller state, поэтому то же observation можно повторить.
@@ -208,7 +214,7 @@ export function watchTheme(element, options) {
     checkpoint(owner);
     const result = admitSnapshot(raw, "watchTheme", checkpoint, owner);
     checkpoint(owner);
-    return { bg, candidateTheme, result };
+    return { kind: "point", bg, candidateTheme, result };
   };
 
   const commitPrepared = ({ bg, candidateTheme, result }, owner) => {
@@ -258,7 +264,12 @@ export function watchTheme(element, options) {
       // кандидат устарел — вернуть закоммиченное состояние без записи.
       return lastResult;
     }
-    return prepared === null ? lastResult : commitPrepared(prepared, gen);
+    if (prepared === null) return lastResult;
+    if (prepared.kind === "unknown") {
+      theme = candidateTheme;
+      return lastResult;
+    }
+    return commitPrepared(prepared, gen);
   };
 
   const runStop = () => {
@@ -468,7 +479,7 @@ export function watchTheme(element, options) {
         });
       }
     }
-    if (!stopped && initialGen === generation) {
+    if (!stopped && initialGen === generation && initial.kind === "point") {
       commitPrepared(initial, initialGen);
     }
   } catch (error) {

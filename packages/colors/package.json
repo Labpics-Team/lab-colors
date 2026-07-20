@@ -48,6 +48,7 @@
     "watch-theme.d.ts",
     "adapt-theme.js",
     "adapt-theme.d.ts",
+    "background-observation.js",
     "effective-bg.js",
     "evidence/wcag22-srgb8-v1.json",
     "evidence/wcag22-srgb8-q55-v1.bin",

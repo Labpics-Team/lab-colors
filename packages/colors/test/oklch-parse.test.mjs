@@ -1,20 +1,21 @@
-// Class-lock: the walker must parse EXACTLY the colour form the engine emits.
+// Class-lock: the point observation adapter must parse EXACTLY the colour form the engine emits.
 //
 // Since @labpics/colors 0.4.0 the core emits every CSS variable as
 // `oklch(L% C H)` / `oklch(L% C H / A)` (crates/labcolors-core/src/spaces/
 // oklch.rs::oklch_css_from_hex). Per CSS Color 4, a browser then serialises the
 // *computed* `background-color` of an oklch()-painted surface back in OKLCH form
 // (Chrome ≥ M111 yields `oklch(<L 0..1> <C> <H>)`, optionally ` / <A>`). If
-// `parseCssColor` cannot read that form, `effectiveBackground` silently drops
+// `parseCssColor` cannot read that form, the observation adapter would reject
 // the layer → a wrong effective background on the very surfaces the package
-// paints. This suite closes that class: emission and walker must agree.
+// paints. This suite closes that class: emission and point observation must agree.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
 import { initSync } from "../pkg/labcolors.js";
-import { parseCssColor, effectiveBackground } from "../effective-bg.js";
+import { parseCssColor } from "../effective-bg.js";
+import { observePointBackground } from "../background-observation.js";
 
 initSync({
   module: new WebAssembly.Module(readFileSync(new URL("../pkg/labcolors_bg.wasm", import.meta.url))),
@@ -79,11 +80,14 @@ test("self-consistency lock: parseCssColor decodes EXACTLY what the engine emits
 });
 
 test("the reported bug: an opaque oklch base is a real layer, not silently dropped", () => {
-  // Pre-fix, parseCssColor(oklch(...)) → null, so effectiveBackground treated the
-  // package's own painted surface as "no layer" and fell through to white.
+  // Pre-fix, parseCssColor(oklch(...)) → null, so the browser adapter could not
+  // admit the package's own painted surface as a physical point.
   const opaque = "oklch(64.04613% 0.193058 259.892)"; // #3E87FF, opaque
   const tree = fakeTree([opaque]);
-  assert.equal(effectiveBackground(tree.leaf, tree), "#3E87FF");
+  assert.deepEqual(observePointBackground(tree.leaf, tree), {
+    kind: "point",
+    hex: "#3E87FF",
+  });
 });
 
 test("Chrome computed form: L as a 0..1 number parses, and equals the percentage form", () => {
@@ -97,14 +101,17 @@ test("Chrome computed form: L as a 0..1 number parses, and equals the percentage
   assert.deepEqual(withAlpha, [...parsed.slice(0, 3), 0.8]);
 });
 
-test("effectiveBackground composites oklch layers (translucent over opaque)", () => {
+test("point observation composites oklch layers (translucent over opaque)", () => {
   // A translucent white oklch panel over an opaque near-black oklch base — the
   // exact self-composed case the package produces. The known byte arithmetic
   // is `26 + .5 × (255 - 26) = 140.5`, round-half-up → 141 (`#8D8D8D`).
   const leaf = "oklch(100.00000% 0.000000 89.876 / 0.5)"; // #FFFFFF @ 0.5
   const base = "oklch(21.77865% 0.000000 89.876)"; // #1A1A1A opaque
   const tree = fakeTree([leaf, base]);
-  assert.equal(effectiveBackground(tree.leaf, tree), "#8D8D8D");
+  assert.deepEqual(observePointBackground(tree.leaf, tree), {
+    kind: "point",
+    hex: "#8D8D8D",
+  });
 });
 
 test("component forms: none = 0, chroma as a percentage (100% = 0.4), deg suffix on hue", () => {
@@ -181,14 +188,26 @@ test("garbage inside oklch(...) yields null, never throws", () => {
   for (const s of bad) assert.equal(parseCssColor(s), null, `${s} must be null`);
 });
 
-// A leaf→root element tree for effectiveBackground: each node carries a
-// background-color string. index 0 = leaf. Returns { leaf, getStyle, parentOf }.
+// A leaf→root element tree for the strict point observation adapter. Each
+// node carries one uniform background-color and otherwise default computed CSS.
 function fakeTree(chain) {
   const nodes = chain.map((bg) => ({ bg, parent: null }));
   for (let i = 0; i < nodes.length - 1; i++) nodes[i].parent = nodes[i + 1];
   return {
     leaf: nodes[0],
-    getStyle: (el) => ({ getPropertyValue: () => el.bg }),
+    getStyle: (el) => ({
+      getPropertyValue(property) {
+        if (property === "background-color") return el.bg;
+        if (property === "background-blend-mode" || property === "mix-blend-mode") {
+          return "normal";
+        }
+        if (property === "background-clip") return "border-box";
+        if (property === "opacity") return "1";
+        if (property === "display") return "block";
+        if (property === "visibility" || property === "content-visibility") return "visible";
+        return "none";
+      },
+    }),
     parentOf: (el) => el.parent,
   };
 }
