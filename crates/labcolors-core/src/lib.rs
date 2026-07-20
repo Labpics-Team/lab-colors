@@ -73,6 +73,18 @@ pub(crate) mod recheck;
 #[cfg(test)]
 mod recheck_tests;
 
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "private V2a joint selection is production-compiled before Pair lowering or a public Program exists"
+    )
+)]
+pub(crate) mod joint;
+
+#[cfg(test)]
+mod joint_tests;
+
 #[cfg(test)]
 mod constraint_tests;
 
