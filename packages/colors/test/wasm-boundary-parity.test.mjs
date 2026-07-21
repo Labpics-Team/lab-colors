@@ -49,9 +49,37 @@ test("wasm recheck boundary is byte-identical to the pre-optimisation golden", a
   const engine = new LabColors();
   engine.loadConfig(CONFIG);
 
-  // (1) Every recheck case: exact f64 equality (Object.is catches ±0 / NaN too).
+  // C8d packed boundary: recheckContrast/recheckContrastMulti take packed
+  // `0x00RRGGBB` words + a `Uint32Array` of foregrounds + a numeric theme handle
+  // minted by `themeHandle`. The string overloads are hard-cut. `pk` mirrors the
+  // controller's `packRgb24Hex`; the FROZEN golden (captured on the hex path)
+  // must still hold byte-for-byte, proving the packed transport changed nothing
+  // but the encoding.
+  // Mirror the controller's `packRgb24Hex` EXACTLY, including #RGB shorthand
+  // expansion (#fff → #FFFFFF, #123 → #112233). The frozen golden was captured
+  // on the string boundary, which normalised shorthand before measuring; the
+  // packed boundary does pure shifts with no expansion, so the test must expand
+  // here to keep byte-identity against the golden's shorthand fixtures.
+  const pk = (hex) => {
+    const body = hex.charCodeAt(0) === 35 /* '#' */ ? hex.slice(1) : hex;
+    const six =
+      body.length === 3
+        ? body[0] + body[0] + body[1] + body[1] + body[2] + body[2]
+        : body;
+    return Number.parseInt(six, 16) >>> 0;
+  };
+  const words = (fgs) => Uint32Array.from(fgs, pk);
+  assert.equal(
+    typeof engine.themeHandle,
+    "function",
+    "engine must expose the numeric themeHandle mint",
+  );
+
+  // (C1) Every recheck case, packed input: exact f64 equality to the golden the
+  //      string boundary produced (Object.is catches ±0 / NaN too).
   for (const { theme, bg, fgs, flat } of golden.recheck) {
-    const got = engine.recheckContrast(bg, fgs, theme);
+    const handle = engine.themeHandle(theme);
+    const got = engine.recheckContrast(pk(bg), words(fgs), handle);
     assert.equal(got.length, flat.length, `${theme} ${bg}: length`);
     for (let i = 0; i < flat.length; i++) {
       assert.ok(
@@ -61,25 +89,26 @@ test("wasm recheck boundary is byte-identical to the pre-optimisation golden", a
     }
   }
 
-  // (2) The public `recheckContrastMulti` batch call must equal per-sample
-  //     `recheckContrast`, byte-for-byte, over a 3-sample backdrop of the resolved
-  //     role set. This is the byte-identity the controller's batch path depends on,
-  //     so it is a hard assertion (not an `if present` skip) — the promoted method
-  //     is part of the public engine surface.
+  // (C2) The public `recheckContrastMulti` batch call must equal per-sample
+  //      `recheckContrast`, byte-for-byte, over a 3-sample backdrop of the resolved
+  //      role set — the background-major layout the controller's batch path depends
+  //      on. Hard assertion (not an `if present` skip): the method is public surface.
+  const darkHandle = engine.themeHandle("dark");
   const res = engine.resolveTheme("#3A3A3C", "dark");
   const fgSet = Object.values(res.roles)
     .filter((r) => r.kind === "color")
     .map((r) => r.hex);
+  const packedFgs = words(fgSet);
   const samples = ["#38383A", "#404042", "#2E2E30"];
   assert.equal(
     typeof engine.recheckContrastMulti,
     "function",
     "engine must expose the public recheckContrastMulti batch method",
   );
-  const multi = engine.recheckContrastMulti(samples, fgSet, "dark");
+  const multi = engine.recheckContrastMulti(words(samples), packedFgs, darkHandle);
   assert.equal(multi.length, samples.length * fgSet.length * 2);
   for (let s = 0; s < samples.length; s++) {
-    const per = engine.recheckContrast(samples[s], fgSet, "dark");
+    const per = engine.recheckContrast(pk(samples[s]), packedFgs, darkHandle);
     for (let i = 0; i < per.length; i++) {
       const base = s * fgSet.length * 2 + i;
       assert.ok(

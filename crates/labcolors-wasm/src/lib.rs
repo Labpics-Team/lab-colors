@@ -716,26 +716,41 @@ impl LabColors {
         Ok(format!("{fp:016x}"))
     }
 
-    /// Повторно проверяет контрасты `fgHexes` к `bgHex` в теме `theme`.
+    /// Минтит numeric handle темы `theme` — слот клиентского ключа в словаре
+    /// `themes` загруженного конфига. Это холодное string→number понижение: рантайм
+    /// разрешает имя темы в handle ОДИН раз на границе solve, затем адресует его
+    /// численно в покадровом recheck-цикле, без пере-сканирования словаря строкой.
+    /// Recheck без загруженного конфига невозможен; неизвестный ключ — обычный JS
+    /// `Error` со стабильным префиксом `"<code>: <message>"`.
+    #[wasm_bindgen(js_name = themeHandle)]
+    pub fn theme_handle(&self, theme: &str) -> Result<u32, JsError> {
+        self.inner.theme_handle(theme).map_err(to_js_error)
+    }
+
+    /// Повторно проверяет контрасты packed foreground-слов `fgs` к packed фону
+    /// `bg` (оба `0x00RRGGBB`, старший байт зарезервирован и обязан быть нулём) в
+    /// теме, адресованной numeric `theme` handle из [`themeHandle`](Self::theme_handle).
     /// Реактивный runtime вызывает этот дешёвый примитив покадрово и запускает
     /// новый solve лишь после устойчивого провала уже решённых цветов. Полного
     /// solve нет: одна оценка замороженной кривой для фона и по одной для foreground.
     ///
-    /// Возвращает `Float64Array` чередующихся пар `[lc, wcagRatio]` в порядке
-    /// `fgHexes`: `2*i` — знаковая candidate-координата Ys foreground `i` из
-    /// замороженной SAPC-shaped кривой, а не вердикт LPC/читаемости; `2*i+1` —
-    /// отношение WCAG. Невалидный hex или неизвестная тема дают обычный JS
-    /// `Error` со стабильным префиксом `"<code>: <message>"`.
+    /// Вход — один смежный typed-array copy в линейную память: ноль hex-парсинга,
+    /// ноль `String`/`Cow` на foreground; зарезервированный старший байт каждого
+    /// слова валидируется один раз без аллокации. Возвращает `Float64Array`
+    /// чередующихся пар `[lc, wcagRatio]` в порядке `fgs` — тот же выходной layout,
+    /// что у прежней строковой границы, побайтно: `2*i` — знаковая
+    /// candidate-координата Ys foreground `i` замороженной SAPC-shaped кривой, а не
+    /// вердикт LPC/читаемости; `2*i+1` — отношение WCAG. Слово с ненулевым старшим
+    /// байтом или неизвестный handle дают обычный JS `Error` со стабильным
+    /// префиксом `"<code>: <message>"`.
     #[wasm_bindgen(js_name = recheckContrast)]
     pub fn recheck_contrast(
         &self,
-        bg_hex: &str,
-        fg_hexes: Vec<String>,
-        theme: &str,
+        bg: u32,
+        fgs: Vec<u32>,
+        theme: u32,
     ) -> Result<Vec<f64>, JsError> {
-        self.inner
-            .recheck(bg_hex, &fg_hexes, theme)
-            .map_err(to_js_error)
+        self.inner.recheck_u32(bg, &fgs, theme).map_err(to_js_error)
     }
 
     /// Точная runtime-перепроверка stable Glow. Возвращает, является ли точечный
@@ -756,24 +771,26 @@ impl LabColors {
             .map_err(|reason| to_js_error(stable_glow_recheck_core_error(reason)))
     }
 
-    /// Одним вызовом проверяет набор foreground против многих образцов фона.
-    /// Контроллер использует это для меняющегося backdrop: gradient, image,
-    /// bg-blur или glass. Каждый foreground декодируется и квантуется один раз;
-    /// его display-relative luminance переиспользуется для всех образцов.
+    /// Одним вызовом проверяет набор packed foreground-слов `fgs` против многих
+    /// packed образцов фона `bgs` (все `0x00RRGGBB`, старший байт required-zero) в
+    /// теме, адресованной numeric `theme` handle. Контроллер использует это для
+    /// меняющегося backdrop: gradient, image, bg-blur или glass. Каждый foreground
+    /// декодируется один раз; его display-relative luminance переиспользуется для
+    /// всех образцов.
     ///
     /// Возвращает плоский background-major `Float64Array`: для образца `s` и
-    /// foreground `i` индекс `(s * fgHexes.length + i) * 2` содержит `lc`, а
+    /// foreground `i` индекс `(s * fgs.length + i) * 2` содержит `lc`, а
     /// следующий — `wcagRatio`. Значения побайтно совпадают с отдельным вызовом
-    /// `recheckContrast(bgHexes[s], fgHexes, theme)` для каждого `s`.
+    /// `recheckContrast(bgs[s], fgs, theme)` для каждого `s`.
     #[wasm_bindgen(js_name = recheckContrastMulti)]
     pub fn recheck_contrast_multi(
         &self,
-        bg_hexes: Vec<String>,
-        fg_hexes: Vec<String>,
-        theme: &str,
+        bgs: Vec<u32>,
+        fgs: Vec<u32>,
+        theme: u32,
     ) -> Result<Vec<f64>, JsError> {
         self.inner
-            .recheck_multi(&bg_hexes, &fg_hexes, theme)
+            .recheck_multi_u32(&bgs, &fgs, theme)
             .map_err(to_js_error)
     }
 }

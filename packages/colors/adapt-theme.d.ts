@@ -4,13 +4,15 @@ import type { LabColors, ThemeName } from "./index.js";
 
 export interface AdaptThemeOptions {
   /**
-   * An initialised engine — needs resolve + contrast recheck. The exact
+   * An initialised engine — needs resolve + packed contrast recheck. The exact
    * `isStableGlowPointNoop` capability is conditionally required when a result
    * contains a stable Glow role. `recheckContrastMulti` is optional and batches
    * a finite explicit sample set without changing its point-wise semantics.
+   * `themeHandle` is optional: when present, the theme key is lowered to its
+   * numeric handle once per theme and addressed numerically in the recheck loop.
    */
   colors: Pick<LabColors, "resolveTheme" | "recheckContrast"> &
-    Partial<Pick<LabColors, "recheckContrastMulti" | "isStableGlowPointNoop">>;
+    Partial<Pick<LabColors, "recheckContrastMulti" | "themeHandle" | "isStableGlowPointNoop">>;
   theme: ThemeName;
   /**
    * Explicit point evidence, overriding computed-CSS observation. A string array
