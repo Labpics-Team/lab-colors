@@ -294,9 +294,16 @@ export function adaptTheme(element, options) {
   // dropFraction)`) against ANY sample. `worstIdx` is the sample with the least
   // set-wide margin — the one to re-solve against, so the constraint we solve to
   // is the same constraint we check hardest.
-  // The current foreground hexes, refreshed on adopt. Rechecks run per changed
-  // frame and previously rebuilt this identical array from `roles` each time.
-  let fgsCache = [];
+  // Recheck lanes — SEPARATE from the color-only ease set above. Every
+  // contrast-bearing role rides a recheck lane: color roles by their hex/lc,
+  // translucent roles by their occurrence descriptor (compositeHex as the
+  // foreground word, |compositeLc| as the drift floor). Kept parallel and 1:1 by
+  // construction (built from one projection → recheckRoles.length ===
+  // recheckFgs.length always), so the length-parity/stride invariants hold. The
+  // ease/overlay loops NEVER read these, so a translucent role stays rechecked
+  // but never eased — its live oklch(tint/alpha) var is left intact (C8d E1).
+  let recheckRoles = [];
+  let recheckFgs = [];
 
   // Batch path (many samples): collapse the shared per-foreground CAM16 forward
   // across every sample into ONE engine call. `recheckContrastMulti` returns a
@@ -324,8 +331,8 @@ export function adaptTheme(element, options) {
 
   const recheckSamples = (
     samples,
-    roleSet = roles,
-    foregrounds = fgsCache,
+    roleSet = recheckRoles,
+    foregrounds = recheckFgs,
     themeName = theme,
     owner,
   ) => {
@@ -512,12 +519,33 @@ export function adaptTheme(element, options) {
         lc: r.lc,
         hex: r.hex,
       }));
+    // Recheck lanes: color roles PLUS translucent roles that carry a usable
+    // occurrence descriptor. The defensive `typeof/Number.isFinite` guard makes
+    // this a clean no-op for stubs/engines that emit no composites (the real
+    // engine always emits compositeHex/compositeLc for translucent roles), and
+    // prevents packRgb24Hex from throwing on an undefined foreground.
+    const nextRecheck = Object.entries(snapshot.roles)
+      .filter(
+        ([, r]) =>
+          r &&
+          (r.kind === "color" ||
+            (r.kind === "translucent" &&
+              typeof r.compositeHex === "string" &&
+              Number.isFinite(r.compositeLc))),
+      )
+      .map(([key, r]) => ({
+        cssVar: r.cssVar,
+        key,
+        lc: r.kind === "color" ? r.lc : r.compositeLc,
+        hex: r.kind === "color" ? r.hex : r.compositeHex,
+      }));
     return {
       result: snapshot,
       baseVars: nextBaseVars,
       roles: nextRoles,
       stableGlows: nextStableGlows,
-      fgsCache: nextRoles.map((r) => r.hex),
+      recheckRoles: nextRecheck,
+      recheckFgs: nextRecheck.map((r) => r.hex),
       lastSolveAt: now,
       breachSince: null,
     };
@@ -528,7 +556,8 @@ export function adaptTheme(element, options) {
     baseVars = candidate.baseVars;
     roles = candidate.roles;
     stableGlows = candidate.stableGlows;
-    fgsCache = candidate.fgsCache;
+    recheckRoles = candidate.recheckRoles;
+    recheckFgs = candidate.recheckFgs;
     lastSolveAt = candidate.lastSolveAt;
     breachSince = candidate.breachSince;
     // Пере-решённый кандидат может сменить набор ключей: следующая запись
@@ -581,8 +610,8 @@ export function adaptTheme(element, options) {
       }
       const { breached, worstIdx: nextWorst, breachCount } = recheckSamples(
         samples,
-        candidate.roles,
-        candidate.fgsCache,
+        candidate.recheckRoles,
+        candidate.recheckFgs,
         themeName,
         owner,
       );
@@ -943,8 +972,11 @@ export function adaptTheme(element, options) {
     }
 
     // Glow-only набор всё равно реагирует на смену подложки. Готовим точный
-    // class-переход до публикации и ключа, и CSS-состояния.
-    if (roles.length === 0) {
+    // class-переход до публикации и ключа, и CSS-состояния. Ключуемся по НАБОРУ
+    // recheck-полос, а не по ease-набору: translucent-only набор (без color-роли,
+    // roles.length===0, но recheckRoles.length>0) обязан пройти recheck/re-solve,
+    // а не уйти в glow-ветку (C8d E1).
+    if (recheckRoles.length === 0) {
       const preparedGlow =
         key === lastKey
           ? null
@@ -967,8 +999,8 @@ export function adaptTheme(element, options) {
     // lowest-metric sample, the one used for the next resolve.
     const { breached, worstIdx } = recheckSamples(
       samples,
-      roles,
-      fgsCache,
+      recheckRoles,
+      recheckFgs,
       theme,
       owner,
     );

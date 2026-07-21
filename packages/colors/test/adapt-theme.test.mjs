@@ -3702,6 +3702,12 @@ function mixedWithUnresolved(hex, lc) {
         cssVar: "--lab-veil",
         tintHex: "#808080",
         alpha: 0.5,
+        // Occurrence descriptor emitted by the real engine (core→dto→projection)
+        // for a translucent role: the encoded-sRGB8 reference composite over the
+        // resolve background and its signed composite contrast estimate. These
+        // are what let the translucent role ride a recheck lane (C8d E1).
+        compositeHex: "#55757F",
+        compositeLc: -41.5,
       },
     },
   };
@@ -3768,6 +3774,213 @@ test("admitted Unresolved stays inert through init, breach re-solve and ease", (
   // 3. current() не фабрикует отказную переменную.
   assert.equal(ctrl.current()["--lab-impossible"], undefined);
   ctrl.stop();
+});
+
+// ── C8d E1: translucent recheck lanes (X2 alpha-only adapts) ────────────────
+//
+// Translucent roles carry an occurrence descriptor {compositeHex, compositeLc}
+// — the reference composite over the resolve background. Dropping the
+// kind==="color" filter on the RECHECK path lets a translucent role ride a
+// recheck lane (compositeHex as the foreground word, |compositeLc| as the drift
+// floor) WITHOUT joining the ease set, so its live oklch(tint/alpha) var stays
+// intact. A contrast-drifting alpha-only theme must then re-adapt through the
+// same graph path (C8 exit X2).
+
+test("alpha_only_theme_readapts: a translucent-only contrast drop re-solves through the same graph", () => {
+  const el = fakeElement();
+  const VEIL_COMPOSITE = "#55757F"; // matches the enriched veil stub
+  let bg = "#FFFFFF";
+  let now = 1000;
+  const seenRecheckWords = [];
+  const colors = {
+    resolveCount: 0,
+    resolveTheme() {
+      this.resolveCount++;
+      return mixedWithUnresolved("#000000", 100);
+    },
+    recheckContrast(b, fgs) {
+      seenRecheckWords.push(...fgs);
+      const out = [];
+      for (const f of fgs) {
+        // Packed transport: only ever 0x00RRGGBB words, translucent lanes too.
+        assert.ok(
+          Number.isInteger(f) && f >= 0 && f <= 0x00ffffff,
+          "recheck must only ever see packed color words (0x00RRGGBB)",
+        );
+        // ONLY the translucent lane's composite drops below its |compositeLc| *
+        // (1 - dropFraction) floor (41.5 * 0.8 = 33.2); the color role passes.
+        // No color-role drift at all — the change is alpha-only.
+        out.push(f === pk(VEIL_COMPOSITE) ? 5 : 100);
+        out.push(10);
+      }
+      return out;
+    },
+  };
+  const ctrl = adaptTheme(el, {
+    colors,
+    theme: "light",
+    background: () => bg,
+    target: el,
+    now: () => now,
+    win: {},
+    sustainMs: 0,
+    dwellMs: 0,
+    easeMs: 100,
+    dropFraction: 0.2,
+  });
+  assert.equal(colors.resolveCount, 1, "one resolve at init");
+
+  bg = "#EEEEEE";
+  now += 10;
+  ctrl.tick();
+  now += 10;
+  ctrl.tick();
+  now += 200;
+  ctrl.tick();
+
+  assert.ok(
+    seenRecheckWords.includes(pk(VEIL_COMPOSITE)),
+    "translucent compositeHex must reach the recheck lane",
+  );
+  assert.ok(
+    colors.resolveCount >= 2,
+    "alpha-only breach must re-solve through the same graph path (X2)",
+  );
+  ctrl.stop();
+});
+
+test("translucent_lanes_participate: translucent rides a recheck lane 1:1 but is never eased", () => {
+  // (1) MIXED set: a color role AND a translucent role. The recheck foreground
+  // words must include BOTH the color hex and the translucent compositeHex, and
+  // every recheck call is 1:1 (one foreground word per role in the set). The
+  // color role breaches → an ease actually runs on its var, while the veil's
+  // live oklch(tint/alpha) var is never overwritten with a hex.
+  const el = fakeElement();
+  const VEIL_COMPOSITE = "#55757F";
+  let bg = "#FFFFFF";
+  let now = 1000;
+  const perCallFgCounts = [];
+  const seenRecheckWords = [];
+  let solveHex = "#000000";
+  const colors = {
+    resolveCount: 0,
+    resolveTheme() {
+      this.resolveCount++;
+      return mixedWithUnresolved(solveHex, 100);
+    },
+    recheckContrast(b, fgs) {
+      perCallFgCounts.push(fgs.length);
+      seenRecheckWords.push(...fgs);
+      const out = [];
+      for (const f of fgs) {
+        // Color role breaches (10 < 80); translucent passes (100 ≥ 33.2).
+        out.push(f === pk(VEIL_COMPOSITE) ? 100 : 10);
+        out.push(10);
+      }
+      return out;
+    },
+  };
+  const ctrl = adaptTheme(el, {
+    colors,
+    theme: "light",
+    background: () => bg,
+    target: el,
+    now: () => now,
+    win: {},
+    sustainMs: 0,
+    dwellMs: 0,
+    easeMs: 100,
+    dropFraction: 0.2,
+  });
+  assert.equal(el.props.get("--lab-veil"), "oklch(50% 0 0 / 0.5)", "veil live oklch at init");
+
+  bg = "#EEEEEE";
+  solveHex = "#111111"; // re-solve to a different colour so an ease truly runs
+  now += 10;
+  ctrl.tick(); // recheck (color breach) → re-solve + begin ease
+  now += 10;
+  ctrl.tick(); // mid-ease frame
+
+  assert.ok(
+    seenRecheckWords.includes(pk("#000000")),
+    "color role hex present among recheck foreground words",
+  );
+  assert.ok(
+    seenRecheckWords.includes(pk(VEIL_COMPOSITE)),
+    "translucent compositeHex present among recheck foreground words (lane participation)",
+  );
+  assert.ok(
+    perCallFgCounts.every((n) => n === 2),
+    "each recheck call is 1:1 — one foreground word per role in the recheck set",
+  );
+  // The color role is mid-ease → a raw hex overlay (proves the ease is live).
+  assert.match(el.props.get("--lab-label-primary"), /^#[0-9A-Fa-f]{6}$/);
+  // The translucent role is rechecked but NEVER eased: its var stays live oklch.
+  assert.equal(
+    el.props.get("--lab-veil"),
+    "oklch(50% 0 0 / 0.5)",
+    "translucent var stays live oklch — recheck lane must not ease it into a hex",
+  );
+
+  // (2) TRANSLUCENT-ONLY set: no color role at all. The glow-only fast-path
+  // guard must key off the RECHECK set (recheckRoles.length), not the ease set
+  // (roles.length) — otherwise a translucent-only set routes to the glow branch
+  // and is never rechecked/re-solved.
+  const el2 = fakeElement();
+  let bg2 = "#FFFFFF";
+  let now2 = 1000;
+  const translucentOnly = () => ({
+    vars: { "--lab-veil": "oklch(50% 0 0 / 0.5)" },
+    roles: {
+      veil: {
+        kind: "translucent",
+        cssVar: "--lab-veil",
+        tintHex: "#808080",
+        alpha: 0.5,
+        compositeHex: VEIL_COMPOSITE,
+        compositeLc: -41.5,
+      },
+    },
+  });
+  const colors2 = {
+    resolveCount: 0,
+    resolveTheme() {
+      this.resolveCount++;
+      return translucentOnly();
+    },
+    recheckContrast(b, fgs) {
+      // The translucent lane breaches (5 < 33.2) → must re-solve.
+      return [...fgs].flatMap(() => [5, 10]);
+    },
+  };
+  const ctrl2 = adaptTheme(el2, {
+    colors: colors2,
+    theme: "light",
+    background: () => bg2,
+    target: el2,
+    now: () => now2,
+    win: {},
+    sustainMs: 0,
+    dwellMs: 0,
+    easeMs: 100,
+    dropFraction: 0.2,
+  });
+  assert.equal(colors2.resolveCount, 1, "one resolve at init (translucent-only)");
+  bg2 = "#EEEEEE";
+  now2 += 10;
+  ctrl2.tick();
+  now2 += 200;
+  ctrl2.tick();
+  assert.ok(
+    colors2.resolveCount >= 2,
+    "translucent-only breach must still re-solve (widened glow guard)",
+  );
+  assert.equal(
+    el2.props.get("--lab-veil"),
+    "oklch(50% 0 0 / 0.5)",
+    "translucent-only var stays live oklch across re-solve",
+  );
+  ctrl2.stop();
 });
 
 // ── Hostile-input стражи цикла (находки CodeRabbit PR #340) ──────────────────
