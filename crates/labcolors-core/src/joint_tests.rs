@@ -11,10 +11,12 @@ use crate::joint::{
     PointwiseSelectedRecheckErrorV1, SelectionPolicyErrorV1, checked_joint_cardinality,
 };
 use crate::observation::{
-    ObservationPayloadInput, ObservationState, ObservationStreamId, ObservationUpdateInput,
-    ObservedScenarioSetInput, Revision, RevisionBoundObservationV1, ScenarioId, ScenarioInput,
-    SurfaceInputBinding,
+    ObservationHeadViewV1, ObservationOwnerV1, ObservationPayloadInput, ObservationStreamId,
+    ObservationUpdateInput, ObservedScenarioSetInput, PreparedObservationUpdateV1, Revision,
+    RevisionBoundObservationV1, ScenarioId, ScenarioInput, SurfaceInputBinding,
+    prepare_observation,
 };
+use crate::session::SessionObservationBindingPermitV1;
 use crate::wcag22::Wcag22CriterionV1;
 use std::cell::Cell;
 use std::rc::Rc;
@@ -23,6 +25,18 @@ const ROOT: SurfaceInputPortId = SurfaceInputPortId::new(7);
 const LOWER: PaintId = PaintId::new(11);
 const UPPER: PaintId = PaintId::new(12);
 const STREAM: ObservationStreamId = ObservationStreamId::new(3);
+
+fn session_permit() -> SessionObservationBindingPermitV1 {
+    SessionObservationBindingPermitV1::for_test()
+}
+
+struct EmptyObservationOwner;
+
+impl ObservationOwnerV1 for EmptyObservationOwner {
+    fn observation_head(&self) -> ObservationHeadViewV1<'_> {
+        ObservationHeadViewV1::Empty
+    }
+}
 
 fn paint(id: PaintId, bytes: [u8; 3], opacity: f64) -> EncodedPointPaintV1 {
     EncodedPointPaintV1::from_admitted(
@@ -65,9 +79,12 @@ fn exact_lower(id: u32, target: [u8; 3]) -> JointHardConstraintV1 {
 }
 
 fn observation(revision: u64, cases: Vec<(u32, [u8; 3])>) -> RevisionBoundObservationV1 {
-    let mut state = ObservationState::new(STREAM, vec![ROOT]).unwrap();
-    state
-        .apply(ObservationUpdateInput {
+    let mut owner = EmptyObservationOwner;
+    let prepared = prepare_observation(
+        &mut owner,
+        STREAM,
+        &[ROOT],
+        ObservationUpdateInput {
             stream: STREAM,
             revision: Revision::new(revision),
             payload: ObservationPayloadInput::Scenarios(ObservedScenarioSetInput {
@@ -82,11 +99,14 @@ fn observation(revision: u64, cases: Vec<(u32, [u8; 3])>) -> RevisionBoundObserv
                     })
                     .collect(),
             }),
-        })
-        .unwrap();
-    state
-        .current_observation()
-        .expect("expected current admitted observation")
+        },
+    )
+    .unwrap();
+    let PreparedObservationUpdateV1::Observed(prepared) = prepared else {
+        panic!("fresh observed update must prepare an observation");
+    };
+    let (_owner, observation) = prepared.into_parts();
+    observation
 }
 
 #[test]
@@ -97,7 +117,7 @@ fn linked_candidate_is_selected_only_after_upper_sees_lower_visible_surface() {
         candidate(1, ([128; 3], 1.0), ([255; 3], 0.5)),
     ]);
     let report = program(vec![exact_upper(1, [192; 3])])
-        .evaluate(domain, observed)
+        .evaluate_revision_bound(domain, observed, session_permit())
         .unwrap();
 
     assert_eq!(
@@ -154,7 +174,7 @@ fn every_unique_physical_case_must_pass_without_worst_or_average_reduction() {
     let observed = observation(2, vec![(1, [0; 3]), (2, [255; 3])]);
     let domain = candidates(vec![candidate(0, ([0; 3], 0.5), ([255; 3], 0.5))]);
     let report = program(vec![exact_upper(1, [128; 3])])
-        .evaluate(domain, observed)
+        .evaluate_revision_bound(domain, observed, session_permit())
         .unwrap();
 
     assert_eq!(report.executions().len(), 2);
@@ -184,7 +204,7 @@ fn full_report_does_not_short_circuit_after_first_violation() {
         exact_upper(2, [128; 3]),
         exact_lower(3, [0; 3]),
     ])
-    .evaluate(domain, observed)
+    .evaluate_revision_bound(domain, observed, session_permit())
     .unwrap();
 
     assert_eq!(crate::composition::source_over_evaluation_count(), 2);
@@ -212,21 +232,23 @@ fn full_report_does_not_short_circuit_after_first_violation() {
 fn candidate_and_constraint_declaration_permutations_are_canonical() {
     let observed = observation(4, vec![(1, [0; 3])]);
     let first = program(vec![exact_upper(9, [255; 3]), exact_lower(4, [0; 3])])
-        .evaluate(
+        .evaluate_revision_bound(
             candidates(vec![
                 candidate(8, ([255; 3], 0.0), ([255; 3], 1.0)),
                 candidate(2, ([0; 3], 1.0), ([255; 3], 1.0)),
             ]),
-            observed.clone(),
+            observation(4, vec![(1, [0; 3])]),
+            session_permit(),
         )
         .unwrap();
     let second = program(vec![exact_lower(4, [0; 3]), exact_upper(9, [255; 3])])
-        .evaluate(
+        .evaluate_revision_bound(
             candidates(vec![
                 candidate(2, ([0; 3], 1.0), ([255; 3], 1.0)),
                 candidate(8, ([255; 3], 0.0), ([255; 3], 1.0)),
             ]),
             observed,
+            session_permit(),
         )
         .unwrap();
 
@@ -236,15 +258,17 @@ fn candidate_and_constraint_declaration_permutations_are_canonical() {
 #[test]
 fn scenario_declaration_permutation_is_canonical() {
     let first = program(vec![exact_upper(1, [255; 3])])
-        .evaluate(
+        .evaluate_revision_bound(
             candidates(vec![candidate(0, ([17; 3], 0.5), ([255; 3], 1.0))]),
             observation(5, vec![(2, [255; 3]), (1, [0; 3])]),
+            session_permit(),
         )
         .unwrap();
     let second = program(vec![exact_upper(1, [255; 3])])
-        .evaluate(
+        .evaluate_revision_bound(
             candidates(vec![candidate(0, ([17; 3], 0.5), ([255; 3], 1.0))]),
             observation(5, vec![(1, [0; 3]), (2, [255; 3])]),
+            session_permit(),
         )
         .unwrap();
 
@@ -252,12 +276,44 @@ fn scenario_declaration_permutation_is_canonical() {
 }
 
 #[test]
+fn static_joint_evaluation_is_explicitly_lifecycle_free() {
+    let report = program(vec![exact_upper(1, [255; 3])])
+        .evaluate_static(
+            candidates(vec![candidate(0, ([0; 3], 1.0), ([255; 3], 1.0))]),
+            crate::joint::StaticJointObservationV1::one_case(ROOT, Srgb8::new([0; 3])),
+        )
+        .unwrap();
+
+    assert_eq!(report.executions().len(), 1);
+    assert_eq!(report.provenance(0), None);
+}
+
+#[test]
+fn static_joint_key_mismatch_fails_before_compositing() {
+    crate::composition::reset_source_over_evaluation_count();
+    let result = program(vec![exact_upper(1, [255; 3])]).evaluate_static(
+        candidates(vec![candidate(0, ([0; 3], 1.0), ([255; 3], 1.0))]),
+        crate::joint::StaticJointObservationV1::one_case(
+            SurfaceInputPortId::new(8),
+            Srgb8::new([0; 3]),
+        ),
+    );
+
+    assert!(matches!(
+        result,
+        Err(JointReportErrorV1::MissingRootSurface(ROOT))
+    ));
+    assert_eq!(crate::composition::source_over_evaluation_count(), 0);
+}
+
+#[test]
 fn duplicate_provenance_does_not_repeat_physical_execution() {
     let observed = observation(6, vec![(9, [1, 2, 3]), (3, [1, 2, 3])]);
     let report = program(vec![exact_upper(1, [255; 3])])
-        .evaluate(
+        .evaluate_revision_bound(
             candidates(vec![candidate(0, ([0; 3], 1.0), ([255; 3], 1.0))]),
             observed,
+            session_permit(),
         )
         .unwrap();
 
@@ -271,15 +327,15 @@ fn duplicate_provenance_does_not_repeat_physical_execution() {
 
 #[test]
 fn declared_policy_is_separate_from_report_and_is_the_only_tie_break() {
-    let observed = observation(7, vec![(1, [0; 3])]);
     let make_report = || {
         program(vec![exact_upper(1, [42; 3])])
-            .evaluate(
+            .evaluate_revision_bound(
                 candidates(vec![
                     candidate(7, ([1; 3], 1.0), ([42; 3], 1.0)),
                     candidate(4, ([250; 3], 1.0), ([42; 3], 1.0)),
                 ]),
-                observed.clone(),
+                observation(7, vec![(1, [0; 3])]),
+                session_permit(),
             )
             .unwrap()
     };
@@ -314,9 +370,10 @@ fn declared_policy_is_separate_from_report_and_is_the_only_tie_break() {
 fn fresh_recheck_executes_the_selected_joint_program_again_on_the_same_revision() {
     let observed = observation(8, vec![(1, [0; 3]), (2, [255; 3])]);
     let report = program(vec![exact_upper(1, [17; 3])])
-        .evaluate(
+        .evaluate_revision_bound(
             candidates(vec![candidate(0, ([9; 3], 1.0), ([17; 3], 1.0))]),
             observed,
+            session_permit(),
         )
         .unwrap();
     crate::composition::reset_source_over_evaluation_count();
@@ -340,7 +397,9 @@ fn fresh_recheck_executes_the_selected_joint_program_again_on_the_same_revision(
 fn empty_hard_constraint_set_is_non_vacuously_feasible() {
     let observed = observation(10, vec![(1, [13, 17, 19])]);
     let domain = candidates(vec![candidate(0, ([20, 30, 40], 0.5), ([50, 60, 70], 1.0))]);
-    let report = program(vec![]).evaluate(domain, observed).unwrap();
+    let report = program(vec![])
+        .evaluate_revision_bound(domain, observed, session_permit())
+        .unwrap();
 
     assert_eq!(report.executions().len(), 1);
     assert!(report.cells().is_empty());
@@ -376,7 +435,9 @@ fn generic_wcag_evaluator_can_constrain_the_derived_lower_occurrence() {
         vec![constraint],
     )
     .unwrap();
-    let report = program.evaluate(domain, observed).unwrap();
+    let report = program
+        .evaluate_revision_bound(domain, observed, session_permit())
+        .unwrap();
 
     assert_eq!(report.cells().len(), 2);
     assert!(!report.cells()[0].decision().is_pass());
@@ -456,7 +517,7 @@ fn evaluator_error_invalidates_the_full_report_and_fresh_recheck() {
         fail_on: 0,
     });
     assert!(matches!(
-        immediate.evaluate(domain(), observed()),
+        immediate.evaluate_revision_bound(domain(), observed(), session_permit()),
         Err(PointwiseJointReportErrorV1::Evaluator("evaluator-fault"))
     ));
 
@@ -464,7 +525,9 @@ fn evaluator_error_invalidates_the_full_report_and_fresh_recheck() {
         calls: Rc::new(Cell::new(0)),
         fail_on: 1,
     });
-    let report = delayed.evaluate(domain(), observed()).unwrap();
+    let report = delayed
+        .evaluate_revision_bound(domain(), observed(), session_permit())
+        .unwrap();
     let PointwiseHardFeasibilityV1::NonEmpty(feasible) = report.classify() else {
         panic!("first evaluation must pass");
     };
@@ -517,7 +580,11 @@ fn invalid_domains_and_policies_fail_before_compositing() {
     .unwrap();
     crate::composition::reset_source_over_evaluation_count();
     assert!(matches!(
-        program(vec![exact_upper(1, [0; 3])]).evaluate(wrong, observed),
+        program(vec![exact_upper(1, [0; 3])]).evaluate_revision_bound(
+            wrong,
+            observed,
+            session_permit()
+        ),
         Err(JointReportErrorV1::CandidatePaintMismatch {
             stage: JointVisibleTargetV1::Lower,
             ..

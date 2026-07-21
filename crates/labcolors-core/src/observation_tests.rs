@@ -1,16 +1,16 @@
+use crate::Srgb8;
 use crate::appearance::{
     AppearanceBindings, AppearanceGraphSpec, BindingError, ColorInputId, CompositionProfileV1,
     OccurrenceId, OccurrenceSpec, PaintId, PaintSpec, PointOpacityError, PointOpacityOverSurfaceV1,
     ResolvedOccurrence, SurfaceId, SurfaceInputPortId, SurfaceSpec,
 };
 use crate::observation::{
-    canonicalize_observation_schema, prepare_observation, ObservationError, ObservationHeadViewV1,
-    ObservationOwnerV1, ObservationPayloadInput, ObservationSchemaMismatchV1, ObservationStreamId,
-    ObservationUpdateInput, ObservedScenarioSet, ObservedScenarioSetInput,
-    PreparedObservationUpdateV1, Revision, RevisionBoundObservationV1, RevisionBoundUnknownV1,
-    ScenarioId, ScenarioInput, SurfaceInputBinding, UnknownReasonId,
+    ObservationError, ObservationHeadViewV1, ObservationOwnerV1, ObservationPayloadInput,
+    ObservationSchemaMismatchV1, ObservationStreamId, ObservationUpdateInput, ObservedScenarioSet,
+    ObservedScenarioSetInput, PreparedObservationUpdateV1, Revision, RevisionBoundObservationV1,
+    RevisionBoundUnknownV1, ScenarioId, ScenarioInput, SurfaceInputBinding, UnknownReasonId,
+    canonicalize_observation_schema, prepare_observation,
 };
-use crate::Srgb8;
 
 const PORT_A: SurfaceInputPortId = SurfaceInputPortId::new(10);
 const PORT_B: SurfaceInputPortId = SurfaceInputPortId::new(20);

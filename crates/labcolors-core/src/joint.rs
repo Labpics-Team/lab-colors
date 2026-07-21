@@ -19,6 +19,7 @@ use crate::constraints::{
     assess_visible_point_hard,
 };
 use crate::observation::{RevisionBoundObservationV1, ScenarioId};
+use crate::session::SessionObservationBindingPermitV1;
 
 /// Sealed evaluator family, которую joint-program вызывает одинаково для
 /// каждого target occurrence. Конкретные Exact/WCAG/readability payload-и
@@ -211,31 +212,33 @@ pub(crate) enum JointPointProgramIdentityV1 {
 
 /// Наблюдение, пригодное для одного и того же execution/recheck kernel-а.
 /// Runtime revision и статическая compiler binding остаются разными типами.
-pub(crate) trait JointObservationV1: Clone + Debug + PartialEq {
-    fn root_index(&self, root: SurfaceInputPortId) -> Option<usize>;
+mod observation_seal {
+    pub(crate) trait Sealed {}
+}
+
+pub(crate) trait JointObservationV1: observation_seal::Sealed + Debug + PartialEq {
     fn case_count(&self) -> usize;
-    fn root_at(&self, case_index: usize, root_index: usize) -> Srgb8;
+    fn surface_at(&self, case_index: usize, surface: SurfaceInputPortId) -> Option<Srgb8>;
     fn provenance(&self, case_index: usize) -> Option<&[ScenarioId]>;
 }
 
-impl JointObservationV1 for RevisionBoundObservationV1 {
-    fn root_index(&self, root: SurfaceInputPortId) -> Option<usize> {
-        self.schema().binary_search(&root).ok()
-    }
+impl observation_seal::Sealed for RevisionBoundObservationV1 {}
 
+impl JointObservationV1 for RevisionBoundObservationV1 {
     fn case_count(&self) -> usize {
         self.set().cases().len()
     }
 
-    fn root_at(&self, case_index: usize, root_index: usize) -> Srgb8 {
-        self.set().cases()[case_index].bindings()[root_index]
+    fn surface_at(&self, case_index: usize, surface: SurfaceInputPortId) -> Option<Srgb8> {
+        let bindings = self.physical_bindings(case_index)?;
+        let index = bindings
+            .binary_search_by_key(&surface, |binding| binding.port())
+            .ok()?;
+        Some(bindings[index].value())
     }
 
     fn provenance(&self, case_index: usize) -> Option<&[ScenarioId]> {
-        self.set()
-            .cases()
-            .get(case_index)
-            .map(|case| case.provenance())
+        RevisionBoundObservationV1::provenance(self, case_index)
     }
 }
 
@@ -254,19 +257,15 @@ impl StaticJointObservationV1 {
     }
 }
 
-impl JointObservationV1 for StaticJointObservationV1 {
-    fn root_index(&self, root: SurfaceInputPortId) -> Option<usize> {
-        (root == self.root_surface).then_some(0)
-    }
+impl observation_seal::Sealed for StaticJointObservationV1 {}
 
+impl JointObservationV1 for StaticJointObservationV1 {
     fn case_count(&self) -> usize {
         1
     }
 
-    fn root_at(&self, case_index: usize, root_index: usize) -> Srgb8 {
-        debug_assert_eq!(case_index, 0);
-        debug_assert_eq!(root_index, 0);
-        self.root
+    fn surface_at(&self, case_index: usize, surface: SurfaceInputPortId) -> Option<Srgb8> {
+        (case_index == 0 && surface == self.root_surface).then_some(self.root)
     }
 
     fn provenance(&self, _case_index: usize) -> Option<&[ScenarioId]> {
@@ -345,7 +344,30 @@ where
         JointPointProgramIdentityV1::TwoPaintDerivedSurfacePointV1
     }
 
-    pub(crate) fn evaluate<Observation>(
+    pub(crate) fn evaluate_static(
+        &self,
+        candidates: JointCandidateSetV1,
+        observation: StaticJointObservationV1,
+    ) -> Result<
+        PointwiseFullHardReportV1<Evaluation, StaticJointObservationV1>,
+        PointwiseJointReportErrorV1<Evaluation>,
+    > {
+        self.evaluate_owned(candidates, observation)
+    }
+
+    pub(crate) fn evaluate_revision_bound(
+        &self,
+        candidates: JointCandidateSetV1,
+        observation: RevisionBoundObservationV1,
+        _permit: SessionObservationBindingPermitV1,
+    ) -> Result<
+        PointwiseFullHardReportV1<Evaluation, RevisionBoundObservationV1>,
+        PointwiseJointReportErrorV1<Evaluation>,
+    > {
+        self.evaluate_owned(candidates, observation)
+    }
+
+    fn evaluate_owned<Observation>(
         &self,
         candidates: JointCandidateSetV1,
         observation: Observation,
@@ -357,9 +379,7 @@ where
         Observation: JointObservationV1,
     {
         self.validate_candidates(&candidates)?;
-        let root_index = observation.root_index(self.root_surface).ok_or(
-            PointwiseJointReportErrorV1::MissingRootSurface(self.root_surface),
-        )?;
+        self.validate_observation(&observation)?;
         let (execution_count, cell_count) = checked_joint_cardinality_raw(
             candidates.candidates.len(),
             observation.case_count(),
@@ -369,7 +389,6 @@ where
         let matrices = self.execute(
             candidates.candidates(),
             &observation,
-            root_index,
             execution_count,
             cell_count,
         )?;
@@ -381,6 +400,25 @@ where
             executions: matrices.executions,
             cells: matrices.cells,
         })
+    }
+
+    fn validate_observation<Observation>(
+        &self,
+        observation: &Observation,
+    ) -> Result<(), PointwiseJointReportErrorV1<Evaluation>>
+    where
+        Observation: JointObservationV1,
+    {
+        if (0..observation.case_count()).any(|case_index| {
+            observation
+                .surface_at(case_index, self.root_surface)
+                .is_none()
+        }) {
+            return Err(PointwiseJointReportErrorV1::MissingRootSurface(
+                self.root_surface,
+            ));
+        }
+        Ok(())
     }
 
     fn validate_candidates(
@@ -412,7 +450,6 @@ where
         &self,
         candidates: &[JointCandidateTupleV1],
         observation: &Observation,
-        root_index: usize,
         execution_count: usize,
         cell_count: usize,
     ) -> Result<
@@ -433,7 +470,9 @@ where
 
         for candidate in candidates {
             for case_index in 0..observation.case_count() {
-                let root = observation.root_at(case_index, root_index);
+                let root = observation
+                    .surface_at(case_index, self.root_surface)
+                    .unwrap_or_else(|| unreachable!("joint observation passed keyed preflight"));
                 let lower = PointOpacityOverSurfaceV1::evaluate_admitted(
                     candidate.lower.source().bytes(),
                     candidate.lower.opacity(),
@@ -868,11 +907,13 @@ where
         PointwiseVerifiedSelectionV1<Evaluation, Observation>,
         PointwiseSelectedRecheckErrorV1<Evaluation>,
     > {
-        let root_index = self
-            .report
-            .observation
-            .root_index(self.report.program.root_surface)
-            .ok_or(PointwiseSelectedRecheckErrorV1::InvariantDrift)?;
+        // A revision-bound report can enter this consuming chain only through
+        // `evaluate_revision_bound` with a Session-minted linear permit. Static
+        // reports have a different concrete observation type.
+        self.report
+            .program
+            .validate_observation(&self.report.observation)
+            .map_err(|_| PointwiseSelectedRecheckErrorV1::InvariantDrift)?;
         let cases = self.report.observation.case_count();
         let (execution_count, cell_count) =
             checked_joint_cardinality_raw(1, cases, self.report.program.constraints.len())
@@ -883,7 +924,6 @@ where
             .execute(
                 core::slice::from_ref(&self.candidate),
                 &self.report.observation,
-                root_index,
                 execution_count,
                 cell_count,
             )

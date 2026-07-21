@@ -6,8 +6,8 @@
 
 use core::ops::Range;
 
-use crate::appearance::SurfaceInputPortId;
 use crate::Srgb8;
+use crate::appearance::SurfaceInputPortId;
 
 /// Runtime instance/epoch of one atomic observation stream.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]

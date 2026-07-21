@@ -1,3 +1,4 @@
+use crate::Srgb8;
 use crate::appearance::{EncodedPointPaintV1, OccurrenceId, PaintId, SurfaceInputPortId};
 use crate::composition::{AdmittedOpacityV1, CompositionProfileV1};
 use crate::observation::{
@@ -14,7 +15,6 @@ use crate::point_support::{
 };
 use crate::session::{PointSupportSessionStateV1, PointSupportSessionV1};
 use crate::wcag22::Wcag22CriterionV1;
-use crate::Srgb8;
 
 const STREAM: ObservationStreamId = ObservationStreamId::new(31);
 const SURFACE_A: SurfaceInputPortId = SurfaceInputPortId::new(21);

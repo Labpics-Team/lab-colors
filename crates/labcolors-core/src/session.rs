@@ -9,9 +9,9 @@ use std::mem;
 
 use crate::composition::CompositionProfileV1;
 use crate::observation::{
-    prepare_observation, ObservationError, ObservationHeadViewV1, ObservationOwnerV1,
-    ObservationSchemaMismatchV1, ObservationStreamId, ObservationUpdateInput,
-    PreparedObservationUpdateV1, RevisionBoundUnknownV1,
+    ObservationError, ObservationHeadViewV1, ObservationOwnerV1, ObservationSchemaMismatchV1,
+    ObservationStreamId, ObservationUpdateInput, PreparedObservationUpdateV1,
+    RevisionBoundUnknownV1, prepare_observation,
 };
 use crate::point_support::{
     BoundPointSupportRecheckV1, CompiledPointSupportRecheckV1, PointSupportDecisionV1,
@@ -21,12 +21,17 @@ use crate::point_support::{
 /// Linear authority to consume and revision-bind an observation. The type is
 /// visible to the evaluator only as a parameter; its private field and private
 /// constructor make safe construction exclusive to this Session module.
-pub(crate) struct PointSupportSessionPermitV1 {
+pub(crate) struct SessionObservationBindingPermitV1 {
     _private: (),
 }
 
-impl PointSupportSessionPermitV1 {
-    const fn new() -> Self {
+impl SessionObservationBindingPermitV1 {
+    const fn mint() -> Self {
+        Self { _private: () }
+    }
+
+    #[cfg(test)]
+    pub(crate) const fn for_test() -> Self {
         Self { _private: () }
     }
 }
@@ -181,7 +186,7 @@ impl PointSupportSessionV1 {
                 let (state, observation) = prepared.into_parts();
                 let decision = self
                     .recheck
-                    .evaluate(observation, PointSupportSessionPermitV1::new())
+                    .evaluate(observation, SessionObservationBindingPermitV1::mint())
                     .map_err(map_evaluation_error)?;
                 let previous = take_last_verified(state);
                 *state = match decision {
@@ -231,21 +236,22 @@ fn take_last_verified(state: &mut PointSupportSessionStateV1) -> Option<Verified
 
 #[cfg(test)]
 mod structural_tests {
-    use super::PointSupportSessionPermitV1;
+    use super::SessionObservationBindingPermitV1;
+    use crate::Srgb8;
     use crate::appearance::{EncodedPointPaintV1, OccurrenceId, PaintId, SurfaceInputPortId};
     use crate::composition::{AdmittedOpacityV1, CompositionProfileV1};
     use crate::observation::{
-        prepare_observation, ObservationHeadViewV1, ObservationOwnerV1, ObservationPayloadInput,
+        ObservationHeadViewV1, ObservationOwnerV1, ObservationPayloadInput,
         ObservationSchemaMismatchV1, ObservationStreamId, ObservationUpdateInput,
         ObservedScenarioSetInput, PreparedObservationUpdateV1, Revision,
         RevisionBoundObservationV1, ScenarioId, ScenarioInput, SurfaceInputBinding,
+        prepare_observation,
     };
     use crate::point_support::{
         CompiledPointSupportRecheckV1, PointSupportCriterionRequirementV1,
         PointSupportEvaluationErrorV1, PointSupportOccurrenceRequirementV1,
         PointSupportStabilityPolicyV1,
     };
-    use crate::Srgb8;
 
     const STREAM: ObservationStreamId = ObservationStreamId::new(700);
     const REQUIRED_SURFACE: SurfaceInputPortId = SurfaceInputPortId::new(10);
@@ -341,7 +347,7 @@ mod structural_tests {
             recheck
                 .evaluate(
                     wrong_schema_observation(),
-                    PointSupportSessionPermitV1::new(),
+                    SessionObservationBindingPermitV1::mint(),
                 )
                 .unwrap_err(),
             PointSupportEvaluationErrorV1::ObservationSchemaMismatch(
@@ -387,7 +393,7 @@ mod structural_tests {
             recheck
                 .evaluate(
                     narrow_schema_observation(),
-                    PointSupportSessionPermitV1::new(),
+                    SessionObservationBindingPermitV1::mint(),
                 )
                 .unwrap_err(),
             PointSupportEvaluationErrorV1::ObservationSchemaMismatch(

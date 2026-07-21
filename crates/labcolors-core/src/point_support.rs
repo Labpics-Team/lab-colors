@@ -10,24 +10,25 @@
 
 use core::cmp::Ordering;
 
+use crate::Srgb8;
 use crate::appearance::{
     EncodedPointPaintV1, OccurrenceId, PaintId, PhysicalProgramIdentityV1,
     PointOpacityOverSurfaceV1, SourceOverCertificateV1, SurfaceInputPortId,
 };
 use crate::composition::CompositionProfileV1;
 use crate::constraints::{
-    assess_visible_point_hard, ExactPassEvidenceV1, ExactSrgb8IdentityV1, ExactViolationEvidenceV1,
-    HardDecision, VisiblePointPassEvidence, VisiblePointViolationEvidence, Wcag22Srgb8V1,
+    ExactPassEvidenceV1, ExactSrgb8IdentityV1, ExactViolationEvidenceV1, HardDecision,
+    VisiblePointPassEvidence, VisiblePointViolationEvidence, Wcag22Srgb8V1,
+    assess_visible_point_hard,
 };
 use crate::numerics::{
-    numerical_registry_v2, NumericalArtifactIdV2, NumericalBoundStatusV2, NumericalErrorBoundIdV2,
+    NumericalArtifactIdV2, NumericalBoundStatusV2, NumericalErrorBoundIdV2,
     NumericalEvidenceClassV2, NumericalFallbackStatusV1, NumericalProofIdV2, NumericalSiteIdV2,
-    StableNumericalOutcomeV2,
+    StableNumericalOutcomeV2, numerical_registry_v2,
 };
 use crate::observation::{ObservationSchemaMismatchV1, RevisionBoundObservationV1, ScenarioId};
-use crate::session::PointSupportSessionPermitV1;
-use crate::wcag22::{measure_wcag22_srgb8, Wcag22CriterionV1, Wcag22MeasurementV1};
-use crate::Srgb8;
+use crate::session::SessionObservationBindingPermitV1;
+use crate::wcag22::{Wcag22CriterionV1, Wcag22MeasurementV1, measure_wcag22_srgb8};
 
 const DROP_BASIS_POINTS_SCALE: u16 = 10_000;
 const STABILITY_SITE_ID: NumericalSiteIdV2 =
@@ -354,7 +355,7 @@ impl BoundPointSupportRecheckV1 {
     pub(crate) fn evaluate(
         &self,
         observation: RevisionBoundObservationV1,
-        _permit: PointSupportSessionPermitV1,
+        _permit: SessionObservationBindingPermitV1,
     ) -> Result<PointSupportDecisionV1, PointSupportEvaluationErrorV1> {
         let assessment = evaluate_bound_point_support(self, &observation)?;
         Ok(assessment.bind(observation))
@@ -1131,8 +1132,8 @@ fn compare_nonnegative_rationals(
     }
 }
 
-fn mint_stability_evidence(
-) -> Result<PointSupportStabilityNumericalEvidenceV1, PointSupportCompileErrorV1> {
+fn mint_stability_evidence()
+-> Result<PointSupportStabilityNumericalEvidenceV1, PointSupportCompileErrorV1> {
     let row = numerical_registry_v2()
         .iter()
         .find(|row| row.site_id == STABILITY_SITE_ID)

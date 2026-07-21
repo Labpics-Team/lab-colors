@@ -57,7 +57,7 @@ SITE_ID = "point-support-retained-reference-surplus-v1"
 SOURCE_BINDING_LAW = "point-support-rust-whole-file-semantic-cone-v2"
 SOURCE_BINDING_DOMAIN = b"labcolors.point-support.rust-whole-file-semantic-cone.v2"
 EXPECTED_SOURCE_CAPSULE_SHA256 = (
-    "3479afab38e52dffa43700aa2753c940ff79b68fc00f10bb0f31e649847f098f"
+    "604e382c156a57489fe79f8f7dc233e3a91985c94563317915a474240429f34a"
 )
 EXPECTED_Q55_PROOF_SHA256 = (
     "d269e9de689009bb955788bf8762fce56680bf616fc0459b6526a367875a6a08"
@@ -192,7 +192,7 @@ def verify_source_binding() -> tuple[str, int]:
         (POINT_SOURCE, b"NumericalSiteIdV2::PointSupportRetainedReferenceSurplusV1;", b"NumericalSiteIdV2::Wcag22Srgb8ContrastV1;"),
         (POINT_SOURCE, b"let current_distance = reference_distance(current_measurement)?;", b"let current_distance = baseline.distance;"),
         (POINT_SOURCE, b"Ok(assessment.bind(observation))", b"Ok(assessment.bind_unchecked(observation))"),
-        (POINT_SOURCE, b"use crate::wcag22::{measure_wcag22_srgb8, Wcag22CriterionV1, Wcag22MeasurementV1};", b"use crate::wcag22::{measure_wcag22_srgb8 as canonical_measure_wcag22_srgb8, Wcag22CriterionV1, Wcag22MeasurementV1};\nfn measure_wcag22_srgb8(foreground: [u8; 3], background: [u8; 3]) -> Wcag22MeasurementV1 { canonical_measure_wcag22_srgb8(background, foreground) }"),
+        (POINT_SOURCE, b"use crate::wcag22::{Wcag22CriterionV1, Wcag22MeasurementV1, measure_wcag22_srgb8};", b"use crate::wcag22::{Wcag22CriterionV1, Wcag22MeasurementV1, measure_wcag22_srgb8 as canonical_measure_wcag22_srgb8};\nfn measure_wcag22_srgb8(foreground: [u8; 3], background: [u8; 3]) -> Wcag22MeasurementV1 { canonical_measure_wcag22_srgb8(background, foreground) }"),
         (OBSERVATION_SOURCE, b"        &self.cases\n", b"        &[]\n"),
         (OBSERVATION_SOURCE, b"if expected_input != actual_input", b"if expected_input == actual_input"),
         (OBSERVATION_SOURCE, b"Some(observation.revision)", b"None"),
@@ -200,7 +200,7 @@ def verify_source_binding() -> tuple[str, int]:
         (OBSERVATION_SOURCE, b"tuples.push((scenario.bindings, scenario.id));", b"tuples.push((Vec::new(), scenario.id));"),
         (SESSION_SOURCE, b"ObservationHeadViewV1::Observed(current.report().observation())", b"ObservationHeadViewV1::Empty"),
         (SESSION_SOURCE, b"recheck: compiled.into_session_recheck(),", b"recheck: unreachable!(),"),
-        (SESSION_SOURCE, b".evaluate(observation, PointSupportSessionPermitV1::new())", b".evaluate(observation, PointSupportSessionPermitV1::bypass())"),
+        (SESSION_SOURCE, b".evaluate(observation, SessionObservationBindingPermitV1::mint())", b".evaluate(observation, SessionObservationBindingPermitV1::bypass())"),
         (SESSION_SOURCE, b"PointSupportEvaluationErrorV1::ResourceExhausted => {\n            PointSupportSessionUpdateErrorV1::ResourceExhausted", b"PointSupportEvaluationErrorV1::ResourceExhausted => {\n            PointSupportSessionUpdateErrorV1::InternalInvariant"),
         (SESSION_SOURCE, b"PointSupportSessionStateV1::Ready { current } => Some(current),", b"PointSupportSessionStateV1::Ready { .. } => None,"),
         (NUMERICS_SOURCE, b"proof_ids: [NumericalProofIdV2::PointSupportReferenceSurplusIntegerV1],\n            bound_status: Available", b"proof_ids: [NumericalProofIdV2::PointSupportReferenceSurplusIntegerV1],\n            bound_status: Unavailable"),

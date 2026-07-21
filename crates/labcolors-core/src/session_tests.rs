@@ -1,5 +1,6 @@
 use proptest::prelude::*;
 
+use crate::Srgb8;
 use crate::appearance::{EncodedPointPaintV1, OccurrenceId, PaintId, SurfaceInputPortId};
 use crate::composition::{AdmittedOpacityV1, CompositionProfileV1};
 use crate::observation::{
@@ -14,7 +15,6 @@ use crate::point_support::{
 use crate::session::{
     PointSupportSessionStateV1, PointSupportSessionUpdateErrorV1, PointSupportSessionV1,
 };
-use crate::Srgb8;
 
 const PAINT: PaintId = PaintId::new(7);
 const OCCURRENCE: OccurrenceId = OccurrenceId::new(11);

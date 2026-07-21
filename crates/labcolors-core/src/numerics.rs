@@ -1097,9 +1097,7 @@ mod tests {
         assert_eq!(wcag.bound_status, NumericalBoundStatusV2::Available);
         let stability = rows
             .iter()
-            .find(|row| {
-                row.site_id == NumericalSiteIdV2::PointSupportRetainedReferenceSurplusV1
-            })
+            .find(|row| row.site_id == NumericalSiteIdV2::PointSupportRetainedReferenceSurplusV1)
             .expect("point-support stability site must be registered");
         assert_eq!(
             stability.artifact_ids,
