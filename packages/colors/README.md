@@ -339,21 +339,43 @@ Ys candidate score `lc` и диагностический `wcagRatio` не мо�
 
 ---
 
-### `engine.recheckContrast(bgHex, fgHexes, theme): Float64Array`
+### `engine.themeHandle(theme): number`
 
-Дешёвая покадровая проверка: какие Ys candidate score и WCAG ratio дают цвета `fgHexes` на фоне `bgHex` под темой `theme`, без полного резолва. Требует загруженный конфиг — `theme` ищется в его словаре (`config_required` без конфига, `unknown_theme` для необъявленного ключа), как и `resolveTheme`. Возвращает `Float64Array` пар `[lc, wcagRatio]` в порядке `fgHexes`: индекс `2·i` — знаковая кандидатная оценка по `Ys` из frozen SAPC-shaped curve, `2·i+1` — WCAG-отношение. `lc` не является LPC/readability verdict; runtime использует его только как координату текущего transitional solver-а.
+Минтит числовой хэндл темы для горячего update-loop-а. `theme` ищется в словаре
+загруженного конфига (`config_required` без конфига, `unknown_theme` для
+необъявленного ключа), как и в `resolveTheme`. Строку темы разрешают ОДИН раз на
+холодном крае, затем в каждом кадре передают числовой хэндл в `recheckContrast`/
+`recheckContrastMulti` — так словарь темы не пересканируется по строке на каждом
+тике.
 
 ---
 
-### `engine.recheckContrastMulti(bgHexes, fgHexes, theme): Float64Array`
+### `engine.recheckContrast(bg, fgs, themeHandle): Float64Array`
+
+Дешёвая покадровая проверка: какие Ys candidate score и WCAG ratio дают цвета
+`fgs` на фоне `bg` под темой `themeHandle`, без полного резолва. `bg` — упакованное
+слово `0x00RRGGBB` (u32, старший байт зарезервирован и обязан быть 0); `fgs` —
+`Uint32Array` таких же упакованных слов; `themeHandle` — число из
+`engine.themeHandle(theme)`. Один contiguous-копи в линейную память, ноль
+hex-parse и строковых аллокаций на update-пути. Возвращает `Float64Array` пар
+`[lc, wcagRatio]` в порядке `fgs`: индекс `2·i` — знаковая кандидатная оценка по
+`Ys` из frozen SAPC-shaped curve, `2·i+1` — WCAG-отношение. `lc` не является
+LPC/readability verdict; runtime использует его только как координату текущего
+transitional solver-а.
+
+---
+
+### `engine.recheckContrastMulti(bgs, fgs, themeHandle): Float64Array`
 
 Батч-вариант `recheckContrast` для конечного набора образцов меняющегося фона
-(градиент / картинка / bg-blur / стекло): проверяет один набор `fgHexes` сразу
-против нескольких `bgHexes`, разделяя прямой ход модели каждого переднего плана
-между всеми образцами (он от фона не зависит). Результат байт-в-байт равен N
-отдельным вызовам `recheckContrast`, пара за парой — это закреплено parity-тестом
-границы. Возвращает плоский background-major `Float64Array`: образец `s`, цвет
-`i` лежит в `(s · fgHexes.length + i) · 2` (`lc`) и `+1` (`wcagRatio`).
+(градиент / картинка / bg-blur / стекло): проверяет один набор `fgs` сразу
+против нескольких `bgs`, разделяя прямой ход модели каждого переднего плана
+между всеми образцами (он от фона не зависит). `bgs` и `fgs` — `Uint32Array`
+упакованных `0x00RRGGBB` слов, `themeHandle` — число из `engine.themeHandle(theme)`.
+Результат байт-в-байт равен N отдельным вызовам `recheckContrast`, пара за парой —
+это закреплено parity-тестом границы. Возвращает плоский background-major
+`Float64Array`: образец `s`, цвет `i` лежит в `(s · fgs.length + i) · 2` (`lc`) и
+`+1` (`wcagRatio`).
 `adaptTheme` использует один батч-вызов вместо N отдельных пересечений границы;
 эффект на производительность зависит от host и интеграции и без отдельного
 воспроизводимого гейта не заявляется. Для одного образца контроллер остаётся на

@@ -450,11 +450,18 @@ fn vars_mirror_reachable_roles_in_oklch() {
     );
 }
 
-/// `recheckContrast` across the wasm boundary: the returned `Float64Array`
-/// reproduces the core `resolve_named_set`'s own `(lc, wcag)` per role, accepts
-/// the same shorthand hex forms as `resolveTheme`, and rejects a bad foreground.
+/// Parse an engine-emitted `#RRGGBB` into the packed `0x00RRGGBB` boundary word.
+fn pack_hex(hex: &str) -> u32 {
+    u32::from_str_radix(hex.trim_start_matches('#'), 16).expect("engine hex is #RRGGBB")
+}
+
+/// Packed `recheckContrast` across the wasm boundary (C8d): the returned
+/// `Float64Array` reproduces the core `resolve_named_set`'s own `(lc, wcag)` per
+/// role from packed `0x00RRGGBB` words + a numeric theme handle, and a word with
+/// a non-zero reserved high byte rejects with the stable code. The string
+/// overload is hard-cut.
 #[wasm_bindgen_test]
-fn recheck_contrast_boundary_matches_resolve_and_shares_hex_contract() {
+fn recheck_contrast_boundary_matches_resolve_over_packed_words() {
     let bg = "#FFFFFF";
     let core_resolved = resolve_named_set(
         &BgInput::solid(bg).expect("white is valid"),
@@ -462,18 +469,19 @@ fn recheck_contrast_boundary_matches_resolve_and_shares_hex_contract() {
         &ViewingConditions::srgb(),
     )
     .expect("valid recheck parity table resolves atomically");
-    let mut fgs: Vec<String> = Vec::new();
+    let mut fgs: Vec<u32> = Vec::new();
     let mut want: Vec<(f64, f64)> = Vec::new();
     for (_name, resolved) in &core_resolved {
         if let Resolved::Color { solved, .. } = resolved {
-            fgs.push(solved.hex().to_string());
+            fgs.push(pack_hex(solved.hex()));
             want.push((solved.lc(), solved.wcag_ratio()));
         }
     }
 
     let engine = boundary_with_labui();
+    let handle = engine.theme_handle("light").expect("light mints a handle");
     let flat = engine
-        .recheck_contrast(bg, fgs.clone(), "light")
+        .recheck_contrast(pack_hex(bg), fgs.clone(), handle)
         .expect("rechecks");
     assert_eq!(
         flat.len(),
@@ -491,28 +499,36 @@ fn recheck_contrast_boundary_matches_resolve_and_shares_hex_contract() {
         );
     }
 
-    // Shorthand / missing-`#` foregrounds are accepted, identical to canonical —
-    // the same hex contract `resolveTheme` honours (`#123` == `#112233`).
-    // C5.1: recheck идёт через словарь тем загруженного конфига — engine здесь
-    // уже несёт labui-паспорт.
-    let canonical = engine
-        .recheck_contrast(bg, vec!["#112233".to_string()], "light")
-        .expect("canonical rechecks");
-    for fg in ["#123", "112233"] {
-        let got = engine
-            .recheck_contrast(bg, vec![fg.to_string()], "light")
-            .expect("shorthand rechecks");
-        assert_eq!(got, canonical, "{fg}: must match the canonical spelling");
+    // The multi call is background-major byte-identical to per-sample calls.
+    let bgs = [
+        pack_hex("#F2F2F7"),
+        pack_hex("#FFFFFF"),
+        pack_hex("#101012"),
+    ];
+    let multi = engine
+        .recheck_contrast_multi(bgs.to_vec(), fgs.clone(), handle)
+        .expect("multi rechecks");
+    assert_eq!(multi.len(), bgs.len() * fgs.len() * 2);
+    for (s, &sample) in bgs.iter().enumerate() {
+        let per = engine
+            .recheck_contrast(sample, fgs.clone(), handle)
+            .expect("per-sample rechecks");
+        let base = s * fgs.len() * 2;
+        for (i, value) in per.iter().enumerate() {
+            assert_eq!(multi[base + i], *value, "multi sample {s} index {i} drift");
+        }
     }
 
-    // A malformed foreground rejects with the stable code, never a panic.
+    // A word with a non-zero reserved high byte (an RGBA/ARGB leak) rejects with
+    // the stable code, never a panic. C5.1: recheck идёт через словарь тем
+    // загруженного конфига — engine здесь уже несёт labui-паспорт.
     let err = engine
-        .recheck_contrast(bg, vec!["zzz".to_string()], "light")
+        .recheck_contrast(pack_hex(bg), vec![0xFF00_0000], handle)
         .map(|_| ())
-        .expect_err("garbage foreground rejects");
+        .expect_err("high-byte-set foreground word rejects");
     assert!(
         error_message(err).contains("invalid_background"),
-        "bad foreground must carry the stable code"
+        "bad foreground word must carry the stable code"
     );
 }
 

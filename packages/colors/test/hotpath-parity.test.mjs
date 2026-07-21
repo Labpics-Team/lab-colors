@@ -25,7 +25,7 @@ import * as ebg from "../effective-bg.js";
 
 const { oklabLerp } = ebg;
 
-// ── deterministic mini-harness (mirrors bench/hotpath.bench.mjs, smaller) ────
+// ── deterministic mini-harness (small, self-contained hot-path replay) ───────
 
 const FRAME_MS = 1000 / 60;
 const FRAMES = 700;
@@ -97,7 +97,11 @@ function makeStubEngine() {
       return { vars, roles };
     },
     recheckContrast(bg, fgs) {
-      const drift = Math.abs(bgTone(bg) - stub.lastSolvedTone);
+      // Packed boundary (C8d): `bg` is a `0x00RRGGBB` word. Its R byte is the
+      // same tone `bgTone` extracts from the hex spelling, so the drift — and
+      // thus every applied-state fingerprint — is byte-identical to the pre-pack
+      // string path.
+      const drift = Math.abs(((bg >> 16) & 0xff) - stub.lastSolvedTone);
       const lc = drift >= 64 ? 40 : 60;
       const out = new Float64Array(fgs.length * 2);
       for (let i = 0; i < fgs.length; i++) out[2 * i] = lc;

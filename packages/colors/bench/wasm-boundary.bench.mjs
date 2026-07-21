@@ -1,8 +1,7 @@
 // JS↔WASM boundary benchmark for the @labpics/colors REAL engine.
 //
-// The sibling `hotpath.bench.mjs` measures the pure-JS controller (`adaptTheme`)
-// against a STUB engine, isolating JS overhead. This one is its pair: it drives
-// the REAL wasm-bindgen boundary — `recheckContrast` (the per-frame primitive)
+// This benchmark drives the REAL wasm-bindgen boundary — `recheckContrast` (the
+// per-frame primitive)
 // and `resolveTheme` (the on-breach re-solve) — so we can see what a call across
 // the JS↔wasm line actually costs, and prove an optimisation keeps the results
 // byte-identical.
@@ -50,6 +49,21 @@ const FGS = Object.values(resolved.roles)
 // Three worst-case samples of a varying backdrop (what strict/gradient mode feeds).
 const SAMPLES = ["#38383A", "#404042", "#2E2E30"];
 
+// C8d packed boundary: recheckContrast/recheckContrastMulti take packed
+// `0x00RRGGBB` words + a `Uint32Array` of foregrounds + a numeric theme handle.
+// Mirror the controller's `packRgb24Hex` (incl. #RGB shorthand expansion) and
+// mint the theme handle ONCE, so the bench drives the real packed ABI — not
+// hex strings silently coerced to 0. `resolveTheme` keeps the string theme (a
+// cold authoring edge, unchanged by the hard-cut).
+const pk = (hex) => {
+  const b = hex.charCodeAt(0) === 35 /* '#' */ ? hex.slice(1) : hex;
+  const six = b.length === 3 ? b[0] + b[0] + b[1] + b[1] + b[2] + b[2] : b;
+  return Number.parseInt(six, 16) >>> 0;
+};
+const THEME_HANDLE = engine.themeHandle(THEME);
+const FGSW = Uint32Array.from(FGS, pk);
+const SAMPLESW = Uint32Array.from(SAMPLES, pk);
+
 // ── timing core ─────────────────────────────────────────────────────────────
 
 /** Median ns/call: run `fn` in `batches` batches of `inner` calls, take the
@@ -94,17 +108,17 @@ function allocPerCall(fn, n) {
 // ── the calls under test ────────────────────────────────────────────────────
 
 // One frame with a solid background = ONE recheck of the whole fg set.
-const recheck1 = () => engine.recheckContrast(SAMPLES[0], FGS, THEME);
+const recheck1 = () => engine.recheckContrast(SAMPLESW[0], FGSW, THEME_HANDLE);
 // One frame with a 3-sample varying backdrop = THREE rechecks (worst-case loop).
 const recheck3 = () => {
   let last;
-  for (let s = 0; s < 3; s++) last = engine.recheckContrast(SAMPLES[s], FGS, THEME);
+  for (let s = 0; s < 3; s++) last = engine.recheckContrast(SAMPLESW[s], FGSW, THEME_HANDLE);
   return last;
 };
 // The same 3-sample frame as `recheck3`, but batched into ONE call so each
 // foreground's CAM16 forward is computed once and shared across samples.
 // Byte-identical to `recheck3`; the public batch API the controller now uses.
-const recheckMulti3 = () => engine.recheckContrastMulti(SAMPLES, FGS, THEME);
+const recheckMulti3 = () => engine.recheckContrastMulti(SAMPLESW, FGSW, THEME_HANDLE);
 // Re-solve, cache HIT (same bg repeatedly): pays only the JS-object projection.
 const resolveHit = () => engine.resolveTheme(SOLVE_BG, THEME);
 // Re-solve, cache MISS (distinct bg each call): full solve + projection. Sweep
@@ -156,7 +170,7 @@ function fnv1aF64(hash, arr) {
   return h >>> 0;
 }
 let fp = 0x811c9dc5;
-for (const s of SAMPLES) fp = fnv1aF64(fp, engine.recheckContrast(s, FGS, THEME));
+for (const s of SAMPLESW) fp = fnv1aF64(fp, engine.recheckContrast(s, FGSW, THEME_HANDLE));
 // Include a resolveTheme vars fingerprint too (the projection is under test).
 const vfp = (() => {
   let h = 0x811c9dc5;

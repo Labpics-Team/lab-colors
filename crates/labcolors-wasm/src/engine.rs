@@ -203,39 +203,46 @@ impl Engine {
         Err(BindingError::ConfigRequired)
     }
 
-    /// Recheck the contrasts a set of foreground colours achieve against a
-    /// (possibly changed) `bg_hex` under `theme` — the cheap per-frame primitive
-    /// of the reactive runtime. One CAM16 forward for the background plus one per
+    /// Mint the numeric theme handle for a client theme key: the slot of the
+    /// key in the loaded config's theme dictionary. This is the cold-edge
+    /// string→number lowering (F1/F2): the controller resolves a theme name to
+    /// its handle ONCE at a solve boundary, then addresses it numerically in the
+    /// per-frame recheck loop — so the hot path never re-scans the dictionary by
+    /// string. Recheck without a loaded config is impossible (no dictionary), and
+    /// an unknown key is a typed [`BindingError::UnknownTheme`].
+    pub fn theme_handle(&self, theme_key: &str) -> Result<u32, BindingError> {
+        let named = self.named.as_ref().ok_or(BindingError::ConfigRequired)?;
+        let (slot, _) =
+            named
+                .theme_binding(theme_key)
+                .ok_or_else(|| BindingError::UnknownTheme {
+                    requested: theme_key.to_string(),
+                })?;
+        Ok(slot)
+    }
+
+    /// Recheck the contrasts a set of packed `0x00RRGGBB` foreground colours
+    /// achieve against a (possibly changed) packed `bg` background under the
+    /// theme addressed by `theme_handle` — the cheap per-frame primitive of the
+    /// reactive runtime. One display-forward for the background plus one per
     /// foreground, **no solve**: the controller keeps current colours while they
     /// still pass and re-solves only the rare role that stably fails.
     ///
+    /// The packed input is one contiguous typed-array copy into linear memory:
+    /// zero hex parse, zero `String`/`Cow` per foreground. The reserved high byte
+    /// of every word is required-zero and validated once, without allocation.
     /// Returns a flat, interleaved buffer `[lc0, wcag0, lc1, wcag1, …]` (mapped to
-    /// a JS `Float64Array`) instead of a per-result object graph. The current
-    /// string ABI and implementation still allocate boundary and work buffers
-    /// per call. Values equal what the solver measured, so a freshly-resolved
+    /// a JS `Float64Array`) — the same output layout the string boundary emitted,
+    /// byte for byte. Values equal what the solver measured, so a freshly-resolved
     /// set rechecks to its own reported contrasts.
-    pub fn recheck(
+    pub fn recheck_u32(
         &self,
-        bg_hex: &str,
-        fg_hexes: &[String],
-        theme_key: &str,
+        bg: u32,
+        fgs: &[u32],
+        theme_handle: u32,
     ) -> Result<Vec<f64>, BindingError> {
-        let vc = self.recheck_vc(theme_key)?;
-        // Accept the same hex forms as the background and `resolveTheme` (`#RGB`
-        // shorthand, missing `#`, any case) — but on this per-frame primitive,
-        // BORROW the input when it is already a valid 6-hex-digit colour so the
-        // common case avoids a normalisation `String`. Boundary vectors,
-        // references, pairs and the flat output still allocate. `#RGB` shorthand
-        // (or another non-canonical form) additionally allocates a normalised
-        // `String`. `srgb_from_hex` parses case- and `#`-insensitively, so a
-        // borrowed lower/upper/bare form yields the byte-identical colour.
-        let bg = hex_for_recheck(bg_hex)?;
-        let fg_cows: Vec<Cow<'_, str>> = fg_hexes
-            .iter()
-            .map(|h| hex_for_recheck(h))
-            .collect::<Result<_, _>>()?;
-        let refs: Vec<&str> = fg_cows.iter().map(Cow::as_ref).collect();
-        let pairs = labcolors_core::recheck_against(bg.as_ref(), &refs, &vc)
+        let vc = self.recheck_vc_by_handle(theme_handle)?;
+        let pairs = labcolors_core::recheck_against_u32(bg, fgs, &vc)
             .map_err(|reason| BindingError::InvalidBackground { reason })?;
         let mut out = Vec::with_capacity(pairs.len() * 2);
         for (lc, wcag) in pairs {
@@ -245,47 +252,41 @@ impl Engine {
         Ok(out)
     }
 
-    /// Recheck one foreground set against MANY background samples in a single
-    /// call, sharing each foreground's CAM16 forward across all samples.
-    /// Byte-identical, pair for pair, to N separate [`recheck`](Self::recheck)
-    /// calls; see [`recheck_against_multi`]. Exported to JS as
-    /// `recheckContrastMulti` and used by the `adaptTheme` controller's
-    /// multi-sample worst-case backdrop loop.
-    pub fn recheck_multi(
+    /// Recheck one packed foreground set against MANY packed background samples in
+    /// a single call, sharing each foreground's display-forward across all
+    /// samples. Byte-identical, entry for entry, to N separate
+    /// [`recheck_u32`](Self::recheck_u32) calls; see [`recheck_against_multi_u32`].
+    /// Exported to JS as `recheckContrastMulti` and used by the `adaptTheme`
+    /// controller's multi-sample worst-case backdrop loop. The flat output is
+    /// background-major: sample `s`, foreground `i` sits at `(s*fgs.len()+i)*2`.
+    pub fn recheck_multi_u32(
         &self,
-        bg_hexes: &[String],
-        fg_hexes: &[String],
-        theme_key: &str,
+        bgs: &[u32],
+        fgs: &[u32],
+        theme_handle: u32,
     ) -> Result<Vec<f64>, BindingError> {
-        let vc = self.recheck_vc(theme_key)?;
-        let bg_cows: Vec<Cow<'_, str>> = bg_hexes
-            .iter()
-            .map(|h| hex_for_recheck(h))
-            .collect::<Result<_, _>>()?;
-        let bg_refs: Vec<&str> = bg_cows.iter().map(Cow::as_ref).collect();
-        let fg_cows: Vec<Cow<'_, str>> = fg_hexes
-            .iter()
-            .map(|h| hex_for_recheck(h))
-            .collect::<Result<_, _>>()?;
-        let fg_refs: Vec<&str> = fg_cows.iter().map(Cow::as_ref).collect();
-        labcolors_core::recheck_against_multi(&bg_refs, &fg_refs, &vc)
+        let vc = self.recheck_vc_by_handle(theme_handle)?;
+        labcolors_core::recheck_against_multi_u32(bgs, fgs, &vc)
             .map_err(|reason| BindingError::InvalidBackground { reason })
     }
 
-    /// Условия просмотра для recheck-пути: ТОТ ЖЕ канонический словарь, что у
-    /// [`resolve_theme`](Self::resolve_theme) — recheck без загруженного
-    /// конфига невозможен (нет словаря ключей), неизвестный ключ типизирован.
-    fn recheck_vc(
+    /// Условия просмотра для recheck-пути по numeric handle: слот прямо индексирует
+    /// канонический словарь тем загруженного конфига — тот же словарь, что у
+    /// [`resolve_theme`](Self::resolve_theme), но адресуемый численно, без
+    /// строкового пере-сканирования на каждом кадре. Recheck без загруженного
+    /// конфига невозможен (нет словаря), а handle вне диапазона типизирован.
+    fn recheck_vc_by_handle(
         &self,
-        theme_key: &str,
+        theme_handle: u32,
     ) -> Result<labcolors_core::ViewingConditions, BindingError> {
         let named = self.named.as_ref().ok_or(BindingError::ConfigRequired)?;
-        let (_, preset) =
-            named
-                .theme_binding(theme_key)
-                .ok_or_else(|| BindingError::UnknownTheme {
-                    requested: theme_key.to_string(),
-                })?;
+        let preset = named
+            .themes
+            .get(theme_handle as usize)
+            .map(|(_, preset)| *preset)
+            .ok_or_else(|| BindingError::UnknownTheme {
+                requested: format!("theme handle {theme_handle}"),
+            })?;
         Ok(preset.viewing_conditions())
     }
 }
@@ -552,13 +553,20 @@ mod tests {
         assert!(keys.contains(&"none"));
     }
 
+    /// Parse an engine-emitted `#RRGGBB` into its packed `0x00RRGGBB` word —
+    /// the boundary transport the packed recheck path consumes.
+    fn pack_hex(hex: &str) -> u32 {
+        u32::from_str_radix(hex.trim_start_matches('#'), 16).expect("engine hex is #RRGGBB")
+    }
+
     #[test]
     fn recheck_matches_resolve_theme_reported_contrasts() {
         // The WASM recheck end-to-end: resolve a set, then recheck each solved
-        // colour against its OWN background — the returned interleaved (lc, wcag)
-        // pairs must equal exactly what `resolve_theme` reported. This is the
-        // identity the reactive controller stands on: "still passes?" means the
-        // same thing as the original solve.
+        // colour (packed to `0x00RRGGBB`) against its OWN background under the
+        // minted theme handle — the returned interleaved (lc, wcag) pairs must
+        // equal exactly what `resolve_theme` reported. This is the identity the
+        // reactive controller stands on: "still passes?" means the same thing as
+        // the original solve.
         let engine = engine_with_labui();
         for (bg, theme) in [
             ("#FFFFFF", "light"),
@@ -566,15 +574,16 @@ mod tests {
             ("#1C1C1E", "dark"),
         ] {
             let result = engine.resolve_theme(bg, theme).unwrap();
+            let handle = engine.theme_handle(theme).unwrap();
             let mut fgs = Vec::new();
             let mut want = Vec::new();
             for r in &result.roles {
                 if let RoleOutcome::Color(c) = &r.outcome {
-                    fgs.push(c.hex.clone());
+                    fgs.push(pack_hex(&c.hex));
                     want.push((c.lc, c.wcag_ratio));
                 }
             }
-            let flat = engine.recheck(bg, &fgs, theme).unwrap();
+            let flat = engine.recheck_u32(pack_hex(bg), &fgs, handle).unwrap();
             assert_eq!(flat.len(), want.len() * 2);
             for (i, (lc, wcag)) in want.iter().enumerate() {
                 assert!((flat[2 * i] - lc).abs() < 1e-9, "{bg}: role {i} lc drift");
@@ -584,36 +593,68 @@ mod tests {
                 );
             }
         }
-        // Invalid foreground hex surfaces a structured error, not a panic —
-        // проверяется С ЗАГРУЖЕННЫМ конфигом, иначе первым сработал бы
-        // ConfigRequired и hex-путь остался бы вакуумным (C5.1: recheck
-        // требует словарь тем).
+        // A word with a non-zero reserved high byte (an RGBA/ARGB leak) surfaces a
+        // structured error, not a panic — проверяется С ЗАГРУЖЕННЫМ конфигом,
+        // иначе первым сработал бы ConfigRequired (C5.1: recheck требует словарь).
+        let handle = engine_with_labui().theme_handle("light").unwrap();
         assert!(matches!(
-            engine_with_labui().recheck("#FFFFFF", &["nothex".to_string()], "light"),
+            engine_with_labui().recheck_u32(0xFF00_0000, &[0x000000], handle),
+            Err(BindingError::InvalidBackground { .. })
+        ));
+        assert!(matches!(
+            engine_with_labui().recheck_u32(0x000000, &[0x0100_0000], handle),
             Err(BindingError::InvalidBackground { .. })
         ));
     }
 
     #[test]
-    fn recheck_accepts_the_same_hex_forms_as_resolve_theme() {
-        // The three entry points share one hex contract: `#RGB` shorthand, a
-        // missing `#`, and mixed case are all accepted by recheck exactly as by
-        // resolve — and every spelling of a colour rechecks bit-identically.
-        // `#123` and `#112233` are the SAME colour (each nibble is doubled), and
-        // `#fff` is `#FFFFFF`, so all of these must agree with the canonical form.
-        // C5.1: recheck требует конфиг (словарь тем клиентский) — путь тот же,
-        // что у resolve.
+    fn recheck_multi_is_byte_identical_to_per_sample_packed_recheck() {
+        // C2 at the engine layer: the background-major multi buffer equals N
+        // per-sample packed recheck calls exactly — the byte-identity the
+        // controller's batch path stands on.
         let engine = engine_with_labui();
-        let canonical = engine
-            .recheck("#FFFFFF", &["#112233".to_string()], "light")
-            .unwrap();
-        for bg in ["#fff", "FFFFFF", "#FFFFFF"] {
-            for fg in ["#123", "112233", "#112233"] {
-                let got = engine.recheck(bg, &[fg.to_string()], "light").unwrap();
-                assert_eq!(got.len(), 2, "{bg}/{fg}: one (lc, wcag) pair");
-                assert_eq!(got, canonical, "{bg}/{fg}: must match the canonical form");
+        let handle = engine.theme_handle("dark").unwrap();
+        let result = engine.resolve_theme("#3A3A3C", "dark").unwrap();
+        let fgs: Vec<u32> = result
+            .roles
+            .iter()
+            .filter_map(|r| match &r.outcome {
+                RoleOutcome::Color(c) => Some(pack_hex(&c.hex)),
+                _ => None,
+            })
+            .collect();
+        let bgs = [
+            pack_hex("#38383A"),
+            pack_hex("#404042"),
+            pack_hex("#2E2E30"),
+        ];
+        let multi = engine.recheck_multi_u32(&bgs, &fgs, handle).unwrap();
+        assert_eq!(multi.len(), bgs.len() * fgs.len() * 2);
+        for (s, &bg) in bgs.iter().enumerate() {
+            let per = engine.recheck_u32(bg, &fgs, handle).unwrap();
+            let base = s * fgs.len() * 2;
+            for (i, value) in per.iter().enumerate() {
+                assert_eq!(multi[base + i], *value, "sample {s} index {i} drift");
             }
         }
+    }
+
+    #[test]
+    fn theme_handle_addresses_the_dictionary_numerically() {
+        // The numeric handle is the dictionary slot; an unknown key is typed, and
+        // a handle out of range routes through the same typed rejection.
+        let engine = engine_with_labui();
+        let light = engine.theme_handle("light").unwrap();
+        let dark = engine.theme_handle("dark").unwrap();
+        assert_ne!(light, dark, "distinct themes mint distinct handles");
+        assert!(matches!(
+            engine.theme_handle("no-such-theme"),
+            Err(BindingError::UnknownTheme { .. })
+        ));
+        assert!(matches!(
+            engine.recheck_u32(0x000000, &[0x000000], u32::MAX),
+            Err(BindingError::UnknownTheme { .. })
+        ));
     }
 
     /// Реальный mixed-набор с конфликтами в начале, середине и конце. На
@@ -1070,11 +1111,15 @@ mod tests {
     fn recheck_without_config_is_config_required() {
         let engine = Engine::new();
         assert!(matches!(
-            engine.recheck("#FFFFFF", &["#112233".to_string()], "light"),
+            engine.recheck_u32(0xFFFFFF, &[0x112233], 0),
             Err(BindingError::ConfigRequired)
         ));
         assert!(matches!(
-            engine.recheck_multi(&["#FFFFFF".to_string()], &["#112233".to_string()], "light"),
+            engine.recheck_multi_u32(&[0xFFFFFF], &[0x112233], 0),
+            Err(BindingError::ConfigRequired)
+        ));
+        assert!(matches!(
+            engine.theme_handle("light"),
             Err(BindingError::ConfigRequired)
         ));
     }

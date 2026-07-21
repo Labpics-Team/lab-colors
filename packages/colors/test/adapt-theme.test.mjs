@@ -13,9 +13,16 @@ initSync({
   module: new WebAssembly.Module(readFileSync(new URL("../pkg/labcolors_bg.wasm", import.meta.url))),
 });
 
+// Packed boundary transport (C8d): recheckContrast/recheckContrastMulti now take
+// packed `0x00RRGGBB` words and a `Uint32Array` of foregrounds, not hex strings.
+// `pk`/`unpk` mirror the controller's `packRgb24Hex` so fakes can key on samples.
+const pk = (hex) => Number.parseInt(hex.replace(/^#/u, ""), 16) >>> 0;
+const unpk = (word) => `#${word.toString(16).padStart(6, "0").toUpperCase()}`;
+
 // A fake LabColors engine. `resolveTheme` returns a controllable role set;
 // `recheckContrast` returns controllable signed Lc per role (interleaved with a
-// dummy wcag). Records call counts.
+// dummy wcag). Records call counts. `bg` arrives as a packed word, so the
+// per-sample Lc map is looked up through `unpk`.
 function fakeColors(initial) {
   let resolveCount = 0;
   let resolve = initial;
@@ -46,7 +53,7 @@ function fakeColors(initial) {
       return resolve;
     },
     recheckContrast(bg) {
-      const lcs = recheckByBg ? (recheckByBg[bg] ?? recheckLc) : recheckLc;
+      const lcs = recheckByBg ? (recheckByBg[unpk(bg)] ?? recheckLc) : recheckLc;
       const out = [];
       for (const lc of lcs) {
         out.push(lc);
@@ -265,7 +272,7 @@ test("a second-sample output conflict leaves DOM/state unchanged and remains ret
     },
     recheckContrast(bg, _foregrounds, theme) {
       recheckThemes.push(theme);
-      return [bg === "#000000" ? 0 : 100, 10];
+      return [bg === pk("#000000") ? 0 : 100, 10];
     },
   };
   const ctrl = adaptTheme(el, {
@@ -404,7 +411,7 @@ test("a stable-Glow reconciliation conflict cannot commit its class transition",
       return determinate;
     },
     recheckContrast(background) {
-      return [background === "#000000" ? 0 : 100, 1];
+      return [background === pk("#000000") ? 0 : 100, 1];
     },
     isStableGlowPointNoop(_source, background) {
       return background === "#FFFFFF";
@@ -1558,7 +1565,7 @@ test("owner loss in one adaptive recheck cancels the remaining samples", () => {
       },
       recheckContrast(background, _foregrounds, theme) {
         calls.push(`${theme}:${background}`);
-        if (armed && theme === "A" && background === "#FFFFFF") {
+        if (armed && theme === "A" && background === pk("#FFFFFF")) {
           ctrl.setTheme("B");
         } else if (armed && theme === "A") {
           ctrl.setTheme("C");
@@ -1581,7 +1588,7 @@ test("owner loss in one adaptive recheck cancels the remaining samples", () => {
   assert.equal(ctrl.current()["--lab-a"], "B");
   assert.deepEqual(
     calls.filter((call) => call.startsWith("A:")),
-    ["A:#FFFFFF"],
+    [`A:${pk("#FFFFFF")}`],
     "the first revoked recheck must cancel the rest of A's sample loop",
   );
 });
@@ -2867,7 +2874,7 @@ test("a color re-solve cannot reintroduce stable Glow vars unsafe for another sa
       };
     },
     recheckContrast(background) {
-      return [failing && background === "#FFFFFF" ? 10 : 100, 10];
+      return [failing && background === pk("#FFFFFF") ? 10 : 100, 10];
     },
     isStableGlowPointNoop(_source, background) {
       return background === "#FFFFFF";
@@ -3376,6 +3383,166 @@ test("batch engine still uses the per-sample path for a single-sample backdrop",
   );
 });
 
+// ── C8d packed recheck boundary (F1/F2) ──────────────────────────────────────
+// The controller now speaks the packed wire to the engine: recheckContrast/
+// recheckContrastMulti receive packed `0x00RRGGBB` words (a `number` bg, a
+// `Uint32Array` of foregrounds) and a NUMERIC theme handle minted once at the
+// cold recheck edge. The old string overload (hex string bg, string[] fgs,
+// string theme) is gone from the update path. This is the RED-then-GREEN
+// JS-boundary lock for the packed surface, runnable without pkg/.
+
+test("packed recheck boundary: multi-sample tick passes Uint32Array words and a numeric theme handle, never a string", () => {
+  const el = fakeElement();
+  const seen = { single: [], multi: [], handleThemes: [] };
+  let samples = ["#FFFFFF", "#EEEEEE", "#DDDDDD"];
+  let now = 1000;
+  const colors = {
+    resolveTheme() {
+      return oneRole("#000000", 100);
+    },
+    themeHandle(theme) {
+      // The string key is lowered to a handle only at this cold edge.
+      assert.equal(typeof theme, "string", "themeHandle mints from the string key");
+      seen.handleThemes.push(theme);
+      return theme === "light" ? 7 : 0;
+    },
+    recheckContrast(bg, fgs, theme) {
+      seen.single.push({ bg, fgs, theme });
+      return [...fgs].flatMap(() => [100, 10]);
+    },
+    recheckContrastMulti(bgs, fgs, theme) {
+      seen.multi.push({ bgs, fgs, theme });
+      const out = [];
+      for (let s = 0; s < bgs.length; s++) for (let i = 0; i < fgs.length; i++) out.push(100, 10);
+      return out;
+    },
+  };
+  const ctrl = adaptTheme(el, {
+    colors,
+    theme: "light",
+    background: () => samples,
+    target: el,
+    now: () => now,
+    win: {},
+    sustainMs: 0,
+    dwellMs: 0,
+  });
+  // Change the backdrop to force a >1-sample recheck through the batch call.
+  samples = ["#123456", "#654321", "#ABCDEF"];
+  now += 10;
+  ctrl.tick();
+
+  assert.ok(seen.multi.length > 0, "a multi-sample recheck must run through the batch call");
+  const m = seen.multi.at(-1);
+  assert.ok(m.bgs instanceof Uint32Array, "recheckContrastMulti bgs is a Uint32Array of packed words");
+  assert.ok(m.fgs instanceof Uint32Array, "recheckContrastMulti fgs is a Uint32Array of packed words");
+  assert.deepEqual([...m.bgs], [0x123456, 0x654321, 0xabcdef], "bgs decode to the packed samples");
+  assert.deepEqual([...m.fgs], [0x000000], "fgs are the packed color-role hexes");
+  assert.equal(m.theme, 7, "recheck is addressed by the numeric theme handle, not the key");
+
+  for (const call of seen.multi) {
+    assert.notEqual(typeof call.bgs, "string", "no hex-string sample ever reaches the boundary");
+    assert.equal(typeof call.theme, "number", "the hot path passes a numeric handle");
+  }
+  for (const call of seen.single) {
+    assert.equal(typeof call.bg, "number", "single-sample bg is a packed word, never a hex string");
+    assert.ok(call.fgs instanceof Uint32Array, "single-sample fgs is a Uint32Array");
+    assert.equal(typeof call.theme, "number", "single-sample theme is a numeric handle");
+  }
+  // The handle is minted at a cold edge and memoised: a steady same-theme run
+  // must not re-scan the dictionary by string every frame.
+  now += 10;
+  ctrl.tick();
+  assert.deepEqual(seen.handleThemes, ["light"], "theme handle minted once for one theme, then reused");
+});
+
+test("packed recheck boundary: single-sample path also uses packed words and a numeric handle", () => {
+  const el = fakeElement();
+  const seen = [];
+  let sample = "#FFFFFF";
+  let now = 1000;
+  const colors = {
+    resolveTheme() {
+      return oneRole("#000000", 100);
+    },
+    themeHandle() {
+      return 3;
+    },
+    recheckContrast(bg, fgs, theme) {
+      seen.push({ bg, fgs, theme });
+      return [...fgs].flatMap(() => [100, 10]);
+    },
+    // No recheckContrastMulti: force the per-sample path.
+  };
+  const ctrl = adaptTheme(el, {
+    colors,
+    theme: "light",
+    background: () => sample,
+    target: el,
+    now: () => now,
+    win: {},
+    sustainMs: 0,
+    dwellMs: 0,
+  });
+  sample = "#202020";
+  now += 10;
+  ctrl.tick();
+  assert.ok(seen.length > 0, "single-sample recheck ran");
+  const last = seen.at(-1);
+  assert.equal(last.bg, 0x202020, "bg is the packed word");
+  assert.ok(last.fgs instanceof Uint32Array, "fgs is a Uint32Array");
+  assert.equal(last.theme, 3, "theme is the numeric handle");
+});
+
+test("packed recheck boundary: without a themeHandle capability the theme key stays a string", () => {
+  const el = fakeElement();
+  const seen = [];
+  let sample = "#FFFFFF";
+  let now = 1000;
+  const colors = {
+    resolveTheme() {
+      return oneRole("#000000", 100);
+    },
+    recheckContrast(bg, fgs, theme) {
+      seen.push({ bg, fgs, theme });
+      return [...fgs].flatMap(() => [100, 10]);
+    },
+  };
+  const ctrl = adaptTheme(el, {
+    colors,
+    theme: "light",
+    background: () => sample,
+    target: el,
+    now: () => now,
+    win: {},
+    sustainMs: 0,
+    dwellMs: 0,
+  });
+  sample = "#202020";
+  now += 10;
+  ctrl.tick();
+  const last = seen.at(-1);
+  assert.equal(typeof last.bg, "number", "bg is packed even without a theme handle");
+  assert.equal(last.theme, "light", "no themeHandle capability → the string key is passed through");
+});
+
+test("adaptTheme rejects a non-function themeHandle capability", () => {
+  assert.throws(
+    () =>
+      adaptTheme(fakeElement(), {
+        colors: {
+          resolveTheme: () => oneRole("#000000", 100),
+          recheckContrast: () => [100, 10],
+          themeHandle: 42,
+        },
+        theme: "light",
+        background: "#FFFFFF",
+        win: {},
+      }),
+    /themeHandle must be a function/u,
+  );
+});
+
 // ── Допущенный Unresolved сквозь рантайм-цикл ────────────────────────────────
 
 // Смешанный набор: живой цвет + допущенный Unresolved (var НЕ эмитится,
@@ -3420,7 +3587,7 @@ test("admitted Unresolved stays inert through init, breach re-solve and ease", (
   const el = fakeElement();
   let bg = "#FFFFFF";
   let now = 1000;
-  const seenRecheckHex = [];
+  const seenRecheckWords = [];
   const colors = {
     resolveCount: 0,
     resolveTheme(b) {
@@ -3428,11 +3595,16 @@ test("admitted Unresolved stays inert through init, breach re-solve and ease", (
       return mixedWithUnresolved(this.resolveCount === 1 ? "#000000" : "#111111", 100);
     },
     recheckContrast(b, fgs) {
-      seenRecheckHex.push(...fgs);
+      seenRecheckWords.push(...fgs);
       for (const f of fgs) {
-        assert.match(f, /^#[0-9A-Fa-f]{6}$/, "recheck must only ever see color hexes");
+        // Packed boundary: recheck now sees only packed `0x00RRGGBB` color words
+        // (high byte zero) — never a hex string, never a translucent role.
+        assert.ok(
+          Number.isInteger(f) && f >= 0 && f <= 0x00ffffff,
+          "recheck must only ever see packed color words (0x00RRGGBB)",
+        );
       }
-      return fgs.flatMap(() => [10, 1.5]); // пробой: цикл обязан пере-решить
+      return [...fgs].flatMap(() => [10, 1.5]); // пробой: цикл обязан пере-решить
     },
   };
   const ctrl = adaptTheme(el, {
@@ -3462,7 +3634,7 @@ test("admitted Unresolved stays inert through init, breach re-solve and ease", (
   now += 200;
   ctrl.tick();
   assert.ok(colors.resolveCount >= 2, "breach must re-solve");
-  assert.ok(seenRecheckHex.length > 0, "recheck actually ran");
+  assert.ok(seenRecheckWords.length > 0, "recheck actually ran");
   assert.equal(el.props.get("--lab-impossible"), undefined, "failure stays var-less across re-solve");
   assert.ok(el.props.get("--lab-label-primary"), "surviving color stays painted");
 
@@ -3481,8 +3653,8 @@ test("corrupted recheck buffer fails loud instead of silently keeping stale colo
     resolveTheme: () => oneRole("#000000", 100),
     recheckContrast(b, fgs) {
       if (recheckMode === "short") return [10]; // битая длина
-      if (recheckMode === "nan") return fgs.flatMap(() => [Number.NaN, 1.5]);
-      return fgs.flatMap(() => [100, 10]);
+      if (recheckMode === "nan") return [...fgs].flatMap(() => [Number.NaN, 1.5]);
+      return [...fgs].flatMap(() => [100, 10]);
     },
   };
   let now = 1000;
@@ -3513,7 +3685,7 @@ test("corrupted resolve result throws instead of wiping vars with an empty snaps
   let bg = "#FFFFFF";
   const colors = {
     resolveTheme: () => (corrupt ? { roles: {} } : oneRole("#000000", 100)),
-    recheckContrast: (b, fgs) => fgs.flatMap(() => [1, 1.5]), // пробой → re-solve
+    recheckContrast: (b, fgs) => [...fgs].flatMap(() => [1, 1.5]), // пробой → re-solve
   };
   let now = 1000;
   const ctrl = adaptTheme(el, {

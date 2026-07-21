@@ -19,6 +19,34 @@ import { admitSnapshot, writeVars } from "./snapshot.js";
 const CANCELLED = Symbol("adaptTheme.cancelled");
 const NO_FRAME = Symbol("adaptTheme.noFrame");
 
+const HEX6 = /^[0-9a-fA-F]{6}$/u;
+
+/** Pack a `#RRGGBB` (or `#RGB` shorthand / bare / any-case) colour string into
+ * the recheck boundary's `0x00RRGGBB` word — the packed transport the WASM
+ * `recheckContrast`/`recheckContrastMulti` now consume instead of hex strings.
+ * The reserved high byte is zero. This is the cold-edge hex→u32 lowering: it
+ * runs at the rare recheck seam, not as a per-frame parse of committed state (a
+ * later packed-byte cache hoists it out of the loop entirely). A non-hex input
+ * throws loudly rather than feeding the boundary a garbage word. */
+function packRgb24Hex(hex) {
+  if (typeof hex !== "string") {
+    throw new TypeError("adaptTheme: colour sample must be a string");
+  }
+  const body = hex.charCodeAt(0) === 35 /* '#' */ ? hex.slice(1) : hex;
+  let six;
+  if (body.length === 3) {
+    six = body[0] + body[0] + body[1] + body[1] + body[2] + body[2];
+  } else if (body.length === 6) {
+    six = body;
+  } else {
+    throw new TypeError(`adaptTheme: expected #RGB or #RRGGBB, got '${hex}'`);
+  }
+  if (!HEX6.test(six)) {
+    throw new TypeError(`adaptTheme: non-hex colour '${hex}'`);
+  }
+  return Number.parseInt(six, 16) >>> 0;
+}
+
 /** Cubic ease-out: fast start, gentle settle, no overshoot. A non-finite `t`
  * (e.g. a NaN clock making `(now - easeStart) / easeMs` NaN) is treated as a
  * completed ease (1), so the crossfade can never emit `#NANNANNAN` CSS. */
@@ -61,7 +89,7 @@ function segHex(seg, t) {
  *
  * @param {*} element
  * @param {object} options
- * @param {{ resolveTheme: (bg:string,theme:string)=>any, recheckContrast:(bg:string,fgs:string[],theme:string)=>ArrayLike<number>, isStableGlowPointNoop?:(tint:string,bg:string)=>boolean }} options.colors
+ * @param {{ resolveTheme: (bg:string,theme:string)=>any, recheckContrast:(bg:number,fgs:Uint32Array,theme:number)=>ArrayLike<number>, recheckContrastMulti?:(bgs:Uint32Array,fgs:Uint32Array,theme:number)=>ArrayLike<number>, themeHandle?:(theme:string)=>number, isStableGlowPointNoop?:(tint:string,bg:string)=>boolean }} options.colors
  * @param {string} options.theme
  * @param {string | string[] | (() => string | string[])} [options.background]
  *   explicit background evidence. An ARRAY (or a function returning one) is a
@@ -120,6 +148,17 @@ export function adaptTheme(element, options) {
     typeof stableGlowPointNoopCapability === "function"
       ? stableGlowPointNoopCapability.bind(colors)
       : null;
+  // Optional numeric theme handle (like recheckContrastMulti, it is an engine
+  // capability the controller uses when offered). When present, a theme key is
+  // lowered to its numeric handle ONCE per distinct theme at a cold recheck
+  // edge, then addressed numerically — the hot loop never re-scans the theme
+  // dictionary by string. Engines without it keep the string theme key.
+  const themeHandleCapability = colors.themeHandle;
+  if (themeHandleCapability !== undefined && typeof themeHandleCapability !== "function") {
+    throw new TypeError("adaptTheme: themeHandle must be a function");
+  }
+  const mintThemeHandle =
+    typeof themeHandleCapability === "function" ? themeHandleCapability.bind(colors) : null;
   const target = options.target ?? element;
   const canvas = options.canvas;
   const backgroundSource = options.background;
@@ -268,6 +307,21 @@ export function adaptTheme(element, options) {
   // below is bit-for-bit the same as the fallback loop.
   const canBatch = typeof recheckContrastMulti === "function";
 
+  // Numeric theme-handle memo. Mint at most once per distinct theme key; the
+  // recheck loop then passes the numeric handle (or the raw key, when the engine
+  // exposes no themeHandle capability).
+  let themeArgKey = null;
+  let themeArgValue = null;
+  const themeArgFor = (themeName, owner) => {
+    if (!mintThemeHandle) return themeName;
+    if (themeName !== themeArgKey) {
+      themeArgValue = mintThemeHandle(themeName);
+      checkpoint(owner);
+      themeArgKey = themeName;
+    }
+    return themeArgValue;
+  };
+
   const recheckSamples = (
     samples,
     roleSet = roles,
@@ -279,10 +333,14 @@ export function adaptTheme(element, options) {
     let worstIdx = 0;
     let worstMargin = Infinity;
     const stride = foregrounds.length;
+    // Cold-edge packing: the theme key is lowered to its numeric handle and the
+    // foreground hexes to one packed `Uint32Array` — the boundary transport.
+    const themeArg = themeArgFor(themeName, owner);
+    const packedFgs = Uint32Array.from(foregrounds, packRgb24Hex);
     const useBatch = canBatch && samples.length > 1;
     let batch = null;
     if (useBatch) {
-      batch = recheckContrastMulti(samples, foregrounds, themeName);
+      batch = recheckContrastMulti(Uint32Array.from(samples, packRgb24Hex), packedFgs, themeArg);
       checkpoint(owner);
       const batchLength = batch?.length ?? -1;
       checkpoint(owner);
@@ -299,7 +357,7 @@ export function adaptTheme(element, options) {
       // Per-sample flat buffer, or a background-major window into the batch one.
       let flat = null;
       if (!useBatch) {
-        flat = recheckContrast(samples[s], foregrounds, themeName);
+        flat = recheckContrast(packRgb24Hex(samples[s]), packedFgs, themeArg);
         checkpoint(owner);
       }
       const flatLength = useBatch ? null : (flat?.length ?? -1);

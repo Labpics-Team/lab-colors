@@ -59,6 +59,12 @@ function engine() {
   return e;
 }
 
+// C8d packed recheck boundary: recheckContrast takes a packed `0x00RRGGBB`
+// background word, a `Uint32Array` of foregrounds, and a numeric theme handle.
+const pk = (hex) => Number.parseInt(hex.replace(/^#/u, ""), 16) >>> 0;
+const recheck1 = (e, bg, fgHex, theme) =>
+  e.recheckContrast(pk(bg), Uint32Array.of(pk(fgHex)), e.themeHandle(theme));
+
 // [r,g,b] из parseCssColor-результата (отбрасываем α).
 const rgb = (parsed) => [parsed[0], parsed[1], parsed[2]];
 const packRgb24 = (parsed) =>
@@ -101,7 +107,7 @@ test("legality survives serialization: each solid role's emitted var reparses to
 
         // Контраст РЕПАРСНУТОГО цвета, замеренный тем же движком, воспроизводит
         // обещанный — и, для floored-ролей, всё ещё держит пол.
-        const flat = e.recheckContrast(bg, [paintedHex], theme);
+        const flat = recheck1(e, bg, paintedHex, theme);
         const [lc, wcag] = [flat[0], flat[1]];
         assert.ok(
           Math.abs(wcag - role.wcagRatio) < 1e-9,
@@ -188,7 +194,7 @@ test("translucent serialization fidelity: emitted tint+alpha, reference composit
 
         // Самосогласованность движка: перепроверка ЕГО ЖЕ compositeHex
         // воспроизводит отданные метрики композита (не зависит от находки выше).
-        const flat = e.recheckContrast(bg, [role.compositeHex], theme);
+        const flat = recheck1(e, bg, role.compositeHex, theme);
         assert.ok(
           Math.abs(flat[1] - role.compositeWcag) < 1e-9,
           `${theme}/${bg}/${key}: recheck(compositeHex) WCAG ${flat[1]} != reported ${role.compositeWcag}`,
