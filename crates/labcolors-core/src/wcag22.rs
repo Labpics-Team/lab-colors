@@ -203,6 +203,25 @@ pub struct Wcag22MeasurementV1 {
     pub background_luminance: Wcag22LuminanceBoundsQ55V1,
 }
 
+/// Measure final sRGB8 bytes into the proof-bound Q55 luminance artifact
+/// without declaring applicability or minting a criterion decision.
+///
+/// This is suitable for explicitly non-normative continuous diagnostics. A
+/// WCAG Pass/Fail still requires [`evaluate_wcag22_srgb8`] and its sealed
+/// [`NumericalDecisionEvidenceV1`].
+#[must_use]
+pub fn measure_wcag22_srgb8(
+    foreground: [u8; 3],
+    background: [u8; 3],
+) -> Wcag22MeasurementV1 {
+    Wcag22MeasurementV1 {
+        foreground,
+        background,
+        foreground_luminance: kernel::luminance_bounds(foreground),
+        background_luminance: kernel::luminance_bounds(background),
+    }
+}
+
 /// Total production decision for the admitted final-sRGB8 domain.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
@@ -414,6 +433,23 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn criterion_free_measurement_is_bit_identical_to_evaluator_payload() {
+        let foreground = [137, 187, 9];
+        let background = [130, 18, 219];
+        let measured = measure_wcag22_srgb8(foreground, background);
+        let evaluated = evaluate_wcag22_srgb8(
+            foreground,
+            background,
+            Wcag22CriterionV1::Sc1411GraphicalObject,
+        )
+        .unwrap();
+        let Wcag22AssessmentV1::Evaluated { measurement, .. } = evaluated else {
+            panic!("an explicit criterion must produce an evaluated payload")
+        };
+        assert_eq!(measured, measurement);
     }
 
     #[test]
