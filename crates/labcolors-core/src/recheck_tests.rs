@@ -2,7 +2,11 @@ use proptest::prelude::*;
 
 use crate::Srgb8;
 use crate::appearance::{EncodedPointPaintV1, OccurrenceId, PaintId, SurfaceInputPortId};
-use crate::constraints::{HardDecision, ReadabilityPolarityV1};
+use crate::constraints::{DisplayReadabilityCurveV1, HardDecision, ReadabilityPolarityV1};
+use crate::joint::{
+    CandidateOrdinalV1, JointCandidateSetV1, JointCandidateTupleV1, JointConstraintIdV1,
+    JointVisibleTargetV1, PointwiseJointHardConstraintV1, PointwiseJointPointProgramV1,
+};
 use crate::observation::{
     ObservationPayloadInput, ObservationState, ObservationStreamId, ObservationUpdateInput,
     ObservedScenarioSetInput, Revision, ScenarioId, ScenarioInput, SurfaceInputBinding,
@@ -10,7 +14,8 @@ use crate::observation::{
 use crate::recheck::{
     BoundReadabilityRecheckV1, CompiledFixedRecheckV1, CompiledReadabilityRecheckV1,
     ExactOccurrenceRequirementV1, FixedRecheckBindErrorV1, FixedRecheckDecisionV1,
-    ReadabilityOccurrenceV1, RecheckProtocolErrorV1, checked_evidence_count,
+    JointReadabilityResolutionV1, ReadabilityOccurrenceV1, RecheckProtocolErrorV1,
+    checked_evidence_count, resolve_across_all_samples,
 };
 use crate::solve::Floor;
 
@@ -20,6 +25,12 @@ const OCCURRENCE_B: OccurrenceId = OccurrenceId::new(12);
 const SURFACE_A: SurfaceInputPortId = SurfaceInputPortId::new(21);
 const SURFACE_B: SurfaceInputPortId = SurfaceInputPortId::new(22);
 const STREAM: ObservationStreamId = ObservationStreamId::new(31);
+
+// Joint re-solve bridge fixtures (C8d step 3): two distinct linked paints over a
+// single observed root backdrop surface.
+const JLOWER: PaintId = PaintId::new(41);
+const JUPPER: PaintId = PaintId::new(42);
+const JROOT: SurfaceInputPortId = SurfaceInputPortId::new(51);
 
 fn scenario(
     id: u32,
@@ -440,4 +451,165 @@ proptest! {
         let decision = bound.recheck(observed).unwrap();
         prop_assert!(matches!(decision, FixedRecheckDecisionV1::Verified(_)));
     }
+}
+
+/// A readability-driven two-paint joint program whose single hard constraint
+/// requires the LOWER role to clear the AA-text floor against the observed root
+/// backdrop. This is the GENERIC joint program instantiated with the frozen
+/// readability curve — no readability type crosses into joint.rs.
+fn readability_joint_program() -> PointwiseJointPointProgramV1<DisplayReadabilityCurveV1> {
+    PointwiseJointPointProgramV1::with_evaluator(
+        DisplayReadabilityCurveV1,
+        JROOT,
+        JLOWER,
+        JUPPER,
+        vec![PointwiseJointHardConstraintV1::new(
+            JointConstraintIdV1::new(1),
+            JointVisibleTargetV1::Lower,
+            Floor::AaText,
+        )],
+    )
+    .expect("distinct paints and a unique constraint compile")
+}
+
+fn joint_lower(bytes: [u8; 3]) -> EncodedPointPaintV1 {
+    encoded_paint(JLOWER, Srgb8::new(bytes), 1.0).unwrap()
+}
+
+fn joint_upper() -> EncodedPointPaintV1 {
+    encoded_paint(JUPPER, Srgb8::new([255, 255, 255]), 1.0).unwrap()
+}
+
+#[test]
+fn joint_recheck_flags_sample_broken_by_resolve() {
+    // N1 (core-level second-solve-breaks-first): a black lower role is exactly
+    // what a solve TARGETING the white sample (A) would pick. Over the WHOLE
+    // observed set it clears A (contrast 21) but breaks the dark sample B
+    // (#3C3C3C, contrast ≈ 1.9 < AA). The joint re-solve over every admitted
+    // sample returns a TYPED Indeterminate whose breaching cell carries B's
+    // provenance — even though B was never the solve target. Worst is a post-hoc
+    // witness, never a solve input.
+    let candidates = JointCandidateSetV1::new(vec![JointCandidateTupleV1::new(
+        CandidateOrdinalV1::new(0),
+        joint_lower([0, 0, 0]),
+        joint_upper(),
+    )])
+    .unwrap();
+    let observed = observation(
+        1,
+        vec![JROOT],
+        vec![
+            scenario(1, [(JROOT, [255, 255, 255])]), // A: white — the solve target.
+            scenario(2, [(JROOT, [60, 60, 60])]),    // B: broken by that resolve.
+        ],
+    );
+
+    let resolution = resolve_across_all_samples(
+        &readability_joint_program(),
+        candidates,
+        observed,
+        vec![CandidateOrdinalV1::new(0)],
+    )
+    .unwrap();
+
+    let JointReadabilityResolutionV1::Indeterminate(report) = resolution else {
+        panic!("a candidate that breaks sample B cannot be jointly feasible");
+    };
+
+    // The breaching sample is identified by its provenance — sample B (id 2).
+    let breaching = report
+        .cells()
+        .iter()
+        .find(|cell| !cell.decision().is_pass())
+        .expect("the dark backdrop must break the black role");
+    assert_eq!(
+        report.provenance(breaching.case_index()),
+        Some(&[ScenarioId::new(2)][..])
+    );
+    // The actual solve target (sample A, id 1) passed — a DIFFERENT sample broke.
+    let passing = report
+        .cells()
+        .iter()
+        .find(|cell| cell.decision().is_pass())
+        .expect("the white target sample must pass");
+    assert_eq!(
+        report.provenance(passing.case_index()),
+        Some(&[ScenarioId::new(1)][..])
+    );
+    assert_ne!(breaching.case_index(), passing.case_index());
+}
+
+#[test]
+fn resolve_is_jointly_reverified() {
+    // N2: two candidates over samples A (white, id 1) and B (#767676, id 2):
+    //   ordinal 0 = #555555 lower — passes A (7.46) but BREAKS B (1.64);
+    //   ordinal 1 = #000000 lower — passes BOTH (21 and 4.62).
+    // The joint re-solve returns candidate 1, re-verified across the whole set,
+    // and the set-breaching candidate 0 is NEVER returned as feasible.
+    let both_samples = || {
+        observation(
+            2,
+            vec![JROOT],
+            vec![
+                scenario(1, [(JROOT, [255, 255, 255])]),
+                scenario(2, [(JROOT, [118, 118, 118])]),
+            ],
+        )
+    };
+
+    let candidates = JointCandidateSetV1::new(vec![
+        JointCandidateTupleV1::new(
+            CandidateOrdinalV1::new(0),
+            joint_lower([85, 85, 85]),
+            joint_upper(),
+        ),
+        JointCandidateTupleV1::new(
+            CandidateOrdinalV1::new(1),
+            joint_lower([0, 0, 0]),
+            joint_upper(),
+        ),
+    ])
+    .unwrap();
+
+    let resolution = resolve_across_all_samples(
+        &readability_joint_program(),
+        candidates,
+        both_samples(),
+        vec![CandidateOrdinalV1::new(0), CandidateOrdinalV1::new(1)],
+    )
+    .unwrap();
+
+    let JointReadabilityResolutionV1::Feasible(verified) = resolution else {
+        panic!("the black candidate is jointly feasible across both samples");
+    };
+    // The set-breaching #555555 (ordinal 0) is never selected; the all-passing
+    // #000000 (ordinal 1) is, and every fresh re-verify cell passes.
+    assert_eq!(verified.ordinal(), CandidateOrdinalV1::new(1));
+    assert_eq!(verified.fresh_cells().len(), 2);
+    assert!(
+        verified
+            .fresh_cells()
+            .iter()
+            .all(|cell| cell.decision().is_pass())
+    );
+
+    // When ONLY the set-breaching candidate is offered, the resolve is a typed
+    // Indeterminate — a breaching candidate is never dressed up as feasible.
+    let only_breaching = JointCandidateSetV1::new(vec![JointCandidateTupleV1::new(
+        CandidateOrdinalV1::new(0),
+        joint_lower([85, 85, 85]),
+        joint_upper(),
+    )])
+    .unwrap();
+    let resolution = resolve_across_all_samples(
+        &readability_joint_program(),
+        only_breaching,
+        both_samples(),
+        vec![CandidateOrdinalV1::new(0)],
+    )
+    .unwrap();
+    assert!(matches!(
+        resolution,
+        JointReadabilityResolutionV1::Indeterminate(_)
+    ));
 }
