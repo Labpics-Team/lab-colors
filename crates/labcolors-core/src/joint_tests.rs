@@ -1,17 +1,23 @@
 use crate::Srgb8;
 use crate::appearance::{EncodedPointPaintV1, PaintId, SurfaceInputPortId};
 use crate::composition::AdmittedOpacityV1;
+use crate::constraints::{HardDecision, Wcag22Srgb8V1};
 use crate::joint::{
     CandidateOrdinalV1, CandidateSetErrorV1, DeclaredTotalOrderV1, HardFeasibilityV1,
     JointCandidateSetV1, JointCandidateTupleV1, JointConstraintDecisionV1, JointConstraintIdV1,
-    JointHardConstraintV1, JointPointProgramIdentityV1, JointPointProgramV1, JointProgramErrorV1,
-    JointReportErrorV1, JointVisibleTargetV1, SelectionPolicyErrorV1, checked_joint_cardinality,
+    JointHardConstraintV1, JointPointEvaluatorV1, JointPointProgramIdentityV1, JointPointProgramV1,
+    JointProgramErrorV1, JointReportErrorV1, JointVisibleTargetV1, PointwiseHardFeasibilityV1,
+    PointwiseJointHardConstraintV1, PointwiseJointPointProgramV1, PointwiseJointReportErrorV1,
+    PointwiseSelectedRecheckErrorV1, SelectionPolicyErrorV1, checked_joint_cardinality,
 };
 use crate::observation::{
     ObservationPayloadInput, ObservationState, ObservationStreamId, ObservationUpdateInput,
     ObservedScenarioSetInput, Revision, RevisionBoundObservationV1, ScenarioId, ScenarioInput,
     SurfaceInputBinding,
 };
+use crate::wcag22::Wcag22CriterionV1;
+use std::cell::Cell;
+use std::rc::Rc;
 
 const ROOT: SurfaceInputPortId = SurfaceInputPortId::new(7);
 const LOWER: PaintId = PaintId::new(11);
@@ -96,7 +102,7 @@ fn linked_candidate_is_selected_only_after_upper_sees_lower_visible_surface() {
 
     assert_eq!(
         report.program_identity(),
-        JointPointProgramIdentityV1::TwoPaintDerivedSurfaceExactPointV1
+        JointPointProgramIdentityV1::TwoPaintDerivedSurfacePointV1
     );
     assert_eq!(report.executions().len(), 2);
     assert!(
@@ -331,6 +337,149 @@ fn fresh_recheck_executes_the_selected_joint_program_again_on_the_same_revision(
 }
 
 #[test]
+fn empty_hard_constraint_set_is_non_vacuously_feasible() {
+    let observed = observation(10, vec![(1, [13, 17, 19])]);
+    let domain = candidates(vec![candidate(0, ([20, 30, 40], 0.5), ([50, 60, 70], 1.0))]);
+    let report = program(vec![]).evaluate(domain, observed).unwrap();
+
+    assert_eq!(report.executions().len(), 1);
+    assert!(report.cells().is_empty());
+    let HardFeasibilityV1::NonEmpty(feasible) = report.classify() else {
+        panic!("a tuple with no hard violations must be feasible");
+    };
+    assert_eq!(feasible.feasible(), &[CandidateOrdinalV1::new(0)]);
+    let policy =
+        DeclaredTotalOrderV1::new(feasible.candidate_set(), vec![CandidateOrdinalV1::new(0)])
+            .unwrap();
+    let verified = feasible.select(policy).recheck().unwrap();
+    assert_eq!(verified.fresh_executions().len(), 1);
+    assert!(verified.fresh_cells().is_empty());
+}
+
+#[test]
+fn generic_wcag_evaluator_can_constrain_the_derived_lower_occurrence() {
+    let observed = observation(11, vec![(1, [255; 3])]);
+    let domain = candidates(vec![
+        candidate(1, ([255; 3], 1.0), ([0; 3], 1.0)),
+        candidate(2, ([0; 3], 1.0), ([0; 3], 1.0)),
+    ]);
+    let constraint = PointwiseJointHardConstraintV1::new(
+        JointConstraintIdV1::new(1),
+        JointVisibleTargetV1::Lower,
+        Wcag22CriterionV1::Sc1411UiComponentOrState,
+    );
+    let program = PointwiseJointPointProgramV1::with_evaluator(
+        Wcag22Srgb8V1,
+        ROOT,
+        LOWER,
+        UPPER,
+        vec![constraint],
+    )
+    .unwrap();
+    let report = program.evaluate(domain, observed).unwrap();
+
+    assert_eq!(report.cells().len(), 2);
+    assert!(!report.cells()[0].decision().is_pass());
+    assert!(report.cells()[1].decision().is_pass());
+    let PointwiseHardFeasibilityV1::NonEmpty(feasible) = report.classify() else {
+        panic!("black lower occurrence must be WCAG-feasible over white");
+    };
+    assert_eq!(feasible.feasible(), &[CandidateOrdinalV1::new(2)]);
+    let policy = DeclaredTotalOrderV1::new(
+        feasible.candidate_set(),
+        vec![CandidateOrdinalV1::new(1), CandidateOrdinalV1::new(2)],
+    )
+    .unwrap();
+    let verified = feasible.select(policy).recheck().unwrap();
+    assert_eq!(verified.ordinal(), CandidateOrdinalV1::new(2));
+    assert_eq!(verified.fresh_cells().len(), 1);
+    assert!(verified.fresh_cells()[0].decision().is_pass());
+}
+
+#[derive(Clone, Debug)]
+struct FailOnCallEvaluatorV1 {
+    calls: Rc<Cell<u32>>,
+    fail_on: u32,
+}
+
+impl PartialEq for FailOnCallEvaluatorV1 {
+    fn eq(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.calls, &other.calls) && self.fail_on == other.fail_on
+    }
+}
+
+impl JointPointEvaluatorV1 for FailOnCallEvaluatorV1 {
+    type Invocation = ();
+    type PassEvidence = ();
+    type ViolationEvidence = ();
+    type Error = &'static str;
+
+    fn assess(
+        &self,
+        _occurrence: &crate::appearance::ResolvedOccurrence,
+        _invocation: Self::Invocation,
+    ) -> Result<HardDecision<Self::PassEvidence, Self::ViolationEvidence>, Self::Error> {
+        let call = self.calls.get();
+        self.calls.set(call + 1);
+        if call == self.fail_on {
+            Err("evaluator-fault")
+        } else {
+            Ok(HardDecision::Pass(()))
+        }
+    }
+}
+
+fn fallible_program(
+    evaluator: FailOnCallEvaluatorV1,
+) -> PointwiseJointPointProgramV1<FailOnCallEvaluatorV1> {
+    PointwiseJointPointProgramV1::with_evaluator(
+        evaluator,
+        ROOT,
+        LOWER,
+        UPPER,
+        vec![PointwiseJointHardConstraintV1::new(
+            JointConstraintIdV1::new(1),
+            JointVisibleTargetV1::Upper,
+            (),
+        )],
+    )
+    .unwrap()
+}
+
+#[test]
+fn evaluator_error_invalidates_the_full_report_and_fresh_recheck() {
+    let domain = || candidates(vec![candidate(0, ([0; 3], 1.0), ([255; 3], 1.0))]);
+    let observed = || observation(12, vec![(1, [0; 3])]);
+
+    let immediate = fallible_program(FailOnCallEvaluatorV1 {
+        calls: Rc::new(Cell::new(0)),
+        fail_on: 0,
+    });
+    assert!(matches!(
+        immediate.evaluate(domain(), observed()),
+        Err(PointwiseJointReportErrorV1::Evaluator("evaluator-fault"))
+    ));
+
+    let delayed = fallible_program(FailOnCallEvaluatorV1 {
+        calls: Rc::new(Cell::new(0)),
+        fail_on: 1,
+    });
+    let report = delayed.evaluate(domain(), observed()).unwrap();
+    let PointwiseHardFeasibilityV1::NonEmpty(feasible) = report.classify() else {
+        panic!("first evaluation must pass");
+    };
+    let policy =
+        DeclaredTotalOrderV1::new(feasible.candidate_set(), vec![CandidateOrdinalV1::new(0)])
+            .unwrap();
+    assert!(matches!(
+        feasible.select(policy).recheck(),
+        Err(PointwiseSelectedRecheckErrorV1::Evaluator(
+            "evaluator-fault"
+        ))
+    ));
+}
+
+#[test]
 fn invalid_domains_and_policies_fail_before_compositing() {
     assert_eq!(
         JointCandidateSetV1::new(vec![]),
@@ -359,11 +508,6 @@ fn invalid_domains_and_policies_fail_before_compositing() {
         JointPointProgramV1::new(ROOT, LOWER, LOWER, vec![exact_upper(1, [0; 3])]),
         Err(JointProgramErrorV1::SamePaintIdentity(LOWER))
     );
-    assert_eq!(
-        JointPointProgramV1::new(ROOT, LOWER, UPPER, vec![]),
-        Err(JointProgramErrorV1::EmptyHardConstraintSet)
-    );
-
     let observed = observation(9, vec![(1, [0; 3])]);
     let wrong = JointCandidateSetV1::new(vec![JointCandidateTupleV1::new(
         CandidateOrdinalV1::new(0),

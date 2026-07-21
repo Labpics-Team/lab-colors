@@ -1340,18 +1340,6 @@ fn meets_floor(solved: &Solved, y_bg: f64, target: f64, _vc: &ViewingConditions)
     meets_floor_lc(lc, target)
 }
 
-/// H-K-corrected luminance (`Y_hk`) of a linear-sRGB stimulus — воспринимаемая
-/// ЯРКОСТЬ поверхности (Гельмгольц–Кольрауш, серый эквивалент `J_HK`).
-///
-/// После ADR-0003 Ys candidate-score путь это НЕ читает: контракт
-/// контраста, полы и recheck меряются в `Ys`. Потребители — яркостная ось:
-/// выбор стороны внутренней pair-эвристики (`pair_side` — H-K-сдвиг кроссовера на
-/// насыщенных фонах) и яркостные подсистемы.
-pub(crate) fn bg_luma(rgb: [f64; 3], vc: &ViewingConditions) -> f64 {
-    let j_hk = lpc::j_hk_from_xyz(srgb_to_xyz(rgb), vc).max(0.0);
-    lpc::y_hk(j_hk, vc)
-}
-
 /// Test-only examined-candidate log (#297 local-search truth): both local
 /// searches (`solve`'s quantisation walk and `solve_dj`'s separation walk)
 /// record every on-grid candidate they actually materialize, so tests can

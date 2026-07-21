@@ -7,6 +7,7 @@ use crate::wcag22::{
     evaluate_wcag22_srgb8, wcag22_profile_v1,
 };
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Wcag22Srgb8V1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -26,6 +27,7 @@ pub(crate) struct ApplicableWcag22MeasurementV1 {
     evidence: NumericalDecisionEvidenceV1,
 }
 
+#[cfg(test)]
 impl ApplicableWcag22MeasurementV1 {
     pub(crate) const fn profile_id(&self) -> Wcag22ProfileIdV1 {
         self.profile_id

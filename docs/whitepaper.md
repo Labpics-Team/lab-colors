@@ -79,8 +79,8 @@ fingerprint считается по распарсенной поддержив�
 | `DecorativeLc` | декоративная контрастная величина без нормативного текстового смысла |
 | `Ladder` | якорь источника при alpha закрытой позиции |
 | `AlphaAnalog` | прозрачная форма объявленной solid-цели на локальном фоне |
-| `PairFill` | solid-поверхность, сдвинутая до выбранной стороны foreground |
-| `PairLabel` | foreground против объявленной derived tint-поверхности |
+| `PairFill` | frozen frontend: exact authored source как opaque Paint/Occurrence |
+| `PairLabel` | finite label candidate domain против фактически emitted PairFill Surface |
 | `Material` | точечная двухслойная композиция с выведенной alpha |
 | `Glow` | точечные screen-слои с явным numerical profile |
 | `Zero` | явное отсутствие цветового значения |
@@ -108,9 +108,11 @@ point-пути scratch принадлежит caller-у и размещён на
 compiler-а проверяется тестом. Compiler принадлежит proof-поверхности и
 отсутствует в production-артефакте.
 
-`PairLabel` использует эту поверхность как фон; role-resolver возвращает цвет
-метки как `Resolved::Color`. Этот контракт не содержит label Paint/occurrence,
-client-authored topology или скрытых зависимостей по имени токена.
+`PairLabel` использует фактически emitted `PairFill` occurrence как derived
+Surface. Frontend формирует конечный label candidate domain; общий joint engine
+исполняет `fill → surfaceFrom → label`, строит полный hard-report, выбирает по
+явному total order и повторяет fresh recheck. Имена клиентских токенов и
+`FillPrimary` в physical lowering не участвуют.
 
 Публичный API не принимает произвольный client-authored graph. `NamedRoleTable`
 остаётся boundary-представлением и не служит extension point для новых доменных
