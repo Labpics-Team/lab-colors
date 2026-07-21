@@ -18,7 +18,7 @@ pub(crate) enum OpacityAdmissionErrorV1 {
 /// и certificate replay не вправе независимо выбирать арифметику по тому же
 /// discriminant.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum CompositionProfileV1 {
+pub enum CompositionProfileV1 {
     /// Straight-alpha source-over в encoded-sRGB8 с одним округлением каждого
     /// финального канала occurrence. Это не модель произвольного renderer/HDR.
     EncodedSrgb8SourceOverV1,
@@ -61,6 +61,13 @@ impl AdmittedOpacityV1 {
 }
 
 impl CompositionProfileV1 {
+    /// Stable identity of this executable composition profile.
+    pub const fn key(self) -> &'static str {
+        match self {
+            Self::EncodedSrgb8SourceOverV1 => "encoded-srgb8-source-over-v1",
+        }
+    }
+
     /// Исполняет ровно тот закон, identity которого несёт профиль.
     pub(crate) fn composite(
         self,
