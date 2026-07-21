@@ -341,10 +341,9 @@ pub fn labui_preset_roles() -> Vec<(String, RoleRecipe)> {
         brand_pos(LadderPosition::FocusRing),
     ));
 
-    // Пары «заливка × лейбл» бейджа (crate::pair): якорь источника, минимально
-    // сдвинутый до выбранной ветви переходной pair-эвристики;
-    // лейбл на такой заливке — обычный nested resolve потребителя. Статики
-    // покрываются тем же законом (белый/чёрный якоря нейтрали).
+    // Frozen Pair frontend: PairFill эмитит exact source как opaque occurrence;
+    // PairLabel строит конечный candidate domain на фактически emitted Surface
+    // и проверяет его общим joint evaluator/recheck. Статики проходят тот же путь.
     let pair = |source| RoleRecipe::PairFill { source };
     roles.push(("badge-fill-brand".to_string(), pair(LadderSource::Brand)));
     for (client_name, family_key) in [

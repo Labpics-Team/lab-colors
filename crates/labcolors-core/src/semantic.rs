@@ -546,35 +546,27 @@ pub enum RoleSpec {
         /// path. Wire-ключ — его boundary-проекция, а не декоративный metadata.
         mode: crate::numerical_plan::NumericalExecutionModeV1,
     },
-    /// Заливка пары (внутренний модуль `pair`): якорь источника, сдвинутый до победы
-    /// выбранной ветви переходной pair-эвристики; солид-эмиссия.
+    /// Frozen PairFill frontend до C7c. Источник становится opaque Paint;
+    /// единственный source-over occurrence создаёт фактически emitted Surface.
+    /// Отдельной Pair-эвристики, собственного compositor-а и выбора стороны нет.
     PairFill {
         /// Пер-темный кодированный якорь источника.
         tint: LadderTint,
     },
-    /// Лейбл ТИНТ-бейджа (внутренний модуль `pair`, лейбл-сторона). Семейно-оттеночный
-    /// лейбл, чей WCAG-пол энфорсится ПРОТИВ объявленной тинт-поверхности
-    /// (exact source-over композит declared `tint` при compatibility-альфе
-    /// позиции `fill-*-primary` над фоном резолва), а НЕ против фона страницы
-    /// и НЕ против эмитированного [`PairFill`](Self::PairFill) — у того своя,
-    /// отдельно сдвинутая солид-эмиссия; ребра `PairFill → PairLabel` не
-    /// существует. Приватный appearance-граф материализует tint Paint, применяет
-    /// его к локальной поверхности ровно в одном fill occurrence и отдаёт
-    /// `surfaceFrom` как фактический фон. Последующий label solve находится вне
-    /// графа: этот recipe не создаёт итоговые label Paint/occurrence или их
-    /// доказательный статус. Дифференциальный тест доказывает только точность
-    /// границы подложки, а не математику label-resolver-а.
-    /// Тон клампится (флаг `compressed`) при недостижимости на кривой семьи.
+    /// Frozen PairLabel frontend до C7c. Кандидаты label Paint проверяются на
+    /// фактически emitted opaque PairFill Surface общим joint evaluator/recheck.
+    /// Поля alpha сохраняют замороженную форму публичного RoleSpec, но после P1
+    /// обязаны быть opaque: представление не выводится из client role names.
     PairLabel {
-        /// Пер-темный кодированный тинт-якорь семьи (как у лестницы).
+        /// Пер-темный кодированный якорь источника fill и hue-направления label.
         tint: LadderTint,
-        /// Доля максимума контраста тинт-поверхности `(0, 1]`.
+        /// Доля максимума контраста PairFill Surface `(0, 1]`.
         fraction: f64,
-        /// WCAG-пол против тинт-поверхности.
+        /// Hard floor против emitted PairFill Surface.
         floor: Floor,
-        /// Альфа поверхности (светлая тема) — из позиции `fill-*-primary`.
+        /// Замороженное поле representation light; P1 принимает только `1.0`.
         surface_alpha_light: f64,
-        /// Альфа поверхности (тёмная тема) — из позиции `fill-*-primary`.
+        /// Замороженное поле representation dark; P1 принимает только `1.0`.
         surface_alpha_dark: f64,
     },
     Ladder {
@@ -2162,15 +2154,7 @@ fn resolve_spec_in(
         }
         RoleSpec::Decorative { magnitude } => ctx.decorative_contract(magnitude),
         RoleSpec::PairFill { tint } => {
-            // Сторона пары — идентичность СЕМЬИ: решается по каноническому
-            // светлому якорю и не флипается между темами/IC (тёмные якоря
-            // labui осветлены и перелезали бы кроссовер). Пер-режимный якорь
-            // затем двигается ПОД эту сторону; солид — лестничной сантехникой
-            // (α = 1; композит на фоне резолва замеряется честно).
-            let side =
-                crate::pair::pair_side(tint.for_vc(&crate::spaces::vc::ViewingConditions::srgb()));
-            let fill = crate::pair::pair_fill(tint.for_vc(vc), side);
-            return resolve_rgba_direct(fill, 1.0, bg, vc);
+            return lower_pair_fill_frontend(bg, tint, vc);
         }
         RoleSpec::PairLabel {
             tint,
@@ -2179,7 +2163,7 @@ fn resolve_spec_in(
             surface_alpha_light,
             surface_alpha_dark,
         } => {
-            return resolve_pair_label(
+            return lower_pair_label_frontend(
                 bg,
                 tint,
                 fraction,
@@ -2606,140 +2590,194 @@ fn resolve_solid_with_ui_floor(
     }
 }
 
-/// Public PairLabel opacity rejected by the graph's SSOT validator.
-fn pair_label_opacity_input_error(error: &str) -> PendingResolution {
-    Err(SolveFailure::InvalidInput(format!(
-        "тинт-поверхность бейджа вне encoded-sRGB8 reference-домена: {error}"
-    )))
+/// Exact page background as the root Surface of the Pair point graph.
+fn pair_root_surface(bg: &BgInput) -> Result<Srgb8, SolveFailure> {
+    crate::alpha::encoded_to_srgb8(bg.encoded_display(), "pair page background")
+        .map(Srgb8::new)
+        .map_err(|error| {
+            SolveFailure::InternalInvariant(format!(
+                "validated Pair background left encoded-sRGB8 domain: {error}"
+            ))
+        })
 }
 
-/// Резолв лейбла ТИНТ-бейджа — жёсткий контраст `label ↔ tinted-surface`
-/// ([`crate::pair`], лейбл-сторона; родственен [`resolve_solid_with_ui_floor`],
-/// но пол энфорсится против ВЫВОДИМОЙ подложки, а не против фона страницы).
-///
-/// Sealed [`PointOpacityOverSurfaceV1`] материализует tint Paint, применяет его
-/// к локальному фону в единственном exact source-over occurrence и проецирует
-/// видимый результат в derived Surface.
-/// Поверхность НЕ является эмитированным [`RoleSpec::PairFill`] — у того своя,
-/// отдельно сдвинутая солид-эмиссия; никакого ребра `PairFill → PairLabel` нет.
-///
-/// Затем [`resolve_hued_anchor_from_srgb8`] решает label НА ЭТОЙ ПОВЕРХНОСТИ,
-/// вне point-графа. Этот контракт не создаёт label Paint/occurrence или
-/// constraint evidence. Собственный [`ResolveContext`] поверхности задаёт
-/// полярность/макс-контраст, поэтому
-/// WCAG-пол лейбла
-/// гарантирован против той подложки, на которой foreground реально стоит
-/// (обычные `label-*` роли решаются против страницы, и на тинт-подложке их
-/// контраст проседает — класс, который закрывает эта роль). Недостижимость пола
-/// на кривой семьи клампит тон (`floor_override` → `compressed`), как у любой
-/// контраст-роли; флаг не позволяет выдать нестрогий исход за точное выполнение.
-/// Занимаемые графом typed handles структурны; клиентские
-/// имена в граф не передаются.
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn resolve_pair_label(
+/// Frozen Pair representation is opaque. The old PairSide/Oklab adjustment and
+/// the hidden FillPrimary opacity are both absent: representation no longer
+/// depends on a client vocabulary term.
+fn lower_pair_fill_occurrence(
     bg: &BgInput,
-    tint: crate::ladder::LadderTint,
-    fraction: f64,
-    floor: Floor,
-    surface_alpha_light: f64,
-    surface_alpha_dark: f64,
+    tint: LadderTint,
+    vc: &ViewingConditions,
+) -> Result<crate::pair::LoweredPairFillV1, SolveFailure> {
+    let source = tint.srgb8_for_vc(vc);
+    let backdrop = pair_root_surface(bg)?;
+    Ok(crate::pair::lower_fill(
+        source,
+        crate::composition::AdmittedOpacityV1::OPAQUE,
+        backdrop,
+    ))
+}
+
+fn lower_pair_fill_frontend(
+    bg: &BgInput,
+    tint: LadderTint,
     vc: &ViewingConditions,
 ) -> PendingResolution {
-    let alpha = if vc.is_dark_theme() {
-        surface_alpha_dark
-    } else {
-        surface_alpha_light
-    };
-    // Тинт квантуется ДО композита: подложка обязана считаться из отдаваемого
-    // значения в едином encoded-sRGB8 reference-домене. Источник и локальный
-    // фон проходят один quantization SSOT; порядок проверок — tint → bg → α.
-    let tint_q = quantise_encoded(tint.for_vc(vc));
-    let source_rgb = match crate::alpha::encoded_to_srgb8(tint_q, "tint") {
-        Ok(bytes) => bytes,
-        Err(error) => {
-            return Err(SolveFailure::InternalInvariant(format!(
-                "validated PairLabel tint left encoded sRGB domain: {error}"
-            )));
-        }
-    };
-    let context_rgb = match crate::alpha::encoded_to_srgb8(bg.encoded_display(), "bg") {
-        Ok(bytes) => bytes,
-        Err(error) => {
-            return Err(SolveFailure::InternalInvariant(format!(
-                "validated background left encoded sRGB domain: {error}"
-            )));
-        }
-    };
-    let surface_occurrence =
-        match PointOpacityOverSurfaceV1::evaluate(source_rgb, alpha, context_rgb) {
-            Ok(occurrence) => occurrence,
-            Err(error) => {
-                return pair_label_opacity_input_error(error.message());
-            }
-        };
-    // Финальные байты реально собранной surface становятся контекстом solve.
-    let surface_rgb = surface_occurrence.visible();
-    let surface_hex = crate::alpha::hex_from_srgb8(surface_rgb);
-    let Ok(surface_bg) = BgInput::solid(&surface_hex) else {
-        // Композит 8-битных каналов всегда в кубе — недостижимо, но честнее
-        // отказ, чем правдоподобный мусор (RoleSpec публичен).
-        return Err(SolveFailure::InternalInvariant(
-            "тинт-поверхность бейджа вне кодированного домена sRGB".into(),
-        ));
-    };
-    // Свежий контекст ПОВЕРХНОСТИ: полярность/интервал/макс-контраст берутся от
-    // тинт-подложки, не от фона страницы — потому пол энфорсится против неё.
-    let surface_ctx = ResolveContext::new(&surface_bg, vc);
-    let anchor = TextAnchor::new(fraction, floor)?;
-    // Hue anchor остаётся отдельным входом label-solver. Fill occurrence
-    // вычисляет только surface и не притворяется зависимостью финального label.
-    resolve_hued_anchor_from_srgb8(
-        &surface_bg,
-        anchor,
-        Srgb8::new(source_rgb),
+    let fill = lower_pair_fill_occurrence(bg, tint, vc)?;
+    finish_rgba_from_certificate(
+        fill.paint().source(),
+        crate::composition::AdmittedOpacityV1::OPAQUE.value(),
+        fill.occurrence().certificate(),
         vc,
-        &surface_ctx,
+        false,
+        false,
     )
 }
 
-/// Ручной differential oracle: композит tint-surface идёт независимым от графа
-/// `composite_hex_from_encoded`-маршрутом, а label — через
-/// [`resolve_hued_anchor`] по исходному tint. Он изолирует корректность
-/// физической композиции, но не является независимым эталоном solver-а.
-#[cfg(test)]
+fn pair_requirement(floor: Floor) -> crate::pair::PairLabelRequirementV1 {
+    match floor {
+        Floor::AaText => crate::pair::PairLabelRequirementV1::Wcag22(
+            crate::wcag22::Wcag22CriterionV1::Sc143TextDefault,
+        ),
+        Floor::AaUi => crate::pair::PairLabelRequirementV1::Wcag22(
+            crate::wcag22::Wcag22CriterionV1::Sc1411UiComponentOrState,
+        ),
+        Floor::None => crate::pair::PairLabelRequirementV1::None,
+    }
+}
+
+fn resolved_label_bytes(resolved: &Resolved) -> Result<Srgb8, SolveFailure> {
+    let Resolved::Color { solved, .. } = resolved else {
+        return Err(SolveFailure::InternalInvariant(
+            "Pair label proposal did not produce a Color".into(),
+        ));
+    };
+    crate::srgb8::hex_bytes(solved.hex())
+        .map(Srgb8::new)
+        .map_err(|error| {
+            SolveFailure::InternalInvariant(format!(
+                "Pair label solver emitted invalid sRGB8: {error}"
+            ))
+        })
+}
+
+fn pair_candidate(
+    surface_bg: &BgInput,
+    fraction: f64,
+    floor: Floor,
+    source: Srgb8,
+    vc: &ViewingConditions,
+    surface_ctx: &ResolveContext,
+) -> Result<(Resolved, Srgb8), SolveFailure> {
+    let resolved = resolve_hued_anchor_from_srgb8(
+        surface_bg,
+        TextAnchor::new(fraction, floor)?,
+        source,
+        vc,
+        surface_ctx,
+    )?;
+    let bytes = resolved_label_bytes(&resolved)?;
+    Ok((resolved, bytes))
+}
+
+/// PairLabel proposes the exact authored fraction first, then a floor-aware
+/// fallback. The common joint engine—not the proposal stage—forms the feasible
+/// set, applies the declared order and performs fresh final-occurrence recheck.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn resolve_pair_label_manual_composite_oracle(
+fn lower_pair_label_frontend(
     bg: &BgInput,
-    tint: crate::ladder::LadderTint,
+    tint: LadderTint,
     fraction: f64,
     floor: Floor,
     surface_alpha_light: f64,
     surface_alpha_dark: f64,
     vc: &ViewingConditions,
 ) -> PendingResolution {
-    let alpha = if vc.is_dark_theme() {
-        surface_alpha_dark
-    } else {
-        surface_alpha_light
-    };
-    let tint_q = quantise_encoded(tint.for_vc(vc));
-    let surface_hex =
-        match crate::alpha::composite_hex_from_encoded(tint_q, alpha, bg.encoded_display()) {
-            Ok(hex) => hex,
-            Err(error) => {
-                return Err(SolveFailure::InvalidInput(format!(
-                    "тинт-поверхность бейджа вне encoded-sRGB8 reference-домена: {error}"
-                )));
-            }
-        };
-    let Ok(surface_bg) = BgInput::solid(&surface_hex) else {
-        return Err(SolveFailure::InternalInvariant(
-            "тинт-поверхность бейджа вне кодированного домена sRGB".into(),
+    if surface_alpha_light.to_bits() != 1.0_f64.to_bits()
+        || surface_alpha_dark.to_bits() != 1.0_f64.to_bits()
+    {
+        return Err(SolveFailure::InvalidInput(
+            "PairLabel surface representation must be opaque after P1".into(),
         ));
-    };
+    }
+
+    let source = tint.srgb8_for_vc(vc);
+    let backdrop = pair_root_surface(bg)?;
+    let fill = lower_pair_fill_occurrence(bg, tint, vc)?;
+    let surface = fill.visible();
+    let surface_bg = BgInput::solid(&surface.to_hex()).map_err(|error| {
+        SolveFailure::InternalInvariant(format!("generated PairFill Surface was rejected: {error}"))
+    })?;
     let surface_ctx = ResolveContext::new(&surface_bg, vc);
-    let anchor = TextAnchor::new(fraction, floor)?;
-    resolve_hued_anchor(&surface_bg, anchor, tint, vc, &surface_ctx)
+
+    let mut resolved_candidates = Vec::new();
+    let mut physical_candidates = Vec::new();
+    let mut order = Vec::new();
+
+    match pair_candidate(&surface_bg, fraction, Floor::None, source, vc, &surface_ctx) {
+        Ok((resolved, bytes)) => {
+            let ordinal = crate::joint::CandidateOrdinalV1::new(1);
+            resolved_candidates.push((ordinal, resolved));
+            physical_candidates.push(crate::pair::PairLabelCandidateV1::new(ordinal, bytes));
+            order.push(ordinal);
+        }
+        Err(error) if matches!(floor, Floor::None) => return Err(error),
+        Err(error) if error.boundary().is_none() => return Err(error),
+        Err(_) => {}
+    }
+
+    if !matches!(floor, Floor::None) {
+        let (resolved, bytes) =
+            pair_candidate(&surface_bg, fraction, floor, source, vc, &surface_ctx)?;
+        if physical_candidates
+            .iter()
+            .all(|candidate| candidate.source() != bytes)
+        {
+            let ordinal = crate::joint::CandidateOrdinalV1::new(2);
+            resolved_candidates.push((ordinal, resolved));
+            physical_candidates.push(crate::pair::PairLabelCandidateV1::new(ordinal, bytes));
+            order.push(ordinal);
+        }
+    }
+
+    if physical_candidates.is_empty() {
+        return Err(SolveFailure::InternalInvariant(
+            "Pair frontend produced an empty candidate domain".into(),
+        ));
+    }
+
+    let verified = crate::pair::select_label_candidates(
+        source,
+        crate::composition::AdmittedOpacityV1::OPAQUE,
+        physical_candidates,
+        order,
+        backdrop,
+        pair_requirement(floor),
+    )
+    .map_err(|error| {
+        SolveFailure::InternalInvariant(format!(
+            "Pair joint selection failed after typed proposal admission: {error:?}"
+        ))
+    })?;
+
+    if verified.fill_occurrence() != fill.occurrence()
+        || verified.fill_paint() != fill.paint()
+        || verified.label_occurrence().visible() != verified.label_paint().source().bytes()
+    {
+        return Err(SolveFailure::InternalInvariant(
+            "Pair joint evidence drifted from the selected physical chain".into(),
+        ));
+    }
+
+    resolved_candidates
+        .into_iter()
+        .find(|(ordinal, _)| *ordinal == verified.ordinal())
+        .map(|(_, resolved)| resolved)
+        .ok_or_else(|| {
+            SolveFailure::InternalInvariant(
+                "Pair selection returned an ordinal outside the proposal domain".into(),
+            )
+        })
 }
 
 /// Альфа-аналог: солид-цель `solid` (кодированный, по теме) на фоне резолва
@@ -3299,7 +3337,13 @@ impl RoleSpec {
                     ));
                 }
                 alpha("pair-label light surface alpha", surface_alpha_light)?;
-                alpha("pair-label dark surface alpha", surface_alpha_dark)
+                alpha("pair-label dark surface alpha", surface_alpha_dark)?;
+                if surface_alpha_light.to_bits() != 1.0_f64.to_bits()
+                    || surface_alpha_dark.to_bits() != 1.0_f64.to_bits()
+                {
+                    return Err("pair-label surface representation must be opaque after P1".into());
+                }
+                Ok(())
             }
             RoleSpec::Ladder {
                 alpha_light,
@@ -4496,6 +4540,7 @@ mod tests {
             pair(f64::NAN, 0.5, 0.5),
             pair(0.5, 0.0, 0.5),
             pair(0.5, 0.5, f64::INFINITY),
+            pair(0.5, 0.25, 1.0),
             ladder(0.0, 0.5),
             ladder(0.5, f64::NAN),
             ladder_with_floor(1.0, 1.0, Some(Floor::None)),
@@ -4523,7 +4568,7 @@ mod tests {
             RoleSpec::DecorativeDj {
                 magnitude_dj: DjMagnitude::new(1.0, 2.0),
             },
-            pair(0.5, 0.25, 1.0),
+            pair(0.5, 1.0, 1.0),
             ladder(0.25, 1.0),
             ladder_with_floor(1.0, 1.0, Some(Floor::AaUi)),
             RoleSpec::AlphaAnalog {

@@ -321,7 +321,9 @@ fn acme_config() -> ThemeConfig {
             ),
             (
                 "brand-fill".to_string(),
-                brand_ladder(LadderPosition::FillPrimary),
+                RoleRecipe::PairFill {
+                    source: LadderSource::Brand,
+                },
             ),
             (
                 "brand-label".to_string(),
@@ -331,8 +333,8 @@ fn acme_config() -> ThemeConfig {
                     hue: Some(LadderSource::Brand),
                 },
             ),
-            // Лейбл тинт-бейджа: любой клиент получает жёсткий контраст
-            // label↔tinted-fill через тот же движок, без правок ядра.
+            // Лейбл пары: любой клиент получает жёсткий контраст против
+            // фактически emitted PairFill Surface через общий joint engine.
             (
                 "badge-label".to_string(),
                 RoleRecipe::PairLabel {
@@ -418,9 +420,9 @@ fn a_second_company_config_compiles_and_emits_a_valid_system() {
             "hued brand-label must resolve to a solved colour on {bg_hex}"
         );
 
-        // Лейбл тинт-бейджа — агностичный жёсткий контраст: решается цветом и
-        // держит свой UI-пол (3:1) ПРОТИВ тинт-поверхности бренда (композит
-        // brand-fill), а не против фона страницы. Тот же движок, чужой конфиг.
+        // PairLabel — агностичный жёсткий контраст: решается цветом и держит
+        // UI-пол (3:1) против фактически emitted PairFill Surface, а не
+        // страницы или скрытой синтетической подложки.
         let badge_label = set.iter().find(|(n, _)| n == "badge-label").unwrap();
         let Resolved::Color { solved, .. } = &badge_label.1 else {
             panic!("badge-label must resolve to a solved colour on {bg_hex}");
@@ -429,13 +431,13 @@ fn a_second_company_config_compiles_and_emits_a_valid_system() {
         let surface_hex = brand_fill
             .1
             .translucent()
-            .expect("brand-fill is a translucent tinted surface")
+            .expect("brand-fill is the emitted PairFill surface")
             .composite_hex();
         let enc = |h: &str| crate::spaces::srgb::srgb_encoded_from_hex(h).unwrap();
         let ratio = crate::wcag::contrast_ratio(enc(solved.hex()), enc(surface_hex));
         assert!(
             ratio >= 3.0 - 1e-9,
-            "badge-label must clear 3:1 against its tinted surface on {bg_hex}: got {ratio:.2}:1"
+            "badge-label must clear 3:1 against emitted PairFill on {bg_hex}: got {ratio:.2}:1"
         );
     }
 }

@@ -36,7 +36,7 @@ use common::source::{ProductionLine, production_records, production_syntax_lines
 // Audit surface — the perceptual modules the detector scans.
 // ─────────────────────────────────────────────────────────────────────────────
 
-const PERCEPTUAL_MODULES: [&str; 8] = [
+const PERCEPTUAL_MODULES: [&str; 7] = [
     "semantic.rs",
     "scale.rs",
     "spaces/oklab.rs",
@@ -44,9 +44,6 @@ const PERCEPTUAL_MODULES: [&str; 8] = [
     "lpc.rs",
     "lcs.rs",
     "solve.rs",
-    // Added for the honest-reclassification wave: `pair.rs` carries the tunable
-    // policy const `PAIR_CROSSOVER_Y` (row 52) — now under GATE-1/2/3.
-    "pair.rs",
 ];
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -58,27 +55,12 @@ const PERCEPTUAL_MODULES: [&str; 8] = [
 // (0.968/0.627/0.461/0.276) and the Separator Lc (8.0) evaded GATE-1 until they
 // were extracted. The const-only detector (GATE-1/2/3) is blind to inline literals.
 //
-// Why a SUBSET: the three modules below are POLICY modules — their magnitudes are
-// tunable perceptual policy (role fractions and curve thresholds). The remaining
-// modules (`scale.rs`, `spaces/oklab.rs`, `lpc.rs`, `lcs.rs`, `solve.rs`) are
-// STANDARD-MODEL
-// transform modules: their inline coefficients implement cited colour-appearance
-// models verbatim — CIECAM16 (`460/451/288/6300/1403…` in `lcs.rs`), the Hellwig
-// 2022 H-K first-harmonic (`0.080/0.132/0.160/0.405/0.792` in `lpc.rs`), the CAM16
-// non-linearity (`27.13/400.0/0.42`), and the J′ compression / cubic solver in
-// `scale.rs`. Those are NOT tunable policy; flagging them as "magic numbers" would
-// be a false claim (their tunable policy already lives in NAMED consts:
-// `HUE_SEARCH_HALF_WINDOW`, `HUE_DRIFT_PENALTY_SLOPE`, the APCA `SOFT_CLAMP_*`/`EXP_*`
-// set — all GATE-1/2 covered). `solve.rs` (added to `PERCEPTUAL_MODULES` for its
-// const budgets) is likewise a quantisation-search transform, so it too stays out
-// of the bare-literal surface. `pair.rs` IS scanned for inline literals: it carries a
-// genuine tunable policy const (`PAIR_CROSSOVER_Y`), so it is a POLICY module. Its only
-// non-policy inline floats were the ITU-R BT.709 / WCAG relative-luminance coefficients
-// (`0.2126/0.7152/0.0722`), now extracted into the `WCAG_LUMA_{R,G,B}` consts on
-// `NUMERIC_METHOD_ALLOWLIST` (a cited standard, excluded by construction — INV-3).
-// Every module in `PERCEPTUAL_MODULES` remains under the const-marker gate; the three
-// POLICY modules below are additionally scanned for inline bare literals.
-const POLICY_LITERAL_MODULES: &[&str] = &["semantic.rs", "neutral.rs", "pair.rs"];
+// Why a SUBSET: the two modules below are POLICY modules — their magnitudes are
+// tunable perceptual policy (role fractions and neutral thresholds). The remaining
+// modules are STANDARD-MODEL or bounded numeric-search transforms. Pair after P1
+// contains only typed topology/lowering and no perceptual policy constants, so it
+// is intentionally outside both inventory scan surfaces.
+const POLICY_LITERAL_MODULES: &[&str] = &["semantic.rs", "neutral.rs"];
 
 /// Bare float literal VALUES that are NOT tunable perceptual policy — universal
 /// domain/normalisation/degenerate/sentinel/numerical arithmetic, plus cited
@@ -135,18 +117,6 @@ const NUMERIC_METHOD_ALLOWLIST: &[&str] = &[
     "PROBE",
     // Derived from a WCAG standard ratio, not an independent policy literal.
     "POLARITY_FLOOR_RATIO",
-    // Derivation-identity from the WCAG strict-win contrast formula
-    // ((Y+0.05)² vs 1.05·0.05 ⇒ Y = 0.17913), rounded conservatively — the pair
-    // polarity crossover BOUNDARY, not an independent tunable policy literal
-    // (same class as `POLARITY_FLOOR_RATIO`). Provenance in pair.rs rustdoc (pair.rs).
-    "WHITE_WINS_Y",
-    "BLACK_WINS_Y",
-    // ITU-R BT.709 / WCAG 2.x relative-luminance coefficients (Rec.709 luma) —
-    // a cited standard, extracted from inline literals in `wcag_y_encoded` so
-    // pair.rs passes GATE-5 with no undeclared bare numbers (pair.rs; values unchanged).
-    "WCAG_LUMA_R",
-    "WCAG_LUMA_G",
-    "WCAG_LUMA_B",
 ];
 
 /// Known standard *names* that must NEVER appear as an inventory row — the

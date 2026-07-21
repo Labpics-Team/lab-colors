@@ -308,8 +308,8 @@ pub struct NoHybridLpcSurfaceMetric;
 #[cfg(doctest)]
 pub struct NoPrematureScalarLpcApi;
 
-/// Полярность и pair-механика закрыты внутри resolver-а, а не образуют
-/// публичный extension point.
+/// Frozen Pair frontend не публикует собственную физику или solver extension
+/// point; Pair lowering остаётся private до общего Program cutover.
 ///
 /// ```compile_fail
 /// use labcolors_core::pair::pair_side;

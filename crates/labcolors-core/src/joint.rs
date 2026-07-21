@@ -3,18 +3,64 @@
 //! Один code-owned program связывает две Paint-переменные через реальный
 //! `lower occurrence -> visible surface -> upper occurrence`. Candidate domain,
 //! полный hard-report, declared policy и fresh recheck являются разными типами.
-//! Модуль не знает клиентских recipes, role taxonomy или legacy solver state и
+//! Модуль не знает клиентских recipes, role taxonomy или evaluator families и
 //! не минтит terminal output certificate.
+
+use core::fmt::Debug;
 
 use crate::Srgb8;
 use crate::appearance::{
-    EncodedPointPaintV1, PaintId, PointOpacityOverSurfaceV1, ResolvedOccurrence, SurfaceInputPortId,
+    EncodedPointPaintV1, ModeledSrgb8PointOccurrence, PaintId, PointOpacityOverSurfaceV1,
+    ResolvedOccurrence, SurfaceInputPortId,
 };
 use crate::constraints::{
-    ExactPassEvidenceV1, ExactSrgb8IdentityV1, ExactViolationEvidenceV1, HardDecision,
+    Evaluator, ExactSrgb8IdentityV1, HardClassifier, HardDecision, PointInvocation,
+    PointMeasurement, VisiblePointPassEvidence, VisiblePointViolationEvidence,
     assess_visible_point_hard,
 };
 use crate::observation::{RevisionBoundObservationV1, ScenarioId};
+
+/// Sealed evaluator family, которую joint-program вызывает одинаково для
+/// каждого target occurrence. Конкретные Exact/WCAG/readability payload-и
+/// остаются в evaluator-модулях и не образуют центральный enum.
+pub(crate) trait JointPointEvaluatorV1: Clone + Debug + PartialEq {
+    type Invocation: Clone + Debug + PartialEq;
+    type PassEvidence: Clone + Debug + PartialEq;
+    type ViolationEvidence: Clone + Debug + PartialEq;
+    type Error: Clone + Debug + PartialEq;
+
+    fn assess(
+        &self,
+        occurrence: &ResolvedOccurrence,
+        invocation: Self::Invocation,
+    ) -> Result<HardDecision<Self::PassEvidence, Self::ViolationEvidence>, Self::Error>;
+}
+
+impl<Evaluation> JointPointEvaluatorV1 for Evaluation
+where
+    Evaluation: Clone
+        + Debug
+        + PartialEq
+        + Evaluator<ModeledSrgb8PointOccurrence>
+        + HardClassifier<PointInvocation<Evaluation>, PointMeasurement<Evaluation>>,
+    PointInvocation<Evaluation>: Clone + Debug + PartialEq,
+    VisiblePointPassEvidence<Evaluation>: Clone + Debug + PartialEq,
+    VisiblePointViolationEvidence<Evaluation>: Clone + Debug + PartialEq,
+    <Evaluation as Evaluator<ModeledSrgb8PointOccurrence>>::Error: Clone + Debug + PartialEq,
+{
+    type Invocation = PointInvocation<Evaluation>;
+    type PassEvidence = VisiblePointPassEvidence<Evaluation>;
+    type ViolationEvidence = VisiblePointViolationEvidence<Evaluation>;
+    type Error = <Evaluation as Evaluator<ModeledSrgb8PointOccurrence>>::Error;
+
+    fn assess(
+        &self,
+        occurrence: &ResolvedOccurrence,
+        invocation: Self::Invocation,
+    ) -> Result<HardDecision<Self::PassEvidence, Self::ViolationEvidence>, Self::Error> {
+        assess_visible_point_hard(occurrence, self, invocation)
+    }
+}
 
 /// Canonical identity одного joint candidate. Число не является declaration
 /// order, расстоянием или скрытым приоритетом.
@@ -108,25 +154,33 @@ impl JointConstraintIdV1 {
     }
 }
 
-/// Physical occurrence, к которому относится exact hard predicate.
+/// Physical occurrence, к которому относится hard predicate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum JointVisibleTargetV1 {
     Lower,
     Upper,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct JointHardConstraintV1 {
+/// Один constraint конкретного evaluator family. Invocation типизирована самим
+/// evaluator-ом; family-specific enum в joint engine отсутствует.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct PointwiseJointHardConstraintV1<Evaluation>
+where
+    Evaluation: JointPointEvaluatorV1,
+{
     id: JointConstraintIdV1,
     target: JointVisibleTargetV1,
-    invocation: Srgb8,
+    invocation: Evaluation::Invocation,
 }
 
-impl JointHardConstraintV1 {
-    pub(crate) const fn exact(
+impl<Evaluation> PointwiseJointHardConstraintV1<Evaluation>
+where
+    Evaluation: JointPointEvaluatorV1,
+{
+    pub(crate) fn new(
         id: JointConstraintIdV1,
         target: JointVisibleTargetV1,
-        invocation: Srgb8,
+        invocation: Evaluation::Invocation,
     ) -> Self {
         Self {
             id,
@@ -136,40 +190,141 @@ impl JointHardConstraintV1 {
     }
 }
 
-/// Identity первой private joint topology. Она не является public Program ID.
+pub(crate) type JointHardConstraintV1 = PointwiseJointHardConstraintV1<ExactSrgb8IdentityV1>;
+
+impl PointwiseJointHardConstraintV1<ExactSrgb8IdentityV1> {
+    pub(crate) fn exact(
+        id: JointConstraintIdV1,
+        target: JointVisibleTargetV1,
+        invocation: Srgb8,
+    ) -> Self {
+        Self::new(id, target, invocation)
+    }
+}
+
+/// Identity первой private joint topology. Она не является public Program ID и
+/// не кодирует evaluator family.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum JointPointProgramIdentityV1 {
-    TwoPaintDerivedSurfaceExactPointV1,
+    TwoPaintDerivedSurfacePointV1,
+}
+
+/// Наблюдение, пригодное для одного и того же execution/recheck kernel-а.
+/// Runtime revision и статическая compiler binding остаются разными типами.
+pub(crate) trait JointObservationV1: Clone + Debug + PartialEq {
+    fn root_index(&self, root: SurfaceInputPortId) -> Option<usize>;
+    fn case_count(&self) -> usize;
+    fn root_at(&self, case_index: usize, root_index: usize) -> Srgb8;
+    fn provenance(&self, case_index: usize) -> Option<&[ScenarioId]>;
+}
+
+impl JointObservationV1 for RevisionBoundObservationV1 {
+    fn root_index(&self, root: SurfaceInputPortId) -> Option<usize> {
+        self.schema().binary_search(&root).ok()
+    }
+
+    fn case_count(&self) -> usize {
+        self.set().cases().len()
+    }
+
+    fn root_at(&self, case_index: usize, root_index: usize) -> Srgb8 {
+        self.set().cases()[case_index].bindings()[root_index]
+    }
+
+    fn provenance(&self, case_index: usize) -> Option<&[ScenarioId]> {
+        self.set()
+            .cases()
+            .get(case_index)
+            .map(|case| case.provenance())
+    }
+}
+
+/// Один статический point case для build/synchronous resolver path. Тип не
+/// содержит runtime stream/revision и не изобретает provenance, которой у
+/// синхронного вызова нет.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct StaticJointObservationV1 {
+    root_surface: SurfaceInputPortId,
+    root: Srgb8,
+}
+
+impl StaticJointObservationV1 {
+    pub(crate) const fn one_case(root_surface: SurfaceInputPortId, root: Srgb8) -> Self {
+        Self { root_surface, root }
+    }
+}
+
+impl JointObservationV1 for StaticJointObservationV1 {
+    fn root_index(&self, root: SurfaceInputPortId) -> Option<usize> {
+        (root == self.root_surface).then_some(0)
+    }
+
+    fn case_count(&self) -> usize {
+        1
+    }
+
+    fn root_at(&self, case_index: usize, root_index: usize) -> Srgb8 {
+        debug_assert_eq!(case_index, 0);
+        debug_assert_eq!(root_index, 0);
+        self.root
+    }
+
+    fn provenance(&self, _case_index: usize) -> Option<&[ScenarioId]> {
+        None
+    }
 }
 
 /// Две связанные occurrences над одним observed root backdrop.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct JointPointProgramV1 {
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct PointwiseJointPointProgramV1<Evaluation>
+where
+    Evaluation: JointPointEvaluatorV1,
+{
+    evaluator: Evaluation,
     root_surface: SurfaceInputPortId,
     lower_paint: PaintId,
     upper_paint: PaintId,
-    constraints: Box<[JointHardConstraintV1]>,
+    constraints: Box<[PointwiseJointHardConstraintV1<Evaluation>]>,
 }
+
+pub(crate) type JointPointProgramV1 = PointwiseJointPointProgramV1<ExactSrgb8IdentityV1>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum JointProgramErrorV1 {
     SamePaintIdentity(PaintId),
-    EmptyHardConstraintSet,
     DuplicateConstraint(JointConstraintIdV1),
 }
 
-impl JointPointProgramV1 {
+impl PointwiseJointPointProgramV1<ExactSrgb8IdentityV1> {
     pub(crate) fn new(
         root_surface: SurfaceInputPortId,
         lower_paint: PaintId,
         upper_paint: PaintId,
-        mut constraints: Vec<JointHardConstraintV1>,
+        constraints: Vec<JointHardConstraintV1>,
+    ) -> Result<Self, JointProgramErrorV1> {
+        Self::with_evaluator(
+            ExactSrgb8IdentityV1,
+            root_surface,
+            lower_paint,
+            upper_paint,
+            constraints,
+        )
+    }
+}
+
+impl<Evaluation> PointwiseJointPointProgramV1<Evaluation>
+where
+    Evaluation: JointPointEvaluatorV1,
+{
+    pub(crate) fn with_evaluator(
+        evaluator: Evaluation,
+        root_surface: SurfaceInputPortId,
+        lower_paint: PaintId,
+        upper_paint: PaintId,
+        mut constraints: Vec<PointwiseJointHardConstraintV1<Evaluation>>,
     ) -> Result<Self, JointProgramErrorV1> {
         if lower_paint == upper_paint {
             return Err(JointProgramErrorV1::SamePaintIdentity(lower_paint));
-        }
-        if constraints.is_empty() {
-            return Err(JointProgramErrorV1::EmptyHardConstraintSet);
         }
         constraints.sort_unstable_by_key(|constraint| constraint.id);
         for pair in constraints.windows(2) {
@@ -178,6 +333,7 @@ impl JointPointProgramV1 {
             }
         }
         Ok(Self {
+            evaluator,
             root_surface,
             lower_paint,
             upper_paint,
@@ -186,24 +342,30 @@ impl JointPointProgramV1 {
     }
 
     const fn identity(&self) -> JointPointProgramIdentityV1 {
-        JointPointProgramIdentityV1::TwoPaintDerivedSurfaceExactPointV1
+        JointPointProgramIdentityV1::TwoPaintDerivedSurfacePointV1
     }
 
-    pub(crate) fn evaluate(
+    pub(crate) fn evaluate<Observation>(
         &self,
         candidates: JointCandidateSetV1,
-        observation: RevisionBoundObservationV1,
-    ) -> Result<FullHardReportV1, JointReportErrorV1> {
+        observation: Observation,
+    ) -> Result<
+        PointwiseFullHardReportV1<Evaluation, Observation>,
+        PointwiseJointReportErrorV1<Evaluation>,
+    >
+    where
+        Observation: JointObservationV1,
+    {
         self.validate_candidates(&candidates)?;
-        let root_index = observation
-            .schema()
-            .binary_search(&self.root_surface)
-            .map_err(|_| JointReportErrorV1::MissingRootSurface(self.root_surface))?;
-        let (execution_count, cell_count) = checked_joint_cardinality(
-            candidates.candidates.len(),
-            observation.set().cases().len(),
-            self.constraints.len(),
+        let root_index = observation.root_index(self.root_surface).ok_or(
+            PointwiseJointReportErrorV1::MissingRootSurface(self.root_surface),
         )?;
+        let (execution_count, cell_count) = checked_joint_cardinality_raw(
+            candidates.candidates.len(),
+            observation.case_count(),
+            self.constraints.len(),
+        )
+        .map_err(|_| PointwiseJointReportErrorV1::ResourceExhausted)?;
         let matrices = self.execute(
             candidates.candidates(),
             &observation,
@@ -211,7 +373,7 @@ impl JointPointProgramV1 {
             execution_count,
             cell_count,
         )?;
-        Ok(FullHardReportV1 {
+        Ok(PointwiseFullHardReportV1 {
             program_identity: self.identity(),
             program: self.clone(),
             candidates,
@@ -224,10 +386,10 @@ impl JointPointProgramV1 {
     fn validate_candidates(
         &self,
         candidates: &JointCandidateSetV1,
-    ) -> Result<(), JointReportErrorV1> {
+    ) -> Result<(), PointwiseJointReportErrorV1<Evaluation>> {
         for candidate in candidates.candidates() {
             if candidate.lower.id() != self.lower_paint {
-                return Err(JointReportErrorV1::CandidatePaintMismatch {
+                return Err(PointwiseJointReportErrorV1::CandidatePaintMismatch {
                     ordinal: candidate.ordinal,
                     stage: JointVisibleTargetV1::Lower,
                     expected: self.lower_paint,
@@ -235,7 +397,7 @@ impl JointPointProgramV1 {
                 });
             }
             if candidate.upper.id() != self.upper_paint {
-                return Err(JointReportErrorV1::CandidatePaintMismatch {
+                return Err(PointwiseJointReportErrorV1::CandidatePaintMismatch {
                     ordinal: candidate.ordinal,
                     stage: JointVisibleTargetV1::Upper,
                     expected: self.upper_paint,
@@ -246,26 +408,32 @@ impl JointPointProgramV1 {
         Ok(())
     }
 
-    fn execute(
+    fn execute<Observation>(
         &self,
         candidates: &[JointCandidateTupleV1],
-        observation: &RevisionBoundObservationV1,
+        observation: &Observation,
         root_index: usize,
         execution_count: usize,
         cell_count: usize,
-    ) -> Result<JointEvaluationMatricesV1, JointReportErrorV1> {
+    ) -> Result<
+        PointwiseJointEvaluationMatricesV1<Evaluation>,
+        PointwiseJointReportErrorV1<Evaluation>,
+    >
+    where
+        Observation: JointObservationV1,
+    {
         let mut executions = Vec::new();
         executions
             .try_reserve_exact(execution_count)
-            .map_err(|_| JointReportErrorV1::ResourceExhausted)?;
+            .map_err(|_| PointwiseJointReportErrorV1::ResourceExhausted)?;
         let mut cells = Vec::new();
         cells
             .try_reserve_exact(cell_count)
-            .map_err(|_| JointReportErrorV1::ResourceExhausted)?;
+            .map_err(|_| PointwiseJointReportErrorV1::ResourceExhausted)?;
 
         for candidate in candidates {
-            for (case_index, case) in observation.set().cases().iter().enumerate() {
-                let root = case.bindings()[root_index];
+            for case_index in 0..observation.case_count() {
+                let root = observation.root_at(case_index, root_index);
                 let lower = PointOpacityOverSurfaceV1::evaluate_admitted(
                     candidate.lower.source().bytes(),
                     candidate.lower.opacity(),
@@ -287,25 +455,26 @@ impl JointPointProgramV1 {
                     upper,
                 });
 
-                for constraint in self.constraints.iter().copied() {
+                for constraint in self.constraints.iter().cloned() {
                     let occurrence = match constraint.target {
                         JointVisibleTargetV1::Lower => &lower,
                         JointVisibleTargetV1::Upper => &upper,
                     };
-                    let decision = match assess_visible_point_hard(
-                        occurrence,
-                        &ExactSrgb8IdentityV1,
-                        constraint.invocation,
-                    ) {
-                        Ok(HardDecision::Pass(evidence)) => {
-                            JointConstraintDecisionV1::Pass(evidence)
+                    // Evaluator `Err` означает отсутствие валидного hard verdict,
+                    // поэтому частичная матрица не называется FullHardReport.
+                    let decision = match self
+                        .evaluator
+                        .assess(occurrence, constraint.invocation.clone())
+                        .map_err(PointwiseJointReportErrorV1::Evaluator)?
+                    {
+                        HardDecision::Pass(evidence) => {
+                            PointwiseJointConstraintDecisionV1::Pass(evidence)
                         }
-                        Ok(HardDecision::Violation(evidence)) => {
-                            JointConstraintDecisionV1::Violation(evidence)
+                        HardDecision::Violation(evidence) => {
+                            PointwiseJointConstraintDecisionV1::Violation(evidence)
                         }
-                        Err(error) => match error {},
                     };
-                    cells.push(JointConstraintCellV1 {
+                    cells.push(PointwiseJointConstraintCellV1 {
                         ordinal: candidate.ordinal,
                         constraint: constraint.id,
                         target: constraint.target,
@@ -318,15 +487,18 @@ impl JointPointProgramV1 {
 
         debug_assert_eq!(executions.len(), execution_count);
         debug_assert_eq!(cells.len(), cell_count);
-        Ok(JointEvaluationMatricesV1 {
+        Ok(PointwiseJointEvaluationMatricesV1 {
             executions: executions.into_boxed_slice(),
             cells: cells.into_boxed_slice(),
         })
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum JointReportErrorV1 {
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum PointwiseJointReportErrorV1<Evaluation>
+where
+    Evaluation: JointPointEvaluatorV1,
+{
     MissingRootSurface(SurfaceInputPortId),
     CandidatePaintMismatch {
         ordinal: CandidateOrdinalV1,
@@ -334,7 +506,29 @@ pub(crate) enum JointReportErrorV1 {
         expected: PaintId,
         actual: PaintId,
     },
+    Evaluator(Evaluation::Error),
     ResourceExhausted,
+}
+
+pub(crate) type JointReportErrorV1 = PointwiseJointReportErrorV1<ExactSrgb8IdentityV1>;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum JointCapacityErrorV1 {
+    ResourceExhausted,
+}
+
+fn checked_joint_cardinality_raw(
+    candidates: usize,
+    cases: usize,
+    constraints: usize,
+) -> Result<(usize, usize), JointCapacityErrorV1> {
+    let executions = candidates
+        .checked_mul(cases)
+        .ok_or(JointCapacityErrorV1::ResourceExhausted)?;
+    let cells = executions
+        .checked_mul(constraints)
+        .ok_or(JointCapacityErrorV1::ResourceExhausted)?;
+    Ok((executions, cells))
 }
 
 pub(crate) fn checked_joint_cardinality(
@@ -342,23 +536,21 @@ pub(crate) fn checked_joint_cardinality(
     cases: usize,
     constraints: usize,
 ) -> Result<(usize, usize), JointReportErrorV1> {
-    let executions = candidates
-        .checked_mul(cases)
-        .ok_or(JointReportErrorV1::ResourceExhausted)?;
-    let cells = executions
-        .checked_mul(constraints)
-        .ok_or(JointReportErrorV1::ResourceExhausted)?;
-    Ok((executions, cells))
+    checked_joint_cardinality_raw(candidates, cases, constraints)
+        .map_err(|_| JointReportErrorV1::ResourceExhausted)
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct JointEvaluationMatricesV1 {
+#[derive(Debug, Clone, PartialEq)]
+struct PointwiseJointEvaluationMatricesV1<Evaluation>
+where
+    Evaluation: JointPointEvaluatorV1,
+{
     executions: Box<[JointExecutionRecordV1]>,
-    cells: Box<[JointConstraintCellV1]>,
+    cells: Box<[PointwiseJointConstraintCellV1<Evaluation>]>,
 }
 
 /// Один execution record существует независимо от наличия constraint на lower.
-/// Поэтому связь derived surface доказана даже при единственном upper predicate.
+/// Поэтому связь derived surface доказана даже при пустом constraint set.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct JointExecutionRecordV1 {
     ordinal: CandidateOrdinalV1,
@@ -386,6 +578,14 @@ impl JointExecutionRecordV1 {
         self.upper_paint
     }
 
+    pub(crate) const fn lower_occurrence(&self) -> &ResolvedOccurrence {
+        &self.lower
+    }
+
+    pub(crate) const fn upper_occurrence(&self) -> &ResolvedOccurrence {
+        &self.upper
+    }
+
     pub(crate) fn lower_visible(&self) -> Srgb8 {
         Srgb8::new(self.lower.visible())
     }
@@ -399,17 +599,28 @@ impl JointExecutionRecordV1 {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum JointConstraintDecisionV1 {
-    Pass(ExactPassEvidenceV1),
-    Violation(ExactViolationEvidenceV1),
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum PointwiseJointConstraintDecisionV1<Evaluation>
+where
+    Evaluation: JointPointEvaluatorV1,
+{
+    Pass(Evaluation::PassEvidence),
+    Violation(Evaluation::ViolationEvidence),
 }
 
-impl JointConstraintDecisionV1 {
+pub(crate) type JointConstraintDecisionV1 =
+    PointwiseJointConstraintDecisionV1<ExactSrgb8IdentityV1>;
+
+impl<Evaluation> PointwiseJointConstraintDecisionV1<Evaluation>
+where
+    Evaluation: JointPointEvaluatorV1,
+{
     pub(crate) const fn is_pass(&self) -> bool {
         matches!(self, Self::Pass(_))
     }
+}
 
+impl PointwiseJointConstraintDecisionV1<ExactSrgb8IdentityV1> {
     pub(crate) fn actual(&self) -> Srgb8 {
         match self {
             Self::Pass(evidence) => evidence.actual(),
@@ -425,16 +636,22 @@ impl JointConstraintDecisionV1 {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct JointConstraintCellV1 {
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct PointwiseJointConstraintCellV1<Evaluation>
+where
+    Evaluation: JointPointEvaluatorV1,
+{
     ordinal: CandidateOrdinalV1,
     constraint: JointConstraintIdV1,
     target: JointVisibleTargetV1,
     case_index: usize,
-    decision: JointConstraintDecisionV1,
+    decision: PointwiseJointConstraintDecisionV1<Evaluation>,
 }
 
-impl JointConstraintCellV1 {
+impl<Evaluation> PointwiseJointConstraintCellV1<Evaluation>
+where
+    Evaluation: JointPointEvaluatorV1,
+{
     pub(crate) const fn ordinal(&self) -> CandidateOrdinalV1 {
         self.ordinal
     }
@@ -451,24 +668,32 @@ impl JointConstraintCellV1 {
         self.case_index
     }
 
-    pub(crate) const fn decision(&self) -> &JointConstraintDecisionV1 {
+    pub(crate) const fn decision(&self) -> &PointwiseJointConstraintDecisionV1<Evaluation> {
         &self.decision
     }
 }
 
 /// Полная матрица candidate x constraint x unique physical case плюс отдельная
 /// joint execution matrix candidate x case. Report не знает selection policy.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct FullHardReportV1 {
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct PointwiseFullHardReportV1<Evaluation, Observation>
+where
+    Evaluation: JointPointEvaluatorV1,
+    Observation: JointObservationV1,
+{
     program_identity: JointPointProgramIdentityV1,
-    program: JointPointProgramV1,
+    program: PointwiseJointPointProgramV1<Evaluation>,
     candidates: JointCandidateSetV1,
-    observation: RevisionBoundObservationV1,
+    observation: Observation,
     executions: Box<[JointExecutionRecordV1]>,
-    cells: Box<[JointConstraintCellV1]>,
+    cells: Box<[PointwiseJointConstraintCellV1<Evaluation>]>,
 }
 
-impl FullHardReportV1 {
+impl<Evaluation, Observation> PointwiseFullHardReportV1<Evaluation, Observation>
+where
+    Evaluation: JointPointEvaluatorV1,
+    Observation: JointObservationV1,
+{
     pub(crate) const fn program_identity(&self) -> JointPointProgramIdentityV1 {
         self.program_identity
     }
@@ -481,23 +706,19 @@ impl FullHardReportV1 {
         &self.executions
     }
 
-    pub(crate) fn cells(&self) -> &[JointConstraintCellV1] {
+    pub(crate) fn cells(&self) -> &[PointwiseJointConstraintCellV1<Evaluation>] {
         &self.cells
     }
 
-    pub(crate) const fn observation(&self) -> &RevisionBoundObservationV1 {
+    pub(crate) const fn observation(&self) -> &Observation {
         &self.observation
     }
 
     pub(crate) fn provenance(&self, case_index: usize) -> Option<&[ScenarioId]> {
-        self.observation
-            .set()
-            .cases()
-            .get(case_index)
-            .map(|case| case.provenance())
+        self.observation.provenance(case_index)
     }
 
-    pub(crate) fn classify(self) -> HardFeasibilityV1 {
+    pub(crate) fn classify(self) -> PointwiseHardFeasibilityV1<Evaluation, Observation> {
         let mut feasible = Vec::new();
         for candidate in self.candidates.candidates() {
             if self
@@ -510,9 +731,9 @@ impl FullHardReportV1 {
             }
         }
         if feasible.is_empty() {
-            HardFeasibilityV1::Infeasible(self)
+            PointwiseHardFeasibilityV1::Infeasible(self)
         } else {
-            HardFeasibilityV1::NonEmpty(NonEmptyFeasibleJointTuplesV1 {
+            PointwiseHardFeasibilityV1::NonEmpty(PointwiseNonEmptyFeasibleJointTuplesV1 {
                 report: self,
                 feasible: feasible.into_boxed_slice(),
             })
@@ -520,19 +741,34 @@ impl FullHardReportV1 {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum HardFeasibilityV1 {
-    Infeasible(FullHardReportV1),
-    NonEmpty(NonEmptyFeasibleJointTuplesV1),
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum PointwiseHardFeasibilityV1<Evaluation, Observation>
+where
+    Evaluation: JointPointEvaluatorV1,
+    Observation: JointObservationV1,
+{
+    Infeasible(PointwiseFullHardReportV1<Evaluation, Observation>),
+    NonEmpty(PointwiseNonEmptyFeasibleJointTuplesV1<Evaluation, Observation>),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct NonEmptyFeasibleJointTuplesV1 {
-    report: FullHardReportV1,
+pub(crate) type HardFeasibilityV1 =
+    PointwiseHardFeasibilityV1<ExactSrgb8IdentityV1, RevisionBoundObservationV1>;
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct PointwiseNonEmptyFeasibleJointTuplesV1<Evaluation, Observation>
+where
+    Evaluation: JointPointEvaluatorV1,
+    Observation: JointObservationV1,
+{
+    report: PointwiseFullHardReportV1<Evaluation, Observation>,
     feasible: Box<[CandidateOrdinalV1]>,
 }
 
-impl NonEmptyFeasibleJointTuplesV1 {
+impl<Evaluation, Observation> PointwiseNonEmptyFeasibleJointTuplesV1<Evaluation, Observation>
+where
+    Evaluation: JointPointEvaluatorV1,
+    Observation: JointObservationV1,
+{
     pub(crate) fn feasible(&self) -> &[CandidateOrdinalV1] {
         &self.feasible
     }
@@ -541,7 +777,10 @@ impl NonEmptyFeasibleJointTuplesV1 {
         self.report.candidate_set()
     }
 
-    pub(crate) fn select(self, policy: DeclaredTotalOrderV1) -> SelectedJointTupleV1 {
+    pub(crate) fn select(
+        self,
+        policy: DeclaredTotalOrderV1,
+    ) -> PointwiseSelectedJointTupleV1<Evaluation, Observation> {
         let ordinal = policy
             .order
             .iter()
@@ -555,7 +794,7 @@ impl NonEmptyFeasibleJointTuplesV1 {
             .iter()
             .find(|candidate| candidate.ordinal == ordinal)
             .unwrap_or_else(|| unreachable!("validated ordinal belongs to candidate set"));
-        SelectedJointTupleV1 {
+        PointwiseSelectedJointTupleV1 {
             report: self.report,
             policy,
             candidate,
@@ -603,31 +842,41 @@ pub(crate) enum SelectionPolicyErrorV1 {
     NotATotalOrder,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct SelectedJointTupleV1 {
-    report: FullHardReportV1,
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct PointwiseSelectedJointTupleV1<Evaluation, Observation>
+where
+    Evaluation: JointPointEvaluatorV1,
+    Observation: JointObservationV1,
+{
+    report: PointwiseFullHardReportV1<Evaluation, Observation>,
     policy: DeclaredTotalOrderV1,
     candidate: JointCandidateTupleV1,
 }
 
-impl SelectedJointTupleV1 {
+impl<Evaluation, Observation> PointwiseSelectedJointTupleV1<Evaluation, Observation>
+where
+    Evaluation: JointPointEvaluatorV1,
+    Observation: JointObservationV1,
+{
     pub(crate) const fn ordinal(&self) -> CandidateOrdinalV1 {
         self.candidate.ordinal
     }
 
     pub(crate) fn recheck(
         self,
-    ) -> Result<RevisionBoundVerifiedSelectionV1, SelectedRecheckErrorV1> {
+    ) -> Result<
+        PointwiseVerifiedSelectionV1<Evaluation, Observation>,
+        PointwiseSelectedRecheckErrorV1<Evaluation>,
+    > {
         let root_index = self
             .report
             .observation
-            .schema()
-            .binary_search(&self.report.program.root_surface)
-            .map_err(|_| SelectedRecheckErrorV1::InvariantDrift)?;
-        let cases = self.report.observation.set().cases().len();
+            .root_index(self.report.program.root_surface)
+            .ok_or(PointwiseSelectedRecheckErrorV1::InvariantDrift)?;
+        let cases = self.report.observation.case_count();
         let (execution_count, cell_count) =
-            checked_joint_cardinality(1, cases, self.report.program.constraints.len())
-                .map_err(|_| SelectedRecheckErrorV1::ResourceExhausted)?;
+            checked_joint_cardinality_raw(1, cases, self.report.program.constraints.len())
+                .map_err(|_| PointwiseSelectedRecheckErrorV1::ResourceExhausted)?;
         let matrices = self
             .report
             .program
@@ -639,23 +888,30 @@ impl SelectedJointTupleV1 {
                 cell_count,
             )
             .map_err(|error| match error {
-                JointReportErrorV1::ResourceExhausted => SelectedRecheckErrorV1::ResourceExhausted,
-                JointReportErrorV1::MissingRootSurface(_)
-                | JointReportErrorV1::CandidatePaintMismatch { .. } => {
-                    SelectedRecheckErrorV1::InvariantDrift
+                PointwiseJointReportErrorV1::ResourceExhausted => {
+                    PointwiseSelectedRecheckErrorV1::ResourceExhausted
+                }
+                PointwiseJointReportErrorV1::Evaluator(error) => {
+                    PointwiseSelectedRecheckErrorV1::Evaluator(error)
+                }
+                PointwiseJointReportErrorV1::MissingRootSurface(_)
+                | PointwiseJointReportErrorV1::CandidatePaintMismatch { .. } => {
+                    PointwiseSelectedRecheckErrorV1::InvariantDrift
                 }
             })?;
         if let Some(violation) = matrices
             .cells
             .iter()
-            .copied()
             .find(|cell| !cell.decision.is_pass())
+            .cloned()
         {
-            return Err(SelectedRecheckErrorV1::Violation(violation));
+            return Err(PointwiseSelectedRecheckErrorV1::Violation(Box::new(
+                violation,
+            )));
         }
-        Ok(RevisionBoundVerifiedSelectionV1 {
+        Ok(PointwiseVerifiedSelectionV1 {
             selected: self,
-            recheck: FreshJointRecheckV1 {
+            recheck: PointwiseFreshJointRecheckV1 {
                 executions: matrices.executions,
                 cells: matrices.cells,
             },
@@ -663,31 +919,46 @@ impl SelectedJointTupleV1 {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum SelectedRecheckErrorV1 {
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum PointwiseSelectedRecheckErrorV1<Evaluation>
+where
+    Evaluation: JointPointEvaluatorV1,
+{
     ResourceExhausted,
     InvariantDrift,
-    Violation(JointConstraintCellV1),
+    Evaluator(Evaluation::Error),
+    Violation(Box<PointwiseJointConstraintCellV1<Evaluation>>),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct FreshJointRecheckV1 {
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct PointwiseFreshJointRecheckV1<Evaluation>
+where
+    Evaluation: JointPointEvaluatorV1,
+{
     executions: Box<[JointExecutionRecordV1]>,
-    cells: Box<[JointConstraintCellV1]>,
+    cells: Box<[PointwiseJointConstraintCellV1<Evaluation>]>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct RevisionBoundVerifiedSelectionV1 {
-    selected: SelectedJointTupleV1,
-    recheck: FreshJointRecheckV1,
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct PointwiseVerifiedSelectionV1<Evaluation, Observation>
+where
+    Evaluation: JointPointEvaluatorV1,
+    Observation: JointObservationV1,
+{
+    selected: PointwiseSelectedJointTupleV1<Evaluation, Observation>,
+    recheck: PointwiseFreshJointRecheckV1<Evaluation>,
 }
 
-impl RevisionBoundVerifiedSelectionV1 {
+impl<Evaluation, Observation> PointwiseVerifiedSelectionV1<Evaluation, Observation>
+where
+    Evaluation: JointPointEvaluatorV1,
+    Observation: JointObservationV1,
+{
     pub(crate) const fn ordinal(&self) -> CandidateOrdinalV1 {
         self.selected.candidate.ordinal
     }
 
-    pub(crate) const fn report(&self) -> &FullHardReportV1 {
+    pub(crate) const fn report(&self) -> &PointwiseFullHardReportV1<Evaluation, Observation> {
         &self.selected.report
     }
 
@@ -699,7 +970,7 @@ impl RevisionBoundVerifiedSelectionV1 {
         &self.recheck.executions
     }
 
-    pub(crate) fn fresh_cells(&self) -> &[JointConstraintCellV1] {
+    pub(crate) fn fresh_cells(&self) -> &[PointwiseJointConstraintCellV1<Evaluation>] {
         &self.recheck.cells
     }
 }
