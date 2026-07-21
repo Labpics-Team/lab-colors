@@ -14,8 +14,13 @@ use crate::observation::{
 use crate::recheck::{
     BoundReadabilityRecheckV1, CompiledFixedRecheckV1, CompiledReadabilityRecheckV1,
     ExactOccurrenceRequirementV1, FixedRecheckBindErrorV1, FixedRecheckDecisionV1,
-    JointReadabilityResolutionV1, ReadabilityOccurrenceV1, RecheckProtocolErrorV1,
-    checked_evidence_count, resolve_across_all_samples,
+    JointReadabilityResolutionV1, POINT_SUPPORT_CAUSE_REQUIRED_RATIO_V1,
+    POINT_SUPPORT_CAUSE_RETAINED_SURPLUS_V1, PointSupportDropFractionV1,
+    PointSupportHysteresisAssessmentV1, PointSupportHysteresisV1, PointSupportInputErrorV1,
+    PointSupportLegacyRatioAnchorV1, PointSupportOccurrenceV1, PointSupportRequiredFloorStateV1,
+    PointSupportRequiredFloorV1, PointSupportStatusV1, ReadabilityOccurrenceV1,
+    RecheckProtocolErrorV1, checked_evidence_count, evaluate_point_support_v1,
+    resolve_across_all_samples,
 };
 use crate::solve::Floor;
 
@@ -431,6 +436,254 @@ fn finite_shape_polarity_typed_decision() {
     assert_eq!(verdict.measurement().lc(), 0.0);
     // A decorative floor (`None`) always passes: the identity ratio clears it.
     assert!(!verdict.is_violation());
+}
+
+fn point_support_occurrence(
+    source: [u8; 3],
+    opacity: f64,
+    required_floor: PointSupportRequiredFloorV1,
+    baseline_backdrop: [u8; 3],
+    anchor: PointSupportLegacyRatioAnchorV1,
+) -> PointSupportOccurrenceV1 {
+    PointSupportOccurrenceV1::try_new(
+        Srgb8::new(source),
+        opacity,
+        required_floor,
+        PointSupportHysteresisV1::RetainLegacyWcagRatioSurplus {
+            baseline_backdrop: Srgb8::new(baseline_backdrop),
+            anchor,
+        },
+    )
+    .unwrap()
+}
+
+fn point_support_drop(value: f64) -> PointSupportDropFractionV1 {
+    PointSupportDropFractionV1::try_new(value).unwrap()
+}
+
+#[test]
+fn point_support_recomposes_source_alpha_over_the_current_backdrop() {
+    // Baseline: white at alpha .4 over black -> #666666. If that old composite
+    // were reused as an opaque source over the new white backdrop it would clear
+    // 3:1. The replayable occurrence correctly recomposes to white-over-white.
+    let occurrence = point_support_occurrence(
+        [255; 3],
+        0.4,
+        PointSupportRequiredFloorV1::RequiredLegacyWcagAaUiRatio,
+        [0; 3],
+        PointSupportLegacyRatioAnchorV1::ThreeToOne,
+    );
+    let report =
+        evaluate_point_support_v1(&[occurrence], &[Srgb8::new([255; 3])], point_support_drop(1.0))
+            .unwrap();
+
+    assert_eq!(report.status(), PointSupportStatusV1::ReconcileRequired);
+    assert_eq!(
+        report.cause_mask(),
+        POINT_SUPPORT_CAUSE_RETAINED_SURPLUS_V1 | POINT_SUPPORT_CAUSE_REQUIRED_RATIO_V1
+    );
+    let cell = report.cells()[0];
+    assert_eq!(cell.source(), Srgb8::new([255; 3]));
+    assert_eq!(cell.visible(), Srgb8::new([255; 3]));
+    assert_eq!(
+        cell.required_floor_state(),
+        PointSupportRequiredFloorStateV1::RequiredThresholdNotMet
+    );
+    assert_eq!(cell.diagnostic().wcag_ratio(), 1.0);
+    let PointSupportHysteresisAssessmentV1::Evaluated(retained) = cell.hysteresis() else {
+        panic!("the transitional support lane must retain its explicit baseline")
+    };
+    assert_eq!(retained.baseline_visible(), Srgb8::new([0x66; 3]));
+    assert_eq!(retained.required_surplus(), 0.0);
+    assert_eq!(retained.current_surplus(), -2.0);
+    assert_eq!(retained.margin(), -2.0);
+
+    let vc = crate::spaces::vc::ViewingConditions::srgb();
+    let wrong =
+        crate::semantic::recheck_against_u32(0x00FF_FFFF, &[0x0066_6666], &vc).unwrap()[0].1;
+    assert!(
+        wrong > 3.0,
+        "the old composite-as-opaque mutation must produce the opposite floor result"
+    );
+}
+
+#[test]
+fn point_support_drop_endpoints_keep_required_floor_independent() {
+    let occurrence = point_support_occurrence(
+        [0; 3],
+        1.0,
+        PointSupportRequiredFloorV1::RequiredLegacyWcagAaTextRatio,
+        [255; 3],
+        PointSupportLegacyRatioAnchorV1::FourPointFiveToOne,
+    );
+
+    let retained_loss =
+        evaluate_point_support_v1(&[occurrence], &[Srgb8::new([0xFE; 3])], point_support_drop(0.0))
+            .unwrap();
+    assert_eq!(
+        retained_loss.cause_mask(),
+        POINT_SUPPORT_CAUSE_RETAINED_SURPLUS_V1
+    );
+    assert_eq!(
+        retained_loss.cells()[0].required_floor_state(),
+        PointSupportRequiredFloorStateV1::RequiredThresholdMet
+    );
+
+    let allowed_drop =
+        evaluate_point_support_v1(&[occurrence], &[Srgb8::new([0x76; 3])], point_support_drop(1.0))
+            .unwrap();
+    assert_eq!(allowed_drop.status(), PointSupportStatusV1::Stable);
+    assert_eq!(allowed_drop.cause_mask(), 0);
+
+    let required_failure =
+        evaluate_point_support_v1(&[occurrence], &[Srgb8::new([0x74; 3])], point_support_drop(1.0))
+            .unwrap();
+    assert_eq!(
+        required_failure.status(),
+        PointSupportStatusV1::ReconcileRequired
+    );
+    assert_ne!(
+        required_failure.cause_mask() & POINT_SUPPORT_CAUSE_REQUIRED_RATIO_V1,
+        0,
+        "dropFraction=1 must not weaken the independently required floor"
+    );
+    assert_eq!(
+        required_failure.cells()[0].required_floor_state(),
+        PointSupportRequiredFloorStateV1::RequiredThresholdNotMet
+    );
+}
+
+#[test]
+fn point_support_worst_tie_preserves_submitted_sample_then_occurrence_order() {
+    let occurrence = point_support_occurrence(
+        [0; 3],
+        1.0,
+        PointSupportRequiredFloorV1::RequiredLegacyWcagAaTextRatio,
+        [255; 3],
+        PointSupportLegacyRatioAnchorV1::FourPointFiveToOne,
+    );
+    let report = evaluate_point_support_v1(
+        &[occurrence, occurrence],
+        &[Srgb8::new([255; 3]), Srgb8::new([255; 3])],
+        point_support_drop(0.0),
+    )
+    .unwrap();
+
+    assert_eq!(report.status(), PointSupportStatusV1::Stable);
+    assert_eq!(report.cells().len(), 4);
+    let worst = *report.minimum_hysteresis_cell().unwrap();
+    assert_eq!((worst.sample_index(), worst.occurrence_index()), (0, 0));
+    assert!(report.primary_failure_cell().is_none());
+}
+
+#[test]
+fn point_support_not_requested_never_fabricates_a_required_pass() {
+    let occurrence = point_support_occurrence(
+        [255, 0, 0],
+        0.0,
+        PointSupportRequiredFloorV1::NotRequested,
+        [0x12, 0x34, 0x56],
+        PointSupportLegacyRatioAnchorV1::IdentityOneToOne,
+    );
+    let report = evaluate_point_support_v1(
+        &[occurrence],
+        &[Srgb8::new([0x12, 0x34, 0x56])],
+        point_support_drop(1.0),
+    )
+    .unwrap();
+
+    assert_eq!(report.status(), PointSupportStatusV1::Stable);
+    let cell = report.cells()[0];
+    assert_eq!(cell.visible(), Srgb8::new([0x12, 0x34, 0x56]));
+    assert_eq!(
+        cell.required_floor_state(),
+        PointSupportRequiredFloorStateV1::NotRequested
+    );
+    assert_eq!(cell.diagnostic().wcag_ratio(), 1.0);
+}
+
+#[test]
+fn point_support_admission_fails_before_the_first_composite() {
+    for invalid in [f64::NAN, f64::NEG_INFINITY, f64::INFINITY] {
+        assert_eq!(
+            PointSupportDropFractionV1::try_new(invalid),
+            Err(PointSupportInputErrorV1::DropFractionNonFinite)
+        );
+    }
+    for invalid in [-f64::MIN_POSITIVE, 1.0 + f64::EPSILON] {
+        assert_eq!(
+            PointSupportDropFractionV1::try_new(invalid),
+            Err(PointSupportInputErrorV1::DropFractionOutsideUnitInterval)
+        );
+    }
+    for invalid in [f64::NAN, f64::NEG_INFINITY, f64::INFINITY] {
+        assert_eq!(
+            PointSupportOccurrenceV1::try_new(
+                Srgb8::new([0; 3]),
+                invalid,
+                PointSupportRequiredFloorV1::NotRequested,
+                PointSupportHysteresisV1::Disabled,
+            ),
+            Err(PointSupportInputErrorV1::OpacityNonFinite)
+        );
+    }
+    for invalid in [-f64::MIN_POSITIVE, 1.0 + f64::EPSILON] {
+        assert_eq!(
+            PointSupportOccurrenceV1::try_new(
+                Srgb8::new([0; 3]),
+                invalid,
+                PointSupportRequiredFloorV1::NotRequested,
+                PointSupportHysteresisV1::Disabled,
+            ),
+            Err(PointSupportInputErrorV1::OpacityOutsideUnitInterval)
+        );
+    }
+
+    let occurrence = point_support_occurrence(
+        [0; 3],
+        1.0,
+        PointSupportRequiredFloorV1::NotRequested,
+        [255; 3],
+        PointSupportLegacyRatioAnchorV1::IdentityOneToOne,
+    );
+    crate::composition::reset_source_over_evaluation_count();
+    assert_eq!(
+        evaluate_point_support_v1(&[], &[Srgb8::new([255; 3])], point_support_drop(0.0)),
+        Err(PointSupportInputErrorV1::EmptyOccurrences)
+    );
+    assert_eq!(crate::composition::source_over_evaluation_count(), 0);
+
+    crate::composition::reset_source_over_evaluation_count();
+    assert_eq!(
+        evaluate_point_support_v1(&[occurrence], &[], point_support_drop(0.0)),
+        Err(PointSupportInputErrorV1::EmptyBackdrops)
+    );
+    assert_eq!(crate::composition::source_over_evaluation_count(), 0);
+}
+
+#[test]
+fn point_support_opaque_diagnostic_matches_the_raw_legacy_metric_bits() {
+    let source = [0x00, 0x57, 0xBB];
+    let backdrop = [255; 3];
+    let occurrence = point_support_occurrence(
+        source,
+        1.0,
+        PointSupportRequiredFloorV1::RequiredLegacyWcagAaTextRatio,
+        backdrop,
+        PointSupportLegacyRatioAnchorV1::FourPointFiveToOne,
+    );
+    let report = evaluate_point_support_v1(
+        &[occurrence],
+        &[Srgb8::new(backdrop)],
+        point_support_drop(1.0),
+    )
+    .unwrap();
+    let diagnostic = report.cells()[0].diagnostic();
+    let vc = crate::spaces::vc::ViewingConditions::srgb();
+    let raw = crate::semantic::recheck_against_u32(0x00FF_FFFF, &[0x0000_57BB], &vc).unwrap()[0];
+
+    assert_eq!(diagnostic.signed_candidate().to_bits(), raw.0.to_bits());
+    assert_eq!(diagnostic.wcag_ratio().to_bits(), raw.1.to_bits());
 }
 
 proptest! {
