@@ -18,6 +18,7 @@ pub(crate) enum OpacityAdmissionErrorV1 {
 /// и certificate replay не вправе независимо выбирать арифметику по тому же
 /// discriminant.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum CompositionProfileV1 {
     /// Straight-alpha source-over в encoded-sRGB8 с одним округлением каждого
     /// финального канала occurrence. Это не модель произвольного renderer/HDR.
