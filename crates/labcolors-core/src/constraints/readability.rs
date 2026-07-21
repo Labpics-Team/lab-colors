@@ -69,6 +69,7 @@ pub(crate) struct DisplayReadabilityMeasurementV1 {
 }
 
 impl DisplayReadabilityMeasurementV1 {
+    #[cfg(test)]
     pub(crate) const fn lc(&self) -> f64 {
         self.lc
     }
