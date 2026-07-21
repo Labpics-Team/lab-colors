@@ -37,11 +37,17 @@ impl ColorInputId {
 /// Он намеренно не взаимозаменяем с [`ColorInputId`]: authored Paint source и
 /// runtime backdrop имеют разные lifecycle и admission contract.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) struct SurfaceInputPortId(u32);
+pub struct SurfaceInputPortId(u32);
 
 impl SurfaceInputPortId {
-    pub(crate) const fn new(raw: u32) -> Self {
+    /// Construct one client-owned opaque surface-input identity.
+    pub const fn new(raw: u32) -> Self {
         Self(raw)
+    }
+
+    /// Exact transport value. It has identity semantics only.
+    pub const fn value(self) -> u32 {
+        self.0
     }
 }
 
@@ -77,11 +83,17 @@ impl SurfaceId {
 
 /// Непрозрачный handle применения Paint к Surface.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) struct OccurrenceId(u32);
+pub struct OccurrenceId(u32);
 
 impl OccurrenceId {
-    pub(crate) const fn new(raw: u32) -> Self {
+    /// Construct one client-owned opaque occurrence identity.
+    pub const fn new(raw: u32) -> Self {
         Self(raw)
+    }
+
+    /// Exact transport value. It has identity semantics only.
+    pub const fn value(self) -> u32 {
+        self.0
     }
 }
 
@@ -1072,6 +1084,10 @@ impl SourceOverCertificateV1 {
 
     pub const fn subject_opacity_bits(&self) -> u64 {
         self.subject_opacity.bits()
+    }
+
+    pub const fn subject_opacity(&self) -> f64 {
+        self.subject_opacity.value()
     }
 
     pub const fn backdrop_rgb(&self) -> [u8; 3] {
