@@ -1047,7 +1047,7 @@ impl EncodedPointPaintV1 {
 /// Replayable exact point-composite certificate. Он доказывает только
 /// заявленную математическую операцию, не readability и не browser pixels.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct SourceOverCertificateV1 {
+pub struct SourceOverCertificateV1 {
     profile: CompositionProfileV1,
     subject_rgb: [u8; 3],
     subject_opacity: crate::composition::AdmittedOpacityV1,
@@ -1056,30 +1056,29 @@ pub(crate) struct SourceOverCertificateV1 {
 }
 
 impl SourceOverCertificateV1 {
-    #[cfg(test)]
-    pub(crate) fn replay(&self) -> [u8; 3] {
+    /// Replay the exact code-owned composition law certified by this value.
+    pub fn replay(&self) -> [u8; 3] {
         self.profile
             .composite(self.subject_rgb, self.subject_opacity, self.backdrop_rgb)
     }
 
-    #[cfg(test)]
-    pub(crate) fn profile(&self) -> CompositionProfileV1 {
+    pub const fn profile(&self) -> CompositionProfileV1 {
         self.profile
     }
 
-    pub(crate) fn subject_rgb(&self) -> [u8; 3] {
+    pub const fn subject_rgb(&self) -> [u8; 3] {
         self.subject_rgb
     }
 
-    pub(crate) fn subject_opacity_bits(&self) -> u64 {
+    pub const fn subject_opacity_bits(&self) -> u64 {
         self.subject_opacity.bits()
     }
 
-    pub(crate) fn backdrop_rgb(&self) -> [u8; 3] {
+    pub const fn backdrop_rgb(&self) -> [u8; 3] {
         self.backdrop_rgb
     }
 
-    pub(crate) fn output_rgb(&self) -> [u8; 3] {
+    pub const fn output_rgb(&self) -> [u8; 3] {
         self.output_rgb
     }
 }
