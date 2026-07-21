@@ -5289,6 +5289,48 @@ mod tests {
         assert!(recheck_against_multi(&["bad"], &["#FFFFFF"], &ViewingConditions::srgb()).is_err());
     }
 
+    #[test]
+    fn recheck_against_ignores_alpha() {
+        // CHARACTERIZATION: the colour-only recheck has no occurrence model.
+        // Given a translucent tint's hex it forwards the tint's OWN display
+        // luminance — never the alpha-composite over the backdrop. This pins the
+        // exact gap the full-support occurrence descriptor (C8d step 2) closes:
+        // the readability recheck must composite the tint at its alpha before
+        // measuring, which this path structurally cannot.
+        let vc = ViewingConditions::srgb();
+        let bg = "#000000";
+        let tint = "#FFFFFF";
+        let alpha = 0.6;
+
+        let seen = recheck_against(bg, &[tint], &vc).unwrap()[0];
+
+        // What it reports is exactly the tint-vs-backdrop contrast.
+        let rl_tint = crate::wcag::relative_luminance(
+            crate::spaces::srgb::srgb_encoded_from_hex(tint).unwrap(),
+        );
+        let rl_bg = crate::wcag::relative_luminance(
+            crate::spaces::srgb::srgb_encoded_from_hex(bg).unwrap(),
+        );
+        assert_eq!(
+            seen.0.to_bits(),
+            crate::lpc::contrast_core(rl_tint, rl_bg).to_bits()
+        );
+        assert_eq!(
+            seen.1.to_bits(),
+            crate::wcag::ratio_from_luminances(rl_tint, rl_bg).to_bits()
+        );
+
+        // The real composite (#FFFFFF @0.6 over black) is a materially different
+        // colour with a different contrast the colour-only path never observes.
+        let composite =
+            crate::composition::source_over_srgb8([255, 255, 255], alpha, [0, 0, 0]).unwrap();
+        let rl_comp = crate::wcag::relative_luminance(crate::Srgb8::new(composite).encoded());
+        assert_ne!(
+            seen.1.to_bits(),
+            crate::wcag::ratio_from_luminances(rl_comp, rl_bg).to_bits()
+        );
+    }
+
     /// The packed `0x00RRGGBB` corpus: canonical 6-hex spelling paired with the
     /// word it encodes. `#ABC` shorthand is a boundary affordance the core does
     /// not accept, so its *expanded* form `#AABBCC` stands in for it here — the
