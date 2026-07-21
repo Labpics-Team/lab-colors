@@ -473,9 +473,12 @@ fn point_support_recomposes_source_alpha_over_the_current_backdrop() {
         [0; 3],
         PointSupportLegacyRatioAnchorV1::ThreeToOne,
     );
-    let report =
-        evaluate_point_support_v1(&[occurrence], &[Srgb8::new([255; 3])], point_support_drop(1.0))
-            .unwrap();
+    let report = evaluate_point_support_v1(
+        &[occurrence],
+        &[Srgb8::new([255; 3])],
+        point_support_drop(1.0),
+    )
+    .unwrap();
 
     assert_eq!(report.status(), PointSupportStatusV1::ReconcileRequired);
     assert_eq!(
@@ -517,9 +520,12 @@ fn point_support_drop_endpoints_keep_required_floor_independent() {
         PointSupportLegacyRatioAnchorV1::FourPointFiveToOne,
     );
 
-    let retained_loss =
-        evaluate_point_support_v1(&[occurrence], &[Srgb8::new([0xFE; 3])], point_support_drop(0.0))
-            .unwrap();
+    let retained_loss = evaluate_point_support_v1(
+        &[occurrence],
+        &[Srgb8::new([0xFE; 3])],
+        point_support_drop(0.0),
+    )
+    .unwrap();
     assert_eq!(
         retained_loss.cause_mask(),
         POINT_SUPPORT_CAUSE_RETAINED_SURPLUS_V1
@@ -529,15 +535,21 @@ fn point_support_drop_endpoints_keep_required_floor_independent() {
         PointSupportRequiredFloorStateV1::RequiredThresholdMet
     );
 
-    let allowed_drop =
-        evaluate_point_support_v1(&[occurrence], &[Srgb8::new([0x76; 3])], point_support_drop(1.0))
-            .unwrap();
+    let allowed_drop = evaluate_point_support_v1(
+        &[occurrence],
+        &[Srgb8::new([0x76; 3])],
+        point_support_drop(1.0),
+    )
+    .unwrap();
     assert_eq!(allowed_drop.status(), PointSupportStatusV1::Stable);
     assert_eq!(allowed_drop.cause_mask(), 0);
 
-    let required_failure =
-        evaluate_point_support_v1(&[occurrence], &[Srgb8::new([0x74; 3])], point_support_drop(1.0))
-            .unwrap();
+    let required_failure = evaluate_point_support_v1(
+        &[occurrence],
+        &[Srgb8::new([0x74; 3])],
+        point_support_drop(1.0),
+    )
+    .unwrap();
     assert_eq!(
         required_failure.status(),
         PointSupportStatusV1::ReconcileRequired
