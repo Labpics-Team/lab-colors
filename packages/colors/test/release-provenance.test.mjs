@@ -29,14 +29,13 @@ test("prepack source guard is clean-tree and exact-SHA executable evidence", asy
   const fixture = mkdtempSync(join(tmpdir(), "labcolors-prepack-source-"));
   const scripts = join(fixture, "scripts");
   mkdirSync(scripts);
-  copyFileSync(
-    join(root, "scripts", "prepare-npm-package.mjs"),
-    join(scripts, "prepare-npm-package.mjs"),
-  );
-  copyFileSync(
-    join(root, "scripts", "cargo-workspace.mjs"),
-    join(scripts, "cargo-workspace.mjs"),
-  );
+  for (const dependency of [
+    "prepare-npm-package.mjs",
+    "cargo-workspace.mjs",
+    "release-evidence.mjs",
+  ]) {
+    copyFileSync(join(root, "scripts", dependency), join(scripts, dependency));
+  }
   try {
     command("git", ["init", "--quiet"], fixture);
     command("git", ["config", "user.name", "Lab Colors release test"], fixture);

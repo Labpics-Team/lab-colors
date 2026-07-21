@@ -19,11 +19,17 @@ import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 
 import {
+  validateNumericalEvidenceArtifacts,
   validateSolveFailurePair,
   validateSolveFamily,
-  validateWcag22EvidenceArtifacts,
 } from "../../../scripts/verify-package-release.mjs";
 import { workspacePackageTable } from "../../../scripts/cargo-workspace.mjs";
+import {
+  NUMERICAL_EVIDENCE_FILES,
+  PACKED_NUMERICAL_EVIDENCE_PATHS,
+  POINT_SUPPORT_EVIDENCE_FILES,
+  WCAG22_EVIDENCE_FILES,
+} from "../../../scripts/release-evidence.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = resolve(here, "../../..");
@@ -827,20 +833,69 @@ test("publish artifact validator executes and rejects identity or byte drift", (
     const payload = join(temporary, "payload", "package");
     mkdirSync(artifact, { recursive: true });
     mkdirSync(payload, { recursive: true });
+    const packageVersion = "0.11.0";
+    const coreVersion = "0.3.0";
     writeFileSync(
       join(payload, "package.json"),
-      `${JSON.stringify({ name: "@labpics/colors", version: "0.10.0" })}\n`,
+      `${JSON.stringify({ name: "@labpics/colors", version: packageVersion })}\n`,
     );
     const runtimeWasm = Buffer.from([0, 97, 115, 109, 1, 0, 0, 0]);
     mkdirSync(join(payload, "pkg"));
     writeFileSync(join(payload, "pkg", "labcolors_bg.wasm"), runtimeWasm);
 
+    const evidenceDir = join(payload, "evidence");
+    mkdirSync(evidenceDir);
+    const contracts = join(root, "crates", "labcolors-core", "contracts");
+    const evidenceBytes = new Map();
+    for (const name of NUMERICAL_EVIDENCE_FILES) {
+      const contents = readFileSync(join(contracts, name));
+      evidenceBytes.set(name, contents);
+      writeFileSync(join(evidenceDir, name), contents);
+    }
+    const evidenceArtifact = (name) => {
+      const contents = evidenceBytes.get(name);
+      assert.ok(contents, `missing fixture evidence ${name}`);
+      return {
+        path: `evidence/${name}`,
+        bytes: contents.length,
+        sha256: createHash("sha256").update(contents).digest("hex"),
+      };
+    };
+    const wcagProfileBytes = evidenceBytes.get(WCAG22_EVIDENCE_FILES[0]);
+    const wcagProofBytes = evidenceBytes.get(WCAG22_EVIDENCE_FILES[2]);
+    const pointProofBytes = evidenceBytes.get(POINT_SUPPORT_EVIDENCE_FILES[0]);
+    assert.ok(wcagProfileBytes && wcagProofBytes && pointProofBytes);
+    const wcagProfile = JSON.parse(wcagProfileBytes.toString("utf8"));
+    const wcagProof = JSON.parse(wcagProofBytes.toString("utf8"));
+    const pointProof = JSON.parse(pointProofBytes.toString("utf8"));
+
+    const conformanceManifestBytes = readFileSync(
+      join(root, "conformance", "vectors", "manifest.json"),
+    );
+    const conformanceManifest = JSON.parse(conformanceManifestBytes.toString("utf8"));
+    const familyNames = [
+      "contrasts.json",
+      "ladders.json",
+      "alpha.json",
+      "solve.json",
+      "wcag22.json",
+    ];
+    const familyBytes = familyNames.map((name) =>
+      readFileSync(join(root, "conformance", "vectors", name))
+    );
+
     const expectedSha = "a".repeat(40);
     const conformance = {
-      packVersion: "9.0.0",
-      packDigest: "12345678",
-      manifestSha256: "c".repeat(64),
-      familySetSha256: "d".repeat(64),
+      packVersion: conformanceManifest.packVersion,
+      packDigest: conformanceManifest.packDigest,
+      counts: conformanceManifest.counts,
+      manifestSha256: createHash("sha256").update(conformanceManifestBytes).digest("hex"),
+      familySetSha256: createHash("sha256").update(Buffer.concat(familyBytes)).digest("hex"),
+      families: familyNames.map((name, index) => ({
+        path: `conformance/vectors/${name}`,
+        bytes: familyBytes[index].length,
+        sha256: createHash("sha256").update(familyBytes[index]).digest("hex"),
+      })),
     };
     const wasmEvidence = [
       {
@@ -852,29 +907,116 @@ test("publish artifact validator executes and rejects identity or byte drift", (
     ];
     const buildMetadata = {
       schemaVersion: 2,
-      package: { name: "@labpics/colors", version: "0.10.0" },
+      package: { name: "@labpics/colors", version: packageVersion },
       sourceSha: expectedSha,
-      coreVersion: "0.2.0",
-      conformance,
+      coreVersion,
+      conformance: {
+        packVersion: conformance.packVersion,
+        packDigest: conformance.packDigest,
+        manifestSha256: conformance.manifestSha256,
+        familySetSha256: conformance.familySetSha256,
+      },
       wasm: wasmEvidence,
     };
     const metadataPath = join(payload, "build-metadata.json");
     const metadataBytes = Buffer.from(`${JSON.stringify(buildMetadata)}\n`);
     writeFileSync(metadataPath, metadataBytes);
 
-    const tarball = join(artifact, "labpics-colors-0.10.0.tgz");
+    const tarball = join(artifact, `labpics-colors-${packageVersion}.tgz`);
     execFileSync("tar", ["-czf", tarball, "-C", join(temporary, "payload"), "package"]);
     const bytes = readFileSync(tarball);
 
     const manifest = {
-      schemaVersion: 3,
-      npm: "0.10.0",
-      core: "0.2.0",
+      schemaVersion: 4,
+      npm: packageVersion,
+      core: coreVersion,
+      wire: {
+        identity: `resolved-theme@${packageVersion}`,
+        embeddedInPayload: false,
+        trackingIssue: 258,
+      },
       conformance,
+      normativeEvidence: {
+        wcag22: {
+          profileId: wcagProfile.profileId,
+          profileChecksum: wcagProof.profile_checksum,
+          artifactId: wcagProof.artifact_id,
+          boundId: wcagProof.bound_id,
+          proofId: wcagProof.proof_id,
+          kernelId: wcagProof.kernel_id,
+          terminalEvidenceId: wcagProof.terminal_evidence_id,
+          parserId: wcagProof.parser_id,
+          facadeId: wcagProof.facade_id,
+          artifacts: WCAG22_EVIDENCE_FILES.map(evidenceArtifact),
+        },
+      },
+      numericalEvidence: {
+        pointSupportReferenceSurplus: {
+          siteId: pointProof.site_id,
+          profileId: pointProof.profile_id,
+          artifactId: pointProof.artifact_id,
+          boundId: pointProof.bound_id,
+          proofId: pointProof.proof_id,
+          proofSha256: createHash("sha256").update(pointProofBytes).digest("hex"),
+          proofPayloadSha256: pointProof.proof_payload_sha256,
+          declaredOperationLaw: pointProof.declared_operation_law,
+          certifiedClaim: pointProof.certified_claim,
+          excludedClaim: pointProof.excluded_claim,
+          sourceBinding: {
+            schemaVersion: pointProof.source_binding_schema_version,
+            law: pointProof.source_binding_law,
+            scope: pointProof.source_binding_scope,
+            exclusions: pointProof.source_binding_exclusions,
+            closureSha256: pointProof.source_closure_sha256,
+          },
+          q55Dependency: {
+            artifactId: pointProof.q55_dependency.artifact_id,
+            artifactSha256: pointProof.q55_dependency.artifact_sha256,
+            proofId: pointProof.q55_dependency.proof_id,
+            proofSha256: pointProof.q55_dependency.proof_sha256,
+            proofPayloadSha256: pointProof.q55_dependency.proof_payload_sha256,
+          },
+          artifacts: POINT_SUPPORT_EVIDENCE_FILES.map(evidenceArtifact),
+        },
+      },
       sourceSha: expectedSha,
+      reproducibility: {
+        method: "two-independent-npm-pack-passes",
+        passes: 2,
+        byteIdentical: true,
+      },
+      requirements: {
+        consumerRuntime: {
+          node: ">=22.11.0",
+          verifiedFloor: "22.11.0",
+          canonicalGate: "Node 22 consumer floor",
+        },
+        buildToolchain: { node: process.versions.node, npm: "11.9.0" },
+        typescript: {
+          compiler: "5.9.3",
+          minimumConsumerCompiler: "5.2.2",
+          target: "ES2022",
+          libraries: ["ES2022", "DOM"],
+          skipLibCheck: false,
+        },
+      },
+      supported: [
+        "exact-alpha-srgb8-v1",
+        "exact-screen-composite-srgb8-v1",
+        "typed-glow-indeterminate-v1",
+        "wcag22-srgb8-contrast-v1",
+      ],
+      numericalCapabilities: structuredClone(conformanceManifest.numericalCapabilities),
+      unsupported: [
+        "embedded-wire-schema-version",
+        "stable-cam16-glow-target-or-maximum-selection",
+        "renderer-or-output-pipeline-equivalence",
+        "spatial-glow-field",
+        "display-p3",
+      ],
       artifacts: {
         tarball: {
-          path: ".release/labpics-colors-0.10.0.tgz",
+          path: `.release/labpics-colors-${packageVersion}.tgz`,
           bytes: bytes.length,
           sha256: createHash("sha256").update(bytes).digest("hex"),
         },
@@ -898,7 +1040,7 @@ test("publish artifact validator executes and rejects identity or byte drift", (
         ...process.env,
         ARTIFACT_DIR: artifact,
         EXPECTED_SHA: expectedSha,
-        EXPECTED_TAG: "colors-v0.10.0",
+        EXPECTED_TAG: `colors-v${packageVersion}`,
         EXPECTED_NODE: process.versions.node,
         EXPECTED_NPM: "11.9.0",
         GITHUB_OUTPUT: output,
@@ -906,6 +1048,7 @@ test("publish artifact validator executes and rejects identity or byte drift", (
       },
       encoding: "utf8",
       stdio: "pipe",
+      cwd: root,
     });
 
     writeFileSync(manifestPath, `${JSON.stringify(manifest)}\n`);
@@ -1494,13 +1637,14 @@ test("WASM runtime budget is one canonical self-contained exact contract", async
   }
 });
 
-test("runtime WASM does not duplicate separately shipped WCAG22 evidence documents", () => {
+test("runtime WASM does not duplicate separately shipped numerical evidence documents", () => {
   const wasm = readFileSync(
     join(root, "packages", "colors", "pkg", "labcolors_bg.wasm"),
   );
   for (const name of [
     "wcag22-srgb8-v1.json",
     "wcag22-srgb8-q55-proof-v1.json",
+    "point-support-reference-surplus-q55-bps-proof-v1.json",
   ]) {
     const evidence = readFileSync(
       join(root, "crates", "labcolors-core", "contracts", name),
@@ -1513,16 +1657,31 @@ test("runtime WASM does not duplicate separately shipped WCAG22 evidence documen
   }
 });
 
-test("npm release carries and re-verifies the exact WCAG22 finite evidence", () => {
+test("npm release carries and re-verifies the exact numerical evidence inventory", () => {
   const packageJson = JSON.parse(read("packages", "colors", "package.json"));
   const evidenceFiles = [
-    "evidence/wcag22-srgb8-v1.json",
-    "evidence/wcag22-srgb8-q55-v1.bin",
+    "evidence/point-support-reference-surplus-q55-bps-proof-v1.json",
     "evidence/wcag22-srgb8-q55-proof-v1.json",
-  ];
-  for (const path of evidenceFiles) {
-    assert.ok(packageJson.files.includes(path), `npm files omits ${path}`);
-  }
+    "evidence/wcag22-srgb8-q55-v1.bin",
+    "evidence/wcag22-srgb8-v1.json",
+  ].sort();
+  assert.deepEqual([...PACKED_NUMERICAL_EVIDENCE_PATHS].sort(), evidenceFiles);
+  assert.deepEqual(
+    packageJson.files.filter((path) => path.startsWith("evidence/")).sort(),
+    evidenceFiles,
+  );
+  assert.deepEqual(
+    [...NUMERICAL_EVIDENCE_FILES].sort(),
+    evidenceFiles.map((path) => path.slice("evidence/".length)),
+  );
+  assert.deepEqual([...WCAG22_EVIDENCE_FILES].sort(), [
+    "wcag22-srgb8-q55-proof-v1.json",
+    "wcag22-srgb8-q55-v1.bin",
+    "wcag22-srgb8-v1.json",
+  ]);
+  assert.deepEqual([...POINT_SUPPORT_EVIDENCE_FILES], [
+    "point-support-reference-surplus-q55-bps-proof-v1.json",
+  ]);
 
   const artifact = join(
     root,
@@ -1535,13 +1694,14 @@ test("npm release carries and re-verifies the exact WCAG22 finite evidence", () 
   assert.equal(lstatSync(artifact).size, 768 * 2 * 8, "artifact must be 1536 little-endian u64s");
 
   const prepare = read("scripts", "prepare-npm-package.mjs");
-  for (const name of evidenceFiles.map((path) => path.split("/").at(-1))) {
-    assert.match(prepare, new RegExp(name.replaceAll(".", "\\."), "u"));
-  }
+  assert.match(prepare, /from "\.\/release-evidence\.mjs"/u);
+  assert.match(prepare, /for \(const file of NUMERICAL_EVIDENCE_FILES\)/u);
+  assert.match(prepare, /assertPackageEvidenceInventory\(packageJson\.files\)/u);
 
   const verifier = read("scripts", "verify-package-release.mjs");
   assert.match(verifier, /verify_wcag22_q55\.py/);
-  assert.match(verifier, /WCAG22_EVIDENCE_FILES/);
+  assert.match(verifier, /verify_point_support_surplus\.py/);
+  assert.match(verifier, /NUMERICAL_EVIDENCE_FILES/);
   const numericalVerifier = read("scripts", "verify_wcag22_q55.py");
   assert.match(numericalVerifier, /NORMATIVE_PROFILE_V1/);
   assert.ok(
@@ -1571,14 +1731,11 @@ test("npm release carries and re-verifies the exact WCAG22 finite evidence", () 
   assert.doesNotMatch(conformanceReadme, /сейчас `[3-9]\.0\.0`/u);
   const workflow = read(".github", "workflows", "ci.yml");
   assert.match(workflow, /python3 scripts\/verify_wcag22_q55\.py/);
+  assert.match(workflow, /python3 scripts\/verify_point_support_surplus\.py/);
 });
 
-test("packed and clean-installed WCAG22 evidence stays byte-exact", async () => {
-  const names = [
-    "wcag22-srgb8-v1.json",
-    "wcag22-srgb8-q55-v1.bin",
-    "wcag22-srgb8-q55-proof-v1.json",
-  ];
+test("packed and clean-installed numerical evidence stays byte-exact", async () => {
+  const names = [...NUMERICAL_EVIDENCE_FILES];
   const contents = names.map((name) =>
     readFileSync(join(root, "crates", "labcolors-core", "contracts", name))
   );
@@ -1595,26 +1752,28 @@ test("packed and clean-installed WCAG22 evidence stays byte-exact", async () => 
       writeFileSync(join(evidenceDir, name), contents[index]);
     }
     await assert.doesNotReject(
-      validateWcag22EvidenceArtifacts(temporary, expected, "fixture"),
+      validateNumericalEvidenceArtifacts(temporary, expected, "fixture"),
     );
 
-    const corrupted = Buffer.from(contents[0]);
-    corrupted[0] ^= 1;
-    writeFileSync(join(evidenceDir, names[0]), corrupted);
-    await assert.rejects(
-      validateWcag22EvidenceArtifacts(temporary, expected, "fixture"),
-      /fixture WCAG22 evidence bytes differ/u,
-      "same-length evidence corruption must fail",
-    );
+    for (const index of [0, names.length - 1]) {
+      const corrupted = Buffer.from(contents[index]);
+      corrupted[0] ^= 1;
+      writeFileSync(join(evidenceDir, names[index]), corrupted);
+      await assert.rejects(
+        validateNumericalEvidenceArtifacts(temporary, expected, "fixture"),
+        /fixture numerical evidence bytes differ/u,
+        `same-length evidence corruption must fail for ${names[index]}`,
+      );
 
-    writeFileSync(join(evidenceDir, names[0]), contents[0]);
-    const wrongDigest = structuredClone(expected);
-    wrongDigest[0].sha256 = "0".repeat(64);
-    await assert.rejects(
-      validateWcag22EvidenceArtifacts(temporary, wrongDigest, "fixture"),
-      /fixture WCAG22 evidence metadata differs/u,
-      "expected digest drift must fail independently of the byte comparison",
-    );
+      writeFileSync(join(evidenceDir, names[index]), contents[index]);
+      const wrongDigest = structuredClone(expected);
+      wrongDigest[index].sha256 = "0".repeat(64);
+      await assert.rejects(
+        validateNumericalEvidenceArtifacts(temporary, wrongDigest, "fixture"),
+        /fixture numerical evidence metadata differs/u,
+        `expected digest drift must fail independently for ${names[index]}`,
+      );
+    }
   } finally {
     rmSync(temporary, { recursive: true, force: true });
   }
@@ -1622,11 +1781,11 @@ test("packed and clean-installed WCAG22 evidence stays byte-exact", async () => 
   const verifier = read("scripts", "verify-package-release.mjs");
   assert.match(
     verifier,
-    /validatePackedWcag22Evidence\(canonicalPack\.path, wcag22Evidence\.artifacts\)/u,
+    /validatePackedNumericalEvidence\(canonicalPack\.path, numericalEvidenceArtifacts\)/u,
   );
   assert.match(
     verifier,
-    /verifyCleanConsumer\([\s\S]*?wcag22Evidence\.artifacts[\s\S]*?\);/u,
+    /verifyCleanConsumer\([\s\S]*?numericalEvidenceArtifacts[\s\S]*?\);/u,
   );
 });
 
