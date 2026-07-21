@@ -17,6 +17,11 @@ use crate::constraints::{
     HardDecision, ReadabilityPassV1, ReadabilityPolarityV1, ReadabilityViolationV1,
     assess_visible_point_hard,
 };
+use crate::joint::{
+    CandidateOrdinalV1, DeclaredTotalOrderV1, JointCandidateSetV1, PointwiseFullHardReportV1,
+    PointwiseHardFeasibilityV1, PointwiseJointPointProgramV1, PointwiseJointReportErrorV1,
+    PointwiseSelectedRecheckErrorV1, PointwiseVerifiedSelectionV1, SelectionPolicyErrorV1,
+};
 use crate::observation::{RevisionBoundObservationV1, ScenarioId};
 use crate::solve::Floor;
 
@@ -625,5 +630,109 @@ impl ReadabilityRecheckReportV1 {
             .cases()
             .get(case_index)
             .map(|case| case.provenance())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// V2a joint feasible-across-all-samples re-solve bridge (C8d step 3).
+//
+// The full-support recheck above proves ONE already-chosen candidate over the
+// whole support. This bridge wires the generic V2a joint selection (joint.rs) so
+// a re-solve returns exactly ONE candidate that is hard-feasible across the WHOLE
+// observed scenario set — every backdrop sample admitted as its own case — or a
+// typed Indeterminate when no jointly-feasible tuple exists. It never returns a
+// candidate that breaks a sample: `classify` demands every case pass, so the
+// least-margin / worst sample is only ever a post-hoc diagnostic witness, never a
+// solve input (the Pointwise every-case law, DAG mandate `V2a + F2 -> C8d`).
+//
+// ANTI-DRIFT: joint.rs stays generic. The readability semantics live entirely in
+// `DisplayReadabilityCurveV1` (constraints/readability.rs); this bridge only
+// INSTANTIATES the existing generic `PointwiseJointPointProgramV1<E>` with
+// `E = DisplayReadabilityCurveV1`, exactly as the exact path instantiates it with
+// `ExactSrgb8IdentityV1`. No readability enum or import ever crosses into
+// joint.rs — the readability curve reaches the joint engine only through the same
+// sealed `Evaluator` + `HardClassifier` seam every other predicate uses.
+// ---------------------------------------------------------------------------
+
+/// The readability specialisation of the generic two-paint joint program: the
+/// same `PointwiseJointPointProgramV1<E>` the exact path uses, instantiated with
+/// the frozen display-domain readability curve as `E`.
+pub(crate) type ReadabilityJointProgramV1 = PointwiseJointPointProgramV1<DisplayReadabilityCurveV1>;
+
+/// The full hard report of a readability joint program over one immutable
+/// observation revision.
+pub(crate) type ReadabilityJointReportV1 =
+    PointwiseFullHardReportV1<DisplayReadabilityCurveV1, RevisionBoundObservationV1>;
+
+/// One re-verified readability joint selection: exactly one candidate, freshly
+/// re-executed across every admitted sample on the same revision.
+pub(crate) type ReadabilityJointVerifiedSelectionV1 =
+    PointwiseVerifiedSelectionV1<DisplayReadabilityCurveV1, RevisionBoundObservationV1>;
+
+/// Typed outcome of a joint readability re-solve evaluated across the WHOLE
+/// observed scenario set.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum JointReadabilityResolutionV1 {
+    /// Exactly one candidate, jointly feasible across every admitted backdrop
+    /// sample and freshly re-verified on the same observation revision before it
+    /// is handed back. A set-breaching candidate can never reach this variant.
+    Feasible(Box<ReadabilityJointVerifiedSelectionV1>),
+    /// No jointly-feasible candidate exists. The full hard report is retained so
+    /// the breaching sample(s) can be identified after the fact — a diagnostic
+    /// witness only, never fed back into the solve as a target.
+    Indeterminate(Box<ReadabilityJointReportV1>),
+}
+
+/// Why a joint readability re-solve could not produce a typed resolution.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum JointReadabilityResolveErrorV1 {
+    /// The joint program rejected the candidate domain or observation before any
+    /// feasibility verdict could be formed.
+    Report(PointwiseJointReportErrorV1<DisplayReadabilityCurveV1>),
+    /// The declared tie-break was not a total order over the candidate domain.
+    Policy(SelectionPolicyErrorV1),
+    /// A candidate that classified feasible failed its fresh re-verify — an
+    /// invariant drift between the selection pass and the recheck pass.
+    ReverifyDrift,
+    /// Cardinality overflow or an allocator refusal during the fresh re-verify.
+    ResourceExhausted,
+}
+
+/// Re-solve across the whole observed scenario set: evaluate every candidate
+/// tuple over every admitted backdrop sample, keep only the candidates that pass
+/// EVERY sample, tie-break by the declared total order, then freshly re-verify
+/// the winner across the whole set before returning it. When no candidate passes
+/// every sample the result is a typed [`JointReadabilityResolutionV1::Indeterminate`],
+/// never a target that breaks a sample.
+pub(crate) fn resolve_across_all_samples(
+    program: &ReadabilityJointProgramV1,
+    candidates: JointCandidateSetV1,
+    observation: RevisionBoundObservationV1,
+    order: Vec<CandidateOrdinalV1>,
+) -> Result<JointReadabilityResolutionV1, JointReadabilityResolveErrorV1> {
+    let report = program
+        .evaluate(candidates, observation)
+        .map_err(JointReadabilityResolveErrorV1::Report)?;
+    match report.classify() {
+        PointwiseHardFeasibilityV1::Infeasible(report) => Ok(
+            JointReadabilityResolutionV1::Indeterminate(Box::new(report)),
+        ),
+        PointwiseHardFeasibilityV1::NonEmpty(feasible) => {
+            let policy = DeclaredTotalOrderV1::new(feasible.candidate_set(), order)
+                .map_err(JointReadabilityResolveErrorV1::Policy)?;
+            match feasible.select(policy).recheck() {
+                Ok(verified) => Ok(JointReadabilityResolutionV1::Feasible(Box::new(verified))),
+                Err(PointwiseSelectedRecheckErrorV1::Violation(_))
+                | Err(PointwiseSelectedRecheckErrorV1::InvariantDrift) => {
+                    Err(JointReadabilityResolveErrorV1::ReverifyDrift)
+                }
+                Err(PointwiseSelectedRecheckErrorV1::ResourceExhausted) => {
+                    Err(JointReadabilityResolveErrorV1::ResourceExhausted)
+                }
+                // The readability curve is `Infallible`, so the evaluator arm is
+                // uninhabited: it can never be constructed.
+                Err(PointwiseSelectedRecheckErrorV1::Evaluator(error)) => match error {},
+            }
+        }
     }
 }
