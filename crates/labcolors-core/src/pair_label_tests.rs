@@ -2,12 +2,13 @@
 
 use crate::Srgb8;
 use crate::composition::AdmittedOpacityV1;
-use crate::config::{LadderSource, RoleRecipe, labui_reference};
+use crate::config::fixture::labui_reference;
+use crate::config::{LadderSource, RoleRecipe};
 use crate::joint::CandidateOrdinalV1;
 use crate::pair::{
     PairLabelCandidateV1, PairLabelRequirementV1, lower_fill, select_label_candidates,
 };
-use crate::semantic::{NamedRoleTable, Resolved, RoleChroma, RoleSpec, resolve_named_set};
+use crate::semantic::{NamedRoleTable, RoleChroma, RoleSpec, resolve_named_set};
 use crate::solve::{BgInput, Floor, SolveFailure};
 use crate::spaces::vc::ViewingConditions;
 use crate::wcag22::Wcag22CriterionV1;

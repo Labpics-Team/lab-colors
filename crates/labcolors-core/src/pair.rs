@@ -60,10 +60,6 @@ impl PairLabelCandidateV1 {
         Self { ordinal, source }
     }
 
-    pub(crate) const fn ordinal(self) -> CandidateOrdinalV1 {
-        self.ordinal
-    }
-
     pub(crate) const fn source(self) -> Srgb8 {
         self.source
     }

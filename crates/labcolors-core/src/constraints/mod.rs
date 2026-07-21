@@ -19,8 +19,11 @@ pub(crate) use exact::ExactIdentityPassV1;
 
 mod wcag22;
 
+pub(crate) use wcag22::Wcag22Srgb8V1;
+
+#[cfg(test)]
 pub(crate) use wcag22::{
-    ApplicableWcag22EvaluationErrorV1, ApplicableWcag22MeasurementV1, Wcag22PassV1, Wcag22Srgb8V1,
+    ApplicableWcag22EvaluationErrorV1, ApplicableWcag22MeasurementV1, Wcag22PassV1,
     Wcag22ViolationV1,
 };
 
