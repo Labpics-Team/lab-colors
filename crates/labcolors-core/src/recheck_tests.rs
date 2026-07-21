@@ -14,11 +14,10 @@ use crate::observation::{
 use crate::recheck::{
     BoundReadabilityRecheckV1, CompiledFixedRecheckV1, CompiledReadabilityRecheckV1,
     ExactOccurrenceRequirementV1, FixedRecheckBindErrorV1, FixedRecheckDecisionV1,
-    JointReadabilityResolutionV1, PointSupportAdmissionErrorV1,
-    PointSupportCriterionAssessmentV1, PointSupportCriterionRequirementV1,
-    PointSupportDropFractionV1, PointSupportEvaluationErrorV1, PointSupportOccurrenceV1,
-    PointSupportStabilityAssessmentV1, PointSupportStabilityPolicyV1, PointSupportStatusV1,
-    ReadabilityOccurrenceV1, RecheckProtocolErrorV1, checked_evidence_count,
+    JointReadabilityResolutionV1, PointSupportAdmissionErrorV1, PointSupportCriterionAssessmentV1,
+    PointSupportCriterionRequirementV1, PointSupportDropFractionV1, PointSupportEvaluationErrorV1,
+    PointSupportOccurrenceV1, PointSupportStabilityAssessmentV1, PointSupportStabilityPolicyV1,
+    PointSupportStatusV1, ReadabilityOccurrenceV1, RecheckProtocolErrorV1, checked_evidence_count,
     evaluate_point_support_v1, resolve_across_all_samples,
 };
 use crate::solve::Floor;
@@ -467,9 +466,7 @@ fn point_support_recomposes_source_alpha_over_the_current_backdrop() {
     let occurrence = point_support_occurrence(
         [255; 3],
         0.4,
-        PointSupportCriterionRequirementV1::Required(
-            Wcag22CriterionV1::Sc1411UiComponentOrState,
-        ),
+        PointSupportCriterionRequirementV1::Required(Wcag22CriterionV1::Sc1411UiComponentOrState),
         [0; 3],
     );
     let report = evaluate_point_support_v1(
