@@ -47,6 +47,23 @@ function packRgb24Hex(hex) {
   return Number.parseInt(six, 16) >>> 0;
 }
 
+/** Admit one public numeric controller option without coercing caller values.
+ * Non-number inputs are a shape error; NaN/±∞ and out-of-domain numbers are a
+ * range error. Keeping this at construction prevents invalid hysteresis/timing
+ * state from silently suppressing every later re-solve. */
+function admitFiniteOption(name, value, minimum, maximum = Infinity) {
+  if (typeof value !== "number") {
+    throw new TypeError(`adaptTheme: ${name} must be a number, received ${typeof value}`);
+  }
+  if (!Number.isFinite(value) || value < minimum || value > maximum) {
+    const received = String(value);
+    const domain =
+      maximum === Infinity ? `a finite number >= ${minimum}` : `a finite number in [${minimum}, ${maximum}]`;
+    throw new RangeError(`adaptTheme: ${name} must be ${domain}, received ${received}`);
+  }
+  return value;
+}
+
 /** Cubic ease-out: fast start, gentle settle, no overshoot. A non-finite `t`
  * (e.g. a NaN clock making `(now - easeStart) / easeMs` NaN) is treated as a
  * completed ease (1), so the crossfade can never emit `#NANNANNAN` CSS. */
@@ -164,9 +181,10 @@ export function adaptTheme(element, options) {
   const backgroundSource = options.background;
   const getStyle = options.getStyle;
   const parentOf = options.parentOf;
-  const dropFraction = options.dropFraction ?? 0.2;
-  const sustainMs = options.sustainMs ?? 120;
-  const dwellMs = options.dwellMs ?? 250;
+  const dropFraction = admitFiniteOption("dropFraction", options.dropFraction ?? 0.2, 0, 1);
+  const sustainMs = admitFiniteOption("sustainMs", options.sustainMs ?? 120, 0);
+  const dwellMs = admitFiniteOption("dwellMs", options.dwellMs ?? 250, 0);
+  const requestedEaseMs = admitFiniteOption("easeMs", options.easeMs ?? 280, 0);
   const win = options.win ?? (typeof globalThis !== "undefined" ? globalThis : undefined);
   const requestFrameCapability = win?.requestAnimationFrame;
   const requestFrame =
@@ -184,7 +202,7 @@ export function adaptTheme(element, options) {
     options.reducedMotion ??
     (win?.matchMedia ? win.matchMedia("(prefers-reduced-motion: reduce)").matches : false);
   // Reduced motion → a gentle SHORT fade, never a hard snap.
-  const easeMs = reducedMotion ? Math.min(options.easeMs ?? 280, 80) : (options.easeMs ?? 280);
+  const easeMs = reducedMotion ? Math.min(requestedEaseMs, 80) : requestedEaseMs;
   const clock = options.now ?? defaultClock;
   const finiteTime = (value) => {
     if (!Number.isFinite(value)) {
