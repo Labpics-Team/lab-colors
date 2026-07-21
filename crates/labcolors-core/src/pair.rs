@@ -13,12 +13,11 @@ use crate::composition::AdmittedOpacityV1;
 use crate::constraints::{ExactSrgb8IdentityV1, Wcag22Srgb8V1};
 use crate::joint::{
     CandidateOrdinalV1, CandidateSetErrorV1, DeclaredTotalOrderV1, JointCandidateSetV1,
-    JointCandidateTupleV1, JointConstraintIdV1, JointExecutionRecordV1,
-    JointProgramErrorV1, JointVisibleTargetV1, PointwiseFullHardReportV1,
-    PointwiseHardFeasibilityV1, PointwiseJointHardConstraintV1,
-    PointwiseJointPointProgramV1, PointwiseJointReportErrorV1,
-    PointwiseSelectedRecheckErrorV1, PointwiseVerifiedSelectionV1,
-    SelectionPolicyErrorV1, StaticJointObservationV1,
+    JointCandidateTupleV1, JointConstraintIdV1, JointExecutionRecordV1, JointProgramErrorV1,
+    JointVisibleTargetV1, PointwiseFullHardReportV1, PointwiseHardFeasibilityV1,
+    PointwiseJointHardConstraintV1, PointwiseJointPointProgramV1, PointwiseJointReportErrorV1,
+    PointwiseSelectedRecheckErrorV1, PointwiseVerifiedSelectionV1, SelectionPolicyErrorV1,
+    StaticJointObservationV1,
 };
 use crate::wcag22::Wcag22CriterionV1;
 
@@ -80,9 +79,7 @@ pub(crate) enum PairLabelRequirementV1 {
 
 #[derive(Debug, Clone, PartialEq)]
 enum PairSelectionEvidenceV1 {
-    Unconstrained(
-        PointwiseVerifiedSelectionV1<ExactSrgb8IdentityV1, StaticJointObservationV1>,
-    ),
+    Unconstrained(PointwiseVerifiedSelectionV1<ExactSrgb8IdentityV1, StaticJointObservationV1>),
     Wcag22(PointwiseVerifiedSelectionV1<Wcag22Srgb8V1, StaticJointObservationV1>),
 }
 
@@ -98,9 +95,9 @@ impl VerifiedPairV1 {
             PairSelectionEvidenceV1::Unconstrained(evidence) => evidence.fresh_executions(),
             PairSelectionEvidenceV1::Wcag22(evidence) => evidence.fresh_executions(),
         };
-        executions
-            .first()
-            .unwrap_or_else(|| unreachable!("one selected Pair tuple over one case has one execution"))
+        executions.first().unwrap_or_else(|| {
+            unreachable!("one selected Pair tuple over one case has one execution")
+        })
     }
 
     pub(crate) fn ordinal(&self) -> CandidateOrdinalV1 {
@@ -134,14 +131,8 @@ pub(crate) enum PairLoweringErrorV1 {
     ExactReport(PointwiseJointReportErrorV1<ExactSrgb8IdentityV1>),
     WcagReport(PointwiseJointReportErrorV1<Wcag22Srgb8V1>),
     Policy(SelectionPolicyErrorV1),
-    ExactInfeasible(Box<PointwiseFullHardReportV1<
-        ExactSrgb8IdentityV1,
-        StaticJointObservationV1,
-    >>),
-    WcagInfeasible(Box<PointwiseFullHardReportV1<
-        Wcag22Srgb8V1,
-        StaticJointObservationV1,
-    >>),
+    ExactInfeasible(Box<PointwiseFullHardReportV1<ExactSrgb8IdentityV1, StaticJointObservationV1>>),
+    WcagInfeasible(Box<PointwiseFullHardReportV1<Wcag22Srgb8V1, StaticJointObservationV1>>),
     ExactRecheck(PointwiseSelectedRecheckErrorV1<ExactSrgb8IdentityV1>),
     WcagRecheck(PointwiseSelectedRecheckErrorV1<Wcag22Srgb8V1>),
 }

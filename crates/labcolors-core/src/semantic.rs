@@ -2706,9 +2706,7 @@ fn lower_pair_label_frontend(
     let fill = lower_pair_fill_occurrence(bg, tint, vc)?;
     let surface = fill.visible();
     let surface_bg = BgInput::solid(&surface.to_hex()).map_err(|error| {
-        SolveFailure::InternalInvariant(format!(
-            "generated PairFill Surface was rejected: {error}"
-        ))
+        SolveFailure::InternalInvariant(format!("generated PairFill Surface was rejected: {error}"))
     })?;
     let surface_ctx = ResolveContext::new(&surface_bg, vc);
 
@@ -2716,14 +2714,7 @@ fn lower_pair_label_frontend(
     let mut physical_candidates = Vec::new();
     let mut order = Vec::new();
 
-    match pair_candidate(
-        &surface_bg,
-        fraction,
-        Floor::None,
-        source,
-        vc,
-        &surface_ctx,
-    ) {
+    match pair_candidate(&surface_bg, fraction, Floor::None, source, vc, &surface_ctx) {
         Ok((resolved, bytes)) => {
             let ordinal = crate::joint::CandidateOrdinalV1::new(1);
             resolved_candidates.push((ordinal, resolved));
@@ -2736,14 +2727,8 @@ fn lower_pair_label_frontend(
     }
 
     if !matches!(floor, Floor::None) {
-        let (resolved, bytes) = pair_candidate(
-            &surface_bg,
-            fraction,
-            floor,
-            source,
-            vc,
-            &surface_ctx,
-        )?;
+        let (resolved, bytes) =
+            pair_candidate(&surface_bg, fraction, floor, source, vc, &surface_ctx)?;
         if physical_candidates
             .iter()
             .all(|candidate| candidate.source() != bytes)
@@ -3356,9 +3341,7 @@ impl RoleSpec {
                 if surface_alpha_light.to_bits() != 1.0_f64.to_bits()
                     || surface_alpha_dark.to_bits() != 1.0_f64.to_bits()
                 {
-                    return Err(
-                        "pair-label surface representation must be opaque after P1".into(),
-                    );
+                    return Err("pair-label surface representation must be opaque after P1".into());
                 }
                 Ok(())
             }

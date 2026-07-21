@@ -1321,7 +1321,11 @@ fn pair_fill_is_exact_opaque_source_across_viewing_conditions() {
     let cases = [
         (ViewingConditions::srgb(), "#FFFFFF", "#007AFF"),
         (ViewingConditions::dim_surround(), "#101012", "#4A8FFF"),
-        (ViewingConditions::srgb_high_contrast(), "#FFFFFF", "#0040DD"),
+        (
+            ViewingConditions::srgb_high_contrast(),
+            "#FFFFFF",
+            "#0040DD",
+        ),
         (
             ViewingConditions::dim_surround_high_contrast(),
             "#101012",

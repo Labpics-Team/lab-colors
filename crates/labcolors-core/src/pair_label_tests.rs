@@ -25,7 +25,10 @@ fn fill_is_one_exact_opaque_occurrence_without_pair_heuristic() {
     assert_eq!(fill.paint().source(), source);
     assert_eq!(fill.paint().opacity(), AdmittedOpacityV1::OPAQUE);
     assert_eq!(fill.visible(), source);
-    assert_eq!(fill.occurrence().certificate().backdrop_rgb(), backdrop.bytes());
+    assert_eq!(
+        fill.occurrence().certificate().backdrop_rgb(),
+        backdrop.bytes()
+    );
 }
 
 #[test]

@@ -1,13 +1,13 @@
 use crate::Srgb8;
 use crate::appearance::{EncodedPointPaintV1, PaintId, SurfaceInputPortId};
 use crate::composition::AdmittedOpacityV1;
+use crate::constraints::{HardDecision, Wcag22Srgb8V1};
 use crate::joint::{
     CandidateOrdinalV1, CandidateSetErrorV1, DeclaredTotalOrderV1, HardFeasibilityV1,
     JointCandidateSetV1, JointCandidateTupleV1, JointConstraintDecisionV1, JointConstraintIdV1,
-    JointHardConstraintV1, JointPointEvaluatorV1, JointPointProgramIdentityV1,
-    JointPointProgramV1, JointProgramErrorV1, JointReportErrorV1, JointVisibleTargetV1,
-    PointwiseHardFeasibilityV1, PointwiseJointHardConstraintV1,
-    PointwiseJointPointProgramV1, PointwiseJointReportErrorV1,
+    JointHardConstraintV1, JointPointEvaluatorV1, JointPointProgramIdentityV1, JointPointProgramV1,
+    JointProgramErrorV1, JointReportErrorV1, JointVisibleTargetV1, PointwiseHardFeasibilityV1,
+    PointwiseJointHardConstraintV1, PointwiseJointPointProgramV1, PointwiseJointReportErrorV1,
     PointwiseSelectedRecheckErrorV1, SelectionPolicyErrorV1, checked_joint_cardinality,
 };
 use crate::observation::{
@@ -15,7 +15,6 @@ use crate::observation::{
     ObservedScenarioSetInput, Revision, RevisionBoundObservationV1, ScenarioId, ScenarioInput,
     SurfaceInputBinding,
 };
-use crate::constraints::{HardDecision, Wcag22Srgb8V1};
 use crate::wcag22::Wcag22CriterionV1;
 use std::cell::Cell;
 use std::rc::Rc;
@@ -337,7 +336,6 @@ fn fresh_recheck_executes_the_selected_joint_program_again_on_the_same_revision(
     assert_eq!(verified.policy(), &[CandidateOrdinalV1::new(0)]);
 }
 
-
 #[test]
 fn empty_hard_constraint_set_is_non_vacuously_feasible() {
     let observed = observation(10, vec![(1, [13, 17, 19])]);
@@ -350,16 +348,13 @@ fn empty_hard_constraint_set_is_non_vacuously_feasible() {
         panic!("a tuple with no hard violations must be feasible");
     };
     assert_eq!(feasible.feasible(), &[CandidateOrdinalV1::new(0)]);
-    let policy = DeclaredTotalOrderV1::new(
-        feasible.candidate_set(),
-        vec![CandidateOrdinalV1::new(0)],
-    )
-    .unwrap();
+    let policy =
+        DeclaredTotalOrderV1::new(feasible.candidate_set(), vec![CandidateOrdinalV1::new(0)])
+            .unwrap();
     let verified = feasible.select(policy).recheck().unwrap();
     assert_eq!(verified.fresh_executions().len(), 1);
     assert!(verified.fresh_cells().is_empty());
 }
-
 
 #[test]
 fn generic_wcag_evaluator_can_constrain_the_derived_lower_occurrence() {
@@ -473,14 +468,14 @@ fn evaluator_error_invalidates_the_full_report_and_fresh_recheck() {
     let PointwiseHardFeasibilityV1::NonEmpty(feasible) = report.classify() else {
         panic!("first evaluation must pass");
     };
-    let policy = DeclaredTotalOrderV1::new(
-        feasible.candidate_set(),
-        vec![CandidateOrdinalV1::new(0)],
-    )
-    .unwrap();
+    let policy =
+        DeclaredTotalOrderV1::new(feasible.candidate_set(), vec![CandidateOrdinalV1::new(0)])
+            .unwrap();
     assert!(matches!(
         feasible.select(policy).recheck(),
-        Err(PointwiseSelectedRecheckErrorV1::Evaluator("evaluator-fault"))
+        Err(PointwiseSelectedRecheckErrorV1::Evaluator(
+            "evaluator-fault"
+        ))
     ));
 }
 

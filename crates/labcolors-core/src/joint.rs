@@ -33,10 +33,7 @@ pub(crate) trait JointPointEvaluatorV1: Clone + Debug + PartialEq {
         &self,
         occurrence: &ResolvedOccurrence,
         invocation: Self::Invocation,
-    ) -> Result<
-        HardDecision<Self::PassEvidence, Self::ViolationEvidence>,
-        Self::Error,
-    >;
+    ) -> Result<HardDecision<Self::PassEvidence, Self::ViolationEvidence>, Self::Error>;
 }
 
 impl<Evaluation> JointPointEvaluatorV1 for Evaluation
@@ -49,8 +46,7 @@ where
     PointInvocation<Evaluation>: Clone + Debug + PartialEq,
     VisiblePointPassEvidence<Evaluation>: Clone + Debug + PartialEq,
     VisiblePointViolationEvidence<Evaluation>: Clone + Debug + PartialEq,
-    <Evaluation as Evaluator<ModeledSrgb8PointOccurrence>>::Error:
-        Clone + Debug + PartialEq,
+    <Evaluation as Evaluator<ModeledSrgb8PointOccurrence>>::Error: Clone + Debug + PartialEq,
 {
     type Invocation = PointInvocation<Evaluation>;
     type PassEvidence = VisiblePointPassEvidence<Evaluation>;
@@ -61,10 +57,7 @@ where
         &self,
         occurrence: &ResolvedOccurrence,
         invocation: Self::Invocation,
-    ) -> Result<
-        HardDecision<Self::PassEvidence, Self::ViolationEvidence>,
-        Self::Error,
-    > {
+    ) -> Result<HardDecision<Self::PassEvidence, Self::ViolationEvidence>, Self::Error> {
         assess_visible_point_hard(occurrence, self, invocation)
     }
 }
@@ -201,8 +194,7 @@ where
     }
 }
 
-pub(crate) type JointHardConstraintV1 =
-    PointwiseJointHardConstraintV1<ExactSrgb8IdentityV1>;
+pub(crate) type JointHardConstraintV1 = PointwiseJointHardConstraintV1<ExactSrgb8IdentityV1>;
 
 impl PointwiseJointHardConstraintV1<ExactSrgb8IdentityV1> {
     pub(crate) fn exact(
@@ -299,8 +291,7 @@ where
     constraints: Box<[PointwiseJointHardConstraintV1<Evaluation>]>,
 }
 
-pub(crate) type JointPointProgramV1 =
-    PointwiseJointPointProgramV1<ExactSrgb8IdentityV1>;
+pub(crate) type JointPointProgramV1 = PointwiseJointPointProgramV1<ExactSrgb8IdentityV1>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum JointProgramErrorV1 {
@@ -370,11 +361,9 @@ where
         Observation: JointObservationV1,
     {
         self.validate_candidates(&candidates)?;
-        let root_index = observation
-            .root_index(self.root_surface)
-            .ok_or(PointwiseJointReportErrorV1::MissingRootSurface(
-                self.root_surface,
-            ))?;
+        let root_index = observation.root_index(self.root_surface).ok_or(
+            PointwiseJointReportErrorV1::MissingRootSurface(self.root_surface),
+        )?;
         let (execution_count, cell_count) = checked_joint_cardinality_raw(
             candidates.candidates.len(),
             observation.case_count(),
@@ -525,8 +514,7 @@ where
     ResourceExhausted,
 }
 
-pub(crate) type JointReportErrorV1 =
-    PointwiseJointReportErrorV1<ExactSrgb8IdentityV1>;
+pub(crate) type JointReportErrorV1 = PointwiseJointReportErrorV1<ExactSrgb8IdentityV1>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum JointCapacityErrorV1 {
@@ -664,8 +652,7 @@ where
     decision: PointwiseJointConstraintDecisionV1<Evaluation>,
 }
 
-pub(crate) type JointConstraintCellV1 =
-    PointwiseJointConstraintCellV1<ExactSrgb8IdentityV1>;
+pub(crate) type JointConstraintCellV1 = PointwiseJointConstraintCellV1<ExactSrgb8IdentityV1>;
 
 impl<Evaluation> PointwiseJointConstraintCellV1<Evaluation>
 where
@@ -786,10 +773,8 @@ where
     feasible: Box<[CandidateOrdinalV1]>,
 }
 
-pub(crate) type NonEmptyFeasibleJointTuplesV1 = PointwiseNonEmptyFeasibleJointTuplesV1<
-    ExactSrgb8IdentityV1,
-    RevisionBoundObservationV1,
->;
+pub(crate) type NonEmptyFeasibleJointTuplesV1 =
+    PointwiseNonEmptyFeasibleJointTuplesV1<ExactSrgb8IdentityV1, RevisionBoundObservationV1>;
 
 impl<Evaluation, Observation> PointwiseNonEmptyFeasibleJointTuplesV1<Evaluation, Observation>
 where
@@ -904,12 +889,9 @@ where
             .root_index(self.report.program.root_surface)
             .ok_or(PointwiseSelectedRecheckErrorV1::InvariantDrift)?;
         let cases = self.report.observation.case_count();
-        let (execution_count, cell_count) = checked_joint_cardinality_raw(
-            1,
-            cases,
-            self.report.program.constraints.len(),
-        )
-        .map_err(|_| PointwiseSelectedRecheckErrorV1::ResourceExhausted)?;
+        let (execution_count, cell_count) =
+            checked_joint_cardinality_raw(1, cases, self.report.program.constraints.len())
+                .map_err(|_| PointwiseSelectedRecheckErrorV1::ResourceExhausted)?;
         let matrices = self
             .report
             .program
@@ -963,8 +945,7 @@ where
     Violation(Box<PointwiseJointConstraintCellV1<Evaluation>>),
 }
 
-pub(crate) type SelectedRecheckErrorV1 =
-    PointwiseSelectedRecheckErrorV1<ExactSrgb8IdentityV1>;
+pub(crate) type SelectedRecheckErrorV1 = PointwiseSelectedRecheckErrorV1<ExactSrgb8IdentityV1>;
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct PointwiseFreshJointRecheckV1<Evaluation>
@@ -975,8 +956,7 @@ where
     cells: Box<[PointwiseJointConstraintCellV1<Evaluation>]>,
 }
 
-pub(crate) type FreshJointRecheckV1 =
-    PointwiseFreshJointRecheckV1<ExactSrgb8IdentityV1>;
+pub(crate) type FreshJointRecheckV1 = PointwiseFreshJointRecheckV1<ExactSrgb8IdentityV1>;
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct PointwiseVerifiedSelectionV1<Evaluation, Observation>
@@ -1000,9 +980,7 @@ where
         self.selected.candidate.ordinal
     }
 
-    pub(crate) const fn report(
-        &self,
-    ) -> &PointwiseFullHardReportV1<Evaluation, Observation> {
+    pub(crate) const fn report(&self) -> &PointwiseFullHardReportV1<Evaluation, Observation> {
         &self.selected.report
     }
 
