@@ -26,8 +26,10 @@ jobs:
         run: |
           set -uo pipefail
           cargo fmt --all
+          set +e
           cargo test --workspace --locked --message-format=short > p1-test.log 2>&1
           status=$?
+          set -e
           printf '%s\n' "$status" > p1-test-status.txt
           git rm .github/workflows/agent-p1-format-diagnostics.yml
           git add -A
@@ -37,7 +39,6 @@ jobs:
             git commit -m 'P1: apply canonical Rust formatting'
             git push origin HEAD:agent/p1-correct-rebuild
           fi
-          exit 0
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: p1-test-diagnostics
