@@ -32,6 +32,26 @@
         "runtimeAttestations": []
       },
       {
+        "siteId": "point-support-retained-reference-surplus-v1",
+        "stableOutcomes": [
+          "canonical-finite-bounded"
+        ],
+        "compatibilityReleases": [],
+        "evidenceClasses": [
+          "canonical-finite-bounded"
+        ],
+        "artifactIds": [
+          "wcag22-srgb8-luminance-q55-v1"
+        ],
+        "boundIds": [
+          "point-support-reference-surplus-q55-bps-v1"
+        ],
+        "proofIds": [
+          "point-support-reference-surplus-integer-v1"
+        ],
+        "runtimeAttestations": []
+      },
+      {
         "siteId": "wcag22-srgb8-contrast-v1",
         "stableOutcomes": [
           "canonical-finite-bounded"
@@ -52,6 +72,6 @@
         "runtimeAttestations": []
       }
     ],
-    "checksum": "f8d0c63d"
+    "checksum": "418d143e"
   }
 }
