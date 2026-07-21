@@ -4540,6 +4540,7 @@ mod tests {
             pair(f64::NAN, 0.5, 0.5),
             pair(0.5, 0.0, 0.5),
             pair(0.5, 0.5, f64::INFINITY),
+            pair(0.5, 0.25, 1.0),
             ladder(0.0, 0.5),
             ladder(0.5, f64::NAN),
             ladder_with_floor(1.0, 1.0, Some(Floor::None)),
@@ -4567,7 +4568,7 @@ mod tests {
             RoleSpec::DecorativeDj {
                 magnitude_dj: DjMagnitude::new(1.0, 2.0),
             },
-            pair(0.5, 0.25, 1.0),
+            pair(0.5, 1.0, 1.0),
             ladder(0.25, 1.0),
             ladder_with_floor(1.0, 1.0, Some(Floor::AaUi)),
             RoleSpec::AlphaAnalog {

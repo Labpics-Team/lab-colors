@@ -50,21 +50,6 @@ pub(crate) fn grid_size() -> usize {
     n * n * n
 }
 
-/// WCAG-люминанс (Rec.709) кодированного 8-битного цвета.
-pub(crate) fn wcag_y(rgb: [u8; 3]) -> f64 {
-    let e = [
-        rgb[0] as f64 / 255.0,
-        rgb[1] as f64 / 255.0,
-        rgb[2] as f64 / 255.0,
-    ];
-    let l = [
-        srgb_gamma_inv(e[0]),
-        srgb_gamma_inv(e[1]),
-        srgb_gamma_inv(e[2]),
-    ];
-    0.2126 * l[0] + 0.7152 * l[1] + 0.0722 * l[2]
-}
-
 /// 8-битные каналы hex-якоря.
 pub(crate) fn enc_of(hex: &str) -> [u8; 3] {
     let s = srgb_encoded_from_hex(hex).expect("passport hex valid");

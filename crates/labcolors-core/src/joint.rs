@@ -93,10 +93,6 @@ impl JointCandidateTupleV1 {
             upper,
         }
     }
-
-    pub(crate) const fn ordinal(&self) -> CandidateOrdinalV1 {
-        self.ordinal
-    }
 }
 
 /// Order-free candidate domain. Policy не участвует в его construction.
@@ -652,8 +648,6 @@ where
     decision: PointwiseJointConstraintDecisionV1<Evaluation>,
 }
 
-pub(crate) type JointConstraintCellV1 = PointwiseJointConstraintCellV1<ExactSrgb8IdentityV1>;
-
 impl<Evaluation> PointwiseJointConstraintCellV1<Evaluation>
 where
     Evaluation: JointPointEvaluatorV1,
@@ -694,9 +688,6 @@ where
     executions: Box<[JointExecutionRecordV1]>,
     cells: Box<[PointwiseJointConstraintCellV1<Evaluation>]>,
 }
-
-pub(crate) type FullHardReportV1 =
-    PointwiseFullHardReportV1<ExactSrgb8IdentityV1, RevisionBoundObservationV1>;
 
 impl<Evaluation, Observation> PointwiseFullHardReportV1<Evaluation, Observation>
 where
@@ -772,9 +763,6 @@ where
     report: PointwiseFullHardReportV1<Evaluation, Observation>,
     feasible: Box<[CandidateOrdinalV1]>,
 }
-
-pub(crate) type NonEmptyFeasibleJointTuplesV1 =
-    PointwiseNonEmptyFeasibleJointTuplesV1<ExactSrgb8IdentityV1, RevisionBoundObservationV1>;
 
 impl<Evaluation, Observation> PointwiseNonEmptyFeasibleJointTuplesV1<Evaluation, Observation>
 where
@@ -865,9 +853,6 @@ where
     candidate: JointCandidateTupleV1,
 }
 
-pub(crate) type SelectedJointTupleV1 =
-    PointwiseSelectedJointTupleV1<ExactSrgb8IdentityV1, RevisionBoundObservationV1>;
-
 impl<Evaluation, Observation> PointwiseSelectedJointTupleV1<Evaluation, Observation>
 where
     Evaluation: JointPointEvaluatorV1,
@@ -945,8 +930,6 @@ where
     Violation(Box<PointwiseJointConstraintCellV1<Evaluation>>),
 }
 
-pub(crate) type SelectedRecheckErrorV1 = PointwiseSelectedRecheckErrorV1<ExactSrgb8IdentityV1>;
-
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct PointwiseFreshJointRecheckV1<Evaluation>
 where
@@ -955,8 +938,6 @@ where
     executions: Box<[JointExecutionRecordV1]>,
     cells: Box<[PointwiseJointConstraintCellV1<Evaluation>]>,
 }
-
-pub(crate) type FreshJointRecheckV1 = PointwiseFreshJointRecheckV1<ExactSrgb8IdentityV1>;
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct PointwiseVerifiedSelectionV1<Evaluation, Observation>
@@ -967,9 +948,6 @@ where
     selected: PointwiseSelectedJointTupleV1<Evaluation, Observation>,
     recheck: PointwiseFreshJointRecheckV1<Evaluation>,
 }
-
-pub(crate) type RevisionBoundVerifiedSelectionV1 =
-    PointwiseVerifiedSelectionV1<ExactSrgb8IdentityV1, RevisionBoundObservationV1>;
 
 impl<Evaluation, Observation> PointwiseVerifiedSelectionV1<Evaluation, Observation>
 where
