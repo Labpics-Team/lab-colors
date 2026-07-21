@@ -188,6 +188,67 @@ test("applies the resolved set immediately on creation", () => {
   assert.equal(h.el.props.get("--lab-label-primary"), "#000000");
 });
 
+test("numeric controller options reject wrong shapes and hostile ranges before resolve", () => {
+  const colors = fakeColors(oneRole("#000000", 100));
+  const invalid = [
+    ["dropFraction", "0.2", TypeError],
+    ["dropFraction", null, TypeError],
+    ["dropFraction", Number.NaN, RangeError],
+    ["dropFraction", Number.POSITIVE_INFINITY, RangeError],
+    ["dropFraction", Number.NEGATIVE_INFINITY, RangeError],
+    ["dropFraction", -Number.MIN_VALUE, RangeError],
+    ["dropFraction", 1 + Number.EPSILON, RangeError],
+    ["sustainMs", "120", TypeError],
+    ["sustainMs", null, TypeError],
+    ["sustainMs", Number.NaN, RangeError],
+    ["sustainMs", Number.POSITIVE_INFINITY, RangeError],
+    ["sustainMs", -1, RangeError],
+    ["dwellMs", null, TypeError],
+    ["dwellMs", Number.NEGATIVE_INFINITY, RangeError],
+    ["dwellMs", -1, RangeError],
+    ["easeMs", null, TypeError],
+    ["easeMs", Number.NaN, RangeError],
+    ["easeMs", Number.POSITIVE_INFINITY, RangeError],
+    ["easeMs", -1, RangeError],
+  ];
+
+  for (const [name, value, ErrorClass] of invalid) {
+    assert.throws(
+      () =>
+        adaptTheme(fakeElement(), {
+          colors,
+          theme: "light",
+          background: "#FFFFFF",
+          win: {},
+          [name]: value,
+        }),
+      (error) => error instanceof ErrorClass && error.message.includes(name),
+      `${name}=${String(value)}`,
+    );
+  }
+  assert.equal(colors.resolveCount(), 0, "invalid construction must not call the resolver");
+});
+
+test("numeric controller option boundary values are admitted", () => {
+  for (const dropFraction of [0, 1]) {
+    const colors = fakeColors(oneRole("#000000", 100));
+    const el = fakeElement();
+    const ctrl = adaptTheme(el, {
+      colors,
+      theme: "light",
+      background: "#FFFFFF",
+      target: el,
+      win: {},
+      dropFraction,
+      sustainMs: 0,
+      dwellMs: 0,
+      easeMs: 0,
+    });
+    assert.equal(colors.resolveCount(), 1);
+    assert.equal(ctrl.current()["--lab-label-primary"], "#000000");
+  }
+});
+
 test("current() reports the logical target, not the painted mid-ease value", () => {
   const h = harness();
   h.colors.setResolve(oneRole("#FFFFFF", 100));
