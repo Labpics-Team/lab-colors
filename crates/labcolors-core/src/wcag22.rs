@@ -210,7 +210,7 @@ pub struct Wcag22MeasurementV1 {
 /// WCAG Pass/Fail still requires [`evaluate_wcag22_srgb8`] and its sealed
 /// [`NumericalDecisionEvidenceV1`].
 #[must_use]
-pub fn measure_wcag22_srgb8(
+pub(crate) fn measure_wcag22_srgb8(
     foreground: [u8; 3],
     background: [u8; 3],
 ) -> Wcag22MeasurementV1 {

@@ -1,115 +1,179 @@
+use crate::appearance::{EncodedPointPaintV1, OccurrenceId, PaintId, SurfaceInputPortId};
+use crate::composition::{AdmittedOpacityV1, CompositionProfileV1};
+use crate::observation::{
+    ObservationPayloadInput, ObservationStreamId, ObservationUpdateInput, ObservedScenarioSetInput,
+    Revision, ScenarioId, ScenarioInput, SurfaceInputBinding,
+};
 use crate::point_support::{
-    CompiledPointSupportPlanV1, PointSupportActionV1, PointSupportAdmissionErrorV1,
-    PointSupportCriterionAggregateV1, PointSupportCriterionAssessmentV1,
-    PointSupportCriterionRequirementV1, PointSupportDropFractionV1,
-    PointSupportEvaluationErrorV1, PointSupportOccurrenceV1, PointSupportPlanErrorV1,
-    PointSupportPlanRevisionV1, PointSupportStabilityAggregateV1,
+    CompiledPointSupportRecheckV1, PointSupportCompileErrorV1, PointSupportCriterionAggregateV1,
+    PointSupportCriterionAssessmentV1, PointSupportCriterionRequirementV1,
+    PointSupportDropFractionV1, PointSupportExactAggregateV1, PointSupportExactAssessmentV1,
+    PointSupportOccurrenceRequirementV1, PointSupportStabilityAggregateV1,
     PointSupportStabilityAnchorV1, PointSupportStabilityAssessmentV1,
     PointSupportStabilityDecisionV1, PointSupportStabilityPolicyV1,
 };
-use crate::wcag22::{Wcag22ApplicableDecisionV1, Wcag22CriterionV1};
-use crate::{
-    OccurrenceId, ObservationSchemaV1, ObservationStreamId, ObservedScenarioSetInput, Revision,
-    ScenarioId, ScenarioInput, Srgb8, SurfaceInputBinding, SurfaceInputPortId,
-    admit_observation_snapshot_v1,
-};
+use crate::session::{PointSupportSessionStateV1, PointSupportSessionV1};
+use crate::wcag22::Wcag22CriterionV1;
+use crate::Srgb8;
 
 const STREAM: ObservationStreamId = ObservationStreamId::new(31);
-const SURFACE: SurfaceInputPortId = SurfaceInputPortId::new(21);
+const SURFACE_A: SurfaceInputPortId = SurfaceInputPortId::new(21);
+const SURFACE_B: SurfaceInputPortId = SurfaceInputPortId::new(22);
 const OCCURRENCE_A: OccurrenceId = OccurrenceId::new(11);
 const OCCURRENCE_B: OccurrenceId = OccurrenceId::new(12);
+const PAINT_A: PaintId = PaintId::new(41);
+const PAINT_B: PaintId = PaintId::new(42);
 
-fn schema() -> ObservationSchemaV1 {
-    ObservationSchemaV1::try_new(vec![SURFACE]).unwrap()
-}
-
-fn observation(
-    schema: &ObservationSchemaV1,
-    revision: u64,
-    samples: impl IntoIterator<Item = (u32, [u8; 3])>,
-) -> crate::RevisionBoundObservationV1 {
-    let scenarios = samples
-        .into_iter()
-        .map(|(id, backdrop)| {
-            ScenarioInput::new(
-                ScenarioId::new(id),
-                vec![SurfaceInputBinding::new(SURFACE, Srgb8::new(backdrop))],
-            )
-        })
-        .collect();
-    admit_observation_snapshot_v1(
-        schema.clone(),
-        STREAM,
-        Revision::new(revision),
-        ObservedScenarioSetInput::new(scenarios),
+fn paint(id: PaintId, source: [u8; 3], opacity: f64) -> EncodedPointPaintV1 {
+    EncodedPointPaintV1::from_admitted(
+        id,
+        Srgb8::new(source),
+        AdmittedOpacityV1::new(opacity).unwrap(),
     )
-    .unwrap()
 }
 
 fn occurrence(
-    id: OccurrenceId,
-    source: [u8; 3],
-    opacity: f64,
+    occurrence: OccurrenceId,
+    surface: SurfaceInputPortId,
+    paint: EncodedPointPaintV1,
+    exact: Option<[u8; 3]>,
     criterion: PointSupportCriterionRequirementV1,
-    baseline_backdrop: [u8; 3],
-    anchor: PointSupportStabilityAnchorV1,
-    drop_basis_points: u32,
-) -> PointSupportOccurrenceV1 {
-    PointSupportOccurrenceV1::try_new(
-        id,
-        SURFACE,
-        Srgb8::new(source),
-        opacity,
+    stability: PointSupportStabilityPolicyV1,
+) -> PointSupportOccurrenceRequirementV1 {
+    PointSupportOccurrenceRequirementV1::new(
+        occurrence,
+        surface,
+        paint,
+        exact.map(Srgb8::new),
         criterion,
-        PointSupportStabilityPolicyV1::RetainBaselineReferenceSurplus {
-            baseline_backdrop: Srgb8::new(baseline_backdrop),
-            anchor,
-            drop_fraction: PointSupportDropFractionV1::try_from_basis_points(drop_basis_points)
-                .unwrap(),
-        },
+        stability,
     )
-    .unwrap()
 }
 
-fn bound(
-    schema: &ObservationSchemaV1,
+fn compiled(
+    occurrences: Vec<PointSupportOccurrenceRequirementV1>,
+) -> CompiledPointSupportRecheckV1 {
+    CompiledPointSupportRecheckV1::new(CompositionProfileV1::EncodedSrgb8SourceOverV1, occurrences)
+        .unwrap()
+}
+
+fn observed_update(
     revision: u64,
-    occurrences: Vec<PointSupportOccurrenceV1>,
-) -> crate::BoundPointSupportPlanV1 {
-    CompiledPointSupportPlanV1::try_new(
-        PointSupportPlanRevisionV1::new(revision),
-        occurrences,
-    )
-    .unwrap()
-    .bind(schema)
-    .unwrap()
+    scenarios: impl IntoIterator<Item = (u32, Vec<(SurfaceInputPortId, [u8; 3])>)>,
+) -> ObservationUpdateInput {
+    ObservationUpdateInput {
+        stream: STREAM,
+        revision: Revision::new(revision),
+        payload: ObservationPayloadInput::Scenarios(ObservedScenarioSetInput {
+            scenarios: scenarios
+                .into_iter()
+                .map(|(id, bindings)| ScenarioInput {
+                    id: ScenarioId::new(id),
+                    bindings: bindings
+                        .into_iter()
+                        .map(|(port, value)| SurfaceInputBinding {
+                            port,
+                            value: Srgb8::new(value),
+                        })
+                        .collect(),
+                })
+                .collect(),
+        }),
+    }
 }
 
 #[test]
-fn report_binds_plan_observation_occurrence_and_recomposed_alpha() {
-    let schema = schema();
-    let plan = bound(
-        &schema,
-        70,
-        vec![occurrence(
+fn multi_paint_declared_order_and_direct_provenance_are_preserved() {
+    // Deliberately declare occurrence B before lower-ID occurrence A.
+    let requirements = compiled(vec![
+        occurrence(
+            OCCURRENCE_B,
+            SURFACE_B,
+            paint(PAINT_B, [0; 3], 1.0),
+            None,
+            PointSupportCriterionRequirementV1::Required(Wcag22CriterionV1::Sc143TextDefault),
+            PointSupportStabilityPolicyV1::Disabled,
+        ),
+        occurrence(
             OCCURRENCE_A,
-            [255; 3],
-            0.4,
-            PointSupportCriterionRequirementV1::Required(
-                Wcag22CriterionV1::Sc1411UiComponentOrState,
-            ),
-            [0; 3],
-            PointSupportStabilityAnchorV1::Ratio3,
-            10_000,
-        )],
-    );
-    let report = plan
-        .evaluate(observation(&schema, 9, [(44, [255; 3])]))
-        .unwrap();
+            SURFACE_A,
+            paint(PAINT_A, [255; 3], 1.0),
+            None,
+            PointSupportCriterionRequirementV1::Required(Wcag22CriterionV1::Sc143TextDefault),
+            PointSupportStabilityPolicyV1::Disabled,
+        ),
+    ]);
+    assert_eq!(requirements.surface_schema(), &[SURFACE_A, SURFACE_B]);
 
-    assert_eq!(report.plan_revision(), PointSupportPlanRevisionV1::new(70));
-    assert_eq!(report.observation().stream(), STREAM);
-    assert_eq!(report.observation().revision(), Revision::new(9));
+    let mut session = PointSupportSessionV1::new(STREAM, requirements);
+    let PointSupportSessionStateV1::Ready { current } = session
+        .update(observed_update(
+            1,
+            [(9, vec![(SURFACE_A, [0; 3]), (SURFACE_B, [255; 3])])],
+        ))
+        .unwrap()
+    else {
+        panic!("both independently required WCAG occurrences must pass");
+    };
+    let report = current.report();
+    assert_eq!(
+        report.exact_aggregate(),
+        PointSupportExactAggregateV1::NotRequested
+    );
+    assert_eq!(
+        report.criterion_aggregate(),
+        PointSupportCriterionAggregateV1::AllRequiredPass
+    );
+    let cells: Vec<_> = report.cells().collect();
+    assert_eq!(cells.len(), 2);
+    assert_eq!(cells[0].occurrence(), OCCURRENCE_B);
+    assert_eq!(cells[0].occurrence_index(), 0);
+    assert_eq!(cells[0].paint().id(), PAINT_B);
+    assert_eq!(cells[0].composition().backdrop_rgb(), [255; 3]);
+    assert_eq!(cells[1].occurrence(), OCCURRENCE_A);
+    assert_eq!(cells[1].occurrence_index(), 1);
+    assert_eq!(cells[1].paint().id(), PAINT_A);
+    assert_eq!(cells[1].composition().backdrop_rgb(), [0; 3]);
+    assert_eq!(cells[0].provenance(), &[ScenarioId::new(9)]);
+    assert_eq!(cells[1].provenance(), &[ScenarioId::new(9)]);
+}
+
+#[test]
+fn exact_wcag_and_stability_are_independent_axes_and_baseline_binds_once() {
+    let drop_all = PointSupportDropFractionV1::try_from_basis_points(10_000).unwrap();
+    crate::composition::reset_source_over_evaluation_count();
+    let requirements = compiled(vec![occurrence(
+        OCCURRENCE_A,
+        SURFACE_A,
+        paint(PAINT_A, [255; 3], 0.4),
+        Some([255; 3]),
+        PointSupportCriterionRequirementV1::Required(Wcag22CriterionV1::Sc1411UiComponentOrState),
+        PointSupportStabilityPolicyV1::RetainBaselineReferenceSurplus {
+            baseline_backdrop: Srgb8::new([0; 3]),
+            anchor: PointSupportStabilityAnchorV1::Ratio3,
+            drop_fraction: drop_all,
+        },
+    )]);
+    assert_eq!(
+        crate::composition::source_over_evaluation_count(),
+        1,
+        "the baseline is composed exactly once at compile/bind"
+    );
+
+    let mut session = PointSupportSessionV1::new(STREAM, requirements);
+    let PointSupportSessionStateV1::Failed { cause, previous } = session
+        .update(observed_update(1, [(44, vec![(SURFACE_A, [255; 3])])]))
+        .unwrap()
+    else {
+        panic!("WCAG and stability must fail even though exact identity passes");
+    };
+    assert!(previous.is_none());
+    assert_eq!(crate::composition::source_over_evaluation_count(), 2);
+    let report = cause.report();
+    assert_eq!(
+        report.exact_aggregate(),
+        PointSupportExactAggregateV1::AllRequiredPass
+    );
     assert_eq!(
         report.criterion_aggregate(),
         PointSupportCriterionAggregateV1::RequiredFailure
@@ -119,211 +183,80 @@ fn report_binds_plan_observation_occurrence_and_recomposed_alpha() {
         PointSupportStabilityAggregateV1::NotRetained
     );
     assert_eq!(
-        report.action(),
-        PointSupportActionV1::ReconciliationRequired
+        report.composition_profile(),
+        CompositionProfileV1::EncodedSrgb8SourceOverV1
     );
-
-    let cell = &report.cells()[0];
-    assert_eq!(cell.occurrence(), OCCURRENCE_A);
-    assert_eq!(cell.surface(), SURFACE);
-    assert_eq!(report.provenance(0), Some(&[ScenarioId::new(44)][..]));
-    let composition = cell.composition();
-    assert_eq!(composition.subject_rgb(), [255; 3]);
-    assert_eq!(composition.subject_opacity(), 0.4);
-    assert_eq!(composition.backdrop_rgb(), [255; 3]);
-    assert_eq!(composition.output_rgb(), [255; 3]);
-    assert_eq!(composition.replay(), composition.output_rgb());
-
+    let cell = report.cells().next().unwrap();
+    assert_eq!(cell.provenance(), &[ScenarioId::new(44)]);
+    assert!(matches!(
+        cell.exact(),
+        PointSupportExactAssessmentV1::RequiredPass(_)
+    ));
     let PointSupportCriterionAssessmentV1::Required(criterion) = cell.criterion() else {
-        panic!("required criterion assessment missing");
+        panic!("required criterion evidence missing");
     };
     assert_eq!(
         criterion.criterion(),
         Wcag22CriterionV1::Sc1411UiComponentOrState
     );
-    assert_eq!(criterion.decision(), Wcag22ApplicableDecisionV1::Fail);
-
     let PointSupportStabilityAssessmentV1::Evaluated(stability) = cell.stability() else {
         panic!("enabled stability evidence missing");
     };
-    assert_eq!(stability.baseline_composition().output_rgb(), [0x66; 3]);
-    assert_eq!(stability.baseline_composition().replay(), [0x66; 3]);
-    assert_eq!(stability.current_measurement().foreground, [255; 3]);
-    assert_eq!(stability.current_measurement().background, [255; 3]);
-    assert_eq!(stability.anchor(), PointSupportStabilityAnchorV1::Ratio3);
-    assert_eq!(stability.drop_fraction(), PointSupportDropFractionV1::ALL);
-    assert!(stability.current_surplus().numerator() < 0);
     assert_eq!(
         stability.decision(),
         PointSupportStabilityDecisionV1::NotRetained
     );
+    assert_eq!(stability.anchor(), PointSupportStabilityAnchorV1::Ratio3);
+    assert_eq!(stability.drop_fraction(), drop_all);
+    assert!(stability.current_surplus().numerator() < 0);
+    assert_eq!(cell.composition().profile(), report.composition_profile());
 
-    let vc = crate::spaces::vc::ViewingConditions::srgb();
-    let wrong =
-        crate::semantic::recheck_against_u32(0x00FF_FFFF, &[0x0066_6666], &vc).unwrap()[0].1;
-    assert!(wrong > 3.0, "old composite-as-opaque must produce the opposite result");
-}
-
-#[test]
-fn drop_endpoints_do_not_weaken_the_independent_required_criterion() {
-    let schema = schema();
-    let retain_all = bound(
-        &schema,
-        1,
-        vec![occurrence(
-            OCCURRENCE_A,
-            [0; 3],
-            1.0,
-            PointSupportCriterionRequirementV1::Required(Wcag22CriterionV1::Sc143TextDefault),
-            [255; 3],
-            PointSupportStabilityAnchorV1::Ratio4Point5,
-            0,
-        )],
-    );
-    let retained_loss = retain_all
-        .evaluate(observation(&schema, 1, [(1, [0xFE; 3])]))
+    session
+        .update(observed_update(2, [(45, vec![(SURFACE_A, [255; 3])])]))
         .unwrap();
     assert_eq!(
-        retained_loss.criterion_aggregate(),
-        PointSupportCriterionAggregateV1::AllRequiredPass
-    );
-    assert_eq!(
-        retained_loss.stability_aggregate(),
-        PointSupportStabilityAggregateV1::NotRetained
-    );
-
-    let allow_all = bound(
-        &schema,
-        2,
-        vec![occurrence(
-            OCCURRENCE_A,
-            [0; 3],
-            1.0,
-            PointSupportCriterionRequirementV1::Required(Wcag22CriterionV1::Sc143TextDefault),
-            [255; 3],
-            PointSupportStabilityAnchorV1::Ratio4Point5,
-            10_000,
-        )],
-    );
-    let allowed = allow_all
-        .evaluate(observation(&schema, 2, [(1, [0x76; 3])]))
-        .unwrap();
-    assert_eq!(
-        allowed.criterion_aggregate(),
-        PointSupportCriterionAggregateV1::AllRequiredPass
-    );
-    assert_eq!(
-        allowed.stability_aggregate(),
-        PointSupportStabilityAggregateV1::AllRetained
-    );
-    assert_eq!(
-        allowed.action(),
-        PointSupportActionV1::NoReconciliationRequired
-    );
-
-    let required_failure = allow_all
-        .evaluate(observation(&schema, 3, [(1, [0x74; 3])]))
-        .unwrap();
-    assert_eq!(
-        required_failure.criterion_aggregate(),
-        PointSupportCriterionAggregateV1::RequiredFailure
-    );
-    assert_eq!(
-        required_failure.action(),
-        PointSupportActionV1::ReconciliationRequired
+        crate::composition::source_over_evaluation_count(),
+        3,
+        "a new revision recomposes the current occurrence, never the baseline"
     );
 }
 
 #[test]
-fn no_requested_policies_is_not_mislabeled_stable() {
-    let schema = schema();
-    let occurrence = PointSupportOccurrenceV1::try_new(
-        OCCURRENCE_A,
-        SURFACE,
-        Srgb8::new([255, 0, 0]),
-        0.0,
-        PointSupportCriterionRequirementV1::NotRequested,
-        PointSupportStabilityPolicyV1::Disabled,
-    )
-    .unwrap();
-    let plan = bound(&schema, 1, vec![occurrence]);
-    let report = plan
-        .evaluate(observation(&schema, 1, [(1, [0x12, 0x34, 0x56])]))
-        .unwrap();
-
-    assert_eq!(
-        report.criterion_aggregate(),
-        PointSupportCriterionAggregateV1::NotRequested
-    );
-    assert_eq!(
-        report.stability_aggregate(),
-        PointSupportStabilityAggregateV1::Disabled
-    );
-    assert_eq!(
-        report.action(),
-        PointSupportActionV1::NoReconciliationRequired
-    );
-    assert!(report.primary_failure_cell().is_none());
-    assert_eq!(
-        report.cells()[0].criterion(),
-        &PointSupportCriterionAssessmentV1::NotRequested
-    );
-    assert_eq!(
-        report.cells()[0].stability(),
-        PointSupportStabilityAssessmentV1::Disabled
-    );
-}
-
-#[test]
-fn stability_is_bit_identical_for_every_criterion_identity() {
-    let schema = schema();
+fn all_four_wcag_criterion_identities_survive_the_full_support_path() {
     let criteria = [
-        PointSupportCriterionRequirementV1::NotRequested,
-        PointSupportCriterionRequirementV1::Required(Wcag22CriterionV1::Sc143TextDefault),
-        PointSupportCriterionRequirementV1::Required(Wcag22CriterionV1::Sc143TextLargeScale),
-        PointSupportCriterionRequirementV1::Required(
-            Wcag22CriterionV1::Sc1411UiComponentOrState,
-        ),
-        PointSupportCriterionRequirementV1::Required(
-            Wcag22CriterionV1::Sc1411GraphicalObject,
-        ),
+        Wcag22CriterionV1::Sc143TextDefault,
+        Wcag22CriterionV1::Sc143TextLargeScale,
+        Wcag22CriterionV1::Sc1411UiComponentOrState,
+        Wcag22CriterionV1::Sc1411GraphicalObject,
     ];
-    let occurrences = criteria
-        .into_iter()
-        .enumerate()
-        .map(|(index, criterion)| {
-            occurrence(
-                OccurrenceId::new(index as u32 + 1),
-                [0; 3],
-                1.0,
-                criterion,
-                [255; 3],
-                PointSupportStabilityAnchorV1::Identity1,
-                5_000,
-            )
-        })
-        .collect();
-    let plan = bound(&schema, 1, occurrences);
-    let report = plan
-        .evaluate(observation(&schema, 1, [(1, [0x80; 3])]))
-        .unwrap();
-
-    let stability: Vec<_> = report
+    let shared_paint = paint(PAINT_A, [0; 3], 1.0);
+    let requirements = compiled(
+        criteria
+            .iter()
+            .copied()
+            .enumerate()
+            .map(|(index, criterion)| {
+                occurrence(
+                    OccurrenceId::new(index as u32 + 1),
+                    SURFACE_A,
+                    shared_paint,
+                    None,
+                    PointSupportCriterionRequirementV1::Required(criterion),
+                    PointSupportStabilityPolicyV1::Disabled,
+                )
+            })
+            .collect(),
+    );
+    let mut session = PointSupportSessionV1::new(STREAM, requirements);
+    let PointSupportSessionStateV1::Ready { current } = session
+        .update(observed_update(1, [(1, vec![(SURFACE_A, [255; 3])])]))
+        .unwrap()
+    else {
+        panic!("black on white passes every admitted WCAG criterion");
+    };
+    let observed: Vec<_> = current
+        .report()
         .cells()
-        .iter()
-        .map(|cell| {
-            let PointSupportStabilityAssessmentV1::Evaluated(evidence) = cell.stability() else {
-                panic!("enabled stability missing");
-            };
-            evidence
-        })
-        .collect();
-    assert!(stability.windows(2).all(|window| window[0] == window[1]));
-
-    let exact: Vec<_> = report
-        .cells()
-        .iter()
-        .skip(1)
         .map(|cell| {
             let PointSupportCriterionAssessmentV1::Required(assessment) = cell.criterion() else {
                 panic!("required assessment missing");
@@ -331,113 +264,108 @@ fn stability_is_bit_identical_for_every_criterion_identity() {
             assessment.criterion()
         })
         .collect();
-    assert_eq!(
-        exact,
-        [
-            Wcag22CriterionV1::Sc143TextDefault,
-            Wcag22CriterionV1::Sc143TextLargeScale,
-            Wcag22CriterionV1::Sc1411UiComponentOrState,
-            Wcag22CriterionV1::Sc1411GraphicalObject,
-        ]
-    );
+    assert_eq!(observed, criteria);
 }
 
 #[test]
-fn declaration_and_schema_failures_precede_composition() {
-    crate::composition::reset_source_over_evaluation_count();
-    assert_eq!(
-        PointSupportDropFractionV1::try_from_basis_points(10_001),
-        Err(PointSupportAdmissionErrorV1::DropFractionOutsideBasisPointRange)
-    );
-    assert_eq!(
-        CompiledPointSupportPlanV1::try_new(PointSupportPlanRevisionV1::new(1), vec![]),
-        Err(PointSupportPlanErrorV1::EmptyOccurrences)
-    );
-
-    let disabled = PointSupportOccurrenceV1::try_new(
+fn wholly_inactive_plan_is_rejected_but_an_inactive_composition_cell_is_allowed() {
+    let inactive = occurrence(
         OCCURRENCE_A,
-        SURFACE,
-        Srgb8::new([0; 3]),
-        1.0,
+        SURFACE_A,
+        paint(PAINT_A, [0; 3], 1.0),
+        None,
         PointSupportCriterionRequirementV1::NotRequested,
         PointSupportStabilityPolicyV1::Disabled,
-    )
-    .unwrap();
+    );
     assert_eq!(
-        CompiledPointSupportPlanV1::try_new(
-            PointSupportPlanRevisionV1::new(1),
-            vec![disabled, disabled],
+        CompiledPointSupportRecheckV1::new(
+            CompositionProfileV1::EncodedSrgb8SourceOverV1,
+            vec![inactive],
         ),
-        Err(PointSupportPlanErrorV1::DuplicateOccurrence(OCCURRENCE_A))
+        Err(PointSupportCompileErrorV1::InactivePlan)
     );
-    assert_eq!(crate::composition::source_over_evaluation_count(), 0);
 
-    let schema = schema();
-    let plan = bound(&schema, 1, vec![disabled]);
-    let other_surface = SurfaceInputPortId::new(99);
-    let other_schema = ObservationSchemaV1::try_new(vec![other_surface]).unwrap();
-    let other_observation = admit_observation_snapshot_v1(
-        other_schema,
-        STREAM,
-        Revision::new(1),
-        ObservedScenarioSetInput::new(vec![ScenarioInput::new(
-            ScenarioId::new(1),
-            vec![SurfaceInputBinding::new(
-                other_surface,
-                Srgb8::new([255; 3]),
-            )],
-        )]),
-    )
-    .unwrap();
-    assert_eq!(
-        plan.evaluate(other_observation),
-        Err(PointSupportEvaluationErrorV1::ObservationSchemaMismatch)
+    let active = occurrence(
+        OCCURRENCE_A,
+        SURFACE_A,
+        paint(PAINT_A, [0; 3], 1.0),
+        Some([0; 3]),
+        PointSupportCriterionRequirementV1::NotRequested,
+        PointSupportStabilityPolicyV1::Disabled,
     );
-    assert_eq!(crate::composition::source_over_evaluation_count(), 0);
+    let mixed = CompiledPointSupportRecheckV1::new(
+        CompositionProfileV1::EncodedSrgb8SourceOverV1,
+        vec![
+            inactive,
+            occurrence(
+                OCCURRENCE_B,
+                SURFACE_B,
+                paint(PAINT_B, [255; 3], 1.0),
+                Some([255; 3]),
+                PointSupportCriterionRequirementV1::NotRequested,
+                PointSupportStabilityPolicyV1::Disabled,
+            ),
+        ],
+    )
+    .expect("one active axis makes the whole full-support plan meaningful");
+    assert_eq!(mixed.surface_schema(), &[SURFACE_A, SURFACE_B]);
+    let mut mixed_session = PointSupportSessionV1::new(STREAM, mixed);
+    let PointSupportSessionStateV1::Ready { current } = mixed_session
+        .update(observed_update(
+            1,
+            [(1, vec![(SURFACE_A, [17; 3]), (SURFACE_B, [3; 3])])],
+        ))
+        .unwrap()
+    else {
+        panic!("the active exact axis passes; the composition-only cell is not a failure");
+    };
+    let cells: Vec<_> = current.report().cells().collect();
+    assert_eq!(cells.len(), 2);
+    assert!(matches!(
+        cells[0].exact(),
+        PointSupportExactAssessmentV1::NotRequested
+    ));
+    assert_eq!(cells[0].composition().backdrop_rgb(), [17; 3]);
+
+    assert_eq!(
+        CompiledPointSupportRecheckV1::new(
+            CompositionProfileV1::EncodedSrgb8SourceOverV1,
+            vec![active, active],
+        ),
+        Err(PointSupportCompileErrorV1::DuplicateOccurrence(
+            OCCURRENCE_A
+        ))
+    );
+
+    let drifted_paint = occurrence(
+        OCCURRENCE_B,
+        SURFACE_B,
+        paint(PAINT_A, [255; 3], 1.0),
+        Some([255; 3]),
+        PointSupportCriterionRequirementV1::NotRequested,
+        PointSupportStabilityPolicyV1::Disabled,
+    );
+    assert_eq!(
+        CompiledPointSupportRecheckV1::new(
+            CompositionProfileV1::EncodedSrgb8SourceOverV1,
+            vec![active, drifted_paint],
+        ),
+        Err(PointSupportCompileErrorV1::PaintDefinitionMismatch(PAINT_A))
+    );
 }
 
 #[test]
-fn first_witness_uses_canonical_case_then_declared_occurrence_order() {
-    let schema = schema();
-    let plan = bound(
-        &schema,
-        1,
-        vec![
-            occurrence(
-                OCCURRENCE_B,
-                [255; 3],
-                1.0,
-                PointSupportCriterionRequirementV1::Required(
-                    Wcag22CriterionV1::Sc143TextDefault,
-                ),
-                [0; 3],
-                PointSupportStabilityAnchorV1::Ratio4Point5,
-                10_000,
-            ),
-            occurrence(
-                OCCURRENCE_A,
-                [255; 3],
-                1.0,
-                PointSupportCriterionRequirementV1::Required(
-                    Wcag22CriterionV1::Sc143TextDefault,
-                ),
-                [0; 3],
-                PointSupportStabilityAnchorV1::Ratio4Point5,
-                10_000,
-            ),
-        ],
+fn drop_fraction_is_closed_and_exact() {
+    assert_eq!(
+        PointSupportDropFractionV1::try_from_basis_points(0).unwrap(),
+        PointSupportDropFractionV1::NONE
     );
-    let report = plan
-        .evaluate(observation(
-            &schema,
-            1,
-            [(9, [255; 3]), (3, [0xFE; 3])],
-        ))
-        .unwrap();
-
-    let first = report.first_required_failure_cell().unwrap();
-    assert!(core::ptr::eq(first, &report.cells()[0]));
-    assert_eq!(first.occurrence_index(), 0);
-    assert_eq!(first.occurrence(), OCCURRENCE_B);
-    assert_eq!(report.provenance(0), Some(&[ScenarioId::new(3)][..]));
+    assert_eq!(
+        PointSupportDropFractionV1::try_from_basis_points(10_000).unwrap(),
+        PointSupportDropFractionV1::ALL
+    );
+    assert_eq!(
+        PointSupportDropFractionV1::try_from_basis_points(10_001),
+        Err(PointSupportCompileErrorV1::DropFractionOutsideBasisPointRange)
+    );
 }

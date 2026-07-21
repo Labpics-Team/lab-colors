@@ -21,13 +21,6 @@ mod wcag22;
 
 pub(crate) use wcag22::Wcag22Srgb8V1;
 
-mod readability;
-
-pub(crate) use readability::{
-    DisplayReadabilityCurveV1, DisplayReadabilityMeasurementV1, ReadabilityPassV1,
-    ReadabilityPolarityV1, ReadabilityViolationV1,
-};
-
 #[cfg(test)]
 pub(crate) use wcag22::{
     ApplicableWcag22EvaluationErrorV1, ApplicableWcag22MeasurementV1, Wcag22PassV1,

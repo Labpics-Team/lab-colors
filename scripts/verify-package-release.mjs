@@ -15,6 +15,13 @@ import { isDeepStrictEqual } from "node:util";
 
 import { workspaceVersion } from "./cargo-workspace.mjs";
 import { PACKAGE_DIR, REPO_ROOT, prepareNpmPackage } from "./prepare-npm-package.mjs";
+import {
+  NUMERICAL_EVIDENCE_FILES,
+  PACKED_NUMERICAL_EVIDENCE_PATHS,
+  POINT_SUPPORT_EVIDENCE_FILES,
+  WCAG22_EVIDENCE_FILES,
+  assertPackageEvidenceInventory,
+} from "./release-evidence.mjs";
 
 const RELEASE_DIR = resolve(PACKAGE_DIR, ".release");
 const RELEASE_MANIFEST = resolve(RELEASE_DIR, "release-manifest.json");
@@ -24,12 +31,7 @@ const BUILD_METADATA = resolve(PACKAGE_DIR, "build-metadata.json");
 const ROOT_CARGO = resolve(REPO_ROOT, "Cargo.toml");
 const CONFORMANCE_DIR = resolve(REPO_ROOT, "conformance/vectors");
 const CONFORMANCE_MANIFEST = resolve(CONFORMANCE_DIR, "manifest.json");
-const WCAG22_CONTRACT_DIR = resolve(REPO_ROOT, "crates/labcolors-core/contracts");
-const WCAG22_EVIDENCE_FILES = [
-  "wcag22-srgb8-v1.json",
-  "wcag22-srgb8-q55-v1.bin",
-  "wcag22-srgb8-q55-proof-v1.json",
-];
+const NUMERICAL_CONTRACT_DIR = resolve(REPO_ROOT, "crates/labcolors-core/contracts");
 // Полный состав пака 10.0.0. Верификатор читает байты из репозитория (не из
 // тарболла) и пересчитывает packDigest над всеми пятью семействами.
 const CONFORMANCE_FAMILY_FILES = [
@@ -40,6 +42,38 @@ const CONFORMANCE_FAMILY_FILES = [
   "wcag22.json",
 ];
 const RUNTIME_WASM_PATH = resolve(PACKAGE_DIR, "pkg/labcolors_bg.wasm");
+
+const POINT_SUPPORT_CERTIFIED_CLAIM =
+  "for every successfully evaluated enabled stability cell, decision is Retained iff current_lower_surplus >= (10000-drop_bps)/10000 * max(baseline_lower_surplus,0); the declared anchor remains a separate hard floor";
+const POINT_SUPPORT_EXCLUDED_CLAIM =
+  "does not certify retention against the unknown exact baseline surplus, renderer equivalence outside encoded-sRGB8 source-over, or a successful result when evaluation fails";
+const POINT_SUPPORT_SOURCE_BINDING_SCOPE =
+  "exact bytes of the private point-support Rust semantic cone and its two WCAG include_str inputs; comments and cfg(test) text are intentionally significant";
+const POINT_SUPPORT_SOURCE_BINDING_EXCLUSIONS = [
+  "whole-crate compilation or compiler/toolchain attestation",
+  "binary, package, FFI, renderer, or browser transport attestation",
+  "unrelated Lab Colors modules outside the declared point-support semantic cone",
+];
+const POINT_SUPPORT_SOURCE_PATHS = [
+  "crates/labcolors-core/contracts/wcag22-srgb8-q55-proof-v1.json",
+  "crates/labcolors-core/contracts/wcag22-srgb8-v1.json",
+  "crates/labcolors-core/src/appearance.rs",
+  "crates/labcolors-core/src/composition.rs",
+  "crates/labcolors-core/src/constraints/exact.rs",
+  "crates/labcolors-core/src/constraints/mod.rs",
+  "crates/labcolors-core/src/constraints/wcag22.rs",
+  "crates/labcolors-core/src/hash.rs",
+  "crates/labcolors-core/src/lib.rs",
+  "crates/labcolors-core/src/numerics.rs",
+  "crates/labcolors-core/src/observation.rs",
+  "crates/labcolors-core/src/point_support.rs",
+  "crates/labcolors-core/src/session.rs",
+  "crates/labcolors-core/src/srgb8.rs",
+  "crates/labcolors-core/src/wcag22/kernel.rs",
+  "crates/labcolors-core/src/wcag22/q55_data.rs",
+  "crates/labcolors-core/src/wcag22.rs",
+  "crates/labcolors-core/src/wcag22_evidence.rs",
+].sort();
 
 const REQUIRED_PACK_FILES = ["package.json", "README.md", "LICENSE"];
 const FORBIDDEN_PACK_SEGMENTS = new Set([
@@ -105,20 +139,138 @@ function sha256(bytes) {
   return createHash("sha256").update(bytes).digest("hex");
 }
 
+// The proof deliberately carries exact Q55/u128 integer lexemes beyond
+// Number.MAX_SAFE_INTEGER. Remove its self-digest from the canonical raw bytes:
+// a JSON.parse/JSON.stringify round-trip would silently change those integers.
+function exactJsonPayloadWithoutTopLevelField(bytes, field, label) {
+  if (
+    !Buffer.isBuffer(bytes) ||
+    bytes.length < 3 ||
+    bytes[bytes.length - 1] !== 0x0a ||
+    bytes[bytes.length - 2] !== 0x7d
+  ) {
+    fail(`${label} must be one canonical JSON object followed by one LF`);
+  }
+
+  const body = bytes.subarray(0, -1);
+  if (body[0] !== 0x7b) {
+    fail(`${label} must have a top-level JSON object`);
+  }
+
+  const members = [];
+  const containers = [0x7b];
+  let memberStart = 1;
+  let inString = false;
+  let escaped = false;
+
+  function addMember(end) {
+    if (end === memberStart) {
+      fail(`${label} has an empty or trailing top-level member`);
+    }
+    let keyEnd = memberStart + 1;
+    if (body[memberStart] !== 0x22) {
+      fail(`${label} has a non-string top-level key`);
+    }
+    let keyEscaped = false;
+    for (; keyEnd < end; keyEnd += 1) {
+      const byte = body[keyEnd];
+      if (keyEscaped) {
+        keyEscaped = false;
+      } else if (byte === 0x5c) {
+        keyEscaped = true;
+      } else if (byte === 0x22) {
+        break;
+      }
+    }
+    if (keyEnd >= end || body[keyEnd + 1] !== 0x3a) {
+      fail(`${label} has a malformed top-level member`);
+    }
+    const rawKey = body.subarray(memberStart, keyEnd + 1);
+    const key = JSON.parse(rawKey.toString("utf8"));
+    if (!rawKey.equals(Buffer.from(JSON.stringify(key), "utf8"))) {
+      fail(`${label} has a non-canonical top-level key`);
+    }
+    members.push({ start: memberStart, end, key, rawKey });
+  }
+
+  for (let index = 1; index < body.length; index += 1) {
+    const byte = body[index];
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (byte === 0x5c) {
+        escaped = true;
+      } else if (byte === 0x22) {
+        inString = false;
+      }
+      continue;
+    }
+    if (byte === 0x22) {
+      inString = true;
+      continue;
+    }
+    if (byte === 0x20 || byte === 0x09 || byte === 0x0a || byte === 0x0d) {
+      fail(`${label} contains non-canonical insignificant whitespace`);
+    }
+    if (byte === 0x7b || byte === 0x5b) {
+      containers.push(byte);
+      continue;
+    }
+    if (byte === 0x7d || byte === 0x5d) {
+      const expectedOpen = byte === 0x7d ? 0x7b : 0x5b;
+      if (containers.at(-1) !== expectedOpen) {
+        fail(`${label} has mismatched JSON containers`);
+      }
+      if (containers.length === 1) {
+        if (byte !== 0x7d || index !== body.length - 1) {
+          fail(`${label} has bytes after its top-level object`);
+        }
+        if (index !== memberStart || members.length > 0) addMember(index);
+      }
+      containers.pop();
+      continue;
+    }
+    if (byte === 0x2c && containers.length === 1) {
+      addMember(index);
+      memberStart = index + 1;
+    }
+  }
+
+  if (inString || containers.length !== 0) {
+    fail(`${label} is not a complete JSON object`);
+  }
+  for (let index = 1; index < members.length; index += 1) {
+    if (Buffer.compare(members[index - 1].rawKey, members[index].rawKey) >= 0) {
+      fail(`${label} top-level keys are duplicate or unsorted`);
+    }
+  }
+
+  const targetIndex = members.findIndex(({ key }) => key === field);
+  if (targetIndex < 0 || members.some(({ key }, index) => key === field && index !== targetIndex)) {
+    fail(`${label} must contain exactly one top-level ${field}`);
+  }
+  const target = members[targetIndex];
+  if (members.length === 1) return Buffer.from("{}", "utf8");
+  if (targetIndex === 0) {
+    return Buffer.concat([body.subarray(0, target.start), body.subarray(target.end + 1)]);
+  }
+  return Buffer.concat([body.subarray(0, target.start - 1), body.subarray(target.end)]);
+}
+
 async function hashedArtifact(path, displayPath) {
   const bytes = await readFile(path);
   if (bytes.length === 0) fail(`${displayPath} is empty`);
   return { path: displayPath, bytes: bytes.length, sha256: sha256(bytes) };
 }
 
-export async function validateWcag22EvidenceArtifacts(
+export async function validateNumericalEvidenceArtifacts(
   root,
   expectedArtifacts,
   label,
 ) {
-  const allowedPaths = WCAG22_EVIDENCE_FILES.map((file) => `evidence/${file}`);
+  const allowedPaths = PACKED_NUMERICAL_EVIDENCE_PATHS;
   if (!Array.isArray(expectedArtifacts) || expectedArtifacts.length !== allowedPaths.length) {
-    fail(`${label} WCAG22 evidence expectation must contain ${allowedPaths.length} artifacts`);
+    fail(`${label} numerical evidence expectation must contain ${allowedPaths.length} artifacts`);
   }
   const expectedByPath = new Map();
   for (const artifact of expectedArtifacts) {
@@ -129,22 +281,22 @@ export async function validateWcag22EvidenceArtifacts(
       !/^[0-9a-f]{64}$/u.test(artifact?.sha256 ?? "") ||
       expectedByPath.has(artifact.path)
     ) {
-      fail(`${label} has malformed or duplicate WCAG22 evidence metadata`);
+      fail(`${label} has malformed or duplicate numerical evidence metadata`);
     }
     expectedByPath.set(artifact.path, artifact);
   }
 
   const actualArtifacts = [];
-  for (const file of WCAG22_EVIDENCE_FILES) {
+  for (const file of NUMERICAL_EVIDENCE_FILES) {
     const displayPath = `evidence/${file}`;
     const expected = expectedByPath.get(displayPath);
-    if (!expected) fail(`${label} lacks expected WCAG22 evidence metadata: ${displayPath}`);
+    if (!expected) fail(`${label} lacks expected numerical evidence metadata: ${displayPath}`);
     const [canonical, actual] = await Promise.all([
-      readFile(resolve(WCAG22_CONTRACT_DIR, file)),
+      readFile(resolve(NUMERICAL_CONTRACT_DIR, file)),
       readFile(resolve(root, "evidence", file)),
     ]);
     if (!actual.equals(canonical)) {
-      fail(`${label} WCAG22 evidence bytes differ from canonical source: ${displayPath}`);
+      fail(`${label} numerical evidence bytes differ from canonical source: ${displayPath}`);
     }
     const metadata = {
       path: displayPath,
@@ -153,7 +305,7 @@ export async function validateWcag22EvidenceArtifacts(
     };
     if (metadata.bytes !== expected.bytes || metadata.sha256 !== expected.sha256) {
       fail(
-        `${label} WCAG22 evidence metadata differs for ${displayPath}: ` +
+        `${label} numerical evidence metadata differs for ${displayPath}: ` +
           `expected ${expected.bytes}B/${expected.sha256}, ` +
           `actual ${metadata.bytes}B/${metadata.sha256}`,
       );
@@ -163,23 +315,26 @@ export async function validateWcag22EvidenceArtifacts(
   return actualArtifacts;
 }
 
-async function validateWcag22Evidence() {
+async function validateNumericalEvidence() {
   const artifacts = [];
-  for (const file of WCAG22_EVIDENCE_FILES) {
+  for (const file of NUMERICAL_EVIDENCE_FILES) {
     artifacts.push(
       await hashedArtifact(
-        resolve(WCAG22_CONTRACT_DIR, file),
+        resolve(NUMERICAL_CONTRACT_DIR, file),
         `evidence/${file}`,
       ),
     );
   }
-  await validateWcag22EvidenceArtifacts(PACKAGE_DIR, artifacts, "staged package");
+  await validateNumericalEvidenceArtifacts(PACKAGE_DIR, artifacts, "staged package");
+  return artifacts;
+}
 
-  const profilePath = resolve(WCAG22_CONTRACT_DIR, WCAG22_EVIDENCE_FILES[0]);
+async function validateWcag22Evidence(artifacts) {
+  const profilePath = resolve(NUMERICAL_CONTRACT_DIR, WCAG22_EVIDENCE_FILES[0]);
   const profileBytes = await readFile(profilePath);
   const profile = await readJson(profilePath);
-  const binary = await readFile(resolve(WCAG22_CONTRACT_DIR, WCAG22_EVIDENCE_FILES[1]));
-  const proof = await readJson(resolve(WCAG22_CONTRACT_DIR, WCAG22_EVIDENCE_FILES[2]));
+  const binary = await readFile(resolve(NUMERICAL_CONTRACT_DIR, WCAG22_EVIDENCE_FILES[1]));
+  const proof = await readJson(resolve(NUMERICAL_CONTRACT_DIR, WCAG22_EVIDENCE_FILES[2]));
   if (profile.profileId !== "wcag22-srgb8-contrast-v1" || proof.profile_id !== profile.profileId) {
     fail("WCAG22 profile/proof identity drifted");
   }
@@ -239,7 +394,182 @@ async function validateWcag22Evidence() {
     terminalEvidenceId: proof.terminal_evidence_id,
     parserId: proof.parser_id,
     facadeId: proof.facade_id,
-    artifacts,
+    artifacts: artifacts.filter(({ path }) =>
+      WCAG22_EVIDENCE_FILES.some((file) => path === `evidence/${file}`)
+    ),
+  };
+}
+
+async function validatePointSupportEvidence(artifacts, numericalCapabilities) {
+  const proofFile = POINT_SUPPORT_EVIDENCE_FILES[0];
+  const proofPath = resolve(NUMERICAL_CONTRACT_DIR, proofFile);
+  const [proofBytes, proof, wcagProofBytes, wcagProof] = await Promise.all([
+    readFile(proofPath),
+    readJson(proofPath),
+    readFile(resolve(NUMERICAL_CONTRACT_DIR, WCAG22_EVIDENCE_FILES[2])),
+    readJson(resolve(NUMERICAL_CONTRACT_DIR, WCAG22_EVIDENCE_FILES[2])),
+  ]);
+  exactKeys(
+    proof,
+    [
+      "schema_version",
+      "profile_id",
+      "site_id",
+      "artifact_id",
+      "bound_id",
+      "proof_id",
+      "declared_operation_law",
+      "certified_claim",
+      "excluded_claim",
+      "q55_dependency",
+      "source_binding_schema_version",
+      "source_binding_law",
+      "source_binding_scope",
+      "source_binding_exclusions",
+      "source_closure_sha256",
+      "source_negative_controls",
+      "source_files",
+      "universal_algebraic_certificate",
+      "reference_and_anchor_proof",
+      "basis_point_proof",
+      "comparator_proof",
+      "integer_replay_envelope",
+      "verifier_sha256",
+      "proof_payload_sha256",
+    ],
+    "point-support proof",
+  );
+  const proofPayloadBytes = exactJsonPayloadWithoutTopLevelField(
+    proofBytes,
+    "proof_payload_sha256",
+    "point-support proof",
+  );
+  if (sha256(proofPayloadBytes) !== proof.proof_payload_sha256) {
+    fail("point-support proof payload digest is invalid");
+  }
+  if (
+    proof.schema_version !== 2 ||
+    proof.site_id !== "point-support-retained-reference-surplus-v1" ||
+    proof.profile_id !== "srgb8-q55-retained-reference-surplus-bps-v1" ||
+    proof.artifact_id !== "wcag22-srgb8-luminance-q55-v1" ||
+    proof.bound_id !== "point-support-reference-surplus-q55-bps-v1" ||
+    proof.proof_id !== "point-support-reference-surplus-integer-v1" ||
+    proof.declared_operation_law !==
+      "q55-lower-reference-distance-explicit-anchor-bps-retention-v1"
+  ) {
+    fail("point-support proof typed identity or operation law drifted");
+  }
+  if (
+    proof.certified_claim !== POINT_SUPPORT_CERTIFIED_CLAIM ||
+    proof.excluded_claim !== POINT_SUPPORT_EXCLUDED_CLAIM
+  ) {
+    fail("point-support proof claim boundary drifted");
+  }
+  if (
+    proof.source_binding_schema_version !== 2 ||
+    proof.source_binding_law !== "point-support-rust-whole-file-semantic-cone-v2" ||
+    proof.source_binding_scope !== POINT_SUPPORT_SOURCE_BINDING_SCOPE ||
+    !isDeepStrictEqual(
+      proof.source_binding_exclusions,
+      POINT_SUPPORT_SOURCE_BINDING_EXCLUSIONS,
+    ) ||
+    !/^[0-9a-f]{64}$/u.test(proof.source_closure_sha256 ?? "") ||
+    proof.source_negative_controls !== 33 ||
+    !/^[0-9a-f]{64}$/u.test(proof.proof_payload_sha256 ?? "") ||
+    !/^[0-9a-f]{64}$/u.test(proof.verifier_sha256 ?? "") ||
+    !Array.isArray(proof.source_files) ||
+    proof.source_files.length !== POINT_SUPPORT_SOURCE_PATHS.length
+  ) {
+    fail("point-support proof lacks its versioned semantic source binding");
+  }
+  for (const [index, sourceFile] of proof.source_files.entries()) {
+    const expectedPath = POINT_SUPPORT_SOURCE_PATHS[index];
+    const expectedKind = expectedPath.endsWith(".rs")
+      ? "rust-source"
+      : "compile-time-input";
+    exactKeys(sourceFile, ["path", "kind", "sha256"], `point source file ${index}`);
+    if (
+      sourceFile?.path !== expectedPath ||
+      sourceFile?.kind !== expectedKind ||
+      !/^[0-9a-f]{64}$/u.test(sourceFile?.sha256 ?? "")
+    ) {
+      fail(`point-support proof has malformed or non-canonical source file ${index}`);
+    }
+    const sourceBytes = await readFile(resolve(REPO_ROOT, expectedPath));
+    if (sourceFile.sha256 !== sha256(sourceBytes)) {
+      fail(`point-support proof source file ${expectedPath} drifted`);
+    }
+  }
+  const algebra = proof.universal_algebraic_certificate;
+  if (
+    algebra?.method !==
+      "exact-sparse-integer-polynomial-identities-plus-positive-denominator-order-lemma-v1" ||
+    algebra?.wolfram_language_cross_check?.query_sha256 !==
+      "8cdbb9964583030c8b92498961896cb2a98613f1cb31eb7c54acdf8e16beff10" ||
+    algebra?.wolfram_language_cross_check?.result !==
+      "{True, True, True, True, True}" ||
+    algebra?.wolfram_language_cross_check?.result_sha256 !==
+      "13a8f2ee8d0fde335a638e46d7cc8a8427b9a1437c77d22cfcf925bb87fa6303"
+  ) {
+    fail("point-support proof lacks the universal algebraic certificate");
+  }
+  const dependency = proof.q55_dependency;
+  if (
+    dependency?.artifact_id !== wcagProof.artifact_id ||
+    dependency?.artifact_sha256 !== wcagProof.artifact_sha256 ||
+    dependency?.proof_id !== wcagProof.proof_id ||
+    dependency?.proof_sha256 !== sha256(wcagProofBytes) ||
+    dependency?.proof_payload_sha256 !== wcagProof.proof_payload_sha256
+  ) {
+    fail("point-support proof does not bind the exact WCAG22 Q55 dependency");
+  }
+  const capabilitySite = numericalCapabilities?.sites?.find(
+    ({ siteId }) => siteId === proof.site_id,
+  );
+  const expectedCapabilitySite = {
+    siteId: proof.site_id,
+    stableOutcomes: ["canonical-finite-bounded"],
+    compatibilityReleases: [],
+    evidenceClasses: ["canonical-finite-bounded"],
+    artifactIds: [proof.artifact_id],
+    boundIds: [proof.bound_id],
+    proofIds: [proof.proof_id],
+    runtimeAttestations: [],
+  };
+  if (!isDeepStrictEqual(capabilitySite, expectedCapabilitySite)) {
+    fail("numerical capability manifest does not exactly project the point-support proof");
+  }
+  const evidencePath = `evidence/${proofFile}`;
+  const proofArtifact = artifacts.find(({ path }) => path === evidencePath);
+  if (proofArtifact?.sha256 !== sha256(proofBytes)) {
+    fail("point-support proof artifact metadata does not bind its canonical bytes");
+  }
+  return {
+    siteId: proof.site_id,
+    profileId: proof.profile_id,
+    artifactId: proof.artifact_id,
+    boundId: proof.bound_id,
+    proofId: proof.proof_id,
+    proofSha256: sha256(proofBytes),
+    proofPayloadSha256: proof.proof_payload_sha256,
+    declaredOperationLaw: proof.declared_operation_law,
+    certifiedClaim: proof.certified_claim,
+    excludedClaim: proof.excluded_claim,
+    sourceBinding: {
+      schemaVersion: proof.source_binding_schema_version,
+      law: proof.source_binding_law,
+      scope: proof.source_binding_scope,
+      exclusions: proof.source_binding_exclusions,
+      closureSha256: proof.source_closure_sha256,
+    },
+    q55Dependency: {
+      artifactId: dependency.artifact_id,
+      artifactSha256: dependency.artifact_sha256,
+      proofId: dependency.proof_id,
+      proofSha256: dependency.proof_sha256,
+      proofPayloadSha256: dependency.proof_payload_sha256,
+    },
+    artifacts: [proofArtifact],
   };
 }
 
@@ -352,11 +682,11 @@ async function packInto(destination, packageJson) {
   return { path: resolve(destination, tarballName), tarballName };
 }
 
-async function validatePackedWcag22Evidence(tarballPath, expectedArtifacts) {
+async function validatePackedNumericalEvidence(tarballPath, expectedArtifacts) {
   const extracted = await mkdtemp(join(tmpdir(), "labcolors-packed-evidence-"));
   try {
     command("tar", ["-xzf", tarballPath, "-C", extracted]);
-    await validateWcag22EvidenceArtifacts(
+    await validateNumericalEvidenceArtifacts(
       resolve(extracted, "package"),
       expectedArtifacts,
       "npm tarball",
@@ -438,6 +768,11 @@ function validateCapabilityManifest(capabilities) {
   if (typeof capabilities !== "object" || capabilities === null || Array.isArray(capabilities)) {
     fail("conformance manifest has no numericalCapabilities object");
   }
+  exactKeys(
+    capabilities,
+    ["schemaVersion", "coverage", "sites", "checksum"],
+    "numericalCapabilities",
+  );
   if (capabilities.schemaVersion !== 2) {
     fail(
       `numericalCapabilities schemaVersion ${capabilities.schemaVersion} is not the supported 2`,
@@ -450,9 +785,16 @@ function validateCapabilityManifest(capabilities) {
     fail("numericalCapabilities must list at least one migrated site");
   }
   const isKeyList = (value) =>
-    Array.isArray(value) && value.every((key) => typeof key === "string" && key.length > 0);
+    Array.isArray(value) &&
+    value.every((key) => typeof key === "string" && key.length > 0) &&
+    new Set(value).size === value.length;
   const siteIds = new Set();
   for (const site of capabilities.sites) {
+    exactKeys(
+      site,
+      ["siteId", ...CAPABILITY_SITE_LIST_FIELDS],
+      "numericalCapabilities site",
+    );
     if (typeof site.siteId !== "string" || site.siteId.length === 0) {
       fail("numericalCapabilities site lacks a non-empty siteId");
     }
@@ -572,7 +914,7 @@ async function validateConformance(conformance) {
   const familyBuffers = await Promise.all(
     CONFORMANCE_FAMILY_FILES.map((name) => readFile(resolve(CONFORMANCE_DIR, name))),
   );
-  const proofPath = resolve(WCAG22_CONTRACT_DIR, "wcag22-srgb8-q55-proof-v1.json");
+  const proofPath = resolve(NUMERICAL_CONTRACT_DIR, "wcag22-srgb8-q55-proof-v1.json");
   const proofBytes = await readFile(proofPath);
   const proof = await readJson(proofPath);
   const actualDigest = fnv1a32(familyBuffers);
@@ -760,6 +1102,21 @@ assert.ok(capability.sites.some((site) =>
   site.siteId === "wcag22-srgb8-contrast-v1" &&
   site.proofIds.includes("wcag22-srgb8-full-domain-q55-v1")
 ));
+assert.deepEqual(
+  capability.sites.find((site) =>
+    site.siteId === "point-support-retained-reference-surplus-v1"
+  ),
+  {
+    siteId: "point-support-retained-reference-surplus-v1",
+    stableOutcomes: ["canonical-finite-bounded"],
+    compatibilityReleases: [],
+    evidenceClasses: ["canonical-finite-bounded"],
+    artifactIds: ["wcag22-srgb8-luminance-q55-v1"],
+    boundIds: ["point-support-reference-surplus-q55-bps-v1"],
+    proofIds: ["point-support-reference-surplus-integer-v1"],
+    runtimeAttestations: [],
+  },
+);
 
 const exactWcag22 = evaluateWcag22(
   "#898CB8",
@@ -1206,7 +1563,7 @@ async function verifyCleanConsumer(
   packageJson,
   typescriptCompilers,
   expectedBuildMetadata,
-  expectedWcag22Artifacts,
+  expectedNumericalArtifacts,
 ) {
   const consumer = await mkdtemp(join(tmpdir(), "labcolors-release-consumer-"));
   try {
@@ -1255,9 +1612,9 @@ async function verifyCleanConsumer(
       );
     }
 
-    await validateWcag22EvidenceArtifacts(
+    await validateNumericalEvidenceArtifacts(
       installed,
-      expectedWcag22Artifacts,
+      expectedNumericalArtifacts,
       "clean-installed package",
     );
 
@@ -1355,7 +1712,9 @@ export async function smokePackedPackage(tarballPath) {
 export async function verifyPackageRelease() {
   const { sourceSha: source } = await prepareNpmPackage();
   command("python3", ["scripts/verify_wcag22_q55.py"], REPO_ROOT);
-  const wcag22Evidence = await validateWcag22Evidence();
+  command("python3", ["scripts/verify_point_support_surplus.py"], REPO_ROOT);
+  const numericalEvidenceArtifacts = await validateNumericalEvidence();
+  const wcag22Evidence = await validateWcag22Evidence(numericalEvidenceArtifacts);
 
   const [packageJson, packageLock, cargoSource, conformance] = await Promise.all([
     readJson(PACKAGE_JSON),
@@ -1363,6 +1722,7 @@ export async function verifyPackageRelease() {
     readFile(ROOT_CARGO, "utf8"),
     readJson(CONFORMANCE_MANIFEST),
   ]);
+  assertPackageEvidenceInventory(packageJson.files);
 
   const coreVersion = workspaceVersion(cargoSource);
   const npmVersion = lockedNpmVersion(packageJson);
@@ -1385,6 +1745,10 @@ export async function verifyPackageRelease() {
     fail(`invalid conformance packVersion: ${conformance.packVersion}`);
   }
   const conformanceEvidence = await validateConformance(conformance);
+  const pointSupportEvidence = await validatePointSupportEvidence(
+    numericalEvidenceArtifacts,
+    conformance.numericalCapabilities,
+  );
 
   const wasmPaths = {
     runtime: [RUNTIME_WASM_PATH, "pkg/labcolors_bg.wasm"],
@@ -1431,7 +1795,7 @@ export async function verifyPackageRelease() {
     await rm(reproductionDir, { recursive: true, force: true });
   }
 
-  await validatePackedWcag22Evidence(canonicalPack.path, wcag22Evidence.artifacts);
+  await validatePackedNumericalEvidence(canonicalPack.path, numericalEvidenceArtifacts);
 
   const tarball = await hashedArtifact(
     canonicalPack.path,
@@ -1442,13 +1806,13 @@ export async function verifyPackageRelease() {
     packageJson,
     typescriptCompilers,
     buildMetadataValue,
-    wcag22Evidence.artifacts,
+    numericalEvidenceArtifacts,
   );
 
   const manifest = {
-    // V3 binds role-tagged WASM records; the publish read-back validates each
-    // record against bytes inside the exact tarball.
-    schemaVersion: 3,
+    // V4 replaces the old point-support capsule projection with the exact
+    // whole-file semantic-cone projection and its explicit claim boundary.
+    schemaVersion: 4,
     npm: packageJson.version,
     core: coreVersion,
     wire: {
@@ -1458,6 +1822,9 @@ export async function verifyPackageRelease() {
     },
     conformance: conformanceEvidence,
     normativeEvidence: { wcag22: wcag22Evidence },
+    numericalEvidence: {
+      pointSupportReferenceSurplus: pointSupportEvidence,
+    },
     sourceSha: source,
     reproducibility: {
       method: "two-independent-npm-pack-passes",

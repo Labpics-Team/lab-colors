@@ -37,16 +37,16 @@ impl ColorInputId {
 /// Он намеренно не взаимозаменяем с [`ColorInputId`]: authored Paint source и
 /// runtime backdrop имеют разные lifecycle и admission contract.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub struct SurfaceInputPortId(u32);
+pub(crate) struct SurfaceInputPortId(u32);
 
 impl SurfaceInputPortId {
     /// Construct one client-owned opaque surface-input identity.
-    pub const fn new(raw: u32) -> Self {
+    pub(crate) const fn new(raw: u32) -> Self {
         Self(raw)
     }
 
     /// Exact transport value. It has identity semantics only.
-    pub const fn value(self) -> u32 {
+    pub(crate) const fn value(self) -> u32 {
         self.0
     }
 }
@@ -83,16 +83,16 @@ impl SurfaceId {
 
 /// Непрозрачный handle применения Paint к Surface.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub struct OccurrenceId(u32);
+pub(crate) struct OccurrenceId(u32);
 
 impl OccurrenceId {
     /// Construct one client-owned opaque occurrence identity.
-    pub const fn new(raw: u32) -> Self {
+    pub(crate) const fn new(raw: u32) -> Self {
         Self(raw)
     }
 
     /// Exact transport value. It has identity semantics only.
-    pub const fn value(self) -> u32 {
+    pub(crate) const fn value(self) -> u32 {
         self.0
     }
 }
@@ -894,6 +894,10 @@ impl PointOpacityOverSurfaceV1 {
         PhysicalProgramIdentityV1::SolidOpacityOverSurfaceEncodedSrgb8V1
     }
 
+    pub(crate) const fn composition_profile() -> CompositionProfileV1 {
+        CompositionProfileV1::EncodedSrgb8SourceOverV1
+    }
+
     pub(crate) fn evaluate(
         source: [u8; 3],
         opacity: f64,
@@ -1059,7 +1063,7 @@ impl EncodedPointPaintV1 {
 /// Replayable exact point-composite certificate. Он доказывает только
 /// заявленную математическую операцию, не readability и не browser pixels.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct SourceOverCertificateV1 {
+pub(crate) struct SourceOverCertificateV1 {
     profile: CompositionProfileV1,
     subject_rgb: [u8; 3],
     subject_opacity: crate::composition::AdmittedOpacityV1,
@@ -1069,32 +1073,32 @@ pub struct SourceOverCertificateV1 {
 
 impl SourceOverCertificateV1 {
     /// Replay the exact code-owned composition law certified by this value.
-    pub fn replay(&self) -> [u8; 3] {
+    pub(crate) fn replay(&self) -> [u8; 3] {
         self.profile
             .composite(self.subject_rgb, self.subject_opacity, self.backdrop_rgb)
     }
 
-    pub const fn profile(&self) -> CompositionProfileV1 {
+    pub(crate) const fn profile(&self) -> CompositionProfileV1 {
         self.profile
     }
 
-    pub const fn subject_rgb(&self) -> [u8; 3] {
+    pub(crate) const fn subject_rgb(&self) -> [u8; 3] {
         self.subject_rgb
     }
 
-    pub const fn subject_opacity_bits(&self) -> u64 {
+    pub(crate) const fn subject_opacity_bits(&self) -> u64 {
         self.subject_opacity.bits()
     }
 
-    pub const fn subject_opacity(&self) -> f64 {
+    pub(crate) const fn subject_opacity(&self) -> f64 {
         self.subject_opacity.value()
     }
 
-    pub const fn backdrop_rgb(&self) -> [u8; 3] {
+    pub(crate) const fn backdrop_rgb(&self) -> [u8; 3] {
         self.backdrop_rgb
     }
 
-    pub const fn output_rgb(&self) -> [u8; 3] {
+    pub(crate) const fn output_rgb(&self) -> [u8; 3] {
         self.output_rgb
     }
 }

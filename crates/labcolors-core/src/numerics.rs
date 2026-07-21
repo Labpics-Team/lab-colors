@@ -442,7 +442,7 @@ define_numerical_registries! {
             proof_ids: [NumericalProofIdV2::PointSupportReferenceSurplusIntegerV1],
             bound_status: Available,
             boundary_corpus: "identity/3/4.5 anchors; drop 0/10000; equality; polarity reversal; overlapping Q55 intervals; u128 extrema",
-            runtime_matrix: "native + wasm32 integer-only operations; exact packet transport",
+            runtime_matrix: "native Core evaluation; wasm32 Core compile; package/FFI transport not yet exposed",
             fallback_status: NumericalFallbackStatusV1::None,
         },
     }

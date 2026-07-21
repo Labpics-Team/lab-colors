@@ -10,10 +10,6 @@ pub mod wcag22_evidence;
 pub(crate) mod composition;
 pub(crate) mod spaces;
 
-pub use appearance::{
-    OccurrenceId, SourceOverCertificateV1, SurfaceInputPortId,
-};
-pub use composition::CompositionProfileV1;
 pub use srgb8::Srgb8;
 
 pub(crate) mod accent_balance;
@@ -31,7 +27,14 @@ pub mod material;
 pub mod neutral;
 pub mod numerical_plan;
 pub(crate) mod pair;
-pub mod point_support;
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "private C8d full-support recheck is production-compiled before its package bridge exists"
+    )
+)]
+pub(crate) mod point_support;
 pub mod scale;
 pub mod semantic;
 pub mod solve;
@@ -61,25 +64,13 @@ mod appearance_graph_tests;
         reason = "private F2 raw admission is production-compiled before its package bridge exists"
     )
 )]
-pub mod observation;
+pub(crate) mod observation;
 
 #[cfg(test)]
 mod observation_tests;
 
 #[cfg(test)]
 mod point_support_tests;
-
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "private F2 exact recheck is production-compiled before its package bridge exists"
-    )
-)]
-pub(crate) mod recheck;
-
-#[cfg(test)]
-mod recheck_tests;
 
 #[cfg_attr(
     not(test),
@@ -183,25 +174,6 @@ pub use numerics::{
     NumericalRuntimeAttestationIdV2, NumericalSiteCapabilityV2, NumericalSiteIdV1,
     NumericalSiteIdV2, NumericalSiteRecordV2, OutwardIntervalV1, ReferenceProfileIdV1,
     StableNumericalOutcomeV2, numerical_capability_manifest_v2, numerical_registry_v2,
-};
-pub use observation::{
-    ObservationError, ObservationSchemaV1, ObservationStreamId, ObservedScenarioSetInput,
-    Revision, RevisionBoundObservationV1, ScenarioId, ScenarioInput, SurfaceInputBinding,
-    admit_observation_snapshot_v1,
-};
-pub use point_support::{
-    BoundPointSupportPlanV1, CompiledPointSupportPlanV1, PointSupportActionV1,
-    PointSupportAdmissionErrorV1, PointSupportCellV1, PointSupportCriterionAggregateV1,
-    PointSupportCriterionAssessmentV1, PointSupportCriterionRequirementV1,
-    PointSupportDropFractionV1, PointSupportEvaluationErrorV1, PointSupportOccurrenceV1,
-    PointSupportPlanErrorV1, PointSupportPlanRevisionV1, PointSupportRationalV1,
-    PointSupportReferenceDistanceQ55V1, PointSupportReferenceOrientationV1,
-    PointSupportSignedRationalV1, PointSupportStabilityAggregateV1,
-    PointSupportStabilityAnchorV1, PointSupportStabilityAssessmentV1,
-    PointSupportStabilityDecisionV1, PointSupportStabilityEvidenceV1,
-    PointSupportStabilityNumericalEvidenceV1, PointSupportStabilityPolicyV1,
-    PointSupportStabilityProfileV1, PointSupportWcag22AssessmentV1,
-    RevisionBoundPointSupportReportV1,
 };
 pub use semantic::{
     GlowIndeterminateResolved, NamedRoleTable, ResolveSetError, ResolveSetErrorKind, Resolved,
@@ -344,6 +316,23 @@ pub struct NoPrematureScalarLpcApi;
 /// ```
 #[cfg(doctest)]
 pub struct NoPublicPairRecipeApi;
+
+/// C8d recheck and F2 observation remain one private Session-owned protocol;
+/// they do not create a second public authoring root before C7c.
+///
+/// ```compile_fail
+/// use labcolors_core::point_support::CompiledPointSupportRecheckV1;
+/// ```
+///
+/// ```compile_fail
+/// use labcolors_core::observation::RevisionBoundObservationV1;
+/// ```
+///
+/// ```compile_fail
+/// use labcolors_core::session::PointSupportSessionV1;
+/// ```
+#[cfg(doctest)]
+pub struct NoPrematurePointSupportApi;
 
 /// Сырые `f64` не являются валидированным цветовым значением: публичная
 /// сериализация идёт через [`Srgb8::to_hex`], где невалидное состояние уже
