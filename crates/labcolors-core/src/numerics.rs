@@ -428,6 +428,23 @@ define_numerical_registries! {
             runtime_matrix: "native + wasm32 integer-only comparisons; adapters transport terminal results",
             fallback_status: NumericalFallbackStatusV1::None,
         },
+        /// Retained point-support surplus over a separately declared anchor.
+        PointSupportRetainedReferenceSurplusV1 => {
+            key: "point-support-retained-reference-surplus-v1",
+            operations: "Q55 conservative reference-distance witness; exact rational anchor surplus; basis-point retention; continued-fraction ordering",
+            domain: "baseline/current final sRGB8 pairs + explicit 1/3/4.5 anchor + drop basis points -> retained/not-retained",
+            branch_effect: "runtime reconciliation trigger, independent of WCAG criterion assessment",
+            stable_outcomes: [CanonicalFiniteBounded],
+            compatibility_releases: [],
+            evidence_classes: [CanonicalFiniteBounded],
+            artifact_ids: [NumericalArtifactIdV2::Wcag22Srgb8LuminanceQ55V1],
+            bound_ids: [NumericalErrorBoundIdV2::PointSupportReferenceSurplusQ55BpsV1],
+            proof_ids: [NumericalProofIdV2::PointSupportReferenceSurplusIntegerV1],
+            bound_status: Available,
+            boundary_corpus: "identity/3/4.5 anchors; drop 0/10000; equality; polarity reversal; overlapping Q55 intervals; u128 extrema",
+            runtime_matrix: "native + wasm32 integer-only operations; exact packet transport",
+            fallback_status: NumericalFallbackStatusV1::None,
+        },
     }
 }
 
@@ -562,6 +579,9 @@ impl NumericalArtifactIdV2 {
 pub enum NumericalErrorBoundIdV2 {
     /// Integer Q55 outward-bound and threshold laws for WCAG 3.0/4.5.
     Wcag22Srgb8OutwardQ55V1,
+    /// Conservative Q55 reference-surplus witness and exact basis-point
+    /// rational retention law for point support.
+    PointSupportReferenceSurplusQ55BpsV1,
 }
 
 impl NumericalErrorBoundIdV2 {
@@ -569,6 +589,9 @@ impl NumericalErrorBoundIdV2 {
     pub fn key(self) -> &'static str {
         match self {
             Self::Wcag22Srgb8OutwardQ55V1 => "wcag22-srgb8-outward-q55-v1",
+            Self::PointSupportReferenceSurplusQ55BpsV1 => {
+                "point-support-reference-surplus-q55-bps-v1"
+            }
         }
     }
 }
@@ -579,6 +602,8 @@ impl NumericalErrorBoundIdV2 {
 pub enum NumericalProofIdV2 {
     /// Full sRGB8-domain proof with zero unresolved WCAG 3.0/4.5 decisions.
     Wcag22Srgb8FullDomainQ55V1,
+    /// Replayable integer/rational proof for point-support retained surplus.
+    PointSupportReferenceSurplusIntegerV1,
 }
 
 impl NumericalProofIdV2 {
@@ -586,6 +611,9 @@ impl NumericalProofIdV2 {
     pub fn key(self) -> &'static str {
         match self {
             Self::Wcag22Srgb8FullDomainQ55V1 => "wcag22-srgb8-full-domain-q55-v1",
+            Self::PointSupportReferenceSurplusIntegerV1 => {
+                "point-support-reference-surplus-integer-v1"
+            }
         }
     }
 }
@@ -1037,7 +1065,7 @@ mod tests {
     fn unified_registry_projects_runtime_glow_and_proof_bound_wcag() {
         assert_eq!(numerical_registry_v1().len(), 1);
         let rows = numerical_registry_v2();
-        assert_eq!(rows.len(), 2);
+        assert_eq!(rows.len(), 3);
         let mut site_keys = std::collections::HashSet::new();
         for row in rows {
             assert!(
@@ -1067,6 +1095,24 @@ mod tests {
             [NumericalProofIdV2::Wcag22Srgb8FullDomainQ55V1]
         );
         assert_eq!(wcag.bound_status, NumericalBoundStatusV2::Available);
+        let stability = rows
+            .iter()
+            .find(|row| {
+                row.site_id == NumericalSiteIdV2::PointSupportRetainedReferenceSurplusV1
+            })
+            .expect("point-support stability site must be registered");
+        assert_eq!(
+            stability.artifact_ids,
+            [NumericalArtifactIdV2::Wcag22Srgb8LuminanceQ55V1]
+        );
+        assert_eq!(
+            stability.bound_ids,
+            [NumericalErrorBoundIdV2::PointSupportReferenceSurplusQ55BpsV1]
+        );
+        assert_eq!(
+            stability.proof_ids,
+            [NumericalProofIdV2::PointSupportReferenceSurplusIntegerV1]
+        );
     }
 
     /// Диагностический интервал проверяет только форму.
@@ -1246,7 +1292,7 @@ mod red_292_tests {
             manifest.coverage,
             NumericalRegistryCoverageV2::MigratedSitesOnlyV1
         ));
-        assert_eq!(manifest.sites.len(), 2);
+        assert_eq!(manifest.sites.len(), 3);
         let site = manifest
             .sites
             .iter()
