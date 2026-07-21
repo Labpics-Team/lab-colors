@@ -6,6 +6,7 @@
 //! `Waiting | Ready | Stale | Failed` принадлежат Session.
 
 use crate::Srgb8;
+use crate::composition::{AdmittedOpacityV1, OpacityAdmissionErrorV1};
 use crate::appearance::{
     EncodedPointPaintV1, OccurrenceId, PaintId, PhysicalProgramIdentityV1,
     PointOpacityOverSurfaceV1, SourceOverCertificateV1, SurfaceInputPortId,
@@ -378,6 +379,552 @@ pub(crate) enum FixedRecheckDecisionV1 {
 pub(crate) enum RecheckProtocolErrorV1 {
     ObservationSchemaMismatch,
     ResourceExhausted,
+}
+
+// ---------------------------------------------------------------------------
+// Stateless point-support application report (C8d #417a).
+//
+// This is deliberately a sibling of the legacy readability bridge below. It
+// owns the application decision for replayable point occurrences without
+// publishing the bridge's misleading readability names or solve::Floor. The
+// current C8d wire menu is transitional: it preserves already-declared legacy
+// AA ratio gates, while exact WCAG criterion identity/policy remains a separate
+// Program/R1 contract.
+// ---------------------------------------------------------------------------
+
+/// Transitional required-ratio policy carried by the current C8d snapshots.
+///
+/// This is not a complete WCAG conformance assessment: the legacy configuration
+/// does not distinguish every success criterion that shares the same ratio.
+/// Future exact criterion policy therefore receives a new version instead of
+/// silently reinterpreting these variants.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum PointSupportCriterionGateV1 {
+    /// No criterion gate was requested. No pass is fabricated.
+    NotRequested,
+    /// Preserve the current legacy AA UI/graphics 3:1 ratio gate.
+    RequiredLegacyWcagAaUiRatio,
+    /// Preserve the current legacy AA ordinary-text 4.5:1 ratio gate.
+    RequiredLegacyWcagAaTextRatio,
+}
+
+impl PointSupportCriterionGateV1 {
+    const fn required_ratio(self) -> Option<f64> {
+        match self {
+            Self::NotRequested => None,
+            Self::RequiredLegacyWcagAaUiRatio => Some(3.0),
+            Self::RequiredLegacyWcagAaTextRatio => Some(4.5),
+        }
+    }
+}
+
+/// Reference floor used only by the transitional retained-surplus hysteresis.
+///
+/// Keeping this type separate from PointSupportCriterionGateV1 prevents an
+/// accessibility invocation from being confused with a runtime stability
+/// anchor. The candidate coordinate remains a legacy WCAG-ratio diagnostic,
+/// not LPC.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum PointSupportLegacyRatioAnchorV1 {
+    IdentityOneToOne,
+    ThreeToOne,
+    FourPointFiveToOne,
+}
+
+impl PointSupportLegacyRatioAnchorV1 {
+    const fn ratio(self) -> f64 {
+        match self {
+            Self::IdentityOneToOne => 1.0,
+            Self::ThreeToOne => 3.0,
+            Self::FourPointFiveToOne => 4.5,
+        }
+    }
+}
+
+/// Runtime hysteresis policy for one replayable occurrence.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum PointSupportHysteresisV1 {
+    Disabled,
+    /// Recompute the committed baseline from the same source/alpha over this
+    /// backdrop, then retain the declared fraction of its ratio surplus.
+    RetainLegacyWcagRatioSurplus {
+        baseline_backdrop: Srgb8,
+        anchor: PointSupportLegacyRatioAnchorV1,
+    },
+}
+
+/// Typed finite drop fraction. Explicit negative zero is canonicalised to zero.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PointSupportDropFractionV1(u64);
+
+impl PointSupportDropFractionV1 {
+    pub fn try_new(value: f64) -> Result<Self, PointSupportInputErrorV1> {
+        if !value.is_finite() {
+            return Err(PointSupportInputErrorV1::DropFractionNonFinite);
+        }
+        if !(0.0..=1.0).contains(&value) {
+            return Err(PointSupportInputErrorV1::DropFractionOutsideUnitInterval);
+        }
+        let canonical = if value == 0.0 { 0.0 } else { value };
+        Ok(Self(canonical.to_bits()))
+    }
+
+    pub const fn value(self) -> f64 {
+        f64::from_bits(self.0)
+    }
+}
+
+/// One replayable source/alpha point occurrence. Client role identity remains
+/// outside Core; array order supplies the opaque occurrence ordinal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PointSupportOccurrenceV1 {
+    source: Srgb8,
+    opacity: AdmittedOpacityV1,
+    criterion: PointSupportCriterionGateV1,
+    hysteresis: PointSupportHysteresisV1,
+}
+
+impl PointSupportOccurrenceV1 {
+    pub fn try_new(
+        source: Srgb8,
+        opacity: f64,
+        criterion: PointSupportCriterionGateV1,
+        hysteresis: PointSupportHysteresisV1,
+    ) -> Result<Self, PointSupportInputErrorV1> {
+        let opacity = AdmittedOpacityV1::new(opacity).map_err(|error| match error {
+            OpacityAdmissionErrorV1::NonFinite => PointSupportInputErrorV1::OpacityNonFinite,
+            OpacityAdmissionErrorV1::OutsideUnitInterval => {
+                PointSupportInputErrorV1::OpacityOutsideUnitInterval
+            }
+        })?;
+        Ok(Self {
+            source,
+            opacity,
+            criterion,
+            hysteresis,
+        })
+    }
+
+    pub const fn source(self) -> Srgb8 {
+        self.source
+    }
+
+    pub const fn opacity(self) -> f64 {
+        self.opacity.value()
+    }
+
+    pub const fn criterion(self) -> PointSupportCriterionGateV1 {
+        self.criterion
+    }
+
+    pub const fn hysteresis(self) -> PointSupportHysteresisV1 {
+        self.hysteresis
+    }
+}
+
+/// Admission/evaluation failure. No variant is a colour verdict.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum PointSupportInputErrorV1 {
+    EmptyBackdrops,
+    EmptyOccurrences,
+    OpacityNonFinite,
+    OpacityOutsideUnitInterval,
+    DropFractionNonFinite,
+    DropFractionOutsideUnitInterval,
+    ResourceExhausted,
+}
+
+/// Operational result over the complete submitted support.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum PointSupportStatusV1 {
+    Stable,
+    ReconcileRequired,
+}
+
+/// Typed sign of the temporary legacy candidate coordinate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum PointSupportLegacyPolarityV1 {
+    LightOnDark,
+    Indistinct,
+    DarkOnLight,
+}
+
+/// Honest diagnostic measurement. Neither field is an LPC/readability verdict.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PointSupportLegacyContrastDiagnosticV1 {
+    signed_candidate: f64,
+    wcag_ratio: f64,
+    polarity: PointSupportLegacyPolarityV1,
+}
+
+impl PointSupportLegacyContrastDiagnosticV1 {
+    pub const fn signed_candidate(self) -> f64 {
+        self.signed_candidate
+    }
+
+    pub const fn wcag_ratio(self) -> f64 {
+        self.wcag_ratio
+    }
+
+    pub const fn polarity(self) -> PointSupportLegacyPolarityV1 {
+        self.polarity
+    }
+}
+
+/// Assessment of the transitional required ratio for one current cell.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum PointSupportCriterionStateV1 {
+    NotRequested,
+    RequiredThresholdMet,
+    RequiredThresholdNotMet,
+}
+
+/// Complete retained-surplus evidence for one cell.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PointSupportRetainedSurplusV1 {
+    baseline_backdrop: Srgb8,
+    baseline_visible: Srgb8,
+    anchor: PointSupportLegacyRatioAnchorV1,
+    baseline_ratio: f64,
+    baseline_surplus: f64,
+    current_surplus: f64,
+    required_surplus: f64,
+    margin: f64,
+}
+
+impl PointSupportRetainedSurplusV1 {
+    pub const fn baseline_backdrop(self) -> Srgb8 {
+        self.baseline_backdrop
+    }
+
+    pub const fn baseline_visible(self) -> Srgb8 {
+        self.baseline_visible
+    }
+
+    pub const fn anchor(self) -> PointSupportLegacyRatioAnchorV1 {
+        self.anchor
+    }
+
+    pub const fn baseline_ratio(self) -> f64 {
+        self.baseline_ratio
+    }
+
+    pub const fn baseline_surplus(self) -> f64 {
+        self.baseline_surplus
+    }
+
+    pub const fn current_surplus(self) -> f64 {
+        self.current_surplus
+    }
+
+    pub const fn required_surplus(self) -> f64 {
+        self.required_surplus
+    }
+
+    pub const fn margin(self) -> f64 {
+        self.margin
+    }
+
+    pub const fn failed(self) -> bool {
+        self.margin < 0.0
+    }
+}
+
+/// Hysteresis was either deliberately disabled or evaluated with full evidence.
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[non_exhaustive]
+pub enum PointSupportHysteresisAssessmentV1 {
+    Disabled,
+    Evaluated(PointSupportRetainedSurplusV1),
+}
+
+/// One physical/evaluator cell in submitted sample-major, occurrence-major order.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PointSupportCellV1 {
+    sample_index: usize,
+    occurrence_index: usize,
+    source: Srgb8,
+    opacity_bits: u64,
+    backdrop: Srgb8,
+    visible: Srgb8,
+    criterion: PointSupportCriterionGateV1,
+    criterion_state: PointSupportCriterionStateV1,
+    diagnostic: PointSupportLegacyContrastDiagnosticV1,
+    hysteresis: PointSupportHysteresisAssessmentV1,
+}
+
+impl PointSupportCellV1 {
+    pub const fn sample_index(self) -> usize {
+        self.sample_index
+    }
+
+    pub const fn occurrence_index(self) -> usize {
+        self.occurrence_index
+    }
+
+    pub const fn source(self) -> Srgb8 {
+        self.source
+    }
+
+    pub const fn opacity(self) -> f64 {
+        f64::from_bits(self.opacity_bits)
+    }
+
+    pub const fn backdrop(self) -> Srgb8 {
+        self.backdrop
+    }
+
+    pub const fn visible(self) -> Srgb8 {
+        self.visible
+    }
+
+    pub const fn criterion(self) -> PointSupportCriterionGateV1 {
+        self.criterion
+    }
+
+    pub const fn criterion_state(self) -> PointSupportCriterionStateV1 {
+        self.criterion_state
+    }
+
+    pub const fn diagnostic(self) -> PointSupportLegacyContrastDiagnosticV1 {
+        self.diagnostic
+    }
+
+    pub const fn hysteresis(self) -> PointSupportHysteresisAssessmentV1 {
+        self.hysteresis
+    }
+}
+
+/// Bit 0: at least one retained-surplus margin is negative.
+pub const POINT_SUPPORT_CAUSE_RETAINED_SURPLUS_V1: u8 = 1;
+/// Bit 1: at least one currently required legacy ratio threshold is not met.
+pub const POINT_SUPPORT_CAUSE_REQUIRED_RATIO_V1: u8 = 2;
+
+/// Core-owned full-support result. All cells are retained; compact boundaries may
+/// project deterministic witnesses but never reclassify or scan raw metrics.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PointSupportReportV1 {
+    status: PointSupportStatusV1,
+    cause_mask: u8,
+    cells: Box<[PointSupportCellV1]>,
+    minimum_hysteresis_index: Option<usize>,
+    first_required_failure_index: Option<usize>,
+}
+
+impl PointSupportReportV1 {
+    pub const fn status(&self) -> PointSupportStatusV1 {
+        self.status
+    }
+
+    pub const fn cause_mask(&self) -> u8 {
+        self.cause_mask
+    }
+
+    pub fn cells(&self) -> &[PointSupportCellV1] {
+        &self.cells
+    }
+
+    pub fn minimum_hysteresis_cell(&self) -> Option<&PointSupportCellV1> {
+        self.minimum_hysteresis_index
+            .and_then(|index| self.cells.get(index))
+    }
+
+    pub fn first_required_failure_cell(&self) -> Option<&PointSupportCellV1> {
+        self.first_required_failure_index
+            .and_then(|index| self.cells.get(index))
+    }
+
+    /// Required-ratio failure is operationally primary. Otherwise a negative
+    /// retained-surplus witness requests reconciliation. A stable report has no
+    /// primary failure witness.
+    pub fn primary_failure_cell(&self) -> Option<&PointSupportCellV1> {
+        if let Some(cell) = self.first_required_failure_cell() {
+            return Some(cell);
+        }
+        let cell = self.minimum_hysteresis_cell()?;
+        match cell.hysteresis {
+            PointSupportHysteresisAssessmentV1::Evaluated(evidence) if evidence.failed() => {
+                Some(cell)
+            }
+            PointSupportHysteresisAssessmentV1::Disabled
+            | PointSupportHysteresisAssessmentV1::Evaluated(_) => None,
+        }
+    }
+}
+
+fn point_support_diagnostic(
+    occurrence: &crate::appearance::ResolvedOccurrence,
+) -> PointSupportLegacyContrastDiagnosticV1 {
+    let evaluator = DisplayReadabilityCurveV1;
+    let modeled = occurrence.modeled_srgb8_point();
+    let measurement = match evaluator.evaluate(&modeled, &Floor::None) {
+        Ok(measurement) => measurement,
+        Err(error) => match error {},
+    };
+    let polarity = match measurement.polarity() {
+        ReadabilityPolarityV1::LightOnDark => PointSupportLegacyPolarityV1::LightOnDark,
+        ReadabilityPolarityV1::Indistinct => PointSupportLegacyPolarityV1::Indistinct,
+        ReadabilityPolarityV1::DarkOnLight => PointSupportLegacyPolarityV1::DarkOnLight,
+    };
+    PointSupportLegacyContrastDiagnosticV1 {
+        signed_candidate: measurement.lc(),
+        wcag_ratio: measurement.wcag(),
+        polarity,
+    }
+}
+
+/// Evaluate every replayable occurrence over every submitted current backdrop.
+///
+/// Array order is provenance: no sorting or de-duplication occurs. All vector
+/// cardinality/allocation checks complete before the first source-over call.
+pub fn evaluate_point_support_v1(
+    occurrences: &[PointSupportOccurrenceV1],
+    backdrops: &[Srgb8],
+    drop_fraction: PointSupportDropFractionV1,
+) -> Result<PointSupportReportV1, PointSupportInputErrorV1> {
+    if backdrops.is_empty() {
+        return Err(PointSupportInputErrorV1::EmptyBackdrops);
+    }
+    if occurrences.is_empty() {
+        return Err(PointSupportInputErrorV1::EmptyOccurrences);
+    }
+
+    let cell_count = checked_evidence_count(backdrops.len(), occurrences.len())
+        .map_err(|_| PointSupportInputErrorV1::ResourceExhausted)?;
+    let mut cells = Vec::new();
+    cells
+        .try_reserve_exact(cell_count)
+        .map_err(|_| PointSupportInputErrorV1::ResourceExhausted)?;
+    let mut baselines = Vec::new();
+    baselines
+        .try_reserve_exact(occurrences.len())
+        .map_err(|_| PointSupportInputErrorV1::ResourceExhausted)?;
+
+    let retained_fraction = 1.0 - drop_fraction.value();
+    for occurrence in occurrences {
+        let baseline = match occurrence.hysteresis {
+            PointSupportHysteresisV1::Disabled => None,
+            PointSupportHysteresisV1::RetainLegacyWcagRatioSurplus {
+                baseline_backdrop,
+                anchor,
+            } => {
+                let physical = PointOpacityOverSurfaceV1::evaluate_admitted(
+                    occurrence.source.bytes(),
+                    occurrence.opacity,
+                    baseline_backdrop.bytes(),
+                );
+                let visible = Srgb8::new(physical.visible());
+                let ratio = point_support_diagnostic(&physical).wcag_ratio();
+                let surplus = ratio - anchor.ratio();
+                let required_surplus = surplus.max(0.0) * retained_fraction;
+                Some((
+                    baseline_backdrop,
+                    visible,
+                    anchor,
+                    ratio,
+                    surplus,
+                    required_surplus,
+                ))
+            }
+        };
+        baselines.push(baseline);
+    }
+
+    let mut cause_mask = 0_u8;
+    let mut minimum_hysteresis_index = None;
+    let mut minimum_hysteresis_margin = None;
+    let mut first_required_failure_index = None;
+
+    for (sample_index, &backdrop) in backdrops.iter().enumerate() {
+        for (occurrence_index, (occurrence, baseline)) in
+            occurrences.iter().zip(baselines.iter()).enumerate()
+        {
+            let physical = PointOpacityOverSurfaceV1::evaluate_admitted(
+                occurrence.source.bytes(),
+                occurrence.opacity,
+                backdrop.bytes(),
+            );
+            let diagnostic = point_support_diagnostic(&physical);
+            let criterion_state = match occurrence.criterion.required_ratio() {
+                None => PointSupportCriterionStateV1::NotRequested,
+                Some(required) if diagnostic.wcag_ratio() >= required => {
+                    PointSupportCriterionStateV1::RequiredThresholdMet
+                }
+                Some(_) => {
+                    cause_mask |= POINT_SUPPORT_CAUSE_REQUIRED_RATIO_V1;
+                    if first_required_failure_index.is_none() {
+                        first_required_failure_index = Some(cells.len());
+                    }
+                    PointSupportCriterionStateV1::RequiredThresholdNotMet
+                }
+            };
+            let hysteresis = match *baseline {
+                None => PointSupportHysteresisAssessmentV1::Disabled,
+                Some((
+                    baseline_backdrop,
+                    baseline_visible,
+                    anchor,
+                    baseline_ratio,
+                    baseline_surplus,
+                    required_surplus,
+                )) => {
+                    let current_surplus = diagnostic.wcag_ratio() - anchor.ratio();
+                    let margin = current_surplus - required_surplus;
+                    if margin < 0.0 {
+                        cause_mask |= POINT_SUPPORT_CAUSE_RETAINED_SURPLUS_V1;
+                    }
+                    if minimum_hysteresis_margin.is_none_or(|minimum| margin < minimum) {
+                        minimum_hysteresis_margin = Some(margin);
+                        minimum_hysteresis_index = Some(cells.len());
+                    }
+                    PointSupportHysteresisAssessmentV1::Evaluated(
+                        PointSupportRetainedSurplusV1 {
+                            baseline_backdrop,
+                            baseline_visible,
+                            anchor,
+                            baseline_ratio,
+                            baseline_surplus,
+                            current_surplus,
+                            required_surplus,
+                            margin,
+                        },
+                    )
+                }
+            };
+            cells.push(PointSupportCellV1 {
+                sample_index,
+                occurrence_index,
+                source: occurrence.source,
+                opacity_bits: occurrence.opacity.bits(),
+                backdrop,
+                visible: Srgb8::new(physical.visible()),
+                criterion: occurrence.criterion,
+                criterion_state,
+                diagnostic,
+                hysteresis,
+            });
+        }
+    }
+
+    let status = if cause_mask == 0 {
+        PointSupportStatusV1::Stable
+    } else {
+        PointSupportStatusV1::ReconcileRequired
+    };
+    Ok(PointSupportReportV1 {
+        status,
+        cause_mask,
+        cells: cells.into_boxed_slice(),
+        minimum_hysteresis_index,
+        first_required_failure_index,
+    })
 }
 
 // ---------------------------------------------------------------------------
