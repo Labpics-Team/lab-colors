@@ -14,15 +14,15 @@ use crate::observation::{
 use crate::recheck::{
     BoundReadabilityRecheckV1, CompiledFixedRecheckV1, CompiledReadabilityRecheckV1,
     ExactOccurrenceRequirementV1, FixedRecheckBindErrorV1, FixedRecheckDecisionV1,
-    JointReadabilityResolutionV1, POINT_SUPPORT_CAUSE_REQUIRED_RATIO_V1,
-    POINT_SUPPORT_CAUSE_RETAINED_SURPLUS_V1, PointSupportDropFractionV1,
-    PointSupportHysteresisAssessmentV1, PointSupportHysteresisV1, PointSupportInputErrorV1,
-    PointSupportLegacyRatioAnchorV1, PointSupportOccurrenceV1, PointSupportRequiredFloorStateV1,
-    PointSupportRequiredFloorV1, PointSupportStatusV1, ReadabilityOccurrenceV1,
-    RecheckProtocolErrorV1, checked_evidence_count, evaluate_point_support_v1,
-    resolve_across_all_samples,
+    JointReadabilityResolutionV1, PointSupportAdmissionErrorV1,
+    PointSupportCriterionAssessmentV1, PointSupportCriterionRequirementV1,
+    PointSupportDropFractionV1, PointSupportEvaluationErrorV1, PointSupportOccurrenceV1,
+    PointSupportStabilityAssessmentV1, PointSupportStabilityPolicyV1, PointSupportStatusV1,
+    ReadabilityOccurrenceV1, RecheckProtocolErrorV1, checked_evidence_count,
+    evaluate_point_support_v1, resolve_across_all_samples,
 };
 use crate::solve::Floor;
+use crate::wcag22::{Wcag22ApplicableDecisionV1, Wcag22CriterionV1};
 
 const PAINT: PaintId = PaintId::new(7);
 const OCCURRENCE_A: OccurrenceId = OccurrenceId::new(11);
@@ -441,17 +441,15 @@ fn finite_shape_polarity_typed_decision() {
 fn point_support_occurrence(
     source: [u8; 3],
     opacity: f64,
-    required_floor: PointSupportRequiredFloorV1,
+    criterion: PointSupportCriterionRequirementV1,
     baseline_backdrop: [u8; 3],
-    anchor: PointSupportLegacyRatioAnchorV1,
 ) -> PointSupportOccurrenceV1 {
     PointSupportOccurrenceV1::try_new(
         Srgb8::new(source),
         opacity,
-        required_floor,
-        PointSupportHysteresisV1::RetainLegacyWcagRatioSurplus {
+        criterion,
+        PointSupportStabilityPolicyV1::RetainBaselineRatioSurplus {
             baseline_backdrop: Srgb8::new(baseline_backdrop),
-            anchor,
         },
     )
     .unwrap()
@@ -469,9 +467,10 @@ fn point_support_recomposes_source_alpha_over_the_current_backdrop() {
     let occurrence = point_support_occurrence(
         [255; 3],
         0.4,
-        PointSupportRequiredFloorV1::RequiredLegacyWcagAaUiRatio,
+        PointSupportCriterionRequirementV1::Required(
+            Wcag22CriterionV1::Sc1411UiComponentOrState,
+        ),
         [0; 3],
-        PointSupportLegacyRatioAnchorV1::ThreeToOne,
     );
     let report = evaluate_point_support_v1(
         &[occurrence],
@@ -481,22 +480,29 @@ fn point_support_recomposes_source_alpha_over_the_current_backdrop() {
     .unwrap();
 
     assert_eq!(report.status(), PointSupportStatusV1::ReconcileRequired);
-    assert_eq!(
-        report.cause_mask(),
-        POINT_SUPPORT_CAUSE_RETAINED_SURPLUS_V1 | POINT_SUPPORT_CAUSE_REQUIRED_RATIO_V1
-    );
-    let cell = report.cells()[0];
-    assert_eq!(cell.source(), Srgb8::new([255; 3]));
-    assert_eq!(cell.visible(), Srgb8::new([255; 3]));
-    assert_eq!(
-        cell.required_floor_state(),
-        PointSupportRequiredFloorStateV1::RequiredThresholdNotMet
-    );
-    assert_eq!(cell.diagnostic().wcag_ratio(), 1.0);
-    let PointSupportHysteresisAssessmentV1::Evaluated(retained) = cell.hysteresis() else {
-        panic!("the transitional support lane must retain its explicit baseline")
+    assert!(report.has_required_criterion_failure());
+    assert!(report.has_stability_failure());
+    let cell = &report.cells()[0];
+    let composition = cell.composition();
+    assert_eq!(composition.subject_rgb(), [255; 3]);
+    assert_eq!(composition.backdrop_rgb(), [255; 3]);
+    assert_eq!(composition.output_rgb(), [255; 3]);
+    assert_eq!(composition.replay(), composition.output_rgb());
+    let PointSupportCriterionAssessmentV1::Required(criterion) = cell.criterion() else {
+        panic!("the exact UI criterion must be evaluated")
     };
-    assert_eq!(retained.baseline_visible(), Srgb8::new([0x66; 3]));
+    assert_eq!(
+        criterion.criterion(),
+        Wcag22CriterionV1::Sc1411UiComponentOrState
+    );
+    assert_eq!(criterion.decision(), Wcag22ApplicableDecisionV1::Fail);
+    assert_eq!(criterion.measurement().foreground, [255; 3]);
+    assert_eq!(criterion.measurement().background, [255; 3]);
+    let PointSupportStabilityAssessmentV1::Evaluated(retained) = cell.stability() else {
+        panic!("the stability lane must retain its explicit baseline")
+    };
+    assert_eq!(retained.baseline_composition().output_rgb(), [0x66; 3]);
+    assert_eq!(retained.anchor_ratio(), 3.0);
     assert_eq!(retained.required_surplus(), 0.0);
     assert_eq!(retained.current_surplus(), -2.0);
     assert_eq!(retained.margin(), -2.0);
@@ -515,9 +521,8 @@ fn point_support_drop_endpoints_keep_required_floor_independent() {
     let occurrence = point_support_occurrence(
         [0; 3],
         1.0,
-        PointSupportRequiredFloorV1::RequiredLegacyWcagAaTextRatio,
+        PointSupportCriterionRequirementV1::Required(Wcag22CriterionV1::Sc143TextDefault),
         [255; 3],
-        PointSupportLegacyRatioAnchorV1::FourPointFiveToOne,
     );
 
     let retained_loss = evaluate_point_support_v1(
@@ -526,14 +531,8 @@ fn point_support_drop_endpoints_keep_required_floor_independent() {
         point_support_drop(0.0),
     )
     .unwrap();
-    assert_eq!(
-        retained_loss.cause_mask(),
-        POINT_SUPPORT_CAUSE_RETAINED_SURPLUS_V1
-    );
-    assert_eq!(
-        retained_loss.cells()[0].required_floor_state(),
-        PointSupportRequiredFloorStateV1::RequiredThresholdMet
-    );
+    assert!(!retained_loss.has_required_criterion_failure());
+    assert!(retained_loss.has_stability_failure());
 
     let allowed_drop = evaluate_point_support_v1(
         &[occurrence],
@@ -542,7 +541,8 @@ fn point_support_drop_endpoints_keep_required_floor_independent() {
     )
     .unwrap();
     assert_eq!(allowed_drop.status(), PointSupportStatusV1::Stable);
-    assert_eq!(allowed_drop.cause_mask(), 0);
+    assert!(!allowed_drop.has_required_criterion_failure());
+    assert!(!allowed_drop.has_stability_failure());
 
     let required_failure = evaluate_point_support_v1(
         &[occurrence],
@@ -554,15 +554,16 @@ fn point_support_drop_endpoints_keep_required_floor_independent() {
         required_failure.status(),
         PointSupportStatusV1::ReconcileRequired
     );
-    assert_ne!(
-        required_failure.cause_mask() & POINT_SUPPORT_CAUSE_REQUIRED_RATIO_V1,
-        0,
-        "dropFraction=1 must not weaken the independently required floor"
+    assert!(
+        required_failure.has_required_criterion_failure(),
+        "dropFraction=1 must not weaken the independently required criterion"
     );
-    assert_eq!(
-        required_failure.cells()[0].required_floor_state(),
-        PointSupportRequiredFloorStateV1::RequiredThresholdNotMet
-    );
+    let PointSupportCriterionAssessmentV1::Required(assessment) =
+        required_failure.cells()[0].criterion()
+    else {
+        panic!("required criterion assessment missing")
+    };
+    assert_eq!(assessment.decision(), Wcag22ApplicableDecisionV1::Fail);
 }
 
 #[test]
@@ -570,9 +571,8 @@ fn point_support_worst_tie_preserves_submitted_sample_then_occurrence_order() {
     let occurrence = point_support_occurrence(
         [0; 3],
         1.0,
-        PointSupportRequiredFloorV1::RequiredLegacyWcagAaTextRatio,
+        PointSupportCriterionRequirementV1::Required(Wcag22CriterionV1::Sc143TextDefault),
         [255; 3],
-        PointSupportLegacyRatioAnchorV1::FourPointFiveToOne,
     );
     let report = evaluate_point_support_v1(
         &[occurrence, occurrence],
@@ -583,7 +583,7 @@ fn point_support_worst_tie_preserves_submitted_sample_then_occurrence_order() {
 
     assert_eq!(report.status(), PointSupportStatusV1::Stable);
     assert_eq!(report.cells().len(), 4);
-    let worst = *report.minimum_hysteresis_cell().unwrap();
+    let worst = report.minimum_stability_cell().unwrap();
     assert_eq!((worst.sample_index(), worst.occurrence_index()), (0, 0));
     assert!(report.primary_failure_cell().is_none());
 }
@@ -593,9 +593,8 @@ fn point_support_not_requested_never_fabricates_a_required_pass() {
     let occurrence = point_support_occurrence(
         [255, 0, 0],
         0.0,
-        PointSupportRequiredFloorV1::NotRequested,
+        PointSupportCriterionRequirementV1::NotRequested,
         [0x12, 0x34, 0x56],
-        PointSupportLegacyRatioAnchorV1::IdentityOneToOne,
     );
     let report = evaluate_point_support_v1(
         &[occurrence],
@@ -605,27 +604,31 @@ fn point_support_not_requested_never_fabricates_a_required_pass() {
     .unwrap();
 
     assert_eq!(report.status(), PointSupportStatusV1::Stable);
-    let cell = report.cells()[0];
-    assert_eq!(cell.visible(), Srgb8::new([0x12, 0x34, 0x56]));
+    let cell = &report.cells()[0];
+    assert_eq!(cell.composition().output_rgb(), [0x12, 0x34, 0x56]);
     assert_eq!(
-        cell.required_floor_state(),
-        PointSupportRequiredFloorStateV1::NotRequested
+        cell.criterion(),
+        &PointSupportCriterionAssessmentV1::NotRequested
     );
-    assert_eq!(cell.diagnostic().wcag_ratio(), 1.0);
+    let PointSupportStabilityAssessmentV1::Evaluated(stability) = cell.stability() else {
+        panic!("enabled stability assessment missing")
+    };
+    assert_eq!(stability.current_ratio(), 1.0);
 }
 
 #[test]
 fn point_support_admission_fails_before_the_first_composite() {
+    crate::composition::reset_source_over_evaluation_count();
     for invalid in [f64::NAN, f64::NEG_INFINITY, f64::INFINITY] {
         assert_eq!(
             PointSupportDropFractionV1::try_new(invalid),
-            Err(PointSupportInputErrorV1::DropFractionNonFinite)
+            Err(PointSupportAdmissionErrorV1::DropFractionNonFinite)
         );
     }
     for invalid in [-f64::MIN_POSITIVE, 1.0 + f64::EPSILON] {
         assert_eq!(
             PointSupportDropFractionV1::try_new(invalid),
-            Err(PointSupportInputErrorV1::DropFractionOutsideUnitInterval)
+            Err(PointSupportAdmissionErrorV1::DropFractionOutsideUnitInterval)
         );
     }
     for invalid in [f64::NAN, f64::NEG_INFINITY, f64::INFINITY] {
@@ -633,10 +636,10 @@ fn point_support_admission_fails_before_the_first_composite() {
             PointSupportOccurrenceV1::try_new(
                 Srgb8::new([0; 3]),
                 invalid,
-                PointSupportRequiredFloorV1::NotRequested,
-                PointSupportHysteresisV1::Disabled,
+                PointSupportCriterionRequirementV1::NotRequested,
+                PointSupportStabilityPolicyV1::Disabled,
             ),
-            Err(PointSupportInputErrorV1::OpacityNonFinite)
+            Err(PointSupportAdmissionErrorV1::OpacityNonFinite)
         );
     }
     for invalid in [-f64::MIN_POSITIVE, 1.0 + f64::EPSILON] {
@@ -644,58 +647,71 @@ fn point_support_admission_fails_before_the_first_composite() {
             PointSupportOccurrenceV1::try_new(
                 Srgb8::new([0; 3]),
                 invalid,
-                PointSupportRequiredFloorV1::NotRequested,
-                PointSupportHysteresisV1::Disabled,
+                PointSupportCriterionRequirementV1::NotRequested,
+                PointSupportStabilityPolicyV1::Disabled,
             ),
-            Err(PointSupportInputErrorV1::OpacityOutsideUnitInterval)
+            Err(PointSupportAdmissionErrorV1::OpacityOutsideUnitInterval)
         );
     }
+    assert_eq!(crate::composition::source_over_evaluation_count(), 0);
 
     let occurrence = point_support_occurrence(
         [0; 3],
         1.0,
-        PointSupportRequiredFloorV1::NotRequested,
+        PointSupportCriterionRequirementV1::NotRequested,
         [255; 3],
-        PointSupportLegacyRatioAnchorV1::IdentityOneToOne,
     );
     crate::composition::reset_source_over_evaluation_count();
     assert_eq!(
         evaluate_point_support_v1(&[], &[Srgb8::new([255; 3])], point_support_drop(0.0)),
-        Err(PointSupportInputErrorV1::EmptyOccurrences)
+        Err(PointSupportEvaluationErrorV1::EmptyOccurrences)
     );
     assert_eq!(crate::composition::source_over_evaluation_count(), 0);
 
     crate::composition::reset_source_over_evaluation_count();
     assert_eq!(
         evaluate_point_support_v1(&[occurrence], &[], point_support_drop(0.0)),
-        Err(PointSupportInputErrorV1::EmptyBackdrops)
+        Err(PointSupportEvaluationErrorV1::EmptyBackdrops)
     );
     assert_eq!(crate::composition::source_over_evaluation_count(), 0);
 }
 
 #[test]
-fn point_support_opaque_diagnostic_matches_the_raw_legacy_metric_bits() {
-    let source = [0x00, 0x57, 0xBB];
-    let backdrop = [255; 3];
-    let occurrence = point_support_occurrence(
-        source,
-        1.0,
-        PointSupportRequiredFloorV1::RequiredLegacyWcagAaTextRatio,
-        backdrop,
-        PointSupportLegacyRatioAnchorV1::FourPointFiveToOne,
-    );
+fn point_support_preserves_exact_identity_for_every_three_to_one_criterion() {
+    let criteria = [
+        Wcag22CriterionV1::Sc143TextLargeScale,
+        Wcag22CriterionV1::Sc1411UiComponentOrState,
+        Wcag22CriterionV1::Sc1411GraphicalObject,
+    ];
+    let occurrences: Vec<_> = criteria
+        .iter()
+        .copied()
+        .map(|criterion| {
+            PointSupportOccurrenceV1::try_new(
+                Srgb8::new([0; 3]),
+                1.0,
+                PointSupportCriterionRequirementV1::Required(criterion),
+                PointSupportStabilityPolicyV1::Disabled,
+            )
+            .unwrap()
+        })
+        .collect();
     let report = evaluate_point_support_v1(
-        &[occurrence],
-        &[Srgb8::new(backdrop)],
+        &occurrences,
+        &[Srgb8::new([255; 3])],
         point_support_drop(1.0),
     )
     .unwrap();
-    let diagnostic = report.cells()[0].diagnostic();
-    let vc = crate::spaces::vc::ViewingConditions::srgb();
-    let raw = crate::semantic::recheck_against_u32(0x00FF_FFFF, &[0x0000_57BB], &vc).unwrap()[0];
 
-    assert_eq!(diagnostic.signed_candidate().to_bits(), raw.0.to_bits());
-    assert_eq!(diagnostic.wcag_ratio().to_bits(), raw.1.to_bits());
+    assert_eq!(report.status(), PointSupportStatusV1::Stable);
+    for (cell, expected) in report.cells().iter().zip(criteria) {
+        let PointSupportCriterionAssessmentV1::Required(assessment) = cell.criterion() else {
+            panic!("required exact criterion missing")
+        };
+        assert_eq!(assessment.criterion(), expected);
+        assert_eq!(assessment.decision(), Wcag22ApplicableDecisionV1::Pass);
+        assert_eq!(cell.composition().replay(), cell.composition().output_rgb());
+    }
 }
 
 proptest! {
