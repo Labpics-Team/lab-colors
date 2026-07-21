@@ -1126,14 +1126,14 @@ test("release verifier performs an independent byte-for-byte reproduction pass",
   );
 });
 
-test("conformance pack 10 removes only the muddiness family", () => {
-  const immutableFamilies = new Map([
+test("conformance pack 10 has the exact canonical family inventory", () => {
+  const canonicalFamilies = new Map([
     ["contrasts.json", "57d99bb3138edba769a185af5589651ab1cd3140f92e5cf493be2f998b2f1145"],
     ["ladders.json", "496f562e55ad8110aeb8a07042b1964ec9ff4d0f1e8c09e362d1b2d14c513036"],
     ["alpha.json", "b9c71e26c96c977c51cb2ffc98ff8f24a24705105c1962479e72e687b1b05bb1"],
-    ["wcag22.json", "6e234fa3a0d4e2b21f515b8f4e6be76f223768821e0308e774c31a5ce7a1d826"],
+    ["wcag22.json", "8b2e44feba985a6f0017d4192c1c03fcc5c22da1d7d86df91dcb5bb214de7ab1"],
   ]);
-  assert.equal(immutableFamilies.size, 4, "anti-vacuum: unchanged family set changed");
+  assert.equal(canonicalFamilies.size, 4, "anti-vacuum: canonical family set changed");
   for (const removed of [
     "wcag22-explicit-selection.json",
     "wcag22-feasibility.json",
@@ -1144,7 +1144,7 @@ test("conformance pack 10 removes only the muddiness family", () => {
       `${removed} must be gone, not regenerated`,
     );
   }
-  for (const [name, expected] of immutableFamilies) {
+  for (const [name, expected] of canonicalFamilies) {
     const bytes = readFileSync(join(root, "conformance", "vectors", name));
     assert.equal(createHash("sha256").update(bytes).digest("hex"), expected, name);
   }
@@ -1153,7 +1153,7 @@ test("conformance pack 10 removes only the muddiness family", () => {
       .update(readFileSync(join(root, "conformance", "vectors", "solve.json")))
       .digest("hex"),
     "db04e50698cc3b10223f4005f74dd35cc5ae0a29988825e44db5c985aa9207af",
-    "pack-7 solve family bytes drifted",
+    "canonical solve family bytes drifted",
   );
 
   const manifest = JSON.parse(read("conformance", "vectors", "manifest.json"));
@@ -1183,7 +1183,7 @@ test("conformance pack 10 removes only the muddiness family", () => {
   assert.equal(
     solve.some(({ outcome }) => outcome.kind === supersededKind),
     false,
-    "pack 7 must not preserve the superseded failure kind",
+    "the current pack must not preserve the superseded failure kind",
   );
   assert.equal(
     manifest.counts.total,

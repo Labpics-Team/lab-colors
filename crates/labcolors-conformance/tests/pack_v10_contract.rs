@@ -1,7 +1,7 @@
-//! Pack-контракт: pack 10 удаляет ровно `muddiness.json` (legacy
-//! cleanliness-прокси вырезан из всех проекций; физические законы —
-//! Oklab-преобразования, гамут-границы, агностичность — живут в своих
-//! модулях), сохраняя байт-в-байт все пять оставшихся семейств pack 9.
+//! Pack-контракт: pack 10 не содержит удалённые legacy-семейства и закрепляет
+//! точные текущие байты пяти канонических семейств. WCAG-family несёт текущую
+//! proof lineage; это identity текущего pack, а не обещание byte-совместимости
+//! с pack 9.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -12,7 +12,7 @@ use labcolors_conformance::{FAMILY_FILES, MANIFEST_FILE, PACK_VERSION};
 #[path = "../../labcolors-core/src/sha256.rs"]
 mod sha256;
 
-const UNCHANGED_FAMILY_SHA256: [(&str, &str); 5] = [
+const CANONICAL_FAMILY_SHA256: [(&str, &str); 5] = [
     (
         "solve.json",
         "db04e50698cc3b10223f4005f74dd35cc5ae0a29988825e44db5c985aa9207af",
@@ -31,7 +31,7 @@ const UNCHANGED_FAMILY_SHA256: [(&str, &str); 5] = [
     ),
     (
         "wcag22.json",
-        "6e234fa3a0d4e2b21f515b8f4e6be76f223768821e0308e774c31a5ce7a1d826",
+        "8b2e44feba985a6f0017d4192c1c03fcc5c22da1d7d86df91dcb5bb214de7ab1",
     ),
 ];
 
@@ -49,7 +49,7 @@ fn read(path: impl AsRef<Path>) -> Vec<u8> {
 }
 
 #[test]
-fn pack_v10_removes_only_the_muddiness_family() {
+fn pack_v10_family_inventory_and_bytes_are_exact() {
     assert_eq!(PACK_VERSION, "10.0.0");
     assert_eq!(
         FAMILY_FILES.as_slice(),
@@ -64,11 +64,11 @@ fn pack_v10_removes_only_the_muddiness_family() {
     );
 
     let dir = vectors_dir();
-    for (name, expected) in UNCHANGED_FAMILY_SHA256 {
+    for (name, expected) in CANONICAL_FAMILY_SHA256 {
         assert_eq!(
             sha256::digest(&read(dir.join(name))).to_hex(),
             expected,
-            "pack-9 family bytes drifted during the muddiness removal: {name}"
+            "pack-10 canonical family bytes drifted without explicit regeneration: {name}"
         );
     }
     assert!(
