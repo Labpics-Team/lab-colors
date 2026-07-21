@@ -13,31 +13,49 @@ use crate::appearance::SurfaceInputPortId;
 
 /// Runtime instance/epoch одного атомарного потока наблюдений.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) struct ObservationStreamId(u32);
+pub struct ObservationStreamId(u32);
 
 impl ObservationStreamId {
-    pub(crate) const fn new(raw: u32) -> Self {
+    /// Construct one client-owned opaque observation-stream identity.
+    pub const fn new(raw: u32) -> Self {
         Self(raw)
+    }
+
+    /// Exact transport value. It has identity semantics only.
+    pub const fn value(self) -> u32 {
+        self.0
     }
 }
 
 /// Монотонная revision внутри одного [`ObservationStreamId`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) struct Revision(u64);
+pub struct Revision(u64);
 
 impl Revision {
-    pub(crate) const fn new(raw: u64) -> Self {
+    /// Construct one monotonic revision inside an observation stream.
+    pub const fn new(raw: u64) -> Self {
         Self(raw)
+    }
+
+    /// Exact transport value.
+    pub const fn value(self) -> u64 {
+        self.0
     }
 }
 
 /// Opaque provenance одной одновременно наблюдённой tuple.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) struct ScenarioId(u32);
+pub struct ScenarioId(u32);
 
 impl ScenarioId {
-    pub(crate) const fn new(raw: u32) -> Self {
+    /// Construct one client-owned opaque scenario identity.
+    pub const fn new(raw: u32) -> Self {
         Self(raw)
+    }
+
+    /// Exact transport value. It has identity semantics only.
+    pub const fn value(self) -> u32 {
+        self.0
     }
 }
 
@@ -53,22 +71,90 @@ impl UnknownReasonId {
 
 /// Raw binding одного surface-input внутри коррелированного scenario.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct SurfaceInputBinding {
+pub struct SurfaceInputBinding {
     pub(crate) port: SurfaceInputPortId,
     pub(crate) value: Srgb8,
 }
 
+impl SurfaceInputBinding {
+    pub const fn new(port: SurfaceInputPortId, value: Srgb8) -> Self {
+        Self { port, value }
+    }
+
+    pub const fn port(self) -> SurfaceInputPortId {
+        self.port
+    }
+
+    pub const fn value(self) -> Srgb8 {
+        self.value
+    }
+}
+
 /// Raw tuple: все bindings были наблюдены одновременно.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ScenarioInput {
+pub struct ScenarioInput {
     pub(crate) id: ScenarioId,
     pub(crate) bindings: Vec<SurfaceInputBinding>,
 }
 
+impl ScenarioInput {
+    pub fn new(id: ScenarioId, bindings: Vec<SurfaceInputBinding>) -> Self {
+        Self { id, bindings }
+    }
+
+    pub const fn id(&self) -> ScenarioId {
+        self.id
+    }
+
+    pub fn bindings(&self) -> &[SurfaceInputBinding] {
+        &self.bindings
+    }
+}
+
 /// Raw collection до проверки schema и канонизации.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ObservedScenarioSetInput {
+pub struct ObservedScenarioSetInput {
     pub(crate) scenarios: Vec<ScenarioInput>,
+}
+
+impl ObservedScenarioSetInput {
+    pub fn new(scenarios: Vec<ScenarioInput>) -> Self {
+        Self { scenarios }
+    }
+
+    pub fn scenarios(&self) -> &[ScenarioInput] {
+        &self.scenarios
+    }
+}
+
+/// Canonical immutable surface-input schema shared by admission and bound
+/// evaluators. Construction sorts opaque identities and rejects duplicates.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ObservationSchemaV1 {
+    ports: Arc<[SurfaceInputPortId]>,
+}
+
+impl ObservationSchemaV1 {
+    pub fn try_new(
+        mut ports: Vec<SurfaceInputPortId>,
+    ) -> Result<Self, ObservationError> {
+        if ports.is_empty() {
+            return Err(ObservationError::EmptyCompiledSurfaceInputSchema);
+        }
+        ports.sort_unstable();
+        if let Some(duplicate) = ports.windows(2).find(|window| window[0] == window[1]) {
+            return Err(ObservationError::DuplicateCompiledSurfaceInputPort {
+                input: duplicate[0],
+            });
+        }
+        Ok(Self {
+            ports: Arc::from(ports.into_boxed_slice()),
+        })
+    }
+
+    pub fn ports(&self) -> &[SurfaceInputPortId] {
+        &self.ports
+    }
 }
 
 /// Raw payload одной revision.
@@ -126,29 +212,66 @@ impl ObservedScenarioSet {
 /// Schema и canonical set используют immutable shared backing: clone не копирует
 /// tuples/provenance, но equality остаётся content-based.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct RevisionBoundObservationV1 {
+pub struct RevisionBoundObservationV1 {
     stream: ObservationStreamId,
-    schema: Arc<[SurfaceInputPortId]>,
+    schema: ObservationSchemaV1,
     revision: Revision,
     set: ObservedScenarioSet,
 }
 
 impl RevisionBoundObservationV1 {
-    pub(crate) const fn stream(&self) -> ObservationStreamId {
+    pub const fn stream(&self) -> ObservationStreamId {
         self.stream
     }
 
-    pub(crate) fn schema(&self) -> &[SurfaceInputPortId] {
+    pub const fn admitted_schema(&self) -> &ObservationSchemaV1 {
         &self.schema
     }
 
-    pub(crate) const fn revision(&self) -> Revision {
+    pub fn schema(&self) -> &[SurfaceInputPortId] {
+        self.schema.ports()
+    }
+
+    pub const fn revision(&self) -> Revision {
         self.revision
     }
 
     pub(crate) const fn set(&self) -> &ObservedScenarioSet {
         &self.set
     }
+
+    pub fn physical_case_count(&self) -> usize {
+        self.set.cases().len()
+    }
+
+    pub fn physical_bindings(&self, case_index: usize) -> Option<&[Srgb8]> {
+        self.set.cases().get(case_index).map(PhysicalScenario::bindings)
+    }
+
+    pub fn provenance(&self, case_index: usize) -> Option<&[ScenarioId]> {
+        self.set
+            .cases()
+            .get(case_index)
+            .map(PhysicalScenario::provenance)
+    }
+}
+
+/// Admit one declared immutable snapshot through the same canonicalizer used
+/// by the stateful observation store. This binds values to a stream/revision;
+/// it does not claim that the revision is still current.
+pub fn admit_observation_snapshot_v1(
+    schema: ObservationSchemaV1,
+    stream: ObservationStreamId,
+    revision: Revision,
+    scenarios: ObservedScenarioSetInput,
+) -> Result<RevisionBoundObservationV1, ObservationError> {
+    let set = admit_scenarios(schema.ports(), scenarios)?;
+    Ok(RevisionBoundObservationV1 {
+        stream,
+        schema,
+        revision,
+        set,
+    })
 }
 
 /// Revision-bound факт отсутствия текущего observation. Он не содержит previous
@@ -216,7 +339,7 @@ pub(crate) enum UpdateDisposition {
 
 /// Typed admission failures; prepare не меняет raw head.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum ObservationError {
+pub enum ObservationError {
     EmptyCompiledSurfaceInputSchema,
     DuplicateCompiledSurfaceInputPort {
         input: SurfaceInputPortId,
@@ -325,38 +448,26 @@ impl PreparedObservationUpdateV1<'_> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ObservationState {
     stream: ObservationStreamId,
-    compiled_surface_input_schema: Arc<[SurfaceInputPortId]>,
+    compiled_surface_input_schema: ObservationSchemaV1,
     head: ObservationHead,
 }
 
 impl ObservationState {
     pub(crate) fn new(
         stream: ObservationStreamId,
-        mut compiled_surface_input_schema: Vec<SurfaceInputPortId>,
+        compiled_surface_input_schema: Vec<SurfaceInputPortId>,
     ) -> Result<Self, ObservationError> {
-        if compiled_surface_input_schema.is_empty() {
-            return Err(ObservationError::EmptyCompiledSurfaceInputSchema);
-        }
-        compiled_surface_input_schema.sort_unstable();
-        if let Some(duplicate) = compiled_surface_input_schema
-            .windows(2)
-            .find(|window| window[0] == window[1])
-        {
-            return Err(ObservationError::DuplicateCompiledSurfaceInputPort {
-                input: duplicate[0],
-            });
-        }
+        let compiled_surface_input_schema =
+            ObservationSchemaV1::try_new(compiled_surface_input_schema)?;
         Ok(Self {
             stream,
-            compiled_surface_input_schema: Arc::from(
-                compiled_surface_input_schema.into_boxed_slice(),
-            ),
+            compiled_surface_input_schema,
             head: ObservationHead::Empty,
         })
     }
 
     pub(crate) fn compiled_surface_input_schema(&self) -> &[SurfaceInputPortId] {
-        &self.compiled_surface_input_schema
+        self.compiled_surface_input_schema.ports()
     }
 
     pub(crate) const fn head(&self) -> &ObservationHead {
@@ -367,7 +478,7 @@ impl ObservationState {
         match &self.head {
             ObservationHead::Observed { revision, set } => Some(RevisionBoundObservationV1 {
                 stream: self.stream,
-                schema: Arc::clone(&self.compiled_surface_input_schema),
+                schema: self.compiled_surface_input_schema.clone(),
                 revision: *revision,
                 set: set.clone(),
             }),
@@ -401,7 +512,7 @@ impl ObservationState {
 
         let payload = match update.payload {
             ObservationPayloadInput::Scenarios(raw) => CanonicalPayload::Observed(admit_scenarios(
-                &self.compiled_surface_input_schema,
+                self.compiled_surface_input_schema.ports(),
                 raw,
             )?),
             ObservationPayloadInput::Unknown(reason) => CanonicalPayload::Unknown(reason),
@@ -430,7 +541,7 @@ impl ObservationState {
             CanonicalPayload::Observed(set) => {
                 PreparedObservationPayloadV1::AppliedObserved(RevisionBoundObservationV1 {
                     stream: self.stream,
-                    schema: Arc::clone(&self.compiled_surface_input_schema),
+                    schema: self.compiled_surface_input_schema.clone(),
                     revision: update.revision,
                     set,
                 })
