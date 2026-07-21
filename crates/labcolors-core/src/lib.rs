@@ -11,6 +11,8 @@ pub(crate) mod composition;
 pub(crate) mod spaces;
 
 pub use srgb8::Srgb8;
+pub use appearance::SourceOverCertificateV1;
+pub use composition::CompositionProfileV1;
 
 pub(crate) mod accent_balance;
 pub mod alpha;
@@ -177,12 +179,12 @@ pub use numerics::{
     StableNumericalOutcomeV2, numerical_capability_manifest_v2, numerical_registry_v2,
 };
 pub use recheck::{
-    POINT_SUPPORT_CAUSE_REQUIRED_RATIO_V1, POINT_SUPPORT_CAUSE_RETAINED_SURPLUS_V1,
-    PointSupportCellV1, PointSupportDropFractionV1, PointSupportHysteresisAssessmentV1,
-    PointSupportHysteresisV1, PointSupportInputErrorV1, PointSupportLegacyContrastDiagnosticV1,
-    PointSupportLegacyPolarityV1, PointSupportLegacyRatioAnchorV1, PointSupportOccurrenceV1,
-    PointSupportReportV1, PointSupportRequiredFloorStateV1, PointSupportRequiredFloorV1,
-    PointSupportRetainedSurplusV1, PointSupportStatusV1, evaluate_point_support_v1,
+    PointSupportAdmissionErrorV1, PointSupportCellV1, PointSupportCriterionAssessmentV1,
+    PointSupportCriterionRequirementV1, PointSupportDropFractionV1,
+    PointSupportEvaluationErrorV1, PointSupportOccurrenceV1, PointSupportReportV1,
+    PointSupportStabilityAssessmentV1, PointSupportStabilityEvidenceV1,
+    PointSupportStabilityPolicyV1, PointSupportStabilityProfileV1, PointSupportStatusV1,
+    PointSupportWcag22AssessmentV1, evaluate_point_support_v1,
 };
 pub use semantic::{
     GlowIndeterminateResolved, NamedRoleTable, ResolveSetError, ResolveSetErrorKind, Resolved,
