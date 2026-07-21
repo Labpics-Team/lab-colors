@@ -654,7 +654,7 @@ pub struct PointSupportCellV1 {
     opacity_bits: u64,
     backdrop: Srgb8,
     visible: Srgb8,
-    criterion: PointSupportRequiredFloorV1,
+    required_floor: PointSupportRequiredFloorV1,
     required_floor_state: PointSupportRequiredFloorStateV1,
     diagnostic: PointSupportLegacyContrastDiagnosticV1,
     hysteresis: PointSupportHysteresisAssessmentV1,
@@ -685,8 +685,8 @@ impl PointSupportCellV1 {
         self.visible
     }
 
-    pub const fn criterion(self) -> PointSupportRequiredFloorV1 {
-        self.criterion
+    pub const fn required_floor(self) -> PointSupportRequiredFloorV1 {
+        self.required_floor
     }
 
     pub const fn required_floor_state(self) -> PointSupportRequiredFloorStateV1 {
