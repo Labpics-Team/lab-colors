@@ -57,7 +57,7 @@ SITE_ID = "point-support-retained-reference-surplus-v1"
 SOURCE_BINDING_LAW = "point-support-rust-whole-file-semantic-cone-v2"
 SOURCE_BINDING_DOMAIN = b"labcolors.point-support.rust-whole-file-semantic-cone.v2"
 EXPECTED_SOURCE_CAPSULE_SHA256 = (
-    "604e382c156a57489fe79f8f7dc233e3a91985c94563317915a474240429f34a"
+    "a00578504687d6396c56e34013bee3d21970984997a97de17d9b2b6aadacaa9a"
 )
 EXPECTED_Q55_PROOF_SHA256 = (
     "d269e9de689009bb955788bf8762fce56680bf616fc0459b6526a367875a6a08"
@@ -188,7 +188,7 @@ def verify_source_binding() -> tuple[str, int]:
         (POINT_SOURCE, b"matches!(self.decision, PointSupportStabilityDecisionV1::NotRetained)", b"false"),
         (POINT_SOURCE, b"matches!(self, Self::RequiredFailure(_))", b"false"),
         (POINT_SOURCE, b"matches!(self, Self::Failure(_))", b"false"),
-        (POINT_SOURCE, b"            criterion,\n            stability,\n        }\n    }\n\n    pub(crate) const fn occurrence", b"            criterion,\n            stability: PointSupportStabilityPolicyV1::Disabled,\n        }\n    }\n\n    pub(crate) const fn occurrence"),
+        (POINT_SOURCE, b"            criterion,\n            stability,\n        }\n    }\n}\n\n#[derive(Debug, Clone, PartialEq, Eq)]", b"            criterion,\n            stability: PointSupportStabilityPolicyV1::Disabled,\n        }\n    }\n}\n\n#[derive(Debug, Clone, PartialEq, Eq)]"),
         (POINT_SOURCE, b"NumericalSiteIdV2::PointSupportRetainedReferenceSurplusV1;", b"NumericalSiteIdV2::Wcag22Srgb8ContrastV1;"),
         (POINT_SOURCE, b"let current_distance = reference_distance(current_measurement)?;", b"let current_distance = baseline.distance;"),
         (POINT_SOURCE, b"Ok(assessment.bind(observation))", b"Ok(assessment.bind_unchecked(observation))"),

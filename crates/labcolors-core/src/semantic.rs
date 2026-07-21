@@ -3711,6 +3711,27 @@ pub fn recheck_against(
         .collect()
 }
 
+/// Compute the complete flat result cardinality before the first forward or
+/// metric call. This is the arithmetic/allocator safety floor; the lower product
+/// limit admitted by the versioned public resource profile remains owned by
+/// #429 and must not be invented here.
+fn checked_recheck_output_len(backgrounds: usize, foregrounds: usize) -> Result<usize, String> {
+    backgrounds
+        .checked_mul(foregrounds)
+        .and_then(|cells| cells.checked_mul(2))
+        .ok_or_else(|| "recheck batch cardinality exceeds platform capacity".to_owned())
+}
+
+fn reserve_recheck_entries<T>(
+    values: &mut Vec<T>,
+    entries: usize,
+    buffer: &'static str,
+) -> Result<(), String> {
+    values.try_reserve_exact(entries).map_err(|_| {
+        format!("recheck batch resource exhausted while reserving {buffer} ({entries} entries)")
+    })
+}
+
 /// Multi-background recheck: the `(lc, wcag_ratio)` each foreground achieves
 /// against EACH of several background samples, sharing every foreground's
 /// forward across all samples. The reactive controller's worst-case loop
@@ -3732,15 +3753,21 @@ pub fn recheck_against_multi(
     fg_hexes: &[&str],
     _vc: &ViewingConditions,
 ) -> Result<Vec<f64>, String> {
+    // Preflight the complete matrix and both allocations before the first
+    // display-forward. Overflow/allocator refusal is atomic: no partial evidence.
+    let output_len = checked_recheck_output_len(bg_hexes.len(), fg_hexes.len())?;
+    let mut fg_pre = Vec::new();
+    reserve_recheck_entries(&mut fg_pre, fg_hexes.len(), "foreground forwards")?;
+    let mut out = Vec::new();
+    reserve_recheck_entries(&mut out, output_len, "result lanes")?;
+
     // Precompute each foreground's background-independent forward exactly once,
     // through the SAME `hex_forward` `recheck_against` uses — so the shared-forward
     // path guarantees byte-identity between the two entry points by construction.
-    let fg_pre: Vec<f64> = fg_hexes
-        .iter()
-        .map(|fg_hex| hex_forward(fg_hex))
-        .collect::<Result<_, String>>()?;
+    for fg_hex in fg_hexes {
+        fg_pre.push(hex_forward(fg_hex)?);
+    }
 
-    let mut out = Vec::with_capacity(bg_hexes.len() * fg_hexes.len() * 2);
     for bg_hex in bg_hexes {
         let rl_bg = hex_forward(bg_hex)?;
         for &rl_fg in &fg_pre {
@@ -3824,12 +3851,17 @@ pub fn recheck_against_multi_u32(
     fgs: &[u32],
     _vc: &ViewingConditions,
 ) -> Result<Vec<f64>, String> {
-    let fg_pre: Vec<f64> = fgs
-        .iter()
-        .map(|&fg| u32_forward(fg))
-        .collect::<Result<_, String>>()?;
+    // Same atomic preflight as the string sibling. Keeping both transports on
+    // this helper makes the overflow/resource law one SSOT.
+    let output_len = checked_recheck_output_len(bgs.len(), fgs.len())?;
+    let mut fg_pre = Vec::new();
+    reserve_recheck_entries(&mut fg_pre, fgs.len(), "foreground forwards")?;
+    let mut out = Vec::new();
+    reserve_recheck_entries(&mut out, output_len, "result lanes")?;
+    for &fg in fgs {
+        fg_pre.push(u32_forward(fg)?);
+    }
 
-    let mut out = Vec::with_capacity(bgs.len() * fgs.len() * 2);
     for &bg in bgs {
         let rl_bg = u32_forward(bg)?;
         for &rl_fg in &fg_pre {
@@ -5374,6 +5406,14 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn recheck_batch_cardinality_is_checked_before_allocation() {
+        assert_eq!(checked_recheck_output_len(0, usize::MAX).unwrap(), 0);
+        assert_eq!(checked_recheck_output_len(2, 3).unwrap(), 12);
+        assert!(checked_recheck_output_len(usize::MAX, 2).is_err());
+        assert!(checked_recheck_output_len(usize::MAX / 2 + 1, 1).is_err());
     }
 
     #[test]

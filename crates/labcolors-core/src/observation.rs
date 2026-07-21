@@ -77,34 +77,10 @@ pub(crate) struct ScenarioInput {
     pub(crate) bindings: Vec<SurfaceInputBinding>,
 }
 
-impl ScenarioInput {
-    pub(crate) fn new(id: ScenarioId, bindings: Vec<SurfaceInputBinding>) -> Self {
-        Self { id, bindings }
-    }
-
-    pub(crate) const fn id(&self) -> ScenarioId {
-        self.id
-    }
-
-    pub(crate) fn bindings(&self) -> &[SurfaceInputBinding] {
-        &self.bindings
-    }
-}
-
 /// Raw scenario collection before schema validation and canonicalization.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ObservedScenarioSetInput {
     pub(crate) scenarios: Vec<ScenarioInput>,
-}
-
-impl ObservedScenarioSetInput {
-    pub(crate) fn new(scenarios: Vec<ScenarioInput>) -> Self {
-        Self { scenarios }
-    }
-
-    pub(crate) fn scenarios(&self) -> &[ScenarioInput] {
-        &self.scenarios
-    }
 }
 
 /// Raw payload of one revision.
@@ -353,6 +329,7 @@ pub(crate) struct PreparedUnknownV1<'owner, Owner> {
 }
 
 impl<'owner, Owner> PreparedUnknownV1<'owner, Owner> {
+    #[cfg(test)]
     pub(crate) const fn unknown(&self) -> RevisionBoundUnknownV1 {
         self.unknown
     }

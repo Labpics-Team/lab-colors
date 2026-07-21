@@ -46,6 +46,7 @@ impl SurfaceInputPortId {
     }
 
     /// Exact transport value. It has identity semantics only.
+    #[cfg(test)]
     pub(crate) const fn value(self) -> u32 {
         self.0
     }
@@ -92,6 +93,7 @@ impl OccurrenceId {
     }
 
     /// Exact transport value. It has identity semantics only.
+    #[cfg(test)]
     pub(crate) const fn value(self) -> u32 {
         self.0
     }
@@ -1073,11 +1075,13 @@ pub(crate) struct SourceOverCertificateV1 {
 
 impl SourceOverCertificateV1 {
     /// Replay the exact code-owned composition law certified by this value.
+    #[cfg(test)]
     pub(crate) fn replay(&self) -> [u8; 3] {
         self.profile
             .composite(self.subject_rgb, self.subject_opacity, self.backdrop_rgb)
     }
 
+    #[cfg(test)]
     pub(crate) const fn profile(&self) -> CompositionProfileV1 {
         self.profile
     }
@@ -1088,10 +1092,6 @@ impl SourceOverCertificateV1 {
 
     pub(crate) const fn subject_opacity_bits(&self) -> u64 {
         self.subject_opacity.bits()
-    }
-
-    pub(crate) const fn subject_opacity(&self) -> f64 {
-        self.subject_opacity.value()
     }
 
     pub(crate) const fn backdrop_rgb(&self) -> [u8; 3] {

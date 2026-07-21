@@ -27,13 +27,16 @@ export interface AdaptThemeOptions {
    * chain. Without it computed observation is `Unknown`; no white base is invented.
    */
   canvas?: string;
-  /** Fraction of a role's contrast surplus that may be lost before a re-solve. Default `0.2`. */
+  /**
+   * Finite fraction of a role's contrast surplus that may be lost before a
+   * re-solve, in the closed interval `[0, 1]`. Default `0.2`.
+   */
   dropFraction?: number;
-  /** A breach must persist this many ms before re-solving. Default `120`. */
+  /** Finite non-negative breach duration in ms. Default `120`. */
   sustainMs?: number;
-  /** Minimum ms between re-solves. Default `250`. */
+  /** Finite non-negative minimum time between re-solves in ms. Default `250`. */
   dwellMs?: number;
-  /** Crossfade duration in ms. Default `280`. */
+  /** Finite non-negative crossfade duration in ms. Default `280`. */
   easeMs?: number;
   /** Override reduced-motion detection. */
   reducedMotion?: boolean;

@@ -120,14 +120,6 @@ impl PointSupportOccurrenceRequirementV1 {
             stability,
         }
     }
-
-    pub(crate) const fn occurrence(self) -> OccurrenceId {
-        self.occurrence
-    }
-
-    pub(crate) const fn paint(self) -> EncodedPointPaintV1 {
-        self.paint
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -304,10 +296,6 @@ impl CompiledPointSupportRecheckV1 {
         })
     }
 
-    pub(crate) const fn composition_profile(&self) -> CompositionProfileV1 {
-        self.composition_profile
-    }
-
     pub(crate) fn surface_schema(&self) -> &[SurfaceInputPortId] {
         &self.surface_schema
     }
@@ -385,12 +373,6 @@ pub(crate) struct PointSupportReferenceDistanceQ55V1 {
     offset_cleared_denominator_q55: u64,
 }
 
-impl PointSupportReferenceDistanceQ55V1 {
-    pub(crate) const fn orientation(self) -> PointSupportReferenceOrientationV1 {
-        self.orientation
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct PointSupportSignedRationalV1 {
     numerator: i128,
@@ -411,16 +393,6 @@ impl PointSupportSignedRationalV1 {
 pub(crate) struct PointSupportRationalV1 {
     numerator: u128,
     denominator: u128,
-}
-
-impl PointSupportRationalV1 {
-    pub(crate) const fn numerator(self) -> u128 {
-        self.numerator
-    }
-
-    pub(crate) const fn denominator(self) -> u128 {
-        self.denominator
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -481,6 +453,10 @@ impl PointSupportStabilityEvidenceV1 {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "inline stability evidence keeps evaluation allocation-complete before the first physical composition; heap indirection would break that evidence boundary"
+)]
 pub(crate) enum PointSupportStabilityAssessmentV1 {
     Disabled,
     Evaluated(PointSupportStabilityEvidenceV1),
@@ -1173,6 +1149,35 @@ mod tests {
         assert_eq!(
             compare_nonnegative_rationals(1, u128::MAX, 2, u128::MAX),
             Ordering::Less
+        );
+    }
+
+    #[test]
+    fn exact_reference_witness_components_remain_typed_and_nonzero() {
+        let distance = PointSupportReferenceDistanceQ55V1 {
+            orientation: PointSupportReferenceOrientationV1::ForegroundLighter,
+            separated_gap_q55: 9,
+            offset_cleared_denominator_q55: 5,
+        };
+        assert_eq!(
+            distance.orientation,
+            PointSupportReferenceOrientationV1::ForegroundLighter
+        );
+
+        let current = anchor_surplus(PointSupportStabilityAnchorV1::Ratio3, distance).unwrap();
+        assert_eq!(current.numerator(), 170);
+        assert_eq!(current.denominator(), 5);
+
+        let required = required_surplus(
+            current,
+            PointSupportDropFractionV1::try_from_basis_points(2_500).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(required.numerator, 1_275_000);
+        assert_eq!(required.denominator, 50_000);
+        assert_eq!(
+            classify_retained(current, required),
+            PointSupportStabilityDecisionV1::Retained
         );
     }
 }

@@ -1,5 +1,7 @@
 use crate::Srgb8;
-use crate::appearance::{EncodedPointPaintV1, OccurrenceId, PaintId, SurfaceInputPortId};
+use crate::appearance::{
+    EncodedPointPaintV1, OccurrenceId, PaintId, PhysicalProgramIdentityV1, SurfaceInputPortId,
+};
 use crate::composition::{AdmittedOpacityV1, CompositionProfileV1};
 use crate::observation::{
     ObservationPayloadInput, ObservationStreamId, ObservationUpdateInput, ObservedScenarioSetInput,
@@ -71,10 +73,7 @@ fn observed_update(
                     id: ScenarioId::new(id),
                     bindings: bindings
                         .into_iter()
-                        .map(|(port, value)| SurfaceInputBinding {
-                            port,
-                            value: Srgb8::new(value),
-                        })
+                        .map(|(port, value)| SurfaceInputBinding::new(port, Srgb8::new(value)))
                         .collect(),
                 })
                 .collect(),
@@ -104,6 +103,8 @@ fn multi_paint_declared_order_and_direct_provenance_are_preserved() {
         ),
     ]);
     assert_eq!(requirements.surface_schema(), &[SURFACE_A, SURFACE_B]);
+    assert_eq!(SURFACE_A.value(), 21);
+    assert_eq!(OCCURRENCE_A.value(), 11);
 
     let mut session = PointSupportSessionV1::new(STREAM, requirements);
     let PointSupportSessionStateV1::Ready { current } = session
@@ -126,12 +127,15 @@ fn multi_paint_declared_order_and_direct_provenance_are_preserved() {
     );
     let cells: Vec<_> = report.cells().collect();
     assert_eq!(cells.len(), 2);
+    assert_eq!(cells[0].case_index(), 0);
     assert_eq!(cells[0].occurrence(), OCCURRENCE_B);
     assert_eq!(cells[0].occurrence_index(), 0);
+    assert_eq!(cells[0].surface(), SURFACE_B);
     assert_eq!(cells[0].paint().id(), PAINT_B);
     assert_eq!(cells[0].composition().backdrop_rgb(), [255; 3]);
     assert_eq!(cells[1].occurrence(), OCCURRENCE_A);
     assert_eq!(cells[1].occurrence_index(), 1);
+    assert_eq!(cells[1].surface(), SURFACE_A);
     assert_eq!(cells[1].paint().id(), PAINT_A);
     assert_eq!(cells[1].composition().backdrop_rgb(), [0; 3]);
     assert_eq!(cells[0].provenance(), &[ScenarioId::new(9)]);
@@ -186,12 +190,23 @@ fn exact_wcag_and_stability_are_independent_axes_and_baseline_binds_once() {
         report.composition_profile(),
         CompositionProfileV1::EncodedSrgb8SourceOverV1
     );
+    assert_eq!(
+        report.composition_profile().key(),
+        "encoded-srgb8-source-over-v1"
+    );
+    assert_eq!(
+        report.physical_program(),
+        PhysicalProgramIdentityV1::SolidOpacityOverSurfaceEncodedSrgb8V1
+    );
     let cell = report.cells().next().unwrap();
     assert_eq!(cell.provenance(), &[ScenarioId::new(44)]);
+    let exact = cell.exact();
     assert!(matches!(
-        cell.exact(),
+        exact,
         PointSupportExactAssessmentV1::RequiredPass(_)
     ));
+    assert_eq!(exact.invocation(), Some(Srgb8::new([255; 3])));
+    assert_eq!(exact.actual(), Some(Srgb8::new([255; 3])));
     let PointSupportCriterionAssessmentV1::Required(criterion) = cell.criterion() else {
         panic!("required criterion evidence missing");
     };
@@ -209,7 +224,18 @@ fn exact_wcag_and_stability_are_independent_axes_and_baseline_binds_once() {
     assert_eq!(stability.anchor(), PointSupportStabilityAnchorV1::Ratio3);
     assert_eq!(stability.drop_fraction(), drop_all);
     assert!(stability.current_surplus().numerator() < 0);
+    assert_ne!(stability.current_surplus().denominator(), 0);
+    assert_eq!(stability.baseline_composition().backdrop_rgb(), [0; 3]);
     assert_eq!(cell.composition().profile(), report.composition_profile());
+    assert!(report.first_exact_failure().is_none());
+    assert_eq!(
+        report.first_required_failure().unwrap().occurrence(),
+        OCCURRENCE_A
+    );
+    assert_eq!(
+        report.first_stability_failure().unwrap().occurrence(),
+        OCCURRENCE_A
+    );
 
     session
         .update(observed_update(2, [(45, vec![(SURFACE_A, [255; 3])])]))
@@ -356,16 +382,71 @@ fn wholly_inactive_plan_is_rejected_but_an_inactive_composition_cell_is_allowed(
 
 #[test]
 fn drop_fraction_is_closed_and_exact() {
-    assert_eq!(
-        PointSupportDropFractionV1::try_from_basis_points(0).unwrap(),
-        PointSupportDropFractionV1::NONE
-    );
-    assert_eq!(
-        PointSupportDropFractionV1::try_from_basis_points(10_000).unwrap(),
-        PointSupportDropFractionV1::ALL
-    );
+    let none = PointSupportDropFractionV1::try_from_basis_points(0).unwrap();
+    assert_eq!(none, PointSupportDropFractionV1::NONE);
+    assert_eq!(none.basis_points(), 0);
+    let all = PointSupportDropFractionV1::try_from_basis_points(10_000).unwrap();
+    assert_eq!(all, PointSupportDropFractionV1::ALL);
+    assert_eq!(all.basis_points(), 10_000);
     assert_eq!(
         PointSupportDropFractionV1::try_from_basis_points(10_001),
         Err(PointSupportCompileErrorV1::DropFractionOutsideBasisPointRange)
     );
+}
+
+#[test]
+fn every_stability_anchor_survives_compile_evaluate_and_typed_evidence() {
+    let anchors = [
+        PointSupportStabilityAnchorV1::Identity1,
+        PointSupportStabilityAnchorV1::Ratio3,
+        PointSupportStabilityAnchorV1::Ratio4Point5,
+    ];
+    let shared_paint = paint(PAINT_A, [0; 3], 1.0);
+    let requirements = compiled(
+        anchors
+            .iter()
+            .copied()
+            .enumerate()
+            .map(|(index, anchor)| {
+                occurrence(
+                    OccurrenceId::new(index as u32 + 100),
+                    SURFACE_A,
+                    shared_paint,
+                    None,
+                    PointSupportCriterionRequirementV1::NotRequested,
+                    PointSupportStabilityPolicyV1::RetainBaselineReferenceSurplus {
+                        baseline_backdrop: Srgb8::new([255; 3]),
+                        anchor,
+                        drop_fraction: PointSupportDropFractionV1::NONE,
+                    },
+                )
+            })
+            .collect(),
+    );
+    let mut session = PointSupportSessionV1::new(STREAM, requirements);
+    let PointSupportSessionStateV1::Ready { current } = session
+        .update(observed_update(1, [(91, vec![(SURFACE_A, [255; 3])])]))
+        .unwrap()
+    else {
+        panic!("unchanged black-on-white reference must retain every declared anchor");
+    };
+    assert_eq!(
+        current.report().stability_aggregate(),
+        PointSupportStabilityAggregateV1::AllRetained
+    );
+    let observed: Vec<_> = current
+        .report()
+        .cells()
+        .map(|cell| {
+            let PointSupportStabilityAssessmentV1::Evaluated(evidence) = cell.stability() else {
+                panic!("every declared stability policy must produce evidence");
+            };
+            assert_eq!(
+                evidence.decision(),
+                PointSupportStabilityDecisionV1::Retained
+            );
+            evidence.anchor()
+        })
+        .collect();
+    assert_eq!(observed, anchors);
 }

@@ -63,6 +63,7 @@ impl AdmittedOpacityV1 {
 
 impl CompositionProfileV1 {
     /// Stable identity of this executable composition profile.
+    #[cfg(test)]
     pub const fn key(self) -> &'static str {
         match self {
             Self::EncodedSrgb8SourceOverV1 => "encoded-srgb8-source-over-v1",

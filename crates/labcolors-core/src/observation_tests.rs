@@ -107,10 +107,7 @@ impl TestState {
 }
 
 fn binding(port: SurfaceInputPortId, bytes: [u8; 3]) -> SurfaceInputBinding {
-    SurfaceInputBinding {
-        port,
-        value: Srgb8::new(bytes),
-    }
+    SurfaceInputBinding::new(port, Srgb8::new(bytes))
 }
 
 fn scenario(id: u32, bindings: impl IntoIterator<Item = SurfaceInputBinding>) -> ScenarioInput {
@@ -382,10 +379,16 @@ fn lower_revision_is_rejected_before_malformed_payload_scan_and_never_moves_head
 fn initial_unknown_is_current_payload_and_exact_replay_is_idempotent() {
     let mut state = TestState::new(STREAM, vec![PORT_A]).unwrap();
     assert_eq!(state.head(), ObservationHeadViewV1::Empty);
-    assert_eq!(
-        state.apply(unknown_update(STREAM, 3, 11)),
-        Ok(UpdateDisposition::Applied)
-    );
+    let prepared = state.prepare(unknown_update(STREAM, 3, 11)).unwrap();
+    let PreparedObservationUpdateV1::Unknown(prepared) = prepared else {
+        panic!("expected a prepared unknown payload");
+    };
+    assert_eq!(prepared.unknown().stream(), STREAM);
+    assert_eq!(prepared.unknown().revision(), Revision::new(3));
+    assert_eq!(prepared.unknown().reason(), UnknownReasonId::new(11));
+    let (owner, unknown) = prepared.into_parts();
+    assert_eq!(owner.observation_head(), ObservationHeadViewV1::Empty);
+    *owner = TestOwner::Unknown(unknown);
     assert!(matches!(
         state.head(),
         ObservationHeadViewV1::Unknown(unknown)
