@@ -6,7 +6,6 @@
 //! `Waiting | Ready | Stale | Failed` принадлежат Session.
 
 use crate::Srgb8;
-use crate::composition::{AdmittedOpacityV1, OpacityAdmissionErrorV1};
 use crate::appearance::{
     EncodedPointPaintV1, OccurrenceId, PaintId, PhysicalProgramIdentityV1,
     PointOpacityOverSurfaceV1, SourceOverCertificateV1, SurfaceInputPortId,
@@ -18,6 +17,7 @@ use crate::constraints::{
     HardDecision, ReadabilityPassV1, ReadabilityPolarityV1, ReadabilityViolationV1,
     assess_visible_point_hard,
 };
+use crate::composition::{AdmittedOpacityV1, OpacityAdmissionErrorV1};
 use crate::joint::{
     CandidateOrdinalV1, DeclaredTotalOrderV1, JointCandidateSetV1, PointwiseFullHardReportV1,
     PointwiseHardFeasibilityV1, PointwiseJointPointProgramV1, PointwiseJointReportErrorV1,
@@ -884,18 +884,16 @@ pub fn evaluate_point_support_v1(
                         minimum_hysteresis_margin = Some(margin);
                         minimum_hysteresis_index = Some(cells.len());
                     }
-                    PointSupportHysteresisAssessmentV1::Evaluated(
-                        PointSupportRetainedSurplusV1 {
-                            baseline_backdrop,
-                            baseline_visible,
-                            anchor,
-                            baseline_ratio,
-                            baseline_surplus,
-                            current_surplus,
-                            required_surplus,
-                            margin,
-                        },
-                    )
+                    PointSupportHysteresisAssessmentV1::Evaluated(PointSupportRetainedSurplusV1 {
+                        baseline_backdrop,
+                        baseline_visible,
+                        anchor,
+                        baseline_ratio,
+                        baseline_surplus,
+                        current_surplus,
+                        required_surplus,
+                        margin,
+                    })
                 }
             };
             cells.push(PointSupportCellV1 {
