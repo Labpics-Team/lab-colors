@@ -21,13 +21,6 @@ mod wcag22;
 
 pub(crate) use wcag22::Wcag22Srgb8V1;
 
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "private F5 readability classifier is production-compiled before its full-support recheck bridge is wired to the package boundary"
-    )
-)]
 mod readability;
 
 pub(crate) use readability::{
