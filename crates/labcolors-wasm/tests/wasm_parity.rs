@@ -516,6 +516,47 @@ fn recheck_contrast_boundary_matches_resolve_and_shares_hex_contract() {
     );
 }
 
+/// The packed `0x00RRGGBB` core recheck entry points are byte-identical to the
+/// hex path they sit beside (C8d step 1). This is an additive core check — the
+/// public wasm boundary is unchanged in this step (packed input lands in step 4)
+/// — so it drives the core functions directly over a corpus incl. the
+/// black/white extremes and the shorthand-equivalent `#ABC`→`0xAABBCC`.
+#[wasm_bindgen_test]
+fn packed_u32_core_recheck_matches_hex_recheck() {
+    use labcolors_core::{recheck_against, recheck_against_u32};
+    let vc = ViewingConditions::srgb();
+    // (canonical hex, packed word). `#ABC` shorthand is a boundary affordance;
+    // its expanded `#AABBCC` stands in for it at the core, matching `0xAABBCC`.
+    let corpus: [(&str, u32); 5] = [
+        ("#000000", 0x0000_0000),
+        ("#FFFFFF", 0x00FF_FFFF),
+        ("#AABBCC", 0x00AA_BBCC),
+        ("#0057BB", 0x0000_57BB),
+        ("#3478F6", 0x0034_78F6),
+    ];
+    let hexes: Vec<&str> = corpus.iter().map(|(h, _)| *h).collect();
+    let words: Vec<u32> = corpus.iter().map(|(_, u)| *u).collect();
+    for (bg_hex, bg_u32) in corpus {
+        let hex_out = recheck_against(bg_hex, &hexes, &vc).expect("hex rechecks");
+        let u32_out = recheck_against_u32(bg_u32, &words, &vc).expect("packed rechecks");
+        assert_eq!(hex_out.len(), u32_out.len());
+        for (i, ((lc_h, wc_h), (lc_u, wc_u))) in hex_out.iter().zip(u32_out.iter()).enumerate() {
+            assert_eq!(
+                lc_h.to_bits(),
+                lc_u.to_bits(),
+                "bg {bg_hex}: fg {i} lc drift"
+            );
+            assert_eq!(
+                wc_h.to_bits(),
+                wc_u.to_bits(),
+                "bg {bg_hex}: fg {i} wcag drift"
+            );
+        }
+    }
+    // High byte reserved: an RGBA/ARGB word leaking in is rejected, not truncated.
+    assert!(recheck_against_u32(0x0100_0000, &[0x0000_0000], &vc).is_err());
+}
+
 #[wasm_bindgen_test]
 fn stable_glow_exact_noop_recheck_crosses_the_wasm_boundary() {
     let engine = LabColors::new();

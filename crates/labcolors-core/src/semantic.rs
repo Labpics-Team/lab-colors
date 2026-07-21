@@ -3751,6 +3751,95 @@ pub fn recheck_against_multi(
     Ok(out)
 }
 
+/// Decode a packed `0x00RRGGBB` colour to its three exact encoded-sRGB8 bytes
+/// `[R, G, B]` via pure shifts — the same octets `hex_bytes("#RRGGBB")` yields.
+///
+/// The high byte is **reserved and required-zero**: `0x00RRGGBB` is the only
+/// legal shape, so `0xAARRGGBB` (an RGBA/ARGB word leaking in) is rejected up
+/// front by a single mask instead of being silently truncated. This is the
+/// cheap validation the packed boundary performs once, with no allocation.
+fn bytes_from_u32(packed: u32) -> Result<[u8; 3], String> {
+    if packed >> 24 != 0 {
+        return Err(format!(
+            "expected packed 0x00RRGGBB with a zero high byte, got {packed:#010X}"
+        ));
+    }
+    Ok([
+        ((packed >> 16) & 0xFF) as u8,
+        ((packed >> 8) & 0xFF) as u8,
+        (packed & 0xFF) as u8,
+    ])
+}
+
+/// One colour's recheck ingredient from its packed `0x00RRGGBB` word: the WCAG
+/// relative luminance of its display bytes — the packed sibling of
+/// [`hex_forward`].
+///
+/// Byte-identity to the hex path holds **by construction, not by a second
+/// copy**: `bytes_from_u32(0x00RRGGBB)` returns exactly the `[R, G, B]` octets
+/// `hex_bytes("#RRGGBB")` returns, both are lifted through the SAME
+/// [`Srgb8::encoded`] projection, and the SAME [`crate::wcag::relative_luminance`]
+/// SSOT reads them. The metric is never forked — a packed input and its hex
+/// spelling cannot drift.
+fn u32_forward(packed: u32) -> Result<f64, String> {
+    let disp = Srgb8::new(bytes_from_u32(packed)?).encoded();
+    Ok(crate::wcag::relative_luminance(disp))
+}
+
+/// Packed sibling of [`recheck_against`]: the `(lc, wcag_ratio)` each foreground
+/// `0x00RRGGBB` word achieves against one shared background word, under `vc`.
+///
+/// This is byte-identical, pair for pair, to spelling the same colours as hex
+/// and calling [`recheck_against`]: it hoists the background forward once and
+/// feeds the SAME `crate::lpc::contrast_core` / `crate::wcag::ratio_from_luminances`
+/// in the SAME order — only the transport (a `u32` shift-decode instead of a
+/// hex parse) differs. Returns `Err` if any word carries a non-zero high byte.
+pub fn recheck_against_u32(
+    bg: u32,
+    fgs: &[u32],
+    _vc: &ViewingConditions,
+) -> Result<Vec<(f64, f64)>, String> {
+    let rl_bg = u32_forward(bg)?;
+    fgs.iter()
+        .map(|&fg| {
+            let rl_fg = u32_forward(fg)?;
+            let lc = crate::lpc::contrast_core(rl_fg, rl_bg);
+            let wcag = crate::wcag::ratio_from_luminances(rl_fg, rl_bg);
+            Ok((lc, wcag))
+        })
+        .collect()
+}
+
+/// Packed sibling of [`recheck_against_multi`]: the `(lc, wcag_ratio)` each
+/// foreground `0x00RRGGBB` word achieves against EACH of several background
+/// words, sharing every foreground's forward across all samples.
+///
+/// The result is **byte-identical**, entry for entry, to calling
+/// [`recheck_against_multi`] with the same colours spelled as hex — same float
+/// operations, same order, same background-major flat layout: entry `bg s`,
+/// foreground `i` at `out[(s*fgs.len() + i) * 2 + {0:lc, 1:wcag}]`. Returns
+/// `Err` on any word with a non-zero high byte.
+pub fn recheck_against_multi_u32(
+    bgs: &[u32],
+    fgs: &[u32],
+    _vc: &ViewingConditions,
+) -> Result<Vec<f64>, String> {
+    let fg_pre: Vec<f64> = fgs
+        .iter()
+        .map(|&fg| u32_forward(fg))
+        .collect::<Result<_, String>>()?;
+
+    let mut out = Vec::with_capacity(bgs.len() * fgs.len() * 2);
+    for &bg in bgs {
+        let rl_bg = u32_forward(bg)?;
+        for &rl_fg in &fg_pre {
+            out.push(crate::lpc::contrast_core(rl_fg, rl_bg));
+            out.push(crate::wcag::ratio_from_luminances(rl_fg, rl_bg));
+        }
+    }
+    Ok(out)
+}
+
 /// Resolve the terminal hierarchy conflict without weakening a hard floor.
 ///
 /// Copying the senior is valid only when that exact emitted colour also clears
@@ -5198,6 +5287,107 @@ mod tests {
             recheck_against_multi(&["#FFFFFF"], &["nothex"], &ViewingConditions::srgb()).is_err()
         );
         assert!(recheck_against_multi(&["bad"], &["#FFFFFF"], &ViewingConditions::srgb()).is_err());
+    }
+
+    /// The packed `0x00RRGGBB` corpus: canonical 6-hex spelling paired with the
+    /// word it encodes. `#ABC` shorthand is a boundary affordance the core does
+    /// not accept, so its *expanded* form `#AABBCC` stands in for it here — the
+    /// byte-identity claim is over the octets, and `#ABC`→`#AABBCC`→`0xAABBCC`.
+    /// `#0057BB` is drawn from the wasm-boundary golden foregrounds.
+    const PACKED_CORPUS: [(&str, u32); 8] = [
+        ("#000000", 0x000000),
+        ("#FFFFFF", 0xFFFFFF),
+        ("#AABBCC", 0xAABBCC),
+        ("#0057BB", 0x0057BB),
+        ("#3478F6", 0x3478F6),
+        ("#1C1C1E", 0x1C1C1E),
+        ("#7F7F7F", 0x7F7F7F),
+        ("#A23E8C", 0xA23E8C),
+    ];
+
+    #[test]
+    fn packed_u32_recheck_is_byte_identical_to_hex() {
+        // The packed entry point must return bit-identical (lc, wcag) to the hex
+        // path over the corpus — byte-identity by construction, checked on the
+        // raw bits so no rounding can hide a drift. Every colour serves as both
+        // the shared background and a foreground.
+        let vc = ViewingConditions::srgb();
+        let hexes: Vec<&str> = PACKED_CORPUS.iter().map(|(h, _)| *h).collect();
+        let words: Vec<u32> = PACKED_CORPUS.iter().map(|(_, u)| *u).collect();
+        for (bg_hex, bg_u32) in PACKED_CORPUS {
+            let hex_out = recheck_against(bg_hex, &hexes, &vc).unwrap();
+            let u32_out = recheck_against_u32(bg_u32, &words, &vc).unwrap();
+            assert_eq!(hex_out.len(), u32_out.len());
+            for (i, ((lc_h, wc_h), (lc_u, wc_u))) in hex_out.iter().zip(u32_out.iter()).enumerate()
+            {
+                assert_eq!(
+                    lc_h.to_bits(),
+                    lc_u.to_bits(),
+                    "bg {bg_hex}: fg {i} lc drift"
+                );
+                assert_eq!(
+                    wc_h.to_bits(),
+                    wc_u.to_bits(),
+                    "bg {bg_hex}: fg {i} wcag drift"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn packed_u32_multi_recheck_is_byte_identical_to_hex() {
+        // The packed multi-background entry point mirrors recheck_against_multi
+        // bit-for-bit, including the background-major flat layout.
+        let vc = ViewingConditions::srgb();
+        let hexes: Vec<&str> = PACKED_CORPUS.iter().map(|(h, _)| *h).collect();
+        let words: Vec<u32> = PACKED_CORPUS.iter().map(|(_, u)| *u).collect();
+        let hex_flat = recheck_against_multi(&hexes, &hexes, &vc).unwrap();
+        let u32_flat = recheck_against_multi_u32(&words, &words, &vc).unwrap();
+        assert_eq!(hex_flat.len(), u32_flat.len());
+        for (i, (h, u)) in hex_flat.iter().zip(u32_flat.iter()).enumerate() {
+            assert_eq!(h.to_bits(), u.to_bits(), "flat entry {i} drift");
+        }
+    }
+
+    #[test]
+    fn packed_u32_decodes_rrggbb_channel_order() {
+        // N2: pack(0x00RRGGBB) must decode to [RR, GG, BB] — a BBGGRR or RGBA
+        // regression would make #0057BB read as #BB5700 (or shift a channel), so
+        // it must match its own hex spelling and NOT the reversed one.
+        let vc = ViewingConditions::srgb();
+        let bg = 0xFFFFFF;
+        let forward = recheck_against_u32(bg, &[0x0057BB], &vc).unwrap();
+        let same = recheck_against("#FFFFFF", &["#0057BB"], &vc).unwrap();
+        assert_eq!(
+            forward[0].0.to_bits(),
+            same[0].0.to_bits(),
+            "lc channel order"
+        );
+        assert_eq!(
+            forward[0].1.to_bits(),
+            same[0].1.to_bits(),
+            "wcag channel order"
+        );
+        // The byte-reversed spelling is a genuinely different colour: guards a
+        // silent channel swap that would otherwise pass a self-consistent metric.
+        let reversed = recheck_against("#FFFFFF", &["#BB5700"], &vc).unwrap();
+        assert_ne!(
+            forward[0].1.to_bits(),
+            reversed[0].1.to_bits(),
+            "0x0057BB must not decode to #BB5700"
+        );
+    }
+
+    #[test]
+    fn packed_u32_high_byte_required_zero() {
+        // The high byte is reserved: a non-zero one (an RGBA/ARGB word leaking
+        // in) is rejected cheaply, never silently truncated to the low 24 bits.
+        let vc = ViewingConditions::srgb();
+        assert!(recheck_against_u32(0x0100_0000, &[0x000000], &vc).is_err());
+        assert!(recheck_against_u32(0xFFFF_FFFF, &[0x000000], &vc).is_err());
+        assert!(recheck_against_u32(0x000000, &[0xFF00_0000], &vc).is_err());
+        assert!(recheck_against_multi_u32(&[0x0000_0000], &[0x0100_0000], &vc).is_err());
+        assert!(recheck_against_multi_u32(&[0xAB00_0000], &[0x000000], &vc).is_err());
     }
 
     /// The 12 mid-to-light nodes of the owner's reference neutral ramp (pure
