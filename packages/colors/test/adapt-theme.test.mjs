@@ -3092,6 +3092,133 @@ test("the worst sample is chosen by least margin, not by position", () => {
   assert.equal(h.colors.lastResolveBg(), "#101010", "re-solve targets the least-margin sample");
 });
 
+// ── E2: second-solve-breaks-first / mandatory full-support re-verify ──────────
+// The headline C8d controller law (§16 E2, Pointwise every-case 3082-3093):
+// `worstIdx` is a diagnostic WITNESS that only CHOOSES the next re-solve sample.
+// A re-solved candidate MUST be re-verified over the FULL support before commit;
+// a target that passes the sample it was solved for but breaches ANOTHER sample
+// is never committed. When no jointly-feasible target exists the controller
+// publishes nothing (a typed no-commit), never a set-breaching target.
+
+test("second solve must not violate the first sample: infeasible set commits nothing (E2)", () => {
+  // Two samples whose feasible targets are mutually exclusive: any target that
+  // passes #000000 (#AAAAAA) breaches #FFFFFF, and any target that passes
+  // #FFFFFF (#555555) breaches #000000. The recheck depends on the CANDIDATE
+  // (its packed fg word), so this is genuine joint infeasibility, not a stub
+  // artefact. The migrated controller full-support re-verifies the re-solved
+  // candidate and, finding no jointly-feasible target, must publish nothing —
+  // never commit #AAAAAA, the worst-sample solve that breaches the first sample.
+  const el = fakeElement();
+  const cssVar = "--lab-label-primary";
+  let samples = ["#FFFFFF"]; // feasible single-sample bootstrap
+  let now = 1000;
+  const colors = {
+    resolveTheme(bg) {
+      const hex = bg === "#000000" ? "#AAAAAA" : "#555555";
+      return { vars: { [cssVar]: hex }, roles: { p: { kind: "color", cssVar, hex, lc: 100 } } };
+    },
+    recheckContrast(bg, fgs) {
+      // Candidate-dependent: a #AAAAAA target (solved for #000000) breaks
+      // #FFFFFF; a #555555 target (solved for #FFFFFF) breaks #000000.
+      const solvedForBlack = [...fgs].includes(pk("#AAAAAA"));
+      const bad = solvedForBlack ? pk("#FFFFFF") : pk("#000000");
+      return [...fgs].flatMap(() => [bg === bad ? 0 : 100, 10]);
+    },
+  };
+  const ctrl = adaptTheme(el, {
+    colors,
+    theme: "light",
+    background: () => samples,
+    target: el,
+    now: () => now,
+    win: {},
+    sustainMs: 0,
+    dwellMs: 0,
+    easeMs: 0,
+  });
+  assert.equal(el.props.get(cssVar), "#555555", "bootstrap commits the feasible single-sample target");
+
+  samples = ["#FFFFFF", "#000000"]; // now jointly infeasible
+  now = 1001;
+  assert.doesNotThrow(() => ctrl.tick());
+
+  assert.notEqual(
+    ctrl.current()[cssVar],
+    "#AAAAAA",
+    "must never commit the worst-sample target that breaches the first sample",
+  );
+  assert.equal(
+    ctrl.current()[cssVar],
+    "#555555",
+    "no jointly-feasible target → keep committed state (typed no-commit)",
+  );
+  assert.notEqual(el.props.get(cssVar), "#AAAAAA", "DOM never paints the first-sample-breaking target");
+});
+
+test("second solve must not commit when the worst sample stays unreachable and another also breaches (E2 multi-breach)", () => {
+  // A subtler joint infeasibility than the mutually-exclusive pair above, and
+  // the one the 2-sample oscillation test does NOT exercise: the seeded worst
+  // sample #111111 is UNREACHABLE — solving directly for it still fails its
+  // floor, so it stays the least-margin (worst) sample — while a SECOND sample
+  // #222222 ALSO breaches under the re-solved candidate. `worstIdx` is only the
+  // argmin margin, not necessarily the SOLE breacher, so a certificate shortcut
+  // that trusts "worst == just-solved" would commit #AAAAAA, which breaches the
+  // never-solved #222222. E2 forbids that: with no jointly-feasible target the
+  // controller must publish nothing (a typed no-commit), never a set-breacher.
+  const el = fakeElement();
+  const cssVar = "--lab-label-primary";
+  let samples = ["#222222"]; // feasible single-sample bootstrap
+  let now = 1000;
+  const colors = {
+    resolveTheme(bg) {
+      const hex = bg === "#111111" ? "#AAAAAA" : "#BBBBBB";
+      return { vars: { [cssVar]: hex }, roles: { p: { kind: "color", cssVar, hex, lc: 100 } } };
+    },
+    // Candidate-dependent (bg is a packed word, fgs a Uint32Array of them):
+    //   committed #BBBBBB → s0(#111111) Lc40 breach(worst), s1(#222222) Lc100 ok
+    //   re-solved  #AAAAAA → s0(#111111) Lc40 (still worst, unreachable), s1(#222222) Lc64 breach
+    recheckContrast(bg, fgs) {
+      const solvedForS0 = [...fgs].includes(pk("#AAAAAA"));
+      const lc = solvedForS0
+        ? bg === pk("#111111")
+          ? 40
+          : 64
+        : bg === pk("#111111")
+          ? 40
+          : 100;
+      return [...fgs].flatMap(() => [lc, 10]);
+    },
+  };
+  const ctrl = adaptTheme(el, {
+    colors,
+    theme: "light",
+    background: () => samples,
+    target: el,
+    now: () => now,
+    win: {},
+    sustainMs: 0,
+    dwellMs: 0,
+    easeMs: 0,
+  });
+  assert.equal(ctrl.current()[cssVar], "#BBBBBB", "bootstrap commits the feasible single-sample target");
+
+  samples = ["#111111", "#222222"]; // #111111 unreachable & worst; #222222 also breaches
+  now = 1001;
+  assert.doesNotThrow(() => ctrl.tick());
+
+  assert.notEqual(
+    ctrl.current()[cssVar],
+    "#AAAAAA",
+    "must never commit #AAAAAA: it breaches #222222, which was never solved for",
+  );
+  assert.equal(
+    ctrl.current()[cssVar],
+    "#BBBBBB",
+    "worst sample is not the sole breacher → no jointly-feasible target → keep committed state",
+  );
+  assert.notEqual(el.props.get(cssVar), "#AAAAAA", "DOM never paints the multi-breach target");
+});
+
 test("initial apply re-solves against the worst sample of a varying backdrop", () => {
   const colors = fakeColors(oneRole("#000000", 100));
   colors.setRecheckByBg({ "#FFFFFF": [100], "#202020": [10] });

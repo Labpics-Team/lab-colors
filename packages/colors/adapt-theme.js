@@ -330,6 +330,7 @@ export function adaptTheme(element, options) {
     owner,
   ) => {
     let breached = false;
+    let breachCount = 0;
     let worstIdx = 0;
     let worstMargin = Infinity;
     const stride = foregrounds.length;
@@ -372,6 +373,7 @@ export function adaptTheme(element, options) {
       }
       const base = s * stride;
       let sampleMargin = Infinity;
+      let sampleBreached = false;
       for (let i = 0; i < roleSet.length; i++) {
         const want = Math.abs(roleSet[i].lc) * (1 - dropFraction);
         const lcRaw = useBatch ? batch[(base + i) * 2] : flat[2 * i];
@@ -384,16 +386,20 @@ export function adaptTheme(element, options) {
           );
         }
         const lcNow = Math.abs(lcRaw);
-        if (lcNow < want) breached = true;
+        if (lcNow < want) {
+          breached = true;
+          sampleBreached = true;
+        }
         const margin = want > 0 ? lcNow / want : Infinity;
         if (margin < sampleMargin) sampleMargin = margin;
       }
+      if (sampleBreached) breachCount++;
       if (sampleMargin < worstMargin) {
         worstMargin = sampleMargin;
         worstIdx = s;
       }
     }
-    return { breached, worstIdx };
+    return { breached, worstIdx, breachCount };
   };
 
   const stableVarKeys = (role) => [
@@ -542,29 +548,71 @@ export function adaptTheme(element, options) {
   const solveCandidate = (bg, now, themeName, owner) =>
     resolvedCandidate(resolveSnapshot(bg, themeName, owner), now);
 
-  // Choose an initial result from `samples`. With one sample this is a single
-  // solve. With several, solve against the first sample, evaluate that
-  // provisional role set over every supplied sample, then re-solve at most once
-  // against its lowest-metric sample. The second result is not rechecked over
-  // the set, so this is a bounded initialization heuristic, not a final
-  // worst-sample certificate. The tick path instead starts from its own current
-  // результата и пере-решает по худшему (минимальная метрика) из образцов.
-  const solveWorstCandidate = (samples, now, themeName, owner) => {
-    const sample0 = solveCandidate(samples[0], now, themeName, owner);
-    let candidate = sample0;
-    if (samples.length > 1) {
-      const { worstIdx } = recheckSamples(
+  // Bounded worst-chasing fixpoint with MANDATORY full-support re-verification
+  // (§16 E2; Pointwise every-case law 3082-3093). `worstIdx` is a diagnostic
+  // WITNESS that only CHOOSES which sample to re-solve — never a commit
+  // certificate. Each pass solves against the current worst breaching sample and
+  // then re-checks that candidate over the WHOLE support:
+  //   • no breach                → jointly feasible, return it;
+  //   • worst is the just-solved sample → its own certificate, nothing better to
+  //     try (the resolver did its best for its own backdrop; matches a single
+  //     sample solving to a still-failing floor), return it;
+  //   • a DIFFERENT sample breaches → chase it (the second-solve-breaks-first
+  //     defect: solving for the worst sample must not silently ship a target
+  //     that breaches another sample).
+  // When the set stays jointly infeasible across the whole bounded chase, return
+  // `{ feasible: null }` — the drift caller then publishes nothing rather than
+  // commit a set-breaching target. This is the controller-side STOPGAP the
+  // roadmap admits precisely because this full-support re-verify guards commit.
+  // The cap bounds an oscillating infeasible set; real sample sets are tiny.
+  const RESOLVE_CHASE_CAP = 8;
+  const chaseFeasible = (samples, startIdx, now, themeName, owner) => {
+    let worstIdx = startIdx;
+    let lastCandidate = null;
+    // The samples[0] resolve, reused by stable-Glow reconciliation when the
+    // committed candidate was solved against samples[0].
+    let sample0Result = null;
+    for (let iter = 0; iter < RESOLVE_CHASE_CAP; iter++) {
+      const candidate = solveCandidate(samples[worstIdx], now, themeName, owner);
+      if (worstIdx === 0) sample0Result = candidate.result;
+      lastCandidate = candidate;
+      if (samples.length === 1) {
+        return { feasible: candidate, sample0Result, lastCandidate };
+      }
+      const { breached, worstIdx: nextWorst, breachCount } = recheckSamples(
         samples,
         candidate.roles,
         candidate.fgsCache,
         themeName,
         owner,
       );
-      if (worstIdx !== 0) {
-        candidate = solveCandidate(samples[worstIdx], now, themeName, owner);
+      // Commit only when jointly feasible (no breach) OR the just-solved worst
+      // sample is the SOLE breacher — an unreachable floor is its own
+      // certificate, nothing better to try for it. `worstIdx` is the argmin
+      // margin, NOT proof of sole breach: if a SECOND sample also breaches, this
+      // candidate would ship a target breaching a sample it was not solved for
+      // (E2 violation). In that case keep chasing; a jointly-infeasible set
+      // burns the bounded cap and returns { feasible: null } → the drift caller
+      // publishes nothing.
+      if (!breached || (nextWorst === worstIdx && breachCount === 1)) {
+        return { feasible: candidate, sample0Result, lastCandidate };
       }
+      worstIdx = nextWorst;
     }
-    return { candidate, sample0Result: sample0.result };
+    return { feasible: null, sample0Result, lastCandidate };
+  };
+
+  // Intent path (init/setTheme): a bootstrap or a deliberate theme switch must
+  // always produce committed state, so the worst-chase falls back to its
+  // best-effort last candidate when no jointly-feasible target exists. Prefer a
+  // jointly-feasible target when one is found. (The drift/tick path instead
+  // publishes nothing on infeasibility — see the sustained-breach branch.)
+  const solveWorstCandidate = (samples, now, themeName, owner) => {
+    const chased = chaseFeasible(samples, 0, now, themeName, owner);
+    return {
+      candidate: chased.feasible ?? chased.lastCandidate,
+      sample0Result: chased.sample0Result,
+    };
   };
 
   // Every write goes through the full canonical set with the (optional) eased
@@ -966,14 +1014,28 @@ export function adaptTheme(element, options) {
     // sampled at `now`) — never the in-flight TARGET. Starting from the target
     // would SNAP the element to the old target for one frame before easing,
     // reintroducing flicker when a re-solve overlaps a previous ease.
+    // `worstIdx` is only the diagnostic witness that SEEDS the chase; the
+    // committed candidate is full-support re-verified (§16 E2) before commit.
     const fromByVar = paintedNow(now);
-    let candidate = solveCandidate(samples[worstIdx], now, theme, owner);
+    const chased = chaseFeasible(samples, worstIdx, now, theme, owner);
     if (!ownsOperation(owner)) return;
-    candidate = withStableGlowReconciliation(
-      candidate,
+    if (chased.feasible === null) {
+      // No jointly-feasible drift target within the bounded worst-chase: publish
+      // NOTHING (a typed no-commit). Committing the worst-sample solve here would
+      // ship a target that breaches another sample — the second-solve-breaks-
+      // first defect. Keep committed colours; an in-flight ease still advances so
+      // presentation does not stall, and the acknowledged breach re-arms.
+      lastKey = key;
+      breachSince = null;
+      if (hasEase) stepEase(now, owner);
+      else if (written === null) applyRolesDirect(owner);
+      return;
+    }
+    let candidate = withStableGlowReconciliation(
+      chased.feasible,
       samples,
       theme,
-      worstIdx === 0 ? candidate.result : null,
+      chased.sample0Result,
       owner,
     );
     if (!ownsOperation(owner)) return;
