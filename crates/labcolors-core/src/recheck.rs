@@ -10,6 +10,7 @@ use crate::appearance::{
     EncodedPointPaintV1, OccurrenceId, PaintId, PhysicalProgramIdentityV1,
     PointOpacityOverSurfaceV1, SourceOverCertificateV1, SurfaceInputPortId,
 };
+use crate::composition::{AdmittedOpacityV1, OpacityAdmissionErrorV1};
 use crate::constraints::{
     DisplayReadabilityCurveV1, DisplayReadabilityMeasurementV1, Evaluator,
     ExactConstraintIdentityV1, ExactIdentityCapabilityV1, ExactIdentityReleaseV1,
@@ -17,7 +18,6 @@ use crate::constraints::{
     HardDecision, ReadabilityPassV1, ReadabilityPolarityV1, ReadabilityViolationV1,
     assess_visible_point_hard,
 };
-use crate::composition::{AdmittedOpacityV1, OpacityAdmissionErrorV1};
 use crate::joint::{
     CandidateOrdinalV1, DeclaredTotalOrderV1, JointCandidateSetV1, PointwiseFullHardReportV1,
     PointwiseHardFeasibilityV1, PointwiseJointPointProgramV1, PointwiseJointReportErrorV1,
@@ -27,9 +27,8 @@ use crate::numerics::NumericalDecisionEvidenceV1;
 use crate::observation::{RevisionBoundObservationV1, ScenarioId};
 use crate::solve::Floor;
 use crate::wcag22::{
-    Wcag22ApplicableDecisionV1, Wcag22AssessmentV1, Wcag22CriterionV1,
-    Wcag22EvaluationErrorV1, Wcag22MeasurementV1, Wcag22ProfileIdV1,
-    evaluate_wcag22_srgb8,
+    Wcag22ApplicableDecisionV1, Wcag22AssessmentV1, Wcag22CriterionV1, Wcag22EvaluationErrorV1,
+    Wcag22MeasurementV1, Wcag22ProfileIdV1, evaluate_wcag22_srgb8,
 };
 
 /// Один immutable exact evaluator invocation, связанный с authored occurrence.
@@ -429,7 +428,9 @@ pub enum PointSupportStabilityPolicyV1 {
     Disabled,
     /// Recompose the committed baseline through the same physical program and
     /// retain a fraction of its reference-ratio surplus.
-    RetainBaselineRatioSurplus { baseline_backdrop: Srgb8 },
+    RetainBaselineRatioSurplus {
+        baseline_backdrop: Srgb8,
+    },
 }
 
 /// Typed finite drop fraction. Explicit negative zero is canonicalised to zero.
@@ -869,19 +870,17 @@ pub fn evaluate_point_support_v1(
                         minimum_stability_margin = Some(margin);
                         minimum_stability_index = Some(cells.len());
                     }
-                    PointSupportStabilityAssessmentV1::Evaluated(
-                        PointSupportStabilityEvidenceV1 {
-                            profile: PointSupportStabilityProfileV1::Srgb8ReferenceContrastRatioV1,
-                            baseline_composition,
-                            anchor_ratio,
-                            baseline_ratio,
-                            baseline_surplus,
-                            current_ratio,
-                            current_surplus,
-                            required_surplus,
-                            margin,
-                        },
-                    )
+                    PointSupportStabilityAssessmentV1::Evaluated(PointSupportStabilityEvidenceV1 {
+                        profile: PointSupportStabilityProfileV1::Srgb8ReferenceContrastRatioV1,
+                        baseline_composition,
+                        anchor_ratio,
+                        baseline_ratio,
+                        baseline_surplus,
+                        current_ratio,
+                        current_surplus,
+                        required_surplus,
+                        margin,
+                    })
                 }
             };
             cells.push(PointSupportCellV1 {
