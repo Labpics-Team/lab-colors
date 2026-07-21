@@ -181,10 +181,27 @@ export function adaptTheme(element, options) {
   const backgroundSource = options.background;
   const getStyle = options.getStyle;
   const parentOf = options.parentOf;
-  const dropFraction = admitFiniteOption("dropFraction", options.dropFraction ?? 0.2, 0, 1);
-  const sustainMs = admitFiniteOption("sustainMs", options.sustainMs ?? 120, 0);
-  const dwellMs = admitFiniteOption("dwellMs", options.dwellMs ?? 250, 0);
-  const requestedEaseMs = admitFiniteOption("easeMs", options.easeMs ?? 280, 0);
+  const dropFraction = admitFiniteOption(
+    "dropFraction",
+    options.dropFraction === undefined ? 0.2 : options.dropFraction,
+    0,
+    1,
+  );
+  const sustainMs = admitFiniteOption(
+    "sustainMs",
+    options.sustainMs === undefined ? 120 : options.sustainMs,
+    0,
+  );
+  const dwellMs = admitFiniteOption(
+    "dwellMs",
+    options.dwellMs === undefined ? 250 : options.dwellMs,
+    0,
+  );
+  const requestedEaseMs = admitFiniteOption(
+    "easeMs",
+    options.easeMs === undefined ? 280 : options.easeMs,
+    0,
+  );
   const win = options.win ?? (typeof globalThis !== "undefined" ? globalThis : undefined);
   const requestFrameCapability = win?.requestAnimationFrame;
   const requestFrame =
