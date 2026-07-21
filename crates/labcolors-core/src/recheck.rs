@@ -28,7 +28,8 @@ use crate::observation::{RevisionBoundObservationV1, ScenarioId};
 use crate::solve::Floor;
 use crate::wcag22::{
     Wcag22ApplicableDecisionV1, Wcag22AssessmentV1, Wcag22CriterionV1, Wcag22EvaluationErrorV1,
-    Wcag22MeasurementV1, Wcag22ProfileIdV1, evaluate_wcag22_srgb8,
+    Wcag22LuminanceBoundsQ55V1, Wcag22MeasurementV1, Wcag22ProfileIdV1,
+    evaluate_wcag22_srgb8, measure_wcag22_srgb8,
 };
 
 /// Один immutable exact evaluator invocation, связанный с authored occurrence.
@@ -578,9 +579,9 @@ pub enum PointSupportCriterionAssessmentV1 {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum PointSupportStabilityProfileV1 {
-    /// Encoded-sRGB8 reference contrast ratio. It is neither an LPC/readability
-    /// verdict nor a WCAG success-criterion decision.
-    Srgb8ReferenceContrastRatioV1,
+    /// Conservative lower reference ratio derived from the WCAG 2.2 Q55
+    /// luminance bounds. It is neither LPC/readability nor criterion Pass/Fail.
+    Wcag22Q55LowerReferenceRatioV1,
 }
 
 /// Complete evidence for the retained-surplus stability decision in one cell.
@@ -736,12 +737,19 @@ impl PointSupportReportV1 {
 }
 
 fn point_support_reference_ratio(occurrence: &crate::appearance::ResolvedOccurrence) -> f64 {
-    let evaluator = DisplayReadabilityCurveV1;
-    let measurement = match evaluator.evaluate(&occurrence.modeled_srgb8_point(), &Floor::None) {
-        Ok(measurement) => measurement,
-        Err(error) => match error {},
-    };
-    measurement.wcag()
+    let certificate = occurrence.certificate();
+    let measurement = measure_wcag22_srgb8(certificate.output_rgb(), certificate.backdrop_rgb());
+    let foreground = measurement.foreground_luminance;
+    let background = measurement.background_luminance;
+    let scale = Wcag22LuminanceBoundsQ55V1::scale() as f64;
+    let offset = 0.05 * scale;
+    if foreground.lower() >= background.upper() {
+        (foreground.lower() as f64 + offset) / (background.upper() as f64 + offset)
+    } else if background.lower() >= foreground.upper() {
+        (background.lower() as f64 + offset) / (foreground.upper() as f64 + offset)
+    } else {
+        1.0
+    }
 }
 
 fn point_support_required_assessment(
@@ -871,7 +879,7 @@ pub fn evaluate_point_support_v1(
                         minimum_stability_index = Some(cells.len());
                     }
                     PointSupportStabilityAssessmentV1::Evaluated(PointSupportStabilityEvidenceV1 {
-                        profile: PointSupportStabilityProfileV1::Srgb8ReferenceContrastRatioV1,
+                        profile: PointSupportStabilityProfileV1::Wcag22Q55LowerReferenceRatioV1,
                         baseline_composition,
                         anchor_ratio,
                         baseline_ratio,
