@@ -10,9 +10,9 @@ pub mod wcag22_evidence;
 pub(crate) mod composition;
 pub(crate) mod spaces;
 
-pub use srgb8::Srgb8;
 pub use appearance::SourceOverCertificateV1;
 pub use composition::CompositionProfileV1;
+pub use srgb8::Srgb8;
 
 pub(crate) mod accent_balance;
 pub mod alpha;
@@ -180,11 +180,10 @@ pub use numerics::{
 };
 pub use recheck::{
     PointSupportAdmissionErrorV1, PointSupportCellV1, PointSupportCriterionAssessmentV1,
-    PointSupportCriterionRequirementV1, PointSupportDropFractionV1,
-    PointSupportEvaluationErrorV1, PointSupportOccurrenceV1, PointSupportReportV1,
-    PointSupportStabilityAssessmentV1, PointSupportStabilityEvidenceV1,
-    PointSupportStabilityPolicyV1, PointSupportStabilityProfileV1, PointSupportStatusV1,
-    PointSupportWcag22AssessmentV1, evaluate_point_support_v1,
+    PointSupportCriterionRequirementV1, PointSupportDropFractionV1, PointSupportEvaluationErrorV1,
+    PointSupportOccurrenceV1, PointSupportReportV1, PointSupportStabilityAssessmentV1,
+    PointSupportStabilityEvidenceV1, PointSupportStabilityPolicyV1, PointSupportStabilityProfileV1,
+    PointSupportStatusV1, PointSupportWcag22AssessmentV1, evaluate_point_support_v1,
 };
 pub use semantic::{
     GlowIndeterminateResolved, NamedRoleTable, ResolveSetError, ResolveSetErrorKind, Resolved,
