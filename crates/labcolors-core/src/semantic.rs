@@ -3715,10 +3715,7 @@ pub fn recheck_against(
 /// metric call. This is the arithmetic/allocator safety floor; the lower product
 /// limit admitted by the versioned public resource profile remains owned by
 /// #429 and must not be invented here.
-fn checked_recheck_output_len(
-    backgrounds: usize,
-    foregrounds: usize,
-) -> Result<usize, String> {
+fn checked_recheck_output_len(backgrounds: usize, foregrounds: usize) -> Result<usize, String> {
     backgrounds
         .checked_mul(foregrounds)
         .and_then(|cells| cells.checked_mul(2))
@@ -3731,9 +3728,7 @@ fn reserve_recheck_entries<T>(
     buffer: &'static str,
 ) -> Result<(), String> {
     values.try_reserve_exact(entries).map_err(|_| {
-        format!(
-            "recheck batch resource exhausted while reserving {buffer} ({entries} entries)"
-        )
+        format!("recheck batch resource exhausted while reserving {buffer} ({entries} entries)")
     })
 }
 
