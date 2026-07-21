@@ -17,8 +17,9 @@ use crate::recheck::{
     JointReadabilityResolutionV1, PointSupportAdmissionErrorV1, PointSupportCriterionAssessmentV1,
     PointSupportCriterionRequirementV1, PointSupportDropFractionV1, PointSupportEvaluationErrorV1,
     PointSupportOccurrenceV1, PointSupportStabilityAssessmentV1, PointSupportStabilityPolicyV1,
-    PointSupportStatusV1, ReadabilityOccurrenceV1, RecheckProtocolErrorV1, checked_evidence_count,
-    evaluate_point_support_v1, resolve_across_all_samples,
+    PointSupportStabilityProfileV1, PointSupportStatusV1, ReadabilityOccurrenceV1,
+    RecheckProtocolErrorV1, checked_evidence_count, evaluate_point_support_v1,
+    resolve_across_all_samples,
 };
 use crate::solve::Floor;
 use crate::wcag22::{Wcag22ApplicableDecisionV1, Wcag22CriterionV1};
@@ -498,6 +499,10 @@ fn point_support_recomposes_source_alpha_over_the_current_backdrop() {
     let PointSupportStabilityAssessmentV1::Evaluated(retained) = cell.stability() else {
         panic!("the stability lane must retain its explicit baseline")
     };
+    assert_eq!(
+        retained.profile(),
+        PointSupportStabilityProfileV1::Wcag22Q55LowerReferenceRatioV1
+    );
     assert_eq!(retained.baseline_composition().output_rgb(), [0x66; 3]);
     assert_eq!(retained.anchor_ratio(), 3.0);
     assert_eq!(retained.required_surplus(), 0.0);
