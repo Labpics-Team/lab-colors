@@ -337,9 +337,9 @@ pub(crate) fn apparent_contrast_candidate_hex_with_vc_for_test(
 ///
 /// ADR-0003: Ys candidate score движка
 /// считает именно в этом домене — `solve::finish`/`meets_floor`, интервал фона,
-/// recheck-примитивы (`semantic::measure_contrast`, `recheck_against*`) и белая
-/// сторона кроссовера пары (`pair::pair_side`). Сам движок зовёт
-/// [`contrast_core`] + [`crate::wcag::relative_luminance`] напрямую на уже
+/// recheck-примитивы (`semantic::measure_contrast`, `recheck_against*`) и
+/// pointwise hard evaluators. Сам движок зовёт [`contrast_core`] +
+/// [`crate::wcag::relative_luminance`] напрямую на уже
 /// готовых скалярах; эта функция — только test-reference той же формулы (те же
 /// функции, ноль новых констант). `Y_hk` остаётся отдельной appearance-
 /// координатой, но не публичным scalar-LPC API.

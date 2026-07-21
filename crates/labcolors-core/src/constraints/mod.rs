@@ -17,10 +17,8 @@ pub(crate) use exact::{
 #[cfg(test)]
 pub(crate) use exact::ExactIdentityPassV1;
 
-#[cfg(test)]
 mod wcag22;
 
-#[cfg(test)]
 pub(crate) use wcag22::{
     ApplicableWcag22EvaluationErrorV1, ApplicableWcag22MeasurementV1, Wcag22PassV1, Wcag22Srgb8V1,
     Wcag22ViolationV1,
@@ -142,13 +140,13 @@ pub(crate) trait HardClassifier<Invocation, Measurement>:
     ) -> HardDecision<Self::Pass, Self::Violation>;
 }
 
-type PointInvocation<Evaluation> =
+pub(crate) type PointInvocation<Evaluation> =
     <Evaluation as Evaluator<ModeledSrgb8PointOccurrence>>::Invocation;
-type PointMeasurement<Evaluation> =
+pub(crate) type PointMeasurement<Evaluation> =
     <Evaluation as Evaluator<ModeledSrgb8PointOccurrence>>::Measurement;
-type PointPass<Evaluation> =
+pub(crate) type PointPass<Evaluation> =
     <Evaluation as HardClassifier<PointInvocation<Evaluation>, PointMeasurement<Evaluation>>>::Pass;
-type PointViolation<Evaluation> = <Evaluation as HardClassifier<
+pub(crate) type PointViolation<Evaluation> = <Evaluation as HardClassifier<
     PointInvocation<Evaluation>,
     PointMeasurement<Evaluation>,
 >>::Violation;

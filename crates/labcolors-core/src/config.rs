@@ -435,28 +435,24 @@ pub enum RoleRecipe {
         /// Обязательный numerical-decision profile; implicit legacy запрещён.
         decision_profile: crate::glow::GlowDecisionProfileV1,
     },
-    /// Переходная solid-эмиссия пары (внутренний модуль `pair`). Текущий heuristic
-    /// выбирает сторону и при необходимости сдвигает светлоту источника; это не
-    /// валидированный перцептивный закон. Результат не является поверхностью
-    /// [`PairLabel`](Self::PairLabel) и удаляется вместе с pair façade.
+    /// Frozen PairFill frontend до C7c. Источник эмитится opaque Paint через
+    /// общий point occurrence; отдельной Pair-эвристики и скрытой роли нет.
     PairFill {
         /// Источник якоря: бренд, семейство или нейтраль.
         source: LadderSource,
     },
-    /// Переходный foreground пары. Он решается против внутренне синтезированной
-    /// tint-поверхности с alpha закрытой позиции `FillPrimary`, а не против
-    /// страницы и не против эмитированного [`PairFill`](Self::PairFill).
-    /// Наличие двух несвязанных поверхностей является известным разрывом SSOT;
-    /// target occurrence-граф заменяет оба варианта одной композицией.
+    /// Frozen PairLabel frontend до C7c. Label-кандидаты проверяются против
+    /// фактически emitted opaque [`PairFill`](Self::PairFill) Surface общим
+    /// joint hard-report и fresh recheck.
     PairLabel {
         /// Источник физической цветовой идентичности: бренд, семейство или нейтраль.
         source: LadderSource,
-        /// Доля максимума контраста тинт-поверхности `(0, 1]` (как у
+        /// Доля максимума контраста PairFill Surface `(0, 1]` (как у
         /// [`TextAnchor`](Self::TextAnchor)): низкая доля оставляет больше места
         /// для хромы источника у пола, высокая тянет к контрастному пределу.
         /// Точный серый source при любой доле остаётся нейтральным.
         fraction: f64,
-        /// WCAG-пол, энфорсимый ПРОТИВ тинт-поверхности (а не фона страницы).
+        /// WCAG-пол против emitted PairFill Surface, не страницы.
         floor: Floor,
     },
     /// Альфа-аналог solid-источника через точечную композит-инверсию
@@ -952,7 +948,7 @@ impl ThemeConfig {
                     *fraction,
                     FRACTION_MIN_EXCLUSIVE,
                     FRACTION_MAX_INCLUSIVE,
-                    "0 < fraction ≤ 1 (доля максимального контраста тинт-поверхности бейджа)",
+                    "0 < fraction ≤ 1 (доля максимального контраста PairFill Surface)",
                 )
             }
             RoleRecipe::AlphaAnalog { of, alpha } => {
@@ -1186,14 +1182,10 @@ impl ThemeConfig {
                 fraction,
                 floor,
             } => {
-                // Поверхность бейджа = семейный тинт при альфе `fill-*-primary`
-                // (@12) над фоном резолва. Альфа берётся из ЗАКРЫТОГО меню позиции
-                // (не литерал), поэтому tinted-badge лейбл и `fill-*-tinted`
-                // заливка всегда садятся на одну и ту же подложку по построению.
-                // `FillPrimary` здесь — ТОЛЬКО источник client-calibrated alpha
-                // на этапе lowering; физика и appearance-граф это имя не знают.
-                let (surface_alpha_light, surface_alpha_dark) =
-                    crate::ladder::LadderPosition::FillPrimary.alpha_pair();
+                // P1 унифицирует PairFill/PairLabel на единственной поверхности,
+                // которую публичный PairFill уже эмитил: opaque source Paint.
+                // Representation не выводится из клиентского имени позиции.
+                let (surface_alpha_light, surface_alpha_dark) = (1.0, 1.0);
                 Ok(RoleSpec::PairLabel {
                     tint: self.compile_ladder_tint(role, source)?,
                     fraction: *fraction,

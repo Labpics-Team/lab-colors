@@ -38,6 +38,7 @@ pub(crate) struct ExactIdentityViolationV1(());
 pub(crate) type ExactPassEvidenceV1 = VisiblePointPassEvidence<ExactSrgb8IdentityV1>;
 pub(crate) type ExactViolationEvidenceV1 = VisiblePointViolationEvidence<ExactSrgb8IdentityV1>;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct ExactSrgb8IdentityV1;
 
 impl ExactSrgb8IdentityV1 {

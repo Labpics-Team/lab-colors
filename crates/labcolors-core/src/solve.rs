@@ -1344,9 +1344,9 @@ fn meets_floor(solved: &Solved, y_bg: f64, target: f64, _vc: &ViewingConditions)
 /// ЯРКОСТЬ поверхности (Гельмгольц–Кольрауш, серый эквивалент `J_HK`).
 ///
 /// После ADR-0003 Ys candidate-score путь это НЕ читает: контракт
-/// контраста, полы и recheck меряются в `Ys`. Потребители — яркостная ось:
-/// выбор стороны внутренней pair-эвристики (`pair_side` — H-K-сдвиг кроссовера на
-/// насыщенных фонах) и яркостные подсистемы.
+/// контраста, полы и recheck меряются в `Ys`. Потребители `Y_hk` — только
+/// подсистемы с явно appearance/brightness-контрактом; Pair physics после P1
+/// этой координаты не читает.
 pub(crate) fn bg_luma(rgb: [f64; 3], vc: &ViewingConditions) -> f64 {
     let j_hk = lpc::j_hk_from_xyz(srgb_to_xyz(rgb), vc).max(0.0);
     lpc::y_hk(j_hk, vc)

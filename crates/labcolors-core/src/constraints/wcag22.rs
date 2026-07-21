@@ -7,6 +7,7 @@ use crate::wcag22::{
     evaluate_wcag22_srgb8, wcag22_profile_v1,
 };
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Wcag22Srgb8V1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

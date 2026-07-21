@@ -659,7 +659,7 @@ const LABUI_CONSUMED_ROLES: &[&str] = &[
     "border-neutral",
     "border-danger",
     "border-focus",
-    // Пары бейджа: заливка законом пары, лейбл — nested resolve потребителя.
+    // Пары бейджа: exact opaque fill и joint-verified label на emitted Surface.
     "badge-fill-brand",
     "badge-fill-danger",
     "badge-fill-warning",
@@ -717,12 +717,12 @@ const COLLAPSED_ROLES: &[(&str, &str)] = &[
         "оверлеи → alpha.rs-роли (вне поглощаемого GAP)",
     ),
     // Компонентные алиасы — конфиг-алиасы, не рецепты. Бейдж сузился законом
-    // пары: badge-fill-* стали первоклассной эмиссией (RoleRecipe::PairFill,
-    // crate::pair), коллапс остаётся только за лейблами бейджа — те решаются
-    // nested resolve потребителя от выведенной заливки.
+    // пары: badge-fill-* — первоклассная эмиссия RoleRecipe::PairFill;
+    // label frontend использует фактически emitted fill Surface без зависимости
+    // по имени токена.
     (
         "badge-label-*",
-        "лейбл бейджа — nested resolve от заливки пары",
+        "лейбл бейджа — joint-verified foreground на emitted PairFill Surface",
     ),
     ("control-bg", "компонентный алиас, не рецепт эмиссии"),
 ];
@@ -1312,43 +1312,36 @@ fn value_test_bites_on_alpha_mutation() {
     );
 }
 
-/// Сторона пары — идентичность семьи НА РЕЗОЛВ-УРОВНЕ. Носитель класса —
-/// БРЕНД под dark-IC: источник Brand несёт сырые якоря, и его dark-ic
-/// (#409CFF, Y = 0.321) пересекает кроссовер 0.30. Семейные якоря (включая
-/// info) разведены солвером и порог не straddle-ят — на них мутация
-/// «сторона от vc» поведенчески неразличима (выживший мутант M3
-/// верификатора). Мутация semantic.rs srgb→vc обязана уронить ЭТОТ тест.
+/// P1 не выводит representation из client-owned имени позиции и не двигает
+/// authored source скрытой Pair-эвристикой. Во всех VC PairFill эмитит точный
+/// выбранный source как opaque Paint; смена темы меняет только authored anchor.
 #[test]
-fn pair_side_is_family_stable_across_themes_at_resolve_level() {
+fn pair_fill_is_exact_opaque_source_across_viewing_conditions() {
     let table = labui_reference().compile_named_role_table().unwrap();
-    let bg_dark = BgInput::solid("#101012").unwrap();
-    let set = resolve_named_set(
-        &bg_dark,
-        &table,
-        &ViewingConditions::dim_surround_high_contrast(),
-    )
-    .expect("валидная pair-side fixture обязана резолвиться");
-    let (_, res) = set
-        .iter()
-        .find(|(n, _)| n == "badge-fill-brand")
-        .expect("паспорт несёт badge-fill-brand");
-    let fill = res
-        .translucent()
-        .expect("заливка пары эмитится лестничной сантехникой");
-    // Светлая сторона семьи: тёмная заливка (белый строго выигрывает
-    // штатную полярность — Y ниже выведенной границы WCAG).
-    let enc =
-        crate::spaces::srgb::srgb_encoded_from_hex(fill.tint_hex()).expect("эмиссия валидный hex");
-    let lin = [
-        crate::spaces::srgb::srgb_gamma_inv(enc[0]),
-        crate::spaces::srgb::srgb_gamma_inv(enc[1]),
-        crate::spaces::srgb::srgb_gamma_inv(enc[2]),
+    let cases = [
+        (ViewingConditions::srgb(), "#FFFFFF", "#007AFF"),
+        (ViewingConditions::dim_surround(), "#101012", "#4A8FFF"),
+        (ViewingConditions::srgb_high_contrast(), "#FFFFFF", "#0040DD"),
+        (
+            ViewingConditions::dim_surround_high_contrast(),
+            "#101012",
+            "#409CFF",
+        ),
     ];
-    let y = 0.2126 * lin[0] + 0.7152 * lin[1] + 0.0722 * lin[2];
-    assert!(
-        y < 0.17913,
-        "badge-fill-brand в dark-IC обязан быть утемнён под светлую сторону семьи (Y={y:.4})"
-    );
+
+    for (vc, background, expected_source) in cases {
+        let set = resolve_named_set(&BgInput::solid(background).unwrap(), &table, &vc)
+            .expect("валидная PairFill fixture обязана резолвиться");
+        let (_, resolved) = set
+            .iter()
+            .find(|(name, _)| name == "badge-fill-brand")
+            .expect("паспорт несёт badge-fill-brand");
+        let fill = resolved
+            .translucent()
+            .expect("PairFill эмитится общей rgba-формой");
+        assert_eq!(fill.tint_hex(), expected_source);
+        assert_eq!(fill.alpha().to_bits(), 1.0_f64.to_bits());
+    }
 }
 
 /// Дубликаты ключей всех словарей отвергаются (повтор имени = неоднозначный

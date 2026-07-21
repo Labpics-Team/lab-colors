@@ -702,7 +702,7 @@ fn cfg_test_module_exclusion_covers_the_relocated_oracles() {
 //
 // WHY THE SIGNATURE, NOT BARE `DECLARED-CALIBRATION`: a `DECLARED-CALIBRATION`
 // marker alone is legitimate — a design-choice knob carries it (e.g.
-// `PAIR_CROSSOVER_Y`), and a RETIRED threshold is still CITED in comments (the
+// `HUE_DRIFT_PENALTY_SLOPE`), and a RETIRED threshold is still CITED in comments (the
 // removed M-03 light-escape). The forbidden class is specifically the
 // SINGLE-OBSERVER fit, whose provenance always carries `N=1` /
 // `single-observer` / `однонаблюдательск`. Keying on that signature makes the
@@ -810,7 +810,7 @@ fn red_proof_observer_fit_scanner_is_silent_on_cfg_test_bare_calibration_and_loo
 
     // A bare DECLARED-CALIBRATION marker WITHOUT the single-observer signature is a
     // legitimate design-choice knob or a historical citation — must stay silent.
-    let bare = "// PAIR_CROSSOVER_Y is a DECLARED-CALIBRATION design choice\n\
+    let bare = "// HUE_DRIFT_PENALTY_SLOPE is a DECLARED-CALIBRATION design choice\n\
                 // the former M-03 light-escape threshold (DECLARED-CALIBRATION) was removed\n";
     assert!(
         single_observer_calibration_sites("probe.rs", bare).is_empty(),
