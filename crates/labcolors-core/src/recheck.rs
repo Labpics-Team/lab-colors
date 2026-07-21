@@ -400,7 +400,7 @@ pub(crate) enum RecheckProtocolErrorV1 {
 /// silently reinterpreting these variants.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
-pub enum PointSupportCriterionGateV1 {
+pub enum PointSupportRequiredFloorV1 {
     /// No criterion gate was requested. No pass is fabricated.
     NotRequested,
     /// Preserve the current legacy AA UI/graphics 3:1 ratio gate.
@@ -409,7 +409,7 @@ pub enum PointSupportCriterionGateV1 {
     RequiredLegacyWcagAaTextRatio,
 }
 
-impl PointSupportCriterionGateV1 {
+impl PointSupportRequiredFloorV1 {
     const fn required_ratio(self) -> Option<f64> {
         match self {
             Self::NotRequested => None,
@@ -421,7 +421,7 @@ impl PointSupportCriterionGateV1 {
 
 /// Reference floor used only by the transitional retained-surplus hysteresis.
 ///
-/// Keeping this type separate from PointSupportCriterionGateV1 prevents an
+/// Keeping this type separate from PointSupportRequiredFloorV1 prevents an
 /// accessibility invocation from being confused with a runtime stability
 /// anchor. The candidate coordinate remains a legacy WCAG-ratio diagnostic,
 /// not LPC.
@@ -483,7 +483,7 @@ impl PointSupportDropFractionV1 {
 pub struct PointSupportOccurrenceV1 {
     source: Srgb8,
     opacity: AdmittedOpacityV1,
-    criterion: PointSupportCriterionGateV1,
+    required_floor: PointSupportRequiredFloorV1,
     hysteresis: PointSupportHysteresisV1,
 }
 
@@ -491,7 +491,7 @@ impl PointSupportOccurrenceV1 {
     pub fn try_new(
         source: Srgb8,
         opacity: f64,
-        criterion: PointSupportCriterionGateV1,
+        required_floor: PointSupportRequiredFloorV1,
         hysteresis: PointSupportHysteresisV1,
     ) -> Result<Self, PointSupportInputErrorV1> {
         let opacity = AdmittedOpacityV1::new(opacity).map_err(|error| match error {
@@ -503,7 +503,7 @@ impl PointSupportOccurrenceV1 {
         Ok(Self {
             source,
             opacity,
-            criterion,
+            required_floor,
             hysteresis,
         })
     }
@@ -516,8 +516,8 @@ impl PointSupportOccurrenceV1 {
         self.opacity.value()
     }
 
-    pub const fn criterion(self) -> PointSupportCriterionGateV1 {
-        self.criterion
+    pub const fn required_floor(self) -> PointSupportRequiredFloorV1 {
+        self.required_floor
     }
 
     pub const fn hysteresis(self) -> PointSupportHysteresisV1 {
@@ -580,7 +580,7 @@ impl PointSupportLegacyContrastDiagnosticV1 {
 /// Assessment of the transitional required ratio for one current cell.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
-pub enum PointSupportCriterionStateV1 {
+pub enum PointSupportRequiredFloorStateV1 {
     NotRequested,
     RequiredThresholdMet,
     RequiredThresholdNotMet,
@@ -654,8 +654,8 @@ pub struct PointSupportCellV1 {
     opacity_bits: u64,
     backdrop: Srgb8,
     visible: Srgb8,
-    criterion: PointSupportCriterionGateV1,
-    criterion_state: PointSupportCriterionStateV1,
+    criterion: PointSupportRequiredFloorV1,
+    required_floor_state: PointSupportRequiredFloorStateV1,
     diagnostic: PointSupportLegacyContrastDiagnosticV1,
     hysteresis: PointSupportHysteresisAssessmentV1,
 }
@@ -685,12 +685,12 @@ impl PointSupportCellV1 {
         self.visible
     }
 
-    pub const fn criterion(self) -> PointSupportCriterionGateV1 {
+    pub const fn criterion(self) -> PointSupportRequiredFloorV1 {
         self.criterion
     }
 
-    pub const fn criterion_state(self) -> PointSupportCriterionStateV1 {
-        self.criterion_state
+    pub const fn required_floor_state(self) -> PointSupportRequiredFloorStateV1 {
+        self.required_floor_state
     }
 
     pub const fn diagnostic(self) -> PointSupportLegacyContrastDiagnosticV1 {
@@ -852,17 +852,17 @@ pub fn evaluate_point_support_v1(
                 backdrop.bytes(),
             );
             let diagnostic = point_support_diagnostic(&physical);
-            let criterion_state = match occurrence.criterion.required_ratio() {
-                None => PointSupportCriterionStateV1::NotRequested,
+            let required_floor_state = match occurrence.required_floor.required_ratio() {
+                None => PointSupportRequiredFloorStateV1::NotRequested,
                 Some(required) if diagnostic.wcag_ratio() >= required => {
-                    PointSupportCriterionStateV1::RequiredThresholdMet
+                    PointSupportRequiredFloorStateV1::RequiredThresholdMet
                 }
                 Some(_) => {
                     cause_mask |= POINT_SUPPORT_CAUSE_REQUIRED_RATIO_V1;
                     if first_required_failure_index.is_none() {
                         first_required_failure_index = Some(cells.len());
                     }
-                    PointSupportCriterionStateV1::RequiredThresholdNotMet
+                    PointSupportRequiredFloorStateV1::RequiredThresholdNotMet
                 }
             };
             let hysteresis = match *baseline {
@@ -905,8 +905,8 @@ pub fn evaluate_point_support_v1(
                 opacity_bits: occurrence.opacity.bits(),
                 backdrop,
                 visible: Srgb8::new(physical.visible()),
-                criterion: occurrence.criterion,
-                criterion_state,
+                required_floor: occurrence.required_floor,
+                required_floor_state,
                 diagnostic,
                 hysteresis,
             });
