@@ -1,0 +1,113 @@
+name: P1 cleanup and diagnostics
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    if: github.event.pull_request.number == 370
+    runs-on: [self-hosted, Linux, X64]
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          ref: agent/p1-correct-rebuild
+          fetch-depth: 0
+          persist-credentials: true
+      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9
+        with:
+          toolchain: 1.96.0
+          components: rustfmt,clippy
+      - name: remove obsolete compatibility residue
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def replace(path: str, old: str, new: str) -> None:
+              file = Path(path)
+              text = file.read_text()
+              if old not in text:
+                  raise SystemExit(f"expected text missing in {path}: {old[:80]!r}")
+              file.write_text(text.replace(old, new, 1))
+
+          replace(
+              "crates/labcolors-core/src/pair_label_tests.rs",
+              "use crate::config::{LadderSource, RoleRecipe, labui_reference};",
+              "use crate::config::fixture::labui_reference;\nuse crate::config::{LadderSource, RoleRecipe};",
+          )
+          replace(
+              "crates/labcolors-core/src/pair_label_tests.rs",
+              "use crate::semantic::{NamedRoleTable, Resolved, RoleChroma, RoleSpec, resolve_named_set};",
+              "use crate::semantic::{NamedRoleTable, RoleChroma, RoleSpec, resolve_named_set};",
+          )
+          replace(
+              "crates/labcolors-core/src/constraints/mod.rs",
+              "pub(crate) use wcag22::{\n    ApplicableWcag22EvaluationErrorV1, ApplicableWcag22MeasurementV1, Wcag22PassV1, Wcag22Srgb8V1,\n    Wcag22ViolationV1,\n};",
+              "pub(crate) use wcag22::Wcag22Srgb8V1;\n\n#[cfg(test)]\npub(crate) use wcag22::{\n    ApplicableWcag22EvaluationErrorV1, ApplicableWcag22MeasurementV1, Wcag22PassV1,\n    Wcag22ViolationV1,\n};",
+          )
+          replace(
+              "crates/labcolors-core/src/constraints/wcag22.rs",
+              "impl ApplicableWcag22MeasurementV1 {",
+              "#[cfg(test)]\nimpl ApplicableWcag22MeasurementV1 {",
+          )
+          for old in [
+              "const HK_CHROMA_EXPONENT: f64 = 0.587;",
+              "pub(crate) fn hk_coeff(h_cam_deg: f64) -> f64 {",
+              "pub(crate) fn y_hk(j_hk: f64, vc: &ViewingConditions) -> f64 {",
+              "pub(crate) fn j_hk_from_xyz(xyz: [f64; 3], vc: &ViewingConditions) -> f64 {",
+              "pub(crate) fn j_hk_from_cam16(j: f64, m: f64, h: f64, vc: &ViewingConditions) -> f64 {",
+          ]:
+              replace("crates/labcolors-core/src/lpc.rs", old, "#[cfg(test)]\n" + old)
+          replace(
+              "crates/labcolors-core/src/pair.rs",
+              "\n    pub(crate) const fn ordinal(self) -> CandidateOrdinalV1 {\n        self.ordinal\n    }\n",
+              "\n",
+          )
+          replace(
+              "crates/labcolors-core/src/appearance.rs",
+              "    #[cfg_attr(\n        not(test),\n        expect(\n            dead_code,\n            reason = \"shipped exact evaluator reads visible; backdrop is consumed by the test-private WCAG adapter\"\n        )\n    )]\n",
+              "",
+          )
+          replace(
+              "crates/labcolors-core/src/solve.rs",
+              "/// H-K-corrected luminance (`Y_hk`) of a linear-sRGB stimulus — воспринимаемая\n/// ЯРКОСТЬ поверхности (Гельмгольц–Кольрауш, серый эквивалент `J_HK`).\n///\n/// После ADR-0003 Ys candidate-score путь это НЕ читает: контракт\n/// контраста, полы и recheck меряются в `Ys`. Потребители `Y_hk` — только\n/// подсистемы с явно appearance/brightness-контрактом; Pair physics после P1\n/// этой координаты не читает.\npub(crate) fn bg_luma(rgb: [f64; 3], vc: &ViewingConditions) -> f64 {\n    let j_hk = lpc::j_hk_from_xyz(srgb_to_xyz(rgb), vc).max(0.0);\n    lpc::y_hk(j_hk, vc)\n}\n\n",
+              "",
+          )
+          PY
+          rm -f p1-test-status.txt
+          cargo fmt --all
+      - name: validate focused workspace
+        shell: bash
+        run: |
+          set +e
+          cargo test --workspace --locked --message-format=short > /tmp/p1-test.log 2>&1
+          test_status=$?
+          cargo clippy --workspace --all-targets --locked --message-format=short -- -D warnings > /tmp/p1-clippy.log 2>&1
+          clippy_status=$?
+          set -e
+          printf '%s\n' "$test_status" > /tmp/p1-test-status.txt
+          printf '%s\n' "$clippy_status" > /tmp/p1-clippy-status.txt
+      - name: commit cleanup
+        shell: bash
+        run: |
+          set -euo pipefail
+          git rm .github/workflows/agent-p1-cleanup.yml
+          git add -A
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git commit -m 'P1: remove retired Pair physics residue'
+          git push origin HEAD:agent/p1-correct-rebuild
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: p1-cleanup-diagnostics
+          path: |
+            /tmp/p1-test.log
+            /tmp/p1-test-status.txt
+            /tmp/p1-clippy.log
+            /tmp/p1-clippy-status.txt
+          if-no-files-found: error
+          retention-days: 1
