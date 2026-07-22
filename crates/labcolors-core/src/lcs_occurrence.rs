@@ -1,10 +1,15 @@
 //! Type foundation for a context-bound Labpics Colors Space occurrence.
 //!
-//! This module intentionally contains no colour transforms. It makes the
-//! physical identity split representable before the existing kernels are moved:
-//! encoded output, framed tristimulus evidence, appearance context and derived
-//! hue state are different values. In particular, an occurrence has no inverse
-//! operation accepting an arbitrary second context.
+//! Encoded output, a framed tristimulus, immutable appearance context and
+//! derived hue state are different values. The one executable transform here is
+//! a sealed, versioned lowering of one encoded sRGB8 point through the existing
+//! IEC transfer table and XYZ(D65) matrix. It is a deterministic
+//! model derivation, not evidence that a host rendered or a person observed the
+//! result. In particular, an occurrence has no inverse operation accepting an
+//! arbitrary second context.
+
+use crate::Srgb8;
+use crate::spaces::srgb::xyz_d65_from_srgb8_v1;
 
 /// A registered encoded-output domain.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -12,34 +17,38 @@ pub enum OutputProfileId {
     Iec61966Srgb8D65V1,
 }
 
-/// A registered render operation. This is deliberately not an output profile.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum RenderProfileId {
-    EncodedSrgb8PointV1,
-}
-
-/// Exact encoded channels plus the profile which gives those channels meaning.
+/// Exact encoded channels plus the output profile which gives them meaning.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ColorSignal {
-    channels: [u8; 3],
+    srgb8: Srgb8,
     output_profile: OutputProfileId,
 }
 
 impl ColorSignal {
-    pub(crate) const fn new(channels: [u8; 3], output_profile: OutputProfileId) -> Self {
+    /// Form the only admitted encoded signal without accepting a free-form
+    /// channel/profile pairing.
+    pub(crate) const fn from_srgb8(srgb8: Srgb8) -> Self {
         Self {
-            channels,
-            output_profile,
+            srgb8,
+            output_profile: OutputProfileId::Iec61966Srgb8D65V1,
         }
     }
 
-    pub(crate) const fn channels(self) -> [u8; 3] {
-        self.channels
+    pub(crate) const fn srgb8(self) -> Srgb8 {
+        self.srgb8
     }
 
     pub(crate) const fn output_profile(self) -> OutputProfileId {
         self.output_profile
     }
+}
+
+/// Exact code release for one colorimetric signal-to-tristimulus transform.
+///
+/// This is not a composition profile, renderer capability or observation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum ColorimetricTransformReleaseId {
+    Iec61966Srgb8ToCie1931TwoDegreeXyzD65RelativeY1V1,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -74,7 +83,7 @@ pub struct ColorimetricFrameId {
 }
 
 impl ColorimetricFrameId {
-    pub(crate) const fn new(
+    const fn registered(
         observer: ObserverProfileId,
         reference_white: ReferenceWhiteId,
         scale: TristimulusScale,
@@ -105,6 +114,61 @@ impl ColorimetricFrameId {
     }
 }
 
+/// Canonical result frame of the registered encoded-sRGB8 transform.
+pub(crate) const IEC_SRGB_D65_XYZ_FRAME_V1: ColorimetricFrameId = ColorimetricFrameId::registered(
+    ObserverProfileId::Cie1931TwoDegreeV1,
+    ReferenceWhiteId::Iec61966D65ChromaticityV1,
+    TristimulusScale::RelativeY1,
+    ColorimetricFrameReleaseId::XyzV1,
+);
+
+#[cfg(test)]
+pub(crate) const MUTATION_SENTINEL_XYZ_FRAME_V1: ColorimetricFrameId =
+    ColorimetricFrameId::registered(
+        ObserverProfileId::Cie1931TwoDegreeV1,
+        ReferenceWhiteId::Iec61966D65ChromaticityV1,
+        TristimulusScale::RelativeY1,
+        ColorimetricFrameReleaseId::MutationSentinelV1,
+    );
+
+/// The one closed, code-owned binding admitted by the current F0 slice.
+///
+/// A variant is the tuple: independent profile, transform and frame fields
+/// cannot be authored or mixed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum AdmittedSrgb8TristimulusBindingV1 {
+    Iec61966Srgb8ToCie1931TwoDegreeXyzD65RelativeY1V1,
+}
+
+impl AdmittedSrgb8TristimulusBindingV1 {
+    pub(crate) const fn signal_output_profile(self) -> OutputProfileId {
+        match self {
+            Self::Iec61966Srgb8ToCie1931TwoDegreeXyzD65RelativeY1V1 => {
+                OutputProfileId::Iec61966Srgb8D65V1
+            }
+        }
+    }
+
+    pub(crate) const fn transform_release(self) -> ColorimetricTransformReleaseId {
+        match self {
+            Self::Iec61966Srgb8ToCie1931TwoDegreeXyzD65RelativeY1V1 => {
+                ColorimetricTransformReleaseId::Iec61966Srgb8ToCie1931TwoDegreeXyzD65RelativeY1V1
+            }
+        }
+    }
+
+    pub(crate) const fn result_frame(self) -> ColorimetricFrameId {
+        match self {
+            Self::Iec61966Srgb8ToCie1931TwoDegreeXyzD65RelativeY1V1 => {
+                IEC_SRGB_D65_XYZ_FRAME_V1
+            }
+        }
+    }
+}
+
+pub(crate) const ADMITTED_SRGB8_TRISTIMULUS_BINDING_V1: AdmittedSrgb8TristimulusBindingV1 =
+    AdmittedSrgb8TristimulusBindingV1::Iec61966Srgb8ToCie1931TwoDegreeXyzD65RelativeY1V1;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NumericDomainError {
     NonFinite,
@@ -116,10 +180,10 @@ pub enum NumericDomainError {
 
 /// Finite, non-negative binary64 value with canonical positive zero.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct FiniteNonNegative(u64);
+struct FiniteNonNegative(u64);
 
 impl FiniteNonNegative {
-    pub(crate) fn new(value: f64) -> Result<Self, NumericDomainError> {
+    fn new(value: f64) -> Result<Self, NumericDomainError> {
         if !value.is_finite() {
             return Err(NumericDomainError::NonFinite);
         }
@@ -133,7 +197,7 @@ impl FiniteNonNegative {
         }))
     }
 
-    pub(crate) fn get(self) -> f64 {
+    fn get(self) -> f64 {
         f64::from_bits(self.0)
     }
 }
@@ -145,19 +209,54 @@ pub struct TristimulusSample {
     frame: ColorimetricFrameId,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum TristimulusComponentV1 {
+    X,
+    Y,
+    Z,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TristimulusDomainErrorV1 {
+    component: TristimulusComponentV1,
+    reason: NumericDomainError,
+}
+
+impl TristimulusDomainErrorV1 {
+    pub(crate) const fn component(self) -> TristimulusComponentV1 {
+        self.component
+    }
+
+    pub(crate) const fn reason(self) -> NumericDomainError {
+        self.reason
+    }
+}
+
 impl TristimulusSample {
-    pub(crate) fn new(
+    fn try_from_registered_xyz(
         xyz: [f64; 3],
         frame: ColorimetricFrameId,
-    ) -> Result<Self, NumericDomainError> {
+    ) -> Result<Self, TristimulusDomainErrorV1> {
+        let admit = |value, component| {
+            FiniteNonNegative::new(value)
+                .map_err(|reason| TristimulusDomainErrorV1 { component, reason })
+        };
         Ok(Self {
             xyz: [
-                FiniteNonNegative::new(xyz[0])?,
-                FiniteNonNegative::new(xyz[1])?,
-                FiniteNonNegative::new(xyz[2])?,
+                admit(xyz[0], TristimulusComponentV1::X)?,
+                admit(xyz[1], TristimulusComponentV1::Y)?,
+                admit(xyz[2], TristimulusComponentV1::Z)?,
             ],
             frame,
         })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn try_from_xyz_for_test(
+        xyz: [f64; 3],
+        frame: ColorimetricFrameId,
+    ) -> Result<Self, TristimulusDomainErrorV1> {
+        Self::try_from_registered_xyz(xyz, frame)
     }
 
     pub(crate) fn xyz(self) -> [f64; 3] {
@@ -169,9 +268,96 @@ impl TristimulusSample {
     }
 }
 
+/// Content-bound provenance of one deterministic modeled transform.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ModeledTristimulusProvenanceV1 {
+    source_signal: ColorSignal,
+    binding: AdmittedSrgb8TristimulusBindingV1,
+}
+
+impl ModeledTristimulusProvenanceV1 {
+    pub(crate) const fn source_signal(self) -> ColorSignal {
+        self.source_signal
+    }
+
+    pub(crate) const fn binding(self) -> AdmittedSrgb8TristimulusBindingV1 {
+        self.binding
+    }
+}
+
+/// Replayable ideal colorimetric derivation under one admitted binding.
+///
+/// This is not a renderer capability, render observation, human observation or
+/// certified field bound. It cannot by itself satisfy such predicates.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ModeledTristimulusDerivationV1 {
+    sample: TristimulusSample,
+    provenance: ModeledTristimulusProvenanceV1,
+}
+
+impl ModeledTristimulusDerivationV1 {
+    pub(crate) const fn sample(self) -> TristimulusSample {
+        self.sample
+    }
+
+    pub(crate) const fn provenance(self) -> ModeledTristimulusProvenanceV1 {
+        self.provenance
+    }
+
+    pub(crate) fn replay(self) -> Result<TristimulusSample, TristimulusDomainErrorV1> {
+        derive_sample_with_binding(
+            self.provenance.source_signal,
+            self.provenance.binding,
+        )
+    }
+}
+
+fn admitted_binding(output_profile: OutputProfileId) -> AdmittedSrgb8TristimulusBindingV1 {
+    match output_profile {
+        OutputProfileId::Iec61966Srgb8D65V1 => ADMITTED_SRGB8_TRISTIMULUS_BINDING_V1,
+    }
+}
+
+fn derive_sample_with_binding(
+    signal: ColorSignal,
+    binding: AdmittedSrgb8TristimulusBindingV1,
+) -> Result<TristimulusSample, TristimulusDomainErrorV1> {
+    let xyz = match (
+        signal.output_profile(),
+        binding.signal_output_profile(),
+        binding.transform_release(),
+    ) {
+        (
+            OutputProfileId::Iec61966Srgb8D65V1,
+            OutputProfileId::Iec61966Srgb8D65V1,
+            ColorimetricTransformReleaseId::Iec61966Srgb8ToCie1931TwoDegreeXyzD65RelativeY1V1,
+        ) => xyz_d65_from_srgb8_v1(signal.srgb8()),
+    };
+    TristimulusSample::try_from_registered_xyz(xyz, binding.result_frame())
+}
+
+/// Derive one modeled tristimulus from an encoded sRGB8 point.
+///
+/// Composition provenance remains the responsibility of the upstream
+/// render/composition layer that produced the signal; renderer capability and
+/// actual observations are deliberately outside this deterministic transform.
+pub(crate) fn derive_modeled_tristimulus_v1(
+    signal: ColorSignal,
+) -> Result<ModeledTristimulusDerivationV1, TristimulusDomainErrorV1> {
+    let binding = admitted_binding(signal.output_profile());
+    let sample = derive_sample_with_binding(signal, binding)?;
+    Ok(ModeledTristimulusDerivationV1 {
+        sample,
+        provenance: ModeledTristimulusProvenanceV1 {
+            source_signal: signal,
+            binding,
+        },
+    })
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum AppearanceContextReleaseId {
-    Cam16V1,
+pub enum AppearanceContextSchemaReleaseId {
+    Ciecam16ViewingInputsV1,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -181,49 +367,128 @@ pub enum SurroundProfileId {
     DarkV1,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum AppearanceContextFieldV1 {
+    AdaptingLuminanceCdM2,
+    BackgroundLuminanceRatio,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AppearanceContextDomainErrorV1 {
+    field: AppearanceContextFieldV1,
+    reason: NumericDomainError,
+}
+
+impl AppearanceContextDomainErrorV1 {
+    pub(crate) const fn field(self) -> AppearanceContextFieldV1 {
+        self.field
+    }
+
+    pub(crate) const fn reason(self) -> NumericDomainError {
+        self.reason
+    }
+}
+
+/// Finite, strictly positive CIECAM16 adapting luminance in cd/m².
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct AdaptingLuminanceCdM2(FiniteNonNegative);
+
+impl AdaptingLuminanceCdM2 {
+    pub(crate) fn try_new(value: f64) -> Result<Self, AppearanceContextDomainErrorV1> {
+        let field = AppearanceContextFieldV1::AdaptingLuminanceCdM2;
+        let value = FiniteNonNegative::new(value)
+            .map_err(|reason| AppearanceContextDomainErrorV1 { field, reason })?;
+        if value.get() == 0.0 {
+            return Err(AppearanceContextDomainErrorV1 {
+                field,
+                reason: NumericDomainError::NotPositive,
+            });
+        }
+        Ok(Self(value))
+    }
+
+    pub(crate) fn get(self) -> f64 {
+        self.0.get()
+    }
+}
+
+/// Finite CIECAM16 background ratio `Y_b / Y_w` in `(0, 1]`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct BackgroundLuminanceRatio(FiniteNonNegative);
+
+impl BackgroundLuminanceRatio {
+    pub(crate) fn try_new(value: f64) -> Result<Self, AppearanceContextDomainErrorV1> {
+        let field = AppearanceContextFieldV1::BackgroundLuminanceRatio;
+        let value = FiniteNonNegative::new(value)
+            .map_err(|reason| AppearanceContextDomainErrorV1 { field, reason })?;
+        if value.get() == 0.0 {
+            return Err(AppearanceContextDomainErrorV1 {
+                field,
+                reason: NumericDomainError::NotPositive,
+            });
+        }
+        if value.get() > 1.0 {
+            return Err(AppearanceContextDomainErrorV1 {
+                field,
+                reason: NumericDomainError::AboveOne,
+            });
+        }
+        Ok(Self(value))
+    }
+
+    pub(crate) fn get(self) -> f64 {
+        self.0.get()
+    }
+}
+
 /// Content identity of immutable semantic viewing inputs.
 ///
 /// Derived CAM constants are intentionally absent and must remain a private
-/// cache of the observer implementation.
+/// cache of the appearance-view implementation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct AppearanceContextId {
-    release: AppearanceContextReleaseId,
+    schema_release: AppearanceContextSchemaReleaseId,
     frame: ColorimetricFrameId,
-    adapting_luminance: FiniteNonNegative,
-    background_relative_luminance: FiniteNonNegative,
+    adapting_luminance_cd_m2: AdaptingLuminanceCdM2,
+    background_luminance_ratio: BackgroundLuminanceRatio,
     surround: SurroundProfileId,
 }
 
 impl AppearanceContextId {
-    pub(crate) fn new(
-        release: AppearanceContextReleaseId,
+    pub(crate) const fn from_inputs(
+        schema_release: AppearanceContextSchemaReleaseId,
         frame: ColorimetricFrameId,
-        adapting_luminance: f64,
-        background_relative_luminance: f64,
+        adapting_luminance_cd_m2: AdaptingLuminanceCdM2,
+        background_luminance_ratio: BackgroundLuminanceRatio,
         surround: SurroundProfileId,
-    ) -> Result<Self, NumericDomainError> {
-        let adapting_luminance = FiniteNonNegative::new(adapting_luminance)?;
-        if adapting_luminance.get() == 0.0 {
-            return Err(NumericDomainError::NotPositive);
-        }
-        let background_relative_luminance = FiniteNonNegative::new(background_relative_luminance)?;
-        if background_relative_luminance.get() == 0.0 {
-            return Err(NumericDomainError::NotPositive);
-        }
-        if background_relative_luminance.get() > 1.0 {
-            return Err(NumericDomainError::AboveOne);
-        }
-        Ok(Self {
-            release,
+    ) -> Self {
+        Self {
+            schema_release,
             frame,
-            adapting_luminance,
-            background_relative_luminance,
+            adapting_luminance_cd_m2,
+            background_luminance_ratio,
             surround,
-        })
+        }
+    }
+
+    pub(crate) const fn schema_release(self) -> AppearanceContextSchemaReleaseId {
+        self.schema_release
     }
 
     pub(crate) const fn frame(self) -> ColorimetricFrameId {
         self.frame
+    }
+
+    pub(crate) fn adapting_luminance_cd_m2(self) -> f64 {
+        self.adapting_luminance_cd_m2.get()
+    }
+
+    pub(crate) fn background_luminance_ratio(self) -> f64 {
+        self.background_luminance_ratio.get()
+    }
+
+    pub(crate) const fn surround_profile(self) -> SurroundProfileId {
+        self.surround
     }
 }
 
@@ -265,14 +530,17 @@ pub enum HueState {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ObserveError {
+pub enum OccurrenceFormationError {
     FrameMismatch {
         stimulus: ColorimetricFrameId,
         context: ColorimetricFrameId,
     },
 }
 
-/// LCS identity: one physical sample observed in one immutable context.
+/// LCS identity: one tristimulus sample bound to one immutable context.
+///
+/// Whether the sample is modeled, renderer-observed or measured belongs to its
+/// external provenance; forming this identity does not upgrade that claim.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LcsOccurrence {
     sample: TristimulusSample,
@@ -280,17 +548,17 @@ pub struct LcsOccurrence {
 }
 
 impl LcsOccurrence {
-    /// Observe one sample in one context with an exactly matching frame.
+    /// Bind one sample to one context with an exactly matching frame.
     ///
     /// Named appearance views are derived later from this pair. No view
     /// coordinate is accepted here, so contradictory cached views cannot become
     /// part of occurrence identity.
-    pub(crate) fn observe(
+    pub(crate) fn in_context(
         sample: TristimulusSample,
         context: AppearanceContextId,
-    ) -> Result<Self, ObserveError> {
+    ) -> Result<Self, OccurrenceFormationError> {
         if sample.frame() != context.frame() {
-            return Err(ObserveError::FrameMismatch {
+            return Err(OccurrenceFormationError::FrameMismatch {
                 stimulus: sample.frame(),
                 context: context.frame(),
             });

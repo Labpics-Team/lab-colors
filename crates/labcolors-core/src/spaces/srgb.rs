@@ -147,6 +147,17 @@ pub(crate) fn srgb_linear_from_srgb8(rgb: Srgb8) -> [f64; 3] {
     [decode_8bit(r), decode_8bit(g), decode_8bit(b)]
 }
 
+/// Derive one CIE 1931 XYZ(D65, relative Y = 1) point from exact encoded sRGB8.
+///
+/// This is the single operation-order owner for the registered finite-input
+/// colourimetric transform. It is a deterministic model of a declared encoded
+/// point signal; it does not claim that a renderer emitted or an
+/// observer measured the resulting tristimulus.
+#[inline]
+pub(crate) fn xyz_d65_from_srgb8_v1(rgb: Srgb8) -> [f64; 3] {
+    srgb_to_xyz(srgb_linear_from_srgb8(rgb))
+}
+
 /// Parse `#RRGGBB` → `(linear, display)` in one pass over the bytes: `linear`
 /// is the exact 8-bit decode (as [`srgb_from_hex`]), `display` is the
 /// **gamma-encoded** value WCAG measures — `[r/255, g/255, b/255]` — obtained
