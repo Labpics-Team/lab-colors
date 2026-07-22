@@ -106,10 +106,8 @@ impl PointRenderOwnerV1 {
             .binding_template
             .try_clone_v1()
             .map_err(PointRenderAttachErrorV1::Bindings)?;
-        let initial_signal_buffers = CompositedSignalBuffersV1::try_new(
-            epoch.surface_ports.len(),
-            epoch.occurrence_count,
-        )?;
+        let initial_signal_buffers =
+            CompositedSignalBuffersV1::try_new(epoch.surface_ports.len(), epoch.occurrence_count)?;
         Ok(PointRenderSessionV1 {
             epoch: Rc::downgrade(epoch),
             bindings,
@@ -347,15 +345,13 @@ impl PointRenderSessionV1 {
                 surfaces_rgb24,
             } => {
                 let retained_shape_matches = match &self.state {
-                    PointRenderSessionStateV1::Waiting { .. } => self
-                        .initial_signal_buffers
-                        .as_ref()
-                        .is_some_and(|buffers| {
-                            buffers.input_surface_signals_rgb24.len()
-                                == epoch.surface_ports.len()
+                    PointRenderSessionStateV1::Waiting { .. } => {
+                        self.initial_signal_buffers.as_ref().is_some_and(|buffers| {
+                            buffers.input_surface_signals_rgb24.len() == epoch.surface_ports.len()
                                 && buffers.composited_occurrence_signals_rgb24.len()
                                     == epoch.occurrence_count
-                        }),
+                        })
+                    }
                     PointRenderSessionStateV1::Ready { current } => {
                         current.buffers.input_surface_signals_rgb24.len()
                             == epoch.surface_ports.len()
@@ -425,10 +421,7 @@ impl PointRenderSessionV1 {
                     *output = pack_rgb24(resolved.visible());
                 }
                 self.state = PointRenderSessionStateV1::Ready {
-                    current: CompositedSignalSnapshotV1 {
-                        revision,
-                        buffers,
-                    },
+                    current: CompositedSignalSnapshotV1 { revision, buffers },
                 };
             }
         }
@@ -458,8 +451,7 @@ impl PointRenderSessionV1 {
                 PointRenderSessionStateV1::Ready { current },
             ) => {
                 revision == current.revision
-                    && surfaces_rgb24
-                        == current.buffers.input_surface_signals_rgb24.as_slice()
+                    && surfaces_rgb24 == current.buffers.input_surface_signals_rgb24.as_slice()
             }
             _ => false,
         };

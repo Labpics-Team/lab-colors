@@ -117,9 +117,7 @@ fn unavailable(revision: u64, reason: u32) -> [u32; 5] {
     ]
 }
 
-fn retained_signal_storage_pointers(
-    state: &PointRenderSessionStateV1,
-) -> (*const u32, *const u32) {
+fn retained_signal_storage_pointers(state: &PointRenderSessionStateV1) -> (*const u32, *const u32) {
     let snapshot = match state {
         PointRenderSessionStateV1::Ready { current } => current,
         PointRenderSessionStateV1::Stale { previous, .. } => previous,
@@ -337,9 +335,8 @@ fn attached_session_reuses_buffers_for_every_update_state() {
         (still_missing.as_slice(), 2),
         (recovered.as_slice(), 3),
     ] {
-        let (result, allocations) = crate::test_support::measured_allocations(|| {
-            session.update_packed(update).map(|_| ())
-        });
+        let (result, allocations) =
+            crate::test_support::measured_allocations(|| session.update_packed(update).map(|_| ()));
         assert!(result.is_ok());
         assert_eq!(
             allocations, 0,
@@ -373,9 +370,8 @@ fn rejected_update_preserves_cold_buffers_for_allocation_free_retry() {
     let valid = point(1, 0xff_ff_ff);
     crate::composition::reset_source_over_evaluation_count();
 
-    let (rejected, rejected_allocations) = crate::test_support::measured_allocations(|| {
-        session.update_packed(&malformed).map(|_| ())
-    });
+    let (rejected, rejected_allocations) =
+        crate::test_support::measured_allocations(|| session.update_packed(&malformed).map(|_| ()));
     assert_eq!(
         rejected,
         Err(PointRenderSessionUpdateErrorV1::EncodedSurfaceUpdate(
@@ -394,9 +390,8 @@ fn rejected_update_preserves_cold_buffers_for_allocation_free_retry() {
     ));
     assert_eq!(crate::composition::source_over_evaluation_count(), 0);
 
-    let (accepted, accepted_allocations) = crate::test_support::measured_allocations(|| {
-        session.update_packed(&valid).map(|_| ())
-    });
+    let (accepted, accepted_allocations) =
+        crate::test_support::measured_allocations(|| session.update_packed(&valid).map(|_| ()));
     assert!(accepted.is_ok());
     assert_eq!(accepted_allocations, 0);
     assert_eq!(crate::composition::source_over_evaluation_count(), 1);
@@ -417,9 +412,8 @@ fn waiting_unknown_chain_preserves_preallocated_buffers() {
         (later_missing.as_slice(), 0),
         (ready.as_slice(), 1),
     ] {
-        let (result, allocations) = crate::test_support::measured_allocations(|| {
-            session.update_packed(update).map(|_| ())
-        });
+        let (result, allocations) =
+            crate::test_support::measured_allocations(|| session.update_packed(update).map(|_| ()));
         assert!(result.is_ok());
         assert_eq!(allocations, 0);
         assert_eq!(
