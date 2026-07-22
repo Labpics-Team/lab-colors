@@ -1,12 +1,16 @@
-use crate::Srgb8;
-use crate::program_session::{
-    ColorInput, ColorInputId, CompiledProgram, CompositionProfile, Occurrence, OccurrenceId,
-    OpacityInput, OpacityInputId, PACKED_ENCODED_SURFACE_PRESENT_TAG_V1,
-    PACKED_ENCODED_SURFACE_UNAVAILABLE_TAG_V1, PACKED_ENCODED_SURFACE_UPDATE_MAGIC_V1,
-    PackedEncodedSurfaceUpdateErrorV1, Paint, PaintId, PointRenderOwner,
-    PointRenderSessionUpdateErrorV1, Program, ProgramCompileError, SessionState,
-    SessionUpdateError, Surface, SurfaceId, SurfaceInputId, SurfaceSignal, SurfaceUpdate,
+use crate::appearance::{
+    OccurrenceId as AppearanceOccurrenceId, SurfaceInputPortId as AppearanceSurfaceInputId,
 };
+use crate::program_session::{
+    canonical_occurrence_sequence_matches, canonical_surface_input_sequence_matches,
+    check_render_node_count, ColorInput, ColorInputId, CompiledProgram, CompositionProfile,
+    Occurrence, OccurrenceId, OpacityInput, OpacityInputId, PackedEncodedSurfaceUpdateErrorV1,
+    Paint, PaintId, PointRenderOwner, PointRenderSessionUpdateErrorV1, Program,
+    ProgramCompileError, SessionState, SessionUpdateError, Surface, SurfaceId, SurfaceInputId,
+    SurfaceSignal, SurfaceUpdate, PACKED_ENCODED_SURFACE_PRESENT_TAG_V1,
+    PACKED_ENCODED_SURFACE_UNAVAILABLE_TAG_V1, PACKED_ENCODED_SURFACE_UPDATE_MAGIC_V1,
+};
+use crate::Srgb8;
 
 const COLOR: ColorInputId = ColorInputId::new(1);
 const SURFACE_PORT: SurfaceInputId = SurfaceInputId::new(2);
@@ -152,6 +156,109 @@ fn authored_and_runtime_values_preserve_exact_typed_bindings() {
     let signal = SurfaceSignal::new(SURFACE_PORT, surface_value);
     assert_eq!(signal.input(), SURFACE_PORT);
     assert_eq!(signal.value(), surface_value);
+}
+
+#[test]
+fn empty_surface_schema_precedes_dangling_surface_input_analysis() {
+    let declaration = Program::new(
+        vec![ColorInput::new(COLOR, Srgb8::new([0; 3]))],
+        vec![],
+        vec![OpacityInput::new(OPACITY, 0.5)],
+        vec![Paint::Solid {
+            id: SOLID,
+            color: COLOR,
+        }],
+        vec![Surface::Input {
+            id: BACKDROP,
+            input: SURFACE_PORT,
+        }],
+        vec![Occurrence::new(
+            OCCURRENCE,
+            SOLID,
+            BACKDROP,
+            CompositionProfile::EncodedSrgb8SourceOverV1,
+        )],
+    );
+
+    assert_eq!(
+        declaration.compile().unwrap_err(),
+        ProgramCompileError::EmptySurfaceSchema
+    );
+}
+
+#[test]
+fn empty_occurrence_set_precedes_dangling_occurrence_analysis() {
+    let declaration = Program::new(
+        vec![ColorInput::new(COLOR, Srgb8::new([0; 3]))],
+        vec![SURFACE_PORT],
+        vec![],
+        vec![Paint::Solid {
+            id: SOLID,
+            color: COLOR,
+        }],
+        vec![Surface::FromOccurrence {
+            id: VISIBLE,
+            occurrence: OCCURRENCE,
+        }],
+        vec![],
+    );
+
+    assert_eq!(
+        declaration.compile().unwrap_err(),
+        ProgramCompileError::EmptyOccurrenceSet
+    );
+}
+
+#[test]
+fn combined_render_cardinality_overflow_is_resource_exhaustion() {
+    assert_eq!(check_render_node_count(usize::MAX - 1, 1), Ok(()));
+    assert_eq!(
+        check_render_node_count(usize::MAX, 1),
+        Err(ProgramCompileError::ResourceExhausted)
+    );
+}
+
+#[test]
+fn canonical_sequence_firewall_rejects_reordering_relabeling_and_truncation() {
+    let surface_inputs = [SurfaceInputId::new(1), SurfaceInputId::new(2)];
+    assert!(canonical_surface_input_sequence_matches(
+        [
+            AppearanceSurfaceInputId::new(1),
+            AppearanceSurfaceInputId::new(2),
+        ],
+        &surface_inputs,
+    ));
+    assert!(!canonical_surface_input_sequence_matches(
+        [
+            AppearanceSurfaceInputId::new(2),
+            AppearanceSurfaceInputId::new(1),
+        ],
+        &surface_inputs,
+    ));
+    assert!(!canonical_surface_input_sequence_matches(
+        [AppearanceSurfaceInputId::new(1)],
+        &surface_inputs,
+    ));
+
+    let occurrences = [OccurrenceId::new(10), OccurrenceId::new(20)];
+    assert!(canonical_occurrence_sequence_matches(
+        [
+            AppearanceOccurrenceId::new(10),
+            AppearanceOccurrenceId::new(20),
+        ],
+        &occurrences,
+    ));
+    assert!(!canonical_occurrence_sequence_matches(
+        [
+            AppearanceOccurrenceId::new(10),
+            AppearanceOccurrenceId::new(21),
+        ],
+        &occurrences,
+    ));
+    assert!(!canonical_occurrence_sequence_matches(
+        [AppearanceOccurrenceId::new(10)],
+        &occurrences,
+    ));
 }
 
 #[test]

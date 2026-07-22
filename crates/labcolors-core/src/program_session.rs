@@ -20,7 +20,6 @@
 use std::mem;
 use std::rc::{Rc, Weak};
 
-use crate::Srgb8;
 use crate::appearance::{
     AdmittedAppearanceBindings, AppearanceBindings, AppearanceGraphSpec, AppearanceWorkspace,
     BindingError, ColorInputId as AppearanceColorInputId, CompileError, CompiledAppearanceGraph,
@@ -30,6 +29,7 @@ use crate::appearance::{
     SurfaceInputPortId as AppearanceSurfaceInputId, SurfaceSpec as AppearanceSurfaceSpec,
 };
 use crate::composition::CompositionProfileV1;
+use crate::Srgb8;
 
 macro_rules! opaque_program_id {
     ($name:ident, $description:literal) => {
@@ -439,16 +439,17 @@ fn try_zeroed_signal_words(len: usize) -> Result<Vec<u32>, PointRenderAttachErro
 }
 
 fn prepare_program(program: Program) -> Result<ProgramEpochV1, ProgramCompileError> {
-    let graph = lower_graph(&program)
-        .compile()
-        .map_err(|error| map_compile_error(&program, error))?;
-
     if program.surface_inputs.is_empty() {
         return Err(ProgramCompileError::EmptySurfaceSchema);
     }
     if program.occurrences.is_empty() {
         return Err(ProgramCompileError::EmptyOccurrenceSet);
     }
+    check_render_node_count(program.surfaces.len(), program.occurrences.len())?;
+
+    let graph = lower_graph(&program)
+        .compile()
+        .map_err(|error| map_compile_error(&program, error))?;
 
     let mut surface_inputs = Vec::new();
     surface_inputs
@@ -464,8 +465,11 @@ fn prepare_program(program: Program) -> Result<ProgramEpochV1, ProgramCompileErr
     occurrence_ids.extend(program.occurrences.iter().map(|occurrence| occurrence.id));
     occurrence_ids.sort_unstable();
 
-    debug_assert_eq!(graph.surface_input_ports().len(), surface_inputs.len());
-    debug_assert_eq!(graph.occurrence_ids().len(), occurrence_ids.len());
+    if !canonical_surface_input_sequence_matches(graph.surface_input_ports(), &surface_inputs)
+        || !canonical_occurrence_sequence_matches(graph.occurrence_ids(), &occurrence_ids)
+    {
+        return Err(ProgramCompileError::InternalInvariant);
+    }
 
     let bindings = lower_bindings(&program);
     let binding_template = graph
@@ -477,6 +481,34 @@ fn prepare_program(program: Program) -> Result<ProgramEpochV1, ProgramCompileErr
         surface_inputs: surface_inputs.into_boxed_slice(),
         occurrence_ids: occurrence_ids.into_boxed_slice(),
     })
+}
+
+pub(crate) fn check_render_node_count(
+    surface_count: usize,
+    occurrence_count: usize,
+) -> Result<(), ProgramCompileError> {
+    surface_count
+        .checked_add(occurrence_count)
+        .ok_or(ProgramCompileError::ResourceExhausted)
+        .map(|_| ())
+}
+
+pub(crate) fn canonical_surface_input_sequence_matches(
+    actual: impl IntoIterator<Item = AppearanceSurfaceInputId>,
+    expected: &[SurfaceInputId],
+) -> bool {
+    actual.into_iter().eq(expected
+        .iter()
+        .map(|input| AppearanceSurfaceInputId::new(input.value())))
+}
+
+pub(crate) fn canonical_occurrence_sequence_matches(
+    actual: impl IntoIterator<Item = AppearanceOccurrenceId>,
+    expected: &[OccurrenceId],
+) -> bool {
+    actual.into_iter().eq(expected
+        .iter()
+        .map(|occurrence| AppearanceOccurrenceId::new(occurrence.value())))
 }
 
 fn lower_graph(program: &Program) -> AppearanceGraphSpec {
@@ -1194,10 +1226,10 @@ impl Session {
         self.apply_prepared(&epoch, prepared)
     }
 
-    fn apply_prepared<'input>(
+    fn apply_prepared(
         &mut self,
         epoch: &ProgramEpochV1,
-        prepared: PreparedEncodedSurfaceUpdateV1<'input>,
+        prepared: PreparedEncodedSurfaceUpdateV1<'_>,
     ) -> Result<&SessionState, PointRenderSessionUpdateErrorV1> {
         let incoming_revision = match &prepared {
             PreparedEncodedSurfaceUpdateV1::Unavailable(unavailable) => unavailable.revision,
