@@ -1,19 +1,15 @@
 use crate::Srgb8;
-use crate::appearance::{
-    AppearanceBindings, AppearanceGraphSpec, BindingError, ColorInputId, CompileError,
-    OccurrenceId, OccurrenceSpec, OpacityInputId, PaintId, PaintSpec, SurfaceId,
-    SurfaceInputPortId, SurfaceSpec,
-};
-use crate::composition::CompositionProfileV1;
 use crate::program_session::{
+    ColorInput, ColorInputId, CompiledProgram, CompositionProfile, Occurrence, OccurrenceId,
+    OpacityInput, OpacityInputId, Paint, PaintId, PointRenderOwner, Program, ProgramCompileError,
     PACKED_ENCODED_SURFACE_PRESENT_TAG_V1, PACKED_ENCODED_SURFACE_UNAVAILABLE_TAG_V1,
     PACKED_ENCODED_SURFACE_UPDATE_MAGIC_V1, PackedEncodedSurfaceUpdateErrorV1,
-    PointRenderEpochBuildErrorV1, PointRenderOwnerV1, PointRenderSessionStateV1,
-    PointRenderSessionUpdateErrorV1,
+    PointRenderSessionUpdateErrorV1, SessionState, SessionUpdateError, Surface, SurfaceId,
+    SurfaceInputId, SurfaceSignal, SurfaceUpdate,
 };
 
 const COLOR: ColorInputId = ColorInputId::new(1);
-const SURFACE_PORT: SurfaceInputPortId = SurfaceInputPortId::new(2);
+const SURFACE_PORT: SurfaceInputId = SurfaceInputId::new(2);
 const OPACITY: OpacityInputId = OpacityInputId::new(3);
 const SOLID: PaintId = PaintId::new(10);
 const TRANSLUCENT: PaintId = PaintId::new(11);
@@ -21,80 +17,76 @@ const BACKDROP: SurfaceId = SurfaceId::new(20);
 const VISIBLE: SurfaceId = SurfaceId::new(21);
 const OCCURRENCE: OccurrenceId = OccurrenceId::new(30);
 
-fn graph_spec() -> AppearanceGraphSpec {
-    graph_spec_against(BACKDROP)
+fn program(opacity: f64) -> Program {
+    program_against(BACKDROP, opacity)
 }
 
-fn graph_spec_against(against: SurfaceId) -> AppearanceGraphSpec {
-    AppearanceGraphSpec::new(
-        vec![COLOR],
+fn program_against(against: SurfaceId, opacity: f64) -> Program {
+    Program::new(
+        vec![ColorInput::new(COLOR, Srgb8::new([0; 3]))],
         vec![SURFACE_PORT],
-        vec![OPACITY],
+        vec![OpacityInput::new(OPACITY, opacity)],
         vec![
-            PaintSpec::Solid {
+            Paint::Solid {
                 id: SOLID,
                 color: COLOR,
             },
-            PaintSpec::Opacity {
+            Paint::Opacity {
                 id: TRANSLUCENT,
                 source: SOLID,
                 opacity: OPACITY,
             },
         ],
         vec![
-            SurfaceSpec::Input {
+            Surface::Input {
                 id: BACKDROP,
-                port: SURFACE_PORT,
+                input: SURFACE_PORT,
             },
-            SurfaceSpec::FromOccurrence {
+            Surface::FromOccurrence {
                 id: VISIBLE,
                 occurrence: OCCURRENCE,
             },
         ],
-        vec![OccurrenceSpec {
-            id: OCCURRENCE,
-            subject: TRANSLUCENT,
+        vec![Occurrence::new(
+            OCCURRENCE,
+            TRANSLUCENT,
             against,
-            profile: CompositionProfileV1::EncodedSrgb8SourceOverV1,
-        }],
+            CompositionProfile::EncodedSrgb8SourceOverV1,
+        )],
     )
 }
 
-fn cyclic_graph_spec() -> AppearanceGraphSpec {
-    AppearanceGraphSpec::new(
-        vec![COLOR],
+fn cyclic_program() -> Program {
+    Program::new(
+        vec![ColorInput::new(COLOR, Srgb8::new([0; 3]))],
         vec![SURFACE_PORT],
-        vec![OPACITY],
+        vec![OpacityInput::new(OPACITY, 0.5)],
         vec![
-            PaintSpec::Solid {
+            Paint::Solid {
                 id: SOLID,
                 color: COLOR,
             },
-            PaintSpec::Opacity {
+            Paint::Opacity {
                 id: TRANSLUCENT,
                 source: SOLID,
                 opacity: OPACITY,
             },
         ],
-        vec![SurfaceSpec::FromOccurrence {
+        vec![Surface::FromOccurrence {
             id: VISIBLE,
             occurrence: OCCURRENCE,
         }],
-        vec![OccurrenceSpec {
-            id: OCCURRENCE,
-            subject: TRANSLUCENT,
-            against: VISIBLE,
-            profile: CompositionProfileV1::EncodedSrgb8SourceOverV1,
-        }],
+        vec![Occurrence::new(
+            OCCURRENCE,
+            TRANSLUCENT,
+            VISIBLE,
+            CompositionProfile::EncodedSrgb8SourceOverV1,
+        )],
     )
 }
 
-fn bindings(opacity: f64) -> AppearanceBindings {
-    AppearanceBindings::new(
-        vec![(COLOR, Srgb8::new([0; 3]))],
-        vec![(SURFACE_PORT, Srgb8::new([0; 3]))],
-        vec![(OPACITY, opacity)],
-    )
+fn compiled(opacity: f64) -> CompiledProgram {
+    program(opacity).compile().unwrap()
 }
 
 fn point(revision: u64, rgb24: u32) -> [u32; 5] {
@@ -117,11 +109,11 @@ fn unavailable(revision: u64, reason: u32) -> [u32; 5] {
     ]
 }
 
-fn retained_signal_storage_pointers(state: &PointRenderSessionStateV1) -> (*const u32, *const u32) {
+fn retained_signal_storage_pointers(state: &SessionState) -> (*const u32, *const u32) {
     let snapshot = match state {
-        PointRenderSessionStateV1::Ready { current } => current,
-        PointRenderSessionStateV1::Stale { previous, .. } => previous,
-        PointRenderSessionStateV1::Waiting { .. } => {
+        SessionState::Ready { current } => current,
+        SessionState::Stale { previous, .. } => previous,
+        SessionState::Waiting { .. } => {
             panic!("the allocation test requires a retained successful snapshot")
         }
     };
@@ -133,10 +125,10 @@ fn retained_signal_storage_pointers(state: &PointRenderSessionStateV1) -> (*cons
 
 #[test]
 fn point_update_executes_the_compiled_graph_and_commits_compact_occurrences() {
-    let owner = PointRenderOwnerV1::new(graph_spec(), bindings(0.5)).unwrap();
+    let owner = compiled(0.5).into_owner();
     let mut session = owner.attach().unwrap();
 
-    let PointRenderSessionStateV1::Ready { current } =
+    let SessionState::Ready { current } =
         session.update_packed(&point(1, 0xff_ff_ff)).unwrap()
     else {
         panic!("present encoded Surface signals must produce Ready");
@@ -148,10 +140,10 @@ fn point_update_executes_the_compiled_graph_and_commits_compact_occurrences() {
 
 #[test]
 fn successful_replace_revokes_old_sessions_without_a_numeric_generation() {
-    let mut owner = PointRenderOwnerV1::new(graph_spec(), bindings(0.5)).unwrap();
+    let mut owner = compiled(0.5).into_owner();
     let mut old = owner.attach().unwrap();
 
-    owner.replace(graph_spec(), bindings(0.25)).unwrap();
+    owner.replace(compiled(0.25));
     assert_eq!(
         old.update_packed(&point(1, 0xff_ff_ff)),
         Err(PointRenderSessionUpdateErrorV1::ProgramExpired)
@@ -160,22 +152,20 @@ fn successful_replace_revokes_old_sessions_without_a_numeric_generation() {
     let mut current = owner.attach().unwrap();
     assert!(matches!(
         current.update_packed(&point(1, 0xff_ff_ff)).unwrap(),
-        PointRenderSessionStateV1::Ready { .. }
+        SessionState::Ready { .. }
     ));
 }
 
 #[test]
 fn invalid_opacity_failed_replace_is_atomic_and_keeps_old_epoch_live() {
-    let mut owner = PointRenderOwnerV1::new(graph_spec(), bindings(0.5)).unwrap();
+    let owner = compiled(0.5).into_owner();
     let mut session = owner.attach().unwrap();
 
-    assert!(matches!(
-        owner.replace(graph_spec(), bindings(1.25)),
-        Err(PointRenderEpochBuildErrorV1::Bindings(
-            BindingError::OpacityOutOfDomain { input: OPACITY, .. }
-        ))
-    ));
-    let PointRenderSessionStateV1::Ready { current } =
+    assert_eq!(
+        program(1.25).compile().unwrap_err(),
+        ProgramCompileError::OpacityOutOfDomain { input: OPACITY }
+    );
+    let SessionState::Ready { current } =
         session.update_packed(&point(1, 0xff_ff_ff)).unwrap()
     else {
         panic!("failed replacement must not revoke the old epoch");
@@ -185,27 +175,23 @@ fn invalid_opacity_failed_replace_is_atomic_and_keeps_old_epoch_live() {
 
 #[test]
 fn dangling_and_cyclic_failed_compiles_do_not_revoke_the_current_epoch() {
-    let mut owner = PointRenderOwnerV1::new(graph_spec(), bindings(0.5)).unwrap();
+    let owner = compiled(0.5).into_owner();
     let mut session = owner.attach().unwrap();
 
     let missing = SurfaceId::new(999);
+    assert_eq!(
+        program_against(missing, 0.5).compile().unwrap_err(),
+        ProgramCompileError::MissingOccurrenceBackdrop {
+            occurrence: OCCURRENCE,
+            surface: missing,
+        }
+    );
     assert!(matches!(
-        owner.replace(graph_spec_against(missing), bindings(0.5)),
-        Err(PointRenderEpochBuildErrorV1::Compile(
-            CompileError::MissingOccurrenceBackdrop {
-                occurrence: OCCURRENCE,
-                surface
-            }
-        )) if surface == missing
-    ));
-    assert!(matches!(
-        owner.replace(cyclic_graph_spec(), bindings(0.5)),
-        Err(PointRenderEpochBuildErrorV1::Compile(
-            CompileError::RenderCycle { .. }
-        ))
+        cyclic_program().compile(),
+        Err(ProgramCompileError::RenderCycle { .. })
     ));
 
-    let PointRenderSessionStateV1::Ready { current } =
+    let SessionState::Ready { current } =
         session.update_packed(&point(1, 0xff_ff_ff)).unwrap()
     else {
         panic!("compile failures must leave the old strong epoch untouched");
@@ -215,7 +201,7 @@ fn dangling_and_cyclic_failed_compiles_do_not_revoke_the_current_epoch() {
 
 #[test]
 fn dispose_revokes_sessions_and_prevents_new_attachment() {
-    let mut owner = PointRenderOwnerV1::new(graph_spec(), bindings(0.5)).unwrap();
+    let mut owner = compiled(0.5).into_owner();
     let mut session = owner.attach().unwrap();
     owner.dispose();
 
@@ -228,11 +214,11 @@ fn dispose_revokes_sessions_and_prevents_new_attachment() {
 
 #[test]
 fn unavailable_after_ready_is_stale_and_retains_exactly_one_previous_snapshot() {
-    let owner = PointRenderOwnerV1::new(graph_spec(), bindings(0.5)).unwrap();
+    let owner = compiled(0.5).into_owner();
     let mut session = owner.attach().unwrap();
     session.update_packed(&point(1, 0xff_ff_ff)).unwrap();
 
-    let PointRenderSessionStateV1::Stale {
+    let SessionState::Stale {
         previous,
         current_unavailable,
     } = session.update_packed(&unavailable(2, 91)).unwrap()
@@ -247,7 +233,7 @@ fn unavailable_after_ready_is_stale_and_retains_exactly_one_previous_snapshot() 
     assert_eq!(current_unavailable.revision(), 2);
     assert_eq!(current_unavailable.reason(), 91);
 
-    let PointRenderSessionStateV1::Stale { previous, .. } =
+    let SessionState::Stale { previous, .. } =
         session.update_packed(&unavailable(3, 92)).unwrap()
     else {
         panic!("a later unavailable update must remain Stale");
@@ -257,7 +243,7 @@ fn unavailable_after_ready_is_stale_and_retains_exactly_one_previous_snapshot() 
 
 #[test]
 fn malformed_lower_and_conflicting_updates_are_atomic_and_do_not_evaluate() {
-    let owner = PointRenderOwnerV1::new(graph_spec(), bindings(0.5)).unwrap();
+    let owner = compiled(0.5).into_owner();
     let mut session = owner.attach().unwrap();
     session.update_packed(&point(5, 0xff_ff_ff)).unwrap();
     crate::composition::reset_source_over_evaluation_count();
@@ -293,7 +279,7 @@ fn malformed_lower_and_conflicting_updates_are_atomic_and_do_not_evaluate() {
     ));
     assert_eq!(crate::composition::source_over_evaluation_count(), 0);
 
-    let PointRenderSessionStateV1::Ready { current } = session.state() else {
+    let SessionState::Ready { current } = session.state() else {
         panic!("every rejected update must leave the committed state untouched");
     };
     assert_eq!(current.revision(), 5);
@@ -302,7 +288,7 @@ fn malformed_lower_and_conflicting_updates_are_atomic_and_do_not_evaluate() {
 
 #[test]
 fn exact_replay_is_idempotent_but_a_new_revision_evaluates_again() {
-    let owner = PointRenderOwnerV1::new(graph_spec(), bindings(0.5)).unwrap();
+    let owner = compiled(0.5).into_owner();
     let mut session = owner.attach().unwrap();
     let payload = point(1, 0xff_ff_ff);
     crate::composition::reset_source_over_evaluation_count();
@@ -317,7 +303,7 @@ fn exact_replay_is_idempotent_but_a_new_revision_evaluates_again() {
 
 #[test]
 fn attached_session_reuses_buffers_for_every_update_state() {
-    let owner = PointRenderOwnerV1::new(graph_spec(), bindings(0.5)).unwrap();
+    let owner = compiled(0.5).into_owner();
     let mut session = owner.attach().unwrap();
     let first = point(1, 0xff_ff_ff);
     let second = point(2, 0x20_40_60);
@@ -354,7 +340,7 @@ fn attached_session_reuses_buffers_for_every_update_state() {
         );
     }
 
-    let PointRenderSessionStateV1::Ready { current } = session.state() else {
+    let SessionState::Ready { current } = session.state() else {
         panic!("a successful observation after Stale must recover Ready");
     };
     assert_eq!(current.revision(), 5);
@@ -364,7 +350,7 @@ fn attached_session_reuses_buffers_for_every_update_state() {
 
 #[test]
 fn rejected_update_preserves_cold_buffers_for_allocation_free_retry() {
-    let owner = PointRenderOwnerV1::new(graph_spec(), bindings(0.5)).unwrap();
+    let owner = compiled(0.5).into_owner();
     let mut session = owner.attach().unwrap();
     let malformed = point(1, 0x01_ff_ff_ff);
     let valid = point(1, 0xff_ff_ff);
@@ -384,7 +370,7 @@ fn rejected_update_preserves_cold_buffers_for_allocation_free_retry() {
     assert_eq!(rejected_allocations, 0);
     assert!(matches!(
         session.state(),
-        PointRenderSessionStateV1::Waiting {
+        SessionState::Waiting {
             current_unavailable: None
         }
     ));
@@ -399,7 +385,7 @@ fn rejected_update_preserves_cold_buffers_for_allocation_free_retry() {
 
 #[test]
 fn waiting_unknown_chain_preserves_preallocated_buffers() {
-    let owner = PointRenderOwnerV1::new(graph_spec(), bindings(0.5)).unwrap();
+    let owner = compiled(0.5).into_owner();
     let mut session = owner.attach().unwrap();
     let first_missing = unavailable(1, 91);
     let later_missing = unavailable(2, 92);
@@ -422,9 +408,158 @@ fn waiting_unknown_chain_preserves_preallocated_buffers() {
         );
     }
 
-    let PointRenderSessionStateV1::Ready { current } = session.state() else {
+    let SessionState::Ready { current } = session.state() else {
         panic!("the first admitted point after Waiting must commit Ready");
     };
     assert_eq!(current.revision(), 3);
     assert_eq!(current.composited_occurrence_signals_rgb24(), &[0x80_80_80]);
+}
+
+#[test]
+fn public_program_compile_owner_session_path_emits_typed_occurrence_values() {
+    let compiled = compiled(0.5);
+    assert_eq!(compiled.surface_inputs(), &[SURFACE_PORT]);
+    assert_eq!(compiled.occurrences(), &[OCCURRENCE]);
+
+    let owner = PointRenderOwner::new(compiled);
+    let mut session = owner.attach().unwrap();
+    let surfaces = [SurfaceSignal::new(
+        SURFACE_PORT,
+        Srgb8::new([0xff; 3]),
+    )];
+    let SessionState::Ready { current } = session
+        .update(SurfaceUpdate::Present {
+            revision: 11,
+            surfaces: &surfaces,
+        })
+        .unwrap()
+    else {
+        panic!("typed present update must produce Ready");
+    };
+
+    assert_eq!(current.revision(), 11);
+    assert_eq!(current.surfaces().collect::<Vec<_>>(), surfaces.to_vec());
+    assert_eq!(
+        current
+            .occurrences()
+            .map(|signal| (signal.occurrence(), signal.value()))
+            .collect::<Vec<_>>(),
+        vec![(OCCURRENCE, Srgb8::new([0x80; 3]))]
+    );
+    assert_eq!(current.occurrence(OCCURRENCE), Some(Srgb8::new([0x80; 3])));
+    assert_eq!(current.occurrence(OccurrenceId::new(999)), None);
+}
+
+#[test]
+fn typed_update_schema_rejection_is_atomic_and_allocation_free() {
+    let owner = compiled(0.5).into_owner();
+    let mut session = owner.attach().unwrap();
+    let wrong = [SurfaceSignal::new(
+        SurfaceInputId::new(999),
+        Srgb8::new([0xff; 3]),
+    )];
+    crate::composition::reset_source_over_evaluation_count();
+
+    let (result, allocations) = crate::test_support::measured_allocations(|| {
+        session
+            .update(SurfaceUpdate::Present {
+                revision: 1,
+                surfaces: &wrong,
+            })
+            .map(|_| ())
+    });
+    assert_eq!(
+        result,
+        Err(SessionUpdateError::SurfaceInputMismatch {
+            index: 0,
+            expected: SURFACE_PORT,
+            actual: SurfaceInputId::new(999),
+        })
+    );
+    assert_eq!(allocations, 0);
+    assert_eq!(crate::composition::source_over_evaluation_count(), 0);
+    assert!(matches!(
+        session.state(),
+        SessionState::Waiting {
+            current_unavailable: None
+        }
+    ));
+}
+
+#[test]
+fn typed_update_reuses_attach_storage_for_ready_stale_and_recovery() {
+    let owner = compiled(0.5).into_owner();
+    let mut session = owner.attach().unwrap();
+    let white = [SurfaceSignal::new(SURFACE_PORT, Srgb8::new([0xff; 3]))];
+    let black = [SurfaceSignal::new(SURFACE_PORT, Srgb8::new([0; 3]))];
+
+    for update in [
+        SurfaceUpdate::Present {
+            revision: 1,
+            surfaces: &white,
+        },
+        SurfaceUpdate::Unavailable {
+            revision: 2,
+            reason: 7,
+        },
+        SurfaceUpdate::Present {
+            revision: 3,
+            surfaces: &black,
+        },
+    ] {
+        let (result, allocations) =
+            crate::test_support::measured_allocations(|| session.update(update).map(|_| ()));
+        assert!(result.is_ok());
+        assert_eq!(allocations, 0);
+    }
+}
+
+#[test]
+fn dropping_the_only_owner_physically_expires_attached_sessions() {
+    let mut session = {
+        let owner = compiled(0.5).into_owner();
+        owner.attach().unwrap()
+    };
+    let surfaces = [SurfaceSignal::new(SURFACE_PORT, Srgb8::new([0; 3]))];
+    assert_eq!(
+        session.update(SurfaceUpdate::Present {
+            revision: 1,
+            surfaces: &surfaces,
+        }),
+        Err(SessionUpdateError::ProgramExpired)
+    );
+}
+
+#[test]
+fn generic_program_module_has_no_recipe_or_ui_compatibility_surface() {
+    let source = include_str!("program_session.rs");
+    for forbidden in [
+        "ThemeConfig",
+        "RoleRecipe",
+        "NamedRoleTable",
+        "PairFill",
+        "PairLabel",
+        "AlphaAnalog",
+        "resolve_named_set",
+        "resolveTheme",
+        "themeHandle",
+    ] {
+        assert!(
+            !source.contains(forbidden),
+            "generic Program module must not contain `{forbidden}`"
+        );
+    }
+    for required in [
+        "pub struct Program",
+        "pub struct CompiledProgram",
+        "pub struct PointRenderOwner",
+        "pub struct Session",
+        "pub fn compile(self)",
+        "pub fn update(",
+    ] {
+        assert!(
+            source.contains(required),
+            "generic Program module must retain `{required}`"
+        );
+    }
 }
