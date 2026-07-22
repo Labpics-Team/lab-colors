@@ -20,7 +20,7 @@ use std::rc::{Rc, Weak};
 use crate::Srgb8;
 use crate::appearance::{
     AdmittedAppearanceBindings, AppearanceBindings, AppearanceGraphSpec, AppearanceWorkspace,
-    BindingError, CompileError, CompiledAppearanceGraph, OccurrenceId, SurfaceInputPortId,
+    BindingError, CompileError, CompiledAppearanceGraph, SurfaceInputPortId,
 };
 
 /// ASCII `LCR1`: code-owned Lab Colors Render transport version 1.
@@ -37,7 +37,7 @@ struct ProgramEpochV1 {
     graph: CompiledAppearanceGraph,
     binding_template: AdmittedAppearanceBindings,
     surface_ports: Box<[SurfaceInputPortId]>,
-    occurrence_ids: Box<[OccurrenceId]>,
+    occurrence_count: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -54,6 +54,7 @@ pub(crate) enum PointRenderAttachErrorV1 {
     Disposed,
     Bindings(BindingError),
     Workspace(BindingError),
+    ResourceExhausted,
 }
 
 /// The only strong owner of the current non-reusable program epoch.
@@ -105,15 +106,29 @@ impl PointRenderOwnerV1 {
             .binding_template
             .try_clone_v1()
             .map_err(PointRenderAttachErrorV1::Bindings)?;
+        let initial_signal_buffers = CompositedSignalBuffersV1::try_new(
+            epoch.surface_ports.len(),
+            epoch.occurrence_count,
+        )?;
         Ok(PointRenderSessionV1 {
             epoch: Rc::downgrade(epoch),
             bindings,
             workspace,
+            initial_signal_buffers: Some(initial_signal_buffers),
             state: PointRenderSessionStateV1::Waiting {
                 current_unavailable: None,
             },
         })
     }
+}
+
+fn try_zeroed_signal_words(len: usize) -> Result<Vec<u32>, PointRenderAttachErrorV1> {
+    let mut words = Vec::new();
+    words
+        .try_reserve_exact(len)
+        .map_err(|_| PointRenderAttachErrorV1::ResourceExhausted)?;
+    words.resize(len, 0);
+    Ok(words)
 }
 
 fn prepare_epoch(
@@ -135,16 +150,8 @@ fn prepare_epoch(
     if surface_ports.is_empty() {
         return Err(PointRenderEpochBuildErrorV1::EmptySurfaceSchema);
     }
-    let occurrence_ids: Box<[_]> = {
-        let occurrences = graph.occurrence_ids();
-        let mut values = Vec::new();
-        values
-            .try_reserve_exact(occurrences.len())
-            .map_err(|_| PointRenderEpochBuildErrorV1::ResourceExhausted)?;
-        values.extend(occurrences);
-        values.into_boxed_slice()
-    };
-    if occurrence_ids.is_empty() {
+    let occurrence_count = graph.occurrence_ids().len();
+    if occurrence_count == 0 {
         return Err(PointRenderEpochBuildErrorV1::EmptyOccurrenceSet);
     }
     let binding_template = graph
@@ -154,7 +161,7 @@ fn prepare_epoch(
         graph,
         binding_template,
         surface_ports,
-        occurrence_ids,
+        occurrence_count,
     })
 }
 
@@ -178,10 +185,27 @@ impl RevisionBoundSurfaceUnavailableV1 {
 /// canonical occurrence order. No metric, threshold or JS-derived verdict is
 /// present on this boundary.
 #[derive(Debug, PartialEq, Eq)]
-pub(crate) struct CompositedSignalSnapshotV1 {
-    revision: u64,
+struct CompositedSignalBuffersV1 {
     input_surface_signals_rgb24: Vec<u32>,
     composited_occurrence_signals_rgb24: Vec<u32>,
+}
+
+impl CompositedSignalBuffersV1 {
+    fn try_new(
+        surface_count: usize,
+        occurrence_count: usize,
+    ) -> Result<Self, PointRenderAttachErrorV1> {
+        Ok(Self {
+            input_surface_signals_rgb24: try_zeroed_signal_words(surface_count)?,
+            composited_occurrence_signals_rgb24: try_zeroed_signal_words(occurrence_count)?,
+        })
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct CompositedSignalSnapshotV1 {
+    revision: u64,
+    buffers: CompositedSignalBuffersV1,
 }
 
 impl CompositedSignalSnapshotV1 {
@@ -190,11 +214,11 @@ impl CompositedSignalSnapshotV1 {
     }
 
     pub(crate) fn input_surface_signals_rgb24(&self) -> &[u32] {
-        &self.input_surface_signals_rgb24
+        &self.buffers.input_surface_signals_rgb24
     }
 
     pub(crate) fn composited_occurrence_signals_rgb24(&self) -> &[u32] {
-        &self.composited_occurrence_signals_rgb24
+        &self.buffers.composited_occurrence_signals_rgb24
     }
 }
 
@@ -247,7 +271,6 @@ pub(crate) enum PointRenderSessionUpdateErrorV1 {
     ProgramExpired,
     EncodedSurfaceUpdate(PackedEncodedSurfaceUpdateErrorV1),
     Evaluation(BindingError),
-    CompiledOccurrenceMissing(OccurrenceId),
 }
 
 enum PreparedEncodedSurfaceUpdateV1<'input> {
@@ -259,12 +282,15 @@ enum PreparedEncodedSurfaceUpdateV1<'input> {
 }
 
 /// Generation-bound mutable runtime. It owns reusable values/scratch, never a
-/// strong reference or a copy of the compiled graph.
+/// strong reference or a copy of the compiled graph. All fixed-cardinality
+/// signal buffers are allocated fallibly by `attach`; `update_packed` only
+/// moves and overwrites their ownership after evaluation succeeds.
 #[derive(Debug)]
 pub(crate) struct PointRenderSessionV1 {
     epoch: Weak<ProgramEpochV1>,
     bindings: AdmittedAppearanceBindings,
     workspace: AppearanceWorkspace,
+    initial_signal_buffers: Option<CompositedSignalBuffersV1>,
     state: PointRenderSessionStateV1,
 }
 
@@ -320,23 +346,34 @@ impl PointRenderSessionV1 {
                 revision,
                 surfaces_rgb24,
             } => {
-                let mut committed_surfaces = Vec::new();
-                committed_surfaces
-                    .try_reserve_exact(surfaces_rgb24.len())
-                    .map_err(|_| {
-                        PointRenderSessionUpdateErrorV1::EncodedSurfaceUpdate(
-                            PackedEncodedSurfaceUpdateErrorV1::ResourceExhausted,
-                        )
-                    })?;
-                committed_surfaces.extend_from_slice(surfaces_rgb24);
-                let mut output = Vec::new();
-                output
-                    .try_reserve_exact(epoch.occurrence_ids.len())
-                    .map_err(|_| {
-                        PointRenderSessionUpdateErrorV1::EncodedSurfaceUpdate(
-                            PackedEncodedSurfaceUpdateErrorV1::ResourceExhausted,
-                        )
-                    })?;
+                let retained_shape_matches = match &self.state {
+                    PointRenderSessionStateV1::Waiting { .. } => self
+                        .initial_signal_buffers
+                        .as_ref()
+                        .is_some_and(|buffers| {
+                            buffers.input_surface_signals_rgb24.len()
+                                == epoch.surface_ports.len()
+                                && buffers.composited_occurrence_signals_rgb24.len()
+                                    == epoch.occurrence_count
+                        }),
+                    PointRenderSessionStateV1::Ready { current } => {
+                        current.buffers.input_surface_signals_rgb24.len()
+                            == epoch.surface_ports.len()
+                            && current.buffers.composited_occurrence_signals_rgb24.len()
+                                == epoch.occurrence_count
+                    }
+                    PointRenderSessionStateV1::Stale { previous, .. } => {
+                        previous.buffers.input_surface_signals_rgb24.len()
+                            == epoch.surface_ports.len()
+                            && previous.buffers.composited_occurrence_signals_rgb24.len()
+                                == epoch.occurrence_count
+                    }
+                };
+                if !retained_shape_matches {
+                    return Err(PointRenderSessionUpdateErrorV1::Evaluation(
+                        BindingError::IncompatibleWorkspace,
+                    ));
+                }
 
                 // Decode admitted the exact epoch-owned cardinality and every
                 // word before this loop. Each typed port therefore exists in
@@ -352,18 +389,45 @@ impl PointRenderSessionV1 {
                     .graph
                     .evaluate_admitted_into(&self.bindings, &mut self.workspace)
                     .map_err(PointRenderSessionUpdateErrorV1::Evaluation)?;
-                for &occurrence in epoch.occurrence_ids.iter() {
-                    let resolved = evaluation.occurrence(occurrence).ok_or(
-                        PointRenderSessionUpdateErrorV1::CompiledOccurrenceMissing(occurrence),
-                    )?;
-                    output.push(pack_rgb24(resolved.visible()));
+                if evaluation.occurrences().len() != epoch.occurrence_count {
+                    return Err(PointRenderSessionUpdateErrorV1::Evaluation(
+                        BindingError::IncompatibleWorkspace,
+                    ));
                 }
 
+                // No fallible work follows. Preserve the committed snapshot
+                // through decode, binding mutation and evaluation; only now
+                // reclaim the one fixed buffer pair and overwrite it.
+                let mut buffers = match take_last_ready(&mut self.state) {
+                    Some(previous) => previous.buffers,
+                    None => self.initial_signal_buffers.take().unwrap_or_else(|| {
+                        unreachable!("a Session without prior Ready must retain initial buffers")
+                    }),
+                };
+                debug_assert_eq!(
+                    buffers.input_surface_signals_rgb24.len(),
+                    surfaces_rgb24.len()
+                );
+                debug_assert_eq!(
+                    buffers.composited_occurrence_signals_rgb24.len(),
+                    epoch.occurrence_count
+                );
+                buffers
+                    .input_surface_signals_rgb24
+                    .copy_from_slice(surfaces_rgb24);
+                for (resolved, output) in evaluation
+                    .occurrences()
+                    .zip(buffers.composited_occurrence_signals_rgb24.iter_mut())
+                {
+                    // Packing an already resolved encoded point is infallible.
+                    // Any future fallible verifier must finish before buffer
+                    // reclamation above (or introduce its own staging value).
+                    *output = pack_rgb24(resolved.visible());
+                }
                 self.state = PointRenderSessionStateV1::Ready {
                     current: CompositedSignalSnapshotV1 {
                         revision,
-                        input_surface_signals_rgb24: committed_surfaces,
-                        composited_occurrence_signals_rgb24: output,
+                        buffers,
                     },
                 };
             }
@@ -394,7 +458,8 @@ impl PointRenderSessionV1 {
                 PointRenderSessionStateV1::Ready { current },
             ) => {
                 revision == current.revision
-                    && surfaces_rgb24 == current.input_surface_signals_rgb24.as_slice()
+                    && surfaces_rgb24
+                        == current.buffers.input_surface_signals_rgb24.as_slice()
             }
             _ => false,
         };

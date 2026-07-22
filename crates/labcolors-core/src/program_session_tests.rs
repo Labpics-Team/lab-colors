@@ -97,8 +97,8 @@ fn bindings(opacity: f64) -> AppearanceBindings {
     )
 }
 
-fn point(revision: u64, rgb24: u32) -> Vec<u32> {
-    vec![
+fn point(revision: u64, rgb24: u32) -> [u32; 5] {
+    [
         PACKED_ENCODED_SURFACE_UPDATE_MAGIC_V1,
         PACKED_ENCODED_SURFACE_PRESENT_TAG_V1,
         revision as u32,
@@ -107,14 +107,30 @@ fn point(revision: u64, rgb24: u32) -> Vec<u32> {
     ]
 }
 
-fn unavailable(revision: u64, reason: u32) -> Vec<u32> {
-    vec![
+fn unavailable(revision: u64, reason: u32) -> [u32; 5] {
+    [
         PACKED_ENCODED_SURFACE_UPDATE_MAGIC_V1,
         PACKED_ENCODED_SURFACE_UNAVAILABLE_TAG_V1,
         revision as u32,
         (revision >> 32) as u32,
         reason,
     ]
+}
+
+fn retained_signal_storage_pointers(
+    state: &PointRenderSessionStateV1,
+) -> (*const u32, *const u32) {
+    let snapshot = match state {
+        PointRenderSessionStateV1::Ready { current } => current,
+        PointRenderSessionStateV1::Stale { previous, .. } => previous,
+        PointRenderSessionStateV1::Waiting { .. } => {
+            panic!("the allocation test requires a retained successful snapshot")
+        }
+    };
+    (
+        snapshot.input_surface_signals_rgb24().as_ptr(),
+        snapshot.composited_occurrence_signals_rgb24().as_ptr(),
+    )
 }
 
 #[test]
@@ -299,4 +315,122 @@ fn exact_replay_is_idempotent_but_a_new_revision_evaluates_again() {
     assert_eq!(crate::composition::source_over_evaluation_count(), 1);
     session.update_packed(&point(2, 0xff_ff_ff)).unwrap();
     assert_eq!(crate::composition::source_over_evaluation_count(), 2);
+}
+
+#[test]
+fn attached_session_reuses_buffers_for_every_update_state() {
+    let owner = PointRenderOwnerV1::new(graph_spec(), bindings(0.5)).unwrap();
+    let mut session = owner.attach().unwrap();
+    let first = point(1, 0xff_ff_ff);
+    let second = point(2, 0x20_40_60);
+    let missing = unavailable(3, 91);
+    let still_missing = unavailable(4, 92);
+    let recovered = point(5, 0x20_40_60);
+
+    let mut retained_storage = None;
+    crate::composition::reset_source_over_evaluation_count();
+    for (update, expected_evaluations) in [
+        (first.as_slice(), 1),
+        (first.as_slice(), 1),
+        (second.as_slice(), 2),
+        (missing.as_slice(), 2),
+        (still_missing.as_slice(), 2),
+        (recovered.as_slice(), 3),
+    ] {
+        let (result, allocations) = crate::test_support::measured_allocations(|| {
+            session.update_packed(update).map(|_| ())
+        });
+        assert!(result.is_ok());
+        assert_eq!(
+            allocations, 0,
+            "attach must preallocate every fixed-cardinality Session buffer"
+        );
+        let current_storage = retained_signal_storage_pointers(session.state());
+        if let Some(initial_storage) = retained_storage {
+            assert_eq!(current_storage, initial_storage);
+        } else {
+            retained_storage = Some(current_storage);
+        }
+        assert_eq!(
+            crate::composition::source_over_evaluation_count(),
+            expected_evaluations
+        );
+    }
+
+    let PointRenderSessionStateV1::Ready { current } = session.state() else {
+        panic!("a successful observation after Stale must recover Ready");
+    };
+    assert_eq!(current.revision(), 5);
+    assert_eq!(current.input_surface_signals_rgb24(), &[0x20_40_60]);
+    assert_eq!(current.composited_occurrence_signals_rgb24(), &[0x10_20_30]);
+}
+
+#[test]
+fn rejected_update_preserves_cold_buffers_for_allocation_free_retry() {
+    let owner = PointRenderOwnerV1::new(graph_spec(), bindings(0.5)).unwrap();
+    let mut session = owner.attach().unwrap();
+    let malformed = point(1, 0x01_ff_ff_ff);
+    let valid = point(1, 0xff_ff_ff);
+    crate::composition::reset_source_over_evaluation_count();
+
+    let (rejected, rejected_allocations) = crate::test_support::measured_allocations(|| {
+        session.update_packed(&malformed).map(|_| ())
+    });
+    assert_eq!(
+        rejected,
+        Err(PointRenderSessionUpdateErrorV1::EncodedSurfaceUpdate(
+            PackedEncodedSurfaceUpdateErrorV1::ReservedSignalByteNonZero {
+                surface_index: 0,
+                value: 0x01_ff_ff_ff,
+            }
+        ))
+    );
+    assert_eq!(rejected_allocations, 0);
+    assert!(matches!(
+        session.state(),
+        PointRenderSessionStateV1::Waiting {
+            current_unavailable: None
+        }
+    ));
+    assert_eq!(crate::composition::source_over_evaluation_count(), 0);
+
+    let (accepted, accepted_allocations) = crate::test_support::measured_allocations(|| {
+        session.update_packed(&valid).map(|_| ())
+    });
+    assert!(accepted.is_ok());
+    assert_eq!(accepted_allocations, 0);
+    assert_eq!(crate::composition::source_over_evaluation_count(), 1);
+}
+
+#[test]
+fn waiting_unknown_chain_preserves_preallocated_buffers() {
+    let owner = PointRenderOwnerV1::new(graph_spec(), bindings(0.5)).unwrap();
+    let mut session = owner.attach().unwrap();
+    let first_missing = unavailable(1, 91);
+    let later_missing = unavailable(2, 92);
+    let ready = point(3, 0xff_ff_ff);
+    crate::composition::reset_source_over_evaluation_count();
+
+    for (update, expected_evaluations) in [
+        (first_missing.as_slice(), 0),
+        (first_missing.as_slice(), 0),
+        (later_missing.as_slice(), 0),
+        (ready.as_slice(), 1),
+    ] {
+        let (result, allocations) = crate::test_support::measured_allocations(|| {
+            session.update_packed(update).map(|_| ())
+        });
+        assert!(result.is_ok());
+        assert_eq!(allocations, 0);
+        assert_eq!(
+            crate::composition::source_over_evaluation_count(),
+            expected_evaluations
+        );
+    }
+
+    let PointRenderSessionStateV1::Ready { current } = session.state() else {
+        panic!("the first admitted point after Waiting must commit Ready");
+    };
+    assert_eq!(current.revision(), 3);
+    assert_eq!(current.composited_occurrence_signals_rgb24(), &[0x80_80_80]);
 }
