@@ -1,20 +1,19 @@
 use crate::Srgb8;
 use crate::appearance::{
-    OccurrenceId as AppearanceOccurrenceId, SurfaceInputPortId as AppearanceSurfaceInputId,
+    ColorInputId, OccurrenceId, OpacityInputId, PaintId, SurfaceId, SurfaceInputPortId,
 };
 use crate::program_session::{
-    ColorInput, ColorInputId, CompiledProgram, CompositionProfile, Occurrence, OccurrenceId,
-    OpacityInput, OpacityInputId, PACKED_ENCODED_SURFACE_PRESENT_TAG_V1,
-    PACKED_ENCODED_SURFACE_UNAVAILABLE_TAG_V1, PACKED_ENCODED_SURFACE_UPDATE_MAGIC_V1,
-    PackedEncodedSurfaceUpdateErrorV1, Paint, PaintId, PointRenderOwner,
-    PointRenderSessionUpdateErrorV1, Program, ProgramCompileError, SessionState,
-    SessionUpdateError, Surface, SurfaceId, SurfaceInputId, SurfaceSignal, SurfaceUpdate,
-    canonical_occurrence_sequence_matches, canonical_surface_input_sequence_matches,
+    ColorInput, CompiledProgram, CompositionProfile, Occurrence, OpacityInput,
+    PACKED_ENCODED_SURFACE_PRESENT_TAG_V1, PACKED_ENCODED_SURFACE_UNAVAILABLE_TAG_V1,
+    PACKED_ENCODED_SURFACE_UPDATE_MAGIC_V1, PackedEncodedSurfaceUpdateErrorV1, Paint,
+    PointRenderOwner, PointRenderSessionUpdateErrorV1, Program, ProgramCompileError, SessionState,
+    SessionUpdateError, Surface, SurfaceSignal, SurfaceUpdate,
+    canonical_occurrence_sequence_matches, canonical_surface_input_port_sequence_matches,
     check_render_node_count,
 };
 
 const COLOR: ColorInputId = ColorInputId::new(1);
-const SURFACE_PORT: SurfaceInputId = SurfaceInputId::new(2);
+const SURFACE_PORT: SurfaceInputPortId = SurfaceInputPortId::new(2);
 const OPACITY: OpacityInputId = OpacityInputId::new(3);
 const SOLID: PaintId = PaintId::new(10);
 const TRANSLUCENT: PaintId = PaintId::new(11);
@@ -160,7 +159,7 @@ fn authored_and_runtime_values_preserve_exact_typed_bindings() {
 }
 
 #[test]
-fn empty_surface_schema_precedes_dangling_surface_input_analysis() {
+fn empty_surface_schema_precedes_dangling_surface_input_port_analysis() {
     let declaration = Program::new(
         vec![ColorInput::new(COLOR, Srgb8::new([0; 3]))],
         vec![],
@@ -221,43 +220,31 @@ fn combined_render_cardinality_overflow_is_resource_exhaustion() {
 
 #[test]
 fn canonical_sequence_firewall_rejects_reordering_relabeling_and_truncation() {
-    let surface_inputs = [SurfaceInputId::new(1), SurfaceInputId::new(2)];
-    assert!(canonical_surface_input_sequence_matches(
-        [
-            AppearanceSurfaceInputId::new(1),
-            AppearanceSurfaceInputId::new(2),
-        ],
-        &surface_inputs,
+    let surface_input_ports = [SurfaceInputPortId::new(1), SurfaceInputPortId::new(2)];
+    assert!(canonical_surface_input_port_sequence_matches(
+        [SurfaceInputPortId::new(1), SurfaceInputPortId::new(2),],
+        &surface_input_ports,
     ));
-    assert!(!canonical_surface_input_sequence_matches(
-        [
-            AppearanceSurfaceInputId::new(2),
-            AppearanceSurfaceInputId::new(1),
-        ],
-        &surface_inputs,
+    assert!(!canonical_surface_input_port_sequence_matches(
+        [SurfaceInputPortId::new(2), SurfaceInputPortId::new(1),],
+        &surface_input_ports,
     ));
-    assert!(!canonical_surface_input_sequence_matches(
-        [AppearanceSurfaceInputId::new(1)],
-        &surface_inputs,
+    assert!(!canonical_surface_input_port_sequence_matches(
+        [SurfaceInputPortId::new(1)],
+        &surface_input_ports,
     ));
 
     let occurrences = [OccurrenceId::new(10), OccurrenceId::new(20)];
     assert!(canonical_occurrence_sequence_matches(
-        [
-            AppearanceOccurrenceId::new(10),
-            AppearanceOccurrenceId::new(20),
-        ],
+        [OccurrenceId::new(10), OccurrenceId::new(20),],
         &occurrences,
     ));
     assert!(!canonical_occurrence_sequence_matches(
-        [
-            AppearanceOccurrenceId::new(10),
-            AppearanceOccurrenceId::new(21),
-        ],
+        [OccurrenceId::new(10), OccurrenceId::new(21),],
         &occurrences,
     ));
     assert!(!canonical_occurrence_sequence_matches(
-        [AppearanceOccurrenceId::new(10)],
+        [OccurrenceId::new(10)],
         &occurrences,
     ));
 }
@@ -553,11 +540,11 @@ fn waiting_unknown_chain_preserves_preallocated_buffers() {
 #[test]
 fn public_program_compile_owner_session_path_emits_typed_occurrence_values() {
     let compiled = compiled(0.5);
-    assert_eq!(compiled.surface_inputs(), &[SURFACE_PORT]);
+    assert_eq!(compiled.surface_input_ports(), &[SURFACE_PORT]);
     assert_eq!(compiled.occurrences(), &[OCCURRENCE]);
 
     let owner = PointRenderOwner::new(compiled);
-    assert_eq!(owner.surface_inputs(), Some(&[SURFACE_PORT][..]));
+    assert_eq!(owner.surface_input_ports(), Some(&[SURFACE_PORT][..]));
     assert_eq!(owner.occurrences(), Some(&[OCCURRENCE][..]));
     let mut session = owner.attach().unwrap();
     let surfaces = [SurfaceSignal::new(SURFACE_PORT, Srgb8::new([0xff; 3]))];
@@ -589,7 +576,7 @@ fn typed_update_schema_rejection_is_atomic_and_allocation_free() {
     let owner = compiled(0.5).into_owner();
     let mut session = owner.attach().unwrap();
     let wrong = [SurfaceSignal::new(
-        SurfaceInputId::new(999),
+        SurfaceInputPortId::new(999),
         Srgb8::new([0xff; 3]),
     )];
     crate::composition::reset_source_over_evaluation_count();
@@ -604,10 +591,10 @@ fn typed_update_schema_rejection_is_atomic_and_allocation_free() {
     });
     assert_eq!(
         result,
-        Err(SessionUpdateError::SurfaceInputMismatch {
+        Err(SessionUpdateError::SurfaceInputPortMismatch {
             index: 0,
             expected: SURFACE_PORT,
-            actual: SurfaceInputId::new(999),
+            actual: SurfaceInputPortId::new(999),
         })
     );
     assert_eq!(allocations, 0);
