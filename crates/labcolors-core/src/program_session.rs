@@ -16,15 +16,19 @@ use std::rc::Rc;
 use crate::Srgb8;
 use crate::appearance::{
     AdmittedAppearanceBindings, AppearanceBindings, AppearanceGraphSpec, AppearanceWorkspace,
-    BindingError, ColorInputId, CompileError, CompiledAppearanceGraph, CompiledOccurrenceSlotV1,
-    CompiledPaintSlotV1, EncodedPointPaintV1, OccurrenceId, OccurrenceSpec, OpacityInputId,
-    PaintId, PaintSpec, SurfaceId, SurfaceInputPortId, SurfaceSpec,
+    BindingError, ColorInputId, CompileError, CompiledAppearanceGraph, CompiledColorInputSlotV1,
+    CompiledOccurrenceSlotV1, CompiledPaintSlotV1, EncodedPointPaintV1, OccurrenceId,
+    OccurrenceSpec, OpacityInputId, PaintId, PaintSpec, SurfaceId, SurfaceInputPortId, SurfaceSpec,
 };
 use crate::composition::CompositionProfileV1;
 use crate::constraints::{
     HardDecision, ProgramPointAssessmentErrorV1, ProgramPointEvaluatorV1, ProgramPointInvocation,
     ProgramPointTargetV1, ProgramVisiblePointBindingV1, ProgramVisiblePointPassEvidence,
     ProgramVisiblePointViolationEvidence, assess_program_point_hard,
+};
+use crate::joint::{
+    AdmittedFiniteJointOrderV1, FiniteDomainOrdinalV1, FiniteJointOrderErrorV1,
+    admit_finite_joint_order_v1,
 };
 use crate::lcs_occurrence::{
     AppearanceContextId, ColorSignal, ModeledLcsOccurrenceFormationErrorV1, ModeledLcsOccurrenceV1,
@@ -39,24 +43,189 @@ use crate::session::{
     private as session_private,
 };
 
-/// One immutable encoded colour binding owned by a [`Program`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ColorInput {
-    id: ColorInputId,
-    value: ColorSignal,
-}
+/// Opaque identity of one immutable authored colour source.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct SourceId(u32);
 
-impl ColorInput {
-    pub const fn new(id: ColorInputId, value: ColorSignal) -> Self {
-        Self { id, value }
+impl SourceId {
+    pub const fn new(value: u32) -> Self {
+        Self(value)
     }
 
-    pub const fn id(self) -> ColorInputId {
+    pub const fn value(self) -> u32 {
+        self.0
+    }
+}
+
+/// One immutable encoded source owned by a [`Program`]. Sources carry data,
+/// never solver freedom and never appear directly in Paint topology.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Source {
+    id: SourceId,
+    signal: ColorSignal,
+}
+
+impl Source {
+    pub const fn new(id: SourceId, signal: ColorSignal) -> Self {
+        Self { id, signal }
+    }
+
+    pub const fn id(self) -> SourceId {
         self.id
     }
 
-    pub const fn value(self) -> ColorSignal {
-        self.value
+    pub const fn signal(self) -> ColorSignal {
+        self.signal
+    }
+}
+
+/// Opaque identity of one jointly selected finite target.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct TargetId(u32);
+
+impl TargetId {
+    pub const fn new(value: u32) -> Self {
+        Self(value)
+    }
+
+    pub const fn value(self) -> u32 {
+        self.0
+    }
+}
+
+/// Opaque identity of one candidate inside a finite target domain.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct TargetCandidateId(u32);
+
+impl TargetCandidateId {
+    pub const fn new(value: u32) -> Self {
+        Self(value)
+    }
+
+    pub const fn value(self) -> u32 {
+        self.0
+    }
+}
+
+/// One candidate signal in a finite target domain.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TargetCandidateV1 {
+    id: TargetCandidateId,
+    signal: ColorSignal,
+}
+
+impl TargetCandidateV1 {
+    pub const fn new(id: TargetCandidateId, signal: ColorSignal) -> Self {
+        Self { id, signal }
+    }
+
+    pub const fn id(self) -> TargetCandidateId {
+        self.id
+    }
+
+    pub const fn signal(self) -> ColorSignal {
+        self.signal
+    }
+}
+
+/// Closed authored freedom of one Target. Fixed targets use their Source
+/// signal exactly; finite targets can select only from the explicit domain.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TargetDomainV1 {
+    Fixed,
+    Finite(Vec<TargetCandidateV1>),
+}
+
+/// A Paint-addressable target distinct from both source data and appearance
+/// storage. Only finite targets participate in declared joint selection.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Target {
+    id: TargetId,
+    source: SourceId,
+    domain: TargetDomainV1,
+}
+
+impl Target {
+    pub const fn new(id: TargetId, source: SourceId, domain: TargetDomainV1) -> Self {
+        Self { id, source, domain }
+    }
+
+    pub const fn fixed(id: TargetId, source: SourceId) -> Self {
+        Self::new(id, source, TargetDomainV1::Fixed)
+    }
+
+    pub const fn finite(
+        id: TargetId,
+        source: SourceId,
+        candidates: Vec<TargetCandidateV1>,
+    ) -> Self {
+        Self::new(id, source, TargetDomainV1::Finite(candidates))
+    }
+
+    pub const fn id(&self) -> TargetId {
+        self.id
+    }
+
+    pub const fn source(&self) -> SourceId {
+        self.source
+    }
+
+    pub const fn domain(&self) -> &TargetDomainV1 {
+        &self.domain
+    }
+}
+
+/// One typed target/candidate assignment inside a declared joint state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct TargetCandidateChoiceV1 {
+    target: TargetId,
+    candidate: TargetCandidateId,
+}
+
+impl TargetCandidateChoiceV1 {
+    pub const fn new(target: TargetId, candidate: TargetCandidateId) -> Self {
+        Self { target, candidate }
+    }
+
+    pub const fn target(self) -> TargetId {
+        self.target
+    }
+
+    pub const fn candidate(self) -> TargetCandidateId {
+        self.candidate
+    }
+}
+
+/// One complete joint candidate state. Choices are keyed, so authored choice
+/// order has no physical meaning.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JointCandidateStateV1 {
+    choices: Vec<TargetCandidateChoiceV1>,
+}
+
+impl JointCandidateStateV1 {
+    pub const fn new(choices: Vec<TargetCandidateChoiceV1>) -> Self {
+        Self { choices }
+    }
+
+    pub fn choices(&self) -> &[TargetCandidateChoiceV1] {
+        &self.choices
+    }
+}
+
+/// Explicit total order over every state in the finite product domain.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeclaredJointSelectionV1 {
+    states: Vec<JointCandidateStateV1>,
+}
+
+impl DeclaredJointSelectionV1 {
+    pub const fn new(states: Vec<JointCandidateStateV1>) -> Self {
+        Self { states }
+    }
+
+    pub fn states(&self) -> &[JointCandidateStateV1] {
+        &self.states
     }
 }
 
@@ -86,7 +255,7 @@ impl OpacityInput {
 pub enum Paint {
     Solid {
         id: PaintId,
-        color: ColorInputId,
+        target: TargetId,
     },
     Opacity {
         id: PaintId,
@@ -330,7 +499,9 @@ where
     Evaluation: ProgramPointEvaluatorV1,
     ProgramPointInvocation<Evaluation>: Copy,
 {
-    colors: Vec<ColorInput>,
+    sources: Vec<Source>,
+    targets: Vec<Target>,
+    joint_selection: Option<DeclaredJointSelectionV1>,
     observation_group: ObservationGroup,
     opacities: Vec<OpacityInput>,
     paints: Vec<Paint>,
@@ -348,7 +519,8 @@ where
 {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
-        colors: Vec<ColorInput>,
+        sources: Vec<Source>,
+        targets: Vec<Target>,
         observation_group: ObservationGroup,
         opacities: Vec<OpacityInput>,
         paints: Vec<Paint>,
@@ -359,7 +531,9 @@ where
         evaluator: Evaluation,
     ) -> Self {
         Self {
-            colors,
+            sources,
+            targets,
+            joint_selection: None,
             observation_group,
             opacities,
             paints,
@@ -369,6 +543,14 @@ where
             outputs,
             evaluator,
         }
+    }
+
+    /// Attach the complete explicit order for all finite Target domains.
+    /// No order is synthesized from target IDs, candidate bytes, or
+    /// declaration position.
+    pub fn with_joint_selection(mut self, selection: DeclaredJointSelectionV1) -> Self {
+        self.joint_selection = Some(selection);
+        self
     }
 
     pub fn compile(self) -> Result<CompiledProgram<Evaluation>, ProgramCompileError> {
@@ -381,8 +563,15 @@ where
 /// Atomic compile failure. No executable partial graph escapes.
 #[derive(Debug, PartialEq, Eq)]
 pub enum ProgramCompileError {
-    DuplicateColorInput {
-        input: ColorInputId,
+    DuplicateSource {
+        source: SourceId,
+    },
+    DuplicateTarget {
+        target: TargetId,
+    },
+    MissingTargetSource {
+        target: TargetId,
+        source: SourceId,
     },
     DuplicateOpacityInput {
         input: OpacityInputId,
@@ -399,9 +588,9 @@ pub enum ProgramCompileError {
     DuplicateOccurrence {
         occurrence: OccurrenceId,
     },
-    MissingPaintColorInput {
+    MissingPaintTarget {
         paint: PaintId,
-        input: ColorInputId,
+        target: TargetId,
     },
     MissingPaintSource {
         paint: PaintId,
@@ -437,6 +626,47 @@ pub enum ProgramCompileError {
     OpacityOutOfDomain {
         input: OpacityInputId,
     },
+    EmptyTargetDomain {
+        target: TargetId,
+    },
+    DuplicateTargetCandidate {
+        target: TargetId,
+        candidate: TargetCandidateId,
+    },
+    DuplicateTargetCandidateSignal {
+        target: TargetId,
+        first: TargetCandidateId,
+        duplicate: TargetCandidateId,
+        signal: ColorSignal,
+    },
+    UnconstrainedTarget {
+        target: TargetId,
+    },
+    DisconnectedFiniteTargets,
+    UnassessedOutput {
+        output: OutputSlotId,
+        paint: PaintId,
+    },
+    MissingJointSelection,
+    JointSelectionWithoutTargets,
+    JointStateDuplicateTarget {
+        state: usize,
+        target: TargetId,
+    },
+    JointStateMissingTarget {
+        state: usize,
+        target: TargetId,
+    },
+    JointStateUnknownTarget {
+        state: usize,
+        target: TargetId,
+    },
+    JointStateUnknownCandidate {
+        state: usize,
+        target: TargetId,
+        candidate: TargetCandidateId,
+    },
+    InvalidJointOrder(FiniteJointOrderErrorV1),
     EmptyObservationGroup {
         group: ObservationGroupId,
     },
@@ -495,6 +725,15 @@ struct CompiledObservationGroupV1 {
     schema: CanonicalObservationSchemaV1,
 }
 
+struct CompiledFiniteTargetV1 {
+    binding: CompiledColorInputSlotV1,
+    candidates: Box<[ColorSignal]>,
+}
+
+struct CompiledJointSelectionV1 {
+    order: AdmittedFiniteJointOrderV1,
+}
+
 struct ProgramEpochV1<Evaluation>
 where
     Evaluation: ProgramPointEvaluatorV1,
@@ -507,6 +746,8 @@ where
     occurrence_contexts: Box<[CompiledOccurrenceContextV1]>,
     constraints: Box<[CompiledPointConstraint<ProgramPointInvocation<Evaluation>>]>,
     outputs: Box<[CompiledOutputBinding]>,
+    finite_targets: Box<[CompiledFiniteTargetV1]>,
+    joint_selection: Option<CompiledJointSelectionV1>,
 }
 
 /// Fully validated immutable Program, not yet attached to runtime.
@@ -627,6 +868,7 @@ pub struct ProgramConstraintCellV1<Evaluation>
 where
     Evaluation: ProgramPointEvaluatorV1,
 {
+    candidate_state_index: usize,
     case_index: usize,
     constraint: ConstraintId,
     target: OccurrenceId,
@@ -638,6 +880,10 @@ impl<Evaluation> ProgramConstraintCellV1<Evaluation>
 where
     Evaluation: ProgramPointEvaluatorV1,
 {
+    pub const fn candidate_state_index(&self) -> usize {
+        self.candidate_state_index
+    }
+
     pub const fn case_index(&self) -> usize {
         self.case_index
     }
@@ -713,6 +959,7 @@ where
 {
     report: ProgramReportV1<Evaluation>,
     outputs: Vec<ProgramOutputV1>,
+    selected_state_index: Option<usize>,
 }
 
 impl<Evaluation> session_private::EvidenceSealed for ProgramVerifiedV1<Evaluation> where
@@ -740,23 +987,30 @@ where
     pub fn outputs(&self) -> &[ProgramOutputV1] {
         &self.outputs
     }
+
+    /// Index inside the authored total order. `None` means this Program has no
+    /// finite targets and therefore performed validation only.
+    pub const fn selected_state_index(&self) -> Option<usize> {
+        self.selected_state_index
+    }
 }
 
-/// Complete report containing at least one hard violation. Outputs are absent
-/// by construction and therefore cannot be mistaken for committed Paints.
-pub struct ProgramViolationV1<Evaluation>
+/// Exhaustive hard-infeasibility report. Outputs are absent by construction
+/// and therefore cannot be mistaken for committed Paints.
+pub struct ProgramConflictV1<Evaluation>
 where
     Evaluation: ProgramPointEvaluatorV1,
 {
     report: ProgramReportV1<Evaluation>,
+    considered_state_count: usize,
 }
 
-impl<Evaluation> session_private::EvidenceSealed for ProgramViolationV1<Evaluation> where
+impl<Evaluation> session_private::EvidenceSealed for ProgramConflictV1<Evaluation> where
     Evaluation: ProgramPointEvaluatorV1
 {
 }
 
-impl<Evaluation> SessionEvidenceV1 for ProgramViolationV1<Evaluation>
+impl<Evaluation> SessionEvidenceV1 for ProgramConflictV1<Evaluation>
 where
     Evaluation: ProgramPointEvaluatorV1,
 {
@@ -765,12 +1019,16 @@ where
     }
 }
 
-impl<Evaluation> ProgramViolationV1<Evaluation>
+impl<Evaluation> ProgramConflictV1<Evaluation>
 where
     Evaluation: ProgramPointEvaluatorV1,
 {
     pub const fn report(&self) -> &ProgramReportV1<Evaluation> {
         &self.report
+    }
+
+    pub const fn considered_state_count(&self) -> usize {
+        self.considered_state_count
     }
 }
 
@@ -800,6 +1058,13 @@ pub enum ProgramSessionEvaluationError<EvaluationError> {
         first_case: usize,
         actual_case: usize,
     },
+    FinalRecheckViolation {
+        state_index: usize,
+        case_index: usize,
+        constraint: ConstraintId,
+        target: OccurrenceId,
+        hard_violation_count: usize,
+    },
     InternalInvariant,
 }
 
@@ -807,9 +1072,156 @@ type ProgramEvaluatorError<Evaluation> =
     <Evaluation as crate::constraints::Evaluator<ProgramPointTargetV1>>::Error;
 
 type ProgramSessionEvaluationResult<Evaluation> = Result<
-    SessionDecision<ProgramVerifiedV1<Evaluation>, ProgramViolationV1<Evaluation>>,
+    SessionDecision<ProgramVerifiedV1<Evaluation>, ProgramConflictV1<Evaluation>>,
     ProgramSessionEvaluationError<ProgramEvaluatorError<Evaluation>>,
 >;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ProgramEvaluationCellCountsV1 {
+    selected: usize,
+    exhaustive_conflict: usize,
+}
+
+fn checked_program_evaluation_cell_counts(
+    physical_case_count: usize,
+    constraint_count: usize,
+    state_count: usize,
+) -> Option<ProgramEvaluationCellCountsV1> {
+    let selected = physical_case_count.checked_mul(constraint_count)?;
+    let exhaustive_conflict = selected.checked_mul(state_count)?;
+    Some(ProgramEvaluationCellCountsV1 {
+        selected,
+        exhaustive_conflict,
+    })
+}
+
+#[cfg(test)]
+pub(crate) fn checked_program_evaluation_cell_counts_for_test(
+    physical_case_count: usize,
+    constraint_count: usize,
+    state_count: usize,
+) -> Option<(usize, usize)> {
+    checked_program_evaluation_cell_counts(physical_case_count, constraint_count, state_count)
+        .map(|counts| (counts.selected, counts.exhaustive_conflict))
+}
+
+#[cfg(test)]
+std::thread_local! {
+    static PROGRAM_PREFLIGHT_FAILURE_AT: std::cell::Cell<Option<usize>> = const {
+        std::cell::Cell::new(None)
+    };
+    static PROGRAM_PREFLIGHT_FAILURE_ACTIVE: std::cell::Cell<bool> = const {
+        std::cell::Cell::new(false)
+    };
+}
+
+#[cfg(test)]
+pub(crate) struct ProgramPreflightFailureGuardV1 {
+    _not_send: PhantomData<Rc<()>>,
+}
+
+#[cfg(test)]
+impl Drop for ProgramPreflightFailureGuardV1 {
+    fn drop(&mut self) {
+        PROGRAM_PREFLIGHT_FAILURE_AT.with(|failure| failure.set(None));
+        PROGRAM_PREFLIGHT_FAILURE_ACTIVE.with(|active| active.set(false));
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn fail_program_preflight_reservation_for_test(
+    reservation_index: usize,
+) -> ProgramPreflightFailureGuardV1 {
+    PROGRAM_PREFLIGHT_FAILURE_ACTIVE.with(|active| {
+        assert!(
+            !active.replace(true),
+            "a preflight failure is already armed"
+        );
+    });
+    PROGRAM_PREFLIGHT_FAILURE_AT.with(|failure| failure.set(Some(reservation_index)));
+    ProgramPreflightFailureGuardV1 {
+        _not_send: PhantomData,
+    }
+}
+
+#[cfg(test)]
+fn injected_program_preflight_failure() -> bool {
+    PROGRAM_PREFLIGHT_FAILURE_AT.with(|failure| match failure.get() {
+        Some(0) => {
+            failure.set(None);
+            true
+        }
+        Some(remaining) => {
+            failure.set(Some(remaining - 1));
+            false
+        }
+        None => false,
+    })
+}
+
+fn try_reserve_program_evaluation_buffer<T>(
+    buffer: &mut Vec<T>,
+    capacity: usize,
+) -> Result<(), ()> {
+    #[cfg(test)]
+    if injected_program_preflight_failure() {
+        return Err(());
+    }
+    buffer.try_reserve_exact(capacity).map_err(|_| ())
+}
+
+struct PreparedProgramEvaluationBuffersV1<Evaluation>
+where
+    Evaluation: ProgramPointEvaluatorV1,
+{
+    selected_cells: Vec<ProgramConstraintCellV1<Evaluation>>,
+    conflict_cells: Vec<ProgramConstraintCellV1<Evaluation>>,
+    outputs: Vec<ProgramOutputV1>,
+    counts: ProgramEvaluationCellCountsV1,
+}
+
+fn prepare_program_evaluation_buffers<Evaluation>(
+    epoch: &ProgramEpochV1<Evaluation>,
+    observation: &RevisionBoundObservationV1,
+    joint_state_count: Option<usize>,
+) -> Result<
+    PreparedProgramEvaluationBuffersV1<Evaluation>,
+    ProgramSessionEvaluationError<ProgramEvaluatorError<Evaluation>>,
+>
+where
+    Evaluation: ProgramPointEvaluatorV1,
+    ProgramPointInvocation<Evaluation>: Copy,
+{
+    let state_count = joint_state_count.unwrap_or(1);
+    if state_count == 0 {
+        return Err(ProgramSessionEvaluationError::InternalInvariant);
+    }
+    let counts = checked_program_evaluation_cell_counts(
+        observation.physical_case_count(),
+        epoch.constraints.len(),
+        state_count,
+    )
+    .ok_or(ProgramSessionEvaluationError::ResourceExhausted)?;
+
+    let mut selected_cells = Vec::new();
+    try_reserve_program_evaluation_buffer(&mut selected_cells, counts.selected)
+        .map_err(|()| ProgramSessionEvaluationError::ResourceExhausted)?;
+    let mut conflict_cells = Vec::new();
+    if joint_state_count.is_some() {
+        try_reserve_program_evaluation_buffer(&mut conflict_cells, counts.exhaustive_conflict)
+            .map_err(|()| ProgramSessionEvaluationError::ResourceExhausted)?;
+    }
+    let mut outputs = Vec::new();
+    try_reserve_program_evaluation_buffer(&mut outputs, epoch.outputs.len())
+        .map_err(|()| ProgramSessionEvaluationError::ResourceExhausted)?;
+
+    Ok(PreparedProgramEvaluationBuffersV1 {
+        selected_cells,
+        conflict_cells,
+        outputs,
+        counts,
+    })
+}
 
 /// Per-Session mutable execution state backed by one strong immutable epoch.
 pub struct ProgramSessionPlan<Evaluation>
@@ -836,7 +1248,7 @@ where
     ProgramPointInvocation<Evaluation>: Copy,
 {
     type Verified = ProgramVerifiedV1<Evaluation>;
-    type Violation = ProgramViolationV1<Evaluation>;
+    type Violation = ProgramConflictV1<Evaluation>;
     type Error = ProgramSessionEvaluationError<ProgramEvaluatorError<Evaluation>>;
 
     fn observation_schema(&self) -> &CanonicalObservationSchemaV1 {
@@ -860,6 +1272,171 @@ where
     Evaluation: ProgramPointEvaluatorV1,
     ProgramPointInvocation<Evaluation>: Copy,
 {
+    let epoch = Rc::clone(&plan.epoch);
+    let Some(selection) = &epoch.joint_selection else {
+        let mut buffers = prepare_program_evaluation_buffers(&epoch, &observation, None)?;
+        return collect_program_candidate_into(
+            plan,
+            observation,
+            None,
+            1,
+            std::mem::take(&mut buffers.selected_cells),
+            std::mem::take(&mut buffers.outputs),
+            buffers.counts.selected,
+        );
+    };
+
+    let state_count = selection.order.tuples().len();
+    let mut buffers = prepare_program_evaluation_buffers(&epoch, &observation, Some(state_count))?;
+    for (state_index, tuple) in selection.order.tuples().enumerate() {
+        apply_joint_candidate(plan, &epoch.finite_targets, tuple)?;
+        if !scan_program_candidate(plan, &observation, state_index, None, None)? {
+            // A selected tuple is never certified from its allocation-free
+            // search pass. Re-apply and collect fresh terminal evidence.
+            apply_joint_candidate(plan, &epoch.finite_targets, tuple)?;
+            match collect_program_candidate_into(
+                plan,
+                observation.clone(),
+                Some(state_index),
+                state_index + 1,
+                std::mem::take(&mut buffers.selected_cells),
+                std::mem::take(&mut buffers.outputs),
+                buffers.counts.selected,
+            )? {
+                SessionDecision::Verified(verified) => {
+                    return Ok(SessionDecision::Verified(verified));
+                }
+                SessionDecision::Violation(conflict) => {
+                    let first = conflict
+                        .report
+                        .cells
+                        .iter()
+                        .find(|cell| cell.is_hard() && cell.result().is_violation())
+                        .ok_or(ProgramSessionEvaluationError::InternalInvariant)?;
+                    let hard_violation_count = conflict
+                        .report
+                        .cells
+                        .iter()
+                        .filter(|cell| cell.is_hard() && cell.result().is_violation())
+                        .count();
+                    return Err(ProgramSessionEvaluationError::FinalRecheckViolation {
+                        state_index,
+                        case_index: first.case_index,
+                        constraint: first.constraint,
+                        target: first.target,
+                        hard_violation_count,
+                    });
+                }
+            }
+        }
+    }
+
+    for (state_index, tuple) in selection.order.tuples().enumerate() {
+        apply_joint_candidate(plan, &epoch.finite_targets, tuple)?;
+        if !scan_program_candidate(
+            plan,
+            &observation,
+            state_index,
+            Some(&mut buffers.conflict_cells),
+            None,
+        )? {
+            return Err(ProgramSessionEvaluationError::InternalInvariant);
+        }
+    }
+    if buffers.conflict_cells.len() != buffers.counts.exhaustive_conflict {
+        return Err(ProgramSessionEvaluationError::InternalInvariant);
+    }
+
+    Ok(SessionDecision::Violation(ProgramConflictV1 {
+        report: ProgramReportV1 {
+            observation,
+            cells: buffers.conflict_cells,
+        },
+        considered_state_count: state_count,
+    }))
+}
+
+fn apply_joint_candidate<Evaluation>(
+    plan: &mut ProgramSessionPlan<Evaluation>,
+    targets: &[CompiledFiniteTargetV1],
+    tuple: &[FiniteDomainOrdinalV1],
+) -> Result<(), ProgramSessionEvaluationError<ProgramEvaluatorError<Evaluation>>>
+where
+    Evaluation: ProgramPointEvaluatorV1,
+    ProgramPointInvocation<Evaluation>: Copy,
+{
+    if targets.len() != tuple.len() {
+        return Err(ProgramSessionEvaluationError::InternalInvariant);
+    }
+    for (target, ordinal) in targets.iter().zip(tuple) {
+        let candidate = target
+            .candidates
+            .get(ordinal.index())
+            .ok_or(ProgramSessionEvaluationError::InternalInvariant)?;
+        plan.bindings
+            .overwrite_color_at(target.binding, candidate.srgb8())
+            .map_err(map_program_execution_binding_error)?;
+    }
+    Ok(())
+}
+
+fn collect_program_candidate_into<Evaluation>(
+    plan: &mut ProgramSessionPlan<Evaluation>,
+    observation: RevisionBoundObservationV1,
+    selected_state_index: Option<usize>,
+    considered_state_count: usize,
+    mut cells: Vec<ProgramConstraintCellV1<Evaluation>>,
+    mut outputs: Vec<ProgramOutputV1>,
+    expected_cell_count: usize,
+) -> ProgramSessionEvaluationResult<Evaluation>
+where
+    Evaluation: ProgramPointEvaluatorV1,
+    ProgramPointInvocation<Evaluation>: Copy,
+{
+    if !cells.is_empty()
+        || cells.capacity() < expected_cell_count
+        || !outputs.is_empty()
+        || outputs.capacity() < plan.epoch.outputs.len()
+    {
+        return Err(ProgramSessionEvaluationError::InternalInvariant);
+    }
+    let candidate_state_index = selected_state_index.unwrap_or(0);
+    let has_hard_violation = scan_program_candidate(
+        plan,
+        &observation,
+        candidate_state_index,
+        Some(&mut cells),
+        Some(&mut outputs),
+    )?;
+    if cells.len() != expected_cell_count {
+        return Err(ProgramSessionEvaluationError::InternalInvariant);
+    }
+    let report = ProgramReportV1 { observation, cells };
+    if has_hard_violation {
+        Ok(SessionDecision::Violation(ProgramConflictV1 {
+            report,
+            considered_state_count,
+        }))
+    } else {
+        Ok(SessionDecision::Verified(ProgramVerifiedV1 {
+            report,
+            outputs,
+            selected_state_index,
+        }))
+    }
+}
+
+fn scan_program_candidate<Evaluation>(
+    plan: &mut ProgramSessionPlan<Evaluation>,
+    observation: &RevisionBoundObservationV1,
+    candidate_state_index: usize,
+    mut cells: Option<&mut Vec<ProgramConstraintCellV1<Evaluation>>>,
+    mut outputs: Option<&mut Vec<ProgramOutputV1>>,
+) -> Result<bool, ProgramSessionEvaluationError<ProgramEvaluatorError<Evaluation>>>
+where
+    Evaluation: ProgramPointEvaluatorV1,
+    ProgramPointInvocation<Evaluation>: Copy,
+{
     let epoch = &plan.epoch;
     let schema = &epoch.observation_group.schema;
     if !observation.shares_schema_backing_with(schema) {
@@ -870,18 +1447,6 @@ where
     }
 
     let case_count = observation.physical_case_count();
-    let cell_count = case_count
-        .checked_mul(epoch.constraints.len())
-        .ok_or(ProgramSessionEvaluationError::ResourceExhausted)?;
-    let mut cells = Vec::new();
-    cells
-        .try_reserve_exact(cell_count)
-        .map_err(|_| ProgramSessionEvaluationError::ResourceExhausted)?;
-    let mut outputs = Vec::new();
-    outputs
-        .try_reserve_exact(epoch.outputs.len())
-        .map_err(|_| ProgramSessionEvaluationError::ResourceExhausted)?;
-
     let mut has_hard_violation = false;
     let mut output_mismatch = None;
     for case_index in 0..case_count {
@@ -988,51 +1553,51 @@ where
             };
             debug_assert_eq!(result.binding().physical(), source.visible_point_binding());
             debug_assert_eq!(result.binding().modeled_lcs(), modeled_lcs_occurrence);
-            cells.push(ProgramConstraintCellV1 {
-                case_index,
-                constraint: constraint.id,
-                target: constraint.target_id,
-                mode: constraint.mode,
-                result,
-            });
+            if let Some(cells) = cells.as_deref_mut() {
+                cells.push(ProgramConstraintCellV1 {
+                    candidate_state_index,
+                    case_index,
+                    constraint: constraint.id,
+                    target: constraint.target_id,
+                    mode: constraint.mode,
+                    result,
+                });
+            }
         }
 
-        for (output_index, output) in epoch.outputs.iter().enumerate() {
-            let paint = evaluation
-                .paint_at(output.paint)
-                .copied()
-                .ok_or(ProgramSessionEvaluationError::InternalInvariant)?;
-            if paint.id() != output.paint_id {
-                return Err(ProgramSessionEvaluationError::InternalInvariant);
-            }
-            let routed = ProgramOutputV1 {
-                output: output.output,
-                paint,
-            };
-            if case_index == 0 {
-                outputs.push(routed);
-            } else if outputs.get(output_index).copied() != Some(routed)
-                && output_mismatch.is_none()
-            {
-                output_mismatch = Some(ProgramSessionEvaluationError::OutputVariesAcrossCases {
+        if let Some(outputs) = outputs.as_deref_mut() {
+            for (output_index, output) in epoch.outputs.iter().enumerate() {
+                let paint = evaluation
+                    .paint_at(output.paint)
+                    .copied()
+                    .ok_or(ProgramSessionEvaluationError::InternalInvariant)?;
+                if paint.id() != output.paint_id {
+                    return Err(ProgramSessionEvaluationError::InternalInvariant);
+                }
+                let routed = ProgramOutputV1 {
                     output: output.output,
-                    first_case: 0,
-                    actual_case: case_index,
-                });
+                    paint,
+                };
+                if case_index == 0 {
+                    outputs.push(routed);
+                } else if outputs.get(output_index).copied() != Some(routed)
+                    && output_mismatch.is_none()
+                {
+                    output_mismatch =
+                        Some(ProgramSessionEvaluationError::OutputVariesAcrossCases {
+                            output: output.output,
+                            first_case: 0,
+                            actual_case: case_index,
+                        });
+                }
             }
         }
     }
 
-    let report = ProgramReportV1 { observation, cells };
     if let Some(error) = output_mismatch {
         Err(error)
-    } else if has_hard_violation {
-        Ok(SessionDecision::Violation(ProgramViolationV1 { report }))
     } else {
-        Ok(SessionDecision::Verified(ProgramVerifiedV1 {
-            report,
-            outputs,
-        }))
+        Ok(has_hard_violation)
     }
 }
 
@@ -1046,7 +1611,7 @@ fn map_program_execution_binding_error<EvaluationError>(
 }
 
 fn prepare_program<Evaluation>(
-    program: Program<Evaluation>,
+    mut program: Program<Evaluation>,
 ) -> Result<ProgramEpochV1<Evaluation>, ProgramCompileError>
 where
     Evaluation: ProgramPointEvaluatorV1,
@@ -1071,10 +1636,13 @@ where
         .constraints
         .checked_len()
         .ok_or(ProgramCompileError::ResourceExhausted)?;
+    canonicalize_sources_and_targets(&mut program)?;
 
-    let graph = lower_graph(&program).compile().map_err(map_compile_error)?;
+    let graph = lower_graph(&program)?
+        .compile()
+        .map_err(map_compile_error)?;
     let binding_template = graph
-        .admit_bindings(&lower_bindings(&program))
+        .admit_bindings(&lower_bindings(&program)?)
         .map_err(map_binding_compile_error)?;
 
     let mut surface_input_ports = Vec::new();
@@ -1092,6 +1660,9 @@ where
     let observation_schema = canonicalize_observation_schema(surface_input_ports)
         .map_err(map_observation_schema_compile_error)?;
 
+    validate_terminal_dependency_cone(&program)?;
+    let (finite_targets, joint_selection) =
+        compile_targets(&graph, program.targets, program.joint_selection)?;
     let all_occurrence_contexts = compile_occurrence_contexts(&graph, &program.occurrences)?;
     let mut constraints =
         compile_constraints::<Evaluation>(&graph, &all_occurrence_contexts, program.constraints)?;
@@ -1109,7 +1680,422 @@ where
         occurrence_contexts,
         constraints,
         outputs,
+        finite_targets,
+        joint_selection,
     })
+}
+
+fn canonicalize_sources_and_targets<Evaluation>(
+    program: &mut Program<Evaluation>,
+) -> Result<(), ProgramCompileError>
+where
+    Evaluation: ProgramPointEvaluatorV1,
+    ProgramPointInvocation<Evaluation>: Copy,
+{
+    program.sources.sort_unstable_by_key(|source| source.id);
+    if let Some(source) = program
+        .sources
+        .windows(2)
+        .find(|pair| pair[0].id == pair[1].id)
+        .map(|pair| pair[0].id)
+    {
+        return Err(ProgramCompileError::DuplicateSource { source });
+    }
+
+    program.targets.sort_unstable_by_key(|target| target.id);
+    if let Some(target) = program
+        .targets
+        .windows(2)
+        .find(|pair| pair[0].id == pair[1].id)
+        .map(|pair| pair[0].id)
+    {
+        return Err(ProgramCompileError::DuplicateTarget { target });
+    }
+    for target in &program.targets {
+        if program
+            .sources
+            .binary_search_by_key(&target.source, |source| source.id)
+            .is_err()
+        {
+            return Err(ProgramCompileError::MissingTargetSource {
+                target: target.id,
+                source: target.source,
+            });
+        }
+    }
+    for paint in &program.paints {
+        if let Paint::Solid { id, target } = *paint {
+            if program
+                .targets
+                .binary_search_by_key(&target, |candidate| candidate.id)
+                .is_err()
+            {
+                return Err(ProgramCompileError::MissingPaintTarget { paint: id, target });
+            }
+        }
+    }
+    Ok(())
+}
+
+#[derive(Debug, Clone, Copy)]
+enum IndexedPaintDependencyV1 {
+    Target(usize),
+    Paint(usize),
+}
+
+#[derive(Debug, Clone, Copy)]
+enum IndexedDependencyNodeV1 {
+    Paint(usize),
+    Surface(usize),
+    Occurrence(usize),
+}
+
+struct IndexedProgramDependenciesV1 {
+    paint_ids: Vec<(PaintId, usize)>,
+    occurrence_ids: Vec<(OccurrenceId, usize)>,
+    paint_dependencies: Vec<IndexedPaintDependencyV1>,
+    surface_occurrences: Vec<Option<usize>>,
+    occurrence_paints: Vec<usize>,
+    occurrence_surfaces: Vec<usize>,
+}
+
+impl IndexedProgramDependenciesV1 {
+    fn paint(&self, id: PaintId) -> Option<usize> {
+        self.paint_ids
+            .binary_search_by_key(&id, |(candidate, _)| *candidate)
+            .ok()
+            .map(|index| self.paint_ids[index].1)
+    }
+
+    fn occurrence(&self, id: OccurrenceId) -> Option<usize> {
+        self.occurrence_ids
+            .binary_search_by_key(&id, |(candidate, _)| *candidate)
+            .ok()
+            .map(|index| self.occurrence_ids[index].1)
+    }
+}
+
+fn index_program_dependencies<Evaluation>(
+    program: &Program<Evaluation>,
+) -> Result<IndexedProgramDependenciesV1, ProgramCompileError>
+where
+    Evaluation: ProgramPointEvaluatorV1,
+    ProgramPointInvocation<Evaluation>: Copy,
+{
+    let mut paint_ids = Vec::new();
+    paint_ids
+        .try_reserve_exact(program.paints.len())
+        .map_err(|_| ProgramCompileError::ResourceExhausted)?;
+    paint_ids.extend(program.paints.iter().enumerate().map(|(index, paint)| {
+        let id = match *paint {
+            Paint::Solid { id, .. } | Paint::Opacity { id, .. } => id,
+        };
+        (id, index)
+    }));
+    paint_ids.sort_unstable_by_key(|(id, _)| *id);
+
+    let mut surface_ids = Vec::new();
+    surface_ids
+        .try_reserve_exact(program.surfaces.len())
+        .map_err(|_| ProgramCompileError::ResourceExhausted)?;
+    surface_ids.extend(program.surfaces.iter().enumerate().map(|(index, surface)| {
+        let id = match *surface {
+            Surface::Input { id, .. } | Surface::FromOccurrence { id, .. } => id,
+        };
+        (id, index)
+    }));
+    surface_ids.sort_unstable_by_key(|(id, _)| *id);
+
+    let mut occurrence_ids = Vec::new();
+    occurrence_ids
+        .try_reserve_exact(program.occurrences.len())
+        .map_err(|_| ProgramCompileError::ResourceExhausted)?;
+    occurrence_ids.extend(
+        program
+            .occurrences
+            .iter()
+            .enumerate()
+            .map(|(index, occurrence)| (occurrence.id, index)),
+    );
+    occurrence_ids.sort_unstable_by_key(|(id, _)| *id);
+
+    let paint_ordinal = |id: PaintId| {
+        paint_ids
+            .binary_search_by_key(&id, |(candidate, _)| *candidate)
+            .ok()
+            .map(|index| paint_ids[index].1)
+            .ok_or(ProgramCompileError::InternalInvariant)
+    };
+    let surface_ordinal = |id: SurfaceId| {
+        surface_ids
+            .binary_search_by_key(&id, |(candidate, _)| *candidate)
+            .ok()
+            .map(|index| surface_ids[index].1)
+            .ok_or(ProgramCompileError::InternalInvariant)
+    };
+    let occurrence_ordinal = |id: OccurrenceId| {
+        occurrence_ids
+            .binary_search_by_key(&id, |(candidate, _)| *candidate)
+            .ok()
+            .map(|index| occurrence_ids[index].1)
+            .ok_or(ProgramCompileError::InternalInvariant)
+    };
+
+    let mut paint_dependencies = Vec::new();
+    paint_dependencies
+        .try_reserve_exact(program.paints.len())
+        .map_err(|_| ProgramCompileError::ResourceExhausted)?;
+    for paint in &program.paints {
+        paint_dependencies.push(match *paint {
+            Paint::Solid { target, .. } => IndexedPaintDependencyV1::Target(
+                program
+                    .targets
+                    .binary_search_by_key(&target, |candidate| candidate.id)
+                    .map_err(|_| ProgramCompileError::InternalInvariant)?,
+            ),
+            Paint::Opacity { source, .. } => {
+                IndexedPaintDependencyV1::Paint(paint_ordinal(source)?)
+            }
+        });
+    }
+    let mut surface_occurrences = Vec::new();
+    surface_occurrences
+        .try_reserve_exact(program.surfaces.len())
+        .map_err(|_| ProgramCompileError::ResourceExhausted)?;
+    for surface in &program.surfaces {
+        surface_occurrences.push(match *surface {
+            Surface::Input { .. } => None,
+            Surface::FromOccurrence { occurrence, .. } => Some(occurrence_ordinal(occurrence)?),
+        });
+    }
+    let mut occurrence_paints = Vec::new();
+    let mut occurrence_surfaces = Vec::new();
+    occurrence_paints
+        .try_reserve_exact(program.occurrences.len())
+        .map_err(|_| ProgramCompileError::ResourceExhausted)?;
+    occurrence_surfaces
+        .try_reserve_exact(program.occurrences.len())
+        .map_err(|_| ProgramCompileError::ResourceExhausted)?;
+    for occurrence in &program.occurrences {
+        occurrence_paints.push(paint_ordinal(occurrence.subject)?);
+        occurrence_surfaces.push(surface_ordinal(occurrence.against)?);
+    }
+    Ok(IndexedProgramDependenciesV1 {
+        paint_ids,
+        occurrence_ids,
+        paint_dependencies,
+        surface_occurrences,
+        occurrence_paints,
+        occurrence_surfaces,
+    })
+}
+
+struct ProgramDependencyScratchV1 {
+    targets: Vec<bool>,
+    paints: Vec<bool>,
+    surfaces: Vec<bool>,
+    occurrences: Vec<bool>,
+    queue: Vec<IndexedDependencyNodeV1>,
+}
+
+impl ProgramDependencyScratchV1 {
+    fn new<Evaluation>(program: &Program<Evaluation>) -> Result<Self, ProgramCompileError>
+    where
+        Evaluation: ProgramPointEvaluatorV1,
+        ProgramPointInvocation<Evaluation>: Copy,
+    {
+        let node_count = program
+            .paints
+            .len()
+            .checked_add(program.surfaces.len())
+            .and_then(|count| count.checked_add(program.occurrences.len()))
+            .ok_or(ProgramCompileError::ResourceExhausted)?;
+        let mut queue = Vec::new();
+        queue
+            .try_reserve_exact(node_count)
+            .map_err(|_| ProgramCompileError::ResourceExhausted)?;
+        Ok(Self {
+            targets: false_slots(program.targets.len())?,
+            paints: false_slots(program.paints.len())?,
+            surfaces: false_slots(program.surfaces.len())?,
+            occurrences: false_slots(program.occurrences.len())?,
+            queue,
+        })
+    }
+
+    fn scan(
+        &mut self,
+        index: &IndexedProgramDependenciesV1,
+        roots: impl IntoIterator<Item = OccurrenceId>,
+    ) -> Result<(), ProgramCompileError> {
+        self.targets.fill(false);
+        self.paints.fill(false);
+        self.surfaces.fill(false);
+        self.occurrences.fill(false);
+        self.queue.clear();
+        for root in roots {
+            let occurrence = index
+                .occurrence(root)
+                .ok_or(ProgramCompileError::InternalInvariant)?;
+            if !self.occurrences[occurrence] {
+                self.occurrences[occurrence] = true;
+                self.queue
+                    .push(IndexedDependencyNodeV1::Occurrence(occurrence));
+            }
+        }
+
+        let mut cursor = 0usize;
+        while let Some(node) = self.queue.get(cursor).copied() {
+            cursor += 1;
+            match node {
+                IndexedDependencyNodeV1::Occurrence(occurrence) => {
+                    let paint = index.occurrence_paints[occurrence];
+                    if !self.paints[paint] {
+                        self.paints[paint] = true;
+                        self.queue.push(IndexedDependencyNodeV1::Paint(paint));
+                    }
+                    let surface = index.occurrence_surfaces[occurrence];
+                    if !self.surfaces[surface] {
+                        self.surfaces[surface] = true;
+                        self.queue.push(IndexedDependencyNodeV1::Surface(surface));
+                    }
+                }
+                IndexedDependencyNodeV1::Surface(surface) => {
+                    if let Some(occurrence) = index.surface_occurrences[surface] {
+                        if !self.occurrences[occurrence] {
+                            self.occurrences[occurrence] = true;
+                            self.queue
+                                .push(IndexedDependencyNodeV1::Occurrence(occurrence));
+                        }
+                    }
+                }
+                IndexedDependencyNodeV1::Paint(paint) => match index.paint_dependencies[paint] {
+                    IndexedPaintDependencyV1::Target(target) => self.targets[target] = true,
+                    IndexedPaintDependencyV1::Paint(source) => {
+                        if !self.paints[source] {
+                            self.paints[source] = true;
+                            self.queue.push(IndexedDependencyNodeV1::Paint(source));
+                        }
+                    }
+                },
+            }
+        }
+        Ok(())
+    }
+}
+
+fn false_slots(len: usize) -> Result<Vec<bool>, ProgramCompileError> {
+    let mut slots = Vec::new();
+    slots
+        .try_reserve_exact(len)
+        .map_err(|_| ProgramCompileError::ResourceExhausted)?;
+    slots.resize(len, false);
+    Ok(slots)
+}
+
+fn validate_terminal_dependency_cone<Evaluation>(
+    program: &Program<Evaluation>,
+) -> Result<(), ProgramCompileError>
+where
+    Evaluation: ProgramPointEvaluatorV1,
+    ProgramPointInvocation<Evaluation>: Copy,
+{
+    // Preserve the canonical missing-reference diagnostics owned by constraint
+    // and output compilation before applying the stronger terminal-safety law.
+    if program
+        .constraints
+        .hard
+        .iter()
+        .map(|constraint| constraint.target)
+        .chain(
+            program
+                .constraints
+                .report_only
+                .iter()
+                .map(|constraint| constraint.target),
+        )
+        .any(|target| {
+            !program
+                .occurrences
+                .iter()
+                .any(|occurrence| occurrence.id == target)
+        })
+        || program.outputs.iter().any(|output| {
+            !program.paints.iter().any(|paint| match *paint {
+                Paint::Solid { id, .. } | Paint::Opacity { id, .. } => id == output.paint,
+            })
+        })
+    {
+        return Ok(());
+    }
+
+    let index = index_program_dependencies(program)?;
+    let mut scratch = ProgramDependencyScratchV1::new(program)?;
+    scratch.scan(
+        &index,
+        program
+            .constraints
+            .hard
+            .iter()
+            .map(|constraint| constraint.target)
+            .chain(
+                program
+                    .constraints
+                    .report_only
+                    .iter()
+                    .map(|constraint| constraint.target),
+            ),
+    )?;
+    for (target_index, target) in program.targets.iter().enumerate() {
+        if matches!(&target.domain, TargetDomainV1::Finite(_)) && !scratch.targets[target_index] {
+            return Err(ProgramCompileError::UnconstrainedTarget { target: target.id });
+        }
+    }
+    for output in &program.outputs {
+        let paint_index = index
+            .paint(output.paint)
+            .ok_or(ProgramCompileError::InternalInvariant)?;
+        if !scratch.paints[paint_index] {
+            return Err(ProgramCompileError::UnassessedOutput {
+                output: output.output,
+                paint: output.paint,
+            });
+        }
+    }
+
+    let finite_count = program
+        .targets
+        .iter()
+        .filter(|target| matches!(&target.domain, TargetDomainV1::Finite(_)))
+        .count();
+    if finite_count > 1 {
+        let mut has_common_assessment = false;
+        for target in program
+            .constraints
+            .hard
+            .iter()
+            .map(|constraint| constraint.target)
+            .chain(
+                program
+                    .constraints
+                    .report_only
+                    .iter()
+                    .map(|constraint| constraint.target),
+            )
+        {
+            scratch.scan(&index, [target])?;
+            if program.targets.iter().enumerate().all(|(index, target)| {
+                !matches!(&target.domain, TargetDomainV1::Finite(_)) || scratch.targets[index]
+            }) {
+                has_common_assessment = true;
+                break;
+            }
+        }
+        if !has_common_assessment {
+            return Err(ProgramCompileError::DisconnectedFiniteTargets);
+        }
+    }
+    Ok(())
 }
 
 fn map_observation_schema_compile_error(error: ObservationError) -> ProgramCompileError {
@@ -1124,6 +2110,165 @@ struct LoweredConstraint<Invocation> {
     target: OccurrenceId,
     mode: CompiledConstraintModeV1,
     invocation: Invocation,
+}
+
+fn compile_targets(
+    graph: &CompiledAppearanceGraph,
+    authored_targets: Vec<Target>,
+    authored_selection: Option<DeclaredJointSelectionV1>,
+) -> Result<
+    (
+        Box<[CompiledFiniteTargetV1]>,
+        Option<CompiledJointSelectionV1>,
+    ),
+    ProgramCompileError,
+> {
+    struct CanonicalFiniteTargetV1 {
+        id: TargetId,
+        binding: CompiledColorInputSlotV1,
+        candidates: Vec<TargetCandidateV1>,
+    }
+
+    let mut compiled = Vec::new();
+    compiled
+        .try_reserve_exact(authored_targets.len())
+        .map_err(|_| ProgramCompileError::ResourceExhausted)?;
+    for target in authored_targets {
+        let TargetDomainV1::Finite(mut candidates) = target.domain else {
+            continue;
+        };
+        if candidates.is_empty() {
+            return Err(ProgramCompileError::EmptyTargetDomain { target: target.id });
+        }
+        let binding = graph
+            .bind_color_input(target_color_input_id(target.id))
+            .ok_or(ProgramCompileError::InternalInvariant)?;
+        candidates.sort_unstable_by_key(|candidate| candidate.id);
+        if let Some(candidate) = candidates
+            .windows(2)
+            .find(|pair| pair[0].id == pair[1].id)
+            .map(|pair| pair[0].id)
+        {
+            return Err(ProgramCompileError::DuplicateTargetCandidate {
+                target: target.id,
+                candidate,
+            });
+        }
+        let mut physical = Vec::new();
+        physical
+            .try_reserve_exact(candidates.len())
+            .map_err(|_| ProgramCompileError::ResourceExhausted)?;
+        physical.extend(
+            candidates
+                .iter()
+                .map(|candidate| (candidate.signal, candidate.id)),
+        );
+        physical.sort_unstable();
+        if let Some(pair) = physical.windows(2).find(|pair| pair[0].0 == pair[1].0) {
+            return Err(ProgramCompileError::DuplicateTargetCandidateSignal {
+                target: target.id,
+                first: pair[0].1,
+                duplicate: pair[1].1,
+                signal: pair[0].0,
+            });
+        }
+        compiled.push(CanonicalFiniteTargetV1 {
+            id: target.id,
+            binding,
+            candidates,
+        });
+    }
+
+    if compiled.is_empty() {
+        return match authored_selection {
+            None => Ok((Box::new([]), None)),
+            Some(_) => Err(ProgramCompileError::JointSelectionWithoutTargets),
+        };
+    }
+    let Some(authored_selection) = authored_selection else {
+        return Err(ProgramCompileError::MissingJointSelection);
+    };
+
+    let mut authored_tuples = Vec::new();
+    authored_tuples
+        .try_reserve_exact(authored_selection.states.len())
+        .map_err(|_| ProgramCompileError::ResourceExhausted)?;
+    for (state_index, mut state) in authored_selection.states.into_iter().enumerate() {
+        state.choices.sort_unstable_by_key(|choice| choice.target);
+        if let Some(target) = state
+            .choices
+            .windows(2)
+            .find(|pair| pair[0].target == pair[1].target)
+            .map(|pair| pair[0].target)
+        {
+            return Err(ProgramCompileError::JointStateDuplicateTarget {
+                state: state_index,
+                target,
+            });
+        }
+        if let Some(choice) = state.choices.iter().find(|choice| {
+            compiled
+                .binary_search_by_key(&choice.target, |target| target.id)
+                .is_err()
+        }) {
+            return Err(ProgramCompileError::JointStateUnknownTarget {
+                state: state_index,
+                target: choice.target,
+            });
+        }
+
+        let mut tuple = Vec::new();
+        tuple
+            .try_reserve_exact(compiled.len())
+            .map_err(|_| ProgramCompileError::ResourceExhausted)?;
+        for target in &compiled {
+            let choice_index = state
+                .choices
+                .binary_search_by_key(&target.id, |choice| choice.target)
+                .map_err(|_| ProgramCompileError::JointStateMissingTarget {
+                    state: state_index,
+                    target: target.id,
+                })?;
+            let choice = state.choices[choice_index];
+            let candidate_index = target
+                .candidates
+                .binary_search_by_key(&choice.candidate, |candidate| candidate.id)
+                .map_err(|_| ProgramCompileError::JointStateUnknownCandidate {
+                    state: state_index,
+                    target: target.id,
+                    candidate: choice.candidate,
+                })?;
+            tuple.push(FiniteDomainOrdinalV1::new(candidate_index));
+        }
+        authored_tuples.push(tuple);
+    }
+
+    let mut domain_lengths = Vec::new();
+    domain_lengths
+        .try_reserve_exact(compiled.len())
+        .map_err(|_| ProgramCompileError::ResourceExhausted)?;
+    domain_lengths.extend(compiled.iter().map(|target| target.candidates.len()));
+    let order = admit_finite_joint_order_v1(&domain_lengths, authored_tuples)
+        .map_err(ProgramCompileError::InvalidJointOrder)?;
+    let mut runtime_targets = Vec::new();
+    runtime_targets
+        .try_reserve_exact(compiled.len())
+        .map_err(|_| ProgramCompileError::ResourceExhausted)?;
+    for target in compiled {
+        let mut candidates = Vec::new();
+        candidates
+            .try_reserve_exact(target.candidates.len())
+            .map_err(|_| ProgramCompileError::ResourceExhausted)?;
+        candidates.extend(target.candidates.into_iter().map(TargetCandidateV1::signal));
+        runtime_targets.push(CompiledFiniteTargetV1 {
+            binding: target.binding,
+            candidates: candidates.into_boxed_slice(),
+        });
+    }
+    Ok((
+        runtime_targets.into_boxed_slice(),
+        Some(CompiledJointSelectionV1 { order }),
+    ))
 }
 
 fn compile_occurrence_contexts(
@@ -1341,88 +2486,140 @@ pub(crate) fn canonical_surface_input_port_sequence_matches(
     actual.into_iter().eq(expected.iter().copied())
 }
 
-fn lower_graph<Evaluation>(program: &Program<Evaluation>) -> AppearanceGraphSpec
-where
-    Evaluation: ProgramPointEvaluatorV1,
-    ProgramPointInvocation<Evaluation>: Copy,
-{
-    AppearanceGraphSpec::new(
-        program.colors.iter().map(|input| input.id).collect(),
-        program.observation_group.surface_input_ports.clone(),
-        program.opacities.iter().map(|input| input.id).collect(),
-        program
-            .paints
-            .iter()
-            .map(|paint| match *paint {
-                Paint::Solid { id, color } => PaintSpec::Solid { id, color },
-                Paint::Opacity {
-                    id,
-                    source,
-                    opacity,
-                } => PaintSpec::Opacity {
-                    id,
-                    source,
-                    opacity,
-                },
-            })
-            .collect(),
-        program
-            .surfaces
-            .iter()
-            .map(|surface| match *surface {
-                Surface::Input { id, input } => SurfaceSpec::Input { id, port: input },
-                Surface::FromOccurrence { id, occurrence } => {
-                    SurfaceSpec::FromOccurrence { id, occurrence }
-                }
-            })
-            .collect(),
-        program
-            .occurrences
-            .iter()
-            .map(|occurrence| OccurrenceSpec {
-                id: occurrence.id,
-                subject: occurrence.subject,
-                against: occurrence.against,
-                profile: match occurrence.composition {
-                    CompositionProfile::EncodedSrgb8SourceOverV1 => {
-                        CompositionProfileV1::EncodedSrgb8SourceOverV1
-                    }
-                },
-            })
-            .collect(),
-    )
+const fn target_color_input_id(target: TargetId) -> ColorInputId {
+    ColorInputId::new(target.value())
 }
 
-fn lower_bindings<Evaluation>(program: &Program<Evaluation>) -> AppearanceBindings
+fn try_collect_program<T>(
+    exact_len: usize,
+    values: impl IntoIterator<Item = T>,
+) -> Result<Vec<T>, ProgramCompileError> {
+    let mut collected = Vec::new();
+    collected
+        .try_reserve_exact(exact_len)
+        .map_err(|_| ProgramCompileError::ResourceExhausted)?;
+    collected.extend(values);
+    Ok(collected)
+}
+
+fn lower_graph<Evaluation>(
+    program: &Program<Evaluation>,
+) -> Result<AppearanceGraphSpec, ProgramCompileError>
 where
     Evaluation: ProgramPointEvaluatorV1,
     ProgramPointInvocation<Evaluation>: Copy,
 {
-    AppearanceBindings::new(
+    let colors = try_collect_program(
+        program.targets.len(),
         program
-            .colors
+            .targets
             .iter()
-            .map(|input| (input.id, input.value.srgb8()))
-            .collect(),
+            .map(|target| target_color_input_id(target.id)),
+    )?;
+    let surface_inputs = try_collect_program(
+        program.observation_group.surface_input_ports.len(),
         program
             .observation_group
             .surface_input_ports
             .iter()
-            .map(|input| (*input, Srgb8::new([0; 3])))
-            .collect(),
+            .copied(),
+    )?;
+    let opacities = try_collect_program(
+        program.opacities.len(),
+        program.opacities.iter().map(|input| input.id),
+    )?;
+    let paints = try_collect_program(
+        program.paints.len(),
+        program.paints.iter().map(|paint| match *paint {
+            Paint::Solid { id, target } => PaintSpec::Solid {
+                id,
+                color: target_color_input_id(target),
+            },
+            Paint::Opacity {
+                id,
+                source,
+                opacity,
+            } => PaintSpec::Opacity {
+                id,
+                source,
+                opacity,
+            },
+        }),
+    )?;
+    let surfaces = try_collect_program(
+        program.surfaces.len(),
+        program.surfaces.iter().map(|surface| match *surface {
+            Surface::Input { id, input } => SurfaceSpec::Input { id, port: input },
+            Surface::FromOccurrence { id, occurrence } => {
+                SurfaceSpec::FromOccurrence { id, occurrence }
+            }
+        }),
+    )?;
+    let occurrences = try_collect_program(
+        program.occurrences.len(),
+        program.occurrences.iter().map(|occurrence| OccurrenceSpec {
+            id: occurrence.id,
+            subject: occurrence.subject,
+            against: occurrence.against,
+            profile: match occurrence.composition {
+                CompositionProfile::EncodedSrgb8SourceOverV1 => {
+                    CompositionProfileV1::EncodedSrgb8SourceOverV1
+                }
+            },
+        }),
+    )?;
+    Ok(AppearanceGraphSpec::new(
+        colors,
+        surface_inputs,
+        opacities,
+        paints,
+        surfaces,
+        occurrences,
+    ))
+}
+
+fn lower_bindings<Evaluation>(
+    program: &Program<Evaluation>,
+) -> Result<AppearanceBindings, ProgramCompileError>
+where
+    Evaluation: ProgramPointEvaluatorV1,
+    ProgramPointInvocation<Evaluation>: Copy,
+{
+    let mut colors = Vec::new();
+    colors
+        .try_reserve_exact(program.targets.len())
+        .map_err(|_| ProgramCompileError::ResourceExhausted)?;
+    for target in &program.targets {
+        let source_index = program
+            .sources
+            .binary_search_by_key(&target.source, |source| source.id)
+            .map_err(|_| ProgramCompileError::InternalInvariant)?;
+        colors.push((
+            target_color_input_id(target.id),
+            program.sources[source_index].signal.srgb8(),
+        ));
+    }
+    let surfaces = try_collect_program(
+        program.observation_group.surface_input_ports.len(),
+        program
+            .observation_group
+            .surface_input_ports
+            .iter()
+            .map(|input| (*input, Srgb8::new([0; 3]))),
+    )?;
+    let opacities = try_collect_program(
+        program.opacities.len(),
         program
             .opacities
             .iter()
-            .map(|input| (input.id, input.value))
-            .collect(),
-    )
+            .map(|input| (input.id, input.value)),
+    )?;
+    Ok(AppearanceBindings::new(colors, surfaces, opacities))
 }
 
 fn map_compile_error(error: CompileError) -> ProgramCompileError {
     match error {
-        CompileError::DuplicateColorInput { input } => {
-            ProgramCompileError::DuplicateColorInput { input }
-        }
+        CompileError::DuplicateColorInput { .. } => ProgramCompileError::InternalInvariant,
         CompileError::DuplicateOpacityInput { input } => {
             ProgramCompileError::DuplicateOpacityInput { input }
         }
@@ -1436,9 +2633,7 @@ fn map_compile_error(error: CompileError) -> ProgramCompileError {
         CompileError::DuplicateOccurrence { occurrence } => {
             ProgramCompileError::DuplicateOccurrence { occurrence }
         }
-        CompileError::MissingPaintColorInput { paint, input } => {
-            ProgramCompileError::MissingPaintColorInput { paint, input }
-        }
+        CompileError::MissingPaintColorInput { .. } => ProgramCompileError::InternalInvariant,
         CompileError::MissingPaintSource { paint, source } => {
             ProgramCompileError::MissingPaintSource { paint, source }
         }

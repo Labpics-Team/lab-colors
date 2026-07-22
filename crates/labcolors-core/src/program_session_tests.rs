@@ -1,7 +1,5 @@
 use crate::Srgb8;
-use crate::appearance::{
-    ColorInputId, OccurrenceId, OpacityInputId, PaintId, SurfaceId, SurfaceInputPortId,
-};
+use crate::appearance::{OccurrenceId, OpacityInputId, PaintId, SurfaceId, SurfaceInputPortId};
 use crate::constraints::{ExactSrgb8IdentityV1, ProgramPointEvaluatorV1, ProgramPointInvocation};
 use crate::lcs_occurrence::{
     AdaptingLuminanceCdM2, AppearanceContextId, AppearanceContextSchemaReleaseId,
@@ -13,14 +11,15 @@ use crate::observation::{
     SurfaceInputBinding,
 };
 use crate::program_session::{
-    ColorInput, CompositionProfile, ConstraintId, ConstraintInvocation, ConstraintSet,
-    ObservationGroup, Occurrence, OpacityInput, OutputBinding, OutputSlotId, Paint, Program,
-    ProgramCompileError, Surface, canonical_surface_input_port_sequence_matches,
+    CompositionProfile, ConstraintId, ConstraintInvocation, ConstraintSet, ObservationGroup,
+    Occurrence, OpacityInput, OutputBinding, OutputSlotId, Paint, Program, ProgramCompileError,
+    Source, SourceId, Surface, Target, TargetId, canonical_surface_input_port_sequence_matches,
     check_render_node_count,
 };
 use crate::session::SessionState;
 
-const COLOR: ColorInputId = ColorInputId::new(1);
+const SOURCE: SourceId = SourceId::new(1);
+const TARGET: TargetId = TargetId::new(1);
 const SURFACE_PORT: SurfaceInputPortId = SurfaceInputPortId::new(2);
 const OPACITY: OpacityInputId = OpacityInputId::new(3);
 const SOLID: PaintId = PaintId::new(10);
@@ -75,16 +74,17 @@ where
     ProgramPointInvocation<Evaluation>: Copy,
 {
     Program::new(
-        vec![ColorInput::new(
-            COLOR,
+        vec![Source::new(
+            SOURCE,
             ColorSignal::from_srgb8(Srgb8::new([0; 3])),
         )],
+        vec![Target::fixed(TARGET, SOURCE)],
         ObservationGroup::new(group, vec![SURFACE_PORT]),
         vec![OpacityInput::new(OPACITY, opacity)],
         vec![
             Paint::Solid {
                 id: SOLID,
-                color: COLOR,
+                target: TARGET,
             },
             Paint::Opacity {
                 id: TRANSLUCENT,
@@ -180,12 +180,16 @@ fn authored_modes_are_marker_typed_and_values_preserve_exact_ids() {
     assert_eq!(ConstraintId::new(7).value(), 7);
     assert_eq!(OutputSlotId::new(8).value(), 8);
 
-    let color = ColorInput::new(COLOR, ColorSignal::from_srgb8(Srgb8::new([1, 2, 3])));
-    assert_eq!(color.id(), COLOR);
+    let source = Source::new(SOURCE, ColorSignal::from_srgb8(Srgb8::new([1, 2, 3])));
+    assert_eq!(SOURCE.value(), 1);
+    assert_eq!(source.id(), SOURCE);
     assert_eq!(
-        color.value(),
+        source.signal(),
         ColorSignal::from_srgb8(Srgb8::new([1, 2, 3]))
     );
+    let target = Target::fixed(TARGET, SOURCE);
+    assert_eq!(target.id(), TARGET);
+    assert_eq!(target.source(), SOURCE);
     let opacity = OpacityInput::new(OPACITY, 0.375);
     assert_eq!(opacity.id(), OPACITY);
     assert_eq!(opacity.value(), 0.375);
@@ -213,15 +217,16 @@ fn authored_modes_are_marker_typed_and_values_preserve_exact_ids() {
 #[test]
 fn empty_domains_have_stable_precedence() {
     let empty_surface = Program::new(
-        vec![ColorInput::new(
-            COLOR,
+        vec![Source::new(
+            SOURCE,
             ColorSignal::from_srgb8(Srgb8::new([0; 3])),
         )],
+        vec![Target::fixed(TARGET, SOURCE)],
         observation_group(vec![]),
         vec![],
         vec![Paint::Solid {
             id: SOLID,
-            color: COLOR,
+            target: TARGET,
         }],
         vec![Surface::Input {
             id: BACKDROP,
@@ -251,15 +256,16 @@ fn empty_domains_have_stable_precedence() {
     );
 
     let empty_occurrence = Program::new(
-        vec![ColorInput::new(
-            COLOR,
+        vec![Source::new(
+            SOURCE,
             ColorSignal::from_srgb8(Srgb8::new([0; 3])),
         )],
+        vec![Target::fixed(TARGET, SOURCE)],
         observation_group(vec![SURFACE_PORT]),
         vec![],
         vec![Paint::Solid {
             id: SOLID,
-            color: COLOR,
+            target: TARGET,
         }],
         vec![Surface::Input {
             id: BACKDROP,
@@ -592,7 +598,7 @@ fn multi_case_hard_failure_retains_the_full_matrix_without_outputs() {
             .count(),
         2,
     );
-    // `ProgramViolationV1` owns only the complete report; no output accessor or
+    // `ProgramConflictV1` owns only the complete report; no output accessor or
     // output storage exists on the failure type.
 }
 
@@ -647,7 +653,7 @@ fn mixed_modes_retain_the_full_canonical_matrix_without_outputs_on_hard_failure(
         vec![true, false, false, true],
     );
     assert!(cells.iter().all(|cell| cell.target() == OCCURRENCE));
-    // `cause` is `ProgramViolationV1`: the failure surface exposes only this
+    // `cause` is `ProgramConflictV1`: the failure surface exposes only this
     // complete report, while Paint outputs exist only on `ProgramVerifiedV1`.
 }
 
@@ -692,8 +698,10 @@ fn report_only_violations_do_not_block_program_scope_paint_outputs() {
 
 #[test]
 fn nested_surface_uses_the_lower_occurrence_before_assessing_the_upper() {
-    const LOWER_COLOR: ColorInputId = ColorInputId::new(101);
-    const UPPER_COLOR: ColorInputId = ColorInputId::new(102);
+    const LOWER_SOURCE: SourceId = SourceId::new(101);
+    const UPPER_SOURCE: SourceId = SourceId::new(102);
+    const LOWER_TARGET: TargetId = TargetId::new(101);
+    const UPPER_TARGET: TargetId = TargetId::new(102);
     const HALF: OpacityInputId = OpacityInputId::new(103);
     const LOWER_PAINT: PaintId = PaintId::new(110);
     const UPPER_SOLID: PaintId = PaintId::new(111);
@@ -706,19 +714,23 @@ fn nested_surface_uses_the_lower_occurrence_before_assessing_the_upper() {
 
     let program = Program::new(
         vec![
-            ColorInput::new(LOWER_COLOR, ColorSignal::from_srgb8(Srgb8::new([0x80; 3]))),
-            ColorInput::new(UPPER_COLOR, ColorSignal::from_srgb8(Srgb8::new([0xFF; 3]))),
+            Source::new(LOWER_SOURCE, ColorSignal::from_srgb8(Srgb8::new([0x80; 3]))),
+            Source::new(UPPER_SOURCE, ColorSignal::from_srgb8(Srgb8::new([0xFF; 3]))),
+        ],
+        vec![
+            Target::fixed(LOWER_TARGET, LOWER_SOURCE),
+            Target::fixed(UPPER_TARGET, UPPER_SOURCE),
         ],
         observation_group(vec![SURFACE_PORT]),
         vec![OpacityInput::new(HALF, 0.5)],
         vec![
             Paint::Solid {
                 id: LOWER_PAINT,
-                color: LOWER_COLOR,
+                target: LOWER_TARGET,
             },
             Paint::Solid {
                 id: UPPER_SOLID,
-                color: UPPER_COLOR,
+                target: UPPER_TARGET,
             },
             Paint::Opacity {
                 id: UPPER_PAINT,

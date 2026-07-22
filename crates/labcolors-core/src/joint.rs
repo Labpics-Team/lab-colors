@@ -19,6 +19,151 @@ use crate::constraints::{
     assess_visible_point_hard,
 };
 use crate::observation::{RevisionBoundObservationV1, ScenarioId};
+
+/// One canonical candidate ordinal inside a finite target domain.
+///
+/// The ordinal is assigned only after the owning Program has sorted the
+/// target's opaque candidate IDs.  It is therefore an internal compiled index,
+/// never client identity or declaration-order policy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub(crate) struct FiniteDomainOrdinalV1(usize);
+
+impl FiniteDomainOrdinalV1 {
+    pub(crate) const fn new(index: usize) -> Self {
+        Self(index)
+    }
+
+    pub(crate) const fn index(self) -> usize {
+        self.0
+    }
+}
+
+/// A fully admitted total order over the product of finite target
+/// domains.  Each tuple is stored in canonical target order.  The tuple order
+/// is authored policy; no target ID, candidate value, or declaration position
+/// becomes an implicit tie-break.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct AdmittedFiniteJointOrderV1 {
+    tuples: Box<[Box<[FiniteDomainOrdinalV1]>]>,
+}
+
+impl AdmittedFiniteJointOrderV1 {
+    pub(crate) fn tuples(&self) -> impl ExactSizeIterator<Item = &[FiniteDomainOrdinalV1]> + '_ {
+        self.tuples.iter().map(Box::as_ref)
+    }
+}
+
+/// Failure to admit a declared finite joint selection order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FiniteJointOrderErrorV1 {
+    EmptyDomain {
+        dimension: usize,
+    },
+    CardinalityOverflow,
+    EmptyOrder,
+    TupleArity {
+        tuple: usize,
+        expected: usize,
+        actual: usize,
+    },
+    OrdinalOutOfDomain {
+        tuple: usize,
+        dimension: usize,
+        ordinal: usize,
+        domain_len: usize,
+    },
+    DuplicateTuple {
+        first: usize,
+        duplicate: usize,
+    },
+    IncompleteOrder {
+        expected: usize,
+        actual: usize,
+    },
+    ResourceExhausted,
+}
+
+/// Check and seal an explicit total order over a finite product domain.
+///
+/// This function deliberately does not synthesize lexicographic policy.  A
+/// caller must enumerate every tuple exactly once.  Checked multiplication and
+/// fallible allocation happen before the result can reach runtime.
+pub(crate) fn admit_finite_joint_order_v1(
+    domain_lengths: &[usize],
+    authored: Vec<Vec<FiniteDomainOrdinalV1>>,
+) -> Result<AdmittedFiniteJointOrderV1, FiniteJointOrderErrorV1> {
+    let mut expected = 1usize;
+    for (dimension, &domain_len) in domain_lengths.iter().enumerate() {
+        if domain_len == 0 {
+            return Err(FiniteJointOrderErrorV1::EmptyDomain { dimension });
+        }
+        expected = expected
+            .checked_mul(domain_len)
+            .ok_or(FiniteJointOrderErrorV1::CardinalityOverflow)?;
+    }
+    if authored.is_empty() {
+        return Err(FiniteJointOrderErrorV1::EmptyOrder);
+    }
+    if authored.len() != expected {
+        return Err(FiniteJointOrderErrorV1::IncompleteOrder {
+            expected,
+            actual: authored.len(),
+        });
+    }
+
+    // The mixed-radix ordinal is a bijection over the admitted product.  A
+    // fallibly allocated first-seen table makes duplicate admission O(states ×
+    // dimensions), rather than comparing every tuple with every earlier tuple.
+    let mut first_seen = Vec::new();
+    first_seen
+        .try_reserve_exact(expected)
+        .map_err(|_| FiniteJointOrderErrorV1::ResourceExhausted)?;
+    first_seen.resize(expected, usize::MAX);
+
+    let mut tuples = Vec::new();
+    tuples
+        .try_reserve_exact(authored.len())
+        .map_err(|_| FiniteJointOrderErrorV1::ResourceExhausted)?;
+    for (tuple_index, tuple) in authored.into_iter().enumerate() {
+        if tuple.len() != domain_lengths.len() {
+            return Err(FiniteJointOrderErrorV1::TupleArity {
+                tuple: tuple_index,
+                expected: domain_lengths.len(),
+                actual: tuple.len(),
+            });
+        }
+        let mut mixed_radix_index = 0usize;
+        for (dimension, (ordinal, &domain_len)) in tuple.iter().zip(domain_lengths).enumerate() {
+            if ordinal.index() >= domain_len {
+                return Err(FiniteJointOrderErrorV1::OrdinalOutOfDomain {
+                    tuple: tuple_index,
+                    dimension,
+                    ordinal: ordinal.index(),
+                    domain_len,
+                });
+            }
+            mixed_radix_index = mixed_radix_index
+                .checked_mul(domain_len)
+                .and_then(|index| index.checked_add(ordinal.index()))
+                .ok_or(FiniteJointOrderErrorV1::CardinalityOverflow)?;
+        }
+        let first = first_seen
+            .get_mut(mixed_radix_index)
+            .ok_or(FiniteJointOrderErrorV1::CardinalityOverflow)?;
+        if *first != usize::MAX {
+            return Err(FiniteJointOrderErrorV1::DuplicateTuple {
+                first: *first,
+                duplicate: tuple_index,
+            });
+        }
+        *first = tuple_index;
+        tuples.push(tuple.into_boxed_slice());
+    }
+
+    Ok(AdmittedFiniteJointOrderV1 {
+        tuples: tuples.into_boxed_slice(),
+    })
+}
 use crate::session::SessionObservationBindingPermitV1;
 
 /// Sealed evaluator family, которую joint-program вызывает одинаково для

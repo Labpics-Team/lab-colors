@@ -1,7 +1,6 @@
 use crate::Srgb8;
 use crate::appearance::{
-    ColorInputId, OccurrenceId, OpacityInputId, PaintId, PointOpacityOverSurfaceV1, SurfaceId,
-    SurfaceInputPortId,
+    OccurrenceId, OpacityInputId, PaintId, PointOpacityOverSurfaceV1, SurfaceId, SurfaceInputPortId,
 };
 use crate::constraints::{
     ExactSrgb8IdentityV1, ProgramPointAssessmentErrorV1, ProgramVisiblePointBindingV1,
@@ -17,16 +16,18 @@ use crate::observation::{
     ObservedScenarioSetInput, Revision, ScenarioId, ScenarioInput, SurfaceInputBinding,
 };
 use crate::program_session::{
-    ColorInput, CompiledProgram, CompositionProfile, ConstraintId, ConstraintInvocation,
-    ConstraintSet, ObservationGroup, Occurrence, OpacityInput, OutputBinding, OutputSlotId, Paint,
-    Program, ProgramConstraintResultV1, Surface,
+    CompiledProgram, CompositionProfile, ConstraintId, ConstraintInvocation, ConstraintSet,
+    ObservationGroup, Occurrence, OpacityInput, OutputBinding, OutputSlotId, Paint, Program,
+    ProgramConstraintResultV1, Source, SourceId, Surface, Target, TargetId,
 };
 use crate::session::SessionState;
 use crate::spaces::cam16::FORWARD_CALLS;
 use crate::wcag22::{Wcag22ApplicableDecisionV1, Wcag22CriterionV1};
 
-const BLACK_INPUT: ColorInputId = ColorInputId::new(1);
-const WHITE_INPUT: ColorInputId = ColorInputId::new(2);
+const BLACK_SOURCE: SourceId = SourceId::new(1);
+const WHITE_SOURCE: SourceId = SourceId::new(2);
+const BLACK_TARGET: TargetId = TargetId::new(1);
+const WHITE_TARGET: TargetId = TargetId::new(2);
 const SURFACE_PORT: SurfaceInputPortId = SurfaceInputPortId::new(3);
 const HALF: OpacityInputId = OpacityInputId::new(4);
 
@@ -41,7 +42,6 @@ const AVERAGE_CONSTRAINT: ConstraintId = ConstraintId::new(40);
 const DIM_CONSTRAINT: ConstraintId = ConstraintId::new(41);
 
 const BLACK_OUTPUT: OutputSlotId = OutputSlotId::new(50);
-const WHITE_OUTPUT: OutputSlotId = OutputSlotId::new(51);
 const GROUP: ObservationGroupId = ObservationGroupId::new(60);
 const STREAM_A: ObservationStreamId = ObservationStreamId::new(70);
 const STREAM_B: ObservationStreamId = ObservationStreamId::new(71);
@@ -98,14 +98,18 @@ fn compiled_program(
     opacity: f64,
     permuted: bool,
 ) -> CompiledProgram<ExactSrgb8IdentityV1> {
-    let mut colors = vec![
-        ColorInput::new(BLACK_INPUT, signal([0; 3])),
-        ColorInput::new(WHITE_INPUT, signal([0xFF; 3])),
+    let mut sources = vec![
+        Source::new(BLACK_SOURCE, signal([0; 3])),
+        Source::new(WHITE_SOURCE, signal([0xFF; 3])),
+    ];
+    let mut targets = vec![
+        Target::fixed(BLACK_TARGET, BLACK_SOURCE),
+        Target::fixed(WHITE_TARGET, WHITE_SOURCE),
     ];
     let mut paints = vec![
         Paint::Solid {
             id: BLACK_SOLID,
-            color: BLACK_INPUT,
+            target: BLACK_TARGET,
         },
         Paint::Opacity {
             id: TRANSLUCENT_BLACK,
@@ -114,7 +118,7 @@ fn compiled_program(
         },
         Paint::Solid {
             id: WHITE_SOLID,
-            color: WHITE_INPUT,
+            target: WHITE_TARGET,
         },
     ];
     let mut occurrences = declarations
@@ -135,13 +139,11 @@ fn compiled_program(
             ConstraintInvocation::hard(*constraint, *occurrence, expected_visible)
         })
         .collect::<Vec<_>>();
-    let mut outputs = vec![
-        OutputBinding::new(BLACK_OUTPUT, TRANSLUCENT_BLACK),
-        OutputBinding::new(WHITE_OUTPUT, WHITE_SOLID),
-    ];
+    let mut outputs = vec![OutputBinding::new(BLACK_OUTPUT, TRANSLUCENT_BLACK)];
 
     if permuted {
-        colors.reverse();
+        sources.reverse();
+        targets.reverse();
         paints.reverse();
         occurrences.reverse();
         hard.reverse();
@@ -149,7 +151,8 @@ fn compiled_program(
     }
 
     Program::new(
-        colors,
+        sources,
+        targets,
         ObservationGroup::new(GROUP, vec![SURFACE_PORT]),
         vec![OpacityInput::new(HALF, opacity)],
         paints,
@@ -169,15 +172,19 @@ fn compiled_program(
 fn compiled_wcag_program(opacity: f64) -> CompiledProgram<Wcag22Srgb8V1> {
     Program::new(
         vec![
-            ColorInput::new(BLACK_INPUT, signal([0; 3])),
-            ColorInput::new(WHITE_INPUT, signal([0xFF; 3])),
+            Source::new(BLACK_SOURCE, signal([0; 3])),
+            Source::new(WHITE_SOURCE, signal([0xFF; 3])),
+        ],
+        vec![
+            Target::fixed(BLACK_TARGET, BLACK_SOURCE),
+            Target::fixed(WHITE_TARGET, WHITE_SOURCE),
         ],
         ObservationGroup::new(GROUP, vec![SURFACE_PORT]),
         vec![OpacityInput::new(HALF, opacity)],
         vec![
             Paint::Solid {
                 id: BLACK_SOLID,
-                color: BLACK_INPUT,
+                target: BLACK_TARGET,
             },
             Paint::Opacity {
                 id: TRANSLUCENT_BLACK,
@@ -186,7 +193,7 @@ fn compiled_wcag_program(opacity: f64) -> CompiledProgram<Wcag22Srgb8V1> {
             },
             Paint::Solid {
                 id: WHITE_SOLID,
-                color: WHITE_INPUT,
+                target: WHITE_TARGET,
             },
         ],
         vec![Surface::Input {
@@ -217,13 +224,14 @@ fn compiled_wcag_program(opacity: f64) -> CompiledProgram<Wcag22Srgb8V1> {
 
 fn compiled_duplicate_constraint_program() -> CompiledProgram<ExactSrgb8IdentityV1> {
     Program::new(
-        vec![ColorInput::new(BLACK_INPUT, signal([0; 3]))],
+        vec![Source::new(BLACK_SOURCE, signal([0; 3]))],
+        vec![Target::fixed(BLACK_TARGET, BLACK_SOURCE)],
         ObservationGroup::new(GROUP, vec![SURFACE_PORT]),
         vec![OpacityInput::new(HALF, 0.5)],
         vec![
             Paint::Solid {
                 id: BLACK_SOLID,
-                color: BLACK_INPUT,
+                target: BLACK_TARGET,
             },
             Paint::Opacity {
                 id: TRANSLUCENT_BLACK,
@@ -411,7 +419,7 @@ fn hard_violation_retains_modeled_lcs_and_commits_no_current_outputs() {
     assert_binding_matches_modeled(*evidence.binding(), modeled);
     assert_eq!(*evidence.measurement().value(), Srgb8::new([0x80; 3]));
     assert_eq!(*evidence.invocation(), Srgb8::new([0x7F; 3]));
-    // `ProgramViolationV1` intentionally exposes only `report()`: current
+    // `ProgramConflictV1` intentionally exposes only `report()`: current
     // outputs exist exclusively on the `ProgramVerifiedV1` Ready branch.
 }
 

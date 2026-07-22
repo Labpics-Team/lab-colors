@@ -28,12 +28,74 @@ pub(crate) use wcag22::{
     Wcag22ViolationV1,
 };
 
+/// Test-only probe around the production Program WCAG evaluator. It records
+/// each physical visible signal without changing measurement or
+/// classification, allowing execution-count assertions at the Program
+/// certification boundary.
+#[cfg(test)]
+#[derive(Debug, Clone, Default)]
+pub(crate) struct CountingProgramWcag22Srgb8V1 {
+    calls: std::rc::Rc<std::cell::RefCell<Vec<Srgb8>>>,
+}
+
+#[cfg(test)]
+impl CountingProgramWcag22Srgb8V1 {
+    pub(crate) fn calls(&self) -> Vec<Srgb8> {
+        self.calls.borrow().clone()
+    }
+}
+
+#[cfg(test)]
+#[derive(Debug, Default)]
+struct FinalRecheckMutantControlV1 {
+    armed: std::cell::Cell<bool>,
+    calls_after_arm: std::cell::Cell<usize>,
+    force_current_violation: std::cell::Cell<bool>,
+}
+
+/// Test-only exact evaluator which can be armed to pass the next search call
+/// and fail the immediately following final-recheck call.
+#[cfg(test)]
+#[derive(Debug, Clone, Default)]
+pub(crate) struct FinalRecheckMutantProgramEvaluatorV1 {
+    control: std::rc::Rc<FinalRecheckMutantControlV1>,
+}
+
+#[cfg(test)]
+impl FinalRecheckMutantProgramEvaluatorV1 {
+    pub(crate) fn arm(&self) {
+        self.control.calls_after_arm.set(0);
+        self.control.force_current_violation.set(false);
+        self.control.armed.set(true);
+    }
+}
+
+#[cfg(test)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct MutantExactPassV1;
+
+#[cfg(test)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct MutantExactViolationV1;
+
 /// Seals недоступны внешним crate-ам: новые evaluator/classifier families
 /// добавляются только вместе с code-owned physical adapter-ом.
 mod private {
     pub trait EvaluatorSealed {}
     pub trait HardClassifierSealed {}
 }
+
+#[cfg(test)]
+impl private::EvaluatorSealed for CountingProgramWcag22Srgb8V1 {}
+
+#[cfg(test)]
+impl private::HardClassifierSealed for CountingProgramWcag22Srgb8V1 {}
+
+#[cfg(test)]
+impl private::EvaluatorSealed for FinalRecheckMutantProgramEvaluatorV1 {}
+
+#[cfg(test)]
+impl private::HardClassifierSealed for FinalRecheckMutantProgramEvaluatorV1 {}
 
 pub(crate) trait Evaluator<Target>: private::EvaluatorSealed {
     type Invocation;
@@ -212,6 +274,123 @@ impl<Evaluation> ProgramPointEvaluatorV1 for Evaluation where
         + Evaluator<ProgramPointTargetV1>
         + HardClassifier<ProgramPointInvocation<Evaluation>, ProgramPointMeasurement<Evaluation>>
 {
+}
+
+#[cfg(test)]
+impl Evaluator<ProgramPointTargetV1> for CountingProgramWcag22Srgb8V1 {
+    type Invocation = <Wcag22Srgb8V1 as Evaluator<ProgramPointTargetV1>>::Invocation;
+    type Identity = <Wcag22Srgb8V1 as Evaluator<ProgramPointTargetV1>>::Identity;
+    type Release = <Wcag22Srgb8V1 as Evaluator<ProgramPointTargetV1>>::Release;
+    type Capability = <Wcag22Srgb8V1 as Evaluator<ProgramPointTargetV1>>::Capability;
+    type Measurement = <Wcag22Srgb8V1 as Evaluator<ProgramPointTargetV1>>::Measurement;
+    type Error = <Wcag22Srgb8V1 as Evaluator<ProgramPointTargetV1>>::Error;
+
+    fn identity(&self) -> Self::Identity {
+        <Wcag22Srgb8V1 as Evaluator<ProgramPointTargetV1>>::identity(&Wcag22Srgb8V1)
+    }
+
+    fn release(&self) -> Self::Release {
+        <Wcag22Srgb8V1 as Evaluator<ProgramPointTargetV1>>::release(&Wcag22Srgb8V1)
+    }
+
+    fn capability(&self) -> Self::Capability {
+        <Wcag22Srgb8V1 as Evaluator<ProgramPointTargetV1>>::capability(&Wcag22Srgb8V1)
+    }
+
+    fn evaluate(
+        &self,
+        target: &ProgramPointTargetV1,
+        invocation: &Self::Invocation,
+    ) -> Result<Self::Measurement, Self::Error> {
+        self.calls
+            .borrow_mut()
+            .push(Srgb8::new(target.encoded().visible()));
+        <Wcag22Srgb8V1 as Evaluator<ProgramPointTargetV1>>::evaluate(
+            &Wcag22Srgb8V1,
+            target,
+            invocation,
+        )
+    }
+}
+
+#[cfg(test)]
+impl
+    HardClassifier<
+        <Wcag22Srgb8V1 as Evaluator<ProgramPointTargetV1>>::Invocation,
+        <Wcag22Srgb8V1 as Evaluator<ProgramPointTargetV1>>::Measurement,
+    > for CountingProgramWcag22Srgb8V1
+{
+    type Pass = <Wcag22Srgb8V1 as HardClassifier<
+        <Wcag22Srgb8V1 as Evaluator<ProgramPointTargetV1>>::Invocation,
+        <Wcag22Srgb8V1 as Evaluator<ProgramPointTargetV1>>::Measurement,
+    >>::Pass;
+    type Violation = <Wcag22Srgb8V1 as HardClassifier<
+        <Wcag22Srgb8V1 as Evaluator<ProgramPointTargetV1>>::Invocation,
+        <Wcag22Srgb8V1 as Evaluator<ProgramPointTargetV1>>::Measurement,
+    >>::Violation;
+
+    fn classify(
+        &self,
+        invocation: &<Wcag22Srgb8V1 as Evaluator<ProgramPointTargetV1>>::Invocation,
+        measurement: &<Wcag22Srgb8V1 as Evaluator<ProgramPointTargetV1>>::Measurement,
+    ) -> HardDecision<Self::Pass, Self::Violation> {
+        <Wcag22Srgb8V1 as HardClassifier<_, _>>::classify(&Wcag22Srgb8V1, invocation, measurement)
+    }
+}
+
+#[cfg(test)]
+impl Evaluator<ProgramPointTargetV1> for FinalRecheckMutantProgramEvaluatorV1 {
+    type Invocation = Srgb8;
+    type Identity = ();
+    type Release = ();
+    type Capability = ();
+    type Measurement = Srgb8;
+    type Error = core::convert::Infallible;
+
+    fn identity(&self) -> Self::Identity {}
+
+    fn release(&self) -> Self::Release {}
+
+    fn capability(&self) -> Self::Capability {}
+
+    fn evaluate(
+        &self,
+        target: &ProgramPointTargetV1,
+        _invocation: &Self::Invocation,
+    ) -> Result<Self::Measurement, Self::Error> {
+        let force_violation = if self.control.armed.get() {
+            let call = self.control.calls_after_arm.get();
+            self.control.calls_after_arm.set(call + 1);
+            if call == 1 {
+                self.control.armed.set(false);
+                true
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+        self.control.force_current_violation.set(force_violation);
+        Ok(Srgb8::new(target.encoded().visible()))
+    }
+}
+
+#[cfg(test)]
+impl HardClassifier<Srgb8, Srgb8> for FinalRecheckMutantProgramEvaluatorV1 {
+    type Pass = MutantExactPassV1;
+    type Violation = MutantExactViolationV1;
+
+    fn classify(
+        &self,
+        invocation: &Srgb8,
+        measurement: &Srgb8,
+    ) -> HardDecision<Self::Pass, Self::Violation> {
+        if self.control.force_current_violation.replace(false) || invocation != measurement {
+            HardDecision::Violation(MutantExactViolationV1)
+        } else {
+            HardDecision::Pass(MutantExactPassV1)
+        }
+    }
 }
 
 /// Program evidence binds the physical source-over certificate and the exact

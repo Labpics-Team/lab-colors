@@ -770,6 +770,16 @@ pub(crate) struct CompiledPaintSlotV1 {
     id: PaintId,
 }
 
+/// Cold-bound canonical colour-input position used by finite Program targets.
+/// The nominal ID is retained and rechecked on every overwrite. This rejects
+/// stale or mismatched index/ID pairs, but does not claim graph-instance
+/// identity when two graphs have the same canonical input at that position.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct CompiledColorInputSlotV1 {
+    index: usize,
+    id: ColorInputId,
+}
+
 /// Cold-bound canonical Occurrence position for allocation-free repeated
 /// lookup. As with [`CompiledPaintSlotV1`], construction remains sealed inside
 /// the compiled appearance graph and every use revalidates the exact ID.
@@ -1103,6 +1113,23 @@ impl AdmittedAppearanceBindings {
         for (index, (_, value)) in self.surfaces.iter_mut().enumerate() {
             *value = value_at(index);
         }
+        Ok(())
+    }
+
+    /// Overwrite one prebound finite-target input without lookup or allocation.
+    /// The canonical index and nominal ID must both match before mutation.
+    pub(crate) fn overwrite_color_at(
+        &mut self,
+        slot: CompiledColorInputSlotV1,
+        value: Srgb8,
+    ) -> Result<(), BindingError> {
+        let Some((bound, destination)) = self.colors.get_mut(slot.index) else {
+            return Err(BindingError::IncompatibleAdmittedBindings);
+        };
+        if *bound != slot.id {
+            return Err(BindingError::IncompatibleAdmittedBindings);
+        }
+        *destination = value;
         Ok(())
     }
 
@@ -1572,6 +1599,13 @@ impl CompiledAppearanceGraph {
     #[cfg(test)]
     fn matches_program(&self, program: CompiledAppearanceProgram<'_>) -> bool {
         self.program() == program
+    }
+
+    /// Bind one colour input to its canonical compiled ordinal. Runtime target
+    /// selection consumes the sealed slot instead of repeating an ID search.
+    pub(crate) fn bind_color_input(&self, id: ColorInputId) -> Option<CompiledColorInputSlotV1> {
+        let index = self.color_inputs.binary_search(&id).ok()?;
+        Some(CompiledColorInputSlotV1 { index, id })
     }
 
     /// Bind one Paint identity to its canonical compiled ordinal.

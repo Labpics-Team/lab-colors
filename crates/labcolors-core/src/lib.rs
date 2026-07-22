@@ -95,6 +95,9 @@ mod program_session_tests;
 mod program_lcs_integration_tests;
 
 #[cfg(test)]
+mod program_joint_integration_tests;
+
+#[cfg(test)]
 mod release_registry_tests;
 
 #[cfg(test)]
