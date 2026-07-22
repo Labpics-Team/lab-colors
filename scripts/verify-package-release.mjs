@@ -335,7 +335,7 @@ async function validatePointSupportEvidence(artifacts, numericalCapabilities) {
       POINT_SUPPORT_SOURCE_BINDING_EXCLUSIONS,
     ) ||
     !/^[0-9a-f]{64}$/u.test(proof.source_closure_sha256 ?? "") ||
-    proof.source_negative_controls !== 33 ||
+    proof.source_negative_controls !== 40 ||
     !/^[0-9a-f]{64}$/u.test(proof.proof_payload_sha256 ?? "") ||
     !/^[0-9a-f]{64}$/u.test(proof.verifier_sha256 ?? "") ||
     !Array.isArray(proof.source_files) ||

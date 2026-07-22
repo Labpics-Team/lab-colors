@@ -5,6 +5,7 @@
 //! only code allowed to bind an admitted observation to evaluator evidence.
 
 use core::ops::Range;
+use std::rc::Rc;
 
 use crate::Srgb8;
 use crate::appearance::SurfaceInputPortId;
@@ -70,14 +71,6 @@ impl SurfaceInputBinding {
     pub(crate) const fn new(port: SurfaceInputPortId, value: Srgb8) -> Self {
         Self { port, value }
     }
-
-    pub(crate) const fn port(self) -> SurfaceInputPortId {
-        self.port
-    }
-
-    pub(crate) const fn value(self) -> Srgb8 {
-        self.value
-    }
 }
 
 /// Raw tuple: every binding was observed simultaneously.
@@ -108,20 +101,14 @@ pub(crate) struct ObservationUpdateInput {
     pub(crate) payload: ObservationPayloadInput,
 }
 
-/// One unique physical tuple as canonical keyed bindings. Port identity travels
-/// with every value, so an observation cannot be reinterpreted through a
-/// different positional schema.
+/// One unique physical tuple inside the shared canonical backing.
+///
+/// Values are stored once in schema order. The schema remains attached to the
+/// backing itself instead of being repeated beside every value.
 #[derive(Debug, PartialEq, Eq)]
-#[cfg_attr(test, derive(Clone))]
-pub(crate) struct PhysicalScenario {
-    bindings: Vec<SurfaceInputBinding>,
+struct PhysicalScenario {
+    values: Range<usize>,
     provenance: Range<usize>,
-}
-
-impl PhysicalScenario {
-    pub(crate) fn bindings(&self) -> &[SurfaceInputBinding] {
-        &self.bindings
-    }
 }
 
 /// First canonical ordinal where an observation's intrinsic keyed schema and a
@@ -150,56 +137,59 @@ impl ObservationSchemaMismatchV1 {
     }
 }
 
-/// Canonical nonempty set. Provenance is one flat allocation shared by ranges,
-/// not one allocation per physical case.
+/// Canonical nonempty correlated set. Values and provenance each use one flat
+/// allocation; a physical case owns only ranges into those arrays.
 #[derive(Debug, PartialEq, Eq)]
-#[cfg_attr(test, derive(Clone))]
-pub(crate) struct ObservedScenarioSet {
-    cases: Vec<PhysicalScenario>,
-    provenance: Vec<ScenarioId>,
+struct ObservedScenarioSet {
+    cases: Box<[PhysicalScenario]>,
+    values: Box<[Srgb8]>,
+    provenance: Box<[ScenarioId]>,
 }
 
 impl ObservedScenarioSet {
-    pub(crate) fn cases(&self) -> &[PhysicalScenario] {
-        &self.cases
+    fn values(&self, case_index: usize) -> Option<&[Srgb8]> {
+        let values = &self.cases.get(case_index)?.values;
+        self.values.get(values.start..values.end)
     }
 
-    pub(crate) fn provenance(&self, case_index: usize) -> Option<&[ScenarioId]> {
+    fn provenance(&self, case_index: usize) -> Option<&[ScenarioId]> {
         let provenance = &self.cases.get(case_index)?.provenance;
-        let range = provenance.start..provenance.end;
-        self.provenance.get(range)
-    }
-
-    fn validate_surface_schema(
-        &self,
-        expected: &[SurfaceInputPortId],
-    ) -> Result<(), ObservationSchemaMismatchV1> {
-        for (case_index, case) in self.cases.iter().enumerate() {
-            let schema_len = expected.len().max(case.bindings.len());
-            for binding_index in 0..schema_len {
-                let expected_input = expected.get(binding_index).copied();
-                let actual_input = case.bindings.get(binding_index).map(|binding| binding.port);
-                if expected_input != actual_input {
-                    return Err(ObservationSchemaMismatchV1::new(
-                        case_index,
-                        binding_index,
-                        expected_input,
-                        actual_input,
-                    ));
-                }
-            }
-        }
-        Ok(())
+        self.provenance.get(provenance.start..provenance.end)
     }
 }
 
-/// Sealed observation admitted against the Session-owned compiled schema.
+/// Canonical immutable schema shared by the compiled recheck and every
+/// admitted observation backing created for it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CanonicalObservationSchemaV1(Rc<[SurfaceInputPortId]>);
+
+impl CanonicalObservationSchemaV1 {
+    pub(crate) fn as_slice(&self) -> &[SurfaceInputPortId] {
+        &self.0
+    }
+
+    fn shares_backing_with(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.0, &other.0)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn backing_ptr_for_test(&self) -> *const SurfaceInputPortId {
+        self.0.as_ptr()
+    }
+}
+
 #[derive(Debug, PartialEq, Eq)]
-#[cfg_attr(test, derive(Clone))]
+struct ObservationBackingV1 {
+    schema: CanonicalObservationSchemaV1,
+    set: ObservedScenarioSet,
+}
+
+/// Sealed observation admitted against the Session-owned compiled schema.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RevisionBoundObservationV1 {
     stream: ObservationStreamId,
     revision: Revision,
-    set: ObservedScenarioSet,
+    backing: Rc<ObservationBackingV1>,
 }
 
 impl RevisionBoundObservationV1 {
@@ -211,30 +201,66 @@ impl RevisionBoundObservationV1 {
         self.revision
     }
 
-    pub(crate) const fn set(&self) -> &ObservedScenarioSet {
-        &self.set
+    pub(crate) fn schema(&self) -> &[SurfaceInputPortId] {
+        self.backing.schema.as_slice()
     }
 
     pub(crate) fn physical_case_count(&self) -> usize {
-        self.set.cases().len()
+        self.backing.set.cases.len()
     }
 
-    pub(crate) fn physical_bindings(&self, case_index: usize) -> Option<&[SurfaceInputBinding]> {
-        self.set
-            .cases()
-            .get(case_index)
-            .map(PhysicalScenario::bindings)
+    pub(crate) fn physical_values(&self, case_index: usize) -> Option<&[Srgb8]> {
+        self.backing.set.values(case_index)
     }
 
     pub(crate) fn provenance(&self, case_index: usize) -> Option<&[ScenarioId]> {
-        self.set.provenance(case_index)
+        self.backing.set.provenance(case_index)
     }
 
     pub(crate) fn validate_surface_schema(
         &self,
         expected: &[SurfaceInputPortId],
     ) -> Result<(), ObservationSchemaMismatchV1> {
-        self.set.validate_surface_schema(expected)
+        let actual = self.schema();
+        let schema_len = expected.len().max(actual.len());
+        for binding_index in 0..schema_len {
+            let expected_input = expected.get(binding_index).copied();
+            let actual_input = actual.get(binding_index).copied();
+            if expected_input != actual_input {
+                return Err(ObservationSchemaMismatchV1::new(
+                    0,
+                    binding_index,
+                    expected_input,
+                    actual_input,
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) fn shares_schema_backing_with(
+        &self,
+        expected: &CanonicalObservationSchemaV1,
+    ) -> bool {
+        self.backing.schema.shares_backing_with(expected)
+    }
+
+    fn has_canonical_input(
+        &self,
+        schema: &CanonicalObservationSchemaV1,
+        scenarios: &[ScenarioInput],
+    ) -> bool {
+        &self.backing.schema == schema && canonical_input_matches_set(&self.backing.set, scenarios)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn backing_ptr_for_test(&self) -> *const () {
+        Rc::as_ptr(&self.backing).cast()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn schema_ptr_for_test(&self) -> *const SurfaceInputPortId {
+        self.backing.schema.backing_ptr_for_test()
     }
 }
 
@@ -375,11 +401,15 @@ pub(crate) enum PreparedObservationUpdateV1<'owner, Owner> {
     Observed(PreparedObservedV1<'owner, Owner>),
 }
 
-/// Canonicalize and validate a compiled surface-input schema without any new
-/// allocation. The supplied Vec remains the unique schema owner.
+/// Canonicalize and validate a compiled surface-input schema.
+///
+/// Sorting and duplicate detection reuse the supplied `Vec`. Converting its
+/// storage into the immutable `Rc`-backed schema can still allocate through the
+/// global allocator; this function does not claim allocator-wide recoverable
+/// OOM semantics.
 pub(crate) fn canonicalize_observation_schema(
     mut ports: Vec<SurfaceInputPortId>,
-) -> Result<Vec<SurfaceInputPortId>, ObservationError> {
+) -> Result<CanonicalObservationSchemaV1, ObservationError> {
     if ports.is_empty() {
         return Err(ObservationError::EmptyCompiledSurfaceInputSchema);
     }
@@ -389,16 +419,20 @@ pub(crate) fn canonicalize_observation_schema(
             input: duplicate[0],
         });
     }
-    Ok(ports)
+    Ok(CanonicalObservationSchemaV1(Rc::from(
+        ports.into_boxed_slice(),
+    )))
 }
 
-/// Prepare without mutation. Cheap stream/lower-revision/payload-kind failures
-/// precede scenario canonicalization; exact same-revision observed replay still
-/// canonicalizes so equality is content-complete.
+/// Prepare without mutation. Stream identity always precedes payload handling.
+/// `Scenarios` are fully admitted before revision comparison so malformed
+/// correlated input is never masked by an otherwise valid revision error.
+/// `Unknown` has no payload structure to admit and takes the cheap revision
+/// path directly.
 pub(crate) fn prepare_observation<'owner, Owner: ObservationOwnerV1>(
     owner: &'owner mut Owner,
     stream: ObservationStreamId,
-    schema: &[SurfaceInputPortId],
+    schema: &CanonicalObservationSchemaV1,
     update: ObservationUpdateInput,
 ) -> Result<PreparedObservationUpdateV1<'owner, Owner>, ObservationError> {
     if update.stream != stream {
@@ -408,18 +442,17 @@ pub(crate) fn prepare_observation<'owner, Owner: ObservationOwnerV1>(
         });
     }
 
-    let current_revision = owner.observation_head().revision();
-    if let Some(current) = current_revision {
-        if update.revision < current {
-            return Err(ObservationError::RevisionOutOfOrder {
-                current,
-                incoming: update.revision,
-            });
-        }
-    }
-
     match update.payload {
         ObservationPayloadInput::Unknown(reason) => {
+            let current_revision = owner.observation_head().revision();
+            if let Some(current) = current_revision {
+                if update.revision < current {
+                    return Err(ObservationError::RevisionOutOfOrder {
+                        current,
+                        incoming: update.revision,
+                    });
+                }
+            }
             if current_revision == Some(update.revision) {
                 let exact = matches!(
                     owner.observation_head(),
@@ -445,6 +478,16 @@ pub(crate) fn prepare_observation<'owner, Owner: ObservationOwnerV1>(
             }))
         }
         ObservationPayloadInput::Scenarios(raw) => {
+            let scenarios = canonicalize_scenarios_input(schema.as_slice(), raw)?;
+            let current_revision = owner.observation_head().revision();
+            if let Some(current) = current_revision {
+                if update.revision < current {
+                    return Err(ObservationError::RevisionOutOfOrder {
+                        current,
+                        incoming: update.revision,
+                    });
+                }
+            }
             if current_revision == Some(update.revision)
                 && !matches!(owner.observation_head(), ObservationHeadViewV1::Observed(_))
             {
@@ -453,11 +496,10 @@ pub(crate) fn prepare_observation<'owner, Owner: ObservationOwnerV1>(
                 });
             }
 
-            let set = admit_scenarios(schema, raw)?;
             if current_revision == Some(update.revision) {
                 let exact = matches!(
-                    owner.observation_head(),
-                    ObservationHeadViewV1::Observed(current) if current.set == set
+                    owner.observation_head(), ObservationHeadViewV1::Observed(current)
+                        if current.has_canonical_input(schema, &scenarios)
                 );
                 return if exact {
                     Ok(PreparedObservationUpdateV1::Idempotent(
@@ -470,22 +512,26 @@ pub(crate) fn prepare_observation<'owner, Owner: ObservationOwnerV1>(
                 };
             }
 
+            let set = materialize_scenarios(schema.as_slice(), scenarios)?;
             Ok(PreparedObservationUpdateV1::Observed(PreparedObservedV1 {
                 owner,
                 observation: RevisionBoundObservationV1 {
                     stream,
                     revision: update.revision,
-                    set,
+                    backing: Rc::new(ObservationBackingV1 {
+                        schema: schema.clone(),
+                        set,
+                    }),
                 },
             }))
         }
     }
 }
 
-fn admit_scenarios(
+fn canonicalize_scenarios_input(
     schema: &[SurfaceInputPortId],
     raw: ObservedScenarioSetInput,
-) -> Result<ObservedScenarioSet, ObservationError> {
+) -> Result<Vec<ScenarioInput>, ObservationError> {
     if raw.scenarios.is_empty() {
         return Err(ObservationError::EmptyScenarioSet);
     }
@@ -501,11 +547,7 @@ fn admit_scenarios(
         });
     }
 
-    let mut tuples = Vec::new();
-    tuples
-        .try_reserve_exact(scenarios.len())
-        .map_err(|_| ObservationError::ResourceExhausted)?;
-    for mut scenario in scenarios {
+    for scenario in &mut scenarios {
         scenario
             .bindings
             .sort_unstable_by_key(|binding| binding.port);
@@ -541,42 +583,120 @@ fn admit_scenarios(
                 input: unexpected.port,
             });
         }
-
-        // Move the already allocated, sorted keyed tuple directly. Keeping the
-        // port beside the value makes schema identity part of observation
-        // equality and removes any later positional reinterpretation seam.
-        tuples.push((scenario.bindings, scenario.id));
     }
 
-    tuples.sort_unstable_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1)));
+    // Reuse the caller-owned outer Vec and every bindings Vec. This complete
+    // canonical input is enough for lower/same-revision decisions without any
+    // new allocation; only an applied higher revision materializes backing.
+    scenarios.sort_unstable_by(|left, right| {
+        left.bindings
+            .cmp(&right.bindings)
+            .then_with(|| left.id.cmp(&right.id))
+    });
+    Ok(scenarios)
+}
 
-    // Both output allocations are reserved before grouping. Moving tuples and
-    // pushing into these capacities cannot allocate afterward.
+fn canonical_input_matches_set(set: &ObservedScenarioSet, scenarios: &[ScenarioInput]) -> bool {
+    let mut case_index = 0;
+    let mut scenario_index = 0;
+    while scenario_index < scenarios.len() {
+        let bindings = &scenarios[scenario_index].bindings;
+        let Some(values) = set.values(case_index) else {
+            return false;
+        };
+        if bindings.len() != values.len()
+            || bindings
+                .iter()
+                .zip(values)
+                .any(|(binding, value)| binding.value != *value)
+        {
+            return false;
+        }
+
+        let first = scenario_index;
+        scenario_index += 1;
+        while scenario_index < scenarios.len()
+            && scenarios[scenario_index].bindings.as_slice() == bindings.as_slice()
+        {
+            scenario_index += 1;
+        }
+        let Some(provenance) = set.provenance(case_index) else {
+            return false;
+        };
+        if provenance.len() != scenario_index - first
+            || scenarios[first..scenario_index]
+                .iter()
+                .zip(provenance)
+                .any(|(scenario, provenance)| scenario.id != *provenance)
+        {
+            return false;
+        }
+        case_index += 1;
+    }
+    case_index == set.cases.len()
+}
+
+fn materialize_scenarios(
+    schema: &[SurfaceInputPortId],
+    scenarios: Vec<ScenarioInput>,
+) -> Result<ObservedScenarioSet, ObservationError> {
+    debug_assert!(!scenarios.is_empty());
+
+    let unique_case_count = 1 + scenarios
+        .windows(2)
+        .filter(|window| window[0].bindings.as_slice() != window[1].bindings.as_slice())
+        .count();
+    let value_count = unique_case_count
+        .checked_mul(schema.len())
+        .ok_or(ObservationError::ResourceExhausted)?;
+
+    // Capacity for every variable-sized Vec used by grouping is fallibly
+    // reserved before the first push/extend, so grouping cannot grow one of
+    // those Vecs. The final boxed representation and its later Rc owner still
+    // follow the global allocator's OOM behavior.
     let mut cases = Vec::new();
     cases
-        .try_reserve_exact(tuples.len())
+        .try_reserve_exact(unique_case_count)
+        .map_err(|_| ObservationError::ResourceExhausted)?;
+    let mut values = Vec::new();
+    values
+        .try_reserve_exact(value_count)
         .map_err(|_| ObservationError::ResourceExhausted)?;
     let mut provenance = Vec::new();
     provenance
-        .try_reserve_exact(tuples.len())
+        .try_reserve_exact(scenarios.len())
         .map_err(|_| ObservationError::ResourceExhausted)?;
 
-    let mut tuples = tuples.into_iter().peekable();
-    while let Some((bindings, first_id)) = tuples.next() {
-        let start = provenance.len();
+    let mut scenarios = scenarios.into_iter().peekable();
+    while let Some(ScenarioInput {
+        id: first_id,
+        bindings,
+    }) = scenarios.next()
+    {
+        let values_start = values.len();
+        values.extend(bindings.iter().map(|binding| binding.value));
+        let values_end = values.len();
+        let provenance_start = provenance.len();
         provenance.push(first_id);
-        while matches!(tuples.peek(), Some((candidate, _)) if candidate == &bindings) {
-            let (_, id) = tuples
+        while matches!(scenarios.peek(), Some(candidate) if candidate.bindings.as_slice() == bindings.as_slice())
+        {
+            let ScenarioInput { id, .. } = scenarios
                 .next()
-                .unwrap_or_else(|| unreachable!("peek observed the next tuple"));
+                .unwrap_or_else(|| unreachable!("peek observed the next scenario"));
             provenance.push(id);
         }
-        let end = provenance.len();
+        let provenance_end = provenance.len();
         cases.push(PhysicalScenario {
-            bindings,
-            provenance: start..end,
+            values: values_start..values_end,
+            provenance: provenance_start..provenance_end,
         });
     }
 
-    Ok(ObservedScenarioSet { cases, provenance })
+    debug_assert_eq!(cases.len(), unique_case_count);
+    debug_assert_eq!(values.len(), value_count);
+    Ok(ObservedScenarioSet {
+        cases: cases.into_boxed_slice(),
+        values: values.into_boxed_slice(),
+        provenance: provenance.into_boxed_slice(),
+    })
 }

@@ -57,7 +57,7 @@ SITE_ID = "point-support-retained-reference-surplus-v1"
 SOURCE_BINDING_LAW = "point-support-rust-whole-file-semantic-cone-v2"
 SOURCE_BINDING_DOMAIN = b"labcolors.point-support.rust-whole-file-semantic-cone.v2"
 EXPECTED_SOURCE_CAPSULE_SHA256 = (
-    "51b242a0ff319f34357fbeef89037118515172dcdc088a09b9ff28e0cc38e860"
+    "06b0017fcfad05f582bae0d9ddc1fe1bb5240ca01fc30795a469c093cf9c1f87"
 )
 EXPECTED_Q55_PROOF_SHA256 = (
     "ac59cf89503170c789223b91d775213a19d4e571ef930f2ea609fcd51b14defd"
@@ -192,15 +192,22 @@ def verify_source_binding() -> tuple[str, int]:
         (POINT_SOURCE, b"NumericalSiteIdV2::PointSupportRetainedReferenceSurplusV1;", b"NumericalSiteIdV2::Wcag22Srgb8ContrastV1;"),
         (POINT_SOURCE, b"let current_distance = reference_distance(current_measurement)?;", b"let current_distance = baseline.distance;"),
         (POINT_SOURCE, b"Ok(assessment.bind(observation))", b"Ok(assessment.bind_unchecked(observation))"),
+        (POINT_SOURCE, b"            let backdrop = values.get(surface_index).copied().ok_or(\n", b"            let backdrop = values.first().copied().ok_or(\n"),
+        (POINT_SOURCE, b"    if !observation.shares_schema_backing_with(&plan.surface_schema) {\n", b"    if observation.shares_schema_backing_with(&plan.surface_schema) {\n"),
+        (POINT_SOURCE, b"        _permit: SessionObservationBindingPermitV1,\n", b"        _permit: (),\n"),
         (POINT_SOURCE, b"use crate::wcag22::{Wcag22CriterionV1, Wcag22MeasurementV1, measure_wcag22_srgb8};", b"use crate::wcag22::{Wcag22CriterionV1, Wcag22MeasurementV1, measure_wcag22_srgb8 as canonical_measure_wcag22_srgb8};\nfn measure_wcag22_srgb8(foreground: [u8; 3], background: [u8; 3]) -> Wcag22MeasurementV1 { canonical_measure_wcag22_srgb8(background, foreground) }"),
-        (OBSERVATION_SOURCE, b"        &self.cases\n", b"        &[]\n"),
+        (OBSERVATION_SOURCE, b"        self.backing.set.values(case_index)\n", b"        None\n"),
+        (OBSERVATION_SOURCE, b"        values.extend(bindings.iter().map(|binding| binding.value));\n", b"        values.extend(bindings.iter().map(|_| Srgb8::new([0, 0, 0])));\n"),
+        (OBSERVATION_SOURCE, b"        Rc::ptr_eq(&self.0, &other.0)\n", b"        self == other\n"),
+        (OBSERVATION_SOURCE, b"                        schema: schema.clone(),\n", b"                        schema: CanonicalObservationSchemaV1(Rc::from(schema.as_slice())),\n"),
         (OBSERVATION_SOURCE, b"if expected_input != actual_input", b"if expected_input == actual_input"),
         (OBSERVATION_SOURCE, b"Some(observation.revision)", b"None"),
         (OBSERVATION_SOURCE, b"(self.owner, self.observation)", b"unreachable!()"),
-        (OBSERVATION_SOURCE, b"tuples.push((scenario.bindings, scenario.id));", b"tuples.push((Vec::new(), scenario.id));"),
-        (SESSION_SOURCE, b"ObservationHeadViewV1::Observed(current.report().observation())", b"ObservationHeadViewV1::Empty"),
+        (SESSION_SOURCE, b"            Self::Observed(observation) => ObservationHeadViewV1::Observed(observation),\n", b"            Self::Observed(_) => ObservationHeadViewV1::Empty,\n"),
+        (SESSION_SOURCE, b"                let next_raw_head = SessionObservationHeadV1::Observed(observation.clone());\n", b"                let next_raw_head = SessionObservationHeadV1::Empty;\n"),
+        (SESSION_SOURCE, b"                *raw_head = next_raw_head;\n", b"                *raw_head = SessionObservationHeadV1::Empty;\n"),
         (SESSION_SOURCE, b"recheck: compiled.into_session_recheck(),", b"recheck: unreachable!(),"),
-        (SESSION_SOURCE, b".evaluate(observation, SessionObservationBindingPermitV1::mint())", b".evaluate(observation, SessionObservationBindingPermitV1::bypass())"),
+        (SESSION_SOURCE, b"                    #[cfg(not(test))]\n                    {\n                        self.recheck\n                            .evaluate(observation, SessionObservationBindingPermitV1::mint())\n                    }", b"                    #[cfg(not(test))]\n                    {\n                        self.recheck\n                            .evaluate(observation, SessionObservationBindingPermitV1::bypass())\n                    }"),
         (SESSION_SOURCE, b"PointSupportEvaluationErrorV1::ResourceExhausted => {\n            PointSupportSessionUpdateErrorV1::ResourceExhausted", b"PointSupportEvaluationErrorV1::ResourceExhausted => {\n            PointSupportSessionUpdateErrorV1::InternalInvariant"),
         (SESSION_SOURCE, b"PointSupportSessionStateV1::Ready { current } => Some(current),", b"PointSupportSessionStateV1::Ready { .. } => None,"),
         (NUMERICS_SOURCE, b"proof_ids: [NumericalProofIdV2::PointSupportReferenceSurplusIntegerV1],\n            bound_status: Available", b"proof_ids: [NumericalProofIdV2::PointSupportReferenceSurplusIntegerV1],\n            bound_status: Unavailable"),

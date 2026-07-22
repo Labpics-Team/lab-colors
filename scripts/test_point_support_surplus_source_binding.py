@@ -55,13 +55,13 @@ class PointSupportSurplusSourceBindingTests(unittest.TestCase):
             ),
             (
                 self.observation_path,
-                b"        &self.cases\n",
-                b"        &[]\n",
+                b"        self.backing.set.values(case_index)\n",
+                b"        None\n",
             ),
             (
                 self.session_path,
-                b"ObservationHeadViewV1::Observed(current.report().observation())",
-                b"ObservationHeadViewV1::Empty",
+                b"            Self::Observed(observation) => ObservationHeadViewV1::Observed(observation),\n",
+                b"            Self::Observed(_) => ObservationHeadViewV1::Empty,\n",
             ),
             (
                 self.numerics_path,

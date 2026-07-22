@@ -1,20 +1,20 @@
 use crate::Srgb8;
 use crate::appearance::{EncodedPointPaintV1, PaintId, SurfaceInputPortId};
 use crate::composition::AdmittedOpacityV1;
-use crate::constraints::{HardDecision, Wcag22Srgb8V1};
+use crate::constraints::{ExactSrgb8IdentityV1, HardDecision, Wcag22Srgb8V1};
 use crate::joint::{
-    CandidateOrdinalV1, CandidateSetErrorV1, DeclaredTotalOrderV1, HardFeasibilityV1,
-    JointCandidateSetV1, JointCandidateTupleV1, JointConstraintDecisionV1, JointConstraintIdV1,
-    JointHardConstraintV1, JointPointEvaluatorV1, JointPointProgramIdentityV1, JointPointProgramV1,
-    JointProgramErrorV1, JointReportErrorV1, JointVisibleTargetV1, PointwiseHardFeasibilityV1,
-    PointwiseJointHardConstraintV1, PointwiseJointPointProgramV1, PointwiseJointReportErrorV1,
-    PointwiseSelectedRecheckErrorV1, SelectionPolicyErrorV1, checked_joint_cardinality,
+    CandidateOrdinalV1, CandidateSetErrorV1, DeclaredTotalOrderV1, JointCandidateSetV1,
+    JointCandidateTupleV1, JointConstraintIdV1, JointPointEvaluatorV1, JointPointProgramIdentityV1,
+    JointProgramErrorV1, JointVisibleTargetV1, PointwiseHardFeasibilityV1,
+    PointwiseJointConstraintDecisionV1, PointwiseJointHardConstraintV1,
+    PointwiseJointPointProgramV1, PointwiseJointReportErrorV1, PointwiseSelectedRecheckErrorV1,
+    SelectionPolicyErrorV1, checked_joint_cardinality,
 };
 use crate::observation::{
     ObservationHeadViewV1, ObservationOwnerV1, ObservationPayloadInput, ObservationStreamId,
     ObservationUpdateInput, ObservedScenarioSetInput, PreparedObservationUpdateV1, Revision,
     RevisionBoundObservationV1, ScenarioId, ScenarioInput, SurfaceInputBinding,
-    prepare_observation,
+    canonicalize_observation_schema, prepare_observation,
 };
 use crate::session::SessionObservationBindingPermitV1;
 use crate::wcag22::Wcag22CriterionV1;
@@ -58,20 +58,22 @@ fn candidates(values: Vec<JointCandidateTupleV1>) -> JointCandidateSetV1 {
     JointCandidateSetV1::new(values).unwrap()
 }
 
-fn program(constraints: Vec<JointHardConstraintV1>) -> JointPointProgramV1 {
-    JointPointProgramV1::new(ROOT, LOWER, UPPER, constraints).unwrap()
+fn program(
+    constraints: Vec<PointwiseJointHardConstraintV1<ExactSrgb8IdentityV1>>,
+) -> PointwiseJointPointProgramV1<ExactSrgb8IdentityV1> {
+    PointwiseJointPointProgramV1::new(ROOT, LOWER, UPPER, constraints).unwrap()
 }
 
-fn exact_upper(id: u32, target: [u8; 3]) -> JointHardConstraintV1 {
-    JointHardConstraintV1::exact(
+fn exact_upper(id: u32, target: [u8; 3]) -> PointwiseJointHardConstraintV1<ExactSrgb8IdentityV1> {
+    PointwiseJointHardConstraintV1::exact(
         JointConstraintIdV1::new(id),
         JointVisibleTargetV1::Upper,
         Srgb8::new(target),
     )
 }
 
-fn exact_lower(id: u32, target: [u8; 3]) -> JointHardConstraintV1 {
-    JointHardConstraintV1::exact(
+fn exact_lower(id: u32, target: [u8; 3]) -> PointwiseJointHardConstraintV1<ExactSrgb8IdentityV1> {
+    PointwiseJointHardConstraintV1::exact(
         JointConstraintIdV1::new(id),
         JointVisibleTargetV1::Lower,
         Srgb8::new(target),
@@ -80,10 +82,11 @@ fn exact_lower(id: u32, target: [u8; 3]) -> JointHardConstraintV1 {
 
 fn observation(revision: u64, cases: Vec<(u32, [u8; 3])>) -> RevisionBoundObservationV1 {
     let mut owner = EmptyObservationOwner;
+    let schema = canonicalize_observation_schema(vec![ROOT]).unwrap();
     let prepared = prepare_observation(
         &mut owner,
         STREAM,
-        &[ROOT],
+        &schema,
         ObservationUpdateInput {
             stream: STREAM,
             revision: Revision::new(revision),
@@ -98,6 +101,46 @@ fn observation(revision: u64, cases: Vec<(u32, [u8; 3])>) -> RevisionBoundObserv
                         }],
                     })
                     .collect(),
+            }),
+        },
+    )
+    .unwrap();
+    let PreparedObservationUpdateV1::Observed(prepared) = prepared else {
+        panic!("fresh observed update must prepare an observation");
+    };
+    let (_owner, observation) = prepared.into_parts();
+    observation
+}
+
+fn observation_with_unrelated_surface(
+    revision: u64,
+    unrelated: [u8; 3],
+    root: [u8; 3],
+) -> RevisionBoundObservationV1 {
+    let unrelated_surface = SurfaceInputPortId::new(ROOT.value() - 1);
+    let mut owner = EmptyObservationOwner;
+    let schema = canonicalize_observation_schema(vec![ROOT, unrelated_surface]).unwrap();
+    let prepared = prepare_observation(
+        &mut owner,
+        STREAM,
+        &schema,
+        ObservationUpdateInput {
+            stream: STREAM,
+            revision: Revision::new(revision),
+            payload: ObservationPayloadInput::Scenarios(ObservedScenarioSetInput {
+                scenarios: vec![ScenarioInput {
+                    id: ScenarioId::new(17),
+                    bindings: vec![
+                        SurfaceInputBinding {
+                            port: ROOT,
+                            value: Srgb8::new(root),
+                        },
+                        SurfaceInputBinding {
+                            port: unrelated_surface,
+                            value: Srgb8::new(unrelated),
+                        },
+                    ],
+                }],
             }),
         },
     )
@@ -145,14 +188,14 @@ fn linked_candidate_is_selected_only_after_upper_sees_lower_visible_surface() {
     assert_eq!(report.cells()[0].decision().target(), Srgb8::new([192; 3]));
     assert!(matches!(
         report.cells()[0].decision(),
-        JointConstraintDecisionV1::Violation(_)
+        PointwiseJointConstraintDecisionV1::Violation(_)
     ));
     assert!(matches!(
         report.cells()[1].decision(),
-        JointConstraintDecisionV1::Pass(_)
+        PointwiseJointConstraintDecisionV1::Pass(_)
     ));
 
-    let HardFeasibilityV1::NonEmpty(feasible) = report.classify() else {
+    let PointwiseHardFeasibilityV1::NonEmpty(feasible) = report.classify() else {
         panic!("second joint tuple must be feasible");
     };
     assert_eq!(feasible.feasible(), &[CandidateOrdinalV1::new(1)]);
@@ -161,7 +204,7 @@ fn linked_candidate_is_selected_only_after_upper_sees_lower_visible_surface() {
         vec![CandidateOrdinalV1::new(0), CandidateOrdinalV1::new(1)],
     )
     .unwrap();
-    let selected = feasible.select(policy);
+    let selected = feasible.select(policy).unwrap();
     assert_eq!(selected.ordinal(), CandidateOrdinalV1::new(1));
     let verified = selected.recheck().unwrap();
     assert_eq!(verified.ordinal(), CandidateOrdinalV1::new(1));
@@ -181,7 +224,7 @@ fn every_unique_physical_case_must_pass_without_worst_or_average_reduction() {
     assert_eq!(report.cells().len(), 2);
     assert_eq!(report.cells()[0].decision().actual(), Srgb8::new([128; 3]));
     assert_eq!(report.cells()[1].decision().actual(), Srgb8::new([192; 3]));
-    let HardFeasibilityV1::Infeasible(report) = report.classify() else {
+    let PointwiseHardFeasibilityV1::Infeasible(report) = report.classify() else {
         panic!("one violated case must exclude the whole tuple");
     };
     assert_eq!(
@@ -276,6 +319,25 @@ fn scenario_declaration_permutation_is_canonical() {
 }
 
 #[test]
+fn revision_bound_root_uses_its_schema_ordinal_and_retains_case_provenance() {
+    let report = program(vec![exact_lower(1, [128; 3])])
+        .evaluate_revision_bound(
+            candidates(vec![candidate(0, ([0; 3], 0.5), ([255; 3], 1.0))]),
+            observation_with_unrelated_surface(6, [0; 3], [255; 3]),
+            session_permit(),
+        )
+        .unwrap();
+
+    assert_eq!(report.executions().len(), 1);
+    assert_eq!(report.executions()[0].lower_visible(), Srgb8::new([128; 3]));
+    assert_eq!(report.provenance(0), Some(&[ScenarioId::new(17)][..]));
+    assert!(matches!(
+        report.cells()[0].decision(),
+        PointwiseJointConstraintDecisionV1::Pass(_)
+    ));
+}
+
+#[test]
 fn static_joint_evaluation_is_explicitly_lifecycle_free() {
     let report = program(vec![exact_upper(1, [255; 3])])
         .evaluate_static(
@@ -301,7 +363,7 @@ fn static_joint_key_mismatch_fails_before_compositing() {
 
     assert!(matches!(
         result,
-        Err(JointReportErrorV1::MissingRootSurface(ROOT))
+        Err(PointwiseJointReportErrorV1::MissingRootSurface(ROOT))
     ));
     assert_eq!(crate::composition::source_over_evaluation_count(), 0);
 }
@@ -340,7 +402,7 @@ fn declared_policy_is_separate_from_report_and_is_the_only_tie_break() {
             .unwrap()
     };
 
-    let HardFeasibilityV1::NonEmpty(first) = make_report().classify() else {
+    let PointwiseHardFeasibilityV1::NonEmpty(first) = make_report().classify() else {
         panic!("both tuples must pass");
     };
     let first_policy = DeclaredTotalOrderV1::new(
@@ -348,7 +410,7 @@ fn declared_policy_is_separate_from_report_and_is_the_only_tie_break() {
         vec![CandidateOrdinalV1::new(7), CandidateOrdinalV1::new(4)],
     )
     .unwrap();
-    let HardFeasibilityV1::NonEmpty(second) = make_report().classify() else {
+    let PointwiseHardFeasibilityV1::NonEmpty(second) = make_report().classify() else {
         panic!("both tuples must pass");
     };
     let second_policy = DeclaredTotalOrderV1::new(
@@ -357,12 +419,162 @@ fn declared_policy_is_separate_from_report_and_is_the_only_tie_break() {
     )
     .unwrap();
     assert_eq!(
-        first.select(first_policy).ordinal(),
+        first.select(first_policy).unwrap().ordinal(),
         CandidateOrdinalV1::new(7)
     );
     assert_eq!(
-        second.select(second_policy).ordinal(),
+        second.select(second_policy).unwrap().ordinal(),
         CandidateOrdinalV1::new(4)
+    );
+}
+
+#[test]
+fn foreign_disjoint_and_partially_overlapping_policy_domains_are_typed_errors() {
+    let make_actual = || {
+        let report = program(vec![])
+            .evaluate_revision_bound(
+                candidates(vec![
+                    candidate(1, ([11; 3], 1.0), ([111; 3], 1.0)),
+                    candidate(2, ([22; 3], 1.0), ([122; 3], 1.0)),
+                ]),
+                observation(70, vec![(1, [0; 3])]),
+                session_permit(),
+            )
+            .unwrap();
+        let PointwiseHardFeasibilityV1::NonEmpty(feasible) = report.classify() else {
+            panic!("an unconstrained nonempty domain must be feasible");
+        };
+        feasible
+    };
+
+    let disjoint_domain = candidates(vec![
+        candidate(10, ([10; 3], 1.0), ([210; 3], 1.0)),
+        candidate(11, ([11; 3], 1.0), ([211; 3], 1.0)),
+    ]);
+    let disjoint_policy = DeclaredTotalOrderV1::new(
+        &disjoint_domain,
+        vec![CandidateOrdinalV1::new(10), CandidateOrdinalV1::new(11)],
+    )
+    .unwrap();
+    let disjoint_feasible = make_actual();
+    crate::composition::reset_source_over_evaluation_count();
+    let (disjoint, disjoint_allocations) =
+        crate::test_support::measured_allocations(|| disjoint_feasible.select(disjoint_policy));
+    let Err(disjoint_failure) = disjoint else {
+        panic!("a disjoint policy domain must be rejected");
+    };
+    assert_eq!(
+        disjoint_failure.reason(),
+        SelectionPolicyErrorV1::CandidateDomainMismatch
+    );
+    assert_eq!(
+        disjoint_failure.feasible().feasible(),
+        &[CandidateOrdinalV1::new(1), CandidateOrdinalV1::new(2)]
+    );
+    assert_eq!(
+        disjoint_failure.policy().order(),
+        &[CandidateOrdinalV1::new(10), CandidateOrdinalV1::new(11)]
+    );
+    assert_eq!(disjoint_allocations, 0);
+    assert_eq!(crate::composition::source_over_evaluation_count(), 0);
+
+    // Ordinal 1 overlaps and is first in the foreign order. The old selector
+    // silently accepted it; exact-domain validation must reject the policy.
+    let partial_domain = candidates(vec![
+        candidate(1, ([31; 3], 1.0), ([131; 3], 1.0)),
+        candidate(3, ([33; 3], 1.0), ([133; 3], 1.0)),
+    ]);
+    let partial_policy = DeclaredTotalOrderV1::new(
+        &partial_domain,
+        vec![CandidateOrdinalV1::new(1), CandidateOrdinalV1::new(3)],
+    )
+    .unwrap();
+    let partial_feasible = make_actual();
+    crate::composition::reset_source_over_evaluation_count();
+    let (partial, partial_allocations) =
+        crate::test_support::measured_allocations(|| partial_feasible.select(partial_policy));
+    let Err(partial_failure) = partial else {
+        panic!("a partially overlapping policy domain must be rejected");
+    };
+    assert_eq!(
+        partial_failure.reason(),
+        SelectionPolicyErrorV1::CandidateDomainMismatch
+    );
+    assert_eq!(partial_allocations, 0);
+    assert_eq!(crate::composition::source_over_evaluation_count(), 0);
+
+    // Recover the expensive report and the caller's original Vec allocation,
+    // repair only the order, then retry without re-running physical evaluation.
+    let (recovered_feasible, rejected_policy, reason) = partial_failure.into_parts();
+    assert_eq!(reason, SelectionPolicyErrorV1::CandidateDomainMismatch);
+    let order_backing = rejected_policy.order().as_ptr();
+    let mut corrected_order = rejected_policy.into_order();
+    corrected_order[1] = CandidateOrdinalV1::new(2);
+    corrected_order.swap(0, 1);
+    assert_eq!(corrected_order.as_ptr(), order_backing);
+    let corrected_policy =
+        DeclaredTotalOrderV1::new(recovered_feasible.candidate_set(), corrected_order).unwrap();
+    assert_eq!(corrected_policy.order().as_ptr(), order_backing);
+    let selected = recovered_feasible.select(corrected_policy).unwrap();
+    assert_eq!(selected.ordinal(), CandidateOrdinalV1::new(2));
+    assert_eq!(crate::composition::source_over_evaluation_count(), 0);
+}
+
+#[test]
+fn policy_is_reusable_for_the_same_ordinal_domain_without_owning_candidate_physics() {
+    let make_actual = || {
+        let report = program(vec![])
+            .evaluate_revision_bound(
+                candidates(vec![
+                    candidate(1, ([11; 3], 1.0), ([111; 3], 1.0)),
+                    candidate(2, ([22; 3], 1.0), ([222; 3], 1.0)),
+                ]),
+                observation(71, vec![(1, [0; 3])]),
+                session_permit(),
+            )
+            .unwrap();
+        let PointwiseHardFeasibilityV1::NonEmpty(feasible) = report.classify() else {
+            panic!("an unconstrained nonempty domain must be feasible");
+        };
+        feasible
+    };
+
+    let different_physics = candidates(vec![
+        candidate(2, ([202; 3], 0.5), ([72; 3], 1.0)),
+        candidate(1, ([201; 3], 0.5), ([71; 3], 1.0)),
+    ]);
+    let reusable_policy = DeclaredTotalOrderV1::new(
+        &different_physics,
+        vec![CandidateOrdinalV1::new(2), CandidateOrdinalV1::new(1)],
+    )
+    .unwrap();
+    let verified = make_actual()
+        .select(reusable_policy)
+        .unwrap()
+        .recheck()
+        .unwrap();
+    assert_eq!(verified.ordinal(), CandidateOrdinalV1::new(2));
+    assert_eq!(
+        verified.fresh_executions()[0].lower_visible(),
+        Srgb8::new([22; 3])
+    );
+    assert_eq!(
+        verified.fresh_executions()[0].upper_visible(),
+        Srgb8::new([222; 3])
+    );
+
+    let independently_identical = candidates(vec![
+        candidate(2, ([22; 3], 1.0), ([222; 3], 1.0)),
+        candidate(1, ([11; 3], 1.0), ([111; 3], 1.0)),
+    ]);
+    let identical_policy = DeclaredTotalOrderV1::new(
+        &independently_identical,
+        vec![CandidateOrdinalV1::new(1), CandidateOrdinalV1::new(2)],
+    )
+    .unwrap();
+    assert_eq!(
+        make_actual().select(identical_policy).unwrap().ordinal(),
+        CandidateOrdinalV1::new(1)
     );
 }
 
@@ -377,13 +589,13 @@ fn fresh_recheck_executes_the_selected_joint_program_again_on_the_same_revision(
         )
         .unwrap();
     crate::composition::reset_source_over_evaluation_count();
-    let HardFeasibilityV1::NonEmpty(feasible) = report.classify() else {
+    let PointwiseHardFeasibilityV1::NonEmpty(feasible) = report.classify() else {
         panic!("opaque upper must pass on both roots");
     };
     let policy =
         DeclaredTotalOrderV1::new(feasible.candidate_set(), vec![CandidateOrdinalV1::new(0)])
             .unwrap();
-    let selected = feasible.select(policy);
+    let selected = feasible.select(policy).unwrap();
     let verified = selected.recheck().unwrap();
 
     assert_eq!(crate::composition::source_over_evaluation_count(), 4);
@@ -403,14 +615,14 @@ fn empty_hard_constraint_set_is_non_vacuously_feasible() {
 
     assert_eq!(report.executions().len(), 1);
     assert!(report.cells().is_empty());
-    let HardFeasibilityV1::NonEmpty(feasible) = report.classify() else {
+    let PointwiseHardFeasibilityV1::NonEmpty(feasible) = report.classify() else {
         panic!("a tuple with no hard violations must be feasible");
     };
     assert_eq!(feasible.feasible(), &[CandidateOrdinalV1::new(0)]);
     let policy =
         DeclaredTotalOrderV1::new(feasible.candidate_set(), vec![CandidateOrdinalV1::new(0)])
             .unwrap();
-    let verified = feasible.select(policy).recheck().unwrap();
+    let verified = feasible.select(policy).unwrap().recheck().unwrap();
     assert_eq!(verified.fresh_executions().len(), 1);
     assert!(verified.fresh_cells().is_empty());
 }
@@ -451,7 +663,7 @@ fn generic_wcag_evaluator_can_constrain_the_derived_lower_occurrence() {
         vec![CandidateOrdinalV1::new(1), CandidateOrdinalV1::new(2)],
     )
     .unwrap();
-    let verified = feasible.select(policy).recheck().unwrap();
+    let verified = feasible.select(policy).unwrap().recheck().unwrap();
     assert_eq!(verified.ordinal(), CandidateOrdinalV1::new(2));
     assert_eq!(verified.fresh_cells().len(), 1);
     assert!(verified.fresh_cells()[0].decision().is_pass());
@@ -535,7 +747,7 @@ fn evaluator_error_invalidates_the_full_report_and_fresh_recheck() {
         DeclaredTotalOrderV1::new(feasible.candidate_set(), vec![CandidateOrdinalV1::new(0)])
             .unwrap();
     assert!(matches!(
-        feasible.select(policy).recheck(),
+        feasible.select(policy).unwrap().recheck(),
         Err(PointwiseSelectedRecheckErrorV1::Evaluator(
             "evaluator-fault"
         ))
@@ -568,7 +780,7 @@ fn invalid_domains_and_policies_fail_before_compositing() {
         })
     );
     assert_eq!(
-        JointPointProgramV1::new(ROOT, LOWER, LOWER, vec![exact_upper(1, [0; 3])]),
+        PointwiseJointPointProgramV1::new(ROOT, LOWER, LOWER, vec![exact_upper(1, [0; 3])]),
         Err(JointProgramErrorV1::SamePaintIdentity(LOWER))
     );
     let observed = observation(9, vec![(1, [0; 3])]);
@@ -585,7 +797,7 @@ fn invalid_domains_and_policies_fail_before_compositing() {
             observed,
             session_permit()
         ),
-        Err(JointReportErrorV1::CandidatePaintMismatch {
+        Err(PointwiseJointReportErrorV1::CandidatePaintMismatch {
             stage: JointVisibleTargetV1::Lower,
             ..
         })
@@ -607,13 +819,55 @@ fn invalid_domains_and_policies_fail_before_compositing() {
 }
 
 #[test]
+fn duplicate_physical_detection_preserves_canonical_ordinal_precedence() {
+    let first_order = vec![
+        candidate(4, ([0; 3], 1.0), ([10; 3], 1.0)),
+        candidate(9, ([250; 3], 1.0), ([240; 3], 1.0)),
+        candidate(3, ([0; 3], 1.0), ([10; 3], 1.0)),
+        candidate(1, ([250; 3], 1.0), ([240; 3], 1.0)),
+    ];
+    let reverse_order = first_order.iter().rev().copied().collect();
+    let expected = Err(CandidateSetErrorV1::DuplicatePhysicalTuple {
+        first: CandidateOrdinalV1::new(1),
+        second: CandidateOrdinalV1::new(9),
+    });
+    assert_eq!(JointCandidateSetV1::new(first_order), expected);
+    assert_eq!(JointCandidateSetV1::new(reverse_order), expected);
+
+    assert_eq!(
+        JointCandidateSetV1::new(vec![
+            candidate(7, ([70; 3], 0.5), ([170; 3], 1.0)),
+            candidate(2, ([70; 3], 0.5), ([170; 3], 1.0)),
+            candidate(5, ([70; 3], 0.5), ([170; 3], 1.0)),
+        ]),
+        Err(CandidateSetErrorV1::DuplicatePhysicalTuple {
+            first: CandidateOrdinalV1::new(2),
+            second: CandidateOrdinalV1::new(5),
+        })
+    );
+}
+
+#[test]
+fn large_candidate_domain_remains_ordinal_canonical() {
+    const COUNT: u32 = 4_096;
+    let make = |ordinal: u32| {
+        let bytes = [(ordinal >> 8) as u8, ordinal as u8, 17];
+        candidate(ordinal, (bytes, 1.0), ([255, 0, 19], 1.0))
+    };
+    let input = (0..COUNT).rev().map(make).collect();
+    let expected: Vec<_> = (0..COUNT).map(make).collect();
+    let domain = JointCandidateSetV1::new(input).unwrap();
+    assert_eq!(domain.candidates(), expected);
+}
+
+#[test]
 fn cardinality_overflow_is_rejected_by_preflight() {
     assert_eq!(
         checked_joint_cardinality(usize::MAX, 2, 1),
-        Err(JointReportErrorV1::ResourceExhausted)
+        Err(PointwiseJointReportErrorV1::ResourceExhausted)
     );
     assert_eq!(
         checked_joint_cardinality(usize::MAX / 2 + 1, 2, 2),
-        Err(JointReportErrorV1::ResourceExhausted)
+        Err(PointwiseJointReportErrorV1::ResourceExhausted)
     );
 }

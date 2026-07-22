@@ -143,6 +143,119 @@ fn multi_paint_declared_order_and_direct_provenance_are_preserved() {
 }
 
 #[test]
+fn duplicate_raw_scenarios_share_one_physical_case_without_cartesian_expansion() {
+    let requirements = compiled(vec![
+        occurrence(
+            OCCURRENCE_A,
+            SURFACE_A,
+            paint(PAINT_A, [0; 3], 0.5),
+            Some([128; 3]),
+            PointSupportCriterionRequirementV1::NotRequested,
+            PointSupportStabilityPolicyV1::Disabled,
+        ),
+        occurrence(
+            OCCURRENCE_B,
+            SURFACE_B,
+            paint(PAINT_B, [255; 3], 0.5),
+            Some([128; 3]),
+            PointSupportCriterionRequirementV1::NotRequested,
+            PointSupportStabilityPolicyV1::Disabled,
+        ),
+    ]);
+    let mut session = PointSupportSessionV1::new(STREAM, requirements);
+
+    crate::composition::reset_source_over_evaluation_count();
+    let PointSupportSessionStateV1::Failed { cause, previous } = session
+        .update(observed_update(
+            1,
+            [
+                // Same complete physical tuple, deliberately repeated with
+                // non-canonical IDs and binding order.
+                (90, vec![(SURFACE_B, [0; 3]), (SURFACE_A, [255; 3])]),
+                (10, vec![(SURFACE_A, [255; 3]), (SURFACE_B, [0; 3])]),
+                // A second anti-correlated tuple must remain one whole case;
+                // it must not be crossed with either value from the first.
+                (50, vec![(SURFACE_B, [255; 3]), (SURFACE_A, [0; 3])]),
+            ],
+        ))
+        .unwrap()
+    else {
+        panic!("the second physical case violates both required exact identities");
+    };
+    assert!(previous.is_none());
+
+    let report = cause.report();
+    assert_eq!(report.observation().physical_case_count(), 2);
+    assert_eq!(
+        report.observation().physical_values(0),
+        Some(&[Srgb8::new([0; 3]), Srgb8::new([255; 3])][..])
+    );
+    assert_eq!(
+        report.observation().physical_values(1),
+        Some(&[Srgb8::new([255; 3]), Srgb8::new([0; 3])][..])
+    );
+    assert_eq!(
+        report.observation().provenance(0),
+        Some(&[ScenarioId::new(50)][..])
+    );
+    assert_eq!(
+        report.observation().provenance(1),
+        Some(&[ScenarioId::new(10), ScenarioId::new(90)][..])
+    );
+
+    let cells: Vec<_> = report.cells().collect();
+    assert_eq!(
+        cells.len(),
+        4,
+        "two cases times two occurrences, not six raw cells"
+    );
+    assert_eq!(
+        crate::composition::source_over_evaluation_count(),
+        4,
+        "compose exactly once per (unique physical case, occurrence)"
+    );
+
+    assert_eq!(cells[0].case_index(), 0);
+    assert_eq!(cells[0].occurrence(), OCCURRENCE_A);
+    assert_eq!(cells[0].composition().backdrop_rgb(), [0; 3]);
+    assert_eq!(cells[0].provenance(), &[ScenarioId::new(50)]);
+    assert!(matches!(
+        cells[0].exact(),
+        PointSupportExactAssessmentV1::RequiredFailure(_)
+    ));
+    assert_eq!(cells[1].case_index(), 0);
+    assert_eq!(cells[1].occurrence(), OCCURRENCE_B);
+    assert_eq!(cells[1].composition().backdrop_rgb(), [255; 3]);
+    assert_eq!(cells[1].provenance(), &[ScenarioId::new(50)]);
+    assert!(matches!(
+        cells[1].exact(),
+        PointSupportExactAssessmentV1::RequiredFailure(_)
+    ));
+
+    for (cell, occurrence, backdrop) in [
+        (cells[2], OCCURRENCE_A, [255; 3]),
+        (cells[3], OCCURRENCE_B, [0; 3]),
+    ] {
+        assert_eq!(cell.case_index(), 1);
+        assert_eq!(cell.occurrence(), occurrence);
+        assert_eq!(cell.composition().backdrop_rgb(), backdrop);
+        assert_eq!(
+            cell.provenance(),
+            &[ScenarioId::new(10), ScenarioId::new(90)]
+        );
+        assert!(matches!(
+            cell.exact(),
+            PointSupportExactAssessmentV1::RequiredPass(_)
+        ));
+    }
+    assert_eq!(
+        report.exact_aggregate(),
+        PointSupportExactAggregateV1::RequiredFailure,
+        "one unique violating case fails the whole recheck"
+    );
+}
+
+#[test]
 fn exact_wcag_and_stability_are_independent_axes_and_baseline_binds_once() {
     let drop_all = PointSupportDropFractionV1::try_from_basis_points(10_000).unwrap();
     crate::composition::reset_source_over_evaluation_count();

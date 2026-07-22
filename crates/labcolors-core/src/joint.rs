@@ -25,7 +25,10 @@ use crate::session::SessionObservationBindingPermitV1;
 /// каждого target occurrence. Конкретные Exact/WCAG/readability payload-и
 /// остаются в evaluator-модулях и не образуют центральный enum.
 pub(crate) trait JointPointEvaluatorV1: Clone + Debug + PartialEq {
-    type Invocation: Clone + Debug + PartialEq;
+    /// Joint execution repeats one invocation across the complete physical
+    /// matrix. Requiring a value type here keeps that repetition allocation-free
+    /// instead of hiding an arbitrary `Clone` behind the engine's preflight.
+    type Invocation: Copy + Debug + PartialEq;
     type PassEvidence: Clone + Debug + PartialEq;
     type ViolationEvidence: Clone + Debug + PartialEq;
     type Error: Clone + Debug + PartialEq;
@@ -44,7 +47,7 @@ where
         + PartialEq
         + Evaluator<ModeledSrgb8PointOccurrence>
         + HardClassifier<PointInvocation<Evaluation>, PointMeasurement<Evaluation>>,
-    PointInvocation<Evaluation>: Clone + Debug + PartialEq,
+    PointInvocation<Evaluation>: Copy + Debug + PartialEq,
     VisiblePointPassEvidence<Evaluation>: Clone + Debug + PartialEq,
     VisiblePointViolationEvidence<Evaluation>: Clone + Debug + PartialEq,
     <Evaluation as Evaluator<ModeledSrgb8PointOccurrence>>::Error: Clone + Debug + PartialEq,
@@ -99,7 +102,7 @@ impl JointCandidateTupleV1 {
 /// Order-free candidate domain. Policy не участвует в его construction.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct JointCandidateSetV1 {
-    candidates: Box<[JointCandidateTupleV1]>,
+    candidates: Vec<JointCandidateTupleV1>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -125,25 +128,44 @@ impl JointCandidateSetV1 {
                 return Err(CandidateSetErrorV1::DuplicateOrdinal(pair[0].ordinal));
             }
         }
-        for (index, first) in candidates.iter().enumerate() {
-            if let Some(second) = candidates[index + 1..]
-                .iter()
-                .find(|second| first.lower == second.lower && first.upper == second.upper)
-            {
-                return Err(CandidateSetErrorV1::DuplicatePhysicalTuple {
-                    first: first.ordinal,
-                    second: second.ordinal,
-                });
-            }
+        // Group equal physical tuples without auxiliary storage. The explicit
+        // ordinal tie-break makes every group canonical even though the sort is
+        // unstable. We inspect every duplicate group and retain the same error
+        // precedence as the former ordinal-order scan: the smallest first
+        // ordinal, followed by the smallest matching second ordinal.
+        candidates.sort_unstable_by(|left, right| {
+            candidate_physical_key(left)
+                .cmp(&candidate_physical_key(right))
+                .then_with(|| left.ordinal.cmp(&right.ordinal))
+        });
+        let duplicate = candidates
+            .windows(2)
+            .filter(|pair| pair[0].lower == pair[1].lower && pair[0].upper == pair[1].upper)
+            .map(|pair| (pair[0].ordinal, pair[1].ordinal))
+            .min();
+        if let Some((first, second)) = duplicate {
+            return Err(CandidateSetErrorV1::DuplicatePhysicalTuple { first, second });
         }
-        Ok(Self {
-            candidates: candidates.into_boxed_slice(),
-        })
+        candidates.sort_unstable_by_key(|candidate| candidate.ordinal);
+        Ok(Self { candidates })
     }
 
     pub(crate) fn candidates(&self) -> &[JointCandidateTupleV1] {
         &self.candidates
     }
+}
+
+fn candidate_physical_key(
+    candidate: &JointCandidateTupleV1,
+) -> (PaintId, Srgb8, u64, PaintId, Srgb8, u64) {
+    (
+        candidate.lower.id(),
+        candidate.lower.source(),
+        candidate.lower.opacity().bits(),
+        candidate.upper.id(),
+        candidate.upper.source(),
+        candidate.upper.opacity().bits(),
+    )
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -191,8 +213,6 @@ where
     }
 }
 
-pub(crate) type JointHardConstraintV1 = PointwiseJointHardConstraintV1<ExactSrgb8IdentityV1>;
-
 impl PointwiseJointHardConstraintV1<ExactSrgb8IdentityV1> {
     pub(crate) fn exact(
         id: JointConstraintIdV1,
@@ -218,7 +238,8 @@ mod observation_seal {
 
 pub(crate) trait JointObservationV1: observation_seal::Sealed + Debug + PartialEq {
     fn case_count(&self) -> usize;
-    fn surface_at(&self, case_index: usize, surface: SurfaceInputPortId) -> Option<Srgb8>;
+    fn bind_surface(&self, surface: SurfaceInputPortId) -> Option<usize>;
+    fn value_at_bound(&self, case_index: usize, bound_index: usize) -> Option<Srgb8>;
     fn provenance(&self, case_index: usize) -> Option<&[ScenarioId]>;
 }
 
@@ -226,15 +247,15 @@ impl observation_seal::Sealed for RevisionBoundObservationV1 {}
 
 impl JointObservationV1 for RevisionBoundObservationV1 {
     fn case_count(&self) -> usize {
-        self.set().cases().len()
+        self.physical_case_count()
     }
 
-    fn surface_at(&self, case_index: usize, surface: SurfaceInputPortId) -> Option<Srgb8> {
-        let bindings = self.physical_bindings(case_index)?;
-        let index = bindings
-            .binary_search_by_key(&surface, |binding| binding.port())
-            .ok()?;
-        Some(bindings[index].value())
+    fn bind_surface(&self, surface: SurfaceInputPortId) -> Option<usize> {
+        self.schema().binary_search(&surface).ok()
+    }
+
+    fn value_at_bound(&self, case_index: usize, bound_index: usize) -> Option<Srgb8> {
+        self.physical_values(case_index)?.get(bound_index).copied()
     }
 
     fn provenance(&self, case_index: usize) -> Option<&[ScenarioId]> {
@@ -264,8 +285,12 @@ impl JointObservationV1 for StaticJointObservationV1 {
         1
     }
 
-    fn surface_at(&self, case_index: usize, surface: SurfaceInputPortId) -> Option<Srgb8> {
-        (case_index == 0 && surface == self.root_surface).then_some(self.root)
+    fn bind_surface(&self, surface: SurfaceInputPortId) -> Option<usize> {
+        (surface == self.root_surface).then_some(0)
+    }
+
+    fn value_at_bound(&self, case_index: usize, bound_index: usize) -> Option<Srgb8> {
+        (case_index == 0 && bound_index == 0).then_some(self.root)
     }
 
     fn provenance(&self, _case_index: usize) -> Option<&[ScenarioId]> {
@@ -283,10 +308,8 @@ where
     root_surface: SurfaceInputPortId,
     lower_paint: PaintId,
     upper_paint: PaintId,
-    constraints: Box<[PointwiseJointHardConstraintV1<Evaluation>]>,
+    constraints: Vec<PointwiseJointHardConstraintV1<Evaluation>>,
 }
-
-pub(crate) type JointPointProgramV1 = PointwiseJointPointProgramV1<ExactSrgb8IdentityV1>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum JointProgramErrorV1 {
@@ -299,7 +322,7 @@ impl PointwiseJointPointProgramV1<ExactSrgb8IdentityV1> {
         root_surface: SurfaceInputPortId,
         lower_paint: PaintId,
         upper_paint: PaintId,
-        constraints: Vec<JointHardConstraintV1>,
+        constraints: Vec<PointwiseJointHardConstraintV1<ExactSrgb8IdentityV1>>,
     ) -> Result<Self, JointProgramErrorV1> {
         Self::with_evaluator(
             ExactSrgb8IdentityV1,
@@ -336,7 +359,7 @@ where
             root_surface,
             lower_paint,
             upper_paint,
-            constraints: constraints.into_boxed_slice(),
+            constraints,
         })
     }
 
@@ -345,7 +368,7 @@ where
     }
 
     pub(crate) fn evaluate_static(
-        &self,
+        self,
         candidates: JointCandidateSetV1,
         observation: StaticJointObservationV1,
     ) -> Result<
@@ -356,7 +379,7 @@ where
     }
 
     pub(crate) fn evaluate_revision_bound(
-        &self,
+        self,
         candidates: JointCandidateSetV1,
         observation: RevisionBoundObservationV1,
         _permit: SessionObservationBindingPermitV1,
@@ -368,7 +391,7 @@ where
     }
 
     fn evaluate_owned<Observation>(
-        &self,
+        self,
         candidates: JointCandidateSetV1,
         observation: Observation,
     ) -> Result<
@@ -379,46 +402,64 @@ where
         Observation: JointObservationV1,
     {
         self.validate_candidates(&candidates)?;
-        self.validate_observation(&observation)?;
+        let root_binding = self.bind_observation_surface(&observation)?;
         let (execution_count, cell_count) = checked_joint_cardinality_raw(
             candidates.candidates.len(),
             observation.case_count(),
             self.constraints.len(),
         )
         .map_err(|_| PointwiseJointReportErrorV1::ResourceExhausted)?;
+        let mut feasible_ordinals = Vec::new();
+        feasible_ordinals
+            .try_reserve_exact(candidates.candidates.len())
+            .map_err(|_| PointwiseJointReportErrorV1::ResourceExhausted)?;
+        feasible_ordinals.extend(
+            candidates
+                .candidates
+                .iter()
+                .map(|candidate| candidate.ordinal),
+        );
         let matrices = self.execute(
             candidates.candidates(),
             &observation,
+            root_binding,
             execution_count,
             cell_count,
         )?;
+        retain_feasible_ordinals(&mut feasible_ordinals, &matrices.cells);
         Ok(PointwiseFullHardReportV1 {
             program_identity: self.identity(),
-            program: self.clone(),
+            program: self,
             candidates,
             observation,
             executions: matrices.executions,
             cells: matrices.cells,
+            feasible_ordinals,
         })
     }
 
-    fn validate_observation<Observation>(
+    fn bind_observation_surface<Observation>(
         &self,
         observation: &Observation,
-    ) -> Result<(), PointwiseJointReportErrorV1<Evaluation>>
+    ) -> Result<usize, PointwiseJointReportErrorV1<Evaluation>>
     where
         Observation: JointObservationV1,
     {
+        let Some(root_binding) = observation.bind_surface(self.root_surface) else {
+            return Err(PointwiseJointReportErrorV1::MissingRootSurface(
+                self.root_surface,
+            ));
+        };
         if (0..observation.case_count()).any(|case_index| {
             observation
-                .surface_at(case_index, self.root_surface)
+                .value_at_bound(case_index, root_binding)
                 .is_none()
         }) {
             return Err(PointwiseJointReportErrorV1::MissingRootSurface(
                 self.root_surface,
             ));
         }
-        Ok(())
+        Ok(root_binding)
     }
 
     fn validate_candidates(
@@ -450,6 +491,7 @@ where
         &self,
         candidates: &[JointCandidateTupleV1],
         observation: &Observation,
+        root_binding: usize,
         execution_count: usize,
         cell_count: usize,
     ) -> Result<
@@ -470,9 +512,9 @@ where
 
         for candidate in candidates {
             for case_index in 0..observation.case_count() {
-                let root = observation
-                    .surface_at(case_index, self.root_surface)
-                    .unwrap_or_else(|| unreachable!("joint observation passed keyed preflight"));
+                let root = observation.value_at_bound(case_index, root_binding).ok_or(
+                    PointwiseJointReportErrorV1::MissingRootSurface(self.root_surface),
+                )?;
                 let lower = PointOpacityOverSurfaceV1::evaluate_admitted(
                     candidate.lower.source().bytes(),
                     candidate.lower.opacity(),
@@ -494,7 +536,7 @@ where
                     upper,
                 });
 
-                for constraint in self.constraints.iter().cloned() {
+                for constraint in &self.constraints {
                     let occurrence = match constraint.target {
                         JointVisibleTargetV1::Lower => &lower,
                         JointVisibleTargetV1::Upper => &upper,
@@ -503,7 +545,7 @@ where
                     // поэтому частичная матрица не называется FullHardReport.
                     let decision = match self
                         .evaluator
-                        .assess(occurrence, constraint.invocation.clone())
+                        .assess(occurrence, constraint.invocation)
                         .map_err(PointwiseJointReportErrorV1::Evaluator)?
                     {
                         HardDecision::Pass(evidence) => {
@@ -526,10 +568,7 @@ where
 
         debug_assert_eq!(executions.len(), execution_count);
         debug_assert_eq!(cells.len(), cell_count);
-        Ok(PointwiseJointEvaluationMatricesV1 {
-            executions: executions.into_boxed_slice(),
-            cells: cells.into_boxed_slice(),
-        })
+        Ok(PointwiseJointEvaluationMatricesV1 { executions, cells })
     }
 }
 
@@ -548,8 +587,6 @@ where
     Evaluator(Evaluation::Error),
     ResourceExhausted,
 }
-
-pub(crate) type JointReportErrorV1 = PointwiseJointReportErrorV1<ExactSrgb8IdentityV1>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum JointCapacityErrorV1 {
@@ -574,18 +611,41 @@ pub(crate) fn checked_joint_cardinality(
     candidates: usize,
     cases: usize,
     constraints: usize,
-) -> Result<(usize, usize), JointReportErrorV1> {
+) -> Result<(usize, usize), PointwiseJointReportErrorV1<ExactSrgb8IdentityV1>> {
     checked_joint_cardinality_raw(candidates, cases, constraints)
-        .map_err(|_| JointReportErrorV1::ResourceExhausted)
+        .map_err(|_| PointwiseJointReportErrorV1::ResourceExhausted)
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, PartialEq)]
 struct PointwiseJointEvaluationMatricesV1<Evaluation>
 where
     Evaluation: JointPointEvaluatorV1,
 {
-    executions: Box<[JointExecutionRecordV1]>,
-    cells: Box<[PointwiseJointConstraintCellV1<Evaluation>]>,
+    executions: Vec<JointExecutionRecordV1>,
+    cells: Vec<PointwiseJointConstraintCellV1<Evaluation>>,
+}
+
+fn retain_feasible_ordinals<Evaluation>(
+    feasible: &mut Vec<CandidateOrdinalV1>,
+    cells: &[PointwiseJointConstraintCellV1<Evaluation>],
+) where
+    Evaluation: JointPointEvaluatorV1,
+{
+    // Both vectors are candidate-major and ordinal-canonical. One cursor keeps
+    // classification O(candidates + cells), including the empty-constraint case.
+    let mut cell_index = 0;
+    feasible.retain(|ordinal| {
+        let mut passes = true;
+        while let Some(cell) = cells
+            .get(cell_index)
+            .filter(|cell| cell.ordinal == *ordinal)
+        {
+            passes &= cell.decision.is_pass();
+            cell_index += 1;
+        }
+        passes
+    });
+    debug_assert_eq!(cell_index, cells.len());
 }
 
 /// Один execution record существует независимо от наличия constraint на lower.
@@ -646,9 +706,6 @@ where
     Pass(Evaluation::PassEvidence),
     Violation(Evaluation::ViolationEvidence),
 }
-
-pub(crate) type JointConstraintDecisionV1 =
-    PointwiseJointConstraintDecisionV1<ExactSrgb8IdentityV1>;
 
 impl<Evaluation> PointwiseJointConstraintDecisionV1<Evaluation>
 where
@@ -714,7 +771,7 @@ where
 
 /// Полная матрица candidate x constraint x unique physical case плюс отдельная
 /// joint execution matrix candidate x case. Report не знает selection policy.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, PartialEq)]
 pub(crate) struct PointwiseFullHardReportV1<Evaluation, Observation>
 where
     Evaluation: JointPointEvaluatorV1,
@@ -724,8 +781,9 @@ where
     program: PointwiseJointPointProgramV1<Evaluation>,
     candidates: JointCandidateSetV1,
     observation: Observation,
-    executions: Box<[JointExecutionRecordV1]>,
-    cells: Box<[PointwiseJointConstraintCellV1<Evaluation>]>,
+    executions: Vec<JointExecutionRecordV1>,
+    cells: Vec<PointwiseJointConstraintCellV1<Evaluation>>,
+    feasible_ordinals: Vec<CandidateOrdinalV1>,
 }
 
 impl<Evaluation, Observation> PointwiseFullHardReportV1<Evaluation, Observation>
@@ -758,29 +816,17 @@ where
     }
 
     pub(crate) fn classify(self) -> PointwiseHardFeasibilityV1<Evaluation, Observation> {
-        let mut feasible = Vec::new();
-        for candidate in self.candidates.candidates() {
-            if self
-                .cells
-                .iter()
-                .filter(|cell| cell.ordinal == candidate.ordinal)
-                .all(|cell| cell.decision.is_pass())
-            {
-                feasible.push(candidate.ordinal);
-            }
-        }
-        if feasible.is_empty() {
+        if self.feasible_ordinals.is_empty() {
             PointwiseHardFeasibilityV1::Infeasible(self)
         } else {
             PointwiseHardFeasibilityV1::NonEmpty(PointwiseNonEmptyFeasibleJointTuplesV1 {
                 report: self,
-                feasible: feasible.into_boxed_slice(),
             })
         }
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, PartialEq)]
 pub(crate) enum PointwiseHardFeasibilityV1<Evaluation, Observation>
 where
     Evaluation: JointPointEvaluatorV1,
@@ -790,17 +836,13 @@ where
     NonEmpty(PointwiseNonEmptyFeasibleJointTuplesV1<Evaluation, Observation>),
 }
 
-pub(crate) type HardFeasibilityV1 =
-    PointwiseHardFeasibilityV1<ExactSrgb8IdentityV1, RevisionBoundObservationV1>;
-
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, PartialEq)]
 pub(crate) struct PointwiseNonEmptyFeasibleJointTuplesV1<Evaluation, Observation>
 where
     Evaluation: JointPointEvaluatorV1,
     Observation: JointObservationV1,
 {
     report: PointwiseFullHardReportV1<Evaluation, Observation>,
-    feasible: Box<[CandidateOrdinalV1]>,
 }
 
 impl<Evaluation, Observation> PointwiseNonEmptyFeasibleJointTuplesV1<Evaluation, Observation>
@@ -809,42 +851,129 @@ where
     Observation: JointObservationV1,
 {
     pub(crate) fn feasible(&self) -> &[CandidateOrdinalV1] {
-        &self.feasible
+        &self.report.feasible_ordinals
     }
 
     pub(crate) fn candidate_set(&self) -> &JointCandidateSetV1 {
         self.report.candidate_set()
     }
 
+    #[expect(
+        clippy::result_large_err,
+        reason = "ownership-preserving rejection keeps the expensive report retryable without heap allocation or recomputation"
+    )]
     pub(crate) fn select(
         self,
         policy: DeclaredTotalOrderV1,
-    ) -> PointwiseSelectedJointTupleV1<Evaluation, Observation> {
-        let ordinal = policy
-            .order
-            .iter()
-            .copied()
-            .find(|ordinal| self.feasible.binary_search(ordinal).is_ok())
-            .unwrap_or_else(|| unreachable!("validated total order covers nonempty feasible set"));
-        let candidate = *self
+    ) -> Result<
+        PointwiseSelectedJointTupleV1<Evaluation, Observation>,
+        PointwiseSelectionFailureV1<Evaluation, Observation>,
+    > {
+        if !policy.is_bound_to(self.report.candidate_set()) {
+            return Err(PointwiseSelectionFailureV1 {
+                feasible: self,
+                policy,
+                reason: SelectionPolicyErrorV1::CandidateDomainMismatch,
+            });
+        }
+        // Canonical policy entries and feasible ordinals are both sorted by
+        // ordinal. One merge scan finds the feasible entry with minimum
+        // client-declared rank without C×log(F) lookup or auxiliary storage.
+        let mut feasible_index = 0;
+        let mut selected: Option<(usize, usize)> = None;
+        for (candidate_index, entry) in policy.domain.iter().enumerate() {
+            if self.report.feasible_ordinals.get(feasible_index) == Some(&entry.ordinal) {
+                if selected.is_none_or(|(rank, _)| entry.rank < rank) {
+                    selected = Some((entry.rank, candidate_index));
+                }
+                feasible_index += 1;
+            }
+        }
+        let Some((_, candidate_index)) =
+            selected.filter(|_| feasible_index == self.report.feasible_ordinals.len())
+        else {
+            return Err(PointwiseSelectionFailureV1 {
+                feasible: self,
+                policy,
+                reason: SelectionPolicyErrorV1::InternalInvariant,
+            });
+        };
+        let Some(candidate) = self
             .report
             .candidates
             .candidates()
-            .iter()
-            .find(|candidate| candidate.ordinal == ordinal)
-            .unwrap_or_else(|| unreachable!("validated ordinal belongs to candidate set"));
-        PointwiseSelectedJointTupleV1 {
+            .get(candidate_index)
+            .copied()
+        else {
+            return Err(PointwiseSelectionFailureV1 {
+                feasible: self,
+                policy,
+                reason: SelectionPolicyErrorV1::InternalInvariant,
+            });
+        };
+        Ok(PointwiseSelectedJointTupleV1 {
             report: self.report,
             policy,
             candidate,
-        }
+        })
+    }
+}
+
+/// Recoverable selection rejection. A foreign/malformed policy cannot destroy
+/// the expensive full report: the caller can replace only the policy and retry
+/// without recomposition or evaluator execution.
+#[derive(Debug, PartialEq)]
+pub(crate) struct PointwiseSelectionFailureV1<Evaluation, Observation>
+where
+    Evaluation: JointPointEvaluatorV1,
+    Observation: JointObservationV1,
+{
+    feasible: PointwiseNonEmptyFeasibleJointTuplesV1<Evaluation, Observation>,
+    policy: DeclaredTotalOrderV1,
+    reason: SelectionPolicyErrorV1,
+}
+
+impl<Evaluation, Observation> PointwiseSelectionFailureV1<Evaluation, Observation>
+where
+    Evaluation: JointPointEvaluatorV1,
+    Observation: JointObservationV1,
+{
+    pub(crate) const fn feasible(
+        &self,
+    ) -> &PointwiseNonEmptyFeasibleJointTuplesV1<Evaluation, Observation> {
+        &self.feasible
+    }
+
+    pub(crate) const fn policy(&self) -> &DeclaredTotalOrderV1 {
+        &self.policy
+    }
+
+    pub(crate) const fn reason(&self) -> SelectionPolicyErrorV1 {
+        self.reason
+    }
+
+    pub(crate) fn into_parts(
+        self,
+    ) -> (
+        PointwiseNonEmptyFeasibleJointTuplesV1<Evaluation, Observation>,
+        DeclaredTotalOrderV1,
+        SelectionPolicyErrorV1,
+    ) {
+        (self.feasible, self.policy, self.reason)
     }
 }
 
 /// Полный client-declared tie-break. Он не участвует в measurement/report.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct DeclaredTotalOrderV1 {
-    order: Box<[CandidateOrdinalV1]>,
+    order: Vec<CandidateOrdinalV1>,
+    domain: Vec<DeclaredPolicyDomainEntryV1>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct DeclaredPolicyDomainEntryV1 {
+    ordinal: CandidateOrdinalV1,
+    rank: usize,
 }
 
 impl DeclaredTotalOrderV1 {
@@ -855,33 +984,60 @@ impl DeclaredTotalOrderV1 {
         if order.len() != candidates.candidates.len() {
             return Err(SelectionPolicyErrorV1::NotATotalOrder);
         }
-        let mut canonical = order.clone();
-        canonical.sort_unstable();
-        for pair in canonical.windows(2) {
-            if pair[0] == pair[1] {
-                return Err(SelectionPolicyErrorV1::DuplicateOrdinal(pair[0]));
-            }
+        let mut domain = Vec::new();
+        domain
+            .try_reserve_exact(candidates.candidates.len())
+            .map_err(|_| SelectionPolicyErrorV1::ResourceExhausted)?;
+        domain.extend(
+            order
+                .iter()
+                .copied()
+                .enumerate()
+                .map(|(rank, ordinal)| DeclaredPolicyDomainEntryV1 { ordinal, rank }),
+        );
+        domain.sort_unstable_by_key(|entry| entry.ordinal);
+        if let Some(pair) = domain
+            .windows(2)
+            .find(|pair| pair[0].ordinal == pair[1].ordinal)
+        {
+            return Err(SelectionPolicyErrorV1::DuplicateOrdinal(pair[0].ordinal));
         }
-        if canonical.iter().copied().ne(candidates
+        if domain.iter().map(|entry| entry.ordinal).ne(candidates
             .candidates
             .iter()
             .map(|candidate| candidate.ordinal))
         {
             return Err(SelectionPolicyErrorV1::NotATotalOrder);
         }
-        Ok(Self {
-            order: order.into_boxed_slice(),
-        })
+        Ok(Self { order, domain })
+    }
+
+    pub(crate) fn order(&self) -> &[CandidateOrdinalV1] {
+        &self.order
+    }
+
+    pub(crate) fn into_order(self) -> Vec<CandidateOrdinalV1> {
+        self.order
+    }
+
+    fn is_bound_to(&self, candidates: &JointCandidateSetV1) -> bool {
+        self.domain.iter().map(|entry| entry.ordinal).eq(candidates
+            .candidates
+            .iter()
+            .map(|candidate| candidate.ordinal))
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SelectionPolicyErrorV1 {
+    ResourceExhausted,
     DuplicateOrdinal(CandidateOrdinalV1),
     NotATotalOrder,
+    CandidateDomainMismatch,
+    InternalInvariant,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, PartialEq)]
 pub(crate) struct PointwiseSelectedJointTupleV1<Evaluation, Observation>
 where
     Evaluation: JointPointEvaluatorV1,
@@ -910,9 +1066,10 @@ where
         // A revision-bound report can enter this consuming chain only through
         // `evaluate_revision_bound` with a Session-minted linear permit. Static
         // reports have a different concrete observation type.
-        self.report
+        let root_binding = self
+            .report
             .program
-            .validate_observation(&self.report.observation)
+            .bind_observation_surface(&self.report.observation)
             .map_err(|_| PointwiseSelectedRecheckErrorV1::InvariantDrift)?;
         let cases = self.report.observation.case_count();
         let (execution_count, cell_count) =
@@ -924,6 +1081,7 @@ where
             .execute(
                 core::slice::from_ref(&self.candidate),
                 &self.report.observation,
+                root_binding,
                 execution_count,
                 cell_count,
             )
@@ -939,15 +1097,18 @@ where
                     PointwiseSelectedRecheckErrorV1::InvariantDrift
                 }
             })?;
-        if let Some(violation) = matrices
+        if let Some(violation_index) = matrices
             .cells
             .iter()
-            .find(|cell| !cell.decision.is_pass())
-            .cloned()
+            .position(|cell| !cell.decision.is_pass())
         {
-            return Err(PointwiseSelectedRecheckErrorV1::Violation(Box::new(
-                violation,
-            )));
+            return Err(PointwiseSelectedRecheckErrorV1::Violation {
+                evidence: PointwiseFreshJointRecheckV1 {
+                    executions: matrices.executions,
+                    cells: matrices.cells,
+                },
+                violation_index,
+            });
         }
         Ok(PointwiseVerifiedSelectionV1 {
             selected: self,
@@ -959,7 +1120,7 @@ where
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, PartialEq)]
 pub(crate) enum PointwiseSelectedRecheckErrorV1<Evaluation>
 where
     Evaluation: JointPointEvaluatorV1,
@@ -967,19 +1128,22 @@ where
     ResourceExhausted,
     InvariantDrift,
     Evaluator(Evaluation::Error),
-    Violation(Box<PointwiseJointConstraintCellV1<Evaluation>>),
+    Violation {
+        evidence: PointwiseFreshJointRecheckV1<Evaluation>,
+        violation_index: usize,
+    },
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, PartialEq)]
 pub(crate) struct PointwiseFreshJointRecheckV1<Evaluation>
 where
     Evaluation: JointPointEvaluatorV1,
 {
-    executions: Box<[JointExecutionRecordV1]>,
-    cells: Box<[PointwiseJointConstraintCellV1<Evaluation>]>,
+    executions: Vec<JointExecutionRecordV1>,
+    cells: Vec<PointwiseJointConstraintCellV1<Evaluation>>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, PartialEq)]
 pub(crate) struct PointwiseVerifiedSelectionV1<Evaluation, Observation>
 where
     Evaluation: JointPointEvaluatorV1,

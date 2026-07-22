@@ -73,27 +73,22 @@ pub(crate) enum PairLabelRequirementV1 {
     Wcag22(Wcag22CriterionV1),
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, PartialEq)]
 enum PairSelectionEvidenceV1 {
     Unconstrained(PointwiseVerifiedSelectionV1<ExactSrgb8IdentityV1, StaticJointObservationV1>),
     Wcag22(PointwiseVerifiedSelectionV1<Wcag22Srgb8V1, StaticJointObservationV1>),
 }
 
 /// Полное fresh evidence одной выбранной Pair-кандидатуры.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, PartialEq)]
 pub(crate) struct VerifiedPairV1 {
     evidence: PairSelectionEvidenceV1,
+    execution: JointExecutionRecordV1,
 }
 
 impl VerifiedPairV1 {
     fn execution(&self) -> &JointExecutionRecordV1 {
-        let executions = match &self.evidence {
-            PairSelectionEvidenceV1::Unconstrained(evidence) => evidence.fresh_executions(),
-            PairSelectionEvidenceV1::Wcag22(evidence) => evidence.fresh_executions(),
-        };
-        executions.first().unwrap_or_else(|| {
-            unreachable!("one selected Pair tuple over one case has one execution")
-        })
+        &self.execution
     }
 
     pub(crate) fn ordinal(&self) -> CandidateOrdinalV1 {
@@ -120,7 +115,7 @@ impl VerifiedPairV1 {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, PartialEq)]
 pub(crate) enum PairLoweringErrorV1 {
     Candidate(CandidateSetErrorV1),
     Program(JointProgramErrorV1),
@@ -131,6 +126,7 @@ pub(crate) enum PairLoweringErrorV1 {
     WcagInfeasible(Box<PointwiseFullHardReportV1<Wcag22Srgb8V1, StaticJointObservationV1>>),
     ExactRecheck(PointwiseSelectedRecheckErrorV1<ExactSrgb8IdentityV1>),
     WcagRecheck(PointwiseSelectedRecheckErrorV1<Wcag22Srgb8V1>),
+    InternalInvariant,
 }
 
 /// Материализовать fill occurrence без role-specific эвристики.
@@ -196,10 +192,17 @@ pub(crate) fn select_label_candidates(
             };
             let verified = feasible
                 .select(policy)
+                .map_err(|failure| PairLoweringErrorV1::Policy(failure.reason()))?
                 .recheck()
                 .map_err(PairLoweringErrorV1::ExactRecheck)?;
+            let execution = verified
+                .fresh_executions()
+                .first()
+                .copied()
+                .ok_or(PairLoweringErrorV1::InternalInvariant)?;
             Ok(VerifiedPairV1 {
                 evidence: PairSelectionEvidenceV1::Unconstrained(verified),
+                execution,
             })
         }
         PairLabelRequirementV1::Wcag22(criterion) => {
@@ -227,10 +230,17 @@ pub(crate) fn select_label_candidates(
             };
             let verified = feasible
                 .select(policy)
+                .map_err(|failure| PairLoweringErrorV1::Policy(failure.reason()))?
                 .recheck()
                 .map_err(PairLoweringErrorV1::WcagRecheck)?;
+            let execution = verified
+                .fresh_executions()
+                .first()
+                .copied()
+                .ok_or(PairLoweringErrorV1::InternalInvariant)?;
             Ok(VerifiedPairV1 {
                 evidence: PairSelectionEvidenceV1::Wcag22(verified),
+                execution,
             })
         }
     }

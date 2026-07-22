@@ -26,7 +26,10 @@ use crate::numerics::{
     NumericalEvidenceClassV2, NumericalFallbackStatusV1, NumericalProofIdV2, NumericalSiteIdV2,
     StableNumericalOutcomeV2, numerical_registry_v2,
 };
-use crate::observation::{ObservationSchemaMismatchV1, RevisionBoundObservationV1, ScenarioId};
+use crate::observation::{
+    CanonicalObservationSchemaV1, ObservationError, ObservationSchemaMismatchV1,
+    RevisionBoundObservationV1, ScenarioId, canonicalize_observation_schema,
+};
 use crate::session::SessionObservationBindingPermitV1;
 use crate::wcag22::{Wcag22CriterionV1, Wcag22MeasurementV1, measure_wcag22_srgb8};
 
@@ -139,18 +142,18 @@ pub(crate) enum PointSupportCompileErrorV1 {
     NumericalRegistryInvariant,
 }
 
-/// Private compiler output for one role table. It owns its canonical surface
-/// schema, but preserves declared occurrence order because that order is the
-/// client-owned packed ordinal and witness order. Prebound surface indices are
-/// only a cache: runtime keyed bindings remain truth and every cached position
-/// is checked against its exact port before use.
+/// Private compiler output for one role table. It owns the canonical shared
+/// surface schema, but preserves declared occurrence order because that order
+/// is the client-owned packed ordinal and witness order. Runtime observations
+/// share this exact schema backing, so prebound positions require no keyed
+/// lookup or per-case schema scan.
 #[derive(Debug, PartialEq, Eq)]
 #[cfg_attr(test, derive(Clone))]
 pub(crate) struct CompiledPointSupportRecheckV1 {
     physical_program: PhysicalProgramIdentityV1,
     composition_profile: CompositionProfileV1,
     occurrences: Vec<PointSupportOccurrenceRequirementV1>,
-    surface_schema: Vec<SurfaceInputPortId>,
+    surface_schema: CanonicalObservationSchemaV1,
     surface_indices: Vec<usize>,
     baselines: Vec<Option<EnabledBaselineV1>>,
 }
@@ -233,6 +236,13 @@ impl CompiledPointSupportRecheckV1 {
                 .map_err(|_| PointSupportCompileErrorV1::SurfaceSchemaInvariant)?;
             surface_indices.push(index);
         }
+        let surface_schema = canonicalize_observation_schema(surface_schema).map_err(|error| {
+            if matches!(error, ObservationError::ResourceExhausted) {
+                PointSupportCompileErrorV1::ResourceExhausted
+            } else {
+                PointSupportCompileErrorV1::SurfaceSchemaInvariant
+            }
+        })?;
 
         let mut baselines = Vec::new();
         baselines
@@ -297,7 +307,7 @@ impl CompiledPointSupportRecheckV1 {
     }
 
     pub(crate) fn surface_schema(&self) -> &[SurfaceInputPortId] {
-        &self.surface_schema
+        self.surface_schema.as_slice()
     }
 
     pub(crate) fn into_session_recheck(self) -> BoundPointSupportRecheckV1 {
@@ -326,7 +336,7 @@ pub(crate) struct BoundPointSupportRecheckV1 {
     physical_program: PhysicalProgramIdentityV1,
     composition_profile: CompositionProfileV1,
     occurrences: Vec<PointSupportOccurrenceRequirementV1>,
-    surface_schema: Vec<SurfaceInputPortId>,
+    surface_schema: CanonicalObservationSchemaV1,
     surface_indices: Vec<usize>,
     baselines: Vec<Option<EnabledBaselineV1>>,
 }
@@ -336,7 +346,7 @@ impl BoundPointSupportRecheckV1 {
         self.composition_profile
     }
 
-    pub(crate) fn surface_schema(&self) -> &[SurfaceInputPortId] {
+    pub(crate) const fn observation_schema(&self) -> &CanonicalObservationSchemaV1 {
         &self.surface_schema
     }
 
@@ -787,9 +797,12 @@ fn evaluate_bound_point_support(
     {
         return Err(PointSupportEvaluationErrorV1::CompiledPlanInvariant);
     }
-    observation
-        .validate_surface_schema(&plan.surface_schema)
-        .map_err(PointSupportEvaluationErrorV1::ObservationSchemaMismatch)?;
+    if !observation.shares_schema_backing_with(&plan.surface_schema) {
+        observation
+            .validate_surface_schema(plan.surface_schema.as_slice())
+            .map_err(PointSupportEvaluationErrorV1::ObservationSchemaMismatch)?;
+        return Err(PointSupportEvaluationErrorV1::CompiledPlanInvariant);
+    }
 
     let cell_count = observation
         .physical_case_count()
@@ -807,7 +820,10 @@ fn evaluate_bound_point_support(
     let mut first_required_failure_index = None;
     let mut first_stability_failure_index = None;
 
-    for (case_index, case) in observation.set().cases().iter().enumerate() {
+    for case_index in 0..observation.physical_case_count() {
+        let values = observation
+            .physical_values(case_index)
+            .ok_or(PointSupportEvaluationErrorV1::CompiledPlanInvariant)?;
         for (occurrence_index, requirement) in plan.occurrences.iter().enumerate() {
             let surface_index = *plan
                 .surface_indices
@@ -817,7 +833,7 @@ fn evaluate_bound_point_support(
                 .baselines
                 .get(occurrence_index)
                 .ok_or(PointSupportEvaluationErrorV1::CompiledPlanInvariant)?;
-            let binding = case.bindings().get(surface_index).ok_or(
+            let backdrop = values.get(surface_index).copied().ok_or(
                 PointSupportEvaluationErrorV1::ObservationSchemaMismatch(
                     ObservationSchemaMismatchV1::new(
                         case_index,
@@ -827,17 +843,6 @@ fn evaluate_bound_point_support(
                     ),
                 ),
             )?;
-            if binding.port() != requirement.surface {
-                return Err(PointSupportEvaluationErrorV1::ObservationSchemaMismatch(
-                    ObservationSchemaMismatchV1::new(
-                        case_index,
-                        surface_index,
-                        Some(requirement.surface),
-                        Some(binding.port()),
-                    ),
-                ));
-            }
-            let backdrop = binding.value();
             let physical = PointOpacityOverSurfaceV1::evaluate_admitted(
                 requirement.paint.source().bytes(),
                 requirement.paint.opacity(),
