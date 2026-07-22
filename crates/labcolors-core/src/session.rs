@@ -66,14 +66,21 @@ where
 /// A compiled, statically dispatched evaluator used by the sole [`Session`]
 /// lifecycle. Implementations own their per-Session scratch directly.
 pub(crate) trait SessionPlanV1: private::PlanSealed {
+    /// One owned lease over the exact compiled owner generation used by an
+    /// update. Acquiring it is the first operation in the transaction, so an
+    /// expired plan cannot admit raw state or reach physical execution.
+    type OwnerLease;
     type Verified: SessionEvidenceV1;
     type Violation: SessionEvidenceV1;
     type Error;
+
+    fn try_acquire_owner(&self) -> Option<Self::OwnerLease>;
 
     fn observation_schema(&self) -> &CanonicalObservationSchemaV1;
 
     fn evaluate(
         &mut self,
+        owner: &Self::OwnerLease,
         observation: RevisionBoundObservationV1,
         permit: SessionObservationBindingPermitV1,
     ) -> Result<SessionDecision<Self::Verified, Self::Violation>, Self::Error>;
@@ -128,6 +135,7 @@ impl ObservationOwnerV1 for SessionObservationHeadV1 {
 /// An update failed before either raw-head or lifecycle commit.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum SessionUpdateError<PlanError> {
+    OwnerExpired,
     Observation(ObservationError),
     Plan(PlanError),
     EvidenceBindingInvariant,
@@ -139,8 +147,10 @@ type SessionUpdateResult<'session, Plan> = Result<
 >;
 
 /// The only production owner of revision admission and evaluator lifecycle.
-/// `Plan` is monomorphized; there is no plan enum, dynamic dispatch, adapter,
-/// weak owner or expiration branch.
+/// `Plan` is monomorphized; there is no plan enum, dynamic dispatch or adapter.
+/// A plan may keep only a weak reference to its compiled owner generation;
+/// every update pins that exact generation before admission and releases it
+/// after commit or rollback.
 #[derive(Debug)]
 pub(crate) struct Session<Plan: SessionPlanV1> {
     stream: ObservationStreamId,
@@ -179,6 +189,10 @@ impl<Plan: SessionPlanV1> Session<Plan> {
         &mut self,
         update: ObservationUpdateInput,
     ) -> SessionUpdateResult<'_, Plan> {
+        let owner = self
+            .plan
+            .try_acquire_owner()
+            .ok_or(SessionUpdateError::OwnerExpired)?;
         let prepared = prepare_observation(&mut self.raw_head, self.stream, &self.schema, update)
             .map_err(SessionUpdateError::Observation)?;
 
@@ -205,7 +219,11 @@ impl<Plan: SessionPlanV1> Session<Plan> {
                 let next_raw_head = SessionObservationHeadV1::Observed(observation.clone());
                 let decision = self
                     .plan
-                    .evaluate(observation, SessionObservationBindingPermitV1::mint())
+                    .evaluate(
+                        &owner,
+                        observation,
+                        SessionObservationBindingPermitV1::mint(),
+                    )
                     .map_err(SessionUpdateError::Plan)?;
                 let SessionObservationHeadV1::Observed(expected_observation) = &next_raw_head
                 else {

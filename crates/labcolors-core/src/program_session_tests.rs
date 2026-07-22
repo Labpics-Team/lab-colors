@@ -16,7 +16,7 @@ use crate::program_session::{
     Source, SourceId, Surface, Target, TargetId, canonical_surface_input_port_sequence_matches,
     check_render_node_count,
 };
-use crate::session::SessionState;
+use crate::session::{SessionState, SessionUpdateError};
 
 const SOURCE: SourceId = SourceId::new(1);
 const TARGET: TargetId = TargetId::new(1);
@@ -521,7 +521,7 @@ fn canonical_helpers_and_checked_cardinality_fail_closed() {
 }
 
 #[test]
-fn independently_instantiated_streams_survive_the_compiled_handle() {
+fn independently_instantiated_streams_expire_with_their_compiled_owner_generation() {
     let compiled = exact_compiled(ConstraintSet::new(
         vec![ConstraintInvocation::hard(
             REQUIRED,
@@ -534,23 +534,18 @@ fn independently_instantiated_streams_survive_the_compiled_handle() {
     let mut second = compiled.instantiate(STREAM_B).unwrap();
     drop(compiled);
 
-    let first_state = first
-        .update(observed_update(STREAM_A, 1, &[(1, [0xFF; 3])]))
-        .unwrap();
-    let SessionState::Ready { current: first } = first_state else {
-        panic!("first independent stream must verify");
-    };
-    assert_eq!(first.outputs().len(), 1);
-
-    let second_state = second
-        .update(observed_update(STREAM_B, 9, &[(2, [0xFF; 3])]))
-        .unwrap();
-    let SessionState::Ready { current: second } = second_state else {
-        panic!("second independent stream must verify after compiled handle drop");
-    };
-    assert_eq!(second.outputs().len(), 1);
-    assert_eq!(first.report().observation().revision(), Revision::new(1));
-    assert_eq!(second.report().observation().revision(), Revision::new(9));
+    assert!(matches!(
+        first.update(observed_update(STREAM_A, 1, &[(1, [0xFF; 3])])),
+        Err(SessionUpdateError::OwnerExpired),
+    ));
+    assert!(matches!(
+        second.update(observed_update(STREAM_B, 9, &[(2, [0xFF; 3])])),
+        Err(SessionUpdateError::OwnerExpired),
+    ));
+    assert!(matches!(first.state(), SessionState::Waiting));
+    assert!(matches!(second.state(), SessionState::Waiting));
+    assert_eq!(first.raw_head(), ObservationHeadViewV1::Empty);
+    assert_eq!(second.raw_head(), ObservationHeadViewV1::Empty);
 }
 
 #[test]

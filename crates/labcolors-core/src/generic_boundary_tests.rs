@@ -207,8 +207,11 @@ fn shared_observation_ssot_has_one_backing_without_lifecycle_or_adapter_facades(
         "production must have exactly one generic revision-bound Session owner",
     );
     for required in [
+        "type OwnerLease;",
         "type Verified: SessionEvidenceV1;",
         "type Violation: SessionEvidenceV1;",
+        "fn try_acquire_owner(&self) -> Option<Self::OwnerLease>;",
+        "SessionUpdateError::OwnerExpired",
         ".is_same_binding_as(expected_observation)",
         "SessionUpdateError::EvidenceBindingInvariant",
     ] {
@@ -239,7 +242,6 @@ fn shared_observation_ssot_has_one_backing_without_lifecycle_or_adapter_facades(
             "into_session_recheck",
             "ObservationStreamBinding",
             "ProgramExpired",
-            "Weak<",
         ] {
             assert!(
                 !source.contains(forbidden),
@@ -247,6 +249,31 @@ fn shared_observation_ssot_has_one_backing_without_lifecycle_or_adapter_facades(
             );
         }
     }
+    for (path, source) in [
+        ("session.rs", SESSION_SOURCE),
+        ("point_support.rs", POINT_SUPPORT_SOURCE),
+    ] {
+        assert!(
+            !source.contains("Weak<"),
+            "{path} must not create another weak ownership boundary",
+        );
+    }
+
+    let update = normalized_source_scope(
+        SESSION_SOURCE,
+        "pub(crate) fn update(",
+        "/// Move exactly one retained verified witness",
+    );
+    let owner_preflight = update
+        .find(".try_acquire_owner()")
+        .expect("Session update must acquire the exact owner generation");
+    let admission = update
+        .find("prepare_observation(")
+        .expect("Session update must perform canonical admission");
+    assert!(
+        owner_preflight < admission,
+        "owner expiry must precede raw admission and physical execution",
+    );
 
     let consuming_entry = source_scope(
         POINT_SUPPORT_SOURCE,
@@ -419,8 +446,30 @@ fn program_session_owns_context_bound_lcs_evidence_and_one_session_scratch_cache
 
     let plan = source_scope(
         PROGRAM_SESSION_SOURCE,
-        "pub struct ProgramSessionPlan<Evaluation>",
+        "pub(crate) struct ProgramSessionPlan<Evaluation>",
         "impl<Evaluation> session_private::PlanSealed for ProgramSessionPlan<Evaluation>",
+    );
+    assert_eq!(
+        plan.matches("owner_generation: Weak<ProgramEpochV1<Evaluation>>,")
+            .count(),
+        1,
+        "a Program Session must hold exactly one weak compiled-generation binding",
+    );
+    assert!(
+        !plan.contains("epoch: Rc<ProgramEpochV1<Evaluation>>,"),
+        "a Program Session must not prolong its CompiledProgram owner",
+    );
+    let compiled = source_scope(
+        PROGRAM_SESSION_SOURCE,
+        "pub struct CompiledProgram<Evaluation>",
+        "impl<Evaluation> CompiledProgram<Evaluation>",
+    );
+    assert_eq!(
+        compiled
+            .matches("owner_generation: Rc<ProgramEpochV1<Evaluation>>,")
+            .count(),
+        1,
+        "CompiledProgram must be the one strong owner of its generation",
     );
     assert_eq!(
         plan.matches("modeled_occurrences: Vec<Option<ModeledLcsOccurrenceV1>>,")

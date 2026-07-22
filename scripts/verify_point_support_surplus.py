@@ -58,7 +58,7 @@ SITE_ID = "point-support-retained-reference-surplus-v1"
 SOURCE_BINDING_LAW = "point-support-rust-whole-file-semantic-cone-v2"
 SOURCE_BINDING_DOMAIN = b"labcolors.point-support.rust-whole-file-semantic-cone.v2"
 EXPECTED_SOURCE_CAPSULE_SHA256 = (
-    "2e63424882231ec2f00ae79911bf74cfb935bb96f11368bce53240468f7f2dd4"
+    "f5e813b21df3bad8c93fa3525190715110b4965792f5b7a2a0bfde7a3b4297d3"
 )
 EXPECTED_Q55_PROOF_SHA256 = (
     "ac59cf89503170c789223b91d775213a19d4e571ef930f2ea609fcd51b14defd"
@@ -211,7 +211,7 @@ def verify_source_binding() -> tuple[str, int]:
         (SESSION_SOURCE, b"                let next_raw_head = SessionObservationHeadV1::Observed(observation.clone());\n", b"                let next_raw_head = SessionObservationHeadV1::Empty;\n"),
         (SESSION_SOURCE, b"                *raw_head = next_raw_head;\n", b"                *raw_head = SessionObservationHeadV1::Empty;\n"),
         (SESSION_SOURCE, b"                    Some(previous) => SessionState::Stale { previous },", b"                    Some(_) => SessionState::Waiting,"),
-        (SESSION_SOURCE, b"                    .evaluate(observation, SessionObservationBindingPermitV1::mint())", b"                    .evaluate(observation, SessionObservationBindingPermitV1::for_test())"),
+        (SESSION_SOURCE, b"                        SessionObservationBindingPermitV1::mint(),", b"                        SessionObservationBindingPermitV1::for_test(),"),
         (SESSION_SOURCE, b"                    SessionDecision::Verified(current) => SessionState::Ready { current },", b"                    SessionDecision::Verified(current) => SessionState::Stale { previous: current },"),
         (SESSION_SOURCE, b"                    SessionDecision::Violation(cause) => SessionState::Failed { cause, previous },", b"                    SessionDecision::Violation(_) => SessionState::Waiting,"),
         (SESSION_SOURCE, b"                    return Err(SessionUpdateError::EvidenceBindingInvariant);\n", b"                    unreachable!();\n"),

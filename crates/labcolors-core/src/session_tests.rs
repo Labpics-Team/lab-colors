@@ -82,9 +82,14 @@ struct SentinelPlan {
 impl session_private::PlanSealed for SentinelPlan {}
 
 impl SessionPlanV1 for SentinelPlan {
+    type OwnerLease = ();
     type Verified = SentinelVerified;
     type Violation = SentinelViolation;
     type Error = SentinelError;
+
+    fn try_acquire_owner(&self) -> Option<Self::OwnerLease> {
+        Some(())
+    }
 
     fn observation_schema(&self) -> &CanonicalObservationSchemaV1 {
         &self.schema
@@ -92,6 +97,7 @@ impl SessionPlanV1 for SentinelPlan {
 
     fn evaluate(
         &mut self,
+        _owner: &Self::OwnerLease,
         observation: RevisionBoundObservationV1,
         _permit: SessionObservationBindingPermitV1,
     ) -> Result<SessionDecision<Self::Verified, Self::Violation>, Self::Error> {
@@ -123,6 +129,52 @@ impl SessionPlanV1 for SentinelPlan {
                 observation,
             }))
         }
+    }
+}
+
+#[derive(Debug)]
+struct ReplacingOwnerPlan {
+    schema: CanonicalObservationSchemaV1,
+    generation: std::rc::Weak<()>,
+    owner_slot: Rc<RefCell<Option<Rc<()>>>>,
+    evaluations: Rc<Cell<usize>>,
+}
+
+impl session_private::PlanSealed for ReplacingOwnerPlan {}
+
+impl SessionPlanV1 for ReplacingOwnerPlan {
+    type OwnerLease = Rc<()>;
+    type Verified = SentinelVerified;
+    type Violation = SentinelViolation;
+    type Error = SentinelError;
+
+    fn try_acquire_owner(&self) -> Option<Self::OwnerLease> {
+        self.generation.upgrade()
+    }
+
+    fn observation_schema(&self) -> &CanonicalObservationSchemaV1 {
+        &self.schema
+    }
+
+    fn evaluate(
+        &mut self,
+        owner: &Self::OwnerLease,
+        observation: RevisionBoundObservationV1,
+        _permit: SessionObservationBindingPermitV1,
+    ) -> Result<SessionDecision<Self::Verified, Self::Violation>, Self::Error> {
+        self.evaluations.set(self.evaluations.get() + 1);
+        let old_generation = self
+            .owner_slot
+            .borrow_mut()
+            .replace(Rc::new(()))
+            .expect("the first owner generation must still be installed");
+        assert!(Rc::ptr_eq(owner, &old_generation));
+        drop(old_generation);
+        assert!(
+            self.generation.upgrade().is_some(),
+            "the transaction lease must pin its starting owner generation"
+        );
+        Ok(SessionDecision::Verified(SentinelVerified { observation }))
     }
 }
 
@@ -414,6 +466,40 @@ fn detached_plan_evidence_is_rejected_before_raw_or_lifecycle_commit() {
 }
 
 #[test]
+fn reentrant_owner_replacement_finishes_on_its_pinned_generation_then_expires() {
+    let schema = canonicalize_observation_schema(vec![SURFACE]).unwrap();
+    let first_generation = Rc::new(());
+    let owner_slot = Rc::new(RefCell::new(Some(Rc::clone(&first_generation))));
+    let evaluations = Rc::new(Cell::new(0));
+    let mut session = Session::new(
+        STREAM,
+        ReplacingOwnerPlan {
+            schema,
+            generation: Rc::downgrade(&first_generation),
+            owner_slot: Rc::clone(&owner_slot),
+            evaluations: Rc::clone(&evaluations),
+        },
+    );
+    drop(first_generation);
+
+    let SessionState::Ready { current } = session.update(observed_update(1, [255; 3])).unwrap()
+    else {
+        panic!("the transaction pinned before replacement must commit");
+    };
+    assert_eq!(current.observation.revision(), Revision::new(1));
+    assert_eq!(evaluations.get(), 1);
+    assert!(owner_slot.borrow().is_some());
+
+    assert_eq!(
+        session.update(observed_update(2, [0; 3])),
+        Err(SessionUpdateError::OwnerExpired),
+    );
+    assert_eq!(evaluations.get(), 1);
+    assert_eq!(session.raw_head().revision(), Some(Revision::new(1)));
+    assert_eq!(verified_revision(session.state()), Some(Revision::new(1)));
+}
+
+#[test]
 fn session_source_contains_one_generic_update_owner_and_no_legacy_runtime() {
     let source = include_str!("session.rs");
     assert_eq!(source.matches("pub(crate) fn update(").count(), 1);
@@ -421,7 +507,6 @@ fn session_source_contains_one_generic_update_owner_and_no_legacy_runtime() {
         "PointSupportSessionV1",
         "PointSupportSessionStateV1",
         "PointSupportSessionUpdateErrorV1",
-        "Weak<",
         "ProgramExpired",
         "ObservationStreamBinding",
         "SurfaceUpdate",

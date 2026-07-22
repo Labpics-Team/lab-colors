@@ -11,7 +11,7 @@
 //! is renderer observation or human-subject evidence.
 
 use std::marker::PhantomData;
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
 
 use crate::Srgb8;
 use crate::appearance::{
@@ -555,7 +555,7 @@ where
 
     pub fn compile(self) -> Result<CompiledProgram<Evaluation>, ProgramCompileError> {
         prepare_program(self).map(|epoch| CompiledProgram {
-            epoch: Rc::new(epoch),
+            owner_generation: Rc::new(epoch),
         })
     }
 }
@@ -750,13 +750,21 @@ where
     joint_selection: Option<CompiledJointSelectionV1>,
 }
 
+/// Transaction-local strong pin for one exact compiled Program generation.
+/// Construction is possible only by upgrading a Session plan's weak binding;
+/// the contained epoch never becomes an independently shareable API.
+pub(crate) struct ProgramOwnerLeaseV1<Evaluation>(Rc<ProgramEpochV1<Evaluation>>)
+where
+    Evaluation: ProgramPointEvaluatorV1,
+    ProgramPointInvocation<Evaluation>: Copy;
+
 /// Fully validated immutable Program, not yet attached to runtime.
 pub struct CompiledProgram<Evaluation>
 where
     Evaluation: ProgramPointEvaluatorV1,
     ProgramPointInvocation<Evaluation>: Copy,
 {
-    epoch: Rc<ProgramEpochV1<Evaluation>>,
+    owner_generation: Rc<ProgramEpochV1<Evaluation>>,
 }
 
 impl<Evaluation> CompiledProgram<Evaluation>
@@ -765,53 +773,55 @@ where
     ProgramPointInvocation<Evaluation>: Copy,
 {
     pub fn observation_group_id(&self) -> ObservationGroupId {
-        self.epoch.observation_group.id
+        self.owner_generation.observation_group.id
     }
 
     pub fn surface_input_ports(&self) -> &[SurfaceInputPortId] {
-        self.epoch.observation_group.schema.as_slice()
+        self.owner_generation.observation_group.schema.as_slice()
     }
 
     pub fn constraint_ids(&self) -> impl ExactSizeIterator<Item = ConstraintId> + '_ {
-        self.epoch
+        self.owner_generation
             .constraints
             .iter()
             .map(|constraint| constraint.id)
     }
 
     pub fn outputs(&self) -> impl ExactSizeIterator<Item = (OutputSlotId, PaintId)> + '_ {
-        self.epoch
+        self.owner_generation
             .outputs
             .iter()
             .map(|output| (output.output, output.paint_id))
     }
 
-    /// Create one independent stream-affine Session from the immutable
-    /// compiled epoch. The graph/evaluator/schema stay shared by strong
-    /// ownership; mutable bindings and workspace belong only to this Session.
+    /// Create one independent stream-affine Session for this exact compiled
+    /// owner generation. Mutable bindings and workspace belong to the Session,
+    /// while executable graph/evaluator state is reached only through a weak
+    /// generation binding and expires when this owner is dropped or replaced.
     pub(crate) fn instantiate(
         &self,
         stream: ObservationStreamId,
     ) -> Result<Session<ProgramSessionPlan<Evaluation>>, ProgramSessionInstantiateError> {
         let bindings = self
-            .epoch
+            .owner_generation
             .binding_template
             .try_clone_v1()
             .map_err(map_session_instantiate_error)?;
         let workspace = self
-            .epoch
+            .owner_generation
             .graph
             .new_workspace()
             .map_err(map_session_instantiate_error)?;
         let mut modeled_occurrences = Vec::new();
         modeled_occurrences
-            .try_reserve_exact(self.epoch.occurrence_contexts.len())
+            .try_reserve_exact(self.owner_generation.occurrence_contexts.len())
             .map_err(|_| ProgramSessionInstantiateError::ResourceExhausted)?;
-        modeled_occurrences.resize(self.epoch.occurrence_contexts.len(), None);
+        modeled_occurrences.resize(self.owner_generation.occurrence_contexts.len(), None);
         Ok(Session::new(
             stream,
             ProgramSessionPlan {
-                epoch: Rc::clone(&self.epoch),
+                owner_generation: Rc::downgrade(&self.owner_generation),
+                schema: self.owner_generation.observation_group.schema.clone(),
                 bindings,
                 workspace,
                 modeled_occurrences,
@@ -1180,6 +1190,28 @@ where
     counts: ProgramEvaluationCellCountsV1,
 }
 
+struct SelectedProgramEvaluationBuffersV1<Evaluation>
+where
+    Evaluation: ProgramPointEvaluatorV1,
+{
+    cells: Vec<ProgramConstraintCellV1<Evaluation>>,
+    outputs: Vec<ProgramOutputV1>,
+    expected_cell_count: usize,
+}
+
+impl<Evaluation> PreparedProgramEvaluationBuffersV1<Evaluation>
+where
+    Evaluation: ProgramPointEvaluatorV1,
+{
+    fn take_selected(&mut self) -> SelectedProgramEvaluationBuffersV1<Evaluation> {
+        SelectedProgramEvaluationBuffersV1 {
+            cells: std::mem::take(&mut self.selected_cells),
+            outputs: std::mem::take(&mut self.outputs),
+            expected_cell_count: self.counts.selected,
+        }
+    }
+}
+
 fn prepare_program_evaluation_buffers<Evaluation>(
     epoch: &ProgramEpochV1<Evaluation>,
     observation: &RevisionBoundObservationV1,
@@ -1223,13 +1255,16 @@ where
     })
 }
 
-/// Per-Session mutable execution state backed by one strong immutable epoch.
-pub struct ProgramSessionPlan<Evaluation>
+/// Per-Session mutable execution state bound weakly to one immutable compiled
+/// owner generation. A transaction pins the generation before raw admission;
+/// the Session itself cannot prolong the owner lifetime.
+pub(crate) struct ProgramSessionPlan<Evaluation>
 where
     Evaluation: ProgramPointEvaluatorV1,
     ProgramPointInvocation<Evaluation>: Copy,
 {
-    epoch: Rc<ProgramEpochV1<Evaluation>>,
+    owner_generation: Weak<ProgramEpochV1<Evaluation>>,
+    schema: CanonicalObservationSchemaV1,
     bindings: AdmittedAppearanceBindings,
     workspace: AppearanceWorkspace,
     modeled_occurrences: Vec<Option<ModeledLcsOccurrenceV1>>,
@@ -1247,61 +1282,65 @@ where
     Evaluation: ProgramPointEvaluatorV1,
     ProgramPointInvocation<Evaluation>: Copy,
 {
+    type OwnerLease = ProgramOwnerLeaseV1<Evaluation>;
     type Verified = ProgramVerifiedV1<Evaluation>;
     type Violation = ProgramConflictV1<Evaluation>;
     type Error = ProgramSessionEvaluationError<ProgramEvaluatorError<Evaluation>>;
 
+    fn try_acquire_owner(&self) -> Option<Self::OwnerLease> {
+        self.owner_generation.upgrade().map(ProgramOwnerLeaseV1)
+    }
+
     fn observation_schema(&self) -> &CanonicalObservationSchemaV1 {
-        &self.epoch.observation_group.schema
+        &self.schema
     }
 
     fn evaluate(
         &mut self,
+        owner: &Self::OwnerLease,
         observation: RevisionBoundObservationV1,
         _permit: SessionObservationBindingPermitV1,
     ) -> Result<SessionDecision<Self::Verified, Self::Violation>, Self::Error> {
-        evaluate_program_session(self, observation)
+        evaluate_program_session(self, &owner.0, observation)
     }
 }
 
 fn evaluate_program_session<Evaluation>(
     plan: &mut ProgramSessionPlan<Evaluation>,
+    epoch: &ProgramEpochV1<Evaluation>,
     observation: RevisionBoundObservationV1,
 ) -> ProgramSessionEvaluationResult<Evaluation>
 where
     Evaluation: ProgramPointEvaluatorV1,
     ProgramPointInvocation<Evaluation>: Copy,
 {
-    let epoch = Rc::clone(&plan.epoch);
     let Some(selection) = &epoch.joint_selection else {
-        let mut buffers = prepare_program_evaluation_buffers(&epoch, &observation, None)?;
+        let mut buffers = prepare_program_evaluation_buffers(epoch, &observation, None)?;
         return collect_program_candidate_into(
             plan,
+            epoch,
             observation,
             None,
             1,
-            std::mem::take(&mut buffers.selected_cells),
-            std::mem::take(&mut buffers.outputs),
-            buffers.counts.selected,
+            buffers.take_selected(),
         );
     };
 
     let state_count = selection.order.tuples().len();
-    let mut buffers = prepare_program_evaluation_buffers(&epoch, &observation, Some(state_count))?;
+    let mut buffers = prepare_program_evaluation_buffers(epoch, &observation, Some(state_count))?;
     for (state_index, tuple) in selection.order.tuples().enumerate() {
         apply_joint_candidate(plan, &epoch.finite_targets, tuple)?;
-        if !scan_program_candidate(plan, &observation, state_index, None, None)? {
+        if !scan_program_candidate(plan, epoch, &observation, state_index, None, None)? {
             // A selected tuple is never certified from its allocation-free
             // search pass. Re-apply and collect fresh terminal evidence.
             apply_joint_candidate(plan, &epoch.finite_targets, tuple)?;
             match collect_program_candidate_into(
                 plan,
+                epoch,
                 observation.clone(),
                 Some(state_index),
                 state_index + 1,
-                std::mem::take(&mut buffers.selected_cells),
-                std::mem::take(&mut buffers.outputs),
-                buffers.counts.selected,
+                buffers.take_selected(),
             )? {
                 SessionDecision::Verified(verified) => {
                     return Ok(SessionDecision::Verified(verified));
@@ -1335,6 +1374,7 @@ where
         apply_joint_candidate(plan, &epoch.finite_targets, tuple)?;
         if !scan_program_candidate(
             plan,
+            epoch,
             &observation,
             state_index,
             Some(&mut buffers.conflict_cells),
@@ -1382,27 +1422,32 @@ where
 
 fn collect_program_candidate_into<Evaluation>(
     plan: &mut ProgramSessionPlan<Evaluation>,
+    epoch: &ProgramEpochV1<Evaluation>,
     observation: RevisionBoundObservationV1,
     selected_state_index: Option<usize>,
     considered_state_count: usize,
-    mut cells: Vec<ProgramConstraintCellV1<Evaluation>>,
-    mut outputs: Vec<ProgramOutputV1>,
-    expected_cell_count: usize,
+    buffers: SelectedProgramEvaluationBuffersV1<Evaluation>,
 ) -> ProgramSessionEvaluationResult<Evaluation>
 where
     Evaluation: ProgramPointEvaluatorV1,
     ProgramPointInvocation<Evaluation>: Copy,
 {
+    let SelectedProgramEvaluationBuffersV1 {
+        mut cells,
+        mut outputs,
+        expected_cell_count,
+    } = buffers;
     if !cells.is_empty()
         || cells.capacity() < expected_cell_count
         || !outputs.is_empty()
-        || outputs.capacity() < plan.epoch.outputs.len()
+        || outputs.capacity() < epoch.outputs.len()
     {
         return Err(ProgramSessionEvaluationError::InternalInvariant);
     }
     let candidate_state_index = selected_state_index.unwrap_or(0);
     let has_hard_violation = scan_program_candidate(
         plan,
+        epoch,
         &observation,
         candidate_state_index,
         Some(&mut cells),
@@ -1428,6 +1473,7 @@ where
 
 fn scan_program_candidate<Evaluation>(
     plan: &mut ProgramSessionPlan<Evaluation>,
+    epoch: &ProgramEpochV1<Evaluation>,
     observation: &RevisionBoundObservationV1,
     candidate_state_index: usize,
     mut cells: Option<&mut Vec<ProgramConstraintCellV1<Evaluation>>>,
@@ -1437,7 +1483,6 @@ where
     Evaluation: ProgramPointEvaluatorV1,
     ProgramPointInvocation<Evaluation>: Copy,
 {
-    let epoch = &plan.epoch;
     let schema = &epoch.observation_group.schema;
     if !observation.shares_schema_backing_with(schema) {
         observation

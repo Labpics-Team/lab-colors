@@ -9,8 +9,9 @@ use crate::lcs_occurrence::{
     BackgroundLuminanceRatio, ColorSignal, IEC_SRGB_D65_XYZ_FRAME_V1, SurroundProfileId,
 };
 use crate::observation::{
-    ObservationGroupId, ObservationPayloadInput, ObservationStreamId, ObservationUpdateInput,
-    ObservedScenarioSetInput, Revision, ScenarioId, ScenarioInput, SurfaceInputBinding,
+    ObservationGroupId, ObservationHeadViewV1, ObservationPayloadInput, ObservationStreamId,
+    ObservationUpdateInput, ObservedScenarioSetInput, Revision, ScenarioId, ScenarioInput,
+    SurfaceInputBinding,
 };
 use crate::program_session::{
     CompositionProfile, ConstraintId, ConstraintInvocation, ConstraintSet,
@@ -1075,6 +1076,109 @@ fn every_fallible_fixed_preflight_reservation_precedes_evaluator_work() {
         assert!(calls.calls().is_empty());
         assert!(matches!(session.state(), SessionState::Waiting));
     }
+}
+
+fn counting_fixed_program(
+    evaluator: CountingProgramWcag22Srgb8V1,
+) -> crate::program_session::CompiledProgram<CountingProgramWcag22Srgb8V1> {
+    Program::new(
+        vec![Source::new(SOURCE, signal(0xFF))],
+        vec![Target::fixed(TARGET, SOURCE)],
+        ObservationGroup::new(GROUP, vec![SURFACE_PORT]),
+        vec![],
+        vec![Paint::Solid {
+            id: PAINT,
+            target: TARGET,
+        }],
+        vec![Surface::Input {
+            id: BACKDROP,
+            input: SURFACE_PORT,
+        }],
+        vec![Occurrence::new(
+            OCCURRENCE,
+            PAINT,
+            BACKDROP,
+            CompositionProfile::EncodedSrgb8SourceOverV1,
+            appearance_context(),
+        )],
+        ConstraintSet::new(
+            vec![ConstraintInvocation::hard(
+                ConstraintId::new(1),
+                OCCURRENCE,
+                Wcag22CriterionV1::Sc143TextLargeScale,
+            )],
+            vec![],
+        ),
+        vec![OutputBinding::new(OUTPUT, PAINT)],
+        evaluator,
+    )
+    .compile()
+    .unwrap()
+}
+
+#[test]
+fn expired_program_generation_precedes_composition_and_evaluation_without_allocation() {
+    let evaluator = CountingProgramWcag22Srgb8V1::default();
+    let calls = evaluator.clone();
+    let compiled = counting_fixed_program(evaluator);
+    let mut session = compiled.instantiate(STREAM).unwrap();
+
+    crate::composition::reset_source_over_evaluation_count();
+    let SessionState::Ready { current } = session.update(update(1, 0x00)).unwrap() else {
+        panic!("control generation must certify");
+    };
+    assert_eq!(current.report().observation().revision(), Revision::new(1));
+    assert_eq!(calls.calls().len(), 1);
+    assert_eq!(crate::composition::source_over_evaluation_count(), 1);
+
+    drop(compiled);
+    let expired_update = update(2, 0x00);
+    let (error, allocations) = crate::test_support::measured_allocations(|| {
+        session.update(expired_update).map(|_| ()).unwrap_err()
+    });
+    assert_eq!(error, SessionUpdateError::OwnerExpired);
+    assert_eq!(allocations, 0);
+    assert_eq!(calls.calls().len(), 1);
+    assert_eq!(crate::composition::source_over_evaluation_count(), 1);
+    assert_eq!(session.raw_head().revision(), Some(Revision::new(1)));
+    let SessionState::Ready { current } = session.state() else {
+        panic!("expiry must retain the previous committed state");
+    };
+    assert_eq!(current.report().observation().revision(), Revision::new(1));
+}
+
+#[test]
+fn equivalent_recompiled_owner_is_a_new_generation_and_cannot_revive_old_sessions() {
+    let first_evaluator = CountingProgramWcag22Srgb8V1::default();
+    let first_calls = first_evaluator.clone();
+    let mut compiled = counting_fixed_program(first_evaluator);
+    let mut old_session = compiled.instantiate(STREAM).unwrap();
+    assert!(matches!(
+        old_session.update(update(1, 0x00)).unwrap(),
+        SessionState::Ready { .. }
+    ));
+
+    let replacement_evaluator = CountingProgramWcag22Srgb8V1::default();
+    let replacement_calls = replacement_evaluator.clone();
+    compiled = counting_fixed_program(replacement_evaluator);
+    assert!(matches!(
+        old_session.update(update(2, 0x00)),
+        Err(SessionUpdateError::OwnerExpired),
+    ));
+    assert_eq!(first_calls.calls().len(), 1);
+    assert!(replacement_calls.calls().is_empty());
+    assert_eq!(old_session.raw_head().revision(), Some(Revision::new(1)));
+
+    let mut replacement_session = compiled.instantiate(STREAM).unwrap();
+    assert!(matches!(
+        replacement_session.update(update(1, 0x00)).unwrap(),
+        SessionState::Ready { .. }
+    ));
+    assert_eq!(replacement_calls.calls().len(), 1);
+    assert!(matches!(
+        replacement_session.raw_head(),
+        ObservationHeadViewV1::Observed(_)
+    ));
 }
 
 #[test]

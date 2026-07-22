@@ -322,9 +322,14 @@ impl CompiledPointSupportRecheckV1 {
 impl session_private::PlanSealed for CompiledPointSupportRecheckV1 {}
 
 impl SessionPlanV1 for CompiledPointSupportRecheckV1 {
+    type OwnerLease = ();
     type Verified = VerifiedPointSupportV1;
     type Violation = PointSupportViolationV1;
     type Error = PointSupportEvaluationErrorV1;
+
+    fn try_acquire_owner(&self) -> Option<Self::OwnerLease> {
+        Some(())
+    }
 
     fn observation_schema(&self) -> &CanonicalObservationSchemaV1 {
         &self.surface_schema
@@ -332,6 +337,7 @@ impl SessionPlanV1 for CompiledPointSupportRecheckV1 {
 
     fn evaluate(
         &mut self,
+        _owner: &Self::OwnerLease,
         observation: RevisionBoundObservationV1,
         _permit: SessionObservationBindingPermitV1,
     ) -> Result<SessionDecision<Self::Verified, Self::Violation>, Self::Error> {
