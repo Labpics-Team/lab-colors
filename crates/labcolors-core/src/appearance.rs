@@ -759,6 +759,26 @@ struct CompiledOccurrenceSpec {
     profile: CompositionProfileV1,
 }
 
+/// Cold-bound canonical Paint position for allocation-free repeated lookup.
+///
+/// Both fields are private to this module: callers can obtain a slot only from
+/// a compiled graph and cannot forge a raw ordinal. The retained nominal ID is
+/// checked again by every evaluation view before the ordinal is dereferenced.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct CompiledPaintSlotV1 {
+    index: usize,
+    id: PaintId,
+}
+
+/// Cold-bound canonical Occurrence position for allocation-free repeated
+/// lookup. As with [`CompiledPaintSlotV1`], construction remains sealed inside
+/// the compiled appearance graph and every use revalidates the exact ID.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct CompiledOccurrenceSlotV1 {
+    index: usize,
+    id: OccurrenceId,
+}
+
 /// Канонический compiled IR с индексными ссылками: после проверки bindings
 /// исполнение самих Paint/Surface/Occurrence узлов линейно по их числу.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1457,6 +1477,19 @@ impl AppearanceEvaluationView<'_, '_> {
         self.workspace.paints[index].as_ref()
     }
 
+    /// Resolve a compiler-minted Paint slot in constant time.
+    ///
+    /// A slot from a graph whose canonical ordinal names another Paint is
+    /// rejected before returning workspace data. No fallback ID lookup occurs.
+    pub(crate) fn paint_at(&self, slot: CompiledPaintSlotV1) -> Option<&EncodedPointPaintV1> {
+        let spec = self.program.paints.get(slot.index)?;
+        if spec.id() != slot.id {
+            return None;
+        }
+        let paint = self.workspace.paints.get(slot.index)?.as_ref()?;
+        (paint.id == slot.id).then_some(paint)
+    }
+
     pub(crate) fn surface_rgb(&self, id: SurfaceId) -> Option<[u8; 3]> {
         let index = self
             .program
@@ -1473,6 +1506,20 @@ impl AppearanceEvaluationView<'_, '_> {
             .binary_search_by_key(&id, |occurrence| occurrence.id)
             .ok()?;
         self.workspace.occurrences[index].as_ref()
+    }
+
+    /// Resolve a compiler-minted Occurrence slot in constant time, retaining
+    /// exact nominal identity as the fail-closed cross-graph check.
+    pub(crate) fn occurrence_at(
+        &self,
+        slot: CompiledOccurrenceSlotV1,
+    ) -> Option<&ResolvedOccurrence> {
+        let spec = self.program.occurrences.get(slot.index)?;
+        if spec.id != slot.id {
+            return None;
+        }
+        let occurrence = self.workspace.occurrences.get(slot.index)?.as_ref()?;
+        (occurrence.id == slot.id).then_some(occurrence)
     }
 
     pub(crate) fn occurrences(&self) -> impl ExactSizeIterator<Item = &ResolvedOccurrence> + '_ {
@@ -1540,6 +1587,27 @@ impl CompiledAppearanceGraph {
     #[cfg(test)]
     fn matches_program(&self, program: CompiledAppearanceProgram<'_>) -> bool {
         self.program() == program
+    }
+
+    /// Bind one Paint identity to its canonical compiled ordinal.
+    ///
+    /// This is the only cold lookup. Repeated evaluations consume the sealed
+    /// slot through [`AppearanceEvaluationView::paint_at`] without searching.
+    pub(crate) fn bind_paint(&self, id: PaintId) -> Option<CompiledPaintSlotV1> {
+        let index = self
+            .paints
+            .binary_search_by_key(&id, CompiledPaintSpec::id)
+            .ok()?;
+        Some(CompiledPaintSlotV1 { index, id })
+    }
+
+    /// Bind one Occurrence identity to its canonical compiled ordinal.
+    pub(crate) fn bind_occurrence(&self, id: OccurrenceId) -> Option<CompiledOccurrenceSlotV1> {
+        let index = self
+            .occurrences
+            .binary_search_by_key(&id, |occurrence| occurrence.id)
+            .ok()?;
+        Some(CompiledOccurrenceSlotV1 { index, id })
     }
 
     /// Canonical client-owned occurrence identities emitted by this program.
