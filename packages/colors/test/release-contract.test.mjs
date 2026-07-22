@@ -1043,6 +1043,7 @@ test("publish artifact validator executes and rejects identity or byte drift", (
         EXPECTED_TAG: `colors-v${packageVersion}`,
         EXPECTED_NODE: process.versions.node,
         EXPECTED_NPM: "11.9.0",
+        GITHUB_WORKSPACE: root,
         GITHUB_OUTPUT: output,
         PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
       },

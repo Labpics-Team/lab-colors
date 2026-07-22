@@ -322,7 +322,21 @@ def oracle_order(a: int, b: int, c: int, d: int) -> int:
 
 def verify_universal_algebra() -> dict[str, object]:
     """Dependency-free sparse-polynomial certificate for the general laws."""
-    variable_names = ("L", "L1", "L2", "D", "D1", "D2", "S", "p", "q", "x")
+    variable_names = (
+        "L",
+        "L1",
+        "L2",
+        "D",
+        "D1",
+        "D2",
+        "Q",
+        "a",
+        "b",
+        "p",
+        "q",
+        "B",
+        "x",
+    )
     zero_exponents = (0,) * len(variable_names)
 
     def constant(value: int) -> dict[tuple[int, ...], int]:
@@ -361,7 +375,9 @@ def verify_universal_algebra() -> dict[str, object]:
             for right_monomial, right_coefficient in right.items():
                 monomial = tuple(
                     left_power + right_power
-                    for left_power, right_power in zip(left_monomial, right_monomial)
+                    for left_power, right_power in zip(
+                        left_monomial, right_monomial, strict=True
+                    )
                 )
                 result[monomial] = (
                     result.get(monomial, 0) + left_coefficient * right_coefficient
@@ -370,26 +386,72 @@ def verify_universal_algebra() -> dict[str, object]:
                     del result[monomial]
         return result
 
-    one = constant(1)
+    def rational_difference(
+        left_numerator: dict[tuple[int, ...], int],
+        left_denominator: dict[tuple[int, ...], int],
+        right_numerator: dict[tuple[int, ...], int],
+        right_denominator: dict[tuple[int, ...], int],
+    ) -> tuple[dict[tuple[int, ...], int], dict[tuple[int, ...], int]]:
+        return (
+            subtract(
+                multiply(left_numerator, right_denominator),
+                multiply(right_numerator, left_denominator),
+            ),
+            multiply(left_denominator, right_denominator),
+        )
+
     l_value, l1, l2 = variable("L"), variable("L1"), variable("L2")
     d_value, d1, d2 = variable("D"), variable("D1"), variable("D2")
-    scale_value = variable("S")
-    p_value, q_value, drop = variable("p"), variable("q"), variable("x")
+    q55_scale = variable("Q")
+    current_numerator, current_denominator = variable("a"), variable("b")
+    baseline_numerator, baseline_denominator = variable("p"), variable("q")
+    basis_point_scale, drop = variable("B"), variable("x")
 
-    # Anchor identities after clearing their positive denominators.
+    # Subtract each declared ratio from the contrast definition
+    # (20L+Q)/(20D+Q), then compare both numerator and denominator with
+    # anchor_surplus's closed forms. The six explicit mutants ensure that a
+    # wrong 20/2/40/7 coefficient or the 4.5 denominator factor is observable.
     gap = subtract(l_value, d_value)
-    identity_anchor = scale(20, gap)
-    assert identity_anchor == scale(20, gap)
-    assert subtract(identity_anchor, scale(2, add(scale(20, d_value), scale_value))) == subtract(
-        scale(20, gap), scale(2, add(scale(20, d_value), scale_value))
+    denominator = add(scale(20, d_value), q55_scale)
+    contrast_numerator = add(scale(20, l_value), q55_scale)
+    anchor_derivations = (
+        rational_difference(
+            contrast_numerator, denominator, constant(1), constant(1)
+        ),
+        rational_difference(
+            contrast_numerator, denominator, constant(3), constant(1)
+        ),
+        rational_difference(
+            contrast_numerator, denominator, constant(9), constant(2)
+        ),
     )
-    assert subtract(scale(2, identity_anchor), scale(7, add(scale(20, d_value), scale_value))) == subtract(
-        scale(40, gap), scale(7, add(scale(20, d_value), scale_value))
+    anchor_closed_forms = (
+        (scale(20, gap), denominator),
+        (subtract(scale(20, gap), scale(2, denominator)), denominator),
+        (
+            subtract(scale(40, gap), scale(7, denominator)),
+            scale(2, denominator),
+        ),
     )
+    assert anchor_derivations == anchor_closed_forms
+    anchor_mutants = (
+        (scale(19, gap), denominator),
+        (subtract(scale(19, gap), scale(2, denominator)), denominator),
+        (subtract(scale(20, gap), scale(3, denominator)), denominator),
+        (
+            subtract(scale(39, gap), scale(7, denominator)),
+            scale(2, denominator),
+        ),
+        (
+            subtract(scale(40, gap), scale(8, denominator)),
+            scale(2, denominator),
+        ),
+        (subtract(scale(40, gap), scale(7, denominator)), denominator),
+    )
+    assert all(mutant not in anchor_derivations for mutant in anchor_mutants)
 
-    # f(L,D)=20(L-D)/(20D+S): increasing L and decreasing D are polynomial
+    # f(L,D)=20(L-D)/(20D+Q): increasing L and decreasing D are polynomial
     # consequences with strictly positive denominators.
-    denominator = add(scale(20, d_value), scale_value)
     lighter_left = subtract(
         multiply(scale(20, subtract(l2, d_value)), denominator),
         multiply(scale(20, subtract(l1, d_value)), denominator),
@@ -397,19 +459,79 @@ def verify_universal_algebra() -> dict[str, object]:
     lighter_right = multiply(scale(20, subtract(l2, l1)), denominator)
     assert lighter_left == lighter_right
     darker_left = subtract(
-        multiply(subtract(l_value, d1), add(scale(20, d2), scale_value)),
-        multiply(subtract(l_value, d2), add(scale(20, d1), scale_value)),
+        multiply(subtract(l_value, d1), add(scale(20, d2), q55_scale)),
+        multiply(subtract(l_value, d2), add(scale(20, d1), q55_scale)),
     )
-    darker_right = multiply(subtract(d2, d1), add(scale(20, l_value), scale_value))
+    darker_right = multiply(subtract(d2, d1), add(scale(20, l_value), q55_scale))
     assert darker_left == darker_right
 
     # For positive baseline p/q, the retained threshold is exactly
-    # p(S-x)/(qS). Both qS and a current rational's denominator are positive,
-    # so cross multiplication preserves the comparator's order.
-    retained_numerator = multiply(p_value, subtract(scale_value, drop))
-    retained_denominator = multiply(q_value, scale_value)
-    assert multiply(retained_numerator, one) == retained_numerator
-    assert multiply(retained_denominator, one) == retained_denominator
+    # p(B-x)/(qB). Derive current-minus-required as one rational; positivity of
+    # b, q and B makes its sign exactly the sign of the cleared numerator.
+    retained_numerator = multiply(
+        baseline_numerator, subtract(basis_point_scale, drop)
+    )
+    retained_denominator = multiply(baseline_denominator, basis_point_scale)
+    retained_difference = rational_difference(
+        current_numerator,
+        current_denominator,
+        retained_numerator,
+        retained_denominator,
+    )
+    retained_closed_form = (
+        subtract(
+            multiply(
+                multiply(current_numerator, baseline_denominator),
+                basis_point_scale,
+            ),
+            multiply(
+                multiply(
+                    baseline_numerator, subtract(basis_point_scale, drop)
+                ),
+                current_denominator,
+            ),
+        ),
+        multiply(
+            multiply(current_denominator, baseline_denominator),
+            basis_point_scale,
+        ),
+    )
+    assert retained_difference == retained_closed_form
+    retained_mutants = (
+        rational_difference(
+            current_numerator,
+            current_denominator,
+            multiply(baseline_numerator, add(basis_point_scale, drop)),
+            retained_denominator,
+        ),
+        rational_difference(
+            current_numerator,
+            current_denominator,
+            retained_numerator,
+            basis_point_scale,
+        ),
+        (
+            retained_closed_form[0],
+            multiply(baseline_denominator, basis_point_scale),
+        ),
+        (
+            retained_closed_form[0],
+            multiply(current_denominator, baseline_denominator),
+        ),
+        (
+            subtract(
+                multiply(
+                    multiply(current_numerator, baseline_denominator),
+                    basis_point_scale,
+                ),
+                multiply(
+                    baseline_numerator, subtract(basis_point_scale, drop)
+                ),
+            ),
+            retained_closed_form[1],
+        ),
+    )
+    assert all(mutant != retained_difference for mutant in retained_mutants)
 
     query_digest = sha256(WOLFRAM_SYMBOLIC_QUERY.encode("utf-8"))
     result_digest = sha256(WOLFRAM_SYMBOLIC_RESULT.encode("utf-8"))
@@ -417,14 +539,19 @@ def verify_universal_algebra() -> dict[str, object]:
     assert result_digest == EXPECTED_WOLFRAM_RESULT_SHA256
     return {
         "method": "exact-sparse-integer-polynomial-identities-plus-positive-denominator-order-lemma-v1",
-        "domain": "integers; Q55 scale S>0; rational denominators >0; 0<=drop_bps<=S",
+        "domain": "integers; Q55 scale Q>0; anchor L>=D>=0; lighter monotonicity L2>=L1>D>=0; darker monotonicity L>D2>=D1>=0; current/baseline denominators b,q>0; basis-point scale B>0 instantiated as 10000; p>0; a>=0; 0<=drop_bps<=B",
         "identities": [
             "three explicit anchor-surplus formulas after denominator clearing",
             "reference distance is monotone increasing in lighter L",
             "reference distance is monotone decreasing in darker D",
-            "positive-baseline retained threshold is p*(S-drop)/(q*S)",
-            "a/b >= p*(S-drop)/(q*S) iff a*q*S >= p*(S-drop)*b",
+            "positive-baseline retained threshold is p*(B-drop)/(q*B)",
+            "a/b >= p*(B-drop)/(q*B) iff a*q*B >= p*(B-drop)*b",
         ],
+        "basis_point_scale_instantiation": DROP_SCALE,
+        "symbolic_mutation_controls": {
+            "anchor_coefficients_and_denominator": len(anchor_mutants),
+            "retained_cross_product": len(retained_mutants),
+        },
         "nonpositive_baseline_case": "max(baseline,0)=0; retained threshold is exactly zero",
         "wolfram_language_cross_check": {
             "query": WOLFRAM_SYMBOLIC_QUERY,
@@ -469,12 +596,20 @@ def verify_reference_and_anchor_laws(scale: int, maximum: int) -> dict[str, obje
         for darker in (0, 1, scale // 2, scale, maximum):
             denominator = 20 * darker + scale
             distance = Fraction(20 * gap, denominator)
-            for anchor, offset in (
-                ("ratio-1", Fraction(0)),
-                ("ratio-3", Fraction(2)),
-                ("ratio-4.5", Fraction(7, 2)),
+            contrast_numerator = 20 * (darker + gap) + scale
+            for anchor, threshold in (
+                ("ratio-1", Fraction(1)),
+                ("ratio-3", Fraction(3)),
+                ("ratio-4.5", Fraction(9, 2)),
             ):
-                assert anchor_surplus(anchor, gap, denominator) == distance - offset
+                derived_from_definition = (
+                    Fraction(contrast_numerator, denominator) - threshold
+                )
+                assert (
+                    anchor_surplus(anchor, gap, denominator)
+                    == derived_from_definition
+                    == distance - (threshold - 1)
+                )
                 anchor_checks += 1
     # Synthetic exact threshold equalities exercise every rational formula.
     assert anchor_surplus("ratio-1", 0, 37) == 0

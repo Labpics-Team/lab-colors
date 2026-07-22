@@ -124,6 +124,30 @@ class PointSupportSurplusSourceBindingTests(unittest.TestCase):
         self.assertEqual(dependency, self.proof["q55_dependency"])
         self.assertEqual(dependency["maximum_luminance_upper"], (1 << 55) + 3)
 
+    def test_universal_certificate_separates_scales_and_rejects_symbolic_mutants(
+        self,
+    ) -> None:
+        algebra = self.proof["universal_algebraic_certificate"]
+        self.assertEqual(algebra["basis_point_scale_instantiation"], 10_000)
+        self.assertIn("Q55 scale Q>0", algebra["domain"])
+        self.assertIn("basis-point scale B>0 instantiated as 10000", algebra["domain"])
+        self.assertNotIn("Q55 scale S", algebra["domain"])
+        self.assertEqual(
+            algebra["symbolic_mutation_controls"],
+            {
+                "anchor_coefficients_and_denominator": 6,
+                "retained_cross_product": 5,
+            },
+        )
+        self.assertIn(
+            "positive-baseline retained threshold is p*(B-drop)/(q*B)",
+            algebra["identities"],
+        )
+        self.assertIn(
+            "a/b >= p*(B-drop)/(q*B) iff a*q*B >= p*(B-drop)*b",
+            algebra["identities"],
+        )
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
