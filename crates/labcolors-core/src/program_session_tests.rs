@@ -10,11 +10,13 @@ use crate::constraints::{
     ProgramTestEvaluatorV1, ProgramTestInvocationV1, Wcag22Srgb8V1, arm_program_test_failure_once,
     program_test_evaluation_count, reset_program_test_evaluation_count,
 };
+use crate::observation::{ObservationGroupId, ObservationStreamId};
 use crate::program_session::{
     ColorInput, CompiledProgram, CompositionProfile, ConstraintAssessment, ConstraintId,
     ConstraintInvocation, ConstraintOutcome, ConstraintReportEntry, ConstraintSet, HardModeV1,
-    Occurrence, OpacityInput, OutputBinding, OutputSlotId, Paint, Program, ProgramCompileError,
-    ReportModeV1, SessionState, SessionUpdateError, Surface, SurfaceSignal, SurfaceUpdate,
+    ObservationGroup, ObservationStreamBinding, Occurrence, OpacityInput, OutputBinding,
+    OutputSlotId, Paint, PointRenderAttachError, Program, ProgramCompileError, ReportModeV1,
+    SessionState, SessionUpdateError, Surface, SurfaceSignal, SurfaceUpdate, SurfaceUpdatePayload,
     canonical_surface_input_port_sequence_matches, check_render_node_count,
 };
 use crate::wcag22::{Wcag22ApplicableDecisionV1, Wcag22CriterionV1};
@@ -29,6 +31,25 @@ const VISIBLE_SURFACE: SurfaceId = SurfaceId::new(21);
 const OCCURRENCE: OccurrenceId = OccurrenceId::new(30);
 const OUTPUT: OutputSlotId = OutputSlotId::new(40);
 const REQUIRED: ConstraintId = ConstraintId::new(50);
+const GROUP: ObservationGroupId = ObservationGroupId::new(60);
+const OTHER_GROUP: ObservationGroupId = ObservationGroupId::new(61);
+const STREAM_A: ObservationStreamId = ObservationStreamId::new(70);
+const STREAM_B: ObservationStreamId = ObservationStreamId::new(71);
+
+fn observation_group(surface_input_ports: Vec<SurfaceInputPortId>) -> ObservationGroup {
+    ObservationGroup::new(GROUP, surface_input_ports)
+}
+
+const fn stream_binding(
+    group: ObservationGroupId,
+    stream: ObservationStreamId,
+) -> ObservationStreamBinding {
+    ObservationStreamBinding::new(group, stream)
+}
+
+const fn default_stream_binding() -> ObservationStreamBinding {
+    stream_binding(GROUP, STREAM_A)
+}
 
 fn base_program<Evaluation>(
     opacity: f64,
@@ -41,9 +62,24 @@ where
     Evaluation: PointEvaluatorV1,
     PointInvocation<Evaluation>: Copy,
 {
+    base_program_in_group(GROUP, opacity, against, constraints, outputs, evaluator)
+}
+
+fn base_program_in_group<Evaluation>(
+    group: ObservationGroupId,
+    opacity: f64,
+    against: SurfaceId,
+    constraints: ConstraintSet<PointInvocation<Evaluation>>,
+    outputs: Vec<OutputBinding>,
+    evaluator: Evaluation,
+) -> Program<Evaluation>
+where
+    Evaluation: PointEvaluatorV1,
+    PointInvocation<Evaluation>: Copy,
+{
     Program::new(
         vec![ColorInput::new(COLOR, Srgb8::new([0; 3]))],
-        vec![SURFACE_PORT],
+        ObservationGroup::new(group, vec![SURFACE_PORT]),
         vec![OpacityInput::new(OPACITY, opacity)],
         vec![
             Paint::Solid {
@@ -100,6 +136,25 @@ fn exact_required(expected: Srgb8) -> Program<ExactSrgb8IdentityV1> {
 
 fn compiled_exact(expected: Srgb8) -> CompiledProgram<ExactSrgb8IdentityV1> {
     exact_required(expected).compile().unwrap()
+}
+
+fn compiled_exact_in_group(
+    group: ObservationGroupId,
+    expected: Srgb8,
+) -> CompiledProgram<ExactSrgb8IdentityV1> {
+    base_program_in_group(
+        group,
+        0.5,
+        BACKDROP,
+        ConstraintSet::new(
+            vec![ConstraintInvocation::hard(REQUIRED, OCCURRENCE, expected)],
+            vec![],
+        ),
+        vec![OutputBinding::new(OUTPUT, TRANSLUCENT)],
+        ExactSrgb8IdentityV1,
+    )
+    .compile()
+    .unwrap()
 }
 
 fn wcag_program(
@@ -208,13 +263,32 @@ fn authored_modes_are_marker_typed_and_values_preserve_exact_ids() {
     let signal = SurfaceSignal::new(SURFACE_PORT, Srgb8::new([4, 5, 6]));
     assert_eq!(signal.input(), SURFACE_PORT);
     assert_eq!(signal.value(), Srgb8::new([4, 5, 6]));
+
+    let group = observation_group(vec![SURFACE_PORT]);
+    assert_eq!(group.id(), GROUP);
+    assert_eq!(group.surface_input_ports(), &[SURFACE_PORT]);
+    let binding = default_stream_binding();
+    assert_eq!(binding.group(), GROUP);
+    assert_eq!(binding.stream(), STREAM_A);
+    let signals = [signal];
+    let update = SurfaceUpdate::present(STREAM_A, 17, &signals);
+    assert_eq!(update.stream(), STREAM_A);
+    assert_eq!(update.revision(), 17);
+    assert_eq!(
+        update.payload(),
+        SurfaceUpdatePayload::Present { surfaces: &signals }
+    );
+    assert_eq!(
+        SurfaceUpdate::unavailable(STREAM_A, 18, 9).payload(),
+        SurfaceUpdatePayload::Unavailable { reason: 9 }
+    );
 }
 
 #[test]
 fn empty_domains_have_stable_precedence() {
     let empty_surface = Program::new(
         vec![ColorInput::new(COLOR, Srgb8::new([0; 3]))],
-        vec![],
+        observation_group(vec![]),
         vec![],
         vec![Paint::Solid {
             id: SOLID,
@@ -243,12 +317,12 @@ fn empty_domains_have_stable_precedence() {
     );
     assert_eq!(
         compile_error(empty_surface),
-        ProgramCompileError::EmptySurfaceSchema
+        ProgramCompileError::EmptyObservationGroup { group: GROUP }
     );
 
     let empty_occurrence = Program::new(
         vec![ColorInput::new(COLOR, Srgb8::new([0; 3]))],
-        vec![SURFACE_PORT],
+        observation_group(vec![SURFACE_PORT]),
         vec![],
         vec![Paint::Solid {
             id: SOLID,
@@ -473,6 +547,7 @@ fn compile_canonicalizes_constraints_and_outputs_independent_of_mode_lists() {
     )
     .compile()
     .unwrap();
+    assert_eq!(compiled.observation_group_id(), GROUP);
     assert_eq!(compiled.surface_input_ports(), &[SURFACE_PORT]);
     assert_eq!(
         compiled.constraint_ids().collect::<Vec<_>>(),
@@ -483,6 +558,7 @@ fn compile_canonicalizes_constraints_and_outputs_independent_of_mode_lists() {
         vec![(output_low, TRANSLUCENT), (output_high, TRANSLUCENT)]
     );
     let owner = compiled.into_owner();
+    assert_eq!(owner.observation_group_id(), Some(GROUP));
     assert_eq!(
         owner.constraint_ids().unwrap().collect::<Vec<_>>(),
         vec![low, high]
@@ -491,6 +567,184 @@ fn compile_canonicalizes_constraints_and_outputs_independent_of_mode_lists() {
         owner.outputs().unwrap().collect::<Vec<_>>(),
         vec![(output_low, TRANSLUCENT), (output_high, TRANSLUCENT)]
     );
+}
+
+#[test]
+fn attach_rejects_the_wrong_group_without_allocation_and_disposed_wins() {
+    let program = base_program(
+        0.5,
+        BACKDROP,
+        ConstraintSet::new(
+            vec![ConstraintInvocation::hard(
+                REQUIRED,
+                OCCURRENCE,
+                ProgramTestInvocationV1::exact(Srgb8::new([0x80; 3])),
+            )],
+            vec![],
+        ),
+        vec![OutputBinding::new(OUTPUT, TRANSLUCENT)],
+        ProgramTestEvaluatorV1,
+    );
+    let mut owner = program.compile().unwrap().into_owner();
+    let wrong_binding = stream_binding(OTHER_GROUP, STREAM_A);
+
+    reset_program_test_evaluation_count();
+    let (result, allocations) =
+        crate::test_support::measured_allocations(|| owner.attach(wrong_binding));
+    let Err(error) = result else {
+        panic!("a stream from another observation group must not attach");
+    };
+    assert_eq!(
+        error,
+        PointRenderAttachError::ObservationGroupMismatch {
+            expected: GROUP,
+            actual: OTHER_GROUP,
+        }
+    );
+    assert_eq!(allocations, 0);
+    assert_eq!(program_test_evaluation_count(), 0);
+
+    let retry = owner
+        .attach(default_stream_binding())
+        .expect("a rejected foreign group must leave attach retryable");
+    assert_eq!(retry.stream(), STREAM_A);
+    assert_eq!(program_test_evaluation_count(), 0);
+    drop(retry);
+
+    owner.dispose();
+    let (result, allocations) =
+        crate::test_support::measured_allocations(|| owner.attach(wrong_binding));
+    let Err(error) = result else {
+        panic!("a disposed owner must not attach");
+    };
+    assert_eq!(error, PointRenderAttachError::Disposed);
+    assert_eq!(allocations, 0);
+}
+
+#[test]
+fn wrong_stream_precedes_shape_revision_callback_evaluation_and_state_mutation() {
+    let program = base_program(
+        0.5,
+        BACKDROP,
+        ConstraintSet::new(
+            vec![ConstraintInvocation::hard(
+                REQUIRED,
+                OCCURRENCE,
+                ProgramTestInvocationV1::exact(Srgb8::new([0x80; 3])),
+            )],
+            vec![],
+        ),
+        vec![OutputBinding::new(OUTPUT, TRANSLUCENT)],
+        ProgramTestEvaluatorV1,
+    );
+    let owner = program.compile().unwrap().into_owner();
+    let mut session = owner.attach(default_stream_binding()).unwrap();
+    session
+        .update_canonical_present(STREAM_A, 10, 1, |_| Srgb8::new([0xff; 3]))
+        .unwrap();
+    let SessionState::Ready { current } = session.state() else {
+        unreachable!()
+    };
+    let retained_storage = current.storage_pointers_for_test();
+    let retained_output = current.output(OUTPUT);
+
+    let wrong_present = SurfaceUpdate::present(STREAM_B, 9, &[]);
+    let wrong_unavailable = SurfaceUpdate::unavailable(STREAM_B, 9, 77);
+    for update in [wrong_present, wrong_unavailable] {
+        reset_program_test_evaluation_count();
+        crate::composition::reset_source_over_evaluation_count();
+        let (result, allocations) =
+            crate::test_support::measured_allocations(|| session.update(update).map(|_| ()));
+        assert_eq!(
+            result,
+            Err(SessionUpdateError::ObservationStreamMismatch {
+                expected: STREAM_A,
+                actual: STREAM_B,
+            })
+        );
+        assert_eq!(allocations, 0);
+        assert_eq!(program_test_evaluation_count(), 0);
+        assert_eq!(crate::composition::source_over_evaluation_count(), 0);
+        let SessionState::Ready { current } = session.state() else {
+            panic!("wrong-stream public update mutated the session state");
+        };
+        assert_eq!(current.revision(), 10);
+        assert_eq!(current.storage_pointers_for_test(), retained_storage);
+        assert_eq!(current.output(OUTPUT), retained_output);
+    }
+
+    reset_program_test_evaluation_count();
+    crate::composition::reset_source_over_evaluation_count();
+    let reads = Cell::new(0);
+    let (result, allocations) = crate::test_support::measured_allocations(|| {
+        session
+            .update_canonical_present(STREAM_B, 9, 0, |_| {
+                reads.set(reads.get() + 1);
+                Srgb8::new([0; 3])
+            })
+            .map(|_| ())
+    });
+    assert_eq!(
+        result,
+        Err(SessionUpdateError::ObservationStreamMismatch {
+            expected: STREAM_A,
+            actual: STREAM_B,
+        })
+    );
+    assert_eq!(reads.get(), 0);
+    assert_eq!(allocations, 0);
+    assert_eq!(program_test_evaluation_count(), 0);
+    assert_eq!(crate::composition::source_over_evaluation_count(), 0);
+    let SessionState::Ready { current } = session.state() else {
+        panic!("wrong-stream canonical update mutated the session state");
+    };
+    assert_eq!(current.revision(), 10);
+    assert_eq!(current.storage_pointers_for_test(), retained_storage);
+    assert_eq!(current.output(OUTPUT), retained_output);
+}
+
+#[test]
+fn sessions_bound_to_distinct_streams_keep_independent_revision_watermarks() {
+    let owner = compiled_exact(Srgb8::new([0x80; 3])).into_owner();
+    let mut session_a = owner.attach(stream_binding(GROUP, STREAM_A)).unwrap();
+    let mut session_b = owner.attach(stream_binding(GROUP, STREAM_B)).unwrap();
+    assert_eq!(session_a.stream(), STREAM_A);
+    assert_eq!(session_b.stream(), STREAM_B);
+
+    for (session, stream, revision) in [
+        (&mut session_a, STREAM_A, 100),
+        (&mut session_b, STREAM_B, 1),
+    ] {
+        let (result, allocations) = crate::test_support::measured_allocations(|| {
+            session
+                .update_canonical_present(stream, revision, 1, |_| Srgb8::new([0xff; 3]))
+                .map(|_| ())
+        });
+        assert!(result.is_ok());
+        assert_eq!(allocations, 0);
+    }
+
+    assert_eq!(
+        update_error(
+            session_a.update_canonical_present(STREAM_A, 99, 1, |_| Srgb8::new([0xff; 3]))
+        ),
+        SessionUpdateError::<Infallible>::RevisionOutOfOrder {
+            current: 100,
+            incoming: 99,
+        }
+    );
+    session_b
+        .update_canonical_present(STREAM_B, 2, 1, |_| Srgb8::new([0xff; 3]))
+        .unwrap();
+
+    let SessionState::Ready { current: current_a } = session_a.state() else {
+        unreachable!()
+    };
+    let SessionState::Ready { current: current_b } = session_b.state() else {
+        unreachable!()
+    };
+    assert_eq!(current_a.revision(), 100);
+    assert_eq!(current_b.revision(), 2);
 }
 
 #[test]
@@ -503,10 +757,10 @@ fn wcag_report_only_uses_visible_808080_but_emits_black_half_alpha_paint() {
         )],
     );
     let owner = program.compile().unwrap().into_owner();
-    let mut session = owner.attach().unwrap();
+    let mut session = owner.attach(default_stream_binding()).unwrap();
     let (result, allocations) = crate::test_support::measured_allocations(|| {
         session
-            .update_canonical_present(1, 1, |_| Srgb8::new([0xff; 3]))
+            .update_canonical_present(STREAM_A, 1, 1, |_| Srgb8::new([0xff; 3]))
             .map(|_| ())
     });
     assert!(result.is_ok());
@@ -555,9 +809,9 @@ fn wcag_hard_violation_commits_conflict_with_full_report_and_no_current_output()
         vec![],
     );
     let owner = program.compile().unwrap().into_owner();
-    let mut session = owner.attach().unwrap();
+    let mut session = owner.attach(default_stream_binding()).unwrap();
     let SessionState::Conflict { current, previous } = session
-        .update_canonical_present(1, 1, |_| Srgb8::new([0xff; 3]))
+        .update_canonical_present(STREAM_A, 1, 1, |_| Srgb8::new([0xff; 3]))
         .unwrap()
     else {
         panic!("mandatory WCAG violation must commit Conflict");
@@ -597,9 +851,9 @@ fn all_constraints_run_before_hard_gate_and_report_order_is_canonical() {
         )],
     );
     let owner = program.compile().unwrap().into_owner();
-    let mut session = owner.attach().unwrap();
+    let mut session = owner.attach(default_stream_binding()).unwrap();
     let SessionState::Conflict { current, .. } = session
-        .update_canonical_present(1, 1, |_| Srgb8::new([0xff; 3]))
+        .update_canonical_present(STREAM_A, 1, 1, |_| Srgb8::new([0xff; 3]))
         .unwrap()
     else {
         panic!("one hard violation must gate the complete result");
@@ -640,9 +894,9 @@ fn report_only_violation_never_gates_terminal_paint() {
         )],
     );
     let owner = program.compile().unwrap().into_owner();
-    let mut session = owner.attach().unwrap();
+    let mut session = owner.attach(default_stream_binding()).unwrap();
     let SessionState::Ready { current } = session
-        .update_canonical_present(1, 1, |_| Srgb8::new([0xff; 3]))
+        .update_canonical_present(STREAM_A, 1, 1, |_| Srgb8::new([0xff; 3]))
         .unwrap()
     else {
         panic!("report-only violation cannot gate");
@@ -673,9 +927,9 @@ fn output_slot_renaming_changes_routing_not_physical_paint() {
             ExactSrgb8IdentityV1,
         );
         let owner = program.compile().unwrap().into_owner();
-        let mut session = owner.attach().unwrap();
+        let mut session = owner.attach(default_stream_binding()).unwrap();
         let SessionState::Ready { current } = session
-            .update_canonical_present(1, 1, |_| Srgb8::new([0xff; 3]))
+            .update_canonical_present(STREAM_A, 1, 1, |_| Srgb8::new([0xff; 3]))
             .unwrap()
         else {
             unreachable!()
@@ -690,6 +944,58 @@ fn output_slot_renaming_changes_routing_not_physical_paint() {
     assert_eq!(left.value(), renamed.value());
     assert_eq!(left.value().source(), Srgb8::new([0; 3]));
     assert_eq!(left.value().straight_alpha_bits(), 0.5f64.to_bits());
+}
+
+#[test]
+fn point_transport_values_and_classifier_payload_are_nominal_id_invariant_before_f2_binding() {
+    type TerminalPaintProjection = (PaintId, Srgb8, u64);
+    type ClassifierPayloadProjection = (ConstraintId, OccurrenceId, Srgb8, Srgb8);
+
+    fn resolve(
+        group: ObservationGroupId,
+        stream: ObservationStreamId,
+    ) -> (TerminalPaintProjection, ClassifierPayloadProjection) {
+        let program = base_program_in_group(
+            group,
+            0.5,
+            BACKDROP,
+            ConstraintSet::new(
+                vec![ConstraintInvocation::hard(
+                    REQUIRED,
+                    OCCURRENCE,
+                    Srgb8::new([0x80; 3]),
+                )],
+                vec![],
+            ),
+            vec![OutputBinding::new(OUTPUT, TRANSLUCENT)],
+            ExactSrgb8IdentityV1,
+        );
+        let owner = program.compile().unwrap().into_owner();
+        let mut session = owner.attach(stream_binding(group, stream)).unwrap();
+        let SessionState::Ready { current } = session
+            .update_canonical_present(stream, 1, 1, |_| Srgb8::new([0xff; 3]))
+            .unwrap()
+        else {
+            unreachable!()
+        };
+        let output = current.output(OUTPUT).unwrap();
+        let Some(ConstraintReportEntry::Hard(assessment)) = current.report().next() else {
+            unreachable!()
+        };
+        let (target, actual) = exact_outcome(assessment);
+        (
+            (
+                output.paint(),
+                output.value().source(),
+                output.value().straight_alpha_bits(),
+            ),
+            (assessment.constraint(), assessment.target(), target, actual),
+        )
+    }
+
+    let original = resolve(GROUP, STREAM_A);
+    let renamed = resolve(OTHER_GROUP, STREAM_B);
+    assert_eq!(original, renamed);
 }
 
 #[test]
@@ -716,9 +1022,9 @@ fn evaluator_error_preserves_prior_snapshot_head_and_all_owned_evidence() {
         ProgramTestEvaluatorV1,
     );
     let owner = program.compile().unwrap().into_owner();
-    let mut session = owner.attach().unwrap();
+    let mut session = owner.attach(default_stream_binding()).unwrap();
     session
-        .update_canonical_present(1, 1, |_| Srgb8::new([0xff; 3]))
+        .update_canonical_present(STREAM_A, 1, 1, |_| Srgb8::new([0xff; 3]))
         .unwrap();
     let SessionState::Ready { current } = session.state() else {
         panic!("control update must be Ready");
@@ -731,7 +1037,8 @@ fn evaluator_error_preserves_prior_snapshot_head_and_all_owned_evidence() {
         .collect::<Vec<_>>();
 
     arm_program_test_failure_once();
-    let error = update_error(session.update_canonical_present(2, 1, |_| Srgb8::new([0xff; 3])));
+    let error =
+        update_error(session.update_canonical_present(STREAM_A, 2, 1, |_| Srgb8::new([0xff; 3])));
     assert_eq!(
         error,
         SessionUpdateError::Evaluator {
@@ -754,7 +1061,7 @@ fn evaluator_error_preserves_prior_snapshot_head_and_all_owned_evidence() {
     );
 
     let SessionState::Ready { current } = session
-        .update_canonical_present(2, 1, |_| Srgb8::new([0xff; 3]))
+        .update_canonical_present(STREAM_A, 2, 1, |_| Srgb8::new([0xff; 3]))
         .unwrap()
     else {
         panic!("same incoming revision must be retryable after evaluator Err");
@@ -762,7 +1069,7 @@ fn evaluator_error_preserves_prior_snapshot_head_and_all_owned_evidence() {
     assert_eq!(current.revision(), 2);
 
     session
-        .update_canonical_present(3, 1, |_| Srgb8::new([0; 3]))
+        .update_canonical_present(STREAM_A, 3, 1, |_| Srgb8::new([0; 3]))
         .unwrap();
     let SessionState::Conflict { current, previous } = session.state() else {
         panic!("black backdrop must create the retained Conflict control");
@@ -774,7 +1081,8 @@ fn evaluator_error_preserves_prior_snapshot_head_and_all_owned_evidence() {
         .storage_pointers_for_test();
 
     arm_program_test_failure_once();
-    let error = update_error(session.update_canonical_present(4, 1, |_| Srgb8::new([0; 3])));
+    let error =
+        update_error(session.update_canonical_present(STREAM_A, 4, 1, |_| Srgb8::new([0; 3])));
     assert_eq!(
         error,
         SessionUpdateError::Evaluator {
@@ -793,7 +1101,7 @@ fn evaluator_error_preserves_prior_snapshot_head_and_all_owned_evidence() {
     );
 
     let SessionState::Conflict { current, previous } = session
-        .update_canonical_present(4, 1, |_| Srgb8::new([0; 3]))
+        .update_canonical_present(STREAM_A, 4, 1, |_| Srgb8::new([0; 3]))
         .unwrap()
     else {
         panic!("retry after evaluator Err must execute and commit Conflict");
@@ -809,9 +1117,9 @@ fn evaluator_error_preserves_prior_snapshot_head_and_all_owned_evidence() {
 #[test]
 fn three_frames_preserve_verified_and_replace_complete_conflict_reports_without_clone() {
     let owner = compiled_exact(Srgb8::new([0x80; 3])).into_owner();
-    let mut session = owner.attach().unwrap();
+    let mut session = owner.attach(default_stream_binding()).unwrap();
     session
-        .update_canonical_present(1, 1, |_| Srgb8::new([0xff; 3]))
+        .update_canonical_present(STREAM_A, 1, 1, |_| Srgb8::new([0xff; 3]))
         .unwrap();
     let SessionState::Ready { current } = session.state() else {
         unreachable!()
@@ -819,7 +1127,7 @@ fn three_frames_preserve_verified_and_replace_complete_conflict_reports_without_
     let verified_storage = current.storage_pointers_for_test();
 
     session
-        .update_canonical_present(2, 1, |_| Srgb8::new([0; 3]))
+        .update_canonical_present(STREAM_A, 2, 1, |_| Srgb8::new([0; 3]))
         .unwrap();
     let SessionState::Conflict { current, previous } = session.state() else {
         panic!("black backdrop must violate exact #808080");
@@ -835,7 +1143,7 @@ fn three_frames_preserve_verified_and_replace_complete_conflict_reports_without_
     );
 
     session
-        .update_canonical_present(3, 1, |_| Srgb8::new([0x20; 3]))
+        .update_canonical_present(STREAM_A, 3, 1, |_| Srgb8::new([0x20; 3]))
         .unwrap();
     let SessionState::Conflict { current, previous } = session.state() else {
         unreachable!()
@@ -853,7 +1161,7 @@ fn three_frames_preserve_verified_and_replace_complete_conflict_reports_without_
     assert_eq!(current.report().count(), 1);
 
     session
-        .update_canonical_present(4, 1, |_| Srgb8::new([0xff; 3]))
+        .update_canonical_present(STREAM_A, 4, 1, |_| Srgb8::new([0xff; 3]))
         .unwrap();
     let SessionState::Ready { current } = session.state() else {
         panic!("Conflict must recover directly to a new verified Snapshot");
@@ -863,7 +1171,7 @@ fn three_frames_preserve_verified_and_replace_complete_conflict_reports_without_
     assert_ne!(recovered_storage, conflict_three_storage);
 
     session
-        .update_canonical_present(5, 1, |_| Srgb8::new([0; 3]))
+        .update_canonical_present(STREAM_A, 5, 1, |_| Srgb8::new([0; 3]))
         .unwrap();
     let SessionState::Conflict { previous, .. } = session.state() else {
         unreachable!()
@@ -877,10 +1185,7 @@ fn three_frames_preserve_verified_and_replace_complete_conflict_reports_without_
         previous,
         current_unavailable,
     } = session
-        .update(SurfaceUpdate::Unavailable {
-            revision: 6,
-            reason: 9,
-        })
+        .update(SurfaceUpdate::unavailable(STREAM_A, 6, 9))
         .unwrap()
     else {
         panic!("Unknown after Conflict(previous) must retain that full Snapshot");
@@ -893,23 +1198,30 @@ fn three_frames_preserve_verified_and_replace_complete_conflict_reports_without_
 #[test]
 fn same_revision_conflict_replay_is_idempotent_and_changed_payload_conflicts() {
     let owner = compiled_exact(Srgb8::new([0x80; 3])).into_owner();
-    let mut session = owner.attach().unwrap();
+    let mut session = owner.attach(default_stream_binding()).unwrap();
     let black = Srgb8::new([0; 3]);
-    session.update_canonical_present(1, 1, |_| black).unwrap();
+    session
+        .update_canonical_present(STREAM_A, 1, 1, |_| black)
+        .unwrap();
     let SessionState::Conflict { current, .. } = session.state() else {
         unreachable!()
     };
     let storage = current.storage_pointers_for_test();
     crate::composition::reset_source_over_evaluation_count();
 
-    assert!(session.update_canonical_present(1, 1, |_| black).is_ok());
+    assert!(
+        session
+            .update_canonical_present(STREAM_A, 1, 1, |_| black)
+            .is_ok()
+    );
     assert_eq!(crate::composition::source_over_evaluation_count(), 0);
     let SessionState::Conflict { current, .. } = session.state() else {
         unreachable!()
     };
     assert_eq!(current.storage_pointers_for_test(), storage);
 
-    let error = update_error(session.update_canonical_present(1, 1, |_| Srgb8::new([0xff; 3])));
+    let error =
+        update_error(session.update_canonical_present(STREAM_A, 1, 1, |_| Srgb8::new([0xff; 3])));
     assert_eq!(
         error,
         SessionUpdateError::<Infallible>::RevisionConflict { revision: 1 }
@@ -927,7 +1239,7 @@ fn three_port_same_revision_conflict_reads_every_value_without_execution_or_allo
     const SURFACE_C: SurfaceId = SurfaceId::new(130);
     let program = Program::new(
         vec![ColorInput::new(COLOR, Srgb8::new([0; 3]))],
-        vec![PORT_C, PORT_A, PORT_B],
+        observation_group(vec![PORT_C, PORT_A, PORT_B]),
         vec![OpacityInput::new(OPACITY, 0.5)],
         vec![
             Paint::Solid {
@@ -974,14 +1286,14 @@ fn three_port_same_revision_conflict_reads_every_value_without_execution_or_allo
     let compiled = program.compile().unwrap();
     assert_eq!(compiled.surface_input_ports(), &[PORT_A, PORT_B, PORT_C]);
     let owner = compiled.into_owner();
-    let mut session = owner.attach().unwrap();
+    let mut session = owner.attach(default_stream_binding()).unwrap();
     let committed = [
         Srgb8::new([0x10; 3]),
         Srgb8::new([0; 3]),
         Srgb8::new([0x30; 3]),
     ];
     session
-        .update_canonical_present(5, 3, |index| committed[index])
+        .update_canonical_present(STREAM_A, 5, 3, |index| committed[index])
         .unwrap();
     let SessionState::Conflict { current, .. } = session.state() else {
         unreachable!()
@@ -992,7 +1304,7 @@ fn three_port_same_revision_conflict_reads_every_value_without_execution_or_allo
     let replay = ReadProbe::new(committed);
     let (result, allocations) = crate::test_support::measured_allocations(|| {
         session
-            .update_canonical_present(5, 3, |index| replay.read(index))
+            .update_canonical_present(STREAM_A, 5, 3, |index| replay.read(index))
             .map(|_| ())
     });
     assert!(result.is_ok());
@@ -1009,7 +1321,7 @@ fn three_port_same_revision_conflict_reads_every_value_without_execution_or_allo
     let mismatch = ReadProbe::new(mismatched);
     let (result, allocations) = crate::test_support::measured_allocations(|| {
         session
-            .update_canonical_present(5, 3, |index| mismatch.read(index))
+            .update_canonical_present(STREAM_A, 5, 3, |index| mismatch.read(index))
             .map(|_| ())
     });
     assert_eq!(
@@ -1026,10 +1338,7 @@ fn three_port_same_revision_conflict_reads_every_value_without_execution_or_allo
 
     let (result, allocations) = crate::test_support::measured_allocations(|| {
         session
-            .update(SurfaceUpdate::Unavailable {
-                revision: 5,
-                reason: 91,
-            })
+            .update(SurfaceUpdate::unavailable(STREAM_A, 5, 91))
             .map(|_| ())
     });
     assert_eq!(
@@ -1046,7 +1355,7 @@ fn three_port_same_revision_conflict_reads_every_value_without_execution_or_allo
 #[test]
 fn typed_schema_revision_and_lifetime_failures_are_atomic() {
     let mut owner = compiled_exact(Srgb8::new([0x80; 3])).into_owner();
-    let mut session = owner.attach().unwrap();
+    let mut session = owner.attach(default_stream_binding()).unwrap();
     let wrong = [SurfaceSignal::new(
         SurfaceInputPortId::new(999),
         Srgb8::new([0xff; 3]),
@@ -1054,10 +1363,7 @@ fn typed_schema_revision_and_lifetime_failures_are_atomic() {
     crate::composition::reset_source_over_evaluation_count();
     let (result, allocations) = crate::test_support::measured_allocations(|| {
         session
-            .update(SurfaceUpdate::Present {
-                revision: 1,
-                surfaces: &wrong,
-            })
+            .update(SurfaceUpdate::present(STREAM_A, 1, &wrong))
             .map(|_| ())
     });
     assert_eq!(
@@ -1078,7 +1384,7 @@ fn typed_schema_revision_and_lifetime_failures_are_atomic() {
     ));
 
     session
-        .update_canonical_present(5, 1, |_| Srgb8::new([0xff; 3]))
+        .update_canonical_present(STREAM_A, 5, 1, |_| Srgb8::new([0xff; 3]))
         .unwrap();
     let SessionState::Ready { current } = session.state() else {
         unreachable!()
@@ -1088,7 +1394,7 @@ fn typed_schema_revision_and_lifetime_failures_are_atomic() {
     crate::composition::reset_source_over_evaluation_count();
     let (result, allocations) = crate::test_support::measured_allocations(|| {
         session
-            .update_canonical_present(4, 1, |_| {
+            .update_canonical_present(STREAM_A, 4, 1, |_| {
                 reads.set(reads.get() + 1);
                 Srgb8::new([0; 3])
             })
@@ -1113,10 +1419,7 @@ fn typed_schema_revision_and_lifetime_failures_are_atomic() {
     owner.dispose();
     let (result, allocations) = crate::test_support::measured_allocations(|| {
         session
-            .update(SurfaceUpdate::Unavailable {
-                revision: 6,
-                reason: 1,
-            })
+            .update(SurfaceUpdate::unavailable(STREAM_A, 6, 1))
             .map(|_| ())
     });
     assert_eq!(
@@ -1129,7 +1432,7 @@ fn typed_schema_revision_and_lifetime_failures_are_atomic() {
 #[test]
 fn replacement_revokes_old_sessions_and_compile_error_keeps_live_epoch() {
     let mut owner = compiled_exact(Srgb8::new([0x80; 3])).into_owner();
-    let mut old = owner.attach().unwrap();
+    let mut old = owner.attach(default_stream_binding()).unwrap();
     assert_eq!(
         compile_error(base_program(
             1.25,
@@ -1148,41 +1451,61 @@ fn replacement_revokes_old_sessions_and_compile_error_keeps_live_epoch() {
         ProgramCompileError::OpacityOutOfDomain { input: OPACITY }
     );
     assert!(
-        old.update_canonical_present(1, 1, |_| Srgb8::new([0xff; 3]))
+        old.update_canonical_present(STREAM_A, 1, 1, |_| Srgb8::new([0xff; 3]))
             .is_ok()
     );
 
-    owner.replace(compiled_exact(Srgb8::new([0x80; 3])));
+    owner.replace(compiled_exact_in_group(OTHER_GROUP, Srgb8::new([0x80; 3])));
+    assert_eq!(owner.observation_group_id(), Some(OTHER_GROUP));
     assert_eq!(
-        update_error(old.update_canonical_present(2, 1, |_| Srgb8::new([0xff; 3]))),
+        update_error(old.update_canonical_present(STREAM_A, 2, 1, |_| Srgb8::new([0xff; 3]))),
         SessionUpdateError::<Infallible>::ProgramExpired
     );
+
+    let (result, allocations) =
+        crate::test_support::measured_allocations(|| owner.attach(default_stream_binding()));
+    let Err(error) = result else {
+        panic!("replacement must reject a binding for the previous group");
+    };
+    assert_eq!(
+        error,
+        PointRenderAttachError::ObservationGroupMismatch {
+            expected: OTHER_GROUP,
+            actual: GROUP,
+        }
+    );
+    assert_eq!(allocations, 0);
+
+    let mut fresh = owner.attach(stream_binding(OTHER_GROUP, STREAM_B)).unwrap();
+    fresh
+        .update_canonical_present(STREAM_B, 1, 1, |_| Srgb8::new([0xff; 3]))
+        .unwrap();
+    owner.dispose();
+    let (result, allocations) = crate::test_support::measured_allocations(|| {
+        fresh
+            .update(SurfaceUpdate::unavailable(STREAM_A, 2, 1))
+            .map(|_| ())
+    });
+    assert_eq!(
+        result,
+        Err(SessionUpdateError::<Infallible>::ProgramExpired),
+        "expiry must precede even a mismatched stream"
+    );
+    assert_eq!(allocations, 0);
 }
 
 #[test]
 fn present_ready_conflict_stale_and_recovery_allocate_zero_after_attach() {
     let owner = compiled_exact(Srgb8::new([0x80; 3])).into_owner();
-    let mut session = owner.attach().unwrap();
+    let mut session = owner.attach(default_stream_binding()).unwrap();
     let white = [SurfaceSignal::new(SURFACE_PORT, Srgb8::new([0xff; 3]))];
     let black = [SurfaceSignal::new(SURFACE_PORT, Srgb8::new([0; 3]))];
 
     for update in [
-        SurfaceUpdate::Present {
-            revision: 1,
-            surfaces: &white,
-        },
-        SurfaceUpdate::Present {
-            revision: 2,
-            surfaces: &black,
-        },
-        SurfaceUpdate::Unavailable {
-            revision: 3,
-            reason: 7,
-        },
-        SurfaceUpdate::Present {
-            revision: 4,
-            surfaces: &white,
-        },
+        SurfaceUpdate::present(STREAM_A, 1, &white),
+        SurfaceUpdate::present(STREAM_A, 2, &black),
+        SurfaceUpdate::unavailable(STREAM_A, 3, 7),
+        SurfaceUpdate::present(STREAM_A, 4, &white),
     ] {
         let (result, allocations) =
             crate::test_support::measured_allocations(|| session.update(update).map(|_| ()));
@@ -1217,12 +1540,12 @@ fn canonical_helpers_and_checked_cardinality_fail_closed() {
 fn callback_is_not_read_before_lifetime_cardinality_or_revision_admission() {
     let mut expired = {
         let owner = compiled_exact(Srgb8::new([0x80; 3])).into_owner();
-        owner.attach().unwrap()
+        owner.attach(default_stream_binding()).unwrap()
     };
     let reads = Cell::new(0);
     let (result, allocations) = crate::test_support::measured_allocations(|| {
         expired
-            .update_canonical_present(1, 1, |_| {
+            .update_canonical_present(STREAM_B, 1, 1, |_| {
                 reads.set(reads.get() + 1);
                 Srgb8::new([0xff; 3])
             })
@@ -1236,12 +1559,12 @@ fn callback_is_not_read_before_lifetime_cardinality_or_revision_admission() {
     assert_eq!(allocations, 0);
 
     let owner = compiled_exact(Srgb8::new([0x80; 3])).into_owner();
-    let mut session = owner.attach().unwrap();
+    let mut session = owner.attach(default_stream_binding()).unwrap();
     for actual in [0, 2] {
         let reads = Cell::new(0);
         let (result, allocations) = crate::test_support::measured_allocations(|| {
             session
-                .update_canonical_present(1, actual, |_| {
+                .update_canonical_present(STREAM_A, 1, actual, |_| {
                     reads.set(reads.get() + 1);
                     Srgb8::new([0xff; 3])
                 })
@@ -1261,15 +1584,12 @@ fn callback_is_not_read_before_lifetime_cardinality_or_revision_admission() {
     }
 
     session
-        .update(SurfaceUpdate::Unavailable {
-            revision: 7,
-            reason: 12,
-        })
+        .update(SurfaceUpdate::unavailable(STREAM_A, 7, 12))
         .unwrap();
     let reads = Cell::new(0);
     let (result, allocations) = crate::test_support::measured_allocations(|| {
         session
-            .update_canonical_present(7, 1, |_| {
+            .update_canonical_present(STREAM_A, 7, 1, |_| {
                 reads.set(reads.get() + 1);
                 Srgb8::new([0xff; 3])
             })
@@ -1284,13 +1604,16 @@ fn callback_is_not_read_before_lifetime_cardinality_or_revision_admission() {
 }
 
 #[test]
-fn same_paint_can_be_assessed_in_multiple_occurrences_but_is_one_terminal_output() {
+fn canonical_two_port_group_assesses_multiple_occurrences_but_emits_one_paint() {
     const OTHER_PORT: SurfaceInputPortId = SurfaceInputPortId::new(4);
     const OTHER_SURFACE: SurfaceId = SurfaceId::new(22);
     const OTHER_OCCURRENCE: OccurrenceId = OccurrenceId::new(31);
+    let group = ObservationGroup::new(GROUP, vec![OTHER_PORT, SURFACE_PORT]);
+    assert_eq!(group.id(), GROUP);
+    assert_eq!(group.surface_input_ports(), &[OTHER_PORT, SURFACE_PORT]);
     let program = Program::new(
         vec![ColorInput::new(COLOR, Srgb8::new([0; 3]))],
-        vec![OTHER_PORT, SURFACE_PORT],
+        group,
         vec![OpacityInput::new(OPACITY, 0.5)],
         vec![
             Paint::Solid {
@@ -1342,21 +1665,23 @@ fn same_paint_can_be_assessed_in_multiple_occurrences_but_is_one_terminal_output
         vec![OutputBinding::new(OUTPUT, TRANSLUCENT)],
         ExactSrgb8IdentityV1,
     );
-    let owner = program.compile().unwrap().into_owner();
+    let compiled = program.compile().unwrap();
+    assert_eq!(compiled.observation_group_id(), GROUP);
+    assert_eq!(compiled.surface_input_ports(), &[SURFACE_PORT, OTHER_PORT]);
+    let owner = compiled.into_owner();
+    assert_eq!(owner.observation_group_id(), Some(GROUP));
     assert_eq!(
         owner.surface_input_ports(),
         Some(&[SURFACE_PORT, OTHER_PORT][..])
     );
-    let mut session = owner.attach().unwrap();
+    let mut session = owner.attach(default_stream_binding()).unwrap();
+    assert_eq!(session.stream(), STREAM_A);
     let signals = [
         SurfaceSignal::new(SURFACE_PORT, Srgb8::new([0xff; 3])),
         SurfaceSignal::new(OTHER_PORT, Srgb8::new([0; 3])),
     ];
     let SessionState::Ready { current } = session
-        .update(SurfaceUpdate::Present {
-            revision: 1,
-            surfaces: &signals,
-        })
+        .update(SurfaceUpdate::present(STREAM_A, 1, &signals))
         .unwrap()
     else {
         panic!("both exact occurrence contracts should pass");

@@ -25,6 +25,7 @@ use crate::constraints::{
     HardDecision, PointEvaluationError, PointEvaluatorV1, PointInvocation,
     VisiblePointPassEvidence, VisiblePointViolationEvidence, assess_visible_point_hard,
 };
+use crate::observation::{ObservationGroupId, ObservationStreamId};
 
 /// One immutable encoded colour binding owned by a [`Program`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -280,6 +281,51 @@ impl OutputBinding {
     }
 }
 
+/// One compile-time atomic correlation boundary for this Program epoch.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ObservationGroup {
+    id: ObservationGroupId,
+    surface_input_ports: Vec<SurfaceInputPortId>,
+}
+
+impl ObservationGroup {
+    pub const fn new(id: ObservationGroupId, surface_input_ports: Vec<SurfaceInputPortId>) -> Self {
+        Self {
+            id,
+            surface_input_ports,
+        }
+    }
+
+    pub const fn id(&self) -> ObservationGroupId {
+        self.id
+    }
+
+    pub fn surface_input_ports(&self) -> &[SurfaceInputPortId] {
+        &self.surface_input_ports
+    }
+}
+
+/// Attachment-time binding of a compiled group to one runtime stream epoch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ObservationStreamBinding {
+    group: ObservationGroupId,
+    stream: ObservationStreamId,
+}
+
+impl ObservationStreamBinding {
+    pub const fn new(group: ObservationGroupId, stream: ObservationStreamId) -> Self {
+        Self { group, stream }
+    }
+
+    pub const fn group(self) -> ObservationGroupId {
+        self.group
+    }
+
+    pub const fn stream(self) -> ObservationStreamId {
+        self.stream
+    }
+}
+
 /// Immutable generic point Program.
 pub struct Program<Evaluation>
 where
@@ -287,7 +333,7 @@ where
     PointInvocation<Evaluation>: Copy,
 {
     colors: Vec<ColorInput>,
-    surface_input_ports: Vec<SurfaceInputPortId>,
+    observation_group: ObservationGroup,
     opacities: Vec<OpacityInput>,
     paints: Vec<Paint>,
     surfaces: Vec<Surface>,
@@ -305,7 +351,7 @@ where
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         colors: Vec<ColorInput>,
-        surface_input_ports: Vec<SurfaceInputPortId>,
+        observation_group: ObservationGroup,
         opacities: Vec<OpacityInput>,
         paints: Vec<Paint>,
         surfaces: Vec<Surface>,
@@ -316,7 +362,7 @@ where
     ) -> Self {
         Self {
             colors,
-            surface_input_ports,
+            observation_group,
             opacities,
             paints,
             surfaces,
@@ -391,7 +437,9 @@ pub enum ProgramCompileError {
     OpacityOutOfDomain {
         input: OpacityInputId,
     },
-    EmptySurfaceSchema,
+    EmptyObservationGroup {
+        group: ObservationGroupId,
+    },
     EmptyOccurrenceSet,
     EmptyConstraintSet,
     EmptyOutputSet,
@@ -434,6 +482,11 @@ struct CompiledOutputBinding {
     paint: CompiledPaintSlotV1,
 }
 
+struct CompiledObservationGroupV1 {
+    id: ObservationGroupId,
+    surface_input_ports: Box<[SurfaceInputPortId]>,
+}
+
 struct ProgramEpochV1<Evaluation>
 where
     Evaluation: PointEvaluatorV1,
@@ -442,7 +495,7 @@ where
     evaluator: Evaluation,
     graph: CompiledAppearanceGraph,
     binding_template: AdmittedAppearanceBindings,
-    surface_input_ports: Box<[SurfaceInputPortId]>,
+    observation_group: CompiledObservationGroupV1,
     constraints: Box<[CompiledPointConstraint<PointInvocation<Evaluation>>]>,
     outputs: Box<[CompiledOutputBinding]>,
 }
@@ -461,8 +514,12 @@ where
     Evaluation: PointEvaluatorV1,
     PointInvocation<Evaluation>: Copy,
 {
+    pub const fn observation_group_id(&self) -> ObservationGroupId {
+        self.epoch.observation_group.id
+    }
+
     pub fn surface_input_ports(&self) -> &[SurfaceInputPortId] {
-        &self.epoch.surface_input_ports
+        &self.epoch.observation_group.surface_input_ports
     }
 
     pub fn constraint_ids(&self) -> impl ExactSizeIterator<Item = ConstraintId> + '_ {
@@ -487,6 +544,10 @@ where
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PointRenderAttachError {
     Disposed,
+    ObservationGroupMismatch {
+        expected: ObservationGroupId,
+        actual: ObservationGroupId,
+    },
     ResourceExhausted,
     InternalInvariant,
 }
@@ -519,10 +580,16 @@ where
         self.current = None;
     }
 
+    pub fn observation_group_id(&self) -> Option<ObservationGroupId> {
+        self.current
+            .as_deref()
+            .map(|epoch| epoch.observation_group.id)
+    }
+
     pub fn surface_input_ports(&self) -> Option<&[SurfaceInputPortId]> {
         self.current
             .as_deref()
-            .map(|epoch| epoch.surface_input_ports.as_ref())
+            .map(|epoch| epoch.observation_group.surface_input_ports.as_ref())
     }
 
     pub fn constraint_ids(&self) -> Option<impl ExactSizeIterator<Item = ConstraintId> + '_> {
@@ -541,11 +608,20 @@ where
     }
 
     /// Fallibly allocate every hot-path frame before the Session escapes.
-    pub fn attach(&self) -> Result<Session<Evaluation>, PointRenderAttachError> {
+    pub fn attach(
+        &self,
+        binding: ObservationStreamBinding,
+    ) -> Result<Session<Evaluation>, PointRenderAttachError> {
         let epoch = self
             .current
             .as_ref()
             .ok_or(PointRenderAttachError::Disposed)?;
+        if binding.group != epoch.observation_group.id {
+            return Err(PointRenderAttachError::ObservationGroupMismatch {
+                expected: epoch.observation_group.id,
+                actual: binding.group,
+            });
+        }
         let workspace = epoch
             .graph
             .new_workspace()
@@ -561,6 +637,7 @@ where
         ];
         Ok(Session {
             epoch: Rc::downgrade(epoch),
+            stream: binding.stream,
             bindings,
             workspace,
             free_frames,
@@ -585,8 +662,10 @@ where
     Evaluation: PointEvaluatorV1,
     PointInvocation<Evaluation>: Copy,
 {
-    if program.surface_input_ports.is_empty() {
-        return Err(ProgramCompileError::EmptySurfaceSchema);
+    if program.observation_group.surface_input_ports.is_empty() {
+        return Err(ProgramCompileError::EmptyObservationGroup {
+            group: program.observation_group.id,
+        });
     }
     if program.occurrences.is_empty() {
         return Err(ProgramCompileError::EmptyOccurrenceSet);
@@ -610,9 +689,9 @@ where
 
     let mut surface_input_ports = Vec::new();
     surface_input_ports
-        .try_reserve_exact(program.surface_input_ports.len())
+        .try_reserve_exact(program.observation_group.surface_input_ports.len())
         .map_err(|_| ProgramCompileError::ResourceExhausted)?;
-    surface_input_ports.extend_from_slice(&program.surface_input_ports);
+    surface_input_ports.extend_from_slice(&program.observation_group.surface_input_ports);
     surface_input_ports.sort_unstable();
     if !canonical_surface_input_port_sequence_matches(
         graph.surface_input_ports(),
@@ -627,7 +706,10 @@ where
         evaluator: program.evaluator,
         graph,
         binding_template,
-        surface_input_ports: surface_input_ports.into_boxed_slice(),
+        observation_group: CompiledObservationGroupV1 {
+            id: program.observation_group.id,
+            surface_input_ports: surface_input_ports.into_boxed_slice(),
+        },
         constraints,
         outputs,
     })
@@ -781,7 +863,7 @@ where
 {
     AppearanceGraphSpec::new(
         program.colors.iter().map(|input| input.id).collect(),
-        program.surface_input_ports.clone(),
+        program.observation_group.surface_input_ports.clone(),
         program.opacities.iter().map(|input| input.id).collect(),
         program
             .paints
@@ -838,6 +920,7 @@ where
             .map(|input| (input.id, input.value))
             .collect(),
         program
+            .observation_group
             .surface_input_ports
             .iter()
             .map(|input| (*input, Srgb8::new([0; 3])))
@@ -956,17 +1039,53 @@ impl SurfaceSignal {
     }
 }
 
+/// Transport-only payload carried by one stream-affine point update.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SurfaceUpdatePayload<'input> {
+    Unavailable { reason: u32 },
+    Present { surfaces: &'input [SurfaceSignal] },
+}
+
 /// Borrowed, correlated runtime update for one attached Session.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SurfaceUpdate<'input> {
-    Unavailable {
-        revision: u64,
-        reason: u32,
-    },
-    Present {
+pub struct SurfaceUpdate<'input> {
+    stream: ObservationStreamId,
+    revision: u64,
+    payload: SurfaceUpdatePayload<'input>,
+}
+
+impl<'input> SurfaceUpdate<'input> {
+    pub const fn unavailable(stream: ObservationStreamId, revision: u64, reason: u32) -> Self {
+        Self {
+            stream,
+            revision,
+            payload: SurfaceUpdatePayload::Unavailable { reason },
+        }
+    }
+
+    pub const fn present(
+        stream: ObservationStreamId,
         revision: u64,
         surfaces: &'input [SurfaceSignal],
-    },
+    ) -> Self {
+        Self {
+            stream,
+            revision,
+            payload: SurfaceUpdatePayload::Present { surfaces },
+        }
+    }
+
+    pub const fn stream(self) -> ObservationStreamId {
+        self.stream
+    }
+
+    pub const fn revision(self) -> u64 {
+        self.revision
+    }
+
+    pub const fn payload(self) -> SurfaceUpdatePayload<'input> {
+        self.payload
+    }
 }
 
 /// Evaluator classification with the exact bound occurrence evidence.
@@ -1108,10 +1227,11 @@ where
     fn try_new(epoch: &ProgramEpochV1<Evaluation>) -> Result<Self, PointRenderAttachError> {
         let mut surfaces = Vec::new();
         surfaces
-            .try_reserve_exact(epoch.surface_input_ports.len())
+            .try_reserve_exact(epoch.observation_group.surface_input_ports.len())
             .map_err(|_| PointRenderAttachError::ResourceExhausted)?;
         surfaces.extend(
             epoch
+                .observation_group
                 .surface_input_ports
                 .iter()
                 .copied()
@@ -1310,6 +1430,10 @@ where
 #[derive(Debug, PartialEq, Eq)]
 pub enum SessionUpdateError<EvaluationError> {
     ProgramExpired,
+    ObservationStreamMismatch {
+        expected: ObservationStreamId,
+        actual: ObservationStreamId,
+    },
     SurfaceInputPortLengthMismatch {
         expected: usize,
         actual: usize,
@@ -1340,6 +1464,7 @@ where
     PointInvocation<Evaluation>: Copy,
 {
     epoch: Weak<ProgramEpochV1<Evaluation>>,
+    stream: ObservationStreamId,
     bindings: AdmittedAppearanceBindings,
     workspace: AppearanceWorkspace,
     free_frames: [Option<ExecutionFrame<Evaluation>>; 3],
@@ -1355,6 +1480,10 @@ where
         &self.state
     }
 
+    pub const fn stream(&self) -> ObservationStreamId {
+        self.stream
+    }
+
     pub fn update(
         &mut self,
         update: SurfaceUpdate<'_>,
@@ -1364,18 +1493,28 @@ where
             .epoch
             .upgrade()
             .ok_or(SessionUpdateError::ProgramExpired)?;
-        match update {
-            SurfaceUpdate::Unavailable { revision, reason } => {
-                self.apply_unavailable(SurfaceUnavailable { revision, reason })
+        if update.stream != self.stream {
+            return Err(SessionUpdateError::ObservationStreamMismatch {
+                expected: self.stream,
+                actual: update.stream,
+            });
+        }
+        match update.payload {
+            SurfaceUpdatePayload::Unavailable { reason } => {
+                self.apply_unavailable(SurfaceUnavailable {
+                    revision: update.revision,
+                    reason,
+                })
             }
-            SurfaceUpdate::Present { revision, surfaces } => {
-                if surfaces.len() != epoch.surface_input_ports.len() {
+            SurfaceUpdatePayload::Present { surfaces } => {
+                if surfaces.len() != epoch.observation_group.surface_input_ports.len() {
                     return Err(SessionUpdateError::SurfaceInputPortLengthMismatch {
-                        expected: epoch.surface_input_ports.len(),
+                        expected: epoch.observation_group.surface_input_ports.len(),
                         actual: surfaces.len(),
                     });
                 }
                 for (index, (&expected, actual)) in epoch
+                    .observation_group
                     .surface_input_ports
                     .iter()
                     .zip(surfaces.iter())
@@ -1389,7 +1528,7 @@ where
                         });
                     }
                 }
-                self.apply_canonical_present(&epoch, revision, surfaces.len(), |index| {
+                self.apply_canonical_present(&epoch, update.revision, surfaces.len(), |index| {
                     surfaces[index].value
                 })
             }
@@ -1398,6 +1537,7 @@ where
 
     pub(crate) fn update_canonical_present(
         &mut self,
+        stream: ObservationStreamId,
         revision: u64,
         surface_input_port_count: usize,
         value_at: impl FnMut(usize) -> Srgb8,
@@ -1407,6 +1547,12 @@ where
             .epoch
             .upgrade()
             .ok_or(SessionUpdateError::ProgramExpired)?;
+        if stream != self.stream {
+            return Err(SessionUpdateError::ObservationStreamMismatch {
+                expected: self.stream,
+                actual: stream,
+            });
+        }
         self.apply_canonical_present(&epoch, revision, surface_input_port_count, value_at)
     }
 
@@ -1463,9 +1609,9 @@ where
         mut value_at: impl FnMut(usize) -> Srgb8,
     ) -> Result<&SessionState<Evaluation>, SessionUpdateError<PointEvaluationError<Evaluation>>>
     {
-        if surface_input_port_count != epoch.surface_input_ports.len() {
+        if surface_input_port_count != epoch.observation_group.surface_input_ports.len() {
             return Err(SessionUpdateError::SurfaceInputPortLengthMismatch {
-                expected: epoch.surface_input_ports.len(),
+                expected: epoch.observation_group.surface_input_ports.len(),
                 actual: surface_input_port_count,
             });
         }
@@ -1484,7 +1630,7 @@ where
         let mut frame =
             take_free_frame(&mut self.free_frames).ok_or(SessionUpdateError::InternalInvariant)?;
         frame.clear_dynamic();
-        if frame.surfaces.len() != epoch.surface_input_ports.len()
+        if frame.surfaces.len() != epoch.observation_group.surface_input_ports.len()
             || frame.reports.len() != epoch.constraints.len()
             || frame.outputs.len() != epoch.outputs.len()
         {
@@ -1496,11 +1642,13 @@ where
         if self
             .bindings
             .overwrite_surface_inputs_canonical(
-                epoch.surface_input_ports.iter().copied(),
+                epoch.observation_group.surface_input_ports.iter().copied(),
                 &mut |index| {
                     let value = value_at(index);
-                    surface_slots[index] =
-                        SurfaceSignal::new(epoch.surface_input_ports[index], value);
+                    surface_slots[index] = SurfaceSignal::new(
+                        epoch.observation_group.surface_input_ports[index],
+                        value,
+                    );
                     value
                 },
             )

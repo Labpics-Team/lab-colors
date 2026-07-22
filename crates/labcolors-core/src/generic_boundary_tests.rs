@@ -66,6 +66,73 @@ fn program_session_module_docs_disclaim_transport_only_scope() {
 }
 
 #[test]
+fn current_og0_program_epoch_has_one_explicit_group_without_scenario_scope_creep() {
+    fn declaration<'a>(source: &'a str, start: &str, end: &str) -> &'a str {
+        let start = source
+            .find(start)
+            .unwrap_or_else(|| panic!("missing OG0 declaration start `{start}`"));
+        let end = source[start..]
+            .find(end)
+            .map(|offset| start + offset)
+            .unwrap_or_else(|| panic!("missing OG0 declaration end `{end}`"));
+        &source[start..end]
+    }
+
+    // This pins only the current private OG0 Program/epoch shape. It does not
+    // prescribe how a future explicit join or independent component API works.
+    let program = declaration(
+        PROGRAM_SESSION_SOURCE,
+        "pub struct Program<",
+        "impl<Evaluation> Program",
+    );
+    let epoch = declaration(
+        PROGRAM_SESSION_SOURCE,
+        "struct ProgramEpochV1<",
+        "/// Fully validated immutable Program",
+    );
+    assert_eq!(
+        program
+            .matches("observation_group: ObservationGroup,")
+            .count(),
+        1,
+        "the current OG0 authored Program owns one explicit atomic group"
+    );
+    assert_eq!(
+        epoch
+            .matches("observation_group: CompiledObservationGroupV1,")
+            .count(),
+        1,
+        "the current OG0 epoch must retain that one compiled group"
+    );
+    for (name, scope) in [("Program", program), ("ProgramEpochV1", epoch)] {
+        for forbidden in ["Vec<ObservationGroup>", "Scenario"] {
+            assert!(
+                !scope.contains(forbidden),
+                "current OG0 {name} declaration must not grow `{forbidden}` scope"
+            );
+        }
+    }
+
+    for forbidden in [
+        "Vec<ObservationGroup>",
+        "ScenarioId",
+        "ScenarioSet",
+        "ObservedScenarioSet",
+        "GraphTemplate",
+        "Cartesian",
+        "wasm_bindgen",
+        "serde",
+        "Dto",
+        "DTO",
+    ] {
+        assert!(
+            !PROGRAM_SESSION_SOURCE.contains(forbidden),
+            "current OG0 transport module must not acquire `{forbidden}` scope"
+        );
+    }
+}
+
+#[test]
 fn f0_signal_transform_has_no_renderer_alias_or_raw_xyz_production_constructor() {
     for forbidden in [
         "RenderProfileId",

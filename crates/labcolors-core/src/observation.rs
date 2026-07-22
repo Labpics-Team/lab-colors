@@ -9,6 +9,16 @@ use core::ops::Range;
 use crate::Srgb8;
 use crate::appearance::SurfaceInputPortId;
 
+/// Stable compile-time identity of one atomic observation boundary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub(crate) struct ObservationGroupId(u32);
+
+impl ObservationGroupId {
+    pub(crate) const fn new(raw: u32) -> Self {
+        Self(raw)
+    }
+}
+
 /// Runtime instance/epoch of one atomic observation stream.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct ObservationStreamId(u32);
