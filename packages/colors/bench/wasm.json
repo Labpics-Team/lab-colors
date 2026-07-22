@@ -19,13 +19,13 @@
     "command": "CARGO_ENCODED_RUSTFLAGS=<rustPathRemap> wasm-pack build crates/labcolors-wasm --release --target web --out-dir ../../packages/colors/pkg --out-name labcolors --locked"
   },
   "measurement": {
-    "source": "github-actions-run-29875865333",
+    "source": "github-actions-run-29934462817",
     "platform": "linux-x64",
-    "rawBytes": 421398
+    "rawBytes": 424971
   },
   "policy": {
-    "maxRawBytes": 421398,
-    "basis": "c8d-revision-bound-point-support",
+    "maxRawBytes": 424971,
+    "basis": "v2a-domain-safe-joint-selection",
     "gzip": "diagnostic-only"
   }
 }

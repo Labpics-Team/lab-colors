@@ -458,11 +458,13 @@ fn foreign_disjoint_and_partially_overlapping_policy_domains_are_typed_errors() 
     .unwrap();
     let disjoint_feasible = make_actual();
     crate::composition::reset_source_over_evaluation_count();
-    let (disjoint, disjoint_allocations) =
-        crate::test_support::measured_allocations(|| disjoint_feasible.select(disjoint_policy));
-    let Err(disjoint_failure) = disjoint else {
-        panic!("a disjoint policy domain must be rejected");
-    };
+    let (disjoint_failure, disjoint_allocations) =
+        crate::test_support::measured_allocations(|| {
+            match disjoint_feasible.select(disjoint_policy) {
+                Ok(_) => panic!("a disjoint policy domain must be rejected"),
+                Err(failure) => failure,
+            }
+        });
     assert_eq!(
         disjoint_failure.reason(),
         SelectionPolicyErrorV1::CandidateDomainMismatch
@@ -491,11 +493,12 @@ fn foreign_disjoint_and_partially_overlapping_policy_domains_are_typed_errors() 
     .unwrap();
     let partial_feasible = make_actual();
     crate::composition::reset_source_over_evaluation_count();
-    let (partial, partial_allocations) =
-        crate::test_support::measured_allocations(|| partial_feasible.select(partial_policy));
-    let Err(partial_failure) = partial else {
-        panic!("a partially overlapping policy domain must be rejected");
-    };
+    let (partial_failure, partial_allocations) = crate::test_support::measured_allocations(|| {
+        match partial_feasible.select(partial_policy) {
+            Ok(_) => panic!("a partially overlapping policy domain must be rejected"),
+            Err(failure) => failure,
+        }
+    });
     assert_eq!(
         partial_failure.reason(),
         SelectionPolicyErrorV1::CandidateDomainMismatch
