@@ -16,6 +16,22 @@ pub(crate) mod accent_balance;
 pub mod alpha;
 pub(crate) mod analog;
 pub(crate) mod appearance;
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "private F0 colour-identity foundation precedes the terminal public hard cut"
+    )
+)]
+pub(crate) mod lcs_occurrence;
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "private encoded point-render Session precedes its package-private WASM bridge"
+    )
+)]
+pub(crate) mod program_session;
 pub mod config;
 pub(crate) mod constraints;
 pub mod glow;
@@ -56,6 +72,15 @@ mod agnostic_gates;
 
 #[cfg(test)]
 mod appearance_graph_tests;
+
+#[cfg(test)]
+mod lcs_occurrence_tests;
+
+#[cfg(test)]
+mod program_session_tests;
+
+#[cfg(test)]
+mod generic_boundary_tests;
 
 #[cfg_attr(
     not(test),

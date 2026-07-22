@@ -3,7 +3,7 @@
 //! Граф владеет только физической топологией: Paint материализуется независимо
 //! от подложки, Occurrence является его единственным применением к Surface, а
 //! `surfaceFrom` лишь даёт видимому результату повторно используемую identity.
-//! Словарь Pair/role и perception-утверждения сюда не входят.
+//! Клиентский словарь и perception-утверждения сюда не входят.
 
 use proptest::prelude::*;
 
@@ -237,6 +237,96 @@ fn complete_typed_id_renaming_does_not_change_physics() {
         first.surface_rgb(DERIVED_SURFACE),
         second.surface_rgb(derived_surface)
     );
+}
+
+#[test]
+fn equal_transport_numbers_remain_opaque_in_a_nested_occurrence_graph() {
+    let first_color = ColorInputId::new(41);
+    let second_color = ColorInputId::new(7);
+    let surface_port = SurfaceInputPortId::new(41);
+    let first_opacity = OpacityInputId::new(41);
+    let second_opacity = OpacityInputId::new(7);
+    let first_solid = PaintId::new(41);
+    let first_modulated = PaintId::new(42);
+    let second_solid = PaintId::new(7);
+    let second_modulated = PaintId::new(8);
+    let backdrop = SurfaceId::new(41);
+    let derived = SurfaceId::new(7);
+    let first_occurrence = OccurrenceId::new(41);
+    let second_occurrence = OccurrenceId::new(7);
+
+    let graph = AppearanceGraphSpec::new(
+        vec![first_color, second_color],
+        vec![surface_port],
+        vec![first_opacity, second_opacity],
+        vec![
+            PaintSpec::Opacity {
+                id: first_modulated,
+                source: first_solid,
+                opacity: first_opacity,
+            },
+            PaintSpec::Solid {
+                id: second_solid,
+                color: second_color,
+            },
+            PaintSpec::Opacity {
+                id: second_modulated,
+                source: second_solid,
+                opacity: second_opacity,
+            },
+            PaintSpec::Solid {
+                id: first_solid,
+                color: first_color,
+            },
+        ],
+        vec![
+            SurfaceSpec::FromOccurrence {
+                id: derived,
+                occurrence: first_occurrence,
+            },
+            SurfaceSpec::Input {
+                id: backdrop,
+                port: surface_port,
+            },
+        ],
+        vec![
+            OccurrenceSpec {
+                id: second_occurrence,
+                subject: second_modulated,
+                against: derived,
+                profile: CompositionProfileV1::EncodedSrgb8SourceOverV1,
+            },
+            OccurrenceSpec {
+                id: first_occurrence,
+                subject: first_modulated,
+                against: backdrop,
+                profile: CompositionProfileV1::EncodedSrgb8SourceOverV1,
+            },
+        ],
+    )
+    .compile()
+    .unwrap();
+    let evaluated = graph
+        .evaluate(&AppearanceBindings::new(
+            vec![
+                (first_color, Srgb8::new([200, 80, 40])),
+                (second_color, Srgb8::new([30, 160, 230])),
+            ],
+            vec![(surface_port, Srgb8::new([20, 40, 60]))],
+            vec![(first_opacity, 0.5), (second_opacity, 0.25)],
+        ))
+        .unwrap();
+
+    let first = evaluated.occurrence(first_occurrence).unwrap();
+    let second = evaluated.occurrence(second_occurrence).unwrap();
+    assert_eq!(first.subject(), first_modulated);
+    assert_eq!(first.against(), backdrop);
+    assert_eq!(first.visible(), [110, 60, 50]);
+    assert_eq!(evaluated.surface_rgb(derived), Some([110, 60, 50]));
+    assert_eq!(second.subject(), second_modulated);
+    assert_eq!(second.against(), derived);
+    assert_eq!(second.backdrop(), first.visible());
+    assert_eq!(second.visible(), [90, 85, 95]);
 }
 
 #[test]
@@ -852,7 +942,8 @@ proptest! {
         } else {
             (invalid, 0.5, OPACITY)
         };
-        let expected_message = crate::composition::validate_alpha(invalid).unwrap_err();
+        let expected_reason =
+            crate::composition::AdmittedOpacityV1::new(invalid).unwrap_err();
         prop_assert_eq!(
             graph.evaluate(&AppearanceBindings::new(
                 vec![(SOURCE, Srgb8::new([1, 2, 3]))],
@@ -861,7 +952,7 @@ proptest! {
             )),
             Err(BindingError::OpacityOutOfDomain {
                 input: expected_input,
-                message: expected_message,
+                reason: expected_reason,
             })
         );
     }
@@ -1333,16 +1424,53 @@ fn evaluate_rejects_duplicate_missing_and_unexpected_bindings() {
 }
 
 #[test]
-fn evaluate_rejects_invalid_alpha_with_the_ssot_domain_text() {
+fn binding_admission_is_atomic_before_any_occurrence_is_evaluated() {
+    let graph = point_component(false, false).compile().unwrap();
+
+    crate::composition::reset_source_over_evaluation_count();
+    let duplicate_surface = graph.evaluate(&AppearanceBindings::new(
+        vec![(SOURCE, Srgb8::new([1, 2, 3]))],
+        vec![
+            (CONTEXT, Srgb8::new([4, 5, 6])),
+            (CONTEXT, Srgb8::new([7, 8, 9])),
+        ],
+        vec![(OPACITY, 0.5)],
+    ));
+    assert_eq!(
+        duplicate_surface,
+        Err(BindingError::DuplicateSurfaceInputBinding { input: CONTEXT })
+    );
+    assert_eq!(crate::composition::source_over_evaluation_count(), 0);
+
+    crate::composition::reset_source_over_evaluation_count();
+    let invalid_opacity = graph.evaluate(&bindings([1, 2, 3], f64::NAN, [4, 5, 6]));
+    assert_eq!(
+        invalid_opacity,
+        Err(BindingError::OpacityOutOfDomain {
+            input: OPACITY,
+            reason: crate::composition::OpacityAdmissionErrorV1::NonFinite,
+        })
+    );
+    assert_eq!(crate::composition::source_over_evaluation_count(), 0);
+
+    let evaluated = graph
+        .evaluate(&bindings([1, 2, 3], 0.5, [4, 5, 6]))
+        .unwrap();
+    assert_eq!(crate::composition::source_over_evaluation_count(), 1);
+    assert!(evaluated.occurrence(FILL_OCCURRENCE).is_some());
+}
+
+#[test]
+fn evaluate_rejects_invalid_alpha_with_the_typed_admission_reason() {
     let graph = point_component(false, false).compile().unwrap();
     for bad_alpha in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, -0.1, 1.5] {
-        let expected = crate::alpha::composite_over_srgb8([1, 2, 3], bad_alpha, [4, 5, 6])
-            .expect_err("композитор обязан отвергать тот же домен alpha");
+        let expected = crate::composition::AdmittedOpacityV1::new(bad_alpha)
+            .expect_err("общий admission обязан отвергать alpha");
         assert_eq!(
             graph.evaluate(&bindings([1, 2, 3], bad_alpha, [4, 5, 6])),
             Err(BindingError::OpacityOutOfDomain {
                 input: OPACITY,
-                message: expected,
+                reason: expected,
             }),
             "alpha={bad_alpha}"
         );
@@ -1363,4 +1491,158 @@ fn signed_zero_opacity_has_one_canonical_state() {
         negative.paint(FILL_PAINT).unwrap().opacity_bits(),
         0.0f64.to_bits()
     );
+}
+
+#[test]
+fn admitted_bindings_and_workspace_are_reused_without_storage_churn() {
+    let graph = point_component(false, false).compile().unwrap();
+    let mut admitted = graph
+        .admit_bindings(&bindings([200, 80, 40], 0.5, [20, 40, 60]))
+        .unwrap();
+    let mut independent = admitted.try_clone_v1().unwrap();
+    assert_eq!(independent, admitted);
+    independent
+        .set_surface_input(CONTEXT, Srgb8::new([1, 2, 3]))
+        .unwrap();
+    assert_ne!(independent, admitted);
+    assert_eq!(admitted.opacity_bits(OPACITY), Some(0.5f64.to_bits()));
+    assert_eq!(
+        graph.occurrence_ids().collect::<Vec<_>>(),
+        vec![FILL_OCCURRENCE]
+    );
+    assert_eq!(
+        graph.surface_input_ports().collect::<Vec<_>>(),
+        vec![CONTEXT]
+    );
+
+    let mut workspace = graph.new_workspace().unwrap();
+    let storage = workspace.storage_signature();
+    for (backdrop, expected) in [
+        ([20, 40, 60], [110, 60, 50]),
+        ([100, 100, 100], [150, 90, 70]),
+    ] {
+        admitted
+            .set_surface_input(CONTEXT, Srgb8::new(backdrop))
+            .unwrap();
+        {
+            let evaluated = graph
+                .evaluate_admitted_into(&admitted, &mut workspace)
+                .unwrap();
+            assert_eq!(
+                evaluated.paint(FILL_PAINT).unwrap().opacity_bits(),
+                0.5f64.to_bits()
+            );
+            assert_eq!(evaluated.surface_rgb(CONTEXT_SURFACE), Some(backdrop));
+            assert_eq!(
+                evaluated.occurrence(FILL_OCCURRENCE).unwrap().visible(),
+                expected
+            );
+            assert_eq!(
+                evaluated
+                    .occurrences()
+                    .map(|occurrence| occurrence.id())
+                    .collect::<Vec<_>>(),
+                vec![FILL_OCCURRENCE]
+            );
+        }
+        assert_eq!(workspace.storage_signature(), storage);
+    }
+}
+
+#[test]
+fn admitted_schema_and_workspace_shape_mismatches_fail_before_composition() {
+    let graph = point_component(false, false).compile().unwrap();
+    let admitted = graph
+        .admit_bindings(&bindings([1, 2, 3], 0.5, [4, 5, 6]))
+        .unwrap();
+    let empty = AppearanceGraphSpec::new(vec![], vec![], vec![], vec![], vec![], vec![])
+        .compile()
+        .unwrap();
+    let mut wrong_workspace = empty.new_workspace().unwrap();
+    let wrong_storage = wrong_workspace.storage_signature();
+
+    crate::composition::reset_source_over_evaluation_count();
+    assert_eq!(
+        graph
+            .evaluate_admitted_into(&admitted, &mut wrong_workspace)
+            .unwrap_err(),
+        BindingError::IncompatibleWorkspace
+    );
+    assert_eq!(crate::composition::source_over_evaluation_count(), 0);
+    assert_eq!(wrong_workspace.storage_signature(), wrong_storage);
+
+    let other_source = ColorInputId::new(100);
+    let other_context = SurfaceInputPortId::new(101);
+    let other_opacity = OpacityInputId::new(102);
+    let other_solid = PaintId::new(103);
+    let other_paint = PaintId::new(104);
+    let other_surface = SurfaceId::new(105);
+    let other_derived = SurfaceId::new(106);
+    let other_occurrence = OccurrenceId::new(107);
+    let other = AppearanceGraphSpec::new(
+        vec![other_source],
+        vec![other_context],
+        vec![other_opacity],
+        vec![
+            PaintSpec::Solid {
+                id: other_solid,
+                color: other_source,
+            },
+            PaintSpec::Opacity {
+                id: other_paint,
+                source: other_solid,
+                opacity: other_opacity,
+            },
+        ],
+        vec![
+            SurfaceSpec::Input {
+                id: other_surface,
+                port: other_context,
+            },
+            SurfaceSpec::FromOccurrence {
+                id: other_derived,
+                occurrence: other_occurrence,
+            },
+        ],
+        vec![OccurrenceSpec {
+            id: other_occurrence,
+            subject: other_paint,
+            against: other_surface,
+            profile: CompositionProfileV1::EncodedSrgb8SourceOverV1,
+        }],
+    )
+    .compile()
+    .unwrap();
+    let other_admitted = other
+        .admit_bindings(&AppearanceBindings::new(
+            vec![(other_source, Srgb8::new([1, 2, 3]))],
+            vec![(other_context, Srgb8::new([4, 5, 6]))],
+            vec![(other_opacity, 0.5)],
+        ))
+        .unwrap();
+    let mut workspace = graph.new_workspace().unwrap();
+    let storage = workspace.storage_signature();
+
+    assert_eq!(
+        graph
+            .evaluate_admitted_into(&other_admitted, &mut workspace)
+            .unwrap_err(),
+        BindingError::IncompatibleAdmittedBindings
+    );
+    assert_eq!(crate::composition::source_over_evaluation_count(), 0);
+    assert_eq!(workspace.storage_signature(), storage);
+}
+
+#[test]
+fn invalid_opacity_is_rejected_during_admission_before_any_composition() {
+    let graph = point_component(false, false).compile().unwrap();
+    crate::composition::reset_source_over_evaluation_count();
+    assert_eq!(
+        graph.admit_bindings(&bindings([1, 2, 3], f64::NAN, [4, 5, 6])),
+        Err(BindingError::OpacityOutOfDomain {
+            input: OPACITY,
+            reason: crate::composition::OpacityAdmissionErrorV1::NonFinite,
+        })
+    );
+    assert_eq!(crate::composition::source_over_evaluation_count(), 0);
 }
