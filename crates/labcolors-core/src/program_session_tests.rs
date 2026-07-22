@@ -3,7 +3,8 @@ use std::convert::Infallible;
 
 use crate::Srgb8;
 use crate::appearance::{
-    ColorInputId, OccurrenceId, OpacityInputId, PaintId, SurfaceId, SurfaceInputPortId,
+    ColorInputId, EncodedPointPaintV1, OccurrenceId, OpacityInputId, PaintId, SurfaceId,
+    SurfaceInputPortId,
 };
 use crate::constraints::{
     ExactSrgb8IdentityV1, PointEvaluatorV1, PointInvocation, ProgramTestEvaluationErrorV1,
@@ -778,8 +779,8 @@ fn wcag_report_only_uses_visible_808080_but_emits_black_half_alpha_paint() {
     assert_eq!(output.output(), OUTPUT);
     assert_eq!(output.paint(), TRANSLUCENT);
     assert_eq!(output.value().source(), Srgb8::new([0; 3]));
-    assert_eq!(output.value().straight_alpha(), 0.5);
-    assert_eq!(output.value().straight_alpha_bits(), 0.5f64.to_bits());
+    assert_eq!(output.value().opacity().value(), 0.5);
+    assert_eq!(output.value().opacity().bits(), 0.5f64.to_bits());
 
     let mut report = current.report();
     let Some(ConstraintReportEntry::ReportOnly(assessment)) = report.next() else {
@@ -880,7 +881,7 @@ fn all_constraints_run_before_hard_gate_and_report_order_is_canonical() {
 }
 
 #[test]
-fn report_only_violation_never_gates_terminal_paint() {
+fn report_only_violation_never_gates_the_routed_encoded_paint() {
     let program = exact_program(
         vec![ConstraintInvocation::hard(
             REQUIRED,
@@ -910,7 +911,7 @@ fn report_only_violation_never_gates_terminal_paint() {
 }
 
 #[test]
-fn output_slot_renaming_changes_routing_not_physical_paint() {
+fn output_slot_renaming_changes_only_route_and_reuses_the_exact_encoded_paint() {
     fn resolve(output: OutputSlotId) -> crate::program_session::OutputValueV1 {
         let program = base_program(
             0.5,
@@ -942,19 +943,91 @@ fn output_slot_renaming_changes_routing_not_physical_paint() {
     assert_ne!(left.output(), renamed.output());
     assert_eq!(left.paint(), renamed.paint());
     assert_eq!(left.value(), renamed.value());
-    assert_eq!(left.value().source(), Srgb8::new([0; 3]));
-    assert_eq!(left.value().straight_alpha_bits(), 0.5f64.to_bits());
+    assert_eq!(left.paint(), left.value().id());
+    assert_eq!(renamed.paint(), renamed.value().id());
+    assert_eq!(
+        left.value(),
+        EncodedPointPaintV1::from_admitted(
+            TRANSLUCENT,
+            Srgb8::new([0; 3]),
+            crate::composition::AdmittedOpacityV1::new(0.5).unwrap(),
+        )
+    );
+    assert_eq!(left.value().opacity().bits(), 0.5f64.to_bits());
+}
+
+#[test]
+fn consistent_paint_id_renaming_changes_only_nominal_identity() {
+    fn resolve(solid: PaintId, translucent: PaintId) -> EncodedPointPaintV1 {
+        let program = Program::new(
+            vec![ColorInput::new(COLOR, Srgb8::new([0; 3]))],
+            observation_group(vec![SURFACE_PORT]),
+            vec![OpacityInput::new(OPACITY, 0.5)],
+            vec![
+                Paint::Solid {
+                    id: solid,
+                    color: COLOR,
+                },
+                Paint::Opacity {
+                    id: translucent,
+                    source: solid,
+                    opacity: OPACITY,
+                },
+            ],
+            vec![Surface::Input {
+                id: BACKDROP,
+                input: SURFACE_PORT,
+            }],
+            vec![Occurrence::new(
+                OCCURRENCE,
+                translucent,
+                BACKDROP,
+                CompositionProfile::EncodedSrgb8SourceOverV1,
+            )],
+            ConstraintSet::new(
+                vec![ConstraintInvocation::hard(
+                    REQUIRED,
+                    OCCURRENCE,
+                    Srgb8::new([0x80; 3]),
+                )],
+                vec![],
+            ),
+            vec![OutputBinding::new(OUTPUT, translucent)],
+            ExactSrgb8IdentityV1,
+        );
+        let owner = program.compile().unwrap().into_owner();
+        let mut session = owner.attach(default_stream_binding()).unwrap();
+        let SessionState::Ready { current } = session
+            .update_canonical_present(STREAM_A, 1, 1, |_| Srgb8::new([0xff; 3]))
+            .unwrap()
+        else {
+            unreachable!()
+        };
+        let output = current.output(OUTPUT).unwrap();
+        let value: EncodedPointPaintV1 = output.value();
+        assert_eq!(output.paint(), value.id());
+        value
+    }
+
+    let original = resolve(SOLID, TRANSLUCENT);
+    let renamed = resolve(PaintId::new(1_010), PaintId::new(1_011));
+
+    assert_ne!(original.id(), renamed.id());
+    assert_eq!(original.source(), renamed.source());
+    assert_eq!(original.opacity(), renamed.opacity());
+    assert_eq!(original.source(), Srgb8::new([0; 3]));
+    assert_eq!(original.opacity().bits(), 0.5f64.to_bits());
 }
 
 #[test]
 fn point_transport_values_and_classifier_payload_are_nominal_id_invariant_before_f2_binding() {
-    type TerminalPaintProjection = (PaintId, Srgb8, u64);
+    type PreF2PaintProjection = (PaintId, Srgb8, u64);
     type ClassifierPayloadProjection = (ConstraintId, OccurrenceId, Srgb8, Srgb8);
 
     fn resolve(
         group: ObservationGroupId,
         stream: ObservationStreamId,
-    ) -> (TerminalPaintProjection, ClassifierPayloadProjection) {
+    ) -> (PreF2PaintProjection, ClassifierPayloadProjection) {
         let program = base_program_in_group(
             group,
             0.5,
@@ -987,7 +1060,7 @@ fn point_transport_values_and_classifier_payload_are_nominal_id_invariant_before
             (
                 output.paint(),
                 output.value().source(),
-                output.value().straight_alpha_bits(),
+                output.value().opacity().bits(),
             ),
             (assessment.constraint(), assessment.target(), target, actual),
         )
@@ -1690,5 +1763,5 @@ fn canonical_two_port_group_assesses_multiple_occurrences_but_emits_one_paint() 
     let outputs = current.outputs().collect::<Vec<_>>();
     assert_eq!(outputs.len(), 1);
     assert_eq!(outputs[0].value().source(), Srgb8::new([0; 3]));
-    assert_eq!(outputs[0].value().straight_alpha_bits(), 0.5f64.to_bits());
+    assert_eq!(outputs[0].value().opacity().bits(), 0.5f64.to_bits());
 }

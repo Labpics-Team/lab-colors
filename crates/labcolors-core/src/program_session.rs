@@ -8,6 +8,9 @@
 //!
 //! This is the encoded-sRGB8 transport-only executable slice, not the LCS
 //! observation/evidence layer.
+//! This is a private pre-F2 execution slice. It materializes routed Paint
+//! values but does not mint a terminal output certificate or define a public
+//! transport contract.
 
 use std::marker::PhantomData;
 use std::mem;
@@ -17,10 +20,10 @@ use crate::Srgb8;
 use crate::appearance::{
     AdmittedAppearanceBindings, AppearanceBindings, AppearanceGraphSpec, AppearanceWorkspace,
     BindingError, ColorInputId, CompileError, CompiledAppearanceGraph, CompiledOccurrenceSlotV1,
-    CompiledPaintSlotV1, OccurrenceId, OccurrenceSpec, OpacityInputId, PaintId, PaintSpec,
-    SurfaceId, SurfaceInputPortId, SurfaceSpec,
+    CompiledPaintSlotV1, EncodedPointPaintV1, OccurrenceId, OccurrenceSpec, OpacityInputId,
+    PaintId, PaintSpec, SurfaceId, SurfaceInputPortId, SurfaceSpec,
 };
-use crate::composition::{AdmittedOpacityV1, CompositionProfileV1};
+use crate::composition::CompositionProfileV1;
 use crate::constraints::{
     HardDecision, PointEvaluationError, PointEvaluatorV1, PointInvocation,
     VisiblePointPassEvidence, VisiblePointViolationEvidence, assess_visible_point_hard,
@@ -1166,34 +1169,12 @@ where
     }
 }
 
-/// Pure terminal Paint value. Routing identities are intentionally outside it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct OutputPaintV1 {
-    source: Srgb8,
-    straight_alpha: AdmittedOpacityV1,
-}
-
-impl OutputPaintV1 {
-    pub const fn source(self) -> Srgb8 {
-        self.source
-    }
-
-    pub const fn straight_alpha(self) -> f64 {
-        self.straight_alpha.value()
-    }
-
-    pub const fn straight_alpha_bits(self) -> u64 {
-        self.straight_alpha.bits()
-    }
-}
-
-/// One routed terminal cell: opaque client slot, authored Paint identity and
-/// the independent physical Paint value produced for it.
+/// One routed private output cell: an opaque output slot and the exact
+/// materialized Paint produced for it. The Paint owns its sole authored identity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct OutputValueV1 {
     output: OutputSlotId,
-    paint: PaintId,
-    value: OutputPaintV1,
+    value: EncodedPointPaintV1,
 }
 
 impl OutputValueV1 {
@@ -1202,10 +1183,10 @@ impl OutputValueV1 {
     }
 
     pub const fn paint(self) -> PaintId {
-        self.paint
+        self.value.id()
     }
 
-    pub const fn value(self) -> OutputPaintV1 {
+    pub const fn value(self) -> EncodedPointPaintV1 {
         self.value
     }
 }
@@ -1711,13 +1692,13 @@ where
                     put_free_frame(&mut self.free_frames, frame);
                     return Err(SessionUpdateError::InternalInvariant);
                 };
+                if paint.id() != output.paint_id {
+                    put_free_frame(&mut self.free_frames, frame);
+                    return Err(SessionUpdateError::InternalInvariant);
+                }
                 frame.outputs[index] = Some(OutputValueV1 {
                     output: output.output,
-                    paint: output.paint_id,
-                    value: OutputPaintV1 {
-                        source: paint.source(),
-                        straight_alpha: paint.opacity(),
-                    },
+                    value: *paint,
                 });
             }
         }
