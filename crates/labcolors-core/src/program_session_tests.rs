@@ -3,13 +3,18 @@ use crate::appearance::{
     ColorInputId, OccurrenceId, OpacityInputId, PaintId, SurfaceId, SurfaceInputPortId,
 };
 use crate::constraints::{ExactSrgb8IdentityV1, PointEvaluatorV1, PointInvocation};
-use crate::observation::ObservationGroupId;
+use crate::observation::{
+    ObservationGroupId, ObservationHeadViewV1, ObservationPayloadInput, ObservationStreamId,
+    ObservationUpdateInput, ObservedScenarioSetInput, Revision, ScenarioId, ScenarioInput,
+    SurfaceInputBinding,
+};
 use crate::program_session::{
     ColorInput, CompositionProfile, ConstraintId, ConstraintInvocation, ConstraintSet,
     ObservationGroup, Occurrence, OpacityInput, OutputBinding, OutputSlotId, Paint, Program,
     ProgramCompileError, Surface, canonical_surface_input_port_sequence_matches,
     check_render_node_count,
 };
+use crate::session::SessionState;
 
 const COLOR: ColorInputId = ColorInputId::new(1);
 const SURFACE_PORT: SurfaceInputPortId = SurfaceInputPortId::new(2);
@@ -22,6 +27,8 @@ const OCCURRENCE: OccurrenceId = OccurrenceId::new(30);
 const OUTPUT: OutputSlotId = OutputSlotId::new(40);
 const REQUIRED: ConstraintId = ConstraintId::new(50);
 const GROUP: ObservationGroupId = ObservationGroupId::new(60);
+const STREAM_A: ObservationStreamId = ObservationStreamId::new(70);
+const STREAM_B: ObservationStreamId = ObservationStreamId::new(71);
 
 fn observation_group(surface_input_ports: Vec<SurfaceInputPortId>) -> ObservationGroup {
     ObservationGroup::new(GROUP, surface_input_ports)
@@ -99,6 +106,43 @@ where
         Ok(_) => panic!("invalid declaration compiled"),
         Err(error) => error,
     }
+}
+
+fn observed_update(
+    stream: ObservationStreamId,
+    revision: u64,
+    scenarios: &[(u32, [u8; 3])],
+) -> ObservationUpdateInput {
+    ObservationUpdateInput {
+        stream,
+        revision: Revision::new(revision),
+        payload: ObservationPayloadInput::Scenarios(ObservedScenarioSetInput {
+            scenarios: scenarios
+                .iter()
+                .map(|(scenario, backdrop)| ScenarioInput {
+                    id: ScenarioId::new(*scenario),
+                    bindings: vec![SurfaceInputBinding::new(
+                        SURFACE_PORT,
+                        Srgb8::new(*backdrop),
+                    )],
+                })
+                .collect(),
+        }),
+    }
+}
+
+fn exact_compiled(
+    constraints: ConstraintSet<Srgb8>,
+) -> crate::program_session::CompiledProgram<ExactSrgb8IdentityV1> {
+    base_program(
+        0.5,
+        BACKDROP,
+        constraints,
+        vec![OutputBinding::new(OUTPUT, TRANSLUCENT)],
+        ExactSrgb8IdentityV1,
+    )
+    .compile()
+    .unwrap()
 }
 
 #[test]
@@ -439,4 +483,302 @@ fn canonical_helpers_and_checked_cardinality_fail_closed() {
         [SurfaceInputPortId::new(1)],
         &canonical,
     ));
+}
+
+#[test]
+fn independently_instantiated_streams_survive_the_compiled_handle() {
+    let compiled = exact_compiled(ConstraintSet::new(
+        vec![ConstraintInvocation::hard(
+            REQUIRED,
+            OCCURRENCE,
+            Srgb8::new([0x80; 3]),
+        )],
+        vec![],
+    ));
+    let mut first = compiled.instantiate(STREAM_A).unwrap();
+    let mut second = compiled.instantiate(STREAM_B).unwrap();
+    drop(compiled);
+
+    let first_state = first
+        .update(observed_update(STREAM_A, 1, &[(1, [0xFF; 3])]))
+        .unwrap();
+    let SessionState::Ready { current: first } = first_state else {
+        panic!("first independent stream must verify");
+    };
+    assert_eq!(first.outputs().len(), 1);
+
+    let second_state = second
+        .update(observed_update(STREAM_B, 9, &[(2, [0xFF; 3])]))
+        .unwrap();
+    let SessionState::Ready { current: second } = second_state else {
+        panic!("second independent stream must verify after compiled handle drop");
+    };
+    assert_eq!(second.outputs().len(), 1);
+    assert_eq!(first.report().observation().revision(), Revision::new(1));
+    assert_eq!(second.report().observation().revision(), Revision::new(9));
+}
+
+#[test]
+fn multi_case_hard_failure_retains_the_full_matrix_without_outputs() {
+    let low = ConstraintId::new(1);
+    let high = ConstraintId::new(2);
+    let compiled = exact_compiled(ConstraintSet::new(
+        vec![
+            ConstraintInvocation::hard(high, OCCURRENCE, Srgb8::new([0x00; 3])),
+            ConstraintInvocation::hard(low, OCCURRENCE, Srgb8::new([0x80; 3])),
+        ],
+        vec![],
+    ));
+    let mut session = compiled.instantiate(STREAM_A).unwrap();
+    let state = session
+        .update(observed_update(
+            STREAM_A,
+            1,
+            &[(11, [0x00; 3]), (12, [0xFF; 3])],
+        ))
+        .unwrap();
+    let SessionState::Failed { cause, previous } = state else {
+        panic!("each candidate target fails on one admitted physical case");
+    };
+    assert!(previous.is_none());
+    let cells = cause.report().cells();
+    assert_eq!(
+        cells.len(),
+        4,
+        "two cases × two constraints must be complete"
+    );
+    assert_eq!(
+        cells
+            .iter()
+            .map(|cell| (cell.case_index(), cell.constraint()))
+            .collect::<Vec<_>>(),
+        vec![(0, low), (0, high), (1, low), (1, high)],
+    );
+    assert!(cells.iter().all(|cell| cell.is_hard()));
+    assert!(cells.iter().all(|cell| cell.target() == OCCURRENCE));
+    assert_eq!(
+        cells
+            .iter()
+            .filter(|cell| cell.result().is_violation())
+            .count(),
+        2,
+    );
+    // `ProgramViolationV1` owns only the complete report; no output accessor or
+    // output storage exists on the failure type.
+}
+
+#[test]
+fn mixed_modes_retain_the_full_canonical_matrix_without_outputs_on_hard_failure() {
+    let diagnostic = ConstraintId::new(1);
+    let required = ConstraintId::new(2);
+    let compiled = exact_compiled(ConstraintSet::new(
+        vec![ConstraintInvocation::hard(
+            required,
+            OCCURRENCE,
+            Srgb8::new([0x00; 3]),
+        )],
+        vec![ConstraintInvocation::report_only(
+            diagnostic,
+            OCCURRENCE,
+            Srgb8::new([0x80; 3]),
+        )],
+    ));
+    let mut session = compiled.instantiate(STREAM_A).unwrap();
+    let state = session
+        .update(observed_update(
+            STREAM_A,
+            1,
+            &[(11, [0x00; 3]), (12, [0xFF; 3])],
+        ))
+        .unwrap();
+    let SessionState::Failed { cause, previous } = state else {
+        panic!("the hard constraint must gate the otherwise complete mixed report");
+    };
+    assert!(previous.is_none());
+
+    let cells = cause.report().cells();
+    assert_eq!(cells.len(), 4);
+    assert_eq!(
+        cells
+            .iter()
+            .map(|cell| (cell.case_index(), cell.constraint(), cell.is_hard()))
+            .collect::<Vec<_>>(),
+        vec![
+            (0, diagnostic, false),
+            (0, required, true),
+            (1, diagnostic, false),
+            (1, required, true),
+        ],
+    );
+    assert_eq!(
+        cells
+            .iter()
+            .map(|cell| cell.result().is_violation())
+            .collect::<Vec<_>>(),
+        vec![true, false, false, true],
+    );
+    assert!(cells.iter().all(|cell| cell.target() == OCCURRENCE));
+    // `cause` is `ProgramViolationV1`: the failure surface exposes only this
+    // complete report, while Paint outputs exist only on `ProgramVerifiedV1`.
+}
+
+#[test]
+fn report_only_violations_do_not_block_program_scope_paint_outputs() {
+    let diagnostic = ConstraintId::new(7);
+    let compiled = exact_compiled(ConstraintSet::new(
+        vec![],
+        vec![ConstraintInvocation::report_only(
+            diagnostic,
+            OCCURRENCE,
+            Srgb8::new([0x7F; 3]),
+        )],
+    ));
+    let mut session = compiled.instantiate(STREAM_A).unwrap();
+    let state = session
+        .update(observed_update(
+            STREAM_A,
+            1,
+            &[(1, [0x00; 3]), (2, [0xFF; 3])],
+        ))
+        .unwrap();
+    let SessionState::Ready { current } = state else {
+        panic!("report-only violations must not gate outputs");
+    };
+    assert_eq!(current.report().cells().len(), 2);
+    assert!(
+        current
+            .report()
+            .cells()
+            .iter()
+            .all(|cell| !cell.is_hard() && cell.result().is_violation()),
+    );
+    let [output] = current.outputs() else {
+        panic!("one canonical output must be emitted");
+    };
+    assert_eq!(output.output(), OUTPUT);
+    assert_eq!(output.paint().id(), TRANSLUCENT);
+    assert_eq!(output.paint().source(), Srgb8::new([0; 3]));
+    assert_eq!(output.paint().opacity_bits(), 0.5_f64.to_bits());
+}
+
+#[test]
+fn nested_surface_uses_the_lower_occurrence_before_assessing_the_upper() {
+    const LOWER_COLOR: ColorInputId = ColorInputId::new(101);
+    const UPPER_COLOR: ColorInputId = ColorInputId::new(102);
+    const HALF: OpacityInputId = OpacityInputId::new(103);
+    const LOWER_PAINT: PaintId = PaintId::new(110);
+    const UPPER_SOLID: PaintId = PaintId::new(111);
+    const UPPER_PAINT: PaintId = PaintId::new(112);
+    const ROOT: SurfaceId = SurfaceId::new(120);
+    const DERIVED: SurfaceId = SurfaceId::new(121);
+    const LOWER: OccurrenceId = OccurrenceId::new(130);
+    const UPPER: OccurrenceId = OccurrenceId::new(131);
+    const NESTED_OUTPUT: OutputSlotId = OutputSlotId::new(140);
+
+    let program = Program::new(
+        vec![
+            ColorInput::new(LOWER_COLOR, Srgb8::new([0x80; 3])),
+            ColorInput::new(UPPER_COLOR, Srgb8::new([0xFF; 3])),
+        ],
+        observation_group(vec![SURFACE_PORT]),
+        vec![OpacityInput::new(HALF, 0.5)],
+        vec![
+            Paint::Solid {
+                id: LOWER_PAINT,
+                color: LOWER_COLOR,
+            },
+            Paint::Solid {
+                id: UPPER_SOLID,
+                color: UPPER_COLOR,
+            },
+            Paint::Opacity {
+                id: UPPER_PAINT,
+                source: UPPER_SOLID,
+                opacity: HALF,
+            },
+        ],
+        vec![
+            Surface::Input {
+                id: ROOT,
+                input: SURFACE_PORT,
+            },
+            Surface::FromOccurrence {
+                id: DERIVED,
+                occurrence: LOWER,
+            },
+        ],
+        vec![
+            Occurrence::new(
+                LOWER,
+                LOWER_PAINT,
+                ROOT,
+                CompositionProfile::EncodedSrgb8SourceOverV1,
+            ),
+            Occurrence::new(
+                UPPER,
+                UPPER_PAINT,
+                DERIVED,
+                CompositionProfile::EncodedSrgb8SourceOverV1,
+            ),
+        ],
+        ConstraintSet::new(
+            vec![ConstraintInvocation::hard(
+                REQUIRED,
+                UPPER,
+                Srgb8::new([0xC0; 3]),
+            )],
+            vec![],
+        ),
+        vec![OutputBinding::new(NESTED_OUTPUT, UPPER_PAINT)],
+        ExactSrgb8IdentityV1,
+    );
+    let compiled = program.compile().unwrap();
+    let mut session = compiled.instantiate(STREAM_A).unwrap();
+    let state = session
+        .update(observed_update(STREAM_A, 1, &[(1, [0x00; 3])]))
+        .unwrap();
+    let SessionState::Ready { current } = state else {
+        panic!("upper occurrence must compose over the lower visible result");
+    };
+    assert!(!current.report().cells()[0].result().is_violation());
+    let [output] = current.outputs() else {
+        panic!("nested program must emit its Paint, not visible composite");
+    };
+    assert_eq!(output.output(), NESTED_OUTPUT);
+    assert_eq!(output.paint().id(), UPPER_PAINT);
+    assert_eq!(output.paint().source(), Srgb8::new([0xFF; 3]));
+}
+
+#[test]
+fn raw_head_and_program_report_share_one_observation_backing() {
+    let compiled = exact_compiled(ConstraintSet::new(
+        vec![ConstraintInvocation::hard(
+            REQUIRED,
+            OCCURRENCE,
+            Srgb8::new([0x80; 3]),
+        )],
+        vec![],
+    ));
+    let mut session = compiled.instantiate(STREAM_A).unwrap();
+    session
+        .update(observed_update(STREAM_A, 1, &[(9, [0xFF; 3])]))
+        .unwrap();
+    let ObservationHeadViewV1::Observed(raw) = session.raw_head() else {
+        panic!("successful observed update must own a raw observed head");
+    };
+    let SessionState::Ready { current } = session.state() else {
+        panic!("fixture must verify");
+    };
+    let report = current.report().observation();
+    assert_eq!(raw, report);
+    assert_eq!(raw.backing_ptr_for_test(), report.backing_ptr_for_test());
+    assert_eq!(raw.schema_ptr_for_test(), report.schema_ptr_for_test());
+    assert_eq!(
+        raw.physical_values(0).unwrap().as_ptr(),
+        report.physical_values(0).unwrap().as_ptr(),
+    );
+    assert_eq!(
+        raw.provenance(0).unwrap().as_ptr(),
+        report.provenance(0).unwrap().as_ptr(),
+    );
 }

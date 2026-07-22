@@ -10,17 +10,29 @@
 //! observation or evidence.
 
 use std::marker::PhantomData;
+use std::rc::Rc;
 
 use crate::Srgb8;
 use crate::appearance::{
-    AdmittedAppearanceBindings, AppearanceBindings, AppearanceGraphSpec, BindingError,
-    ColorInputId, CompileError, CompiledAppearanceGraph, CompiledOccurrenceSlotV1,
-    CompiledPaintSlotV1, OccurrenceId, OccurrenceSpec, OpacityInputId, PaintId, PaintSpec,
-    SurfaceId, SurfaceInputPortId, SurfaceSpec,
+    AdmittedAppearanceBindings, AppearanceBindings, AppearanceGraphSpec, AppearanceWorkspace,
+    BindingError, ColorInputId, CompileError, CompiledAppearanceGraph, CompiledOccurrenceSlotV1,
+    CompiledPaintSlotV1, EncodedPointPaintV1, OccurrenceId, OccurrenceSpec, OpacityInputId,
+    PaintId, PaintSpec, SurfaceId, SurfaceInputPortId, SurfaceSpec,
 };
 use crate::composition::CompositionProfileV1;
-use crate::constraints::{PointEvaluatorV1, PointInvocation};
-use crate::observation::ObservationGroupId;
+use crate::constraints::{
+    HardDecision, PointEvaluatorV1, PointInvocation, VisiblePointPassEvidence,
+    VisiblePointViolationEvidence, assess_visible_point_hard,
+};
+use crate::observation::{
+    CanonicalObservationSchemaV1, ObservationError, ObservationGroupId,
+    ObservationSchemaMismatchV1, ObservationStreamId, RevisionBoundObservationV1,
+    canonicalize_observation_schema,
+};
+use crate::session::{
+    Session, SessionDecision, SessionEvidenceV1, SessionObservationBindingPermitV1, SessionPlanV1,
+    private as session_private,
+};
 
 /// One immutable encoded colour binding owned by a [`Program`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -348,7 +360,9 @@ where
     }
 
     pub fn compile(self) -> Result<CompiledProgram<Evaluation>, ProgramCompileError> {
-        prepare_program(self).map(|epoch| CompiledProgram { epoch })
+        prepare_program(self).map(|epoch| CompiledProgram {
+            epoch: Rc::new(epoch),
+        })
     }
 }
 
@@ -441,10 +455,6 @@ enum CompiledConstraintModeV1 {
     ReportOnly,
 }
 
-#[expect(
-    dead_code,
-    reason = "the compiled constraint payload is retained for the direct sole-Session bridge; erasing it would reduce lowering to a shape-only placeholder"
-)]
 struct CompiledPointConstraint<Invocation> {
     id: ConstraintId,
     target_id: OccurrenceId,
@@ -462,13 +472,9 @@ struct CompiledOutputBinding {
 
 struct CompiledObservationGroupV1 {
     id: ObservationGroupId,
-    surface_input_ports: Box<[SurfaceInputPortId]>,
+    schema: CanonicalObservationSchemaV1,
 }
 
-#[expect(
-    dead_code,
-    reason = "the executable graph, admitted bindings and evaluator are retained for the direct sole-Session bridge in the next stack"
-)]
 struct ProgramEpochV1<Evaluation>
 where
     Evaluation: PointEvaluatorV1,
@@ -488,7 +494,7 @@ where
     Evaluation: PointEvaluatorV1,
     PointInvocation<Evaluation>: Copy,
 {
-    epoch: ProgramEpochV1<Evaluation>,
+    epoch: Rc<ProgramEpochV1<Evaluation>>,
 }
 
 impl<Evaluation> CompiledProgram<Evaluation>
@@ -496,12 +502,12 @@ where
     Evaluation: PointEvaluatorV1,
     PointInvocation<Evaluation>: Copy,
 {
-    pub const fn observation_group_id(&self) -> ObservationGroupId {
+    pub fn observation_group_id(&self) -> ObservationGroupId {
         self.epoch.observation_group.id
     }
 
     pub fn surface_input_ports(&self) -> &[SurfaceInputPortId] {
-        &self.epoch.observation_group.surface_input_ports
+        self.epoch.observation_group.schema.as_slice()
     }
 
     pub fn constraint_ids(&self) -> impl ExactSizeIterator<Item = ConstraintId> + '_ {
@@ -516,6 +522,410 @@ where
             .outputs
             .iter()
             .map(|output| (output.output, output.paint_id))
+    }
+
+    /// Create one independent stream-affine Session from the immutable
+    /// compiled epoch. The graph/evaluator/schema stay shared by strong
+    /// ownership; mutable bindings and workspace belong only to this Session.
+    pub(crate) fn instantiate(
+        &self,
+        stream: ObservationStreamId,
+    ) -> Result<Session<ProgramSessionPlan<Evaluation>>, ProgramSessionInstantiateError> {
+        let bindings = self
+            .epoch
+            .binding_template
+            .try_clone_v1()
+            .map_err(map_session_instantiate_error)?;
+        let workspace = self
+            .epoch
+            .graph
+            .new_workspace()
+            .map_err(map_session_instantiate_error)?;
+        Ok(Session::new(
+            stream,
+            ProgramSessionPlan {
+                epoch: Rc::clone(&self.epoch),
+                bindings,
+                workspace,
+            },
+        ))
+    }
+}
+
+/// Failure while preparing mutable storage for one independent Session.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProgramSessionInstantiateError {
+    ResourceExhausted,
+    InternalInvariant,
+}
+
+fn map_session_instantiate_error(error: BindingError) -> ProgramSessionInstantiateError {
+    match error {
+        BindingError::ResourceExhausted => ProgramSessionInstantiateError::ResourceExhausted,
+        _ => ProgramSessionInstantiateError::InternalInvariant,
+    }
+}
+
+/// One evaluator classification retained in the complete Program report.
+pub enum ProgramConstraintResultV1<Evaluation>
+where
+    Evaluation: PointEvaluatorV1,
+{
+    Pass(VisiblePointPassEvidence<Evaluation>),
+    Violation(VisiblePointViolationEvidence<Evaluation>),
+}
+
+impl<Evaluation> ProgramConstraintResultV1<Evaluation>
+where
+    Evaluation: PointEvaluatorV1,
+{
+    pub const fn is_violation(&self) -> bool {
+        matches!(self, Self::Violation(_))
+    }
+}
+
+/// One canonical `physical case × constraint` report cell.
+pub struct ProgramConstraintCellV1<Evaluation>
+where
+    Evaluation: PointEvaluatorV1,
+{
+    case_index: usize,
+    constraint: ConstraintId,
+    target: OccurrenceId,
+    mode: CompiledConstraintModeV1,
+    result: ProgramConstraintResultV1<Evaluation>,
+}
+
+impl<Evaluation> ProgramConstraintCellV1<Evaluation>
+where
+    Evaluation: PointEvaluatorV1,
+{
+    pub const fn case_index(&self) -> usize {
+        self.case_index
+    }
+
+    pub const fn constraint(&self) -> ConstraintId {
+        self.constraint
+    }
+
+    pub const fn target(&self) -> OccurrenceId {
+        self.target
+    }
+
+    pub const fn is_hard(&self) -> bool {
+        matches!(self.mode, CompiledConstraintModeV1::Hard)
+    }
+
+    pub const fn result(&self) -> &ProgramConstraintResultV1<Evaluation> {
+        &self.result
+    }
+}
+
+/// Complete revision-bound assessment in case-major, constraint-ID order.
+pub struct ProgramReportV1<Evaluation>
+where
+    Evaluation: PointEvaluatorV1,
+{
+    observation: RevisionBoundObservationV1,
+    cells: Vec<ProgramConstraintCellV1<Evaluation>>,
+}
+
+impl<Evaluation> ProgramReportV1<Evaluation>
+where
+    Evaluation: PointEvaluatorV1,
+{
+    pub const fn observation(&self) -> &RevisionBoundObservationV1 {
+        &self.observation
+    }
+
+    pub fn cells(&self) -> &[ProgramConstraintCellV1<Evaluation>] {
+        &self.cells
+    }
+}
+
+/// One emitted Program Paint routed to an opaque output slot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProgramOutputV1 {
+    output: OutputSlotId,
+    paint: EncodedPointPaintV1,
+}
+
+impl ProgramOutputV1 {
+    pub const fn output(self) -> OutputSlotId {
+        self.output
+    }
+
+    pub const fn paint(self) -> EncodedPointPaintV1 {
+        self.paint
+    }
+}
+
+/// All hard cells passed over the complete admitted physical support.
+pub struct ProgramVerifiedV1<Evaluation>
+where
+    Evaluation: PointEvaluatorV1,
+{
+    report: ProgramReportV1<Evaluation>,
+    outputs: Vec<ProgramOutputV1>,
+}
+
+impl<Evaluation> session_private::EvidenceSealed for ProgramVerifiedV1<Evaluation> where
+    Evaluation: PointEvaluatorV1
+{
+}
+
+impl<Evaluation> SessionEvidenceV1 for ProgramVerifiedV1<Evaluation>
+where
+    Evaluation: PointEvaluatorV1,
+{
+    fn observation(&self) -> &RevisionBoundObservationV1 {
+        self.report().observation()
+    }
+}
+
+impl<Evaluation> ProgramVerifiedV1<Evaluation>
+where
+    Evaluation: PointEvaluatorV1,
+{
+    pub const fn report(&self) -> &ProgramReportV1<Evaluation> {
+        &self.report
+    }
+
+    pub fn outputs(&self) -> &[ProgramOutputV1] {
+        &self.outputs
+    }
+}
+
+/// Complete report containing at least one hard violation. Outputs are absent
+/// by construction and therefore cannot be mistaken for committed Paints.
+pub struct ProgramViolationV1<Evaluation>
+where
+    Evaluation: PointEvaluatorV1,
+{
+    report: ProgramReportV1<Evaluation>,
+}
+
+impl<Evaluation> session_private::EvidenceSealed for ProgramViolationV1<Evaluation> where
+    Evaluation: PointEvaluatorV1
+{
+}
+
+impl<Evaluation> SessionEvidenceV1 for ProgramViolationV1<Evaluation>
+where
+    Evaluation: PointEvaluatorV1,
+{
+    fn observation(&self) -> &RevisionBoundObservationV1 {
+        self.report().observation()
+    }
+}
+
+impl<Evaluation> ProgramViolationV1<Evaluation>
+where
+    Evaluation: PointEvaluatorV1,
+{
+    pub const fn report(&self) -> &ProgramReportV1<Evaluation> {
+        &self.report
+    }
+}
+
+/// Program execution failure before Session commit.
+#[derive(Debug, PartialEq, Eq)]
+pub enum ProgramSessionEvaluationError<EvaluationError> {
+    ObservationSchemaMismatch(ObservationSchemaMismatchV1),
+    ResourceExhausted,
+    Evaluator {
+        case_index: usize,
+        constraint: ConstraintId,
+        source: EvaluationError,
+    },
+    OutputVariesAcrossCases {
+        output: OutputSlotId,
+        first_case: usize,
+        actual_case: usize,
+    },
+    InternalInvariant,
+}
+
+type ProgramEvaluatorError<Evaluation> = <Evaluation as crate::constraints::Evaluator<
+    crate::appearance::ModeledSrgb8PointOccurrence,
+>>::Error;
+
+type ProgramSessionEvaluationResult<Evaluation> = Result<
+    SessionDecision<ProgramVerifiedV1<Evaluation>, ProgramViolationV1<Evaluation>>,
+    ProgramSessionEvaluationError<ProgramEvaluatorError<Evaluation>>,
+>;
+
+/// Per-Session mutable execution state backed by one strong immutable epoch.
+pub struct ProgramSessionPlan<Evaluation>
+where
+    Evaluation: PointEvaluatorV1,
+    PointInvocation<Evaluation>: Copy,
+{
+    epoch: Rc<ProgramEpochV1<Evaluation>>,
+    bindings: AdmittedAppearanceBindings,
+    workspace: AppearanceWorkspace,
+}
+
+impl<Evaluation> session_private::PlanSealed for ProgramSessionPlan<Evaluation>
+where
+    Evaluation: PointEvaluatorV1,
+    PointInvocation<Evaluation>: Copy,
+{
+}
+
+impl<Evaluation> SessionPlanV1 for ProgramSessionPlan<Evaluation>
+where
+    Evaluation: PointEvaluatorV1,
+    PointInvocation<Evaluation>: Copy,
+{
+    type Verified = ProgramVerifiedV1<Evaluation>;
+    type Violation = ProgramViolationV1<Evaluation>;
+    type Error = ProgramSessionEvaluationError<ProgramEvaluatorError<Evaluation>>;
+
+    fn observation_schema(&self) -> &CanonicalObservationSchemaV1 {
+        &self.epoch.observation_group.schema
+    }
+
+    fn evaluate(
+        &mut self,
+        observation: RevisionBoundObservationV1,
+        _permit: SessionObservationBindingPermitV1,
+    ) -> Result<SessionDecision<Self::Verified, Self::Violation>, Self::Error> {
+        evaluate_program_session(self, observation)
+    }
+}
+
+fn evaluate_program_session<Evaluation>(
+    plan: &mut ProgramSessionPlan<Evaluation>,
+    observation: RevisionBoundObservationV1,
+) -> ProgramSessionEvaluationResult<Evaluation>
+where
+    Evaluation: PointEvaluatorV1,
+    PointInvocation<Evaluation>: Copy,
+{
+    let epoch = &plan.epoch;
+    let schema = &epoch.observation_group.schema;
+    if !observation.shares_schema_backing_with(schema) {
+        observation
+            .validate_surface_schema(schema.as_slice())
+            .map_err(ProgramSessionEvaluationError::ObservationSchemaMismatch)?;
+        return Err(ProgramSessionEvaluationError::InternalInvariant);
+    }
+
+    let case_count = observation.physical_case_count();
+    let cell_count = case_count
+        .checked_mul(epoch.constraints.len())
+        .ok_or(ProgramSessionEvaluationError::ResourceExhausted)?;
+    let mut cells = Vec::new();
+    cells
+        .try_reserve_exact(cell_count)
+        .map_err(|_| ProgramSessionEvaluationError::ResourceExhausted)?;
+    let mut outputs = Vec::new();
+    outputs
+        .try_reserve_exact(epoch.outputs.len())
+        .map_err(|_| ProgramSessionEvaluationError::ResourceExhausted)?;
+
+    let mut has_hard_violation = false;
+    let mut output_mismatch = None;
+    for case_index in 0..case_count {
+        let values = observation
+            .physical_values(case_index)
+            .ok_or(ProgramSessionEvaluationError::InternalInvariant)?;
+        if values.len() != schema.as_slice().len() {
+            let binding_index = values.len().min(schema.as_slice().len());
+            return Err(ProgramSessionEvaluationError::ObservationSchemaMismatch(
+                ObservationSchemaMismatchV1::new(
+                    case_index,
+                    binding_index,
+                    schema.as_slice().get(binding_index).copied(),
+                    None,
+                ),
+            ));
+        }
+        plan.bindings
+            .overwrite_surface_inputs_canonical(schema.as_slice().iter().copied(), |index| {
+                values[index]
+            })
+            .map_err(map_program_execution_binding_error)?;
+        let evaluation = epoch
+            .graph
+            .evaluate_admitted_into(&plan.bindings, &mut plan.workspace)
+            .map_err(map_program_execution_binding_error)?;
+
+        for constraint in epoch.constraints.iter() {
+            let source = evaluation
+                .occurrence_at(constraint.target)
+                .ok_or(ProgramSessionEvaluationError::InternalInvariant)?;
+            let decision =
+                assess_visible_point_hard(source, &epoch.evaluator, constraint.invocation)
+                    .map_err(|source| ProgramSessionEvaluationError::Evaluator {
+                        case_index,
+                        constraint: constraint.id,
+                        source,
+                    })?;
+            let result = match decision {
+                HardDecision::Pass(evidence) => ProgramConstraintResultV1::Pass(evidence),
+                HardDecision::Violation(evidence) => {
+                    if matches!(constraint.mode, CompiledConstraintModeV1::Hard) {
+                        has_hard_violation = true;
+                    }
+                    ProgramConstraintResultV1::Violation(evidence)
+                }
+            };
+            cells.push(ProgramConstraintCellV1 {
+                case_index,
+                constraint: constraint.id,
+                target: constraint.target_id,
+                mode: constraint.mode,
+                result,
+            });
+        }
+
+        for (output_index, output) in epoch.outputs.iter().enumerate() {
+            let paint = evaluation
+                .paint_at(output.paint)
+                .copied()
+                .ok_or(ProgramSessionEvaluationError::InternalInvariant)?;
+            if paint.id() != output.paint_id {
+                return Err(ProgramSessionEvaluationError::InternalInvariant);
+            }
+            let routed = ProgramOutputV1 {
+                output: output.output,
+                paint,
+            };
+            if case_index == 0 {
+                outputs.push(routed);
+            } else if outputs.get(output_index).copied() != Some(routed)
+                && output_mismatch.is_none()
+            {
+                output_mismatch = Some(ProgramSessionEvaluationError::OutputVariesAcrossCases {
+                    output: output.output,
+                    first_case: 0,
+                    actual_case: case_index,
+                });
+            }
+        }
+    }
+
+    let report = ProgramReportV1 { observation, cells };
+    if let Some(error) = output_mismatch {
+        Err(error)
+    } else if has_hard_violation {
+        Ok(SessionDecision::Violation(ProgramViolationV1 { report }))
+    } else {
+        Ok(SessionDecision::Verified(ProgramVerifiedV1 {
+            report,
+            outputs,
+        }))
+    }
+}
+
+fn map_program_execution_binding_error<EvaluationError>(
+    error: BindingError,
+) -> ProgramSessionEvaluationError<EvaluationError> {
+    match error {
+        BindingError::ResourceExhausted => ProgramSessionEvaluationError::ResourceExhausted,
+        _ => ProgramSessionEvaluationError::InternalInvariant,
     }
 }
 
@@ -563,6 +973,8 @@ where
     ) {
         return Err(ProgramCompileError::InternalInvariant);
     }
+    let observation_schema = canonicalize_observation_schema(surface_input_ports)
+        .map_err(map_observation_schema_compile_error)?;
 
     let constraints = compile_constraints::<Evaluation>(&graph, program.constraints)?;
     let outputs = compile_outputs(&graph, program.outputs)?;
@@ -572,11 +984,18 @@ where
         binding_template,
         observation_group: CompiledObservationGroupV1 {
             id: program.observation_group.id,
-            surface_input_ports: surface_input_ports.into_boxed_slice(),
+            schema: observation_schema,
         },
         constraints,
         outputs,
     })
+}
+
+fn map_observation_schema_compile_error(error: ObservationError) -> ProgramCompileError {
+    match error {
+        ObservationError::ResourceExhausted => ProgramCompileError::ResourceExhausted,
+        _ => ProgramCompileError::InternalInvariant,
+    }
 }
 
 struct LoweredConstraint<Invocation> {

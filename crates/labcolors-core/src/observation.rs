@@ -245,6 +245,12 @@ impl RevisionBoundObservationV1 {
         self.backing.schema.shares_backing_with(expected)
     }
 
+    pub(crate) fn is_same_binding_as(&self, other: &Self) -> bool {
+        self.stream == other.stream
+            && self.revision == other.revision
+            && Rc::ptr_eq(&self.backing, &other.backing)
+    }
+
     fn has_canonical_input(
         &self,
         schema: &CanonicalObservationSchemaV1,

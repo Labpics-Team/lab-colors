@@ -30,7 +30,10 @@ use crate::observation::{
     CanonicalObservationSchemaV1, ObservationError, ObservationSchemaMismatchV1,
     RevisionBoundObservationV1, ScenarioId, canonicalize_observation_schema,
 };
-use crate::session::SessionObservationBindingPermitV1;
+use crate::session::{
+    SessionDecision, SessionEvidenceV1, SessionObservationBindingPermitV1, SessionPlanV1,
+    private as session_private,
+};
 use crate::wcag22::{Wcag22CriterionV1, Wcag22MeasurementV1, measure_wcag22_srgb8};
 
 const DROP_BASIS_POINTS_SCALE: u16 = 10_000;
@@ -180,34 +183,39 @@ impl CompiledPointSupportRecheckV1 {
             return Err(PointSupportCompileErrorV1::InactivePlan);
         }
 
-        let mut paint_definitions = Vec::new();
-        paint_definitions
-            .try_reserve_exact(occurrences.len())
-            .map_err(|_| PointSupportCompileErrorV1::ResourceExhausted)?;
-        paint_definitions.extend(occurrences.iter().map(|occurrence| occurrence.paint));
-        paint_definitions.sort_unstable_by_key(|paint| paint.id());
-        if let Some(drift) = paint_definitions
-            .windows(2)
-            .find(|window| window[0].id() == window[1].id() && window[0] != window[1])
         {
-            return Err(PointSupportCompileErrorV1::PaintDefinitionMismatch(
-                drift[0].id(),
-            ));
+            let mut paint_definitions = Vec::new();
+            paint_definitions
+                .try_reserve_exact(occurrences.len())
+                .map_err(|_| PointSupportCompileErrorV1::ResourceExhausted)?;
+            paint_definitions.extend(occurrences.iter().map(|occurrence| occurrence.paint));
+            paint_definitions.sort_unstable_by_key(|paint| paint.id());
+            if let Some(drift) = paint_definitions
+                .windows(2)
+                .find(|window| window[0].id() == window[1].id() && window[0] != window[1])
+            {
+                return Err(PointSupportCompileErrorV1::PaintDefinitionMismatch(
+                    drift[0].id(),
+                ));
+            }
         }
 
-        let mut occurrence_identities = Vec::new();
-        occurrence_identities
-            .try_reserve_exact(occurrences.len())
-            .map_err(|_| PointSupportCompileErrorV1::ResourceExhausted)?;
-        occurrence_identities.extend(occurrences.iter().map(|occurrence| occurrence.occurrence));
-        occurrence_identities.sort_unstable();
-        if let Some(duplicate) = occurrence_identities
-            .windows(2)
-            .find(|window| window[0] == window[1])
         {
-            return Err(PointSupportCompileErrorV1::DuplicateOccurrence(
-                duplicate[0],
-            ));
+            let mut occurrence_identities = Vec::new();
+            occurrence_identities
+                .try_reserve_exact(occurrences.len())
+                .map_err(|_| PointSupportCompileErrorV1::ResourceExhausted)?;
+            occurrence_identities
+                .extend(occurrences.iter().map(|occurrence| occurrence.occurrence));
+            occurrence_identities.sort_unstable();
+            if let Some(duplicate) = occurrence_identities
+                .windows(2)
+                .find(|window| window[0] == window[1])
+            {
+                return Err(PointSupportCompileErrorV1::DuplicateOccurrence(
+                    duplicate[0],
+                ));
+            }
         }
 
         let actual_profile = PointOpacityOverSurfaceV1::composition_profile();
@@ -309,52 +317,24 @@ impl CompiledPointSupportRecheckV1 {
     pub(crate) fn surface_schema(&self) -> &[SurfaceInputPortId] {
         self.surface_schema.as_slice()
     }
-
-    pub(crate) fn into_session_recheck(self) -> BoundPointSupportRecheckV1 {
-        let Self {
-            physical_program,
-            composition_profile,
-            occurrences,
-            surface_schema,
-            surface_indices,
-            baselines,
-        } = self;
-        BoundPointSupportRecheckV1 {
-            physical_program,
-            composition_profile,
-            occurrences,
-            surface_schema,
-            surface_indices,
-            baselines,
-        }
-    }
 }
 
-#[derive(Debug, PartialEq, Eq)]
-#[cfg_attr(test, derive(Clone))]
-pub(crate) struct BoundPointSupportRecheckV1 {
-    physical_program: PhysicalProgramIdentityV1,
-    composition_profile: CompositionProfileV1,
-    occurrences: Vec<PointSupportOccurrenceRequirementV1>,
-    surface_schema: CanonicalObservationSchemaV1,
-    surface_indices: Vec<usize>,
-    baselines: Vec<Option<EnabledBaselineV1>>,
-}
+impl session_private::PlanSealed for CompiledPointSupportRecheckV1 {}
 
-impl BoundPointSupportRecheckV1 {
-    pub(crate) const fn composition_profile(&self) -> CompositionProfileV1 {
-        self.composition_profile
-    }
+impl SessionPlanV1 for CompiledPointSupportRecheckV1 {
+    type Verified = VerifiedPointSupportV1;
+    type Violation = PointSupportViolationV1;
+    type Error = PointSupportEvaluationErrorV1;
 
-    pub(crate) const fn observation_schema(&self) -> &CanonicalObservationSchemaV1 {
+    fn observation_schema(&self) -> &CanonicalObservationSchemaV1 {
         &self.surface_schema
     }
 
-    pub(crate) fn evaluate(
-        &self,
+    fn evaluate(
+        &mut self,
         observation: RevisionBoundObservationV1,
         _permit: SessionObservationBindingPermitV1,
-    ) -> Result<PointSupportDecisionV1, PointSupportEvaluationErrorV1> {
+    ) -> Result<SessionDecision<Self::Verified, Self::Violation>, Self::Error> {
         let assessment = evaluate_bound_point_support(self, &observation)?;
         Ok(assessment.bind(observation))
     }
@@ -639,7 +619,10 @@ impl PointSupportAssessmentV1 {
 
     /// Bind by move only. There is no allocation, recomputation or other
     /// fallible work after the consuming evaluator has completed assessment.
-    fn bind(self, observation: RevisionBoundObservationV1) -> PointSupportDecisionV1 {
+    fn bind(
+        self,
+        observation: RevisionBoundObservationV1,
+    ) -> SessionDecision<VerifiedPointSupportV1, PointSupportViolationV1> {
         let failed = self.has_failure();
         let Self {
             physical_program,
@@ -665,9 +648,9 @@ impl PointSupportAssessmentV1 {
             first_stability_failure_index,
         };
         if failed {
-            PointSupportDecisionV1::Violation(PointSupportViolationV1(report))
+            SessionDecision::Violation(PointSupportViolationV1(report))
         } else {
-            PointSupportDecisionV1::Verified(VerifiedPointSupportV1(report))
+            SessionDecision::Verified(VerifiedPointSupportV1(report))
         }
     }
 }
@@ -754,6 +737,14 @@ impl RevisionBoundPointSupportReportV1 {
 #[cfg_attr(test, derive(Clone))]
 pub(crate) struct VerifiedPointSupportV1(RevisionBoundPointSupportReportV1);
 
+impl session_private::EvidenceSealed for VerifiedPointSupportV1 {}
+
+impl SessionEvidenceV1 for VerifiedPointSupportV1 {
+    fn observation(&self) -> &RevisionBoundObservationV1 {
+        self.report().observation()
+    }
+}
+
 impl VerifiedPointSupportV1 {
     pub(crate) const fn report(&self) -> &RevisionBoundPointSupportReportV1 {
         &self.0
@@ -764,17 +755,18 @@ impl VerifiedPointSupportV1 {
 #[cfg_attr(test, derive(Clone))]
 pub(crate) struct PointSupportViolationV1(RevisionBoundPointSupportReportV1);
 
+impl session_private::EvidenceSealed for PointSupportViolationV1 {}
+
+impl SessionEvidenceV1 for PointSupportViolationV1 {
+    fn observation(&self) -> &RevisionBoundObservationV1 {
+        self.report().observation()
+    }
+}
+
 impl PointSupportViolationV1 {
     pub(crate) const fn report(&self) -> &RevisionBoundPointSupportReportV1 {
         &self.0
     }
-}
-
-#[derive(Debug, PartialEq)]
-#[cfg_attr(test, derive(Clone))]
-pub(crate) enum PointSupportDecisionV1 {
-    Verified(VerifiedPointSupportV1),
-    Violation(PointSupportViolationV1),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -789,7 +781,7 @@ struct EnabledBaselineV1 {
 }
 
 fn evaluate_bound_point_support(
-    plan: &BoundPointSupportRecheckV1,
+    plan: &CompiledPointSupportRecheckV1,
     observation: &RevisionBoundObservationV1,
 ) -> Result<PointSupportAssessmentV1, PointSupportEvaluationErrorV1> {
     if plan.occurrences.len() != plan.surface_indices.len()
@@ -824,20 +816,18 @@ fn evaluate_bound_point_support(
         let values = observation
             .physical_values(case_index)
             .ok_or(PointSupportEvaluationErrorV1::CompiledPlanInvariant)?;
-        for (occurrence_index, requirement) in plan.occurrences.iter().enumerate() {
-            let surface_index = *plan
-                .surface_indices
-                .get(occurrence_index)
-                .ok_or(PointSupportEvaluationErrorV1::CompiledPlanInvariant)?;
-            let baseline = plan
-                .baselines
-                .get(occurrence_index)
-                .ok_or(PointSupportEvaluationErrorV1::CompiledPlanInvariant)?;
-            let backdrop = values.get(surface_index).copied().ok_or(
+        for (occurrence_index, ((requirement, surface_index), baseline)) in plan
+            .occurrences
+            .iter()
+            .zip(&plan.surface_indices)
+            .zip(&plan.baselines)
+            .enumerate()
+        {
+            let backdrop = values.get(*surface_index).copied().ok_or(
                 PointSupportEvaluationErrorV1::ObservationSchemaMismatch(
                     ObservationSchemaMismatchV1::new(
                         case_index,
-                        surface_index,
+                        *surface_index,
                         Some(requirement.surface),
                         None,
                     ),

@@ -131,15 +131,15 @@ fn shared_observation_ssot_has_one_backing_without_lifecycle_or_adapter_facades(
     assert_eq!(
         normalized_source_scope(
             SESSION_SOURCE,
-            "pub(crate) enum PointSupportSessionStateV1 {",
-            "impl PointSupportSessionStateV1",
+            "pub(crate) enum SessionState<Verified, Violation> {",
+            "impl<Verified, Violation> SessionState<Verified, Violation>",
         ),
         concat!(
-            "pub(crate) enum PointSupportSessionStateV1 { ",
+            "pub(crate) enum SessionState<Verified, Violation> { ",
             "Waiting, ",
-            "Ready { current: VerifiedPointSupportV1, }, ",
-            "Stale { previous: VerifiedPointSupportV1, }, ",
-            "Failed { cause: PointSupportViolationV1, previous: Option<VerifiedPointSupportV1>, }, ",
+            "Ready { current: Verified, }, ",
+            "Stale { previous: Verified, }, ",
+            "Failed { cause: Violation, previous: Option<Verified>, }, ",
             "}",
         ),
         "lifecycle state must not duplicate the current raw observation",
@@ -148,25 +148,26 @@ fn shared_observation_ssot_has_one_backing_without_lifecycle_or_adapter_facades(
         normalized_source_scope(
             SESSION_SOURCE,
             "enum SessionObservationHeadV1 {",
-            "impl SessionObservationHeadV1",
+            "impl ObservationOwnerV1 for SessionObservationHeadV1",
         ),
         concat!(
             "enum SessionObservationHeadV1 { ",
             "Empty, ",
             "Unknown(RevisionBoundUnknownV1), ",
-            "Observed(crate::observation::RevisionBoundObservationV1), ",
+            "Observed(RevisionBoundObservationV1), ",
             "}",
         ),
         "raw Empty/Unknown/Observed must remain separate from lifecycle state",
     );
     let session_owner = source_scope(
         SESSION_SOURCE,
-        "pub(crate) struct PointSupportSessionV1 {",
-        "impl PointSupportSessionV1",
+        "pub(crate) struct Session<Plan: SessionPlanV1> {",
+        "impl<Plan: SessionPlanV1> Session<Plan>",
     );
     for required in [
+        "schema: CanonicalObservationSchemaV1,",
         "raw_head: SessionObservationHeadV1,",
-        "state: PointSupportSessionStateV1,",
+        "state: SessionState<Plan::Verified, Plan::Violation>,",
     ] {
         assert_eq!(
             session_owner.matches(required).count(),
@@ -184,10 +185,56 @@ fn shared_observation_ssot_has_one_backing_without_lifecycle_or_adapter_facades(
             "Session owner must not duplicate raw storage through `{forbidden}`",
         );
     }
+    assert_eq!(
+        SESSION_SOURCE.matches("pub(crate) struct Session<").count(),
+        1,
+        "production must have exactly one generic revision-bound Session owner",
+    );
+    for required in [
+        "type Verified: SessionEvidenceV1;",
+        "type Violation: SessionEvidenceV1;",
+        ".is_same_binding_as(expected_observation)",
+        "SessionUpdateError::EvidenceBindingInvariant",
+    ] {
+        assert!(
+            SESSION_SOURCE.contains(required),
+            "Session must reject detached evaluator evidence; missing `{required}`",
+        );
+    }
+    assert_eq!(
+        POINT_SUPPORT_SOURCE
+            .matches("impl SessionPlanV1 for CompiledPointSupportRecheckV1")
+            .count()
+            + PROGRAM_SESSION_SOURCE
+                .matches("SessionPlanV1 for ProgramSessionPlan<Evaluation>")
+                .count(),
+        2,
+        "only the point-support and Program compiled plans may inhabit Session",
+    );
+    for (path, source) in [
+        ("session.rs", SESSION_SOURCE),
+        ("point_support.rs", POINT_SUPPORT_SOURCE),
+        ("program_session.rs", PROGRAM_SESSION_SOURCE),
+    ] {
+        for forbidden in [
+            "PointSupportSessionV1",
+            "PointSupportSessionStateV1",
+            "BoundPointSupportRecheckV1",
+            "into_session_recheck",
+            "ObservationStreamBinding",
+            "ProgramExpired",
+            "Weak<",
+        ] {
+            assert!(
+                !source.contains(forbidden),
+                "{path} must not restore a second owner or adapter `{forbidden}`",
+            );
+        }
+    }
 
     let consuming_entry = source_scope(
         POINT_SUPPORT_SOURCE,
-        "impl BoundPointSupportRecheckV1 {",
+        "impl SessionPlanV1 for CompiledPointSupportRecheckV1 {",
         "pub(crate) enum PointSupportEvaluationErrorV1",
     );
     for required in [
@@ -230,7 +277,7 @@ fn shared_observation_ssot_has_one_backing_without_lifecycle_or_adapter_facades(
         .find(".physical_values(case_index)")
         .expect("physical-values route must exist");
     let indexed_surface = evaluator[physical_values..]
-        .find("values.get(surface_index)")
+        .find("values.get(*surface_index)")
         .expect("the prebound surface index must read from physical values");
     assert!(
         indexed_surface > 0,

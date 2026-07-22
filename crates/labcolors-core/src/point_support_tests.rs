@@ -15,7 +15,7 @@ use crate::point_support::{
     PointSupportStabilityAnchorV1, PointSupportStabilityAssessmentV1,
     PointSupportStabilityDecisionV1, PointSupportStabilityPolicyV1,
 };
-use crate::session::{PointSupportSessionStateV1, PointSupportSessionV1};
+use crate::session::{Session, SessionState};
 use crate::wcag22::Wcag22CriterionV1;
 
 const STREAM: ObservationStreamId = ObservationStreamId::new(31);
@@ -106,8 +106,8 @@ fn multi_paint_declared_order_and_direct_provenance_are_preserved() {
     assert_eq!(SURFACE_A.value(), 21);
     assert_eq!(OCCURRENCE_A.value(), 11);
 
-    let mut session = PointSupportSessionV1::new(STREAM, requirements);
-    let PointSupportSessionStateV1::Ready { current } = session
+    let mut session = Session::new(STREAM, requirements);
+    let SessionState::Ready { current } = session
         .update(observed_update(
             1,
             [(9, vec![(SURFACE_A, [0; 3]), (SURFACE_B, [255; 3])])],
@@ -162,10 +162,10 @@ fn duplicate_raw_scenarios_share_one_physical_case_without_cartesian_expansion()
             PointSupportStabilityPolicyV1::Disabled,
         ),
     ]);
-    let mut session = PointSupportSessionV1::new(STREAM, requirements);
+    let mut session = Session::new(STREAM, requirements);
 
     crate::composition::reset_source_over_evaluation_count();
-    let PointSupportSessionStateV1::Failed { cause, previous } = session
+    let SessionState::Failed { cause, previous } = session
         .update(observed_update(
             1,
             [
@@ -277,8 +277,8 @@ fn exact_wcag_and_stability_are_independent_axes_and_baseline_binds_once() {
         "the baseline is composed exactly once at compile/bind"
     );
 
-    let mut session = PointSupportSessionV1::new(STREAM, requirements);
-    let PointSupportSessionStateV1::Failed { cause, previous } = session
+    let mut session = Session::new(STREAM, requirements);
+    let SessionState::Failed { cause, previous } = session
         .update(observed_update(1, [(44, vec![(SURFACE_A, [255; 3])])]))
         .unwrap()
     else {
@@ -386,8 +386,8 @@ fn all_four_wcag_criterion_identities_survive_the_full_support_path() {
             })
             .collect(),
     );
-    let mut session = PointSupportSessionV1::new(STREAM, requirements);
-    let PointSupportSessionStateV1::Ready { current } = session
+    let mut session = Session::new(STREAM, requirements);
+    let SessionState::Ready { current } = session
         .update(observed_update(1, [(1, vec![(SURFACE_A, [255; 3])])]))
         .unwrap()
     else {
@@ -448,8 +448,8 @@ fn wholly_inactive_plan_is_rejected_but_an_inactive_composition_cell_is_allowed(
     )
     .expect("one active axis makes the whole full-support plan meaningful");
     assert_eq!(mixed.surface_schema(), &[SURFACE_A, SURFACE_B]);
-    let mut mixed_session = PointSupportSessionV1::new(STREAM, mixed);
-    let PointSupportSessionStateV1::Ready { current } = mixed_session
+    let mut mixed_session = Session::new(STREAM, mixed);
+    let SessionState::Ready { current } = mixed_session
         .update(observed_update(
             1,
             [(1, vec![(SURFACE_A, [17; 3]), (SURFACE_B, [3; 3])])],
@@ -536,8 +536,8 @@ fn every_stability_anchor_survives_compile_evaluate_and_typed_evidence() {
             })
             .collect(),
     );
-    let mut session = PointSupportSessionV1::new(STREAM, requirements);
-    let PointSupportSessionStateV1::Ready { current } = session
+    let mut session = Session::new(STREAM, requirements);
+    let SessionState::Ready { current } = session
         .update(observed_update(1, [(91, vec![(SURFACE_A, [255; 3])])]))
         .unwrap()
     else {

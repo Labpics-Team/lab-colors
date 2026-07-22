@@ -370,7 +370,7 @@ pub struct NoPublicPairRecipeApi;
 /// ```
 ///
 /// ```compile_fail
-/// use labcolors_core::session::PointSupportSessionV1;
+/// use labcolors_core::session::Session;
 /// ```
 #[cfg(doctest)]
 pub struct NoPrematurePointSupportApi;

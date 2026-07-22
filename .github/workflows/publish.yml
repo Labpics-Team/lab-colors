@@ -674,7 +674,7 @@ jobs:
             JSON.stringify(point.sourceBinding.exclusions) !==
               JSON.stringify(pointProof.source_binding_exclusions) ||
             point.sourceBinding.closureSha256 !== pointProof.source_closure_sha256 ||
-            pointProof.source_negative_controls !== 40 ||
+            pointProof.source_negative_controls !== 42 ||
             pointAlgebra?.method !==
               "exact-sparse-integer-polynomial-identities-plus-positive-denominator-order-lemma-v1" ||
             pointAlgebra?.wolfram_language_cross_check?.query_sha256 !==
