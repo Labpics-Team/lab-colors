@@ -159,9 +159,7 @@ impl AdmittedSrgb8TristimulusBindingV1 {
 
     pub(crate) const fn result_frame(self) -> ColorimetricFrameId {
         match self {
-            Self::Iec61966Srgb8ToCie1931TwoDegreeXyzD65RelativeY1V1 => {
-                IEC_SRGB_D65_XYZ_FRAME_V1
-            }
+            Self::Iec61966Srgb8ToCie1931TwoDegreeXyzD65RelativeY1V1 => IEC_SRGB_D65_XYZ_FRAME_V1,
         }
     }
 }
@@ -305,10 +303,7 @@ impl ModeledTristimulusDerivationV1 {
     }
 
     pub(crate) fn replay(self) -> Result<TristimulusSample, TristimulusDomainErrorV1> {
-        derive_sample_with_binding(
-            self.provenance.source_signal,
-            self.provenance.binding,
-        )
+        derive_sample_with_binding(self.provenance.source_signal, self.provenance.binding)
     }
 }
 

@@ -8,8 +8,7 @@ use crate::lcs_occurrence::{
     HueState, IEC_SRGB_D65_XYZ_FRAME_V1, LcsOccurrence, MUTATION_SENTINEL_XYZ_FRAME_V1,
     ModeledTristimulusDerivationV1, NumericDomainError, ObserverProfileId,
     OccurrenceFormationError, ReferenceWhiteId, SurroundProfileId, TristimulusComponentV1,
-    TristimulusDomainErrorV1, TristimulusSample, TristimulusScale,
-    derive_modeled_tristimulus_v1,
+    TristimulusDomainErrorV1, TristimulusSample, TristimulusScale, derive_modeled_tristimulus_v1,
 };
 use crate::spaces::srgb::{D65_WHITE, srgb_linear_from_srgb8, srgb_to_xyz};
 
@@ -35,7 +34,10 @@ fn xyz_and_context_numeric_admission_is_fail_closed() {
     }
 
     let zero_la = AdaptingLuminanceCdM2::try_new(0.0).unwrap_err();
-    assert_eq!(zero_la.field(), AppearanceContextFieldV1::AdaptingLuminanceCdM2);
+    assert_eq!(
+        zero_la.field(),
+        AppearanceContextFieldV1::AdaptingLuminanceCdM2
+    );
     assert_eq!(zero_la.reason(), NumericDomainError::NotPositive);
 
     let zero_background = BackgroundLuminanceRatio::try_new(0.0).unwrap_err();
@@ -54,9 +56,7 @@ fn xyz_and_context_numeric_admission_is_fail_closed() {
 
     for invalid in [f64::NAN, f64::INFINITY, -f64::MIN_POSITIVE, -0.0] {
         assert_eq!(
-            AdaptingLuminanceCdM2::try_new(invalid)
-                .unwrap_err()
-                .field(),
+            AdaptingLuminanceCdM2::try_new(invalid).unwrap_err().field(),
             AppearanceContextFieldV1::AdaptingLuminanceCdM2,
         );
         assert_eq!(
@@ -80,11 +80,10 @@ fn hue_algebra_cannot_encode_exact_absence_as_zero_degrees() {
 fn frame_mismatch_cannot_form_an_occurrence() {
     let relative = IEC_SRGB_D65_XYZ_FRAME_V1;
     let mismatching = MUTATION_SENTINEL_XYZ_FRAME_V1;
-    let sample = derive_modeled_tristimulus_v1(ColorSignal::from_srgb8(Srgb8::new([
-        0x44, 0x88, 0xCC,
-    ])))
-    .unwrap()
-    .sample();
+    let sample =
+        derive_modeled_tristimulus_v1(ColorSignal::from_srgb8(Srgb8::new([0x44, 0x88, 0xCC])))
+            .unwrap()
+            .sample();
     assert_eq!(sample.frame(), relative);
     assert_eq!(
         LcsOccurrence::in_context(sample, context(mismatching, 64.0)),
@@ -98,8 +97,7 @@ fn frame_mismatch_cannot_form_an_occurrence() {
 #[test]
 fn occurrence_identity_contains_only_sample_and_context() {
     let relative = IEC_SRGB_D65_XYZ_FRAME_V1;
-    let sample =
-        TristimulusSample::try_from_xyz_for_test([0.1, 0.2, 0.3], relative).unwrap();
+    let sample = TristimulusSample::try_from_xyz_for_test([0.1, 0.2, 0.3], relative).unwrap();
     let occurrence = LcsOccurrence::in_context(sample, context(relative, 64.0)).unwrap();
     assert_eq!(occurrence.sample(), sample);
     assert_eq!(occurrence.context(), context(relative, 64.0));
@@ -157,9 +155,7 @@ proptest! {
 
 #[test]
 fn f0_lowering_signature_accepts_only_one_profiled_signal() {
-    let lower: fn(
-        ColorSignal,
-    ) -> Result<ModeledTristimulusDerivationV1, TristimulusDomainErrorV1> =
+    let lower: fn(ColorSignal) -> Result<ModeledTristimulusDerivationV1, TristimulusDomainErrorV1> =
         derive_modeled_tristimulus_v1;
     assert!(lower(ColorSignal::from_srgb8(Srgb8::new([0; 3]))).is_ok());
 }
@@ -189,12 +185,11 @@ fn transform_release_v1_pins_a_pre_f0_binary64_vector() {
     // Recorded once from the pre-F0 decode-table + matrix operation order. This
     // is a release anti-drift vector, not a claim of measured or bounded
     // colorimetric evidence.
-    let xyz = derive_modeled_tristimulus_v1(ColorSignal::from_srgb8(Srgb8::new([
-        0x0A, 0x0B, 0x80,
-    ])))
-    .unwrap()
-    .sample()
-    .xyz();
+    let xyz =
+        derive_modeled_tristimulus_v1(ColorSignal::from_srgb8(Srgb8::new([0x0A, 0x0B, 0x80])))
+            .unwrap()
+            .sample()
+            .xyz();
     assert_eq!(
         xyz.map(f64::to_bits),
         [
@@ -220,7 +215,10 @@ fn every_srgb8_channel_code_has_finite_nonnegative_basis_contribution() {
                 .unwrap()
                 .sample()
                 .xyz();
-            assert!(xyz.into_iter().all(|component| component.is_finite() && component >= 0.0));
+            assert!(
+                xyz.into_iter()
+                    .all(|component| component.is_finite() && component >= 0.0)
+            );
         }
     }
 }
@@ -245,10 +243,7 @@ fn admitted_binding_is_one_closed_profile_transform_frame_tuple() {
         binding.result_frame().reference_white(),
         ReferenceWhiteId::Iec61966D65ChromaticityV1,
     );
-    assert_eq!(
-        binding.result_frame().scale(),
-        TristimulusScale::RelativeY1,
-    );
+    assert_eq!(binding.result_frame().scale(), TristimulusScale::RelativeY1,);
     assert_eq!(
         binding.result_frame().release(),
         ColorimetricFrameReleaseId::XyzV1,
