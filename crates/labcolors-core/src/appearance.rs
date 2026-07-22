@@ -1081,21 +1081,6 @@ impl AdmittedAppearanceBindings {
         })
     }
 
-    /// Обновить один уже объявленный physical Surface input без пересборки
-    /// остальных authored bindings и без allocation.
-    pub(crate) fn set_surface_input(
-        &mut self,
-        input: SurfaceInputPortId,
-        value: Srgb8,
-    ) -> Result<(), BindingError> {
-        let index = self
-            .surfaces
-            .binary_search_by_key(&input, |(bound, _)| *bound)
-            .map_err(|_| BindingError::UnexpectedSurfaceInputBinding { input })?;
-        self.surfaces[index].1 = value;
-        Ok(())
-    }
-
     /// Overwrite the complete canonical Surface-input slice from one borrowed
     /// value source.
     ///

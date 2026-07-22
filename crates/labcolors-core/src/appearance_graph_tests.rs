@@ -1758,6 +1758,25 @@ fn canonical_surface_overwrite_reads_once_and_exposes_all_values_without_allocat
 }
 
 #[test]
+fn admitted_surface_runtime_exposes_only_canonical_bulk_seams() {
+    let source = include_str!("appearance.rs");
+    let forbidden = concat!("set_surface_", "input");
+    assert!(
+        !source.contains(forbidden),
+        "per-port Surface mutation must not return after the canonical bulk cut"
+    );
+    for required in [
+        "overwrite_surface_inputs_canonical",
+        "surface_inputs_canonical",
+    ] {
+        assert!(
+            source.contains(required),
+            "canonical runtime seam `{required}` must remain"
+        );
+    }
+}
+
+#[test]
 fn admitted_bindings_and_workspace_are_reused_without_storage_churn() {
     let graph = point_component(false, false).compile().unwrap();
     let mut admitted = graph
@@ -1766,7 +1785,7 @@ fn admitted_bindings_and_workspace_are_reused_without_storage_churn() {
     let mut independent = admitted.try_clone_v1().unwrap();
     assert_eq!(independent, admitted);
     independent
-        .set_surface_input(CONTEXT, Srgb8::new([1, 2, 3]))
+        .overwrite_surface_inputs_canonical([CONTEXT], |_| Srgb8::new([1, 2, 3]))
         .unwrap();
     assert_ne!(independent, admitted);
     assert_eq!(admitted.opacity_bits(OPACITY), Some(0.5f64.to_bits()));
@@ -1786,7 +1805,7 @@ fn admitted_bindings_and_workspace_are_reused_without_storage_churn() {
         ([100, 100, 100], [150, 90, 70]),
     ] {
         admitted
-            .set_surface_input(CONTEXT, Srgb8::new(backdrop))
+            .overwrite_surface_inputs_canonical([CONTEXT], |_| Srgb8::new(backdrop))
             .unwrap();
         {
             let evaluated = graph
