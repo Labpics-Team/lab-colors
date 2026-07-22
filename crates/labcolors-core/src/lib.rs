@@ -31,6 +31,11 @@ pub(crate) mod lpc;
 pub mod material;
 pub mod neutral;
 pub mod numerical_plan;
+#[expect(
+    dead_code,
+    reason = "private F0 output-projection release firewall precedes the atomic public hard cut"
+)]
+pub(crate) mod output_projection;
 pub(crate) mod pair;
 #[cfg_attr(
     not(test),
@@ -40,6 +45,11 @@ pub(crate) mod pair;
     )
 )]
 pub(crate) mod point_support;
+#[expect(
+    dead_code,
+    reason = "private F0 release registry precedes the atomic public hard cut"
+)]
+pub(crate) mod release_registry;
 #[cfg_attr(
     not(test),
     expect(
@@ -74,7 +84,13 @@ mod appearance_graph_tests;
 mod lcs_occurrence_tests;
 
 #[cfg(test)]
+mod output_projection_tests;
+
+#[cfg(test)]
 mod program_session_tests;
+
+#[cfg(test)]
+mod release_registry_tests;
 
 #[cfg(test)]
 mod generic_boundary_tests;
