@@ -11,8 +11,9 @@ use std::mem;
 
 use crate::observation::{
     CanonicalObservationSchemaV1, ObservationError, ObservationHeadViewV1, ObservationOwnerV1,
-    ObservationStreamId, ObservationUpdateInput, PreparedObservationUpdateV1,
-    RevisionBoundObservationV1, RevisionBoundUnknownV1, prepare_observation,
+    ObservationStreamId, ObservationUpdateInput, PreparedObservationUpdateV1, Revision,
+    RevisionBoundObservationV1, RevisionBoundUnknownV1, SchemaOrderedScenarioSourceV1,
+    prepare_observation, prepare_schema_ordered_observation,
 };
 
 /// Crate-private sealing prevents an additional runtime owner from being
@@ -196,56 +197,89 @@ impl<Plan: SessionPlanV1> Session<Plan> {
         let prepared = prepare_observation(&mut self.raw_head, self.stream, &self.schema, update)
             .map_err(SessionUpdateError::Observation)?;
 
-        match prepared {
-            PreparedObservationUpdateV1::Idempotent(prepared) => {
-                let _raw_head = prepared.into_owner();
-                Ok(&self.state)
-            }
-            PreparedObservationUpdateV1::Unknown(prepared) => {
-                let (raw_head, unknown) = prepared.into_parts();
-                let next_state = match take_last_verified(&mut self.state) {
-                    Some(previous) => SessionState::Stale { previous },
-                    None => SessionState::Waiting,
-                };
-                *raw_head = SessionObservationHeadV1::Unknown(unknown);
-                self.state = next_state;
-                Ok(&self.state)
-            }
-            PreparedObservationUpdateV1::Observed(prepared) => {
-                // Clone only the small Rc-backed observation handle. Both the
-                // committed raw head and returned evidence then share the exact
-                // immutable observation backing.
-                let (raw_head, observation) = prepared.into_parts();
-                let next_raw_head = SessionObservationHeadV1::Observed(observation.clone());
-                let decision = self
-                    .plan
-                    .evaluate(
-                        &owner,
-                        observation,
-                        SessionObservationBindingPermitV1::mint(),
-                    )
-                    .map_err(SessionUpdateError::Plan)?;
-                let SessionObservationHeadV1::Observed(expected_observation) = &next_raw_head
-                else {
-                    unreachable!("the pending raw head was constructed as Observed")
-                };
-                if !decision
-                    .observation()
-                    .is_same_binding_as(expected_observation)
-                {
-                    return Err(SessionUpdateError::EvidenceBindingInvariant);
-                }
+        apply_prepared_update(&mut self.plan, &mut self.state, &owner, prepared)
+    }
 
-                // All fallible work is complete. Commit with moves only.
-                let previous = take_last_verified(&mut self.state);
-                let next_state = match decision {
-                    SessionDecision::Verified(current) => SessionState::Ready { current },
-                    SessionDecision::Violation(cause) => SessionState::Failed { cause, previous },
-                };
-                *raw_head = next_raw_head;
-                self.state = next_state;
-                Ok(&self.state)
+    /// Package hot path for already schema-ordered point-sRGB8 scenarios.
+    /// It shares the exact lifecycle transaction below without constructing
+    /// keyed surface bindings or a second raw observation owner.
+    pub(crate) fn update_schema_ordered<Source: SchemaOrderedScenarioSourceV1>(
+        &mut self,
+        revision: Revision,
+        source: &Source,
+        order_scratch: &mut Vec<usize>,
+    ) -> SessionUpdateResult<'_, Plan> {
+        let owner = self
+            .plan
+            .try_acquire_owner()
+            .ok_or(SessionUpdateError::OwnerExpired)?;
+        let prepared = prepare_schema_ordered_observation(
+            &mut self.raw_head,
+            self.stream,
+            &self.schema,
+            revision,
+            source,
+            order_scratch,
+        )
+        .map_err(SessionUpdateError::Observation)?;
+
+        apply_prepared_update(&mut self.plan, &mut self.state, &owner, prepared)
+    }
+}
+
+fn apply_prepared_update<'session, Plan: SessionPlanV1>(
+    plan: &mut Plan,
+    state: &'session mut SessionState<Plan::Verified, Plan::Violation>,
+    owner: &Plan::OwnerLease,
+    prepared: PreparedObservationUpdateV1<'_, SessionObservationHeadV1>,
+) -> SessionUpdateResult<'session, Plan> {
+    match prepared {
+        PreparedObservationUpdateV1::Idempotent(prepared) => {
+            let _raw_head = prepared.into_owner();
+            Ok(state)
+        }
+        PreparedObservationUpdateV1::Unknown(prepared) => {
+            let (raw_head, unknown) = prepared.into_parts();
+            let next_state = match take_last_verified(state) {
+                Some(previous) => SessionState::Stale { previous },
+                None => SessionState::Waiting,
+            };
+            *raw_head = SessionObservationHeadV1::Unknown(unknown);
+            *state = next_state;
+            Ok(state)
+        }
+        PreparedObservationUpdateV1::Observed(prepared) => {
+            // Clone only the small Rc-backed observation handle. Both the
+            // committed raw head and returned evidence then share the exact
+            // immutable observation backing.
+            let (raw_head, observation) = prepared.into_parts();
+            let next_raw_head = SessionObservationHeadV1::Observed(observation.clone());
+            let decision = plan
+                .evaluate(
+                    owner,
+                    observation,
+                    SessionObservationBindingPermitV1::mint(),
+                )
+                .map_err(SessionUpdateError::Plan)?;
+            let SessionObservationHeadV1::Observed(expected_observation) = &next_raw_head else {
+                unreachable!("the pending raw head was constructed as Observed")
+            };
+            if !decision
+                .observation()
+                .is_same_binding_as(expected_observation)
+            {
+                return Err(SessionUpdateError::EvidenceBindingInvariant);
             }
+
+            // All fallible work is complete. Commit with moves only.
+            let previous = take_last_verified(state);
+            let next_state = match decision {
+                SessionDecision::Verified(current) => SessionState::Ready { current },
+                SessionDecision::Violation(cause) => SessionState::Failed { cause, previous },
+            };
+            *raw_head = next_raw_head;
+            *state = next_state;
+            Ok(state)
         }
     }
 }

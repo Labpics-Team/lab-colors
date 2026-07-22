@@ -22,9 +22,10 @@ use crate::appearance::{
 };
 use crate::composition::CompositionProfileV1;
 use crate::constraints::{
-    HardDecision, ProgramPointAssessmentErrorV1, ProgramPointEvaluatorV1, ProgramPointInvocation,
-    ProgramPointTargetV1, ProgramVisiblePointBindingV1, ProgramVisiblePointPassEvidence,
-    ProgramVisiblePointViolationEvidence, assess_program_point_hard,
+    Evaluator, ExactSrgb8IdentityV1, HardDecision, ProgramPointAssessmentErrorV1,
+    ProgramPointEvaluatorV1, ProgramPointInvocation, ProgramPointTargetV1,
+    ProgramVisiblePointBindingV1, ProgramVisiblePointPassEvidence,
+    ProgramVisiblePointViolationEvidence, Wcag22Srgb8V1, assess_program_point_hard,
 };
 use crate::joint::{
     AdmittedFiniteJointOrderV1, FiniteDomainOrdinalV1, FiniteJointOrderErrorV1,
@@ -42,6 +43,7 @@ use crate::session::{
     Session, SessionDecision, SessionEvidenceV1, SessionObservationBindingPermitV1, SessionPlanV1,
     private as session_private,
 };
+use crate::wcag22::Wcag22CriterionV1;
 
 /// Opaque identity of one immutable authored colour source.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -448,6 +450,170 @@ impl<Invocation> ConstraintSet<Invocation> {
     }
 }
 
+/// Static dispatch contract used by one Program epoch. The invocation,
+/// evaluator error, and both evidence branches are one closed type family;
+/// no trait object or client-provided callback reaches the evaluation loop.
+type ProgramConstraintAssessmentResultV1<Evaluation> = Result<
+    HardDecision<
+        <Evaluation as ProgramConstraintEvaluatorSetV1>::PassEvidence,
+        <Evaluation as ProgramConstraintEvaluatorSetV1>::ViolationEvidence,
+    >,
+    ProgramPointAssessmentErrorV1<<Evaluation as ProgramConstraintEvaluatorSetV1>::Error>,
+>;
+
+pub(crate) trait ProgramConstraintEvaluatorSetV1: Sized {
+    type Invocation: Copy;
+    type PassEvidence;
+    type ViolationEvidence;
+    type Error;
+
+    fn assess(
+        &self,
+        source: &crate::appearance::ResolvedOccurrence,
+        modeled_lcs: ModeledLcsOccurrenceV1,
+        invocation: Self::Invocation,
+    ) -> ProgramConstraintAssessmentResultV1<Self>;
+
+    fn pass_binding(evidence: &Self::PassEvidence) -> ProgramVisiblePointBindingV1;
+
+    fn violation_binding(evidence: &Self::ViolationEvidence) -> ProgramVisiblePointBindingV1;
+}
+
+impl<Evaluation> ProgramConstraintEvaluatorSetV1 for Evaluation
+where
+    Evaluation: ProgramPointEvaluatorV1,
+    ProgramPointInvocation<Evaluation>: Copy,
+{
+    type Invocation = ProgramPointInvocation<Evaluation>;
+    type PassEvidence = ProgramVisiblePointPassEvidence<Evaluation>;
+    type ViolationEvidence = ProgramVisiblePointViolationEvidence<Evaluation>;
+    type Error = <Evaluation as Evaluator<ProgramPointTargetV1>>::Error;
+
+    fn assess(
+        &self,
+        source: &crate::appearance::ResolvedOccurrence,
+        modeled_lcs: ModeledLcsOccurrenceV1,
+        invocation: Self::Invocation,
+    ) -> ProgramConstraintAssessmentResultV1<Self> {
+        assess_program_point_hard(source, modeled_lcs, self, invocation)
+    }
+
+    fn pass_binding(evidence: &Self::PassEvidence) -> ProgramVisiblePointBindingV1 {
+        *evidence.binding()
+    }
+
+    fn violation_binding(evidence: &Self::ViolationEvidence) -> ProgramVisiblePointBindingV1 {
+        *evidence.binding()
+    }
+}
+
+/// Generates the code-owned heterogeneous evaluator set as parallel closed
+/// unions. Each evidence variant retains the concrete evaluator's physical +
+/// LCS binding, identity, release, capability, invocation, measurement, and
+/// classifier payload. Adding a family therefore requires a Core code change
+/// in this single declaration, not a client-extensible semantic registry.
+macro_rules! define_core_program_evaluators_v1 {
+    ($(
+        $variant:ident {
+            evaluator: $evaluator:ty = $evaluator_value:expr,
+            invocation: $invocation:ty
+        }
+    ),+ $(,)?) => {
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        pub(crate) enum CoreProgramConstraintInvocationV1 {
+            $($variant($invocation)),+
+        }
+
+        pub(crate) enum CoreProgramPassEvidenceV1 {
+            $($variant(ProgramVisiblePointPassEvidence<$evaluator>)),+
+        }
+
+        pub(crate) enum CoreProgramViolationEvidenceV1 {
+            $($variant(ProgramVisiblePointViolationEvidence<$evaluator>)),+
+        }
+
+        #[derive(Debug, PartialEq)]
+        pub(crate) enum CoreProgramEvaluatorErrorV1 {
+            $($variant(<$evaluator as Evaluator<ProgramPointTargetV1>>::Error)),+
+        }
+
+        /// The sole production evaluator set for this Program schema version.
+        /// Dispatch compiles to a direct match over the generated invocation
+        /// tag; it performs neither virtual dispatch nor lookup allocation.
+        #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+        pub(crate) struct CoreProgramEvaluatorsV1;
+
+        impl ProgramConstraintEvaluatorSetV1 for CoreProgramEvaluatorsV1 {
+            type Invocation = CoreProgramConstraintInvocationV1;
+            type PassEvidence = CoreProgramPassEvidenceV1;
+            type ViolationEvidence = CoreProgramViolationEvidenceV1;
+            type Error = CoreProgramEvaluatorErrorV1;
+
+            fn assess(
+                &self,
+                source: &crate::appearance::ResolvedOccurrence,
+                modeled_lcs: ModeledLcsOccurrenceV1,
+                invocation: Self::Invocation,
+            ) -> ProgramConstraintAssessmentResultV1<Self> {
+                match invocation {
+                    $(CoreProgramConstraintInvocationV1::$variant(invocation) => {
+                        let evaluator: $evaluator = $evaluator_value;
+                        match assess_program_point_hard(
+                            source,
+                            modeled_lcs,
+                            &evaluator,
+                            invocation,
+                        ) {
+                            Ok(HardDecision::Pass(evidence)) => Ok(HardDecision::Pass(
+                                CoreProgramPassEvidenceV1::$variant(evidence),
+                            )),
+                            Ok(HardDecision::Violation(evidence)) => Ok(HardDecision::Violation(
+                                CoreProgramViolationEvidenceV1::$variant(evidence),
+                            )),
+                            Err(ProgramPointAssessmentErrorV1::Binding(source)) => {
+                                Err(ProgramPointAssessmentErrorV1::Binding(source))
+                            }
+                            Err(ProgramPointAssessmentErrorV1::Evaluator(source)) => Err(
+                                ProgramPointAssessmentErrorV1::Evaluator(
+                                    CoreProgramEvaluatorErrorV1::$variant(source),
+                                ),
+                            ),
+                        }
+                    }),+
+                }
+            }
+
+            fn pass_binding(evidence: &Self::PassEvidence) -> ProgramVisiblePointBindingV1 {
+                match evidence {
+                    $(CoreProgramPassEvidenceV1::$variant(evidence) => *evidence.binding()),+
+                }
+            }
+
+            fn violation_binding(
+                evidence: &Self::ViolationEvidence,
+            ) -> ProgramVisiblePointBindingV1 {
+                match evidence {
+                    $(CoreProgramViolationEvidenceV1::$variant(evidence) => *evidence.binding()),+
+                }
+            }
+        }
+    };
+}
+
+define_core_program_evaluators_v1! {
+    ExactSrgb8 {
+        evaluator: ExactSrgb8IdentityV1 = ExactSrgb8IdentityV1,
+        invocation: Srgb8
+    },
+    Wcag22Srgb8 {
+        evaluator: Wcag22Srgb8V1 = Wcag22Srgb8V1,
+        invocation: Wcag22CriterionV1
+    },
+}
+
+type ProgramConstraintInvocationOf<Evaluation> =
+    <Evaluation as ProgramConstraintEvaluatorSetV1>::Invocation;
+
 /// Compile-time binding from one terminal slot to one Paint.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct OutputBinding {
@@ -496,8 +662,8 @@ impl ObservationGroup {
 /// Immutable generic point Program.
 pub struct Program<Evaluation>
 where
-    Evaluation: ProgramPointEvaluatorV1,
-    ProgramPointInvocation<Evaluation>: Copy,
+    Evaluation: ProgramConstraintEvaluatorSetV1,
+    ProgramConstraintInvocationOf<Evaluation>: Copy,
 {
     sources: Vec<Source>,
     targets: Vec<Target>,
@@ -507,15 +673,15 @@ where
     paints: Vec<Paint>,
     surfaces: Vec<Surface>,
     occurrences: Vec<Occurrence>,
-    constraints: ConstraintSet<ProgramPointInvocation<Evaluation>>,
+    constraints: ConstraintSet<ProgramConstraintInvocationOf<Evaluation>>,
     outputs: Vec<OutputBinding>,
     evaluator: Evaluation,
 }
 
 impl<Evaluation> Program<Evaluation>
 where
-    Evaluation: ProgramPointEvaluatorV1,
-    ProgramPointInvocation<Evaluation>: Copy,
+    Evaluation: ProgramConstraintEvaluatorSetV1,
+    ProgramConstraintInvocationOf<Evaluation>: Copy,
 {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
@@ -526,7 +692,7 @@ where
         paints: Vec<Paint>,
         surfaces: Vec<Surface>,
         occurrences: Vec<Occurrence>,
-        constraints: ConstraintSet<ProgramPointInvocation<Evaluation>>,
+        constraints: ConstraintSet<ProgramConstraintInvocationOf<Evaluation>>,
         outputs: Vec<OutputBinding>,
         evaluator: Evaluation,
     ) -> Self {
@@ -559,6 +725,11 @@ where
         })
     }
 }
+
+/// Concrete monomorphized Program boundary for package/WASM lowering. The
+/// generic form remains an internal test seam; package code binds only this
+/// code-owned evaluator union.
+pub(crate) type CoreProgramV1 = Program<CoreProgramEvaluatorsV1>;
 
 /// Atomic compile failure. No executable partial graph escapes.
 #[derive(Debug, PartialEq, Eq)]
@@ -736,15 +907,15 @@ struct CompiledJointSelectionV1 {
 
 struct ProgramEpochV1<Evaluation>
 where
-    Evaluation: ProgramPointEvaluatorV1,
-    ProgramPointInvocation<Evaluation>: Copy,
+    Evaluation: ProgramConstraintEvaluatorSetV1,
+    ProgramConstraintInvocationOf<Evaluation>: Copy,
 {
     evaluator: Evaluation,
     graph: CompiledAppearanceGraph,
     binding_template: AdmittedAppearanceBindings,
     observation_group: CompiledObservationGroupV1,
     occurrence_contexts: Box<[CompiledOccurrenceContextV1]>,
-    constraints: Box<[CompiledPointConstraint<ProgramPointInvocation<Evaluation>>]>,
+    constraints: Box<[CompiledPointConstraint<ProgramConstraintInvocationOf<Evaluation>>]>,
     outputs: Box<[CompiledOutputBinding]>,
     finite_targets: Box<[CompiledFiniteTargetV1]>,
     joint_selection: Option<CompiledJointSelectionV1>,
@@ -755,22 +926,24 @@ where
 /// the contained epoch never becomes an independently shareable API.
 pub(crate) struct ProgramOwnerLeaseV1<Evaluation>(Rc<ProgramEpochV1<Evaluation>>)
 where
-    Evaluation: ProgramPointEvaluatorV1,
-    ProgramPointInvocation<Evaluation>: Copy;
+    Evaluation: ProgramConstraintEvaluatorSetV1,
+    ProgramConstraintInvocationOf<Evaluation>: Copy;
 
 /// Fully validated immutable Program, not yet attached to runtime.
 pub struct CompiledProgram<Evaluation>
 where
-    Evaluation: ProgramPointEvaluatorV1,
-    ProgramPointInvocation<Evaluation>: Copy,
+    Evaluation: ProgramConstraintEvaluatorSetV1,
+    ProgramConstraintInvocationOf<Evaluation>: Copy,
 {
     owner_generation: Rc<ProgramEpochV1<Evaluation>>,
 }
 
+pub(crate) type CompiledCoreProgramV1 = CompiledProgram<CoreProgramEvaluatorsV1>;
+
 impl<Evaluation> CompiledProgram<Evaluation>
 where
-    Evaluation: ProgramPointEvaluatorV1,
-    ProgramPointInvocation<Evaluation>: Copy,
+    Evaluation: ProgramConstraintEvaluatorSetV1,
+    ProgramConstraintInvocationOf<Evaluation>: Copy,
 {
     pub fn observation_group_id(&self) -> ObservationGroupId {
         self.owner_generation.observation_group.id
@@ -847,15 +1020,15 @@ fn map_session_instantiate_error(error: BindingError) -> ProgramSessionInstantia
 /// One evaluator classification retained in the complete Program report.
 pub enum ProgramConstraintResultV1<Evaluation>
 where
-    Evaluation: ProgramPointEvaluatorV1,
+    Evaluation: ProgramConstraintEvaluatorSetV1,
 {
-    Pass(ProgramVisiblePointPassEvidence<Evaluation>),
-    Violation(ProgramVisiblePointViolationEvidence<Evaluation>),
+    Pass(Evaluation::PassEvidence),
+    Violation(Evaluation::ViolationEvidence),
 }
 
 impl<Evaluation> ProgramConstraintResultV1<Evaluation>
 where
-    Evaluation: ProgramPointEvaluatorV1,
+    Evaluation: ProgramConstraintEvaluatorSetV1,
 {
     pub const fn is_violation(&self) -> bool {
         matches!(self, Self::Violation(_))
@@ -863,8 +1036,8 @@ where
 
     fn binding(&self) -> ProgramVisiblePointBindingV1 {
         match self {
-            Self::Pass(evidence) => *evidence.binding(),
-            Self::Violation(evidence) => *evidence.binding(),
+            Self::Pass(evidence) => Evaluation::pass_binding(evidence),
+            Self::Violation(evidence) => Evaluation::violation_binding(evidence),
         }
     }
 
@@ -876,7 +1049,7 @@ where
 /// One canonical `physical case × constraint` report cell.
 pub struct ProgramConstraintCellV1<Evaluation>
 where
-    Evaluation: ProgramPointEvaluatorV1,
+    Evaluation: ProgramConstraintEvaluatorSetV1,
 {
     candidate_state_index: usize,
     case_index: usize,
@@ -888,7 +1061,7 @@ where
 
 impl<Evaluation> ProgramConstraintCellV1<Evaluation>
 where
-    Evaluation: ProgramPointEvaluatorV1,
+    Evaluation: ProgramConstraintEvaluatorSetV1,
 {
     pub const fn candidate_state_index(&self) -> usize {
         self.candidate_state_index
@@ -922,7 +1095,7 @@ where
 /// Complete revision-bound assessment in case-major, constraint-ID order.
 pub struct ProgramReportV1<Evaluation>
 where
-    Evaluation: ProgramPointEvaluatorV1,
+    Evaluation: ProgramConstraintEvaluatorSetV1,
 {
     observation: RevisionBoundObservationV1,
     cells: Vec<ProgramConstraintCellV1<Evaluation>>,
@@ -930,7 +1103,7 @@ where
 
 impl<Evaluation> ProgramReportV1<Evaluation>
 where
-    Evaluation: ProgramPointEvaluatorV1,
+    Evaluation: ProgramConstraintEvaluatorSetV1,
 {
     pub const fn observation(&self) -> &RevisionBoundObservationV1 {
         &self.observation
@@ -965,7 +1138,7 @@ impl ProgramOutputV1 {
 /// All hard cells passed over the complete admitted physical support.
 pub struct ProgramVerifiedV1<Evaluation>
 where
-    Evaluation: ProgramPointEvaluatorV1,
+    Evaluation: ProgramConstraintEvaluatorSetV1,
 {
     report: ProgramReportV1<Evaluation>,
     outputs: Vec<ProgramOutputV1>,
@@ -973,13 +1146,13 @@ where
 }
 
 impl<Evaluation> session_private::EvidenceSealed for ProgramVerifiedV1<Evaluation> where
-    Evaluation: ProgramPointEvaluatorV1
+    Evaluation: ProgramConstraintEvaluatorSetV1
 {
 }
 
 impl<Evaluation> SessionEvidenceV1 for ProgramVerifiedV1<Evaluation>
 where
-    Evaluation: ProgramPointEvaluatorV1,
+    Evaluation: ProgramConstraintEvaluatorSetV1,
 {
     fn observation(&self) -> &RevisionBoundObservationV1 {
         self.report().observation()
@@ -988,7 +1161,7 @@ where
 
 impl<Evaluation> ProgramVerifiedV1<Evaluation>
 where
-    Evaluation: ProgramPointEvaluatorV1,
+    Evaluation: ProgramConstraintEvaluatorSetV1,
 {
     pub const fn report(&self) -> &ProgramReportV1<Evaluation> {
         &self.report
@@ -1009,20 +1182,20 @@ where
 /// and therefore cannot be mistaken for committed Paints.
 pub struct ProgramConflictV1<Evaluation>
 where
-    Evaluation: ProgramPointEvaluatorV1,
+    Evaluation: ProgramConstraintEvaluatorSetV1,
 {
     report: ProgramReportV1<Evaluation>,
     considered_state_count: usize,
 }
 
 impl<Evaluation> session_private::EvidenceSealed for ProgramConflictV1<Evaluation> where
-    Evaluation: ProgramPointEvaluatorV1
+    Evaluation: ProgramConstraintEvaluatorSetV1
 {
 }
 
 impl<Evaluation> SessionEvidenceV1 for ProgramConflictV1<Evaluation>
 where
-    Evaluation: ProgramPointEvaluatorV1,
+    Evaluation: ProgramConstraintEvaluatorSetV1,
 {
     fn observation(&self) -> &RevisionBoundObservationV1 {
         self.report().observation()
@@ -1031,7 +1204,7 @@ where
 
 impl<Evaluation> ProgramConflictV1<Evaluation>
 where
-    Evaluation: ProgramPointEvaluatorV1,
+    Evaluation: ProgramConstraintEvaluatorSetV1,
 {
     pub const fn report(&self) -> &ProgramReportV1<Evaluation> {
         &self.report
@@ -1078,8 +1251,7 @@ pub enum ProgramSessionEvaluationError<EvaluationError> {
     InternalInvariant,
 }
 
-type ProgramEvaluatorError<Evaluation> =
-    <Evaluation as crate::constraints::Evaluator<ProgramPointTargetV1>>::Error;
+type ProgramEvaluatorError<Evaluation> = <Evaluation as ProgramConstraintEvaluatorSetV1>::Error;
 
 type ProgramSessionEvaluationResult<Evaluation> = Result<
     SessionDecision<ProgramVerifiedV1<Evaluation>, ProgramConflictV1<Evaluation>>,
@@ -1182,7 +1354,7 @@ fn try_reserve_program_evaluation_buffer<T>(
 
 struct PreparedProgramEvaluationBuffersV1<Evaluation>
 where
-    Evaluation: ProgramPointEvaluatorV1,
+    Evaluation: ProgramConstraintEvaluatorSetV1,
 {
     selected_cells: Vec<ProgramConstraintCellV1<Evaluation>>,
     conflict_cells: Vec<ProgramConstraintCellV1<Evaluation>>,
@@ -1192,7 +1364,7 @@ where
 
 struct SelectedProgramEvaluationBuffersV1<Evaluation>
 where
-    Evaluation: ProgramPointEvaluatorV1,
+    Evaluation: ProgramConstraintEvaluatorSetV1,
 {
     cells: Vec<ProgramConstraintCellV1<Evaluation>>,
     outputs: Vec<ProgramOutputV1>,
@@ -1201,7 +1373,7 @@ where
 
 impl<Evaluation> PreparedProgramEvaluationBuffersV1<Evaluation>
 where
-    Evaluation: ProgramPointEvaluatorV1,
+    Evaluation: ProgramConstraintEvaluatorSetV1,
 {
     fn take_selected(&mut self) -> SelectedProgramEvaluationBuffersV1<Evaluation> {
         SelectedProgramEvaluationBuffersV1 {
@@ -1221,8 +1393,8 @@ fn prepare_program_evaluation_buffers<Evaluation>(
     ProgramSessionEvaluationError<ProgramEvaluatorError<Evaluation>>,
 >
 where
-    Evaluation: ProgramPointEvaluatorV1,
-    ProgramPointInvocation<Evaluation>: Copy,
+    Evaluation: ProgramConstraintEvaluatorSetV1,
+    ProgramConstraintInvocationOf<Evaluation>: Copy,
 {
     let state_count = joint_state_count.unwrap_or(1);
     if state_count == 0 {
@@ -1260,8 +1432,8 @@ where
 /// the Session itself cannot prolong the owner lifetime.
 pub(crate) struct ProgramSessionPlan<Evaluation>
 where
-    Evaluation: ProgramPointEvaluatorV1,
-    ProgramPointInvocation<Evaluation>: Copy,
+    Evaluation: ProgramConstraintEvaluatorSetV1,
+    ProgramConstraintInvocationOf<Evaluation>: Copy,
 {
     owner_generation: Weak<ProgramEpochV1<Evaluation>>,
     schema: CanonicalObservationSchemaV1,
@@ -1272,15 +1444,15 @@ where
 
 impl<Evaluation> session_private::PlanSealed for ProgramSessionPlan<Evaluation>
 where
-    Evaluation: ProgramPointEvaluatorV1,
-    ProgramPointInvocation<Evaluation>: Copy,
+    Evaluation: ProgramConstraintEvaluatorSetV1,
+    ProgramConstraintInvocationOf<Evaluation>: Copy,
 {
 }
 
 impl<Evaluation> SessionPlanV1 for ProgramSessionPlan<Evaluation>
 where
-    Evaluation: ProgramPointEvaluatorV1,
-    ProgramPointInvocation<Evaluation>: Copy,
+    Evaluation: ProgramConstraintEvaluatorSetV1,
+    ProgramConstraintInvocationOf<Evaluation>: Copy,
 {
     type OwnerLease = ProgramOwnerLeaseV1<Evaluation>;
     type Verified = ProgramVerifiedV1<Evaluation>;
@@ -1311,8 +1483,8 @@ fn evaluate_program_session<Evaluation>(
     observation: RevisionBoundObservationV1,
 ) -> ProgramSessionEvaluationResult<Evaluation>
 where
-    Evaluation: ProgramPointEvaluatorV1,
-    ProgramPointInvocation<Evaluation>: Copy,
+    Evaluation: ProgramConstraintEvaluatorSetV1,
+    ProgramConstraintInvocationOf<Evaluation>: Copy,
 {
     let Some(selection) = &epoch.joint_selection else {
         let mut buffers = prepare_program_evaluation_buffers(epoch, &observation, None)?;
@@ -1402,8 +1574,8 @@ fn apply_joint_candidate<Evaluation>(
     tuple: &[FiniteDomainOrdinalV1],
 ) -> Result<(), ProgramSessionEvaluationError<ProgramEvaluatorError<Evaluation>>>
 where
-    Evaluation: ProgramPointEvaluatorV1,
-    ProgramPointInvocation<Evaluation>: Copy,
+    Evaluation: ProgramConstraintEvaluatorSetV1,
+    ProgramConstraintInvocationOf<Evaluation>: Copy,
 {
     if targets.len() != tuple.len() {
         return Err(ProgramSessionEvaluationError::InternalInvariant);
@@ -1429,8 +1601,8 @@ fn collect_program_candidate_into<Evaluation>(
     buffers: SelectedProgramEvaluationBuffersV1<Evaluation>,
 ) -> ProgramSessionEvaluationResult<Evaluation>
 where
-    Evaluation: ProgramPointEvaluatorV1,
-    ProgramPointInvocation<Evaluation>: Copy,
+    Evaluation: ProgramConstraintEvaluatorSetV1,
+    ProgramConstraintInvocationOf<Evaluation>: Copy,
 {
     let SelectedProgramEvaluationBuffersV1 {
         mut cells,
@@ -1480,8 +1652,8 @@ fn scan_program_candidate<Evaluation>(
     mut outputs: Option<&mut Vec<ProgramOutputV1>>,
 ) -> Result<bool, ProgramSessionEvaluationError<ProgramEvaluatorError<Evaluation>>>
 where
-    Evaluation: ProgramPointEvaluatorV1,
-    ProgramPointInvocation<Evaluation>: Copy,
+    Evaluation: ProgramConstraintEvaluatorSetV1,
+    ProgramConstraintInvocationOf<Evaluation>: Copy,
 {
     let schema = &epoch.observation_group.schema;
     if !observation.shares_schema_backing_with(schema) {
@@ -1563,10 +1735,10 @@ where
                     modeled
                 }
             };
-            let decision = assess_program_point_hard(
+            let decision = Evaluation::assess(
+                &epoch.evaluator,
                 source,
                 modeled_lcs_occurrence,
-                &epoch.evaluator,
                 constraint.invocation,
             )
             .map_err(|error| match error {
@@ -1659,8 +1831,8 @@ fn prepare_program<Evaluation>(
     mut program: Program<Evaluation>,
 ) -> Result<ProgramEpochV1<Evaluation>, ProgramCompileError>
 where
-    Evaluation: ProgramPointEvaluatorV1,
-    ProgramPointInvocation<Evaluation>: Copy,
+    Evaluation: ProgramConstraintEvaluatorSetV1,
+    ProgramConstraintInvocationOf<Evaluation>: Copy,
 {
     if program.observation_group.surface_input_ports.is_empty() {
         return Err(ProgramCompileError::EmptyObservationGroup {
@@ -1734,8 +1906,8 @@ fn canonicalize_sources_and_targets<Evaluation>(
     program: &mut Program<Evaluation>,
 ) -> Result<(), ProgramCompileError>
 where
-    Evaluation: ProgramPointEvaluatorV1,
-    ProgramPointInvocation<Evaluation>: Copy,
+    Evaluation: ProgramConstraintEvaluatorSetV1,
+    ProgramConstraintInvocationOf<Evaluation>: Copy,
 {
     program.sources.sort_unstable_by_key(|source| source.id);
     if let Some(source) = program
@@ -1824,8 +1996,8 @@ fn index_program_dependencies<Evaluation>(
     program: &Program<Evaluation>,
 ) -> Result<IndexedProgramDependenciesV1, ProgramCompileError>
 where
-    Evaluation: ProgramPointEvaluatorV1,
-    ProgramPointInvocation<Evaluation>: Copy,
+    Evaluation: ProgramConstraintEvaluatorSetV1,
+    ProgramConstraintInvocationOf<Evaluation>: Copy,
 {
     let mut paint_ids = Vec::new();
     paint_ids
@@ -1946,8 +2118,8 @@ struct ProgramDependencyScratchV1 {
 impl ProgramDependencyScratchV1 {
     fn new<Evaluation>(program: &Program<Evaluation>) -> Result<Self, ProgramCompileError>
     where
-        Evaluation: ProgramPointEvaluatorV1,
-        ProgramPointInvocation<Evaluation>: Copy,
+        Evaluation: ProgramConstraintEvaluatorSetV1,
+        ProgramConstraintInvocationOf<Evaluation>: Copy,
     {
         let node_count = program
             .paints
@@ -2042,8 +2214,8 @@ fn validate_terminal_dependency_cone<Evaluation>(
     program: &Program<Evaluation>,
 ) -> Result<(), ProgramCompileError>
 where
-    Evaluation: ProgramPointEvaluatorV1,
-    ProgramPointInvocation<Evaluation>: Copy,
+    Evaluation: ProgramConstraintEvaluatorSetV1,
+    ProgramConstraintInvocationOf<Evaluation>: Copy,
 {
     // Preserve the canonical missing-reference diagnostics owned by constraint
     // and output compilation before applying the stronger terminal-safety law.
@@ -2357,11 +2529,14 @@ fn compile_occurrence_contexts(
 fn compile_constraints<Evaluation>(
     graph: &CompiledAppearanceGraph,
     occurrence_contexts: &[CompiledOccurrenceContextV1],
-    authored: ConstraintSet<ProgramPointInvocation<Evaluation>>,
-) -> Result<Box<[CompiledPointConstraint<ProgramPointInvocation<Evaluation>>]>, ProgramCompileError>
+    authored: ConstraintSet<ProgramConstraintInvocationOf<Evaluation>>,
+) -> Result<
+    Box<[CompiledPointConstraint<ProgramConstraintInvocationOf<Evaluation>>]>,
+    ProgramCompileError,
+>
 where
-    Evaluation: ProgramPointEvaluatorV1,
-    ProgramPointInvocation<Evaluation>: Copy,
+    Evaluation: ProgramConstraintEvaluatorSetV1,
+    ProgramConstraintInvocationOf<Evaluation>: Copy,
 {
     let total = authored
         .hard
@@ -2551,8 +2726,8 @@ fn lower_graph<Evaluation>(
     program: &Program<Evaluation>,
 ) -> Result<AppearanceGraphSpec, ProgramCompileError>
 where
-    Evaluation: ProgramPointEvaluatorV1,
-    ProgramPointInvocation<Evaluation>: Copy,
+    Evaluation: ProgramConstraintEvaluatorSetV1,
+    ProgramConstraintInvocationOf<Evaluation>: Copy,
 {
     let colors = try_collect_program(
         program.targets.len(),
@@ -2627,8 +2802,8 @@ fn lower_bindings<Evaluation>(
     program: &Program<Evaluation>,
 ) -> Result<AppearanceBindings, ProgramCompileError>
 where
-    Evaluation: ProgramPointEvaluatorV1,
-    ProgramPointInvocation<Evaluation>: Copy,
+    Evaluation: ProgramConstraintEvaluatorSetV1,
+    ProgramConstraintInvocationOf<Evaluation>: Copy,
 {
     let mut colors = Vec::new();
     colors

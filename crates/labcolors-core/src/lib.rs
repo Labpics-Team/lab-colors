@@ -36,6 +36,8 @@ pub mod numerical_plan;
     reason = "private F0 output-projection release firewall precedes the atomic public hard cut"
 )]
 pub(crate) mod output_projection;
+#[doc(hidden)]
+pub mod package_bridge;
 #[cfg_attr(
     not(test),
     expect(
@@ -96,6 +98,9 @@ mod program_lcs_integration_tests;
 
 #[cfg(test)]
 mod program_joint_integration_tests;
+
+#[cfg(test)]
+mod program_mixed_evaluator_tests;
 
 #[cfg(test)]
 mod release_registry_tests;
