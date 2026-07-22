@@ -5,6 +5,10 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { workspaceVersion } from "./cargo-workspace.mjs";
+import {
+  NUMERICAL_EVIDENCE_FILES,
+  assertPackageEvidenceInventory,
+} from "./release-evidence.mjs";
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 export const REPO_ROOT = resolve(SCRIPT_DIR, "..");
@@ -13,13 +17,8 @@ export const PACKAGE_DIR = resolve(REPO_ROOT, "packages/colors");
 const SOURCE_LICENSE = resolve(REPO_ROOT, "LICENSE");
 const PACKED_LICENSE = resolve(PACKAGE_DIR, "LICENSE");
 const BUILD_METADATA = resolve(PACKAGE_DIR, "build-metadata.json");
-const WCAG22_CONTRACT_DIR = resolve(REPO_ROOT, "crates/labcolors-core/contracts");
-const PACKED_WCAG22_EVIDENCE_DIR = resolve(PACKAGE_DIR, "evidence");
-const WCAG22_EVIDENCE_FILES = [
-  "wcag22-srgb8-v1.json",
-  "wcag22-srgb8-q55-v1.bin",
-  "wcag22-srgb8-q55-proof-v1.json",
-];
+const NUMERICAL_CONTRACT_DIR = resolve(REPO_ROOT, "crates/labcolors-core/contracts");
+const PACKED_NUMERICAL_EVIDENCE_DIR = resolve(PACKAGE_DIR, "evidence");
 const CONFORMANCE_DIR = resolve(REPO_ROOT, "conformance/vectors");
 // Полный состав пака 10.0.0: пять семейств. В npm-тарболл эти файлы НЕ
 // копируются — байты хешируются из репозитория в build-metadata provenance
@@ -87,7 +86,12 @@ export async function prepareNpmPackage() {
   // Must precede even generated/ignored writes. A rejected call leaves no new
   // metadata that could later be packed as if it described the current source.
   const sourceSha = verifiedSourceSha();
-  const canonical = await readFile(SOURCE_LICENSE);
+  const [canonical, packageJsonSource] = await Promise.all([
+    readFile(SOURCE_LICENSE),
+    readFile(resolve(PACKAGE_DIR, "package.json"), "utf8"),
+  ]);
+  const packageJson = JSON.parse(packageJsonSource);
+  assertPackageEvidenceInventory(packageJson.files);
   if (canonical.length === 0) {
     throw new Error(`canonical licence is empty: ${SOURCE_LICENSE}`);
   }
@@ -100,26 +104,24 @@ export async function prepareNpmPackage() {
     throw new Error("generated npm LICENSE differs from the canonical root LICENSE");
   }
 
-  await mkdir(PACKED_WCAG22_EVIDENCE_DIR, { recursive: true });
-  for (const file of WCAG22_EVIDENCE_FILES) {
-    const source = await readFile(resolve(WCAG22_CONTRACT_DIR, file));
-    if (source.length === 0) throw new Error(`canonical WCAG22 evidence is empty: ${file}`);
-    const destination = resolve(PACKED_WCAG22_EVIDENCE_DIR, file);
+  await mkdir(PACKED_NUMERICAL_EVIDENCE_DIR, { recursive: true });
+  for (const file of NUMERICAL_EVIDENCE_FILES) {
+    const source = await readFile(resolve(NUMERICAL_CONTRACT_DIR, file));
+    if (source.length === 0) throw new Error(`canonical numerical evidence is empty: ${file}`);
+    const destination = resolve(PACKED_NUMERICAL_EVIDENCE_DIR, file);
     await atomicWrite(destination, source);
     if (!(await readFile(destination)).equals(source)) {
-      throw new Error(`packed WCAG22 evidence differs from canonical source: ${file}`);
+      throw new Error(`packed numerical evidence differs from canonical source: ${file}`);
     }
   }
 
-  const [packageJsonSource, cargoSource, conformanceSource, runtimeWasm, ...familyBytes] =
+  const [cargoSource, conformanceSource, runtimeWasm, ...familyBytes] =
     await Promise.all([
-      readFile(resolve(PACKAGE_DIR, "package.json"), "utf8"),
       readFile(resolve(REPO_ROOT, "Cargo.toml"), "utf8"),
       readFile(resolve(CONFORMANCE_DIR, "manifest.json"), "utf8"),
       readFile(resolve(PACKAGE_DIR, "pkg/labcolors_bg.wasm")),
       ...CONFORMANCE_FILES.map((file) => readFile(resolve(CONFORMANCE_DIR, file))),
     ]);
-  const packageJson = JSON.parse(packageJsonSource);
   const conformance = JSON.parse(conformanceSource);
   const coreVersion = workspaceVersion(cargoSource);
   const metadata = {

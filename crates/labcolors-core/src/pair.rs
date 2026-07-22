@@ -186,7 +186,7 @@ pub(crate) fn select_label_candidates(
             )
             .map_err(PairLoweringErrorV1::Program)?;
             let report = program
-                .evaluate(candidates, observation)
+                .evaluate_static(candidates, observation)
                 .map_err(PairLoweringErrorV1::ExactReport)?;
             let feasible = match report.classify() {
                 PointwiseHardFeasibilityV1::NonEmpty(feasible) => feasible,
@@ -217,7 +217,7 @@ pub(crate) fn select_label_candidates(
             )
             .map_err(PairLoweringErrorV1::Program)?;
             let report = program
-                .evaluate(candidates, observation)
+                .evaluate_static(candidates, observation)
                 .map_err(PairLoweringErrorV1::WcagReport)?;
             let feasible = match report.classify() {
                 PointwiseHardFeasibilityV1::NonEmpty(feasible) => feasible,

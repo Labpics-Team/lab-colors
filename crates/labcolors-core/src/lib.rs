@@ -27,6 +27,14 @@ pub mod material;
 pub mod neutral;
 pub mod numerical_plan;
 pub(crate) mod pair;
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "private C8d full-support recheck is production-compiled before its package bridge exists"
+    )
+)]
+pub(crate) mod point_support;
 pub mod scale;
 pub mod semantic;
 pub mod solve;
@@ -61,17 +69,8 @@ pub(crate) mod observation;
 #[cfg(test)]
 mod observation_tests;
 
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "private F2 exact recheck is production-compiled before its package bridge exists"
-    )
-)]
-pub(crate) mod recheck;
-
 #[cfg(test)]
-mod recheck_tests;
+mod point_support_tests;
 
 #[cfg_attr(
     not(test),
@@ -317,6 +316,23 @@ pub struct NoPrematureScalarLpcApi;
 /// ```
 #[cfg(doctest)]
 pub struct NoPublicPairRecipeApi;
+
+/// C8d recheck and F2 observation remain one private Session-owned protocol;
+/// they do not create a second public authoring root before C7c.
+///
+/// ```compile_fail
+/// use labcolors_core::point_support::CompiledPointSupportRecheckV1;
+/// ```
+///
+/// ```compile_fail
+/// use labcolors_core::observation::RevisionBoundObservationV1;
+/// ```
+///
+/// ```compile_fail
+/// use labcolors_core::session::PointSupportSessionV1;
+/// ```
+#[cfg(doctest)]
+pub struct NoPrematurePointSupportApi;
 
 /// Сырые `f64` не являются валидированным цветовым значением: публичная
 /// сериализация идёт через [`Srgb8::to_hex`], где невалидное состояние уже

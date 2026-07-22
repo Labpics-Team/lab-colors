@@ -40,8 +40,15 @@ impl ColorInputId {
 pub(crate) struct SurfaceInputPortId(u32);
 
 impl SurfaceInputPortId {
+    /// Construct one client-owned opaque surface-input identity.
     pub(crate) const fn new(raw: u32) -> Self {
         Self(raw)
+    }
+
+    /// Exact transport value. It has identity semantics only.
+    #[cfg(test)]
+    pub(crate) const fn value(self) -> u32 {
+        self.0
     }
 }
 
@@ -80,8 +87,15 @@ impl SurfaceId {
 pub(crate) struct OccurrenceId(u32);
 
 impl OccurrenceId {
+    /// Construct one client-owned opaque occurrence identity.
     pub(crate) const fn new(raw: u32) -> Self {
         Self(raw)
+    }
+
+    /// Exact transport value. It has identity semantics only.
+    #[cfg(test)]
+    pub(crate) const fn value(self) -> u32 {
+        self.0
     }
 }
 
@@ -882,6 +896,10 @@ impl PointOpacityOverSurfaceV1 {
         PhysicalProgramIdentityV1::SolidOpacityOverSurfaceEncodedSrgb8V1
     }
 
+    pub(crate) const fn composition_profile() -> CompositionProfileV1 {
+        CompositionProfileV1::EncodedSrgb8SourceOverV1
+    }
+
     pub(crate) fn evaluate(
         source: [u8; 3],
         opacity: f64,
@@ -1056,6 +1074,7 @@ pub(crate) struct SourceOverCertificateV1 {
 }
 
 impl SourceOverCertificateV1 {
+    /// Replay the exact code-owned composition law certified by this value.
     #[cfg(test)]
     pub(crate) fn replay(&self) -> [u8; 3] {
         self.profile
@@ -1063,23 +1082,23 @@ impl SourceOverCertificateV1 {
     }
 
     #[cfg(test)]
-    pub(crate) fn profile(&self) -> CompositionProfileV1 {
+    pub(crate) const fn profile(&self) -> CompositionProfileV1 {
         self.profile
     }
 
-    pub(crate) fn subject_rgb(&self) -> [u8; 3] {
+    pub(crate) const fn subject_rgb(&self) -> [u8; 3] {
         self.subject_rgb
     }
 
-    pub(crate) fn subject_opacity_bits(&self) -> u64 {
+    pub(crate) const fn subject_opacity_bits(&self) -> u64 {
         self.subject_opacity.bits()
     }
 
-    pub(crate) fn backdrop_rgb(&self) -> [u8; 3] {
+    pub(crate) const fn backdrop_rgb(&self) -> [u8; 3] {
         self.backdrop_rgb
     }
 
-    pub(crate) fn output_rgb(&self) -> [u8; 3] {
+    pub(crate) const fn output_rgb(&self) -> [u8; 3] {
         self.output_rgb
     }
 }

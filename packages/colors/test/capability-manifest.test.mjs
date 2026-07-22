@@ -48,6 +48,7 @@ test("numericalCapabilityManifest publishes the single proof-capable V2 contract
   const ids = manifest.sites.map((site) => site.siteId);
   assert.deepEqual(ids, [
     "glow-target-or-maximum-v1",
+    "point-support-retained-reference-surplus-v1",
     "wcag22-srgb8-contrast-v1",
   ]);
 
@@ -82,12 +83,33 @@ test("numericalCapabilityManifest publishes the single proof-capable V2 contract
   assert.deepEqual(glow.proofIds, []);
   assert.deepEqual(glow.runtimeAttestations, []);
 
-  const wcag22 = manifest.sites[1];
-  assert.deepEqual(wcag22.stableOutcomes, ["canonical-finite-bounded"]);
-  assert.deepEqual(wcag22.evidenceClasses, ["canonical-finite-bounded"]);
-  assert.deepEqual(wcag22.artifactIds, ["wcag22-srgb8-luminance-q55-v1"]);
-  assert.deepEqual(wcag22.boundIds, ["wcag22-srgb8-outward-q55-v1"]);
-  assert.deepEqual(wcag22.proofIds, ["wcag22-srgb8-full-domain-q55-v1"]);
+  const pointSupport = manifest.sites.find(
+    (site) => site.siteId === "point-support-retained-reference-surplus-v1",
+  );
+  assert.deepEqual(pointSupport, {
+    siteId: "point-support-retained-reference-surplus-v1",
+    stableOutcomes: ["canonical-finite-bounded"],
+    compatibilityReleases: [],
+    evidenceClasses: ["canonical-finite-bounded"],
+    artifactIds: ["wcag22-srgb8-luminance-q55-v1"],
+    boundIds: ["point-support-reference-surplus-q55-bps-v1"],
+    proofIds: ["point-support-reference-surplus-integer-v1"],
+    runtimeAttestations: [],
+  });
+
+  const wcag22 = manifest.sites.find(
+    (site) => site.siteId === "wcag22-srgb8-contrast-v1",
+  );
+  assert.deepEqual(wcag22, {
+    siteId: "wcag22-srgb8-contrast-v1",
+    stableOutcomes: ["canonical-finite-bounded"],
+    compatibilityReleases: [],
+    evidenceClasses: ["canonical-finite-bounded"],
+    artifactIds: ["wcag22-srgb8-luminance-q55-v1"],
+    boundIds: ["wcag22-srgb8-outward-q55-v1"],
+    proofIds: ["wcag22-srgb8-full-domain-q55-v1"],
+    runtimeAttestations: [],
+  });
 
   // Манифест — статическое свойство сборки: повторный вызов идентичен.
   assert.deepEqual(numericalCapabilityManifest(), manifest);

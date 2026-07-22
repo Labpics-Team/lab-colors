@@ -1,42 +1,65 @@
-//! Единственный lifecycle owner fixed-candidate F2.
+//! Single lifecycle and observation owner for private F2/C8d full support.
 //!
-//! Session атомарно связывает raw observation watermark, prebound exact recheck и
-//! последний verified evidence. Raw admission не хранит прошлое, recheck не знает
-//! `Waiting | Ready | Stale | Failed`, а output/presentation остаются за O1.
+//! The closed state below owns the one current raw payload through either its
+//! revision-bound report or its current `Unknown`. A separate raw head does not
+//! exist; [`ObservationHeadViewV1`] is derived by borrow. At most one previous
+//! verified report is retained and no transition builds a history chain.
 
 use std::mem;
 
-use crate::appearance::{EncodedPointPaintV1, SurfaceInputPortId};
+use crate::composition::CompositionProfileV1;
 use crate::observation::{
-    ObservationError, ObservationHead, ObservationState, ObservationStreamId,
-    ObservationUpdateInput, PreparedObservationViewV1, RevisionBoundUnknownV1,
+    ObservationError, ObservationHeadViewV1, ObservationOwnerV1, ObservationSchemaMismatchV1,
+    ObservationStreamId, ObservationUpdateInput, PreparedObservationUpdateV1,
+    RevisionBoundUnknownV1, prepare_observation,
 };
-use crate::recheck::{
-    BoundFixedRecheckV1, CompiledFixedRecheckV1, ExactViolationRecheckV1, FixedRecheckBindErrorV1,
-    FixedRecheckDecisionV1, RecheckProtocolErrorV1, RevisionBoundRecheckV1,
+use crate::point_support::{
+    BoundPointSupportRecheckV1, CompiledPointSupportRecheckV1, PointSupportDecisionV1,
+    PointSupportEvaluationErrorV1, PointSupportViolationV1, VerifiedPointSupportV1,
 };
 
-/// Session владеет ровно одним current lifecycle state и не хранит update history.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum ExactFixedSessionStateV1 {
-    Waiting,
+/// Linear authority to consume and revision-bind an observation. The type is
+/// visible to the evaluator only as a parameter; its private field and private
+/// constructor make safe construction exclusive to this Session module.
+pub(crate) struct SessionObservationBindingPermitV1 {
+    _private: (),
+}
+
+impl SessionObservationBindingPermitV1 {
+    const fn mint() -> Self {
+        Self { _private: () }
+    }
+
+    #[cfg(test)]
+    pub(crate) const fn for_test() -> Self {
+        Self { _private: () }
+    }
+}
+
+#[derive(Debug, PartialEq)]
+#[cfg_attr(test, derive(Clone))]
+pub(crate) enum PointSupportSessionStateV1 {
+    /// Initial state or a current Unknown without any previous verified report.
+    Waiting {
+        current_unknown: Option<RevisionBoundUnknownV1>,
+    },
     Ready {
-        current: RevisionBoundRecheckV1,
+        current: VerifiedPointSupportV1,
     },
     Stale {
-        previous: RevisionBoundRecheckV1,
+        previous: VerifiedPointSupportV1,
         current_unknown: RevisionBoundUnknownV1,
     },
     Failed {
-        cause: ExactViolationRecheckV1,
-        previous: Option<RevisionBoundRecheckV1>,
+        cause: PointSupportViolationV1,
+        previous: Option<VerifiedPointSupportV1>,
     },
 }
 
-impl ExactFixedSessionStateV1 {
-    pub(crate) fn last_verified(&self) -> Option<&RevisionBoundRecheckV1> {
+impl PointSupportSessionStateV1 {
+    pub(crate) fn last_verified(&self) -> Option<&VerifiedPointSupportV1> {
         match self {
-            Self::Waiting => None,
+            Self::Waiting { .. } => None,
             Self::Ready { current } => Some(current),
             Self::Stale { previous, .. } => Some(previous),
             Self::Failed { previous, .. } => previous.as_ref(),
@@ -44,61 +67,75 @@ impl ExactFixedSessionStateV1 {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum FixedSessionBuildErrorV1 {
-    Observation(ObservationError),
-    Recheck(FixedRecheckBindErrorV1),
+impl ObservationOwnerV1 for PointSupportSessionStateV1 {
+    fn observation_head(&self) -> ObservationHeadViewV1<'_> {
+        match self {
+            Self::Waiting {
+                current_unknown: None,
+            } => ObservationHeadViewV1::Empty,
+            Self::Waiting {
+                current_unknown: Some(unknown),
+            }
+            | Self::Stale {
+                current_unknown: unknown,
+                ..
+            } => ObservationHeadViewV1::Unknown(unknown),
+            Self::Ready { current } => {
+                ObservationHeadViewV1::Observed(current.report().observation())
+            }
+            Self::Failed { cause, .. } => {
+                ObservationHeadViewV1::Observed(cause.report().observation())
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum FixedSessionUpdateErrorV1 {
+pub(crate) enum PointSupportSessionUpdateErrorV1 {
     Observation(ObservationError),
+    ObservationSchemaMismatch(ObservationSchemaMismatchV1),
     ResourceExhausted,
     InternalInvariant,
 }
 
-/// Один prebound fixed-candidate Session. Candidate, schema, evaluator invocation
-/// и surface indices принимаются только construction-ом и не приходят в update.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct FixedCandidateSessionV1 {
-    observation: ObservationState,
-    recheck: BoundFixedRecheckV1,
-    state: ExactFixedSessionStateV1,
+#[derive(Debug, PartialEq)]
+#[cfg_attr(test, derive(Clone))]
+pub(crate) struct PointSupportSessionV1 {
+    stream: ObservationStreamId,
+    recheck: BoundPointSupportRecheckV1,
+    state: PointSupportSessionStateV1,
     #[cfg(test)]
     force_resource_failure: bool,
 }
 
-impl FixedCandidateSessionV1 {
+impl PointSupportSessionV1 {
+    /// The compiled recheck owns the only canonical schema and is moved into
+    /// the Session. No second schema or replacement Paint can enter updates.
     pub(crate) fn new(
         stream: ObservationStreamId,
-        schema: Vec<SurfaceInputPortId>,
-        requirement: CompiledFixedRecheckV1,
-        paint: EncodedPointPaintV1,
-    ) -> Result<Self, FixedSessionBuildErrorV1> {
-        let observation =
-            ObservationState::new(stream, schema).map_err(FixedSessionBuildErrorV1::Observation)?;
-        let recheck = requirement
-            .bind(observation.compiled_surface_input_schema(), paint)
-            .map_err(FixedSessionBuildErrorV1::Recheck)?;
-        Ok(Self {
-            observation,
-            recheck,
-            state: ExactFixedSessionStateV1::Waiting,
+        compiled: CompiledPointSupportRecheckV1,
+    ) -> Self {
+        Self {
+            stream,
+            recheck: compiled.into_session_recheck(),
+            state: PointSupportSessionStateV1::Waiting {
+                current_unknown: None,
+            },
             #[cfg(test)]
             force_resource_failure: false,
-        })
+        }
     }
 
-    pub(crate) const fn state(&self) -> &ExactFixedSessionStateV1 {
+    pub(crate) const fn state(&self) -> &PointSupportSessionStateV1 {
         &self.state
     }
 
-    pub(crate) const fn raw_head(&self) -> &ObservationHead {
-        self.observation.head()
+    pub(crate) fn raw_head(&self) -> ObservationHeadViewV1<'_> {
+        self.state.observation_head()
     }
 
-    pub(crate) const fn paint(&self) -> EncodedPointPaintV1 {
-        self.recheck.paint()
+    pub(crate) const fn composition_profile(&self) -> CompositionProfileV1 {
+        self.recheck.composition_profile()
     }
 
     #[cfg(test)]
@@ -106,76 +143,263 @@ impl FixedCandidateSessionV1 {
         self.force_resource_failure = true;
     }
 
-    /// Одна логическая транзакция:
-    /// prepare admission без mutation → exact recheck/preflight → build next state
-    /// → infallible raw+session commit. Любой `Err` сохраняет оба SSOT byte-identical.
+    /// One transaction: prepare/canonicalize without mutation, transfer the
+    /// exact observation under a Session-only permit to the consuming
+    /// evaluator, then replace the closed owner with infallible moves only.
     pub(crate) fn update(
         &mut self,
         update: ObservationUpdateInput,
-    ) -> Result<&ExactFixedSessionStateV1, FixedSessionUpdateErrorV1> {
-        let prepared = self
-            .observation
-            .prepare(update)
-            .map_err(FixedSessionUpdateErrorV1::Observation)?;
+    ) -> Result<&PointSupportSessionStateV1, PointSupportSessionUpdateErrorV1> {
+        let prepared = prepare_observation(
+            &mut self.state,
+            self.stream,
+            self.recheck.surface_schema(),
+            update,
+        )
+        .map_err(PointSupportSessionUpdateErrorV1::Observation)?;
 
-        match prepared.view() {
-            PreparedObservationViewV1::Idempotent => Ok(&self.state),
-            PreparedObservationViewV1::AppliedUnknown(unknown) => {
-                let previous = take_last_verified(&mut self.state);
-                let next = match previous {
-                    Some(previous) => ExactFixedSessionStateV1::Stale {
+        match prepared {
+            PreparedObservationUpdateV1::Idempotent(prepared) => Ok(prepared.into_owner()),
+            PreparedObservationUpdateV1::Unknown(prepared) => {
+                let (state, unknown) = prepared.into_parts();
+                let previous = take_last_verified(state);
+                *state = match previous {
+                    Some(previous) => PointSupportSessionStateV1::Stale {
                         previous,
                         current_unknown: unknown,
                     },
-                    None => ExactFixedSessionStateV1::Waiting,
+                    None => PointSupportSessionStateV1::Waiting {
+                        current_unknown: Some(unknown),
+                    },
                 };
-                let disposition = prepared.commit();
-                debug_assert_eq!(disposition, crate::observation::UpdateDisposition::Applied);
-                self.state = next;
-                Ok(&self.state)
+                Ok(state)
             }
-            PreparedObservationViewV1::AppliedObserved(observation) => {
+            PreparedObservationUpdateV1::Observed(prepared) => {
                 #[cfg(test)]
                 if mem::take(&mut self.force_resource_failure) {
-                    return Err(FixedSessionUpdateErrorV1::ResourceExhausted);
+                    return Err(PointSupportSessionUpdateErrorV1::ResourceExhausted);
                 }
+
+                // Evaluation consumes the exact admitted observation and can
+                // return only an already revision-bound decision. The mutable
+                // owner is retained unchanged until that fallible work succeeds.
+                let (state, observation) = prepared.into_parts();
                 let decision = self
                     .recheck
-                    .recheck(observation)
-                    .map_err(map_recheck_error)?;
-                let previous = take_last_verified(&mut self.state);
-                let next = match decision {
-                    FixedRecheckDecisionV1::Verified(current) => {
-                        ExactFixedSessionStateV1::Ready { current }
+                    .evaluate(observation, SessionObservationBindingPermitV1::mint())
+                    .map_err(map_evaluation_error)?;
+                let previous = take_last_verified(state);
+                *state = match decision {
+                    PointSupportDecisionV1::Verified(current) => {
+                        PointSupportSessionStateV1::Ready { current }
                     }
-                    FixedRecheckDecisionV1::Violation(cause) => {
-                        ExactFixedSessionStateV1::Failed { cause, previous }
+                    PointSupportDecisionV1::Violation(cause) => {
+                        PointSupportSessionStateV1::Failed { cause, previous }
                     }
                 };
-                let disposition = prepared.commit();
-                debug_assert_eq!(disposition, crate::observation::UpdateDisposition::Applied);
-                self.state = next;
-                Ok(&self.state)
+                Ok(state)
             }
         }
     }
 }
 
-fn map_recheck_error(error: RecheckProtocolErrorV1) -> FixedSessionUpdateErrorV1 {
+fn map_evaluation_error(error: PointSupportEvaluationErrorV1) -> PointSupportSessionUpdateErrorV1 {
     match error {
-        RecheckProtocolErrorV1::ResourceExhausted => FixedSessionUpdateErrorV1::ResourceExhausted,
-        RecheckProtocolErrorV1::ObservationSchemaMismatch => {
-            FixedSessionUpdateErrorV1::InternalInvariant
+        PointSupportEvaluationErrorV1::ObservationSchemaMismatch(mismatch) => {
+            PointSupportSessionUpdateErrorV1::ObservationSchemaMismatch(mismatch)
+        }
+        PointSupportEvaluationErrorV1::ResourceExhausted => {
+            PointSupportSessionUpdateErrorV1::ResourceExhausted
+        }
+        PointSupportEvaluationErrorV1::CompiledPlanInvariant
+        | PointSupportEvaluationErrorV1::Wcag22Invariant
+        | PointSupportEvaluationErrorV1::StabilityArithmeticInvariant => {
+            PointSupportSessionUpdateErrorV1::InternalInvariant
         }
     }
 }
 
-/// Переносит ровно один retained verified witness без clone и без history chain.
-fn take_last_verified(state: &mut ExactFixedSessionStateV1) -> Option<RevisionBoundRecheckV1> {
-    match mem::replace(state, ExactFixedSessionStateV1::Waiting) {
-        ExactFixedSessionStateV1::Waiting => None,
-        ExactFixedSessionStateV1::Ready { current } => Some(current),
-        ExactFixedSessionStateV1::Stale { previous, .. } => Some(previous),
-        ExactFixedSessionStateV1::Failed { previous, .. } => previous,
+/// Move exactly one retained verified witness out of the old closed owner.
+fn take_last_verified(state: &mut PointSupportSessionStateV1) -> Option<VerifiedPointSupportV1> {
+    match mem::replace(
+        state,
+        PointSupportSessionStateV1::Waiting {
+            current_unknown: None,
+        },
+    ) {
+        PointSupportSessionStateV1::Waiting { .. } => None,
+        PointSupportSessionStateV1::Ready { current } => Some(current),
+        PointSupportSessionStateV1::Stale { previous, .. } => Some(previous),
+        PointSupportSessionStateV1::Failed { previous, .. } => previous,
+    }
+}
+
+#[cfg(test)]
+mod structural_tests {
+    use super::SessionObservationBindingPermitV1;
+    use crate::Srgb8;
+    use crate::appearance::{EncodedPointPaintV1, OccurrenceId, PaintId, SurfaceInputPortId};
+    use crate::composition::{AdmittedOpacityV1, CompositionProfileV1};
+    use crate::observation::{
+        ObservationHeadViewV1, ObservationOwnerV1, ObservationPayloadInput,
+        ObservationSchemaMismatchV1, ObservationStreamId, ObservationUpdateInput,
+        ObservedScenarioSetInput, PreparedObservationUpdateV1, Revision,
+        RevisionBoundObservationV1, ScenarioId, ScenarioInput, SurfaceInputBinding,
+        prepare_observation,
+    };
+    use crate::point_support::{
+        CompiledPointSupportRecheckV1, PointSupportCriterionRequirementV1,
+        PointSupportEvaluationErrorV1, PointSupportOccurrenceRequirementV1,
+        PointSupportStabilityPolicyV1,
+    };
+
+    const STREAM: ObservationStreamId = ObservationStreamId::new(700);
+    const REQUIRED_SURFACE: SurfaceInputPortId = SurfaceInputPortId::new(10);
+    const WRONG_SURFACE: SurfaceInputPortId = SurfaceInputPortId::new(20);
+
+    struct EmptyOwner;
+
+    impl ObservationOwnerV1 for EmptyOwner {
+        fn observation_head(&self) -> ObservationHeadViewV1<'_> {
+            ObservationHeadViewV1::Empty
+        }
+    }
+
+    fn wrong_schema_observation() -> RevisionBoundObservationV1 {
+        let mut owner = EmptyOwner;
+        let prepared = prepare_observation(
+            &mut owner,
+            STREAM,
+            &[WRONG_SURFACE],
+            ObservationUpdateInput {
+                stream: STREAM,
+                revision: Revision::new(1),
+                payload: ObservationPayloadInput::Scenarios(ObservedScenarioSetInput {
+                    scenarios: vec![ScenarioInput {
+                        id: ScenarioId::new(1),
+                        bindings: vec![SurfaceInputBinding::new(
+                            WRONG_SURFACE,
+                            Srgb8::new([255; 3]),
+                        )],
+                    }],
+                }),
+            },
+        )
+        .unwrap();
+        let PreparedObservationUpdateV1::Observed(prepared) = prepared else {
+            panic!("fresh observed update must prepare an observation");
+        };
+        let (_owner, observation) = prepared.into_parts();
+        observation
+    }
+
+    fn narrow_schema_observation() -> RevisionBoundObservationV1 {
+        let mut owner = EmptyOwner;
+        let prepared = prepare_observation(
+            &mut owner,
+            STREAM,
+            &[REQUIRED_SURFACE],
+            ObservationUpdateInput {
+                stream: STREAM,
+                revision: Revision::new(1),
+                payload: ObservationPayloadInput::Scenarios(ObservedScenarioSetInput {
+                    scenarios: vec![ScenarioInput {
+                        id: ScenarioId::new(1),
+                        bindings: vec![SurfaceInputBinding::new(
+                            REQUIRED_SURFACE,
+                            Srgb8::new([255; 3]),
+                        )],
+                    }],
+                }),
+            },
+        )
+        .unwrap();
+        let PreparedObservationUpdateV1::Observed(prepared) = prepared else {
+            panic!("fresh observed update must prepare an observation");
+        };
+        let (_owner, observation) = prepared.into_parts();
+        observation
+    }
+
+    #[test]
+    fn consuming_evaluator_rejects_wrong_keyed_schema_before_composition() {
+        let paint = EncodedPointPaintV1::from_admitted(
+            PaintId::new(1),
+            Srgb8::new([0; 3]),
+            AdmittedOpacityV1::new(1.0).unwrap(),
+        );
+        let compiled = CompiledPointSupportRecheckV1::new(
+            CompositionProfileV1::EncodedSrgb8SourceOverV1,
+            vec![PointSupportOccurrenceRequirementV1::new(
+                OccurrenceId::new(1),
+                REQUIRED_SURFACE,
+                paint,
+                Some(Srgb8::new([0; 3])),
+                PointSupportCriterionRequirementV1::NotRequested,
+                PointSupportStabilityPolicyV1::Disabled,
+            )],
+        )
+        .unwrap();
+        let recheck = compiled.into_session_recheck();
+
+        crate::composition::reset_source_over_evaluation_count();
+        assert_eq!(
+            recheck
+                .evaluate(
+                    wrong_schema_observation(),
+                    SessionObservationBindingPermitV1::mint(),
+                )
+                .unwrap_err(),
+            PointSupportEvaluationErrorV1::ObservationSchemaMismatch(
+                ObservationSchemaMismatchV1::new(0, 0, Some(REQUIRED_SURFACE), Some(WRONG_SURFACE),),
+            )
+        );
+        assert_eq!(crate::composition::source_over_evaluation_count(), 0);
+    }
+
+    #[test]
+    fn consuming_evaluator_rejects_narrow_schema_without_indexing_panic() {
+        let paint = EncodedPointPaintV1::from_admitted(
+            PaintId::new(1),
+            Srgb8::new([0; 3]),
+            AdmittedOpacityV1::new(1.0).unwrap(),
+        );
+        let compiled = CompiledPointSupportRecheckV1::new(
+            CompositionProfileV1::EncodedSrgb8SourceOverV1,
+            vec![
+                PointSupportOccurrenceRequirementV1::new(
+                    OccurrenceId::new(1),
+                    REQUIRED_SURFACE,
+                    paint,
+                    Some(Srgb8::new([0; 3])),
+                    PointSupportCriterionRequirementV1::NotRequested,
+                    PointSupportStabilityPolicyV1::Disabled,
+                ),
+                PointSupportOccurrenceRequirementV1::new(
+                    OccurrenceId::new(2),
+                    WRONG_SURFACE,
+                    paint,
+                    Some(Srgb8::new([0; 3])),
+                    PointSupportCriterionRequirementV1::NotRequested,
+                    PointSupportStabilityPolicyV1::Disabled,
+                ),
+            ],
+        )
+        .unwrap();
+        let recheck = compiled.into_session_recheck();
+
+        crate::composition::reset_source_over_evaluation_count();
+        assert_eq!(
+            recheck
+                .evaluate(
+                    narrow_schema_observation(),
+                    SessionObservationBindingPermitV1::mint(),
+                )
+                .unwrap_err(),
+            PointSupportEvaluationErrorV1::ObservationSchemaMismatch(
+                ObservationSchemaMismatchV1::new(0, 1, Some(WRONG_SURFACE), None),
+            )
+        );
+        assert_eq!(crate::composition::source_over_evaluation_count(), 0);
     }
 }
