@@ -36,7 +36,6 @@ pub mod numerical_plan;
     reason = "private F0 output-projection release firewall precedes the atomic public hard cut"
 )]
 pub(crate) mod output_projection;
-pub(crate) mod pair;
 #[cfg_attr(
     not(test),
     expect(
@@ -132,7 +131,7 @@ mod session_tests;
     not(test),
     expect(
         dead_code,
-        reason = "private V2a joint selection is production-compiled before Pair lowering or a public Program exists"
+        reason = "private V2a joint selection is production-compiled before a public Program exists"
     )
 )]
 pub(crate) mod joint;
@@ -161,9 +160,6 @@ mod continuity_tests;
 
 #[cfg(test)]
 mod dim_tinted_tests;
-
-#[cfg(test)]
-mod pair_label_tests;
 
 #[cfg(test)]
 mod r3_byte_identity_tests;
@@ -351,15 +347,6 @@ pub struct NoHybridLpcSurfaceMetric;
 /// ```
 #[cfg(doctest)]
 pub struct NoPrematureScalarLpcApi;
-
-/// Frozen Pair frontend не публикует собственную физику или solver extension
-/// point; Pair lowering остаётся private до общего Program cutover.
-///
-/// ```compile_fail
-/// use labcolors_core::pair::pair_side;
-/// ```
-#[cfg(doctest)]
-pub struct NoPublicPairRecipeApi;
 
 /// C8d recheck and F2 observation remain one private Session-owned protocol;
 /// they do not create a second public authoring root before C7c.

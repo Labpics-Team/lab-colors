@@ -680,14 +680,6 @@ impl JointExecutionRecordV1 {
         self.upper_paint
     }
 
-    pub(crate) const fn lower_occurrence(&self) -> &ResolvedOccurrence {
-        &self.lower
-    }
-
-    pub(crate) const fn upper_occurrence(&self) -> &ResolvedOccurrence {
-        &self.upper
-    }
-
     pub(crate) fn lower_visible(&self) -> Srgb8 {
         Srgb8::new(self.lower.visible())
     }

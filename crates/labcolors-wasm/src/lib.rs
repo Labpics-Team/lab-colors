@@ -417,8 +417,6 @@ export type RoleRecipe =
       step: "subtle" | "base" | "bloom";
       decision_profile: GlowDecisionProfileV1;
     }
-  | { kind: "pair-fill"; source: LadderSource }
-  | { kind: "pair-label"; source: LadderSource; fraction: number; floor: "aa-text" | "aa-ui" | "none" }
   | { kind: "alpha-analog"; of: LadderSource; alpha: number }
   | { kind: "material"; source: LadderSource; tone_light: number; tone_dark: number; floor: "aa-text" | "aa-ui" }
   | { kind: "zero" };

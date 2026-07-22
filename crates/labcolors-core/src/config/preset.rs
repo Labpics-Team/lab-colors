@@ -297,9 +297,7 @@ pub fn labui_preset_roles() -> Vec<(String, RoleRecipe)> {
     // НЕЙТРАЛЬНЫЙ (стаб: fill-neutral солид-литерал; fill-neutral-tinted и
     // border-neutral алиасят нейтральные core-роли fill-primary/border-base).
     //
-    // Словарный канон labui#92: `fill-accent`/`fill-danger` — НЕ роли, а
-    // deprecation-алиасы на `badge-fill-brand`/`badge-fill-danger` (закон пары;
-    // labui_preset_aliases). `-tinted` остаётся РОЛЬЮ: ЗАЛИВКА при низкой альфе
+    // `-tinted` остаётся РОЛЬЮ: ЗАЛИВКА при низкой альфе
     // (тинт×альфа напрямую), то есть Ladder FillPrimary — тинт = якорь источника,
     // α = @12 (солид над белым дал бы α_min≈1 и «-tinted» перестал быть
     // полупрозрачным, поэтому Ladder, а не инверсия).
@@ -341,31 +339,6 @@ pub fn labui_preset_roles() -> Vec<(String, RoleRecipe)> {
         brand_pos(LadderPosition::FocusRing),
     ));
 
-    // Frozen Pair frontend: PairFill эмитит exact source как opaque occurrence;
-    // PairLabel строит конечный candidate domain на фактически emitted Surface
-    // и проверяет его общим joint evaluator/recheck. Статики проходят тот же путь.
-    let pair = |source| RoleRecipe::PairFill { source };
-    roles.push(("badge-fill-brand".to_string(), pair(LadderSource::Brand)));
-    for (client_name, family_key) in [
-        ("danger", "red"),
-        ("warning", "orange"),
-        ("success", "green"),
-        ("info", "blue"),
-    ] {
-        roles.push((
-            format!("badge-fill-{client_name}"),
-            pair(LadderSource::Family(family_key.to_string())),
-        ));
-    }
-    roles.push((
-        "badge-fill-static-dark".to_string(),
-        pair(LadderSource::Neutral(NeutralPick::Dark)),
-    ));
-    roles.push((
-        "badge-fill-static-light".to_string(),
-        pair(LadderSource::Neutral(NeutralPick::Light)),
-    ));
-
     roles
 }
 
@@ -375,8 +348,7 @@ pub fn labui_preset_roles() -> Vec<(String, RoleRecipe)> {
 /// Нейтральные компонент-роли, которые стаб алиасит через `var()` на
 /// нейтральные core-роли (одна истина, ноль дублирования значений):
 /// fill-neutral-tinted = var(--lab-fill-primary); border-neutral =
-/// var(--lab-border-base). Плюс deprecation-алиасы канона #92: fill-accent/
-/// fill-danger → badge-fill-brand/danger (закон пары), icon → label-tertiary
+/// var(--lab-border-base). Плюс алиасы канона #92: icon → label-tertiary
 /// (глиф красится Labels), border-ghost → border-none (честный ноль). Пресет
 /// наполняет роли И алиасы как единое целое.
 pub fn labui_preset_aliases() -> Vec<(String, String)> {
@@ -391,10 +363,7 @@ pub fn labui_preset_aliases() -> Vec<(String, String)> {
             "fill-quaternary".to_string(),
         ),
         // Словарный канон labui#92 (порядок = passport.aliases labui; отпечаток
-        // тонкий==полный чувствителен к порядку). Акцент/данжер-заливки — закон
-        // пары; icon — глиф (label-tertiary); border-ghost — честный ноль.
-        ("fill-accent".to_string(), "badge-fill-brand".to_string()),
-        ("fill-danger".to_string(), "badge-fill-danger".to_string()),
+        // тонкий==полный чувствителен к порядку).
         ("icon".to_string(), "label-tertiary".to_string()),
         ("border-ghost".to_string(), "border-none".to_string()),
     ]

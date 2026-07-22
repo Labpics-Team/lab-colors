@@ -57,9 +57,7 @@ const PERCEPTUAL_MODULES: [&str; 7] = [
 //
 // Why a SUBSET: the two modules below are POLICY modules — their magnitudes are
 // tunable perceptual policy (role fractions and neutral thresholds). The remaining
-// modules are STANDARD-MODEL or bounded numeric-search transforms. Pair after P1
-// contains only typed topology/lowering and no perceptual policy constants, so it
-// is intentionally outside both inventory scan surfaces.
+// modules are STANDARD-MODEL or bounded numeric-search transforms.
 const POLICY_LITERAL_MODULES: &[&str] = &["semantic.rs", "neutral.rs"];
 
 /// Bare float literal VALUES that are NOT tunable perceptual policy — universal
@@ -171,9 +169,6 @@ const STRUCTURAL_NONPOLICY_ALLOWLIST: &[&str] = &[
     "NEIGHBOR_STEPS",
     "DJ_NEIGHBOR_STEPS",
     "MAX_PROBES",
-    // Bisection iteration count in the pair-fill minimal-nudge search — an
-    // iteration budget, not a perceptual magnitude (pair.rs).
-    "BISECTION_STEPS",
 ];
 
 // ─────────────────────────────────────────────────────────────────────────────

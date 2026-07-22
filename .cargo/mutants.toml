@@ -23,7 +23,6 @@ examine_globs = [
     "crates/labcolors-core/src/numerical_plan.rs",
     "crates/labcolors-core/src/numerics.rs",
     "crates/labcolors-core/src/observation.rs",
-    "crates/labcolors-core/src/pair.rs",
     "crates/labcolors-core/src/recheck.rs",
     "crates/labcolors-core/src/srgb8.rs",
     "crates/labcolors-core/src/wcag22.rs",

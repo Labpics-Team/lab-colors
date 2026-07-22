@@ -546,29 +546,6 @@ pub enum RoleSpec {
         /// path. Wire-ключ — его boundary-проекция, а не декоративный metadata.
         mode: crate::numerical_plan::NumericalExecutionModeV1,
     },
-    /// Frozen PairFill frontend до C7c. Источник становится opaque Paint;
-    /// единственный source-over occurrence создаёт фактически emitted Surface.
-    /// Отдельной Pair-эвристики, собственного compositor-а и выбора стороны нет.
-    PairFill {
-        /// Пер-темный кодированный якорь источника.
-        tint: LadderTint,
-    },
-    /// Frozen PairLabel frontend до C7c. Кандидаты label Paint проверяются на
-    /// фактически emitted opaque PairFill Surface общим joint evaluator/recheck.
-    /// Поля alpha сохраняют замороженную форму публичного RoleSpec, но после P1
-    /// обязаны быть opaque: представление не выводится из client role names.
-    PairLabel {
-        /// Пер-темный кодированный якорь источника fill и hue-направления label.
-        tint: LadderTint,
-        /// Доля максимума контраста PairFill Surface `(0, 1]`.
-        fraction: f64,
-        /// Hard floor против emitted PairFill Surface.
-        floor: Floor,
-        /// Замороженное поле representation light; P1 принимает только `1.0`.
-        surface_alpha_light: f64,
-        /// Замороженное поле representation dark; P1 принимает только `1.0`.
-        surface_alpha_dark: f64,
-    },
     Ladder {
         /// Пер-темный кодированный тинт (якорь источника).
         tint: LadderTint,
@@ -2153,26 +2130,6 @@ fn resolve_spec_in(
             });
         }
         RoleSpec::Decorative { magnitude } => ctx.decorative_contract(magnitude),
-        RoleSpec::PairFill { tint } => {
-            return lower_pair_fill_frontend(bg, tint, vc);
-        }
-        RoleSpec::PairLabel {
-            tint,
-            fraction,
-            floor,
-            surface_alpha_light,
-            surface_alpha_dark,
-        } => {
-            return lower_pair_label_frontend(
-                bg,
-                tint,
-                fraction,
-                floor,
-                surface_alpha_light,
-                surface_alpha_dark,
-                vc,
-            );
-        }
         RoleSpec::Ladder {
             tint,
             alpha_light,
@@ -2588,196 +2545,6 @@ fn resolve_solid_with_ui_floor(
         },
         Err(reason) => Err(reason),
     }
-}
-
-/// Exact page background as the root Surface of the Pair point graph.
-fn pair_root_surface(bg: &BgInput) -> Result<Srgb8, SolveFailure> {
-    crate::alpha::encoded_to_srgb8(bg.encoded_display(), "pair page background")
-        .map(Srgb8::new)
-        .map_err(|error| {
-            SolveFailure::InternalInvariant(format!(
-                "validated Pair background left encoded-sRGB8 domain: {error}"
-            ))
-        })
-}
-
-/// Frozen Pair representation is opaque. The old PairSide/Oklab adjustment and
-/// the hidden FillPrimary opacity are both absent: representation no longer
-/// depends on a client vocabulary term.
-fn lower_pair_fill_occurrence(
-    bg: &BgInput,
-    tint: LadderTint,
-    vc: &ViewingConditions,
-) -> Result<crate::pair::LoweredPairFillV1, SolveFailure> {
-    let source = tint.srgb8_for_vc(vc);
-    let backdrop = pair_root_surface(bg)?;
-    Ok(crate::pair::lower_fill(
-        source,
-        crate::composition::AdmittedOpacityV1::OPAQUE,
-        backdrop,
-    ))
-}
-
-fn lower_pair_fill_frontend(
-    bg: &BgInput,
-    tint: LadderTint,
-    vc: &ViewingConditions,
-) -> PendingResolution {
-    let fill = lower_pair_fill_occurrence(bg, tint, vc)?;
-    finish_rgba_from_certificate(
-        fill.paint().source(),
-        crate::composition::AdmittedOpacityV1::OPAQUE.value(),
-        fill.occurrence().certificate(),
-        vc,
-        false,
-        false,
-    )
-}
-
-fn pair_requirement(floor: Floor) -> crate::pair::PairLabelRequirementV1 {
-    match floor {
-        Floor::AaText => crate::pair::PairLabelRequirementV1::Wcag22(
-            crate::wcag22::Wcag22CriterionV1::Sc143TextDefault,
-        ),
-        Floor::AaUi => crate::pair::PairLabelRequirementV1::Wcag22(
-            crate::wcag22::Wcag22CriterionV1::Sc1411UiComponentOrState,
-        ),
-        Floor::None => crate::pair::PairLabelRequirementV1::None,
-    }
-}
-
-fn resolved_label_bytes(resolved: &Resolved) -> Result<Srgb8, SolveFailure> {
-    let Resolved::Color { solved, .. } = resolved else {
-        return Err(SolveFailure::InternalInvariant(
-            "Pair label proposal did not produce a Color".into(),
-        ));
-    };
-    crate::srgb8::hex_bytes(solved.hex())
-        .map(Srgb8::new)
-        .map_err(|error| {
-            SolveFailure::InternalInvariant(format!(
-                "Pair label solver emitted invalid sRGB8: {error}"
-            ))
-        })
-}
-
-fn pair_candidate(
-    surface_bg: &BgInput,
-    fraction: f64,
-    floor: Floor,
-    source: Srgb8,
-    vc: &ViewingConditions,
-    surface_ctx: &ResolveContext,
-) -> Result<(Resolved, Srgb8), SolveFailure> {
-    let resolved = resolve_hued_anchor_from_srgb8(
-        surface_bg,
-        TextAnchor::new(fraction, floor)?,
-        source,
-        vc,
-        surface_ctx,
-    )?;
-    let bytes = resolved_label_bytes(&resolved)?;
-    Ok((resolved, bytes))
-}
-
-/// PairLabel proposes the exact authored fraction first, then a floor-aware
-/// fallback. The common joint engine—not the proposal stage—forms the feasible
-/// set, applies the declared order and performs fresh final-occurrence recheck.
-#[allow(clippy::too_many_arguments)]
-fn lower_pair_label_frontend(
-    bg: &BgInput,
-    tint: LadderTint,
-    fraction: f64,
-    floor: Floor,
-    surface_alpha_light: f64,
-    surface_alpha_dark: f64,
-    vc: &ViewingConditions,
-) -> PendingResolution {
-    if surface_alpha_light.to_bits() != 1.0_f64.to_bits()
-        || surface_alpha_dark.to_bits() != 1.0_f64.to_bits()
-    {
-        return Err(SolveFailure::InvalidInput(
-            "PairLabel surface representation must be opaque after P1".into(),
-        ));
-    }
-
-    let source = tint.srgb8_for_vc(vc);
-    let backdrop = pair_root_surface(bg)?;
-    let fill = lower_pair_fill_occurrence(bg, tint, vc)?;
-    let surface = fill.visible();
-    let surface_bg = BgInput::solid(&surface.to_hex()).map_err(|error| {
-        SolveFailure::InternalInvariant(format!("generated PairFill Surface was rejected: {error}"))
-    })?;
-    let surface_ctx = ResolveContext::new(&surface_bg, vc);
-
-    let mut resolved_candidates = Vec::new();
-    let mut physical_candidates = Vec::new();
-    let mut order = Vec::new();
-
-    match pair_candidate(&surface_bg, fraction, Floor::None, source, vc, &surface_ctx) {
-        Ok((resolved, bytes)) => {
-            let ordinal = crate::joint::CandidateOrdinalV1::new(1);
-            resolved_candidates.push((ordinal, resolved));
-            physical_candidates.push(crate::pair::PairLabelCandidateV1::new(ordinal, bytes));
-            order.push(ordinal);
-        }
-        Err(error) if matches!(floor, Floor::None) => return Err(error),
-        Err(error) if error.boundary().is_none() => return Err(error),
-        Err(_) => {}
-    }
-
-    if !matches!(floor, Floor::None) {
-        let (resolved, bytes) =
-            pair_candidate(&surface_bg, fraction, floor, source, vc, &surface_ctx)?;
-        if physical_candidates
-            .iter()
-            .all(|candidate| candidate.source() != bytes)
-        {
-            let ordinal = crate::joint::CandidateOrdinalV1::new(2);
-            resolved_candidates.push((ordinal, resolved));
-            physical_candidates.push(crate::pair::PairLabelCandidateV1::new(ordinal, bytes));
-            order.push(ordinal);
-        }
-    }
-
-    if physical_candidates.is_empty() {
-        return Err(SolveFailure::InternalInvariant(
-            "Pair frontend produced an empty candidate domain".into(),
-        ));
-    }
-
-    let verified = crate::pair::select_label_candidates(
-        source,
-        crate::composition::AdmittedOpacityV1::OPAQUE,
-        physical_candidates,
-        order,
-        backdrop,
-        pair_requirement(floor),
-    )
-    .map_err(|error| {
-        SolveFailure::InternalInvariant(format!(
-            "Pair joint selection failed after typed proposal admission: {error:?}"
-        ))
-    })?;
-
-    if verified.fill_occurrence() != fill.occurrence()
-        || verified.fill_paint() != fill.paint()
-        || verified.label_occurrence().visible() != verified.label_paint().source().bytes()
-    {
-        return Err(SolveFailure::InternalInvariant(
-            "Pair joint evidence drifted from the selected physical chain".into(),
-        ));
-    }
-
-    resolved_candidates
-        .into_iter()
-        .find(|(ordinal, _)| *ordinal == verified.ordinal())
-        .map(|(_, resolved)| resolved)
-        .ok_or_else(|| {
-            SolveFailure::InternalInvariant(
-                "Pair selection returned an ordinal outside the proposal domain".into(),
-            )
-        })
 }
 
 /// Альфа-аналог: солид-цель `solid` (кодированный, по теме) на фоне резолва
@@ -3308,10 +3075,7 @@ impl RoleSpec {
         };
 
         match self {
-            RoleSpec::Anchor(_)
-            | RoleSpec::Glow { .. }
-            | RoleSpec::PairFill { .. }
-            | RoleSpec::Zero => Ok(()),
+            RoleSpec::Anchor(_) | RoleSpec::Glow { .. } | RoleSpec::Zero => Ok(()),
             RoleSpec::DecorativeDj { magnitude_dj } => {
                 positive("decorative dJ light magnitude", magnitude_dj.light())?;
                 positive("decorative dJ dark magnitude", magnitude_dj.dark())
@@ -3324,26 +3088,6 @@ impl RoleSpec {
                         "decorative Lc magnitude must be finite and at least {DECORATIVE_FLOOR_MIN}, got {magnitude}"
                     ))
                 }
-            }
-            RoleSpec::PairLabel {
-                fraction,
-                surface_alpha_light,
-                surface_alpha_dark,
-                ..
-            } => {
-                if !fraction.is_finite() || fraction <= 0.0 || fraction > 1.0 {
-                    return Err(format!(
-                        "pair-label fraction must be finite and inside (0, 1], got {fraction}"
-                    ));
-                }
-                alpha("pair-label light surface alpha", surface_alpha_light)?;
-                alpha("pair-label dark surface alpha", surface_alpha_dark)?;
-                if surface_alpha_light.to_bits() != 1.0_f64.to_bits()
-                    || surface_alpha_dark.to_bits() != 1.0_f64.to_bits()
-                {
-                    return Err("pair-label surface representation must be opaque after P1".into());
-                }
-                Ok(())
             }
             RoleSpec::Ladder {
                 alpha_light,
@@ -3409,10 +3153,6 @@ impl RoleSpec {
     pub fn legal_floor(&self) -> Option<f64> {
         match self {
             RoleSpec::Anchor(anchor) => anchor.conformance().min_ratio(),
-            // Лейбл тинт-бейджа несёт свой пол против тинт-поверхности — семантика
-            // контракта, как у текст/UI-якоря (иерархия-пасс его не трогает: он
-            // singleton, не ступень лестницы).
-            RoleSpec::PairLabel { floor, .. } => floor.min_ratio(),
             _ => None,
         }
     }
@@ -4627,13 +4367,6 @@ mod tests {
     #[test]
     fn named_table_validates_every_raw_role_field_before_resolution() {
         let tint = LadderTint::new([[0.25, 0.5, 0.75]; 4]).unwrap();
-        let pair = |fraction, light, dark| RoleSpec::PairLabel {
-            tint,
-            fraction,
-            floor: Floor::AaText,
-            surface_alpha_light: light,
-            surface_alpha_dark: dark,
-        };
         let ladder = |light, dark| RoleSpec::Ladder {
             tint,
             alpha_light: light,
@@ -4658,10 +4391,6 @@ mod tests {
             RoleSpec::DecorativeDj {
                 magnitude_dj: DjMagnitude::new(1.0, 0.0),
             },
-            pair(f64::NAN, 0.5, 0.5),
-            pair(0.5, 0.0, 0.5),
-            pair(0.5, 0.5, f64::INFINITY),
-            pair(0.5, 0.25, 1.0),
             ladder(0.0, 0.5),
             ladder(0.5, f64::NAN),
             ladder_with_floor(1.0, 1.0, Some(Floor::None)),
@@ -4689,7 +4418,6 @@ mod tests {
             RoleSpec::DecorativeDj {
                 magnitude_dj: DjMagnitude::new(1.0, 2.0),
             },
-            pair(0.5, 1.0, 1.0),
             ladder(0.25, 1.0),
             ladder_with_floor(1.0, 1.0, Some(Floor::AaUi)),
             RoleSpec::AlphaAnalog {

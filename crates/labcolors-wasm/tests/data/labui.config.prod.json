@@ -1109,76 +1109,8 @@
         },
         "position": "focus-ring"
       }
-    },
-    {
-      "name": "badge-fill-brand",
-      "recipe": {
-        "kind": "pair-fill",
-        "source": {
-          "kind": "brand"
-        }
-      }
-    },
-    {
-      "name": "badge-fill-danger",
-      "recipe": {
-        "kind": "pair-fill",
-        "source": {
-          "kind": "family",
-          "key": "red"
-        }
-      }
-    },
-    {
-      "name": "badge-fill-warning",
-      "recipe": {
-        "kind": "pair-fill",
-        "source": {
-          "kind": "family",
-          "key": "orange"
-        }
-      }
-    },
-    {
-      "name": "badge-fill-success",
-      "recipe": {
-        "kind": "pair-fill",
-        "source": {
-          "kind": "family",
-          "key": "green"
-        }
-      }
-    },
-    {
-      "name": "badge-fill-info",
-      "recipe": {
-        "kind": "pair-fill",
-        "source": {
-          "kind": "family",
-          "key": "blue"
-        }
-      }
-    },
-    {
-      "name": "badge-fill-static-dark",
-      "recipe": {
-        "kind": "pair-fill",
-        "source": {
-          "kind": "neutral",
-          "pick": "dark"
-        }
-      }
-    },
-    {
-      "name": "badge-fill-static-light",
-      "recipe": {
-        "kind": "pair-fill",
-        "source": {
-          "kind": "neutral",
-          "pick": "light"
-        }
-      }
     }
+
   ],
   "aliases": [
     {
@@ -1192,14 +1124,6 @@
     {
       "alias": "fx-skeleton-base",
       "target": "fill-quaternary"
-    },
-    {
-      "alias": "fill-accent",
-      "target": "badge-fill-brand"
-    },
-    {
-      "alias": "fill-danger",
-      "target": "badge-fill-danger"
     },
     {
       "alias": "icon",

@@ -647,9 +647,7 @@ const LABUI_CONSUMED_ROLES: &[&str] = &[
     "fx-shadow-penumbra",
     "fx-shadow-major",
     // Component.
-    "fill-accent",
     "fill-neutral",
-    "fill-danger",
     "fill-accent-tinted",
     "fill-neutral-tinted",
     "fill-danger-tinted",
@@ -659,14 +657,6 @@ const LABUI_CONSUMED_ROLES: &[&str] = &[
     "border-neutral",
     "border-danger",
     "border-focus",
-    // Пары бейджа: exact opaque fill и joint-verified label на emitted Surface.
-    "badge-fill-brand",
-    "badge-fill-danger",
-    "badge-fill-warning",
-    "badge-fill-success",
-    "badge-fill-info",
-    "badge-fill-static-dark",
-    "badge-fill-static-light",
     // Прочие эмитируемые нейтральные (none — core; icon снят с контракта каноном
     // #92 — глиф красится label-tertiary; separator НЕ токен: бордер и сепаратор
     // едины, компонент применяет бордер-токен).
@@ -716,14 +706,11 @@ const COLLAPSED_ROLES: &[(&str, &str)] = &[
         "bg-overlay-*",
         "оверлеи → alpha.rs-роли (вне поглощаемого GAP)",
     ),
-    // Компонентные алиасы — конфиг-алиасы, не рецепты. Бейдж сузился законом
-    // пары: badge-fill-* — первоклассная эмиссия RoleRecipe::PairFill;
-    // label frontend использует фактически emitted fill Surface без зависимости
-    // по имени токена.
-    (
-        "badge-label-*",
-        "лейбл бейджа — joint-verified foreground на emitted PairFill Surface",
-    ),
+    // Компонентная композиция принадлежит клиентскому Program, а не закрытому
+    // ролевому меню Core.
+    ("badge-*", "client-owned Program composition"),
+    ("fill-accent", "client-owned alias"),
+    ("fill-danger", "client-owned alias"),
     ("control-bg", "компонентный алиас, не рецепт эмиссии"),
 ];
 
@@ -896,8 +883,6 @@ fn renaming_family_id_and_references_does_not_change_the_compiled_graph() {
             }
             RoleRecipe::Ladder { source, .. }
             | RoleRecipe::Glow { source, .. }
-            | RoleRecipe::PairFill { source }
-            | RoleRecipe::PairLabel { source, .. }
             | RoleRecipe::Material { source, .. } => {
                 rename_source(source, "red", "client-family-42");
             }
@@ -1308,42 +1293,6 @@ fn value_test_bites_on_alpha_mutation() {
         (got_alpha - 0.039).abs() > 1e-9,
         "RED-proof значенческого теста провален: мутация альфы НЕ сдвинула эмиссию"
     );
-}
-
-/// P1 не выводит representation из client-owned имени позиции и не двигает
-/// authored source скрытой Pair-эвристикой. Во всех VC PairFill эмитит точный
-/// выбранный source как opaque Paint; смена темы меняет только authored anchor.
-#[test]
-fn pair_fill_is_exact_opaque_source_across_viewing_conditions() {
-    let table = labui_reference().compile_named_role_table().unwrap();
-    let cases = [
-        (ViewingConditions::srgb(), "#FFFFFF", "#007AFF"),
-        (ViewingConditions::dim_surround(), "#101012", "#4A8FFF"),
-        (
-            ViewingConditions::srgb_high_contrast(),
-            "#FFFFFF",
-            "#0040DD",
-        ),
-        (
-            ViewingConditions::dim_surround_high_contrast(),
-            "#101012",
-            "#409CFF",
-        ),
-    ];
-
-    for (vc, background, expected_source) in cases {
-        let set = resolve_named_set(&BgInput::solid(background).unwrap(), &table, &vc)
-            .expect("валидная PairFill fixture обязана резолвиться");
-        let (_, resolved) = set
-            .iter()
-            .find(|(name, _)| name == "badge-fill-brand")
-            .expect("паспорт несёт badge-fill-brand");
-        let fill = resolved
-            .translucent()
-            .expect("PairFill эмитится общей rgba-формой");
-        assert_eq!(fill.tint_hex(), expected_source);
-        assert_eq!(fill.alpha().to_bits(), 1.0_f64.to_bits());
-    }
 }
 
 /// Дубликаты ключей всех словарей отвергаются (повтор имени = неоднозначный
@@ -2016,10 +1965,10 @@ fn every_hue_consuming_path_preserves_achromatic_source_identity() {
         for (name, recipe) in &mut config.roles {
             match name.as_str() {
                 "label-brand-secondary" => {
-                    *recipe = RoleRecipe::PairLabel {
-                        source: LadderSource::Brand,
+                    *recipe = RoleRecipe::TextAnchor {
                         fraction: 0.5,
                         floor: Floor::AaUi,
+                        hue: Some(LadderSource::Brand),
                     };
                 }
                 "fill-brand-secondary" => {
@@ -2080,10 +2029,10 @@ fn nearest_chromatic_source_survives_every_current_source_consuming_path() {
     for (name, recipe) in &mut config.roles {
         match name.as_str() {
             "label-brand-secondary" => {
-                *recipe = RoleRecipe::PairLabel {
-                    source: LadderSource::Brand,
+                *recipe = RoleRecipe::TextAnchor {
                     fraction: 0.5,
                     floor: Floor::AaUi,
+                    hue: Some(LadderSource::Brand),
                 };
             }
             "fill-brand-secondary" => {
@@ -2125,15 +2074,6 @@ fn nearest_chromatic_source_survives_every_current_source_consuming_path() {
         panic!("fill-brand-secondary must resolve to Material");
     };
     assert_chromatic_hex(material.base_hex(), "Material");
-
-    let (_, Resolved::Translucent(pair_fill)) = set
-        .iter()
-        .find(|(name, _)| name == "badge-fill-brand")
-        .expect("pair fill exists")
-    else {
-        panic!("badge-fill-brand must resolve to Translucent");
-    };
-    assert_chromatic_hex(pair_fill.tint_hex(), "PairFill");
 }
 
 #[test]
