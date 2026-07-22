@@ -45,11 +45,6 @@ pub(crate) mod pair;
     )
 )]
 pub(crate) mod point_support;
-#[expect(
-    dead_code,
-    reason = "private F0 release registry precedes the atomic public hard cut"
-)]
-pub(crate) mod release_registry;
 #[cfg_attr(
     not(test),
     expect(
@@ -58,6 +53,11 @@ pub(crate) mod release_registry;
     )
 )]
 pub(crate) mod program_session;
+#[expect(
+    dead_code,
+    reason = "private F0 release registry precedes the atomic public hard cut"
+)]
+pub(crate) mod release_registry;
 pub mod scale;
 pub mod semantic;
 pub mod solve;
