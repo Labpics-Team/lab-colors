@@ -5,13 +5,15 @@
 //! `surfaceFrom` лишь даёт видимому результату повторно используемую identity.
 //! Клиентский словарь и perception-утверждения сюда не входят.
 
+use std::cell::Cell;
+
 use proptest::prelude::*;
 
 use crate::Srgb8;
 use crate::appearance::{
-    AppearanceBindings, AppearanceGraphSpec, BindingError, ColorInputId, CompileError,
-    CompositionProfileV1, EncodedPointPaintV1, OccurrenceId, OccurrenceSpec, OpacityInputId,
-    PaintId, PaintSpec, SurfaceId, SurfaceInputPortId, SurfaceSpec,
+    AdmittedAppearanceBindings, AppearanceBindings, AppearanceGraphSpec, BindingError,
+    ColorInputId, CompileError, CompositionProfileV1, EncodedPointPaintV1, OccurrenceId,
+    OccurrenceSpec, OpacityInputId, PaintId, PaintSpec, SurfaceId, SurfaceInputPortId, SurfaceSpec,
 };
 use crate::constraints::Evaluator;
 
@@ -78,6 +80,28 @@ fn bindings(source: [u8; 3], opacity: f64, context: [u8; 3]) -> AppearanceBindin
         vec![(CONTEXT, Srgb8::new(context))],
         vec![(OPACITY, opacity)],
     )
+}
+
+fn admitted_surface_triplet() -> AdmittedAppearanceBindings {
+    let inputs = [
+        SurfaceInputPortId::new(30),
+        SurfaceInputPortId::new(10),
+        SurfaceInputPortId::new(20),
+    ];
+    let graph = AppearanceGraphSpec::new(vec![], inputs.to_vec(), vec![], vec![], vec![], vec![])
+        .compile()
+        .unwrap();
+    graph
+        .admit_bindings(&AppearanceBindings::new(
+            vec![],
+            vec![
+                (inputs[0], Srgb8::new([30; 3])),
+                (inputs[1], Srgb8::new([10; 3])),
+                (inputs[2], Srgb8::new([20; 3])),
+            ],
+            vec![],
+        ))
+        .unwrap()
 }
 
 #[test]
@@ -1491,6 +1515,81 @@ fn signed_zero_opacity_has_one_canonical_state() {
         negative.paint(FILL_PAINT).unwrap().opacity_bits(),
         0.0f64.to_bits()
     );
+}
+
+#[test]
+fn canonical_surface_overwrite_rejects_every_schema_drift_before_read_or_mutation() {
+    let mut admitted = admitted_surface_triplet();
+    let first = SurfaceInputPortId::new(10);
+    let second = SurfaceInputPortId::new(20);
+    let third = SurfaceInputPortId::new(30);
+    let original = [
+        (first, Srgb8::new([10; 3])),
+        (second, Srgb8::new([20; 3])),
+        (third, Srgb8::new([30; 3])),
+    ];
+    let reordered = [second, first, third];
+    let relabelled = [first, SurfaceInputPortId::new(21), third];
+    let truncated = [first, second];
+    let extended = [first, second, third, SurfaceInputPortId::new(40)];
+
+    for expected in [
+        reordered.as_slice(),
+        relabelled.as_slice(),
+        truncated.as_slice(),
+        extended.as_slice(),
+    ] {
+        let reads = Cell::new(0);
+        let (result, allocations) = crate::test_support::measured_allocations(|| {
+            admitted.overwrite_surface_inputs_canonical(expected.iter().copied(), |_| {
+                reads.set(reads.get() + 1);
+                Srgb8::new([0; 3])
+            })
+        });
+
+        assert_eq!(result, Err(BindingError::IncompatibleAdmittedBindings));
+        assert_eq!(reads.get(), 0);
+        assert_eq!(allocations, 0);
+        assert!(admitted.surface_inputs_canonical().eq(original));
+    }
+}
+
+#[test]
+fn canonical_surface_overwrite_reads_once_and_exposes_all_values_without_allocation() {
+    let mut admitted = admitted_surface_triplet();
+    let expected_inputs = [
+        SurfaceInputPortId::new(10),
+        SurfaceInputPortId::new(20),
+        SurfaceInputPortId::new(30),
+    ];
+
+    admitted
+        .overwrite_surface_inputs_canonical(expected_inputs, |index| Srgb8::new([index as u8; 3]))
+        .unwrap();
+
+    let values = [
+        Srgb8::new([101, 102, 103]),
+        Srgb8::new([111, 112, 113]),
+        Srgb8::new([121, 122, 123]),
+    ];
+    let reads = Cell::new([0_usize; 3]);
+    let (result, allocations) = crate::test_support::measured_allocations(|| {
+        admitted.overwrite_surface_inputs_canonical(expected_inputs, |index| {
+            let mut counts = reads.get();
+            counts[index] += 1;
+            reads.set(counts);
+            values[index]
+        })?;
+        Ok::<_, BindingError>(
+            admitted
+                .surface_inputs_canonical()
+                .eq(expected_inputs.into_iter().zip(values)),
+        )
+    });
+
+    assert_eq!(result, Ok(true));
+    assert_eq!(reads.get(), [1, 1, 1]);
+    assert_eq!(allocations, 0);
 }
 
 #[test]

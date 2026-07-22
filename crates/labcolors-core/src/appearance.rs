@@ -1076,6 +1076,38 @@ impl AdmittedAppearanceBindings {
         Ok(())
     }
 
+    /// Overwrite the complete canonical Surface-input slice from one borrowed
+    /// value source.
+    ///
+    /// The exact typed schema is checked in full before `value_at` can run or
+    /// any admitted value can change. After that O(N) preflight, `value_at` is
+    /// called exactly once per canonical input and every destination value is
+    /// overwritten exactly once. Neither pass needs lookup or allocation.
+    pub(crate) fn overwrite_surface_inputs_canonical(
+        &mut self,
+        expected_inputs: impl IntoIterator<Item = SurfaceInputPortId>,
+        mut value_at: impl FnMut(usize) -> Srgb8,
+    ) -> Result<(), BindingError> {
+        if !expected_inputs
+            .into_iter()
+            .eq(self.surfaces.iter().map(|(input, _)| *input))
+        {
+            return Err(BindingError::IncompatibleAdmittedBindings);
+        }
+
+        for (index, (_, value)) in self.surfaces.iter_mut().enumerate() {
+            *value = value_at(index);
+        }
+        Ok(())
+    }
+
+    /// Borrow the admitted Surface-input slice in its exact canonical order.
+    pub(crate) fn surface_inputs_canonical(
+        &self,
+    ) -> impl ExactSizeIterator<Item = (SurfaceInputPortId, Srgb8)> + '_ {
+        self.surfaces.iter().copied()
+    }
+
     #[cfg(test)]
     pub(crate) fn opacity_bits(&self, input: OpacityInputId) -> Option<u64> {
         self.opacities
