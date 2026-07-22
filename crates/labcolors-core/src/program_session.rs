@@ -19,8 +19,8 @@ use std::rc::{Rc, Weak};
 
 use crate::Srgb8;
 use crate::appearance::{
-    AdmittedAppearanceBindings, AppearanceBindings, AppearanceWorkspace, BindingError,
-    AppearanceGraphSpec, CompileError, CompiledAppearanceGraph, OccurrenceId, SurfaceInputPortId,
+    AdmittedAppearanceBindings, AppearanceBindings, AppearanceGraphSpec, AppearanceWorkspace,
+    BindingError, CompileError, CompiledAppearanceGraph, OccurrenceId, SurfaceInputPortId,
 };
 
 /// ASCII `LCR1`: code-owned Lab Colors Render transport version 1.
@@ -452,10 +452,12 @@ fn decode_encoded_surface_update(
             let surfaces = &words[PACKED_ENCODED_SURFACE_HEADER_WORDS_V1..];
             for (surface_index, &value) in surfaces.iter().enumerate() {
                 if value & 0xff00_0000 != 0 {
-                    return Err(PackedEncodedSurfaceUpdateErrorV1::ReservedSignalByteNonZero {
-                        surface_index,
-                        value,
-                    });
+                    return Err(
+                        PackedEncodedSurfaceUpdateErrorV1::ReservedSignalByteNonZero {
+                            surface_index,
+                            value,
+                        },
+                    );
                 }
             }
             Ok(PreparedEncodedSurfaceUpdateV1::Present {

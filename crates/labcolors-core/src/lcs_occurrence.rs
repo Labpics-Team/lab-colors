@@ -206,8 +206,7 @@ impl AppearanceContextId {
         if adapting_luminance.get() == 0.0 {
             return Err(NumericDomainError::NotPositive);
         }
-        let background_relative_luminance =
-            FiniteNonNegative::new(background_relative_luminance)?;
+        let background_relative_luminance = FiniteNonNegative::new(background_relative_luminance)?;
         if background_relative_luminance.get() == 0.0 {
             return Err(NumericDomainError::NotPositive);
         }

@@ -1,8 +1,8 @@
 use crate::Srgb8;
 use crate::appearance::{
-    AppearanceBindings, AppearanceGraphSpec, BindingError, ColorInputId, CompileError, OccurrenceId,
-    OccurrenceSpec, OpacityInputId, PaintId, PaintSpec, SurfaceId, SurfaceInputPortId,
-    SurfaceSpec,
+    AppearanceBindings, AppearanceGraphSpec, BindingError, ColorInputId, CompileError,
+    OccurrenceId, OccurrenceSpec, OpacityInputId, PaintId, PaintSpec, SurfaceId,
+    SurfaceInputPortId, SurfaceSpec,
 };
 use crate::composition::CompositionProfileV1;
 use crate::program_session::{
@@ -226,7 +226,10 @@ fn unavailable_after_ready_is_stale_and_retains_exactly_one_previous_snapshot() 
         panic!("unavailable Surface input after Ready must become Stale");
     };
     assert_eq!(previous.revision(), 1);
-    assert_eq!(previous.composited_occurrence_signals_rgb24(), &[0x80_80_80]);
+    assert_eq!(
+        previous.composited_occurrence_signals_rgb24(),
+        &[0x80_80_80]
+    );
     assert_eq!(current_unavailable.revision(), 2);
     assert_eq!(current_unavailable.reason(), 91);
 

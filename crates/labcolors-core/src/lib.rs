@@ -16,28 +16,17 @@ pub(crate) mod accent_balance;
 pub mod alpha;
 pub(crate) mod analog;
 pub(crate) mod appearance;
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "private F0 colour-identity foundation precedes the terminal public hard cut"
-    )
-)]
-pub(crate) mod lcs_occurrence;
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "private encoded point-render Session precedes its package-private WASM bridge"
-    )
-)]
-pub(crate) mod program_session;
 pub mod config;
 pub(crate) mod constraints;
 pub mod glow;
 pub mod hash;
 pub mod ladder;
 pub mod lcs;
+#[expect(
+    dead_code,
+    reason = "private F0 colour-identity foundation precedes the terminal public hard cut"
+)]
+pub(crate) mod lcs_occurrence;
 pub(crate) mod lpc;
 pub mod material;
 pub mod neutral;
@@ -51,6 +40,14 @@ pub(crate) mod pair;
     )
 )]
 pub(crate) mod point_support;
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "private encoded point-render Session precedes its package-private WASM bridge"
+    )
+)]
+pub(crate) mod program_session;
 pub mod scale;
 pub mod semantic;
 pub mod solve;

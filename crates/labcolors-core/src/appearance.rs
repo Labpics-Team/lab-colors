@@ -1464,12 +1464,7 @@ impl AppearanceEvaluationView<'_, '_> {
         surfaces
             .try_reserve_exact(self.workspace.surfaces.len())
             .map_err(|_| BindingError::ResourceExhausted)?;
-        for (spec, value) in self
-            .program
-            .surfaces
-            .iter()
-            .zip(&self.workspace.surfaces)
-        {
+        for (spec, value) in self.program.surfaces.iter().zip(&self.workspace.surfaces) {
             surfaces.push((
                 spec.id(),
                 value.unwrap_or_else(|| unreachable!("render topo covers every Surface")),
@@ -1548,8 +1543,7 @@ impl CompiledAppearanceGraph {
         bindings: &AdmittedAppearanceBindings,
         workspace: &'workspace mut AppearanceWorkspace,
     ) -> Result<AppearanceEvaluationView<'_, 'workspace>, BindingError> {
-        self.program()
-            .evaluate_admitted_into(bindings, workspace)
+        self.program().evaluate_admitted_into(bindings, workspace)
     }
 
     /// Cold convenience внутри Core для callers, которым нужен owned result.
