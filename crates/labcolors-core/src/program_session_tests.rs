@@ -1,11 +1,11 @@
 use crate::Srgb8;
 use crate::program_session::{
     ColorInput, ColorInputId, CompiledProgram, CompositionProfile, Occurrence, OccurrenceId,
-    OpacityInput, OpacityInputId, Paint, PaintId, PointRenderOwner, Program, ProgramCompileError,
-    PACKED_ENCODED_SURFACE_PRESENT_TAG_V1, PACKED_ENCODED_SURFACE_UNAVAILABLE_TAG_V1,
-    PACKED_ENCODED_SURFACE_UPDATE_MAGIC_V1, PackedEncodedSurfaceUpdateErrorV1,
-    PointRenderSessionUpdateErrorV1, SessionState, SessionUpdateError, Surface, SurfaceId,
-    SurfaceInputId, SurfaceSignal, SurfaceUpdate,
+    OpacityInput, OpacityInputId, PACKED_ENCODED_SURFACE_PRESENT_TAG_V1,
+    PACKED_ENCODED_SURFACE_UNAVAILABLE_TAG_V1, PACKED_ENCODED_SURFACE_UPDATE_MAGIC_V1,
+    PackedEncodedSurfaceUpdateErrorV1, Paint, PaintId, PointRenderOwner,
+    PointRenderSessionUpdateErrorV1, Program, ProgramCompileError, SessionState,
+    SessionUpdateError, Surface, SurfaceId, SurfaceInputId, SurfaceSignal, SurfaceUpdate,
 };
 
 const COLOR: ColorInputId = ColorInputId::new(1);
@@ -124,12 +124,42 @@ fn retained_signal_storage_pointers(state: &SessionState) -> (*const u32, *const
 }
 
 #[test]
+fn authored_and_runtime_values_preserve_exact_typed_bindings() {
+    let color_value = Srgb8::new([0x12, 0x34, 0x56]);
+    let color = ColorInput::new(COLOR, color_value);
+    assert_eq!(color.id(), COLOR);
+    assert_eq!(color.value(), color_value);
+
+    let opacity = OpacityInput::new(OPACITY, 0.375);
+    assert_eq!(opacity.id(), OPACITY);
+    assert_eq!(opacity.value(), 0.375);
+
+    let occurrence = Occurrence::new(
+        OCCURRENCE,
+        TRANSLUCENT,
+        BACKDROP,
+        CompositionProfile::EncodedSrgb8SourceOverV1,
+    );
+    assert_eq!(occurrence.id(), OCCURRENCE);
+    assert_eq!(occurrence.subject(), TRANSLUCENT);
+    assert_eq!(occurrence.against(), BACKDROP);
+    assert_eq!(
+        occurrence.composition(),
+        CompositionProfile::EncodedSrgb8SourceOverV1
+    );
+
+    let surface_value = Srgb8::new([0xab, 0xcd, 0xef]);
+    let signal = SurfaceSignal::new(SURFACE_PORT, surface_value);
+    assert_eq!(signal.input(), SURFACE_PORT);
+    assert_eq!(signal.value(), surface_value);
+}
+
+#[test]
 fn point_update_executes_the_compiled_graph_and_commits_compact_occurrences() {
     let owner = compiled(0.5).into_owner();
     let mut session = owner.attach().unwrap();
 
-    let SessionState::Ready { current } =
-        session.update_packed(&point(1, 0xff_ff_ff)).unwrap()
+    let SessionState::Ready { current } = session.update_packed(&point(1, 0xff_ff_ff)).unwrap()
     else {
         panic!("present encoded Surface signals must produce Ready");
     };
@@ -165,8 +195,7 @@ fn invalid_opacity_failed_replace_is_atomic_and_keeps_old_epoch_live() {
         program(1.25).compile().unwrap_err(),
         ProgramCompileError::OpacityOutOfDomain { input: OPACITY }
     );
-    let SessionState::Ready { current } =
-        session.update_packed(&point(1, 0xff_ff_ff)).unwrap()
+    let SessionState::Ready { current } = session.update_packed(&point(1, 0xff_ff_ff)).unwrap()
     else {
         panic!("failed replacement must not revoke the old epoch");
     };
@@ -191,8 +220,7 @@ fn dangling_and_cyclic_failed_compiles_do_not_revoke_the_current_epoch() {
         Err(ProgramCompileError::RenderCycle { .. })
     ));
 
-    let SessionState::Ready { current } =
-        session.update_packed(&point(1, 0xff_ff_ff)).unwrap()
+    let SessionState::Ready { current } = session.update_packed(&point(1, 0xff_ff_ff)).unwrap()
     else {
         panic!("compile failures must leave the old strong epoch untouched");
     };
@@ -233,8 +261,7 @@ fn unavailable_after_ready_is_stale_and_retains_exactly_one_previous_snapshot() 
     assert_eq!(current_unavailable.revision(), 2);
     assert_eq!(current_unavailable.reason(), 91);
 
-    let SessionState::Stale { previous, .. } =
-        session.update_packed(&unavailable(3, 92)).unwrap()
+    let SessionState::Stale { previous, .. } = session.update_packed(&unavailable(3, 92)).unwrap()
     else {
         panic!("a later unavailable update must remain Stale");
     };
@@ -422,11 +449,10 @@ fn public_program_compile_owner_session_path_emits_typed_occurrence_values() {
     assert_eq!(compiled.occurrences(), &[OCCURRENCE]);
 
     let owner = PointRenderOwner::new(compiled);
+    assert_eq!(owner.surface_inputs(), Some(&[SURFACE_PORT][..]));
+    assert_eq!(owner.occurrences(), Some(&[OCCURRENCE][..]));
     let mut session = owner.attach().unwrap();
-    let surfaces = [SurfaceSignal::new(
-        SURFACE_PORT,
-        Srgb8::new([0xff; 3]),
-    )];
+    let surfaces = [SurfaceSignal::new(SURFACE_PORT, Srgb8::new([0xff; 3]))];
     let SessionState::Ready { current } = session
         .update(SurfaceUpdate::Present {
             revision: 11,

@@ -23,12 +23,11 @@ use std::rc::{Rc, Weak};
 use crate::Srgb8;
 use crate::appearance::{
     AdmittedAppearanceBindings, AppearanceBindings, AppearanceGraphSpec, AppearanceWorkspace,
-    BindingError, ColorInputId as AppearanceColorInputId, CompileError,
-    CompiledAppearanceGraph, OccurrenceId as AppearanceOccurrenceId,
-    OccurrenceSpec as AppearanceOccurrenceSpec, OpacityInputId as AppearanceOpacityInputId,
-    PaintId as AppearancePaintId, PaintSpec as AppearancePaintSpec,
-    SurfaceId as AppearanceSurfaceId, SurfaceInputPortId as AppearanceSurfaceInputId,
-    SurfaceSpec as AppearanceSurfaceSpec,
+    BindingError, ColorInputId as AppearanceColorInputId, CompileError, CompiledAppearanceGraph,
+    OccurrenceId as AppearanceOccurrenceId, OccurrenceSpec as AppearanceOccurrenceSpec,
+    OpacityInputId as AppearanceOpacityInputId, PaintId as AppearancePaintId,
+    PaintSpec as AppearancePaintSpec, SurfaceId as AppearanceSurfaceId,
+    SurfaceInputPortId as AppearanceSurfaceInputId, SurfaceSpec as AppearanceSurfaceSpec,
 };
 use crate::composition::CompositionProfileV1;
 
@@ -52,7 +51,10 @@ macro_rules! opaque_program_id {
     };
 }
 
-opaque_program_id!(ColorInputId, "Identity of one immutable encoded colour input.");
+opaque_program_id!(
+    ColorInputId,
+    "Identity of one immutable encoded colour input."
+);
 opaque_program_id!(
     SurfaceInputId,
     "Identity of one runtime encoded Surface input."
@@ -237,17 +239,32 @@ impl Program {
 /// Public compile failure; every variant leaves no executable partial graph.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProgramCompileError {
-    DuplicateColorInput { input: ColorInputId },
-    DuplicateOpacityInput { input: OpacityInputId },
-    DuplicateSurfaceInput { input: SurfaceInputId },
-    DuplicatePaint { paint: PaintId },
-    DuplicateSurface { surface: SurfaceId },
-    DuplicateOccurrence { occurrence: OccurrenceId },
+    DuplicateColorInput {
+        input: ColorInputId,
+    },
+    DuplicateOpacityInput {
+        input: OpacityInputId,
+    },
+    DuplicateSurfaceInput {
+        input: SurfaceInputId,
+    },
+    DuplicatePaint {
+        paint: PaintId,
+    },
+    DuplicateSurface {
+        surface: SurfaceId,
+    },
+    DuplicateOccurrence {
+        occurrence: OccurrenceId,
+    },
     MissingPaintColorInput {
         paint: PaintId,
         input: ColorInputId,
     },
-    MissingPaintSource { paint: PaintId, source: PaintId },
+    MissingPaintSource {
+        paint: PaintId,
+        source: PaintId,
+    },
     MissingPaintOpacityInput {
         paint: PaintId,
         input: OpacityInputId,
@@ -268,12 +285,16 @@ pub enum ProgramCompileError {
         occurrence: OccurrenceId,
         surface: SurfaceId,
     },
-    PaintCycle { paints: Vec<PaintId> },
+    PaintCycle {
+        paints: Vec<PaintId>,
+    },
     RenderCycle {
         surfaces: Vec<SurfaceId>,
         occurrences: Vec<OccurrenceId>,
     },
-    OpacityOutOfDomain { input: OpacityInputId },
+    OpacityOutOfDomain {
+        input: OpacityInputId,
+    },
     EmptySurfaceSchema,
     EmptyOccurrenceSet,
     ResourceExhausted,
@@ -387,10 +408,8 @@ impl PointRenderOwner {
             .binding_template
             .try_clone_v1()
             .map_err(map_attach_binding_error)?;
-        let initial_signal_buffers = CompositedSignalBuffersV1::try_new(
-            &epoch.surface_inputs,
-            &epoch.occurrence_ids,
-        )?;
+        let initial_signal_buffers =
+            CompositedSignalBuffersV1::try_new(&epoch.surface_inputs, &epoch.occurrence_ids)?;
         Ok(Session {
             epoch: Rc::downgrade(epoch),
             bindings,
@@ -449,9 +468,9 @@ fn prepare_program(program: Program) -> Result<ProgramEpochV1, ProgramCompileErr
     debug_assert_eq!(graph.occurrence_ids().len(), occurrence_ids.len());
 
     let bindings = lower_bindings(&program);
-    let binding_template = graph.admit_bindings(&bindings).map_err(|error| {
-        map_binding_compile_error(&program, error)
-    })?;
+    let binding_template = graph
+        .admit_bindings(&bindings)
+        .map_err(|error| map_binding_compile_error(&program, error))?;
     Ok(ProgramEpochV1 {
         graph,
         binding_template,
@@ -534,12 +553,7 @@ fn lower_bindings(program: &Program) -> AppearanceBindings {
         program
             .colors
             .iter()
-            .map(|input| {
-                (
-                    AppearanceColorInputId::new(input.id.value()),
-                    input.value,
-                )
-            })
+            .map(|input| (AppearanceColorInputId::new(input.id.value()), input.value))
             .collect(),
         program
             .surface_inputs
@@ -554,12 +568,7 @@ fn lower_bindings(program: &Program) -> AppearanceBindings {
         program
             .opacities
             .iter()
-            .map(|input| {
-                (
-                    AppearanceOpacityInputId::new(input.id.value()),
-                    input.value,
-                )
-            })
+            .map(|input| (AppearanceOpacityInputId::new(input.id.value()), input.value))
             .collect(),
     )
 }
@@ -580,10 +589,7 @@ fn public_color_id(program: &Program, value: AppearanceColorInputId) -> Option<C
     None
 }
 
-fn public_opacity_id(
-    program: &Program,
-    value: AppearanceOpacityInputId,
-) -> Option<OpacityInputId> {
+fn public_opacity_id(program: &Program, value: AppearanceOpacityInputId) -> Option<OpacityInputId> {
     for input in &program.opacities {
         if AppearanceOpacityInputId::new(input.id.value()) == value {
             return Some(input.id);
@@ -660,10 +666,7 @@ fn public_surface_id(program: &Program, value: AppearanceSurfaceId) -> Option<Su
     None
 }
 
-fn public_occurrence_id(
-    program: &Program,
-    value: AppearanceOccurrenceId,
-) -> Option<OccurrenceId> {
+fn public_occurrence_id(program: &Program, value: AppearanceOccurrenceId) -> Option<OccurrenceId> {
     for occurrence in &program.occurrences {
         if AppearanceOccurrenceId::new(occurrence.id.value()) == value {
             return Some(occurrence.id);
@@ -690,10 +693,10 @@ fn map_compile_error(program: &Program, error: CompileError) -> ProgramCompileEr
                 ProgramCompileError::DuplicateOpacityInput { input }
             }),
         CompileError::DuplicateSurfaceInputPort { input } => {
-            public_surface_input_id(program, input).map_or(
-                ProgramCompileError::InternalInvariant,
-                |input| ProgramCompileError::DuplicateSurfaceInput { input },
-            )
+            public_surface_input_id(program, input)
+                .map_or(ProgramCompileError::InternalInvariant, |input| {
+                    ProgramCompileError::DuplicateSurfaceInput { input }
+                })
         }
         CompileError::DuplicatePaint { paint } => public_paint_id(program, paint)
             .map_or(ProgramCompileError::InternalInvariant, |paint| {
@@ -704,10 +707,10 @@ fn map_compile_error(program: &Program, error: CompileError) -> ProgramCompileEr
                 ProgramCompileError::DuplicateSurface { surface }
             }),
         CompileError::DuplicateOccurrence { occurrence } => {
-            public_occurrence_id(program, occurrence).map_or(
-                ProgramCompileError::InternalInvariant,
-                |occurrence| ProgramCompileError::DuplicateOccurrence { occurrence },
-            )
+            public_occurrence_id(program, occurrence)
+                .map_or(ProgramCompileError::InternalInvariant, |occurrence| {
+                    ProgramCompileError::DuplicateOccurrence { occurrence }
+                })
         }
         CompileError::MissingPaintColorInput { paint, input } => {
             match (
@@ -760,12 +763,10 @@ fn map_compile_error(program: &Program, error: CompileError) -> ProgramCompileEr
             public_surface_id(program, surface),
             public_occurrence_id(program, occurrence),
         ) {
-            (Some(surface), Some(occurrence)) => {
-                ProgramCompileError::MissingSurfaceOccurrence {
-                    surface,
-                    occurrence,
-                }
-            }
+            (Some(surface), Some(occurrence)) => ProgramCompileError::MissingSurfaceOccurrence {
+                surface,
+                occurrence,
+            },
             _ => ProgramCompileError::InternalInvariant,
         },
         CompileError::MissingOccurrencePaint { occurrence, paint } => {
@@ -786,12 +787,10 @@ fn map_compile_error(program: &Program, error: CompileError) -> ProgramCompileEr
             public_occurrence_id(program, occurrence),
             public_surface_id(program, surface),
         ) {
-            (Some(occurrence), Some(surface)) => {
-                ProgramCompileError::MissingOccurrenceBackdrop {
-                    occurrence,
-                    surface,
-                }
-            }
+            (Some(occurrence), Some(surface)) => ProgramCompileError::MissingOccurrenceBackdrop {
+                occurrence,
+                surface,
+            },
             _ => ProgramCompileError::InternalInvariant,
         },
         CompileError::PaintCycle { paints } => paints
@@ -1065,14 +1064,22 @@ pub(crate) enum PointRenderSessionUpdateErrorV1 {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SessionUpdateError {
     ProgramExpired,
-    SurfaceInputLengthMismatch { expected: usize, actual: usize },
+    SurfaceInputLengthMismatch {
+        expected: usize,
+        actual: usize,
+    },
     SurfaceInputMismatch {
         index: usize,
         expected: SurfaceInputId,
         actual: SurfaceInputId,
     },
-    RevisionOutOfOrder { current: u64, incoming: u64 },
-    RevisionConflict { revision: u64 },
+    RevisionOutOfOrder {
+        current: u64,
+        incoming: u64,
+    },
+    RevisionConflict {
+        revision: u64,
+    },
     InternalInvariant,
 }
 
@@ -1143,10 +1150,7 @@ impl Session {
             .ok_or(SessionUpdateError::ProgramExpired)?;
         let prepared = match update {
             SurfaceUpdate::Unavailable { revision, reason } => {
-                PreparedEncodedSurfaceUpdateV1::Unavailable(SurfaceUnavailable {
-                    revision,
-                    reason,
-                })
+                PreparedEncodedSurfaceUpdateV1::Unavailable(SurfaceUnavailable { revision, reason })
             }
             SurfaceUpdate::Present { revision, surfaces } => {
                 if surfaces.len() != epoch.surface_inputs.len() {
@@ -1155,11 +1159,8 @@ impl Session {
                         actual: surfaces.len(),
                     });
                 }
-                for (index, (&expected, actual)) in epoch
-                    .surface_inputs
-                    .iter()
-                    .zip(surfaces.iter())
-                    .enumerate()
+                for (index, (&expected, actual)) in
+                    epoch.surface_inputs.iter().zip(surfaces.iter()).enumerate()
                 {
                     if actual.input != expected {
                         return Err(SessionUpdateError::SurfaceInputMismatch {
@@ -1230,10 +1231,7 @@ impl Session {
                     },
                 };
             }
-            PreparedEncodedSurfaceUpdateV1::Present {
-                revision,
-                surfaces,
-            } => {
+            PreparedEncodedSurfaceUpdateV1::Present { revision, surfaces } => {
                 let retained_shape_matches = match &self.state {
                     SessionState::Waiting { .. } => {
                         self.initial_signal_buffers.as_ref().is_some_and(|buffers| {
@@ -1293,19 +1291,12 @@ impl Session {
                         unreachable!("a Session without prior Ready must retain initial buffers")
                     }),
                 };
-                debug_assert_eq!(
-                    buffers.input_surface_signals_rgb24.len(),
-                    surfaces.len()
-                );
+                debug_assert_eq!(buffers.input_surface_signals_rgb24.len(), surfaces.len());
                 debug_assert_eq!(
                     buffers.composited_occurrence_signals_rgb24.len(),
                     epoch.occurrence_ids.len()
                 );
-                for (index, output) in buffers
-                    .input_surface_signals_rgb24
-                    .iter_mut()
-                    .enumerate()
-                {
+                for (index, output) in buffers.input_surface_signals_rgb24.iter_mut().enumerate() {
                     *output = pack_rgb24(surfaces.value(index).bytes());
                 }
                 for (resolved, output) in evaluation
@@ -1341,10 +1332,7 @@ impl Session {
                 },
             ) => incoming == *current,
             (
-                PreparedEncodedSurfaceUpdateV1::Present {
-                    revision,
-                    surfaces,
-                },
+                PreparedEncodedSurfaceUpdateV1::Present { revision, surfaces },
                 SessionState::Ready { current },
             ) => {
                 revision == current.revision
