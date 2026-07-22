@@ -237,7 +237,6 @@ pub use solve::{
     SolveFailureCategory, SolveJob, Solved, solve, solve_many,
 };
 pub use spaces::oklch::{css_alpha_value, oklch_css_from_hex, oklch_from_hex};
-pub use spaces::p3::{p3_css_from_hex, p3_from_hex};
 pub use spaces::srgb::srgb_encoded_from_hex;
 pub use spaces::vc::ViewingConditions;
 

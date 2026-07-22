@@ -657,7 +657,7 @@ impl LabColors {
     ///
     /// Возвращает полный `ResolvedTheme`. Локальный `unresolved` остаётся
     /// типизированным исходом роли; ordinary `unreachable` отклоняет весь вызов
-    /// как `OutputConflictError`. Rejected/unsupported/internal также
+    /// как `OutputConflictError`. Rejected/internal также
     /// отклоняются атомарно: частичной темы или CSS не бывает.
     /// Ошибки границы — структурная форма `"<code>: <message>"`, Rust-паника
     /// в JavaScript не разматывается.

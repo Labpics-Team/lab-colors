@@ -700,7 +700,6 @@ const SOLVE_FAILURE_CATEGORY_BY_CODE = new Map([
   ["exceeds_range", "unreachable"],
   ["bounded_search_exhausted", "unresolved"],
   ["floor_unreachable", "unreachable"],
-  ["gamut_unsupported", "unsupported"],
   ["invalid_input", "rejected"],
 ]);
 
@@ -1722,7 +1721,6 @@ export async function verifyPackageRelease() {
       "stable-cam16-glow-target-or-maximum-selection",
       "renderer-or-output-pipeline-equivalence",
       "spatial-glow-field",
-      "display-p3",
     ],
     artifacts: {
       tarball,

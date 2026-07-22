@@ -352,8 +352,6 @@ pub enum FailureCategory {
     Unresolved,
     /// Запрос не принадлежит объявленному domain.
     Rejected,
-    /// Запрос валиден, но capability не реализована.
-    Unsupported,
 }
 
 impl FailureCategory {
@@ -362,7 +360,6 @@ impl FailureCategory {
             labcolors_core::SolveFailureCategory::Unreachable => Self::Unreachable,
             labcolors_core::SolveFailureCategory::Unresolved => Self::Unresolved,
             labcolors_core::SolveFailureCategory::Rejected => Self::Rejected,
-            labcolors_core::SolveFailureCategory::Unsupported => Self::Unsupported,
         }
     }
 }
@@ -389,7 +386,7 @@ pub enum ColorError {
         key: String,
     },
     /// Resolver не вернул цвет. Категория отделяет доказанную недостижимость
-    /// от unresolved, rejected и unsupported исходов.
+    /// от unresolved и rejected исходов.
     #[error("solve failure {category:?}/{code}")]
     Failure {
         /// Стабильная семантическая категория core failure.
@@ -996,11 +993,6 @@ mod tests {
                 },
                 FailureCategory::Unreachable,
                 "floor_unreachable",
-            ),
-            (
-                U::GamutUnsupported,
-                FailureCategory::Unsupported,
-                "gamut_unsupported",
             ),
             (
                 U::InvalidInput("fixture".into()),

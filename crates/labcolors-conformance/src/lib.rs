@@ -296,7 +296,7 @@ pub enum SolveOutcome {
         floor_override: bool,
     },
     /// Resolver не вернул цвет; category отделяет доказанную недостижимость от
-    /// unresolved, rejected и unsupported исходов.
+    /// unresolved и rejected исходов.
     Failure {
         /// Стабильная семантическая категория core failure.
         category: String,
@@ -883,7 +883,6 @@ mod tests {
                 "unreachable",
                 "floor_unreachable",
             ),
-            (F::GamutUnsupported, "unsupported", "gamut_unsupported"),
             (
                 F::InvalidInput("fixture".into()),
                 "rejected",

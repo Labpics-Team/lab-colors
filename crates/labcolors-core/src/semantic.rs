@@ -8,8 +8,8 @@
 //! текущего фона и viewing conditions; сериализация принадлежит биндингу.
 //!
 //! Граница набора атомарна. Доказанная недостижимость и незавершённый bounded
-//! search остаются типизированными исходами отдельных ролей; rejected,
-//! unsupported и internal закрывают вызов через [`ResolveSetError`] без
+//! search остаются типизированными исходами отдельных ролей; rejected и
+//! internal закрывают вызов через [`ResolveSetError`] без
 //! частичного успешного вектора. Нулевое значение представлено явно через
 //! [`Resolved::None`].
 //!
@@ -1335,8 +1335,6 @@ impl std::error::Error for RoleFailure {
 pub enum ResolveSetErrorKind {
     /// Значение запроса вышло за объявленный домен.
     Rejected,
-    /// Запрос требует capability, которую этот резолвер не реализует.
-    Unsupported,
     /// Состояние, произведённое ядром, нарушило внутренний постинвариант.
     Internal,
 }
@@ -1346,7 +1344,6 @@ impl ResolveSetErrorKind {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Rejected => SolveFailureCategory::Rejected.as_str(),
-            Self::Unsupported => SolveFailureCategory::Unsupported.as_str(),
             Self::Internal => "internal",
         }
     }
@@ -1355,16 +1352,15 @@ impl ResolveSetErrorKind {
 #[derive(Debug, Clone, PartialEq)]
 enum ResolveSetErrorState {
     Rejected(BoundaryFailure),
-    Unsupported(BoundaryFailure),
     Internal(SolveFailure),
 }
 
 /// Отказ всего набора из [`resolve_named_set`].
 ///
-/// Rejected-запросы, неподдержанные capability и внутренний дрейф закрывают
-/// весь вызов. Конструкторы приватны; допуск делит [`SolveFailure::boundary`]
-/// с [`RoleFailure`], а [`Self::kind`] и [`Self::code`] остаются
-/// авторитетной whole-call-классификацией.
+/// Rejected-запросы и внутренний дрейф закрывают весь вызов. Конструкторы
+/// приватны; допуск делит [`SolveFailure::boundary`] с [`RoleFailure`], а
+/// [`Self::kind`] и [`Self::code`] остаются авторитетной whole-call-
+/// классификацией.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ResolveSetError {
     state: ResolveSetErrorState,
@@ -1375,17 +1371,15 @@ impl ResolveSetError {
     pub const fn kind(&self) -> ResolveSetErrorKind {
         match &self.state {
             ResolveSetErrorState::Rejected(_) => ResolveSetErrorKind::Rejected,
-            ResolveSetErrorState::Unsupported(_) => ResolveSetErrorKind::Unsupported,
             ResolveSetErrorState::Internal(_) => ResolveSetErrorKind::Internal,
         }
     }
 
-    /// Стабильный машинный код ядра для rejected/unsupported-отказов.
+    /// Стабильный машинный код ядра для rejected-отказов.
     /// У внутреннего дрейфа намеренно нет публичного solver-кода.
     pub const fn code(&self) -> Option<&'static str> {
         match &self.state {
-            ResolveSetErrorState::Rejected(evidence)
-            | ResolveSetErrorState::Unsupported(evidence) => Some(evidence.boundary.code()),
+            ResolveSetErrorState::Rejected(evidence) => Some(evidence.boundary.code()),
             ResolveSetErrorState::Internal(_) => None,
         }
     }
@@ -1393,8 +1387,7 @@ impl ResolveSetError {
     /// Структурированный исходный отказ — диагностика и точные evidence-поля.
     pub const fn reason(&self) -> &SolveFailure {
         match &self.state {
-            ResolveSetErrorState::Rejected(evidence)
-            | ResolveSetErrorState::Unsupported(evidence) => &evidence.reason,
+            ResolveSetErrorState::Rejected(evidence) => &evidence.reason,
             ResolveSetErrorState::Internal(reason) => reason,
         }
     }
@@ -1418,10 +1411,9 @@ type PendingResolution = Result<Resolved, SolveFailure>;
 /// Исход резолва одной допущенной роли: решённый цвет, честный ноль,
 /// типизированная численная неопределённость или локальный отказ роли.
 ///
-/// Доказанная недостижимость и незавершённый bounded search отдаются
-/// пер-ролью и не маскируются. Rejected/unsupported/internal провенанс в этом
-/// типе жить не может: он закрывает [`resolve_named_set`] через
-/// [`ResolveSetError`].
+/// Доказанная недостижимость и незавершённый bounded search отдаются пер-ролью
+/// и не маскируются. Rejected/internal провенанс в этом типе жить не может: он
+/// закрывает [`resolve_named_set`] через [`ResolveSetError`].
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub enum Resolved {
@@ -1478,9 +1470,6 @@ fn classify_role_failure(reason: SolveFailure) -> Result<RoleFailure, ResolveSet
             }),
             SolveFailureCategory::Rejected => Err(ResolveSetError {
                 state: ResolveSetErrorState::Rejected(BoundaryFailure { reason, boundary }),
-            }),
-            SolveFailureCategory::Unsupported => Err(ResolveSetError {
-                state: ResolveSetErrorState::Unsupported(BoundaryFailure { reason, boundary }),
             }),
         },
         None => Err(ResolveSetError {
@@ -3766,11 +3755,9 @@ fn demotion_outcome(
         Err(failure) => match failure.boundary().map(|boundary| boundary.category()) {
             Some(SolveFailureCategory::Unreachable) => Ok(None),
             Some(SolveFailureCategory::Unresolved) | None => Err(failure),
-            Some(SolveFailureCategory::Rejected | SolveFailureCategory::Unsupported) => {
-                Err(SolveFailure::InternalInvariant(format!(
-                    "validated sRGB hierarchy demotion produced {failure}"
-                )))
-            }
+            Some(SolveFailureCategory::Rejected) => Err(SolveFailure::InternalInvariant(format!(
+                "validated sRGB hierarchy demotion produced {failure}"
+            ))),
         },
     }
 }
@@ -3989,11 +3976,6 @@ mod tests {
                 SolveFailure::InvalidInput("invalid fixture".into()),
                 ResolveSetErrorKind::Rejected,
                 Some("invalid_input"),
-            ),
-            (
-                SolveFailure::GamutUnsupported,
-                ResolveSetErrorKind::Unsupported,
-                Some("gamut_unsupported"),
             ),
             (
                 SolveFailure::InternalInvariant("injected drift".into()),
@@ -4258,7 +4240,6 @@ mod tests {
                 floor: 4.5,
                 max_ratio: 3.0,
             },
-            SolveFailure::GamutUnsupported,
             SolveFailure::InvalidInput("generated probe".into()),
         ] {
             assert!(
@@ -4319,15 +4300,11 @@ mod tests {
         ] {
             assert_eq!(demotion_outcome(Err(failure), 20.0), Ok(None));
         }
-        for failure in [
-            SolveFailure::GamutUnsupported,
-            SolveFailure::InvalidInput("generated request".into()),
-        ] {
-            assert!(matches!(
-                demotion_outcome(Err(failure), 20.0),
-                Err(SolveFailure::InternalInvariant(_))
-            ));
-        }
+        let failure = SolveFailure::InvalidInput("generated request".into());
+        assert!(matches!(
+            demotion_outcome(Err(failure), 20.0),
+            Err(SolveFailure::InternalInvariant(_))
+        ));
     }
 
     #[test]

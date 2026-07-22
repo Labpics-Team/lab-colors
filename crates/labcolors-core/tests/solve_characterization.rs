@@ -262,7 +262,6 @@ fn outcome_line(result: &Result<Solved, SolveFailure>) -> String {
             bits(*floor),
             bits(*max_ratio)
         ),
-        Err(SolveFailure::GamutUnsupported) => "err gamut_unsupported".to_string(),
         Err(SolveFailure::InvalidInput(message)) => {
             format!("err invalid_input message={message:?}")
         }
@@ -287,20 +286,6 @@ fn run_case(case: &CaseSpec) -> Result<Solved, SolveFailure> {
 
 fn observed_map() -> BTreeMap<String, String> {
     let mut observed = BTreeMap::new();
-    // Одна GamutUnsupported-строка поверх матрицы (у solve это внешний гейт).
-    let gamut_case = solve(
-        BgInput::solid("#FFFFFF").expect("literal background"),
-        Contract::text(60.0),
-        Hue::deg(0.0),
-        ChromaPolicy::Neutral,
-        &ViewingConditions::srgb(),
-        Gamut::DisplayP3,
-    );
-    observed.insert(
-        "bg=#FFFFFF contract=text(60) floor=default hue=0 chroma=neutral gamut=display-p3"
-            .to_string(),
-        outcome_line(&gamut_case),
-    );
     for case in matrix() {
         let previous = observed.insert(case_key(&case), outcome_line(&run_case(&case)));
         assert!(
@@ -410,7 +395,6 @@ fn characterization_counters_are_non_vacuous() {
                 "exceeds_range" => "exceeds_range",
                 "bounded_search_exhausted" => "bounded_search_exhausted",
                 "floor_unreachable" => "floor_unreachable",
-                "gamut_unsupported" => "gamut_unsupported",
                 "invalid_input" => "invalid_input",
                 "internal_invariant" => "internal_invariant",
                 other => panic!("unknown error class {other}"),
@@ -426,7 +410,6 @@ fn characterization_counters_are_non_vacuous() {
         "below_contrast_floor",
         "exceeds_range",
         "floor_unreachable",
-        "gamut_unsupported",
         "invalid_input",
     ] {
         assert!(
@@ -441,10 +424,9 @@ fn characterization_counters_are_non_vacuous() {
     // квантования; walk в 2 distinct-шага пересекает всё остальное (фикс #44).
     // Эмпирически: сканы публичного API на миллионы вызовов (solid-фоны обеих
     // полярностей, серые и хроматические, hue-сетка, Neutral/Relative вплоть до
-    // 1.0, Floor::None/AaText/AaUi, |Lc| 7.3..112, srgb и dim surround; wide
-    // gamut не участвует — DisplayP3 умирает на внешнем гейте) не производят
-    // ни одного. Правда самого варианта (`closest_examined` локален, не глобален)
-    // запинена на его собственном шве:
+    // 1.0, Floor::None/AaText/AaUi, |Lc| 7.3..112, srgb и dim surround) не
+    // производят ни одного. Правда самого варианта (`closest_examined` локален,
+    // не глобален) запинена на его собственном шве:
     // `solve::tests::bounded_search_exhausted_is_local_not_global_counterexample`.
     // Появление исхода из этой матрицы = изменение поведения поиска, не «новый кейс».
     assert_eq!(
@@ -464,7 +446,7 @@ fn characterization_counters_are_non_vacuous() {
 
 /// `solve_many(bg, jobs) == jobs.map(solve)` позиционно: успехи, каждый класс
 /// per-job ошибки, пустой вход, дубликаты и смешанные валидные/невалидные
-/// задания; внешняя gamut-ошибка остаётся внешней и не сдвигает позиции.
+/// задания.
 #[test]
 fn solve_many_is_positionally_identical_to_sequential_solve() {
     let vc = ViewingConditions::srgb();
@@ -600,13 +582,6 @@ fn solve_many_is_positionally_identical_to_sequential_solve() {
             .expect("empty batch")
             .is_empty()
     );
-
-    // Внешняя ошибка гамута — внешняя: Err всей партии, позиций нет.
-    let bg = BgInput::solid("#FFFFFF").expect("literal background");
-    assert!(matches!(
-        solve_many(bg, &jobs, &vc, Gamut::DisplayP3),
-        Err(SolveFailure::GamutUnsupported)
-    ));
 }
 
 /// Позитивная характеризация JND-полосы против `recheck_against` — публичного
@@ -701,7 +676,7 @@ fn jnd_band_resolves_within_budget_with_tolerant_acceptance() {
 /// Linux-x64 расходится РОВНО хвост ulp одного поля — Oklab-hue коррелята
 /// `h_ok` — в двух хроматических кейсах матрицы. Всё остальное (hex-байты, `lc`,
 /// `wcag_ratio`, `floor_override`, `jp`, `s`, все payload'ы ошибок) —
-/// бит-идентично на всех 77 кейсах. Оба кейса — libm-разница
+/// бит-идентично на всех 76 кейсах. Оба кейса — libm-разница
 /// (atan2/cbrt, 5 ulp на хроматике). У точного sRGB-серого `h_ok = 0` по
 /// определению, поэтому его прежний atan2-шум больше не является частью
 /// платформенного контракта. Рост этого множества — изменение численного
@@ -728,7 +703,7 @@ fn platform_fixtures_agree_except_documented_hue_ulp_drift() {
     };
     let mac = load(FIXTURE_MACOS_AARCH64);
     let linux = load(FIXTURE_LINUX_X64);
-    assert_eq!(mac.len(), 77, "macOS fixture cardinality");
+    assert_eq!(mac.len(), 76, "macOS fixture cardinality");
     assert_eq!(
         mac.keys().collect::<Vec<_>>(),
         linux.keys().collect::<Vec<_>>(),

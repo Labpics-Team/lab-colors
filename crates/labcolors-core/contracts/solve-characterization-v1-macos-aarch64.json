@@ -62,7 +62,6 @@
   "bg=#FFFFFF contract=text(150) floor=default hue=264 chroma=neutral": "err exceeds_range target_bits=4062c00000000000 max_achievable_bits=405a829a490ad002",
   "bg=#FFFFFF contract=text(3) floor=none hue=0 chroma=neutral": "err below_contrast_floor target_bits=4008000000000000",
   "bg=#FFFFFF contract=text(30) floor=default hue=264 chroma=neutral": "ok hex=#767676 lc_bits=40510fca61d5b9ee wcag_ratio_bits=40122b3d05125164 floor_override=true jp_bits=404a3678a8f0c874 h_ok_bits=0000000000000000 s_bits=3f92a6b801503a78",
-  "bg=#FFFFFF contract=text(60) floor=default hue=0 chroma=neutral gamut=display-p3": "err gamut_unsupported",
   "bg=#FFFFFF contract=text(60) floor=default hue=264 chroma=neutral": "ok hex=#767676 lc_bits=40510fca61d5b9ee wcag_ratio_bits=40122b3d05125164 floor_override=true jp_bits=404a3678a8f0c874 h_ok_bits=0000000000000000 s_bits=3f92a6b801503a78",
   "bg=#FFFFFF contract=text(7.3) floor=none hue=0 chroma=neutral": "ok hex=#EDEDED lc_bits=401e6aa8625b8742 wcag_ratio_bits=3ff2bb539763a677 floor_override=false jp_bits=4057afba8603b8da h_ok_bits=0000000000000000 s_bits=3f8f614c4436cac4",
   "bg=#FFFFFF contract=text(7.35) floor=none hue=0 chroma=neutral": "ok hex=#EDEDED lc_bits=401e6aa8625b8742 wcag_ratio_bits=3ff2bb539763a677 floor_override=false jp_bits=4057afba8603b8da h_ok_bits=0000000000000000 s_bits=3f8f614c4436cac4",

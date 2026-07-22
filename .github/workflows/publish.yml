@@ -790,7 +790,6 @@ jobs:
             "stable-cam16-glow-target-or-maximum-selection",
             "renderer-or-output-pipeline-equivalence",
             "spatial-glow-field",
-            "display-p3",
           ];
           if (
             JSON.stringify(manifest.supported) !== JSON.stringify(expectedSupported) ||

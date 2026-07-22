@@ -53,7 +53,7 @@ Swift/UniFFI evidence сейчас ограничено описанным вы�
 runtime. Solve-hex — квантование трансцендентного резолва, ±1 LSB на канал.
 Неуспешный solve возвращает `ColorError.Failure(category, code)`: category —
 закрытый enum `FailureCategory`, а не произвольная строка. Он
-отделяет доказанную `unreachable` от `unresolved`, `rejected` и `unsupported`,
+отделяет доказанную `unreachable` от `unresolved` и `rejected`,
 а code задаёт конкретную машинную причину. Оба поля приходят из одного
 core-owned descriptor и проверяются conformance-паком.
 
