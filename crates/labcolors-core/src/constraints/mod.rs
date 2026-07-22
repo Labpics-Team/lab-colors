@@ -27,13 +27,6 @@ pub(crate) use wcag22::{
     Wcag22ViolationV1,
 };
 
-#[cfg(test)]
-pub(crate) use program_test_evaluator::{
-    ProgramTestEvaluationErrorV1, ProgramTestEvaluatorV1, ProgramTestInvocationV1,
-    arm_program_test_failure_once, program_test_evaluation_count,
-    reset_program_test_evaluation_count,
-};
-
 /// Seals недоступны внешним crate-ам: новые evaluator/classifier families
 /// добавляются только вместе с code-owned physical adapter-ом.
 mod private {
@@ -160,9 +153,6 @@ pub(crate) type PointViolation<Evaluation> = <Evaluation as HardClassifier<
     PointMeasurement<Evaluation>,
 >>::Violation;
 
-pub(crate) type PointEvaluationError<Evaluation> =
-    <Evaluation as Evaluator<ModeledSrgb8PointOccurrence>>::Error;
-
 /// One statically dispatched point evaluator/classifier family.
 ///
 /// The first executable Program slice is deliberately homogeneous: every
@@ -261,125 +251,6 @@ impl<Binding, Identity, Release, Capability, Classification>
 
     pub(crate) fn actual(&self) -> Srgb8 {
         *self.measurement.value()
-    }
-}
-
-/// Code-owned fallible evaluator used only to prove Program transactionality.
-/// Its measurement intentionally does not implement `Clone` or `Copy`.
-#[cfg(test)]
-mod program_test_evaluator {
-    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-
-    use super::{Evaluator, HardClassifier, HardDecision, private};
-    use crate::Srgb8;
-    use crate::appearance::ModeledSrgb8PointOccurrence;
-
-    static EVALUATIONS: AtomicUsize = AtomicUsize::new(0);
-    static FAIL_ONCE_ARMED: AtomicBool = AtomicBool::new(false);
-
-    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-    pub(crate) struct ProgramTestEvaluatorV1;
-
-    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-    pub(crate) struct ProgramTestInvocationV1 {
-        expected: Srgb8,
-        fail_once_when_armed: bool,
-    }
-
-    impl ProgramTestInvocationV1 {
-        pub(crate) const fn exact(expected: Srgb8) -> Self {
-            Self {
-                expected,
-                fail_once_when_armed: false,
-            }
-        }
-
-        pub(crate) const fn fail_once_when_armed(expected: Srgb8) -> Self {
-            Self {
-                expected,
-                fail_once_when_armed: true,
-            }
-        }
-    }
-
-    #[derive(Debug, PartialEq, Eq)]
-    pub(crate) struct ProgramTestMeasurementV1 {
-        visible: Srgb8,
-        backdrop: Srgb8,
-    }
-
-    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-    pub(crate) enum ProgramTestEvaluationErrorV1 {
-        Forced,
-    }
-
-    #[derive(Debug, PartialEq, Eq)]
-    pub(crate) struct ProgramTestPassV1;
-
-    #[derive(Debug, PartialEq, Eq)]
-    pub(crate) struct ProgramTestViolationV1;
-
-    impl private::EvaluatorSealed for ProgramTestEvaluatorV1 {}
-    impl private::HardClassifierSealed for ProgramTestEvaluatorV1 {}
-
-    impl Evaluator<ModeledSrgb8PointOccurrence> for ProgramTestEvaluatorV1 {
-        type Invocation = ProgramTestInvocationV1;
-        type Identity = ();
-        type Release = ();
-        type Capability = ();
-        type Measurement = ProgramTestMeasurementV1;
-        type Error = ProgramTestEvaluationErrorV1;
-
-        fn identity(&self) {}
-
-        fn release(&self) {}
-
-        fn capability(&self) {}
-
-        fn evaluate(
-            &self,
-            target: &ModeledSrgb8PointOccurrence,
-            invocation: &Self::Invocation,
-        ) -> Result<Self::Measurement, Self::Error> {
-            EVALUATIONS.fetch_add(1, Ordering::Relaxed);
-            if invocation.fail_once_when_armed && FAIL_ONCE_ARMED.swap(false, Ordering::Relaxed) {
-                return Err(ProgramTestEvaluationErrorV1::Forced);
-            }
-            Ok(ProgramTestMeasurementV1 {
-                visible: Srgb8::new(target.visible()),
-                backdrop: Srgb8::new(target.backdrop()),
-            })
-        }
-    }
-
-    impl HardClassifier<ProgramTestInvocationV1, ProgramTestMeasurementV1> for ProgramTestEvaluatorV1 {
-        type Pass = ProgramTestPassV1;
-        type Violation = ProgramTestViolationV1;
-
-        fn classify(
-            &self,
-            invocation: &ProgramTestInvocationV1,
-            measurement: &ProgramTestMeasurementV1,
-        ) -> HardDecision<Self::Pass, Self::Violation> {
-            if measurement.visible == invocation.expected {
-                HardDecision::Pass(ProgramTestPassV1)
-            } else {
-                HardDecision::Violation(ProgramTestViolationV1)
-            }
-        }
-    }
-
-    pub(crate) fn reset_program_test_evaluation_count() {
-        EVALUATIONS.store(0, Ordering::Relaxed);
-        FAIL_ONCE_ARMED.store(false, Ordering::Relaxed);
-    }
-
-    pub(crate) fn program_test_evaluation_count() -> usize {
-        EVALUATIONS.load(Ordering::Relaxed)
-    }
-
-    pub(crate) fn arm_program_test_failure_once() {
-        FAIL_ONCE_ARMED.store(true, Ordering::Relaxed);
     }
 }
 

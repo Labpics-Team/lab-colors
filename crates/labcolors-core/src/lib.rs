@@ -49,7 +49,7 @@ pub(crate) mod point_support;
     not(test),
     expect(
         dead_code,
-        reason = "private encoded point-render Session precedes its package-private WASM bridge"
+        reason = "private Program compiler/lowering precedes its direct sole-Session bridge"
     )
 )]
 pub(crate) mod program_session;

@@ -4,7 +4,6 @@ const OBSERVATION_SOURCE: &str = include_str!("observation.rs");
 const POINT_SUPPORT_SOURCE: &str = include_str!("point_support.rs");
 const PROGRAM_SESSION_SOURCE: &str = include_str!("program_session.rs");
 const SESSION_SOURCE: &str = include_str!("session.rs");
-const LIB_SOURCE: &str = include_str!("lib.rs");
 
 const GENERIC_SOURCES: [(&str, &str); 3] = [
     ("appearance.rs", APPEARANCE_SOURCE),
@@ -320,111 +319,19 @@ fn program_session_module_docs_disclaim_transport_only_scope() {
 }
 
 #[test]
-fn pre_f2_outputs_reuse_the_shared_encoded_point_paint_without_a_parallel_value() {
-    fn declaration<'a>(source: &'a str, start: &str, end: &str) -> &'a str {
-        let start = source
-            .find(start)
-            .unwrap_or_else(|| panic!("missing S0 declaration start `{start}`"));
-        let end = source[start..]
-            .find(end)
-            .map(|offset| start + offset)
-            .unwrap_or_else(|| panic!("missing S0 declaration end `{end}`"));
-        &source[start..end]
-    }
-
-    assert!(
-        LIB_SOURCE.contains("pub(crate) mod program_session;"),
-        "the pre-F2 execution slice must remain crate-private",
-    );
-    assert!(
-        !PROGRAM_SESSION_SOURCE.contains("OutputPaintV1"),
-        "S0 allows only appearance::EncodedPointPaintV1 as the physical point Paint value",
-    );
-
-    let output_value = declaration(
-        PROGRAM_SESSION_SOURCE,
-        "pub struct OutputValueV1 {",
-        "impl OutputValueV1 {",
-    );
-    let fields_start = output_value
-        .find('{')
-        .expect("OutputValueV1 declaration must open its field list");
-    let fields_end = output_value
-        .rfind('}')
-        .expect("OutputValueV1 declaration must close its field list");
-    let fields = output_value[fields_start + 1..fields_end]
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .collect::<Vec<_>>();
-    assert_eq!(
-        fields,
-        ["output: OutputSlotId,", "value: EncodedPointPaintV1,"],
-        "OutputValueV1 must own exactly one route and the shared S0 Paint",
-    );
-    assert!(
-        !output_value.contains("PaintId"),
-        "OutputValueV1 must not store any PaintId beside the same ID in EncodedPointPaintV1",
-    );
-
-    let output_value_impl = declaration(
-        PROGRAM_SESSION_SOURCE,
-        "impl OutputValueV1 {",
-        "struct ExecutionFrame",
-    );
-    for required in [
-        "self.value.id()",
-        "pub const fn value(self) -> EncodedPointPaintV1",
+fn program_compiler_cannot_regrow_the_superseded_runtime_facade() {
+    for forbidden in [
+        "PointRenderOwner",
+        "PointRenderAttachError",
+        "ObservationStreamBinding",
+        "SurfaceUpdate",
+        "OutputValueV1",
+        "ExecutionFrame",
+        "SessionState",
     ] {
         assert!(
-            output_value_impl.contains(required),
-            "OutputValueV1 must project directly from its shared S0 Paint; missing `{required}`",
-        );
-    }
-
-    let materialization = declaration(
-        PROGRAM_SESSION_SOURCE,
-        "for (index, output) in epoch.outputs.iter().enumerate() {",
-        "if has_hard_violation",
-    );
-    let nominal_guard = materialization
-        .find("if paint.id() != output.paint_id {")
-        .expect("routed output must fail closed on compiled/materialized Paint ID drift");
-    let exact_copy = materialization
-        .find("value: *paint,")
-        .expect("routed output must copy the exact graph-materialized Paint");
-    assert!(
-        nominal_guard < exact_copy,
-        "nominal Paint ID drift must be rejected before the graph Paint is routed",
-    );
-    assert!(
-        materialization[nominal_guard..exact_copy]
-            .contains("return Err(SessionUpdateError::InternalInvariant);"),
-        "compiled/materialized Paint ID drift must fail closed",
-    );
-    assert!(
-        materialization[exact_copy..].contains("value: *paint,"),
-        "the routed value must copy the exact graph-materialized EncodedPointPaintV1",
-    );
-    for forbidden in ["source: paint.source()", "straight_alpha: paint.opacity()"] {
-        assert!(
-            !materialization.contains(forbidden),
-            "graph materialization must not be reconstructed through `{forbidden}`",
-        );
-    }
-
-    let module_docs = PROGRAM_SESSION_SOURCE
-        .lines()
-        .take_while(|line| line.starts_with("//!"))
-        .collect::<Vec<_>>()
-        .join("\n");
-    for required in [
-        "private pre-F2",
-        "does not mint a terminal output certificate",
-    ] {
-        assert!(
-            module_docs.contains(required),
-            "the routed pre-F2 value must not claim a public terminal certificate; missing `{required}`",
+            !PROGRAM_SESSION_SOURCE.contains(forbidden),
+            "program_session.rs must remain compiler/lowering-only; found superseded `{forbidden}`"
         );
     }
 }
