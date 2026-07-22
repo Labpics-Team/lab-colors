@@ -8,7 +8,8 @@ const GENERIC_SOURCES: [(&str, &str); 3] = [
     ("program_session.rs", PROGRAM_SESSION_SOURCE),
 ];
 
-const CLIENT_OR_LEGACY_VOCABULARY: [&str; 14] = [
+const CLIENT_OR_LEGACY_VOCABULARY: [&str; 15] = [
+    "Lab UI",
     "ThemeConfig",
     "RoleRecipe",
     "RoleSpec",

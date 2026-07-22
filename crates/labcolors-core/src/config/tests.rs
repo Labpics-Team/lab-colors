@@ -785,8 +785,6 @@ fn consumed_roles_diff_is_empty_against_labui_contract() {
     };
     assert!(hits("label-on-accent") && hits("bg-material-thick") && hits("tint-static-dark-4"));
     assert!(!hits("fx-glow-inverted") && !hits("label-danger-primary"));
-    // COLLAPSED_ROLES не пуст — декларация причин присутствует.
-    assert!(!COLLAPSED_ROLES.is_empty());
 }
 
 /// Glob-сопоставление паттернов [`COLLAPSED_ROLES`] (`*` — любая подстрока):

@@ -1,32 +1,30 @@
-//! Terminal generation-bound path prepared for the atomic public cut.
+//! Private generic point Program, constraint recheck and terminal Paint path.
 //!
-//! [`Program`] is the authored, typed Paint/Surface/Occurrence declaration.
-//! [`Program::compile`] validates and canonicalises the complete graph before a
-//! [`CompiledProgram`] can exist. [`PointRenderOwner`] then becomes the sole
-//! strong owner of one compiled epoch. Attached [`Session`] values retain only
-//! a [`Weak`] reference, so replacement, disposal or owner drop makes the old
-//! graph physically unreachable from every old session.
-//! The crate root keeps this path private until the atomic public-surface cut;
-//! it must not create a second simultaneously supported authoring schema.
+//! The authored graph has no client/UI role vocabulary. Paints are physical
+//! source-plus-straight-alpha programs, occurrences are modeled applications of
+//! Paint to Surface, constraints assess those exact occurrences, and outputs
+//! bind opaque slots back to Paints. A visible occurrence is evidence, never a
+//! terminal emitted value.
 //!
-//! The first executable boundary is intentionally narrow: one correlated set
-//! of encoded Surface input signals per revision. It is transport-only runtime
-//! state, not an observed stimulus, physical evidence or certificate, and not
-//! an `lcs` identity. F0 observer/output/render identities remain a terminal
-//! prerequisite before any such claim can be minted. Expanding the private
-//! boundary to a ScenarioSet does not require exposing the legacy
-//! multi-background metric matrix.
+//! This is the encoded-sRGB8 transport-only executable slice, not the LCS
+//! observation/evidence layer.
 
+use std::marker::PhantomData;
 use std::mem;
 use std::rc::{Rc, Weak};
 
 use crate::Srgb8;
 use crate::appearance::{
     AdmittedAppearanceBindings, AppearanceBindings, AppearanceGraphSpec, AppearanceWorkspace,
-    BindingError, ColorInputId, CompileError, CompiledAppearanceGraph, OccurrenceId,
-    OccurrenceSpec, OpacityInputId, PaintId, PaintSpec, SurfaceId, SurfaceInputPortId, SurfaceSpec,
+    BindingError, ColorInputId, CompileError, CompiledAppearanceGraph, CompiledOccurrenceSlotV1,
+    CompiledPaintSlotV1, OccurrenceId, OccurrenceSpec, OpacityInputId, PaintId, PaintSpec,
+    SurfaceId, SurfaceInputPortId, SurfaceSpec,
 };
-use crate::composition::CompositionProfileV1;
+use crate::composition::{AdmittedOpacityV1, CompositionProfileV1};
+use crate::constraints::{
+    HardDecision, PointEvaluationError, PointEvaluatorV1, PointInvocation,
+    VisiblePointPassEvidence, VisiblePointViolationEvidence, assess_visible_point_hard,
+};
 
 /// One immutable encoded colour binding owned by a [`Program`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -36,17 +34,14 @@ pub struct ColorInput {
 }
 
 impl ColorInput {
-    /// Bind one opaque input identity to exact encoded-sRGB8 bytes.
     pub const fn new(id: ColorInputId, value: Srgb8) -> Self {
         Self { id, value }
     }
 
-    /// Return the opaque input identity.
     pub const fn id(self) -> ColorInputId {
         self.id
     }
 
-    /// Return the exact immutable value.
     pub const fn value(self) -> Srgb8 {
         self.value
     }
@@ -60,30 +55,26 @@ pub struct OpacityInput {
 }
 
 impl OpacityInput {
-    /// Bind one opaque input identity to a finite value in `[0, 1]`.
-    ///
-    /// Numeric admission happens atomically in [`Program::compile`].
     pub const fn new(id: OpacityInputId, value: f64) -> Self {
         Self { id, value }
     }
 
-    /// Return the opaque input identity.
     pub const fn id(self) -> OpacityInputId {
         self.id
     }
 
-    /// Return the authored binary64 value.
     pub const fn value(self) -> f64 {
         self.value
     }
 }
 
-/// Generic Paint constructor algebra supported by the point renderer.
+/// Generic point Paint constructor algebra.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Paint {
-    /// Create an opaque Paint from exact encoded bytes.
-    Solid { id: PaintId, color: ColorInputId },
-    /// Multiply a Paint's straight alpha by one admitted scalar.
+    Solid {
+        id: PaintId,
+        color: ColorInputId,
+    },
     Opacity {
         id: PaintId,
         source: PaintId,
@@ -91,29 +82,26 @@ pub enum Paint {
     },
 }
 
-/// Generic Surface constructor algebra supported by the point renderer.
+/// Generic point Surface constructor algebra.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Surface {
-    /// Read one revision-bound runtime point input.
     Input {
         id: SurfaceId,
         input: SurfaceInputPortId,
     },
-    /// Give a visible occurrence result a Surface identity for nesting.
     FromOccurrence {
         id: SurfaceId,
         occurrence: OccurrenceId,
     },
 }
 
-/// Closed mathematical composition profile set for this point-program version.
+/// Closed mathematical composition profile set for this Program version.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CompositionProfile {
-    /// Exact encoded-sRGB8 source-over with its declared byte rounding order.
     EncodedSrgb8SourceOverV1,
 }
 
-/// The only canonical application of one Paint to one Surface.
+/// The canonical application of one Paint to one Surface.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Occurrence {
     id: OccurrenceId,
@@ -123,7 +111,6 @@ pub struct Occurrence {
 }
 
 impl Occurrence {
-    /// Declare one Paint-on-Surface application.
     pub const fn new(
         id: OccurrenceId,
         subject: PaintId,
@@ -138,44 +125,184 @@ impl Occurrence {
         }
     }
 
-    /// Return the occurrence identity.
     pub const fn id(self) -> OccurrenceId {
         self.id
     }
 
-    /// Return the subject Paint identity.
     pub const fn subject(self) -> PaintId {
         self.subject
     }
 
-    /// Return the backdrop Surface identity.
     pub const fn against(self) -> SurfaceId {
         self.against
     }
 
-    /// Return the exact mathematical composition profile.
     pub const fn composition(self) -> CompositionProfile {
         self.composition
     }
 }
 
-/// Immutable generic point-render declaration.
-///
-/// List order carries no semantics. Compilation canonicalises every typed ID
-/// domain and rejects dangling edges, duplicates, cycles and invalid numeric
-/// inputs before any runtime owner can be constructed.
-#[derive(Debug, Clone, PartialEq)]
-pub struct Program {
+/// Opaque authored constraint identity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ConstraintId(u32);
+
+impl ConstraintId {
+    pub const fn new(value: u32) -> Self {
+        Self(value)
+    }
+
+    pub const fn value(self) -> u32 {
+        self.0
+    }
+}
+
+/// Opaque authored terminal output identity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct OutputSlotId(u32);
+
+impl OutputSlotId {
+    pub const fn new(value: u32) -> Self {
+        Self(value)
+    }
+
+    pub const fn value(self) -> u32 {
+        self.0
+    }
+}
+
+/// Type-level marker for a mandatory constraint.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HardModeV1 {}
+
+/// Type-level marker for a diagnostic-only constraint.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReportModeV1 {}
+
+/// One typed evaluator invocation over one exact visible occurrence.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ConstraintInvocation<Invocation, Mode> {
+    id: ConstraintId,
+    target: OccurrenceId,
+    invocation: Invocation,
+    mode: PhantomData<fn() -> Mode>,
+}
+
+impl<Invocation> ConstraintInvocation<Invocation, HardModeV1> {
+    pub const fn hard(id: ConstraintId, target: OccurrenceId, invocation: Invocation) -> Self {
+        Self {
+            id,
+            target,
+            invocation,
+            mode: PhantomData,
+        }
+    }
+}
+
+impl<Invocation> ConstraintInvocation<Invocation, ReportModeV1> {
+    pub const fn report_only(
+        id: ConstraintId,
+        target: OccurrenceId,
+        invocation: Invocation,
+    ) -> Self {
+        Self {
+            id,
+            target,
+            invocation,
+            mode: PhantomData,
+        }
+    }
+}
+
+impl<Invocation, Mode> ConstraintInvocation<Invocation, Mode> {
+    pub const fn id(&self) -> ConstraintId {
+        self.id
+    }
+
+    pub const fn target(&self) -> OccurrenceId {
+        self.target
+    }
+
+    pub const fn invocation(&self) -> &Invocation {
+        &self.invocation
+    }
+}
+
+/// The two authored modality domains remain type-separated until compilation.
+#[derive(Debug, PartialEq, Eq)]
+pub struct ConstraintSet<Invocation> {
+    hard: Vec<ConstraintInvocation<Invocation, HardModeV1>>,
+    report_only: Vec<ConstraintInvocation<Invocation, ReportModeV1>>,
+}
+
+impl<Invocation> ConstraintSet<Invocation> {
+    pub fn new(
+        hard: Vec<ConstraintInvocation<Invocation, HardModeV1>>,
+        report_only: Vec<ConstraintInvocation<Invocation, ReportModeV1>>,
+    ) -> Self {
+        Self { hard, report_only }
+    }
+
+    pub fn hard(&self) -> &[ConstraintInvocation<Invocation, HardModeV1>] {
+        &self.hard
+    }
+
+    pub fn report_only(&self) -> &[ConstraintInvocation<Invocation, ReportModeV1>] {
+        &self.report_only
+    }
+
+    fn is_empty(&self) -> bool {
+        self.hard.is_empty() && self.report_only.is_empty()
+    }
+
+    fn checked_len(&self) -> Option<usize> {
+        self.hard.len().checked_add(self.report_only.len())
+    }
+}
+
+/// Compile-time binding from one terminal slot to one Paint.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OutputBinding {
+    output: OutputSlotId,
+    paint: PaintId,
+}
+
+impl OutputBinding {
+    pub const fn new(output: OutputSlotId, paint: PaintId) -> Self {
+        Self { output, paint }
+    }
+
+    pub const fn output(self) -> OutputSlotId {
+        self.output
+    }
+
+    pub const fn paint(self) -> PaintId {
+        self.paint
+    }
+}
+
+/// Immutable generic point Program.
+pub struct Program<Evaluation>
+where
+    Evaluation: PointEvaluatorV1,
+    PointInvocation<Evaluation>: Copy,
+{
     colors: Vec<ColorInput>,
     surface_input_ports: Vec<SurfaceInputPortId>,
     opacities: Vec<OpacityInput>,
     paints: Vec<Paint>,
     surfaces: Vec<Surface>,
     occurrences: Vec<Occurrence>,
+    constraints: ConstraintSet<PointInvocation<Evaluation>>,
+    outputs: Vec<OutputBinding>,
+    evaluator: Evaluation,
 }
 
-impl Program {
-    /// Assemble one declaration. This constructor performs no partial compile.
+impl<Evaluation> Program<Evaluation>
+where
+    Evaluation: PointEvaluatorV1,
+    PointInvocation<Evaluation>: Copy,
+{
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         colors: Vec<ColorInput>,
         surface_input_ports: Vec<SurfaceInputPortId>,
@@ -183,6 +310,9 @@ impl Program {
         paints: Vec<Paint>,
         surfaces: Vec<Surface>,
         occurrences: Vec<Occurrence>,
+        constraints: ConstraintSet<PointInvocation<Evaluation>>,
+        outputs: Vec<OutputBinding>,
+        evaluator: Evaluation,
     ) -> Self {
         Self {
             colors,
@@ -191,17 +321,19 @@ impl Program {
             paints,
             surfaces,
             occurrences,
+            constraints,
+            outputs,
+            evaluator,
         }
     }
 
-    /// Atomically validate, bind and canonicalise this complete declaration.
-    pub fn compile(self) -> Result<CompiledProgram, ProgramCompileError> {
+    pub fn compile(self) -> Result<CompiledProgram<Evaluation>, ProgramCompileError> {
         prepare_program(self).map(|epoch| CompiledProgram { epoch })
     }
 }
 
-/// Public compile failure; every variant leaves no executable partial graph.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// Atomic compile failure. No executable partial graph escapes.
+#[derive(Debug, PartialEq, Eq)]
 pub enum ProgramCompileError {
     DuplicateColorInput {
         input: ColorInputId,
@@ -261,45 +393,97 @@ pub enum ProgramCompileError {
     },
     EmptySurfaceSchema,
     EmptyOccurrenceSet,
+    EmptyConstraintSet,
+    EmptyOutputSet,
+    DuplicateConstraint {
+        constraint: ConstraintId,
+    },
+    MissingConstraintOccurrence {
+        constraint: ConstraintId,
+        occurrence: OccurrenceId,
+    },
+    DuplicateOutputSlot {
+        output: OutputSlotId,
+    },
+    MissingOutputPaint {
+        output: OutputSlotId,
+        paint: PaintId,
+    },
     ResourceExhausted,
     InternalInvariant,
 }
 
-#[derive(Debug)]
-struct ProgramEpochV1 {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CompiledConstraintModeV1 {
+    Hard,
+    ReportOnly,
+}
+
+struct CompiledPointConstraint<Invocation> {
+    id: ConstraintId,
+    target_id: OccurrenceId,
+    target: CompiledOccurrenceSlotV1,
+    mode: CompiledConstraintModeV1,
+    invocation: Invocation,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct CompiledOutputBinding {
+    output: OutputSlotId,
+    paint_id: PaintId,
+    paint: CompiledPaintSlotV1,
+}
+
+struct ProgramEpochV1<Evaluation>
+where
+    Evaluation: PointEvaluatorV1,
+    PointInvocation<Evaluation>: Copy,
+{
+    evaluator: Evaluation,
     graph: CompiledAppearanceGraph,
     binding_template: AdmittedAppearanceBindings,
     surface_input_ports: Box<[SurfaceInputPortId]>,
-    occurrence_ids: Box<[OccurrenceId]>,
+    constraints: Box<[CompiledPointConstraint<PointInvocation<Evaluation>>]>,
+    outputs: Box<[CompiledOutputBinding]>,
 }
 
-/// Fully validated immutable point-render program, not yet attached to runtime.
-///
-/// This value is deliberately not `Clone`: moving it into an owner establishes
-/// one unambiguous strong-ownership root for its compiled epoch.
-#[derive(Debug)]
-pub struct CompiledProgram {
-    epoch: ProgramEpochV1,
+/// Fully validated immutable Program, not yet attached to runtime.
+pub struct CompiledProgram<Evaluation>
+where
+    Evaluation: PointEvaluatorV1,
+    PointInvocation<Evaluation>: Copy,
+{
+    epoch: ProgramEpochV1<Evaluation>,
 }
 
-impl CompiledProgram {
-    /// Canonical Surface-input order required by [`SurfaceUpdate::Present`].
+impl<Evaluation> CompiledProgram<Evaluation>
+where
+    Evaluation: PointEvaluatorV1,
+    PointInvocation<Evaluation>: Copy,
+{
     pub fn surface_input_ports(&self) -> &[SurfaceInputPortId] {
         &self.epoch.surface_input_ports
     }
 
-    /// Canonical occurrence order emitted by every [`Snapshot`].
-    pub fn occurrences(&self) -> &[OccurrenceId] {
-        &self.epoch.occurrence_ids
+    pub fn constraint_ids(&self) -> impl ExactSizeIterator<Item = ConstraintId> + '_ {
+        self.epoch
+            .constraints
+            .iter()
+            .map(|constraint| constraint.id)
     }
 
-    /// Transfer this compiled epoch to its sole runtime owner.
-    pub fn into_owner(self) -> PointRenderOwner {
+    pub fn outputs(&self) -> impl ExactSizeIterator<Item = (OutputSlotId, PaintId)> + '_ {
+        self.epoch
+            .outputs
+            .iter()
+            .map(|output| (output.output, output.paint_id))
+    }
+
+    pub fn into_owner(self) -> PointRenderOwner<Evaluation> {
         PointRenderOwner::new(self)
     }
 }
 
-/// Failure while preparing an independent allocation-owning [`Session`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PointRenderAttachError {
     Disposed,
@@ -307,50 +491,57 @@ pub enum PointRenderAttachError {
     InternalInvariant,
 }
 
-/// The only strong owner of the current non-reusable program epoch.
-///
-/// Replacement accepts only an already complete [`CompiledProgram`]. Compile
-/// failure therefore happens before the swap and cannot revoke the live epoch.
-/// No numeric generation participates in this ownership proof.
-#[derive(Debug)]
-pub struct PointRenderOwner {
-    current: Option<Rc<ProgramEpochV1>>,
+/// Sole strong owner of one non-reusable compiled epoch.
+pub struct PointRenderOwner<Evaluation>
+where
+    Evaluation: PointEvaluatorV1,
+    PointInvocation<Evaluation>: Copy,
+{
+    current: Option<Rc<ProgramEpochV1<Evaluation>>>,
 }
 
-impl PointRenderOwner {
-    /// Establish the sole strong owner of one compiled epoch.
-    pub fn new(compiled: CompiledProgram) -> Self {
+impl<Evaluation> PointRenderOwner<Evaluation>
+where
+    Evaluation: PointEvaluatorV1,
+    PointInvocation<Evaluation>: Copy,
+{
+    pub fn new(compiled: CompiledProgram<Evaluation>) -> Self {
         Self {
             current: Some(Rc::new(compiled.epoch)),
         }
     }
 
-    /// Atomically replace the current epoch and revoke all attached old sessions.
-    pub fn replace(&mut self, compiled: CompiledProgram) {
+    pub fn replace(&mut self, compiled: CompiledProgram<Evaluation>) {
         self.current = Some(Rc::new(compiled.epoch));
     }
 
-    /// Revoke the current epoch. Existing sessions fail on their next call.
     pub fn dispose(&mut self) {
         self.current = None;
     }
 
-    /// Return the current canonical Surface-input order, or `None` if disposed.
     pub fn surface_input_ports(&self) -> Option<&[SurfaceInputPortId]> {
         self.current
             .as_deref()
             .map(|epoch| epoch.surface_input_ports.as_ref())
     }
 
-    /// Return the current canonical occurrence order, or `None` if disposed.
-    pub fn occurrences(&self) -> Option<&[OccurrenceId]> {
+    pub fn constraint_ids(&self) -> Option<impl ExactSizeIterator<Item = ConstraintId> + '_> {
         self.current
             .as_deref()
-            .map(|epoch| epoch.occurrence_ids.as_ref())
+            .map(|epoch| epoch.constraints.iter().map(|constraint| constraint.id))
     }
 
-    /// Allocate all independent mutable storage before a Session escapes.
-    pub fn attach(&self) -> Result<Session, PointRenderAttachError> {
+    pub fn outputs(&self) -> Option<impl ExactSizeIterator<Item = (OutputSlotId, PaintId)> + '_> {
+        self.current.as_deref().map(|epoch| {
+            epoch
+                .outputs
+                .iter()
+                .map(|output| (output.output, output.paint_id))
+        })
+    }
+
+    /// Fallibly allocate every hot-path frame before the Session escapes.
+    pub fn attach(&self) -> Result<Session<Evaluation>, PointRenderAttachError> {
         let epoch = self
             .current
             .as_ref()
@@ -363,13 +554,16 @@ impl PointRenderOwner {
             .binding_template
             .try_clone_v1()
             .map_err(map_attach_binding_error)?;
-        let initial_signal_buffers =
-            CompositedSignalBuffersV1::try_new(&epoch.surface_input_ports, &epoch.occurrence_ids)?;
+        let free_frames = [
+            Some(ExecutionFrame::try_new(epoch)?),
+            Some(ExecutionFrame::try_new(epoch)?),
+            Some(ExecutionFrame::try_new(epoch)?),
+        ];
         Ok(Session {
             epoch: Rc::downgrade(epoch),
             bindings,
             workspace,
-            initial_signal_buffers: Some(initial_signal_buffers),
+            free_frames,
             state: SessionState::Waiting {
                 current_unavailable: None,
             },
@@ -384,25 +578,35 @@ fn map_attach_binding_error(error: BindingError) -> PointRenderAttachError {
     }
 }
 
-fn try_zeroed_signal_words(len: usize) -> Result<Vec<u32>, PointRenderAttachError> {
-    let mut words = Vec::new();
-    words
-        .try_reserve_exact(len)
-        .map_err(|_| PointRenderAttachError::ResourceExhausted)?;
-    words.resize(len, 0);
-    Ok(words)
-}
-
-fn prepare_program(program: Program) -> Result<ProgramEpochV1, ProgramCompileError> {
+fn prepare_program<Evaluation>(
+    program: Program<Evaluation>,
+) -> Result<ProgramEpochV1<Evaluation>, ProgramCompileError>
+where
+    Evaluation: PointEvaluatorV1,
+    PointInvocation<Evaluation>: Copy,
+{
     if program.surface_input_ports.is_empty() {
         return Err(ProgramCompileError::EmptySurfaceSchema);
     }
     if program.occurrences.is_empty() {
         return Err(ProgramCompileError::EmptyOccurrenceSet);
     }
+    if program.constraints.is_empty() {
+        return Err(ProgramCompileError::EmptyConstraintSet);
+    }
+    if program.outputs.is_empty() {
+        return Err(ProgramCompileError::EmptyOutputSet);
+    }
     check_render_node_count(program.surfaces.len(), program.occurrences.len())?;
+    program
+        .constraints
+        .checked_len()
+        .ok_or(ProgramCompileError::ResourceExhausted)?;
 
     let graph = lower_graph(&program).compile().map_err(map_compile_error)?;
+    let binding_template = graph
+        .admit_bindings(&lower_bindings(&program))
+        .map_err(map_binding_compile_error)?;
 
     let mut surface_input_ports = Vec::new();
     surface_input_ports
@@ -410,31 +614,147 @@ fn prepare_program(program: Program) -> Result<ProgramEpochV1, ProgramCompileErr
         .map_err(|_| ProgramCompileError::ResourceExhausted)?;
     surface_input_ports.extend_from_slice(&program.surface_input_ports);
     surface_input_ports.sort_unstable();
-
-    let mut occurrence_ids = Vec::new();
-    occurrence_ids
-        .try_reserve_exact(program.occurrences.len())
-        .map_err(|_| ProgramCompileError::ResourceExhausted)?;
-    occurrence_ids.extend(program.occurrences.iter().map(|occurrence| occurrence.id));
-    occurrence_ids.sort_unstable();
     if !canonical_surface_input_port_sequence_matches(
         graph.surface_input_ports(),
         &surface_input_ports,
-    ) || !canonical_occurrence_sequence_matches(graph.occurrence_ids(), &occurrence_ids)
-    {
+    ) {
         return Err(ProgramCompileError::InternalInvariant);
     }
 
-    let bindings = lower_bindings(&program);
-    let binding_template = graph
-        .admit_bindings(&bindings)
-        .map_err(map_binding_compile_error)?;
+    let constraints = compile_constraints::<Evaluation>(&graph, program.constraints)?;
+    let outputs = compile_outputs(&graph, program.outputs)?;
     Ok(ProgramEpochV1 {
+        evaluator: program.evaluator,
         graph,
         binding_template,
         surface_input_ports: surface_input_ports.into_boxed_slice(),
-        occurrence_ids: occurrence_ids.into_boxed_slice(),
+        constraints,
+        outputs,
     })
+}
+
+struct LoweredConstraint<Invocation> {
+    id: ConstraintId,
+    target: OccurrenceId,
+    mode: CompiledConstraintModeV1,
+    invocation: Invocation,
+}
+
+fn compile_constraints<Evaluation>(
+    graph: &CompiledAppearanceGraph,
+    authored: ConstraintSet<PointInvocation<Evaluation>>,
+) -> Result<Box<[CompiledPointConstraint<PointInvocation<Evaluation>>]>, ProgramCompileError>
+where
+    Evaluation: PointEvaluatorV1,
+    PointInvocation<Evaluation>: Copy,
+{
+    let total = authored
+        .hard
+        .len()
+        .checked_add(authored.report_only.len())
+        .ok_or(ProgramCompileError::ResourceExhausted)?;
+    let mut lowered = Vec::new();
+    lowered
+        .try_reserve_exact(total)
+        .map_err(|_| ProgramCompileError::ResourceExhausted)?;
+    lowered.extend(
+        authored
+            .hard
+            .into_iter()
+            .map(|constraint| LoweredConstraint {
+                id: constraint.id,
+                target: constraint.target,
+                mode: CompiledConstraintModeV1::Hard,
+                invocation: constraint.invocation,
+            }),
+    );
+    lowered.extend(
+        authored
+            .report_only
+            .into_iter()
+            .map(|constraint| LoweredConstraint {
+                id: constraint.id,
+                target: constraint.target,
+                mode: CompiledConstraintModeV1::ReportOnly,
+                invocation: constraint.invocation,
+            }),
+    );
+    lowered.sort_unstable_by_key(|constraint| constraint.id);
+    if let Some(duplicate) = lowered
+        .windows(2)
+        .find(|pair| pair[0].id == pair[1].id)
+        .map(|pair| pair[0].id)
+    {
+        return Err(ProgramCompileError::DuplicateConstraint {
+            constraint: duplicate,
+        });
+    }
+    for constraint in &lowered {
+        if graph.bind_occurrence(constraint.target).is_none() {
+            return Err(ProgramCompileError::MissingConstraintOccurrence {
+                constraint: constraint.id,
+                occurrence: constraint.target,
+            });
+        }
+    }
+
+    let mut compiled = Vec::new();
+    compiled
+        .try_reserve_exact(total)
+        .map_err(|_| ProgramCompileError::ResourceExhausted)?;
+    for constraint in lowered {
+        let target = graph
+            .bind_occurrence(constraint.target)
+            .ok_or(ProgramCompileError::InternalInvariant)?;
+        compiled.push(CompiledPointConstraint {
+            id: constraint.id,
+            target_id: constraint.target,
+            target,
+            mode: constraint.mode,
+            invocation: constraint.invocation,
+        });
+    }
+    Ok(compiled.into_boxed_slice())
+}
+
+fn compile_outputs(
+    graph: &CompiledAppearanceGraph,
+    authored: Vec<OutputBinding>,
+) -> Result<Box<[CompiledOutputBinding]>, ProgramCompileError> {
+    let len = authored.len();
+    let mut authored = authored;
+    authored.sort_unstable_by_key(|output| output.output);
+    if let Some(duplicate) = authored
+        .windows(2)
+        .find(|pair| pair[0].output == pair[1].output)
+        .map(|pair| pair[0].output)
+    {
+        return Err(ProgramCompileError::DuplicateOutputSlot { output: duplicate });
+    }
+    for output in &authored {
+        if graph.bind_paint(output.paint).is_none() {
+            return Err(ProgramCompileError::MissingOutputPaint {
+                output: output.output,
+                paint: output.paint,
+            });
+        }
+    }
+
+    let mut compiled = Vec::new();
+    compiled
+        .try_reserve_exact(len)
+        .map_err(|_| ProgramCompileError::ResourceExhausted)?;
+    for output in authored {
+        let paint = graph
+            .bind_paint(output.paint)
+            .ok_or(ProgramCompileError::InternalInvariant)?;
+        compiled.push(CompiledOutputBinding {
+            output: output.output,
+            paint_id: output.paint,
+            paint,
+        });
+    }
+    Ok(compiled.into_boxed_slice())
 }
 
 pub(crate) fn check_render_node_count(
@@ -454,14 +774,11 @@ pub(crate) fn canonical_surface_input_port_sequence_matches(
     actual.into_iter().eq(expected.iter().copied())
 }
 
-pub(crate) fn canonical_occurrence_sequence_matches(
-    actual: impl IntoIterator<Item = OccurrenceId>,
-    expected: &[OccurrenceId],
-) -> bool {
-    actual.into_iter().eq(expected.iter().copied())
-}
-
-fn lower_graph(program: &Program) -> AppearanceGraphSpec {
+fn lower_graph<Evaluation>(program: &Program<Evaluation>) -> AppearanceGraphSpec
+where
+    Evaluation: PointEvaluatorV1,
+    PointInvocation<Evaluation>: Copy,
+{
     AppearanceGraphSpec::new(
         program.colors.iter().map(|input| input.id).collect(),
         program.surface_input_ports.clone(),
@@ -509,7 +826,11 @@ fn lower_graph(program: &Program) -> AppearanceGraphSpec {
     )
 }
 
-fn lower_bindings(program: &Program) -> AppearanceBindings {
+fn lower_bindings<Evaluation>(program: &Program<Evaluation>) -> AppearanceBindings
+where
+    Evaluation: PointEvaluatorV1,
+    PointInvocation<Evaluation>: Copy,
+{
     AppearanceBindings::new(
         program
             .colors
@@ -597,7 +918,7 @@ fn map_binding_compile_error(error: BindingError) -> ProgramCompileError {
     }
 }
 
-/// One revision-bound absence of the correlated Surface-input set.
+/// Revision-bound unavailable input descriptor.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SurfaceUnavailable {
     revision: u64,
@@ -605,18 +926,16 @@ pub struct SurfaceUnavailable {
 }
 
 impl SurfaceUnavailable {
-    /// Return the stream revision carrying this absence.
     pub const fn revision(self) -> u64 {
         self.revision
     }
 
-    /// Return the client-owned opaque absence reason.
     pub const fn reason(self) -> u32 {
         self.reason
     }
 }
 
-/// One exact runtime Surface-input value.
+/// One typed runtime Surface input signal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SurfaceSignal {
     input: SurfaceInputPortId,
@@ -624,36 +943,14 @@ pub struct SurfaceSignal {
 }
 
 impl SurfaceSignal {
-    /// Bind one runtime input identity to exact encoded bytes.
     pub const fn new(input: SurfaceInputPortId, value: Srgb8) -> Self {
         Self { input, value }
     }
 
-    /// Return the runtime input identity.
     pub const fn input(self) -> SurfaceInputPortId {
         self.input
     }
 
-    /// Return the exact encoded value.
-    pub const fn value(self) -> Srgb8 {
-        self.value
-    }
-}
-
-/// One exact visible value emitted for a compiled occurrence.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct OccurrenceSignal {
-    occurrence: OccurrenceId,
-    value: Srgb8,
-}
-
-impl OccurrenceSignal {
-    /// Return the compiled occurrence identity.
-    pub const fn occurrence(self) -> OccurrenceId {
-        self.occurrence
-    }
-
-    /// Return the exact encoded visible value.
     pub const fn value(self) -> Srgb8 {
         self.value
     }
@@ -662,131 +959,334 @@ impl OccurrenceSignal {
 /// Borrowed, correlated runtime update for one attached Session.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SurfaceUpdate<'input> {
-    /// The entire Surface-input set is unavailable at this revision.
-    Unavailable { revision: u64, reason: u32 },
-    /// The complete input set in [`CompiledProgram::surface_input_ports`] order.
+    Unavailable {
+        revision: u64,
+        reason: u32,
+    },
     Present {
         revision: u64,
         surfaces: &'input [SurfaceSignal],
     },
 }
 
-/// Compact committed value: one word per compiled occurrence, in the graph's
-/// canonical occurrence order. No metric, threshold or JS-derived verdict is
-/// present on this boundary.
-#[derive(Debug, PartialEq, Eq)]
-struct CompositedSignalBuffersV1 {
-    surface_input_ports: Box<[SurfaceInputPortId]>,
-    input_surface_signals_rgb24: Vec<u32>,
-    occurrence_ids: Box<[OccurrenceId]>,
-    composited_occurrence_signals_rgb24: Vec<u32>,
+/// Evaluator classification with the exact bound occurrence evidence.
+pub enum ConstraintOutcome<Evaluation>
+where
+    Evaluation: PointEvaluatorV1,
+{
+    Pass(VisiblePointPassEvidence<Evaluation>),
+    Violation(VisiblePointViolationEvidence<Evaluation>),
 }
 
-impl CompositedSignalBuffersV1 {
-    fn try_new(
-        surface_input_ports: &[SurfaceInputPortId],
-        occurrence_ids: &[OccurrenceId],
-    ) -> Result<Self, PointRenderAttachError> {
-        Ok(Self {
-            surface_input_ports: try_copy_ids(surface_input_ports)?,
-            input_surface_signals_rgb24: try_zeroed_signal_words(surface_input_ports.len())?,
-            occurrence_ids: try_copy_ids(occurrence_ids)?,
-            composited_occurrence_signals_rgb24: try_zeroed_signal_words(occurrence_ids.len())?,
-        })
+/// One mode-refined report cell.
+pub struct ConstraintAssessment<Evaluation, Mode>
+where
+    Evaluation: PointEvaluatorV1,
+{
+    constraint: ConstraintId,
+    target: OccurrenceId,
+    outcome: ConstraintOutcome<Evaluation>,
+    mode: PhantomData<fn() -> Mode>,
+}
+
+impl<Evaluation, Mode> ConstraintAssessment<Evaluation, Mode>
+where
+    Evaluation: PointEvaluatorV1,
+{
+    fn new(
+        constraint: ConstraintId,
+        target: OccurrenceId,
+        outcome: ConstraintOutcome<Evaluation>,
+    ) -> Self {
+        Self {
+            constraint,
+            target,
+            outcome,
+            mode: PhantomData,
+        }
+    }
+
+    pub const fn constraint(&self) -> ConstraintId {
+        self.constraint
+    }
+
+    pub const fn target(&self) -> OccurrenceId {
+        self.target
+    }
+
+    pub const fn outcome(&self) -> &ConstraintOutcome<Evaluation> {
+        &self.outcome
     }
 }
 
-fn try_copy_ids<T: Copy>(values: &[T]) -> Result<Box<[T]>, PointRenderAttachError> {
-    let mut copied = Vec::new();
-    copied
-        .try_reserve_exact(values.len())
-        .map_err(|_| PointRenderAttachError::ResourceExhausted)?;
-    copied.extend_from_slice(values);
-    Ok(copied.into_boxed_slice())
+/// Canonical full-report entry; authored mode remains visible in the type.
+pub enum ConstraintReportEntry<Evaluation>
+where
+    Evaluation: PointEvaluatorV1,
+{
+    Hard(ConstraintAssessment<Evaluation, HardModeV1>),
+    ReportOnly(ConstraintAssessment<Evaluation, ReportModeV1>),
 }
 
-/// One committed, revision-bound point-render result.
-#[derive(Debug, PartialEq, Eq)]
-pub struct Snapshot {
+impl<Evaluation> ConstraintReportEntry<Evaluation>
+where
+    Evaluation: PointEvaluatorV1,
+{
+    pub const fn constraint(&self) -> ConstraintId {
+        match self {
+            Self::Hard(assessment) => assessment.constraint,
+            Self::ReportOnly(assessment) => assessment.constraint,
+        }
+    }
+
+    pub const fn target(&self) -> OccurrenceId {
+        match self {
+            Self::Hard(assessment) => assessment.target,
+            Self::ReportOnly(assessment) => assessment.target,
+        }
+    }
+}
+
+/// Pure terminal Paint value. Routing identities are intentionally outside it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OutputPaintV1 {
+    source: Srgb8,
+    straight_alpha: AdmittedOpacityV1,
+}
+
+impl OutputPaintV1 {
+    pub const fn source(self) -> Srgb8 {
+        self.source
+    }
+
+    pub const fn straight_alpha(self) -> f64 {
+        self.straight_alpha.value()
+    }
+
+    pub const fn straight_alpha_bits(self) -> u64 {
+        self.straight_alpha.bits()
+    }
+}
+
+/// One routed terminal cell: opaque client slot, authored Paint identity and
+/// the independent physical Paint value produced for it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OutputValueV1 {
+    output: OutputSlotId,
+    paint: PaintId,
+    value: OutputPaintV1,
+}
+
+impl OutputValueV1 {
+    pub const fn output(self) -> OutputSlotId {
+        self.output
+    }
+
+    pub const fn paint(self) -> PaintId {
+        self.paint
+    }
+
+    pub const fn value(self) -> OutputPaintV1 {
+        self.value
+    }
+}
+
+struct ExecutionFrame<Evaluation>
+where
+    Evaluation: PointEvaluatorV1,
+{
+    surfaces: Box<[SurfaceSignal]>,
+    reports: Vec<Option<ConstraintReportEntry<Evaluation>>>,
+    outputs: Vec<Option<OutputValueV1>>,
+}
+
+impl<Evaluation> ExecutionFrame<Evaluation>
+where
+    Evaluation: PointEvaluatorV1,
+    PointInvocation<Evaluation>: Copy,
+{
+    fn try_new(epoch: &ProgramEpochV1<Evaluation>) -> Result<Self, PointRenderAttachError> {
+        let mut surfaces = Vec::new();
+        surfaces
+            .try_reserve_exact(epoch.surface_input_ports.len())
+            .map_err(|_| PointRenderAttachError::ResourceExhausted)?;
+        surfaces.extend(
+            epoch
+                .surface_input_ports
+                .iter()
+                .copied()
+                .map(|input| SurfaceSignal::new(input, Srgb8::new([0; 3]))),
+        );
+
+        let mut reports = Vec::new();
+        reports
+            .try_reserve_exact(epoch.constraints.len())
+            .map_err(|_| PointRenderAttachError::ResourceExhausted)?;
+        reports.resize_with(epoch.constraints.len(), || None);
+
+        let mut outputs = Vec::new();
+        outputs
+            .try_reserve_exact(epoch.outputs.len())
+            .map_err(|_| PointRenderAttachError::ResourceExhausted)?;
+        outputs.resize_with(epoch.outputs.len(), || None);
+
+        Ok(Self {
+            surfaces: surfaces.into_boxed_slice(),
+            reports,
+            outputs,
+        })
+    }
+
+    fn clear_dynamic(&mut self) {
+        for report in &mut self.reports {
+            report.take();
+        }
+        for output in &mut self.outputs {
+            output.take();
+        }
+    }
+
+    fn report(&self) -> impl ExactSizeIterator<Item = &ConstraintReportEntry<Evaluation>> + '_ {
+        self.reports.iter().map(|report| {
+            report
+                .as_ref()
+                .unwrap_or_else(|| unreachable!("committed report is complete"))
+        })
+    }
+
+    fn outputs(&self) -> impl ExactSizeIterator<Item = OutputValueV1> + '_ {
+        self.outputs.iter().map(|output| {
+            output
+                .as_ref()
+                .copied()
+                .unwrap_or_else(|| unreachable!("verified output set is complete"))
+        })
+    }
+
+    fn present_payload_matches(&self, mut value_at: impl FnMut(usize) -> Srgb8) -> bool {
+        let mut exact = true;
+        for (index, signal) in self.surfaces.iter().enumerate() {
+            if value_at(index) != signal.value {
+                exact = false;
+            }
+        }
+        exact
+    }
+}
+
+/// One hard-admitted snapshot with full evidence and terminal Paints.
+pub struct Snapshot<Evaluation>
+where
+    Evaluation: PointEvaluatorV1,
+{
     revision: u64,
-    buffers: CompositedSignalBuffersV1,
+    frame: ExecutionFrame<Evaluation>,
 }
 
-impl Snapshot {
-    /// Return the exact revision used for every input and output in this value.
+impl<Evaluation> Snapshot<Evaluation>
+where
+    Evaluation: PointEvaluatorV1,
+    PointInvocation<Evaluation>: Copy,
+{
     pub const fn revision(&self) -> u64 {
         self.revision
     }
 
-    /// Iterate admitted inputs in canonical compiled order without allocation.
     pub fn surfaces(&self) -> impl ExactSizeIterator<Item = SurfaceSignal> + '_ {
-        self.buffers
-            .surface_input_ports
-            .iter()
-            .copied()
-            .zip(self.buffers.input_surface_signals_rgb24.iter().copied())
-            .map(|(input, value)| SurfaceSignal {
-                input,
-                value: Srgb8::new(unpack_rgb24(value)),
+        self.frame.surfaces.iter().copied()
+    }
+
+    pub fn report(&self) -> impl ExactSizeIterator<Item = &ConstraintReportEntry<Evaluation>> + '_ {
+        self.frame.report()
+    }
+
+    pub fn outputs(&self) -> impl ExactSizeIterator<Item = OutputValueV1> + '_ {
+        self.frame.outputs()
+    }
+
+    pub fn output(&self, output: OutputSlotId) -> Option<OutputValueV1> {
+        let index = self
+            .frame
+            .outputs
+            .binary_search_by_key(&output, |slot| {
+                slot.as_ref()
+                    .unwrap_or_else(|| unreachable!("verified output set is complete"))
+                    .output
             })
+            .ok()?;
+        self.frame.outputs[index]
     }
 
-    /// Iterate visible occurrence values in canonical compiled order.
-    pub fn occurrences(&self) -> impl ExactSizeIterator<Item = OccurrenceSignal> + '_ {
-        self.buffers
-            .occurrence_ids
-            .iter()
-            .copied()
-            .zip(
-                self.buffers
-                    .composited_occurrence_signals_rgb24
-                    .iter()
-                    .copied(),
-            )
-            .map(|(occurrence, value)| OccurrenceSignal {
-                occurrence,
-                value: Srgb8::new(unpack_rgb24(value)),
-            })
-    }
-
-    /// Look up one canonical occurrence output without allocation.
-    pub fn occurrence(&self, occurrence: OccurrenceId) -> Option<Srgb8> {
-        self.buffers
-            .occurrence_ids
-            .binary_search(&occurrence)
-            .ok()
-            .map(|index| {
-                Srgb8::new(unpack_rgb24(
-                    self.buffers.composited_occurrence_signals_rgb24[index],
-                ))
-            })
-    }
-
-    pub(crate) fn input_surface_signals_rgb24(&self) -> &[u32] {
-        &self.buffers.input_surface_signals_rgb24
-    }
-
-    pub(crate) fn composited_occurrence_signals_rgb24(&self) -> &[u32] {
-        &self.buffers.composited_occurrence_signals_rgb24
+    #[cfg(test)]
+    pub(crate) fn storage_pointers_for_test(&self) -> (*const SurfaceSignal, *const ()) {
+        (
+            self.frame.surfaces.as_ptr(),
+            self.frame.reports.as_ptr().cast(),
+        )
     }
 }
 
-/// Current state of one generation-bound Session.
-#[derive(Debug, PartialEq, Eq)]
-pub enum SessionState {
+/// Complete current report containing at least one hard violation.
+pub struct ConstraintConflict<Evaluation>
+where
+    Evaluation: PointEvaluatorV1,
+{
+    revision: u64,
+    frame: ExecutionFrame<Evaluation>,
+}
+
+impl<Evaluation> ConstraintConflict<Evaluation>
+where
+    Evaluation: PointEvaluatorV1,
+    PointInvocation<Evaluation>: Copy,
+{
+    pub const fn revision(&self) -> u64 {
+        self.revision
+    }
+
+    pub fn surfaces(&self) -> impl ExactSizeIterator<Item = SurfaceSignal> + '_ {
+        self.frame.surfaces.iter().copied()
+    }
+
+    pub fn report(&self) -> impl ExactSizeIterator<Item = &ConstraintReportEntry<Evaluation>> + '_ {
+        self.frame.report()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn storage_pointers_for_test(&self) -> (*const SurfaceSignal, *const ()) {
+        (
+            self.frame.surfaces.as_ptr(),
+            self.frame.reports.as_ptr().cast(),
+        )
+    }
+}
+
+/// Current lifecycle state of one generation-bound Session.
+pub enum SessionState<Evaluation>
+where
+    Evaluation: PointEvaluatorV1,
+{
     Waiting {
         current_unavailable: Option<SurfaceUnavailable>,
     },
     Ready {
-        current: Snapshot,
+        current: Snapshot<Evaluation>,
     },
     Stale {
-        previous: Snapshot,
+        previous: Snapshot<Evaluation>,
         current_unavailable: SurfaceUnavailable,
+    },
+    Conflict {
+        current: ConstraintConflict<Evaluation>,
+        previous: Option<Snapshot<Evaluation>>,
     },
 }
 
-impl SessionState {
+impl<Evaluation> SessionState<Evaluation>
+where
+    Evaluation: PointEvaluatorV1,
+    PointInvocation<Evaluation>: Copy,
+{
     const fn head_revision(&self) -> Option<u64> {
         match self {
             Self::Waiting {
@@ -800,13 +1300,15 @@ impl SessionState {
                 ..
             } => Some(unavailable.revision),
             Self::Ready { current } => Some(current.revision),
+            Self::Conflict { current, .. } => Some(current.revision),
         }
     }
 }
 
-/// Failure to admit or execute one typed Session update.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SessionUpdateError {
+/// Failure to admit or evaluate one Session update. A hard violation is not an
+/// error; it commits [`SessionState::Conflict`] with its full report.
+#[derive(Debug, PartialEq, Eq)]
+pub enum SessionUpdateError<EvaluationError> {
     ProgramExpired,
     SurfaceInputPortLengthMismatch {
         expected: usize,
@@ -824,40 +1326,40 @@ pub enum SessionUpdateError {
     RevisionConflict {
         revision: u64,
     },
+    Evaluator {
+        constraint: ConstraintId,
+        source: EvaluationError,
+    },
     InternalInvariant,
 }
 
-/// Generation-bound mutable runtime. It owns reusable values/scratch, never a
-/// strong reference or a copy of the compiled graph. All fixed-cardinality
-/// signal buffers are allocated fallibly by `attach`; updates only move and
-/// overwrite their ownership after evaluation succeeds.
-#[derive(Debug)]
-pub struct Session {
-    epoch: Weak<ProgramEpochV1>,
+/// Mutable runtime with three attach-allocated transactional frames.
+pub struct Session<Evaluation>
+where
+    Evaluation: PointEvaluatorV1,
+    PointInvocation<Evaluation>: Copy,
+{
+    epoch: Weak<ProgramEpochV1<Evaluation>>,
     bindings: AdmittedAppearanceBindings,
     workspace: AppearanceWorkspace,
-    initial_signal_buffers: Option<CompositedSignalBuffersV1>,
-    state: SessionState,
+    free_frames: [Option<ExecutionFrame<Evaluation>>; 3],
+    state: SessionState<Evaluation>,
 }
 
-impl Session {
-    /// Borrow the current committed state.
-    pub const fn state(&self) -> &SessionState {
+impl<Evaluation> Session<Evaluation>
+where
+    Evaluation: PointEvaluatorV1,
+    PointInvocation<Evaluation>: Copy,
+{
+    pub const fn state(&self) -> &SessionState<Evaluation> {
         &self.state
     }
 
-    #[cfg(test)]
-    pub(crate) fn bound_surface_inputs_for_test(
-        &self,
-    ) -> impl ExactSizeIterator<Item = (SurfaceInputPortId, Srgb8)> + '_ {
-        self.bindings.surface_inputs_canonical()
-    }
-
-    /// Admit, evaluate and atomically commit one typed Surface-input update.
     pub fn update(
         &mut self,
         update: SurfaceUpdate<'_>,
-    ) -> Result<&SessionState, SessionUpdateError> {
+    ) -> Result<&SessionState<Evaluation>, SessionUpdateError<PointEvaluationError<Evaluation>>>
+    {
         let epoch = self
             .epoch
             .upgrade()
@@ -894,15 +1396,13 @@ impl Session {
         }
     }
 
-    /// Read one complete canonical Surface-input set lazily and commit it as one
-    /// revision. The callback is not invoked until lifetime, cardinality and
-    /// revision admission have all succeeded.
     pub(crate) fn update_canonical_present(
         &mut self,
         revision: u64,
         surface_input_port_count: usize,
         value_at: impl FnMut(usize) -> Srgb8,
-    ) -> Result<&SessionState, SessionUpdateError> {
+    ) -> Result<&SessionState<Evaluation>, SessionUpdateError<PointEvaluationError<Evaluation>>>
+    {
         let epoch = self
             .epoch
             .upgrade()
@@ -913,7 +1413,8 @@ impl Session {
     fn apply_unavailable(
         &mut self,
         unavailable: SurfaceUnavailable,
-    ) -> Result<&SessionState, SessionUpdateError> {
+    ) -> Result<&SessionState<Evaluation>, SessionUpdateError<PointEvaluationError<Evaluation>>>
+    {
         let incoming_revision = unavailable.revision;
         if let Some(current) = self.state.head_revision() {
             if incoming_revision < current {
@@ -941,7 +1442,7 @@ impl Session {
             }
         }
 
-        let previous = take_last_ready(&mut self.state);
+        let previous = self.take_last_verified_and_recycle_current();
         self.state = match previous {
             Some(previous) => SessionState::Stale {
                 previous,
@@ -956,18 +1457,18 @@ impl Session {
 
     fn apply_canonical_present(
         &mut self,
-        epoch: &ProgramEpochV1,
+        epoch: &ProgramEpochV1<Evaluation>,
         revision: u64,
         surface_input_port_count: usize,
         mut value_at: impl FnMut(usize) -> Srgb8,
-    ) -> Result<&SessionState, SessionUpdateError> {
+    ) -> Result<&SessionState<Evaluation>, SessionUpdateError<PointEvaluationError<Evaluation>>>
+    {
         if surface_input_port_count != epoch.surface_input_ports.len() {
             return Err(SessionUpdateError::SurfaceInputPortLengthMismatch {
                 expected: epoch.surface_input_ports.len(),
                 actual: surface_input_port_count,
             });
         }
-
         if let Some(current) = self.state.head_revision() {
             if revision < current {
                 return Err(SessionUpdateError::RevisionOutOfOrder {
@@ -976,136 +1477,195 @@ impl Session {
                 });
             }
             if revision == current {
-                return self.admit_same_revision_present(revision, &mut value_at);
+                return self.admit_same_revision_present(revision, value_at);
             }
         }
 
-        let retained_shape_matches = match &self.state {
-            SessionState::Waiting { .. } => {
-                self.initial_signal_buffers.as_ref().is_some_and(|buffers| {
-                    buffers.input_surface_signals_rgb24.len() == epoch.surface_input_ports.len()
-                        && buffers.composited_occurrence_signals_rgb24.len()
-                            == epoch.occurrence_ids.len()
-                })
-            }
-            SessionState::Ready { current } => {
-                current.buffers.input_surface_signals_rgb24.len() == epoch.surface_input_ports.len()
-                    && current.buffers.composited_occurrence_signals_rgb24.len()
-                        == epoch.occurrence_ids.len()
-            }
-            SessionState::Stale { previous, .. } => {
-                previous.buffers.input_surface_signals_rgb24.len()
-                    == epoch.surface_input_ports.len()
-                    && previous.buffers.composited_occurrence_signals_rgb24.len()
-                        == epoch.occurrence_ids.len()
-            }
-        };
-        if !retained_shape_matches {
+        let mut frame =
+            take_free_frame(&mut self.free_frames).ok_or(SessionUpdateError::InternalInvariant)?;
+        frame.clear_dynamic();
+        if frame.surfaces.len() != epoch.surface_input_ports.len()
+            || frame.reports.len() != epoch.constraints.len()
+            || frame.outputs.len() != epoch.outputs.len()
+        {
+            put_free_frame(&mut self.free_frames, frame);
             return Err(SessionUpdateError::InternalInvariant);
         }
 
-        self.bindings
+        let surface_slots = &mut frame.surfaces;
+        if self
+            .bindings
             .overwrite_surface_inputs_canonical(
                 epoch.surface_input_ports.iter().copied(),
-                &mut value_at,
+                &mut |index| {
+                    let value = value_at(index);
+                    surface_slots[index] =
+                        SurfaceSignal::new(epoch.surface_input_ports[index], value);
+                    value
+                },
             )
-            .map_err(|_| SessionUpdateError::InternalInvariant)?;
-        let evaluation = epoch
-            .graph
-            .evaluate_admitted_into(&self.bindings, &mut self.workspace)
-            .map_err(|_| SessionUpdateError::InternalInvariant)?;
-        if evaluation.occurrences().len() != epoch.occurrence_ids.len() {
+            .is_err()
+        {
+            put_free_frame(&mut self.free_frames, frame);
             return Err(SessionUpdateError::InternalInvariant);
         }
 
-        // No fallible work follows. The callback is already gone from the
-        // commit path: the input snapshot is read back from the admitted
-        // canonical bindings that evaluation consumed.
-        let mut buffers = match take_last_ready(&mut self.state) {
-            Some(previous) => previous.buffers,
-            None => self.initial_signal_buffers.take().unwrap_or_else(|| {
-                unreachable!("a Session without prior Ready must retain initial buffers")
-            }),
-        };
-        debug_assert_eq!(
-            buffers.input_surface_signals_rgb24.len(),
-            surface_input_port_count
-        );
-        debug_assert_eq!(
-            buffers.composited_occurrence_signals_rgb24.len(),
-            epoch.occurrence_ids.len()
-        );
-        for (((input, value), expected), output) in self
-            .bindings
-            .surface_inputs_canonical()
-            .zip(buffers.surface_input_ports.iter().copied())
-            .zip(buffers.input_surface_signals_rgb24.iter_mut())
+        let evaluation = match epoch
+            .graph
+            .evaluate_admitted_into(&self.bindings, &mut self.workspace)
         {
-            debug_assert_eq!(input, expected);
-            *output = pack_rgb24(value.bytes());
-        }
-        for (resolved, output) in evaluation
-            .occurrences()
-            .zip(buffers.composited_occurrence_signals_rgb24.iter_mut())
-        {
-            *output = pack_rgb24(resolved.visible());
-        }
-        self.state = SessionState::Ready {
-            current: Snapshot { revision, buffers },
+            Ok(evaluation) => evaluation,
+            Err(_) => {
+                put_free_frame(&mut self.free_frames, frame);
+                return Err(SessionUpdateError::InternalInvariant);
+            }
         };
+
+        let mut has_hard_violation = false;
+        for (index, constraint) in epoch.constraints.iter().enumerate() {
+            let Some(source) = evaluation.occurrence_at(constraint.target) else {
+                put_free_frame(&mut self.free_frames, frame);
+                return Err(SessionUpdateError::InternalInvariant);
+            };
+            let decision =
+                match assess_visible_point_hard(source, &epoch.evaluator, constraint.invocation) {
+                    Ok(decision) => decision,
+                    Err(source) => {
+                        put_free_frame(&mut self.free_frames, frame);
+                        return Err(SessionUpdateError::Evaluator {
+                            constraint: constraint.id,
+                            source,
+                        });
+                    }
+                };
+            let (outcome, violation) = match decision {
+                HardDecision::Pass(evidence) => (ConstraintOutcome::Pass(evidence), false),
+                HardDecision::Violation(evidence) => (ConstraintOutcome::Violation(evidence), true),
+            };
+            frame.reports[index] = Some(match constraint.mode {
+                CompiledConstraintModeV1::Hard => {
+                    has_hard_violation |= violation;
+                    ConstraintReportEntry::Hard(ConstraintAssessment::new(
+                        constraint.id,
+                        constraint.target_id,
+                        outcome,
+                    ))
+                }
+                CompiledConstraintModeV1::ReportOnly => ConstraintReportEntry::ReportOnly(
+                    ConstraintAssessment::new(constraint.id, constraint.target_id, outcome),
+                ),
+            });
+        }
+
+        if !has_hard_violation {
+            for (index, output) in epoch.outputs.iter().enumerate() {
+                let Some(paint) = evaluation.paint_at(output.paint) else {
+                    put_free_frame(&mut self.free_frames, frame);
+                    return Err(SessionUpdateError::InternalInvariant);
+                };
+                frame.outputs[index] = Some(OutputValueV1 {
+                    output: output.output,
+                    paint: output.paint_id,
+                    value: OutputPaintV1 {
+                        source: paint.source(),
+                        straight_alpha: paint.opacity(),
+                    },
+                });
+            }
+        }
+        if has_hard_violation {
+            let previous = self.take_last_verified_and_recycle_current();
+            self.state = SessionState::Conflict {
+                current: ConstraintConflict { revision, frame },
+                previous,
+            };
+        } else {
+            self.recycle_entire_state();
+            self.state = SessionState::Ready {
+                current: Snapshot { revision, frame },
+            };
+        }
         Ok(&self.state)
     }
 
     fn admit_same_revision_present(
         &self,
         revision: u64,
-        mut value_at: impl FnMut(usize) -> Srgb8,
-    ) -> Result<&SessionState, SessionUpdateError> {
-        let SessionState::Ready { current } = &self.state else {
-            return Err(SessionUpdateError::RevisionConflict { revision });
-        };
-        debug_assert_eq!(current.revision, revision);
-
-        let mut exact = true;
-        for (index, &expected) in current
-            .buffers
-            .input_surface_signals_rgb24
-            .iter()
-            .enumerate()
-        {
-            if pack_rgb24(value_at(index).bytes()) != expected {
-                exact = false;
+        value_at: impl FnMut(usize) -> Srgb8,
+    ) -> Result<&SessionState<Evaluation>, SessionUpdateError<PointEvaluationError<Evaluation>>>
+    {
+        let exact = match &self.state {
+            SessionState::Ready { current } => current.frame.present_payload_matches(value_at),
+            SessionState::Conflict { current, .. } => {
+                current.frame.present_payload_matches(value_at)
             }
-        }
+            _ => return Err(SessionUpdateError::RevisionConflict { revision }),
+        };
         if exact {
             Ok(&self.state)
         } else {
             Err(SessionUpdateError::RevisionConflict { revision })
         }
     }
-}
 
-fn take_last_ready(state: &mut SessionState) -> Option<Snapshot> {
-    match mem::replace(
-        state,
-        SessionState::Waiting {
-            current_unavailable: None,
-        },
-    ) {
-        SessionState::Waiting { .. } => None,
-        SessionState::Ready { current } => Some(current),
-        SessionState::Stale { previous, .. } => Some(previous),
+    fn take_last_verified_and_recycle_current(&mut self) -> Option<Snapshot<Evaluation>> {
+        match mem::replace(
+            &mut self.state,
+            SessionState::Waiting {
+                current_unavailable: None,
+            },
+        ) {
+            SessionState::Waiting { .. } => None,
+            SessionState::Ready { current } => Some(current),
+            SessionState::Stale { previous, .. } => Some(previous),
+            SessionState::Conflict { current, previous } => {
+                put_free_frame(&mut self.free_frames, current.frame);
+                previous
+            }
+        }
+    }
+
+    fn recycle_entire_state(&mut self) {
+        match mem::replace(
+            &mut self.state,
+            SessionState::Waiting {
+                current_unavailable: None,
+            },
+        ) {
+            SessionState::Waiting { .. } => {}
+            SessionState::Ready { current } => {
+                put_free_frame(&mut self.free_frames, current.frame);
+            }
+            SessionState::Stale { previous, .. } => {
+                put_free_frame(&mut self.free_frames, previous.frame);
+            }
+            SessionState::Conflict { current, previous } => {
+                put_free_frame(&mut self.free_frames, current.frame);
+                if let Some(previous) = previous {
+                    put_free_frame(&mut self.free_frames, previous.frame);
+                }
+            }
+        }
     }
 }
 
-const fn unpack_rgb24(word: u32) -> [u8; 3] {
-    [
-        ((word >> 16) & 0xff) as u8,
-        ((word >> 8) & 0xff) as u8,
-        (word & 0xff) as u8,
-    ]
+fn take_free_frame<Evaluation>(
+    pool: &mut [Option<ExecutionFrame<Evaluation>>; 3],
+) -> Option<ExecutionFrame<Evaluation>>
+where
+    Evaluation: PointEvaluatorV1,
+{
+    pool.iter_mut().find_map(Option::take)
 }
 
-const fn pack_rgb24(bytes: [u8; 3]) -> u32 {
-    ((bytes[0] as u32) << 16) | ((bytes[1] as u32) << 8) | bytes[2] as u32
+fn put_free_frame<Evaluation>(
+    pool: &mut [Option<ExecutionFrame<Evaluation>>; 3],
+    frame: ExecutionFrame<Evaluation>,
+) where
+    Evaluation: PointEvaluatorV1,
+{
+    let Some(slot) = pool.iter_mut().find(|slot| slot.is_none()) else {
+        unreachable!("three-frame ownership invariant exceeded")
+    };
+    *slot = Some(frame);
 }
