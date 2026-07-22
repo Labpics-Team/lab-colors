@@ -20,6 +20,7 @@
 use std::mem;
 use std::rc::{Rc, Weak};
 
+use crate::Srgb8;
 use crate::appearance::{
     AdmittedAppearanceBindings, AppearanceBindings, AppearanceGraphSpec, AppearanceWorkspace,
     BindingError, ColorInputId as AppearanceColorInputId, CompileError, CompiledAppearanceGraph,
@@ -29,7 +30,6 @@ use crate::appearance::{
     SurfaceInputPortId as AppearanceSurfaceInputId, SurfaceSpec as AppearanceSurfaceSpec,
 };
 use crate::composition::CompositionProfileV1;
-use crate::Srgb8;
 
 macro_rules! opaque_program_id {
     ($name:ident, $description:literal) => {

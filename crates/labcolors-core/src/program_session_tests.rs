@@ -1,16 +1,17 @@
+use crate::Srgb8;
 use crate::appearance::{
     OccurrenceId as AppearanceOccurrenceId, SurfaceInputPortId as AppearanceSurfaceInputId,
 };
 use crate::program_session::{
-    canonical_occurrence_sequence_matches, canonical_surface_input_sequence_matches,
-    check_render_node_count, ColorInput, ColorInputId, CompiledProgram, CompositionProfile,
-    Occurrence, OccurrenceId, OpacityInput, OpacityInputId, PackedEncodedSurfaceUpdateErrorV1,
-    Paint, PaintId, PointRenderOwner, PointRenderSessionUpdateErrorV1, Program,
-    ProgramCompileError, SessionState, SessionUpdateError, Surface, SurfaceId, SurfaceInputId,
-    SurfaceSignal, SurfaceUpdate, PACKED_ENCODED_SURFACE_PRESENT_TAG_V1,
+    ColorInput, ColorInputId, CompiledProgram, CompositionProfile, Occurrence, OccurrenceId,
+    OpacityInput, OpacityInputId, PACKED_ENCODED_SURFACE_PRESENT_TAG_V1,
     PACKED_ENCODED_SURFACE_UNAVAILABLE_TAG_V1, PACKED_ENCODED_SURFACE_UPDATE_MAGIC_V1,
+    PackedEncodedSurfaceUpdateErrorV1, Paint, PaintId, PointRenderOwner,
+    PointRenderSessionUpdateErrorV1, Program, ProgramCompileError, SessionState,
+    SessionUpdateError, Surface, SurfaceId, SurfaceInputId, SurfaceSignal, SurfaceUpdate,
+    canonical_occurrence_sequence_matches, canonical_surface_input_sequence_matches,
+    check_render_node_count,
 };
-use crate::Srgb8;
 
 const COLOR: ColorInputId = ColorInputId::new(1);
 const SURFACE_PORT: SurfaceInputId = SurfaceInputId::new(2);
