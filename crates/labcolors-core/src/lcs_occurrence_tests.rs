@@ -3,23 +3,43 @@ use proptest::prelude::*;
 use crate::Srgb8;
 use crate::lcs_occurrence::{
     ADMITTED_SRGB8_TRISTIMULUS_BINDING_V1, AdaptingLuminanceCdM2, AppearanceContextFieldV1,
-    AppearanceContextId, AppearanceContextSchemaReleaseId, BackgroundLuminanceRatio, ColorSignal,
-    ColorimetricFrameId, ColorimetricFrameReleaseId, ColorimetricTransformReleaseId, HueAngle,
-    HueState, IEC_SRGB_D65_XYZ_FRAME_V1, LcsOccurrence, MUTATION_SENTINEL_XYZ_FRAME_V1,
-    ModeledTristimulusDerivationV1, NumericDomainError, ObserverProfileId,
+    AppearanceContextId, AppearanceContextSchemaReleaseId, AppearanceState,
+    AppearanceStateDerivationErrorV1, AppearanceViewFieldV1, AppearanceViewReleaseIdV1,
+    BackgroundLuminanceRatio, CAM16_VIEW_RELEASE_V1, ColorSignal, ColorimetricFrameId,
+    ColorimetricFrameReleaseId, ColorimetricTransformReleaseId, HueAngle, HueState,
+    IEC_SRGB_D65_XYZ_FRAME_V1, LcsOccurrence, MUTATION_SENTINEL_XYZ_FRAME_V1,
+    ModeledTristimulusDerivationV1, NumericDomainError, OKLAB_VIEW_RELEASE_V1, ObserverProfileId,
     OccurrenceFormationError, ReferenceWhiteId, SurroundProfileId, TristimulusComponentV1,
     TristimulusDomainErrorV1, TristimulusSample, TristimulusScale, derive_modeled_tristimulus_v1,
 };
+use crate::spaces::cam16::{ForwardCacheGuard, forward, forward_correlates_v1};
+use crate::spaces::oklab::{srgb_linear_to_oklab, xyz_d65_to_oklab_v1};
 use crate::spaces::srgb::{D65_WHITE, srgb_linear_from_srgb8, srgb_to_xyz};
+use crate::spaces::vc::ViewingConditions;
 
 fn context(frame: ColorimetricFrameId, la: f64) -> AppearanceContextId {
+    context_with_surround(frame, la, SurroundProfileId::AverageV1)
+}
+
+fn context_with_surround(
+    frame: ColorimetricFrameId,
+    la: f64,
+    surround: SurroundProfileId,
+) -> AppearanceContextId {
     AppearanceContextId::from_inputs(
         AppearanceContextSchemaReleaseId::Ciecam16ViewingInputsV1,
         frame,
         AdaptingLuminanceCdM2::try_new(la).unwrap(),
         BackgroundLuminanceRatio::try_new(0.2).unwrap(),
-        SurroundProfileId::AverageV1,
+        surround,
     )
+}
+
+fn occurrence_from_srgb8(bytes: [u8; 3], context: AppearanceContextId) -> LcsOccurrence {
+    let sample = derive_modeled_tristimulus_v1(ColorSignal::from_srgb8(Srgb8::new(bytes)))
+        .unwrap()
+        .sample();
+    LcsOccurrence::in_context(sample, context).unwrap()
 }
 
 #[test]
@@ -150,6 +170,25 @@ proptest! {
             expected.map(f64::to_bits),
         );
         prop_assert_eq!(derived.sample().frame(), IEC_SRGB_D65_XYZ_FRAME_V1);
+    }
+
+    #[test]
+    fn direct_xyz_oklab_projection_tracks_the_existing_srgb_kernel_without_routing_through_it(
+        bytes in any::<[u8; 3]>(),
+    ) {
+        let linear = srgb_linear_from_srgb8(Srgb8::new(bytes));
+        let legacy_srgb_projection = srgb_linear_to_oklab(linear);
+        let direct_xyz_projection = xyz_d65_to_oklab_v1(srgb_to_xyz(linear));
+
+        for component in 0..3 {
+            prop_assert!(
+                (direct_xyz_projection[component] - legacy_srgb_projection[component]).abs()
+                    <= 2.0e-8,
+                "component {component}: direct={} existing={}",
+                direct_xyz_projection[component],
+                legacy_srgb_projection[component],
+            );
+        }
     }
 }
 
@@ -335,4 +374,294 @@ fn appearance_context_identity_exposes_only_semantic_inputs() {
     assert_eq!(context.adapting_luminance_cd_m2(), 64.0);
     assert_eq!(context.background_luminance_ratio(), 0.2);
     assert_eq!(context.surround_profile(), SurroundProfileId::AverageV1);
+}
+
+#[test]
+fn appearance_state_is_one_way_views_of_the_same_occurrence_with_separate_releases() {
+    let occurrence =
+        occurrence_from_srgb8([0x00, 0x00, 0xFF], context(IEC_SRGB_D65_XYZ_FRAME_V1, 64.0));
+    let state = AppearanceState::derive_v1(occurrence).unwrap();
+
+    assert_eq!(state.occurrence(), occurrence);
+    assert_eq!(state.oklab().release(), OKLAB_VIEW_RELEASE_V1);
+    assert_eq!(state.cam16().release(), CAM16_VIEW_RELEASE_V1);
+
+    let direct = xyz_d65_to_oklab_v1(occurrence.sample().xyz());
+    assert_eq!(
+        [state.oklab().l(), state.oklab().a(), state.oklab().b()].map(f64::to_bits),
+        direct.map(f64::to_bits),
+    );
+
+    let expected_cam = forward_correlates_v1(occurrence.sample().xyz(), &ViewingConditions::srgb());
+    let cam = state.cam16();
+    assert_eq!(cam.j().to_bits(), expected_cam.j.to_bits());
+    assert_eq!(cam.q().to_bits(), expected_cam.q.to_bits());
+    assert_eq!(cam.c().to_bits(), expected_cam.c.to_bits());
+    assert_eq!(cam.m().to_bits(), expected_cam.m.to_bits());
+    assert_eq!(cam.s().to_bits(), expected_cam.s.to_bits());
+    let HueState::Defined(cam_hue) = cam.hue() else {
+        panic!("chromatic blue must have a CAM16 hue");
+    };
+    assert_eq!(cam_hue.degrees().to_bits(), expected_cam.h.to_bits());
+
+    let oklab_hue = state.oklab().b().atan2(state.oklab().a()).to_degrees();
+    let oklab_hue = if oklab_hue < 0.0 {
+        oklab_hue + 360.0
+    } else {
+        oklab_hue
+    };
+    assert!(
+        (cam_hue.degrees() - oklab_hue).abs() > 10.0,
+        "CAM16 hue must not be copied from Oklab: CAM16={} Oklab={oklab_hue}",
+        cam_hue.degrees(),
+    );
+}
+
+#[test]
+fn context_changes_only_the_contextual_cam16_view() {
+    let sample =
+        derive_modeled_tristimulus_v1(ColorSignal::from_srgb8(Srgb8::new([0x44, 0x88, 0xCC])))
+            .unwrap()
+            .sample();
+    let average = AppearanceState::derive_v1(
+        LcsOccurrence::in_context(
+            sample,
+            context_with_surround(
+                IEC_SRGB_D65_XYZ_FRAME_V1,
+                64.0,
+                SurroundProfileId::AverageV1,
+            ),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let dim = AppearanceState::derive_v1(
+        LcsOccurrence::in_context(
+            sample,
+            context_with_surround(IEC_SRGB_D65_XYZ_FRAME_V1, 64.0, SurroundProfileId::DimV1),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+
+    assert_eq!(average.oklab(), dim.oklab());
+    assert_ne!(average.cam16().j().to_bits(), dim.cam16().j().to_bits());
+    assert_ne!(average.cam16().m().to_bits(), dim.cam16().m().to_bits());
+    assert_ne!(average.occurrence(), dim.occurrence());
+}
+
+#[test]
+fn every_registered_surround_maps_to_its_exact_cam16_kernel_tuple() {
+    for (surround, vc) in [
+        (SurroundProfileId::AverageV1, ViewingConditions::srgb()),
+        (SurroundProfileId::DimV1, ViewingConditions::dim_surround()),
+        (
+            SurroundProfileId::DarkV1,
+            ViewingConditions::dark_surround(),
+        ),
+    ] {
+        let occurrence = occurrence_from_srgb8(
+            [0x44, 0x88, 0xCC],
+            context_with_surround(IEC_SRGB_D65_XYZ_FRAME_V1, 64.0, surround),
+        );
+        let actual = AppearanceState::derive_v1(occurrence).unwrap().cam16();
+        let expected = forward_correlates_v1(occurrence.sample().xyz(), &vc);
+        assert_eq!(
+            [actual.j(), actual.q(), actual.c(), actual.m(), actual.s(),].map(f64::to_bits),
+            [expected.j, expected.q, expected.c, expected.m, expected.s,].map(f64::to_bits),
+            "surround {surround:?} must not mix registered tuple fields",
+        );
+        let HueState::Defined(actual_hue) = actual.hue() else {
+            panic!("chromatic fixture must have hue under {surround:?}");
+        };
+        assert_eq!(actual_hue.degrees().to_bits(), expected.h.to_bits());
+    }
+}
+
+#[test]
+fn exact_zero_coordinate_has_no_invented_hue() {
+    let state = AppearanceState::derive_v1(occurrence_from_srgb8(
+        [0; 3],
+        context(IEC_SRGB_D65_XYZ_FRAME_V1, 64.0),
+    ))
+    .unwrap();
+
+    assert_eq!(
+        [state.oklab().l(), state.oklab().a(), state.oklab().b()].map(f64::to_bits),
+        [0; 3],
+    );
+    assert_eq!(state.cam16().j().to_bits(), 0);
+    assert_eq!(state.cam16().q().to_bits(), 0);
+    assert_eq!(state.cam16().c().to_bits(), 0);
+    assert_eq!(state.cam16().m().to_bits(), 0);
+    assert_eq!(state.cam16().s().to_bits(), 0);
+    assert_eq!(state.cam16().hue(), HueState::UndefinedExact);
+}
+
+#[test]
+fn state_derivation_rejects_an_unregistered_frame_before_any_view_math() {
+    let frame = MUTATION_SENTINEL_XYZ_FRAME_V1;
+    let sample = TristimulusSample::try_from_xyz_for_test([0.1, 0.2, 0.3], frame).unwrap();
+    let occurrence = LcsOccurrence::in_context(sample, context(frame, 64.0)).unwrap();
+
+    assert_eq!(
+        AppearanceState::derive_v1(occurrence).unwrap_err(),
+        AppearanceStateDerivationErrorV1::UnsupportedFrame { frame },
+    );
+}
+
+#[test]
+fn state_derivation_rejects_nonfinite_derived_coordinates_with_release_and_field() {
+    let frame = IEC_SRGB_D65_XYZ_FRAME_V1;
+    let sample = TristimulusSample::try_from_xyz_for_test([f64::MAX; 3], frame).unwrap();
+    let occurrence = LcsOccurrence::in_context(sample, context(frame, 64.0)).unwrap();
+
+    assert_eq!(
+        AppearanceState::derive_v1(occurrence).unwrap_err(),
+        AppearanceStateDerivationErrorV1::NumericDomain {
+            release: AppearanceViewReleaseIdV1::Oklab(OKLAB_VIEW_RELEASE_V1),
+            field: AppearanceViewFieldV1::OklabL,
+            reason: NumericDomainError::NonFinite,
+        },
+    );
+}
+
+#[test]
+fn direct_oklab_release_pins_an_external_xyz_projection_vector() {
+    // Fixed vector from the CSS Color 4 direct XYZ(D65) -> Oklab matrices for
+    // the already-pinned `[0A, 0B, 80]` F0 tristimulus. Tolerance covers only
+    // cross-libm cbrt ULPs; it is far below the direct-vs-legacy matrix delta.
+    let state = AppearanceState::derive_v1(occurrence_from_srgb8(
+        [0x0A, 0x0B, 0x80],
+        context(IEC_SRGB_D65_XYZ_FRAME_V1, 64.0),
+    ))
+    .unwrap();
+    let actual = [state.oklab().l(), state.oklab().a(), state.oklab().b()];
+    let expected = [
+        0.284_226_036_666_170_47,
+        -0.009_591_562_466_562_426,
+        -0.178_614_436_252_897_94,
+    ];
+    for component in 0..3 {
+        assert!(
+            (actual[component] - expected[component]).abs() <= 1.0e-14,
+            "Oklab component {component} drifted: actual={} expected={}",
+            actual[component],
+            expected[component],
+        );
+    }
+}
+
+#[test]
+fn cam16_release_pins_a_full_external_correlate_vector() {
+    // colour-science CIECAM16, D65, L_A=64 cd/m², Y_b/Y_w=0.2, average
+    // surround. Unlike the older J/M/h table this pins the newly exposed
+    // Q/C/s correlates as well. The tolerances cover only the documented CSS
+    // XYZ constant delta from colour-science's matrix derivation.
+    let state = AppearanceState::derive_v1(occurrence_from_srgb8(
+        [0x00, 0x00, 0xFF],
+        context(IEC_SRGB_D65_XYZ_FRAME_V1, 64.0),
+    ))
+    .unwrap();
+    let cam = state.cam16();
+    let HueState::Defined(hue) = cam.hue() else {
+        panic!("reference blue must retain a CAM16 hue");
+    };
+
+    for (name, actual, expected, tolerance) in [
+        ("J", cam.j(), 25.271_208_691_856_113, 0.01),
+        ("Q", cam.q(), 109.108_232_192_767_33, 0.1),
+        ("C", cam.c(), 86.580_098_936_732_16, 0.1),
+        ("M", cam.m(), 78.737_310_637_269_06, 0.05),
+        ("s", cam.s(), 84.949_637_273_879, 0.1),
+        ("h", hue.degrees(), 282.871_080_928_130_14, 0.15),
+    ] {
+        assert!(
+            (actual - expected).abs() < tolerance,
+            "CAM16 {name} drifted: actual={actual} expected={expected}",
+        );
+    }
+}
+
+#[test]
+fn full_appearance_state_derivation_is_allocation_free() {
+    let occurrence =
+        occurrence_from_srgb8([0x44, 0x88, 0xCC], context(IEC_SRGB_D65_XYZ_FRAME_V1, 64.0));
+    let (derived, allocations) =
+        crate::test_support::measured_allocations(|| AppearanceState::derive_v1(occurrence));
+
+    assert_eq!(allocations, 0);
+    assert!(derived.is_ok());
+}
+
+#[test]
+fn appearance_state_bypasses_active_xyz_only_cache_for_each_context_without_allocating() {
+    let frame = IEC_SRGB_D65_XYZ_FRAME_V1;
+    let sample =
+        derive_modeled_tristimulus_v1(ColorSignal::from_srgb8(Srgb8::new([0x44, 0x88, 0xCC])))
+            .unwrap()
+            .sample();
+    let xyz = sample.xyz();
+
+    // Freeze the per-context cache-free answers before activating the legacy
+    // XYZ-only cache. These are independent of its ambient guard state.
+    let expected_dim = forward_correlates_v1(xyz, &ViewingConditions::dim_surround());
+    let expected_dark = forward_correlates_v1(xyz, &ViewingConditions::dark_surround());
+
+    let dim_occurrence = LcsOccurrence::in_context(
+        sample,
+        context_with_surround(frame, 64.0, SurroundProfileId::DimV1),
+    )
+    .unwrap();
+    let dark_occurrence = LcsOccurrence::in_context(
+        sample,
+        context_with_surround(frame, 64.0, SurroundProfileId::DarkV1),
+    )
+    .unwrap();
+
+    let _guard = ForwardCacheGuard::activate();
+    let cached_average = forward(xyz, &ViewingConditions::srgb());
+    assert_ne!(cached_average.0.to_bits(), expected_dim.j.to_bits());
+    assert_ne!(cached_average.0.to_bits(), expected_dark.j.to_bits());
+
+    let (dim, dim_allocations) =
+        crate::test_support::measured_allocations(|| AppearanceState::derive_v1(dim_occurrence));
+    let (dark, dark_allocations) =
+        crate::test_support::measured_allocations(|| AppearanceState::derive_v1(dark_occurrence));
+    let dim = dim.unwrap().cam16();
+    let dark = dark.unwrap().cam16();
+
+    assert_eq!(dim_allocations, 0);
+    assert_eq!(dark_allocations, 0);
+    assert_eq!(
+        [dim.j(), dim.q(), dim.c(), dim.m(), dim.s()].map(f64::to_bits),
+        [
+            expected_dim.j,
+            expected_dim.q,
+            expected_dim.c,
+            expected_dim.m,
+            expected_dim.s,
+        ]
+        .map(f64::to_bits),
+    );
+    assert_eq!(
+        [dark.j(), dark.q(), dark.c(), dark.m(), dark.s()].map(f64::to_bits),
+        [
+            expected_dark.j,
+            expected_dark.q,
+            expected_dark.c,
+            expected_dark.m,
+            expected_dark.s,
+        ]
+        .map(f64::to_bits),
+    );
+
+    let HueState::Defined(dim_hue) = dim.hue() else {
+        panic!("chromatic dim fixture must have CAM16 hue");
+    };
+    let HueState::Defined(dark_hue) = dark.hue() else {
+        panic!("chromatic dark fixture must have CAM16 hue");
+    };
+    assert_eq!(dim_hue.degrees().to_bits(), expected_dim.h.to_bits());
+    assert_eq!(dark_hue.degrees().to_bits(), expected_dark.h.to_bits());
 }

@@ -1,15 +1,19 @@
 //! Type foundation for a context-bound Labpics Colors Space occurrence.
 //!
 //! Encoded output, a framed tristimulus, immutable appearance context and
-//! derived hue state are different values. The one executable transform here is
-//! a sealed, versioned lowering of one encoded sRGB8 point through the existing
-//! IEC transfer table and XYZ(D65) matrix. It is a deterministic
-//! model derivation, not evidence that a host rendered or a person observed the
+//! separately named derived views are different values. Executable transforms
+//! are sealed and versioned: encoded sRGB8 lowers through the existing IEC
+//! transfer table and XYZ(D65) matrix, then an occurrence can derive independent
+//! rectangular Oklab and contextual CAM16 views. These are deterministic model
+//! derivations, not evidence that a host rendered or a person observed the
 //! result. In particular, an occurrence has no inverse operation accepting an
 //! arbitrary second context.
 
 use crate::Srgb8;
+use crate::spaces::cam16::forward_correlates_v1;
+use crate::spaces::oklab::xyz_d65_to_oklab_v1;
 use crate::spaces::srgb::xyz_d65_from_srgb8_v1;
+use crate::spaces::vc::{Cam16SurroundV1, ViewingConditions};
 
 /// A registered encoded-output domain.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -568,4 +572,264 @@ impl LcsOccurrence {
     pub(crate) const fn context(self) -> AppearanceContextId {
         self.context
     }
+}
+
+/// Formula and operation-order release of the rectangular Oklab view.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum OklabViewReleaseId {
+    Ottosson20210125XyzD65V1,
+}
+
+/// Formula and operation-order release of the context-dependent CAM16 view.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Cam16ViewReleaseId {
+    LiEtAl2017Cie248ForwardV1,
+}
+
+/// Typed release discriminator used only to qualify derivation errors.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum AppearanceViewReleaseIdV1 {
+    Oklab(OklabViewReleaseId),
+    Cam16(Cam16ViewReleaseId),
+}
+
+pub(crate) const OKLAB_VIEW_RELEASE_V1: OklabViewReleaseId =
+    OklabViewReleaseId::Ottosson20210125XyzD65V1;
+pub(crate) const CAM16_VIEW_RELEASE_V1: Cam16ViewReleaseId =
+    Cam16ViewReleaseId::LiEtAl2017Cie248ForwardV1;
+
+/// Finite binary64 coordinate with canonical positive zero.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+struct FiniteCoordinate(u64);
+
+impl FiniteCoordinate {
+    fn new(value: f64) -> Result<Self, NumericDomainError> {
+        if !value.is_finite() {
+            return Err(NumericDomainError::NonFinite);
+        }
+        Ok(Self(if value == 0.0 {
+            0.0_f64.to_bits()
+        } else {
+            value.to_bits()
+        }))
+    }
+
+    fn get(self) -> f64 {
+        f64::from_bits(self.0)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum AppearanceViewFieldV1 {
+    OklabL,
+    OklabA,
+    OklabB,
+    Cam16J,
+    Cam16Q,
+    Cam16C,
+    Cam16M,
+    Cam16S,
+    Cam16Hue,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AppearanceStateDerivationErrorV1 {
+    UnsupportedFrame {
+        frame: ColorimetricFrameId,
+    },
+    NumericDomain {
+        release: AppearanceViewReleaseIdV1,
+        field: AppearanceViewFieldV1,
+        reason: NumericDomainError,
+    },
+}
+
+/// Rectangular Oklab geometry of one admitted XYZ(D65) stimulus.
+///
+/// It deliberately has no hue, context-dependent correlate, inverse or setter.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct OklabViewV1 {
+    release: OklabViewReleaseId,
+    l: FiniteCoordinate,
+    a: FiniteCoordinate,
+    b: FiniteCoordinate,
+}
+
+impl OklabViewV1 {
+    pub(crate) const fn release(self) -> OklabViewReleaseId {
+        self.release
+    }
+
+    pub(crate) fn l(self) -> f64 {
+        self.l.get()
+    }
+
+    pub(crate) fn a(self) -> f64 {
+        self.a.get()
+    }
+
+    pub(crate) fn b(self) -> f64 {
+        self.b.get()
+    }
+}
+
+/// CAM16 appearance correlates of one occurrence under its own context.
+///
+/// This view is not CAM16-UCS, a difference calibration or a rendering claim.
+/// Its hue is the CAM16 angular correlate only; no Oklab direction enters it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Cam16ViewV1 {
+    release: Cam16ViewReleaseId,
+    j: FiniteNonNegative,
+    q: FiniteNonNegative,
+    c: FiniteNonNegative,
+    m: FiniteNonNegative,
+    s: FiniteNonNegative,
+    hue: HueState,
+}
+
+impl Cam16ViewV1 {
+    pub(crate) const fn release(self) -> Cam16ViewReleaseId {
+        self.release
+    }
+
+    pub(crate) fn j(self) -> f64 {
+        self.j.get()
+    }
+
+    pub(crate) fn q(self) -> f64 {
+        self.q.get()
+    }
+
+    pub(crate) fn c(self) -> f64 {
+        self.c.get()
+    }
+
+    pub(crate) fn m(self) -> f64 {
+        self.m.get()
+    }
+
+    pub(crate) fn s(self) -> f64 {
+        self.s.get()
+    }
+
+    pub(crate) const fn hue(self) -> HueState {
+        self.hue
+    }
+}
+
+/// One-way, derived appearance snapshot of exactly one occurrence.
+///
+/// Canonical LCS identity remains [`LcsOccurrence`] (`sample × context`). This
+/// type is only a deterministic cache of separately named views and cannot be
+/// constructed from, edited through or inverted from view coordinates.
+#[derive(Debug, Clone, Copy)]
+pub struct AppearanceState {
+    occurrence: LcsOccurrence,
+    oklab: OklabViewV1,
+    cam16: Cam16ViewV1,
+}
+
+impl AppearanceState {
+    pub(crate) fn derive_v1(
+        occurrence: LcsOccurrence,
+    ) -> Result<Self, AppearanceStateDerivationErrorV1> {
+        if occurrence.sample().frame() != IEC_SRGB_D65_XYZ_FRAME_V1 {
+            return Err(AppearanceStateDerivationErrorV1::UnsupportedFrame {
+                frame: occurrence.sample().frame(),
+            });
+        }
+
+        let oklab = derive_oklab_view_v1(occurrence.sample().xyz())?;
+        let cam16 = derive_cam16_view_v1(occurrence)?;
+        Ok(Self {
+            occurrence,
+            oklab,
+            cam16,
+        })
+    }
+
+    pub(crate) const fn occurrence(self) -> LcsOccurrence {
+        self.occurrence
+    }
+
+    pub(crate) const fn oklab(self) -> OklabViewV1 {
+        self.oklab
+    }
+
+    pub(crate) const fn cam16(self) -> Cam16ViewV1 {
+        self.cam16
+    }
+}
+
+fn view_numeric_error(
+    release: AppearanceViewReleaseIdV1,
+    field: AppearanceViewFieldV1,
+    reason: NumericDomainError,
+) -> AppearanceStateDerivationErrorV1 {
+    AppearanceStateDerivationErrorV1::NumericDomain {
+        release,
+        field,
+        reason,
+    }
+}
+
+fn derive_oklab_view_v1(xyz: [f64; 3]) -> Result<OklabViewV1, AppearanceStateDerivationErrorV1> {
+    let [l, a, b] = xyz_d65_to_oklab_v1(xyz);
+    let release = AppearanceViewReleaseIdV1::Oklab(OKLAB_VIEW_RELEASE_V1);
+    Ok(OklabViewV1 {
+        release: OKLAB_VIEW_RELEASE_V1,
+        l: FiniteCoordinate::new(l)
+            .map_err(|reason| view_numeric_error(release, AppearanceViewFieldV1::OklabL, reason))?,
+        a: FiniteCoordinate::new(a)
+            .map_err(|reason| view_numeric_error(release, AppearanceViewFieldV1::OklabA, reason))?,
+        b: FiniteCoordinate::new(b)
+            .map_err(|reason| view_numeric_error(release, AppearanceViewFieldV1::OklabB, reason))?,
+    })
+}
+
+fn derive_cam16_view_v1(
+    occurrence: LcsOccurrence,
+) -> Result<Cam16ViewV1, AppearanceStateDerivationErrorV1> {
+    let context = occurrence.context();
+    let surround = match context.surround_profile() {
+        SurroundProfileId::AverageV1 => Cam16SurroundV1::Average,
+        SurroundProfileId::DimV1 => Cam16SurroundV1::Dim,
+        SurroundProfileId::DarkV1 => Cam16SurroundV1::Dark,
+    };
+    let vc = match context.schema_release() {
+        AppearanceContextSchemaReleaseId::Ciecam16ViewingInputsV1 => {
+            ViewingConditions::from_semantic_inputs_v1(
+                context.adapting_luminance_cd_m2(),
+                context.background_luminance_ratio(),
+                surround,
+            )
+        }
+    };
+    let coordinates = forward_correlates_v1(occurrence.sample().xyz(), &vc);
+    let release = AppearanceViewReleaseIdV1::Cam16(CAM16_VIEW_RELEASE_V1);
+    let admit = |value, field| {
+        FiniteNonNegative::new(value).map_err(|reason| view_numeric_error(release, field, reason))
+    };
+    let j = admit(coordinates.j, AppearanceViewFieldV1::Cam16J)?;
+    let q = admit(coordinates.q, AppearanceViewFieldV1::Cam16Q)?;
+    let c = admit(coordinates.c, AppearanceViewFieldV1::Cam16C)?;
+    let m = admit(coordinates.m, AppearanceViewFieldV1::Cam16M)?;
+    let s = admit(coordinates.s, AppearanceViewFieldV1::Cam16S)?;
+    let hue = if m.get() == 0.0 {
+        HueState::UndefinedExact
+    } else {
+        HueState::Defined(HueAngle::new(coordinates.h).map_err(|reason| {
+            view_numeric_error(release, AppearanceViewFieldV1::Cam16Hue, reason)
+        })?)
+    };
+    Ok(Cam16ViewV1 {
+        release: CAM16_VIEW_RELEASE_V1,
+        j,
+        q,
+        c,
+        m,
+        s,
+        hue,
+    })
 }

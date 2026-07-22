@@ -17,6 +17,17 @@ use std::sync::OnceLock;
 
 use super::{cam16::adapt, cat16::xyz_to_cone};
 
+/// Closed CIECAM16 surround tuple admitted by the F0 occurrence context.
+///
+/// Keeping the triplets behind variants prevents callers from independently
+/// combining `F`, `c` and `N_c` into a context the release never registered.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Cam16SurroundV1 {
+    Average,
+    Dim,
+    Dark,
+}
+
 /// Условия просмотра для модели цветового восприятия CIECAM16.
 ///
 /// Значения по умолчанию соответствуют sRGB: D65, серый фон 20 %, среднее
@@ -75,6 +86,31 @@ impl Default for ViewingConditions {
 }
 
 impl ViewingConditions {
+    /// Build CAM16 derived constants from immutable semantic context inputs.
+    ///
+    /// `background_luminance_ratio` is `Y_b / Y_w`, not a percentage. The
+    /// existing builder consumes percent, so the conversion remains here at
+    /// the legacy-kernel boundary rather than leaking into the occurrence
+    /// domain. Admission of the numeric inputs is owned by `AppearanceContext`.
+    pub(crate) fn from_semantic_inputs_v1(
+        adapting_luminance_cd_m2: f64,
+        background_luminance_ratio: f64,
+        surround: Cam16SurroundV1,
+    ) -> Self {
+        let (f, c, nc) = match surround {
+            Cam16SurroundV1::Average => (1.0, 0.69, 1.0),
+            Cam16SurroundV1::Dim => (0.9, 0.59, 0.9),
+            Cam16SurroundV1::Dark => (0.8, 0.525, 0.8),
+        };
+        Self::build(
+            adapting_luminance_cd_m2,
+            background_luminance_ratio * 100.0,
+            f,
+            c,
+            nc,
+        )
+    }
+
     /// Коэффициент фоновой яркости CAM16: `n = Y_b / Y_w`.
     pub fn n(&self) -> f64 {
         self.n
