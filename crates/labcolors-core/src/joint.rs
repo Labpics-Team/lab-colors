@@ -255,7 +255,10 @@ impl JointObservationV1 for RevisionBoundObservationV1 {
     }
 
     fn value_at_bound(&self, case_index: usize, bound_index: usize) -> Option<Srgb8> {
-        self.physical_values(case_index)?.get(bound_index).copied()
+        self.physical_values(case_index)?
+            .get(bound_index)
+            .copied()
+            .map(crate::lcs_occurrence::ColorSignal::srgb8)
     }
 
     fn provenance(&self, case_index: usize) -> Option<&[ScenarioId]> {

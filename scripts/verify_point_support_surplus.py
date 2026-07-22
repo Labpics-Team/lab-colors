@@ -23,6 +23,7 @@ if not __debug__:
 REPO_ROOT = Path(__file__).resolve().parents[1]
 POINT_SOURCE = REPO_ROOT / "crates/labcolors-core/src/point_support.rs"
 OBSERVATION_SOURCE = REPO_ROOT / "crates/labcolors-core/src/observation.rs"
+LCS_OCCURRENCE_SOURCE = REPO_ROOT / "crates/labcolors-core/src/lcs_occurrence.rs"
 NUMERICS_SOURCE = REPO_ROOT / "crates/labcolors-core/src/numerics.rs"
 SESSION_SOURCE = REPO_ROOT / "crates/labcolors-core/src/session.rs"
 COMPOSITION_SOURCE = REPO_ROOT / "crates/labcolors-core/src/composition.rs"
@@ -57,7 +58,7 @@ SITE_ID = "point-support-retained-reference-surplus-v1"
 SOURCE_BINDING_LAW = "point-support-rust-whole-file-semantic-cone-v2"
 SOURCE_BINDING_DOMAIN = b"labcolors.point-support.rust-whole-file-semantic-cone.v2"
 EXPECTED_SOURCE_CAPSULE_SHA256 = (
-    "2dba7f59bd0f8d665b79d3286527cc67a99d1dfe1f7604e6d19be3643e39ed5d"
+    "1845ff9cb4584f752d576e87a456c758f280b447410f5c0666e8c35d3f0f199b"
 )
 EXPECTED_Q55_PROOF_SHA256 = (
     "ac59cf89503170c789223b91d775213a19d4e571ef930f2ea609fcd51b14defd"
@@ -93,6 +94,7 @@ EXPECTED_WOLFRAM_RESULT_SHA256 = (
 SOURCE_CONE_PATHS = (
     POINT_SOURCE,
     OBSERVATION_SOURCE,
+    LCS_OCCURRENCE_SOURCE,
     SESSION_SOURCE,
     NUMERICS_SOURCE,
     COMPOSITION_SOURCE,
@@ -204,6 +206,7 @@ def verify_source_binding() -> tuple[str, int]:
         (OBSERVATION_SOURCE, b"Some(observation.revision)", b"None"),
         (OBSERVATION_SOURCE, b"(self.owner, self.observation)", b"unreachable!()"),
         (OBSERVATION_SOURCE, b"            && Rc::ptr_eq(&self.backing, &other.backing)\n", b"            && self.backing == other.backing\n"),
+        (LCS_OCCURRENCE_SOURCE, b"    pub(crate) const fn srgb8(self) -> Srgb8 {\n        self.srgb8\n    }", b"    pub(crate) const fn srgb8(self) -> Srgb8 {\n        Srgb8::new([0, 0, 0])\n    }"),
         (SESSION_SOURCE, b"            Self::Observed(observation) => ObservationHeadViewV1::Observed(observation),\n", b"            Self::Observed(_) => ObservationHeadViewV1::Empty,\n"),
         (SESSION_SOURCE, b"                let next_raw_head = SessionObservationHeadV1::Observed(observation.clone());\n", b"                let next_raw_head = SessionObservationHeadV1::Empty;\n"),
         (SESSION_SOURCE, b"                *raw_head = next_raw_head;\n", b"                *raw_head = SessionObservationHeadV1::Empty;\n"),
@@ -215,7 +218,7 @@ def verify_source_binding() -> tuple[str, int]:
         (NUMERICS_SOURCE, b"proof_ids: [NumericalProofIdV2::PointSupportReferenceSurplusIntegerV1],\n            bound_status: Available", b"proof_ids: [NumericalProofIdV2::PointSupportReferenceSurplusIntegerV1],\n            bound_status: Unavailable"),
         (COMPOSITION_SOURCE, b"f64::from(backdrop) + alpha * (f64::from(tint) - f64::from(backdrop))", b"f64::from(tint)"),
         (APPEARANCE_SOURCE, b"self.opacity\n", b"crate::composition::AdmittedOpacityV1::OPAQUE\n"),
-        (CONSTRAINTS_SOURCE, b"let classification = evaluator.classify(&invocation, &measurement);", b"let classification = unreachable!();"),
+        (CONSTRAINTS_SOURCE, b"let measurement = evaluator.evaluate(&target, &invocation)?;\n    let classification = evaluator.classify(&invocation, &measurement);\n    let identity = evaluator.identity();", b"let measurement = evaluator.evaluate(&target, &invocation)?;\n    let classification = unreachable!();\n    let identity = evaluator.identity();"),
         (EXACT_CONSTRAINT_SOURCE, b"if actual == *invocation", b"if actual != *invocation"),
         (WCAG22_CONSTRAINT_SOURCE, b"Wcag22ApplicableDecisionV1::Pass => HardDecision::Pass(Wcag22PassV1(()))", b"Wcag22ApplicableDecisionV1::Pass => HardDecision::Violation(Wcag22ViolationV1(()))"),
         (WCAG22_SOURCE, b"foreground_luminance: kernel::luminance_bounds(foreground),", b"foreground_luminance: kernel::luminance_bounds(background),"),

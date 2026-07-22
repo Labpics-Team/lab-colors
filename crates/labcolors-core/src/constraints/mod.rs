@@ -7,6 +7,7 @@
 
 use crate::Srgb8;
 use crate::appearance::{ModeledSrgb8PointOccurrence, ResolvedOccurrence, VisiblePointBindingV1};
+use crate::lcs_occurrence::ModeledLcsOccurrenceV1;
 
 mod exact;
 pub(crate) use exact::{
@@ -153,24 +154,181 @@ pub(crate) type PointViolation<Evaluation> = <Evaluation as HardClassifier<
     PointMeasurement<Evaluation>,
 >>::Violation;
 
-/// One statically dispatched point evaluator/classifier family.
-///
-/// The first executable Program slice is deliberately homogeneous: every
-/// compiled invocation has this evaluator's one typed invocation and result
-/// family. The trait remains sealed through both parent protocols; this slice
-/// contains no dynamic registry or open payload enum.
-pub(crate) trait PointEvaluatorV1:
+/// Program-only target: the exact encoded point used by physical evaluators
+/// and the context-bound LCS occurrence derived from that same visible signal.
+/// Neither half is optional, and construction remains inside the sole Program
+/// execution path.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct ProgramPointTargetV1 {
+    encoded: ModeledSrgb8PointOccurrence,
+    modeled_lcs: ModeledLcsOccurrenceV1,
+}
+
+impl ProgramPointTargetV1 {
+    pub(crate) const fn new(
+        encoded: ModeledSrgb8PointOccurrence,
+        modeled_lcs: ModeledLcsOccurrenceV1,
+    ) -> Self {
+        Self {
+            encoded,
+            modeled_lcs,
+        }
+    }
+
+    pub(crate) const fn encoded(self) -> ModeledSrgb8PointOccurrence {
+        self.encoded
+    }
+
+    pub(crate) const fn modeled_lcs(self) -> ModeledLcsOccurrenceV1 {
+        self.modeled_lcs
+    }
+}
+
+pub(crate) type ProgramPointInvocation<Evaluation> =
+    <Evaluation as Evaluator<ProgramPointTargetV1>>::Invocation;
+pub(crate) type ProgramPointMeasurement<Evaluation> =
+    <Evaluation as Evaluator<ProgramPointTargetV1>>::Measurement;
+pub(crate) type ProgramPointPass<Evaluation> = <Evaluation as HardClassifier<
+    ProgramPointInvocation<Evaluation>,
+    ProgramPointMeasurement<Evaluation>,
+>>::Pass;
+pub(crate) type ProgramPointViolation<Evaluation> = <Evaluation as HardClassifier<
+    ProgramPointInvocation<Evaluation>,
+    ProgramPointMeasurement<Evaluation>,
+>>::Violation;
+
+/// Sealed, statically dispatched evaluator family for context-bound Program
+/// occurrences. Fixed point-support intentionally keeps its narrower encoded
+/// target and therefore cannot silently satisfy an LCS-aware invocation.
+pub(crate) trait ProgramPointEvaluatorV1:
     Sized
-    + Evaluator<ModeledSrgb8PointOccurrence>
-    + HardClassifier<PointInvocation<Self>, PointMeasurement<Self>>
+    + Evaluator<ProgramPointTargetV1>
+    + HardClassifier<ProgramPointInvocation<Self>, ProgramPointMeasurement<Self>>
 {
 }
 
-impl<Evaluation> PointEvaluatorV1 for Evaluation where
+impl<Evaluation> ProgramPointEvaluatorV1 for Evaluation where
     Evaluation: Sized
-        + Evaluator<ModeledSrgb8PointOccurrence>
-        + HardClassifier<PointInvocation<Evaluation>, PointMeasurement<Evaluation>>
+        + Evaluator<ProgramPointTargetV1>
+        + HardClassifier<ProgramPointInvocation<Evaluation>, ProgramPointMeasurement<Evaluation>>
 {
+}
+
+/// Program evidence binds the physical source-over certificate and the exact
+/// modeled LCS provenance/context used by the evaluator in one non-forgeable
+/// value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ProgramVisiblePointBindingV1 {
+    physical: VisiblePointBindingV1,
+    modeled_lcs: ModeledLcsOccurrenceV1,
+}
+
+impl ProgramVisiblePointBindingV1 {
+    pub(crate) const fn physical(self) -> VisiblePointBindingV1 {
+        self.physical
+    }
+
+    pub(crate) const fn modeled_lcs(self) -> ModeledLcsOccurrenceV1 {
+        self.modeled_lcs
+    }
+}
+
+type BoundProgramPointMeasurement<Evaluation, Measurement> = BoundEvidence<
+    ProgramVisiblePointBindingV1,
+    <Evaluation as Evaluator<ProgramPointTargetV1>>::Identity,
+    <Evaluation as Evaluator<ProgramPointTargetV1>>::Release,
+    <Evaluation as Evaluator<ProgramPointTargetV1>>::Capability,
+    <Evaluation as Evaluator<ProgramPointTargetV1>>::Invocation,
+    Measurement,
+>;
+
+pub(crate) type ProgramVisiblePointPassEvidence<Evaluation> = BoundProgramPointMeasurement<
+    Evaluation,
+    ClassifiedMeasurement<ProgramPointMeasurement<Evaluation>, ProgramPointPass<Evaluation>>,
+>;
+pub(crate) type ProgramVisiblePointViolationEvidence<Evaluation> = BoundProgramPointMeasurement<
+    Evaluation,
+    ClassifiedMeasurement<ProgramPointMeasurement<Evaluation>, ProgramPointViolation<Evaluation>>,
+>;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ProgramPointBindingMismatchV1 {
+    physical: Srgb8,
+    modeled: Srgb8,
+}
+
+impl ProgramPointBindingMismatchV1 {
+    pub(crate) const fn physical(self) -> Srgb8 {
+        self.physical
+    }
+
+    pub(crate) const fn modeled(self) -> Srgb8 {
+        self.modeled
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ProgramPointAssessmentErrorV1<EvaluatorError> {
+    Binding(ProgramPointBindingMismatchV1),
+    Evaluator(EvaluatorError),
+}
+
+pub(crate) type ProgramPointAssessmentResultV1<Evaluation> = Result<
+    HardDecision<
+        ProgramVisiblePointPassEvidence<Evaluation>,
+        ProgramVisiblePointViolationEvidence<Evaluation>,
+    >,
+    ProgramPointAssessmentErrorV1<<Evaluation as Evaluator<ProgramPointTargetV1>>::Error>,
+>;
+
+pub(crate) fn assess_program_point_hard<Evaluation>(
+    source: &ResolvedOccurrence,
+    modeled_lcs: ModeledLcsOccurrenceV1,
+    evaluator: &Evaluation,
+    invocation: ProgramPointInvocation<Evaluation>,
+) -> ProgramPointAssessmentResultV1<Evaluation>
+where
+    Evaluation: Evaluator<ProgramPointTargetV1>
+        + HardClassifier<ProgramPointInvocation<Evaluation>, ProgramPointMeasurement<Evaluation>>,
+{
+    let physical = Srgb8::new(source.visible());
+    let modeled = modeled_lcs.signal().srgb8();
+    if physical != modeled {
+        return Err(ProgramPointAssessmentErrorV1::Binding(
+            ProgramPointBindingMismatchV1 { physical, modeled },
+        ));
+    }
+    let target = ProgramPointTargetV1::new(source.modeled_srgb8_point(), modeled_lcs);
+    let binding = ProgramVisiblePointBindingV1 {
+        physical: source.visible_point_binding(),
+        modeled_lcs: target.modeled_lcs(),
+    };
+    let measurement =
+        <Evaluation as Evaluator<ProgramPointTargetV1>>::evaluate(evaluator, &target, &invocation)
+            .map_err(ProgramPointAssessmentErrorV1::Evaluator)?;
+    let classification = evaluator.classify(&invocation, &measurement);
+    let identity = <Evaluation as Evaluator<ProgramPointTargetV1>>::identity(evaluator);
+    let release = <Evaluation as Evaluator<ProgramPointTargetV1>>::release(evaluator);
+    let capability = <Evaluation as Evaluator<ProgramPointTargetV1>>::capability(evaluator);
+
+    Ok(match classification {
+        HardDecision::Pass(payload) => HardDecision::Pass(BoundEvidence {
+            binding,
+            identity,
+            release,
+            capability,
+            invocation,
+            measurement: ClassifiedMeasurement::new(measurement, payload),
+        }),
+        HardDecision::Violation(payload) => HardDecision::Violation(BoundEvidence {
+            binding,
+            identity,
+            release,
+            capability,
+            invocation,
+            measurement: ClassifiedMeasurement::new(measurement, payload),
+        }),
+    })
 }
 
 type BoundVisiblePointMeasurement<Evaluation, Measurement> = BoundEvidence<

@@ -335,6 +335,15 @@ fn derive_sample_with_binding(
     TristimulusSample::try_from_registered_xyz(xyz, binding.result_frame())
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Per-thread count of modeled signal-to-tristimulus derivations. Program
+    /// regression tests use this deterministic metric to pin one derivation
+    /// per unique target occurrence and physical case without timing noise.
+    pub(crate) static MODELED_TRISTIMULUS_DERIVATION_CALLS: std::cell::Cell<u64> =
+        const { std::cell::Cell::new(0) };
+}
+
 /// Derive one modeled tristimulus from an encoded sRGB8 point.
 ///
 /// Composition provenance remains the responsibility of the upstream
@@ -343,6 +352,8 @@ fn derive_sample_with_binding(
 pub(crate) fn derive_modeled_tristimulus_v1(
     signal: ColorSignal,
 ) -> Result<ModeledTristimulusDerivationV1, TristimulusDomainErrorV1> {
+    #[cfg(test)]
+    MODELED_TRISTIMULUS_DERIVATION_CALLS.with(|calls| calls.set(calls.get() + 1));
     let binding = admitted_binding(signal.output_profile());
     let sample = derive_sample_with_binding(signal, binding)?;
     Ok(ModeledTristimulusDerivationV1 {
@@ -574,6 +585,111 @@ impl LcsOccurrence {
     }
 }
 
+/// Failure while binding replayable modeled provenance to one context-bound
+/// occurrence. Every mismatch is explicit; no convenient encoded signal may be
+/// attached to unrelated XYZ/context identity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ModeledLcsOccurrenceFormationErrorV1 {
+    Tristimulus(TristimulusDomainErrorV1),
+    Formation(OccurrenceFormationError),
+    ProvenanceReplayFailed(TristimulusDomainErrorV1),
+    RecordedSampleDoesNotReplay {
+        recorded: TristimulusSample,
+        replayed: TristimulusSample,
+    },
+    OccurrenceSampleMismatch {
+        occurrence: TristimulusSample,
+        modeled: TristimulusSample,
+    },
+}
+
+/// One replayable modeled signal derivation bound to exactly one immutable
+/// appearance context.
+///
+/// The provenance is retained beside the LCS identity: a bare XYZ triple or a
+/// derived appearance coordinate can never impersonate the encoded signal
+/// which produced this occurrence. This value is still a deterministic model,
+/// not evidence that a renderer or observer produced the stimulus.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ModeledLcsOccurrenceV1 {
+    derivation: ModeledTristimulusDerivationV1,
+    occurrence: LcsOccurrence,
+}
+
+impl ModeledLcsOccurrenceV1 {
+    pub(crate) fn from_signal_in_context(
+        signal: ColorSignal,
+        context: AppearanceContextId,
+    ) -> Result<Self, ModeledLcsOccurrenceFormationErrorV1> {
+        let derivation = derive_modeled_tristimulus_v1(signal)
+            .map_err(ModeledLcsOccurrenceFormationErrorV1::Tristimulus)?;
+        let occurrence = LcsOccurrence::in_context(derivation.sample(), context)
+            .map_err(ModeledLcsOccurrenceFormationErrorV1::Formation)?;
+        // Both values are formed in this function from the same admitted
+        // sample. Replaying the transform here would derive sRGB -> XYZ twice
+        // on the Program hot path; replay remains mandatory for `bind`, whose
+        // two pre-existing inputs may be unrelated.
+        Ok(Self {
+            derivation,
+            occurrence,
+        })
+    }
+
+    pub(crate) fn bind(
+        occurrence: LcsOccurrence,
+        derivation: ModeledTristimulusDerivationV1,
+    ) -> Result<Self, ModeledLcsOccurrenceFormationErrorV1> {
+        let modeled = Self {
+            derivation,
+            occurrence,
+        };
+        modeled.verify()?;
+        Ok(modeled)
+    }
+
+    pub(crate) fn verify(self) -> Result<(), ModeledLcsOccurrenceFormationErrorV1> {
+        let replayed = self
+            .derivation
+            .replay()
+            .map_err(ModeledLcsOccurrenceFormationErrorV1::ProvenanceReplayFailed)?;
+        let recorded = self.derivation.sample();
+        if replayed != recorded {
+            return Err(
+                ModeledLcsOccurrenceFormationErrorV1::RecordedSampleDoesNotReplay {
+                    recorded,
+                    replayed,
+                },
+            );
+        }
+        let occurrence = self.occurrence.sample();
+        if occurrence != recorded {
+            return Err(
+                ModeledLcsOccurrenceFormationErrorV1::OccurrenceSampleMismatch {
+                    occurrence,
+                    modeled: recorded,
+                },
+            );
+        }
+        Ok(())
+    }
+
+    pub(crate) const fn derivation(self) -> ModeledTristimulusDerivationV1 {
+        self.derivation
+    }
+
+    pub(crate) const fn occurrence(self) -> LcsOccurrence {
+        self.occurrence
+    }
+
+    pub(crate) const fn provenance(self) -> ModeledTristimulusProvenanceV1 {
+        self.derivation.provenance()
+    }
+
+    pub(crate) const fn signal(self) -> ColorSignal {
+        self.provenance().source_signal()
+    }
+}
+
 /// Formula and operation-order release of the rectangular Oklab view.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum OklabViewReleaseId {
@@ -774,7 +890,9 @@ fn view_numeric_error(
     }
 }
 
-fn derive_oklab_view_v1(xyz: [f64; 3]) -> Result<OklabViewV1, AppearanceStateDerivationErrorV1> {
+pub(crate) fn derive_oklab_view_v1(
+    xyz: [f64; 3],
+) -> Result<OklabViewV1, AppearanceStateDerivationErrorV1> {
     let [l, a, b] = xyz_d65_to_oklab_v1(xyz);
     let release = AppearanceViewReleaseIdV1::Oklab(OKLAB_VIEW_RELEASE_V1);
     Ok(OklabViewV1 {

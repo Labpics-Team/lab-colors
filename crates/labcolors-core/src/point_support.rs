@@ -836,7 +836,7 @@ fn evaluate_bound_point_support(
             let physical = PointOpacityOverSurfaceV1::evaluate_admitted(
                 requirement.paint.source().bytes(),
                 requirement.paint.opacity(),
-                backdrop.bytes(),
+                backdrop.srgb8().bytes(),
             );
 
             let exact = match requirement.exact_invocation {

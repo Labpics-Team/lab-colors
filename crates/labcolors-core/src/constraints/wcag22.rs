@@ -1,5 +1,5 @@
 use crate::appearance::ModeledSrgb8PointOccurrence;
-use crate::constraints::{Evaluator, HardClassifier, HardDecision, private};
+use crate::constraints::{Evaluator, HardClassifier, HardDecision, ProgramPointTargetV1, private};
 use crate::numerics::NumericalDecisionEvidenceV1;
 use crate::wcag22::{
     Wcag22ApplicableDecisionV1, Wcag22AssessmentV1, Wcag22ClientDeclaredNotApplicableV1,
@@ -139,6 +139,39 @@ impl Evaluator<ModeledSrgb8PointOccurrence> for Wcag22Srgb8V1 {
         let assessment = evaluate_wcag22_srgb8(target.visible(), target.backdrop(), *invocation)
             .map_err(ApplicableWcag22EvaluationErrorV1::Kernel)?;
         refine_applicable_measurement(*invocation, assessment)
+    }
+}
+
+impl Evaluator<ProgramPointTargetV1> for Wcag22Srgb8V1 {
+    type Invocation = Wcag22CriterionV1;
+    type Identity = Wcag22Srgb8EvaluatorIdentityV1;
+    type Release = Wcag22ProfileIdV1;
+    type Capability = Wcag22Srgb8CapabilityV1;
+    type Measurement = ApplicableWcag22MeasurementV1;
+    type Error = ApplicableWcag22EvaluationErrorV1;
+
+    fn identity(&self) -> Self::Identity {
+        Wcag22Srgb8EvaluatorIdentityV1
+    }
+
+    fn release(&self) -> Self::Release {
+        wcag22_profile_v1().profile_id
+    }
+
+    fn capability(&self) -> Self::Capability {
+        Wcag22Srgb8CapabilityV1
+    }
+
+    fn evaluate(
+        &self,
+        target: &ProgramPointTargetV1,
+        invocation: &Self::Invocation,
+    ) -> Result<Self::Measurement, Self::Error> {
+        <Self as Evaluator<ModeledSrgb8PointOccurrence>>::evaluate(
+            self,
+            &target.encoded(),
+            invocation,
+        )
     }
 }
 

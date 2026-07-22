@@ -4,15 +4,14 @@ use crate::Srgb8;
 use crate::lcs_occurrence::{
     AdaptingLuminanceCdM2, AppearanceContextId, AppearanceContextSchemaReleaseId,
     BackgroundLuminanceRatio, ColorSignal, IEC_SRGB_D65_XYZ_FRAME_V1, LcsOccurrence,
-    ModeledTristimulusDerivationV1, OKLAB_VIEW_RELEASE_V1, SurroundProfileId,
-    derive_modeled_tristimulus_v1,
+    ModeledLcsOccurrenceFormationErrorV1, ModeledLcsOccurrenceV1, ModeledTristimulusDerivationV1,
+    OKLAB_VIEW_RELEASE_V1, SurroundProfileId, derive_modeled_tristimulus_v1,
 };
 use crate::output_projection::{
     CSS_COLOR_4_OKLCH_D65_FROM_MODELED_SRGB8_SOLID_V1, CssOklchHueSerializationReleaseIdV1,
     CssOklchNumberEncodingReleaseIdV1, DifferenceCalibrationReleaseIdV1, OKLCH_VIEW_RELEASE_V1,
     OutputGamutTreatmentV1, OutputProjectionErrorV1, OutputProjectionReleaseIdV1,
-    OutputProjectionRequestV1, OutputProjectionV1, ProjectionSourceFormationErrorV1,
-    ProjectionSourceV1, project_output_v1,
+    OutputProjectionRequestV1, OutputProjectionV1, project_output_v1,
 };
 use crate::spaces::oklab::oklab_to_srgb_linear;
 use crate::spaces::srgb::srgb8_from_linear;
@@ -31,11 +30,11 @@ fn modeled(bytes: [u8; 3]) -> ModeledTristimulusDerivationV1 {
     derive_modeled_tristimulus_v1(ColorSignal::from_srgb8(Srgb8::new(bytes))).unwrap()
 }
 
-fn source(bytes: [u8; 3], adapting_luminance_cd_m2: f64) -> ProjectionSourceV1 {
+fn source(bytes: [u8; 3], adapting_luminance_cd_m2: f64) -> ModeledLcsOccurrenceV1 {
     let modeled = modeled(bytes);
     let occurrence =
         LcsOccurrence::in_context(modeled.sample(), context(adapting_luminance_cd_m2)).unwrap();
-    ProjectionSourceV1::bind(occurrence, modeled).unwrap()
+    ModeledLcsOccurrenceV1::bind(occurrence, modeled).unwrap()
 }
 
 fn project(bytes: [u8; 3], adapting_luminance_cd_m2: f64) -> OutputProjectionV1 {
@@ -84,11 +83,13 @@ fn source_binding_rejects_bytes_from_an_unrelated_modeled_derivation() {
     let occurrence = LcsOccurrence::in_context(occurrence_model.sample(), context(64.0)).unwrap();
 
     assert_eq!(
-        ProjectionSourceV1::bind(occurrence, unrelated_model),
-        Err(ProjectionSourceFormationErrorV1::OccurrenceSampleMismatch {
-            occurrence: occurrence_model.sample(),
-            modeled: unrelated_model.sample(),
-        }),
+        ModeledLcsOccurrenceV1::bind(occurrence, unrelated_model),
+        Err(
+            ModeledLcsOccurrenceFormationErrorV1::OccurrenceSampleMismatch {
+                occurrence: occurrence_model.sample(),
+                modeled: unrelated_model.sample(),
+            }
+        ),
     );
 }
 
@@ -126,7 +127,7 @@ fn certificate_replays_source_view_formula_and_exact_css_bytes() {
     );
     assert_eq!(
         certificate.source_provenance(),
-        certificate.source().modeled().provenance(),
+        certificate.source().derivation().provenance(),
     );
 }
 

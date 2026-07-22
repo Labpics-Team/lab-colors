@@ -2,7 +2,11 @@ use crate::Srgb8;
 use crate::appearance::{
     ColorInputId, OccurrenceId, OpacityInputId, PaintId, SurfaceId, SurfaceInputPortId,
 };
-use crate::constraints::{ExactSrgb8IdentityV1, PointEvaluatorV1, PointInvocation};
+use crate::constraints::{ExactSrgb8IdentityV1, ProgramPointEvaluatorV1, ProgramPointInvocation};
+use crate::lcs_occurrence::{
+    AdaptingLuminanceCdM2, AppearanceContextId, AppearanceContextSchemaReleaseId,
+    BackgroundLuminanceRatio, ColorSignal, IEC_SRGB_D65_XYZ_FRAME_V1, SurroundProfileId,
+};
 use crate::observation::{
     ObservationGroupId, ObservationHeadViewV1, ObservationPayloadInput, ObservationStreamId,
     ObservationUpdateInput, ObservedScenarioSetInput, Revision, ScenarioId, ScenarioInput,
@@ -30,6 +34,16 @@ const GROUP: ObservationGroupId = ObservationGroupId::new(60);
 const STREAM_A: ObservationStreamId = ObservationStreamId::new(70);
 const STREAM_B: ObservationStreamId = ObservationStreamId::new(71);
 
+fn appearance_context() -> AppearanceContextId {
+    AppearanceContextId::from_inputs(
+        AppearanceContextSchemaReleaseId::Ciecam16ViewingInputsV1,
+        IEC_SRGB_D65_XYZ_FRAME_V1,
+        AdaptingLuminanceCdM2::try_new(64.0).unwrap(),
+        BackgroundLuminanceRatio::try_new(0.2).unwrap(),
+        SurroundProfileId::AverageV1,
+    )
+}
+
 fn observation_group(surface_input_ports: Vec<SurfaceInputPortId>) -> ObservationGroup {
     ObservationGroup::new(GROUP, surface_input_ports)
 }
@@ -37,13 +51,13 @@ fn observation_group(surface_input_ports: Vec<SurfaceInputPortId>) -> Observatio
 fn base_program<Evaluation>(
     opacity: f64,
     against: SurfaceId,
-    constraints: ConstraintSet<PointInvocation<Evaluation>>,
+    constraints: ConstraintSet<ProgramPointInvocation<Evaluation>>,
     outputs: Vec<OutputBinding>,
     evaluator: Evaluation,
 ) -> Program<Evaluation>
 where
-    Evaluation: PointEvaluatorV1,
-    PointInvocation<Evaluation>: Copy,
+    Evaluation: ProgramPointEvaluatorV1,
+    ProgramPointInvocation<Evaluation>: Copy,
 {
     base_program_in_group(GROUP, opacity, against, constraints, outputs, evaluator)
 }
@@ -52,16 +66,19 @@ fn base_program_in_group<Evaluation>(
     group: ObservationGroupId,
     opacity: f64,
     against: SurfaceId,
-    constraints: ConstraintSet<PointInvocation<Evaluation>>,
+    constraints: ConstraintSet<ProgramPointInvocation<Evaluation>>,
     outputs: Vec<OutputBinding>,
     evaluator: Evaluation,
 ) -> Program<Evaluation>
 where
-    Evaluation: PointEvaluatorV1,
-    PointInvocation<Evaluation>: Copy,
+    Evaluation: ProgramPointEvaluatorV1,
+    ProgramPointInvocation<Evaluation>: Copy,
 {
     Program::new(
-        vec![ColorInput::new(COLOR, Srgb8::new([0; 3]))],
+        vec![ColorInput::new(
+            COLOR,
+            ColorSignal::from_srgb8(Srgb8::new([0; 3])),
+        )],
         ObservationGroup::new(group, vec![SURFACE_PORT]),
         vec![OpacityInput::new(OPACITY, opacity)],
         vec![
@@ -90,6 +107,7 @@ where
             TRANSLUCENT,
             against,
             CompositionProfile::EncodedSrgb8SourceOverV1,
+            appearance_context(),
         )],
         constraints,
         outputs,
@@ -99,8 +117,8 @@ where
 
 fn compile_error<Evaluation>(program: Program<Evaluation>) -> ProgramCompileError
 where
-    Evaluation: PointEvaluatorV1,
-    PointInvocation<Evaluation>: Copy,
+    Evaluation: ProgramPointEvaluatorV1,
+    ProgramPointInvocation<Evaluation>: Copy,
 {
     match program.compile() {
         Ok(_) => panic!("invalid declaration compiled"),
@@ -123,7 +141,7 @@ fn observed_update(
                     id: ScenarioId::new(*scenario),
                     bindings: vec![SurfaceInputBinding::new(
                         SURFACE_PORT,
-                        Srgb8::new(*backdrop),
+                        ColorSignal::from_srgb8(Srgb8::new(*backdrop)),
                     )],
                 })
                 .collect(),
@@ -162,9 +180,12 @@ fn authored_modes_are_marker_typed_and_values_preserve_exact_ids() {
     assert_eq!(ConstraintId::new(7).value(), 7);
     assert_eq!(OutputSlotId::new(8).value(), 8);
 
-    let color = ColorInput::new(COLOR, Srgb8::new([1, 2, 3]));
+    let color = ColorInput::new(COLOR, ColorSignal::from_srgb8(Srgb8::new([1, 2, 3])));
     assert_eq!(color.id(), COLOR);
-    assert_eq!(color.value(), Srgb8::new([1, 2, 3]));
+    assert_eq!(
+        color.value(),
+        ColorSignal::from_srgb8(Srgb8::new([1, 2, 3]))
+    );
     let opacity = OpacityInput::new(OPACITY, 0.375);
     assert_eq!(opacity.id(), OPACITY);
     assert_eq!(opacity.value(), 0.375);
@@ -174,6 +195,7 @@ fn authored_modes_are_marker_typed_and_values_preserve_exact_ids() {
         TRANSLUCENT,
         BACKDROP,
         CompositionProfile::EncodedSrgb8SourceOverV1,
+        appearance_context(),
     );
     assert_eq!(occurrence.id(), OCCURRENCE);
     assert_eq!(occurrence.subject(), TRANSLUCENT);
@@ -191,7 +213,10 @@ fn authored_modes_are_marker_typed_and_values_preserve_exact_ids() {
 #[test]
 fn empty_domains_have_stable_precedence() {
     let empty_surface = Program::new(
-        vec![ColorInput::new(COLOR, Srgb8::new([0; 3]))],
+        vec![ColorInput::new(
+            COLOR,
+            ColorSignal::from_srgb8(Srgb8::new([0; 3])),
+        )],
         observation_group(vec![]),
         vec![],
         vec![Paint::Solid {
@@ -207,6 +232,7 @@ fn empty_domains_have_stable_precedence() {
             SOLID,
             BACKDROP,
             CompositionProfile::EncodedSrgb8SourceOverV1,
+            appearance_context(),
         )],
         ConstraintSet::new(
             vec![ConstraintInvocation::hard(
@@ -225,7 +251,10 @@ fn empty_domains_have_stable_precedence() {
     );
 
     let empty_occurrence = Program::new(
-        vec![ColorInput::new(COLOR, Srgb8::new([0; 3]))],
+        vec![ColorInput::new(
+            COLOR,
+            ColorSignal::from_srgb8(Srgb8::new([0; 3])),
+        )],
         observation_group(vec![SURFACE_PORT]),
         vec![],
         vec![Paint::Solid {
@@ -677,8 +706,8 @@ fn nested_surface_uses_the_lower_occurrence_before_assessing_the_upper() {
 
     let program = Program::new(
         vec![
-            ColorInput::new(LOWER_COLOR, Srgb8::new([0x80; 3])),
-            ColorInput::new(UPPER_COLOR, Srgb8::new([0xFF; 3])),
+            ColorInput::new(LOWER_COLOR, ColorSignal::from_srgb8(Srgb8::new([0x80; 3]))),
+            ColorInput::new(UPPER_COLOR, ColorSignal::from_srgb8(Srgb8::new([0xFF; 3]))),
         ],
         observation_group(vec![SURFACE_PORT]),
         vec![OpacityInput::new(HALF, 0.5)],
@@ -713,12 +742,14 @@ fn nested_surface_uses_the_lower_occurrence_before_assessing_the_upper() {
                 LOWER_PAINT,
                 ROOT,
                 CompositionProfile::EncodedSrgb8SourceOverV1,
+                appearance_context(),
             ),
             Occurrence::new(
                 UPPER,
                 UPPER_PAINT,
                 DERIVED,
                 CompositionProfile::EncodedSrgb8SourceOverV1,
+                appearance_context(),
             ),
         ],
         ConstraintSet::new(

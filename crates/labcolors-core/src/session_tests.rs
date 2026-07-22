@@ -3,6 +3,7 @@ use std::rc::Rc;
 
 use crate::Srgb8;
 use crate::appearance::SurfaceInputPortId;
+use crate::lcs_occurrence::ColorSignal;
 use crate::observation::{
     CanonicalObservationSchemaV1, ObservationError, ObservationHeadViewV1, ObservationPayloadInput,
     ObservationStreamId, ObservationUpdateInput, ObservedScenarioSetInput, Revision,
@@ -107,6 +108,7 @@ impl SessionPlanV1 for SentinelPlan {
             .physical_values(0)
             .and_then(|values| values.first())
             .copied()
+            .map(ColorSignal::srgb8)
             .ok_or(SentinelError::EmptyObservation)?;
         let observation = self
             .control
@@ -156,7 +158,10 @@ fn observed_update(revision: u64, value: [u8; 3]) -> ObservationUpdateInput {
         payload: ObservationPayloadInput::Scenarios(ObservedScenarioSetInput {
             scenarios: vec![ScenarioInput {
                 id: ScenarioId::new(1),
-                bindings: vec![SurfaceInputBinding::new(SURFACE, Srgb8::new(value))],
+                bindings: vec![SurfaceInputBinding::new(
+                    SURFACE,
+                    ColorSignal::from_srgb8(Srgb8::new(value)),
+                )],
             }],
         }),
     }

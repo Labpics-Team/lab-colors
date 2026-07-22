@@ -1,7 +1,7 @@
 use crate::Srgb8;
 use crate::appearance::ModeledSrgb8PointOccurrence;
 use crate::constraints::{
-    Evaluator, HardClassifier, HardDecision, VisiblePointPassEvidence,
+    Evaluator, HardClassifier, HardDecision, ProgramPointTargetV1, VisiblePointPassEvidence,
     VisiblePointViolationEvidence, private,
 };
 use core::convert::Infallible;
@@ -75,6 +75,39 @@ impl Evaluator<ModeledSrgb8PointOccurrence> for ExactSrgb8IdentityV1 {
         _invocation: &Self::Invocation,
     ) -> Result<Self::Measurement, Self::Error> {
         Ok(Srgb8::new(occurrence.visible()))
+    }
+}
+
+impl Evaluator<ProgramPointTargetV1> for ExactSrgb8IdentityV1 {
+    type Invocation = Srgb8;
+    type Identity = ExactConstraintIdentityV1;
+    type Release = ExactIdentityReleaseV1;
+    type Capability = ExactIdentityCapabilityV1;
+    type Measurement = Srgb8;
+    type Error = Infallible;
+
+    fn identity(&self) -> Self::Identity {
+        Self::IDENTITY
+    }
+
+    fn release(&self) -> Self::Release {
+        ExactIdentityReleaseV1::V1
+    }
+
+    fn capability(&self) -> Self::Capability {
+        ExactIdentityCapabilityV1::FinalOccurrenceSrgb8IdentityV1
+    }
+
+    fn evaluate(
+        &self,
+        occurrence: &ProgramPointTargetV1,
+        invocation: &Self::Invocation,
+    ) -> Result<Self::Measurement, Self::Error> {
+        <Self as Evaluator<ModeledSrgb8PointOccurrence>>::evaluate(
+            self,
+            &occurrence.encoded(),
+            invocation,
+        )
     }
 }
 

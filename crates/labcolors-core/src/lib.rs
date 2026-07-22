@@ -93,6 +93,9 @@ mod output_projection_tests;
 mod program_session_tests;
 
 #[cfg(test)]
+mod program_lcs_integration_tests;
+
+#[cfg(test)]
 mod release_registry_tests;
 
 #[cfg(test)]

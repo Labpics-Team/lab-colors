@@ -16,11 +16,10 @@
 //! slice.
 
 use crate::lcs_occurrence::{
-    ColorSignal, HueAngle, HueState, LcsOccurrence, ModeledTristimulusDerivationV1,
-    ModeledTristimulusProvenanceV1, NumericDomainError, OKLAB_VIEW_RELEASE_V1, OklabViewReleaseId,
-    TristimulusDomainErrorV1, TristimulusSample,
+    AppearanceStateDerivationErrorV1, ColorSignal, HueAngle, HueState, LcsOccurrence,
+    ModeledLcsOccurrenceFormationErrorV1, ModeledLcsOccurrenceV1, ModeledTristimulusProvenanceV1,
+    NumericDomainError, OKLAB_VIEW_RELEASE_V1, OklabViewReleaseId, derive_oklab_view_v1,
 };
-use crate::spaces::oklab::xyz_d65_to_oklab_v1;
 
 /// Formula, policy and operation-order identity of an output projection.
 ///
@@ -233,101 +232,22 @@ pub(crate) enum OutputGamutTreatmentV1 {
     NoExplicitProjectionGamutMapV1,
 }
 
-/// A modeled derivation and the occurrence which claims that exact sample.
-///
-/// Construction is sealed so a caller cannot attach convenient source bytes to
-/// an unrelated XYZ occurrence.  Context is retained inside the occurrence and
-/// therefore remains part of certificate identity even though this output edge
-/// uses only the occurrence's stimulus coordinates.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct ProjectionSourceV1 {
-    occurrence: LcsOccurrence,
-    modeled: ModeledTristimulusDerivationV1,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ProjectionSourceFormationErrorV1 {
-    ProvenanceReplayFailed(TristimulusDomainErrorV1),
-    RecordedSampleDoesNotReplay {
-        recorded: TristimulusSample,
-        replayed: TristimulusSample,
-    },
-    OccurrenceSampleMismatch {
-        occurrence: TristimulusSample,
-        modeled: TristimulusSample,
-    },
-}
-
-impl ProjectionSourceV1 {
-    pub(crate) fn bind(
-        occurrence: LcsOccurrence,
-        modeled: ModeledTristimulusDerivationV1,
-    ) -> Result<Self, ProjectionSourceFormationErrorV1> {
-        let source = Self {
-            occurrence,
-            modeled,
-        };
-        source.verify()?;
-        Ok(source)
-    }
-
-    fn verify(self) -> Result<(), ProjectionSourceFormationErrorV1> {
-        let replayed = self
-            .modeled
-            .replay()
-            .map_err(ProjectionSourceFormationErrorV1::ProvenanceReplayFailed)?;
-        let recorded = self.modeled.sample();
-        if replayed != recorded {
-            return Err(
-                ProjectionSourceFormationErrorV1::RecordedSampleDoesNotReplay {
-                    recorded,
-                    replayed,
-                },
-            );
-        }
-        let occurrence = self.occurrence.sample();
-        if occurrence != recorded {
-            return Err(ProjectionSourceFormationErrorV1::OccurrenceSampleMismatch {
-                occurrence,
-                modeled: recorded,
-            });
-        }
-        Ok(())
-    }
-
-    pub(crate) const fn occurrence(self) -> LcsOccurrence {
-        self.occurrence
-    }
-
-    pub(crate) const fn modeled(self) -> ModeledTristimulusDerivationV1 {
-        self.modeled
-    }
-
-    pub(crate) const fn provenance(self) -> ModeledTristimulusProvenanceV1 {
-        self.modeled.provenance()
-    }
-
-    pub(crate) const fn signal(self) -> ColorSignal {
-        self.provenance().source_signal()
-    }
-}
-
 /// The release choice is made before any coordinates or output bytes exist.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct OutputProjectionRequestV1 {
-    source: ProjectionSourceV1,
+    source: ModeledLcsOccurrenceV1,
     release: OutputProjectionReleaseIdV1,
 }
 
 impl OutputProjectionRequestV1 {
     pub(crate) const fn new(
-        source: ProjectionSourceV1,
+        source: ModeledLcsOccurrenceV1,
         release: OutputProjectionReleaseIdV1,
     ) -> Self {
         Self { source, release }
     }
 
-    pub(crate) const fn source(self) -> ProjectionSourceV1 {
+    pub(crate) const fn source(self) -> ModeledLcsOccurrenceV1 {
         self.source
     }
 
@@ -360,7 +280,8 @@ pub(crate) enum OutputProjectionNumericErrorV1 {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum OutputProjectionErrorV1 {
-    Source(ProjectionSourceFormationErrorV1),
+    Source(ModeledLcsOccurrenceFormationErrorV1),
+    OklabView(AppearanceStateDerivationErrorV1),
     OklchView(OklchViewDerivationErrorV1),
     Numeric {
         release: OutputProjectionReleaseIdV1,
@@ -377,7 +298,7 @@ pub(crate) enum OutputProjectionErrorV1 {
 /// All inputs and versioned policies needed to replay one projection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct OutputProjectionCertificateV1 {
-    source: ProjectionSourceV1,
+    source: ModeledLcsOccurrenceV1,
     release: OutputProjectionReleaseIdV1,
     oklab_release: OklabViewReleaseId,
     oklch_release: OklchViewReleaseId,
@@ -387,7 +308,7 @@ pub(crate) struct OutputProjectionCertificateV1 {
 }
 
 impl OutputProjectionCertificateV1 {
-    pub(crate) const fn source(self) -> ProjectionSourceV1 {
+    pub(crate) const fn source(self) -> ModeledLcsOccurrenceV1 {
         self.source
     }
 
@@ -468,7 +389,7 @@ fn numeric_error(
 }
 
 fn project_css_color4_oklch_d65_from_modeled_srgb8_solid_v1(
-    source: ProjectionSourceV1,
+    source: ModeledLcsOccurrenceV1,
     release: OutputProjectionReleaseIdV1,
 ) -> Result<OutputProjectionV1, OutputProjectionErrorV1> {
     source.verify().map_err(OutputProjectionErrorV1::Source)?;
@@ -476,9 +397,11 @@ fn project_css_color4_oklch_d65_from_modeled_srgb8_solid_v1(
     // The occurrence sample, not the encoded source channels, owns appearance
     // geometry.  Provenance is used only to prove that this narrow output
     // release may serialize the occurrence under its registered policies.
-    let oklab = xyz_d65_to_oklab_v1(source.occurrence().sample().xyz());
+    let oklab = derive_oklab_view_v1(source.occurrence().sample().xyz())
+        .map_err(OutputProjectionErrorV1::OklabView)?;
     let source_srgb8 = source.signal().srgb8();
-    let oklch_view = derive_oklch_view_v1(oklab).map_err(OutputProjectionErrorV1::OklchView)?;
+    let oklch_view = derive_oklch_view_v1([oklab.l(), oklab.a(), oklab.b()])
+        .map_err(OutputProjectionErrorV1::OklchView)?;
     let l = oklch_view.l();
     if !(0.0..=1.0).contains(&l) {
         return Err(numeric_error(

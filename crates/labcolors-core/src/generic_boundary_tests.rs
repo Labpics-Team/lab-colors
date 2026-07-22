@@ -1,9 +1,15 @@
 const APPEARANCE_SOURCE: &str = include_str!("appearance.rs");
+const CONSTRAINTS_SOURCE: &str = include_str!("constraints/mod.rs");
+const EXACT_CONSTRAINT_SOURCE: &str = include_str!("constraints/exact.rs");
+const JOINT_SOURCE: &str = include_str!("joint.rs");
+const LIB_SOURCE: &str = include_str!("lib.rs");
 const LCS_OCCURRENCE_SOURCE: &str = include_str!("lcs_occurrence.rs");
 const OBSERVATION_SOURCE: &str = include_str!("observation.rs");
+const OUTPUT_PROJECTION_SOURCE: &str = include_str!("output_projection.rs");
 const POINT_SUPPORT_SOURCE: &str = include_str!("point_support.rs");
 const PROGRAM_SESSION_SOURCE: &str = include_str!("program_session.rs");
 const SESSION_SOURCE: &str = include_str!("session.rs");
+const WCAG22_CONSTRAINT_SOURCE: &str = include_str!("constraints/wcag22.rs");
 
 const GENERIC_SOURCES: [(&str, &str); 3] = [
     ("appearance.rs", APPEARANCE_SOURCE),
@@ -47,6 +53,18 @@ fn normalized_source_scope(source: &str, start: &str, end: &str) -> String {
         .join(" ")
 }
 
+fn contains_rust_identifier(source: &str, identifier: &str) -> bool {
+    fn is_continue(character: char) -> bool {
+        character == '_' || character.is_ascii_alphanumeric()
+    }
+
+    source.match_indices(identifier).any(|(start, _)| {
+        let before = source[..start].chars().next_back();
+        let after = source[start + identifier.len()..].chars().next();
+        !before.is_some_and(is_continue) && !after.is_some_and(is_continue)
+    })
+}
+
 #[test]
 fn generic_physical_and_transport_modules_contain_no_client_or_legacy_vocabulary() {
     for (path, source) in GENERIC_SOURCES {
@@ -70,7 +88,7 @@ fn shared_observation_ssot_has_one_backing_without_lifecycle_or_adapter_facades(
         concat!(
             "struct ObservedScenarioSet { ",
             "cases: Box<[PhysicalScenario]>, ",
-            "values: Box<[Srgb8]>, ",
+            "values: Box<[ColorSignal]>, ",
             "provenance: Box<[ScenarioId]>, ",
             "}",
         ),
@@ -339,28 +357,279 @@ fn shared_observation_ssot_has_one_backing_without_lifecycle_or_adapter_facades(
 }
 
 #[test]
-fn encoded_point_transport_does_not_claim_lcs_observation_types() {
-    for forbidden in ["TristimulusSample", "LcsOccurrence", "AppearanceState"] {
+fn program_session_owns_context_bound_lcs_evidence_and_one_session_scratch_cache() {
+    for required in [
+        "ProgramPointTargetV1",
+        "ModeledLcsOccurrenceV1",
+        "AppearanceContextId",
+        "ProgramVisiblePointPassEvidence",
+        "ProgramVisiblePointViolationEvidence",
+        "ModeledLcsOccurrenceV1::from_signal_in_context(",
+        "source.visible() != source.certificate().output_rgb()",
+        "binding.context,",
+        "assess_program_point_hard(",
+    ] {
         assert!(
-            !PROGRAM_SESSION_SOURCE.contains(forbidden),
-            "program_session.rs is encoded point transport, not `{forbidden}` evidence"
+            PROGRAM_SESSION_SOURCE.contains(required),
+            "Program must retain physical-source and context-bound LCS evidence; missing `{required}`",
+        );
+    }
+
+    let program_evidence_binding = normalized_source_scope(
+        CONSTRAINTS_SOURCE,
+        "pub(crate) struct ProgramVisiblePointBindingV1 {",
+        "impl ProgramVisiblePointBindingV1",
+    );
+    for required in [
+        "physical: VisiblePointBindingV1,",
+        "modeled_lcs: ModeledLcsOccurrenceV1,",
+    ] {
+        assert!(
+            program_evidence_binding.contains(required),
+            "Program evidence must bind source-over and LCS context in one value; missing `{required}`",
+        );
+    }
+
+    let result = source_scope(
+        PROGRAM_SESSION_SOURCE,
+        "impl<Evaluation> ProgramConstraintResultV1<Evaluation>",
+        "/// One canonical `physical case × constraint` report cell.",
+    );
+    for required in [
+        "fn binding(&self) -> ProgramVisiblePointBindingV1",
+        "fn modeled_lcs_occurrence(&self) -> ModeledLcsOccurrenceV1",
+        "self.binding().modeled_lcs()",
+    ] {
+        assert!(
+            result.contains(required),
+            "Program result must project modeled LCS from its evidence SSOT; missing `{required}`",
+        );
+    }
+    let cell = source_scope(
+        PROGRAM_SESSION_SOURCE,
+        "pub struct ProgramConstraintCellV1<Evaluation>",
+        "impl<Evaluation> ProgramConstraintCellV1<Evaluation>",
+    );
+    assert!(
+        cell.contains("result: ProgramConstraintResultV1<Evaluation>,"),
+        "each Program cell must own the typed evidence result",
+    );
+    assert!(
+        !cell.contains("modeled_lcs_occurrence: ModeledLcsOccurrenceV1,"),
+        "a Program cell must not duplicate the modeled occurrence already owned by evidence",
+    );
+
+    let plan = source_scope(
+        PROGRAM_SESSION_SOURCE,
+        "pub struct ProgramSessionPlan<Evaluation>",
+        "impl<Evaluation> session_private::PlanSealed for ProgramSessionPlan<Evaluation>",
+    );
+    assert_eq!(
+        plan.matches("modeled_occurrences: Vec<Option<ModeledLcsOccurrenceV1>>,")
+            .count(),
+        1,
+        "each Program Session must own exactly one reusable modeled-occurrence scratch cache",
+    );
+    assert_eq!(
+        PROGRAM_SESSION_SOURCE
+            .matches("modeled_occurrences: Vec<Option<ModeledLcsOccurrenceV1>>,")
+            .count(),
+        1,
+        "the modeled-occurrence scratch cache must not be duplicated outside the Session plan",
+    );
+
+    let preparation = normalized_source_scope(
+        PROGRAM_SESSION_SOURCE,
+        "let all_occurrence_contexts = compile_occurrence_contexts(",
+        "let outputs = compile_outputs(",
+    );
+    for required in [
+        "compile_constraints::<Evaluation>(&graph, &all_occurrence_contexts, program.constraints)?",
+        "compact_constraint_contexts(&all_occurrence_contexts, &mut constraints)?",
+    ] {
+        assert!(
+            preparation.contains(required),
+            "Program compilation must compact full occurrence metadata to constrained targets; missing `{required}`",
+        );
+    }
+
+    let compaction = normalized_source_scope(
+        PROGRAM_SESSION_SOURCE,
+        "fn compact_constraint_contexts<Invocation>(",
+        "fn compile_outputs(",
+    );
+    for required in [
+        "targets.sort_unstable(); targets.dedup();",
+        ".binary_search_by_key(&constraint.target_id, |binding| binding.occurrence)",
+        "constraint.modeled_occurrence_index = index;",
+    ] {
+        assert!(
+            compaction.contains(required),
+            "cold compilation must deduplicate targets and remap every constraint; missing `{required}`",
+        );
+    }
+
+    let hot_evaluation = source_scope(
+        PROGRAM_SESSION_SOURCE,
+        "fn evaluate_program_session<Evaluation>(",
+        "fn map_program_execution_binding_error<EvaluationError>(",
+    );
+    assert!(
+        !hot_evaluation.contains("binary_search"),
+        "hot Program evaluation must consume compile-time direct indices without searching",
+    );
+    for required in [
+        "plan.modeled_occurrences.fill(None);",
+        ".get(constraint.modeled_occurrence_index)",
+        ".get_mut(constraint.modeled_occurrence_index)",
+    ] {
+        assert!(
+            hot_evaluation.contains(required),
+            "hot Program evaluation must reuse the compact direct-index cache; missing `{required}`",
         );
     }
 }
 
 #[test]
-fn program_session_module_docs_disclaim_transport_only_scope() {
-    let module_docs = PROGRAM_SESSION_SOURCE
-        .lines()
-        .take_while(|line| line.starts_with("//!"))
-        .collect::<Vec<_>>()
-        .join("\n")
-        .to_ascii_lowercase();
-
-    for required in ["transport-only", "encoded", "not", "lcs", "evidence"] {
+fn program_lcs_boundary_has_no_legacy_color_or_projection_shortcuts() {
+    for forbidden in [
+        "LcsColor",
+        "ViewingConditions",
+        "from_hex",
+        "to_hex",
+        "is_dark_theme",
+        "CAM16-UCS",
+        "ucs_",
+        "ProjectionSourceV1",
+        "default_context",
+        "default context",
+        "DefaultContext",
+    ] {
         assert!(
-            module_docs.contains(required),
-            "program_session.rs module docs must explicitly disclaim transport-only scope; missing `{required}`"
+            !PROGRAM_SESSION_SOURCE.contains(forbidden),
+            "program_session.rs must not bypass explicit source/context admission through `{forbidden}`",
+        );
+    }
+
+    for (path, source) in [
+        ("point_support.rs", POINT_SUPPORT_SOURCE),
+        ("joint.rs", JOINT_SOURCE),
+    ] {
+        for forbidden in [
+            "ProgramPointTargetV1",
+            "ProgramPointEvaluatorV1",
+            "ProgramPointInvocation",
+            "ProgramVisiblePointBindingV1",
+            "ProgramVisiblePointPassEvidence",
+            "ProgramVisiblePointViolationEvidence",
+            "ModeledLcsOccurrenceV1",
+            "AppearanceContextId",
+            "LcsOccurrence",
+        ] {
+            assert!(
+                !contains_rust_identifier(source, forbidden),
+                "{path} must not absorb Program-only contextual LCS type `{forbidden}`",
+            );
+        }
+    }
+
+    for forbidden in [
+        "PointEvaluatorV1",
+        "PointInvocation",
+        "VisiblePointBindingV1",
+        "VisiblePointPassEvidence",
+        "VisiblePointViolationEvidence",
+        "assess_visible_point_hard",
+    ] {
+        assert!(
+            !contains_rust_identifier(PROGRAM_SESSION_SOURCE, forbidden),
+            "program_session.rs must not route Program through legacy point evidence `{forbidden}`",
+        );
+    }
+
+    for forbidden in [
+        "AppearanceState",
+        "Cam16ViewV1",
+        "Cam16SurroundV1",
+        "ViewingConditions",
+        "derive_cam16_view_v1",
+        "forward_correlates_v1",
+    ] {
+        assert!(
+            !contains_rust_identifier(PROGRAM_SESSION_SOURCE, forbidden),
+            "program_session.rs hot lowering must not derive CAM16 through `{forbidden}`",
+        );
+    }
+    assert!(
+        !PROGRAM_SESSION_SOURCE.contains(".cam16("),
+        "program_session.rs hot lowering must not request a CAM16 view",
+    );
+
+    assert!(
+        !OUTPUT_PROJECTION_SOURCE.contains("ProjectionSourceV1"),
+        "output_projection.rs must consume ModeledLcsOccurrenceV1 directly, not define ProjectionSourceV1",
+    );
+}
+
+#[test]
+fn existing_encoded_evaluators_delegate_program_targets_without_parallel_formulae() {
+    for (path, source, evaluator, next_impl) in [
+        (
+            "constraints/exact.rs",
+            EXACT_CONSTRAINT_SOURCE,
+            "ExactSrgb8IdentityV1",
+            "impl HardClassifier<Srgb8, Srgb8> for ExactSrgb8IdentityV1",
+        ),
+        (
+            "constraints/wcag22.rs",
+            WCAG22_CONSTRAINT_SOURCE,
+            "Wcag22Srgb8V1",
+            "impl HardClassifier<Wcag22CriterionV1, ApplicableWcag22MeasurementV1> for Wcag22Srgb8V1",
+        ),
+    ] {
+        let start = format!("impl Evaluator<ProgramPointTargetV1> for {evaluator} {{");
+        let implementation = source_scope(source, &start, next_impl);
+        assert_eq!(
+            implementation
+                .matches("<Self as Evaluator<ModeledSrgb8PointOccurrence>>::evaluate(")
+                .count(),
+            1,
+            "{path} Program evaluator must delegate exactly once to its encoded-target SSOT",
+        );
+        assert_eq!(
+            implementation.matches(".encoded(),").count(),
+            1,
+            "{path} Program evaluator must pass only the typed encoded target to its SSOT",
+        );
+        assert!(
+            !implementation.contains(".modeled_lcs()"),
+            "{path} encoded evaluator must not silently grow a contextual LCS formula",
+        );
+    }
+}
+
+#[test]
+fn private_program_and_lcs_occurrence_types_are_not_publicly_exported() {
+    for required in [
+        "pub(crate) mod lcs_occurrence;",
+        "pub(crate) mod program_session;",
+    ] {
+        assert!(
+            LIB_SOURCE.contains(required),
+            "the pre-hard-cut boundary must remain crate-private; missing `{required}`",
+        );
+    }
+    for forbidden in [
+        "pub mod lcs_occurrence;",
+        "pub mod program_session;",
+        "pub use lcs_occurrence::",
+        "pub use crate::lcs_occurrence::",
+        "pub use program_session::",
+        "pub use crate::program_session::",
+    ] {
+        assert!(
+            !LIB_SOURCE.contains(forbidden),
+            "lib.rs must not expose private Program/LCS occurrence surface `{forbidden}`",
         );
     }
 }

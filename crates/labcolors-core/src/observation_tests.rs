@@ -4,6 +4,7 @@ use crate::appearance::{
     OccurrenceId, OccurrenceSpec, PaintId, PaintSpec, PointOpacityError, PointOpacityOverSurfaceV1,
     ResolvedOccurrence, SurfaceId, SurfaceInputPortId, SurfaceSpec,
 };
+use crate::lcs_occurrence::ColorSignal;
 use crate::observation::{
     CanonicalObservationSchemaV1, ObservationError, ObservationHeadViewV1, ObservationOwnerV1,
     ObservationPayloadInput, ObservationStreamId, ObservationUpdateInput, ObservedScenarioSetInput,
@@ -107,7 +108,7 @@ impl TestState {
 }
 
 fn binding(port: SurfaceInputPortId, bytes: [u8; 3]) -> SurfaceInputBinding {
-    SurfaceInputBinding::new(port, Srgb8::new(bytes))
+    SurfaceInputBinding::new(port, ColorSignal::from_srgb8(Srgb8::new(bytes)))
 }
 
 fn scenario(id: u32, bindings: impl IntoIterator<Item = SurfaceInputBinding>) -> ScenarioInput {
@@ -234,6 +235,7 @@ fn admission_preserves_correlated_tuples_without_cartesian_product() {
                 .unwrap()
                 .iter()
                 .copied()
+                .map(ColorSignal::srgb8)
                 .map(Srgb8::bytes)
                 .collect()
         })
@@ -272,14 +274,20 @@ fn canonicalization_ignores_declaration_order_and_groups_duplicate_physics() {
         &[ScenarioId::new(3), ScenarioId::new(9)]
     );
     assert_eq!(observation.provenance(1).unwrap(), &[ScenarioId::new(4)]);
-    let physical_values: Vec<Vec<Srgb8>> = (0..observation.physical_case_count())
+    let physical_values: Vec<Vec<ColorSignal>> = (0..observation.physical_case_count())
         .map(|case_index| observation.physical_values(case_index).unwrap().to_vec())
         .collect();
     assert_eq!(
         physical_values,
         vec![
-            vec![Srgb8::new([1, 2, 3]), Srgb8::new([4, 5, 6])],
-            vec![Srgb8::new([9, 8, 7]), Srgb8::new([6, 5, 4])],
+            vec![
+                ColorSignal::from_srgb8(Srgb8::new([1, 2, 3])),
+                ColorSignal::from_srgb8(Srgb8::new([4, 5, 6])),
+            ],
+            vec![
+                ColorSignal::from_srgb8(Srgb8::new([9, 8, 7])),
+                ColorSignal::from_srgb8(Srgb8::new([6, 5, 4])),
+            ],
         ]
     );
 }
@@ -350,16 +358,22 @@ fn schema_and_values_are_aligned_once_while_provenance_remains_complete() {
         .unwrap();
 
     let observation = revision_bound(&state);
-    let first_values: &[Srgb8] = observation.physical_values(0).unwrap();
-    let second_values: &[Srgb8] = observation.physical_values(1).unwrap();
+    let first_values: &[ColorSignal] = observation.physical_values(0).unwrap();
+    let second_values: &[ColorSignal] = observation.physical_values(1).unwrap();
     assert_eq!(observation.schema(), &[PORT_A, PORT_B]);
     assert_eq!(
         first_values,
-        &[Srgb8::new([1, 2, 3]), Srgb8::new([4, 5, 6])]
+        &[
+            ColorSignal::from_srgb8(Srgb8::new([1, 2, 3])),
+            ColorSignal::from_srgb8(Srgb8::new([4, 5, 6])),
+        ]
     );
     assert_eq!(
         second_values,
-        &[Srgb8::new([9, 8, 7]), Srgb8::new([6, 5, 4])]
+        &[
+            ColorSignal::from_srgb8(Srgb8::new([9, 8, 7])),
+            ColorSignal::from_srgb8(Srgb8::new([6, 5, 4])),
+        ]
     );
     assert_eq!(
         observation.provenance(0),
@@ -393,11 +407,11 @@ fn keyed_schema_is_intrinsic_to_revision_bound_observation_identity() {
     assert_eq!(revision_bound(&right).schema(), &[PORT_B]);
     assert_eq!(
         revision_bound(&left).physical_values(0),
-        Some(&[Srgb8::new([7, 8, 9])][..])
+        Some(&[ColorSignal::from_srgb8(Srgb8::new([7, 8, 9]))][..])
     );
     assert_eq!(
         revision_bound(&right).physical_values(0),
-        Some(&[Srgb8::new([7, 8, 9])][..])
+        Some(&[ColorSignal::from_srgb8(Srgb8::new([7, 8, 9]))][..])
     );
 
     let alternate_schema = canonicalize_observation_schema(vec![PORT_B]).unwrap();
@@ -539,7 +553,10 @@ fn observed_to_unknown_replaces_raw_payload_instead_of_duplicating_it() {
     assert!(matches!(state.head(), ObservationHeadViewV1::Unknown(_)));
     assert_eq!(old_revision, Revision::new(1));
     assert_eq!(old_schema, vec![PORT_A]);
-    assert_eq!(old_values, vec![Srgb8::new([3, 4, 5])]);
+    assert_eq!(
+        old_values,
+        vec![ColorSignal::from_srgb8(Srgb8::new([3, 4, 5]))]
+    );
 }
 
 #[test]

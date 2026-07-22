@@ -7,8 +7,8 @@
 use core::ops::Range;
 use std::rc::Rc;
 
-use crate::Srgb8;
 use crate::appearance::SurfaceInputPortId;
+use crate::lcs_occurrence::ColorSignal;
 
 /// Stable compile-time identity of one atomic observation boundary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -64,11 +64,11 @@ impl UnknownReasonId {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct SurfaceInputBinding {
     pub(crate) port: SurfaceInputPortId,
-    pub(crate) value: Srgb8,
+    pub(crate) value: ColorSignal,
 }
 
 impl SurfaceInputBinding {
-    pub(crate) const fn new(port: SurfaceInputPortId, value: Srgb8) -> Self {
+    pub(crate) const fn new(port: SurfaceInputPortId, value: ColorSignal) -> Self {
         Self { port, value }
     }
 }
@@ -142,12 +142,12 @@ impl ObservationSchemaMismatchV1 {
 #[derive(Debug, PartialEq, Eq)]
 struct ObservedScenarioSet {
     cases: Box<[PhysicalScenario]>,
-    values: Box<[Srgb8]>,
+    values: Box<[ColorSignal]>,
     provenance: Box<[ScenarioId]>,
 }
 
 impl ObservedScenarioSet {
-    fn values(&self, case_index: usize) -> Option<&[Srgb8]> {
+    fn values(&self, case_index: usize) -> Option<&[ColorSignal]> {
         let values = &self.cases.get(case_index)?.values;
         self.values.get(values.start..values.end)
     }
@@ -209,7 +209,7 @@ impl RevisionBoundObservationV1 {
         self.backing.set.cases.len()
     }
 
-    pub(crate) fn physical_values(&self, case_index: usize) -> Option<&[Srgb8]> {
+    pub(crate) fn physical_values(&self, case_index: usize) -> Option<&[ColorSignal]> {
         self.backing.set.values(case_index)
     }
 

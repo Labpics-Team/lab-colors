@@ -3,6 +3,7 @@ use crate::appearance::{
     EncodedPointPaintV1, OccurrenceId, PaintId, PhysicalProgramIdentityV1, SurfaceInputPortId,
 };
 use crate::composition::{AdmittedOpacityV1, CompositionProfileV1};
+use crate::lcs_occurrence::ColorSignal;
 use crate::observation::{
     ObservationPayloadInput, ObservationStreamId, ObservationUpdateInput, ObservedScenarioSetInput,
     Revision, ScenarioId, ScenarioInput, SurfaceInputBinding,
@@ -73,7 +74,12 @@ fn observed_update(
                     id: ScenarioId::new(id),
                     bindings: bindings
                         .into_iter()
-                        .map(|(port, value)| SurfaceInputBinding::new(port, Srgb8::new(value)))
+                        .map(|(port, value)| {
+                            SurfaceInputBinding::new(
+                                port,
+                                ColorSignal::from_srgb8(Srgb8::new(value)),
+                            )
+                        })
                         .collect(),
                 })
                 .collect(),
@@ -188,11 +194,21 @@ fn duplicate_raw_scenarios_share_one_physical_case_without_cartesian_expansion()
     assert_eq!(report.observation().physical_case_count(), 2);
     assert_eq!(
         report.observation().physical_values(0),
-        Some(&[Srgb8::new([0; 3]), Srgb8::new([255; 3])][..])
+        Some(
+            &[
+                ColorSignal::from_srgb8(Srgb8::new([0; 3])),
+                ColorSignal::from_srgb8(Srgb8::new([255; 3])),
+            ][..]
+        )
     );
     assert_eq!(
         report.observation().physical_values(1),
-        Some(&[Srgb8::new([255; 3]), Srgb8::new([0; 3])][..])
+        Some(
+            &[
+                ColorSignal::from_srgb8(Srgb8::new([255; 3])),
+                ColorSignal::from_srgb8(Srgb8::new([0; 3])),
+            ][..]
+        )
     );
     assert_eq!(
         report.observation().provenance(0),

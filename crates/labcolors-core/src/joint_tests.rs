@@ -10,6 +10,7 @@ use crate::joint::{
     PointwiseJointPointProgramV1, PointwiseJointReportErrorV1, PointwiseSelectedRecheckErrorV1,
     SelectionPolicyErrorV1, checked_joint_cardinality,
 };
+use crate::lcs_occurrence::ColorSignal;
 use crate::observation::{
     ObservationHeadViewV1, ObservationOwnerV1, ObservationPayloadInput, ObservationStreamId,
     ObservationUpdateInput, ObservedScenarioSetInput, PreparedObservationUpdateV1, Revision,
@@ -97,7 +98,7 @@ fn observation(revision: u64, cases: Vec<(u32, [u8; 3])>) -> RevisionBoundObserv
                         id: ScenarioId::new(id),
                         bindings: vec![SurfaceInputBinding {
                             port: ROOT,
-                            value: Srgb8::new(value),
+                            value: ColorSignal::from_srgb8(Srgb8::new(value)),
                         }],
                     })
                     .collect(),
@@ -133,11 +134,11 @@ fn observation_with_unrelated_surface(
                     bindings: vec![
                         SurfaceInputBinding {
                             port: ROOT,
-                            value: Srgb8::new(root),
+                            value: ColorSignal::from_srgb8(Srgb8::new(root)),
                         },
                         SurfaceInputBinding {
                             port: unrelated_surface,
-                            value: Srgb8::new(unrelated),
+                            value: ColorSignal::from_srgb8(Srgb8::new(unrelated)),
                         },
                     ],
                 }],
