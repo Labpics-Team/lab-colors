@@ -1,15 +1,14 @@
+use std::cell::Cell;
+
 use crate::Srgb8;
 use crate::appearance::{
     ColorInputId, OccurrenceId, OpacityInputId, PaintId, SurfaceId, SurfaceInputPortId,
 };
 use crate::program_session::{
-    ColorInput, CompiledProgram, CompositionProfile, Occurrence, OpacityInput,
-    PACKED_ENCODED_SURFACE_PRESENT_TAG_V1, PACKED_ENCODED_SURFACE_UNAVAILABLE_TAG_V1,
-    PACKED_ENCODED_SURFACE_UPDATE_MAGIC_V1, PackedEncodedSurfaceUpdateErrorV1, Paint,
-    PointRenderOwner, PointRenderSessionUpdateErrorV1, Program, ProgramCompileError, SessionState,
-    SessionUpdateError, Surface, SurfaceSignal, SurfaceUpdate,
-    canonical_occurrence_sequence_matches, canonical_surface_input_port_sequence_matches,
-    check_render_node_count,
+    ColorInput, CompiledProgram, CompositionProfile, Occurrence, OpacityInput, Paint,
+    PointRenderOwner, Program, ProgramCompileError, SessionState, SessionUpdateError, Surface,
+    SurfaceSignal, SurfaceUpdate, canonical_occurrence_sequence_matches,
+    canonical_surface_input_port_sequence_matches, check_render_node_count,
 };
 
 const COLOR: ColorInputId = ColorInputId::new(1);
@@ -20,6 +19,14 @@ const TRANSLUCENT: PaintId = PaintId::new(11);
 const BACKDROP: SurfaceId = SurfaceId::new(20);
 const VISIBLE: SurfaceId = SurfaceId::new(21);
 const OCCURRENCE: OccurrenceId = OccurrenceId::new(30);
+
+const MULTI_PORT_A: SurfaceInputPortId = SurfaceInputPortId::new(10);
+const MULTI_PORT_B: SurfaceInputPortId = SurfaceInputPortId::new(20);
+const MULTI_PORT_C: SurfaceInputPortId = SurfaceInputPortId::new(30);
+const MULTI_PORTS: [SurfaceInputPortId; 3] = [MULTI_PORT_A, MULTI_PORT_B, MULTI_PORT_C];
+const MULTI_SURFACE_A: SurfaceId = SurfaceId::new(100);
+const MULTI_SURFACE_B: SurfaceId = SurfaceId::new(101);
+const MULTI_SURFACE_C: SurfaceId = SurfaceId::new(102);
 
 fn program(opacity: f64) -> Program {
     program_against(BACKDROP, opacity)
@@ -93,24 +100,76 @@ fn compiled(opacity: f64) -> CompiledProgram {
     program(opacity).compile().unwrap()
 }
 
-fn point(revision: u64, rgb24: u32) -> [u32; 5] {
-    [
-        PACKED_ENCODED_SURFACE_UPDATE_MAGIC_V1,
-        PACKED_ENCODED_SURFACE_PRESENT_TAG_V1,
-        revision as u32,
-        (revision >> 32) as u32,
-        rgb24,
-    ]
+fn multi_surface_program() -> Program {
+    Program::new(
+        vec![ColorInput::new(COLOR, Srgb8::new([0; 3]))],
+        vec![MULTI_PORT_C, MULTI_PORT_A, MULTI_PORT_B],
+        vec![OpacityInput::new(OPACITY, 0.5)],
+        vec![
+            Paint::Solid {
+                id: SOLID,
+                color: COLOR,
+            },
+            Paint::Opacity {
+                id: TRANSLUCENT,
+                source: SOLID,
+                opacity: OPACITY,
+            },
+        ],
+        vec![
+            Surface::Input {
+                id: MULTI_SURFACE_C,
+                input: MULTI_PORT_C,
+            },
+            Surface::Input {
+                id: MULTI_SURFACE_A,
+                input: MULTI_PORT_A,
+            },
+            Surface::Input {
+                id: MULTI_SURFACE_B,
+                input: MULTI_PORT_B,
+            },
+            Surface::FromOccurrence {
+                id: VISIBLE,
+                occurrence: OCCURRENCE,
+            },
+        ],
+        vec![Occurrence::new(
+            OCCURRENCE,
+            TRANSLUCENT,
+            MULTI_SURFACE_B,
+            CompositionProfile::EncodedSrgb8SourceOverV1,
+        )],
+    )
 }
 
-fn unavailable(revision: u64, reason: u32) -> [u32; 5] {
-    [
-        PACKED_ENCODED_SURFACE_UPDATE_MAGIC_V1,
-        PACKED_ENCODED_SURFACE_UNAVAILABLE_TAG_V1,
-        revision as u32,
-        (revision >> 32) as u32,
-        reason,
-    ]
+fn multi_compiled() -> CompiledProgram {
+    multi_surface_program().compile().unwrap()
+}
+
+struct ReadProbe<const N: usize> {
+    values: [Srgb8; N],
+    reads: Cell<[usize; N]>,
+}
+
+impl<const N: usize> ReadProbe<N> {
+    fn new(values: [Srgb8; N]) -> Self {
+        Self {
+            values,
+            reads: Cell::new([0; N]),
+        }
+    }
+
+    fn read(&self, index: usize) -> Srgb8 {
+        let mut reads = self.reads.get();
+        reads[index] += 1;
+        self.reads.set(reads);
+        self.values[index]
+    }
+
+    fn reads(&self) -> [usize; N] {
+        self.reads.get()
+    }
 }
 
 fn retained_signal_storage_pointers(state: &SessionState) -> (*const u32, *const u32) {
@@ -250,13 +309,15 @@ fn canonical_sequence_firewall_rejects_reordering_relabeling_and_truncation() {
 }
 
 #[test]
-fn point_update_executes_the_compiled_graph_and_commits_compact_occurrences() {
+fn canonical_present_executes_the_compiled_graph_and_commits_compact_occurrences() {
     let owner = compiled(0.5).into_owner();
     let mut session = owner.attach().unwrap();
 
-    let SessionState::Ready { current } = session.update_packed(&point(1, 0xff_ff_ff)).unwrap()
+    let SessionState::Ready { current } = session
+        .update_canonical_present(1, 1, |_| Srgb8::new([0xff; 3]))
+        .unwrap()
     else {
-        panic!("present encoded Surface signals must produce Ready");
+        panic!("a complete canonical Surface set must produce Ready");
     };
     assert_eq!(current.revision(), 1);
     assert_eq!(current.input_surface_signals_rgb24(), &[0xff_ff_ff]);
@@ -270,13 +331,15 @@ fn successful_replace_revokes_old_sessions_without_a_numeric_generation() {
 
     owner.replace(compiled(0.25));
     assert_eq!(
-        old.update_packed(&point(1, 0xff_ff_ff)),
-        Err(PointRenderSessionUpdateErrorV1::ProgramExpired)
+        old.update_canonical_present(1, 1, |_| Srgb8::new([0xff; 3])),
+        Err(SessionUpdateError::ProgramExpired)
     );
 
     let mut current = owner.attach().unwrap();
     assert!(matches!(
-        current.update_packed(&point(1, 0xff_ff_ff)).unwrap(),
+        current
+            .update_canonical_present(1, 1, |_| Srgb8::new([0xff; 3]))
+            .unwrap(),
         SessionState::Ready { .. }
     ));
 }
@@ -290,7 +353,9 @@ fn invalid_opacity_failed_replace_is_atomic_and_keeps_old_epoch_live() {
         program(1.25).compile().unwrap_err(),
         ProgramCompileError::OpacityOutOfDomain { input: OPACITY }
     );
-    let SessionState::Ready { current } = session.update_packed(&point(1, 0xff_ff_ff)).unwrap()
+    let SessionState::Ready { current } = session
+        .update_canonical_present(1, 1, |_| Srgb8::new([0xff; 3]))
+        .unwrap()
     else {
         panic!("failed replacement must not revoke the old epoch");
     };
@@ -315,7 +380,9 @@ fn dangling_and_cyclic_failed_compiles_do_not_revoke_the_current_epoch() {
         Err(ProgramCompileError::RenderCycle { .. })
     ));
 
-    let SessionState::Ready { current } = session.update_packed(&point(1, 0xff_ff_ff)).unwrap()
+    let SessionState::Ready { current } = session
+        .update_canonical_present(1, 1, |_| Srgb8::new([0xff; 3]))
+        .unwrap()
     else {
         panic!("compile failures must leave the old strong epoch untouched");
     };
@@ -329,8 +396,11 @@ fn dispose_revokes_sessions_and_prevents_new_attachment() {
     owner.dispose();
 
     assert_eq!(
-        session.update_packed(&unavailable(1, 7)),
-        Err(PointRenderSessionUpdateErrorV1::ProgramExpired)
+        session.update(SurfaceUpdate::Unavailable {
+            revision: 1,
+            reason: 7,
+        }),
+        Err(SessionUpdateError::ProgramExpired)
     );
     assert!(owner.attach().is_err());
 }
@@ -339,12 +409,19 @@ fn dispose_revokes_sessions_and_prevents_new_attachment() {
 fn unavailable_after_ready_is_stale_and_retains_exactly_one_previous_snapshot() {
     let owner = compiled(0.5).into_owner();
     let mut session = owner.attach().unwrap();
-    session.update_packed(&point(1, 0xff_ff_ff)).unwrap();
+    session
+        .update_canonical_present(1, 1, |_| Srgb8::new([0xff; 3]))
+        .unwrap();
 
     let SessionState::Stale {
         previous,
         current_unavailable,
-    } = session.update_packed(&unavailable(2, 91)).unwrap()
+    } = session
+        .update(SurfaceUpdate::Unavailable {
+            revision: 2,
+            reason: 91,
+        })
+        .unwrap()
     else {
         panic!("unavailable Surface input after Ready must become Stale");
     };
@@ -356,7 +433,12 @@ fn unavailable_after_ready_is_stale_and_retains_exactly_one_previous_snapshot() 
     assert_eq!(current_unavailable.revision(), 2);
     assert_eq!(current_unavailable.reason(), 91);
 
-    let SessionState::Stale { previous, .. } = session.update_packed(&unavailable(3, 92)).unwrap()
+    let SessionState::Stale { previous, .. } = session
+        .update(SurfaceUpdate::Unavailable {
+            revision: 3,
+            reason: 92,
+        })
+        .unwrap()
     else {
         panic!("a later unavailable update must remain Stale");
     };
@@ -364,177 +446,228 @@ fn unavailable_after_ready_is_stale_and_retains_exactly_one_previous_snapshot() 
 }
 
 #[test]
-fn malformed_lower_and_conflicting_updates_are_atomic_and_do_not_evaluate() {
-    let owner = compiled(0.5).into_owner();
-    let mut session = owner.attach().unwrap();
-    session.update_packed(&point(5, 0xff_ff_ff)).unwrap();
-    crate::composition::reset_source_over_evaluation_count();
-
-    let malformed = point(6, 0x01_ff_ff_ff);
-    assert_eq!(
-        session.update_packed(&malformed),
-        Err(PointRenderSessionUpdateErrorV1::EncodedSurfaceUpdate(
-            PackedEncodedSurfaceUpdateErrorV1::ReservedSignalByteNonZero {
-                surface_index: 0,
-                value: 0x01_ff_ff_ff,
-            }
-        ))
-    );
-    assert_eq!(crate::composition::source_over_evaluation_count(), 0);
-
-    assert!(matches!(
-        session.update_packed(&point(4, 0)),
-        Err(PointRenderSessionUpdateErrorV1::EncodedSurfaceUpdate(
-            PackedEncodedSurfaceUpdateErrorV1::RevisionOutOfOrder {
-                current: 5,
-                incoming: 4
-            }
-        ))
-    ));
-    assert_eq!(crate::composition::source_over_evaluation_count(), 0);
-
-    assert!(matches!(
-        session.update_packed(&point(5, 0)),
-        Err(PointRenderSessionUpdateErrorV1::EncodedSurfaceUpdate(
-            PackedEncodedSurfaceUpdateErrorV1::RevisionConflict { revision: 5 }
-        ))
-    ));
-    assert_eq!(crate::composition::source_over_evaluation_count(), 0);
-
-    let SessionState::Ready { current } = session.state() else {
-        panic!("every rejected update must leave the committed state untouched");
+fn borrowed_present_expired_epoch_reads_zero_and_allocates_zero() {
+    let mut session = {
+        let owner = compiled(0.5).into_owner();
+        owner.attach().unwrap()
     };
-    assert_eq!(current.revision(), 5);
-    assert_eq!(current.composited_occurrence_signals_rgb24(), &[0x80_80_80]);
-}
+    let reads = Cell::new(0);
 
-#[test]
-fn exact_replay_is_idempotent_but_a_new_revision_evaluates_again() {
-    let owner = compiled(0.5).into_owner();
-    let mut session = owner.attach().unwrap();
-    let payload = point(1, 0xff_ff_ff);
-    crate::composition::reset_source_over_evaluation_count();
+    let (result, allocations) = crate::test_support::measured_allocations(|| {
+        session
+            .update_canonical_present(1, 1, |_| {
+                reads.set(reads.get() + 1);
+                Srgb8::new([0xff; 3])
+            })
+            .map(|_| ())
+    });
 
-    session.update_packed(&payload).unwrap();
-    assert_eq!(crate::composition::source_over_evaluation_count(), 1);
-    session.update_packed(&payload).unwrap();
-    assert_eq!(crate::composition::source_over_evaluation_count(), 1);
-    session.update_packed(&point(2, 0xff_ff_ff)).unwrap();
-    assert_eq!(crate::composition::source_over_evaluation_count(), 2);
-}
-
-#[test]
-fn attached_session_reuses_buffers_for_every_update_state() {
-    let owner = compiled(0.5).into_owner();
-    let mut session = owner.attach().unwrap();
-    let first = point(1, 0xff_ff_ff);
-    let second = point(2, 0x20_40_60);
-    let missing = unavailable(3, 91);
-    let still_missing = unavailable(4, 92);
-    let recovered = point(5, 0x20_40_60);
-
-    let mut retained_storage = None;
-    crate::composition::reset_source_over_evaluation_count();
-    for (update, expected_evaluations) in [
-        (first.as_slice(), 1),
-        (first.as_slice(), 1),
-        (second.as_slice(), 2),
-        (missing.as_slice(), 2),
-        (still_missing.as_slice(), 2),
-        (recovered.as_slice(), 3),
-    ] {
-        let (result, allocations) =
-            crate::test_support::measured_allocations(|| session.update_packed(update).map(|_| ()));
-        assert!(result.is_ok());
-        assert_eq!(
-            allocations, 0,
-            "attach must preallocate every fixed-cardinality Session buffer"
-        );
-        let current_storage = retained_signal_storage_pointers(session.state());
-        if let Some(initial_storage) = retained_storage {
-            assert_eq!(current_storage, initial_storage);
-        } else {
-            retained_storage = Some(current_storage);
-        }
-        assert_eq!(
-            crate::composition::source_over_evaluation_count(),
-            expected_evaluations
-        );
-    }
-
-    let SessionState::Ready { current } = session.state() else {
-        panic!("a successful observation after Stale must recover Ready");
-    };
-    assert_eq!(current.revision(), 5);
-    assert_eq!(current.input_surface_signals_rgb24(), &[0x20_40_60]);
-    assert_eq!(current.composited_occurrence_signals_rgb24(), &[0x10_20_30]);
-}
-
-#[test]
-fn rejected_update_preserves_cold_buffers_for_allocation_free_retry() {
-    let owner = compiled(0.5).into_owner();
-    let mut session = owner.attach().unwrap();
-    let malformed = point(1, 0x01_ff_ff_ff);
-    let valid = point(1, 0xff_ff_ff);
-    crate::composition::reset_source_over_evaluation_count();
-
-    let (rejected, rejected_allocations) =
-        crate::test_support::measured_allocations(|| session.update_packed(&malformed).map(|_| ()));
-    assert_eq!(
-        rejected,
-        Err(PointRenderSessionUpdateErrorV1::EncodedSurfaceUpdate(
-            PackedEncodedSurfaceUpdateErrorV1::ReservedSignalByteNonZero {
-                surface_index: 0,
-                value: 0x01_ff_ff_ff,
-            }
-        ))
-    );
-    assert_eq!(rejected_allocations, 0);
+    assert_eq!(result, Err(SessionUpdateError::ProgramExpired));
+    assert_eq!(reads.get(), 0);
+    assert_eq!(allocations, 0);
     assert!(matches!(
         session.state(),
         SessionState::Waiting {
             current_unavailable: None
         }
     ));
-    assert_eq!(crate::composition::source_over_evaluation_count(), 0);
-
-    let (accepted, accepted_allocations) =
-        crate::test_support::measured_allocations(|| session.update_packed(&valid).map(|_| ()));
-    assert!(accepted.is_ok());
-    assert_eq!(accepted_allocations, 0);
-    assert_eq!(crate::composition::source_over_evaluation_count(), 1);
 }
 
 #[test]
-fn waiting_unknown_chain_preserves_preallocated_buffers() {
+fn borrowed_present_schema_mismatch_reads_zero_and_allocates_zero() {
     let owner = compiled(0.5).into_owner();
     let mut session = owner.attach().unwrap();
-    let first_missing = unavailable(1, 91);
-    let later_missing = unavailable(2, 92);
-    let ready = point(3, 0xff_ff_ff);
     crate::composition::reset_source_over_evaluation_count();
 
-    for (update, expected_evaluations) in [
-        (first_missing.as_slice(), 0),
-        (first_missing.as_slice(), 0),
-        (later_missing.as_slice(), 0),
-        (ready.as_slice(), 1),
-    ] {
-        let (result, allocations) =
-            crate::test_support::measured_allocations(|| session.update_packed(update).map(|_| ()));
-        assert!(result.is_ok());
-        assert_eq!(allocations, 0);
+    for actual in [0, 2] {
+        let reads = Cell::new(0);
+        let (result, allocations) = crate::test_support::measured_allocations(|| {
+            session
+                .update_canonical_present(1, actual, |_| {
+                    reads.set(reads.get() + 1);
+                    Srgb8::new([0xff; 3])
+                })
+                .map(|_| ())
+        });
         assert_eq!(
-            crate::composition::source_over_evaluation_count(),
-            expected_evaluations
+            result,
+            Err(SessionUpdateError::SurfaceInputPortLengthMismatch {
+                expected: 1,
+                actual,
+            })
         );
+        assert_eq!(reads.get(), 0);
+        assert_eq!(allocations, 0);
     }
 
+    assert_eq!(crate::composition::source_over_evaluation_count(), 0);
+    assert!(matches!(
+        session.state(),
+        SessionState::Waiting {
+            current_unavailable: None
+        }
+    ));
+}
+
+#[test]
+fn borrowed_present_lower_revision_reads_zero_and_preserves_state() {
+    let owner = compiled(0.5).into_owner();
+    let mut session = owner.attach().unwrap();
+    let white = Srgb8::new([0xff; 3]);
+    session.update_canonical_present(5, 1, |_| white).unwrap();
+    let storage = retained_signal_storage_pointers(session.state());
+    crate::composition::reset_source_over_evaluation_count();
+    let reads = Cell::new(0);
+
+    let (result, allocations) = crate::test_support::measured_allocations(|| {
+        session
+            .update_canonical_present(4, 1, |_| {
+                reads.set(reads.get() + 1);
+                Srgb8::new([0; 3])
+            })
+            .map(|_| ())
+    });
+
+    assert_eq!(
+        result,
+        Err(SessionUpdateError::RevisionOutOfOrder {
+            current: 5,
+            incoming: 4,
+        })
+    );
+    assert_eq!(reads.get(), 0);
+    assert_eq!(allocations, 0);
+    assert_eq!(crate::composition::source_over_evaluation_count(), 0);
+    assert_eq!(retained_signal_storage_pointers(session.state()), storage);
     let SessionState::Ready { current } = session.state() else {
-        panic!("the first admitted point after Waiting must commit Ready");
+        panic!("a lower revision must leave Ready untouched");
     };
-    assert_eq!(current.revision(), 3);
+    assert_eq!(current.revision(), 5);
+    assert!(
+        current
+            .surfaces()
+            .eq([SurfaceSignal::new(SURFACE_PORT, white)])
+    );
     assert_eq!(current.composited_occurrence_signals_rgb24(), &[0x80_80_80]);
+    assert!(
+        session
+            .bound_surface_inputs_for_test()
+            .eq([(SURFACE_PORT, white)])
+    );
+}
+
+#[test]
+fn same_revision_replay_and_conflict_read_every_value_without_mutation() {
+    let compiled = multi_compiled();
+    assert_eq!(compiled.surface_input_ports(), &MULTI_PORTS);
+    let owner = compiled.into_owner();
+    let mut session = owner.attach().unwrap();
+    let committed_values = [
+        Srgb8::new([0x10, 0x20, 0x30]),
+        Srgb8::new([0xff; 3]),
+        Srgb8::new([0x70, 0x80, 0x90]),
+    ];
+    session
+        .update_canonical_present(5, MULTI_PORTS.len(), |index| committed_values[index])
+        .unwrap();
+    let storage = retained_signal_storage_pointers(session.state());
+    crate::composition::reset_source_over_evaluation_count();
+
+    let replay = ReadProbe::new(committed_values);
+    let (result, allocations) = crate::test_support::measured_allocations(|| {
+        session
+            .update_canonical_present(5, MULTI_PORTS.len(), |index| replay.read(index))
+            .map(|_| ())
+    });
+    assert_eq!(result, Ok(()));
+    assert_eq!(replay.reads(), [1, 1, 1]);
+    assert_eq!(allocations, 0);
+    assert_eq!(crate::composition::source_over_evaluation_count(), 0);
+    assert_eq!(retained_signal_storage_pointers(session.state()), storage);
+
+    let mut conflicting_values = committed_values;
+    conflicting_values[0] = Srgb8::new([0; 3]);
+    let conflict = ReadProbe::new(conflicting_values);
+    let (result, allocations) = crate::test_support::measured_allocations(|| {
+        session
+            .update_canonical_present(5, MULTI_PORTS.len(), |index| conflict.read(index))
+            .map(|_| ())
+    });
+    assert_eq!(
+        result,
+        Err(SessionUpdateError::RevisionConflict { revision: 5 })
+    );
+    assert_eq!(conflict.reads(), [1, 1, 1]);
+    assert_eq!(allocations, 0);
+    assert_eq!(crate::composition::source_over_evaluation_count(), 0);
+    assert_eq!(retained_signal_storage_pointers(session.state()), storage);
+
+    let expected_surfaces = [
+        SurfaceSignal::new(MULTI_PORT_A, committed_values[0]),
+        SurfaceSignal::new(MULTI_PORT_B, committed_values[1]),
+        SurfaceSignal::new(MULTI_PORT_C, committed_values[2]),
+    ];
+    let SessionState::Ready { current } = session.state() else {
+        panic!("same-revision admission must retain Ready");
+    };
+    assert_eq!(current.revision(), 5);
+    assert!(current.surfaces().eq(expected_surfaces));
+    assert_eq!(current.composited_occurrence_signals_rgb24(), &[0x80_80_80]);
+    assert!(session.bound_surface_inputs_for_test().eq([
+        (MULTI_PORT_A, committed_values[0]),
+        (MULTI_PORT_B, committed_values[1]),
+        (MULTI_PORT_C, committed_values[2]),
+    ]));
+}
+
+#[test]
+fn new_revision_reads_each_value_once_and_snapshots_binding_readback() {
+    let owner = multi_compiled().into_owner();
+    let mut session = owner.attach().unwrap();
+    let initial_values = [
+        Srgb8::new([0x10; 3]),
+        Srgb8::new([0xff; 3]),
+        Srgb8::new([0x30; 3]),
+    ];
+    session
+        .update_canonical_present(1, MULTI_PORTS.len(), |index| initial_values[index])
+        .unwrap();
+    let storage = retained_signal_storage_pointers(session.state());
+    let next_values = [
+        Srgb8::new([0xa1, 0xa2, 0xa3]),
+        Srgb8::new([0; 3]),
+        Srgb8::new([0xc1, 0xc2, 0xc3]),
+    ];
+    let probe = ReadProbe::new(next_values);
+    crate::composition::reset_source_over_evaluation_count();
+
+    let (result, allocations) = crate::test_support::measured_allocations(|| {
+        session
+            .update_canonical_present(2, MULTI_PORTS.len(), |index| probe.read(index))
+            .map(|_| ())
+    });
+
+    assert_eq!(result, Ok(()));
+    assert_eq!(probe.reads(), [1, 1, 1]);
+    assert_eq!(allocations, 0);
+    assert_eq!(crate::composition::source_over_evaluation_count(), 1);
+    assert_eq!(retained_signal_storage_pointers(session.state()), storage);
+    let expected_surfaces = [
+        SurfaceSignal::new(MULTI_PORT_A, next_values[0]),
+        SurfaceSignal::new(MULTI_PORT_B, next_values[1]),
+        SurfaceSignal::new(MULTI_PORT_C, next_values[2]),
+    ];
+    let SessionState::Ready { current } = session.state() else {
+        panic!("a new canonical revision must commit Ready");
+    };
+    assert_eq!(current.revision(), 2);
+    assert!(current.surfaces().eq(expected_surfaces));
+    assert_eq!(current.composited_occurrence_signals_rgb24(), &[0]);
+    assert!(session.bound_surface_inputs_for_test().eq([
+        (MULTI_PORT_A, next_values[0]),
+        (MULTI_PORT_B, next_values[1]),
+        (MULTI_PORT_C, next_values[2]),
+    ]));
 }
 
 #[test]
@@ -664,6 +797,11 @@ fn generic_program_module_has_no_recipe_or_ui_compatibility_surface() {
         "resolve_named_set",
         "resolveTheme",
         "themeHandle",
+        concat!("PACK", "ED_ENCODED_"),
+        concat!("Pack", "edEncoded"),
+        "PointRenderSessionUpdateError",
+        concat!("update_pa", "cked"),
+        concat!("decode_encoded_", "surface_update"),
     ] {
         assert!(
             !source.contains(forbidden),

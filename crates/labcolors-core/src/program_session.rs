@@ -9,13 +9,13 @@
 //! The crate root keeps this path private until the atomic public-surface cut;
 //! it must not create a second simultaneously supported authoring schema.
 //!
-//! The first executable transport is intentionally narrow: one correlated set
-//! of encoded Surface input signals per revision. It is transport-only state,
-//! not an observed stimulus, physical evidence or certificate. F0
-//! observer/output/render identities remain a terminal prerequisite before any
-//! such claim can be minted. Expanding the private transport to a ScenarioSet
-//! does not require exposing the legacy multi-background metric matrix.
-//! In particular, the wire magic is not an `lcs` or physical identity.
+//! The first executable boundary is intentionally narrow: one correlated set
+//! of encoded Surface input signals per revision. It is transport-only runtime
+//! state, not an observed stimulus, physical evidence or certificate, and not
+//! an `lcs` identity. F0 observer/output/render identities remain a terminal
+//! prerequisite before any such claim can be minted. Expanding the private
+//! boundary to a ScenarioSet does not require exposing the legacy
+//! multi-background metric matrix.
 
 use std::mem;
 use std::rc::{Rc, Weak};
@@ -265,15 +265,6 @@ pub enum ProgramCompileError {
     InternalInvariant,
 }
 
-/// ASCII `LCR1`: code-owned Lab Colors Render transport version 1.
-///
-/// This is a wire discriminator, not an LCS, context or physical identity.
-pub(crate) const PACKED_ENCODED_SURFACE_UPDATE_MAGIC_V1: u32 = 0x4c43_5231;
-pub(crate) const PACKED_ENCODED_SURFACE_UNAVAILABLE_TAG_V1: u32 = 0;
-pub(crate) const PACKED_ENCODED_SURFACE_PRESENT_TAG_V1: u32 = 1;
-const PACKED_ENCODED_SURFACE_HEADER_WORDS_V1: usize = 4;
-const PACKED_SURFACE_UNAVAILABLE_WORDS_V1: usize = 5;
-
 #[derive(Debug)]
 struct ProgramEpochV1 {
     graph: CompiledAppearanceGraph,
@@ -426,7 +417,6 @@ fn prepare_program(program: Program) -> Result<ProgramEpochV1, ProgramCompileErr
         .map_err(|_| ProgramCompileError::ResourceExhausted)?;
     occurrence_ids.extend(program.occurrences.iter().map(|occurrence| occurrence.id));
     occurrence_ids.sort_unstable();
-
     if !canonical_surface_input_port_sequence_matches(
         graph.surface_input_ports(),
         &surface_input_ports,
@@ -814,25 +804,6 @@ impl SessionState {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum PackedEncodedSurfaceUpdateErrorV1 {
-    HeaderTooShort,
-    MagicMismatch { actual: u32 },
-    UnsupportedTag { actual: u32 },
-    LengthMismatch { expected: usize, actual: usize },
-    ReservedSignalByteNonZero { surface_index: usize, value: u32 },
-    RevisionOutOfOrder { current: u64, incoming: u64 },
-    RevisionConflict { revision: u64 },
-    ResourceExhausted,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum PointRenderSessionUpdateErrorV1 {
-    ProgramExpired,
-    EncodedSurfaceUpdate(PackedEncodedSurfaceUpdateErrorV1),
-    Evaluation(BindingError),
-}
-
 /// Failure to admit or execute one typed Session update.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SessionUpdateError {
@@ -856,43 +827,6 @@ pub enum SessionUpdateError {
     InternalInvariant,
 }
 
-enum PreparedSurfaceValuesV1<'input> {
-    Typed(&'input [SurfaceSignal]),
-    PackedRgb24(&'input [u32]),
-}
-
-impl PreparedSurfaceValuesV1<'_> {
-    fn len(&self) -> usize {
-        match self {
-            Self::Typed(values) => values.len(),
-            Self::PackedRgb24(values) => values.len(),
-        }
-    }
-
-    fn value(&self, index: usize) -> Srgb8 {
-        match self {
-            Self::Typed(values) => values[index].value,
-            Self::PackedRgb24(values) => Srgb8::new(unpack_rgb24(values[index])),
-        }
-    }
-
-    fn matches_rgb24(&self, expected: &[u32]) -> bool {
-        self.len() == expected.len()
-            && expected
-                .iter()
-                .enumerate()
-                .all(|(index, &word)| pack_rgb24(self.value(index).bytes()) == word)
-    }
-}
-
-enum PreparedEncodedSurfaceUpdateV1<'input> {
-    Unavailable(SurfaceUnavailable),
-    Present {
-        revision: u64,
-        surfaces: PreparedSurfaceValuesV1<'input>,
-    },
-}
-
 /// Generation-bound mutable runtime. It owns reusable values/scratch, never a
 /// strong reference or a copy of the compiled graph. All fixed-cardinality
 /// signal buffers are allocated fallibly by `attach`; updates only move and
@@ -912,6 +846,13 @@ impl Session {
         &self.state
     }
 
+    #[cfg(test)]
+    pub(crate) fn bound_surface_inputs_for_test(
+        &self,
+    ) -> impl ExactSizeIterator<Item = (SurfaceInputPortId, Srgb8)> + '_ {
+        self.bindings.surface_inputs_canonical()
+    }
+
     /// Admit, evaluate and atomically commit one typed Surface-input update.
     pub fn update(
         &mut self,
@@ -921,9 +862,9 @@ impl Session {
             .epoch
             .upgrade()
             .ok_or(SessionUpdateError::ProgramExpired)?;
-        let prepared = match update {
+        match update {
             SurfaceUpdate::Unavailable { revision, reason } => {
-                PreparedEncodedSurfaceUpdateV1::Unavailable(SurfaceUnavailable { revision, reason })
+                self.apply_unavailable(SurfaceUnavailable { revision, reason })
             }
             SurfaceUpdate::Present { revision, surfaces } => {
                 if surfaces.len() != epoch.surface_input_ports.len() {
@@ -946,256 +887,201 @@ impl Session {
                         });
                     }
                 }
-                PreparedEncodedSurfaceUpdateV1::Present {
-                    revision,
-                    surfaces: PreparedSurfaceValuesV1::Typed(surfaces),
-                }
+                self.apply_canonical_present(&epoch, revision, surfaces.len(), |index| {
+                    surfaces[index].value
+                })
             }
-        };
-        self.apply_prepared(&epoch, prepared)
-            .map_err(map_session_update_error)
+        }
     }
 
-    /// Private allocation-free packed bridge for the WASM boundary.
-    pub(crate) fn update_packed(
+    /// Read one complete canonical Surface-input set lazily and commit it as one
+    /// revision. The callback is not invoked until lifetime, cardinality and
+    /// revision admission have all succeeded.
+    pub(crate) fn update_canonical_present(
         &mut self,
-        words: &[u32],
-    ) -> Result<&SessionState, PointRenderSessionUpdateErrorV1> {
+        revision: u64,
+        surface_input_port_count: usize,
+        value_at: impl FnMut(usize) -> Srgb8,
+    ) -> Result<&SessionState, SessionUpdateError> {
         let epoch = self
             .epoch
             .upgrade()
-            .ok_or(PointRenderSessionUpdateErrorV1::ProgramExpired)?;
-        let prepared = decode_encoded_surface_update(words, epoch.surface_input_ports.len())
-            .map_err(PointRenderSessionUpdateErrorV1::EncodedSurfaceUpdate)?;
-        self.apply_prepared(&epoch, prepared)
+            .ok_or(SessionUpdateError::ProgramExpired)?;
+        self.apply_canonical_present(&epoch, revision, surface_input_port_count, value_at)
     }
 
-    fn apply_prepared(
+    fn apply_unavailable(
         &mut self,
-        epoch: &ProgramEpochV1,
-        prepared: PreparedEncodedSurfaceUpdateV1<'_>,
-    ) -> Result<&SessionState, PointRenderSessionUpdateErrorV1> {
-        let incoming_revision = match &prepared {
-            PreparedEncodedSurfaceUpdateV1::Unavailable(unavailable) => unavailable.revision,
-            PreparedEncodedSurfaceUpdateV1::Present { revision, .. } => *revision,
-        };
-
+        unavailable: SurfaceUnavailable,
+    ) -> Result<&SessionState, SessionUpdateError> {
+        let incoming_revision = unavailable.revision;
         if let Some(current) = self.state.head_revision() {
             if incoming_revision < current {
-                return Err(PointRenderSessionUpdateErrorV1::EncodedSurfaceUpdate(
-                    PackedEncodedSurfaceUpdateErrorV1::RevisionOutOfOrder {
-                        current,
-                        incoming: incoming_revision,
-                    },
-                ));
+                return Err(SessionUpdateError::RevisionOutOfOrder {
+                    current,
+                    incoming: incoming_revision,
+                });
             }
             if incoming_revision == current {
-                return self.admit_same_revision(prepared);
+                let exact = match &self.state {
+                    SessionState::Waiting {
+                        current_unavailable: Some(current),
+                    }
+                    | SessionState::Stale {
+                        current_unavailable: current,
+                        ..
+                    } => unavailable == *current,
+                    _ => false,
+                };
+                return if exact {
+                    Ok(&self.state)
+                } else {
+                    Err(SessionUpdateError::RevisionConflict { revision: current })
+                };
             }
         }
 
-        match prepared {
-            PreparedEncodedSurfaceUpdateV1::Unavailable(unavailable) => {
-                let previous = take_last_ready(&mut self.state);
-                self.state = match previous {
-                    Some(previous) => SessionState::Stale {
-                        previous,
-                        current_unavailable: unavailable,
-                    },
-                    None => SessionState::Waiting {
-                        current_unavailable: Some(unavailable),
-                    },
-                };
-            }
-            PreparedEncodedSurfaceUpdateV1::Present { revision, surfaces } => {
-                let retained_shape_matches = match &self.state {
-                    SessionState::Waiting { .. } => {
-                        self.initial_signal_buffers.as_ref().is_some_and(|buffers| {
-                            buffers.input_surface_signals_rgb24.len()
-                                == epoch.surface_input_ports.len()
-                                && buffers.composited_occurrence_signals_rgb24.len()
-                                    == epoch.occurrence_ids.len()
-                        })
-                    }
-                    SessionState::Ready { current } => {
-                        current.buffers.input_surface_signals_rgb24.len()
-                            == epoch.surface_input_ports.len()
-                            && current.buffers.composited_occurrence_signals_rgb24.len()
-                                == epoch.occurrence_ids.len()
-                    }
-                    SessionState::Stale { previous, .. } => {
-                        previous.buffers.input_surface_signals_rgb24.len()
-                            == epoch.surface_input_ports.len()
-                            && previous.buffers.composited_occurrence_signals_rgb24.len()
-                                == epoch.occurrence_ids.len()
-                    }
-                };
-                if !retained_shape_matches {
-                    return Err(PointRenderSessionUpdateErrorV1::Evaluation(
-                        BindingError::IncompatibleWorkspace,
-                    ));
-                }
-
-                // Decode admitted the exact epoch-owned cardinality and every
-                // word before this loop. Each typed port therefore exists in
-                // the cloned admitted schema; setters cannot partially reject
-                // a later element. These mutable values are scratch only and
-                // are not published until the final state replacement below.
-                for (index, &port) in epoch.surface_input_ports.iter().enumerate() {
-                    self.bindings
-                        .set_surface_input(port, surfaces.value(index))
-                        .map_err(PointRenderSessionUpdateErrorV1::Evaluation)?;
-                }
-                let evaluation = epoch
-                    .graph
-                    .evaluate_admitted_into(&self.bindings, &mut self.workspace)
-                    .map_err(PointRenderSessionUpdateErrorV1::Evaluation)?;
-                if evaluation.occurrences().len() != epoch.occurrence_ids.len() {
-                    return Err(PointRenderSessionUpdateErrorV1::Evaluation(
-                        BindingError::IncompatibleWorkspace,
-                    ));
-                }
-
-                // No fallible work follows. Preserve the committed snapshot
-                // through decode, binding mutation and evaluation; only now
-                // reclaim the one fixed buffer pair and overwrite it.
-                let mut buffers = match take_last_ready(&mut self.state) {
-                    Some(previous) => previous.buffers,
-                    None => self.initial_signal_buffers.take().unwrap_or_else(|| {
-                        unreachable!("a Session without prior Ready must retain initial buffers")
-                    }),
-                };
-                debug_assert_eq!(buffers.input_surface_signals_rgb24.len(), surfaces.len());
-                debug_assert_eq!(
-                    buffers.composited_occurrence_signals_rgb24.len(),
-                    epoch.occurrence_ids.len()
-                );
-                for (index, output) in buffers.input_surface_signals_rgb24.iter_mut().enumerate() {
-                    *output = pack_rgb24(surfaces.value(index).bytes());
-                }
-                for (resolved, output) in evaluation
-                    .occurrences()
-                    .zip(buffers.composited_occurrence_signals_rgb24.iter_mut())
-                {
-                    // Packing an already resolved encoded point is infallible.
-                    // Any future fallible verifier must finish before buffer
-                    // reclamation above (or introduce its own staging value).
-                    *output = pack_rgb24(resolved.visible());
-                }
-                self.state = SessionState::Ready {
-                    current: Snapshot { revision, buffers },
-                };
-            }
-        }
+        let previous = take_last_ready(&mut self.state);
+        self.state = match previous {
+            Some(previous) => SessionState::Stale {
+                previous,
+                current_unavailable: unavailable,
+            },
+            None => SessionState::Waiting {
+                current_unavailable: Some(unavailable),
+            },
+        };
         Ok(&self.state)
     }
 
-    fn admit_same_revision(
-        &self,
-        prepared: PreparedEncodedSurfaceUpdateV1<'_>,
-    ) -> Result<&SessionState, PointRenderSessionUpdateErrorV1> {
-        let exact = match (prepared, &self.state) {
-            (
-                PreparedEncodedSurfaceUpdateV1::Unavailable(incoming),
-                SessionState::Waiting {
-                    current_unavailable: Some(current),
-                }
-                | SessionState::Stale {
-                    current_unavailable: current,
-                    ..
-                },
-            ) => incoming == *current,
-            (
-                PreparedEncodedSurfaceUpdateV1::Present { revision, surfaces },
-                SessionState::Ready { current },
-            ) => {
-                revision == current.revision
-                    && surfaces.matches_rgb24(&current.buffers.input_surface_signals_rgb24)
+    fn apply_canonical_present(
+        &mut self,
+        epoch: &ProgramEpochV1,
+        revision: u64,
+        surface_input_port_count: usize,
+        mut value_at: impl FnMut(usize) -> Srgb8,
+    ) -> Result<&SessionState, SessionUpdateError> {
+        if surface_input_port_count != epoch.surface_input_ports.len() {
+            return Err(SessionUpdateError::SurfaceInputPortLengthMismatch {
+                expected: epoch.surface_input_ports.len(),
+                actual: surface_input_port_count,
+            });
+        }
+
+        if let Some(current) = self.state.head_revision() {
+            if revision < current {
+                return Err(SessionUpdateError::RevisionOutOfOrder {
+                    current,
+                    incoming: revision,
+                });
             }
-            _ => false,
+            if revision == current {
+                return self.admit_same_revision_present(revision, &mut value_at);
+            }
+        }
+
+        let retained_shape_matches = match &self.state {
+            SessionState::Waiting { .. } => {
+                self.initial_signal_buffers.as_ref().is_some_and(|buffers| {
+                    buffers.input_surface_signals_rgb24.len() == epoch.surface_input_ports.len()
+                        && buffers.composited_occurrence_signals_rgb24.len()
+                            == epoch.occurrence_ids.len()
+                })
+            }
+            SessionState::Ready { current } => {
+                current.buffers.input_surface_signals_rgb24.len() == epoch.surface_input_ports.len()
+                    && current.buffers.composited_occurrence_signals_rgb24.len()
+                        == epoch.occurrence_ids.len()
+            }
+            SessionState::Stale { previous, .. } => {
+                previous.buffers.input_surface_signals_rgb24.len()
+                    == epoch.surface_input_ports.len()
+                    && previous.buffers.composited_occurrence_signals_rgb24.len()
+                        == epoch.occurrence_ids.len()
+            }
         };
+        if !retained_shape_matches {
+            return Err(SessionUpdateError::InternalInvariant);
+        }
+
+        self.bindings
+            .overwrite_surface_inputs_canonical(
+                epoch.surface_input_ports.iter().copied(),
+                &mut value_at,
+            )
+            .map_err(|_| SessionUpdateError::InternalInvariant)?;
+        let evaluation = epoch
+            .graph
+            .evaluate_admitted_into(&self.bindings, &mut self.workspace)
+            .map_err(|_| SessionUpdateError::InternalInvariant)?;
+        if evaluation.occurrences().len() != epoch.occurrence_ids.len() {
+            return Err(SessionUpdateError::InternalInvariant);
+        }
+
+        // No fallible work follows. The callback is already gone from the
+        // commit path: the input snapshot is read back from the admitted
+        // canonical bindings that evaluation consumed.
+        let mut buffers = match take_last_ready(&mut self.state) {
+            Some(previous) => previous.buffers,
+            None => self.initial_signal_buffers.take().unwrap_or_else(|| {
+                unreachable!("a Session without prior Ready must retain initial buffers")
+            }),
+        };
+        debug_assert_eq!(
+            buffers.input_surface_signals_rgb24.len(),
+            surface_input_port_count
+        );
+        debug_assert_eq!(
+            buffers.composited_occurrence_signals_rgb24.len(),
+            epoch.occurrence_ids.len()
+        );
+        for (((input, value), expected), output) in self
+            .bindings
+            .surface_inputs_canonical()
+            .zip(buffers.surface_input_ports.iter().copied())
+            .zip(buffers.input_surface_signals_rgb24.iter_mut())
+        {
+            debug_assert_eq!(input, expected);
+            *output = pack_rgb24(value.bytes());
+        }
+        for (resolved, output) in evaluation
+            .occurrences()
+            .zip(buffers.composited_occurrence_signals_rgb24.iter_mut())
+        {
+            *output = pack_rgb24(resolved.visible());
+        }
+        self.state = SessionState::Ready {
+            current: Snapshot { revision, buffers },
+        };
+        Ok(&self.state)
+    }
+
+    fn admit_same_revision_present(
+        &self,
+        revision: u64,
+        mut value_at: impl FnMut(usize) -> Srgb8,
+    ) -> Result<&SessionState, SessionUpdateError> {
+        let SessionState::Ready { current } = &self.state else {
+            return Err(SessionUpdateError::RevisionConflict { revision });
+        };
+        debug_assert_eq!(current.revision, revision);
+
+        let mut exact = true;
+        for (index, &expected) in current
+            .buffers
+            .input_surface_signals_rgb24
+            .iter()
+            .enumerate()
+        {
+            if pack_rgb24(value_at(index).bytes()) != expected {
+                exact = false;
+            }
+        }
         if exact {
             Ok(&self.state)
         } else {
-            Err(PointRenderSessionUpdateErrorV1::EncodedSurfaceUpdate(
-                PackedEncodedSurfaceUpdateErrorV1::RevisionConflict {
-                    revision: self
-                        .state
-                        .head_revision()
-                        .unwrap_or_else(|| unreachable!("same-revision branch has a head")),
-                },
-            ))
+            Err(SessionUpdateError::RevisionConflict { revision })
         }
-    }
-}
-
-fn map_session_update_error(error: PointRenderSessionUpdateErrorV1) -> SessionUpdateError {
-    match error {
-        PointRenderSessionUpdateErrorV1::ProgramExpired => SessionUpdateError::ProgramExpired,
-        PointRenderSessionUpdateErrorV1::EncodedSurfaceUpdate(
-            PackedEncodedSurfaceUpdateErrorV1::RevisionOutOfOrder { current, incoming },
-        ) => SessionUpdateError::RevisionOutOfOrder { current, incoming },
-        PointRenderSessionUpdateErrorV1::EncodedSurfaceUpdate(
-            PackedEncodedSurfaceUpdateErrorV1::RevisionConflict { revision },
-        ) => SessionUpdateError::RevisionConflict { revision },
-        PointRenderSessionUpdateErrorV1::EncodedSurfaceUpdate(_)
-        | PointRenderSessionUpdateErrorV1::Evaluation(_) => SessionUpdateError::InternalInvariant,
-    }
-}
-
-fn decode_encoded_surface_update(
-    words: &[u32],
-    surface_count: usize,
-) -> Result<PreparedEncodedSurfaceUpdateV1<'_>, PackedEncodedSurfaceUpdateErrorV1> {
-    if words.len() < PACKED_ENCODED_SURFACE_HEADER_WORDS_V1 {
-        return Err(PackedEncodedSurfaceUpdateErrorV1::HeaderTooShort);
-    }
-    if words[0] != PACKED_ENCODED_SURFACE_UPDATE_MAGIC_V1 {
-        return Err(PackedEncodedSurfaceUpdateErrorV1::MagicMismatch { actual: words[0] });
-    }
-    let revision = u64::from(words[2]) | (u64::from(words[3]) << 32);
-    match words[1] {
-        PACKED_ENCODED_SURFACE_UNAVAILABLE_TAG_V1 => {
-            if words.len() != PACKED_SURFACE_UNAVAILABLE_WORDS_V1 {
-                return Err(PackedEncodedSurfaceUpdateErrorV1::LengthMismatch {
-                    expected: PACKED_SURFACE_UNAVAILABLE_WORDS_V1,
-                    actual: words.len(),
-                });
-            }
-            Ok(PreparedEncodedSurfaceUpdateV1::Unavailable(
-                SurfaceUnavailable {
-                    revision,
-                    reason: words[4],
-                },
-            ))
-        }
-        PACKED_ENCODED_SURFACE_PRESENT_TAG_V1 => {
-            let expected = PACKED_ENCODED_SURFACE_HEADER_WORDS_V1
-                .checked_add(surface_count)
-                .ok_or(PackedEncodedSurfaceUpdateErrorV1::ResourceExhausted)?;
-            if words.len() != expected {
-                return Err(PackedEncodedSurfaceUpdateErrorV1::LengthMismatch {
-                    expected,
-                    actual: words.len(),
-                });
-            }
-            let surfaces = &words[PACKED_ENCODED_SURFACE_HEADER_WORDS_V1..];
-            for (surface_index, &value) in surfaces.iter().enumerate() {
-                if value & 0xff00_0000 != 0 {
-                    return Err(
-                        PackedEncodedSurfaceUpdateErrorV1::ReservedSignalByteNonZero {
-                            surface_index,
-                            value,
-                        },
-                    );
-                }
-            }
-            Ok(PreparedEncodedSurfaceUpdateV1::Present {
-                revision,
-                surfaces: PreparedSurfaceValuesV1::PackedRgb24(surfaces),
-            })
-        }
-        actual => Err(PackedEncodedSurfaceUpdateErrorV1::UnsupportedTag { actual }),
     }
 }
 
