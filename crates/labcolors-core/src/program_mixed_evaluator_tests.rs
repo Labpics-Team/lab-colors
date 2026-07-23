@@ -12,9 +12,9 @@ use crate::observation::{
     ObservedScenarioSetInput, Revision, ScenarioId, ScenarioInput, SurfaceInputBinding,
 };
 use crate::package_bridge::{
-    PackageProgramCertificateKindV1, PackageProgramOperationV1, PackageProgramOwnerV1,
-    PackageProgramScenarioV1, PackageProgramStateKindV1, PackageProgramUpdateErrorKindV1,
-    PackageProgramUpdateV1,
+    PackageProgramCertificateKindV1, PackageProgramOperationV1, PackageProgramOutputSlotIdV1,
+    PackageProgramOwnerV1, PackageProgramScenarioV1, PackageProgramStateKindV1,
+    PackageProgramUpdateErrorKindV1, PackageProgramUpdateV1,
 };
 use crate::program_session::{
     CompiledCoreProgramV1, CompositionProfile, ConstraintId, ConstraintInvocation, ConstraintSet,
@@ -305,8 +305,11 @@ fn mixed_family_conflict_is_exhaustive_and_keeps_report_only_non_gating() {
 #[test]
 fn concrete_package_bridge_projects_total_ready_and_stale_operations() {
     let owner = PackageProgramOwnerV1::from_compiled(finite_program([[0x80; 3], [0; 3]]));
-    assert_eq!(owner.surface_input_count(), 1);
-    assert_eq!(owner.output_slots().collect::<Vec<_>>(), [OUTPUT.value()]);
+    assert_eq!(owner.surface_input_port_count(), 1);
+    assert_eq!(
+        owner.output_slots().collect::<Vec<_>>(),
+        [PackageProgramOutputSlotIdV1::new(OUTPUT.value())]
+    );
 
     let mut session = owner.instantiate(11).unwrap();
     let initial = session.state();
@@ -341,7 +344,7 @@ fn concrete_package_bridge_projects_total_ready_and_stale_operations() {
     assert_eq!(
         ready.operations().collect::<Vec<_>>(),
         [PackageProgramOperationV1::Set {
-            output_slot: OUTPUT.value(),
+            output_slot: PackageProgramOutputSlotIdV1::new(OUTPUT.value()),
             source: Srgb8::new([0; 3]),
             opacity: 1.0,
             certificate_index: 0,
@@ -398,7 +401,7 @@ fn concrete_package_bridge_projects_total_ready_and_stale_operations() {
     assert_eq!(
         stale.operations().collect::<Vec<_>>(),
         [PackageProgramOperationV1::Hold {
-            output_slot: OUTPUT.value(),
+            output_slot: PackageProgramOutputSlotIdV1::new(OUTPUT.value()),
             certificate_index: 0,
         }]
     );
@@ -430,7 +433,7 @@ fn concrete_package_bridge_distinguishes_failed_remove_from_failed_hold() {
     assert_eq!(
         failed.operations().collect::<Vec<_>>(),
         [PackageProgramOperationV1::Remove {
-            output_slot: OUTPUT.value(),
+            output_slot: PackageProgramOutputSlotIdV1::new(OUTPUT.value()),
         }]
     );
 
@@ -468,7 +471,7 @@ fn concrete_package_bridge_distinguishes_failed_remove_from_failed_hold() {
     assert_eq!(
         failed.operations().collect::<Vec<_>>(),
         [PackageProgramOperationV1::Hold {
-            output_slot: OUTPUT.value(),
+            output_slot: PackageProgramOutputSlotIdV1::new(OUTPUT.value()),
             certificate_index: 1,
         }]
     );

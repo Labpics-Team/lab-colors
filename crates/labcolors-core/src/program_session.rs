@@ -121,6 +121,12 @@ impl TargetCandidateV1 {
         Self { id, signal }
     }
 
+    /// Bind one encoded sRGB8 candidate through the sole admitted signal
+    /// profile. Package authoring never carries a free-form profile tag.
+    pub const fn from_srgb8(id: TargetCandidateId, value: Srgb8) -> Self {
+        Self::new(id, ColorSignal::from_srgb8(value))
+    }
+
     pub const fn id(self) -> TargetCandidateId {
         self.id
     }
@@ -731,6 +737,104 @@ where
 /// code-owned evaluator union.
 pub(crate) type CoreProgramV1 = Program<CoreProgramEvaluatorsV1>;
 
+/// Mutable cold-edge builder for the one concrete Core Program IR.
+///
+/// Every pushed value is already an actual Program declaration type. This
+/// builder owns no transport tags, names, client taxonomy, or second graph;
+/// compilation moves the concrete Program directly into the existing atomic
+/// compiler.
+pub(crate) struct CoreProgramDraftV1 {
+    program: CoreProgramV1,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CoreProgramDraftErrorV1 {
+    JointSelectionAlreadyDeclared,
+}
+
+impl CoreProgramDraftV1 {
+    pub(crate) fn new() -> Self {
+        Self {
+            program: Program::new(
+                Vec::new(),
+                Vec::new(),
+                ObservationGroup::new(ObservationGroupId::new(0), Vec::new()),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                ConstraintSet::new(Vec::new(), Vec::new()),
+                Vec::new(),
+                CoreProgramEvaluatorsV1,
+            ),
+        }
+    }
+
+    pub(crate) fn push_source(&mut self, source: Source) {
+        self.program.sources.push(source);
+    }
+
+    pub(crate) fn push_target(&mut self, target: Target) {
+        self.program.targets.push(target);
+    }
+
+    pub(crate) fn set_joint_selection(
+        &mut self,
+        selection: DeclaredJointSelectionV1,
+    ) -> Result<(), CoreProgramDraftErrorV1> {
+        if self.program.joint_selection.is_some() {
+            return Err(CoreProgramDraftErrorV1::JointSelectionAlreadyDeclared);
+        }
+        self.program.joint_selection = Some(selection);
+        Ok(())
+    }
+
+    pub(crate) fn push_surface_input_port(&mut self, input: SurfaceInputPortId) {
+        self.program
+            .observation_group
+            .surface_input_ports
+            .push(input);
+    }
+
+    pub(crate) fn push_opacity_input(&mut self, opacity: OpacityInput) {
+        self.program.opacities.push(opacity);
+    }
+
+    pub(crate) fn push_paint(&mut self, paint: Paint) {
+        self.program.paints.push(paint);
+    }
+
+    pub(crate) fn push_surface(&mut self, surface: Surface) {
+        self.program.surfaces.push(surface);
+    }
+
+    pub(crate) fn push_occurrence(&mut self, occurrence: Occurrence) {
+        self.program.occurrences.push(occurrence);
+    }
+
+    pub(crate) fn push_hard_constraint(
+        &mut self,
+        constraint: ConstraintInvocation<CoreProgramConstraintInvocationV1, HardModeV1>,
+    ) {
+        self.program.constraints.hard.push(constraint);
+    }
+
+    pub(crate) fn push_report_constraint(
+        &mut self,
+        constraint: ConstraintInvocation<CoreProgramConstraintInvocationV1, ReportModeV1>,
+    ) {
+        self.program.constraints.report_only.push(constraint);
+    }
+
+    pub(crate) fn push_output(&mut self, output: OutputBinding) {
+        self.program.outputs.push(output);
+    }
+
+    pub(crate) fn compile(self) -> Result<CompiledCoreProgramV1, ProgramCompileError> {
+        self.program.compile()
+    }
+}
+
 /// Atomic compile failure. No executable partial graph escapes.
 #[derive(Debug, PartialEq, Eq)]
 pub enum ProgramCompileError {
@@ -749,6 +853,14 @@ pub enum ProgramCompileError {
     },
     DuplicateSurfaceInputPort {
         input: SurfaceInputPortId,
+    },
+    UnusedSurfaceInputPort {
+        input: SurfaceInputPortId,
+    },
+    DuplicateSurfaceInputBinding {
+        input: SurfaceInputPortId,
+        first: SurfaceId,
+        duplicate: SurfaceId,
     },
     DuplicatePaint {
         paint: PaintId,
@@ -1827,6 +1939,51 @@ fn map_program_execution_binding_error<EvaluationError>(
     }
 }
 
+fn validate_surface_input_bijection<Evaluation>(
+    program: &Program<Evaluation>,
+) -> Result<(), ProgramCompileError>
+where
+    Evaluation: ProgramConstraintEvaluatorSetV1,
+    ProgramConstraintInvocationOf<Evaluation>: Copy,
+{
+    let mut bindings = Vec::new();
+    bindings
+        .try_reserve_exact(program.surfaces.len())
+        .map_err(|_| ProgramCompileError::ResourceExhausted)?;
+    for surface in &program.surfaces {
+        if let Surface::Input { id, input } = *surface {
+            bindings.push((input, id));
+        }
+    }
+    bindings.sort_unstable();
+
+    for pair in bindings.windows(2) {
+        if let [
+            (first_input, first_surface),
+            (duplicate_input, duplicate_surface),
+        ] = pair
+        {
+            if first_input == duplicate_input {
+                return Err(ProgramCompileError::DuplicateSurfaceInputBinding {
+                    input: *first_input,
+                    first: *first_surface,
+                    duplicate: *duplicate_surface,
+                });
+            }
+        }
+    }
+
+    for input in &program.observation_group.surface_input_ports {
+        if bindings
+            .binary_search_by_key(input, |(bound, _surface)| *bound)
+            .is_err()
+        {
+            return Err(ProgramCompileError::UnusedSurfaceInputPort { input: *input });
+        }
+    }
+    Ok(())
+}
+
 fn prepare_program<Evaluation>(
     mut program: Program<Evaluation>,
 ) -> Result<ProgramEpochV1<Evaluation>, ProgramCompileError>
@@ -1858,6 +2015,7 @@ where
     let graph = lower_graph(&program)?
         .compile()
         .map_err(map_compile_error)?;
+    validate_surface_input_bijection(&program)?;
     let binding_template = graph
         .admit_bindings(&lower_bindings(&program)?)
         .map_err(map_binding_compile_error)?;

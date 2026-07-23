@@ -6,6 +6,7 @@ const LIB_SOURCE: &str = include_str!("lib.rs");
 const LCS_OCCURRENCE_SOURCE: &str = include_str!("lcs_occurrence.rs");
 const OBSERVATION_SOURCE: &str = include_str!("observation.rs");
 const OUTPUT_PROJECTION_SOURCE: &str = include_str!("output_projection.rs");
+const PACKAGE_BRIDGE_SOURCE: &str = include_str!("package_bridge.rs");
 const POINT_SUPPORT_SOURCE: &str = include_str!("point_support.rs");
 const PROGRAM_SESSION_SOURCE: &str = include_str!("program_session.rs");
 const SESSION_SOURCE: &str = include_str!("session.rs");
@@ -72,6 +73,55 @@ fn generic_physical_and_transport_modules_contain_no_client_or_legacy_vocabulary
                 "{path} must remain client-semantic agnostic; found `{forbidden}`"
             );
         }
+    }
+}
+
+#[test]
+fn package_authoring_is_one_thin_concrete_core_draft_without_a_second_graph() {
+    assert_eq!(
+        normalized_source_scope(
+            PACKAGE_BRIDGE_SOURCE,
+            "pub struct PackageProgramDraftV1 {",
+            "/// Draft mutation rejected",
+        ),
+        "pub struct PackageProgramDraftV1 { inner: CoreProgramDraftV1, }",
+        "the package seam must forward actual IR nodes into the sole Core draft",
+    );
+    assert_eq!(
+        normalized_source_scope(
+            PROGRAM_SESSION_SOURCE,
+            "pub(crate) struct CoreProgramDraftV1 {",
+            "#[derive(Debug, Clone, Copy, PartialEq, Eq)]\npub(crate) enum CoreProgramDraftErrorV1",
+        ),
+        "pub(crate) struct CoreProgramDraftV1 { program: CoreProgramV1, }",
+        "the mutable Core seam must own the actual concrete Program, not mirror its fields",
+    );
+    for forbidden in [
+        "PairFill",
+        "PairLabel",
+        "Glow",
+        "Material",
+        "Ladder",
+        "AlphaAnalog",
+        "ThemeConfig",
+        "RoleRecipe",
+        "serde",
+        "serde_json",
+        "String",
+        "HashMap",
+        "dyn Program",
+        "OutputProfileId",
+        "PackageProgramObservationGroupIdV1",
+        "PackageProgramOpacityIdV1",
+        "PackageProgramSurfaceInputIdV1",
+        "pub fn push_opacity(",
+        "pub fn push_surface_input(",
+        "pub fn surface_input_slots(",
+    ] {
+        assert!(
+            !PACKAGE_BRIDGE_SOURCE.contains(forbidden),
+            "the concrete package lowerer must not acquire `{forbidden}`",
+        );
     }
 }
 

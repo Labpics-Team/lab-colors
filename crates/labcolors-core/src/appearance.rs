@@ -54,7 +54,6 @@ impl SurfaceInputPortId {
     }
 
     /// Exact transport value. It has identity semantics only.
-    #[cfg(test)]
     pub(crate) const fn value(self) -> u32 {
         self.0
     }
@@ -68,6 +67,10 @@ impl OpacityInputId {
     pub(crate) const fn new(raw: u32) -> Self {
         Self(raw)
     }
+
+    pub(crate) const fn value(self) -> u32 {
+        self.0
+    }
 }
 
 /// Непрозрачный handle Paint-программы.
@@ -78,6 +81,10 @@ impl PaintId {
     pub(crate) const fn new(raw: u32) -> Self {
         Self(raw)
     }
+
+    pub(crate) const fn value(self) -> u32 {
+        self.0
+    }
 }
 
 /// Непрозрачный handle наблюдаемой поверхности.
@@ -87,6 +94,10 @@ pub(crate) struct SurfaceId(u32);
 impl SurfaceId {
     pub(crate) const fn new(raw: u32) -> Self {
         Self(raw)
+    }
+
+    pub(crate) const fn value(self) -> u32 {
+        self.0
     }
 }
 
@@ -101,7 +112,6 @@ impl OccurrenceId {
     }
 
     /// Exact transport value. It has identity semantics only.
-    #[cfg(test)]
     pub(crate) const fn value(self) -> u32 {
         self.0
     }
