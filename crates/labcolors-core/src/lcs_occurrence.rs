@@ -10,7 +10,7 @@
 //! arbitrary second context.
 
 use crate::Srgb8;
-use crate::spaces::cam16::forward_correlates_v1;
+use crate::spaces::cam16::{forward_correlates_v1, ucs_j, ucs_m};
 use crate::spaces::oklab::xyz_d65_to_oklab_v1;
 use crate::spaces::srgb::xyz_d65_from_srgb8_v1;
 use crate::spaces::vc::{Cam16SurroundV1, ViewingConditions};
@@ -702,17 +702,26 @@ pub enum Cam16ViewReleaseId {
     LiEtAl2017Cie248ForwardV1,
 }
 
+/// Formula and operation-order release of the rectangular CAM16-UCS view.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Cam16UcsViewReleaseId {
+    LiEtAl2017Cam16UcsV1,
+}
+
 /// Typed release discriminator used only to qualify derivation errors.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum AppearanceViewReleaseIdV1 {
     Oklab(OklabViewReleaseId),
     Cam16(Cam16ViewReleaseId),
+    Cam16Ucs(Cam16UcsViewReleaseId),
 }
 
 pub(crate) const OKLAB_VIEW_RELEASE_V1: OklabViewReleaseId =
     OklabViewReleaseId::Ottosson20210125XyzD65V1;
 pub(crate) const CAM16_VIEW_RELEASE_V1: Cam16ViewReleaseId =
     Cam16ViewReleaseId::LiEtAl2017Cie248ForwardV1;
+pub(crate) const CAM16_UCS_VIEW_RELEASE_V1: Cam16UcsViewReleaseId =
+    Cam16UcsViewReleaseId::LiEtAl2017Cam16UcsV1;
 
 /// Finite binary64 coordinate with canonical positive zero.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -746,6 +755,10 @@ pub enum AppearanceViewFieldV1 {
     Cam16M,
     Cam16S,
     Cam16Hue,
+    Cam16UcsJPrime,
+    Cam16UcsMPrimeIntermediate,
+    Cam16UcsAPrime,
+    Cam16UcsBPrime,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -757,6 +770,11 @@ pub enum AppearanceStateDerivationErrorV1 {
         release: AppearanceViewReleaseIdV1,
         field: AppearanceViewFieldV1,
         reason: NumericDomainError,
+    },
+    InconsistentDerivedHueState {
+        release: Cam16UcsViewReleaseId,
+        hue: HueState,
+        m_prime_bits: u64,
     },
 }
 
@@ -834,6 +852,38 @@ impl Cam16ViewV1 {
     }
 }
 
+/// Rectangular CAM16-UCS coordinates derived from one admitted CAM16 view.
+///
+/// This is a coordinate view of one occurrence, not a pairwise difference
+/// calibration, universal perceptual scale, editable colour or inverse route.
+/// Its polar magnitude is an intermediate only; the stored coordinates are the
+/// published rectangular `(J', a', b')` form.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Cam16UcsViewV1 {
+    release: Cam16UcsViewReleaseId,
+    j_prime: FiniteNonNegative,
+    a_prime: FiniteCoordinate,
+    b_prime: FiniteCoordinate,
+}
+
+impl Cam16UcsViewV1 {
+    pub(crate) const fn release(self) -> Cam16UcsViewReleaseId {
+        self.release
+    }
+
+    pub(crate) fn j_prime(self) -> f64 {
+        self.j_prime.get()
+    }
+
+    pub(crate) fn a_prime(self) -> f64 {
+        self.a_prime.get()
+    }
+
+    pub(crate) fn b_prime(self) -> f64 {
+        self.b_prime.get()
+    }
+}
+
 /// One-way, derived appearance snapshot of exactly one occurrence.
 ///
 /// Canonical LCS identity remains [`LcsOccurrence`] (`sample × context`). This
@@ -875,6 +925,15 @@ impl AppearanceState {
 
     pub(crate) const fn cam16(self) -> Cam16ViewV1 {
         self.cam16
+    }
+
+    /// Derive the optional-cost rectangular CAM16-UCS view from this state's
+    /// already admitted CAM16 coordinates.
+    ///
+    /// Keeping the rescale lazy avoids an `ln` plus polar-to-rectangular
+    /// trigonometry for evaluators which request only Oklab or CAM16.
+    pub(crate) fn cam16_ucs(self) -> Result<Cam16UcsViewV1, AppearanceStateDerivationErrorV1> {
+        derive_cam16_ucs_view_v1(self.cam16)
     }
 }
 
@@ -949,5 +1008,50 @@ fn derive_cam16_view_v1(
         m,
         s,
         hue,
+    })
+}
+
+fn derive_cam16_ucs_view_v1(
+    cam16: Cam16ViewV1,
+) -> Result<Cam16UcsViewV1, AppearanceStateDerivationErrorV1> {
+    let release = AppearanceViewReleaseIdV1::Cam16Ucs(CAM16_UCS_VIEW_RELEASE_V1);
+    let j_prime = FiniteNonNegative::new(ucs_j(cam16.j())).map_err(|reason| {
+        view_numeric_error(release, AppearanceViewFieldV1::Cam16UcsJPrime, reason)
+    })?;
+    let m_prime = FiniteNonNegative::new(ucs_m(cam16.m())).map_err(|reason| {
+        view_numeric_error(
+            release,
+            AppearanceViewFieldV1::Cam16UcsMPrimeIntermediate,
+            reason,
+        )
+    })?;
+
+    let [a_prime, b_prime] = if m_prime.get() == 0.0 {
+        // Rectangular zero has no angular dependency. This branch also keeps
+        // both coordinates canonical positive zero for exact black.
+        [0.0, 0.0]
+    } else {
+        let HueState::Defined(hue) = cam16.hue() else {
+            return Err(
+                AppearanceStateDerivationErrorV1::InconsistentDerivedHueState {
+                    release: CAM16_UCS_VIEW_RELEASE_V1,
+                    hue: cam16.hue(),
+                    m_prime_bits: m_prime.get().to_bits(),
+                },
+            );
+        };
+        let radians = hue.degrees().to_radians();
+        [m_prime.get() * radians.cos(), m_prime.get() * radians.sin()]
+    };
+
+    Ok(Cam16UcsViewV1 {
+        release: CAM16_UCS_VIEW_RELEASE_V1,
+        j_prime,
+        a_prime: FiniteCoordinate::new(a_prime).map_err(|reason| {
+            view_numeric_error(release, AppearanceViewFieldV1::Cam16UcsAPrime, reason)
+        })?,
+        b_prime: FiniteCoordinate::new(b_prime).map_err(|reason| {
+            view_numeric_error(release, AppearanceViewFieldV1::Cam16UcsBPrime, reason)
+        })?,
     })
 }

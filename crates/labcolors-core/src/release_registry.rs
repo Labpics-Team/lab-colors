@@ -9,8 +9,9 @@
 
 use crate::lcs_occurrence::{
     ADMITTED_SRGB8_TRISTIMULUS_BINDING_V1, AdmittedSrgb8TristimulusBindingV1,
-    AppearanceContextSchemaReleaseId, CAM16_VIEW_RELEASE_V1, Cam16ViewReleaseId,
-    ColorimetricFrameId, IEC_SRGB_D65_XYZ_FRAME_V1, OKLAB_VIEW_RELEASE_V1, OklabViewReleaseId,
+    AppearanceContextSchemaReleaseId, CAM16_UCS_VIEW_RELEASE_V1, CAM16_VIEW_RELEASE_V1,
+    Cam16UcsViewReleaseId, Cam16ViewReleaseId, ColorimetricFrameId, IEC_SRGB_D65_XYZ_FRAME_V1,
+    OKLAB_VIEW_RELEASE_V1, OklabViewReleaseId,
 };
 use crate::output_projection::{
     CSS_COLOR_4_OKLCH_D65_FROM_MODELED_SRGB8_SOLID_V1, CssOklchHueSerializationReleaseIdV1,
@@ -24,9 +25,11 @@ pub(crate) const RELEASE_REGISTRY_SCHEMA_VERSION_V1: u16 = 1;
 // key. The byte order is documented by `RegisteredReleaseDescriptorV1` below.
 const RELEASE_REGISTRY_CANONICAL_BYTES_V1: &[u8] = concat!(
     "labcolors.release-registry.canonical-binary.v1\0",
-    "\0\x01\0\x05",
+    "\0\x01\0\x06",
     "\x01\x01\0\x26cam16-li-et-al-2017-cie-248-forward-v1",
     "\x01\x02\x01\x01\x01\x02\x02\x02\0\0\0\0\0\0\0",
+    "\x01\x01\0\x26cam16-ucs-li-et-al-2017-rectangular-v1",
+    "\x01\x02\x01\x01\x04\x05\x05\x05\x03\x01\0\0\0\0\0",
     "\x01\x01\0\x24oklab-ottosson-2021-01-25-xyz-d65-v1",
     "\x01\x01\0\x01\x01\x01\x01\x01\0\0\0\0\0\0\0",
     "\x01\x01\0\x27polar-from-ottosson-2021-01-25-oklab-v1",
@@ -37,7 +40,7 @@ const RELEASE_REGISTRY_CANONICAL_BYTES_V1: &[u8] = concat!(
 )
 .as_bytes();
 
-const RELEASE_REGISTRY_FNV1A32_V1: u32 = 1_293_630_307;
+const RELEASE_REGISTRY_FNV1A32_V1: u32 = 540_606_852;
 
 /// The disjoint kinds whose availability is reported by this registry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -76,6 +79,7 @@ impl ReleaseRegistryAvailabilityV1 {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) enum RegisteredColorReleaseIdV1 {
     Cam16View(Cam16ViewReleaseId),
+    Cam16UcsView(Cam16UcsViewReleaseId),
     OklabView(OklabViewReleaseId),
     OklchView(OklchViewReleaseId),
     CssColor4OklchD65FromModeledSrgb8Solid(OutputProjectionReleaseIdV1),
@@ -84,9 +88,10 @@ pub(crate) enum RegisteredColorReleaseIdV1 {
 impl RegisteredColorReleaseIdV1 {
     pub(crate) const fn class(self) -> ReleaseRegistryClassV1 {
         match self {
-            Self::Cam16View(_) | Self::OklabView(_) | Self::OklchView(_) => {
-                ReleaseRegistryClassV1::AppearanceView
-            }
+            Self::Cam16View(_)
+            | Self::Cam16UcsView(_)
+            | Self::OklabView(_)
+            | Self::OklchView(_) => ReleaseRegistryClassV1::AppearanceView,
             Self::CssColor4OklchD65FromModeledSrgb8Solid(_) => {
                 ReleaseRegistryClassV1::OutputProjection
             }
@@ -98,6 +103,9 @@ impl RegisteredColorReleaseIdV1 {
         match self {
             Self::Cam16View(Cam16ViewReleaseId::LiEtAl2017Cie248ForwardV1) => {
                 "cam16-li-et-al-2017-cie-248-forward-v1"
+            }
+            Self::Cam16UcsView(Cam16UcsViewReleaseId::LiEtAl2017Cam16UcsV1) => {
+                "cam16-ucs-li-et-al-2017-rectangular-v1"
             }
             Self::OklabView(OklabViewReleaseId::Ottosson20210125XyzD65V1) => {
                 "oklab-ottosson-2021-01-25-xyz-d65-v1"
@@ -171,6 +179,7 @@ pub(crate) enum RegistryAdmittedDomainV1 {
     FiniteNonNegativeXyzStimulusV1,
     FiniteOklabRectangularViewV1,
     ModeledIec61966Srgb8OccurrenceV1,
+    FiniteCam16ViewV1,
 }
 
 impl RegistryAdmittedDomainV1 {
@@ -179,6 +188,7 @@ impl RegistryAdmittedDomainV1 {
             Self::FiniteNonNegativeXyzStimulusV1 => 1,
             Self::FiniteOklabRectangularViewV1 => 2,
             Self::ModeledIec61966Srgb8OccurrenceV1 => 3,
+            Self::FiniteCam16ViewV1 => 4,
         }
     }
 }
@@ -190,6 +200,7 @@ pub(crate) enum RegistryCoordinateUnitsV1 {
     Cam16CorrelatesUnitlessHueDegreesV1,
     OklchCoordinatesUnitlessHueDegreesV1,
     CssColor4OklchPercentLightnessNumericChromaHueDegreesV1,
+    Cam16UcsJPrimeAPrimeBPrimeUnitlessV1,
 }
 
 impl RegistryCoordinateUnitsV1 {
@@ -199,6 +210,7 @@ impl RegistryCoordinateUnitsV1 {
             Self::Cam16CorrelatesUnitlessHueDegreesV1 => 2,
             Self::OklchCoordinatesUnitlessHueDegreesV1 => 3,
             Self::CssColor4OklchPercentLightnessNumericChromaHueDegreesV1 => 4,
+            Self::Cam16UcsJPrimeAPrimeBPrimeUnitlessV1 => 5,
         }
     }
 }
@@ -210,6 +222,7 @@ pub(crate) enum RegistryAchromaticLawV1 {
     HueUndefinedExactlyWhenCam16MIsZeroV1,
     HueUndefinedExactlyWhenOklabAAndBAreZeroV1,
     ExactSourceGreyOrRectangularOriginSerializesHueZeroV1,
+    RectangularChromaOriginExactlyWhenCam16MIsZeroV1,
 }
 
 impl RegistryAchromaticLawV1 {
@@ -219,6 +232,7 @@ impl RegistryAchromaticLawV1 {
             Self::HueUndefinedExactlyWhenCam16MIsZeroV1 => 2,
             Self::HueUndefinedExactlyWhenOklabAAndBAreZeroV1 => 3,
             Self::ExactSourceGreyOrRectangularOriginSerializesHueZeroV1 => 4,
+            Self::RectangularChromaOriginExactlyWhenCam16MIsZeroV1 => 5,
         }
     }
 }
@@ -230,6 +244,7 @@ pub(crate) enum RegistryReferenceIdentityV1 {
     LiEtAl2017Cie248Cam16ForwardV1,
     Ottosson20210125OklabPolarV1,
     CssColor4OklchD65V1,
+    LiEtAl2017Cam16UcsCoordinatesV1,
 }
 
 impl RegistryReferenceIdentityV1 {
@@ -239,6 +254,7 @@ impl RegistryReferenceIdentityV1 {
             Self::LiEtAl2017Cie248Cam16ForwardV1 => 2,
             Self::Ottosson20210125OklabPolarV1 => 3,
             Self::CssColor4OklchD65V1 => 4,
+            Self::LiEtAl2017Cam16UcsCoordinatesV1 => 5,
         }
     }
 }
@@ -297,18 +313,26 @@ impl OutputProjectionDependencyGraphV1 {
 pub(crate) enum ReleaseDependencyGraphV1 {
     DirectV1,
     OklchPolarFromOklabV1(OklabViewReleaseId),
+    Cam16UcsRectangularFromCam16V1(Cam16ViewReleaseId),
     CssColor4OklchD65V1(OutputProjectionDependencyGraphV1),
 }
 
 impl ReleaseDependencyGraphV1 {
-    /// Fixed canonical fields:
-    /// `[graph, source-binding, Oklab, Oklch, number, hue-policy, gamut-policy]`.
+    /// Fixed seven-byte tagged union. The graph tag determines its payload:
+    ///
+    /// - direct: six zero bytes;
+    /// - Oklch: `[0, Oklab, 0, 0, 0, 0]`;
+    /// - CSS output: `[source-binding, Oklab, Oklch, number, hue, gamut]`;
+    /// - CAM16-UCS: `[CAM16, 0, 0, 0, 0, 0]`.
     const fn canonical_fields(self) -> [u8; 7] {
         match self {
             Self::DirectV1 => [0; 7],
             Self::OklchPolarFromOklabV1(OklabViewReleaseId::Ottosson20210125XyzD65V1) => {
                 [1, 0, 1, 0, 0, 0, 0]
             }
+            Self::Cam16UcsRectangularFromCam16V1(
+                Cam16ViewReleaseId::LiEtAl2017Cie248ForwardV1,
+            ) => [3, 1, 0, 0, 0, 0, 0],
             Self::CssColor4OklchD65V1(graph) => [
                 2,
                 match graph.modeled_source_binding {
@@ -420,6 +444,19 @@ const CAM16_VIEW_DESCRIPTOR_V1: RegisteredReleaseDescriptorV1 = RegisteredReleas
     dependencies: ReleaseDependencyGraphV1::DirectV1,
 };
 
+const CAM16_UCS_VIEW_DESCRIPTOR_V1: RegisteredReleaseDescriptorV1 = RegisteredReleaseDescriptorV1 {
+    release: RegisteredColorReleaseIdV1::Cam16UcsView(CAM16_UCS_VIEW_RELEASE_V1),
+    context_requirement: ReleaseContextRequirementV1::ConsumesAppearanceContextV1(
+        AppearanceContextSchemaReleaseId::Ciecam16ViewingInputsV1,
+    ),
+    admitted_frame: RegistryAdmittedFrameV1::Cie1931TwoDegreeXyzIecD65RelativeY1V1,
+    admitted_domain: RegistryAdmittedDomainV1::FiniteCam16ViewV1,
+    coordinate_units: RegistryCoordinateUnitsV1::Cam16UcsJPrimeAPrimeBPrimeUnitlessV1,
+    achromatic_law: RegistryAchromaticLawV1::RectangularChromaOriginExactlyWhenCam16MIsZeroV1,
+    reference_identity: RegistryReferenceIdentityV1::LiEtAl2017Cam16UcsCoordinatesV1,
+    dependencies: ReleaseDependencyGraphV1::Cam16UcsRectangularFromCam16V1(CAM16_VIEW_RELEASE_V1),
+};
+
 const OKLAB_VIEW_DESCRIPTOR_V1: RegisteredReleaseDescriptorV1 = RegisteredReleaseDescriptorV1 {
     release: RegisteredColorReleaseIdV1::OklabView(OKLAB_VIEW_RELEASE_V1),
     context_requirement: ReleaseContextRequirementV1::NoAppearanceContextConsumptionV1,
@@ -503,8 +540,9 @@ impl ReleaseRegistryRecordV1 {
 
 // Canonical order is class tag, then release-key bytes. An unavailable class
 // has exactly one keyless and descriptor-less row.
-const RELEASE_REGISTRY_RECORDS_V1: [ReleaseRegistryRecordV1; 5] = [
+const RELEASE_REGISTRY_RECORDS_V1: [ReleaseRegistryRecordV1; 6] = [
     ReleaseRegistryRecordV1::Registered(CAM16_VIEW_DESCRIPTOR_V1),
+    ReleaseRegistryRecordV1::Registered(CAM16_UCS_VIEW_DESCRIPTOR_V1),
     ReleaseRegistryRecordV1::Registered(OKLAB_VIEW_DESCRIPTOR_V1),
     ReleaseRegistryRecordV1::Registered(OKLCH_VIEW_DESCRIPTOR_V1),
     ReleaseRegistryRecordV1::DifferenceCalibrationUnavailable,

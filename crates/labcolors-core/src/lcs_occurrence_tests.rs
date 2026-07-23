@@ -5,14 +5,14 @@ use crate::lcs_occurrence::{
     ADMITTED_SRGB8_TRISTIMULUS_BINDING_V1, AdaptingLuminanceCdM2, AppearanceContextFieldV1,
     AppearanceContextId, AppearanceContextSchemaReleaseId, AppearanceState,
     AppearanceStateDerivationErrorV1, AppearanceViewFieldV1, AppearanceViewReleaseIdV1,
-    BackgroundLuminanceRatio, CAM16_VIEW_RELEASE_V1, ColorSignal, ColorimetricFrameId,
-    ColorimetricFrameReleaseId, ColorimetricTransformReleaseId, HueAngle, HueState,
-    IEC_SRGB_D65_XYZ_FRAME_V1, LcsOccurrence, MUTATION_SENTINEL_XYZ_FRAME_V1,
+    BackgroundLuminanceRatio, CAM16_UCS_VIEW_RELEASE_V1, CAM16_VIEW_RELEASE_V1, ColorSignal,
+    ColorimetricFrameId, ColorimetricFrameReleaseId, ColorimetricTransformReleaseId, HueAngle,
+    HueState, IEC_SRGB_D65_XYZ_FRAME_V1, LcsOccurrence, MUTATION_SENTINEL_XYZ_FRAME_V1,
     ModeledTristimulusDerivationV1, NumericDomainError, OKLAB_VIEW_RELEASE_V1, ObserverProfileId,
     OccurrenceFormationError, ReferenceWhiteId, SurroundProfileId, TristimulusComponentV1,
     TristimulusDomainErrorV1, TristimulusSample, TristimulusScale, derive_modeled_tristimulus_v1,
 };
-use crate::spaces::cam16::{ForwardCacheGuard, forward, forward_correlates_v1};
+use crate::spaces::cam16::{ForwardCacheGuard, forward, forward_correlates_v1, ucs_j, ucs_m};
 use crate::spaces::oklab::{srgb_linear_to_oklab, xyz_d65_to_oklab_v1};
 use crate::spaces::srgb::{D65_WHITE, srgb_linear_from_srgb8, srgb_to_xyz};
 use crate::spaces::vc::ViewingConditions;
@@ -385,6 +385,15 @@ fn appearance_state_is_one_way_views_of_the_same_occurrence_with_separate_releas
     assert_eq!(state.occurrence(), occurrence);
     assert_eq!(state.oklab().release(), OKLAB_VIEW_RELEASE_V1);
     assert_eq!(state.cam16().release(), CAM16_VIEW_RELEASE_V1);
+    assert_eq!(
+        state.cam16_ucs().unwrap().release(),
+        CAM16_UCS_VIEW_RELEASE_V1,
+    );
+    assert_eq!(
+        state.occurrence().sample().frame().observer(),
+        ObserverProfileId::Cie1931TwoDegreeV1,
+    );
+    assert_eq!(state.occurrence().context(), occurrence.context());
 
     let direct = xyz_d65_to_oklab_v1(occurrence.sample().xyz());
     assert_eq!(
@@ -447,6 +456,11 @@ fn context_changes_only_the_contextual_cam16_view() {
     assert_eq!(average.oklab(), dim.oklab());
     assert_ne!(average.cam16().j().to_bits(), dim.cam16().j().to_bits());
     assert_ne!(average.cam16().m().to_bits(), dim.cam16().m().to_bits());
+    assert_ne!(
+        average.cam16_ucs().unwrap().j_prime().to_bits(),
+        dim.cam16_ucs().unwrap().j_prime().to_bits(),
+    );
+    assert_ne!(average.cam16_ucs().unwrap(), dim.cam16_ucs().unwrap());
     assert_ne!(average.occurrence(), dim.occurrence());
 }
 
@@ -475,6 +489,29 @@ fn every_registered_surround_maps_to_its_exact_cam16_kernel_tuple() {
             panic!("chromatic fixture must have hue under {surround:?}");
         };
         assert_eq!(actual_hue.degrees().to_bits(), expected.h.to_bits());
+
+        let actual_ucs = AppearanceState::derive_v1(occurrence)
+            .unwrap()
+            .cam16_ucs()
+            .unwrap();
+        let expected_j_prime = ucs_j(expected.j);
+        let expected_m_prime = ucs_m(expected.m);
+        let expected_radians = expected.h.to_radians();
+        assert_eq!(
+            [
+                actual_ucs.j_prime(),
+                actual_ucs.a_prime(),
+                actual_ucs.b_prime(),
+            ]
+            .map(f64::to_bits),
+            [
+                expected_j_prime,
+                expected_m_prime * expected_radians.cos(),
+                expected_m_prime * expected_radians.sin(),
+            ]
+            .map(f64::to_bits),
+            "CAM16-UCS must be assembled from the same CAM16 view under {surround:?}",
+        );
     }
 }
 
@@ -496,6 +533,11 @@ fn exact_zero_coordinate_has_no_invented_hue() {
     assert_eq!(state.cam16().m().to_bits(), 0);
     assert_eq!(state.cam16().s().to_bits(), 0);
     assert_eq!(state.cam16().hue(), HueState::UndefinedExact);
+    let ucs = state.cam16_ucs().unwrap();
+    assert_eq!(
+        [ucs.j_prime(), ucs.a_prime(), ucs.b_prime()].map(f64::to_bits),
+        [0; 3],
+    );
 }
 
 #[test]
@@ -581,6 +623,20 @@ fn cam16_release_pins_a_full_external_correlate_vector() {
             "CAM16 {name} drifted: actual={actual} expected={expected}",
         );
     }
+
+    // The same independent reference vector projected through Li et al. 2017
+    // CAM16-UCS. These are coordinates of this occurrence, not a distance claim.
+    let ucs = state.cam16_ucs().unwrap();
+    for (name, actual, expected, tolerance) in [
+        ("J'", ucs.j_prime(), 36.503_620_495_334_07, 0.02),
+        ("a'", ucs.a_prime(), 10.042_750_480_031_993, 0.1),
+        ("b'", ucs.b_prime(), -43.950_878_225_240_46, 0.1),
+    ] {
+        assert!(
+            (actual - expected).abs() < tolerance,
+            "CAM16-UCS {name} drifted: actual={actual} expected={expected}",
+        );
+    }
 }
 
 #[test]
@@ -591,7 +647,10 @@ fn full_appearance_state_derivation_is_allocation_free() {
         crate::test_support::measured_allocations(|| AppearanceState::derive_v1(occurrence));
 
     assert_eq!(allocations, 0);
-    assert!(derived.is_ok());
+    let derived = derived.unwrap();
+    let (ucs, ucs_allocations) = crate::test_support::measured_allocations(|| derived.cam16_ucs());
+    assert_eq!(ucs_allocations, 0);
+    assert!(ucs.is_ok());
 }
 
 #[test]
@@ -664,4 +723,66 @@ fn appearance_state_bypasses_active_xyz_only_cache_for_each_context_without_allo
     };
     assert_eq!(dim_hue.degrees().to_bits(), expected_dim.h.to_bits());
     assert_eq!(dark_hue.degrees().to_bits(), expected_dark.h.to_bits());
+
+    let expected_ucs = |expected: crate::spaces::cam16::Cam16CorrelatesV1| {
+        let m_prime = ucs_m(expected.m);
+        let radians = expected.h.to_radians();
+        [
+            ucs_j(expected.j),
+            m_prime * radians.cos(),
+            m_prime * radians.sin(),
+        ]
+        .map(f64::to_bits)
+    };
+    let actual_ucs = |view: crate::lcs_occurrence::Cam16UcsViewV1| {
+        [view.j_prime(), view.a_prime(), view.b_prime()].map(f64::to_bits)
+    };
+    assert_eq!(
+        actual_ucs(
+            AppearanceState::derive_v1(dim_occurrence)
+                .unwrap()
+                .cam16_ucs()
+                .unwrap(),
+        ),
+        expected_ucs(expected_dim),
+    );
+    assert_eq!(
+        actual_ucs(
+            AppearanceState::derive_v1(dark_occurrence)
+                .unwrap()
+                .cam16_ucs()
+                .unwrap(),
+        ),
+        expected_ucs(expected_dark),
+    );
+}
+
+#[test]
+fn occurrence_views_have_no_ambient_preset_or_client_semantic_route() {
+    let source = include_str!("lcs_occurrence.rs");
+    for forbidden in [
+        "ViewingConditions::srgb()",
+        "ViewingConditions::dim_surround()",
+        "ForwardCacheGuard",
+        "PairFill",
+        "Glow",
+        "LabUI",
+        "Compatibility",
+        "Legacy",
+    ] {
+        assert!(
+            !source.contains(forbidden),
+            "occurrence/view foundation must not contain `{forbidden}`",
+        );
+    }
+    for required in [
+        "ViewingConditions::from_semantic_inputs_v1",
+        "forward_correlates_v1(occurrence.sample().xyz(), &vc)",
+        "derive_cam16_ucs_view_v1(self.cam16)",
+    ] {
+        assert!(
+            source.contains(required),
+            "explicit derived-view route must retain `{required}`",
+        );
+    }
 }

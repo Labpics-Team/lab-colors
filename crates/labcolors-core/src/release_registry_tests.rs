@@ -1,6 +1,7 @@
 use crate::lcs_occurrence::{
-    ADMITTED_SRGB8_TRISTIMULUS_BINDING_V1, AppearanceContextSchemaReleaseId, CAM16_VIEW_RELEASE_V1,
-    IEC_SRGB_D65_XYZ_FRAME_V1, OKLAB_VIEW_RELEASE_V1,
+    ADMITTED_SRGB8_TRISTIMULUS_BINDING_V1, AppearanceContextSchemaReleaseId,
+    CAM16_UCS_VIEW_RELEASE_V1, CAM16_VIEW_RELEASE_V1, IEC_SRGB_D65_XYZ_FRAME_V1,
+    OKLAB_VIEW_RELEASE_V1,
 };
 use crate::output_projection::{
     CSS_COLOR_4_OKLCH_D65_FROM_MODELED_SRGB8_SOLID_V1, CssOklchHueSerializationReleaseIdV1,
@@ -26,7 +27,7 @@ fn descriptor(release: RegisteredColorReleaseIdV1) -> RegisteredReleaseDescripto
 }
 
 #[test]
-fn registry_contains_only_the_four_implemented_releases() {
+fn registry_contains_only_the_five_implemented_releases() {
     let releases: Vec<_> = release_registry_records_v1()
         .iter()
         .filter_map(|record| record.release())
@@ -35,6 +36,7 @@ fn registry_contains_only_the_four_implemented_releases() {
         releases,
         [
             RegisteredColorReleaseIdV1::Cam16View(CAM16_VIEW_RELEASE_V1),
+            RegisteredColorReleaseIdV1::Cam16UcsView(CAM16_UCS_VIEW_RELEASE_V1),
             RegisteredColorReleaseIdV1::OklabView(OKLAB_VIEW_RELEASE_V1),
             RegisteredColorReleaseIdV1::OklchView(OKLCH_VIEW_RELEASE_V1),
             RegisteredColorReleaseIdV1::CssColor4OklchD65FromModeledSrgb8Solid(
@@ -100,6 +102,44 @@ fn appearance_descriptors_pin_only_code_owned_domain_units_hue_and_reference_fac
         RegistryReferenceIdentityV1::LiEtAl2017Cie248Cam16ForwardV1,
     );
     assert_eq!(cam16.dependencies(), ReleaseDependencyGraphV1::DirectV1);
+
+    let cam16_ucs = descriptor(RegisteredColorReleaseIdV1::Cam16UcsView(
+        CAM16_UCS_VIEW_RELEASE_V1,
+    ));
+    assert_eq!(
+        cam16_ucs.context_requirement(),
+        ReleaseContextRequirementV1::ConsumesAppearanceContextV1(
+            AppearanceContextSchemaReleaseId::Ciecam16ViewingInputsV1,
+        ),
+    );
+    assert_eq!(
+        cam16_ucs.context_requirement().schema_release(),
+        Some(AppearanceContextSchemaReleaseId::Ciecam16ViewingInputsV1),
+    );
+    assert_eq!(
+        cam16_ucs.admitted_frame().frame(),
+        IEC_SRGB_D65_XYZ_FRAME_V1,
+    );
+    assert_eq!(
+        cam16_ucs.admitted_domain(),
+        RegistryAdmittedDomainV1::FiniteCam16ViewV1,
+    );
+    assert_eq!(
+        cam16_ucs.coordinate_units(),
+        RegistryCoordinateUnitsV1::Cam16UcsJPrimeAPrimeBPrimeUnitlessV1,
+    );
+    assert_eq!(
+        cam16_ucs.achromatic_law(),
+        RegistryAchromaticLawV1::RectangularChromaOriginExactlyWhenCam16MIsZeroV1,
+    );
+    assert_eq!(
+        cam16_ucs.reference_identity(),
+        RegistryReferenceIdentityV1::LiEtAl2017Cam16UcsCoordinatesV1,
+    );
+    assert_eq!(
+        cam16_ucs.dependencies(),
+        ReleaseDependencyGraphV1::Cam16UcsRectangularFromCam16V1(CAM16_VIEW_RELEASE_V1),
+    );
 
     let oklab = descriptor(RegisteredColorReleaseIdV1::OklabView(OKLAB_VIEW_RELEASE_V1));
     assert_eq!(
@@ -217,6 +257,7 @@ fn registered_rows_have_stable_exact_release_keys() {
         keys,
         [
             "cam16-li-et-al-2017-cie-248-forward-v1",
+            "cam16-ucs-li-et-al-2017-rectangular-v1",
             "oklab-ottosson-2021-01-25-xyz-d65-v1",
             "polar-from-ottosson-2021-01-25-oklab-v1",
             "css-color-4-oklch-d65-from-modeled-iec61966-srgb8-solid-v1",
@@ -231,9 +272,11 @@ fn canonical_bytes_pin_schema_rows_descriptors_dependencies_and_order() {
         release_registry_canonical_bytes_v1(),
         concat!(
             "labcolors.release-registry.canonical-binary.v1\0",
-            "\0\x01\0\x05",
+            "\0\x01\0\x06",
             "\x01\x01\0\x26cam16-li-et-al-2017-cie-248-forward-v1",
             "\x01\x02\x01\x01\x01\x02\x02\x02\0\0\0\0\0\0\0",
+            "\x01\x01\0\x26cam16-ucs-li-et-al-2017-rectangular-v1",
+            "\x01\x02\x01\x01\x04\x05\x05\x05\x03\x01\0\0\0\0\0",
             "\x01\x01\0\x24oklab-ottosson-2021-01-25-xyz-d65-v1",
             "\x01\x01\0\x01\x01\x01\x01\x01\0\0\0\0\0\0\0",
             "\x01\x01\0\x27polar-from-ottosson-2021-01-25-oklab-v1",
@@ -301,5 +344,5 @@ fn digest_names_its_non_cryptographic_algorithm_and_covers_descriptor_bytes() {
         digest.value(),
         crate::fnv1a_32(release_registry_canonical_bytes_v1()),
     );
-    assert_eq!(digest.value(), 1_293_630_307);
+    assert_eq!(digest.value(), 540_606_852);
 }
