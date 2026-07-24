@@ -8,13 +8,15 @@ const OBSERVATION_SOURCE: &str = include_str!("observation.rs");
 const OUTPUT_PROJECTION_SOURCE: &str = include_str!("output_projection.rs");
 const PACKAGE_BRIDGE_SOURCE: &str = include_str!("package_bridge.rs");
 const POINT_SUPPORT_SOURCE: &str = include_str!("point_support.rs");
+const PROGRAM_IDENTITY_SOURCE: &str = include_str!("program_identity.rs");
 const PROGRAM_SESSION_SOURCE: &str = include_str!("program_session.rs");
 const SESSION_SOURCE: &str = include_str!("session.rs");
 const WCAG22_CONSTRAINT_SOURCE: &str = include_str!("constraints/wcag22.rs");
 
-const GENERIC_SOURCES: [(&str, &str); 3] = [
+const GENERIC_SOURCES: [(&str, &str); 4] = [
     ("appearance.rs", APPEARANCE_SOURCE),
     ("lcs_occurrence.rs", LCS_OCCURRENCE_SOURCE),
+    ("program_identity.rs", PROGRAM_IDENTITY_SOURCE),
     ("program_session.rs", PROGRAM_SESSION_SOURCE),
 ];
 
@@ -541,7 +543,7 @@ fn program_session_owns_context_bound_lcs_evidence_and_one_session_scratch_cache
         "let outputs = compile_outputs(",
     );
     for required in [
-        "compile_constraints::<Evaluation>(&graph, &all_occurrence_contexts, program.constraints)?",
+        "compile_constraints::<Evaluation>(&graph, &all_occurrence_contexts, &program.constraints)?",
         "compact_constraint_contexts(&all_occurrence_contexts, &mut constraints)?",
     ] {
         assert!(
@@ -583,6 +585,36 @@ fn program_session_owns_context_bound_lcs_evidence_and_one_session_scratch_cache
         assert!(
             hot_evaluation.contains(required),
             "hot Program evaluation must reuse the compact direct-index cache; missing `{required}`",
+        );
+    }
+}
+
+#[test]
+fn cold_program_normalization_reuses_owned_unordered_buffers() {
+    let compiler = PROGRAM_SESSION_SOURCE
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    for required in [
+        "authored_targets: &mut [Target]",
+        "authored_selection: Option<&mut DeclaredJointSelectionV1>",
+        "let TargetDomainV1::Finite(candidates) = &mut target.domain",
+        "authored_state .choices .sort_unstable_by_key",
+        "authored: &mut [OutputBinding]",
+    ] {
+        assert!(
+            compiler.contains(required),
+            "cold Program compilation must normalize owned buffers in place; missing `{required}`",
+        );
+    }
+    for forbidden in [
+        "candidates.extend_from_slice(authored_candidates)",
+        "choices.extend_from_slice(&authored_state.choices)",
+        "authored.extend_from_slice(authored_outputs)",
+    ] {
+        assert!(
+            !compiler.contains(forbidden),
+            "cold Program compilation must not restore avoidable shadow copy `{forbidden}`",
         );
     }
 }

@@ -1,5 +1,8 @@
 use crate::appearance::ModeledSrgb8PointOccurrence;
-use crate::constraints::{Evaluator, HardClassifier, HardDecision, ProgramPointTargetV1, private};
+use crate::constraints::{
+    Evaluator, HardClassifier, HardDecision, ProgramConstraintContentV1,
+    ProgramPointEvaluatorContentV1, ProgramPointTargetV1, private,
+};
 use crate::numerics::NumericalDecisionEvidenceV1;
 use crate::wcag22::{
     Wcag22ApplicableDecisionV1, Wcag22AssessmentV1, Wcag22ClientDeclaredNotApplicableV1,
@@ -172,6 +175,20 @@ impl Evaluator<ProgramPointTargetV1> for Wcag22Srgb8V1 {
             &target.encoded(),
             invocation,
         )
+    }
+}
+
+impl ProgramPointEvaluatorContentV1 for Wcag22Srgb8V1 {
+    fn program_constraint_content_v1(
+        &self,
+        invocation: Wcag22CriterionV1,
+    ) -> ProgramConstraintContentV1 {
+        ProgramConstraintContentV1::Wcag22Srgb8 {
+            identity: <Self as Evaluator<ProgramPointTargetV1>>::identity(self),
+            release: <Self as Evaluator<ProgramPointTargetV1>>::release(self),
+            capability: <Self as Evaluator<ProgramPointTargetV1>>::capability(self),
+            criterion: invocation,
+        }
     }
 }
 

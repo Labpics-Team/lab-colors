@@ -1152,15 +1152,17 @@ fn equivalent_recompiled_owner_is_a_new_generation_and_cannot_revive_old_session
     let first_evaluator = CountingProgramWcag22Srgb8V1::default();
     let first_calls = first_evaluator.clone();
     let mut compiled = counting_fixed_program(first_evaluator);
+    let first_content_identity = compiled.content_identity();
     let mut old_session = compiled.instantiate(STREAM).unwrap();
-    assert!(matches!(
-        old_session.update(update(1, 0x00)).unwrap(),
-        SessionState::Ready { .. }
-    ));
+    let SessionState::Ready { current } = old_session.update(update(1, 0x00)).unwrap() else {
+        panic!("the first owner must certify its admitted input");
+    };
+    assert_eq!(current.report().content_identity(), first_content_identity);
 
     let replacement_evaluator = CountingProgramWcag22Srgb8V1::default();
     let replacement_calls = replacement_evaluator.clone();
     compiled = counting_fixed_program(replacement_evaluator);
+    assert_eq!(compiled.content_identity(), first_content_identity);
     assert!(matches!(
         old_session.update(update(2, 0x00)),
         Err(SessionUpdateError::OwnerExpired),

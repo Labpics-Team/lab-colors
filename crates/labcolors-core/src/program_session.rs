@@ -22,10 +22,11 @@ use crate::appearance::{
 };
 use crate::composition::CompositionProfileV1;
 use crate::constraints::{
-    Evaluator, ExactSrgb8IdentityV1, HardDecision, ProgramPointAssessmentErrorV1,
-    ProgramPointEvaluatorV1, ProgramPointInvocation, ProgramPointTargetV1,
-    ProgramVisiblePointBindingV1, ProgramVisiblePointPassEvidence,
-    ProgramVisiblePointViolationEvidence, Wcag22Srgb8V1, assess_program_point_hard,
+    Evaluator, ExactSrgb8IdentityV1, HardDecision, ProgramConstraintContentV1,
+    ProgramPointAssessmentErrorV1, ProgramPointEvaluatorContentV1, ProgramPointEvaluatorV1,
+    ProgramPointInvocation, ProgramPointTargetV1, ProgramVisiblePointBindingV1,
+    ProgramVisiblePointPassEvidence, ProgramVisiblePointViolationEvidence, Wcag22Srgb8V1,
+    assess_program_point_hard,
 };
 use crate::joint::{
     AdmittedFiniteJointOrderV1, FiniteDomainOrdinalV1, FiniteJointOrderErrorV1,
@@ -44,6 +45,10 @@ use crate::session::{
     private as session_private,
 };
 use crate::wcag22::Wcag22CriterionV1;
+
+#[path = "program_identity.rs"]
+mod identity;
+pub(crate) use identity::ProgramContentIdentityV1;
 
 /// Opaque identity of one immutable authored colour source.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -483,6 +488,8 @@ pub(crate) trait ProgramConstraintEvaluatorSetV1: Sized {
     fn pass_binding(evidence: &Self::PassEvidence) -> ProgramVisiblePointBindingV1;
 
     fn violation_binding(evidence: &Self::ViolationEvidence) -> ProgramVisiblePointBindingV1;
+
+    fn constraint_content(&self, invocation: Self::Invocation) -> ProgramConstraintContentV1;
 }
 
 impl<Evaluation> ProgramConstraintEvaluatorSetV1 for Evaluation
@@ -510,6 +517,10 @@ where
 
     fn violation_binding(evidence: &Self::ViolationEvidence) -> ProgramVisiblePointBindingV1 {
         *evidence.binding()
+    }
+
+    fn constraint_content(&self, invocation: Self::Invocation) -> ProgramConstraintContentV1 {
+        self.program_constraint_content_v1(invocation)
     }
 }
 
@@ -600,6 +611,18 @@ macro_rules! define_core_program_evaluators_v1 {
             ) -> ProgramVisiblePointBindingV1 {
                 match evidence {
                     $(CoreProgramViolationEvidenceV1::$variant(evidence) => *evidence.binding()),+
+                }
+            }
+
+            fn constraint_content(&self, invocation: Self::Invocation) -> ProgramConstraintContentV1 {
+                match invocation {
+                    $(CoreProgramConstraintInvocationV1::$variant(invocation) => {
+                        let evaluator: $evaluator = $evaluator_value;
+                        <$evaluator as ProgramPointEvaluatorContentV1>::program_constraint_content_v1(
+                            &evaluator,
+                            invocation,
+                        )
+                    }),+
                 }
             }
         }
@@ -1022,6 +1045,7 @@ where
     Evaluation: ProgramConstraintEvaluatorSetV1,
     ProgramConstraintInvocationOf<Evaluation>: Copy,
 {
+    content_identity: ProgramContentIdentityV1,
     evaluator: Evaluation,
     graph: CompiledAppearanceGraph,
     binding_template: AdmittedAppearanceBindings,
@@ -1059,6 +1083,15 @@ where
 {
     pub fn observation_group_id(&self) -> ObservationGroupId {
         self.owner_generation.observation_group.id
+    }
+
+    /// Контентный адрес Program в границах схемы V1.
+    ///
+    /// Opaque ID и порядок неупорядоченных объявлений исключены; явный joint
+    /// order входит в адрес. Адрес не подтверждает поколение владельца и не
+    /// заменяет revision-bound evidence.
+    pub fn content_identity(&self) -> ProgramContentIdentityV1 {
+        self.owner_generation.content_identity
     }
 
     pub fn surface_input_ports(&self) -> &[SurfaceInputPortId] {
@@ -1204,11 +1237,14 @@ where
     }
 }
 
-/// Complete revision-bound assessment in case-major, constraint-ID order.
+/// Полная оценка, привязанная к revision. Для selected/fixed результата ячейки
+/// идут сначала по physical case, затем по constraint ID. Exhaustive conflict
+/// дополнительно упорядочен сначала по joint state.
 pub struct ProgramReportV1<Evaluation>
 where
     Evaluation: ProgramConstraintEvaluatorSetV1,
 {
+    content_identity: ProgramContentIdentityV1,
     observation: RevisionBoundObservationV1,
     cells: Vec<ProgramConstraintCellV1<Evaluation>>,
 }
@@ -1217,6 +1253,12 @@ impl<Evaluation> ProgramReportV1<Evaluation>
 where
     Evaluation: ProgramConstraintEvaluatorSetV1,
 {
+    /// Адрес содержимого Program, по которому построен report; это не
+    /// идентификатор поколения и не runtime-authority.
+    pub const fn content_identity(&self) -> ProgramContentIdentityV1 {
+        self.content_identity
+    }
+
     pub const fn observation(&self) -> &RevisionBoundObservationV1 {
         &self.observation
     }
@@ -1673,6 +1715,7 @@ where
 
     Ok(SessionDecision::Violation(ProgramConflictV1 {
         report: ProgramReportV1 {
+            content_identity: epoch.content_identity,
             observation,
             cells: buffers.conflict_cells,
         },
@@ -1740,7 +1783,11 @@ where
     if cells.len() != expected_cell_count {
         return Err(ProgramSessionEvaluationError::InternalInvariant);
     }
-    let report = ProgramReportV1 { observation, cells };
+    let report = ProgramReportV1 {
+        content_identity: epoch.content_identity,
+        observation,
+        cells,
+    };
     if has_hard_violation {
         Ok(SessionDecision::Violation(ProgramConflictV1 {
             report,
@@ -2036,15 +2083,20 @@ where
         .map_err(map_observation_schema_compile_error)?;
 
     validate_terminal_dependency_cone(&program)?;
-    let (finite_targets, joint_selection) =
-        compile_targets(&graph, program.targets, program.joint_selection)?;
+    let (finite_targets, joint_selection) = compile_targets(
+        &graph,
+        &mut program.targets,
+        program.joint_selection.as_mut(),
+    )?;
     let all_occurrence_contexts = compile_occurrence_contexts(&graph, &program.occurrences)?;
     let mut constraints =
-        compile_constraints::<Evaluation>(&graph, &all_occurrence_contexts, program.constraints)?;
+        compile_constraints::<Evaluation>(&graph, &all_occurrence_contexts, &program.constraints)?;
     let occurrence_contexts =
         compact_constraint_contexts(&all_occurrence_contexts, &mut constraints)?;
-    let outputs = compile_outputs(&graph, program.outputs)?;
+    let outputs = compile_outputs(&graph, &mut program.outputs)?;
+    let content_identity = identity::compile_program_content_identity_v1(&program)?;
     Ok(ProgramEpochV1 {
+        content_identity,
         evaluator: program.evaluator,
         graph,
         binding_template,
@@ -2489,8 +2541,8 @@ struct LoweredConstraint<Invocation> {
 
 fn compile_targets(
     graph: &CompiledAppearanceGraph,
-    authored_targets: Vec<Target>,
-    authored_selection: Option<DeclaredJointSelectionV1>,
+    authored_targets: &mut [Target],
+    authored_selection: Option<&mut DeclaredJointSelectionV1>,
 ) -> Result<
     (
         Box<[CompiledFiniteTargetV1]>,
@@ -2498,10 +2550,10 @@ fn compile_targets(
     ),
     ProgramCompileError,
 > {
-    struct CanonicalFiniteTargetV1 {
+    struct CanonicalFiniteTargetV1<'a> {
         id: TargetId,
         binding: CompiledColorInputSlotV1,
-        candidates: Vec<TargetCandidateV1>,
+        candidates: &'a [TargetCandidateV1],
     }
 
     let mut compiled = Vec::new();
@@ -2509,7 +2561,7 @@ fn compile_targets(
         .try_reserve_exact(authored_targets.len())
         .map_err(|_| ProgramCompileError::ResourceExhausted)?;
     for target in authored_targets {
-        let TargetDomainV1::Finite(mut candidates) = target.domain else {
+        let TargetDomainV1::Finite(candidates) = &mut target.domain else {
             continue;
         };
         if candidates.is_empty() {
@@ -2568,9 +2620,11 @@ fn compile_targets(
     authored_tuples
         .try_reserve_exact(authored_selection.states.len())
         .map_err(|_| ProgramCompileError::ResourceExhausted)?;
-    for (state_index, mut state) in authored_selection.states.into_iter().enumerate() {
-        state.choices.sort_unstable_by_key(|choice| choice.target);
-        if let Some(target) = state
+    for (state_index, authored_state) in authored_selection.states.iter_mut().enumerate() {
+        authored_state
+            .choices
+            .sort_unstable_by_key(|choice| choice.target);
+        if let Some(target) = authored_state
             .choices
             .windows(2)
             .find(|pair| pair[0].target == pair[1].target)
@@ -2581,7 +2635,7 @@ fn compile_targets(
                 target,
             });
         }
-        if let Some(choice) = state.choices.iter().find(|choice| {
+        if let Some(choice) = authored_state.choices.iter().find(|choice| {
             compiled
                 .binary_search_by_key(&choice.target, |target| target.id)
                 .is_err()
@@ -2597,14 +2651,14 @@ fn compile_targets(
             .try_reserve_exact(compiled.len())
             .map_err(|_| ProgramCompileError::ResourceExhausted)?;
         for target in &compiled {
-            let choice_index = state
+            let choice_index = authored_state
                 .choices
                 .binary_search_by_key(&target.id, |choice| choice.target)
                 .map_err(|_| ProgramCompileError::JointStateMissingTarget {
                     state: state_index,
                     target: target.id,
                 })?;
-            let choice = state.choices[choice_index];
+            let choice = authored_state.choices[choice_index];
             let candidate_index = target
                 .candidates
                 .binary_search_by_key(&choice.candidate, |candidate| candidate.id)
@@ -2634,7 +2688,7 @@ fn compile_targets(
         candidates
             .try_reserve_exact(target.candidates.len())
             .map_err(|_| ProgramCompileError::ResourceExhausted)?;
-        candidates.extend(target.candidates.into_iter().map(TargetCandidateV1::signal));
+        candidates.extend(target.candidates.iter().map(|candidate| candidate.signal()));
         runtime_targets.push(CompiledFiniteTargetV1 {
             binding: target.binding,
             candidates: candidates.into_boxed_slice(),
@@ -2687,7 +2741,7 @@ fn compile_occurrence_contexts(
 fn compile_constraints<Evaluation>(
     graph: &CompiledAppearanceGraph,
     occurrence_contexts: &[CompiledOccurrenceContextV1],
-    authored: ConstraintSet<ProgramConstraintInvocationOf<Evaluation>>,
+    authored: &ConstraintSet<ProgramConstraintInvocationOf<Evaluation>>,
 ) -> Result<
     Box<[CompiledPointConstraint<ProgramConstraintInvocationOf<Evaluation>>]>,
     ProgramCompileError,
@@ -2705,21 +2759,16 @@ where
     lowered
         .try_reserve_exact(total)
         .map_err(|_| ProgramCompileError::ResourceExhausted)?;
-    lowered.extend(
-        authored
-            .hard
-            .into_iter()
-            .map(|constraint| LoweredConstraint {
-                id: constraint.id,
-                target: constraint.target,
-                mode: CompiledConstraintModeV1::Hard,
-                invocation: constraint.invocation,
-            }),
-    );
+    lowered.extend(authored.hard.iter().map(|constraint| LoweredConstraint {
+        id: constraint.id,
+        target: constraint.target,
+        mode: CompiledConstraintModeV1::Hard,
+        invocation: constraint.invocation,
+    }));
     lowered.extend(
         authored
             .report_only
-            .into_iter()
+            .iter()
             .map(|constraint| LoweredConstraint {
                 id: constraint.id,
                 target: constraint.target,
@@ -2809,10 +2858,9 @@ fn compact_constraint_contexts<Invocation>(
 
 fn compile_outputs(
     graph: &CompiledAppearanceGraph,
-    authored: Vec<OutputBinding>,
+    authored: &mut [OutputBinding],
 ) -> Result<Box<[CompiledOutputBinding]>, ProgramCompileError> {
     let len = authored.len();
-    let mut authored = authored;
     authored.sort_unstable_by_key(|output| output.output);
     if let Some(duplicate) = authored
         .windows(2)
@@ -2821,7 +2869,7 @@ fn compile_outputs(
     {
         return Err(ProgramCompileError::DuplicateOutputSlot { output: duplicate });
     }
-    for output in &authored {
+    for output in authored.iter() {
         if graph.bind_paint(output.paint).is_none() {
             return Err(ProgramCompileError::MissingOutputPaint {
                 output: output.output,
@@ -2834,7 +2882,7 @@ fn compile_outputs(
     compiled
         .try_reserve_exact(len)
         .map_err(|_| ProgramCompileError::ResourceExhausted)?;
-    for output in authored {
+    for output in authored.iter().copied() {
         let paint = graph
             .bind_paint(output.paint)
             .ok_or(ProgramCompileError::InternalInvariant)?;

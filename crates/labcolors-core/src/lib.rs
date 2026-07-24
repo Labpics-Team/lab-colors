@@ -64,6 +64,7 @@ pub(crate) mod program_session;
 pub(crate) mod release_registry;
 pub mod scale;
 pub mod semantic;
+pub(crate) mod sha256;
 pub mod solve;
 pub(crate) mod wcag;
 
@@ -101,6 +102,9 @@ mod program_joint_integration_tests;
 
 #[cfg(test)]
 mod program_mixed_evaluator_tests;
+
+#[cfg(test)]
+mod program_identity_tests;
 
 #[cfg(test)]
 mod release_registry_tests;

@@ -8,6 +8,7 @@
 use crate::Srgb8;
 use crate::appearance::{ModeledSrgb8PointOccurrence, ResolvedOccurrence, VisiblePointBindingV1};
 use crate::lcs_occurrence::ModeledLcsOccurrenceV1;
+use crate::wcag22::{Wcag22CriterionV1, Wcag22ProfileIdV1};
 
 mod exact;
 pub(crate) use exact::{
@@ -20,7 +21,7 @@ pub(crate) use exact::ExactIdentityPassV1;
 
 mod wcag22;
 
-pub(crate) use wcag22::Wcag22Srgb8V1;
+pub(crate) use wcag22::{Wcag22Srgb8CapabilityV1, Wcag22Srgb8EvaluatorIdentityV1, Wcag22Srgb8V1};
 
 #[cfg(test)]
 pub(crate) use wcag22::{
@@ -266,6 +267,7 @@ pub(crate) trait ProgramPointEvaluatorV1:
     Sized
     + Evaluator<ProgramPointTargetV1>
     + HardClassifier<ProgramPointInvocation<Self>, ProgramPointMeasurement<Self>>
+    + ProgramPointEvaluatorContentV1
 {
 }
 
@@ -273,7 +275,42 @@ impl<Evaluation> ProgramPointEvaluatorV1 for Evaluation where
     Evaluation: Sized
         + Evaluator<ProgramPointTargetV1>
         + HardClassifier<ProgramPointInvocation<Evaluation>, ProgramPointMeasurement<Evaluation>>
+        + ProgramPointEvaluatorContentV1
 {
+}
+
+/// Полное code-owned описание одного evaluator invocation для compile identity.
+///
+/// Здесь намеренно нет авторского constraint ID. Метаданные берутся из того же
+/// закрытого определения evaluator-а, которое связывает runtime evidence, и не
+/// могут разойтись с его identity, release или capability. Добавление либо
+/// изменение production evaluator-а остаётся явной сменой схемы.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ProgramConstraintContentV1 {
+    ExactSrgb8 {
+        identity: ExactConstraintIdentityV1,
+        release: ExactIdentityReleaseV1,
+        capability: ExactIdentityCapabilityV1,
+        expected: Srgb8,
+    },
+    Wcag22Srgb8 {
+        identity: Wcag22Srgb8EvaluatorIdentityV1,
+        release: Wcag22ProfileIdV1,
+        capability: Wcag22Srgb8CapabilityV1,
+        criterion: Wcag22CriterionV1,
+    },
+    #[cfg(test)]
+    FinalRecheckMutantExactSrgb8 { expected: Srgb8 },
+}
+
+/// Внутрикрейтное описание generic test seam с одним evaluator-ом. Package
+/// Program использует закрытое heterogeneous-множество, поэтому клиент не
+/// может подменить descriptor.
+pub(crate) trait ProgramPointEvaluatorContentV1: Evaluator<ProgramPointTargetV1> {
+    fn program_constraint_content_v1(
+        &self,
+        invocation: ProgramPointInvocation<Self>,
+    ) -> ProgramConstraintContentV1;
 }
 
 #[cfg(test)]
@@ -310,6 +347,21 @@ impl Evaluator<ProgramPointTargetV1> for CountingProgramWcag22Srgb8V1 {
             target,
             invocation,
         )
+    }
+}
+
+#[cfg(test)]
+impl ProgramPointEvaluatorContentV1 for CountingProgramWcag22Srgb8V1 {
+    fn program_constraint_content_v1(
+        &self,
+        invocation: ProgramPointInvocation<Self>,
+    ) -> ProgramConstraintContentV1 {
+        ProgramConstraintContentV1::Wcag22Srgb8 {
+            identity: self.identity(),
+            release: self.release(),
+            capability: self.capability(),
+            criterion: invocation,
+        }
     }
 }
 
@@ -372,6 +424,18 @@ impl Evaluator<ProgramPointTargetV1> for FinalRecheckMutantProgramEvaluatorV1 {
         };
         self.control.force_current_violation.set(force_violation);
         Ok(Srgb8::new(target.encoded().visible()))
+    }
+}
+
+#[cfg(test)]
+impl ProgramPointEvaluatorContentV1 for FinalRecheckMutantProgramEvaluatorV1 {
+    fn program_constraint_content_v1(
+        &self,
+        invocation: ProgramPointInvocation<Self>,
+    ) -> ProgramConstraintContentV1 {
+        ProgramConstraintContentV1::FinalRecheckMutantExactSrgb8 {
+            expected: invocation,
+        }
     }
 }
 

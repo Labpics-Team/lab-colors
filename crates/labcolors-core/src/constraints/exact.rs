@@ -1,7 +1,8 @@
 use crate::Srgb8;
 use crate::appearance::ModeledSrgb8PointOccurrence;
 use crate::constraints::{
-    Evaluator, HardClassifier, HardDecision, ProgramPointTargetV1, VisiblePointPassEvidence,
+    Evaluator, HardClassifier, HardDecision, ProgramConstraintContentV1,
+    ProgramPointEvaluatorContentV1, ProgramPointTargetV1, VisiblePointPassEvidence,
     VisiblePointViolationEvidence, private,
 };
 use core::convert::Infallible;
@@ -12,12 +13,16 @@ use core::convert::Infallible;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ExactConstraintIdentityV1 {
     FinalSrgb8IdentityV1,
+    #[cfg(test)]
+    MutationSentinelV1,
 }
 
 /// Версия формулы exact byte-identity evaluator-а.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ExactIdentityReleaseV1 {
     V1,
+    #[cfg(test)]
+    MutationSentinelV1,
 }
 
 /// Узкая capability evaluator-а: только финальный modeled point occurrence в
@@ -25,6 +30,8 @@ pub(crate) enum ExactIdentityReleaseV1 {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ExactIdentityCapabilityV1 {
     FinalOccurrenceSrgb8IdentityV1,
+    #[cfg(test)]
+    MutationSentinelV1,
 }
 
 /// Закрытые ZST payload-типы делают Pass и Violation несовместимыми, но не
@@ -108,6 +115,17 @@ impl Evaluator<ProgramPointTargetV1> for ExactSrgb8IdentityV1 {
             &occurrence.encoded(),
             invocation,
         )
+    }
+}
+
+impl ProgramPointEvaluatorContentV1 for ExactSrgb8IdentityV1 {
+    fn program_constraint_content_v1(&self, invocation: Srgb8) -> ProgramConstraintContentV1 {
+        ProgramConstraintContentV1::ExactSrgb8 {
+            identity: <Self as Evaluator<ProgramPointTargetV1>>::identity(self),
+            release: <Self as Evaluator<ProgramPointTargetV1>>::release(self),
+            capability: <Self as Evaluator<ProgramPointTargetV1>>::capability(self),
+            expected: invocation,
+        }
     }
 }
 
