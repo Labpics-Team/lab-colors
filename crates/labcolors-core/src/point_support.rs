@@ -331,7 +331,10 @@ impl SessionPlanV1 for CompiledPointSupportRecheckV1 {
         Some(())
     }
 
-    fn observation_schema(&self) -> &CanonicalObservationSchemaV1 {
+    fn observation_schema<'a>(
+        &'a self,
+        _owner: &'a Self::OwnerLease,
+    ) -> &'a CanonicalObservationSchemaV1 {
         &self.surface_schema
     }
 

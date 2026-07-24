@@ -1,3 +1,6 @@
+use std::ffi::OsStr;
+use std::path::PathBuf;
+
 const APPEARANCE_SOURCE: &str = include_str!("appearance.rs");
 const CONSTRAINTS_SOURCE: &str = include_str!("constraints/mod.rs");
 const EXACT_CONSTRAINT_SOURCE: &str = include_str!("constraints/exact.rs");
@@ -64,6 +67,40 @@ fn contains_rust_identifier(source: &str, identifier: &str) -> bool {
         let after = source[start + identifier.len()..].chars().next();
         !before.is_some_and(is_continue) && !after.is_some_and(is_continue)
     })
+}
+
+fn production_rust_sources() -> Vec<(String, String)> {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut pending = vec![root.clone()];
+    let mut sources = Vec::new();
+    while let Some(directory) = pending.pop() {
+        for entry in std::fs::read_dir(&directory).expect("Core source directory must be readable")
+        {
+            let path = entry.expect("Core source entry must be readable").path();
+            if path.is_dir() {
+                pending.push(path);
+                continue;
+            }
+            let is_production_rust = path.extension() == Some(OsStr::new("rs"))
+                && !path
+                    .file_name()
+                    .and_then(OsStr::to_str)
+                    .is_some_and(|name| name.ends_with("_tests.rs"));
+            if !is_production_rust {
+                continue;
+            }
+            let relative = path
+                .strip_prefix(&root)
+                .expect("Core source must remain below its manifest root")
+                .to_string_lossy()
+                .into_owned();
+            let source =
+                std::fs::read_to_string(&path).expect("Core Rust source must be valid UTF-8");
+            sources.push((relative, source));
+        }
+    }
+    sources.sort_unstable_by(|left, right| left.0.cmp(&right.0));
+    sources
 }
 
 #[test]
@@ -324,6 +361,23 @@ fn shared_observation_ssot_has_one_backing_without_lifecycle_or_adapter_facades(
             .contains("pub(crate) struct CanonicalObservationSchemaV1(Rc<[SurfaceInputPortId]>);"),
         "compiled schema and observations must share the same Rc-backed schema",
     );
+    assert!(
+        OBSERVATION_SOURCE.contains(
+            "#[derive(Debug, PartialEq, Eq)]\n#[cfg_attr(test, derive(Clone))]\npub(crate) struct CanonicalObservationSchemaV1",
+        ),
+        "production schema ownership must not expose a general Clone capability",
+    );
+    assert_eq!(
+        OBSERVATION_SOURCE
+            .matches("schema.share_for_observation()")
+            .count(),
+        2,
+        "only keyed and schema-ordered admission may share a schema handle",
+    );
+    assert!(
+        !OBSERVATION_SOURCE.contains("schema: schema.clone()"),
+        "admission must use the private schema-sharing capability",
+    );
     for forbidden in ["std::sync::Arc", "Arc<", "RefCell<", "Mutex<", "RwLock<"] {
         assert!(
             !OBSERVATION_SOURCE.contains(forbidden),
@@ -368,7 +422,6 @@ fn shared_observation_ssot_has_one_backing_without_lifecycle_or_adapter_facades(
         "impl<Plan: SessionPlanV1> Session<Plan>",
     );
     for required in [
-        "schema: CanonicalObservationSchemaV1,",
         "raw_head: SessionObservationHeadV1,",
         "state: SessionState<Plan::Verified, Plan::Violation>,",
     ] {
@@ -378,6 +431,10 @@ fn shared_observation_ssot_has_one_backing_without_lifecycle_or_adapter_facades(
             "Session must own exactly one `{required}` field",
         );
     }
+    assert!(
+        !session_owner.contains("schema: CanonicalObservationSchemaV1,"),
+        "the concrete plan is the sole Session-local owner of its canonical schema",
+    );
     for forbidden in [
         "current_unknown",
         "observation: RevisionBoundObservationV1",
@@ -398,6 +455,7 @@ fn shared_observation_ssot_has_one_backing_without_lifecycle_or_adapter_facades(
         "type Verified: SessionEvidenceV1;",
         "type Violation: SessionEvidenceV1;",
         "fn try_acquire_owner(&self) -> Option<Self::OwnerLease>;",
+        "owner: &'a Self::OwnerLease,",
         "SessionUpdateError::OwnerExpired",
         ".is_same_binding_as(expected_observation)",
         "SessionUpdateError::EvidenceBindingInvariant",
@@ -407,15 +465,20 @@ fn shared_observation_ssot_has_one_backing_without_lifecycle_or_adapter_facades(
             "Session must reject detached evaluator evidence; missing `{required}`",
         );
     }
+    let session_plan_implementors = production_rust_sources()
+        .into_iter()
+        .filter_map(|(path, source)| {
+            let count = source.matches("SessionPlanV1 for").count();
+            (count != 0).then_some((path, count))
+        })
+        .collect::<Vec<_>>();
     assert_eq!(
-        POINT_SUPPORT_SOURCE
-            .matches("impl SessionPlanV1 for CompiledPointSupportRecheckV1")
-            .count()
-            + PROGRAM_SESSION_SOURCE
-                .matches("SessionPlanV1 for ProgramSessionPlan<Evaluation>")
-                .count(),
-        2,
-        "only the point-support and Program compiled plans may inhabit Session",
+        session_plan_implementors,
+        vec![
+            ("point_support.rs".to_owned(), 1),
+            ("program_session.rs".to_owned(), 1),
+        ],
+        "only the audited point-support and Program plans may inhabit Session",
     );
     for (path, source) in [
         ("session.rs", SESSION_SOURCE),
@@ -446,21 +509,51 @@ fn shared_observation_ssot_has_one_backing_without_lifecycle_or_adapter_facades(
         );
     }
 
-    let update = normalized_source_scope(
-        SESSION_SOURCE,
-        "pub(crate) fn update(",
-        "/// Move exactly one retained verified witness",
-    );
-    let owner_preflight = update
-        .find(".try_acquire_owner()")
-        .expect("Session update must acquire the exact owner generation");
-    let admission = update
-        .find("prepare_observation(")
-        .expect("Session update must perform canonical admission");
-    assert!(
-        owner_preflight < admission,
-        "owner expiry must precede raw admission and physical execution",
-    );
+    for (name, update, prepare) in [
+        (
+            "keyed",
+            source_scope(
+                SESSION_SOURCE,
+                "pub(crate) fn update(",
+                "/// Stream-affine `Unknown` admission",
+            ),
+            "prepare_observation(",
+        ),
+        (
+            "schema-ordered",
+            source_scope(
+                SESSION_SOURCE,
+                "pub(crate) fn update_schema_ordered",
+                "fn apply_prepared_update",
+            ),
+            "prepare_schema_ordered_observation(",
+        ),
+    ] {
+        let owner_preflight = update
+            .find(".try_acquire_owner()")
+            .unwrap_or_else(|| panic!("{name} update must acquire the exact owner generation"));
+        let schema = update
+            .find("let schema = self.plan.observation_schema(&owner);")
+            .unwrap_or_else(|| panic!("{name} update must derive schema from that owner"));
+        let admission = update
+            .find(prepare)
+            .unwrap_or_else(|| panic!("{name} update must perform canonical admission"));
+        assert!(
+            owner_preflight < schema && schema < admission,
+            "{name} update must pin owner, derive its schema, then admit",
+        );
+        assert_eq!(
+            update
+                .matches("let schema = self.plan.observation_schema(&owner);")
+                .count(),
+            1,
+            "{name} update must borrow exactly one schema",
+        );
+        assert!(
+            !update.contains("observation_schema(&owner).clone()"),
+            "{name} admission must not create a transient schema owner",
+        );
+    }
 
     let consuming_entry = source_scope(
         POINT_SUPPORT_SOURCE,
@@ -645,6 +738,19 @@ fn program_session_owns_context_bound_lcs_evidence_and_one_session_scratch_cache
     assert!(
         !plan.contains("epoch: Rc<ProgramEpochV1<Evaluation>>,"),
         "a Program Session must not prolong its CompiledProgram owner",
+    );
+    assert!(
+        !plan.contains("schema: CanonicalObservationSchemaV1,"),
+        "a Program Session must derive schema from its pinned owner generation",
+    );
+    let instantiate = source_scope(
+        PROGRAM_SESSION_SOURCE,
+        "pub(crate) fn instantiate(",
+        "/// Failure while preparing mutable storage",
+    );
+    assert!(
+        !instantiate.contains("observation_group.schema.clone()"),
+        "empty Program Sessions must not add persistent schema handles",
     );
     let compiled = source_scope(
         PROGRAM_SESSION_SOURCE,

@@ -1134,6 +1134,14 @@ where
             .map(|output| output.output)
     }
 
+    #[cfg(test)]
+    pub(crate) fn observation_schema_strong_count_for_test(&self) -> usize {
+        self.owner_generation
+            .observation_group
+            .schema
+            .strong_count_for_test()
+    }
+
     /// Membership is the exact live owner allocation, never equivalent
     /// compiled content. The Session's `Weak` keeps the old control block
     /// address reserved until the Session itself is destroyed.
@@ -1171,7 +1179,6 @@ where
             stream,
             ProgramSessionPlan {
                 owner_generation: Rc::downgrade(&self.owner_generation),
-                schema: self.owner_generation.observation_group.schema.clone(),
                 bindings,
                 workspace,
                 modeled_occurrences,
@@ -1622,7 +1629,6 @@ where
     ProgramConstraintInvocationOf<Evaluation>: Copy,
 {
     owner_generation: Weak<ProgramEpochV1<Evaluation>>,
-    schema: CanonicalObservationSchemaV1,
     bindings: AdmittedAppearanceBindings,
     workspace: AppearanceWorkspace,
     modeled_occurrences: Vec<Option<ModeledLcsOccurrenceV1>>,
@@ -1649,8 +1655,11 @@ where
         self.owner_generation.upgrade().map(ProgramOwnerLeaseV1)
     }
 
-    fn observation_schema(&self) -> &CanonicalObservationSchemaV1 {
-        &self.schema
+    fn observation_schema<'a>(
+        &'a self,
+        owner: &'a Self::OwnerLease,
+    ) -> &'a CanonicalObservationSchemaV1 {
+        &owner.0.observation_group.schema
     }
 
     fn evaluate(

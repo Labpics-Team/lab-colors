@@ -190,7 +190,8 @@ impl ObservedScenarioSet {
 
 /// Canonical immutable schema shared by the compiled recheck and every
 /// admitted observation backing created for it.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
+#[cfg_attr(test, derive(Clone))]
 pub(crate) struct CanonicalObservationSchemaV1(Rc<[SurfaceInputPortId]>);
 
 impl CanonicalObservationSchemaV1 {
@@ -202,9 +203,21 @@ impl CanonicalObservationSchemaV1 {
         Rc::ptr_eq(&self.0, &other.0)
     }
 
+    /// Admission is the sole production boundary allowed to share the compiled
+    /// schema handle: the immutable observation backing must prove the exact
+    /// schema against which it was admitted.
+    fn share_for_observation(&self) -> Self {
+        Self(Rc::clone(&self.0))
+    }
+
     #[cfg(test)]
     pub(crate) fn backing_ptr_for_test(&self) -> *const SurfaceInputPortId {
         self.0.as_ptr()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn strong_count_for_test(&self) -> usize {
+        Rc::strong_count(&self.0)
     }
 }
 
@@ -214,7 +227,8 @@ struct ObservationBackingV1 {
     set: ObservedScenarioSet,
 }
 
-/// Sealed observation admitted against the Session-owned compiled schema.
+/// Sealed observation admitted against the exact schema owned by its sealed
+/// Session plan.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RevisionBoundObservationV1 {
     stream: ObservationStreamId,
@@ -575,7 +589,7 @@ pub(crate) fn prepare_observation<'owner, Owner: ObservationOwnerV1>(
                     stream,
                     revision: update.revision,
                     backing: Rc::new(ObservationBackingV1 {
-                        schema: schema.clone(),
+                        schema: schema.share_for_observation(),
                         set,
                     }),
                 },
@@ -688,7 +702,7 @@ pub(crate) fn prepare_schema_ordered_observation<
             stream,
             revision,
             backing: Rc::new(ObservationBackingV1 {
-                schema: schema.clone(),
+                schema: schema.share_for_observation(),
                 set,
             }),
         },

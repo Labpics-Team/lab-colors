@@ -78,7 +78,13 @@ pub(crate) trait SessionPlanV1: private::PlanSealed {
 
     fn try_acquire_owner(&self) -> Option<Self::OwnerLease>;
 
-    fn observation_schema(&self) -> &CanonicalObservationSchemaV1;
+    /// Return the canonical schema reached through the same owner lease that
+    /// will authorize evaluation. Self-owned plans may return their own schema;
+    /// weakly bound plans must derive it from the pinned generation.
+    fn observation_schema<'a>(
+        &'a self,
+        owner: &'a Self::OwnerLease,
+    ) -> &'a CanonicalObservationSchemaV1;
 
     fn evaluate(
         &mut self,
@@ -156,7 +162,6 @@ type SessionUpdateResult<'session, Plan> = Result<
 #[derive(Debug)]
 pub(crate) struct Session<Plan: SessionPlanV1> {
     stream: ObservationStreamId,
-    schema: CanonicalObservationSchemaV1,
     plan: Plan,
     raw_head: SessionObservationHeadV1,
     state: SessionState<Plan::Verified, Plan::Violation>,
@@ -164,10 +169,8 @@ pub(crate) struct Session<Plan: SessionPlanV1> {
 
 impl<Plan: SessionPlanV1> Session<Plan> {
     pub(crate) fn new(stream: ObservationStreamId, plan: Plan) -> Self {
-        let schema = plan.observation_schema().clone();
         Self {
             stream,
-            schema,
             plan,
             raw_head: SessionObservationHeadV1::Empty,
             state: SessionState::Waiting,
@@ -199,7 +202,8 @@ impl<Plan: SessionPlanV1> Session<Plan> {
             .plan
             .try_acquire_owner()
             .ok_or(SessionUpdateError::OwnerExpired)?;
-        let prepared = prepare_observation(&mut self.raw_head, self.stream, &self.schema, update)
+        let schema = self.plan.observation_schema(&owner);
+        let prepared = prepare_observation(&mut self.raw_head, self.stream, schema, update)
             .map_err(SessionUpdateError::Observation)?;
 
         apply_prepared_update(&mut self.plan, &mut self.state, &owner, prepared)
@@ -232,10 +236,11 @@ impl<Plan: SessionPlanV1> Session<Plan> {
             .plan
             .try_acquire_owner()
             .ok_or(SessionUpdateError::OwnerExpired)?;
+        let schema = self.plan.observation_schema(&owner);
         let prepared = prepare_schema_ordered_observation(
             &mut self.raw_head,
             self.stream,
-            &self.schema,
+            schema,
             revision,
             source,
             order_scratch,

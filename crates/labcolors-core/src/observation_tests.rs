@@ -335,11 +335,21 @@ fn independent_equal_admissions_do_not_alias_observation_or_schema_backing() {
     left.apply(observed_update(STREAM, 1, first)).unwrap();
     right.apply(observed_update(STREAM, 1, second)).unwrap();
 
-    let left = revision_bound(&left);
-    let right = revision_bound(&right);
-    assert_eq!(left, right);
-    assert_ne!(left.backing_ptr_for_test(), right.backing_ptr_for_test());
-    assert_ne!(left.schema_ptr_for_test(), right.schema_ptr_for_test());
+    let left_observation = revision_bound(&left);
+    let right_observation = revision_bound(&right);
+    assert_eq!(left_observation, right_observation);
+    assert!(
+        !left_observation.shares_schema_backing_with(&right.schema),
+        "equal schema values from another owner must not inherit authority",
+    );
+    assert_ne!(
+        left_observation.backing_ptr_for_test(),
+        right_observation.backing_ptr_for_test()
+    );
+    assert_ne!(
+        left_observation.schema_ptr_for_test(),
+        right_observation.schema_ptr_for_test()
+    );
 }
 
 #[test]

@@ -58,7 +58,7 @@ SITE_ID = "point-support-retained-reference-surplus-v1"
 SOURCE_BINDING_LAW = "point-support-rust-whole-file-semantic-cone-v2"
 SOURCE_BINDING_DOMAIN = b"labcolors.point-support.rust-whole-file-semantic-cone.v2"
 EXPECTED_SOURCE_CAPSULE_SHA256 = (
-    "ac2e23b4d89850df7bc6697a79dfc715192e998bbabcf47fe88c415e8c332df8"
+    "669326bce56a2901f7fbbd8b4c23f26f8b33daceb1471b81c98763940b41d3e4"
 )
 EXPECTED_Q55_PROOF_SHA256 = (
     "ac59cf89503170c789223b91d775213a19d4e571ef930f2ea609fcd51b14defd"
@@ -201,7 +201,7 @@ def verify_source_binding() -> tuple[str, int]:
         (OBSERVATION_SOURCE, b"        self.backing.set.values(case_index)\n", b"        None\n"),
         (OBSERVATION_SOURCE, b"        values.extend(bindings.iter().map(|binding| binding.value));\n", b"        values.extend(bindings.iter().map(|_| Srgb8::new([0, 0, 0])));\n"),
         (OBSERVATION_SOURCE, b"        Rc::ptr_eq(&self.0, &other.0)\n", b"        self == other\n"),
-        (OBSERVATION_SOURCE, b"                        schema: schema.clone(),\n", b"                        schema: CanonicalObservationSchemaV1(Rc::from(schema.as_slice())),\n"),
+        (OBSERVATION_SOURCE, b"        Self(Rc::clone(&self.0))\n", b"        Self(Rc::from(self.as_slice()))\n"),
         (OBSERVATION_SOURCE, b"if expected_input != actual_input", b"if expected_input == actual_input"),
         (OBSERVATION_SOURCE, b"Some(observation.revision)", b"None"),
         (OBSERVATION_SOURCE, b"(self.owner, self.observation)", b"unreachable!()"),
@@ -385,11 +385,10 @@ def verify_universal_algebra() -> dict[str, object]:
         result: dict[tuple[int, ...], int] = {}
         for left_monomial, left_coefficient in left.items():
             for right_monomial, right_coefficient in right.items():
+                assert len(left_monomial) == len(right_monomial)
                 monomial = tuple(
                     left_power + right_power
-                    for left_power, right_power in zip(
-                        left_monomial, right_monomial, strict=True
-                    )
+                    for left_power, right_power in zip(left_monomial, right_monomial)
                 )
                 result[monomial] = (
                     result.get(monomial, 0) + left_coefficient * right_coefficient

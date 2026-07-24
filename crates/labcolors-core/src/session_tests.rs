@@ -7,8 +7,8 @@ use crate::lcs_occurrence::ColorSignal;
 use crate::observation::{
     CanonicalObservationSchemaV1, ObservationError, ObservationHeadViewV1, ObservationPayloadInput,
     ObservationStreamId, ObservationUpdateInput, ObservedScenarioSetInput, Revision,
-    RevisionBoundObservationV1, ScenarioId, ScenarioInput, SurfaceInputBinding, UnknownReasonId,
-    canonicalize_observation_schema,
+    RevisionBoundObservationV1, ScenarioId, ScenarioInput, SchemaOrderedScenarioSourceV1,
+    SurfaceInputBinding, UnknownReasonId, canonicalize_observation_schema,
 };
 use crate::session::{
     Session, SessionDecision, SessionEvidenceV1, SessionObservationBindingPermitV1, SessionPlanV1,
@@ -91,7 +91,10 @@ impl SessionPlanV1 for SentinelPlan {
         Some(())
     }
 
-    fn observation_schema(&self) -> &CanonicalObservationSchemaV1 {
+    fn observation_schema<'a>(
+        &'a self,
+        _owner: &'a Self::OwnerLease,
+    ) -> &'a CanonicalObservationSchemaV1 {
         &self.schema
     }
 
@@ -133,17 +136,21 @@ impl SessionPlanV1 for SentinelPlan {
 }
 
 #[derive(Debug)]
-struct ReplacingOwnerPlan {
+struct ReplacingOwnerGeneration {
     schema: CanonicalObservationSchemaV1,
-    generation: std::rc::Weak<()>,
-    owner_slot: Rc<RefCell<Option<Rc<()>>>>,
+}
+
+#[derive(Debug)]
+struct ReplacingOwnerPlan {
+    generation: std::rc::Weak<ReplacingOwnerGeneration>,
+    owner_slot: Rc<RefCell<Option<Rc<ReplacingOwnerGeneration>>>>,
     evaluations: Rc<Cell<usize>>,
 }
 
 impl session_private::PlanSealed for ReplacingOwnerPlan {}
 
 impl SessionPlanV1 for ReplacingOwnerPlan {
-    type OwnerLease = Rc<()>;
+    type OwnerLease = Rc<ReplacingOwnerGeneration>;
     type Verified = SentinelVerified;
     type Violation = SentinelViolation;
     type Error = SentinelError;
@@ -152,8 +159,11 @@ impl SessionPlanV1 for ReplacingOwnerPlan {
         self.generation.upgrade()
     }
 
-    fn observation_schema(&self) -> &CanonicalObservationSchemaV1 {
-        &self.schema
+    fn observation_schema<'a>(
+        &'a self,
+        owner: &'a Self::OwnerLease,
+    ) -> &'a CanonicalObservationSchemaV1 {
+        &owner.schema
     }
 
     fn evaluate(
@@ -163,10 +173,16 @@ impl SessionPlanV1 for ReplacingOwnerPlan {
         _permit: SessionObservationBindingPermitV1,
     ) -> Result<SessionDecision<Self::Verified, Self::Violation>, Self::Error> {
         self.evaluations.set(self.evaluations.get() + 1);
+        assert!(
+            observation.shares_schema_backing_with(&owner.schema),
+            "admission and evaluation must use the same pinned generation"
+        );
         let old_generation = self
             .owner_slot
             .borrow_mut()
-            .replace(Rc::new(()))
+            .replace(Rc::new(ReplacingOwnerGeneration {
+                schema: canonicalize_observation_schema(vec![SURFACE]).unwrap(),
+            }))
             .expect("the first owner generation must still be installed");
         assert!(Rc::ptr_eq(owner, &old_generation));
         drop(old_generation);
@@ -175,6 +191,32 @@ impl SessionPlanV1 for ReplacingOwnerPlan {
             "the transaction lease must pin its starting owner generation"
         );
         Ok(SessionDecision::Verified(SentinelVerified { observation }))
+    }
+}
+
+struct OneOrderedScenario {
+    id: ScenarioId,
+    value: Srgb8,
+}
+
+impl SchemaOrderedScenarioSourceV1 for OneOrderedScenario {
+    fn scenario_count(&self) -> usize {
+        1
+    }
+
+    fn scenario_id(&self, scenario_index: usize) -> ScenarioId {
+        assert_eq!(scenario_index, 0);
+        self.id
+    }
+
+    fn value_count(&self, scenario_index: usize) -> usize {
+        assert_eq!(scenario_index, 0);
+        1
+    }
+
+    fn value(&self, scenario_index: usize, binding_index: usize) -> Srgb8 {
+        assert_eq!((scenario_index, binding_index), (0, 0));
+        self.value
     }
 }
 
@@ -347,6 +389,51 @@ fn exact_replay_is_idempotent_and_never_invokes_the_plan() {
 }
 
 #[test]
+fn schema_ordered_admission_shares_only_the_plan_schema_handle() {
+    let (mut session, control, schema_ptr) = session();
+    assert_eq!(
+        session
+            .plan()
+            .observation_schema(&())
+            .strong_count_for_test(),
+        1,
+    );
+    let source = OneOrderedScenario {
+        id: ScenarioId::new(1),
+        value: Srgb8::new([255; 3]),
+    };
+    let mut order_scratch = Vec::new();
+
+    let SessionState::Ready { current } = session
+        .update_schema_ordered(Revision::new(1), &source, &mut order_scratch)
+        .unwrap()
+    else {
+        panic!("white sentinel input must verify");
+    };
+    assert_eq!(current.observation.schema_ptr_for_test(), schema_ptr);
+    assert_eq!(
+        session
+            .plan()
+            .observation_schema(&())
+            .strong_count_for_test(),
+        2,
+    );
+    assert_eq!(control.evaluation_count(), 1);
+
+    session
+        .update_schema_ordered(Revision::new(1), &source, &mut order_scratch)
+        .unwrap();
+    assert_eq!(
+        session
+            .plan()
+            .observation_schema(&())
+            .strong_count_for_test(),
+        2,
+    );
+    assert_eq!(control.evaluation_count(), 1);
+}
+
+#[test]
 fn equal_content_at_a_higher_revision_rebinds_fresh_evidence() {
     let (mut session, control, _) = session();
     session.update(observed_update(1, [255; 3])).unwrap();
@@ -467,14 +554,14 @@ fn detached_plan_evidence_is_rejected_before_raw_or_lifecycle_commit() {
 
 #[test]
 fn reentrant_owner_replacement_finishes_on_its_pinned_generation_then_expires() {
-    let schema = canonicalize_observation_schema(vec![SURFACE]).unwrap();
-    let first_generation = Rc::new(());
+    let first_generation = Rc::new(ReplacingOwnerGeneration {
+        schema: canonicalize_observation_schema(vec![SURFACE]).unwrap(),
+    });
     let owner_slot = Rc::new(RefCell::new(Some(Rc::clone(&first_generation))));
     let evaluations = Rc::new(Cell::new(0));
     let mut session = Session::new(
         STREAM,
         ReplacingOwnerPlan {
-            schema,
             generation: Rc::downgrade(&first_generation),
             owner_slot: Rc::clone(&owner_slot),
             evaluations: Rc::clone(&evaluations),

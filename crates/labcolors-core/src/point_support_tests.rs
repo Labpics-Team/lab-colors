@@ -16,7 +16,7 @@ use crate::point_support::{
     PointSupportStabilityAnchorV1, PointSupportStabilityAssessmentV1,
     PointSupportStabilityDecisionV1, PointSupportStabilityPolicyV1,
 };
-use crate::session::{Session, SessionState};
+use crate::session::{Session, SessionPlanV1, SessionState};
 use crate::wcag22::Wcag22CriterionV1;
 
 const STREAM: ObservationStreamId = ObservationStreamId::new(31);
@@ -58,6 +58,60 @@ fn compiled(
 ) -> CompiledPointSupportRecheckV1 {
     CompiledPointSupportRecheckV1::new(CompositionProfileV1::EncodedSrgb8SourceOverV1, occurrences)
         .unwrap()
+}
+
+#[test]
+fn point_support_session_owns_exactly_one_canonical_schema_handle() {
+    let requirements = compiled(vec![occurrence(
+        OCCURRENCE_A,
+        SURFACE_A,
+        paint(PAINT_A, [0; 3], 1.0),
+        Some([0; 3]),
+        PointSupportCriterionRequirementV1::NotRequested,
+        PointSupportStabilityPolicyV1::Disabled,
+    )]);
+
+    assert_eq!(
+        requirements.observation_schema(&()).strong_count_for_test(),
+        1,
+    );
+
+    let schema_ptr = requirements.observation_schema(&()).backing_ptr_for_test();
+    let mut session = Session::new(STREAM, requirements);
+    assert_eq!(
+        session
+            .plan()
+            .observation_schema(&())
+            .strong_count_for_test(),
+        1,
+    );
+
+    let report_schema_ptr = match session
+        .update(observed_update(1, [(1, vec![(SURFACE_A, [0; 3])])]))
+        .unwrap()
+    {
+        SessionState::Ready { current } => current.report().observation().schema_ptr_for_test(),
+        _ => panic!("the exact point-support requirement must verify"),
+    };
+    assert_eq!(report_schema_ptr, schema_ptr);
+    assert_eq!(
+        session
+            .plan()
+            .observation_schema(&())
+            .strong_count_for_test(),
+        2,
+    );
+
+    session
+        .update(observed_update(1, [(1, vec![(SURFACE_A, [0; 3])])]))
+        .unwrap();
+    assert_eq!(
+        session
+            .plan()
+            .observation_schema(&())
+            .strong_count_for_test(),
+        2,
+    );
 }
 
 fn observed_update(

@@ -16,7 +16,7 @@ use crate::program_session::{
     Source, SourceId, Surface, Target, TargetId, canonical_surface_input_port_sequence_matches,
     check_render_node_count,
 };
-use crate::session::{SessionState, SessionUpdateError};
+use crate::session::{SessionPlanV1, SessionState, SessionUpdateError};
 
 const SOURCE: SourceId = SourceId::new(1);
 const TARGET: TargetId = TargetId::new(1);
@@ -546,6 +546,57 @@ fn independently_instantiated_streams_expire_with_their_compiled_owner_generatio
     assert!(matches!(second.state(), SessionState::Waiting));
     assert_eq!(first.raw_head(), ObservationHeadViewV1::Empty);
     assert_eq!(second.raw_head(), ObservationHeadViewV1::Empty);
+}
+
+#[test]
+fn program_sessions_reuse_the_owner_canonical_schema_handle() {
+    let compiled = exact_compiled(ConstraintSet::new(
+        vec![ConstraintInvocation::hard(
+            REQUIRED,
+            OCCURRENCE,
+            Srgb8::new([0x80; 3]),
+        )],
+        vec![],
+    ));
+
+    assert_eq!(compiled.observation_schema_strong_count_for_test(), 1);
+
+    let mut first = compiled.instantiate(STREAM_A).unwrap();
+    assert_eq!(compiled.observation_schema_strong_count_for_test(), 1);
+    let second = compiled.instantiate(STREAM_B).unwrap();
+    assert_eq!(compiled.observation_schema_strong_count_for_test(), 1);
+
+    drop(second);
+    assert_eq!(compiled.observation_schema_strong_count_for_test(), 1);
+
+    let schema_ptr = {
+        let owner = first.plan().try_acquire_owner().unwrap();
+        first
+            .plan()
+            .observation_schema(&owner)
+            .backing_ptr_for_test()
+    };
+    let report_schema_ptr = match first
+        .update(observed_update(STREAM_A, 1, &[(1, [0xFF; 3])]))
+        .unwrap()
+    {
+        SessionState::Ready { current } => current.report().observation().schema_ptr_for_test(),
+        _ => panic!("the exact Program must verify"),
+    };
+    assert_eq!(report_schema_ptr, schema_ptr);
+    let ObservationHeadViewV1::Observed(raw) = first.raw_head() else {
+        panic!("the raw head must retain the admitted observation");
+    };
+    assert_eq!(raw.schema_ptr_for_test(), schema_ptr);
+    assert_eq!(compiled.observation_schema_strong_count_for_test(), 2);
+
+    first
+        .update(observed_update(STREAM_A, 1, &[(1, [0xFF; 3])]))
+        .unwrap();
+    assert_eq!(compiled.observation_schema_strong_count_for_test(), 2);
+
+    drop(first);
+    assert_eq!(compiled.observation_schema_strong_count_for_test(), 1);
 }
 
 #[test]
