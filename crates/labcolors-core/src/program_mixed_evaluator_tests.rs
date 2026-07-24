@@ -16,12 +16,13 @@ use crate::observation::{
     ObservedScenarioSetInput, Revision, ScenarioId, ScenarioInput, SurfaceInputBinding,
 };
 use crate::package_bridge::{
-    PackageProgramAssessmentV1, PackageProgramCertificateV1, PackageProgramConflictCellV1,
-    PackageProgramModeledPointV1, PackageProgramObservationV1, PackageProgramOperationV1,
-    PackageProgramOutputSlotIdV1, PackageProgramOwnerV1, PackageProgramPhysicalPointV1,
+    PackageProgramAccessErrorV1, PackageProgramAssessmentV1, PackageProgramCertificateV1,
+    PackageProgramConflictCellV1, PackageProgramModeledPointV1, PackageProgramObservationHeadV1,
+    PackageProgramObservationV1, PackageProgramOperationV1, PackageProgramOutputSlotIdV1,
+    PackageProgramOwnerV1, PackageProgramPhysicalPointV1, PackageProgramProjectionV1,
     PackageProgramScenarioV1, PackageProgramSignalV1, PackageProgramStateKindV1,
-    PackageProgramStateViewV1, PackageProgramSurroundV1, PackageProgramUpdateErrorKindV1,
-    PackageProgramUpdateV1, PackageProgramVerdictV1, PackageProgramVerifiedCellV1,
+    PackageProgramSurroundV1, PackageProgramUpdateErrorKindV1, PackageProgramUpdateV1,
+    PackageProgramVerdictV1, PackageProgramVerifiedCellV1,
 };
 use crate::program_session::{
     CORE_PROGRAM_ASSESSMENT_CALLS, CompiledCoreProgramV1, CompositionProfile, ConstraintId,
@@ -44,6 +45,7 @@ const OCCURRENCE: OccurrenceId = OccurrenceId::new(6);
 const EXACT_CONSTRAINT: ConstraintId = ConstraintId::new(7);
 const WCAG_CONSTRAINT: ConstraintId = ConstraintId::new(8);
 const OUTPUT: OutputSlotId = OutputSlotId::new(9);
+const SECOND_OUTPUT: OutputSlotId = OutputSlotId::new(19);
 const GROUP: ObservationGroupId = ObservationGroupId::new(10);
 const STREAM: ObservationStreamId = ObservationStreamId::new(11);
 
@@ -92,6 +94,13 @@ fn observed_backdrops(backdrops: &[[u8; 3]]) -> ObservationUpdateInput {
 }
 
 fn finite_program(candidate_signals: [[u8; 3]; 2]) -> CompiledCoreProgramV1 {
+    finite_program_with_outputs(candidate_signals, vec![OutputBinding::new(OUTPUT, PAINT)])
+}
+
+fn finite_program_with_outputs(
+    candidate_signals: [[u8; 3]; 2],
+    outputs: Vec<OutputBinding>,
+) -> CompiledCoreProgramV1 {
     const FIRST: TargetCandidateId = TargetCandidateId::new(1);
     const SECOND: TargetCandidateId = TargetCandidateId::new(2);
     let program: CoreProgramV1 = Program::new(
@@ -133,7 +142,7 @@ fn finite_program(candidate_signals: [[u8; 3]; 2]) -> CompiledCoreProgramV1 {
                 CoreProgramConstraintInvocationV1::ExactSrgb8(Srgb8::new([0; 3])),
             )],
         ),
-        vec![OutputBinding::new(OUTPUT, PAINT)],
+        outputs,
         CoreProgramEvaluatorsV1,
     );
     program
@@ -558,7 +567,8 @@ fn consume_package_assessment(
     });
 }
 
-fn consume_package_projection(view: PackageProgramStateViewV1<'_>) -> ProjectionProbe {
+fn consume_package_projection(projection: PackageProgramProjectionV1<'_, '_>) -> ProjectionProbe {
+    let view = projection.evidence();
     let mut probe = ProjectionProbe::new();
     probe.mix(match view.kind() {
         PackageProgramStateKindV1::Waiting => 1,
@@ -566,7 +576,24 @@ fn consume_package_projection(view: PackageProgramStateViewV1<'_>) -> Projection
         PackageProgramStateKindV1::Failed => 3,
         PackageProgramStateKindV1::Stale => 4,
     });
-    probe.mix(view.revision().unwrap_or_default());
+    match view.observation_head() {
+        PackageProgramObservationHeadV1::Empty => probe.mix(0),
+        PackageProgramObservationHeadV1::Unknown {
+            stream,
+            revision,
+            reason_id,
+        } => {
+            probe.mix(1);
+            probe.mix(u64::from(stream.value()));
+            probe.mix(revision);
+            probe.mix(u64::from(reason_id));
+        }
+        PackageProgramObservationHeadV1::Observed { stream, revision } => {
+            probe.mix(2);
+            probe.mix(u64::from(stream.value()));
+            probe.mix(revision);
+        }
+    }
     probe.mix(
         view.cause_certificate_index()
             .map_or(0, |index| index as u64 + 1),
@@ -636,7 +663,7 @@ fn consume_package_projection(view: PackageProgramStateViewV1<'_>) -> Projection
             }
         }
     });
-    consume_exact_fused(view.operations(), &mut probe, |operation, probe| {
+    consume_exact_fused(projection.operations(), &mut probe, |operation, probe| {
         probe.operations += 1;
         match operation {
             PackageProgramOperationV1::Set(set) => {
@@ -660,6 +687,37 @@ fn consume_package_projection(view: PackageProgramStateViewV1<'_>) -> Projection
         }
     });
     std::hint::black_box(probe)
+}
+
+fn assert_observed_head(
+    head: PackageProgramObservationHeadV1,
+    expected_stream: u32,
+    expected_revision: u64,
+) {
+    let PackageProgramObservationHeadV1::Observed { stream, revision } = head else {
+        panic!("raw evidence must remain a closed Observed payload");
+    };
+    assert_eq!(stream.value(), expected_stream);
+    assert_eq!(revision, expected_revision);
+}
+
+fn assert_unknown_head(
+    head: PackageProgramObservationHeadV1,
+    expected_stream: u32,
+    expected_revision: u64,
+    expected_reason: u32,
+) {
+    let PackageProgramObservationHeadV1::Unknown {
+        stream,
+        revision,
+        reason_id,
+    } = head
+    else {
+        panic!("raw evidence must remain a closed Unknown payload");
+    };
+    assert_eq!(stream.value(), expected_stream);
+    assert_eq!(revision, expected_revision);
+    assert_eq!(reason_id, expected_reason);
 }
 
 #[test]
@@ -755,13 +813,17 @@ fn fixed_package_certificate_retains_none_selection_and_nonunit_output_opacity()
     let mut session = owner.instantiate(STREAM.value()).unwrap();
     let white = [Srgb8::new([0xFF; 3])];
     let scenarios = [PackageProgramScenarioV1::new(1, &white)];
-    let state = session
-        .update(PackageProgramUpdateV1::Observed {
-            revision: 1,
-            scenarios: &scenarios,
-        })
+    let projection = owner
+        .update(
+            &mut session,
+            PackageProgramUpdateV1::Observed {
+                revision: 1,
+                scenarios: &scenarios,
+            },
+        )
         .unwrap();
-    let Some(PackageProgramCertificateV1::Verified(certificate)) = state.certificates().next()
+    let Some(PackageProgramCertificateV1::Verified(certificate)) =
+        projection.evidence().certificates().next()
     else {
         panic!("the exact translucent midpoint must be verified");
     };
@@ -779,7 +841,7 @@ fn fixed_package_certificate_retains_none_selection_and_nonunit_output_opacity()
         certificate.outputs().next().unwrap().opacity().to_bits(),
         physical.opacity().to_bits()
     );
-    let Some(PackageProgramOperationV1::Set(set)) = state.operations().next() else {
+    let Some(PackageProgramOperationV1::Set(set)) = projection.operations().next() else {
         panic!("Verified must emit one Set");
     };
     assert_eq!(set.opacity().to_bits(), physical.opacity().to_bits());
@@ -887,13 +949,16 @@ fn package_projection_preserves_every_exposed_ready_and_conflict_field_against_c
         PackageProgramScenarioV1::new(2, &ready_white),
         PackageProgramScenarioV1::new(3, &ready_gray),
     ];
-    let package_ready = ready_package_session
-        .update(PackageProgramUpdateV1::Observed {
-            revision: 1,
-            scenarios: &ready_scenarios,
-        })
+    let package_ready = ready_package_owner
+        .update(
+            &mut ready_package_session,
+            PackageProgramUpdateV1::Observed {
+                revision: 1,
+                scenarios: &ready_scenarios,
+            },
+        )
         .unwrap();
-    let mut package_certificates = package_ready.certificates();
+    let mut package_certificates = package_ready.evidence().certificates();
     assert_eq!(package_certificates.len(), 1);
     let Some(PackageProgramCertificateV1::Verified(package_verified)) = package_certificates.next()
     else {
@@ -987,13 +1052,16 @@ fn package_projection_preserves_every_exposed_ready_and_conflict_field_against_c
         PackageProgramScenarioV1::new(1, &conflict_white),
         PackageProgramScenarioV1::new(2, &conflict_black),
     ];
-    let package_failed = conflict_package_session
-        .update(PackageProgramUpdateV1::Observed {
-            revision: 1,
-            scenarios: &conflict_scenarios,
-        })
+    let package_failed = conflict_package_owner
+        .update(
+            &mut conflict_package_session,
+            PackageProgramUpdateV1::Observed {
+                revision: 1,
+                scenarios: &conflict_scenarios,
+            },
+        )
         .unwrap();
-    let mut package_certificates = package_failed.certificates();
+    let mut package_certificates = package_failed.evidence().certificates();
     assert_eq!(package_certificates.len(), 1);
     let Some(PackageProgramCertificateV1::Conflict(package_conflict)) = package_certificates.next()
     else {
@@ -1051,14 +1119,17 @@ fn committed_projection_is_zero_alloc_and_repeats_no_composite_transform_or_eval
     let mut session = owner.instantiate(STREAM.value()).unwrap();
     let white = [Srgb8::new([0xFF; 3])];
     let white_only = [PackageProgramScenarioV1::new(1, &white)];
-    session
-        .update(PackageProgramUpdateV1::Observed {
-            revision: 1,
-            scenarios: &white_only,
-        })
+    owner
+        .update(
+            &mut session,
+            PackageProgramUpdateV1::Observed {
+                revision: 1,
+                scenarios: &white_only,
+            },
+        )
         .unwrap();
     let Some(PackageProgramCertificateV1::Verified(ready_certificate)) =
-        session.state().certificates().next()
+        session.evidence().certificates().next()
     else {
         panic!("black must be selected for the white-only physical support");
     };
@@ -1071,7 +1142,7 @@ fn committed_projection_is_zero_alloc_and_repeats_no_composite_transform_or_eval
     assert!(ready_derivations > 0);
     assert!(ready_assessments > 0);
     let (ready_probe, ready_allocations) = crate::test_support::measured_allocations(|| {
-        consume_package_projection(std::hint::black_box(session.state()))
+        consume_package_projection(std::hint::black_box(owner.project(&session).unwrap()))
     });
     assert_eq!(ready_allocations, 0);
     assert!(ready_probe.iterator_laws_hold);
@@ -1098,17 +1169,20 @@ fn committed_projection_is_zero_alloc_and_repeats_no_composite_transform_or_eval
         ready_assessments
     );
 
-    session
-        .update(PackageProgramUpdateV1::Unknown {
-            revision: 2,
-            reason_id: 7,
-        })
+    owner
+        .update(
+            &mut session,
+            PackageProgramUpdateV1::Unknown {
+                revision: 2,
+                reason_id: 7,
+            },
+        )
         .unwrap();
     let stale_compositions = crate::composition::source_over_evaluation_count();
     let stale_derivations = MODELED_TRISTIMULUS_DERIVATION_CALLS.with(core::cell::Cell::get);
     let stale_assessments = CORE_PROGRAM_ASSESSMENT_CALLS.with(core::cell::Cell::get);
     let (stale_probe, stale_allocations) = crate::test_support::measured_allocations(|| {
-        consume_package_projection(std::hint::black_box(session.state()))
+        consume_package_projection(std::hint::black_box(owner.project(&session).unwrap()))
     });
     assert_eq!(stale_allocations, 0);
     assert!(stale_probe.iterator_laws_hold);
@@ -1135,17 +1209,20 @@ fn committed_projection_is_zero_alloc_and_repeats_no_composite_transform_or_eval
         PackageProgramScenarioV1::new(1, &white),
         PackageProgramScenarioV1::new(2, &black),
     ];
-    session
-        .update(PackageProgramUpdateV1::Observed {
-            revision: 3,
-            scenarios: &opposing_backdrops,
-        })
+    owner
+        .update(
+            &mut session,
+            PackageProgramUpdateV1::Observed {
+                revision: 3,
+                scenarios: &opposing_backdrops,
+            },
+        )
         .unwrap();
     let failed_compositions = crate::composition::source_over_evaluation_count();
     let failed_derivations = MODELED_TRISTIMULUS_DERIVATION_CALLS.with(core::cell::Cell::get);
     let failed_assessments = CORE_PROGRAM_ASSESSMENT_CALLS.with(core::cell::Cell::get);
     let (failed_probe, failed_allocations) = crate::test_support::measured_allocations(|| {
-        consume_package_projection(std::hint::black_box(session.state()))
+        consume_package_projection(std::hint::black_box(owner.project(&session).unwrap()))
     });
     assert_eq!(failed_allocations, 0);
     assert!(failed_probe.iterator_laws_hold);
@@ -1224,14 +1301,17 @@ fn observation_projection_is_invariant_under_every_scenario_permutation_and_keep
         };
         let package_scenarios = permutation
             .map(|index| PackageProgramScenarioV1::new(IDS[index], &package_values[index]));
-        let package_state = package_session
-            .update(PackageProgramUpdateV1::Observed {
-                revision: 1,
-                scenarios: &package_scenarios,
-            })
+        let package_state = package_owner
+            .update(
+                &mut package_session,
+                PackageProgramUpdateV1::Observed {
+                    revision: 1,
+                    scenarios: &package_scenarios,
+                },
+            )
             .unwrap();
         let Some(PackageProgramCertificateV1::Verified(package_verified)) =
-            package_state.certificates().next()
+            package_state.evidence().certificates().next()
         else {
             panic!("the canonical observation must keep one Verified certificate");
         };
@@ -1305,11 +1385,14 @@ fn concrete_package_bridge_projects_total_ready_and_stale_operations() {
     );
 
     let mut session = owner.instantiate(11).unwrap();
-    let initial = session.state();
+    let initial = session.evidence();
     assert_eq!(initial.kind(), PackageProgramStateKindV1::Waiting);
-    assert_eq!(initial.revision(), None);
+    assert_eq!(
+        initial.observation_head(),
+        PackageProgramObservationHeadV1::Empty
+    );
     assert_eq!(initial.certificates().len(), 0);
-    assert_eq!(initial.operations().len(), 0);
+    assert_eq!(owner.project(&session).unwrap().operations().len(), 0);
 
     let white = [Srgb8::new([0xFF; 3])];
     let gray = [Srgb8::new([0x80; 3])];
@@ -1317,16 +1400,20 @@ fn concrete_package_bridge_projects_total_ready_and_stale_operations() {
         PackageProgramScenarioV1::new(2, &gray),
         PackageProgramScenarioV1::new(1, &white),
     ];
-    let ready = session
-        .update(PackageProgramUpdateV1::Observed {
-            revision: 1,
-            scenarios: &scenarios,
-        })
+    let ready = owner
+        .update(
+            &mut session,
+            PackageProgramUpdateV1::Observed {
+                revision: 1,
+                scenarios: &scenarios,
+            },
+        )
         .unwrap();
-    assert_eq!(ready.kind(), PackageProgramStateKindV1::Ready);
-    assert_eq!(ready.revision(), Some(1));
-    assert_eq!(ready.cause_certificate_index(), None);
-    let certificates = ready.certificates().collect::<Vec<_>>();
+    let ready_evidence = ready.evidence();
+    assert_eq!(ready_evidence.kind(), PackageProgramStateKindV1::Ready);
+    assert_observed_head(ready_evidence.observation_head(), STREAM.value(), 1);
+    assert_eq!(ready_evidence.cause_certificate_index(), None);
+    let certificates = ready_evidence.certificates().collect::<Vec<_>>();
     assert_eq!(certificates.len(), 1);
     assert!(matches!(
         certificates[0],
@@ -1364,13 +1451,16 @@ fn concrete_package_bridge_projects_total_ready_and_stale_operations() {
         PackageProgramScenarioV1::new(1, &white),
         PackageProgramScenarioV1::new(2, &gray),
     ];
-    let replay = session
-        .update(PackageProgramUpdateV1::Observed {
-            revision: 1,
-            scenarios: &reordered,
-        })
+    let replay = owner
+        .update(
+            &mut session,
+            PackageProgramUpdateV1::Observed {
+                revision: 1,
+                scenarios: &reordered,
+            },
+        )
         .unwrap();
-    let replay_certificate = replay.certificates().next().unwrap();
+    let replay_certificate = replay.evidence().certificates().next().unwrap();
     assert_eq!(
         replay_certificate.observation_backing_ptr_for_test(),
         ready_backing,
@@ -1378,10 +1468,13 @@ fn concrete_package_bridge_projects_total_ready_and_stale_operations() {
     );
 
     let changed_same_revision = [PackageProgramScenarioV1::new(1, &white)];
-    let error = match session.update(PackageProgramUpdateV1::Observed {
-        revision: 1,
-        scenarios: &changed_same_revision,
-    }) {
+    let error = match owner.update(
+        &mut session,
+        PackageProgramUpdateV1::Observed {
+            revision: 1,
+            scenarios: &changed_same_revision,
+        },
+    ) {
         Ok(_) => panic!("changed payload at the same revision must be rejected"),
         Err(error) => error,
     };
@@ -1389,18 +1482,22 @@ fn concrete_package_bridge_projects_total_ready_and_stale_operations() {
         error.kind(),
         PackageProgramUpdateErrorKindV1::RevisionConflict
     );
-    assert_eq!(session.state().kind(), PackageProgramStateKindV1::Ready);
-    assert_eq!(session.state().revision(), Some(1));
+    assert_eq!(session.evidence().kind(), PackageProgramStateKindV1::Ready);
+    assert_observed_head(session.evidence().observation_head(), STREAM.value(), 1);
 
-    let stale = session
-        .update(PackageProgramUpdateV1::Unknown {
-            revision: 2,
-            reason_id: 7,
-        })
+    let stale = owner
+        .update(
+            &mut session,
+            PackageProgramUpdateV1::Unknown {
+                revision: 2,
+                reason_id: 7,
+            },
+        )
         .unwrap();
-    assert_eq!(stale.kind(), PackageProgramStateKindV1::Stale);
-    assert_eq!(stale.revision(), Some(2));
-    let certificates = stale.certificates().collect::<Vec<_>>();
+    let stale_evidence = stale.evidence();
+    assert_eq!(stale_evidence.kind(), PackageProgramStateKindV1::Stale);
+    assert_unknown_head(stale_evidence.observation_head(), STREAM.value(), 2, 7);
+    let certificates = stale_evidence.certificates().collect::<Vec<_>>();
     assert_eq!(certificates.len(), 1);
     assert!(matches!(
         certificates[0],
@@ -1439,15 +1536,19 @@ fn concrete_package_bridge_distinguishes_failed_remove_from_failed_hold() {
 
     let owner = PackageProgramOwnerV1::from_compiled(finite_program([[0x80; 3], [0xFF; 3]]));
     let mut session = owner.instantiate(11).unwrap();
-    let failed = session
-        .update(PackageProgramUpdateV1::Observed {
-            revision: 1,
-            scenarios: &white_only,
-        })
+    let failed = owner
+        .update(
+            &mut session,
+            PackageProgramUpdateV1::Observed {
+                revision: 1,
+                scenarios: &white_only,
+            },
+        )
         .unwrap();
-    assert_eq!(failed.kind(), PackageProgramStateKindV1::Failed);
-    assert_eq!(failed.cause_certificate_index(), Some(0));
-    let certificates = failed.certificates().collect::<Vec<_>>();
+    let failed_evidence = failed.evidence();
+    assert_eq!(failed_evidence.kind(), PackageProgramStateKindV1::Failed);
+    assert_eq!(failed_evidence.cause_certificate_index(), Some(0));
+    let certificates = failed_evidence.certificates().collect::<Vec<_>>();
     assert_eq!(certificates.len(), 1);
     assert!(matches!(
         certificates[0],
@@ -1466,13 +1567,17 @@ fn concrete_package_bridge_distinguishes_failed_remove_from_failed_hold() {
 
     let owner = PackageProgramOwnerV1::from_compiled(finite_program([[0; 3], [0xFF; 3]]));
     let mut session = owner.instantiate(12).unwrap();
-    let previous = session
-        .update(PackageProgramUpdateV1::Observed {
-            revision: 1,
-            scenarios: &white_only,
-        })
+    let previous = owner
+        .update(
+            &mut session,
+            PackageProgramUpdateV1::Observed {
+                revision: 1,
+                scenarios: &white_only,
+            },
+        )
         .unwrap();
     let previous_backing = previous
+        .evidence()
         .certificates()
         .next()
         .unwrap()
@@ -1481,15 +1586,19 @@ fn concrete_package_bridge_distinguishes_failed_remove_from_failed_hold() {
         PackageProgramScenarioV1::new(1, &white),
         PackageProgramScenarioV1::new(2, &black),
     ];
-    let failed = session
-        .update(PackageProgramUpdateV1::Observed {
-            revision: 2,
-            scenarios: &both,
-        })
+    let failed = owner
+        .update(
+            &mut session,
+            PackageProgramUpdateV1::Observed {
+                revision: 2,
+                scenarios: &both,
+            },
+        )
         .unwrap();
-    assert_eq!(failed.kind(), PackageProgramStateKindV1::Failed);
-    assert_eq!(failed.cause_certificate_index(), Some(0));
-    let certificates = failed.certificates().collect::<Vec<_>>();
+    let failed_evidence = failed.evidence();
+    assert_eq!(failed_evidence.kind(), PackageProgramStateKindV1::Failed);
+    assert_eq!(failed_evidence.cause_certificate_index(), Some(0));
+    let certificates = failed_evidence.certificates().collect::<Vec<_>>();
     assert_eq!(
         certificates
             .iter()
@@ -1531,10 +1640,13 @@ fn concrete_package_bridge_rejects_transport_shape_before_core_admission() {
     let mut session = owner.instantiate(11).unwrap();
     let empty_values = [];
     let malformed = [PackageProgramScenarioV1::new(1, &empty_values)];
-    let error = match session.update(PackageProgramUpdateV1::Observed {
-        revision: 1,
-        scenarios: &malformed,
-    }) {
+    let error = match owner.update(
+        &mut session,
+        PackageProgramUpdateV1::Observed {
+            revision: 1,
+            scenarios: &malformed,
+        },
+    ) {
         Ok(_) => panic!("schema-short package input must fail before Core admission"),
         Err(error) => error,
     };
@@ -1542,25 +1654,37 @@ fn concrete_package_bridge_rejects_transport_shape_before_core_admission() {
         error.kind(),
         PackageProgramUpdateErrorKindV1::InvalidObservation
     );
-    assert_eq!(session.state().kind(), PackageProgramStateKindV1::Waiting);
-    assert_eq!(session.state().revision(), None);
+    assert_eq!(
+        session.evidence().kind(),
+        PackageProgramStateKindV1::Waiting
+    );
+    assert_eq!(
+        session.evidence().observation_head(),
+        PackageProgramObservationHeadV1::Empty
+    );
 
     let white = [Srgb8::new([0xFF; 3])];
     let valid = [PackageProgramScenarioV1::new(1, &white)];
-    session
-        .update(PackageProgramUpdateV1::Observed {
-            revision: 2,
-            scenarios: &valid,
-        })
+    owner
+        .update(
+            &mut session,
+            PackageProgramUpdateV1::Observed {
+                revision: 2,
+                scenarios: &valid,
+            },
+        )
         .unwrap();
     let duplicate = [
         PackageProgramScenarioV1::new(7, &white),
         PackageProgramScenarioV1::new(7, &white),
     ];
-    let error = match session.update(PackageProgramUpdateV1::Observed {
-        revision: 1,
-        scenarios: &duplicate,
-    }) {
+    let error = match owner.update(
+        &mut session,
+        PackageProgramUpdateV1::Observed {
+            revision: 1,
+            scenarios: &duplicate,
+        },
+    ) {
         Ok(_) => panic!("duplicate scenario IDs must precede revision admission"),
         Err(error) => error,
     };
@@ -1568,6 +1692,466 @@ fn concrete_package_bridge_rejects_transport_shape_before_core_admission() {
         error.kind(),
         PackageProgramUpdateErrorKindV1::InvalidObservation
     );
-    assert_eq!(session.state().kind(), PackageProgramStateKindV1::Ready);
-    assert_eq!(session.state().revision(), Some(2));
+    assert_eq!(session.evidence().kind(), PackageProgramStateKindV1::Ready);
+    assert_observed_head(session.evidence().observation_head(), 11, 2);
+}
+
+#[test]
+fn same_content_foreign_owner_is_rejected_before_admission_without_work() {
+    crate::composition::reset_source_over_evaluation_count();
+    MODELED_TRISTIMULUS_DERIVATION_CALLS.with(|calls| calls.set(0));
+    CORE_PROGRAM_ASSESSMENT_CALLS.with(|calls| calls.set(0));
+
+    let compiled_a = finite_program([[0x80; 3], [0; 3]]);
+    let compiled_b = finite_program([[0x80; 3], [0; 3]]);
+    assert_eq!(compiled_a.content_identity(), compiled_b.content_identity());
+    let owner_a = PackageProgramOwnerV1::from_compiled(compiled_a);
+    let owner_b = PackageProgramOwnerV1::from_compiled(compiled_b);
+    let mut session = owner_a.instantiate(STREAM.value()).unwrap();
+    let white = [Srgb8::new([0xFF; 3])];
+    let observed = [PackageProgramScenarioV1::new(1, &white)];
+
+    owner_a
+        .update(
+            &mut session,
+            PackageProgramUpdateV1::Observed {
+                revision: 1,
+                scenarios: &observed,
+            },
+        )
+        .unwrap();
+    let before = session.evidence();
+    assert_observed_head(before.observation_head(), STREAM.value(), 1);
+    let before_backing = before
+        .certificates()
+        .next()
+        .unwrap()
+        .observation_backing_ptr_for_test();
+    let counts = (
+        crate::composition::source_over_evaluation_count(),
+        MODELED_TRISTIMULUS_DERIVATION_CALLS.with(core::cell::Cell::get),
+        CORE_PROGRAM_ASSESSMENT_CALLS.with(core::cell::Cell::get),
+    );
+
+    let (project_mismatch, project_allocations) = crate::test_support::measured_allocations(|| {
+        matches!(
+            owner_b.project(std::hint::black_box(&session)),
+            Err(PackageProgramAccessErrorV1::OwnerMismatch)
+        )
+    });
+    assert!(project_mismatch);
+    assert_eq!(project_allocations, 0);
+
+    let empty = [];
+    let malformed = [PackageProgramScenarioV1::new(2, &empty)];
+    let (update_mismatch, update_allocations) = crate::test_support::measured_allocations(|| {
+        matches!(
+            owner_b.update(
+                std::hint::black_box(&mut session),
+                PackageProgramUpdateV1::Observed {
+                    revision: 2,
+                    scenarios: &malformed,
+                },
+            ),
+            Err(error) if error.kind() == PackageProgramUpdateErrorKindV1::OwnerMismatch
+        )
+    });
+    assert!(update_mismatch);
+    assert_eq!(update_allocations, 0);
+    assert_eq!(
+        (
+            crate::composition::source_over_evaluation_count(),
+            MODELED_TRISTIMULUS_DERIVATION_CALLS.with(core::cell::Cell::get),
+            CORE_PROGRAM_ASSESSMENT_CALLS.with(core::cell::Cell::get),
+        ),
+        counts
+    );
+
+    let after = session.evidence();
+    assert_eq!(after.kind(), PackageProgramStateKindV1::Ready);
+    assert_observed_head(after.observation_head(), STREAM.value(), 1);
+    assert_eq!(
+        after
+            .certificates()
+            .next()
+            .unwrap()
+            .observation_backing_ptr_for_test(),
+        before_backing
+    );
+    assert!(owner_a.project(&session).is_ok());
+}
+
+#[test]
+fn raw_observation_head_preserves_unknown_reason_independently_of_lifecycle() {
+    let owner = PackageProgramOwnerV1::from_compiled(finite_program([[0x80; 3], [0; 3]]));
+    let mut session = owner.instantiate(STREAM.value()).unwrap();
+    assert_eq!(
+        session.evidence().observation_head(),
+        PackageProgramObservationHeadV1::Empty
+    );
+
+    owner
+        .update(
+            &mut session,
+            PackageProgramUpdateV1::Unknown {
+                revision: 1,
+                reason_id: u32::MAX,
+            },
+        )
+        .unwrap();
+    let unknown = session.evidence();
+    assert_eq!(unknown.kind(), PackageProgramStateKindV1::Waiting);
+    let PackageProgramObservationHeadV1::Unknown {
+        stream,
+        revision,
+        reason_id,
+    } = unknown.observation_head()
+    else {
+        panic!("Unknown raw evidence must remain a closed Unknown payload");
+    };
+    assert_eq!(stream.value(), STREAM.value());
+    assert_eq!(revision, 1);
+    assert_eq!(reason_id, u32::MAX);
+
+    let mut other_session = owner.instantiate(29).unwrap();
+    owner
+        .update(
+            &mut other_session,
+            PackageProgramUpdateV1::Unknown {
+                revision: 1,
+                reason_id: u32::MAX,
+            },
+        )
+        .unwrap();
+    assert_ne!(
+        unknown.observation_head(),
+        other_session.evidence().observation_head(),
+        "equal revision and reason on different streams are distinct raw evidence"
+    );
+
+    let conflicting = match owner.update(
+        &mut session,
+        PackageProgramUpdateV1::Unknown {
+            revision: 1,
+            reason_id: 0,
+        },
+    ) {
+        Ok(_) => panic!("same revision with another reason must conflict"),
+        Err(error) => error,
+    };
+    assert_eq!(
+        conflicting.kind(),
+        PackageProgramUpdateErrorKindV1::RevisionConflict
+    );
+    assert_unknown_head(
+        session.evidence().observation_head(),
+        STREAM.value(),
+        1,
+        u32::MAX,
+    );
+}
+
+#[test]
+fn copied_raw_heads_outlive_owner_and_session_without_losing_provenance() {
+    let (unknown, observed) = {
+        let owner = PackageProgramOwnerV1::from_compiled(finite_program([[0x80; 3], [0; 3]]));
+        let mut session = owner.instantiate(u32::MAX).unwrap();
+        owner
+            .update(
+                &mut session,
+                PackageProgramUpdateV1::Unknown {
+                    revision: 1,
+                    reason_id: u32::MAX,
+                },
+            )
+            .unwrap();
+        let unknown = session.evidence().observation_head();
+
+        let white = [Srgb8::new([0xFF; 3])];
+        let scenarios = [PackageProgramScenarioV1::new(1, &white)];
+        owner
+            .update(
+                &mut session,
+                PackageProgramUpdateV1::Observed {
+                    revision: u64::MAX,
+                    scenarios: &scenarios,
+                },
+            )
+            .unwrap();
+        let observed = session.evidence().observation_head();
+        (unknown, observed)
+    };
+
+    assert_unknown_head(unknown, u32::MAX, 1, u32::MAX);
+    assert_observed_head(observed, u32::MAX, u64::MAX);
+}
+
+#[test]
+fn expired_owner_preserves_historical_evidence_but_equivalent_owner_has_no_authority() {
+    let compiled_a = finite_program([[0x80; 3], [0; 3]]);
+    let compiled_b = finite_program([[0x80; 3], [0; 3]]);
+    assert_eq!(compiled_a.content_identity(), compiled_b.content_identity());
+    let owner_a = PackageProgramOwnerV1::from_compiled(compiled_a);
+    let owner_b = PackageProgramOwnerV1::from_compiled(compiled_b);
+    let mut session = owner_a.instantiate(STREAM.value()).unwrap();
+    let white = [Srgb8::new([0xFF; 3])];
+    let observed = [PackageProgramScenarioV1::new(1, &white)];
+    owner_a
+        .update(
+            &mut session,
+            PackageProgramUpdateV1::Observed {
+                revision: 1,
+                scenarios: &observed,
+            },
+        )
+        .unwrap();
+
+    let certificate = session.evidence().certificates().next().unwrap();
+    let backing = certificate.observation_backing_ptr_for_test();
+    drop(owner_a);
+    assert_eq!(certificate.observation().revision(), 1);
+    assert_eq!(
+        certificate.observation_backing_ptr_for_test(),
+        backing,
+        "historical evidence is Session-owned rather than owner-authorized"
+    );
+
+    assert!(matches!(
+        owner_b.project(&session),
+        Err(PackageProgramAccessErrorV1::OwnerMismatch)
+    ));
+    let mismatch = match owner_b.update(
+        &mut session,
+        PackageProgramUpdateV1::Unknown {
+            revision: 2,
+            reason_id: 9,
+        },
+    ) {
+        Ok(_) => panic!("equivalent recompile must not revive another owner generation"),
+        Err(error) => error,
+    };
+    assert_eq!(
+        mismatch.kind(),
+        PackageProgramUpdateErrorKindV1::OwnerMismatch
+    );
+    assert_eq!(
+        session
+            .evidence()
+            .certificates()
+            .next()
+            .unwrap()
+            .observation_backing_ptr_for_test(),
+        backing
+    );
+}
+
+#[test]
+fn raw_head_and_evaluator_lifecycle_form_the_exact_reachable_product() {
+    let owner = PackageProgramOwnerV1::from_compiled(finite_program([[0x80; 3], [0; 3]]));
+    let mut session = owner.instantiate(STREAM.value()).unwrap();
+    let white = [Srgb8::new([0xFF; 3])];
+    let black = [Srgb8::new([0; 3])];
+    let white_only = [PackageProgramScenarioV1::new(1, &white)];
+    let opposing = [
+        PackageProgramScenarioV1::new(1, &white),
+        PackageProgramScenarioV1::new(2, &black),
+    ];
+
+    owner
+        .update(
+            &mut session,
+            PackageProgramUpdateV1::Unknown {
+                revision: 1,
+                reason_id: 3,
+            },
+        )
+        .unwrap();
+    owner
+        .update(
+            &mut session,
+            PackageProgramUpdateV1::Observed {
+                revision: 2,
+                scenarios: &white_only,
+            },
+        )
+        .unwrap();
+    let ready = session.evidence();
+    assert_eq!(ready.kind(), PackageProgramStateKindV1::Ready);
+    assert_observed_head(ready.observation_head(), STREAM.value(), 2);
+
+    owner
+        .update(
+            &mut session,
+            PackageProgramUpdateV1::Observed {
+                revision: 3,
+                scenarios: &opposing,
+            },
+        )
+        .unwrap();
+    let failed = session.evidence();
+    assert_eq!(failed.kind(), PackageProgramStateKindV1::Failed);
+    assert_observed_head(failed.observation_head(), STREAM.value(), 3);
+    assert_eq!(
+        failed
+            .certificates()
+            .map(|certificate| certificate.observation().revision())
+            .collect::<Vec<_>>(),
+        [3, 2]
+    );
+
+    owner
+        .update(
+            &mut session,
+            PackageProgramUpdateV1::Unknown {
+                revision: 4,
+                reason_id: 17,
+            },
+        )
+        .unwrap();
+    let stale = session.evidence();
+    assert_eq!(stale.kind(), PackageProgramStateKindV1::Stale);
+    assert_unknown_head(stale.observation_head(), STREAM.value(), 4, 17);
+    assert_eq!(
+        stale
+            .certificates()
+            .map(|certificate| certificate.observation().revision())
+            .collect::<Vec<_>>(),
+        [2]
+    );
+
+    let rejecting_owner =
+        PackageProgramOwnerV1::from_compiled(finite_program([[0x80; 3], [0xFF; 3]]));
+    let mut rejecting_session = rejecting_owner.instantiate(STREAM.value()).unwrap();
+    rejecting_owner
+        .update(
+            &mut rejecting_session,
+            PackageProgramUpdateV1::Observed {
+                revision: 1,
+                scenarios: &white_only,
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        rejecting_session.evidence().kind(),
+        PackageProgramStateKindV1::Failed
+    );
+    rejecting_owner
+        .update(
+            &mut rejecting_session,
+            PackageProgramUpdateV1::Unknown {
+                revision: 2,
+                reason_id: 23,
+            },
+        )
+        .unwrap();
+    let waiting = rejecting_session.evidence();
+    assert_eq!(waiting.kind(), PackageProgramStateKindV1::Waiting);
+    assert_unknown_head(waiting.observation_head(), STREAM.value(), 2, 23);
+    assert_eq!(waiting.certificates().len(), 0);
+}
+
+#[test]
+fn failed_without_previous_removes_every_output_in_canonical_exact_order() {
+    let owner = PackageProgramOwnerV1::from_compiled(finite_program_with_outputs(
+        [[0x80; 3], [0xFF; 3]],
+        vec![
+            OutputBinding::new(SECOND_OUTPUT, PAINT),
+            OutputBinding::new(OUTPUT, PAINT),
+        ],
+    ));
+    let mut session = owner.instantiate(STREAM.value()).unwrap();
+    let white = [Srgb8::new([0xFF; 3])];
+    let scenarios = [PackageProgramScenarioV1::new(1, &white)];
+    let failed = owner
+        .update(
+            &mut session,
+            PackageProgramUpdateV1::Observed {
+                revision: 1,
+                scenarios: &scenarios,
+            },
+        )
+        .unwrap();
+    assert_eq!(failed.evidence().kind(), PackageProgramStateKindV1::Failed);
+    assert_eq!(failed.evidence().certificates().len(), 1);
+
+    let mut operations = failed.operations();
+    assert_eq!(operations.len(), 2);
+    assert_eq!(operations.size_hint(), (2, Some(2)));
+    let Some(PackageProgramOperationV1::Remove(first)) = operations.next() else {
+        panic!("Failed without previous evidence must remove the first output");
+    };
+    assert_eq!(
+        first.output_slot(),
+        PackageProgramOutputSlotIdV1::new(OUTPUT.value())
+    );
+    assert_eq!(operations.len(), 1);
+    assert_eq!(operations.size_hint(), (1, Some(1)));
+
+    let Some(PackageProgramOperationV1::Remove(second)) = operations.next() else {
+        panic!("Failed without previous evidence must remove the second output");
+    };
+    assert_eq!(
+        second.output_slot(),
+        PackageProgramOutputSlotIdV1::new(SECOND_OUTPUT.value())
+    );
+    assert_eq!(operations.len(), 0);
+    assert_eq!(operations.size_hint(), (0, Some(0)));
+    assert!(operations.next().is_none());
+    assert!(operations.next().is_none());
+}
+
+#[test]
+fn ready_and_stale_project_every_output_in_the_same_canonical_order() {
+    let owner = PackageProgramOwnerV1::from_compiled(finite_program_with_outputs(
+        [[0x80; 3], [0; 3]],
+        vec![
+            OutputBinding::new(SECOND_OUTPUT, PAINT),
+            OutputBinding::new(OUTPUT, PAINT),
+        ],
+    ));
+    let mut session = owner.instantiate(STREAM.value()).unwrap();
+    let white = [Srgb8::new([0xFF; 3])];
+    let scenarios = [PackageProgramScenarioV1::new(1, &white)];
+
+    {
+        let ready = owner
+            .update(
+                &mut session,
+                PackageProgramUpdateV1::Observed {
+                    revision: 1,
+                    scenarios: &scenarios,
+                },
+            )
+            .unwrap();
+        let mut operations = ready.operations();
+        assert_eq!(operations.len(), 2);
+        for expected in [OUTPUT, SECOND_OUTPUT] {
+            let Some(PackageProgramOperationV1::Set(set)) = operations.next() else {
+                panic!("Ready must set every compiled output");
+            };
+            assert_eq!(set.output_slot().value(), expected.value());
+            assert_eq!(set.certificate().observation().revision(), 1);
+        }
+        assert!(operations.next().is_none());
+    }
+
+    let stale = owner
+        .update(
+            &mut session,
+            PackageProgramUpdateV1::Unknown {
+                revision: 2,
+                reason_id: 7,
+            },
+        )
+        .unwrap();
+    let mut operations = stale.operations();
+    assert_eq!(operations.len(), 2);
+    for expected in [OUTPUT, SECOND_OUTPUT] {
+        let Some(PackageProgramOperationV1::Hold(hold)) = operations.next() else {
+            panic!("Stale must hold every previously verified output");
+        };
+        assert_eq!(hold.output_slot().value(), expected.value());
+        assert_eq!(hold.certificate().observation().revision(), 1);
+    }
+    assert!(operations.next().is_none());
 }

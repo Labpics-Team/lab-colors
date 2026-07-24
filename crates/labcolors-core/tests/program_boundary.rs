@@ -14,14 +14,15 @@ use labcolors_core::package_bridge::{
     PackageProgramCompileErrorV1, PackageProgramConstraintIdV1, PackageProgramDraftErrorV1,
     PackageProgramDraftV1, PackageProgramInstantiateErrorV1, PackageProgramJointChoiceV1,
     PackageProgramJointOrderErrorV1, PackageProgramJointStateV1, PackageProgramModeledPointV1,
-    PackageProgramNumericDomainErrorV1, PackageProgramOccurrenceIdV1,
-    PackageProgramOpacityInputIdV1, PackageProgramOperationV1, PackageProgramOutputSlotIdV1,
-    PackageProgramOwnerV1, PackageProgramPaintIdV1, PackageProgramPhysicalPointV1,
-    PackageProgramScenarioV1, PackageProgramSessionV1, PackageProgramSignalV1,
-    PackageProgramSourceIdV1, PackageProgramStateKindV1, PackageProgramStateViewV1,
-    PackageProgramSurfaceIdV1, PackageProgramSurfaceInputPortIdV1, PackageProgramSurroundV1,
-    PackageProgramTargetCandidateIdV1, PackageProgramTargetCandidateV1, PackageProgramTargetIdV1,
-    PackageProgramUpdateErrorKindV1, PackageProgramUpdateV1, PackageProgramVerdictV1,
+    PackageProgramNumericDomainErrorV1, PackageProgramObservationHeadV1,
+    PackageProgramOccurrenceIdV1, PackageProgramOpacityInputIdV1, PackageProgramOperationV1,
+    PackageProgramOutputSlotIdV1, PackageProgramOwnerV1, PackageProgramPaintIdV1,
+    PackageProgramPhysicalPointV1, PackageProgramProjectionV1, PackageProgramScenarioV1,
+    PackageProgramSessionV1, PackageProgramSignalV1, PackageProgramSourceIdV1,
+    PackageProgramStateKindV1, PackageProgramSurfaceIdV1, PackageProgramSurfaceInputPortIdV1,
+    PackageProgramSurroundV1, PackageProgramTargetCandidateIdV1, PackageProgramTargetCandidateV1,
+    PackageProgramTargetIdV1, PackageProgramUpdateErrorKindV1, PackageProgramUpdateV1,
+    PackageProgramVerdictV1,
 };
 use labcolors_core::wcag22::Wcag22CriterionV1;
 
@@ -47,14 +48,32 @@ fn wasm_can_use_only_the_concrete_owner_and_session(
         revision: 1,
         scenarios,
     };
-    let view = session.update(update).expect("well-formed update");
-    assert_projection_is_linear(view);
+    let view = owner
+        .update(session, update)
+        .expect("well-formed owner-bound update");
+    assert_projection_is_owner_bound(view);
     Ok(())
 }
 
-fn assert_projection_is_linear(view: PackageProgramStateViewV1<'_>) {
+fn assert_projection_is_owner_bound(projection: PackageProgramProjectionV1<'_, '_>) {
+    let view = projection.evidence();
     let _kind: PackageProgramStateKindV1 = view.kind();
-    let _revision: Option<u64> = view.revision();
+    match view.observation_head() {
+        PackageProgramObservationHeadV1::Empty => {}
+        PackageProgramObservationHeadV1::Unknown {
+            stream,
+            revision,
+            reason_id,
+        } => {
+            let _ = stream.value();
+            let _: u64 = revision;
+            let _: u32 = reason_id;
+        }
+        PackageProgramObservationHeadV1::Observed { stream, revision } => {
+            let _ = stream.value();
+            let _: u64 = revision;
+        }
+    }
     let certificates = exact_size(view.certificates());
     let certificate_count = certificates.len();
     for certificate in certificates {
@@ -136,7 +155,7 @@ fn assert_projection_is_linear(view: PackageProgramStateViewV1<'_>) {
             }
         }
     }
-    for operation in exact_size(view.operations()) {
+    for operation in exact_size(projection.operations()) {
         match operation {
             PackageProgramOperationV1::Set(set) => {
                 let _: PackageProgramOutputSlotIdV1 = set.output_slot();
@@ -158,20 +177,21 @@ fn assert_projection_is_linear(view: PackageProgramStateViewV1<'_>) {
 
 #[allow(dead_code)]
 fn unknown_is_revision_bound_without_a_stream_or_generation_field(
+    owner: &PackageProgramOwnerV1,
     session: &mut PackageProgramSessionV1,
 ) {
     let update = PackageProgramUpdateV1::Unknown {
         revision: 2,
         reason_id: 7,
     };
-    let _ = session.update(update);
+    let _ = owner.update(session, update);
 }
 
 #[allow(dead_code)]
-fn owner_expiry_is_a_closed_package_error(
+fn owner_mismatch_is_a_closed_package_error(
     error: labcolors_core::package_bridge::PackageProgramUpdateErrorV1,
 ) {
-    assert_eq!(error.kind(), PackageProgramUpdateErrorKindV1::OwnerExpired);
+    assert_eq!(error.kind(), PackageProgramUpdateErrorKindV1::OwnerMismatch);
 }
 
 #[test]
@@ -302,19 +322,18 @@ fn external_authoring_lowers_the_actual_closed_program_and_returns_canonical_inp
         [low_input, high_input]
     );
     let mut session = owner.instantiate(44).unwrap();
-    assert_eq!(
-        session.surface_input_ports().collect::<Vec<_>>(),
-        [low_input, high_input]
-    );
     let white = [Srgb8::new([0xFF; 3]), Srgb8::new([0xFF; 3])];
     let scenarios = [PackageProgramScenarioV1::new(7, &white)];
-    let ready = session
-        .update(PackageProgramUpdateV1::Observed {
-            revision: 1,
-            scenarios: &scenarios,
-        })
+    let ready = owner
+        .update(
+            &mut session,
+            PackageProgramUpdateV1::Observed {
+                revision: 1,
+                scenarios: &scenarios,
+            },
+        )
         .unwrap();
-    assert_eq!(ready.kind(), PackageProgramStateKindV1::Ready);
+    assert_eq!(ready.evidence().kind(), PackageProgramStateKindV1::Ready);
     let mut operations = ready.operations();
     let Some(PackageProgramOperationV1::Set(set)) = operations.next() else {
         panic!("Ready must emit one Set operation");
@@ -358,14 +377,18 @@ fn every_physical_constructor_and_both_remaining_constraint_modes_execute() {
     let mut session = owner.instantiate(13).unwrap();
     let white = [Srgb8::new([0xFF; 3])];
     let scenarios = [PackageProgramScenarioV1::new(1, &white)];
-    let state = session
-        .update(PackageProgramUpdateV1::Observed {
-            revision: 1,
-            scenarios: &scenarios,
-        })
+    let state = owner
+        .update(
+            &mut session,
+            PackageProgramUpdateV1::Observed {
+                revision: 1,
+                scenarios: &scenarios,
+            },
+        )
         .unwrap();
-    assert_eq!(state.kind(), PackageProgramStateKindV1::Ready);
-    let Some(PackageProgramCertificateV1::Verified(certificate)) = state.certificates().next()
+    assert_eq!(state.evidence().kind(), PackageProgramStateKindV1::Ready);
+    let Some(PackageProgramCertificateV1::Verified(certificate)) =
+        state.evidence().certificates().next()
     else {
         panic!("a fixed target must produce one Verified certificate");
     };
@@ -412,13 +435,17 @@ fn certificate_and_set_retain_the_same_nonunit_opacity() {
     let mut session = owner.instantiate(17).unwrap();
     let white = [Srgb8::new([0xFF; 3])];
     let scenarios = [PackageProgramScenarioV1::new(1, &white)];
-    let state = session
-        .update(PackageProgramUpdateV1::Observed {
-            revision: 1,
-            scenarios: &scenarios,
-        })
+    let state = owner
+        .update(
+            &mut session,
+            PackageProgramUpdateV1::Observed {
+                revision: 1,
+                scenarios: &scenarios,
+            },
+        )
         .unwrap();
-    let Some(PackageProgramCertificateV1::Verified(certificate)) = state.certificates().next()
+    let Some(PackageProgramCertificateV1::Verified(certificate)) =
+        state.evidence().certificates().next()
     else {
         panic!("the exact emitted midpoint must be verified");
     };

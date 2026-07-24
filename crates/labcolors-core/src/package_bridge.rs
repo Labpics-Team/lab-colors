@@ -8,6 +8,7 @@
 //! transport words, strings, or lifecycle generations.
 
 use core::iter::FusedIterator;
+use core::marker::PhantomData;
 use core::slice;
 
 use crate::Srgb8;
@@ -26,8 +27,8 @@ use crate::lcs_occurrence::{
 };
 use crate::numerics::NumericalDecisionEvidenceV1;
 use crate::observation::{
-    ObservationError, ObservationPayloadInput, ObservationStreamId, ObservationUpdateInput,
-    Revision, ScenarioId, SchemaOrderedScenarioSourceV1, UnknownReasonId,
+    ObservationError, ObservationHeadViewV1, ObservationStreamId, Revision, ScenarioId,
+    SchemaOrderedScenarioSourceV1, UnknownReasonId,
 };
 use crate::program_session::{
     CompiledCoreProgramV1, CompositionProfile, ConstraintId, ConstraintInvocation,
@@ -997,12 +998,17 @@ impl Default for PackageProgramDraftV1 {
 
 /// Opaque strong owner of one exact compiled Core Program.
 ///
-/// Sessions instantiated from this owner are independently mutable. In the
-/// terminal stacked build they retain only the canonical weak owner binding;
-/// dropping this value therefore expires every such Session before its next
-/// admission.
+/// Sessions instantiated from this owner are independently mutable only
+/// through this exact allocation. Dropping it revokes updates and operation
+/// projections; Session-owned historical evidence remains readable.
 pub struct PackageProgramOwnerV1 {
     compiled: CompiledCoreProgramV1,
+}
+
+/// A Session belongs to a different immutable owner allocation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PackageProgramAccessErrorV1 {
+    OwnerMismatch,
 }
 
 impl PackageProgramOwnerV1 {
@@ -1034,22 +1040,53 @@ impl PackageProgramOwnerV1 {
             .map(|(slot, _paint)| PackageProgramOutputSlotIdV1::from_core(slot))
     }
 
+    /// Borrow one operation projection only for the exact Session generation
+    /// instantiated by this owner. Equivalent content is not authority.
+    pub fn project<'owner, 'session>(
+        &'owner self,
+        session: &'session PackageProgramSessionV1,
+    ) -> Result<PackageProgramProjectionV1<'owner, 'session>, PackageProgramAccessErrorV1> {
+        if !self.compiled.owns_session(&session.session) {
+            return Err(PackageProgramAccessErrorV1::OwnerMismatch);
+        }
+        Ok(PackageProgramProjectionV1 {
+            evidence: session.evidence(),
+            owner: self,
+            scope: PackageProgramBorrowScopeV1::new(self, session),
+        })
+    }
+
+    /// Admit and commit one update only when owner and Session are the exact
+    /// same generation, then borrow the resulting immutable snapshot.
+    pub fn update<'owner, 'session>(
+        &'owner self,
+        session: &'session mut PackageProgramSessionV1,
+        update: PackageProgramUpdateV1<'_>,
+    ) -> Result<PackageProgramProjectionV1<'owner, 'session>, PackageProgramUpdateErrorV1> {
+        if !self.compiled.owns_session(&session.session) {
+            return Err(PackageProgramUpdateErrorV1::new(
+                PackageProgramUpdateErrorKindV1::OwnerMismatch,
+            ));
+        }
+        session.apply_update(update)?;
+        Ok(PackageProgramProjectionV1 {
+            evidence: session.evidence(),
+            owner: self,
+            scope: PackageProgramBorrowScopeV1::new(self, session),
+        })
+    }
+
     /// Instantiate one stream-affine Session without exposing a generation.
     pub fn instantiate(
         &self,
         stream_id: u32,
     ) -> Result<PackageProgramSessionV1, PackageProgramInstantiateErrorV1> {
-        let surface_input_ports = try_copy_surface_input_ports(&self.compiled)?;
-        let output_slots = try_copy_output_slots(&self.compiled)?;
         let stream = ObservationStreamId::new(stream_id);
         let session = self
             .compiled
             .instantiate(stream)
             .map_err(PackageProgramInstantiateErrorV1::from_core)?;
         Ok(PackageProgramSessionV1 {
-            stream,
-            surface_input_ports,
-            output_slots,
             scenario_order_scratch: Vec::new(),
             session,
         })
@@ -1091,46 +1128,23 @@ pub enum PackageProgramUpdateV1<'a> {
 
 /// Concrete opaque owner of one mutable Core Program Session.
 pub struct PackageProgramSessionV1 {
-    stream: ObservationStreamId,
-    surface_input_ports: Box<[PackageProgramSurfaceInputPortIdV1]>,
-    output_slots: Box<[PackageProgramOutputSlotIdV1]>,
     scenario_order_scratch: Vec<usize>,
     session: CoreProgramSessionV1,
 }
 
 impl PackageProgramSessionV1 {
-    /// Number of schema-ordered values required in every observed scenario.
-    pub fn surface_input_port_count(&self) -> usize {
-        self.surface_input_ports.len()
-    }
-
-    /// Canonically ordered authored input handles for one-time host binding.
-    pub fn surface_input_ports(
-        &self,
-    ) -> impl ExactSizeIterator<Item = PackageProgramSurfaceInputPortIdV1> + '_ {
-        self.surface_input_ports.iter().copied()
-    }
-
-    /// Canonically ordered opaque output slots for one-time host binding.
-    pub fn output_slots(&self) -> impl ExactSizeIterator<Item = PackageProgramOutputSlotIdV1> + '_ {
-        self.output_slots.iter().copied()
-    }
-
-    /// Allocation-free view of the current Core-owned lifecycle state.
-    pub fn state(&self) -> PackageProgramStateViewV1<'_> {
-        let revision = self.session.raw_head().revision().map(Revision::value);
-        PackageProgramStateViewV1 {
-            state: self.session.state(),
-            revision,
-            output_slots: &self.output_slots,
+    /// Historical evidence remains readable after owner expiry. It never
+    /// grants an operation projection.
+    pub fn evidence(&self) -> PackageProgramEvidenceViewV1<'_> {
+        PackageProgramEvidenceViewV1 {
+            session: &self.session,
         }
     }
 
-    /// Admit, evaluate and atomically commit one revision before projecting it.
-    pub fn update(
+    fn apply_update(
         &mut self,
         update: PackageProgramUpdateV1<'_>,
-    ) -> Result<PackageProgramStateViewV1<'_>, PackageProgramUpdateErrorV1> {
+    ) -> Result<(), PackageProgramUpdateErrorV1> {
         match update {
             PackageProgramUpdateV1::Observed {
                 revision,
@@ -1150,15 +1164,11 @@ impl PackageProgramSessionV1 {
                 reason_id,
             } => {
                 self.session
-                    .update(ObservationUpdateInput {
-                        stream: self.stream,
-                        revision: Revision::new(revision),
-                        payload: ObservationPayloadInput::Unknown(UnknownReasonId::new(reason_id)),
-                    })
+                    .update_unknown(Revision::new(revision), UnknownReasonId::new(reason_id))
                     .map_err(map_session_update_error)?;
             }
         }
-        Ok(self.state())
+        Ok(())
     }
 }
 
@@ -1191,17 +1201,37 @@ pub enum PackageProgramStateKindV1 {
     Failed,
 }
 
-/// Borrowed projection of one complete Core-owned lifecycle state.
-#[derive(Clone, Copy)]
-pub struct PackageProgramStateViewV1<'a> {
-    state: &'a CoreProgramStateV1,
-    revision: Option<u64>,
-    output_slots: &'a [PackageProgramOutputSlotIdV1],
+/// Closed raw observation head, independent of evaluator lifecycle.
+///
+/// A non-empty head retains stream provenance for detached correlation, never
+/// as operation authority. `Empty` carries none because no observation exists.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PackageProgramObservationHeadV1 {
+    Empty,
+    Unknown {
+        stream: PackageProgramStreamIdV1,
+        revision: u64,
+        reason_id: u32,
+    },
+    Observed {
+        stream: PackageProgramStreamIdV1,
+        revision: u64,
+    },
 }
 
-impl<'a> PackageProgramStateViewV1<'a> {
+/// Borrowed historical evidence owned solely by one Session.
+#[derive(Clone, Copy)]
+pub struct PackageProgramEvidenceViewV1<'a> {
+    session: &'a CoreProgramSessionV1,
+}
+
+impl<'a> PackageProgramEvidenceViewV1<'a> {
+    const fn state(self) -> &'a CoreProgramStateV1 {
+        self.session.state()
+    }
+
     pub const fn kind(self) -> PackageProgramStateKindV1 {
-        match self.state {
+        match self.state() {
             SessionState::Waiting => PackageProgramStateKindV1::Waiting,
             SessionState::Ready { .. } => PackageProgramStateKindV1::Ready,
             SessionState::Stale { .. } => PackageProgramStateKindV1::Stale,
@@ -1209,14 +1239,26 @@ impl<'a> PackageProgramStateViewV1<'a> {
         }
     }
 
-    /// Current raw-head revision; only the initial Waiting state has none.
-    pub const fn revision(self) -> Option<u64> {
-        self.revision
+    pub fn observation_head(self) -> PackageProgramObservationHeadV1 {
+        match self.session.raw_head() {
+            ObservationHeadViewV1::Empty => PackageProgramObservationHeadV1::Empty,
+            ObservationHeadViewV1::Unknown(unknown) => PackageProgramObservationHeadV1::Unknown {
+                stream: PackageProgramStreamIdV1::from_core(unknown.stream()),
+                revision: unknown.revision().value(),
+                reason_id: unknown.reason().value(),
+            },
+            ObservationHeadViewV1::Observed(observation) => {
+                PackageProgramObservationHeadV1::Observed {
+                    stream: PackageProgramStreamIdV1::from_core(observation.stream()),
+                    revision: observation.revision().value(),
+                }
+            }
+        }
     }
 
     /// Failed-state cause ordinal inside [`Self::certificates`].
     pub const fn cause_certificate_index(self) -> Option<usize> {
-        match self.state {
+        match self.state() {
             SessionState::Failed { .. } => Some(0),
             SessionState::Waiting | SessionState::Ready { .. } | SessionState::Stale { .. } => None,
         }
@@ -1226,7 +1268,7 @@ impl<'a> PackageProgramStateViewV1<'a> {
     pub fn certificates(
         self,
     ) -> impl ExactSizeIterator<Item = PackageProgramCertificateV1<'a>> + FusedIterator + 'a {
-        let (first, second) = match self.state {
+        let (first, second) = match self.state() {
             SessionState::Waiting => (None, None),
             SessionState::Ready { current } | SessionState::Stale { previous: current } => {
                 (Some(PackageProgramCertificateV1::verified(current)), None)
@@ -1238,40 +1280,86 @@ impl<'a> PackageProgramStateViewV1<'a> {
         };
         PackageProgramCertificatesV1::new(first, second)
     }
+}
+
+/// Zero-sized lifetime marker tying an operation projection to one exact live
+/// owner and one immutable Session snapshot.
+///
+/// This constrains borrowed Rust values; it is not a sink commit capability.
+#[derive(Clone, Copy)]
+struct PackageProgramBorrowScopeV1<'owner, 'session> {
+    _scope: PhantomData<(
+        &'owner PackageProgramOwnerV1,
+        &'session PackageProgramSessionV1,
+    )>,
+}
+
+impl<'owner, 'session> PackageProgramBorrowScopeV1<'owner, 'session> {
+    const fn new(
+        _owner: &'owner PackageProgramOwnerV1,
+        _session: &'session PackageProgramSessionV1,
+    ) -> Self {
+        Self {
+            _scope: PhantomData,
+        }
+    }
+}
+
+/// Owner-and-snapshot-validated projection. Historical evidence is available
+/// separately through [`PackageProgramSessionV1::evidence`].
+#[derive(Clone, Copy)]
+pub struct PackageProgramProjectionV1<'owner, 'session> {
+    evidence: PackageProgramEvidenceViewV1<'session>,
+    owner: &'owner PackageProgramOwnerV1,
+    scope: PackageProgramBorrowScopeV1<'owner, 'session>,
+}
+
+impl<'owner, 'session> PackageProgramProjectionV1<'owner, 'session> {
+    pub const fn evidence(self) -> PackageProgramEvidenceViewV1<'session> {
+        self.evidence
+    }
 
     /// Total canonical output projection for this lifecycle state.
     pub fn operations(
         self,
-    ) -> impl ExactSizeIterator<Item = PackageProgramOperationV1<'a>> + FusedIterator + 'a {
-        let inner = match self.state {
+    ) -> impl ExactSizeIterator<Item = PackageProgramOperationV1<'owner, 'session>> + FusedIterator
+    {
+        let inner = match self.evidence.state() {
             SessionState::Waiting => PackageProgramOperationSourceV1::Empty,
             SessionState::Ready { current } => {
-                debug_assert_eq!(current.outputs().len(), self.output_slots.len());
+                debug_assert_eq!(current.outputs().len(), self.owner.compiled.output_count());
                 debug_assert!(
                     current
                         .outputs()
                         .iter()
-                        .zip(self.output_slots)
-                        .all(|(output, slot)| output.output().value() == slot.value())
+                        .enumerate()
+                        .all(|(index, output)| self.owner.compiled.output_slot_at(index)
+                            == Some(output.output()))
                 );
                 PackageProgramOperationSourceV1::Set {
                     outputs: current.outputs().iter(),
                     certificate: PackageProgramVerifiedCertificateV1 { inner: current },
+                    scope: self.scope,
                 }
             }
             SessionState::Stale { previous } => PackageProgramOperationSourceV1::Hold {
-                slots: self.output_slots.iter(),
+                outputs: previous.outputs().iter(),
                 certificate: PackageProgramVerifiedCertificateV1 { inner: previous },
+                scope: self.scope,
             },
             SessionState::Failed {
                 previous: Some(previous),
                 ..
             } => PackageProgramOperationSourceV1::Hold {
-                slots: self.output_slots.iter(),
+                outputs: previous.outputs().iter(),
                 certificate: PackageProgramVerifiedCertificateV1 { inner: previous },
+                scope: self.scope,
             },
             SessionState::Failed { previous: None, .. } => {
-                PackageProgramOperationSourceV1::Remove(self.output_slots.iter())
+                PackageProgramOperationSourceV1::Remove {
+                    slots: PackageProgramOwnerOutputSlotsV1::new(&self.owner.compiled),
+                    scope: self.scope,
+                }
             }
         };
         PackageProgramOperationsV1 { inner }
@@ -1369,6 +1457,28 @@ impl<'a> PackageProgramConflictCertificateV1<'a> {
 }
 
 /// Closed borrowed projection of one exact Core-owned certificate.
+///
+/// A certificate borrows only Session-owned history, so it can outlive the
+/// owner that authorized the projection from which it was read.
+///
+/// ```no_run
+/// use labcolors_core::package_bridge::{
+///     PackageProgramCertificateV1, PackageProgramOwnerV1, PackageProgramSessionV1,
+/// };
+///
+/// fn retain_evidence<'session>(
+///     owner: PackageProgramOwnerV1,
+///     session: &'session PackageProgramSessionV1,
+/// ) -> PackageProgramCertificateV1<'session> {
+///     owner
+///         .project(session)
+///         .unwrap()
+///         .evidence()
+///         .certificates()
+///         .next()
+///         .unwrap()
+/// }
+/// ```
 #[derive(Clone, Copy)]
 pub enum PackageProgramCertificateV1<'a> {
     Verified(PackageProgramVerifiedCertificateV1<'a>),
@@ -1876,12 +1986,13 @@ impl<'a> PackageProgramCertifiedOutputV1<'a> {
 
 /// A Set operation is structurally tied to the exact Verified certificate.
 #[derive(Clone, Copy)]
-pub struct PackageProgramSetV1<'a> {
-    output: &'a ProgramOutputV1,
-    certificate: PackageProgramVerifiedCertificateV1<'a>,
+pub struct PackageProgramSetV1<'owner, 'session> {
+    output: &'session ProgramOutputV1,
+    certificate: PackageProgramVerifiedCertificateV1<'session>,
+    _scope: PackageProgramBorrowScopeV1<'owner, 'session>,
 }
 
-impl<'a> PackageProgramSetV1<'a> {
+impl<'session> PackageProgramSetV1<'_, 'session> {
     pub const fn output_slot(self) -> PackageProgramOutputSlotIdV1 {
         PackageProgramOutputSlotIdV1::from_core((*self.output).output())
     }
@@ -1894,17 +2005,18 @@ impl<'a> PackageProgramSetV1<'a> {
         (*self.output).paint().opacity().value()
     }
 
-    pub const fn certificate(self) -> PackageProgramVerifiedCertificateV1<'a> {
+    pub const fn certificate(self) -> PackageProgramVerifiedCertificateV1<'session> {
         self.certificate
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct PackageProgramRemoveV1 {
+#[derive(Clone, Copy)]
+pub struct PackageProgramRemoveV1<'owner, 'session> {
     output_slot: PackageProgramOutputSlotIdV1,
+    _scope: PackageProgramBorrowScopeV1<'owner, 'session>,
 }
 
-impl PackageProgramRemoveV1 {
+impl PackageProgramRemoveV1<'_, '_> {
     pub const fn output_slot(self) -> PackageProgramOutputSlotIdV1 {
         self.output_slot
     }
@@ -1912,27 +2024,126 @@ impl PackageProgramRemoveV1 {
 
 /// A Hold operation is structurally tied to the retained Verified certificate.
 #[derive(Clone, Copy)]
-pub struct PackageProgramHoldV1<'a> {
-    output_slot: PackageProgramOutputSlotIdV1,
-    certificate: PackageProgramVerifiedCertificateV1<'a>,
+pub struct PackageProgramHoldV1<'owner, 'session> {
+    output: &'session ProgramOutputV1,
+    certificate: PackageProgramVerifiedCertificateV1<'session>,
+    _scope: PackageProgramBorrowScopeV1<'owner, 'session>,
 }
 
-impl<'a> PackageProgramHoldV1<'a> {
+impl<'session> PackageProgramHoldV1<'_, 'session> {
     pub const fn output_slot(self) -> PackageProgramOutputSlotIdV1 {
-        self.output_slot
+        PackageProgramOutputSlotIdV1::from_core((*self.output).output())
     }
 
-    pub const fn certificate(self) -> PackageProgramVerifiedCertificateV1<'a> {
+    pub const fn certificate(self) -> PackageProgramVerifiedCertificateV1<'session> {
         self.certificate
     }
 }
 
 /// Closed total operation union over opaque output slots.
+///
+/// Every payload borrows both the exact owner and immutable Session snapshot;
+/// destructuring a `Remove` cannot erase that scope.
+/// Copied slot/source/opacity values are data only: a runtime adapter must
+/// recheck its live owner, Session and revision immediately before one atomic
+/// sink commit.
+///
+/// ```compile_fail,E0515
+/// use labcolors_core::package_bridge::{
+///     PackageProgramOperationV1, PackageProgramOwnerV1, PackageProgramRemoveV1,
+///     PackageProgramSessionV1,
+/// };
+///
+/// fn escape_remove<'session>(
+///     owner: PackageProgramOwnerV1,
+///     session: &'session PackageProgramSessionV1,
+/// ) -> PackageProgramRemoveV1<'session, 'session> {
+///     match owner.project(session).unwrap().operations().next().unwrap() {
+///         PackageProgramOperationV1::Remove(remove) => remove,
+///         _ => panic!("fixture supplies Remove"),
+///     }
+/// }
+/// ```
+///
+/// ```compile_fail,E0515
+/// use labcolors_core::package_bridge::{
+///     PackageProgramOperationV1, PackageProgramOwnerV1, PackageProgramRemoveV1,
+/// };
+///
+/// fn escape_local_session<'owner>(
+///     owner: &'owner PackageProgramOwnerV1,
+/// ) -> PackageProgramRemoveV1<'owner, 'owner> {
+///     let session = owner.instantiate(1).unwrap();
+///     match owner.project(&session).unwrap().operations().next().unwrap() {
+///         PackageProgramOperationV1::Remove(remove) => remove,
+///         _ => panic!("fixture supplies Remove"),
+///     }
+/// }
+/// ```
+///
+/// ```compile_fail,E0515
+/// use labcolors_core::package_bridge::{
+///     PackageProgramOperationV1, PackageProgramOwnerV1, PackageProgramSessionV1,
+///     PackageProgramSetV1,
+/// };
+///
+/// fn escape_set<'session>(
+///     owner: PackageProgramOwnerV1,
+///     session: &'session PackageProgramSessionV1,
+/// ) -> PackageProgramSetV1<'session, 'session> {
+///     match owner.project(session).unwrap().operations().next().unwrap() {
+///         PackageProgramOperationV1::Set(set) => set,
+///         _ => panic!("fixture supplies Set"),
+///     }
+/// }
+/// ```
+///
+/// ```compile_fail,E0515
+/// use labcolors_core::package_bridge::{
+///     PackageProgramHoldV1, PackageProgramOperationV1, PackageProgramOwnerV1,
+///     PackageProgramSessionV1,
+/// };
+///
+/// fn escape_hold<'session>(
+///     owner: PackageProgramOwnerV1,
+///     session: &'session PackageProgramSessionV1,
+/// ) -> PackageProgramHoldV1<'session, 'session> {
+///     match owner.project(session).unwrap().operations().next().unwrap() {
+///         PackageProgramOperationV1::Hold(hold) => hold,
+///         _ => panic!("fixture supplies Hold"),
+///     }
+/// }
+/// ```
+///
+/// ```compile_fail,E0502
+/// use labcolors_core::package_bridge::{
+///     PackageProgramOperationV1, PackageProgramOwnerV1, PackageProgramSessionV1,
+///     PackageProgramUpdateV1,
+/// };
+///
+/// fn remove_blocks_session_mutation(
+///     owner: &PackageProgramOwnerV1,
+///     session: &mut PackageProgramSessionV1,
+/// ) {
+///     let remove = match owner.project(session).unwrap().operations().next().unwrap() {
+///         PackageProgramOperationV1::Remove(remove) => remove,
+///         _ => return,
+///     };
+///     let _second = owner.update(
+///         session,
+///         PackageProgramUpdateV1::Unknown {
+///             revision: 2,
+///             reason_id: 7,
+///         },
+///     );
+///     let _slot = remove.output_slot();
+/// }
+/// ```
 #[derive(Clone, Copy)]
-pub enum PackageProgramOperationV1<'a> {
-    Set(PackageProgramSetV1<'a>),
-    Remove(PackageProgramRemoveV1),
-    Hold(PackageProgramHoldV1<'a>),
+pub enum PackageProgramOperationV1<'owner, 'session> {
+    Set(PackageProgramSetV1<'owner, 'session>),
+    Remove(PackageProgramRemoveV1<'owner, 'session>),
+    Hold(PackageProgramHoldV1<'owner, 'session>),
 }
 
 struct PackageProgramCertificatesV1<'a> {
@@ -1977,25 +2188,67 @@ impl<'a> Iterator for PackageProgramCertificatesV1<'a> {
 impl ExactSizeIterator for PackageProgramCertificatesV1<'_> {}
 impl FusedIterator for PackageProgramCertificatesV1<'_> {}
 
-enum PackageProgramOperationSourceV1<'a> {
+struct PackageProgramOwnerOutputSlotsV1<'owner> {
+    compiled: &'owner CompiledCoreProgramV1,
+    index: usize,
+    len: usize,
+}
+
+impl<'owner> PackageProgramOwnerOutputSlotsV1<'owner> {
+    fn new(compiled: &'owner CompiledCoreProgramV1) -> Self {
+        Self {
+            compiled,
+            index: 0,
+            len: compiled.output_count(),
+        }
+    }
+}
+
+impl Iterator for PackageProgramOwnerOutputSlotsV1<'_> {
+    type Item = PackageProgramOutputSlotIdV1;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.index == self.len {
+            return None;
+        }
+        let output = self.compiled.output_slot_at(self.index)?;
+        self.index += 1;
+        Some(PackageProgramOutputSlotIdV1::from_core(output))
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let remaining = self.len - self.index;
+        (remaining, Some(remaining))
+    }
+}
+
+impl ExactSizeIterator for PackageProgramOwnerOutputSlotsV1<'_> {}
+impl FusedIterator for PackageProgramOwnerOutputSlotsV1<'_> {}
+
+enum PackageProgramOperationSourceV1<'owner, 'session> {
     Empty,
     Set {
-        outputs: slice::Iter<'a, ProgramOutputV1>,
-        certificate: PackageProgramVerifiedCertificateV1<'a>,
+        outputs: slice::Iter<'session, ProgramOutputV1>,
+        certificate: PackageProgramVerifiedCertificateV1<'session>,
+        scope: PackageProgramBorrowScopeV1<'owner, 'session>,
     },
     Hold {
-        slots: slice::Iter<'a, PackageProgramOutputSlotIdV1>,
-        certificate: PackageProgramVerifiedCertificateV1<'a>,
+        outputs: slice::Iter<'session, ProgramOutputV1>,
+        certificate: PackageProgramVerifiedCertificateV1<'session>,
+        scope: PackageProgramBorrowScopeV1<'owner, 'session>,
     },
-    Remove(slice::Iter<'a, PackageProgramOutputSlotIdV1>),
+    Remove {
+        slots: PackageProgramOwnerOutputSlotsV1<'owner>,
+        scope: PackageProgramBorrowScopeV1<'owner, 'session>,
+    },
 }
 
-struct PackageProgramOperationsV1<'a> {
-    inner: PackageProgramOperationSourceV1<'a>,
+struct PackageProgramOperationsV1<'owner, 'session> {
+    inner: PackageProgramOperationSourceV1<'owner, 'session>,
 }
 
-impl<'a> Iterator for PackageProgramOperationsV1<'a> {
-    type Item = PackageProgramOperationV1<'a>;
+impl<'owner, 'session> Iterator for PackageProgramOperationsV1<'owner, 'session> {
+    type Item = PackageProgramOperationV1<'owner, 'session>;
 
     fn next(&mut self) -> Option<Self::Item> {
         match &mut self.inner {
@@ -2003,22 +2256,28 @@ impl<'a> Iterator for PackageProgramOperationsV1<'a> {
             PackageProgramOperationSourceV1::Set {
                 outputs,
                 certificate,
+                scope,
             } => {
                 let output = outputs.next()?;
                 Some(PackageProgramOperationV1::Set(PackageProgramSetV1 {
                     output,
                     certificate: *certificate,
+                    _scope: *scope,
                 }))
             }
-            PackageProgramOperationSourceV1::Hold { slots, certificate } => {
-                Some(PackageProgramOperationV1::Hold(PackageProgramHoldV1 {
-                    output_slot: *slots.next()?,
-                    certificate: *certificate,
-                }))
-            }
-            PackageProgramOperationSourceV1::Remove(slots) => {
+            PackageProgramOperationSourceV1::Hold {
+                outputs,
+                certificate,
+                scope,
+            } => Some(PackageProgramOperationV1::Hold(PackageProgramHoldV1 {
+                output: outputs.next()?,
+                certificate: *certificate,
+                _scope: *scope,
+            })),
+            PackageProgramOperationSourceV1::Remove { slots, scope } => {
                 Some(PackageProgramOperationV1::Remove(PackageProgramRemoveV1 {
-                    output_slot: *slots.next()?,
+                    output_slot: slots.next()?,
+                    _scope: *scope,
                 }))
             }
         }
@@ -2028,15 +2287,15 @@ impl<'a> Iterator for PackageProgramOperationsV1<'a> {
         let remaining = match &self.inner {
             PackageProgramOperationSourceV1::Empty => 0,
             PackageProgramOperationSourceV1::Set { outputs, .. } => outputs.len(),
-            PackageProgramOperationSourceV1::Hold { slots, .. }
-            | PackageProgramOperationSourceV1::Remove(slots) => slots.len(),
+            PackageProgramOperationSourceV1::Hold { outputs, .. } => outputs.len(),
+            PackageProgramOperationSourceV1::Remove { slots, .. } => slots.len(),
         };
         (remaining, Some(remaining))
     }
 }
 
-impl ExactSizeIterator for PackageProgramOperationsV1<'_> {}
-impl FusedIterator for PackageProgramOperationsV1<'_> {}
+impl ExactSizeIterator for PackageProgramOperationsV1<'_, '_> {}
+impl FusedIterator for PackageProgramOperationsV1<'_, '_> {}
 
 /// Closed package error classifications for Session construction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2082,7 +2341,7 @@ impl From<PackageProgramInstantiateErrorKindV1> for PackageProgramInstantiateErr
 /// Closed package error classifications for one atomic update.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PackageProgramUpdateErrorKindV1 {
-    OwnerExpired,
+    OwnerMismatch,
     InvalidObservation,
     RevisionOutOfOrder,
     RevisionConflict,
@@ -2372,40 +2631,13 @@ fn map_program_compile_error(error: ProgramCompileError) -> PackageProgramCompil
         ProgramCompileError::InternalInvariant => PackageProgramCompileErrorV1::InternalInvariant,
     }
 }
-fn try_copy_surface_input_ports(
-    compiled: &CompiledCoreProgramV1,
-) -> Result<Box<[PackageProgramSurfaceInputPortIdV1]>, PackageProgramInstantiateErrorV1> {
-    let inputs = compiled.surface_input_ports();
-    let mut copied = Vec::new();
-    copied
-        .try_reserve_exact(inputs.len())
-        .map_err(|_| PackageProgramInstantiateErrorKindV1::ResourceExhausted)?;
-    copied.extend(
-        inputs
-            .iter()
-            .copied()
-            .map(PackageProgramSurfaceInputPortIdV1::from_core),
-    );
-    Ok(copied.into_boxed_slice())
-}
-
-fn try_copy_output_slots(
-    compiled: &CompiledCoreProgramV1,
-) -> Result<Box<[PackageProgramOutputSlotIdV1]>, PackageProgramInstantiateErrorV1> {
-    let outputs = compiled.outputs();
-    let mut copied = Vec::new();
-    copied
-        .try_reserve_exact(outputs.len())
-        .map_err(|_| PackageProgramInstantiateErrorKindV1::ResourceExhausted)?;
-    copied.extend(outputs.map(|(slot, _paint)| PackageProgramOutputSlotIdV1::from_core(slot)));
-    Ok(copied.into_boxed_slice())
-}
-
 fn map_session_update_error(
     error: SessionUpdateError<CoreProgramPlanErrorV1>,
 ) -> PackageProgramUpdateErrorV1 {
     let kind = match error {
-        SessionUpdateError::OwnerExpired => PackageProgramUpdateErrorKindV1::OwnerExpired,
+        // A borrowed matching owner keeps the exact Rc generation alive for
+        // the whole transaction; expiry here is therefore an internal breach.
+        SessionUpdateError::OwnerExpired => PackageProgramUpdateErrorKindV1::InternalInvariant,
         SessionUpdateError::Observation(error) => map_observation_error(error),
         SessionUpdateError::Plan(error) => map_plan_error(error),
         SessionUpdateError::EvidenceBindingInvariant => {
@@ -2462,6 +2694,14 @@ fn map_plan_error(error: CoreProgramPlanErrorV1) -> PackageProgramUpdateErrorKin
 #[cfg(test)]
 mod compile_error_projection_tests {
     use super::*;
+
+    #[test]
+    fn operation_scope_is_a_zero_sized_borrow_marker() {
+        assert_eq!(
+            core::mem::size_of::<PackageProgramBorrowScopeV1<'static, 'static>>(),
+            0
+        );
+    }
 
     #[test]
     fn nested_joint_resource_exhaustion_keeps_its_exact_reason_and_site_kind() {

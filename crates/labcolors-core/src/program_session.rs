@@ -1123,6 +1123,27 @@ where
             .map(|output| (output.output, output.paint_id))
     }
 
+    pub(crate) fn output_count(&self) -> usize {
+        self.owner_generation.outputs.len()
+    }
+
+    pub(crate) fn output_slot_at(&self, index: usize) -> Option<OutputSlotId> {
+        self.owner_generation
+            .outputs
+            .get(index)
+            .map(|output| output.output)
+    }
+
+    /// Membership is the exact live owner allocation, never equivalent
+    /// compiled content. The Session's `Weak` keeps the old control block
+    /// address reserved until the Session itself is destroyed.
+    pub(crate) fn owns_session(&self, session: &Session<ProgramSessionPlan<Evaluation>>) -> bool {
+        core::ptr::eq(
+            session.plan().owner_generation.as_ptr(),
+            Rc::as_ptr(&self.owner_generation),
+        )
+    }
+
     /// Create one independent stream-affine Session for this exact compiled
     /// owner generation. Mutable bindings and workspace belong to the Session,
     /// while executable graph/evaluator state is reached only through a weak

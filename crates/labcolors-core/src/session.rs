@@ -11,9 +11,10 @@ use std::mem;
 
 use crate::observation::{
     CanonicalObservationSchemaV1, ObservationError, ObservationHeadViewV1, ObservationOwnerV1,
-    ObservationStreamId, ObservationUpdateInput, PreparedObservationUpdateV1, Revision,
-    RevisionBoundObservationV1, RevisionBoundUnknownV1, SchemaOrderedScenarioSourceV1,
-    prepare_observation, prepare_schema_ordered_observation,
+    ObservationPayloadInput, ObservationStreamId, ObservationUpdateInput,
+    PreparedObservationUpdateV1, Revision, RevisionBoundObservationV1, RevisionBoundUnknownV1,
+    SchemaOrderedScenarioSourceV1, UnknownReasonId, prepare_observation,
+    prepare_schema_ordered_observation,
 };
 
 /// Crate-private sealing prevents an additional runtime owner from being
@@ -181,6 +182,10 @@ impl<Plan: SessionPlanV1> Session<Plan> {
         self.raw_head.observation_head()
     }
 
+    pub(crate) const fn plan(&self) -> &Plan {
+        &self.plan
+    }
+
     /// Prepare, evaluate and commit one update transaction. Admission and plan
     /// errors leave both the concrete raw head and lifecycle state untouched.
     /// Plan-local scratch may have been overwritten by a failed evaluation,
@@ -198,6 +203,20 @@ impl<Plan: SessionPlanV1> Session<Plan> {
             .map_err(SessionUpdateError::Observation)?;
 
         apply_prepared_update(&mut self.plan, &mut self.state, &owner, prepared)
+    }
+
+    /// Stream-affine `Unknown` admission without re-exporting or duplicating
+    /// the Session-owned stream identity at a package boundary.
+    pub(crate) fn update_unknown(
+        &mut self,
+        revision: Revision,
+        reason: UnknownReasonId,
+    ) -> SessionUpdateResult<'_, Plan> {
+        self.update(ObservationUpdateInput {
+            stream: self.stream,
+            revision,
+            payload: ObservationPayloadInput::Unknown(reason),
+        })
     }
 
     /// Package hot path for already schema-ordered point-sRGB8 scenarios.

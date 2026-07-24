@@ -128,6 +128,141 @@ fn package_authoring_is_one_thin_concrete_core_draft_without_a_second_graph() {
 }
 
 #[test]
+fn package_session_keeps_evidence_but_owner_alone_grants_updates_and_operations() {
+    assert_eq!(
+        normalized_source_scope(
+            PACKAGE_BRIDGE_SOURCE,
+            "pub struct PackageProgramSessionV1 {",
+            "impl PackageProgramSessionV1",
+        ),
+        concat!(
+            "pub struct PackageProgramSessionV1 { ",
+            "scenario_order_scratch: Vec<usize>, ",
+            "session: CoreProgramSessionV1, ",
+            "}",
+        ),
+        "the package Session must not duplicate owner schema, outputs, stream, or lifecycle state",
+    );
+
+    let session_api = source_scope(
+        PACKAGE_BRIDGE_SOURCE,
+        "impl PackageProgramSessionV1 {",
+        "struct PackageProgramScenarioSourceV1",
+    );
+    assert_eq!(
+        session_api.matches("pub fn evidence(").count(),
+        1,
+        "historical evidence is the Session's sole public projection",
+    );
+    assert_eq!(
+        session_api.matches("pub ").count(),
+        1,
+        "Session must not expose a second public authority by changing function qualifiers",
+    );
+    for forbidden in [
+        "pub fn state(",
+        "pub fn update(",
+        "pub fn surface_input_port_count(",
+        "pub fn surface_input_ports(",
+        "pub fn output_slots(",
+    ] {
+        assert!(
+            !session_api.contains(forbidden),
+            "Session must not regain owner authority through `{forbidden}`",
+        );
+    }
+
+    let evidence_api = source_scope(
+        PACKAGE_BRIDGE_SOURCE,
+        "impl<'a> PackageProgramEvidenceViewV1<'a> {",
+        "struct PackageProgramBorrowScopeV1<'owner, 'session>",
+    );
+    for forbidden in [
+        "pub fn revision(",
+        "pub const fn revision(",
+        "pub fn stream(",
+        "pub const fn stream(",
+    ] {
+        assert!(
+            !evidence_api.contains(forbidden),
+            "evidence must not flatten atomic raw-head provenance through `{forbidden}`",
+        );
+    }
+
+    let owner_api = source_scope(
+        PACKAGE_BRIDGE_SOURCE,
+        "impl PackageProgramOwnerV1 {",
+        "pub struct PackageProgramScenarioV1<'a> {",
+    );
+    for required in [
+        "pub fn project<'owner, 'session>(",
+        "pub fn update<'owner, 'session>(",
+        ".owns_session(&session.session)",
+    ] {
+        assert!(
+            owner_api.contains(required),
+            "the exact owner must remain the only operation authority; missing `{required}`",
+        );
+    }
+    let update = source_scope(
+        owner_api,
+        "pub fn update<'owner, 'session>(",
+        "pub fn instantiate(",
+    );
+    assert!(
+        update
+            .find(".owns_session(&session.session)")
+            .expect("owner update must preflight exact membership")
+            < update
+                .find("session.apply_update(update)?")
+                .expect("owner update must delegate one atomic Session update"),
+        "owner mismatch must be rejected before admission, allocation, or evaluation",
+    );
+
+    let public_access_errors = source_scope(
+        PACKAGE_BRIDGE_SOURCE,
+        "pub enum PackageProgramAccessErrorV1 {",
+        "impl PackageProgramOwnerV1",
+    );
+    assert!(
+        public_access_errors.contains("OwnerMismatch,")
+            && !public_access_errors.contains("OwnerExpired"),
+        "operation projection must distinguish foreign ownership, not expose internal expiry",
+    );
+    let public_update_errors = source_scope(
+        PACKAGE_BRIDGE_SOURCE,
+        "pub enum PackageProgramUpdateErrorKindV1 {",
+        "pub struct PackageProgramUpdateErrorV1 {",
+    );
+    assert!(
+        public_update_errors.contains("OwnerMismatch,")
+            && !public_update_errors.contains("OwnerExpired"),
+        "owner expiry is an internal invariant after a matching owner borrow",
+    );
+
+    for (payload, end) in [
+        (
+            "pub struct PackageProgramSetV1<'owner, 'session> {",
+            "impl<'session> PackageProgramSetV1<'_, 'session>",
+        ),
+        (
+            "pub struct PackageProgramRemoveV1<'owner, 'session> {",
+            "impl PackageProgramRemoveV1<'_, '_>",
+        ),
+        (
+            "pub struct PackageProgramHoldV1<'owner, 'session> {",
+            "impl<'session> PackageProgramHoldV1<'_, 'session>",
+        ),
+    ] {
+        assert!(
+            source_scope(PACKAGE_BRIDGE_SOURCE, payload, end)
+                .contains("_scope: PackageProgramBorrowScopeV1<'owner, 'session>,"),
+            "{payload} must retain both owner and immutable Session borrows",
+        );
+    }
+}
+
+#[test]
 fn shared_observation_ssot_has_one_backing_without_lifecycle_or_adapter_facades() {
     assert_eq!(
         normalized_source_scope(
