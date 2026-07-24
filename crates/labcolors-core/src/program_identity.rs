@@ -32,6 +32,9 @@ mod release_tag {
     pub(super) const MUTATION_SENTINEL_FRAME_V1: u8 = 2;
     pub(super) const CIECAM16_VIEWING_INPUTS_V1: u8 = 1;
     pub(super) const ENCODED_SRGB8_SOURCE_OVER_V1: u8 = 1;
+    pub(super) const SURROUND_AVERAGE_V1: u8 = 1;
+    pub(super) const SURROUND_DIM_V1: u8 = 2;
+    pub(super) const SURROUND_DARK_V1: u8 = 3;
 
     pub(super) const EXACT_SRGB8_FAMILY_V1: u8 = 1;
     pub(super) const EXACT_SRGB8_IDENTITY_V1: u8 = 1;
@@ -47,6 +50,10 @@ mod release_tag {
     pub(super) const WCAG22_SRGB8_IDENTITY_V1: u8 = 1;
     pub(super) const WCAG22_SRGB8_PROFILE_V1: u8 = 1;
     pub(super) const WCAG22_SRGB8_CAPABILITY_V1: u8 = 1;
+    pub(super) const WCAG22_SC_1_4_3_TEXT_DEFAULT: u8 = 1;
+    pub(super) const WCAG22_SC_1_4_3_TEXT_LARGE_SCALE: u8 = 2;
+    pub(super) const WCAG22_SC_1_4_11_UI_COMPONENT_OR_STATE: u8 = 3;
+    pub(super) const WCAG22_SC_1_4_11_GRAPHICAL_OBJECT: u8 = 4;
 }
 
 /// Устойчивый к коллизиям адрес канонизированного содержимого Program V1.
@@ -394,9 +401,9 @@ fn write_context(
     color.push_u64(context.adapting_luminance_cd_m2().to_bits())?;
     color.push_u64(context.background_luminance_ratio().to_bits())?;
     color.push_u8(match context.surround_profile() {
-        crate::lcs_occurrence::SurroundProfileId::AverageV1 => 1,
-        crate::lcs_occurrence::SurroundProfileId::DimV1 => 2,
-        crate::lcs_occurrence::SurroundProfileId::DarkV1 => 3,
+        crate::lcs_occurrence::SurroundProfileId::AverageV1 => release_tag::SURROUND_AVERAGE_V1,
+        crate::lcs_occurrence::SurroundProfileId::DimV1 => release_tag::SURROUND_DIM_V1,
+        crate::lcs_occurrence::SurroundProfileId::DarkV1 => release_tag::SURROUND_DARK_V1,
     })?;
     Ok(())
 }
@@ -412,10 +419,12 @@ fn occurrence_color(occurrence: Occurrence) -> Result<VertexColorV1, ProgramComp
 
 fn wcag_criterion_tag(criterion: Wcag22CriterionV1) -> u8 {
     match criterion {
-        Wcag22CriterionV1::Sc143TextDefault => 1,
-        Wcag22CriterionV1::Sc143TextLargeScale => 2,
-        Wcag22CriterionV1::Sc1411UiComponentOrState => 3,
-        Wcag22CriterionV1::Sc1411GraphicalObject => 4,
+        Wcag22CriterionV1::Sc143TextDefault => release_tag::WCAG22_SC_1_4_3_TEXT_DEFAULT,
+        Wcag22CriterionV1::Sc143TextLargeScale => release_tag::WCAG22_SC_1_4_3_TEXT_LARGE_SCALE,
+        Wcag22CriterionV1::Sc1411UiComponentOrState => {
+            release_tag::WCAG22_SC_1_4_11_UI_COMPONENT_OR_STATE
+        }
+        Wcag22CriterionV1::Sc1411GraphicalObject => release_tag::WCAG22_SC_1_4_11_GRAPHICAL_OBJECT,
     }
 }
 
