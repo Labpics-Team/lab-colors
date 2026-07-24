@@ -155,7 +155,6 @@ impl<Binding, Identity, Release, Capability, Invocation, Measurement>
         &self.invocation
     }
 
-    #[cfg(test)]
     pub(crate) fn measurement(&self) -> &Measurement {
         &self.measurement
     }

@@ -30,6 +30,10 @@ impl ObservationStreamId {
     pub(crate) const fn new(raw: u32) -> Self {
         Self(raw)
     }
+
+    pub(crate) const fn value(self) -> u32 {
+        self.0
+    }
 }
 
 /// Monotonic revision inside one [`ObservationStreamId`].
@@ -53,6 +57,10 @@ pub(crate) struct ScenarioId(u32);
 impl ScenarioId {
     pub(crate) const fn new(raw: u32) -> Self {
         Self(raw)
+    }
+
+    pub(crate) const fn value(self) -> u32 {
+        self.0
     }
 }
 

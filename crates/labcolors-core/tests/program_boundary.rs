@@ -1,29 +1,31 @@
-//! RED contract for the sole concrete Core package seam.
+//! External compile-and-runtime contract for the sole concrete Core Program seam.
 //!
 //! This integration crate deliberately has no access to Core-private generic
-//! evaluator/session machinery. It must compile using only one hidden,
-//! concrete package module once that seam is linked after the P3 + weak-owner
-//! rebase.
+//! evaluator/session machinery. Every reachable path uses only the closed
+//! concrete boundary types.
+
+use core::iter::FusedIterator;
 
 use labcolors_core::Srgb8;
 use labcolors_core::package_bridge::{
     PackageProgramAppearanceContextErrorKindV1, PackageProgramAppearanceContextFieldV1,
-    PackageProgramAppearanceContextV1, PackageProgramCertificateV1,
+    PackageProgramAppearanceContextV1, PackageProgramAssessmentV1, PackageProgramCertificateV1,
     PackageProgramCompileErrorHandleV1, PackageProgramCompileErrorKindV1,
     PackageProgramCompileErrorV1, PackageProgramConstraintIdV1, PackageProgramDraftErrorV1,
     PackageProgramDraftV1, PackageProgramInstantiateErrorV1, PackageProgramJointChoiceV1,
-    PackageProgramJointOrderErrorV1, PackageProgramJointStateV1,
+    PackageProgramJointOrderErrorV1, PackageProgramJointStateV1, PackageProgramModeledPointV1,
     PackageProgramNumericDomainErrorV1, PackageProgramOccurrenceIdV1,
     PackageProgramOpacityInputIdV1, PackageProgramOperationV1, PackageProgramOutputSlotIdV1,
-    PackageProgramOwnerV1, PackageProgramPaintIdV1, PackageProgramScenarioV1,
-    PackageProgramSessionV1, PackageProgramSourceIdV1, PackageProgramStateKindV1,
-    PackageProgramStateViewV1, PackageProgramSurfaceIdV1, PackageProgramSurfaceInputPortIdV1,
-    PackageProgramSurroundV1, PackageProgramTargetCandidateIdV1, PackageProgramTargetCandidateV1,
-    PackageProgramTargetIdV1, PackageProgramUpdateErrorKindV1, PackageProgramUpdateV1,
+    PackageProgramOwnerV1, PackageProgramPaintIdV1, PackageProgramPhysicalPointV1,
+    PackageProgramScenarioV1, PackageProgramSessionV1, PackageProgramSignalV1,
+    PackageProgramSourceIdV1, PackageProgramStateKindV1, PackageProgramStateViewV1,
+    PackageProgramSurfaceIdV1, PackageProgramSurfaceInputPortIdV1, PackageProgramSurroundV1,
+    PackageProgramTargetCandidateIdV1, PackageProgramTargetCandidateV1, PackageProgramTargetIdV1,
+    PackageProgramUpdateErrorKindV1, PackageProgramUpdateV1, PackageProgramVerdictV1,
 };
 use labcolors_core::wcag22::Wcag22CriterionV1;
 
-fn exact_size<I: ExactSizeIterator>(iterator: I) -> I {
+fn exact_size<I: ExactSizeIterator + FusedIterator>(iterator: I) -> I {
     iterator
 }
 
@@ -56,33 +58,102 @@ fn assert_projection_is_linear(view: PackageProgramStateViewV1<'_>) {
     let certificates = exact_size(view.certificates());
     let certificate_count = certificates.len();
     for certificate in certificates {
-        let _: PackageProgramCertificateV1<'_> = certificate;
-    }
-    for operation in exact_size(view.operations()) {
-        match operation {
-            PackageProgramOperationV1::Set {
-                output_slot,
-                source,
-                opacity,
-                certificate_index,
-            } => {
-                let _: PackageProgramOutputSlotIdV1 = output_slot;
-                let _: Srgb8 = source;
-                assert!(opacity.is_finite() && (0.0..=1.0).contains(&opacity));
-                assert!(certificate_index < certificate_count);
+        let _: &[u8; 32] = certificate.content_identity().as_bytes();
+        let observation = certificate.observation();
+        let _stream_id = observation.stream().value();
+        let _revision = observation.revision();
+        for port in exact_size(observation.surface_input_ports()) {
+            let _: PackageProgramSurfaceInputPortIdV1 = port;
+        }
+        for case in exact_size(observation.physical_cases()) {
+            for value in exact_size(case.values()) {
+                let PackageProgramSignalV1::Iec61966Srgb8D65(value) = value;
+                let _: Srgb8 = value;
             }
-            PackageProgramOperationV1::Remove { output_slot } => {
-                let _: PackageProgramOutputSlotIdV1 = output_slot;
+            for scenario in exact_size(case.provenance()) {
+                let _ = scenario.value();
             }
-            PackageProgramOperationV1::Hold {
-                output_slot,
-                certificate_index,
-            } => {
-                let _: PackageProgramOutputSlotIdV1 = output_slot;
-                assert!(certificate_index < certificate_count);
+        }
+        macro_rules! inspect_cell {
+            ($cell:expr) => {{
+                let cell = $cell;
+                let _ = cell.case_index();
+                let _ = cell.constraint().value();
+                let _ = cell.occurrence().value();
+                let _ = cell.mode();
+                let assessment = cell.assessment();
+                let _: PackageProgramVerdictV1 = assessment.verdict();
+                match assessment {
+                    PackageProgramAssessmentV1::ExactSrgb8(evidence) => {
+                        let _: Srgb8 = evidence.expected();
+                    }
+                    PackageProgramAssessmentV1::Wcag22Srgb8(evidence) => {
+                        let _ = evidence.profile_id();
+                        let _ = evidence.criterion();
+                        let _ = evidence.foreground_luminance();
+                        let _ = evidence.background_luminance();
+                        let _ = evidence.numerical_evidence();
+                    }
+                }
+                let binding = assessment.binding();
+                let PackageProgramPhysicalPointV1::EncodedSrgb8SourceOver(physical) =
+                    binding.physical();
+                let _ = physical.subject_paint().value();
+                let _ = physical.backdrop_surface().value();
+                let _: Srgb8 = physical.subject();
+                let _ = physical.opacity();
+                let _: Srgb8 = physical.backdrop();
+                let _: Srgb8 = physical.visible();
+                let PackageProgramModeledPointV1::Iec61966Srgb8ToCie1931TwoDegreeXyzD65RelativeY1(
+                    modeled,
+                ) = binding.modeled();
+                let _: [f64; 3] = modeled.xyz();
+                let context = modeled.appearance_context();
+                let _ = context.adapting_luminance_cd_m2();
+                let _ = context.background_luminance_ratio_yb_yw();
+                let _ = context.surround();
+            }};
+        }
+        match certificate {
+            PackageProgramCertificateV1::Verified(verified) => {
+                let _ = verified.selected_state_index();
+                for cell in exact_size(verified.cells()) {
+                    inspect_cell!(cell);
+                }
+                for output in exact_size(verified.outputs()) {
+                    let _ = output.output_slot().value();
+                    let _ = output.paint().value();
+                    let _: Srgb8 = output.source();
+                    let _ = output.opacity();
+                }
+            }
+            PackageProgramCertificateV1::Conflict(conflict) => {
+                let _ = conflict.considered_state_count();
+                for cell in exact_size(conflict.cells()) {
+                    let _ = cell.state_index();
+                    inspect_cell!(cell);
+                }
             }
         }
     }
+    for operation in exact_size(view.operations()) {
+        match operation {
+            PackageProgramOperationV1::Set(set) => {
+                let _: PackageProgramOutputSlotIdV1 = set.output_slot();
+                let _: Srgb8 = set.source();
+                assert!(set.opacity().is_finite() && (0.0..=1.0).contains(&set.opacity()));
+                let _ = set.certificate().content_identity();
+            }
+            PackageProgramOperationV1::Remove(remove) => {
+                let _: PackageProgramOutputSlotIdV1 = remove.output_slot();
+            }
+            PackageProgramOperationV1::Hold(hold) => {
+                let _: PackageProgramOutputSlotIdV1 = hold.output_slot();
+                let _ = hold.certificate().content_identity();
+            }
+        }
+    }
+    let _ = certificate_count;
 }
 
 #[allow(dead_code)]
@@ -104,7 +175,7 @@ fn owner_expiry_is_a_closed_package_error(
 }
 
 #[test]
-fn red_contract_is_linked_by_the_concrete_package_module() {
+fn external_boundary_uses_only_closed_concrete_types() {
     // Reaching this test means the external crate compiled without importing
     // Program<E>, evaluator traits, Session<Plan>, or numeric generations.
     assert_eq!(core::mem::size_of::<Srgb8>(), 3);
@@ -244,15 +315,15 @@ fn external_authoring_lowers_the_actual_closed_program_and_returns_canonical_inp
         })
         .unwrap();
     assert_eq!(ready.kind(), PackageProgramStateKindV1::Ready);
-    assert_eq!(
-        ready.operations().collect::<Vec<_>>(),
-        [PackageProgramOperationV1::Set {
-            output_slot: output,
-            source: Srgb8::new([0; 3]),
-            opacity: 1.0,
-            certificate_index: 0,
-        }]
-    );
+    let mut operations = ready.operations();
+    let Some(PackageProgramOperationV1::Set(set)) = operations.next() else {
+        panic!("Ready must emit one Set operation");
+    };
+    assert_eq!(set.output_slot(), output);
+    assert_eq!(set.source(), Srgb8::new([0; 3]));
+    assert_eq!(set.opacity(), 1.0);
+    assert_eq!(set.certificate().observation().revision(), 1);
+    assert!(operations.next().is_none());
 }
 
 #[test]
@@ -294,15 +365,81 @@ fn every_physical_constructor_and_both_remaining_constraint_modes_execute() {
         })
         .unwrap();
     assert_eq!(state.kind(), PackageProgramStateKindV1::Ready);
+    let Some(PackageProgramCertificateV1::Verified(certificate)) = state.certificates().next()
+    else {
+        panic!("a fixed target must produce one Verified certificate");
+    };
+    assert_eq!(certificate.selected_state_index(), None);
+    let mut operations = state.operations();
+    let Some(PackageProgramOperationV1::Set(set)) = operations.next() else {
+        panic!("Ready must emit one Set operation");
+    };
+    assert_eq!(set.output_slot(), PackageProgramOutputSlotIdV1::new(12));
+    assert_eq!(set.source(), Srgb8::new([0; 3]));
+    assert_eq!(set.opacity(), 1.0);
+    assert_eq!(set.certificate().observation().revision(), 1);
+    assert!(operations.next().is_none());
+}
+
+#[test]
+fn certificate_and_set_retain_the_same_nonunit_opacity() {
+    let source = PackageProgramSourceIdV1::new(1);
+    let target = PackageProgramTargetIdV1::new(2);
+    let opacity = PackageProgramOpacityInputIdV1::new(3);
+    let solid = PackageProgramPaintIdV1::new(4);
+    let translucent = PackageProgramPaintIdV1::new(5);
+    let input = PackageProgramSurfaceInputPortIdV1::new(6);
+    let surface = PackageProgramSurfaceIdV1::new(7);
+    let occurrence = PackageProgramOccurrenceIdV1::new(8);
+    let constraint = PackageProgramConstraintIdV1::new(9);
+    let output = PackageProgramOutputSlotIdV1::new(10);
+    let context =
+        PackageProgramAppearanceContextV1::try_new(64.0, 0.2, PackageProgramSurroundV1::Average)
+            .unwrap();
+    let mut draft = PackageProgramDraftV1::new();
+    draft.push_source(source, Srgb8::new([0; 3]));
+    draft.push_fixed_target(target, source);
+    draft.push_surface_input_port(input);
+    draft.push_opacity_input(opacity, 0.5);
+    draft.push_solid_paint(solid, target);
+    draft.push_opacity_paint(translucent, solid, opacity);
+    draft.push_input_surface(surface, input);
+    draft.push_source_over_occurrence(occurrence, translucent, surface, context);
+    draft.push_exact_hard(constraint, occurrence, Srgb8::new([0x80; 3]));
+    draft.push_output(output, translucent);
+
+    let owner = draft.compile().unwrap();
+    let mut session = owner.instantiate(17).unwrap();
+    let white = [Srgb8::new([0xFF; 3])];
+    let scenarios = [PackageProgramScenarioV1::new(1, &white)];
+    let state = session
+        .update(PackageProgramUpdateV1::Observed {
+            revision: 1,
+            scenarios: &scenarios,
+        })
+        .unwrap();
+    let Some(PackageProgramCertificateV1::Verified(certificate)) = state.certificates().next()
+    else {
+        panic!("the exact emitted midpoint must be verified");
+    };
+    let PackageProgramAssessmentV1::ExactSrgb8(assessment) =
+        certificate.cells().next().unwrap().assessment()
+    else {
+        panic!("the authored exact constraint must retain Exact evidence");
+    };
+    let PackageProgramPhysicalPointV1::EncodedSrgb8SourceOver(physical) =
+        assessment.binding().physical();
+    assert_eq!(physical.opacity().to_bits(), 0.5_f64.to_bits());
+    assert_eq!(physical.visible(), Srgb8::new([0x80; 3]));
     assert_eq!(
-        state.operations().collect::<Vec<_>>(),
-        [PackageProgramOperationV1::Set {
-            output_slot: PackageProgramOutputSlotIdV1::new(12),
-            source: Srgb8::new([0; 3]),
-            opacity: 1.0,
-            certificate_index: 0,
-        }]
+        certificate.outputs().next().unwrap().opacity().to_bits(),
+        physical.opacity().to_bits()
     );
+
+    let Some(PackageProgramOperationV1::Set(set)) = state.operations().next() else {
+        panic!("the verified output must emit one Set");
+    };
+    assert_eq!(set.opacity().to_bits(), physical.opacity().to_bits());
 }
 
 #[test]

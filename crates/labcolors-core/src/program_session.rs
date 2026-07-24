@@ -524,6 +524,15 @@ where
     }
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Counts the concrete production evaluator dispatch itself, so certificate
+    /// projection cannot accidentally recompute a verdict while still reusing
+    /// the stored physical and modeled witnesses.
+    pub(crate) static CORE_PROGRAM_ASSESSMENT_CALLS: core::cell::Cell<u64> =
+        const { core::cell::Cell::new(0) };
+}
+
 /// Generates the code-owned heterogeneous evaluator set as parallel closed
 /// unions. Each evidence variant retains the concrete evaluator's physical +
 /// LCS binding, identity, release, capability, invocation, measurement, and
@@ -572,6 +581,8 @@ macro_rules! define_core_program_evaluators_v1 {
                 modeled_lcs: ModeledLcsOccurrenceV1,
                 invocation: Self::Invocation,
             ) -> ProgramConstraintAssessmentResultV1<Self> {
+                #[cfg(test)]
+                CORE_PROGRAM_ASSESSMENT_CALLS.with(|calls| calls.set(calls.get() + 1));
                 match invocation {
                     $(CoreProgramConstraintInvocationV1::$variant(invocation) => {
                         let evaluator: $evaluator = $evaluator_value;

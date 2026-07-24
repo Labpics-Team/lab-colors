@@ -134,17 +134,14 @@ pub(crate) struct ProgramOccurrenceBindingV1 {
 }
 
 impl ProgramOccurrenceBindingV1 {
-    #[cfg(test)]
     pub(crate) const fn occurrence(self) -> OccurrenceId {
         self.occurrence
     }
 
-    #[cfg(test)]
     pub(crate) const fn subject(self) -> PaintId {
         self.subject
     }
 
-    #[cfg(test)]
     pub(crate) const fn backdrop_surface(self) -> SurfaceId {
         self.backdrop_surface
     }
@@ -1217,7 +1214,6 @@ impl EncodedPointPaintV1 {
         self.opacity
     }
 
-    #[cfg(test)]
     pub(crate) const fn opacity_bits(self) -> u64 {
         self.opacity.bits()
     }
@@ -1242,7 +1238,6 @@ impl SourceOverCertificateV1 {
             .composite(self.subject_rgb, self.subject_opacity, self.backdrop_rgb)
     }
 
-    #[cfg(test)]
     pub(crate) const fn profile(&self) -> CompositionProfileV1 {
         self.profile
     }
@@ -1357,11 +1352,11 @@ pub(crate) struct VisiblePointBindingV1 {
 }
 
 impl VisiblePointBindingV1 {
-    pub(crate) fn program_occurrence(self) -> ProgramOccurrenceBindingV1 {
+    pub(crate) const fn program_occurrence(self) -> ProgramOccurrenceBindingV1 {
         self.program_occurrence
     }
 
-    pub(crate) fn occurrence(self) -> SourceOverCertificateV1 {
+    pub(crate) const fn occurrence(self) -> SourceOverCertificateV1 {
         self.occurrence
     }
 

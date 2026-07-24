@@ -28,6 +28,13 @@ pub struct ColorSignal {
     output_profile: OutputProfileId,
 }
 
+/// Exhaustive internal decomposition for boundaries that must preserve the
+/// signal profile instead of treating encoded bytes as self-describing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ColorSignalViewV1 {
+    Iec61966Srgb8D65(Srgb8),
+}
+
 impl ColorSignal {
     /// Form the only admitted encoded signal without accepting a free-form
     /// channel/profile pairing.
@@ -44,6 +51,12 @@ impl ColorSignal {
 
     pub(crate) const fn output_profile(self) -> OutputProfileId {
         self.output_profile
+    }
+
+    pub(crate) const fn view(self) -> ColorSignalViewV1 {
+        match self.output_profile {
+            OutputProfileId::Iec61966Srgb8D65V1 => ColorSignalViewV1::Iec61966Srgb8D65(self.srgb8),
+        }
     }
 }
 
@@ -321,6 +334,8 @@ fn derive_sample_with_binding(
     signal: ColorSignal,
     binding: AdmittedSrgb8TristimulusBindingV1,
 ) -> Result<TristimulusSample, TristimulusDomainErrorV1> {
+    #[cfg(test)]
+    MODELED_TRISTIMULUS_DERIVATION_CALLS.with(|calls| calls.set(calls.get() + 1));
     let xyz = match (
         signal.output_profile(),
         binding.signal_output_profile(),
@@ -337,9 +352,9 @@ fn derive_sample_with_binding(
 
 #[cfg(test)]
 thread_local! {
-    /// Per-thread count of modeled signal-to-tristimulus derivations. Program
-    /// regression tests use this deterministic metric to pin one derivation
-    /// per unique target occurrence and physical case without timing noise.
+    /// Per-thread count of modeled signal-to-tristimulus kernel executions.
+    /// Counting below both initial derivation and replay keeps a projection
+    /// from hiding recomputation behind the replay API.
     pub(crate) static MODELED_TRISTIMULUS_DERIVATION_CALLS: std::cell::Cell<u64> =
         const { std::cell::Cell::new(0) };
 }
@@ -352,8 +367,6 @@ thread_local! {
 pub(crate) fn derive_modeled_tristimulus_v1(
     signal: ColorSignal,
 ) -> Result<ModeledTristimulusDerivationV1, TristimulusDomainErrorV1> {
-    #[cfg(test)]
-    MODELED_TRISTIMULUS_DERIVATION_CALLS.with(|calls| calls.set(calls.get() + 1));
     let binding = admitted_binding(signal.output_profile());
     let sample = derive_sample_with_binding(signal, binding)?;
     Ok(ModeledTristimulusDerivationV1 {

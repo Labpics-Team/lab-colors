@@ -12,12 +12,19 @@ use core::slice;
 
 use crate::Srgb8;
 use crate::appearance::{OccurrenceId, OpacityInputId, PaintId, SurfaceId, SurfaceInputPortId};
+use crate::composition::CompositionProfileV1;
+use crate::constraints::{
+    ExactSrgb8IdentityV1, ProgramVisiblePointBindingV1, ProgramVisiblePointPassEvidence,
+    ProgramVisiblePointViolationEvidence, Wcag22Srgb8V1,
+};
 use crate::joint::FiniteJointOrderErrorV1;
 use crate::lcs_occurrence::{
-    AdaptingLuminanceCdM2, AppearanceContextDomainErrorV1, AppearanceContextFieldV1,
-    AppearanceContextId, AppearanceContextSchemaReleaseId, BackgroundLuminanceRatio, ColorSignal,
-    IEC_SRGB_D65_XYZ_FRAME_V1, NumericDomainError, SurroundProfileId,
+    AdaptingLuminanceCdM2, AdmittedSrgb8TristimulusBindingV1, AppearanceContextDomainErrorV1,
+    AppearanceContextFieldV1, AppearanceContextId, AppearanceContextSchemaReleaseId,
+    BackgroundLuminanceRatio, ColorSignal, ColorSignalViewV1, IEC_SRGB_D65_XYZ_FRAME_V1,
+    NumericDomainError, SurroundProfileId,
 };
+use crate::numerics::NumericalDecisionEvidenceV1;
 use crate::observation::{
     ObservationError, ObservationPayloadInput, ObservationStreamId, ObservationUpdateInput,
     Revision, ScenarioId, SchemaOrderedScenarioSourceV1, UnknownReasonId,
@@ -25,14 +32,16 @@ use crate::observation::{
 use crate::program_session::{
     CompiledCoreProgramV1, CompositionProfile, ConstraintId, ConstraintInvocation,
     CoreProgramConstraintInvocationV1, CoreProgramDraftErrorV1, CoreProgramDraftV1,
-    CoreProgramEvaluatorErrorV1, CoreProgramEvaluatorsV1, DeclaredJointSelectionV1,
-    JointCandidateStateV1, Occurrence, OpacityInput, OutputBinding, OutputSlotId, Paint,
-    ProgramCompileError, ProgramConflictV1, ProgramOutputV1, ProgramSessionEvaluationError,
-    ProgramSessionInstantiateError, ProgramSessionPlan, ProgramVerifiedV1, Source, SourceId,
-    Surface, Target, TargetCandidateChoiceV1, TargetCandidateId, TargetCandidateV1, TargetId,
+    CoreProgramEvaluatorErrorV1, CoreProgramEvaluatorsV1, CoreProgramPassEvidenceV1,
+    CoreProgramViolationEvidenceV1, DeclaredJointSelectionV1, JointCandidateStateV1, Occurrence,
+    OpacityInput, OutputBinding, OutputSlotId, Paint, ProgramCompileError, ProgramConflictV1,
+    ProgramConstraintCellV1, ProgramConstraintResultV1, ProgramContentIdentityV1, ProgramOutputV1,
+    ProgramSessionEvaluationError, ProgramSessionInstantiateError, ProgramSessionPlan,
+    ProgramVerifiedV1, Source, SourceId, Surface, Target, TargetCandidateChoiceV1,
+    TargetCandidateId, TargetCandidateV1, TargetId,
 };
 use crate::session::{Session, SessionState, SessionUpdateError};
-use crate::wcag22::Wcag22CriterionV1;
+use crate::wcag22::{Wcag22CriterionV1, Wcag22LuminanceBoundsQ55V1, Wcag22ProfileIdV1};
 
 type CoreVerifiedV1 = ProgramVerifiedV1<CoreProgramEvaluatorsV1>;
 type CoreConflictV1 = ProgramConflictV1<CoreProgramEvaluatorsV1>;
@@ -40,6 +49,11 @@ type CoreProgramPlanV1 = ProgramSessionPlan<CoreProgramEvaluatorsV1>;
 type CoreProgramSessionV1 = Session<CoreProgramPlanV1>;
 type CoreProgramStateV1 = SessionState<CoreVerifiedV1, CoreConflictV1>;
 type CoreProgramPlanErrorV1 = ProgramSessionEvaluationError<CoreProgramEvaluatorErrorV1>;
+type CoreProgramConstraintCellV1 = ProgramConstraintCellV1<CoreProgramEvaluatorsV1>;
+type CoreExactPassEvidenceV1 = ProgramVisiblePointPassEvidence<ExactSrgb8IdentityV1>;
+type CoreExactViolationEvidenceV1 = ProgramVisiblePointViolationEvidence<ExactSrgb8IdentityV1>;
+type CoreWcag22PassEvidenceV1 = ProgramVisiblePointPassEvidence<Wcag22Srgb8V1>;
+type CoreWcag22ViolationEvidenceV1 = ProgramVisiblePointViolationEvidence<Wcag22Srgb8V1>;
 
 macro_rules! package_program_id {
     ($name:ident, $core:ty) => {
@@ -74,6 +88,31 @@ macro_rules! package_program_id {
     };
 }
 
+macro_rules! package_program_projected_id {
+    ($name:ident, $core:ty) => {
+        #[repr(transparent)]
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+        #[must_use]
+        pub struct $name($core);
+
+        impl $name {
+            const fn from_core(value: $core) -> Self {
+                Self(value)
+            }
+
+            pub const fn value(self) -> u32 {
+                self.0.value()
+            }
+        }
+
+        impl core::hash::Hash for $name {
+            fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
+                core::hash::Hash::hash(&self.value(), state);
+            }
+        }
+    };
+}
+
 package_program_id!(PackageProgramSourceIdV1, SourceId);
 package_program_id!(PackageProgramTargetIdV1, TargetId);
 package_program_id!(PackageProgramTargetCandidateIdV1, TargetCandidateId);
@@ -84,6 +123,8 @@ package_program_id!(PackageProgramSurfaceIdV1, SurfaceId);
 package_program_id!(PackageProgramOccurrenceIdV1, OccurrenceId);
 package_program_id!(PackageProgramConstraintIdV1, ConstraintId);
 package_program_id!(PackageProgramOutputSlotIdV1, OutputSlotId);
+package_program_projected_id!(PackageProgramStreamIdV1, ObservationStreamId);
+package_program_projected_id!(PackageProgramScenarioIdV1, ScenarioId);
 
 /// One finite candidate, stored as the actual Core target-candidate IR node.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -243,6 +284,22 @@ impl PackageProgramAppearanceContextV1 {
             background_luminance_ratio,
             surround.into_core(),
         )))
+    }
+
+    pub fn adapting_luminance_cd_m2(self) -> f64 {
+        self.0.adapting_luminance_cd_m2()
+    }
+
+    pub fn background_luminance_ratio_yb_yw(self) -> f64 {
+        self.0.background_luminance_ratio()
+    }
+
+    pub const fn surround(self) -> PackageProgramSurroundV1 {
+        match self.0.surround_profile() {
+            SurroundProfileId::AverageV1 => PackageProgramSurroundV1::Average,
+            SurroundProfileId::DimV1 => PackageProgramSurroundV1::Dim,
+            SurroundProfileId::DarkV1 => PackageProgramSurroundV1::Dark,
+        }
     }
 }
 
@@ -1168,7 +1225,7 @@ impl<'a> PackageProgramStateViewV1<'a> {
     /// Core-owned certificates in canonical same-call ordinal order.
     pub fn certificates(
         self,
-    ) -> impl ExactSizeIterator<Item = PackageProgramCertificateV1<'a>> + 'a {
+    ) -> impl ExactSizeIterator<Item = PackageProgramCertificateV1<'a>> + FusedIterator + 'a {
         let (first, second) = match self.state {
             SessionState::Waiting => (None, None),
             SessionState::Ready { current } | SessionState::Stale { previous: current } => {
@@ -1183,7 +1240,9 @@ impl<'a> PackageProgramStateViewV1<'a> {
     }
 
     /// Total canonical output projection for this lifecycle state.
-    pub fn operations(self) -> impl ExactSizeIterator<Item = PackageProgramOperationV1> + 'a {
+    pub fn operations(
+        self,
+    ) -> impl ExactSizeIterator<Item = PackageProgramOperationV1<'a>> + FusedIterator + 'a {
         let inner = match self.state {
             SessionState::Waiting => PackageProgramOperationSourceV1::Empty,
             SessionState::Ready { current } => {
@@ -1195,17 +1254,21 @@ impl<'a> PackageProgramStateViewV1<'a> {
                         .zip(self.output_slots)
                         .all(|(output, slot)| output.output().value() == slot.value())
                 );
-                PackageProgramOperationSourceV1::Set(current.outputs().iter())
+                PackageProgramOperationSourceV1::Set {
+                    outputs: current.outputs().iter(),
+                    certificate: PackageProgramVerifiedCertificateV1 { inner: current },
+                }
             }
-            SessionState::Stale { .. } => PackageProgramOperationSourceV1::Hold {
+            SessionState::Stale { previous } => PackageProgramOperationSourceV1::Hold {
                 slots: self.output_slots.iter(),
-                certificate_index: 0,
+                certificate: PackageProgramVerifiedCertificateV1 { inner: previous },
             },
             SessionState::Failed {
-                previous: Some(_), ..
+                previous: Some(previous),
+                ..
             } => PackageProgramOperationSourceV1::Hold {
                 slots: self.output_slots.iter(),
-                certificate_index: 1,
+                certificate: PackageProgramVerifiedCertificateV1 { inner: previous },
             },
             SessionState::Failed { previous: None, .. } => {
                 PackageProgramOperationSourceV1::Remove(self.output_slots.iter())
@@ -1215,91 +1278,661 @@ impl<'a> PackageProgramStateViewV1<'a> {
     }
 }
 
-/// Opaque certificate family; evaluator-specific evidence never escapes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PackageProgramCertificateKindV1 {
-    Verified,
-    Conflict,
+/// Collision-resistant address of the canonical physical Program content.
+/// It deliberately does not identify an owner epoch or runtime authority.
+#[repr(transparent)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct PackageProgramContentIdentityV1([u8; 32]);
+
+impl PackageProgramContentIdentityV1 {
+    const fn from_core(value: ProgramContentIdentityV1) -> Self {
+        Self(*value.as_bytes())
+    }
+
+    pub const fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
 }
 
+/// All hard cells passed over the complete admitted physical support.
 #[derive(Clone, Copy)]
-enum PackageProgramCertificateRefV1<'a> {
-    Verified(&'a CoreVerifiedV1),
-    Conflict(&'a CoreConflictV1),
+pub struct PackageProgramVerifiedCertificateV1<'a> {
+    inner: &'a CoreVerifiedV1,
 }
 
-/// Borrowed opaque handle to one Core-owned certificate.
+impl<'a> PackageProgramVerifiedCertificateV1<'a> {
+    pub const fn content_identity(self) -> PackageProgramContentIdentityV1 {
+        PackageProgramContentIdentityV1::from_core(self.inner.report().content_identity())
+    }
+
+    pub const fn observation(self) -> PackageProgramObservationV1<'a> {
+        PackageProgramObservationV1 {
+            inner: self.inner.report().observation(),
+        }
+    }
+
+    pub const fn selected_state_index(self) -> Option<usize> {
+        self.inner.selected_state_index()
+    }
+
+    pub fn cells(
+        self,
+    ) -> impl ExactSizeIterator<Item = PackageProgramVerifiedCellV1<'a>> + FusedIterator + 'a {
+        self.inner
+            .report()
+            .cells()
+            .iter()
+            .map(PackageProgramVerifiedCellV1::from_core)
+    }
+
+    pub fn outputs(
+        self,
+    ) -> impl ExactSizeIterator<Item = PackageProgramCertifiedOutputV1<'a>> + FusedIterator + 'a
+    {
+        self.inner
+            .outputs()
+            .iter()
+            .map(PackageProgramCertifiedOutputV1::from_core)
+    }
+}
+
+/// Exhaustive proof that every declared candidate state violates a hard cell.
 #[derive(Clone, Copy)]
-pub struct PackageProgramCertificateV1<'a> {
-    inner: PackageProgramCertificateRefV1<'a>,
+pub struct PackageProgramConflictCertificateV1<'a> {
+    inner: &'a CoreConflictV1,
+}
+
+impl<'a> PackageProgramConflictCertificateV1<'a> {
+    pub const fn content_identity(self) -> PackageProgramContentIdentityV1 {
+        PackageProgramContentIdentityV1::from_core(self.inner.report().content_identity())
+    }
+
+    pub const fn observation(self) -> PackageProgramObservationV1<'a> {
+        PackageProgramObservationV1 {
+            inner: self.inner.report().observation(),
+        }
+    }
+
+    pub const fn considered_state_count(self) -> usize {
+        self.inner.considered_state_count()
+    }
+
+    pub fn cells(
+        self,
+    ) -> impl ExactSizeIterator<Item = PackageProgramConflictCellV1<'a>> + FusedIterator + 'a {
+        self.inner
+            .report()
+            .cells()
+            .iter()
+            .map(PackageProgramConflictCellV1::from_core)
+    }
+}
+
+/// Closed borrowed projection of one exact Core-owned certificate.
+#[derive(Clone, Copy)]
+pub enum PackageProgramCertificateV1<'a> {
+    Verified(PackageProgramVerifiedCertificateV1<'a>),
+    Conflict(PackageProgramConflictCertificateV1<'a>),
 }
 
 impl<'a> PackageProgramCertificateV1<'a> {
     const fn verified(value: &'a CoreVerifiedV1) -> Self {
-        Self {
-            inner: PackageProgramCertificateRefV1::Verified(value),
-        }
+        Self::Verified(PackageProgramVerifiedCertificateV1 { inner: value })
     }
 
     const fn conflict(value: &'a CoreConflictV1) -> Self {
-        Self {
-            inner: PackageProgramCertificateRefV1::Conflict(value),
+        Self::Conflict(PackageProgramConflictCertificateV1 { inner: value })
+    }
+
+    pub const fn content_identity(self) -> PackageProgramContentIdentityV1 {
+        match self {
+            Self::Verified(value) => value.content_identity(),
+            Self::Conflict(value) => value.content_identity(),
         }
     }
 
-    pub const fn kind(self) -> PackageProgramCertificateKindV1 {
-        match self.inner {
-            PackageProgramCertificateRefV1::Verified(_) => {
-                PackageProgramCertificateKindV1::Verified
-            }
-            PackageProgramCertificateRefV1::Conflict(_) => {
-                PackageProgramCertificateKindV1::Conflict
-            }
+    pub const fn observation(self) -> PackageProgramObservationV1<'a> {
+        match self {
+            Self::Verified(value) => value.observation(),
+            Self::Conflict(value) => value.observation(),
         }
-    }
-
-    /// Revision bound into this exact evidence object.
-    pub const fn revision(self) -> u64 {
-        let revision = match self.inner {
-            PackageProgramCertificateRefV1::Verified(value) => {
-                value.report().observation().revision()
-            }
-            PackageProgramCertificateRefV1::Conflict(value) => {
-                value.report().observation().revision()
-            }
-        };
-        revision.value()
     }
 
     #[cfg(test)]
     pub(crate) fn observation_backing_ptr_for_test(self) -> *const () {
+        self.observation().inner.backing_ptr_for_test()
+    }
+}
+
+/// The exact revision-bound observation retained by a certificate.
+#[derive(Clone, Copy)]
+pub struct PackageProgramObservationV1<'a> {
+    inner: &'a crate::observation::RevisionBoundObservationV1,
+}
+
+impl<'a> PackageProgramObservationV1<'a> {
+    pub const fn stream(self) -> PackageProgramStreamIdV1 {
+        PackageProgramStreamIdV1::from_core(self.inner.stream())
+    }
+
+    pub const fn revision(self) -> u64 {
+        self.inner.revision().value()
+    }
+
+    /// Canonical schema shared by every physical case. Position `i` is the
+    /// identity of position `i` in each [`PackageProgramPhysicalCaseV1::values`]
+    /// iterator; the two exact-size iterators always have equal length.
+    pub fn surface_input_ports(
+        self,
+    ) -> impl ExactSizeIterator<Item = PackageProgramSurfaceInputPortIdV1> + FusedIterator + 'a
+    {
+        self.inner
+            .schema()
+            .iter()
+            .copied()
+            .map(PackageProgramSurfaceInputPortIdV1::from_core)
+    }
+
+    /// Canonical unique physical value vectors. Each case is schema-ordered by
+    /// [`Self::surface_input_ports`]; scenario IDs remain in `provenance()`.
+    pub fn physical_cases(
+        self,
+    ) -> impl ExactSizeIterator<Item = PackageProgramPhysicalCaseV1<'a>> + FusedIterator + 'a {
+        (0..self.inner.physical_case_count()).map(move |index| PackageProgramPhysicalCaseV1 {
+            observation: self.inner,
+            index,
+        })
+    }
+}
+
+/// Closed encoded signal family retained in a physical observation case.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PackageProgramSignalV1 {
+    Iec61966Srgb8D65(Srgb8),
+}
+
+/// One canonical physical observation case and its complete provenance set.
+#[derive(Clone, Copy)]
+pub struct PackageProgramPhysicalCaseV1<'a> {
+    observation: &'a crate::observation::RevisionBoundObservationV1,
+    index: usize,
+}
+
+impl<'a> PackageProgramPhysicalCaseV1<'a> {
+    pub fn values(
+        self,
+    ) -> impl ExactSizeIterator<Item = PackageProgramSignalV1> + FusedIterator + 'a {
+        self.observation
+            .physical_values(self.index)
+            .expect("package case originates from the same observation")
+            .iter()
+            .copied()
+            .map(|signal| match signal.view() {
+                ColorSignalViewV1::Iec61966Srgb8D65(value) => {
+                    PackageProgramSignalV1::Iec61966Srgb8D65(value)
+                }
+            })
+    }
+
+    pub fn provenance(
+        self,
+    ) -> impl ExactSizeIterator<Item = PackageProgramScenarioIdV1> + FusedIterator + 'a {
+        self.observation
+            .provenance(self.index)
+            .expect("package case originates from the same observation")
+            .iter()
+            .copied()
+            .map(PackageProgramScenarioIdV1::from_core)
+    }
+}
+
+/// Whether one constraint cell gates selection or is retained for reporting.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PackageProgramConstraintModeV1 {
+    Hard,
+    ReportOnly,
+}
+
+/// One selected/fixed case × constraint cell; state is owned by its certificate.
+#[derive(Clone, Copy)]
+pub struct PackageProgramVerifiedCellV1<'a> {
+    inner: &'a CoreProgramConstraintCellV1,
+}
+
+impl<'a> PackageProgramVerifiedCellV1<'a> {
+    const fn from_core(inner: &'a CoreProgramConstraintCellV1) -> Self {
+        Self { inner }
+    }
+
+    pub const fn case_index(self) -> usize {
+        self.inner.case_index()
+    }
+
+    pub const fn constraint(self) -> PackageProgramConstraintIdV1 {
+        PackageProgramConstraintIdV1::from_core(self.inner.constraint())
+    }
+
+    pub const fn occurrence(self) -> PackageProgramOccurrenceIdV1 {
+        PackageProgramOccurrenceIdV1::from_core(self.inner.target())
+    }
+
+    pub const fn mode(self) -> PackageProgramConstraintModeV1 {
+        project_constraint_mode(self.inner)
+    }
+
+    pub fn assessment(self) -> PackageProgramAssessmentV1<'a> {
+        project_assessment(self.inner)
+    }
+}
+
+/// One exhaustive candidate-state × case × constraint conflict cell.
+#[derive(Clone, Copy)]
+pub struct PackageProgramConflictCellV1<'a> {
+    inner: &'a CoreProgramConstraintCellV1,
+}
+
+impl<'a> PackageProgramConflictCellV1<'a> {
+    const fn from_core(inner: &'a CoreProgramConstraintCellV1) -> Self {
+        Self { inner }
+    }
+
+    pub const fn state_index(self) -> usize {
+        self.inner.candidate_state_index()
+    }
+
+    pub const fn case_index(self) -> usize {
+        self.inner.case_index()
+    }
+
+    pub const fn constraint(self) -> PackageProgramConstraintIdV1 {
+        PackageProgramConstraintIdV1::from_core(self.inner.constraint())
+    }
+
+    pub const fn occurrence(self) -> PackageProgramOccurrenceIdV1 {
+        PackageProgramOccurrenceIdV1::from_core(self.inner.target())
+    }
+
+    pub const fn mode(self) -> PackageProgramConstraintModeV1 {
+        project_constraint_mode(self.inner)
+    }
+
+    pub fn assessment(self) -> PackageProgramAssessmentV1<'a> {
+        project_assessment(self.inner)
+    }
+}
+
+const fn project_constraint_mode(
+    cell: &CoreProgramConstraintCellV1,
+) -> PackageProgramConstraintModeV1 {
+    if cell.is_hard() {
+        PackageProgramConstraintModeV1::Hard
+    } else {
+        PackageProgramConstraintModeV1::ReportOnly
+    }
+}
+
+fn project_assessment(cell: &CoreProgramConstraintCellV1) -> PackageProgramAssessmentV1<'_> {
+    match cell.result() {
+        ProgramConstraintResultV1::Pass(CoreProgramPassEvidenceV1::ExactSrgb8(evidence)) => {
+            PackageProgramAssessmentV1::ExactSrgb8(PackageProgramExactSrgb8EvidenceV1 {
+                inner: PackageProgramExactSrgb8EvidenceRefV1::Pass(evidence),
+            })
+        }
+        ProgramConstraintResultV1::Violation(CoreProgramViolationEvidenceV1::ExactSrgb8(
+            evidence,
+        )) => PackageProgramAssessmentV1::ExactSrgb8(PackageProgramExactSrgb8EvidenceV1 {
+            inner: PackageProgramExactSrgb8EvidenceRefV1::Violation(evidence),
+        }),
+        ProgramConstraintResultV1::Pass(CoreProgramPassEvidenceV1::Wcag22Srgb8(evidence)) => {
+            PackageProgramAssessmentV1::Wcag22Srgb8(PackageProgramWcag22Srgb8EvidenceV1 {
+                inner: PackageProgramWcag22Srgb8EvidenceRefV1::Pass(evidence),
+            })
+        }
+        ProgramConstraintResultV1::Violation(CoreProgramViolationEvidenceV1::Wcag22Srgb8(
+            evidence,
+        )) => PackageProgramAssessmentV1::Wcag22Srgb8(PackageProgramWcag22Srgb8EvidenceV1 {
+            inner: PackageProgramWcag22Srgb8EvidenceRefV1::Violation(evidence),
+        }),
+    }
+}
+
+/// Stored evaluator family. Its sealed witness retains the incompatible verdict.
+#[derive(Clone, Copy)]
+pub enum PackageProgramAssessmentV1<'a> {
+    ExactSrgb8(PackageProgramExactSrgb8EvidenceV1<'a>),
+    Wcag22Srgb8(PackageProgramWcag22Srgb8EvidenceV1<'a>),
+}
+
+impl<'a> PackageProgramAssessmentV1<'a> {
+    pub const fn verdict(self) -> PackageProgramVerdictV1 {
+        match self {
+            Self::ExactSrgb8(value) => value.verdict(),
+            Self::Wcag22Srgb8(value) => value.verdict(),
+        }
+    }
+
+    pub fn binding(self) -> PackageProgramPointBindingV1<'a> {
+        match self {
+            Self::ExactSrgb8(value) => value.binding(),
+            Self::Wcag22Srgb8(value) => value.binding(),
+        }
+    }
+}
+
+/// Incompatible stored classifier outcomes. Clients cannot construct evidence.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PackageProgramVerdictV1 {
+    Pass,
+    Violation,
+}
+
+#[derive(Clone, Copy)]
+enum PackageProgramExactSrgb8EvidenceRefV1<'a> {
+    Pass(&'a CoreExactPassEvidenceV1),
+    Violation(&'a CoreExactViolationEvidenceV1),
+}
+
+/// Exact-sRGB8 expected value plus retained physical composition and modeled
+/// tristimulus/context.
+#[derive(Clone, Copy)]
+pub struct PackageProgramExactSrgb8EvidenceV1<'a> {
+    inner: PackageProgramExactSrgb8EvidenceRefV1<'a>,
+}
+
+impl<'a> PackageProgramExactSrgb8EvidenceV1<'a> {
+    pub const fn verdict(self) -> PackageProgramVerdictV1 {
         match self.inner {
-            PackageProgramCertificateRefV1::Verified(value) => {
-                value.report().observation().backing_ptr_for_test()
+            PackageProgramExactSrgb8EvidenceRefV1::Pass(_) => PackageProgramVerdictV1::Pass,
+            PackageProgramExactSrgb8EvidenceRefV1::Violation(_) => {
+                PackageProgramVerdictV1::Violation
             }
-            PackageProgramCertificateRefV1::Conflict(value) => {
-                value.report().observation().backing_ptr_for_test()
+        }
+    }
+
+    pub fn expected(self) -> Srgb8 {
+        match self.inner {
+            PackageProgramExactSrgb8EvidenceRefV1::Pass(value) => value.target(),
+            PackageProgramExactSrgb8EvidenceRefV1::Violation(value) => value.target(),
+        }
+    }
+
+    pub fn binding(self) -> PackageProgramPointBindingV1<'a> {
+        let value = match self.inner {
+            PackageProgramExactSrgb8EvidenceRefV1::Pass(value) => value.binding(),
+            PackageProgramExactSrgb8EvidenceRefV1::Violation(value) => value.binding(),
+        };
+        PackageProgramPointBindingV1 { inner: value }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum PackageProgramWcag22Srgb8EvidenceRefV1<'a> {
+    Pass(&'a CoreWcag22PassEvidenceV1),
+    Violation(&'a CoreWcag22ViolationEvidenceV1),
+}
+
+/// WCAG 2.2 profile, criterion, luminance evidence, physical composition and
+/// modeled tristimulus/context retained by the Core report.
+#[derive(Clone, Copy)]
+pub struct PackageProgramWcag22Srgb8EvidenceV1<'a> {
+    inner: PackageProgramWcag22Srgb8EvidenceRefV1<'a>,
+}
+
+impl<'a> PackageProgramWcag22Srgb8EvidenceV1<'a> {
+    pub const fn verdict(self) -> PackageProgramVerdictV1 {
+        match self.inner {
+            PackageProgramWcag22Srgb8EvidenceRefV1::Pass(_) => PackageProgramVerdictV1::Pass,
+            PackageProgramWcag22Srgb8EvidenceRefV1::Violation(_) => {
+                PackageProgramVerdictV1::Violation
+            }
+        }
+    }
+
+    pub fn profile_id(self) -> Wcag22ProfileIdV1 {
+        match self.inner {
+            PackageProgramWcag22Srgb8EvidenceRefV1::Pass(value) => {
+                value.measurement().value().profile_id()
+            }
+            PackageProgramWcag22Srgb8EvidenceRefV1::Violation(value) => {
+                value.measurement().value().profile_id()
+            }
+        }
+    }
+
+    pub fn criterion(self) -> Wcag22CriterionV1 {
+        match self.inner {
+            PackageProgramWcag22Srgb8EvidenceRefV1::Pass(value) => {
+                value.measurement().value().criterion()
+            }
+            PackageProgramWcag22Srgb8EvidenceRefV1::Violation(value) => {
+                value.measurement().value().criterion()
+            }
+        }
+    }
+
+    pub fn foreground_luminance(self) -> Wcag22LuminanceBoundsQ55V1 {
+        let measurement = match self.inner {
+            PackageProgramWcag22Srgb8EvidenceRefV1::Pass(value) => {
+                value.measurement().value().measurement()
+            }
+            PackageProgramWcag22Srgb8EvidenceRefV1::Violation(value) => {
+                value.measurement().value().measurement()
+            }
+        };
+        measurement.foreground_luminance
+    }
+
+    pub fn background_luminance(self) -> Wcag22LuminanceBoundsQ55V1 {
+        let measurement = match self.inner {
+            PackageProgramWcag22Srgb8EvidenceRefV1::Pass(value) => {
+                value.measurement().value().measurement()
+            }
+            PackageProgramWcag22Srgb8EvidenceRefV1::Violation(value) => {
+                value.measurement().value().measurement()
+            }
+        };
+        measurement.background_luminance
+    }
+
+    pub fn numerical_evidence(self) -> &'a NumericalDecisionEvidenceV1 {
+        match self.inner {
+            PackageProgramWcag22Srgb8EvidenceRefV1::Pass(value) => {
+                value.measurement().value().evidence()
+            }
+            PackageProgramWcag22Srgb8EvidenceRefV1::Violation(value) => {
+                value.measurement().value().evidence()
+            }
+        }
+    }
+
+    pub fn binding(self) -> PackageProgramPointBindingV1<'a> {
+        let value = match self.inner {
+            PackageProgramWcag22Srgb8EvidenceRefV1::Pass(value) => value.binding(),
+            PackageProgramWcag22Srgb8EvidenceRefV1::Violation(value) => value.binding(),
+        };
+        PackageProgramPointBindingV1 { inner: value }
+    }
+}
+
+/// Retained physical composition and modeled tristimulus/context shared by an
+/// evaluator witness.
+#[derive(Clone, Copy)]
+pub struct PackageProgramPointBindingV1<'a> {
+    inner: &'a ProgramVisiblePointBindingV1,
+}
+
+impl<'a> PackageProgramPointBindingV1<'a> {
+    pub const fn physical(self) -> PackageProgramPhysicalPointV1<'a> {
+        match self.inner.physical().occurrence().profile() {
+            CompositionProfileV1::EncodedSrgb8SourceOverV1 => {
+                PackageProgramPhysicalPointV1::EncodedSrgb8SourceOver(
+                    PackageProgramEncodedSrgb8SourceOverV1 { inner: self.inner },
+                )
+            }
+        }
+    }
+
+    pub const fn modeled(self) -> PackageProgramModeledPointV1<'a> {
+        match self.inner.modeled_lcs().provenance().binding() {
+            AdmittedSrgb8TristimulusBindingV1::Iec61966Srgb8ToCie1931TwoDegreeXyzD65RelativeY1V1 => {
+                PackageProgramModeledPointV1::Iec61966Srgb8ToCie1931TwoDegreeXyzD65RelativeY1(
+                    PackageProgramModeledTristimulusV1 { inner: self.inner },
+                )
             }
         }
     }
 }
 
+/// Closed exact physical-composition family.
+#[derive(Clone, Copy)]
+pub enum PackageProgramPhysicalPointV1<'a> {
+    EncodedSrgb8SourceOver(PackageProgramEncodedSrgb8SourceOverV1<'a>),
+}
+
+#[derive(Clone, Copy)]
+pub struct PackageProgramEncodedSrgb8SourceOverV1<'a> {
+    inner: &'a ProgramVisiblePointBindingV1,
+}
+
+impl PackageProgramEncodedSrgb8SourceOverV1<'_> {
+    pub const fn subject_paint(self) -> PackageProgramPaintIdV1 {
+        PackageProgramPaintIdV1::from_core(self.inner.physical().program_occurrence().subject())
+    }
+
+    pub const fn backdrop_surface(self) -> PackageProgramSurfaceIdV1 {
+        PackageProgramSurfaceIdV1::from_core(
+            self.inner
+                .physical()
+                .program_occurrence()
+                .backdrop_surface(),
+        )
+    }
+
+    pub const fn subject(self) -> Srgb8 {
+        Srgb8::new(self.inner.physical().occurrence().subject_rgb())
+    }
+
+    pub const fn opacity(self) -> f64 {
+        f64::from_bits(self.inner.physical().occurrence().subject_opacity_bits())
+    }
+
+    pub const fn backdrop(self) -> Srgb8 {
+        Srgb8::new(self.inner.physical().occurrence().backdrop_rgb())
+    }
+
+    pub const fn visible(self) -> Srgb8 {
+        Srgb8::new(self.inner.physical().occurrence().output_rgb())
+    }
+}
+
+/// Closed modeled-tristimulus provenance family.
+#[derive(Clone, Copy)]
+pub enum PackageProgramModeledPointV1<'a> {
+    Iec61966Srgb8ToCie1931TwoDegreeXyzD65RelativeY1(PackageProgramModeledTristimulusV1<'a>),
+}
+
+#[derive(Clone, Copy)]
+pub struct PackageProgramModeledTristimulusV1<'a> {
+    inner: &'a ProgramVisiblePointBindingV1,
+}
+
+impl PackageProgramModeledTristimulusV1<'_> {
+    pub fn xyz(self) -> [f64; 3] {
+        self.inner.modeled_lcs().derivation().sample().xyz()
+    }
+
+    pub const fn appearance_context(self) -> PackageProgramAppearanceContextV1 {
+        PackageProgramAppearanceContextV1(self.inner.modeled_lcs().occurrence().context())
+    }
+}
+
+/// One Core-certified output Paint. No output exists for Conflict.
+#[derive(Clone, Copy)]
+pub struct PackageProgramCertifiedOutputV1<'a> {
+    inner: &'a ProgramOutputV1,
+}
+
+impl<'a> PackageProgramCertifiedOutputV1<'a> {
+    const fn from_core(inner: &'a ProgramOutputV1) -> Self {
+        Self { inner }
+    }
+
+    pub const fn output_slot(self) -> PackageProgramOutputSlotIdV1 {
+        PackageProgramOutputSlotIdV1::from_core((*self.inner).output())
+    }
+
+    pub const fn paint(self) -> PackageProgramPaintIdV1 {
+        PackageProgramPaintIdV1::from_core((*self.inner).paint().id())
+    }
+
+    pub const fn source(self) -> Srgb8 {
+        (*self.inner).paint().source()
+    }
+
+    pub const fn opacity(self) -> f64 {
+        (*self.inner).paint().opacity().value()
+    }
+}
+
+/// A Set operation is structurally tied to the exact Verified certificate.
+#[derive(Clone, Copy)]
+pub struct PackageProgramSetV1<'a> {
+    output: &'a ProgramOutputV1,
+    certificate: PackageProgramVerifiedCertificateV1<'a>,
+}
+
+impl<'a> PackageProgramSetV1<'a> {
+    pub const fn output_slot(self) -> PackageProgramOutputSlotIdV1 {
+        PackageProgramOutputSlotIdV1::from_core((*self.output).output())
+    }
+
+    pub const fn source(self) -> Srgb8 {
+        (*self.output).paint().source()
+    }
+
+    pub const fn opacity(self) -> f64 {
+        (*self.output).paint().opacity().value()
+    }
+
+    pub const fn certificate(self) -> PackageProgramVerifiedCertificateV1<'a> {
+        self.certificate
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PackageProgramRemoveV1 {
+    output_slot: PackageProgramOutputSlotIdV1,
+}
+
+impl PackageProgramRemoveV1 {
+    pub const fn output_slot(self) -> PackageProgramOutputSlotIdV1 {
+        self.output_slot
+    }
+}
+
+/// A Hold operation is structurally tied to the retained Verified certificate.
+#[derive(Clone, Copy)]
+pub struct PackageProgramHoldV1<'a> {
+    output_slot: PackageProgramOutputSlotIdV1,
+    certificate: PackageProgramVerifiedCertificateV1<'a>,
+}
+
+impl<'a> PackageProgramHoldV1<'a> {
+    pub const fn output_slot(self) -> PackageProgramOutputSlotIdV1 {
+        self.output_slot
+    }
+
+    pub const fn certificate(self) -> PackageProgramVerifiedCertificateV1<'a> {
+        self.certificate
+    }
+}
+
 /// Closed total operation union over opaque output slots.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum PackageProgramOperationV1 {
-    Set {
-        output_slot: PackageProgramOutputSlotIdV1,
-        source: Srgb8,
-        opacity: f64,
-        certificate_index: usize,
-    },
-    Remove {
-        output_slot: PackageProgramOutputSlotIdV1,
-    },
-    Hold {
-        output_slot: PackageProgramOutputSlotIdV1,
-        certificate_index: usize,
-    },
+#[derive(Clone, Copy)]
+pub enum PackageProgramOperationV1<'a> {
+    Set(PackageProgramSetV1<'a>),
+    Remove(PackageProgramRemoveV1),
+    Hold(PackageProgramHoldV1<'a>),
 }
 
 struct PackageProgramCertificatesV1<'a> {
@@ -1346,10 +1979,13 @@ impl FusedIterator for PackageProgramCertificatesV1<'_> {}
 
 enum PackageProgramOperationSourceV1<'a> {
     Empty,
-    Set(slice::Iter<'a, ProgramOutputV1>),
+    Set {
+        outputs: slice::Iter<'a, ProgramOutputV1>,
+        certificate: PackageProgramVerifiedCertificateV1<'a>,
+    },
     Hold {
         slots: slice::Iter<'a, PackageProgramOutputSlotIdV1>,
-        certificate_index: usize,
+        certificate: PackageProgramVerifiedCertificateV1<'a>,
     },
     Remove(slice::Iter<'a, PackageProgramOutputSlotIdV1>),
 }
@@ -1358,33 +1994,32 @@ struct PackageProgramOperationsV1<'a> {
     inner: PackageProgramOperationSourceV1<'a>,
 }
 
-impl Iterator for PackageProgramOperationsV1<'_> {
-    type Item = PackageProgramOperationV1;
+impl<'a> Iterator for PackageProgramOperationsV1<'a> {
+    type Item = PackageProgramOperationV1<'a>;
 
     fn next(&mut self) -> Option<Self::Item> {
         match &mut self.inner {
             PackageProgramOperationSourceV1::Empty => None,
-            PackageProgramOperationSourceV1::Set(outputs) => {
-                let output = *outputs.next()?;
-                let paint = output.paint();
-                Some(PackageProgramOperationV1::Set {
-                    output_slot: PackageProgramOutputSlotIdV1::from_core(output.output()),
-                    source: paint.source(),
-                    opacity: paint.opacity().value(),
-                    certificate_index: 0,
-                })
+            PackageProgramOperationSourceV1::Set {
+                outputs,
+                certificate,
+            } => {
+                let output = outputs.next()?;
+                Some(PackageProgramOperationV1::Set(PackageProgramSetV1 {
+                    output,
+                    certificate: *certificate,
+                }))
             }
-            PackageProgramOperationSourceV1::Hold {
-                slots,
-                certificate_index,
-            } => Some(PackageProgramOperationV1::Hold {
-                output_slot: *slots.next()?,
-                certificate_index: *certificate_index,
-            }),
-            PackageProgramOperationSourceV1::Remove(slots) => {
-                Some(PackageProgramOperationV1::Remove {
+            PackageProgramOperationSourceV1::Hold { slots, certificate } => {
+                Some(PackageProgramOperationV1::Hold(PackageProgramHoldV1 {
                     output_slot: *slots.next()?,
-                })
+                    certificate: *certificate,
+                }))
+            }
+            PackageProgramOperationSourceV1::Remove(slots) => {
+                Some(PackageProgramOperationV1::Remove(PackageProgramRemoveV1 {
+                    output_slot: *slots.next()?,
+                }))
             }
         }
     }
@@ -1392,7 +2027,7 @@ impl Iterator for PackageProgramOperationsV1<'_> {
     fn size_hint(&self) -> (usize, Option<usize>) {
         let remaining = match &self.inner {
             PackageProgramOperationSourceV1::Empty => 0,
-            PackageProgramOperationSourceV1::Set(outputs) => outputs.len(),
+            PackageProgramOperationSourceV1::Set { outputs, .. } => outputs.len(),
             PackageProgramOperationSourceV1::Hold { slots, .. }
             | PackageProgramOperationSourceV1::Remove(slots) => slots.len(),
         };
