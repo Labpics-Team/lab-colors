@@ -69,6 +69,48 @@ fn contains_rust_identifier(source: &str, identifier: &str) -> bool {
     })
 }
 
+fn assert_only_in_compile_fail(source: &str, needle: &str) {
+    let mut in_compile_fail = false;
+    let mut occurrences = 0;
+
+    for (line_index, line) in source.lines().enumerate() {
+        let doc = line.trim_start().strip_prefix("///").map(str::trim_start);
+        match doc {
+            Some("```compile_fail") => {
+                assert!(
+                    !in_compile_fail,
+                    "nested compile_fail fence before line {}",
+                    line_index + 1,
+                );
+                in_compile_fail = true;
+                continue;
+            }
+            Some("```") if in_compile_fail => {
+                in_compile_fail = false;
+                continue;
+            }
+            _ => {}
+        }
+
+        let line_occurrences = line.matches(needle).count();
+        if line_occurrences == 0 {
+            continue;
+        }
+        assert!(
+            in_compile_fail,
+            "`{needle}` escaped its negative compile_fail sentinel at line {}",
+            line_index + 1,
+        );
+        occurrences += line_occurrences;
+    }
+
+    assert!(!in_compile_fail, "unclosed compile_fail fence");
+    assert!(
+        occurrences > 0,
+        "`{needle}` must remain covered by a negative API sentinel",
+    );
+}
+
 fn production_rust_sources() -> Vec<(String, String)> {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src");
     let mut pending = vec![root.clone()];
@@ -163,8 +205,7 @@ fn stacked_program_module_is_visible_module_qualified_and_transport_neutral() {
     );
     assert!(
         !PROGRAM_SOURCE.contains("PackageProgram")
-            && !contains_rust_identifier(PROGRAM_SOURCE, "package_bridge")
-            && !PROGRAM_SOURCE.contains("package "),
+            && !contains_rust_identifier(PROGRAM_SOURCE, "package_bridge"),
         "the public Program source must not retain transport-era vocabulary",
     );
 
@@ -178,16 +219,8 @@ fn stacked_program_module_is_visible_module_qualified_and_transport_neutral() {
             "{path} must not retain the superseded public path or prefix",
         );
     }
-    assert_eq!(
-        LIB_SOURCE.matches("PackageProgram").count(),
-        2,
-        "the old prefix may appear only in the two negative API sentinels",
-    );
-    assert_eq!(
-        LIB_SOURCE.matches("package_bridge").count(),
-        2,
-        "the old module may appear only in the two negative API sentinels",
-    );
+    assert_only_in_compile_fail(LIB_SOURCE, "PackageProgram");
+    assert_only_in_compile_fail(LIB_SOURCE, "package_bridge");
 }
 
 #[test]

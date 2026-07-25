@@ -302,7 +302,7 @@ impl AppearanceContextErrorV1 {
         self.kind
     }
 
-    /// Возвращает отвергнутое поле, если отказ относится к входному домену.
+    /// Возвращает отвергнутое поле, когда Core смог его локализовать.
     pub const fn field(self) -> Option<AppearanceContextFieldV1> {
         self.field
     }
@@ -336,7 +336,7 @@ impl AppearanceContextErrorV1 {
             },
             None => Self {
                 kind: AppearanceContextErrorKindV1::InternalInvariant,
-                field: None,
+                field: Some(field),
                 reason: None,
             },
         }
@@ -909,8 +909,8 @@ impl CompileErrorV1 {
             | Self::JointStateDuplicateTarget { target, .. }
             | Self::JointStateMissingTarget { target, .. }
             | Self::JointStateUnknownTarget { target, .. }
-            | Self::JointStateUnknownCandidate { target, .. } => Some(Handle::Target(*target)),
-            Self::MissingTargetSource { target, .. }
+            | Self::JointStateUnknownCandidate { target, .. }
+            | Self::MissingTargetSource { target, .. }
             | Self::DuplicateTargetCandidate { target, .. }
             | Self::DuplicateTargetCandidateSignal { target, .. } => Some(Handle::Target(*target)),
             Self::DuplicateOpacityInput { input } | Self::OpacityOutOfDomain { input } => {
@@ -2443,17 +2443,13 @@ pub enum OperationV1<'owner, 'session> {
 struct CertificatesV1<'a> {
     values: [Option<CertificateV1<'a>>; 2],
     index: usize,
-    len: usize,
 }
 
 impl<'a> CertificatesV1<'a> {
     fn new(first: Option<CertificateV1<'a>>, second: Option<CertificateV1<'a>>) -> Self {
-        let len = usize::from(first.is_some()) + usize::from(second.is_some());
-        debug_assert!(first.is_some() || second.is_none());
         Self {
             values: [first, second],
             index: 0,
-            len,
         }
     }
 }
@@ -2462,16 +2458,21 @@ impl<'a> Iterator for CertificatesV1<'a> {
     type Item = CertificateV1<'a>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if self.index == self.len {
-            return None;
+        while self.index < self.values.len() {
+            let value = self.values[self.index];
+            self.index += 1;
+            if value.is_some() {
+                return value;
+            }
         }
-        let value = self.values[self.index];
-        self.index += 1;
-        value
+        None
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
-        let remaining = self.len - self.index;
+        let remaining = self.values[self.index..]
+            .iter()
+            .filter(|value| value.is_some())
+            .count();
         (remaining, Some(remaining))
     }
 }
@@ -2745,6 +2746,8 @@ pub enum TristimulusComponentV1 {
 /// Точная конечная XYZ-точка и её зарегистрированный frame.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TristimulusSampleV1 {
+    /// Биты IEEE-754 сохраняют точный диагностический payload и отделяют
+    /// равенство записи от семантики сравнения floating-point.
     xyz_bits: [u64; 3],
     frame: ColorimetricFrameV1,
 }
@@ -4055,13 +4058,18 @@ mod update_error_projection_tests {
 }
 
 #[cfg(test)]
-mod compile_error_projection_tests {
+mod operation_scope_tests {
     use super::*;
 
     #[test]
     fn operation_scope_is_a_zero_sized_borrow_marker() {
         assert_eq!(core::mem::size_of::<BorrowScopeV1<'static, 'static>>(), 0);
     }
+}
+
+#[cfg(test)]
+mod compile_error_projection_tests {
+    use super::*;
 
     #[test]
     fn nested_joint_resource_exhaustion_keeps_its_exact_reason_and_site_kind() {
