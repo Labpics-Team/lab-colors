@@ -92,12 +92,17 @@ fn assert_only_in_compile_fail(source: &str, needle: &str) {
             _ => {}
         }
 
+        assert!(
+            !in_compile_fail || doc.is_some() || line.trim().is_empty(),
+            "compile_fail sentinel was interrupted by live code at line {}",
+            line_index + 1,
+        );
         let line_occurrences = line.matches(needle).count();
         if line_occurrences == 0 {
             continue;
         }
         assert!(
-            in_compile_fail,
+            in_compile_fail && doc.is_some(),
             "`{needle}` escaped its negative compile_fail sentinel at line {}",
             line_index + 1,
         );
@@ -108,6 +113,16 @@ fn assert_only_in_compile_fail(source: &str, needle: &str) {
     assert!(
         occurrences > 0,
         "`{needle}` must remain covered by a negative API sentinel",
+    );
+}
+
+#[test]
+fn compile_fail_scanner_rejects_live_code_between_document_fences() {
+    let escaped = "/// ```compile_fail\npub type PackageProgram = u8;\n/// ```";
+    assert!(
+        std::panic::catch_unwind(|| assert_only_in_compile_fail(escaped, "PackageProgram"))
+            .is_err(),
+        "a live declaration must never inherit compile_fail state from adjacent documentation",
     );
 }
 
