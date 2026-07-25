@@ -165,6 +165,22 @@ impl ObservationSchemaMismatchV1 {
             actual,
         }
     }
+
+    pub(crate) const fn into_parts(
+        self,
+    ) -> (
+        usize,
+        usize,
+        Option<SurfaceInputPortId>,
+        Option<SurfaceInputPortId>,
+    ) {
+        (
+            self.case_index,
+            self.binding_index,
+            self.expected,
+            self.actual,
+        )
+    }
 }
 
 /// Canonical nonempty correlated set. Values and provenance each use one flat

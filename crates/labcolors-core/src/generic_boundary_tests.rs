@@ -9,7 +9,7 @@ const LIB_SOURCE: &str = include_str!("lib.rs");
 const LCS_OCCURRENCE_SOURCE: &str = include_str!("lcs_occurrence.rs");
 const OBSERVATION_SOURCE: &str = include_str!("observation.rs");
 const OUTPUT_PROJECTION_SOURCE: &str = include_str!("output_projection.rs");
-const PACKAGE_BRIDGE_SOURCE: &str = include_str!("package_bridge.rs");
+const PROGRAM_SOURCE: &str = include_str!("program.rs");
 const POINT_SUPPORT_SOURCE: &str = include_str!("point_support.rs");
 const PROGRAM_IDENTITY_SOURCE: &str = include_str!("program_identity.rs");
 const PROGRAM_SESSION_SOURCE: &str = include_str!("program_session.rs");
@@ -116,15 +116,90 @@ fn generic_physical_and_transport_modules_contain_no_client_or_legacy_vocabulary
 }
 
 #[test]
-fn package_authoring_is_one_thin_concrete_core_draft_without_a_second_graph() {
+fn stacked_program_module_is_visible_module_qualified_and_transport_neutral() {
+    let normalized_lib = LIB_SOURCE.split_whitespace().collect::<Vec<_>>().join(" ");
+    assert_eq!(
+        LIB_SOURCE
+            .lines()
+            .filter(|line| line.trim() == "pub mod program;")
+            .count(),
+        1,
+        "the crate root must expose exactly one file-backed Program module",
+    );
+    assert!(
+        normalized_lib.contains("#[deny(missing_docs)] pub mod program;"),
+        "the public Program reference must stay complete by construction",
+    );
+    assert!(
+        !normalized_lib.contains("#[doc(hidden)] pub mod program;"),
+        "the reviewed Program API must remain visible in rustdoc",
+    );
+
+    for introducer in ["pub use ", "pub type "] {
+        let mut remaining = LIB_SOURCE;
+        while let Some(start) = remaining.find(introducer) {
+            let statement = &remaining[start
+                ..start
+                    + remaining[start..]
+                        .find(';')
+                        .expect("root public declaration must terminate")
+                    + 1];
+            assert!(
+                !contains_rust_identifier(statement, "program"),
+                "Program types must stay module-qualified; found root alias `{statement}`",
+            );
+            remaining = &remaining[start + statement.len()..];
+        }
+    }
+
+    let source_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src");
+    assert!(
+        source_root.join("program.rs").is_file(),
+        "the public Program implementation must remain file-backed",
+    );
+    assert!(
+        !source_root.join("package_bridge.rs").exists(),
+        "the superseded transport-named module must not return",
+    );
+    assert!(
+        !PROGRAM_SOURCE.contains("PackageProgram")
+            && !contains_rust_identifier(PROGRAM_SOURCE, "package_bridge")
+            && !PROGRAM_SOURCE.contains("package "),
+        "the public Program source must not retain transport-era vocabulary",
+    );
+
+    for (path, source) in production_rust_sources() {
+        if path == "lib.rs" {
+            continue;
+        }
+        assert!(
+            !source.contains("PackageProgram")
+                && !contains_rust_identifier(&source, "package_bridge"),
+            "{path} must not retain the superseded public path or prefix",
+        );
+    }
+    assert_eq!(
+        LIB_SOURCE.matches("PackageProgram").count(),
+        2,
+        "the old prefix may appear only in the two negative API sentinels",
+    );
+    assert_eq!(
+        LIB_SOURCE.matches("package_bridge").count(),
+        2,
+        "the old module may appear only in the two negative API sentinels",
+    );
+}
+
+#[test]
+fn public_program_draft_wraps_the_single_canonical_core_graph() {
     assert_eq!(
         normalized_source_scope(
-            PACKAGE_BRIDGE_SOURCE,
-            "pub struct PackageProgramDraftV1 {",
-            "/// Draft mutation rejected",
+            PROGRAM_SOURCE,
+            "pub struct DraftV1 {",
+            "/// Ошибка изменения Draft до компиляции.",
         ),
-        "pub struct PackageProgramDraftV1 { inner: CoreProgramDraftV1, }",
-        "the package seam must forward actual IR nodes into the sole Core draft",
+        "pub struct DraftV1 { inner: CoreProgramDraftV1, }",
+        "the public seam must forward actual IR nodes into the sole Core draft",
     );
     assert_eq!(
         normalized_source_scope(
@@ -150,41 +225,37 @@ fn package_authoring_is_one_thin_concrete_core_draft_without_a_second_graph() {
         "HashMap",
         "dyn Program",
         "OutputProfileId",
-        "PackageProgramObservationGroupIdV1",
-        "PackageProgramOpacityIdV1",
-        "PackageProgramSurfaceInputIdV1",
+        "ObservationGroupIdV1",
+        "OpacityIdV1",
+        "SurfaceInputIdV1",
         "pub fn push_opacity(",
         "pub fn push_surface_input(",
         "pub fn surface_input_slots(",
     ] {
         assert!(
-            !PACKAGE_BRIDGE_SOURCE.contains(forbidden),
-            "the concrete package lowerer must not acquire `{forbidden}`",
+            !PROGRAM_SOURCE.contains(forbidden),
+            "the concrete public lowerer must not acquire `{forbidden}`",
         );
     }
 }
 
 #[test]
-fn package_session_keeps_evidence_but_owner_alone_grants_updates_and_operations() {
+fn public_session_keeps_evidence_but_owner_alone_grants_updates_and_operations() {
     assert_eq!(
-        normalized_source_scope(
-            PACKAGE_BRIDGE_SOURCE,
-            "pub struct PackageProgramSessionV1 {",
-            "impl PackageProgramSessionV1",
-        ),
+        normalized_source_scope(PROGRAM_SOURCE, "pub struct SessionV1 {", "impl SessionV1",),
         concat!(
-            "pub struct PackageProgramSessionV1 { ",
+            "pub struct SessionV1 { ",
             "scenario_order_scratch: Vec<usize>, ",
             "session: CoreProgramSessionV1, ",
             "}",
         ),
-        "the package Session must not duplicate owner schema, outputs, stream, or lifecycle state",
+        "the public Session must not duplicate owner schema, outputs, stream, or lifecycle state",
     );
 
     let session_api = source_scope(
-        PACKAGE_BRIDGE_SOURCE,
-        "impl PackageProgramSessionV1 {",
-        "struct PackageProgramScenarioSourceV1",
+        PROGRAM_SOURCE,
+        "impl SessionV1 {",
+        "struct ScenarioSourceV1",
     );
     assert_eq!(
         session_api.matches("pub fn evidence(").count(),
@@ -210,9 +281,9 @@ fn package_session_keeps_evidence_but_owner_alone_grants_updates_and_operations(
     }
 
     let evidence_api = source_scope(
-        PACKAGE_BRIDGE_SOURCE,
-        "impl<'a> PackageProgramEvidenceViewV1<'a> {",
-        "struct PackageProgramBorrowScopeV1<'owner, 'session>",
+        PROGRAM_SOURCE,
+        "impl<'a> EvidenceViewV1<'a> {",
+        "struct BorrowScopeV1<'owner, 'session>",
     );
     for forbidden in [
         "pub fn revision(",
@@ -227,9 +298,9 @@ fn package_session_keeps_evidence_but_owner_alone_grants_updates_and_operations(
     }
 
     let owner_api = source_scope(
-        PACKAGE_BRIDGE_SOURCE,
-        "impl PackageProgramOwnerV1 {",
-        "pub struct PackageProgramScenarioV1<'a> {",
+        PROGRAM_SOURCE,
+        "impl OwnerV1 {",
+        "pub struct ScenarioV1<'a> {",
     );
     for required in [
         "pub fn project<'owner, 'session>(",
@@ -256,44 +327,50 @@ fn package_session_keeps_evidence_but_owner_alone_grants_updates_and_operations(
         "owner mismatch must be rejected before admission, allocation, or evaluation",
     );
 
-    let public_access_errors = source_scope(
-        PACKAGE_BRIDGE_SOURCE,
-        "pub enum PackageProgramAccessErrorV1 {",
-        "impl PackageProgramOwnerV1",
-    );
+    let public_access_errors =
+        source_scope(PROGRAM_SOURCE, "pub enum AccessErrorV1 {", "impl OwnerV1");
     assert!(
         public_access_errors.contains("OwnerMismatch,")
             && !public_access_errors.contains("OwnerExpired"),
         "operation projection must distinguish foreign ownership, not expose internal expiry",
     );
     let public_update_errors = source_scope(
-        PACKAGE_BRIDGE_SOURCE,
-        "pub enum PackageProgramUpdateErrorKindV1 {",
-        "pub struct PackageProgramUpdateErrorV1 {",
+        PROGRAM_SOURCE,
+        "pub enum UpdateErrorKindV1 {",
+        "pub enum UpdateErrorV1 {",
     );
     assert!(
         public_update_errors.contains("OwnerMismatch,")
             && !public_update_errors.contains("OwnerExpired"),
         "owner expiry is an internal invariant after a matching owner borrow",
     );
+    assert!(
+        PROGRAM_SOURCE.contains("pub enum UpdateErrorV1 {")
+            && !PROGRAM_SOURCE.contains("pub struct UpdateErrorV1 {")
+            && PROGRAM_SOURCE
+                .contains("fn map_observation_error(error: ObservationError) -> UpdateErrorV1",)
+            && PROGRAM_SOURCE
+                .contains("fn map_plan_error(error: CoreProgramPlanErrorV1) -> UpdateErrorV1",),
+        "update errors must retain payloads in the authoritative enum before kind projection",
+    );
 
     for (payload, end) in [
         (
-            "pub struct PackageProgramSetV1<'owner, 'session> {",
-            "impl<'session> PackageProgramSetV1<'_, 'session>",
+            "pub struct SetV1<'owner, 'session> {",
+            "impl<'session> SetV1<'_, 'session>",
         ),
         (
-            "pub struct PackageProgramRemoveV1<'owner, 'session> {",
-            "impl PackageProgramRemoveV1<'_, '_>",
+            "pub struct RemoveV1<'owner, 'session> {",
+            "impl RemoveV1<'_, '_>",
         ),
         (
-            "pub struct PackageProgramHoldV1<'owner, 'session> {",
-            "impl<'session> PackageProgramHoldV1<'_, 'session>",
+            "pub struct HoldV1<'owner, 'session> {",
+            "impl<'session> HoldV1<'_, 'session>",
         ),
     ] {
         assert!(
-            source_scope(PACKAGE_BRIDGE_SOURCE, payload, end)
-                .contains("_scope: PackageProgramBorrowScopeV1<'owner, 'session>,"),
+            source_scope(PROGRAM_SOURCE, payload, end)
+                .contains("_scope: BorrowScopeV1<'owner, 'session>,"),
             "{payload} must retain both owner and immutable Session borrows",
         );
     }
