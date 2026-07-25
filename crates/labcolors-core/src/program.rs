@@ -1258,6 +1258,37 @@ pub struct OwnerV1 {
     compiled: CompiledCoreProgramV1,
 }
 
+/// Верхние границы числа клеток в новом сертификате одного Observed-update.
+///
+/// Границы относятся только к текущим клеткам доказательства. Они не включают
+/// сохранённый прошлый сертификат, observation/provenance, выходы, операции или
+/// байты конкретного транспорта.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EvidenceCellBoundsV1 {
+    verified_cells: usize,
+    conflict_cells: usize,
+}
+
+impl EvidenceCellBoundsV1 {
+    /// Максимум клеток успешного сертификата.
+    pub const fn verified_cells(self) -> usize {
+        self.verified_cells
+    }
+
+    /// Максимум клеток исчерпывающего конфликтного сертификата.
+    pub const fn conflict_cells(self) -> usize {
+        self.conflict_cells
+    }
+}
+
+/// Закрытая причина невозможности вычислить границы сертификата.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EvidenceBoundsErrorV1 {
+    /// Произведение числа сценариев, ограничений и состояний не помещается в
+    /// адресное пространство платформы.
+    CardinalityOverflow,
+}
+
 /// Отказ доступа из-за несовпадения точной owner-эпохи.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AccessErrorV1 {
@@ -1277,6 +1308,26 @@ impl OwnerV1 {
     /// конкретной owner-эпохи.
     pub fn content_identity(&self) -> ContentIdentityV1 {
         ContentIdentityV1::from_core(self.compiled.content_identity())
+    }
+
+    /// Вычисляет верхние границы клеток для prospective Observed-update.
+    ///
+    /// `scenario_count` — число объявленных клиентом сценариев до admission.
+    /// Core сам схлопывает физически одинаковые сценарии, поэтому фактический
+    /// сертификат может быть короче. Нулевое значение разрешено только как
+    /// чистый арифметический preflight; пустой Observed-update по-прежнему не
+    /// допускается. Запрос не создаёт Session и не меняет состояние.
+    pub fn evidence_cell_bounds(
+        &self,
+        scenario_count: usize,
+    ) -> Result<EvidenceCellBoundsV1, EvidenceBoundsErrorV1> {
+        self.compiled
+            .evidence_cell_bounds(scenario_count)
+            .map(|(verified_cells, conflict_cells)| EvidenceCellBoundsV1 {
+                verified_cells,
+                conflict_cells,
+            })
+            .ok_or(EvidenceBoundsErrorV1::CardinalityOverflow)
     }
 
     /// Число значений Surface в каждом schema-ordered сценарии.

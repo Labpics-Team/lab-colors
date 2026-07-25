@@ -1014,6 +1014,12 @@ enum CompiledConstraintModeV1 {
     ReportOnly,
 }
 
+impl CompiledConstraintModeV1 {
+    const fn rejects_candidate(self) -> bool {
+        matches!(self, Self::Hard)
+    }
+}
+
 struct CompiledPointConstraint<Invocation> {
     id: ConstraintId,
     target_id: OccurrenceId,
@@ -1125,6 +1131,11 @@ where
 
     pub(crate) fn output_count(&self) -> usize {
         self.owner_generation.outputs.len()
+    }
+
+    pub(crate) fn evidence_cell_bounds(&self, scenario_count: usize) -> Option<(usize, usize)> {
+        checked_program_epoch_evaluation_cell_counts(&self.owner_generation, scenario_count)
+            .map(|counts| (counts.selected, counts.exhaustive_conflict))
     }
 
     pub(crate) fn output_slot_at(&self, index: usize) -> Option<OutputSlotId> {
@@ -1268,7 +1279,7 @@ where
     }
 
     pub const fn is_hard(&self) -> bool {
-        matches!(self.mode, CompiledConstraintModeV1::Hard)
+        self.mode.rejects_candidate()
     }
 
     pub const fn result(&self) -> &ProgramConstraintResultV1<Evaluation> {
@@ -1466,13 +1477,43 @@ fn checked_program_evaluation_cell_counts(
     physical_case_count: usize,
     constraint_count: usize,
     state_count: usize,
+    can_conflict: bool,
 ) -> Option<ProgramEvaluationCellCountsV1> {
     let selected = physical_case_count.checked_mul(constraint_count)?;
-    let exhaustive_conflict = selected.checked_mul(state_count)?;
+    let exhaustive_conflict = if can_conflict {
+        selected.checked_mul(state_count)?
+    } else {
+        0
+    };
     Some(ProgramEvaluationCellCountsV1 {
         selected,
         exhaustive_conflict,
     })
+}
+
+fn checked_program_epoch_evaluation_cell_counts<Evaluation>(
+    epoch: &ProgramEpochV1<Evaluation>,
+    physical_case_count: usize,
+) -> Option<ProgramEvaluationCellCountsV1>
+where
+    Evaluation: ProgramConstraintEvaluatorSetV1,
+    ProgramConstraintInvocationOf<Evaluation>: Copy,
+{
+    let state_count = epoch
+        .joint_selection
+        .as_ref()
+        .map(|selection| selection.order.state_count())
+        .unwrap_or(1);
+    let can_conflict = epoch
+        .constraints
+        .iter()
+        .any(|constraint| constraint.mode.rejects_candidate());
+    checked_program_evaluation_cell_counts(
+        physical_case_count,
+        epoch.constraints.len(),
+        state_count,
+        can_conflict,
+    )
 }
 
 #[cfg(test)]
@@ -1481,7 +1522,7 @@ pub(crate) fn checked_program_evaluation_cell_counts_for_test(
     constraint_count: usize,
     state_count: usize,
 ) -> Option<(usize, usize)> {
-    checked_program_evaluation_cell_counts(physical_case_count, constraint_count, state_count)
+    checked_program_evaluation_cell_counts(physical_case_count, constraint_count, state_count, true)
         .map(|counts| (counts.selected, counts.exhaustive_conflict))
 }
 
@@ -1585,7 +1626,6 @@ where
 fn prepare_program_evaluation_buffers<Evaluation>(
     epoch: &ProgramEpochV1<Evaluation>,
     observation: &RevisionBoundObservationV1,
-    joint_state_count: Option<usize>,
 ) -> Result<
     PreparedProgramEvaluationBuffersV1<Evaluation>,
     ProgramSessionEvaluationError<ProgramEvaluatorError<Evaluation>>,
@@ -1594,22 +1634,15 @@ where
     Evaluation: ProgramConstraintEvaluatorSetV1,
     ProgramConstraintInvocationOf<Evaluation>: Copy,
 {
-    let state_count = joint_state_count.unwrap_or(1);
-    if state_count == 0 {
-        return Err(ProgramSessionEvaluationError::InternalInvariant);
-    }
-    let counts = checked_program_evaluation_cell_counts(
-        observation.physical_case_count(),
-        epoch.constraints.len(),
-        state_count,
-    )
-    .ok_or(ProgramSessionEvaluationError::ResourceExhausted)?;
+    let counts =
+        checked_program_epoch_evaluation_cell_counts(epoch, observation.physical_case_count())
+            .ok_or(ProgramSessionEvaluationError::ResourceExhausted)?;
 
     let mut selected_cells = Vec::new();
     try_reserve_program_evaluation_buffer(&mut selected_cells, counts.selected)
         .map_err(|()| ProgramSessionEvaluationError::ResourceExhausted)?;
     let mut conflict_cells = Vec::new();
-    if joint_state_count.is_some() {
+    if epoch.joint_selection.is_some() && counts.exhaustive_conflict != 0 {
         try_reserve_program_evaluation_buffer(&mut conflict_cells, counts.exhaustive_conflict)
             .map_err(|()| ProgramSessionEvaluationError::ResourceExhausted)?;
     }
@@ -1687,7 +1720,7 @@ where
     ProgramConstraintInvocationOf<Evaluation>: Copy,
 {
     let Some(selection) = &epoch.joint_selection else {
-        let mut buffers = prepare_program_evaluation_buffers(epoch, &observation, None)?;
+        let mut buffers = prepare_program_evaluation_buffers(epoch, &observation)?;
         return collect_program_candidate_into(
             plan,
             epoch,
@@ -1698,8 +1731,8 @@ where
         );
     };
 
-    let state_count = selection.order.tuples().len();
-    let mut buffers = prepare_program_evaluation_buffers(epoch, &observation, Some(state_count))?;
+    let state_count = selection.order.state_count();
+    let mut buffers = prepare_program_evaluation_buffers(epoch, &observation)?;
     for (state_index, tuple) in selection.order.tuples().enumerate() {
         apply_joint_candidate(plan, &epoch.finite_targets, tuple)?;
         if !scan_program_candidate(plan, epoch, &observation, state_index, None, None)? {
@@ -1972,7 +2005,7 @@ where
             let result = match decision {
                 HardDecision::Pass(evidence) => ProgramConstraintResultV1::Pass(evidence),
                 HardDecision::Violation(evidence) => {
-                    if matches!(constraint.mode, CompiledConstraintModeV1::Hard) {
+                    if constraint.mode.rejects_candidate() {
                         has_hard_violation = true;
                     }
                     ProgramConstraintResultV1::Violation(evidence)

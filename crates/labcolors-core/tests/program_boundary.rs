@@ -10,12 +10,12 @@ use labcolors_core::Srgb8;
 use labcolors_core::program::{
     AppearanceContextErrorKindV1, AppearanceContextFieldV1, AppearanceContextV1, AssessmentV1,
     CertificateV1, CompileErrorHandleV1, CompileErrorKindV1, CompileErrorV1, ConstraintIdV1,
-    DraftErrorV1, DraftV1, InstantiateErrorV1, JointChoiceV1, JointOrderErrorV1, JointStateV1,
-    ModeledPointV1, NumericDomainErrorV1, ObservationHeadV1, OccurrenceIdV1, OpacityInputIdV1,
-    OperationV1, OutputSlotIdV1, OwnerV1, PaintIdV1, PhysicalPointV1, ProjectionV1, ScenarioV1,
-    SessionV1, SignalV1, SourceIdV1, StateKindV1, SurfaceIdV1, SurfaceInputPortIdV1, SurroundV1,
-    TargetCandidateIdV1, TargetCandidateV1, TargetIdV1, UpdateErrorKindV1, UpdateErrorV1, UpdateV1,
-    VerdictV1,
+    DraftErrorV1, DraftV1, EvidenceBoundsErrorV1, InstantiateErrorV1, JointChoiceV1,
+    JointOrderErrorV1, JointStateV1, ModeledPointV1, NumericDomainErrorV1, ObservationHeadV1,
+    OccurrenceIdV1, OpacityInputIdV1, OperationV1, OutputSlotIdV1, OwnerV1, PaintIdV1,
+    PhysicalPointV1, ProjectionV1, ScenarioV1, SessionV1, SignalV1, SourceIdV1, StateKindV1,
+    SurfaceIdV1, SurfaceInputPortIdV1, SurroundV1, TargetCandidateIdV1, TargetCandidateV1,
+    TargetIdV1, UpdateErrorKindV1, UpdateErrorV1, UpdateV1, VerdictV1,
 };
 use labcolors_core::wcag22::Wcag22CriterionV1;
 
@@ -235,6 +235,201 @@ fn attach_target_assessment(draft: &mut DraftV1, target: TargetIdV1) {
     draft.push_solid_paint(paint, target);
     draft.push_source_over_occurrence(occurrence, paint, SurfaceIdV1::new(6), context);
     draft.push_exact_report_only(constraint, occurrence, Srgb8::new([0; 3]));
+}
+
+fn joint_draft(hard: bool) -> DraftV1 {
+    let source = SourceIdV1::new(1);
+    let target = TargetIdV1::new(2);
+    let black = TargetCandidateIdV1::new(3);
+    let white = TargetCandidateIdV1::new(4);
+    let input = SurfaceInputPortIdV1::new(5);
+    let paint = PaintIdV1::new(6);
+    let surface = SurfaceIdV1::new(7);
+    let occurrence = OccurrenceIdV1::new(8);
+    let constraint = ConstraintIdV1::new(9);
+    let output = OutputSlotIdV1::new(10);
+    let context = AppearanceContextV1::try_new(64.0, 0.2, SurroundV1::Average).unwrap();
+
+    let mut draft = DraftV1::new();
+    draft.push_source(source, Srgb8::new([0; 3]));
+    draft.push_finite_target(
+        target,
+        source,
+        vec![
+            TargetCandidateV1::new(black, Srgb8::new([0; 3])),
+            TargetCandidateV1::new(white, Srgb8::new([255; 3])),
+        ],
+    );
+    draft
+        .set_joint_selection(vec![
+            JointStateV1::new(vec![JointChoiceV1::new(target, black)]),
+            JointStateV1::new(vec![JointChoiceV1::new(target, white)]),
+        ])
+        .unwrap();
+    draft.push_surface_input_port(input);
+    draft.push_solid_paint(paint, target);
+    draft.push_input_surface(surface, input);
+    draft.push_source_over_occurrence(occurrence, paint, surface, context);
+    if hard {
+        draft.push_exact_hard(constraint, occurrence, Srgb8::new([128; 3]));
+    } else {
+        draft.push_exact_report_only(constraint, occurrence, Srgb8::new([0; 3]));
+    }
+    draft.push_output(output, paint);
+    draft
+}
+
+#[test]
+fn evidence_cell_bounds_cover_fixed_and_joint_evaluation_laws() {
+    let input = SurfaceInputPortIdV1::new(50);
+    let fixed = fixed_nested_draft(1.0, SourceIdV1::new(1), input, input)
+        .compile()
+        .unwrap();
+
+    let empty = fixed.evidence_cell_bounds(0).unwrap();
+    assert_eq!(empty.verified_cells(), 0);
+    assert_eq!(empty.conflict_cells(), 0);
+
+    // The second fixed constraint is report-only. Counting only hard
+    // constraints would under-reserve a successful certificate.
+    let fixed_bounds = fixed.evidence_cell_bounds(3).unwrap();
+    assert_eq!(fixed_bounds.verified_cells(), 6);
+    assert_eq!(fixed_bounds.conflict_cells(), 6);
+
+    let report_only_joint = joint_draft(false).compile().unwrap();
+    let report_only_bounds = report_only_joint.evidence_cell_bounds(4).unwrap();
+    assert_eq!(report_only_bounds.verified_cells(), 4);
+    assert_eq!(report_only_bounds.conflict_cells(), 0);
+
+    let hard_joint = joint_draft(true).compile().unwrap();
+    let hard_bounds = hard_joint.evidence_cell_bounds(4).unwrap();
+    assert_eq!(hard_bounds.verified_cells(), 4);
+    assert_eq!(hard_bounds.conflict_cells(), 8);
+}
+
+#[test]
+fn evidence_cell_bounds_report_both_checked_multiplication_overflows() {
+    let input = SurfaceInputPortIdV1::new(50);
+    let two_constraints = fixed_nested_draft(1.0, SourceIdV1::new(1), input, input)
+        .compile()
+        .unwrap();
+    assert!(matches!(
+        two_constraints.evidence_cell_bounds(usize::MAX),
+        Err(EvidenceBoundsErrorV1::CardinalityOverflow)
+    ));
+
+    // One constraint keeps the first product representable; the two-state
+    // joint order forces the independent exhaustive-conflict product to fail.
+    let two_states = joint_draft(true).compile().unwrap();
+    assert!(matches!(
+        two_states.evidence_cell_bounds(usize::MAX),
+        Err(EvidenceBoundsErrorV1::CardinalityOverflow)
+    ));
+}
+
+#[test]
+fn evidence_cell_bounds_cover_actual_joint_conflict_and_duplicate_case_reduction() {
+    let joint = joint_draft(true).compile().unwrap();
+    let mut joint_session = joint.instantiate(21).unwrap();
+    let red = [Srgb8::new([255, 0, 0])];
+    let blue = [Srgb8::new([0, 0, 255])];
+    let unique_scenarios = [ScenarioV1::new(1, &red), ScenarioV1::new(2, &blue)];
+    let joint_bounds = joint.evidence_cell_bounds(unique_scenarios.len()).unwrap();
+    let projection = joint
+        .update(
+            &mut joint_session,
+            UpdateV1::Observed {
+                revision: 1,
+                scenarios: &unique_scenarios,
+            },
+        )
+        .unwrap();
+    let Some(CertificateV1::Conflict(certificate)) = projection.evidence().certificates().next()
+    else {
+        panic!("both authored joint states must violate the hard exact constraint");
+    };
+    assert_eq!(certificate.cells().len(), joint_bounds.conflict_cells());
+
+    let input = SurfaceInputPortIdV1::new(50);
+    let fixed = fixed_nested_draft(1.0, SourceIdV1::new(1), input, input)
+        .compile()
+        .unwrap();
+    let mut fixed_session = fixed.instantiate(22).unwrap();
+    let white = [Srgb8::new([0xFF; 3])];
+    let duplicate_scenarios = [ScenarioV1::new(1, &white), ScenarioV1::new(2, &white)];
+    let fixed_bounds = fixed
+        .evidence_cell_bounds(duplicate_scenarios.len())
+        .unwrap();
+    let projection = fixed
+        .update(
+            &mut fixed_session,
+            UpdateV1::Observed {
+                revision: 1,
+                scenarios: &duplicate_scenarios,
+            },
+        )
+        .unwrap();
+    let Some(CertificateV1::Verified(certificate)) = projection.evidence().certificates().next()
+    else {
+        panic!("duplicate physical scenarios must preserve a valid certificate");
+    };
+    assert!(certificate.cells().len() < fixed_bounds.verified_cells());
+}
+
+#[test]
+fn evidence_cell_bounds_query_is_pure_across_session_updates() {
+    let input = SurfaceInputPortIdV1::new(50);
+    let owner = fixed_nested_draft(1.0, SourceIdV1::new(1), input, input)
+        .compile()
+        .unwrap();
+    let expected = owner.evidence_cell_bounds(1).unwrap();
+    assert_eq!(expected.verified_cells(), 2);
+    assert_eq!(expected.conflict_cells(), 2);
+
+    let mut session = owner.instantiate(13).unwrap();
+    let after_instantiation = owner.evidence_cell_bounds(1).unwrap();
+    assert_eq!(
+        after_instantiation.verified_cells(),
+        expected.verified_cells()
+    );
+    assert_eq!(
+        after_instantiation.conflict_cells(),
+        expected.conflict_cells()
+    );
+
+    let white = [Srgb8::new([0xFF; 3])];
+    let scenarios = [ScenarioV1::new(1, &white)];
+    {
+        let projection = owner
+            .update(
+                &mut session,
+                UpdateV1::Observed {
+                    revision: 1,
+                    scenarios: &scenarios,
+                },
+            )
+            .unwrap();
+        let Some(CertificateV1::Verified(certificate)) =
+            projection.evidence().certificates().next()
+        else {
+            panic!("the fixed admissible program must produce Verified evidence");
+        };
+        assert_eq!(certificate.cells().len(), expected.verified_cells());
+    }
+
+    let after_update = owner.evidence_cell_bounds(1).unwrap();
+    assert_eq!(after_update.verified_cells(), expected.verified_cells());
+    assert_eq!(after_update.conflict_cells(), expected.conflict_cells());
+    let projection = owner
+        .update(
+            &mut session,
+            UpdateV1::Observed {
+                revision: 2,
+                scenarios: &scenarios,
+            },
+        )
+        .unwrap();
+    assert_eq!(projection.evidence().kind(), StateKindV1::Ready);
 }
 
 #[test]

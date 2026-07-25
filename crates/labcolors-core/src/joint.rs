@@ -44,12 +44,19 @@ impl FiniteDomainOrdinalV1 {
 /// becomes an implicit tie-break.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct AdmittedFiniteJointOrderV1 {
-    tuples: Box<[Box<[FiniteDomainOrdinalV1]>]>,
+    first: Box<[FiniteDomainOrdinalV1]>,
+    rest: Box<[Box<[FiniteDomainOrdinalV1]>]>,
 }
 
 impl AdmittedFiniteJointOrderV1 {
-    pub(crate) fn tuples(&self) -> impl ExactSizeIterator<Item = &[FiniteDomainOrdinalV1]> + '_ {
-        self.tuples.iter().map(Box::as_ref)
+    pub(crate) fn tuples(&self) -> impl Iterator<Item = &[FiniteDomainOrdinalV1]> + '_ {
+        std::iter::once(self.first.as_ref()).chain(self.rest.iter().map(Box::as_ref))
+    }
+
+    pub(crate) fn state_count(&self) -> usize {
+        // `first` makes the admitted order structurally non-empty; the
+        // remaining slice length is bounded by Rust's allocation limit.
+        self.rest.len() + 1
     }
 }
 
@@ -120,10 +127,10 @@ pub(crate) fn admit_finite_joint_order_v1(
         .map_err(|_| FiniteJointOrderErrorV1::ResourceExhausted)?;
     first_seen.resize(expected, usize::MAX);
 
-    let mut tuples = Vec::new();
-    tuples
-        .try_reserve_exact(authored.len())
+    let mut rest = Vec::new();
+    rest.try_reserve_exact(authored.len() - 1)
         .map_err(|_| FiniteJointOrderErrorV1::ResourceExhausted)?;
+    let mut first_tuple = None;
     for (tuple_index, tuple) in authored.into_iter().enumerate() {
         if tuple.len() != domain_lengths.len() {
             return Err(FiniteJointOrderErrorV1::TupleArity {
@@ -157,11 +164,17 @@ pub(crate) fn admit_finite_joint_order_v1(
             });
         }
         *first = tuple_index;
-        tuples.push(tuple.into_boxed_slice());
+        let tuple = tuple.into_boxed_slice();
+        if first_tuple.is_none() {
+            first_tuple = Some(tuple);
+        } else {
+            rest.push(tuple);
+        }
     }
 
     Ok(AdmittedFiniteJointOrderV1 {
-        tuples: tuples.into_boxed_slice(),
+        first: first_tuple.ok_or(FiniteJointOrderErrorV1::EmptyOrder)?,
+        rest: rest.into_boxed_slice(),
     })
 }
 use crate::session::SessionObservationBindingPermitV1;
