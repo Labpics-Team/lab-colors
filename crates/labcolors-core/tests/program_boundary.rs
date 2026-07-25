@@ -179,7 +179,7 @@ fn unknown_is_revision_bound_without_a_stream_or_generation_field(
 }
 
 #[allow(dead_code)]
-fn owner_mismatch_is_a_closed_public_error(error: labcolors_core::program::UpdateErrorV1) {
+fn owner_mismatch_is_a_closed_public_error(error: UpdateErrorV1) {
     assert_eq!(error.kind(), UpdateErrorKindV1::OwnerMismatch);
 }
 

@@ -3,8 +3,8 @@ use core::iter::FusedIterator;
 use crate::Srgb8;
 use crate::appearance::{OccurrenceId, OpacityInputId, PaintId, SurfaceId, SurfaceInputPortId};
 use crate::constraints::{
-    ExactConstraintIdentityV1, ExactIdentityCapabilityV1, ExactIdentityReleaseV1,
-    ProgramVisiblePointBindingV1,
+    ApplicableWcag22MeasurementV1, ExactConstraintIdentityV1, ExactIdentityCapabilityV1,
+    ExactIdentityReleaseV1, ProgramVisiblePointBindingV1,
 };
 use crate::lcs_occurrence::{
     AdaptingLuminanceCdM2, AppearanceContextId, AppearanceContextSchemaReleaseId,
@@ -16,9 +16,10 @@ use crate::observation::{
     ObservedScenarioSetInput, Revision, ScenarioId, ScenarioInput, SurfaceInputBinding,
 };
 use crate::program::{
-    AccessErrorV1, AssessmentV1, CertificateV1, ConflictCellV1, ModeledPointV1, ObservationHeadV1,
-    ObservationV1, OperationV1, OutputSlotIdV1, OwnerV1, PhysicalPointV1, ProjectionV1, ScenarioV1,
-    SignalV1, StateKindV1, SurroundV1, UpdateErrorKindV1, UpdateV1, VerdictV1, VerifiedCellV1,
+    AccessErrorV1, AssessmentV1, CertificateV1, ConflictCellV1, ConstraintModeV1,
+    ExactSrgb8EvidenceV1, ModeledPointV1, ObservationHeadV1, ObservationV1, OperationV1,
+    OutputSlotIdV1, OwnerV1, PhysicalPointV1, ProjectionV1, ScenarioV1, SignalV1, StateKindV1,
+    SurroundV1, UpdateErrorKindV1, UpdateV1, VerdictV1, VerifiedCellV1, Wcag22Srgb8EvidenceV1,
 };
 use crate::program_session::{
     CORE_PROGRAM_ASSESSMENT_CALLS, CompiledCoreProgramV1, CompositionProfile, ConstraintId,
@@ -318,83 +319,95 @@ fn assert_public_assessment_matches_core(
     core: &ProgramConstraintResultV1<CoreProgramEvaluatorsV1>,
     expected_occurrence: OccurrenceId,
 ) {
+    fn assert_exact_matches(
+        public: ExactSrgb8EvidenceV1<'_>,
+        verdict: VerdictV1,
+        expected: Srgb8,
+        actual: Srgb8,
+        binding: &ProgramVisiblePointBindingV1,
+        expected_occurrence: OccurrenceId,
+    ) {
+        assert_eq!(public.verdict(), verdict);
+        assert_eq!(public.expected(), expected);
+        let (visible, _) = assert_public_binding_matches_core(
+            AssessmentV1::ExactSrgb8(public),
+            binding,
+            expected_occurrence,
+        );
+        assert_eq!(visible, actual);
+    }
+
+    fn assert_wcag_matches(
+        public: Wcag22Srgb8EvidenceV1<'_>,
+        verdict: VerdictV1,
+        measurement: &ApplicableWcag22MeasurementV1,
+        binding: &ProgramVisiblePointBindingV1,
+        expected_occurrence: OccurrenceId,
+    ) {
+        assert_eq!(public.verdict(), verdict);
+        assert_eq!(public.profile_id(), measurement.profile_id());
+        assert_eq!(public.criterion(), measurement.criterion());
+        assert_eq!(
+            public.foreground_luminance(),
+            measurement.measurement().foreground_luminance
+        );
+        assert_eq!(
+            public.background_luminance(),
+            measurement.measurement().background_luminance
+        );
+        assert_eq!(public.numerical_evidence(), measurement.evidence());
+        let (visible, backdrop) = assert_public_binding_matches_core(
+            AssessmentV1::Wcag22Srgb8(public),
+            binding,
+            expected_occurrence,
+        );
+        assert_eq!(visible, Srgb8::new(measurement.measurement().foreground));
+        assert_eq!(backdrop, Srgb8::new(measurement.measurement().background));
+    }
+
     match (public, core) {
         (
             AssessmentV1::ExactSrgb8(public),
             ProgramConstraintResultV1::Pass(CoreProgramPassEvidenceV1::ExactSrgb8(core)),
-        ) => {
-            assert_eq!(public.verdict(), VerdictV1::Pass);
-            assert_eq!(public.expected(), core.target());
-            let (visible, _) = assert_public_binding_matches_core(
-                AssessmentV1::ExactSrgb8(public),
-                core.binding(),
-                expected_occurrence,
-            );
-            assert_eq!(visible, core.actual());
-        }
+        ) => assert_exact_matches(
+            public,
+            VerdictV1::Pass,
+            core.target(),
+            core.actual(),
+            core.binding(),
+            expected_occurrence,
+        ),
         (
             AssessmentV1::ExactSrgb8(public),
             ProgramConstraintResultV1::Violation(CoreProgramViolationEvidenceV1::ExactSrgb8(core)),
-        ) => {
-            assert_eq!(public.verdict(), VerdictV1::Violation);
-            assert_eq!(public.expected(), core.target());
-            let (visible, _) = assert_public_binding_matches_core(
-                AssessmentV1::ExactSrgb8(public),
-                core.binding(),
-                expected_occurrence,
-            );
-            assert_eq!(visible, core.actual());
-        }
+        ) => assert_exact_matches(
+            public,
+            VerdictV1::Violation,
+            core.target(),
+            core.actual(),
+            core.binding(),
+            expected_occurrence,
+        ),
         (
             AssessmentV1::Wcag22Srgb8(public),
             ProgramConstraintResultV1::Pass(CoreProgramPassEvidenceV1::Wcag22Srgb8(core)),
-        ) => {
-            assert_eq!(public.verdict(), VerdictV1::Pass);
-            let measurement = core.measurement().value();
-            assert_eq!(public.profile_id(), measurement.profile_id());
-            assert_eq!(public.criterion(), measurement.criterion());
-            assert_eq!(
-                public.foreground_luminance(),
-                measurement.measurement().foreground_luminance
-            );
-            assert_eq!(
-                public.background_luminance(),
-                measurement.measurement().background_luminance
-            );
-            assert_eq!(public.numerical_evidence(), measurement.evidence());
-            let (visible, backdrop) = assert_public_binding_matches_core(
-                AssessmentV1::Wcag22Srgb8(public),
-                core.binding(),
-                expected_occurrence,
-            );
-            assert_eq!(visible, Srgb8::new(measurement.measurement().foreground));
-            assert_eq!(backdrop, Srgb8::new(measurement.measurement().background));
-        }
+        ) => assert_wcag_matches(
+            public,
+            VerdictV1::Pass,
+            core.measurement().value(),
+            core.binding(),
+            expected_occurrence,
+        ),
         (
             AssessmentV1::Wcag22Srgb8(public),
             ProgramConstraintResultV1::Violation(CoreProgramViolationEvidenceV1::Wcag22Srgb8(core)),
-        ) => {
-            assert_eq!(public.verdict(), VerdictV1::Violation);
-            let measurement = core.measurement().value();
-            assert_eq!(public.profile_id(), measurement.profile_id());
-            assert_eq!(public.criterion(), measurement.criterion());
-            assert_eq!(
-                public.foreground_luminance(),
-                measurement.measurement().foreground_luminance
-            );
-            assert_eq!(
-                public.background_luminance(),
-                measurement.measurement().background_luminance
-            );
-            assert_eq!(public.numerical_evidence(), measurement.evidence());
-            let (visible, backdrop) = assert_public_binding_matches_core(
-                AssessmentV1::Wcag22Srgb8(public),
-                core.binding(),
-                expected_occurrence,
-            );
-            assert_eq!(visible, Srgb8::new(measurement.measurement().foreground));
-            assert_eq!(backdrop, Srgb8::new(measurement.measurement().background));
-        }
+        ) => assert_wcag_matches(
+            public,
+            VerdictV1::Violation,
+            core.measurement().value(),
+            core.binding(),
+            expected_occurrence,
+        ),
         _ => panic!("public assessment family or verdict drifted from Core"),
     }
 }
@@ -409,7 +422,7 @@ fn assert_verified_cell_matches_core(
     assert_eq!(public.constraint().value(), core.constraint().value());
     assert_eq!(public.occurrence().value(), core.target().value());
     assert_eq!(
-        matches!(public.mode(), crate::program::ConstraintModeV1::Hard),
+        matches!(public.mode(), ConstraintModeV1::Hard),
         core.is_hard()
     );
     assert_public_assessment_matches_core(public.assessment(), core.result(), core.target());
@@ -424,7 +437,7 @@ fn assert_conflict_cell_matches_core(
     assert_eq!(public.constraint().value(), core.constraint().value());
     assert_eq!(public.occurrence().value(), core.target().value());
     assert_eq!(
-        matches!(public.mode(), crate::program::ConstraintModeV1::Hard),
+        matches!(public.mode(), ConstraintModeV1::Hard),
         core.is_hard()
     );
     assert_public_assessment_matches_core(public.assessment(), core.result(), core.target());
@@ -617,8 +630,8 @@ fn consume_public_projection(projection: ProjectionV1<'_, '_>) -> ProjectionProb
                     probe.mix(u64::from(cell.constraint().value()));
                     probe.mix(u64::from(cell.occurrence().value()));
                     probe.mix(match cell.mode() {
-                        crate::program::ConstraintModeV1::Hard => 1,
-                        crate::program::ConstraintModeV1::ReportOnly => 2,
+                        ConstraintModeV1::Hard => 1,
+                        ConstraintModeV1::ReportOnly => 2,
                     });
                     consume_public_assessment(cell.assessment(), probe);
                 });
@@ -639,8 +652,8 @@ fn consume_public_projection(projection: ProjectionV1<'_, '_>) -> ProjectionProb
                     probe.mix(u64::from(cell.constraint().value()));
                     probe.mix(u64::from(cell.occurrence().value()));
                     probe.mix(match cell.mode() {
-                        crate::program::ConstraintModeV1::Hard => 1,
-                        crate::program::ConstraintModeV1::ReportOnly => 2,
+                        ConstraintModeV1::Hard => 1,
+                        ConstraintModeV1::ReportOnly => 2,
                     });
                     consume_public_assessment(cell.assessment(), probe);
                 });
