@@ -58,7 +58,7 @@ SITE_ID = "point-support-retained-reference-surplus-v1"
 SOURCE_BINDING_LAW = "point-support-rust-whole-file-semantic-cone-v2"
 SOURCE_BINDING_DOMAIN = b"labcolors.point-support.rust-whole-file-semantic-cone.v2"
 EXPECTED_SOURCE_CAPSULE_SHA256 = (
-    "669326bce56a2901f7fbbd8b4c23f26f8b33daceb1471b81c98763940b41d3e4"
+    "371a19f9da8337a13fb9a474c0f0395b35117822fd2d9293c6228b1f01e97ca4"
 )
 EXPECTED_Q55_PROOF_SHA256 = (
     "ac59cf89503170c789223b91d775213a19d4e571ef930f2ea609fcd51b14defd"
@@ -386,6 +386,7 @@ def verify_universal_algebra() -> dict[str, object]:
         for left_monomial, left_coefficient in left.items():
             for right_monomial, right_coefficient in right.items():
                 assert len(left_monomial) == len(right_monomial)
+                # Python 3.9 не поддерживает strict=True; assert выше даёт тот же инвариант.
                 monomial = tuple(
                     left_power + right_power
                     for left_power, right_power in zip(left_monomial, right_monomial)

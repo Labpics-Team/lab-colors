@@ -21,13 +21,13 @@ pub(crate) use exact::ExactIdentityPassV1;
 
 mod wcag22;
 
-pub(crate) use wcag22::{Wcag22Srgb8CapabilityV1, Wcag22Srgb8EvaluatorIdentityV1, Wcag22Srgb8V1};
+pub(crate) use wcag22::{
+    ApplicableWcag22EvaluationErrorV1, Wcag22Srgb8CapabilityV1, Wcag22Srgb8EvaluatorIdentityV1,
+    Wcag22Srgb8V1,
+};
 
 #[cfg(test)]
-pub(crate) use wcag22::{
-    ApplicableWcag22EvaluationErrorV1, ApplicableWcag22MeasurementV1, Wcag22PassV1,
-    Wcag22ViolationV1,
-};
+pub(crate) use wcag22::{ApplicableWcag22MeasurementV1, Wcag22PassV1, Wcag22ViolationV1};
 
 /// Test-only probe around the production Program WCAG evaluator. It records
 /// each physical visible signal without changing measurement or

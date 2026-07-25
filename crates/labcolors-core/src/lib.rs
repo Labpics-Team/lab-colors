@@ -24,7 +24,7 @@ pub mod ladder;
 pub mod lcs;
 #[expect(
     dead_code,
-    reason = "private F0 colour-identity foundation precedes the terminal public hard cut"
+    reason = "F0 colour-identity internals are exposed only through typed Program evidence"
 )]
 pub(crate) mod lcs_occurrence;
 pub(crate) mod lpc;
@@ -33,24 +33,24 @@ pub mod neutral;
 pub mod numerical_plan;
 #[expect(
     dead_code,
-    reason = "private F0 output-projection release firewall precedes the atomic public hard cut"
+    reason = "the output-profile firewall is intentionally internal to registered profiles"
 )]
 pub(crate) mod output_projection;
-#[doc(hidden)]
-pub mod package_bridge;
 #[cfg_attr(
     not(test),
     expect(
         dead_code,
-        reason = "private C8d full-support recheck is production-compiled before its package bridge exists"
+        reason = "the full-support recheck remains a private verified engine"
     )
 )]
 pub(crate) mod point_support;
+#[deny(missing_docs)]
+pub mod program;
 #[cfg_attr(
     not(test),
     expect(
         dead_code,
-        reason = "private Program compiler/lowering precedes its direct sole-Session bridge"
+        reason = "generic Program machinery is exposed only through the concrete public module"
     )
 )]
 pub(crate) mod program_session;
@@ -58,7 +58,7 @@ pub(crate) mod program_session;
     not(test),
     expect(
         dead_code,
-        reason = "private F0 release registry precedes the atomic public hard cut"
+        reason = "release-registry internals are projected only through typed public evidence"
     )
 )]
 pub(crate) mod release_registry;
@@ -116,7 +116,7 @@ mod generic_boundary_tests;
     not(test),
     expect(
         dead_code,
-        reason = "private F2 raw admission is production-compiled before its package bridge exists"
+        reason = "raw observation ownership is exposed only through the public Program session"
     )
 )]
 pub(crate) mod observation;
@@ -131,7 +131,7 @@ mod point_support_tests;
     not(test),
     expect(
         dead_code,
-        reason = "private F2 Session is production-compiled before C8c package integration exists"
+        reason = "the generic Session engine is exposed only through the public Program owner"
     )
 )]
 pub(crate) mod session;
@@ -143,7 +143,7 @@ mod session_tests;
     not(test),
     expect(
         dead_code,
-        reason = "private V2a joint selection is production-compiled before a public Program exists"
+        reason = "joint-selection internals are exposed only through the public Program contract"
     )
 )]
 pub(crate) mod joint;
@@ -359,8 +359,73 @@ pub struct NoHybridLpcSurfaceMetric;
 #[cfg(doctest)]
 pub struct NoPrematureScalarLpcApi;
 
-/// C8d recheck and F2 observation remain one private Session-owned protocol;
-/// they do not create a second public authoring root before C7c.
+/// Публичный Program API живёт только в одноимённом модуле и не сохраняет
+/// транспортный префикс, старый путь или корневые реэкспорты.
+///
+/// ```
+/// use labcolors_core::{Srgb8, program};
+///
+/// let source = program::SourceIdV1::new(1);
+/// let target = program::TargetIdV1::new(2);
+/// let input = program::SurfaceInputPortIdV1::new(3);
+/// let paint = program::PaintIdV1::new(4);
+/// let surface = program::SurfaceIdV1::new(5);
+/// let occurrence = program::OccurrenceIdV1::new(6);
+/// let constraint = program::ConstraintIdV1::new(7);
+/// let output = program::OutputSlotIdV1::new(8);
+/// let context = program::AppearanceContextV1::try_new(
+///     64.0,
+///     0.2,
+///     program::SurroundV1::Average,
+/// ).unwrap();
+/// let mut draft = program::DraftV1::new();
+///
+/// draft.push_source(source, Srgb8::new([0, 0, 0]));
+/// draft.push_fixed_target(target, source);
+/// draft.push_surface_input_port(input);
+/// draft.push_solid_paint(paint, target);
+/// draft.push_input_surface(surface, input);
+/// draft.push_source_over_occurrence(occurrence, paint, surface, context);
+/// draft.push_exact_hard(constraint, occurrence, Srgb8::new([0, 0, 0]));
+/// draft.push_output(output, paint);
+///
+/// let owner = draft.compile().unwrap();
+/// let mut session = owner.instantiate(1).unwrap();
+/// let white = [Srgb8::new([255, 255, 255])];
+/// let scenarios = [program::ScenarioV1::new(1, &white)];
+/// let projection = owner.update(
+///     &mut session,
+///     program::UpdateV1::Observed {
+///         revision: 1,
+///         scenarios: &scenarios,
+///     },
+/// ).unwrap();
+/// assert!(matches!(
+///     projection.operations().next(),
+///     Some(program::OperationV1::Set(_)),
+/// ));
+/// ```
+///
+/// ```compile_fail
+/// use labcolors_core::package_bridge;
+/// ```
+///
+/// ```compile_fail
+/// use labcolors_core::package_bridge::PackageProgramDraftV1;
+/// ```
+///
+/// ```compile_fail
+/// use labcolors_core::program::PackageProgramDraftV1;
+/// ```
+///
+/// ```compile_fail
+/// use labcolors_core::DraftV1;
+/// ```
+#[cfg(doctest)]
+pub struct ProgramApiBoundary;
+
+/// C8d recheck и F2 observation остаются деталями одной приватной Session;
+/// они не могут стать дополнительными public authoring/runtime roots.
 ///
 /// ```compile_fail
 /// use labcolors_core::point_support::CompiledPointSupportRecheckV1;

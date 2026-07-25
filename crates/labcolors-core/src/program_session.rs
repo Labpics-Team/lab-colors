@@ -1416,17 +1416,22 @@ pub enum ProgramSessionEvaluationError<EvaluationError> {
     Evaluator {
         case_index: usize,
         constraint: ConstraintId,
+        occurrence: OccurrenceId,
+        context: AppearanceContextId,
         source: EvaluationError,
     },
     ProgramTargetBinding {
         case_index: usize,
         constraint: ConstraintId,
+        occurrence: OccurrenceId,
+        context: AppearanceContextId,
         physical: Srgb8,
         modeled: Srgb8,
     },
     ModeledOccurrence {
         case_index: usize,
-        target: OccurrenceId,
+        occurrence: OccurrenceId,
+        context: AppearanceContextId,
         source: ModeledLcsOccurrenceFormationErrorV1,
     },
     OutputVariesAcrossCases {
@@ -1923,7 +1928,8 @@ where
                     .map_err(|source| {
                         ProgramSessionEvaluationError::ModeledOccurrence {
                             case_index,
-                            target: constraint.target_id,
+                            occurrence: constraint.target_id,
+                            context: binding.context,
                             source,
                         }
                     })?;
@@ -1947,6 +1953,8 @@ where
                     ProgramSessionEvaluationError::ProgramTargetBinding {
                         case_index,
                         constraint: constraint.id,
+                        occurrence: constraint.target_id,
+                        context: modeled_lcs_occurrence.occurrence().context(),
                         physical: source.physical(),
                         modeled: source.modeled(),
                     }
@@ -1955,6 +1963,8 @@ where
                     ProgramSessionEvaluationError::Evaluator {
                         case_index,
                         constraint: constraint.id,
+                        occurrence: constraint.target_id,
+                        context: modeled_lcs_occurrence.occurrence().context(),
                         source,
                     }
                 }
