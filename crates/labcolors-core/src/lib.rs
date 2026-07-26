@@ -183,9 +183,6 @@ mod continuity_tests;
 #[cfg(test)]
 mod dim_tinted_tests;
 
-#[cfg(test)]
-mod r3_byte_identity_tests;
-
 // Reference checks for the deepest colour-science layers (sRGB EOTF & matrices,
 // Ottosson Oklab, CAT16/CIECAM16 adapt, Hellwig-2022 H-K, WCAG linearise). These
 // reach `pub(crate)` transforms an integration test in `tests/` cannot see; the

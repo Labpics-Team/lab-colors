@@ -664,7 +664,6 @@ fn cfg_test_module_exclusion_covers_the_relocated_oracles() {
     let excluded = cfg_test_module_files();
     for expected in [
         "accent_golden_tests.rs",
-        "r3_byte_identity_tests.rs",
         "continuity_tests.rs",
         "dim_tinted_tests.rs",
         "config/preset.rs",

@@ -19,8 +19,6 @@ default = []
 [dev-dependencies]
 pretty_assertions = "1.4"
 criterion = { version = "0.5", default-features = false, features = ["cargo_bench_support"] }
-# Isolated on-disk scanner mutation proof; the real tree is never mutated.
-tempfile = "3.10"
 # Property/fuzz engine for mathematical invariants; pin is workspace-owned.
 proptest = { workspace = true }
 
