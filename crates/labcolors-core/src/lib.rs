@@ -476,8 +476,12 @@ pub struct NoPrematurePointSupportApi;
 pub struct NoRawFloatSrgbSerializer;
 
 /// Research-метка `EVIDENCE.md` не даёт права менять цвет (раздел 9
-/// контракта чистоты). Свойство структурное: целевой носитель необитаем, а
-/// конверсии из метки не существует ни в каком виде.
+/// контракта чистоты). Механизм — **несовпадение типов**: метка не является
+/// свидетельством ступени 4, и подстановка её на место свидетельства не
+/// компилируется. Названо именно так потому, что это утверждение переживёт
+/// день первого допуска: доктесты ниже падают по `E0308`, а не по
+/// необитаемости носителя, и останутся красными, когда носитель станет
+/// обитаемым.
 ///
 /// Метка не является свидетельством ступени 4:
 ///
@@ -525,6 +529,24 @@ pub struct NoMovementAuthorityFromResearchLabel;
 /// ```compile_fail
 /// use labcolors_core::cleanliness::QualityOutcomeV1;
 /// let _ = QualityOutcomeV1::Improved.cleanliness_score();
+/// ```
+///
+/// Проверка идёт по нескольким правдоподобным именам, а не по одному: канарейка
+/// на единственное имя доказывала бы лишь его отсутствие.
+///
+/// ```compile_fail
+/// use labcolors_core::cleanliness::QualityOutcomeV1;
+/// let _ = QualityOutcomeV1::Improved.dirtiness();
+/// ```
+///
+/// ```compile_fail
+/// use labcolors_core::cleanliness::QualityOutcomeV1;
+/// let _ = QualityOutcomeV1::Improved.score();
+/// ```
+///
+/// ```compile_fail
+/// use labcolors_core::cleanliness::QualityOutcomeV1;
+/// let _ = QualityOutcomeV1::Improved.purity();
 /// ```
 ///
 /// Исходы не сравнимы между собой: порядок есть только у приоритета правила

@@ -4,25 +4,15 @@ use crate::cleanliness::outcome::{
     MovementV1, OutcomePhaseV1, OutcomePriorityV1, QualityOutcomeV1,
 };
 
-/// Порядок объявления вариантов в типе — тот, в котором они написаны в
-/// контракте, и он намеренно **отличается** от порядка приоритета.
-const DECLARATION_ORDER: [QualityOutcomeV1; 15] = [
-    QualityOutcomeV1::Improved,
-    QualityOutcomeV1::ImprovedToAllowanceCap,
-    QualityOutcomeV1::PartiallyImproved,
-    QualityOutcomeV1::UnchangedDirectionalConflict,
-    QualityOutcomeV1::UnchangedContextUnresolvable,
-    QualityOutcomeV1::UnchangedNoAdmittedProfile,
-    QualityOutcomeV1::UnchangedNoReferenceState,
-    QualityOutcomeV1::UnchangedOutsideEvidenceSupport,
-    QualityOutcomeV1::UnchangedSignUnresolved,
-    QualityOutcomeV1::UnchangedProfileConflict,
-    QualityOutcomeV1::UnchangedUndominated,
-    QualityOutcomeV1::UnchangedImmutable,
-    QualityOutcomeV1::UnchangedEnumerationBudgetExhausted,
-    QualityOutcomeV1::UnchangedFailedEmissionRecheck,
-    QualityOutcomeV1::UnchangedNotFixedPoint,
-];
+/// Позиция варианта в объявлении типа.
+///
+/// Наблюдается **из самого типа**, а не из рукописного списка: у fieldless-enum
+/// без явных дискриминантов `as u8` даёт индекс объявления. Это существенно —
+/// второй рукописный список ничего бы не проверял, потому что автор, изменивший
+/// порядок в типе, изменил бы и его.
+fn declaration_index(outcome: QualityOutcomeV1) -> u8 {
+    outcome as u8
+}
 
 #[test]
 fn priority_ranks_are_contiguous_from_one() {
@@ -52,35 +42,63 @@ fn all_is_ordered_by_priority() {
     }
 }
 
-/// Биекция «тип ↔ приоритет»: ни одного исхода без ранга и ни одного ранга без
-/// исхода. Это та проверка, которую нормативный документ провалил в трёх
-/// последовательных ревью, поэтому она стоит здесь явно.
+/// Биекция «позиция объявления ↔ элемент `ALL`»: каждая позиция объявления
+/// встречается в `ALL` ровно один раз.
+///
+/// Сравнение идёт с индексами, наблюдаемыми из типа, а не с рукописным
+/// списком, поэтому проверка не может стать тавтологией.
 #[test]
-fn every_declared_variant_appears_exactly_once_in_all() {
-    for declared in DECLARATION_ORDER {
-        let hits = QualityOutcomeV1::ALL
-            .iter()
-            .filter(|candidate| **candidate == declared)
-            .count();
+fn every_declaration_position_appears_exactly_once_in_all() {
+    let indices: Vec<u8> = QualityOutcomeV1::ALL
+        .iter()
+        .map(|outcome| declaration_index(*outcome))
+        .collect();
+
+    for position in 0..QualityOutcomeV1::ALL.len() as u8 {
+        let hits = indices.iter().filter(|index| **index == position).count();
         assert_eq!(
             hits, 1,
-            "{declared:?} обязан встречаться в ALL ровно один раз"
+            "позиция объявления {position} обязана встречаться в ALL ровно один раз"
         );
     }
-    assert_eq!(DECLARATION_ORDER.len(), QualityOutcomeV1::ALL.len());
 }
 
-/// Анти-вакуум для самой проверки порядка.
+/// Анти-вакуум для проверок порядка.
 ///
-/// Если бы порядок объявления совпал с порядком приоритета, проверки выше
-/// стали бы бессодержательными, и заметить это было бы некому. Тест фиксирует,
-/// что порядки различны, чтобы будущее «косметическое» выравнивание краснело.
+/// Если бы порядок объявления совпал с приоритетным, проверки порядка стали бы
+/// бессодержательными. Тест берёт индексы объявления **из типа**: выравнивание
+/// порядков сделает последовательность вдоль `ALL` тождественной `0..15`, и
+/// тест покраснеет. Рукописный список этого поймать не мог — автор,
+/// переставивший варианты, переставил бы и его.
 #[test]
 fn declaration_order_differs_from_priority_order() {
+    let indices: Vec<u8> = QualityOutcomeV1::ALL
+        .iter()
+        .map(|outcome| declaration_index(*outcome))
+        .collect();
+    let identity: Vec<u8> = (0..QualityOutcomeV1::ALL.len() as u8).collect();
+
     assert_ne!(
-        DECLARATION_ORDER,
-        QualityOutcomeV1::ALL,
+        indices, identity,
         "порядок объявления обязан отличаться от приоритетного, иначе проверки порядка пусты"
+    );
+}
+
+/// Сам наблюдатель порядка не вакуумен: индексы обязаны быть различны и лежать
+/// в диапазоне типа. Без этого `declaration_index` мог бы вернуть константу, и
+/// оба теста выше стали бы бессмысленными.
+#[test]
+fn declaration_indices_are_distinct_and_in_range() {
+    let mut seen = [false; 15];
+    for outcome in QualityOutcomeV1::ALL {
+        let index = declaration_index(outcome) as usize;
+        assert!(index < seen.len(), "индекс объявления вне диапазона типа");
+        assert!(!seen[index], "индекс объявления {index} повторился");
+        seen[index] = true;
+    }
+    assert!(
+        seen.iter().all(|hit| *hit),
+        "не все позиции объявления заняты"
     );
 }
 
@@ -168,12 +186,6 @@ fn only_the_moved_phase_prescribes_movement() {
             "предписанное движение для {outcome:?}"
         );
     }
-
-    assert_eq!(
-        QualityOutcomeV1::UnchangedFailedEmissionRecheck.verdict_movement(),
-        MovementV1::Unchanged,
-        "откат после провала recheck не вправе предписывать движение"
-    );
 }
 
 /// Ключ, начинающийся на `unchanged-`, обязан отвечать вердикту без движения,
@@ -197,7 +209,6 @@ fn no_admitted_profile_is_distinct_from_outside_support() {
     let no_profile = QualityOutcomeV1::UnchangedNoAdmittedProfile;
     let outside = QualityOutcomeV1::UnchangedOutsideEvidenceSupport;
 
-    assert_ne!(no_profile, outside);
     assert_ne!(no_profile.key(), outside.key());
     assert_ne!(no_profile.priority(), outside.priority());
     assert!(

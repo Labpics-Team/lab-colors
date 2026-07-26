@@ -77,7 +77,7 @@ impl ProfileRegistryRowV1 {
     pub const fn movement_authority(self) -> Option<MovementAuthorityV1> {
         match self {
             Self::NoAdmittedProfile(_) => None,
-            Self::Admitted(profile) => Some(profile.authority()),
+            Self::Admitted(profile) => profile.absurd(),
         }
     }
 }
@@ -97,12 +97,11 @@ impl AdmittedProfileV1 {
         self.mode
     }
 
-    /// Право двигать цвет, вытекающее из свидетельства ступени 4.
-    pub const fn authority(self) -> MovementAuthorityV1 {
-        MovementAuthorityV1::from_admission(self.admission)
-    }
-
     /// Значения не существует, поэтому вызов недостижим.
+    ///
+    /// Аксессора «право двигать цвет» у профиля намеренно нет: право берётся
+    /// только из свидетельства ступени 4, и конструировать его из необитаемого
+    /// носителя незачем — ветвь всё равно недостижима и разрешается здесь.
     pub const fn absurd(self) -> ! {
         self.admission.absurd()
     }
