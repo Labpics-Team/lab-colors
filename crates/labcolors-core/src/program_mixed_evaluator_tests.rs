@@ -694,6 +694,7 @@ fn assert_unknown_head(
 
 #[test]
 fn one_program_retains_typed_exact_and_wcag22_outcomes() {
+    let declared_context = context();
     let program: CoreProgramV1 = Program::new(
         vec![Source::new(SOURCE, signal([0; 3]))],
         vec![Target::fixed(TARGET, SOURCE)],
@@ -712,7 +713,7 @@ fn one_program_retains_typed_exact_and_wcag22_outcomes() {
             PAINT,
             SURFACE,
             CompositionProfile::EncodedSrgb8SourceOverV1,
-            context(),
+            declared_context,
         )],
         ConstraintSet::new(
             vec![
@@ -758,7 +759,7 @@ fn one_program_retains_typed_exact_and_wcag22_outcomes() {
         evidence.capability(),
         &ExactIdentityCapabilityV1::FinalOccurrenceSrgb8IdentityV1,
     );
-    assert_eq!(evidence.binding().context(), exact.appearance_context());
+    assert_eq!(evidence.binding().context(), declared_context);
 
     let ProgramConstraintResultV1::Pass(CoreProgramPassEvidenceV1::Wcag22Srgb8(evidence)) =
         wcag.result()
@@ -766,7 +767,7 @@ fn one_program_retains_typed_exact_and_wcag22_outcomes() {
         panic!("the second cell must retain WCAG22-specific pass evidence");
     };
     assert_eq!(evidence.release(), &wcag22_profile_v1().profile_id);
-    assert_eq!(evidence.binding().context(), wcag.appearance_context());
+    assert_eq!(evidence.binding().context(), declared_context);
     assert_ne!(
         core::any::type_name_of_val(evidence.identity()),
         core::any::type_name_of_val(exact.result()),

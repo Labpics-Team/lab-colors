@@ -980,8 +980,13 @@ fn program_session_keeps_physical_evidence_separate_from_lazy_lcs_capability() {
             "the explicit lazy LCS capability is incomplete; missing `{required}`",
         );
     }
+    let lcs_adapter = source_scope(
+        CONSTRAINTS_SOURCE,
+        "pub(crate) struct ProgramLcsPointAdapterV1 {",
+        "#[cfg(test)]\nimpl Evaluator<ProgramLcsPointTargetV1>",
+    );
     assert!(
-        !CONSTRAINTS_SOURCE.contains("Option<ModeledLcsOccurrenceV1>"),
+        !lcs_adapter.contains("Option<ModeledLcsOccurrenceV1>"),
         "LCS capability must be a typed adapter, not an optional field state",
     );
     let lcs_target_impl = normalized_source_scope(
@@ -1011,6 +1016,36 @@ fn program_session_keeps_physical_evidence_separate_from_lazy_lcs_capability() {
 
 #[test]
 fn program_identity_binds_lcs_releases_only_through_lcs_constraint_content() {
+    let identity_sources = [
+        ("program_identity.rs", PROGRAM_IDENTITY_SOURCE),
+        ("program_session.rs", PROGRAM_SESSION_SOURCE),
+        ("program.rs", PROGRAM_SOURCE),
+    ];
+    for retired in [
+        "ProgramContentIdentityV1",
+        "ContentIdentityV1",
+        "DOMAIN_V1",
+        "PROGRAM_SCHEMA_V1",
+        "compile_program_content_identity_v1",
+    ] {
+        for (path, source) in identity_sources {
+            assert!(
+                !contains_rust_identifier(source, retired),
+                "the V2 content-address cut must not retain legacy identity symbol `{retired}` in {path}",
+            );
+        }
+    }
+    assert!(!PROGRAM_IDENTITY_SOURCE.contains("labcolors.program-content-identity.v1"));
+    for required in [
+        "const DOMAIN_V2: &[u8] = b\"labcolors.program-content-identity.v2\\0\";",
+        "pub(super) const PROGRAM_SCHEMA_V2: u8 = 2;",
+    ] {
+        assert!(
+            PROGRAM_IDENTITY_SOURCE.contains(required),
+            "the V2 content-address type must bind its exact domain and schema tag; missing `{required}`",
+        );
+    }
+
     let root = normalized_source_scope(
         PROGRAM_IDENTITY_SOURCE,
         "fn program_root_color()",

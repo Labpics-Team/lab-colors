@@ -47,7 +47,7 @@ use crate::wcag22::Wcag22CriterionV1;
 
 #[path = "program_identity.rs"]
 mod identity;
-pub(crate) use identity::ProgramContentIdentityV1;
+pub(crate) use identity::ProgramContentIdentityV2;
 
 /// Opaque identity of one immutable authored colour source.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -1055,7 +1055,7 @@ where
     Evaluation: ProgramConstraintEvaluatorSetV1,
     ProgramConstraintInvocationOf<Evaluation>: Copy,
 {
-    content_identity: ProgramContentIdentityV1,
+    content_identity: ProgramContentIdentityV2,
     evaluator: Evaluation,
     graph: CompiledAppearanceGraph,
     binding_template: AdmittedAppearanceBindings,
@@ -1095,12 +1095,12 @@ where
         self.owner_generation.observation_group.id
     }
 
-    /// Контентный адрес Program в границах схемы V1.
+    /// Контентный адрес Program в границах схемы V2.
     ///
     /// Opaque ID и порядок неупорядоченных объявлений исключены; явный joint
     /// order входит в адрес. Адрес не подтверждает поколение владельца и не
     /// заменяет revision-bound evidence.
-    pub fn content_identity(&self) -> ProgramContentIdentityV1 {
+    pub fn content_identity(&self) -> ProgramContentIdentityV2 {
         self.owner_generation.content_identity
     }
 
@@ -1277,7 +1277,7 @@ pub struct ProgramReportV1<Evaluation>
 where
     Evaluation: ProgramConstraintEvaluatorSetV1,
 {
-    content_identity: ProgramContentIdentityV1,
+    content_identity: ProgramContentIdentityV2,
     observation: RevisionBoundObservationV1,
     cells: Vec<ProgramConstraintCellV1<Evaluation>>,
 }
@@ -1288,7 +1288,7 @@ where
 {
     /// Адрес содержимого Program, по которому построен report; это не
     /// идентификатор поколения и не runtime-authority.
-    pub const fn content_identity(&self) -> ProgramContentIdentityV1 {
+    pub const fn content_identity(&self) -> ProgramContentIdentityV2 {
         self.content_identity
     }
 
@@ -2102,7 +2102,7 @@ where
     let occurrence_contexts =
         compact_constraint_contexts(&all_occurrence_contexts, &mut constraints)?;
     let outputs = compile_outputs(&graph, &mut program.outputs)?;
-    let content_identity = identity::compile_program_content_identity_v1(&program)?;
+    let content_identity = identity::compile_program_content_identity_v2(&program)?;
     Ok(ProgramEpochV1 {
         content_identity,
         evaluator: program.evaluator,

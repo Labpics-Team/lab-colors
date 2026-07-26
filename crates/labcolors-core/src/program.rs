@@ -35,7 +35,7 @@
 //! [`CertificateV1::Verified`] хранит выбранное состояние, все клетки
 //! доказательства и сертифицированные выходы. [`CertificateV1::Conflict`]
 //! хранит исчерпывающий конфликт по всем рассмотренным состояниям.
-//! [`ContentIdentityV1`] идентифицирует каноническое содержание, но не даёт
+//! [`ContentIdentityV2`] идентифицирует каноническое содержание, но не даёт
 //! полномочий живого [`OwnerV1`].
 
 #![forbid(unreachable_pub)]
@@ -56,8 +56,7 @@ use crate::lcs_occurrence::{
     AdaptingLuminanceCdM2, AppearanceContextDomainErrorV1,
     AppearanceContextFieldV1 as CoreAppearanceContextFieldV1, AppearanceContextId,
     AppearanceContextSchemaReleaseId, BackgroundLuminanceRatio, ColorSignal, ColorSignalViewV1,
-    ColorimetricFrameId, ColorimetricFrameReleaseId, IEC_SRGB_D65_XYZ_FRAME_V1, NumericDomainError,
-    ObserverProfileId, ReferenceWhiteId, SurroundProfileId, TristimulusScale,
+    IEC_SRGB_D65_XYZ_FRAME_V1, NumericDomainError, SurroundProfileId,
 };
 use crate::numerics::NumericalDecisionEvidenceV1;
 use crate::observation::{
@@ -70,7 +69,7 @@ use crate::program_session::{
     CoreProgramEvaluatorErrorV1, CoreProgramEvaluatorsV1, CoreProgramPassEvidenceV1,
     CoreProgramViolationEvidenceV1, DeclaredJointSelectionV1, JointCandidateStateV1, Occurrence,
     OpacityInput, OutputBinding, OutputSlotId, Paint, ProgramCompileError, ProgramConflictV1,
-    ProgramConstraintCellV1, ProgramConstraintResultV1, ProgramContentIdentityV1, ProgramOutputV1,
+    ProgramConstraintCellV1, ProgramConstraintResultV1, ProgramContentIdentityV2, ProgramOutputV1,
     ProgramSessionEvaluationError, ProgramSessionInstantiateError, ProgramSessionPlan,
     ProgramVerifiedV1, Source, SourceId, Surface, Target, TargetCandidateChoiceV1,
     TargetCandidateId, TargetCandidateV1 as CoreTargetCandidateV1, TargetId,
@@ -1315,8 +1314,8 @@ impl OwnerV1 {
     ///
     /// Identity доступна до первого update, но не заменяет полномочия этой
     /// конкретной owner-эпохи.
-    pub(crate) fn content_identity(&self) -> ContentIdentityV1 {
-        ContentIdentityV1::from_core(self.compiled.content_identity())
+    pub(crate) fn content_identity(&self) -> ContentIdentityV2 {
+        ContentIdentityV2::from_core(self.compiled.content_identity())
     }
 
     /// Вычисляет верхние границы клеток для prospective Observed-update.
@@ -1364,7 +1363,7 @@ impl OwnerV1 {
 
     /// Проецирует операции только для Session этой точной owner-эпохи.
     ///
-    /// Равенство [`ContentIdentityV1`] не даёт полномочий.
+    /// Равенство [`ContentIdentityV2`] не даёт полномочий.
     pub(crate) fn project<'owner, 'session>(
         &'owner self,
         session: &'session SessionV1,
@@ -1692,10 +1691,10 @@ impl<'owner, 'session> ProjectionV1<'owner, 'session> {
 /// Identity не идентифицирует owner-эпоху и не даёт runtime-полномочий.
 #[repr(transparent)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(crate) struct ContentIdentityV1([u8; 32]);
+pub(crate) struct ContentIdentityV2([u8; 32]);
 
-impl ContentIdentityV1 {
-    const fn from_core(value: ProgramContentIdentityV1) -> Self {
+impl ContentIdentityV2 {
+    const fn from_core(value: ProgramContentIdentityV2) -> Self {
         Self(*value.as_bytes())
     }
 
@@ -1713,8 +1712,8 @@ pub(crate) struct VerifiedCertificateV1<'a> {
 
 impl<'a> VerifiedCertificateV1<'a> {
     /// Возвращает identity скомпилированного содержания.
-    pub(crate) const fn content_identity(self) -> ContentIdentityV1 {
-        ContentIdentityV1::from_core(self.inner.report().content_identity())
+    pub(crate) const fn content_identity(self) -> ContentIdentityV2 {
+        ContentIdentityV2::from_core(self.inner.report().content_identity())
     }
 
     /// Возвращает точное наблюдение, на котором выдан сертификат.
@@ -1759,8 +1758,8 @@ pub(crate) struct ConflictCertificateV1<'a> {
 
 impl<'a> ConflictCertificateV1<'a> {
     /// Возвращает identity скомпилированного содержания.
-    pub(crate) const fn content_identity(self) -> ContentIdentityV1 {
-        ContentIdentityV1::from_core(self.inner.report().content_identity())
+    pub(crate) const fn content_identity(self) -> ContentIdentityV2 {
+        ContentIdentityV2::from_core(self.inner.report().content_identity())
     }
 
     /// Возвращает точное наблюдение, вызвавшее конфликт.
@@ -1809,7 +1808,7 @@ impl<'a> CertificateV1<'a> {
     }
 
     /// Возвращает identity скомпилированного содержания.
-    pub(crate) const fn content_identity(self) -> ContentIdentityV1 {
+    pub(crate) const fn content_identity(self) -> ContentIdentityV2 {
         match self {
             Self::Verified(value) => value.content_identity(),
             Self::Conflict(value) => value.content_identity(),
@@ -2052,7 +2051,7 @@ impl<'a> AssessmentV1<'a> {
         }
     }
 
-    /// Возвращает общую физическую и моделированную привязку точки.
+    /// Возвращает физическую occurrence-привязку и объявленный appearance context.
     pub(crate) fn binding(self) -> PointBindingV1<'a> {
         match self {
             Self::ExactSrgb8(value) => value.binding(),
@@ -2076,7 +2075,7 @@ enum ExactSrgb8EvidenceRefV1<'a> {
     Violation(&'a CoreExactViolationEvidenceV1),
 }
 
-/// Evidence точного sRGB8 сравнения с физикой и моделированным контекстом.
+/// Evidence точного sRGB8 сравнения с физической occurrence и объявленным context.
 #[derive(Clone, Copy)]
 pub(crate) struct ExactSrgb8EvidenceV1<'a> {
     inner: ExactSrgb8EvidenceRefV1<'a>,
@@ -2099,7 +2098,7 @@ impl<'a> ExactSrgb8EvidenceV1<'a> {
         }
     }
 
-    /// Возвращает физическую и моделированную привязку точки.
+    /// Возвращает физическую occurrence-привязку и объявленный appearance context.
     pub(crate) fn binding(self) -> PointBindingV1<'a> {
         let value = match self.inner {
             ExactSrgb8EvidenceRefV1::Pass(value) => value.binding(),
@@ -2115,7 +2114,7 @@ enum Wcag22Srgb8EvidenceRefV1<'a> {
     Violation(&'a CoreWcag22ViolationEvidenceV1),
 }
 
-/// WCAG 2.2 evidence вместе с физикой и моделированным контекстом.
+/// WCAG 2.2 evidence с физической occurrence и объявленным appearance context.
 #[derive(Clone, Copy)]
 pub(crate) struct Wcag22Srgb8EvidenceV1<'a> {
     inner: Wcag22Srgb8EvidenceRefV1<'a>,
@@ -2172,7 +2171,7 @@ impl<'a> Wcag22Srgb8EvidenceV1<'a> {
         }
     }
 
-    /// Возвращает физическую и моделированную привязку точки.
+    /// Возвращает физическую occurrence-привязку и объявленный appearance context.
     pub(crate) fn binding(self) -> PointBindingV1<'a> {
         let value = match self.inner {
             Wcag22Srgb8EvidenceRefV1::Pass(value) => value.binding(),
@@ -2610,16 +2609,6 @@ pub(crate) enum ObservationBindingFailureV1 {
         /// Фактический порт либо конец observation schema.
         actual: Option<SurfaceInputPortIdV1>,
     },
-}
-
-/// Зарегистрированная identity XYZ-frame в диагностике закрытого Core.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ColorimetricFrameV1 {
-    /// CIE 1931 2°, IEC 61966-2-1 D65, относительная шкала `Y=1`, XYZ v1.
-    Iec61966Srgb8D65XyzRelativeY1V1,
-    /// Зарезервированный frame hostile-теста, недостижимый в production.
-    #[cfg(test)]
-    MutationSentinelV1,
 }
 
 /// Точное недопустимое protocol-состояние зарегистрированного evaluator-а.
@@ -3062,39 +3051,6 @@ fn map_program_compile_error(error: ProgramCompileError) -> CompileErrorV1 {
         }
         ProgramCompileError::ResourceExhausted => CompileErrorV1::ResourceExhausted,
         ProgramCompileError::InternalInvariant => CompileErrorV1::InternalInvariant,
-    }
-}
-
-const fn map_colorimetric_frame(frame: ColorimetricFrameId) -> ColorimetricFrameV1 {
-    match (
-        frame.observer(),
-        frame.reference_white(),
-        frame.scale(),
-        frame.release(),
-    ) {
-        (
-            ObserverProfileId::Cie1931TwoDegreeV1,
-            ReferenceWhiteId::Iec61966D65ChromaticityV1,
-            TristimulusScale::RelativeY1,
-            ColorimetricFrameReleaseId::XyzV1,
-        ) => ColorimetricFrameV1::Iec61966Srgb8D65XyzRelativeY1V1,
-        #[cfg(test)]
-        (
-            ObserverProfileId::Cie1931TwoDegreeV1,
-            ReferenceWhiteId::Iec61966D65ChromaticityV1,
-            TristimulusScale::RelativeY1,
-            ColorimetricFrameReleaseId::MutationSentinelV1,
-        ) => ColorimetricFrameV1::MutationSentinelV1,
-    }
-}
-
-const fn map_numeric_domain_error(error: NumericDomainError) -> NumericDomainErrorV1 {
-    match error {
-        NumericDomainError::NonFinite => NumericDomainErrorV1::NonFinite,
-        NumericDomainError::Negative => NumericDomainErrorV1::Negative,
-        NumericDomainError::NotPositive => NumericDomainErrorV1::NotPositive,
-        NumericDomainError::AboveOne => NumericDomainErrorV1::AboveOne,
-        NumericDomainError::HueOutOfRange => NumericDomainErrorV1::HueOutOfRange,
     }
 }
 

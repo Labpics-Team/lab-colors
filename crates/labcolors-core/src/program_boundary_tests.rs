@@ -9,12 +9,12 @@ use crate::Srgb8;
 use crate::program::{
     AppearanceContextErrorKindV1, AppearanceContextFieldV1, AppearanceContextV1, AssessmentV1,
     CertificateV1, CompileErrorHandleV1, CompileErrorKindV1, CompileErrorV1, ConstraintIdV1,
-    DraftErrorV1, DraftV1, EvidenceBoundsErrorV1, InstantiateErrorV1, JointChoiceV1,
-    JointOrderErrorV1, JointStateV1, NumericDomainErrorV1, ObservationHeadV1, OccurrenceIdV1,
-    OpacityInputIdV1, OperationV1, OutputSlotIdV1, OwnerV1, PaintIdV1, PhysicalPointV1,
-    ProjectionV1, ScenarioV1, SessionV1, SignalV1, SourceIdV1, StateKindV1, SurfaceIdV1,
-    SurfaceInputPortIdV1, SurroundV1, TargetCandidateIdV1, TargetCandidateV1, TargetIdV1,
-    UpdateErrorKindV1, UpdateErrorV1, UpdateV1, VerdictV1,
+    ContentIdentityV2, DraftErrorV1, DraftV1, EvidenceBoundsErrorV1, InstantiateErrorV1,
+    JointChoiceV1, JointOrderErrorV1, JointStateV1, NumericDomainErrorV1, ObservationHeadV1,
+    OccurrenceIdV1, OpacityInputIdV1, OperationV1, OutputSlotIdV1, OwnerV1, PaintIdV1,
+    PhysicalPointV1, ProjectionV1, ScenarioV1, SessionV1, SignalV1, SourceIdV1, StateKindV1,
+    SurfaceIdV1, SurfaceInputPortIdV1, SurroundV1, TargetCandidateIdV1, TargetCandidateV1,
+    TargetIdV1, UpdateErrorKindV1, UpdateErrorV1, UpdateV1, VerdictV1,
 };
 use crate::wcag22::Wcag22CriterionV1;
 
@@ -677,7 +677,7 @@ fn owner_and_update_errors_preserve_content_and_input_identity() {
     let owner = fixed_nested_draft(1.0, SourceIdV1::new(1), input, input)
         .compile()
         .unwrap();
-    let owner_identity = owner.content_identity();
+    let owner_identity: ContentIdentityV2 = owner.content_identity();
     let mut session = owner.instantiate(13).unwrap();
 
     let no_scenarios = [];

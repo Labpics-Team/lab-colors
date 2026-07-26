@@ -7,15 +7,15 @@
 
 use super::*;
 
-const DOMAIN_V1: &[u8] = b"labcolors.program-content-identity.v1\0";
-// Максимальный V1-цвет принадлежит Occurrence: теги вершины, композиции,
+const DOMAIN_V2: &[u8] = b"labcolors.program-content-identity.v2\0";
+// Максимальный V2-цвет принадлежит Occurrence: теги вершины, композиции,
 // контекста и frame, два binary64-параметра наблюдения и surround. Явная
 // граница устраняет аллокацию на каждую вершину и требует пересмотра при
 // расширении схемы вместо скрытого runtime-лимита.
 const COLOR_CAPACITY: usize = 1 + 1 + 1 + 4 + 8 + 8 + 1;
 
 mod release_tag {
-    pub(super) const PROGRAM_SCHEMA_V1: u8 = 1;
+    pub(super) const PROGRAM_SCHEMA_V2: u8 = 2;
     pub(super) const DECLARED_TOTAL_ORDER_V1: u8 = 1;
     pub(super) const FRESH_FULL_RECHECK_V1: u8 = 1;
     pub(super) const ATOMIC_OBSERVATION_GROUP_V1: u8 = 1;
@@ -62,14 +62,14 @@ mod release_tag {
     pub(super) const MODELED_LCS_PROBE_FAMILY_V1: u8 = 3;
 }
 
-/// Устойчивый к коллизиям адрес канонизированного содержимого Program V1.
+/// Устойчивый к коллизиям адрес канонизированного содержимого Program V2.
 ///
 /// SHA-256 не делает адрес инъективным. Адрес не связывает пространства opaque
 /// ID и не подтверждает владельца, поколение либо revision.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(crate) struct ProgramContentIdentityV1([u8; 32]);
+pub(crate) struct ProgramContentIdentityV2([u8; 32]);
 
-impl ProgramContentIdentityV1 {
+impl ProgramContentIdentityV2 {
     pub(crate) const fn as_bytes(&self) -> &[u8; 32] {
         &self.0
     }
@@ -326,7 +326,7 @@ fn program_root_color() -> Result<VertexColorV1, ProgramCompileError> {
     // encoded Paint emission. Derived capability releases bind only the
     // constraints that execute them.
     for release in [
-        release_tag::PROGRAM_SCHEMA_V1,
+        release_tag::PROGRAM_SCHEMA_V2,
         release_tag::DECLARED_TOTAL_ORDER_V1,
         release_tag::FRESH_FULL_RECHECK_V1,
         release_tag::ATOMIC_OBSERVATION_GROUP_V1,
@@ -992,7 +992,7 @@ fn serialize_leaf(
             .and_then(|value| value.checked_add(color.as_slice().len()))
             .ok_or(ProgramCompileError::ResourceExhausted)
     })?;
-    let capacity = DOMAIN_V1
+    let capacity = DOMAIN_V2
         .len()
         .checked_add(16)
         .and_then(|value| value.checked_add(color_bytes))
@@ -1002,7 +1002,7 @@ fn serialize_leaf(
     output
         .try_reserve_exact(capacity)
         .map_err(|_| ProgramCompileError::ResourceExhausted)?;
-    output.extend_from_slice(DOMAIN_V1);
+    output.extend_from_slice(DOMAIN_V2);
     push_u64_bytes(&mut output, usize_as_u64(graph.colors.len())?);
     push_u64_bytes(&mut output, usize_as_u64(graph.edge_count)?);
 
@@ -1336,9 +1336,9 @@ fn canonical_preimage(graph: &CanonicalGraphV1) -> Result<Vec<u8>, ProgramCompil
     canonical_search(graph).map(|(preimage, _)| preimage)
 }
 
-pub(super) fn compile_program_content_identity_v1<Evaluation>(
+pub(super) fn compile_program_content_identity_v2<Evaluation>(
     program: &Program<Evaluation>,
-) -> Result<ProgramContentIdentityV1, ProgramCompileError>
+) -> Result<ProgramContentIdentityV2, ProgramCompileError>
 where
     Evaluation: ProgramConstraintEvaluatorSetV1,
     ProgramConstraintInvocationOf<Evaluation>: Copy,
@@ -1346,7 +1346,7 @@ where
     let graph = build_graph(program)?;
     let preimage = canonical_preimage(&graph)?;
     let digest = crate::sha256::digest(&preimage);
-    Ok(ProgramContentIdentityV1(*digest.as_bytes()))
+    Ok(ProgramContentIdentityV2(*digest.as_bytes()))
 }
 
 #[cfg(test)]

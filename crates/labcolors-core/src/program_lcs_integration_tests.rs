@@ -574,7 +574,7 @@ fn equal_bytes_and_context_cannot_mix_provenance_between_physical_occurrences() 
 }
 
 #[test]
-fn encoded_only_program_evaluators_do_not_derive_lcs() {
+fn exact_report_only_program_does_not_derive_lcs() {
     let compiled = compiled_duplicate_constraint_program();
     let mut session = compiled.instantiate(STREAM_A).unwrap();
     MODELED_TRISTIMULUS_DERIVATION_CALLS.with(|calls| calls.set(0));
@@ -596,7 +596,10 @@ fn encoded_only_program_evaluators_do_not_derive_lcs() {
         cam16_forwards, 0,
         "Program lowering must not eagerly derive the contextual CAM16 view",
     );
+}
 
+#[test]
+fn wcag_program_does_not_derive_lcs() {
     let compiled = compiled_wcag_program(1.0);
     let mut session = compiled.instantiate(STREAM_A).unwrap();
     MODELED_TRISTIMULUS_DERIVATION_CALLS.with(|calls| calls.set(0));
@@ -638,6 +641,7 @@ fn encoded_only_program_is_not_rejected_by_an_lcs_incompatible_declared_context(
     assert_eq!(
         MODELED_TRISTIMULUS_DERIVATION_CALLS.with(|calls| calls.get()),
         0,
+        "an LCS-incompatible declared context must not be derived by an encoded-only constraint",
     );
 }
 
