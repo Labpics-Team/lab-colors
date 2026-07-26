@@ -109,9 +109,9 @@ jobs:
         run: |
           echo "RUSTUP_HOME=$RUNNER_TEMP/rustup-$GITHUB_JOB" >> "$GITHUB_ENV"
           echo "CARGO_HOME=$RUNNER_TEMP/cargo-$GITHUB_JOB" >> "$GITHUB_ENV"
-          # TMPDIR тоже с tmpfs: staging cargo install (aws-lc-sys ~ГБ) и
-          # tempfile-доктесты забивали 8ГБ /tmp до 100% (4КБ свободно, все
-          # джобы умирали «abnormal exit»/cc без stderr, 2026-07-03 18:34Z).
+          # TMPDIR тоже изолирован под runner.temp: /tmp на de-02 — 8ГБ tmpfs;
+          # при исчерпании места (4КБ свободно) все
+          # джобы умирали «abnormal exit»/cc без stderr, 2026-07-03 18:34Z.
           echo "TMPDIR=$RUNNER_TEMP/tmp-$GITHUB_JOB" >> "$GITHUB_ENV"
           mkdir -p "$RUNNER_TEMP/tmp-$GITHUB_JOB"
       - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master @ 2026-03-27
@@ -143,9 +143,9 @@ jobs:
         run: |
           echo "RUSTUP_HOME=$RUNNER_TEMP/rustup-$GITHUB_JOB" >> "$GITHUB_ENV"
           echo "CARGO_HOME=$RUNNER_TEMP/cargo-$GITHUB_JOB" >> "$GITHUB_ENV"
-          # TMPDIR тоже с tmpfs: staging cargo install (aws-lc-sys ~ГБ) и
-          # tempfile-доктесты забивали 8ГБ /tmp до 100% (4КБ свободно, все
-          # джобы умирали «abnormal exit»/cc без stderr, 2026-07-03 18:34Z).
+          # TMPDIR тоже изолирован под runner.temp: /tmp на de-02 — 8ГБ tmpfs;
+          # при исчерпании места (4КБ свободно) все
+          # джобы умирали «abnormal exit»/cc без stderr, 2026-07-03 18:34Z.
           echo "TMPDIR=$RUNNER_TEMP/tmp-$GITHUB_JOB" >> "$GITHUB_ENV"
           mkdir -p "$RUNNER_TEMP/tmp-$GITHUB_JOB"
       - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master @ 2026-03-27
@@ -207,20 +207,14 @@ jobs:
         run: |
           echo "RUSTUP_HOME=$RUNNER_TEMP/rustup-$GITHUB_JOB" >> "$GITHUB_ENV"
           echo "CARGO_HOME=$RUNNER_TEMP/cargo-$GITHUB_JOB" >> "$GITHUB_ENV"
-          # TMPDIR тоже с tmpfs: staging cargo install (aws-lc-sys ~ГБ) и
-          # tempfile-доктесты забивали 8ГБ /tmp до 100% (4КБ свободно, все
-          # джобы умирали «abnormal exit»/cc без stderr, 2026-07-03 18:34Z).
+          # TMPDIR тоже изолирован под runner.temp: /tmp на de-02 — 8ГБ tmpfs;
+          # при исчерпании места (4КБ свободно) все
+          # джобы умирали «abnormal exit»/cc без stderr, 2026-07-03 18:34Z.
           echo "TMPDIR=$RUNNER_TEMP/tmp-$GITHUB_JOB" >> "$GITHUB_ENV"
           mkdir -p "$RUNNER_TEMP/tmp-$GITHUB_JOB"
       - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master @ 2026-03-27
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
-          # The lint_parity.rs meta-test (run by `cargo test`) shells out to
-          # `cargo +1.96.0 fmt --check` and `cargo +1.96.0 clippy`, so this job
-          # must provision those components on the SAME pinned toolchain — without
-          # them the meta-test panics with "'cargo-clippy'/'cargo-fmt' is not
-          # installed for the toolchain '1.96.0'". Kept in lockstep with the lint job.
-          components: clippy, rustfmt
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
       - name: cargo test
         run: cargo test --workspace --locked
@@ -332,9 +326,9 @@ jobs:
         run: |
           echo "RUSTUP_HOME=$RUNNER_TEMP/rustup-$GITHUB_JOB" >> "$GITHUB_ENV"
           echo "CARGO_HOME=$RUNNER_TEMP/cargo-$GITHUB_JOB" >> "$GITHUB_ENV"
-          # TMPDIR тоже с tmpfs: staging cargo install (aws-lc-sys ~ГБ) и
-          # tempfile-доктесты забивали 8ГБ /tmp до 100% (4КБ свободно, все
-          # джобы умирали «abnormal exit»/cc без stderr, 2026-07-03 18:34Z).
+          # TMPDIR тоже изолирован под runner.temp: /tmp на de-02 — 8ГБ tmpfs;
+          # при исчерпании места (4КБ свободно) все
+          # джобы умирали «abnormal exit»/cc без stderr, 2026-07-03 18:34Z.
           echo "TMPDIR=$RUNNER_TEMP/tmp-$GITHUB_JOB" >> "$GITHUB_ENV"
           mkdir -p "$RUNNER_TEMP/tmp-$GITHUB_JOB"
       - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master @ 2026-03-27
@@ -383,9 +377,9 @@ jobs:
           echo "RUSTUP_HOME=$RUNNER_TEMP/rustup-$GITHUB_JOB" >> "$GITHUB_ENV"
           echo "CARGO_HOME=$RUNNER_TEMP/cargo-$GITHUB_JOB" >> "$GITHUB_ENV"
           echo "WASM_PACK_CACHE=$RUNNER_TEMP/wasm-pack-$GITHUB_JOB" >> "$GITHUB_ENV"
-          # TMPDIR тоже с tmpfs: staging cargo install (aws-lc-sys ~ГБ) и
-          # tempfile-доктесты забивали 8ГБ /tmp до 100% (4КБ свободно, все
-          # джобы умирали «abnormal exit»/cc без stderr, 2026-07-03 18:34Z).
+          # TMPDIR тоже изолирован под runner.temp: /tmp на de-02 — 8ГБ tmpfs;
+          # при исчерпании места (4КБ свободно) все
+          # джобы умирали «abnormal exit»/cc без stderr, 2026-07-03 18:34Z.
           echo "TMPDIR=$RUNNER_TEMP/tmp-$GITHUB_JOB" >> "$GITHUB_ENV"
           mkdir -p "$RUNNER_TEMP/tmp-$GITHUB_JOB" "$RUNNER_TEMP/wasm-pack-$GITHUB_JOB"
       - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master @ 2026-03-27

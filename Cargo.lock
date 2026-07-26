@@ -498,7 +498,6 @@ dependencies = [
  "criterion",
  "pretty_assertions",
  "proptest",
- "tempfile",
 ]
 
 [[package]]
