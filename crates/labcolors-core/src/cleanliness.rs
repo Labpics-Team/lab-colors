@@ -30,6 +30,7 @@
 pub mod admission;
 pub mod outcome;
 pub mod registry;
+pub mod report;
 
 pub use admission::{
     AdmittedLevelV1, AutoActionAdmissionV1, DispositionV1, MovementAuthorityV1, ResearchLabelV1,
@@ -38,4 +39,8 @@ pub use outcome::{MovementV1, OutcomePhaseV1, OutcomePriorityV1, QualityOutcomeV
 pub use registry::{
     AdmittedProfileV1, AppearanceModeV1, ProfileRegistryRowV1, movement_authority_v1,
     profile_registry_row_v1, profile_registry_v1,
+};
+pub use report::{
+    ProfileWiseOrderingV1, QualityModeV1, QualityReportV1, SlotClassV1, SlotQualityV1,
+    evaluate_slot_v1, slot_quality_v1,
 };

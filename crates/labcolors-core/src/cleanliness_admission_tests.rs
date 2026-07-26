@@ -24,11 +24,20 @@ fn admitted_levels_stop_below_auto_action() {
     assert_eq!(AdmittedLevelV1::ALL.len(), 3);
     assert_eq!(DispositionV1::ALL.len(), 6);
 
+    assert_eq!(
+        AdmittedLevelV1::ALL,
+        [
+            AdmittedLevelV1::Math,
+            AdmittedLevelV1::Correlate,
+            AdmittedLevelV1::Decision
+        ],
+        "достижимые ступени обязаны исчерпываться первыми тремя"
+    );
+
+    // Ни одна достижимая ступень не вправе называться ступенью 4: иначе отчёт
+    // заявил бы право, которого не существует.
     for level in AdmittedLevelV1::ALL {
-        assert!(
-            level < AdmittedLevelV1::Decision || level == AdmittedLevelV1::Decision,
-            "достижимые ступени обязаны лежать не выше Decision"
-        );
+        assert_ne!(level.key(), "auto-action-admitted");
     }
 }
 
