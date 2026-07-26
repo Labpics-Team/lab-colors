@@ -194,6 +194,9 @@ mod accent_golden_tests;
 #[cfg(test)]
 mod cleanliness_outcome_tests;
 
+#[cfg(test)]
+mod cleanliness_admission_tests;
+
 pub use alpha::composite_over_encoded;
 pub use config::{
     Brand, ConfigError, LadderSource, NeutralAnchors, NeutralConfig, NeutralPick, NeutralTint,
@@ -465,3 +468,74 @@ pub struct NoPrematurePointSupportApi;
 /// ```
 #[cfg(doctest)]
 pub struct NoRawFloatSrgbSerializer;
+
+/// Research-метка `EVIDENCE.md` не даёт права менять цвет (раздел 9
+/// контракта чистоты). Свойство структурное: целевой носитель необитаем, а
+/// конверсии из метки не существует ни в каком виде.
+///
+/// Метка не является свидетельством ступени 4:
+///
+/// ```compile_fail
+/// use labcolors_core::cleanliness::{AdmittedLevelV1, ResearchLabelV1};
+/// let _ = AdmittedLevelV1::AutoAction(ResearchLabelV1::PublishedCandidate);
+/// ```
+///
+/// И не конвертируется в право напрямую:
+///
+/// ```compile_fail
+/// use labcolors_core::cleanliness::{MovementAuthorityV1, ResearchLabelV1};
+/// let _ = MovementAuthorityV1::from_admission(ResearchLabelV1::Hypothesis);
+/// ```
+///
+/// Ступень ниже четвёртой права тоже не даёт:
+///
+/// ```compile_fail
+/// use labcolors_core::cleanliness::{AdmittedLevelV1, MovementAuthorityV1};
+/// let _ = MovementAuthorityV1::from_admission(AdmittedLevelV1::Decision);
+/// ```
+///
+/// Валидная соседняя форма собирается — иначе тесты выше были бы зелёными от
+/// опечатки, а не от свойства:
+///
+/// ```
+/// use labcolors_core::cleanliness::{
+///     AutoActionAdmissionV1, DispositionV1, MovementAuthorityV1, ResearchLabelV1,
+/// };
+/// // Конструктор существует и принимает ровно свидетельство ступени 4:
+/// // без этой строки `compile_fail` выше могли бы быть зелёными от опечатки
+/// // в имени метода, а не от отсутствия конверсии.
+/// let _: fn(AutoActionAdmissionV1) -> MovementAuthorityV1 =
+///     MovementAuthorityV1::from_admission;
+/// assert!(DispositionV1::Candidate.movement_authority().is_none());
+/// assert_eq!(ResearchLabelV1::Hypothesis.key(), "hypothesis");
+/// ```
+#[cfg(doctest)]
+pub struct NoMovementAuthorityFromResearchLabel;
+
+/// Меры грязности не существует (раздел 4 контракта чистоты): единого score
+/// нет, потому что объявленные популяции расходятся, а усреднение подменило бы
+/// предмет спора.
+///
+/// ```compile_fail
+/// use labcolors_core::cleanliness::QualityOutcomeV1;
+/// let _ = QualityOutcomeV1::Improved.cleanliness_score();
+/// ```
+///
+/// Исходы не сравнимы между собой: порядок есть только у приоритета правила
+/// разрешения.
+///
+/// ```compile_fail
+/// use labcolors_core::cleanliness::QualityOutcomeV1;
+/// let _ = QualityOutcomeV1::Improved < QualityOutcomeV1::UnchangedUndominated;
+/// ```
+///
+/// Сравнивать приоритеты — можно и нужно:
+///
+/// ```
+/// use labcolors_core::cleanliness::QualityOutcomeV1;
+/// let immutable = QualityOutcomeV1::UnchangedImmutable.priority();
+/// let improved = QualityOutcomeV1::Improved.priority();
+/// assert!(immutable < improved);
+/// ```
+#[cfg(doctest)]
+pub struct NoCleanlinessScore;

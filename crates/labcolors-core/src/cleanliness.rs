@@ -27,6 +27,10 @@
 //! колориметрических исследований. Смешивать их запрещено: первое считается
 //! из координат, второе не считается вовсе, потому что меры не существует.
 
+pub mod admission;
 pub mod outcome;
 
+pub use admission::{
+    AdmittedLevelV1, AutoActionAdmissionV1, DispositionV1, MovementAuthorityV1, ResearchLabelV1,
+};
 pub use outcome::{MovementV1, OutcomePhaseV1, OutcomePriorityV1, QualityOutcomeV1};
