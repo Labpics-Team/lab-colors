@@ -6,6 +6,14 @@
 //! occurrences, and outputs bind opaque slots back to Paints. The compiled
 //! result owns only admitted, canonical topology; runtime observation,
 //! lifecycle and terminal emission belong to the sole revision-bound Session.
+//! Finite candidate search executes only hard constraints. Every fresh hard
+//! phase completes across its whole physical support (and across every state
+//! of an exhaustive conflict) before diagnostics execute. Report cells are
+//! then restored to canonical ID order, keeping evidence order separate from
+//! selection authority. A selected finite state whose fresh hard recheck fails
+//! exits before diagnostics, preserving the authoritative typed failure. A
+//! diagnostic evaluator error may abort fixed or exhaustive report construction
+//! only after their hard verdict is fixed; no partial certificate is emitted.
 //! Output transport and encoded-only assessments retain exact physical
 //! occurrence evidence plus the declared appearance context. A modeled LCS
 //! occurrence is derived only through its separate typed capability; neither
@@ -1013,6 +1021,23 @@ impl CompiledConstraintModeV1 {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProgramEvaluationPhaseV1 {
+    Hard,
+    ReportOnly,
+}
+
+impl ProgramEvaluationPhaseV1 {
+    /// Phase separation prevents diagnostics from mutating evaluator state
+    /// before any hard decision in the same authority scope is frozen.
+    const fn includes(self, mode: CompiledConstraintModeV1) -> bool {
+        match self {
+            Self::Hard => mode.rejects_candidate(),
+            Self::ReportOnly => !mode.rejects_candidate(),
+        }
+    }
+}
+
 struct CompiledPointConstraint<Invocation> {
     id: ConstraintId,
     target_id: OccurrenceId,
@@ -1705,7 +1730,15 @@ where
     let mut buffers = prepare_program_evaluation_buffers(epoch, &observation)?;
     for (state_index, tuple) in selection.order.tuples().enumerate() {
         apply_joint_candidate(plan, &epoch.finite_targets, tuple)?;
-        if !scan_program_candidate(plan, epoch, &observation, state_index, None, None)? {
+        if !scan_program_candidate(
+            plan,
+            epoch,
+            &observation,
+            state_index,
+            ProgramEvaluationPhaseV1::Hard,
+            None,
+            None,
+        )? {
             // A selected tuple is never certified from its allocation-free
             // search pass. Re-apply and collect fresh terminal evidence.
             apply_joint_candidate(plan, &epoch.finite_targets, tuple)?;
@@ -1720,26 +1753,8 @@ where
                 SessionDecision::Verified(verified) => {
                     return Ok(SessionDecision::Verified(verified));
                 }
-                SessionDecision::Violation(conflict) => {
-                    let first = conflict
-                        .report
-                        .cells
-                        .iter()
-                        .find(|cell| cell.is_hard() && cell.result().is_violation())
-                        .ok_or(ProgramSessionEvaluationError::InternalInvariant)?;
-                    let hard_violation_count = conflict
-                        .report
-                        .cells
-                        .iter()
-                        .filter(|cell| cell.is_hard() && cell.result().is_violation())
-                        .count();
-                    return Err(ProgramSessionEvaluationError::FinalRecheckViolation {
-                        state_index,
-                        case_index: first.case_index,
-                        constraint: first.constraint,
-                        target: first.target,
-                        hard_violation_count,
-                    });
+                SessionDecision::Violation(_) => {
+                    return Err(ProgramSessionEvaluationError::InternalInvariant);
                 }
             }
         }
@@ -1752,15 +1767,37 @@ where
             epoch,
             &observation,
             state_index,
+            ProgramEvaluationPhaseV1::Hard,
             Some(&mut buffers.conflict_cells),
             None,
         )? {
             return Err(ProgramSessionEvaluationError::InternalInvariant);
         }
     }
+    if epoch
+        .constraints
+        .iter()
+        .any(|constraint| ProgramEvaluationPhaseV1::ReportOnly.includes(constraint.mode))
+    {
+        for (state_index, tuple) in selection.order.tuples().enumerate() {
+            apply_joint_candidate(plan, &epoch.finite_targets, tuple)?;
+            if scan_program_candidate(
+                plan,
+                epoch,
+                &observation,
+                state_index,
+                ProgramEvaluationPhaseV1::ReportOnly,
+                Some(&mut buffers.conflict_cells),
+                None,
+            )? {
+                return Err(ProgramSessionEvaluationError::InternalInvariant);
+            }
+        }
+    }
     if buffers.conflict_cells.len() != buffers.counts.exhaustive_conflict {
         return Err(ProgramSessionEvaluationError::InternalInvariant);
     }
+    canonicalize_program_report_cells(&mut buffers.conflict_cells);
 
     Ok(SessionDecision::Violation(ProgramConflictV1 {
         report: ProgramReportV1 {
@@ -1821,17 +1858,63 @@ where
         return Err(ProgramSessionEvaluationError::InternalInvariant);
     }
     let candidate_state_index = selected_state_index.unwrap_or(0);
-    let has_hard_violation = scan_program_candidate(
-        plan,
-        epoch,
-        &observation,
-        candidate_state_index,
-        Some(&mut cells),
-        Some(&mut outputs),
-    )?;
+    let has_hard_constraints = epoch
+        .constraints
+        .iter()
+        .any(|constraint| ProgramEvaluationPhaseV1::Hard.includes(constraint.mode));
+    let has_report_constraints = epoch
+        .constraints
+        .iter()
+        .any(|constraint| ProgramEvaluationPhaseV1::ReportOnly.includes(constraint.mode));
+    let has_hard_violation = if has_hard_constraints {
+        scan_program_candidate(
+            plan,
+            epoch,
+            &observation,
+            candidate_state_index,
+            ProgramEvaluationPhaseV1::Hard,
+            Some(&mut cells),
+            Some(&mut outputs),
+        )?
+    } else {
+        false
+    };
+    if let Some(state_index) = selected_state_index.filter(|_| has_hard_violation) {
+        // Search only nominates a finite state. Its fresh hard recheck owns the
+        // terminal verdict, so diagnostics cannot mask or mutate that failure.
+        let first = cells
+            .iter()
+            .find(|cell| cell.is_hard() && cell.result().is_violation())
+            .ok_or(ProgramSessionEvaluationError::InternalInvariant)?;
+        let hard_violation_count = cells
+            .iter()
+            .filter(|cell| cell.is_hard() && cell.result().is_violation())
+            .count();
+        return Err(ProgramSessionEvaluationError::FinalRecheckViolation {
+            state_index,
+            case_index: first.case_index,
+            constraint: first.constraint,
+            target: first.target,
+            hard_violation_count,
+        });
+    }
+    if has_report_constraints
+        && scan_program_candidate(
+            plan,
+            epoch,
+            &observation,
+            candidate_state_index,
+            ProgramEvaluationPhaseV1::ReportOnly,
+            Some(&mut cells),
+            (!has_hard_constraints).then_some(&mut outputs),
+        )?
+    {
+        return Err(ProgramSessionEvaluationError::InternalInvariant);
+    }
     if cells.len() != expected_cell_count {
         return Err(ProgramSessionEvaluationError::InternalInvariant);
     }
+    canonicalize_program_report_cells(&mut cells);
     let report = ProgramReportV1 {
         content_identity: epoch.content_identity,
         observation,
@@ -1851,11 +1934,24 @@ where
     }
 }
 
+/// Evaluation is authority-first, while the emitted contract remains
+/// `state × physical case × ConstraintId`. Sorting is in-place and therefore
+/// adds no allocation to the preflight-bounded terminal path.
+fn canonicalize_program_report_cells<Evaluation>(cells: &mut [ProgramConstraintCellV1<Evaluation>])
+where
+    Evaluation: ProgramConstraintEvaluatorSetV1,
+{
+    cells.sort_unstable_by_key(|cell| {
+        (cell.candidate_state_index, cell.case_index, cell.constraint)
+    });
+}
+
 fn scan_program_candidate<Evaluation>(
     plan: &mut ProgramSessionPlan<Evaluation>,
     epoch: &ProgramEpochV1<Evaluation>,
     observation: &RevisionBoundObservationV1,
     candidate_state_index: usize,
+    phase: ProgramEvaluationPhaseV1,
     mut cells: Option<&mut Vec<ProgramConstraintCellV1<Evaluation>>>,
     mut outputs: Option<&mut Vec<ProgramOutputV1>>,
 ) -> Result<bool, ProgramSessionEvaluationError<ProgramEvaluatorError<Evaluation>>>
@@ -1899,7 +1995,11 @@ where
             .evaluate_admitted_into(&plan.bindings, &mut plan.workspace)
             .map_err(map_program_execution_binding_error)?;
 
-        for constraint in epoch.constraints.iter() {
+        for constraint in epoch
+            .constraints
+            .iter()
+            .filter(|constraint| phase.includes(constraint.mode))
+        {
             let source = evaluation
                 .occurrence_at(constraint.target)
                 .ok_or(ProgramSessionEvaluationError::InternalInvariant)?;

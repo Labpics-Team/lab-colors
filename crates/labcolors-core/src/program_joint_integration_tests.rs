@@ -1,7 +1,11 @@
 use crate::Srgb8;
 use crate::appearance::{OccurrenceId, PaintId, SurfaceId, SurfaceInputPortId};
 use crate::constraints::{
-    CountingProgramWcag22Srgb8V1, FinalRecheckMutantProgramEvaluatorV1, Wcag22Srgb8V1,
+    ApplicableWcag22EvaluationErrorV1, CountingProgramWcag22Srgb8V1, ExactSrgb8IdentityV1,
+    FinalRecheckMutantProgramEvaluatorV1, HardDecision, ProgramConstraintContentV1,
+    ProgramPointAssessmentErrorV1, ProgramPointEvaluatorContentV1, ProgramPointOccurrenceV1,
+    ProgramVisiblePointBindingV1, ProgramVisiblePointPassEvidence,
+    ProgramVisiblePointViolationEvidence, Wcag22Srgb8V1, assess_program_point_hard,
 };
 use crate::joint::FiniteJointOrderErrorV1;
 use crate::lcs_occurrence::{
@@ -15,10 +19,11 @@ use crate::observation::{
 };
 use crate::program_session::{
     CompositionProfile, ConstraintId, ConstraintInvocation, ConstraintSet,
-    DeclaredJointSelectionV1, JointCandidateStateV1, ObservationGroup, Occurrence, OutputBinding,
-    OutputSlotId, Paint, Program, ProgramCompileError, ProgramSessionEvaluationError, Source,
-    SourceId, Surface, Target, TargetCandidateChoiceV1, TargetCandidateId, TargetCandidateV1,
-    TargetDomainV1, TargetId, checked_program_evaluation_cell_counts_for_test,
+    DeclaredJointSelectionV1, HardModeV1, JointCandidateStateV1, ObservationGroup, Occurrence,
+    OutputBinding, OutputSlotId, Paint, Program, ProgramCompileError,
+    ProgramConstraintEvaluatorSetV1, ProgramSessionEvaluationError, ReportModeV1, Source, SourceId,
+    Surface, Target, TargetCandidateChoiceV1, TargetCandidateId, TargetCandidateV1, TargetDomainV1,
+    TargetId, checked_program_evaluation_cell_counts_for_test,
     fail_program_preflight_reservation_for_test,
 };
 use crate::session::{SessionState, SessionUpdateError};
@@ -43,6 +48,244 @@ const UPPER_OUTPUT: OutputSlotId = OutputSlotId::new(85);
 const UPPER_TARGET: TargetId = TargetId::new(86);
 const UPPER_FIRST: TargetCandidateId = TargetCandidateId::new(87);
 const UPPER_SECOND: TargetCandidateId = TargetCandidateId::new(88);
+
+/// A premature report invocation becomes an evaluator error, so this hostile
+/// test double detects diagnostic authority leakage instead of merely counting
+/// extra calls to a pure evaluator.
+#[derive(Debug, Clone)]
+struct ReportSelectionIsolationEvaluatorSetV1 {
+    control: std::rc::Rc<ReportSelectionIsolationControlV1>,
+}
+
+#[derive(Debug)]
+struct ReportSelectionIsolationControlV1 {
+    selected: Srgb8,
+    report_invocation: Wcag22CriterionV1,
+    selected_non_report_calls: std::cell::Cell<usize>,
+    report_calls: std::cell::Cell<usize>,
+    calls: std::cell::RefCell<Vec<Srgb8>>,
+}
+
+impl ReportSelectionIsolationEvaluatorSetV1 {
+    fn new(selected: Srgb8, report_invocation: Wcag22CriterionV1) -> Self {
+        Self {
+            control: std::rc::Rc::new(ReportSelectionIsolationControlV1 {
+                selected,
+                report_invocation,
+                selected_non_report_calls: std::cell::Cell::new(0),
+                report_calls: std::cell::Cell::new(0),
+                calls: std::cell::RefCell::new(Vec::new()),
+            }),
+        }
+    }
+
+    fn report_calls(&self) -> usize {
+        self.control.report_calls.get()
+    }
+
+    fn calls(&self) -> Vec<Srgb8> {
+        self.control.calls.borrow().clone()
+    }
+}
+
+impl ProgramConstraintEvaluatorSetV1 for ReportSelectionIsolationEvaluatorSetV1 {
+    type Invocation = Wcag22CriterionV1;
+    type PassEvidence = ProgramVisiblePointPassEvidence<Wcag22Srgb8V1>;
+    type ViolationEvidence = ProgramVisiblePointViolationEvidence<Wcag22Srgb8V1>;
+    type Error = ApplicableWcag22EvaluationErrorV1;
+
+    fn assess(
+        &self,
+        point: ProgramPointOccurrenceV1,
+        invocation: Self::Invocation,
+    ) -> Result<
+        HardDecision<Self::PassEvidence, Self::ViolationEvidence>,
+        ProgramPointAssessmentErrorV1<Self::Error>,
+    > {
+        let visible = Srgb8::new(point.target().encoded().visible());
+        self.control.calls.borrow_mut().push(visible);
+        if invocation == self.control.report_invocation {
+            if self.control.selected_non_report_calls.get() < 2 {
+                return Err(ProgramPointAssessmentErrorV1::Evaluator(
+                    ApplicableWcag22EvaluationErrorV1::CriterionMismatch {
+                        requested: invocation,
+                        evaluated: Wcag22CriterionV1::Sc143TextLargeScale,
+                    },
+                ));
+            }
+            self.control
+                .report_calls
+                .set(self.control.report_calls.get() + 1);
+        } else if visible == self.control.selected {
+            self.control
+                .selected_non_report_calls
+                .set(self.control.selected_non_report_calls.get() + 1);
+        }
+        assess_program_point_hard(point, &Wcag22Srgb8V1, invocation)
+    }
+
+    fn pass_binding(evidence: &Self::PassEvidence) -> ProgramVisiblePointBindingV1 {
+        *evidence.binding()
+    }
+
+    fn violation_binding(evidence: &Self::ViolationEvidence) -> ProgramVisiblePointBindingV1 {
+        *evidence.binding()
+    }
+
+    fn constraint_content(&self, invocation: Self::Invocation) -> ProgramConstraintContentV1 {
+        Wcag22Srgb8V1.program_constraint_content_v1(invocation)
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct DiagnosticPoisonPassV1(ProgramVisiblePointBindingV1);
+
+#[derive(Debug, Clone, Copy)]
+struct DiagnosticPoisonViolationV1(ProgramVisiblePointBindingV1);
+
+/// The first diagnostic poisons every later hard decision. A complete conflict
+/// is therefore possible only when all state × case hard evidence is frozen
+/// before any report-only invocation runs.
+#[derive(Debug, Clone, Default)]
+struct CrossStateDiagnosticPoisonEvaluatorSetV1 {
+    control: std::rc::Rc<CrossStateDiagnosticPoisonControlV1>,
+}
+
+#[derive(Debug, Default)]
+struct CrossStateDiagnosticPoisonControlV1 {
+    poisoned: std::cell::Cell<bool>,
+    hard_calls: std::cell::Cell<usize>,
+    first_report_after_hard_calls: std::cell::Cell<Option<usize>>,
+}
+
+impl CrossStateDiagnosticPoisonEvaluatorSetV1 {
+    fn hard_calls_before_first_report(&self) -> Option<usize> {
+        self.control.first_report_after_hard_calls.get()
+    }
+}
+
+impl ProgramConstraintEvaluatorSetV1 for CrossStateDiagnosticPoisonEvaluatorSetV1 {
+    type Invocation = Srgb8;
+    type PassEvidence = DiagnosticPoisonPassV1;
+    type ViolationEvidence = DiagnosticPoisonViolationV1;
+    type Error = core::convert::Infallible;
+
+    fn assess(
+        &self,
+        point: ProgramPointOccurrenceV1,
+        invocation: Self::Invocation,
+    ) -> Result<
+        HardDecision<Self::PassEvidence, Self::ViolationEvidence>,
+        ProgramPointAssessmentErrorV1<Self::Error>,
+    > {
+        let binding = point.binding();
+        if invocation == Srgb8::new([0xEE; 3]) {
+            if self.control.first_report_after_hard_calls.get().is_none() {
+                self.control
+                    .first_report_after_hard_calls
+                    .set(Some(self.control.hard_calls.get()));
+            }
+            self.control.poisoned.set(true);
+            return Ok(HardDecision::Pass(DiagnosticPoisonPassV1(binding)));
+        }
+
+        self.control
+            .hard_calls
+            .set(self.control.hard_calls.get() + 1);
+        if self.control.poisoned.get() {
+            Ok(HardDecision::Pass(DiagnosticPoisonPassV1(binding)))
+        } else {
+            Ok(HardDecision::Violation(DiagnosticPoisonViolationV1(
+                binding,
+            )))
+        }
+    }
+
+    fn pass_binding(evidence: &Self::PassEvidence) -> ProgramVisiblePointBindingV1 {
+        evidence.0
+    }
+
+    fn violation_binding(evidence: &Self::ViolationEvidence) -> ProgramVisiblePointBindingV1 {
+        evidence.0
+    }
+
+    fn constraint_content(&self, invocation: Self::Invocation) -> ProgramConstraintContentV1 {
+        ExactSrgb8IdentityV1.program_constraint_content_v1(invocation)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FinalViolationDiagnosticErrorV1 {
+    DiagnosticInvoked,
+}
+
+/// The hard evaluator passes candidate search and rejects the fresh selected
+/// state recheck. Its diagnostic branch fails loudly, so a leaked diagnostic
+/// invocation would mask the authoritative final-recheck verdict.
+#[derive(Debug, Clone, Default)]
+struct FinalViolationDiagnosticErrorEvaluatorSetV1 {
+    control: std::rc::Rc<FinalViolationDiagnosticErrorControlV1>,
+}
+
+#[derive(Debug, Default)]
+struct FinalViolationDiagnosticErrorControlV1 {
+    hard_calls: std::cell::Cell<usize>,
+    diagnostic_calls: std::cell::Cell<usize>,
+}
+
+impl FinalViolationDiagnosticErrorEvaluatorSetV1 {
+    fn diagnostic_calls(&self) -> usize {
+        self.control.diagnostic_calls.get()
+    }
+}
+
+impl ProgramConstraintEvaluatorSetV1 for FinalViolationDiagnosticErrorEvaluatorSetV1 {
+    type Invocation = Srgb8;
+    type PassEvidence = DiagnosticPoisonPassV1;
+    type ViolationEvidence = DiagnosticPoisonViolationV1;
+    type Error = FinalViolationDiagnosticErrorV1;
+
+    fn assess(
+        &self,
+        point: ProgramPointOccurrenceV1,
+        invocation: Self::Invocation,
+    ) -> Result<
+        HardDecision<Self::PassEvidence, Self::ViolationEvidence>,
+        ProgramPointAssessmentErrorV1<Self::Error>,
+    > {
+        if invocation == Srgb8::new([0xEE; 3]) {
+            self.control
+                .diagnostic_calls
+                .set(self.control.diagnostic_calls.get() + 1);
+            return Err(ProgramPointAssessmentErrorV1::Evaluator(
+                FinalViolationDiagnosticErrorV1::DiagnosticInvoked,
+            ));
+        }
+
+        let hard_call = self.control.hard_calls.get();
+        self.control.hard_calls.set(hard_call + 1);
+        let binding = point.binding();
+        if hard_call == 0 {
+            Ok(HardDecision::Pass(DiagnosticPoisonPassV1(binding)))
+        } else {
+            Ok(HardDecision::Violation(DiagnosticPoisonViolationV1(
+                binding,
+            )))
+        }
+    }
+
+    fn pass_binding(evidence: &Self::PassEvidence) -> ProgramVisiblePointBindingV1 {
+        evidence.0
+    }
+
+    fn violation_binding(evidence: &Self::ViolationEvidence) -> ProgramVisiblePointBindingV1 {
+        evidence.0
+    }
+
+    fn constraint_content(&self, invocation: Self::Invocation) -> ProgramConstraintContentV1 {
+        ExactSrgb8IdentityV1.program_constraint_content_v1(invocation)
+    }
+}
 
 fn appearance_context() -> AppearanceContextId {
     AppearanceContextId::from_inputs(
@@ -70,15 +313,30 @@ fn target(candidates: Vec<TargetCandidateV1>) -> Target {
     Target::finite(TARGET, SOURCE, candidates)
 }
 
-fn program(
-    hard: Vec<ConstraintInvocation<Wcag22CriterionV1, crate::program_session::HardModeV1>>,
-    report_only: Vec<ConstraintInvocation<Wcag22CriterionV1, crate::program_session::ReportModeV1>>,
-    candidates: Vec<TargetCandidateV1>,
-    order: Vec<JointCandidateStateV1>,
-) -> Program<Wcag22Srgb8V1> {
+fn point_program<Evaluation>(
+    source_signal: ColorSignal,
+    target: Target,
+    hard: Vec<
+        ConstraintInvocation<
+            <Evaluation as ProgramConstraintEvaluatorSetV1>::Invocation,
+            HardModeV1,
+        >,
+    >,
+    report_only: Vec<
+        ConstraintInvocation<
+            <Evaluation as ProgramConstraintEvaluatorSetV1>::Invocation,
+            ReportModeV1,
+        >,
+    >,
+    evaluator: Evaluation,
+) -> Program<Evaluation>
+where
+    Evaluation: ProgramConstraintEvaluatorSetV1,
+    <Evaluation as ProgramConstraintEvaluatorSetV1>::Invocation: Copy,
+{
     Program::new(
-        vec![Source::new(SOURCE, signal(0))],
-        vec![target(candidates)],
+        vec![Source::new(SOURCE, source_signal)],
+        vec![target],
         ObservationGroup::new(GROUP, vec![SURFACE_PORT]),
         vec![],
         vec![Paint::Solid {
@@ -98,20 +356,44 @@ fn program(
         )],
         ConstraintSet::new(hard, report_only),
         vec![OutputBinding::new(OUTPUT, PAINT)],
+        evaluator,
+    )
+}
+
+fn program(
+    hard: Vec<ConstraintInvocation<Wcag22CriterionV1, crate::program_session::HardModeV1>>,
+    report_only: Vec<ConstraintInvocation<Wcag22CriterionV1, crate::program_session::ReportModeV1>>,
+    candidates: Vec<TargetCandidateV1>,
+    order: Vec<JointCandidateStateV1>,
+) -> Program<Wcag22Srgb8V1> {
+    point_program(
+        signal(0),
+        target(candidates),
+        hard,
+        report_only,
         Wcag22Srgb8V1,
     )
     .with_joint_selection(DeclaredJointSelectionV1::new(order))
 }
 
 fn update(revision: u64, backdrop: u8) -> ObservationUpdateInput {
+    update_cases(revision, &[backdrop])
+}
+
+fn update_cases(revision: u64, backdrops: &[u8]) -> ObservationUpdateInput {
     ObservationUpdateInput {
         stream: STREAM,
         revision: Revision::new(revision),
         payload: ObservationPayloadInput::Scenarios(ObservedScenarioSetInput {
-            scenarios: vec![ScenarioInput {
-                id: ScenarioId::new(1),
-                bindings: vec![SurfaceInputBinding::new(SURFACE_PORT, signal(backdrop))],
-            }],
+            scenarios: backdrops
+                .iter()
+                .copied()
+                .enumerate()
+                .map(|(index, backdrop)| ScenarioInput {
+                    id: ScenarioId::new(u32::try_from(index + 1).unwrap()),
+                    bindings: vec![SurfaceInputBinding::new(SURFACE_PORT, signal(backdrop))],
+                })
+                .collect(),
         }),
     }
 }
@@ -903,6 +1185,196 @@ fn rejected_state_runs_once_and_selected_state_runs_fresh_recheck_twice() {
 }
 
 #[test]
+fn report_evaluator_error_cannot_poison_candidate_search_or_change_selection() {
+    let report_invocation = Wcag22CriterionV1::Sc143TextDefault;
+    let evaluator =
+        ReportSelectionIsolationEvaluatorSetV1::new(Srgb8::new([0xFF; 3]), report_invocation);
+    let probe = evaluator.clone();
+    let compiled = point_program(
+        signal(0),
+        target(vec![candidate(FIRST, 0x55), candidate(SECOND, 0xFF)]),
+        vec![ConstraintInvocation::hard(
+            ConstraintId::new(1),
+            OCCURRENCE,
+            Wcag22CriterionV1::Sc143TextLargeScale,
+        )],
+        vec![ConstraintInvocation::report_only(
+            ConstraintId::new(2),
+            OCCURRENCE,
+            report_invocation,
+        )],
+        evaluator,
+    )
+    .with_joint_selection(DeclaredJointSelectionV1::new(vec![
+        state(FIRST),
+        state(SECOND),
+    ]))
+    .compile()
+    .unwrap();
+    let mut session = compiled.instantiate(STREAM).unwrap();
+
+    let SessionState::Ready { current } = session.update(update(1, 0x00)).unwrap() else {
+        panic!("diagnostics without selection authority cannot poison hard candidate search");
+    };
+    assert_eq!(current.selected_state_index(), Some(1));
+    assert_eq!(current.report().cells().len(), 2);
+    assert!(current.report().cells()[0].is_hard());
+    assert!(!current.report().cells()[0].result().is_violation());
+    assert!(!current.report().cells()[1].is_hard());
+    assert!(!current.report().cells()[1].result().is_violation());
+    assert_eq!(probe.report_calls(), 1);
+    assert_eq!(
+        probe.calls(),
+        vec![
+            Srgb8::new([0x55; 3]),
+            Srgb8::new([0xFF; 3]),
+            Srgb8::new([0xFF; 3]),
+            Srgb8::new([0xFF; 3]),
+        ],
+    );
+}
+
+#[test]
+fn hard_conflict_runs_report_only_once_in_the_exhaustive_full_pass() {
+    let evaluator = CountingProgramWcag22Srgb8V1::default();
+    let calls = evaluator.clone();
+    let compiled = point_program(
+        signal(0),
+        target(vec![candidate(FIRST, 0xAA), candidate(SECOND, 0xFF)]),
+        vec![ConstraintInvocation::hard(
+            ConstraintId::new(1),
+            OCCURRENCE,
+            Wcag22CriterionV1::Sc143TextLargeScale,
+        )],
+        vec![ConstraintInvocation::report_only(
+            ConstraintId::new(2),
+            OCCURRENCE,
+            Wcag22CriterionV1::Sc143TextDefault,
+        )],
+        evaluator,
+    )
+    .with_joint_selection(DeclaredJointSelectionV1::new(vec![
+        state(FIRST),
+        state(SECOND),
+    ]))
+    .compile()
+    .unwrap();
+    let mut session = compiled.instantiate(STREAM).unwrap();
+
+    let SessionState::Failed { cause, previous } = session.update(update(1, 0xFF)).unwrap() else {
+        panic!("both states must fail the hard large-text criterion on white");
+    };
+    assert!(previous.is_none());
+    assert_eq!(cause.considered_state_count(), 2);
+    assert_eq!(cause.report().cells().len(), 4);
+    assert_eq!(
+        calls.calls(),
+        vec![
+            Srgb8::new([0xAA; 3]),
+            Srgb8::new([0xFF; 3]),
+            Srgb8::new([0xAA; 3]),
+            Srgb8::new([0xFF; 3]),
+            Srgb8::new([0xAA; 3]),
+            Srgb8::new([0xFF; 3]),
+        ],
+        "hard search and the exhaustive all-state hard phase must precede the complete diagnostic phase",
+    );
+}
+
+#[test]
+fn fixed_program_without_finite_targets_executes_one_complete_evidence_pass() {
+    let evaluator = CountingProgramWcag22Srgb8V1::default();
+    let calls = evaluator.clone();
+    let compiled = point_program(
+        signal(0xFF),
+        Target::fixed(TARGET, SOURCE),
+        vec![],
+        vec![ConstraintInvocation::report_only(
+            ConstraintId::new(1),
+            OCCURRENCE,
+            Wcag22CriterionV1::Sc143TextDefault,
+        )],
+        evaluator,
+    )
+    .compile()
+    .unwrap();
+    let mut session = compiled.instantiate(STREAM).unwrap();
+
+    let SessionState::Ready { current } = session.update(update(1, 0x00)).unwrap() else {
+        panic!("a fixed Program must retain diagnostics in its sole complete pass");
+    };
+    assert_eq!(current.selected_state_index(), None);
+    assert_eq!(current.report().cells().len(), 1);
+    assert!(!current.report().cells()[0].is_hard());
+    assert!(!current.report().cells()[0].result().is_violation());
+    assert_eq!(calls.calls(), vec![Srgb8::new([0xFF; 3])]);
+}
+
+#[test]
+fn exhaustive_conflict_freezes_every_state_case_hard_cell_before_any_diagnostic() {
+    let evaluator = CrossStateDiagnosticPoisonEvaluatorSetV1::default();
+    let probe = evaluator.clone();
+    let hard = ConstraintId::new(1);
+    let report = ConstraintId::new(2);
+    let compiled = point_program(
+        signal(0),
+        target(vec![candidate(FIRST, 0xAA), candidate(SECOND, 0xBB)]),
+        vec![ConstraintInvocation::hard(
+            hard,
+            OCCURRENCE,
+            Srgb8::new([0xDD; 3]),
+        )],
+        vec![ConstraintInvocation::report_only(
+            report,
+            OCCURRENCE,
+            Srgb8::new([0xEE; 3]),
+        )],
+        evaluator,
+    )
+    .with_joint_selection(DeclaredJointSelectionV1::new(vec![
+        state(FIRST),
+        state(SECOND),
+    ]))
+    .compile()
+    .unwrap();
+    let mut session = compiled.instantiate(STREAM).unwrap();
+
+    let SessionState::Failed { cause, previous } =
+        session.update(update_cases(1, &[0x00, 0xFF])).unwrap()
+    else {
+        panic!("diagnostics cannot poison hard evidence in a later case or state");
+    };
+    assert!(previous.is_none());
+    assert_eq!(cause.considered_state_count(), 2);
+    assert_eq!(probe.hard_calls_before_first_report(), Some(8));
+    assert_eq!(cause.report().cells().len(), 8);
+    assert_eq!(
+        cause
+            .report()
+            .cells()
+            .iter()
+            .map(|cell| (
+                cell.candidate_state_index(),
+                cell.case_index(),
+                cell.constraint(),
+                cell.is_hard(),
+                cell.result().is_violation(),
+            ))
+            .collect::<Vec<_>>(),
+        vec![
+            (0, 0, hard, true, true),
+            (0, 0, report, false, false),
+            (0, 1, hard, true, true),
+            (0, 1, report, false, false),
+            (1, 0, hard, true, true),
+            (1, 0, report, false, false),
+            (1, 1, hard, true, true),
+            (1, 1, report, false, false),
+        ],
+    );
+}
+
+#[test]
 fn successful_search_allocations_do_not_scale_with_rejected_states() {
     let compile = |candidates, order| {
         program(
@@ -1179,6 +1651,94 @@ fn equivalent_recompiled_owner_is_a_new_generation_and_cannot_revive_old_session
         replacement_session.raw_head(),
         ObservationHeadViewV1::Observed(_)
     ));
+}
+
+#[test]
+fn lower_id_diagnostic_cannot_consume_the_selected_state_final_recheck() {
+    let evaluator = FinalRecheckMutantProgramEvaluatorV1::default();
+    let control = evaluator.clone();
+    let hard = ConstraintId::new(2);
+    let compiled = point_program(
+        signal(0),
+        target(vec![candidate(FIRST, 0xFF)]),
+        vec![ConstraintInvocation::hard(
+            hard,
+            OCCURRENCE,
+            Srgb8::new([0xFF; 3]),
+        )],
+        vec![ConstraintInvocation::report_only(
+            ConstraintId::new(1),
+            OCCURRENCE,
+            Srgb8::new([0xFF; 3]),
+        )],
+        evaluator,
+    )
+    .with_joint_selection(DeclaredJointSelectionV1::new(vec![state(FIRST)]))
+    .compile()
+    .unwrap();
+    let mut session = compiled.instantiate(STREAM).unwrap();
+
+    assert!(matches!(
+        session.update(update(1, 0x00)).unwrap(),
+        SessionState::Ready { .. }
+    ));
+    control.arm();
+    let error = match session.update(update(2, 0x00)) {
+        Ok(_) => panic!("a lower-ID diagnostic must not consume the hard final recheck"),
+        Err(error) => error,
+    };
+    assert_eq!(
+        error,
+        SessionUpdateError::Plan(ProgramSessionEvaluationError::FinalRecheckViolation {
+            state_index: 0,
+            case_index: 0,
+            constraint: hard,
+            target: OCCURRENCE,
+            hard_violation_count: 1,
+        }),
+    );
+}
+
+#[test]
+fn diagnostic_error_cannot_mask_a_selected_state_final_recheck_violation() {
+    let evaluator = FinalViolationDiagnosticErrorEvaluatorSetV1::default();
+    let probe = evaluator.clone();
+    let hard = ConstraintId::new(1);
+    let compiled = point_program(
+        signal(0),
+        target(vec![candidate(FIRST, 0xFF)]),
+        vec![ConstraintInvocation::hard(
+            hard,
+            OCCURRENCE,
+            Srgb8::new([0xDD; 3]),
+        )],
+        vec![ConstraintInvocation::report_only(
+            ConstraintId::new(2),
+            OCCURRENCE,
+            Srgb8::new([0xEE; 3]),
+        )],
+        evaluator,
+    )
+    .with_joint_selection(DeclaredJointSelectionV1::new(vec![state(FIRST)]))
+    .compile()
+    .unwrap();
+    let mut session = compiled.instantiate(STREAM).unwrap();
+
+    let error = match session.update(update(1, 0x00)) {
+        Ok(_) => panic!("a diagnostic error must not mask the hard final-recheck verdict"),
+        Err(error) => error,
+    };
+    assert_eq!(
+        error,
+        SessionUpdateError::Plan(ProgramSessionEvaluationError::FinalRecheckViolation {
+            state_index: 0,
+            case_index: 0,
+            constraint: hard,
+            target: OCCURRENCE,
+            hard_violation_count: 1,
+        }),
+    );
+    assert_eq!(probe.diagnostic_calls(), 0);
 }
 
 #[test]
