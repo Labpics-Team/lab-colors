@@ -386,6 +386,8 @@ def verify_universal_algebra() -> dict[str, object]:
         for left_monomial, left_coefficient in left.items():
             for right_monomial, right_coefficient in right.items():
                 assert len(left_monomial) == len(right_monomial)
+                # Python 3.9 lacks zip(..., strict=True); this assertion gives
+                # the same no-truncation guarantee without raising the floor.
                 monomial = tuple(
                     left_power + right_power
                     for left_power, right_power in zip(left_monomial, right_monomial)
