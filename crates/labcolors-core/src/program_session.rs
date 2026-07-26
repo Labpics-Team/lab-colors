@@ -1503,6 +1503,8 @@ where
         .joint_selection
         .as_ref()
         .map(|selection| selection.order.state_count())
+        // Without joint selection the epoch has one fixed configuration, so
+        // the exhaustive-cell multiplier remains the multiplicative identity.
         .unwrap_or(1);
     let can_conflict = epoch
         .constraints

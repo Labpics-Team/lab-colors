@@ -173,6 +173,8 @@ pub(crate) fn admit_finite_joint_order_v1(
     }
 
     Ok(AdmittedFiniteJointOrderV1 {
+        // Empty input returned above, so the loop always materialises a first
+        // tuple; keep the typed branch instead of encoding that proof as panic.
         first: first_tuple.ok_or(FiniteJointOrderErrorV1::EmptyOrder)?,
         rest: rest.into_boxed_slice(),
     })
