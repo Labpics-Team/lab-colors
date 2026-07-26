@@ -9,8 +9,8 @@ use crate::program_session::{
     CompositionProfile, ConstraintId, ConstraintInvocation, ConstraintSet,
     CoreProgramConstraintInvocationV1, CoreProgramEvaluatorsV1, CoreProgramV1,
     DeclaredJointSelectionV1, JointCandidateStateV1, ObservationGroup, Occurrence, OpacityInput,
-    OutputBinding, OutputSlotId, Paint, Program, Source, SourceId, Surface, Target,
-    TargetCandidateChoiceV1, TargetCandidateId, TargetCandidateV1, TargetId,
+    OutputBinding, OutputSlotId, Paint, Program, ProgramContentIdentityV2, Source, SourceId,
+    Surface, Target, TargetCandidateChoiceV1, TargetCandidateId, TargetCandidateV1, TargetId,
 };
 use crate::wcag22::Wcag22CriterionV1;
 
@@ -201,7 +201,7 @@ fn fixed_graph_identity_ignores_opaque_names_and_unordered_declaration_order() {
 }
 
 #[test]
-fn canonical_v1_digest_is_cross_platform_golden() {
+fn canonical_v2_digest_is_cross_platform_golden() {
     let ids = FixedIds {
         sources: [SourceId::new(10), SourceId::new(20)],
         targets: [TargetId::new(30), TargetId::new(40)],
@@ -222,11 +222,12 @@ fn canonical_v1_digest_is_cross_platform_golden() {
     .compile()
     .unwrap();
 
+    let identity: ProgramContentIdentityV2 = compiled.content_identity();
     assert_eq!(
-        compiled.content_identity().as_bytes(),
+        identity.as_bytes(),
         &[
-            168, 248, 71, 93, 18, 147, 245, 229, 235, 83, 237, 210, 202, 114, 6, 19, 16, 224, 85,
-            63, 190, 86, 219, 66, 99, 226, 22, 200, 208, 224, 149, 196,
+            105, 3, 194, 140, 229, 146, 207, 108, 6, 103, 170, 89, 223, 123, 17, 99, 144, 255, 27,
+            240, 129, 52, 2, 255, 197, 97, 146, 190, 217, 50, 138, 120,
         ]
     );
 }
@@ -568,8 +569,8 @@ fn canonical_full_ids() -> FullIds {
 }
 
 #[test]
-fn complete_program_schema_v1_digest_is_cross_platform_golden() {
-    // Вместе с fixed golden этот Program содержит каждый V1 vertex/edge tag,
+fn complete_program_schema_v2_digest_is_cross_platform_golden() {
+    // Вместе с fixed golden этот Program содержит каждый V2 vertex/edge tag,
     // обе constraint families и оба режима. Случайная смена кодировки требует
     // явной смены версии, а не тихого перевыпуска прежнего content address.
     let compiled = full_program(
@@ -583,8 +584,8 @@ fn complete_program_schema_v1_digest_is_cross_platform_golden() {
     assert_eq!(
         compiled.content_identity().as_bytes(),
         &[
-            31, 240, 88, 38, 57, 68, 24, 218, 176, 123, 232, 154, 83, 136, 136, 238, 75, 62, 8,
-            163, 188, 120, 229, 152, 163, 217, 101, 60, 245, 191, 167, 219,
+            47, 106, 231, 159, 6, 154, 100, 143, 78, 142, 99, 175, 114, 42, 229, 41, 69, 234, 79,
+            180, 60, 17, 100, 195, 213, 202, 188, 234, 16, 229, 67, 159,
         ]
     );
 }

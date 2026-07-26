@@ -7,22 +7,26 @@
 
 use super::*;
 
-const DOMAIN_V1: &[u8] = b"labcolors.program-content-identity.v1\0";
-// Максимальный V1-цвет принадлежит Occurrence: теги вершины, композиции,
+const DOMAIN_V2: &[u8] = b"labcolors.program-content-identity.v2\0";
+// Максимальный V2-цвет принадлежит Occurrence: теги вершины, композиции,
 // контекста и frame, два binary64-параметра наблюдения и surround. Явная
 // граница устраняет аллокацию на каждую вершину и требует пересмотра при
 // расширении схемы вместо скрытого runtime-лимита.
 const COLOR_CAPACITY: usize = 1 + 1 + 1 + 4 + 8 + 8 + 1;
 
 mod release_tag {
-    pub(super) const PROGRAM_SCHEMA_V1: u8 = 1;
+    pub(super) const PROGRAM_SCHEMA_V2: u8 = 2;
     pub(super) const DECLARED_TOTAL_ORDER_V1: u8 = 1;
     pub(super) const FRESH_FULL_RECHECK_V1: u8 = 1;
     pub(super) const ATOMIC_OBSERVATION_GROUP_V1: u8 = 1;
     pub(super) const ENCODED_PAINT_EMISSION_V1: u8 = 1;
+    #[cfg(test)]
     pub(super) const MODELED_LCS_OCCURRENCE_V1: u8 = 1;
+    #[cfg(test)]
+    pub(super) const MODELED_LCS_OCCURRENCE_MUTATION_SENTINEL_V1: u8 = 2;
 
     pub(super) const IEC_SRGB8_D65_OUTPUT_PROFILE_V1: u8 = 1;
+    #[cfg(test)]
     pub(super) const IEC_SRGB8_TO_XYZ_D65_TRANSFORM_V1: u8 = 1;
     pub(super) const CIE1931_TWO_DEGREE_OBSERVER_V1: u8 = 1;
     pub(super) const IEC61966_D65_REFERENCE_WHITE_V1: u8 = 1;
@@ -54,16 +58,18 @@ mod release_tag {
     pub(super) const WCAG22_SC_1_4_3_TEXT_LARGE_SCALE: u8 = 2;
     pub(super) const WCAG22_SC_1_4_11_UI_COMPONENT_OR_STATE: u8 = 3;
     pub(super) const WCAG22_SC_1_4_11_GRAPHICAL_OBJECT: u8 = 4;
+    #[cfg(test)]
+    pub(super) const MODELED_LCS_PROBE_FAMILY_V1: u8 = 3;
 }
 
-/// Устойчивый к коллизиям адрес канонизированного содержимого Program V1.
+/// Устойчивый к коллизиям адрес канонизированного содержимого Program V2.
 ///
 /// SHA-256 не делает адрес инъективным. Адрес не связывает пространства opaque
 /// ID и не подтверждает владельца, поколение либо revision.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(crate) struct ProgramContentIdentityV1([u8; 32]);
+pub(crate) struct ProgramContentIdentityV2([u8; 32]);
 
-impl ProgramContentIdentityV1 {
+impl ProgramContentIdentityV2 {
     pub(crate) const fn as_bytes(&self) -> &[u8; 32] {
         &self.0
     }
@@ -316,15 +322,15 @@ where
 fn program_root_color() -> Result<VertexColorV1, ProgramCompileError> {
     let mut color = VertexColorV1::new(vertex_tag::PROGRAM);
     // Эти теги связывают адрес с версиями исполняемых законов: схемой Program,
-    // total-order selection, финальной перепроверкой, атомарным наблюдением,
-    // encoded Paint emission и формированием modeled LCS.
+    // total-order selection, финальной перепроверкой, атомарным наблюдением и
+    // encoded Paint emission. Derived capability releases bind only the
+    // constraints that execute them.
     for release in [
-        release_tag::PROGRAM_SCHEMA_V1,
+        release_tag::PROGRAM_SCHEMA_V2,
         release_tag::DECLARED_TOTAL_ORDER_V1,
         release_tag::FRESH_FULL_RECHECK_V1,
         release_tag::ATOMIC_OBSERVATION_GROUP_V1,
         release_tag::ENCODED_PAINT_EMISSION_V1,
-        release_tag::MODELED_LCS_OCCURRENCE_V1,
     ] {
         color.push_u8(release)?;
     }
@@ -338,13 +344,6 @@ fn write_signal(color: &mut VertexColorV1, signal: ColorSignal) -> Result<(), Pr
         }
     };
     color.push_u8(profile)?;
-    color.push_u8(match crate::lcs_occurrence::ADMITTED_SRGB8_TRISTIMULUS_BINDING_V1
-        .transform_release()
-    {
-        crate::lcs_occurrence::ColorimetricTransformReleaseId::Iec61966Srgb8ToCie1931TwoDegreeXyzD65RelativeY1V1 => {
-            release_tag::IEC_SRGB8_TO_XYZ_D65_TRANSFORM_V1
-        }
-    })?;
     color.push_srgb8(signal.srgb8())
 }
 
@@ -493,6 +492,23 @@ fn constraint_color(
                 }
             })?;
             color.push_u8(wcag_criterion_tag(criterion))?;
+        }
+        #[cfg(test)]
+        ProgramConstraintContentV1::ModeledLcsProbe { release } => {
+            color.push_u8(release_tag::MODELED_LCS_PROBE_FAMILY_V1)?;
+            color.push_u8(match release.modeled_lcs_release() {
+                crate::lcs_occurrence::ModeledLcsOccurrenceReleaseId::V1 => {
+                    release_tag::MODELED_LCS_OCCURRENCE_V1
+                }
+                crate::lcs_occurrence::ModeledLcsOccurrenceReleaseId::MutationSentinelV1 => {
+                    release_tag::MODELED_LCS_OCCURRENCE_MUTATION_SENTINEL_V1
+                }
+            })?;
+            color.push_u8(match release.transform_release() {
+                crate::lcs_occurrence::ColorimetricTransformReleaseId::Iec61966Srgb8ToCie1931TwoDegreeXyzD65RelativeY1V1 => {
+                    release_tag::IEC_SRGB8_TO_XYZ_D65_TRANSFORM_V1
+                }
+            })?;
         }
         #[cfg(test)]
         ProgramConstraintContentV1::FinalRecheckMutantExactSrgb8 { expected } => {
@@ -976,7 +992,7 @@ fn serialize_leaf(
             .and_then(|value| value.checked_add(color.as_slice().len()))
             .ok_or(ProgramCompileError::ResourceExhausted)
     })?;
-    let capacity = DOMAIN_V1
+    let capacity = DOMAIN_V2
         .len()
         .checked_add(16)
         .and_then(|value| value.checked_add(color_bytes))
@@ -986,7 +1002,7 @@ fn serialize_leaf(
     output
         .try_reserve_exact(capacity)
         .map_err(|_| ProgramCompileError::ResourceExhausted)?;
-    output.extend_from_slice(DOMAIN_V1);
+    output.extend_from_slice(DOMAIN_V2);
     push_u64_bytes(&mut output, usize_as_u64(graph.colors.len())?);
     push_u64_bytes(&mut output, usize_as_u64(graph.edge_count)?);
 
@@ -1320,9 +1336,9 @@ fn canonical_preimage(graph: &CanonicalGraphV1) -> Result<Vec<u8>, ProgramCompil
     canonical_search(graph).map(|(preimage, _)| preimage)
 }
 
-pub(super) fn compile_program_content_identity_v1<Evaluation>(
+pub(super) fn compile_program_content_identity_v2<Evaluation>(
     program: &Program<Evaluation>,
-) -> Result<ProgramContentIdentityV1, ProgramCompileError>
+) -> Result<ProgramContentIdentityV2, ProgramCompileError>
 where
     Evaluation: ProgramConstraintEvaluatorSetV1,
     ProgramConstraintInvocationOf<Evaluation>: Copy,
@@ -1330,7 +1346,7 @@ where
     let graph = build_graph(program)?;
     let preimage = canonical_preimage(&graph)?;
     let digest = crate::sha256::digest(&preimage);
-    Ok(ProgramContentIdentityV1(*digest.as_bytes()))
+    Ok(ProgramContentIdentityV2(*digest.as_bytes()))
 }
 
 #[cfg(test)]
@@ -1398,6 +1414,48 @@ mod tests {
                 baseline
             );
         }
+    }
+
+    #[test]
+    fn modeled_lcs_release_mutation_affects_only_lcs_aware_constraint_content() {
+        fn mutate_modeled_lcs_release(
+            content: ProgramConstraintContentV1,
+        ) -> ProgramConstraintContentV1 {
+            match content {
+                ProgramConstraintContentV1::ModeledLcsProbe { release } => {
+                    ProgramConstraintContentV1::ModeledLcsProbe {
+                        release: release.with_modeled_lcs_release_for_test(
+                            crate::lcs_occurrence::ModeledLcsOccurrenceReleaseId::MutationSentinelV1,
+                        ),
+                    }
+                }
+                encoded_only => encoded_only,
+            }
+        }
+
+        let exact = crate::constraints::ExactSrgb8IdentityV1
+            .program_constraint_content_v1(Srgb8::new([0x12, 0x34, 0x56]));
+        let wcag = crate::constraints::Wcag22Srgb8V1
+            .program_constraint_content_v1(Wcag22CriterionV1::Sc143TextDefault);
+        for encoded_only in [exact, wcag] {
+            assert_eq!(
+                constraint_color(vertex_tag::CONSTRAINT_HARD, encoded_only).unwrap(),
+                constraint_color(
+                    vertex_tag::CONSTRAINT_HARD,
+                    mutate_modeled_lcs_release(encoded_only),
+                )
+                .unwrap(),
+                "an encoded-only descriptor has no LCS release capability to mutate",
+            );
+        }
+
+        let lcs = crate::constraints::LcsProbeProgramEvaluatorV1.program_constraint_content_v1();
+        assert_ne!(
+            constraint_color(vertex_tag::CONSTRAINT_HARD, lcs).unwrap(),
+            constraint_color(vertex_tag::CONSTRAINT_HARD, mutate_modeled_lcs_release(lcs),)
+                .unwrap(),
+            "an LCS-aware descriptor must bind the modeled occurrence release",
+        );
     }
 
     fn context_color(context: AppearanceContextId) -> VertexColorV1 {

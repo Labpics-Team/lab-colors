@@ -1,14 +1,18 @@
 //! Приватная typed-связка physical measurement, hard-classifier и evidence.
 //!
-//! Evaluator только измеряет modeled occurrence. Hard verdict появляется один
+//! Evaluator только измеряет свой typed target. Hard verdict появляется один
 //! раз в sealed classifier-е, после чего source-specific binder атомарно
 //! связывает результат с physical occurrence и metadata реально вызванного
-//! evaluator-а.
+//! evaluator-а. Derived LCS target отделён от encoded point capability типом.
 
 use crate::Srgb8;
 use crate::appearance::{ModeledSrgb8PointOccurrence, ResolvedOccurrence, VisiblePointBindingV1};
-use crate::lcs_occurrence::ModeledLcsOccurrenceV1;
+use crate::lcs_occurrence::{
+    AppearanceContextId, ColorSignal, ColorimetricTransformReleaseId,
+    ModeledLcsOccurrenceFormationErrorV1, ModeledLcsOccurrenceReleaseId, ModeledLcsOccurrenceV1,
+};
 use crate::wcag22::{Wcag22CriterionV1, Wcag22ProfileIdV1};
+use std::cell::OnceCell;
 
 mod exact;
 pub(crate) use exact::{
@@ -79,6 +83,16 @@ pub(crate) struct MutantExactPassV1;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct MutantExactViolationV1;
 
+/// Test-only LCS-aware evaluator used to prove capability sharing and atomic
+/// provenance before the first production LCS constraint family is admitted.
+#[cfg(test)]
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct LcsProbeProgramEvaluatorV1;
+
+#[cfg(test)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct LcsProbePassV1;
+
 /// Seals недоступны внешним crate-ам: новые evaluator/classifier families
 /// добавляются только вместе с code-owned physical adapter-ом.
 mod private {
@@ -97,6 +111,12 @@ impl private::EvaluatorSealed for FinalRecheckMutantProgramEvaluatorV1 {}
 
 #[cfg(test)]
 impl private::HardClassifierSealed for FinalRecheckMutantProgramEvaluatorV1 {}
+
+#[cfg(test)]
+impl private::EvaluatorSealed for LcsProbeProgramEvaluatorV1 {}
+
+#[cfg(test)]
+impl private::HardClassifierSealed for LcsProbeProgramEvaluatorV1 {}
 
 pub(crate) trait Evaluator<Target>: private::EvaluatorSealed {
     type Invocation;
@@ -216,33 +236,211 @@ pub(crate) type PointViolation<Evaluation> = <Evaluation as HardClassifier<
     PointMeasurement<Evaluation>,
 >>::Violation;
 
-/// Program-only target: the exact encoded point used by physical evaluators
-/// and the context-bound LCS occurrence derived from that same visible signal.
-/// Neither half is optional, and construction remains inside the sole Program
-/// execution path.
+/// Program-only encoded point. Appearance context and every derived view stay
+/// outside this capability, so an encoded evaluator cannot acquire either
+/// dependency through its target type.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct ProgramPointTargetV1 {
+    encoded: ModeledSrgb8PointOccurrence,
+}
+
+impl ProgramPointTargetV1 {
+    pub(crate) const fn new(encoded: ModeledSrgb8PointOccurrence) -> Self {
+        Self { encoded }
+    }
+
+    pub(crate) const fn encoded(self) -> ModeledSrgb8PointOccurrence {
+        self.encoded
+    }
+}
+
+/// Canonical physical Program occurrence. Target and evidence views are
+/// projected from this single value, so evaluator input and final source-over
+/// certificate cannot name different occurrences.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct ProgramPointOccurrenceV1 {
+    encoded: ModeledSrgb8PointOccurrence,
+    physical: VisiblePointBindingV1,
+    context: AppearanceContextId,
+}
+
+impl ProgramPointOccurrenceV1 {
+    pub(crate) fn from_resolved(source: &ResolvedOccurrence, context: AppearanceContextId) -> Self {
+        Self {
+            encoded: source.modeled_srgb8_point(),
+            physical: source.visible_point_binding(),
+            context,
+        }
+    }
+
+    pub(crate) const fn target(self) -> ProgramPointTargetV1 {
+        ProgramPointTargetV1::new(self.encoded)
+    }
+
+    pub(crate) const fn binding(self) -> ProgramVisiblePointBindingV1 {
+        ProgramVisiblePointBindingV1 {
+            physical: self.physical,
+            context: self.context,
+        }
+    }
+}
+
+/// Exact executable dependencies of an LCS-aware Program constraint. The same
+/// value is retained by evaluator evidence and compile-time content identity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(
+    dead_code,
+    reason = "the typed LCS capability precedes its first admitted Program evaluator"
+)]
+pub(crate) struct ProgramLcsDependencyReleaseV1 {
+    modeled_lcs_release: ModeledLcsOccurrenceReleaseId,
+    transform_release: ColorimetricTransformReleaseId,
+}
+
+#[allow(
+    dead_code,
+    reason = "the typed LCS capability precedes its first admitted Program evaluator"
+)]
+impl ProgramLcsDependencyReleaseV1 {
+    pub(crate) const fn current() -> Self {
+        Self {
+            modeled_lcs_release: crate::lcs_occurrence::MODELED_LCS_OCCURRENCE_RELEASE_V1,
+            transform_release: crate::lcs_occurrence::ADMITTED_SRGB8_TRISTIMULUS_BINDING_V1
+                .transform_release(),
+        }
+    }
+
+    pub(crate) const fn modeled_lcs_release(self) -> ModeledLcsOccurrenceReleaseId {
+        self.modeled_lcs_release
+    }
+
+    pub(crate) const fn transform_release(self) -> ColorimetricTransformReleaseId {
+        self.transform_release
+    }
+
+    #[cfg(test)]
+    pub(crate) const fn with_modeled_lcs_release_for_test(
+        self,
+        modeled_lcs_release: ModeledLcsOccurrenceReleaseId,
+    ) -> Self {
+        Self {
+            modeled_lcs_release,
+            ..self
+        }
+    }
+}
+
+/// LCS-aware target is a distinct capability, never an optional field on the
+/// encoded target. Only the occurrence-scoped adapter can construct it.
+#[derive(Debug, Clone, Copy)]
+#[allow(
+    dead_code,
+    reason = "the typed LCS capability precedes its first admitted Program evaluator"
+)]
+pub(crate) struct ProgramLcsPointTargetV1 {
     encoded: ModeledSrgb8PointOccurrence,
     modeled_lcs: ModeledLcsOccurrenceV1,
 }
 
-impl ProgramPointTargetV1 {
-    pub(crate) const fn new(
-        encoded: ModeledSrgb8PointOccurrence,
-        modeled_lcs: ModeledLcsOccurrenceV1,
-    ) -> Self {
-        Self {
-            encoded,
-            modeled_lcs,
-        }
-    }
-
+#[allow(
+    dead_code,
+    reason = "the typed LCS capability precedes its first admitted Program evaluator"
+)]
+impl ProgramLcsPointTargetV1 {
     pub(crate) const fn encoded(self) -> ModeledSrgb8PointOccurrence {
         self.encoded
     }
 
     pub(crate) const fn modeled_lcs(self) -> ModeledLcsOccurrenceV1 {
         self.modeled_lcs
+    }
+}
+
+/// One lazy derived LCS capability over a canonical physical occurrence.
+/// Success and failure are memoized so repeated LCS-aware constraints cannot
+/// repeat the sRGB8 -> XYZ derivation inside one evaluation scope.
+#[derive(Debug)]
+#[allow(
+    dead_code,
+    reason = "the typed LCS capability precedes its first admitted Program evaluator"
+)]
+pub(crate) struct ProgramLcsPointAdapterV1 {
+    point: ProgramPointOccurrenceV1,
+    modeled_lcs: OnceCell<Result<ModeledLcsOccurrenceV1, ModeledLcsOccurrenceFormationErrorV1>>,
+}
+
+#[allow(
+    dead_code,
+    reason = "the typed LCS capability precedes its first admitted Program evaluator"
+)]
+impl ProgramLcsPointAdapterV1 {
+    pub(crate) const fn new(point: ProgramPointOccurrenceV1) -> Self {
+        Self {
+            point,
+            modeled_lcs: OnceCell::new(),
+        }
+    }
+
+    fn modeled_lcs(&self) -> Result<ModeledLcsOccurrenceV1, ModeledLcsOccurrenceFormationErrorV1> {
+        *self.modeled_lcs.get_or_init(|| {
+            ModeledLcsOccurrenceV1::from_signal_in_context(
+                ColorSignal::from_srgb8(Srgb8::new(self.point.encoded.visible())),
+                self.point.context,
+            )
+        })
+    }
+}
+
+#[cfg(test)]
+impl Evaluator<ProgramLcsPointTargetV1> for LcsProbeProgramEvaluatorV1 {
+    type Invocation = u8;
+    type Identity = ();
+    type Release = ProgramLcsDependencyReleaseV1;
+    type Capability = ();
+    type Measurement = ModeledLcsOccurrenceV1;
+    type Error = core::convert::Infallible;
+
+    fn identity(&self) -> Self::Identity {}
+
+    fn release(&self) -> Self::Release {
+        ProgramLcsDependencyReleaseV1::current()
+    }
+
+    fn capability(&self) -> Self::Capability {}
+
+    fn evaluate(
+        &self,
+        target: &ProgramLcsPointTargetV1,
+        _invocation: &Self::Invocation,
+    ) -> Result<Self::Measurement, Self::Error> {
+        debug_assert_eq!(
+            target.modeled_lcs().signal().srgb8(),
+            Srgb8::new(target.encoded().visible())
+        );
+        Ok(target.modeled_lcs())
+    }
+}
+
+#[cfg(test)]
+impl HardClassifier<u8, ModeledLcsOccurrenceV1> for LcsProbeProgramEvaluatorV1 {
+    type Pass = LcsProbePassV1;
+    type Violation = core::convert::Infallible;
+
+    fn classify(
+        &self,
+        _invocation: &u8,
+        _measurement: &ModeledLcsOccurrenceV1,
+    ) -> HardDecision<Self::Pass, Self::Violation> {
+        HardDecision::Pass(LcsProbePassV1)
+    }
+}
+
+#[cfg(test)]
+impl LcsProbeProgramEvaluatorV1 {
+    pub(crate) fn program_constraint_content_v1(self) -> ProgramConstraintContentV1 {
+        ProgramConstraintContentV1::ModeledLcsProbe {
+            release: <Self as Evaluator<ProgramLcsPointTargetV1>>::release(&self),
+        }
     }
 }
 
@@ -297,6 +495,10 @@ pub(crate) enum ProgramConstraintContentV1 {
         release: Wcag22ProfileIdV1,
         capability: Wcag22Srgb8CapabilityV1,
         criterion: Wcag22CriterionV1,
+    },
+    #[cfg(test)]
+    ModeledLcsProbe {
+        release: ProgramLcsDependencyReleaseV1,
     },
     #[cfg(test)]
     FinalRecheckMutantExactSrgb8 { expected: Srgb8 },
@@ -457,16 +659,40 @@ impl HardClassifier<Srgb8, Srgb8> for FinalRecheckMutantProgramEvaluatorV1 {
 }
 
 /// Program evidence binds the physical source-over certificate and the exact
-/// modeled LCS provenance/context used by the evaluator in one non-forgeable
-/// value.
+/// declared appearance context. A derived LCS view is a separate capability.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct ProgramVisiblePointBindingV1 {
     physical: VisiblePointBindingV1,
-    modeled_lcs: ModeledLcsOccurrenceV1,
+    context: AppearanceContextId,
 }
 
 impl ProgramVisiblePointBindingV1 {
     pub(crate) const fn physical(self) -> VisiblePointBindingV1 {
+        self.physical
+    }
+
+    pub(crate) const fn context(self) -> AppearanceContextId {
+        self.context
+    }
+}
+
+/// Evidence binding available only to LCS-aware evaluators.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(
+    dead_code,
+    reason = "the typed LCS capability precedes its first admitted Program evaluator"
+)]
+pub(crate) struct ProgramLcsVisiblePointBindingV1 {
+    physical: ProgramVisiblePointBindingV1,
+    modeled_lcs: ModeledLcsOccurrenceV1,
+}
+
+#[allow(
+    dead_code,
+    reason = "the typed LCS capability precedes its first admitted Program evaluator"
+)]
+impl ProgramLcsVisiblePointBindingV1 {
+    pub(crate) const fn physical(self) -> ProgramVisiblePointBindingV1 {
         self.physical
     }
 
@@ -494,24 +720,117 @@ pub(crate) type ProgramVisiblePointViolationEvidence<Evaluation> = BoundProgramP
 >;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct ProgramPointBindingMismatchV1 {
-    physical: Srgb8,
-    modeled: Srgb8,
+#[allow(
+    dead_code,
+    reason = "the typed LCS capability precedes its first admitted Program evaluator"
+)]
+pub(crate) enum ProgramLcsPointAssessmentErrorV1<EvaluatorError> {
+    Formation(ModeledLcsOccurrenceFormationErrorV1),
+    Evaluator(EvaluatorError),
 }
 
-impl ProgramPointBindingMismatchV1 {
-    pub(crate) const fn physical(self) -> Srgb8 {
-        self.physical
-    }
+pub(crate) type ProgramLcsPointInvocation<Evaluation> =
+    <Evaluation as Evaluator<ProgramLcsPointTargetV1>>::Invocation;
+pub(crate) type ProgramLcsPointMeasurement<Evaluation> =
+    <Evaluation as Evaluator<ProgramLcsPointTargetV1>>::Measurement;
+pub(crate) type ProgramLcsPointPass<Evaluation> = <Evaluation as HardClassifier<
+    ProgramLcsPointInvocation<Evaluation>,
+    ProgramLcsPointMeasurement<Evaluation>,
+>>::Pass;
+pub(crate) type ProgramLcsPointViolation<Evaluation> = <Evaluation as HardClassifier<
+    ProgramLcsPointInvocation<Evaluation>,
+    ProgramLcsPointMeasurement<Evaluation>,
+>>::Violation;
 
-    pub(crate) const fn modeled(self) -> Srgb8 {
-        self.modeled
-    }
+type BoundProgramLcsPointMeasurement<Evaluation, Measurement> = BoundEvidence<
+    ProgramLcsVisiblePointBindingV1,
+    <Evaluation as Evaluator<ProgramLcsPointTargetV1>>::Identity,
+    <Evaluation as Evaluator<ProgramLcsPointTargetV1>>::Release,
+    <Evaluation as Evaluator<ProgramLcsPointTargetV1>>::Capability,
+    <Evaluation as Evaluator<ProgramLcsPointTargetV1>>::Invocation,
+    Measurement,
+>;
+
+pub(crate) type ProgramLcsVisiblePointPassEvidence<Evaluation> = BoundProgramLcsPointMeasurement<
+    Evaluation,
+    ClassifiedMeasurement<ProgramLcsPointMeasurement<Evaluation>, ProgramLcsPointPass<Evaluation>>,
+>;
+pub(crate) type ProgramLcsVisiblePointViolationEvidence<Evaluation> =
+    BoundProgramLcsPointMeasurement<
+        Evaluation,
+        ClassifiedMeasurement<
+            ProgramLcsPointMeasurement<Evaluation>,
+            ProgramLcsPointViolation<Evaluation>,
+        >,
+    >;
+pub(crate) type ProgramLcsPointAssessmentResultV1<Evaluation> = Result<
+    HardDecision<
+        ProgramLcsVisiblePointPassEvidence<Evaluation>,
+        ProgramLcsVisiblePointViolationEvidence<Evaluation>,
+    >,
+    ProgramLcsPointAssessmentErrorV1<<Evaluation as Evaluator<ProgramLcsPointTargetV1>>::Error>,
+>;
+
+/// The only LCS-aware Program binder. The target and its physical evidence are
+/// minted together from one occurrence-scoped adapter after one memoized
+/// derivation, so callers cannot pair equal bytes from different occurrences.
+#[allow(
+    dead_code,
+    reason = "the typed LCS capability precedes its first admitted Program evaluator"
+)]
+pub(crate) fn assess_program_lcs_point_hard<Evaluation>(
+    adapter: &ProgramLcsPointAdapterV1,
+    evaluator: &Evaluation,
+    invocation: ProgramLcsPointInvocation<Evaluation>,
+) -> ProgramLcsPointAssessmentResultV1<Evaluation>
+where
+    Evaluation: Evaluator<ProgramLcsPointTargetV1>
+        + HardClassifier<
+            ProgramLcsPointInvocation<Evaluation>,
+            ProgramLcsPointMeasurement<Evaluation>,
+        >,
+{
+    let modeled_lcs = adapter
+        .modeled_lcs()
+        .map_err(ProgramLcsPointAssessmentErrorV1::Formation)?;
+    let target = ProgramLcsPointTargetV1 {
+        encoded: adapter.point.encoded,
+        modeled_lcs,
+    };
+    let binding = ProgramLcsVisiblePointBindingV1 {
+        physical: adapter.point.binding(),
+        modeled_lcs,
+    };
+    let measurement = evaluator
+        .evaluate(&target, &invocation)
+        .map_err(ProgramLcsPointAssessmentErrorV1::Evaluator)?;
+    let classification = evaluator.classify(&invocation, &measurement);
+    let identity = evaluator.identity();
+    let release = evaluator.release();
+    let capability = evaluator.capability();
+
+    Ok(match classification {
+        HardDecision::Pass(payload) => HardDecision::Pass(BoundEvidence {
+            binding,
+            identity,
+            release,
+            capability,
+            invocation,
+            measurement: ClassifiedMeasurement::new(measurement, payload),
+        }),
+        HardDecision::Violation(payload) => HardDecision::Violation(BoundEvidence {
+            binding,
+            identity,
+            release,
+            capability,
+            invocation,
+            measurement: ClassifiedMeasurement::new(measurement, payload),
+        }),
+    })
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ProgramPointAssessmentErrorV1<EvaluatorError> {
-    Binding(ProgramPointBindingMismatchV1),
     Evaluator(EvaluatorError),
 }
 
@@ -524,8 +843,7 @@ pub(crate) type ProgramPointAssessmentResultV1<Evaluation> = Result<
 >;
 
 pub(crate) fn assess_program_point_hard<Evaluation>(
-    source: &ResolvedOccurrence,
-    modeled_lcs: ModeledLcsOccurrenceV1,
+    point: ProgramPointOccurrenceV1,
     evaluator: &Evaluation,
     invocation: ProgramPointInvocation<Evaluation>,
 ) -> ProgramPointAssessmentResultV1<Evaluation>
@@ -533,18 +851,8 @@ where
     Evaluation: Evaluator<ProgramPointTargetV1>
         + HardClassifier<ProgramPointInvocation<Evaluation>, ProgramPointMeasurement<Evaluation>>,
 {
-    let physical = Srgb8::new(source.visible());
-    let modeled = modeled_lcs.signal().srgb8();
-    if physical != modeled {
-        return Err(ProgramPointAssessmentErrorV1::Binding(
-            ProgramPointBindingMismatchV1 { physical, modeled },
-        ));
-    }
-    let target = ProgramPointTargetV1::new(source.modeled_srgb8_point(), modeled_lcs);
-    let binding = ProgramVisiblePointBindingV1 {
-        physical: source.visible_point_binding(),
-        modeled_lcs: target.modeled_lcs(),
-    };
+    let target = point.target();
+    let binding = point.binding();
     let measurement =
         <Evaluation as Evaluator<ProgramPointTargetV1>>::evaluate(evaluator, &target, &invocation)
             .map_err(ProgramPointAssessmentErrorV1::Evaluator)?;

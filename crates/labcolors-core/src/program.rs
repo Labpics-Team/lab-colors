@@ -35,7 +35,7 @@
 //! [`CertificateV1::Verified`] хранит выбранное состояние, все клетки
 //! доказательства и сертифицированные выходы. [`CertificateV1::Conflict`]
 //! хранит исчерпывающий конфликт по всем рассмотренным состояниям.
-//! [`ContentIdentityV1`] идентифицирует каноническое содержание, но не даёт
+//! [`ContentIdentityV2`] идентифицирует каноническое содержание, но не даёт
 //! полномочий живого [`OwnerV1`].
 
 #![forbid(unreachable_pub)]
@@ -53,14 +53,10 @@ use crate::constraints::{
 };
 use crate::joint::FiniteJointOrderErrorV1;
 use crate::lcs_occurrence::{
-    AdaptingLuminanceCdM2, AdmittedSrgb8TristimulusBindingV1, AppearanceContextDomainErrorV1,
+    AdaptingLuminanceCdM2, AppearanceContextDomainErrorV1,
     AppearanceContextFieldV1 as CoreAppearanceContextFieldV1, AppearanceContextId,
     AppearanceContextSchemaReleaseId, BackgroundLuminanceRatio, ColorSignal, ColorSignalViewV1,
-    ColorimetricFrameId, ColorimetricFrameReleaseId, IEC_SRGB_D65_XYZ_FRAME_V1,
-    ModeledLcsOccurrenceFormationErrorV1, NumericDomainError, ObserverProfileId,
-    OccurrenceFormationError, ReferenceWhiteId, SurroundProfileId,
-    TristimulusComponentV1 as CoreTristimulusComponentV1, TristimulusDomainErrorV1,
-    TristimulusSample, TristimulusScale,
+    IEC_SRGB_D65_XYZ_FRAME_V1, NumericDomainError, SurroundProfileId,
 };
 use crate::numerics::NumericalDecisionEvidenceV1;
 use crate::observation::{
@@ -73,7 +69,7 @@ use crate::program_session::{
     CoreProgramEvaluatorErrorV1, CoreProgramEvaluatorsV1, CoreProgramPassEvidenceV1,
     CoreProgramViolationEvidenceV1, DeclaredJointSelectionV1, JointCandidateStateV1, Occurrence,
     OpacityInput, OutputBinding, OutputSlotId, Paint, ProgramCompileError, ProgramConflictV1,
-    ProgramConstraintCellV1, ProgramConstraintResultV1, ProgramContentIdentityV1, ProgramOutputV1,
+    ProgramConstraintCellV1, ProgramConstraintResultV1, ProgramContentIdentityV2, ProgramOutputV1,
     ProgramSessionEvaluationError, ProgramSessionInstantiateError, ProgramSessionPlan,
     ProgramVerifiedV1, Source, SourceId, Surface, Target, TargetCandidateChoiceV1,
     TargetCandidateId, TargetCandidateV1 as CoreTargetCandidateV1, TargetId,
@@ -1318,8 +1314,8 @@ impl OwnerV1 {
     ///
     /// Identity доступна до первого update, но не заменяет полномочия этой
     /// конкретной owner-эпохи.
-    pub(crate) fn content_identity(&self) -> ContentIdentityV1 {
-        ContentIdentityV1::from_core(self.compiled.content_identity())
+    pub(crate) fn content_identity(&self) -> ContentIdentityV2 {
+        ContentIdentityV2::from_core(self.compiled.content_identity())
     }
 
     /// Вычисляет верхние границы клеток для prospective Observed-update.
@@ -1367,7 +1363,7 @@ impl OwnerV1 {
 
     /// Проецирует операции только для Session этой точной owner-эпохи.
     ///
-    /// Равенство [`ContentIdentityV1`] не даёт полномочий.
+    /// Равенство [`ContentIdentityV2`] не даёт полномочий.
     pub(crate) fn project<'owner, 'session>(
         &'owner self,
         session: &'session SessionV1,
@@ -1695,10 +1691,10 @@ impl<'owner, 'session> ProjectionV1<'owner, 'session> {
 /// Identity не идентифицирует owner-эпоху и не даёт runtime-полномочий.
 #[repr(transparent)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(crate) struct ContentIdentityV1([u8; 32]);
+pub(crate) struct ContentIdentityV2([u8; 32]);
 
-impl ContentIdentityV1 {
-    const fn from_core(value: ProgramContentIdentityV1) -> Self {
+impl ContentIdentityV2 {
+    const fn from_core(value: ProgramContentIdentityV2) -> Self {
         Self(*value.as_bytes())
     }
 
@@ -1716,8 +1712,8 @@ pub(crate) struct VerifiedCertificateV1<'a> {
 
 impl<'a> VerifiedCertificateV1<'a> {
     /// Возвращает identity скомпилированного содержания.
-    pub(crate) const fn content_identity(self) -> ContentIdentityV1 {
-        ContentIdentityV1::from_core(self.inner.report().content_identity())
+    pub(crate) const fn content_identity(self) -> ContentIdentityV2 {
+        ContentIdentityV2::from_core(self.inner.report().content_identity())
     }
 
     /// Возвращает точное наблюдение, на котором выдан сертификат.
@@ -1762,8 +1758,8 @@ pub(crate) struct ConflictCertificateV1<'a> {
 
 impl<'a> ConflictCertificateV1<'a> {
     /// Возвращает identity скомпилированного содержания.
-    pub(crate) const fn content_identity(self) -> ContentIdentityV1 {
-        ContentIdentityV1::from_core(self.inner.report().content_identity())
+    pub(crate) const fn content_identity(self) -> ContentIdentityV2 {
+        ContentIdentityV2::from_core(self.inner.report().content_identity())
     }
 
     /// Возвращает точное наблюдение, вызвавшее конфликт.
@@ -1812,7 +1808,7 @@ impl<'a> CertificateV1<'a> {
     }
 
     /// Возвращает identity скомпилированного содержания.
-    pub(crate) const fn content_identity(self) -> ContentIdentityV1 {
+    pub(crate) const fn content_identity(self) -> ContentIdentityV2 {
         match self {
             Self::Verified(value) => value.content_identity(),
             Self::Conflict(value) => value.content_identity(),
@@ -2055,7 +2051,7 @@ impl<'a> AssessmentV1<'a> {
         }
     }
 
-    /// Возвращает общую физическую и моделированную привязку точки.
+    /// Возвращает физическую occurrence-привязку и объявленный appearance context.
     pub(crate) fn binding(self) -> PointBindingV1<'a> {
         match self {
             Self::ExactSrgb8(value) => value.binding(),
@@ -2079,7 +2075,7 @@ enum ExactSrgb8EvidenceRefV1<'a> {
     Violation(&'a CoreExactViolationEvidenceV1),
 }
 
-/// Evidence точного sRGB8 сравнения с физикой и моделированным контекстом.
+/// Evidence точного sRGB8 сравнения с физической occurrence и объявленным context.
 #[derive(Clone, Copy)]
 pub(crate) struct ExactSrgb8EvidenceV1<'a> {
     inner: ExactSrgb8EvidenceRefV1<'a>,
@@ -2102,7 +2098,7 @@ impl<'a> ExactSrgb8EvidenceV1<'a> {
         }
     }
 
-    /// Возвращает физическую и моделированную привязку точки.
+    /// Возвращает физическую occurrence-привязку и объявленный appearance context.
     pub(crate) fn binding(self) -> PointBindingV1<'a> {
         let value = match self.inner {
             ExactSrgb8EvidenceRefV1::Pass(value) => value.binding(),
@@ -2118,7 +2114,7 @@ enum Wcag22Srgb8EvidenceRefV1<'a> {
     Violation(&'a CoreWcag22ViolationEvidenceV1),
 }
 
-/// WCAG 2.2 evidence вместе с физикой и моделированным контекстом.
+/// WCAG 2.2 evidence с физической occurrence и объявленным appearance context.
 #[derive(Clone, Copy)]
 pub(crate) struct Wcag22Srgb8EvidenceV1<'a> {
     inner: Wcag22Srgb8EvidenceRefV1<'a>,
@@ -2175,7 +2171,7 @@ impl<'a> Wcag22Srgb8EvidenceV1<'a> {
         }
     }
 
-    /// Возвращает физическую и моделированную привязку точки.
+    /// Возвращает физическую occurrence-привязку и объявленный appearance context.
     pub(crate) fn binding(self) -> PointBindingV1<'a> {
         let value = match self.inner {
             Wcag22Srgb8EvidenceRefV1::Pass(value) => value.binding(),
@@ -2185,7 +2181,7 @@ impl<'a> Wcag22Srgb8EvidenceV1<'a> {
     }
 }
 
-/// Общая привязка физической композиции и моделированного tristimulus/context.
+/// Общая привязка физической композиции и объявленного appearance context.
 #[derive(Clone, Copy)]
 pub(crate) struct PointBindingV1<'a> {
     inner: &'a ProgramVisiblePointBindingV1,
@@ -2203,15 +2199,9 @@ impl<'a> PointBindingV1<'a> {
         }
     }
 
-    /// Возвращает закрытый тип допущенного моделированного сигнала.
-    pub(crate) const fn modeled(self) -> ModeledPointV1<'a> {
-        match self.inner.modeled_lcs().provenance().binding() {
-            AdmittedSrgb8TristimulusBindingV1::Iec61966Srgb8ToCie1931TwoDegreeXyzD65RelativeY1V1 => {
-                ModeledPointV1::Iec61966Srgb8ToCie1931TwoDegreeXyzD65RelativeY1(
-                    ModeledTristimulusV1 { inner: self.inner },
-                )
-            }
-        }
+    /// Возвращает точный объявленный контекст без неявного построения LCS-view.
+    pub(crate) const fn appearance_context(self) -> AppearanceContextV1 {
+        AppearanceContextV1(self.inner.context())
     }
 }
 
@@ -2262,31 +2252,6 @@ impl EncodedSrgb8SourceOverV1<'_> {
     /// Возвращает видимый encoded sRGB8 результат композиции.
     pub(crate) const fn visible(self) -> Srgb8 {
         Srgb8::new(self.inner.physical().occurrence().output_rgb())
-    }
-}
-
-/// Закрытое семейство provenance моделированного tristimulus.
-#[derive(Clone, Copy)]
-pub(crate) enum ModeledPointV1<'a> {
-    /// IEC sRGB8 → CIE 1931 2° XYZ D65 с относительным `Y=1`.
-    Iec61966Srgb8ToCie1931TwoDegreeXyzD65RelativeY1(ModeledTristimulusV1<'a>),
-}
-
-/// Допущенный моделированный tristimulus и его контекст восприятия.
-#[derive(Clone, Copy)]
-pub(crate) struct ModeledTristimulusV1<'a> {
-    inner: &'a ProgramVisiblePointBindingV1,
-}
-
-impl ModeledTristimulusV1<'_> {
-    /// Возвращает относительные координаты CIE XYZ.
-    pub(crate) fn xyz(self) -> [f64; 3] {
-        self.inner.modeled_lcs().derivation().sample().xyz()
-    }
-
-    /// Возвращает явный контекст, использованный при моделировании.
-    pub(crate) const fn appearance_context(self) -> AppearanceContextV1 {
-        AppearanceContextV1(self.inner.modeled_lcs().occurrence().context())
     }
 }
 
@@ -2646,95 +2611,6 @@ pub(crate) enum ObservationBindingFailureV1 {
     },
 }
 
-/// Зарегистрированная identity XYZ-frame в диагностике закрытого Core.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ColorimetricFrameV1 {
-    /// CIE 1931 2°, IEC 61966-2-1 D65, относительная шкала `Y=1`, XYZ v1.
-    Iec61966Srgb8D65XyzRelativeY1V1,
-    /// Зарезервированный frame hostile-теста, недостижимый в production.
-    #[cfg(test)]
-    MutationSentinelV1,
-}
-
-/// Компонент XYZ в точной диагностике.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum TristimulusComponentV1 {
-    /// Компонент X.
-    X,
-    /// Компонент Y.
-    Y,
-    /// Компонент Z.
-    Z,
-}
-
-/// Точная конечная XYZ-точка и её зарегистрированный frame.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct TristimulusSampleV1 {
-    /// Биты IEEE-754 сохраняют точный диагностический payload и отделяют
-    /// равенство записи от семантики сравнения floating-point.
-    xyz_bits: [u64; 3],
-    frame: ColorimetricFrameV1,
-}
-
-impl TristimulusSampleV1 {
-    fn from_core(sample: TristimulusSample) -> Self {
-        Self {
-            xyz_bits: sample.xyz().map(f64::to_bits),
-            frame: map_colorimetric_frame(sample.frame()),
-        }
-    }
-
-    /// Возвращает точные конечные XYZ-компоненты.
-    pub(crate) fn xyz(self) -> [f64; 3] {
-        self.xyz_bits.map(f64::from_bits)
-    }
-
-    /// Возвращает зарегистрированный frame точки.
-    pub(crate) const fn frame(self) -> ColorimetricFrameV1 {
-        self.frame
-    }
-}
-
-/// Точная причина, по которой Core не сформировал modeled LCS occurrence.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ModeledOccurrenceFailureV1 {
-    /// Детерминированное преобразование получило недопустимую XYZ-компоненту.
-    Tristimulus {
-        /// Ошибочная компонента.
-        component: TristimulusComponentV1,
-        /// Точная числовая причина.
-        reason: NumericDomainErrorV1,
-    },
-    /// Stimulus и appearance context принадлежат разным frame.
-    FrameMismatch {
-        /// Frame modeled stimulus.
-        stimulus: ColorimetricFrameV1,
-        /// Frame appearance context.
-        context: ColorimetricFrameV1,
-    },
-    /// Повторное вычисление provenance получило недопустимую XYZ-компоненту.
-    ProvenanceReplayFailed {
-        /// Ошибочная компонента.
-        component: TristimulusComponentV1,
-        /// Точная числовая причина.
-        reason: NumericDomainErrorV1,
-    },
-    /// Записанная modeled-точка не совпала с повторным вычислением provenance.
-    RecordedSampleDoesNotReplay {
-        /// Записанная точка.
-        recorded: TristimulusSampleV1,
-        /// Повторно вычисленная точка.
-        replayed: TristimulusSampleV1,
-    },
-    /// Точка occurrence не совпала с modeled provenance.
-    OccurrenceSampleMismatch {
-        /// Точка occurrence.
-        occurrence: TristimulusSampleV1,
-        /// Точка modeled provenance.
-        modeled: TristimulusSampleV1,
-    },
-}
-
 /// Точное недопустимое protocol-состояние зарегистрированного evaluator-а.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[expect(
@@ -2776,10 +2652,6 @@ pub(crate) enum UpdateInvariantV1 {
     EvidenceBinding,
     /// Applicable evaluator вернул недопустимое protocol-состояние.
     EvaluatorProtocol,
-    /// Physical и modeled точки одного evaluator-вызова разошлись.
-    PhysicalModeledBinding,
-    /// Зарегистрированный сигнал не сформировал свой LCS occurrence.
-    ModeledOccurrenceFormation,
     /// Один выбранный state дал разные выходы в физических сценариях.
     OutputCaseInvariance,
     /// Детерминированная финальная перепроверка разошлась с поиском.
@@ -2816,32 +2688,6 @@ pub(crate) enum UpdateInvariantFailureV1 {
         /// Недопустимое protocol-состояние.
         source: EvaluatorProtocolFailureV1,
     },
-    /// Physical и modeled точки одного evaluator-вызова разошлись.
-    PhysicalModeledBinding {
-        /// Индекс физического сценария.
-        case_index: usize,
-        /// Непрозрачный ID проверяемого ограничения.
-        constraint: ConstraintIdV1,
-        /// Непрозрачный ID физического occurrence.
-        occurrence: OccurrenceIdV1,
-        /// Точный appearance context evaluator-вызова.
-        context: AppearanceContextV1,
-        /// Физическая encoded sRGB8-точка.
-        physical: Srgb8,
-        /// Modeled encoded sRGB8-точка.
-        modeled: Srgb8,
-    },
-    /// Зарегистрированный сигнал не сформировал свой LCS occurrence.
-    ModeledOccurrenceFormation {
-        /// Индекс физического сценария.
-        case_index: usize,
-        /// Непрозрачный ID occurrence.
-        occurrence: OccurrenceIdV1,
-        /// Intended appearance context формирования.
-        context: AppearanceContextV1,
-        /// Точная причина отказа формирования.
-        source: ModeledOccurrenceFailureV1,
-    },
     /// Один выбранный state дал разные выходы в физических сценариях.
     OutputCaseInvariance {
         /// Непрозрачный ID выходного слота.
@@ -2876,10 +2722,6 @@ impl UpdateInvariantFailureV1 {
             Self::ObservationBinding { .. } => UpdateInvariantV1::ObservationBinding,
             Self::EvidenceBinding => UpdateInvariantV1::EvidenceBinding,
             Self::EvaluatorProtocol { .. } => UpdateInvariantV1::EvaluatorProtocol,
-            Self::PhysicalModeledBinding { .. } => UpdateInvariantV1::PhysicalModeledBinding,
-            Self::ModeledOccurrenceFormation { .. } => {
-                UpdateInvariantV1::ModeledOccurrenceFormation
-            }
             Self::OutputCaseInvariance { .. } => UpdateInvariantV1::OutputCaseInvariance,
             Self::SelectionRecheck { .. } => UpdateInvariantV1::SelectionRecheck,
             Self::ProgramEvaluation => UpdateInvariantV1::ProgramEvaluation,
@@ -3212,93 +3054,6 @@ fn map_program_compile_error(error: ProgramCompileError) -> CompileErrorV1 {
     }
 }
 
-const fn map_colorimetric_frame(frame: ColorimetricFrameId) -> ColorimetricFrameV1 {
-    match (
-        frame.observer(),
-        frame.reference_white(),
-        frame.scale(),
-        frame.release(),
-    ) {
-        (
-            ObserverProfileId::Cie1931TwoDegreeV1,
-            ReferenceWhiteId::Iec61966D65ChromaticityV1,
-            TristimulusScale::RelativeY1,
-            ColorimetricFrameReleaseId::XyzV1,
-        ) => ColorimetricFrameV1::Iec61966Srgb8D65XyzRelativeY1V1,
-        #[cfg(test)]
-        (
-            ObserverProfileId::Cie1931TwoDegreeV1,
-            ReferenceWhiteId::Iec61966D65ChromaticityV1,
-            TristimulusScale::RelativeY1,
-            ColorimetricFrameReleaseId::MutationSentinelV1,
-        ) => ColorimetricFrameV1::MutationSentinelV1,
-    }
-}
-
-const fn map_numeric_domain_error(error: NumericDomainError) -> NumericDomainErrorV1 {
-    match error {
-        NumericDomainError::NonFinite => NumericDomainErrorV1::NonFinite,
-        NumericDomainError::Negative => NumericDomainErrorV1::Negative,
-        NumericDomainError::NotPositive => NumericDomainErrorV1::NotPositive,
-        NumericDomainError::AboveOne => NumericDomainErrorV1::AboveOne,
-        NumericDomainError::HueOutOfRange => NumericDomainErrorV1::HueOutOfRange,
-    }
-}
-
-const fn map_tristimulus_component(
-    component: CoreTristimulusComponentV1,
-) -> TristimulusComponentV1 {
-    match component {
-        CoreTristimulusComponentV1::X => TristimulusComponentV1::X,
-        CoreTristimulusComponentV1::Y => TristimulusComponentV1::Y,
-        CoreTristimulusComponentV1::Z => TristimulusComponentV1::Z,
-    }
-}
-
-const fn map_tristimulus_domain_error(
-    error: TristimulusDomainErrorV1,
-) -> (TristimulusComponentV1, NumericDomainErrorV1) {
-    (
-        map_tristimulus_component(error.component()),
-        map_numeric_domain_error(error.reason()),
-    )
-}
-
-fn map_modeled_occurrence_error(
-    error: ModeledLcsOccurrenceFormationErrorV1,
-) -> ModeledOccurrenceFailureV1 {
-    match error {
-        ModeledLcsOccurrenceFormationErrorV1::Tristimulus(source) => {
-            let (component, reason) = map_tristimulus_domain_error(source);
-            ModeledOccurrenceFailureV1::Tristimulus { component, reason }
-        }
-        ModeledLcsOccurrenceFormationErrorV1::Formation(
-            OccurrenceFormationError::FrameMismatch { stimulus, context },
-        ) => ModeledOccurrenceFailureV1::FrameMismatch {
-            stimulus: map_colorimetric_frame(stimulus),
-            context: map_colorimetric_frame(context),
-        },
-        ModeledLcsOccurrenceFormationErrorV1::ProvenanceReplayFailed(source) => {
-            let (component, reason) = map_tristimulus_domain_error(source);
-            ModeledOccurrenceFailureV1::ProvenanceReplayFailed { component, reason }
-        }
-        ModeledLcsOccurrenceFormationErrorV1::RecordedSampleDoesNotReplay {
-            recorded,
-            replayed,
-        } => ModeledOccurrenceFailureV1::RecordedSampleDoesNotReplay {
-            recorded: TristimulusSampleV1::from_core(recorded),
-            replayed: TristimulusSampleV1::from_core(replayed),
-        },
-        ModeledLcsOccurrenceFormationErrorV1::OccurrenceSampleMismatch {
-            occurrence,
-            modeled,
-        } => ModeledOccurrenceFailureV1::OccurrenceSampleMismatch {
-            occurrence: TristimulusSampleV1::from_core(occurrence),
-            modeled: TristimulusSampleV1::from_core(modeled),
-        },
-    }
-}
-
 fn map_observation_schema_mismatch(
     error: ObservationSchemaMismatchV1,
 ) -> ObservationBindingFailureV1 {
@@ -3442,36 +3197,6 @@ fn map_plan_error(error: CoreProgramPlanErrorV1) -> UpdateErrorV1 {
                     context: AppearanceContextV1::from_core(context),
                     source,
                 },
-            },
-        },
-        ProgramSessionEvaluationError::ProgramTargetBinding {
-            case_index,
-            constraint,
-            occurrence,
-            context,
-            physical,
-            modeled,
-        } => UpdateErrorV1::InternalInvariant {
-            source: UpdateInvariantFailureV1::PhysicalModeledBinding {
-                case_index,
-                constraint: ConstraintIdV1::from_core(constraint),
-                occurrence: OccurrenceIdV1::from_core(occurrence),
-                context: AppearanceContextV1::from_core(context),
-                physical,
-                modeled,
-            },
-        },
-        ProgramSessionEvaluationError::ModeledOccurrence {
-            case_index,
-            occurrence,
-            context,
-            source,
-        } => UpdateErrorV1::InternalInvariant {
-            source: UpdateInvariantFailureV1::ModeledOccurrenceFormation {
-                case_index,
-                occurrence: OccurrenceIdV1::from_core(occurrence),
-                context: AppearanceContextV1::from_core(context),
-                source: map_modeled_occurrence_error(source),
             },
         },
         ProgramSessionEvaluationError::OutputVariesAcrossCases {
@@ -3760,84 +3485,7 @@ mod update_error_projection_tests {
     }
 
     #[test]
-    fn every_modeled_occurrence_failure_has_an_isomorphic_boundary_witness() {
-        use crate::lcs_occurrence::{
-            MUTATION_SENTINEL_XYZ_FRAME_V1, ModeledLcsOccurrenceFormationErrorV1,
-            OccurrenceFormationError, TristimulusSample,
-        };
-
-        let domain = TristimulusSample::try_from_xyz_for_test(
-            [f64::NAN, 0.2, 0.3],
-            IEC_SRGB_D65_XYZ_FRAME_V1,
-        )
-        .unwrap_err();
-        let recorded =
-            TristimulusSample::try_from_xyz_for_test([0.1, 0.2, 0.3], IEC_SRGB_D65_XYZ_FRAME_V1)
-                .unwrap();
-        let replayed =
-            TristimulusSample::try_from_xyz_for_test([0.1, 0.2, 0.4], IEC_SRGB_D65_XYZ_FRAME_V1)
-                .unwrap();
-
-        let cases = [
-            (
-                ModeledLcsOccurrenceFormationErrorV1::Tristimulus(domain),
-                ModeledOccurrenceFailureV1::Tristimulus {
-                    component: TristimulusComponentV1::X,
-                    reason: NumericDomainErrorV1::NonFinite,
-                },
-            ),
-            (
-                ModeledLcsOccurrenceFormationErrorV1::Formation(
-                    OccurrenceFormationError::FrameMismatch {
-                        stimulus: IEC_SRGB_D65_XYZ_FRAME_V1,
-                        context: MUTATION_SENTINEL_XYZ_FRAME_V1,
-                    },
-                ),
-                ModeledOccurrenceFailureV1::FrameMismatch {
-                    stimulus: ColorimetricFrameV1::Iec61966Srgb8D65XyzRelativeY1V1,
-                    context: ColorimetricFrameV1::MutationSentinelV1,
-                },
-            ),
-            (
-                ModeledLcsOccurrenceFormationErrorV1::ProvenanceReplayFailed(domain),
-                ModeledOccurrenceFailureV1::ProvenanceReplayFailed {
-                    component: TristimulusComponentV1::X,
-                    reason: NumericDomainErrorV1::NonFinite,
-                },
-            ),
-            (
-                ModeledLcsOccurrenceFormationErrorV1::RecordedSampleDoesNotReplay {
-                    recorded,
-                    replayed,
-                },
-                ModeledOccurrenceFailureV1::RecordedSampleDoesNotReplay {
-                    recorded: TristimulusSampleV1::from_core(recorded),
-                    replayed: TristimulusSampleV1::from_core(replayed),
-                },
-            ),
-            (
-                ModeledLcsOccurrenceFormationErrorV1::OccurrenceSampleMismatch {
-                    occurrence: recorded,
-                    modeled: replayed,
-                },
-                ModeledOccurrenceFailureV1::OccurrenceSampleMismatch {
-                    occurrence: TristimulusSampleV1::from_core(recorded),
-                    modeled: TristimulusSampleV1::from_core(replayed),
-                },
-            ),
-        ];
-
-        for (source, expected) in cases {
-            assert_eq!(map_modeled_occurrence_error(source), expected);
-        }
-    }
-
-    #[test]
     fn every_unreachable_core_failure_keeps_its_subject_and_witness_facts() {
-        use crate::lcs_occurrence::{
-            MUTATION_SENTINEL_XYZ_FRAME_V1, ModeledLcsOccurrenceFormationErrorV1,
-            OccurrenceFormationError,
-        };
         use crate::observation::ObservationSchemaMismatchV1;
 
         let assert_invariant = |error: UpdateErrorV1, source: UpdateInvariantFailureV1| {
@@ -3862,12 +3510,6 @@ mod update_error_projection_tests {
                     }
                     UpdateInvariantFailureV1::EvaluatorProtocol { .. } => {
                         UpdateInvariantV1::EvaluatorProtocol
-                    }
-                    UpdateInvariantFailureV1::PhysicalModeledBinding { .. } => {
-                        UpdateInvariantV1::PhysicalModeledBinding
-                    }
-                    UpdateInvariantFailureV1::ModeledOccurrenceFormation { .. } => {
-                        UpdateInvariantV1::ModeledOccurrenceFormation
                     }
                     UpdateInvariantFailureV1::OutputCaseInvariance { .. } => {
                         UpdateInvariantV1::OutputCaseInvariance
@@ -3907,46 +3549,6 @@ mod update_error_projection_tests {
                     binding_index: 3,
                     expected: None,
                     actual: None,
-                },
-            },
-        );
-        assert_invariant(
-            map_plan_error(ProgramSessionEvaluationError::ProgramTargetBinding {
-                case_index: 2,
-                constraint: ConstraintId::new(3),
-                occurrence: OccurrenceId::new(4),
-                context: context().0,
-                physical: Srgb8::new([1, 2, 3]),
-                modeled: Srgb8::new([3, 2, 1]),
-            }),
-            UpdateInvariantFailureV1::PhysicalModeledBinding {
-                case_index: 2,
-                constraint: ConstraintIdV1::new(3),
-                occurrence: OccurrenceIdV1::new(4),
-                context: context(),
-                physical: Srgb8::new([1, 2, 3]),
-                modeled: Srgb8::new([3, 2, 1]),
-            },
-        );
-        assert_invariant(
-            map_plan_error(ProgramSessionEvaluationError::ModeledOccurrence {
-                case_index: 2,
-                occurrence: OccurrenceId::new(4),
-                context: context().0,
-                source: ModeledLcsOccurrenceFormationErrorV1::Formation(
-                    OccurrenceFormationError::FrameMismatch {
-                        stimulus: IEC_SRGB_D65_XYZ_FRAME_V1,
-                        context: MUTATION_SENTINEL_XYZ_FRAME_V1,
-                    },
-                ),
-            }),
-            UpdateInvariantFailureV1::ModeledOccurrenceFormation {
-                case_index: 2,
-                occurrence: OccurrenceIdV1::new(4),
-                context: context(),
-                source: ModeledOccurrenceFailureV1::FrameMismatch {
-                    stimulus: ColorimetricFrameV1::Iec61966Srgb8D65XyzRelativeY1V1,
-                    context: ColorimetricFrameV1::MutationSentinelV1,
                 },
             },
         );

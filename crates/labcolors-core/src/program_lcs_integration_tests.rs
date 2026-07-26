@@ -3,13 +3,14 @@ use crate::appearance::{
     OccurrenceId, OpacityInputId, PaintId, PointOpacityOverSurfaceV1, SurfaceId, SurfaceInputPortId,
 };
 use crate::constraints::{
-    ExactSrgb8IdentityV1, ProgramPointAssessmentErrorV1, ProgramVisiblePointBindingV1,
-    Wcag22Srgb8V1, assess_program_point_hard,
+    ExactSrgb8IdentityV1, HardDecision, LcsProbeProgramEvaluatorV1, ProgramLcsDependencyReleaseV1,
+    ProgramLcsPointAdapterV1, ProgramLcsPointAssessmentErrorV1, ProgramPointOccurrenceV1,
+    ProgramVisiblePointBindingV1, Wcag22Srgb8V1, assess_program_lcs_point_hard,
 };
 use crate::lcs_occurrence::{
-    AdaptingLuminanceCdM2, AppearanceContextId, AppearanceContextSchemaReleaseId, AppearanceState,
-    BackgroundLuminanceRatio, ColorSignal, HueState, IEC_SRGB_D65_XYZ_FRAME_V1,
-    MODELED_TRISTIMULUS_DERIVATION_CALLS, ModeledLcsOccurrenceV1, SurroundProfileId,
+    AdaptingLuminanceCdM2, AppearanceContextId, AppearanceContextSchemaReleaseId,
+    BackgroundLuminanceRatio, ColorSignal, IEC_SRGB_D65_XYZ_FRAME_V1,
+    MODELED_TRISTIMULUS_DERIVATION_CALLS, MUTATION_SENTINEL_XYZ_FRAME_V1, SurroundProfileId,
 };
 use crate::observation::{
     ObservationGroupId, ObservationPayloadInput, ObservationStreamId, ObservationUpdateInput,
@@ -272,19 +273,20 @@ fn compiled_duplicate_constraint_program() -> CompiledProgram<ExactSrgb8Identity
     .unwrap()
 }
 
-fn assert_binding_matches_modeled(
+fn assert_binding_matches_physical(
     binding: ProgramVisiblePointBindingV1,
-    modeled: ModeledLcsOccurrenceV1,
+    expected_context: AppearanceContextId,
+    expected_visible: Srgb8,
 ) {
-    assert_eq!(binding.modeled_lcs(), modeled);
+    assert_eq!(binding.context(), expected_context);
     assert_eq!(
         binding.physical().occurrence().output_rgb(),
-        modeled.signal().srgb8().bytes(),
+        expected_visible.bytes()
     );
 }
 
 #[test]
-fn ready_cell_binds_the_actual_visible_signal_to_the_exact_authored_context() {
+fn ready_cell_binds_the_actual_visible_signal_and_declared_context_without_lcs() {
     let average = context(SurroundProfileId::AverageV1);
     let compiled = compiled_program(
         &[(AVERAGE_OCCURRENCE, AVERAGE_CONSTRAINT, average)],
@@ -301,23 +303,17 @@ fn ready_cell_binds_the_actual_visible_signal_to_the_exact_authored_context() {
         panic!("one physical case times one constraint must produce one cell");
     };
 
-    let modeled = cell.modeled_lcs_occurrence();
-    assert_eq!(
-        modeled.derivation().provenance().source_signal(),
-        signal([0x80; 3]),
-        "provenance must name the visible source-over result, not the Paint source or backdrop",
-    );
-    assert_eq!(modeled.occurrence().context(), average);
+    assert_eq!(cell.appearance_context(), average);
     let ProgramConstraintResultV1::Pass(evidence) = cell.result() else {
         panic!("exact equality must retain typed pass evidence");
     };
-    assert_binding_matches_modeled(*evidence.binding(), modeled);
+    assert_binding_matches_physical(*evidence.binding(), average, Srgb8::new([0x80; 3]));
     assert_eq!(*evidence.measurement().value(), Srgb8::new([0x80; 3]));
     assert_eq!(*evidence.invocation(), Srgb8::new([0x80; 3]));
 }
 
 #[test]
-fn identical_physical_bytes_share_tristimulus_but_contextual_cam16_views_diverge() {
+fn identical_physical_bytes_keep_distinct_declared_contexts_without_deriving_views() {
     let average = context(SurroundProfileId::AverageV1);
     let dim = context(SurroundProfileId::DimV1);
     let compiled = compiled_program(
@@ -337,33 +333,26 @@ fn identical_physical_bytes_share_tristimulus_but_contextual_cam16_views_diverge
     let [average_cell, dim_cell] = current.report().cells() else {
         panic!("one case times two constraints must produce two canonical cells");
     };
-    let average_modeled = average_cell.modeled_lcs_occurrence();
-    let dim_modeled = dim_cell.modeled_lcs_occurrence();
-
-    assert_eq!(
-        average_modeled.derivation().provenance().source_signal(),
-        dim_modeled.derivation().provenance().source_signal(),
-    );
-    assert_eq!(
-        average_modeled.derivation().sample(),
-        dim_modeled.derivation().sample(),
-    );
-    assert_eq!(average_modeled.occurrence().context(), average);
-    assert_eq!(dim_modeled.occurrence().context(), dim);
-    assert_ne!(average_modeled.occurrence(), dim_modeled.occurrence());
-
-    let average_state = AppearanceState::derive_v1(average_modeled.occurrence()).unwrap();
-    let dim_state = AppearanceState::derive_v1(dim_modeled.occurrence()).unwrap();
-    assert_eq!(average_state.oklab(), dim_state.oklab());
+    assert_eq!(average_cell.appearance_context(), average);
+    assert_eq!(dim_cell.appearance_context(), dim);
     assert_ne!(
-        average_state.cam16().j().to_bits(),
-        dim_state.cam16().j().to_bits(),
-        "CAM16 must be evaluated under each occurrence's own context",
+        average_cell.appearance_context(),
+        dim_cell.appearance_context()
     );
+    for cell in [average_cell, dim_cell] {
+        let ProgramConstraintResultV1::Pass(evidence) = cell.result() else {
+            panic!("both exact constraints must pass");
+        };
+        assert_eq!(
+            evidence.binding().physical().occurrence().output_rgb(),
+            [0x80; 3]
+        );
+        assert_eq!(*evidence.measurement().value(), Srgb8::new([0x80; 3]));
+    }
 }
 
 #[test]
-fn exact_black_visible_occurrence_keeps_undefined_hue_in_lcs() {
+fn exact_black_visible_occurrence_does_not_construct_a_colorimetric_view() {
     let average = context(SurroundProfileId::AverageV1);
     let compiled = compiled_program(
         &[(AVERAGE_OCCURRENCE, AVERAGE_CONSTRAINT, average)],
@@ -379,14 +368,15 @@ fn exact_black_visible_occurrence_keeps_undefined_hue_in_lcs() {
     let [cell] = current.report().cells() else {
         panic!("the complete report must retain its sole visible occurrence");
     };
-    let modeled = cell.modeled_lcs_occurrence();
-    assert_eq!(modeled.signal(), signal([0x00; 3]));
-    let state = AppearanceState::derive_v1(modeled.occurrence()).unwrap();
-    assert_eq!(state.cam16().hue(), HueState::UndefinedExact);
+    assert_eq!(cell.appearance_context(), average);
+    let ProgramConstraintResultV1::Pass(evidence) = cell.result() else {
+        panic!("exact black identity must pass");
+    };
+    assert_eq!(*evidence.measurement().value(), Srgb8::new([0; 3]));
 }
 
 #[test]
-fn hard_violation_retains_modeled_lcs_and_commits_no_current_outputs() {
+fn hard_violation_retains_physical_binding_and_context_without_current_outputs() {
     let average = context(SurroundProfileId::AverageV1);
     let compiled = compiled_program(
         &[(AVERAGE_OCCURRENCE, AVERAGE_CONSTRAINT, average)],
@@ -407,16 +397,11 @@ fn hard_violation_retains_modeled_lcs_and_commits_no_current_outputs() {
         panic!("the complete failed report must retain its sole cell");
     };
     assert!(cell.result().is_violation());
-    let modeled = cell.modeled_lcs_occurrence();
-    assert_eq!(
-        modeled.derivation().provenance().source_signal(),
-        signal([0x80; 3]),
-    );
-    assert_eq!(modeled.occurrence().context(), average);
+    assert_eq!(cell.appearance_context(), average);
     let ProgramConstraintResultV1::Violation(evidence) = cell.result() else {
         panic!("exact mismatch must retain typed violation evidence");
     };
-    assert_binding_matches_modeled(*evidence.binding(), modeled);
+    assert_binding_matches_physical(*evidence.binding(), average, Srgb8::new([0x80; 3]));
     assert_eq!(*evidence.measurement().value(), Srgb8::new([0x80; 3]));
     assert_eq!(*evidence.invocation(), Srgb8::new([0x7F; 3]));
     // `ProgramConflictV1` intentionally exposes only `report()`: current
@@ -424,7 +409,7 @@ fn hard_violation_retains_modeled_lcs_and_commits_no_current_outputs() {
 }
 
 #[test]
-fn program_wcag_pass_binds_physical_and_modeled_occurrence_to_one_evidence() {
+fn program_wcag_pass_binds_physical_occurrence_and_declared_context() {
     let compiled = compiled_wcag_program(1.0);
     let mut session = compiled.instantiate(STREAM_A).unwrap();
     let state = session.update(observed_white(STREAM_A)).unwrap();
@@ -437,8 +422,11 @@ fn program_wcag_pass_binds_physical_and_modeled_occurrence_to_one_evidence() {
     let ProgramConstraintResultV1::Pass(evidence) = cell.result() else {
         panic!("WCAG pass must retain typed pass evidence");
     };
-    let modeled = cell.modeled_lcs_occurrence();
-    assert_binding_matches_modeled(*evidence.binding(), modeled);
+    assert_binding_matches_physical(
+        *evidence.binding(),
+        context(SurroundProfileId::AverageV1),
+        Srgb8::new([0; 3]),
+    );
     let measurement = evidence.measurement().value();
     assert_eq!(measurement.decision(), Wcag22ApplicableDecisionV1::Pass);
     assert_eq!(measurement.measurement().foreground, [0; 3]);
@@ -451,7 +439,7 @@ fn program_wcag_pass_binds_physical_and_modeled_occurrence_to_one_evidence() {
 }
 
 #[test]
-fn program_wcag_violation_retains_coherent_evidence_without_current_outputs() {
+fn program_wcag_violation_retains_physical_evidence_without_current_outputs() {
     let compiled = compiled_wcag_program(0.5);
     let mut session = compiled.instantiate(STREAM_A).unwrap();
     let state = session.update(observed_white(STREAM_A)).unwrap();
@@ -465,8 +453,11 @@ fn program_wcag_violation_retains_coherent_evidence_without_current_outputs() {
     let ProgramConstraintResultV1::Violation(evidence) = cell.result() else {
         panic!("WCAG failure must retain typed violation evidence");
     };
-    let modeled = cell.modeled_lcs_occurrence();
-    assert_binding_matches_modeled(*evidence.binding(), modeled);
+    assert_binding_matches_physical(
+        *evidence.binding(),
+        context(SurroundProfileId::AverageV1),
+        Srgb8::new([0x80; 3]),
+    );
     let measurement = evidence.measurement().value();
     assert_eq!(measurement.decision(), Wcag22ApplicableDecisionV1::Fail);
     assert_eq!(measurement.measurement().foreground, [0x80; 3]);
@@ -475,38 +466,115 @@ fn program_wcag_violation_retains_coherent_evidence_without_current_outputs() {
         evidence.binding().physical().occurrence().backdrop_rgb(),
         measurement.measurement().background,
     );
+}
+
+#[test]
+fn one_occurrence_scoped_adapter_serves_two_lcs_constraints_with_one_derivation() {
+    let physical = PointOpacityOverSurfaceV1::evaluate([0; 3], 0.5, [0xFF; 3]).unwrap();
+    let average = context(SurroundProfileId::AverageV1);
+    let point = ProgramPointOccurrenceV1::from_resolved(&physical, average);
+    let adapter = ProgramLcsPointAdapterV1::new(point);
+    MODELED_TRISTIMULUS_DERIVATION_CALLS.with(|calls| calls.set(0));
+
+    let first = assess_program_lcs_point_hard(&adapter, &LcsProbeProgramEvaluatorV1, 1).unwrap();
+    let second = assess_program_lcs_point_hard(&adapter, &LcsProbeProgramEvaluatorV1, 2).unwrap();
+    let HardDecision::Pass(first) = first else {
+        panic!("the LCS probe has no violation branch");
+    };
+    let HardDecision::Pass(second) = second else {
+        panic!("the LCS probe has no violation branch");
+    };
+
+    assert_eq!(first.binding(), second.binding());
+    assert_eq!(first.binding().physical(), point.binding());
+    assert_eq!(*first.release(), ProgramLcsDependencyReleaseV1::current());
+    assert_eq!((*first.invocation(), *second.invocation()), (1, 2));
+    assert_eq!(first.measurement().value(), second.measurement().value());
+    assert_eq!(first.binding().modeled_lcs(), *first.measurement().value());
     assert_eq!(
-        modeled.signal(),
-        signal(measurement.measurement().foreground)
+        MODELED_TRISTIMULUS_DERIVATION_CALLS.with(|calls| calls.get()),
+        1,
+        "two LCS-aware constraints over one occurrence scope must share one derivation",
     );
 }
 
 #[test]
-fn mismatched_modeled_signal_is_rejected_before_program_evaluation() {
-    let physical = PointOpacityOverSurfaceV1::evaluate([0; 3], 1.0, [0xFF; 3]).unwrap();
-    let mismatched = ModeledLcsOccurrenceV1::from_signal_in_context(
-        signal([0xFF; 3]),
-        context(SurroundProfileId::AverageV1),
-    )
-    .unwrap();
+fn one_occurrence_scoped_adapter_memoizes_failure_across_two_lcs_constraints() {
+    let physical = PointOpacityOverSurfaceV1::evaluate([0; 3], 0.5, [0xFF; 3]).unwrap();
+    let incompatible = AppearanceContextId::from_inputs(
+        AppearanceContextSchemaReleaseId::Ciecam16ViewingInputsV1,
+        MUTATION_SENTINEL_XYZ_FRAME_V1,
+        AdaptingLuminanceCdM2::try_new(64.0).unwrap(),
+        BackgroundLuminanceRatio::try_new(0.2).unwrap(),
+        SurroundProfileId::AverageV1,
+    );
+    let point = ProgramPointOccurrenceV1::from_resolved(&physical, incompatible);
+    let adapter = ProgramLcsPointAdapterV1::new(point);
+    MODELED_TRISTIMULUS_DERIVATION_CALLS.with(|calls| calls.set(0));
 
-    let error = assess_program_point_hard(
-        &physical,
-        mismatched,
-        &ExactSrgb8IdentityV1,
-        Srgb8::new([0; 3]),
-    )
-    .expect_err("binding mismatch must be rejected before the evaluator can run");
-    let mismatch = match error {
-        ProgramPointAssessmentErrorV1::Binding(mismatch) => mismatch,
-        ProgramPointAssessmentErrorV1::Evaluator(unreachable) => match unreachable {},
-    };
-    assert_eq!(mismatch.physical(), Srgb8::new([0; 3]));
-    assert_eq!(mismatch.modeled(), Srgb8::new([0xFF; 3]));
+    let first = assess_program_lcs_point_hard(&adapter, &LcsProbeProgramEvaluatorV1, 1)
+        .expect_err("the incompatible frame must fail");
+    let second = assess_program_lcs_point_hard(&adapter, &LcsProbeProgramEvaluatorV1, 2)
+        .expect_err("the memoized incompatible frame must fail identically");
+
+    assert_eq!(first, second);
+    assert!(matches!(
+        first,
+        ProgramLcsPointAssessmentErrorV1::Formation(_)
+    ));
+    assert_eq!(
+        MODELED_TRISTIMULUS_DERIVATION_CALLS.with(|calls| calls.get()),
+        1,
+        "one adapter must cache a failed derivation as well as a successful one",
+    );
 }
 
 #[test]
-fn program_derives_lcs_once_per_target_and_case_without_eager_cam16() {
+fn equal_bytes_and_context_cannot_mix_provenance_between_physical_occurrences() {
+    let context = context(SurroundProfileId::AverageV1);
+    let translucent = PointOpacityOverSurfaceV1::evaluate([0; 3], 0.5, [0xFF; 3]).unwrap();
+    let solid = PointOpacityOverSurfaceV1::evaluate([0x80; 3], 1.0, [0; 3]).unwrap();
+    assert_eq!(translucent.visible(), solid.visible());
+    assert_ne!(
+        translucent.visible_point_binding(),
+        solid.visible_point_binding()
+    );
+    let translucent_point = ProgramPointOccurrenceV1::from_resolved(&translucent, context);
+    let solid_point = ProgramPointOccurrenceV1::from_resolved(&solid, context);
+    let translucent_adapter = ProgramLcsPointAdapterV1::new(translucent_point);
+    let solid_adapter = ProgramLcsPointAdapterV1::new(solid_point);
+    MODELED_TRISTIMULUS_DERIVATION_CALLS.with(|calls| calls.set(0));
+
+    let translucent_evidence =
+        assess_program_lcs_point_hard(&translucent_adapter, &LcsProbeProgramEvaluatorV1, 1)
+            .unwrap();
+    let solid_evidence =
+        assess_program_lcs_point_hard(&solid_adapter, &LcsProbeProgramEvaluatorV1, 1).unwrap();
+    let HardDecision::Pass(translucent_evidence) = translucent_evidence else {
+        panic!("the LCS probe has no violation branch");
+    };
+    let HardDecision::Pass(solid_evidence) = solid_evidence else {
+        panic!("the LCS probe has no violation branch");
+    };
+
+    assert_eq!(
+        translucent_evidence.binding().physical(),
+        translucent_point.binding()
+    );
+    assert_eq!(solid_evidence.binding().physical(), solid_point.binding());
+    assert_ne!(
+        translucent_evidence.binding().physical(),
+        solid_evidence.binding().physical()
+    );
+    assert_eq!(
+        MODELED_TRISTIMULUS_DERIVATION_CALLS.with(|calls| calls.get()),
+        2,
+        "byte equality must not collapse distinct physical occurrence scopes",
+    );
+}
+
+#[test]
+fn exact_report_only_program_does_not_derive_lcs() {
     let compiled = compiled_duplicate_constraint_program();
     let mut session = compiled.instantiate(STREAM_A).unwrap();
     MODELED_TRISTIMULUS_DERIVATION_CALLS.with(|calls| calls.set(0));
@@ -521,8 +589,8 @@ fn program_derives_lcs_once_per_target_and_case_without_eager_cam16() {
     };
     assert_eq!(current.report().cells().len(), 4);
     assert_eq!(
-        derivations, 2,
-        "two constraints sharing one target must reuse one LCS derivation in each physical case",
+        derivations, 0,
+        "encoded-only constraints must not pay for or depend on a derived LCS occurrence",
     );
     assert_eq!(
         cam16_forwards, 0,
@@ -531,7 +599,54 @@ fn program_derives_lcs_once_per_target_and_case_without_eager_cam16() {
 }
 
 #[test]
-fn declaration_permutations_preserve_canonical_lcs_cells_and_output_signals() {
+fn wcag_program_does_not_derive_lcs() {
+    let compiled = compiled_wcag_program(1.0);
+    let mut session = compiled.instantiate(STREAM_A).unwrap();
+    MODELED_TRISTIMULUS_DERIVATION_CALLS.with(|calls| calls.set(0));
+    let state = session.update(observed_white(STREAM_A)).unwrap();
+    assert!(matches!(state, SessionState::Ready { .. }));
+    assert_eq!(
+        MODELED_TRISTIMULUS_DERIVATION_CALLS.with(|calls| calls.get()),
+        0,
+        "WCAG must consume the final encoded pair without constructing LCS",
+    );
+}
+
+#[test]
+fn encoded_only_program_is_not_rejected_by_an_lcs_incompatible_declared_context() {
+    let incompatible = AppearanceContextId::from_inputs(
+        AppearanceContextSchemaReleaseId::Ciecam16ViewingInputsV1,
+        MUTATION_SENTINEL_XYZ_FRAME_V1,
+        AdaptingLuminanceCdM2::try_new(64.0).unwrap(),
+        BackgroundLuminanceRatio::try_new(0.2).unwrap(),
+        SurroundProfileId::AverageV1,
+    );
+    let compiled = compiled_program(
+        &[(AVERAGE_OCCURRENCE, AVERAGE_CONSTRAINT, incompatible)],
+        Srgb8::new([0x80; 3]),
+        0.5,
+        false,
+    );
+    let mut session = compiled.instantiate(STREAM_A).unwrap();
+    MODELED_TRISTIMULUS_DERIVATION_CALLS.with(|calls| calls.set(0));
+
+    let state = session.update(observed_white(STREAM_A)).unwrap();
+    let SessionState::Ready { current } = state else {
+        panic!("an encoded evaluator must not inherit an unrelated LCS frame requirement");
+    };
+    let [cell] = current.report().cells() else {
+        panic!("the exact constraint must still emit one evidence cell");
+    };
+    assert_eq!(cell.appearance_context(), incompatible);
+    assert_eq!(
+        MODELED_TRISTIMULUS_DERIVATION_CALLS.with(|calls| calls.get()),
+        0,
+        "an LCS-incompatible declared context must not be derived by an encoded-only constraint",
+    );
+}
+
+#[test]
+fn declaration_permutations_preserve_canonical_context_cells_and_output_signals() {
     let declarations = [
         (
             AVERAGE_OCCURRENCE,
@@ -563,7 +678,7 @@ fn declaration_permutations_preserve_canonical_lcs_cells_and_output_signals() {
             cell.case_index(),
             cell.constraint(),
             cell.target(),
-            cell.modeled_lcs_occurrence(),
+            cell.appearance_context(),
             cell.result().is_violation(),
         )
     };
