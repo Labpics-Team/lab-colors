@@ -16,14 +16,17 @@
 //!
 //! | Состояние | Операции |
 //! |---|---|
-//! | `Waiting` | нет |
+//! | `Waiting` + `Empty` | нет |
+//! | `Waiting` + допущенный `Unknown` | `Remove` для каждого выхода |
 //! | `Ready` | `Set` для каждого выхода |
 //! | `Stale` | `Remove` для каждого выхода |
 //! | `Failed` | `Remove` для каждого выхода |
 //!
 //! Прошлый Verified-сертификат остаётся в evidence для диагностики, но не
 //! разрешает эмиссию: он относится к прошлому наблюдению, а не к текущему
-//! неизвестному или нарушающему контексту.
+//! неизвестному или нарушающему контексту. Непустая сырая голова без текущего
+//! Verified-сертификата также отзывает выходы: это закрывает передачу sink от
+//! одной Session другой Session того же Owner.
 //!
 //! [`CertificateV1::Verified`] хранит выбранное состояние, все клетки
 //! доказательства и сертифицированные выходы. [`CertificateV1::Conflict`]
@@ -1508,7 +1511,7 @@ impl SchemaOrderedScenarioSourceV1 for ScenarioSourceV1<'_> {
 /// Закрытая классификация lifecycle Session.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StateKindV1 {
-    /// Допущенного вычислимого наблюдения ещё нет.
+    /// Допущенного вычислимого наблюдения ещё нет; сырая голова может быть `Unknown`.
     Waiting,
     /// Текущая ревизия сертифицирована.
     Ready,
@@ -1639,7 +1642,14 @@ impl<'owner, 'session> ProjectionV1<'owner, 'session> {
         self,
     ) -> impl ExactSizeIterator<Item = OperationV1<'owner, 'session>> + FusedIterator {
         let inner = match self.evidence.state() {
-            SessionState::Waiting => OperationSourceV1::Empty,
+            SessionState::Waiting
+                if matches!(
+                    self.evidence.session.raw_head(),
+                    ObservationHeadViewV1::Empty
+                ) =>
+            {
+                OperationSourceV1::Empty
+            }
             SessionState::Ready { current } => {
                 debug_assert_eq!(current.outputs().len(), self.owner.compiled.output_count());
                 debug_assert!(
@@ -1656,10 +1666,17 @@ impl<'owner, 'session> ProjectionV1<'owner, 'session> {
                     scope: self.scope,
                 }
             }
-            SessionState::Stale { .. } | SessionState::Failed { .. } => OperationSourceV1::Remove {
-                slots: OwnerOutputSlotsV1::new(&self.owner.compiled),
-                scope: self.scope,
-            },
+            // `Waiting + Empty` — единственное состояние без действия и без
+            // полномочий на sink. После admission сырой головы любое состояние
+            // без текущего Verified-доказательства подчиняется одному закону
+            // отзыва. Так же fail-closed обрабатывается внутренне недостижимое
+            // сегодня сочетание `Waiting + Observed`.
+            SessionState::Waiting | SessionState::Stale { .. } | SessionState::Failed { .. } => {
+                OperationSourceV1::Remove {
+                    slots: OwnerOutputSlotsV1::new(&self.owner.compiled),
+                    scope: self.scope,
+                }
+            }
         };
         OperationsV1 { inner }
     }

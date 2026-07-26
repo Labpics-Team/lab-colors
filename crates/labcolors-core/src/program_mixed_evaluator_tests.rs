@@ -1471,6 +1471,62 @@ fn concrete_program_projects_ready_and_fail_closed_stale_operations() {
 }
 
 #[test]
+fn unknown_replacement_session_revokes_an_existing_owner_output() {
+    let owner = OwnerV1::from_compiled(finite_program([[0x80; 3], [0; 3]]));
+    let white = [Srgb8::new([0xFF; 3])];
+    let scenarios = [ScenarioV1::new(1, &white)];
+
+    let mut first_session = owner.instantiate(11).unwrap();
+    let ready = owner
+        .update(
+            &mut first_session,
+            UpdateV1::Observed {
+                revision: 1,
+                scenarios: &scenarios,
+            },
+        )
+        .unwrap();
+    let mut sink = None;
+    for operation in ready.operations() {
+        match operation {
+            OperationV1::Set(set) => sink = Some((set.source(), set.opacity())),
+            OperationV1::Remove(_) => sink = None,
+        }
+    }
+    assert!(
+        sink.is_some(),
+        "the first Session must populate the shared sink"
+    );
+    drop(first_session);
+
+    let mut replacement_session = owner.instantiate(12).unwrap();
+    let unknown = owner
+        .update(
+            &mut replacement_session,
+            UpdateV1::Unknown {
+                revision: 1,
+                reason_id: 7,
+            },
+        )
+        .unwrap();
+    assert_eq!(unknown.evidence().kind(), StateKindV1::Waiting);
+    assert_unknown_head(unknown.evidence().observation_head(), 12, 1, 7);
+    assert_eq!(unknown.evidence().certificates().len(), 0);
+
+    let mut operations = unknown.operations();
+    let Some(OperationV1::Remove(remove)) = operations.next() else {
+        panic!("an explicit Unknown must revoke an existing owner output during handoff");
+    };
+    assert_eq!(remove.output_slot(), OutputSlotIdV1::new(OUTPUT.value()));
+    sink = None;
+    assert!(operations.next().is_none());
+    assert!(
+        sink.is_none(),
+        "the replacement Session must not leave stale paint"
+    );
+}
+
+#[test]
 fn concrete_program_failed_always_removes_but_retains_previous_evidence() {
     let white = [Srgb8::new([0xFF; 3])];
     let black = [Srgb8::new([0; 3])];
