@@ -3,15 +3,17 @@
 //! Граф владеет только физической топологией: Paint материализуется независимо
 //! от подложки, Occurrence является его единственным применением к Surface, а
 //! `surfaceFrom` лишь даёт видимому результату повторно используемую identity.
-//! Словарь Pair/role и perception-утверждения сюда не входят.
+//! Клиентский словарь и perception-утверждения сюда не входят.
+
+use std::cell::Cell;
 
 use proptest::prelude::*;
 
 use crate::Srgb8;
 use crate::appearance::{
-    AppearanceBindings, AppearanceGraphSpec, BindingError, ColorInputId, CompileError,
-    CompositionProfileV1, EncodedPointPaintV1, OccurrenceId, OccurrenceSpec, OpacityInputId,
-    PaintId, PaintSpec, SurfaceId, SurfaceInputPortId, SurfaceSpec,
+    AdmittedAppearanceBindings, AppearanceBindings, AppearanceGraphSpec, BindingError,
+    ColorInputId, CompileError, CompositionProfileV1, EncodedPointPaintV1, OccurrenceId,
+    OccurrenceSpec, OpacityInputId, PaintId, PaintSpec, SurfaceId, SurfaceInputPortId, SurfaceSpec,
 };
 use crate::constraints::Evaluator;
 
@@ -27,6 +29,7 @@ const OTHER_PAINT: PaintId = PaintId::new(41);
 const CONTEXT_SURFACE: SurfaceId = SurfaceId::new(90);
 const DERIVED_SURFACE: SurfaceId = SurfaceId::new(2);
 const FILL_OCCURRENCE: OccurrenceId = OccurrenceId::new(800);
+const OTHER_OCCURRENCE: OccurrenceId = OccurrenceId::new(400);
 
 fn point_component(reverse_paints: bool, reverse_surfaces: bool) -> AppearanceGraphSpec {
     let mut paints = vec![
@@ -80,6 +83,71 @@ fn bindings(source: [u8; 3], opacity: f64, context: [u8; 3]) -> AppearanceBindin
     )
 }
 
+fn slot_component(reverse_declarations: bool) -> AppearanceGraphSpec {
+    let mut paints = vec![
+        PaintSpec::Solid {
+            id: SOLID_PAINT,
+            color: SOURCE,
+        },
+        PaintSpec::Solid {
+            id: FILL_PAINT,
+            color: OTHER_SOURCE,
+        },
+    ];
+    let mut occurrences = vec![
+        OccurrenceSpec {
+            id: FILL_OCCURRENCE,
+            subject: FILL_PAINT,
+            against: CONTEXT_SURFACE,
+            profile: CompositionProfileV1::EncodedSrgb8SourceOverV1,
+        },
+        OccurrenceSpec {
+            id: OTHER_OCCURRENCE,
+            subject: SOLID_PAINT,
+            against: CONTEXT_SURFACE,
+            profile: CompositionProfileV1::EncodedSrgb8SourceOverV1,
+        },
+    ];
+    if reverse_declarations {
+        paints.reverse();
+        occurrences.reverse();
+    }
+
+    AppearanceGraphSpec::new(
+        vec![SOURCE, OTHER_SOURCE],
+        vec![CONTEXT],
+        vec![],
+        paints,
+        vec![SurfaceSpec::Input {
+            id: CONTEXT_SURFACE,
+            port: CONTEXT,
+        }],
+        occurrences,
+    )
+}
+
+fn admitted_surface_triplet() -> AdmittedAppearanceBindings {
+    let inputs = [
+        SurfaceInputPortId::new(30),
+        SurfaceInputPortId::new(10),
+        SurfaceInputPortId::new(20),
+    ];
+    let graph = AppearanceGraphSpec::new(vec![], inputs.to_vec(), vec![], vec![], vec![], vec![])
+        .compile()
+        .unwrap();
+    graph
+        .admit_bindings(&AppearanceBindings::new(
+            vec![],
+            vec![
+                (inputs[0], Srgb8::new([30; 3])),
+                (inputs[1], Srgb8::new([10; 3])),
+                (inputs[2], Srgb8::new([20; 3])),
+            ],
+            vec![],
+        ))
+        .unwrap()
+}
+
 #[test]
 fn static_exact_program_is_declarative_topology_plus_typed_constraint() {
     let compiled = crate::appearance::point_opacity_over_surface_declarative_spec()
@@ -91,7 +159,9 @@ fn static_exact_program_is_declarative_topology_plus_typed_constraint() {
         crate::appearance::PhysicalProgramIdentityV1::SolidOpacityOverSurfaceEncodedSrgb8V1
     );
     assert_eq!(
-        crate::constraints::ExactSrgb8IdentityV1.identity(),
+        <crate::constraints::ExactSrgb8IdentityV1 as Evaluator<
+            crate::appearance::ModeledSrgb8PointOccurrence,
+        >>::identity(&crate::constraints::ExactSrgb8IdentityV1),
         crate::constraints::ExactConstraintIdentityV1::FinalSrgb8IdentityV1
     );
 }
@@ -146,6 +216,127 @@ fn compile_and_evaluate_ignore_declaration_order() {
     assert_eq!(expected, paints_reversed.evaluate(&values).unwrap());
     assert_eq!(expected, surfaces_reversed.evaluate(&values).unwrap());
     assert_eq!(expected, both_reversed.evaluate(&values).unwrap());
+}
+
+#[test]
+fn compiled_slots_bind_found_ids_and_reject_missing_ids() {
+    let graph = point_component(false, false).compile().unwrap();
+
+    assert!(graph.bind_paint(SOLID_PAINT).is_some());
+    assert!(graph.bind_paint(FILL_PAINT).is_some());
+    assert!(graph.bind_paint(PaintId::new(999)).is_none());
+    assert!(graph.bind_occurrence(FILL_OCCURRENCE).is_some());
+    assert!(graph.bind_occurrence(OccurrenceId::new(999)).is_none());
+}
+
+#[test]
+fn compiled_slots_have_canonical_ordinals_across_declaration_permutations() {
+    let canonical = slot_component(false).compile().unwrap();
+    let reversed = slot_component(true).compile().unwrap();
+
+    for paint in [FILL_PAINT, SOLID_PAINT] {
+        assert_eq!(canonical.bind_paint(paint), reversed.bind_paint(paint));
+    }
+    for occurrence in [OTHER_OCCURRENCE, FILL_OCCURRENCE] {
+        assert_eq!(
+            canonical.bind_occurrence(occurrence),
+            reversed.bind_occurrence(occurrence)
+        );
+    }
+}
+
+#[test]
+fn evaluation_view_rejects_same_ordinal_slots_with_different_nominal_ids() {
+    let compile_single = |paint, occurrence| {
+        AppearanceGraphSpec::new(
+            vec![SOURCE],
+            vec![CONTEXT],
+            vec![],
+            vec![PaintSpec::Solid {
+                id: paint,
+                color: SOURCE,
+            }],
+            vec![SurfaceSpec::Input {
+                id: CONTEXT_SURFACE,
+                port: CONTEXT,
+            }],
+            vec![OccurrenceSpec {
+                id: occurrence,
+                subject: paint,
+                against: CONTEXT_SURFACE,
+                profile: CompositionProfileV1::EncodedSrgb8SourceOverV1,
+            }],
+        )
+        .compile()
+        .unwrap()
+    };
+    let graph = compile_single(FILL_PAINT, FILL_OCCURRENCE);
+    let incompatible = compile_single(OTHER_PAINT, OTHER_OCCURRENCE);
+    let incompatible_paint = incompatible.bind_paint(OTHER_PAINT).unwrap();
+    let incompatible_occurrence = incompatible.bind_occurrence(OTHER_OCCURRENCE).unwrap();
+    let admitted = graph
+        .admit_bindings(&AppearanceBindings::new(
+            vec![(SOURCE, Srgb8::new([10, 20, 30]))],
+            vec![(CONTEXT, Srgb8::new([40, 50, 60]))],
+            vec![],
+        ))
+        .unwrap();
+    let mut workspace = graph.new_workspace().unwrap();
+    let evaluated = graph
+        .evaluate_admitted_into(&admitted, &mut workspace)
+        .unwrap();
+
+    assert!(evaluated.paint_at(incompatible_paint).is_none());
+    assert!(evaluated.occurrence_at(incompatible_occurrence).is_none());
+}
+
+#[test]
+fn prebound_view_lookup_returns_exact_values_and_allocates_nothing() {
+    let graph = point_component(false, false).compile().unwrap();
+    let admitted = graph
+        .admit_bindings(&bindings([0xFF, 0xA1, 0x00], 0.122, [0xFF; 3]))
+        .unwrap();
+    let mut workspace = graph.new_workspace().unwrap();
+    let evaluated = graph
+        .evaluate_admitted_into(&admitted, &mut workspace)
+        .unwrap();
+    let paint_slot = graph.bind_paint(FILL_PAINT).unwrap();
+    let occurrence_slot = graph.bind_occurrence(FILL_OCCURRENCE).unwrap();
+
+    let (resolved, allocations) = crate::test_support::measured_allocations(|| {
+        let paint = evaluated.paint_at(paint_slot);
+        let occurrence = evaluated.occurrence_at(occurrence_slot);
+        (
+            paint.map(|paint| (paint.id(), paint.source(), paint.opacity_bits())),
+            occurrence.map(|occurrence| {
+                (
+                    occurrence.id(),
+                    occurrence.subject(),
+                    occurrence.against(),
+                    occurrence.backdrop(),
+                    occurrence.visible(),
+                    *occurrence.certificate(),
+                )
+            }),
+        )
+    });
+
+    assert_eq!(allocations, 0);
+    assert_eq!(
+        resolved.0,
+        Some((
+            FILL_PAINT,
+            Srgb8::new([0xFF, 0xA1, 0x00]),
+            0.122f64.to_bits(),
+        ))
+    );
+    let occurrence = resolved.1.unwrap();
+    assert_eq!(occurrence.0, FILL_OCCURRENCE);
+    assert_eq!(occurrence.1, FILL_PAINT);
+    assert_eq!(occurrence.2, CONTEXT_SURFACE);
+    assert_eq!(occurrence.3, [0xFF; 3]);
+    assert_eq!(occurrence.4, [0xFF, 0xF4, 0xE0]);
+    assert_eq!(occurrence.5.replay(), [0xFF, 0xF4, 0xE0]);
 }
 
 #[test]
@@ -237,6 +428,96 @@ fn complete_typed_id_renaming_does_not_change_physics() {
         first.surface_rgb(DERIVED_SURFACE),
         second.surface_rgb(derived_surface)
     );
+}
+
+#[test]
+fn equal_transport_numbers_remain_opaque_in_a_nested_occurrence_graph() {
+    let first_color = ColorInputId::new(41);
+    let second_color = ColorInputId::new(7);
+    let surface_port = SurfaceInputPortId::new(41);
+    let first_opacity = OpacityInputId::new(41);
+    let second_opacity = OpacityInputId::new(7);
+    let first_solid = PaintId::new(41);
+    let first_modulated = PaintId::new(42);
+    let second_solid = PaintId::new(7);
+    let second_modulated = PaintId::new(8);
+    let backdrop = SurfaceId::new(41);
+    let derived = SurfaceId::new(7);
+    let first_occurrence = OccurrenceId::new(41);
+    let second_occurrence = OccurrenceId::new(7);
+
+    let graph = AppearanceGraphSpec::new(
+        vec![first_color, second_color],
+        vec![surface_port],
+        vec![first_opacity, second_opacity],
+        vec![
+            PaintSpec::Opacity {
+                id: first_modulated,
+                source: first_solid,
+                opacity: first_opacity,
+            },
+            PaintSpec::Solid {
+                id: second_solid,
+                color: second_color,
+            },
+            PaintSpec::Opacity {
+                id: second_modulated,
+                source: second_solid,
+                opacity: second_opacity,
+            },
+            PaintSpec::Solid {
+                id: first_solid,
+                color: first_color,
+            },
+        ],
+        vec![
+            SurfaceSpec::FromOccurrence {
+                id: derived,
+                occurrence: first_occurrence,
+            },
+            SurfaceSpec::Input {
+                id: backdrop,
+                port: surface_port,
+            },
+        ],
+        vec![
+            OccurrenceSpec {
+                id: second_occurrence,
+                subject: second_modulated,
+                against: derived,
+                profile: CompositionProfileV1::EncodedSrgb8SourceOverV1,
+            },
+            OccurrenceSpec {
+                id: first_occurrence,
+                subject: first_modulated,
+                against: backdrop,
+                profile: CompositionProfileV1::EncodedSrgb8SourceOverV1,
+            },
+        ],
+    )
+    .compile()
+    .unwrap();
+    let evaluated = graph
+        .evaluate(&AppearanceBindings::new(
+            vec![
+                (first_color, Srgb8::new([200, 80, 40])),
+                (second_color, Srgb8::new([30, 160, 230])),
+            ],
+            vec![(surface_port, Srgb8::new([20, 40, 60]))],
+            vec![(first_opacity, 0.5), (second_opacity, 0.25)],
+        ))
+        .unwrap();
+
+    let first = evaluated.occurrence(first_occurrence).unwrap();
+    let second = evaluated.occurrence(second_occurrence).unwrap();
+    assert_eq!(first.subject(), first_modulated);
+    assert_eq!(first.against(), backdrop);
+    assert_eq!(first.visible(), [110, 60, 50]);
+    assert_eq!(evaluated.surface_rgb(derived), Some([110, 60, 50]));
+    assert_eq!(second.subject(), second_modulated);
+    assert_eq!(second.against(), derived);
+    assert_eq!(second.backdrop(), first.visible());
+    assert_eq!(second.visible(), [90, 85, 95]);
 }
 
 #[test]
@@ -852,7 +1133,8 @@ proptest! {
         } else {
             (invalid, 0.5, OPACITY)
         };
-        let expected_message = crate::composition::validate_alpha(invalid).unwrap_err();
+        let expected_reason =
+            crate::composition::AdmittedOpacityV1::new(invalid).unwrap_err();
         prop_assert_eq!(
             graph.evaluate(&AppearanceBindings::new(
                 vec![(SOURCE, Srgb8::new([1, 2, 3]))],
@@ -861,7 +1143,7 @@ proptest! {
             )),
             Err(BindingError::OpacityOutOfDomain {
                 input: expected_input,
-                message: expected_message,
+                reason: expected_reason,
             })
         );
     }
@@ -1333,16 +1615,53 @@ fn evaluate_rejects_duplicate_missing_and_unexpected_bindings() {
 }
 
 #[test]
-fn evaluate_rejects_invalid_alpha_with_the_ssot_domain_text() {
+fn binding_admission_is_atomic_before_any_occurrence_is_evaluated() {
+    let graph = point_component(false, false).compile().unwrap();
+
+    crate::composition::reset_source_over_evaluation_count();
+    let duplicate_surface = graph.evaluate(&AppearanceBindings::new(
+        vec![(SOURCE, Srgb8::new([1, 2, 3]))],
+        vec![
+            (CONTEXT, Srgb8::new([4, 5, 6])),
+            (CONTEXT, Srgb8::new([7, 8, 9])),
+        ],
+        vec![(OPACITY, 0.5)],
+    ));
+    assert_eq!(
+        duplicate_surface,
+        Err(BindingError::DuplicateSurfaceInputBinding { input: CONTEXT })
+    );
+    assert_eq!(crate::composition::source_over_evaluation_count(), 0);
+
+    crate::composition::reset_source_over_evaluation_count();
+    let invalid_opacity = graph.evaluate(&bindings([1, 2, 3], f64::NAN, [4, 5, 6]));
+    assert_eq!(
+        invalid_opacity,
+        Err(BindingError::OpacityOutOfDomain {
+            input: OPACITY,
+            reason: crate::composition::OpacityAdmissionErrorV1::NonFinite,
+        })
+    );
+    assert_eq!(crate::composition::source_over_evaluation_count(), 0);
+
+    let evaluated = graph
+        .evaluate(&bindings([1, 2, 3], 0.5, [4, 5, 6]))
+        .unwrap();
+    assert_eq!(crate::composition::source_over_evaluation_count(), 1);
+    assert!(evaluated.occurrence(FILL_OCCURRENCE).is_some());
+}
+
+#[test]
+fn evaluate_rejects_invalid_alpha_with_the_typed_admission_reason() {
     let graph = point_component(false, false).compile().unwrap();
     for bad_alpha in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, -0.1, 1.5] {
-        let expected = crate::alpha::composite_over_srgb8([1, 2, 3], bad_alpha, [4, 5, 6])
-            .expect_err("композитор обязан отвергать тот же домен alpha");
+        let expected = crate::composition::AdmittedOpacityV1::new(bad_alpha)
+            .expect_err("общий admission обязан отвергать alpha");
         assert_eq!(
             graph.evaluate(&bindings([1, 2, 3], bad_alpha, [4, 5, 6])),
             Err(BindingError::OpacityOutOfDomain {
                 input: OPACITY,
-                message: expected,
+                reason: expected,
             }),
             "alpha={bad_alpha}"
         );
@@ -1363,4 +1682,252 @@ fn signed_zero_opacity_has_one_canonical_state() {
         negative.paint(FILL_PAINT).unwrap().opacity_bits(),
         0.0f64.to_bits()
     );
+}
+
+#[test]
+fn canonical_surface_overwrite_rejects_every_schema_drift_before_read_or_mutation() {
+    let mut admitted = admitted_surface_triplet();
+    let first = SurfaceInputPortId::new(10);
+    let second = SurfaceInputPortId::new(20);
+    let third = SurfaceInputPortId::new(30);
+    let original = [
+        (first, Srgb8::new([10; 3])),
+        (second, Srgb8::new([20; 3])),
+        (third, Srgb8::new([30; 3])),
+    ];
+    let reordered = [second, first, third];
+    let relabelled = [first, SurfaceInputPortId::new(21), third];
+    let truncated = [first, second];
+    let extended = [first, second, third, SurfaceInputPortId::new(40)];
+
+    for expected in [
+        reordered.as_slice(),
+        relabelled.as_slice(),
+        truncated.as_slice(),
+        extended.as_slice(),
+    ] {
+        let reads = Cell::new(0);
+        let (result, allocations) = crate::test_support::measured_allocations(|| {
+            admitted.overwrite_surface_inputs_canonical(expected.iter().copied(), |_| {
+                reads.set(reads.get() + 1);
+                Srgb8::new([0; 3])
+            })
+        });
+
+        assert_eq!(result, Err(BindingError::IncompatibleAdmittedBindings));
+        assert_eq!(reads.get(), 0);
+        assert_eq!(allocations, 0);
+        assert!(admitted.surface_inputs_canonical().eq(original));
+    }
+}
+
+#[test]
+fn canonical_surface_overwrite_reads_once_and_exposes_all_values_without_allocation() {
+    let mut admitted = admitted_surface_triplet();
+    let expected_inputs = [
+        SurfaceInputPortId::new(10),
+        SurfaceInputPortId::new(20),
+        SurfaceInputPortId::new(30),
+    ];
+
+    admitted
+        .overwrite_surface_inputs_canonical(expected_inputs, |index| Srgb8::new([index as u8; 3]))
+        .unwrap();
+
+    let values = [
+        Srgb8::new([101, 102, 103]),
+        Srgb8::new([111, 112, 113]),
+        Srgb8::new([121, 122, 123]),
+    ];
+    let reads = Cell::new([0_usize; 3]);
+    let (result, allocations) = crate::test_support::measured_allocations(|| {
+        admitted.overwrite_surface_inputs_canonical(expected_inputs, |index| {
+            let mut counts = reads.get();
+            counts[index] += 1;
+            reads.set(counts);
+            values[index]
+        })?;
+        Ok::<_, BindingError>(
+            admitted
+                .surface_inputs_canonical()
+                .eq(expected_inputs.into_iter().zip(values)),
+        )
+    });
+
+    assert_eq!(result, Ok(true));
+    assert_eq!(reads.get(), [1, 1, 1]);
+    assert_eq!(allocations, 0);
+}
+
+#[test]
+fn admitted_surface_runtime_exposes_only_canonical_bulk_seams() {
+    let source = include_str!("appearance.rs");
+    let forbidden = concat!("set_surface_", "input");
+    assert!(
+        !source.contains(forbidden),
+        "per-port Surface mutation must not return after the canonical bulk cut"
+    );
+    for required in [
+        "overwrite_surface_inputs_canonical",
+        "surface_inputs_canonical",
+    ] {
+        assert!(
+            source.contains(required),
+            "canonical runtime seam `{required}` must remain"
+        );
+    }
+}
+
+#[test]
+fn admitted_bindings_and_workspace_are_reused_without_storage_churn() {
+    let graph = point_component(false, false).compile().unwrap();
+    let mut admitted = graph
+        .admit_bindings(&bindings([200, 80, 40], 0.5, [20, 40, 60]))
+        .unwrap();
+    let mut independent = admitted.try_clone_v1().unwrap();
+    assert_eq!(independent, admitted);
+    independent
+        .overwrite_surface_inputs_canonical([CONTEXT], |_| Srgb8::new([1, 2, 3]))
+        .unwrap();
+    assert_ne!(independent, admitted);
+    assert_eq!(admitted.opacity_bits(OPACITY), Some(0.5f64.to_bits()));
+    assert_eq!(
+        graph.occurrence_ids().collect::<Vec<_>>(),
+        vec![FILL_OCCURRENCE]
+    );
+    assert_eq!(
+        graph.surface_input_ports().collect::<Vec<_>>(),
+        vec![CONTEXT]
+    );
+
+    let mut workspace = graph.new_workspace().unwrap();
+    let storage = workspace.storage_signature();
+    for (backdrop, expected) in [
+        ([20, 40, 60], [110, 60, 50]),
+        ([100, 100, 100], [150, 90, 70]),
+    ] {
+        admitted
+            .overwrite_surface_inputs_canonical([CONTEXT], |_| Srgb8::new(backdrop))
+            .unwrap();
+        {
+            let evaluated = graph
+                .evaluate_admitted_into(&admitted, &mut workspace)
+                .unwrap();
+            assert_eq!(
+                evaluated.paint(FILL_PAINT).unwrap().opacity_bits(),
+                0.5f64.to_bits()
+            );
+            assert_eq!(evaluated.surface_rgb(CONTEXT_SURFACE), Some(backdrop));
+            assert_eq!(
+                evaluated.occurrence(FILL_OCCURRENCE).unwrap().visible(),
+                expected
+            );
+            assert_eq!(
+                evaluated
+                    .occurrences()
+                    .map(|occurrence| occurrence.id())
+                    .collect::<Vec<_>>(),
+                vec![FILL_OCCURRENCE]
+            );
+        }
+        assert_eq!(workspace.storage_signature(), storage);
+    }
+}
+
+#[test]
+fn admitted_schema_and_workspace_shape_mismatches_fail_before_composition() {
+    let graph = point_component(false, false).compile().unwrap();
+    let admitted = graph
+        .admit_bindings(&bindings([1, 2, 3], 0.5, [4, 5, 6]))
+        .unwrap();
+    let empty = AppearanceGraphSpec::new(vec![], vec![], vec![], vec![], vec![], vec![])
+        .compile()
+        .unwrap();
+    let mut wrong_workspace = empty.new_workspace().unwrap();
+    let wrong_storage = wrong_workspace.storage_signature();
+
+    crate::composition::reset_source_over_evaluation_count();
+    assert_eq!(
+        graph
+            .evaluate_admitted_into(&admitted, &mut wrong_workspace)
+            .unwrap_err(),
+        BindingError::IncompatibleWorkspace
+    );
+    assert_eq!(crate::composition::source_over_evaluation_count(), 0);
+    assert_eq!(wrong_workspace.storage_signature(), wrong_storage);
+
+    let other_source = ColorInputId::new(100);
+    let other_context = SurfaceInputPortId::new(101);
+    let other_opacity = OpacityInputId::new(102);
+    let other_solid = PaintId::new(103);
+    let other_paint = PaintId::new(104);
+    let other_surface = SurfaceId::new(105);
+    let other_derived = SurfaceId::new(106);
+    let other_occurrence = OccurrenceId::new(107);
+    let other = AppearanceGraphSpec::new(
+        vec![other_source],
+        vec![other_context],
+        vec![other_opacity],
+        vec![
+            PaintSpec::Solid {
+                id: other_solid,
+                color: other_source,
+            },
+            PaintSpec::Opacity {
+                id: other_paint,
+                source: other_solid,
+                opacity: other_opacity,
+            },
+        ],
+        vec![
+            SurfaceSpec::Input {
+                id: other_surface,
+                port: other_context,
+            },
+            SurfaceSpec::FromOccurrence {
+                id: other_derived,
+                occurrence: other_occurrence,
+            },
+        ],
+        vec![OccurrenceSpec {
+            id: other_occurrence,
+            subject: other_paint,
+            against: other_surface,
+            profile: CompositionProfileV1::EncodedSrgb8SourceOverV1,
+        }],
+    )
+    .compile()
+    .unwrap();
+    let other_admitted = other
+        .admit_bindings(&AppearanceBindings::new(
+            vec![(other_source, Srgb8::new([1, 2, 3]))],
+            vec![(other_context, Srgb8::new([4, 5, 6]))],
+            vec![(other_opacity, 0.5)],
+        ))
+        .unwrap();
+    let mut workspace = graph.new_workspace().unwrap();
+    let storage = workspace.storage_signature();
+
+    assert_eq!(
+        graph
+            .evaluate_admitted_into(&other_admitted, &mut workspace)
+            .unwrap_err(),
+        BindingError::IncompatibleAdmittedBindings
+    );
+    assert_eq!(crate::composition::source_over_evaluation_count(), 0);
+    assert_eq!(workspace.storage_signature(), storage);
+}
+
+#[test]
+fn invalid_opacity_is_rejected_during_admission_before_any_composition() {
+    let graph = point_component(false, false).compile().unwrap();
+    crate::composition::reset_source_over_evaluation_count();
+    assert_eq!(
+        graph.admit_bindings(&bindings([1, 2, 3], f64::NAN, [4, 5, 6])),
+        Err(BindingError::OpacityOutOfDomain {
+            input: OPACITY,
+            reason: crate::composition::OpacityAdmissionErrorV1::NonFinite,
+        })
+    );
+    assert_eq!(crate::composition::source_over_evaluation_count(), 0);
 }

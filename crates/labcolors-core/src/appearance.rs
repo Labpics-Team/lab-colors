@@ -13,10 +13,18 @@
 //!
 //! Code-owned adapter представлен sealed borrowed IR и исполняется тем же
 //! evaluator-ом, что результат декларативной компиляции. Структурное равенство
-//! статического IR результату compiler-а закреплено proof-тестом; production-
-//! артефакт не содержит admission/topology compiler.
+//! статического IR результату compiler-а закреплено proof-тестом. Compiler входит
+//! в production Core: любой внутренний lowerer собирает тот же нейтральный
+//! Paint/Surface/Occurrence DAG, не добавляя в физику словарь клиента.
 
-#[cfg(test)]
+#![cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "production physical-graph compiler lands before its Core lowerer consumer"
+    )
+)]
+
 use std::collections::BTreeSet;
 
 use crate::Srgb8;
@@ -46,7 +54,6 @@ impl SurfaceInputPortId {
     }
 
     /// Exact transport value. It has identity semantics only.
-    #[cfg(test)]
     pub(crate) const fn value(self) -> u32 {
         self.0
     }
@@ -60,6 +67,10 @@ impl OpacityInputId {
     pub(crate) const fn new(raw: u32) -> Self {
         Self(raw)
     }
+
+    pub(crate) const fn value(self) -> u32 {
+        self.0
+    }
 }
 
 /// Непрозрачный handle Paint-программы.
@@ -70,6 +81,10 @@ impl PaintId {
     pub(crate) const fn new(raw: u32) -> Self {
         Self(raw)
     }
+
+    pub(crate) const fn value(self) -> u32 {
+        self.0
+    }
 }
 
 /// Непрозрачный handle наблюдаемой поверхности.
@@ -79,6 +94,10 @@ pub(crate) struct SurfaceId(u32);
 impl SurfaceId {
     pub(crate) const fn new(raw: u32) -> Self {
         Self(raw)
+    }
+
+    pub(crate) const fn value(self) -> u32 {
+        self.0
     }
 }
 
@@ -93,7 +112,6 @@ impl OccurrenceId {
     }
 
     /// Exact transport value. It has identity semantics only.
-    #[cfg(test)]
     pub(crate) const fn value(self) -> u32 {
         self.0
     }
@@ -116,24 +134,20 @@ pub(crate) struct ProgramOccurrenceBindingV1 {
 }
 
 impl ProgramOccurrenceBindingV1 {
-    #[cfg(test)]
     pub(crate) const fn occurrence(self) -> OccurrenceId {
         self.occurrence
     }
 
-    #[cfg(test)]
     pub(crate) const fn subject(self) -> PaintId {
         self.subject
     }
 
-    #[cfg(test)]
     pub(crate) const fn backdrop_surface(self) -> SurfaceId {
         self.backdrop_surface
     }
 }
 
 /// Paint-конструкторы point-домена. Ни один вариант не знает Surface.
-#[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PaintSpec {
     /// Непрозрачный encoded-sRGB8 Paint из цветового входа.
@@ -151,7 +165,6 @@ pub(crate) enum PaintSpec {
     },
 }
 
-#[cfg(test)]
 impl PaintSpec {
     fn id(&self) -> PaintId {
         match self {
@@ -162,7 +175,6 @@ impl PaintSpec {
 
 /// Surface либо приходит извне как point-вход, либо является видимым
 /// результатом объявленного occurrence.
-#[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SurfaceSpec {
     Input {
@@ -175,7 +187,6 @@ pub(crate) enum SurfaceSpec {
     },
 }
 
-#[cfg(test)]
 impl SurfaceSpec {
     fn id(&self) -> SurfaceId {
         match self {
@@ -185,7 +196,6 @@ impl SurfaceSpec {
 }
 
 /// Единственная canonical application Paint к backdrop Surface.
-#[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct OccurrenceSpec {
     pub(crate) id: OccurrenceId,
@@ -194,9 +204,7 @@ pub(crate) struct OccurrenceSpec {
     pub(crate) profile: CompositionProfileV1,
 }
 
-/// Ошибки AOT-компиляции декларации. Compiler принадлежит proof-поверхности и
-/// не входит в production-артефакт.
-#[cfg(test)]
+/// Ошибки атомарной AOT-компиляции физической декларации.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum CompileError {
     DuplicateColorInput {
@@ -258,7 +266,6 @@ pub(crate) enum CompileError {
 
 /// Ошибки admission runtime bindings. Исполнение начинается только после
 /// полной проверки, поэтому частичного результата нет.
-#[cfg(test)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum BindingError {
     DuplicateColorBinding {
@@ -290,8 +297,16 @@ pub(crate) enum BindingError {
     },
     OpacityOutOfDomain {
         input: OpacityInputId,
-        message: String,
+        reason: crate::composition::OpacityAdmissionErrorV1,
     },
+    /// Bindings were admitted against a different exact typed input schema.
+    IncompatibleAdmittedBindings,
+    /// Scratch belongs to a different physical graph shape. Reusing storage is
+    /// allowed only when every typed output domain has the same cardinality.
+    IncompatibleWorkspace,
+    /// A fallible allocation needed to prepare bindings, scratch or an owned
+    /// result could not be satisfied. No numeric policy limit is implied.
+    ResourceExhausted,
 }
 
 /// Единственный отказ sealed point-adapter-а: невалидная authored alpha.
@@ -309,7 +324,6 @@ impl PointOpacityError {
 }
 
 /// Плоские декларации до атомарной компиляции. Порядок списков смысла не несёт.
-#[cfg(test)]
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct AppearanceGraphSpec {
     color_inputs: Vec<ColorInputId>,
@@ -320,7 +334,6 @@ pub(crate) struct AppearanceGraphSpec {
     occurrences: Vec<OccurrenceSpec>,
 }
 
-#[cfg(test)]
 impl AppearanceGraphSpec {
     pub(crate) fn new(
         color_inputs: Vec<ColorInputId>,
@@ -598,7 +611,6 @@ impl AppearanceGraphSpec {
     }
 }
 
-#[cfg(test)]
 fn adjacent_duplicate<T: Copy + Eq>(sorted: &[T]) -> Option<T> {
     sorted
         .windows(2)
@@ -609,7 +621,6 @@ fn adjacent_duplicate<T: Copy + Eq>(sorted: &[T]) -> Option<T> {
 /// Topo для functional dependency graph: каждый узел имеет не более одной
 /// зависимости. При цикле возвращает только его реальные узлы, а не весь
 /// заблокированный Kahn-остаток.
-#[cfg(test)]
 fn canonical_functional_topology<K: Copy + Ord>(
     keys: &[K],
     dependencies: &[Option<usize>],
@@ -649,7 +660,6 @@ fn canonical_functional_topology<K: Copy + Ord>(
 
 /// Итеративный functional-cycle detector: O(V), без риска переполнить стек на
 /// большом входе и без ложного включения деревьев, ведущих в цикл.
-#[cfg(test)]
 fn functional_cycle_members(dependencies: &[Option<usize>]) -> Vec<usize> {
     const UNSEEN: u8 = 0;
     const ACTIVE: u8 = 1;
@@ -694,7 +704,6 @@ fn functional_cycle_members(dependencies: &[Option<usize>]) -> Vec<usize> {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-#[cfg(test)]
 enum RenderKey {
     Surface(SurfaceId),
     Occurrence(OccurrenceId),
@@ -719,6 +728,14 @@ enum CompiledPaintSpec {
     },
 }
 
+impl CompiledPaintSpec {
+    const fn id(&self) -> PaintId {
+        match self {
+            Self::Solid { id, .. } | Self::Opacity { id, .. } => *id,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum CompiledSurfaceSpec {
     Input {
@@ -731,7 +748,6 @@ enum CompiledSurfaceSpec {
     },
 }
 
-#[cfg(test)]
 impl CompiledSurfaceSpec {
     fn id(&self) -> SurfaceId {
         match self {
@@ -750,9 +766,38 @@ struct CompiledOccurrenceSpec {
     profile: CompositionProfileV1,
 }
 
+/// Cold-bound canonical Paint position for allocation-free repeated lookup.
+///
+/// Both fields are private to this module: callers can obtain a slot only from
+/// a compiled graph and cannot forge a raw ordinal. The retained nominal ID is
+/// checked again by every evaluation view before the ordinal is dereferenced.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct CompiledPaintSlotV1 {
+    index: usize,
+    id: PaintId,
+}
+
+/// Cold-bound canonical colour-input position used by finite Program targets.
+/// The nominal ID is retained and rechecked on every overwrite. This rejects
+/// stale or mismatched index/ID pairs, but does not claim graph-instance
+/// identity when two graphs have the same canonical input at that position.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct CompiledColorInputSlotV1 {
+    index: usize,
+    id: ColorInputId,
+}
+
+/// Cold-bound canonical Occurrence position for allocation-free repeated
+/// lookup. As with [`CompiledPaintSlotV1`], construction remains sealed inside
+/// the compiled appearance graph and every use revalidates the exact ID.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct CompiledOccurrenceSlotV1 {
+    index: usize,
+    id: OccurrenceId,
+}
+
 /// Канонический compiled IR с индексными ссылками: после проверки bindings
 /// исполнение самих Paint/Surface/Occurrence узлов линейно по их числу.
-#[cfg(test)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct CompiledAppearanceGraph {
     color_inputs: Vec<ColorInputId>,
@@ -766,8 +811,8 @@ pub(crate) struct CompiledAppearanceGraph {
 }
 
 /// Borrowed runtime-представление уже проверенного compiled IR. Оно отделяет
-/// исполнение от compiler-а и позволяет статическим внутренним adapter-ам не
-/// тащить admission/topology machinery в конечный binary.
+/// исполнение от compiler-а, а статическим внутренним adapter-ам — исполнять
+/// заранее доказанную топологию без повторной компиляции.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct CompiledInputSchema<'a> {
     color_inputs: &'a [ColorInputId],
@@ -993,7 +1038,6 @@ pub(crate) fn point_program_matches(compiled: &CompiledAppearanceGraph) -> bool 
 }
 
 /// Runtime bindings одного атомарного evaluate.
-#[cfg(test)]
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct AppearanceBindings {
     colors: Vec<(ColorInputId, Srgb8)>,
@@ -1001,7 +1045,6 @@ pub(crate) struct AppearanceBindings {
     opacities: Vec<(OpacityInputId, f64)>,
 }
 
-#[cfg(test)]
 impl AppearanceBindings {
     pub(crate) fn new(
         mut colors: Vec<(ColorInputId, Srgb8)>,
@@ -1016,6 +1059,121 @@ impl AppearanceBindings {
             surfaces,
             opacities,
         }
+    }
+}
+
+/// Один раз полностью проверенные runtime bindings в typed physical domain.
+///
+/// IDs остаются рядом со значениями: это позволяет fail-closed отвергнуть
+/// случайное применение bindings к другому compiled input schema. Значения
+/// alpha уже представлены [`crate::composition::AdmittedOpacityV1`], поэтому
+/// steady-state evaluate не повторяет numeric admission.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct AdmittedAppearanceBindings {
+    colors: Vec<(ColorInputId, Srgb8)>,
+    surfaces: Vec<(SurfaceInputPortId, Srgb8)>,
+    opacities: Vec<(OpacityInputId, crate::composition::AdmittedOpacityV1)>,
+}
+
+impl AdmittedAppearanceBindings {
+    /// Fallibly duplicate one fully admitted value for an independent Session.
+    ///
+    /// An ordinary [`Clone`] can abort the process on allocation failure. The
+    /// runtime attachment boundary uses this method so resource exhaustion is
+    /// returned before a partially prepared Session can escape.
+    pub(crate) fn try_clone_v1(&self) -> Result<Self, BindingError> {
+        fn copy_vec<T: Copy>(source: &[T]) -> Result<Vec<T>, BindingError> {
+            let mut copied = Vec::new();
+            copied
+                .try_reserve_exact(source.len())
+                .map_err(|_| BindingError::ResourceExhausted)?;
+            copied.extend_from_slice(source);
+            Ok(copied)
+        }
+
+        Ok(Self {
+            colors: copy_vec(&self.colors)?,
+            surfaces: copy_vec(&self.surfaces)?,
+            opacities: copy_vec(&self.opacities)?,
+        })
+    }
+
+    /// Overwrite the complete canonical Surface-input slice from one borrowed
+    /// value source.
+    ///
+    /// The exact typed schema is checked in full before `value_at` can run or
+    /// any admitted value can change. After that O(N) preflight, `value_at` is
+    /// called exactly once per canonical input and every destination value is
+    /// overwritten exactly once. Neither pass needs lookup or allocation.
+    pub(crate) fn overwrite_surface_inputs_canonical(
+        &mut self,
+        expected_inputs: impl IntoIterator<Item = SurfaceInputPortId>,
+        mut value_at: impl FnMut(usize) -> Srgb8,
+    ) -> Result<(), BindingError> {
+        if !expected_inputs
+            .into_iter()
+            .eq(self.surfaces.iter().map(|(input, _)| *input))
+        {
+            return Err(BindingError::IncompatibleAdmittedBindings);
+        }
+
+        for (index, (_, value)) in self.surfaces.iter_mut().enumerate() {
+            *value = value_at(index);
+        }
+        Ok(())
+    }
+
+    /// Overwrite one prebound finite-target input without lookup or allocation.
+    /// The canonical index and nominal ID must both match before mutation.
+    pub(crate) fn overwrite_color_at(
+        &mut self,
+        slot: CompiledColorInputSlotV1,
+        value: Srgb8,
+    ) -> Result<(), BindingError> {
+        let Some((bound, destination)) = self.colors.get_mut(slot.index) else {
+            return Err(BindingError::IncompatibleAdmittedBindings);
+        };
+        if *bound != slot.id {
+            return Err(BindingError::IncompatibleAdmittedBindings);
+        }
+        *destination = value;
+        Ok(())
+    }
+
+    /// Borrow the admitted Surface-input slice in its exact canonical order.
+    pub(crate) fn surface_inputs_canonical(
+        &self,
+    ) -> impl ExactSizeIterator<Item = (SurfaceInputPortId, Srgb8)> + '_ {
+        self.surfaces.iter().copied()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn opacity_bits(&self, input: OpacityInputId) -> Option<u64> {
+        self.opacities
+            .binary_search_by_key(&input, |(bound, _)| *bound)
+            .ok()
+            .map(|index| self.opacities[index].1.bits())
+    }
+
+    fn matches_schema(&self, schema: CompiledInputSchema<'_>) -> bool {
+        schema.color_inputs.len() == self.colors.len()
+            && schema.surface_input_ports.len() == self.surfaces.len()
+            && schema.opacity_inputs.len() == self.opacities.len()
+            && schema
+                .color_inputs
+                .iter()
+                .zip(&self.colors)
+                .all(|(declared, (bound, _))| declared == bound)
+            && schema
+                .surface_input_ports
+                .iter()
+                .zip(&self.surfaces)
+                .all(|(declared, (bound, _))| declared == bound)
+            && schema
+                .opacity_inputs
+                .iter()
+                .zip(&self.opacities)
+                .all(|(declared, (bound, _))| declared == bound)
     }
 }
 
@@ -1056,7 +1214,6 @@ impl EncodedPointPaintV1 {
         self.opacity
     }
 
-    #[cfg(test)]
     pub(crate) const fn opacity_bits(self) -> u64 {
         self.opacity.bits()
     }
@@ -1081,7 +1238,6 @@ impl SourceOverCertificateV1 {
             .composite(self.subject_rgb, self.subject_opacity, self.backdrop_rgb)
     }
 
-    #[cfg(test)]
     pub(crate) const fn profile(&self) -> CompositionProfileV1 {
         self.profile
     }
@@ -1196,11 +1352,11 @@ pub(crate) struct VisiblePointBindingV1 {
 }
 
 impl VisiblePointBindingV1 {
-    pub(crate) fn program_occurrence(self) -> ProgramOccurrenceBindingV1 {
+    pub(crate) const fn program_occurrence(self) -> ProgramOccurrenceBindingV1 {
         self.program_occurrence
     }
 
-    pub(crate) fn occurrence(self) -> SourceOverCertificateV1 {
+    pub(crate) const fn occurrence(self) -> SourceOverCertificateV1 {
         self.occurrence
     }
 
@@ -1210,7 +1366,6 @@ impl VisiblePointBindingV1 {
 }
 
 /// Полный атомарный результат evaluate в каноническом typed-ID порядке.
-#[cfg(test)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct AppearanceEvaluation {
     paints: Vec<EncodedPointPaintV1>,
@@ -1218,7 +1373,6 @@ pub(crate) struct AppearanceEvaluation {
     occurrences: Vec<ResolvedOccurrence>,
 }
 
-#[cfg(test)]
 impl AppearanceEvaluation {
     pub(crate) fn paint(&self, id: PaintId) -> Option<&EncodedPointPaintV1> {
         self.paints
@@ -1242,7 +1396,195 @@ impl AppearanceEvaluation {
     }
 }
 
-#[cfg(test)]
+/// Reusable scratch для одного compiled physical graph.
+///
+/// После первого fallible sizing повторные evaluate того же shape только
+/// очищают slots; capacity и backing allocations остаются неизменными.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct AppearanceWorkspaceShape {
+    paints: usize,
+    surfaces: usize,
+    occurrences: usize,
+}
+
+impl AppearanceWorkspaceShape {
+    const fn of(program: CompiledAppearanceProgram<'_>) -> Self {
+        Self {
+            paints: program.paints.len(),
+            surfaces: program.surfaces.len(),
+            occurrences: program.occurrences.len(),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct AppearanceWorkspace {
+    shape: AppearanceWorkspaceShape,
+    paints: Vec<Option<EncodedPointPaintV1>>,
+    surfaces: Vec<Option<Srgb8>>,
+    occurrences: Vec<Option<ResolvedOccurrence>>,
+}
+
+impl AppearanceWorkspace {
+    fn for_program(program: CompiledAppearanceProgram<'_>) -> Result<Self, BindingError> {
+        let shape = AppearanceWorkspaceShape::of(program);
+        let mut workspace = Self {
+            shape,
+            paints: Vec::new(),
+            surfaces: Vec::new(),
+            occurrences: Vec::new(),
+        };
+        initialise_workspace_slots(&mut workspace.paints, shape.paints)?;
+        initialise_workspace_slots(&mut workspace.surfaces, shape.surfaces)?;
+        initialise_workspace_slots(&mut workspace.occurrences, shape.occurrences)?;
+        Ok(workspace)
+    }
+
+    fn prepare(&mut self, program: CompiledAppearanceProgram<'_>) -> Result<(), BindingError> {
+        if self.shape != AppearanceWorkspaceShape::of(program) {
+            return Err(BindingError::IncompatibleWorkspace);
+        }
+        self.paints.fill(None);
+        self.surfaces.fill(None);
+        self.occurrences.fill(None);
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn storage_signature(&self) -> [(usize, usize); 3] {
+        [
+            (self.paints.as_ptr() as usize, self.paints.capacity()),
+            (self.surfaces.as_ptr() as usize, self.surfaces.capacity()),
+            (
+                self.occurrences.as_ptr() as usize,
+                self.occurrences.capacity(),
+            ),
+        ]
+    }
+}
+
+fn initialise_workspace_slots<T: Clone>(
+    slots: &mut Vec<Option<T>>,
+    required_len: usize,
+) -> Result<(), BindingError> {
+    slots
+        .try_reserve_exact(required_len)
+        .map_err(|_| BindingError::ResourceExhausted)?;
+    slots.resize(required_len, None);
+    Ok(())
+}
+
+/// Borrowed allocation-free result of one workspace evaluation.
+///
+/// The mutable workspace borrow prevents another evaluate from invalidating
+/// these values while a consumer is still reading them.
+#[derive(Debug)]
+pub(crate) struct AppearanceEvaluationView<'program, 'workspace> {
+    program: CompiledAppearanceProgram<'program>,
+    workspace: &'workspace AppearanceWorkspace,
+}
+
+impl AppearanceEvaluationView<'_, '_> {
+    pub(crate) fn paint(&self, id: PaintId) -> Option<&EncodedPointPaintV1> {
+        let index = self
+            .program
+            .paints
+            .binary_search_by_key(&id, CompiledPaintSpec::id)
+            .ok()?;
+        self.workspace.paints[index].as_ref()
+    }
+
+    /// Resolve a compiler-minted Paint slot in constant time.
+    ///
+    /// A slot from a graph whose canonical ordinal names another Paint is
+    /// rejected before returning workspace data. No fallback ID lookup occurs.
+    pub(crate) fn paint_at(&self, slot: CompiledPaintSlotV1) -> Option<&EncodedPointPaintV1> {
+        let spec = self.program.paints.get(slot.index)?;
+        if spec.id() != slot.id {
+            return None;
+        }
+        let paint = self.workspace.paints.get(slot.index)?.as_ref()?;
+        (paint.id == slot.id).then_some(paint)
+    }
+
+    pub(crate) fn surface_rgb(&self, id: SurfaceId) -> Option<[u8; 3]> {
+        let index = self
+            .program
+            .surfaces
+            .binary_search_by_key(&id, CompiledSurfaceSpec::id)
+            .ok()?;
+        self.workspace.surfaces[index].map(Srgb8::bytes)
+    }
+
+    pub(crate) fn occurrence(&self, id: OccurrenceId) -> Option<&ResolvedOccurrence> {
+        let index = self
+            .program
+            .occurrences
+            .binary_search_by_key(&id, |occurrence| occurrence.id)
+            .ok()?;
+        self.workspace.occurrences[index].as_ref()
+    }
+
+    /// Resolve a compiler-minted Occurrence slot in constant time, retaining
+    /// exact nominal identity as the fail-closed cross-graph check.
+    pub(crate) fn occurrence_at(
+        &self,
+        slot: CompiledOccurrenceSlotV1,
+    ) -> Option<&ResolvedOccurrence> {
+        let spec = self.program.occurrences.get(slot.index)?;
+        if spec.id != slot.id {
+            return None;
+        }
+        let occurrence = self.workspace.occurrences.get(slot.index)?.as_ref()?;
+        (occurrence.id == slot.id).then_some(occurrence)
+    }
+
+    pub(crate) fn occurrences(&self) -> impl ExactSizeIterator<Item = &ResolvedOccurrence> + '_ {
+        self.workspace.occurrences.iter().map(|occurrence| {
+            occurrence
+                .as_ref()
+                .unwrap_or_else(|| unreachable!("render topo covers every Occurrence"))
+        })
+    }
+
+    fn try_to_owned(&self) -> Result<AppearanceEvaluation, BindingError> {
+        let mut paints = Vec::new();
+        paints
+            .try_reserve_exact(self.workspace.paints.len())
+            .map_err(|_| BindingError::ResourceExhausted)?;
+        for paint in &self.workspace.paints {
+            paints.push(paint.unwrap_or_else(|| unreachable!("Paint topo covers every node")));
+        }
+
+        let mut surfaces = Vec::new();
+        surfaces
+            .try_reserve_exact(self.workspace.surfaces.len())
+            .map_err(|_| BindingError::ResourceExhausted)?;
+        for (spec, value) in self.program.surfaces.iter().zip(&self.workspace.surfaces) {
+            surfaces.push((
+                spec.id(),
+                value.unwrap_or_else(|| unreachable!("render topo covers every Surface")),
+            ));
+        }
+
+        let mut occurrences = Vec::new();
+        occurrences
+            .try_reserve_exact(self.workspace.occurrences.len())
+            .map_err(|_| BindingError::ResourceExhausted)?;
+        for occurrence in &self.workspace.occurrences {
+            occurrences.push(
+                occurrence.unwrap_or_else(|| unreachable!("render topo covers every Occurrence")),
+            );
+        }
+
+        Ok(AppearanceEvaluation {
+            paints,
+            surfaces,
+            occurrences,
+        })
+    }
+}
+
 impl CompiledAppearanceGraph {
     fn program(&self) -> CompiledAppearanceProgram<'_> {
         CompiledAppearanceProgram::from_validated_parts(
@@ -1259,26 +1601,101 @@ impl CompiledAppearanceGraph {
         )
     }
 
+    #[cfg(test)]
     fn matches_program(&self, program: CompiledAppearanceProgram<'_>) -> bool {
         self.program() == program
     }
 
+    /// Bind one colour input to its canonical compiled ordinal. Runtime target
+    /// selection consumes the sealed slot instead of repeating an ID search.
+    pub(crate) fn bind_color_input(&self, id: ColorInputId) -> Option<CompiledColorInputSlotV1> {
+        let index = self.color_inputs.binary_search(&id).ok()?;
+        Some(CompiledColorInputSlotV1 { index, id })
+    }
+
+    /// Bind one Paint identity to its canonical compiled ordinal.
+    ///
+    /// This is the only cold lookup. Repeated evaluations consume the sealed
+    /// slot through [`AppearanceEvaluationView::paint_at`] without searching.
+    pub(crate) fn bind_paint(&self, id: PaintId) -> Option<CompiledPaintSlotV1> {
+        let index = self
+            .paints
+            .binary_search_by_key(&id, CompiledPaintSpec::id)
+            .ok()?;
+        Some(CompiledPaintSlotV1 { index, id })
+    }
+
+    /// Bind one Occurrence identity to its canonical compiled ordinal.
+    pub(crate) fn bind_occurrence(&self, id: OccurrenceId) -> Option<CompiledOccurrenceSlotV1> {
+        let index = self
+            .occurrences
+            .binary_search_by_key(&id, |occurrence| occurrence.id)
+            .ok()?;
+        Some(CompiledOccurrenceSlotV1 { index, id })
+    }
+
+    /// Canonical client-owned occurrence identities emitted by this program.
+    pub(crate) fn occurrence_ids(&self) -> impl ExactSizeIterator<Item = OccurrenceId> + '_ {
+        self.occurrences.iter().map(|occurrence| occurrence.id)
+    }
+
+    /// Canonical physical Surface-input schema accepted by this program.
+    pub(crate) fn surface_input_ports(
+        &self,
+    ) -> impl ExactSizeIterator<Item = SurfaceInputPortId> + '_ {
+        self.surface_input_ports.iter().copied()
+    }
+
+    /// Проверить полный typed schema и один раз понизить authored alpha в
+    /// admitted physical values. Результат можно клонировать для независимых
+    /// runtime callers без повторной numeric admission.
+    pub(crate) fn admit_bindings(
+        &self,
+        bindings: &AppearanceBindings,
+    ) -> Result<AdmittedAppearanceBindings, BindingError> {
+        self.program().admit_bindings(bindings)
+    }
+
+    /// Fallible one-time allocation of scratch for this exact physical shape.
+    pub(crate) fn new_workspace(&self) -> Result<AppearanceWorkspace, BindingError> {
+        AppearanceWorkspace::for_program(self.program())
+    }
+
+    /// Allocation-free steady-state execution over already admitted bindings.
+    pub(crate) fn evaluate_admitted_into<'workspace>(
+        &self,
+        bindings: &AdmittedAppearanceBindings,
+        workspace: &'workspace mut AppearanceWorkspace,
+    ) -> Result<AppearanceEvaluationView<'_, 'workspace>, BindingError> {
+        self.program().evaluate_admitted_into(bindings, workspace)
+    }
+
+    /// Cold convenience внутри Core для callers, которым нужен owned result.
+    /// Hot Session обязан хранить admitted bindings и workspace между вызовами.
     pub(crate) fn evaluate(
         &self,
         bindings: &AppearanceBindings,
     ) -> Result<AppearanceEvaluation, BindingError> {
-        self.program().evaluate(bindings)
+        let admitted = self.admit_bindings(bindings)?;
+        let mut workspace = self.new_workspace()?;
+        self.evaluate_admitted_into(&admitted, &mut workspace)?
+            .try_to_owned()
     }
 }
 
-impl CompiledAppearanceProgram<'_> {
-    /// Проверить bindings, материализовать Paint DAG один раз и исполнить
-    /// Surface/Occurrence DAG один раз. Частичный результат не возвращается.
-    #[cfg(test)]
-    pub(crate) fn evaluate(
+impl<'program> CompiledAppearanceProgram<'program> {
+    const fn input_schema(self) -> CompiledInputSchema<'program> {
+        CompiledInputSchema::new(
+            self.color_inputs,
+            self.surface_input_ports,
+            self.opacity_inputs,
+        )
+    }
+
+    fn admit_bindings(
         &self,
         bindings: &AppearanceBindings,
-    ) -> Result<AppearanceEvaluation, BindingError> {
+    ) -> Result<AdmittedAppearanceBindings, BindingError> {
         let colors = &bindings.colors;
         if let Some(window) = colors.windows(2).find(|window| window[0].0 == window[1].0) {
             return Err(BindingError::DuplicateColorBinding { input: window[0].0 });
@@ -1337,14 +1754,53 @@ impl CompiledAppearanceProgram<'_> {
                 return Err(BindingError::UnexpectedSurfaceInputBinding { input: *bound });
             }
         }
+
+        let mut admitted_colors = Vec::new();
+        admitted_colors
+            .try_reserve_exact(colors.len())
+            .map_err(|_| BindingError::ResourceExhausted)?;
+        admitted_colors.extend(colors.iter().copied());
+
+        let mut admitted_surfaces = Vec::new();
+        admitted_surfaces
+            .try_reserve_exact(surfaces.len())
+            .map_err(|_| BindingError::ResourceExhausted)?;
+        admitted_surfaces.extend(surfaces.iter().copied());
+
+        let mut admitted_opacities = Vec::new();
+        admitted_opacities
+            .try_reserve_exact(opacities.len())
+            .map_err(|_| BindingError::ResourceExhausted)?;
         for (input, alpha) in opacities {
-            if let Err(message) = crate::composition::validate_alpha(*alpha) {
-                return Err(BindingError::OpacityOutOfDomain {
+            let value = crate::composition::AdmittedOpacityV1::new(*alpha).map_err(|reason| {
+                BindingError::OpacityOutOfDomain {
                     input: *input,
-                    message,
-                });
-            }
+                    reason,
+                }
+            })?;
+            admitted_opacities.push((*input, value));
         }
+
+        Ok(AdmittedAppearanceBindings {
+            colors: admitted_colors,
+            surfaces: admitted_surfaces,
+            opacities: admitted_opacities,
+        })
+    }
+
+    fn evaluate_admitted_into<'workspace>(
+        self,
+        bindings: &AdmittedAppearanceBindings,
+        workspace: &'workspace mut AppearanceWorkspace,
+    ) -> Result<AppearanceEvaluationView<'program, 'workspace>, BindingError> {
+        if !bindings.matches_schema(self.input_schema()) {
+            return Err(BindingError::IncompatibleAdmittedBindings);
+        }
+        workspace.prepare(self)?;
+
+        let colors = &bindings.colors;
+        let surfaces = &bindings.surfaces;
+        let opacities = &bindings.opacities;
 
         let color_value = |id: ColorInputId| -> Srgb8 {
             let index = colors
@@ -1362,55 +1818,27 @@ impl CompiledAppearanceProgram<'_> {
             let index = opacities
                 .binary_search_by_key(&id, |(bound, _)| *bound)
                 .unwrap_or_else(|_| unreachable!("bindings were matched before evaluation"));
-            crate::composition::AdmittedOpacityV1::new(opacities[index].1)
-                .unwrap_or_else(|_| unreachable!("opacity bindings were admitted before execution"))
+            opacities[index].1
         };
 
-        let mut resolved_paints: Vec<Option<EncodedPointPaintV1>> = vec![None; self.paints.len()];
-        let mut resolved_surfaces: Vec<Option<Srgb8>> = vec![None; self.surfaces.len()];
-        let mut resolved_occurrences: Vec<Option<ResolvedOccurrence>> =
-            vec![None; self.occurrences.len()];
         self.execute_into(
             color_value,
             surface_value,
             opacity_value,
-            &mut resolved_paints,
-            &mut resolved_surfaces,
-            &mut resolved_occurrences,
+            &mut workspace.paints,
+            &mut workspace.surfaces,
+            &mut workspace.occurrences,
         );
 
-        let paints = resolved_paints
-            .into_iter()
-            .map(|paint| paint.unwrap_or_else(|| unreachable!("Paint topo covers every node")))
-            .collect();
-        let surfaces = self
-            .surfaces
-            .iter()
-            .zip(resolved_surfaces)
-            .map(|(surface, value)| {
-                (
-                    surface.id(),
-                    value.unwrap_or_else(|| unreachable!("render topo covers every Surface")),
-                )
-            })
-            .collect();
-        let occurrences = resolved_occurrences
-            .into_iter()
-            .map(|occurrence| {
-                occurrence.unwrap_or_else(|| unreachable!("render topo covers every Occurrence"))
-            })
-            .collect();
-
-        Ok(AppearanceEvaluation {
-            paints,
-            surfaces,
-            occurrences,
+        Ok(AppearanceEvaluationView {
+            program: self,
+            workspace,
         })
     }
 
     /// Единственное исполнение compiled IR. Scratch принадлежит caller-у:
-    /// static adapter использует stack arrays, test-only generic admission —
-    /// динамические buffers. Алгоритм и сертификат при этом общие.
+    /// static adapter использует stack arrays, generic admission —
+    /// владеющие buffers. Алгоритм и сертификат при этом общие.
     fn execute_into<C, S, O>(
         &self,
         color_value: C,

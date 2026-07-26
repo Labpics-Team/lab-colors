@@ -306,8 +306,8 @@ fn acme_config() -> ThemeConfig {
                 ("night".to_string(), VcPreset::Dim),
             ],
         },
-        // A small but real role set: a text ladder, a neutral fill, a brand fill,
-        // a hued brand label, a badge label, a brand focus ring, a brand glow.
+        // A small but real role set: a text ladder, a neutral fill, a hued brand
+        // label, a brand focus ring and a brand glow.
         roles: vec![
             ("text-strong".to_string(), text(0.968, Floor::AaText)),
             ("text-weak".to_string(), text(0.461, Floor::AaUi)),
@@ -320,27 +320,11 @@ fn acme_config() -> ThemeConfig {
                 },
             ),
             (
-                "brand-fill".to_string(),
-                RoleRecipe::PairFill {
-                    source: LadderSource::Brand,
-                },
-            ),
-            (
                 "brand-label".to_string(),
                 RoleRecipe::TextAnchor {
                     fraction: 0.968,
                     floor: Floor::AaText,
                     hue: Some(LadderSource::Brand),
-                },
-            ),
-            // Лейбл пары: любой клиент получает жёсткий контраст против
-            // фактически emitted PairFill Surface через общий joint engine.
-            (
-                "badge-label".to_string(),
-                RoleRecipe::PairLabel {
-                    source: LadderSource::Brand,
-                    fraction: 0.461,
-                    floor: Floor::AaUi,
                 },
             ),
             ("focus".to_string(), brand_ladder(LadderPosition::FocusRing)),
@@ -369,8 +353,8 @@ fn a_second_company_config_compiles_and_emits_a_valid_system() {
         .expect("a well-formed foreign config must compile");
     assert_eq!(
         table.entries().len(),
-        8,
-        "acme declared eight roles; the table carries exactly them"
+        6,
+        "acme declared six roles; the table carries exactly them"
     );
 
     // Численный план (#292) второго клиента — derived-проекция той же таблицы:
@@ -394,7 +378,7 @@ fn a_second_company_config_compiles_and_emits_a_valid_system() {
         let bg = BgInput::solid(bg_hex).unwrap();
         let set = resolve_named_set(&bg, &table, &vc)
             .expect("валидный второй клиент обязан резолвиться атомарно");
-        assert_eq!(set.len(), 8, "every declared role resolves to an outcome");
+        assert_eq!(set.len(), 6, "every declared role resolves to an outcome");
 
         // The text ladder is real: strong is a solved colour that clears its AA
         // text floor and reads stronger than the weak rung.
@@ -418,26 +402,6 @@ fn a_second_company_config_compiles_and_emits_a_valid_system() {
         assert!(
             matches!(brand_label.1, Resolved::Color { .. }),
             "hued brand-label must resolve to a solved colour on {bg_hex}"
-        );
-
-        // PairLabel — агностичный жёсткий контраст: решается цветом и держит
-        // UI-пол (3:1) против фактически emitted PairFill Surface, а не
-        // страницы или скрытой синтетической подложки.
-        let badge_label = set.iter().find(|(n, _)| n == "badge-label").unwrap();
-        let Resolved::Color { solved, .. } = &badge_label.1 else {
-            panic!("badge-label must resolve to a solved colour on {bg_hex}");
-        };
-        let brand_fill = set.iter().find(|(n, _)| n == "brand-fill").unwrap();
-        let surface_hex = brand_fill
-            .1
-            .translucent()
-            .expect("brand-fill is the emitted PairFill surface")
-            .composite_hex();
-        let enc = |h: &str| crate::spaces::srgb::srgb_encoded_from_hex(h).unwrap();
-        let ratio = crate::wcag::contrast_ratio(enc(solved.hex()), enc(surface_hex));
-        assert!(
-            ratio >= 3.0 - 1e-9,
-            "badge-label must clear 3:1 against emitted PairFill on {bg_hex}: got {ratio:.2}:1"
         );
     }
 }

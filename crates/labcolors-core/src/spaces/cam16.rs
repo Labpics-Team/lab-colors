@@ -285,9 +285,7 @@ pub(crate) fn forward(xyz: [f64; 3], vc: &ViewingConditions) -> (f64, f64, f64) 
     }) {
         return hit;
     }
-    #[cfg(test)]
-    FORWARD_CALLS.with(|c| c.set(c.get() + 1));
-    let result = forward_compute(xyz, vc);
+    let result = forward_cache_free_v1(xyz, vc);
     FORWARD_CACHE.with(|c| {
         let mut c = c.borrow_mut();
         if c.active {
@@ -295,6 +293,52 @@ pub(crate) fn forward(xyz: [f64; 3], vc: &ViewingConditions) -> (f64, f64, f64) 
         }
     });
     result
+}
+
+/// Execute one CAM16 forward pass without consulting the legacy per-set cache.
+///
+/// The legacy cache is deliberately keyed only by XYZ because its
+/// `resolve_set` owner holds one viewing condition for the entire guard scope.
+/// An F0 appearance state instead carries its own immutable context, so it must
+/// never inherit that ambient single-context assumption. Both paths still use
+/// the same numeric owner below; this boundary changes caching only, not math or
+/// operation order.
+#[inline]
+fn forward_cache_free_v1(xyz: [f64; 3], vc: &ViewingConditions) -> (f64, f64, f64) {
+    #[cfg(test)]
+    FORWARD_CALLS.with(|c| c.set(c.get() + 1));
+    forward_compute(xyz, vc)
+}
+
+/// Complete correlates of the registered CAM16 forward view.
+///
+/// This is an internal numeric carrier, not an editable colour value or a
+/// difference metric. Hue absence is classified by the occurrence layer after
+/// all coordinates have passed its finite-domain admission.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct Cam16CorrelatesV1 {
+    pub(crate) j: f64,
+    pub(crate) q: f64,
+    pub(crate) c: f64,
+    pub(crate) m: f64,
+    pub(crate) s: f64,
+    pub(crate) h: f64,
+}
+
+/// Derive the full CAM16 correlate set from the same cache-free `J/M/h`
+/// operation-order owner used on a cache miss by [`forward`].
+///
+/// `C`, `Q` and `s` are the published CAM16 correlates. The explicit `J = 0`
+/// branch gives mathematical black `(C, M, Q, s) = 0` without evaluating the
+/// otherwise indeterminate `C / sqrt(J / 100)` ratio.
+pub(crate) fn forward_correlates_v1(xyz: [f64; 3], vc: &ViewingConditions) -> Cam16CorrelatesV1 {
+    let (j, m, h) = forward_cache_free_v1(xyz, vc);
+    let root_j = (j / 100.0).sqrt();
+    let c = m / vc.fl_pow_025;
+    let q = (4.0 / vc.c) * root_j * (vc.aw + 4.0) * vc.fl_pow_025;
+    let alpha = if root_j == 0.0 { 0.0 } else { c / root_j };
+    let s = 50.0 * (vc.c * alpha / (vc.aw + 4.0)).sqrt();
+    Cam16CorrelatesV1 { j, q, c, m, s, h }
 }
 
 /// The CIECAM16 forward math itself (cache-free); see [`forward`].

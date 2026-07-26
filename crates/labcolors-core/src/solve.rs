@@ -73,16 +73,29 @@ pub enum ChromaPolicy {
     Relative(f64),
 }
 
-/// Output colour gamut. The solver produces colours inside this gamut.
+/// Output colour gamut. The public surface lists only executable output paths.
+///
+/// A reserved Display P3 selector is intentionally not a public capability:
+///
+/// ```compile_fail
+/// let _ = labcolors_core::Gamut::DisplayP3;
+/// ```
+///
+/// Re-encoding an already sRGB-bounded hex value is not a P3 output path, so
+/// those former helpers are intentionally absent too:
+///
+/// ```compile_fail
+/// use labcolors_core::p3_from_hex;
+/// ```
+///
+/// ```compile_fail
+/// use labcolors_core::p3_css_from_hex;
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum Gamut {
     /// Standard sRGB.
     Srgb,
-    /// Display P3. Reserved: the wider-gamut chroma boundary lands in a later
-    /// chapter, so v1 returns [`SolveFailure::GamutUnsupported`] rather than
-    /// silently solving in sRGB.
-    DisplayP3,
 }
 
 /// The WCAG 2.1 AA legal contrast floor a contract must clear.
@@ -339,8 +352,8 @@ impl Solved {
 
 /// Why a solve did not return a colour. The variant and its
 /// [`SolveFailureCategory`] distinguish proof of unreachability from an
-/// exhausted algorithm, a rejected request, an unsupported capability, and an
-/// internal invariant. Bindings must fail closed on [`Self::InternalInvariant`].
+/// exhausted algorithm, a rejected request, and an internal invariant. Bindings
+/// must fail closed on [`Self::InternalInvariant`].
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub enum SolveFailure {
@@ -363,8 +376,6 @@ pub enum SolveFailure {
     /// light-on-dark). `max_ratio` is the most contrast this background can
     /// supply in that polarity; `floor` is the ratio the contract required.
     FloorUnreachable { floor: f64, max_ratio: f64 },
-    /// The requested gamut is not supported yet (Display P3 arrives later).
-    GamutUnsupported,
     /// Malformed input, such as an invalid hex colour or a non-finite target.
     InvalidInput(String),
     /// A value produced and validated by the core later violated an internal
@@ -386,8 +397,6 @@ pub enum SolveFailureCategory {
     Unresolved,
     /// The request is malformed or inconsistent with the declared domain.
     Rejected,
-    /// The request is valid, but the requested capability is not implemented.
-    Unsupported,
 }
 
 impl SolveFailureCategory {
@@ -397,7 +406,6 @@ impl SolveFailureCategory {
             Self::Unreachable => "unreachable",
             Self::Unresolved => "unresolved",
             Self::Rejected => "rejected",
-            Self::Unsupported => "unsupported",
         }
     }
 }
@@ -439,7 +447,6 @@ impl SolveFailure {
             Self::FloorUnreachable { .. } => {
                 (SolveFailureCategory::Unreachable, "floor_unreachable")
             }
-            Self::GamutUnsupported => (SolveFailureCategory::Unsupported, "gamut_unsupported"),
             Self::InvalidInput(_) => (SolveFailureCategory::Rejected, "invalid_input"),
             Self::InternalInvariant(_) => return None,
         };
@@ -472,12 +479,6 @@ impl core::fmt::Display for SolveFailure {
                 f,
                 "WCAG floor {floor:.1}:1 is unreachable on this background (max {max_ratio:.2}:1)"
             ),
-            Self::GamutUnsupported => {
-                write!(
-                    f,
-                    "requested gamut is not supported yet (Display P3 is future work)"
-                )
-            }
             Self::InvalidInput(msg) => write!(f, "invalid input: {msg}"),
             Self::InternalInvariant(msg) => write!(f, "internal invariant failure: {msg}"),
         }
@@ -507,10 +508,7 @@ pub fn solve(
     vc: &ViewingConditions,
     gamut: Gamut,
 ) -> Result<Solved, SolveFailure> {
-    // The Display P3 chroma boundary is future work (chapter 5); fail loudly.
-    if gamut != Gamut::Srgb {
-        return Err(SolveFailure::GamutUnsupported);
-    }
+    let Gamut::Srgb = gamut;
     validate_job(contract, hue, chroma_policy)?;
     // Compute the background's quantised display-luminance interval once and
     // hand it to [`solve_in`]; batch/set entry points reuse the same value for
@@ -539,17 +537,14 @@ pub struct SolveJob {
 /// quantised display-luminance interval is computed once for the whole slice.
 /// The returned vector is positional: entry `i` is the result for `jobs[i]`,
 /// each carrying its own `Result` so one failed request never fails the batch.
-/// A whole-batch failure (unsupported gamut, or a background that cannot be
-/// reduced) is the outer `Err`.
+/// A background that cannot be reduced is the outer `Err`.
 pub fn solve_many(
     bg: BgInput,
     jobs: &[SolveJob],
     vc: &ViewingConditions,
     gamut: Gamut,
 ) -> Result<Vec<Result<Solved, SolveFailure>>, SolveFailure> {
-    if gamut != Gamut::Srgb {
-        return Err(SolveFailure::GamutUnsupported);
-    }
+    let Gamut::Srgb = gamut;
     // Background side: one forward for the whole batch (see [`solve`]).
     let interval = bg.luma_interval(vc)?;
     Ok(jobs
@@ -1424,11 +1419,6 @@ mod tests {
                 "floor_unreachable",
             ),
             (
-                SolveFailure::GamutUnsupported,
-                SolveFailureCategory::Unsupported,
-                "gamut_unsupported",
-            ),
-            (
                 SolveFailure::InvalidInput("x".into()),
                 SolveFailureCategory::Rejected,
                 "invalid_input",
@@ -1468,7 +1458,6 @@ mod tests {
                 floor: 4.5,
                 max_ratio: 2.0,
             },
-            SolveFailure::GamutUnsupported,
             SolveFailure::InvalidInput("x".to_string()),
             SolveFailure::InternalInvariant("x".to_string()),
         ];
@@ -1481,7 +1470,6 @@ mod tests {
                 | SolveFailure::ExceedsRange { .. }
                 | SolveFailure::BoundedSearchExhausted { .. }
                 | SolveFailure::FloorUnreachable { .. }
-                | SolveFailure::GamutUnsupported
                 | SolveFailure::InvalidInput(_)
                 | SolveFailure::InternalInvariant(_) => {}
             }
@@ -2038,24 +2026,6 @@ mod tests {
             "in-budget achieved {:.3}",
             ok.achieved_dj
         );
-    }
-
-    #[test]
-    fn display_p3_gamut_is_reserved_not_implemented() {
-        // SEAM (c): the P3 variant exists in the type but returns a real error,
-        // never a panic and never a silent sRGB fallback.
-        let vc = ViewingConditions::srgb();
-        let bg = BgInput::solid("#FFFFFF").unwrap();
-        let err = solve(
-            bg,
-            Contract::text(60.0),
-            Hue::deg(0.0),
-            ChromaPolicy::Neutral,
-            &vc,
-            Gamut::DisplayP3,
-        )
-        .unwrap_err();
-        assert_eq!(err, SolveFailure::GamutUnsupported);
     }
 
     #[test]

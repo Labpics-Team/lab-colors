@@ -22,21 +22,53 @@ pub mod glow;
 pub mod hash;
 pub mod ladder;
 pub mod lcs;
+#[expect(
+    dead_code,
+    reason = "F0 colour-identity internals are exposed only through typed Program evidence"
+)]
+pub(crate) mod lcs_occurrence;
 pub(crate) mod lpc;
 pub mod material;
 pub mod neutral;
 pub mod numerical_plan;
-pub(crate) mod pair;
+#[expect(
+    dead_code,
+    reason = "the output-profile firewall is intentionally internal to registered profiles"
+)]
+pub(crate) mod output_projection;
 #[cfg_attr(
     not(test),
     expect(
         dead_code,
-        reason = "private C8d full-support recheck is production-compiled before its package bridge exists"
+        reason = "the full-support recheck remains a private verified engine"
     )
 )]
 pub(crate) mod point_support;
+#[expect(
+    dead_code,
+    reason = "the complete Program candidate remains private until terminal C7c"
+)]
+#[deny(missing_docs)]
+pub(crate) mod program;
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "generic Program machinery is used only through the staged concrete module"
+    )
+)]
+pub(crate) mod program_session;
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "release-registry internals are projected only through typed Program evidence"
+    )
+)]
+pub(crate) mod release_registry;
 pub mod scale;
 pub mod semantic;
+pub(crate) mod sha256;
 pub mod solve;
 pub(crate) mod wcag;
 
@@ -57,11 +89,44 @@ mod agnostic_gates;
 #[cfg(test)]
 mod appearance_graph_tests;
 
+#[cfg(test)]
+mod lcs_occurrence_tests;
+
+#[cfg(test)]
+mod output_projection_tests;
+
+#[cfg(test)]
+mod program_session_tests;
+
+#[cfg(test)]
+mod program_lcs_integration_tests;
+
+#[cfg(test)]
+mod program_joint_integration_tests;
+
+#[cfg(test)]
+mod program_mixed_evaluator_tests;
+
+#[cfg(test)]
+mod program_identity_tests;
+
+#[cfg(test)]
+mod program_boundary_tests;
+
+#[cfg(test)]
+mod program_api_tests;
+
+#[cfg(test)]
+mod release_registry_tests;
+
+#[cfg(test)]
+mod generic_boundary_tests;
+
 #[cfg_attr(
     not(test),
     expect(
         dead_code,
-        reason = "private F2 raw admission is production-compiled before its package bridge exists"
+        reason = "raw observation ownership is used only through the staged Program session"
     )
 )]
 pub(crate) mod observation;
@@ -76,7 +141,7 @@ mod point_support_tests;
     not(test),
     expect(
         dead_code,
-        reason = "private F2 Session is production-compiled before C8c package integration exists"
+        reason = "the generic Session engine is used only through the staged Program owner"
     )
 )]
 pub(crate) mod session;
@@ -88,7 +153,7 @@ mod session_tests;
     not(test),
     expect(
         dead_code,
-        reason = "private V2a joint selection is production-compiled before Pair lowering or a public Program exists"
+        reason = "joint-selection internals are used only through the staged Program contract"
     )
 )]
 pub(crate) mod joint;
@@ -117,9 +182,6 @@ mod continuity_tests;
 
 #[cfg(test)]
 mod dim_tinted_tests;
-
-#[cfg(test)]
-mod pair_label_tests;
 
 #[cfg(test)]
 mod r3_byte_identity_tests;
@@ -194,7 +256,6 @@ pub use solve::{
     SolveFailureCategory, SolveJob, Solved, solve, solve_many,
 };
 pub use spaces::oklch::{css_alpha_value, oklch_css_from_hex, oklch_from_hex};
-pub use spaces::p3::{p3_css_from_hex, p3_from_hex};
 pub use spaces::srgb::srgb_encoded_from_hex;
 pub use spaces::vc::ViewingConditions;
 
@@ -308,17 +369,33 @@ pub struct NoHybridLpcSurfaceMetric;
 #[cfg(doctest)]
 pub struct NoPrematureScalarLpcApi;
 
-/// Frozen Pair frontend не публикует собственную физику или solver extension
-/// point; Pair lowering остаётся private до общего Program cutover.
+/// Кандидат Program остаётся внутренним до завершения terminal C7c: неполную
+/// emission/attachment/transaction поверхность нельзя случайно опубликовать.
 ///
 /// ```compile_fail
-/// use labcolors_core::pair::pair_side;
+/// use labcolors_core::program;
+/// ```
+///
+/// ```compile_fail
+/// use labcolors_core::package_bridge;
+/// ```
+///
+/// ```compile_fail
+/// use labcolors_core::package_bridge::PackageProgramDraftV1;
+/// ```
+///
+/// ```compile_fail
+/// use labcolors_core::program::PackageProgramDraftV1;
+/// ```
+///
+/// ```compile_fail
+/// use labcolors_core::DraftV1;
 /// ```
 #[cfg(doctest)]
-pub struct NoPublicPairRecipeApi;
+pub struct NoPrematureProgramApi;
 
-/// C8d recheck and F2 observation remain one private Session-owned protocol;
-/// they do not create a second public authoring root before C7c.
+/// C8d recheck и F2 observation остаются деталями одной приватной Session;
+/// они не могут стать дополнительными public authoring/runtime roots.
 ///
 /// ```compile_fail
 /// use labcolors_core::point_support::CompiledPointSupportRecheckV1;
@@ -329,7 +406,7 @@ pub struct NoPublicPairRecipeApi;
 /// ```
 ///
 /// ```compile_fail
-/// use labcolors_core::session::PointSupportSessionV1;
+/// use labcolors_core::session::Session;
 /// ```
 #[cfg(doctest)]
 pub struct NoPrematurePointSupportApi;

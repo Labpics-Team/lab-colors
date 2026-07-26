@@ -1,21 +1,20 @@
-//! Dependency-free SHA-256 used only for canonical content identities.
+//! SHA-256 без зависимостей только для канонических контентных адресов.
 //!
-//! Constants and operations are the SHA-256 algorithm specified by NIST
-//! FIPS 180-4, section 6.2. This module is intentionally private: callers use
-//! domain-specific digest types instead of treating a hash as mathematical
-//! proof or a semantic identifier.
+//! Константы и операции следуют алгоритму NIST FIPS 180-4, раздел 6.2. Модуль
+//! намеренно закрыт: вызывающий код использует предметные типы адресов и не
+//! выдаёт хеш за математическое доказательство либо семантический ID.
 
-/// Exact 256-bit SHA-256 output.
+/// Точный 256-битный результат SHA-256.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) struct Digest([u8; 32]);
 
 impl Digest {
-    /// Borrow the exact digest bytes.
+    /// Заимствует точные байты digest-а.
     pub(crate) const fn as_bytes(&self) -> &[u8; 32] {
         &self.0
     }
 
-    /// Canonical lowercase hexadecimal encoding.
+    /// Каноническая hexadecimal-запись в нижнем регистре.
     #[cfg(test)]
     #[allow(dead_code)]
     pub(crate) fn to_hex(self) -> String {
@@ -107,11 +106,10 @@ const ROUND_CONSTANTS: [u32; 64] = [
     0xc671_78f2,
 ];
 
-/// Incremental SHA-256 state with one fixed-size pending block.
+/// Инкрементальное состояние SHA-256 с одним pending-блоком фиксированного размера.
 ///
-/// The byte count wraps modulo 2^64, matching the encoded message-length field
-/// defined by FIPS 180-4. No input bytes are retained after their block has
-/// been compressed.
+/// Счётчик байтов оборачивается по модулю 2^64, как поле длины сообщения в
+/// FIPS 180-4. После сжатия блока входные байты не сохраняются.
 pub(crate) struct Hasher {
     state: [u32; 8],
     pending: [u8; 64],
@@ -120,7 +118,7 @@ pub(crate) struct Hasher {
 }
 
 impl Hasher {
-    /// Start a new SHA-256 computation.
+    /// Начинает новое вычисление SHA-256.
     pub(crate) const fn new() -> Self {
         Self {
             state: INITIAL_STATE,
@@ -130,8 +128,7 @@ impl Hasher {
         }
     }
 
-    /// Add bytes to this computation without allocating or retaining the
-    /// caller's slice.
+    /// Добавляет байты без аллокации и сохранения среза вызывающей стороны.
     pub(crate) fn update(&mut self, mut bytes: &[u8]) {
         self.byte_len = self.byte_len.wrapping_add(bytes.len() as u64);
 
@@ -163,7 +160,7 @@ impl Hasher {
         self.pending_len = remainder.len();
     }
 
-    /// Finish the computation and return its exact 256-bit output.
+    /// Завершает вычисление и возвращает точный 256-битный результат.
     pub(crate) fn finalize(mut self) -> Digest {
         let mut final_block = self.pending;
         final_block[self.pending_len] = 0x80;
@@ -188,7 +185,7 @@ impl Hasher {
     }
 }
 
-/// Hash one byte slice without heap-allocating a padded copy.
+/// Хеширует один байтовый срез без padded-копии в heap.
 pub(crate) fn digest(bytes: &[u8]) -> Digest {
     let mut hasher = Hasher::new();
     hasher.update(bytes);

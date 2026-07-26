@@ -1012,7 +1012,6 @@ test("publish artifact validator executes and rejects identity or byte drift", (
         "stable-cam16-glow-target-or-maximum-selection",
         "renderer-or-output-pipeline-equivalence",
         "spatial-glow-field",
-        "display-p3",
       ],
       artifacts: {
         tarball: {
@@ -1228,10 +1227,9 @@ test("release checker rejects solve failure wire drift", () => {
     ["unreachable", "exceeds_range"],
     ["unresolved", "bounded_search_exhausted"],
     ["unreachable", "floor_unreachable"],
-    ["unsupported", "gamut_unsupported"],
     ["rejected", "invalid_input"],
   ];
-  assert.equal(boundaryRows.length, 6, "public core failure dictionary changed");
+  assert.equal(boundaryRows.length, 5, "public core failure dictionary changed");
   for (const [category, code] of boundaryRows) {
     assert.doesNotThrow(() => validateSolveFailurePair(category, code));
     const wrongCategory = category === "unreachable" ? "rejected" : "unreachable";

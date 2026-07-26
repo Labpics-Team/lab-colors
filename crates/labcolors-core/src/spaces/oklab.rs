@@ -1,4 +1,4 @@
-//! Oklab perceptual colour space (sRGB path).
+//! Oklab perceptual colour-space kernels for direct XYZ(D65) and sRGB paths.
 //!
 //! Source: Björn Ottosson, "A perceptual color space for image processing"
 //! (2020), <https://bottosson.github.io/posts/oklab/>. The matrices below are
@@ -23,6 +23,18 @@ const LMS_TO_OKLAB: [[f64; 3]; 3] = [
     [ 0.2104542553,  0.7936177850, -0.0040720468],
     [ 1.9779984951, -2.4285922050,  0.4505937099],
     [ 0.0259040371,  0.7827717662, -0.8086757660],
+];
+
+// Direct XYZ(D65) -> LMS projection used by the registered F0 Oklab view.
+// These are the CSS Color 4 / 2021 Oklab coefficients. Keeping this projection
+// direct is important: an XYZ stimulus is not an encoded or linear-sRGB value,
+// and routing it through the inverse sRGB matrix would make an output space an
+// accidental part of stimulus geometry.
+#[rustfmt::skip]
+const XYZ_D65_TO_LMS_OKLAB_20210125: [[f64; 3]; 3] = [
+    [0.819_022_437_996_703, 0.3619062600528904, -0.1288737815209879],
+    [0.0329836539323885, 0.9292868615863434,  0.0361446663506424],
+    [0.0481771893596242, 0.2642395317527308,  0.6335478284694309],
 ];
 
 /// Canonical degree domain of a hue angle.
@@ -55,6 +67,18 @@ pub(crate) fn srgb_linear_to_oklab(rgb: [f64; 3]) -> [f64; 3] {
     let lms = mat_vec_mul(SRGB_TO_LMS, rgb);
     let lms_ = [lms[0].cbrt(), lms[1].cbrt(), lms[2].cbrt()];
     mat_vec_mul(LMS_TO_OKLAB, lms_)
+}
+
+/// Direct 2021 Oklab projection of one relative XYZ(D65) stimulus.
+///
+/// The caller owns frame admission. This kernel does not perform chromatic
+/// adaptation, infer an output profile, clamp coordinates or provide an
+/// inverse/editing operation.
+#[inline]
+pub(crate) fn xyz_d65_to_oklab_v1(xyz: [f64; 3]) -> [f64; 3] {
+    let lms = mat_vec_mul(XYZ_D65_TO_LMS_OKLAB_20210125, xyz);
+    let lms_root = [lms[0].cbrt(), lms[1].cbrt(), lms[2].cbrt()];
+    mat_vec_mul(LMS_TO_OKLAB, lms_root)
 }
 
 pub(crate) fn oklab_to_srgb_linear(lab: [f64; 3]) -> [f64; 3] {

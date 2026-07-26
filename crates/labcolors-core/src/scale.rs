@@ -752,16 +752,10 @@ fn quadratic_roots(d: f64, c: f64, b: f64) -> ([f64; 3], usize) {
     (roots, 2)
 }
 
-/// Стена гамута **Display P3** при `(L, h)` — та же бисекция, что
-/// [`max_chroma_bisect`], но валидность кандидата проверяется в ЛИНЕЙНОМ P3
-/// (Oklab → линейный sRGB → XYZ → линейный P3; первые два шага — линейная
-/// алгебра, корректная и за пределами sRGB-куба).
-///
-/// Этап 1 gamut-aware солвера (2026-07-03): геометрия стен и решётка эмиссии;
-/// перевод `Solved`/эмиссии на P3-кандидаты — этап 2. Чистая гамут-геометрия
-/// CSS Color 4 матриц — нуля подгонки (класс M-13 инвентаря).
-// Прод-потребитель — этап 2 (P3-кандидаты солвера); до него читается тестами.
-#[cfg_attr(not(test), allow(dead_code))]
+/// Test-only physical Display P3 gamut boundary.  This is geometry, not a
+/// released output capability: no production selector, encoder, or verifier
+/// consumes it yet.
+#[cfg(test)]
 pub(crate) fn max_chroma_p3_bisect(l_ok: f64, h_ok_deg: f64) -> f64 {
     let h_ok = h_ok_deg.to_radians();
     let cos_h = h_ok.cos();

@@ -155,14 +155,6 @@ pub enum RoleRecipeDto {
         step: String,
         decision_profile: String,
     },
-    PairFill {
-        source: LadderSourceDto,
-    },
-    PairLabel {
-        source: LadderSourceDto,
-        fraction: f64,
-        floor: FloorDto,
-    },
     AlphaAnalog {
         of: LadderSourceDto,
         alpha: f64,
@@ -354,18 +346,6 @@ impl TryFrom<RoleRecipeDto> for RoleRecipe {
                 position: position_from_key(&position)?,
                 floor: floor.map(Floor::from),
             },
-            RoleRecipeDto::PairFill { source } => RoleRecipe::PairFill {
-                source: source.into(),
-            },
-            RoleRecipeDto::PairLabel {
-                source,
-                fraction,
-                floor,
-            } => RoleRecipe::PairLabel {
-                source: source.into(),
-                fraction,
-                floor: floor.into(),
-            },
             RoleRecipeDto::AlphaAnalog { of, alpha } => RoleRecipe::AlphaAnalog {
                 of: of.into(),
                 alpha,
@@ -515,18 +495,6 @@ impl TryFrom<&RoleRecipe> for RoleRecipeDto {
                 position: position.key().to_string(),
                 floor: floor.map(floor_to_dto).transpose()?,
             },
-            RoleRecipe::PairFill { source } => RoleRecipeDto::PairFill {
-                source: source.try_into()?,
-            },
-            RoleRecipe::PairLabel {
-                source,
-                fraction,
-                floor,
-            } => RoleRecipeDto::PairLabel {
-                source: source.try_into()?,
-                fraction: *fraction,
-                floor: floor_to_dto(*floor)?,
-            },
             RoleRecipe::AlphaAnalog { of, alpha } => RoleRecipeDto::AlphaAnalog {
                 of: of.try_into()?,
                 alpha: *alpha,
@@ -661,31 +629,6 @@ mod tests {
         restored
             .compile_named_role_table()
             .expect("восстановленный конфиг компилируется");
-    }
-
-    /// Recipe-адаптер `pair-label` гоняется через JSON без
-    /// потерь: kebab-тег `pair-label`, источник/доля/пол целы туда-обратно.
-    /// Это только доказательство DTO round-trip, а не наличия pair-label
-    /// в целевом graph API.
-    #[test]
-    fn pair_label_recipe_round_trips_through_json() {
-        use labcolors_core::solve::Floor;
-        let json = r#"{"kind":"pair-label","source":{"kind":"family","key":"warning"},"fraction":0.461,"floor":"aa-ui"}"#;
-        let dto: RoleRecipeDto = serde_json::from_str(json).expect("pair-label парсится");
-        let core = RoleRecipe::try_from(dto).expect("DTO → RoleRecipe");
-        assert!(
-            matches!(
-                &core,
-                RoleRecipe::PairLabel { fraction, floor: Floor::AaUi, .. }
-                    if (*fraction - 0.461).abs() < 1e-12
-            ),
-            "pair-label конвертируется в ядро с целыми полями"
-        );
-        let back = RoleRecipeDto::try_from(&core).expect("RoleRecipe → DTO");
-        let re = serde_json::to_string(&back).expect("сериализуем");
-        assert!(re.contains(r#""kind":"pair-label""#), "kebab-тег цел: {re}");
-        assert!(re.contains(r#""floor":"aa-ui""#), "пол цел: {re}");
-        assert!(re.contains(r#""key":"warning""#), "источник цел: {re}");
     }
 
     /// C6 RED: удалённая специальная sentiment-схема обязана стать неизвестной,
@@ -876,7 +819,7 @@ mod tests {
         let full = labui_dto();
         assert_eq!(
             format!("{:016x}", fingerprint(&full)),
-            "1adb2876102d77f3",
+            "bce14f09e43c705a",
             "пин паспорта main; при легитимной смене паспорта обнови это число"
         );
     }

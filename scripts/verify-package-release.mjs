@@ -335,7 +335,7 @@ async function validatePointSupportEvidence(artifacts, numericalCapabilities) {
       POINT_SUPPORT_SOURCE_BINDING_EXCLUSIONS,
     ) ||
     !/^[0-9a-f]{64}$/u.test(proof.source_closure_sha256 ?? "") ||
-    proof.source_negative_controls !== 33 ||
+    proof.source_negative_controls !== 43 ||
     !/^[0-9a-f]{64}$/u.test(proof.proof_payload_sha256 ?? "") ||
     !/^[0-9a-f]{64}$/u.test(proof.verifier_sha256 ?? "") ||
     !Array.isArray(proof.source_files) ||
@@ -700,7 +700,6 @@ const SOLVE_FAILURE_CATEGORY_BY_CODE = new Map([
   ["exceeds_range", "unreachable"],
   ["bounded_search_exhausted", "unresolved"],
   ["floor_unreachable", "unreachable"],
-  ["gamut_unsupported", "unsupported"],
   ["invalid_input", "rejected"],
 ]);
 
@@ -1722,7 +1721,6 @@ export async function verifyPackageRelease() {
       "stable-cam16-glow-target-or-maximum-selection",
       "renderer-or-output-pipeline-equivalence",
       "spatial-glow-field",
-      "display-p3",
     ],
     artifacts: {
       tarball,

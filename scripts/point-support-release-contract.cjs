@@ -21,6 +21,7 @@ const POINT_SUPPORT_SOURCE_PATHS = Object.freeze(
     "crates/labcolors-core/src/constraints/mod.rs",
     "crates/labcolors-core/src/constraints/wcag22.rs",
     "crates/labcolors-core/src/hash.rs",
+    "crates/labcolors-core/src/lcs_occurrence.rs",
     "crates/labcolors-core/src/lib.rs",
     "crates/labcolors-core/src/numerics.rs",
     "crates/labcolors-core/src/observation.rs",

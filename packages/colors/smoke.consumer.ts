@@ -66,15 +66,6 @@ requireFailure({
   code: "invalid_input",
   message: "x",
 });
-requireFailure({
-  kind: "failure",
-  cssVar: "--lab-example",
-  // @ts-expect-error unsupported closes the whole resolve and cannot be role data.
-  category: "unsupported",
-  code: "gamut_unsupported",
-  message: "x",
-});
-
 const admittedFailureCategory: FailureCategory = "unresolved";
 void admittedFailureCategory;
 

@@ -1,65 +1,261 @@
-use proptest::prelude::*;
+use std::cell::{Cell, RefCell};
+use std::rc::Rc;
 
 use crate::Srgb8;
-use crate::appearance::{EncodedPointPaintV1, OccurrenceId, PaintId, SurfaceInputPortId};
-use crate::composition::{AdmittedOpacityV1, CompositionProfileV1};
+use crate::appearance::SurfaceInputPortId;
+use crate::lcs_occurrence::ColorSignal;
 use crate::observation::{
-    ObservationError, ObservationHeadViewV1, ObservationPayloadInput, ObservationStreamId,
-    ObservationUpdateInput, ObservedScenarioSetInput, Revision, ScenarioId, ScenarioInput,
-    SurfaceInputBinding, UnknownReasonId,
-};
-use crate::point_support::{
-    CompiledPointSupportRecheckV1, PointSupportCriterionRequirementV1,
-    PointSupportOccurrenceRequirementV1, PointSupportStabilityPolicyV1,
+    CanonicalObservationSchemaV1, ObservationError, ObservationHeadViewV1, ObservationPayloadInput,
+    ObservationStreamId, ObservationUpdateInput, ObservedScenarioSetInput, Revision,
+    RevisionBoundObservationV1, ScenarioId, ScenarioInput, SchemaOrderedScenarioSourceV1,
+    SurfaceInputBinding, UnknownReasonId, canonicalize_observation_schema,
 };
 use crate::session::{
-    PointSupportSessionStateV1, PointSupportSessionUpdateErrorV1, PointSupportSessionV1,
+    Session, SessionDecision, SessionEvidenceV1, SessionObservationBindingPermitV1, SessionPlanV1,
+    SessionState, SessionUpdateError, private as session_private,
 };
 
-const PAINT: PaintId = PaintId::new(7);
-const OCCURRENCE: OccurrenceId = OccurrenceId::new(11);
-const SURFACE: SurfaceInputPortId = SurfaceInputPortId::new(21);
 const STREAM: ObservationStreamId = ObservationStreamId::new(31);
-const TARGET: [u8; 3] = [128; 3];
+const FOREIGN_STREAM: ObservationStreamId = ObservationStreamId::new(32);
+const SURFACE: SurfaceInputPortId = SurfaceInputPortId::new(21);
 
-fn candidate() -> EncodedPointPaintV1 {
-    EncodedPointPaintV1::from_admitted(
-        PAINT,
-        Srgb8::new([0; 3]),
-        AdmittedOpacityV1::new(0.5).unwrap(),
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SentinelVerified {
+    observation: RevisionBoundObservationV1,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SentinelViolation {
+    observation: RevisionBoundObservationV1,
+}
+
+impl session_private::EvidenceSealed for SentinelVerified {}
+
+impl SessionEvidenceV1 for SentinelVerified {
+    fn observation(&self) -> &RevisionBoundObservationV1 {
+        &self.observation
+    }
+}
+
+impl session_private::EvidenceSealed for SentinelViolation {}
+
+impl SessionEvidenceV1 for SentinelViolation {
+    fn observation(&self) -> &RevisionBoundObservationV1 {
+        &self.observation
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SentinelError {
+    Forced,
+    SchemaBackingMismatch,
+    EmptyObservation,
+}
+
+#[derive(Debug, Clone)]
+struct SentinelControl {
+    evaluations: Rc<Cell<usize>>,
+    fail_next: Rc<Cell<bool>>,
+    substitute_next: Rc<RefCell<Option<RevisionBoundObservationV1>>>,
+}
+
+impl SentinelControl {
+    fn evaluation_count(&self) -> usize {
+        self.evaluations.get()
+    }
+
+    fn fail_next(&self) {
+        self.fail_next.set(true);
+    }
+
+    fn substitute_next_with(&self, observation: RevisionBoundObservationV1) {
+        *self.substitute_next.borrow_mut() = Some(observation);
+    }
+}
+
+#[derive(Debug)]
+struct SentinelPlan {
+    schema: CanonicalObservationSchemaV1,
+    control: SentinelControl,
+}
+
+impl session_private::PlanSealed for SentinelPlan {}
+
+impl SessionPlanV1 for SentinelPlan {
+    type OwnerLease = ();
+    type Verified = SentinelVerified;
+    type Violation = SentinelViolation;
+    type Error = SentinelError;
+
+    fn try_acquire_owner(&self) -> Option<Self::OwnerLease> {
+        Some(())
+    }
+
+    fn observation_schema<'a>(
+        &'a self,
+        _owner: &'a Self::OwnerLease,
+    ) -> &'a CanonicalObservationSchemaV1 {
+        &self.schema
+    }
+
+    fn evaluate(
+        &mut self,
+        _owner: &Self::OwnerLease,
+        observation: RevisionBoundObservationV1,
+        _permit: SessionObservationBindingPermitV1,
+    ) -> Result<SessionDecision<Self::Verified, Self::Violation>, Self::Error> {
+        self.control
+            .evaluations
+            .set(self.control.evaluations.get() + 1);
+        if self.control.fail_next.replace(false) {
+            return Err(SentinelError::Forced);
+        }
+        if !observation.shares_schema_backing_with(&self.schema) {
+            return Err(SentinelError::SchemaBackingMismatch);
+        }
+        let first = observation
+            .physical_values(0)
+            .and_then(|values| values.first())
+            .copied()
+            .map(ColorSignal::srgb8)
+            .ok_or(SentinelError::EmptyObservation)?;
+        let observation = self
+            .control
+            .substitute_next
+            .borrow_mut()
+            .take()
+            .unwrap_or(observation);
+        if first == Srgb8::new([255; 3]) {
+            Ok(SessionDecision::Verified(SentinelVerified { observation }))
+        } else {
+            Ok(SessionDecision::Violation(SentinelViolation {
+                observation,
+            }))
+        }
+    }
+}
+
+#[derive(Debug)]
+struct ReplacingOwnerGeneration {
+    schema: CanonicalObservationSchemaV1,
+}
+
+#[derive(Debug)]
+struct ReplacingOwnerPlan {
+    generation: std::rc::Weak<ReplacingOwnerGeneration>,
+    owner_slot: Rc<RefCell<Option<Rc<ReplacingOwnerGeneration>>>>,
+    evaluations: Rc<Cell<usize>>,
+}
+
+impl session_private::PlanSealed for ReplacingOwnerPlan {}
+
+impl SessionPlanV1 for ReplacingOwnerPlan {
+    type OwnerLease = Rc<ReplacingOwnerGeneration>;
+    type Verified = SentinelVerified;
+    type Violation = SentinelViolation;
+    type Error = SentinelError;
+
+    fn try_acquire_owner(&self) -> Option<Self::OwnerLease> {
+        self.generation.upgrade()
+    }
+
+    fn observation_schema<'a>(
+        &'a self,
+        owner: &'a Self::OwnerLease,
+    ) -> &'a CanonicalObservationSchemaV1 {
+        &owner.schema
+    }
+
+    fn evaluate(
+        &mut self,
+        owner: &Self::OwnerLease,
+        observation: RevisionBoundObservationV1,
+        _permit: SessionObservationBindingPermitV1,
+    ) -> Result<SessionDecision<Self::Verified, Self::Violation>, Self::Error> {
+        self.evaluations.set(self.evaluations.get() + 1);
+        assert!(
+            observation.shares_schema_backing_with(&owner.schema),
+            "admission and evaluation must use the same pinned generation"
+        );
+        let old_generation = self
+            .owner_slot
+            .borrow_mut()
+            .replace(Rc::new(ReplacingOwnerGeneration {
+                schema: canonicalize_observation_schema(vec![SURFACE]).unwrap(),
+            }))
+            .expect("the first owner generation must still be installed");
+        assert!(Rc::ptr_eq(owner, &old_generation));
+        drop(old_generation);
+        assert!(
+            self.generation.upgrade().is_some(),
+            "the transaction lease must pin its starting owner generation"
+        );
+        Ok(SessionDecision::Verified(SentinelVerified { observation }))
+    }
+}
+
+struct OneOrderedScenario {
+    id: ScenarioId,
+    value: Srgb8,
+}
+
+impl SchemaOrderedScenarioSourceV1 for OneOrderedScenario {
+    fn scenario_count(&self) -> usize {
+        1
+    }
+
+    fn scenario_id(&self, scenario_index: usize) -> ScenarioId {
+        assert_eq!(scenario_index, 0);
+        self.id
+    }
+
+    fn value_count(&self, scenario_index: usize) -> usize {
+        assert_eq!(scenario_index, 0);
+        1
+    }
+
+    fn value(&self, scenario_index: usize, binding_index: usize) -> Srgb8 {
+        assert_eq!((scenario_index, binding_index), (0, 0));
+        self.value
+    }
+}
+
+fn session() -> (
+    Session<SentinelPlan>,
+    SentinelControl,
+    *const SurfaceInputPortId,
+) {
+    let schema = canonicalize_observation_schema(vec![SURFACE]).unwrap();
+    let schema_ptr = schema.backing_ptr_for_test();
+    let control = SentinelControl {
+        evaluations: Rc::new(Cell::new(0)),
+        fail_next: Rc::new(Cell::new(false)),
+        substitute_next: Rc::new(RefCell::new(None)),
+    };
+    (
+        Session::new(
+            STREAM,
+            SentinelPlan {
+                schema,
+                control: control.clone(),
+            },
+        ),
+        control,
+        schema_ptr,
     )
 }
 
-fn requirement() -> CompiledPointSupportRecheckV1 {
-    CompiledPointSupportRecheckV1::new(
-        CompositionProfileV1::EncodedSrgb8SourceOverV1,
-        vec![PointSupportOccurrenceRequirementV1::new(
-            OCCURRENCE,
-            SURFACE,
-            candidate(),
-            Some(Srgb8::new(TARGET)),
-            PointSupportCriterionRequirementV1::NotRequested,
-            PointSupportStabilityPolicyV1::Disabled,
-        )],
-    )
-    .unwrap()
-}
-
-fn session() -> PointSupportSessionV1 {
-    PointSupportSessionV1::new(STREAM, requirement())
-}
-
-fn observed_update(revision: u64, backdrop: [u8; 3]) -> ObservationUpdateInput {
+fn observed_update(revision: u64, value: [u8; 3]) -> ObservationUpdateInput {
     ObservationUpdateInput {
         stream: STREAM,
         revision: Revision::new(revision),
         payload: ObservationPayloadInput::Scenarios(ObservedScenarioSetInput {
             scenarios: vec![ScenarioInput {
                 id: ScenarioId::new(1),
-                bindings: vec![SurfaceInputBinding {
-                    port: SURFACE,
-                    value: Srgb8::new(backdrop),
-                }],
+                bindings: vec![SurfaceInputBinding::new(
+                    SURFACE,
+                    ColorSignal::from_srgb8(Srgb8::new(value)),
+                )],
             }],
         }),
     }
@@ -80,265 +276,332 @@ fn malformed_update(revision: u64) -> ObservationUpdateInput {
         payload: ObservationPayloadInput::Scenarios(ObservedScenarioSetInput {
             scenarios: vec![ScenarioInput {
                 id: ScenarioId::new(1),
-                bindings: vec![],
+                bindings: Vec::new(),
             }],
         }),
     }
 }
 
-fn verified_revision(state: &PointSupportSessionStateV1) -> Option<Revision> {
+fn raw_observed(session: &Session<SentinelPlan>) -> &RevisionBoundObservationV1 {
+    let ObservationHeadViewV1::Observed(observation) = session.raw_head() else {
+        panic!("raw head must be Observed");
+    };
+    observation
+}
+
+fn verified_revision(
+    state: &SessionState<SentinelVerified, SentinelViolation>,
+) -> Option<Revision> {
     state
         .last_verified()
-        .map(|verified| verified.report().observation().revision())
+        .map(|verified| verified.observation.revision())
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum StateKind {
-    Waiting,
-    Ready,
-    Stale,
-    Failed,
-}
-
-fn state_kind(state: &PointSupportSessionStateV1) -> StateKind {
-    match state {
-        PointSupportSessionStateV1::Waiting { .. } => StateKind::Waiting,
-        PointSupportSessionStateV1::Ready { .. } => StateKind::Ready,
-        PointSupportSessionStateV1::Stale { .. } => StateKind::Stale,
-        PointSupportSessionStateV1::Failed { .. } => StateKind::Failed,
-    }
+fn assert_shared_observation(
+    raw: &RevisionBoundObservationV1,
+    evidence: &RevisionBoundObservationV1,
+) {
+    assert_eq!(raw, evidence);
+    assert_eq!(raw.backing_ptr_for_test(), evidence.backing_ptr_for_test());
+    assert_eq!(raw.schema_ptr_for_test(), evidence.schema_ptr_for_test());
 }
 
 #[test]
-fn construction_uses_only_the_compiled_schema_and_profile() {
-    let session = session();
-    assert!(matches!(
-        session.state(),
-        PointSupportSessionStateV1::Waiting {
-            current_unknown: None,
-        }
-    ));
+fn construction_is_waiting_and_owns_no_raw_evidence() {
+    let (session, control, _) = session();
+    assert!(matches!(session.state(), SessionState::Waiting));
     assert_eq!(session.raw_head(), ObservationHeadViewV1::Empty);
-    assert_eq!(
-        session.composition_profile(),
-        CompositionProfileV1::EncodedSrgb8SourceOverV1
-    );
+    assert_eq!(control.evaluation_count(), 0);
 }
 
 #[test]
-fn ready_violation_unknown_preserves_exactly_one_verified_witness() {
-    let mut session = session();
-    let PointSupportSessionStateV1::Ready { current } =
-        session.update(observed_update(1, [255; 3])).unwrap()
-    else {
-        panic!("white backdrop must verify #808080 target");
-    };
-    assert_eq!(current.report().observation().revision(), Revision::new(1));
-    assert_eq!(
-        current.report().cells().next().unwrap().provenance(),
-        &[ScenarioId::new(1)]
-    );
+fn ready_failed_unknown_retains_exactly_one_verified_witness() {
+    let (mut session, control, schema_ptr) = session();
 
-    let PointSupportSessionStateV1::Failed { cause, previous } =
-        session.update(observed_update(2, [0; 3])).unwrap()
-    else {
-        panic!("black backdrop must violate #808080 target");
+    let current_observation = match session.update(observed_update(1, [255; 3])).unwrap() {
+        SessionState::Ready { current } => current.observation.clone(),
+        _ => panic!("white sentinel input must verify"),
     };
-    assert_eq!(cause.report().observation().revision(), Revision::new(2));
-    assert_eq!(
-        previous.as_ref().unwrap().report().observation().revision(),
-        Revision::new(1)
-    );
+    assert_eq!(current_observation.revision(), Revision::new(1));
+    assert_eq!(current_observation.schema_ptr_for_test(), schema_ptr);
+    assert_shared_observation(raw_observed(&session), &current_observation);
 
-    let PointSupportSessionStateV1::Stale {
-        previous,
-        current_unknown,
-    } = session.update(unknown_update(3, 9)).unwrap()
-    else {
-        panic!("unknown after a verified result must become Stale");
+    let (cause_observation, previous_revision) =
+        match session.update(observed_update(2, [0; 3])).unwrap() {
+            SessionState::Failed { cause, previous } => (
+                cause.observation.clone(),
+                previous.as_ref().unwrap().observation.revision(),
+            ),
+            _ => panic!("black sentinel input must violate"),
+        };
+    assert_eq!(cause_observation.revision(), Revision::new(2));
+    assert_eq!(previous_revision, Revision::new(1));
+    assert_shared_observation(raw_observed(&session), &cause_observation);
+
+    let previous_revision = match session.update(unknown_update(3, 9)).unwrap() {
+        SessionState::Stale { previous } => previous.observation.revision(),
+        _ => panic!("Unknown after a verified result must become Stale"),
     };
-    let expected_unknown = *current_unknown;
-    assert_eq!(previous.report().observation().revision(), Revision::new(1));
-    assert_eq!(current_unknown.stream(), STREAM);
-    assert_eq!(current_unknown.revision(), Revision::new(3));
-    assert_eq!(current_unknown.reason(), UnknownReasonId::new(9));
-    assert_eq!(
-        session.raw_head(),
-        ObservationHeadViewV1::Unknown(&expected_unknown)
-    );
+    assert_eq!(previous_revision, Revision::new(1));
+    let ObservationHeadViewV1::Unknown(unknown) = session.raw_head() else {
+        panic!("Unknown belongs to the separate raw head");
+    };
+    assert_eq!(unknown.stream(), STREAM);
+    assert_eq!(unknown.revision(), Revision::new(3));
+    assert_eq!(unknown.reason(), UnknownReasonId::new(9));
+    assert_eq!(control.evaluation_count(), 2);
 }
 
 #[test]
-fn violation_without_prior_then_unknown_is_waiting() {
-    let mut session = session();
+fn violation_without_verified_then_unknown_returns_to_waiting() {
+    let (mut session, control, _) = session();
     assert!(matches!(
         session.update(observed_update(1, [0; 3])).unwrap(),
-        PointSupportSessionStateV1::Failed { previous: None, .. }
+        SessionState::Failed { previous: None, .. }
     ));
-    let PointSupportSessionStateV1::Waiting {
-        current_unknown: Some(current_unknown),
-    } = session.update(unknown_update(2, 1)).unwrap()
-    else {
-        panic!("unknown without a verified result must be retained by Waiting");
-    };
-    let expected_unknown = *current_unknown;
-    assert_eq!(current_unknown.stream(), STREAM);
-    assert_eq!(current_unknown.revision(), Revision::new(2));
-    assert_eq!(current_unknown.reason(), UnknownReasonId::new(1));
-    assert_eq!(
-        session.raw_head(),
-        ObservationHeadViewV1::Unknown(&expected_unknown)
-    );
+    assert!(matches!(
+        session.update(unknown_update(2, 7)).unwrap(),
+        SessionState::Waiting
+    ));
     assert_eq!(verified_revision(session.state()), None);
+    assert_eq!(control.evaluation_count(), 1);
 }
 
 #[test]
-fn stale_and_failed_transitions_move_one_previous_without_history() {
-    let mut session = session();
+fn exact_replay_is_idempotent_and_never_invokes_the_plan() {
+    let (mut session, control, _) = session();
     session.update(observed_update(1, [255; 3])).unwrap();
-    session.update(unknown_update(2, 1)).unwrap();
-    assert_eq!(verified_revision(session.state()), Some(Revision::new(1)));
+    let raw_backing = raw_observed(&session).backing_ptr_for_test();
+    assert_eq!(control.evaluation_count(), 1);
+
+    session.update(observed_update(1, [255; 3])).unwrap();
+    assert_eq!(control.evaluation_count(), 1);
+    assert_eq!(raw_observed(&session).backing_ptr_for_test(), raw_backing);
+    let SessionState::Ready { current } = session.state() else {
+        panic!("exact replay must retain Ready");
+    };
+    assert_shared_observation(raw_observed(&session), &current.observation);
+
+    session.update(unknown_update(2, 11)).unwrap();
+    session.update(unknown_update(2, 11)).unwrap();
+    assert_eq!(control.evaluation_count(), 1);
     assert_eq!(session.raw_head().revision(), Some(Revision::new(2)));
-
-    session.update(observed_update(3, [0; 3])).unwrap();
-    assert_eq!(state_kind(session.state()), StateKind::Failed);
-    assert_eq!(verified_revision(session.state()), Some(Revision::new(1)));
-    assert_eq!(session.raw_head().revision(), Some(Revision::new(3)));
-
-    session.update(unknown_update(4, 2)).unwrap();
-    assert_eq!(state_kind(session.state()), StateKind::Stale);
-    assert_eq!(verified_revision(session.state()), Some(Revision::new(1)));
-    assert_eq!(session.raw_head().revision(), Some(Revision::new(4)));
-
-    session.update(observed_update(5, [255; 3])).unwrap();
-    assert_eq!(state_kind(session.state()), StateKind::Ready);
-    assert_eq!(verified_revision(session.state()), Some(Revision::new(5)));
-    assert_eq!(session.raw_head().revision(), Some(Revision::new(5)));
 }
 
 #[test]
-fn unknown_idempotent_and_rejected_updates_never_evaluate() {
-    let mut session = session();
-    crate::composition::reset_source_over_evaluation_count();
-    let unknown = unknown_update(1, 1);
-    session.update(unknown.clone()).unwrap();
-    assert_eq!(crate::composition::source_over_evaluation_count(), 0);
-    let before = session.clone();
-    session.update(unknown).unwrap();
-    assert_eq!(crate::composition::source_over_evaluation_count(), 0);
-    assert_eq!(session, before);
-
-    let update = observed_update(2, [255; 3]);
-    session.update(update.clone()).unwrap();
-    assert_eq!(crate::composition::source_over_evaluation_count(), 1);
-    let before = session.clone();
-    session.update(update).unwrap();
-    assert_eq!(crate::composition::source_over_evaluation_count(), 1);
-    assert_eq!(session, before);
-
-    let before = session.clone();
-    crate::composition::reset_source_over_evaluation_count();
+fn schema_ordered_admission_shares_only_the_plan_schema_handle() {
+    let (mut session, control, schema_ptr) = session();
     assert_eq!(
-        session.update(malformed_update(1)),
-        Err(PointSupportSessionUpdateErrorV1::Observation(
-            ObservationError::RevisionOutOfOrder {
-                current: Revision::new(2),
-                incoming: Revision::new(1),
-            },
-        ))
+        session
+            .plan()
+            .observation_schema(&())
+            .strong_count_for_test(),
+        1,
     );
-    assert_eq!(crate::composition::source_over_evaluation_count(), 0);
-    assert_eq!(session, before);
+    let source = OneOrderedScenario {
+        id: ScenarioId::new(1),
+        value: Srgb8::new([255; 3]),
+    };
+    let mut order_scratch = Vec::new();
 
-    for rejected in [
-        malformed_update(3),
-        ObservationUpdateInput {
-            stream: ObservationStreamId::new(99),
-            revision: Revision::new(3),
-            payload: ObservationPayloadInput::Unknown(UnknownReasonId::new(1)),
-        },
-        observed_update(2, [0; 3]),
-    ] {
-        let before = session.clone();
-        crate::composition::reset_source_over_evaluation_count();
-        assert!(session.update(rejected).is_err());
-        assert_eq!(crate::composition::source_over_evaluation_count(), 0);
-        assert_eq!(session, before);
-    }
+    let SessionState::Ready { current } = session
+        .update_schema_ordered(Revision::new(1), &source, &mut order_scratch)
+        .unwrap()
+    else {
+        panic!("white sentinel input must verify");
+    };
+    assert_eq!(current.observation.schema_ptr_for_test(), schema_ptr);
+    assert_eq!(
+        session
+            .plan()
+            .observation_schema(&())
+            .strong_count_for_test(),
+        2,
+    );
+    assert_eq!(control.evaluation_count(), 1);
+
+    session
+        .update_schema_ordered(Revision::new(1), &source, &mut order_scratch)
+        .unwrap();
+    assert_eq!(
+        session
+            .plan()
+            .observation_schema(&())
+            .strong_count_for_test(),
+        2,
+    );
+    assert_eq!(control.evaluation_count(), 1);
 }
 
 #[test]
-fn resource_preflight_failure_is_atomic_and_retryable() {
-    let mut session = session();
+fn equal_content_at_a_higher_revision_rebinds_fresh_evidence() {
+    let (mut session, control, _) = session();
     session.update(observed_update(1, [255; 3])).unwrap();
-    let before = session.clone();
-    session.force_next_resource_failure();
-    crate::composition::reset_source_over_evaluation_count();
-    assert_eq!(
-        session.update(observed_update(2, [255; 3])),
-        Err(PointSupportSessionUpdateErrorV1::ResourceExhausted)
-    );
-    assert_eq!(crate::composition::source_over_evaluation_count(), 0);
-    assert_eq!(session, before);
-    assert_eq!(session.state(), before.state());
-    assert_eq!(session.raw_head(), before.raw_head());
-    assert_eq!(session.composition_profile(), before.composition_profile());
+    let first_backing = raw_observed(&session).backing_ptr_for_test();
 
     session.update(observed_update(2, [255; 3])).unwrap();
-    assert_eq!(verified_revision(session.state()), Some(Revision::new(2)));
+    assert_eq!(control.evaluation_count(), 2);
+    assert_ne!(raw_observed(&session).backing_ptr_for_test(), first_backing);
+    let SessionState::Ready { current } = session.state() else {
+        panic!("higher revision must produce fresh Ready evidence");
+    };
+    assert_eq!(current.observation.revision(), Revision::new(2));
+    assert_shared_observation(raw_observed(&session), &current.observation);
 }
 
-proptest! {
-    #[test]
-    fn lifecycle_matches_pure_last_verified_model(ops in prop::collection::vec(0u8..5, 1..60)) {
-        let mut session = session();
-        session.update(observed_update(1, [255; 3])).unwrap();
-        let mut raw_revision = 1u64;
-        let mut expected_kind = StateKind::Ready;
-        let mut expected_verified = Some(Revision::new(1));
-        let mut last_applied = observed_update(1, [255; 3]);
+#[test]
+fn rejected_admission_neither_invokes_plan_nor_mutates_closed_state() {
+    let (mut session, control, _) = session();
+    session.update(observed_update(1, [255; 3])).unwrap();
+    let raw_backing = raw_observed(&session).backing_ptr_for_test();
 
-        for (next_revision, op) in (2u64..).zip(ops) {
-            let before = session.clone();
-            match op {
-                0 => {
-                    let update = observed_update(next_revision, [255; 3]);
-                    session.update(update.clone()).unwrap();
-                    raw_revision = next_revision;
-                    expected_kind = StateKind::Ready;
-                    expected_verified = Some(Revision::new(next_revision));
-                    last_applied = update;
-                }
-                1 => {
-                    let update = observed_update(next_revision, [0; 3]);
-                    session.update(update.clone()).unwrap();
-                    raw_revision = next_revision;
-                    expected_kind = StateKind::Failed;
-                    last_applied = update;
-                }
-                2 => {
-                    let update = unknown_update(next_revision, u32::from(op));
-                    session.update(update.clone()).unwrap();
-                    raw_revision = next_revision;
-                    expected_kind = if expected_verified.is_some() {
-                        StateKind::Stale
-                    } else {
-                        StateKind::Waiting
-                    };
-                    last_applied = update;
-                }
-                3 => {
-                    session.update(last_applied.clone()).unwrap();
-                    prop_assert_eq!(&session, &before);
-                }
-                _ => {
-                    let rejected = observed_update(raw_revision, [17; 3]);
-                    prop_assert!(session.update(rejected).is_err());
-                    prop_assert_eq!(&session, &before);
-                }
+    let mut foreign = observed_update(2, [0; 3]);
+    foreign.stream = FOREIGN_STREAM;
+    assert_eq!(
+        session.update(foreign),
+        Err(SessionUpdateError::Observation(
+            ObservationError::StreamMismatch {
+                expected: STREAM,
+                actual: FOREIGN_STREAM,
             }
-            prop_assert_eq!(state_kind(session.state()), expected_kind);
-            prop_assert_eq!(verified_revision(session.state()), expected_verified);
-        }
+        ))
+    );
+    assert_eq!(
+        session.update(malformed_update(2)),
+        Err(SessionUpdateError::Observation(
+            ObservationError::MissingSurfaceInputBinding {
+                scenario: ScenarioId::new(1),
+                input: SURFACE,
+            }
+        ))
+    );
+    assert_eq!(
+        session.update(observed_update(0, [255; 3])),
+        Err(SessionUpdateError::Observation(
+            ObservationError::RevisionOutOfOrder {
+                current: Revision::new(1),
+                incoming: Revision::new(0),
+            }
+        ))
+    );
+    assert_eq!(
+        session.update(observed_update(1, [0; 3])),
+        Err(SessionUpdateError::Observation(
+            ObservationError::RevisionConflict {
+                revision: Revision::new(1),
+            }
+        ))
+    );
+
+    assert_eq!(control.evaluation_count(), 1);
+    assert_eq!(raw_observed(&session).backing_ptr_for_test(), raw_backing);
+    assert_eq!(verified_revision(session.state()), Some(Revision::new(1)));
+}
+
+#[test]
+fn plan_failure_commits_neither_raw_head_nor_lifecycle_and_retry_is_fresh() {
+    let (mut session, control, _) = session();
+    session.update(observed_update(1, [255; 3])).unwrap();
+    let raw_backing = raw_observed(&session).backing_ptr_for_test();
+    control.fail_next();
+
+    assert_eq!(
+        session.update(observed_update(2, [0; 3])),
+        Err(SessionUpdateError::Plan(SentinelError::Forced))
+    );
+    assert_eq!(control.evaluation_count(), 2);
+    assert_eq!(raw_observed(&session).backing_ptr_for_test(), raw_backing);
+    assert_eq!(session.raw_head().revision(), Some(Revision::new(1)));
+    assert_eq!(verified_revision(session.state()), Some(Revision::new(1)));
+
+    let (cause_observation, previous_revision) =
+        match session.update(observed_update(2, [0; 3])).unwrap() {
+            SessionState::Failed { cause, previous } => (
+                cause.observation.clone(),
+                previous.as_ref().unwrap().observation.revision(),
+            ),
+            _ => panic!("retry must re-prepare, re-evaluate and commit"),
+        };
+    assert_eq!(control.evaluation_count(), 3);
+    assert_eq!(cause_observation.revision(), Revision::new(2));
+    assert_eq!(previous_revision, Revision::new(1));
+    assert_shared_observation(raw_observed(&session), &cause_observation);
+}
+
+#[test]
+fn detached_plan_evidence_is_rejected_before_raw_or_lifecycle_commit() {
+    let (mut session, control, _) = session();
+    session.update(observed_update(1, [255; 3])).unwrap();
+    let first_observation = raw_observed(&session).clone();
+    control.substitute_next_with(first_observation);
+
+    assert_eq!(
+        session.update(observed_update(2, [255; 3])),
+        Err(SessionUpdateError::EvidenceBindingInvariant)
+    );
+    assert_eq!(control.evaluation_count(), 2);
+    assert_eq!(session.raw_head().revision(), Some(Revision::new(1)));
+    assert_eq!(verified_revision(session.state()), Some(Revision::new(1)));
+
+    let current_observation = match session.update(observed_update(2, [255; 3])).unwrap() {
+        SessionState::Ready { current } => current.observation.clone(),
+        _ => panic!("a fresh retry must bind evidence from the current observation"),
+    };
+    assert_eq!(control.evaluation_count(), 3);
+    assert_eq!(current_observation.revision(), Revision::new(2));
+    assert_shared_observation(raw_observed(&session), &current_observation);
+}
+
+#[test]
+fn reentrant_owner_replacement_finishes_on_its_pinned_generation_then_expires() {
+    let first_generation = Rc::new(ReplacingOwnerGeneration {
+        schema: canonicalize_observation_schema(vec![SURFACE]).unwrap(),
+    });
+    let owner_slot = Rc::new(RefCell::new(Some(Rc::clone(&first_generation))));
+    let evaluations = Rc::new(Cell::new(0));
+    let mut session = Session::new(
+        STREAM,
+        ReplacingOwnerPlan {
+            generation: Rc::downgrade(&first_generation),
+            owner_slot: Rc::clone(&owner_slot),
+            evaluations: Rc::clone(&evaluations),
+        },
+    );
+    drop(first_generation);
+
+    let SessionState::Ready { current } = session.update(observed_update(1, [255; 3])).unwrap()
+    else {
+        panic!("the transaction pinned before replacement must commit");
+    };
+    assert_eq!(current.observation.revision(), Revision::new(1));
+    assert_eq!(evaluations.get(), 1);
+    assert!(owner_slot.borrow().is_some());
+
+    assert_eq!(
+        session.update(observed_update(2, [0; 3])),
+        Err(SessionUpdateError::OwnerExpired),
+    );
+    assert_eq!(evaluations.get(), 1);
+    assert_eq!(session.raw_head().revision(), Some(Revision::new(1)));
+    assert_eq!(verified_revision(session.state()), Some(Revision::new(1)));
+}
+
+#[test]
+fn session_source_contains_one_generic_update_owner_and_no_legacy_runtime() {
+    let source = include_str!("session.rs");
+    assert_eq!(source.matches("pub(crate) fn update(").count(), 1);
+    for forbidden in [
+        "PointSupportSessionV1",
+        "PointSupportSessionStateV1",
+        "PointSupportSessionUpdateErrorV1",
+        "ProgramExpired",
+        "ObservationStreamBinding",
+        "SurfaceUpdate",
+        "Box<dyn SessionPlanV1",
+    ] {
+        assert!(
+            !source.contains(forbidden),
+            "legacy or dual-runtime marker survived: {forbidden}"
+        );
     }
 }

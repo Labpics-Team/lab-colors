@@ -4,11 +4,12 @@ use crate::appearance::{
     OccurrenceId, OccurrenceSpec, PaintId, PaintSpec, PointOpacityError, PointOpacityOverSurfaceV1,
     ResolvedOccurrence, SurfaceId, SurfaceInputPortId, SurfaceSpec,
 };
+use crate::lcs_occurrence::ColorSignal;
 use crate::observation::{
-    ObservationError, ObservationHeadViewV1, ObservationOwnerV1, ObservationPayloadInput,
-    ObservationSchemaMismatchV1, ObservationStreamId, ObservationUpdateInput, ObservedScenarioSet,
-    ObservedScenarioSetInput, PreparedObservationUpdateV1, Revision, RevisionBoundObservationV1,
-    RevisionBoundUnknownV1, ScenarioId, ScenarioInput, SurfaceInputBinding, UnknownReasonId,
+    CanonicalObservationSchemaV1, ObservationError, ObservationHeadViewV1, ObservationOwnerV1,
+    ObservationPayloadInput, ObservationStreamId, ObservationUpdateInput, ObservedScenarioSetInput,
+    PreparedObservationUpdateV1, Revision, RevisionBoundObservationV1, RevisionBoundUnknownV1,
+    ScenarioId, ScenarioInput, SurfaceInputBinding, UnknownReasonId,
     canonicalize_observation_schema, prepare_observation,
 };
 
@@ -42,7 +43,7 @@ impl ObservationOwnerV1 for TestOwner {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct TestState {
     stream: ObservationStreamId,
-    schema: Vec<SurfaceInputPortId>,
+    schema: CanonicalObservationSchemaV1,
     owner: TestOwner,
 }
 
@@ -107,7 +108,7 @@ impl TestState {
 }
 
 fn binding(port: SurfaceInputPortId, bytes: [u8; 3]) -> SurfaceInputBinding {
-    SurfaceInputBinding::new(port, Srgb8::new(bytes))
+    SurfaceInputBinding::new(port, ColorSignal::from_srgb8(Srgb8::new(bytes)))
 }
 
 fn scenario(id: u32, bindings: impl IntoIterator<Item = SurfaceInputBinding>) -> ScenarioInput {
@@ -152,13 +153,6 @@ fn paired_set(first: ([u8; 3], [u8; 3]), second: ([u8; 3], [u8; 3])) -> Observed
         scenario(1, [binding(PORT_A, first.0), binding(PORT_B, first.1)]),
         scenario(2, [binding(PORT_A, second.0), binding(PORT_B, second.1)]),
     ])
-}
-
-fn observed_set(state: &TestState) -> &ObservedScenarioSet {
-    state
-        .current_observation()
-        .expect("expected admitted observation")
-        .set()
 }
 
 fn revision_bound(state: &TestState) -> &RevisionBoundObservationV1 {
@@ -232,14 +226,17 @@ fn admission_preserves_correlated_tuples_without_cartesian_product() {
         ))
         .unwrap();
 
-    let cases: Vec<Vec<[u8; 3]>> = observed_set(&state)
-        .cases()
-        .iter()
-        .map(|case| {
-            case.bindings()
+    let observation = revision_bound(&state);
+    assert_eq!(observation.schema(), &[PORT_A, PORT_B]);
+    let cases: Vec<Vec<[u8; 3]>> = (0..observation.physical_case_count())
+        .map(|case_index| {
+            observation
+                .physical_values(case_index)
+                .unwrap()
                 .iter()
                 .copied()
-                .map(|binding| binding.value().bytes())
+                .map(ColorSignal::srgb8)
+                .map(Srgb8::bytes)
                 .collect()
         })
         .collect();
@@ -269,25 +266,132 @@ fn canonicalization_ignores_declaration_order_and_groups_duplicate_physics() {
     right.apply(observed_update(STREAM, 1, second)).unwrap();
 
     assert_eq!(left, right);
-    let set = observed_set(&left);
-    assert_eq!(set.cases().len(), 2);
+    let observation = revision_bound(&left);
+    assert_eq!(observation.schema(), &[PORT_A, PORT_B]);
+    assert_eq!(observation.physical_case_count(), 2);
     assert_eq!(
-        set.provenance(0).unwrap(),
+        observation.provenance(0).unwrap(),
         &[ScenarioId::new(3), ScenarioId::new(9)]
     );
-    assert_eq!(set.provenance(1).unwrap(), &[ScenarioId::new(4)]);
-    let physical_bindings: Vec<Vec<SurfaceInputBinding>> = set
-        .cases()
-        .iter()
-        .map(|case| case.bindings().to_vec())
+    assert_eq!(observation.provenance(1).unwrap(), &[ScenarioId::new(4)]);
+    let physical_values: Vec<Vec<ColorSignal>> = (0..observation.physical_case_count())
+        .map(|case_index| observation.physical_values(case_index).unwrap().to_vec())
         .collect();
     assert_eq!(
-        physical_bindings,
+        physical_values,
         vec![
-            vec![binding(PORT_A, [1, 2, 3]), binding(PORT_B, [4, 5, 6])],
-            vec![binding(PORT_A, [9, 8, 7]), binding(PORT_B, [6, 5, 4])],
+            vec![
+                ColorSignal::from_srgb8(Srgb8::new([1, 2, 3])),
+                ColorSignal::from_srgb8(Srgb8::new([4, 5, 6])),
+            ],
+            vec![
+                ColorSignal::from_srgb8(Srgb8::new([9, 8, 7])),
+                ColorSignal::from_srgb8(Srgb8::new([6, 5, 4])),
+            ],
         ]
     );
+}
+
+#[test]
+fn revision_bound_clone_is_allocation_free_and_shares_all_canonical_backing() {
+    let mut state = TestState::new(STREAM, vec![PORT_B, PORT_A]).unwrap();
+    state
+        .apply(observed_update(
+            STREAM,
+            1,
+            scenarios([
+                scenario(9, [binding(PORT_B, [4, 5, 6]), binding(PORT_A, [1, 2, 3])]),
+                scenario(3, [binding(PORT_A, [1, 2, 3]), binding(PORT_B, [4, 5, 6])]),
+            ]),
+        ))
+        .unwrap();
+
+    let observation = revision_bound(&state);
+    let backing_ptr = observation.backing_ptr_for_test();
+    let schema_ptr = observation.schema_ptr_for_test();
+    let (cloned, allocations) = crate::test_support::measured_allocations(|| observation.clone());
+
+    assert_eq!(allocations, 0);
+    assert_eq!(&cloned, observation);
+    assert_eq!(cloned.backing_ptr_for_test(), backing_ptr);
+    assert_eq!(cloned.schema_ptr_for_test(), schema_ptr);
+    assert_eq!(cloned.schema(), observation.schema());
+    assert_eq!(cloned.physical_values(0), observation.physical_values(0));
+    assert_eq!(cloned.provenance(0), observation.provenance(0));
+}
+
+#[test]
+fn independent_equal_admissions_do_not_alias_observation_or_schema_backing() {
+    let first = scenarios([
+        scenario(9, [binding(PORT_B, [4, 5, 6]), binding(PORT_A, [1, 2, 3])]),
+        scenario(3, [binding(PORT_A, [1, 2, 3]), binding(PORT_B, [4, 5, 6])]),
+    ]);
+    let second = scenarios([
+        scenario(3, [binding(PORT_B, [4, 5, 6]), binding(PORT_A, [1, 2, 3])]),
+        scenario(9, [binding(PORT_A, [1, 2, 3]), binding(PORT_B, [4, 5, 6])]),
+    ]);
+    let mut left = TestState::new(STREAM, vec![PORT_B, PORT_A]).unwrap();
+    let mut right = TestState::new(STREAM, vec![PORT_A, PORT_B]).unwrap();
+    left.apply(observed_update(STREAM, 1, first)).unwrap();
+    right.apply(observed_update(STREAM, 1, second)).unwrap();
+
+    let left_observation = revision_bound(&left);
+    let right_observation = revision_bound(&right);
+    assert_eq!(left_observation, right_observation);
+    assert!(
+        !left_observation.shares_schema_backing_with(&right.schema),
+        "equal schema values from another owner must not inherit authority",
+    );
+    assert_ne!(
+        left_observation.backing_ptr_for_test(),
+        right_observation.backing_ptr_for_test()
+    );
+    assert_ne!(
+        left_observation.schema_ptr_for_test(),
+        right_observation.schema_ptr_for_test()
+    );
+}
+
+#[test]
+fn schema_and_values_are_aligned_once_while_provenance_remains_complete() {
+    let mut state = TestState::new(STREAM, vec![PORT_B, PORT_A]).unwrap();
+    state
+        .apply(observed_update(
+            STREAM,
+            1,
+            scenarios([
+                scenario(9, [binding(PORT_B, [4, 5, 6]), binding(PORT_A, [1, 2, 3])]),
+                scenario(4, [binding(PORT_A, [9, 8, 7]), binding(PORT_B, [6, 5, 4])]),
+                scenario(3, [binding(PORT_A, [1, 2, 3]), binding(PORT_B, [4, 5, 6])]),
+            ]),
+        ))
+        .unwrap();
+
+    let observation = revision_bound(&state);
+    let first_values: &[ColorSignal] = observation.physical_values(0).unwrap();
+    let second_values: &[ColorSignal] = observation.physical_values(1).unwrap();
+    assert_eq!(observation.schema(), &[PORT_A, PORT_B]);
+    assert_eq!(
+        first_values,
+        &[
+            ColorSignal::from_srgb8(Srgb8::new([1, 2, 3])),
+            ColorSignal::from_srgb8(Srgb8::new([4, 5, 6])),
+        ]
+    );
+    assert_eq!(
+        second_values,
+        &[
+            ColorSignal::from_srgb8(Srgb8::new([9, 8, 7])),
+            ColorSignal::from_srgb8(Srgb8::new([6, 5, 4])),
+        ]
+    );
+    assert_eq!(
+        observation.provenance(0),
+        Some(&[ScenarioId::new(3), ScenarioId::new(9)][..])
+    );
+    assert_eq!(observation.provenance(1), Some(&[ScenarioId::new(4)][..]));
+    assert_eq!(observation.physical_values(2), None);
+    assert_eq!(observation.provenance(2), None);
 }
 
 #[test]
@@ -309,26 +413,24 @@ fn keyed_schema_is_intrinsic_to_revision_bound_observation_identity() {
         .unwrap();
 
     assert_ne!(revision_bound(&left), revision_bound(&right));
+    assert_eq!(revision_bound(&left).schema(), &[PORT_A]);
+    assert_eq!(revision_bound(&right).schema(), &[PORT_B]);
     assert_eq!(
-        revision_bound(&left).validate_surface_schema(&[PORT_A, PORT_B]),
-        Err(ObservationSchemaMismatchV1::new(0, 1, Some(PORT_B), None,))
+        revision_bound(&left).physical_values(0),
+        Some(&[ColorSignal::from_srgb8(Srgb8::new([7, 8, 9]))][..])
     );
     assert_eq!(
-        revision_bound(&left).validate_surface_schema(&[PORT_B]),
-        Err(ObservationSchemaMismatchV1::new(
-            0,
-            0,
-            Some(PORT_B),
-            Some(PORT_A),
-        ))
+        revision_bound(&right).physical_values(0),
+        Some(&[ColorSignal::from_srgb8(Srgb8::new([7, 8, 9]))][..])
     );
 
+    let alternate_schema = canonicalize_observation_schema(vec![PORT_B]).unwrap();
     let before = left.clone();
     assert!(matches!(
         prepare_observation(
             &mut left.owner,
             STREAM,
-            &[PORT_B],
+            &alternate_schema,
             observed_update(
                 STREAM,
                 1,
@@ -342,21 +444,27 @@ fn keyed_schema_is_intrinsic_to_revision_bound_observation_identity() {
 }
 
 #[test]
-fn lower_revision_is_rejected_before_malformed_payload_scan_and_never_moves_head() {
+fn stream_precedes_full_scenario_admission_which_precedes_revision_checks() {
     let mut state = TestState::new(STREAM, vec![PORT_A, PORT_B]).unwrap();
     state.apply(unknown_update(STREAM, 4, 1)).unwrap();
     let before = state.clone();
-    let malformed = scenarios([scenario(1, [binding(PORT_A, [1; 3])])]);
+    let malformed = || scenarios([scenario(1, [binding(PORT_A, [1; 3])])]);
+
     assert_eq!(
-        state.apply(observed_update(STREAM, 2, malformed.clone())),
-        Err(ObservationError::RevisionOutOfOrder {
-            current: Revision::new(4),
-            incoming: Revision::new(2),
+        state.apply(observed_update(
+            ObservationStreamId::new(99),
+            2,
+            malformed(),
+        )),
+        Err(ObservationError::StreamMismatch {
+            expected: STREAM,
+            actual: ObservationStreamId::new(99),
         })
     );
     assert_eq!(state, before);
+
     assert_eq!(
-        state.apply(observed_update(STREAM, 5, malformed)),
+        state.apply(observed_update(STREAM, 2, malformed())),
         Err(ObservationError::MissingSurfaceInputBinding {
             scenario: ScenarioId::new(1),
             input: PORT_B,
@@ -364,12 +472,32 @@ fn lower_revision_is_rejected_before_malformed_payload_scan_and_never_moves_head
     );
     assert_eq!(state, before);
 
-    let corrected = scenarios([scenario(
-        1,
-        [binding(PORT_A, [1; 3]), binding(PORT_B, [2; 3])],
-    )]);
     assert_eq!(
-        state.apply(observed_update(STREAM, 5, corrected)),
+        state.apply(observed_update(STREAM, 4, malformed())),
+        Err(ObservationError::MissingSurfaceInputBinding {
+            scenario: ScenarioId::new(1),
+            input: PORT_B,
+        })
+    );
+    assert_eq!(state, before);
+
+    let valid = || {
+        scenarios([scenario(
+            1,
+            [binding(PORT_A, [1; 3]), binding(PORT_B, [2; 3])],
+        )])
+    };
+    assert_eq!(
+        state.apply(observed_update(STREAM, 2, valid())),
+        Err(ObservationError::RevisionOutOfOrder {
+            current: Revision::new(4),
+            incoming: Revision::new(2),
+        })
+    );
+    assert_eq!(state, before);
+
+    assert_eq!(
+        state.apply(observed_update(STREAM, 5, valid())),
         Ok(UpdateDisposition::Applied)
     );
     assert!(state.current_observation().is_some());
@@ -427,13 +555,18 @@ fn observed_to_unknown_replaces_raw_payload_instead_of_duplicating_it() {
         ))
         .unwrap();
     let old_revision = revision_bound(&state).revision();
-    let old_bindings = revision_bound(&state).set().cases()[0].bindings().to_vec();
+    let old_schema = revision_bound(&state).schema().to_vec();
+    let old_values = revision_bound(&state).physical_values(0).unwrap().to_vec();
     state.apply(unknown_update(STREAM, 2, 9)).unwrap();
 
     assert!(state.current_observation().is_none());
     assert!(matches!(state.head(), ObservationHeadViewV1::Unknown(_)));
     assert_eq!(old_revision, Revision::new(1));
-    assert_eq!(old_bindings, vec![binding(PORT_A, [3, 4, 5])]);
+    assert_eq!(old_schema, vec![PORT_A]);
+    assert_eq!(
+        old_values,
+        vec![ColorSignal::from_srgb8(Srgb8::new([3, 4, 5]))]
+    );
 }
 
 #[test]
@@ -457,6 +590,36 @@ fn same_revision_exact_payload_is_idempotent_and_conflict_is_rejected() {
         })
     );
     assert_eq!(state, before);
+}
+
+#[test]
+fn same_revision_permuted_replay_is_idempotent_without_replacing_backing() {
+    let first = scenarios([
+        scenario(9, [binding(PORT_B, [4, 5, 6]), binding(PORT_A, [1, 2, 3])]),
+        scenario(4, [binding(PORT_A, [9, 8, 7]), binding(PORT_B, [6, 5, 4])]),
+        scenario(3, [binding(PORT_A, [1, 2, 3]), binding(PORT_B, [4, 5, 6])]),
+    ]);
+    let replay = scenarios([
+        scenario(3, [binding(PORT_B, [4, 5, 6]), binding(PORT_A, [1, 2, 3])]),
+        scenario(9, [binding(PORT_A, [1, 2, 3]), binding(PORT_B, [4, 5, 6])]),
+        scenario(4, [binding(PORT_B, [6, 5, 4]), binding(PORT_A, [9, 8, 7])]),
+    ]);
+    let mut state = TestState::new(STREAM, vec![PORT_B, PORT_A]).unwrap();
+    assert_eq!(
+        state.apply(observed_update(STREAM, 7, first)),
+        Ok(UpdateDisposition::Applied)
+    );
+    let before = state.clone();
+    let backing_ptr = revision_bound(&state).backing_ptr_for_test();
+    let schema_ptr = revision_bound(&state).schema_ptr_for_test();
+
+    assert_eq!(
+        state.apply(observed_update(STREAM, 7, replay)),
+        Ok(UpdateDisposition::Idempotent)
+    );
+    assert_eq!(state, before);
+    assert_eq!(revision_bound(&state).backing_ptr_for_test(), backing_ptr);
+    assert_eq!(revision_bound(&state).schema_ptr_for_test(), schema_ptr);
 }
 
 #[test]
@@ -532,7 +695,18 @@ fn two_streams_have_independent_watermarks_and_same_physics() {
     left.apply(observed_update(STREAM, 5, set.clone())).unwrap();
     right.apply(observed_update(other, 1, set)).unwrap();
 
-    assert_eq!(revision_bound(&left).set(), revision_bound(&right).set());
+    assert_eq!(
+        revision_bound(&left).schema(),
+        revision_bound(&right).schema()
+    );
+    assert_eq!(
+        revision_bound(&left).physical_values(0),
+        revision_bound(&right).physical_values(0)
+    );
+    assert_eq!(
+        revision_bound(&left).provenance(0),
+        revision_bound(&right).provenance(0)
+    );
     assert_ne!(
         revision_bound(&left).stream(),
         revision_bound(&right).stream()

@@ -271,6 +271,8 @@ pub fn compile_numerical_plan_v1<'a>(
 
 #[cfg(test)]
 mod tests {
+    use std::fmt::Write as _;
+
     use super::*;
 
     const SITE: NumericalSiteIdV1 = NumericalSiteIdV1::GlowTargetOrMaximumV1;
@@ -386,11 +388,11 @@ mod tests {
             (b"z".as_slice(), SITE, compatibility()),
         ])
         .unwrap();
-        let hex: String = plan
-            .canonical_checksum_preimage()
-            .iter()
-            .map(|b| format!("{b:02x}"))
-            .collect();
+        let preimage = plan.canonical_checksum_preimage();
+        let mut hex = String::with_capacity(preimage.len() * 2);
+        for byte in preimage {
+            write!(&mut hex, "{byte:02x}").expect("writing to String cannot fail");
+        }
         let frozen = "1b0000006c6162636f6c6f72732e6e756d65726963616c2d706c616e2e763101000000020000004f000000210000006c6162636f6c6f72732e6e756d65726963616c2d696e766f636174696f6e2e763101000000010000006119000000676c6f772d7461726765742d6f722d6d6178696d756d2d76310000000019000000676c6f772d7461726765742d6f722d6d6178696d756d2d76310b000000737461626c652d6f6e6c79000000004f000000210000006c6162636f6c6f72732e6e756d65726963616c2d696e766f636174696f6e2e763101000000010000007a19000000676c6f772d7461726765742d6f722d6d6178696d756d2d76310000000019000000676c6f772d7461726765742d6f722d6d6178696d756d2d7631160000006578706c696369742d636f6d7061746962696c69747926000000676c6f772d63616d31362d7563732d6a7072696d652d7461726765742d6f722d6d61782d7631";
         assert_eq!(hex, frozen, "canonical plan encoding v1 заморожен");
         assert_eq!(plan.checksum.hex(), "49e5b6b7");

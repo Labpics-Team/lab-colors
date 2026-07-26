@@ -23,7 +23,7 @@ use labcolors_core::{
     BgInput, Brand, Floor, GlowDecisionProfileV1, LadderPosition, LadderSource, NeutralAnchors,
     NeutralConfig, NeutralPick, NeutralTint, PaletteFamily, Resolved, RoleFailure, RoleRecipe,
     ThemeAnchors, ThemeConfig, ThemesConfig, VcPreset, ViewingConditions, oklch_from_hex,
-    p3_from_hex, resolve_named_set, srgb_encoded_from_hex,
+    resolve_named_set, srgb_encoded_from_hex,
 };
 use proptest::prelude::*;
 use proptest::test_runner::{Config, RngAlgorithm, TestRng, TestRunner};
@@ -593,7 +593,7 @@ fn hued_brand_label_stays_in_family_coordinate_band_when_chromatic() {
 // СВОЙСТВО 6 — fuzz-устойчивость парсеров цвета (ноль паник на мусоре)
 //
 // КЛАСС: «парсер hex падает/паникует на враждебном/битом входе». Любая строка на
-// входе `oklch_from_hex` / `srgb_encoded_from_hex` / `p3_from_hex` / `BgInput::solid`
+// входе `oklch_from_hex` / `srgb_encoded_from_hex` / `BgInput::solid`
 // → аккуратный `Result` (Ok или Err), НИКОГДА не паника (паника развернула бы стек
 // и уронила бы тест). Класс-закрыватель для парсеров, читающих внешний ввод.
 // БЬЁТ НА МУТАЦИИ: замена валидации на `unwrap`/индексацию без границ → паника → RED.
@@ -615,10 +615,9 @@ fn hex_like() -> impl Strategy<Value = String> {
 #[test]
 fn color_parsers_never_panic_on_arbitrary_input() {
     check(2000, hex_like(), |s| {
-        // Все четыре парсера обязаны вернуть Result, не паниковать.
+        // Все три парсера обязаны вернуть Result, не паниковать.
         let _ = oklch_from_hex(&s);
         let _ = srgb_encoded_from_hex(&s);
-        let _ = p3_from_hex(&s);
         let _ = BgInput::solid(&s);
         Ok(())
     });

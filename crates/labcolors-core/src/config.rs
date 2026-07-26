@@ -435,26 +435,6 @@ pub enum RoleRecipe {
         /// Обязательный numerical-decision profile; implicit legacy запрещён.
         decision_profile: crate::glow::GlowDecisionProfileV1,
     },
-    /// Frozen PairFill frontend до C7c. Источник эмитится opaque Paint через
-    /// общий point occurrence; отдельной Pair-эвристики и скрытой роли нет.
-    PairFill {
-        /// Источник якоря: бренд, семейство или нейтраль.
-        source: LadderSource,
-    },
-    /// Frozen PairLabel frontend до C7c. Label-кандидаты проверяются против
-    /// фактически emitted opaque [`PairFill`](Self::PairFill) Surface общим
-    /// joint hard-report и fresh recheck.
-    PairLabel {
-        /// Источник физической цветовой идентичности: бренд, семейство или нейтраль.
-        source: LadderSource,
-        /// Доля максимума контраста PairFill Surface `(0, 1]` (как у
-        /// [`TextAnchor`](Self::TextAnchor)): низкая доля оставляет больше места
-        /// для хромы источника у пола, высокая тянет к контрастному пределу.
-        /// Точный серый source при любой доле остаётся нейтральным.
-        fraction: f64,
-        /// WCAG-пол против emitted PairFill Surface, не страницы.
-        floor: Floor,
-    },
     /// Альфа-аналог solid-источника через точечную композит-инверсию
     /// ([`crate::alpha`]): `(tint, α)`, чей композит на объявленном фоне равен
     /// solid-цели `of`. Компилируется в [`RoleSpec::AlphaAnalog`].
@@ -508,8 +488,6 @@ fn reserved_css_suffixes(recipe: &RoleRecipe) -> &'static [&'static str] {
         | RoleRecipe::DjAnchor { .. }
         | RoleRecipe::DecorativeLc { .. }
         | RoleRecipe::Ladder { .. }
-        | RoleRecipe::PairFill { .. }
-        | RoleRecipe::PairLabel { .. }
         | RoleRecipe::AlphaAnalog { .. }
         | RoleRecipe::Zero => PRIMARY,
     }
@@ -938,19 +916,6 @@ impl ThemeConfig {
             }
             // Ступень — закрытый enum, числовой валидации не требует; источник — как у лестницы.
             RoleRecipe::Glow { source, .. } => self.check_ladder_source(role, source),
-            RoleRecipe::PairFill { source } => self.check_ladder_source(role, source),
-            RoleRecipe::PairLabel {
-                source, fraction, ..
-            } => {
-                self.check_ladder_source(role, source)?;
-                check_in_excl_incl(
-                    &format!("roles.{role}.fraction"),
-                    *fraction,
-                    FRACTION_MIN_EXCLUSIVE,
-                    FRACTION_MAX_INCLUSIVE,
-                    "0 < fraction ≤ 1 (доля максимального контраста PairFill Surface)",
-                )
-            }
             RoleRecipe::AlphaAnalog { of, alpha } => {
                 self.check_ladder_source(role, of)?;
                 check_in_excl_incl(
@@ -1172,26 +1137,6 @@ impl ThemeConfig {
                     hue,
                     tone: DjMagnitude::new(*tone_light, *tone_dark),
                     floor: *floor,
-                })
-            }
-            RoleRecipe::PairFill { source } => Ok(RoleSpec::PairFill {
-                tint: self.compile_ladder_tint(role, source)?,
-            }),
-            RoleRecipe::PairLabel {
-                source,
-                fraction,
-                floor,
-            } => {
-                // P1 унифицирует PairFill/PairLabel на единственной поверхности,
-                // которую публичный PairFill уже эмитил: opaque source Paint.
-                // Representation не выводится из клиентского имени позиции.
-                let (surface_alpha_light, surface_alpha_dark) = (1.0, 1.0);
-                Ok(RoleSpec::PairLabel {
-                    tint: self.compile_ladder_tint(role, source)?,
-                    fraction: *fraction,
-                    floor: *floor,
-                    surface_alpha_light,
-                    surface_alpha_dark,
                 })
             }
         }

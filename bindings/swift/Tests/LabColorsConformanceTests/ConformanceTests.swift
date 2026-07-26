@@ -53,7 +53,6 @@ final class ConformanceTests: XCTestCase {
         case "unreachable": return .unreachable
         case "unresolved": return .unresolved
         case "rejected": return .rejected
-        case "unsupported": return .unsupported
         default: fatalError("неизвестная failure category в pack: \(key)")
         }
     }

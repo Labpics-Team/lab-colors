@@ -76,7 +76,7 @@ adjacent bytes или нормативного отношения пересчи
 - `(category, code)` — атомарная core-owned классификация, общая для всех
   биндингов: `unreachable/exceeds_range`, `unreachable/floor_unreachable`,
   `unresolved/bounded_search_exhausted`, `rejected/invalid_input`,
-  `unreachable/below_contrast_floor` и `unsupported/gamut_unsupported`. Только
+  `unreachable/below_contrast_floor`. Только
   `unreachable` доказывает отсутствие
   решения в объявленном полном domain; `unresolved` не делает утверждения о
   непроверенных кандидатах.
