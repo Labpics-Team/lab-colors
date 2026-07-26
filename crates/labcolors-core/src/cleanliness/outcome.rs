@@ -141,9 +141,14 @@ impl QualityOutcomeV1 {
         self.priority().phase()
     }
 
-    /// Сдвинулись ли emitted-байты слота.
-    pub const fn movement(self) -> MovementV1 {
-        self.priority().movement()
+    /// Движение, которое предписывает вердикт.
+    ///
+    /// Исход называет **вердикт оценки**, общей для `lint` и `auto`, а не факт
+    /// записи байтов: применён ли вердикт — свойство режима (раздел 3).
+    /// Поэтому здесь возвращается движение, которое выполнил бы `auto`. В
+    /// режиме `lint` байты слота не меняются ни при каком вердикте.
+    pub const fn verdict_movement(self) -> MovementV1 {
+        self.priority().verdict_movement()
     }
 }
 
@@ -258,9 +263,9 @@ impl OutcomePriorityV1 {
         }
     }
 
-    /// Сдвинулись ли emitted-байты слота.
-    pub const fn movement(self) -> MovementV1 {
-        self.phase().movement()
+    /// Движение, которое предписывает вердикт этого ранга.
+    pub const fn verdict_movement(self) -> MovementV1 {
+        self.phase().verdict_movement()
     }
 }
 
@@ -286,12 +291,12 @@ impl OutcomePhaseV1 {
         Self::Moved,
     ];
 
-    /// Сдвинулись ли emitted-байты слота по итогам фазы.
+    /// Движение, которое предписывает вердикт этой фазы.
     ///
     /// Отмена движения возвращает слот к reference state, поэтому байты не
     /// меняются: [`OutcomePhaseV1::MovementCancelled`] даёт
     /// [`MovementV1::Unchanged`].
-    pub const fn movement(self) -> MovementV1 {
+    pub const fn verdict_movement(self) -> MovementV1 {
         match self {
             Self::NoEvaluationResult | Self::MovementCancelled | Self::MovementDeclined => {
                 MovementV1::Unchanged
@@ -301,12 +306,15 @@ impl OutcomePhaseV1 {
     }
 }
 
-/// Сдвинулись ли emitted-байты слота.
+/// Движение, предписанное вердиктом оценки.
+///
+/// Это не наблюдение над байтами, а то, что вердикт **предписывает**: в режиме
+/// `auto` предписание выполняется, в `lint` — нет (раздел 3 контракта).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum MovementV1 {
-    /// Байты слота не изменились.
+    /// Вердикт оставляет слот на reference state.
     Unchanged,
-    /// Байты слота изменились.
+    /// Вердикт предписывает сдвинуть слот.
     Moved,
 }
 

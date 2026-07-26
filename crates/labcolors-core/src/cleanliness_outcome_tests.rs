@@ -153,35 +153,39 @@ fn phases_are_contiguous_and_ordered_by_rank() {
     }
 }
 
-/// Только фаза `Moved` двигает байты. Отмена движения (ранги 7–8) возвращает
-/// слот к reference state, поэтому байты не меняются.
+/// Только фаза `Moved` предписывает движение. Отмена (ранги 7–8) возвращает
+/// слот к reference state, поэтому вердикт движения не предписывает.
 #[test]
-fn only_the_moved_phase_changes_emitted_bytes() {
+fn only_the_moved_phase_prescribes_movement() {
     for outcome in QualityOutcomeV1::ALL {
         let expected = match outcome.phase() {
             OutcomePhaseV1::Moved => MovementV1::Moved,
             _ => MovementV1::Unchanged,
         };
-        assert_eq!(outcome.movement(), expected, "движение для {outcome:?}");
+        assert_eq!(
+            outcome.verdict_movement(),
+            expected,
+            "предписанное движение для {outcome:?}"
+        );
     }
 
     assert_eq!(
-        QualityOutcomeV1::UnchangedFailedEmissionRecheck.movement(),
+        QualityOutcomeV1::UnchangedFailedEmissionRecheck.verdict_movement(),
         MovementV1::Unchanged,
-        "откат после провала recheck обязан оставлять байты нетронутыми"
+        "откат после провала recheck не вправе предписывать движение"
     );
 }
 
-/// Все исходы, чей ключ начинается на `unchanged-`, обязаны не двигать байты, и
-/// наоборот. Иначе имя исхода лгало бы о наблюдаемом факте.
+/// Ключ, начинающийся на `unchanged-`, обязан отвечать вердикту без движения,
+/// и наоборот. Иначе имя исхода лгало бы о том, что вердикт предписывает.
 #[test]
 fn key_prefix_agrees_with_movement() {
     for outcome in QualityOutcomeV1::ALL {
         let claims_unchanged = outcome.key().starts_with("unchanged-");
-        let moves = outcome.movement() == MovementV1::Moved;
+        let moves = outcome.verdict_movement() == MovementV1::Moved;
         assert_ne!(
             claims_unchanged, moves,
-            "{outcome:?}: имя и наблюдаемое движение разошлись"
+            "{outcome:?}: имя и предписанное движение разошлись"
         );
     }
 }
