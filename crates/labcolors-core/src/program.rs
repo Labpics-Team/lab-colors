@@ -1,4 +1,8 @@
-//! Публичный декларативный контракт компиляции и исполнения цветовой программы.
+//! Внутренний кандидат декларативного контракта цветовой программы.
+//!
+//! Модуль не публикуется до завершения emission, attachment и атомарной
+//! транзакционной границы terminal C7c. Его закрытая поверхность уже служит
+//! единственным concrete seam для внутренних проверок и дальнейших срезов.
 //!
 //! Клиент один раз описывает физический граф через [`DraftV1`]: исходные
 //! сигналы, решаемые цели, Paint, Surface, их [`OccurrenceIdV1`], ограничения
@@ -1782,25 +1786,6 @@ impl<'a> ConflictCertificateV1<'a> {
 ///
 /// Сертификат заимствует только историю Session и может пережить Owner,
 /// разрешивший исходную проекцию.
-///
-/// ```no_run
-/// use labcolors_core::program::{
-///     CertificateV1, OwnerV1, SessionV1,
-/// };
-///
-/// fn retain_evidence<'session>(
-///     owner: OwnerV1,
-///     session: &'session SessionV1,
-/// ) -> CertificateV1<'session> {
-///     owner
-///         .project(session)
-///         .unwrap()
-///         .evidence()
-///         .certificates()
-///         .next()
-///         .unwrap()
-/// }
-/// ```
 #[derive(Clone, Copy)]
 pub enum CertificateV1<'a> {
     /// Все hard-клетки полного support прошли.
@@ -2376,81 +2361,6 @@ impl RemoveV1<'_, '_> {
 /// Каждый payload заимствует точные Owner и снимок Session. Скопированные
 /// slot/source/opacity — только данные: runtime обязан перепроверить живую
 /// пару непосредственно перед одним атомарным sink commit.
-///
-/// ```compile_fail,E0515
-/// use labcolors_core::program::{
-///     OperationV1, OwnerV1, RemoveV1,
-///     SessionV1,
-/// };
-///
-/// fn escape_remove<'session>(
-///     owner: OwnerV1,
-///     session: &'session SessionV1,
-/// ) -> RemoveV1<'session, 'session> {
-///     match owner.project(session).unwrap().operations().next().unwrap() {
-///         OperationV1::Remove(remove) => remove,
-///         _ => panic!("fixture supplies Remove"),
-///     }
-/// }
-/// ```
-///
-/// ```compile_fail,E0515
-/// use labcolors_core::program::{
-///     OperationV1, OwnerV1, RemoveV1,
-/// };
-///
-/// fn escape_local_session<'owner>(
-///     owner: &'owner OwnerV1,
-/// ) -> RemoveV1<'owner, 'owner> {
-///     let session = owner.instantiate(1).unwrap();
-///     match owner.project(&session).unwrap().operations().next().unwrap() {
-///         OperationV1::Remove(remove) => remove,
-///         _ => panic!("fixture supplies Remove"),
-///     }
-/// }
-/// ```
-///
-/// ```compile_fail,E0515
-/// use labcolors_core::program::{
-///     OperationV1, OwnerV1, SessionV1,
-///     SetV1,
-/// };
-///
-/// fn escape_set<'session>(
-///     owner: OwnerV1,
-///     session: &'session SessionV1,
-/// ) -> SetV1<'session, 'session> {
-///     match owner.project(session).unwrap().operations().next().unwrap() {
-///         OperationV1::Set(set) => set,
-///         _ => panic!("fixture supplies Set"),
-///     }
-/// }
-/// ```
-///
-/// ```compile_fail,E0502
-/// use labcolors_core::program::{
-///     OperationV1, OwnerV1, SessionV1,
-///     UpdateV1,
-/// };
-///
-/// fn remove_blocks_session_mutation(
-///     owner: &OwnerV1,
-///     session: &mut SessionV1,
-/// ) {
-///     let remove = match owner.project(session).unwrap().operations().next().unwrap() {
-///         OperationV1::Remove(remove) => remove,
-///         _ => return,
-///     };
-///     let _second = owner.update(
-///         session,
-///         UpdateV1::Unknown {
-///             revision: 2,
-///             reason_id: 7,
-///         },
-///     );
-///     let _slot = remove.output_slot();
-/// }
-/// ```
 #[derive(Clone, Copy)]
 pub enum OperationV1<'owner, 'session> {
     /// Установить сертифицированный результат.
@@ -2817,6 +2727,10 @@ pub enum ModeledOccurrenceFailureV1 {
 
 /// Точное недопустимое protocol-состояние зарегистрированного evaluator-а.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[expect(
+    clippy::enum_variant_names,
+    reason = "the variant name preserves evaluator provenance as this closed family grows"
+)]
 pub enum EvaluatorProtocolFailureV1 {
     /// WCAG evaluator вернул kernel-ошибку, недостижимую для typed Program.
     Wcag22Kernel {
@@ -2866,7 +2780,7 @@ pub enum UpdateInvariantV1 {
 
 /// Нарушенный внутренний контракт с точными subject и witness-фактами.
 ///
-/// Эти варианты недостижимы через типизированный public input. Payload нужен
+/// Эти варианты недостижимы через типизированный boundary input. Payload нужен
 /// для детерминированной диагностики и не превращает breach в цветовой verdict.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum UpdateInvariantFailureV1 {
@@ -3836,7 +3750,7 @@ mod update_error_projection_tests {
     }
 
     #[test]
-    fn every_modeled_occurrence_failure_has_an_isomorphic_public_witness() {
+    fn every_modeled_occurrence_failure_has_an_isomorphic_boundary_witness() {
         use crate::lcs_occurrence::{
             MUTATION_SENTINEL_XYZ_FRAME_V1, ModeledLcsOccurrenceFormationErrorV1,
             OccurrenceFormationError, TristimulusSample,

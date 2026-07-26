@@ -44,13 +44,17 @@ pub(crate) mod output_projection;
     )
 )]
 pub(crate) mod point_support;
+#[expect(
+    dead_code,
+    reason = "the complete Program candidate remains private until terminal C7c"
+)]
 #[deny(missing_docs)]
-pub mod program;
+pub(crate) mod program;
 #[cfg_attr(
     not(test),
     expect(
         dead_code,
-        reason = "generic Program machinery is exposed only through the concrete public module"
+        reason = "generic Program machinery is used only through the staged concrete module"
     )
 )]
 pub(crate) mod program_session;
@@ -58,7 +62,7 @@ pub(crate) mod program_session;
     not(test),
     expect(
         dead_code,
-        reason = "release-registry internals are projected only through typed public evidence"
+        reason = "release-registry internals are projected only through typed Program evidence"
     )
 )]
 pub(crate) mod release_registry;
@@ -107,6 +111,12 @@ mod program_mixed_evaluator_tests;
 mod program_identity_tests;
 
 #[cfg(test)]
+mod program_boundary_tests;
+
+#[cfg(test)]
+mod program_api_tests;
+
+#[cfg(test)]
 mod release_registry_tests;
 
 #[cfg(test)]
@@ -116,7 +126,7 @@ mod generic_boundary_tests;
     not(test),
     expect(
         dead_code,
-        reason = "raw observation ownership is exposed only through the public Program session"
+        reason = "raw observation ownership is used only through the staged Program session"
     )
 )]
 pub(crate) mod observation;
@@ -131,7 +141,7 @@ mod point_support_tests;
     not(test),
     expect(
         dead_code,
-        reason = "the generic Session engine is exposed only through the public Program owner"
+        reason = "the generic Session engine is used only through the staged Program owner"
     )
 )]
 pub(crate) mod session;
@@ -143,7 +153,7 @@ mod session_tests;
     not(test),
     expect(
         dead_code,
-        reason = "joint-selection internals are exposed only through the public Program contract"
+        reason = "joint-selection internals are used only through the staged Program contract"
     )
 )]
 pub(crate) mod joint;
@@ -359,51 +369,11 @@ pub struct NoHybridLpcSurfaceMetric;
 #[cfg(doctest)]
 pub struct NoPrematureScalarLpcApi;
 
-/// Публичный Program API живёт только в одноимённом модуле и не сохраняет
-/// транспортный префикс, старый путь или корневые реэкспорты.
+/// Кандидат Program остаётся внутренним до завершения terminal C7c: неполную
+/// emission/attachment/transaction поверхность нельзя случайно опубликовать.
 ///
-/// ```
-/// use labcolors_core::{Srgb8, program};
-///
-/// let source = program::SourceIdV1::new(1);
-/// let target = program::TargetIdV1::new(2);
-/// let input = program::SurfaceInputPortIdV1::new(3);
-/// let paint = program::PaintIdV1::new(4);
-/// let surface = program::SurfaceIdV1::new(5);
-/// let occurrence = program::OccurrenceIdV1::new(6);
-/// let constraint = program::ConstraintIdV1::new(7);
-/// let output = program::OutputSlotIdV1::new(8);
-/// let context = program::AppearanceContextV1::try_new(
-///     64.0,
-///     0.2,
-///     program::SurroundV1::Average,
-/// ).unwrap();
-/// let mut draft = program::DraftV1::new();
-///
-/// draft.push_source(source, Srgb8::new([0, 0, 0]));
-/// draft.push_fixed_target(target, source);
-/// draft.push_surface_input_port(input);
-/// draft.push_solid_paint(paint, target);
-/// draft.push_input_surface(surface, input);
-/// draft.push_source_over_occurrence(occurrence, paint, surface, context);
-/// draft.push_exact_hard(constraint, occurrence, Srgb8::new([0, 0, 0]));
-/// draft.push_output(output, paint);
-///
-/// let owner = draft.compile().unwrap();
-/// let mut session = owner.instantiate(1).unwrap();
-/// let white = [Srgb8::new([255, 255, 255])];
-/// let scenarios = [program::ScenarioV1::new(1, &white)];
-/// let projection = owner.update(
-///     &mut session,
-///     program::UpdateV1::Observed {
-///         revision: 1,
-///         scenarios: &scenarios,
-///     },
-/// ).unwrap();
-/// assert!(matches!(
-///     projection.operations().next(),
-///     Some(program::OperationV1::Set(_)),
-/// ));
+/// ```compile_fail
+/// use labcolors_core::program;
 /// ```
 ///
 /// ```compile_fail
@@ -422,7 +392,7 @@ pub struct NoPrematureScalarLpcApi;
 /// use labcolors_core::DraftV1;
 /// ```
 #[cfg(doctest)]
-pub struct ProgramApiBoundary;
+pub struct NoPrematureProgramApi;
 
 /// C8d recheck и F2 observation остаются деталями одной приватной Session;
 /// они не могут стать дополнительными public authoring/runtime roots.

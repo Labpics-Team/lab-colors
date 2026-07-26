@@ -1,13 +1,12 @@
-//! External compile-and-runtime contract for the sole concrete Core Program seam.
+//! Internal compile-and-runtime contract for the staged concrete Core Program seam.
 //!
-//! This integration crate deliberately has no access to Core-private generic
-//! evaluator/session machinery. Every reachable path uses only the closed
-//! concrete boundary types.
+//! These tests deliberately exercise only the closed concrete boundary types;
+//! the module stays crate-private until the terminal public cut is complete.
 
 use core::iter::FusedIterator;
 
-use labcolors_core::Srgb8;
-use labcolors_core::program::{
+use crate::Srgb8;
+use crate::program::{
     AppearanceContextErrorKindV1, AppearanceContextFieldV1, AppearanceContextV1, AssessmentV1,
     CertificateV1, CompileErrorHandleV1, CompileErrorKindV1, CompileErrorV1, ConstraintIdV1,
     DraftErrorV1, DraftV1, EvidenceBoundsErrorV1, InstantiateErrorV1, JointChoiceV1,
@@ -17,7 +16,7 @@ use labcolors_core::program::{
     SurfaceIdV1, SurfaceInputPortIdV1, SurroundV1, TargetCandidateIdV1, TargetCandidateV1,
     TargetIdV1, UpdateErrorKindV1, UpdateErrorV1, UpdateV1, VerdictV1,
 };
-use labcolors_core::wcag22::Wcag22CriterionV1;
+use crate::wcag22::Wcag22CriterionV1;
 
 fn exact_size<I: ExactSizeIterator + FusedIterator>(iterator: I) -> I {
     iterator
@@ -175,13 +174,13 @@ fn unknown_is_revision_bound_without_a_stream_or_generation_field(
 }
 
 #[allow(dead_code)]
-fn owner_mismatch_is_a_closed_public_error(error: UpdateErrorV1) {
+fn owner_mismatch_is_a_closed_boundary_error(error: UpdateErrorV1) {
     assert_eq!(error.kind(), UpdateErrorKindV1::OwnerMismatch);
 }
 
 #[test]
-fn external_boundary_uses_only_closed_concrete_types() {
-    // Reaching this test means the external crate compiled without importing
+fn staged_boundary_uses_only_closed_concrete_types() {
+    // Reaching this test means the concrete seam compiled without importing
     // Program<E>, evaluator traits, Session<Plan>, or numeric generations.
     assert_eq!(core::mem::size_of::<Srgb8>(), 3);
 }
@@ -429,7 +428,7 @@ fn evidence_cell_bounds_query_is_pure_across_session_updates() {
 }
 
 #[test]
-fn external_authoring_lowers_the_actual_closed_program_and_returns_canonical_input_ports() {
+fn staged_authoring_lowers_the_actual_closed_program_and_returns_canonical_input_ports() {
     let source = SourceIdV1::new(91);
     let target = TargetIdV1::new(72);
     let gray = TargetCandidateIdV1::new(8);
@@ -725,7 +724,7 @@ fn owner_and_update_errors_preserve_content_and_input_identity() {
             scenarios: &malformed,
         },
     ) {
-        Ok(_) => panic!("schema-short public input must fail"),
+        Ok(_) => panic!("schema-short boundary input must fail"),
         Err(error) => error,
     };
     assert_eq!(error.kind(), UpdateErrorKindV1::InvalidObservation);
@@ -1089,7 +1088,7 @@ fn dependency_cycles_retain_all_typed_core_members_without_reallocation() {
 }
 
 #[test]
-fn the_code_owned_observation_group_reports_public_authored_port_semantics() {
+fn the_code_owned_observation_group_reports_authored_port_semantics() {
     assert_eq!(
         compile_error(DraftV1::new()),
         CompileErrorV1::EmptySurfaceInputPortSet

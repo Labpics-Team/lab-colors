@@ -1,9 +1,9 @@
-//! Минимальный внешний контракт лаконичной публичной поверхности Program.
+//! Минимальный внутренний контракт кандидата поверхности Program.
 
-use labcolors_core::{Srgb8, program};
+use crate::{Srgb8, program};
 
 #[test]
-fn public_program_api_is_module_qualified_without_transport_prefixes() {
+fn staged_program_api_is_module_qualified_without_transport_prefixes() {
     let source = program::SourceIdV1::new(1);
     let target = program::TargetIdV1::new(2);
     let input = program::SurfaceInputPortIdV1::new(3);
@@ -46,7 +46,7 @@ fn public_program_api_is_module_qualified_without_transport_prefixes() {
 }
 
 #[test]
-fn public_internal_failure_keeps_fact_and_contract_as_one_consistent_value() {
+fn staged_internal_failure_keeps_fact_and_contract_as_one_consistent_value() {
     let source = program::UpdateInvariantFailureV1::OwnerAuthority;
     assert_eq!(
         source.contract(),

@@ -173,23 +173,25 @@ fn generic_physical_and_transport_modules_contain_no_client_or_legacy_vocabulary
 }
 
 #[test]
-fn stacked_program_module_is_visible_module_qualified_and_transport_neutral() {
+fn staged_program_module_is_private_module_qualified_and_transport_neutral() {
     let normalized_lib = LIB_SOURCE.split_whitespace().collect::<Vec<_>>().join(" ");
     assert_eq!(
         LIB_SOURCE
             .lines()
-            .filter(|line| line.trim() == "pub mod program;")
+            .filter(|line| line.trim() == "pub(crate) mod program;")
             .count(),
         1,
-        "the crate root must expose exactly one file-backed Program module",
+        "the crate root must retain exactly one crate-private file-backed Program module",
     );
     assert!(
-        normalized_lib.contains("#[deny(missing_docs)] pub mod program;"),
-        "the public Program reference must stay complete by construction",
+        normalized_lib.contains("#[deny(missing_docs)] pub(crate) mod program;"),
+        "the staged Program candidate must stay documented but crate-private",
     );
     assert!(
-        !normalized_lib.contains("#[doc(hidden)] pub mod program;"),
-        "the reviewed Program API must remain visible in rustdoc",
+        !LIB_SOURCE
+            .lines()
+            .any(|line| line.trim() == "pub mod program;"),
+        "the incomplete Program candidate must not become externally reachable",
     );
 
     for introducer in ["pub use ", "pub type "] {
@@ -203,7 +205,7 @@ fn stacked_program_module_is_visible_module_qualified_and_transport_neutral() {
                     + 1];
             assert!(
                 !contains_rust_identifier(statement, "program"),
-                "Program types must stay module-qualified; found root alias `{statement}`",
+                "Program types must stay private and module-qualified; found root alias `{statement}`",
             );
             remaining = &remaining[start + statement.len()..];
         }
@@ -212,7 +214,7 @@ fn stacked_program_module_is_visible_module_qualified_and_transport_neutral() {
     let source_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src");
     assert!(
         source_root.join("program.rs").is_file(),
-        "the public Program implementation must remain file-backed",
+        "the staged Program implementation must remain file-backed",
     );
     assert!(
         !source_root.join("package_bridge.rs").exists(),
@@ -221,7 +223,7 @@ fn stacked_program_module_is_visible_module_qualified_and_transport_neutral() {
     assert!(
         !PROGRAM_SOURCE.contains("PackageProgram")
             && !contains_rust_identifier(PROGRAM_SOURCE, "package_bridge"),
-        "the public Program source must not retain transport-era vocabulary",
+        "the staged Program source must not retain transport-era vocabulary",
     );
 
     for (path, source) in production_rust_sources() {
@@ -236,10 +238,11 @@ fn stacked_program_module_is_visible_module_qualified_and_transport_neutral() {
     }
     assert_only_in_compile_fail(LIB_SOURCE, "PackageProgram");
     assert_only_in_compile_fail(LIB_SOURCE, "package_bridge");
+    assert_only_in_compile_fail(LIB_SOURCE, "use labcolors_core::program;");
 }
 
 #[test]
-fn public_program_draft_wraps_the_single_canonical_core_graph() {
+fn staged_program_draft_wraps_the_single_canonical_core_graph() {
     assert_eq!(
         normalized_source_scope(
             PROGRAM_SOURCE,
@@ -247,7 +250,7 @@ fn public_program_draft_wraps_the_single_canonical_core_graph() {
             "/// Ошибка изменения Draft до компиляции.",
         ),
         "pub struct DraftV1 { inner: CoreProgramDraftV1, }",
-        "the public seam must forward actual IR nodes into the sole Core draft",
+        "the staged seam must forward actual IR nodes into the sole Core draft",
     );
     assert_eq!(
         normalized_source_scope(
@@ -282,13 +285,13 @@ fn public_program_draft_wraps_the_single_canonical_core_graph() {
     ] {
         assert!(
             !PROGRAM_SOURCE.contains(forbidden),
-            "the concrete public lowerer must not acquire `{forbidden}`",
+            "the staged concrete lowerer must not acquire `{forbidden}`",
         );
     }
 }
 
 #[test]
-fn public_session_keeps_evidence_but_owner_alone_grants_updates_and_operations() {
+fn staged_session_keeps_evidence_but_owner_alone_grants_updates_and_operations() {
     assert_eq!(
         normalized_source_scope(PROGRAM_SOURCE, "pub struct SessionV1 {", "impl SessionV1",),
         concat!(
@@ -297,7 +300,7 @@ fn public_session_keeps_evidence_but_owner_alone_grants_updates_and_operations()
             "session: CoreProgramSessionV1, ",
             "}",
         ),
-        "the public Session must not duplicate owner schema, outputs, stream, or lifecycle state",
+        "the staged Session must not duplicate owner schema, outputs, stream, or lifecycle state",
     );
 
     let session_api = source_scope(
@@ -308,12 +311,12 @@ fn public_session_keeps_evidence_but_owner_alone_grants_updates_and_operations()
     assert_eq!(
         session_api.matches("pub fn evidence(").count(),
         1,
-        "historical evidence is the Session's sole public projection",
+        "historical evidence is the Session's sole boundary projection",
     );
     assert_eq!(
         session_api.matches("pub ").count(),
         1,
-        "Session must not expose a second public authority by changing function qualifiers",
+        "Session must not expose a second authority by changing function qualifiers",
     );
     for forbidden in [
         "pub fn state(",
@@ -375,21 +378,21 @@ fn public_session_keeps_evidence_but_owner_alone_grants_updates_and_operations()
         "owner mismatch must be rejected before admission, allocation, or evaluation",
     );
 
-    let public_access_errors =
+    let staged_access_errors =
         source_scope(PROGRAM_SOURCE, "pub enum AccessErrorV1 {", "impl OwnerV1");
     assert!(
-        public_access_errors.contains("OwnerMismatch,")
-            && !public_access_errors.contains("OwnerExpired"),
+        staged_access_errors.contains("OwnerMismatch,")
+            && !staged_access_errors.contains("OwnerExpired"),
         "operation projection must distinguish foreign ownership, not expose internal expiry",
     );
-    let public_update_errors = source_scope(
+    let staged_update_errors = source_scope(
         PROGRAM_SOURCE,
         "pub enum UpdateErrorKindV1 {",
         "pub enum UpdateErrorV1 {",
     );
     assert!(
-        public_update_errors.contains("OwnerMismatch,")
-            && !public_update_errors.contains("OwnerExpired"),
+        staged_update_errors.contains("OwnerMismatch,")
+            && !staged_update_errors.contains("OwnerExpired"),
         "owner expiry is an internal invariant after a matching owner borrow",
     );
     assert!(
@@ -1107,6 +1110,7 @@ fn existing_encoded_evaluators_delegate_program_targets_without_parallel_formula
 fn private_program_and_lcs_occurrence_types_are_not_publicly_exported() {
     for required in [
         "pub(crate) mod lcs_occurrence;",
+        "pub(crate) mod program;",
         "pub(crate) mod program_session;",
     ] {
         assert!(
@@ -1116,9 +1120,12 @@ fn private_program_and_lcs_occurrence_types_are_not_publicly_exported() {
     }
     for forbidden in [
         "pub mod lcs_occurrence;",
+        "pub mod program;",
         "pub mod program_session;",
         "pub use lcs_occurrence::",
         "pub use crate::lcs_occurrence::",
+        "pub use program::",
+        "pub use crate::program::",
         "pub use program_session::",
         "pub use crate::program_session::",
     ] {
