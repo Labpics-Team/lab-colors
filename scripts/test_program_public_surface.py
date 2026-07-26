@@ -79,6 +79,18 @@ class ProgramPublicSurfaceTests(unittest.TestCase):
         with self.assertRaises(RustdocShapeError):
             program_public_surface(self.crate)
 
+    def test_missing_source_class_names_the_rustdoc_toolchain_contract(self) -> None:
+        self.write_all("struct.Srgb8.html")
+        self.write_item(
+            "struct.Srgb8.html",
+            '<a href="../src/labcolors_core/srgb8.rs.html#1">Source</a>',
+        )
+        with self.assertRaisesRegex(
+            RustdocShapeError,
+            'expected rustdoc class "src".*markup or toolchain version is incompatible',
+        ):
+            program_public_surface(self.crate)
+
     def test_empty_public_inventory_fails_closed(self) -> None:
         self.write_all()
         with self.assertRaises(RustdocShapeError):

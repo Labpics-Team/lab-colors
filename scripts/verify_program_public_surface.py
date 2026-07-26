@@ -154,7 +154,9 @@ def program_public_surface(crate_doc_root: Path) -> tuple[int, list[ProgramLeak]
                 break
         if source_links == 0:
             raise RustdocShapeError(
-                f"public rustdoc item has no compiler-emitted source link: {public_item}"
+                "public rustdoc item has no compiler-emitted source link with "
+                'expected rustdoc class "src"; rustdoc HTML markup or toolchain '
+                f"version is incompatible: {public_item}"
             )
 
     return len(pages), leaks
