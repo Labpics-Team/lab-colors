@@ -16,6 +16,8 @@ pub(crate) mod accent_balance;
 pub mod alpha;
 pub(crate) mod analog;
 pub(crate) mod appearance;
+#[deny(missing_docs)]
+pub mod cleanliness;
 pub mod config;
 pub(crate) mod constraints;
 pub mod glow;
@@ -188,6 +190,9 @@ mod reference_vectors_deep;
 // anchors are `#[cfg(test)]`-only.
 #[cfg(test)]
 mod accent_golden_tests;
+
+#[cfg(test)]
+mod cleanliness_outcome_tests;
 
 pub use alpha::composite_over_encoded;
 pub use config::{
