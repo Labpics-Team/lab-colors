@@ -197,6 +197,9 @@ mod cleanliness_outcome_tests;
 #[cfg(test)]
 mod cleanliness_admission_tests;
 
+#[cfg(test)]
+mod cleanliness_registry_tests;
+
 pub use alpha::composite_over_encoded;
 pub use config::{
     Brand, ConfigError, LadderSource, NeutralAnchors, NeutralConfig, NeutralPick, NeutralTint,
