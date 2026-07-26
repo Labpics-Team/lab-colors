@@ -38,6 +38,8 @@
 //! [`ContentIdentityV1`] идентифицирует каноническое содержание, но не даёт
 //! полномочий живого [`OwnerV1`].
 
+#![forbid(unreachable_pub)]
+
 use core::iter::FusedIterator;
 use core::marker::PhantomData;
 use core::slice;
@@ -100,16 +102,16 @@ macro_rules! authored_id {
         #[repr(transparent)]
         #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
         #[must_use]
-        pub struct $name($core);
+        pub(crate) struct $name($core);
 
         impl $name {
             /// Создаёт непрозрачный идентификатор из клиентского числового ключа.
-            pub const fn new(value: u32) -> Self {
+            pub(crate) const fn new(value: u32) -> Self {
                 Self(<$core>::new(value))
             }
 
             /// Возвращает исходный клиентский числовой ключ.
-            pub const fn value(self) -> u32 {
+            pub(crate) const fn value(self) -> u32 {
                 self.0.value()
             }
 
@@ -136,7 +138,7 @@ macro_rules! projected_id {
         #[repr(transparent)]
         #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
         #[must_use]
-        pub struct $name($core);
+        pub(crate) struct $name($core);
 
         impl $name {
             const fn from_core(value: $core) -> Self {
@@ -144,7 +146,7 @@ macro_rules! projected_id {
             }
 
             /// Возвращает числовой ключ сохранённой provenance.
-            pub const fn value(self) -> u32 {
+            pub(crate) const fn value(self) -> u32 {
                 self.0.value()
             }
         }
@@ -208,22 +210,22 @@ projected_id!(
 
 /// Один физический кандидат конечной цели.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct TargetCandidateV1(CoreTargetCandidateV1);
+pub(crate) struct TargetCandidateV1(CoreTargetCandidateV1);
 
 impl TargetCandidateV1 {
     /// Связывает непрозрачный ID кандидата с конкретным encoded sRGB8 сигналом.
-    pub const fn new(id: TargetCandidateIdV1, source: Srgb8) -> Self {
+    pub(crate) const fn new(id: TargetCandidateIdV1, source: Srgb8) -> Self {
         Self(CoreTargetCandidateV1::from_srgb8(id.into_core(), source))
     }
 }
 
 /// Выбор одного кандидата для одной цели в совместном состоянии.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct JointChoiceV1(TargetCandidateChoiceV1);
+pub(crate) struct JointChoiceV1(TargetCandidateChoiceV1);
 
 impl JointChoiceV1 {
     /// Создаёт типизированную пару `цель → кандидат`.
-    pub const fn new(target: TargetIdV1, candidate: TargetCandidateIdV1) -> Self {
+    pub(crate) const fn new(target: TargetIdV1, candidate: TargetCandidateIdV1) -> Self {
         Self(TargetCandidateChoiceV1::new(
             target.into_core(),
             candidate.into_core(),
@@ -233,11 +235,11 @@ impl JointChoiceV1 {
 
 /// Полное явно объявленное состояние всех конечных целей.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct JointStateV1(JointCandidateStateV1);
+pub(crate) struct JointStateV1(JointCandidateStateV1);
 
 impl JointStateV1 {
     /// Создаёт состояние из одного выбора для каждой конечной цели.
-    pub fn new(choices: Vec<JointChoiceV1>) -> Self {
+    pub(crate) fn new(choices: Vec<JointChoiceV1>) -> Self {
         Self(JointCandidateStateV1::new(
             choices.into_iter().map(|choice| choice.0).collect(),
         ))
@@ -246,7 +248,7 @@ impl JointStateV1 {
 
 /// Зарегистрированный режим окружения CIECAM16.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SurroundV1 {
+pub(crate) enum SurroundV1 {
     /// Среднее освещение окружения.
     Average,
     /// Приглушённое освещение окружения.
@@ -267,7 +269,7 @@ impl SurroundV1 {
 
 /// Поле входного контекста восприятия, не прошедшее admission.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AppearanceContextFieldV1 {
+pub(crate) enum AppearanceContextFieldV1 {
     /// Адаптирующая яркость в кд/м².
     AdaptingLuminanceCdM2,
     /// Безразмерное отношение фоновой яркости `Y_b/Y_w`.
@@ -276,7 +278,7 @@ pub enum AppearanceContextFieldV1 {
 
 /// Числовая причина отказа при формировании контекста восприятия.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum NumericDomainErrorV1 {
+pub(crate) enum NumericDomainErrorV1 {
     /// Значение не является конечным числом.
     NonFinite,
     /// Значение отрицательно.
@@ -291,7 +293,7 @@ pub enum NumericDomainErrorV1 {
 
 /// Закрытая классификация отказа admission контекста восприятия.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AppearanceContextErrorKindV1 {
+pub(crate) enum AppearanceContextErrorKindV1 {
     /// Клиентское значение находится вне объявленного домена.
     Domain,
     /// Нарушен внутренний инвариант закрытого преобразования.
@@ -300,7 +302,7 @@ pub enum AppearanceContextErrorKindV1 {
 
 /// Типизированный отказ admission контекста восприятия.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct AppearanceContextErrorV1 {
+pub(crate) struct AppearanceContextErrorV1 {
     kind: AppearanceContextErrorKindV1,
     field: Option<AppearanceContextFieldV1>,
     reason: Option<NumericDomainErrorV1>,
@@ -308,17 +310,17 @@ pub struct AppearanceContextErrorV1 {
 
 impl AppearanceContextErrorV1 {
     /// Возвращает класс отказа.
-    pub const fn kind(self) -> AppearanceContextErrorKindV1 {
+    pub(crate) const fn kind(self) -> AppearanceContextErrorKindV1 {
         self.kind
     }
 
     /// Возвращает отвергнутое поле, когда Core смог его локализовать.
-    pub const fn field(self) -> Option<AppearanceContextFieldV1> {
+    pub(crate) const fn field(self) -> Option<AppearanceContextFieldV1> {
         self.field
     }
 
     /// Возвращает точную числовую причину, если отказ относится к входному домену.
-    pub const fn reason(self) -> Option<NumericDomainErrorV1> {
+    pub(crate) const fn reason(self) -> Option<NumericDomainErrorV1> {
         self.reason
     }
 
@@ -355,7 +357,7 @@ impl AppearanceContextErrorV1 {
 
 /// Неизменяемый допущенный контекст восприятия.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct AppearanceContextV1(AppearanceContextId);
+pub(crate) struct AppearanceContextV1(AppearanceContextId);
 
 impl AppearanceContextV1 {
     const fn from_core(context: AppearanceContextId) -> Self {
@@ -366,7 +368,7 @@ impl AppearanceContextV1 {
     ///
     /// `background_luminance_ratio_yb_yw` — безразмерное `Y_b/Y_w` в `(0, 1]`,
     /// а не абсолютная яркость.
-    pub fn try_new(
+    pub(crate) fn try_new(
         adapting_luminance_cd_m2: f64,
         background_luminance_ratio_yb_yw: f64,
         surround: SurroundV1,
@@ -386,17 +388,17 @@ impl AppearanceContextV1 {
     }
 
     /// Возвращает допущенную адаптирующую яркость в кд/м².
-    pub fn adapting_luminance_cd_m2(self) -> f64 {
+    pub(crate) fn adapting_luminance_cd_m2(self) -> f64 {
         self.0.adapting_luminance_cd_m2()
     }
 
     /// Возвращает допущенное безразмерное отношение `Y_b/Y_w`.
-    pub fn background_luminance_ratio_yb_yw(self) -> f64 {
+    pub(crate) fn background_luminance_ratio_yb_yw(self) -> f64 {
         self.0.background_luminance_ratio()
     }
 
     /// Возвращает зарегистрированный режим окружения.
-    pub const fn surround(self) -> SurroundV1 {
+    pub(crate) const fn surround(self) -> SurroundV1 {
         match self.0.surround_profile() {
             SurroundProfileId::AverageV1 => SurroundV1::Average,
             SurroundProfileId::DimV1 => SurroundV1::Dim,
@@ -407,7 +409,7 @@ impl AppearanceContextV1 {
 
 /// Закрытая классификация ошибки компиляции.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CompileErrorKindV1 {
+pub(crate) enum CompileErrorKindV1 {
     /// Повторно объявлен исходный сигнал.
     DuplicateSource,
     /// Повторно объявлена цель.
@@ -498,7 +500,7 @@ pub enum CompileErrorKindV1 {
 
 /// Типизированный ID узла, к которому относится ошибка компиляции.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CompileErrorHandleV1 {
+pub(crate) enum CompileErrorHandleV1 {
     /// Исходный сигнал.
     Source(SourceIdV1),
     /// Цель.
@@ -523,7 +525,7 @@ pub enum CompileErrorHandleV1 {
 
 impl CompileErrorHandleV1 {
     /// Возвращает клиентский числовой ключ независимо от пространства ID.
-    pub const fn value(self) -> u32 {
+    pub(crate) const fn value(self) -> u32 {
         match self {
             Self::Source(value) => value.value(),
             Self::Target(value) => value.value(),
@@ -541,32 +543,32 @@ impl CompileErrorHandleV1 {
 
 /// Точные участники одного цикла зависимостей Paint.
 #[derive(Debug, PartialEq, Eq)]
-pub struct PaintCycleV1 {
+pub(crate) struct PaintCycleV1 {
     paints: Vec<PaintId>,
 }
 
 impl PaintCycleV1 {
     /// Возвращает участников цикла в каноническом порядке диагностики.
-    pub fn paints(&self) -> impl ExactSizeIterator<Item = PaintIdV1> + '_ {
+    pub(crate) fn paints(&self) -> impl ExactSizeIterator<Item = PaintIdV1> + '_ {
         self.paints.iter().copied().map(PaintIdV1::from_core)
     }
 }
 
 /// Точные участники одного цикла рендера.
 #[derive(Debug, PartialEq, Eq)]
-pub struct RenderCycleV1 {
+pub(crate) struct RenderCycleV1 {
     surfaces: Vec<SurfaceId>,
     occurrences: Vec<OccurrenceId>,
 }
 
 impl RenderCycleV1 {
     /// Возвращает Surface-участников цикла.
-    pub fn surfaces(&self) -> impl ExactSizeIterator<Item = SurfaceIdV1> + '_ {
+    pub(crate) fn surfaces(&self) -> impl ExactSizeIterator<Item = SurfaceIdV1> + '_ {
         self.surfaces.iter().copied().map(SurfaceIdV1::from_core)
     }
 
     /// Возвращает Occurrence-участников цикла.
-    pub fn occurrences(&self) -> impl ExactSizeIterator<Item = OccurrenceIdV1> + '_ {
+    pub(crate) fn occurrences(&self) -> impl ExactSizeIterator<Item = OccurrenceIdV1> + '_ {
         self.occurrences
             .iter()
             .copied()
@@ -576,7 +578,7 @@ impl RenderCycleV1 {
 
 /// Точная причина отказа явно объявленного конечного совместного порядка.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum JointOrderErrorV1 {
+pub(crate) enum JointOrderErrorV1 {
     /// Одно измерение не содержит кандидатов.
     EmptyDomain {
         /// Индекс пустого измерения.
@@ -629,7 +631,7 @@ pub enum JointOrderErrorV1 {
 /// Enum авторитетен; [`Self::kind`], [`Self::primary_handle`] и
 /// [`Self::related_handle`] — только удобные проекции полного payload.
 #[derive(Debug, PartialEq, Eq)]
-pub enum CompileErrorV1 {
+pub(crate) enum CompileErrorV1 {
     /// Повторно объявлен исходный сигнал.
     DuplicateSource {
         /// Повторный ID.
@@ -857,7 +859,7 @@ pub enum CompileErrorV1 {
 
 impl CompileErrorV1 {
     /// Возвращает стабильный класс ошибки без потери полного payload.
-    pub const fn kind(&self) -> CompileErrorKindV1 {
+    pub(crate) const fn kind(&self) -> CompileErrorKindV1 {
         use CompileErrorKindV1 as Kind;
 
         match self {
@@ -908,7 +910,7 @@ impl CompileErrorV1 {
     }
 
     /// Возвращает основной типизированный ID, если ошибка локализуема одним узлом.
-    pub const fn primary_handle(&self) -> Option<CompileErrorHandleV1> {
+    pub(crate) const fn primary_handle(&self) -> Option<CompileErrorHandleV1> {
         use CompileErrorHandleV1 as Handle;
 
         match self {
@@ -966,7 +968,7 @@ impl CompileErrorV1 {
     }
 
     /// Возвращает связанный типизированный ID для ошибки отношения двух узлов.
-    pub const fn related_handle(&self) -> Option<CompileErrorHandleV1> {
+    pub(crate) const fn related_handle(&self) -> Option<CompileErrorHandleV1> {
         use CompileErrorHandleV1 as Handle;
 
         match self {
@@ -1028,41 +1030,41 @@ impl CompileErrorV1 {
 
 /// Холодный декларативный builder канонической Program IR.
 #[must_use]
-pub struct DraftV1 {
+pub(crate) struct DraftV1 {
     inner: CoreProgramDraftV1,
 }
 
 /// Ошибка изменения Draft до компиляции.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DraftErrorV1 {
+pub(crate) enum DraftErrorV1 {
     /// Совместный порядок уже объявлен и не может быть молча заменён.
     JointSelectionAlreadyDeclared,
 }
 
 impl DraftV1 {
     /// Создаёт пустой Draft.
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             inner: CoreProgramDraftV1::new(),
         }
     }
 
     /// Объявляет неизменяемый исходный encoded sRGB8 сигнал.
-    pub fn push_source(&mut self, id: SourceIdV1, source: Srgb8) -> &mut Self {
+    pub(crate) fn push_source(&mut self, id: SourceIdV1, source: Srgb8) -> &mut Self {
         self.inner
             .push_source(Source::new(id.into_core(), ColorSignal::from_srgb8(source)));
         self
     }
 
     /// Объявляет цель, физически равную исходному сигналу.
-    pub fn push_fixed_target(&mut self, id: TargetIdV1, source: SourceIdV1) -> &mut Self {
+    pub(crate) fn push_fixed_target(&mut self, id: TargetIdV1, source: SourceIdV1) -> &mut Self {
         self.inner
             .push_target(Target::fixed(id.into_core(), source.into_core()));
         self
     }
 
     /// Объявляет решаемую цель с конечным набором физических кандидатов.
-    pub fn push_finite_target(
+    pub(crate) fn push_finite_target(
         &mut self,
         id: TargetIdV1,
         source: SourceIdV1,
@@ -1080,7 +1082,7 @@ impl DraftV1 {
     }
 
     /// Один раз задаёт полный порядок совместных состояний конечных целей.
-    pub fn set_joint_selection(
+    pub(crate) fn set_joint_selection(
         &mut self,
         states: Vec<JointStateV1>,
     ) -> Result<&mut Self, DraftErrorV1> {
@@ -1097,20 +1099,20 @@ impl DraftV1 {
     }
 
     /// Объявляет один динамический вход поверхности.
-    pub fn push_surface_input_port(&mut self, input: SurfaceInputPortIdV1) -> &mut Self {
+    pub(crate) fn push_surface_input_port(&mut self, input: SurfaceInputPortIdV1) -> &mut Self {
         self.inner.push_surface_input_port(input.into_core());
         self
     }
 
     /// Объявляет числовой вход прозрачности; домен проверяется при компиляции.
-    pub fn push_opacity_input(&mut self, id: OpacityInputIdV1, value: f64) -> &mut Self {
+    pub(crate) fn push_opacity_input(&mut self, id: OpacityInputIdV1, value: f64) -> &mut Self {
         self.inner
             .push_opacity_input(OpacityInput::new(id.into_core(), value));
         self
     }
 
     /// Объявляет непрозрачный Paint, связанный с целью.
-    pub fn push_solid_paint(&mut self, id: PaintIdV1, target: TargetIdV1) -> &mut Self {
+    pub(crate) fn push_solid_paint(&mut self, id: PaintIdV1, target: TargetIdV1) -> &mut Self {
         self.inner.push_paint(Paint::Solid {
             id: id.into_core(),
             target: target.into_core(),
@@ -1119,7 +1121,7 @@ impl DraftV1 {
     }
 
     /// Объявляет Paint как прозрачную версию другого Paint.
-    pub fn push_opacity_paint(
+    pub(crate) fn push_opacity_paint(
         &mut self,
         id: PaintIdV1,
         source: PaintIdV1,
@@ -1134,7 +1136,7 @@ impl DraftV1 {
     }
 
     /// Объявляет Surface, значение которой поступает из runtime-сценария.
-    pub fn push_input_surface(
+    pub(crate) fn push_input_surface(
         &mut self,
         id: SurfaceIdV1,
         input: SurfaceInputPortIdV1,
@@ -1147,7 +1149,7 @@ impl DraftV1 {
     }
 
     /// Объявляет Surface как видимый результат другого Occurrence.
-    pub fn push_occurrence_surface(
+    pub(crate) fn push_occurrence_surface(
         &mut self,
         id: SurfaceIdV1,
         occurrence: OccurrenceIdV1,
@@ -1160,7 +1162,7 @@ impl DraftV1 {
     }
 
     /// Объявляет encoded-sRGB8 source-over Occurrence в явном контексте.
-    pub fn push_source_over_occurrence(
+    pub(crate) fn push_source_over_occurrence(
         &mut self,
         id: OccurrenceIdV1,
         subject: PaintIdV1,
@@ -1178,7 +1180,7 @@ impl DraftV1 {
     }
 
     /// Добавляет обязательное точное сравнение видимого sRGB8 результата.
-    pub fn push_exact_hard(
+    pub(crate) fn push_exact_hard(
         &mut self,
         id: ConstraintIdV1,
         occurrence: OccurrenceIdV1,
@@ -1193,7 +1195,7 @@ impl DraftV1 {
     }
 
     /// Добавляет диагностическое точное сравнение, не влияющее на выбор.
-    pub fn push_exact_report_only(
+    pub(crate) fn push_exact_report_only(
         &mut self,
         id: ConstraintIdV1,
         occurrence: OccurrenceIdV1,
@@ -1209,7 +1211,7 @@ impl DraftV1 {
     }
 
     /// Добавляет обязательный критерий WCAG 2.2 для видимого результата.
-    pub fn push_wcag22_hard(
+    pub(crate) fn push_wcag22_hard(
         &mut self,
         id: ConstraintIdV1,
         occurrence: OccurrenceIdV1,
@@ -1224,7 +1226,7 @@ impl DraftV1 {
     }
 
     /// Добавляет диагностический критерий WCAG 2.2, не влияющий на выбор.
-    pub fn push_wcag22_report_only(
+    pub(crate) fn push_wcag22_report_only(
         &mut self,
         id: ConstraintIdV1,
         occurrence: OccurrenceIdV1,
@@ -1240,14 +1242,14 @@ impl DraftV1 {
     }
 
     /// Связывает клиентский выходной слот с итоговым Paint.
-    pub fn push_output(&mut self, output: OutputSlotIdV1, paint: PaintIdV1) -> &mut Self {
+    pub(crate) fn push_output(&mut self, output: OutputSlotIdV1, paint: PaintIdV1) -> &mut Self {
         self.inner
             .push_output(OutputBinding::new(output.into_core(), paint.into_core()));
         self
     }
 
     /// Атомарно проверяет и компилирует весь граф.
-    pub fn compile(self) -> Result<OwnerV1, CompileErrorV1> {
+    pub(crate) fn compile(self) -> Result<OwnerV1, CompileErrorV1> {
         let compiled = self.inner.compile().map_err(map_program_compile_error)?;
         Ok(OwnerV1::from_compiled(compiled))
     }
@@ -1264,7 +1266,7 @@ impl Default for DraftV1 {
 /// Созданные им Session изменяются только через эту же аллокацию. Уничтожение
 /// Owner отзывает обновления и операции, но исторические evidence остаются в
 /// Session.
-pub struct OwnerV1 {
+pub(crate) struct OwnerV1 {
     compiled: CompiledCoreProgramV1,
 }
 
@@ -1274,26 +1276,26 @@ pub struct OwnerV1 {
 /// сохранённый прошлый сертификат, observation/provenance, выходы, операции или
 /// байты конкретного транспорта.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct EvidenceCellBoundsV1 {
+pub(crate) struct EvidenceCellBoundsV1 {
     verified_cells: usize,
     conflict_cells: usize,
 }
 
 impl EvidenceCellBoundsV1 {
     /// Максимум клеток успешного сертификата.
-    pub const fn verified_cells(self) -> usize {
+    pub(crate) const fn verified_cells(self) -> usize {
         self.verified_cells
     }
 
     /// Максимум клеток исчерпывающего конфликтного сертификата.
-    pub const fn conflict_cells(self) -> usize {
+    pub(crate) const fn conflict_cells(self) -> usize {
         self.conflict_cells
     }
 }
 
 /// Закрытая причина невозможности вычислить границы сертификата.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum EvidenceBoundsErrorV1 {
+pub(crate) enum EvidenceBoundsErrorV1 {
     /// Произведение числа сценариев, ограничений и состояний не помещается в
     /// адресное пространство платформы.
     CardinalityOverflow,
@@ -1301,7 +1303,7 @@ pub enum EvidenceBoundsErrorV1 {
 
 /// Отказ доступа из-за несовпадения точной owner-эпохи.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AccessErrorV1 {
+pub(crate) enum AccessErrorV1 {
     /// Session была создана другой аллокацией Owner.
     OwnerMismatch,
 }
@@ -1316,7 +1318,7 @@ impl OwnerV1 {
     ///
     /// Identity доступна до первого update, но не заменяет полномочия этой
     /// конкретной owner-эпохи.
-    pub fn content_identity(&self) -> ContentIdentityV1 {
+    pub(crate) fn content_identity(&self) -> ContentIdentityV1 {
         ContentIdentityV1::from_core(self.compiled.content_identity())
     }
 
@@ -1327,7 +1329,7 @@ impl OwnerV1 {
     /// сертификат может быть короче. Нулевое значение разрешено только как
     /// чистый арифметический preflight; пустой Observed-update по-прежнему не
     /// допускается. Запрос не создаёт Session и не меняет состояние.
-    pub fn evidence_cell_bounds(
+    pub(crate) fn evidence_cell_bounds(
         &self,
         scenario_count: usize,
     ) -> Result<EvidenceCellBoundsV1, EvidenceBoundsErrorV1> {
@@ -1341,12 +1343,14 @@ impl OwnerV1 {
     }
 
     /// Число значений Surface в каждом schema-ordered сценарии.
-    pub fn surface_input_port_count(&self) -> usize {
+    pub(crate) fn surface_input_port_count(&self) -> usize {
         self.compiled.surface_input_ports().len()
     }
 
     /// Канонический порядок входных портов для однократного binding на хосте.
-    pub fn surface_input_ports(&self) -> impl ExactSizeIterator<Item = SurfaceInputPortIdV1> + '_ {
+    pub(crate) fn surface_input_ports(
+        &self,
+    ) -> impl ExactSizeIterator<Item = SurfaceInputPortIdV1> + '_ {
         self.compiled
             .surface_input_ports()
             .iter()
@@ -1355,7 +1359,7 @@ impl OwnerV1 {
     }
 
     /// Канонический порядок непрозрачных выходных слотов.
-    pub fn output_slots(&self) -> impl ExactSizeIterator<Item = OutputSlotIdV1> + '_ {
+    pub(crate) fn output_slots(&self) -> impl ExactSizeIterator<Item = OutputSlotIdV1> + '_ {
         self.compiled
             .outputs()
             .map(|(slot, _paint)| OutputSlotIdV1::from_core(slot))
@@ -1364,7 +1368,7 @@ impl OwnerV1 {
     /// Проецирует операции только для Session этой точной owner-эпохи.
     ///
     /// Равенство [`ContentIdentityV1`] не даёт полномочий.
-    pub fn project<'owner, 'session>(
+    pub(crate) fn project<'owner, 'session>(
         &'owner self,
         session: &'session SessionV1,
     ) -> Result<ProjectionV1<'owner, 'session>, AccessErrorV1> {
@@ -1381,7 +1385,7 @@ impl OwnerV1 {
     /// Атомарно допускает update и возвращает его неизменяемую проекцию.
     ///
     /// Несовпадение Owner проверяется до admission, аллокаций и вычисления.
-    pub fn update<'owner, 'session>(
+    pub(crate) fn update<'owner, 'session>(
         &'owner self,
         session: &'session mut SessionV1,
         update: UpdateV1<'_>,
@@ -1398,7 +1402,7 @@ impl OwnerV1 {
     }
 
     /// Создаёт Session, привязанную к одному непрозрачному stream ID.
-    pub fn instantiate(&self, stream_id: u32) -> Result<SessionV1, InstantiateErrorV1> {
+    pub(crate) fn instantiate(&self, stream_id: u32) -> Result<SessionV1, InstantiateErrorV1> {
         let stream = ObservationStreamId::new(stream_id);
         let session = self
             .compiled
@@ -1416,14 +1420,14 @@ impl OwnerV1 {
 /// ID сценария — непрозрачная provenance. `values` содержит ровно один encoded
 /// sRGB8 на каждый [`OwnerV1::surface_input_ports`] в том же порядке.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ScenarioV1<'a> {
+pub(crate) struct ScenarioV1<'a> {
     scenario_id: u32,
     values: &'a [Srgb8],
 }
 
 impl<'a> ScenarioV1<'a> {
     /// Создаёт один одновременный физический кортеж.
-    pub const fn new(scenario_id: u32, values: &'a [Srgb8]) -> Self {
+    pub(crate) const fn new(scenario_id: u32, values: &'a [Srgb8]) -> Self {
         Self {
             scenario_id,
             values,
@@ -1433,7 +1437,7 @@ impl<'a> ScenarioV1<'a> {
 
 /// Одно revision-bound обновление; stream принадлежит Session.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum UpdateV1<'a> {
+pub(crate) enum UpdateV1<'a> {
     /// Согласованные физические сценарии в порядке скомпилированной схемы.
     Observed {
         /// Монотонная ревизия входного наблюдения.
@@ -1451,14 +1455,14 @@ pub enum UpdateV1<'a> {
 }
 
 /// Непрозрачная изменяемая Session одной Program и одного stream.
-pub struct SessionV1 {
+pub(crate) struct SessionV1 {
     scenario_order_scratch: Vec<usize>,
     session: CoreProgramSessionV1,
 }
 
 impl SessionV1 {
     /// Возвращает исторические evidence без права на операции.
-    pub fn evidence(&self) -> EvidenceViewV1<'_> {
+    pub(crate) fn evidence(&self) -> EvidenceViewV1<'_> {
         EvidenceViewV1 {
             session: &self.session,
         }
@@ -1514,7 +1518,7 @@ impl SchemaOrderedScenarioSourceV1 for ScenarioSourceV1<'_> {
 
 /// Закрытая классификация lifecycle Session.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum StateKindV1 {
+pub(crate) enum StateKindV1 {
     /// Допущенного вычислимого наблюдения ещё нет; сырая голова может быть `Unknown`.
     Waiting,
     /// Текущая ревизия сертифицирована.
@@ -1529,7 +1533,7 @@ pub enum StateKindV1 {
 ///
 /// Непустая голова хранит stream provenance, но не полномочия на операции.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ObservationHeadV1 {
+pub(crate) enum ObservationHeadV1 {
     /// Наблюдений ещё не было.
     Empty,
     /// Наблюдение явно недоступно.
@@ -1552,7 +1556,7 @@ pub enum ObservationHeadV1 {
 
 /// Заимствованное историческое evidence, принадлежащее Session.
 #[derive(Clone, Copy)]
-pub struct EvidenceViewV1<'a> {
+pub(crate) struct EvidenceViewV1<'a> {
     session: &'a CoreProgramSessionV1,
 }
 
@@ -1562,7 +1566,7 @@ impl<'a> EvidenceViewV1<'a> {
     }
 
     /// Возвращает lifecycle-класс текущего состояния.
-    pub const fn kind(self) -> StateKindV1 {
+    pub(crate) const fn kind(self) -> StateKindV1 {
         match self.state() {
             SessionState::Waiting => StateKindV1::Waiting,
             SessionState::Ready { .. } => StateKindV1::Ready,
@@ -1572,7 +1576,7 @@ impl<'a> EvidenceViewV1<'a> {
     }
 
     /// Возвращает сырую голову наблюдений вместе с provenance.
-    pub fn observation_head(self) -> ObservationHeadV1 {
+    pub(crate) fn observation_head(self) -> ObservationHeadV1 {
         match self.session.raw_head() {
             ObservationHeadViewV1::Empty => ObservationHeadV1::Empty,
             ObservationHeadViewV1::Unknown(unknown) => ObservationHeadV1::Unknown {
@@ -1588,7 +1592,7 @@ impl<'a> EvidenceViewV1<'a> {
     }
 
     /// Индекс cause-сертификата в [`Self::certificates`] для `Failed`.
-    pub const fn cause_certificate_index(self) -> Option<usize> {
+    pub(crate) const fn cause_certificate_index(self) -> Option<usize> {
         match self.state() {
             SessionState::Failed { .. } => Some(0),
             SessionState::Waiting | SessionState::Ready { .. } | SessionState::Stale { .. } => None,
@@ -1596,7 +1600,7 @@ impl<'a> EvidenceViewV1<'a> {
     }
 
     /// Сертификаты в каноническом порядке одного снимка.
-    pub fn certificates(
+    pub(crate) fn certificates(
         self,
     ) -> impl ExactSizeIterator<Item = CertificateV1<'a>> + FusedIterator + 'a {
         let (first, second) = match self.state() {
@@ -1629,7 +1633,7 @@ impl<'owner, 'session> BorrowScopeV1<'owner, 'session> {
 
 /// Проверенная Owner-and-snapshot проекция evidence и операций.
 #[derive(Clone, Copy)]
-pub struct ProjectionV1<'owner, 'session> {
+pub(crate) struct ProjectionV1<'owner, 'session> {
     evidence: EvidenceViewV1<'session>,
     owner: &'owner OwnerV1,
     scope: BorrowScopeV1<'owner, 'session>,
@@ -1637,12 +1641,12 @@ pub struct ProjectionV1<'owner, 'session> {
 
 impl<'owner, 'session> ProjectionV1<'owner, 'session> {
     /// Возвращает историческое evidence этого снимка.
-    pub const fn evidence(self) -> EvidenceViewV1<'session> {
+    pub(crate) const fn evidence(self) -> EvidenceViewV1<'session> {
         self.evidence
     }
 
     /// Возвращает полную каноническую последовательность операций состояния.
-    pub fn operations(
+    pub(crate) fn operations(
         self,
     ) -> impl ExactSizeIterator<Item = OperationV1<'owner, 'session>> + FusedIterator {
         let inner = match self.evidence.state() {
@@ -1691,7 +1695,7 @@ impl<'owner, 'session> ProjectionV1<'owner, 'session> {
 /// Identity не идентифицирует owner-эпоху и не даёт runtime-полномочий.
 #[repr(transparent)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct ContentIdentityV1([u8; 32]);
+pub(crate) struct ContentIdentityV1([u8; 32]);
 
 impl ContentIdentityV1 {
     const fn from_core(value: ProgramContentIdentityV1) -> Self {
@@ -1699,37 +1703,39 @@ impl ContentIdentityV1 {
     }
 
     /// Возвращает 256-битное каноническое представление identity.
-    pub const fn as_bytes(&self) -> &[u8; 32] {
+    pub(crate) const fn as_bytes(&self) -> &[u8; 32] {
         &self.0
     }
 }
 
 /// Доказательство прохождения всех hard-клеток на полном physical support.
 #[derive(Clone, Copy)]
-pub struct VerifiedCertificateV1<'a> {
+pub(crate) struct VerifiedCertificateV1<'a> {
     inner: &'a CoreVerifiedV1,
 }
 
 impl<'a> VerifiedCertificateV1<'a> {
     /// Возвращает identity скомпилированного содержания.
-    pub const fn content_identity(self) -> ContentIdentityV1 {
+    pub(crate) const fn content_identity(self) -> ContentIdentityV1 {
         ContentIdentityV1::from_core(self.inner.report().content_identity())
     }
 
     /// Возвращает точное наблюдение, на котором выдан сертификат.
-    pub const fn observation(self) -> ObservationV1<'a> {
+    pub(crate) const fn observation(self) -> ObservationV1<'a> {
         ObservationV1 {
             inner: self.inner.report().observation(),
         }
     }
 
     /// Возвращает индекс выбранного состояния или `None` для fixed Program.
-    pub const fn selected_state_index(self) -> Option<usize> {
+    pub(crate) const fn selected_state_index(self) -> Option<usize> {
         self.inner.selected_state_index()
     }
 
     /// Возвращает все `case × constraint` клетки выбранного состояния.
-    pub fn cells(self) -> impl ExactSizeIterator<Item = VerifiedCellV1<'a>> + FusedIterator + 'a {
+    pub(crate) fn cells(
+        self,
+    ) -> impl ExactSizeIterator<Item = VerifiedCellV1<'a>> + FusedIterator + 'a {
         self.inner
             .report()
             .cells()
@@ -1738,7 +1744,7 @@ impl<'a> VerifiedCertificateV1<'a> {
     }
 
     /// Возвращает все сертифицированные выходы в каноническом порядке.
-    pub fn outputs(
+    pub(crate) fn outputs(
         self,
     ) -> impl ExactSizeIterator<Item = CertifiedOutputV1<'a>> + FusedIterator + 'a {
         self.inner
@@ -1750,30 +1756,32 @@ impl<'a> VerifiedCertificateV1<'a> {
 
 /// Исчерпывающее доказательство, что каждое состояние нарушает hard-клетку.
 #[derive(Clone, Copy)]
-pub struct ConflictCertificateV1<'a> {
+pub(crate) struct ConflictCertificateV1<'a> {
     inner: &'a CoreConflictV1,
 }
 
 impl<'a> ConflictCertificateV1<'a> {
     /// Возвращает identity скомпилированного содержания.
-    pub const fn content_identity(self) -> ContentIdentityV1 {
+    pub(crate) const fn content_identity(self) -> ContentIdentityV1 {
         ContentIdentityV1::from_core(self.inner.report().content_identity())
     }
 
     /// Возвращает точное наблюдение, вызвавшее конфликт.
-    pub const fn observation(self) -> ObservationV1<'a> {
+    pub(crate) const fn observation(self) -> ObservationV1<'a> {
         ObservationV1 {
             inner: self.inner.report().observation(),
         }
     }
 
     /// Возвращает число исчерпывающе рассмотренных состояний.
-    pub const fn considered_state_count(self) -> usize {
+    pub(crate) const fn considered_state_count(self) -> usize {
         self.inner.considered_state_count()
     }
 
     /// Возвращает все `state × case × constraint` клетки конфликта.
-    pub fn cells(self) -> impl ExactSizeIterator<Item = ConflictCellV1<'a>> + FusedIterator + 'a {
+    pub(crate) fn cells(
+        self,
+    ) -> impl ExactSizeIterator<Item = ConflictCellV1<'a>> + FusedIterator + 'a {
         self.inner
             .report()
             .cells()
@@ -1787,7 +1795,7 @@ impl<'a> ConflictCertificateV1<'a> {
 /// Сертификат заимствует только историю Session и может пережить Owner,
 /// разрешивший исходную проекцию.
 #[derive(Clone, Copy)]
-pub enum CertificateV1<'a> {
+pub(crate) enum CertificateV1<'a> {
     /// Все hard-клетки полного support прошли.
     Verified(VerifiedCertificateV1<'a>),
     /// Каждое рассмотренное состояние нарушает хотя бы одну hard-клетку.
@@ -1804,7 +1812,7 @@ impl<'a> CertificateV1<'a> {
     }
 
     /// Возвращает identity скомпилированного содержания.
-    pub const fn content_identity(self) -> ContentIdentityV1 {
+    pub(crate) const fn content_identity(self) -> ContentIdentityV1 {
         match self {
             Self::Verified(value) => value.content_identity(),
             Self::Conflict(value) => value.content_identity(),
@@ -1812,7 +1820,7 @@ impl<'a> CertificateV1<'a> {
     }
 
     /// Возвращает точное revision-bound наблюдение сертификата.
-    pub const fn observation(self) -> ObservationV1<'a> {
+    pub(crate) const fn observation(self) -> ObservationV1<'a> {
         match self {
             Self::Verified(value) => value.observation(),
             Self::Conflict(value) => value.observation(),
@@ -1827,25 +1835,25 @@ impl<'a> CertificateV1<'a> {
 
 /// Точное revision-bound наблюдение, сохранённое сертификатом.
 #[derive(Clone, Copy)]
-pub struct ObservationV1<'a> {
+pub(crate) struct ObservationV1<'a> {
     inner: &'a crate::observation::RevisionBoundObservationV1,
 }
 
 impl<'a> ObservationV1<'a> {
     /// Возвращает stream provenance наблюдения.
-    pub const fn stream(self) -> StreamIdV1 {
+    pub(crate) const fn stream(self) -> StreamIdV1 {
         StreamIdV1::from_core(self.inner.stream())
     }
 
     /// Возвращает ревизию наблюдения.
-    pub const fn revision(self) -> u64 {
+    pub(crate) const fn revision(self) -> u64 {
         self.inner.revision().value()
     }
 
     /// Возвращает каноническую schema, общую для всех физических cases.
     ///
     /// Позиция `i` соответствует позиции `i` в [`PhysicalCaseV1::values`].
-    pub fn surface_input_ports(
+    pub(crate) fn surface_input_ports(
         self,
     ) -> impl ExactSizeIterator<Item = SurfaceInputPortIdV1> + FusedIterator + 'a {
         self.inner
@@ -1858,7 +1866,7 @@ impl<'a> ObservationV1<'a> {
     /// Возвращает канонические уникальные физические cases.
     ///
     /// Дубликаты значений схлопываются, а их ID сохраняются в provenance.
-    pub fn physical_cases(
+    pub(crate) fn physical_cases(
         self,
     ) -> impl ExactSizeIterator<Item = PhysicalCaseV1<'a>> + FusedIterator + 'a {
         (0..self.inner.physical_case_count()).map(move |index| PhysicalCaseV1 {
@@ -1870,21 +1878,21 @@ impl<'a> ObservationV1<'a> {
 
 /// Закрытое семейство сигналов физического case.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SignalV1 {
+pub(crate) enum SignalV1 {
     /// Encoded sRGB8 в IEC 61966-2-1 с белой точкой D65.
     Iec61966Srgb8D65(Srgb8),
 }
 
 /// Один канонический физический case и его полная provenance.
 #[derive(Clone, Copy)]
-pub struct PhysicalCaseV1<'a> {
+pub(crate) struct PhysicalCaseV1<'a> {
     observation: &'a crate::observation::RevisionBoundObservationV1,
     index: usize,
 }
 
 impl<'a> PhysicalCaseV1<'a> {
     /// Возвращает значения case в каноническом schema order.
-    pub fn values(self) -> impl ExactSizeIterator<Item = SignalV1> + FusedIterator + 'a {
+    pub(crate) fn values(self) -> impl ExactSizeIterator<Item = SignalV1> + FusedIterator + 'a {
         self.observation
             .physical_values(self.index)
             .expect("physical case originates from the same observation")
@@ -1896,7 +1904,9 @@ impl<'a> PhysicalCaseV1<'a> {
     }
 
     /// Возвращает все scenario ID, схлопнутые в этот физический case.
-    pub fn provenance(self) -> impl ExactSizeIterator<Item = ScenarioIdV1> + FusedIterator + 'a {
+    pub(crate) fn provenance(
+        self,
+    ) -> impl ExactSizeIterator<Item = ScenarioIdV1> + FusedIterator + 'a {
         self.observation
             .provenance(self.index)
             .expect("physical case originates from the same observation")
@@ -1908,7 +1918,7 @@ impl<'a> PhysicalCaseV1<'a> {
 
 /// Роль одной constraint-клетки в выборе.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ConstraintModeV1 {
+pub(crate) enum ConstraintModeV1 {
     /// Нарушение запрещает состояние.
     Hard,
     /// Результат сохраняется, но не влияет на выбор.
@@ -1917,7 +1927,7 @@ pub enum ConstraintModeV1 {
 
 /// Одна клетка `case × constraint` выбранного или fixed состояния.
 #[derive(Clone, Copy)]
-pub struct VerifiedCellV1<'a> {
+pub(crate) struct VerifiedCellV1<'a> {
     inner: &'a CoreProgramConstraintCellV1,
 }
 
@@ -1927,34 +1937,34 @@ impl<'a> VerifiedCellV1<'a> {
     }
 
     /// Возвращает индекс физического case.
-    pub const fn case_index(self) -> usize {
+    pub(crate) const fn case_index(self) -> usize {
         self.inner.case_index()
     }
 
     /// Возвращает ID ограничения.
-    pub const fn constraint(self) -> ConstraintIdV1 {
+    pub(crate) const fn constraint(self) -> ConstraintIdV1 {
         ConstraintIdV1::from_core(self.inner.constraint())
     }
 
     /// Возвращает ID проверенного Occurrence.
-    pub const fn occurrence(self) -> OccurrenceIdV1 {
+    pub(crate) const fn occurrence(self) -> OccurrenceIdV1 {
         OccurrenceIdV1::from_core(self.inner.target())
     }
 
     /// Возвращает роль ограничения в выборе.
-    pub const fn mode(self) -> ConstraintModeV1 {
+    pub(crate) const fn mode(self) -> ConstraintModeV1 {
         project_constraint_mode(self.inner)
     }
 
     /// Возвращает типизированное сохранённое evidence.
-    pub fn assessment(self) -> AssessmentV1<'a> {
+    pub(crate) fn assessment(self) -> AssessmentV1<'a> {
         project_assessment(self.inner)
     }
 }
 
 /// Одна исчерпывающая клетка `state × case × constraint` конфликта.
 #[derive(Clone, Copy)]
-pub struct ConflictCellV1<'a> {
+pub(crate) struct ConflictCellV1<'a> {
     inner: &'a CoreProgramConstraintCellV1,
 }
 
@@ -1964,32 +1974,32 @@ impl<'a> ConflictCellV1<'a> {
     }
 
     /// Возвращает индекс рассмотренного состояния.
-    pub const fn state_index(self) -> usize {
+    pub(crate) const fn state_index(self) -> usize {
         self.inner.candidate_state_index()
     }
 
     /// Возвращает индекс физического case.
-    pub const fn case_index(self) -> usize {
+    pub(crate) const fn case_index(self) -> usize {
         self.inner.case_index()
     }
 
     /// Возвращает ID ограничения.
-    pub const fn constraint(self) -> ConstraintIdV1 {
+    pub(crate) const fn constraint(self) -> ConstraintIdV1 {
         ConstraintIdV1::from_core(self.inner.constraint())
     }
 
     /// Возвращает ID проверенного Occurrence.
-    pub const fn occurrence(self) -> OccurrenceIdV1 {
+    pub(crate) const fn occurrence(self) -> OccurrenceIdV1 {
         OccurrenceIdV1::from_core(self.inner.target())
     }
 
     /// Возвращает роль ограничения в выборе.
-    pub const fn mode(self) -> ConstraintModeV1 {
+    pub(crate) const fn mode(self) -> ConstraintModeV1 {
         project_constraint_mode(self.inner)
     }
 
     /// Возвращает типизированное сохранённое evidence.
-    pub fn assessment(self) -> AssessmentV1<'a> {
+    pub(crate) fn assessment(self) -> AssessmentV1<'a> {
         project_assessment(self.inner)
     }
 }
@@ -2029,7 +2039,7 @@ fn project_assessment(cell: &CoreProgramConstraintCellV1) -> AssessmentV1<'_> {
 
 /// Закрытое семейство сохранённого evaluator evidence.
 #[derive(Clone, Copy)]
-pub enum AssessmentV1<'a> {
+pub(crate) enum AssessmentV1<'a> {
     /// Evidence точного сравнения encoded sRGB8.
     ExactSrgb8(ExactSrgb8EvidenceV1<'a>),
     /// Evidence применимого критерия WCAG 2.2.
@@ -2038,7 +2048,7 @@ pub enum AssessmentV1<'a> {
 
 impl<'a> AssessmentV1<'a> {
     /// Возвращает несовместимый с противоположным исход классификатора.
-    pub const fn verdict(self) -> VerdictV1 {
+    pub(crate) const fn verdict(self) -> VerdictV1 {
         match self {
             Self::ExactSrgb8(value) => value.verdict(),
             Self::Wcag22Srgb8(value) => value.verdict(),
@@ -2046,7 +2056,7 @@ impl<'a> AssessmentV1<'a> {
     }
 
     /// Возвращает общую физическую и моделированную привязку точки.
-    pub fn binding(self) -> PointBindingV1<'a> {
+    pub(crate) fn binding(self) -> PointBindingV1<'a> {
         match self {
             Self::ExactSrgb8(value) => value.binding(),
             Self::Wcag22Srgb8(value) => value.binding(),
@@ -2056,7 +2066,7 @@ impl<'a> AssessmentV1<'a> {
 
 /// Несовместимые сохранённые исходы классификатора.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum VerdictV1 {
+pub(crate) enum VerdictV1 {
     /// Критерий доказан.
     Pass,
     /// Критерий доказанно нарушен.
@@ -2071,13 +2081,13 @@ enum ExactSrgb8EvidenceRefV1<'a> {
 
 /// Evidence точного sRGB8 сравнения с физикой и моделированным контекстом.
 #[derive(Clone, Copy)]
-pub struct ExactSrgb8EvidenceV1<'a> {
+pub(crate) struct ExactSrgb8EvidenceV1<'a> {
     inner: ExactSrgb8EvidenceRefV1<'a>,
 }
 
 impl<'a> ExactSrgb8EvidenceV1<'a> {
     /// Возвращает сохранённый исход классификатора.
-    pub const fn verdict(self) -> VerdictV1 {
+    pub(crate) const fn verdict(self) -> VerdictV1 {
         match self.inner {
             ExactSrgb8EvidenceRefV1::Pass(_) => VerdictV1::Pass,
             ExactSrgb8EvidenceRefV1::Violation(_) => VerdictV1::Violation,
@@ -2085,7 +2095,7 @@ impl<'a> ExactSrgb8EvidenceV1<'a> {
     }
 
     /// Возвращает ожидаемый encoded sRGB8 результат.
-    pub fn expected(self) -> Srgb8 {
+    pub(crate) fn expected(self) -> Srgb8 {
         match self.inner {
             ExactSrgb8EvidenceRefV1::Pass(value) => value.target(),
             ExactSrgb8EvidenceRefV1::Violation(value) => value.target(),
@@ -2093,7 +2103,7 @@ impl<'a> ExactSrgb8EvidenceV1<'a> {
     }
 
     /// Возвращает физическую и моделированную привязку точки.
-    pub fn binding(self) -> PointBindingV1<'a> {
+    pub(crate) fn binding(self) -> PointBindingV1<'a> {
         let value = match self.inner {
             ExactSrgb8EvidenceRefV1::Pass(value) => value.binding(),
             ExactSrgb8EvidenceRefV1::Violation(value) => value.binding(),
@@ -2110,13 +2120,13 @@ enum Wcag22Srgb8EvidenceRefV1<'a> {
 
 /// WCAG 2.2 evidence вместе с физикой и моделированным контекстом.
 #[derive(Clone, Copy)]
-pub struct Wcag22Srgb8EvidenceV1<'a> {
+pub(crate) struct Wcag22Srgb8EvidenceV1<'a> {
     inner: Wcag22Srgb8EvidenceRefV1<'a>,
 }
 
 impl<'a> Wcag22Srgb8EvidenceV1<'a> {
     /// Возвращает сохранённый исход классификатора.
-    pub const fn verdict(self) -> VerdictV1 {
+    pub(crate) const fn verdict(self) -> VerdictV1 {
         match self.inner {
             Wcag22Srgb8EvidenceRefV1::Pass(_) => VerdictV1::Pass,
             Wcag22Srgb8EvidenceRefV1::Violation(_) => VerdictV1::Violation,
@@ -2124,7 +2134,7 @@ impl<'a> Wcag22Srgb8EvidenceV1<'a> {
     }
 
     /// Возвращает версию применённого WCAG 2.2 профиля.
-    pub fn profile_id(self) -> Wcag22ProfileIdV1 {
+    pub(crate) fn profile_id(self) -> Wcag22ProfileIdV1 {
         match self.inner {
             Wcag22Srgb8EvidenceRefV1::Pass(value) => value.measurement().value().profile_id(),
             Wcag22Srgb8EvidenceRefV1::Violation(value) => value.measurement().value().profile_id(),
@@ -2132,7 +2142,7 @@ impl<'a> Wcag22Srgb8EvidenceV1<'a> {
     }
 
     /// Возвращает применённый критерий.
-    pub fn criterion(self) -> Wcag22CriterionV1 {
+    pub(crate) fn criterion(self) -> Wcag22CriterionV1 {
         match self.inner {
             Wcag22Srgb8EvidenceRefV1::Pass(value) => value.measurement().value().criterion(),
             Wcag22Srgb8EvidenceRefV1::Violation(value) => value.measurement().value().criterion(),
@@ -2140,7 +2150,7 @@ impl<'a> Wcag22Srgb8EvidenceV1<'a> {
     }
 
     /// Возвращает сертифицированные границы яркости foreground.
-    pub fn foreground_luminance(self) -> Wcag22LuminanceBoundsQ55V1 {
+    pub(crate) fn foreground_luminance(self) -> Wcag22LuminanceBoundsQ55V1 {
         let measurement = match self.inner {
             Wcag22Srgb8EvidenceRefV1::Pass(value) => value.measurement().value().measurement(),
             Wcag22Srgb8EvidenceRefV1::Violation(value) => value.measurement().value().measurement(),
@@ -2149,7 +2159,7 @@ impl<'a> Wcag22Srgb8EvidenceV1<'a> {
     }
 
     /// Возвращает сертифицированные границы яркости background.
-    pub fn background_luminance(self) -> Wcag22LuminanceBoundsQ55V1 {
+    pub(crate) fn background_luminance(self) -> Wcag22LuminanceBoundsQ55V1 {
         let measurement = match self.inner {
             Wcag22Srgb8EvidenceRefV1::Pass(value) => value.measurement().value().measurement(),
             Wcag22Srgb8EvidenceRefV1::Violation(value) => value.measurement().value().measurement(),
@@ -2158,7 +2168,7 @@ impl<'a> Wcag22Srgb8EvidenceV1<'a> {
     }
 
     /// Возвращает числовое доказательство устойчивости решения.
-    pub fn numerical_evidence(self) -> &'a NumericalDecisionEvidenceV1 {
+    pub(crate) fn numerical_evidence(self) -> &'a NumericalDecisionEvidenceV1 {
         match self.inner {
             Wcag22Srgb8EvidenceRefV1::Pass(value) => value.measurement().value().evidence(),
             Wcag22Srgb8EvidenceRefV1::Violation(value) => value.measurement().value().evidence(),
@@ -2166,7 +2176,7 @@ impl<'a> Wcag22Srgb8EvidenceV1<'a> {
     }
 
     /// Возвращает физическую и моделированную привязку точки.
-    pub fn binding(self) -> PointBindingV1<'a> {
+    pub(crate) fn binding(self) -> PointBindingV1<'a> {
         let value = match self.inner {
             Wcag22Srgb8EvidenceRefV1::Pass(value) => value.binding(),
             Wcag22Srgb8EvidenceRefV1::Violation(value) => value.binding(),
@@ -2177,13 +2187,13 @@ impl<'a> Wcag22Srgb8EvidenceV1<'a> {
 
 /// Общая привязка физической композиции и моделированного tristimulus/context.
 #[derive(Clone, Copy)]
-pub struct PointBindingV1<'a> {
+pub(crate) struct PointBindingV1<'a> {
     inner: &'a ProgramVisiblePointBindingV1,
 }
 
 impl<'a> PointBindingV1<'a> {
     /// Возвращает закрытый тип точной физической композиции.
-    pub const fn physical(self) -> PhysicalPointV1<'a> {
+    pub(crate) const fn physical(self) -> PhysicalPointV1<'a> {
         match self.inner.physical().occurrence().profile() {
             CompositionProfileV1::EncodedSrgb8SourceOverV1 => {
                 PhysicalPointV1::EncodedSrgb8SourceOver(EncodedSrgb8SourceOverV1 {
@@ -2194,7 +2204,7 @@ impl<'a> PointBindingV1<'a> {
     }
 
     /// Возвращает закрытый тип допущенного моделированного сигнала.
-    pub const fn modeled(self) -> ModeledPointV1<'a> {
+    pub(crate) const fn modeled(self) -> ModeledPointV1<'a> {
         match self.inner.modeled_lcs().provenance().binding() {
             AdmittedSrgb8TristimulusBindingV1::Iec61966Srgb8ToCie1931TwoDegreeXyzD65RelativeY1V1 => {
                 ModeledPointV1::Iec61966Srgb8ToCie1931TwoDegreeXyzD65RelativeY1(
@@ -2207,25 +2217,25 @@ impl<'a> PointBindingV1<'a> {
 
 /// Закрытое семейство точной физической композиции.
 #[derive(Clone, Copy)]
-pub enum PhysicalPointV1<'a> {
+pub(crate) enum PhysicalPointV1<'a> {
     /// Encoded-sRGB8 source-over композиция.
     EncodedSrgb8SourceOver(EncodedSrgb8SourceOverV1<'a>),
 }
 
 /// Точная привязка одного encoded-sRGB8 source-over Occurrence.
 #[derive(Clone, Copy)]
-pub struct EncodedSrgb8SourceOverV1<'a> {
+pub(crate) struct EncodedSrgb8SourceOverV1<'a> {
     inner: &'a ProgramVisiblePointBindingV1,
 }
 
 impl EncodedSrgb8SourceOverV1<'_> {
     /// Возвращает ID накладываемого Paint.
-    pub const fn subject_paint(self) -> PaintIdV1 {
+    pub(crate) const fn subject_paint(self) -> PaintIdV1 {
         PaintIdV1::from_core(self.inner.physical().program_occurrence().subject())
     }
 
     /// Возвращает ID backdrop Surface.
-    pub const fn backdrop_surface(self) -> SurfaceIdV1 {
+    pub(crate) const fn backdrop_surface(self) -> SurfaceIdV1 {
         SurfaceIdV1::from_core(
             self.inner
                 .physical()
@@ -2235,54 +2245,54 @@ impl EncodedSrgb8SourceOverV1<'_> {
     }
 
     /// Возвращает исходный encoded sRGB8 subject до композиции.
-    pub const fn subject(self) -> Srgb8 {
+    pub(crate) const fn subject(self) -> Srgb8 {
         Srgb8::new(self.inner.physical().occurrence().subject_rgb())
     }
 
     /// Возвращает точную прозрачность subject в `[0, 1]`.
-    pub const fn opacity(self) -> f64 {
+    pub(crate) const fn opacity(self) -> f64 {
         f64::from_bits(self.inner.physical().occurrence().subject_opacity_bits())
     }
 
     /// Возвращает observed encoded sRGB8 backdrop.
-    pub const fn backdrop(self) -> Srgb8 {
+    pub(crate) const fn backdrop(self) -> Srgb8 {
         Srgb8::new(self.inner.physical().occurrence().backdrop_rgb())
     }
 
     /// Возвращает видимый encoded sRGB8 результат композиции.
-    pub const fn visible(self) -> Srgb8 {
+    pub(crate) const fn visible(self) -> Srgb8 {
         Srgb8::new(self.inner.physical().occurrence().output_rgb())
     }
 }
 
 /// Закрытое семейство provenance моделированного tristimulus.
 #[derive(Clone, Copy)]
-pub enum ModeledPointV1<'a> {
+pub(crate) enum ModeledPointV1<'a> {
     /// IEC sRGB8 → CIE 1931 2° XYZ D65 с относительным `Y=1`.
     Iec61966Srgb8ToCie1931TwoDegreeXyzD65RelativeY1(ModeledTristimulusV1<'a>),
 }
 
 /// Допущенный моделированный tristimulus и его контекст восприятия.
 #[derive(Clone, Copy)]
-pub struct ModeledTristimulusV1<'a> {
+pub(crate) struct ModeledTristimulusV1<'a> {
     inner: &'a ProgramVisiblePointBindingV1,
 }
 
 impl ModeledTristimulusV1<'_> {
     /// Возвращает относительные координаты CIE XYZ.
-    pub fn xyz(self) -> [f64; 3] {
+    pub(crate) fn xyz(self) -> [f64; 3] {
         self.inner.modeled_lcs().derivation().sample().xyz()
     }
 
     /// Возвращает явный контекст, использованный при моделировании.
-    pub const fn appearance_context(self) -> AppearanceContextV1 {
+    pub(crate) const fn appearance_context(self) -> AppearanceContextV1 {
         AppearanceContextV1(self.inner.modeled_lcs().occurrence().context())
     }
 }
 
 /// Один Core-сертифицированный выходной Paint.
 #[derive(Clone, Copy)]
-pub struct CertifiedOutputV1<'a> {
+pub(crate) struct CertifiedOutputV1<'a> {
     inner: &'a ProgramOutputV1,
 }
 
@@ -2292,29 +2302,29 @@ impl<'a> CertifiedOutputV1<'a> {
     }
 
     /// Возвращает клиентский выходной слот.
-    pub const fn output_slot(self) -> OutputSlotIdV1 {
+    pub(crate) const fn output_slot(self) -> OutputSlotIdV1 {
         OutputSlotIdV1::from_core((*self.inner).output())
     }
 
     /// Возвращает ID сертифицированного Paint.
-    pub const fn paint(self) -> PaintIdV1 {
+    pub(crate) const fn paint(self) -> PaintIdV1 {
         PaintIdV1::from_core((*self.inner).paint().id())
     }
 
     /// Возвращает исходный encoded sRGB8 сигнал Paint.
-    pub const fn source(self) -> Srgb8 {
+    pub(crate) const fn source(self) -> Srgb8 {
         (*self.inner).paint().source()
     }
 
     /// Возвращает сертифицированную прозрачность Paint.
-    pub const fn opacity(self) -> f64 {
+    pub(crate) const fn opacity(self) -> f64 {
         (*self.inner).paint().opacity().value()
     }
 }
 
 /// Операция установки, структурно связанная с точным Verified-сертификатом.
 #[derive(Clone, Copy)]
-pub struct SetV1<'owner, 'session> {
+pub(crate) struct SetV1<'owner, 'session> {
     output: &'session ProgramOutputV1,
     certificate: VerifiedCertificateV1<'session>,
     _scope: BorrowScopeV1<'owner, 'session>,
@@ -2322,36 +2332,36 @@ pub struct SetV1<'owner, 'session> {
 
 impl<'session> SetV1<'_, 'session> {
     /// Возвращает изменяемый клиентский выходной слот.
-    pub const fn output_slot(self) -> OutputSlotIdV1 {
+    pub(crate) const fn output_slot(self) -> OutputSlotIdV1 {
         OutputSlotIdV1::from_core((*self.output).output())
     }
 
     /// Возвращает исходный encoded sRGB8 сигнал результата.
-    pub const fn source(self) -> Srgb8 {
+    pub(crate) const fn source(self) -> Srgb8 {
         (*self.output).paint().source()
     }
 
     /// Возвращает прозрачность результата.
-    pub const fn opacity(self) -> f64 {
+    pub(crate) const fn opacity(self) -> f64 {
         (*self.output).paint().opacity().value()
     }
 
     /// Возвращает сертификат, разрешивший эту операцию.
-    pub const fn certificate(self) -> VerifiedCertificateV1<'session> {
+    pub(crate) const fn certificate(self) -> VerifiedCertificateV1<'session> {
         self.certificate
     }
 }
 
 /// Операция удаления результата без сертификата для текущего контекста.
 #[derive(Clone, Copy)]
-pub struct RemoveV1<'owner, 'session> {
+pub(crate) struct RemoveV1<'owner, 'session> {
     output_slot: OutputSlotIdV1,
     _scope: BorrowScopeV1<'owner, 'session>,
 }
 
 impl RemoveV1<'_, '_> {
     /// Возвращает удаляемый клиентский выходной слот.
-    pub const fn output_slot(self) -> OutputSlotIdV1 {
+    pub(crate) const fn output_slot(self) -> OutputSlotIdV1 {
         self.output_slot
     }
 }
@@ -2362,7 +2372,7 @@ impl RemoveV1<'_, '_> {
 /// slot/source/opacity — только данные: runtime обязан перепроверить живую
 /// пару непосредственно перед одним атомарным sink commit.
 #[derive(Clone, Copy)]
-pub enum OperationV1<'owner, 'session> {
+pub(crate) enum OperationV1<'owner, 'session> {
     /// Установить сертифицированный результат.
     Set(SetV1<'owner, 'session>),
     /// Удалить результат, когда текущий контекст не сертифицирован.
@@ -2503,7 +2513,7 @@ impl FusedIterator for OperationsV1<'_, '_> {}
 
 /// Закрытая классификация ошибки создания Session.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum InstantiateErrorKindV1 {
+pub(crate) enum InstantiateErrorKindV1 {
     /// Для создания Session недостаточно ресурсов.
     ResourceExhausted,
     /// Нарушен внутренний инвариант скомпилированной Program.
@@ -2512,7 +2522,7 @@ pub enum InstantiateErrorKindV1 {
 
 /// Непрозрачная ошибка создания Session.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstantiateErrorV1 {
+pub(crate) struct InstantiateErrorV1 {
     kind: InstantiateErrorKindV1,
 }
 
@@ -2534,7 +2544,7 @@ impl InstantiateErrorV1 {
     }
 
     /// Возвращает стабильный класс ошибки.
-    pub const fn kind(self) -> InstantiateErrorKindV1 {
+    pub(crate) const fn kind(self) -> InstantiateErrorKindV1 {
         self.kind
     }
 }
@@ -2547,7 +2557,7 @@ impl From<InstantiateErrorKindV1> for InstantiateErrorV1 {
 
 /// Закрытая классификация ошибки одного атомарного update.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum UpdateErrorKindV1 {
+pub(crate) enum UpdateErrorKindV1 {
     /// Session принадлежит другой точной owner-эпохе.
     OwnerMismatch,
     /// Наблюдение нарушает скомпилированную schema.
@@ -2566,7 +2576,7 @@ pub enum UpdateErrorKindV1 {
 
 /// Фаза update, в которой закончился ограниченный ресурс.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum UpdatePhaseV1 {
+pub(crate) enum UpdatePhaseV1 {
     /// Admission и канонизация физического наблюдения.
     ObservationAdmission,
     /// Вычисление, поиск и финальная перепроверка Program.
@@ -2575,7 +2585,7 @@ pub enum UpdatePhaseV1 {
 
 /// Точный отказ зарегистрированного evaluator-а.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum EvaluatorFailureV1 {
+pub(crate) enum EvaluatorFailureV1 {
     /// Отказ зарегистрированного WCAG 2.2 evaluator-а.
     Wcag22Srgb8 {
         /// Версия evaluator-а и его численного доказательства.
@@ -2587,7 +2597,7 @@ pub enum EvaluatorFailureV1 {
 
 /// Точная причина расхождения observation со скомпилированным binding.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ObservationBindingFailureV1 {
+pub(crate) enum ObservationBindingFailureV1 {
     /// Скомпилированная schema не содержит ни одного входного порта.
     EmptyCompiledSurfaceInputSchema,
     /// Один входной порт повторён в скомпилированной schema.
@@ -2638,7 +2648,7 @@ pub enum ObservationBindingFailureV1 {
 
 /// Зарегистрированная identity XYZ-frame в диагностике закрытого Core.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ColorimetricFrameV1 {
+pub(crate) enum ColorimetricFrameV1 {
     /// CIE 1931 2°, IEC 61966-2-1 D65, относительная шкала `Y=1`, XYZ v1.
     Iec61966Srgb8D65XyzRelativeY1V1,
     /// Зарезервированный frame hostile-теста, недостижимый в production.
@@ -2648,7 +2658,7 @@ pub enum ColorimetricFrameV1 {
 
 /// Компонент XYZ в точной диагностике.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TristimulusComponentV1 {
+pub(crate) enum TristimulusComponentV1 {
     /// Компонент X.
     X,
     /// Компонент Y.
@@ -2659,7 +2669,7 @@ pub enum TristimulusComponentV1 {
 
 /// Точная конечная XYZ-точка и её зарегистрированный frame.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct TristimulusSampleV1 {
+pub(crate) struct TristimulusSampleV1 {
     /// Биты IEEE-754 сохраняют точный диагностический payload и отделяют
     /// равенство записи от семантики сравнения floating-point.
     xyz_bits: [u64; 3],
@@ -2675,19 +2685,19 @@ impl TristimulusSampleV1 {
     }
 
     /// Возвращает точные конечные XYZ-компоненты.
-    pub fn xyz(self) -> [f64; 3] {
+    pub(crate) fn xyz(self) -> [f64; 3] {
         self.xyz_bits.map(f64::from_bits)
     }
 
     /// Возвращает зарегистрированный frame точки.
-    pub const fn frame(self) -> ColorimetricFrameV1 {
+    pub(crate) const fn frame(self) -> ColorimetricFrameV1 {
         self.frame
     }
 }
 
 /// Точная причина, по которой Core не сформировал modeled LCS occurrence.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ModeledOccurrenceFailureV1 {
+pub(crate) enum ModeledOccurrenceFailureV1 {
     /// Детерминированное преобразование получило недопустимую XYZ-компоненту.
     Tristimulus {
         /// Ошибочная компонента.
@@ -2731,7 +2741,7 @@ pub enum ModeledOccurrenceFailureV1 {
     clippy::enum_variant_names,
     reason = "the variant name preserves evaluator provenance as this closed family grows"
 )]
-pub enum EvaluatorProtocolFailureV1 {
+pub(crate) enum EvaluatorProtocolFailureV1 {
     /// WCAG evaluator вернул kernel-ошибку, недостижимую для typed Program.
     Wcag22Kernel {
         /// Версия evaluator-а и его численного доказательства.
@@ -2757,7 +2767,7 @@ pub enum EvaluatorProtocolFailureV1 {
 
 /// Машиночитаемая identity нарушенного внутреннего контракта.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum UpdateInvariantV1 {
+pub(crate) enum UpdateInvariantV1 {
     /// Заимствованный matching Owner не удержал свою эпоху живой.
     OwnerAuthority,
     /// Каноническая observation schema разошлась со скомпилированным binding.
@@ -2783,7 +2793,7 @@ pub enum UpdateInvariantV1 {
 /// Эти варианты недостижимы через типизированный boundary input. Payload нужен
 /// для детерминированной диагностики и не превращает breach в цветовой verdict.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum UpdateInvariantFailureV1 {
+pub(crate) enum UpdateInvariantFailureV1 {
     /// Заимствованный matching Owner не удержал свою эпоху живой.
     OwnerAuthority,
     /// Каноническая observation schema разошлась со скомпилированным binding.
@@ -2860,7 +2870,7 @@ pub enum UpdateInvariantFailureV1 {
 
 impl UpdateInvariantFailureV1 {
     /// Возвращает стабильную identity нарушенного контракта.
-    pub const fn contract(&self) -> UpdateInvariantV1 {
+    pub(crate) const fn contract(&self) -> UpdateInvariantV1 {
         match self {
             Self::OwnerAuthority => UpdateInvariantV1::OwnerAuthority,
             Self::ObservationBinding { .. } => UpdateInvariantV1::ObservationBinding,
@@ -2883,7 +2893,7 @@ impl UpdateInvariantFailureV1 {
 /// неизменными. [`UpdateErrorKindV1`] — только удобная производная проекция:
 /// авторитетные IDs и факты отказа находятся в этом enum.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum UpdateErrorV1 {
+pub(crate) enum UpdateErrorV1 {
     /// Session создана другой точной owner-эпохой.
     OwnerMismatch,
     /// Наблюдение не содержит ни одного физического сценария.
@@ -2941,7 +2951,7 @@ pub enum UpdateErrorV1 {
 
 impl UpdateErrorV1 {
     /// Возвращает стабильный класс ошибки без потери её payload.
-    pub const fn kind(&self) -> UpdateErrorKindV1 {
+    pub(crate) const fn kind(&self) -> UpdateErrorKindV1 {
         match self {
             Self::OwnerMismatch => UpdateErrorKindV1::OwnerMismatch,
             Self::EmptyScenarioSet

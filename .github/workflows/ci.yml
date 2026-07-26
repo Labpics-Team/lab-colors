@@ -161,6 +161,10 @@ jobs:
         # reference from merging silently (main was green with ~81 broken links
         # because cargo doc was never gated — #26).
         run: RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --locked
+      - name: staged Program is absent from the resolved public API
+        run: |
+          python3 scripts/test_program_public_surface.py
+          python3 scripts/verify_program_public_surface.py target/doc/labcolors_core
       - name: package labcolors-core and run extracted package doctests
         run: |
           set -euo pipefail

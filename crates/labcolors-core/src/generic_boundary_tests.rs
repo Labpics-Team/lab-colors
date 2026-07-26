@@ -193,23 +193,12 @@ fn staged_program_module_is_private_module_qualified_and_transport_neutral() {
             .any(|line| line.trim() == "pub mod program;"),
         "the incomplete Program candidate must not become externally reachable",
     );
-
-    for introducer in ["pub use ", "pub type "] {
-        let mut remaining = LIB_SOURCE;
-        while let Some(start) = remaining.find(introducer) {
-            let statement = &remaining[start
-                ..start
-                    + remaining[start..]
-                        .find(';')
-                        .expect("root public declaration must terminate")
-                    + 1];
-            assert!(
-                !contains_rust_identifier(statement, "program"),
-                "Program types must stay private and module-qualified; found root alias `{statement}`",
-            );
-            remaining = &remaining[start + statement.len()..];
-        }
-    }
+    assert!(
+        PROGRAM_SOURCE
+            .lines()
+            .any(|line| line.trim() == "#![forbid(unreachable_pub)]"),
+        "rustc must reject accidentally over-visible items inside the staged module",
+    );
 
     let source_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src");
     assert!(
@@ -246,10 +235,10 @@ fn staged_program_draft_wraps_the_single_canonical_core_graph() {
     assert_eq!(
         normalized_source_scope(
             PROGRAM_SOURCE,
-            "pub struct DraftV1 {",
+            "pub(crate) struct DraftV1 {",
             "/// Ошибка изменения Draft до компиляции.",
         ),
-        "pub struct DraftV1 { inner: CoreProgramDraftV1, }",
+        "pub(crate) struct DraftV1 { inner: CoreProgramDraftV1, }",
         "the staged seam must forward actual IR nodes into the sole Core draft",
     );
     assert_eq!(
@@ -279,9 +268,9 @@ fn staged_program_draft_wraps_the_single_canonical_core_graph() {
         "ObservationGroupIdV1",
         "OpacityIdV1",
         "SurfaceInputIdV1",
-        "pub fn push_opacity(",
-        "pub fn push_surface_input(",
-        "pub fn surface_input_slots(",
+        "push_opacity(",
+        "push_surface_input(",
+        "surface_input_slots(",
     ] {
         assert!(
             !PROGRAM_SOURCE.contains(forbidden),
@@ -293,9 +282,13 @@ fn staged_program_draft_wraps_the_single_canonical_core_graph() {
 #[test]
 fn staged_session_keeps_evidence_but_owner_alone_grants_updates_and_operations() {
     assert_eq!(
-        normalized_source_scope(PROGRAM_SOURCE, "pub struct SessionV1 {", "impl SessionV1",),
+        normalized_source_scope(
+            PROGRAM_SOURCE,
+            "pub(crate) struct SessionV1 {",
+            "impl SessionV1",
+        ),
         concat!(
-            "pub struct SessionV1 { ",
+            "pub(crate) struct SessionV1 { ",
             "scenario_order_scratch: Vec<usize>, ",
             "session: CoreProgramSessionV1, ",
             "}",
@@ -309,21 +302,21 @@ fn staged_session_keeps_evidence_but_owner_alone_grants_updates_and_operations()
         "struct ScenarioSourceV1",
     );
     assert_eq!(
-        session_api.matches("pub fn evidence(").count(),
+        session_api.matches("pub(crate) fn evidence(").count(),
         1,
         "historical evidence is the Session's sole boundary projection",
     );
     assert_eq!(
-        session_api.matches("pub ").count(),
+        session_api.matches("pub(crate) ").count(),
         1,
         "Session must not expose a second authority by changing function qualifiers",
     );
     for forbidden in [
-        "pub fn state(",
-        "pub fn update(",
-        "pub fn surface_input_port_count(",
-        "pub fn surface_input_ports(",
-        "pub fn output_slots(",
+        "fn state(",
+        "fn update(",
+        "fn surface_input_port_count(",
+        "fn surface_input_ports(",
+        "fn output_slots(",
     ] {
         assert!(
             !session_api.contains(forbidden),
@@ -337,10 +330,10 @@ fn staged_session_keeps_evidence_but_owner_alone_grants_updates_and_operations()
         "struct BorrowScopeV1<'owner, 'session>",
     );
     for forbidden in [
-        "pub fn revision(",
-        "pub const fn revision(",
-        "pub fn stream(",
-        "pub const fn stream(",
+        "fn revision(",
+        "const fn revision(",
+        "fn stream(",
+        "const fn stream(",
     ] {
         assert!(
             !evidence_api.contains(forbidden),
@@ -351,11 +344,11 @@ fn staged_session_keeps_evidence_but_owner_alone_grants_updates_and_operations()
     let owner_api = source_scope(
         PROGRAM_SOURCE,
         "impl OwnerV1 {",
-        "pub struct ScenarioV1<'a> {",
+        "pub(crate) struct ScenarioV1<'a> {",
     );
     for required in [
-        "pub fn project<'owner, 'session>(",
-        "pub fn update<'owner, 'session>(",
+        "pub(crate) fn project<'owner, 'session>(",
+        "pub(crate) fn update<'owner, 'session>(",
         ".owns_session(&session.session)",
     ] {
         assert!(
@@ -365,8 +358,8 @@ fn staged_session_keeps_evidence_but_owner_alone_grants_updates_and_operations()
     }
     let update = source_scope(
         owner_api,
-        "pub fn update<'owner, 'session>(",
-        "pub fn instantiate(",
+        "pub(crate) fn update<'owner, 'session>(",
+        "pub(crate) fn instantiate(",
     );
     assert!(
         update
@@ -378,8 +371,11 @@ fn staged_session_keeps_evidence_but_owner_alone_grants_updates_and_operations()
         "owner mismatch must be rejected before admission, allocation, or evaluation",
     );
 
-    let staged_access_errors =
-        source_scope(PROGRAM_SOURCE, "pub enum AccessErrorV1 {", "impl OwnerV1");
+    let staged_access_errors = source_scope(
+        PROGRAM_SOURCE,
+        "pub(crate) enum AccessErrorV1 {",
+        "impl OwnerV1",
+    );
     assert!(
         staged_access_errors.contains("OwnerMismatch,")
             && !staged_access_errors.contains("OwnerExpired"),
@@ -387,8 +383,8 @@ fn staged_session_keeps_evidence_but_owner_alone_grants_updates_and_operations()
     );
     let staged_update_errors = source_scope(
         PROGRAM_SOURCE,
-        "pub enum UpdateErrorKindV1 {",
-        "pub enum UpdateErrorV1 {",
+        "pub(crate) enum UpdateErrorKindV1 {",
+        "pub(crate) enum UpdateErrorV1 {",
     );
     assert!(
         staged_update_errors.contains("OwnerMismatch,")
@@ -396,8 +392,8 @@ fn staged_session_keeps_evidence_but_owner_alone_grants_updates_and_operations()
         "owner expiry is an internal invariant after a matching owner borrow",
     );
     assert!(
-        PROGRAM_SOURCE.contains("pub enum UpdateErrorV1 {")
-            && !PROGRAM_SOURCE.contains("pub struct UpdateErrorV1 {")
+        PROGRAM_SOURCE.contains("pub(crate) enum UpdateErrorV1 {")
+            && !PROGRAM_SOURCE.contains("pub(crate) struct UpdateErrorV1 {")
             && PROGRAM_SOURCE
                 .contains("fn map_observation_error(error: ObservationError) -> UpdateErrorV1",)
             && PROGRAM_SOURCE
@@ -407,11 +403,11 @@ fn staged_session_keeps_evidence_but_owner_alone_grants_updates_and_operations()
 
     for (payload, end) in [
         (
-            "pub struct SetV1<'owner, 'session> {",
+            "pub(crate) struct SetV1<'owner, 'session> {",
             "impl<'session> SetV1<'_, 'session>",
         ),
         (
-            "pub struct RemoveV1<'owner, 'session> {",
+            "pub(crate) struct RemoveV1<'owner, 'session> {",
             "impl RemoveV1<'_, '_>",
         ),
     ] {
@@ -1107,7 +1103,7 @@ fn existing_encoded_evaluators_delegate_program_targets_without_parallel_formula
 }
 
 #[test]
-fn private_program_and_lcs_occurrence_types_are_not_publicly_exported() {
+fn staged_program_and_lcs_occurrence_modules_remain_private() {
     for required in [
         "pub(crate) mod lcs_occurrence;",
         "pub(crate) mod program;",
@@ -1122,16 +1118,10 @@ fn private_program_and_lcs_occurrence_types_are_not_publicly_exported() {
         "pub mod lcs_occurrence;",
         "pub mod program;",
         "pub mod program_session;",
-        "pub use lcs_occurrence::",
-        "pub use crate::lcs_occurrence::",
-        "pub use program::",
-        "pub use crate::program::",
-        "pub use program_session::",
-        "pub use crate::program_session::",
     ] {
         assert!(
             !LIB_SOURCE.contains(forbidden),
-            "lib.rs must not expose private Program/LCS occurrence surface `{forbidden}`",
+            "lib.rs must not publish a staged private module `{forbidden}`",
         );
     }
 }
