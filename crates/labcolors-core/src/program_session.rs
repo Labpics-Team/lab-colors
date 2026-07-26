@@ -1038,6 +1038,28 @@ impl ProgramEvaluationPhaseV1 {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct CompiledConstraintPhasesV1 {
+    hard: bool,
+    report_only: bool,
+}
+
+impl CompiledConstraintPhasesV1 {
+    fn from_authored<Invocation>(constraints: &ConstraintSet<Invocation>) -> Self {
+        Self {
+            hard: !constraints.hard.is_empty(),
+            report_only: !constraints.report_only.is_empty(),
+        }
+    }
+
+    const fn contains(self, phase: ProgramEvaluationPhaseV1) -> bool {
+        match phase {
+            ProgramEvaluationPhaseV1::Hard => self.hard,
+            ProgramEvaluationPhaseV1::ReportOnly => self.report_only,
+        }
+    }
+}
+
 struct CompiledPointConstraint<Invocation> {
     id: ConstraintId,
     target_id: OccurrenceId,
@@ -1087,6 +1109,7 @@ where
     observation_group: CompiledObservationGroupV1,
     occurrence_contexts: Box<[CompiledOccurrenceContextV1]>,
     constraints: Box<[CompiledPointConstraint<ProgramConstraintInvocationOf<Evaluation>>]>,
+    constraint_phases: CompiledConstraintPhasesV1,
     outputs: Box<[CompiledOutputBinding]>,
     finite_targets: Box<[CompiledFiniteTargetV1]>,
     joint_selection: Option<CompiledJointSelectionV1>,
@@ -1501,9 +1524,8 @@ where
         // the exhaustive-cell multiplier remains the multiplicative identity.
         .unwrap_or(1);
     let can_conflict = epoch
-        .constraints
-        .iter()
-        .any(|constraint| constraint.mode.rejects_candidate());
+        .constraint_phases
+        .contains(ProgramEvaluationPhaseV1::Hard);
     checked_program_evaluation_cell_counts(
         physical_case_count,
         epoch.constraints.len(),
@@ -1754,6 +1776,9 @@ where
                     return Ok(SessionDecision::Verified(verified));
                 }
                 SessionDecision::Violation(_) => {
+                    // A selected finite state converts every fresh hard failure
+                    // into FinalRecheckViolation inside collect_*. Reaching a
+                    // plain Violation here means that contract was broken.
                     return Err(ProgramSessionEvaluationError::InternalInvariant);
                 }
             }
@@ -1775,9 +1800,8 @@ where
         }
     }
     if epoch
-        .constraints
-        .iter()
-        .any(|constraint| ProgramEvaluationPhaseV1::ReportOnly.includes(constraint.mode))
+        .constraint_phases
+        .contains(ProgramEvaluationPhaseV1::ReportOnly)
     {
         for (state_index, tuple) in selection.order.tuples().enumerate() {
             apply_joint_candidate(plan, &epoch.finite_targets, tuple)?;
@@ -1859,13 +1883,11 @@ where
     }
     let candidate_state_index = selected_state_index.unwrap_or(0);
     let has_hard_constraints = epoch
-        .constraints
-        .iter()
-        .any(|constraint| ProgramEvaluationPhaseV1::Hard.includes(constraint.mode));
+        .constraint_phases
+        .contains(ProgramEvaluationPhaseV1::Hard);
     let has_report_constraints = epoch
-        .constraints
-        .iter()
-        .any(|constraint| ProgramEvaluationPhaseV1::ReportOnly.includes(constraint.mode));
+        .constraint_phases
+        .contains(ProgramEvaluationPhaseV1::ReportOnly);
     let has_hard_violation = if has_hard_constraints {
         scan_program_candidate(
             plan,
@@ -1882,14 +1904,13 @@ where
     if let Some(state_index) = selected_state_index.filter(|_| has_hard_violation) {
         // Search only nominates a finite state. Its fresh hard recheck owns the
         // terminal verdict, so diagnostics cannot mask or mutate that failure.
-        let first = cells
+        let mut violations = cells
             .iter()
-            .find(|cell| cell.is_hard() && cell.result().is_violation())
+            .filter(|cell| cell.is_hard() && cell.result().is_violation());
+        let first = violations
+            .next()
             .ok_or(ProgramSessionEvaluationError::InternalInvariant)?;
-        let hard_violation_count = cells
-            .iter()
-            .filter(|cell| cell.is_hard() && cell.result().is_violation())
-            .count();
+        let hard_violation_count = 1 + violations.count();
         return Err(ProgramSessionEvaluationError::FinalRecheckViolation {
             state_index,
             case_index: first.case_index,
@@ -2199,6 +2220,7 @@ where
     let all_occurrence_contexts = compile_occurrence_contexts(&graph, &program.occurrences)?;
     let mut constraints =
         compile_constraints::<Evaluation>(&graph, &all_occurrence_contexts, &program.constraints)?;
+    let constraint_phases = CompiledConstraintPhasesV1::from_authored(&program.constraints);
     let occurrence_contexts =
         compact_constraint_contexts(&all_occurrence_contexts, &mut constraints)?;
     let outputs = compile_outputs(&graph, &mut program.outputs)?;
@@ -2214,6 +2236,7 @@ where
         },
         occurrence_contexts,
         constraints,
+        constraint_phases,
         outputs,
         finite_targets,
         joint_selection,

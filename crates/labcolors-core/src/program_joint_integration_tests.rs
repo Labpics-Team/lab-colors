@@ -48,6 +48,8 @@ const UPPER_OUTPUT: OutputSlotId = OutputSlotId::new(85);
 const UPPER_TARGET: TargetId = TargetId::new(86);
 const UPPER_FIRST: TargetCandidateId = TargetCandidateId::new(87);
 const UPPER_SECOND: TargetCandidateId = TargetCandidateId::new(88);
+const HARD_INVOCATION: Srgb8 = Srgb8::new([0xDD; 3]);
+const DIAGNOSTIC_INVOCATION: Srgb8 = Srgb8::new([0xEE; 3]);
 
 /// A premature report invocation becomes an evaluator error, so this hostile
 /// test double detects diagnostic authority leakage instead of merely counting
@@ -105,6 +107,8 @@ impl ProgramConstraintEvaluatorSetV1 for ReportSelectionIsolationEvaluatorSetV1 
         let visible = Srgb8::new(point.target().encoded().visible());
         self.control.calls.borrow_mut().push(visible);
         if invocation == self.control.report_invocation {
+            // The selected state must complete its search hit and fresh hard
+            // recheck before the report-only phase may execute.
             if self.control.selected_non_report_calls.get() < 2 {
                 return Err(ProgramPointAssessmentErrorV1::Evaluator(
                     ApplicableWcag22EvaluationErrorV1::CriterionMismatch {
@@ -179,7 +183,7 @@ impl ProgramConstraintEvaluatorSetV1 for CrossStateDiagnosticPoisonEvaluatorSetV
         ProgramPointAssessmentErrorV1<Self::Error>,
     > {
         let binding = point.binding();
-        if invocation == Srgb8::new([0xEE; 3]) {
+        if invocation == DIAGNOSTIC_INVOCATION {
             if self.control.first_report_after_hard_calls.get().is_none() {
                 self.control
                     .first_report_after_hard_calls
@@ -253,7 +257,7 @@ impl ProgramConstraintEvaluatorSetV1 for FinalViolationDiagnosticErrorEvaluatorS
         HardDecision<Self::PassEvidence, Self::ViolationEvidence>,
         ProgramPointAssessmentErrorV1<Self::Error>,
     > {
-        if invocation == Srgb8::new([0xEE; 3]) {
+        if invocation == DIAGNOSTIC_INVOCATION {
             self.control
                 .diagnostic_calls
                 .set(self.control.diagnostic_calls.get() + 1);
@@ -361,8 +365,8 @@ where
 }
 
 fn program(
-    hard: Vec<ConstraintInvocation<Wcag22CriterionV1, crate::program_session::HardModeV1>>,
-    report_only: Vec<ConstraintInvocation<Wcag22CriterionV1, crate::program_session::ReportModeV1>>,
+    hard: Vec<ConstraintInvocation<Wcag22CriterionV1, HardModeV1>>,
+    report_only: Vec<ConstraintInvocation<Wcag22CriterionV1, ReportModeV1>>,
     candidates: Vec<TargetCandidateV1>,
     order: Vec<JointCandidateStateV1>,
 ) -> Program<Wcag22Srgb8V1> {
@@ -1311,6 +1315,56 @@ fn fixed_program_without_finite_targets_executes_one_complete_evidence_pass() {
 }
 
 #[test]
+fn fixed_hard_conflict_still_collects_report_only_evidence() {
+    let evaluator = CountingProgramWcag22Srgb8V1::default();
+    let calls = evaluator.clone();
+    let report = ConstraintId::new(1);
+    let hard = ConstraintId::new(2);
+    let compiled = point_program(
+        signal(0xAA),
+        Target::fixed(TARGET, SOURCE),
+        vec![ConstraintInvocation::hard(
+            hard,
+            OCCURRENCE,
+            Wcag22CriterionV1::Sc143TextLargeScale,
+        )],
+        vec![ConstraintInvocation::report_only(
+            report,
+            OCCURRENCE,
+            Wcag22CriterionV1::Sc143TextDefault,
+        )],
+        evaluator,
+    )
+    .compile()
+    .unwrap();
+    let mut session = compiled.instantiate(STREAM).unwrap();
+
+    let SessionState::Failed { cause, previous } = session.update(update(1, 0xFF)).unwrap() else {
+        panic!("a fixed hard conflict must retain its complete diagnostic report");
+    };
+    assert!(previous.is_none());
+    assert_eq!(cause.considered_state_count(), 1);
+    assert_eq!(
+        cause
+            .report()
+            .cells()
+            .iter()
+            .map(|cell| (
+                cell.constraint(),
+                cell.is_hard(),
+                cell.result().is_violation(),
+            ))
+            .collect::<Vec<_>>(),
+        vec![(report, false, true), (hard, true, true)],
+    );
+    assert_eq!(
+        calls.calls(),
+        vec![Srgb8::new([0xAA; 3]), Srgb8::new([0xAA; 3])],
+        "fixed evidence executes the hard phase before report-only diagnostics",
+    );
+}
+
+#[test]
 fn exhaustive_conflict_freezes_every_state_case_hard_cell_before_any_diagnostic() {
     let evaluator = CrossStateDiagnosticPoisonEvaluatorSetV1::default();
     let probe = evaluator.clone();
@@ -1322,12 +1376,12 @@ fn exhaustive_conflict_freezes_every_state_case_hard_cell_before_any_diagnostic(
         vec![ConstraintInvocation::hard(
             hard,
             OCCURRENCE,
-            Srgb8::new([0xDD; 3]),
+            HARD_INVOCATION,
         )],
         vec![ConstraintInvocation::report_only(
             report,
             OCCURRENCE,
-            Srgb8::new([0xEE; 3]),
+            DIAGNOSTIC_INVOCATION,
         )],
         evaluator,
     )
@@ -1710,12 +1764,12 @@ fn diagnostic_error_cannot_mask_a_selected_state_final_recheck_violation() {
         vec![ConstraintInvocation::hard(
             hard,
             OCCURRENCE,
-            Srgb8::new([0xDD; 3]),
+            HARD_INVOCATION,
         )],
         vec![ConstraintInvocation::report_only(
             ConstraintId::new(2),
             OCCURRENCE,
-            Srgb8::new([0xEE; 3]),
+            DIAGNOSTIC_INVOCATION,
         )],
         evaluator,
     )
