@@ -18,9 +18,12 @@
 //! |---|---|
 //! | `Waiting` | нет |
 //! | `Ready` | `Set` для каждого выхода |
-//! | `Stale` | `Hold` последнего доказанного результата |
-//! | `Failed` с прошлым результатом | `Hold` |
-//! | `Failed` без прошлого результата | `Remove` |
+//! | `Stale` | `Remove` для каждого выхода |
+//! | `Failed` | `Remove` для каждого выхода |
+//!
+//! Прошлый Verified-сертификат остаётся в evidence для диагностики, но не
+//! разрешает эмиссию: он относится к прошлому наблюдению, а не к текущему
+//! неизвестному или нарушающему контексту.
 //!
 //! [`CertificateV1::Verified`] хранит выбранное состояние, все клетки
 //! доказательства и сертифицированные выходы. [`CertificateV1::Conflict`]
@@ -1509,7 +1512,7 @@ pub enum StateKindV1 {
     Waiting,
     /// Текущая ревизия сертифицирована.
     Ready,
-    /// Новое наблюдение недоступно, сохранён прошлый сертификат.
+    /// Новое наблюдение недоступно; прошлый сертификат сохранён для диагностики.
     Stale,
     /// Текущая ревизия имеет исчерпывающий конфликт.
     Failed,
@@ -1653,20 +1656,7 @@ impl<'owner, 'session> ProjectionV1<'owner, 'session> {
                     scope: self.scope,
                 }
             }
-            SessionState::Stale { previous } => OperationSourceV1::Hold {
-                outputs: previous.outputs().iter(),
-                certificate: VerifiedCertificateV1 { inner: previous },
-                scope: self.scope,
-            },
-            SessionState::Failed {
-                previous: Some(previous),
-                ..
-            } => OperationSourceV1::Hold {
-                outputs: previous.outputs().iter(),
-                certificate: VerifiedCertificateV1 { inner: previous },
-                scope: self.scope,
-            },
-            SessionState::Failed { previous: None, .. } => OperationSourceV1::Remove {
+            SessionState::Stale { .. } | SessionState::Failed { .. } => OperationSourceV1::Remove {
                 slots: OwnerOutputSlotsV1::new(&self.owner.compiled),
                 scope: self.scope,
             },
@@ -2350,7 +2340,7 @@ impl<'session> SetV1<'_, 'session> {
     }
 }
 
-/// Операция удаления результата без допустимого предыдущего значения.
+/// Операция удаления результата без сертификата для текущего контекста.
 #[derive(Clone, Copy)]
 pub struct RemoveV1<'owner, 'session> {
     output_slot: OutputSlotIdV1,
@@ -2361,26 +2351,6 @@ impl RemoveV1<'_, '_> {
     /// Возвращает удаляемый клиентский выходной слот.
     pub const fn output_slot(self) -> OutputSlotIdV1 {
         self.output_slot
-    }
-}
-
-/// Операция удержания прошлого результата с его Verified-сертификатом.
-#[derive(Clone, Copy)]
-pub struct HoldV1<'owner, 'session> {
-    output: &'session ProgramOutputV1,
-    certificate: VerifiedCertificateV1<'session>,
-    _scope: BorrowScopeV1<'owner, 'session>,
-}
-
-impl<'session> HoldV1<'_, 'session> {
-    /// Возвращает удерживаемый клиентский выходной слот.
-    pub const fn output_slot(self) -> OutputSlotIdV1 {
-        OutputSlotIdV1::from_core((*self.output).output())
-    }
-
-    /// Возвращает сертификат удерживаемого результата.
-    pub const fn certificate(self) -> VerifiedCertificateV1<'session> {
-        self.certificate
     }
 }
 
@@ -2440,23 +2410,6 @@ impl<'session> HoldV1<'_, 'session> {
 /// }
 /// ```
 ///
-/// ```compile_fail,E0515
-/// use labcolors_core::program::{
-///     HoldV1, OperationV1, OwnerV1,
-///     SessionV1,
-/// };
-///
-/// fn escape_hold<'session>(
-///     owner: OwnerV1,
-///     session: &'session SessionV1,
-/// ) -> HoldV1<'session, 'session> {
-///     match owner.project(session).unwrap().operations().next().unwrap() {
-///         OperationV1::Hold(hold) => hold,
-///         _ => panic!("fixture supplies Hold"),
-///     }
-/// }
-/// ```
-///
 /// ```compile_fail,E0502
 /// use labcolors_core::program::{
 ///     OperationV1, OwnerV1, SessionV1,
@@ -2485,10 +2438,8 @@ impl<'session> HoldV1<'_, 'session> {
 pub enum OperationV1<'owner, 'session> {
     /// Установить сертифицированный результат.
     Set(SetV1<'owner, 'session>),
-    /// Удалить результат, когда допустимого прошлого значения нет.
+    /// Удалить результат, когда текущий контекст не сертифицирован.
     Remove(RemoveV1<'owner, 'session>),
-    /// Удержать последний сертифицированный результат.
-    Hold(HoldV1<'owner, 'session>),
 }
 
 struct CertificatesV1<'a> {
@@ -2575,11 +2526,6 @@ enum OperationSourceV1<'owner, 'session> {
         certificate: VerifiedCertificateV1<'session>,
         scope: BorrowScopeV1<'owner, 'session>,
     },
-    Hold {
-        outputs: slice::Iter<'session, ProgramOutputV1>,
-        certificate: VerifiedCertificateV1<'session>,
-        scope: BorrowScopeV1<'owner, 'session>,
-    },
     Remove {
         slots: OwnerOutputSlotsV1<'owner>,
         scope: BorrowScopeV1<'owner, 'session>,
@@ -2608,15 +2554,6 @@ impl<'owner, 'session> Iterator for OperationsV1<'owner, 'session> {
                     _scope: *scope,
                 }))
             }
-            OperationSourceV1::Hold {
-                outputs,
-                certificate,
-                scope,
-            } => Some(OperationV1::Hold(HoldV1 {
-                output: outputs.next()?,
-                certificate: *certificate,
-                _scope: *scope,
-            })),
             OperationSourceV1::Remove { slots, scope } => Some(OperationV1::Remove(RemoveV1 {
                 output_slot: slots.next()?,
                 _scope: *scope,
@@ -2628,7 +2565,6 @@ impl<'owner, 'session> Iterator for OperationsV1<'owner, 'session> {
         let remaining = match &self.inner {
             OperationSourceV1::Empty => 0,
             OperationSourceV1::Set { outputs, .. } => outputs.len(),
-            OperationSourceV1::Hold { outputs, .. } => outputs.len(),
             OperationSourceV1::Remove { slots, .. } => slots.len(),
         };
         (remaining, Some(remaining))

@@ -411,10 +411,6 @@ fn public_session_keeps_evidence_but_owner_alone_grants_updates_and_operations()
             "pub struct RemoveV1<'owner, 'session> {",
             "impl RemoveV1<'_, '_>",
         ),
-        (
-            "pub struct HoldV1<'owner, 'session> {",
-            "impl<'session> HoldV1<'_, 'session>",
-        ),
     ] {
         assert!(
             source_scope(PROGRAM_SOURCE, payload, end)
@@ -422,6 +418,10 @@ fn public_session_keeps_evidence_but_owner_alone_grants_updates_and_operations()
             "{payload} must retain both owner and immutable Session borrows",
         );
     }
+    assert!(
+        !PROGRAM_SOURCE.contains("HoldV1") && !PROGRAM_SOURCE.contains("OperationV1::Hold"),
+        "past evidence must not become a current emission authority",
+    );
 }
 
 #[test]

@@ -675,12 +675,6 @@ fn consume_public_projection(projection: ProjectionV1<'_, '_>) -> ProjectionProb
                 probe.mix(2);
                 probe.mix(u64::from(remove.output_slot().value()));
             }
-            OperationV1::Hold(hold) => {
-                probe.mix(3);
-                probe.mix(u64::from(hold.output_slot().value()));
-                probe.mix_bytes(hold.certificate().content_identity().as_bytes());
-                probe.mix(hold.certificate().observation().revision());
-            }
         }
     });
     std::hint::black_box(probe)
@@ -1357,7 +1351,7 @@ fn observation_projection_is_invariant_under_every_scenario_permutation_and_keep
 }
 
 #[test]
-fn concrete_program_projects_total_ready_and_stale_operations() {
+fn concrete_program_projects_ready_and_fail_closed_stale_operations() {
     let owner = OwnerV1::from_compiled(finite_program([[0x80; 3], [0; 3]]));
     assert_eq!(owner.surface_input_port_count(), 1);
     assert_eq!(
@@ -1464,28 +1458,20 @@ fn concrete_program_projects_total_ready_and_stale_operations() {
     assert_eq!(certificates.len(), 1);
     assert!(matches!(certificates[0], CertificateV1::Verified(_)));
     assert_eq!(certificates[0].observation().revision(), 1);
-    let mut operations = stale.operations();
-    let Some(OperationV1::Hold(hold)) = operations.next() else {
-        panic!("Stale must emit one Hold operation");
-    };
-    assert_eq!(hold.output_slot(), OutputSlotIdV1::new(OUTPUT.value()));
     assert_eq!(
-        hold.certificate().observation().revision(),
-        certificates[0].observation().revision()
-    );
-    assert_eq!(
-        hold.certificate().content_identity(),
-        certificates[0].content_identity()
-    );
-    assert_eq!(
-        CertificateV1::Verified(hold.certificate()).observation_backing_ptr_for_test(),
+        certificates[0].observation_backing_ptr_for_test(),
         ready_backing
     );
+    let mut operations = stale.operations();
+    let Some(OperationV1::Remove(remove)) = operations.next() else {
+        panic!("Stale must remove an output that lacks current evidence");
+    };
+    assert_eq!(remove.output_slot(), OutputSlotIdV1::new(OUTPUT.value()));
     assert!(operations.next().is_none());
 }
 
 #[test]
-fn concrete_program_distinguishes_failed_remove_from_failed_hold() {
+fn concrete_program_failed_always_removes_but_retains_previous_evidence() {
     let white = [Srgb8::new([0xFF; 3])];
     let black = [Srgb8::new([0; 3])];
     let white_only = [ScenarioV1::new(1, &white)];
@@ -1560,20 +1546,15 @@ fn concrete_program_distinguishes_failed_remove_from_failed_hold() {
             .collect::<Vec<_>>(),
         [("conflict", 2), ("verified", 1)]
     );
-    let mut operations = failed.operations();
-    let Some(OperationV1::Hold(hold)) = operations.next() else {
-        panic!("Failed with previous evidence must emit one Hold operation");
-    };
-    assert_eq!(hold.output_slot(), OutputSlotIdV1::new(OUTPUT.value()));
-    assert_eq!(hold.certificate().observation().revision(), 1);
     assert_eq!(
-        hold.certificate().content_identity(),
-        certificates[1].content_identity()
-    );
-    assert_eq!(
-        CertificateV1::Verified(hold.certificate()).observation_backing_ptr_for_test(),
+        certificates[1].observation_backing_ptr_for_test(),
         previous_backing
     );
+    let mut operations = failed.operations();
+    let Some(OperationV1::Remove(remove)) = operations.next() else {
+        panic!("Failed must remove an output that violates the current context");
+    };
+    assert_eq!(remove.output_slot(), OutputSlotIdV1::new(OUTPUT.value()));
     assert!(operations.next().is_none());
 }
 
@@ -2016,7 +1997,7 @@ fn failed_without_previous_removes_every_output_in_canonical_exact_order() {
 }
 
 #[test]
-fn ready_and_stale_project_every_output_in_the_same_canonical_order() {
+fn ready_sets_and_stale_removes_every_output_in_the_same_canonical_order() {
     let owner = OwnerV1::from_compiled(finite_program_with_outputs(
         [[0x80; 3], [0; 3]],
         vec![
@@ -2062,11 +2043,10 @@ fn ready_and_stale_project_every_output_in_the_same_canonical_order() {
     let mut operations = stale.operations();
     assert_eq!(operations.len(), 2);
     for expected in [OUTPUT, SECOND_OUTPUT] {
-        let Some(OperationV1::Hold(hold)) = operations.next() else {
-            panic!("Stale must hold every previously verified output");
+        let Some(OperationV1::Remove(remove)) = operations.next() else {
+            panic!("Stale must remove every output that lacks current evidence");
         };
-        assert_eq!(hold.output_slot().value(), expected.value());
-        assert_eq!(hold.certificate().observation().revision(), 1);
+        assert_eq!(remove.output_slot().value(), expected.value());
     }
     assert!(operations.next().is_none());
 }

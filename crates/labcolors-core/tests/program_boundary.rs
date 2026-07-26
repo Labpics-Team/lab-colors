@@ -157,10 +157,6 @@ fn assert_projection_is_owner_bound(projection: ProjectionV1<'_, '_>) {
             OperationV1::Remove(remove) => {
                 let _: OutputSlotIdV1 = remove.output_slot();
             }
-            OperationV1::Hold(hold) => {
-                let _: OutputSlotIdV1 = hold.output_slot();
-                let _ = hold.certificate().content_identity();
-            }
         }
     }
     let _ = certificate_count;
@@ -569,6 +565,113 @@ fn every_physical_constructor_and_both_remaining_constraint_modes_execute() {
     assert_eq!(set.source(), Srgb8::new([0; 3]));
     assert_eq!(set.opacity(), 1.0);
     assert_eq!(set.certificate().observation().revision(), 1);
+    assert!(operations.next().is_none());
+}
+
+#[test]
+fn observed_violation_removes_outputs_but_retains_previous_certificate_as_evidence() {
+    let input = SurfaceInputPortIdV1::new(50);
+    let output = OutputSlotIdV1::new(12);
+    let owner = fixed_nested_draft(0.5, SourceIdV1::new(1), input, input)
+        .compile()
+        .unwrap();
+    let mut session = owner.instantiate(13).unwrap();
+
+    let black = [Srgb8::new([0; 3])];
+    let black_scenarios = [ScenarioV1::new(1, &black)];
+    let ready = owner
+        .update(
+            &mut session,
+            UpdateV1::Observed {
+                revision: 1,
+                scenarios: &black_scenarios,
+            },
+        )
+        .unwrap();
+    assert!(matches!(
+        ready.operations().next(),
+        Some(OperationV1::Set(_))
+    ));
+
+    let white = [Srgb8::new([0xFF; 3])];
+    let white_scenarios = [ScenarioV1::new(2, &white)];
+    let failed = owner
+        .update(
+            &mut session,
+            UpdateV1::Observed {
+                revision: 2,
+                scenarios: &white_scenarios,
+            },
+        )
+        .unwrap();
+    assert_eq!(failed.evidence().kind(), StateKindV1::Failed);
+    let certificates = failed.evidence().certificates().collect::<Vec<_>>();
+    assert_eq!(certificates.len(), 2);
+    assert!(matches!(certificates[0], CertificateV1::Conflict(_)));
+    let CertificateV1::Verified(previous) = certificates[1] else {
+        panic!("the previous certificate must remain available as diagnostics");
+    };
+    assert_eq!(previous.observation().revision(), 1);
+
+    let mut operations = failed.operations();
+    let Some(OperationV1::Remove(remove)) = operations.next() else {
+        panic!("a known violation of the current context must remove the old output");
+    };
+    assert_eq!(remove.output_slot(), output);
+    assert!(operations.next().is_none());
+}
+
+#[test]
+fn unknown_context_removes_outputs_but_retains_previous_certificate_as_evidence() {
+    let input = SurfaceInputPortIdV1::new(50);
+    let output = OutputSlotIdV1::new(12);
+    let owner = fixed_nested_draft(0.5, SourceIdV1::new(1), input, input)
+        .compile()
+        .unwrap();
+    let mut session = owner.instantiate(13).unwrap();
+
+    let black = [Srgb8::new([0; 3])];
+    let black_scenarios = [ScenarioV1::new(1, &black)];
+    let ready = owner
+        .update(
+            &mut session,
+            UpdateV1::Observed {
+                revision: 1,
+                scenarios: &black_scenarios,
+            },
+        )
+        .unwrap();
+    assert!(matches!(
+        ready.operations().next(),
+        Some(OperationV1::Set(_))
+    ));
+
+    let stale = owner
+        .update(
+            &mut session,
+            UpdateV1::Unknown {
+                revision: 2,
+                reason_id: 9,
+            },
+        )
+        .unwrap();
+    assert_eq!(stale.evidence().kind(), StateKindV1::Stale);
+    let certificates = stale.evidence().certificates().collect::<Vec<_>>();
+    assert_eq!(certificates.len(), 1);
+    let CertificateV1::Verified(previous) = certificates[0] else {
+        panic!("the previous certificate must remain available as diagnostics");
+    };
+    assert_eq!(previous.observation().revision(), 1);
+    assert!(matches!(
+        stale.evidence().observation_head(),
+        ObservationHeadV1::Unknown { revision: 2, .. }
+    ));
+
+    let mut operations = stale.operations();
+    let Some(OperationV1::Remove(remove)) = operations.next() else {
+        panic!("unknown current context cannot authorize the old output");
+    };
+    assert_eq!(remove.output_slot(), output);
     assert!(operations.next().is_none());
 }
 
