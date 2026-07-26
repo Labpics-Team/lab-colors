@@ -616,6 +616,17 @@ pub enum ModeledLcsOccurrenceFormationErrorV1 {
     },
 }
 
+/// Formula and binding release for one modeled LCS occurrence.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum ModeledLcsOccurrenceReleaseId {
+    V1,
+    #[cfg(test)]
+    MutationSentinelV1,
+}
+
+pub(crate) const MODELED_LCS_OCCURRENCE_RELEASE_V1: ModeledLcsOccurrenceReleaseId =
+    ModeledLcsOccurrenceReleaseId::V1;
+
 /// One replayable modeled signal derivation bound to exactly one immutable
 /// appearance context.
 ///

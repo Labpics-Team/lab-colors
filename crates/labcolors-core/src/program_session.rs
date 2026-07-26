@@ -6,9 +6,10 @@
 //! occurrences, and outputs bind opaque slots back to Paints. The compiled
 //! result owns only admitted, canonical topology; runtime observation,
 //! lifecycle and terminal emission belong to the sole revision-bound Session.
-//! Output transport remains encoded, while every assessed visible occurrence
-//! carries deterministic, context-bound modeled LCS provenance. Neither claim
-//! is renderer observation or human-subject evidence.
+//! Output transport and encoded-only assessments retain exact physical
+//! occurrence evidence plus the declared appearance context. A modeled LCS
+//! occurrence is derived only through its separate typed capability; neither
+//! claim is renderer observation or human-subject evidence.
 
 use std::marker::PhantomData;
 use std::rc::{Rc, Weak};
@@ -24,17 +25,15 @@ use crate::composition::CompositionProfileV1;
 use crate::constraints::{
     Evaluator, ExactSrgb8IdentityV1, HardDecision, ProgramConstraintContentV1,
     ProgramPointAssessmentErrorV1, ProgramPointEvaluatorContentV1, ProgramPointEvaluatorV1,
-    ProgramPointInvocation, ProgramPointTargetV1, ProgramVisiblePointBindingV1,
-    ProgramVisiblePointPassEvidence, ProgramVisiblePointViolationEvidence, Wcag22Srgb8V1,
-    assess_program_point_hard,
+    ProgramPointInvocation, ProgramPointOccurrenceV1, ProgramPointTargetV1,
+    ProgramVisiblePointBindingV1, ProgramVisiblePointPassEvidence,
+    ProgramVisiblePointViolationEvidence, Wcag22Srgb8V1, assess_program_point_hard,
 };
 use crate::joint::{
     AdmittedFiniteJointOrderV1, FiniteDomainOrdinalV1, FiniteJointOrderErrorV1,
     admit_finite_joint_order_v1,
 };
-use crate::lcs_occurrence::{
-    AppearanceContextId, ColorSignal, ModeledLcsOccurrenceFormationErrorV1, ModeledLcsOccurrenceV1,
-};
+use crate::lcs_occurrence::{AppearanceContextId, ColorSignal};
 use crate::observation::{
     CanonicalObservationSchemaV1, ObservationError, ObservationGroupId,
     ObservationSchemaMismatchV1, ObservationStreamId, RevisionBoundObservationV1,
@@ -480,8 +479,7 @@ pub(crate) trait ProgramConstraintEvaluatorSetV1: Sized {
 
     fn assess(
         &self,
-        source: &crate::appearance::ResolvedOccurrence,
-        modeled_lcs: ModeledLcsOccurrenceV1,
+        point: ProgramPointOccurrenceV1,
         invocation: Self::Invocation,
     ) -> ProgramConstraintAssessmentResultV1<Self>;
 
@@ -504,11 +502,10 @@ where
 
     fn assess(
         &self,
-        source: &crate::appearance::ResolvedOccurrence,
-        modeled_lcs: ModeledLcsOccurrenceV1,
+        point: ProgramPointOccurrenceV1,
         invocation: Self::Invocation,
     ) -> ProgramConstraintAssessmentResultV1<Self> {
-        assess_program_point_hard(source, modeled_lcs, self, invocation)
+        assess_program_point_hard(point, self, invocation)
     }
 
     fn pass_binding(evidence: &Self::PassEvidence) -> ProgramVisiblePointBindingV1 {
@@ -528,16 +525,17 @@ where
 thread_local! {
     /// Counts the concrete production evaluator dispatch itself, so certificate
     /// projection cannot accidentally recompute a verdict while still reusing
-    /// the stored physical and modeled witnesses.
+    /// the stored physical witness and declared context.
     pub(crate) static CORE_PROGRAM_ASSESSMENT_CALLS: core::cell::Cell<u64> =
         const { core::cell::Cell::new(0) };
 }
 
 /// Generates the code-owned heterogeneous evaluator set as parallel closed
 /// unions. Each evidence variant retains the concrete evaluator's physical +
-/// LCS binding, identity, release, capability, invocation, measurement, and
-/// classifier payload. Adding a family therefore requires a Core code change
-/// in this single declaration, not a client-extensible semantic registry.
+/// declared-context binding, identity, release, capability, invocation,
+/// measurement, and classifier payload. Adding a family therefore requires a
+/// Core code change in this single declaration, not a client-extensible
+/// semantic registry.
 macro_rules! define_core_program_evaluators_v1 {
     ($(
         $variant:ident {
@@ -577,8 +575,7 @@ macro_rules! define_core_program_evaluators_v1 {
 
             fn assess(
                 &self,
-                source: &crate::appearance::ResolvedOccurrence,
-                modeled_lcs: ModeledLcsOccurrenceV1,
+                point: ProgramPointOccurrenceV1,
                 invocation: Self::Invocation,
             ) -> ProgramConstraintAssessmentResultV1<Self> {
                 #[cfg(test)]
@@ -587,8 +584,7 @@ macro_rules! define_core_program_evaluators_v1 {
                     $(CoreProgramConstraintInvocationV1::$variant(invocation) => {
                         let evaluator: $evaluator = $evaluator_value;
                         match assess_program_point_hard(
-                            source,
-                            modeled_lcs,
+                            point,
                             &evaluator,
                             invocation,
                         ) {
@@ -598,9 +594,6 @@ macro_rules! define_core_program_evaluators_v1 {
                             Ok(HardDecision::Violation(evidence)) => Ok(HardDecision::Violation(
                                 CoreProgramViolationEvidenceV1::$variant(evidence),
                             )),
-                            Err(ProgramPointAssessmentErrorV1::Binding(source)) => {
-                                Err(ProgramPointAssessmentErrorV1::Binding(source))
-                            }
                             Err(ProgramPointAssessmentErrorV1::Evaluator(source)) => Err(
                                 ProgramPointAssessmentErrorV1::Evaluator(
                                     CoreProgramEvaluatorErrorV1::$variant(source),
@@ -1024,7 +1017,7 @@ struct CompiledPointConstraint<Invocation> {
     id: ConstraintId,
     target_id: OccurrenceId,
     target: CompiledOccurrenceSlotV1,
-    modeled_occurrence_index: usize,
+    occurrence_context_index: usize,
     mode: CompiledConstraintModeV1,
     invocation: Invocation,
 }
@@ -1181,18 +1174,12 @@ where
             .graph
             .new_workspace()
             .map_err(map_session_instantiate_error)?;
-        let mut modeled_occurrences = Vec::new();
-        modeled_occurrences
-            .try_reserve_exact(self.owner_generation.occurrence_contexts.len())
-            .map_err(|_| ProgramSessionInstantiateError::ResourceExhausted)?;
-        modeled_occurrences.resize(self.owner_generation.occurrence_contexts.len(), None);
         Ok(Session::new(
             stream,
             ProgramSessionPlan {
                 owner_generation: Rc::downgrade(&self.owner_generation),
                 bindings,
                 workspace,
-                modeled_occurrences,
             },
         ))
     }
@@ -1235,10 +1222,6 @@ where
             Self::Violation(evidence) => Evaluation::violation_binding(evidence),
         }
     }
-
-    fn modeled_lcs_occurrence(&self) -> ModeledLcsOccurrenceV1 {
-        self.binding().modeled_lcs()
-    }
 }
 
 /// One canonical `physical case × constraint` report cell.
@@ -1274,8 +1257,8 @@ where
         self.target
     }
 
-    pub fn modeled_lcs_occurrence(&self) -> ModeledLcsOccurrenceV1 {
-        self.result.modeled_lcs_occurrence()
+    pub fn appearance_context(&self) -> AppearanceContextId {
+        self.result.binding().context()
     }
 
     pub const fn is_hard(&self) -> bool {
@@ -1430,20 +1413,6 @@ pub enum ProgramSessionEvaluationError<EvaluationError> {
         occurrence: OccurrenceId,
         context: AppearanceContextId,
         source: EvaluationError,
-    },
-    ProgramTargetBinding {
-        case_index: usize,
-        constraint: ConstraintId,
-        occurrence: OccurrenceId,
-        context: AppearanceContextId,
-        physical: Srgb8,
-        modeled: Srgb8,
-    },
-    ModeledOccurrence {
-        case_index: usize,
-        occurrence: OccurrenceId,
-        context: AppearanceContextId,
-        source: ModeledLcsOccurrenceFormationErrorV1,
     },
     OutputVariesAcrossCases {
         output: OutputSlotId,
@@ -1671,7 +1640,6 @@ where
     owner_generation: Weak<ProgramEpochV1<Evaluation>>,
     bindings: AdmittedAppearanceBindings,
     workspace: AppearanceWorkspace,
-    modeled_occurrences: Vec<Option<ModeledLcsOccurrenceV1>>,
 }
 
 impl<Evaluation> session_private::PlanSealed for ProgramSessionPlan<Evaluation>
@@ -1930,7 +1898,6 @@ where
             .graph
             .evaluate_admitted_into(&plan.bindings, &mut plan.workspace)
             .map_err(map_program_execution_binding_error)?;
-        plan.modeled_occurrences.fill(None);
 
         for constraint in epoch.constraints.iter() {
             let source = evaluation
@@ -1939,71 +1906,26 @@ where
             if source.visible() != source.certificate().output_rgb() {
                 return Err(ProgramSessionEvaluationError::InternalInvariant);
             }
-            let modeled_lcs_occurrence = match plan
-                .modeled_occurrences
-                .get(constraint.modeled_occurrence_index)
-                .copied()
-                .flatten()
-            {
-                Some(modeled) => modeled,
-                None => {
-                    let binding = epoch
-                        .occurrence_contexts
-                        .get(constraint.modeled_occurrence_index)
-                        .ok_or(ProgramSessionEvaluationError::InternalInvariant)?;
-                    if binding.occurrence != constraint.target_id
-                        || binding.target != constraint.target
-                    {
-                        return Err(ProgramSessionEvaluationError::InternalInvariant);
-                    }
-                    let modeled = ModeledLcsOccurrenceV1::from_signal_in_context(
-                        ColorSignal::from_srgb8(Srgb8::new(source.visible())),
-                        binding.context,
-                    )
-                    .map_err(|source| {
-                        ProgramSessionEvaluationError::ModeledOccurrence {
+            let binding = epoch
+                .occurrence_contexts
+                .get(constraint.occurrence_context_index)
+                .ok_or(ProgramSessionEvaluationError::InternalInvariant)?;
+            if binding.occurrence != constraint.target_id || binding.target != constraint.target {
+                return Err(ProgramSessionEvaluationError::InternalInvariant);
+            }
+            let point = ProgramPointOccurrenceV1::from_resolved(source, binding.context);
+            let decision = Evaluation::assess(&epoch.evaluator, point, constraint.invocation)
+                .map_err(|error| match error {
+                    ProgramPointAssessmentErrorV1::Evaluator(source) => {
+                        ProgramSessionEvaluationError::Evaluator {
                             case_index,
+                            constraint: constraint.id,
                             occurrence: constraint.target_id,
                             context: binding.context,
                             source,
                         }
-                    })?;
-                    let slot = plan
-                        .modeled_occurrences
-                        .get_mut(constraint.modeled_occurrence_index)
-                        .ok_or(ProgramSessionEvaluationError::InternalInvariant)?;
-                    *slot = Some(modeled);
-                    modeled
-                }
-            };
-            let decision = Evaluation::assess(
-                &epoch.evaluator,
-                source,
-                modeled_lcs_occurrence,
-                constraint.invocation,
-            )
-            .map_err(|error| match error {
-                ProgramPointAssessmentErrorV1::Binding(source) => {
-                    debug_assert_ne!(source.physical(), source.modeled());
-                    ProgramSessionEvaluationError::ProgramTargetBinding {
-                        case_index,
-                        constraint: constraint.id,
-                        occurrence: constraint.target_id,
-                        context: modeled_lcs_occurrence.occurrence().context(),
-                        physical: source.physical(),
-                        modeled: source.modeled(),
                     }
-                }
-                ProgramPointAssessmentErrorV1::Evaluator(source) => {
-                    ProgramSessionEvaluationError::Evaluator {
-                        case_index,
-                        constraint: constraint.id,
-                        occurrence: constraint.target_id,
-                        context: modeled_lcs_occurrence.occurrence().context(),
-                        source,
-                    }
-                }
-            })?;
+                })?;
             let result = match decision {
                 HardDecision::Pass(evidence) => ProgramConstraintResultV1::Pass(evidence),
                 HardDecision::Violation(evidence) => {
@@ -2014,7 +1936,7 @@ where
                 }
             };
             debug_assert_eq!(result.binding().physical(), source.visible_point_binding());
-            debug_assert_eq!(result.binding().modeled_lcs(), modeled_lcs_occurrence);
+            debug_assert_eq!(result.binding().context(), binding.context);
             if let Some(cells) = cells.as_deref_mut() {
                 cells.push(ProgramConstraintCellV1 {
                     candidate_state_index,
@@ -2889,17 +2811,17 @@ where
         let target = graph
             .bind_occurrence(constraint.target)
             .ok_or(ProgramCompileError::InternalInvariant)?;
-        let modeled_occurrence_index = occurrence_contexts
+        let occurrence_context_index = occurrence_contexts
             .binary_search_by_key(&constraint.target, |binding| binding.occurrence)
             .map_err(|_| ProgramCompileError::InternalInvariant)?;
-        if occurrence_contexts[modeled_occurrence_index].target != target {
+        if occurrence_contexts[occurrence_context_index].target != target {
             return Err(ProgramCompileError::InternalInvariant);
         }
         compiled.push(CompiledPointConstraint {
             id: constraint.id,
             target_id: constraint.target,
             target,
-            modeled_occurrence_index,
+            occurrence_context_index,
             mode: constraint.mode,
             invocation: constraint.invocation,
         });
@@ -2937,7 +2859,7 @@ fn compact_constraint_contexts<Invocation>(
         if compact[index].target != constraint.target {
             return Err(ProgramCompileError::InternalInvariant);
         }
-        constraint.modeled_occurrence_index = index;
+        constraint.occurrence_context_index = index;
     }
     Ok(compact.into_boxed_slice())
 }

@@ -10,11 +10,11 @@ use crate::program::{
     AppearanceContextErrorKindV1, AppearanceContextFieldV1, AppearanceContextV1, AssessmentV1,
     CertificateV1, CompileErrorHandleV1, CompileErrorKindV1, CompileErrorV1, ConstraintIdV1,
     DraftErrorV1, DraftV1, EvidenceBoundsErrorV1, InstantiateErrorV1, JointChoiceV1,
-    JointOrderErrorV1, JointStateV1, ModeledPointV1, NumericDomainErrorV1, ObservationHeadV1,
-    OccurrenceIdV1, OpacityInputIdV1, OperationV1, OutputSlotIdV1, OwnerV1, PaintIdV1,
-    PhysicalPointV1, ProjectionV1, ScenarioV1, SessionV1, SignalV1, SourceIdV1, StateKindV1,
-    SurfaceIdV1, SurfaceInputPortIdV1, SurroundV1, TargetCandidateIdV1, TargetCandidateV1,
-    TargetIdV1, UpdateErrorKindV1, UpdateErrorV1, UpdateV1, VerdictV1,
+    JointOrderErrorV1, JointStateV1, NumericDomainErrorV1, ObservationHeadV1, OccurrenceIdV1,
+    OpacityInputIdV1, OperationV1, OutputSlotIdV1, OwnerV1, PaintIdV1, PhysicalPointV1,
+    ProjectionV1, ScenarioV1, SessionV1, SignalV1, SourceIdV1, StateKindV1, SurfaceIdV1,
+    SurfaceInputPortIdV1, SurroundV1, TargetCandidateIdV1, TargetCandidateV1, TargetIdV1,
+    UpdateErrorKindV1, UpdateErrorV1, UpdateV1, VerdictV1,
 };
 use crate::wcag22::Wcag22CriterionV1;
 
@@ -114,10 +114,7 @@ fn assert_projection_is_owner_bound(projection: ProjectionV1<'_, '_>) {
                 let _ = physical.opacity();
                 let _: Srgb8 = physical.backdrop();
                 let _: Srgb8 = physical.visible();
-                let ModeledPointV1::Iec61966Srgb8ToCie1931TwoDegreeXyzD65RelativeY1(modeled) =
-                    binding.modeled();
-                let _: [f64; 3] = modeled.xyz();
-                let context = modeled.appearance_context();
+                let context = binding.appearance_context();
                 let _ = context.adapting_luminance_cd_m2();
                 let _ = context.background_luminance_ratio_yb_yw();
                 let _ = context.surround();

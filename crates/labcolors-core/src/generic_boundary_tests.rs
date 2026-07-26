@@ -786,23 +786,46 @@ fn shared_observation_ssot_has_one_backing_without_lifecycle_or_adapter_facades(
 }
 
 #[test]
-fn program_session_owns_context_bound_lcs_evidence_and_one_session_scratch_cache() {
+fn program_session_keeps_physical_evidence_separate_from_lazy_lcs_capability() {
     for required in [
-        "ProgramPointTargetV1",
-        "ModeledLcsOccurrenceV1",
+        "ProgramPointOccurrenceV1::from_resolved(source, binding.context)",
         "AppearanceContextId",
         "ProgramVisiblePointPassEvidence",
         "ProgramVisiblePointViolationEvidence",
-        "ModeledLcsOccurrenceV1::from_signal_in_context(",
         "source.visible() != source.certificate().output_rgb()",
-        "binding.context,",
         "assess_program_point_hard(",
     ] {
         assert!(
             PROGRAM_SESSION_SOURCE.contains(required),
-            "Program must retain physical-source and context-bound LCS evidence; missing `{required}`",
+            "Program must retain physical-source evidence and declared context; missing `{required}`",
         );
     }
+    for forbidden in [
+        "ModeledLcsOccurrenceV1::from_signal_in_context(",
+        "modeled_occurrences: Vec<Option<ModeledLcsOccurrenceV1>>",
+        "ProgramPointAssessmentErrorV1::Binding",
+        "ProgramSessionEvaluationError::ModeledOccurrence",
+    ] {
+        assert!(
+            !PROGRAM_SESSION_SOURCE.contains(forbidden),
+            "encoded Program execution must not restore eager LCS path `{forbidden}`",
+        );
+    }
+
+    let encoded_target = normalized_source_scope(
+        CONSTRAINTS_SOURCE,
+        "pub(crate) struct ProgramPointTargetV1 {",
+        "impl ProgramPointTargetV1",
+    );
+    assert!(
+        encoded_target.contains("encoded: ModeledSrgb8PointOccurrence,"),
+        "encoded target must retain the physical sRGB8 point",
+    );
+    assert!(
+        !encoded_target.contains("ModeledLcsOccurrenceV1")
+            && !encoded_target.contains("AppearanceContextId"),
+        "encoded evaluator target must expose neither a derived LCS view nor appearance context",
+    );
 
     let program_evidence_binding = normalized_source_scope(
         CONSTRAINTS_SOURCE,
@@ -811,11 +834,32 @@ fn program_session_owns_context_bound_lcs_evidence_and_one_session_scratch_cache
     );
     for required in [
         "physical: VisiblePointBindingV1,",
-        "modeled_lcs: ModeledLcsOccurrenceV1,",
+        "context: AppearanceContextId,",
     ] {
         assert!(
             program_evidence_binding.contains(required),
-            "Program evidence must bind source-over and LCS context in one value; missing `{required}`",
+            "base Program evidence must bind source-over and declared context; missing `{required}`",
+        );
+    }
+    assert!(
+        !program_evidence_binding.contains("ModeledLcsOccurrenceV1"),
+        "base Program evidence must not smuggle a derived LCS view",
+    );
+    let projected_binding = source_scope(
+        PROGRAM_SOURCE,
+        "impl<'a> PointBindingV1<'a> {",
+        "/// Закрытое семейство точной физической композиции.",
+    );
+    assert!(projected_binding.contains("appearance_context(self)"));
+    for forbidden in [
+        "modeled(self)",
+        "ModeledPointV1",
+        ".modeled_lcs()",
+        "xyz(self)",
+    ] {
+        assert!(
+            !projected_binding.contains(forbidden),
+            "base projected binding must not restore derived view `{forbidden}`",
         );
     }
 
@@ -824,16 +868,8 @@ fn program_session_owns_context_bound_lcs_evidence_and_one_session_scratch_cache
         "impl<Evaluation> ProgramConstraintResultV1<Evaluation>",
         "/// One canonical `physical case × constraint` report cell.",
     );
-    for required in [
-        "fn binding(&self) -> ProgramVisiblePointBindingV1",
-        "fn modeled_lcs_occurrence(&self) -> ModeledLcsOccurrenceV1",
-        "self.binding().modeled_lcs()",
-    ] {
-        assert!(
-            result.contains(required),
-            "Program result must project modeled LCS from its evidence SSOT; missing `{required}`",
-        );
-    }
+    assert!(result.contains("fn binding(&self) -> ProgramVisiblePointBindingV1"));
+    assert!(!result.contains("modeled_lcs"));
     let cell = source_scope(
         PROGRAM_SESSION_SOURCE,
         "pub struct ProgramConstraintCellV1<Evaluation>",
@@ -888,19 +924,7 @@ fn program_session_owns_context_bound_lcs_evidence_and_one_session_scratch_cache
         1,
         "CompiledProgram must be the one strong owner of its generation",
     );
-    assert_eq!(
-        plan.matches("modeled_occurrences: Vec<Option<ModeledLcsOccurrenceV1>>,")
-            .count(),
-        1,
-        "each Program Session must own exactly one reusable modeled-occurrence scratch cache",
-    );
-    assert_eq!(
-        PROGRAM_SESSION_SOURCE
-            .matches("modeled_occurrences: Vec<Option<ModeledLcsOccurrenceV1>>,")
-            .count(),
-        1,
-        "the modeled-occurrence scratch cache must not be duplicated outside the Session plan",
-    );
+    assert!(!plan.contains("ModeledLcsOccurrenceV1"));
 
     let preparation = normalized_source_scope(
         PROGRAM_SESSION_SOURCE,
@@ -925,7 +949,7 @@ fn program_session_owns_context_bound_lcs_evidence_and_one_session_scratch_cache
     for required in [
         "targets.sort_unstable(); targets.dedup();",
         ".binary_search_by_key(&constraint.target_id, |binding| binding.occurrence)",
-        "constraint.modeled_occurrence_index = index;",
+        "constraint.occurrence_context_index = index;",
     ] {
         assert!(
             compaction.contains(required),
@@ -942,16 +966,93 @@ fn program_session_owns_context_bound_lcs_evidence_and_one_session_scratch_cache
         !hot_evaluation.contains("binary_search"),
         "hot Program evaluation must consume compile-time direct indices without searching",
     );
+    assert!(hot_evaluation.contains(".get(constraint.occurrence_context_index)"));
+
     for required in [
-        "plan.modeled_occurrences.fill(None);",
-        ".get(constraint.modeled_occurrence_index)",
-        ".get_mut(constraint.modeled_occurrence_index)",
+        "pub(crate) struct ProgramLcsPointAdapterV1",
+        "OnceCell<Result<ModeledLcsOccurrenceV1, ModeledLcsOccurrenceFormationErrorV1>>",
+        "pub(crate) struct ProgramLcsPointTargetV1",
+        "pub(crate) struct ProgramLcsVisiblePointBindingV1",
+        "assess_program_lcs_point_hard",
     ] {
         assert!(
-            hot_evaluation.contains(required),
-            "hot Program evaluation must reuse the compact direct-index cache; missing `{required}`",
+            CONSTRAINTS_SOURCE.contains(required),
+            "the explicit lazy LCS capability is incomplete; missing `{required}`",
         );
     }
+    assert!(
+        !CONSTRAINTS_SOURCE.contains("Option<ModeledLcsOccurrenceV1>"),
+        "LCS capability must be a typed adapter, not an optional field state",
+    );
+    let lcs_target_impl = normalized_source_scope(
+        CONSTRAINTS_SOURCE,
+        "impl ProgramLcsPointTargetV1 {",
+        "/// One lazy derived LCS capability",
+    );
+    let lcs_binding_impl = normalized_source_scope(
+        CONSTRAINTS_SOURCE,
+        "impl ProgramLcsVisiblePointBindingV1 {",
+        "type BoundProgramPointMeasurement",
+    );
+    for (surface, source) in [
+        ("LCS target", lcs_target_impl.as_str()),
+        ("LCS evidence", lcs_binding_impl.as_str()),
+    ] {
+        assert!(
+            !source.contains("fn bind("),
+            "{surface} must have no independent bind constructor",
+        );
+    }
+    assert!(
+        !CONSTRAINTS_SOURCE.contains("verify_program_lcs_point_binding"),
+        "byte/context equality cannot certify physical occurrence identity",
+    );
+}
+
+#[test]
+fn program_identity_binds_lcs_releases_only_through_lcs_constraint_content() {
+    let root = normalized_source_scope(
+        PROGRAM_IDENTITY_SOURCE,
+        "fn program_root_color()",
+        "fn write_signal(",
+    );
+    assert!(
+        !root.contains("MODELED_LCS_OCCURRENCE_V1"),
+        "an encoded-only Program must not inherit the modeled-LCS release",
+    );
+
+    let signal = normalized_source_scope(
+        PROGRAM_IDENTITY_SOURCE,
+        "fn write_signal(",
+        "fn source_color(",
+    );
+    assert!(
+        !signal.contains("transform_release")
+            && !signal.contains("IEC_SRGB8_TO_XYZ_D65_TRANSFORM_V1"),
+        "encoded signal identity must not inherit an unused sRGB-to-XYZ transform",
+    );
+
+    let content = normalized_source_scope(
+        CONSTRAINTS_SOURCE,
+        "pub(crate) enum ProgramConstraintContentV1 {",
+        "/// Внутрикрейтное описание generic test seam",
+    );
+    assert!(content.contains("ModeledLcs"));
+    assert!(content.contains("release: ProgramLcsDependencyReleaseV1"));
+    let dependency_release = normalized_source_scope(
+        CONSTRAINTS_SOURCE,
+        "pub(crate) struct ProgramLcsDependencyReleaseV1 {",
+        "impl ProgramLcsDependencyReleaseV1",
+    );
+    assert!(dependency_release.contains("modeled_lcs_release: ModeledLcsOccurrenceReleaseId"));
+    assert!(dependency_release.contains("transform_release: ColorimetricTransformReleaseId"));
+    let constraint_identity = normalized_source_scope(
+        PROGRAM_IDENTITY_SOURCE,
+        "fn constraint_color(",
+        "fn build_graph<",
+    );
+    assert!(constraint_identity.contains("release.modeled_lcs_release()"));
+    assert!(constraint_identity.contains("release.transform_release()"));
 }
 
 #[test]
@@ -1099,6 +1200,17 @@ fn existing_encoded_evaluators_delegate_program_targets_without_parallel_formula
             !implementation.contains(".modeled_lcs()"),
             "{path} encoded evaluator must not silently grow a contextual LCS formula",
         );
+        for forbidden in [
+            "ProgramLcsPointTargetV1",
+            "ProgramLcsPointAdapterV1",
+            "ModeledLcsOccurrenceV1",
+            "ColorSignal",
+        ] {
+            assert!(
+                !contains_rust_identifier(source, forbidden),
+                "{path} encoded evaluator must not acquire LCS capability `{forbidden}`",
+            );
+        }
     }
 }
 

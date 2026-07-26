@@ -17,9 +17,9 @@ use crate::observation::{
 };
 use crate::program::{
     AccessErrorV1, AssessmentV1, CertificateV1, ConflictCellV1, ConstraintModeV1,
-    ExactSrgb8EvidenceV1, ModeledPointV1, ObservationHeadV1, ObservationV1, OperationV1,
-    OutputSlotIdV1, OwnerV1, PhysicalPointV1, ProjectionV1, ScenarioV1, SignalV1, StateKindV1,
-    SurroundV1, UpdateErrorKindV1, UpdateV1, VerdictV1, VerifiedCellV1, Wcag22Srgb8EvidenceV1,
+    ExactSrgb8EvidenceV1, ObservationHeadV1, ObservationV1, OperationV1, OutputSlotIdV1, OwnerV1,
+    PhysicalPointV1, ProjectionV1, ScenarioV1, SignalV1, StateKindV1, SurroundV1,
+    UpdateErrorKindV1, UpdateV1, VerdictV1, VerifiedCellV1, Wcag22Srgb8EvidenceV1,
 };
 use crate::program_session::{
     CORE_PROGRAM_ASSESSMENT_CALLS, CompiledCoreProgramV1, CompositionProfile, ConstraintId,
@@ -284,18 +284,8 @@ fn assert_public_binding_matches_core(
         Srgb8::new(core_occurrence.output_rgb())
     );
 
-    let ModeledPointV1::Iec61966Srgb8ToCie1931TwoDegreeXyzD65RelativeY1(public_modeled) =
-        public.binding().modeled();
-    assert_eq!(
-        public_modeled.xyz().map(f64::to_bits),
-        core.modeled_lcs()
-            .derivation()
-            .sample()
-            .xyz()
-            .map(f64::to_bits)
-    );
-    let public_context = public_modeled.appearance_context();
-    let core_context = core.modeled_lcs().occurrence().context();
+    let public_context = public.binding().appearance_context();
+    let core_context = core.context();
     assert_eq!(
         public_context.adapting_luminance_cd_m2().to_bits(),
         core_context.adapting_luminance_cd_m2().to_bits()
@@ -549,12 +539,7 @@ fn consume_public_assessment(assessment: AssessmentV1<'_>, probe: &mut Projectio
     probe.mix_srgb8(physical.backdrop());
     probe.mix_srgb8(physical.visible());
 
-    let ModeledPointV1::Iec61966Srgb8ToCie1931TwoDegreeXyzD65RelativeY1(modeled) =
-        assessment.binding().modeled();
-    for coordinate in modeled.xyz() {
-        probe.mix(coordinate.to_bits());
-    }
-    let context = modeled.appearance_context();
+    let context = assessment.binding().appearance_context();
     probe.mix(context.adapting_luminance_cd_m2().to_bits());
     probe.mix(context.background_luminance_ratio_yb_yw().to_bits());
     probe.mix(match context.surround() {
@@ -773,10 +758,7 @@ fn one_program_retains_typed_exact_and_wcag22_outcomes() {
         evidence.capability(),
         &ExactIdentityCapabilityV1::FinalOccurrenceSrgb8IdentityV1,
     );
-    assert_eq!(
-        evidence.binding().modeled_lcs(),
-        exact.modeled_lcs_occurrence(),
-    );
+    assert_eq!(evidence.binding().context(), exact.appearance_context());
 
     let ProgramConstraintResultV1::Pass(CoreProgramPassEvidenceV1::Wcag22Srgb8(evidence)) =
         wcag.result()
@@ -784,10 +766,7 @@ fn one_program_retains_typed_exact_and_wcag22_outcomes() {
         panic!("the second cell must retain WCAG22-specific pass evidence");
     };
     assert_eq!(evidence.release(), &wcag22_profile_v1().profile_id);
-    assert_eq!(
-        evidence.binding().modeled_lcs(),
-        wcag.modeled_lcs_occurrence(),
-    );
+    assert_eq!(evidence.binding().context(), wcag.appearance_context());
     assert_ne!(
         core::any::type_name_of_val(evidence.identity()),
         core::any::type_name_of_val(exact.result()),
@@ -1118,7 +1097,10 @@ fn committed_projection_is_zero_alloc_and_repeats_no_composite_transform_or_eval
     let ready_derivations = MODELED_TRISTIMULUS_DERIVATION_CALLS.with(core::cell::Cell::get);
     let ready_assessments = CORE_PROGRAM_ASSESSMENT_CALLS.with(core::cell::Cell::get);
     assert!(ready_compositions > 0);
-    assert!(ready_derivations > 0);
+    assert_eq!(
+        ready_derivations, 0,
+        "the encoded-only evaluator set must not derive an LCS view",
+    );
     assert!(ready_assessments > 0);
     let (ready_probe, ready_allocations) = crate::test_support::measured_allocations(|| {
         consume_public_projection(std::hint::black_box(owner.project(&session).unwrap()))

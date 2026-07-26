@@ -799,7 +799,6 @@ fn bijective_source_target_and_candidate_renaming_preserves_joint_evidence() {
             .cells()
             .iter()
             .map(|cell| {
-                let modeled = cell.modeled_lcs_occurrence();
                 (
                     cell.candidate_state_index(),
                     cell.case_index(),
@@ -807,8 +806,7 @@ fn bijective_source_target_and_candidate_renaming_preserves_joint_evidence() {
                     cell.target(),
                     cell.is_hard(),
                     cell.result().is_violation(),
-                    modeled,
-                    modeled.signal(),
+                    cell.appearance_context(),
                 )
             })
             .collect::<Vec<_>>();
