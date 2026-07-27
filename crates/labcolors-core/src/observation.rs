@@ -615,12 +615,13 @@ pub(crate) fn prepare_observation<'owner, Owner: ObservationOwnerV1>(
 }
 
 /// Prepare one borrowed schema-ordered observation without constructing keyed
-/// port bindings. One caller-owned scratch vector is reused first as an
-/// open-addressed scenario-ID set and then as the canonical scenario order.
-/// Consequently admission needs one sort, performs no per-scenario
-/// allocation, and exact replay can be allocation-free after scratch growth.
-/// A higher revision materializes the canonical backing exactly once; exact
-/// replay compares against the existing backing without rebuilding it.
+/// port bindings. One caller-owned index scratch is sorted first by opaque
+/// scenario ID for canonical validation and then by physical tuple plus ID for
+/// canonical materialization. Both passes are bounded by comparison sorting;
+/// admission performs no per-scenario allocation, and exact replay can be
+/// allocation-free after scratch growth. A higher revision materializes the
+/// canonical backing exactly once; exact replay compares against the existing
+/// backing without rebuilding it.
 pub(crate) fn prepare_schema_ordered_observation<
     'owner,
     Owner: ObservationOwnerV1,
@@ -638,17 +639,23 @@ pub(crate) fn prepare_schema_ordered_observation<
         return Err(ObservationError::EmptyScenarioSet);
     }
 
-    let id_table_len = scenario_count
-        .checked_mul(2)
-        .and_then(usize::checked_next_power_of_two)
-        .ok_or(ObservationError::ResourceExhausted)?;
     order_scratch.clear();
     order_scratch
-        .try_reserve_exact(id_table_len)
+        .try_reserve_exact(scenario_count)
         .map_err(|_| ObservationError::ResourceExhausted)?;
-    order_scratch.resize(id_table_len, usize::MAX);
+    order_scratch.extend(0..scenario_count);
+    order_scratch.sort_unstable_by_key(|&scenario_index| source.scenario_id(scenario_index));
 
-    for scenario_index in 0..scenario_count {
+    if let Some(duplicate) = order_scratch
+        .windows(2)
+        .find(|pair| source.scenario_id(pair[0]) == source.scenario_id(pair[1]))
+    {
+        return Err(ObservationError::DuplicateScenarioId {
+            scenario: source.scenario_id(duplicate[0]),
+        });
+    }
+
+    for &scenario_index in order_scratch.iter() {
         let actual = source.value_count(scenario_index);
         if actual != schema.as_slice().len() {
             return Err(ObservationError::SchemaOrderedValueCountMismatch {
@@ -657,27 +664,8 @@ pub(crate) fn prepare_schema_ordered_observation<
                 actual,
             });
         }
-
-        let scenario_id = source.scenario_id(scenario_index);
-        let mut table_index =
-            (scenario_id.0 as usize).wrapping_mul(0x9e37_79b1) & (id_table_len - 1);
-        loop {
-            let existing_index = order_scratch[table_index];
-            if existing_index == usize::MAX {
-                order_scratch[table_index] = scenario_index;
-                break;
-            }
-            if source.scenario_id(existing_index) == scenario_id {
-                return Err(ObservationError::DuplicateScenarioId {
-                    scenario: scenario_id,
-                });
-            }
-            table_index = (table_index + 1) & (id_table_len - 1);
-        }
     }
 
-    order_scratch.clear();
-    order_scratch.extend(0..scenario_count);
     order_scratch.sort_unstable_by(|&left, &right| {
         compare_schema_ordered_scenarios(source, left, right, schema.as_slice().len())
     });

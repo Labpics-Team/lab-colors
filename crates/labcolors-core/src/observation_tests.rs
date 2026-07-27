@@ -1,3 +1,9 @@
+use core::cell::Cell;
+use std::collections::{BTreeMap, BTreeSet};
+
+use proptest::prelude::*;
+use proptest::test_runner::{Config, RngAlgorithm, TestRng, TestRunner};
+
 use crate::Srgb8;
 use crate::appearance::{
     AppearanceBindings, AppearanceGraphSpec, BindingError, ColorInputId, CompositionProfileV1,
@@ -9,8 +15,8 @@ use crate::observation::{
     CanonicalObservationSchemaV1, ObservationError, ObservationHeadViewV1, ObservationOwnerV1,
     ObservationPayloadInput, ObservationStreamId, ObservationUpdateInput, ObservedScenarioSetInput,
     PreparedObservationUpdateV1, Revision, RevisionBoundObservationV1, RevisionBoundUnknownV1,
-    ScenarioId, ScenarioInput, SurfaceInputBinding, UnknownReasonId,
-    canonicalize_observation_schema, prepare_observation,
+    ScenarioId, ScenarioInput, SchemaOrderedScenarioSourceV1, SurfaceInputBinding, UnknownReasonId,
+    canonicalize_observation_schema, prepare_observation, prepare_schema_ordered_observation,
 };
 
 const PORT_A: SurfaceInputPortId = SurfaceInputPortId::new(10);
@@ -159,6 +165,112 @@ fn revision_bound(state: &TestState) -> &RevisionBoundObservationV1 {
     state
         .current_observation()
         .expect("expected current admitted observation")
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct OrderedScenario {
+    id: ScenarioId,
+    values: Vec<Srgb8>,
+}
+
+#[derive(Debug)]
+struct OrderedSource {
+    scenarios: Vec<OrderedScenario>,
+    scenario_id_reads: Cell<usize>,
+    value_reads: Cell<usize>,
+}
+
+impl OrderedSource {
+    fn new(scenarios: Vec<OrderedScenario>) -> Self {
+        Self {
+            scenarios,
+            scenario_id_reads: Cell::new(0),
+            value_reads: Cell::new(0),
+        }
+    }
+
+    fn scenario_id_reads(&self) -> usize {
+        self.scenario_id_reads.get()
+    }
+
+    fn value_reads(&self) -> usize {
+        self.value_reads.get()
+    }
+}
+
+impl SchemaOrderedScenarioSourceV1 for OrderedSource {
+    fn scenario_count(&self) -> usize {
+        self.scenarios.len()
+    }
+
+    fn scenario_id(&self, scenario_index: usize) -> ScenarioId {
+        self.scenario_id_reads.set(self.scenario_id_reads.get() + 1);
+        self.scenarios[scenario_index].id
+    }
+
+    fn value_count(&self, scenario_index: usize) -> usize {
+        self.scenarios[scenario_index].values.len()
+    }
+
+    fn value(&self, scenario_index: usize, binding_index: usize) -> Srgb8 {
+        self.value_reads.set(self.value_reads.get() + 1);
+        self.scenarios[scenario_index].values[binding_index]
+    }
+}
+
+struct UnrepresentableOrderedSource;
+
+impl SchemaOrderedScenarioSourceV1 for UnrepresentableOrderedSource {
+    fn scenario_count(&self) -> usize {
+        usize::MAX
+    }
+
+    fn scenario_id(&self, _scenario_index: usize) -> ScenarioId {
+        panic!("scratch preflight must precede every source access")
+    }
+
+    fn value_count(&self, _scenario_index: usize) -> usize {
+        panic!("scratch preflight must precede every source access")
+    }
+
+    fn value(&self, _scenario_index: usize, _binding_index: usize) -> Srgb8 {
+        panic!("scratch preflight must precede every source access")
+    }
+}
+
+fn ordered_scenario(id: u32, values: impl IntoIterator<Item = [u8; 3]>) -> OrderedScenario {
+    OrderedScenario {
+        id: ScenarioId::new(id),
+        values: values.into_iter().map(Srgb8::new).collect(),
+    }
+}
+
+fn visit_permutations<T>(values: &mut [T], start: usize, visit: &mut impl FnMut(&[T])) {
+    if start == values.len() {
+        visit(values);
+        return;
+    }
+    for index in start..values.len() {
+        values.swap(start, index);
+        visit_permutations(values, start + 1, visit);
+        values.swap(start, index);
+    }
+}
+
+fn prepare_ordered<'owner>(
+    state: &'owner mut TestState,
+    revision: u64,
+    source: &OrderedSource,
+    order_scratch: &mut Vec<usize>,
+) -> Result<PreparedObservationUpdateV1<'owner, TestOwner>, ObservationError> {
+    prepare_schema_ordered_observation(
+        &mut state.owner,
+        state.stream,
+        &state.schema,
+        Revision::new(revision),
+        source,
+        order_scratch,
+    )
 }
 
 #[test]
@@ -764,4 +876,262 @@ fn invalid_schema_and_bindings_are_typed_and_deterministic() {
         );
         assert_eq!(state.head(), ObservationHeadViewV1::Empty);
     }
+}
+
+#[test]
+fn schema_ordered_duplicate_error_is_the_minimum_id_before_shape_and_revision() {
+    let mut scenarios = vec![
+        ordered_scenario(7, [[7; 3]]),
+        ordered_scenario(3, [[3; 3]]),
+        ordered_scenario(1, []),
+        ordered_scenario(7, [[70; 3]]),
+        ordered_scenario(3, [[30; 3]]),
+    ];
+    let mut state = TestState::new(STREAM, vec![PORT_A]).unwrap();
+    state.apply(unknown_update(STREAM, 10, 1)).unwrap();
+
+    let mut checked = 0;
+    visit_permutations(&mut scenarios, 0, &mut |permutation| {
+        let source = OrderedSource::new(permutation.to_vec());
+        let mut order_scratch = Vec::new();
+        let error = prepare_ordered(&mut state, 1, &source, &mut order_scratch)
+            .err()
+            .expect("duplicate IDs must be rejected");
+        assert_eq!(
+            error,
+            ObservationError::DuplicateScenarioId {
+                scenario: ScenarioId::new(3),
+            }
+        );
+        checked += 1;
+    });
+    assert_eq!(checked, 120);
+}
+
+#[test]
+fn schema_ordered_shape_error_is_the_minimum_id_before_revision() {
+    let mut scenarios = vec![
+        ordered_scenario(9, [[9; 3]]),
+        ordered_scenario(5, []),
+        ordered_scenario(2, [[2; 3], [20; 3]]),
+    ];
+    let mut state = TestState::new(STREAM, vec![PORT_A]).unwrap();
+    state.apply(unknown_update(STREAM, 10, 1)).unwrap();
+
+    visit_permutations(&mut scenarios, 0, &mut |permutation| {
+        let source = OrderedSource::new(permutation.to_vec());
+        let mut order_scratch = Vec::new();
+        let error = prepare_ordered(&mut state, 1, &source, &mut order_scratch)
+            .err()
+            .expect("malformed scenario width must be rejected");
+        assert_eq!(
+            error,
+            ObservationError::SchemaOrderedValueCountMismatch {
+                scenario: ScenarioId::new(2),
+                expected: 1,
+                actual: 2,
+            }
+        );
+    });
+}
+
+#[test]
+fn schema_ordered_scenario_id_reads_stay_inside_a_sorting_envelope() {
+    const SCENARIO_COUNT: usize = 1 << 10;
+    const COLLIDING_ID_STRIDE: u32 = 1 << 11;
+    const SORT_COUNT: usize = 2;
+    const IDS_PER_COMPARISON: usize = 2;
+    // Это mutation-budget, не коэффициент production API: запас остаётся
+    // существенно ниже квадратичного collision-корпуса и меняется только по
+    // измеренному дрейфу стратегии стандартной сортировки на поддерживаемом Rust.
+    const COMPARISON_ENVELOPE_PER_LEVEL: usize = 8;
+
+    let source = OrderedSource::new(
+        (0..SCENARIO_COUNT)
+            .rev()
+            .map(|index| ordered_scenario(index as u32 * COLLIDING_ID_STRIDE, [[0x80; 3]]))
+            .collect(),
+    );
+    let mut state = TestState::new(STREAM, vec![PORT_A]).unwrap();
+    let mut order_scratch = Vec::new();
+    let prepared = prepare_ordered(&mut state, 1, &source, &mut order_scratch)
+        .expect("unique opaque IDs must be admitted");
+    drop(prepared);
+
+    let logarithmic_levels = usize::BITS as usize - (SCENARIO_COUNT - 1).leading_zeros() as usize;
+    let read_budget = SORT_COUNT
+        * IDS_PER_COMPARISON
+        * COMPARISON_ENVELOPE_PER_LEVEL
+        * SCENARIO_COUNT
+        * logarithmic_levels;
+    assert!(
+        source.scenario_id_reads() <= read_budget,
+        "{} ScenarioId reads exceeded the O(n log n) admission envelope of {read_budget}",
+        source.scenario_id_reads(),
+    );
+}
+
+fn schema_ordered_value_read_count(scenario_count: usize, binding_count: usize) -> usize {
+    assert!(scenario_count > 0);
+    assert!(binding_count > 0);
+    let source = OrderedSource::new(
+        (0..scenario_count)
+            .rev()
+            .map(|index| {
+                let id = ((index * 5) % scenario_count) as u32;
+                let key = Srgb8::new([(index >> 16) as u8, (index >> 8) as u8, index as u8]);
+                let mut values = vec![Srgb8::new([0; 3]); binding_count];
+                values[binding_count - 1] = key;
+                OrderedScenario {
+                    id: ScenarioId::new(id),
+                    values,
+                }
+            })
+            .collect(),
+    );
+    let schema = (0..binding_count)
+        .map(|index| SurfaceInputPortId::new(index as u32 + 1))
+        .collect();
+    let mut state = TestState::new(STREAM, schema).unwrap();
+    let mut order_scratch = Vec::new();
+    let prepared = prepare_ordered(&mut state, 1, &source, &mut order_scratch)
+        .expect("the bounded-work corpus must be valid");
+    drop(prepared);
+    source.value_reads()
+}
+
+#[test]
+fn schema_ordered_value_reads_scale_linearly_with_width_and_n_log_n_with_count() {
+    const SMALL_COUNT: usize = 1 << 6;
+    const LARGE_COUNT: usize = 1 << 9;
+    const WIDE_SCHEMA: usize = 1 << 3;
+    // При восьмикратном росте n квадратичный mutant растёт в 64 раза, а n log n
+    // здесь — в 12; двукратный запас допускает toolchain-дрейф, но не n².
+    const N_LOG_N_HEADROOM: usize = 2;
+
+    let small_narrow = schema_ordered_value_read_count(SMALL_COUNT, 1);
+    let small_wide = schema_ordered_value_read_count(SMALL_COUNT, WIDE_SCHEMA);
+    let large_narrow = schema_ordered_value_read_count(LARGE_COUNT, 1);
+    let large_wide = schema_ordered_value_read_count(LARGE_COUNT, WIDE_SCHEMA);
+
+    assert_eq!(small_wide, small_narrow * WIDE_SCHEMA);
+    assert_eq!(large_wide, large_narrow * WIDE_SCHEMA);
+
+    let small_levels = SMALL_COUNT.ilog2() as usize;
+    let large_levels = LARGE_COUNT.ilog2() as usize;
+    assert!(
+        large_narrow * SMALL_COUNT * small_levels
+            <= small_narrow * LARGE_COUNT * large_levels * N_LOG_N_HEADROOM,
+        "value reads grew faster than the n log n envelope: {small_narrow} -> {large_narrow}",
+    );
+}
+
+#[test]
+fn schema_ordered_scratch_exhaustion_precedes_every_source_access() {
+    let mut state = TestState::new(STREAM, vec![PORT_A]).unwrap();
+    let mut order_scratch = Vec::new();
+
+    assert!(matches!(
+        prepare_schema_ordered_observation(
+            &mut state.owner,
+            state.stream,
+            &state.schema,
+            Revision::new(1),
+            &UnrepresentableOrderedSource,
+            &mut order_scratch,
+        ),
+        Err(ObservationError::ResourceExhausted)
+    ));
+    assert_eq!(state.head(), ObservationHeadViewV1::Empty);
+}
+
+fn schema_ordered_admission_matches_oracle(
+    raw: Vec<(u32, [u8; 6])>,
+    shift: usize,
+    reverse: bool,
+) -> Result<(), TestCaseError> {
+    let mut by_id = BTreeMap::new();
+    for (id, bytes) in raw {
+        let first_class = bytes[0] & 0b11;
+        let second_class = bytes[1] & 0b1;
+        by_id.insert(
+            ScenarioId::new(id),
+            [Srgb8::new([first_class; 3]), Srgb8::new([second_class; 3])],
+        );
+    }
+    let mut scenarios = by_id
+        .into_iter()
+        .map(|(id, values)| OrderedScenario {
+            id,
+            values: values.to_vec(),
+        })
+        .collect::<Vec<_>>();
+    let scenario_count = scenarios.len();
+    scenarios.rotate_left(shift % scenario_count);
+    if reverse {
+        scenarios.reverse();
+    }
+
+    let mut oracle = BTreeMap::<Vec<Srgb8>, BTreeSet<ScenarioId>>::new();
+    for scenario in &scenarios {
+        oracle
+            .entry(scenario.values.clone())
+            .or_default()
+            .insert(scenario.id);
+    }
+    let expected = oracle
+        .into_iter()
+        .map(|(values, provenance)| (values, provenance.into_iter().collect::<Vec<_>>()))
+        .collect::<Vec<_>>();
+
+    let source = OrderedSource::new(scenarios);
+    let mut state = TestState::new(STREAM, vec![PORT_A, PORT_B]).unwrap();
+    let mut order_scratch = Vec::new();
+    let prepared = prepare_ordered(&mut state, 1, &source, &mut order_scratch)
+        .map_err(|error| TestCaseError::fail(format!("valid oracle input failed: {error:?}")))?;
+    let PreparedObservationUpdateV1::Observed(prepared) = prepared else {
+        return Err(TestCaseError::fail(
+            "a fresh valid observation was not materialized",
+        ));
+    };
+    let observation = prepared.observation();
+    let actual = (0..observation.physical_case_count())
+        .map(|case_index| {
+            let values = observation
+                .physical_values(case_index)
+                .expect("case index originates from the admitted observation")
+                .iter()
+                .map(|value| value.srgb8())
+                .collect::<Vec<_>>();
+            let provenance = observation
+                .provenance(case_index)
+                .expect("case index originates from the admitted observation")
+                .to_vec();
+            (values, provenance)
+        })
+        .collect::<Vec<_>>();
+
+    prop_assert_eq!(actual, expected);
+    Ok(())
+}
+
+#[test]
+fn schema_ordered_admission_matches_an_independent_ordered_map_oracle() {
+    let config = Config {
+        cases: 256,
+        failure_persistence: None,
+        ..Config::default()
+    };
+    let mut runner =
+        TestRunner::new_with_rng(config, TestRng::deterministic_rng(RngAlgorithm::ChaCha));
+    runner
+        .run(
+            &(
+                prop::collection::vec((any::<u32>(), any::<[u8; 6]>()), 1..40),
+                any::<usize>(),
+                any::<bool>(),
+            ),
+            |(raw, shift, reverse)| schema_ordered_admission_matches_oracle(raw, shift, reverse),
+        )
+        .expect("deterministic schema-ordered differential property failed");
 }
