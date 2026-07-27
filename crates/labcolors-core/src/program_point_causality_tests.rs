@@ -682,7 +682,12 @@ fn verified_report_storage_does_not_retain_exhaustive_joint_capacity() {
         small_capacities, large_capacities,
         "a verified report owns one selected state, not exhaustive conflict storage"
     );
-    assert_eq!(large_capacities, [1, 1, 1]);
+    assert!(
+        large_capacities
+            .into_iter()
+            .all(|capacity| capacity >= 1 && capacity < large.len()),
+        "try_reserve_exact may over-allocate, but selected storage must remain non-empty and smaller than the exhaustive candidate set: {large_capacities:?}"
+    );
 
     let compiled = finite_program_with_candidates(Srgb8::new([255; 3]), &large);
     let mut session = compiled.instantiate(STREAM).unwrap();
@@ -690,7 +695,13 @@ fn verified_report_storage_does_not_retain_exhaustive_joint_capacity() {
     else {
         panic!("none of the authored states may satisfy the exact target");
     };
-    assert_eq!(cause.report().storage_capacities_for_test(), [64, 64, 64]);
+    let conflict_capacities = cause.report().storage_capacities_for_test();
+    assert!(
+        conflict_capacities
+            .into_iter()
+            .all(|capacity| capacity >= large.len()),
+        "an exhaustive conflict must own every considered state even if the allocator over-reserves: {conflict_capacities:?}"
+    );
 }
 
 #[test]
