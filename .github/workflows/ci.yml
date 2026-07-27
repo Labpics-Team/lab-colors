@@ -516,10 +516,47 @@ jobs:
           DEBS_DIR="$DEPS_DIR/debs"
           APT_LISTS="$DEPS_DIR/apt-lists"
           APT_CACHE="$DEPS_DIR/apt-cache"
-          mkdir -p "$DEBS_DIR" "$APT_LISTS/partial" "$APT_CACHE/archives/partial"
-          # Keep every mutable APT path job-local and disable global locks. The
-          # system sources/keyrings and dpkg status remain read-only inputs.
+          APT_SOURCES="$DEPS_DIR/apt-sources"
+          mkdir -p \
+            "$DEBS_DIR" \
+            "$APT_LISTS/partial" \
+            "$APT_CACHE/archives/partial" \
+            "$APT_SOURCES/sources.list.d"
+          # Общие sources раннера содержат посторонние vendor-репозитории.
+          # Недоступный vendor не должен отменять browser-gate, которому нужны
+          # только пакеты дистрибутива, поэтому зависимость объявлена явно.
+          source /etc/os-release
+          : "${ID:?missing distro ID}"
+          : "${VERSION_CODENAME:?missing distro codename}"
+          case "$ID" in
+            debian)
+              DISTRO_KEYRING=/usr/share/keyrings/debian-archive-keyring.gpg
+              test -r "$DISTRO_KEYRING"
+              printf '%s\n' \
+                "deb [signed-by=$DISTRO_KEYRING] https://deb.debian.org/debian $VERSION_CODENAME main" \
+                "deb [signed-by=$DISTRO_KEYRING] https://deb.debian.org/debian $VERSION_CODENAME-updates main" \
+                "deb [signed-by=$DISTRO_KEYRING] https://security.debian.org/debian-security $VERSION_CODENAME-security main" \
+                > "$APT_SOURCES/sources.list"
+              ;;
+            ubuntu)
+              DISTRO_KEYRING=/usr/share/keyrings/ubuntu-archive-keyring.gpg
+              test -r "$DISTRO_KEYRING"
+              printf '%s\n' \
+                "deb [signed-by=$DISTRO_KEYRING] https://archive.ubuntu.com/ubuntu $VERSION_CODENAME main" \
+                "deb [signed-by=$DISTRO_KEYRING] https://archive.ubuntu.com/ubuntu $VERSION_CODENAME-updates main" \
+                "deb [signed-by=$DISTRO_KEYRING] https://security.ubuntu.com/ubuntu $VERSION_CODENAME-security main" \
+                > "$APT_SOURCES/sources.list"
+              ;;
+            *)
+              echo "unsupported Chrome dependency distro: $ID" >&2
+              exit 1
+              ;;
+          esac
+          # Все изменяемые пути APT и полный inventory sources принадлежат job;
+          # keyring и dpkg status остаются read-only входами.
           APT_OPTIONS=(
+            -o "Dir::Etc::sourcelist=$APT_SOURCES/sources.list"
+            -o "Dir::Etc::sourceparts=$APT_SOURCES/sources.list.d"
             -o "Dir::State::lists=$APT_LISTS"
             -o "Dir::State::status=/var/lib/dpkg/status"
             -o "Dir::Cache=$APT_CACHE"
