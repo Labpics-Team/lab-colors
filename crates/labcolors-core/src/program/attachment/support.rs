@@ -1,6 +1,7 @@
 use std::{
     cell::{Cell, RefCell},
     rc::Rc,
+    sync::atomic::{AtomicU64, Ordering},
 };
 
 use super::*;
@@ -18,19 +19,15 @@ impl TestSinkOutputIdV1 {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct TestPublishedStampV1 {
     sequence: u64,
-    epoch: Rc<()>,
+    epoch: u64,
 }
 
-impl PartialEq for TestPublishedStampV1 {
-    fn eq(&self, other: &Self) -> bool {
-        self.sequence == other.sequence && Rc::ptr_eq(&self.epoch, &other.epoch)
-    }
-}
-
-impl Eq for TestPublishedStampV1 {}
+// Stamp должен оставаться Copy, поэтому test sink получает неповторимую эпоху
+// из монотонного issuer-а, а не владеет Rc и не выводит identity из адреса.
+static NEXT_TEST_SINK_EPOCH: AtomicU64 = AtomicU64::new(1);
 
 impl TestPublishedStampV1 {
     fn next(&self) -> Result<Self, InMemoryPointSinkErrorV1> {
@@ -39,7 +36,7 @@ impl TestPublishedStampV1 {
                 .sequence
                 .checked_add(1)
                 .ok_or(InMemoryPointSinkErrorV1::StampExhausted)?,
-            epoch: Rc::clone(&self.epoch),
+            epoch: self.epoch,
         })
     }
 }
@@ -105,6 +102,7 @@ struct TestSinkSharedV1 {
     misreport_next_confirm_proposed_stamp: Cell<bool>,
     panic_on_retirement_drop: Cell<bool>,
     retirement_drop_count: Cell<usize>,
+    measure_terminal_tail: Cell<bool>,
 }
 
 pub(crate) struct InMemoryPointSinkLeaseV1 {
@@ -128,7 +126,7 @@ impl InMemoryPointSinkProbeV1 {
     }
 
     pub(crate) fn stamp(&self) -> TestPublishedStampV1 {
-        self.shared.state.borrow().stamp.clone()
+        self.shared.state.borrow().stamp
     }
 
     pub(crate) fn intent_counts(&self) -> TestIntentCountsV1 {
@@ -182,12 +180,23 @@ impl InMemoryPointSinkProbeV1 {
     pub(crate) fn retirement_drop_count(&self) -> usize {
         self.shared.retirement_drop_count.get()
     }
+
+    pub(crate) fn checkpoint_next_terminal_tail(&self) {
+        assert!(
+            !self.shared.measure_terminal_tail.replace(true),
+            "terminal-tail measurements cannot overlap"
+        );
+    }
 }
 
 pub(crate) fn in_memory_point_sink(
     owned_scope: &[u32],
 ) -> (InMemoryPointSinkLeaseV1, InMemoryPointSinkProbeV1) {
-    let epoch = Rc::new(());
+    let epoch = NEXT_TEST_SINK_EPOCH
+        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+            current.checked_add(1)
+        })
+        .unwrap_or_else(|_| panic!("test sink epoch space exhausted"));
     let shared = Rc::new(TestSinkSharedV1 {
         state: RefCell::new(TestSinkStateV1 {
             snapshot: Vec::new(),
@@ -208,6 +217,7 @@ pub(crate) fn in_memory_point_sink(
         misreport_next_confirm_proposed_stamp: Cell::new(false),
         panic_on_retirement_drop: Cell::new(false),
         retirement_drop_count: Cell::new(0),
+        measure_terminal_tail: Cell::new(false),
     });
     (
         InMemoryPointSinkLeaseV1 {
@@ -266,7 +276,7 @@ impl LinearPointSinkLeaseV1 for InMemoryPointSinkLeaseV1 {
         drop(self.retired.take());
         let (base_stamp, current_revision, busy) = {
             let state = self.shared.state.borrow();
-            (state.stamp.clone(), state.revision, self.shared.busy.get())
+            (state.stamp, state.revision, self.shared.busy.get())
         };
         if busy {
             return Err(InMemoryPointSinkErrorV1::Busy);
@@ -311,7 +321,7 @@ impl LinearPointSinkLeaseV1 for InMemoryPointSinkLeaseV1 {
                 {
                     published_stamp.next()?
                 } else {
-                    published_stamp.clone()
+                    *published_stamp
                 };
                 (
                     TestStagingV1::ConfirmExact { revision },
@@ -397,9 +407,6 @@ enum TestStagingV1 {
 
 struct TestSinkRetirementV1 {
     _staging: Option<TestStagingV1>,
-    _retired_stamp: Option<TestPublishedStampV1>,
-    _proposed: Option<TestPublishedStampV1>,
-    _base_stamp: Option<TestPublishedStampV1>,
     probe: Option<Rc<TestSinkSharedV1>>,
 }
 
@@ -430,9 +437,8 @@ impl PreparedPointSinkWriteV1 for InMemoryPreparedPointSinkWriteV1<'_> {
     type Stamp = TestPublishedStampV1;
     type Error = InMemoryPointSinkErrorV1;
 
-    fn proposed_stamp(&self) -> &Self::Stamp {
+    fn proposed_stamp(&self) -> Self::Stamp {
         self.proposed
-            .as_ref()
             .unwrap_or_else(|| unreachable!("proposed stamp читается до install"))
     }
 
@@ -503,15 +509,16 @@ impl PreparedPointSinkWriteV1 for InMemoryPreparedPointSinkWriteV1<'_> {
             state.revision = prior_revision;
             return Err(InMemoryPointSinkErrorV1::RejectedInstallAfterSwap);
         }
+        drop(state);
+        if self.lease.shared.measure_terminal_tail.replace(false) {
+            crate::test_support::reset_allocator_events();
+        }
         Ok(())
     }
 
     fn finish_after_session(mut self) {
         let retirement = TestSinkRetirementV1 {
             _staging: self.staging.take(),
-            _retired_stamp: self.retired_stamp.take(),
-            _proposed: self.proposed.take(),
-            _base_stamp: self.base_stamp.take(),
             probe: self.retirement_probe.take(),
         };
         self.lease.retired = Some(retirement);
@@ -524,9 +531,6 @@ impl Drop for InMemoryPreparedPointSinkWriteV1<'_> {
     fn drop(&mut self) {
         if !self.finished {
             drop(self.staging.take());
-            drop(self.retired_stamp.take());
-            drop(self.proposed.take());
-            drop(self.base_stamp.take());
             drop(self.retirement_probe.take());
             self.lease.shared.busy.set(false);
         }

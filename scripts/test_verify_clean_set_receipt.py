@@ -45,6 +45,7 @@ TRANSITIVE_EXECUTOR_ROLES = (
     "signal_transport_source",
 )
 ATTACHMENT_PROOF_ROLES = (
+    "point_attachment_allocator_oracle",
     "point_attachment_test_support",
     "point_attachment_tests",
 )

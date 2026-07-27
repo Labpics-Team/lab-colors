@@ -1,5 +1,6 @@
 use super::support::{
-    InMemoryPointSinkErrorV1, authored_emission, authored_presentation, in_memory_point_sink,
+    InMemoryPointSinkErrorV1, TestPublishedStampV1, authored_emission, authored_presentation,
+    in_memory_point_sink,
 };
 use super::*;
 use crate::Srgb8;
@@ -19,6 +20,98 @@ const MIDDLE: OccurrenceIdV1 = OccurrenceIdV1::new(15);
 const ROOT: PresentationRootIdV1 = PresentationRootIdV1::new(51);
 const OUTPUT_A: OutputSlotIdV1 = OutputSlotIdV1::new(12);
 const OUTPUT_B: OutputSlotIdV1 = OutputSlotIdV1::new(13);
+
+#[test]
+fn terminal_stamp_is_a_fixed_two_word_copy_value() {
+    const fn assert_copy<T: Copy>() {}
+    fn assert_prepared_stamp_is_copy<T: PreparedPointSinkWriteV1>() {
+        assert_copy::<T::Stamp>();
+    }
+    fn assert_lease_stamp_is_copy<T: LinearPointSinkLeaseV1>() {
+        assert_copy::<T::Stamp>();
+    }
+
+    assert_copy::<TestPublishedStampV1>();
+    assert_prepared_stamp_is_copy::<super::support::InMemoryPreparedPointSinkWriteV1<'static>>();
+    assert_lease_stamp_is_copy::<super::support::InMemoryPointSinkLeaseV1>();
+    assert_eq!(
+        core::mem::size_of::<TestPublishedStampV1>(),
+        core::mem::size_of::<[u64; 2]>()
+    );
+}
+
+#[test]
+fn a_stale_copy_stamp_cannot_cross_a_sequential_sink_epoch() {
+    let (mut first, first_probe) = in_memory_point_sink(&[900]);
+    let mut prepared = first
+        .prepare(PointSinkIntentV1::RevokeAll { revision: 1 })
+        .unwrap();
+    prepared.try_install().unwrap();
+    prepared.finish_after_session();
+    let stale = first_probe.stamp();
+    drop(first_probe);
+    drop(first);
+
+    let (mut second, second_probe) = in_memory_point_sink(&[900]);
+    let mut prepared = second
+        .prepare(PointSinkIntentV1::RevokeAll { revision: 1 })
+        .unwrap();
+    prepared.try_install().unwrap();
+    prepared.finish_after_session();
+    assert_ne!(second_probe.stamp(), stale);
+    assert!(matches!(
+        second.prepare(PointSinkIntentV1::ConfirmExact {
+            revision: 1,
+            published_stamp: &stale,
+        }),
+        Err(InMemoryPointSinkErrorV1::StampMismatch)
+    ));
+}
+
+#[test]
+fn attachment_terminal_tail_has_no_allocator_events() {
+    let owner = owner(
+        Srgb8::new([12, 34, 56]),
+        Srgb8::new([12, 34, 56]),
+        false,
+        &[OUTPUT_A],
+    );
+    let (sink, probe) = in_memory_point_sink(&[900]);
+    let emissions = [authored_emission(OUTPUT_A.value(), 900)];
+    let presentations = [authored_presentation(
+        OUTPUT_A.value(),
+        ROOT.value(),
+        INNER.value(),
+    )];
+    let mut attachment = owner.attach(1, &emissions, &presentations, sink).unwrap();
+    let values = [Srgb8::new([0, 0, 0])];
+    let scenarios = [ScenarioV1::new(44, &values)];
+
+    probe.checkpoint_next_terminal_tail();
+    let ((), events) = crate::test_support::measured_allocator_events(|| {
+        attachment.update(observed(1, &scenarios)).unwrap();
+    });
+    assert_eq!(events, crate::test_support::AllocatorEvents::default());
+
+    let unknown = UpdateV1::Unknown {
+        revision: 2,
+        reason_id: 77,
+    };
+    probe.checkpoint_next_terminal_tail();
+    let ((), events) = crate::test_support::measured_allocator_events(|| {
+        attachment.update(unknown).unwrap();
+    });
+    assert_eq!(events, crate::test_support::AllocatorEvents::default());
+
+    probe.checkpoint_next_terminal_tail();
+    let ((), events) = crate::test_support::measured_allocator_events(|| {
+        attachment.update(unknown).unwrap();
+    });
+    assert_eq!(events, crate::test_support::AllocatorEvents::default());
+    assert_eq!(probe.intent_counts().set_all, 1);
+    assert_eq!(probe.intent_counts().revoke_all, 1);
+    assert_eq!(probe.intent_counts().confirm_exact, 1);
+}
 
 fn owner(
     source: Srgb8,
@@ -620,9 +713,6 @@ fn source_guards_keep_the_post_install_tail_destructor_free() {
     let session_drain = attachment_source
         .find("drop(self.retired_session.take())")
         .expect("Attachment must drain deferred Session retirement");
-    let stamp_drain = attachment_source
-        .find("drop(self.retired_stamp.take())")
-        .expect("Attachment must drain deferred stamp retirement");
     let prepare = attachment_source
         .find(".prepare_update(update)")
         .expect("Attachment must prepare one Session transition");
@@ -632,10 +722,6 @@ fn source_guards_keep_the_post_install_tail_destructor_free() {
     assert!(
         session_drain < prepare && prepare < install,
         "Session retirement must drain before prepare and install",
-    );
-    assert!(
-        stamp_drain < prepare && prepare < install,
-        "stamp retirement must drain before prepare and install",
     );
 
     let sink_prepare = support_source
@@ -672,9 +758,6 @@ fn source_guards_keep_the_post_install_tail_destructor_free() {
     );
     for owning_take in [
         "_staging: self.staging.take()",
-        "_retired_stamp: self.retired_stamp.take()",
-        "_proposed: self.proposed.take()",
-        "_base_stamp: self.base_stamp.take()",
         "probe: self.retirement_probe.take()",
     ] {
         assert!(
