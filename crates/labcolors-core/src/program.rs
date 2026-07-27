@@ -33,7 +33,7 @@
 //! одной Session другой Session того же Owner.
 //!
 //! [`CertificateV1::Verified`] хранит выбранное состояние, все клетки
-//! доказательства и сертифицированные выходы. [`CertificateV1::Conflict`]
+//! доказательства и сертифицированные Paint outputs. [`CertificateV1::Conflict`]
 //! хранит исчерпывающий конфликт по всем рассмотренным состояниям.
 //! [`ContentIdentityV3`] идентифицирует каноническое содержание, но не даёт
 //! полномочий живого [`OwnerV1`].
@@ -70,10 +70,11 @@ use crate::program_session::{
     CoreProgramViolationEvidenceV1, DeclaredJointSelectionV1, JointCandidateStateV1, Occurrence,
     OpacityInput, OutputBinding, OutputSlotId, Paint, PointPresentationRootV1,
     PointPresentationTargetV1, PresentationRootId, ProgramCompileError, ProgramConflictV1,
-    ProgramConstraintCellV1, ProgramConstraintResultV1, ProgramContentIdentityV3, ProgramOutputV1,
-    ProgramSessionEvaluationError, ProgramSessionInstantiateError, ProgramSessionPlan,
-    ProgramVerifiedV1, Source, SourceId, Surface, Target, TargetCandidateChoiceV1,
-    TargetCandidateId, TargetCandidateV1 as CoreTargetCandidateV1, TargetId,
+    ProgramConstraintCellV1, ProgramConstraintResultV1, ProgramContentIdentityV3,
+    ProgramPaintOutputV1, ProgramSessionEvaluationError, ProgramSessionInstantiateError,
+    ProgramSessionPlan, ProgramVerifiedV1, Source, SourceId, Surface, Target,
+    TargetCandidateChoiceV1, TargetCandidateId, TargetCandidateV1 as CoreTargetCandidateV1,
+    TargetId,
 };
 use crate::session::{Session, SessionState, SessionUpdateError};
 use crate::wcag22::{
@@ -1378,7 +1379,7 @@ impl DraftV1 {
         self
     }
 
-    /// Связывает клиентский выходной слот с итоговым Paint.
+    /// Связывает клиентский output slot с выбранным encoded Paint.
     pub(crate) fn push_output(&mut self, output: OutputSlotIdV1, paint: PaintIdV1) -> &mut Self {
         self.inner
             .push_output(OutputBinding::new(output.into_core(), paint.into_core()));
@@ -1885,14 +1886,14 @@ impl<'a> VerifiedCertificateV1<'a> {
             .map(VerifiedCellV1::from_core)
     }
 
-    /// Возвращает все сертифицированные выходы в каноническом порядке.
+    /// Возвращает все сертифицированные Paint outputs в каноническом порядке.
     pub(crate) fn outputs(
         self,
-    ) -> impl ExactSizeIterator<Item = CertifiedOutputV1<'a>> + FusedIterator + 'a {
+    ) -> impl ExactSizeIterator<Item = CertifiedPaintOutputV1<'a>> + FusedIterator + 'a {
         self.inner
             .outputs()
             .iter()
-            .map(CertifiedOutputV1::from_core)
+            .map(CertifiedPaintOutputV1::from_core)
     }
 }
 
@@ -2401,14 +2402,17 @@ impl EncodedSrgb8SourceOverV1<'_> {
     }
 }
 
-/// Один Core-сертифицированный выходной Paint.
+/// Один Core-сертифицированный encoded Paint, направленный в клиентский slot.
+///
+/// Это ещё не результат sink, attachment, renderer или final-visible
+/// композиции.
 #[derive(Clone, Copy)]
-pub(crate) struct CertifiedOutputV1<'a> {
-    inner: &'a ProgramOutputV1,
+pub(crate) struct CertifiedPaintOutputV1<'a> {
+    inner: &'a ProgramPaintOutputV1,
 }
 
-impl<'a> CertifiedOutputV1<'a> {
-    const fn from_core(inner: &'a ProgramOutputV1) -> Self {
+impl<'a> CertifiedPaintOutputV1<'a> {
+    const fn from_core(inner: &'a ProgramPaintOutputV1) -> Self {
         Self { inner }
     }
 
@@ -2436,7 +2440,7 @@ impl<'a> CertifiedOutputV1<'a> {
 /// Операция установки, структурно связанная с точным Verified-сертификатом.
 #[derive(Clone, Copy)]
 pub(crate) struct SetV1<'owner, 'session> {
-    output: &'session ProgramOutputV1,
+    output: &'session ProgramPaintOutputV1,
     certificate: VerifiedCertificateV1<'session>,
     _scope: BorrowScopeV1<'owner, 'session>,
 }
@@ -2447,12 +2451,12 @@ impl<'session> SetV1<'_, 'session> {
         OutputSlotIdV1::from_core((*self.output).output())
     }
 
-    /// Возвращает исходный encoded sRGB8 сигнал результата.
+    /// Возвращает исходный encoded sRGB8 сигнал выходного Paint.
     pub(crate) const fn source(self) -> Srgb8 {
         (*self.output).paint().source()
     }
 
-    /// Возвращает прозрачность результата.
+    /// Возвращает прозрачность выходного Paint.
     pub(crate) const fn opacity(self) -> f64 {
         (*self.output).paint().opacity().value()
     }
@@ -2570,7 +2574,7 @@ impl FusedIterator for OwnerOutputSlotsV1<'_> {}
 enum OperationSourceV1<'owner, 'session> {
     Empty,
     Set {
-        outputs: slice::Iter<'session, ProgramOutputV1>,
+        outputs: slice::Iter<'session, ProgramPaintOutputV1>,
         certificate: VerifiedCertificateV1<'session>,
         scope: BorrowScopeV1<'owner, 'session>,
     },

@@ -19,7 +19,7 @@ mod release_tag {
     pub(super) const DECLARED_TOTAL_ORDER_V1: u8 = 1;
     pub(super) const FRESH_FULL_RECHECK_V1: u8 = 1;
     pub(super) const ATOMIC_OBSERVATION_GROUP_V1: u8 = 1;
-    pub(super) const ENCODED_PAINT_EMISSION_V1: u8 = 1;
+    pub(super) const ENCODED_PAINT_OUTPUT_ROUTING_V1: u8 = 1;
     pub(super) const MODELED_POINT_PRESENTATION_V1: u8 = 1;
     pub(super) const POINT_ABSENCE_BYPASS_OWN_BACKDROP_V1: u8 = 1;
     #[cfg(test)]
@@ -330,7 +330,8 @@ fn program_root_color() -> Result<VertexColorV1, ProgramCompileError> {
     let mut color = VertexColorV1::new(vertex_tag::PROGRAM);
     // Эти теги связывают адрес с версиями исполняемых законов: схемой Program,
     // выбором по полному порядку, финальной перепроверкой, атомарным наблюдением,
-    // эмиссией кодированного `Paint` и моделируемым представлением точки. Версии
+    // маршрутизацией кодированного `Paint` в output slot и моделируемым
+    // представлением точки. Версии
     // производных возможностей связываются только с теми ограничениями,
     // которые их исполняют.
     for release in [
@@ -338,7 +339,7 @@ fn program_root_color() -> Result<VertexColorV1, ProgramCompileError> {
         release_tag::DECLARED_TOTAL_ORDER_V1,
         release_tag::FRESH_FULL_RECHECK_V1,
         release_tag::ATOMIC_OBSERVATION_GROUP_V1,
-        release_tag::ENCODED_PAINT_EMISSION_V1,
+        release_tag::ENCODED_PAINT_OUTPUT_ROUTING_V1,
         release_tag::MODELED_POINT_PRESENTATION_V1,
     ] {
         color.push_u8(release)?;
