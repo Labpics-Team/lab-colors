@@ -21,9 +21,9 @@ use crate::program_session::{
     CompositionProfile, ConstraintId, ConstraintInvocation, ConstraintSet,
     DeclaredJointSelectionV1, HardModeV1, JointCandidateStateV1, ObservationGroup, Occurrence,
     OutputBinding, OutputSlotId, Paint, Program, ProgramCompileError,
-    ProgramConstraintEvaluatorSetV1, ProgramSessionEvaluationError, ReportModeV1, Source, SourceId,
-    Surface, Target, TargetCandidateChoiceV1, TargetCandidateId, TargetCandidateV1, TargetDomainV1,
-    TargetId, checked_program_evaluation_cell_counts_for_test,
+    ProgramConstraintEvaluatorSetV1, ProgramConstraintSubjectV1, ProgramSessionEvaluationError,
+    ReportModeV1, Source, SourceId, Surface, Target, TargetCandidateChoiceV1, TargetCandidateId,
+    TargetCandidateV1, TargetDomainV1, TargetId, checked_program_evaluation_cell_counts_for_test,
     fail_program_preflight_reservation_for_test,
 };
 use crate::session::{SessionState, SessionUpdateError};
@@ -1089,10 +1089,9 @@ fn bijective_source_target_and_candidate_renaming_preserves_joint_evidence() {
                     cell.candidate_state_index(),
                     cell.case_index(),
                     cell.constraint(),
-                    cell.target(),
+                    cell.subject(),
                     cell.is_hard(),
                     cell.result().is_violation(),
-                    cell.appearance_context(),
                 )
             })
             .collect::<Vec<_>>();
@@ -1769,7 +1768,10 @@ fn lower_id_diagnostic_cannot_consume_the_selected_state_final_recheck() {
             state_index: 0,
             case_index: 0,
             constraint: hard,
-            target: OCCURRENCE,
+            subject: ProgramConstraintSubjectV1::ModeledOccurrence {
+                occurrence: OCCURRENCE,
+                context: appearance_context(),
+            },
             hard_violation_count: 1,
         }),
     );
@@ -1810,7 +1812,10 @@ fn diagnostic_error_cannot_mask_a_selected_state_final_recheck_violation() {
             state_index: 0,
             case_index: 0,
             constraint: hard,
-            target: OCCURRENCE,
+            subject: ProgramConstraintSubjectV1::ModeledOccurrence {
+                occurrence: OCCURRENCE,
+                context: appearance_context(),
+            },
             hard_violation_count: 1,
         }),
     );
@@ -1873,7 +1878,10 @@ fn final_recheck_violation_is_typed_and_retains_the_previous_certificate() {
             state_index: 0,
             case_index: 0,
             constraint: ConstraintId::new(1),
-            target: OCCURRENCE,
+            subject: ProgramConstraintSubjectV1::ModeledOccurrence {
+                occurrence: OCCURRENCE,
+                context: appearance_context(),
+            },
             hard_violation_count: 1,
         })
     );

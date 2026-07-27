@@ -8,11 +8,11 @@
 use super::*;
 
 const DOMAIN_V3: &[u8] = b"labcolors.program-content-identity.v3\0";
-// Максимальный V3-цвет принадлежит Occurrence: теги вершины, композиции,
-// контекста и frame, два binary64-параметра наблюдения и surround. Явная
-// граница устраняет аллокацию на каждую вершину и требует пересмотра при
-// расширении схемы вместо скрытого runtime-лимита.
-const COLOR_CAPACITY: usize = 1 + 1 + 1 + 4 + 8 + 8 + 1;
+// Максимальный V3-цвет принадлежит ограничению clean-set: тег вершины,
+// семейство и полный дайджест выпуска. Явная граница устраняет аллокацию на
+// каждую вершину и требует пересмотра при расширении схемы вместо скрытого
+// лимита времени исполнения.
+const COLOR_CAPACITY: usize = 1 + 1 + 32;
 
 mod release_tag {
     pub(super) const PROGRAM_SCHEMA_V3: u8 = 3;
@@ -60,8 +60,9 @@ mod release_tag {
     pub(super) const WCAG22_SC_1_4_3_TEXT_LARGE_SCALE: u8 = 2;
     pub(super) const WCAG22_SC_1_4_11_UI_COMPONENT_OR_STATE: u8 = 3;
     pub(super) const WCAG22_SC_1_4_11_GRAPHICAL_OBJECT: u8 = 4;
+    pub(super) const DECLARED_SRGB8_CLEAN_SET_FAMILY_V1: u8 = 3;
     #[cfg(test)]
-    pub(super) const MODELED_LCS_PROBE_FAMILY_V1: u8 = 3;
+    pub(super) const MODELED_LCS_PROBE_FAMILY_V1: u8 = 4;
 }
 
 /// Устойчивый к коллизиям адрес канонизированного содержимого Program V3.
@@ -173,6 +174,7 @@ enum EdgeRoleV1 {
     PresentationRootTerminal = 18,
     PresentationTargetRoot = 19,
     PresentationTargetOccurrence = 20,
+    ConstraintPresentationTarget = 21,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -543,6 +545,44 @@ fn constraint_color(
     Ok(color)
 }
 
+fn declared_srgb8_clean_set_constraint_color(
+    mode_tag: u8,
+) -> Result<VertexColorV1, ProgramCompileError> {
+    declared_srgb8_clean_set_constraint_color_for_release(
+        mode_tag,
+        crate::clean_set::EXACT_NOMINAL_SRGB8_CLEAN_SET_RELEASE_SHA256_V1,
+    )
+}
+
+fn declared_srgb8_clean_set_constraint_color_for_release(
+    mode_tag: u8,
+    release: [u8; 32],
+) -> Result<VertexColorV1, ProgramCompileError> {
+    let mut color = VertexColorV1::new(mode_tag);
+    color.push_u8(release_tag::DECLARED_SRGB8_CLEAN_SET_FAMILY_V1)?;
+    for byte in release {
+        color.push_u8(byte)?;
+    }
+    Ok(color)
+}
+
+fn presentation_target_vertex(
+    targets: &[(PointPresentationTargetV1, usize)],
+    target: PointPresentationTargetV1,
+) -> Result<usize, ProgramCompileError> {
+    let key = (target.root(), target.occurrence());
+    let index = targets
+        .binary_search_by_key(&key, |(candidate, _)| {
+            (candidate.root(), candidate.occurrence())
+        })
+        .map_err(|_| ProgramCompileError::InternalInvariant)?;
+    let (candidate, vertex) = targets[index];
+    if candidate != target {
+        return Err(ProgramCompileError::InternalInvariant);
+    }
+    Ok(vertex)
+}
+
 fn build_graph<Evaluation>(
     program: &Program<Evaluation>,
 ) -> Result<CanonicalGraphV1, ProgramCompileError>
@@ -718,42 +758,88 @@ where
             EdgeRoleV1::PresentationRootTerminal,
         )?;
     }
-    for (target, vertex) in presentation_targets {
+    for (target, vertex) in &presentation_targets {
         graph.add_edge(
-            vertex,
+            *vertex,
             presentation_roots.get(target.root())?,
             EdgeRoleV1::PresentationTargetRoot,
         )?;
         graph.add_edge(
-            vertex,
+            *vertex,
             occurrences.get(target.occurrence())?,
             EdgeRoleV1::PresentationTargetOccurrence,
         )?;
     }
 
     for constraint in &program.constraints.hard {
-        let color = constraint_color(
-            vertex_tag::CONSTRAINT_HARD,
-            program.evaluator.constraint_content(constraint.invocation),
-        )?;
+        let (color, target, role) = match *constraint.body() {
+            ProgramConstraintBodyV1::ModeledOccurrence {
+                occurrence,
+                invocation,
+            } => (
+                constraint_color(
+                    vertex_tag::CONSTRAINT_HARD,
+                    program.evaluator.constraint_content(invocation),
+                )?,
+                occurrences.get(occurrence)?,
+                EdgeRoleV1::ConstraintOccurrence,
+            ),
+            ProgramConstraintBodyV1::DeclaredSrgb8CleanSet { target } => (
+                declared_srgb8_clean_set_constraint_color(vertex_tag::CONSTRAINT_HARD)?,
+                presentation_target_vertex(&presentation_targets, target)?,
+                EdgeRoleV1::ConstraintPresentationTarget,
+            ),
+            #[cfg(test)]
+            ProgramConstraintBodyV1::DeclaredSrgb8CleanSetFinalRecheckMutant { target } => {
+                let mut release = crate::clean_set::EXACT_NOMINAL_SRGB8_CLEAN_SET_RELEASE_SHA256_V1;
+                release[0] ^= 1;
+                (
+                    declared_srgb8_clean_set_constraint_color_for_release(
+                        vertex_tag::CONSTRAINT_HARD,
+                        release,
+                    )?,
+                    presentation_target_vertex(&presentation_targets, target)?,
+                    EdgeRoleV1::ConstraintPresentationTarget,
+                )
+            }
+        };
         let vertex = graph.add_member(color)?;
-        graph.add_edge(
-            vertex,
-            occurrences.get(constraint.target)?,
-            EdgeRoleV1::ConstraintOccurrence,
-        )?;
+        graph.add_edge(vertex, target, role)?;
     }
     for constraint in &program.constraints.report_only {
-        let color = constraint_color(
-            vertex_tag::CONSTRAINT_REPORT_ONLY,
-            program.evaluator.constraint_content(constraint.invocation),
-        )?;
+        let (color, target, role) = match *constraint.body() {
+            ProgramConstraintBodyV1::ModeledOccurrence {
+                occurrence,
+                invocation,
+            } => (
+                constraint_color(
+                    vertex_tag::CONSTRAINT_REPORT_ONLY,
+                    program.evaluator.constraint_content(invocation),
+                )?,
+                occurrences.get(occurrence)?,
+                EdgeRoleV1::ConstraintOccurrence,
+            ),
+            ProgramConstraintBodyV1::DeclaredSrgb8CleanSet { target } => (
+                declared_srgb8_clean_set_constraint_color(vertex_tag::CONSTRAINT_REPORT_ONLY)?,
+                presentation_target_vertex(&presentation_targets, target)?,
+                EdgeRoleV1::ConstraintPresentationTarget,
+            ),
+            #[cfg(test)]
+            ProgramConstraintBodyV1::DeclaredSrgb8CleanSetFinalRecheckMutant { target } => {
+                let mut release = crate::clean_set::EXACT_NOMINAL_SRGB8_CLEAN_SET_RELEASE_SHA256_V1;
+                release[0] ^= 1;
+                (
+                    declared_srgb8_clean_set_constraint_color_for_release(
+                        vertex_tag::CONSTRAINT_REPORT_ONLY,
+                        release,
+                    )?,
+                    presentation_target_vertex(&presentation_targets, target)?,
+                    EdgeRoleV1::ConstraintPresentationTarget,
+                )
+            }
+        };
         let vertex = graph.add_member(color)?;
-        graph.add_edge(
-            vertex,
-            occurrences.get(constraint.target)?,
-            EdgeRoleV1::ConstraintOccurrence,
-        )?;
+        graph.add_edge(vertex, target, role)?;
     }
     for output in &program.outputs {
         let vertex = graph.add_member(VertexColorV1::new(vertex_tag::OUTPUT))?;
@@ -1415,6 +1501,30 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn declared_clean_set_constraint_color_binds_every_release_digest_byte() {
+        let release = crate::clean_set::EXACT_NOMINAL_SRGB8_CLEAN_SET_RELEASE_SHA256_V1;
+        let baseline = declared_srgb8_clean_set_constraint_color_for_release(
+            vertex_tag::CONSTRAINT_HARD,
+            release,
+        )
+        .unwrap();
+
+        for byte_index in 0..release.len() {
+            let mut mutant = release;
+            mutant[byte_index] ^= 1;
+            assert_ne!(
+                baseline,
+                declared_srgb8_clean_set_constraint_color_for_release(
+                    vertex_tag::CONSTRAINT_HARD,
+                    mutant,
+                )
+                .unwrap(),
+                "release digest byte {byte_index} escaped identity",
+            );
+        }
+    }
     use proptest::prelude::*;
 
     #[test]

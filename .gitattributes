@@ -21,3 +21,13 @@ conformance/vectors/*.json text eol=lf
 # Bash-скрипт Swift-conformance исполняется в контейнере через `bash <файл>`.
 # Пин к LF: CR в shebang/командах ломает исполнение на Linux.
 bindings/swift/ci/*.sh text eol=lf
+
+# Точные идентичности clean-set считаются по байтам репозитория. Кодек бинарный;
+# юридические тексты, происхождение и receipt канонизированы как UTF-8 с LF.
+crates/labcolors-core/contracts/clean-set-srgb8-v1/*.bin binary
+crates/labcolors-core/contracts/clean-set-srgb8-v1/*.json text eol=lf
+crates/labcolors-core/contracts/clean-set-srgb8-v1/*.sha256 text eol=lf
+crates/labcolors-core/LICENSES/*.txt text eol=lf whitespace=-blank-at-eof
+crates/labcolors-core/NOTICE.md text eol=lf
+scripts/verify_clean_set_receipt.py text eol=lf
+scripts/test_verify_clean_set_receipt.py text eol=lf

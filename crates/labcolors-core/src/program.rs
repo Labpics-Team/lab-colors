@@ -67,14 +67,17 @@ use crate::program_session::{
     CompiledCoreProgramV1, CompositionProfile, ConstraintId, ConstraintInvocation,
     CoreProgramConstraintInvocationV1, CoreProgramDraftErrorV1, CoreProgramDraftV1,
     CoreProgramEvaluatorErrorV1, CoreProgramEvaluatorsV1, CoreProgramPassEvidenceV1,
-    CoreProgramViolationEvidenceV1, DeclaredJointSelectionV1, JointCandidateStateV1, Occurrence,
-    OpacityInput, OutputBinding, OutputSlotId, Paint, PointPresentationRootV1,
-    PointPresentationTargetV1, PresentationRootId, ProgramCompileError, ProgramConflictV1,
-    ProgramConstraintCellV1, ProgramConstraintResultV1, ProgramContentIdentityV3,
-    ProgramPaintOutputV1, ProgramSessionEvaluationError, ProgramSessionInstantiateError,
-    ProgramSessionPlan, ProgramVerifiedV1, Source, SourceId, Surface, Target,
-    TargetCandidateChoiceV1, TargetCandidateId, TargetCandidateV1 as CoreTargetCandidateV1,
-    TargetId,
+    CoreProgramViolationEvidenceV1, DeclaredJointSelectionV1,
+    DeclaredSrgb8CleanSetPassV1 as CoreDeclaredSrgb8CleanSetPassV1,
+    DeclaredSrgb8CleanSetViolationV1 as CoreDeclaredSrgb8CleanSetViolationV1,
+    JointCandidateStateV1, Occurrence, OpacityInput, OutputBinding, OutputSlotId, Paint,
+    PointPresentationRootV1, PointPresentationTargetV1, PresentationRootId, ProgramCompileError,
+    ProgramConflictV1, ProgramConstraintCellV1, ProgramConstraintPassEvidenceV1,
+    ProgramConstraintResultV1, ProgramConstraintSubjectV1, ProgramConstraintViolationEvidenceV1,
+    ProgramContentIdentityV3, ProgramPaintOutputV1, ProgramSessionEvaluationError,
+    ProgramSessionInstantiateError, ProgramSessionPlan, ProgramVerifiedV1, Source, SourceId,
+    Surface, Target, TargetCandidateChoiceV1, TargetCandidateId,
+    TargetCandidateV1 as CoreTargetCandidateV1, TargetId,
 };
 use crate::session::{Session, SessionState, SessionUpdateError};
 use crate::wcag22::{
@@ -473,6 +476,8 @@ pub(crate) enum CompileErrorKindV1 {
     MissingOccurrenceBackdrop,
     /// Ограничение ссылается на отсутствующий Occurrence.
     MissingConstraintOccurrence,
+    /// Ограничение clean-set ссылается на необъявленную цель представления.
+    MissingConstraintPresentationTarget,
     /// Выход ссылается на отсутствующий Paint.
     MissingOutputPaint,
     /// Граф Paint содержит цикл.
@@ -913,6 +918,15 @@ pub(crate) enum CompileErrorV1 {
         /// Отсутствующий Occurrence.
         occurrence: OccurrenceIdV1,
     },
+    /// Ограничение clean-set ссылается не на целиком объявленную цель представления.
+    MissingConstraintPresentationTarget {
+        /// Ошибочное ограничение.
+        constraint: ConstraintIdV1,
+        /// Корень отсутствующей пары.
+        root: PresentationRootIdV1,
+        /// Целевой `Occurrence` отсутствующей пары.
+        occurrence: OccurrenceIdV1,
+    },
     /// Повторно объявлен выходной слот.
     DuplicateOutputSlot {
         /// Повторный ID.
@@ -992,6 +1006,9 @@ impl CompileErrorV1 {
             Self::EmptyOutputSet => Kind::EmptyOutputSet,
             Self::DuplicateConstraint { .. } => Kind::DuplicateConstraint,
             Self::MissingConstraintOccurrence { .. } => Kind::MissingConstraintOccurrence,
+            Self::MissingConstraintPresentationTarget { .. } => {
+                Kind::MissingConstraintPresentationTarget
+            }
             Self::DuplicateOutputSlot { .. } => Kind::DuplicateOutputSlot,
             Self::MissingOutputPaint { .. } => Kind::MissingOutputPaint,
             Self::ResourceExhausted => Kind::ResourceExhausted,
@@ -1049,7 +1066,8 @@ impl CompileErrorV1 {
             | Self::DuplicateOutputSlot { output }
             | Self::MissingOutputPaint { output, .. } => Some(Handle::OutputSlot(*output)),
             Self::DuplicateConstraint { constraint }
-            | Self::MissingConstraintOccurrence { constraint, .. } => {
+            | Self::MissingConstraintOccurrence { constraint, .. }
+            | Self::MissingConstraintPresentationTarget { constraint, .. } => {
                 Some(Handle::Constraint(*constraint))
             }
             Self::PaintCycle(_)
@@ -1082,6 +1100,7 @@ impl CompileErrorV1 {
             Self::MissingSurfaceInputPort { input, .. } => Some(Handle::SurfaceInputPort(*input)),
             Self::MissingSurfaceOccurrence { occurrence, .. }
             | Self::MissingConstraintOccurrence { occurrence, .. }
+            | Self::MissingConstraintPresentationTarget { occurrence, .. }
             | Self::MissingPresentationRootOccurrence { occurrence, .. }
             | Self::PresentationRootConsumedDownstream { occurrence, .. }
             | Self::DuplicatePointPresentationTarget { occurrence, .. }
@@ -1379,6 +1398,50 @@ impl DraftV1 {
         self
     }
 
+    /// Требует принадлежности непустого финального вклада точной цели
+    /// представления к закреплённому пакетом множеству encoded sRGB8.
+    pub(crate) fn push_declared_srgb8_clean_set_hard(
+        &mut self,
+        id: ConstraintIdV1,
+        root: PresentationRootIdV1,
+        occurrence: OccurrenceIdV1,
+    ) -> &mut Self {
+        self.inner.push_declared_srgb8_clean_set_hard(
+            id.into_core(),
+            PointPresentationTargetV1::new(root.into_core(), occurrence.into_core()),
+        );
+        self
+    }
+
+    /// Диагностирует тот же закреплённый пакетом предикат, не влияя на выбор.
+    pub(crate) fn push_declared_srgb8_clean_set_report_only(
+        &mut self,
+        id: ConstraintIdV1,
+        root: PresentationRootIdV1,
+        occurrence: OccurrenceIdV1,
+    ) -> &mut Self {
+        self.inner.push_declared_srgb8_clean_set_report_only(
+            id.into_core(),
+            PointPresentationTargetV1::new(root.into_core(), occurrence.into_core()),
+        );
+        self
+    }
+
+    #[cfg(test)]
+    pub(crate) fn push_declared_srgb8_clean_set_final_recheck_mutant(
+        &mut self,
+        id: ConstraintIdV1,
+        root: PresentationRootIdV1,
+        occurrence: OccurrenceIdV1,
+    ) -> &mut Self {
+        self.inner
+            .push_declared_srgb8_clean_set_final_recheck_mutant(
+                id.into_core(),
+                PointPresentationTargetV1::new(root.into_core(), occurrence.into_core()),
+            );
+        self
+    }
+
     /// Связывает клиентский output slot с выбранным encoded Paint.
     pub(crate) fn push_output(&mut self, output: OutputSlotIdV1, paint: PaintIdV1) -> &mut Self {
         self.inner
@@ -1488,6 +1551,15 @@ impl OwnerV1 {
     /// Число допущенных компилятором связей между целью и корнем представления точки.
     pub(crate) fn point_presentation_count(&self) -> usize {
         self.compiled.point_presentation_count()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn point_resolution_count_for_test(
+        &self,
+        session: &SessionV1,
+    ) -> Option<(usize, usize)> {
+        self.compiled
+            .point_resolution_count_for_test(&session.session)
     }
 
     /// Канонический порядок входных портов для однократного binding на хосте.
@@ -2068,6 +2140,41 @@ pub(crate) enum ConstraintModeV1 {
     ReportOnly,
 }
 
+/// Полный физический объект ограничения без подстановки одного лишь `Occurrence`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ConstraintSubjectV1 {
+    /// Видимый результат одного `Occurrence` в объявленном для него контексте.
+    ModeledOccurrence {
+        occurrence: OccurrenceIdV1,
+        context: AppearanceContextV1,
+    },
+    /// Итоговый вклад целевого `Occurrence` в конкретный терминальный корень.
+    PointPresentation {
+        root: PresentationRootIdV1,
+        occurrence: OccurrenceIdV1,
+        terminal: OccurrenceIdV1,
+    },
+}
+
+const fn project_constraint_subject(subject: ProgramConstraintSubjectV1) -> ConstraintSubjectV1 {
+    match subject {
+        ProgramConstraintSubjectV1::ModeledOccurrence {
+            occurrence,
+            context,
+        } => ConstraintSubjectV1::ModeledOccurrence {
+            occurrence: OccurrenceIdV1::from_core(occurrence),
+            context: AppearanceContextV1::from_core(context),
+        },
+        ProgramConstraintSubjectV1::PointPresentation { target, terminal } => {
+            ConstraintSubjectV1::PointPresentation {
+                root: PresentationRootIdV1::from_core(target.root()),
+                occurrence: OccurrenceIdV1::from_core(target.occurrence()),
+                terminal: OccurrenceIdV1::from_core(terminal),
+            }
+        }
+    }
+}
+
 /// Одна клетка `case × constraint` выбранного или fixed состояния.
 #[derive(Clone, Copy)]
 pub(crate) struct VerifiedCellV1<'a> {
@@ -2089,9 +2196,9 @@ impl<'a> VerifiedCellV1<'a> {
         ConstraintIdV1::from_core(self.inner.constraint())
     }
 
-    /// Возвращает ID проверенного Occurrence.
-    pub(crate) const fn occurrence(self) -> OccurrenceIdV1 {
-        OccurrenceIdV1::from_core(self.inner.target())
+    /// Возвращает полный физический объект ограничения.
+    pub(crate) const fn subject(self) -> ConstraintSubjectV1 {
+        project_constraint_subject(self.inner.subject())
     }
 
     /// Возвращает роль ограничения в выборе.
@@ -2131,9 +2238,9 @@ impl<'a> ConflictCellV1<'a> {
         ConstraintIdV1::from_core(self.inner.constraint())
     }
 
-    /// Возвращает ID проверенного Occurrence.
-    pub(crate) const fn occurrence(self) -> OccurrenceIdV1 {
-        OccurrenceIdV1::from_core(self.inner.target())
+    /// Возвращает полный физический объект ограничения.
+    pub(crate) const fn subject(self) -> ConstraintSubjectV1 {
+        project_constraint_subject(self.inner.subject())
     }
 
     /// Возвращает роль ограничения в выборе.
@@ -2157,25 +2264,39 @@ const fn project_constraint_mode(cell: &CoreProgramConstraintCellV1) -> Constrai
 
 fn project_assessment(cell: &CoreProgramConstraintCellV1) -> AssessmentV1<'_> {
     match cell.result() {
-        ProgramConstraintResultV1::Pass(CoreProgramPassEvidenceV1::ExactSrgb8(evidence)) => {
-            AssessmentV1::ExactSrgb8(ExactSrgb8EvidenceV1 {
-                inner: ExactSrgb8EvidenceRefV1::Pass(evidence),
-            })
-        }
-        ProgramConstraintResultV1::Violation(CoreProgramViolationEvidenceV1::ExactSrgb8(
-            evidence,
+        ProgramConstraintResultV1::Pass(ProgramConstraintPassEvidenceV1::ModeledOccurrence(
+            CoreProgramPassEvidenceV1::ExactSrgb8(evidence),
         )) => AssessmentV1::ExactSrgb8(ExactSrgb8EvidenceV1 {
+            inner: ExactSrgb8EvidenceRefV1::Pass(evidence),
+        }),
+        ProgramConstraintResultV1::Violation(
+            ProgramConstraintViolationEvidenceV1::ModeledOccurrence(
+                CoreProgramViolationEvidenceV1::ExactSrgb8(evidence),
+            ),
+        ) => AssessmentV1::ExactSrgb8(ExactSrgb8EvidenceV1 {
             inner: ExactSrgb8EvidenceRefV1::Violation(evidence),
         }),
-        ProgramConstraintResultV1::Pass(CoreProgramPassEvidenceV1::Wcag22Srgb8(evidence)) => {
-            AssessmentV1::Wcag22Srgb8(Wcag22Srgb8EvidenceV1 {
-                inner: Wcag22Srgb8EvidenceRefV1::Pass(evidence),
-            })
-        }
-        ProgramConstraintResultV1::Violation(CoreProgramViolationEvidenceV1::Wcag22Srgb8(
-            evidence,
+        ProgramConstraintResultV1::Pass(ProgramConstraintPassEvidenceV1::ModeledOccurrence(
+            CoreProgramPassEvidenceV1::Wcag22Srgb8(evidence),
         )) => AssessmentV1::Wcag22Srgb8(Wcag22Srgb8EvidenceV1 {
+            inner: Wcag22Srgb8EvidenceRefV1::Pass(evidence),
+        }),
+        ProgramConstraintResultV1::Violation(
+            ProgramConstraintViolationEvidenceV1::ModeledOccurrence(
+                CoreProgramViolationEvidenceV1::Wcag22Srgb8(evidence),
+            ),
+        ) => AssessmentV1::Wcag22Srgb8(Wcag22Srgb8EvidenceV1 {
             inner: Wcag22Srgb8EvidenceRefV1::Violation(evidence),
+        }),
+        ProgramConstraintResultV1::Pass(
+            ProgramConstraintPassEvidenceV1::DeclaredSrgb8CleanSet(evidence),
+        ) => AssessmentV1::DeclaredSrgb8CleanSet(DeclaredSrgb8CleanSetEvidenceV1 {
+            inner: DeclaredSrgb8CleanSetEvidenceRefV1::Pass(evidence),
+        }),
+        ProgramConstraintResultV1::Violation(
+            ProgramConstraintViolationEvidenceV1::DeclaredSrgb8CleanSet(evidence),
+        ) => AssessmentV1::DeclaredSrgb8CleanSet(DeclaredSrgb8CleanSetEvidenceV1 {
+            inner: DeclaredSrgb8CleanSetEvidenceRefV1::Violation(evidence),
         }),
     }
 }
@@ -2187,22 +2308,76 @@ pub(crate) enum AssessmentV1<'a> {
     ExactSrgb8(ExactSrgb8EvidenceV1<'a>),
     /// Evidence применимого критерия WCAG 2.2.
     Wcag22Srgb8(Wcag22Srgb8EvidenceV1<'a>),
+    /// Свидетельство закреплённого пакетом clean-set над финальным результатом
+    /// представления.
+    DeclaredSrgb8CleanSet(DeclaredSrgb8CleanSetEvidenceV1<'a>),
 }
 
-impl<'a> AssessmentV1<'a> {
+impl AssessmentV1<'_> {
     /// Возвращает несовместимый с противоположным исход классификатора.
     pub(crate) const fn verdict(self) -> VerdictV1 {
         match self {
             Self::ExactSrgb8(value) => value.verdict(),
             Self::Wcag22Srgb8(value) => value.verdict(),
+            Self::DeclaredSrgb8CleanSet(value) => value.verdict(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DeclaredSrgb8CleanSetViolationKindV1 {
+    FinalOwnedDomainAbsent,
+    Rejected,
+}
+
+#[derive(Clone, Copy)]
+enum DeclaredSrgb8CleanSetEvidenceRefV1<'a> {
+    Pass(&'a CoreDeclaredSrgb8CleanSetPassV1),
+    Violation(&'a CoreDeclaredSrgb8CleanSetViolationV1),
+}
+
+/// Заимствованное свидетельство одной абсолютной проверки финального домена sRGB8.
+#[derive(Clone, Copy)]
+pub(crate) struct DeclaredSrgb8CleanSetEvidenceV1<'a> {
+    inner: DeclaredSrgb8CleanSetEvidenceRefV1<'a>,
+}
+
+impl DeclaredSrgb8CleanSetEvidenceV1<'_> {
+    pub(crate) const fn verdict(self) -> VerdictV1 {
+        match self.inner {
+            DeclaredSrgb8CleanSetEvidenceRefV1::Pass(_) => VerdictV1::Pass,
+            DeclaredSrgb8CleanSetEvidenceRefV1::Violation(_) => VerdictV1::Violation,
         }
     }
 
-    /// Возвращает физическую occurrence-привязку и объявленный appearance context.
-    pub(crate) fn binding(self) -> PointBindingV1<'a> {
-        match self {
-            Self::ExactSrgb8(value) => value.binding(),
-            Self::Wcag22Srgb8(value) => value.binding(),
+    pub(crate) const fn violation(self) -> Option<DeclaredSrgb8CleanSetViolationKindV1> {
+        match self.inner {
+            DeclaredSrgb8CleanSetEvidenceRefV1::Pass(_) => None,
+            DeclaredSrgb8CleanSetEvidenceRefV1::Violation(
+                CoreDeclaredSrgb8CleanSetViolationV1::FinalOwnedDomainAbsent,
+            ) => Some(DeclaredSrgb8CleanSetViolationKindV1::FinalOwnedDomainAbsent),
+            DeclaredSrgb8CleanSetEvidenceRefV1::Violation(
+                CoreDeclaredSrgb8CleanSetViolationV1::Rejected { .. },
+            ) => Some(DeclaredSrgb8CleanSetViolationKindV1::Rejected),
+        }
+    }
+
+    pub(crate) const fn visible(self) -> Option<Srgb8> {
+        match self.inner {
+            DeclaredSrgb8CleanSetEvidenceRefV1::Pass(evidence) => Some(evidence.visible()),
+            DeclaredSrgb8CleanSetEvidenceRefV1::Violation(evidence) => evidence.visible(),
+        }
+    }
+
+    pub(crate) const fn rejected_blue_interval(self) -> Option<[u8; 2]> {
+        match self.inner {
+            DeclaredSrgb8CleanSetEvidenceRefV1::Pass(_) => None,
+            DeclaredSrgb8CleanSetEvidenceRefV1::Violation(evidence) => {
+                match evidence.rejected_blue_interval() {
+                    Some(interval) => Some(interval.endpoints()),
+                    None => None,
+                }
+            }
         }
     }
 }
@@ -2855,8 +3030,8 @@ pub(crate) enum UpdateInvariantFailureV1 {
         case_index: usize,
         /// Непрозрачный ID ограничения.
         constraint: ConstraintIdV1,
-        /// Непрозрачный ID occurrence.
-        occurrence: OccurrenceIdV1,
+        /// Полный физический объект финальной перепроверки.
+        subject: ConstraintSubjectV1,
         /// Число hard-нарушений на финальной перепроверке.
         hard_violation_count: usize,
     },
@@ -3236,6 +3411,15 @@ fn map_program_compile_error(error: ProgramCompileError) -> CompileErrorV1 {
             constraint: ConstraintIdV1::from_core(constraint),
             occurrence: OccurrenceIdV1::from_core(occurrence),
         },
+        ProgramCompileError::MissingConstraintPresentationTarget {
+            constraint,
+            root,
+            occurrence,
+        } => CompileErrorV1::MissingConstraintPresentationTarget {
+            constraint: ConstraintIdV1::from_core(constraint),
+            root: PresentationRootIdV1::from_core(root),
+            occurrence: OccurrenceIdV1::from_core(occurrence),
+        },
         ProgramCompileError::DuplicateOutputSlot { output } => {
             CompileErrorV1::DuplicateOutputSlot {
                 output: OutputSlotIdV1::from_core(output),
@@ -3412,14 +3596,14 @@ fn map_plan_error(error: CoreProgramPlanErrorV1) -> UpdateErrorV1 {
             state_index,
             case_index,
             constraint,
-            target,
+            subject,
             hard_violation_count,
         } => UpdateErrorV1::InternalInvariant {
             source: UpdateInvariantFailureV1::SelectionRecheck {
                 state_index,
                 case_index,
                 constraint: ConstraintIdV1::from_core(constraint),
-                occurrence: OccurrenceIdV1::from_core(target),
+                subject: project_constraint_subject(subject),
                 hard_violation_count,
             },
         },
@@ -3685,6 +3869,7 @@ mod update_error_projection_tests {
     #[test]
     fn every_unreachable_core_failure_keeps_its_subject_and_witness_facts() {
         use crate::observation::ObservationSchemaMismatchV1;
+        let subject_context = context().0;
 
         let assert_invariant = |error: UpdateErrorV1, source: UpdateInvariantFailureV1| {
             assert_eq!(error.kind(), UpdateErrorKindV1::InternalInvariant);
@@ -3767,14 +3952,20 @@ mod update_error_projection_tests {
                 state_index: 1,
                 case_index: 2,
                 constraint: ConstraintId::new(3),
-                target: OccurrenceId::new(4),
+                subject: ProgramConstraintSubjectV1::ModeledOccurrence {
+                    occurrence: OccurrenceId::new(4),
+                    context: subject_context,
+                },
                 hard_violation_count: 1,
             }),
             UpdateInvariantFailureV1::SelectionRecheck {
                 state_index: 1,
                 case_index: 2,
                 constraint: ConstraintIdV1::new(3),
-                occurrence: OccurrenceIdV1::new(4),
+                subject: ConstraintSubjectV1::ModeledOccurrence {
+                    occurrence: OccurrenceIdV1::new(4),
+                    context: AppearanceContextV1::from_core(subject_context),
+                },
                 hard_violation_count: 1,
             },
         );

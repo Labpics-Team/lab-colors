@@ -786,6 +786,33 @@ fn shared_observation_ssot_has_one_backing_without_lifecycle_or_adapter_facades(
 }
 
 #[test]
+fn clean_set_program_path_cannot_smuggle_auto_or_writer_contracts() {
+    for (path, source) in [
+        ("program.rs", PROGRAM_SOURCE),
+        ("program_session.rs", PROGRAM_SESSION_SOURCE),
+        ("program_identity.rs", PROGRAM_IDENTITY_SOURCE),
+    ] {
+        let source = source.to_ascii_lowercase();
+        for forbidden in [
+            "pointconvention",
+            "autoqualityrelease",
+            "qualityauto",
+            "quality_auto",
+            "quality-auto",
+            "shortquality",
+            "short_quality",
+            "writer",
+            "checkpoint",
+        ] {
+            assert!(
+                !source.contains(forbidden),
+                "{path} must not couple encoded clean-set admission to `{forbidden}`",
+            );
+        }
+    }
+}
+
+#[test]
 fn program_session_keeps_physical_evidence_separate_from_lazy_lcs_capability() {
     for required in [
         "ProgramPointOccurrenceV1::from_resolved(source, binding.context)",
@@ -868,7 +895,10 @@ fn program_session_keeps_physical_evidence_separate_from_lazy_lcs_capability() {
         "impl<Evaluation> ProgramConstraintResultV1<Evaluation>",
         "/// One canonical `physical case × constraint` report cell.",
     );
-    assert!(result.contains("fn binding(&self) -> ProgramVisiblePointBindingV1"));
+    assert!(
+        !result.contains("fn binding(&self) -> ProgramVisiblePointBindingV1"),
+        "a heterogeneous result must not invent an occurrence-only binding",
+    );
     assert!(!result.contains("modeled_lcs"));
     let cell = source_scope(
         PROGRAM_SESSION_SOURCE,
@@ -879,6 +909,7 @@ fn program_session_keeps_physical_evidence_separate_from_lazy_lcs_capability() {
         cell.contains("result: ProgramConstraintResultV1<Evaluation>,"),
         "each Program cell must own the typed evidence result",
     );
+    assert!(cell.contains("subject: ProgramConstraintSubjectV1,"));
     assert!(
         !cell.contains("modeled_lcs_occurrence: ModeledLcsOccurrenceV1,"),
         "a Program cell must not duplicate the modeled occurrence already owned by evidence",
@@ -932,7 +963,7 @@ fn program_session_keeps_physical_evidence_separate_from_lazy_lcs_capability() {
         "let outputs = compile_outputs(",
     );
     for required in [
-        "compile_constraints::<Evaluation>(&graph, &all_occurrence_contexts, &program.constraints)?",
+        "compile_constraints::<Evaluation>( &graph, &all_occurrence_contexts, &point_presentations, &program.constraints, )?",
         "compact_constraint_contexts(&all_occurrence_contexts, &mut constraints)?",
     ] {
         assert!(
@@ -948,8 +979,10 @@ fn program_session_keeps_physical_evidence_separate_from_lazy_lcs_capability() {
     );
     for required in [
         "targets.sort_unstable(); targets.dedup();",
-        ".binary_search_by_key(&constraint.target_id, |binding| binding.occurrence)",
-        "constraint.occurrence_context_index = index;",
+        "CompiledProgramConstraintBodyV1::ModeledOccurrence { target_id, .. } => { Some(*target_id) }",
+        "CompiledProgramConstraintBodyV1::PointPresentation { .. } => None",
+        ".binary_search_by_key(target_id, |binding| binding.occurrence)",
+        "*occurrence_context_index = index;",
     ] {
         assert!(
             compaction.contains(required),
@@ -966,7 +999,7 @@ fn program_session_keeps_physical_evidence_separate_from_lazy_lcs_capability() {
         !hot_evaluation.contains("binary_search"),
         "hot Program evaluation must consume compile-time direct indices without searching",
     );
-    assert!(hot_evaluation.contains(".get(constraint.occurrence_context_index)"));
+    assert!(hot_evaluation.contains(".get(occurrence_context_index)"));
 
     for required in [
         "pub(crate) struct ProgramLcsPointAdapterV1",

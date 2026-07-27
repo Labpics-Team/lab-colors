@@ -5,7 +5,7 @@ readme = "README.md"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
-license.workspace = true
+license = "MIT AND CC-BY-4.0 AND CC-BY-SA-4.0"
 repository.workspace = true
 rust-version.workspace = true
 

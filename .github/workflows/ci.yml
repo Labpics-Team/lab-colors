@@ -66,6 +66,10 @@ jobs:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           persist-credentials: false
+      - name: verify exact clean-set product receipt
+        run: python3 scripts/verify_clean_set_receipt.py product --product-root "$GITHUB_WORKSPACE"
+      - name: clean-set receipt verifier hostile tests
+        run: python3 scripts/test_verify_clean_set_receipt.py
       - name: toolchain env (runner.temp)
         run: |
           echo "RUSTUP_HOME=$RUNNER_TEMP/rustup-$GITHUB_JOB" >> "$GITHUB_ENV"
@@ -178,14 +182,9 @@ jobs:
           tar -xzf "target/package/labcolors-core-${crate_version}.crate" -C "$package_root"
           crate_dir="$package_root/labcolors-core-${crate_version}"
           test -f "$crate_dir/README.md"
-          test -f "$crate_dir/LICENSE"
-          test ! -L "$crate_dir/LICENSE"
-          cmp LICENSE "$crate_dir/LICENSE"
-          grep -q '^license = "MIT"$' "$crate_dir/Cargo.toml"
-          if grep -q '^license-file[[:space:]]*=' "$crate_dir/Cargo.toml"; then
-            echo "packaged manifest must not carry both SPDX license and license-file" >&2
-            exit 1
-          fi
+          python3 scripts/verify_clean_set_receipt.py core-package \
+            --source-root "$GITHUB_WORKSPACE" \
+            --package-root "$crate_dir"
           cargo test --doc --manifest-path "$crate_dir/Cargo.toml" --locked
 
   test:

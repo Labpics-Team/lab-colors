@@ -19,7 +19,8 @@ use crate::observation::{
 use crate::program_session::{
     CompiledProgram, CompositionProfile, ConstraintId, ConstraintInvocation, ConstraintSet,
     ObservationGroup, Occurrence, OpacityInput, OutputBinding, OutputSlotId, Paint, Program,
-    ProgramConstraintResultV1, Source, SourceId, Surface, Target, TargetId,
+    ProgramConstraintPassEvidenceV1, ProgramConstraintResultV1, ProgramConstraintSubjectV1,
+    ProgramConstraintViolationEvidenceV1, Source, SourceId, Surface, Target, TargetId,
 };
 use crate::session::SessionState;
 use crate::spaces::cam16::FORWARD_CALLS;
@@ -303,8 +304,17 @@ fn ready_cell_binds_the_actual_visible_signal_and_declared_context_without_lcs()
         panic!("one physical case times one constraint must produce one cell");
     };
 
-    assert_eq!(cell.appearance_context(), average);
-    let ProgramConstraintResultV1::Pass(evidence) = cell.result() else {
+    assert_eq!(
+        cell.subject(),
+        ProgramConstraintSubjectV1::ModeledOccurrence {
+            occurrence: AVERAGE_OCCURRENCE,
+            context: average,
+        },
+    );
+    let ProgramConstraintResultV1::Pass(ProgramConstraintPassEvidenceV1::ModeledOccurrence(
+        evidence,
+    )) = cell.result()
+    else {
         panic!("exact equality must retain typed pass evidence");
     };
     assert_binding_matches_physical(*evidence.binding(), average, Srgb8::new([0x80; 3]));
@@ -333,14 +343,25 @@ fn identical_physical_bytes_keep_distinct_declared_contexts_without_deriving_vie
     let [average_cell, dim_cell] = current.report().cells() else {
         panic!("one case times two constraints must produce two canonical cells");
     };
-    assert_eq!(average_cell.appearance_context(), average);
-    assert_eq!(dim_cell.appearance_context(), dim);
-    assert_ne!(
-        average_cell.appearance_context(),
-        dim_cell.appearance_context()
+    assert_eq!(
+        average_cell.subject(),
+        ProgramConstraintSubjectV1::ModeledOccurrence {
+            occurrence: AVERAGE_OCCURRENCE,
+            context: average,
+        },
+    );
+    assert_eq!(
+        dim_cell.subject(),
+        ProgramConstraintSubjectV1::ModeledOccurrence {
+            occurrence: DIM_OCCURRENCE,
+            context: dim,
+        },
     );
     for cell in [average_cell, dim_cell] {
-        let ProgramConstraintResultV1::Pass(evidence) = cell.result() else {
+        let ProgramConstraintResultV1::Pass(ProgramConstraintPassEvidenceV1::ModeledOccurrence(
+            evidence,
+        )) = cell.result()
+        else {
             panic!("both exact constraints must pass");
         };
         assert_eq!(
@@ -368,8 +389,17 @@ fn exact_black_visible_occurrence_does_not_construct_a_colorimetric_view() {
     let [cell] = current.report().cells() else {
         panic!("the complete report must retain its sole visible occurrence");
     };
-    assert_eq!(cell.appearance_context(), average);
-    let ProgramConstraintResultV1::Pass(evidence) = cell.result() else {
+    assert_eq!(
+        cell.subject(),
+        ProgramConstraintSubjectV1::ModeledOccurrence {
+            occurrence: AVERAGE_OCCURRENCE,
+            context: average,
+        },
+    );
+    let ProgramConstraintResultV1::Pass(ProgramConstraintPassEvidenceV1::ModeledOccurrence(
+        evidence,
+    )) = cell.result()
+    else {
         panic!("exact black identity must pass");
     };
     assert_eq!(*evidence.measurement().value(), Srgb8::new([0; 3]));
@@ -397,8 +427,17 @@ fn hard_violation_retains_physical_binding_and_context_without_current_outputs()
         panic!("the complete failed report must retain its sole cell");
     };
     assert!(cell.result().is_violation());
-    assert_eq!(cell.appearance_context(), average);
-    let ProgramConstraintResultV1::Violation(evidence) = cell.result() else {
+    assert_eq!(
+        cell.subject(),
+        ProgramConstraintSubjectV1::ModeledOccurrence {
+            occurrence: AVERAGE_OCCURRENCE,
+            context: average,
+        },
+    );
+    let ProgramConstraintResultV1::Violation(
+        ProgramConstraintViolationEvidenceV1::ModeledOccurrence(evidence),
+    ) = cell.result()
+    else {
         panic!("exact mismatch must retain typed violation evidence");
     };
     assert_binding_matches_physical(*evidence.binding(), average, Srgb8::new([0x80; 3]));
@@ -419,7 +458,10 @@ fn program_wcag_pass_binds_physical_occurrence_and_declared_context() {
     let [cell] = current.report().cells() else {
         panic!("one WCAG declaration must produce one report cell");
     };
-    let ProgramConstraintResultV1::Pass(evidence) = cell.result() else {
+    let ProgramConstraintResultV1::Pass(ProgramConstraintPassEvidenceV1::ModeledOccurrence(
+        evidence,
+    )) = cell.result()
+    else {
         panic!("WCAG pass must retain typed pass evidence");
     };
     assert_binding_matches_physical(
@@ -450,7 +492,10 @@ fn program_wcag_violation_retains_physical_evidence_without_current_outputs() {
     let [cell] = cause.report().cells() else {
         panic!("one WCAG declaration must produce one failed report cell");
     };
-    let ProgramConstraintResultV1::Violation(evidence) = cell.result() else {
+    let ProgramConstraintResultV1::Violation(
+        ProgramConstraintViolationEvidenceV1::ModeledOccurrence(evidence),
+    ) = cell.result()
+    else {
         panic!("WCAG failure must retain typed violation evidence");
     };
     assert_binding_matches_physical(
@@ -637,7 +682,13 @@ fn encoded_only_program_is_not_rejected_by_an_lcs_incompatible_declared_context(
     let [cell] = current.report().cells() else {
         panic!("the exact constraint must still emit one evidence cell");
     };
-    assert_eq!(cell.appearance_context(), incompatible);
+    assert_eq!(
+        cell.subject(),
+        ProgramConstraintSubjectV1::ModeledOccurrence {
+            occurrence: AVERAGE_OCCURRENCE,
+            context: incompatible,
+        },
+    );
     assert_eq!(
         MODELED_TRISTIMULUS_DERIVATION_CALLS.with(|calls| calls.get()),
         0,
@@ -677,8 +728,7 @@ fn declaration_permutations_preserve_canonical_context_cells_and_output_signals(
         (
             cell.case_index(),
             cell.constraint(),
-            cell.target(),
-            cell.appearance_context(),
+            cell.subject(),
             cell.result().is_violation(),
         )
     };
