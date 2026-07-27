@@ -11,10 +11,14 @@
 //! единственного владельца конкретной скомпилированной эпохи.
 //!
 //! [`OwnerV1::instantiate`] создаёт потоковую [`SessionV1`]. На горячем пути
-//! [`OwnerV1::update`] принимает физические сценарии в каноническом порядке
-//! входов и атомарно возвращает [`ProjectionV1`] без повторного решения в
-//! адаптере. Исторические доказательства принадлежат Session, но только тот же
-//! Owner разрешает обновления и операции.
+//! [`OwnerV1::prepare_update`] принимает физические сценарии в каноническом
+//! порядке входов и возвращает линейный [`PreparedSessionTransitionV1`]. Его
+//! Drop не меняет зафиксированные raw head, lifecycle и previous evidence, а
+//! consuming commit публикует только уже вычисленные raw head и lifecycle и
+//! возвращает [`ProjectionV1`]. Внутренние scratch-буферы могут быть полностью
+//! переинициализированы во время prepare; они не являются состоянием Session.
+//! Это ещё не commit внешнего sink. Исторические доказательства принадлежат
+//! Session, но только тот же Owner разрешает подготовку обновлений и операции.
 //!
 //! Состояния проецируются однозначно:
 //!
@@ -79,7 +83,9 @@ use crate::program_session::{
     Surface, Target, TargetCandidateChoiceV1, TargetCandidateId,
     TargetCandidateV1 as CoreTargetCandidateV1, TargetId,
 };
-use crate::session::{Session, SessionState, SessionUpdateError};
+use crate::session::{
+    PreparedSessionTransition, Session, SessionState, SessionUpdateError, SessionView,
+};
 use crate::wcag22::{
     Wcag22ClientDeclaredNotApplicableV1, Wcag22CriterionV1, Wcag22EvaluationErrorV1,
     Wcag22LuminanceBoundsQ55V1, Wcag22ProfileIdV1, wcag22_profile_v1,
@@ -90,6 +96,8 @@ type CoreConflictV1 = ProgramConflictV1<CoreProgramEvaluatorsV1>;
 type CoreProgramPlanV1 = ProgramSessionPlan<CoreProgramEvaluatorsV1>;
 type CoreProgramSessionV1 = Session<CoreProgramPlanV1>;
 type CoreProgramStateV1 = SessionState<CoreVerifiedV1, CoreConflictV1>;
+type CoreProgramSessionViewV1<'a> = SessionView<'a, CoreProgramPlanV1>;
+type CorePreparedSessionTransitionV1<'a> = PreparedSessionTransition<'a, CoreProgramPlanV1>;
 type CoreProgramPlanErrorV1 = ProgramSessionEvaluationError<CoreProgramEvaluatorErrorV1>;
 type CoreProgramConstraintCellV1 = ProgramConstraintCellV1<CoreProgramEvaluatorsV1>;
 type CoreExactPassEvidenceV1 = ProgramVisiblePointPassEvidence<ExactSrgb8IdentityV1>;
@@ -1597,22 +1605,24 @@ impl OwnerV1 {
         })
     }
 
-    /// Атомарно допускает update и возвращает его неизменяемую проекцию.
+    /// Допускает update без изменения зафиксированных raw head и lifecycle.
     ///
     /// Несовпадение Owner проверяется до admission, аллокаций и вычисления.
-    pub(crate) fn update<'owner, 'session>(
+    /// Raw head, lifecycle и previous evidence меняются только в consuming
+    /// commit; внутренние scratch-буферы могут быть переинициализированы здесь.
+    pub(crate) fn prepare_update<'owner, 'session>(
         &'owner self,
         session: &'session mut SessionV1,
         update: UpdateV1<'_>,
-    ) -> Result<ProjectionV1<'owner, 'session>, UpdateErrorV1> {
+    ) -> Result<PreparedSessionTransitionV1<'owner, 'session>, UpdateErrorV1> {
         if !self.compiled.owns_session(&session.session) {
             return Err(UpdateErrorV1::OwnerMismatch);
         }
-        session.apply_update(update)?;
-        Ok(ProjectionV1 {
-            evidence: session.evidence(),
+        let transition = session.prepare_update(update)?;
+        Ok(PreparedSessionTransitionV1 {
             owner: self,
-            scope: BorrowScopeV1::new(self, session),
+            transition,
+            scope: BorrowScopeV1::prepared(),
         })
     }
 
@@ -1679,11 +1689,14 @@ impl SessionV1 {
     /// Возвращает исторические evidence без права на операции.
     pub(crate) fn evidence(&self) -> EvidenceViewV1<'_> {
         EvidenceViewV1 {
-            session: &self.session,
+            session: self.session.view(),
         }
     }
 
-    fn apply_update(&mut self, update: UpdateV1<'_>) -> Result<(), UpdateErrorV1> {
+    fn prepare_update(
+        &mut self,
+        update: UpdateV1<'_>,
+    ) -> Result<CorePreparedSessionTransitionV1<'_>, UpdateErrorV1> {
         match update {
             UpdateV1::Observed {
                 revision,
@@ -1691,23 +1704,21 @@ impl SessionV1 {
             } => {
                 let source = ScenarioSourceV1(scenarios);
                 self.session
-                    .update_schema_ordered(
+                    .prepare_schema_ordered(
                         Revision::new(revision),
                         &source,
                         &mut self.scenario_order_scratch,
                     )
-                    .map_err(map_session_update_error)?;
+                    .map_err(map_session_update_error)
             }
             UpdateV1::Unknown {
                 revision,
                 reason_id,
-            } => {
-                self.session
-                    .update_unknown(Revision::new(revision), UnknownReasonId::new(reason_id))
-                    .map_err(map_session_update_error)?;
-            }
+            } => self
+                .session
+                .prepare_unknown(Revision::new(revision), UnknownReasonId::new(reason_id))
+                .map_err(map_session_update_error),
         }
-        Ok(())
     }
 }
 
@@ -1772,7 +1783,7 @@ pub(crate) enum ObservationHeadV1 {
 /// Заимствованное историческое evidence, принадлежащее Session.
 #[derive(Clone, Copy)]
 pub(crate) struct EvidenceViewV1<'a> {
-    session: &'a CoreProgramSessionV1,
+    session: CoreProgramSessionViewV1<'a>,
 }
 
 impl<'a> EvidenceViewV1<'a> {
@@ -1842,6 +1853,49 @@ impl<'owner, 'session> BorrowScopeV1<'owner, 'session> {
     const fn new(_owner: &'owner OwnerV1, _session: &'session SessionV1) -> Self {
         Self {
             _scope: PhantomData,
+        }
+    }
+
+    const fn prepared() -> Self {
+        // Core transition already owns the sole mutable Session borrow, so
+        // accepting owner/session here would duplicate or conflict with it.
+        // The containing PreparedSessionTransitionV1 stores that transition
+        // and the exact Owner reference; its type ties this marker to both
+        // concrete `'owner` and `'session` lifetimes.
+        Self {
+            _scope: PhantomData,
+        }
+    }
+}
+
+/// Полностью вычисленный, но ещё не опубликованный переход одной Session.
+///
+/// Тип линейный: он не реализует Clone/Copy. Drop сохраняет зафиксированные raw
+/// head, lifecycle и previous evidence; переинициализированный scratch не
+/// откатывается и не является наблюдаемым состоянием Session. [`Self::commit`]
+/// не выполняет fallible work и не утверждает запись в sink.
+#[must_use = "commit the prepared transition or drop it intentionally"]
+pub(crate) struct PreparedSessionTransitionV1<'owner, 'session> {
+    owner: &'owner OwnerV1,
+    transition: CorePreparedSessionTransitionV1<'session>,
+    scope: BorrowScopeV1<'owner, 'session>,
+}
+
+impl<'owner, 'session> PreparedSessionTransitionV1<'owner, 'session> {
+    /// Публикует только уже подготовленные raw head и lifecycle Session и
+    /// возвращает их точную проекцию.
+    pub(crate) fn commit(self) -> ProjectionV1<'owner, 'session> {
+        let Self {
+            owner,
+            transition,
+            scope,
+        } = self;
+        ProjectionV1 {
+            evidence: EvidenceViewV1 {
+                session: transition.commit(),
+            },
+            owner,
+            scope,
         }
     }
 }
@@ -2045,6 +2099,15 @@ impl<'a> CertificateV1<'a> {
     #[cfg(test)]
     pub(crate) fn observation_backing_ptr_for_test(self) -> *const () {
         self.observation().inner.backing_ptr_for_test()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn identity_for_test(self) -> (*const (), *const ()) {
+        let certificate: *const () = match self {
+            Self::Verified(value) => core::ptr::from_ref(value.inner).cast(),
+            Self::Conflict(value) => core::ptr::from_ref(value.inner).cast(),
+        };
+        (certificate, self.observation_backing_ptr_for_test())
     }
 }
 

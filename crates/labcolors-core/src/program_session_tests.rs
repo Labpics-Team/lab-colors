@@ -17,6 +17,7 @@ use crate::program_session::{
     TargetId, canonical_surface_input_port_sequence_matches, check_render_node_count,
 };
 use crate::session::{SessionPlanV1, SessionState, SessionUpdateError};
+use crate::session_tests::CommitSessionUpdateForTest as _;
 
 const SOURCE: SourceId = SourceId::new(1);
 const TARGET: TargetId = TargetId::new(1);
@@ -540,11 +541,11 @@ fn independently_instantiated_streams_expire_with_their_compiled_owner_generatio
     drop(compiled);
 
     assert!(matches!(
-        first.update(observed_update(STREAM_A, 1, &[(1, [0xFF; 3])])),
+        first.commit(observed_update(STREAM_A, 1, &[(1, [0xFF; 3])])),
         Err(SessionUpdateError::OwnerExpired),
     ));
     assert!(matches!(
-        second.update(observed_update(STREAM_B, 9, &[(2, [0xFF; 3])])),
+        second.commit(observed_update(STREAM_B, 9, &[(2, [0xFF; 3])])),
         Err(SessionUpdateError::OwnerExpired),
     ));
     assert!(matches!(first.state(), SessionState::Waiting));
@@ -582,7 +583,7 @@ fn program_sessions_reuse_the_owner_canonical_schema_handle() {
             .backing_ptr_for_test()
     };
     let report_schema_ptr = match first
-        .update(observed_update(STREAM_A, 1, &[(1, [0xFF; 3])]))
+        .commit(observed_update(STREAM_A, 1, &[(1, [0xFF; 3])]))
         .unwrap()
     {
         SessionState::Ready { current } => current.report().observation().schema_ptr_for_test(),
@@ -596,7 +597,7 @@ fn program_sessions_reuse_the_owner_canonical_schema_handle() {
     assert_eq!(compiled.observation_schema_strong_count_for_test(), 2);
 
     first
-        .update(observed_update(STREAM_A, 1, &[(1, [0xFF; 3])]))
+        .commit(observed_update(STREAM_A, 1, &[(1, [0xFF; 3])]))
         .unwrap();
     assert_eq!(compiled.observation_schema_strong_count_for_test(), 2);
 
@@ -617,7 +618,7 @@ fn multi_case_hard_failure_retains_the_full_matrix_without_outputs() {
     ));
     let mut session = compiled.instantiate(STREAM_A).unwrap();
     let state = session
-        .update(observed_update(
+        .commit(observed_update(
             STREAM_A,
             1,
             &[(11, [0x00; 3]), (12, [0xFF; 3])],
@@ -677,7 +678,7 @@ fn mixed_modes_retain_the_full_canonical_matrix_without_outputs_on_hard_failure(
     ));
     let mut session = compiled.instantiate(STREAM_A).unwrap();
     let state = session
-        .update(observed_update(
+        .commit(observed_update(
             STREAM_A,
             1,
             &[(11, [0x00; 3]), (12, [0xFF; 3])],
@@ -733,7 +734,7 @@ fn report_only_violations_do_not_block_program_scope_paint_outputs() {
     ));
     let mut session = compiled.instantiate(STREAM_A).unwrap();
     let state = session
-        .update(observed_update(
+        .commit(observed_update(
             STREAM_A,
             1,
             &[(1, [0x00; 3]), (2, [0xFF; 3])],
@@ -841,7 +842,7 @@ fn nested_surface_uses_the_lower_occurrence_before_assessing_the_upper() {
     let compiled = program.compile().unwrap();
     let mut session = compiled.instantiate(STREAM_A).unwrap();
     let state = session
-        .update(observed_update(STREAM_A, 1, &[(1, [0x00; 3])]))
+        .commit(observed_update(STREAM_A, 1, &[(1, [0x00; 3])]))
         .unwrap();
     let SessionState::Ready { current } = state else {
         panic!("upper occurrence must compose over the lower visible result");
@@ -867,7 +868,7 @@ fn raw_head_and_program_report_share_one_observation_backing() {
     ));
     let mut session = compiled.instantiate(STREAM_A).unwrap();
     session
-        .update(observed_update(STREAM_A, 1, &[(9, [0xFF; 3])]))
+        .commit(observed_update(STREAM_A, 1, &[(9, [0xFF; 3])]))
         .unwrap();
     let ObservationHeadViewV1::Observed(raw) = session.raw_head() else {
         panic!("successful observed update must own a raw observed head");

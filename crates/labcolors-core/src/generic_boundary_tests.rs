@@ -423,7 +423,7 @@ fn staged_session_keeps_evidence_but_owner_alone_grants_updates_and_operations()
     );
     for required in [
         "pub(crate) fn project<'owner, 'session>(",
-        "pub(crate) fn update<'owner, 'session>(",
+        "pub(crate) fn prepare_update<'owner, 'session>(",
         ".owns_session(&session.session)",
     ] {
         assert!(
@@ -431,19 +431,145 @@ fn staged_session_keeps_evidence_but_owner_alone_grants_updates_and_operations()
             "the exact owner must remain the only operation authority; missing `{required}`",
         );
     }
-    let update = source_scope(
+    let prepare = source_scope(
         owner_api,
-        "pub(crate) fn update<'owner, 'session>(",
+        "pub(crate) fn prepare_update<'owner, 'session>(",
         "pub(crate) fn instantiate(",
     );
     assert!(
-        update
+        prepare
             .find(".owns_session(&session.session)")
-            .expect("owner update must preflight exact membership")
-            < update
-                .find("session.apply_update(update)?")
-                .expect("owner update must delegate one atomic Session update"),
+            .expect("owner prepare must preflight exact membership")
+            < prepare
+                .find("let transition = session.prepare_update(update)?")
+                .expect("owner prepare must delegate one prepared Session transition"),
         "owner mismatch must be rejected before admission, allocation, or evaluation",
+    );
+    assert!(
+        !owner_api.contains("pub(crate) fn update<'owner, 'session>("),
+        "Owner must not retain an immediate prepare-and-commit authority",
+    );
+
+    let session_code = normalized_production_code(SESSION_SOURCE);
+    let program_code = normalized_production_code(PROGRAM_SOURCE);
+    for forbidden in [
+        "pub(crate) fn update(",
+        "pub(crate) fn update_unknown(",
+        "pub(crate) fn update_schema_ordered",
+        "fn apply_prepared_update(",
+    ] {
+        assert!(
+            !session_code.contains(forbidden),
+            "generic Session must not retain immediate authority `{forbidden}`",
+        );
+    }
+    assert!(
+        !program_code.contains("fn apply_update("),
+        "concrete Program Session must not retain immediate authority",
+    );
+
+    let prepared_owner = source_scope(
+        SESSION_SOURCE,
+        "pub(crate) struct PreparedSessionTransition<'session, Plan: SessionPlanV1> {",
+        "impl<'session, Plan: SessionPlanV1> PreparedSessionTransition<'session, Plan>",
+    );
+    for required in [
+        "raw_head: &'session mut SessionObservationHeadV1,",
+        "state: &'session mut SessionState<Plan::Verified, Plan::Violation>,",
+        "pending: PendingSessionTransition<Plan::Verified, Plan::Violation>,",
+        "owner: Plan::OwnerLease,",
+    ] {
+        assert_eq!(
+            prepared_owner.matches(required).count(),
+            1,
+            "the linear transition must own exactly one `{required}`",
+        );
+    }
+    assert!(
+        !prepared_owner.contains("derive(Clone") && !prepared_owner.contains("derive(Copy"),
+        "prepared lifecycle authority must remain linear",
+    );
+    assert!(
+        prepared_owner
+            .find("pending: PendingSessionTransition<Plan::Verified, Plan::Violation>,")
+            .expect("prepared transition must own pending evidence")
+            < prepared_owner
+                .find("owner: Plan::OwnerLease,")
+                .expect("prepared transition must retain its exact owner lease"),
+        "Rust drops fields in declaration order, so pending evidence must precede its owner lease",
+    );
+
+    let core_commit = source_scope(
+        SESSION_SOURCE,
+        "impl<'session, Plan: SessionPlanV1> PreparedSessionTransition<'session, Plan>",
+        "/// The only production owner of revision admission",
+    );
+    for forbidden in [
+        "Result<",
+        "?;",
+        ".evaluate(",
+        "prepare_observation(",
+        "prepare_schema_ordered_observation(",
+        ".map_err(",
+        ".try_reserve(",
+        ".clone(",
+    ] {
+        assert!(
+            !core_commit.contains(forbidden),
+            "commit must remain infallible move-only publication; found `{forbidden}`",
+        );
+    }
+    for required in ["drop(owner);", "*raw_head =", "*state = next_state;"] {
+        assert!(
+            core_commit.contains(required),
+            "commit must publish under the pinned owner; missing `{required}`",
+        );
+    }
+    let owner_release = core_commit
+        .find("drop(owner);")
+        .expect("commit must release its exact owner explicitly");
+    for publication in ["*raw_head =", "*state = next_state;"] {
+        let last_publication = core_commit
+            .rfind(publication)
+            .unwrap_or_else(|| panic!("commit must contain `{publication}`"));
+        assert!(
+            last_publication < owner_release,
+            "every `{publication}` path must publish before releasing the exact owner",
+        );
+    }
+
+    let concrete_prepared = source_scope(
+        PROGRAM_SOURCE,
+        "/// Полностью вычисленный, но ещё не опубликованный переход одной Session.",
+        "impl<'owner, 'session> PreparedSessionTransitionV1<'owner, 'session>",
+    );
+    let concrete_must_use =
+        "#[must_use = \"commit the prepared transition or drop it intentionally\"]";
+    assert_eq!(
+        concrete_prepared.matches(concrete_must_use).count(),
+        1,
+        "the Program wrapper must carry the same deliberate commit-or-drop diagnostic as Core",
+    );
+    assert!(
+        concrete_prepared
+            .find(concrete_must_use)
+            .expect("prepared Program transition must be must_use")
+            < concrete_prepared
+                .find("pub(crate) struct PreparedSessionTransitionV1")
+                .expect("prepared Program transition declaration must remain present"),
+        "must_use must annotate the linear transition itself",
+    );
+
+    let concrete_commit = source_scope(
+        PROGRAM_SOURCE,
+        "impl<'owner, 'session> PreparedSessionTransitionV1<'owner, 'session>",
+        "/// Проверенная Owner-and-snapshot проекция",
+    );
+    assert!(
+        concrete_commit.contains("session: transition.commit(),")
+            && !concrete_commit.contains("Result<")
+            && !concrete_commit.contains("?;"),
+        "Program commit must only project the already committed Session view",
     );
 
     let staged_access_errors = source_scope(
@@ -656,7 +782,7 @@ fn shared_observation_ssot_has_one_backing_without_lifecycle_or_adapter_facades(
         "fn try_acquire_owner(&self) -> Option<Self::OwnerLease>;",
         "owner: &'a Self::OwnerLease,",
         "SessionUpdateError::OwnerExpired",
-        ".is_same_binding_as(expected_observation)",
+        ".is_same_binding_as(&raw_observation)",
         "SessionUpdateError::EvidenceBindingInvariant",
     ] {
         assert!(
@@ -713,7 +839,7 @@ fn shared_observation_ssot_has_one_backing_without_lifecycle_or_adapter_facades(
             "keyed",
             source_scope(
                 SESSION_SOURCE,
-                "pub(crate) fn update(",
+                "pub(crate) fn prepare_update(",
                 "/// Stream-affine `Unknown` admission",
             ),
             "prepare_observation(",
@@ -722,31 +848,31 @@ fn shared_observation_ssot_has_one_backing_without_lifecycle_or_adapter_facades(
             "schema-ordered",
             source_scope(
                 SESSION_SOURCE,
-                "pub(crate) fn update_schema_ordered",
-                "fn apply_prepared_update",
+                "pub(crate) fn prepare_schema_ordered",
+                "fn prepare_session_transition",
             ),
             "prepare_schema_ordered_observation(",
         ),
     ] {
         let owner_preflight = update
             .find(".try_acquire_owner()")
-            .unwrap_or_else(|| panic!("{name} update must acquire the exact owner generation"));
+            .unwrap_or_else(|| panic!("{name} prepare must acquire the exact owner generation"));
         let schema = update
             .find("let schema = self.plan.observation_schema(&owner);")
-            .unwrap_or_else(|| panic!("{name} update must derive schema from that owner"));
+            .unwrap_or_else(|| panic!("{name} prepare must derive schema from that owner"));
         let admission = update
             .find(prepare)
-            .unwrap_or_else(|| panic!("{name} update must perform canonical admission"));
+            .unwrap_or_else(|| panic!("{name} prepare must perform canonical admission"));
         assert!(
             owner_preflight < schema && schema < admission,
-            "{name} update must pin owner, derive its schema, then admit",
+            "{name} prepare must pin owner, derive its schema, then admit",
         );
         assert_eq!(
             update
                 .matches("let schema = self.plan.observation_schema(&owner);")
                 .count(),
             1,
-            "{name} update must borrow exactly one schema",
+            "{name} prepare must borrow exactly one schema",
         );
         assert!(
             !update.contains("observation_schema(&owner).clone()"),

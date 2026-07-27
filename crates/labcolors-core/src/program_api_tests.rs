@@ -1,5 +1,6 @@
 //! Минимальный внутренний контракт кандидата поверхности Program.
 
+use crate::program_boundary_tests::CommitProgramUpdateForTest as _;
 use crate::{Srgb8, program};
 
 #[test]
@@ -34,7 +35,7 @@ fn staged_program_api_is_module_qualified_without_transport_prefixes() {
     let white = [Srgb8::new([255, 255, 255])];
     let scenarios = [program::ScenarioV1::new(1, &white)];
     let projection = owner
-        .update(
+        .commit(
             &mut session,
             program::UpdateV1::Observed {
                 revision: 1,

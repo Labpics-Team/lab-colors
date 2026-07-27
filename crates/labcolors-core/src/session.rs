@@ -149,10 +149,108 @@ pub(crate) enum SessionUpdateError<PlanError> {
     EvidenceBindingInvariant,
 }
 
-type SessionUpdateResult<'session, Plan> = Result<
-    &'session SessionState<<Plan as SessionPlanV1>::Verified, <Plan as SessionPlanV1>::Violation>,
+type SessionPrepareResult<'session, Plan> = Result<
+    PreparedSessionTransition<'session, Plan>,
     SessionUpdateError<<Plan as SessionPlanV1>::Error>,
 >;
+
+/// Immutable projection of one committed raw-head/lifecycle pair.
+///
+/// A prepared transition cannot construct this view until it is consumed by
+/// [`PreparedSessionTransition::commit`].
+pub(crate) struct SessionView<'session, Plan: SessionPlanV1> {
+    raw_head: ObservationHeadViewV1<'session>,
+    state: &'session SessionState<Plan::Verified, Plan::Violation>,
+}
+
+impl<Plan: SessionPlanV1> Copy for SessionView<'_, Plan> {}
+
+impl<Plan: SessionPlanV1> Clone for SessionView<'_, Plan> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<'session, Plan: SessionPlanV1> SessionView<'session, Plan> {
+    pub(crate) const fn raw_head(self) -> ObservationHeadViewV1<'session> {
+        self.raw_head
+    }
+
+    pub(crate) const fn state(self) -> &'session SessionState<Plan::Verified, Plan::Violation> {
+        self.state
+    }
+}
+
+enum PendingSessionTransition<Verified, Violation> {
+    Idempotent,
+    Unknown(RevisionBoundUnknownV1),
+    Observed {
+        raw_observation: RevisionBoundObservationV1,
+        decision: SessionDecision<Verified, Violation>,
+    },
+}
+
+/// Linear, fully evaluated Session transition that has not been published yet.
+///
+/// Dropping this value discards only prospective data. Committing consumes the
+/// sole mutable borrow and publishes raw head and lifecycle with moves after
+/// every fallible operation has completed.
+#[must_use = "commit the prepared transition or drop it intentionally"]
+pub(crate) struct PreparedSessionTransition<'session, Plan: SessionPlanV1> {
+    raw_head: &'session mut SessionObservationHeadV1,
+    state: &'session mut SessionState<Plan::Verified, Plan::Violation>,
+    pending: PendingSessionTransition<Plan::Verified, Plan::Violation>,
+    // Rust drops fields in declaration order. Keep the lease last so abort
+    // destroys every prospective evidence value while its generation is live.
+    owner: Plan::OwnerLease,
+}
+
+impl<'session, Plan: SessionPlanV1> PreparedSessionTransition<'session, Plan> {
+    /// Publish one already admitted and evaluated lifecycle transition.
+    ///
+    /// This function has no failure return and performs no admission,
+    /// evaluation or allocation. It does not claim that an external sink has
+    /// accepted any output.
+    pub(crate) fn commit(self) -> SessionView<'session, Plan> {
+        let Self {
+            raw_head,
+            state,
+            pending,
+            owner,
+        } = self;
+
+        match pending {
+            PendingSessionTransition::Idempotent => {}
+            PendingSessionTransition::Unknown(unknown) => {
+                let next_state = match take_last_verified(state) {
+                    Some(previous) => SessionState::Stale { previous },
+                    None => SessionState::Waiting,
+                };
+                *raw_head = SessionObservationHeadV1::Unknown(unknown);
+                *state = next_state;
+            }
+            PendingSessionTransition::Observed {
+                raw_observation,
+                decision,
+            } => {
+                let previous = take_last_verified(state);
+                let next_state = match decision {
+                    SessionDecision::Verified(current) => SessionState::Ready { current },
+                    SessionDecision::Violation(cause) => SessionState::Failed { cause, previous },
+                };
+                *raw_head = SessionObservationHeadV1::Observed(raw_observation);
+                *state = next_state;
+            }
+        }
+
+        // The exact generation remains pinned through both lifecycle moves.
+        drop(owner);
+        SessionView {
+            raw_head: raw_head.observation_head(),
+            state,
+        }
+    }
+}
 
 /// The only production owner of revision admission and evaluator lifecycle.
 /// `Plan` is monomorphized; there is no plan enum, dynamic dispatch or adapter.
@@ -185,19 +283,27 @@ impl<Plan: SessionPlanV1> Session<Plan> {
         self.raw_head.observation_head()
     }
 
+    pub(crate) fn view(&self) -> SessionView<'_, Plan> {
+        SessionView {
+            raw_head: self.raw_head(),
+            state: self.state(),
+        }
+    }
+
     pub(crate) const fn plan(&self) -> &Plan {
         &self.plan
     }
 
-    /// Prepare, evaluate and commit one update transaction. Admission and plan
-    /// errors leave both the concrete raw head and lifecycle state untouched.
+    /// Prepare and evaluate one update without committing it. Admission and
+    /// plan errors leave both the concrete raw head and lifecycle untouched;
+    /// dropping the returned transition has the same property.
     /// Plan-local scratch may have been overwritten by a failed evaluation,
     /// but it is not observable lifecycle state and every evaluation must
     /// completely initialize the scratch it consumes.
-    pub(crate) fn update(
+    pub(crate) fn prepare_update(
         &mut self,
         update: ObservationUpdateInput,
-    ) -> SessionUpdateResult<'_, Plan> {
+    ) -> SessionPrepareResult<'_, Plan> {
         let owner = self
             .plan
             .try_acquire_owner()
@@ -206,17 +312,17 @@ impl<Plan: SessionPlanV1> Session<Plan> {
         let prepared = prepare_observation(&mut self.raw_head, self.stream, schema, update)
             .map_err(SessionUpdateError::Observation)?;
 
-        apply_prepared_update(&mut self.plan, &mut self.state, &owner, prepared)
+        prepare_session_transition(&mut self.plan, &mut self.state, owner, prepared)
     }
 
     /// Stream-affine `Unknown` admission without re-exporting or duplicating
     /// the Session-owned stream identity at a package boundary.
-    pub(crate) fn update_unknown(
+    pub(crate) fn prepare_unknown(
         &mut self,
         revision: Revision,
         reason: UnknownReasonId,
-    ) -> SessionUpdateResult<'_, Plan> {
-        self.update(ObservationUpdateInput {
+    ) -> SessionPrepareResult<'_, Plan> {
+        self.prepare_update(ObservationUpdateInput {
             stream: self.stream,
             revision,
             payload: ObservationPayloadInput::Unknown(reason),
@@ -224,14 +330,14 @@ impl<Plan: SessionPlanV1> Session<Plan> {
     }
 
     /// Package hot path for already schema-ordered point-sRGB8 scenarios.
-    /// It shares the exact lifecycle transaction below without constructing
-    /// keyed surface bindings or a second raw observation owner.
-    pub(crate) fn update_schema_ordered<Source: SchemaOrderedScenarioSourceV1>(
+    /// It shares the exact prepared lifecycle transition below without
+    /// constructing keyed surface bindings or a second raw observation owner.
+    pub(crate) fn prepare_schema_ordered<Source: SchemaOrderedScenarioSourceV1>(
         &mut self,
         revision: Revision,
         source: &Source,
         order_scratch: &mut Vec<usize>,
-    ) -> SessionUpdateResult<'_, Plan> {
+    ) -> SessionPrepareResult<'_, Plan> {
         let owner = self
             .plan
             .try_acquire_owner()
@@ -247,65 +353,56 @@ impl<Plan: SessionPlanV1> Session<Plan> {
         )
         .map_err(SessionUpdateError::Observation)?;
 
-        apply_prepared_update(&mut self.plan, &mut self.state, &owner, prepared)
+        prepare_session_transition(&mut self.plan, &mut self.state, owner, prepared)
     }
 }
 
-fn apply_prepared_update<'session, Plan: SessionPlanV1>(
+fn prepare_session_transition<'session, Plan: SessionPlanV1>(
     plan: &mut Plan,
     state: &'session mut SessionState<Plan::Verified, Plan::Violation>,
-    owner: &Plan::OwnerLease,
-    prepared: PreparedObservationUpdateV1<'_, SessionObservationHeadV1>,
-) -> SessionUpdateResult<'session, Plan> {
-    match prepared {
+    owner: Plan::OwnerLease,
+    prepared: PreparedObservationUpdateV1<'session, SessionObservationHeadV1>,
+) -> SessionPrepareResult<'session, Plan> {
+    let (raw_head, pending) = match prepared {
         PreparedObservationUpdateV1::Idempotent(prepared) => {
-            let _raw_head = prepared.into_owner();
-            Ok(state)
+            (prepared.into_owner(), PendingSessionTransition::Idempotent)
         }
         PreparedObservationUpdateV1::Unknown(prepared) => {
             let (raw_head, unknown) = prepared.into_parts();
-            let next_state = match take_last_verified(state) {
-                Some(previous) => SessionState::Stale { previous },
-                None => SessionState::Waiting,
-            };
-            *raw_head = SessionObservationHeadV1::Unknown(unknown);
-            *state = next_state;
-            Ok(state)
+            (raw_head, PendingSessionTransition::Unknown(unknown))
         }
         PreparedObservationUpdateV1::Observed(prepared) => {
             // Clone only the small Rc-backed observation handle. Both the
             // committed raw head and returned evidence then share the exact
             // immutable observation backing.
             let (raw_head, observation) = prepared.into_parts();
-            let next_raw_head = SessionObservationHeadV1::Observed(observation.clone());
+            let raw_observation = observation.clone();
             let decision = plan
                 .evaluate(
-                    owner,
+                    &owner,
                     observation,
                     SessionObservationBindingPermitV1::mint(),
                 )
                 .map_err(SessionUpdateError::Plan)?;
-            let SessionObservationHeadV1::Observed(expected_observation) = &next_raw_head else {
-                unreachable!("the pending raw head was constructed as Observed")
-            };
-            if !decision
-                .observation()
-                .is_same_binding_as(expected_observation)
-            {
+            if !decision.observation().is_same_binding_as(&raw_observation) {
                 return Err(SessionUpdateError::EvidenceBindingInvariant);
             }
-
-            // All fallible work is complete. Commit with moves only.
-            let previous = take_last_verified(state);
-            let next_state = match decision {
-                SessionDecision::Verified(current) => SessionState::Ready { current },
-                SessionDecision::Violation(cause) => SessionState::Failed { cause, previous },
-            };
-            *raw_head = next_raw_head;
-            *state = next_state;
-            Ok(state)
+            (
+                raw_head,
+                PendingSessionTransition::Observed {
+                    raw_observation,
+                    decision,
+                },
+            )
         }
-    }
+    };
+
+    Ok(PreparedSessionTransition {
+        raw_head,
+        state,
+        pending,
+        owner,
+    })
 }
 
 /// Move exactly one retained verified witness out of the old closed owner.

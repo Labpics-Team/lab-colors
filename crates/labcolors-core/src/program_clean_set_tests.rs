@@ -1,4 +1,5 @@
 use crate::lcs_occurrence::MODELED_TRISTIMULUS_DERIVATION_CALLS;
+use crate::program_boundary_tests::CommitProgramUpdateForTest as _;
 use crate::{Srgb8, program};
 use proptest::prelude::*;
 
@@ -67,7 +68,7 @@ fn report_only_dirty_terminal_is_retained_as_a_typed_rejected_violation() {
     let backdrop = [Srgb8::new([0; 3])];
     let scenarios = one_case(&backdrop);
     let projection = owner
-        .update(
+        .commit(
             &mut session,
             program::UpdateV1::Observed {
                 revision: 1,
@@ -112,7 +113,7 @@ fn hard_absent_final_owned_domain_is_a_violation_not_a_pass() {
     let backdrop = [Srgb8::new([0; 3])];
     let scenarios = one_case(&backdrop);
     let projection = owner
-        .update(
+        .commit(
             &mut session,
             program::UpdateV1::Observed {
                 revision: 1,
@@ -175,7 +176,7 @@ fn finite_search_skips_dirty_and_freshly_rechecks_the_first_clean_state() {
     let scenarios = one_case(&backdrop);
     MODELED_TRISTIMULUS_DERIVATION_CALLS.with(|calls| calls.set(0));
     let projection = owner
-        .update(
+        .commit(
             &mut session,
             program::UpdateV1::Observed {
                 revision: 1,
@@ -217,7 +218,7 @@ fn two_clean_constraints_and_causal_reporting_share_one_phase_materialization() 
     let backdrop = [Srgb8::new([0; 3])];
     let scenarios = one_case(&backdrop);
     let projection = owner
-        .update(
+        .commit(
             &mut session,
             program::UpdateV1::Observed {
                 revision: 1,
@@ -252,7 +253,7 @@ fn hard_and_report_phases_do_not_reuse_resolution_authority() {
     let backdrop = [Srgb8::new([0; 3])];
     let scenarios = one_case(&backdrop);
     owner
-        .update(
+        .commit(
             &mut session,
             program::UpdateV1::Observed {
                 revision: 1,
@@ -296,7 +297,7 @@ fn downstream_occlusion_is_absent_even_when_the_inner_nominal_color_is_rejected(
     let backdrop = [Srgb8::new([0; 3])];
     let scenarios = one_case(&backdrop);
     let projection = owner
-        .update(
+        .commit(
             &mut session,
             program::UpdateV1::Observed {
                 revision: 1,
@@ -405,7 +406,7 @@ fn clean_family_fresh_recheck_failure_retains_the_presentation_subject() {
     let mut session = owner.instantiate(1).unwrap();
     let backdrop = [Srgb8::new([0; 3])];
     let scenarios = one_case(&backdrop);
-    let error = match owner.update(
+    let error = match owner.commit(
         &mut session,
         program::UpdateV1::Observed {
             revision: 1,
@@ -548,7 +549,7 @@ fn rejected_clean_search_states_do_not_add_hot_path_allocations() {
 
     let (_, direct_allocations) = crate::test_support::measured_allocations(|| {
         direct
-            .update(
+            .commit(
                 &mut direct_session,
                 program::UpdateV1::Observed {
                     revision: 1,
@@ -561,7 +562,7 @@ fn rejected_clean_search_states_do_not_add_hot_path_allocations() {
     });
     let (_, rejected_allocations) = crate::test_support::measured_allocations(|| {
         rejected
-            .update(
+            .commit(
                 &mut rejected_session,
                 program::UpdateV1::Observed {
                     revision: 1,

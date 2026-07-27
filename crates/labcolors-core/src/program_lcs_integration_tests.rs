@@ -23,6 +23,7 @@ use crate::program_session::{
     ProgramConstraintViolationEvidenceV1, Source, SourceId, Surface, Target, TargetId,
 };
 use crate::session::SessionState;
+use crate::session_tests::CommitSessionUpdateForTest as _;
 use crate::spaces::cam16::FORWARD_CALLS;
 use crate::wcag22::{Wcag22ApplicableDecisionV1, Wcag22CriterionV1};
 
@@ -296,7 +297,7 @@ fn ready_cell_binds_the_actual_visible_signal_and_declared_context_without_lcs()
         false,
     );
     let mut session = compiled.instantiate(STREAM_A).unwrap();
-    let state = session.update(observed_white(STREAM_A)).unwrap();
+    let state = session.commit(observed_white(STREAM_A)).unwrap();
     let SessionState::Ready { current } = state else {
         panic!("the exact visible composite must pass");
     };
@@ -336,7 +337,7 @@ fn identical_physical_bytes_keep_distinct_declared_contexts_without_deriving_vie
         false,
     );
     let mut session = compiled.instantiate(STREAM_A).unwrap();
-    let state = session.update(observed_white(STREAM_A)).unwrap();
+    let state = session.commit(observed_white(STREAM_A)).unwrap();
     let SessionState::Ready { current } = state else {
         panic!("both context-bound declarations assess the same passing physical point");
     };
@@ -382,7 +383,7 @@ fn exact_black_visible_occurrence_does_not_construct_a_colorimetric_view() {
         false,
     );
     let mut session = compiled.instantiate(STREAM_A).unwrap();
-    let state = session.update(observed_white(STREAM_A)).unwrap();
+    let state = session.commit(observed_white(STREAM_A)).unwrap();
     let SessionState::Ready { current } = state else {
         panic!("fixture must verify");
     };
@@ -415,7 +416,7 @@ fn hard_violation_retains_physical_binding_and_context_without_current_outputs()
         false,
     );
     let mut session = compiled.instantiate(STREAM_A).unwrap();
-    let state = session.update(observed_white(STREAM_A)).unwrap();
+    let state = session.commit(observed_white(STREAM_A)).unwrap();
     let SessionState::Failed { cause, previous } = state else {
         panic!("the mandatory exact constraint must fail");
     };
@@ -451,7 +452,7 @@ fn hard_violation_retains_physical_binding_and_context_without_current_outputs()
 fn program_wcag_pass_binds_physical_occurrence_and_declared_context() {
     let compiled = compiled_wcag_program(1.0);
     let mut session = compiled.instantiate(STREAM_A).unwrap();
-    let state = session.update(observed_white(STREAM_A)).unwrap();
+    let state = session.commit(observed_white(STREAM_A)).unwrap();
     let SessionState::Ready { current } = state else {
         panic!("opaque black on white must pass WCAG default text");
     };
@@ -484,7 +485,7 @@ fn program_wcag_pass_binds_physical_occurrence_and_declared_context() {
 fn program_wcag_violation_retains_physical_evidence_without_current_outputs() {
     let compiled = compiled_wcag_program(0.5);
     let mut session = compiled.instantiate(STREAM_A).unwrap();
-    let state = session.update(observed_white(STREAM_A)).unwrap();
+    let state = session.commit(observed_white(STREAM_A)).unwrap();
     let SessionState::Failed { cause, previous } = state else {
         panic!("half-black composite on white must violate WCAG default text");
     };
@@ -625,7 +626,7 @@ fn exact_report_only_program_does_not_derive_lcs() {
     MODELED_TRISTIMULUS_DERIVATION_CALLS.with(|calls| calls.set(0));
     FORWARD_CALLS.with(|calls| calls.set(0));
 
-    let state = session.update(observed_two_backdrops(STREAM_A)).unwrap();
+    let state = session.commit(observed_two_backdrops(STREAM_A)).unwrap();
 
     let derivations = MODELED_TRISTIMULUS_DERIVATION_CALLS.with(|calls| calls.get());
     let cam16_forwards = FORWARD_CALLS.with(|calls| calls.get());
@@ -648,7 +649,7 @@ fn wcag_program_does_not_derive_lcs() {
     let compiled = compiled_wcag_program(1.0);
     let mut session = compiled.instantiate(STREAM_A).unwrap();
     MODELED_TRISTIMULUS_DERIVATION_CALLS.with(|calls| calls.set(0));
-    let state = session.update(observed_white(STREAM_A)).unwrap();
+    let state = session.commit(observed_white(STREAM_A)).unwrap();
     assert!(matches!(state, SessionState::Ready { .. }));
     assert_eq!(
         MODELED_TRISTIMULUS_DERIVATION_CALLS.with(|calls| calls.get()),
@@ -675,7 +676,7 @@ fn encoded_only_program_is_not_rejected_by_an_lcs_incompatible_declared_context(
     let mut session = compiled.instantiate(STREAM_A).unwrap();
     MODELED_TRISTIMULUS_DERIVATION_CALLS.with(|calls| calls.set(0));
 
-    let state = session.update(observed_white(STREAM_A)).unwrap();
+    let state = session.commit(observed_white(STREAM_A)).unwrap();
     let SessionState::Ready { current } = state else {
         panic!("an encoded evaluator must not inherit an unrelated LCS frame requirement");
     };
@@ -715,8 +716,8 @@ fn declaration_permutations_preserve_canonical_context_cells_and_output_signals(
     let mut canonical_session = canonical.instantiate(STREAM_A).unwrap();
     let mut permuted_session = permuted.instantiate(STREAM_B).unwrap();
 
-    let canonical_state = canonical_session.update(observed_white(STREAM_A)).unwrap();
-    let permuted_state = permuted_session.update(observed_white(STREAM_B)).unwrap();
+    let canonical_state = canonical_session.commit(observed_white(STREAM_A)).unwrap();
+    let permuted_state = permuted_session.commit(observed_white(STREAM_B)).unwrap();
     let SessionState::Ready { current: canonical } = canonical_state else {
         panic!("canonical declarations must verify");
     };

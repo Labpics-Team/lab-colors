@@ -19,6 +19,27 @@ use crate::program::{
 };
 use crate::wcag22::Wcag22CriterionV1;
 
+/// Existing Program characterizations commit the prepared lifecycle through
+/// this test-only extension; production exposes no immediate update method.
+pub(crate) trait CommitProgramUpdateForTest {
+    fn commit<'owner, 'session>(
+        &'owner self,
+        session: &'session mut SessionV1,
+        update: UpdateV1<'_>,
+    ) -> Result<ProjectionV1<'owner, 'session>, UpdateErrorV1>;
+}
+
+impl CommitProgramUpdateForTest for OwnerV1 {
+    fn commit<'owner, 'session>(
+        &'owner self,
+        session: &'session mut SessionV1,
+        update: UpdateV1<'_>,
+    ) -> Result<ProjectionV1<'owner, 'session>, UpdateErrorV1> {
+        self.prepare_update(session, update)
+            .map(|prepared| prepared.commit())
+    }
+}
+
 fn exact_size<I: ExactSizeIterator + FusedIterator>(iterator: I) -> I {
     iterator
 }
@@ -42,7 +63,7 @@ fn wasm_can_use_only_the_concrete_owner_and_session(
         scenarios,
     };
     let view = owner
-        .update(session, update)
+        .commit(session, update)
         .expect("well-formed owner-bound update");
     assert_projection_is_owner_bound(view);
     Ok(())
@@ -194,7 +215,7 @@ fn unknown_is_revision_bound_without_a_stream_or_generation_field(
         revision: 2,
         reason_id: 7,
     };
-    let _ = owner.update(session, update);
+    let _ = owner.commit(session, update);
 }
 
 #[allow(dead_code)]
@@ -553,7 +574,7 @@ fn evidence_cell_bounds_cover_actual_joint_conflict_and_duplicate_case_reduction
     let unique_scenarios = [ScenarioV1::new(1, &red), ScenarioV1::new(2, &blue)];
     let joint_bounds = joint.evidence_cell_bounds(unique_scenarios.len()).unwrap();
     let projection = joint
-        .update(
+        .commit(
             &mut joint_session,
             UpdateV1::Observed {
                 revision: 1,
@@ -578,7 +599,7 @@ fn evidence_cell_bounds_cover_actual_joint_conflict_and_duplicate_case_reduction
         .evidence_cell_bounds(duplicate_scenarios.len())
         .unwrap();
     let projection = fixed
-        .update(
+        .commit(
             &mut fixed_session,
             UpdateV1::Observed {
                 revision: 1,
@@ -618,7 +639,7 @@ fn evidence_cell_bounds_query_is_pure_across_session_updates() {
     let scenarios = [ScenarioV1::new(1, &white)];
     {
         let projection = owner
-            .update(
+            .commit(
                 &mut session,
                 UpdateV1::Observed {
                     revision: 1,
@@ -638,7 +659,7 @@ fn evidence_cell_bounds_query_is_pure_across_session_updates() {
     assert_eq!(after_update.verified_cells(), expected.verified_cells());
     assert_eq!(after_update.conflict_cells(), expected.conflict_cells());
     let projection = owner
-        .update(
+        .commit(
             &mut session,
             UpdateV1::Observed {
                 revision: 2,
@@ -715,7 +736,7 @@ fn staged_authoring_lowers_the_actual_closed_program_and_returns_canonical_input
     let white = [Srgb8::new([0xFF; 3]), Srgb8::new([0xFF; 3])];
     let scenarios = [ScenarioV1::new(7, &white)];
     let ready = owner
-        .update(
+        .commit(
             &mut session,
             UpdateV1::Observed {
                 revision: 1,
@@ -765,7 +786,7 @@ fn every_physical_constructor_and_both_remaining_constraint_modes_execute() {
     let white = [Srgb8::new([0xFF; 3])];
     let scenarios = [ScenarioV1::new(1, &white)];
     let state = owner
-        .update(
+        .commit(
             &mut session,
             UpdateV1::Observed {
                 revision: 1,
@@ -801,7 +822,7 @@ fn observed_violation_removes_outputs_but_retains_previous_certificate_as_eviden
     let black = [Srgb8::new([0; 3])];
     let black_scenarios = [ScenarioV1::new(1, &black)];
     let ready = owner
-        .update(
+        .commit(
             &mut session,
             UpdateV1::Observed {
                 revision: 1,
@@ -817,7 +838,7 @@ fn observed_violation_removes_outputs_but_retains_previous_certificate_as_eviden
     let white = [Srgb8::new([0xFF; 3])];
     let white_scenarios = [ScenarioV1::new(2, &white)];
     let failed = owner
-        .update(
+        .commit(
             &mut session,
             UpdateV1::Observed {
                 revision: 2,
@@ -843,6 +864,60 @@ fn observed_violation_removes_outputs_but_retains_previous_certificate_as_eviden
 }
 
 #[test]
+fn program_prepare_drop_is_invisible_and_commit_returns_the_new_projection() {
+    let input = SurfaceInputPortIdV1::new(50);
+    let owner = fixed_nested_draft(0.5, SourceIdV1::new(1), input, input)
+        .compile()
+        .unwrap();
+    let mut session = owner.instantiate(13).unwrap();
+    let black = [Srgb8::new([0; 3])];
+    let scenarios = [ScenarioV1::new(1, &black)];
+    owner
+        .commit(
+            &mut session,
+            UpdateV1::Observed {
+                revision: 1,
+                scenarios: &scenarios,
+            },
+        )
+        .unwrap();
+
+    let prepared = owner
+        .prepare_update(
+            &mut session,
+            UpdateV1::Unknown {
+                revision: 2,
+                reason_id: 9,
+            },
+        )
+        .unwrap();
+    drop(prepared);
+
+    let unchanged = owner.project(&session).unwrap();
+    assert_eq!(unchanged.evidence().kind(), StateKindV1::Ready);
+    assert!(matches!(
+        unchanged.evidence().observation_head(),
+        ObservationHeadV1::Observed { revision: 1, .. }
+    ));
+
+    let committed = owner
+        .prepare_update(
+            &mut session,
+            UpdateV1::Unknown {
+                revision: 2,
+                reason_id: 9,
+            },
+        )
+        .unwrap()
+        .commit();
+    assert_eq!(committed.evidence().kind(), StateKindV1::Stale);
+    assert!(matches!(
+        committed.evidence().observation_head(),
+        ObservationHeadV1::Unknown { revision: 2, .. }
+    ));
+}
+
+#[test]
 fn unknown_context_removes_outputs_but_retains_previous_certificate_as_evidence() {
     let input = SurfaceInputPortIdV1::new(50);
     let output = OutputSlotIdV1::new(12);
@@ -854,7 +929,7 @@ fn unknown_context_removes_outputs_but_retains_previous_certificate_as_evidence(
     let black = [Srgb8::new([0; 3])];
     let black_scenarios = [ScenarioV1::new(1, &black)];
     let ready = owner
-        .update(
+        .commit(
             &mut session,
             UpdateV1::Observed {
                 revision: 1,
@@ -868,7 +943,7 @@ fn unknown_context_removes_outputs_but_retains_previous_certificate_as_evidence(
     ));
 
     let stale = owner
-        .update(
+        .commit(
             &mut session,
             UpdateV1::Unknown {
                 revision: 2,
@@ -906,7 +981,7 @@ fn owner_and_update_errors_preserve_content_and_input_identity() {
     let mut session = owner.instantiate(13).unwrap();
 
     let no_scenarios = [];
-    let error = match owner.update(
+    let error = match owner.commit(
         &mut session,
         UpdateV1::Observed {
             revision: 1,
@@ -921,7 +996,7 @@ fn owner_and_update_errors_preserve_content_and_input_identity() {
 
     let white = [Srgb8::new([0xFF; 3])];
     let duplicate = [ScenarioV1::new(70, &white), ScenarioV1::new(70, &white)];
-    let error = match owner.update(
+    let error = match owner.commit(
         &mut session,
         UpdateV1::Observed {
             revision: 1,
@@ -939,7 +1014,7 @@ fn owner_and_update_errors_preserve_content_and_input_identity() {
 
     let no_values = [];
     let malformed = [ScenarioV1::new(71, &no_values)];
-    let error = match owner.update(
+    let error = match owner.commit(
         &mut session,
         UpdateV1::Observed {
             revision: 1,
@@ -969,7 +1044,7 @@ fn owner_and_update_errors_preserve_content_and_input_identity() {
 
     let valid = [ScenarioV1::new(72, &white)];
     let projection = owner
-        .update(
+        .commit(
             &mut session,
             UpdateV1::Observed {
                 revision: 2,
@@ -980,7 +1055,7 @@ fn owner_and_update_errors_preserve_content_and_input_identity() {
     let certificate = projection.evidence().certificates().next().unwrap();
     assert_eq!(owner_identity, certificate.content_identity());
 
-    let error = match owner.update(
+    let error = match owner.commit(
         &mut session,
         UpdateV1::Unknown {
             revision: 1,
@@ -999,7 +1074,7 @@ fn owner_and_update_errors_preserve_content_and_input_identity() {
         }
     );
 
-    let error = match owner.update(
+    let error = match owner.commit(
         &mut session,
         UpdateV1::Unknown {
             revision: 2,
@@ -1023,7 +1098,7 @@ fn owner_and_update_errors_preserve_content_and_input_identity() {
         .compile()
         .unwrap();
     assert_eq!(foreign.content_identity(), owner.content_identity());
-    let error = match foreign.update(
+    let error = match foreign.commit(
         &mut session,
         UpdateV1::Unknown {
             revision: 3,
@@ -1067,7 +1142,7 @@ fn certificate_and_set_retain_the_same_nonunit_opacity() {
     let white = [Srgb8::new([0xFF; 3])];
     let scenarios = [ScenarioV1::new(1, &white)];
     let state = owner
-        .update(
+        .commit(
             &mut session,
             UpdateV1::Observed {
                 revision: 1,

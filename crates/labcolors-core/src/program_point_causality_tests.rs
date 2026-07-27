@@ -24,6 +24,7 @@ use crate::program_session::{
     program_report_cardinality_is_exact_for_test, selected_program_storage_is_prepared_for_test,
 };
 use crate::session::{SessionState, SessionUpdateError};
+use crate::session_tests::CommitSessionUpdateForTest as _;
 use crate::wcag22::Wcag22CriterionV1;
 
 const SOURCE: SourceId = SourceId::new(1);
@@ -462,7 +463,7 @@ fn fixed_fanout_retains_empty_and_singleton_as_distinct_modeled_roots() {
     assert_eq!(compiled.point_presentation_count(), 2);
     let expected_identity = compiled.content_identity();
     let mut session = compiled.instantiate(STREAM).unwrap();
-    let SessionState::Ready { current } = session.update(observed_backdrop(1, [255; 3])).unwrap()
+    let SessionState::Ready { current } = session.commit(observed_backdrop(1, [255; 3])).unwrap()
     else {
         panic!("exact fixed fixture must verify");
     };
@@ -544,7 +545,7 @@ fn fixed_fanout_retains_empty_and_singleton_as_distinct_modeled_roots() {
 fn borrowed_causal_projection_does_not_recompute_or_allocate() {
     let compiled = fanout_program();
     let mut session = compiled.instantiate(STREAM).unwrap();
-    let SessionState::Ready { current } = session.update(observed_backdrop(1, [255; 3])).unwrap()
+    let SessionState::Ready { current } = session.commit(observed_backdrop(1, [255; 3])).unwrap()
     else {
         panic!("exact fixed fixture must verify");
     };
@@ -573,7 +574,7 @@ fn no_declared_presentation_means_no_causal_evidence() {
     let compiled = preflight_program_with_presentations(evaluator, false);
     assert_eq!(compiled.point_presentation_count(), 0);
     let mut session = compiled.instantiate(STREAM).unwrap();
-    let SessionState::Ready { current } = session.update(observed(1)).unwrap() else {
+    let SessionState::Ready { current } = session.commit(observed(1)).unwrap() else {
         panic!("the fixed control Program must verify");
     };
     assert_eq!(current.point_causal_certificates().len(), 0);
@@ -585,7 +586,7 @@ fn report_only_fixed_program_collects_terminal_causality_and_outputs_in_one_pass
     let calls = evaluator.clone();
     let compiled = preflight_program_with_mode(evaluator, true, false);
     let mut session = compiled.instantiate(STREAM).unwrap();
-    let SessionState::Ready { current } = session.update(observed_backdrop(1, [0; 3])).unwrap()
+    let SessionState::Ready { current } = session.commit(observed_backdrop(1, [0; 3])).unwrap()
     else {
         panic!("report-only evidence cannot reject the fixed Program");
     };
@@ -674,7 +675,7 @@ fn verified_report_storage_does_not_retain_exhaustive_joint_capacity() {
         let compiled =
             finite_program_with_candidates(Srgb8::new(candidate_codes[0]), candidate_codes);
         let mut session = compiled.instantiate(STREAM).unwrap();
-        let SessionState::Ready { current } = session.update(observed_backdrop(1, [0; 3])).unwrap()
+        let SessionState::Ready { current } = session.commit(observed_backdrop(1, [0; 3])).unwrap()
         else {
             panic!("the first authored state must verify");
         };
@@ -698,7 +699,7 @@ fn verified_report_storage_does_not_retain_exhaustive_joint_capacity() {
 
     let compiled = finite_program_with_candidates(Srgb8::new([255; 3]), &large);
     let mut session = compiled.instantiate(STREAM).unwrap();
-    let SessionState::Failed { cause, .. } = session.update(observed_backdrop(1, [0; 3])).unwrap()
+    let SessionState::Failed { cause, .. } = session.commit(observed_backdrop(1, [0; 3])).unwrap()
     else {
         panic!("none of the authored states may satisfy the exact target");
     };
@@ -718,7 +719,7 @@ fn exhaustive_conflict_retains_each_considered_state_without_minting_selection()
     let SessionState::Failed {
         cause,
         previous: None,
-    } = session.update(observed_backdrop(1, [0; 3])).unwrap()
+    } = session.commit(observed_backdrop(1, [0; 3])).unwrap()
     else {
         panic!("both authored states must remain hard-infeasible");
     };
@@ -759,7 +760,7 @@ fn exhaustive_causal_projection_is_state_case_presentation_lexicographic() {
     assert_eq!(compiled.point_presentation_count(), 4);
     let mut session = compiled.instantiate(STREAM).unwrap();
     let SessionState::Failed { cause, .. } = session
-        .update(observed_backdrops(1, &[(2, [255; 3]), (1, [0; 3])]))
+        .commit(observed_backdrops(1, &[(2, [255; 3]), (1, [0; 3])]))
         .unwrap()
     else {
         panic!("neither authored state may equal the exact target");
@@ -825,7 +826,7 @@ fn fixed_conflict_retains_fixed_causal_evidence_without_minting_selection() {
     let SessionState::Failed {
         cause,
         previous: None,
-    } = session.update(observed_backdrop(1, [255; 3])).unwrap()
+    } = session.commit(observed_backdrop(1, [255; 3])).unwrap()
     else {
         panic!("white on white must fail the fixed hard criterion");
     };
@@ -843,7 +844,7 @@ fn fixed_conflict_retains_fixed_causal_evidence_without_minting_selection() {
 fn selected_certificate_comes_only_from_the_fresh_selected_state() {
     let compiled = finite_program(Srgb8::new([255; 3]));
     let mut session = compiled.instantiate(STREAM).unwrap();
-    let SessionState::Ready { current } = session.update(observed_backdrop(1, [0; 3])).unwrap()
+    let SessionState::Ready { current } = session.commit(observed_backdrop(1, [0; 3])).unwrap()
     else {
         panic!("the second finite state must be the selected state");
     };
@@ -867,7 +868,7 @@ fn causal_rows_follow_canonical_physical_cases_not_duplicate_scenarios() {
     let compiled = finite_program(Srgb8::new([255; 3]));
     let mut session = compiled.instantiate(STREAM).unwrap();
     let SessionState::Ready { current } = session
-        .update(observed_backdrops(
+        .commit(observed_backdrops(
             1,
             &[(3, [255; 3]), (1, [0; 3]), (2, [0; 3])],
         ))
@@ -997,7 +998,7 @@ fn selected_storage_precondition_rejects_each_independent_drift() {
 fn causal_evidence_remains_bound_to_its_own_revision_through_replay_and_stale() {
     let compiled = fanout_program();
     let mut session = compiled.instantiate(STREAM).unwrap();
-    let SessionState::Ready { current } = session.update(observed_backdrop(1, [255; 3])).unwrap()
+    let SessionState::Ready { current } = session.commit(observed_backdrop(1, [255; 3])).unwrap()
     else {
         panic!("revision one must verify");
     };
@@ -1009,7 +1010,7 @@ fn causal_evidence_remains_bound_to_its_own_revision_through_replay_and_stale() 
         .as_ptr();
 
     crate::composition::reset_source_over_evaluation_count();
-    let SessionState::Ready { current } = session.update(observed_backdrop(1, [255; 3])).unwrap()
+    let SessionState::Ready { current } = session.commit(observed_backdrop(1, [255; 3])).unwrap()
     else {
         panic!("exact replay must preserve Ready");
     };
@@ -1020,7 +1021,7 @@ fn causal_evidence_remains_bound_to_its_own_revision_through_replay_and_stale() 
     assert_eq!(replayed.steps().as_ptr(), first_steps);
     assert_eq!(crate::composition::source_over_evaluation_count(), 0);
 
-    let SessionState::Stale { previous } = session.update(unknown(2)).unwrap() else {
+    let SessionState::Stale { previous } = session.commit(unknown(2)).unwrap() else {
         panic!("unknown successor must retain the previous verified witness");
     };
     let stale = previous.point_causal_certificates().next().unwrap();
@@ -1028,7 +1029,7 @@ fn causal_evidence_remains_bound_to_its_own_revision_through_replay_and_stale() 
     assert_eq!(stale.steps().as_ptr(), first_steps);
 
     crate::composition::reset_source_over_evaluation_count();
-    let SessionState::Ready { current } = session.update(observed_backdrop(3, [255; 3])).unwrap()
+    let SessionState::Ready { current } = session.commit(observed_backdrop(3, [255; 3])).unwrap()
     else {
         panic!("new observed revision must mint fresh evidence");
     };
@@ -1053,7 +1054,7 @@ fn every_causal_preflight_reservation_precedes_graph_and_evaluator_work() {
 
         let result = {
             let _failure = fail_program_preflight_reservation_for_test(reservation_index);
-            session.update(observed(1))
+            session.commit(observed(1))
         };
         let error = match result {
             Ok(_) => panic!("reservation {reservation_index} was not preflighted"),
@@ -1069,7 +1070,7 @@ fn every_causal_preflight_reservation_precedes_graph_and_evaluator_work() {
         assert!(matches!(session.state(), SessionState::Waiting));
         assert_eq!(session.raw_head(), ObservationHeadViewV1::Empty);
         assert!(matches!(
-            session.update(observed(1)).unwrap(),
+            session.commit(observed(1)).unwrap(),
             SessionState::Ready { .. }
         ));
     }
@@ -1081,7 +1082,7 @@ fn every_causal_preflight_reservation_precedes_graph_and_evaluator_work() {
     crate::composition::reset_source_over_evaluation_count();
     let state = {
         let _failure = fail_program_preflight_reservation_for_test(FIRST_UNUSED_RESERVATION_INDEX);
-        session.update(observed(1)).unwrap()
+        session.commit(observed(1)).unwrap()
     };
     assert!(matches!(state, SessionState::Ready { .. }));
     assert!(!calls.calls().is_empty());
@@ -1097,7 +1098,7 @@ fn every_joint_causal_preflight_reservation_is_transactional() {
         let calls = evaluator.clone();
         let compiled = joint_preflight_program(evaluator);
         let mut session = compiled.instantiate(STREAM).unwrap();
-        let SessionState::Ready { current } = session.update(observed_backdrop(1, [0; 3])).unwrap()
+        let SessionState::Ready { current } = session.commit(observed_backdrop(1, [0; 3])).unwrap()
         else {
             panic!("the first joint state must verify on black");
         };
@@ -1112,7 +1113,7 @@ fn every_joint_causal_preflight_reservation_is_transactional() {
 
         let result = {
             let _failure = fail_program_preflight_reservation_for_test(reservation_index);
-            session.update(observed_backdrop(2, [255; 3]))
+            session.commit(observed_backdrop(2, [255; 3]))
         };
         let error = match result {
             Ok(_) => panic!("reservation {reservation_index} was not preflighted"),
@@ -1136,7 +1137,7 @@ fn every_joint_causal_preflight_reservation_is_transactional() {
         let SessionState::Failed {
             cause,
             previous: Some(previous),
-        } = session.update(observed_backdrop(2, [255; 3])).unwrap()
+        } = session.commit(observed_backdrop(2, [255; 3])).unwrap()
         else {
             panic!("retry must expose the exhaustive two-state conflict");
         };
@@ -1158,14 +1159,14 @@ fn every_joint_causal_preflight_reservation_is_transactional() {
     let compiled = joint_preflight_program(evaluator);
     let mut session = compiled.instantiate(STREAM).unwrap();
     assert!(matches!(
-        session.update(observed_backdrop(1, [0; 3])).unwrap(),
+        session.commit(observed_backdrop(1, [0; 3])).unwrap(),
         SessionState::Ready { .. }
     ));
     let calls_before = calls.calls().len();
     crate::composition::reset_source_over_evaluation_count();
     let state = {
         let _failure = fail_program_preflight_reservation_for_test(FIRST_UNUSED_RESERVATION_INDEX);
-        session.update(observed_backdrop(2, [255; 3])).unwrap()
+        session.commit(observed_backdrop(2, [255; 3])).unwrap()
     };
     let SessionState::Failed { cause, .. } = state else {
         panic!("the first unused reservation index must not intercept evaluation");

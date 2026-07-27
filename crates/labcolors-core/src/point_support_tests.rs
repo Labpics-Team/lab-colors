@@ -17,6 +17,7 @@ use crate::point_support::{
     PointSupportStabilityDecisionV1, PointSupportStabilityPolicyV1,
 };
 use crate::session::{Session, SessionPlanV1, SessionState};
+use crate::session_tests::CommitSessionUpdateForTest as _;
 use crate::wcag22::Wcag22CriterionV1;
 
 const STREAM: ObservationStreamId = ObservationStreamId::new(31);
@@ -87,7 +88,7 @@ fn point_support_session_owns_exactly_one_canonical_schema_handle() {
     );
 
     let report_schema_ptr = match session
-        .update(observed_update(1, [(1, vec![(SURFACE_A, [0; 3])])]))
+        .commit(observed_update(1, [(1, vec![(SURFACE_A, [0; 3])])]))
         .unwrap()
     {
         SessionState::Ready { current } => current.report().observation().schema_ptr_for_test(),
@@ -103,7 +104,7 @@ fn point_support_session_owns_exactly_one_canonical_schema_handle() {
     );
 
     session
-        .update(observed_update(1, [(1, vec![(SURFACE_A, [0; 3])])]))
+        .commit(observed_update(1, [(1, vec![(SURFACE_A, [0; 3])])]))
         .unwrap();
     assert_eq!(
         session
@@ -168,7 +169,7 @@ fn multi_paint_declared_order_and_direct_provenance_are_preserved() {
 
     let mut session = Session::new(STREAM, requirements);
     let SessionState::Ready { current } = session
-        .update(observed_update(
+        .commit(observed_update(
             1,
             [(9, vec![(SURFACE_A, [0; 3]), (SURFACE_B, [255; 3])])],
         ))
@@ -226,7 +227,7 @@ fn duplicate_raw_scenarios_share_one_physical_case_without_cartesian_expansion()
 
     crate::composition::reset_source_over_evaluation_count();
     let SessionState::Failed { cause, previous } = session
-        .update(observed_update(
+        .commit(observed_update(
             1,
             [
                 // Same complete physical tuple, deliberately repeated with
@@ -349,7 +350,7 @@ fn exact_wcag_and_stability_are_independent_axes_and_baseline_binds_once() {
 
     let mut session = Session::new(STREAM, requirements);
     let SessionState::Failed { cause, previous } = session
-        .update(observed_update(1, [(44, vec![(SURFACE_A, [255; 3])])]))
+        .commit(observed_update(1, [(44, vec![(SURFACE_A, [255; 3])])]))
         .unwrap()
     else {
         panic!("WCAG and stability must fail even though exact identity passes");
@@ -421,7 +422,7 @@ fn exact_wcag_and_stability_are_independent_axes_and_baseline_binds_once() {
     );
 
     session
-        .update(observed_update(2, [(45, vec![(SURFACE_A, [255; 3])])]))
+        .commit(observed_update(2, [(45, vec![(SURFACE_A, [255; 3])])]))
         .unwrap();
     assert_eq!(
         crate::composition::source_over_evaluation_count(),
@@ -458,7 +459,7 @@ fn all_four_wcag_criterion_identities_survive_the_full_support_path() {
     );
     let mut session = Session::new(STREAM, requirements);
     let SessionState::Ready { current } = session
-        .update(observed_update(1, [(1, vec![(SURFACE_A, [255; 3])])]))
+        .commit(observed_update(1, [(1, vec![(SURFACE_A, [255; 3])])]))
         .unwrap()
     else {
         panic!("black on white passes every admitted WCAG criterion");
@@ -520,7 +521,7 @@ fn wholly_inactive_plan_is_rejected_but_an_inactive_composition_cell_is_allowed(
     assert_eq!(mixed.surface_schema(), &[SURFACE_A, SURFACE_B]);
     let mut mixed_session = Session::new(STREAM, mixed);
     let SessionState::Ready { current } = mixed_session
-        .update(observed_update(
+        .commit(observed_update(
             1,
             [(1, vec![(SURFACE_A, [17; 3]), (SURFACE_B, [3; 3])])],
         ))
@@ -608,7 +609,7 @@ fn every_stability_anchor_survives_compile_evaluate_and_typed_evidence() {
     );
     let mut session = Session::new(STREAM, requirements);
     let SessionState::Ready { current } = session
-        .update(observed_update(1, [(91, vec![(SURFACE_A, [255; 3])])]))
+        .commit(observed_update(1, [(91, vec![(SURFACE_A, [255; 3])])]))
         .unwrap()
     else {
         panic!("unchanged black-on-white reference must retain every declared anchor");
