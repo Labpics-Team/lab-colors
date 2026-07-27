@@ -798,16 +798,17 @@ pub(crate) struct CompiledOccurrenceSlotV1 {
     id: OccurrenceId,
 }
 
-/// Versioned counterfactual declared for one modeled point target.
+/// Версионированное правило контрфактического отсутствия для одной
+/// моделируемой целевой точки.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PointOccurrenceAbsenceReleaseV1 {
-    /// Replace the target Occurrence output with its own resolved backdrop,
-    /// then replay every unchanged downstream occurrence and quantization.
+    /// Заменить результат целевого `Occurrence` его уже вычисленной подложкой,
+    /// затем повторить все неизменённые downstream-`Occurrence` и квантование.
     BypassOwnBackdropV1,
 }
 
-/// Compiler-minted terminal root authority. A naked OccurrenceId cannot
-/// authorize a final modeled-result claim.
+/// Созданное компилятором полномочие терминального корня. Один `OccurrenceId`
+/// не разрешает утверждать финальный моделируемый результат.
 #[derive(Debug, Clone)]
 pub(crate) struct CompiledPointPresentationRootV1 {
     graph_instance: Arc<()>,
@@ -820,7 +821,8 @@ impl CompiledPointPresentationRootV1 {
     }
 }
 
-/// Unique target-to-root ancestry proven on the compiler cold edge.
+/// Однозначный путь предков от цели к корню, доказанный на холодной границе
+/// компилятора.
 #[derive(Debug, Clone)]
 pub(crate) struct CompiledPointPresentationPathV1 {
     graph_instance: Arc<()>,
@@ -1356,8 +1358,9 @@ impl SourceOverCertificateV1 {
 /// Точный финальный домен точки одного смоделированного `Occurrence` после
 /// полного пересчёта оставшегося пути представления к корню.
 ///
-/// `Empty` означает отсутствие вклада `Occurrence` на границе кодированных
-/// байтов. Это не положительное свидетельство о восприятии или качестве.
+/// `Empty` означает отсутствие вклада `Occurrence` в байты именно выбранного
+/// корня этого пересчёта. Это ничего не утверждает о других терминальных корнях
+/// и не является положительным свидетельством о восприятии или качестве.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ExactFinalOwnedPointDomainV1 {
     Empty,
@@ -1401,11 +1404,14 @@ impl PointOccurrenceAbsenceStepV1 {
 
 /// Заимствованный результат одного точного контрфактического пересчёта.
 ///
-/// Это намеренно не причинный сертификат: связывание ревизии, идентичности
-/// `Program`, сценария и версий алгоритмов принадлежит следующему срезу.
+/// Результат связывает версию интервенции и профили композиции шагов, но сам по
+/// себе не связывает ревизию, идентичность `Program` или сценарий и потому не
+/// является причинным сертификатом.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct PointOccurrenceAbsenceReplayV1<'steps> {
     release: PointOccurrenceAbsenceReleaseV1,
+    /// Срез непуст по построению: compiler-minted path всегда содержит хотя бы
+    /// корень, а другого конструктора результата в модуле нет.
     steps: &'steps [PointOccurrenceAbsenceStepV1],
 }
 
@@ -1749,6 +1755,11 @@ impl AppearanceEvaluationView<'_, '_> {
 
     /// Пересчитывает доказанную компилятором цепочку точки по версионированному
     /// правилу отсутствия без аллокации и частичного результата.
+    ///
+    /// Новые шаги дописываются в конец `steps`, а результат заимствует только
+    /// добавленный диапазон. При переиспользовании scratch вызывающая сторона
+    /// очищает или укорачивает его; недостаточная свободная ёмкость отвергается
+    /// до композиции и до изменения буфера.
     pub(crate) fn replay_point_occurrence_absence_into<'steps>(
         &self,
         path: &CompiledPointPresentationPathV1,
@@ -1758,6 +1769,8 @@ impl AppearanceEvaluationView<'_, '_> {
         if !Arc::ptr_eq(self.graph_instance, &path.graph_instance) {
             return Err(PointOccurrenceAbsenceReplayErrorV1::IncompatibleEvaluation);
         }
+        // Новый вариант release обязан сломать компиляцию здесь, а не молча
+        // получить семантику единственного текущего правила.
         let PointOccurrenceAbsenceReleaseV1::BypassOwnBackdropV1 = release;
         if steps.capacity().saturating_sub(steps.len()) < path.occurrences.len() {
             return Err(PointOccurrenceAbsenceReplayErrorV1::InsufficientCapacity);
@@ -1888,9 +1901,9 @@ impl CompiledAppearanceGraph {
         Some(CompiledOccurrenceSlotV1 { index, id })
     }
 
-    /// Mint authority only for an occurrence that is not consumed by another
-    /// occurrence in this point graph. Intermediate layers therefore cannot
-    /// be mistaken for final modeled results.
+    /// Создаёт полномочие только для `Occurrence`, который не потребляется
+    /// другим `Occurrence` этого точечного графа: промежуточный слой нельзя
+    /// принять за финальный моделируемый результат.
     pub(crate) fn compile_point_presentation_root(
         &self,
         terminal: OccurrenceId,
@@ -1916,7 +1929,8 @@ impl CompiledAppearanceGraph {
         })
     }
 
-    /// Prove one target's membership in the root's unique backdrop ancestry.
+    /// Доказывает принадлежность цели однозначной цепочке предков подложки
+    /// выбранного корня.
     pub(crate) fn compile_point_presentation_path(
         &self,
         target: OccurrenceId,
@@ -1934,10 +1948,10 @@ impl CompiledAppearanceGraph {
             .try_reserve_exact(self.occurrences.len())
             .map_err(|_| PointPresentationPathErrorV1::ResourceExhausted)?;
 
-        // `compile()` rejects `RenderCycle` through canonical functional
-        // topology. Every hop therefore moves to a unique ancestor and the
-        // walk terminates within `occurrences.len()` nodes; that same finite
-        // upper bound makes the exact reservation safe.
+        // `compile()` отклоняет `RenderCycle` при построении канонической
+        // функциональной топологии. Каждый переход идёт к единственному предку,
+        // поэтому обход завершается не более чем за `occurrences.len()` узлов;
+        // та же граница позволяет безопасно зарезервировать точный объём.
         let mut current = root_slot.index;
         loop {
             let spec = self

@@ -194,6 +194,9 @@ fn exact_binary64_dyadic(value: f64) -> (i128, u32) {
         (mantissa << u32::try_from(binary_exponent).unwrap(), 0)
     } else {
         let denominator_shift = u32::try_from(-binary_exponent).unwrap();
+        // Потребитель сдвигает 8-битную подложку на тот же порядок. При 119
+        // старший бит занимает позицию 126, а оставшийся запас больше 53-битной
+        // мантиссы слагаемого; 120 уже затронул бы знаковый бит i128.
         assert!(
             denominator_shift < 120,
             "диадическое число эталона должно помещаться в i128"
@@ -346,6 +349,134 @@ fn alpha_endpoints_and_a_later_opaque_layer_obey_the_same_domain_law() {
 }
 
 #[test]
+fn final_domain_is_scoped_to_one_selected_root_in_a_fanout_graph() {
+    let input = SurfaceInputPortId::new(300);
+    let input_surface = SurfaceId::new(301);
+    let shared_surface = derived_surface(0);
+    let mut paints = Vec::new();
+    for index in 0..3 {
+        paints.push(PaintSpec::Solid {
+            id: solid(index),
+            color: color(index),
+        });
+        paints.push(PaintSpec::Opacity {
+            id: translucent(index),
+            source: solid(index),
+            opacity: opacity(index),
+        });
+    }
+    paints.reverse();
+    let graph = AppearanceGraphSpec::new(
+        (0..3).map(color).collect(),
+        vec![input],
+        (0..3).map(opacity).collect(),
+        paints,
+        vec![
+            SurfaceSpec::FromOccurrence {
+                id: shared_surface,
+                occurrence: occurrence(0),
+            },
+            SurfaceSpec::Input {
+                id: input_surface,
+                port: input,
+            },
+        ],
+        vec![
+            OccurrenceSpec {
+                id: occurrence(2),
+                subject: translucent(2),
+                against: shared_surface,
+                profile: CompositionProfileV1::EncodedSrgb8SourceOverV1,
+            },
+            OccurrenceSpec {
+                id: occurrence(0),
+                subject: translucent(0),
+                against: input_surface,
+                profile: CompositionProfileV1::EncodedSrgb8SourceOverV1,
+            },
+            OccurrenceSpec {
+                id: occurrence(1),
+                subject: translucent(1),
+                against: shared_surface,
+                profile: CompositionProfileV1::EncodedSrgb8SourceOverV1,
+            },
+        ],
+    )
+    .compile()
+    .unwrap();
+    let bindings = AppearanceBindings::new(
+        vec![
+            (color(0), Srgb8::new([240, 30, 10])),
+            (color(1), Srgb8::new([5, 200, 90])),
+            (color(2), Srgb8::new([220, 180, 70])),
+        ],
+        vec![(input, Srgb8::new([31, 47, 89]))],
+        vec![(opacity(0), 0.5), (opacity(1), 1.0), (opacity(2), 0.25)],
+    );
+    let admitted = graph.admit_bindings(&bindings).unwrap();
+    let mut workspace = graph.new_workspace().unwrap();
+    let evaluation = graph
+        .evaluate_admitted_into(&admitted, &mut workspace)
+        .unwrap();
+
+    let opaque_root = graph
+        .compile_point_presentation_root(occurrence(1))
+        .unwrap();
+    let opaque_path = graph
+        .compile_point_presentation_path(occurrence(0), &opaque_root)
+        .unwrap();
+    let mut opaque_steps = Vec::with_capacity(opaque_path.len());
+    let opaque = evaluation
+        .replay_point_occurrence_absence_into(
+            &opaque_path,
+            PointOccurrenceAbsenceReleaseV1::BypassOwnBackdropV1,
+            &mut opaque_steps,
+        )
+        .unwrap();
+    assert_eq!(opaque.root(), occurrence(1));
+    assert_eq!(opaque.domain(), ExactFinalOwnedPointDomainV1::Empty);
+    assert_eq!(
+        opaque
+            .steps()
+            .iter()
+            .map(|step| step.occurrence())
+            .collect::<Vec<_>>(),
+        vec![occurrence(0), occurrence(1)]
+    );
+
+    let translucent_root = graph
+        .compile_point_presentation_root(occurrence(2))
+        .unwrap();
+    let translucent_path = graph
+        .compile_point_presentation_path(occurrence(0), &translucent_root)
+        .unwrap();
+    let mut translucent_steps = Vec::with_capacity(translucent_path.len());
+    let translucent = evaluation
+        .replay_point_occurrence_absence_into(
+            &translucent_path,
+            PointOccurrenceAbsenceReleaseV1::BypassOwnBackdropV1,
+            &mut translucent_steps,
+        )
+        .unwrap();
+    assert_eq!(translucent.root(), occurrence(2));
+    assert_ne!(translucent.normal_root(), translucent.counterfactual_root());
+    assert_eq!(
+        translucent.domain(),
+        ExactFinalOwnedPointDomainV1::Singleton {
+            visible: translucent.normal_root(),
+        }
+    );
+    assert_eq!(
+        translucent
+            .steps()
+            .iter()
+            .map(|step| step.occurrence())
+            .collect::<Vec<_>>(),
+        vec![occurrence(0), occurrence(2)]
+    );
+}
+
+#[test]
 fn replay_rejects_foreign_evaluation_before_touching_the_replay_buffer() {
     let layers = [([10, 20, 30], 0.5), ([220, 180, 70], 0.25)];
     let (origin, _) = chain(&layers, [255; 3]);
@@ -432,10 +563,18 @@ fn replay_preflights_capacity_and_returns_only_its_appended_range() {
     });
     assert_eq!(summary, (path.len(), occurrence(0), occurrence(1)));
     assert_eq!(allocations, 0);
+    assert_eq!(
+        crate::composition::source_over_evaluation_count(),
+        path.len() - 1
+    );
     assert_eq!((exact.as_ptr(), exact.capacity()), storage);
 }
 
 proptest! {
+    // Зафиксированный O1a-B CI-ратчет: 2^11 случаев не даёт изменению default
+    // `proptest` молча ослабить корпус; другой бюджет требует явного решения.
+    #![proptest_config(ProptestConfig::with_cases(2_048))]
+
     #[test]
     fn replay_matches_an_independent_encoded_srgb8_oracle(
         sources in prop::array::uniform4(any::<[u8; 3]>()),
