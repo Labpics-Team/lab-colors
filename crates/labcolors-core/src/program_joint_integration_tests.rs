@@ -1485,7 +1485,9 @@ fn evaluation_cell_cardinality_checks_both_products_without_a_numeric_cap() {
 
 #[test]
 fn every_fallible_joint_preflight_reservation_precedes_evaluator_work() {
-    for reservation_index in 0..3 {
+    const FIRST_UNUSED_RESERVATION_INDEX: usize = 3;
+
+    for reservation_index in 0..=FIRST_UNUSED_RESERVATION_INDEX {
         let evaluator = CountingProgramWcag22Srgb8V1::default();
         let calls = evaluator.clone();
         let compiled = Program::new(
@@ -1530,12 +1532,21 @@ fn every_fallible_joint_preflight_reservation_precedes_evaluator_work() {
         .unwrap();
         let mut session = compiled.instantiate(STREAM).unwrap();
 
-        let error = {
+        let result = {
             let _failure = fail_program_preflight_reservation_for_test(reservation_index);
-            match session.update(update(1, 0x00)) {
-                Ok(_) => panic!("injected preflight failure must abort the update"),
-                Err(error) => error,
-            }
+            session.update(update(1, 0x00))
+        };
+        if reservation_index == FIRST_UNUSED_RESERVATION_INDEX {
+            assert!(
+                matches!(result, Ok(SessionState::Ready { .. })),
+                "the first unused reservation index must leave the Session Ready"
+            );
+            assert!(!calls.calls().is_empty());
+            continue;
+        }
+        let error = match result {
+            Ok(_) => panic!("injected preflight failure must abort the update"),
+            Err(error) => error,
         };
         assert_eq!(
             error,
@@ -1548,7 +1559,9 @@ fn every_fallible_joint_preflight_reservation_precedes_evaluator_work() {
 
 #[test]
 fn every_fallible_fixed_preflight_reservation_precedes_evaluator_work() {
-    for reservation_index in 0..2 {
+    const FIRST_UNUSED_RESERVATION_INDEX: usize = 2;
+
+    for reservation_index in 0..=FIRST_UNUSED_RESERVATION_INDEX {
         let evaluator = CountingProgramWcag22Srgb8V1::default();
         let calls = evaluator.clone();
         let compiled = Program::new(
@@ -1586,12 +1599,21 @@ fn every_fallible_fixed_preflight_reservation_precedes_evaluator_work() {
         .unwrap();
         let mut session = compiled.instantiate(STREAM).unwrap();
 
-        let error = {
+        let result = {
             let _failure = fail_program_preflight_reservation_for_test(reservation_index);
-            match session.update(update(1, 0x00)) {
-                Ok(_) => panic!("injected fixed preflight failure must abort the update"),
-                Err(error) => error,
-            }
+            session.update(update(1, 0x00))
+        };
+        if reservation_index == FIRST_UNUSED_RESERVATION_INDEX {
+            assert!(
+                matches!(result, Ok(SessionState::Ready { .. })),
+                "the first unused reservation index must leave the Session Ready"
+            );
+            assert!(!calls.calls().is_empty());
+            continue;
+        }
+        let error = match result {
+            Ok(_) => panic!("injected fixed preflight failure must abort the update"),
+            Err(error) => error,
         };
         assert_eq!(
             error,

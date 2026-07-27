@@ -108,6 +108,9 @@ mod program_lcs_integration_tests;
 mod program_joint_integration_tests;
 
 #[cfg(test)]
+mod program_point_causality_tests;
+
+#[cfg(test)]
 mod program_mixed_evaluator_tests;
 
 #[cfg(test)]

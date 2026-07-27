@@ -20,6 +20,7 @@
 //! claim is renderer observation or human-subject evidence.
 
 use std::marker::PhantomData;
+use std::num::NonZeroUsize;
 use std::rc::{Rc, Weak};
 
 use crate::Srgb8;
@@ -27,8 +28,10 @@ use crate::appearance::{
     AdmittedAppearanceBindings, AppearanceBindings, AppearanceGraphSpec, AppearanceWorkspace,
     BindingError, ColorInputId, CompileError, CompiledAppearanceGraph, CompiledColorInputSlotV1,
     CompiledOccurrenceSlotV1, CompiledPaintSlotV1, CompiledPointPresentationPathV1,
-    EncodedPointPaintV1, OccurrenceId, OccurrenceSpec, OpacityInputId, PaintId, PaintSpec,
-    PointOccurrenceAbsenceReleaseV1, PointPresentationPathErrorV1, SurfaceId, SurfaceInputPortId,
+    EncodedPointPaintV1, ExactFinalOwnedPointDomainV1, OccurrenceId, OccurrenceSpec,
+    OpacityInputId, PaintId, PaintSpec, PointOccurrenceAbsenceReleaseV1,
+    PointOccurrenceAbsenceReplayErrorV1, PointOccurrenceAbsenceStepV1,
+    PointOccurrenceAbsenceSummaryV1, PointPresentationPathErrorV1, SurfaceId, SurfaceInputPortId,
     SurfaceSpec,
 };
 use crate::composition::CompositionProfileV1;
@@ -1216,6 +1219,25 @@ struct CompiledPointPresentationV1 {
     path: CompiledPointPresentationPathV1,
 }
 
+struct CompiledPointPresentationsV1 {
+    entries: Box<[CompiledPointPresentationV1]>,
+    steps_per_case: usize,
+}
+
+impl CompiledPointPresentationsV1 {
+    fn iter(&self) -> impl ExactSizeIterator<Item = &CompiledPointPresentationV1> {
+        self.entries.iter()
+    }
+
+    const fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    const fn steps_per_case(&self) -> usize {
+        self.steps_per_case
+    }
+}
+
 struct CompiledFiniteTargetV1 {
     binding: CompiledColorInputSlotV1,
     candidates: Box<[ColorSignal]>,
@@ -1238,7 +1260,7 @@ where
     occurrence_contexts: Box<[CompiledOccurrenceContextV1]>,
     constraints: Box<[CompiledPointConstraint<ProgramConstraintInvocationOf<Evaluation>>]>,
     constraint_phases: CompiledConstraintPhasesV1,
-    point_presentations: Box<[CompiledPointPresentationV1]>,
+    point_presentations: CompiledPointPresentationsV1,
     outputs: Box<[CompiledOutputBinding]>,
     finite_targets: Box<[CompiledFiniteTargetV1]>,
     joint_selection: Option<CompiledJointSelectionV1>,
@@ -1303,12 +1325,14 @@ where
         debug_assert!(
             self.owner_generation
                 .point_presentations
+                .entries
                 .windows(2)
                 .all(|pair| (pair[0].root, pair[0].target) < (pair[1].root, pair[1].target))
         );
         debug_assert!(
             self.owner_generation
                 .point_presentations
+                .entries
                 .iter()
                 .all(|presentation| {
                     presentation.path.belongs_to(&self.owner_generation.graph)
@@ -1472,9 +1496,128 @@ where
     }
 }
 
-/// Полная оценка, привязанная к revision. Для selected/fixed результата ячейки
-/// идут сначала по physical case, затем по constraint ID. Exhaustive conflict
-/// дополнительно упорядочен сначала по joint state.
+/// Непустой участок плоской истории пересчёта. Это диапазон индексов памяти,
+/// не дискретизация непрерывной цветовой растяжки и не набор свотчей.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct NonEmptyReplaySpanV1 {
+    start: usize,
+    len: NonZeroUsize,
+}
+
+impl NonEmptyReplaySpanV1 {
+    fn from_bounds(start: usize, end: usize) -> Option<Self> {
+        let len = NonZeroUsize::new(end.checked_sub(start)?)?;
+        Some(Self { start, len })
+    }
+
+    fn get<T>(self, storage: &[T]) -> Option<&[T]> {
+        let end = self.start.checked_add(self.len.get())?;
+        storage.get(self.start..end)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ProgramPointCausalRecordV1 {
+    /// Только exhaustive conflict хранит рассмотренное состояние в строке.
+    /// Selected/fixed authority берётся у владеющего типизированного отчёта.
+    considered_state_index: Option<usize>,
+    case_index: usize,
+    presentation_root: PresentationRootId,
+    release: PointOccurrenceAbsenceReleaseV1,
+    replay: NonEmptyReplaySpanV1,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ProgramPointCausalSelectedStateV1 {
+    Fixed,
+    Selected(usize),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ProgramPointCausalConsideredStateV1 {
+    Fixed,
+    Considered(usize),
+}
+
+/// Заимствованное revision-bound свидетельство о вкладе одной точки в байты
+/// одного моделируемого terminal root. Оно ничего не утверждает о пикселе
+/// браузера, восприятии или качестве цвета.
+pub(crate) struct ProgramPointCausalEvidenceV1<'report, State> {
+    content_identity: ProgramContentIdentityV3,
+    observation: &'report RevisionBoundObservationV1,
+    record: &'report ProgramPointCausalRecordV1,
+    steps: &'report [PointOccurrenceAbsenceStepV1],
+    state: State,
+}
+
+pub(crate) type ProgramPointCausalCertificateV1<'report> =
+    ProgramPointCausalEvidenceV1<'report, ProgramPointCausalSelectedStateV1>;
+pub(crate) type ProgramConsideredPointCausalEvidenceV1<'report> =
+    ProgramPointCausalEvidenceV1<'report, ProgramPointCausalConsideredStateV1>;
+
+impl<State> ProgramPointCausalEvidenceV1<'_, State>
+where
+    State: Copy,
+{
+    fn summary(&self) -> PointOccurrenceAbsenceSummaryV1 {
+        PointOccurrenceAbsenceSummaryV1::from_nonempty_steps(self.steps)
+            .unwrap_or_else(|| unreachable!("тип replay span запрещает пустой пересчёт"))
+    }
+
+    pub(crate) const fn content_identity(&self) -> ProgramContentIdentityV3 {
+        self.content_identity
+    }
+
+    pub(crate) const fn observation(&self) -> &RevisionBoundObservationV1 {
+        self.observation
+    }
+
+    pub(crate) const fn state(&self) -> State {
+        self.state
+    }
+
+    pub(crate) const fn case_index(&self) -> usize {
+        self.record.case_index
+    }
+
+    pub(crate) const fn presentation_root(&self) -> PresentationRootId {
+        self.record.presentation_root
+    }
+
+    pub(crate) const fn release(&self) -> PointOccurrenceAbsenceReleaseV1 {
+        self.record.release
+    }
+
+    pub(crate) fn target(&self) -> OccurrenceId {
+        self.summary().target()
+    }
+
+    pub(crate) fn modeled_terminal_occurrence(&self) -> OccurrenceId {
+        self.summary().root()
+    }
+
+    pub(crate) fn modeled_terminal_codes(&self) -> [u8; 3] {
+        self.summary().normal_root()
+    }
+
+    pub(crate) fn modeled_terminal_without_target_codes(&self) -> [u8; 3] {
+        self.summary().counterfactual_root()
+    }
+
+    pub(crate) fn domain(&self) -> ExactFinalOwnedPointDomainV1 {
+        self.summary().domain()
+    }
+
+    pub(crate) fn steps(&self) -> &[PointOccurrenceAbsenceStepV1] {
+        self.steps
+    }
+}
+
+/// Полная оценка, привязанная к revision. Для выбранного или фиксированного
+/// результата ячейки идут сначала по physical case, затем по constraint ID.
+/// Исчерпывающий конфликт дополнительно упорядочен сначала по joint state.
+/// Проекция причинного replay сохраняет порядок построения
+/// `state × physical case × (root, target)` без сортировки.
 pub struct ProgramReportV1<Evaluation>
 where
     Evaluation: ProgramConstraintEvaluatorSetV1,
@@ -1482,6 +1625,8 @@ where
     content_identity: ProgramContentIdentityV3,
     observation: RevisionBoundObservationV1,
     cells: Vec<ProgramConstraintCellV1<Evaluation>>,
+    point_causal_records: Vec<ProgramPointCausalRecordV1>,
+    point_causal_steps: Vec<PointOccurrenceAbsenceStepV1>,
 }
 
 impl<Evaluation> ProgramReportV1<Evaluation>
@@ -1500,6 +1645,15 @@ where
 
     pub fn cells(&self) -> &[ProgramConstraintCellV1<Evaluation>] {
         &self.cells
+    }
+
+    #[cfg(test)]
+    pub(crate) fn storage_capacities_for_test(&self) -> [usize; 3] {
+        [
+            self.cells.capacity(),
+            self.point_causal_records.capacity(),
+            self.point_causal_steps.capacity(),
+        ]
     }
 }
 
@@ -1565,6 +1719,29 @@ where
     pub const fn selected_state_index(&self) -> Option<usize> {
         self.selected_state_index
     }
+
+    pub(crate) fn point_causal_certificates(
+        &self,
+    ) -> impl ExactSizeIterator<Item = ProgramPointCausalCertificateV1<'_>> + '_ {
+        let state = self.selected_state_index.map_or(
+            ProgramPointCausalSelectedStateV1::Fixed,
+            ProgramPointCausalSelectedStateV1::Selected,
+        );
+        self.report.point_causal_records.iter().map(move |record| {
+            debug_assert!(record.considered_state_index.is_none());
+            let steps = record
+                .replay
+                .get(&self.report.point_causal_steps)
+                .unwrap_or_else(|| unreachable!("report владеет каноническим replay span"));
+            ProgramPointCausalEvidenceV1 {
+                content_identity: self.report.content_identity,
+                observation: &self.report.observation,
+                record,
+                steps,
+                state,
+            }
+        })
+    }
 }
 
 /// Exhaustive hard-infeasibility report. Outputs are absent by construction
@@ -1601,6 +1778,28 @@ where
 
     pub const fn considered_state_count(&self) -> usize {
         self.considered_state_count
+    }
+
+    pub(crate) fn considered_point_causal_evidence(
+        &self,
+    ) -> impl ExactSizeIterator<Item = ProgramConsideredPointCausalEvidenceV1<'_>> + '_ {
+        self.report.point_causal_records.iter().map(move |record| {
+            let state = record.considered_state_index.map_or(
+                ProgramPointCausalConsideredStateV1::Fixed,
+                ProgramPointCausalConsideredStateV1::Considered,
+            );
+            let steps = record
+                .replay
+                .get(&self.report.point_causal_steps)
+                .unwrap_or_else(|| unreachable!("report владеет каноническим replay span"));
+            ProgramPointCausalEvidenceV1 {
+                content_identity: self.report.content_identity,
+                observation: &self.report.observation,
+                record,
+                steps,
+                state,
+            }
+        })
     }
 }
 
@@ -1674,8 +1873,6 @@ where
         .joint_selection
         .as_ref()
         .map(|selection| selection.order.state_count())
-        // Without joint selection the epoch has one fixed configuration, so
-        // the exhaustive-cell multiplier remains the multiplicative identity.
         .unwrap_or(1);
     let can_conflict = epoch
         .constraint_phases
@@ -1683,6 +1880,80 @@ where
     checked_program_evaluation_cell_counts(
         physical_case_count,
         epoch.constraints.len(),
+        state_count,
+        can_conflict,
+    )
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ProgramEvaluationCardinalityV1 {
+    selected: usize,
+    exhaustive_conflict: usize,
+    selected_point_records: usize,
+    exhaustive_point_records: usize,
+    selected_replay_steps: usize,
+    exhaustive_replay_steps: usize,
+}
+
+fn checked_program_evaluation_cardinality(
+    physical_case_count: usize,
+    constraint_count: usize,
+    point_presentation_count: usize,
+    replay_steps_per_case: usize,
+    state_count: usize,
+    can_conflict: bool,
+) -> Option<ProgramEvaluationCardinalityV1> {
+    let cells = checked_program_evaluation_cell_counts(
+        physical_case_count,
+        constraint_count,
+        state_count,
+        can_conflict,
+    )?;
+    let selected_point_records = physical_case_count.checked_mul(point_presentation_count)?;
+    let selected_replay_steps = physical_case_count.checked_mul(replay_steps_per_case)?;
+    let exhaustive_point_records = if can_conflict {
+        selected_point_records.checked_mul(state_count)?
+    } else {
+        0
+    };
+    let exhaustive_replay_steps = if can_conflict {
+        selected_replay_steps.checked_mul(state_count)?
+    } else {
+        0
+    };
+    Some(ProgramEvaluationCardinalityV1 {
+        selected: cells.selected,
+        exhaustive_conflict: cells.exhaustive_conflict,
+        selected_point_records,
+        exhaustive_point_records,
+        selected_replay_steps,
+        exhaustive_replay_steps,
+    })
+}
+
+fn checked_program_epoch_evaluation_cardinality<Evaluation>(
+    epoch: &ProgramEpochV1<Evaluation>,
+    physical_case_count: usize,
+) -> Option<ProgramEvaluationCardinalityV1>
+where
+    Evaluation: ProgramConstraintEvaluatorSetV1,
+    ProgramConstraintInvocationOf<Evaluation>: Copy,
+{
+    let state_count = epoch
+        .joint_selection
+        .as_ref()
+        .map(|selection| selection.order.state_count())
+        // Without joint selection the epoch has one fixed configuration, so
+        // the exhaustive-cell multiplier remains the multiplicative identity.
+        .unwrap_or(1);
+    let can_conflict = epoch
+        .constraint_phases
+        .contains(ProgramEvaluationPhaseV1::Hard);
+    checked_program_evaluation_cardinality(
+        physical_case_count,
+        epoch.constraints.len(),
+        epoch.point_presentations.len(),
+        epoch.point_presentations.steps_per_case(),
         state_count,
         can_conflict,
     )
@@ -1696,6 +1967,33 @@ pub(crate) fn checked_program_evaluation_cell_counts_for_test(
 ) -> Option<(usize, usize)> {
     checked_program_evaluation_cell_counts(physical_case_count, constraint_count, state_count, true)
         .map(|counts| (counts.selected, counts.exhaustive_conflict))
+}
+
+#[cfg(test)]
+pub(crate) fn checked_program_point_causal_cardinality_for_test(
+    physical_case_count: usize,
+    constraint_count: usize,
+    point_presentation_count: usize,
+    replay_steps_per_case: usize,
+    state_count: usize,
+    can_conflict: bool,
+) -> Option<(usize, usize, usize, usize)> {
+    checked_program_evaluation_cardinality(
+        physical_case_count,
+        constraint_count,
+        point_presentation_count,
+        replay_steps_per_case,
+        state_count,
+        can_conflict,
+    )
+    .map(|cardinality| {
+        (
+            cardinality.selected_point_records,
+            cardinality.exhaustive_point_records,
+            cardinality.selected_replay_steps,
+            cardinality.exhaustive_replay_steps,
+        )
+    })
 }
 
 #[cfg(test)]
@@ -1763,23 +2061,114 @@ fn try_reserve_program_evaluation_buffer<T>(
     buffer.try_reserve_exact(capacity).map_err(|_| ())
 }
 
+struct ProgramReportBuffersV1<Evaluation>
+where
+    Evaluation: ProgramConstraintEvaluatorSetV1,
+{
+    cells: Vec<ProgramConstraintCellV1<Evaluation>>,
+    point_causal_records: Vec<ProgramPointCausalRecordV1>,
+    point_causal_steps: Vec<PointOccurrenceAbsenceStepV1>,
+}
+
+impl<Evaluation> ProgramReportBuffersV1<Evaluation>
+where
+    Evaluation: ProgramConstraintEvaluatorSetV1,
+{
+    const fn empty() -> Self {
+        Self {
+            cells: Vec::new(),
+            point_causal_records: Vec::new(),
+            point_causal_steps: Vec::new(),
+        }
+    }
+}
+
+// Порядок координат совпадает с физическим владением отчёта: constraint cells,
+// causal records и плоские replay steps.
+fn program_report_cardinality_is_exact(actual: [usize; 3], expected: [usize; 3]) -> bool {
+    actual == expected
+}
+
+#[cfg(test)]
+pub(crate) fn program_report_cardinality_is_exact_for_test(
+    actual: [usize; 3],
+    expected: [usize; 3],
+) -> bool {
+    program_report_cardinality_is_exact(actual, expected)
+}
+
+// Четвёртая координата — output arena. Избыточная ёмкость допустима, но все
+// арены обязаны быть пусты и независимо покрывать заранее рассчитанный объём.
+fn selected_program_storage_is_prepared(
+    lengths: [usize; 4],
+    capacities: [usize; 4],
+    required: [usize; 4],
+) -> bool {
+    lengths == [0; 4]
+        && capacities[0] >= required[0]
+        && capacities[1] >= required[1]
+        && capacities[2] >= required[2]
+        && capacities[3] >= required[3]
+}
+
+#[cfg(test)]
+pub(crate) fn selected_program_storage_is_prepared_for_test(
+    lengths: [usize; 4],
+    capacities: [usize; 4],
+    required: [usize; 4],
+) -> bool {
+    selected_program_storage_is_prepared(lengths, capacities, required)
+}
+
 struct PreparedProgramEvaluationBuffersV1<Evaluation>
 where
     Evaluation: ProgramConstraintEvaluatorSetV1,
 {
-    selected_cells: Vec<ProgramConstraintCellV1<Evaluation>>,
-    conflict_cells: Vec<ProgramConstraintCellV1<Evaluation>>,
+    // Раздельное владение оставляет успешному отчёту только выбранное
+    // доказательство, но сохраняет fail-before-work для возможного конфликта.
+    selected: ProgramReportBuffersV1<Evaluation>,
+    exhaustive_conflict: ProgramReportBuffersV1<Evaluation>,
     outputs: Vec<ProgramOutputV1>,
-    counts: ProgramEvaluationCellCountsV1,
+    counts: ProgramEvaluationCardinalityV1,
 }
 
 struct SelectedProgramEvaluationBuffersV1<Evaluation>
 where
     Evaluation: ProgramConstraintEvaluatorSetV1,
 {
-    cells: Vec<ProgramConstraintCellV1<Evaluation>>,
+    report: ProgramReportBuffersV1<Evaluation>,
     outputs: Vec<ProgramOutputV1>,
     expected_cell_count: usize,
+    expected_point_record_count: usize,
+    expected_replay_step_count: usize,
+}
+
+struct ProgramPointCausalBuffersV1<'buffers> {
+    considered_state_index: Option<usize>,
+    records: &'buffers mut Vec<ProgramPointCausalRecordV1>,
+    steps: &'buffers mut Vec<PointOccurrenceAbsenceStepV1>,
+}
+
+struct ProgramCandidateCollectionV1<'buffers, Evaluation>
+where
+    Evaluation: ProgramConstraintEvaluatorSetV1,
+{
+    cells: Option<&'buffers mut Vec<ProgramConstraintCellV1<Evaluation>>>,
+    outputs: Option<&'buffers mut Vec<ProgramOutputV1>>,
+    point_causal: Option<ProgramPointCausalBuffersV1<'buffers>>,
+}
+
+impl<Evaluation> ProgramCandidateCollectionV1<'_, Evaluation>
+where
+    Evaluation: ProgramConstraintEvaluatorSetV1,
+{
+    const fn none() -> Self {
+        Self {
+            cells: None,
+            outputs: None,
+            point_causal: None,
+        }
+    }
 }
 
 impl<Evaluation> PreparedProgramEvaluationBuffersV1<Evaluation>
@@ -1788,9 +2177,11 @@ where
 {
     fn take_selected(&mut self) -> SelectedProgramEvaluationBuffersV1<Evaluation> {
         SelectedProgramEvaluationBuffersV1 {
-            cells: std::mem::take(&mut self.selected_cells),
+            report: std::mem::replace(&mut self.selected, ProgramReportBuffersV1::empty()),
             outputs: std::mem::take(&mut self.outputs),
             expected_cell_count: self.counts.selected,
+            expected_point_record_count: self.counts.selected_point_records,
+            expected_replay_step_count: self.counts.selected_replay_steps,
         }
     }
 }
@@ -1807,24 +2198,63 @@ where
     ProgramConstraintInvocationOf<Evaluation>: Copy,
 {
     let counts =
-        checked_program_epoch_evaluation_cell_counts(epoch, observation.physical_case_count())
+        checked_program_epoch_evaluation_cardinality(epoch, observation.physical_case_count())
             .ok_or(ProgramSessionEvaluationError::ResourceExhausted)?;
 
-    let mut selected_cells = Vec::new();
-    try_reserve_program_evaluation_buffer(&mut selected_cells, counts.selected)
+    // Failure-injection tests observe this order by index, so adding or moving
+    // a reservation must also move the corresponding first-unused boundary.
+    let mut selected = ProgramReportBuffersV1::empty();
+    try_reserve_program_evaluation_buffer(&mut selected.cells, counts.selected)
         .map_err(|()| ProgramSessionEvaluationError::ResourceExhausted)?;
-    let mut conflict_cells = Vec::new();
+
+    let mut exhaustive_conflict = ProgramReportBuffersV1::empty();
     if epoch.joint_selection.is_some() && counts.exhaustive_conflict != 0 {
-        try_reserve_program_evaluation_buffer(&mut conflict_cells, counts.exhaustive_conflict)
-            .map_err(|()| ProgramSessionEvaluationError::ResourceExhausted)?;
+        try_reserve_program_evaluation_buffer(
+            &mut exhaustive_conflict.cells,
+            counts.exhaustive_conflict,
+        )
+        .map_err(|()| ProgramSessionEvaluationError::ResourceExhausted)?;
     }
+
+    if counts.selected_point_records != 0 {
+        try_reserve_program_evaluation_buffer(
+            &mut selected.point_causal_records,
+            counts.selected_point_records,
+        )
+        .map_err(|()| ProgramSessionEvaluationError::ResourceExhausted)?;
+    }
+
+    if epoch.joint_selection.is_some() && counts.exhaustive_point_records != 0 {
+        try_reserve_program_evaluation_buffer(
+            &mut exhaustive_conflict.point_causal_records,
+            counts.exhaustive_point_records,
+        )
+        .map_err(|()| ProgramSessionEvaluationError::ResourceExhausted)?;
+    }
+
+    if counts.selected_replay_steps != 0 {
+        try_reserve_program_evaluation_buffer(
+            &mut selected.point_causal_steps,
+            counts.selected_replay_steps,
+        )
+        .map_err(|()| ProgramSessionEvaluationError::ResourceExhausted)?;
+    }
+
+    if epoch.joint_selection.is_some() && counts.exhaustive_replay_steps != 0 {
+        try_reserve_program_evaluation_buffer(
+            &mut exhaustive_conflict.point_causal_steps,
+            counts.exhaustive_replay_steps,
+        )
+        .map_err(|()| ProgramSessionEvaluationError::ResourceExhausted)?;
+    }
+
     let mut outputs = Vec::new();
     try_reserve_program_evaluation_buffer(&mut outputs, epoch.outputs.len())
         .map_err(|()| ProgramSessionEvaluationError::ResourceExhausted)?;
 
     Ok(PreparedProgramEvaluationBuffersV1 {
-        selected_cells,
-        conflict_cells,
+        selected,
+        exhaustive_conflict,
         outputs,
         counts,
     })
@@ -1912,8 +2342,7 @@ where
             &observation,
             state_index,
             ProgramEvaluationPhaseV1::Hard,
-            None,
-            None,
+            ProgramCandidateCollectionV1::none(),
         )? {
             // A selected tuple is never certified from its allocation-free
             // search pass. Re-apply and collect fresh terminal evidence.
@@ -1947,8 +2376,15 @@ where
             &observation,
             state_index,
             ProgramEvaluationPhaseV1::Hard,
-            Some(&mut buffers.conflict_cells),
-            None,
+            ProgramCandidateCollectionV1 {
+                cells: Some(&mut buffers.exhaustive_conflict.cells),
+                outputs: None,
+                point_causal: Some(ProgramPointCausalBuffersV1 {
+                    considered_state_index: Some(state_index),
+                    records: &mut buffers.exhaustive_conflict.point_causal_records,
+                    steps: &mut buffers.exhaustive_conflict.point_causal_steps,
+                }),
+            },
         )? {
             return Err(ProgramSessionEvaluationError::InternalInvariant);
         }
@@ -1965,23 +2401,39 @@ where
                 &observation,
                 state_index,
                 ProgramEvaluationPhaseV1::ReportOnly,
-                Some(&mut buffers.conflict_cells),
-                None,
+                ProgramCandidateCollectionV1 {
+                    cells: Some(&mut buffers.exhaustive_conflict.cells),
+                    outputs: None,
+                    point_causal: None,
+                },
             )? {
                 return Err(ProgramSessionEvaluationError::InternalInvariant);
             }
         }
     }
-    if buffers.conflict_cells.len() != buffers.counts.exhaustive_conflict {
+    if !program_report_cardinality_is_exact(
+        [
+            buffers.exhaustive_conflict.cells.len(),
+            buffers.exhaustive_conflict.point_causal_records.len(),
+            buffers.exhaustive_conflict.point_causal_steps.len(),
+        ],
+        [
+            buffers.counts.exhaustive_conflict,
+            buffers.counts.exhaustive_point_records,
+            buffers.counts.exhaustive_replay_steps,
+        ],
+    ) {
         return Err(ProgramSessionEvaluationError::InternalInvariant);
     }
-    canonicalize_program_report_cells(&mut buffers.conflict_cells);
+    canonicalize_program_report_cells(&mut buffers.exhaustive_conflict.cells);
 
     Ok(SessionDecision::Violation(ProgramConflictV1 {
         report: ProgramReportV1 {
             content_identity: epoch.content_identity,
             observation,
-            cells: buffers.conflict_cells,
+            cells: buffers.exhaustive_conflict.cells,
+            point_causal_records: buffers.exhaustive_conflict.point_causal_records,
+            point_causal_steps: buffers.exhaustive_conflict.point_causal_steps,
         },
         considered_state_count: state_count,
     }))
@@ -2024,15 +2476,37 @@ where
     ProgramConstraintInvocationOf<Evaluation>: Copy,
 {
     let SelectedProgramEvaluationBuffersV1 {
-        mut cells,
+        report:
+            ProgramReportBuffersV1 {
+                mut cells,
+                mut point_causal_records,
+                mut point_causal_steps,
+            },
         mut outputs,
         expected_cell_count,
+        expected_point_record_count,
+        expected_replay_step_count,
     } = buffers;
-    if !cells.is_empty()
-        || cells.capacity() < expected_cell_count
-        || !outputs.is_empty()
-        || outputs.capacity() < epoch.outputs.len()
-    {
+    if !selected_program_storage_is_prepared(
+        [
+            cells.len(),
+            point_causal_records.len(),
+            point_causal_steps.len(),
+            outputs.len(),
+        ],
+        [
+            cells.capacity(),
+            point_causal_records.capacity(),
+            point_causal_steps.capacity(),
+            outputs.capacity(),
+        ],
+        [
+            expected_cell_count,
+            expected_point_record_count,
+            expected_replay_step_count,
+            epoch.outputs.len(),
+        ],
+    ) {
         return Err(ProgramSessionEvaluationError::InternalInvariant);
     }
     let candidate_state_index = selected_state_index.unwrap_or(0);
@@ -2049,8 +2523,15 @@ where
             &observation,
             candidate_state_index,
             ProgramEvaluationPhaseV1::Hard,
-            Some(&mut cells),
-            Some(&mut outputs),
+            ProgramCandidateCollectionV1 {
+                cells: Some(&mut cells),
+                outputs: Some(&mut outputs),
+                point_causal: Some(ProgramPointCausalBuffersV1 {
+                    considered_state_index: None,
+                    records: &mut point_causal_records,
+                    steps: &mut point_causal_steps,
+                }),
+            },
         )?
     } else {
         false
@@ -2073,20 +2554,39 @@ where
             hard_violation_count,
         });
     }
-    if has_report_constraints
-        && scan_program_candidate(
+    if has_report_constraints {
+        let point_causal = (!has_hard_constraints).then_some(ProgramPointCausalBuffersV1 {
+            considered_state_index: None,
+            records: &mut point_causal_records,
+            steps: &mut point_causal_steps,
+        });
+        if scan_program_candidate(
             plan,
             epoch,
             &observation,
             candidate_state_index,
             ProgramEvaluationPhaseV1::ReportOnly,
-            Some(&mut cells),
-            (!has_hard_constraints).then_some(&mut outputs),
-        )?
-    {
-        return Err(ProgramSessionEvaluationError::InternalInvariant);
+            ProgramCandidateCollectionV1 {
+                cells: Some(&mut cells),
+                outputs: (!has_hard_constraints).then_some(&mut outputs),
+                point_causal,
+            },
+        )? {
+            return Err(ProgramSessionEvaluationError::InternalInvariant);
+        }
     }
-    if cells.len() != expected_cell_count {
+    if !program_report_cardinality_is_exact(
+        [
+            cells.len(),
+            point_causal_records.len(),
+            point_causal_steps.len(),
+        ],
+        [
+            expected_cell_count,
+            expected_point_record_count,
+            expected_replay_step_count,
+        ],
+    ) {
         return Err(ProgramSessionEvaluationError::InternalInvariant);
     }
     canonicalize_program_report_cells(&mut cells);
@@ -2094,6 +2594,8 @@ where
         content_identity: epoch.content_identity,
         observation,
         cells,
+        point_causal_records,
+        point_causal_steps,
     };
     if has_hard_violation {
         Ok(SessionDecision::Violation(ProgramConflictV1 {
@@ -2127,13 +2629,17 @@ fn scan_program_candidate<Evaluation>(
     observation: &RevisionBoundObservationV1,
     candidate_state_index: usize,
     phase: ProgramEvaluationPhaseV1,
-    mut cells: Option<&mut Vec<ProgramConstraintCellV1<Evaluation>>>,
-    mut outputs: Option<&mut Vec<ProgramOutputV1>>,
+    collection: ProgramCandidateCollectionV1<'_, Evaluation>,
 ) -> Result<bool, ProgramSessionEvaluationError<ProgramEvaluatorError<Evaluation>>>
 where
     Evaluation: ProgramConstraintEvaluatorSetV1,
     ProgramConstraintInvocationOf<Evaluation>: Copy,
 {
+    let ProgramCandidateCollectionV1 {
+        mut cells,
+        mut outputs,
+        mut point_causal,
+    } = collection;
     let schema = &epoch.observation_group.schema;
     if !observation.shares_schema_backing_with(schema) {
         observation
@@ -2169,6 +2675,60 @@ where
             .graph
             .evaluate_admitted_into(&plan.bindings, &mut plan.workspace)
             .map_err(map_program_execution_binding_error)?;
+
+        if let Some(point_causal) = point_causal.as_mut() {
+            // Предварительный расчёт зарезервировал арены целиком. Локальная
+            // проверка не даёт причинному replay незаметно начать аллоцировать.
+            if point_causal
+                .records
+                .capacity()
+                .saturating_sub(point_causal.records.len())
+                < epoch.point_presentations.len()
+                || point_causal
+                    .steps
+                    .capacity()
+                    .saturating_sub(point_causal.steps.len())
+                    < epoch.point_presentations.steps_per_case()
+            {
+                return Err(ProgramSessionEvaluationError::InternalInvariant);
+            }
+            for presentation in epoch.point_presentations.iter() {
+                let start = point_causal.steps.len();
+                let replay = evaluation
+                    .replay_point_occurrence_absence_into(
+                        &presentation.path,
+                        presentation.absence_release,
+                        point_causal.steps,
+                    )
+                    .map_err(|error| match error {
+                        // Ёмкость проверена выше, а каждый путь presentation
+                        // скомпилирован для этой же версии графа.
+                        PointOccurrenceAbsenceReplayErrorV1::InsufficientCapacity
+                        | PointOccurrenceAbsenceReplayErrorV1::IncompatibleEvaluation => {
+                            ProgramSessionEvaluationError::InternalInvariant
+                        }
+                    })?;
+                if replay.release() != presentation.absence_release
+                    || replay.target() != presentation.target
+                    || replay.root() != presentation.terminal
+                    || replay.steps().len() != presentation.path.len()
+                {
+                    return Err(ProgramSessionEvaluationError::InternalInvariant);
+                }
+                let end = start
+                    .checked_add(replay.steps().len())
+                    .ok_or(ProgramSessionEvaluationError::InternalInvariant)?;
+                let replay = NonEmptyReplaySpanV1::from_bounds(start, end)
+                    .ok_or(ProgramSessionEvaluationError::InternalInvariant)?;
+                point_causal.records.push(ProgramPointCausalRecordV1 {
+                    considered_state_index: point_causal.considered_state_index,
+                    case_index,
+                    presentation_root: presentation.root,
+                    release: presentation.absence_release,
+                    replay,
+                });
+            }
+        }
 
         for constraint in epoch
             .constraints
@@ -3151,7 +3711,7 @@ fn compile_point_presentations(
     graph: &CompiledAppearanceGraph,
     roots: &mut [PointPresentationRootV1],
     targets: &mut [PointPresentationTargetV1],
-) -> Result<Box<[CompiledPointPresentationV1]>, ProgramCompileError> {
+) -> Result<CompiledPointPresentationsV1, ProgramCompileError> {
     roots.sort_unstable_by_key(|root| root.id);
     if let Some(root) = roots
         .windows(2)
@@ -3207,6 +3767,7 @@ fn compile_point_presentations(
     }
 
     let mut compiled = Vec::new();
+    let mut steps_per_case = 0_usize;
     compiled
         .try_reserve_exact(targets.len())
         .map_err(|_| ProgramCompileError::ResourceExhausted)?;
@@ -3242,6 +3803,9 @@ fn compile_point_presentations(
                     ProgramCompileError::InternalInvariant
                 }
             })?;
+        steps_per_case = steps_per_case
+            .checked_add(path.len())
+            .ok_or(ProgramCompileError::ResourceExhausted)?;
         compiled.push(CompiledPointPresentationV1 {
             root: target.root,
             terminal,
@@ -3259,7 +3823,10 @@ fn compile_point_presentations(
             return Err(ProgramCompileError::UnusedPresentationRoot { root: root.id });
         }
     }
-    Ok(compiled.into_boxed_slice())
+    Ok(CompiledPointPresentationsV1 {
+        entries: compiled.into_boxed_slice(),
+        steps_per_case,
+    })
 }
 
 fn compile_outputs(

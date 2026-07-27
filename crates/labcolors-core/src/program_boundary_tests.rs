@@ -480,6 +480,44 @@ fn evidence_cell_bounds_report_both_checked_multiplication_overflows() {
 }
 
 #[test]
+fn evidence_cell_bounds_are_independent_of_internal_causal_replay_storage() {
+    let source = SourceIdV1::new(1);
+    let target = TargetIdV1::new(2);
+    let input = SurfaceInputPortIdV1::new(3);
+    let paint = PaintIdV1::new(4);
+    let input_surface = SurfaceIdV1::new(5);
+    let derived_surface = SurfaceIdV1::new(6);
+    let inner = OccurrenceIdV1::new(7);
+    let terminal = OccurrenceIdV1::new(8);
+    let constraint = ConstraintIdV1::new(9);
+    let output = OutputSlotIdV1::new(10);
+    let root = PresentationRootIdV1::new(11);
+    let context = AppearanceContextV1::try_new(64.0, 0.2, SurroundV1::Average).unwrap();
+
+    let mut draft = DraftV1::new();
+    draft.push_source(source, Srgb8::new([0; 3]));
+    draft.push_fixed_target(target, source);
+    draft.push_surface_input_port(input);
+    draft.push_solid_paint(paint, target);
+    draft.push_input_surface(input_surface, input);
+    draft.push_source_over_occurrence(inner, paint, input_surface, context);
+    draft.push_occurrence_surface(derived_surface, inner);
+    draft.push_source_over_occurrence(terminal, paint, derived_surface, context);
+    draft.push_exact_hard(constraint, terminal, Srgb8::new([0; 3]));
+    draft.push_point_presentation_root(root, terminal);
+    draft.push_point_presentation_target(root, inner);
+    draft.push_output(output, paint);
+    let owner = draft.compile().unwrap();
+
+    // One cell per scenario still fits. The two-step causal replay would not,
+    // but that private arena is outside this cell-only prospective query.
+    let scenario_count = usize::MAX / 2 + 1;
+    let bounds = owner.evidence_cell_bounds(scenario_count).unwrap();
+    assert_eq!(bounds.verified_cells(), scenario_count);
+    assert_eq!(bounds.conflict_cells(), scenario_count);
+}
+
+#[test]
 fn evidence_cell_bounds_cover_actual_joint_conflict_and_duplicate_case_reduction() {
     let joint = joint_draft(true).compile().unwrap();
     let mut joint_session = joint.instantiate(21).unwrap();
