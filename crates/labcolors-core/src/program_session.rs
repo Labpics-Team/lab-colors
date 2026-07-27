@@ -4,8 +4,9 @@
 //! source-plus-straight-alpha programs, occurrences are modeled applications of
 //! Paint to Surface, constraints declare assessments of those exact
 //! occurrences, and outputs bind opaque slots back to Paints. The compiled
-//! result owns only admitted, canonical topology; runtime observation,
-//! lifecycle and terminal emission belong to the sole revision-bound Session.
+//! result owns only admitted, canonical topology; runtime observation and
+//! lifecycle belong to the sole revision-bound Session. Attachment, renderer
+//! and actual terminal sink are outside this module.
 //! Finite candidate search executes only hard constraints. Every fresh hard
 //! phase completes across its whole physical support (and across every state
 //! of an exhaustive conflict) before diagnostics execute. Report cells are
@@ -14,7 +15,7 @@
 //! exits before diagnostics, preserving the authoritative typed failure. A
 //! diagnostic evaluator error may abort fixed or exhaustive report construction
 //! only after their hard verdict is fixed; no partial certificate is emitted.
-//! Output transport and encoded-only assessments retain exact physical
+//! Routed Paint outputs and encoded-only assessments retain exact physical
 //! occurrence evidence plus the declared appearance context. A modeled LCS
 //! occurrence is derived only through its separate typed capability; neither
 //! claim is renderer observation or human-subject evidence.
@@ -1657,14 +1658,17 @@ where
     }
 }
 
-/// One emitted Program Paint routed to an opaque output slot.
+/// Один encoded Paint из Program, направленный в непрозрачный клиентский slot.
+///
+/// Это выбранный source с opacity до клиентского sink, attachment, renderer
+/// и final-visible композиции.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ProgramOutputV1 {
+pub struct ProgramPaintOutputV1 {
     output: OutputSlotId,
     paint: EncodedPointPaintV1,
 }
 
-impl ProgramOutputV1 {
+impl ProgramPaintOutputV1 {
     pub const fn output(self) -> OutputSlotId {
         self.output
     }
@@ -1684,7 +1688,7 @@ where
     Evaluation: ProgramConstraintEvaluatorSetV1,
 {
     report: ProgramReportV1<Evaluation>,
-    outputs: Vec<ProgramOutputV1>,
+    outputs: Vec<ProgramPaintOutputV1>,
     selected_state_index: Option<usize>,
 }
 
@@ -1710,7 +1714,7 @@ where
         &self.report
     }
 
-    pub fn outputs(&self) -> &[ProgramOutputV1] {
+    pub fn outputs(&self) -> &[ProgramPaintOutputV1] {
         &self.outputs
     }
 
@@ -2128,7 +2132,7 @@ where
     // доказательство, но сохраняет fail-before-work для возможного конфликта.
     selected: ProgramReportBuffersV1<Evaluation>,
     exhaustive_conflict: ProgramReportBuffersV1<Evaluation>,
-    outputs: Vec<ProgramOutputV1>,
+    outputs: Vec<ProgramPaintOutputV1>,
     counts: ProgramEvaluationCardinalityV1,
 }
 
@@ -2137,7 +2141,7 @@ where
     Evaluation: ProgramConstraintEvaluatorSetV1,
 {
     report: ProgramReportBuffersV1<Evaluation>,
-    outputs: Vec<ProgramOutputV1>,
+    outputs: Vec<ProgramPaintOutputV1>,
     expected_cell_count: usize,
     expected_point_record_count: usize,
     expected_replay_step_count: usize,
@@ -2154,7 +2158,7 @@ where
     Evaluation: ProgramConstraintEvaluatorSetV1,
 {
     cells: Option<&'buffers mut Vec<ProgramConstraintCellV1<Evaluation>>>,
-    outputs: Option<&'buffers mut Vec<ProgramOutputV1>>,
+    outputs: Option<&'buffers mut Vec<ProgramPaintOutputV1>>,
     point_causal: Option<ProgramPointCausalBuffersV1<'buffers>>,
 }
 
@@ -2793,7 +2797,7 @@ where
                 if paint.id() != output.paint_id {
                     return Err(ProgramSessionEvaluationError::InternalInvariant);
                 }
-                let routed = ProgramOutputV1 {
+                let routed = ProgramPaintOutputV1 {
                     output: output.output,
                     paint,
                 };

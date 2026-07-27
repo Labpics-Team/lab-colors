@@ -1097,6 +1097,76 @@ fn program_identity_binds_lcs_releases_only_through_lcs_constraint_content() {
 }
 
 #[test]
+fn program_paint_output_names_are_exact_and_retired_ambiguity_cannot_return() {
+    let production_sources = production_rust_sources();
+    for retired in [
+        "ProgramOutputV1",
+        "CertifiedOutputV1",
+        "ENCODED_PAINT_EMISSION_V1",
+    ] {
+        for (path, source) in &production_sources {
+            assert!(
+                !contains_rust_identifier(source, retired),
+                "the output naming hard cut must not retain ambiguous symbol `{retired}` in {path}",
+            );
+        }
+    }
+
+    for (path, source, required) in [
+        (
+            "program_session.rs",
+            PROGRAM_SESSION_SOURCE,
+            "pub struct ProgramPaintOutputV1 {",
+        ),
+        (
+            "program.rs",
+            PROGRAM_SOURCE,
+            "pub(crate) struct CertifiedPaintOutputV1<'a> {",
+        ),
+        (
+            "program_identity.rs",
+            PROGRAM_IDENTITY_SOURCE,
+            "pub(super) const ENCODED_PAINT_OUTPUT_ROUTING_V1: u8 = 1;",
+        ),
+        (
+            "program_identity.rs",
+            PROGRAM_IDENTITY_SOURCE,
+            "release_tag::ENCODED_PAINT_OUTPUT_ROUTING_V1",
+        ),
+    ] {
+        assert!(
+            source.contains(required),
+            "the exact Paint-output boundary is incomplete in {path}; missing `{required}`",
+        );
+    }
+
+    assert_eq!(
+        normalized_source_scope(
+            PROGRAM_SESSION_SOURCE,
+            "pub struct ProgramPaintOutputV1 {",
+            "impl ProgramPaintOutputV1 {",
+        ),
+        "pub struct ProgramPaintOutputV1 { output: OutputSlotId, paint: EncodedPointPaintV1, }",
+        "a routed Paint output must contain only the authored slot and selected encoded Paint",
+    );
+    let causal_evidence = source_scope(
+        PROGRAM_SESSION_SOURCE,
+        "pub(crate) struct ProgramPointCausalEvidenceV1<'report, State> {",
+        "pub(crate) type ProgramPointCausalCertificateV1",
+    );
+    for forbidden in [
+        "OutputSlotId",
+        "ProgramPaintOutputV1",
+        "EncodedPointPaintV1",
+    ] {
+        assert!(
+            !contains_rust_identifier(causal_evidence, forbidden),
+            "final-visible causal evidence must not absorb routed Paint output `{forbidden}`",
+        );
+    }
+}
+
+#[test]
 fn cold_program_normalization_reuses_owned_unordered_buffers() {
     let compiler = PROGRAM_SESSION_SOURCE
         .split_whitespace()
