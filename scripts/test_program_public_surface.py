@@ -62,6 +62,18 @@ class ProgramPublicSurfaceTests(unittest.TestCase):
         _, leaks = program_public_surface(self.crate)
         self.assertEqual(len(leaks), 1)
 
+    def test_nested_program_source_file_is_rejected_by_origin(self) -> None:
+        self.write_all("struct.AttachmentAlias.html")
+        self.write_item(
+            "struct.AttachmentAlias.html",
+            (
+                '<a class="src" href="../src/labcolors_core/'
+                'program/attachment.rs.html#1">Source</a>'
+            ),
+        )
+        _, leaks = program_public_surface(self.crate)
+        self.assertEqual(len(leaks), 1)
+
     def test_public_type_alias_route_to_program_is_rejected(self) -> None:
         self.write_all("type.Alias.html")
         self.write_item(

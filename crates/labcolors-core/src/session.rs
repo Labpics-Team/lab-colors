@@ -190,28 +190,96 @@ enum PendingSessionTransition<Verified, Violation> {
     },
 }
 
-/// Linear, fully evaluated Session transition that has not been published yet.
+/// Заимствованный prospective lifecycle для imperative shell до commit.
 ///
-/// Dropping this value discards only prospective data. Committing consumes the
-/// sole mutable borrow and publishes raw head and lifecycle with moves after
-/// every fallible operation has completed.
+/// Generic Session открывает только evidence и provenance ревизии; она не
+/// знает, будет ли вызывающий код render-ить, lint-ить, сохранять или
+/// отбрасывать результат.
+pub(crate) enum PreparedSessionDispositionV1<'a, Plan: SessionPlanV1> {
+    Idempotent {
+        raw_head: ObservationHeadViewV1<'a>,
+        state: &'a SessionState<Plan::Verified, Plan::Violation>,
+    },
+    Unknown(&'a RevisionBoundUnknownV1),
+    Verified(&'a Plan::Verified),
+    Violation(&'a Plan::Violation),
+}
+
+struct DisplacedSessionState<Verified, Violation> {
+    last_verified: Option<Verified>,
+    discarded_violation: Option<Violation>,
+}
+
+/// Вытесненные значения уже опубликованного перехода, чьё уничтожение
+/// вызывающий shell обязан отложить за границу физического commit.
+///
+/// Поля намеренно закрыты. Значение служит только линейным retirement-bundle;
+/// owner объявлен последним и потому переживает raw/evidence при уничтожении.
+pub(crate) struct DeferredSessionRetirement<Plan: SessionPlanV1> {
+    _retired_raw_head: Option<SessionObservationHeadV1>,
+    _retired_verified: Option<Plan::Verified>,
+    _retired_violation: Option<Plan::Violation>,
+    _displaced_placeholder: SessionState<Plan::Verified, Plan::Violation>,
+    _owner: Plan::OwnerLease,
+}
+
+/// Линейный, полностью вычисленный и ещё не опубликованный переход Session.
+///
+/// Drop отбрасывает только prospective data. Commit поглощает единственное
+/// mutable-заимствование и публикует raw head и lifecycle перемещениями после
+/// завершения всех fallible-операций.
 #[must_use = "commit the prepared transition or drop it intentionally"]
 pub(crate) struct PreparedSessionTransition<'session, Plan: SessionPlanV1> {
     raw_head: &'session mut SessionObservationHeadV1,
     state: &'session mut SessionState<Plan::Verified, Plan::Violation>,
     pending: PendingSessionTransition<Plan::Verified, Plan::Violation>,
-    // Rust drops fields in declaration order. Keep the lease last so abort
-    // destroys every prospective evidence value while its generation is live.
+    // Rust уничтожает поля в порядке объявления. Lease остаётся последним,
+    // чтобы abort уничтожил все prospective evidence при живой generation.
     owner: Plan::OwnerLease,
 }
 
 impl<'session, Plan: SessionPlanV1> PreparedSessionTransition<'session, Plan> {
-    /// Publish one already admitted and evaluated lifecycle transition.
+    /// Возвращает fully evaluated prospective disposition без публикации.
+    pub(crate) fn disposition(&self) -> PreparedSessionDispositionV1<'_, Plan> {
+        match &self.pending {
+            PendingSessionTransition::Idempotent => PreparedSessionDispositionV1::Idempotent {
+                raw_head: self.raw_head.observation_head(),
+                state: self.state,
+            },
+            PendingSessionTransition::Unknown(unknown) => {
+                PreparedSessionDispositionV1::Unknown(unknown)
+            }
+            PendingSessionTransition::Observed { decision, .. } => match decision {
+                SessionDecision::Verified(verified) => {
+                    PreparedSessionDispositionV1::Verified(verified)
+                }
+                SessionDecision::Violation(violation) => {
+                    PreparedSessionDispositionV1::Violation(violation)
+                }
+            },
+        }
+    }
+
+    /// Публикует один уже допущенный и вычисленный lifecycle-переход.
     ///
-    /// This function has no failure return and performs no admission,
-    /// evaluation or allocation. It does not claim that an external sink has
-    /// accepted any output.
+    /// Функция не возвращает ошибку и не выполняет admission, evaluation или
+    /// allocation. Она не утверждает, что внешний sink принял output.
     pub(crate) fn commit(self) -> SessionView<'session, Plan> {
+        let (view, retirement) = self.commit_deferred();
+        drop(retirement);
+        view
+    }
+
+    /// Публикует пару raw-head/lifecycle, но возвращает всё вытесненное без
+    /// запуска пользовательских деструкторов.
+    ///
+    /// После входа в эту функцию выполняются только перемещения и записи в
+    /// уже существующие слоты. Это вариант для imperative shell, который уже
+    /// установил внешний снимок и обязан отложить retirement до следующего
+    /// pre-install участка.
+    pub(crate) fn commit_deferred(
+        self,
+    ) -> (SessionView<'session, Plan>, DeferredSessionRetirement<Plan>) {
         let Self {
             raw_head,
             state,
@@ -219,36 +287,74 @@ impl<'session, Plan: SessionPlanV1> PreparedSessionTransition<'session, Plan> {
             owner,
         } = self;
 
-        match pending {
-            PendingSessionTransition::Idempotent => {}
-            PendingSessionTransition::Unknown(unknown) => {
-                let next_state = match take_last_verified(state) {
-                    Some(previous) => SessionState::Stale { previous },
-                    None => SessionState::Waiting,
-                };
-                *raw_head = SessionObservationHeadV1::Unknown(unknown);
-                *state = next_state;
-            }
-            PendingSessionTransition::Observed {
-                raw_observation,
-                decision,
-            } => {
-                let previous = take_last_verified(state);
-                let next_state = match decision {
-                    SessionDecision::Verified(current) => SessionState::Ready { current },
-                    SessionDecision::Violation(cause) => SessionState::Failed { cause, previous },
-                };
-                *raw_head = SessionObservationHeadV1::Observed(raw_observation);
-                *state = next_state;
-            }
-        }
+        let (retired_raw_head, retired_verified, retired_violation, displaced_placeholder) =
+            match pending {
+                PendingSessionTransition::Idempotent => (None, None, None, SessionState::Waiting),
+                PendingSessionTransition::Unknown(unknown) => {
+                    let DisplacedSessionState {
+                        last_verified,
+                        discarded_violation,
+                    } = displace_session_state(state);
+                    let next_state = match last_verified {
+                        Some(previous) => SessionState::Stale { previous },
+                        None => SessionState::Waiting,
+                    };
+                    let retired_raw_head =
+                        mem::replace(raw_head, SessionObservationHeadV1::Unknown(unknown));
+                    let displaced_placeholder = mem::replace(state, next_state);
+                    (
+                        Some(retired_raw_head),
+                        None,
+                        discarded_violation,
+                        displaced_placeholder,
+                    )
+                }
+                PendingSessionTransition::Observed {
+                    raw_observation,
+                    decision,
+                } => {
+                    let DisplacedSessionState {
+                        last_verified,
+                        discarded_violation,
+                    } = displace_session_state(state);
+                    let (next_state, retired_verified) = match decision {
+                        SessionDecision::Verified(current) => {
+                            (SessionState::Ready { current }, last_verified)
+                        }
+                        SessionDecision::Violation(cause) => (
+                            SessionState::Failed {
+                                cause,
+                                previous: last_verified,
+                            },
+                            None,
+                        ),
+                    };
+                    let retired_raw_head = mem::replace(
+                        raw_head,
+                        SessionObservationHeadV1::Observed(raw_observation),
+                    );
+                    let displaced_placeholder = mem::replace(state, next_state);
+                    (
+                        Some(retired_raw_head),
+                        retired_verified,
+                        discarded_violation,
+                        displaced_placeholder,
+                    )
+                }
+            };
 
-        // The exact generation remains pinned through both lifecycle moves.
-        drop(owner);
-        SessionView {
+        let view = SessionView {
             raw_head: raw_head.observation_head(),
             state,
-        }
+        };
+        let retirement = DeferredSessionRetirement {
+            _retired_raw_head: retired_raw_head,
+            _retired_verified: retired_verified,
+            _retired_violation: retired_violation,
+            _displaced_placeholder: displaced_placeholder,
+            _owner: owner,
+        };
+        (view, retirement)
     }
 }
 
@@ -405,14 +511,27 @@ fn prepare_session_transition<'session, Plan: SessionPlanV1>(
     })
 }
 
-/// Move exactly one retained verified witness out of the old closed owner.
-fn take_last_verified<Verified, Violation>(
+/// Вытесняет старый lifecycle, не уничтожая evidence до установки следующей
+/// пары raw-head/state.
+fn displace_session_state<Verified, Violation>(
     state: &mut SessionState<Verified, Violation>,
-) -> Option<Verified> {
+) -> DisplacedSessionState<Verified, Violation> {
     match mem::replace(state, SessionState::Waiting) {
-        SessionState::Waiting => None,
-        SessionState::Ready { current } => Some(current),
-        SessionState::Stale { previous } => Some(previous),
-        SessionState::Failed { previous, .. } => previous,
+        SessionState::Waiting => DisplacedSessionState {
+            last_verified: None,
+            discarded_violation: None,
+        },
+        SessionState::Ready { current } => DisplacedSessionState {
+            last_verified: Some(current),
+            discarded_violation: None,
+        },
+        SessionState::Stale { previous } => DisplacedSessionState {
+            last_verified: Some(previous),
+            discarded_violation: None,
+        },
+        SessionState::Failed { cause, previous } => DisplacedSessionState {
+            last_verified: previous,
+            discarded_violation: Some(cause),
+        },
     }
 }

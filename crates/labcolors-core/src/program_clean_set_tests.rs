@@ -77,9 +77,8 @@ fn report_only_dirty_terminal_is_retained_as_a_typed_rejected_violation() {
         )
         .unwrap();
 
-    assert_eq!(projection.evidence().kind(), program::StateKindV1::Ready);
-    let Some(program::CertificateV1::Verified(certificate)) =
-        projection.evidence().certificates().next()
+    assert_eq!(projection.kind(), program::StateKindV1::Ready);
+    let Some(program::CertificateV1::Verified(certificate)) = projection.certificates().next()
     else {
         panic!("report-only rejection must retain a Verified certificate");
     };
@@ -122,9 +121,8 @@ fn hard_absent_final_owned_domain_is_a_violation_not_a_pass() {
         )
         .unwrap();
 
-    assert_eq!(projection.evidence().kind(), program::StateKindV1::Failed);
-    let Some(program::CertificateV1::Conflict(certificate)) =
-        projection.evidence().certificates().next()
+    assert_eq!(projection.kind(), program::StateKindV1::Failed);
+    let Some(program::CertificateV1::Conflict(certificate)) = projection.certificates().next()
     else {
         panic!("absent final-owned domain must reject a hard fixed candidate");
     };
@@ -185,13 +183,14 @@ fn finite_search_skips_dirty_and_freshly_rechecks_the_first_clean_state() {
         )
         .unwrap();
 
-    let Some(program::OperationV1::Set(set)) = projection.operations().next() else {
+    let Some(program::CertificateV1::Verified(certificate)) = projection.certificates().next()
+    else {
         panic!("the first clean finite state must be selected");
     };
-    assert_eq!(set.source(), clean);
-    assert_eq!(set.certificate().selected_state_index(), Some(1));
+    assert_eq!(certificate.outputs().next().unwrap().source(), clean);
+    assert_eq!(certificate.selected_state_index(), Some(1));
     let program::AssessmentV1::DeclaredSrgb8CleanSet(evidence) =
-        set.certificate().cells().next().unwrap().assessment()
+        certificate.cells().next().unwrap().assessment()
     else {
         panic!("final recheck must retain clean-set evidence");
     };
@@ -227,8 +226,7 @@ fn two_clean_constraints_and_causal_reporting_share_one_phase_materialization() 
         )
         .unwrap();
 
-    let Some(program::CertificateV1::Verified(certificate)) =
-        projection.evidence().certificates().next()
+    let Some(program::CertificateV1::Verified(certificate)) = projection.certificates().next()
     else {
         panic!("report-only constraints must retain a Verified certificate");
     };
@@ -306,8 +304,7 @@ fn downstream_occlusion_is_absent_even_when_the_inner_nominal_color_is_rejected(
         )
         .unwrap();
 
-    let Some(program::CertificateV1::Conflict(certificate)) =
-        projection.evidence().certificates().next()
+    let Some(program::CertificateV1::Conflict(certificate)) = projection.certificates().next()
     else {
         panic!("opaque downstream replacement must erase the inner final-owned domain");
     };
@@ -557,7 +554,6 @@ fn rejected_clean_search_states_do_not_add_hot_path_allocations() {
                 },
             )
             .unwrap()
-            .evidence()
             .kind()
     });
     let (_, rejected_allocations) = crate::test_support::measured_allocations(|| {
@@ -570,7 +566,6 @@ fn rejected_clean_search_states_do_not_add_hot_path_allocations() {
                 },
             )
             .unwrap()
-            .evidence()
             .kind()
     });
 

@@ -17,6 +17,7 @@ const LIB_SOURCE: &str = include_str!("lib.rs");
 const LCS_OCCURRENCE_SOURCE: &str = include_str!("lcs_occurrence.rs");
 const OBSERVATION_SOURCE: &str = include_str!("observation.rs");
 const OUTPUT_PROJECTION_SOURCE: &str = include_str!("output_projection.rs");
+const PROGRAM_ATTACHMENT_SOURCE: &str = include_str!("program/attachment.rs");
 const PROGRAM_SOURCE: &str = include_str!("program.rs");
 const POINT_SUPPORT_SOURCE: &str = include_str!("point_support.rs");
 const PROGRAM_IDENTITY_SOURCE: &str = include_str!("program_identity.rs");
@@ -24,15 +25,17 @@ const PROGRAM_SESSION_SOURCE: &str = include_str!("program_session.rs");
 const SESSION_SOURCE: &str = include_str!("session.rs");
 const WCAG22_CONSTRAINT_SOURCE: &str = include_str!("constraints/wcag22.rs");
 
-const GENERIC_SOURCES: [(&str, &str); 4] = [
+const GENERIC_SOURCES: [(&str, &str); 5] = [
     ("appearance.rs", APPEARANCE_SOURCE),
     ("lcs_occurrence.rs", LCS_OCCURRENCE_SOURCE),
+    ("program/attachment.rs", PROGRAM_ATTACHMENT_SOURCE),
     ("program_identity.rs", PROGRAM_IDENTITY_SOURCE),
     ("program_session.rs", PROGRAM_SESSION_SOURCE),
 ];
 
 const CLEAN_SET_PROGRAM_SOURCES: &[(&str, &str)] = &[
     ("clean_set.rs", CLEAN_SET_SOURCE),
+    ("program/attachment.rs", PROGRAM_ATTACHMENT_SOURCE),
     ("program.rs", PROGRAM_SOURCE),
     ("program_session.rs", PROGRAM_SESSION_SOURCE),
     ("program_identity.rs", PROGRAM_IDENTITY_SOURCE),
@@ -138,6 +141,7 @@ fn clean_set_program_guard_covers_the_complete_classifier_and_program_path() {
         [
             "clean_set.rs",
             "program.rs",
+            "program/attachment.rs",
             "program_identity.rs",
             "program_session.rs",
         ],
@@ -355,7 +359,7 @@ fn staged_program_draft_wraps_the_single_canonical_core_graph() {
 }
 
 #[test]
-fn staged_session_keeps_evidence_but_owner_alone_grants_updates_and_operations() {
+fn staged_session_is_evidence_only_and_retired_operation_authority_cannot_return() {
     assert_eq!(
         normalized_source_scope(
             PROGRAM_SOURCE,
@@ -402,7 +406,7 @@ fn staged_session_keeps_evidence_but_owner_alone_grants_updates_and_operations()
     let evidence_api = source_scope(
         PROGRAM_SOURCE,
         "impl<'a> EvidenceViewV1<'a> {",
-        "struct BorrowScopeV1<'owner, 'session>",
+        "/// Полностью вычисленный, но ещё не опубликованный переход одной Session.",
     );
     for forbidden in [
         "fn revision(",
@@ -422,18 +426,18 @@ fn staged_session_keeps_evidence_but_owner_alone_grants_updates_and_operations()
         "pub(crate) struct ScenarioV1<'a> {",
     );
     for required in [
-        "pub(crate) fn project<'owner, 'session>(",
-        "pub(crate) fn prepare_update<'owner, 'session>(",
+        "pub(crate) fn prepare_update<'session>(",
         ".owns_session(&session.session)",
+        "pub(crate) fn instantiate(",
     ] {
         assert!(
             owner_api.contains(required),
-            "the exact owner must remain the only operation authority; missing `{required}`",
+            "the evidence-only owner/session seam is incomplete; missing `{required}`",
         );
     }
     let prepare = source_scope(
         owner_api,
-        "pub(crate) fn prepare_update<'owner, 'session>(",
+        "pub(crate) fn prepare_update<'session>(",
         "pub(crate) fn instantiate(",
     );
     assert!(
@@ -445,10 +449,24 @@ fn staged_session_keeps_evidence_but_owner_alone_grants_updates_and_operations()
                 .expect("owner prepare must delegate one prepared Session transition"),
         "owner mismatch must be rejected before admission, allocation, or evaluation",
     );
-    assert!(
-        !owner_api.contains("pub(crate) fn update<'owner, 'session>("),
-        "Owner must not retain an immediate prepare-and-commit authority",
-    );
+    for forbidden in ["pub(crate) fn project(", "pub(crate) fn update("] {
+        assert!(
+            !PROGRAM_SOURCE.contains(forbidden),
+            "evidence must not regain retired sink authority `{forbidden}`",
+        );
+    }
+    for retired in [
+        "OperationV1",
+        "SetV1",
+        "RemoveV1",
+        "HoldV1",
+        "BorrowScopeV1",
+    ] {
+        assert!(
+            !contains_rust_identifier(PROGRAM_SOURCE, retired),
+            "evidence must not regain retired sink authority `{retired}`",
+        );
+    }
 
     let session_code = normalized_production_code(SESSION_SOURCE);
     let program_code = normalized_production_code(PROGRAM_SOURCE);
@@ -519,29 +537,50 @@ fn staged_session_keeps_evidence_but_owner_alone_grants_updates_and_operations()
             "commit must remain infallible move-only publication; found `{forbidden}`",
         );
     }
-    for required in ["drop(owner);", "*raw_head =", "*state = next_state;"] {
+    for required in [
+        "let (view, retirement) = self.commit_deferred();",
+        "drop(retirement);",
+        "mem::replace(raw_head,",
+        "mem::replace(state, next_state)",
+        "_owner: owner,",
+    ] {
         assert!(
             core_commit.contains(required),
             "commit must publish under the pinned owner; missing `{required}`",
         );
     }
-    let owner_release = core_commit
-        .find("drop(owner);")
-        .expect("commit must release its exact owner explicitly");
-    for publication in ["*raw_head =", "*state = next_state;"] {
+    let owner_retirement = core_commit
+        .find("_owner: owner,")
+        .expect("deferred commit must park its exact owner");
+    for publication in ["mem::replace(raw_head,", "mem::replace(state, next_state)"] {
         let last_publication = core_commit
             .rfind(publication)
             .unwrap_or_else(|| panic!("commit must contain `{publication}`"));
         assert!(
-            last_publication < owner_release,
-            "every `{publication}` path must publish before releasing the exact owner",
+            last_publication < owner_retirement,
+            "every `{publication}` path must publish before parking the exact owner",
         );
     }
+    let deferred_retirement = source_scope(
+        SESSION_SOURCE,
+        "pub(crate) struct DeferredSessionRetirement<Plan: SessionPlanV1>",
+        "/// Линейный, полностью вычисленный",
+    );
+    let retired_evidence = deferred_retirement
+        .find("_retired_verified: Option<Plan::Verified>,")
+        .expect("retirement must own displaced verified evidence");
+    let retired_owner = deferred_retirement
+        .find("_owner: Plan::OwnerLease,")
+        .expect("retirement must retain the exact owner");
+    assert!(
+        retired_evidence < retired_owner,
+        "retired evidence must drop before its exact owner",
+    );
 
     let concrete_prepared = source_scope(
         PROGRAM_SOURCE,
         "/// Полностью вычисленный, но ещё не опубликованный переход одной Session.",
-        "impl<'owner, 'session> PreparedSessionTransitionV1<'owner, 'session>",
+        "impl<'session> PreparedSessionTransitionV1<'session>",
     );
     let concrete_must_use =
         "#[must_use = \"commit the prepared transition or drop it intentionally\"]";
@@ -562,25 +601,14 @@ fn staged_session_keeps_evidence_but_owner_alone_grants_updates_and_operations()
 
     let concrete_commit = source_scope(
         PROGRAM_SOURCE,
-        "impl<'owner, 'session> PreparedSessionTransitionV1<'owner, 'session>",
-        "/// Проверенная Owner-and-snapshot проекция",
+        "impl<'session> PreparedSessionTransitionV1<'session>",
+        "/// Collision-resistant адрес канонического физического содержания Program.",
     );
     assert!(
-        concrete_commit.contains("session: transition.commit(),")
+        concrete_commit.contains("session: self.transition.commit(),")
             && !concrete_commit.contains("Result<")
             && !concrete_commit.contains("?;"),
-        "Program commit must only project the already committed Session view",
-    );
-
-    let staged_access_errors = source_scope(
-        PROGRAM_SOURCE,
-        "pub(crate) enum AccessErrorV1 {",
-        "impl OwnerV1",
-    );
-    assert!(
-        staged_access_errors.contains("OwnerMismatch,")
-            && !staged_access_errors.contains("OwnerExpired"),
-        "operation projection must distinguish foreign ownership, not expose internal expiry",
+        "evidence-only commit must only project the already committed Session view",
     );
     let staged_update_errors = source_scope(
         PROGRAM_SOURCE,
@@ -600,27 +628,6 @@ fn staged_session_keeps_evidence_but_owner_alone_grants_updates_and_operations()
             && PROGRAM_SOURCE
                 .contains("fn map_plan_error(error: CoreProgramPlanErrorV1) -> UpdateErrorV1",),
         "update errors must retain payloads in the authoritative enum before kind projection",
-    );
-
-    for (payload, end) in [
-        (
-            "pub(crate) struct SetV1<'owner, 'session> {",
-            "impl<'session> SetV1<'_, 'session>",
-        ),
-        (
-            "pub(crate) struct RemoveV1<'owner, 'session> {",
-            "impl RemoveV1<'_, '_>",
-        ),
-    ] {
-        assert!(
-            source_scope(PROGRAM_SOURCE, payload, end)
-                .contains("_scope: BorrowScopeV1<'owner, 'session>,"),
-            "{payload} must retain both owner and immutable Session borrows",
-        );
-    }
-    assert!(
-        !PROGRAM_SOURCE.contains("HoldV1") && !PROGRAM_SOURCE.contains("OperationV1::Hold"),
-        "past evidence must not become a current emission authority",
     );
 }
 

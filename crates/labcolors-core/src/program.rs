@@ -10,31 +10,16 @@
 //! [`DraftV1::compile`] проверяет граф целиком и возвращает [`OwnerV1`] —
 //! единственного владельца конкретной скомпилированной эпохи.
 //!
-//! [`OwnerV1::instantiate`] создаёт потоковую [`SessionV1`]. На горячем пути
-//! [`OwnerV1::prepare_update`] принимает физические сценарии в каноническом
-//! порядке входов и возвращает линейный [`PreparedSessionTransitionV1`]. Его
-//! Drop не меняет зафиксированные raw head, lifecycle и previous evidence, а
-//! consuming commit публикует только уже вычисленные raw head и lifecycle и
-//! возвращает [`ProjectionV1`]. Внутренние scratch-буферы могут быть полностью
-//! переинициализированы во время prepare; они не являются состоянием Session.
-//! Это ещё не commit внешнего sink. Исторические доказательства принадлежат
-//! Session, но только тот же Owner разрешает подготовку обновлений и операции.
+//! [`OwnerV1::instantiate`] создаёт evidence-only [`SessionV1`] для lint и
+//! мониторинга. [`OwnerV1::prepare_update`] возвращает линейный
+//! [`PreparedSessionTransitionV1`]: Drop ничего не публикует, а consuming commit
+//! меняет только raw head и lifecycle Session. Этот путь не выдаёт sink-authority.
 //!
-//! Состояния проецируются однозначно:
-//!
-//! | Состояние | Операции |
-//! |---|---|
-//! | `Waiting` + `Empty` | нет |
-//! | `Waiting` + допущенный `Unknown` | `Remove` для каждого выхода |
-//! | `Ready` | `Set` для каждого выхода |
-//! | `Stale` | `Remove` для каждого выхода |
-//! | `Failed` | `Remove` для каждого выхода |
-//!
-//! Прошлый Verified-сертификат остаётся в evidence для диагностики, но не
-//! разрешает эмиссию: он относится к прошлому наблюдению, а не к текущему
-//! неизвестному или нарушающему контексту. Непустая сырая голова без текущего
-//! Verified-сертификата также отзывает выходы: это закрывает передачу sink от
-//! одной Session другой Session того же Owner.
+//! Terminal runtime принадлежит [`attachment`]: один Attachment структурно
+//! связывает точную compiled generation, Session, полные output→sink и
+//! output→presentation bindings и линейный writer lease. Только он может
+//! атомарно материализовать или отозвать весь снимок; историческое evidence
+//! само по себе такого права не даёт.
 //!
 //! [`CertificateV1::Verified`] хранит выбранное состояние, все клетки
 //! доказательства и сертифицированные Paint outputs. [`CertificateV1::Conflict`]
@@ -44,9 +29,10 @@
 
 #![forbid(unreachable_pub)]
 
+/// Транзакционный point-output attachment и его линейный sink-контракт.
+pub(crate) mod attachment;
+
 use core::iter::FusedIterator;
-use core::marker::PhantomData;
-use core::slice;
 
 use crate::Srgb8;
 use crate::appearance::{OccurrenceId, OpacityInputId, PaintId, SurfaceId, SurfaceInputPortId};
@@ -84,7 +70,8 @@ use crate::program_session::{
     TargetCandidateV1 as CoreTargetCandidateV1, TargetId,
 };
 use crate::session::{
-    PreparedSessionTransition, Session, SessionState, SessionUpdateError, SessionView,
+    DeferredSessionRetirement, PreparedSessionTransition, Session, SessionState,
+    SessionUpdateError, SessionView,
 };
 use crate::wcag22::{
     Wcag22ClientDeclaredNotApplicableV1, Wcag22CriterionV1, Wcag22EvaluationErrorV1,
@@ -98,6 +85,7 @@ type CoreProgramSessionV1 = Session<CoreProgramPlanV1>;
 type CoreProgramStateV1 = SessionState<CoreVerifiedV1, CoreConflictV1>;
 type CoreProgramSessionViewV1<'a> = SessionView<'a, CoreProgramPlanV1>;
 type CorePreparedSessionTransitionV1<'a> = PreparedSessionTransition<'a, CoreProgramPlanV1>;
+type CoreDeferredSessionRetirementV1 = DeferredSessionRetirement<CoreProgramPlanV1>;
 type CoreProgramPlanErrorV1 = ProgramSessionEvaluationError<CoreProgramEvaluatorErrorV1>;
 type CoreProgramConstraintCellV1 = ProgramConstraintCellV1<CoreProgramEvaluatorsV1>;
 type CoreExactPassEvidenceV1 = ProgramVisiblePointPassEvidence<ExactSrgb8IdentityV1>;
@@ -1472,9 +1460,10 @@ impl Default for DraftV1 {
 
 /// Непрозрачный сильный владелец одной точной скомпилированной Program.
 ///
-/// Созданные им Session изменяются только через эту же аллокацию. Уничтожение
-/// Owner отзывает обновления и операции, но исторические evidence остаются в
-/// Session.
+/// Созданные им standalone Session изменяются только через эту же аллокацию.
+/// Attachment атомарно удерживает собственный strong pin той же эпохи, поэтому
+/// уничтожение внешнего Owner не отзывает уже присоединённый runtime. Без такого
+/// pin исторические evidence остаются читаемыми, но новые обновления недоступны.
 pub(crate) struct OwnerV1 {
     compiled: CompiledCoreProgramV1,
 }
@@ -1508,13 +1497,6 @@ pub(crate) enum EvidenceBoundsErrorV1 {
     /// Произведение числа сценариев, ограничений и состояний не помещается в
     /// адресное пространство платформы.
     CardinalityOverflow,
-}
-
-/// Отказ доступа из-за несовпадения точной owner-эпохи.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum AccessErrorV1 {
-    /// Session была создана другой аллокацией Owner.
-    OwnerMismatch,
 }
 
 impl OwnerV1 {
@@ -1588,42 +1570,21 @@ impl OwnerV1 {
             .map(|(slot, _paint)| OutputSlotIdV1::from_core(slot))
     }
 
-    /// Проецирует операции только для Session этой точной owner-эпохи.
-    ///
-    /// Равенство [`ContentIdentityV3`] не даёт полномочий.
-    pub(crate) fn project<'owner, 'session>(
-        &'owner self,
-        session: &'session SessionV1,
-    ) -> Result<ProjectionV1<'owner, 'session>, AccessErrorV1> {
-        if !self.compiled.owns_session(&session.session) {
-            return Err(AccessErrorV1::OwnerMismatch);
-        }
-        Ok(ProjectionV1 {
-            evidence: session.evidence(),
-            owner: self,
-            scope: BorrowScopeV1::new(self, session),
-        })
-    }
-
     /// Допускает update без изменения зафиксированных raw head и lifecycle.
     ///
     /// Несовпадение Owner проверяется до admission, аллокаций и вычисления.
     /// Raw head, lifecycle и previous evidence меняются только в consuming
     /// commit; внутренние scratch-буферы могут быть переинициализированы здесь.
-    pub(crate) fn prepare_update<'owner, 'session>(
-        &'owner self,
+    pub(crate) fn prepare_update<'session>(
+        &self,
         session: &'session mut SessionV1,
         update: UpdateV1<'_>,
-    ) -> Result<PreparedSessionTransitionV1<'owner, 'session>, UpdateErrorV1> {
+    ) -> Result<PreparedSessionTransitionV1<'session>, UpdateErrorV1> {
         if !self.compiled.owns_session(&session.session) {
             return Err(UpdateErrorV1::OwnerMismatch);
         }
         let transition = session.prepare_update(update)?;
-        Ok(PreparedSessionTransitionV1 {
-            owner: self,
-            transition,
-            scope: BorrowScopeV1::prepared(),
-        })
+        Ok(PreparedSessionTransitionV1 { transition })
     }
 
     /// Создаёт Session, привязанную к одному непрозрачному stream ID.
@@ -1843,31 +1804,6 @@ impl<'a> EvidenceViewV1<'a> {
     }
 }
 
-/// Нулевой lifetime-маркер точной пары Owner и неизменяемого снимка Session.
-#[derive(Clone, Copy)]
-struct BorrowScopeV1<'owner, 'session> {
-    _scope: PhantomData<(&'owner OwnerV1, &'session SessionV1)>,
-}
-
-impl<'owner, 'session> BorrowScopeV1<'owner, 'session> {
-    const fn new(_owner: &'owner OwnerV1, _session: &'session SessionV1) -> Self {
-        Self {
-            _scope: PhantomData,
-        }
-    }
-
-    const fn prepared() -> Self {
-        // Core transition already owns the sole mutable Session borrow, so
-        // accepting owner/session here would duplicate or conflict with it.
-        // The containing PreparedSessionTransitionV1 stores that transition
-        // and the exact Owner reference; its type ties this marker to both
-        // concrete `'owner` and `'session` lifetimes.
-        Self {
-            _scope: PhantomData,
-        }
-    }
-}
-
 /// Полностью вычисленный, но ещё не опубликованный переход одной Session.
 ///
 /// Тип линейный: он не реализует Clone/Copy. Drop сохраняет зафиксированные raw
@@ -1875,87 +1811,17 @@ impl<'owner, 'session> BorrowScopeV1<'owner, 'session> {
 /// откатывается и не является наблюдаемым состоянием Session. [`Self::commit`]
 /// не выполняет fallible work и не утверждает запись в sink.
 #[must_use = "commit the prepared transition or drop it intentionally"]
-pub(crate) struct PreparedSessionTransitionV1<'owner, 'session> {
-    owner: &'owner OwnerV1,
+pub(crate) struct PreparedSessionTransitionV1<'session> {
     transition: CorePreparedSessionTransitionV1<'session>,
-    scope: BorrowScopeV1<'owner, 'session>,
 }
 
-impl<'owner, 'session> PreparedSessionTransitionV1<'owner, 'session> {
+impl<'session> PreparedSessionTransitionV1<'session> {
     /// Публикует только уже подготовленные raw head и lifecycle Session и
-    /// возвращает их точную проекцию.
-    pub(crate) fn commit(self) -> ProjectionV1<'owner, 'session> {
-        let Self {
-            owner,
-            transition,
-            scope,
-        } = self;
-        ProjectionV1 {
-            evidence: EvidenceViewV1 {
-                session: transition.commit(),
-            },
-            owner,
-            scope,
+    /// возвращает exact evidence-only snapshot без sink-authority.
+    pub(crate) fn commit(self) -> EvidenceViewV1<'session> {
+        EvidenceViewV1 {
+            session: self.transition.commit(),
         }
-    }
-}
-
-/// Проверенная Owner-and-snapshot проекция evidence и операций.
-#[derive(Clone, Copy)]
-pub(crate) struct ProjectionV1<'owner, 'session> {
-    evidence: EvidenceViewV1<'session>,
-    owner: &'owner OwnerV1,
-    scope: BorrowScopeV1<'owner, 'session>,
-}
-
-impl<'owner, 'session> ProjectionV1<'owner, 'session> {
-    /// Возвращает историческое evidence этого снимка.
-    pub(crate) const fn evidence(self) -> EvidenceViewV1<'session> {
-        self.evidence
-    }
-
-    /// Возвращает полную каноническую последовательность операций состояния.
-    pub(crate) fn operations(
-        self,
-    ) -> impl ExactSizeIterator<Item = OperationV1<'owner, 'session>> + FusedIterator {
-        let inner = match self.evidence.state() {
-            SessionState::Waiting
-                if matches!(
-                    self.evidence.session.raw_head(),
-                    ObservationHeadViewV1::Empty
-                ) =>
-            {
-                OperationSourceV1::Empty
-            }
-            SessionState::Ready { current } => {
-                debug_assert_eq!(current.outputs().len(), self.owner.compiled.output_count());
-                debug_assert!(
-                    current
-                        .outputs()
-                        .iter()
-                        .enumerate()
-                        .all(|(index, output)| self.owner.compiled.output_slot_at(index)
-                            == Some(output.output()))
-                );
-                OperationSourceV1::Set {
-                    outputs: current.outputs().iter(),
-                    certificate: VerifiedCertificateV1 { inner: current },
-                    scope: self.scope,
-                }
-            }
-            // `Waiting + Empty` — единственное состояние без действия и без
-            // полномочий на sink. После admission сырой головы любое состояние
-            // без текущего Verified-доказательства подчиняется одному закону
-            // отзыва. Так же fail-closed обрабатывается внутренне недостижимое
-            // сегодня сочетание `Waiting + Observed`.
-            SessionState::Waiting | SessionState::Stale { .. } | SessionState::Failed { .. } => {
-                OperationSourceV1::Remove {
-                    slots: OwnerOutputSlotsV1::new(&self.owner.compiled),
-                    scope: self.scope,
-                }
-            }
-        };
-        OperationsV1 { inner }
     }
 }
 
@@ -2675,63 +2541,6 @@ impl<'a> CertifiedPaintOutputV1<'a> {
     }
 }
 
-/// Операция установки, структурно связанная с точным Verified-сертификатом.
-#[derive(Clone, Copy)]
-pub(crate) struct SetV1<'owner, 'session> {
-    output: &'session ProgramPaintOutputV1,
-    certificate: VerifiedCertificateV1<'session>,
-    _scope: BorrowScopeV1<'owner, 'session>,
-}
-
-impl<'session> SetV1<'_, 'session> {
-    /// Возвращает изменяемый клиентский выходной слот.
-    pub(crate) const fn output_slot(self) -> OutputSlotIdV1 {
-        OutputSlotIdV1::from_core((*self.output).output())
-    }
-
-    /// Возвращает исходный encoded sRGB8 сигнал выходного Paint.
-    pub(crate) const fn source(self) -> Srgb8 {
-        (*self.output).paint().source()
-    }
-
-    /// Возвращает прозрачность выходного Paint.
-    pub(crate) const fn opacity(self) -> f64 {
-        (*self.output).paint().opacity().value()
-    }
-
-    /// Возвращает сертификат, разрешивший эту операцию.
-    pub(crate) const fn certificate(self) -> VerifiedCertificateV1<'session> {
-        self.certificate
-    }
-}
-
-/// Операция удаления результата без сертификата для текущего контекста.
-#[derive(Clone, Copy)]
-pub(crate) struct RemoveV1<'owner, 'session> {
-    output_slot: OutputSlotIdV1,
-    _scope: BorrowScopeV1<'owner, 'session>,
-}
-
-impl RemoveV1<'_, '_> {
-    /// Возвращает удаляемый клиентский выходной слот.
-    pub(crate) const fn output_slot(self) -> OutputSlotIdV1 {
-        self.output_slot
-    }
-}
-
-/// Полное закрытое множество операций над непрозрачными выходными слотами.
-///
-/// Каждый payload заимствует точные Owner и снимок Session. Скопированные
-/// slot/source/opacity — только данные: runtime обязан перепроверить живую
-/// пару непосредственно перед одним атомарным sink commit.
-#[derive(Clone, Copy)]
-pub(crate) enum OperationV1<'owner, 'session> {
-    /// Установить сертифицированный результат.
-    Set(SetV1<'owner, 'session>),
-    /// Удалить результат, когда текущий контекст не сертифицирован.
-    Remove(RemoveV1<'owner, 'session>),
-}
-
 struct CertificatesV1<'a> {
     values: [Option<CertificateV1<'a>>; 2],
     index: usize,
@@ -2771,98 +2580,6 @@ impl<'a> Iterator for CertificatesV1<'a> {
 
 impl ExactSizeIterator for CertificatesV1<'_> {}
 impl FusedIterator for CertificatesV1<'_> {}
-
-struct OwnerOutputSlotsV1<'owner> {
-    compiled: &'owner CompiledCoreProgramV1,
-    index: usize,
-    len: usize,
-}
-
-impl<'owner> OwnerOutputSlotsV1<'owner> {
-    fn new(compiled: &'owner CompiledCoreProgramV1) -> Self {
-        Self {
-            compiled,
-            index: 0,
-            len: compiled.output_count(),
-        }
-    }
-}
-
-impl Iterator for OwnerOutputSlotsV1<'_> {
-    type Item = OutputSlotIdV1;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.index == self.len {
-            return None;
-        }
-        let output = self.compiled.output_slot_at(self.index)?;
-        self.index += 1;
-        Some(OutputSlotIdV1::from_core(output))
-    }
-
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        let remaining = self.len - self.index;
-        (remaining, Some(remaining))
-    }
-}
-
-impl ExactSizeIterator for OwnerOutputSlotsV1<'_> {}
-impl FusedIterator for OwnerOutputSlotsV1<'_> {}
-
-enum OperationSourceV1<'owner, 'session> {
-    Empty,
-    Set {
-        outputs: slice::Iter<'session, ProgramPaintOutputV1>,
-        certificate: VerifiedCertificateV1<'session>,
-        scope: BorrowScopeV1<'owner, 'session>,
-    },
-    Remove {
-        slots: OwnerOutputSlotsV1<'owner>,
-        scope: BorrowScopeV1<'owner, 'session>,
-    },
-}
-
-struct OperationsV1<'owner, 'session> {
-    inner: OperationSourceV1<'owner, 'session>,
-}
-
-impl<'owner, 'session> Iterator for OperationsV1<'owner, 'session> {
-    type Item = OperationV1<'owner, 'session>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        match &mut self.inner {
-            OperationSourceV1::Empty => None,
-            OperationSourceV1::Set {
-                outputs,
-                certificate,
-                scope,
-            } => {
-                let output = outputs.next()?;
-                Some(OperationV1::Set(SetV1 {
-                    output,
-                    certificate: *certificate,
-                    _scope: *scope,
-                }))
-            }
-            OperationSourceV1::Remove { slots, scope } => Some(OperationV1::Remove(RemoveV1 {
-                output_slot: slots.next()?,
-                _scope: *scope,
-            })),
-        }
-    }
-
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        let remaining = match &self.inner {
-            OperationSourceV1::Empty => 0,
-            OperationSourceV1::Set { outputs, .. } => outputs.len(),
-            OperationSourceV1::Remove { slots, .. } => slots.len(),
-        };
-        (remaining, Some(remaining))
-    }
-}
-
-impl ExactSizeIterator for OperationsV1<'_, '_> {}
-impl FusedIterator for OperationsV1<'_, '_> {}
 
 /// Закрытая классификация ошибки создания Session.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -4036,16 +3753,6 @@ mod update_error_projection_tests {
             map_plan_error(ProgramSessionEvaluationError::InternalInvariant),
             UpdateInvariantFailureV1::ProgramEvaluation,
         );
-    }
-}
-
-#[cfg(test)]
-mod operation_scope_tests {
-    use super::*;
-
-    #[test]
-    fn operation_scope_is_a_zero_sized_borrow_marker() {
-        assert_eq!(core::mem::size_of::<BorrowScopeV1<'static, 'static>>(), 0);
     }
 }
 

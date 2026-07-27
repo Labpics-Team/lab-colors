@@ -1352,6 +1352,81 @@ struct CompiledOutputBinding {
     paint: CompiledPaintSlotV1,
 }
 
+/// Сминченная компилятором точная корреляция одного выхода Program и одной
+/// моделируемой point-presentation цели.
+///
+/// Закрытые поля не дают подделать ordinal. Номинальные ID сохранены рядом,
+/// чтобы hot path повторно проверял их без поиска. Само значение не доказывает
+/// owner generation: enclosing owner обязан атомарно сминтить его и удержать
+/// [`ProgramOwnerLeaseV1`] из той же [`CompiledProgram`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct CompiledPointOutputPresentationV1 {
+    output_ordinal: usize,
+    output: OutputSlotId,
+    paint: PaintId,
+    presentation_ordinal: usize,
+    root: PresentationRootId,
+    occurrence: OccurrenceId,
+}
+
+impl CompiledPointOutputPresentationV1 {
+    pub(crate) const fn output_ordinal(self) -> usize {
+        self.output_ordinal
+    }
+
+    pub(crate) const fn output(self) -> OutputSlotId {
+        self.output
+    }
+
+    pub(crate) const fn paint(self) -> PaintId {
+        self.paint
+    }
+
+    pub(crate) const fn presentation_ordinal(self) -> usize {
+        self.presentation_ordinal
+    }
+
+    pub(crate) const fn root(self) -> PresentationRootId {
+        self.root
+    }
+
+    pub(crate) const fn occurrence(self) -> OccurrenceId {
+        self.occurrence
+    }
+}
+
+/// Cold-ошибка binding до допуска point output в hot path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PointOutputPresentationBindErrorV1 {
+    /// Авторский output отсутствует в compiled output table.
+    MissingOutput {
+        /// Неизвестный output ID.
+        output: OutputSlotId,
+    },
+    /// Авторская point-presentation цель отсутствует в compiled graph.
+    MissingPresentationTarget {
+        /// Root, в котором ожидалась цель.
+        root: PresentationRootId,
+        /// Occurrence, который должен быть доступен из root.
+        occurrence: OccurrenceId,
+    },
+    /// Output и point-presentation цель ссылаются на разные Paint.
+    SubjectPaintMismatch {
+        /// Авторский output ID.
+        output: OutputSlotId,
+        /// Paint, связанный с output.
+        output_paint: PaintId,
+        /// Авторский presentation root.
+        root: PresentationRootId,
+        /// Авторский presentation occurrence.
+        occurrence: OccurrenceId,
+        /// Paint, физически представленный occurrence.
+        subject_paint: PaintId,
+    },
+    /// Нарушен закрытый compiled-инвариант после успешной валидации Draft.
+    InternalInvariant,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct CompiledOccurrenceContextV1 {
     occurrence: OccurrenceId,
@@ -1419,9 +1494,10 @@ where
     joint_selection: Option<CompiledJointSelectionV1>,
 }
 
-/// Transaction-local strong pin for one exact compiled Program generation.
-/// Construction is possible only by upgrading a Session plan's weak binding;
-/// the contained epoch never becomes an independently shareable API.
+/// Strong pin одной точной compiled generation Program. Транзакция получает
+/// его через upgrade слабой связи Session plan; enclosing cold owner также
+/// может клонировать его прямо из [`CompiledProgram`]. Вложенная эпоха никогда
+/// не становится независимо распространяемым API.
 pub(crate) struct ProgramOwnerLeaseV1<Evaluation>(Rc<ProgramEpochV1<Evaluation>>)
 where
     Evaluation: ProgramConstraintEvaluatorSetV1,
@@ -1474,6 +1550,63 @@ where
             .map(|output| (output.output, output.paint_id))
     }
 
+    /// Минтит закрытую ordinal-backed корреляцию, только если Paint выхода
+    /// точно совпадает с объявленным subject выбранной presentation target.
+    pub(crate) fn bind_point_output_presentation(
+        &self,
+        output: OutputSlotId,
+        root: PresentationRootId,
+        occurrence: OccurrenceId,
+    ) -> Result<CompiledPointOutputPresentationV1, PointOutputPresentationBindErrorV1> {
+        let output_ordinal = self
+            .owner_generation
+            .outputs
+            .binary_search_by_key(&output, |candidate| candidate.output)
+            .map_err(|_| PointOutputPresentationBindErrorV1::MissingOutput { output })?;
+        let compiled_output = &self.owner_generation.outputs[output_ordinal];
+
+        let target = (root, occurrence);
+        let presentation_ordinal = self
+            .owner_generation
+            .point_presentations
+            .entries
+            .binary_search_by_key(&target, |candidate| (candidate.root, candidate.target))
+            .map_err(
+                |_| PointOutputPresentationBindErrorV1::MissingPresentationTarget {
+                    root,
+                    occurrence,
+                },
+            )?;
+        let subject_paint = self
+            .owner_generation
+            .graph
+            .occurrence_subject(occurrence)
+            .ok_or(PointOutputPresentationBindErrorV1::InternalInvariant)?;
+        if compiled_output.paint_id != subject_paint {
+            return Err(PointOutputPresentationBindErrorV1::SubjectPaintMismatch {
+                output,
+                output_paint: compiled_output.paint_id,
+                root,
+                occurrence,
+                subject_paint,
+            });
+        }
+
+        Ok(CompiledPointOutputPresentationV1 {
+            output_ordinal,
+            output,
+            paint: compiled_output.paint_id,
+            presentation_ordinal,
+            root,
+            occurrence,
+        })
+    }
+
+    /// Удерживает точную owner generation независимо от `CompiledProgram`.
+    pub(crate) fn pin_owner(&self) -> ProgramOwnerLeaseV1<Evaluation> {
+        ProgramOwnerLeaseV1(Rc::clone(&self.owner_generation))
+    }
+
     pub(crate) fn point_presentation_count(&self) -> usize {
         debug_assert!(
             self.owner_generation
@@ -1508,13 +1641,6 @@ where
     pub(crate) fn evidence_cell_bounds(&self, scenario_count: usize) -> Option<(usize, usize)> {
         checked_program_epoch_evaluation_cell_counts(&self.owner_generation, scenario_count)
             .map(|counts| (counts.selected, counts.exhaustive_conflict))
-    }
-
-    pub(crate) fn output_slot_at(&self, index: usize) -> Option<OutputSlotId> {
-        self.owner_generation
-            .outputs
-            .get(index)
-            .map(|output| output.output)
     }
 
     #[cfg(test)]

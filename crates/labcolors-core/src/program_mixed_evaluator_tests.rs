@@ -19,12 +19,11 @@ use crate::observation::{
     ObservedScenarioSetInput, Revision, ScenarioId, ScenarioInput, SurfaceInputBinding,
 };
 use crate::program::{
-    AccessErrorV1, AssessmentV1, CertificateV1, ConflictCellV1, ConstraintModeV1,
-    ConstraintSubjectV1, DeclaredSrgb8CleanSetViolationKindV1, EvidenceViewV1,
-    ExactSrgb8EvidenceV1, ObservationHeadV1, ObservationV1, OperationV1, OutputSlotIdV1, OwnerV1,
-    PhysicalPointV1, PreparedSessionTransitionV1, ProjectionV1, ScenarioV1, SessionV1, SignalV1,
-    StateKindV1, SurroundV1, UpdateErrorKindV1, UpdateErrorV1, UpdateV1, VerdictV1, VerifiedCellV1,
-    Wcag22Srgb8EvidenceV1,
+    AssessmentV1, CertificateV1, ConflictCellV1, ConstraintModeV1, ConstraintSubjectV1,
+    DeclaredSrgb8CleanSetViolationKindV1, EvidenceViewV1, ExactSrgb8EvidenceV1, ObservationHeadV1,
+    ObservationV1, OutputSlotIdV1, OwnerV1, PhysicalPointV1, PreparedSessionTransitionV1,
+    ScenarioV1, SessionV1, SignalV1, StateKindV1, SurroundV1, UpdateErrorKindV1, UpdateErrorV1,
+    UpdateV1, VerdictV1, VerifiedCellV1, Wcag22Srgb8EvidenceV1,
 };
 use crate::program_boundary_tests::CommitProgramUpdateForTest as _;
 use crate::program_session::{
@@ -548,7 +547,7 @@ fn assert_conflict_cell_matches_core(
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct ProjectionProbe {
+struct EvidenceProbe {
     iterators: usize,
     certificates: usize,
     cases: usize,
@@ -556,14 +555,13 @@ struct ProjectionProbe {
     provenance: usize,
     cells: usize,
     outputs: usize,
-    operations: usize,
     exact_assessments: usize,
     wcag_assessments: usize,
     iterator_laws_hold: bool,
     checksum: u64,
 }
 
-impl ProjectionProbe {
+impl EvidenceProbe {
     const fn new() -> Self {
         Self {
             iterators: 0,
@@ -573,7 +571,6 @@ impl ProjectionProbe {
             provenance: 0,
             cells: 0,
             outputs: 0,
-            operations: 0,
             exact_assessments: 0,
             wcag_assessments: 0,
             iterator_laws_hold: true,
@@ -598,8 +595,8 @@ impl ProjectionProbe {
 
 fn consume_exact_fused<I>(
     mut iterator: I,
-    probe: &mut ProjectionProbe,
-    mut consume: impl FnMut(I::Item, &mut ProjectionProbe),
+    probe: &mut EvidenceProbe,
+    mut consume: impl FnMut(I::Item, &mut EvidenceProbe),
 ) where
     I: ExactSizeIterator + FusedIterator,
 {
@@ -623,7 +620,7 @@ fn consume_exact_fused<I>(
     probe.iterator_laws_hold &= iterator.next().is_none();
 }
 
-fn consume_public_assessment(assessment: AssessmentV1<'_>, probe: &mut ProjectionProbe) {
+fn consume_public_assessment(assessment: AssessmentV1<'_>, probe: &mut EvidenceProbe) {
     probe.mix(match assessment.verdict() {
         VerdictV1::Pass => 1,
         VerdictV1::Violation => 2,
@@ -687,7 +684,7 @@ fn consume_public_assessment(assessment: AssessmentV1<'_>, probe: &mut Projectio
     });
 }
 
-fn clean_set_projection_probe(source: [u8; 3]) -> ProjectionProbe {
+fn clean_set_projection_probe(source: [u8; 3]) -> EvidenceProbe {
     let owner = OwnerV1::from_compiled(fixed_clean_set_program(source));
     let mut session = owner.instantiate(STREAM.value()).unwrap();
     let backdrop = [Srgb8::new([0; 3])];
@@ -701,14 +698,13 @@ fn clean_set_projection_probe(source: [u8; 3]) -> ProjectionProbe {
             },
         )
         .unwrap();
-    let Some(CertificateV1::Verified(certificate)) = projection.evidence().certificates().next()
-    else {
+    let Some(CertificateV1::Verified(certificate)) = projection.certificates().next() else {
         panic!("report-only clean-set outcome must retain a verified certificate");
     };
     assert_eq!(certificate.cells().len(), 1);
     let assessment = certificate.cells().next().unwrap().assessment();
 
-    let mut probe = ProjectionProbe::new();
+    let mut probe = EvidenceProbe::new();
     consume_public_assessment(assessment, &mut probe);
     probe
 }
@@ -725,7 +721,7 @@ fn clean_set_projection_probe_binds_pass_absence_rejection_and_interval() {
         ),
     ] {
         let actual = clean_set_projection_probe(source);
-        let mut expected = ProjectionProbe::new();
+        let mut expected = EvidenceProbe::new();
         for component in components {
             expected.mix(component);
         }
@@ -733,9 +729,8 @@ fn clean_set_projection_probe_binds_pass_absence_rejection_and_interval() {
     }
 }
 
-fn consume_public_projection(projection: ProjectionV1<'_, '_>) -> ProjectionProbe {
-    let view = projection.evidence();
-    let mut probe = ProjectionProbe::new();
+fn consume_public_evidence(view: EvidenceViewV1<'_>) -> EvidenceProbe {
+    let mut probe = EvidenceProbe::new();
     probe.mix(match view.kind() {
         StateKindV1::Waiting => 1,
         StateKindV1::Ready => 2,
@@ -852,23 +847,6 @@ fn consume_public_projection(projection: ProjectionV1<'_, '_>) -> ProjectionProb
                     });
                     consume_public_assessment(cell.assessment(), probe);
                 });
-            }
-        }
-    });
-    consume_exact_fused(projection.operations(), &mut probe, |operation, probe| {
-        probe.operations += 1;
-        match operation {
-            OperationV1::Set(set) => {
-                probe.mix(1);
-                probe.mix(u64::from(set.output_slot().value()));
-                probe.mix_srgb8(set.source());
-                probe.mix(set.opacity().to_bits());
-                probe.mix_bytes(set.certificate().content_identity().as_bytes());
-                probe.mix(set.certificate().observation().revision());
-            }
-            OperationV1::Remove(remove) => {
-                probe.mix(2);
-                probe.mix(u64::from(remove.output_slot().value()));
             }
         }
     });
@@ -1001,8 +979,7 @@ fn fixed_public_certificate_retains_none_selection_and_nonunit_output_opacity() 
             },
         )
         .unwrap();
-    let Some(CertificateV1::Verified(certificate)) = projection.evidence().certificates().next()
-    else {
+    let Some(CertificateV1::Verified(certificate)) = projection.certificates().next() else {
         panic!("the exact translucent midpoint must be verified");
     };
     assert_eq!(certificate.selected_state_index(), None);
@@ -1017,10 +994,6 @@ fn fixed_public_certificate_retains_none_selection_and_nonunit_output_opacity() 
         certificate.outputs().next().unwrap().opacity().to_bits(),
         physical.opacity().to_bits()
     );
-    let Some(OperationV1::Set(set)) = projection.operations().next() else {
-        panic!("Verified must emit one Set");
-    };
-    assert_eq!(set.opacity().to_bits(), physical.opacity().to_bits());
 }
 
 #[test]
@@ -1145,7 +1118,7 @@ fn public_projection_preserves_every_exposed_ready_and_conflict_field_against_co
             },
         )
         .unwrap();
-    let mut public_certificates = public_ready.evidence().certificates();
+    let mut public_certificates = public_ready.certificates();
     assert_eq!(public_certificates.len(), 1);
     let Some(CertificateV1::Verified(public_verified)) = public_certificates.next() else {
         panic!("Ready must retain exactly one Verified certificate");
@@ -1192,30 +1165,6 @@ fn public_projection_preserves_every_exposed_ready_and_conflict_field_against_co
     assert!(public_outputs.next().is_none());
     assert!(public_outputs.next().is_none());
     assert!(core_outputs.next().is_none());
-    let mut ready_operations = public_ready.operations();
-    assert_eq!(ready_operations.len(), core_verified.outputs().len());
-    for core_output in core_verified.outputs() {
-        let Some(OperationV1::Set(set)) = ready_operations.next() else {
-            panic!("every certified output must become exactly one Set");
-        };
-        assert_eq!(set.output_slot().value(), core_output.output().value());
-        assert_eq!(set.source(), core_output.paint().source());
-        assert_eq!(
-            set.opacity().to_bits(),
-            core_output.paint().opacity().value().to_bits()
-        );
-        assert_eq!(
-            set.certificate().content_identity(),
-            public_verified.content_identity()
-        );
-        assert_eq!(
-            set.certificate().observation().revision(),
-            public_verified.observation().revision()
-        );
-    }
-    assert!(ready_operations.next().is_none());
-    assert!(ready_operations.next().is_none());
-
     let conflict_core_owner = finite_program([[0; 3], [0xFF; 3]]);
     let conflict_identity = conflict_core_owner.content_identity();
     let conflict_public_owner = OwnerV1::from_compiled(finite_program([[0; 3], [0xFF; 3]]));
@@ -1246,7 +1195,7 @@ fn public_projection_preserves_every_exposed_ready_and_conflict_field_against_co
             },
         )
         .unwrap();
-    let mut public_certificates = public_failed.evidence().certificates();
+    let mut public_certificates = public_failed.certificates();
     assert_eq!(public_certificates.len(), 1);
     let Some(CertificateV1::Conflict(public_conflict)) = public_certificates.next() else {
         panic!("Failed without previous state must retain one Conflict certificate");
@@ -1283,18 +1232,10 @@ fn public_projection_preserves_every_exposed_ready_and_conflict_field_against_co
     assert!(public_cells.next().is_none());
     assert!(public_cells.next().is_none());
     assert!(core_cells.next().is_none());
-    let mut failed_operations = public_failed.operations();
-    assert_eq!(failed_operations.len(), 1);
-    assert!(matches!(
-        failed_operations.next(),
-        Some(OperationV1::Remove(_))
-    ));
-    assert!(failed_operations.next().is_none());
-    assert!(failed_operations.next().is_none());
 }
 
 #[test]
-fn committed_projection_is_zero_alloc_and_repeats_no_composite_transform_or_evaluator_dispatch() {
+fn committed_evidence_is_zero_alloc_and_repeats_no_composite_transform_or_evaluator_dispatch() {
     crate::composition::reset_source_over_evaluation_count();
     MODELED_TRISTIMULUS_DERIVATION_CALLS.with(|calls| calls.set(0));
     CORE_PROGRAM_ASSESSMENT_CALLS.with(|calls| calls.set(0));
@@ -1328,7 +1269,7 @@ fn committed_projection_is_zero_alloc_and_repeats_no_composite_transform_or_eval
     );
     assert!(ready_assessments > 0);
     let (ready_probe, ready_allocations) = crate::test_support::measured_allocations(|| {
-        consume_public_projection(std::hint::black_box(owner.project(&session).unwrap()))
+        consume_public_evidence(std::hint::black_box(session.evidence()))
     });
     assert_eq!(ready_allocations, 0);
     assert!(ready_probe.iterator_laws_hold);
@@ -1338,7 +1279,6 @@ fn committed_projection_is_zero_alloc_and_repeats_no_composite_transform_or_eval
     assert_eq!(ready_probe.provenance, 1);
     assert_eq!(ready_probe.cells, 2);
     assert_eq!(ready_probe.outputs, 1);
-    assert_eq!(ready_probe.operations, 1);
     assert_eq!(ready_probe.exact_assessments, 1);
     assert_eq!(ready_probe.wcag_assessments, 1);
     assert_ne!(ready_probe.checksum, 0);
@@ -1368,14 +1308,13 @@ fn committed_projection_is_zero_alloc_and_repeats_no_composite_transform_or_eval
     let stale_derivations = MODELED_TRISTIMULUS_DERIVATION_CALLS.with(core::cell::Cell::get);
     let stale_assessments = CORE_PROGRAM_ASSESSMENT_CALLS.with(core::cell::Cell::get);
     let (stale_probe, stale_allocations) = crate::test_support::measured_allocations(|| {
-        consume_public_projection(std::hint::black_box(owner.project(&session).unwrap()))
+        consume_public_evidence(std::hint::black_box(session.evidence()))
     });
     assert_eq!(stale_allocations, 0);
     assert!(stale_probe.iterator_laws_hold);
     assert_eq!(stale_probe.certificates, 1);
     assert_eq!(stale_probe.cells, 2);
     assert_eq!(stale_probe.outputs, 1);
-    assert_eq!(stale_probe.operations, 1);
     assert_ne!(stale_probe.checksum, ready_probe.checksum);
     assert_eq!(
         crate::composition::source_over_evaluation_count(),
@@ -1405,7 +1344,7 @@ fn committed_projection_is_zero_alloc_and_repeats_no_composite_transform_or_eval
     let failed_derivations = MODELED_TRISTIMULUS_DERIVATION_CALLS.with(core::cell::Cell::get);
     let failed_assessments = CORE_PROGRAM_ASSESSMENT_CALLS.with(core::cell::Cell::get);
     let (failed_probe, failed_allocations) = crate::test_support::measured_allocations(|| {
-        consume_public_projection(std::hint::black_box(owner.project(&session).unwrap()))
+        consume_public_evidence(std::hint::black_box(session.evidence()))
     });
     assert_eq!(failed_allocations, 0);
     assert!(failed_probe.iterator_laws_hold);
@@ -1415,7 +1354,6 @@ fn committed_projection_is_zero_alloc_and_repeats_no_composite_transform_or_eval
     assert_eq!(failed_probe.provenance, 3);
     assert_eq!(failed_probe.cells, 10);
     assert_eq!(failed_probe.outputs, 1);
-    assert_eq!(failed_probe.operations, 1);
     assert_eq!(failed_probe.exact_assessments, 5);
     assert_eq!(failed_probe.wcag_assessments, 5);
     assert_ne!(failed_probe.checksum, stale_probe.checksum);
@@ -1493,8 +1431,7 @@ fn observation_projection_is_invariant_under_every_scenario_permutation_and_keep
                 },
             )
             .unwrap();
-        let Some(CertificateV1::Verified(public_verified)) =
-            public_state.evidence().certificates().next()
+        let Some(CertificateV1::Verified(public_verified)) = public_state.certificates().next()
         else {
             panic!("the canonical observation must keep one Verified certificate");
         };
@@ -1558,7 +1495,7 @@ fn observation_projection_is_invariant_under_every_scenario_permutation_and_keep
 }
 
 #[test]
-fn concrete_program_projects_ready_and_fail_closed_stale_operations() {
+fn concrete_program_retains_ready_and_fail_closed_stale_evidence() {
     let owner = OwnerV1::from_compiled(finite_program([[0x80; 3], [0; 3]]));
     assert_eq!(owner.surface_input_port_count(), 1);
     assert_eq!(
@@ -1571,7 +1508,6 @@ fn concrete_program_projects_ready_and_fail_closed_stale_operations() {
     assert_eq!(initial.kind(), StateKindV1::Waiting);
     assert_eq!(initial.observation_head(), ObservationHeadV1::Empty);
     assert_eq!(initial.certificates().len(), 0);
-    assert_eq!(owner.project(&session).unwrap().operations().len(), 0);
 
     let white = [Srgb8::new([0xFF; 3])];
     let gray = [Srgb8::new([0x80; 3])];
@@ -1585,36 +1521,14 @@ fn concrete_program_projects_ready_and_fail_closed_stale_operations() {
             },
         )
         .unwrap();
-    let ready_evidence = ready.evidence();
-    assert_eq!(ready_evidence.kind(), StateKindV1::Ready);
-    assert_observed_head(ready_evidence.observation_head(), STREAM.value(), 1);
-    assert_eq!(ready_evidence.cause_certificate_index(), None);
-    let certificates = ready_evidence.certificates().collect::<Vec<_>>();
+    assert_eq!(ready.kind(), StateKindV1::Ready);
+    assert_observed_head(ready.observation_head(), STREAM.value(), 1);
+    assert_eq!(ready.cause_certificate_index(), None);
+    let certificates = ready.certificates().collect::<Vec<_>>();
     assert_eq!(certificates.len(), 1);
     assert!(matches!(certificates[0], CertificateV1::Verified(_)));
     assert_eq!(certificates[0].observation().revision(), 1);
     let ready_backing = certificates[0].observation_backing_ptr_for_test();
-    let mut operations = ready.operations();
-    let Some(OperationV1::Set(set)) = operations.next() else {
-        panic!("Ready must emit one Set operation");
-    };
-    assert_eq!(set.output_slot(), OutputSlotIdV1::new(OUTPUT.value()));
-    assert_eq!(set.source(), Srgb8::new([0; 3]));
-    assert_eq!(set.opacity(), 1.0);
-    assert_eq!(
-        set.certificate().observation().revision(),
-        certificates[0].observation().revision()
-    );
-    assert_eq!(
-        set.certificate().content_identity(),
-        certificates[0].content_identity()
-    );
-    assert_eq!(
-        CertificateV1::Verified(set.certificate()).observation_backing_ptr_for_test(),
-        ready_backing
-    );
-    assert!(operations.next().is_none());
-    drop(operations);
     drop(certificates);
 
     let reordered = [ScenarioV1::new(1, &white), ScenarioV1::new(2, &gray)];
@@ -1627,7 +1541,7 @@ fn concrete_program_projects_ready_and_fail_closed_stale_operations() {
             },
         )
         .unwrap();
-    let replay_certificate = replay.evidence().certificates().next().unwrap();
+    let replay_certificate = replay.certificates().next().unwrap();
     assert_eq!(
         replay_certificate.observation_backing_ptr_for_test(),
         ready_backing,
@@ -1658,10 +1572,9 @@ fn concrete_program_projects_ready_and_fail_closed_stale_operations() {
             },
         )
         .unwrap();
-    let stale_evidence = stale.evidence();
-    assert_eq!(stale_evidence.kind(), StateKindV1::Stale);
-    assert_unknown_head(stale_evidence.observation_head(), STREAM.value(), 2, 7);
-    let certificates = stale_evidence.certificates().collect::<Vec<_>>();
+    assert_eq!(stale.kind(), StateKindV1::Stale);
+    assert_unknown_head(stale.observation_head(), STREAM.value(), 2, 7);
+    let certificates = stale.certificates().collect::<Vec<_>>();
     assert_eq!(certificates.len(), 1);
     assert!(matches!(certificates[0], CertificateV1::Verified(_)));
     assert_eq!(certificates[0].observation().revision(), 1);
@@ -1669,72 +1582,10 @@ fn concrete_program_projects_ready_and_fail_closed_stale_operations() {
         certificates[0].observation_backing_ptr_for_test(),
         ready_backing
     );
-    let mut operations = stale.operations();
-    let Some(OperationV1::Remove(remove)) = operations.next() else {
-        panic!("Stale must remove an output that lacks current evidence");
-    };
-    assert_eq!(remove.output_slot(), OutputSlotIdV1::new(OUTPUT.value()));
-    assert!(operations.next().is_none());
 }
 
 #[test]
-fn unknown_replacement_session_revokes_an_existing_owner_output() {
-    let owner = OwnerV1::from_compiled(finite_program([[0x80; 3], [0; 3]]));
-    let white = [Srgb8::new([0xFF; 3])];
-    let scenarios = [ScenarioV1::new(1, &white)];
-
-    let mut first_session = owner.instantiate(11).unwrap();
-    let ready = owner
-        .commit(
-            &mut first_session,
-            UpdateV1::Observed {
-                revision: 1,
-                scenarios: &scenarios,
-            },
-        )
-        .unwrap();
-    let mut sink = None;
-    for operation in ready.operations() {
-        match operation {
-            OperationV1::Set(set) => sink = Some((set.source(), set.opacity())),
-            OperationV1::Remove(_) => sink = None,
-        }
-    }
-    assert!(
-        sink.is_some(),
-        "the first Session must populate the shared sink"
-    );
-    drop(first_session);
-
-    let mut replacement_session = owner.instantiate(12).unwrap();
-    let unknown = owner
-        .commit(
-            &mut replacement_session,
-            UpdateV1::Unknown {
-                revision: 1,
-                reason_id: 7,
-            },
-        )
-        .unwrap();
-    assert_eq!(unknown.evidence().kind(), StateKindV1::Waiting);
-    assert_unknown_head(unknown.evidence().observation_head(), 12, 1, 7);
-    assert_eq!(unknown.evidence().certificates().len(), 0);
-
-    let mut operations = unknown.operations();
-    let Some(OperationV1::Remove(remove)) = operations.next() else {
-        panic!("an explicit Unknown must revoke an existing owner output during handoff");
-    };
-    assert_eq!(remove.output_slot(), OutputSlotIdV1::new(OUTPUT.value()));
-    sink = None;
-    assert!(operations.next().is_none());
-    assert!(
-        sink.is_none(),
-        "the replacement Session must not leave stale paint"
-    );
-}
-
-#[test]
-fn concrete_program_failed_always_removes_but_retains_previous_evidence() {
+fn concrete_program_failed_retains_only_current_conflict_and_previous_evidence() {
     let white = [Srgb8::new([0xFF; 3])];
     let black = [Srgb8::new([0; 3])];
     let white_only = [ScenarioV1::new(1, &white)];
@@ -1750,19 +1601,12 @@ fn concrete_program_failed_always_removes_but_retains_previous_evidence() {
             },
         )
         .unwrap();
-    let failed_evidence = failed.evidence();
-    assert_eq!(failed_evidence.kind(), StateKindV1::Failed);
-    assert_eq!(failed_evidence.cause_certificate_index(), Some(0));
-    let certificates = failed_evidence.certificates().collect::<Vec<_>>();
+    assert_eq!(failed.kind(), StateKindV1::Failed);
+    assert_eq!(failed.cause_certificate_index(), Some(0));
+    let certificates = failed.certificates().collect::<Vec<_>>();
     assert_eq!(certificates.len(), 1);
     assert!(matches!(certificates[0], CertificateV1::Conflict(_)));
     assert_eq!(certificates[0].observation().revision(), 1);
-    let mut operations = failed.operations();
-    let Some(OperationV1::Remove(remove)) = operations.next() else {
-        panic!("Failed without previous evidence must emit one Remove operation");
-    };
-    assert_eq!(remove.output_slot(), OutputSlotIdV1::new(OUTPUT.value()));
-    assert!(operations.next().is_none());
 
     let owner = OwnerV1::from_compiled(finite_program([[0; 3], [0xFF; 3]]));
     let mut session = owner.instantiate(12).unwrap();
@@ -1776,7 +1620,6 @@ fn concrete_program_failed_always_removes_but_retains_previous_evidence() {
         )
         .unwrap();
     let previous_backing = previous
-        .evidence()
         .certificates()
         .next()
         .unwrap()
@@ -1791,10 +1634,9 @@ fn concrete_program_failed_always_removes_but_retains_previous_evidence() {
             },
         )
         .unwrap();
-    let failed_evidence = failed.evidence();
-    assert_eq!(failed_evidence.kind(), StateKindV1::Failed);
-    assert_eq!(failed_evidence.cause_certificate_index(), Some(0));
-    let certificates = failed_evidence.certificates().collect::<Vec<_>>();
+    assert_eq!(failed.kind(), StateKindV1::Failed);
+    assert_eq!(failed.cause_certificate_index(), Some(0));
+    let certificates = failed.certificates().collect::<Vec<_>>();
     assert_eq!(
         certificates
             .iter()
@@ -1813,12 +1655,6 @@ fn concrete_program_failed_always_removes_but_retains_previous_evidence() {
         certificates[1].observation_backing_ptr_for_test(),
         previous_backing
     );
-    let mut operations = failed.operations();
-    let Some(OperationV1::Remove(remove)) = operations.next() else {
-        panic!("Failed must remove an output that violates the current context");
-    };
-    assert_eq!(remove.output_slot(), OutputSlotIdV1::new(OUTPUT.value()));
-    assert!(operations.next().is_none());
 }
 
 #[test]
@@ -1908,15 +1744,6 @@ fn same_content_foreign_owner_is_rejected_before_admission_without_work() {
         CORE_PROGRAM_ASSESSMENT_CALLS.with(core::cell::Cell::get),
     );
 
-    let (project_mismatch, project_allocations) = crate::test_support::measured_allocations(|| {
-        matches!(
-            owner_b.project(std::hint::black_box(&session)),
-            Err(AccessErrorV1::OwnerMismatch)
-        )
-    });
-    assert!(project_mismatch);
-    assert_eq!(project_allocations, 0);
-
     let empty = [];
     let malformed = [ScenarioV1::new(2, &empty)];
     let (update_mismatch, update_allocations) = crate::test_support::measured_allocations(|| {
@@ -1953,7 +1780,7 @@ fn same_content_foreign_owner_is_rejected_before_admission_without_work() {
             .observation_backing_ptr_for_test(),
         before_backing
     );
-    assert!(owner_a.project(&session).is_ok());
+    assert_eq!(session.evidence().kind(), StateKindV1::Ready);
 }
 
 #[test]
@@ -2088,10 +1915,6 @@ fn expired_owner_preserves_historical_evidence_but_equivalent_owner_has_no_autho
         "historical evidence is Session-owned rather than owner-authorized"
     );
 
-    assert!(matches!(
-        owner_b.project(&session),
-        Err(AccessErrorV1::OwnerMismatch)
-    ));
     let mismatch = match owner_b.commit(
         &mut session,
         UpdateV1::Unknown {
@@ -2212,108 +2035,6 @@ fn raw_head_and_evaluator_lifecycle_form_the_exact_reachable_product() {
     assert_eq!(waiting.certificates().len(), 0);
 }
 
-#[test]
-fn failed_without_previous_removes_every_output_in_canonical_exact_order() {
-    let owner = OwnerV1::from_compiled(finite_program_with_outputs(
-        [[0x80; 3], [0xFF; 3]],
-        vec![
-            OutputBinding::new(SECOND_OUTPUT, PAINT),
-            OutputBinding::new(OUTPUT, PAINT),
-        ],
-    ));
-    let mut session = owner.instantiate(STREAM.value()).unwrap();
-    let white = [Srgb8::new([0xFF; 3])];
-    let scenarios = [ScenarioV1::new(1, &white)];
-    let failed = owner
-        .commit(
-            &mut session,
-            UpdateV1::Observed {
-                revision: 1,
-                scenarios: &scenarios,
-            },
-        )
-        .unwrap();
-    assert_eq!(failed.evidence().kind(), StateKindV1::Failed);
-    assert_eq!(failed.evidence().certificates().len(), 1);
-
-    let mut operations = failed.operations();
-    assert_eq!(operations.len(), 2);
-    assert_eq!(operations.size_hint(), (2, Some(2)));
-    let Some(OperationV1::Remove(first)) = operations.next() else {
-        panic!("Failed without previous evidence must remove the first output");
-    };
-    assert_eq!(first.output_slot(), OutputSlotIdV1::new(OUTPUT.value()));
-    assert_eq!(operations.len(), 1);
-    assert_eq!(operations.size_hint(), (1, Some(1)));
-
-    let Some(OperationV1::Remove(second)) = operations.next() else {
-        panic!("Failed without previous evidence must remove the second output");
-    };
-    assert_eq!(
-        second.output_slot(),
-        OutputSlotIdV1::new(SECOND_OUTPUT.value())
-    );
-    assert_eq!(operations.len(), 0);
-    assert_eq!(operations.size_hint(), (0, Some(0)));
-    assert!(operations.next().is_none());
-    assert!(operations.next().is_none());
-}
-
-#[test]
-fn ready_sets_and_stale_removes_every_output_in_the_same_canonical_order() {
-    let owner = OwnerV1::from_compiled(finite_program_with_outputs(
-        [[0x80; 3], [0; 3]],
-        vec![
-            OutputBinding::new(SECOND_OUTPUT, PAINT),
-            OutputBinding::new(OUTPUT, PAINT),
-        ],
-    ));
-    let mut session = owner.instantiate(STREAM.value()).unwrap();
-    let white = [Srgb8::new([0xFF; 3])];
-    let scenarios = [ScenarioV1::new(1, &white)];
-
-    {
-        let ready = owner
-            .commit(
-                &mut session,
-                UpdateV1::Observed {
-                    revision: 1,
-                    scenarios: &scenarios,
-                },
-            )
-            .unwrap();
-        let mut operations = ready.operations();
-        assert_eq!(operations.len(), 2);
-        for expected in [OUTPUT, SECOND_OUTPUT] {
-            let Some(OperationV1::Set(set)) = operations.next() else {
-                panic!("Ready must set every compiled output");
-            };
-            assert_eq!(set.output_slot().value(), expected.value());
-            assert_eq!(set.certificate().observation().revision(), 1);
-        }
-        assert!(operations.next().is_none());
-    }
-
-    let stale = owner
-        .commit(
-            &mut session,
-            UpdateV1::Unknown {
-                revision: 2,
-                reason_id: 7,
-            },
-        )
-        .unwrap();
-    let mut operations = stale.operations();
-    assert_eq!(operations.len(), 2);
-    for expected in [OUTPUT, SECOND_OUTPUT] {
-        let Some(OperationV1::Remove(remove)) = operations.next() else {
-            panic!("Stale must remove every output that lacks current evidence");
-        };
-        assert_eq!(remove.output_slot().value(), expected.value());
-    }
-    assert!(operations.next().is_none());
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ModeledPayload {
     ReadyOnWhite,
@@ -2432,21 +2153,21 @@ impl ModeledSession {
     }
 }
 
-fn apply_modeled_payload<'owner, 'session>(
-    owner: &'owner OwnerV1,
+fn apply_modeled_payload<'session>(
+    owner: &OwnerV1,
     session: &'session mut SessionV1,
     revision: u64,
     payload: ModeledPayload,
-) -> Result<ProjectionV1<'owner, 'session>, UpdateErrorV1> {
+) -> Result<EvidenceViewV1<'session>, UpdateErrorV1> {
     prepare_modeled_payload(owner, session, revision, payload).map(|prepared| prepared.commit())
 }
 
-fn prepare_modeled_payload<'owner, 'session>(
-    owner: &'owner OwnerV1,
+fn prepare_modeled_payload<'session>(
+    owner: &OwnerV1,
     session: &'session mut SessionV1,
     revision: u64,
     payload: ModeledPayload,
-) -> Result<PreparedSessionTransitionV1<'owner, 'session>, UpdateErrorV1> {
+) -> Result<PreparedSessionTransitionV1<'session>, UpdateErrorV1> {
     let white = [Srgb8::new([0xFF; 3])];
     let black = [Srgb8::new([0; 3])];
     match payload {
@@ -2506,10 +2227,9 @@ fn assert_verified_matches_model(
 }
 
 fn assert_projection_matches_model(
-    projection: ProjectionV1<'_, '_>,
+    evidence: EvidenceViewV1<'_>,
     model: ModeledSession,
 ) -> Result<(), TestCaseError> {
-    let evidence = projection.evidence();
     let expected_kind = match model.lifecycle {
         ModeledLifecycle::Waiting => StateKindV1::Waiting,
         ModeledLifecycle::Ready(_) => StateKindV1::Ready,
@@ -2594,37 +2314,6 @@ fn assert_projection_matches_model(
         }
     }
 
-    let operations = projection.operations().collect::<Vec<_>>();
-    match (model.head, model.lifecycle) {
-        (None, ModeledLifecycle::Waiting) => prop_assert_eq!(operations.len(), 0),
-        (_, ModeledLifecycle::Ready(expected)) => {
-            prop_assert_eq!(operations.len(), 2);
-            for (operation, expected_slot) in operations.into_iter().zip([OUTPUT, SECOND_OUTPUT]) {
-                let OperationV1::Set(set) = operation else {
-                    return Err(TestCaseError::fail("Ready must emit Set for every output"));
-                };
-                prop_assert_eq!(set.output_slot().value(), expected_slot.value());
-                prop_assert_eq!(set.source(), Srgb8::new(expected.source));
-                prop_assert_eq!(set.opacity(), 1.0);
-                prop_assert_eq!(
-                    set.certificate().observation().revision(),
-                    expected.revision
-                );
-            }
-        }
-        (Some(_), _) => {
-            prop_assert_eq!(operations.len(), 2);
-            for (operation, expected_slot) in operations.into_iter().zip([OUTPUT, SECOND_OUTPUT]) {
-                let OperationV1::Remove(remove) = operation else {
-                    return Err(TestCaseError::fail(
-                        "a non-Ready admitted head must not authorize Set",
-                    ));
-                };
-                prop_assert_eq!(remove.output_slot().value(), expected_slot.value());
-            }
-        }
-        (None, _) => prop_assert!(false, "only Waiting may have an empty raw head"),
-    }
     Ok(())
 }
 
@@ -2674,8 +2363,8 @@ fn historical_evidence_identity_probe_rejects_recreated_equal_certificates() {
     )
     .unwrap();
     assert_ne!(
-        historical_evidence_identities(first_projection.evidence()),
-        historical_evidence_identities(recreated_projection.evidence()),
+        historical_evidence_identities(first_projection),
+        historical_evidence_identities(recreated_projection),
         "the probe must reject value-equivalent evidence recreated in another Session",
     );
 }
@@ -2850,12 +2539,7 @@ fn exercise_modeled_action(
             "replay, Unknown and rejected inputs must not dispatch evaluators",
         );
     }
-    assert_projection_matches_model(
-        owner
-            .project(session)
-            .map_err(|error| TestCaseError::fail(format!("matching owner rejected: {error:?}")))?,
-        *model,
-    )
+    assert_projection_matches_model(session.evidence(), *model)
 }
 
 fn exercise_modeled_sequence(
@@ -2873,9 +2557,7 @@ fn exercise_modeled_sequence(
         .instantiate(STREAM.value())
         .map_err(|error| TestCaseError::fail(format!("fixture stream was rejected: {error:?}")))?;
     let mut model = ModeledSession::new();
-    let projection = owner
-        .project(&session)
-        .map_err(|error| TestCaseError::fail(format!("fixture epoch mismatch: {error:?}")))?;
+    let projection = session.evidence();
     assert_projection_matches_model(projection, model)?;
     for action in actions {
         exercise_modeled_action(&owner, &mut session, &mut model, action)?;

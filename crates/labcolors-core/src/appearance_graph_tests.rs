@@ -352,6 +352,24 @@ fn compiled_slots_have_canonical_ordinals_across_declaration_permutations() {
 }
 
 #[test]
+fn occurrence_subject_is_an_exact_cold_lookup_across_declaration_permutations() {
+    let canonical = slot_component(false).compile().unwrap();
+    let reversed = slot_component(true).compile().unwrap();
+
+    for (occurrence, subject) in [
+        (FILL_OCCURRENCE, FILL_PAINT),
+        (OTHER_OCCURRENCE, SOLID_PAINT),
+    ] {
+        assert_eq!(canonical.occurrence_subject(occurrence), Some(subject));
+        assert_eq!(reversed.occurrence_subject(occurrence), Some(subject));
+    }
+    assert_eq!(
+        canonical.occurrence_subject(OccurrenceId::new(u32::MAX)),
+        None
+    );
+}
+
+#[test]
 fn evaluation_view_rejects_same_ordinal_slots_with_different_nominal_ids() {
     let compile_single = |paint, occurrence| {
         AppearanceGraphSpec::new(

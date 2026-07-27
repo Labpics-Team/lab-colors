@@ -10,31 +10,30 @@ use crate::program::{
     AppearanceContextErrorKindV1, AppearanceContextFieldV1, AppearanceContextV1, AssessmentV1,
     CertificateV1, CompileErrorHandleV1, CompileErrorKindV1, CompileErrorV1, ConstraintIdV1,
     ConstraintSubjectV1, ContentIdentityV3, DraftErrorV1, DraftV1, EvidenceBoundsErrorV1,
-    InstantiateErrorV1, JointChoiceV1, JointOrderErrorV1, JointStateV1, NumericDomainErrorV1,
-    ObservationHeadV1, OccurrenceIdV1, OpacityInputIdV1, OperationV1, OutputSlotIdV1, OwnerV1,
-    PaintIdV1, PhysicalPointV1, PresentationRootIdV1, ProjectionV1, ScenarioV1, SessionV1,
-    SignalV1, SourceIdV1, StateKindV1, SurfaceIdV1, SurfaceInputPortIdV1, SurroundV1,
-    TargetCandidateIdV1, TargetCandidateV1, TargetIdV1, UpdateErrorKindV1, UpdateErrorV1, UpdateV1,
-    VerdictV1,
+    EvidenceViewV1, InstantiateErrorV1, JointChoiceV1, JointOrderErrorV1, JointStateV1,
+    NumericDomainErrorV1, ObservationHeadV1, OccurrenceIdV1, OpacityInputIdV1, OutputSlotIdV1,
+    OwnerV1, PaintIdV1, PhysicalPointV1, PresentationRootIdV1, ScenarioV1, SessionV1, SignalV1,
+    SourceIdV1, StateKindV1, SurfaceIdV1, SurfaceInputPortIdV1, SurroundV1, TargetCandidateIdV1,
+    TargetCandidateV1, TargetIdV1, UpdateErrorKindV1, UpdateErrorV1, UpdateV1, VerdictV1,
 };
 use crate::wcag22::Wcag22CriterionV1;
 
 /// Existing Program characterizations commit the prepared lifecycle through
 /// this test-only extension; production exposes no immediate update method.
 pub(crate) trait CommitProgramUpdateForTest {
-    fn commit<'owner, 'session>(
-        &'owner self,
+    fn commit<'session>(
+        &self,
         session: &'session mut SessionV1,
         update: UpdateV1<'_>,
-    ) -> Result<ProjectionV1<'owner, 'session>, UpdateErrorV1>;
+    ) -> Result<EvidenceViewV1<'session>, UpdateErrorV1>;
 }
 
 impl CommitProgramUpdateForTest for OwnerV1 {
-    fn commit<'owner, 'session>(
-        &'owner self,
+    fn commit<'session>(
+        &self,
         session: &'session mut SessionV1,
         update: UpdateV1<'_>,
-    ) -> Result<ProjectionV1<'owner, 'session>, UpdateErrorV1> {
+    ) -> Result<EvidenceViewV1<'session>, UpdateErrorV1> {
         self.prepare_update(session, update)
             .map(|prepared| prepared.commit())
     }
@@ -65,12 +64,11 @@ fn wasm_can_use_only_the_concrete_owner_and_session(
     let view = owner
         .commit(session, update)
         .expect("well-formed owner-bound update");
-    assert_projection_is_owner_bound(view);
+    assert_evidence_snapshot(view);
     Ok(())
 }
 
-fn assert_projection_is_owner_bound(projection: ProjectionV1<'_, '_>) {
-    let view = projection.evidence();
+fn assert_evidence_snapshot(view: EvidenceViewV1<'_>) {
     let _kind: StateKindV1 = view.kind();
     match view.observation_head() {
         ObservationHeadV1::Empty => {}
@@ -89,7 +87,6 @@ fn assert_projection_is_owner_bound(projection: ProjectionV1<'_, '_>) {
         }
     }
     let certificates = exact_size(view.certificates());
-    let certificate_count = certificates.len();
     for certificate in certificates {
         let _: &[u8; 32] = certificate.content_identity().as_bytes();
         let observation = certificate.observation();
@@ -190,20 +187,6 @@ fn assert_projection_is_owner_bound(projection: ProjectionV1<'_, '_>) {
             }
         }
     }
-    for operation in exact_size(projection.operations()) {
-        match operation {
-            OperationV1::Set(set) => {
-                let _: OutputSlotIdV1 = set.output_slot();
-                let _: Srgb8 = set.source();
-                assert!(set.opacity().is_finite() && (0.0..=1.0).contains(&set.opacity()));
-                let _ = set.certificate().content_identity();
-            }
-            OperationV1::Remove(remove) => {
-                let _: OutputSlotIdV1 = remove.output_slot();
-            }
-        }
-    }
-    let _ = certificate_count;
 }
 
 #[allow(dead_code)]
@@ -582,8 +565,7 @@ fn evidence_cell_bounds_cover_actual_joint_conflict_and_duplicate_case_reduction
             },
         )
         .unwrap();
-    let Some(CertificateV1::Conflict(certificate)) = projection.evidence().certificates().next()
-    else {
+    let Some(CertificateV1::Conflict(certificate)) = projection.certificates().next() else {
         panic!("both authored joint states must violate the hard exact constraint");
     };
     assert_eq!(certificate.cells().len(), joint_bounds.conflict_cells());
@@ -607,8 +589,7 @@ fn evidence_cell_bounds_cover_actual_joint_conflict_and_duplicate_case_reduction
             },
         )
         .unwrap();
-    let Some(CertificateV1::Verified(certificate)) = projection.evidence().certificates().next()
-    else {
+    let Some(CertificateV1::Verified(certificate)) = projection.certificates().next() else {
         panic!("duplicate physical scenarios must preserve a valid certificate");
     };
     assert!(certificate.cells().len() < fixed_bounds.verified_cells());
@@ -647,9 +628,7 @@ fn evidence_cell_bounds_query_is_pure_across_session_updates() {
                 },
             )
             .unwrap();
-        let Some(CertificateV1::Verified(certificate)) =
-            projection.evidence().certificates().next()
-        else {
+        let Some(CertificateV1::Verified(certificate)) = projection.certificates().next() else {
             panic!("the fixed admissible program must produce Verified evidence");
         };
         assert_eq!(certificate.cells().len(), expected.verified_cells());
@@ -667,7 +646,7 @@ fn evidence_cell_bounds_query_is_pure_across_session_updates() {
             },
         )
         .unwrap();
-    assert_eq!(projection.evidence().kind(), StateKindV1::Ready);
+    assert_eq!(projection.kind(), StateKindV1::Ready);
 }
 
 #[test]
@@ -744,16 +723,16 @@ fn staged_authoring_lowers_the_actual_closed_program_and_returns_canonical_input
             },
         )
         .unwrap();
-    assert_eq!(ready.evidence().kind(), StateKindV1::Ready);
-    let mut operations = ready.operations();
-    let Some(OperationV1::Set(set)) = operations.next() else {
-        panic!("Ready must emit one Set operation");
+    assert_eq!(ready.kind(), StateKindV1::Ready);
+    let Some(CertificateV1::Verified(certificate)) = ready.certificates().next() else {
+        panic!("Ready must retain one Verified certificate");
     };
-    assert_eq!(set.output_slot(), output);
-    assert_eq!(set.source(), Srgb8::new([0; 3]));
-    assert_eq!(set.opacity(), 1.0);
-    assert_eq!(set.certificate().observation().revision(), 1);
-    assert!(operations.next().is_none());
+    let outputs = certificate.outputs().collect::<Vec<_>>();
+    assert_eq!(outputs.len(), 1);
+    assert_eq!(outputs[0].output_slot(), output);
+    assert_eq!(outputs[0].source(), Srgb8::new([0; 3]));
+    assert_eq!(outputs[0].opacity(), 1.0);
+    assert_eq!(certificate.observation().revision(), 1);
 }
 
 #[test]
@@ -794,26 +773,22 @@ fn every_physical_constructor_and_both_remaining_constraint_modes_execute() {
             },
         )
         .unwrap();
-    assert_eq!(state.evidence().kind(), StateKindV1::Ready);
-    let Some(CertificateV1::Verified(certificate)) = state.evidence().certificates().next() else {
+    assert_eq!(state.kind(), StateKindV1::Ready);
+    let Some(CertificateV1::Verified(certificate)) = state.certificates().next() else {
         panic!("a fixed target must produce one Verified certificate");
     };
     assert_eq!(certificate.selected_state_index(), None);
-    let mut operations = state.operations();
-    let Some(OperationV1::Set(set)) = operations.next() else {
-        panic!("Ready must emit one Set operation");
-    };
-    assert_eq!(set.output_slot(), OutputSlotIdV1::new(12));
-    assert_eq!(set.source(), Srgb8::new([0; 3]));
-    assert_eq!(set.opacity(), 1.0);
-    assert_eq!(set.certificate().observation().revision(), 1);
-    assert!(operations.next().is_none());
+    let outputs = certificate.outputs().collect::<Vec<_>>();
+    assert_eq!(outputs.len(), 1);
+    assert_eq!(outputs[0].output_slot(), OutputSlotIdV1::new(12));
+    assert_eq!(outputs[0].source(), Srgb8::new([0; 3]));
+    assert_eq!(outputs[0].opacity(), 1.0);
+    assert_eq!(certificate.observation().revision(), 1);
 }
 
 #[test]
-fn observed_violation_removes_outputs_but_retains_previous_certificate_as_evidence() {
+fn observed_violation_retains_previous_certificate_only_as_evidence() {
     let input = SurfaceInputPortIdV1::new(50);
-    let output = OutputSlotIdV1::new(12);
     let owner = fixed_nested_draft(0.5, SourceIdV1::new(1), input, input)
         .compile()
         .unwrap();
@@ -830,10 +805,7 @@ fn observed_violation_removes_outputs_but_retains_previous_certificate_as_eviden
             },
         )
         .unwrap();
-    assert!(matches!(
-        ready.operations().next(),
-        Some(OperationV1::Set(_))
-    ));
+    assert_eq!(ready.kind(), StateKindV1::Ready);
 
     let white = [Srgb8::new([0xFF; 3])];
     let white_scenarios = [ScenarioV1::new(2, &white)];
@@ -846,25 +818,18 @@ fn observed_violation_removes_outputs_but_retains_previous_certificate_as_eviden
             },
         )
         .unwrap();
-    assert_eq!(failed.evidence().kind(), StateKindV1::Failed);
-    let certificates = failed.evidence().certificates().collect::<Vec<_>>();
+    assert_eq!(failed.kind(), StateKindV1::Failed);
+    let certificates = failed.certificates().collect::<Vec<_>>();
     assert_eq!(certificates.len(), 2);
     assert!(matches!(certificates[0], CertificateV1::Conflict(_)));
     let CertificateV1::Verified(previous) = certificates[1] else {
         panic!("the previous certificate must remain available as diagnostics");
     };
     assert_eq!(previous.observation().revision(), 1);
-
-    let mut operations = failed.operations();
-    let Some(OperationV1::Remove(remove)) = operations.next() else {
-        panic!("a known violation of the current context must remove the old output");
-    };
-    assert_eq!(remove.output_slot(), output);
-    assert!(operations.next().is_none());
 }
 
 #[test]
-fn program_prepare_drop_is_invisible_and_commit_returns_the_new_projection() {
+fn program_prepare_drop_is_invisible_and_commit_returns_the_new_evidence() {
     let input = SurfaceInputPortIdV1::new(50);
     let owner = fixed_nested_draft(0.5, SourceIdV1::new(1), input, input)
         .compile()
@@ -893,10 +858,10 @@ fn program_prepare_drop_is_invisible_and_commit_returns_the_new_projection() {
         .unwrap();
     drop(prepared);
 
-    let unchanged = owner.project(&session).unwrap();
-    assert_eq!(unchanged.evidence().kind(), StateKindV1::Ready);
+    let unchanged = session.evidence();
+    assert_eq!(unchanged.kind(), StateKindV1::Ready);
     assert!(matches!(
-        unchanged.evidence().observation_head(),
+        unchanged.observation_head(),
         ObservationHeadV1::Observed { revision: 1, .. }
     ));
 
@@ -910,17 +875,16 @@ fn program_prepare_drop_is_invisible_and_commit_returns_the_new_projection() {
         )
         .unwrap()
         .commit();
-    assert_eq!(committed.evidence().kind(), StateKindV1::Stale);
+    assert_eq!(committed.kind(), StateKindV1::Stale);
     assert!(matches!(
-        committed.evidence().observation_head(),
+        committed.observation_head(),
         ObservationHeadV1::Unknown { revision: 2, .. }
     ));
 }
 
 #[test]
-fn unknown_context_removes_outputs_but_retains_previous_certificate_as_evidence() {
+fn unknown_context_retains_previous_certificate_only_as_evidence() {
     let input = SurfaceInputPortIdV1::new(50);
-    let output = OutputSlotIdV1::new(12);
     let owner = fixed_nested_draft(0.5, SourceIdV1::new(1), input, input)
         .compile()
         .unwrap();
@@ -937,10 +901,7 @@ fn unknown_context_removes_outputs_but_retains_previous_certificate_as_evidence(
             },
         )
         .unwrap();
-    assert!(matches!(
-        ready.operations().next(),
-        Some(OperationV1::Set(_))
-    ));
+    assert_eq!(ready.kind(), StateKindV1::Ready);
 
     let stale = owner
         .commit(
@@ -951,24 +912,17 @@ fn unknown_context_removes_outputs_but_retains_previous_certificate_as_evidence(
             },
         )
         .unwrap();
-    assert_eq!(stale.evidence().kind(), StateKindV1::Stale);
-    let certificates = stale.evidence().certificates().collect::<Vec<_>>();
+    assert_eq!(stale.kind(), StateKindV1::Stale);
+    let certificates = stale.certificates().collect::<Vec<_>>();
     assert_eq!(certificates.len(), 1);
     let CertificateV1::Verified(previous) = certificates[0] else {
         panic!("the previous certificate must remain available as diagnostics");
     };
     assert_eq!(previous.observation().revision(), 1);
     assert!(matches!(
-        stale.evidence().observation_head(),
+        stale.observation_head(),
         ObservationHeadV1::Unknown { revision: 2, .. }
     ));
-
-    let mut operations = stale.operations();
-    let Some(OperationV1::Remove(remove)) = operations.next() else {
-        panic!("unknown current context cannot authorize the old output");
-    };
-    assert_eq!(remove.output_slot(), output);
-    assert!(operations.next().is_none());
 }
 
 #[test]
@@ -1052,7 +1006,7 @@ fn owner_and_update_errors_preserve_content_and_input_identity() {
             },
         )
         .unwrap();
-    let certificate = projection.evidence().certificates().next().unwrap();
+    let certificate = projection.certificates().next().unwrap();
     assert_eq!(owner_identity, certificate.content_identity());
 
     let error = match owner.commit(
@@ -1150,7 +1104,7 @@ fn certificate_and_set_retain_the_same_nonunit_opacity() {
             },
         )
         .unwrap();
-    let Some(CertificateV1::Verified(certificate)) = state.evidence().certificates().next() else {
+    let Some(CertificateV1::Verified(certificate)) = state.certificates().next() else {
         panic!("the exact emitted midpoint must be verified");
     };
     let AssessmentV1::ExactSrgb8(assessment) = certificate.cells().next().unwrap().assessment()
@@ -1164,11 +1118,6 @@ fn certificate_and_set_retain_the_same_nonunit_opacity() {
         certificate.outputs().next().unwrap().opacity().to_bits(),
         physical.opacity().to_bits()
     );
-
-    let Some(OperationV1::Set(set)) = state.operations().next() else {
-        panic!("the verified output must emit one Set");
-    };
-    assert_eq!(set.opacity().to_bits(), physical.opacity().to_bits());
 }
 
 #[test]
