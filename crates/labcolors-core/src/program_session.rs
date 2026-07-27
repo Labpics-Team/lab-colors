@@ -26,8 +26,10 @@ use crate::Srgb8;
 use crate::appearance::{
     AdmittedAppearanceBindings, AppearanceBindings, AppearanceGraphSpec, AppearanceWorkspace,
     BindingError, ColorInputId, CompileError, CompiledAppearanceGraph, CompiledColorInputSlotV1,
-    CompiledOccurrenceSlotV1, CompiledPaintSlotV1, EncodedPointPaintV1, OccurrenceId,
-    OccurrenceSpec, OpacityInputId, PaintId, PaintSpec, SurfaceId, SurfaceInputPortId, SurfaceSpec,
+    CompiledOccurrenceSlotV1, CompiledPaintSlotV1, CompiledPointPresentationPathV1,
+    EncodedPointPaintV1, OccurrenceId, OccurrenceSpec, OpacityInputId, PaintId, PaintSpec,
+    PointOccurrenceAbsenceReleaseV1, PointPresentationPathErrorV1, SurfaceId, SurfaceInputPortId,
+    SurfaceSpec,
 };
 use crate::composition::CompositionProfileV1;
 use crate::constraints::{
@@ -55,7 +57,7 @@ use crate::wcag22::Wcag22CriterionV1;
 
 #[path = "program_identity.rs"]
 mod identity;
-pub(crate) use identity::ProgramContentIdentityV2;
+pub(crate) use identity::ProgramContentIdentityV3;
 
 /// Opaque identity of one immutable authored colour source.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -376,6 +378,72 @@ impl OutputSlotId {
 
     pub const fn value(self) -> u32 {
         self.0
+    }
+}
+
+/// Opaque identity of one modeled point presentation root.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct PresentationRootId(u32);
+
+impl PresentationRootId {
+    pub const fn new(value: u32) -> Self {
+        Self(value)
+    }
+
+    pub const fn value(self) -> u32 {
+        self.0
+    }
+}
+
+/// One declared terminal occurrence of the modeled point graph.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PointPresentationRootV1 {
+    id: PresentationRootId,
+    terminal: OccurrenceId,
+}
+
+impl PointPresentationRootV1 {
+    pub const fn new(id: PresentationRootId, terminal: OccurrenceId) -> Self {
+        Self { id, terminal }
+    }
+
+    pub const fn id(self) -> PresentationRootId {
+        self.id
+    }
+
+    pub const fn terminal(self) -> OccurrenceId {
+        self.terminal
+    }
+}
+
+/// One occurrence whose final point contribution will be evaluated at the
+/// declared root under an explicit, versioned absence intervention.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PointPresentationTargetV1 {
+    root: PresentationRootId,
+    occurrence: OccurrenceId,
+    absence_release: PointOccurrenceAbsenceReleaseV1,
+}
+
+impl PointPresentationTargetV1 {
+    pub const fn new(root: PresentationRootId, occurrence: OccurrenceId) -> Self {
+        Self {
+            root,
+            occurrence,
+            absence_release: PointOccurrenceAbsenceReleaseV1::BypassOwnBackdropV1,
+        }
+    }
+
+    pub const fn root(self) -> PresentationRootId {
+        self.root
+    }
+
+    pub const fn occurrence(self) -> OccurrenceId {
+        self.occurrence
+    }
+
+    pub const fn absence_release(self) -> PointOccurrenceAbsenceReleaseV1 {
+        self.absence_release
     }
 }
 
@@ -714,6 +782,8 @@ where
     paints: Vec<Paint>,
     surfaces: Vec<Surface>,
     occurrences: Vec<Occurrence>,
+    presentation_roots: Vec<PointPresentationRootV1>,
+    presentation_targets: Vec<PointPresentationTargetV1>,
     constraints: ConstraintSet<ProgramConstraintInvocationOf<Evaluation>>,
     outputs: Vec<OutputBinding>,
     evaluator: Evaluation,
@@ -746,6 +816,8 @@ where
             paints,
             surfaces,
             occurrences,
+            presentation_roots: Vec::new(),
+            presentation_targets: Vec::new(),
             constraints,
             outputs,
             evaluator,
@@ -757,6 +829,16 @@ where
     /// declaration position.
     pub fn with_joint_selection(mut self, selection: DeclaredJointSelectionV1) -> Self {
         self.joint_selection = Some(selection);
+        self
+    }
+
+    pub fn with_point_presentations(
+        mut self,
+        roots: Vec<PointPresentationRootV1>,
+        targets: Vec<PointPresentationTargetV1>,
+    ) -> Self {
+        self.presentation_roots = roots;
+        self.presentation_targets = targets;
         self
     }
 
@@ -847,6 +929,14 @@ impl CoreProgramDraftV1 {
         self.program.occurrences.push(occurrence);
     }
 
+    pub(crate) fn push_point_presentation_root(&mut self, root: PointPresentationRootV1) {
+        self.program.presentation_roots.push(root);
+    }
+
+    pub(crate) fn push_point_presentation_target(&mut self, target: PointPresentationTargetV1) {
+        self.program.presentation_targets.push(target);
+    }
+
     pub(crate) fn push_hard_constraint(
         &mut self,
         constraint: ConstraintInvocation<CoreProgramConstraintInvocationV1, HardModeV1>,
@@ -933,6 +1023,36 @@ pub enum ProgramCompileError {
     MissingOccurrenceBackdrop {
         occurrence: OccurrenceId,
         surface: SurfaceId,
+    },
+    DuplicatePresentationRoot {
+        root: PresentationRootId,
+    },
+    MissingPresentationRootOccurrence {
+        root: PresentationRootId,
+        occurrence: OccurrenceId,
+    },
+    PresentationRootConsumedDownstream {
+        root: PresentationRootId,
+        occurrence: OccurrenceId,
+    },
+    UnusedPresentationRoot {
+        root: PresentationRootId,
+    },
+    DuplicatePointPresentationTarget {
+        root: PresentationRootId,
+        occurrence: OccurrenceId,
+    },
+    MissingPointPresentationRoot {
+        root: PresentationRootId,
+    },
+    MissingPointPresentationOccurrence {
+        root: PresentationRootId,
+        occurrence: OccurrenceId,
+    },
+    PointPresentationOccurrenceOutsideRootAncestry {
+        root: PresentationRootId,
+        terminal: OccurrenceId,
+        occurrence: OccurrenceId,
     },
     PaintCycle {
         paints: Vec<PaintId>,
@@ -1088,6 +1208,14 @@ struct CompiledObservationGroupV1 {
     schema: CanonicalObservationSchemaV1,
 }
 
+struct CompiledPointPresentationV1 {
+    root: PresentationRootId,
+    terminal: OccurrenceId,
+    target: OccurrenceId,
+    absence_release: PointOccurrenceAbsenceReleaseV1,
+    path: CompiledPointPresentationPathV1,
+}
+
 struct CompiledFiniteTargetV1 {
     binding: CompiledColorInputSlotV1,
     candidates: Box<[ColorSignal]>,
@@ -1102,7 +1230,7 @@ where
     Evaluation: ProgramConstraintEvaluatorSetV1,
     ProgramConstraintInvocationOf<Evaluation>: Copy,
 {
-    content_identity: ProgramContentIdentityV2,
+    content_identity: ProgramContentIdentityV3,
     evaluator: Evaluation,
     graph: CompiledAppearanceGraph,
     binding_template: AdmittedAppearanceBindings,
@@ -1110,6 +1238,7 @@ where
     occurrence_contexts: Box<[CompiledOccurrenceContextV1]>,
     constraints: Box<[CompiledPointConstraint<ProgramConstraintInvocationOf<Evaluation>>]>,
     constraint_phases: CompiledConstraintPhasesV1,
+    point_presentations: Box<[CompiledPointPresentationV1]>,
     outputs: Box<[CompiledOutputBinding]>,
     finite_targets: Box<[CompiledFiniteTargetV1]>,
     joint_selection: Option<CompiledJointSelectionV1>,
@@ -1143,12 +1272,12 @@ where
         self.owner_generation.observation_group.id
     }
 
-    /// Контентный адрес Program в границах схемы V2.
+    /// Контентный адрес Program в границах схемы V3.
     ///
     /// Opaque ID и порядок неупорядоченных объявлений исключены; явный joint
     /// order входит в адрес. Адрес не подтверждает поколение владельца и не
     /// заменяет revision-bound evidence.
-    pub fn content_identity(&self) -> ProgramContentIdentityV2 {
+    pub fn content_identity(&self) -> ProgramContentIdentityV3 {
         self.owner_generation.content_identity
     }
 
@@ -1168,6 +1297,31 @@ where
             .outputs
             .iter()
             .map(|output| (output.output, output.paint_id))
+    }
+
+    pub(crate) fn point_presentation_count(&self) -> usize {
+        debug_assert!(
+            self.owner_generation
+                .point_presentations
+                .windows(2)
+                .all(|pair| (pair[0].root, pair[0].target) < (pair[1].root, pair[1].target))
+        );
+        debug_assert!(
+            self.owner_generation
+                .point_presentations
+                .iter()
+                .all(|presentation| {
+                    presentation.path.belongs_to(&self.owner_generation.graph)
+                        && presentation.path.root() == presentation.terminal
+                        && presentation.path.target() == presentation.target
+                        && presentation.path.len() != 0
+                        && matches!(
+                            presentation.absence_release,
+                            PointOccurrenceAbsenceReleaseV1::BypassOwnBackdropV1
+                        )
+                })
+        );
+        self.owner_generation.point_presentations.len()
     }
 
     pub(crate) fn output_count(&self) -> usize {
@@ -1325,7 +1479,7 @@ pub struct ProgramReportV1<Evaluation>
 where
     Evaluation: ProgramConstraintEvaluatorSetV1,
 {
-    content_identity: ProgramContentIdentityV2,
+    content_identity: ProgramContentIdentityV3,
     observation: RevisionBoundObservationV1,
     cells: Vec<ProgramConstraintCellV1<Evaluation>>,
 }
@@ -1336,7 +1490,7 @@ where
 {
     /// Адрес содержимого Program, по которому построен report; это не
     /// идентификатор поколения и не runtime-authority.
-    pub const fn content_identity(&self) -> ProgramContentIdentityV2 {
+    pub const fn content_identity(&self) -> ProgramContentIdentityV3 {
         self.content_identity
     }
 
@@ -2223,8 +2377,13 @@ where
     let constraint_phases = CompiledConstraintPhasesV1::from_authored(&program.constraints);
     let occurrence_contexts =
         compact_constraint_contexts(&all_occurrence_contexts, &mut constraints)?;
+    let point_presentations = compile_point_presentations(
+        &graph,
+        &mut program.presentation_roots,
+        &mut program.presentation_targets,
+    )?;
     let outputs = compile_outputs(&graph, &mut program.outputs)?;
-    let content_identity = identity::compile_program_content_identity_v2(&program)?;
+    let content_identity = identity::compile_program_content_identity_v3(&program)?;
     Ok(ProgramEpochV1 {
         content_identity,
         evaluator: program.evaluator,
@@ -2237,6 +2396,7 @@ where
         occurrence_contexts,
         constraints,
         constraint_phases,
+        point_presentations,
         outputs,
         finite_targets,
         joint_selection,
@@ -2985,6 +3145,111 @@ fn compact_constraint_contexts<Invocation>(
         constraint.occurrence_context_index = index;
     }
     Ok(compact.into_boxed_slice())
+}
+
+fn compile_point_presentations(
+    graph: &CompiledAppearanceGraph,
+    roots: &mut [PointPresentationRootV1],
+    targets: &mut [PointPresentationTargetV1],
+) -> Result<Box<[CompiledPointPresentationV1]>, ProgramCompileError> {
+    roots.sort_unstable_by_key(|root| root.id);
+    if let Some(root) = roots
+        .windows(2)
+        .find(|pair| pair[0].id == pair[1].id)
+        .map(|pair| pair[0].id)
+    {
+        return Err(ProgramCompileError::DuplicatePresentationRoot { root });
+    }
+
+    let mut compiled_roots = Vec::new();
+    compiled_roots
+        .try_reserve_exact(roots.len())
+        .map_err(|_| ProgramCompileError::ResourceExhausted)?;
+    for root in roots.iter().copied() {
+        let compiled = graph
+            .compile_point_presentation_root(root.terminal)
+            .map_err(|error| match error {
+                PointPresentationPathErrorV1::MissingRoot => {
+                    ProgramCompileError::MissingPresentationRootOccurrence {
+                        root: root.id,
+                        occurrence: root.terminal,
+                    }
+                }
+                PointPresentationPathErrorV1::RootConsumedDownstream => {
+                    ProgramCompileError::PresentationRootConsumedDownstream {
+                        root: root.id,
+                        occurrence: root.terminal,
+                    }
+                }
+                PointPresentationPathErrorV1::ResourceExhausted => {
+                    ProgramCompileError::ResourceExhausted
+                }
+                _ => ProgramCompileError::InternalInvariant,
+            })?;
+        compiled_roots.push((root.id, compiled));
+    }
+
+    targets.sort_unstable_by_key(|target| (target.root, target.occurrence));
+    if let Some(duplicate) = targets
+        .windows(2)
+        .find(|pair| pair[0] == pair[1])
+        .map(|pair| pair[0])
+    {
+        return Err(ProgramCompileError::DuplicatePointPresentationTarget {
+            root: duplicate.root,
+            occurrence: duplicate.occurrence,
+        });
+    }
+
+    let mut compiled = Vec::new();
+    compiled
+        .try_reserve_exact(targets.len())
+        .map_err(|_| ProgramCompileError::ResourceExhausted)?;
+    for target in targets.iter().copied() {
+        let root_index = compiled_roots
+            .binary_search_by_key(&target.root, |(root, _)| *root)
+            .map_err(|_| ProgramCompileError::MissingPointPresentationRoot { root: target.root })?;
+        let compiled_root = &compiled_roots[root_index].1;
+        let terminal = compiled_root.terminal();
+        let path = graph
+            .compile_point_presentation_path(target.occurrence, compiled_root)
+            .map_err(|error| match error {
+                PointPresentationPathErrorV1::MissingTarget => {
+                    ProgramCompileError::MissingPointPresentationOccurrence {
+                        root: target.root,
+                        occurrence: target.occurrence,
+                    }
+                }
+                PointPresentationPathErrorV1::TargetOutsideRootAncestry => {
+                    ProgramCompileError::PointPresentationOccurrenceOutsideRootAncestry {
+                        root: target.root,
+                        terminal,
+                        occurrence: target.occurrence,
+                    }
+                }
+                PointPresentationPathErrorV1::ResourceExhausted => {
+                    ProgramCompileError::ResourceExhausted
+                }
+                _ => ProgramCompileError::InternalInvariant,
+            })?;
+        compiled.push(CompiledPointPresentationV1 {
+            root: target.root,
+            terminal,
+            target: target.occurrence,
+            absence_release: target.absence_release,
+            path,
+        });
+    }
+
+    for root in roots.iter() {
+        if targets
+            .binary_search_by_key(&root.id, |target| target.root)
+            .is_err()
+        {
+            return Err(ProgramCompileError::UnusedPresentationRoot { root: root.id });
+        }
+    }
+    Ok(compiled.into_boxed_slice())
 }
 
 fn compile_outputs(

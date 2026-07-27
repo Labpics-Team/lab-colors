@@ -9,8 +9,9 @@ use crate::program_session::{
     CompositionProfile, ConstraintId, ConstraintInvocation, ConstraintSet,
     CoreProgramConstraintInvocationV1, CoreProgramEvaluatorsV1, CoreProgramV1,
     DeclaredJointSelectionV1, JointCandidateStateV1, ObservationGroup, Occurrence, OpacityInput,
-    OutputBinding, OutputSlotId, Paint, Program, ProgramContentIdentityV2, Source, SourceId,
-    Surface, Target, TargetCandidateChoiceV1, TargetCandidateId, TargetCandidateV1, TargetId,
+    OutputBinding, OutputSlotId, Paint, PointPresentationRootV1, PointPresentationTargetV1,
+    PresentationRootId, Program, ProgramContentIdentityV3, Source, SourceId, Surface, Target,
+    TargetCandidateChoiceV1, TargetCandidateId, TargetCandidateV1, TargetId,
 };
 use crate::wcag22::Wcag22CriterionV1;
 
@@ -201,7 +202,122 @@ fn fixed_graph_identity_ignores_opaque_names_and_unordered_declaration_order() {
 }
 
 #[test]
-fn canonical_v2_digest_is_cross_platform_golden() {
+fn presentation_topology_ignores_root_names_and_declaration_order() {
+    let ids = FixedIds {
+        sources: [SourceId::new(10), SourceId::new(20)],
+        targets: [TargetId::new(30), TargetId::new(40)],
+        paints: [PaintId::new(50), PaintId::new(60)],
+        ports: [SurfaceInputPortId::new(70), SurfaceInputPortId::new(80)],
+        surfaces: [SurfaceId::new(90), SurfaceId::new(100)],
+        occurrences: [OccurrenceId::new(110), OccurrenceId::new(120)],
+        constraints: [ConstraintId::new(130), ConstraintId::new(140)],
+        outputs: [OutputSlotId::new(150), OutputSlotId::new(160)],
+        group: ObservationGroupId::new(170),
+    };
+    let canonical = fixed_program(
+        ids,
+        false,
+        Srgb8::new([0x40, 0x50, 0x60]),
+        FixedMutation::None,
+    )
+    .with_point_presentations(
+        vec![
+            PointPresentationRootV1::new(PresentationRootId::new(1), ids.occurrences[0]),
+            PointPresentationRootV1::new(PresentationRootId::new(2), ids.occurrences[1]),
+        ],
+        vec![
+            PointPresentationTargetV1::new(PresentationRootId::new(1), ids.occurrences[0]),
+            PointPresentationTargetV1::new(PresentationRootId::new(2), ids.occurrences[1]),
+        ],
+    )
+    .compile()
+    .unwrap();
+    let renamed = fixed_program(
+        ids,
+        true,
+        Srgb8::new([0x40, 0x50, 0x60]),
+        FixedMutation::None,
+    )
+    .with_point_presentations(
+        vec![
+            PointPresentationRootV1::new(PresentationRootId::new(900), ids.occurrences[1]),
+            PointPresentationRootV1::new(PresentationRootId::new(700), ids.occurrences[0]),
+        ],
+        vec![
+            PointPresentationTargetV1::new(PresentationRootId::new(900), ids.occurrences[1]),
+            PointPresentationTargetV1::new(PresentationRootId::new(700), ids.occurrences[0]),
+        ],
+    )
+    .compile()
+    .unwrap();
+    assert_eq!(canonical.content_identity(), renamed.content_identity());
+}
+
+#[test]
+fn presentation_root_terminal_relation_changes_v3_identity() {
+    let ids = canonical_full_ids();
+    let root = PresentationRootId::new(1);
+    let first = full_program(ids, false, FullMutation::None)
+        .with_point_presentations(
+            vec![PointPresentationRootV1::new(root, ids.occurrences[1])],
+            vec![PointPresentationTargetV1::new(root, ids.occurrences[0])],
+        )
+        .compile()
+        .unwrap();
+    let second = full_program(ids, false, FullMutation::None)
+        .with_point_presentations(
+            vec![PointPresentationRootV1::new(root, ids.occurrences[2])],
+            vec![PointPresentationTargetV1::new(root, ids.occurrences[0])],
+        )
+        .compile()
+        .unwrap();
+    assert_ne!(first.content_identity(), second.content_identity());
+}
+
+#[test]
+fn presentation_target_relation_and_multiplicity_change_v3_identity() {
+    let ids = canonical_full_ids();
+    let root = PresentationRootId::new(1);
+    let nested_target = full_program(ids, false, FullMutation::None)
+        .with_point_presentations(
+            vec![PointPresentationRootV1::new(root, ids.occurrences[1])],
+            vec![PointPresentationTargetV1::new(root, ids.occurrences[0])],
+        )
+        .compile()
+        .unwrap();
+    let root_target = full_program(ids, false, FullMutation::None)
+        .with_point_presentations(
+            vec![PointPresentationRootV1::new(root, ids.occurrences[1])],
+            vec![PointPresentationTargetV1::new(root, ids.occurrences[1])],
+        )
+        .compile()
+        .unwrap();
+    let duplicated_topology = full_program(ids, false, FullMutation::None)
+        .with_point_presentations(
+            vec![
+                PointPresentationRootV1::new(root, ids.occurrences[1]),
+                PointPresentationRootV1::new(PresentationRootId::new(2), ids.occurrences[1]),
+            ],
+            vec![
+                PointPresentationTargetV1::new(root, ids.occurrences[0]),
+                PointPresentationTargetV1::new(PresentationRootId::new(2), ids.occurrences[0]),
+            ],
+        )
+        .compile()
+        .unwrap();
+
+    assert_ne!(
+        nested_target.content_identity(),
+        root_target.content_identity()
+    );
+    assert_ne!(
+        nested_target.content_identity(),
+        duplicated_topology.content_identity()
+    );
+}
+
+#[test]
+fn canonical_v3_digest_is_cross_platform_golden() {
     let ids = FixedIds {
         sources: [SourceId::new(10), SourceId::new(20)],
         targets: [TargetId::new(30), TargetId::new(40)],
@@ -222,12 +338,12 @@ fn canonical_v2_digest_is_cross_platform_golden() {
     .compile()
     .unwrap();
 
-    let identity: ProgramContentIdentityV2 = compiled.content_identity();
+    let identity: ProgramContentIdentityV3 = compiled.content_identity();
     assert_eq!(
         identity.as_bytes(),
         &[
-            105, 3, 194, 140, 229, 146, 207, 108, 6, 103, 170, 89, 223, 123, 17, 99, 144, 255, 27,
-            240, 129, 52, 2, 255, 197, 97, 146, 190, 217, 50, 138, 120,
+            211, 179, 135, 69, 69, 109, 110, 86, 153, 187, 96, 120, 151, 187, 168, 80, 219, 230,
+            123, 39, 214, 9, 163, 4, 100, 108, 41, 75, 133, 240, 235, 243,
         ]
     );
 }
@@ -521,7 +637,7 @@ fn full_program(ids: FullIds, reverse_unordered: bool, mutation: FullMutation) -
         }
     }
 
-    Program::new(
+    let program = Program::new(
         sources,
         targets,
         ObservationGroup::new(ids.group, vec![ids.port]),
@@ -533,7 +649,22 @@ fn full_program(ids: FullIds, reverse_unordered: bool, mutation: FullMutation) -
         outputs,
         CoreProgramEvaluatorsV1,
     )
-    .with_joint_selection(DeclaredJointSelectionV1::new(states))
+    .with_joint_selection(DeclaredJointSelectionV1::new(states));
+
+    if matches!(mutation, FullMutation::CompleteSchemaGolden) {
+        program.with_point_presentations(
+            vec![PointPresentationRootV1::new(
+                PresentationRootId::new(1_002),
+                ids.occurrences[1],
+            )],
+            vec![PointPresentationTargetV1::new(
+                PresentationRootId::new(1_002),
+                ids.occurrences[0],
+            )],
+        )
+    } else {
+        program
+    }
 }
 
 fn canonical_full_ids() -> FullIds {
@@ -569,8 +700,8 @@ fn canonical_full_ids() -> FullIds {
 }
 
 #[test]
-fn complete_program_schema_v2_digest_is_cross_platform_golden() {
-    // Вместе с fixed golden этот Program содержит каждый V2 vertex/edge tag,
+fn complete_program_schema_v3_digest_is_cross_platform_golden() {
+    // Вместе с fixed golden этот Program содержит каждый V3 vertex/edge tag,
     // обе constraint families и оба режима. Случайная смена кодировки требует
     // явной смены версии, а не тихого перевыпуска прежнего content address.
     let compiled = full_program(
@@ -584,8 +715,8 @@ fn complete_program_schema_v2_digest_is_cross_platform_golden() {
     assert_eq!(
         compiled.content_identity().as_bytes(),
         &[
-            47, 106, 231, 159, 6, 154, 100, 143, 78, 142, 99, 175, 114, 42, 229, 41, 69, 234, 79,
-            180, 60, 17, 100, 195, 213, 202, 188, 234, 16, 229, 67, 159,
+            15, 108, 204, 68, 241, 35, 134, 151, 201, 150, 216, 202, 77, 2, 70, 32, 150, 16, 125,
+            38, 103, 99, 132, 86, 227, 246, 128, 42, 234, 33, 53, 173,
         ]
     );
 }

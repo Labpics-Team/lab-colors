@@ -9,12 +9,12 @@ use crate::Srgb8;
 use crate::program::{
     AppearanceContextErrorKindV1, AppearanceContextFieldV1, AppearanceContextV1, AssessmentV1,
     CertificateV1, CompileErrorHandleV1, CompileErrorKindV1, CompileErrorV1, ConstraintIdV1,
-    ContentIdentityV2, DraftErrorV1, DraftV1, EvidenceBoundsErrorV1, InstantiateErrorV1,
+    ContentIdentityV3, DraftErrorV1, DraftV1, EvidenceBoundsErrorV1, InstantiateErrorV1,
     JointChoiceV1, JointOrderErrorV1, JointStateV1, NumericDomainErrorV1, ObservationHeadV1,
     OccurrenceIdV1, OpacityInputIdV1, OperationV1, OutputSlotIdV1, OwnerV1, PaintIdV1,
-    PhysicalPointV1, ProjectionV1, ScenarioV1, SessionV1, SignalV1, SourceIdV1, StateKindV1,
-    SurfaceIdV1, SurfaceInputPortIdV1, SurroundV1, TargetCandidateIdV1, TargetCandidateV1,
-    TargetIdV1, UpdateErrorKindV1, UpdateErrorV1, UpdateV1, VerdictV1,
+    PhysicalPointV1, PresentationRootIdV1, ProjectionV1, ScenarioV1, SessionV1, SignalV1,
+    SourceIdV1, StateKindV1, SurfaceIdV1, SurfaceInputPortIdV1, SurroundV1, TargetCandidateIdV1,
+    TargetCandidateV1, TargetIdV1, UpdateErrorKindV1, UpdateErrorV1, UpdateV1, VerdictV1,
 };
 use crate::wcag22::Wcag22CriterionV1;
 
@@ -182,6 +182,11 @@ fn staged_boundary_uses_only_closed_concrete_types() {
     assert_eq!(core::mem::size_of::<Srgb8>(), 3);
 }
 
+const NESTED_SOLID_PAINT: PaintIdV1 = PaintIdV1::new(4);
+const NESTED_INPUT_SURFACE: SurfaceIdV1 = SurfaceIdV1::new(6);
+const NESTED_INNER_OCCURRENCE: OccurrenceIdV1 = OccurrenceIdV1::new(8);
+const NESTED_TERMINAL_OCCURRENCE: OccurrenceIdV1 = OccurrenceIdV1::new(9);
+
 fn fixed_nested_draft(
     opacity_value: f64,
     target_source: SourceIdV1,
@@ -191,12 +196,8 @@ fn fixed_nested_draft(
     let source = SourceIdV1::new(1);
     let target = TargetIdV1::new(2);
     let opacity = OpacityInputIdV1::new(3);
-    let solid = PaintIdV1::new(4);
     let translucent = PaintIdV1::new(5);
-    let input_surface = SurfaceIdV1::new(6);
-    let nested_surface = SurfaceIdV1::new(7);
-    let first_occurrence = OccurrenceIdV1::new(8);
-    let second_occurrence = OccurrenceIdV1::new(9);
+    let derived_surface = SurfaceIdV1::new(7);
     let exact = ConstraintIdV1::new(10);
     let wcag = ConstraintIdV1::new(11);
     let output = OutputSlotIdV1::new(12);
@@ -207,16 +208,175 @@ fn fixed_nested_draft(
     draft.push_fixed_target(target, target_source);
     draft.push_surface_input_port(declared_input);
     draft.push_opacity_input(opacity, opacity_value);
-    draft.push_solid_paint(solid, target);
-    draft.push_opacity_paint(translucent, solid, opacity);
-    draft.push_input_surface(input_surface, used_input);
-    draft.push_source_over_occurrence(first_occurrence, translucent, input_surface, context);
-    draft.push_occurrence_surface(nested_surface, first_occurrence);
-    draft.push_source_over_occurrence(second_occurrence, solid, nested_surface, context);
-    draft.push_exact_hard(exact, first_occurrence, Srgb8::new([0; 3]));
-    draft.push_wcag22_report_only(wcag, second_occurrence, Wcag22CriterionV1::Sc143TextDefault);
+    draft.push_solid_paint(NESTED_SOLID_PAINT, target);
+    draft.push_opacity_paint(translucent, NESTED_SOLID_PAINT, opacity);
+    draft.push_input_surface(NESTED_INPUT_SURFACE, used_input);
+    draft.push_source_over_occurrence(
+        NESTED_INNER_OCCURRENCE,
+        translucent,
+        NESTED_INPUT_SURFACE,
+        context,
+    );
+    draft.push_occurrence_surface(derived_surface, NESTED_INNER_OCCURRENCE);
+    draft.push_source_over_occurrence(
+        NESTED_TERMINAL_OCCURRENCE,
+        NESTED_SOLID_PAINT,
+        derived_surface,
+        context,
+    );
+    draft.push_exact_hard(exact, NESTED_INNER_OCCURRENCE, Srgb8::new([0; 3]));
+    draft.push_wcag22_report_only(
+        wcag,
+        NESTED_TERMINAL_OCCURRENCE,
+        Wcag22CriterionV1::Sc143TextDefault,
+    );
     draft.push_output(output, translucent);
     draft
+}
+
+#[test]
+fn program_compiler_admits_only_explicit_terminal_point_presentations() {
+    let input = SurfaceInputPortIdV1::new(50);
+    let root = PresentationRootIdV1::new(51);
+    let mut valid = fixed_nested_draft(0.5, SourceIdV1::new(1), input, input);
+    valid.push_point_presentation_root(root, NESTED_TERMINAL_OCCURRENCE);
+    valid.push_point_presentation_target(root, NESTED_INNER_OCCURRENCE);
+    let owner = valid.compile().unwrap();
+    assert_eq!(owner.point_presentation_count(), 1);
+
+    let mut intermediate = fixed_nested_draft(0.5, SourceIdV1::new(1), input, input);
+    intermediate.push_point_presentation_root(root, NESTED_INNER_OCCURRENCE);
+    intermediate.push_point_presentation_target(root, NESTED_INNER_OCCURRENCE);
+    assert_eq!(
+        compile_error(intermediate),
+        CompileErrorV1::PresentationRootConsumedDownstream {
+            root,
+            occurrence: NESTED_INNER_OCCURRENCE,
+        }
+    );
+}
+
+#[test]
+fn presentation_compile_failures_preserve_typed_root_and_occurrence_handles() {
+    let input = SurfaceInputPortIdV1::new(50);
+    let root = PresentationRootIdV1::new(51);
+
+    let mut missing_root = fixed_nested_draft(0.5, SourceIdV1::new(1), input, input);
+    missing_root.push_point_presentation_target(root, NESTED_INNER_OCCURRENCE);
+    let error = compile_error(missing_root);
+    assert_eq!(
+        error.kind(),
+        CompileErrorKindV1::MissingPointPresentationRoot
+    );
+    assert_eq!(
+        error.primary_handle(),
+        Some(CompileErrorHandleV1::PresentationRoot(root))
+    );
+
+    let mut unused_root = fixed_nested_draft(0.5, SourceIdV1::new(1), input, input);
+    unused_root.push_point_presentation_root(root, NESTED_TERMINAL_OCCURRENCE);
+    assert_eq!(
+        compile_error(unused_root),
+        CompileErrorV1::UnusedPresentationRoot { root }
+    );
+
+    let missing_occurrence = OccurrenceIdV1::new(999);
+    let mut missing_target = fixed_nested_draft(0.5, SourceIdV1::new(1), input, input);
+    missing_target.push_point_presentation_root(root, NESTED_TERMINAL_OCCURRENCE);
+    missing_target.push_point_presentation_target(root, missing_occurrence);
+    let error = compile_error(missing_target);
+    assert_eq!(
+        error,
+        CompileErrorV1::MissingPointPresentationOccurrence {
+            root,
+            occurrence: missing_occurrence,
+        }
+    );
+    assert_eq!(
+        error.related_handle(),
+        Some(CompileErrorHandleV1::Occurrence(missing_occurrence))
+    );
+}
+
+#[test]
+fn malformed_presentation_target_precedes_an_aggregate_unused_root_error() {
+    let input = SurfaceInputPortIdV1::new(50);
+    let root = PresentationRootIdV1::new(51);
+    let orphan = PresentationRootIdV1::new(52);
+    let missing = OccurrenceIdV1::new(999);
+    let mut draft = fixed_nested_draft(0.5, SourceIdV1::new(1), input, input);
+    draft.push_point_presentation_root(root, NESTED_TERMINAL_OCCURRENCE);
+    draft.push_point_presentation_root(orphan, NESTED_TERMINAL_OCCURRENCE);
+    draft.push_point_presentation_target(root, missing);
+
+    assert_eq!(
+        compile_error(draft),
+        CompileErrorV1::MissingPointPresentationOccurrence {
+            root,
+            occurrence: missing,
+        }
+    );
+}
+
+#[test]
+fn presentation_declarations_fail_closed_on_duplicates_and_unrelated_nodes() {
+    let input = SurfaceInputPortIdV1::new(50);
+    let root = PresentationRootIdV1::new(51);
+    let terminal = NESTED_TERMINAL_OCCURRENCE;
+    let target = NESTED_INNER_OCCURRENCE;
+
+    let mut duplicate_root = fixed_nested_draft(0.5, SourceIdV1::new(1), input, input);
+    duplicate_root.push_point_presentation_root(root, terminal);
+    duplicate_root.push_point_presentation_root(root, terminal);
+    duplicate_root.push_point_presentation_target(root, target);
+    assert_eq!(
+        compile_error(duplicate_root),
+        CompileErrorV1::DuplicatePresentationRoot { root }
+    );
+
+    let mut duplicate_target = fixed_nested_draft(0.5, SourceIdV1::new(1), input, input);
+    duplicate_target.push_point_presentation_root(root, terminal);
+    duplicate_target.push_point_presentation_target(root, target);
+    duplicate_target.push_point_presentation_target(root, target);
+    assert_eq!(
+        compile_error(duplicate_target),
+        CompileErrorV1::DuplicatePointPresentationTarget {
+            root,
+            occurrence: target,
+        }
+    );
+
+    let missing_terminal = OccurrenceIdV1::new(998);
+    let mut missing_root_occurrence = fixed_nested_draft(0.5, SourceIdV1::new(1), input, input);
+    missing_root_occurrence.push_point_presentation_root(root, missing_terminal);
+    missing_root_occurrence.push_point_presentation_target(root, target);
+    assert_eq!(
+        compile_error(missing_root_occurrence),
+        CompileErrorV1::MissingPresentationRootOccurrence {
+            root,
+            occurrence: missing_terminal,
+        }
+    );
+
+    let unrelated = OccurrenceIdV1::new(997);
+    let context = AppearanceContextV1::try_new(64.0, 0.2, SurroundV1::Dim).unwrap();
+    let mut outside_ancestry = fixed_nested_draft(0.5, SourceIdV1::new(1), input, input);
+    outside_ancestry.push_source_over_occurrence(
+        unrelated,
+        NESTED_SOLID_PAINT,
+        NESTED_INPUT_SURFACE,
+        context,
+    );
+    outside_ancestry.push_point_presentation_root(root, terminal);
+    outside_ancestry.push_point_presentation_target(root, unrelated);
+    assert_eq!(
+        compile_error(outside_ancestry),
+        CompileErrorV1::PointPresentationOccurrenceOutsideRootAncestry {
+            root,
+            terminal,
+            occurrence: unrelated,
+        }
+    );
 }
 
 fn attach_target_assessment(draft: &mut DraftV1, target: TargetIdV1) {
@@ -225,7 +385,7 @@ fn attach_target_assessment(draft: &mut DraftV1, target: TargetIdV1) {
     let constraint = ConstraintIdV1::new(772);
     let context = AppearanceContextV1::try_new(64.0, 0.2, SurroundV1::Average).unwrap();
     draft.push_solid_paint(paint, target);
-    draft.push_source_over_occurrence(occurrence, paint, SurfaceIdV1::new(6), context);
+    draft.push_source_over_occurrence(occurrence, paint, NESTED_INPUT_SURFACE, context);
     draft.push_exact_report_only(constraint, occurrence, Srgb8::new([0; 3]));
 }
 
@@ -677,7 +837,7 @@ fn owner_and_update_errors_preserve_content_and_input_identity() {
     let owner = fixed_nested_draft(1.0, SourceIdV1::new(1), input, input)
         .compile()
         .unwrap();
-    let owner_identity: ContentIdentityV2 = owner.content_identity();
+    let owner_identity: ContentIdentityV3 = owner.content_identity();
     let mut session = owner.instantiate(13).unwrap();
 
     let no_scenarios = [];
@@ -924,7 +1084,7 @@ fn declared_and_referenced_surface_inputs_cannot_drift() {
     assert_eq!(error.kind(), CompileErrorKindV1::MissingSurfaceInputPort);
     assert_eq!(
         error.primary_handle(),
-        Some(CompileErrorHandleV1::Surface(SurfaceIdV1::new(6)))
+        Some(CompileErrorHandleV1::Surface(NESTED_INPUT_SURFACE))
     );
     assert_eq!(
         error.related_handle(),
@@ -971,7 +1131,7 @@ fn declared_input_ports_form_an_exact_bijection_with_input_surfaces() {
         error,
         CompileErrorV1::DuplicateSurfaceInputBinding {
             input,
-            first: SurfaceIdV1::new(6),
+            first: NESTED_INPUT_SURFACE,
             duplicate: duplicate_surface,
         }
     );
@@ -1072,7 +1232,7 @@ fn dependency_cycles_retain_all_typed_core_members_without_reallocation() {
     render_cycle.push_occurrence_surface(cyclic_surface, cyclic_occurrence);
     render_cycle.push_source_over_occurrence(
         cyclic_occurrence,
-        PaintIdV1::new(4),
+        NESTED_SOLID_PAINT,
         cyclic_surface,
         context,
     );
