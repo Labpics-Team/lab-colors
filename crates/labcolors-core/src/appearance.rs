@@ -798,16 +798,17 @@ pub(crate) struct CompiledOccurrenceSlotV1 {
     id: OccurrenceId,
 }
 
-/// Versioned counterfactual declared for one modeled point target.
+/// Версионированное правило контрфактического отсутствия для одной
+/// моделируемой целевой точки.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PointOccurrenceAbsenceReleaseV1 {
-    /// Replace the target Occurrence output with its own resolved backdrop,
-    /// then replay every unchanged downstream occurrence and quantization.
+    /// Заменить результат целевого `Occurrence` его уже вычисленной подложкой,
+    /// затем повторить все неизменённые downstream-`Occurrence` и квантование.
     BypassOwnBackdropV1,
 }
 
-/// Compiler-minted terminal root authority. A naked OccurrenceId cannot
-/// authorize a final modeled-result claim.
+/// Созданное компилятором полномочие терминального корня. Один `OccurrenceId`
+/// не разрешает утверждать финальный моделируемый результат.
 #[derive(Debug, Clone)]
 pub(crate) struct CompiledPointPresentationRootV1 {
     graph_instance: Arc<()>,
@@ -820,7 +821,8 @@ impl CompiledPointPresentationRootV1 {
     }
 }
 
-/// Unique target-to-root ancestry proven on the compiler cold edge.
+/// Однозначный путь предков от цели к корню, доказанный на холодной границе
+/// компилятора.
 #[derive(Debug, Clone)]
 pub(crate) struct CompiledPointPresentationPathV1 {
     graph_instance: Arc<()>,
@@ -856,6 +858,15 @@ pub(crate) enum PointPresentationPathErrorV1 {
     IncompatibleRoot,
     ResourceExhausted,
     InternalInvariant,
+}
+
+/// Типизированный отказ до начала точного контрфакта точки.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PointOccurrenceAbsenceReplayErrorV1 {
+    /// В плоском буфере вызывающей стороны нет места для полного пересчёта.
+    InsufficientCapacity,
+    /// Результат вычисления и созданный компилятором путь принадлежат разным графам.
+    IncompatibleEvaluation,
 }
 
 /// Канонический compiled IR с индексными ссылками: после проверки bindings
@@ -1297,6 +1308,21 @@ pub(crate) struct SourceOverCertificateV1 {
 }
 
 impl SourceOverCertificateV1 {
+    fn compose(
+        profile: CompositionProfileV1,
+        subject_rgb: [u8; 3],
+        subject_opacity: crate::composition::AdmittedOpacityV1,
+        backdrop_rgb: [u8; 3],
+    ) -> Self {
+        Self {
+            profile,
+            subject_rgb,
+            subject_opacity,
+            backdrop_rgb,
+            output_rgb: profile.composite(subject_rgb, subject_opacity, backdrop_rgb),
+        }
+    }
+
     /// Replay the exact code-owned composition law certified by this value.
     #[cfg(test)]
     pub(crate) fn replay(&self) -> [u8; 3] {
@@ -1316,12 +1342,125 @@ impl SourceOverCertificateV1 {
         self.subject_opacity.bits()
     }
 
+    const fn subject_opacity(&self) -> crate::composition::AdmittedOpacityV1 {
+        self.subject_opacity
+    }
+
     pub(crate) const fn backdrop_rgb(&self) -> [u8; 3] {
         self.backdrop_rgb
     }
 
     pub(crate) const fn output_rgb(&self) -> [u8; 3] {
         self.output_rgb
+    }
+}
+
+/// Точный финальный домен точки одного смоделированного `Occurrence` после
+/// полного пересчёта оставшегося пути представления к корню.
+///
+/// `Empty` означает отсутствие вклада `Occurrence` в байты именно выбранного
+/// корня этого пересчёта. Это ничего не утверждает о других терминальных корнях
+/// и не является положительным свидетельством о восприятии или качестве.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ExactFinalOwnedPointDomainV1 {
+    Empty,
+    Singleton { visible: [u8; 3] },
+}
+
+/// Один точный шаг версионированной интервенции отсутствия.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PointOccurrenceAbsenceStepV1 {
+    Removed {
+        occurrence: OccurrenceId,
+        normal: SourceOverCertificateV1,
+    },
+    Propagated {
+        occurrence: OccurrenceId,
+        normal: SourceOverCertificateV1,
+        counterfactual: SourceOverCertificateV1,
+    },
+}
+
+impl PointOccurrenceAbsenceStepV1 {
+    pub(crate) const fn occurrence(self) -> OccurrenceId {
+        match self {
+            Self::Removed { occurrence, .. } | Self::Propagated { occurrence, .. } => occurrence,
+        }
+    }
+
+    pub(crate) const fn normal(self) -> SourceOverCertificateV1 {
+        match self {
+            Self::Removed { normal, .. } | Self::Propagated { normal, .. } => normal,
+        }
+    }
+
+    pub(crate) const fn counterfactual_output(self) -> [u8; 3] {
+        match self {
+            Self::Removed { normal, .. } => normal.backdrop_rgb(),
+            Self::Propagated { counterfactual, .. } => counterfactual.output_rgb(),
+        }
+    }
+}
+
+/// Заимствованный результат одного точного контрфактического пересчёта.
+///
+/// Результат связывает версию интервенции и профили композиции шагов, но сам по
+/// себе не связывает ревизию, идентичность `Program` или сценарий и потому не
+/// является причинным сертификатом.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PointOccurrenceAbsenceReplayV1<'steps> {
+    release: PointOccurrenceAbsenceReleaseV1,
+    /// Срез непуст по построению: compiler-minted path всегда содержит хотя бы
+    /// корень, а другого конструктора результата в модуле нет.
+    steps: &'steps [PointOccurrenceAbsenceStepV1],
+}
+
+impl PointOccurrenceAbsenceReplayV1<'_> {
+    fn first(&self) -> PointOccurrenceAbsenceStepV1 {
+        self.steps
+            .first()
+            .copied()
+            .unwrap_or_else(|| unreachable!("созданный компилятором пересчёт непуст"))
+    }
+
+    fn last(&self) -> PointOccurrenceAbsenceStepV1 {
+        self.steps
+            .last()
+            .copied()
+            .unwrap_or_else(|| unreachable!("созданный компилятором пересчёт непуст"))
+    }
+
+    pub(crate) fn target(&self) -> OccurrenceId {
+        self.first().occurrence()
+    }
+
+    pub(crate) fn root(&self) -> OccurrenceId {
+        self.last().occurrence()
+    }
+
+    pub(crate) const fn release(&self) -> PointOccurrenceAbsenceReleaseV1 {
+        self.release
+    }
+
+    pub(crate) fn normal_root(&self) -> [u8; 3] {
+        self.last().normal().output_rgb()
+    }
+
+    pub(crate) fn counterfactual_root(&self) -> [u8; 3] {
+        self.last().counterfactual_output()
+    }
+
+    pub(crate) fn domain(&self) -> ExactFinalOwnedPointDomainV1 {
+        let normal = self.normal_root();
+        if normal == self.counterfactual_root() {
+            ExactFinalOwnedPointDomainV1::Empty
+        } else {
+            ExactFinalOwnedPointDomainV1::Singleton { visible: normal }
+        }
+    }
+
+    pub(crate) const fn steps(&self) -> &[PointOccurrenceAbsenceStepV1] {
+        self.steps
     }
 }
 
@@ -1546,6 +1685,7 @@ fn initialise_workspace_slots<T: Clone>(
 /// these values while a consumer is still reading them.
 #[derive(Debug)]
 pub(crate) struct AppearanceEvaluationView<'program, 'workspace> {
+    graph_instance: &'program Arc<()>,
     program: CompiledAppearanceProgram<'program>,
     workspace: &'workspace AppearanceWorkspace,
 }
@@ -1610,6 +1750,67 @@ impl AppearanceEvaluationView<'_, '_> {
             occurrence
                 .as_ref()
                 .unwrap_or_else(|| unreachable!("render topo covers every Occurrence"))
+        })
+    }
+
+    /// Пересчитывает доказанную компилятором цепочку точки по версионированному
+    /// правилу отсутствия без аллокации и частичного результата.
+    ///
+    /// Новые шаги дописываются в конец `steps`, а результат заимствует только
+    /// добавленный диапазон. При переиспользовании scratch вызывающая сторона
+    /// очищает или укорачивает его; недостаточная свободная ёмкость отвергается
+    /// до композиции и до изменения буфера.
+    pub(crate) fn replay_point_occurrence_absence_into<'steps>(
+        &self,
+        path: &CompiledPointPresentationPathV1,
+        release: PointOccurrenceAbsenceReleaseV1,
+        steps: &'steps mut Vec<PointOccurrenceAbsenceStepV1>,
+    ) -> Result<PointOccurrenceAbsenceReplayV1<'steps>, PointOccurrenceAbsenceReplayErrorV1> {
+        if !Arc::ptr_eq(self.graph_instance, &path.graph_instance) {
+            return Err(PointOccurrenceAbsenceReplayErrorV1::IncompatibleEvaluation);
+        }
+        // Новый вариант release обязан сломать компиляцию здесь, а не молча
+        // получить семантику единственного текущего правила.
+        let PointOccurrenceAbsenceReleaseV1::BypassOwnBackdropV1 = release;
+        if steps.capacity().saturating_sub(steps.len()) < path.occurrences.len() {
+            return Err(PointOccurrenceAbsenceReplayErrorV1::InsufficientCapacity);
+        }
+        let start = steps.len();
+        let mut counterfactual_previous = None;
+        for (path_index, slot) in path.occurrences.iter().copied().enumerate() {
+            let occurrence = self.occurrence_at(slot).unwrap_or_else(|| {
+                unreachable!("путь того же графа содержит канонические позиции")
+            });
+            let normal = *occurrence.certificate();
+            let counterfactual_output = if path_index == 0 {
+                let absent_output = normal.backdrop_rgb();
+                steps.push(PointOccurrenceAbsenceStepV1::Removed {
+                    occurrence: slot.id,
+                    normal,
+                });
+                absent_output
+            } else {
+                let counterfactual_backdrop = counterfactual_previous
+                    .unwrap_or_else(|| unreachable!("каждый пересчёт начинается с удалённой цели"));
+                let counterfactual = SourceOverCertificateV1::compose(
+                    normal.profile(),
+                    normal.subject_rgb(),
+                    normal.subject_opacity(),
+                    counterfactual_backdrop,
+                );
+                steps.push(PointOccurrenceAbsenceStepV1::Propagated {
+                    occurrence: slot.id,
+                    normal,
+                    counterfactual,
+                });
+                counterfactual.output_rgb()
+            };
+            counterfactual_previous = Some(counterfactual_output);
+        }
+        let end = steps.len();
+        Ok(PointOccurrenceAbsenceReplayV1 {
+            release,
+            steps: &steps[start..end],
         })
     }
 
@@ -1700,9 +1901,9 @@ impl CompiledAppearanceGraph {
         Some(CompiledOccurrenceSlotV1 { index, id })
     }
 
-    /// Mint authority only for an occurrence that is not consumed by another
-    /// occurrence in this point graph. Intermediate layers therefore cannot
-    /// be mistaken for final modeled results.
+    /// Создаёт полномочие только для `Occurrence`, который не потребляется
+    /// другим `Occurrence` этого точечного графа: промежуточный слой нельзя
+    /// принять за финальный моделируемый результат.
     pub(crate) fn compile_point_presentation_root(
         &self,
         terminal: OccurrenceId,
@@ -1728,7 +1929,8 @@ impl CompiledAppearanceGraph {
         })
     }
 
-    /// Prove one target's membership in the root's unique backdrop ancestry.
+    /// Доказывает принадлежность цели однозначной цепочке предков подложки
+    /// выбранного корня.
     pub(crate) fn compile_point_presentation_path(
         &self,
         target: OccurrenceId,
@@ -1746,10 +1948,10 @@ impl CompiledAppearanceGraph {
             .try_reserve_exact(self.occurrences.len())
             .map_err(|_| PointPresentationPathErrorV1::ResourceExhausted)?;
 
-        // `compile()` rejects `RenderCycle` through canonical functional
-        // topology. Every hop therefore moves to a unique ancestor and the
-        // walk terminates within `occurrences.len()` nodes; that same finite
-        // upper bound makes the exact reservation safe.
+        // `compile()` отклоняет `RenderCycle` при построении канонической
+        // функциональной топологии. Каждый переход идёт к единственному предку,
+        // поэтому обход завершается не более чем за `occurrences.len()` узлов;
+        // та же граница позволяет безопасно зарезервировать точный объём.
         let mut current = root_slot.index;
         loop {
             let spec = self
@@ -1816,7 +2018,8 @@ impl CompiledAppearanceGraph {
         bindings: &AdmittedAppearanceBindings,
         workspace: &'workspace mut AppearanceWorkspace,
     ) -> Result<AppearanceEvaluationView<'_, 'workspace>, BindingError> {
-        self.program().evaluate_admitted_into(bindings, workspace)
+        self.program()
+            .evaluate_admitted_into(&self.instance, bindings, workspace)
     }
 
     /// Cold convenience внутри Core для callers, которым нужен owned result.
@@ -1939,6 +2142,7 @@ impl<'program> CompiledAppearanceProgram<'program> {
 
     fn evaluate_admitted_into<'workspace>(
         self,
+        graph_instance: &'program Arc<()>,
         bindings: &AdmittedAppearanceBindings,
         workspace: &'workspace mut AppearanceWorkspace,
     ) -> Result<AppearanceEvaluationView<'program, 'workspace>, BindingError> {
@@ -1980,6 +2184,7 @@ impl<'program> CompiledAppearanceProgram<'program> {
         );
 
         Ok(AppearanceEvaluationView {
+            graph_instance,
             program: self,
             workspace,
         })
@@ -2048,18 +2253,13 @@ impl<'program> CompiledAppearanceProgram<'program> {
                     let subject = resolved_paints[spec.subject].unwrap_or_else(|| unreachable!());
                     let backdrop =
                         resolved_surfaces[spec.against].unwrap_or_else(|| unreachable!());
-                    let visible = spec.profile.composite(
+                    let certificate = SourceOverCertificateV1::compose(
+                        spec.profile,
                         subject.source.bytes(),
                         subject.opacity,
                         backdrop.bytes(),
                     );
-                    let certificate = SourceOverCertificateV1 {
-                        profile: spec.profile,
-                        subject_rgb: subject.source.bytes(),
-                        subject_opacity: subject.opacity,
-                        backdrop_rgb: backdrop.bytes(),
-                        output_rgb: visible,
-                    };
+                    let visible = certificate.output_rgb();
                     resolved_occurrences[index] = Some(ResolvedOccurrence {
                         id: spec.id,
                         subject: spec.subject_id,
