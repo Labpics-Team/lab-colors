@@ -1935,6 +1935,21 @@ impl CompiledAppearanceGraph {
         Some(CompiledOccurrenceSlotV1 { index, id })
     }
 
+    /// Находит объявленный subject Paint одного канонического Occurrence.
+    ///
+    /// Cold compiler lookup не читает вычисленные значения и не создаёт
+    /// runtime-состояние. Hot path сохраняет полученный Paint ID в закрытом
+    /// compiled binding вместо повторного поиска.
+    pub(crate) fn occurrence_subject(&self, id: OccurrenceId) -> Option<PaintId> {
+        let index = self
+            .occurrences
+            .binary_search_by_key(&id, |occurrence| occurrence.id)
+            .ok()?;
+        self.occurrences
+            .get(index)
+            .map(|occurrence| occurrence.subject_id)
+    }
+
     /// Создаёт полномочие только для `Occurrence`, который не потребляется
     /// другим `Occurrence` этого точечного графа: промежуточный слой нельзя
     /// принять за финальный моделируемый результат.

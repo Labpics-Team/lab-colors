@@ -130,6 +130,7 @@ def program_public_surface(crate_doc_root: Path) -> tuple[int, list[ProgramLeak]
     crate_doc_root = crate_doc_root.resolve()
     docs_root = crate_doc_root.parent
     forbidden_source = (docs_root / "src/labcolors_core/program.rs.html").resolve()
+    forbidden_source_dir = (docs_root / "src/labcolors_core/program").resolve()
     forbidden_module = (crate_doc_root / "program").resolve()
     pages = public_item_pages(crate_doc_root)
     leaks: list[ProgramLeak] = []
@@ -149,7 +150,11 @@ def program_public_surface(crate_doc_root: Path) -> tuple[int, list[ProgramLeak]
                 continue
             if "src" in classes:
                 source_links += 1
-            if route == forbidden_source or _inside(route, forbidden_module):
+            if (
+                route == forbidden_source
+                or _inside(route, forbidden_source_dir)
+                or _inside(route, forbidden_module)
+            ):
                 leaks.append(ProgramLeak(public_item, href))
                 break
         if source_links == 0:

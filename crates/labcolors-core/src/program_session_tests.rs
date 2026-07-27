@@ -12,9 +12,11 @@ use crate::observation::{
 };
 use crate::program_session::{
     CompositionProfile, ConstraintId, ConstraintInvocation, ConstraintSet, ObservationGroup,
-    Occurrence, OpacityInput, OutputBinding, OutputSlotId, Paint, Program, ProgramCompileError,
-    ProgramConstraintBodyV1, ProgramConstraintSubjectV1, Source, SourceId, Surface, Target,
-    TargetId, canonical_surface_input_port_sequence_matches, check_render_node_count,
+    Occurrence, OpacityInput, OutputBinding, OutputSlotId, Paint,
+    PointOutputPresentationBindErrorV1, PointPresentationRootV1, PointPresentationTargetV1,
+    PresentationRootId, Program, ProgramCompileError, ProgramConstraintBodyV1,
+    ProgramConstraintSubjectV1, Source, SourceId, Surface, Target, TargetId,
+    canonical_surface_input_port_sequence_matches, check_render_node_count,
 };
 use crate::session::{SessionPlanV1, SessionState, SessionUpdateError};
 use crate::session_tests::CommitSessionUpdateForTest as _;
@@ -29,7 +31,10 @@ const BACKDROP: SurfaceId = SurfaceId::new(20);
 const VISIBLE_SURFACE: SurfaceId = SurfaceId::new(21);
 const OCCURRENCE: OccurrenceId = OccurrenceId::new(30);
 const OUTPUT: OutputSlotId = OutputSlotId::new(40);
+const EARLIER_OUTPUT: OutputSlotId = OutputSlotId::new(39);
 const REQUIRED: ConstraintId = ConstraintId::new(50);
+const PRESENTATION_ROOT: PresentationRootId = PresentationRootId::new(91);
+const EARLIER_PRESENTATION_ROOT: PresentationRootId = PresentationRootId::new(90);
 const GROUP: ObservationGroupId = ObservationGroupId::new(60);
 const STREAM_A: ObservationStreamId = ObservationStreamId::new(70);
 const STREAM_B: ObservationStreamId = ObservationStreamId::new(71);
@@ -159,6 +164,37 @@ fn exact_compiled(
         constraints,
         vec![OutputBinding::new(OUTPUT, TRANSLUCENT)],
         ExactSrgb8IdentityV1,
+    )
+    .compile()
+    .unwrap()
+}
+
+fn exact_compiled_with_point_presentations(
+    outputs: Vec<OutputBinding>,
+) -> crate::program_session::CompiledProgram<ExactSrgb8IdentityV1> {
+    base_program(
+        0.5,
+        BACKDROP,
+        ConstraintSet::new(
+            vec![ConstraintInvocation::hard(
+                REQUIRED,
+                OCCURRENCE,
+                Srgb8::new([0x80; 3]),
+            )],
+            vec![],
+        ),
+        outputs,
+        ExactSrgb8IdentityV1,
+    )
+    .with_point_presentations(
+        vec![
+            PointPresentationRootV1::new(PRESENTATION_ROOT, OCCURRENCE),
+            PointPresentationRootV1::new(EARLIER_PRESENTATION_ROOT, OCCURRENCE),
+        ],
+        vec![
+            PointPresentationTargetV1::new(PRESENTATION_ROOT, OCCURRENCE),
+            PointPresentationTargetV1::new(EARLIER_PRESENTATION_ROOT, OCCURRENCE),
+        ],
     )
     .compile()
     .unwrap()
@@ -502,6 +538,199 @@ fn compile_canonicalizes_constraints_and_outputs_independent_of_mode_lists() {
         compiled.outputs().collect::<Vec<_>>(),
         vec![(output_low, TRANSLUCENT), (output_high, TRANSLUCENT)]
     );
+}
+
+#[test]
+fn point_output_presentation_binding_retains_exact_ids_and_canonical_ordinals() {
+    let compiled = exact_compiled_with_point_presentations(vec![
+        OutputBinding::new(OUTPUT, TRANSLUCENT),
+        OutputBinding::new(EARLIER_OUTPUT, TRANSLUCENT),
+    ]);
+
+    let binding = compiled
+        .bind_point_output_presentation(OUTPUT, PRESENTATION_ROOT, OCCURRENCE)
+        .unwrap();
+
+    assert_eq!(binding.output(), OUTPUT);
+    assert_eq!(binding.paint(), TRANSLUCENT);
+    assert_eq!(binding.root(), PRESENTATION_ROOT);
+    assert_eq!(binding.occurrence(), OCCURRENCE);
+    assert_eq!(binding.output_ordinal(), 1);
+    assert_eq!(binding.presentation_ordinal(), 1);
+}
+
+#[test]
+fn point_output_presentation_uses_the_selected_target_subject_not_the_terminal_subject() {
+    let lower_source = SourceId::new(101);
+    let terminal_source = SourceId::new(102);
+    let lower_target = TargetId::new(103);
+    let terminal_target = TargetId::new(104);
+    let lower_paint = PaintId::new(105);
+    let terminal_paint = PaintId::new(106);
+    let root_surface = SurfaceId::new(107);
+    let derived_surface = SurfaceId::new(108);
+    let selected_occurrence = OccurrenceId::new(109);
+    let terminal_occurrence = OccurrenceId::new(110);
+    let selected_output = OutputSlotId::new(111);
+    let presentation_root = PresentationRootId::new(112);
+
+    let compiled = Program::new(
+        vec![
+            Source::new(
+                lower_source,
+                ColorSignal::from_srgb8(Srgb8::new([10, 20, 30])),
+            ),
+            Source::new(
+                terminal_source,
+                ColorSignal::from_srgb8(Srgb8::new([40, 50, 60])),
+            ),
+        ],
+        vec![
+            Target::fixed(lower_target, lower_source),
+            Target::fixed(terminal_target, terminal_source),
+        ],
+        observation_group(vec![SURFACE_PORT]),
+        vec![],
+        vec![
+            Paint::Solid {
+                id: lower_paint,
+                target: lower_target,
+            },
+            Paint::Solid {
+                id: terminal_paint,
+                target: terminal_target,
+            },
+        ],
+        vec![
+            Surface::Input {
+                id: root_surface,
+                input: SURFACE_PORT,
+            },
+            Surface::FromOccurrence {
+                id: derived_surface,
+                occurrence: selected_occurrence,
+            },
+        ],
+        vec![
+            Occurrence::new(
+                selected_occurrence,
+                lower_paint,
+                root_surface,
+                CompositionProfile::EncodedSrgb8SourceOverV1,
+                appearance_context(),
+            ),
+            Occurrence::new(
+                terminal_occurrence,
+                terminal_paint,
+                derived_surface,
+                CompositionProfile::EncodedSrgb8SourceOverV1,
+                appearance_context(),
+            ),
+        ],
+        ConstraintSet::new(
+            vec![ConstraintInvocation::hard(
+                REQUIRED,
+                terminal_occurrence,
+                Srgb8::new([40, 50, 60]),
+            )],
+            vec![],
+        ),
+        vec![OutputBinding::new(selected_output, lower_paint)],
+        ExactSrgb8IdentityV1,
+    )
+    .with_point_presentations(
+        vec![PointPresentationRootV1::new(
+            presentation_root,
+            terminal_occurrence,
+        )],
+        vec![PointPresentationTargetV1::new(
+            presentation_root,
+            selected_occurrence,
+        )],
+    )
+    .compile()
+    .unwrap();
+
+    let binding = compiled
+        .bind_point_output_presentation(selected_output, presentation_root, selected_occurrence)
+        .unwrap();
+    assert_eq!(binding.paint(), lower_paint);
+    assert_eq!(binding.occurrence(), selected_occurrence);
+    assert_ne!(binding.paint(), terminal_paint);
+}
+
+#[test]
+fn point_output_presentation_binding_reports_each_exact_failure() {
+    let compiled =
+        exact_compiled_with_point_presentations(vec![OutputBinding::new(OUTPUT, TRANSLUCENT)]);
+    let missing_output = OutputSlotId::new(u32::MAX);
+    let missing_root = PresentationRootId::new(u32::MAX);
+    let missing_occurrence = OccurrenceId::new(u32::MAX);
+
+    assert_eq!(
+        compiled.bind_point_output_presentation(missing_output, missing_root, missing_occurrence,),
+        Err(PointOutputPresentationBindErrorV1::MissingOutput {
+            output: missing_output,
+        })
+    );
+    assert_eq!(
+        compiled.bind_point_output_presentation(OUTPUT, missing_root, OCCURRENCE),
+        Err(
+            PointOutputPresentationBindErrorV1::MissingPresentationTarget {
+                root: missing_root,
+                occurrence: OCCURRENCE,
+            }
+        )
+    );
+    assert_eq!(
+        compiled.bind_point_output_presentation(OUTPUT, PRESENTATION_ROOT, missing_occurrence),
+        Err(
+            PointOutputPresentationBindErrorV1::MissingPresentationTarget {
+                root: PRESENTATION_ROOT,
+                occurrence: missing_occurrence,
+            }
+        )
+    );
+
+    let mismatch = exact_compiled_with_point_presentations(vec![OutputBinding::new(OUTPUT, SOLID)]);
+    assert_eq!(
+        mismatch.bind_point_output_presentation(OUTPUT, PRESENTATION_ROOT, OCCURRENCE),
+        Err(PointOutputPresentationBindErrorV1::SubjectPaintMismatch {
+            output: OUTPUT,
+            output_paint: SOLID,
+            root: PRESENTATION_ROOT,
+            occurrence: OCCURRENCE,
+            subject_paint: TRANSLUCENT,
+        })
+    );
+}
+
+#[test]
+fn compiled_program_owner_pin_keeps_the_exact_generation_alive_until_drop() {
+    let compiled = exact_compiled(ConstraintSet::new(
+        vec![ConstraintInvocation::hard(
+            REQUIRED,
+            OCCURRENCE,
+            Srgb8::new([0x80; 3]),
+        )],
+        vec![],
+    ));
+    let owner_pin = compiled.pin_owner();
+    let mut session = compiled.instantiate(STREAM_A).unwrap();
+    drop(compiled);
+
+    assert!(matches!(
+        session
+            .commit(observed_update(STREAM_A, 1, &[(1, [0xFF; 3])]))
+            .unwrap(),
+        SessionState::Ready { .. }
+    ));
+
+    drop(owner_pin);
+    assert!(matches!(
+        session.commit(observed_update(STREAM_A, 2, &[(1, [0xFF; 3])])),
+        Err(SessionUpdateError::OwnerExpired)
+    ));
 }
 
 #[test]

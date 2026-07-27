@@ -11,8 +11,9 @@ use crate::observation::{
     SurfaceInputBinding, UnknownReasonId, canonicalize_observation_schema,
 };
 use crate::session::{
-    Session, SessionDecision, SessionEvidenceV1, SessionObservationBindingPermitV1, SessionPlanV1,
-    SessionState, SessionUpdateError, private as session_private,
+    PreparedSessionDispositionV1, Session, SessionDecision, SessionEvidenceV1,
+    SessionObservationBindingPermitV1, SessionPlanV1, SessionState, SessionUpdateError,
+    private as session_private,
 };
 
 /// Characterization tests spell an immediate commit explicitly through this
@@ -269,6 +270,84 @@ impl SessionEvidenceV1 for DropOrderEvidence {
 }
 
 #[derive(Debug)]
+struct RetirementEvidence {
+    observation: RevisionBoundObservationV1,
+    panic_on_next_drop: Rc<Cell<bool>>,
+    drops: Rc<Cell<usize>>,
+}
+
+impl Drop for RetirementEvidence {
+    fn drop(&mut self) {
+        self.drops.set(self.drops.get() + 1);
+        if self.panic_on_next_drop.replace(false) {
+            panic!("retired evidence observed the commit boundary");
+        }
+    }
+}
+
+impl session_private::EvidenceSealed for RetirementEvidence {}
+
+impl SessionEvidenceV1 for RetirementEvidence {
+    fn observation(&self) -> &RevisionBoundObservationV1 {
+        &self.observation
+    }
+}
+
+#[derive(Debug)]
+struct RetirementPlan {
+    schema: CanonicalObservationSchemaV1,
+    panic_on_next_drop: Rc<Cell<bool>>,
+    drops: Rc<Cell<usize>>,
+}
+
+impl session_private::PlanSealed for RetirementPlan {}
+
+impl SessionPlanV1 for RetirementPlan {
+    type OwnerLease = ();
+    type Verified = RetirementEvidence;
+    type Violation = RetirementEvidence;
+    type Error = SentinelError;
+
+    fn try_acquire_owner(&self) -> Option<Self::OwnerLease> {
+        Some(())
+    }
+
+    fn observation_schema<'a>(
+        &'a self,
+        _owner: &'a Self::OwnerLease,
+    ) -> &'a CanonicalObservationSchemaV1 {
+        &self.schema
+    }
+
+    fn evaluate(
+        &mut self,
+        _owner: &Self::OwnerLease,
+        observation: RevisionBoundObservationV1,
+        _permit: SessionObservationBindingPermitV1,
+    ) -> Result<SessionDecision<Self::Verified, Self::Violation>, Self::Error> {
+        if !observation.shares_schema_backing_with(&self.schema) {
+            return Err(SentinelError::SchemaBackingMismatch);
+        }
+        let first = observation
+            .physical_values(0)
+            .and_then(|values| values.first())
+            .copied()
+            .map(ColorSignal::srgb8)
+            .ok_or(SentinelError::EmptyObservation)?;
+        let evidence = RetirementEvidence {
+            observation,
+            panic_on_next_drop: Rc::clone(&self.panic_on_next_drop),
+            drops: Rc::clone(&self.drops),
+        };
+        if first == Srgb8::new([255; 3]) {
+            Ok(SessionDecision::Verified(evidence))
+        } else {
+            Ok(SessionDecision::Violation(evidence))
+        }
+    }
+}
+
+#[derive(Debug)]
 struct DropOrderPlan {
     generation: std::rc::Weak<DropOrderOwnerGeneration>,
     owner_slot: Rc<RefCell<Option<Rc<DropOrderOwnerGeneration>>>>,
@@ -362,6 +441,23 @@ fn session() -> (
         ),
         control,
         schema_ptr,
+    )
+}
+
+fn retirement_session() -> (Session<RetirementPlan>, Rc<Cell<bool>>, Rc<Cell<usize>>) {
+    let panic_on_next_drop = Rc::new(Cell::new(false));
+    let drops = Rc::new(Cell::new(0));
+    (
+        Session::new(
+            STREAM,
+            RetirementPlan {
+                schema: canonicalize_observation_schema(vec![SURFACE]).unwrap(),
+                panic_on_next_drop: Rc::clone(&panic_on_next_drop),
+                drops: Rc::clone(&drops),
+            },
+        ),
+        panic_on_next_drop,
+        drops,
     )
 }
 
@@ -670,6 +766,160 @@ fn detached_plan_evidence_is_rejected_before_raw_or_lifecycle_commit() {
     assert_eq!(control.evaluation_count(), 3);
     assert_eq!(current_observation.revision(), Revision::new(2));
     assert_shared_observation(raw_observed(&session), &current_observation);
+}
+
+#[test]
+fn successful_commit_publishes_new_pair_before_retiring_old_evidence() {
+    let (mut session, panic_on_next_drop, drops) = retirement_session();
+    session.commit(observed_update(1, [0; 3])).unwrap();
+    assert!(matches!(session.state(), SessionState::Failed { .. }));
+    assert_eq!(drops.get(), 0);
+
+    let prepared = session
+        .prepare_update(observed_update(2, [255; 3]))
+        .unwrap();
+    panic_on_next_drop.set(true);
+    let retirement = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _ = prepared.commit();
+    }));
+
+    assert!(retirement.is_err(), "the hostile retirement probe must run");
+    assert_eq!(session.raw_head().revision(), Some(Revision::new(2)));
+    let SessionState::Ready { current } = session.state() else {
+        panic!("retirement must begin only after publishing the new state");
+    };
+    assert_eq!(current.observation.revision(), Revision::new(2));
+    assert_eq!(drops.get(), 1);
+}
+
+#[test]
+fn deferred_commit_returns_before_hostile_retirement_destructor_runs() {
+    let (mut session, panic_on_next_drop, drops) = retirement_session();
+    session.commit(observed_update(1, [0; 3])).unwrap();
+    assert!(matches!(session.state(), SessionState::Failed { .. }));
+
+    let prepared = session
+        .prepare_update(observed_update(2, [255; 3]))
+        .unwrap();
+    panic_on_next_drop.set(true);
+    let committed =
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| prepared.commit_deferred()));
+    let (view, retirement) = committed.expect("deferred commit must only move retirement");
+    assert_eq!(view.raw_head().revision(), Some(Revision::new(2)));
+    assert!(matches!(view.state(), SessionState::Ready { .. }));
+    assert_eq!(drops.get(), 0);
+
+    let retirement = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        drop(retirement);
+    }));
+    assert!(
+        retirement.is_err(),
+        "the hostile destructor must be deferred"
+    );
+    assert_eq!(drops.get(), 1);
+}
+
+#[test]
+fn deferred_retirement_keeps_its_exact_owner_alive_through_old_evidence_drop() {
+    let alive = Rc::new(Cell::new(true));
+    let events = Rc::new(RefCell::new(Vec::new()));
+    let generation = Rc::new(DropOrderOwnerGeneration {
+        schema: canonicalize_observation_schema(vec![SURFACE]).unwrap(),
+        alive: Rc::clone(&alive),
+        events: Rc::clone(&events),
+    });
+    let generation_weak = Rc::downgrade(&generation);
+    let owner_slot = Rc::new(RefCell::new(Some(Rc::clone(&generation))));
+    let mut session = Session::new(
+        STREAM,
+        DropOrderPlan {
+            generation: generation_weak.clone(),
+            owner_slot: Rc::clone(&owner_slot),
+        },
+    );
+
+    session
+        .prepare_update(observed_update(1, [255; 3]))
+        .unwrap()
+        .commit();
+    assert!(events.borrow().is_empty());
+
+    *owner_slot.borrow_mut() = Some(Rc::clone(&generation));
+    let prepared = session
+        .prepare_update(observed_update(2, [255; 3]))
+        .unwrap();
+    drop(generation);
+    assert!(alive.get());
+
+    let (_view, retirement) = prepared.commit_deferred();
+    assert!(events.borrow().is_empty());
+    assert!(alive.get());
+    drop(retirement);
+
+    assert!(!alive.get());
+    assert!(generation_weak.upgrade().is_none());
+    assert_eq!(&*events.borrow(), &["evidence", "owner"]);
+}
+
+#[test]
+fn dropping_prepared_transition_retires_only_pending_evidence() {
+    let (mut session, _, drops) = retirement_session();
+    session.commit(observed_update(1, [0; 3])).unwrap();
+
+    let prepared = session
+        .prepare_update(observed_update(2, [255; 3]))
+        .unwrap();
+    drop(prepared);
+
+    assert_eq!(drops.get(), 1);
+    assert_eq!(session.raw_head().revision(), Some(Revision::new(1)));
+    let SessionState::Failed { cause, previous } = session.state() else {
+        panic!("aborting prepare must preserve the committed violation");
+    };
+    assert_eq!(cause.observation.revision(), Revision::new(1));
+    assert!(previous.is_none());
+}
+
+#[test]
+fn prepared_disposition_borrows_the_exact_uncommitted_outcome() {
+    let (mut session, _, _) = session();
+    session.commit(observed_update(1, [255; 3])).unwrap();
+
+    let idempotent = session
+        .prepare_update(observed_update(1, [255; 3]))
+        .unwrap();
+    let PreparedSessionDispositionV1::Idempotent { raw_head, state } = idempotent.disposition()
+    else {
+        panic!("same observation must prepare an idempotent disposition");
+    };
+    assert_eq!(raw_head.revision(), Some(Revision::new(1)));
+    assert!(matches!(state, SessionState::Ready { .. }));
+    drop(idempotent);
+
+    let unknown = session
+        .prepare_unknown(Revision::new(2), UnknownReasonId::new(7))
+        .unwrap();
+    let PreparedSessionDispositionV1::Unknown(value) = unknown.disposition() else {
+        panic!("unknown payload must stay typed before commit");
+    };
+    assert_eq!(value.revision(), Revision::new(2));
+    drop(unknown);
+
+    let verified = session
+        .prepare_update(observed_update(2, [255; 3]))
+        .unwrap();
+    let PreparedSessionDispositionV1::Verified(value) = verified.disposition() else {
+        panic!("verified outcome must stay typed before commit");
+    };
+    assert_eq!(value.observation().revision(), Revision::new(2));
+    drop(verified);
+
+    let violation = session.prepare_update(observed_update(2, [0; 3])).unwrap();
+    let PreparedSessionDispositionV1::Violation(value) = violation.disposition() else {
+        panic!("violation outcome must stay typed before commit");
+    };
+    assert_eq!(value.observation().revision(), Revision::new(2));
+    drop(violation);
 }
 
 #[test]

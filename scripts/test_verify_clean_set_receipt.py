@@ -40,8 +40,13 @@ TRANSITIVE_EXECUTOR_ROLES = (
     "content_digest_source",
     "joint_selection_source",
     "observation_runtime_source",
+    "point_attachment_source",
     "session_runtime_source",
     "signal_transport_source",
+)
+ATTACHMENT_PROOF_ROLES = (
+    "point_attachment_test_support",
+    "point_attachment_tests",
 )
 
 
@@ -448,6 +453,32 @@ class ReceiptHostileTests(unittest.TestCase):
             fixture = _fixture(Path(temporary))
             fixture.write_pin()
             for role in TRANSITIVE_EXECUTOR_ROLES:
+                with self.subTest(role=role):
+                    path = fixture.product / PRODUCT_ARTIFACT_PATHS[role]
+                    original = path.read_bytes()
+                    path.write_bytes(original + b"mutant\n")
+                    with self.assertRaisesRegex(VerificationError, "receipt metadata"):
+                        verify_product_receipt(fixture.product, policy=fixture.policy)
+                    path.write_bytes(original)
+
+    def test_product_only_mode_rejects_each_missing_attachment_proof_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = _fixture(Path(temporary))
+            fixture.write_pin()
+            for role in ATTACHMENT_PROOF_ROLES:
+                with self.subTest(role=role):
+                    path = fixture.product / PRODUCT_ARTIFACT_PATHS[role]
+                    original = path.read_bytes()
+                    path.unlink()
+                    with self.assertRaisesRegex(VerificationError, "unavailable"):
+                        verify_product_receipt(fixture.product, policy=fixture.policy)
+                    path.write_bytes(original)
+
+    def test_product_only_mode_rejects_each_mutated_attachment_proof_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = _fixture(Path(temporary))
+            fixture.write_pin()
+            for role in ATTACHMENT_PROOF_ROLES:
                 with self.subTest(role=role):
                     path = fixture.product / PRODUCT_ARTIFACT_PATHS[role]
                     original = path.read_bytes()
