@@ -292,6 +292,68 @@ impl ProgramConstraintEvaluatorSetV1 for FinalViolationDiagnosticErrorEvaluatorS
     }
 }
 
+#[derive(Debug)]
+struct PanicOnceEvaluatorControlV1 {
+    armed: std::cell::Cell<bool>,
+    calls: std::cell::Cell<usize>,
+}
+
+/// Panics only on the first real assessment so the test can distinguish an
+/// unwind after the evaluation arena lease was acquired from an earlier panic.
+#[derive(Debug, Clone)]
+struct PanicOnceEvaluatorSetV1 {
+    control: std::rc::Rc<PanicOnceEvaluatorControlV1>,
+}
+
+impl PanicOnceEvaluatorSetV1 {
+    fn new() -> Self {
+        Self {
+            control: std::rc::Rc::new(PanicOnceEvaluatorControlV1 {
+                armed: std::cell::Cell::new(true),
+                calls: std::cell::Cell::new(0),
+            }),
+        }
+    }
+
+    fn calls(&self) -> usize {
+        self.control.calls.get()
+    }
+}
+
+impl ProgramConstraintEvaluatorSetV1 for PanicOnceEvaluatorSetV1 {
+    type Invocation = Wcag22CriterionV1;
+    type PassEvidence = ProgramVisiblePointPassEvidence<Wcag22Srgb8V1>;
+    type ViolationEvidence = ProgramVisiblePointViolationEvidence<Wcag22Srgb8V1>;
+    type Error = ApplicableWcag22EvaluationErrorV1;
+
+    fn assess(
+        &self,
+        point: ProgramPointOccurrenceV1,
+        invocation: Self::Invocation,
+    ) -> Result<
+        HardDecision<Self::PassEvidence, Self::ViolationEvidence>,
+        ProgramPointAssessmentErrorV1<Self::Error>,
+    > {
+        self.control.calls.set(self.control.calls.get() + 1);
+        if self.control.armed.replace(false) {
+            panic!("hostile evaluator panic after the arena lease was acquired");
+        }
+        assess_program_point_hard(point, &Wcag22Srgb8V1, invocation)
+    }
+
+    fn pass_binding(evidence: &Self::PassEvidence) -> ProgramVisiblePointBindingV1 {
+        *evidence.binding()
+    }
+
+    fn violation_binding(evidence: &Self::ViolationEvidence) -> ProgramVisiblePointBindingV1 {
+        *evidence.binding()
+    }
+
+    fn constraint_content(&self, invocation: Self::Invocation) -> ProgramConstraintContentV1 {
+        Wcag22Srgb8V1.program_constraint_content_v1(invocation)
+    }
+}
+
 fn appearance_context() -> AppearanceContextId {
     AppearanceContextId::from_inputs(
         AppearanceContextSchemaReleaseId::Ciecam16ViewingInputsV1,
@@ -641,6 +703,48 @@ fn authored_finite_target_values_keep_only_opaque_identity_and_explicit_policy()
     assert_eq!(state.choices(), &[choice]);
     let order = DeclaredJointSelectionV1::new(vec![state.clone()]);
     assert_eq!(order.states(), &[state]);
+}
+
+#[test]
+fn evaluator_unwind_does_not_consume_the_reusable_evaluation_arena() {
+    let evaluator = PanicOnceEvaluatorSetV1::new();
+    let probe = evaluator.clone();
+    let compiled = point_program(
+        signal(0),
+        Target::fixed(TARGET, SOURCE),
+        vec![ConstraintInvocation::hard(
+            ConstraintId::new(1),
+            OCCURRENCE,
+            Wcag22CriterionV1::Sc143TextDefault,
+        )],
+        vec![],
+        evaluator,
+    )
+    .compile()
+    .unwrap();
+    let mut session = compiled.instantiate(STREAM).unwrap();
+
+    let first = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _ = session.commit(update(1, 0xFF));
+    }));
+    assert!(first.is_err(), "the hostile evaluator must exercise unwind");
+    assert_eq!(
+        probe.calls(),
+        1,
+        "the panic must originate inside the evaluator, after arena acquisition",
+    );
+
+    let SessionState::Ready { current } = session
+        .commit(update(1, 0xFF))
+        .expect("unwind must return the arena slot for the lawful retry")
+    else {
+        panic!("opaque black on white must remain a normal verified outcome");
+    };
+    assert_eq!(current.outputs()[0].source_signal(), signal(0));
+    assert!(
+        probe.calls() > 1,
+        "the retry must reach the evaluator again"
+    );
 }
 
 #[test]
@@ -1484,8 +1588,10 @@ fn evaluation_cell_cardinality_checks_both_products_without_a_numeric_cap() {
 }
 
 #[test]
-fn every_fallible_joint_preflight_reservation_precedes_evaluator_work() {
-    const FIRST_UNUSED_RESERVATION_INDEX: usize = 3;
+fn every_required_joint_arena_reservation_is_fail_before_work_and_retryable() {
+    // Joint evaluation without point-causal evidence has two non-empty arena
+    // coordinates: constraint cells and committed outputs.
+    const FIRST_UNUSED_RESERVATION_INDEX: usize = 2;
 
     for reservation_index in 0..=FIRST_UNUSED_RESERVATION_INDEX {
         let evaluator = CountingProgramWcag22Srgb8V1::default();
@@ -1554,6 +1660,16 @@ fn every_fallible_joint_preflight_reservation_precedes_evaluator_work() {
         );
         assert!(calls.calls().is_empty());
         assert!(matches!(session.state(), SessionState::Waiting));
+        assert_eq!(session.raw_head(), ObservationHeadViewV1::Empty);
+
+        let SessionState::Ready { current } = session
+            .commit(update(1, 0x00))
+            .expect("a failed preflight must return the arena for an exact retry")
+        else {
+            panic!("the retry must select the first certifying joint state");
+        };
+        assert_eq!(current.selected_state_index(), Some(1));
+        assert!(!calls.calls().is_empty());
     }
 }
 

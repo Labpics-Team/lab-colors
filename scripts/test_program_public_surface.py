@@ -53,6 +53,39 @@ class ProgramPublicSurfaceTests(unittest.TestCase):
         self.assertEqual(count, 1)
         self.assertEqual([leak.public_item for leak in leaks], ["struct.AnyClientName.html"])
 
+    def test_arbitrary_session_alias_is_rejected_by_origin(self) -> None:
+        self.write_all("struct.SessionAlias.html")
+        self.write_item(
+            "struct.SessionAlias.html",
+            '<a class="src" href="../src/labcolors_core/session.rs.html#367">Source</a>',
+        )
+        _, leaks = program_public_surface(self.crate)
+        self.assertEqual(len(leaks), 1)
+
+    def test_arbitrary_program_session_alias_is_rejected_by_origin(self) -> None:
+        self.write_all("struct.ProgramSessionAlias.html")
+        self.write_item(
+            "struct.ProgramSessionAlias.html",
+            (
+                '<a class="src" href="../src/labcolors_core/'
+                'program_session.rs.html#2729">Source</a>'
+            ),
+        )
+        _, leaks = program_public_surface(self.crate)
+        self.assertEqual(len(leaks), 1)
+
+    def test_arbitrary_observation_alias_is_rejected_by_origin(self) -> None:
+        self.write_all("struct.ObservationAlias.html")
+        self.write_item(
+            "struct.ObservationAlias.html",
+            (
+                '<a class="src" href="../src/labcolors_core/'
+                'observation.rs.html#249">Source</a>'
+            ),
+        )
+        _, leaks = program_public_surface(self.crate)
+        self.assertEqual(len(leaks), 1)
+
     def test_nested_alias_is_rejected_without_a_name_allowlist(self) -> None:
         self.write_all("facade/struct.UnrelatedName.html")
         self.write_item(

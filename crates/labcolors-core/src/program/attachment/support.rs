@@ -376,6 +376,306 @@ pub(crate) fn in_memory_point_sink(
     )
 }
 
+/// Однослотовый sink для whole-update allocator oracle.
+///
+/// Его snapshot и staging имеют фиксированный размер, поэтому после cold
+/// construction тест приписывает каждый allocator event самому Core path, а
+/// не test adapter-у. Полный поведенческий sink выше остаётся независимым
+/// oracle транзакционной семантики.
+struct AllocatorPointSinkStateV1 {
+    entry: Cell<Option<TestSnapshotEntryV1>>,
+    revision: Cell<Option<u64>>,
+    stamp: Cell<Option<PointSinkStampV1>>,
+    busy: Cell<bool>,
+    reject_next_prepare: Cell<bool>,
+    reject_next_install: Cell<bool>,
+    reject_next_install_after_swap: Cell<bool>,
+}
+
+pub(crate) struct AllocatorPointSinkLeaseV1 {
+    owned_scope: [TestSinkOutputIdV1; 1],
+    shared: Rc<AllocatorPointSinkStateV1>,
+}
+
+pub(crate) struct ClosedAllocatorPointSinkLeaseV1 {
+    owned_scope: [TestSinkOutputIdV1; 1],
+    binding_epoch: PointSinkBindingEpochV1,
+    shared: Rc<AllocatorPointSinkStateV1>,
+}
+
+#[derive(Clone)]
+pub(crate) struct AllocatorPointSinkProbeV1 {
+    shared: Rc<AllocatorPointSinkStateV1>,
+}
+
+impl AllocatorPointSinkProbeV1 {
+    pub(crate) fn reject_next_prepare(&self) {
+        self.shared.reject_next_prepare.set(true);
+    }
+
+    pub(crate) fn reject_next_install(&self) {
+        self.shared.reject_next_install.set(true);
+    }
+
+    pub(crate) fn reject_next_install_after_swap(&self) {
+        self.shared.reject_next_install_after_swap.set(true);
+    }
+
+    pub(crate) fn revision(&self) -> Option<u64> {
+        self.shared.revision.get()
+    }
+
+    pub(crate) fn entry(&self) -> Option<TestSnapshotEntryV1> {
+        self.shared.entry.get()
+    }
+
+    pub(crate) fn stamp(&self) -> PointSinkStampV1 {
+        self.shared
+            .stamp
+            .get()
+            .unwrap_or_else(|| unreachable!("allocator sink is admitted before updates"))
+    }
+
+    pub(crate) fn is_busy(&self) -> bool {
+        self.shared.busy.get()
+    }
+}
+
+pub(crate) fn allocator_point_sink(
+    owned_output: u32,
+) -> (AllocatorPointSinkLeaseV1, AllocatorPointSinkProbeV1) {
+    let shared = Rc::new(AllocatorPointSinkStateV1 {
+        entry: Cell::new(None),
+        revision: Cell::new(None),
+        stamp: Cell::new(None),
+        busy: Cell::new(false),
+        reject_next_prepare: Cell::new(false),
+        reject_next_install: Cell::new(false),
+        reject_next_install_after_swap: Cell::new(false),
+    });
+    (
+        AllocatorPointSinkLeaseV1 {
+            owned_scope: [TestSinkOutputIdV1::new(owned_output)],
+            shared: Rc::clone(&shared),
+        },
+        AllocatorPointSinkProbeV1 { shared },
+    )
+}
+
+impl sink_private::Sealed for AllocatorPointSinkLeaseV1 {}
+impl sink_private::Sealed for ClosedAllocatorPointSinkLeaseV1 {}
+
+impl UnboundPointSinkLeaseV1 for AllocatorPointSinkLeaseV1 {
+    type OutputId = TestSinkOutputIdV1;
+    type Closed = ClosedAllocatorPointSinkLeaseV1;
+    type AdmissionError = InMemoryPointSinkAdmissionErrorV1;
+
+    fn owned_output_scope(&self) -> &[Self::OutputId] {
+        &self.owned_scope
+    }
+
+    fn try_admit_closed(
+        self,
+        scope: BoundPointSinkScopePermitV1<'_, Self::OutputId>,
+    ) -> Result<ClosedPointSinkAdmissionV1<Self::Closed>, PointSinkAdmissionFailureV1<Self>> {
+        let mut actual = scope.output_scope();
+        if actual.next() != self.owned_scope.first().copied() || actual.next().is_some() {
+            return Err(PointSinkAdmissionFailureV1::new(
+                InMemoryPointSinkAdmissionErrorV1::ScopeChanged,
+                self,
+            ));
+        }
+        let Some(binding_epoch) = next_test_sink_epoch() else {
+            return Err(PointSinkAdmissionFailureV1::new(
+                InMemoryPointSinkAdmissionErrorV1::EpochExhausted,
+                self,
+            ));
+        };
+        let shared = Rc::clone(&self.shared);
+        let admission = ClosedPointSinkAdmissionV1::new(ClosedAllocatorPointSinkLeaseV1 {
+            owned_scope: self.owned_scope,
+            binding_epoch,
+            shared: self.shared,
+        });
+        shared.stamp.set(Some(admission.initial_stamp()));
+        Ok(admission)
+    }
+}
+
+#[derive(Clone, Copy)]
+enum AllocatorPointSinkStagingV1 {
+    SetAll {
+        revision: u64,
+        entry: TestSnapshotEntryV1,
+    },
+    RevokeAll {
+        revision: u64,
+    },
+    ConfirmExact {
+        revision: u64,
+    },
+}
+
+pub(crate) struct AllocatorPreparedPointSinkWriteV1<'lease> {
+    lease: &'lease mut ClosedAllocatorPointSinkLeaseV1,
+    base_stamp: PointSinkStampV1,
+    desired_stamp: Option<PointSinkStampV1>,
+    staging: AllocatorPointSinkStagingV1,
+    finished: bool,
+}
+
+impl ClosedPointSinkLeaseV1 for ClosedAllocatorPointSinkLeaseV1 {
+    type OutputId = TestSinkOutputIdV1;
+    type Error = InMemoryPointSinkErrorV1;
+    type Prepared<'lease> = AllocatorPreparedPointSinkWriteV1<'lease>;
+
+    fn binding_epoch(&self) -> PointSinkBindingEpochV1 {
+        self.binding_epoch
+    }
+
+    fn prepare<'lease>(
+        &'lease mut self,
+        intent: PointSinkIntentV1<'_, Self::OutputId>,
+    ) -> Result<Self::Prepared<'lease>, Self::Error> {
+        if self.shared.busy.replace(true) {
+            return Err(InMemoryPointSinkErrorV1::Busy);
+        }
+        if self.shared.reject_next_prepare.replace(false) {
+            self.shared.busy.set(false);
+            return Err(InMemoryPointSinkErrorV1::RejectedPrepare);
+        }
+
+        let base_stamp = self
+            .shared
+            .stamp
+            .get()
+            .unwrap_or_else(|| unreachable!("closed allocator sink owns a stamp"));
+        let (staging, desired_stamp) = match intent {
+            PointSinkIntentV1::SetAll {
+                revision,
+                stamp,
+                patch,
+            } => {
+                if stamp.expected() != base_stamp {
+                    self.shared.busy.set(false);
+                    return Err(InMemoryPointSinkErrorV1::StampMismatch);
+                }
+                let [patch] = patch else {
+                    self.shared.busy.set(false);
+                    return Err(InMemoryPointSinkErrorV1::StampMismatch);
+                };
+                if patch.sink_output() != self.owned_scope[0] {
+                    self.shared.busy.set(false);
+                    return Err(InMemoryPointSinkErrorV1::StampMismatch);
+                }
+                (
+                    AllocatorPointSinkStagingV1::SetAll {
+                        revision,
+                        entry: TestSnapshotEntryV1 {
+                            output: patch.output(),
+                            sink_output: patch.sink_output(),
+                            paint: patch.paint(),
+                        },
+                    },
+                    stamp.desired(),
+                )
+            }
+            PointSinkIntentV1::RevokeAll { revision, stamp } => {
+                if stamp.expected() != base_stamp {
+                    self.shared.busy.set(false);
+                    return Err(InMemoryPointSinkErrorV1::StampMismatch);
+                }
+                (
+                    AllocatorPointSinkStagingV1::RevokeAll { revision },
+                    stamp.desired(),
+                )
+            }
+            PointSinkIntentV1::ConfirmExact {
+                revision,
+                published_stamp,
+            } => {
+                if published_stamp != base_stamp || self.shared.revision.get() != Some(revision) {
+                    self.shared.busy.set(false);
+                    return Err(InMemoryPointSinkErrorV1::StampMismatch);
+                }
+                (
+                    AllocatorPointSinkStagingV1::ConfirmExact { revision },
+                    published_stamp,
+                )
+            }
+        };
+        Ok(AllocatorPreparedPointSinkWriteV1 {
+            lease: self,
+            base_stamp,
+            desired_stamp: Some(desired_stamp),
+            staging,
+            finished: false,
+        })
+    }
+
+    fn close_before_release(&mut self) {
+        self.shared.entry.set(None);
+        self.shared.revision.set(None);
+    }
+}
+
+impl PreparedPointSinkWriteV1 for AllocatorPreparedPointSinkWriteV1<'_> {
+    type Error = InMemoryPointSinkErrorV1;
+
+    fn try_install(&mut self) -> Result<(), Self::Error> {
+        if self.lease.shared.reject_next_install.replace(false) {
+            return Err(InMemoryPointSinkErrorV1::RejectedInstall);
+        }
+        if self.lease.shared.stamp.get() != Some(self.base_stamp) {
+            return Err(InMemoryPointSinkErrorV1::StampMismatch);
+        }
+        let Some(desired_stamp) = self.desired_stamp.take() else {
+            return Err(InMemoryPointSinkErrorV1::StampMismatch);
+        };
+        let previous_entry = self.lease.shared.entry.get();
+        let previous_revision = self.lease.shared.revision.get();
+        let revision = match self.staging {
+            AllocatorPointSinkStagingV1::SetAll { revision, entry } => {
+                self.lease.shared.entry.set(Some(entry));
+                revision
+            }
+            AllocatorPointSinkStagingV1::RevokeAll { revision } => {
+                self.lease.shared.entry.set(None);
+                revision
+            }
+            AllocatorPointSinkStagingV1::ConfirmExact { revision } => revision,
+        };
+        self.lease.shared.revision.set(Some(revision));
+        self.lease.shared.stamp.set(Some(desired_stamp));
+        if self
+            .lease
+            .shared
+            .reject_next_install_after_swap
+            .replace(false)
+        {
+            self.lease.shared.entry.set(previous_entry);
+            self.lease.shared.revision.set(previous_revision);
+            self.lease.shared.stamp.set(Some(self.base_stamp));
+            self.desired_stamp = Some(desired_stamp);
+            return Err(InMemoryPointSinkErrorV1::RejectedInstallAfterSwap);
+        }
+        Ok(())
+    }
+
+    fn finish_after_session(mut self) {
+        self.lease.shared.busy.set(false);
+        self.finished = true;
+    }
+}
+
+impl Drop for AllocatorPreparedPointSinkWriteV1<'_> {
+    fn drop(&mut self) {
+        if !self.finished {
+            self.lease.shared.busy.set(false);
+        }
+    }
+}
+
 pub(crate) const fn authored_emission(
     output: u32,
     sink_output: u32,

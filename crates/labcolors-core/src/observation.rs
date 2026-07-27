@@ -183,16 +183,24 @@ impl ObservationSchemaMismatchV1 {
     }
 }
 
-/// Canonical nonempty correlated set. Values and provenance each use one flat
-/// allocation; a physical case owns only ranges into those arrays.
+/// Канонический непустой набор связанных сценариев. Значения и provenance
+/// лежат в плоских повторно используемых буферах; сценарий владеет диапазонами.
 #[derive(Debug, PartialEq, Eq)]
 struct ObservedScenarioSet {
-    cases: Box<[PhysicalScenario]>,
-    values: Box<[ColorSignal]>,
-    provenance: Box<[ScenarioId]>,
+    cases: Vec<PhysicalScenario>,
+    values: Vec<ColorSignal>,
+    provenance: Vec<ScenarioId>,
 }
 
 impl ObservedScenarioSet {
+    const fn empty() -> Self {
+        Self {
+            cases: Vec::new(),
+            values: Vec::new(),
+            provenance: Vec::new(),
+        }
+    }
+
     fn values(&self, case_index: usize) -> Option<&[ColorSignal]> {
         let values = &self.cases.get(case_index)?.values;
         self.values.get(values.start..values.end)
@@ -239,8 +247,78 @@ impl CanonicalObservationSchemaV1 {
 
 #[derive(Debug, PartialEq, Eq)]
 struct ObservationBackingV1 {
+    arena_slot: ObservationArenaSlotV1,
     schema: CanonicalObservationSchemaV1,
     set: ObservedScenarioSet,
+}
+
+/// Автомату Session достаточно ровно трёх observation-lease: Failed удерживает
+/// `cause + previous`, пока полностью материализованный prospective update ждёт
+/// commit. Четвёртый слот был бы недоказанным запасом, а двух недостаточно для
+/// атомарного отказа.
+pub(crate) const OBSERVATION_ARENA_SLOT_COUNT_V1: usize = 3;
+
+/// Закрытая identity общего слота observation backing и evaluator arena.
+/// Она идентифицирует только хранилище; Session остаётся lifecycle-authority.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ObservationArenaSlotV1(u8);
+
+impl ObservationArenaSlotV1 {
+    const ALL: [Self; OBSERVATION_ARENA_SLOT_COUNT_V1] = [Self(0), Self(1), Self(2)];
+
+    pub(crate) const fn index(self) -> usize {
+        self.0 as usize
+    }
+}
+
+/// Три постоянных backing allocation во владении одной Session.
+///
+/// Pool хранит ровно один `Rc` каждого свободного слота. Raw-head и evidence
+/// клонируют только этот control block, поэтому уникальность без аллокации
+/// доказывает, что освобождённый слот можно перезаписать.
+#[derive(Debug)]
+pub(crate) struct ObservationArenaPoolV1 {
+    slots: [Rc<ObservationBackingV1>; OBSERVATION_ARENA_SLOT_COUNT_V1],
+}
+
+impl ObservationArenaPoolV1 {
+    pub(crate) fn new(schema: &CanonicalObservationSchemaV1) -> Self {
+        Self {
+            slots: ObservationArenaSlotV1::ALL.map(|arena_slot| {
+                Rc::new(ObservationBackingV1 {
+                    arena_slot,
+                    schema: schema.share_for_observation(),
+                    set: ObservedScenarioSet::empty(),
+                })
+            }),
+        }
+    }
+
+    fn materialize_into(
+        &mut self,
+        materialize: impl FnOnce(&mut ObservedScenarioSet) -> Result<(), ObservationError>,
+    ) -> Result<Rc<ObservationBackingV1>, ObservationError> {
+        let mut free_slot = None;
+        for slot_index in 0..OBSERVATION_ARENA_SLOT_COUNT_V1 {
+            if Rc::get_mut(&mut self.slots[slot_index]).is_some() {
+                free_slot = Some(slot_index);
+                break;
+            }
+        }
+        let Some(slot_index) = free_slot else {
+            return Err(ObservationError::InternalInvariant);
+        };
+        let backing =
+            Rc::get_mut(&mut self.slots[slot_index]).ok_or(ObservationError::InternalInvariant)?;
+        materialize(&mut backing.set)?;
+        Ok(Rc::clone(&self.slots[slot_index]))
+    }
+
+    fn shares_schema_backing_with(&self, schema: &CanonicalObservationSchemaV1) -> bool {
+        self.slots
+            .iter()
+            .all(|slot| slot.schema.shares_backing_with(schema))
+    }
 }
 
 /// Sealed observation admitted against the exact schema owned by its sealed
@@ -259,6 +337,10 @@ impl RevisionBoundObservationV1 {
 
     pub(crate) const fn revision(&self) -> Revision {
         self.revision
+    }
+
+    pub(crate) fn arena_slot(&self) -> ObservationArenaSlotV1 {
+        self.backing.arena_slot
     }
 
     pub(crate) fn schema(&self) -> &[SurfaceInputPortId] {
@@ -431,6 +513,7 @@ pub(crate) enum ObservationError {
         revision: Revision,
     },
     ResourceExhausted,
+    InternalInvariant,
 }
 
 /// Exact replay performed no state transition.
@@ -517,10 +600,14 @@ pub(crate) fn canonicalize_observation_schema(
 /// path directly.
 pub(crate) fn prepare_observation<'owner, Owner: ObservationOwnerV1>(
     owner: &'owner mut Owner,
+    arenas: &mut ObservationArenaPoolV1,
     stream: ObservationStreamId,
     schema: &CanonicalObservationSchemaV1,
     update: ObservationUpdateInput,
 ) -> Result<PreparedObservationUpdateV1<'owner, Owner>, ObservationError> {
+    if !arenas.shares_schema_backing_with(schema) {
+        return Err(ObservationError::InternalInvariant);
+    }
     if update.stream != stream {
         return Err(ObservationError::StreamMismatch {
             expected: stream,
@@ -598,16 +685,15 @@ pub(crate) fn prepare_observation<'owner, Owner: ObservationOwnerV1>(
                 };
             }
 
-            let set = materialize_scenarios(schema.as_slice(), scenarios)?;
+            let backing = arenas.materialize_into(|set| {
+                materialize_scenarios_into(set, schema.as_slice(), scenarios)
+            })?;
             Ok(PreparedObservationUpdateV1::Observed(PreparedObservedV1 {
                 owner,
                 observation: RevisionBoundObservationV1 {
                     stream,
                     revision: update.revision,
-                    backing: Rc::new(ObservationBackingV1 {
-                        schema: schema.share_for_observation(),
-                        set,
-                    }),
+                    backing,
                 },
             }))
         }
@@ -628,12 +714,16 @@ pub(crate) fn prepare_schema_ordered_observation<
     Source: SchemaOrderedScenarioSourceV1,
 >(
     owner: &'owner mut Owner,
+    arenas: &mut ObservationArenaPoolV1,
     stream: ObservationStreamId,
     schema: &CanonicalObservationSchemaV1,
     revision: Revision,
     source: &Source,
     order_scratch: &mut Vec<usize>,
 ) -> Result<PreparedObservationUpdateV1<'owner, Owner>, ObservationError> {
+    if !arenas.shares_schema_backing_with(schema) {
+        return Err(ObservationError::InternalInvariant);
+    }
     let scenario_count = source.scenario_count();
     if scenario_count == 0 {
         return Err(ObservationError::EmptyScenarioSet);
@@ -699,16 +789,15 @@ pub(crate) fn prepare_schema_ordered_observation<
         };
     }
 
-    let set = materialize_schema_ordered_scenarios(schema.as_slice(), source, order_scratch)?;
+    let backing = arenas.materialize_into(|set| {
+        materialize_schema_ordered_scenarios_into(set, schema.as_slice(), source, order_scratch)
+    })?;
     Ok(PreparedObservationUpdateV1::Observed(PreparedObservedV1 {
         owner,
         observation: RevisionBoundObservationV1 {
             stream,
             revision,
-            backing: Rc::new(ObservationBackingV1 {
-                schema: schema.share_for_observation(),
-                set,
-            }),
+            backing,
         },
     }))
 }
@@ -898,11 +987,12 @@ fn schema_ordered_scenarios_equal<Source: SchemaOrderedScenarioSourceV1>(
     })
 }
 
-fn materialize_schema_ordered_scenarios<Source: SchemaOrderedScenarioSourceV1>(
+fn materialize_schema_ordered_scenarios_into<Source: SchemaOrderedScenarioSourceV1>(
+    set: &mut ObservedScenarioSet,
     schema: &[SurfaceInputPortId],
     source: &Source,
     order: &[usize],
-) -> Result<ObservedScenarioSet, ObservationError> {
+) -> Result<(), ObservationError> {
     debug_assert!(!order.is_empty());
 
     let unique_case_count = 1 + order
@@ -913,29 +1003,23 @@ fn materialize_schema_ordered_scenarios<Source: SchemaOrderedScenarioSourceV1>(
         .checked_mul(schema.len())
         .ok_or(ObservationError::ResourceExhausted)?;
 
-    let mut cases = Vec::new();
-    cases
-        .try_reserve_exact(unique_case_count)
-        .map_err(|_| ObservationError::ResourceExhausted)?;
-    let mut values = Vec::new();
-    values
-        .try_reserve_exact(value_count)
-        .map_err(|_| ObservationError::ResourceExhausted)?;
-    let mut provenance = Vec::new();
-    provenance
-        .try_reserve_exact(order.len())
-        .map_err(|_| ObservationError::ResourceExhausted)?;
+    try_reserve_total(&mut set.cases, unique_case_count)?;
+    try_reserve_total(&mut set.values, value_count)?;
+    try_reserve_total(&mut set.provenance, order.len())?;
+    set.cases.clear();
+    set.values.clear();
+    set.provenance.clear();
 
     let mut scenario_ordinal = 0;
     while scenario_ordinal < order.len() {
         let first_source_index = order[scenario_ordinal];
-        let values_start = values.len();
-        values.extend((0..schema.len()).map(|binding_index| {
+        let values_start = set.values.len();
+        set.values.extend((0..schema.len()).map(|binding_index| {
             ColorSignal::from_srgb8(source.value(first_source_index, binding_index))
         }));
-        let values_end = values.len();
-        let provenance_start = provenance.len();
-        provenance.push(source.scenario_id(first_source_index));
+        let values_end = set.values.len();
+        let provenance_start = set.provenance.len();
+        set.provenance.push(source.scenario_id(first_source_index));
         scenario_ordinal += 1;
         while scenario_ordinal < order.len()
             && schema_ordered_scenarios_equal(
@@ -945,29 +1029,27 @@ fn materialize_schema_ordered_scenarios<Source: SchemaOrderedScenarioSourceV1>(
                 schema.len(),
             )
         {
-            provenance.push(source.scenario_id(order[scenario_ordinal]));
+            set.provenance
+                .push(source.scenario_id(order[scenario_ordinal]));
             scenario_ordinal += 1;
         }
-        let provenance_end = provenance.len();
-        cases.push(PhysicalScenario {
+        let provenance_end = set.provenance.len();
+        set.cases.push(PhysicalScenario {
             values: values_start..values_end,
             provenance: provenance_start..provenance_end,
         });
     }
 
-    debug_assert_eq!(cases.len(), unique_case_count);
-    debug_assert_eq!(values.len(), value_count);
-    Ok(ObservedScenarioSet {
-        cases: cases.into_boxed_slice(),
-        values: values.into_boxed_slice(),
-        provenance: provenance.into_boxed_slice(),
-    })
+    debug_assert_eq!(set.cases.len(), unique_case_count);
+    debug_assert_eq!(set.values.len(), value_count);
+    Ok(())
 }
 
-fn materialize_scenarios(
+fn materialize_scenarios_into(
+    set: &mut ObservedScenarioSet,
     schema: &[SurfaceInputPortId],
     scenarios: Vec<ScenarioInput>,
-) -> Result<ObservedScenarioSet, ObservationError> {
+) -> Result<(), ObservationError> {
     debug_assert!(!scenarios.is_empty());
 
     let unique_case_count = 1 + scenarios
@@ -978,22 +1060,15 @@ fn materialize_scenarios(
         .checked_mul(schema.len())
         .ok_or(ObservationError::ResourceExhausted)?;
 
-    // Capacity for every variable-sized Vec used by grouping is fallibly
-    // reserved before the first push/extend, so grouping cannot grow one of
-    // those Vecs. The final boxed representation and its later Rc owner still
-    // follow the global allocator's OOM behavior.
-    let mut cases = Vec::new();
-    cases
-        .try_reserve_exact(unique_case_count)
-        .map_err(|_| ObservationError::ResourceExhausted)?;
-    let mut values = Vec::new();
-    values
-        .try_reserve_exact(value_count)
-        .map_err(|_| ObservationError::ResourceExhausted)?;
-    let mut provenance = Vec::new();
-    provenance
-        .try_reserve_exact(scenarios.len())
-        .map_err(|_| ObservationError::ResourceExhausted)?;
+    // Все буферы растут до очистки и записи: ошибка reserve оставляет свободный
+    // слот пригодным к повтору и не открывает частично записанный набор.
+    let provenance_count = scenarios.len();
+    try_reserve_total(&mut set.cases, unique_case_count)?;
+    try_reserve_total(&mut set.values, value_count)?;
+    try_reserve_total(&mut set.provenance, provenance_count)?;
+    set.cases.clear();
+    set.values.clear();
+    set.provenance.clear();
 
     let mut scenarios = scenarios.into_iter().peekable();
     while let Some(ScenarioInput {
@@ -1001,30 +1076,36 @@ fn materialize_scenarios(
         bindings,
     }) = scenarios.next()
     {
-        let values_start = values.len();
-        values.extend(bindings.iter().map(|binding| binding.value));
-        let values_end = values.len();
-        let provenance_start = provenance.len();
-        provenance.push(first_id);
+        let values_start = set.values.len();
+        set.values
+            .extend(bindings.iter().map(|binding| binding.value));
+        let values_end = set.values.len();
+        let provenance_start = set.provenance.len();
+        set.provenance.push(first_id);
         while matches!(scenarios.peek(), Some(candidate) if candidate.bindings.as_slice() == bindings.as_slice())
         {
             let ScenarioInput { id, .. } = scenarios
                 .next()
                 .unwrap_or_else(|| unreachable!("peek observed the next scenario"));
-            provenance.push(id);
+            set.provenance.push(id);
         }
-        let provenance_end = provenance.len();
-        cases.push(PhysicalScenario {
+        let provenance_end = set.provenance.len();
+        set.cases.push(PhysicalScenario {
             values: values_start..values_end,
             provenance: provenance_start..provenance_end,
         });
     }
 
-    debug_assert_eq!(cases.len(), unique_case_count);
-    debug_assert_eq!(values.len(), value_count);
-    Ok(ObservedScenarioSet {
-        cases: cases.into_boxed_slice(),
-        values: values.into_boxed_slice(),
-        provenance: provenance.into_boxed_slice(),
-    })
+    debug_assert_eq!(set.cases.len(), unique_case_count);
+    debug_assert_eq!(set.values.len(), value_count);
+    Ok(())
+}
+
+fn try_reserve_total<T>(storage: &mut Vec<T>, required: usize) -> Result<(), ObservationError> {
+    if storage.capacity() < required {
+        storage
+            .try_reserve_exact(required - storage.len())
+            .map_err(|_| ObservationError::ResourceExhausted)?;
+    }
+    Ok(())
 }

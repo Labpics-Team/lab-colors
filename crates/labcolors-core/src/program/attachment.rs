@@ -14,9 +14,9 @@ use crate::program_session::{
 use crate::session::PreparedSessionDispositionV1;
 
 use super::{
-    CoreDeferredSessionRetirementV1, CorePreparedSessionTransitionV1, EvidenceViewV1,
-    InstantiateErrorV1, OccurrenceIdV1, OutputSlotIdV1, OwnerV1, PresentationRootIdV1,
-    SessionState, SessionV1, UpdateErrorV1, UpdateV1, VerifiedCertificateV1,
+    CorePreparedSessionTransitionV1, EvidenceViewV1, InstantiateErrorV1, OccurrenceIdV1,
+    OutputSlotIdV1, OwnerV1, PresentationRootIdV1, SessionState, SessionV1, UpdateErrorV1,
+    UpdateV1, VerifiedCertificateV1,
 };
 
 /// Sealing оставляет реализации физического writer внутри пакета.
@@ -578,7 +578,7 @@ pub(crate) struct AttachedPublishedStampV1<'a> {
     sink: &'a PointSinkStampV1,
 }
 
-impl<'a> AttachedPublishedStampV1<'a> {
+impl AttachedPublishedStampV1<'_> {
     pub(crate) const fn revision(self) -> u64 {
         self.revision
     }
@@ -726,9 +726,6 @@ where
     scratch_render_patch: Vec<AttachedRenderPatchEntryV1<L::OutputId>>,
     expected_sink_stamp: PointSinkStampV1,
     committed_revision: Option<u64>,
-    // Вытеснённые Session evidence и transaction owner после install только
-    // переносятся сюда и освобождаются до следующего prepare.
-    retired_session: Option<CoreDeferredSessionRetirementV1>,
     _owner_pin: ProgramOwnerLeaseV1<CoreProgramEvaluatorsV1>,
 }
 
@@ -793,7 +790,7 @@ where
     ) -> Self {
         // POST_ADMISSION_TAIL_START_V1
         let (sink, initial_sink_stamp) = admission.into_parts();
-        let attachment = Self {
+        Self {
             sink,
             session: prepared.session,
             emissions: prepared.emissions,
@@ -804,11 +801,9 @@ where
             scratch_render_patch: prepared.scratch_render_patch,
             expected_sink_stamp: initial_sink_stamp,
             committed_revision: None,
-            retired_session: None,
             _owner_pin: prepared.owner_pin,
-        };
+        }
         // POST_ADMISSION_TAIL_END_V1
-        attachment
     }
 }
 
@@ -1035,7 +1030,6 @@ where
 {
     /// Готовит, атомарно устанавливает и infallibly публикует целый update.
     pub(crate) fn update(&mut self, update: UpdateV1<'_>) -> AttachmentUpdateResultV1<'_, L> {
-        drop(self.retired_session.take());
         let transition = self
             .session
             .prepare_update(update)
@@ -1128,8 +1122,7 @@ where
             .map_err(AttachmentUpdateErrorV1::SinkInstall)?;
 
         // Ниже только moves/swaps/writes в заранее пустые retirement-слоты.
-        let (installed_sink, retired_session) = prepared.commit_session();
-        self.retired_session = Some(retired_session);
+        let installed_sink = prepared.commit_session();
         match &action {
             PreparedPatchActionV1::SetAll { .. } | PreparedPatchActionV1::RevokeAll { .. } => {
                 mem::swap(&mut self.committed_sink_patch, &mut self.scratch_sink_patch);
@@ -1248,10 +1241,10 @@ where
         self.sink.try_install()
     }
 
-    fn commit_session(self) -> (L::Prepared<'sink>, CoreDeferredSessionRetirementV1) {
+    fn commit_session(self) -> L::Prepared<'sink> {
         let Self { transition, sink } = self;
-        let (_view, retirement) = transition.commit_deferred();
-        (sink, retirement)
+        let _view = transition.commit_deferred();
+        sink
     }
 }
 

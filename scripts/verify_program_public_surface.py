@@ -129,14 +129,22 @@ def public_item_pages(crate_doc_root: Path) -> list[tuple[str, Path]]:
 def program_public_surface(crate_doc_root: Path) -> tuple[int, list[ProgramLeak]]:
     crate_doc_root = crate_doc_root.resolve()
     docs_root = crate_doc_root.parent
-    forbidden_source = (docs_root / "src/labcolors_core/program.rs.html").resolve()
-    forbidden_source_dir = (docs_root / "src/labcolors_core/program").resolve()
-    forbidden_module = (crate_doc_root / "program").resolve()
+    forbidden_sources = tuple(
+        (docs_root / f"src/labcolors_core/{source}.rs.html").resolve()
+        for source in ("observation", "program", "program_session", "session")
+    )
+    forbidden_source_dirs = (
+        (docs_root / "src/labcolors_core/program").resolve(),
+    )
+    forbidden_modules = tuple(
+        (crate_doc_root / module).resolve()
+        for module in ("observation", "program", "program_session", "session")
+    )
     pages = public_item_pages(crate_doc_root)
     leaks: list[ProgramLeak] = []
 
     for public_item, page in pages:
-        if _inside(page, forbidden_module):
+        if any(_inside(page, module) for module in forbidden_modules):
             leaks.append(ProgramLeak(public_item, str(page.relative_to(docs_root))))
             continue
 
@@ -151,9 +159,9 @@ def program_public_surface(crate_doc_root: Path) -> tuple[int, list[ProgramLeak]
             if "src" in classes:
                 source_links += 1
             if (
-                route == forbidden_source
-                or _inside(route, forbidden_source_dir)
-                or _inside(route, forbidden_module)
+                route in forbidden_sources
+                or any(_inside(route, source_dir) for source_dir in forbidden_source_dirs)
+                or any(_inside(route, module) for module in forbidden_modules)
             ):
                 leaks.append(ProgramLeak(public_item, href))
                 break

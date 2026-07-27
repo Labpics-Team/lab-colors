@@ -5,8 +5,9 @@ use crate::appearance::{
 use crate::composition::{AdmittedOpacityV1, CompositionProfileV1};
 use crate::lcs_occurrence::ColorSignal;
 use crate::observation::{
-    ObservationPayloadInput, ObservationStreamId, ObservationUpdateInput, ObservedScenarioSetInput,
-    Revision, ScenarioId, ScenarioInput, SurfaceInputBinding,
+    OBSERVATION_ARENA_SLOT_COUNT_V1, ObservationPayloadInput, ObservationStreamId,
+    ObservationUpdateInput, ObservedScenarioSetInput, Revision, ScenarioId, ScenarioInput,
+    SurfaceInputBinding,
 };
 use crate::point_support::{
     CompiledPointSupportRecheckV1, PointSupportCompileErrorV1, PointSupportCriterionAggregateV1,
@@ -62,7 +63,7 @@ fn compiled(
 }
 
 #[test]
-fn point_support_session_owns_exactly_one_canonical_schema_handle() {
+fn point_support_observation_arenas_share_the_canonical_schema_for_the_session_lifetime() {
     let requirements = compiled(vec![occurrence(
         OCCURRENCE_A,
         SURFACE_A,
@@ -79,19 +80,23 @@ fn point_support_session_owns_exactly_one_canonical_schema_handle() {
 
     let schema_ptr = requirements.observation_schema(&()).backing_ptr_for_test();
     let mut session = Session::new(STREAM, requirements);
+    let session_schema_handle_count = 1 + OBSERVATION_ARENA_SLOT_COUNT_V1;
     assert_eq!(
         session
             .plan()
             .observation_schema(&())
             .strong_count_for_test(),
-        1,
+        session_schema_handle_count,
     );
 
-    let report_schema_ptr = match session
+    let (report_schema_ptr, report_backing_ptr) = match session
         .commit(observed_update(1, [(1, vec![(SURFACE_A, [0; 3])])]))
         .unwrap()
     {
-        SessionState::Ready { current } => current.report().observation().schema_ptr_for_test(),
+        SessionState::Ready { current } => (
+            current.report().observation().schema_ptr_for_test(),
+            current.report().observation().backing_ptr_for_test(),
+        ),
         _ => panic!("the exact point-support requirement must verify"),
     };
     assert_eq!(report_schema_ptr, schema_ptr);
@@ -100,18 +105,51 @@ fn point_support_session_owns_exactly_one_canonical_schema_handle() {
             .plan()
             .observation_schema(&())
             .strong_count_for_test(),
-        2,
+        session_schema_handle_count,
     );
 
-    session
+    let idempotent_report_backing_ptr = match session
         .commit(observed_update(1, [(1, vec![(SURFACE_A, [0; 3])])]))
-        .unwrap();
+        .unwrap()
+    {
+        SessionState::Ready { current } => current.report().observation().backing_ptr_for_test(),
+        _ => panic!("an exact replay must retain the verified report"),
+    };
+    assert_eq!(idempotent_report_backing_ptr, report_backing_ptr);
     assert_eq!(
         session
             .plan()
             .observation_schema(&())
             .strong_count_for_test(),
-        2,
+        session_schema_handle_count,
+    );
+
+    let observation_clone = match session.state() {
+        SessionState::Ready { current } => current.report().observation().clone(),
+        _ => panic!("the verified report must remain current"),
+    };
+    assert_eq!(observation_clone.schema_ptr_for_test(), schema_ptr);
+    assert_eq!(
+        session
+            .plan()
+            .observation_schema(&())
+            .strong_count_for_test(),
+        session_schema_handle_count,
+        "cloning an observation shares its backing, not the schema Rc directly",
+    );
+    drop(observation_clone);
+
+    let schema_probe = session.plan().observation_schema(&()).clone();
+    assert_eq!(
+        schema_probe.strong_count_for_test(),
+        session_schema_handle_count + 1,
+    );
+    drop(session);
+    assert_eq!(schema_probe.backing_ptr_for_test(), schema_ptr);
+    assert_eq!(
+        schema_probe.strong_count_for_test(),
+        1,
+        "dropping the Session must release its plan and all persistent observation arenas",
     );
 }
 

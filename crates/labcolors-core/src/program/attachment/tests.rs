@@ -1,13 +1,15 @@
 use super::support::{
     InMemoryPointSinkAdmissionErrorV1, InMemoryPointSinkErrorV1, TestHostBindingAxisV1,
-    authored_emission, authored_presentation, in_memory_point_sink,
+    allocator_point_sink, authored_emission, authored_presentation, in_memory_point_sink,
 };
 use super::*;
 use crate::Srgb8;
 use crate::program::{
-    AppearanceContextV1, ConstraintIdV1, DraftV1, PaintIdV1, ScenarioV1, SourceIdV1, StateKindV1,
-    SurfaceIdV1, SurfaceInputPortIdV1, SurroundV1, TargetIdV1,
+    AppearanceContextV1, ConstraintIdV1, DraftV1, JointChoiceV1, JointStateV1, PaintIdV1,
+    ScenarioV1, SourceIdV1, StateKindV1, SurfaceIdV1, SurfaceInputPortIdV1, SurroundV1,
+    TargetCandidateIdV1, TargetCandidateV1, TargetIdV1,
 };
+use crate::wcag22::Wcag22CriterionV1;
 use proptest::prelude::*;
 
 const SOURCE: SourceIdV1 = SourceIdV1::new(1);
@@ -725,6 +727,287 @@ fn attachment_terminal_tail_has_no_allocator_events() {
     assert_eq!(probe.intent_counts().confirm_exact, 1);
 }
 
+#[test]
+fn warmed_attachment_complete_lifecycle_has_no_allocator_events() {
+    let owner = allocator_owner();
+    let (sink, probe) = allocator_point_sink(900);
+    let emissions = [authored_emission(OUTPUT_A.value(), 900)];
+    let presentations = [authored_presentation(
+        OUTPUT_A.value(),
+        ROOT.value(),
+        INNER.value(),
+    )];
+    let mut attachment = owner.attach(1, &emissions, &presentations, sink).unwrap();
+    let white = [Srgb8::new([0xFF; 3])];
+    let light = [Srgb8::new([0xF0; 3])];
+    let black = [Srgb8::new([0; 3])];
+    let ready_scenarios = [ScenarioV1::new(41, &white), ScenarioV1::new(42, &light)];
+    let conflict_scenarios = [ScenarioV1::new(41, &white), ScenarioV1::new(43, &black)];
+
+    // A dedicated known allocation proves the observer is live without
+    // requiring Core's cold path to allocate forever.
+    let (sentinel, observer_control) =
+        crate::test_support::measured_allocator_events(|| Box::new(0_u8));
+    assert_eq!(*sentinel, 0);
+    assert_ne!(
+        observer_control,
+        crate::test_support::AllocatorEvents::default(),
+        "the allocator observer must see a known sentinel allocation",
+    );
+    drop(sentinel);
+
+    assert_eq!(
+        attachment
+            .update(observed(1, &ready_scenarios))
+            .unwrap()
+            .evidence()
+            .kind(),
+        StateKindV1::Ready,
+    );
+
+    // Three equal-cardinality observations prove the automaton high-water:
+    // Ready A, Failed(cause B + previous A), then prospective/committed Ready C.
+    assert_eq!(
+        attachment
+            .update(observed(2, &conflict_scenarios))
+            .unwrap()
+            .evidence()
+            .kind(),
+        StateKindV1::Failed,
+    );
+    assert_eq!(
+        attachment
+            .update(observed(3, &ready_scenarios))
+            .unwrap()
+            .evidence()
+            .kind(),
+        StateKindV1::Ready,
+    );
+
+    let (failed, events) = crate::test_support::measured_allocator_events(|| {
+        attachment
+            .update(observed(4, &conflict_scenarios))
+            .map(|committed| committed.evidence().kind())
+    });
+    assert_eq!(failed.unwrap(), StateKindV1::Failed);
+    assert_eq!(
+        events,
+        crate::test_support::AllocatorEvents::default(),
+        "warmed Ready -> Failed must reuse observation, report and output arenas",
+    );
+
+    let (ready, events) = crate::test_support::measured_allocator_events(|| {
+        attachment
+            .update(observed(5, &ready_scenarios))
+            .map(|committed| committed.evidence().kind())
+    });
+    assert_eq!(ready.unwrap(), StateKindV1::Ready);
+    assert_eq!(
+        events,
+        crate::test_support::AllocatorEvents::default(),
+        "warmed Failed -> Ready must retire two witnesses without allocator traffic",
+    );
+
+    let unknown = UpdateV1::Unknown {
+        revision: 6,
+        reason_id: 77,
+    };
+    let (stale, events) = crate::test_support::measured_allocator_events(|| {
+        attachment
+            .update(unknown)
+            .map(|committed| committed.evidence().kind())
+    });
+    assert_eq!(stale.unwrap(), StateKindV1::Stale);
+    assert_eq!(
+        events,
+        crate::test_support::AllocatorEvents::default(),
+        "Unknown -> Stale must retain the verified arena without allocation or release",
+    );
+
+    let (confirmed_unknown, events) = crate::test_support::measured_allocator_events(|| {
+        attachment
+            .update(unknown)
+            .map(|committed| committed.evidence().kind())
+    });
+    assert_eq!(confirmed_unknown.unwrap(), StateKindV1::Stale);
+    assert_eq!(
+        events,
+        crate::test_support::AllocatorEvents::default(),
+        "ConfirmExact over a closed Unknown snapshot must not acquire an arena",
+    );
+
+    let (ready, events) = crate::test_support::measured_allocator_events(|| {
+        attachment
+            .update(observed(7, &ready_scenarios))
+            .map(|committed| committed.evidence().kind())
+    });
+    assert_eq!(ready.unwrap(), StateKindV1::Ready);
+    assert_eq!(events, crate::test_support::AllocatorEvents::default());
+
+    let (confirmed_ready, events) = crate::test_support::measured_allocator_events(|| {
+        attachment
+            .update(observed(7, &ready_scenarios))
+            .map(|committed| committed.evidence().kind())
+    });
+    assert_eq!(confirmed_ready.unwrap(), StateKindV1::Ready);
+    assert_eq!(
+        events,
+        crate::test_support::AllocatorEvents::default(),
+        "ConfirmExact over a published snapshot must not evaluate or acquire an arena",
+    );
+
+    let committed_entry = probe.entry();
+    let committed_stamp = probe.stamp();
+    probe.reject_next_prepare();
+    let (rejected, events) = crate::test_support::measured_allocator_events(|| {
+        attachment.update(observed(8, &ready_scenarios)).map(|_| ())
+    });
+    assert!(matches!(
+        rejected,
+        Err(AttachmentUpdateErrorV1::SinkPrepare(
+            InMemoryPointSinkErrorV1::RejectedPrepare
+        ))
+    ));
+    assert_eq!(events, crate::test_support::AllocatorEvents::default());
+    assert_eq!(attachment.committed_revision, Some(7));
+    assert_eq!(probe.revision(), Some(7));
+    assert_eq!(probe.entry(), committed_entry);
+    assert_eq!(probe.stamp(), committed_stamp);
+    assert!(!probe.is_busy());
+
+    probe.reject_next_install();
+    let (rejected, events) = crate::test_support::measured_allocator_events(|| {
+        attachment.update(observed(8, &ready_scenarios)).map(|_| ())
+    });
+    assert!(matches!(
+        rejected,
+        Err(AttachmentUpdateErrorV1::SinkInstall(
+            InMemoryPointSinkErrorV1::RejectedInstall
+        ))
+    ));
+    assert_eq!(events, crate::test_support::AllocatorEvents::default());
+    assert_eq!(attachment.committed_revision, Some(7));
+    assert_eq!(probe.revision(), Some(7));
+    assert_eq!(probe.entry(), committed_entry);
+    assert_eq!(probe.stamp(), committed_stamp);
+    assert!(!probe.is_busy());
+
+    probe.reject_next_install_after_swap();
+    let (rejected, events) = crate::test_support::measured_allocator_events(|| {
+        attachment.update(observed(8, &ready_scenarios)).map(|_| ())
+    });
+    assert!(matches!(
+        rejected,
+        Err(AttachmentUpdateErrorV1::SinkInstall(
+            InMemoryPointSinkErrorV1::RejectedInstallAfterSwap
+        ))
+    ));
+    assert_eq!(events, crate::test_support::AllocatorEvents::default());
+    assert_eq!(attachment.committed_revision, Some(7));
+    assert_eq!(probe.revision(), Some(7));
+    assert_eq!(probe.entry(), committed_entry);
+    assert_eq!(probe.stamp(), committed_stamp);
+    assert!(!probe.is_busy());
+
+    let (retried, events) = crate::test_support::measured_allocator_events(|| {
+        attachment
+            .update(observed(8, &ready_scenarios))
+            .map(|committed| committed.evidence().kind())
+    });
+    assert_eq!(retried.unwrap(), StateKindV1::Ready);
+    assert_eq!(
+        events,
+        crate::test_support::AllocatorEvents::default(),
+        "all rejected prospective leases must return to the same warmed Session",
+    );
+    assert_eq!(attachment.committed_revision, Some(8));
+    assert_eq!(probe.revision(), Some(8));
+    assert!(!probe.is_busy());
+}
+
+#[test]
+fn session_hot_path_contains_no_retired_per_update_storage_constructors() {
+    let compact = |source: &str| {
+        source
+            .chars()
+            .filter(|character| !character.is_whitespace())
+            .collect::<String>()
+    };
+    let observation = compact(include_str!("../../observation.rs"));
+    for retired in [
+        "cases: cases.into_boxed_slice()",
+        "values: values.into_boxed_slice()",
+        "provenance: provenance.into_boxed_slice()",
+        "backing: Rc::new(ObservationBackingV1",
+    ] {
+        let retired = compact(retired);
+        assert!(
+            !observation.contains(&retired),
+            "observation hot path still constructs retired per-update storage: {retired}",
+        );
+    }
+    assert_eq!(
+        observation.matches("Rc::new(ObservationBackingV1{").count(),
+        1,
+        "ObservationBackingV1 may be allocated only by the three-slot pool constructor",
+    );
+
+    let evaluation = compact(include_str!("../../program_session.rs"));
+    assert!(
+        !evaluation.contains("ProgramReportBuffersV1"),
+        "the retired selected/exhaustive report-buffer type must not return",
+    );
+    for retired in [
+        "let mut selected = ProgramReportBuffersV1::empty()",
+        "let mut exhaustive_conflict = ProgramReportBuffersV1::empty()",
+        "let mut outputs = Vec::new()",
+        "std::mem::replace(&mut self.selected, ProgramReportBuffersV1::empty())",
+        "std::mem::take(&mut self.outputs)",
+    ] {
+        let retired = compact(retired);
+        assert!(
+            !evaluation.contains(&retired),
+            "evaluation hot path still constructs or detaches retired per-update storage: {retired}",
+        );
+    }
+}
+
+fn allocator_owner() -> OwnerV1 {
+    const BLACK: TargetCandidateIdV1 = TargetCandidateIdV1::new(101);
+    const GRAY: TargetCandidateIdV1 = TargetCandidateIdV1::new(102);
+
+    let context = AppearanceContextV1::try_new(64.0, 0.2, SurroundV1::Dim).unwrap();
+    let mut draft = DraftV1::new();
+    draft.push_source(SOURCE, Srgb8::new([0; 3]));
+    draft.push_finite_target(
+        TARGET,
+        SOURCE,
+        vec![
+            TargetCandidateV1::new(BLACK, Srgb8::new([0; 3])),
+            TargetCandidateV1::new(GRAY, Srgb8::new([0x80; 3])),
+        ],
+    );
+    draft
+        .set_joint_selection(vec![
+            JointStateV1::new(vec![JointChoiceV1::new(TARGET, BLACK)]),
+            JointStateV1::new(vec![JointChoiceV1::new(TARGET, GRAY)]),
+        ])
+        .unwrap();
+    draft.push_surface_input_port(INPUT);
+    draft.push_solid_paint(PAINT, TARGET);
+    draft.push_input_surface(INPUT_SURFACE, INPUT);
+    draft.push_source_over_occurrence(INNER, PAINT, INPUT_SURFACE, context);
+    draft.push_point_presentation_root(ROOT, INNER);
+    draft.push_point_presentation_target(ROOT, INNER);
+    draft.push_wcag22_hard(
+        ConstraintIdV1::new(10),
+        INNER,
+        Wcag22CriterionV1::Sc143TextDefault,
+    );
+    draft.push_output(OUTPUT_A, PAINT);
+    draft.compile().unwrap()
+}
+
 fn owner(
     source: Srgb8,
     expected: Srgb8,
@@ -1289,6 +1572,7 @@ fn installed_retirement_waits_for_the_next_preinstall_drain_and_retry_is_clean()
 #[test]
 fn source_guards_keep_the_post_install_tail_destructor_free() {
     let attachment_source = include_str!("../attachment.rs");
+    let session_source = include_str!("../../session.rs");
     let support_source = include_str!("support.rs");
 
     let cold_prepare = attachment_source
@@ -1341,25 +1625,63 @@ fn source_guards_keep_the_post_install_tail_destructor_free() {
         !attachment_source.contains("let _ = transition.commit();"),
         "eager Session commit must not return to the post-install tail",
     );
-
-    let session_drain = attachment_source
-        .find("drop(self.retired_session.take())")
-        .expect("Attachment must drain deferred Session retirement");
-    let prepare = attachment_source
-        .find(".prepare_update(update)")
-        .expect("Attachment must prepare one Session transition");
-    let install = attachment_source
-        .find(".try_install()")
-        .expect("Attachment must install the prepared sink transaction");
     assert!(
-        session_drain < prepare && prepare < install,
-        "Session retirement must drain before prepare and install",
+        !attachment_source.contains("retired_session"),
+        "Attachment must not duplicate Session-owned deferred retirement",
+    );
+    let session_owner = session_source
+        .split("pub(crate) struct Session<Plan: SessionPlanV1> {")
+        .nth(1)
+        .expect("generic Session owner must exist")
+        .split("impl<Plan: SessionPlanV1> Session<Plan>")
+        .next()
+        .expect("Session owner fields must precede its implementation");
+    assert_eq!(
+        session_owner
+            .matches("deferred_retirement: Option<DeferredSessionRetirement<Plan>>,")
+            .count(),
+        1,
+        "Session must own exactly one deferred-retirement slot",
+    );
+    let session_prepare = session_source
+        .split("pub(crate) fn prepare_update(")
+        .nth(1)
+        .expect("Session must prepare updates")
+        .split("/// Stream-affine `Unknown` admission")
+        .next()
+        .expect("prepare_update body must be bounded");
+    assert!(
+        session_prepare
+            .find("self.drain_deferred_retirement();")
+            .expect("Session prepare must drain deferred retirement")
+            < session_prepare
+                .find(".try_acquire_owner()")
+                .expect("Session prepare must acquire the exact owner"),
+        "deferred retirement must drain before owner acquisition and admission",
+    );
+    let deferred_commit = session_source
+        .split("pub(crate) fn commit_deferred(self)")
+        .nth(1)
+        .expect("Session must expose its internal deferred-commit seam")
+        .split("fn publish_session_transition")
+        .next()
+        .expect("commit_deferred body must precede publication helper");
+    assert!(
+        deferred_commit.contains("*deferred_retirement = Some(retirement);"),
+        "deferred commit must park retirement inside Session",
     );
 
-    let sink_prepare = support_source
+    let in_memory_sink = support_source
+        .split("impl ClosedPointSinkLeaseV1 for ClosedInMemoryPointSinkLeaseV1 {")
+        .nth(1)
+        .expect("in-memory test sink must implement the closed lease")
+        .split("impl PreparedPointSinkWriteV1 for InMemoryPreparedPointSinkWriteV1")
+        .next()
+        .expect("closed-lease implementation must precede prepared-write implementation");
+    let sink_prepare = in_memory_sink
         .split("fn prepare<'lease>(")
         .nth(1)
-        .expect("test sink must implement prepare")
+        .expect("in-memory test sink must implement prepare")
         .split("fn close_before_release")
         .next()
         .expect("prepare body must precede close implementation");
@@ -1373,13 +1695,17 @@ fn source_guards_keep_the_post_install_tail_destructor_free() {
         "retired sink state must drain before Busy is acquired",
     );
 
-    let finish = support_source
-        .split("fn finish_after_session(mut self)")
+    let in_memory_prepared = support_source
+        .split("impl PreparedPointSinkWriteV1 for InMemoryPreparedPointSinkWriteV1")
         .nth(1)
-        .expect("prepared sink must implement finish_after_session")
+        .expect("in-memory prepared sink must implement the prepared write")
         .split("impl Drop for InMemoryPreparedPointSinkWriteV1")
         .next()
-        .expect("finish body must precede prepared-sink Drop");
+        .expect("prepared-write implementation must precede prepared-sink Drop");
+    let finish = in_memory_prepared
+        .split("fn finish_after_session(mut self)")
+        .nth(1)
+        .expect("prepared sink must implement finish_after_session");
     assert!(
         !finish.contains("drop("),
         "post-install finish must not run a destructor",
