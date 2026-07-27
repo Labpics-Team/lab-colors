@@ -926,6 +926,37 @@ fn warmed_attachment_complete_lifecycle_has_no_allocator_events() {
 }
 
 #[test]
+fn allocator_sink_missing_stamp_is_a_typed_prepare_failure() {
+    let owner = allocator_owner();
+    let (sink, probe) = allocator_point_sink(900);
+    let emissions = [authored_emission(OUTPUT_A.value(), 900)];
+    let presentations = [authored_presentation(
+        OUTPUT_A.value(),
+        ROOT.value(),
+        INNER.value(),
+    )];
+    let mut attachment = owner.attach(1, &emissions, &presentations, sink).unwrap();
+
+    probe.clear_stamp_for_test();
+    assert!(matches!(
+        attachment.update(UpdateV1::Unknown {
+            revision: 1,
+            reason_id: 77,
+        }),
+        Err(AttachmentUpdateErrorV1::SinkPrepare(
+            InMemoryPointSinkErrorV1::StampMismatch
+        ))
+    ));
+    assert_eq!(attachment.committed_revision, None);
+    assert!(matches!(
+        attachment.session.evidence().observation_head(),
+        super::super::ObservationHeadV1::Empty
+    ));
+    assert_eq!(probe.revision(), None);
+    assert!(!probe.is_busy());
+}
+
+#[test]
 fn session_hot_path_contains_no_retired_per_update_storage_constructors() {
     let compact = crate::generic_boundary_tests::compact_production_syntax;
     let observation_source = include_str!("../../observation.rs");
@@ -942,13 +973,6 @@ fn session_hot_path_contains_no_retired_per_update_storage_constructors() {
             "observation hot path still constructs retired per-update storage: {retired}",
         );
     }
-    assert!(
-        crate::generic_boundary_tests::observation_backing_allocation_is_pool_scoped(
-            observation_source,
-        ),
-        "ObservationBackingV1 may be allocated only by the three-slot pool constructor",
-    );
-
     let evaluation = compact(include_str!("../../program_session.rs"));
     assert!(
         !evaluation.contains("ProgramReportBuffersV1"),

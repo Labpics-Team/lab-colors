@@ -409,6 +409,10 @@ pub(crate) struct AllocatorPointSinkProbeV1 {
 }
 
 impl AllocatorPointSinkProbeV1 {
+    pub(crate) fn clear_stamp_for_test(&self) {
+        self.shared.stamp.set(None);
+    }
+
     pub(crate) fn reject_next_prepare(&self) {
         self.shared.reject_next_prepare.set(true);
     }
@@ -545,11 +549,10 @@ impl ClosedPointSinkLeaseV1 for ClosedAllocatorPointSinkLeaseV1 {
             return Err(InMemoryPointSinkErrorV1::RejectedPrepare);
         }
 
-        let base_stamp = self
-            .shared
-            .stamp
-            .get()
-            .unwrap_or_else(|| unreachable!("closed allocator sink owns a stamp"));
+        let Some(base_stamp) = self.shared.stamp.get() else {
+            self.shared.busy.set(false);
+            return Err(InMemoryPointSinkErrorV1::StampMismatch);
+        };
         let (staging, desired_stamp) = match intent {
             PointSinkIntentV1::SetAll {
                 revision,

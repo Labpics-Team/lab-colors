@@ -62,6 +62,40 @@ class ProgramPublicSurfaceTests(unittest.TestCase):
         _, leaks = program_public_surface(self.crate)
         self.assertEqual(len(leaks), 1)
 
+    def test_public_page_inside_forbidden_module_is_rejected(self) -> None:
+        for module in ("observation", "program", "program_session", "session"):
+            with self.subTest(module=module):
+                item = f"{module}/struct.InternalItem.html"
+                self.write_all(item)
+                self.write_item(
+                    item,
+                    (
+                        '<a class="src" href="../../src/labcolors_core/'
+                        'srgb8.rs.html#1">Source</a>'
+                    ),
+                )
+                count, leaks = program_public_surface(self.crate)
+                self.assertEqual(count, 1)
+                self.assertEqual(len(leaks), 1)
+                self.assertEqual(leaks[0].public_item, item)
+                self.assertEqual(
+                    leaks[0].route,
+                    f"labcolors_core/{item}",
+                )
+
+    def test_similar_module_name_is_not_rejected(self) -> None:
+        self.write_all("sessionish/struct.ClientItem.html")
+        self.write_item(
+            "sessionish/struct.ClientItem.html",
+            (
+                '<a class="src" href="../../src/labcolors_core/'
+                'srgb8.rs.html#1">Source</a>'
+            ),
+        )
+        count, leaks = program_public_surface(self.crate)
+        self.assertEqual(count, 1)
+        self.assertEqual(leaks, [])
+
     def test_arbitrary_program_session_alias_is_rejected_by_origin(self) -> None:
         self.write_all("struct.ProgramSessionAlias.html")
         self.write_item(

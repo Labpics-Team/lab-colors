@@ -2115,17 +2115,18 @@ where
         ]
     }
 
-    fn into_arena(self) -> ProgramEvaluationArenaLeaseV1<Evaluation> {
+    fn into_arena(self) -> ProgramEvaluationArenaReturnV1<Evaluation> {
         let Self {
             content_identity: _,
             observation,
             arena,
         } = self;
-        if observation.arena_slot() != arena.slot {
-            unreachable!("report and observation are minted from one logical Session slot");
-        }
+        let slot = observation.arena_slot();
         drop(observation);
-        arena
+        ProgramEvaluationArenaReturnV1 {
+            slot,
+            storage: arena.storage,
+        }
     }
 }
 
@@ -2222,7 +2223,7 @@ where
             })
     }
 
-    fn into_arena(self) -> ProgramEvaluationArenaLeaseV1<Evaluation> {
+    fn into_arena(self) -> ProgramEvaluationArenaReturnV1<Evaluation> {
         self.report.into_arena()
     }
 }
@@ -2295,7 +2296,7 @@ where
             })
     }
 
-    fn into_arena(self) -> ProgramEvaluationArenaLeaseV1<Evaluation> {
+    fn into_arena(self) -> ProgramEvaluationArenaReturnV1<Evaluation> {
         self.report.into_arena()
     }
 }
@@ -2533,6 +2534,11 @@ pub(crate) fn fail_program_preflight_reservation_for_test(
 }
 
 #[cfg(test)]
+pub(crate) fn program_preflight_failure_remaining_for_test() -> Option<usize> {
+    PROGRAM_PREFLIGHT_FAILURE_AT.with(std::cell::Cell::get)
+}
+
+#[cfg(test)]
 fn injected_program_preflight_failure() -> bool {
     PROGRAM_PREFLIGHT_FAILURE_AT.with(|failure| match failure.get() {
         Some(0) => {
@@ -2551,14 +2557,57 @@ fn try_reserve_program_evaluation_buffer<T>(
     buffer: &mut Vec<T>,
     capacity: usize,
 ) -> Result<(), ()> {
+    // Нулевая координата не является резервированием и не сдвигает индекс
+    // fault injection; любая непустая координата учитывается и после прогрева.
+    if capacity == 0 {
+        return Ok(());
+    }
+    #[cfg(test)]
+    let fail_this_coordinate = injected_program_preflight_failure();
     if buffer.capacity() >= capacity {
         return Ok(());
     }
     #[cfg(test)]
-    if injected_program_preflight_failure() {
+    if fail_this_coordinate {
         return Err(());
     }
     buffer.try_reserve_exact(capacity).map_err(|_| ())
+}
+
+#[cfg(test)]
+mod program_preflight_reservation_tests {
+    use super::*;
+
+    #[test]
+    fn mixed_warm_and_cold_coordinates_keep_stable_failure_indices() {
+        let mut warm = Vec::<u8>::with_capacity(1);
+        let mut cold = Vec::<u8>::new();
+        let _failure = fail_program_preflight_reservation_for_test(1);
+
+        assert_eq!(try_reserve_program_evaluation_buffer(&mut warm, 1), Ok(()));
+        assert_eq!(try_reserve_program_evaluation_buffer(&mut cold, 1), Err(()));
+    }
+
+    #[test]
+    fn a_warm_coordinate_consumes_but_cannot_realize_an_allocation_failure() {
+        let mut warm = Vec::<u8>::with_capacity(1);
+        let mut cold = Vec::<u8>::new();
+        let _failure = fail_program_preflight_reservation_for_test(0);
+
+        assert_eq!(try_reserve_program_evaluation_buffer(&mut warm, 1), Ok(()));
+        assert_eq!(try_reserve_program_evaluation_buffer(&mut cold, 1), Ok(()));
+        assert!(cold.capacity() >= 1);
+    }
+
+    #[test]
+    fn an_empty_coordinate_does_not_consume_a_failure_index() {
+        let mut empty = Vec::<u8>::new();
+        let mut cold = Vec::<u8>::new();
+        let _failure = fail_program_preflight_reservation_for_test(0);
+
+        assert_eq!(try_reserve_program_evaluation_buffer(&mut empty, 0), Ok(()));
+        assert_eq!(try_reserve_program_evaluation_buffer(&mut cold, 1), Err(()));
+    }
 }
 
 struct ProgramEvaluationArenaV1<Evaluation>
@@ -2592,9 +2641,18 @@ where
     }
 }
 
-/// Move-only половина логического arena-слота Session. Observation backing
-/// несёт ту же identity, поэтому report/output нельзя взять у другой ревизии.
+/// Move-only storage половина логического arena-слота Session. Return-route
+/// остаётся только в observation, поэтому report нельзя привязать к чужому slot.
 struct ProgramEvaluationArenaLeaseV1<Evaluation>
+where
+    Evaluation: ProgramConstraintEvaluatorSetV1,
+{
+    storage: ProgramEvaluationArenaV1<Evaluation>,
+}
+
+/// Единственный return-route появляется при retirement из observation,
+/// которая остаётся SSOT общей arena identity на всём lifetime report.
+struct ProgramEvaluationArenaReturnV1<Evaluation>
 where
     Evaluation: ProgramConstraintEvaluatorSetV1,
 {
@@ -2646,9 +2704,9 @@ where
         let Some(lease) = self.lease.take() else {
             return;
         };
-        if self.destination.is_some() {
-            unreachable!("a guarded Program arena cannot be returned twice");
-        }
+        // Эксклюзивное заимствование указывает ровно на слот, из которого
+        // guard забрал storage. Drop не проверяет этот структурный инвариант
+        // паникой: evaluator unwind иначе мог бы превратиться в abort.
         *self.destination = Some(lease.storage);
     }
 }
@@ -2671,19 +2729,19 @@ where
         let storage = destination.take()?;
         Some(ProgramEvaluationArenaGuardV1 {
             destination,
-            lease: Some(ProgramEvaluationArenaLeaseV1 { slot, storage }),
+            lease: Some(ProgramEvaluationArenaLeaseV1 { storage }),
         })
     }
 
-    fn restore(&mut self, lease: ProgramEvaluationArenaLeaseV1<Evaluation>) {
+    fn restore(&mut self, returned: ProgramEvaluationArenaReturnV1<Evaluation>) {
         let destination = self
             .slots
-            .get_mut(lease.slot.index())
+            .get_mut(returned.slot.index())
             .unwrap_or_else(|| unreachable!("observation minted a bounded arena slot"));
         if destination.is_some() {
             unreachable!("a move-only Program arena cannot be returned twice");
         }
-        *destination = Some(lease.storage);
+        *destination = Some(returned.storage);
     }
 }
 

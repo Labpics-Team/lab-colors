@@ -183,8 +183,10 @@ impl ObservationSchemaMismatchV1 {
     }
 }
 
-/// Канонический непустой набор связанных сценариев. Значения и provenance
-/// лежат в плоских повторно используемых буферах; сценарий владеет диапазонами.
+/// Повторно используемое хранилище связанного набора сценариев. Успешно
+/// выданный `RevisionBoundObservationV1` всегда непуст; `empty()` создаёт
+/// только начальное состояние свободного pool-слота. Значения и provenance
+/// лежат в плоских буферах.
 #[derive(Debug, PartialEq, Eq)]
 struct ObservedScenarioSet {
     cases: Vec<PhysicalScenario>,
@@ -245,13 +247,6 @@ impl CanonicalObservationSchemaV1 {
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
-struct ObservationBackingV1 {
-    arena_slot: ObservationArenaSlotV1,
-    schema: CanonicalObservationSchemaV1,
-    set: ObservedScenarioSet,
-}
-
 /// Автомату Session достаточно ровно трёх observation-lease: Failed удерживает
 /// `cause + previous`, пока полностью материализованный prospective update ждёт
 /// commit. Четвёртый слот был бы недоказанным запасом, а двух недостаточно для
@@ -271,55 +266,92 @@ impl ObservationArenaSlotV1 {
     }
 }
 
-/// Три постоянных backing allocation во владении одной Session.
-///
-/// Pool хранит ровно один `Rc` каждого свободного слота. Raw-head и evidence
-/// клонируют только этот control block, поэтому уникальность без аллокации
-/// доказывает, что освобождённый слот можно перезаписать.
-#[derive(Debug)]
-pub(crate) struct ObservationArenaPoolV1 {
-    slots: [Rc<ObservationBackingV1>; OBSERVATION_ARENA_SLOT_COUNT_V1],
-}
+mod arena {
+    use super::{
+        CanonicalObservationSchemaV1, OBSERVATION_ARENA_SLOT_COUNT_V1, ObservationArenaSlotV1,
+        ObservationError, ObservedScenarioSet,
+    };
+    use std::rc::Rc;
 
-impl ObservationArenaPoolV1 {
-    pub(crate) fn new(schema: &CanonicalObservationSchemaV1) -> Self {
-        Self {
-            slots: ObservationArenaSlotV1::ALL.map(|arena_slot| {
-                Rc::new(ObservationBackingV1 {
-                    arena_slot,
-                    schema: schema.share_for_observation(),
-                    set: ObservedScenarioSet::empty(),
-                })
-            }),
+    /// Приватные поля делают construction backing недоступным даже через alias;
+    /// родительский admission получает только готовый pool-owned handle.
+    #[derive(Debug, PartialEq, Eq)]
+    pub(super) struct ObservationBackingV1 {
+        arena_slot: ObservationArenaSlotV1,
+        schema: CanonicalObservationSchemaV1,
+        set: ObservedScenarioSet,
+    }
+
+    impl ObservationBackingV1 {
+        pub(super) const fn arena_slot(&self) -> ObservationArenaSlotV1 {
+            self.arena_slot
+        }
+
+        pub(super) const fn schema(&self) -> &CanonicalObservationSchemaV1 {
+            &self.schema
+        }
+
+        pub(super) const fn set(&self) -> &ObservedScenarioSet {
+            &self.set
         }
     }
 
-    fn materialize_into(
-        &mut self,
-        materialize: impl FnOnce(&mut ObservedScenarioSet) -> Result<(), ObservationError>,
-    ) -> Result<Rc<ObservationBackingV1>, ObservationError> {
-        let mut free_slot = None;
-        for slot_index in 0..OBSERVATION_ARENA_SLOT_COUNT_V1 {
-            if Rc::get_mut(&mut self.slots[slot_index]).is_some() {
-                free_slot = Some(slot_index);
-                break;
+    /// Три постоянных backing allocation во владении одной Session.
+    ///
+    /// Pool хранит ровно один `Rc` каждого свободного слота. Raw-head и evidence
+    /// клонируют только этот control block, поэтому уникальность без аллокации
+    /// доказывает, что освобождённый слот можно перезаписать.
+    #[derive(Debug)]
+    pub(crate) struct ObservationArenaPoolV1 {
+        slots: [Rc<ObservationBackingV1>; OBSERVATION_ARENA_SLOT_COUNT_V1],
+    }
+
+    impl ObservationArenaPoolV1 {
+        pub(crate) fn new(schema: &CanonicalObservationSchemaV1) -> Self {
+            Self {
+                slots: ObservationArenaSlotV1::ALL.map(|arena_slot| {
+                    Rc::new(ObservationBackingV1 {
+                        arena_slot,
+                        schema: schema.share_for_observation(),
+                        set: ObservedScenarioSet::empty(),
+                    })
+                }),
             }
         }
-        let Some(slot_index) = free_slot else {
-            return Err(ObservationError::InternalInvariant);
-        };
-        let backing =
-            Rc::get_mut(&mut self.slots[slot_index]).ok_or(ObservationError::InternalInvariant)?;
-        materialize(&mut backing.set)?;
-        Ok(Rc::clone(&self.slots[slot_index]))
-    }
 
-    fn shares_schema_backing_with(&self, schema: &CanonicalObservationSchemaV1) -> bool {
-        self.slots
-            .iter()
-            .all(|slot| slot.schema.shares_backing_with(schema))
+        pub(super) fn materialize_into(
+            &mut self,
+            materialize: impl FnOnce(&mut ObservedScenarioSet) -> Result<(), ObservationError>,
+        ) -> Result<Rc<ObservationBackingV1>, ObservationError> {
+            let mut free_slot = None;
+            for slot_index in 0..OBSERVATION_ARENA_SLOT_COUNT_V1 {
+                if Rc::get_mut(&mut self.slots[slot_index]).is_some() {
+                    free_slot = Some(slot_index);
+                    break;
+                }
+            }
+            let Some(slot_index) = free_slot else {
+                return Err(ObservationError::InternalInvariant);
+            };
+            let backing = Rc::get_mut(&mut self.slots[slot_index])
+                .ok_or(ObservationError::InternalInvariant)?;
+            materialize(&mut backing.set)?;
+            Ok(Rc::clone(&self.slots[slot_index]))
+        }
+
+        pub(super) fn shares_schema_backing_with(
+            &self,
+            schema: &CanonicalObservationSchemaV1,
+        ) -> bool {
+            self.slots
+                .iter()
+                .all(|slot| slot.schema.shares_backing_with(schema))
+        }
     }
 }
+
+pub(crate) use arena::ObservationArenaPoolV1;
+use arena::ObservationBackingV1;
 
 /// Sealed observation admitted against the exact schema owned by its sealed
 /// Session plan.
@@ -340,23 +372,23 @@ impl RevisionBoundObservationV1 {
     }
 
     pub(crate) fn arena_slot(&self) -> ObservationArenaSlotV1 {
-        self.backing.arena_slot
+        self.backing.arena_slot()
     }
 
     pub(crate) fn schema(&self) -> &[SurfaceInputPortId] {
-        self.backing.schema.as_slice()
+        self.backing.schema().as_slice()
     }
 
     pub(crate) fn physical_case_count(&self) -> usize {
-        self.backing.set.cases.len()
+        self.backing.set().cases.len()
     }
 
     pub(crate) fn physical_values(&self, case_index: usize) -> Option<&[ColorSignal]> {
-        self.backing.set.values(case_index)
+        self.backing.set().values(case_index)
     }
 
     pub(crate) fn provenance(&self, case_index: usize) -> Option<&[ScenarioId]> {
-        self.backing.set.provenance(case_index)
+        self.backing.set().provenance(case_index)
     }
 
     pub(crate) fn validate_surface_schema(
@@ -384,7 +416,7 @@ impl RevisionBoundObservationV1 {
         &self,
         expected: &CanonicalObservationSchemaV1,
     ) -> bool {
-        self.backing.schema.shares_backing_with(expected)
+        self.backing.schema().shares_backing_with(expected)
     }
 
     pub(crate) fn is_same_binding_as(&self, other: &Self) -> bool {
@@ -398,7 +430,8 @@ impl RevisionBoundObservationV1 {
         schema: &CanonicalObservationSchemaV1,
         scenarios: &[ScenarioInput],
     ) -> bool {
-        &self.backing.schema == schema && canonical_input_matches_set(&self.backing.set, scenarios)
+        self.backing.schema() == schema
+            && canonical_input_matches_set(self.backing.set(), scenarios)
     }
 
     fn has_schema_ordered_input<Source: SchemaOrderedScenarioSourceV1>(
@@ -407,9 +440,9 @@ impl RevisionBoundObservationV1 {
         source: &Source,
         order: &[usize],
     ) -> bool {
-        &self.backing.schema == schema
+        self.backing.schema() == schema
             && schema_ordered_input_matches_set(
-                &self.backing.set,
+                self.backing.set(),
                 source,
                 order,
                 schema.as_slice().len(),
@@ -423,7 +456,7 @@ impl RevisionBoundObservationV1 {
 
     #[cfg(test)]
     pub(crate) fn schema_ptr_for_test(&self) -> *const SurfaceInputPortId {
-        self.backing.schema.backing_ptr_for_test()
+        self.backing.schema().backing_ptr_for_test()
     }
 }
 
@@ -1103,6 +1136,8 @@ fn materialize_scenarios_into(
 
 fn try_reserve_total<T>(storage: &mut Vec<T>, required: usize) -> Result<(), ObservationError> {
     if storage.capacity() < required {
+        // Vec гарантирует `len <= capacity < required`, поэтому дополнительный
+        // объём вычисляется точно и без отдельной недостижимой ветки ошибки.
         storage
             .try_reserve_exact(required - storage.len())
             .map_err(|_| ObservationError::ResourceExhausted)?;

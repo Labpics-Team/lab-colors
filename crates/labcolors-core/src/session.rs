@@ -227,10 +227,10 @@ struct DisplacedSessionState<Verified, Violation> {
 /// Поля намеренно закрыты. Значение служит только линейным retirement-bundle;
 /// owner объявлен последним и потому переживает raw/evidence при уничтожении.
 pub(crate) struct DeferredSessionRetirement<Plan: SessionPlanV1> {
-    _retired_raw_head: Option<SessionObservationHeadV1>,
-    _retired_verified: Option<Plan::Verified>,
-    _retired_violation: Option<Plan::Violation>,
-    _displaced_placeholder: SessionState<Plan::Verified, Plan::Violation>,
+    retired_raw_head: Option<SessionObservationHeadV1>,
+    retired_verified: Option<Plan::Verified>,
+    retired_violation: Option<Plan::Violation>,
+    displaced_placeholder: SessionState<Plan::Verified, Plan::Violation>,
     _owner: Plan::OwnerLease,
 }
 
@@ -240,17 +240,17 @@ impl<Plan: SessionPlanV1> DeferredSessionRetirement<Plan> {
         // Owner остаётся внутри `self` до завершения всех evidence/raw
         // деструкторов. При unwind порядок полей всё равно освобождает exact
         // owner последним и не зависит от порядка локальных переменных.
-        if let Some(verified) = self._retired_verified.take() {
+        if let Some(verified) = self.retired_verified.take() {
             plan.retire_verified(verified);
         }
-        if let Some(violation) = self._retired_violation.take() {
+        if let Some(violation) = self.retired_violation.take() {
             plan.retire_violation(violation);
         }
         drop(mem::replace(
-            &mut self._displaced_placeholder,
+            &mut self.displaced_placeholder,
             SessionState::Waiting,
         ));
-        drop(self._retired_raw_head.take());
+        drop(self.retired_raw_head.take());
     }
 }
 
@@ -338,10 +338,11 @@ impl<'session, Plan: SessionPlanV1> PreparedSessionTransition<'session, Plan> {
         let Self {
             raw_head,
             state,
-            deferred_retirement,
+            deferred_retirement: _,
             mut guard,
         } = self;
-        debug_assert!(deferred_retirement.is_none());
+        // Token получен только после drain и эксклюзивно заимствует retirement
+        // slot до commit, поэтому повторно проверить или заполнить его нельзя.
         let (pending, owner) = guard.take_parts();
         let (view, retirement) = publish_session_transition(raw_head, state, pending, owner);
         retirement.retire_into(guard.plan);
@@ -363,9 +364,7 @@ impl<'session, Plan: SessionPlanV1> PreparedSessionTransition<'session, Plan> {
             deferred_retirement,
             mut guard,
         } = self;
-        if deferred_retirement.is_some() {
-            unreachable!("prepare drains deferred retirement before a new transition");
-        }
+        // Та же эксклюзивная vacant-slot гарантия, что и у обычного commit.
         let (pending, owner) = guard.take_parts();
         let (view, retirement) = publish_session_transition(raw_head, state, pending, owner);
         *deferred_retirement = Some(retirement);
@@ -441,10 +440,10 @@ fn publish_session_transition<'session, Plan: SessionPlanV1>(
         state,
     };
     let retirement = DeferredSessionRetirement {
-        _retired_raw_head: retired_raw_head,
-        _retired_verified: retired_verified,
-        _retired_violation: retired_violation,
-        _displaced_placeholder: displaced_placeholder,
+        retired_raw_head,
+        retired_verified,
+        retired_violation,
+        displaced_placeholder,
         _owner: owner,
     };
     (view, retirement)

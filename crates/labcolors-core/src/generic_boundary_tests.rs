@@ -100,58 +100,25 @@ pub(crate) fn compact_production_syntax(source: &str) -> String {
     compact
 }
 
-pub(crate) fn observation_backing_allocation_is_pool_scoped(source: &str) -> bool {
-    let syntax = compact_production_syntax(source);
-    let Some(pool_start) = syntax.find("implObservationArenaPoolV1{") else {
-        return false;
-    };
-    let Some(relative_end) = syntax[pool_start..].find("structRevisionBoundObservationV1") else {
-        return false;
-    };
-    let pool = &syntax[pool_start..pool_start + relative_end];
-    let Some(constructor_start) = pool.find("pub(crate)fnnew(") else {
-        return false;
-    };
-    let Some(constructor_end) = pool[constructor_start..].find("fnmaterialize_into(") else {
-        return false;
-    };
-    let constructor = &pool[constructor_start..constructor_start + constructor_end];
-
-    // Единственный production-конструктор backing обязан находиться внутри
-    // `ObservationArenaPoolV1::new`; первое глобальное совпадение — само
-    // объявление структуры.
-    syntax.matches("ObservationBackingV1{").count() == 2
-        && pool.matches("ObservationBackingV1{").count() == 1
-        && constructor.matches("ObservationBackingV1{").count() == 1
-        && constructor.contains("Rc::new(ObservationBackingV1{")
-}
-
 #[test]
-fn observation_backing_allocation_gate_ignores_prose_and_rejects_out_of_scope_code() {
-    let comment_only = concat!(
-        "struct ObservationBackingV1 {}\n",
-        "struct ObservationArenaPoolV1;\n",
-        "impl ObservationArenaPoolV1 {\n",
-        "    pub(crate) fn new() {}\n",
-        "    fn materialize_into() {}\n",
-        "}\n",
-        "// Rc::new(ObservationBackingV1 {})\n",
-        "const FAKE: &str = \"Rc::new(ObservationBackingV1 {})\";\n",
-        "struct RevisionBoundObservationV1;\n",
+fn program_arena_return_route_has_one_slot_authority() {
+    let lease = source_scope(
+        PROGRAM_SESSION_SOURCE,
+        "struct ProgramEvaluationArenaLeaseV1<Evaluation>",
+        "/// Единственный return-route появляется при retirement",
     );
-    assert!(!observation_backing_allocation_is_pool_scoped(comment_only));
+    assert!(
+        !lease.contains("slot: ObservationArenaSlotV1"),
+        "an evaluator lease must not duplicate the observation-owned arena route",
+    );
 
-    let out_of_scope = concat!(
-        "struct ObservationBackingV1 {}\n",
-        "struct ObservationArenaPoolV1;\n",
-        "impl ObservationArenaPoolV1 {\n",
-        "    pub(crate) fn new() { Rc::new(ObservationBackingV1 {}); }\n",
-        "    fn materialize_into() {}\n",
-        "}\n",
-        "fn hot_path() { Rc::<ObservationBackingV1>::new(ObservationBackingV1 {}); }\n",
-        "struct RevisionBoundObservationV1;\n",
+    let report = source_scope(
+        PROGRAM_SESSION_SOURCE,
+        "impl<Evaluation> ProgramReportV1<Evaluation>",
+        "/// Один encoded Paint из Program",
     );
-    assert!(!observation_backing_allocation_is_pool_scoped(out_of_scope));
+    assert!(report.contains("let slot = observation.arena_slot();"));
+    assert!(report.contains("ProgramEvaluationArenaReturnV1 {"));
 }
 
 #[test]
@@ -661,10 +628,10 @@ fn staged_session_is_evidence_only_and_retired_operation_authority_cannot_return
         .find("_owner: Plan::OwnerLease,")
         .expect("retirement must retain the exact owner");
     for retired in [
-        "_retired_raw_head: Option<SessionObservationHeadV1>,",
-        "_retired_verified: Option<Plan::Verified>,",
-        "_retired_violation: Option<Plan::Violation>,",
-        "_displaced_placeholder: SessionState<Plan::Verified, Plan::Violation>,",
+        "retired_raw_head: Option<SessionObservationHeadV1>,",
+        "retired_verified: Option<Plan::Verified>,",
+        "retired_violation: Option<Plan::Violation>,",
+        "displaced_placeholder: SessionState<Plan::Verified, Plan::Violation>,",
     ] {
         assert!(
             deferred_retirement
@@ -682,7 +649,7 @@ fn staged_session_is_evidence_only_and_retired_operation_authority_cannot_return
     for required in [
         "plan.retire_verified(verified);",
         "plan.retire_violation(violation);",
-        "drop(self._retired_raw_head.take());",
+        "drop(self.retired_raw_head.take());",
     ] {
         assert!(
             retirement_impl.contains(required),
@@ -772,8 +739,8 @@ fn shared_observation_ssot_has_one_backing_without_lifecycle_or_adapter_facades(
 
     let observation_backing = source_scope(
         OBSERVATION_SOURCE,
-        "struct ObservationBackingV1 {",
-        "pub(crate) const OBSERVATION_ARENA_SLOT_COUNT_V1",
+        "pub(super) struct ObservationBackingV1 {",
+        "impl ObservationBackingV1",
     );
     for backing_field in [
         "arena_slot: ObservationArenaSlotV1,",
@@ -789,7 +756,7 @@ fn shared_observation_ssot_has_one_backing_without_lifecycle_or_adapter_facades(
     let observation_pool = source_scope(
         OBSERVATION_SOURCE,
         "pub(crate) struct ObservationArenaPoolV1 {",
-        "/// Sealed observation admitted",
+        "use arena::ObservationBackingV1;",
     );
     assert_eq!(
         observation_pool
@@ -810,8 +777,10 @@ fn shared_observation_ssot_has_one_backing_without_lifecycle_or_adapter_facades(
         );
     }
     assert!(
-        observation_backing_allocation_is_pool_scoped(OBSERVATION_SOURCE),
-        "observation backing allocation must exist only in the persistent pool constructor",
+        OBSERVATION_SOURCE.contains("mod arena {")
+            && OBSERVATION_SOURCE.contains("use arena::ObservationBackingV1;")
+            && OBSERVATION_SOURCE.contains("pub(crate) use arena::ObservationArenaPoolV1;"),
+        "compiler privacy must isolate backing construction inside the arena module",
     );
     assert_eq!(
         normalized_source_scope(

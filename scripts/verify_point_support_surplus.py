@@ -58,7 +58,7 @@ SITE_ID = "point-support-retained-reference-surplus-v1"
 SOURCE_BINDING_LAW = "point-support-rust-whole-file-semantic-cone-v2"
 SOURCE_BINDING_DOMAIN = b"labcolors.point-support.rust-whole-file-semantic-cone.v2"
 EXPECTED_SOURCE_CAPSULE_SHA256 = (
-    "62a6bce45dac3a38379db50453a459ff21cb74857a87fae84b10effd24e353f6"
+    "bb1536ae707b565a38621eda9974496a39090c1ab637d6f87e530939b8ac8f9d"
 )
 EXPECTED_Q55_PROOF_SHA256 = (
     "ac59cf89503170c789223b91d775213a19d4e571ef930f2ea609fcd51b14defd"
@@ -198,7 +198,7 @@ def verify_source_binding() -> tuple[str, int]:
         (POINT_SOURCE, b"    if !observation.shares_schema_backing_with(&plan.surface_schema) {\n", b"    if observation.shares_schema_backing_with(&plan.surface_schema) {\n"),
         (POINT_SOURCE, b"        _permit: SessionObservationBindingPermitV1,\n", b"        _permit: (),\n"),
         (POINT_SOURCE, b"use crate::wcag22::{Wcag22CriterionV1, Wcag22MeasurementV1, measure_wcag22_srgb8};", b"use crate::wcag22::{Wcag22CriterionV1, Wcag22MeasurementV1, measure_wcag22_srgb8 as canonical_measure_wcag22_srgb8};\nfn measure_wcag22_srgb8(foreground: [u8; 3], background: [u8; 3]) -> Wcag22MeasurementV1 { canonical_measure_wcag22_srgb8(background, foreground) }"),
-        (OBSERVATION_SOURCE, b"        self.backing.set.values(case_index)\n", b"        None\n"),
+        (OBSERVATION_SOURCE, b"        self.backing.set().values(case_index)\n", b"        None\n"),
         (OBSERVATION_SOURCE, b"            .extend(bindings.iter().map(|binding| binding.value));\n", b"            .extend(bindings.iter().map(|_| ColorSignal::from_srgb8(Srgb8::new([0, 0, 0]))));\n"),
         (OBSERVATION_SOURCE, b"        Rc::ptr_eq(&self.0, &other.0)\n", b"        self == other\n"),
         (OBSERVATION_SOURCE, b"        Self(Rc::clone(&self.0))\n", b"        Self(Rc::from(self.as_slice()))\n"),

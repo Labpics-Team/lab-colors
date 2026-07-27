@@ -24,7 +24,7 @@ use crate::program_session::{
     ProgramConstraintEvaluatorSetV1, ProgramConstraintSubjectV1, ProgramSessionEvaluationError,
     ReportModeV1, Source, SourceId, Surface, Target, TargetCandidateChoiceV1, TargetCandidateId,
     TargetCandidateV1, TargetDomainV1, TargetId, checked_program_evaluation_cell_counts_for_test,
-    fail_program_preflight_reservation_for_test,
+    fail_program_preflight_reservation_for_test, program_preflight_failure_remaining_for_test,
 };
 use crate::session::{SessionState, SessionUpdateError};
 use crate::session_tests::CommitSessionUpdateForTest as _;
@@ -1738,6 +1738,33 @@ fn every_fallible_fixed_preflight_reservation_precedes_evaluator_work() {
         assert!(calls.calls().is_empty());
         assert!(matches!(session.state(), SessionState::Waiting));
     }
+}
+
+#[test]
+fn warmed_program_preflight_still_visits_every_nonempty_coordinate() {
+    const NONEMPTY_COORDINATE_COUNT: usize = 2;
+
+    let evaluator = CountingProgramWcag22Srgb8V1::default();
+    let calls = evaluator.clone();
+    let compiled = counting_fixed_program(evaluator);
+    let mut session = compiled.instantiate(STREAM).unwrap();
+    assert!(matches!(
+        session.commit(update(1, 0x00)).unwrap(),
+        SessionState::Ready { .. }
+    ));
+    assert!(matches!(
+        session.commit(update(2, 0x00)).unwrap(),
+        SessionState::Ready { .. }
+    ));
+    let calls_before = calls.calls().len();
+
+    let _failure = fail_program_preflight_reservation_for_test(NONEMPTY_COORDINATE_COUNT);
+    assert!(matches!(
+        session.commit(update(3, 0x00)).unwrap(),
+        SessionState::Ready { .. }
+    ));
+    assert_eq!(program_preflight_failure_remaining_for_test(), Some(0));
+    assert!(calls.calls().len() > calls_before);
 }
 
 fn counting_fixed_program(
