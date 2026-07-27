@@ -1857,6 +1857,11 @@ impl<'owner, 'session> BorrowScopeV1<'owner, 'session> {
     }
 
     const fn prepared() -> Self {
+        // Core transition already owns the sole mutable Session borrow, so
+        // accepting owner/session here would duplicate or conflict with it.
+        // The containing PreparedSessionTransitionV1 stores that transition
+        // and the exact Owner reference; its type ties this marker to both
+        // concrete `'owner` and `'session` lifetimes.
         Self {
             _scope: PhantomData,
         }
@@ -1869,6 +1874,7 @@ impl<'owner, 'session> BorrowScopeV1<'owner, 'session> {
 /// head, lifecycle и previous evidence; переинициализированный scratch не
 /// откатывается и не является наблюдаемым состоянием Session. [`Self::commit`]
 /// не выполняет fallible work и не утверждает запись в sink.
+#[must_use = "commit the prepared transition or drop it intentionally"]
 pub(crate) struct PreparedSessionTransitionV1<'owner, 'session> {
     owner: &'owner OwnerV1,
     transition: CorePreparedSessionTransitionV1<'session>,
@@ -2093,6 +2099,15 @@ impl<'a> CertificateV1<'a> {
     #[cfg(test)]
     pub(crate) fn observation_backing_ptr_for_test(self) -> *const () {
         self.observation().inner.backing_ptr_for_test()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn identity_for_test(self) -> (*const (), *const ()) {
+        let certificate: *const () = match self {
+            Self::Verified(value) => core::ptr::from_ref(value.inner).cast(),
+            Self::Conflict(value) => core::ptr::from_ref(value.inner).cast(),
+        };
+        (certificate, self.observation_backing_ptr_for_test())
     }
 }
 

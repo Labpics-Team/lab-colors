@@ -20,10 +20,10 @@ use crate::observation::{
 };
 use crate::program::{
     AccessErrorV1, AssessmentV1, CertificateV1, ConflictCellV1, ConstraintModeV1,
-    ConstraintSubjectV1, DeclaredSrgb8CleanSetViolationKindV1, ExactSrgb8EvidenceV1,
-    ObservationHeadV1, ObservationV1, OperationV1, OutputSlotIdV1, OwnerV1, PhysicalPointV1,
-    PreparedSessionTransitionV1, ProjectionV1, ScenarioV1, SessionV1, SignalV1, StateKindV1,
-    SurroundV1, UpdateErrorKindV1, UpdateErrorV1, UpdateV1, VerdictV1, VerifiedCellV1,
+    ConstraintSubjectV1, DeclaredSrgb8CleanSetViolationKindV1, EvidenceViewV1,
+    ExactSrgb8EvidenceV1, ObservationHeadV1, ObservationV1, OperationV1, OutputSlotIdV1, OwnerV1,
+    PhysicalPointV1, PreparedSessionTransitionV1, ProjectionV1, ScenarioV1, SessionV1, SignalV1,
+    StateKindV1, SurroundV1, UpdateErrorKindV1, UpdateErrorV1, UpdateV1, VerdictV1, VerifiedCellV1,
     Wcag22Srgb8EvidenceV1,
 };
 use crate::program_boundary_tests::CommitProgramUpdateForTest as _;
@@ -2628,6 +2628,58 @@ fn assert_projection_matches_model(
     Ok(())
 }
 
+fn historical_evidence_identities(evidence: EvidenceViewV1<'_>) -> Vec<(*const (), *const ())> {
+    evidence
+        .certificates()
+        .map(CertificateV1::identity_for_test)
+        .collect()
+}
+
+#[test]
+fn historical_evidence_identity_probe_rejects_recreated_equal_certificates() {
+    let owner = OwnerV1::from_compiled(finite_program_with_outputs(
+        [[0x80; 3], [0; 3]],
+        vec![
+            OutputBinding::new(SECOND_OUTPUT, PAINT),
+            OutputBinding::new(OUTPUT, PAINT),
+        ],
+    ));
+    let mut first = owner.instantiate(STREAM.value()).unwrap();
+    let mut recreated = owner.instantiate(STREAM.value()).unwrap();
+
+    let first_projection =
+        apply_modeled_payload(&owner, &mut first, 1, ModeledPayload::ReadyOnWhite).unwrap();
+    let recreated_projection =
+        apply_modeled_payload(&owner, &mut recreated, 1, ModeledPayload::ReadyOnWhite).unwrap();
+    assert_projection_matches_model(
+        first_projection,
+        ModeledSession {
+            head: Some((1, ModeledPayload::ReadyOnWhite)),
+            lifecycle: ModeledLifecycle::Ready(ModeledVerified {
+                revision: 1,
+                source: [0; 3],
+            }),
+        },
+    )
+    .unwrap();
+    assert_projection_matches_model(
+        recreated_projection,
+        ModeledSession {
+            head: Some((1, ModeledPayload::ReadyOnWhite)),
+            lifecycle: ModeledLifecycle::Ready(ModeledVerified {
+                revision: 1,
+                source: [0; 3],
+            }),
+        },
+    )
+    .unwrap();
+    assert_ne!(
+        historical_evidence_identities(first_projection.evidence()),
+        historical_evidence_identities(recreated_projection.evidence()),
+        "the probe must reject value-equivalent evidence recreated in another Session",
+    );
+}
+
 fn exercise_modeled_action(
     owner: &OwnerV1,
     session: &mut SessionV1,
@@ -2654,9 +2706,15 @@ fn exercise_modeled_action(
         }
         SessionAction::PrepareDrop(payload) => {
             let revision = model.next_revision();
+            let evidence_before = historical_evidence_identities(session.evidence());
             let prepared = prepare_modeled_payload(owner, session, revision, payload)
                 .map_err(|error| TestCaseError::fail(format!("fresh prepare failed: {error:?}")))?;
             drop(prepared);
+            prop_assert_eq!(
+                historical_evidence_identities(session.evidence()),
+                evidence_before,
+                "PrepareDrop must preserve exact certificate and observation backing identities",
+            );
             !matches!(payload, ModeledPayload::Unknown(_))
         }
         SessionAction::Replay => {

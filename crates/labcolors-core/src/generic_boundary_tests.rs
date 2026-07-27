@@ -538,6 +538,28 @@ fn staged_session_keeps_evidence_but_owner_alone_grants_updates_and_operations()
         );
     }
 
+    let concrete_prepared = source_scope(
+        PROGRAM_SOURCE,
+        "/// Полностью вычисленный, но ещё не опубликованный переход одной Session.",
+        "impl<'owner, 'session> PreparedSessionTransitionV1<'owner, 'session>",
+    );
+    let concrete_must_use =
+        "#[must_use = \"commit the prepared transition or drop it intentionally\"]";
+    assert_eq!(
+        concrete_prepared.matches(concrete_must_use).count(),
+        1,
+        "the Program wrapper must carry the same deliberate commit-or-drop diagnostic as Core",
+    );
+    assert!(
+        concrete_prepared
+            .find(concrete_must_use)
+            .expect("prepared Program transition must be must_use")
+            < concrete_prepared
+                .find("pub(crate) struct PreparedSessionTransitionV1")
+                .expect("prepared Program transition declaration must remain present"),
+        "must_use must annotate the linear transition itself",
+    );
+
     let concrete_commit = source_scope(
         PROGRAM_SOURCE,
         "impl<'owner, 'session> PreparedSessionTransitionV1<'owner, 'session>",

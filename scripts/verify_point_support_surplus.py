@@ -58,7 +58,7 @@ SITE_ID = "point-support-retained-reference-surplus-v1"
 SOURCE_BINDING_LAW = "point-support-rust-whole-file-semantic-cone-v2"
 SOURCE_BINDING_DOMAIN = b"labcolors.point-support.rust-whole-file-semantic-cone.v2"
 EXPECTED_SOURCE_CAPSULE_SHA256 = (
-    "cb3a375a5558c263bc611c814aa33cf45a0ad4c5652582275de3f70f8e7d09dc"
+    "3cc4aad62ebd85681e4cef6a15fb52ddf4fae9af06b8a35715d3fe6cf9fec173"
 )
 EXPECTED_Q55_PROOF_SHA256 = (
     "ac59cf89503170c789223b91d775213a19d4e571ef930f2ea609fcd51b14defd"
@@ -208,8 +208,8 @@ def verify_source_binding() -> tuple[str, int]:
         (OBSERVATION_SOURCE, b"            && Rc::ptr_eq(&self.backing, &other.backing)\n", b"            && self.backing == other.backing\n"),
         (LCS_OCCURRENCE_SOURCE, b"    pub(crate) const fn srgb8(self) -> Srgb8 {\n        self.srgb8\n    }", b"    pub(crate) const fn srgb8(self) -> Srgb8 {\n        Srgb8::new([0, 0, 0])\n    }"),
         (SESSION_SOURCE, b"            Self::Observed(observation) => ObservationHeadViewV1::Observed(observation),\n", b"            Self::Observed(_) => ObservationHeadViewV1::Empty,\n"),
-        (SESSION_SOURCE, b"            let next_raw_head = SessionObservationHeadV1::Observed(observation.clone());\n", b"            let next_raw_head = SessionObservationHeadV1::Empty;\n"),
-        (SESSION_SOURCE, b"            *raw_head = next_raw_head;\n", b"            *raw_head = SessionObservationHeadV1::Empty;\n"),
+        (SESSION_SOURCE, b"            let (raw_head, observation) = prepared.into_parts();\n            let raw_observation = observation.clone();\n", b"            let (raw_head, observation) = prepared.into_parts();\n            *raw_head = SessionObservationHeadV1::Observed(observation.clone());\n            let raw_observation = observation.clone();\n"),
+        (SESSION_SOURCE, b"                *raw_head = SessionObservationHeadV1::Observed(raw_observation);\n", b"                *raw_head = SessionObservationHeadV1::Empty;\n"),
         (SESSION_SOURCE, b"                Some(previous) => SessionState::Stale { previous },", b"                Some(_) => SessionState::Waiting,"),
         (SESSION_SOURCE, b"                    SessionObservationBindingPermitV1::mint(),", b"                    SessionObservationBindingPermitV1::for_test(),"),
         (SESSION_SOURCE, b"                SessionDecision::Verified(current) => SessionState::Ready { current },", b"                SessionDecision::Verified(current) => SessionState::Stale { previous: current },"),
