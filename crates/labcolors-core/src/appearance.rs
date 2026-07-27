@@ -1367,6 +1367,16 @@ pub(crate) enum ExactFinalOwnedPointDomainV1 {
     Singleton { visible: [u8; 3] },
 }
 
+impl ExactFinalOwnedPointDomainV1 {
+    fn from_roots(normal: [u8; 3], counterfactual: [u8; 3]) -> Self {
+        if normal == counterfactual {
+            Self::Empty
+        } else {
+            Self::Singleton { visible: normal }
+        }
+    }
+}
+
 /// Один точный шаг версионированной интервенции отсутствия.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PointOccurrenceAbsenceStepV1 {
@@ -1402,6 +1412,44 @@ impl PointOccurrenceAbsenceStepV1 {
     }
 }
 
+/// Нейтральная сводка непустой истории пересчёта. В отличие от Replay она не
+/// выдаёт право на происхождение шагов: authority остаётся у вычисления либо
+/// у владеющего ими revision-bound отчёта.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct PointOccurrenceAbsenceSummaryV1 {
+    first: PointOccurrenceAbsenceStepV1,
+    last: PointOccurrenceAbsenceStepV1,
+}
+
+impl PointOccurrenceAbsenceSummaryV1 {
+    pub(crate) fn from_nonempty_steps(steps: &[PointOccurrenceAbsenceStepV1]) -> Option<Self> {
+        Some(Self {
+            first: steps.first().copied()?,
+            last: steps.last().copied()?,
+        })
+    }
+
+    pub(crate) const fn target(self) -> OccurrenceId {
+        self.first.occurrence()
+    }
+
+    pub(crate) const fn root(self) -> OccurrenceId {
+        self.last.occurrence()
+    }
+
+    pub(crate) const fn normal_root(self) -> [u8; 3] {
+        self.last.normal().output_rgb()
+    }
+
+    pub(crate) const fn counterfactual_root(self) -> [u8; 3] {
+        self.last.counterfactual_output()
+    }
+
+    pub(crate) fn domain(self) -> ExactFinalOwnedPointDomainV1 {
+        ExactFinalOwnedPointDomainV1::from_roots(self.normal_root(), self.counterfactual_root())
+    }
+}
+
 /// Заимствованный результат одного точного контрфактического пересчёта.
 ///
 /// Результат связывает версию интервенции и профили композиции шагов, но сам по
@@ -1416,26 +1464,17 @@ pub(crate) struct PointOccurrenceAbsenceReplayV1<'steps> {
 }
 
 impl PointOccurrenceAbsenceReplayV1<'_> {
-    fn first(&self) -> PointOccurrenceAbsenceStepV1 {
-        self.steps
-            .first()
-            .copied()
-            .unwrap_or_else(|| unreachable!("созданный компилятором пересчёт непуст"))
-    }
-
-    fn last(&self) -> PointOccurrenceAbsenceStepV1 {
-        self.steps
-            .last()
-            .copied()
+    fn summary(&self) -> PointOccurrenceAbsenceSummaryV1 {
+        PointOccurrenceAbsenceSummaryV1::from_nonempty_steps(self.steps)
             .unwrap_or_else(|| unreachable!("созданный компилятором пересчёт непуст"))
     }
 
     pub(crate) fn target(&self) -> OccurrenceId {
-        self.first().occurrence()
+        self.summary().target()
     }
 
     pub(crate) fn root(&self) -> OccurrenceId {
-        self.last().occurrence()
+        self.summary().root()
     }
 
     pub(crate) const fn release(&self) -> PointOccurrenceAbsenceReleaseV1 {
@@ -1443,20 +1482,15 @@ impl PointOccurrenceAbsenceReplayV1<'_> {
     }
 
     pub(crate) fn normal_root(&self) -> [u8; 3] {
-        self.last().normal().output_rgb()
+        self.summary().normal_root()
     }
 
     pub(crate) fn counterfactual_root(&self) -> [u8; 3] {
-        self.last().counterfactual_output()
+        self.summary().counterfactual_root()
     }
 
     pub(crate) fn domain(&self) -> ExactFinalOwnedPointDomainV1 {
-        let normal = self.normal_root();
-        if normal == self.counterfactual_root() {
-            ExactFinalOwnedPointDomainV1::Empty
-        } else {
-            ExactFinalOwnedPointDomainV1::Singleton { visible: normal }
-        }
+        self.summary().domain()
     }
 
     pub(crate) const fn steps(&self) -> &[PointOccurrenceAbsenceStepV1] {

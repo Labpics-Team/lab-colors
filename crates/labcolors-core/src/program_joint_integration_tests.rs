@@ -23,7 +23,7 @@ use crate::program_session::{
     OutputBinding, OutputSlotId, Paint, Program, ProgramCompileError,
     ProgramConstraintEvaluatorSetV1, ProgramSessionEvaluationError, ReportModeV1, Source, SourceId,
     Surface, Target, TargetCandidateChoiceV1, TargetCandidateId, TargetCandidateV1, TargetDomainV1,
-    TargetId, checked_program_evaluation_cell_counts_for_test,
+    TargetId, checked_program_evaluation_cardinality_for_test,
     fail_program_preflight_reservation_for_test,
 };
 use crate::session::{SessionState, SessionUpdateError};
@@ -1470,22 +1470,22 @@ fn successful_search_allocations_do_not_scale_with_rejected_states() {
 #[test]
 fn evaluation_cell_cardinality_checks_both_products_without_a_numeric_cap() {
     assert_eq!(
-        checked_program_evaluation_cell_counts_for_test(3, 2, 4),
+        checked_program_evaluation_cardinality_for_test(3, 2, 4),
         Some((6, 24))
     );
     assert_eq!(
-        checked_program_evaluation_cell_counts_for_test(usize::MAX, 2, 1),
+        checked_program_evaluation_cardinality_for_test(usize::MAX, 2, 1),
         None
     );
     assert_eq!(
-        checked_program_evaluation_cell_counts_for_test(usize::MAX, 1, 2),
+        checked_program_evaluation_cardinality_for_test(usize::MAX, 1, 2),
         None
     );
 }
 
 #[test]
 fn every_fallible_joint_preflight_reservation_precedes_evaluator_work() {
-    for reservation_index in 0..3 {
+    for reservation_index in 0..=2 {
         let evaluator = CountingProgramWcag22Srgb8V1::default();
         let calls = evaluator.clone();
         let compiled = Program::new(
@@ -1530,12 +1530,18 @@ fn every_fallible_joint_preflight_reservation_precedes_evaluator_work() {
         .unwrap();
         let mut session = compiled.instantiate(STREAM).unwrap();
 
-        let error = {
+        let result = {
             let _failure = fail_program_preflight_reservation_for_test(reservation_index);
-            match session.update(update(1, 0x00)) {
-                Ok(_) => panic!("injected preflight failure must abort the update"),
-                Err(error) => error,
-            }
+            session.update(update(1, 0x00))
+        };
+        if reservation_index == 2 {
+            assert!(result.is_ok(), "zero-sized causal arenas must not reserve");
+            assert!(!calls.calls().is_empty());
+            continue;
+        }
+        let error = match result {
+            Ok(_) => panic!("injected preflight failure must abort the update"),
+            Err(error) => error,
         };
         assert_eq!(
             error,
@@ -1548,7 +1554,7 @@ fn every_fallible_joint_preflight_reservation_precedes_evaluator_work() {
 
 #[test]
 fn every_fallible_fixed_preflight_reservation_precedes_evaluator_work() {
-    for reservation_index in 0..2 {
+    for reservation_index in 0..=2 {
         let evaluator = CountingProgramWcag22Srgb8V1::default();
         let calls = evaluator.clone();
         let compiled = Program::new(
@@ -1586,12 +1592,18 @@ fn every_fallible_fixed_preflight_reservation_precedes_evaluator_work() {
         .unwrap();
         let mut session = compiled.instantiate(STREAM).unwrap();
 
-        let error = {
+        let result = {
             let _failure = fail_program_preflight_reservation_for_test(reservation_index);
-            match session.update(update(1, 0x00)) {
-                Ok(_) => panic!("injected fixed preflight failure must abort the update"),
-                Err(error) => error,
-            }
+            session.update(update(1, 0x00))
+        };
+        if reservation_index == 2 {
+            assert!(result.is_ok(), "zero-sized causal arenas must not reserve");
+            assert!(!calls.calls().is_empty());
+            continue;
+        }
+        let error = match result {
+            Ok(_) => panic!("injected fixed preflight failure must abort the update"),
+            Err(error) => error,
         };
         assert_eq!(
             error,
