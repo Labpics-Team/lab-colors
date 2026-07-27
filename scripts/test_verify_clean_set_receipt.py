@@ -12,6 +12,9 @@ import tempfile
 import unittest
 from dataclasses import dataclass
 from pathlib import Path
+from unittest import mock
+
+import verify_clean_set_receipt as verifier
 
 from verify_clean_set_receipt import (
     CODEC_PATH,
@@ -47,11 +50,21 @@ def _sha256(data: bytes) -> str:
 
 
 def _decode_raw(codec: bytes) -> bytes:
+    header_bytes = len(b"LPCC\x01\x01\x00\x00")
+    index_entries = 256 + 1
+    index_entry_bytes = 2
+    body_offset = header_bytes + index_entries * index_entry_bytes
     offsets = [
-        int.from_bytes(codec[8 + index * 2 : 10 + index * 2], "big")
-        for index in range(257)
+        int.from_bytes(
+            codec[
+                header_bytes + index * index_entry_bytes :
+                header_bytes + (index + 1) * index_entry_bytes
+            ],
+            "big",
+        )
+        for index in range(index_entries)
     ]
-    body = codec[522:]
+    body = codec[body_offset:]
     columns: list[list[tuple[int, int, int]]] = []
     for green in range(256):
         columns.append(
@@ -461,16 +474,43 @@ class ReceiptHostileTests(unittest.TestCase):
             with self.assertRaisesRegex(VerificationError, "product receipt pin"):
                 verify_product_receipt(fixture.product, policy=fixture.policy)
 
-    def test_product_pin_rejects_noncanonical_name_or_digest(self) -> None:
+    def test_product_pin_rejects_noncanonical_name(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = _fixture(Path(temporary))
+            digest = fixture.write_receipt()
+            _write(
+                fixture.product / RECEIPT_PIN_PATH,
+                f"{digest}  other.json\n".encode("ascii"),
+            )
+            with self.assertRaisesRegex(VerificationError, "receipt-v1.json"):
+                verify_product_receipt(fixture.product, policy=fixture.policy)
+
+    def test_product_pin_rejects_noncanonical_digest(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             fixture = _fixture(Path(temporary))
             fixture.write_receipt()
             _write(
                 fixture.product / RECEIPT_PIN_PATH,
-                b"A" * 64 + b"  other.json\n",
+                b"A" * 64 + b"  receipt-v1.json\n",
             )
-            with self.assertRaisesRegex(VerificationError, "receipt-v1.json"):
+            with self.assertRaisesRegex(VerificationError, "lower-case SHA-256"):
                 verify_product_receipt(fixture.product, policy=fixture.policy)
+
+    def test_git_timeout_is_a_verification_error_when_output_is_absent(self) -> None:
+        timeout = subprocess.TimeoutExpired(["git"], 1, output=None)
+        with mock.patch.object(
+            verifier.subprocess,
+            "check_output",
+            side_effect=timeout,
+        ) as check_output:
+            with self.assertRaisesRegex(VerificationError, "research commit Git lookup failed"):
+                verifier._git(Path("."), ["cat-file", "-t", "0" * 40], "research commit")
+
+        self.assertEqual(
+            check_output.call_args.kwargs.get("timeout"),
+            verifier.GIT_LOOKUP_TIMEOUT_SECONDS,
+        )
+        self.assertGreater(verifier.GIT_LOOKUP_TIMEOUT_SECONDS, 0)
 
     def test_numeric_zero_cannot_impersonate_false(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -641,6 +681,39 @@ class CorePackageLicenseTests(unittest.TestCase):
             )
             with self.assertRaisesRegex(VerificationError, "package license"):
                 verify_core_package(source, package)
+
+    def test_array_table_cannot_supply_the_package_license(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            source, package = self._package_fixture(Path(temporary))
+            (package / "Cargo.toml").write_text(
+                (
+                    '[package]\nname = "labcolors-core"\n\n'
+                    '[[bin]]\nname = "fixture"\npath = "src/main.rs"\n'
+                    f'license = "{CORE_LICENSE_EXPRESSION}"\n'
+                ),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(VerificationError, "package license"):
+                verify_core_package(source, package)
+
+    def test_commented_table_headers_cannot_supply_the_package_license(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            source, package = self._package_fixture(Path(temporary))
+            for table_header in (
+                "[[bin]] # executable target",
+                "[dependencies] # package table has ended",
+            ):
+                with self.subTest(table_header=table_header):
+                    (package / "Cargo.toml").write_text(
+                        (
+                            '[package]\nname = "labcolors-core"\n\n'
+                            f"{table_header}\n"
+                            f'license = "{CORE_LICENSE_EXPRESSION}"\n'
+                        ),
+                        encoding="utf-8",
+                    )
+                    with self.assertRaisesRegex(VerificationError, "package license"):
+                        verify_core_package(source, package)
 
     def test_missing_cc_text_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

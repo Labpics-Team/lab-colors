@@ -41,11 +41,22 @@ DATA_LICENSE_EXPRESSION = "CC-BY-4.0 AND CC-BY-SA-4.0"
 CODEC_SHA256 = "aa6aa7c0b630437f1c1ba8c2ceafb0dadf6551c42331559504076a6cd44e6331"
 RAW_SHA256 = "97bcc9f793adb7f13bd70c89e9788c8ab61baf8c77e9f8cd80335ad767d71ae2"
 CODEC_HEADER = b"LPCC\x01\x01\x00\x00"
+# LPCC v1 связывает 256 green-колонок конечным смещением и трёхбайтовыми
+# записями; эти величины меняются только вместе с версией формата в заголовке.
+CODEC_INDEX_ENTRIES = 256 + 1
+CODEC_INDEX_ENTRY_BYTES = 2
+CODEC_RECORD_BYTES = 3
+CODEC_BODY_OFFSET = len(CODEC_HEADER) + CODEC_INDEX_ENTRIES * CODEC_INDEX_ENTRY_BYTES
 CODEC_BYTES = 11_370
 CODEC_RECORDS = 3_616
 RAW_BYTES = 131_072
 DOMAIN_POINTS = 16_777_216
 ACCEPTED_POINTS = 8_232_849
+
+# Здесь Git читает только локальные неизменяемые объекты. 30 секунд — принятый
+# операционный предел быстрого отказа, а не замер скорости; менять его следует
+# по замеру самого медленного поддерживаемого репозитория и runner с явным запасом.
+GIT_LOOKUP_TIMEOUT_SECONDS = 30
 
 EXCLUDED_CLAIMS = (
     "ideal algebraic IEC 61966-2-1 transfer semantics",
@@ -354,22 +365,28 @@ def _verify_excluded_claims(value: Any, label: str) -> None:
 
 
 def _decode_codec(codec: bytes, expected_records: int = CODEC_RECORDS) -> tuple[bytes, int]:
-    expected_bytes = 8 + 257 * 2 + expected_records * 3
+    expected_bytes = CODEC_BODY_OFFSET + expected_records * CODEC_RECORD_BYTES
     if len(codec) != expected_bytes:
         _fail(f"runtime codec has {len(codec)} bytes, expected {expected_bytes}")
-    if codec[:8] != CODEC_HEADER:
+    if codec[: len(CODEC_HEADER)] != CODEC_HEADER:
         _fail("runtime codec header differs from LPCC v1")
 
     offsets = [
-        int.from_bytes(codec[8 + index * 2 : 10 + index * 2], "big")
-        for index in range(257)
+        int.from_bytes(
+            codec[
+                len(CODEC_HEADER) + index * CODEC_INDEX_ENTRY_BYTES :
+                len(CODEC_HEADER) + (index + 1) * CODEC_INDEX_ENTRY_BYTES
+            ],
+            "big",
+        )
+        for index in range(CODEC_INDEX_ENTRIES)
     ]
     if offsets[0] != 0 or offsets[-1] != expected_records:
         _fail("runtime codec offsets do not bind the complete record body")
     if any(left >= right for left, right in zip(offsets, offsets[1:])):
         _fail("runtime codec must contain one non-empty canonical run list per green column")
 
-    body = codec[522:]
+    body = codec[CODEC_BODY_OFFSET:]
     columns: list[list[tuple[int, int, int]]] = []
     for green in range(256):
         records = [
@@ -431,9 +448,11 @@ def _git(root: Path, args: list[str], label: str) -> bytes:
             ["git", "--no-replace-objects", "-C", str(root), *args],
             stderr=subprocess.STDOUT,
             env=environment,
+            timeout=GIT_LOOKUP_TIMEOUT_SECONDS,
         )
-    except (OSError, subprocess.CalledProcessError) as error:
-        detail = getattr(error, "output", b"").decode("utf-8", errors="replace").strip()
+    except (OSError, subprocess.SubprocessError) as error:
+        output: bytes = getattr(error, "output", None) or b""
+        detail = output.decode("utf-8", errors="replace").strip()
         _fail(f"{label} Git lookup failed{': ' + detail if detail else ''}")
 
 
@@ -612,11 +631,12 @@ def _verify_research(
         _fail("research proof.counts must be an object")
     _exact_int(counts.get("cube_points"), DOMAIN_POINTS, "research proof cube points")
     _exact_int(counts.get("neutral_points"), 256, "research proof neutral points")
+    accepted_chromatic = counts.get("accepted_chromatic")
+    neutral_points = counts.get("neutral_points")
+    if type(accepted_chromatic) is not int or type(neutral_points) is not int:
+        _fail("research proof accepted points must be integers")
     _exact_int(
-        counts.get("accepted_chromatic") + counts.get("neutral_points")
-        if type(counts.get("accepted_chromatic")) is int
-        and type(counts.get("neutral_points")) is int
-        else None,
+        accepted_chromatic + neutral_points,
         ACCEPTED_POINTS,
         "research proof accepted points",
     )
@@ -837,7 +857,13 @@ def _package_license(cargo_toml: bytes) -> str:
     current_table = ""
     licenses: list[str] = []
     for line in source.splitlines():
-        table = re.fullmatch(r"\s*\[([^][]+)]\s*", line)
+        # Любой заголовок таблицы завершает область `[package]`: иначе поле из
+        # массива таблиц вроде `[[bin]]` было бы ошибочно засчитано пакету.
+        array_table = re.fullmatch(r"\s*\[\[([^][]+)]]\s*(?:#.*)?", line)
+        if array_table:
+            current_table = ""
+            continue
+        table = re.fullmatch(r"\s*\[([^][]+)]\s*(?:#.*)?", line)
         if table:
             current_table = table.group(1).strip()
             continue

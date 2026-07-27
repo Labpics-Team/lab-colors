@@ -69,18 +69,18 @@
       "sha256": "10195d665228073345b3c453c49c4cce99bc168da5dd5e70932f34e0cead1873"
     },
     {
-      "bytes": 72497,
+      "bytes": 71522,
       "license": "MIT",
       "path": "crates/labcolors-core/src/program_identity.rs",
       "role": "program_identity_source",
-      "sha256": "0064b6a897f7c87b581c3f71bf7c469733c2d63311da187a5222c2270f039751"
+      "sha256": "8f0366079e6fa0006360ab19b0449e622add48fdb08431a02258236e1371d78a"
     },
     {
-      "bytes": 155942,
+      "bytes": 154789,
       "license": "MIT",
       "path": "crates/labcolors-core/src/program_session.rs",
       "role": "program_source",
-      "sha256": "c942b28fc37812054c7c6dce9144734d1dd4eabb863a49a31db1c076d3b61757"
+      "sha256": "a236381dcf80760e1ea39743b3a20d10de938fe1a9d6c64e9a9075f6265b6eb3"
     },
     {
       "bytes": 21581,
@@ -118,18 +118,18 @@
       "sha256": "6c95324eb05476f35f75375a9af0b2b4a41b8b2978c46e67d2ce1aea5adde342"
     },
     {
-      "bytes": 37589,
+      "bytes": 39302,
       "license": "MIT",
       "path": "scripts/verify_clean_set_receipt.py",
       "role": "verifier_source",
-      "sha256": "edbc1b6af3b917db8cfd67eb03808e273aa409c9d420e8e7137696019c13e5fc"
+      "sha256": "c6d9025235c1c53b54ce4c7b231fb02a412d5505740f82cdbba42f80ea375472"
     },
     {
-      "bytes": 27965,
+      "bytes": 31194,
       "license": "MIT",
       "path": "scripts/test_verify_clean_set_receipt.py",
       "role": "verifier_tests",
-      "sha256": "e401dbe626fe9f2a047ec0d591b461c70278ba7eb2b9981942ed78b254fd8f62"
+      "sha256": "2831e67431294c28ba60753a892d0ad5e3ff972144d483500eeb10c47bb9d760"
     }
   ],
   "excluded_claims": [

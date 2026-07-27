@@ -3989,6 +3989,35 @@ fn compile_occurrence_contexts(
     Ok(compiled.into_boxed_slice())
 }
 
+fn compile_declared_clean_set_body<Invocation>(
+    presentations: &CompiledPointPresentationsV1,
+    constraint: ConstraintId,
+    target: PointPresentationTargetV1,
+    convention: DeclaredSrgb8CleanSetV1,
+) -> Result<CompiledProgramConstraintBodyV1<Invocation>, ProgramCompileError> {
+    let missing = || ProgramCompileError::MissingConstraintPresentationTarget {
+        constraint,
+        root: target.root(),
+        occurrence: target.occurrence(),
+    };
+    let key = (target.root(), target.occurrence());
+    let presentation_ordinal = presentations
+        .entries
+        .binary_search_by_key(&key, |presentation| {
+            (presentation.root, presentation.target)
+        })
+        .map_err(|_| missing())?;
+    let presentation = &presentations.entries[presentation_ordinal];
+    if presentation.absence_release != target.absence_release() {
+        return Err(missing());
+    }
+    Ok(CompiledProgramConstraintBodyV1::PointPresentation {
+        presentation_ordinal,
+        terminal: presentation.terminal,
+        convention,
+    })
+}
+
 fn compile_constraints<Evaluation>(
     graph: &CompiledAppearanceGraph,
     occurrence_contexts: &[CompiledOccurrenceContextV1],
@@ -4066,61 +4095,21 @@ where
                 }
             }
             ProgramConstraintBodyV1::DeclaredSrgb8CleanSet { target } => {
-                let key = (target.root(), target.occurrence());
-                let presentation_ordinal = presentations
-                    .entries
-                    .binary_search_by_key(&key, |presentation| {
-                        (presentation.root, presentation.target)
-                    })
-                    .map_err(
-                        |_| ProgramCompileError::MissingConstraintPresentationTarget {
-                            constraint: constraint.id,
-                            root: target.root(),
-                            occurrence: target.occurrence(),
-                        },
-                    )?;
-                let presentation = &presentations.entries[presentation_ordinal];
-                if presentation.absence_release != target.absence_release() {
-                    return Err(ProgramCompileError::MissingConstraintPresentationTarget {
-                        constraint: constraint.id,
-                        root: target.root(),
-                        occurrence: target.occurrence(),
-                    });
-                }
-                CompiledProgramConstraintBodyV1::PointPresentation {
-                    presentation_ordinal,
-                    terminal: presentation.terminal,
-                    convention: DeclaredSrgb8CleanSetV1::package_pinned(),
-                }
+                compile_declared_clean_set_body(
+                    presentations,
+                    constraint.id,
+                    target,
+                    DeclaredSrgb8CleanSetV1::package_pinned(),
+                )?
             }
             #[cfg(test)]
             ProgramConstraintBodyV1::DeclaredSrgb8CleanSetFinalRecheckMutant { target } => {
-                let key = (target.root(), target.occurrence());
-                let presentation_ordinal = presentations
-                    .entries
-                    .binary_search_by_key(&key, |presentation| {
-                        (presentation.root, presentation.target)
-                    })
-                    .map_err(
-                        |_| ProgramCompileError::MissingConstraintPresentationTarget {
-                            constraint: constraint.id,
-                            root: target.root(),
-                            occurrence: target.occurrence(),
-                        },
-                    )?;
-                let presentation = &presentations.entries[presentation_ordinal];
-                if presentation.absence_release != target.absence_release() {
-                    return Err(ProgramCompileError::MissingConstraintPresentationTarget {
-                        constraint: constraint.id,
-                        root: target.root(),
-                        occurrence: target.occurrence(),
-                    });
-                }
-                CompiledProgramConstraintBodyV1::PointPresentation {
-                    presentation_ordinal,
-                    terminal: presentation.terminal,
-                    convention: DeclaredSrgb8CleanSetV1::final_recheck_mutant(),
-                }
+                compile_declared_clean_set_body(
+                    presentations,
+                    constraint.id,
+                    target,
+                    DeclaredSrgb8CleanSetV1::final_recheck_mutant(),
+                )?
             }
         };
         compiled.push(CompiledPointConstraint {

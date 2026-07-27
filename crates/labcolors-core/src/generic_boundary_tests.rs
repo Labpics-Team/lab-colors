@@ -1,7 +1,15 @@
 use std::ffi::OsStr;
 use std::path::PathBuf;
 
+#[expect(
+    dead_code,
+    reason = "the shared scanner also exposes a syntax projection for sibling integration gates"
+)]
+#[path = "../tests/common/source.rs"]
+mod source_scanner;
+
 const APPEARANCE_SOURCE: &str = include_str!("appearance.rs");
+const CLEAN_SET_SOURCE: &str = include_str!("clean_set.rs");
 const CONSTRAINTS_SOURCE: &str = include_str!("constraints/mod.rs");
 const EXACT_CONSTRAINT_SOURCE: &str = include_str!("constraints/exact.rs");
 const JOINT_SOURCE: &str = include_str!("joint.rs");
@@ -67,6 +75,47 @@ fn contains_rust_identifier(source: &str, identifier: &str) -> bool {
         let after = source[start + identifier.len()..].chars().next();
         !before.is_some_and(is_continue) && !after.is_some_and(is_continue)
     })
+}
+
+fn normalized_production_code(source: &str) -> String {
+    source_scanner::production_code_lines(source)
+        .into_iter()
+        .map(|(_, line)| line)
+        .collect::<Vec<_>>()
+        .join("\n")
+        .to_ascii_lowercase()
+}
+
+#[test]
+fn rust_comment_stripping_ignores_prose_without_erasing_live_identifiers() {
+    let source = concat!(
+        "//! writer in documentation\n",
+        "/* quality_auto in a nested /* checkpoint */ comment */\n",
+        "const URL: &str = \"https://example.test/path\";\n",
+        "fn checkpoint_writer() {}\n",
+    );
+    let code = normalized_production_code(source);
+
+    assert_eq!(code.matches("writer").count(), 1);
+    assert_eq!(code.matches("checkpoint").count(), 1);
+    assert!(!code.contains("quality_auto"));
+    assert!(code.contains("https://example.test/path"));
+}
+
+#[test]
+fn rust_comment_stripping_preserves_live_identifiers_after_literal_comment_tokens() {
+    for source in [
+        r##"fn probe() { let _ = (r#""//"#, |writer: ()| writer); }"##,
+        r##"fn probe() { let _ = (br#""//"#, |writer: ()| writer); }"##,
+        r#"fn probe() { let _ = ('"', "//", |writer: ()| writer); }"#,
+    ] {
+        let code = normalized_production_code(source);
+        assert_eq!(
+            code.matches("writer").count(),
+            2,
+            "literal content must not hide live identifiers: {source}",
+        );
+    }
 }
 
 fn assert_only_in_compile_fail(source: &str, needle: &str) {
@@ -788,11 +837,12 @@ fn shared_observation_ssot_has_one_backing_without_lifecycle_or_adapter_facades(
 #[test]
 fn clean_set_program_path_cannot_smuggle_auto_or_writer_contracts() {
     for (path, source) in [
+        ("clean_set.rs", CLEAN_SET_SOURCE),
         ("program.rs", PROGRAM_SOURCE),
         ("program_session.rs", PROGRAM_SESSION_SOURCE),
         ("program_identity.rs", PROGRAM_IDENTITY_SOURCE),
     ] {
-        let source = source.to_ascii_lowercase();
+        let source = normalized_production_code(source);
         for forbidden in [
             "pointconvention",
             "autoqualityrelease",

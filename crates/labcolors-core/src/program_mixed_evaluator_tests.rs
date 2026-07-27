@@ -20,17 +20,18 @@ use crate::observation::{
 };
 use crate::program::{
     AccessErrorV1, AssessmentV1, CertificateV1, ConflictCellV1, ConstraintModeV1,
-    ConstraintSubjectV1, ExactSrgb8EvidenceV1, ObservationHeadV1, ObservationV1, OperationV1,
-    OutputSlotIdV1, OwnerV1, PhysicalPointV1, ProjectionV1, ScenarioV1, SessionV1, SignalV1,
-    StateKindV1, SurroundV1, UpdateErrorKindV1, UpdateErrorV1, UpdateV1, VerdictV1, VerifiedCellV1,
-    Wcag22Srgb8EvidenceV1,
+    ConstraintSubjectV1, DeclaredSrgb8CleanSetViolationKindV1, ExactSrgb8EvidenceV1,
+    ObservationHeadV1, ObservationV1, OperationV1, OutputSlotIdV1, OwnerV1, PhysicalPointV1,
+    ProjectionV1, ScenarioV1, SessionV1, SignalV1, StateKindV1, SurroundV1, UpdateErrorKindV1,
+    UpdateErrorV1, UpdateV1, VerdictV1, VerifiedCellV1, Wcag22Srgb8EvidenceV1,
 };
 use crate::program_session::{
     CORE_PROGRAM_ASSESSMENT_CALLS, CompiledCoreProgramV1, CompositionProfile, ConstraintId,
     ConstraintInvocation, ConstraintSet, CoreProgramConstraintInvocationV1,
     CoreProgramEvaluatorsV1, CoreProgramPassEvidenceV1, CoreProgramV1,
     CoreProgramViolationEvidenceV1, DeclaredJointSelectionV1, JointCandidateStateV1,
-    ObservationGroup, Occurrence, OpacityInput, OutputBinding, OutputSlotId, Paint, Program,
+    ObservationGroup, Occurrence, OpacityInput, OutputBinding, OutputSlotId, Paint,
+    PointPresentationRootV1, PointPresentationTargetV1, PresentationRootId, Program,
     ProgramConstraintCellV1, ProgramConstraintPassEvidenceV1, ProgramConstraintResultV1,
     ProgramConstraintSubjectV1, ProgramConstraintViolationEvidenceV1, Source, SourceId, Surface,
     Target, TargetCandidateChoiceV1, TargetCandidateId, TargetCandidateV1, TargetId,
@@ -50,6 +51,8 @@ const OUTPUT: OutputSlotId = OutputSlotId::new(9);
 const SECOND_OUTPUT: OutputSlotId = OutputSlotId::new(19);
 const GROUP: ObservationGroupId = ObservationGroupId::new(10);
 const STREAM: ObservationStreamId = ObservationStreamId::new(11);
+const CLEAN_CONSTRAINT: ConstraintId = ConstraintId::new(20);
+const PRESENTATION_ROOT: PresentationRootId = PresentationRootId::new(21);
 
 fn signal(bytes: [u8; 3]) -> ColorSignal {
     ColorSignal::from_srgb8(Srgb8::new(bytes))
@@ -196,6 +199,46 @@ fn fixed_translucent_program() -> CompiledCoreProgramV1 {
         ),
         vec![OutputBinding::new(OUTPUT, TRANSLUCENT_PAINT)],
         CoreProgramEvaluatorsV1,
+    )
+    .compile()
+    .unwrap()
+}
+
+fn fixed_clean_set_program(source: [u8; 3]) -> CompiledCoreProgramV1 {
+    let target = PointPresentationTargetV1::new(PRESENTATION_ROOT, OCCURRENCE);
+    Program::new(
+        vec![Source::new(SOURCE, signal(source))],
+        vec![Target::fixed(TARGET, SOURCE)],
+        ObservationGroup::new(GROUP, vec![SURFACE_PORT]),
+        vec![],
+        vec![Paint::Solid {
+            id: PAINT,
+            target: TARGET,
+        }],
+        vec![Surface::Input {
+            id: SURFACE,
+            input: SURFACE_PORT,
+        }],
+        vec![Occurrence::new(
+            OCCURRENCE,
+            PAINT,
+            SURFACE,
+            CompositionProfile::EncodedSrgb8SourceOverV1,
+            context(),
+        )],
+        ConstraintSet::new(
+            vec![],
+            vec![ConstraintInvocation::declared_srgb8_clean_set_report_only(
+                CLEAN_CONSTRAINT,
+                target,
+            )],
+        ),
+        vec![OutputBinding::new(OUTPUT, PAINT)],
+        CoreProgramEvaluatorsV1,
+    )
+    .with_point_presentations(
+        vec![PointPresentationRootV1::new(PRESENTATION_ROOT, OCCURRENCE)],
+        vec![target],
     )
     .compile()
     .unwrap()
@@ -604,6 +647,18 @@ fn consume_public_assessment(assessment: AssessmentV1<'_>, probe: &mut Projectio
                 let [r, g, b] = value.bytes();
                 (u64::from(r) << 16) | (u64::from(g) << 8) | u64::from(b)
             }));
+            probe.mix(match evidence.violation() {
+                None => 0,
+                Some(DeclaredSrgb8CleanSetViolationKindV1::FinalOwnedDomainAbsent) => 1,
+                Some(DeclaredSrgb8CleanSetViolationKindV1::Rejected) => 2,
+            });
+            probe.mix(
+                evidence
+                    .rejected_blue_interval()
+                    .map_or(0, |[lower, upper]| {
+                        (u64::from(lower) << 8) | u64::from(upper)
+                    }),
+            );
             None
         }
     };
@@ -627,6 +682,38 @@ fn consume_public_assessment(assessment: AssessmentV1<'_>, probe: &mut Projectio
         SurroundV1::Dim => 2,
         SurroundV1::Dark => 3,
     });
+}
+
+#[test]
+fn clean_set_projection_probe_binds_violation_kind_and_rejected_interval() {
+    let owner = OwnerV1::from_compiled(fixed_clean_set_program([0, 200, 71]));
+    let mut session = owner.instantiate(STREAM.value()).unwrap();
+    let backdrop = [Srgb8::new([0; 3])];
+    let scenarios = [ScenarioV1::new(1, &backdrop)];
+    let projection = owner
+        .update(
+            &mut session,
+            UpdateV1::Observed {
+                revision: 1,
+                scenarios: &scenarios,
+            },
+        )
+        .unwrap();
+    let Some(CertificateV1::Verified(certificate)) = projection.evidence().certificates().next()
+    else {
+        panic!("report-only clean-set rejection must retain a verified certificate");
+    };
+    let assessment = certificate.cells().next().unwrap().assessment();
+
+    let mut actual = ProjectionProbe::new();
+    consume_public_assessment(assessment, &mut actual);
+
+    let mut expected = ProjectionProbe::new();
+    expected.mix(2);
+    expected.mix((u64::from(200_u8) << 8) | u64::from(71_u8));
+    expected.mix(2);
+    expected.mix((u64::from(71_u8) << 8) | u64::from(101_u8));
+    assert_eq!(actual.checksum, expected.checksum);
 }
 
 fn consume_public_projection(projection: ProjectionV1<'_, '_>) -> ProjectionProbe {
