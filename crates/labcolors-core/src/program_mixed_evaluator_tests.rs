@@ -1,5 +1,8 @@
 use core::iter::FusedIterator;
 
+use proptest::prelude::*;
+use proptest::test_runner::{Config, RngAlgorithm, TestRng, TestRunner};
+
 use crate::Srgb8;
 use crate::appearance::{OccurrenceId, OpacityInputId, PaintId, SurfaceId, SurfaceInputPortId};
 use crate::constraints::{
@@ -18,8 +21,8 @@ use crate::observation::{
 use crate::program::{
     AccessErrorV1, AssessmentV1, CertificateV1, ConflictCellV1, ConstraintModeV1,
     ExactSrgb8EvidenceV1, ObservationHeadV1, ObservationV1, OperationV1, OutputSlotIdV1, OwnerV1,
-    PhysicalPointV1, ProjectionV1, ScenarioV1, SignalV1, StateKindV1, SurroundV1,
-    UpdateErrorKindV1, UpdateV1, VerdictV1, VerifiedCellV1, Wcag22Srgb8EvidenceV1,
+    PhysicalPointV1, ProjectionV1, ScenarioV1, SessionV1, SignalV1, StateKindV1, SurroundV1,
+    UpdateErrorKindV1, UpdateErrorV1, UpdateV1, VerdictV1, VerifiedCellV1, Wcag22Srgb8EvidenceV1,
 };
 use crate::program_session::{
     CORE_PROGRAM_ASSESSMENT_CALLS, CompiledCoreProgramV1, CompositionProfile, ConstraintId,
@@ -2088,4 +2091,545 @@ fn ready_sets_and_stale_removes_every_output_in_the_same_canonical_order() {
         assert_eq!(remove.output_slot().value(), expected.value());
     }
     assert!(operations.next().is_none());
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ModeledPayload {
+    ReadyOnWhite,
+    ReadyOnBlack,
+    Conflict,
+    Unknown(u32),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RejectedInput {
+    EmptyScenarios,
+    DuplicateScenario,
+    MissingSurfaceValue,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SessionAction {
+    Admit(ModeledPayload),
+    Replay,
+    OutOfOrder,
+    ConflictingReplay,
+    Reject(RejectedInput),
+}
+
+impl ModeledPayload {
+    const fn selected_source(self) -> Option<[u8; 3]> {
+        // The fixture below declares exactly these two candidates; its WCAG
+        // constraint selects black on white and mid-gray on black.
+        match self {
+            Self::ReadyOnWhite => Some([0; 3]),
+            Self::ReadyOnBlack => Some([0x80; 3]),
+            Self::Conflict | Self::Unknown(_) => None,
+        }
+    }
+
+    const fn conflicting(self) -> Self {
+        // Every edge changes the payload, so replaying it at the same revision
+        // must exercise RevisionConflict rather than exact idempotence.
+        match self {
+            Self::ReadyOnWhite => Self::ReadyOnBlack,
+            Self::ReadyOnBlack => Self::Conflict,
+            Self::Conflict => Self::Unknown(0x00C0_FFEE),
+            Self::Unknown(_) => Self::ReadyOnWhite,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ModeledVerified {
+    revision: u64,
+    source: [u8; 3],
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ModeledLifecycle {
+    Waiting,
+    Ready(ModeledVerified),
+    Stale(ModeledVerified),
+    Failed {
+        cause_revision: u64,
+        previous: Option<ModeledVerified>,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ModeledSession {
+    head: Option<(u64, ModeledPayload)>,
+    lifecycle: ModeledLifecycle,
+}
+
+impl ModeledSession {
+    const fn new() -> Self {
+        Self {
+            head: None,
+            lifecycle: ModeledLifecycle::Waiting,
+        }
+    }
+
+    const fn next_revision(self) -> u64 {
+        match self.head {
+            Some((revision, _)) => revision + 1,
+            None => 1,
+        }
+    }
+
+    const fn last_verified(self) -> Option<ModeledVerified> {
+        match self.lifecycle {
+            ModeledLifecycle::Waiting => None,
+            ModeledLifecycle::Ready(verified) | ModeledLifecycle::Stale(verified) => Some(verified),
+            ModeledLifecycle::Failed { previous, .. } => previous,
+        }
+    }
+
+    fn admit(&mut self, revision: u64, payload: ModeledPayload) {
+        let previous = self.last_verified();
+        self.head = Some((revision, payload));
+        self.lifecycle = match payload {
+            ModeledPayload::ReadyOnWhite | ModeledPayload::ReadyOnBlack => {
+                ModeledLifecycle::Ready(ModeledVerified {
+                    revision,
+                    source: payload
+                        .selected_source()
+                        .expect("a modeled Ready payload has one selected source"),
+                })
+            }
+            ModeledPayload::Conflict => ModeledLifecycle::Failed {
+                cause_revision: revision,
+                previous,
+            },
+            ModeledPayload::Unknown(_) => match previous {
+                Some(verified) => ModeledLifecycle::Stale(verified),
+                None => ModeledLifecycle::Waiting,
+            },
+        };
+    }
+}
+
+fn apply_modeled_payload<'owner, 'session>(
+    owner: &'owner OwnerV1,
+    session: &'session mut SessionV1,
+    revision: u64,
+    payload: ModeledPayload,
+) -> Result<ProjectionV1<'owner, 'session>, UpdateErrorV1> {
+    let white = [Srgb8::new([0xFF; 3])];
+    let black = [Srgb8::new([0; 3])];
+    match payload {
+        ModeledPayload::ReadyOnWhite => {
+            let scenarios = [ScenarioV1::new(1, &white)];
+            owner.update(
+                session,
+                UpdateV1::Observed {
+                    revision,
+                    scenarios: &scenarios,
+                },
+            )
+        }
+        ModeledPayload::ReadyOnBlack => {
+            let scenarios = [ScenarioV1::new(1, &black)];
+            owner.update(
+                session,
+                UpdateV1::Observed {
+                    revision,
+                    scenarios: &scenarios,
+                },
+            )
+        }
+        ModeledPayload::Conflict => {
+            let scenarios = [ScenarioV1::new(1, &white), ScenarioV1::new(2, &black)];
+            owner.update(
+                session,
+                UpdateV1::Observed {
+                    revision,
+                    scenarios: &scenarios,
+                },
+            )
+        }
+        ModeledPayload::Unknown(reason_id) => owner.update(
+            session,
+            UpdateV1::Unknown {
+                revision,
+                reason_id,
+            },
+        ),
+    }
+}
+
+fn assert_verified_matches_model(
+    certificate: crate::program::VerifiedCertificateV1<'_>,
+    expected: ModeledVerified,
+) -> Result<(), TestCaseError> {
+    prop_assert_eq!(certificate.observation().revision(), expected.revision);
+    let outputs = certificate.outputs().collect::<Vec<_>>();
+    prop_assert_eq!(outputs.len(), 2);
+    for (output, expected_slot) in outputs.into_iter().zip([OUTPUT, SECOND_OUTPUT]) {
+        prop_assert_eq!(output.output_slot().value(), expected_slot.value());
+        prop_assert_eq!(output.source(), Srgb8::new(expected.source));
+        prop_assert_eq!(output.opacity(), 1.0);
+    }
+    Ok(())
+}
+
+fn assert_projection_matches_model(
+    projection: ProjectionV1<'_, '_>,
+    model: ModeledSession,
+) -> Result<(), TestCaseError> {
+    let evidence = projection.evidence();
+    let expected_kind = match model.lifecycle {
+        ModeledLifecycle::Waiting => StateKindV1::Waiting,
+        ModeledLifecycle::Ready(_) => StateKindV1::Ready,
+        ModeledLifecycle::Stale(_) => StateKindV1::Stale,
+        ModeledLifecycle::Failed { .. } => StateKindV1::Failed,
+    };
+    prop_assert_eq!(evidence.kind(), expected_kind);
+
+    match (evidence.observation_head(), model.head) {
+        (ObservationHeadV1::Empty, None) => {}
+        (
+            ObservationHeadV1::Unknown {
+                stream,
+                revision,
+                reason_id,
+            },
+            Some((expected_revision, ModeledPayload::Unknown(expected_reason))),
+        ) => {
+            prop_assert_eq!(stream.value(), STREAM.value());
+            prop_assert_eq!(revision, expected_revision);
+            prop_assert_eq!(reason_id, expected_reason);
+        }
+        (
+            ObservationHeadV1::Observed { stream, revision },
+            Some((expected_revision, expected_payload)),
+        ) if !matches!(expected_payload, ModeledPayload::Unknown(_)) => {
+            prop_assert_eq!(stream.value(), STREAM.value());
+            prop_assert_eq!(revision, expected_revision);
+        }
+        (actual, expected) => {
+            prop_assert!(
+                false,
+                "raw head drifted: actual={actual:?}, expected={expected:?}"
+            );
+        }
+    }
+
+    let certificates = evidence.certificates().collect::<Vec<_>>();
+    let verified_count = certificates
+        .iter()
+        .filter(|certificate| matches!(certificate, CertificateV1::Verified(_)))
+        .count();
+    prop_assert!(
+        verified_count <= 1,
+        "Session retained more than one Verified witness"
+    );
+    match model.lifecycle {
+        ModeledLifecycle::Waiting => {
+            prop_assert_eq!(evidence.cause_certificate_index(), None);
+            prop_assert_eq!(certificates.len(), 0);
+        }
+        ModeledLifecycle::Ready(expected) | ModeledLifecycle::Stale(expected) => {
+            prop_assert_eq!(evidence.cause_certificate_index(), None);
+            prop_assert_eq!(certificates.len(), 1);
+            let CertificateV1::Verified(certificate) = certificates[0] else {
+                return Err(TestCaseError::fail(
+                    "Ready/Stale must retain exactly one Verified witness",
+                ));
+            };
+            assert_verified_matches_model(certificate, expected)?;
+        }
+        ModeledLifecycle::Failed {
+            cause_revision,
+            previous,
+        } => {
+            prop_assert_eq!(evidence.cause_certificate_index(), Some(0));
+            prop_assert_eq!(certificates.len(), usize::from(previous.is_some()) + 1);
+            let CertificateV1::Conflict(cause) = certificates[0] else {
+                return Err(TestCaseError::fail(
+                    "Failed cause must be the first Conflict certificate",
+                ));
+            };
+            prop_assert_eq!(cause.observation().revision(), cause_revision);
+            if let Some(expected) = previous {
+                let CertificateV1::Verified(certificate) = certificates[1] else {
+                    return Err(TestCaseError::fail(
+                        "Failed history must retain only its last Verified witness",
+                    ));
+                };
+                assert_verified_matches_model(certificate, expected)?;
+            }
+        }
+    }
+
+    let operations = projection.operations().collect::<Vec<_>>();
+    match (model.head, model.lifecycle) {
+        (None, ModeledLifecycle::Waiting) => prop_assert_eq!(operations.len(), 0),
+        (_, ModeledLifecycle::Ready(expected)) => {
+            prop_assert_eq!(operations.len(), 2);
+            for (operation, expected_slot) in operations.into_iter().zip([OUTPUT, SECOND_OUTPUT]) {
+                let OperationV1::Set(set) = operation else {
+                    return Err(TestCaseError::fail("Ready must emit Set for every output"));
+                };
+                prop_assert_eq!(set.output_slot().value(), expected_slot.value());
+                prop_assert_eq!(set.source(), Srgb8::new(expected.source));
+                prop_assert_eq!(set.opacity(), 1.0);
+                prop_assert_eq!(
+                    set.certificate().observation().revision(),
+                    expected.revision
+                );
+            }
+        }
+        (Some(_), _) => {
+            prop_assert_eq!(operations.len(), 2);
+            for (operation, expected_slot) in operations.into_iter().zip([OUTPUT, SECOND_OUTPUT]) {
+                let OperationV1::Remove(remove) = operation else {
+                    return Err(TestCaseError::fail(
+                        "a non-Ready admitted head must not authorize Set",
+                    ));
+                };
+                prop_assert_eq!(remove.output_slot().value(), expected_slot.value());
+            }
+        }
+        (None, _) => prop_assert!(false, "only Waiting may have an empty raw head"),
+    }
+    Ok(())
+}
+
+fn exercise_modeled_action(
+    owner: &OwnerV1,
+    session: &mut SessionV1,
+    model: &mut ModeledSession,
+    action: SessionAction,
+) -> Result<(), TestCaseError> {
+    let assessments_before = CORE_PROGRAM_ASSESSMENT_CALLS.with(core::cell::Cell::get);
+    let evaluator_must_run = match action {
+        SessionAction::Admit(payload) => {
+            let revision = model.next_revision();
+            let projection = apply_modeled_payload(owner, session, revision, payload)
+                .map_err(|error| TestCaseError::fail(format!("fresh update failed: {error:?}")))?;
+            model.admit(revision, payload);
+            assert_projection_matches_model(projection, *model)?;
+            !matches!(payload, ModeledPayload::Unknown(_))
+        }
+        SessionAction::Replay => {
+            if let Some((revision, payload)) = model.head {
+                let projection =
+                    apply_modeled_payload(owner, session, revision, payload).map_err(|error| {
+                        TestCaseError::fail(format!("exact replay failed: {error:?}"))
+                    })?;
+                assert_projection_matches_model(projection, *model)?;
+            }
+            false
+        }
+        SessionAction::OutOfOrder => {
+            if let Some((current, _)) = model.head {
+                let incoming = current
+                    .checked_sub(1)
+                    .expect("an admitted revision starts at one");
+                let error =
+                    apply_modeled_payload(owner, session, incoming, ModeledPayload::ReadyOnWhite)
+                        .err()
+                        .ok_or_else(|| TestCaseError::fail("out-of-order update was admitted"))?;
+                prop_assert!(
+                    matches!(
+                        error,
+                        UpdateErrorV1::RevisionOutOfOrder {
+                            current: actual_current,
+                            incoming: actual_incoming,
+                        } if actual_current == current && actual_incoming == incoming
+                    ),
+                    "out-of-order error payload drifted: {error:?}"
+                );
+            }
+            false
+        }
+        SessionAction::ConflictingReplay => {
+            if let Some((revision, payload)) = model.head {
+                let conflicting = payload.conflicting();
+                prop_assert_ne!(conflicting, payload);
+                let error = apply_modeled_payload(owner, session, revision, conflicting)
+                    .err()
+                    .ok_or_else(|| TestCaseError::fail("conflicting replay was admitted"))?;
+                prop_assert!(
+                    matches!(
+                        error,
+                        UpdateErrorV1::RevisionConflict {
+                            revision: actual_revision,
+                        } if actual_revision == revision
+                    ),
+                    "revision-conflict error payload drifted: {error:?}"
+                );
+            }
+            false
+        }
+        SessionAction::Reject(rejected) => {
+            let revision = model.next_revision();
+            let error = match rejected {
+                RejectedInput::EmptyScenarios => {
+                    let scenarios = [];
+                    owner.update(
+                        session,
+                        UpdateV1::Observed {
+                            revision,
+                            scenarios: &scenarios,
+                        },
+                    )
+                }
+                RejectedInput::DuplicateScenario => {
+                    let white = [Srgb8::new([0xFF; 3])];
+                    let scenarios = [ScenarioV1::new(7, &white), ScenarioV1::new(7, &white)];
+                    owner.update(
+                        session,
+                        UpdateV1::Observed {
+                            revision,
+                            scenarios: &scenarios,
+                        },
+                    )
+                }
+                RejectedInput::MissingSurfaceValue => {
+                    let empty = [];
+                    let scenarios = [ScenarioV1::new(9, &empty)];
+                    owner.update(
+                        session,
+                        UpdateV1::Observed {
+                            revision,
+                            scenarios: &scenarios,
+                        },
+                    )
+                }
+            }
+            .err()
+            .ok_or_else(|| TestCaseError::fail(format!("{rejected:?} input was admitted")))?;
+            match rejected {
+                RejectedInput::EmptyScenarios => {
+                    prop_assert!(matches!(error, UpdateErrorV1::EmptyScenarioSet));
+                }
+                RejectedInput::DuplicateScenario => prop_assert!(
+                    matches!(error, UpdateErrorV1::DuplicateScenarioId { scenario } if scenario.value() == 7),
+                    "duplicate-scenario error payload drifted: {error:?}"
+                ),
+                RejectedInput::MissingSurfaceValue => prop_assert!(
+                    matches!(
+                        error,
+                        UpdateErrorV1::ScenarioValueCountMismatch {
+                            scenario,
+                            expected: 1,
+                            actual: 0,
+                        } if scenario.value() == 9
+                    ),
+                    "value-count error payload drifted: {error:?}"
+                ),
+            }
+            false
+        }
+    };
+
+    let assessments_after = CORE_PROGRAM_ASSESSMENT_CALLS.with(core::cell::Cell::get);
+    if evaluator_must_run {
+        prop_assert!(
+            assessments_after > assessments_before,
+            "a fresh physical observation bypassed every evaluator"
+        );
+    } else {
+        prop_assert_eq!(
+            assessments_after,
+            assessments_before,
+            "replay, Unknown and rejected inputs must not dispatch evaluators",
+        );
+    }
+    assert_projection_matches_model(
+        owner
+            .project(session)
+            .map_err(|error| TestCaseError::fail(format!("matching owner rejected: {error:?}")))?,
+        *model,
+    )
+}
+
+fn exercise_modeled_sequence(
+    actions: impl IntoIterator<Item = SessionAction>,
+) -> Result<(), TestCaseError> {
+    CORE_PROGRAM_ASSESSMENT_CALLS.with(|calls| calls.set(0));
+    let owner = OwnerV1::from_compiled(finite_program_with_outputs(
+        [[0x80; 3], [0; 3]],
+        vec![
+            OutputBinding::new(SECOND_OUTPUT, PAINT),
+            OutputBinding::new(OUTPUT, PAINT),
+        ],
+    ));
+    let mut session = owner
+        .instantiate(STREAM.value())
+        .map_err(|error| TestCaseError::fail(format!("fixture stream was rejected: {error:?}")))?;
+    let mut model = ModeledSession::new();
+    let projection = owner
+        .project(&session)
+        .map_err(|error| TestCaseError::fail(format!("fixture epoch mismatch: {error:?}")))?;
+    assert_projection_matches_model(projection, model)?;
+    for action in actions {
+        exercise_modeled_action(&owner, &mut session, &mut model, action)?;
+    }
+    Ok(())
+}
+
+fn session_action_strategy() -> impl Strategy<Value = SessionAction> {
+    let admit = prop_oneof![
+        Just(SessionAction::Admit(ModeledPayload::ReadyOnWhite)),
+        Just(SessionAction::Admit(ModeledPayload::ReadyOnBlack)),
+        Just(SessionAction::Admit(ModeledPayload::Conflict)),
+        any::<u32>().prop_map(|reason| SessionAction::Admit(ModeledPayload::Unknown(reason))),
+    ];
+    let reject = prop_oneof![
+        Just(SessionAction::Reject(RejectedInput::EmptyScenarios)),
+        Just(SessionAction::Reject(RejectedInput::DuplicateScenario)),
+        Just(SessionAction::Reject(RejectedInput::MissingSurfaceValue)),
+    ];
+    // Balance behavioral classes; nested strategies still cover every payload
+    // and rejected-input variant without over-weighting Admit.
+    prop_oneof![
+        1 => admit,
+        1 => Just(SessionAction::Replay),
+        1 => Just(SessionAction::OutOfOrder),
+        1 => Just(SessionAction::ConflictingReplay),
+        1 => reject,
+    ]
+}
+
+#[test]
+fn hostile_session_corpus_covers_every_lifecycle_recovery_and_rejection_class() {
+    // Coverage is separate from generated input so shrinking cannot hide the
+    // real initial-state paths behind a state-preparing prefix.
+    let actions = [
+        SessionAction::Admit(ModeledPayload::Conflict),
+        SessionAction::Admit(ModeledPayload::Unknown(0xA11C_E001)),
+        SessionAction::Admit(ModeledPayload::ReadyOnWhite),
+        SessionAction::Replay,
+        SessionAction::Admit(ModeledPayload::Unknown(0xA11C_E002)),
+        SessionAction::Admit(ModeledPayload::Conflict),
+        SessionAction::Admit(ModeledPayload::ReadyOnBlack),
+        SessionAction::OutOfOrder,
+        SessionAction::ConflictingReplay,
+        SessionAction::Reject(RejectedInput::EmptyScenarios),
+        SessionAction::Reject(RejectedInput::DuplicateScenario),
+        SessionAction::Reject(RejectedInput::MissingSurfaceValue),
+    ];
+    exercise_modeled_sequence(actions).expect("hostile Session lifecycle corpus drifted");
+}
+
+#[test]
+fn arbitrary_finite_update_sequences_match_lifecycle_evidence_and_emission_model() {
+    let config = Config {
+        cases: 256,
+        failure_persistence: None,
+        ..Config::default()
+    };
+    let mut runner =
+        TestRunner::new_with_rng(config, TestRng::deterministic_rng(RngAlgorithm::ChaCha));
+
+    runner
+        .run(
+            &prop::collection::vec(session_action_strategy(), 0..64),
+            exercise_modeled_sequence,
+        )
+        .expect("deterministic Program Session state-machine property failed");
 }
