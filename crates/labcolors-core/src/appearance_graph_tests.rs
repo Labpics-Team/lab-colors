@@ -137,6 +137,7 @@ fn presentation_root_authority_is_minted_only_for_a_terminal_occurrence() {
     assert_eq!(path.target(), FILL_OCCURRENCE);
     assert_eq!(path.root(), OTHER_OCCURRENCE);
     assert_eq!(path.len(), 2);
+    assert!(path.belongs_to(&graph));
 }
 
 #[test]
@@ -149,6 +150,36 @@ fn presentation_root_authority_is_bound_to_its_compiled_graph() {
     assert!(matches!(
         second.compile_point_presentation_path(FILL_OCCURRENCE, &foreign_root),
         Err(PointPresentationPathErrorV1::IncompatibleRoot)
+    ));
+}
+
+#[test]
+fn presentation_path_reports_missing_root_and_target_at_the_graph_boundary() {
+    let graph = terminal_chain().compile().unwrap();
+    let missing = OccurrenceId::new(u32::MAX);
+    assert!(matches!(
+        graph.compile_point_presentation_root(missing),
+        Err(PointPresentationPathErrorV1::MissingRoot)
+    ));
+
+    let root = graph
+        .compile_point_presentation_root(OTHER_OCCURRENCE)
+        .unwrap();
+    assert!(matches!(
+        graph.compile_point_presentation_path(missing, &root),
+        Err(PointPresentationPathErrorV1::MissingTarget)
+    ));
+}
+
+#[test]
+fn presentation_path_rejects_a_target_outside_the_root_ancestry() {
+    let graph = slot_component(false).compile().unwrap();
+    let root = graph
+        .compile_point_presentation_root(OTHER_OCCURRENCE)
+        .unwrap();
+    assert!(matches!(
+        graph.compile_point_presentation_path(FILL_OCCURRENCE, &root),
+        Err(PointPresentationPathErrorV1::TargetOutsideRootAncestry)
     ));
 }
 

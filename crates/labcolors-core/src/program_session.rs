@@ -1299,30 +1299,29 @@ where
             .map(|output| (output.output, output.paint_id))
     }
 
-    pub fn point_presentations(
-        &self,
-    ) -> impl ExactSizeIterator<
-        Item = (
-            PresentationRootId,
-            OccurrenceId,
-            OccurrenceId,
-            PointOccurrenceAbsenceReleaseV1,
-            usize,
-        ),
-    > + '_ {
-        self.owner_generation
-            .point_presentations
-            .iter()
-            .map(|presentation| {
-                debug_assert!(presentation.path.belongs_to(&self.owner_generation.graph));
-                (
-                    presentation.root,
-                    presentation.terminal,
-                    presentation.target,
-                    presentation.absence_release,
-                    presentation.path.len(),
-                )
-            })
+    pub(crate) fn point_presentation_count(&self) -> usize {
+        debug_assert!(
+            self.owner_generation
+                .point_presentations
+                .windows(2)
+                .all(|pair| (pair[0].root, pair[0].target) < (pair[1].root, pair[1].target))
+        );
+        debug_assert!(
+            self.owner_generation
+                .point_presentations
+                .iter()
+                .all(|presentation| {
+                    presentation.path.belongs_to(&self.owner_generation.graph)
+                        && presentation.path.root() == presentation.terminal
+                        && presentation.path.target() == presentation.target
+                        && presentation.path.len() != 0
+                        && matches!(
+                            presentation.absence_release,
+                            PointOccurrenceAbsenceReleaseV1::BypassOwnBackdropV1
+                        )
+                })
+        );
+        self.owner_generation.point_presentations.len()
     }
 
     pub(crate) fn output_count(&self) -> usize {
@@ -3210,12 +3209,10 @@ fn compile_point_presentations(
         let root_index = compiled_roots
             .binary_search_by_key(&target.root, |(root, _)| *root)
             .map_err(|_| ProgramCompileError::MissingPointPresentationRoot { root: target.root })?;
-        let terminal = roots
-            .get(root_index)
-            .ok_or(ProgramCompileError::InternalInvariant)?
-            .terminal;
+        let compiled_root = &compiled_roots[root_index].1;
+        let terminal = compiled_root.terminal();
         let path = graph
-            .compile_point_presentation_path(target.occurrence, &compiled_roots[root_index].1)
+            .compile_point_presentation_path(target.occurrence, compiled_root)
             .map_err(|error| match error {
                 PointPresentationPathErrorV1::MissingTarget => {
                     ProgramCompileError::MissingPointPresentationOccurrence {

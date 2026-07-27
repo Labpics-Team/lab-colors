@@ -1041,6 +1041,7 @@ fn program_identity_binds_lcs_releases_only_through_lcs_constraint_content() {
         }
     }
     assert!(!PROGRAM_IDENTITY_SOURCE.contains("labcolors.program-content-identity.v1"));
+    assert!(!PROGRAM_IDENTITY_SOURCE.contains("labcolors.program-content-identity.v2"));
     for required in [
         "const DOMAIN_V3: &[u8] = b\"labcolors.program-content-identity.v3\\0\";",
         "pub(super) const PROGRAM_SCHEMA_V3: u8 = 3;",

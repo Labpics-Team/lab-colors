@@ -434,13 +434,21 @@ pub(crate) enum CompileErrorKindV1 {
     DuplicateSurface,
     /// Повторно объявлен Occurrence.
     DuplicateOccurrence,
+    /// Повторно объявлен presentation root.
     DuplicatePresentationRoot,
+    /// Presentation root ссылается на отсутствующий терминальный Occurrence.
     MissingPresentationRootOccurrence,
+    /// Терминальный Occurrence root всё ещё потребляется downstream.
     PresentationRootConsumedDownstream,
+    /// Presentation root не имеет ни одной проверяемой цели.
     UnusedPresentationRoot,
+    /// Повторно объявлена одна пара presentation root/target.
     DuplicatePointPresentationTarget,
+    /// Presentation target ссылается на отсутствующий root.
     MissingPointPresentationRoot,
+    /// Presentation target ссылается на отсутствующий Occurrence.
     MissingPointPresentationOccurrence,
+    /// Target Occurrence не принадлежит ancestry объявленного root.
     PointPresentationOccurrenceOutsideRootAncestry,
     /// Повторно объявлено ограничение.
     DuplicateConstraint,
@@ -751,35 +759,55 @@ pub(crate) enum CompileErrorV1 {
         surface: SurfaceIdV1,
     },
     /// Повторно объявлен presentation root.
-    DuplicatePresentationRoot { root: PresentationRootIdV1 },
-    /// Presentation root ссылается на отсутствующий Occurrence.
-    MissingPresentationRootOccurrence {
+    DuplicatePresentationRoot {
+        /// Повторный root ID.
         root: PresentationRootIdV1,
+    },
+    /// Presentation root ссылается на отсутствующий терминальный Occurrence.
+    MissingPresentationRootOccurrence {
+        /// Ошибочный root ID.
+        root: PresentationRootIdV1,
+        /// Отсутствующий Occurrence, объявленный терминалом root.
         occurrence: OccurrenceIdV1,
     },
-    /// Root всё ещё потребляется downstream Occurrence.
+    /// Терминальный Occurrence root всё ещё потребляется downstream.
     PresentationRootConsumedDownstream {
+        /// Ошибочный root ID.
         root: PresentationRootIdV1,
+        /// Occurrence, объявленный терминалом root.
         occurrence: OccurrenceIdV1,
     },
     /// Root не имеет ни одной проверяемой цели.
-    UnusedPresentationRoot { root: PresentationRootIdV1 },
+    UnusedPresentationRoot {
+        /// Неиспользуемый root ID.
+        root: PresentationRootIdV1,
+    },
     /// Повторно объявлена одна пара root/target.
     DuplicatePointPresentationTarget {
+        /// Root повторной пары.
         root: PresentationRootIdV1,
+        /// Target Occurrence повторной пары.
         occurrence: OccurrenceIdV1,
     },
     /// Target ссылается на отсутствующий root.
-    MissingPointPresentationRoot { root: PresentationRootIdV1 },
+    MissingPointPresentationRoot {
+        /// Отсутствующий root ID.
+        root: PresentationRootIdV1,
+    },
     /// Target ссылается на отсутствующий Occurrence.
     MissingPointPresentationOccurrence {
+        /// Root ошибочного target.
         root: PresentationRootIdV1,
+        /// Отсутствующий target Occurrence.
         occurrence: OccurrenceIdV1,
     },
     /// Target не принадлежит ancestry root.
     PointPresentationOccurrenceOutsideRootAncestry {
+        /// Root, относительно которого проверялся target.
         root: PresentationRootIdV1,
+        /// Финальный Occurrence, объявленный терминалом root.
         terminal: OccurrenceIdV1,
+        /// Target Occurrence вне ancestry терминала.
         occurrence: OccurrenceIdV1,
     },
     /// Обнаружен цикл зависимостей Paint.
@@ -1457,7 +1485,7 @@ impl OwnerV1 {
 
     /// Number of compiler-admitted target/root presentation relations.
     pub(crate) fn point_presentation_count(&self) -> usize {
-        self.compiled.point_presentations().len()
+        self.compiled.point_presentation_count()
     }
 
     /// Канонический порядок входных портов для однократного binding на хосте.

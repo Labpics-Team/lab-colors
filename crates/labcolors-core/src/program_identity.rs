@@ -617,6 +617,10 @@ where
             graph.add_member(VertexColorV1::new(vertex_tag::PRESENTATION_ROOT))?,
         )?;
     }
+    // `prepare_program` reaches this private identity step only after
+    // `compile_point_presentations` has sorted and rejected duplicate
+    // `(root, occurrence)` pairs. Deduplicating again here would hide an
+    // authored error and split that admission rule across two authorities.
     for target in &program.presentation_targets {
         presentation_targets.push((
             *target,

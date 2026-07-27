@@ -1713,8 +1713,10 @@ impl CompiledAppearanceGraph {
         let consumed = self.occurrences.iter().any(|occurrence| {
             matches!(
                 self.surfaces.get(occurrence.against),
-                Some(CompiledSurfaceSpec::FromOccurrence { occurrence, .. })
-                    if *occurrence == terminal.index
+                Some(CompiledSurfaceSpec::FromOccurrence {
+                    occurrence: source_occurrence,
+                    ..
+                }) if *source_occurrence == terminal.index
             )
         });
         if consumed {
@@ -1744,6 +1746,10 @@ impl CompiledAppearanceGraph {
             .try_reserve_exact(self.occurrences.len())
             .map_err(|_| PointPresentationPathErrorV1::ResourceExhausted)?;
 
+        // `compile()` rejects `RenderCycle` through canonical functional
+        // topology. Every hop therefore moves to a unique ancestor and the
+        // walk terminates within `occurrences.len()` nodes; that same finite
+        // upper bound makes the exact reservation safe.
         let mut current = root_slot.index;
         loop {
             let spec = self
