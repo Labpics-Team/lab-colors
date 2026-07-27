@@ -1093,8 +1093,8 @@ fn every_causal_preflight_reservation_precedes_graph_and_evaluator_work() {
 
 #[test]
 fn every_joint_causal_arena_reservation_is_fail_before_work_and_transactional() {
-    // Joint point-causal evaluation fills every arena coordinate: constraint
-    // cells, causal records, replay steps and committed outputs.
+    // Joint point-causal оценка заполняет каждую координату arena: constraint
+    // cells, causal records, replay steps и committed outputs.
     const FIRST_UNUSED_RESERVATION_INDEX: usize = 4;
 
     for reservation_index in 0..FIRST_UNUSED_RESERVATION_INDEX {

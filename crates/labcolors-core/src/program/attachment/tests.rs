@@ -744,8 +744,8 @@ fn warmed_attachment_complete_lifecycle_has_no_allocator_events() {
     let ready_scenarios = [ScenarioV1::new(41, &white), ScenarioV1::new(42, &light)];
     let conflict_scenarios = [ScenarioV1::new(41, &white), ScenarioV1::new(43, &black)];
 
-    // A dedicated known allocation proves the observer is live without
-    // requiring Core's cold path to allocate forever.
+    // Отдельная заведомая аллокация доказывает работоспособность наблюдателя,
+    // не превращая аллокацию холодного пути Core в вечный контракт.
     let (sentinel, observer_control) =
         crate::test_support::measured_allocator_events(|| Box::new(0_u8));
     assert_eq!(*sentinel, 0);
@@ -765,8 +765,8 @@ fn warmed_attachment_complete_lifecycle_has_no_allocator_events() {
         StateKindV1::Ready,
     );
 
-    // Three equal-cardinality observations prove the automaton high-water:
-    // Ready A, Failed(cause B + previous A), then prospective/committed Ready C.
+    // Три наблюдения равной мощности доказывают high-water автомата:
+    // Ready A, Failed(cause B + previous A), затем prospective/committed Ready C.
     assert_eq!(
         attachment
             .update(observed(2, &conflict_scenarios))
@@ -927,13 +927,9 @@ fn warmed_attachment_complete_lifecycle_has_no_allocator_events() {
 
 #[test]
 fn session_hot_path_contains_no_retired_per_update_storage_constructors() {
-    let compact = |source: &str| {
-        source
-            .chars()
-            .filter(|character| !character.is_whitespace())
-            .collect::<String>()
-    };
-    let observation = compact(include_str!("../../observation.rs"));
+    let compact = crate::generic_boundary_tests::compact_production_syntax;
+    let observation_source = include_str!("../../observation.rs");
+    let observation = compact(observation_source);
     for retired in [
         "cases: cases.into_boxed_slice()",
         "values: values.into_boxed_slice()",
@@ -946,9 +942,10 @@ fn session_hot_path_contains_no_retired_per_update_storage_constructors() {
             "observation hot path still constructs retired per-update storage: {retired}",
         );
     }
-    assert_eq!(
-        observation.matches("Rc::new(ObservationBackingV1{").count(),
-        1,
+    assert!(
+        crate::generic_boundary_tests::observation_backing_allocation_is_pool_scoped(
+            observation_source,
+        ),
         "ObservationBackingV1 may be allocated only by the three-slot pool constructor",
     );
 

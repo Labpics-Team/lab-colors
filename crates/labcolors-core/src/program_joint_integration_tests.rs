@@ -298,8 +298,8 @@ struct PanicOnceEvaluatorControlV1 {
     calls: std::cell::Cell<usize>,
 }
 
-/// Panics only on the first real assessment so the test can distinguish an
-/// unwind after the evaluation arena lease was acquired from an earlier panic.
+/// Паникует только на первой реальной оценке: тест отличает unwind после
+/// получения evaluation-arena lease от более ранней паники.
 #[derive(Debug, Clone)]
 struct PanicOnceEvaluatorSetV1 {
     control: std::rc::Rc<PanicOnceEvaluatorControlV1>,
@@ -1589,8 +1589,8 @@ fn evaluation_cell_cardinality_checks_both_products_without_a_numeric_cap() {
 
 #[test]
 fn every_required_joint_arena_reservation_is_fail_before_work_and_retryable() {
-    // Joint evaluation without point-causal evidence has two non-empty arena
-    // coordinates: constraint cells and committed outputs.
+    // Joint-оценка без point-causal evidence имеет две непустые координаты
+    // arena: constraint cells и committed outputs.
     const FIRST_UNUSED_RESERVATION_INDEX: usize = 2;
 
     for reservation_index in 0..=FIRST_UNUSED_RESERVATION_INDEX {

@@ -2263,6 +2263,11 @@ where
         self.considered_state_count
     }
 
+    #[cfg(test)]
+    pub(crate) fn retained_output_value_count_for_test(&self) -> usize {
+        self.report.arena.storage.outputs.len()
+    }
+
     pub(crate) fn considered_point_causal_evidence(
         &self,
     ) -> impl ExactSizeIterator<Item = ProgramConsideredPointCausalEvidenceV1<'_>> + '_ {
@@ -2605,7 +2610,7 @@ where
 }
 
 /// Возвращает arena в точный pool-слот при любом выходе, включая unwind из
-/// клиентского evaluator или деструктора evidence.
+/// зарегистрированного evaluator или деструктора evidence.
 struct ProgramEvaluationArenaGuardV1<'pool, Evaluation>
 where
     Evaluation: ProgramConstraintEvaluatorSetV1,
@@ -2786,6 +2791,9 @@ where
             .max(counts.exhaustive_replay_steps),
     )
     .map_err(|()| ProgramSessionEvaluationError::ResourceExhausted)?;
+    // До verdict любой из трёх logical slots может стать новым Ready и потому
+    // заранее покрывает outputs. Conflict очистит значения; перенос capacity
+    // потребовал бы второго pool/lease authority вместо одной связанной arena.
     try_reserve_program_evaluation_buffer(&mut arena.outputs, epoch.outputs.len())
         .map_err(|()| ProgramSessionEvaluationError::ResourceExhausted)?;
     Ok(counts)
@@ -2898,6 +2906,11 @@ where
         arena.storage_mut(),
         counts,
     )?;
+    if matches!(&outcome, ProgramEvaluationOutcomeV1::Conflict { .. }) {
+        // Conflict не имеет output-authority: сохраняется только capacity для
+        // следующего prospective update, но ни одно значение не переживает verdict.
+        arena.storage_mut().outputs.clear();
+    }
     let report = ProgramReportV1 {
         content_identity: epoch.content_identity,
         observation,

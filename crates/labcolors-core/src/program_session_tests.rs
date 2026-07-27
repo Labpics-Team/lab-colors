@@ -896,6 +896,11 @@ fn multi_case_hard_failure_retains_the_full_matrix_without_outputs() {
         panic!("each candidate target fails on one admitted physical case");
     };
     assert!(previous.is_none());
+    assert_eq!(
+        cause.retained_output_value_count_for_test(),
+        0,
+        "conflict evidence must not retain output values without output authority",
+    );
     let cells = cause.report().cells();
     assert_eq!(
         cells.len(),

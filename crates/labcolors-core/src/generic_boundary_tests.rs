@@ -1,10 +1,6 @@
 use std::ffi::OsStr;
 use std::path::PathBuf;
 
-#[expect(
-    dead_code,
-    reason = "the shared scanner also exposes a syntax projection for sibling integration gates"
-)]
 #[path = "../tests/common/source.rs"]
 mod source_scanner;
 
@@ -94,6 +90,68 @@ fn normalized_production_code(source: &str) -> String {
         .collect::<Vec<_>>()
         .join("\n")
         .to_ascii_lowercase()
+}
+
+pub(crate) fn compact_production_syntax(source: &str) -> String {
+    let mut compact = String::new();
+    for (_, line) in source_scanner::production_syntax_lines(source) {
+        compact.extend(line.chars().filter(|character| !character.is_whitespace()));
+    }
+    compact
+}
+
+pub(crate) fn observation_backing_allocation_is_pool_scoped(source: &str) -> bool {
+    let syntax = compact_production_syntax(source);
+    let Some(pool_start) = syntax.find("implObservationArenaPoolV1{") else {
+        return false;
+    };
+    let Some(relative_end) = syntax[pool_start..].find("structRevisionBoundObservationV1") else {
+        return false;
+    };
+    let pool = &syntax[pool_start..pool_start + relative_end];
+    let Some(constructor_start) = pool.find("pub(crate)fnnew(") else {
+        return false;
+    };
+    let Some(constructor_end) = pool[constructor_start..].find("fnmaterialize_into(") else {
+        return false;
+    };
+    let constructor = &pool[constructor_start..constructor_start + constructor_end];
+
+    // Единственный production-конструктор backing обязан находиться внутри
+    // `ObservationArenaPoolV1::new`; первое глобальное совпадение — само
+    // объявление структуры.
+    syntax.matches("ObservationBackingV1{").count() == 2
+        && pool.matches("ObservationBackingV1{").count() == 1
+        && constructor.matches("ObservationBackingV1{").count() == 1
+        && constructor.contains("Rc::new(ObservationBackingV1{")
+}
+
+#[test]
+fn observation_backing_allocation_gate_ignores_prose_and_rejects_out_of_scope_code() {
+    let comment_only = concat!(
+        "struct ObservationBackingV1 {}\n",
+        "struct ObservationArenaPoolV1;\n",
+        "impl ObservationArenaPoolV1 {\n",
+        "    pub(crate) fn new() {}\n",
+        "    fn materialize_into() {}\n",
+        "}\n",
+        "// Rc::new(ObservationBackingV1 {})\n",
+        "const FAKE: &str = \"Rc::new(ObservationBackingV1 {})\";\n",
+        "struct RevisionBoundObservationV1;\n",
+    );
+    assert!(!observation_backing_allocation_is_pool_scoped(comment_only));
+
+    let out_of_scope = concat!(
+        "struct ObservationBackingV1 {}\n",
+        "struct ObservationArenaPoolV1;\n",
+        "impl ObservationArenaPoolV1 {\n",
+        "    pub(crate) fn new() { Rc::new(ObservationBackingV1 {}); }\n",
+        "    fn materialize_into() {}\n",
+        "}\n",
+        "fn hot_path() { Rc::<ObservationBackingV1>::new(ObservationBackingV1 {}); }\n",
+        "struct RevisionBoundObservationV1;\n",
+    );
+    assert!(!observation_backing_allocation_is_pool_scoped(out_of_scope));
 }
 
 #[test]
@@ -688,6 +746,7 @@ fn staged_session_is_evidence_only_and_retired_operation_authority_cannot_return
 
 #[test]
 fn shared_observation_ssot_has_one_backing_without_lifecycle_or_adapter_facades() {
+    let observation_syntax = compact_production_syntax(OBSERVATION_SOURCE);
     let scenario_set = source_scope(
         OBSERVATION_SOURCE,
         "struct ObservedScenarioSet {",
@@ -740,21 +799,18 @@ fn shared_observation_ssot_has_one_backing_without_lifecycle_or_adapter_facades(
         "one Session-owned pool must retain every reusable observation backing",
     );
     for required in [
-        "pub(crate) const OBSERVATION_ARENA_SLOT_COUNT_V1: usize = 3;",
-        "Rc::new(ObservationBackingV1 {",
-        "Rc::get_mut(&mut self.slots[slot_index])",
+        "pub(crate)constOBSERVATION_ARENA_SLOT_COUNT_V1:usize=3;",
+        "Rc::new(ObservationBackingV1{",
+        "Rc::get_mut(&mutself.slots[slot_index])",
         "Ok(Rc::clone(&self.slots[slot_index]))",
     ] {
         assert!(
-            OBSERVATION_SOURCE.contains(required),
+            observation_syntax.contains(required),
             "the three-slot reuse proof is incomplete; missing `{required}`",
         );
     }
-    assert_eq!(
-        OBSERVATION_SOURCE
-            .matches("Rc::new(ObservationBackingV1 {")
-            .count(),
-        1,
+    assert!(
+        observation_backing_allocation_is_pool_scoped(OBSERVATION_SOURCE),
         "observation backing allocation must exist only in the persistent pool constructor",
     );
     assert_eq!(
