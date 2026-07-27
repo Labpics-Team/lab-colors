@@ -419,6 +419,32 @@ def _fixture(root: Path) -> ReceiptFixture:
 
 
 class ReceiptHostileTests(unittest.TestCase):
+    def assert_product_only_rejects_missing_roles(self, roles: tuple[str, ...]) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = _fixture(Path(temporary))
+            fixture.write_pin()
+            for role in roles:
+                with self.subTest(role=role):
+                    path = fixture.product / PRODUCT_ARTIFACT_PATHS[role]
+                    original = path.read_bytes()
+                    path.unlink()
+                    with self.assertRaisesRegex(VerificationError, "unavailable"):
+                        verify_product_receipt(fixture.product, policy=fixture.policy)
+                    path.write_bytes(original)
+
+    def assert_product_only_rejects_mutated_roles(self, roles: tuple[str, ...]) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = _fixture(Path(temporary))
+            fixture.write_pin()
+            for role in roles:
+                with self.subTest(role=role):
+                    path = fixture.product / PRODUCT_ARTIFACT_PATHS[role]
+                    original = path.read_bytes()
+                    path.write_bytes(original + b"mutant\n")
+                    with self.assertRaisesRegex(VerificationError, "receipt metadata"):
+                        verify_product_receipt(fixture.product, policy=fixture.policy)
+                    path.write_bytes(original)
+
     def test_valid_receipt_binds_committed_research_and_product_codec(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             _fixture(Path(temporary)).verify()
@@ -436,56 +462,16 @@ class ReceiptHostileTests(unittest.TestCase):
                 verify_product_receipt(fixture.product, policy=fixture.policy)
 
     def test_product_only_mode_rejects_each_missing_transitive_executor(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            fixture = _fixture(Path(temporary))
-            fixture.write_pin()
-            for role in TRANSITIVE_EXECUTOR_ROLES:
-                with self.subTest(role=role):
-                    path = fixture.product / PRODUCT_ARTIFACT_PATHS[role]
-                    original = path.read_bytes()
-                    path.unlink()
-                    with self.assertRaisesRegex(VerificationError, "unavailable"):
-                        verify_product_receipt(fixture.product, policy=fixture.policy)
-                    path.write_bytes(original)
+        self.assert_product_only_rejects_missing_roles(TRANSITIVE_EXECUTOR_ROLES)
 
     def test_product_only_mode_rejects_each_mutated_transitive_executor(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            fixture = _fixture(Path(temporary))
-            fixture.write_pin()
-            for role in TRANSITIVE_EXECUTOR_ROLES:
-                with self.subTest(role=role):
-                    path = fixture.product / PRODUCT_ARTIFACT_PATHS[role]
-                    original = path.read_bytes()
-                    path.write_bytes(original + b"mutant\n")
-                    with self.assertRaisesRegex(VerificationError, "receipt metadata"):
-                        verify_product_receipt(fixture.product, policy=fixture.policy)
-                    path.write_bytes(original)
+        self.assert_product_only_rejects_mutated_roles(TRANSITIVE_EXECUTOR_ROLES)
 
     def test_product_only_mode_rejects_each_missing_attachment_proof_artifact(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            fixture = _fixture(Path(temporary))
-            fixture.write_pin()
-            for role in ATTACHMENT_PROOF_ROLES:
-                with self.subTest(role=role):
-                    path = fixture.product / PRODUCT_ARTIFACT_PATHS[role]
-                    original = path.read_bytes()
-                    path.unlink()
-                    with self.assertRaisesRegex(VerificationError, "unavailable"):
-                        verify_product_receipt(fixture.product, policy=fixture.policy)
-                    path.write_bytes(original)
+        self.assert_product_only_rejects_missing_roles(ATTACHMENT_PROOF_ROLES)
 
     def test_product_only_mode_rejects_each_mutated_attachment_proof_artifact(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            fixture = _fixture(Path(temporary))
-            fixture.write_pin()
-            for role in ATTACHMENT_PROOF_ROLES:
-                with self.subTest(role=role):
-                    path = fixture.product / PRODUCT_ARTIFACT_PATHS[role]
-                    original = path.read_bytes()
-                    path.write_bytes(original + b"mutant\n")
-                    with self.assertRaisesRegex(VerificationError, "receipt metadata"):
-                        verify_product_receipt(fixture.product, policy=fixture.policy)
-                    path.write_bytes(original)
+        self.assert_product_only_rejects_mutated_roles(ATTACHMENT_PROOF_ROLES)
 
     def test_product_only_mode_rejects_a_receipt_changed_without_external_pin(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

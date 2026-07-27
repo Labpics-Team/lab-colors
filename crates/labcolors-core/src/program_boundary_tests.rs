@@ -87,7 +87,6 @@ fn assert_evidence_snapshot(view: EvidenceViewV1<'_>) {
         }
     }
     let certificates = exact_size(view.certificates());
-    let certificate_count = certificates.len();
     for certificate in certificates {
         let _: &[u8; 32] = certificate.content_identity().as_bytes();
         let observation = certificate.observation();
@@ -188,7 +187,6 @@ fn assert_evidence_snapshot(view: EvidenceViewV1<'_>) {
             }
         }
     }
-    let _ = certificate_count;
 }
 
 #[allow(dead_code)]
@@ -831,7 +829,7 @@ fn observed_violation_retains_previous_certificate_only_as_evidence() {
 }
 
 #[test]
-fn program_prepare_drop_is_invisible_and_commit_returns_the_new_projection() {
+fn program_prepare_drop_is_invisible_and_commit_returns_the_new_evidence() {
     let input = SurfaceInputPortIdV1::new(50);
     let owner = fixed_nested_draft(0.5, SourceIdV1::new(1), input, input)
         .compile()

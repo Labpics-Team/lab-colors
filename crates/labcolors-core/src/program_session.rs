@@ -1398,20 +1398,32 @@ impl CompiledPointOutputPresentationV1 {
 /// Cold-ошибка binding до допуска point output в hot path.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PointOutputPresentationBindErrorV1 {
+    /// Авторский output отсутствует в compiled output table.
     MissingOutput {
+        /// Неизвестный output ID.
         output: OutputSlotId,
     },
+    /// Авторская point-presentation цель отсутствует в compiled graph.
     MissingPresentationTarget {
+        /// Root, в котором ожидалась цель.
         root: PresentationRootId,
+        /// Occurrence, который должен быть доступен из root.
         occurrence: OccurrenceId,
     },
+    /// Output и point-presentation цель ссылаются на разные Paint.
     SubjectPaintMismatch {
+        /// Авторский output ID.
         output: OutputSlotId,
+        /// Paint, связанный с output.
         output_paint: PaintId,
+        /// Авторский presentation root.
         root: PresentationRootId,
+        /// Авторский presentation occurrence.
         occurrence: OccurrenceId,
+        /// Paint, физически представленный occurrence.
         subject_paint: PaintId,
     },
+    /// Нарушен закрытый compiled-инвариант после успешной валидации Draft.
     InternalInvariant,
 }
 

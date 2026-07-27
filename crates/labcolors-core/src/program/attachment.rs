@@ -504,6 +504,8 @@ where
     session: SessionV1,
     emissions: Vec<AttachedPointEmissionV1<L::OutputId>>,
     presentations: Vec<AttachedPointPresentationV1<L::OutputId>>,
+    // Published patch остаётся reusable backing: swap/clear меняют длину,
+    // но сохраняют заранее зарезервированную capacity для следующей ревизии.
     committed_sink_patch: Vec<PointSinkPatchEntryV1<L::OutputId>>,
     scratch_sink_patch: Vec<PointSinkPatchEntryV1<L::OutputId>>,
     committed_render_patch: Vec<AttachedRenderPatchEntryV1<L::OutputId>>,
@@ -518,34 +520,29 @@ where
     _owner_pin: ProgramOwnerLeaseV1<CoreProgramEvaluatorsV1>,
 }
 
-struct UnpublishedSinkGuardV1<L: LinearPointSinkLeaseV1> {
-    sink: Option<L>,
+struct UnpublishedSinkGuardV1<'a, L: LinearPointSinkLeaseV1> {
+    sink: &'a mut L,
+    armed: bool,
 }
 
-impl<L: LinearPointSinkLeaseV1> UnpublishedSinkGuardV1<L> {
-    const fn new(sink: L) -> Self {
-        Self { sink: Some(sink) }
+impl<'a, L: LinearPointSinkLeaseV1> UnpublishedSinkGuardV1<'a, L> {
+    const fn new(sink: &'a mut L) -> Self {
+        Self { sink, armed: true }
     }
 
     fn sink(&self) -> &L {
-        match &self.sink {
-            Some(sink) => sink,
-            None => unreachable!("guard владеет sink до успешного принятия"),
-        }
+        self.sink
     }
 
-    fn accept(mut self) -> L {
-        match self.sink.take() {
-            Some(sink) => sink,
-            None => unreachable!("guard принимает sink ровно один раз"),
-        }
+    fn disarm(mut self) {
+        self.armed = false;
     }
 }
 
-impl<L: LinearPointSinkLeaseV1> Drop for UnpublishedSinkGuardV1<L> {
+impl<L: LinearPointSinkLeaseV1> Drop for UnpublishedSinkGuardV1<'_, L> {
     fn drop(&mut self) {
-        if let Some(sink) = &mut self.sink {
-            sink.revoke_all_before_release(None);
+        if self.armed {
+            self.sink.revoke_all_before_release(None);
         }
     }
 }
@@ -584,7 +581,8 @@ where
         authored_presentations: &[AuthoredPointPresentationBindingV1],
         sink: L,
     ) -> Result<Self, AttachmentCreateErrorV1<L::OutputId>> {
-        let sink = UnpublishedSinkGuardV1::new(sink);
+        let mut sink = sink;
+        let sink_guard = UnpublishedSinkGuardV1::new(&mut sink);
         let expected_outputs = owner.compiled.output_count();
         if authored_emissions.len() != expected_outputs {
             return Err(AttachmentCreateErrorV1::EmissionBindingCount {
@@ -638,7 +636,7 @@ where
             }
         }
 
-        let owned_scope = sink.sink().owned_output_scope();
+        let owned_scope = sink_guard.sink().owned_output_scope();
         if owned_scope.len() != emissions.len() {
             return Err(AttachmentCreateErrorV1::SinkScopeCount {
                 expected: emissions.len(),
@@ -779,7 +777,7 @@ where
             .instantiate(stream_id)
             .map_err(AttachmentCreateErrorV1::Instantiate)?;
         let owner_pin = owner.compiled.pin_owner();
-        let sink = sink.accept();
+        sink_guard.disarm();
         Ok(Self {
             sink,
             session,
@@ -807,6 +805,23 @@ where
         let disposition = prepared_disposition(&transition)
             .map_err(AttachmentUpdateErrorV1::InternalInvariant)?;
 
+        let confirmed_stamp = match &disposition {
+            PreparedDispositionV1::ConfirmExact { revision } => {
+                let published = self.published_stamp.as_ref().ok_or(
+                    AttachmentUpdateErrorV1::InternalInvariant(
+                        AttachmentInvariantV1::MissingPublishedStamp,
+                    ),
+                )?;
+                if published.revision != *revision {
+                    return Err(AttachmentUpdateErrorV1::InternalInvariant(
+                        AttachmentInvariantV1::PublishedRevisionMismatch,
+                    ));
+                }
+                Some(&published.sink)
+            }
+            PreparedDispositionV1::SetAll { .. } | PreparedDispositionV1::RevokeAll { .. } => None,
+        };
+
         let action = match disposition {
             PreparedDispositionV1::SetAll { revision, outputs } => {
                 stage_complete_patches(
@@ -825,16 +840,6 @@ where
                 PreparedPatchActionV1::RevokeAll { revision }
             }
             PreparedDispositionV1::ConfirmExact { revision } => {
-                let published = self.published_stamp.as_ref().ok_or(
-                    AttachmentUpdateErrorV1::InternalInvariant(
-                        AttachmentInvariantV1::MissingPublishedStamp,
-                    ),
-                )?;
-                if published.revision != revision {
-                    return Err(AttachmentUpdateErrorV1::InternalInvariant(
-                        AttachmentInvariantV1::PublishedRevisionMismatch,
-                    ));
-                }
                 PreparedPatchActionV1::ConfirmExact { revision }
             }
         };
@@ -847,19 +852,14 @@ where
             PreparedPatchActionV1::RevokeAll { revision } => PointSinkIntentV1::RevokeAll {
                 revision: *revision,
             },
-            PreparedPatchActionV1::ConfirmExact { revision } => {
-                let expected = &self
-                    .published_stamp
-                    .as_ref()
-                    .ok_or(AttachmentUpdateErrorV1::InternalInvariant(
+            PreparedPatchActionV1::ConfirmExact { revision } => PointSinkIntentV1::ConfirmExact {
+                revision: *revision,
+                published_stamp: confirmed_stamp.ok_or(
+                    AttachmentUpdateErrorV1::InternalInvariant(
                         AttachmentInvariantV1::MissingPublishedStamp,
-                    ))?
-                    .sink;
-                PointSinkIntentV1::ConfirmExact {
-                    revision: *revision,
-                    published_stamp: expected,
-                }
-            }
+                    ),
+                )?,
+            },
         };
         let sink_prepared = self
             .sink
@@ -872,13 +872,9 @@ where
             sink: prepared.proposed_stamp().clone(),
         };
         if matches!(&action, PreparedPatchActionV1::ConfirmExact { .. }) {
-            let expected = &self
-                .published_stamp
-                .as_ref()
-                .ok_or(AttachmentUpdateErrorV1::InternalInvariant(
-                    AttachmentInvariantV1::MissingPublishedStamp,
-                ))?
-                .sink;
+            let expected = confirmed_stamp.ok_or(AttachmentUpdateErrorV1::InternalInvariant(
+                AttachmentInvariantV1::MissingPublishedStamp,
+            ))?;
             if &next_stamp.sink != expected {
                 return Err(AttachmentUpdateErrorV1::InternalInvariant(
                     AttachmentInvariantV1::ConfirmStampMismatch,

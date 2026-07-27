@@ -43,13 +43,16 @@ fn staged_program_api_is_module_qualified_without_transport_prefixes() {
             },
         )
         .unwrap();
-    let Some(program::CertificateV1::Verified(certificate)) = projection.certificates().next()
-    else {
+    let mut certificates = projection.certificates();
+    let Some(program::CertificateV1::Verified(certificate)) = certificates.next() else {
         panic!("the exact program must retain one Verified certificate");
     };
-    let Some(result) = certificate.outputs().next() else {
+    assert!(certificates.next().is_none());
+    let mut outputs = certificate.outputs();
+    let Some(result) = outputs.next() else {
         panic!("the exact program must retain one certified Paint output");
     };
+    assert!(outputs.next().is_none());
     assert_eq!(result.output_slot(), output);
     assert_eq!(result.source(), Srgb8::new([0, 0, 0]));
 }

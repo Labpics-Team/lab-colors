@@ -449,9 +449,13 @@ fn staged_session_is_evidence_only_and_retired_operation_authority_cannot_return
                 .expect("owner prepare must delegate one prepared Session transition"),
         "owner mismatch must be rejected before admission, allocation, or evaluation",
     );
-    for forbidden in [
-        "pub(crate) fn project(",
-        "pub(crate) fn update(",
+    for forbidden in ["pub(crate) fn project(", "pub(crate) fn update("] {
+        assert!(
+            !PROGRAM_SOURCE.contains(forbidden),
+            "evidence must not regain retired sink authority `{forbidden}`",
+        );
+    }
+    for retired in [
         "OperationV1",
         "SetV1",
         "RemoveV1",
@@ -459,8 +463,8 @@ fn staged_session_is_evidence_only_and_retired_operation_authority_cannot_return
         "BorrowScopeV1",
     ] {
         assert!(
-            !PROGRAM_SOURCE.contains(forbidden),
-            "evidence must not regain retired sink authority `{forbidden}`",
+            !contains_rust_identifier(PROGRAM_SOURCE, retired),
+            "evidence must not regain retired sink authority `{retired}`",
         );
     }
 

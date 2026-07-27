@@ -327,6 +327,8 @@ impl LinearPointSinkLeaseV1 for InMemoryPointSinkLeaseV1 {
                 return Err(InMemoryPointSinkErrorV1::Busy);
             }
             self.shared.busy.set(true);
+            // Счётчики фиксируют каждый intent, получивший linear Busy;
+            // test-only fault injection после этого тоже считается попыткой.
             match intent_kind {
                 TestIntentKindV1::SetAll => state.counts.set_all += 1,
                 TestIntentKindV1::RevokeAll => state.counts.revoke_all += 1,

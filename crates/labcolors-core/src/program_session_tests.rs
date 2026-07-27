@@ -555,6 +555,8 @@ fn point_output_presentation_binding_retains_exact_ids_and_canonical_ordinals() 
     assert_eq!(binding.paint(), TRANSLUCENT);
     assert_eq!(binding.root(), PRESENTATION_ROOT);
     assert_eq!(binding.occurrence(), OCCURRENCE);
+    // Canonical ordinals следуют возрастающим numeric IDs: оба EARLIER_ ID
+    // меньше выбранных OUTPUT/PRESENTATION_ROOT и потому занимают ordinal 0.
     assert_eq!(binding.output_ordinal(), 1);
     assert_eq!(binding.presentation_ordinal(), 1);
 }

@@ -547,7 +547,7 @@ fn assert_conflict_cell_matches_core(
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct ProjectionProbe {
+struct EvidenceProbe {
     iterators: usize,
     certificates: usize,
     cases: usize,
@@ -561,7 +561,7 @@ struct ProjectionProbe {
     checksum: u64,
 }
 
-impl ProjectionProbe {
+impl EvidenceProbe {
     const fn new() -> Self {
         Self {
             iterators: 0,
@@ -595,8 +595,8 @@ impl ProjectionProbe {
 
 fn consume_exact_fused<I>(
     mut iterator: I,
-    probe: &mut ProjectionProbe,
-    mut consume: impl FnMut(I::Item, &mut ProjectionProbe),
+    probe: &mut EvidenceProbe,
+    mut consume: impl FnMut(I::Item, &mut EvidenceProbe),
 ) where
     I: ExactSizeIterator + FusedIterator,
 {
@@ -620,7 +620,7 @@ fn consume_exact_fused<I>(
     probe.iterator_laws_hold &= iterator.next().is_none();
 }
 
-fn consume_public_assessment(assessment: AssessmentV1<'_>, probe: &mut ProjectionProbe) {
+fn consume_public_assessment(assessment: AssessmentV1<'_>, probe: &mut EvidenceProbe) {
     probe.mix(match assessment.verdict() {
         VerdictV1::Pass => 1,
         VerdictV1::Violation => 2,
@@ -684,7 +684,7 @@ fn consume_public_assessment(assessment: AssessmentV1<'_>, probe: &mut Projectio
     });
 }
 
-fn clean_set_projection_probe(source: [u8; 3]) -> ProjectionProbe {
+fn clean_set_projection_probe(source: [u8; 3]) -> EvidenceProbe {
     let owner = OwnerV1::from_compiled(fixed_clean_set_program(source));
     let mut session = owner.instantiate(STREAM.value()).unwrap();
     let backdrop = [Srgb8::new([0; 3])];
@@ -704,7 +704,7 @@ fn clean_set_projection_probe(source: [u8; 3]) -> ProjectionProbe {
     assert_eq!(certificate.cells().len(), 1);
     let assessment = certificate.cells().next().unwrap().assessment();
 
-    let mut probe = ProjectionProbe::new();
+    let mut probe = EvidenceProbe::new();
     consume_public_assessment(assessment, &mut probe);
     probe
 }
@@ -721,7 +721,7 @@ fn clean_set_projection_probe_binds_pass_absence_rejection_and_interval() {
         ),
     ] {
         let actual = clean_set_projection_probe(source);
-        let mut expected = ProjectionProbe::new();
+        let mut expected = EvidenceProbe::new();
         for component in components {
             expected.mix(component);
         }
@@ -729,8 +729,8 @@ fn clean_set_projection_probe_binds_pass_absence_rejection_and_interval() {
     }
 }
 
-fn consume_public_projection(view: EvidenceViewV1<'_>) -> ProjectionProbe {
-    let mut probe = ProjectionProbe::new();
+fn consume_public_evidence(view: EvidenceViewV1<'_>) -> EvidenceProbe {
+    let mut probe = EvidenceProbe::new();
     probe.mix(match view.kind() {
         StateKindV1::Waiting => 1,
         StateKindV1::Ready => 2,
@@ -1269,7 +1269,7 @@ fn committed_evidence_is_zero_alloc_and_repeats_no_composite_transform_or_evalua
     );
     assert!(ready_assessments > 0);
     let (ready_probe, ready_allocations) = crate::test_support::measured_allocations(|| {
-        consume_public_projection(std::hint::black_box(session.evidence()))
+        consume_public_evidence(std::hint::black_box(session.evidence()))
     });
     assert_eq!(ready_allocations, 0);
     assert!(ready_probe.iterator_laws_hold);
@@ -1308,7 +1308,7 @@ fn committed_evidence_is_zero_alloc_and_repeats_no_composite_transform_or_evalua
     let stale_derivations = MODELED_TRISTIMULUS_DERIVATION_CALLS.with(core::cell::Cell::get);
     let stale_assessments = CORE_PROGRAM_ASSESSMENT_CALLS.with(core::cell::Cell::get);
     let (stale_probe, stale_allocations) = crate::test_support::measured_allocations(|| {
-        consume_public_projection(std::hint::black_box(session.evidence()))
+        consume_public_evidence(std::hint::black_box(session.evidence()))
     });
     assert_eq!(stale_allocations, 0);
     assert!(stale_probe.iterator_laws_hold);
@@ -1344,7 +1344,7 @@ fn committed_evidence_is_zero_alloc_and_repeats_no_composite_transform_or_evalua
     let failed_derivations = MODELED_TRISTIMULUS_DERIVATION_CALLS.with(core::cell::Cell::get);
     let failed_assessments = CORE_PROGRAM_ASSESSMENT_CALLS.with(core::cell::Cell::get);
     let (failed_probe, failed_allocations) = crate::test_support::measured_allocations(|| {
-        consume_public_projection(std::hint::black_box(session.evidence()))
+        consume_public_evidence(std::hint::black_box(session.evidence()))
     });
     assert_eq!(failed_allocations, 0);
     assert!(failed_probe.iterator_laws_hold);
@@ -1521,11 +1521,10 @@ fn concrete_program_retains_ready_and_fail_closed_stale_evidence() {
             },
         )
         .unwrap();
-    let ready_evidence = ready;
-    assert_eq!(ready_evidence.kind(), StateKindV1::Ready);
-    assert_observed_head(ready_evidence.observation_head(), STREAM.value(), 1);
-    assert_eq!(ready_evidence.cause_certificate_index(), None);
-    let certificates = ready_evidence.certificates().collect::<Vec<_>>();
+    assert_eq!(ready.kind(), StateKindV1::Ready);
+    assert_observed_head(ready.observation_head(), STREAM.value(), 1);
+    assert_eq!(ready.cause_certificate_index(), None);
+    let certificates = ready.certificates().collect::<Vec<_>>();
     assert_eq!(certificates.len(), 1);
     assert!(matches!(certificates[0], CertificateV1::Verified(_)));
     assert_eq!(certificates[0].observation().revision(), 1);
@@ -1573,10 +1572,9 @@ fn concrete_program_retains_ready_and_fail_closed_stale_evidence() {
             },
         )
         .unwrap();
-    let stale_evidence = stale;
-    assert_eq!(stale_evidence.kind(), StateKindV1::Stale);
-    assert_unknown_head(stale_evidence.observation_head(), STREAM.value(), 2, 7);
-    let certificates = stale_evidence.certificates().collect::<Vec<_>>();
+    assert_eq!(stale.kind(), StateKindV1::Stale);
+    assert_unknown_head(stale.observation_head(), STREAM.value(), 2, 7);
+    let certificates = stale.certificates().collect::<Vec<_>>();
     assert_eq!(certificates.len(), 1);
     assert!(matches!(certificates[0], CertificateV1::Verified(_)));
     assert_eq!(certificates[0].observation().revision(), 1);
@@ -1603,10 +1601,9 @@ fn concrete_program_failed_retains_only_current_conflict_and_previous_evidence()
             },
         )
         .unwrap();
-    let failed_evidence = failed;
-    assert_eq!(failed_evidence.kind(), StateKindV1::Failed);
-    assert_eq!(failed_evidence.cause_certificate_index(), Some(0));
-    let certificates = failed_evidence.certificates().collect::<Vec<_>>();
+    assert_eq!(failed.kind(), StateKindV1::Failed);
+    assert_eq!(failed.cause_certificate_index(), Some(0));
+    let certificates = failed.certificates().collect::<Vec<_>>();
     assert_eq!(certificates.len(), 1);
     assert!(matches!(certificates[0], CertificateV1::Conflict(_)));
     assert_eq!(certificates[0].observation().revision(), 1);
@@ -1637,10 +1634,9 @@ fn concrete_program_failed_retains_only_current_conflict_and_previous_evidence()
             },
         )
         .unwrap();
-    let failed_evidence = failed;
-    assert_eq!(failed_evidence.kind(), StateKindV1::Failed);
-    assert_eq!(failed_evidence.cause_certificate_index(), Some(0));
-    let certificates = failed_evidence.certificates().collect::<Vec<_>>();
+    assert_eq!(failed.kind(), StateKindV1::Failed);
+    assert_eq!(failed.cause_certificate_index(), Some(0));
+    let certificates = failed.certificates().collect::<Vec<_>>();
     assert_eq!(
         certificates
             .iter()
@@ -2543,7 +2539,6 @@ fn exercise_modeled_action(
             "replay, Unknown and rejected inputs must not dispatch evaluators",
         );
     }
-    let _ = owner;
     assert_projection_matches_model(session.evidence(), *model)
 }
 

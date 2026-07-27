@@ -613,34 +613,42 @@ fn source_guards_keep_the_post_install_tail_destructor_free() {
 
     let session_drain = attachment_source
         .find("drop(self.retired_session.take())")
-        .unwrap();
+        .expect("Attachment must drain deferred Session retirement");
     let stamp_drain = attachment_source
         .find("drop(self.retired_stamp.take())")
-        .unwrap();
-    let prepare = attachment_source.find(".prepare_update(update)").unwrap();
-    let install = attachment_source.find(".try_install()").unwrap();
+        .expect("Attachment must drain deferred stamp retirement");
+    let prepare = attachment_source
+        .find(".prepare_update(update)")
+        .expect("Attachment must prepare one Session transition");
+    let install = attachment_source
+        .find(".try_install()")
+        .expect("Attachment must install the prepared sink transaction");
     assert!(session_drain < prepare && prepare < install);
     assert!(stamp_drain < prepare && prepare < install);
 
     let sink_prepare = support_source
         .split("fn prepare<'lease>(")
         .nth(1)
-        .unwrap()
+        .expect("test sink must implement prepare")
         .split("fn revoke_all_before_release")
         .next()
-        .unwrap();
+        .expect("prepare body must precede revoke implementation");
     assert!(
-        sink_prepare.find("drop(self.retired.take())").unwrap()
-            < sink_prepare.find("self.shared.busy.set(true)").unwrap()
+        sink_prepare
+            .find("drop(self.retired.take())")
+            .expect("prepare must drain retired sink state")
+            < sink_prepare
+                .find("self.shared.busy.set(true)")
+                .expect("prepare must acquire Busy")
     );
 
     let finish = support_source
         .split("fn finish_after_session(mut self)")
         .nth(1)
-        .unwrap()
+        .expect("prepared sink must implement finish_after_session")
         .split("impl Drop for InMemoryPreparedPointSinkWriteV1")
         .next()
-        .unwrap();
+        .expect("finish body must precede prepared-sink Drop");
     assert!(!finish.contains("drop("));
     assert!(!finish.contains("borrow_mut"));
     for owning_take in [
@@ -658,8 +666,10 @@ fn source_guards_keep_the_post_install_tail_destructor_free() {
     assert!(
         finish
             .find("self.lease.retired = Some(retirement)")
-            .unwrap()
-            < finish.find("self.lease.shared.busy.set(false)").unwrap()
+            .expect("finish must park retirement")
+            < finish
+                .find("self.lease.shared.busy.set(false)")
+                .expect("finish must release Busy")
     );
 }
 

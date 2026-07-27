@@ -1945,9 +1945,7 @@ impl CompiledAppearanceGraph {
             .occurrences
             .binary_search_by_key(&id, |occurrence| occurrence.id)
             .ok()?;
-        self.occurrences
-            .get(index)
-            .map(|occurrence| occurrence.subject_id)
+        Some(self.occurrences[index].subject_id)
     }
 
     /// Создаёт полномочие только для `Occurrence`, который не потребляется
