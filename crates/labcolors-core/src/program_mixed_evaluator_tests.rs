@@ -1495,6 +1495,59 @@ fn observation_projection_is_invariant_under_every_scenario_permutation_and_keep
 }
 
 #[test]
+fn warmed_schema_ordered_exact_replay_reuses_session_scratch_without_allocation() {
+    let owner = OwnerV1::from_compiled(finite_program([[0x80; 3], [0; 3]]));
+    let mut session = owner.instantiate(STREAM.value()).unwrap();
+    let white = [Srgb8::new([0xFF; 3])];
+    let gray = [Srgb8::new([0x80; 3])];
+    let first = [
+        ScenarioV1::new(9, &white),
+        ScenarioV1::new(4, &gray),
+        ScenarioV1::new(3, &white),
+    ];
+    let initial = owner
+        .prepare_update(
+            &mut session,
+            UpdateV1::Observed {
+                revision: 1,
+                scenarios: &first,
+            },
+        )
+        .unwrap()
+        .commit();
+    let initial_backing = initial
+        .certificates()
+        .next()
+        .expect("the valid update must retain one certificate")
+        .observation_backing_ptr_for_test();
+
+    let replay = [
+        ScenarioV1::new(3, &white),
+        ScenarioV1::new(9, &white),
+        ScenarioV1::new(4, &gray),
+    ];
+    let (replay_backing, allocations) = crate::test_support::measured_allocations(|| {
+        owner
+            .prepare_update(
+                std::hint::black_box(&mut session),
+                UpdateV1::Observed {
+                    revision: 1,
+                    scenarios: std::hint::black_box(&replay),
+                },
+            )
+            .expect("a permuted exact replay must be idempotent")
+            .commit()
+            .certificates()
+            .next()
+            .expect("idempotence must preserve the certificate")
+            .observation_backing_ptr_for_test()
+    });
+
+    assert_eq!(allocations, 0);
+    assert_eq!(replay_backing, initial_backing);
+}
+
+#[test]
 fn concrete_program_retains_ready_and_fail_closed_stale_evidence() {
     let owner = OwnerV1::from_compiled(finite_program([[0x80; 3], [0; 3]]));
     assert_eq!(owner.surface_input_port_count(), 1);
