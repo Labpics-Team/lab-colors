@@ -329,9 +329,9 @@ where
 fn program_root_color() -> Result<VertexColorV1, ProgramCompileError> {
     let mut color = VertexColorV1::new(vertex_tag::PROGRAM);
     // Эти теги связывают адрес с версиями исполняемых законов: схемой Program,
-    // total-order selection, финальной перепроверкой, атомарным наблюдением и
-    // encoded Paint emission. Derived capability releases bind only the
-    // constraints that execute them.
+    // total-order selection, финальной перепроверкой, атомарным наблюдением,
+    // encoded Paint emission и modeled point presentation. Derived capability
+    // releases bind only the constraints that execute them.
     for release in [
         release_tag::PROGRAM_SCHEMA_V3,
         release_tag::DECLARED_TOTAL_ORDER_V1,
