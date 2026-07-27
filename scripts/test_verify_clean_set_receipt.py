@@ -419,7 +419,7 @@ def _fixture(root: Path) -> ReceiptFixture:
 
 
 class ReceiptHostileTests(unittest.TestCase):
-    def assert_product_only_rejects_missing_roles(self, roles: tuple[str, ...]) -> None:
+    def _assert_product_only_rejects_missing_roles(self, roles: tuple[str, ...]) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             fixture = _fixture(Path(temporary))
             fixture.write_pin()
@@ -432,7 +432,7 @@ class ReceiptHostileTests(unittest.TestCase):
                         verify_product_receipt(fixture.product, policy=fixture.policy)
                     path.write_bytes(original)
 
-    def assert_product_only_rejects_mutated_roles(self, roles: tuple[str, ...]) -> None:
+    def _assert_product_only_rejects_mutated_roles(self, roles: tuple[str, ...]) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             fixture = _fixture(Path(temporary))
             fixture.write_pin()
@@ -462,16 +462,16 @@ class ReceiptHostileTests(unittest.TestCase):
                 verify_product_receipt(fixture.product, policy=fixture.policy)
 
     def test_product_only_mode_rejects_each_missing_transitive_executor(self) -> None:
-        self.assert_product_only_rejects_missing_roles(TRANSITIVE_EXECUTOR_ROLES)
+        self._assert_product_only_rejects_missing_roles(TRANSITIVE_EXECUTOR_ROLES)
 
     def test_product_only_mode_rejects_each_mutated_transitive_executor(self) -> None:
-        self.assert_product_only_rejects_mutated_roles(TRANSITIVE_EXECUTOR_ROLES)
+        self._assert_product_only_rejects_mutated_roles(TRANSITIVE_EXECUTOR_ROLES)
 
     def test_product_only_mode_rejects_each_missing_attachment_proof_artifact(self) -> None:
-        self.assert_product_only_rejects_missing_roles(ATTACHMENT_PROOF_ROLES)
+        self._assert_product_only_rejects_missing_roles(ATTACHMENT_PROOF_ROLES)
 
     def test_product_only_mode_rejects_each_mutated_attachment_proof_artifact(self) -> None:
-        self.assert_product_only_rejects_mutated_roles(ATTACHMENT_PROOF_ROLES)
+        self._assert_product_only_rejects_mutated_roles(ATTACHMENT_PROOF_ROLES)
 
     def test_product_only_mode_rejects_a_receipt_changed_without_external_pin(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

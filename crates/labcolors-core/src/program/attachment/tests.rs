@@ -608,8 +608,14 @@ fn source_guards_keep_the_post_install_tail_destructor_free() {
     let attachment_source = include_str!("../attachment.rs");
     let support_source = include_str!("support.rs");
 
-    assert!(attachment_source.contains("transition.commit_deferred()"));
-    assert!(!attachment_source.contains("let _ = transition.commit();"));
+    assert!(
+        attachment_source.contains("transition.commit_deferred()"),
+        "Attachment must publish through the deferred Session commit seam",
+    );
+    assert!(
+        !attachment_source.contains("let _ = transition.commit();"),
+        "eager Session commit must not return to the post-install tail",
+    );
 
     let session_drain = attachment_source
         .find("drop(self.retired_session.take())")
@@ -623,8 +629,14 @@ fn source_guards_keep_the_post_install_tail_destructor_free() {
     let install = attachment_source
         .find(".try_install()")
         .expect("Attachment must install the prepared sink transaction");
-    assert!(session_drain < prepare && prepare < install);
-    assert!(stamp_drain < prepare && prepare < install);
+    assert!(
+        session_drain < prepare && prepare < install,
+        "Session retirement must drain before prepare and install",
+    );
+    assert!(
+        stamp_drain < prepare && prepare < install,
+        "stamp retirement must drain before prepare and install",
+    );
 
     let sink_prepare = support_source
         .split("fn prepare<'lease>(")
@@ -639,7 +651,8 @@ fn source_guards_keep_the_post_install_tail_destructor_free() {
             .expect("prepare must drain retired sink state")
             < sink_prepare
                 .find("self.shared.busy.set(true)")
-                .expect("prepare must acquire Busy")
+                .expect("prepare must acquire Busy"),
+        "retired sink state must drain before Busy is acquired",
     );
 
     let finish = support_source
@@ -649,8 +662,14 @@ fn source_guards_keep_the_post_install_tail_destructor_free() {
         .split("impl Drop for InMemoryPreparedPointSinkWriteV1")
         .next()
         .expect("finish body must precede prepared-sink Drop");
-    assert!(!finish.contains("drop("));
-    assert!(!finish.contains("borrow_mut"));
+    assert!(
+        !finish.contains("drop("),
+        "post-install finish must not run a destructor",
+    );
+    assert!(
+        !finish.contains("borrow_mut"),
+        "post-install finish must not enter a fallible RefCell borrow",
+    );
     for owning_take in [
         "_staging: self.staging.take()",
         "_retired_stamp: self.retired_stamp.take()",
@@ -669,7 +688,8 @@ fn source_guards_keep_the_post_install_tail_destructor_free() {
             .expect("finish must park retirement")
             < finish
                 .find("self.lease.shared.busy.set(false)")
-                .expect("finish must release Busy")
+                .expect("finish must release Busy"),
+        "finish must park every retired owner before releasing Busy",
     );
 }
 
