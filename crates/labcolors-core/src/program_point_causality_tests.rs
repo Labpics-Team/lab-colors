@@ -360,6 +360,9 @@ fn finite_fanout_program() -> crate::program_session::CompiledProgram<ExactSrgb8
         )],
         ObservationGroup::new(GROUP, vec![PORT]),
         vec![
+            // На подложках 0/255 alpha 0.01 ограничивает hard-occurrence
+            // кодами 0/3 и 252/255 для двух кандидатов. Alpha корней 0.95/0.5
+            // независимо разводят Empty/Singleton в causal evidence.
             OpacityInput::new(alpha_target, 0.01),
             OpacityInput::new(alpha_opaque_root, 0.95),
             OpacityInput::new(alpha_translucent_root, 0.5),
@@ -422,6 +425,8 @@ fn finite_fanout_program() -> crate::program_session::CompiledProgram<ExactSrgb8
             vec![ConstraintInvocation::hard(
                 CONSTRAINT,
                 OCCURRENCE,
+                // Ни один из четырёх выведенных выше кодов не равен 128,
+                // поэтому обе joint-конфигурации обязаны попасть в conflict.
                 Srgb8::new([128; 3]),
             )],
             vec![],
@@ -435,6 +440,8 @@ fn finite_fanout_program() -> crate::program_session::CompiledProgram<ExactSrgb8
     ]))
     .with_point_presentations(
         vec![
+            // Обратный declaration order намеренно доказывает, что compilation
+            // канонизирует root 60 перед root 61.
             PointPresentationRootV1::new(translucent_root_id, translucent_root),
             PointPresentationRootV1::new(opaque_root_id, opaque_root),
         ],

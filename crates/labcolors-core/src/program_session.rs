@@ -2201,6 +2201,8 @@ where
         checked_program_epoch_evaluation_cardinality(epoch, observation.physical_case_count())
             .ok_or(ProgramSessionEvaluationError::ResourceExhausted)?;
 
+    // Failure-injection tests observe this order by index, so adding or moving
+    // a reservation must also move the corresponding first-unused boundary.
     let mut selected = ProgramReportBuffersV1::empty();
     try_reserve_program_evaluation_buffer(&mut selected.cells, counts.selected)
         .map_err(|()| ProgramSessionEvaluationError::ResourceExhausted)?;
