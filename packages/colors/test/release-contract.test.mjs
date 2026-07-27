@@ -482,9 +482,101 @@ test("MSRV and packaged Rust crate gates are executable CI contracts", () => {
   assert.match(ci, /DEPS_DIR="\$RUNNER_TEMP\/chrome-deps-\$GITHUB_JOB"/);
   assert.match(ci, /APT_LISTS="\$DEPS_DIR\/apt-lists"/);
   assert.match(ci, /APT_CACHE="\$DEPS_DIR\/apt-cache"/);
-  assert.match(ci, /APT_SOURCES="\$DEPS_DIR\/apt-sources"/);
-  assert.match(ci, /Dir::Etc::sourcelist=\$APT_SOURCES\/sources\.list/);
-  assert.match(ci, /Dir::Etc::sourceparts=\$APT_SOURCES\/sources\.list\.d/);
+  const chromeInstallStep = "name: install Chrome + dependencies (Chrome for Testing + apt-get download)";
+  const assertAptSourceIsolation = (workflow) => {
+    const active = workflowRunScript(workflow, chromeInstallStep)
+      .split("\n")
+      .filter((line) => !line.trimStart().startsWith("#"))
+      .join("\n");
+    assert.equal(
+      active.match(/^readonly APT_SOURCES="\$DEPS_DIR\/apt-sources"$/gmu)?.length,
+      1,
+      "Chrome APT source root must have one active job-local authority",
+    );
+    assert.equal(
+      active.match(/\bAPT_SOURCES(?:\[[^\]\n]*\])?\s*\+?=/gu)?.length,
+      1,
+      "Chrome APT source authority must be assigned exactly once",
+    );
+    assert.doesNotMatch(active, /\bunset\b[^\n;]*\bAPT_SOURCES\b/gu);
+    const optionArrays = [...active.matchAll(
+      /^[ \t]*APT_OPTIONS=\(\n(?<body>(?:[ \t]+[^\n]*\n)+)^[ \t]*\)$/gmu,
+    )];
+    assert.equal(optionArrays.length, 1, "Chrome step must have one active APT_OPTIONS array");
+    assert.equal(
+      active.match(/\bAPT_OPTIONS(?:\[[^\]\n]*\])?\s*\+?=/gu)?.length,
+      1,
+      "Chrome APT options must be assigned exactly once",
+    );
+    assert.equal(active.match(/^readonly APT_OPTIONS$/gmu)?.length, 1);
+    assert.doesNotMatch(active, /\bunset\b[^\n;]*\bAPT_OPTIONS\b/gu);
+    const optionBody = optionArrays[0].groups?.body ?? "";
+    for (const option of [
+      '-o "Dir::Etc::sourcelist=$APT_SOURCES/sources.list"',
+      '-o "Dir::Etc::sourceparts=$APT_SOURCES/sources.list.d"',
+    ]) {
+      assert.equal(
+        optionBody.split("\n").filter((line) => line.trim() === option).length,
+        1,
+        `missing active isolated-source option: ${option}`,
+      );
+    }
+    assert.match(active, /^: "\$\{ID:\?missing distro ID\}"$/mu);
+    assert.match(active, /^: "\$\{VERSION_CODENAME:\?missing distro codename\}"$/mu);
+    assert.equal(active.match(/^\s*test -r "\$DISTRO_KEYRING"$/gmu)?.length, 2);
+    assert.match(
+      active,
+      /^\s*\*\)\n\s+echo "unsupported Chrome dependency distro: \$ID" >&2\n\s+exit 1\n\s+;;$/mu,
+    );
+
+    const optionsEnd = optionArrays[0].index + optionArrays[0][0].length;
+    const afterOptions = active.slice(optionsEnd);
+    assert.match(afterOptions, /^\nreadonly APT_OPTIONS\napt-get /u);
+    const update = active.indexOf('apt-get "${APT_OPTIONS[@]}" update', optionsEnd);
+    const download = active.indexOf('apt-get "${APT_OPTIONS[@]}" download', update);
+    assert.ok(optionsEnd < update && update < download);
+    assert.deepEqual(
+      active
+        .split("\n")
+        .map((line) => line.trim())
+        .filter((line) => /(?:^|[\s;&(|])apt(?:-get)?(?=\s)/u.test(line)),
+      [
+        'apt-get "${APT_OPTIONS[@]}" update',
+        '(cd "$DEBS_DIR" && apt-get "${APT_OPTIONS[@]}" download libnspr4 libnss3 libasound2t64 libgbm1 2>&1)',
+      ],
+      "every APT invocation must use the one immutable isolated option set",
+    );
+  };
+  assertAptSourceIsolation(ci);
+  for (const mutant of [
+    ci.replace(
+      '            -o "Dir::Etc::sourcelist=$APT_SOURCES/sources.list"',
+      '            # -o "Dir::Etc::sourcelist=$APT_SOURCES/sources.list"',
+    ),
+    ci.replace(
+      '          apt-get "${APT_OPTIONS[@]}" update',
+      '          APT_OPTIONS=()\n          apt-get "${APT_OPTIONS[@]}" update',
+    ),
+    ci.replace(
+      '          apt-get "${APT_OPTIONS[@]}" update',
+      '          APT_SOURCES=/etc/apt\n          apt-get "${APT_OPTIONS[@]}" update',
+    ),
+    ci.replace(
+      '          apt-get "${APT_OPTIONS[@]}" update',
+      '          :; APT_OPTIONS=()\n          apt-get "${APT_OPTIONS[@]}" update',
+    ),
+    ci.replace(
+      '          (cd "$DEBS_DIR" && apt-get',
+      '          unset APT_OPTIONS\n          (cd "$DEBS_DIR" && apt-get',
+    ),
+    ci.replace(
+      '          apt-get "${APT_OPTIONS[@]}" update',
+      '          apt-get download libnss3\n          apt-get "${APT_OPTIONS[@]}" update',
+    ),
+  ]) {
+    assert.notEqual(mutant, ci, "hostile APT mutation must bite");
+    assert.throws(() => assertAptSourceIsolation(mutant));
+  }
   assert.match(ci, /Dir::State::lists=\$APT_LISTS/);
   assert.match(ci, /Dir::State::status=\/var\/lib\/dpkg\/status/);
   assert.match(ci, /Dir::Cache=\$APT_CACHE/);

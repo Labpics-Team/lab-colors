@@ -2734,10 +2734,14 @@ where
     }
 
     fn restore(&mut self, returned: ProgramEvaluationArenaReturnV1<Evaluation>) {
+        // Маршрут возврата минтится тем же observation, который выбрал слот
+        // ограниченной арены; внешнего конструктора для такого слота нет.
         let destination = self
             .slots
             .get_mut(returned.slot.index())
             .unwrap_or_else(|| unreachable!("observation minted a bounded arena slot"));
+        // Move-only lease удерживает storage до единственного retirement, поэтому
+        // занятый destination означал бы повторный возврат одного владения.
         if destination.is_some() {
             unreachable!("a move-only Program arena cannot be returned twice");
         }

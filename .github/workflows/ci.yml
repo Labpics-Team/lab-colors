@@ -516,7 +516,7 @@ jobs:
           DEBS_DIR="$DEPS_DIR/debs"
           APT_LISTS="$DEPS_DIR/apt-lists"
           APT_CACHE="$DEPS_DIR/apt-cache"
-          APT_SOURCES="$DEPS_DIR/apt-sources"
+          readonly APT_SOURCES="$DEPS_DIR/apt-sources"
           mkdir -p \
             "$DEBS_DIR" \
             "$APT_LISTS/partial" \
@@ -564,6 +564,7 @@ jobs:
             -o "Debug::NoLocking=1"
             -o "Acquire::Retries=3"
           )
+          readonly APT_OPTIONS
           apt-get "${APT_OPTIONS[@]}" update
           # libnspr4/libnss3: NSS/NSPR crypto deps for Chrome and chromedriver.
           # libasound2t64: ALSA after the current Debian/Ubuntu time64 transition.
