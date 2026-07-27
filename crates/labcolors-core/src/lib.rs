@@ -90,6 +90,9 @@ mod agnostic_gates;
 mod appearance_graph_tests;
 
 #[cfg(test)]
+mod appearance_replay_tests;
+
+#[cfg(test)]
 mod lcs_occurrence_tests;
 
 #[cfg(test)]
