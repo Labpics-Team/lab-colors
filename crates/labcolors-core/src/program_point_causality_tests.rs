@@ -21,6 +21,7 @@ use crate::program_session::{
     ProgramPointCausalSelectedStateV1, ProgramSessionEvaluationError, Source, SourceId, Surface,
     Target, TargetCandidateChoiceV1, TargetCandidateId, TargetCandidateV1, TargetId,
     checked_program_point_causal_cardinality_for_test, fail_program_preflight_reservation_for_test,
+    program_report_cardinality_is_exact_for_test, selected_program_storage_is_prepared_for_test,
 };
 use crate::session::{SessionState, SessionUpdateError};
 use crate::wcag22::Wcag22CriterionV1;
@@ -123,6 +124,61 @@ fn preflight_program_with_mode(
     program.compile().unwrap()
 }
 
+fn joint_preflight_program(
+    evaluator: CountingProgramWcag22Srgb8V1,
+) -> crate::program_session::CompiledProgram<CountingProgramWcag22Srgb8V1> {
+    let lower = TargetCandidateId::new(72);
+    let higher = TargetCandidateId::new(73);
+    Program::new(
+        vec![Source::new(SOURCE, signal([0xEE; 3]))],
+        vec![Target::finite(
+            TARGET,
+            SOURCE,
+            vec![
+                TargetCandidateV1::new(lower, signal([0xEE; 3])),
+                TargetCandidateV1::new(higher, signal([0xFF; 3])),
+            ],
+        )],
+        ObservationGroup::new(GROUP, vec![PORT]),
+        vec![],
+        vec![Paint::Solid {
+            id: PAINT,
+            target: TARGET,
+        }],
+        vec![Surface::Input {
+            id: SURFACE,
+            input: PORT,
+        }],
+        vec![Occurrence::new(
+            OCCURRENCE,
+            PAINT,
+            SURFACE,
+            CompositionProfile::EncodedSrgb8SourceOverV1,
+            context(),
+        )],
+        ConstraintSet::new(
+            vec![ConstraintInvocation::hard(
+                CONSTRAINT,
+                OCCURRENCE,
+                Wcag22CriterionV1::Sc143TextLargeScale,
+            )],
+            vec![],
+        ),
+        vec![OutputBinding::new(OUTPUT, PAINT)],
+        evaluator,
+    )
+    .with_joint_selection(DeclaredJointSelectionV1::new(vec![
+        JointCandidateStateV1::new(vec![TargetCandidateChoiceV1::new(TARGET, lower)]),
+        JointCandidateStateV1::new(vec![TargetCandidateChoiceV1::new(TARGET, higher)]),
+    ]))
+    .with_point_presentations(
+        vec![PointPresentationRootV1::new(ROOT, OCCURRENCE)],
+        vec![PointPresentationTargetV1::new(ROOT, OCCURRENCE)],
+    )
+    .compile()
+    .unwrap()
+}
+
 fn observed(revision: u64) -> ObservationUpdateInput {
     ObservationUpdateInput {
         stream: STREAM,
@@ -191,6 +247,9 @@ fn fanout_program() -> crate::program_session::CompiledProgram<ExactSrgb8Identit
         vec![Target::fixed(TARGET, SOURCE)],
         ObservationGroup::new(GROUP, vec![PORT]),
         vec![
+            // На белой подложке чёрная цель даёт 255 + 0.01 * (0 - 255) = 252.45;
+            // объявленная граница source-over округляет это до 252. Разная
+            // непрозрачность корней затем различает отсутствие Empty/Singleton.
             OpacityInput::new(alpha_target, 0.01),
             OpacityInput::new(alpha_opaque_root, 0.95),
             OpacityInput::new(alpha_translucent_root, 0.5),
@@ -274,6 +333,122 @@ fn fanout_program() -> crate::program_session::CompiledProgram<ExactSrgb8Identit
     .unwrap()
 }
 
+fn finite_fanout_program() -> crate::program_session::CompiledProgram<ExactSrgb8IdentityV1> {
+    let alpha_target = OpacityInputId::new(20);
+    let alpha_opaque_root = OpacityInputId::new(21);
+    let alpha_translucent_root = OpacityInputId::new(22);
+    let target_paint = PaintId::new(30);
+    let opaque_root_paint = PaintId::new(31);
+    let translucent_root_paint = PaintId::new(32);
+    let derived = SurfaceId::new(40);
+    let opaque_root = OccurrenceId::new(50);
+    let translucent_root = OccurrenceId::new(51);
+    let opaque_root_id = PresentationRootId::new(60);
+    let translucent_root_id = PresentationRootId::new(61);
+    let dark = TargetCandidateId::new(70);
+    let light = TargetCandidateId::new(71);
+
+    Program::new(
+        vec![Source::new(SOURCE, signal([0; 3]))],
+        vec![Target::finite(
+            TARGET,
+            SOURCE,
+            vec![
+                TargetCandidateV1::new(dark, signal([0; 3])),
+                TargetCandidateV1::new(light, signal([255; 3])),
+            ],
+        )],
+        ObservationGroup::new(GROUP, vec![PORT]),
+        vec![
+            OpacityInput::new(alpha_target, 0.01),
+            OpacityInput::new(alpha_opaque_root, 0.95),
+            OpacityInput::new(alpha_translucent_root, 0.5),
+        ],
+        vec![
+            Paint::Solid {
+                id: PAINT,
+                target: TARGET,
+            },
+            Paint::Opacity {
+                id: target_paint,
+                source: PAINT,
+                opacity: alpha_target,
+            },
+            Paint::Opacity {
+                id: opaque_root_paint,
+                source: PAINT,
+                opacity: alpha_opaque_root,
+            },
+            Paint::Opacity {
+                id: translucent_root_paint,
+                source: PAINT,
+                opacity: alpha_translucent_root,
+            },
+        ],
+        vec![
+            Surface::Input {
+                id: SURFACE,
+                input: PORT,
+            },
+            Surface::FromOccurrence {
+                id: derived,
+                occurrence: OCCURRENCE,
+            },
+        ],
+        vec![
+            Occurrence::new(
+                OCCURRENCE,
+                target_paint,
+                SURFACE,
+                CompositionProfile::EncodedSrgb8SourceOverV1,
+                context(),
+            ),
+            Occurrence::new(
+                opaque_root,
+                opaque_root_paint,
+                derived,
+                CompositionProfile::EncodedSrgb8SourceOverV1,
+                context(),
+            ),
+            Occurrence::new(
+                translucent_root,
+                translucent_root_paint,
+                derived,
+                CompositionProfile::EncodedSrgb8SourceOverV1,
+                context(),
+            ),
+        ],
+        ConstraintSet::new(
+            vec![ConstraintInvocation::hard(
+                CONSTRAINT,
+                OCCURRENCE,
+                Srgb8::new([128; 3]),
+            )],
+            vec![],
+        ),
+        vec![OutputBinding::new(OUTPUT, target_paint)],
+        ExactSrgb8IdentityV1,
+    )
+    .with_joint_selection(DeclaredJointSelectionV1::new(vec![
+        JointCandidateStateV1::new(vec![TargetCandidateChoiceV1::new(TARGET, dark)]),
+        JointCandidateStateV1::new(vec![TargetCandidateChoiceV1::new(TARGET, light)]),
+    ]))
+    .with_point_presentations(
+        vec![
+            PointPresentationRootV1::new(translucent_root_id, translucent_root),
+            PointPresentationRootV1::new(opaque_root_id, opaque_root),
+        ],
+        vec![
+            PointPresentationTargetV1::new(translucent_root_id, translucent_root),
+            PointPresentationTargetV1::new(translucent_root_id, OCCURRENCE),
+            PointPresentationTargetV1::new(opaque_root_id, opaque_root),
+            PointPresentationTargetV1::new(opaque_root_id, OCCURRENCE),
+        ],
+    )
+    .compile()
+    .unwrap()
+}
+
 #[test]
 fn fixed_fanout_retains_empty_and_singleton_as_distinct_modeled_roots() {
     let compiled = fanout_program();
@@ -292,16 +467,44 @@ fn fixed_fanout_retains_empty_and_singleton_as_distinct_modeled_roots() {
         certificates[1].steps().as_ptr_range().start,
         "flat replay spans must be adjacent without overlap or gaps"
     );
-    assert!(certificates.iter().all(|certificate| {
-        certificate.content_identity() == expected_identity
-            && certificate.observation().revision() == Revision::new(1)
-            && certificate.state() == ProgramPointCausalSelectedStateV1::Fixed
-            && certificate.case_index() == 0
-            && certificate.release() == PointOccurrenceAbsenceReleaseV1::BypassOwnBackdropV1
-            && certificate.target() == OCCURRENCE
-            && certificate.steps().len() == 2
-            && certificate.steps()[0].occurrence() == OCCURRENCE
-    }));
+    for (index, certificate) in certificates.iter().enumerate() {
+        assert_eq!(
+            certificate.content_identity(),
+            expected_identity,
+            "certificate {index} must retain the compiled Program identity"
+        );
+        assert_eq!(
+            certificate.observation().revision(),
+            Revision::new(1),
+            "certificate {index} must retain the admitted revision"
+        );
+        assert_eq!(
+            certificate.state(),
+            ProgramPointCausalSelectedStateV1::Fixed,
+            "certificate {index} must retain fixed-state authority"
+        );
+        assert_eq!(certificate.case_index(), 0, "certificate {index}");
+        assert_eq!(
+            certificate.release(),
+            PointOccurrenceAbsenceReleaseV1::BypassOwnBackdropV1,
+            "certificate {index} must retain the declared absence release"
+        );
+        assert_eq!(
+            certificate.target(),
+            OCCURRENCE,
+            "certificate {index} must retain the target occurrence"
+        );
+        assert_eq!(
+            certificate.steps().len(),
+            2,
+            "certificate {index} must retain the complete replay path"
+        );
+        assert_eq!(
+            certificate.steps()[0].occurrence(),
+            OCCURRENCE,
+            "certificate {index} replay must begin at the target"
+        );
+    }
 
     let opaque = &certificates[0];
     assert_eq!(opaque.presentation_root(), PresentationRootId::new(60));
@@ -399,18 +602,32 @@ fn report_only_fixed_program_collects_terminal_causality_and_outputs_in_one_pass
 fn finite_program(
     expected: Srgb8,
 ) -> crate::program_session::CompiledProgram<ExactSrgb8IdentityV1> {
-    let dark = TargetCandidateId::new(70);
-    let light = TargetCandidateId::new(71);
+    finite_program_with_candidates(expected, &[[0; 3], [255; 3]])
+}
+
+fn finite_program_with_candidates(
+    expected: Srgb8,
+    candidate_codes: &[[u8; 3]],
+) -> crate::program_session::CompiledProgram<ExactSrgb8IdentityV1> {
+    let candidate_ids = (0..candidate_codes.len())
+        .map(|index| TargetCandidateId::new(70 + u32::try_from(index).unwrap()))
+        .collect::<Vec<_>>();
+    let candidates = candidate_ids
+        .iter()
+        .copied()
+        .zip(candidate_codes.iter().copied())
+        .map(|(id, codes)| TargetCandidateV1::new(id, signal(codes)))
+        .collect();
+    let states = candidate_ids
+        .iter()
+        .copied()
+        .map(|candidate| {
+            JointCandidateStateV1::new(vec![TargetCandidateChoiceV1::new(TARGET, candidate)])
+        })
+        .collect();
     Program::new(
         vec![Source::new(SOURCE, signal([0; 3]))],
-        vec![Target::finite(
-            TARGET,
-            SOURCE,
-            vec![
-                TargetCandidateV1::new(dark, signal([0; 3])),
-                TargetCandidateV1::new(light, signal([255; 3])),
-            ],
-        )],
+        vec![Target::finite(TARGET, SOURCE, candidates)],
         ObservationGroup::new(GROUP, vec![PORT]),
         vec![],
         vec![Paint::Solid {
@@ -435,16 +652,45 @@ fn finite_program(
         vec![OutputBinding::new(OUTPUT, PAINT)],
         ExactSrgb8IdentityV1,
     )
-    .with_joint_selection(DeclaredJointSelectionV1::new(vec![
-        JointCandidateStateV1::new(vec![TargetCandidateChoiceV1::new(TARGET, dark)]),
-        JointCandidateStateV1::new(vec![TargetCandidateChoiceV1::new(TARGET, light)]),
-    ]))
+    .with_joint_selection(DeclaredJointSelectionV1::new(states))
     .with_point_presentations(
         vec![PointPresentationRootV1::new(ROOT, OCCURRENCE)],
         vec![PointPresentationTargetV1::new(ROOT, OCCURRENCE)],
     )
     .compile()
     .unwrap()
+}
+
+#[test]
+fn verified_report_storage_does_not_retain_exhaustive_joint_capacity() {
+    let capacities = |candidate_codes: &[[u8; 3]]| {
+        let compiled =
+            finite_program_with_candidates(Srgb8::new(candidate_codes[0]), candidate_codes);
+        let mut session = compiled.instantiate(STREAM).unwrap();
+        let SessionState::Ready { current } = session.update(observed_backdrop(1, [0; 3])).unwrap()
+        else {
+            panic!("the first authored state must verify");
+        };
+        current.report().storage_capacities_for_test()
+    };
+    let small = [[0; 3], [1; 3]];
+    let large = (0_u8..64).map(|code| [code; 3]).collect::<Vec<_>>();
+
+    let small_capacities = capacities(&small);
+    let large_capacities = capacities(&large);
+    assert_eq!(
+        small_capacities, large_capacities,
+        "a verified report owns one selected state, not exhaustive conflict storage"
+    );
+    assert_eq!(large_capacities, [1, 1, 1]);
+
+    let compiled = finite_program_with_candidates(Srgb8::new([255; 3]), &large);
+    let mut session = compiled.instantiate(STREAM).unwrap();
+    let SessionState::Failed { cause, .. } = session.update(observed_backdrop(1, [0; 3])).unwrap()
+    else {
+        panic!("none of the authored states may satisfy the exact target");
+    };
+    assert_eq!(cause.report().storage_capacities_for_test(), [64, 64, 64]);
 }
 
 #[test]
@@ -483,6 +729,75 @@ fn exhaustive_conflict_retains_each_considered_state_without_minting_selection()
         ExactFinalOwnedPointDomainV1::Singleton { visible: [255; 3] }
     );
     assert_eq!(evidence_rows[1].modeled_terminal_codes(), [255; 3]);
+}
+
+#[test]
+fn exhaustive_causal_projection_is_state_case_presentation_lexicographic() {
+    let lower_root = PresentationRootId::new(60);
+    let higher_root = PresentationRootId::new(61);
+    let lower_terminal = OccurrenceId::new(50);
+    let higher_terminal = OccurrenceId::new(51);
+    let compiled = finite_fanout_program();
+    assert_eq!(compiled.point_presentation_count(), 4);
+    let mut session = compiled.instantiate(STREAM).unwrap();
+    let SessionState::Failed { cause, .. } = session
+        .update(observed_backdrops(1, &[(2, [255; 3]), (1, [0; 3])]))
+        .unwrap()
+    else {
+        panic!("neither authored state may equal the exact target");
+    };
+
+    let actual = cause
+        .considered_point_causal_evidence()
+        .map(|evidence| {
+            let steps = evidence.steps();
+            (
+                evidence.state(),
+                evidence.case_index(),
+                evidence.presentation_root(),
+                evidence.target(),
+                steps.len(),
+                steps.first().unwrap().occurrence(),
+                steps.last().unwrap().occurrence(),
+            )
+        })
+        .collect::<Vec<_>>();
+    let considered = ProgramPointCausalConsideredStateV1::Considered;
+    let presentation_order = [
+        (lower_root, OCCURRENCE, 2, OCCURRENCE, lower_terminal),
+        (
+            lower_root,
+            lower_terminal,
+            1,
+            lower_terminal,
+            lower_terminal,
+        ),
+        (higher_root, OCCURRENCE, 2, OCCURRENCE, higher_terminal),
+        (
+            higher_root,
+            higher_terminal,
+            1,
+            higher_terminal,
+            higher_terminal,
+        ),
+    ];
+    let mut expected = Vec::new();
+    for state in 0..2 {
+        for case_index in 0..2 {
+            for &(root, target, step_count, first, last) in &presentation_order {
+                expected.push((
+                    considered(state),
+                    case_index,
+                    root,
+                    target,
+                    step_count,
+                    first,
+                    last,
+                ));
+            }
+        }
+    }
+    assert_eq!(actual, expected);
 }
 
 #[test]
@@ -592,12 +907,12 @@ fn causal_rows_follow_canonical_physical_cases_not_duplicate_scenarios() {
 #[test]
 fn causal_cardinality_is_the_exact_state_case_presentation_product() {
     assert_eq!(
-        checked_program_point_causal_cardinality_for_test(3, 2, 2, 5, 4, true),
-        Some((6, 24, 15, 60))
+        checked_program_point_causal_cardinality_for_test(3, 2, 5, 7, 11, true),
+        Some((15, 165, 21, 231))
     );
     assert_eq!(
-        checked_program_point_causal_cardinality_for_test(3, 2, 2, 5, usize::MAX, false),
-        Some((6, 0, 15, 0)),
+        checked_program_point_causal_cardinality_for_test(3, 2, 5, 7, usize::MAX, false),
+        Some((15, 0, 21, 0)),
         "report-only selection must not multiply by unreachable conflict states"
     );
 
@@ -617,6 +932,47 @@ fn causal_cardinality_is_the_exact_state_case_presentation_product() {
         checked_program_point_causal_cardinality_for_test(2, 0, 0, 1, usize::MAX, true),
         None
     );
+}
+
+#[test]
+fn report_cardinality_rejects_each_independent_storage_drift() {
+    let expected = [3, 5, 7];
+    assert!(program_report_cardinality_is_exact_for_test(
+        expected, expected
+    ));
+    for actual in [[2, 5, 7], [3, 4, 7], [3, 5, 6]] {
+        assert!(
+            !program_report_cardinality_is_exact_for_test(actual, expected),
+            "one drifting storage dimension must invalidate {actual:?}"
+        );
+    }
+}
+
+#[test]
+fn selected_storage_precondition_rejects_each_independent_drift() {
+    let empty = [0, 0, 0, 0];
+    let required = [3, 5, 7, 11];
+    assert!(selected_program_storage_is_prepared_for_test(
+        empty, required, required
+    ));
+    assert!(selected_program_storage_is_prepared_for_test(
+        empty,
+        [4, 6, 8, 12],
+        required
+    ));
+
+    for lengths in [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]] {
+        assert!(
+            !selected_program_storage_is_prepared_for_test(lengths, required, required),
+            "every arena must be empty before evaluation: {lengths:?}"
+        );
+    }
+    for capacities in [[2, 5, 7, 11], [3, 4, 7, 11], [3, 5, 6, 11], [3, 5, 7, 10]] {
+        assert!(
+            !selected_program_storage_is_prepared_for_test(empty, capacities, required),
+            "every arena must independently satisfy preflight: {capacities:?}"
+        );
+    }
 }
 
 #[test]
@@ -641,6 +997,8 @@ fn causal_evidence_remains_bound_to_its_own_revision_through_replay_and_stale() 
     };
     let replayed = current.point_causal_certificates().next().unwrap();
     assert_eq!(replayed.observation().revision(), Revision::new(1));
+    // Счётчик вычислений доказывает, что replay не запускал граф; равенство
+    // указателей дополнительно доказывает повторное использование той же арены.
     assert_eq!(replayed.steps().as_ptr(), first_steps);
     assert_eq!(crate::composition::source_over_evaluation_count(), 0);
 
@@ -666,7 +1024,9 @@ fn causal_evidence_remains_bound_to_its_own_revision_through_replay_and_stale() 
 
 #[test]
 fn every_causal_preflight_reservation_precedes_graph_and_evaluator_work() {
-    for reservation_index in 0..4 {
+    const FIRST_UNUSED_RESERVATION_INDEX: usize = 4;
+
+    for reservation_index in 0..FIRST_UNUSED_RESERVATION_INDEX {
         let evaluator = CountingProgramWcag22Srgb8V1::default();
         let calls = evaluator.clone();
         let compiled = preflight_program(evaluator);
@@ -702,10 +1062,98 @@ fn every_causal_preflight_reservation_precedes_graph_and_evaluator_work() {
     let mut session = compiled.instantiate(STREAM).unwrap();
     crate::composition::reset_source_over_evaluation_count();
     let state = {
-        let _failure = fail_program_preflight_reservation_for_test(4);
+        let _failure = fail_program_preflight_reservation_for_test(FIRST_UNUSED_RESERVATION_INDEX);
         session.update(observed(1)).unwrap()
     };
     assert!(matches!(state, SessionState::Ready { .. }));
     assert!(!calls.calls().is_empty());
+    assert!(crate::composition::source_over_evaluation_count() > 0);
+}
+
+#[test]
+fn every_joint_causal_preflight_reservation_is_transactional() {
+    const FIRST_UNUSED_RESERVATION_INDEX: usize = 7;
+
+    for reservation_index in 0..FIRST_UNUSED_RESERVATION_INDEX {
+        let evaluator = CountingProgramWcag22Srgb8V1::default();
+        let calls = evaluator.clone();
+        let compiled = joint_preflight_program(evaluator);
+        let mut session = compiled.instantiate(STREAM).unwrap();
+        let SessionState::Ready { current } = session.update(observed_backdrop(1, [0; 3])).unwrap()
+        else {
+            panic!("the first joint state must verify on black");
+        };
+        let previous_steps = current
+            .point_causal_certificates()
+            .next()
+            .unwrap()
+            .steps()
+            .as_ptr();
+        let calls_before = calls.calls().len();
+        crate::composition::reset_source_over_evaluation_count();
+
+        let result = {
+            let _failure = fail_program_preflight_reservation_for_test(reservation_index);
+            session.update(observed_backdrop(2, [255; 3]))
+        };
+        let error = match result {
+            Ok(_) => panic!("reservation {reservation_index} was not preflighted"),
+            Err(error) => error,
+        };
+        assert_eq!(
+            error,
+            SessionUpdateError::Plan(ProgramSessionEvaluationError::ResourceExhausted),
+            "reservation {reservation_index} must fail before evaluation"
+        );
+        assert_eq!(calls.calls().len(), calls_before);
+        assert_eq!(crate::composition::source_over_evaluation_count(), 0);
+        assert_eq!(session.raw_head().revision(), Some(Revision::new(1)));
+        let SessionState::Ready { current } = session.state() else {
+            panic!("a preflight failure must preserve the previous Ready state");
+        };
+        let retained = current.point_causal_certificates().next().unwrap();
+        assert_eq!(retained.observation().revision(), Revision::new(1));
+        assert_eq!(retained.steps().as_ptr(), previous_steps);
+
+        let SessionState::Failed {
+            cause,
+            previous: Some(previous),
+        } = session.update(observed_backdrop(2, [255; 3])).unwrap()
+        else {
+            panic!("retry must expose the exhaustive two-state conflict");
+        };
+        assert_eq!(cause.considered_state_count(), 2);
+        assert_eq!(cause.considered_point_causal_evidence().len(), 2);
+        assert_eq!(
+            previous
+                .point_causal_certificates()
+                .next()
+                .unwrap()
+                .steps()
+                .as_ptr(),
+            previous_steps
+        );
+    }
+
+    let evaluator = CountingProgramWcag22Srgb8V1::default();
+    let calls = evaluator.clone();
+    let compiled = joint_preflight_program(evaluator);
+    let mut session = compiled.instantiate(STREAM).unwrap();
+    assert!(matches!(
+        session.update(observed_backdrop(1, [0; 3])).unwrap(),
+        SessionState::Ready { .. }
+    ));
+    let calls_before = calls.calls().len();
+    crate::composition::reset_source_over_evaluation_count();
+    let state = {
+        let _failure = fail_program_preflight_reservation_for_test(FIRST_UNUSED_RESERVATION_INDEX);
+        session.update(observed_backdrop(2, [255; 3])).unwrap()
+    };
+    let SessionState::Failed { cause, .. } = state else {
+        panic!("the first unused reservation index must not intercept evaluation");
+    };
+    assert_eq!(cause.considered_state_count(), 2);
+    assert_eq!(cause.considered_point_causal_evidence().len(), 2);
+    assert!(calls.calls().len() > calls_before);
     assert!(crate::composition::source_over_evaluation_count() > 0);
 }

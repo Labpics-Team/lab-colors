@@ -23,7 +23,7 @@ use crate::program_session::{
     OutputBinding, OutputSlotId, Paint, Program, ProgramCompileError,
     ProgramConstraintEvaluatorSetV1, ProgramSessionEvaluationError, ReportModeV1, Source, SourceId,
     Surface, Target, TargetCandidateChoiceV1, TargetCandidateId, TargetCandidateV1, TargetDomainV1,
-    TargetId, checked_program_evaluation_cardinality_for_test,
+    TargetId, checked_program_evaluation_cell_counts_for_test,
     fail_program_preflight_reservation_for_test,
 };
 use crate::session::{SessionState, SessionUpdateError};
@@ -1470,22 +1470,24 @@ fn successful_search_allocations_do_not_scale_with_rejected_states() {
 #[test]
 fn evaluation_cell_cardinality_checks_both_products_without_a_numeric_cap() {
     assert_eq!(
-        checked_program_evaluation_cardinality_for_test(3, 2, 4),
+        checked_program_evaluation_cell_counts_for_test(3, 2, 4),
         Some((6, 24))
     );
     assert_eq!(
-        checked_program_evaluation_cardinality_for_test(usize::MAX, 2, 1),
+        checked_program_evaluation_cell_counts_for_test(usize::MAX, 2, 1),
         None
     );
     assert_eq!(
-        checked_program_evaluation_cardinality_for_test(usize::MAX, 1, 2),
+        checked_program_evaluation_cell_counts_for_test(usize::MAX, 1, 2),
         None
     );
 }
 
 #[test]
 fn every_fallible_joint_preflight_reservation_precedes_evaluator_work() {
-    for reservation_index in 0..=2 {
+    const FIRST_UNUSED_RESERVATION_INDEX: usize = 3;
+
+    for reservation_index in 0..=FIRST_UNUSED_RESERVATION_INDEX {
         let evaluator = CountingProgramWcag22Srgb8V1::default();
         let calls = evaluator.clone();
         let compiled = Program::new(
@@ -1534,8 +1536,11 @@ fn every_fallible_joint_preflight_reservation_precedes_evaluator_work() {
             let _failure = fail_program_preflight_reservation_for_test(reservation_index);
             session.update(update(1, 0x00))
         };
-        if reservation_index == 2 {
-            assert!(result.is_ok(), "zero-sized causal arenas must not reserve");
+        if reservation_index == FIRST_UNUSED_RESERVATION_INDEX {
+            assert!(
+                matches!(result, Ok(SessionState::Ready { .. })),
+                "the first unused reservation index must leave the Session Ready"
+            );
             assert!(!calls.calls().is_empty());
             continue;
         }
@@ -1554,7 +1559,9 @@ fn every_fallible_joint_preflight_reservation_precedes_evaluator_work() {
 
 #[test]
 fn every_fallible_fixed_preflight_reservation_precedes_evaluator_work() {
-    for reservation_index in 0..=2 {
+    const FIRST_UNUSED_RESERVATION_INDEX: usize = 2;
+
+    for reservation_index in 0..=FIRST_UNUSED_RESERVATION_INDEX {
         let evaluator = CountingProgramWcag22Srgb8V1::default();
         let calls = evaluator.clone();
         let compiled = Program::new(
@@ -1596,8 +1603,11 @@ fn every_fallible_fixed_preflight_reservation_precedes_evaluator_work() {
             let _failure = fail_program_preflight_reservation_for_test(reservation_index);
             session.update(update(1, 0x00))
         };
-        if reservation_index == 2 {
-            assert!(result.is_ok(), "zero-sized causal arenas must not reserve");
+        if reservation_index == FIRST_UNUSED_RESERVATION_INDEX {
+            assert!(
+                matches!(result, Ok(SessionState::Ready { .. })),
+                "the first unused reservation index must leave the Session Ready"
+            );
             assert!(!calls.calls().is_empty());
             continue;
         }

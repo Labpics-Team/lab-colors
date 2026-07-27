@@ -1613,9 +1613,11 @@ where
     }
 }
 
-/// Полная оценка, привязанная к revision. Для selected/fixed результата ячейки
-/// идут сначала по physical case, затем по constraint ID. Exhaustive conflict
-/// дополнительно упорядочен сначала по joint state.
+/// Полная оценка, привязанная к revision. Для выбранного или фиксированного
+/// результата ячейки идут сначала по physical case, затем по constraint ID.
+/// Исчерпывающий конфликт дополнительно упорядочен сначала по joint state.
+/// Проекция причинного replay сохраняет порядок построения
+/// `state × physical case × (root, target)` без сортировки.
 pub struct ProgramReportV1<Evaluation>
 where
     Evaluation: ProgramConstraintEvaluatorSetV1,
@@ -1643,6 +1645,15 @@ where
 
     pub fn cells(&self) -> &[ProgramConstraintCellV1<Evaluation>] {
         &self.cells
+    }
+
+    #[cfg(test)]
+    pub(crate) fn storage_capacities_for_test(&self) -> [usize; 3] {
+        [
+            self.cells.capacity(),
+            self.point_causal_records.capacity(),
+            self.point_causal_steps.capacity(),
+        ]
     }
 }
 
@@ -1884,21 +1895,6 @@ struct ProgramEvaluationCardinalityV1 {
     exhaustive_replay_steps: usize,
 }
 
-impl ProgramEvaluationCardinalityV1 {
-    fn cell_capacity(self) -> usize {
-        self.selected.max(self.exhaustive_conflict)
-    }
-
-    fn point_record_capacity(self) -> usize {
-        self.selected_point_records
-            .max(self.exhaustive_point_records)
-    }
-
-    fn replay_step_capacity(self) -> usize {
-        self.selected_replay_steps.max(self.exhaustive_replay_steps)
-    }
-}
-
 fn checked_program_evaluation_cardinality(
     physical_case_count: usize,
     constraint_count: usize,
@@ -1964,7 +1960,7 @@ where
 }
 
 #[cfg(test)]
-pub(crate) fn checked_program_evaluation_cardinality_for_test(
+pub(crate) fn checked_program_evaluation_cell_counts_for_test(
     physical_case_count: usize,
     constraint_count: usize,
     state_count: usize,
@@ -2065,13 +2061,73 @@ fn try_reserve_program_evaluation_buffer<T>(
     buffer.try_reserve_exact(capacity).map_err(|_| ())
 }
 
-struct PreparedProgramEvaluationBuffersV1<Evaluation>
+struct ProgramReportBuffersV1<Evaluation>
 where
     Evaluation: ProgramConstraintEvaluatorSetV1,
 {
     cells: Vec<ProgramConstraintCellV1<Evaluation>>,
     point_causal_records: Vec<ProgramPointCausalRecordV1>,
     point_causal_steps: Vec<PointOccurrenceAbsenceStepV1>,
+}
+
+impl<Evaluation> ProgramReportBuffersV1<Evaluation>
+where
+    Evaluation: ProgramConstraintEvaluatorSetV1,
+{
+    const fn empty() -> Self {
+        Self {
+            cells: Vec::new(),
+            point_causal_records: Vec::new(),
+            point_causal_steps: Vec::new(),
+        }
+    }
+}
+
+// Порядок координат совпадает с физическим владением отчёта: constraint cells,
+// causal records и плоские replay steps.
+fn program_report_cardinality_is_exact(actual: [usize; 3], expected: [usize; 3]) -> bool {
+    actual == expected
+}
+
+#[cfg(test)]
+pub(crate) fn program_report_cardinality_is_exact_for_test(
+    actual: [usize; 3],
+    expected: [usize; 3],
+) -> bool {
+    program_report_cardinality_is_exact(actual, expected)
+}
+
+// Четвёртая координата — output arena. Избыточная ёмкость допустима, но все
+// арены обязаны быть пусты и независимо покрывать заранее рассчитанный объём.
+fn selected_program_storage_is_prepared(
+    lengths: [usize; 4],
+    capacities: [usize; 4],
+    required: [usize; 4],
+) -> bool {
+    lengths == [0; 4]
+        && capacities[0] >= required[0]
+        && capacities[1] >= required[1]
+        && capacities[2] >= required[2]
+        && capacities[3] >= required[3]
+}
+
+#[cfg(test)]
+pub(crate) fn selected_program_storage_is_prepared_for_test(
+    lengths: [usize; 4],
+    capacities: [usize; 4],
+    required: [usize; 4],
+) -> bool {
+    selected_program_storage_is_prepared(lengths, capacities, required)
+}
+
+struct PreparedProgramEvaluationBuffersV1<Evaluation>
+where
+    Evaluation: ProgramConstraintEvaluatorSetV1,
+{
+    // Раздельное владение оставляет успешному отчёту только выбранное
+    // доказательство, но сохраняет fail-before-work для возможного конфликта.
+    selected: ProgramReportBuffersV1<Evaluation>,
+    exhaustive_conflict: ProgramReportBuffersV1<Evaluation>,
     outputs: Vec<ProgramOutputV1>,
     counts: ProgramEvaluationCardinalityV1,
 }
@@ -2080,9 +2136,7 @@ struct SelectedProgramEvaluationBuffersV1<Evaluation>
 where
     Evaluation: ProgramConstraintEvaluatorSetV1,
 {
-    cells: Vec<ProgramConstraintCellV1<Evaluation>>,
-    point_causal_records: Vec<ProgramPointCausalRecordV1>,
-    point_causal_steps: Vec<PointOccurrenceAbsenceStepV1>,
+    report: ProgramReportBuffersV1<Evaluation>,
     outputs: Vec<ProgramOutputV1>,
     expected_cell_count: usize,
     expected_point_record_count: usize,
@@ -2123,9 +2177,7 @@ where
 {
     fn take_selected(&mut self) -> SelectedProgramEvaluationBuffersV1<Evaluation> {
         SelectedProgramEvaluationBuffersV1 {
-            cells: std::mem::take(&mut self.cells),
-            point_causal_records: std::mem::take(&mut self.point_causal_records),
-            point_causal_steps: std::mem::take(&mut self.point_causal_steps),
+            report: std::mem::replace(&mut self.selected, ProgramReportBuffersV1::empty()),
             outputs: std::mem::take(&mut self.outputs),
             expected_cell_count: self.counts.selected,
             expected_point_record_count: self.counts.selected_point_records,
@@ -2149,24 +2201,47 @@ where
         checked_program_epoch_evaluation_cardinality(epoch, observation.physical_case_count())
             .ok_or(ProgramSessionEvaluationError::ResourceExhausted)?;
 
-    let mut cells = Vec::new();
-    try_reserve_program_evaluation_buffer(&mut cells, counts.cell_capacity())
+    let mut selected = ProgramReportBuffersV1::empty();
+    try_reserve_program_evaluation_buffer(&mut selected.cells, counts.selected)
         .map_err(|()| ProgramSessionEvaluationError::ResourceExhausted)?;
 
-    let mut point_causal_records = Vec::new();
-    if counts.point_record_capacity() != 0 {
+    let mut exhaustive_conflict = ProgramReportBuffersV1::empty();
+    if epoch.joint_selection.is_some() && counts.exhaustive_conflict != 0 {
         try_reserve_program_evaluation_buffer(
-            &mut point_causal_records,
-            counts.point_record_capacity(),
+            &mut exhaustive_conflict.cells,
+            counts.exhaustive_conflict,
         )
         .map_err(|()| ProgramSessionEvaluationError::ResourceExhausted)?;
     }
 
-    let mut point_causal_steps = Vec::new();
-    if counts.replay_step_capacity() != 0 {
+    if counts.selected_point_records != 0 {
         try_reserve_program_evaluation_buffer(
-            &mut point_causal_steps,
-            counts.replay_step_capacity(),
+            &mut selected.point_causal_records,
+            counts.selected_point_records,
+        )
+        .map_err(|()| ProgramSessionEvaluationError::ResourceExhausted)?;
+    }
+
+    if epoch.joint_selection.is_some() && counts.exhaustive_point_records != 0 {
+        try_reserve_program_evaluation_buffer(
+            &mut exhaustive_conflict.point_causal_records,
+            counts.exhaustive_point_records,
+        )
+        .map_err(|()| ProgramSessionEvaluationError::ResourceExhausted)?;
+    }
+
+    if counts.selected_replay_steps != 0 {
+        try_reserve_program_evaluation_buffer(
+            &mut selected.point_causal_steps,
+            counts.selected_replay_steps,
+        )
+        .map_err(|()| ProgramSessionEvaluationError::ResourceExhausted)?;
+    }
+
+    if epoch.joint_selection.is_some() && counts.exhaustive_replay_steps != 0 {
+        try_reserve_program_evaluation_buffer(
+            &mut exhaustive_conflict.point_causal_steps,
+            counts.exhaustive_replay_steps,
         )
         .map_err(|()| ProgramSessionEvaluationError::ResourceExhausted)?;
     }
@@ -2176,9 +2251,8 @@ where
         .map_err(|()| ProgramSessionEvaluationError::ResourceExhausted)?;
 
     Ok(PreparedProgramEvaluationBuffersV1 {
-        cells,
-        point_causal_records,
-        point_causal_steps,
+        selected,
+        exhaustive_conflict,
         outputs,
         counts,
     })
@@ -2301,12 +2375,12 @@ where
             state_index,
             ProgramEvaluationPhaseV1::Hard,
             ProgramCandidateCollectionV1 {
-                cells: Some(&mut buffers.cells),
+                cells: Some(&mut buffers.exhaustive_conflict.cells),
                 outputs: None,
                 point_causal: Some(ProgramPointCausalBuffersV1 {
                     considered_state_index: Some(state_index),
-                    records: &mut buffers.point_causal_records,
-                    steps: &mut buffers.point_causal_steps,
+                    records: &mut buffers.exhaustive_conflict.point_causal_records,
+                    steps: &mut buffers.exhaustive_conflict.point_causal_steps,
                 }),
             },
         )? {
@@ -2326,7 +2400,7 @@ where
                 state_index,
                 ProgramEvaluationPhaseV1::ReportOnly,
                 ProgramCandidateCollectionV1 {
-                    cells: Some(&mut buffers.cells),
+                    cells: Some(&mut buffers.exhaustive_conflict.cells),
                     outputs: None,
                     point_causal: None,
                 },
@@ -2335,21 +2409,29 @@ where
             }
         }
     }
-    if buffers.cells.len() != buffers.counts.exhaustive_conflict
-        || buffers.point_causal_records.len() != buffers.counts.exhaustive_point_records
-        || buffers.point_causal_steps.len() != buffers.counts.exhaustive_replay_steps
-    {
+    if !program_report_cardinality_is_exact(
+        [
+            buffers.exhaustive_conflict.cells.len(),
+            buffers.exhaustive_conflict.point_causal_records.len(),
+            buffers.exhaustive_conflict.point_causal_steps.len(),
+        ],
+        [
+            buffers.counts.exhaustive_conflict,
+            buffers.counts.exhaustive_point_records,
+            buffers.counts.exhaustive_replay_steps,
+        ],
+    ) {
         return Err(ProgramSessionEvaluationError::InternalInvariant);
     }
-    canonicalize_program_report_cells(&mut buffers.cells);
+    canonicalize_program_report_cells(&mut buffers.exhaustive_conflict.cells);
 
     Ok(SessionDecision::Violation(ProgramConflictV1 {
         report: ProgramReportV1 {
             content_identity: epoch.content_identity,
             observation,
-            cells: buffers.cells,
-            point_causal_records: buffers.point_causal_records,
-            point_causal_steps: buffers.point_causal_steps,
+            cells: buffers.exhaustive_conflict.cells,
+            point_causal_records: buffers.exhaustive_conflict.point_causal_records,
+            point_causal_steps: buffers.exhaustive_conflict.point_causal_steps,
         },
         considered_state_count: state_count,
     }))
@@ -2392,23 +2474,37 @@ where
     ProgramConstraintInvocationOf<Evaluation>: Copy,
 {
     let SelectedProgramEvaluationBuffersV1 {
-        mut cells,
-        mut point_causal_records,
-        mut point_causal_steps,
+        report:
+            ProgramReportBuffersV1 {
+                mut cells,
+                mut point_causal_records,
+                mut point_causal_steps,
+            },
         mut outputs,
         expected_cell_count,
         expected_point_record_count,
         expected_replay_step_count,
     } = buffers;
-    if !cells.is_empty()
-        || cells.capacity() < expected_cell_count
-        || !point_causal_records.is_empty()
-        || point_causal_records.capacity() < expected_point_record_count
-        || !point_causal_steps.is_empty()
-        || point_causal_steps.capacity() < expected_replay_step_count
-        || !outputs.is_empty()
-        || outputs.capacity() < epoch.outputs.len()
-    {
+    if !selected_program_storage_is_prepared(
+        [
+            cells.len(),
+            point_causal_records.len(),
+            point_causal_steps.len(),
+            outputs.len(),
+        ],
+        [
+            cells.capacity(),
+            point_causal_records.capacity(),
+            point_causal_steps.capacity(),
+            outputs.capacity(),
+        ],
+        [
+            expected_cell_count,
+            expected_point_record_count,
+            expected_replay_step_count,
+            epoch.outputs.len(),
+        ],
+    ) {
         return Err(ProgramSessionEvaluationError::InternalInvariant);
     }
     let candidate_state_index = selected_state_index.unwrap_or(0);
@@ -2477,10 +2573,18 @@ where
             return Err(ProgramSessionEvaluationError::InternalInvariant);
         }
     }
-    if cells.len() != expected_cell_count
-        || point_causal_records.len() != expected_point_record_count
-        || point_causal_steps.len() != expected_replay_step_count
-    {
+    if !program_report_cardinality_is_exact(
+        [
+            cells.len(),
+            point_causal_records.len(),
+            point_causal_steps.len(),
+        ],
+        [
+            expected_cell_count,
+            expected_point_record_count,
+            expected_replay_step_count,
+        ],
+    ) {
         return Err(ProgramSessionEvaluationError::InternalInvariant);
     }
     canonicalize_program_report_cells(&mut cells);
@@ -2571,6 +2675,8 @@ where
             .map_err(map_program_execution_binding_error)?;
 
         if let Some(point_causal) = point_causal.as_mut() {
+            // Предварительный расчёт зарезервировал арены целиком. Локальная
+            // проверка не даёт причинному replay незаметно начать аллоцировать.
             if point_causal
                 .records
                 .capacity()
@@ -2593,6 +2699,8 @@ where
                         point_causal.steps,
                     )
                     .map_err(|error| match error {
+                        // Ёмкость проверена выше, а каждый путь presentation
+                        // скомпилирован для этой же версии графа.
                         PointOccurrenceAbsenceReplayErrorV1::InsufficientCapacity
                         | PointOccurrenceAbsenceReplayErrorV1::IncompatibleEvaluation => {
                             ProgramSessionEvaluationError::InternalInvariant
