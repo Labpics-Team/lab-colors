@@ -15,10 +15,11 @@
 //! exits before diagnostics, preserving the authoritative typed failure. A
 //! diagnostic evaluator error may abort fixed or exhaustive report construction
 //! only after their hard verdict is fixed; no partial certificate is emitted.
-//! Routed Paint outputs and encoded-only assessments retain exact physical
-//! occurrence evidence plus the declared appearance context. A modeled LCS
-//! occurrence is derived only through its separate typed capability; neither
-//! claim is renderer observation or human-subject evidence.
+//! The verified report retains exact physical occurrence evidence plus the
+//! declared appearance context; a routed Paint output contains only its opaque
+//! slot and encoded Paint. A modeled LCS occurrence is derived only through its
+//! separate typed capability; neither claim is renderer observation or
+//! human-subject evidence.
 
 use std::marker::PhantomData;
 use std::num::NonZeroUsize;
