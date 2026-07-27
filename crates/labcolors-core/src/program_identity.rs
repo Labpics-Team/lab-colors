@@ -329,9 +329,10 @@ where
 fn program_root_color() -> Result<VertexColorV1, ProgramCompileError> {
     let mut color = VertexColorV1::new(vertex_tag::PROGRAM);
     // Эти теги связывают адрес с версиями исполняемых законов: схемой Program,
-    // total-order selection, финальной перепроверкой, атомарным наблюдением,
-    // encoded Paint emission и modeled point presentation. Derived capability
-    // releases bind only the constraints that execute them.
+    // выбором по полному порядку, финальной перепроверкой, атомарным наблюдением,
+    // эмиссией кодированного `Paint` и моделируемым представлением точки. Версии
+    // производных возможностей связываются только с теми ограничениями,
+    // которые их исполняют.
     for release in [
         release_tag::PROGRAM_SCHEMA_V3,
         release_tag::DECLARED_TOTAL_ORDER_V1,
@@ -617,10 +618,10 @@ where
             graph.add_member(VertexColorV1::new(vertex_tag::PRESENTATION_ROOT))?,
         )?;
     }
-    // `prepare_program` reaches this private identity step only after
-    // `compile_point_presentations` has sorted and rejected duplicate
-    // `(root, occurrence)` pairs. Deduplicating again here would hide an
-    // authored error and split that admission rule across two authorities.
+    // `prepare_program` вызывает этот закрытый этап вычисления identity только
+    // после сортировки пар `(root, occurrence)` и отклонения дубликатов в
+    // `compile_point_presentations`. Повторная дедупликация здесь скрыла бы
+    // ошибку декларации и разделила правило admission между двумя источниками истины.
     for target in &program.presentation_targets {
         presentation_targets.push((
             *target,

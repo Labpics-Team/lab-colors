@@ -1286,7 +1286,7 @@ impl DraftV1 {
         self
     }
 
-    /// Declares one terminal root of the modeled point graph.
+    /// Объявляет один терминальный корень моделируемого точечного графа.
     pub(crate) fn push_point_presentation_root(
         &mut self,
         id: PresentationRootIdV1,
@@ -1300,8 +1300,9 @@ impl DraftV1 {
         self
     }
 
-    /// Declares one occurrence whose final point contribution belongs to the
-    /// named root under the code-owned versioned absence intervention.
+    /// Объявляет целевой `Occurrence`, для которого компилятор обязан доказать
+    /// путь к указанному корню при версионированном правиле Core, моделирующем
+    /// отсутствие этого `Occurrence`.
     pub(crate) fn push_point_presentation_target(
         &mut self,
         root: PresentationRootIdV1,
@@ -1483,7 +1484,7 @@ impl OwnerV1 {
         self.compiled.surface_input_ports().len()
     }
 
-    /// Number of compiler-admitted target/root presentation relations.
+    /// Число допущенных компилятором связей между целью и корнем представления точки.
     pub(crate) fn point_presentation_count(&self) -> usize {
         self.compiled.point_presentation_count()
     }

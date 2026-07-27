@@ -381,7 +381,7 @@ impl OutputSlotId {
     }
 }
 
-/// Opaque identity of one modeled point presentation root.
+/// Непрозрачный идентификатор одного корня моделируемого представления точки.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct PresentationRootId(u32);
 
@@ -395,7 +395,7 @@ impl PresentationRootId {
     }
 }
 
-/// One declared terminal occurrence of the modeled point graph.
+/// Объявление терминального корня моделируемого точечного графа.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PointPresentationRootV1 {
     id: PresentationRootId,
@@ -416,8 +416,8 @@ impl PointPresentationRootV1 {
     }
 }
 
-/// One occurrence whose final point contribution will be evaluated at the
-/// declared root under an explicit, versioned absence intervention.
+/// Целевой `Occurrence`, для которого компилятор доказывает путь к объявленному
+/// корню и фиксирует явную версию интервенции отсутствия.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PointPresentationTargetV1 {
     root: PresentationRootId,
