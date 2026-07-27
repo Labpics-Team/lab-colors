@@ -3184,7 +3184,12 @@ fn compile_point_presentations(
                 PointPresentationPathErrorV1::ResourceExhausted => {
                     ProgramCompileError::ResourceExhausted
                 }
-                _ => ProgramCompileError::InternalInvariant,
+                PointPresentationPathErrorV1::MissingTarget
+                | PointPresentationPathErrorV1::TargetOutsideRootAncestry
+                | PointPresentationPathErrorV1::IncompatibleRoot
+                | PointPresentationPathErrorV1::InternalInvariant => {
+                    ProgramCompileError::InternalInvariant
+                }
             })?;
         compiled_roots.push((root.id, compiled));
     }
@@ -3230,7 +3235,12 @@ fn compile_point_presentations(
                 PointPresentationPathErrorV1::ResourceExhausted => {
                     ProgramCompileError::ResourceExhausted
                 }
-                _ => ProgramCompileError::InternalInvariant,
+                PointPresentationPathErrorV1::MissingRoot
+                | PointPresentationPathErrorV1::RootConsumedDownstream
+                | PointPresentationPathErrorV1::IncompatibleRoot
+                | PointPresentationPathErrorV1::InternalInvariant => {
+                    ProgramCompileError::InternalInvariant
+                }
             })?;
         compiled.push(CompiledPointPresentationV1 {
             root: target.root,
