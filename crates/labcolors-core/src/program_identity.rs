@@ -7,19 +7,21 @@
 
 use super::*;
 
-const DOMAIN_V2: &[u8] = b"labcolors.program-content-identity.v2\0";
-// Максимальный V2-цвет принадлежит Occurrence: теги вершины, композиции,
+const DOMAIN_V3: &[u8] = b"labcolors.program-content-identity.v3\0";
+// Максимальный V3-цвет принадлежит Occurrence: теги вершины, композиции,
 // контекста и frame, два binary64-параметра наблюдения и surround. Явная
 // граница устраняет аллокацию на каждую вершину и требует пересмотра при
 // расширении схемы вместо скрытого runtime-лимита.
 const COLOR_CAPACITY: usize = 1 + 1 + 1 + 4 + 8 + 8 + 1;
 
 mod release_tag {
-    pub(super) const PROGRAM_SCHEMA_V2: u8 = 2;
+    pub(super) const PROGRAM_SCHEMA_V3: u8 = 3;
     pub(super) const DECLARED_TOTAL_ORDER_V1: u8 = 1;
     pub(super) const FRESH_FULL_RECHECK_V1: u8 = 1;
     pub(super) const ATOMIC_OBSERVATION_GROUP_V1: u8 = 1;
     pub(super) const ENCODED_PAINT_EMISSION_V1: u8 = 1;
+    pub(super) const MODELED_POINT_PRESENTATION_V1: u8 = 1;
+    pub(super) const POINT_ABSENCE_BYPASS_OWN_BACKDROP_V1: u8 = 1;
     #[cfg(test)]
     pub(super) const MODELED_LCS_OCCURRENCE_V1: u8 = 1;
     #[cfg(test)]
@@ -62,14 +64,14 @@ mod release_tag {
     pub(super) const MODELED_LCS_PROBE_FAMILY_V1: u8 = 3;
 }
 
-/// Устойчивый к коллизиям адрес канонизированного содержимого Program V2.
+/// Устойчивый к коллизиям адрес канонизированного содержимого Program V3.
 ///
 /// SHA-256 не делает адрес инъективным. Адрес не связывает пространства opaque
 /// ID и не подтверждает владельца, поколение либо revision.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(crate) struct ProgramContentIdentityV2([u8; 32]);
+pub(crate) struct ProgramContentIdentityV3([u8; 32]);
 
-impl ProgramContentIdentityV2 {
+impl ProgramContentIdentityV3 {
     pub(crate) const fn as_bytes(&self) -> &[u8; 32] {
         &self.0
     }
@@ -144,6 +146,8 @@ mod vertex_tag {
     pub(super) const JOINT_SELECTION: u8 = 17;
     pub(super) const JOINT_STATE: u8 = 18;
     pub(super) const JOINT_CHOICE: u8 = 19;
+    pub(super) const PRESENTATION_ROOT: u8 = 20;
+    pub(super) const PRESENTATION_TARGET: u8 = 21;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -166,6 +170,9 @@ enum EdgeRoleV1 {
     StateChoice = 15,
     ChoiceTarget = 16,
     ChoiceCandidate = 17,
+    PresentationRootTerminal = 18,
+    PresentationTargetRoot = 19,
+    PresentationTargetOccurrence = 20,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -326,14 +333,27 @@ fn program_root_color() -> Result<VertexColorV1, ProgramCompileError> {
     // encoded Paint emission. Derived capability releases bind only the
     // constraints that execute them.
     for release in [
-        release_tag::PROGRAM_SCHEMA_V2,
+        release_tag::PROGRAM_SCHEMA_V3,
         release_tag::DECLARED_TOTAL_ORDER_V1,
         release_tag::FRESH_FULL_RECHECK_V1,
         release_tag::ATOMIC_OBSERVATION_GROUP_V1,
         release_tag::ENCODED_PAINT_EMISSION_V1,
+        release_tag::MODELED_POINT_PRESENTATION_V1,
     ] {
         color.push_u8(release)?;
     }
+    Ok(color)
+}
+
+fn presentation_target_color(
+    target: PointPresentationTargetV1,
+) -> Result<VertexColorV1, ProgramCompileError> {
+    let mut color = VertexColorV1::new(vertex_tag::PRESENTATION_TARGET);
+    color.push_u8(match target.absence_release() {
+        PointOccurrenceAbsenceReleaseV1::BypassOwnBackdropV1 => {
+            release_tag::POINT_ABSENCE_BYPASS_OWN_BACKDROP_V1
+        }
+    })?;
     Ok(color)
 }
 
@@ -537,6 +557,11 @@ where
     let mut ports = IdIndexV1::new();
     let mut surfaces = IdIndexV1::new();
     let mut occurrences = IdIndexV1::new();
+    let mut presentation_roots = IdIndexV1::new();
+    let mut presentation_targets = Vec::new();
+    presentation_targets
+        .try_reserve_exact(program.presentation_targets.len())
+        .map_err(|_| ProgramCompileError::ResourceExhausted)?;
 
     for source in &program.sources {
         sources.insert(source.id(), graph.add_member(source_color(*source)?)?)?;
@@ -586,6 +611,18 @@ where
             graph.add_member(occurrence_color(*occurrence)?)?,
         )?;
     }
+    for root in &program.presentation_roots {
+        presentation_roots.insert(
+            root.id(),
+            graph.add_member(VertexColorV1::new(vertex_tag::PRESENTATION_ROOT))?,
+        )?;
+    }
+    for target in &program.presentation_targets {
+        presentation_targets.push((
+            *target,
+            graph.add_member(presentation_target_color(*target)?)?,
+        ));
+    }
 
     sources.finish()?;
     targets.finish()?;
@@ -595,6 +632,7 @@ where
     ports.finish()?;
     surfaces.finish()?;
     occurrences.finish()?;
+    presentation_roots.finish()?;
 
     for target in &program.targets {
         let target_vertex = targets.get(target.id())?;
@@ -665,6 +703,25 @@ where
             occurrences.get(occurrence.id())?,
             surfaces.get(occurrence.against())?,
             EdgeRoleV1::OccurrenceBackdropSurface,
+        )?;
+    }
+    for root in &program.presentation_roots {
+        graph.add_edge(
+            presentation_roots.get(root.id())?,
+            occurrences.get(root.terminal())?,
+            EdgeRoleV1::PresentationRootTerminal,
+        )?;
+    }
+    for (target, vertex) in presentation_targets {
+        graph.add_edge(
+            vertex,
+            presentation_roots.get(target.root())?,
+            EdgeRoleV1::PresentationTargetRoot,
+        )?;
+        graph.add_edge(
+            vertex,
+            occurrences.get(target.occurrence())?,
+            EdgeRoleV1::PresentationTargetOccurrence,
         )?;
     }
 
@@ -992,7 +1049,7 @@ fn serialize_leaf(
             .and_then(|value| value.checked_add(color.as_slice().len()))
             .ok_or(ProgramCompileError::ResourceExhausted)
     })?;
-    let capacity = DOMAIN_V2
+    let capacity = DOMAIN_V3
         .len()
         .checked_add(16)
         .and_then(|value| value.checked_add(color_bytes))
@@ -1002,7 +1059,7 @@ fn serialize_leaf(
     output
         .try_reserve_exact(capacity)
         .map_err(|_| ProgramCompileError::ResourceExhausted)?;
-    output.extend_from_slice(DOMAIN_V2);
+    output.extend_from_slice(DOMAIN_V3);
     push_u64_bytes(&mut output, usize_as_u64(graph.colors.len())?);
     push_u64_bytes(&mut output, usize_as_u64(graph.edge_count)?);
 
@@ -1336,9 +1393,9 @@ fn canonical_preimage(graph: &CanonicalGraphV1) -> Result<Vec<u8>, ProgramCompil
     canonical_search(graph).map(|(preimage, _)| preimage)
 }
 
-pub(super) fn compile_program_content_identity_v2<Evaluation>(
+pub(super) fn compile_program_content_identity_v3<Evaluation>(
     program: &Program<Evaluation>,
-) -> Result<ProgramContentIdentityV2, ProgramCompileError>
+) -> Result<ProgramContentIdentityV3, ProgramCompileError>
 where
     Evaluation: ProgramConstraintEvaluatorSetV1,
     ProgramConstraintInvocationOf<Evaluation>: Copy,
@@ -1346,7 +1403,7 @@ where
     let graph = build_graph(program)?;
     let preimage = canonical_preimage(&graph)?;
     let digest = crate::sha256::digest(&preimage);
-    Ok(ProgramContentIdentityV2(*digest.as_bytes()))
+    Ok(ProgramContentIdentityV3(*digest.as_bytes()))
 }
 
 #[cfg(test)]

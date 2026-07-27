@@ -13,7 +13,8 @@ use crate::Srgb8;
 use crate::appearance::{
     AdmittedAppearanceBindings, AppearanceBindings, AppearanceGraphSpec, BindingError,
     ColorInputId, CompileError, CompositionProfileV1, EncodedPointPaintV1, OccurrenceId,
-    OccurrenceSpec, OpacityInputId, PaintId, PaintSpec, SurfaceId, SurfaceInputPortId, SurfaceSpec,
+    OccurrenceSpec, OpacityInputId, PaintId, PaintSpec, PointPresentationPathErrorV1, SurfaceId,
+    SurfaceInputPortId, SurfaceSpec,
 };
 use crate::constraints::Evaluator;
 
@@ -81,6 +82,80 @@ fn bindings(source: [u8; 3], opacity: f64, context: [u8; 3]) -> AppearanceBindin
         vec![(CONTEXT, Srgb8::new(context))],
         vec![(OPACITY, opacity)],
     )
+}
+
+fn terminal_chain() -> AppearanceGraphSpec {
+    AppearanceGraphSpec::new(
+        vec![SOURCE],
+        vec![CONTEXT],
+        vec![],
+        vec![PaintSpec::Solid {
+            id: SOLID_PAINT,
+            color: SOURCE,
+        }],
+        vec![
+            SurfaceSpec::Input {
+                id: CONTEXT_SURFACE,
+                port: CONTEXT,
+            },
+            SurfaceSpec::FromOccurrence {
+                id: DERIVED_SURFACE,
+                occurrence: FILL_OCCURRENCE,
+            },
+        ],
+        vec![
+            OccurrenceSpec {
+                id: FILL_OCCURRENCE,
+                subject: SOLID_PAINT,
+                against: CONTEXT_SURFACE,
+                profile: CompositionProfileV1::EncodedSrgb8SourceOverV1,
+            },
+            OccurrenceSpec {
+                id: OTHER_OCCURRENCE,
+                subject: SOLID_PAINT,
+                against: DERIVED_SURFACE,
+                profile: CompositionProfileV1::EncodedSrgb8SourceOverV1,
+            },
+        ],
+    )
+}
+
+#[test]
+fn presentation_root_authority_is_minted_only_for_a_terminal_occurrence() {
+    let graph = terminal_chain().compile().unwrap();
+    assert!(matches!(
+        graph.compile_point_presentation_root(FILL_OCCURRENCE),
+        Err(PointPresentationPathErrorV1::RootConsumedDownstream)
+    ));
+    let root = graph
+        .compile_point_presentation_root(OTHER_OCCURRENCE)
+        .unwrap();
+    assert_eq!(root.terminal(), OTHER_OCCURRENCE);
+    let path = graph
+        .compile_point_presentation_path(FILL_OCCURRENCE, &root)
+        .unwrap();
+    assert_eq!(path.target(), FILL_OCCURRENCE);
+    assert_eq!(path.root(), OTHER_OCCURRENCE);
+    assert_eq!(path.len(), 2);
+}
+
+#[test]
+fn presentation_root_authority_is_bound_to_its_compiled_graph() {
+    let first = terminal_chain().compile().unwrap();
+    let second = terminal_chain().compile().unwrap();
+    let foreign_root = first
+        .compile_point_presentation_root(OTHER_OCCURRENCE)
+        .unwrap();
+    assert!(matches!(
+        second.compile_point_presentation_path(FILL_OCCURRENCE, &foreign_root),
+        Err(PointPresentationPathErrorV1::IncompatibleRoot)
+    ));
+}
+
+#[test]
+fn compiled_appearance_graph_remains_send_and_sync() {
+    fn assert_send_sync<T: Send + Sync>() {}
+    assert_send_sync::<crate::appearance::CompiledAppearanceGraph>();
 }
 
 fn slot_component(reverse_declarations: bool) -> AppearanceGraphSpec {
@@ -1185,8 +1260,9 @@ proptest! {
 fn compile_rejects_duplicate_declarations_with_typed_errors() {
     assert_eq!(
         AppearanceGraphSpec::new(vec![SOURCE, SOURCE], vec![], vec![], vec![], vec![], vec![])
-            .compile(),
-        Err(CompileError::DuplicateColorInput { input: SOURCE })
+            .compile()
+            .unwrap_err(),
+        CompileError::DuplicateColorInput { input: SOURCE }
     );
     assert_eq!(
         AppearanceGraphSpec::new(
@@ -1197,8 +1273,9 @@ fn compile_rejects_duplicate_declarations_with_typed_errors() {
             vec![],
             vec![]
         )
-        .compile(),
-        Err(CompileError::DuplicateOpacityInput { input: OPACITY })
+        .compile()
+        .unwrap_err(),
+        CompileError::DuplicateOpacityInput { input: OPACITY }
     );
     assert_eq!(
         AppearanceGraphSpec::new(
@@ -1209,8 +1286,9 @@ fn compile_rejects_duplicate_declarations_with_typed_errors() {
             vec![],
             vec![]
         )
-        .compile(),
-        Err(CompileError::DuplicateSurfaceInputPort { input: CONTEXT })
+        .compile()
+        .unwrap_err(),
+        CompileError::DuplicateSurfaceInputPort { input: CONTEXT }
     );
     assert_eq!(
         AppearanceGraphSpec::new(
@@ -1230,8 +1308,9 @@ fn compile_rejects_duplicate_declarations_with_typed_errors() {
             vec![],
             vec![]
         )
-        .compile(),
-        Err(CompileError::DuplicatePaint { paint: SOLID_PAINT })
+        .compile()
+        .unwrap_err(),
+        CompileError::DuplicatePaint { paint: SOLID_PAINT }
     );
     assert_eq!(
         AppearanceGraphSpec::new(
@@ -1251,10 +1330,11 @@ fn compile_rejects_duplicate_declarations_with_typed_errors() {
             ],
             vec![]
         )
-        .compile(),
-        Err(CompileError::DuplicateSurface {
+        .compile()
+        .unwrap_err(),
+        CompileError::DuplicateSurface {
             surface: CONTEXT_SURFACE
-        })
+        }
     );
     assert_eq!(
         AppearanceGraphSpec::new(
@@ -1278,10 +1358,11 @@ fn compile_rejects_duplicate_declarations_with_typed_errors() {
                 },
             ]
         )
-        .compile(),
-        Err(CompileError::DuplicateOccurrence {
+        .compile()
+        .unwrap_err(),
+        CompileError::DuplicateOccurrence {
             occurrence: FILL_OCCURRENCE
-        })
+        }
     );
 }
 
@@ -1300,11 +1381,11 @@ fn compile_rejects_every_dangling_canonical_edge() {
     )
     .compile();
     assert_eq!(
-        missing_color,
-        Err(CompileError::MissingPaintColorInput {
+        missing_color.unwrap_err(),
+        CompileError::MissingPaintColorInput {
             paint: SOLID_PAINT,
             input: SOURCE,
-        })
+        }
     );
 
     let missing_paint = AppearanceGraphSpec::new(
@@ -1321,11 +1402,11 @@ fn compile_rejects_every_dangling_canonical_edge() {
     )
     .compile();
     assert_eq!(
-        missing_paint,
-        Err(CompileError::MissingPaintSource {
+        missing_paint.unwrap_err(),
+        CompileError::MissingPaintSource {
             paint: FILL_PAINT,
             source: SOLID_PAINT,
-        })
+        }
     );
 
     let missing_opacity = AppearanceGraphSpec::new(
@@ -1348,11 +1429,11 @@ fn compile_rejects_every_dangling_canonical_edge() {
     )
     .compile();
     assert_eq!(
-        missing_opacity,
-        Err(CompileError::MissingPaintOpacityInput {
+        missing_opacity.unwrap_err(),
+        CompileError::MissingPaintOpacityInput {
             paint: FILL_PAINT,
             input: OPACITY,
-        })
+        }
     );
 
     let missing_surface_input = AppearanceGraphSpec::new(
@@ -1368,11 +1449,11 @@ fn compile_rejects_every_dangling_canonical_edge() {
     )
     .compile();
     assert_eq!(
-        missing_surface_input,
-        Err(CompileError::MissingSurfaceInputPort {
+        missing_surface_input.unwrap_err(),
+        CompileError::MissingSurfaceInputPort {
             surface: CONTEXT_SURFACE,
             input: CONTEXT,
-        })
+        }
     );
 
     let missing_surface_occurrence = AppearanceGraphSpec::new(
@@ -1388,11 +1469,11 @@ fn compile_rejects_every_dangling_canonical_edge() {
     )
     .compile();
     assert_eq!(
-        missing_surface_occurrence,
-        Err(CompileError::MissingSurfaceOccurrence {
+        missing_surface_occurrence.unwrap_err(),
+        CompileError::MissingSurfaceOccurrence {
             surface: DERIVED_SURFACE,
             occurrence: FILL_OCCURRENCE,
-        })
+        }
     );
 
     let missing_occurrence_paint = AppearanceGraphSpec::new(
@@ -1413,11 +1494,11 @@ fn compile_rejects_every_dangling_canonical_edge() {
     )
     .compile();
     assert_eq!(
-        missing_occurrence_paint,
-        Err(CompileError::MissingOccurrencePaint {
+        missing_occurrence_paint.unwrap_err(),
+        CompileError::MissingOccurrencePaint {
             occurrence: FILL_OCCURRENCE,
             paint: FILL_PAINT,
-        })
+        }
     );
 
     let missing_occurrence_backdrop = AppearanceGraphSpec::new(
@@ -1438,11 +1519,11 @@ fn compile_rejects_every_dangling_canonical_edge() {
     )
     .compile();
     assert_eq!(
-        missing_occurrence_backdrop,
-        Err(CompileError::MissingOccurrenceBackdrop {
+        missing_occurrence_backdrop.unwrap_err(),
+        CompileError::MissingOccurrenceBackdrop {
             occurrence: FILL_OCCURRENCE,
             surface: CONTEXT_SURFACE,
-        })
+        }
     );
 }
 
@@ -1477,10 +1558,10 @@ fn cycle_errors_contain_only_actual_cycle_members() {
     )
     .compile();
     assert_eq!(
-        paint_cycle,
-        Err(CompileError::PaintCycle {
+        paint_cycle.unwrap_err(),
+        CompileError::PaintCycle {
             paints: vec![cycle_a, cycle_b],
-        })
+        }
     );
 
     let cycle_surface = SurfaceId::new(10);
@@ -1522,11 +1603,11 @@ fn cycle_errors_contain_only_actual_cycle_members() {
     )
     .compile();
     assert_eq!(
-        render_cycle,
-        Err(CompileError::RenderCycle {
+        render_cycle.unwrap_err(),
+        CompileError::RenderCycle {
             surfaces: vec![cycle_surface],
             occurrences: vec![cycle_occurrence],
-        })
+        }
     );
 }
 

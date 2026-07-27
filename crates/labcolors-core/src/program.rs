@@ -35,7 +35,7 @@
 //! [`CertificateV1::Verified`] хранит выбранное состояние, все клетки
 //! доказательства и сертифицированные выходы. [`CertificateV1::Conflict`]
 //! хранит исчерпывающий конфликт по всем рассмотренным состояниям.
-//! [`ContentIdentityV2`] идентифицирует каноническое содержание, но не даёт
+//! [`ContentIdentityV3`] идентифицирует каноническое содержание, но не даёт
 //! полномочий живого [`OwnerV1`].
 
 #![forbid(unreachable_pub)]
@@ -68,8 +68,9 @@ use crate::program_session::{
     CoreProgramConstraintInvocationV1, CoreProgramDraftErrorV1, CoreProgramDraftV1,
     CoreProgramEvaluatorErrorV1, CoreProgramEvaluatorsV1, CoreProgramPassEvidenceV1,
     CoreProgramViolationEvidenceV1, DeclaredJointSelectionV1, JointCandidateStateV1, Occurrence,
-    OpacityInput, OutputBinding, OutputSlotId, Paint, ProgramCompileError, ProgramConflictV1,
-    ProgramConstraintCellV1, ProgramConstraintResultV1, ProgramContentIdentityV2, ProgramOutputV1,
+    OpacityInput, OutputBinding, OutputSlotId, Paint, PointPresentationRootV1,
+    PointPresentationTargetV1, PresentationRootId, ProgramCompileError, ProgramConflictV1,
+    ProgramConstraintCellV1, ProgramConstraintResultV1, ProgramContentIdentityV3, ProgramOutputV1,
     ProgramSessionEvaluationError, ProgramSessionInstantiateError, ProgramSessionPlan,
     ProgramVerifiedV1, Source, SourceId, Surface, Target, TargetCandidateChoiceV1,
     TargetCandidateId, TargetCandidateV1 as CoreTargetCandidateV1, TargetId,
@@ -182,6 +183,11 @@ authored_id!(
     "Идентификатор физического наложения Paint на Surface.",
     OccurrenceIdV1,
     OccurrenceId
+);
+authored_id!(
+    "Идентификатор моделируемого point presentation root.",
+    PresentationRootIdV1,
+    PresentationRootId
 );
 authored_id!(
     "Идентификатор проверяемого ограничения.",
@@ -428,6 +434,14 @@ pub(crate) enum CompileErrorKindV1 {
     DuplicateSurface,
     /// Повторно объявлен Occurrence.
     DuplicateOccurrence,
+    DuplicatePresentationRoot,
+    MissingPresentationRootOccurrence,
+    PresentationRootConsumedDownstream,
+    UnusedPresentationRoot,
+    DuplicatePointPresentationTarget,
+    MissingPointPresentationRoot,
+    MissingPointPresentationOccurrence,
+    PointPresentationOccurrenceOutsideRootAncestry,
     /// Повторно объявлено ограничение.
     DuplicateConstraint,
     /// Повторно объявлен выходной слот.
@@ -513,6 +527,8 @@ pub(crate) enum CompileErrorHandleV1 {
     Surface(SurfaceIdV1),
     /// Occurrence.
     Occurrence(OccurrenceIdV1),
+    /// Моделируемый presentation root.
+    PresentationRoot(PresentationRootIdV1),
     /// Ограничение.
     Constraint(ConstraintIdV1),
     /// Выходной слот.
@@ -531,6 +547,7 @@ impl CompileErrorHandleV1 {
             Self::SurfaceInputPort(value) => value.value(),
             Self::Surface(value) => value.value(),
             Self::Occurrence(value) => value.value(),
+            Self::PresentationRoot(value) => value.value(),
             Self::Constraint(value) => value.value(),
             Self::OutputSlot(value) => value.value(),
         }
@@ -733,6 +750,38 @@ pub(crate) enum CompileErrorV1 {
         /// Отсутствующая Surface.
         surface: SurfaceIdV1,
     },
+    /// Повторно объявлен presentation root.
+    DuplicatePresentationRoot { root: PresentationRootIdV1 },
+    /// Presentation root ссылается на отсутствующий Occurrence.
+    MissingPresentationRootOccurrence {
+        root: PresentationRootIdV1,
+        occurrence: OccurrenceIdV1,
+    },
+    /// Root всё ещё потребляется downstream Occurrence.
+    PresentationRootConsumedDownstream {
+        root: PresentationRootIdV1,
+        occurrence: OccurrenceIdV1,
+    },
+    /// Root не имеет ни одной проверяемой цели.
+    UnusedPresentationRoot { root: PresentationRootIdV1 },
+    /// Повторно объявлена одна пара root/target.
+    DuplicatePointPresentationTarget {
+        root: PresentationRootIdV1,
+        occurrence: OccurrenceIdV1,
+    },
+    /// Target ссылается на отсутствующий root.
+    MissingPointPresentationRoot { root: PresentationRootIdV1 },
+    /// Target ссылается на отсутствующий Occurrence.
+    MissingPointPresentationOccurrence {
+        root: PresentationRootIdV1,
+        occurrence: OccurrenceIdV1,
+    },
+    /// Target не принадлежит ancestry root.
+    PointPresentationOccurrenceOutsideRootAncestry {
+        root: PresentationRootIdV1,
+        terminal: OccurrenceIdV1,
+        occurrence: OccurrenceIdV1,
+    },
     /// Обнаружен цикл зависимостей Paint.
     PaintCycle(PaintCycleV1),
     /// Обнаружен цикл Surface/Occurrence.
@@ -869,6 +918,22 @@ impl CompileErrorV1 {
             Self::DuplicatePaint { .. } => Kind::DuplicatePaint,
             Self::DuplicateSurface { .. } => Kind::DuplicateSurface,
             Self::DuplicateOccurrence { .. } => Kind::DuplicateOccurrence,
+            Self::DuplicatePresentationRoot { .. } => Kind::DuplicatePresentationRoot,
+            Self::MissingPresentationRootOccurrence { .. } => {
+                Kind::MissingPresentationRootOccurrence
+            }
+            Self::PresentationRootConsumedDownstream { .. } => {
+                Kind::PresentationRootConsumedDownstream
+            }
+            Self::UnusedPresentationRoot { .. } => Kind::UnusedPresentationRoot,
+            Self::DuplicatePointPresentationTarget { .. } => Kind::DuplicatePointPresentationTarget,
+            Self::MissingPointPresentationRoot { .. } => Kind::MissingPointPresentationRoot,
+            Self::MissingPointPresentationOccurrence { .. } => {
+                Kind::MissingPointPresentationOccurrence
+            }
+            Self::PointPresentationOccurrenceOutsideRootAncestry { .. } => {
+                Kind::PointPresentationOccurrenceOutsideRootAncestry
+            }
             Self::MissingPaintTarget { .. } => Kind::MissingPaintTarget,
             Self::MissingPaintSource { .. } => Kind::MissingPaintSource,
             Self::MissingPaintOpacityInput { .. } => Kind::MissingPaintOpacityInput,
@@ -941,6 +1006,16 @@ impl CompileErrorV1 {
             | Self::MissingOccurrenceBackdrop { occurrence, .. } => {
                 Some(Handle::Occurrence(*occurrence))
             }
+            Self::DuplicatePresentationRoot { root }
+            | Self::MissingPresentationRootOccurrence { root, .. }
+            | Self::PresentationRootConsumedDownstream { root, .. }
+            | Self::UnusedPresentationRoot { root }
+            | Self::DuplicatePointPresentationTarget { root, .. }
+            | Self::MissingPointPresentationRoot { root }
+            | Self::MissingPointPresentationOccurrence { root, .. }
+            | Self::PointPresentationOccurrenceOutsideRootAncestry { root, .. } => {
+                Some(Handle::PresentationRoot(*root))
+            }
             Self::UnassessedOutput { output, .. }
             | Self::DuplicateOutputSlot { output }
             | Self::MissingOutputPaint { output, .. } => Some(Handle::OutputSlot(*output)),
@@ -977,7 +1052,12 @@ impl CompileErrorV1 {
             Self::MissingPaintOpacityInput { input, .. } => Some(Handle::OpacityInput(*input)),
             Self::MissingSurfaceInputPort { input, .. } => Some(Handle::SurfaceInputPort(*input)),
             Self::MissingSurfaceOccurrence { occurrence, .. }
-            | Self::MissingConstraintOccurrence { occurrence, .. } => {
+            | Self::MissingConstraintOccurrence { occurrence, .. }
+            | Self::MissingPresentationRootOccurrence { occurrence, .. }
+            | Self::PresentationRootConsumedDownstream { occurrence, .. }
+            | Self::DuplicatePointPresentationTarget { occurrence, .. }
+            | Self::MissingPointPresentationOccurrence { occurrence, .. }
+            | Self::PointPresentationOccurrenceOutsideRootAncestry { occurrence, .. } => {
                 Some(Handle::Occurrence(*occurrence))
             }
             Self::MissingOccurrencePaint { paint, .. }
@@ -1000,6 +1080,9 @@ impl CompileErrorV1 {
             | Self::DuplicatePaint { .. }
             | Self::DuplicateSurface { .. }
             | Self::DuplicateOccurrence { .. }
+            | Self::DuplicatePresentationRoot { .. }
+            | Self::UnusedPresentationRoot { .. }
+            | Self::MissingPointPresentationRoot { .. }
             | Self::PaintCycle(_)
             | Self::RenderCycle(_)
             | Self::OpacityOutOfDomain { .. }
@@ -1175,6 +1258,35 @@ impl DraftV1 {
         self
     }
 
+    /// Declares one terminal root of the modeled point graph.
+    pub(crate) fn push_point_presentation_root(
+        &mut self,
+        id: PresentationRootIdV1,
+        terminal: OccurrenceIdV1,
+    ) -> &mut Self {
+        self.inner
+            .push_point_presentation_root(PointPresentationRootV1::new(
+                id.into_core(),
+                terminal.into_core(),
+            ));
+        self
+    }
+
+    /// Declares one occurrence whose final point contribution belongs to the
+    /// named root under the code-owned versioned absence intervention.
+    pub(crate) fn push_point_presentation_target(
+        &mut self,
+        root: PresentationRootIdV1,
+        occurrence: OccurrenceIdV1,
+    ) -> &mut Self {
+        self.inner
+            .push_point_presentation_target(PointPresentationTargetV1::new(
+                root.into_core(),
+                occurrence.into_core(),
+            ));
+        self
+    }
+
     /// Добавляет обязательное точное сравнение видимого sRGB8 результата.
     pub(crate) fn push_exact_hard(
         &mut self,
@@ -1314,8 +1426,8 @@ impl OwnerV1 {
     ///
     /// Identity доступна до первого update, но не заменяет полномочия этой
     /// конкретной owner-эпохи.
-    pub(crate) fn content_identity(&self) -> ContentIdentityV2 {
-        ContentIdentityV2::from_core(self.compiled.content_identity())
+    pub(crate) fn content_identity(&self) -> ContentIdentityV3 {
+        ContentIdentityV3::from_core(self.compiled.content_identity())
     }
 
     /// Вычисляет верхние границы клеток для prospective Observed-update.
@@ -1343,6 +1455,11 @@ impl OwnerV1 {
         self.compiled.surface_input_ports().len()
     }
 
+    /// Number of compiler-admitted target/root presentation relations.
+    pub(crate) fn point_presentation_count(&self) -> usize {
+        self.compiled.point_presentations().len()
+    }
+
     /// Канонический порядок входных портов для однократного binding на хосте.
     pub(crate) fn surface_input_ports(
         &self,
@@ -1363,7 +1480,7 @@ impl OwnerV1 {
 
     /// Проецирует операции только для Session этой точной owner-эпохи.
     ///
-    /// Равенство [`ContentIdentityV2`] не даёт полномочий.
+    /// Равенство [`ContentIdentityV3`] не даёт полномочий.
     pub(crate) fn project<'owner, 'session>(
         &'owner self,
         session: &'session SessionV1,
@@ -1691,10 +1808,10 @@ impl<'owner, 'session> ProjectionV1<'owner, 'session> {
 /// Identity не идентифицирует owner-эпоху и не даёт runtime-полномочий.
 #[repr(transparent)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(crate) struct ContentIdentityV2([u8; 32]);
+pub(crate) struct ContentIdentityV3([u8; 32]);
 
-impl ContentIdentityV2 {
-    const fn from_core(value: ProgramContentIdentityV2) -> Self {
+impl ContentIdentityV3 {
+    const fn from_core(value: ProgramContentIdentityV3) -> Self {
         Self(*value.as_bytes())
     }
 
@@ -1712,8 +1829,8 @@ pub(crate) struct VerifiedCertificateV1<'a> {
 
 impl<'a> VerifiedCertificateV1<'a> {
     /// Возвращает identity скомпилированного содержания.
-    pub(crate) const fn content_identity(self) -> ContentIdentityV2 {
-        ContentIdentityV2::from_core(self.inner.report().content_identity())
+    pub(crate) const fn content_identity(self) -> ContentIdentityV3 {
+        ContentIdentityV3::from_core(self.inner.report().content_identity())
     }
 
     /// Возвращает точное наблюдение, на котором выдан сертификат.
@@ -1758,8 +1875,8 @@ pub(crate) struct ConflictCertificateV1<'a> {
 
 impl<'a> ConflictCertificateV1<'a> {
     /// Возвращает identity скомпилированного содержания.
-    pub(crate) const fn content_identity(self) -> ContentIdentityV2 {
-        ContentIdentityV2::from_core(self.inner.report().content_identity())
+    pub(crate) const fn content_identity(self) -> ContentIdentityV3 {
+        ContentIdentityV3::from_core(self.inner.report().content_identity())
     }
 
     /// Возвращает точное наблюдение, вызвавшее конфликт.
@@ -1808,7 +1925,7 @@ impl<'a> CertificateV1<'a> {
     }
 
     /// Возвращает identity скомпилированного содержания.
-    pub(crate) const fn content_identity(self) -> ContentIdentityV2 {
+    pub(crate) const fn content_identity(self) -> ContentIdentityV3 {
         match self {
             Self::Verified(value) => value.content_identity(),
             Self::Conflict(value) => value.content_identity(),
@@ -2940,6 +3057,54 @@ fn map_program_compile_error(error: ProgramCompileError) -> CompileErrorV1 {
         } => CompileErrorV1::MissingOccurrenceBackdrop {
             occurrence: OccurrenceIdV1::from_core(occurrence),
             surface: SurfaceIdV1::from_core(surface),
+        },
+        ProgramCompileError::DuplicatePresentationRoot { root } => {
+            CompileErrorV1::DuplicatePresentationRoot {
+                root: PresentationRootIdV1::from_core(root),
+            }
+        }
+        ProgramCompileError::MissingPresentationRootOccurrence { root, occurrence } => {
+            CompileErrorV1::MissingPresentationRootOccurrence {
+                root: PresentationRootIdV1::from_core(root),
+                occurrence: OccurrenceIdV1::from_core(occurrence),
+            }
+        }
+        ProgramCompileError::PresentationRootConsumedDownstream { root, occurrence } => {
+            CompileErrorV1::PresentationRootConsumedDownstream {
+                root: PresentationRootIdV1::from_core(root),
+                occurrence: OccurrenceIdV1::from_core(occurrence),
+            }
+        }
+        ProgramCompileError::UnusedPresentationRoot { root } => {
+            CompileErrorV1::UnusedPresentationRoot {
+                root: PresentationRootIdV1::from_core(root),
+            }
+        }
+        ProgramCompileError::DuplicatePointPresentationTarget { root, occurrence } => {
+            CompileErrorV1::DuplicatePointPresentationTarget {
+                root: PresentationRootIdV1::from_core(root),
+                occurrence: OccurrenceIdV1::from_core(occurrence),
+            }
+        }
+        ProgramCompileError::MissingPointPresentationRoot { root } => {
+            CompileErrorV1::MissingPointPresentationRoot {
+                root: PresentationRootIdV1::from_core(root),
+            }
+        }
+        ProgramCompileError::MissingPointPresentationOccurrence { root, occurrence } => {
+            CompileErrorV1::MissingPointPresentationOccurrence {
+                root: PresentationRootIdV1::from_core(root),
+                occurrence: OccurrenceIdV1::from_core(occurrence),
+            }
+        }
+        ProgramCompileError::PointPresentationOccurrenceOutsideRootAncestry {
+            root,
+            terminal,
+            occurrence,
+        } => CompileErrorV1::PointPresentationOccurrenceOutsideRootAncestry {
+            root: PresentationRootIdV1::from_core(root),
+            terminal: OccurrenceIdV1::from_core(terminal),
+            occurrence: OccurrenceIdV1::from_core(occurrence),
         },
         ProgramCompileError::PaintCycle { paints } => {
             CompileErrorV1::PaintCycle(PaintCycleV1 { paints })

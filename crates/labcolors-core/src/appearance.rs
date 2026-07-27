@@ -26,6 +26,7 @@
 )]
 
 use std::collections::BTreeSet;
+use std::sync::Arc;
 
 use crate::Srgb8;
 pub(crate) use crate::composition::CompositionProfileV1;
@@ -599,6 +600,7 @@ impl AppearanceGraphSpec {
             .collect();
 
         Ok(CompiledAppearanceGraph {
+            instance: Arc::new(()),
             color_inputs,
             surface_input_ports,
             opacity_inputs,
@@ -796,10 +798,74 @@ pub(crate) struct CompiledOccurrenceSlotV1 {
     id: OccurrenceId,
 }
 
+/// Versioned counterfactual declared for one modeled point target.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PointOccurrenceAbsenceReleaseV1 {
+    /// Replace the target Occurrence output with its own resolved backdrop,
+    /// then replay every unchanged downstream occurrence and quantization.
+    BypassOwnBackdropV1,
+}
+
+/// Compiler-minted terminal root authority. A naked OccurrenceId cannot
+/// authorize a final modeled-result claim.
+#[derive(Debug, Clone)]
+pub(crate) struct CompiledPointPresentationRootV1 {
+    graph_instance: Arc<()>,
+    terminal: CompiledOccurrenceSlotV1,
+}
+
+impl CompiledPointPresentationRootV1 {
+    pub(crate) const fn terminal(&self) -> OccurrenceId {
+        self.terminal.id
+    }
+}
+
+/// Unique target-to-root ancestry proven on the compiler cold edge.
+#[derive(Debug, Clone)]
+pub(crate) struct CompiledPointPresentationPathV1 {
+    graph_instance: Arc<()>,
+    target: OccurrenceId,
+    root: OccurrenceId,
+    occurrences: Box<[CompiledOccurrenceSlotV1]>,
+}
+
+impl CompiledPointPresentationPathV1 {
+    pub(crate) const fn target(&self) -> OccurrenceId {
+        self.target
+    }
+
+    pub(crate) const fn root(&self) -> OccurrenceId {
+        self.root
+    }
+
+    pub(crate) const fn len(&self) -> usize {
+        self.occurrences.len()
+    }
+
+    pub(crate) fn belongs_to(&self, graph: &CompiledAppearanceGraph) -> bool {
+        Arc::ptr_eq(&self.graph_instance, &graph.instance)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PointPresentationPathErrorV1 {
+    MissingRoot,
+    MissingTarget,
+    RootConsumedDownstream,
+    TargetOutsideRootAncestry,
+    IncompatibleRoot,
+    ResourceExhausted,
+    InternalInvariant,
+}
+
 /// Канонический compiled IR с индексными ссылками: после проверки bindings
 /// исполнение самих Paint/Surface/Occurrence узлов линейно по их числу.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// Graph намеренно не реализует `Clone` и value equality: его instance-token
+/// является compiler-owned authority, а не частью сравнимого содержимого.
+#[derive(Debug)]
 pub(crate) struct CompiledAppearanceGraph {
+    instance: Arc<()>,
     color_inputs: Vec<ColorInputId>,
     surface_input_ports: Vec<SurfaceInputPortId>,
     opacity_inputs: Vec<OpacityInputId>,
@@ -1632,6 +1698,83 @@ impl CompiledAppearanceGraph {
             .binary_search_by_key(&id, |occurrence| occurrence.id)
             .ok()?;
         Some(CompiledOccurrenceSlotV1 { index, id })
+    }
+
+    /// Mint authority only for an occurrence that is not consumed by another
+    /// occurrence in this point graph. Intermediate layers therefore cannot
+    /// be mistaken for final modeled results.
+    pub(crate) fn compile_point_presentation_root(
+        &self,
+        terminal: OccurrenceId,
+    ) -> Result<CompiledPointPresentationRootV1, PointPresentationPathErrorV1> {
+        let terminal = self
+            .bind_occurrence(terminal)
+            .ok_or(PointPresentationPathErrorV1::MissingRoot)?;
+        let consumed = self.occurrences.iter().any(|occurrence| {
+            matches!(
+                self.surfaces.get(occurrence.against),
+                Some(CompiledSurfaceSpec::FromOccurrence { occurrence, .. })
+                    if *occurrence == terminal.index
+            )
+        });
+        if consumed {
+            return Err(PointPresentationPathErrorV1::RootConsumedDownstream);
+        }
+        Ok(CompiledPointPresentationRootV1 {
+            graph_instance: Arc::clone(&self.instance),
+            terminal,
+        })
+    }
+
+    /// Prove one target's membership in the root's unique backdrop ancestry.
+    pub(crate) fn compile_point_presentation_path(
+        &self,
+        target: OccurrenceId,
+        root: &CompiledPointPresentationRootV1,
+    ) -> Result<CompiledPointPresentationPathV1, PointPresentationPathErrorV1> {
+        if !Arc::ptr_eq(&self.instance, &root.graph_instance) {
+            return Err(PointPresentationPathErrorV1::IncompatibleRoot);
+        }
+        let target_slot = self
+            .bind_occurrence(target)
+            .ok_or(PointPresentationPathErrorV1::MissingTarget)?;
+        let root_slot = root.terminal;
+        let mut reverse = Vec::new();
+        reverse
+            .try_reserve_exact(self.occurrences.len())
+            .map_err(|_| PointPresentationPathErrorV1::ResourceExhausted)?;
+
+        let mut current = root_slot.index;
+        loop {
+            let spec = self
+                .occurrences
+                .get(current)
+                .ok_or(PointPresentationPathErrorV1::InternalInvariant)?;
+            reverse.push(CompiledOccurrenceSlotV1 {
+                index: current,
+                id: spec.id,
+            });
+            if current == target_slot.index {
+                break;
+            }
+            let surface = self
+                .surfaces
+                .get(spec.against)
+                .ok_or(PointPresentationPathErrorV1::InternalInvariant)?;
+            current = match surface {
+                CompiledSurfaceSpec::FromOccurrence { occurrence, .. } => *occurrence,
+                CompiledSurfaceSpec::Input { .. } => {
+                    return Err(PointPresentationPathErrorV1::TargetOutsideRootAncestry);
+                }
+            };
+        }
+        reverse.reverse();
+        Ok(CompiledPointPresentationPathV1 {
+            graph_instance: Arc::clone(&self.instance),
+            target,
+            root: root_slot.id,
+            occurrences: reverse.into_boxed_slice(),
+        })
     }
 
     /// Canonical client-owned occurrence identities emitted by this program.

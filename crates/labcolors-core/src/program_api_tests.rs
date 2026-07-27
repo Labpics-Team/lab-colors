@@ -10,6 +10,7 @@ fn staged_program_api_is_module_qualified_without_transport_prefixes() {
     let paint = program::PaintIdV1::new(4);
     let surface = program::SurfaceIdV1::new(5);
     let occurrence = program::OccurrenceIdV1::new(6);
+    let root = program::PresentationRootIdV1::new(9);
     let constraint = program::ConstraintIdV1::new(7);
     let output = program::OutputSlotIdV1::new(8);
     let context =
@@ -22,10 +23,13 @@ fn staged_program_api_is_module_qualified_without_transport_prefixes() {
     draft.push_solid_paint(paint, target);
     draft.push_input_surface(surface, input);
     draft.push_source_over_occurrence(occurrence, paint, surface, context);
+    draft.push_point_presentation_root(root, occurrence);
+    draft.push_point_presentation_target(root, occurrence);
     draft.push_exact_hard(constraint, occurrence, Srgb8::new([0, 0, 0]));
     draft.push_output(output, paint);
 
     let owner = draft.compile().unwrap();
+    assert_eq!(owner.point_presentation_count(), 1);
     let mut session = owner.instantiate(1).unwrap();
     let white = [Srgb8::new([255, 255, 255])];
     let scenarios = [program::ScenarioV1::new(1, &white)];

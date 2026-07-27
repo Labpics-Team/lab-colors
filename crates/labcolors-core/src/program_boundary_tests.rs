@@ -9,12 +9,12 @@ use crate::Srgb8;
 use crate::program::{
     AppearanceContextErrorKindV1, AppearanceContextFieldV1, AppearanceContextV1, AssessmentV1,
     CertificateV1, CompileErrorHandleV1, CompileErrorKindV1, CompileErrorV1, ConstraintIdV1,
-    ContentIdentityV2, DraftErrorV1, DraftV1, EvidenceBoundsErrorV1, InstantiateErrorV1,
+    ContentIdentityV3, DraftErrorV1, DraftV1, EvidenceBoundsErrorV1, InstantiateErrorV1,
     JointChoiceV1, JointOrderErrorV1, JointStateV1, NumericDomainErrorV1, ObservationHeadV1,
     OccurrenceIdV1, OpacityInputIdV1, OperationV1, OutputSlotIdV1, OwnerV1, PaintIdV1,
-    PhysicalPointV1, ProjectionV1, ScenarioV1, SessionV1, SignalV1, SourceIdV1, StateKindV1,
-    SurfaceIdV1, SurfaceInputPortIdV1, SurroundV1, TargetCandidateIdV1, TargetCandidateV1,
-    TargetIdV1, UpdateErrorKindV1, UpdateErrorV1, UpdateV1, VerdictV1,
+    PhysicalPointV1, PresentationRootIdV1, ProjectionV1, ScenarioV1, SessionV1, SignalV1,
+    SourceIdV1, StateKindV1, SurfaceIdV1, SurfaceInputPortIdV1, SurroundV1, TargetCandidateIdV1,
+    TargetCandidateV1, TargetIdV1, UpdateErrorKindV1, UpdateErrorV1, UpdateV1, VerdictV1,
 };
 use crate::wcag22::Wcag22CriterionV1;
 
@@ -217,6 +217,131 @@ fn fixed_nested_draft(
     draft.push_wcag22_report_only(wcag, second_occurrence, Wcag22CriterionV1::Sc143TextDefault);
     draft.push_output(output, translucent);
     draft
+}
+
+#[test]
+fn program_compiler_admits_only_explicit_terminal_point_presentations() {
+    let input = SurfaceInputPortIdV1::new(50);
+    let root = PresentationRootIdV1::new(51);
+    let mut valid = fixed_nested_draft(0.5, SourceIdV1::new(1), input, input);
+    valid.push_point_presentation_root(root, OccurrenceIdV1::new(9));
+    valid.push_point_presentation_target(root, OccurrenceIdV1::new(8));
+    let owner = valid.compile().unwrap();
+    assert_eq!(owner.point_presentation_count(), 1);
+
+    let mut intermediate = fixed_nested_draft(0.5, SourceIdV1::new(1), input, input);
+    intermediate.push_point_presentation_root(root, OccurrenceIdV1::new(8));
+    intermediate.push_point_presentation_target(root, OccurrenceIdV1::new(8));
+    assert_eq!(
+        compile_error(intermediate),
+        CompileErrorV1::PresentationRootConsumedDownstream {
+            root,
+            occurrence: OccurrenceIdV1::new(8),
+        }
+    );
+}
+
+#[test]
+fn presentation_compile_failures_preserve_typed_root_and_occurrence_handles() {
+    let input = SurfaceInputPortIdV1::new(50);
+    let root = PresentationRootIdV1::new(51);
+
+    let mut missing_root = fixed_nested_draft(0.5, SourceIdV1::new(1), input, input);
+    missing_root.push_point_presentation_target(root, OccurrenceIdV1::new(8));
+    let error = compile_error(missing_root);
+    assert_eq!(
+        error.kind(),
+        CompileErrorKindV1::MissingPointPresentationRoot
+    );
+    assert_eq!(
+        error.primary_handle(),
+        Some(CompileErrorHandleV1::PresentationRoot(root))
+    );
+
+    let mut unused_root = fixed_nested_draft(0.5, SourceIdV1::new(1), input, input);
+    unused_root.push_point_presentation_root(root, OccurrenceIdV1::new(9));
+    assert_eq!(
+        compile_error(unused_root),
+        CompileErrorV1::UnusedPresentationRoot { root }
+    );
+
+    let missing_occurrence = OccurrenceIdV1::new(999);
+    let mut missing_target = fixed_nested_draft(0.5, SourceIdV1::new(1), input, input);
+    missing_target.push_point_presentation_root(root, OccurrenceIdV1::new(9));
+    missing_target.push_point_presentation_target(root, missing_occurrence);
+    let error = compile_error(missing_target);
+    assert_eq!(
+        error,
+        CompileErrorV1::MissingPointPresentationOccurrence {
+            root,
+            occurrence: missing_occurrence,
+        }
+    );
+    assert_eq!(
+        error.related_handle(),
+        Some(CompileErrorHandleV1::Occurrence(missing_occurrence))
+    );
+}
+
+#[test]
+fn presentation_declarations_fail_closed_on_duplicates_and_unrelated_nodes() {
+    let input = SurfaceInputPortIdV1::new(50);
+    let root = PresentationRootIdV1::new(51);
+    let terminal = OccurrenceIdV1::new(9);
+    let target = OccurrenceIdV1::new(8);
+
+    let mut duplicate_root = fixed_nested_draft(0.5, SourceIdV1::new(1), input, input);
+    duplicate_root.push_point_presentation_root(root, terminal);
+    duplicate_root.push_point_presentation_root(root, terminal);
+    duplicate_root.push_point_presentation_target(root, target);
+    assert_eq!(
+        compile_error(duplicate_root),
+        CompileErrorV1::DuplicatePresentationRoot { root }
+    );
+
+    let mut duplicate_target = fixed_nested_draft(0.5, SourceIdV1::new(1), input, input);
+    duplicate_target.push_point_presentation_root(root, terminal);
+    duplicate_target.push_point_presentation_target(root, target);
+    duplicate_target.push_point_presentation_target(root, target);
+    assert_eq!(
+        compile_error(duplicate_target),
+        CompileErrorV1::DuplicatePointPresentationTarget {
+            root,
+            occurrence: target,
+        }
+    );
+
+    let missing_terminal = OccurrenceIdV1::new(998);
+    let mut missing_root_occurrence = fixed_nested_draft(0.5, SourceIdV1::new(1), input, input);
+    missing_root_occurrence.push_point_presentation_root(root, missing_terminal);
+    missing_root_occurrence.push_point_presentation_target(root, target);
+    assert_eq!(
+        compile_error(missing_root_occurrence),
+        CompileErrorV1::MissingPresentationRootOccurrence {
+            root,
+            occurrence: missing_terminal,
+        }
+    );
+
+    let unrelated = OccurrenceIdV1::new(997);
+    let context = AppearanceContextV1::try_new(64.0, 0.2, SurroundV1::Dim).unwrap();
+    let mut outside_ancestry = fixed_nested_draft(0.5, SourceIdV1::new(1), input, input);
+    outside_ancestry.push_source_over_occurrence(
+        unrelated,
+        PaintIdV1::new(4),
+        SurfaceIdV1::new(6),
+        context,
+    );
+    outside_ancestry.push_point_presentation_root(root, terminal);
+    outside_ancestry.push_point_presentation_target(root, unrelated);
+    assert_eq!(
+        compile_error(outside_ancestry),
+        CompileErrorV1::PointPresentationOccurrenceOutsideRootAncestry {
+            root,
+            terminal,
+            occurrence: unrelated,
+        }
+    );
 }
 
 fn attach_target_assessment(draft: &mut DraftV1, target: TargetIdV1) {
@@ -677,7 +802,7 @@ fn owner_and_update_errors_preserve_content_and_input_identity() {
     let owner = fixed_nested_draft(1.0, SourceIdV1::new(1), input, input)
         .compile()
         .unwrap();
-    let owner_identity: ContentIdentityV2 = owner.content_identity();
+    let owner_identity: ContentIdentityV3 = owner.content_identity();
     let mut session = owner.instantiate(13).unwrap();
 
     let no_scenarios = [];
