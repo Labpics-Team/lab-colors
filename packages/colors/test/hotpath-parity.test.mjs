@@ -20,10 +20,16 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { adaptTheme } from "../adapt-theme.js";
 import * as ebg from "../effective-bg.js";
+import { __over, initSync } from "../pkg/labcolors.js";
 
 const { oklabLerp } = ebg;
+
+initSync({
+  module: new WebAssembly.Module(readFileSync(new URL("../pkg/labcolors_bg.wasm", import.meta.url))),
+});
 
 // ── deterministic mini-harness (small, self-contained hot-path replay) ───────
 
@@ -35,6 +41,8 @@ const TL_COUNT = 4;
 const hex2 = (n) => n.toString(16).padStart(2, "0");
 const toneHex = (t) => `#${hex2(t & 0xff)}${hex2((t * 3) & 0xff)}${hex2((t * 7) & 0xff)}`.toUpperCase();
 const bgTone = (bg) => parseInt(bg.slice(1, 3), 16);
+const pack = (hex) => Number.parseInt(hex.slice(1), 16) >>> 0;
+const unpack = (word) => `#${word.toString(16).padStart(6, "0").toUpperCase()}`;
 
 const fnv1a = (h, str) => {
   for (let i = 0; i < str.length; i++) {
@@ -91,8 +99,18 @@ function makeStubEngine() {
       }
       for (let i = 0; i < TL_COUNT; i++) {
         const cssVar = `--lab-tl-${i}`;
-        vars[cssVar] = `oklch(80.0% 0.0200 ${(i * 31) % 360} / 0.6)`;
-        roles[`tl${i}`] = { kind: "translucent", cssVar };
+        const css = `oklch(80.0% 0.0200 ${(i * 31) % 360} / 0.6)`;
+        const tintHex = ebg.toHex(ebg.parseCssColor(css));
+        const alpha = 0.6;
+        vars[cssVar] = css;
+        roles[`tl${i}`] = {
+          kind: "translucent",
+          cssVar,
+          tintHex,
+          alpha,
+          compositeHex: unpack(__over(pack(tintHex), alpha, pack(bg))),
+          compositeLc: 60,
+        };
       }
       return { vars, roles };
     },

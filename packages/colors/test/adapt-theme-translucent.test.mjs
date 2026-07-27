@@ -13,8 +13,14 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 
 import { adaptTheme } from "../adapt-theme.js";
+import { initSync } from "../pkg/labcolors.js";
+
+initSync({
+  module: new WebAssembly.Module(readFileSync(new URL("../pkg/labcolors_bg.wasm", import.meta.url))),
+});
 
 function fakeElement() {
   const props = new Map();
@@ -39,7 +45,14 @@ const makeResult = (hex, labelVar, panelVar, legalFloor = null) => ({
   vars: { "--lab-label": labelVar, "--lab-panel": panelVar },
   roles: {
     label: { kind: "color", cssVar: "--lab-label", hex, lc: 100, legalFloor },
-    panel: { kind: "translucent", cssVar: "--lab-panel" },
+    panel: {
+      kind: "translucent",
+      cssVar: "--lab-panel",
+      tintHex: "#808080",
+      alpha: 0.6,
+      compositeHex: "#B3B3B3",
+      compositeLc: 60,
+    },
   },
 });
 
@@ -48,7 +61,7 @@ const makeResult = (hex, labelVar, panelVar, legalFloor = null) => ({
 function fakeColors(initial) {
   let resolveCount = 0;
   let current = initial;
-  let recheckLc = [100]; // one color role, passing by default
+  let recheckLc = [100];
   return {
     resolveCount: () => resolveCount,
     setResolve: (r) => (current = r),
@@ -57,9 +70,10 @@ function fakeColors(initial) {
       resolveCount++;
       return current;
     },
-    recheckContrast() {
+    recheckContrast(_background, foregrounds) {
       const out = [];
-      for (const lc of recheckLc) {
+      for (let index = 0; index < foregrounds.length; index++) {
+        const lc = recheckLc[index] ?? recheckLc[0];
         out.push(lc);
         out.push(10);
       }
@@ -171,15 +185,36 @@ const THREE = {
   },
   roles: {
     label: { kind: "color", cssVar: "--lab-label", hex: "#1A1A1A", lc: 100, legalFloor: null },
-    panel: { kind: "translucent", cssVar: "--lab-panel" },
-    extra: { kind: "translucent", cssVar: "--lab-extra" },
+    panel: {
+      kind: "translucent",
+      cssVar: "--lab-panel",
+      tintHex: "#808080",
+      alpha: 0.6,
+      compositeHex: "#B3B3B3",
+      compositeLc: 60,
+    },
+    extra: {
+      kind: "translucent",
+      cssVar: "--lab-extra",
+      tintHex: "#408020",
+      alpha: 0.4,
+      compositeHex: "#B3CCA6",
+      compositeLc: 50,
+    },
   },
 };
 const TWO = {
   vars: { "--lab-label": "oklch(90.000% 0 0)", "--lab-panel": "oklch(30.000% 0.02 260 / 0.6)" },
   roles: {
     label: { kind: "color", cssVar: "--lab-label", hex: "#E5E5E5", lc: 100, legalFloor: null },
-    panel: { kind: "translucent", cssVar: "--lab-panel" },
+    panel: {
+      kind: "translucent",
+      cssVar: "--lab-panel",
+      tintHex: "#808080",
+      alpha: 0.6,
+      compositeHex: "#B3B3B3",
+      compositeLc: 60,
+    },
   },
 };
 const ONE = {

@@ -14,6 +14,7 @@ test("effective-background math stays internal to the browser shell", () => {
   const rootTypes = read("packages", "colors", "index.d.ts");
   const backdropRuntime = read("packages", "colors", "effective-bg.js");
   const observationRuntime = read("packages", "colors", "background-observation.js");
+  const adaptRuntime = read("packages", "colors", "adapt-theme.js");
   const releaseVerifier = read("scripts", "verify-package-release.mjs");
 
   assert.equal(manifest.exports["./effective-bg"], undefined);
@@ -44,6 +45,8 @@ test("effective-background math stays internal to the browser shell", () => {
   assert.equal(manifest.exports["./pkg/labcolors.js"], undefined);
   assert.doesNotMatch(backdropRuntime, /__over|effectiveBackground/u);
   assert.match(observationRuntime, /__over/u);
+  assert.match(adaptRuntime, /import\s*\{\s*__over\s*\}/u);
+  assert.doesNotMatch(adaptRuntime, /\.compositeHex\b|\["compositeHex"\]/u);
   assert.match(observationRuntime, /export function observePointBackground/u);
   assert.doesNotMatch(
     backdropRuntime,

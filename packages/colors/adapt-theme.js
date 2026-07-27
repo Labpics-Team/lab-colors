@@ -14,12 +14,14 @@
 
 import { oklabLerp, compileLerpPair, lerpPairHex } from "./effective-bg.js";
 import { observePointBackground } from "./background-observation.js";
+import { __over } from "./pkg/labcolors.js";
 import { admitSnapshot, writeVars } from "./snapshot.js";
 
 const CANCELLED = Symbol("adaptTheme.cancelled");
 const NO_FRAME = Symbol("adaptTheme.noFrame");
 
 const HEX6 = /^[0-9a-fA-F]{6}$/u;
+const INVALID_RGB24 = 0xFFFFFFFF;
 
 /** Pack a `#RRGGBB` (or `#RGB` shorthand / bare / any-case) colour string into
  * the recheck boundary's `0x00RRGGBB` word — the packed transport the WASM
@@ -329,16 +331,13 @@ export function adaptTheme(element, options) {
   // dropFraction)`) against ANY sample. `worstIdx` is the sample with the least
   // set-wide margin — the one to re-solve against, so the constraint we solve to
   // is the same constraint we check hardest.
-  // Recheck lanes — SEPARATE from the color-only ease set above. Every
-  // contrast-bearing role rides a recheck lane: color roles by their hex/lc,
-  // translucent roles by their occurrence descriptor (compositeHex as the
-  // foreground word, |compositeLc| as the drift floor). Kept parallel and 1:1 by
-  // construction (built from one projection → recheckRoles.length ===
-  // recheckFgs.length always), so the length-parity/stride invariants hold. The
-  // ease/overlay loops NEVER read these, so a translucent role stays rechecked
-  // but never eased — its live oklch(tint/alpha) var is left intact (C8d E1).
-  let recheckRoles = [];
-  let recheckFgs = [];
+  // Recheck occurrences are separate from the color-only ease set above. Solid
+  // and translucent output share one physical descriptor: emitted source bytes,
+  // admitted opacity and the solve-time metric used only as a drift baseline.
+  // The visible foreground is materialized later on EACH current backdrop;
+  // solve-time `compositeHex` is never a runtime input. The ease/overlay loops
+  // never read this set, so translucent CSS remains tint+alpha (C8d E1).
+  let recheckOccurrences = [];
 
   // Batch path (many samples): collapse the shared per-foreground CAM16 forward
   // across every sample into ONE engine call. `recheckContrastMulti` returns a
@@ -366,8 +365,7 @@ export function adaptTheme(element, options) {
 
   const recheckSamples = (
     samples,
-    roleSet = recheckRoles,
-    foregrounds = recheckFgs,
+    occurrenceSet = recheckOccurrences,
     themeName = theme,
     owner,
   ) => {
@@ -375,15 +373,31 @@ export function adaptTheme(element, options) {
     let breachCount = 0;
     let worstIdx = 0;
     let worstMargin = Infinity;
-    const stride = foregrounds.length;
-    // Cold-edge packing: the theme key is lowered to its numeric handle and the
-    // foreground hexes to one packed `Uint32Array` — the boundary transport.
+    const stride = occurrenceSet.length;
+    // The theme key is lowered to its numeric handle once. Source words were
+    // already parsed at solve admission; one row is reused across samples.
     const themeArg = themeArgFor(themeName, owner);
-    const packedFgs = Uint32Array.from(foregrounds, packRgb24Hex);
-    const useBatch = canBatch && samples.length > 1;
+    const foregroundRow = new Uint32Array(stride);
+    let hasBackdropDependentOccurrence = false;
+    for (let i = 0; i < stride; i++) {
+      const occurrence = occurrenceSet[i];
+      foregroundRow[i] = occurrence.sourceRgb24;
+      if (occurrence.opacity !== 1) hasBackdropDependentOccurrence = true;
+    }
+    // One shared foreground row exists only for opaque occurrences. For alpha,
+    // foreground is a function of the particular backdrop, so the rectangular
+    // batch API would encode the wrong physics.
+    const useBatch =
+      canBatch && samples.length > 1 && !hasBackdropDependentOccurrence;
     let batch = null;
+    let packedBackdrops = null;
     if (useBatch) {
-      batch = recheckContrastMulti(Uint32Array.from(samples, packRgb24Hex), packedFgs, themeArg);
+      packedBackdrops = Uint32Array.from(samples, packRgb24Hex);
+      batch = recheckContrastMulti(
+        packedBackdrops,
+        foregroundRow,
+        themeArg,
+      );
       checkpoint(owner);
       const batchLength = batch?.length ?? -1;
       checkpoint(owner);
@@ -397,27 +411,48 @@ export function adaptTheme(element, options) {
       }
     }
     for (let s = 0; s < samples.length; s++) {
+      const backdrop = useBatch
+        ? packedBackdrops[s]
+        : packRgb24Hex(samples[s]);
       // Per-sample flat buffer, or a background-major window into the batch one.
       let flat = null;
       if (!useBatch) {
-        flat = recheckContrast(packRgb24Hex(samples[s]), packedFgs, themeArg);
+        for (let i = 0; i < stride; i++) {
+          const occurrence = occurrenceSet[i];
+          if (occurrence.opacity === 1) {
+            foregroundRow[i] = occurrence.sourceRgb24;
+            continue;
+          }
+          const visible = __over(
+            occurrence.sourceRgb24,
+            occurrence.opacity,
+            backdrop,
+          );
+          if (visible === INVALID_RGB24) {
+            throw new RangeError(
+              `adaptTheme: Core rejected admitted opacity for '${occurrence.key}'`,
+            );
+          }
+          foregroundRow[i] = visible;
+        }
+        flat = recheckContrast(backdrop, foregroundRow, themeArg);
         checkpoint(owner);
       }
       const flatLength = useBatch ? null : (flat?.length ?? -1);
       checkpoint(owner);
-      if (!useBatch && flatLength !== roleSet.length * 2) {
+      if (!useBatch && flatLength !== occurrenceSet.length * 2) {
         const received = typeof flatLength === "number" ? String(flatLength) : typeof flatLength;
         throw new RangeError(
           "adaptTheme: recheckContrast вернул буфер неверной длины " +
-            `(${received} вместо ${roleSet.length * 2}) — ` +
+            `(${received} вместо ${occurrenceSet.length * 2}) — ` +
             "битый результат нельзя молча принять за отсутствие пробоя",
         );
       }
       const base = s * stride;
       let sampleMargin = Infinity;
       let sampleBreached = false;
-      for (let i = 0; i < roleSet.length; i++) {
-        const want = Math.abs(roleSet[i].lc) * (1 - dropFraction);
+      for (let i = 0; i < occurrenceSet.length; i++) {
+        const want = Math.abs(occurrenceSet[i].lc) * (1 - dropFraction);
         const lcRaw = useBatch ? batch[(base + i) * 2] : flat[2 * i];
         checkpoint(owner);
         if (!Number.isFinite(lcRaw)) {
@@ -554,33 +589,47 @@ export function adaptTheme(element, options) {
         lc: r.lc,
         hex: r.hex,
       }));
-    // Recheck lanes: color roles PLUS translucent roles that carry a usable
-    // occurrence descriptor. The defensive `typeof/Number.isFinite` guard makes
-    // this a clean no-op for stubs/engines that emit no composites (the real
-    // engine always emits compositeHex/compositeLc for translucent roles), and
-    // prevents packRgb24Hex from throwing on an undefined foreground.
-    const nextRecheck = Object.entries(snapshot.roles)
-      .filter(
-        ([, r]) =>
-          r &&
-          (r.kind === "color" ||
-            (r.kind === "translucent" &&
-              typeof r.compositeHex === "string" &&
-              Number.isFinite(r.compositeLc))),
-      )
-      .map(([key, r]) => ({
-        cssVar: r.cssVar,
+    const nextRecheckOccurrences = [];
+    for (const [key, role] of Object.entries(snapshot.roles)) {
+      if (!role || (role.kind !== "color" && role.kind !== "translucent")) continue;
+      const translucent = role.kind === "translucent";
+      const sourceField = translucent ? "tintHex" : "hex";
+      const lcField = translucent ? "compositeLc" : "lc";
+      if (typeof role[sourceField] !== "string") {
+        throw new TypeError(
+          `adaptTheme: ${role.kind} role '${key}' requires string ${sourceField}`,
+        );
+      }
+      if (!Number.isFinite(role[lcField])) {
+        throw new TypeError(
+          `adaptTheme: ${role.kind} role '${key}' requires finite ${lcField}`,
+        );
+      }
+      const opacity = translucent ? role.alpha : 1;
+      if (typeof opacity !== "number") {
+        throw new TypeError(
+          `adaptTheme: ${role.kind} role '${key}' requires numeric opacity`,
+        );
+      }
+      if (!Number.isFinite(opacity) || opacity <= 0 || opacity > 1) {
+        throw new RangeError(
+          `adaptTheme: ${role.kind} role '${key}' requires opacity in (0,1]`,
+        );
+      }
+      nextRecheckOccurrences.push({
+        cssVar: role.cssVar,
         key,
-        lc: r.kind === "color" ? r.lc : r.compositeLc,
-        hex: r.kind === "color" ? r.hex : r.compositeHex,
-      }));
+        lc: role[lcField],
+        sourceRgb24: packRgb24Hex(role[sourceField]),
+        opacity,
+      });
+    }
     return {
       result: snapshot,
       baseVars: nextBaseVars,
       roles: nextRoles,
       stableGlows: nextStableGlows,
-      recheckRoles: nextRecheck,
-      recheckFgs: nextRecheck.map((r) => r.hex),
+      recheckOccurrences: nextRecheckOccurrences,
       lastSolveAt: now,
       breachSince: null,
     };
@@ -591,8 +640,7 @@ export function adaptTheme(element, options) {
     baseVars = candidate.baseVars;
     roles = candidate.roles;
     stableGlows = candidate.stableGlows;
-    recheckRoles = candidate.recheckRoles;
-    recheckFgs = candidate.recheckFgs;
+    recheckOccurrences = candidate.recheckOccurrences;
     lastSolveAt = candidate.lastSolveAt;
     breachSince = candidate.breachSince;
     // Пере-решённый кандидат может сменить набор ключей: следующая запись
@@ -645,8 +693,7 @@ export function adaptTheme(element, options) {
       }
       const { breached, worstIdx: nextWorst, breachCount } = recheckSamples(
         samples,
-        candidate.recheckRoles,
-        candidate.recheckFgs,
+        candidate.recheckOccurrences,
         themeName,
         owner,
       );
@@ -1009,9 +1056,9 @@ export function adaptTheme(element, options) {
     // Glow-only набор всё равно реагирует на смену подложки. Готовим точный
     // class-переход до публикации и ключа, и CSS-состояния. Ключуемся по НАБОРУ
     // recheck-полос, а не по ease-набору: translucent-only набор (без color-роли,
-    // roles.length===0, но recheckRoles.length>0) обязан пройти recheck/re-solve,
+    // roles.length===0, но recheckOccurrences.length>0) обязан пройти recheck/re-solve,
     // а не уйти в glow-ветку (C8d E1).
-    if (recheckRoles.length === 0) {
+    if (recheckOccurrences.length === 0) {
       const preparedGlow =
         key === lastKey
           ? null
@@ -1034,8 +1081,7 @@ export function adaptTheme(element, options) {
     // lowest-metric sample, the one used for the next resolve.
     const { breached, worstIdx } = recheckSamples(
       samples,
-      recheckRoles,
-      recheckFgs,
+      recheckOccurrences,
       theme,
       owner,
     );
