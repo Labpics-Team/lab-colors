@@ -684,9 +684,8 @@ fn consume_public_assessment(assessment: AssessmentV1<'_>, probe: &mut Projectio
     });
 }
 
-#[test]
-fn clean_set_projection_probe_binds_violation_kind_and_rejected_interval() {
-    let owner = OwnerV1::from_compiled(fixed_clean_set_program([0, 200, 71]));
+fn clean_set_projection_probe(source: [u8; 3]) -> ProjectionProbe {
+    let owner = OwnerV1::from_compiled(fixed_clean_set_program(source));
     let mut session = owner.instantiate(STREAM.value()).unwrap();
     let backdrop = [Srgb8::new([0; 3])];
     let scenarios = [ScenarioV1::new(1, &backdrop)];
@@ -701,19 +700,34 @@ fn clean_set_projection_probe_binds_violation_kind_and_rejected_interval() {
         .unwrap();
     let Some(CertificateV1::Verified(certificate)) = projection.evidence().certificates().next()
     else {
-        panic!("report-only clean-set rejection must retain a verified certificate");
+        panic!("report-only clean-set outcome must retain a verified certificate");
     };
+    assert_eq!(certificate.cells().len(), 1);
     let assessment = certificate.cells().next().unwrap().assessment();
 
-    let mut actual = ProjectionProbe::new();
-    consume_public_assessment(assessment, &mut actual);
+    let mut probe = ProjectionProbe::new();
+    consume_public_assessment(assessment, &mut probe);
+    probe
+}
 
-    let mut expected = ProjectionProbe::new();
-    expected.mix(2);
-    expected.mix((u64::from(200_u8) << 8) | u64::from(71_u8));
-    expected.mix(2);
-    expected.mix((u64::from(71_u8) << 8) | u64::from(101_u8));
-    assert_eq!(actual.checksum, expected.checksum);
+#[test]
+fn clean_set_projection_probe_binds_pass_absence_rejection_and_interval() {
+    for (name, source, components) in [
+        ("pass", [255, 0, 0], [1, 0xFF_00_00, 0, 0]),
+        ("final-owned domain absent", [0, 0, 0], [2, 0, 1, 0]),
+        (
+            "rejected with interval",
+            [0, 200, 71],
+            [2, 0x00_C8_47, 2, 0x47_65],
+        ),
+    ] {
+        let actual = clean_set_projection_probe(source);
+        let mut expected = ProjectionProbe::new();
+        for component in components {
+            expected.mix(component);
+        }
+        assert_eq!(actual.checksum, expected.checksum, "{name}");
+    }
 }
 
 fn consume_public_projection(projection: ProjectionV1<'_, '_>) -> ProjectionProbe {

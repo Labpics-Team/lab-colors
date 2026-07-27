@@ -31,6 +31,13 @@ const GENERIC_SOURCES: [(&str, &str); 4] = [
     ("program_session.rs", PROGRAM_SESSION_SOURCE),
 ];
 
+const CLEAN_SET_PROGRAM_SOURCES: &[(&str, &str)] = &[
+    ("clean_set.rs", CLEAN_SET_SOURCE),
+    ("program.rs", PROGRAM_SOURCE),
+    ("program_session.rs", PROGRAM_SESSION_SOURCE),
+    ("program_identity.rs", PROGRAM_IDENTITY_SOURCE),
+];
+
 const CLIENT_OR_LEGACY_VOCABULARY: [&str; 13] = [
     "Lab UI",
     "ThemeConfig",
@@ -116,6 +123,25 @@ fn rust_comment_stripping_preserves_live_identifiers_after_literal_comment_token
             "literal content must not hide live identifiers: {source}",
         );
     }
+}
+
+#[test]
+fn clean_set_program_guard_covers_the_complete_classifier_and_program_path() {
+    let mut covered = CLEAN_SET_PROGRAM_SOURCES
+        .iter()
+        .map(|(path, _)| *path)
+        .collect::<Vec<_>>();
+    covered.sort_unstable();
+
+    assert_eq!(
+        covered,
+        [
+            "clean_set.rs",
+            "program.rs",
+            "program_identity.rs",
+            "program_session.rs",
+        ],
+    );
 }
 
 fn assert_only_in_compile_fail(source: &str, needle: &str) {
@@ -836,12 +862,7 @@ fn shared_observation_ssot_has_one_backing_without_lifecycle_or_adapter_facades(
 
 #[test]
 fn clean_set_program_path_cannot_smuggle_auto_or_writer_contracts() {
-    for (path, source) in [
-        ("clean_set.rs", CLEAN_SET_SOURCE),
-        ("program.rs", PROGRAM_SOURCE),
-        ("program_session.rs", PROGRAM_SESSION_SOURCE),
-        ("program_identity.rs", PROGRAM_IDENTITY_SOURCE),
-    ] {
+    for &(path, source) in CLEAN_SET_PROGRAM_SOURCES {
         let source = normalized_production_code(source);
         for forbidden in [
             "pointconvention",
