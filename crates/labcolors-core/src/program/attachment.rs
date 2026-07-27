@@ -4,7 +4,7 @@
 //! compiled owner. Поэтому runtime-update не принимает независимые owner,
 //! Session, stamp или sink handle, которые клиент мог бы перепутать.
 
-use core::{iter::FusedIterator, mem};
+use core::{fmt, iter::FusedIterator, mem, num::NonZeroU64};
 
 use crate::appearance::EncodedPointPaintV1;
 use crate::program_session::{
@@ -105,11 +105,96 @@ impl<SinkOutputId: Copy> AttachedPointPresentationV1<SinkOutputId> {
     }
 }
 
+/// Непередаваемый compiler-side permit полного terminal scope.
+///
+/// Значение создаётся только после точной output→sink и
+/// output→presentation bijection, удерживает exact owner generation и
+/// поглощается единственным host admission. Content identity сама по себе не
+/// является этим полномочием.
+pub(crate) struct BoundPointSinkScopePermitV1<'a, SinkOutputId> {
+    _owner: &'a ProgramOwnerLeaseV1<CoreProgramEvaluatorsV1>,
+    emissions: &'a [AttachedPointEmissionV1<SinkOutputId>],
+    _presentations: &'a [AttachedPointPresentationV1<SinkOutputId>],
+}
+
+impl<SinkOutputId: Copy> BoundPointSinkScopePermitV1<'_, SinkOutputId> {
+    pub(crate) fn output_scope(
+        &self,
+    ) -> impl ExactSizeIterator<Item = SinkOutputId> + FusedIterator + '_ {
+        self.emissions.iter().map(|emission| emission.sink_output())
+    }
+}
+
 /// Один элемент полного сертифицированного point-снимка для sink.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct PointSinkPatchEntryV1<SinkOutputId> {
     emission: AttachedPointEmissionV1<SinkOutputId>,
     paint: EncodedPointPaintV1,
+}
+
+/// Номинальная локальная для процесса эпоха одной неизменяемой host-привязки.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct PointSinkBindingEpochV1(NonZeroU64);
+
+impl PointSinkBindingEpochV1 {
+    pub(crate) const fn new(value: NonZeroU64) -> Self {
+        Self(value)
+    }
+}
+
+/// Двухсловный CAS-token одной допущенной инкарнации sink.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct PointSinkStampV1 {
+    sequence: u64,
+    binding_epoch: PointSinkBindingEpochV1,
+}
+
+impl PointSinkStampV1 {
+    pub(crate) const fn new(sequence: u64, binding_epoch: PointSinkBindingEpochV1) -> Self {
+        Self {
+            sequence,
+            binding_epoch,
+        }
+    }
+
+    pub(crate) const fn sequence(self) -> u64 {
+        self.sequence
+    }
+
+    pub(crate) const fn binding_epoch(self) -> PointSinkBindingEpochV1 {
+        self.binding_epoch
+    }
+
+    const fn checked_successor(self) -> Option<Self> {
+        match self.sequence.checked_add(1) {
+            Some(sequence) => Some(Self::new(sequence, self.binding_epoch)),
+            None => None,
+        }
+    }
+}
+
+/// Единственный конструируемый Core переход stamp для меняющего снимок intent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct PointSinkMutationStampV1 {
+    expected: PointSinkStampV1,
+    desired: PointSinkStampV1,
+}
+
+impl PointSinkMutationStampV1 {
+    const fn new(expected: PointSinkStampV1) -> Option<Self> {
+        match expected.checked_successor() {
+            Some(desired) => Some(Self { expected, desired }),
+            None => None,
+        }
+    }
+
+    pub(crate) const fn expected(self) -> PointSinkStampV1 {
+        self.expected
+    }
+
+    pub(crate) const fn desired(self) -> PointSinkStampV1 {
+        self.desired
+    }
 }
 
 impl<SinkOutputId: Copy> PointSinkPatchEntryV1<SinkOutputId> {
@@ -133,17 +218,19 @@ struct AttachedRenderPatchEntryV1<SinkOutputId> {
 }
 
 /// Единственные три intent, принимаемые терминальным point sink.
-pub(crate) enum PointSinkIntentV1<'a, SinkOutputId, Stamp> {
+pub(crate) enum PointSinkIntentV1<'a, SinkOutputId> {
     SetAll {
         revision: u64,
+        stamp: PointSinkMutationStampV1,
         patch: &'a [PointSinkPatchEntryV1<SinkOutputId>],
     },
     RevokeAll {
         revision: u64,
+        stamp: PointSinkMutationStampV1,
     },
     ConfirmExact {
         revision: u64,
-        published_stamp: &'a Stamp,
+        published_stamp: PointSinkStampV1,
     },
 }
 
@@ -154,11 +241,7 @@ pub(crate) enum PointSinkIntentV1<'a, SinkOutputId, Stamp> {
 /// scope одной атомарной публикацией. Любой отказ сохраняет прежние наблюдаемые
 /// scope→value snapshot, revision и равный по [`Eq`] Stamp.
 pub(crate) trait PreparedPointSinkWriteV1 {
-    type Stamp: Copy + Eq;
     type Error;
-
-    /// Stamp точного снимка, который опубликует успешный install.
-    fn proposed_stamp(&self) -> Self::Stamp;
 
     /// Единственная fallible-операция после parsing, allocations и CAS setup.
     ///
@@ -176,18 +259,99 @@ pub(crate) trait PreparedPointSinkWriteV1 {
     fn finish_after_session(self);
 }
 
-/// Линейное владение одним точным физическим point-sink scope.
-pub(crate) trait LinearPointSinkLeaseV1: sink_private::Sealed {
+/// Сырой linear lease, который ещё не создавал Lab-output в host scope.
+///
+/// Только успешный admission атомарно устанавливает persistent closed state и
+/// превращает lease в [`ClosedPointSinkLeaseV1`]. Ошибка сохраняет прежний host
+/// state и возвращает тот же lease: fallible cleanup никогда не пересекает
+/// границу [`Attachment`].
+pub(crate) trait UnboundPointSinkLeaseV1: sink_private::Sealed + Sized {
     type OutputId: Copy + Eq;
-    type Stamp: Copy + Eq;
+    type Closed: ClosedPointSinkLeaseV1<OutputId = Self::OutputId>;
+    type AdmissionError;
+
+    /// Scope зарезервирован lease, но ещё не является Lab-output authority.
+    fn owned_output_scope(&self) -> &[Self::OutputId];
+
+    /// Последняя fallible-операция создания Attachment.
+    ///
+    /// Permit минтится только после полной compiler-backed bijection и всех
+    /// allocations. Успех обязан атомарно установить closed state, связать
+    /// новый process-local epoch со всем immutable host binding и вернуть
+    /// lease, чей Drop можно закрыть без ошибки. Ошибка не меняет host state.
+    fn try_admit_closed(
+        self,
+        scope: BoundPointSinkScopePermitV1<'_, Self::OutputId>,
+    ) -> Result<ClosedPointSinkAdmissionV1<Self::Closed>, PointSinkAdmissionFailureV1<Self>>;
+}
+
+/// Атомарный результат допуска: закрытый lease и первый CAS-token одной эпохи.
+pub(crate) struct ClosedPointSinkAdmissionV1<L>
+where
+    L: ClosedPointSinkLeaseV1,
+{
+    sink: L,
+    initial_stamp: PointSinkStampV1,
+}
+
+impl<L> ClosedPointSinkAdmissionV1<L>
+where
+    L: ClosedPointSinkLeaseV1,
+{
+    fn new(sink: L) -> Self {
+        let initial_stamp = PointSinkStampV1::new(0, sink.binding_epoch());
+        Self {
+            sink,
+            initial_stamp,
+        }
+    }
+
+    const fn initial_stamp(&self) -> PointSinkStampV1 {
+        self.initial_stamp
+    }
+
+    fn into_parts(self) -> (L, PointSinkStampV1) {
+        (self.sink, self.initial_stamp)
+    }
+}
+
+/// Owning-отказ host admission; исходный unbound lease остаётся retryable.
+pub(crate) struct PointSinkAdmissionFailureV1<L>
+where
+    L: UnboundPointSinkLeaseV1,
+{
+    cause: L::AdmissionError,
+    sink: L,
+}
+
+impl<L> PointSinkAdmissionFailureV1<L>
+where
+    L: UnboundPointSinkLeaseV1,
+{
+    pub(crate) const fn new(cause: L::AdmissionError, sink: L) -> Self {
+        Self { cause, sink }
+    }
+
+    pub(crate) fn into_parts(self) -> (L::AdmissionError, L) {
+        (self.cause, self.sink)
+    }
+}
+
+/// Линейное владение admission-bound физическим point-sink scope.
+///
+/// Сам typestate является единственным closed-absence + infallible-release
+/// capability. Его Stamp обязан включать process-local binding epoch, который
+/// меняется при любом изменении realm, host root, owned scope, codec release,
+/// capability set или atomic primitive. Эти host-факты не становятся Core DTO.
+pub(crate) trait ClosedPointSinkLeaseV1: sink_private::Sealed {
+    type OutputId: Copy + Eq;
     type Error;
-    type Prepared<'lease>: PreparedPointSinkWriteV1<Stamp = Self::Stamp, Error = Self::Error>
+    type Prepared<'lease>: PreparedPointSinkWriteV1<Error = Self::Error>
     where
         Self: 'lease;
 
-    /// Точный scope, которым эксклюзивно владеет lease, в каноническом порядке
-    /// выходов скомпилированной Program.
-    fn owned_output_scope(&self) -> &[Self::OutputId];
+    /// Неизменяемая эпоха полномочия tombstone, захваченная атомарным допуском.
+    fn binding_epoch(&self) -> PointSinkBindingEpochV1;
 
     /// Готовит полный снимок, не сохраняя borrowed-данные patch.
     ///
@@ -196,14 +360,14 @@ pub(crate) trait LinearPointSinkLeaseV1: sink_private::Sealed {
     /// допустимую часть нового снимка.
     fn prepare<'lease>(
         &'lease mut self,
-        intent: PointSinkIntentV1<'_, Self::OutputId, Self::Stamp>,
+        intent: PointSinkIntentV1<'_, Self::OutputId>,
     ) -> Result<Self::Prepared<'lease>, Self::Error>;
 
     /// Атомарно отзывает полный scope lease перед его освобождением.
     ///
     /// Реализация обязана быть infallible и allocation-free, даже если ни один
     /// снимок ещё не публиковался.
-    fn revoke_all_before_release(&mut self, published_stamp: Option<&Self::Stamp>);
+    fn close_before_release(&mut self);
 }
 
 /// Cold-ошибка создания Attachment; sink ещё ничего не опубликовал.
@@ -252,10 +416,9 @@ pub(crate) enum AttachmentCreateErrorV1<SinkOutputId> {
     DuplicateSinkScopeOutput {
         sink_output: SinkOutputId,
     },
-    SinkScopeMismatch {
-        ordinal: usize,
-        binding: SinkOutputId,
-        owned: SinkOutputId,
+    UnownedSinkOutput {
+        output: OutputSlotIdV1,
+        sink_output: SinkOutputId,
     },
     InvalidPointBinding {
         authored_index: usize,
@@ -264,17 +427,79 @@ pub(crate) enum AttachmentCreateErrorV1<SinkOutputId> {
     InternalInvariant,
 }
 
+/// Точная причина cold attach failure; lease хранится один раз во внешнем
+/// owning-контейнере и не дублируется по вариантам.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum AttachmentCreateCauseV1<SinkOutputId, SinkAdmissionError> {
+    Contract(AttachmentCreateErrorV1<SinkOutputId>),
+    SinkAdmission(SinkAdmissionError),
+}
+
+/// Cold failure сохраняет тот же unbound lease для исправления и retry.
+pub(crate) struct AttachmentCreateFailureV1<L>
+where
+    L: UnboundPointSinkLeaseV1,
+{
+    cause: AttachmentCreateCauseV1<L::OutputId, L::AdmissionError>,
+    sink: L,
+}
+
+impl<L> fmt::Debug for AttachmentCreateFailureV1<L>
+where
+    L: UnboundPointSinkLeaseV1,
+    L::OutputId: fmt::Debug,
+    L::AdmissionError: fmt::Debug,
+{
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("AttachmentCreateFailureV1")
+            .field("cause", &self.cause)
+            .finish_non_exhaustive()
+    }
+}
+
+impl<L> AttachmentCreateFailureV1<L>
+where
+    L: UnboundPointSinkLeaseV1,
+{
+    const fn contract(cause: AttachmentCreateErrorV1<L::OutputId>, sink: L) -> Self {
+        Self {
+            cause: AttachmentCreateCauseV1::Contract(cause),
+            sink,
+        }
+    }
+
+    const fn sink_admission(cause: L::AdmissionError, sink: L) -> Self {
+        Self {
+            cause: AttachmentCreateCauseV1::SinkAdmission(cause),
+            sink,
+        }
+    }
+
+    pub(crate) const fn cause(&self) -> &AttachmentCreateCauseV1<L::OutputId, L::AdmissionError> {
+        &self.cause
+    }
+
+    pub(crate) fn into_sink(self) -> L {
+        self.sink
+    }
+
+    pub(crate) fn into_parts(self) -> (AttachmentCreateCauseV1<L::OutputId, L::AdmissionError>, L) {
+        (self.cause, self.sink)
+    }
+}
+
 /// Закрытый отказ уже скомпилированной терминальной транзакции.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum AttachmentInvariantV1 {
     EmptyIdempotentHead,
-    MissingPublishedStamp,
+    MissingCommittedRevision,
     PublishedRevisionMismatch,
     OutputCountMismatch,
     OutputIdentityMismatch,
     PaintIdentityMismatch,
     ScratchCapacityLost,
-    ConfirmStampMismatch,
+    SinkStampExhausted,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -286,12 +511,8 @@ pub(crate) enum AttachmentUpdateErrorV1<SinkError> {
 }
 
 type AttachmentUpdateResultV1<'a, L> = Result<
-    AttachmentCommitV1<
-        'a,
-        <L as LinearPointSinkLeaseV1>::OutputId,
-        <L as LinearPointSinkLeaseV1>::Stamp,
-    >,
-    AttachmentUpdateErrorV1<<L as LinearPointSinkLeaseV1>::Error>,
+    AttachmentCommitV1<'a, <L as ClosedPointSinkLeaseV1>::OutputId>,
+    AttachmentUpdateErrorV1<<L as ClosedPointSinkLeaseV1>::Error>,
 >;
 
 /// Prospective sink-смысл одного полностью вычисленного перехода Session.
@@ -333,11 +554,7 @@ fn prepared_disposition<'prepared>(
     }
 }
 
-struct PublishedAttachmentStampV1<Stamp> {
-    revision: u64,
-    sink: Stamp,
-}
-
+#[derive(Clone, Copy)]
 enum PreparedPatchActionV1 {
     SetAll { revision: u64 },
     RevokeAll { revision: u64 },
@@ -354,41 +571,39 @@ impl PreparedPatchActionV1 {
     }
 }
 
-/// Borrowed exact stamp снимка, принадлежащего одному Attachment.
-pub(crate) struct AttachedPublishedStampV1<'a, Stamp> {
-    inner: &'a PublishedAttachmentStampV1<Stamp>,
+/// Компактное заимствованное представление exact stamp одного Attachment.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct AttachedPublishedStampV1<'a> {
+    revision: u64,
+    sink: &'a PointSinkStampV1,
 }
 
-impl<Stamp> Copy for AttachedPublishedStampV1<'_, Stamp> {}
-
-impl<Stamp> Clone for AttachedPublishedStampV1<'_, Stamp> {
-    fn clone(&self) -> Self {
-        *self
-    }
-}
-
-impl<Stamp> AttachedPublishedStampV1<'_, Stamp> {
+impl<'a> AttachedPublishedStampV1<'a> {
     pub(crate) const fn revision(self) -> u64 {
-        self.inner.revision
+        self.revision
+    }
+
+    pub(crate) const fn sink_stamp(self) -> PointSinkStampV1 {
+        *self.sink
     }
 }
 
 /// Один элемент final render-authority после commit sink и Session.
-pub(crate) struct AttachedRenderOutputV1<'a, SinkOutputId, Stamp> {
+pub(crate) struct AttachedRenderOutputV1<'a, SinkOutputId> {
     certificate: VerifiedCertificateV1<'a>,
     patch: AttachedRenderPatchEntryV1<SinkOutputId>,
-    published_stamp: AttachedPublishedStampV1<'a, Stamp>,
+    published_stamp: AttachedPublishedStampV1<'a>,
 }
 
-impl<SinkOutputId: Copy, Stamp> Copy for AttachedRenderOutputV1<'_, SinkOutputId, Stamp> {}
+impl<SinkOutputId: Copy> Copy for AttachedRenderOutputV1<'_, SinkOutputId> {}
 
-impl<SinkOutputId: Copy, Stamp> Clone for AttachedRenderOutputV1<'_, SinkOutputId, Stamp> {
+impl<SinkOutputId: Copy> Clone for AttachedRenderOutputV1<'_, SinkOutputId> {
     fn clone(&self) -> Self {
         *self
     }
 }
 
-impl<'a, SinkOutputId: Copy, Stamp> AttachedRenderOutputV1<'a, SinkOutputId, Stamp> {
+impl<'a, SinkOutputId: Copy> AttachedRenderOutputV1<'a, SinkOutputId> {
     pub(crate) const fn certificate(self) -> VerifiedCertificateV1<'a> {
         self.certificate
     }
@@ -413,32 +628,33 @@ impl<'a, SinkOutputId: Copy, Stamp> AttachedRenderOutputV1<'a, SinkOutputId, Sta
         self.patch.presentation.sink_output()
     }
 
-    pub(crate) const fn published_stamp(self) -> AttachedPublishedStampV1<'a, Stamp> {
+    pub(crate) const fn published_stamp(self) -> AttachedPublishedStampV1<'a> {
         self.published_stamp
     }
 }
 
 /// Точный post-commit view; historical evidence и render authority не смешаны.
-pub(crate) struct AttachmentCommitV1<'a, SinkOutputId, Stamp> {
+pub(crate) struct AttachmentCommitV1<'a, SinkOutputId> {
     evidence: EvidenceViewV1<'a>,
     committed_render_patch: &'a [AttachedRenderPatchEntryV1<SinkOutputId>],
-    published_stamp: &'a PublishedAttachmentStampV1<Stamp>,
+    committed_revision: u64,
+    committed_sink_stamp: &'a PointSinkStampV1,
 }
 
-impl<SinkOutputId, Stamp> Copy for AttachmentCommitV1<'_, SinkOutputId, Stamp> {}
+impl<SinkOutputId> Copy for AttachmentCommitV1<'_, SinkOutputId> {}
 
-impl<SinkOutputId, Stamp> Clone for AttachmentCommitV1<'_, SinkOutputId, Stamp> {
+impl<SinkOutputId> Clone for AttachmentCommitV1<'_, SinkOutputId> {
     fn clone(&self) -> Self {
         *self
     }
 }
 
-impl<'a, SinkOutputId: Copy, Stamp> AttachmentCommitV1<'a, SinkOutputId, Stamp> {
+impl<'a, SinkOutputId: Copy> AttachmentCommitV1<'a, SinkOutputId> {
     pub(crate) const fn evidence(self) -> EvidenceViewV1<'a> {
         self.evidence
     }
 
-    pub(crate) fn render_outputs(self) -> AttachedRenderOutputsV1<'a, SinkOutputId, Stamp> {
+    pub(crate) fn render_outputs(self) -> AttachedRenderOutputsV1<'a, SinkOutputId> {
         let certificate = match self.evidence.state() {
             SessionState::Ready { current } => Some(VerifiedCertificateV1 { inner: current }),
             SessionState::Waiting | SessionState::Stale { .. } | SessionState::Failed { .. } => {
@@ -449,22 +665,23 @@ impl<'a, SinkOutputId: Copy, Stamp> AttachmentCommitV1<'a, SinkOutputId, Stamp> 
             certificate,
             committed_render_patch: self.committed_render_patch,
             published_stamp: AttachedPublishedStampV1 {
-                inner: self.published_stamp,
+                revision: self.committed_revision,
+                sink: self.committed_sink_stamp,
             },
             index: 0,
         }
     }
 }
 
-pub(crate) struct AttachedRenderOutputsV1<'a, SinkOutputId, Stamp> {
+pub(crate) struct AttachedRenderOutputsV1<'a, SinkOutputId> {
     certificate: Option<VerifiedCertificateV1<'a>>,
     committed_render_patch: &'a [AttachedRenderPatchEntryV1<SinkOutputId>],
-    published_stamp: AttachedPublishedStampV1<'a, Stamp>,
+    published_stamp: AttachedPublishedStampV1<'a>,
     index: usize,
 }
 
-impl<'a, SinkOutputId: Copy, Stamp> Iterator for AttachedRenderOutputsV1<'a, SinkOutputId, Stamp> {
-    type Item = AttachedRenderOutputV1<'a, SinkOutputId, Stamp>;
+impl<'a, SinkOutputId: Copy> Iterator for AttachedRenderOutputsV1<'a, SinkOutputId> {
+    type Item = AttachedRenderOutputV1<'a, SinkOutputId>;
 
     fn next(&mut self) -> Option<Self::Item> {
         let certificate = self.certificate?;
@@ -487,16 +704,13 @@ impl<'a, SinkOutputId: Copy, Stamp> Iterator for AttachedRenderOutputsV1<'a, Sin
     }
 }
 
-impl<SinkOutputId: Copy, Stamp> ExactSizeIterator
-    for AttachedRenderOutputsV1<'_, SinkOutputId, Stamp>
-{
-}
-impl<SinkOutputId: Copy, Stamp> FusedIterator for AttachedRenderOutputsV1<'_, SinkOutputId, Stamp> {}
+impl<SinkOutputId: Copy> ExactSizeIterator for AttachedRenderOutputsV1<'_, SinkOutputId> {}
+impl<SinkOutputId: Copy> FusedIterator for AttachedRenderOutputsV1<'_, SinkOutputId> {}
 
 /// Владеет одной Session, одним exact Program pin и одним linear writer.
 pub(crate) struct Attachment<L>
 where
-    L: LinearPointSinkLeaseV1,
+    L: ClosedPointSinkLeaseV1,
 {
     // Порядок полей задаёт освобождение после `Drop::drop`: writer, Session,
     // инертные снимки и последней — точная Program generation.
@@ -510,38 +724,24 @@ where
     scratch_sink_patch: Vec<PointSinkPatchEntryV1<L::OutputId>>,
     committed_render_patch: Vec<AttachedRenderPatchEntryV1<L::OutputId>>,
     scratch_render_patch: Vec<AttachedRenderPatchEntryV1<L::OutputId>>,
-    published_stamp: Option<PublishedAttachmentStampV1<L::Stamp>>,
+    expected_sink_stamp: PointSinkStampV1,
+    committed_revision: Option<u64>,
     // Вытеснённые Session evidence и transaction owner после install только
     // переносятся сюда и освобождаются до следующего prepare.
     retired_session: Option<CoreDeferredSessionRetirementV1>,
     _owner_pin: ProgramOwnerLeaseV1<CoreProgramEvaluatorsV1>,
 }
 
-struct UnpublishedSinkGuardV1<'a, L: LinearPointSinkLeaseV1> {
-    sink: &'a mut L,
-    armed: bool,
-}
-
-impl<'a, L: LinearPointSinkLeaseV1> UnpublishedSinkGuardV1<'a, L> {
-    const fn new(sink: &'a mut L) -> Self {
-        Self { sink, armed: true }
-    }
-
-    fn sink(&self) -> &L {
-        self.sink
-    }
-
-    fn disarm(mut self) {
-        self.armed = false;
-    }
-}
-
-impl<L: LinearPointSinkLeaseV1> Drop for UnpublishedSinkGuardV1<'_, L> {
-    fn drop(&mut self) {
-        if self.armed {
-            self.sink.revoke_all_before_release(None);
-        }
-    }
+/// Все fallible Core-части cold attach, завершённые до host admission.
+struct PreparedAttachmentColdV1<SinkOutputId> {
+    session: SessionV1,
+    emissions: Vec<AttachedPointEmissionV1<SinkOutputId>>,
+    presentations: Vec<AttachedPointPresentationV1<SinkOutputId>>,
+    committed_sink_patch: Vec<PointSinkPatchEntryV1<SinkOutputId>>,
+    scratch_sink_patch: Vec<PointSinkPatchEntryV1<SinkOutputId>>,
+    committed_render_patch: Vec<AttachedRenderPatchEntryV1<SinkOutputId>>,
+    scratch_render_patch: Vec<AttachedRenderPatchEntryV1<SinkOutputId>>,
+    owner_pin: ProgramOwnerLeaseV1<CoreProgramEvaluatorsV1>,
 }
 
 impl OwnerV1 {
@@ -552,34 +752,81 @@ impl OwnerV1 {
         authored_emissions: &[AuthoredPointEmissionBindingV1<L::OutputId>],
         authored_presentations: &[AuthoredPointPresentationBindingV1],
         sink: L,
-    ) -> Result<Attachment<L>, AttachmentCreateErrorV1<L::OutputId>>
+    ) -> Result<Attachment<L::Closed>, AttachmentCreateFailureV1<L>>
     where
-        L: LinearPointSinkLeaseV1,
+        L: UnboundPointSinkLeaseV1,
     {
-        Attachment::try_new(
+        let prepared = match PreparedAttachmentColdV1::try_new(
             self,
             stream_id,
             authored_emissions,
             authored_presentations,
-            sink,
-        )
+            &sink,
+        ) {
+            Ok(prepared) => prepared,
+            Err(cause) => return Err(AttachmentCreateFailureV1::contract(cause, sink)),
+        };
+        let permit = BoundPointSinkScopePermitV1 {
+            _owner: &prepared.owner_pin,
+            emissions: &prepared.emissions,
+            _presentations: &prepared.presentations,
+        };
+        let admission = match sink.try_admit_closed(permit) {
+            Ok(admission) => admission,
+            Err(failure) => {
+                let (cause, sink) = failure.into_parts();
+                return Err(AttachmentCreateFailureV1::sink_admission(cause, sink));
+            }
+        };
+        // Возвращаемый `Self`, а не `Result`, типом закрывает fallible-границу.
+        Ok(Attachment::from_closed_admission(prepared, admission))
     }
 }
 
 impl<L> Attachment<L>
 where
-    L: LinearPointSinkLeaseV1,
+    L: ClosedPointSinkLeaseV1,
 {
-    /// Атомарно связывает authored IDs и pin той же exact compiled generation.
-    fn try_new(
+    fn from_closed_admission(
+        prepared: PreparedAttachmentColdV1<L::OutputId>,
+        admission: ClosedPointSinkAdmissionV1<L>,
+    ) -> Self {
+        // POST_ADMISSION_TAIL_START_V1
+        let (sink, initial_sink_stamp) = admission.into_parts();
+        let attachment = Self {
+            sink,
+            session: prepared.session,
+            emissions: prepared.emissions,
+            presentations: prepared.presentations,
+            committed_sink_patch: prepared.committed_sink_patch,
+            scratch_sink_patch: prepared.scratch_sink_patch,
+            committed_render_patch: prepared.committed_render_patch,
+            scratch_render_patch: prepared.scratch_render_patch,
+            expected_sink_stamp: initial_sink_stamp,
+            committed_revision: None,
+            retired_session: None,
+            _owner_pin: prepared.owner_pin,
+        };
+        // POST_ADMISSION_TAIL_END_V1
+        attachment
+    }
+}
+
+impl<SinkOutputId> PreparedAttachmentColdV1<SinkOutputId>
+where
+    SinkOutputId: Copy + Eq,
+{
+    /// Связывает authored IDs и pin той же exact compiled generation до host admission.
+    fn try_new<L>(
         owner: &OwnerV1,
         stream_id: u32,
-        authored_emissions: &[AuthoredPointEmissionBindingV1<L::OutputId>],
+        authored_emissions: &[AuthoredPointEmissionBindingV1<SinkOutputId>],
         authored_presentations: &[AuthoredPointPresentationBindingV1],
-        sink: L,
-    ) -> Result<Self, AttachmentCreateErrorV1<L::OutputId>> {
-        let mut sink = sink;
-        let sink_guard = UnpublishedSinkGuardV1::new(&mut sink);
+        sink: &L,
+    ) -> Result<Self, AttachmentCreateErrorV1<SinkOutputId>>
+    where
+        L: UnboundPointSinkLeaseV1<OutputId = SinkOutputId>,
+    {
         let expected_outputs = owner.compiled.output_count();
         if authored_emissions.len() != expected_outputs {
             return Err(AttachmentCreateErrorV1::EmissionBindingCount {
@@ -588,7 +835,7 @@ where
             });
         }
 
-        let mut emissions: Vec<AttachedPointEmissionV1<L::OutputId>> = Vec::new();
+        let mut emissions: Vec<AttachedPointEmissionV1<SinkOutputId>> = Vec::new();
         emissions
             .try_reserve_exact(expected_outputs)
             .map_err(|_| AttachmentCreateErrorV1::ResourceExhausted)?;
@@ -633,7 +880,7 @@ where
             }
         }
 
-        let owned_scope = sink_guard.sink().owned_output_scope();
+        let owned_scope = sink.owned_output_scope();
         if owned_scope.len() != emissions.len() {
             return Err(AttachmentCreateErrorV1::SinkScopeCount {
                 expected: emissions.len(),
@@ -739,16 +986,11 @@ where
         if presentation_index != presentations.len() {
             return Err(AttachmentCreateErrorV1::InternalInvariant);
         }
-        for (ordinal, (binding, owned)) in emissions
-            .iter()
-            .zip(owned_scope.iter().copied())
-            .enumerate()
-        {
-            if binding.sink_output != owned {
-                return Err(AttachmentCreateErrorV1::SinkScopeMismatch {
-                    ordinal,
-                    binding: binding.sink_output,
-                    owned,
+        for binding in &emissions {
+            if !owned_scope.contains(&binding.sink_output) {
+                return Err(AttachmentCreateErrorV1::UnownedSinkOutput {
+                    output: binding.output,
+                    sink_output: binding.sink_output,
                 });
             }
         }
@@ -774,9 +1016,7 @@ where
             .instantiate(stream_id)
             .map_err(AttachmentCreateErrorV1::Instantiate)?;
         let owner_pin = owner.compiled.pin_owner();
-        sink_guard.disarm();
         Ok(Self {
-            sink,
             session,
             emissions,
             presentations,
@@ -784,12 +1024,15 @@ where
             scratch_sink_patch,
             committed_render_patch,
             scratch_render_patch,
-            published_stamp: None,
-            retired_session: None,
-            _owner_pin: owner_pin,
+            owner_pin,
         })
     }
+}
 
+impl<L> Attachment<L>
+where
+    L: ClosedPointSinkLeaseV1,
+{
     /// Готовит, атомарно устанавливает и infallibly публикует целый update.
     pub(crate) fn update(&mut self, update: UpdateV1<'_>) -> AttachmentUpdateResultV1<'_, L> {
         drop(self.retired_session.take());
@@ -800,22 +1043,21 @@ where
         let disposition = prepared_disposition(&transition)
             .map_err(AttachmentUpdateErrorV1::InternalInvariant)?;
 
-        let confirmed_stamp = match &disposition {
+        match &disposition {
             PreparedDispositionV1::ConfirmExact { revision } => {
-                let published = self.published_stamp.as_ref().ok_or(
-                    AttachmentUpdateErrorV1::InternalInvariant(
-                        AttachmentInvariantV1::MissingPublishedStamp,
-                    ),
-                )?;
-                if published.revision != *revision {
+                let published_revision =
+                    self.committed_revision
+                        .ok_or(AttachmentUpdateErrorV1::InternalInvariant(
+                            AttachmentInvariantV1::MissingCommittedRevision,
+                        ))?;
+                if published_revision != *revision {
                     return Err(AttachmentUpdateErrorV1::InternalInvariant(
                         AttachmentInvariantV1::PublishedRevisionMismatch,
                     ));
                 }
-                Some(&published.sink)
             }
-            PreparedDispositionV1::SetAll { .. } | PreparedDispositionV1::RevokeAll { .. } => None,
-        };
+            PreparedDispositionV1::SetAll { .. } | PreparedDispositionV1::RevokeAll { .. } => {}
+        }
 
         let action = match disposition {
             PreparedDispositionV1::SetAll { revision, outputs } => {
@@ -839,22 +1081,40 @@ where
             }
         };
 
-        let intent = match &action {
-            PreparedPatchActionV1::SetAll { revision } => PointSinkIntentV1::SetAll {
-                revision: *revision,
-                patch: &self.scratch_sink_patch,
-            },
-            PreparedPatchActionV1::RevokeAll { revision } => PointSinkIntentV1::RevokeAll {
-                revision: *revision,
-            },
-            PreparedPatchActionV1::ConfirmExact { revision } => PointSinkIntentV1::ConfirmExact {
-                revision: *revision,
-                published_stamp: confirmed_stamp.ok_or(
+        let (intent, desired_sink_stamp) = match action {
+            PreparedPatchActionV1::SetAll { revision } => {
+                let stamp = PointSinkMutationStampV1::new(self.expected_sink_stamp).ok_or(
                     AttachmentUpdateErrorV1::InternalInvariant(
-                        AttachmentInvariantV1::MissingPublishedStamp,
+                        AttachmentInvariantV1::SinkStampExhausted,
                     ),
-                )?,
-            },
+                )?;
+                (
+                    PointSinkIntentV1::SetAll {
+                        revision,
+                        stamp,
+                        patch: &self.scratch_sink_patch,
+                    },
+                    stamp.desired(),
+                )
+            }
+            PreparedPatchActionV1::RevokeAll { revision } => {
+                let stamp = PointSinkMutationStampV1::new(self.expected_sink_stamp).ok_or(
+                    AttachmentUpdateErrorV1::InternalInvariant(
+                        AttachmentInvariantV1::SinkStampExhausted,
+                    ),
+                )?;
+                (
+                    PointSinkIntentV1::RevokeAll { revision, stamp },
+                    stamp.desired(),
+                )
+            }
+            PreparedPatchActionV1::ConfirmExact { revision } => (
+                PointSinkIntentV1::ConfirmExact {
+                    revision,
+                    published_stamp: self.expected_sink_stamp,
+                },
+                self.expected_sink_stamp,
+            ),
         };
         let sink_prepared = self
             .sink
@@ -862,20 +1122,6 @@ where
             .map_err(AttachmentUpdateErrorV1::SinkPrepare)?;
         let mut prepared: PreparedAttachmentUpdateV1<'_, '_, L> =
             PreparedAttachmentUpdateV1::new(transition, sink_prepared);
-        let next_stamp = PublishedAttachmentStampV1 {
-            revision: action.revision(),
-            sink: prepared.proposed_stamp(),
-        };
-        if matches!(&action, PreparedPatchActionV1::ConfirmExact { .. }) {
-            let expected = confirmed_stamp.ok_or(AttachmentUpdateErrorV1::InternalInvariant(
-                AttachmentInvariantV1::MissingPublishedStamp,
-            ))?;
-            if next_stamp.sink != *expected {
-                return Err(AttachmentUpdateErrorV1::InternalInvariant(
-                    AttachmentInvariantV1::ConfirmStampMismatch,
-                ));
-            }
-        }
 
         prepared
             .try_install()
@@ -894,13 +1140,15 @@ where
             }
             PreparedPatchActionV1::ConfirmExact { .. } => {}
         }
-        let published_stamp = self.published_stamp.insert(next_stamp);
+        self.expected_sink_stamp = desired_sink_stamp;
+        self.committed_revision = Some(action.revision());
         installed_sink.finish_after_session();
 
         Ok(AttachmentCommitV1 {
             evidence: self.session.evidence(),
             committed_render_patch: &self.committed_render_patch,
-            published_stamp,
+            committed_revision: action.revision(),
+            committed_sink_stamp: &self.expected_sink_stamp,
         })
     }
 
@@ -912,12 +1160,11 @@ where
 
 impl<L> Drop for Attachment<L>
 where
-    L: LinearPointSinkLeaseV1,
+    L: ClosedPointSinkLeaseV1,
 {
     fn drop(&mut self) {
-        self.sink
-            .revoke_all_before_release(self.published_stamp.as_ref().map(|stamp| &stamp.sink));
-        self.published_stamp = None;
+        self.sink.close_before_release();
+        self.committed_revision = None;
         self.committed_sink_patch.clear();
         self.committed_render_patch.clear();
     }
@@ -978,7 +1225,7 @@ fn stage_complete_patches<SinkOutputId: Copy + Eq>(
 /// Общий token: abort всегда уничтожает evidence до освобождения Busy.
 struct PreparedAttachmentUpdateV1<'session, 'sink, L>
 where
-    L: LinearPointSinkLeaseV1 + 'sink,
+    L: ClosedPointSinkLeaseV1 + 'sink,
 {
     // Порядок объявления и есть abort-протокол: prospective evidence
     // уничтожается, пока sink ещё удерживает Busy.
@@ -988,17 +1235,13 @@ where
 
 impl<'session, 'sink, L> PreparedAttachmentUpdateV1<'session, 'sink, L>
 where
-    L: LinearPointSinkLeaseV1 + 'sink,
+    L: ClosedPointSinkLeaseV1 + 'sink,
 {
     fn new(
         transition: CorePreparedSessionTransitionV1<'session>,
         sink: L::Prepared<'sink>,
     ) -> Self {
         Self { transition, sink }
-    }
-
-    fn proposed_stamp(&self) -> L::Stamp {
-        self.sink.proposed_stamp()
     }
 
     fn try_install(&mut self) -> Result<(), L::Error> {
