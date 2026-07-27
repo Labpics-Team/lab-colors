@@ -1,5 +1,6 @@
 use std::{
     cell::{Cell, RefCell},
+    num::NonZeroU64,
     rc::Rc,
     sync::atomic::{AtomicU64, Ordering},
 };
@@ -19,37 +20,104 @@ impl TestSinkOutputIdV1 {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct TestPublishedStampV1 {
-    sequence: u64,
-    epoch: u64,
-}
-
 // Stamp должен оставаться Copy, поэтому test sink получает неповторимую эпоху
 // из монотонного issuer-а, а не владеет Rc и не выводит identity из адреса.
 static NEXT_TEST_SINK_EPOCH: AtomicU64 = AtomicU64::new(1);
 
-impl TestPublishedStampV1 {
-    fn next(&self) -> Result<Self, InMemoryPointSinkErrorV1> {
-        Ok(Self {
-            sequence: self
-                .sequence
-                .checked_add(1)
-                .ok_or(InMemoryPointSinkErrorV1::StampExhausted)?,
-            epoch: self.epoch,
-        })
+impl PointSinkStampV1 {
+    const fn rebound(self, epoch: PointSinkBindingEpochV1) -> Self {
+        Self::new(self.sequence(), epoch)
     }
+}
+
+fn next_test_sink_epoch() -> Option<PointSinkBindingEpochV1> {
+    NEXT_TEST_SINK_EPOCH
+        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+            current.checked_add(1)
+        })
+        .ok()
+        .and_then(NonZeroU64::new)
+        .map(PointSinkBindingEpochV1::new)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum InMemoryPointSinkErrorV1 {
     Busy,
+    BindingDrift,
     StampMismatch,
     RejectedPrepare,
     RejectedInstall,
     RejectedInstallAfterSwap,
-    StampExhausted,
     ResourceExhausted,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct TestHostBindingV1 {
+    generation: u64,
+    realm: u64,
+    root: u64,
+    scope: u64,
+    codec: u64,
+    capabilities: u64,
+    tombstone: u64,
+}
+
+impl TestHostBindingV1 {
+    const INITIAL: Self = Self {
+        generation: 1,
+        realm: 1,
+        root: 2,
+        scope: 3,
+        codec: 4,
+        capabilities: 5,
+        tombstone: 6,
+    };
+
+    fn drifted(mut self, axis: TestHostBindingAxisV1) -> Self {
+        let value = match axis {
+            TestHostBindingAxisV1::Realm => &mut self.realm,
+            TestHostBindingAxisV1::Root => &mut self.root,
+            TestHostBindingAxisV1::Scope => &mut self.scope,
+            TestHostBindingAxisV1::Codec => &mut self.codec,
+            TestHostBindingAxisV1::Capabilities => &mut self.capabilities,
+            TestHostBindingAxisV1::Tombstone => &mut self.tombstone,
+        };
+        *value = value.wrapping_add(1);
+        self.generation = self
+            .generation
+            .checked_add(1)
+            .unwrap_or_else(|| unreachable!("test host generation exhausted"));
+        self
+    }
+
+    fn restored_facts(self) -> Self {
+        Self {
+            generation: self
+                .generation
+                .checked_add(1)
+                .unwrap_or_else(|| unreachable!("test host generation exhausted")),
+            ..Self::INITIAL
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TestHostBindingAxisV1 {
+    Realm,
+    Root,
+    Scope,
+    Codec,
+    Capabilities,
+    Tombstone,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum InMemoryPointSinkAdmissionErrorV1 {
+    RejectedBeforeInstall,
+    RejectedAfterInstall,
+    ScopeChanged,
+    HostStateChanged,
+    EpochExhausted,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -80,26 +148,36 @@ pub(crate) struct TestIntentCountsV1 {
     pub(crate) confirm_exact: usize,
 }
 
+enum TestHostLayerV1 {
+    AmbientExposed,
+    Closed,
+    Published(Vec<TestSnapshotEntryV1>),
+}
+
 struct TestSinkStateV1 {
-    snapshot: Vec<TestSnapshotEntryV1>,
+    // `layer` остаётся admission-bound resource; host drift создаёт отдельный
+    // foreign scope, которым старый closed lease никогда не владеет.
+    layer: TestHostLayerV1,
+    foreign_layer: Option<TestHostLayerV1>,
     revision: Option<u64>,
-    stamp: TestPublishedStampV1,
+    stamp: Option<PointSinkStampV1>,
     reject_next_install: bool,
     counts: TestIntentCountsV1,
     revoke_count: usize,
     sequence: u64,
     revoke_sequence: Option<u64>,
     lease_drop_sequence: Option<u64>,
-    revoke_saw_exact_stamp: bool,
 }
 
 struct TestSinkSharedV1 {
     state: RefCell<TestSinkStateV1>,
+    host_binding: Cell<TestHostBindingV1>,
+    reject_next_admission: Cell<bool>,
+    reject_next_admission_after_install: Cell<bool>,
     busy: Cell<bool>,
     reject_next_prepare: Cell<bool>,
     rejected_prepare_saw_busy: Cell<bool>,
     reject_next_install_after_swap: Cell<bool>,
-    misreport_next_confirm_proposed_stamp: Cell<bool>,
     panic_on_retirement_drop: Cell<bool>,
     retirement_drop_count: Cell<usize>,
     measure_terminal_tail: Cell<bool>,
@@ -108,6 +186,13 @@ struct TestSinkSharedV1 {
 pub(crate) struct InMemoryPointSinkLeaseV1 {
     owned_scope: Vec<TestSinkOutputIdV1>,
     shared: Rc<TestSinkSharedV1>,
+}
+
+pub(crate) struct ClosedInMemoryPointSinkLeaseV1 {
+    _owned_scope: Vec<TestSinkOutputIdV1>,
+    shared: Rc<TestSinkSharedV1>,
+    bound_host: TestHostBindingV1,
+    binding_epoch: PointSinkBindingEpochV1,
     retired: Option<TestSinkRetirementV1>,
 }
 
@@ -118,15 +203,85 @@ pub(crate) struct InMemoryPointSinkProbeV1 {
 
 impl InMemoryPointSinkProbeV1 {
     pub(crate) fn snapshot(&self) -> Vec<TestSnapshotEntryV1> {
-        self.shared.state.borrow().snapshot.clone()
+        match &self.shared.state.borrow().layer {
+            TestHostLayerV1::Published(snapshot) => snapshot.clone(),
+            TestHostLayerV1::AmbientExposed | TestHostLayerV1::Closed => Vec::new(),
+        }
     }
 
     pub(crate) fn revision(&self) -> Option<u64> {
         self.shared.state.borrow().revision
     }
 
-    pub(crate) fn stamp(&self) -> TestPublishedStampV1 {
+    pub(crate) fn stamp(&self) -> PointSinkStampV1 {
+        self.shared
+            .state
+            .borrow()
+            .stamp
+            .unwrap_or_else(|| unreachable!("stamp существует только после admission"))
+    }
+
+    pub(crate) fn admitted_stamp(&self) -> Option<PointSinkStampV1> {
         self.shared.state.borrow().stamp
+    }
+
+    pub(crate) fn force_stamp_sequence(&self, sequence: u64) {
+        let mut state = self.shared.state.borrow_mut();
+        let stamp = state
+            .stamp
+            .unwrap_or_else(|| unreachable!("stamp существует только после admission"));
+        state.stamp = Some(PointSinkStampV1::new(sequence, stamp.binding_epoch()));
+    }
+
+    pub(crate) fn drift_host_binding(&self, axis: TestHostBindingAxisV1) {
+        self.replace_host_binding(self.shared.host_binding.get().drifted(axis));
+    }
+
+    pub(crate) fn restore_host_binding(&self) {
+        self.replace_host_binding(self.shared.host_binding.get().restored_facts());
+    }
+
+    fn replace_host_binding(&self, binding: TestHostBindingV1) {
+        self.shared.host_binding.set(binding);
+        let epoch = next_test_sink_epoch()
+            .unwrap_or_else(|| unreachable!("test sink epoch exhausted during host mutation"));
+        let mut state = self.shared.state.borrow_mut();
+        if let Some(stamp) = state.stamp.as_mut() {
+            *stamp = stamp.rebound(epoch);
+        }
+        state
+            .foreign_layer
+            .get_or_insert(TestHostLayerV1::AmbientExposed);
+    }
+
+    pub(crate) fn ambient_fallback_is_exposed(&self) -> bool {
+        matches!(
+            &self.shared.state.borrow().layer,
+            TestHostLayerV1::AmbientExposed
+        )
+    }
+
+    pub(crate) fn is_closed(&self) -> bool {
+        matches!(&self.shared.state.borrow().layer, TestHostLayerV1::Closed)
+    }
+
+    pub(crate) fn foreign_scope_is_untouched(&self) -> bool {
+        matches!(
+            &self.shared.state.borrow().foreign_layer,
+            Some(TestHostLayerV1::AmbientExposed)
+        )
+    }
+
+    pub(crate) fn lease_was_dropped(&self) -> bool {
+        self.shared.state.borrow().lease_drop_sequence.is_some()
+    }
+
+    pub(crate) fn reject_next_admission(&self) {
+        self.shared.reject_next_admission.set(true);
+    }
+
+    pub(crate) fn reject_next_admission_after_install(&self) {
+        self.shared.reject_next_admission_after_install.set(true);
     }
 
     pub(crate) fn intent_counts(&self) -> TestIntentCountsV1 {
@@ -153,10 +308,6 @@ impl InMemoryPointSinkProbeV1 {
         self.shared.rejected_prepare_saw_busy.get()
     }
 
-    pub(crate) fn misreport_next_confirm_proposed_stamp(&self) {
-        self.shared.misreport_next_confirm_proposed_stamp.set(true);
-    }
-
     pub(crate) fn revoke_count(&self) -> usize {
         self.shared.state.borrow().revoke_count
     }
@@ -167,10 +318,6 @@ impl InMemoryPointSinkProbeV1 {
             (state.revoke_sequence, state.lease_drop_sequence),
             (Some(revoke), Some(release)) if revoke < release
         )
-    }
-
-    pub(crate) fn revoke_saw_exact_stamp(&self) -> bool {
-        self.shared.state.borrow().revoke_saw_exact_stamp
     }
 
     pub(crate) fn panic_on_next_retirement_drop(&self) {
@@ -192,29 +339,26 @@ impl InMemoryPointSinkProbeV1 {
 pub(crate) fn in_memory_point_sink(
     owned_scope: &[u32],
 ) -> (InMemoryPointSinkLeaseV1, InMemoryPointSinkProbeV1) {
-    let epoch = NEXT_TEST_SINK_EPOCH
-        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
-            current.checked_add(1)
-        })
-        .unwrap_or_else(|_| panic!("test sink epoch space exhausted"));
     let shared = Rc::new(TestSinkSharedV1 {
         state: RefCell::new(TestSinkStateV1 {
-            snapshot: Vec::new(),
+            layer: TestHostLayerV1::AmbientExposed,
+            foreign_layer: None,
             revision: None,
-            stamp: TestPublishedStampV1 { sequence: 0, epoch },
+            stamp: None,
             reject_next_install: false,
             counts: TestIntentCountsV1::default(),
             revoke_count: 0,
             sequence: 0,
             revoke_sequence: None,
             lease_drop_sequence: None,
-            revoke_saw_exact_stamp: false,
         }),
+        host_binding: Cell::new(TestHostBindingV1::INITIAL),
+        reject_next_admission: Cell::new(false),
+        reject_next_admission_after_install: Cell::new(false),
         busy: Cell::new(false),
         reject_next_prepare: Cell::new(false),
         rejected_prepare_saw_busy: Cell::new(false),
         reject_next_install_after_swap: Cell::new(false),
-        misreport_next_confirm_proposed_stamp: Cell::new(false),
         panic_on_retirement_drop: Cell::new(false),
         retirement_drop_count: Cell::new(0),
         measure_terminal_tail: Cell::new(false),
@@ -227,7 +371,6 @@ pub(crate) fn in_memory_point_sink(
                 .map(TestSinkOutputIdV1::new)
                 .collect(),
             shared: Rc::clone(&shared),
-            retired: None,
         },
         InMemoryPointSinkProbeV1 { shared },
     )
@@ -256,34 +399,127 @@ pub(crate) const fn authored_presentation(
 }
 
 impl sink_private::Sealed for InMemoryPointSinkLeaseV1 {}
+impl sink_private::Sealed for ClosedInMemoryPointSinkLeaseV1 {}
 
-impl LinearPointSinkLeaseV1 for InMemoryPointSinkLeaseV1 {
+impl UnboundPointSinkLeaseV1 for InMemoryPointSinkLeaseV1 {
     type OutputId = TestSinkOutputIdV1;
-    type Stamp = TestPublishedStampV1;
-    type Error = InMemoryPointSinkErrorV1;
-    type Prepared<'lease> = InMemoryPreparedPointSinkWriteV1<'lease>;
+    type Closed = ClosedInMemoryPointSinkLeaseV1;
+    type AdmissionError = InMemoryPointSinkAdmissionErrorV1;
 
     fn owned_output_scope(&self) -> &[Self::OutputId] {
         &self.owned_scope
     }
 
+    fn try_admit_closed(
+        self,
+        scope: BoundPointSinkScopePermitV1<'_, Self::OutputId>,
+    ) -> Result<ClosedPointSinkAdmissionV1<Self::Closed>, PointSinkAdmissionFailureV1<Self>> {
+        let mut output_scope = scope.output_scope();
+        if output_scope.len() != self.owned_scope.len()
+            || output_scope.any(|output| !self.owned_scope.contains(&output))
+        {
+            return Err(PointSinkAdmissionFailureV1::new(
+                InMemoryPointSinkAdmissionErrorV1::ScopeChanged,
+                self,
+            ));
+        }
+        if self.shared.reject_next_admission.replace(false) {
+            return Err(PointSinkAdmissionFailureV1::new(
+                InMemoryPointSinkAdmissionErrorV1::RejectedBeforeInstall,
+                self,
+            ));
+        }
+        {
+            let state = self.shared.state.borrow();
+            if !matches!(&state.layer, TestHostLayerV1::AmbientExposed)
+                || state.stamp.is_some()
+                || state.revision.is_some()
+            {
+                drop(state);
+                return Err(PointSinkAdmissionFailureV1::new(
+                    InMemoryPointSinkAdmissionErrorV1::HostStateChanged,
+                    self,
+                ));
+            }
+        }
+
+        // Test adapter моделирует один atomic host install: любой отказ после
+        // swap восстанавливает побитово прежний unbound state.
+        self.shared.state.borrow_mut().layer = TestHostLayerV1::Closed;
+        if self
+            .shared
+            .reject_next_admission_after_install
+            .replace(false)
+        {
+            self.shared.state.borrow_mut().layer = TestHostLayerV1::AmbientExposed;
+            return Err(PointSinkAdmissionFailureV1::new(
+                InMemoryPointSinkAdmissionErrorV1::RejectedAfterInstall,
+                self,
+            ));
+        }
+        let epoch = match next_test_sink_epoch() {
+            Some(epoch) => epoch,
+            None => {
+                self.shared.state.borrow_mut().layer = TestHostLayerV1::AmbientExposed;
+                return Err(PointSinkAdmissionFailureV1::new(
+                    InMemoryPointSinkAdmissionErrorV1::EpochExhausted,
+                    self,
+                ));
+            }
+        };
+        let shared = Rc::clone(&self.shared);
+        let closed = ClosedInMemoryPointSinkLeaseV1 {
+            _owned_scope: self.owned_scope,
+            bound_host: self.shared.host_binding.get(),
+            binding_epoch: epoch,
+            shared: self.shared,
+            retired: None,
+        };
+        let admission = ClosedPointSinkAdmissionV1::new(closed);
+        shared.state.borrow_mut().stamp = Some(admission.initial_stamp());
+        Ok(admission)
+    }
+}
+
+impl ClosedPointSinkLeaseV1 for ClosedInMemoryPointSinkLeaseV1 {
+    type OutputId = TestSinkOutputIdV1;
+    type Error = InMemoryPointSinkErrorV1;
+    type Prepared<'lease> = InMemoryPreparedPointSinkWriteV1<'lease>;
+
+    fn binding_epoch(&self) -> PointSinkBindingEpochV1 {
+        self.binding_epoch
+    }
+
     fn prepare<'lease>(
         &'lease mut self,
-        intent: PointSinkIntentV1<'_, Self::OutputId, Self::Stamp>,
+        intent: PointSinkIntentV1<'_, Self::OutputId>,
     ) -> Result<Self::Prepared<'lease>, Self::Error> {
+        if self.shared.host_binding.get() != self.bound_host {
+            return Err(InMemoryPointSinkErrorV1::BindingDrift);
+        }
         // Retirement предыдущего install завершается до Busy и до любых
         // изменений нового физического снимка.
         drop(self.retired.take());
         let (base_stamp, current_revision, busy) = {
             let state = self.shared.state.borrow();
-            (state.stamp, state.revision, self.shared.busy.get())
+            let stamp = state
+                .stamp
+                .unwrap_or_else(|| unreachable!("closed lease всегда имеет stamp"));
+            (stamp, state.revision, self.shared.busy.get())
         };
         if busy {
             return Err(InMemoryPointSinkErrorV1::Busy);
         }
 
-        let (staging, proposed, intent_kind) = match intent {
-            PointSinkIntentV1::SetAll { revision, patch } => {
+        let (staging, desired, intent_kind) = match intent {
+            PointSinkIntentV1::SetAll {
+                revision,
+                stamp,
+                patch,
+            } => {
+                if stamp.expected() != base_stamp {
+                    return Err(InMemoryPointSinkErrorV1::StampMismatch);
+                }
                 let mut snapshot = Vec::new();
                 snapshot
                     .try_reserve_exact(patch.len())
@@ -294,38 +530,37 @@ impl LinearPointSinkLeaseV1 for InMemoryPointSinkLeaseV1 {
                     paint: entry.paint(),
                 }));
                 (
-                    TestStagingV1::SetAll { revision, snapshot },
-                    base_stamp.next()?,
+                    TestStagingV1::SetAll {
+                        revision,
+                        layer: TestHostLayerV1::Published(snapshot),
+                    },
+                    stamp.desired(),
                     TestIntentKindV1::SetAll,
                 )
             }
-            PointSinkIntentV1::RevokeAll { revision } => (
-                TestStagingV1::RevokeAll {
-                    revision,
-                    retired: Vec::new(),
-                },
-                base_stamp.next()?,
-                TestIntentKindV1::RevokeAll,
-            ),
+            PointSinkIntentV1::RevokeAll { revision, stamp } => {
+                if stamp.expected() != base_stamp {
+                    return Err(InMemoryPointSinkErrorV1::StampMismatch);
+                }
+                (
+                    TestStagingV1::RevokeAll {
+                        revision,
+                        layer: TestHostLayerV1::Closed,
+                    },
+                    stamp.desired(),
+                    TestIntentKindV1::RevokeAll,
+                )
+            }
             PointSinkIntentV1::ConfirmExact {
                 revision,
                 published_stamp,
             } => {
-                if published_stamp != &base_stamp || current_revision != Some(revision) {
+                if published_stamp != base_stamp || current_revision != Some(revision) {
                     return Err(InMemoryPointSinkErrorV1::StampMismatch);
                 }
-                let proposed = if self
-                    .shared
-                    .misreport_next_confirm_proposed_stamp
-                    .replace(false)
-                {
-                    published_stamp.next()?
-                } else {
-                    *published_stamp
-                };
                 (
                     TestStagingV1::ConfirmExact { revision },
-                    proposed,
+                    published_stamp,
                     TestIntentKindV1::ConfirmExact,
                 )
             }
@@ -333,7 +568,7 @@ impl LinearPointSinkLeaseV1 for InMemoryPointSinkLeaseV1 {
 
         {
             let mut state = self.shared.state.borrow_mut();
-            if self.shared.busy.get() || state.stamp != base_stamp {
+            if self.shared.busy.get() || state.stamp != Some(base_stamp) {
                 return Err(InMemoryPointSinkErrorV1::Busy);
             }
             self.shared.busy.set(true);
@@ -357,7 +592,7 @@ impl LinearPointSinkLeaseV1 for InMemoryPointSinkLeaseV1 {
         Ok(InMemoryPreparedPointSinkWriteV1 {
             lease: self,
             base_stamp: Some(base_stamp),
-            proposed: Some(proposed),
+            desired: Some(desired),
             staging: Some(staging),
             retired_stamp: None,
             retirement_probe,
@@ -365,10 +600,9 @@ impl LinearPointSinkLeaseV1 for InMemoryPointSinkLeaseV1 {
         })
     }
 
-    fn revoke_all_before_release(&mut self, published_stamp: Option<&Self::Stamp>) {
+    fn close_before_release(&mut self) {
         let mut state = self.shared.state.borrow_mut();
-        state.revoke_saw_exact_stamp = published_stamp.is_none_or(|stamp| stamp == &state.stamp);
-        state.snapshot.clear();
+        state.layer = TestHostLayerV1::Closed;
         state.revision = None;
         state.revoke_count += 1;
         state.sequence = state.sequence.saturating_add(1);
@@ -376,7 +610,7 @@ impl LinearPointSinkLeaseV1 for InMemoryPointSinkLeaseV1 {
     }
 }
 
-impl Drop for InMemoryPointSinkLeaseV1 {
+impl Drop for ClosedInMemoryPointSinkLeaseV1 {
     fn drop(&mut self) {
         let mut state = self.shared.state.borrow_mut();
         state.sequence = state.sequence.saturating_add(1);
@@ -394,11 +628,11 @@ enum TestIntentKindV1 {
 enum TestStagingV1 {
     SetAll {
         revision: u64,
-        snapshot: Vec<TestSnapshotEntryV1>,
+        layer: TestHostLayerV1,
     },
     RevokeAll {
         revision: u64,
-        retired: Vec<TestSnapshotEntryV1>,
+        layer: TestHostLayerV1,
     },
     ConfirmExact {
         revision: u64,
@@ -424,27 +658,21 @@ impl Drop for TestSinkRetirementV1 {
 }
 
 pub(crate) struct InMemoryPreparedPointSinkWriteV1<'lease> {
-    lease: &'lease mut InMemoryPointSinkLeaseV1,
-    base_stamp: Option<TestPublishedStampV1>,
-    proposed: Option<TestPublishedStampV1>,
+    lease: &'lease mut ClosedInMemoryPointSinkLeaseV1,
+    base_stamp: Option<PointSinkStampV1>,
+    desired: Option<PointSinkStampV1>,
     staging: Option<TestStagingV1>,
-    retired_stamp: Option<TestPublishedStampV1>,
+    retired_stamp: Option<PointSinkStampV1>,
     retirement_probe: Option<Rc<TestSinkSharedV1>>,
     finished: bool,
 }
 
 impl PreparedPointSinkWriteV1 for InMemoryPreparedPointSinkWriteV1<'_> {
-    type Stamp = TestPublishedStampV1;
     type Error = InMemoryPointSinkErrorV1;
 
-    fn proposed_stamp(&self) -> Self::Stamp {
-        self.proposed
-            .unwrap_or_else(|| unreachable!("proposed stamp читается до install"))
-    }
-
     fn try_install(&mut self) -> Result<(), Self::Error> {
-        let proposed = match self.proposed.take() {
-            Some(proposed) => proposed,
+        let desired = match self.desired.take() {
+            Some(desired) => desired,
             None => return Err(InMemoryPointSinkErrorV1::StampMismatch),
         };
         if self.retired_stamp.is_some() {
@@ -459,7 +687,7 @@ impl PreparedPointSinkWriteV1 for InMemoryPreparedPointSinkWriteV1<'_> {
             state.reject_next_install = false;
             return Err(InMemoryPointSinkErrorV1::RejectedInstall);
         }
-        if self.base_stamp.as_ref() != Some(&state.stamp) {
+        if self.base_stamp.as_ref() != state.stamp.as_ref() {
             return Err(InMemoryPointSinkErrorV1::StampMismatch);
         }
 
@@ -476,15 +704,17 @@ impl PreparedPointSinkWriteV1 for InMemoryPreparedPointSinkWriteV1<'_> {
             }
         };
         match staging {
-            TestStagingV1::SetAll { snapshot, .. } => {
-                mem::swap(&mut state.snapshot, snapshot);
-            }
-            TestStagingV1::RevokeAll { retired, .. } => {
-                mem::swap(&mut state.snapshot, retired);
+            TestStagingV1::SetAll { layer, .. } | TestStagingV1::RevokeAll { layer, .. } => {
+                mem::swap(&mut state.layer, layer);
             }
             TestStagingV1::ConfirmExact { .. } => {}
         }
-        self.retired_stamp = Some(mem::replace(&mut state.stamp, proposed));
+        self.retired_stamp = Some(
+            state
+                .stamp
+                .replace(desired)
+                .unwrap_or_else(|| unreachable!("closed state всегда имеет stamp")),
+        );
         state.revision = Some(revision);
         if self
             .lease
@@ -493,11 +723,8 @@ impl PreparedPointSinkWriteV1 for InMemoryPreparedPointSinkWriteV1<'_> {
             .replace(false)
         {
             match staging {
-                TestStagingV1::SetAll { snapshot, .. } => {
-                    mem::swap(&mut state.snapshot, snapshot);
-                }
-                TestStagingV1::RevokeAll { retired, .. } => {
-                    mem::swap(&mut state.snapshot, retired);
+                TestStagingV1::SetAll { layer, .. } | TestStagingV1::RevokeAll { layer, .. } => {
+                    mem::swap(&mut state.layer, layer);
                 }
                 TestStagingV1::ConfirmExact { .. } => {}
             }
@@ -505,7 +732,12 @@ impl PreparedPointSinkWriteV1 for InMemoryPreparedPointSinkWriteV1<'_> {
                 .retired_stamp
                 .take()
                 .unwrap_or_else(|| unreachable!("install уже перенёс прежний stamp"));
-            self.proposed = Some(mem::replace(&mut state.stamp, retired_stamp));
+            self.desired = Some(
+                state
+                    .stamp
+                    .replace(retired_stamp)
+                    .unwrap_or_else(|| unreachable!("install уже записал desired stamp")),
+            );
             state.revision = prior_revision;
             return Err(InMemoryPointSinkErrorV1::RejectedInstallAfterSwap);
         }

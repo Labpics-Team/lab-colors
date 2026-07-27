@@ -1,6 +1,6 @@
 use super::support::{
-    InMemoryPointSinkErrorV1, TestPublishedStampV1, authored_emission, authored_presentation,
-    in_memory_point_sink,
+    InMemoryPointSinkAdmissionErrorV1, InMemoryPointSinkErrorV1, TestHostBindingAxisV1,
+    authored_emission, authored_presentation, in_memory_point_sink,
 };
 use super::*;
 use crate::Srgb8;
@@ -8,6 +8,7 @@ use crate::program::{
     AppearanceContextV1, ConstraintIdV1, DraftV1, PaintIdV1, ScenarioV1, SourceIdV1, StateKindV1,
     SurfaceIdV1, SurfaceInputPortIdV1, SurroundV1, TargetIdV1,
 };
+use proptest::prelude::*;
 
 const SOURCE: SourceIdV1 = SourceIdV1::new(1);
 const TARGET: TargetIdV1 = TargetIdV1::new(2);
@@ -24,48 +25,647 @@ const OUTPUT_B: OutputSlotIdV1 = OutputSlotIdV1::new(13);
 #[test]
 fn terminal_stamp_is_a_fixed_two_word_copy_value() {
     const fn assert_copy<T: Copy>() {}
-    fn assert_prepared_stamp_is_copy<T: PreparedPointSinkWriteV1>() {
-        assert_copy::<T::Stamp>();
-    }
-    fn assert_lease_stamp_is_copy<T: LinearPointSinkLeaseV1>() {
-        assert_copy::<T::Stamp>();
-    }
-
-    assert_copy::<TestPublishedStampV1>();
-    assert_prepared_stamp_is_copy::<super::support::InMemoryPreparedPointSinkWriteV1<'static>>();
-    assert_lease_stamp_is_copy::<super::support::InMemoryPointSinkLeaseV1>();
+    assert_copy::<PointSinkStampV1>();
     assert_eq!(
-        core::mem::size_of::<TestPublishedStampV1>(),
+        core::mem::size_of::<PointSinkStampV1>(),
         core::mem::size_of::<[u64; 2]>()
     );
 }
 
 #[test]
 fn a_stale_copy_stamp_cannot_cross_a_sequential_sink_epoch() {
-    let (mut first, first_probe) = in_memory_point_sink(&[900]);
-    let mut prepared = first
-        .prepare(PointSinkIntentV1::RevokeAll { revision: 1 })
-        .unwrap();
-    prepared.try_install().unwrap();
-    prepared.finish_after_session();
+    let owner = owner(
+        Srgb8::new([12, 34, 56]),
+        Srgb8::new([12, 34, 56]),
+        false,
+        &[OUTPUT_A],
+    );
+    let emissions = [authored_emission(OUTPUT_A.value(), 900)];
+    let presentations = [authored_presentation(
+        OUTPUT_A.value(),
+        ROOT.value(),
+        INNER.value(),
+    )];
+    let unknown = UpdateV1::Unknown {
+        revision: 1,
+        reason_id: 77,
+    };
+
+    let (first, first_probe) = in_memory_point_sink(&[900]);
+    let mut first = owner.attach(1, &emissions, &presentations, first).unwrap();
+    first.update(unknown).unwrap();
     let stale = first_probe.stamp();
-    drop(first_probe);
     drop(first);
 
-    let (mut second, second_probe) = in_memory_point_sink(&[900]);
-    let mut prepared = second
-        .prepare(PointSinkIntentV1::RevokeAll { revision: 1 })
-        .unwrap();
-    prepared.try_install().unwrap();
-    prepared.finish_after_session();
+    let (second, second_probe) = in_memory_point_sink(&[900]);
+    let mut second = owner.attach(1, &emissions, &presentations, second).unwrap();
+    second.update(unknown).unwrap();
     assert_ne!(second_probe.stamp(), stale);
     assert!(matches!(
-        second.prepare(PointSinkIntentV1::ConfirmExact {
+        second.sink.prepare(PointSinkIntentV1::ConfirmExact {
             revision: 1,
-            published_stamp: &stale,
+            published_stamp: stale,
         }),
         Err(InMemoryPointSinkErrorV1::StampMismatch)
     ));
+}
+
+#[test]
+fn cold_attach_failure_preserves_the_same_unbound_lease_for_retry() {
+    let owner = owner(
+        Srgb8::new([12, 34, 56]),
+        Srgb8::new([12, 34, 56]),
+        false,
+        &[OUTPUT_A],
+    );
+    let (sink, probe) = in_memory_point_sink(&[900]);
+    let emissions = [authored_emission(OUTPUT_A.value(), 900)];
+    let presentations = [authored_presentation(
+        OUTPUT_A.value(),
+        ROOT.value(),
+        INNER.value(),
+    )];
+
+    let failure = match owner.attach(1, &emissions, &[], sink) {
+        Ok(_) => panic!("incomplete presentation binding must fail"),
+        Err(failure) => failure,
+    };
+    assert!(matches!(
+        failure.cause(),
+        &AttachmentCreateCauseV1::Contract(AttachmentCreateErrorV1::EmptyPresentations)
+    ));
+    assert!(probe.ambient_fallback_is_exposed());
+    assert!(!probe.lease_was_dropped());
+
+    let sink = failure.into_sink();
+    let attachment = owner.attach(1, &emissions, &presentations, sink).unwrap();
+    assert!(probe.is_closed());
+    assert!(!probe.ambient_fallback_is_exposed());
+
+    attachment.dispose();
+    assert!(probe.is_closed());
+    assert!(!probe.ambient_fallback_is_exposed());
+}
+
+#[test]
+fn create_failure_debug_reports_the_typed_cause_without_sink_internals() {
+    let owner = owner(
+        Srgb8::new([12, 34, 56]),
+        Srgb8::new([12, 34, 56]),
+        false,
+        &[OUTPUT_A],
+    );
+    let emissions = [authored_emission(OUTPUT_A.value(), 900)];
+    let presentations = [authored_presentation(
+        OUTPUT_A.value(),
+        ROOT.value(),
+        INNER.value(),
+    )];
+
+    let (sink, _) = in_memory_point_sink(&[900]);
+    let contract = match owner.attach(1, &emissions, &[], sink) {
+        Ok(_) => panic!("contract failure was expected"),
+        Err(failure) => failure,
+    };
+    let contract_debug = format!("{contract:?}");
+    assert!(contract_debug.contains("AttachmentCreateFailureV1"));
+    assert!(contract_debug.contains("Contract(EmptyPresentations)"));
+    assert!(!contract_debug.contains("owned_scope"));
+    assert!(!contract_debug.contains("TestSinkSharedV1"));
+
+    let (sink, probe) = in_memory_point_sink(&[900]);
+    probe.reject_next_admission();
+    let admission = match owner.attach(2, &emissions, &presentations, sink) {
+        Ok(_) => panic!("admission failure was expected"),
+        Err(failure) => failure,
+    };
+    let admission_debug = format!("{admission:?}");
+    assert!(admission_debug.contains("AttachmentCreateFailureV1"));
+    assert!(admission_debug.contains("SinkAdmission(RejectedBeforeInstall)"));
+    assert!(!admission_debug.contains("owned_scope"));
+    assert!(!admission_debug.contains("TestSinkSharedV1"));
+}
+
+#[test]
+fn failed_closed_admission_is_atomic_and_mints_epoch_only_after_install() {
+    let owner = owner(
+        Srgb8::new([12, 34, 56]),
+        Srgb8::new([12, 34, 56]),
+        false,
+        &[OUTPUT_A],
+    );
+    let (sink, probe) = in_memory_point_sink(&[900]);
+    let emissions = [authored_emission(OUTPUT_A.value(), 900)];
+    let presentations = [authored_presentation(
+        OUTPUT_A.value(),
+        ROOT.value(),
+        INNER.value(),
+    )];
+
+    probe.reject_next_admission();
+    let failure = match owner.attach(2, &emissions, &presentations, sink) {
+        Ok(_) => panic!("pre-install admission fault must return the lease"),
+        Err(failure) => failure,
+    };
+    assert!(matches!(
+        failure.cause(),
+        &AttachmentCreateCauseV1::SinkAdmission(
+            InMemoryPointSinkAdmissionErrorV1::RejectedBeforeInstall
+        )
+    ));
+    assert!(probe.ambient_fallback_is_exposed());
+    assert_eq!(probe.admitted_stamp(), None);
+
+    let sink = failure.into_sink();
+    probe.reject_next_admission_after_install();
+    let failure = match owner.attach(2, &emissions, &presentations, sink) {
+        Ok(_) => panic!("post-install fault must roll the tombstone back"),
+        Err(failure) => failure,
+    };
+    assert!(matches!(
+        failure.cause(),
+        &AttachmentCreateCauseV1::SinkAdmission(
+            InMemoryPointSinkAdmissionErrorV1::RejectedAfterInstall
+        )
+    ));
+    assert!(probe.ambient_fallback_is_exposed());
+    assert_eq!(probe.admitted_stamp(), None);
+
+    let attachment = owner
+        .attach(2, &emissions, &presentations, failure.into_sink())
+        .unwrap();
+    let admitted = probe.stamp();
+    assert_eq!(admitted.sequence(), 0);
+    assert!(probe.is_closed());
+    drop(attachment);
+    assert!(probe.is_closed());
+}
+
+#[test]
+fn initial_unknown_and_violation_keep_the_host_scope_closed() {
+    let emissions = [authored_emission(OUTPUT_A.value(), 900)];
+    let presentations = [authored_presentation(
+        OUTPUT_A.value(),
+        ROOT.value(),
+        INNER.value(),
+    )];
+    let unknown = UpdateV1::Unknown {
+        revision: 1,
+        reason_id: 77,
+    };
+
+    let pass_owner = owner(
+        Srgb8::new([0, 0, 0]),
+        Srgb8::new([0, 0, 0]),
+        false,
+        &[OUTPUT_A],
+    );
+    let (sink, unknown_probe) = in_memory_point_sink(&[900]);
+    let mut attachment = pass_owner
+        .attach(3, &emissions, &presentations, sink)
+        .unwrap();
+    assert!(unknown_probe.is_closed());
+    attachment.update(unknown).unwrap();
+    assert!(unknown_probe.is_closed());
+    assert!(!unknown_probe.ambient_fallback_is_exposed());
+
+    let conflict_owner = owner(
+        Srgb8::new([255, 0, 0]),
+        Srgb8::new([0, 0, 0]),
+        false,
+        &[OUTPUT_A],
+    );
+    let (sink, violation_probe) = in_memory_point_sink(&[900]);
+    let mut conflict = conflict_owner
+        .attach(4, &emissions, &presentations, sink)
+        .unwrap();
+    let values = [Srgb8::new([0, 0, 0])];
+    let scenarios = [ScenarioV1::new(1, &values)];
+    conflict.update(observed(1, &scenarios)).unwrap();
+    assert!(violation_probe.is_closed());
+    assert!(!violation_probe.ambient_fallback_is_exposed());
+}
+
+#[test]
+fn every_host_binding_axis_is_checked_before_sink_mutation() {
+    let owner = owner(
+        Srgb8::new([12, 34, 56]),
+        Srgb8::new([12, 34, 56]),
+        false,
+        &[OUTPUT_A],
+    );
+    let emissions = [authored_emission(OUTPUT_A.value(), 900)];
+    let presentations = [authored_presentation(
+        OUTPUT_A.value(),
+        ROOT.value(),
+        INNER.value(),
+    )];
+    for (index, axis) in [
+        TestHostBindingAxisV1::Realm,
+        TestHostBindingAxisV1::Root,
+        TestHostBindingAxisV1::Scope,
+        TestHostBindingAxisV1::Codec,
+        TestHostBindingAxisV1::Capabilities,
+        TestHostBindingAxisV1::Tombstone,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let (sink, probe) = in_memory_point_sink(&[900]);
+        let mut attachment = owner
+            .attach(5 + index as u32, &emissions, &presentations, sink)
+            .unwrap();
+        let initial_stamp = probe.stamp();
+        probe.drift_host_binding(axis);
+        let drifted_stamp = probe.stamp();
+        assert_ne!(drifted_stamp, initial_stamp, "axis {axis:?}");
+        assert!(matches!(
+            attachment.update(UpdateV1::Unknown {
+                revision: 1,
+                reason_id: 77,
+            }),
+            Err(AttachmentUpdateErrorV1::SinkPrepare(
+                InMemoryPointSinkErrorV1::BindingDrift
+            ))
+        ));
+        assert_eq!(probe.stamp(), drifted_stamp, "axis {axis:?}");
+        assert!(probe.is_closed(), "axis {axis:?}");
+        assert_eq!(probe.intent_counts(), Default::default(), "axis {axis:?}");
+        assert!(matches!(
+            attachment.session.evidence().observation_head(),
+            super::super::ObservationHeadV1::Empty
+        ));
+        probe.restore_host_binding();
+        let restored_facts_stamp = probe.stamp();
+        assert_ne!(restored_facts_stamp, drifted_stamp, "axis {axis:?}");
+        assert!(matches!(
+            attachment.update(UpdateV1::Unknown {
+                revision: 1,
+                reason_id: 77,
+            }),
+            Err(AttachmentUpdateErrorV1::SinkPrepare(
+                InMemoryPointSinkErrorV1::BindingDrift
+            ))
+        ));
+        assert_eq!(probe.stamp(), restored_facts_stamp, "axis {axis:?}");
+        assert_eq!(probe.intent_counts(), Default::default(), "axis {axis:?}");
+        drop(attachment);
+        assert!(probe.is_closed(), "axis {axis:?}");
+        assert!(probe.foreign_scope_is_untouched(), "axis {axis:?}");
+    }
+}
+
+#[test]
+fn every_sink_intent_cas_checks_the_same_current_binding_stamp() {
+    let owner = owner(
+        Srgb8::new([12, 34, 56]),
+        Srgb8::new([12, 34, 56]),
+        false,
+        &[OUTPUT_A],
+    );
+    let emissions = [authored_emission(OUTPUT_A.value(), 900)];
+    let presentations = [authored_presentation(
+        OUTPUT_A.value(),
+        ROOT.value(),
+        INNER.value(),
+    )];
+    let (sink, probe) = in_memory_point_sink(&[900]);
+    let mut attachment = owner.attach(6, &emissions, &presentations, sink).unwrap();
+    let values = [Srgb8::new([0, 0, 0])];
+    let scenarios = [ScenarioV1::new(1, &values)];
+    attachment.update(observed(1, &scenarios)).unwrap();
+    let baseline_stamp = probe.stamp();
+    let baseline_revision = probe.revision();
+    let baseline_snapshot = probe.snapshot();
+    let baseline_counts = probe.intent_counts();
+    let (foreign, foreign_probe) = in_memory_point_sink(&[900]);
+    let foreign = owner
+        .attach(7, &emissions, &presentations, foreign)
+        .unwrap();
+    let foreign_stamp = foreign_probe.stamp();
+    let foreign_transition = PointSinkMutationStampV1::new(foreign_stamp).unwrap();
+    assert_ne!(foreign_stamp, probe.stamp());
+
+    assert!(matches!(
+        attachment.sink.prepare(PointSinkIntentV1::SetAll {
+            revision: 1,
+            stamp: foreign_transition,
+            patch: &[],
+        }),
+        Err(InMemoryPointSinkErrorV1::StampMismatch)
+    ));
+    assert!(matches!(
+        attachment.sink.prepare(PointSinkIntentV1::RevokeAll {
+            revision: 1,
+            stamp: foreign_transition,
+        }),
+        Err(InMemoryPointSinkErrorV1::StampMismatch)
+    ));
+    assert!(matches!(
+        attachment.sink.prepare(PointSinkIntentV1::ConfirmExact {
+            revision: 1,
+            published_stamp: foreign_stamp,
+        }),
+        Err(InMemoryPointSinkErrorV1::StampMismatch)
+    ));
+    assert_eq!(probe.stamp(), baseline_stamp);
+    assert_eq!(probe.revision(), baseline_revision);
+    assert_eq!(probe.snapshot(), baseline_snapshot);
+    assert_eq!(probe.intent_counts(), baseline_counts);
+    assert!(!probe.is_busy());
+
+    drop(foreign);
+    drop(attachment);
+    assert!(probe.is_closed());
+    assert!(foreign_probe.is_closed());
+}
+
+#[test]
+fn core_mints_the_exact_successor_for_every_mutating_intent() {
+    let owner = owner(
+        Srgb8::new([12, 34, 56]),
+        Srgb8::new([12, 34, 56]),
+        false,
+        &[OUTPUT_A],
+    );
+    let emissions = [authored_emission(OUTPUT_A.value(), 900)];
+    let presentations = [authored_presentation(
+        OUTPUT_A.value(),
+        ROOT.value(),
+        INNER.value(),
+    )];
+    let (sink, probe) = in_memory_point_sink(&[900]);
+    let mut attachment = owner.attach(8, &emissions, &presentations, sink).unwrap();
+    let values = [Srgb8::new([0, 0, 0])];
+    let scenarios = [ScenarioV1::new(1, &values)];
+
+    let admission_stamp = probe.stamp();
+    attachment.update(observed(1, &scenarios)).unwrap();
+    let published_stamp = probe.stamp();
+    assert_eq!(
+        published_stamp.sequence(),
+        admission_stamp.sequence().checked_add(1).unwrap()
+    );
+    assert_eq!(
+        published_stamp.binding_epoch(),
+        admission_stamp.binding_epoch()
+    );
+
+    attachment
+        .update(UpdateV1::Unknown {
+            revision: 2,
+            reason_id: 77,
+        })
+        .unwrap();
+    let revoked_stamp = probe.stamp();
+    assert_eq!(
+        revoked_stamp.sequence(),
+        published_stamp.sequence().checked_add(1).unwrap()
+    );
+    assert_eq!(
+        revoked_stamp.binding_epoch(),
+        admission_stamp.binding_epoch()
+    );
+
+    attachment
+        .update(UpdateV1::Unknown {
+            revision: 2,
+            reason_id: 77,
+        })
+        .unwrap();
+    assert_eq!(probe.stamp(), revoked_stamp);
+}
+
+#[test]
+fn exhausted_stamp_fails_before_sink_prepare_or_session_commit() {
+    let owner = owner(
+        Srgb8::new([12, 34, 56]),
+        Srgb8::new([12, 34, 56]),
+        false,
+        &[OUTPUT_A],
+    );
+    let emissions = [authored_emission(OUTPUT_A.value(), 900)];
+    let presentations = [authored_presentation(
+        OUTPUT_A.value(),
+        ROOT.value(),
+        INNER.value(),
+    )];
+    let (sink, probe) = in_memory_point_sink(&[900]);
+    let mut attachment = owner.attach(8, &emissions, &presentations, sink).unwrap();
+    let exhausted = PointSinkStampV1::new(u64::MAX, probe.stamp().binding_epoch());
+    probe.force_stamp_sequence(u64::MAX);
+    attachment.expected_sink_stamp = exhausted;
+    let values = [Srgb8::new([0, 0, 0])];
+    let scenarios = [ScenarioV1::new(1, &values)];
+
+    assert!(matches!(
+        attachment.update(observed(1, &scenarios)),
+        Err(AttachmentUpdateErrorV1::InternalInvariant(
+            AttachmentInvariantV1::SinkStampExhausted
+        ))
+    ));
+    assert_eq!(probe.stamp(), exhausted);
+    assert_eq!(probe.intent_counts(), Default::default());
+    assert!(probe.is_closed());
+    assert!(matches!(
+        attachment.session.evidence().observation_head(),
+        super::super::ObservationHeadV1::Empty
+    ));
+}
+
+#[test]
+fn closed_revoke_is_confirmable_from_one_expected_stamp_source_of_truth() {
+    let owner = owner(
+        Srgb8::new([12, 34, 56]),
+        Srgb8::new([12, 34, 56]),
+        false,
+        &[OUTPUT_A],
+    );
+    let (sink, probe) = in_memory_point_sink(&[900]);
+    let emissions = [authored_emission(OUTPUT_A.value(), 900)];
+    let presentations = [authored_presentation(
+        OUTPUT_A.value(),
+        ROOT.value(),
+        INNER.value(),
+    )];
+    let mut attachment = owner.attach(8, &emissions, &presentations, sink).unwrap();
+    let admission_stamp = attachment.expected_sink_stamp;
+    assert_eq!(attachment.committed_revision, None);
+
+    let unknown = UpdateV1::Unknown {
+        revision: 1,
+        reason_id: 77,
+    };
+    attachment.update(unknown).unwrap();
+    let revoked_stamp = attachment.expected_sink_stamp;
+    assert_ne!(revoked_stamp, admission_stamp);
+    assert_eq!(attachment.committed_revision, Some(1));
+    assert!(probe.is_closed());
+    assert_eq!(probe.intent_counts().revoke_all, 1);
+
+    attachment.update(unknown).unwrap();
+    assert_eq!(attachment.expected_sink_stamp, revoked_stamp);
+    assert_eq!(attachment.committed_revision, Some(1));
+    assert_eq!(probe.intent_counts().revoke_all, 1);
+    assert_eq!(probe.intent_counts().confirm_exact, 1);
+
+    let values = [Srgb8::new([0, 0, 0])];
+    let scenarios = [ScenarioV1::new(1, &values)];
+    let committed = attachment.update(observed(2, &scenarios)).unwrap();
+    let output = committed.render_outputs().next().unwrap();
+    assert_eq!(output.published_stamp().revision(), 2);
+    assert_eq!(*output.published_stamp().sink_stamp(), probe.stamp());
+    assert_eq!(attachment.committed_revision, Some(2));
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ModelSnapshotV1 {
+    Closed,
+    Published,
+}
+
+proptest! {
+    #[test]
+    fn admitted_state_machine_never_exposes_ambient_fallback(
+        actions in prop::collection::vec(0_u8..12, 0..64),
+    ) {
+        let owner = owner(
+            Srgb8::new([12, 34, 56]),
+            Srgb8::new([12, 34, 56]),
+            false,
+            &[OUTPUT_A],
+        );
+        let (sink, probe) = in_memory_point_sink(&[900]);
+        let emissions = [authored_emission(OUTPUT_A.value(), 900)];
+        let presentations = [authored_presentation(
+            OUTPUT_A.value(),
+            ROOT.value(),
+            INNER.value(),
+        )];
+        let mut attachment = owner
+            .attach(9, &emissions, &presentations, sink)
+            .unwrap();
+        let values = [Srgb8::new([0, 0, 0])];
+        let scenarios = [ScenarioV1::new(1, &values)];
+        let mut revision = 0_u64;
+        let mut model = ModelSnapshotV1::Closed;
+        let mut binding_valid = true;
+
+        for action in actions {
+            if !binding_valid {
+                let stamp = probe.stamp();
+                let counts = probe.intent_counts();
+                let result = attachment.update(UpdateV1::Unknown {
+                    revision: revision + 1,
+                    reason_id: 77,
+                });
+                prop_assert!(matches!(
+                    result,
+                    Err(AttachmentUpdateErrorV1::SinkPrepare(
+                        InMemoryPointSinkErrorV1::BindingDrift
+                    ))
+                ));
+                prop_assert_eq!(probe.stamp(), stamp);
+                prop_assert_eq!(probe.intent_counts(), counts);
+                prop_assert!(!probe.ambient_fallback_is_exposed());
+                continue;
+            }
+            match action {
+                0 => {
+                    revision += 1;
+                    attachment.update(observed(revision, &scenarios)).unwrap();
+                    model = ModelSnapshotV1::Published;
+                }
+                1 => {
+                    revision += 1;
+                    attachment.update(UpdateV1::Unknown {
+                        revision,
+                        reason_id: 77,
+                    }).unwrap();
+                    model = ModelSnapshotV1::Closed;
+                }
+                2 => {
+                    probe.reject_next_prepare();
+                    let result = attachment.update(observed(revision + 1, &scenarios));
+                    prop_assert!(matches!(
+                        result,
+                        Err(AttachmentUpdateErrorV1::SinkPrepare(
+                            InMemoryPointSinkErrorV1::RejectedPrepare
+                        ))
+                    ));
+                }
+                3 => {
+                    probe.reject_next_install();
+                    let result = attachment.update(UpdateV1::Unknown {
+                        revision: revision + 1,
+                        reason_id: 77,
+                    });
+                    prop_assert!(matches!(
+                        result,
+                        Err(AttachmentUpdateErrorV1::SinkInstall(
+                            InMemoryPointSinkErrorV1::RejectedInstall
+                        ))
+                    ));
+                }
+                4 if revision != 0 => match model {
+                    ModelSnapshotV1::Closed => {
+                        attachment.update(UpdateV1::Unknown {
+                            revision,
+                            reason_id: 77,
+                        }).unwrap();
+                    }
+                    ModelSnapshotV1::Published => {
+                        attachment.update(observed(revision, &scenarios)).unwrap();
+                    }
+                },
+                5..=10 => {
+                    let axis = match action {
+                        5 => TestHostBindingAxisV1::Realm,
+                        6 => TestHostBindingAxisV1::Root,
+                        7 => TestHostBindingAxisV1::Scope,
+                        8 => TestHostBindingAxisV1::Codec,
+                        9 => TestHostBindingAxisV1::Capabilities,
+                        _ => TestHostBindingAxisV1::Tombstone,
+                    };
+                    probe.drift_host_binding(axis);
+                    let result = attachment.update(UpdateV1::Unknown {
+                        revision: revision + 1,
+                        reason_id: 77,
+                    });
+                    prop_assert!(matches!(
+                        result,
+                        Err(AttachmentUpdateErrorV1::SinkPrepare(
+                            InMemoryPointSinkErrorV1::BindingDrift
+                        ))
+                    ));
+                    binding_valid = false;
+                }
+                _ => {}
+            }
+
+            prop_assert!(!probe.ambient_fallback_is_exposed());
+            if binding_valid {
+                prop_assert_eq!(probe.stamp(), attachment.expected_sink_stamp);
+            } else {
+                prop_assert_ne!(probe.stamp(), attachment.expected_sink_stamp);
+            }
+            prop_assert_eq!(attachment.committed_revision, (revision != 0).then_some(revision));
+            match model {
+                ModelSnapshotV1::Closed => {
+                    prop_assert!(probe.is_closed());
+                    prop_assert!(probe.snapshot().is_empty());
+                }
+                ModelSnapshotV1::Published => prop_assert_eq!(probe.snapshot().len(), 1),
+            }
+        }
+
+        drop(attachment);
+        prop_assert!(probe.is_closed());
+        prop_assert!(!probe.ambient_fallback_is_exposed());
+        if !binding_valid {
+            prop_assert!(probe.foreign_scope_is_untouched());
+        }
+    }
 }
 
 #[test]
@@ -170,8 +770,26 @@ fn observed<'a>(revision: u64, scenarios: &'a [ScenarioV1<'a>]) -> UpdateV1<'a> 
     }
 }
 
+fn contract_error<L>(
+    result: Result<Attachment<L::Closed>, AttachmentCreateFailureV1<L>>,
+) -> AttachmentCreateErrorV1<L::OutputId>
+where
+    L: UnboundPointSinkLeaseV1,
+{
+    let failure = match result {
+        Ok(_) => panic!("cold contract error was expected"),
+        Err(failure) => failure,
+    };
+    match failure.into_parts().0 {
+        AttachmentCreateCauseV1::Contract(cause) => cause,
+        AttachmentCreateCauseV1::SinkAdmission(_) => {
+            panic!("contract test reached host admission")
+        }
+    }
+}
+
 #[test]
-fn attach_rejects_missing_extra_duplicate_and_reordered_sink_scope() {
+fn attach_rejects_missing_extra_duplicate_and_accepts_reordered_sink_scope() {
     let owner = owner(
         Srgb8::new([0, 0, 0]),
         Srgb8::new([0, 0, 0]),
@@ -189,36 +807,36 @@ fn attach_rejects_missing_extra_duplicate_and_reordered_sink_scope() {
 
     let (missing, missing_probe) = in_memory_point_sink(&[900]);
     assert!(matches!(
-        owner.attach(1, &emissions, &presentations, missing),
-        Err(AttachmentCreateErrorV1::SinkScopeCount {
+        contract_error(owner.attach(1, &emissions, &presentations, missing)),
+        AttachmentCreateErrorV1::SinkScopeCount {
             expected: 2,
             actual: 1
-        })
+        }
     ));
-    assert_eq!(missing_probe.revoke_count(), 1);
-    assert!(missing_probe.revoke_saw_exact_stamp());
-    assert!(missing_probe.revoked_before_lease_drop());
+    assert_eq!(missing_probe.revoke_count(), 0);
+    assert!(missing_probe.ambient_fallback_is_exposed());
 
     let (extra, _) = in_memory_point_sink(&[900, 901, 902]);
     assert!(matches!(
-        owner.attach(1, &emissions, &presentations, extra),
-        Err(AttachmentCreateErrorV1::SinkScopeCount {
+        contract_error(owner.attach(1, &emissions, &presentations, extra)),
+        AttachmentCreateErrorV1::SinkScopeCount {
             expected: 2,
             actual: 3
-        })
+        }
     ));
 
     let (duplicate, _) = in_memory_point_sink(&[900, 900]);
     assert!(matches!(
-        owner.attach(1, &emissions, &presentations, duplicate),
-        Err(AttachmentCreateErrorV1::DuplicateSinkScopeOutput { .. })
+        contract_error(owner.attach(1, &emissions, &presentations, duplicate)),
+        AttachmentCreateErrorV1::DuplicateSinkScopeOutput { .. }
     ));
 
-    let (reordered, _) = in_memory_point_sink(&[901, 900]);
-    assert!(matches!(
-        owner.attach(1, &emissions, &presentations, reordered),
-        Err(AttachmentCreateErrorV1::SinkScopeMismatch { ordinal: 0, .. })
-    ));
+    let (reordered, reordered_probe) = in_memory_point_sink(&[901, 900]);
+    let reordered = owner
+        .attach(1, &emissions, &presentations, reordered)
+        .unwrap();
+    assert!(reordered_probe.is_closed());
+    reordered.dispose();
 
     let duplicate_emission = [
         authored_emission(OUTPUT_A.value(), 900),
@@ -226,8 +844,8 @@ fn attach_rejects_missing_extra_duplicate_and_reordered_sink_scope() {
     ];
     let (sink, _) = in_memory_point_sink(&[900, 901]);
     assert!(matches!(
-        owner.attach(1, &duplicate_emission, &presentations, sink),
-        Err(AttachmentCreateErrorV1::SinkOutputAliased { .. })
+        contract_error(owner.attach(1, &duplicate_emission, &presentations, sink)),
+        AttachmentCreateErrorV1::SinkOutputAliased { .. }
     ));
 }
 
@@ -250,14 +868,14 @@ fn attach_requires_exact_bijection_over_compiled_presentations() {
     ];
     let (sink, probe) = in_memory_point_sink(&[900, 901]);
     assert!(matches!(
-        owner.attach(2, &emissions, &omitted_terminal, sink),
-        Err(AttachmentCreateErrorV1::PresentationCount {
+        contract_error(owner.attach(2, &emissions, &omitted_terminal, sink)),
+        AttachmentCreateErrorV1::PresentationCount {
             expected: 3,
             actual: 2
-        })
+        }
     ));
-    assert_eq!(probe.revoke_count(), 1);
-    assert!(probe.revoked_before_lease_drop());
+    assert_eq!(probe.revoke_count(), 0);
+    assert!(probe.ambient_fallback_is_exposed());
 }
 
 #[test]
@@ -278,13 +896,13 @@ fn alias_outputs_cannot_claim_the_same_compiled_presentation() {
     ];
     let (sink, _) = in_memory_point_sink(&[900, 901]);
     assert!(matches!(
-        owner.attach(3, &emissions, &duplicate_actual_target, sink),
-        Err(AttachmentCreateErrorV1::DuplicatePresentation {
+        contract_error(owner.attach(3, &emissions, &duplicate_actual_target, sink)),
+        AttachmentCreateErrorV1::DuplicatePresentation {
             root: ROOT,
             occurrence: INNER,
             first_output: OUTPUT_A,
             second_output: OUTPUT_B,
-        })
+        }
     ));
 }
 
@@ -307,8 +925,8 @@ fn every_emission_requires_at_least_one_distinct_compiled_presentation() {
     let (sink, _) = in_memory_point_sink(&[900, 901]);
 
     assert!(matches!(
-        owner.attach(4, &emissions, &only_output_a, sink),
-        Err(AttachmentCreateErrorV1::MissingOutputPresentation { output: OUTPUT_B })
+        contract_error(owner.attach(4, &emissions, &only_output_a, sink)),
+        AttachmentCreateErrorV1::MissingOutputPresentation { output: OUTPUT_B }
     ));
 }
 
@@ -331,8 +949,8 @@ fn duplicate_emission_output_has_its_exact_typed_error() {
     let (sink, _) = in_memory_point_sink(&[900, 901]);
 
     assert!(matches!(
-        owner.attach(5, &duplicate_output, &presentations, sink),
-        Err(AttachmentCreateErrorV1::DuplicateEmissionOutput { output: OUTPUT_A })
+        contract_error(owner.attach(5, &duplicate_output, &presentations, sink)),
+        AttachmentCreateErrorV1::DuplicateEmissionOutput { output: OUTPUT_A }
     ));
 }
 
@@ -388,50 +1006,6 @@ fn verified_snapshot_mints_attached_render_output_and_exact_confirm_only_for_ide
     assert_eq!(probe.intent_counts().set_all, 2);
     assert_eq!(probe.intent_counts().confirm_exact, 1);
     assert_eq!(probe.revision(), Some(2));
-}
-
-#[test]
-fn confirm_exact_rejects_a_sink_that_misreports_its_proposed_stamp() {
-    let owner = owner(
-        Srgb8::new([12, 34, 56]),
-        Srgb8::new([12, 34, 56]),
-        false,
-        &[OUTPUT_A],
-    );
-    let (sink, probe) = in_memory_point_sink(&[900]);
-    let emissions = [authored_emission(OUTPUT_A.value(), 900)];
-    let presentations = [authored_presentation(
-        OUTPUT_A.value(),
-        ROOT.value(),
-        INNER.value(),
-    )];
-    let mut attachment = owner.attach(6, &emissions, &presentations, sink).unwrap();
-    let values = [Srgb8::new([0, 0, 0])];
-    let scenarios = [ScenarioV1::new(44, &values)];
-    attachment.update(observed(1, &scenarios)).unwrap();
-    let prior_snapshot = probe.snapshot();
-
-    probe.misreport_next_confirm_proposed_stamp();
-    assert!(matches!(
-        attachment.update(observed(1, &scenarios)),
-        Err(AttachmentUpdateErrorV1::InternalInvariant(
-            AttachmentInvariantV1::ConfirmStampMismatch
-        ))
-    ));
-    assert_eq!(probe.snapshot(), prior_snapshot);
-    assert_eq!(probe.revision(), Some(1));
-    assert!(!probe.is_busy());
-    match attachment.session.evidence().observation_head() {
-        super::super::ObservationHeadV1::Observed { stream, revision } => {
-            assert_eq!(stream.value(), 6);
-            assert_eq!(revision, 1);
-        }
-        _ => panic!("rejected confirm must preserve the prior observed head"),
-    }
-
-    let committed = attachment.update(observed(1, &scenarios)).unwrap();
-    assert_eq!(committed.render_outputs().len(), 1);
-    assert_eq!(probe.intent_counts().confirm_exact, 2);
 }
 
 #[test]
@@ -497,6 +1071,8 @@ fn unknown_and_known_violation_revoke_the_complete_snapshot() {
     assert_eq!(committed.evidence().kind(), StateKindV1::Stale);
     assert_eq!(committed.render_outputs().len(), 0);
     assert!(probe.snapshot().is_empty());
+    assert!(probe.is_closed());
+    assert!(!probe.ambient_fallback_is_exposed());
     assert_eq!(probe.intent_counts().revoke_all, 1);
     attachment.update(unknown).unwrap();
     assert_eq!(probe.intent_counts().confirm_exact, 1);
@@ -515,6 +1091,8 @@ fn unknown_and_known_violation_revoke_the_complete_snapshot() {
     assert_eq!(committed.evidence().kind(), StateKindV1::Failed);
     assert_eq!(committed.render_outputs().len(), 0);
     assert!(conflict_probe.snapshot().is_empty());
+    assert!(conflict_probe.is_closed());
+    assert!(!conflict_probe.ambient_fallback_is_exposed());
     assert_eq!(conflict_probe.intent_counts().revoke_all, 1);
 }
 
@@ -701,6 +1279,31 @@ fn source_guards_keep_the_post_install_tail_destructor_free() {
     let attachment_source = include_str!("../attachment.rs");
     let support_source = include_str!("support.rs");
 
+    let cold_prepare = attachment_source
+        .find("PreparedAttachmentColdV1::try_new(")
+        .expect("all fallible Core preparation must precede host admission");
+    let admission = attachment_source
+        .find("sink.try_admit_closed(permit)")
+        .expect("Attachment must cross one closed admission seam");
+    assert!(cold_prepare < admission);
+    let post_admission = attachment_source
+        .split("// Admission был последней fallible-операцией")
+        .nth(1)
+        .expect("post-admission infallible tail marker must exist")
+        .split("impl<SinkOutputId> PreparedAttachmentColdV1")
+        .next()
+        .expect("cold preparation implementation must follow Owner attach");
+    for forbidden in ["?", "try_reserve", ".map_err", ".instantiate(", "drop("] {
+        assert!(
+            !post_admission.contains(forbidden),
+            "post-admission construction contains fallible/destructive work: {forbidden}",
+        );
+    }
+    assert!(post_admission.contains("admission.into_parts()"));
+    assert!(!post_admission.contains(".current_stamp("));
+    assert!(attachment_source.contains("fn close_before_release(&mut self);"));
+    assert!(attachment_source.contains("self.sink.close_before_release();"));
+
     assert!(
         attachment_source.contains("transition.commit_deferred()"),
         "Attachment must publish through the deferred Session commit seam",
@@ -728,9 +1331,9 @@ fn source_guards_keep_the_post_install_tail_destructor_free() {
         .split("fn prepare<'lease>(")
         .nth(1)
         .expect("test sink must implement prepare")
-        .split("fn revoke_all_before_release")
+        .split("fn close_before_release")
         .next()
-        .expect("prepare body must precede revoke implementation");
+        .expect("prepare body must precede close implementation");
     assert!(
         sink_prepare
             .find("drop(self.retired.take())")
@@ -806,6 +1409,8 @@ fn dispose_revokes_before_hostile_retirement_destructor_runs() {
     assert_eq!(probe.retirement_drop_count(), 1);
     assert_eq!(probe.revoke_count(), 1);
     assert!(probe.snapshot().is_empty());
+    assert!(probe.is_closed());
+    assert!(!probe.ambient_fallback_is_exposed());
     assert!(probe.revoked_before_lease_drop());
 }
 
@@ -891,7 +1496,8 @@ fn dispose_revokes_before_lease_session_and_owner_pin_release() {
 
     attachment.dispose();
     assert!(probe.snapshot().is_empty());
+    assert!(probe.is_closed());
+    assert!(!probe.ambient_fallback_is_exposed());
     assert_eq!(probe.revoke_count(), 1);
-    assert!(probe.revoke_saw_exact_stamp());
     assert!(probe.revoked_before_lease_drop());
 }
