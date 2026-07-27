@@ -25,7 +25,12 @@ static TEST_ALLOCATOR: TestAllocator = TestAllocator;
 
 impl TestAllocator {
     fn record(counter: &'static std::thread::LocalKey<Cell<usize>>) {
-        let active = COUNT_ALLOCATIONS.try_with(Cell::get).unwrap_or(false);
+        let active = match COUNT_ALLOCATIONS.try_with(Cell::get) {
+            Ok(active) => active,
+            // GlobalAlloc может вызываться во время teardown уже уничтоженного
+            // TLS; в этой фазе наблюдатель намеренно не приписывает событие тесту.
+            Err(_) => return,
+        };
         if active {
             let _ = counter.try_with(|count| count.set(count.get().saturating_add(1)));
         }
