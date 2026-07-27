@@ -7,6 +7,7 @@ pub mod wcag22;
 pub mod wcag22_evidence;
 // END WCAG22_SOURCE_ROUTES_V1
 
+pub(crate) mod clean_set;
 pub(crate) mod composition;
 pub(crate) mod spaces;
 
@@ -121,6 +122,8 @@ mod program_boundary_tests;
 
 #[cfg(test)]
 mod program_api_tests;
+#[cfg(test)]
+mod program_clean_set_tests;
 
 #[cfg(test)]
 mod release_registry_tests;
@@ -169,6 +172,9 @@ mod joint_tests;
 
 #[cfg(test)]
 mod constraint_tests;
+
+#[cfg(test)]
+mod clean_set_tests;
 
 #[cfg(test)]
 mod wcag22_tests;

@@ -36,35 +36,51 @@ const root = resolve(here, "../../..");
 const read = (...parts) => readFileSync(join(root, ...parts), "utf8");
 
 function workflowNodeScript(workflow, stepName) {
-  const step = workflow.indexOf(stepName);
-  assert.ok(step >= 0, `workflow step not found: ${stepName}`);
+  const runScript = workflowRunScript(workflow, stepName);
   const marker = "node <<'NODE'\n";
-  const start = workflow.indexOf(marker, step);
+  const start = runScript.indexOf(marker);
   assert.ok(start >= 0, `node heredoc not found after: ${stepName}`);
   const bodyStart = start + marker.length;
-  const end = workflow.indexOf("\n          NODE", bodyStart);
+  const end = runScript.indexOf("\nNODE", bodyStart);
   assert.ok(end >= 0, `node heredoc terminator not found after: ${stepName}`);
-  return workflow
-    .slice(bodyStart, end)
-    .split("\n")
-    .map((line) => line.startsWith("          ") ? line.slice(10) : line)
-    .join("\n");
+  return runScript.slice(bodyStart, end);
+}
+
+function workflowStepLines(workflow, stepName) {
+  const lines = workflow.replaceAll("\r\n", "\n").split("\n");
+  const starts = lines
+    .map((line, index) => ({ line, index }))
+    .filter(({ line }) => line.trim() === `- ${stepName}`);
+  assert.equal(starts.length, 1, `expected exactly one workflow step: ${stepName}`);
+  const start = starts[0].index;
+  const indentation = starts[0].line.length - starts[0].line.trimStart().length;
+  let end = start + 1;
+  while (end < lines.length) {
+    const candidate = lines[end];
+    const candidateIndentation = candidate.length - candidate.trimStart().length;
+    if (candidate.trim().length > 0 && candidateIndentation <= indentation) break;
+    end += 1;
+  }
+  return lines.slice(start, end);
 }
 
 function workflowRunScript(workflow, stepName) {
-  const step = workflow.indexOf(stepName);
-  assert.ok(step >= 0, `workflow step not found: ${stepName}`);
-  const marker = "\n        run: |\n";
-  const start = workflow.indexOf(marker, step);
-  assert.ok(start >= 0, `run block not found after: ${stepName}`);
-  const bodyStart = start + marker.length;
-  const end = workflow.indexOf("\n      - ", bodyStart);
-  assert.ok(end >= 0, `next workflow step not found after: ${stepName}`);
-  return workflow
-    .slice(bodyStart, end)
-    .split("\n")
-    .map((line) => line.startsWith("          ") ? line.slice(10) : line)
-    .join("\n");
+  const step = workflowStepLines(workflow, stepName);
+  const runLines = step
+    .map((line, index) => ({ line, index }))
+    .filter(({ line }) => line.trim() === "run: |");
+  assert.equal(runLines.length, 1, `expected one run block in workflow step: ${stepName}`);
+  const run = runLines[0];
+  const runIndentation = run.line.length - run.line.trimStart().length;
+  const body = [];
+  for (let cursor = run.index + 1; cursor < step.length; cursor += 1) {
+    const line = step[cursor];
+    const indentation = line.length - line.trimStart().length;
+    if (line.trim().length > 0 && indentation <= runIndentation) break;
+    body.push(line.length >= runIndentation + 2 ? line.slice(runIndentation + 2) : "");
+  }
+  assert.ok(body.some((line) => line.length > 0), `empty run block: ${stepName}`);
+  return body.join("\n");
 }
 
 function assertCheckoutCredentialsAreEphemeral(workflow, name) {
@@ -99,6 +115,20 @@ function tomlString(table, key) {
   ];
   assert.equal(matches.length, 1, `expected exactly one ${key} in [workspace.package]`);
   return matches[0][1];
+}
+
+function packageTable(source) {
+  const lines = source.split(/\r?\n/u);
+  const packageHeaders = lines
+    .map((line, index) => ({ line, index }))
+    .filter(({ line }) => /^[ \t]*\[package\][ \t]*(?:#.*)?$/u.test(line));
+  assert.equal(packageHeaders.length, 1, "expected exactly one [package] table");
+  const start = packageHeaders[0].index + 1;
+  const relativeEnd = lines.slice(start).findIndex((line) =>
+    /^[ \t]*(?:\[[^\[\]\r\n]+\]|\[\[[^\[\]\r\n]+\]\])[ \t]*(?:#.*)?$/u.test(line)
+  );
+  const end = relativeEnd < 0 ? lines.length : start + relativeEnd;
+  return lines.slice(start, end);
 }
 
 function assertWorkspaceReleaseMetadata(source) {
@@ -287,6 +317,24 @@ test("MSRV and packaged Rust crate gates are executable CI contracts", () => {
     ...publishableCargoRoots,
     ...wasmPackRoots,
   ])].sort();
+  const coreRoot = resolve(root, "crates", "labcolors-core");
+  const coreReceipt = JSON.parse(read(
+    "crates",
+    "labcolors-core",
+    "contracts",
+    "clean-set-srgb8-v1",
+    "receipt-v1.json",
+  ));
+  const coreSpdx = coreReceipt.license_scope?.core_package_spdx;
+  assert.equal(typeof coreSpdx, "string", "clean-set receipt must own Core SPDX");
+  const workspaceSpdx = tomlString(
+    workspacePackageTable(read("Cargo.toml")),
+    "license",
+  );
+  const packageMetadataByRoot = new Map(
+    cargoMetadata.packages.map((crate) => [dirname(crate.manifest_path), crate]),
+  );
+  assert.ok(distributableRoots.includes(coreRoot), "anti-vacuum: Core is distributable");
   assert.deepEqual(
     distributableRoots
       .filter((crateRoot) => !existsSync(join(crateRoot, "LICENSE")))
@@ -301,8 +349,19 @@ test("MSRV and packaged Rust crate gates are executable CI contracts", () => {
     assert.equal(readlinkSync(license), canonicalTarget);
     assert.equal(readFileSync(license, "utf8"), read("LICENSE"));
     const manifest = readFileSync(join(crateRoot, "Cargo.toml"), "utf8");
-    assert.match(manifest, /^license\.workspace = true$/mu);
-    assert.doesNotMatch(manifest, /^license-file\s*=/mu);
+    const licenseDeclarations = packageTable(manifest)
+      .filter((line) => /^license(?:\.workspace)?\s*=/u.test(line));
+    const packageMetadata = packageMetadataByRoot.get(crateRoot);
+    assert.ok(packageMetadata, `cargo metadata omitted ${crateRoot}`);
+    assert.equal(packageMetadata.license_file, null, `${crateRoot} must use SPDX only`);
+    if (crateRoot === coreRoot) {
+      assert.deepEqual(licenseDeclarations, [`license = "${coreSpdx}"`]);
+      assert.equal(packageMetadata.license, coreSpdx);
+    } else {
+      assert.deepEqual(licenseDeclarations, ["license.workspace = true"]);
+      assert.equal(packageMetadata.license, workspaceSpdx);
+    }
+    assert.doesNotMatch(manifest, /^[ \t]*license-file\s*=/mu);
   }
   const coreManifest = read("crates", "labcolors-core", "Cargo.toml");
   const coreLib = read("crates", "labcolors-core", "src", "lib.rs");
@@ -339,15 +398,63 @@ test("MSRV and packaged Rust crate gates are executable CI contracts", () => {
   assert.match(ci, /^\s*msrv:$/m);
   assert.match(ci, /cargo check --workspace --all-targets --locked/);
   assert.match(ci, /cargo package -p labcolors-core --locked/);
-  assert.match(ci, /test -L crates\/labcolors-core\/LICENSE/);
-  assert.match(ci, /cmp LICENSE crates\/labcolors-core\/LICENSE/);
-  assert.match(ci, /tar -xzf .*labcolors-core-\$\{crate_version\}\.crate/);
-  assert.match(ci, /test ! -L "\$crate_dir\/LICENSE"/);
-  assert.match(ci, /cmp LICENSE "\$crate_dir\/LICENSE"/);
-  assert.match(
-    ci,
-    /cargo test --doc --manifest-path "\$crate_dir\/Cargo\.toml" --locked/,
-  );
+  const corePackageStepName =
+    "name: package labcolors-core and run extracted package doctests";
+  const assertCorePackageGate = (workflow) => {
+    const step = workflowStepLines(workflow, corePackageStepName);
+    assert.deepEqual(
+      step.filter((line) => /^(?:if|continue-on-error):/u.test(line.trim())),
+      [],
+      "Core package verification step cannot be disabled or made non-blocking",
+    );
+    const lines = workflowRunScript(workflow, corePackageStepName).split(/\r?\n/u);
+    assert.equal(
+      lines[0],
+      "set -euo pipefail",
+      "Core package verification must start in fail-closed shell mode",
+    );
+    assert.deepEqual(
+      lines.filter((line) => /^\s*set(?:\s|$)/u.test(line)),
+      ["set -euo pipefail"],
+      "Core package verification cannot disable fail-fast after its prologue",
+    );
+    assert.ok(lines.includes("test -L crates/labcolors-core/LICENSE"));
+    assert.ok(lines.includes("cmp LICENSE crates/labcolors-core/LICENSE"));
+    const extract = lines.indexOf(
+      'tar -xzf "target/package/labcolors-core-${crate_version}.crate" -C "$package_root"',
+    );
+    const shellContinuation = "\\";
+    const verifierCommand = [
+      `python3 scripts/verify_clean_set_receipt.py core-package ${shellContinuation}`,
+      `  --source-root "$GITHUB_WORKSPACE" ${shellContinuation}`,
+      '  --package-root "$crate_dir"',
+    ];
+    const verify = lines.indexOf(verifierCommand[0]);
+    assert.deepEqual(lines.slice(verify, verify + 3), verifierCommand);
+    const doctest = lines.indexOf(
+      'cargo test --doc --manifest-path "$crate_dir/Cargo.toml" --locked',
+    );
+    assert.ok(
+      extract >= 0 && extract < verify && verify < doctest,
+      "extracted Core package must be verified before its doctests",
+    );
+  };
+  assertCorePackageGate(ci);
+  assertCorePackageGate(ci.replaceAll("\n", "\r\n"));
+  const stepLine = `      - ${corePackageStepName}`;
+  for (const bypass of ["if: false", "continue-on-error: true"]) {
+    const mutated = ci.replace(stepLine, `${stepLine}\n        ${bypass}`);
+    assert.notEqual(mutated, ci, `workflow mutation must insert ${bypass}`);
+    assert.throws(() => assertCorePackageGate(mutated));
+  }
+  const failOpenShell = ci.replace("          set -euo pipefail", "          set +e");
+  assert.notEqual(failOpenShell, ci, "workflow mutation must disable shell fail-fast");
+  assert.throws(() => assertCorePackageGate(failOpenShell));
+  const verifierLine =
+    "          python3 scripts/verify_clean_set_receipt.py core-package \\";
+  const commentedVerifier = ci.replace(verifierLine, `          # ${verifierLine.trim()}`);
+  assert.notEqual(commentedVerifier, ci, "workflow mutation must comment the verifier");
+  assert.throws(() => assertCorePackageGate(commentedVerifier));
   assert.match(ci, /id: verified-release[\s\S]*npm run release:verify/);
   assert.match(ci, /actions\/upload-artifact@[0-9a-f]{40}[\s\S]*steps\.verified-release\.outputs\.tarball/);
   assert.match(ci, /steps\.verified-release\.outputs\.manifest/);

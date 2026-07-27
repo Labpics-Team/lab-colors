@@ -1,7 +1,15 @@
 use std::ffi::OsStr;
 use std::path::PathBuf;
 
+#[expect(
+    dead_code,
+    reason = "the shared scanner also exposes a syntax projection for sibling integration gates"
+)]
+#[path = "../tests/common/source.rs"]
+mod source_scanner;
+
 const APPEARANCE_SOURCE: &str = include_str!("appearance.rs");
+const CLEAN_SET_SOURCE: &str = include_str!("clean_set.rs");
 const CONSTRAINTS_SOURCE: &str = include_str!("constraints/mod.rs");
 const EXACT_CONSTRAINT_SOURCE: &str = include_str!("constraints/exact.rs");
 const JOINT_SOURCE: &str = include_str!("joint.rs");
@@ -21,6 +29,13 @@ const GENERIC_SOURCES: [(&str, &str); 4] = [
     ("lcs_occurrence.rs", LCS_OCCURRENCE_SOURCE),
     ("program_identity.rs", PROGRAM_IDENTITY_SOURCE),
     ("program_session.rs", PROGRAM_SESSION_SOURCE),
+];
+
+const CLEAN_SET_PROGRAM_SOURCES: &[(&str, &str)] = &[
+    ("clean_set.rs", CLEAN_SET_SOURCE),
+    ("program.rs", PROGRAM_SOURCE),
+    ("program_session.rs", PROGRAM_SESSION_SOURCE),
+    ("program_identity.rs", PROGRAM_IDENTITY_SOURCE),
 ];
 
 const CLIENT_OR_LEGACY_VOCABULARY: [&str; 13] = [
@@ -67,6 +82,66 @@ fn contains_rust_identifier(source: &str, identifier: &str) -> bool {
         let after = source[start + identifier.len()..].chars().next();
         !before.is_some_and(is_continue) && !after.is_some_and(is_continue)
     })
+}
+
+fn normalized_production_code(source: &str) -> String {
+    source_scanner::production_code_lines(source)
+        .into_iter()
+        .map(|(_, line)| line)
+        .collect::<Vec<_>>()
+        .join("\n")
+        .to_ascii_lowercase()
+}
+
+#[test]
+fn rust_comment_stripping_ignores_prose_without_erasing_live_identifiers() {
+    let source = concat!(
+        "//! writer in documentation\n",
+        "/* quality_auto in a nested /* checkpoint */ comment */\n",
+        "const URL: &str = \"https://example.test/path\";\n",
+        "fn checkpoint_writer() {}\n",
+    );
+    let code = normalized_production_code(source);
+
+    assert_eq!(code.matches("writer").count(), 1);
+    assert_eq!(code.matches("checkpoint").count(), 1);
+    assert!(!code.contains("quality_auto"));
+    assert!(code.contains("https://example.test/path"));
+}
+
+#[test]
+fn rust_comment_stripping_preserves_live_identifiers_after_literal_comment_tokens() {
+    for source in [
+        r##"fn probe() { let _ = (r#""//"#, |writer: ()| writer); }"##,
+        r##"fn probe() { let _ = (br#""//"#, |writer: ()| writer); }"##,
+        r#"fn probe() { let _ = ('"', "//", |writer: ()| writer); }"#,
+    ] {
+        let code = normalized_production_code(source);
+        assert_eq!(
+            code.matches("writer").count(),
+            2,
+            "literal content must not hide live identifiers: {source}",
+        );
+    }
+}
+
+#[test]
+fn clean_set_program_guard_covers_the_complete_classifier_and_program_path() {
+    let mut covered = CLEAN_SET_PROGRAM_SOURCES
+        .iter()
+        .map(|(path, _)| *path)
+        .collect::<Vec<_>>();
+    covered.sort_unstable();
+
+    assert_eq!(
+        covered,
+        [
+            "clean_set.rs",
+            "program.rs",
+            "program_identity.rs",
+            "program_session.rs",
+        ],
+    );
 }
 
 fn assert_only_in_compile_fail(source: &str, needle: &str) {
@@ -786,6 +861,29 @@ fn shared_observation_ssot_has_one_backing_without_lifecycle_or_adapter_facades(
 }
 
 #[test]
+fn clean_set_program_path_cannot_smuggle_auto_or_writer_contracts() {
+    for &(path, source) in CLEAN_SET_PROGRAM_SOURCES {
+        let source = normalized_production_code(source);
+        for forbidden in [
+            "pointconvention",
+            "autoqualityrelease",
+            "qualityauto",
+            "quality_auto",
+            "quality-auto",
+            "shortquality",
+            "short_quality",
+            "writer",
+            "checkpoint",
+        ] {
+            assert!(
+                !source.contains(forbidden),
+                "{path} must not couple encoded clean-set admission to `{forbidden}`",
+            );
+        }
+    }
+}
+
+#[test]
 fn program_session_keeps_physical_evidence_separate_from_lazy_lcs_capability() {
     for required in [
         "ProgramPointOccurrenceV1::from_resolved(source, binding.context)",
@@ -868,7 +966,10 @@ fn program_session_keeps_physical_evidence_separate_from_lazy_lcs_capability() {
         "impl<Evaluation> ProgramConstraintResultV1<Evaluation>",
         "/// One canonical `physical case × constraint` report cell.",
     );
-    assert!(result.contains("fn binding(&self) -> ProgramVisiblePointBindingV1"));
+    assert!(
+        !result.contains("fn binding(&self) -> ProgramVisiblePointBindingV1"),
+        "a heterogeneous result must not invent an occurrence-only binding",
+    );
     assert!(!result.contains("modeled_lcs"));
     let cell = source_scope(
         PROGRAM_SESSION_SOURCE,
@@ -879,6 +980,7 @@ fn program_session_keeps_physical_evidence_separate_from_lazy_lcs_capability() {
         cell.contains("result: ProgramConstraintResultV1<Evaluation>,"),
         "each Program cell must own the typed evidence result",
     );
+    assert!(cell.contains("subject: ProgramConstraintSubjectV1,"));
     assert!(
         !cell.contains("modeled_lcs_occurrence: ModeledLcsOccurrenceV1,"),
         "a Program cell must not duplicate the modeled occurrence already owned by evidence",
@@ -932,7 +1034,7 @@ fn program_session_keeps_physical_evidence_separate_from_lazy_lcs_capability() {
         "let outputs = compile_outputs(",
     );
     for required in [
-        "compile_constraints::<Evaluation>(&graph, &all_occurrence_contexts, &program.constraints)?",
+        "compile_constraints::<Evaluation>( &graph, &all_occurrence_contexts, &point_presentations, &program.constraints, )?",
         "compact_constraint_contexts(&all_occurrence_contexts, &mut constraints)?",
     ] {
         assert!(
@@ -948,8 +1050,10 @@ fn program_session_keeps_physical_evidence_separate_from_lazy_lcs_capability() {
     );
     for required in [
         "targets.sort_unstable(); targets.dedup();",
-        ".binary_search_by_key(&constraint.target_id, |binding| binding.occurrence)",
-        "constraint.occurrence_context_index = index;",
+        "CompiledProgramConstraintBodyV1::ModeledOccurrence { target_id, .. } => { Some(*target_id) }",
+        "CompiledProgramConstraintBodyV1::PointPresentation { .. } => None",
+        ".binary_search_by_key(target_id, |binding| binding.occurrence)",
+        "*occurrence_context_index = index;",
     ] {
         assert!(
             compaction.contains(required),
@@ -966,7 +1070,7 @@ fn program_session_keeps_physical_evidence_separate_from_lazy_lcs_capability() {
         !hot_evaluation.contains("binary_search"),
         "hot Program evaluation must consume compile-time direct indices without searching",
     );
-    assert!(hot_evaluation.contains(".get(constraint.occurrence_context_index)"));
+    assert!(hot_evaluation.contains(".get(occurrence_context_index)"));
 
     for required in [
         "pub(crate) struct ProgramLcsPointAdapterV1",

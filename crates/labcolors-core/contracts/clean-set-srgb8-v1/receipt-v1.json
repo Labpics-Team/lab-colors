@@ -1,0 +1,206 @@
+{
+  "admission": {
+    "authority": "ExactTechnicalDerivation",
+    "convention": "DeclaredPackagePolicyCandidate",
+    "production_auto_minted": false
+  },
+  "artifacts": [
+    {
+      "bytes": 84737,
+      "license": "MIT",
+      "path": "crates/labcolors-core/src/appearance.rs",
+      "role": "appearance_executor_source",
+      "sha256": "2302258dec70a76acbb4ac5c3a1a472997716c3e58fc7bc1b9aaeb105526a709"
+    },
+    {
+      "bytes": 6373,
+      "license": "MIT",
+      "path": "crates/labcolors-core/src/clean_set.rs",
+      "role": "classifier_source",
+      "sha256": "584ede95e80aa1a4a66a1dc38b1441f661e6de6eac7513f4ab8945a21a39373e"
+    },
+    {
+      "bytes": 3417,
+      "license": "MIT",
+      "path": "crates/labcolors-core/src/clean_set_tests.rs",
+      "role": "classifier_tests",
+      "sha256": "30c7b3c5ce7b7f876c2cf475a2815b6ac8e53b9986e471864b03de1558978d99"
+    },
+    {
+      "bytes": 5981,
+      "license": "MIT",
+      "path": "crates/labcolors-core/src/composition.rs",
+      "role": "composition_executor_source",
+      "sha256": "195a67327a3bd86d7816b634481389930bf68577bb1202fad14c2ea152df8625"
+    },
+    {
+      "bytes": 7419,
+      "license": "MIT",
+      "path": "crates/labcolors-core/src/sha256.rs",
+      "role": "content_digest_source",
+      "sha256": "57f3eb04c91a3562d40523a601d435caf1181dd0a24df0d9162100c13a7c5262"
+    },
+    {
+      "bytes": 45142,
+      "license": "MIT",
+      "path": "crates/labcolors-core/src/joint.rs",
+      "role": "joint_selection_source",
+      "sha256": "5add7d50fbaacd4849552f81461d6c7c584b985be0f4485112c4b5705dee991a"
+    },
+    {
+      "bytes": 13873,
+      "license": "MIT",
+      "path": "crates/labcolors-core/src/lib.rs",
+      "role": "module_registration_source",
+      "sha256": "b30300edd3910e3d9da1e56896ce14c3db508b1a6fc5608e01032a5ad95777b1"
+    },
+    {
+      "bytes": 34218,
+      "license": "MIT",
+      "path": "crates/labcolors-core/src/observation.rs",
+      "role": "observation_runtime_source",
+      "sha256": "8c9838107077775c51d80638ba0b59f9672d14347ca404dfd4c63e2fb62d1c45"
+    },
+    {
+      "bytes": 169898,
+      "license": "MIT",
+      "path": "crates/labcolors-core/src/program.rs",
+      "role": "program_facade_source",
+      "sha256": "10195d665228073345b3c453c49c4cce99bc168da5dd5e70932f34e0cead1873"
+    },
+    {
+      "bytes": 71522,
+      "license": "MIT",
+      "path": "crates/labcolors-core/src/program_identity.rs",
+      "role": "program_identity_source",
+      "sha256": "8f0366079e6fa0006360ab19b0449e622add48fdb08431a02258236e1371d78a"
+    },
+    {
+      "bytes": 154789,
+      "license": "MIT",
+      "path": "crates/labcolors-core/src/program_session.rs",
+      "role": "program_source",
+      "sha256": "a236381dcf80760e1ea39743b3a20d10de938fe1a9d6c64e9a9075f6265b6eb3"
+    },
+    {
+      "bytes": 21581,
+      "license": "MIT",
+      "path": "crates/labcolors-core/src/program_clean_set_tests.rs",
+      "role": "program_tests",
+      "sha256": "4a02dc8aa1c08649fb04797bdcb713c0356e167b63c5f8e17207fdee92556f2b"
+    },
+    {
+      "bytes": 11370,
+      "license": "CC-BY-4.0 AND CC-BY-SA-4.0",
+      "path": "crates/labcolors-core/contracts/clean-set-srgb8-v1/point-clean-set-srgb8-column-rle-v1.bin",
+      "role": "runtime_codec",
+      "sha256": "aa6aa7c0b630437f1c1ba8c2ceafb0dadf6551c42331559504076a6cd44e6331"
+    },
+    {
+      "bytes": 11785,
+      "license": "MIT",
+      "path": "crates/labcolors-core/src/session.rs",
+      "role": "session_runtime_source",
+      "sha256": "4f77643206077c080e5e9b182e896145bfb69bf3db8aa4c1ac7d4c5360ea8504"
+    },
+    {
+      "bytes": 34105,
+      "license": "MIT",
+      "path": "crates/labcolors-core/src/lcs_occurrence.rs",
+      "role": "signal_transport_source",
+      "sha256": "78d37406e9bdc37f126b72987c9c92b452c13b3233c0aeb0a75ed25dadb83a68"
+    },
+    {
+      "bytes": 5154,
+      "license": "MIT",
+      "path": "crates/labcolors-core/src/srgb8.rs",
+      "role": "srgb8_source",
+      "sha256": "6c95324eb05476f35f75375a9af0b2b4a41b8b2978c46e67d2ce1aea5adde342"
+    },
+    {
+      "bytes": 39302,
+      "license": "MIT",
+      "path": "scripts/verify_clean_set_receipt.py",
+      "role": "verifier_source",
+      "sha256": "c6d9025235c1c53b54ce4c7b231fb02a412d5505740f82cdbba42f80ea375472"
+    },
+    {
+      "bytes": 31194,
+      "license": "MIT",
+      "path": "scripts/test_verify_clean_set_receipt.py",
+      "role": "verifier_tests",
+      "sha256": "2831e67431294c28ba60753a892d0ad5e3ff972144d483500eeb10c47bb9d760"
+    }
+  ],
+  "excluded_claims": [
+    "ideal algebraic IEC 61966-2-1 transfer semantics",
+    "chromatic adaptation",
+    "physical applicability of object-colour geometry to self-luminous display",
+    "human cleanliness law or population guarantee"
+  ],
+  "license_scope": {
+    "codec_spdx": "CC-BY-4.0 AND CC-BY-SA-4.0",
+    "core_package_spdx": "MIT AND CC-BY-4.0 AND CC-BY-SA-4.0",
+    "legal_files": [
+      {
+        "bytes": 2952,
+        "path": "crates/labcolors-core/NOTICE.md",
+        "role": "attribution_notice",
+        "sha256": "caf524260873a2daa9f727d81b9b49f571f444e9452d48099a516a8a9f9f7684"
+      },
+      {
+        "bytes": 18657,
+        "path": "crates/labcolors-core/LICENSES/CC-BY-4.0.txt",
+        "role": "cc_by_4_0_text",
+        "sha256": "9ba9550ad48438d0836ddab3da480b3b69ffa0aac7b7878b5a0039e7ab429411"
+      },
+      {
+        "bytes": 20138,
+        "path": "crates/labcolors-core/LICENSES/CC-BY-SA-4.0.txt",
+        "role": "cc_by_sa_4_0_text",
+        "sha256": "28a9529c7d0bb4dc51f4bf5c116a3d16ef247a052f7591466768ddf563fd1cf5"
+      },
+      {
+        "bytes": 969,
+        "path": "crates/labcolors-core/Cargo.toml",
+        "role": "core_manifest",
+        "sha256": "819952e6aab56e930031c6d68d0b87363e89f10f0bcf20e4ed4179916a296650"
+      },
+      {
+        "bytes": 1065,
+        "path": "LICENSE",
+        "role": "mit_text",
+        "sha256": "af88b29f7cdf9f243ab5a72807e9e90cd31403a5517dda61731ea639a2c73ac1"
+      }
+    ],
+    "receipt_spdx": "CC-BY-4.0 AND CC-BY-SA-4.0",
+    "software_spdx": "MIT"
+  },
+  "release_id": "exact-nominal-srgb8-point-clean-set-v1",
+  "research": {
+    "commit": "ac6d9654fc722334d8bc2054afb903770f2aad80",
+    "object_format": "sha1",
+    "release_path": "evidence/point-clean-set-srgb8/release-v1.json",
+    "release_sha256": "67cadaae38bbaea3096dba69142b5bf3d7776b7574ec224022abbcd119c45ce6"
+  },
+  "runtime_contract": {
+    "accepted_points": 8232849,
+    "codec": {
+      "bytes": 11370,
+      "header_hex": "4c50434301010000",
+      "id": "green-column-red-run-start-rle-v1",
+      "records": 3616,
+      "sha256": "aa6aa7c0b630437f1c1ba8c2ceafb0dadf6551c42331559504076a6cd44e6331"
+    },
+    "domain_id": "encoded-srgb8-u8-cube-v1",
+    "domain_points": 16777216,
+    "law_id": "neutral-or-blue-outside-closed-dirty-interval-v1",
+    "neutral_axis_id": "srgb8-output-neutral-axis-v1",
+    "raw": {
+      "bytes": 131072,
+      "id": "raw-dirty-blue-interval-u8-pair-v1",
+      "sha256": "97bcc9f793adb7f13bd70c89e9788c8ab61baf8c77e9f8cd80335ad767d71ae2"
+    }
+  },
+  "schema": "labcolors-exact-point-clean-set-product-receipt/1"
+}

@@ -27,14 +27,16 @@ use std::rc::{Rc, Weak};
 
 use crate::Srgb8;
 use crate::appearance::{
-    AdmittedAppearanceBindings, AppearanceBindings, AppearanceGraphSpec, AppearanceWorkspace,
-    BindingError, ColorInputId, CompileError, CompiledAppearanceGraph, CompiledColorInputSlotV1,
-    CompiledOccurrenceSlotV1, CompiledPaintSlotV1, CompiledPointPresentationPathV1,
-    EncodedPointPaintV1, ExactFinalOwnedPointDomainV1, OccurrenceId, OccurrenceSpec,
-    OpacityInputId, PaintId, PaintSpec, PointOccurrenceAbsenceReleaseV1,
-    PointOccurrenceAbsenceReplayErrorV1, PointOccurrenceAbsenceStepV1,
-    PointOccurrenceAbsenceSummaryV1, PointPresentationPathErrorV1, SurfaceId, SurfaceInputPortId,
-    SurfaceSpec,
+    AdmittedAppearanceBindings, AppearanceBindings, AppearanceEvaluationView, AppearanceGraphSpec,
+    AppearanceWorkspace, BindingError, ColorInputId, CompileError, CompiledAppearanceGraph,
+    CompiledColorInputSlotV1, CompiledOccurrenceSlotV1, CompiledPaintSlotV1,
+    CompiledPointPresentationPathV1, EncodedPointPaintV1, ExactFinalOwnedPointDomainV1,
+    OccurrenceId, OccurrenceSpec, OpacityInputId, PaintId, PaintSpec,
+    PointOccurrenceAbsenceReleaseV1, PointOccurrenceAbsenceStepV1, PointOccurrenceAbsenceSummaryV1,
+    PointPresentationPathErrorV1, SurfaceId, SurfaceInputPortId, SurfaceSpec,
+};
+use crate::clean_set::{
+    ClosedRejectedBlueIntervalV1, ExactNominalSrgb8CleanSetDecisionV1, ExactNominalSrgb8CleanSetV1,
 };
 use crate::composition::CompositionProfileV1;
 use crate::constraints::{
@@ -460,12 +462,30 @@ pub enum HardModeV1 {}
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReportModeV1 {}
 
-/// One typed evaluator invocation over one exact visible occurrence.
+/// Атомарное тело одного ограничения над одним физически типизированным
+/// объектом. Закрытая сумма не позволяет оценщику `Occurrence` и конвенции
+/// `PointPresentation` притвориться взаимозаменяемыми либо хранить объект
+/// ограничения отдельным полем.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ProgramConstraintBodyV1<Invocation> {
+    ModeledOccurrence {
+        occurrence: OccurrenceId,
+        invocation: Invocation,
+    },
+    DeclaredSrgb8CleanSet {
+        target: PointPresentationTargetV1,
+    },
+    #[cfg(test)]
+    DeclaredSrgb8CleanSetFinalRecheckMutant {
+        target: PointPresentationTargetV1,
+    },
+}
+
+/// Одно атомарное типизированное ограничение над одним точным физическим объектом.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ConstraintInvocation<Invocation, Mode> {
     id: ConstraintId,
-    target: OccurrenceId,
-    invocation: Invocation,
+    body: ProgramConstraintBodyV1<Invocation>,
     mode: PhantomData<fn() -> Mode>,
 }
 
@@ -473,8 +493,34 @@ impl<Invocation> ConstraintInvocation<Invocation, HardModeV1> {
     pub const fn hard(id: ConstraintId, target: OccurrenceId, invocation: Invocation) -> Self {
         Self {
             id,
-            target,
-            invocation,
+            body: ProgramConstraintBodyV1::ModeledOccurrence {
+                occurrence: target,
+                invocation,
+            },
+            mode: PhantomData,
+        }
+    }
+
+    pub(crate) const fn declared_srgb8_clean_set_hard(
+        id: ConstraintId,
+        target: PointPresentationTargetV1,
+    ) -> Self {
+        Self {
+            id,
+            body: ProgramConstraintBodyV1::DeclaredSrgb8CleanSet { target },
+            mode: PhantomData,
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn declared_srgb8_clean_set_final_recheck_mutant(
+        id: ConstraintId,
+        target: PointPresentationTargetV1,
+    ) -> Self {
+        CLEAN_SET_FINAL_RECHECK_MUTANT_CALLS.with(|calls| calls.set(0));
+        Self {
+            id,
+            body: ProgramConstraintBodyV1::DeclaredSrgb8CleanSetFinalRecheckMutant { target },
             mode: PhantomData,
         }
     }
@@ -488,8 +534,21 @@ impl<Invocation> ConstraintInvocation<Invocation, ReportModeV1> {
     ) -> Self {
         Self {
             id,
-            target,
-            invocation,
+            body: ProgramConstraintBodyV1::ModeledOccurrence {
+                occurrence: target,
+                invocation,
+            },
+            mode: PhantomData,
+        }
+    }
+
+    pub(crate) const fn declared_srgb8_clean_set_report_only(
+        id: ConstraintId,
+        target: PointPresentationTargetV1,
+    ) -> Self {
+        Self {
+            id,
+            body: ProgramConstraintBodyV1::DeclaredSrgb8CleanSet { target },
             mode: PhantomData,
         }
     }
@@ -500,12 +559,8 @@ impl<Invocation, Mode> ConstraintInvocation<Invocation, Mode> {
         self.id
     }
 
-    pub const fn target(&self) -> OccurrenceId {
-        self.target
-    }
-
-    pub const fn invocation(&self) -> &Invocation {
-        &self.invocation
+    pub(crate) const fn body(&self) -> &ProgramConstraintBodyV1<Invocation> {
+        &self.body
     }
 }
 
@@ -956,6 +1011,41 @@ impl CoreProgramDraftV1 {
         self.program.constraints.report_only.push(constraint);
     }
 
+    pub(crate) fn push_declared_srgb8_clean_set_hard(
+        &mut self,
+        id: ConstraintId,
+        target: PointPresentationTargetV1,
+    ) {
+        self.program
+            .constraints
+            .hard
+            .push(ConstraintInvocation::declared_srgb8_clean_set_hard(
+                id, target,
+            ));
+    }
+
+    pub(crate) fn push_declared_srgb8_clean_set_report_only(
+        &mut self,
+        id: ConstraintId,
+        target: PointPresentationTargetV1,
+    ) {
+        self.program.constraints.report_only.push(
+            ConstraintInvocation::declared_srgb8_clean_set_report_only(id, target),
+        );
+    }
+
+    #[cfg(test)]
+    pub(crate) fn push_declared_srgb8_clean_set_final_recheck_mutant(
+        &mut self,
+        id: ConstraintId,
+        target: PointPresentationTargetV1,
+    ) {
+        self.program
+            .constraints
+            .hard
+            .push(ConstraintInvocation::declared_srgb8_clean_set_final_recheck_mutant(id, target));
+    }
+
     pub(crate) fn push_output(&mut self, output: OutputBinding) {
         self.program.outputs.push(output);
     }
@@ -1123,6 +1213,11 @@ pub enum ProgramCompileError {
         constraint: ConstraintId,
         occurrence: OccurrenceId,
     },
+    MissingConstraintPresentationTarget {
+        constraint: ConstraintId,
+        root: PresentationRootId,
+        occurrence: OccurrenceId,
+    },
     DuplicateOutputSlot {
         output: OutputSlotId,
     },
@@ -1185,13 +1280,69 @@ impl CompiledConstraintPhasesV1 {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct DeclaredSrgb8CleanSetV1 {
+    classifier: ExactNominalSrgb8CleanSetV1,
+    #[cfg(test)]
+    final_recheck_mutant: bool,
+}
+
+impl DeclaredSrgb8CleanSetV1 {
+    const fn package_pinned() -> Self {
+        Self {
+            classifier: ExactNominalSrgb8CleanSetV1,
+            #[cfg(test)]
+            final_recheck_mutant: false,
+        }
+    }
+
+    #[cfg(test)]
+    const fn final_recheck_mutant() -> Self {
+        Self {
+            classifier: ExactNominalSrgb8CleanSetV1,
+            final_recheck_mutant: true,
+        }
+    }
+
+    fn forces_absent_mutation(self) -> bool {
+        #[cfg(test)]
+        if self.final_recheck_mutant {
+            return CLEAN_SET_FINAL_RECHECK_MUTANT_CALLS.with(|calls| {
+                let previous = calls.get();
+                calls.set(previous + 1);
+                previous != 0
+            });
+        }
+        false
+    }
+}
+
+#[cfg(test)]
+std::thread_local! {
+    static CLEAN_SET_FINAL_RECHECK_MUTANT_CALLS: std::cell::Cell<usize> = const {
+        std::cell::Cell::new(0)
+    };
+}
+
+#[derive(Clone, Copy)]
+enum CompiledProgramConstraintBodyV1<Invocation> {
+    ModeledOccurrence {
+        target_id: OccurrenceId,
+        target: CompiledOccurrenceSlotV1,
+        occurrence_context_index: usize,
+        invocation: Invocation,
+    },
+    PointPresentation {
+        presentation_ordinal: usize,
+        terminal: OccurrenceId,
+        convention: DeclaredSrgb8CleanSetV1,
+    },
+}
+
 struct CompiledPointConstraint<Invocation> {
     id: ConstraintId,
-    target_id: OccurrenceId,
-    target: CompiledOccurrenceSlotV1,
-    occurrence_context_index: usize,
     mode: CompiledConstraintModeV1,
-    invocation: Invocation,
+    body: CompiledProgramConstraintBodyV1<Invocation>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1384,6 +1535,15 @@ where
         )
     }
 
+    #[cfg(test)]
+    pub(crate) fn point_resolution_count_for_test(
+        &self,
+        session: &Session<ProgramSessionPlan<Evaluation>>,
+    ) -> Option<(usize, usize)> {
+        self.owns_session(session)
+            .then(|| session.plan().presentation_cache.replay_counts())
+    }
+
     /// Create one independent stream-affine Session for this exact compiled
     /// owner generation. Mutable bindings and workspace belong to the Session,
     /// while executable graph/evaluator state is reached only through a weak
@@ -1402,12 +1562,16 @@ where
             .graph
             .new_workspace()
             .map_err(map_session_instantiate_error)?;
+        let presentation_cache =
+            ProgramPresentationCacheV1::try_new(&self.owner_generation.point_presentations)
+                .map_err(|()| ProgramSessionInstantiateError::ResourceExhausted)?;
         Ok(Session::new(
             stream,
             ProgramSessionPlan {
                 owner_generation: Rc::downgrade(&self.owner_generation),
                 bindings,
                 workspace,
+                presentation_cache,
             },
         ))
     }
@@ -1427,13 +1591,86 @@ fn map_session_instantiate_error(error: BindingError) -> ProgramSessionInstantia
     }
 }
 
+/// Физический объект одной ячейки ограничения. Варианты не дают цели
+/// представления доступ к API контекста, предназначенному только для
+/// `Occurrence`, и тем самым не подменяют финальный корень внутренним цветом.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ProgramConstraintSubjectV1 {
+    ModeledOccurrence {
+        occurrence: OccurrenceId,
+        context: AppearanceContextId,
+    },
+    PointPresentation {
+        target: PointPresentationTargetV1,
+        terminal: OccurrenceId,
+    },
+}
+
+/// Точное положительное свидетельство закреплённого пакетом clean-set над
+/// непустым финальным доменом точки.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct DeclaredSrgb8CleanSetPassV1 {
+    visible: Srgb8,
+}
+
+impl DeclaredSrgb8CleanSetPassV1 {
+    pub(crate) const fn visible(self) -> Srgb8 {
+        self.visible
+    }
+}
+
+/// Два взаимоисключающих способа нарушить предикат clean-set.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DeclaredSrgb8CleanSetViolationV1 {
+    FinalOwnedDomainAbsent,
+    Rejected {
+        visible: Srgb8,
+        rejected_blue_interval: ClosedRejectedBlueIntervalV1,
+    },
+}
+
+impl DeclaredSrgb8CleanSetViolationV1 {
+    pub(crate) const fn visible(self) -> Option<Srgb8> {
+        match self {
+            Self::FinalOwnedDomainAbsent => None,
+            Self::Rejected { visible, .. } => Some(visible),
+        }
+    }
+
+    pub(crate) const fn rejected_blue_interval(self) -> Option<ClosedRejectedBlueIntervalV1> {
+        match self {
+            Self::FinalOwnedDomainAbsent => None,
+            Self::Rejected {
+                rejected_blue_interval,
+                ..
+            } => Some(rejected_blue_interval),
+        }
+    }
+}
+
+pub(crate) enum ProgramConstraintPassEvidenceV1<Evaluation>
+where
+    Evaluation: ProgramConstraintEvaluatorSetV1,
+{
+    ModeledOccurrence(Evaluation::PassEvidence),
+    DeclaredSrgb8CleanSet(DeclaredSrgb8CleanSetPassV1),
+}
+
+pub(crate) enum ProgramConstraintViolationEvidenceV1<Evaluation>
+where
+    Evaluation: ProgramConstraintEvaluatorSetV1,
+{
+    ModeledOccurrence(Evaluation::ViolationEvidence),
+    DeclaredSrgb8CleanSet(DeclaredSrgb8CleanSetViolationV1),
+}
+
 /// One evaluator classification retained in the complete Program report.
 pub enum ProgramConstraintResultV1<Evaluation>
 where
     Evaluation: ProgramConstraintEvaluatorSetV1,
 {
-    Pass(Evaluation::PassEvidence),
-    Violation(Evaluation::ViolationEvidence),
+    Pass(ProgramConstraintPassEvidenceV1<Evaluation>),
+    Violation(ProgramConstraintViolationEvidenceV1<Evaluation>),
 }
 
 impl<Evaluation> ProgramConstraintResultV1<Evaluation>
@@ -1442,13 +1679,6 @@ where
 {
     pub const fn is_violation(&self) -> bool {
         matches!(self, Self::Violation(_))
-    }
-
-    fn binding(&self) -> ProgramVisiblePointBindingV1 {
-        match self {
-            Self::Pass(evidence) => Evaluation::pass_binding(evidence),
-            Self::Violation(evidence) => Evaluation::violation_binding(evidence),
-        }
     }
 }
 
@@ -1460,7 +1690,7 @@ where
     candidate_state_index: usize,
     case_index: usize,
     constraint: ConstraintId,
-    target: OccurrenceId,
+    subject: ProgramConstraintSubjectV1,
     mode: CompiledConstraintModeV1,
     result: ProgramConstraintResultV1<Evaluation>,
 }
@@ -1481,12 +1711,8 @@ where
         self.constraint
     }
 
-    pub const fn target(&self) -> OccurrenceId {
-        self.target
-    }
-
-    pub fn appearance_context(&self) -> AppearanceContextId {
-        self.result.binding().context()
+    pub(crate) const fn subject(&self) -> ProgramConstraintSubjectV1 {
+        self.subject
     }
 
     pub const fn is_hard(&self) -> bool {
@@ -1515,6 +1741,112 @@ impl NonEmptyReplaySpanV1 {
     fn get<T>(self, storage: &[T]) -> Option<&[T]> {
         let end = self.start.checked_add(self.len.get())?;
         storage.get(self.start..end)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ResolvedPointPresentationV1 {
+    domain: ExactFinalOwnedPointDomainV1,
+    replay: Option<NonEmptyReplaySpanV1>,
+}
+
+/// Принадлежащий сессии временный буфер одной фазы. Каждая фаза начинает с
+/// пустого кеша, поэтому поиск, отчёт и финальная перепроверка не наследуют
+/// полномочия друг друга.
+struct ProgramPresentationCacheV1 {
+    domains: Vec<Option<ExactFinalOwnedPointDomainV1>>,
+    scratch_steps: Vec<PointOccurrenceAbsenceStepV1>,
+    #[cfg(test)]
+    phase: ProgramEvaluationPhaseV1,
+    #[cfg(test)]
+    replay_counts: [usize; 2],
+}
+
+impl ProgramPresentationCacheV1 {
+    fn try_new(presentations: &CompiledPointPresentationsV1) -> Result<Self, ()> {
+        let mut domains = Vec::new();
+        domains
+            .try_reserve_exact(presentations.len())
+            .map_err(|_| ())?;
+        domains.resize(presentations.len(), None);
+        let mut scratch_steps = Vec::new();
+        scratch_steps
+            .try_reserve_exact(presentations.steps_per_case())
+            .map_err(|_| ())?;
+        Ok(Self {
+            domains,
+            scratch_steps,
+            #[cfg(test)]
+            phase: ProgramEvaluationPhaseV1::Hard,
+            #[cfg(test)]
+            replay_counts: [0; 2],
+        })
+    }
+
+    fn begin_case(&mut self, _phase: ProgramEvaluationPhaseV1) {
+        self.domains.fill(None);
+        self.scratch_steps.clear();
+        #[cfg(test)]
+        {
+            self.phase = _phase;
+        }
+    }
+
+    fn resolve(
+        &mut self,
+        evaluation: &AppearanceEvaluationView<'_, '_>,
+        presentation_ordinal: usize,
+        presentation: &CompiledPointPresentationV1,
+        destination: Option<&mut Vec<PointOccurrenceAbsenceStepV1>>,
+    ) -> Result<ResolvedPointPresentationV1, ()> {
+        let cached = *self.domains.get(presentation_ordinal).ok_or(())?;
+        if let Some(domain) = cached {
+            return Ok(ResolvedPointPresentationV1 {
+                domain,
+                replay: None,
+            });
+        }
+
+        let steps = destination.unwrap_or(&mut self.scratch_steps);
+        if steps.capacity().saturating_sub(steps.len()) < presentation.path.len() {
+            return Err(());
+        }
+        let start = steps.len();
+        let replay = evaluation
+            .replay_point_occurrence_absence_into(
+                &presentation.path,
+                presentation.absence_release,
+                steps,
+            )
+            .map_err(|_| ())?;
+        if replay.release() != presentation.absence_release
+            || replay.target() != presentation.target
+            || replay.root() != presentation.terminal
+            || replay.steps().len() != presentation.path.len()
+        {
+            return Err(());
+        }
+        let domain = replay.domain();
+        let end = start.checked_add(replay.steps().len()).ok_or(())?;
+        let span = NonEmptyReplaySpanV1::from_bounds(start, end).ok_or(())?;
+        self.domains[presentation_ordinal] = Some(domain);
+        #[cfg(test)]
+        {
+            let phase_index = match self.phase {
+                ProgramEvaluationPhaseV1::Hard => 0,
+                ProgramEvaluationPhaseV1::ReportOnly => 1,
+            };
+            self.replay_counts[phase_index] += 1;
+        }
+        Ok(ResolvedPointPresentationV1 {
+            domain,
+            replay: Some(span),
+        })
+    }
+
+    #[cfg(test)]
+    const fn replay_counts(&self) -> (usize, usize) {
+        (self.replay_counts[0], self.replay_counts[1])
     }
 }
 
@@ -1829,7 +2161,7 @@ pub enum ProgramSessionEvaluationError<EvaluationError> {
         state_index: usize,
         case_index: usize,
         constraint: ConstraintId,
-        target: OccurrenceId,
+        subject: ProgramConstraintSubjectV1,
         hard_violation_count: usize,
     },
     InternalInvariant,
@@ -2276,6 +2608,7 @@ where
     owner_generation: Weak<ProgramEpochV1<Evaluation>>,
     bindings: AdmittedAppearanceBindings,
     workspace: AppearanceWorkspace,
+    presentation_cache: ProgramPresentationCacheV1,
 }
 
 impl<Evaluation> session_private::PlanSealed for ProgramSessionPlan<Evaluation>
@@ -2555,7 +2888,7 @@ where
             state_index,
             case_index: first.case_index,
             constraint: first.constraint,
-            target: first.target,
+            subject: first.subject,
             hard_violation_count,
         });
     }
@@ -2680,6 +3013,7 @@ where
             .graph
             .evaluate_admitted_into(&plan.bindings, &mut plan.workspace)
             .map_err(map_program_execution_binding_error)?;
+        plan.presentation_cache.begin_case(phase);
 
         if let Some(point_causal) = point_causal.as_mut() {
             // Предварительный расчёт зарезервировал арены целиком. Локальная
@@ -2697,33 +3031,19 @@ where
             {
                 return Err(ProgramSessionEvaluationError::InternalInvariant);
             }
-            for presentation in epoch.point_presentations.iter() {
-                let start = point_causal.steps.len();
-                let replay = evaluation
-                    .replay_point_occurrence_absence_into(
-                        &presentation.path,
-                        presentation.absence_release,
-                        point_causal.steps,
+            for (presentation_ordinal, presentation) in epoch.point_presentations.iter().enumerate()
+            {
+                let resolved = plan
+                    .presentation_cache
+                    .resolve(
+                        &evaluation,
+                        presentation_ordinal,
+                        presentation,
+                        Some(point_causal.steps),
                     )
-                    .map_err(|error| match error {
-                        // Ёмкость проверена выше, а каждый путь presentation
-                        // скомпилирован для этой же версии графа.
-                        PointOccurrenceAbsenceReplayErrorV1::InsufficientCapacity
-                        | PointOccurrenceAbsenceReplayErrorV1::IncompatibleEvaluation => {
-                            ProgramSessionEvaluationError::InternalInvariant
-                        }
-                    })?;
-                if replay.release() != presentation.absence_release
-                    || replay.target() != presentation.target
-                    || replay.root() != presentation.terminal
-                    || replay.steps().len() != presentation.path.len()
-                {
-                    return Err(ProgramSessionEvaluationError::InternalInvariant);
-                }
-                let end = start
-                    .checked_add(replay.steps().len())
-                    .ok_or(ProgramSessionEvaluationError::InternalInvariant)?;
-                let replay = NonEmptyReplaySpanV1::from_bounds(start, end)
+                    .map_err(|()| ProgramSessionEvaluationError::InternalInvariant)?;
+                let replay = resolved
+                    .replay
                     .ok_or(ProgramSessionEvaluationError::InternalInvariant)?;
                 point_causal.records.push(ProgramPointCausalRecordV1 {
                     considered_state_index: point_causal.considered_state_index,
@@ -2740,49 +3060,153 @@ where
             .iter()
             .filter(|constraint| phase.includes(constraint.mode))
         {
-            let source = evaluation
-                .occurrence_at(constraint.target)
-                .ok_or(ProgramSessionEvaluationError::InternalInvariant)?;
-            if source.visible() != source.certificate().output_rgb() {
-                return Err(ProgramSessionEvaluationError::InternalInvariant);
-            }
-            let binding = epoch
-                .occurrence_contexts
-                .get(constraint.occurrence_context_index)
-                .ok_or(ProgramSessionEvaluationError::InternalInvariant)?;
-            if binding.occurrence != constraint.target_id || binding.target != constraint.target {
-                return Err(ProgramSessionEvaluationError::InternalInvariant);
-            }
-            let point = ProgramPointOccurrenceV1::from_resolved(source, binding.context);
-            let decision = Evaluation::assess(&epoch.evaluator, point, constraint.invocation)
-                .map_err(|error| match error {
-                    ProgramPointAssessmentErrorV1::Evaluator(source) => {
-                        ProgramSessionEvaluationError::Evaluator {
-                            case_index,
-                            constraint: constraint.id,
-                            occurrence: constraint.target_id,
-                            context: binding.context,
-                            source,
+            let (subject, result) = match constraint.body {
+                CompiledProgramConstraintBodyV1::ModeledOccurrence {
+                    target_id,
+                    target,
+                    occurrence_context_index,
+                    invocation,
+                } => {
+                    let source = evaluation
+                        .occurrence_at(target)
+                        .ok_or(ProgramSessionEvaluationError::InternalInvariant)?;
+                    if source.visible() != source.certificate().output_rgb() {
+                        return Err(ProgramSessionEvaluationError::InternalInvariant);
+                    }
+                    let binding = epoch
+                        .occurrence_contexts
+                        .get(occurrence_context_index)
+                        .ok_or(ProgramSessionEvaluationError::InternalInvariant)?;
+                    if binding.occurrence != target_id || binding.target != target {
+                        return Err(ProgramSessionEvaluationError::InternalInvariant);
+                    }
+                    let point = ProgramPointOccurrenceV1::from_resolved(source, binding.context);
+                    let decision = Evaluation::assess(&epoch.evaluator, point, invocation)
+                        .map_err(|error| match error {
+                            ProgramPointAssessmentErrorV1::Evaluator(source) => {
+                                ProgramSessionEvaluationError::Evaluator {
+                                    case_index,
+                                    constraint: constraint.id,
+                                    occurrence: target_id,
+                                    context: binding.context,
+                                    source,
+                                }
+                            }
+                        })?;
+                    let result = match decision {
+                        HardDecision::Pass(evidence) => {
+                            debug_assert_eq!(
+                                Evaluation::pass_binding(&evidence).physical(),
+                                source.visible_point_binding(),
+                            );
+                            debug_assert_eq!(
+                                Evaluation::pass_binding(&evidence).context(),
+                                binding.context,
+                            );
+                            ProgramConstraintResultV1::Pass(
+                                ProgramConstraintPassEvidenceV1::ModeledOccurrence(evidence),
+                            )
                         }
+                        HardDecision::Violation(evidence) => {
+                            debug_assert_eq!(
+                                Evaluation::violation_binding(&evidence).physical(),
+                                source.visible_point_binding(),
+                            );
+                            debug_assert_eq!(
+                                Evaluation::violation_binding(&evidence).context(),
+                                binding.context,
+                            );
+                            ProgramConstraintResultV1::Violation(
+                                ProgramConstraintViolationEvidenceV1::ModeledOccurrence(evidence),
+                            )
+                        }
+                    };
+                    (
+                        ProgramConstraintSubjectV1::ModeledOccurrence {
+                            occurrence: target_id,
+                            context: binding.context,
+                        },
+                        result,
+                    )
+                }
+                CompiledProgramConstraintBodyV1::PointPresentation {
+                    presentation_ordinal,
+                    terminal,
+                    convention,
+                } => {
+                    let presentation = epoch
+                        .point_presentations
+                        .entries
+                        .get(presentation_ordinal)
+                        .ok_or(ProgramSessionEvaluationError::InternalInvariant)?;
+                    if presentation.terminal != terminal {
+                        return Err(ProgramSessionEvaluationError::InternalInvariant);
                     }
-                })?;
-            let result = match decision {
-                HardDecision::Pass(evidence) => ProgramConstraintResultV1::Pass(evidence),
-                HardDecision::Violation(evidence) => {
-                    if constraint.mode.rejects_candidate() {
-                        has_hard_violation = true;
-                    }
-                    ProgramConstraintResultV1::Violation(evidence)
+                    let resolved = plan
+                        .presentation_cache
+                        .resolve(&evaluation, presentation_ordinal, presentation, None)
+                        .map_err(|()| ProgramSessionEvaluationError::InternalInvariant)?;
+                    let result = if convention.forces_absent_mutation() {
+                        ProgramConstraintResultV1::Violation(
+                            ProgramConstraintViolationEvidenceV1::DeclaredSrgb8CleanSet(
+                                DeclaredSrgb8CleanSetViolationV1::FinalOwnedDomainAbsent,
+                            ),
+                        )
+                    } else {
+                        match resolved.domain {
+                            ExactFinalOwnedPointDomainV1::Empty => {
+                                ProgramConstraintResultV1::Violation(
+                                    ProgramConstraintViolationEvidenceV1::DeclaredSrgb8CleanSet(
+                                        DeclaredSrgb8CleanSetViolationV1::FinalOwnedDomainAbsent,
+                                    ),
+                                )
+                            }
+                            ExactFinalOwnedPointDomainV1::Singleton { visible } => {
+                                let visible = Srgb8::new(visible);
+                                match convention.classifier.classify(visible) {
+                                ExactNominalSrgb8CleanSetDecisionV1::Accepted => {
+                                    ProgramConstraintResultV1::Pass(
+                                        ProgramConstraintPassEvidenceV1::DeclaredSrgb8CleanSet(
+                                            DeclaredSrgb8CleanSetPassV1 { visible },
+                                        ),
+                                    )
+                                }
+                                ExactNominalSrgb8CleanSetDecisionV1::Rejected(interval) => {
+                                    ProgramConstraintResultV1::Violation(
+                                        ProgramConstraintViolationEvidenceV1::DeclaredSrgb8CleanSet(
+                                            DeclaredSrgb8CleanSetViolationV1::Rejected {
+                                                visible,
+                                                rejected_blue_interval: interval,
+                                            },
+                                        ),
+                                    )
+                                }
+                            }
+                            }
+                        }
+                    };
+                    (
+                        ProgramConstraintSubjectV1::PointPresentation {
+                            target: PointPresentationTargetV1 {
+                                root: presentation.root,
+                                occurrence: presentation.target,
+                                absence_release: presentation.absence_release,
+                            },
+                            terminal,
+                        },
+                        result,
+                    )
                 }
             };
-            debug_assert_eq!(result.binding().physical(), source.visible_point_binding());
-            debug_assert_eq!(result.binding().context(), binding.context);
+            if constraint.mode.rejects_candidate() && result.is_violation() {
+                has_hard_violation = true;
+            }
             if let Some(cells) = cells.as_deref_mut() {
                 cells.push(ProgramConstraintCellV1 {
                     candidate_state_index,
                     case_index,
                     constraint: constraint.id,
-                    target: constraint.target_id,
+                    subject,
                     mode: constraint.mode,
                     result,
                 });
@@ -2930,23 +3354,27 @@ where
     let observation_schema = canonicalize_observation_schema(surface_input_ports)
         .map_err(map_observation_schema_compile_error)?;
 
-    validate_terminal_dependency_cone(&program)?;
     let (finite_targets, joint_selection) = compile_targets(
         &graph,
         &mut program.targets,
         program.joint_selection.as_mut(),
     )?;
     let all_occurrence_contexts = compile_occurrence_contexts(&graph, &program.occurrences)?;
-    let mut constraints =
-        compile_constraints::<Evaluation>(&graph, &all_occurrence_contexts, &program.constraints)?;
-    let constraint_phases = CompiledConstraintPhasesV1::from_authored(&program.constraints);
-    let occurrence_contexts =
-        compact_constraint_contexts(&all_occurrence_contexts, &mut constraints)?;
     let point_presentations = compile_point_presentations(
         &graph,
         &mut program.presentation_roots,
         &mut program.presentation_targets,
     )?;
+    let mut constraints = compile_constraints::<Evaluation>(
+        &graph,
+        &all_occurrence_contexts,
+        &point_presentations,
+        &program.constraints,
+    )?;
+    validate_terminal_dependency_cone(&program, &constraints)?;
+    let constraint_phases = CompiledConstraintPhasesV1::from_authored(&program.constraints);
+    let occurrence_contexts =
+        compact_constraint_contexts(&all_occurrence_contexts, &mut constraints)?;
     let outputs = compile_outputs(&graph, &mut program.outputs)?;
     let content_identity = identity::compile_program_content_identity_v3(&program)?;
     Ok(ProgramEpochV1 {
@@ -3278,37 +3706,19 @@ fn false_slots(len: usize) -> Result<Vec<bool>, ProgramCompileError> {
 
 fn validate_terminal_dependency_cone<Evaluation>(
     program: &Program<Evaluation>,
+    constraints: &[CompiledPointConstraint<ProgramConstraintInvocationOf<Evaluation>>],
 ) -> Result<(), ProgramCompileError>
 where
     Evaluation: ProgramConstraintEvaluatorSetV1,
     ProgramConstraintInvocationOf<Evaluation>: Copy,
 {
-    // Preserve the canonical missing-reference diagnostics owned by constraint
-    // and output compilation before applying the stronger terminal-safety law.
-    if program
-        .constraints
-        .hard
-        .iter()
-        .map(|constraint| constraint.target)
-        .chain(
-            program
-                .constraints
-                .report_only
-                .iter()
-                .map(|constraint| constraint.target),
-        )
-        .any(|target| {
-            !program
-                .occurrences
-                .iter()
-                .any(|occurrence| occurrence.id == target)
+    // Объекты ограничений здесь уже скомпилированы, поэтому более точная
+    // диагностика отсутствующей ссылки ещё может принадлежать только выходу.
+    if program.outputs.iter().any(|output| {
+        !program.paints.iter().any(|paint| match *paint {
+            Paint::Solid { id, .. } | Paint::Opacity { id, .. } => id == output.paint,
         })
-        || program.outputs.iter().any(|output| {
-            !program.paints.iter().any(|paint| match *paint {
-                Paint::Solid { id, .. } | Paint::Opacity { id, .. } => id == output.paint,
-            })
-        })
-    {
+    }) {
         return Ok(());
     }
 
@@ -3316,18 +3726,7 @@ where
     let mut scratch = ProgramDependencyScratchV1::new(program)?;
     scratch.scan(
         &index,
-        program
-            .constraints
-            .hard
-            .iter()
-            .map(|constraint| constraint.target)
-            .chain(
-                program
-                    .constraints
-                    .report_only
-                    .iter()
-                    .map(|constraint| constraint.target),
-            ),
+        constraints.iter().map(compiled_constraint_dependency_root),
     )?;
     for (target_index, target) in program.targets.iter().enumerate() {
         if matches!(&target.domain, TargetDomainV1::Finite(_)) && !scratch.targets[target_index] {
@@ -3353,19 +3752,7 @@ where
         .count();
     if finite_count > 1 {
         let mut has_common_assessment = false;
-        for target in program
-            .constraints
-            .hard
-            .iter()
-            .map(|constraint| constraint.target)
-            .chain(
-                program
-                    .constraints
-                    .report_only
-                    .iter()
-                    .map(|constraint| constraint.target),
-            )
-        {
+        for target in constraints.iter().map(compiled_constraint_dependency_root) {
             scratch.scan(&index, [target])?;
             if program.targets.iter().enumerate().all(|(index, target)| {
                 !matches!(&target.domain, TargetDomainV1::Finite(_)) || scratch.targets[index]
@@ -3381,6 +3768,15 @@ where
     Ok(())
 }
 
+fn compiled_constraint_dependency_root<Invocation>(
+    constraint: &CompiledPointConstraint<Invocation>,
+) -> OccurrenceId {
+    match &constraint.body {
+        CompiledProgramConstraintBodyV1::ModeledOccurrence { target_id, .. } => *target_id,
+        CompiledProgramConstraintBodyV1::PointPresentation { terminal, .. } => *terminal,
+    }
+}
+
 fn map_observation_schema_compile_error(error: ObservationError) -> ProgramCompileError {
     match error {
         ObservationError::ResourceExhausted => ProgramCompileError::ResourceExhausted,
@@ -3390,9 +3786,8 @@ fn map_observation_schema_compile_error(error: ObservationError) -> ProgramCompi
 
 struct LoweredConstraint<Invocation> {
     id: ConstraintId,
-    target: OccurrenceId,
     mode: CompiledConstraintModeV1,
-    invocation: Invocation,
+    body: ProgramConstraintBodyV1<Invocation>,
 }
 
 fn compile_targets(
@@ -3594,9 +3989,39 @@ fn compile_occurrence_contexts(
     Ok(compiled.into_boxed_slice())
 }
 
+fn compile_declared_clean_set_body<Invocation>(
+    presentations: &CompiledPointPresentationsV1,
+    constraint: ConstraintId,
+    target: PointPresentationTargetV1,
+    convention: DeclaredSrgb8CleanSetV1,
+) -> Result<CompiledProgramConstraintBodyV1<Invocation>, ProgramCompileError> {
+    let missing = || ProgramCompileError::MissingConstraintPresentationTarget {
+        constraint,
+        root: target.root(),
+        occurrence: target.occurrence(),
+    };
+    let key = (target.root(), target.occurrence());
+    let presentation_ordinal = presentations
+        .entries
+        .binary_search_by_key(&key, |presentation| {
+            (presentation.root, presentation.target)
+        })
+        .map_err(|_| missing())?;
+    let presentation = &presentations.entries[presentation_ordinal];
+    if presentation.absence_release != target.absence_release() {
+        return Err(missing());
+    }
+    Ok(CompiledProgramConstraintBodyV1::PointPresentation {
+        presentation_ordinal,
+        terminal: presentation.terminal,
+        convention,
+    })
+}
+
 fn compile_constraints<Evaluation>(
     graph: &CompiledAppearanceGraph,
     occurrence_contexts: &[CompiledOccurrenceContextV1],
+    presentations: &CompiledPointPresentationsV1,
     authored: &ConstraintSet<ProgramConstraintInvocationOf<Evaluation>>,
 ) -> Result<
     Box<[CompiledPointConstraint<ProgramConstraintInvocationOf<Evaluation>>]>,
@@ -3617,9 +4042,8 @@ where
         .map_err(|_| ProgramCompileError::ResourceExhausted)?;
     lowered.extend(authored.hard.iter().map(|constraint| LoweredConstraint {
         id: constraint.id,
-        target: constraint.target,
         mode: CompiledConstraintModeV1::Hard,
-        invocation: constraint.invocation,
+        body: *constraint.body(),
     }));
     lowered.extend(
         authored
@@ -3627,9 +4051,8 @@ where
             .iter()
             .map(|constraint| LoweredConstraint {
                 id: constraint.id,
-                target: constraint.target,
                 mode: CompiledConstraintModeV1::ReportOnly,
-                invocation: constraint.invocation,
+                body: *constraint.body(),
             }),
     );
     lowered.sort_unstable_by_key(|constraint| constraint.id);
@@ -3642,36 +4065,57 @@ where
             constraint: duplicate,
         });
     }
-    for constraint in &lowered {
-        if graph.bind_occurrence(constraint.target).is_none() {
-            return Err(ProgramCompileError::MissingConstraintOccurrence {
-                constraint: constraint.id,
-                occurrence: constraint.target,
-            });
-        }
-    }
-
     let mut compiled = Vec::new();
     compiled
         .try_reserve_exact(total)
         .map_err(|_| ProgramCompileError::ResourceExhausted)?;
     for constraint in lowered {
-        let target = graph
-            .bind_occurrence(constraint.target)
-            .ok_or(ProgramCompileError::InternalInvariant)?;
-        let occurrence_context_index = occurrence_contexts
-            .binary_search_by_key(&constraint.target, |binding| binding.occurrence)
-            .map_err(|_| ProgramCompileError::InternalInvariant)?;
-        if occurrence_contexts[occurrence_context_index].target != target {
-            return Err(ProgramCompileError::InternalInvariant);
-        }
+        let body = match constraint.body {
+            ProgramConstraintBodyV1::ModeledOccurrence {
+                occurrence,
+                invocation,
+            } => {
+                let target = graph.bind_occurrence(occurrence).ok_or(
+                    ProgramCompileError::MissingConstraintOccurrence {
+                        constraint: constraint.id,
+                        occurrence,
+                    },
+                )?;
+                let occurrence_context_index = occurrence_contexts
+                    .binary_search_by_key(&occurrence, |binding| binding.occurrence)
+                    .map_err(|_| ProgramCompileError::InternalInvariant)?;
+                if occurrence_contexts[occurrence_context_index].target != target {
+                    return Err(ProgramCompileError::InternalInvariant);
+                }
+                CompiledProgramConstraintBodyV1::ModeledOccurrence {
+                    target_id: occurrence,
+                    target,
+                    occurrence_context_index,
+                    invocation,
+                }
+            }
+            ProgramConstraintBodyV1::DeclaredSrgb8CleanSet { target } => {
+                compile_declared_clean_set_body(
+                    presentations,
+                    constraint.id,
+                    target,
+                    DeclaredSrgb8CleanSetV1::package_pinned(),
+                )?
+            }
+            #[cfg(test)]
+            ProgramConstraintBodyV1::DeclaredSrgb8CleanSetFinalRecheckMutant { target } => {
+                compile_declared_clean_set_body(
+                    presentations,
+                    constraint.id,
+                    target,
+                    DeclaredSrgb8CleanSetV1::final_recheck_mutant(),
+                )?
+            }
+        };
         compiled.push(CompiledPointConstraint {
             id: constraint.id,
-            target_id: constraint.target,
-            target,
-            occurrence_context_index,
             mode: constraint.mode,
-            invocation: constraint.invocation,
+            body,
         });
     }
     Ok(compiled.into_boxed_slice())
@@ -3685,7 +4129,16 @@ fn compact_constraint_contexts<Invocation>(
     targets
         .try_reserve_exact(constraints.len())
         .map_err(|_| ProgramCompileError::ResourceExhausted)?;
-    targets.extend(constraints.iter().map(|constraint| constraint.target_id));
+    targets.extend(
+        constraints
+            .iter()
+            .filter_map(|constraint| match &constraint.body {
+                CompiledProgramConstraintBodyV1::ModeledOccurrence { target_id, .. } => {
+                    Some(*target_id)
+                }
+                CompiledProgramConstraintBodyV1::PointPresentation { .. } => None,
+            }),
+    );
     targets.sort_unstable();
     targets.dedup();
 
@@ -3701,13 +4154,21 @@ fn compact_constraint_contexts<Invocation>(
     }
 
     for constraint in constraints {
-        let index = compact
-            .binary_search_by_key(&constraint.target_id, |binding| binding.occurrence)
-            .map_err(|_| ProgramCompileError::InternalInvariant)?;
-        if compact[index].target != constraint.target {
-            return Err(ProgramCompileError::InternalInvariant);
+        if let CompiledProgramConstraintBodyV1::ModeledOccurrence {
+            target_id,
+            target,
+            occurrence_context_index,
+            ..
+        } = &mut constraint.body
+        {
+            let index = compact
+                .binary_search_by_key(target_id, |binding| binding.occurrence)
+                .map_err(|_| ProgramCompileError::InternalInvariant)?;
+            if compact[index].target != *target {
+                return Err(ProgramCompileError::InternalInvariant);
+            }
+            *occurrence_context_index = index;
         }
-        constraint.occurrence_context_index = index;
     }
     Ok(compact.into_boxed_slice())
 }

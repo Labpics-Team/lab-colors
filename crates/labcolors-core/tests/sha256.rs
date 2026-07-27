@@ -177,7 +177,7 @@ fn deterministic_corpus_matches_python_hashlib() {
         .expect("python3 is part of the repository CI toolchain");
 
     let mut stdin = child.stdin.take().expect("piped Python stdin");
-    let (output, write_result) = std::thread::scope(|scope| {
+    let output = std::thread::scope(|scope| {
         let corpus_for_writer = &corpus;
         let writer = scope.spawn(move || {
             const HEX: &[u8; 16] = b"0123456789abcdef";
@@ -188,20 +188,20 @@ fn deterministic_corpus_matches_python_hashlib() {
                     line.push(HEX[usize::from(byte & 0x0f)]);
                 }
                 line.push(b'\n');
-                stdin.write_all(&line)?;
+                // `panic` закрывает принадлежащий потоку канал до ожидания в
+                // родителе, поэтому ошибка записи не оставит дочерний процесс.
+                stdin.write_all(&line).expect("write corpus to hashlib");
             }
-            Ok::<(), std::io::Error>(())
         });
         let output = child.wait_with_output().expect("wait for hashlib oracle");
-        let write_result = writer.join().expect("hashlib stdin writer panicked");
-        (output, write_result)
+        writer.join().expect("hashlib stdin writer panicked");
+        output
     });
     assert!(
         output.status.success(),
-        "hashlib oracle failed (stdin={write_result:?}): {}",
+        "hashlib oracle failed: {}",
         String::from_utf8_lossy(&output.stderr),
     );
-    write_result.expect("write corpus to hashlib");
     let expected: Vec<_> = String::from_utf8(output.stdout)
         .expect("hashlib emits ASCII")
         .lines()

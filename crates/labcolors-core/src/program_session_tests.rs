@@ -13,8 +13,8 @@ use crate::observation::{
 use crate::program_session::{
     CompositionProfile, ConstraintId, ConstraintInvocation, ConstraintSet, ObservationGroup,
     Occurrence, OpacityInput, OutputBinding, OutputSlotId, Paint, Program, ProgramCompileError,
-    Source, SourceId, Surface, Target, TargetId, canonical_surface_input_port_sequence_matches,
-    check_render_node_count,
+    ProgramConstraintBodyV1, ProgramConstraintSubjectV1, Source, SourceId, Surface, Target,
+    TargetId, canonical_surface_input_port_sequence_matches, check_render_node_count,
 };
 use crate::session::{SessionPlanV1, SessionState, SessionUpdateError};
 
@@ -170,8 +170,13 @@ fn authored_modes_are_marker_typed_and_values_preserve_exact_ids() {
         ConstraintInvocation::report_only(ConstraintId::new(51), OCCURRENCE, Srgb8::new([0x81; 3]));
     let set = ConstraintSet::new(vec![hard], vec![report]);
     assert_eq!(set.hard()[0].id(), REQUIRED);
-    assert_eq!(set.hard()[0].target(), OCCURRENCE);
-    assert_eq!(*set.hard()[0].invocation(), Srgb8::new([0x80; 3]));
+    assert_eq!(
+        *set.hard()[0].body(),
+        ProgramConstraintBodyV1::ModeledOccurrence {
+            occurrence: OCCURRENCE,
+            invocation: Srgb8::new([0x80; 3]),
+        },
+    );
     assert_eq!(set.report_only()[0].id(), ConstraintId::new(51));
 
     let output = OutputBinding::new(OUTPUT, TRANSLUCENT);
@@ -636,7 +641,13 @@ fn multi_case_hard_failure_retains_the_full_matrix_without_outputs() {
         vec![(0, low), (0, high), (1, low), (1, high)],
     );
     assert!(cells.iter().all(|cell| cell.is_hard()));
-    assert!(cells.iter().all(|cell| cell.target() == OCCURRENCE));
+    assert!(cells.iter().all(|cell| {
+        cell.subject()
+            == ProgramConstraintSubjectV1::ModeledOccurrence {
+                occurrence: OCCURRENCE,
+                context: appearance_context(),
+            }
+    }));
     assert_eq!(
         cells
             .iter()
@@ -698,7 +709,13 @@ fn mixed_modes_retain_the_full_canonical_matrix_without_outputs_on_hard_failure(
             .collect::<Vec<_>>(),
         vec![true, false, false, true],
     );
-    assert!(cells.iter().all(|cell| cell.target() == OCCURRENCE));
+    assert!(cells.iter().all(|cell| {
+        cell.subject()
+            == ProgramConstraintSubjectV1::ModeledOccurrence {
+                occurrence: OCCURRENCE,
+                context: appearance_context(),
+            }
+    }));
     // `cause` is `ProgramConflictV1`: the failure surface exposes only this
     // complete report, while Paint outputs exist only on `ProgramVerifiedV1`.
 }

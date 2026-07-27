@@ -9,12 +9,13 @@ use crate::Srgb8;
 use crate::program::{
     AppearanceContextErrorKindV1, AppearanceContextFieldV1, AppearanceContextV1, AssessmentV1,
     CertificateV1, CompileErrorHandleV1, CompileErrorKindV1, CompileErrorV1, ConstraintIdV1,
-    ContentIdentityV3, DraftErrorV1, DraftV1, EvidenceBoundsErrorV1, InstantiateErrorV1,
-    JointChoiceV1, JointOrderErrorV1, JointStateV1, NumericDomainErrorV1, ObservationHeadV1,
-    OccurrenceIdV1, OpacityInputIdV1, OperationV1, OutputSlotIdV1, OwnerV1, PaintIdV1,
-    PhysicalPointV1, PresentationRootIdV1, ProjectionV1, ScenarioV1, SessionV1, SignalV1,
-    SourceIdV1, StateKindV1, SurfaceIdV1, SurfaceInputPortIdV1, SurroundV1, TargetCandidateIdV1,
-    TargetCandidateV1, TargetIdV1, UpdateErrorKindV1, UpdateErrorV1, UpdateV1, VerdictV1,
+    ConstraintSubjectV1, ContentIdentityV3, DraftErrorV1, DraftV1, EvidenceBoundsErrorV1,
+    InstantiateErrorV1, JointChoiceV1, JointOrderErrorV1, JointStateV1, NumericDomainErrorV1,
+    ObservationHeadV1, OccurrenceIdV1, OpacityInputIdV1, OperationV1, OutputSlotIdV1, OwnerV1,
+    PaintIdV1, PhysicalPointV1, PresentationRootIdV1, ProjectionV1, ScenarioV1, SessionV1,
+    SignalV1, SourceIdV1, StateKindV1, SurfaceIdV1, SurfaceInputPortIdV1, SurroundV1,
+    TargetCandidateIdV1, TargetCandidateV1, TargetIdV1, UpdateErrorKindV1, UpdateErrorV1, UpdateV1,
+    VerdictV1,
 };
 use crate::wcag22::Wcag22CriterionV1;
 
@@ -90,13 +91,31 @@ fn assert_projection_is_owner_bound(projection: ProjectionV1<'_, '_>) {
                 let cell = $cell;
                 let _ = cell.case_index();
                 let _ = cell.constraint().value();
-                let _ = cell.occurrence().value();
+                match cell.subject() {
+                    ConstraintSubjectV1::ModeledOccurrence {
+                        occurrence,
+                        context,
+                    } => {
+                        let _ = occurrence.value();
+                        let _ = context.adapting_luminance_cd_m2();
+                    }
+                    ConstraintSubjectV1::PointPresentation {
+                        root,
+                        occurrence,
+                        terminal,
+                    } => {
+                        let _ = root.value();
+                        let _ = occurrence.value();
+                        let _ = terminal.value();
+                    }
+                }
                 let _ = cell.mode();
                 let assessment = cell.assessment();
                 let _: VerdictV1 = assessment.verdict();
-                match assessment {
+                let binding = match assessment {
                     AssessmentV1::ExactSrgb8(evidence) => {
                         let _: Srgb8 = evidence.expected();
+                        Some(evidence.binding())
                     }
                     AssessmentV1::Wcag22Srgb8(evidence) => {
                         let _ = evidence.profile_id();
@@ -104,20 +123,28 @@ fn assert_projection_is_owner_bound(projection: ProjectionV1<'_, '_>) {
                         let _ = evidence.foreground_luminance();
                         let _ = evidence.background_luminance();
                         let _ = evidence.numerical_evidence();
+                        Some(evidence.binding())
                     }
+                    AssessmentV1::DeclaredSrgb8CleanSet(evidence) => {
+                        let _ = evidence.visible();
+                        let _ = evidence.violation();
+                        let _ = evidence.rejected_blue_interval();
+                        None
+                    }
+                };
+                if let Some(binding) = binding {
+                    let PhysicalPointV1::EncodedSrgb8SourceOver(physical) = binding.physical();
+                    let _ = physical.subject_paint().value();
+                    let _ = physical.backdrop_surface().value();
+                    let _: Srgb8 = physical.subject();
+                    let _ = physical.opacity();
+                    let _: Srgb8 = physical.backdrop();
+                    let _: Srgb8 = physical.visible();
+                    let context = binding.appearance_context();
+                    let _ = context.adapting_luminance_cd_m2();
+                    let _ = context.background_luminance_ratio_yb_yw();
+                    let _ = context.surround();
                 }
-                let binding = assessment.binding();
-                let PhysicalPointV1::EncodedSrgb8SourceOver(physical) = binding.physical();
-                let _ = physical.subject_paint().value();
-                let _ = physical.backdrop_surface().value();
-                let _: Srgb8 = physical.subject();
-                let _ = physical.opacity();
-                let _: Srgb8 = physical.backdrop();
-                let _: Srgb8 = physical.visible();
-                let context = binding.appearance_context();
-                let _ = context.adapting_luminance_cd_m2();
-                let _ = context.background_luminance_ratio_yb_yw();
-                let _ = context.surround();
             }};
         }
         match certificate {

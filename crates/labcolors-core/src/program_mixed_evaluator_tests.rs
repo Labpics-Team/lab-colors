@@ -20,18 +20,21 @@ use crate::observation::{
 };
 use crate::program::{
     AccessErrorV1, AssessmentV1, CertificateV1, ConflictCellV1, ConstraintModeV1,
-    ExactSrgb8EvidenceV1, ObservationHeadV1, ObservationV1, OperationV1, OutputSlotIdV1, OwnerV1,
-    PhysicalPointV1, ProjectionV1, ScenarioV1, SessionV1, SignalV1, StateKindV1, SurroundV1,
-    UpdateErrorKindV1, UpdateErrorV1, UpdateV1, VerdictV1, VerifiedCellV1, Wcag22Srgb8EvidenceV1,
+    ConstraintSubjectV1, DeclaredSrgb8CleanSetViolationKindV1, ExactSrgb8EvidenceV1,
+    ObservationHeadV1, ObservationV1, OperationV1, OutputSlotIdV1, OwnerV1, PhysicalPointV1,
+    ProjectionV1, ScenarioV1, SessionV1, SignalV1, StateKindV1, SurroundV1, UpdateErrorKindV1,
+    UpdateErrorV1, UpdateV1, VerdictV1, VerifiedCellV1, Wcag22Srgb8EvidenceV1,
 };
 use crate::program_session::{
     CORE_PROGRAM_ASSESSMENT_CALLS, CompiledCoreProgramV1, CompositionProfile, ConstraintId,
     ConstraintInvocation, ConstraintSet, CoreProgramConstraintInvocationV1,
     CoreProgramEvaluatorsV1, CoreProgramPassEvidenceV1, CoreProgramV1,
     CoreProgramViolationEvidenceV1, DeclaredJointSelectionV1, JointCandidateStateV1,
-    ObservationGroup, Occurrence, OpacityInput, OutputBinding, OutputSlotId, Paint, Program,
-    ProgramConstraintCellV1, ProgramConstraintResultV1, Source, SourceId, Surface, Target,
-    TargetCandidateChoiceV1, TargetCandidateId, TargetCandidateV1, TargetId,
+    ObservationGroup, Occurrence, OpacityInput, OutputBinding, OutputSlotId, Paint,
+    PointPresentationRootV1, PointPresentationTargetV1, PresentationRootId, Program,
+    ProgramConstraintCellV1, ProgramConstraintPassEvidenceV1, ProgramConstraintResultV1,
+    ProgramConstraintSubjectV1, ProgramConstraintViolationEvidenceV1, Source, SourceId, Surface,
+    Target, TargetCandidateChoiceV1, TargetCandidateId, TargetCandidateV1, TargetId,
 };
 use crate::session::SessionState;
 use crate::wcag22::{Wcag22CriterionV1, wcag22_profile_v1};
@@ -48,6 +51,8 @@ const OUTPUT: OutputSlotId = OutputSlotId::new(9);
 const SECOND_OUTPUT: OutputSlotId = OutputSlotId::new(19);
 const GROUP: ObservationGroupId = ObservationGroupId::new(10);
 const STREAM: ObservationStreamId = ObservationStreamId::new(11);
+const CLEAN_CONSTRAINT: ConstraintId = ConstraintId::new(20);
+const PRESENTATION_ROOT: PresentationRootId = PresentationRootId::new(21);
 
 fn signal(bytes: [u8; 3]) -> ColorSignal {
     ColorSignal::from_srgb8(Srgb8::new(bytes))
@@ -199,6 +204,46 @@ fn fixed_translucent_program() -> CompiledCoreProgramV1 {
     .unwrap()
 }
 
+fn fixed_clean_set_program(source: [u8; 3]) -> CompiledCoreProgramV1 {
+    let target = PointPresentationTargetV1::new(PRESENTATION_ROOT, OCCURRENCE);
+    Program::new(
+        vec![Source::new(SOURCE, signal(source))],
+        vec![Target::fixed(TARGET, SOURCE)],
+        ObservationGroup::new(GROUP, vec![SURFACE_PORT]),
+        vec![],
+        vec![Paint::Solid {
+            id: PAINT,
+            target: TARGET,
+        }],
+        vec![Surface::Input {
+            id: SURFACE,
+            input: SURFACE_PORT,
+        }],
+        vec![Occurrence::new(
+            OCCURRENCE,
+            PAINT,
+            SURFACE,
+            CompositionProfile::EncodedSrgb8SourceOverV1,
+            context(),
+        )],
+        ConstraintSet::new(
+            vec![],
+            vec![ConstraintInvocation::declared_srgb8_clean_set_report_only(
+                CLEAN_CONSTRAINT,
+                target,
+            )],
+        ),
+        vec![OutputBinding::new(OUTPUT, PAINT)],
+        CoreProgramEvaluatorsV1,
+    )
+    .with_point_presentations(
+        vec![PointPresentationRootV1::new(PRESENTATION_ROOT, OCCURRENCE)],
+        vec![target],
+    )
+    .compile()
+    .unwrap()
+}
+
 fn assert_public_observation_matches_core(
     public: ObservationV1<'_>,
     core: &crate::observation::RevisionBoundObservationV1,
@@ -261,7 +306,14 @@ fn assert_public_binding_matches_core(
     let core_occurrence = core_physical.occurrence();
     let core_program_occurrence = core_physical.program_occurrence();
     assert_eq!(core_program_occurrence.occurrence(), expected_occurrence);
-    let PhysicalPointV1::EncodedSrgb8SourceOver(public_physical) = public.binding().physical();
+    let public_binding = match public {
+        AssessmentV1::ExactSrgb8(evidence) => evidence.binding(),
+        AssessmentV1::Wcag22Srgb8(evidence) => evidence.binding(),
+        AssessmentV1::DeclaredSrgb8CleanSet(_) => {
+            panic!("fixture contains only occurrence-subject evaluators")
+        }
+    };
+    let PhysicalPointV1::EncodedSrgb8SourceOver(public_physical) = public_binding.physical();
     assert_eq!(
         public_physical.subject_paint().value(),
         core_program_occurrence.subject().value()
@@ -287,7 +339,7 @@ fn assert_public_binding_matches_core(
         Srgb8::new(core_occurrence.output_rgb())
     );
 
-    let public_context = public.binding().appearance_context();
+    let public_context = public_binding.appearance_context();
     let core_context = core.context();
     assert_eq!(
         public_context.adapting_luminance_cd_m2().to_bits(),
@@ -361,7 +413,9 @@ fn assert_public_assessment_matches_core(
     match (public, core) {
         (
             AssessmentV1::ExactSrgb8(public),
-            ProgramConstraintResultV1::Pass(CoreProgramPassEvidenceV1::ExactSrgb8(core)),
+            ProgramConstraintResultV1::Pass(ProgramConstraintPassEvidenceV1::ModeledOccurrence(
+                CoreProgramPassEvidenceV1::ExactSrgb8(core),
+            )),
         ) => assert_exact_matches(
             public,
             VerdictV1::Pass,
@@ -372,7 +426,11 @@ fn assert_public_assessment_matches_core(
         ),
         (
             AssessmentV1::ExactSrgb8(public),
-            ProgramConstraintResultV1::Violation(CoreProgramViolationEvidenceV1::ExactSrgb8(core)),
+            ProgramConstraintResultV1::Violation(
+                ProgramConstraintViolationEvidenceV1::ModeledOccurrence(
+                    CoreProgramViolationEvidenceV1::ExactSrgb8(core),
+                ),
+            ),
         ) => assert_exact_matches(
             public,
             VerdictV1::Violation,
@@ -383,7 +441,9 @@ fn assert_public_assessment_matches_core(
         ),
         (
             AssessmentV1::Wcag22Srgb8(public),
-            ProgramConstraintResultV1::Pass(CoreProgramPassEvidenceV1::Wcag22Srgb8(core)),
+            ProgramConstraintResultV1::Pass(ProgramConstraintPassEvidenceV1::ModeledOccurrence(
+                CoreProgramPassEvidenceV1::Wcag22Srgb8(core),
+            )),
         ) => assert_wcag_matches(
             public,
             VerdictV1::Pass,
@@ -393,7 +453,11 @@ fn assert_public_assessment_matches_core(
         ),
         (
             AssessmentV1::Wcag22Srgb8(public),
-            ProgramConstraintResultV1::Violation(CoreProgramViolationEvidenceV1::Wcag22Srgb8(core)),
+            ProgramConstraintResultV1::Violation(
+                ProgramConstraintViolationEvidenceV1::ModeledOccurrence(
+                    CoreProgramViolationEvidenceV1::Wcag22Srgb8(core),
+                ),
+            ),
         ) => assert_wcag_matches(
             public,
             VerdictV1::Violation,
@@ -413,12 +477,36 @@ fn assert_verified_cell_matches_core(
     assert_eq!(core.candidate_state_index(), selected_state_index);
     assert_eq!(public.case_index(), core.case_index());
     assert_eq!(public.constraint().value(), core.constraint().value());
-    assert_eq!(public.occurrence().value(), core.target().value());
+    let (occurrence, context) = match core.subject() {
+        ProgramConstraintSubjectV1::ModeledOccurrence {
+            occurrence,
+            context,
+        } => (occurrence, context),
+        ProgramConstraintSubjectV1::PointPresentation { .. } => {
+            panic!("fixture contains only occurrence-subject evaluators")
+        }
+    };
+    assert_eq!(
+        public.subject(),
+        ConstraintSubjectV1::ModeledOccurrence {
+            occurrence: crate::program::OccurrenceIdV1::new(occurrence.value()),
+            context: crate::program::AppearanceContextV1::try_new(
+                context.adapting_luminance_cd_m2(),
+                context.background_luminance_ratio(),
+                match context.surround_profile() {
+                    SurroundProfileId::AverageV1 => SurroundV1::Average,
+                    SurroundProfileId::DimV1 => SurroundV1::Dim,
+                    SurroundProfileId::DarkV1 => SurroundV1::Dark,
+                },
+            )
+            .unwrap(),
+        },
+    );
     assert_eq!(
         matches!(public.mode(), ConstraintModeV1::Hard),
         core.is_hard()
     );
-    assert_public_assessment_matches_core(public.assessment(), core.result(), core.target());
+    assert_public_assessment_matches_core(public.assessment(), core.result(), occurrence);
 }
 
 fn assert_conflict_cell_matches_core(
@@ -428,12 +516,32 @@ fn assert_conflict_cell_matches_core(
     assert_eq!(public.state_index(), core.candidate_state_index());
     assert_eq!(public.case_index(), core.case_index());
     assert_eq!(public.constraint().value(), core.constraint().value());
-    assert_eq!(public.occurrence().value(), core.target().value());
+    let (occurrence, context) = match core.subject() {
+        ProgramConstraintSubjectV1::ModeledOccurrence {
+            occurrence,
+            context,
+        } => (occurrence, context),
+        ProgramConstraintSubjectV1::PointPresentation { .. } => {
+            panic!("fixture contains only occurrence-subject evaluators")
+        }
+    };
+    let ConstraintSubjectV1::ModeledOccurrence {
+        occurrence: public_occurrence,
+        context: public_context,
+    } = public.subject()
+    else {
+        panic!("fixture contains only occurrence-subject evaluators");
+    };
+    assert_eq!(public_occurrence.value(), occurrence.value());
+    assert_eq!(
+        public_context.adapting_luminance_cd_m2().to_bits(),
+        context.adapting_luminance_cd_m2().to_bits(),
+    );
     assert_eq!(
         matches!(public.mode(), ConstraintModeV1::Hard),
         core.is_hard()
     );
-    assert_public_assessment_matches_core(public.assessment(), core.result(), core.target());
+    assert_public_assessment_matches_core(public.assessment(), core.result(), occurrence);
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -517,10 +625,11 @@ fn consume_public_assessment(assessment: AssessmentV1<'_>, probe: &mut Projectio
         VerdictV1::Pass => 1,
         VerdictV1::Violation => 2,
     });
-    match assessment {
+    let binding = match assessment {
         AssessmentV1::ExactSrgb8(evidence) => {
             probe.exact_assessments += 1;
             probe.mix_srgb8(evidence.expected());
+            Some(evidence.binding())
         }
         AssessmentV1::Wcag22Srgb8(evidence) => {
             probe.wcag_assessments += 1;
@@ -531,10 +640,33 @@ fn consume_public_assessment(assessment: AssessmentV1<'_>, probe: &mut Projectio
             probe.mix(evidence.background_luminance().lower());
             probe.mix(evidence.background_luminance().upper());
             probe.mix_bytes(evidence.numerical_evidence().class_key().as_bytes());
+            Some(evidence.binding())
         }
-    }
+        AssessmentV1::DeclaredSrgb8CleanSet(evidence) => {
+            probe.mix(evidence.visible().map_or(0, |value| {
+                let [r, g, b] = value.bytes();
+                (u64::from(r) << 16) | (u64::from(g) << 8) | u64::from(b)
+            }));
+            probe.mix(match evidence.violation() {
+                None => 0,
+                Some(DeclaredSrgb8CleanSetViolationKindV1::FinalOwnedDomainAbsent) => 1,
+                Some(DeclaredSrgb8CleanSetViolationKindV1::Rejected) => 2,
+            });
+            probe.mix(
+                evidence
+                    .rejected_blue_interval()
+                    .map_or(0, |[lower, upper]| {
+                        (u64::from(lower) << 8) | u64::from(upper)
+                    }),
+            );
+            None
+        }
+    };
 
-    let PhysicalPointV1::EncodedSrgb8SourceOver(physical) = assessment.binding().physical();
+    let Some(binding) = binding else {
+        return;
+    };
+    let PhysicalPointV1::EncodedSrgb8SourceOver(physical) = binding.physical();
     probe.mix(u64::from(physical.subject_paint().value()));
     probe.mix(u64::from(physical.backdrop_surface().value()));
     probe.mix_srgb8(physical.subject());
@@ -542,7 +674,7 @@ fn consume_public_assessment(assessment: AssessmentV1<'_>, probe: &mut Projectio
     probe.mix_srgb8(physical.backdrop());
     probe.mix_srgb8(physical.visible());
 
-    let context = assessment.binding().appearance_context();
+    let context = binding.appearance_context();
     probe.mix(context.adapting_luminance_cd_m2().to_bits());
     probe.mix(context.background_luminance_ratio_yb_yw().to_bits());
     probe.mix(match context.surround() {
@@ -550,6 +682,52 @@ fn consume_public_assessment(assessment: AssessmentV1<'_>, probe: &mut Projectio
         SurroundV1::Dim => 2,
         SurroundV1::Dark => 3,
     });
+}
+
+fn clean_set_projection_probe(source: [u8; 3]) -> ProjectionProbe {
+    let owner = OwnerV1::from_compiled(fixed_clean_set_program(source));
+    let mut session = owner.instantiate(STREAM.value()).unwrap();
+    let backdrop = [Srgb8::new([0; 3])];
+    let scenarios = [ScenarioV1::new(1, &backdrop)];
+    let projection = owner
+        .update(
+            &mut session,
+            UpdateV1::Observed {
+                revision: 1,
+                scenarios: &scenarios,
+            },
+        )
+        .unwrap();
+    let Some(CertificateV1::Verified(certificate)) = projection.evidence().certificates().next()
+    else {
+        panic!("report-only clean-set outcome must retain a verified certificate");
+    };
+    assert_eq!(certificate.cells().len(), 1);
+    let assessment = certificate.cells().next().unwrap().assessment();
+
+    let mut probe = ProjectionProbe::new();
+    consume_public_assessment(assessment, &mut probe);
+    probe
+}
+
+#[test]
+fn clean_set_projection_probe_binds_pass_absence_rejection_and_interval() {
+    for (name, source, components) in [
+        ("pass", [255, 0, 0], [1, 0xFF_00_00, 0, 0]),
+        ("final-owned domain absent", [0, 0, 0], [2, 0, 1, 0]),
+        (
+            "rejected with interval",
+            [0, 200, 71],
+            [2, 0x00_C8_47, 2, 0x47_65],
+        ),
+    ] {
+        let actual = clean_set_projection_probe(source);
+        let mut expected = ProjectionProbe::new();
+        for component in components {
+            expected.mix(component);
+        }
+        assert_eq!(actual.checksum, expected.checksum, "{name}");
+    }
 }
 
 fn consume_public_projection(projection: ProjectionV1<'_, '_>) -> ProjectionProbe {
@@ -616,7 +794,20 @@ fn consume_public_projection(projection: ProjectionV1<'_, '_>) -> ProjectionProb
                     probe.cells += 1;
                     probe.mix(cell.case_index() as u64);
                     probe.mix(u64::from(cell.constraint().value()));
-                    probe.mix(u64::from(cell.occurrence().value()));
+                    match cell.subject() {
+                        ConstraintSubjectV1::ModeledOccurrence { occurrence, .. } => {
+                            probe.mix(u64::from(occurrence.value()));
+                        }
+                        ConstraintSubjectV1::PointPresentation {
+                            root,
+                            occurrence,
+                            terminal,
+                        } => {
+                            probe.mix(u64::from(root.value()));
+                            probe.mix(u64::from(occurrence.value()));
+                            probe.mix(u64::from(terminal.value()));
+                        }
+                    }
                     probe.mix(match cell.mode() {
                         ConstraintModeV1::Hard => 1,
                         ConstraintModeV1::ReportOnly => 2,
@@ -638,7 +829,20 @@ fn consume_public_projection(projection: ProjectionV1<'_, '_>) -> ProjectionProb
                     probe.mix(cell.state_index() as u64);
                     probe.mix(cell.case_index() as u64);
                     probe.mix(u64::from(cell.constraint().value()));
-                    probe.mix(u64::from(cell.occurrence().value()));
+                    match cell.subject() {
+                        ConstraintSubjectV1::ModeledOccurrence { occurrence, .. } => {
+                            probe.mix(u64::from(occurrence.value()));
+                        }
+                        ConstraintSubjectV1::PointPresentation {
+                            root,
+                            occurrence,
+                            terminal,
+                        } => {
+                            probe.mix(u64::from(root.value()));
+                            probe.mix(u64::from(occurrence.value()));
+                            probe.mix(u64::from(terminal.value()));
+                        }
+                    }
                     probe.mix(match cell.mode() {
                         ConstraintModeV1::Hard => 1,
                         ConstraintModeV1::ReportOnly => 2,
@@ -748,8 +952,9 @@ fn one_program_retains_typed_exact_and_wcag22_outcomes() {
         panic!("one case times two heterogeneous constraints must produce two cells");
     };
 
-    let ProgramConstraintResultV1::Pass(CoreProgramPassEvidenceV1::ExactSrgb8(evidence)) =
-        exact.result()
+    let ProgramConstraintResultV1::Pass(ProgramConstraintPassEvidenceV1::ModeledOccurrence(
+        CoreProgramPassEvidenceV1::ExactSrgb8(evidence),
+    )) = exact.result()
     else {
         panic!("the first cell must retain Exact-specific pass evidence");
     };
@@ -764,8 +969,9 @@ fn one_program_retains_typed_exact_and_wcag22_outcomes() {
     );
     assert_eq!(evidence.binding().context(), declared_context);
 
-    let ProgramConstraintResultV1::Pass(CoreProgramPassEvidenceV1::Wcag22Srgb8(evidence)) =
-        wcag.result()
+    let ProgramConstraintResultV1::Pass(ProgramConstraintPassEvidenceV1::ModeledOccurrence(
+        CoreProgramPassEvidenceV1::Wcag22Srgb8(evidence),
+    )) = wcag.result()
     else {
         panic!("the second cell must retain WCAG22-specific pass evidence");
     };
@@ -843,13 +1049,17 @@ fn mixed_families_select_only_a_state_that_passes_every_case_then_recheck_it() {
     for cell in [cells[0].result(), cells[2].result()] {
         assert!(matches!(
             cell,
-            ProgramConstraintResultV1::Pass(CoreProgramPassEvidenceV1::ExactSrgb8(_))
+            ProgramConstraintResultV1::Pass(ProgramConstraintPassEvidenceV1::ModeledOccurrence(
+                CoreProgramPassEvidenceV1::ExactSrgb8(_)
+            ))
         ));
     }
     for cell in [cells[1].result(), cells[3].result()] {
         assert!(matches!(
             cell,
-            ProgramConstraintResultV1::Pass(CoreProgramPassEvidenceV1::Wcag22Srgb8(_))
+            ProgramConstraintResultV1::Pass(ProgramConstraintPassEvidenceV1::ModeledOccurrence(
+                CoreProgramPassEvidenceV1::Wcag22Srgb8(_)
+            ))
         ));
     }
 }
@@ -884,11 +1094,19 @@ fn mixed_family_conflict_is_exhaustive_and_keeps_report_only_non_gating() {
     assert!(cells.iter().all(|cell| cell.result().is_violation()));
     assert!(matches!(
         cells[0].result(),
-        ProgramConstraintResultV1::Violation(CoreProgramViolationEvidenceV1::ExactSrgb8(_))
+        ProgramConstraintResultV1::Violation(
+            ProgramConstraintViolationEvidenceV1::ModeledOccurrence(
+                CoreProgramViolationEvidenceV1::ExactSrgb8(_)
+            )
+        )
     ));
     assert!(matches!(
         cells[1].result(),
-        ProgramConstraintResultV1::Violation(CoreProgramViolationEvidenceV1::Wcag22Srgb8(_))
+        ProgramConstraintResultV1::Violation(
+            ProgramConstraintViolationEvidenceV1::ModeledOccurrence(
+                CoreProgramViolationEvidenceV1::Wcag22Srgb8(_)
+            )
+        )
     ));
 }
 
