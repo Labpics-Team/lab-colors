@@ -22,9 +22,11 @@ use crate::program::{
     AccessErrorV1, AssessmentV1, CertificateV1, ConflictCellV1, ConstraintModeV1,
     ConstraintSubjectV1, DeclaredSrgb8CleanSetViolationKindV1, ExactSrgb8EvidenceV1,
     ObservationHeadV1, ObservationV1, OperationV1, OutputSlotIdV1, OwnerV1, PhysicalPointV1,
-    ProjectionV1, ScenarioV1, SessionV1, SignalV1, StateKindV1, SurroundV1, UpdateErrorKindV1,
-    UpdateErrorV1, UpdateV1, VerdictV1, VerifiedCellV1, Wcag22Srgb8EvidenceV1,
+    PreparedSessionTransitionV1, ProjectionV1, ScenarioV1, SessionV1, SignalV1, StateKindV1,
+    SurroundV1, UpdateErrorKindV1, UpdateErrorV1, UpdateV1, VerdictV1, VerifiedCellV1,
+    Wcag22Srgb8EvidenceV1,
 };
+use crate::program_boundary_tests::CommitProgramUpdateForTest as _;
 use crate::program_session::{
     CORE_PROGRAM_ASSESSMENT_CALLS, CompiledCoreProgramV1, CompositionProfile, ConstraintId,
     ConstraintInvocation, ConstraintSet, CoreProgramConstraintInvocationV1,
@@ -37,6 +39,7 @@ use crate::program_session::{
     Target, TargetCandidateChoiceV1, TargetCandidateId, TargetCandidateV1, TargetId,
 };
 use crate::session::SessionState;
+use crate::session_tests::CommitSessionUpdateForTest as _;
 use crate::wcag22::{Wcag22CriterionV1, wcag22_profile_v1};
 
 const SOURCE: SourceId = SourceId::new(1);
@@ -690,7 +693,7 @@ fn clean_set_projection_probe(source: [u8; 3]) -> ProjectionProbe {
     let backdrop = [Srgb8::new([0; 3])];
     let scenarios = [ScenarioV1::new(1, &backdrop)];
     let projection = owner
-        .update(
+        .commit(
             &mut session,
             UpdateV1::Observed {
                 revision: 1,
@@ -945,7 +948,7 @@ fn one_program_retains_typed_exact_and_wcag22_outcomes() {
     let compiled = program.compile().unwrap();
 
     let mut session = compiled.instantiate(STREAM).unwrap();
-    let SessionState::Ready { current } = session.update(observed_white()).unwrap() else {
+    let SessionState::Ready { current } = session.commit(observed_white()).unwrap() else {
         panic!("opaque black on white must satisfy both authored hard constraints");
     };
     let [exact, wcag] = current.report().cells() else {
@@ -990,7 +993,7 @@ fn fixed_public_certificate_retains_none_selection_and_nonunit_output_opacity() 
     let white = [Srgb8::new([0xFF; 3])];
     let scenarios = [ScenarioV1::new(1, &white)];
     let projection = owner
-        .update(
+        .commit(
             &mut session,
             UpdateV1::Observed {
                 revision: 1,
@@ -1025,7 +1028,7 @@ fn mixed_families_select_only_a_state_that_passes_every_case_then_recheck_it() {
     let compiled = finite_program([[0x80; 3], [0; 3]]);
     let mut session = compiled.instantiate(STREAM).unwrap();
     let SessionState::Ready { current } = session
-        .update(observed_backdrops(&[[0xFF; 3], [0x80; 3]]))
+        .commit(observed_backdrops(&[[0xFF; 3], [0x80; 3]]))
         .unwrap()
     else {
         panic!("the later black state must pass WCAG22 over both physical cases");
@@ -1068,7 +1071,7 @@ fn mixed_families_select_only_a_state_that_passes_every_case_then_recheck_it() {
 fn mixed_family_conflict_is_exhaustive_and_keeps_report_only_non_gating() {
     let compiled = finite_program([[0x80; 3], [0xFF; 3]]);
     let mut session = compiled.instantiate(STREAM).unwrap();
-    let SessionState::Failed { cause, previous } = session.update(observed_white()).unwrap() else {
+    let SessionState::Failed { cause, previous } = session.commit(observed_white()).unwrap() else {
         panic!("neither gray nor white satisfies default text contrast on white");
     };
     assert!(previous.is_none());
@@ -1121,7 +1124,7 @@ fn public_projection_preserves_every_exposed_ready_and_conflict_field_against_co
     let SessionState::Ready {
         current: core_verified,
     } = ready_core_session
-        .update(observed_backdrops(&ready_backdrops))
+        .commit(observed_backdrops(&ready_backdrops))
         .unwrap()
     else {
         panic!("black is the first state that passes both canonical physical cases");
@@ -1134,7 +1137,7 @@ fn public_projection_preserves_every_exposed_ready_and_conflict_field_against_co
         ScenarioV1::new(3, &ready_gray),
     ];
     let public_ready = ready_public_owner
-        .update(
+        .commit(
             &mut ready_public_session,
             UpdateV1::Observed {
                 revision: 1,
@@ -1223,7 +1226,7 @@ fn public_projection_preserves_every_exposed_ready_and_conflict_field_against_co
         cause: core_conflict,
         previous: None,
     } = conflict_core_session
-        .update(observed_backdrops(&conflict_backdrops))
+        .commit(observed_backdrops(&conflict_backdrops))
         .unwrap()
     else {
         panic!("neither black nor white passes both opposing physical cases");
@@ -1235,7 +1238,7 @@ fn public_projection_preserves_every_exposed_ready_and_conflict_field_against_co
         ScenarioV1::new(2, &conflict_black),
     ];
     let public_failed = conflict_public_owner
-        .update(
+        .commit(
             &mut conflict_public_session,
             UpdateV1::Observed {
                 revision: 1,
@@ -1301,7 +1304,7 @@ fn committed_projection_is_zero_alloc_and_repeats_no_composite_transform_or_eval
     let white = [Srgb8::new([0xFF; 3])];
     let white_only = [ScenarioV1::new(1, &white)];
     owner
-        .update(
+        .commit(
             &mut session,
             UpdateV1::Observed {
                 revision: 1,
@@ -1353,7 +1356,7 @@ fn committed_projection_is_zero_alloc_and_repeats_no_composite_transform_or_eval
     );
 
     owner
-        .update(
+        .commit(
             &mut session,
             UpdateV1::Unknown {
                 revision: 2,
@@ -1390,7 +1393,7 @@ fn committed_projection_is_zero_alloc_and_repeats_no_composite_transform_or_eval
     let black = [Srgb8::new([0; 3])];
     let opposing_backdrops = [ScenarioV1::new(1, &white), ScenarioV1::new(2, &black)];
     owner
-        .update(
+        .commit(
             &mut session,
             UpdateV1::Observed {
                 revision: 3,
@@ -1475,14 +1478,14 @@ fn observation_projection_is_invariant_under_every_scenario_permutation_and_keep
         };
         let SessionState::Ready {
             current: core_verified,
-        } = core_session.update(core_update).unwrap()
+        } = core_session.commit(core_update).unwrap()
         else {
             panic!("black must pass both deduplicated physical cases");
         };
         let public_scenarios =
             permutation.map(|index| ScenarioV1::new(IDS[index], &public_values[index]));
         let public_state = public_owner
-            .update(
+            .commit(
                 &mut public_session,
                 UpdateV1::Observed {
                     revision: 1,
@@ -1574,7 +1577,7 @@ fn concrete_program_projects_ready_and_fail_closed_stale_operations() {
     let gray = [Srgb8::new([0x80; 3])];
     let scenarios = [ScenarioV1::new(2, &gray), ScenarioV1::new(1, &white)];
     let ready = owner
-        .update(
+        .commit(
             &mut session,
             UpdateV1::Observed {
                 revision: 1,
@@ -1616,7 +1619,7 @@ fn concrete_program_projects_ready_and_fail_closed_stale_operations() {
 
     let reordered = [ScenarioV1::new(1, &white), ScenarioV1::new(2, &gray)];
     let replay = owner
-        .update(
+        .commit(
             &mut session,
             UpdateV1::Observed {
                 revision: 1,
@@ -1632,7 +1635,7 @@ fn concrete_program_projects_ready_and_fail_closed_stale_operations() {
     );
 
     let changed_same_revision = [ScenarioV1::new(1, &white)];
-    let error = match owner.update(
+    let error = match owner.commit(
         &mut session,
         UpdateV1::Observed {
             revision: 1,
@@ -1647,7 +1650,7 @@ fn concrete_program_projects_ready_and_fail_closed_stale_operations() {
     assert_observed_head(session.evidence().observation_head(), STREAM.value(), 1);
 
     let stale = owner
-        .update(
+        .commit(
             &mut session,
             UpdateV1::Unknown {
                 revision: 2,
@@ -1682,7 +1685,7 @@ fn unknown_replacement_session_revokes_an_existing_owner_output() {
 
     let mut first_session = owner.instantiate(11).unwrap();
     let ready = owner
-        .update(
+        .commit(
             &mut first_session,
             UpdateV1::Observed {
                 revision: 1,
@@ -1705,7 +1708,7 @@ fn unknown_replacement_session_revokes_an_existing_owner_output() {
 
     let mut replacement_session = owner.instantiate(12).unwrap();
     let unknown = owner
-        .update(
+        .commit(
             &mut replacement_session,
             UpdateV1::Unknown {
                 revision: 1,
@@ -1739,7 +1742,7 @@ fn concrete_program_failed_always_removes_but_retains_previous_evidence() {
     let owner = OwnerV1::from_compiled(finite_program([[0x80; 3], [0xFF; 3]]));
     let mut session = owner.instantiate(11).unwrap();
     let failed = owner
-        .update(
+        .commit(
             &mut session,
             UpdateV1::Observed {
                 revision: 1,
@@ -1764,7 +1767,7 @@ fn concrete_program_failed_always_removes_but_retains_previous_evidence() {
     let owner = OwnerV1::from_compiled(finite_program([[0; 3], [0xFF; 3]]));
     let mut session = owner.instantiate(12).unwrap();
     let previous = owner
-        .update(
+        .commit(
             &mut session,
             UpdateV1::Observed {
                 revision: 1,
@@ -1780,7 +1783,7 @@ fn concrete_program_failed_always_removes_but_retains_previous_evidence() {
         .observation_backing_ptr_for_test();
     let both = [ScenarioV1::new(1, &white), ScenarioV1::new(2, &black)];
     let failed = owner
-        .update(
+        .commit(
             &mut session,
             UpdateV1::Observed {
                 revision: 2,
@@ -1824,7 +1827,7 @@ fn concrete_program_rejects_transport_shape_before_core_admission() {
     let mut session = owner.instantiate(11).unwrap();
     let empty_values = [];
     let malformed = [ScenarioV1::new(1, &empty_values)];
-    let error = match owner.update(
+    let error = match owner.commit(
         &mut session,
         UpdateV1::Observed {
             revision: 1,
@@ -1844,7 +1847,7 @@ fn concrete_program_rejects_transport_shape_before_core_admission() {
     let white = [Srgb8::new([0xFF; 3])];
     let valid = [ScenarioV1::new(1, &white)];
     owner
-        .update(
+        .commit(
             &mut session,
             UpdateV1::Observed {
                 revision: 2,
@@ -1853,7 +1856,7 @@ fn concrete_program_rejects_transport_shape_before_core_admission() {
         )
         .unwrap();
     let duplicate = [ScenarioV1::new(7, &white), ScenarioV1::new(7, &white)];
-    let error = match owner.update(
+    let error = match owner.commit(
         &mut session,
         UpdateV1::Observed {
             revision: 1,
@@ -1884,7 +1887,7 @@ fn same_content_foreign_owner_is_rejected_before_admission_without_work() {
     let observed = [ScenarioV1::new(1, &white)];
 
     owner_a
-        .update(
+        .commit(
             &mut session,
             UpdateV1::Observed {
                 revision: 1,
@@ -1918,7 +1921,7 @@ fn same_content_foreign_owner_is_rejected_before_admission_without_work() {
     let malformed = [ScenarioV1::new(2, &empty)];
     let (update_mismatch, update_allocations) = crate::test_support::measured_allocations(|| {
         matches!(
-            owner_b.update(
+            owner_b.commit(
                 std::hint::black_box(&mut session),
                 UpdateV1::Observed {
                     revision: 2,
@@ -1963,7 +1966,7 @@ fn raw_observation_head_preserves_unknown_reason_independently_of_lifecycle() {
     );
 
     owner
-        .update(
+        .commit(
             &mut session,
             UpdateV1::Unknown {
                 revision: 1,
@@ -1987,7 +1990,7 @@ fn raw_observation_head_preserves_unknown_reason_independently_of_lifecycle() {
 
     let mut other_session = owner.instantiate(29).unwrap();
     owner
-        .update(
+        .commit(
             &mut other_session,
             UpdateV1::Unknown {
                 revision: 1,
@@ -2001,7 +2004,7 @@ fn raw_observation_head_preserves_unknown_reason_independently_of_lifecycle() {
         "equal revision and reason on different streams are distinct raw evidence"
     );
 
-    let conflicting = match owner.update(
+    let conflicting = match owner.commit(
         &mut session,
         UpdateV1::Unknown {
             revision: 1,
@@ -2026,7 +2029,7 @@ fn copied_raw_heads_outlive_owner_and_session_without_losing_provenance() {
         let owner = OwnerV1::from_compiled(finite_program([[0x80; 3], [0; 3]]));
         let mut session = owner.instantiate(u32::MAX).unwrap();
         owner
-            .update(
+            .commit(
                 &mut session,
                 UpdateV1::Unknown {
                     revision: 1,
@@ -2039,7 +2042,7 @@ fn copied_raw_heads_outlive_owner_and_session_without_losing_provenance() {
         let white = [Srgb8::new([0xFF; 3])];
         let scenarios = [ScenarioV1::new(1, &white)];
         owner
-            .update(
+            .commit(
                 &mut session,
                 UpdateV1::Observed {
                     revision: u64::MAX,
@@ -2066,7 +2069,7 @@ fn expired_owner_preserves_historical_evidence_but_equivalent_owner_has_no_autho
     let white = [Srgb8::new([0xFF; 3])];
     let observed = [ScenarioV1::new(1, &white)];
     owner_a
-        .update(
+        .commit(
             &mut session,
             UpdateV1::Observed {
                 revision: 1,
@@ -2089,7 +2092,7 @@ fn expired_owner_preserves_historical_evidence_but_equivalent_owner_has_no_autho
         owner_b.project(&session),
         Err(AccessErrorV1::OwnerMismatch)
     ));
-    let mismatch = match owner_b.update(
+    let mismatch = match owner_b.commit(
         &mut session,
         UpdateV1::Unknown {
             revision: 2,
@@ -2121,7 +2124,7 @@ fn raw_head_and_evaluator_lifecycle_form_the_exact_reachable_product() {
     let opposing = [ScenarioV1::new(1, &white), ScenarioV1::new(2, &black)];
 
     owner
-        .update(
+        .commit(
             &mut session,
             UpdateV1::Unknown {
                 revision: 1,
@@ -2130,7 +2133,7 @@ fn raw_head_and_evaluator_lifecycle_form_the_exact_reachable_product() {
         )
         .unwrap();
     owner
-        .update(
+        .commit(
             &mut session,
             UpdateV1::Observed {
                 revision: 2,
@@ -2143,7 +2146,7 @@ fn raw_head_and_evaluator_lifecycle_form_the_exact_reachable_product() {
     assert_observed_head(ready.observation_head(), STREAM.value(), 2);
 
     owner
-        .update(
+        .commit(
             &mut session,
             UpdateV1::Observed {
                 revision: 3,
@@ -2163,7 +2166,7 @@ fn raw_head_and_evaluator_lifecycle_form_the_exact_reachable_product() {
     );
 
     owner
-        .update(
+        .commit(
             &mut session,
             UpdateV1::Unknown {
                 revision: 4,
@@ -2185,7 +2188,7 @@ fn raw_head_and_evaluator_lifecycle_form_the_exact_reachable_product() {
     let rejecting_owner = OwnerV1::from_compiled(finite_program([[0x80; 3], [0xFF; 3]]));
     let mut rejecting_session = rejecting_owner.instantiate(STREAM.value()).unwrap();
     rejecting_owner
-        .update(
+        .commit(
             &mut rejecting_session,
             UpdateV1::Observed {
                 revision: 1,
@@ -2195,7 +2198,7 @@ fn raw_head_and_evaluator_lifecycle_form_the_exact_reachable_product() {
         .unwrap();
     assert_eq!(rejecting_session.evidence().kind(), StateKindV1::Failed);
     rejecting_owner
-        .update(
+        .commit(
             &mut rejecting_session,
             UpdateV1::Unknown {
                 revision: 2,
@@ -2222,7 +2225,7 @@ fn failed_without_previous_removes_every_output_in_canonical_exact_order() {
     let white = [Srgb8::new([0xFF; 3])];
     let scenarios = [ScenarioV1::new(1, &white)];
     let failed = owner
-        .update(
+        .commit(
             &mut session,
             UpdateV1::Observed {
                 revision: 1,
@@ -2271,7 +2274,7 @@ fn ready_sets_and_stale_removes_every_output_in_the_same_canonical_order() {
 
     {
         let ready = owner
-            .update(
+            .commit(
                 &mut session,
                 UpdateV1::Observed {
                     revision: 1,
@@ -2292,7 +2295,7 @@ fn ready_sets_and_stale_removes_every_output_in_the_same_canonical_order() {
     }
 
     let stale = owner
-        .update(
+        .commit(
             &mut session,
             UpdateV1::Unknown {
                 revision: 2,
@@ -2329,6 +2332,7 @@ enum RejectedInput {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SessionAction {
     Admit(ModeledPayload),
+    PrepareDrop(ModeledPayload),
     Replay,
     OutOfOrder,
     ConflictingReplay,
@@ -2434,12 +2438,21 @@ fn apply_modeled_payload<'owner, 'session>(
     revision: u64,
     payload: ModeledPayload,
 ) -> Result<ProjectionV1<'owner, 'session>, UpdateErrorV1> {
+    prepare_modeled_payload(owner, session, revision, payload).map(|prepared| prepared.commit())
+}
+
+fn prepare_modeled_payload<'owner, 'session>(
+    owner: &'owner OwnerV1,
+    session: &'session mut SessionV1,
+    revision: u64,
+    payload: ModeledPayload,
+) -> Result<PreparedSessionTransitionV1<'owner, 'session>, UpdateErrorV1> {
     let white = [Srgb8::new([0xFF; 3])];
     let black = [Srgb8::new([0; 3])];
     match payload {
         ModeledPayload::ReadyOnWhite => {
             let scenarios = [ScenarioV1::new(1, &white)];
-            owner.update(
+            owner.prepare_update(
                 session,
                 UpdateV1::Observed {
                     revision,
@@ -2449,7 +2462,7 @@ fn apply_modeled_payload<'owner, 'session>(
         }
         ModeledPayload::ReadyOnBlack => {
             let scenarios = [ScenarioV1::new(1, &black)];
-            owner.update(
+            owner.prepare_update(
                 session,
                 UpdateV1::Observed {
                     revision,
@@ -2459,7 +2472,7 @@ fn apply_modeled_payload<'owner, 'session>(
         }
         ModeledPayload::Conflict => {
             let scenarios = [ScenarioV1::new(1, &white), ScenarioV1::new(2, &black)];
-            owner.update(
+            owner.prepare_update(
                 session,
                 UpdateV1::Observed {
                     revision,
@@ -2467,7 +2480,7 @@ fn apply_modeled_payload<'owner, 'session>(
                 },
             )
         }
-        ModeledPayload::Unknown(reason_id) => owner.update(
+        ModeledPayload::Unknown(reason_id) => owner.prepare_update(
             session,
             UpdateV1::Unknown {
                 revision,
@@ -2625,18 +2638,40 @@ fn exercise_modeled_action(
     let evaluator_must_run = match action {
         SessionAction::Admit(payload) => {
             let revision = model.next_revision();
-            let projection = apply_modeled_payload(owner, session, revision, payload)
+            let prepared = prepare_modeled_payload(owner, session, revision, payload)
                 .map_err(|error| TestCaseError::fail(format!("fresh update failed: {error:?}")))?;
+            let (projection, commit_allocations) =
+                crate::test_support::measured_allocations(|| prepared.commit());
+            prop_assert_eq!(
+                commit_allocations,
+                0,
+                "every fresh lifecycle commit must be allocation-free: {:?}",
+                payload,
+            );
             model.admit(revision, payload);
             assert_projection_matches_model(projection, *model)?;
             !matches!(payload, ModeledPayload::Unknown(_))
         }
+        SessionAction::PrepareDrop(payload) => {
+            let revision = model.next_revision();
+            let prepared = prepare_modeled_payload(owner, session, revision, payload)
+                .map_err(|error| TestCaseError::fail(format!("fresh prepare failed: {error:?}")))?;
+            drop(prepared);
+            !matches!(payload, ModeledPayload::Unknown(_))
+        }
         SessionAction::Replay => {
             if let Some((revision, payload)) = model.head {
-                let projection =
-                    apply_modeled_payload(owner, session, revision, payload).map_err(|error| {
-                        TestCaseError::fail(format!("exact replay failed: {error:?}"))
-                    })?;
+                let prepared = prepare_modeled_payload(owner, session, revision, payload).map_err(
+                    |error| TestCaseError::fail(format!("exact replay failed: {error:?}")),
+                )?;
+                let (projection, commit_allocations) =
+                    crate::test_support::measured_allocations(|| prepared.commit());
+                prop_assert_eq!(
+                    commit_allocations,
+                    0,
+                    "every idempotent lifecycle commit must be allocation-free: {:?}",
+                    payload,
+                );
                 assert_projection_matches_model(projection, *model)?;
             }
             false
@@ -2687,7 +2722,7 @@ fn exercise_modeled_action(
             let error = match rejected {
                 RejectedInput::EmptyScenarios => {
                     let scenarios = [];
-                    owner.update(
+                    owner.commit(
                         session,
                         UpdateV1::Observed {
                             revision,
@@ -2698,7 +2733,7 @@ fn exercise_modeled_action(
                 RejectedInput::DuplicateScenario => {
                     let white = [Srgb8::new([0xFF; 3])];
                     let scenarios = [ScenarioV1::new(7, &white), ScenarioV1::new(7, &white)];
-                    owner.update(
+                    owner.commit(
                         session,
                         UpdateV1::Observed {
                             revision,
@@ -2709,7 +2744,7 @@ fn exercise_modeled_action(
                 RejectedInput::MissingSurfaceValue => {
                     let empty = [];
                     let scenarios = [ScenarioV1::new(9, &empty)];
-                    owner.update(
+                    owner.commit(
                         session,
                         UpdateV1::Observed {
                             revision,
@@ -2802,6 +2837,12 @@ fn session_action_strategy() -> impl Strategy<Value = SessionAction> {
         Just(SessionAction::Reject(RejectedInput::DuplicateScenario)),
         Just(SessionAction::Reject(RejectedInput::MissingSurfaceValue)),
     ];
+    let prepare_drop = prop_oneof![
+        Just(SessionAction::PrepareDrop(ModeledPayload::ReadyOnWhite)),
+        Just(SessionAction::PrepareDrop(ModeledPayload::ReadyOnBlack)),
+        Just(SessionAction::PrepareDrop(ModeledPayload::Conflict)),
+        any::<u32>().prop_map(|reason| SessionAction::PrepareDrop(ModeledPayload::Unknown(reason))),
+    ];
     // Balance behavioral classes; nested strategies still cover every payload
     // and rejected-input variant without over-weighting Admit.
     prop_oneof![
@@ -2810,6 +2851,7 @@ fn session_action_strategy() -> impl Strategy<Value = SessionAction> {
         1 => Just(SessionAction::OutOfOrder),
         1 => Just(SessionAction::ConflictingReplay),
         1 => reject,
+        1 => prepare_drop,
     ]
 }
 
@@ -2818,13 +2860,16 @@ fn hostile_session_corpus_covers_every_lifecycle_recovery_and_rejection_class() 
     // Coverage is separate from generated input so shrinking cannot hide the
     // real initial-state paths behind a state-preparing prefix.
     let actions = [
+        SessionAction::PrepareDrop(ModeledPayload::Conflict),
         SessionAction::Admit(ModeledPayload::Conflict),
+        SessionAction::PrepareDrop(ModeledPayload::Unknown(0xA11C_D001)),
         SessionAction::Admit(ModeledPayload::Unknown(0xA11C_E001)),
         SessionAction::Admit(ModeledPayload::ReadyOnWhite),
         SessionAction::Replay,
         SessionAction::Admit(ModeledPayload::Unknown(0xA11C_E002)),
         SessionAction::Admit(ModeledPayload::Conflict),
         SessionAction::Admit(ModeledPayload::ReadyOnBlack),
+        SessionAction::PrepareDrop(ModeledPayload::ReadyOnWhite),
         SessionAction::OutOfOrder,
         SessionAction::ConflictingReplay,
         SessionAction::Reject(RejectedInput::EmptyScenarios),

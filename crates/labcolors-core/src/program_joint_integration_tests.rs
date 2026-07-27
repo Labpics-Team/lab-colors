@@ -27,6 +27,7 @@ use crate::program_session::{
     fail_program_preflight_reservation_for_test,
 };
 use crate::session::{SessionState, SessionUpdateError};
+use crate::session_tests::CommitSessionUpdateForTest as _;
 use crate::wcag22::Wcag22CriterionV1;
 
 const SOURCE: SourceId = SourceId::new(1);
@@ -860,7 +861,7 @@ fn candidate_passing_one_hard_cell_and_failing_another_is_never_certified() {
     .unwrap();
     let mut session = compiled.instantiate(STREAM).unwrap();
 
-    let SessionState::Ready { current } = session.update(update(1, 0x00)).unwrap() else {
+    let SessionState::Ready { current } = session.commit(update(1, 0x00)).unwrap() else {
         panic!("the later all-hard-feasible candidate must be selected");
     };
     assert_eq!(current.selected_state_index(), Some(1));
@@ -896,7 +897,7 @@ fn report_only_violation_is_retained_but_does_not_select() {
     .unwrap();
     let mut session = compiled.instantiate(STREAM).unwrap();
 
-    let SessionState::Ready { current } = session.update(update(1, 0x00)).unwrap() else {
+    let SessionState::Ready { current } = session.commit(update(1, 0x00)).unwrap() else {
         panic!("report-only failure must not reject the first hard-feasible state");
     };
     assert_eq!(current.selected_state_index(), Some(0));
@@ -925,7 +926,7 @@ fn report_only_assessment_admits_output_but_cannot_override_explicit_selection_o
     .unwrap();
     let mut session = compiled.instantiate(STREAM).unwrap();
 
-    let SessionState::Ready { current } = session.update(update(1, 0x00)).unwrap() else {
+    let SessionState::Ready { current } = session.commit(update(1, 0x00)).unwrap() else {
         panic!("report-only assessment must not create hard infeasibility");
     };
     assert_eq!(current.selected_state_index(), Some(0));
@@ -950,12 +951,12 @@ fn no_feasible_joint_state_commits_no_output_and_retains_previous_certificate() 
     .unwrap();
     let mut session = compiled.instantiate(STREAM).unwrap();
 
-    let SessionState::Ready { current } = session.update(update(1, 0x00)).unwrap() else {
+    let SessionState::Ready { current } = session.commit(update(1, 0x00)).unwrap() else {
         panic!("control update must certify the first state");
     };
     assert_eq!(current.outputs()[0].source_signal(), signal(0xAA));
 
-    let SessionState::Failed { cause, previous } = session.update(update(2, 0xFF)).unwrap() else {
+    let SessionState::Failed { cause, previous } = session.commit(update(2, 0xFF)).unwrap() else {
         panic!("all-hard-infeasible domain must become Conflict/Failed");
     };
     assert_eq!(cause.considered_state_count(), 2);
@@ -994,12 +995,12 @@ fn candidate_declaration_permutation_preserves_explicit_physical_order() {
     let mut first_session = first.instantiate(STREAM).unwrap();
     let mut reversed_session = reversed.instantiate(STREAM).unwrap();
 
-    let SessionState::Ready { current: first } = first_session.update(update(1, 0x00)).unwrap()
+    let SessionState::Ready { current: first } = first_session.commit(update(1, 0x00)).unwrap()
     else {
         panic!("first program must certify");
     };
     let SessionState::Ready { current: reversed } =
-        reversed_session.update(update(1, 0x00)).unwrap()
+        reversed_session.commit(update(1, 0x00)).unwrap()
     else {
         panic!("permuted program must certify");
     };
@@ -1017,7 +1018,7 @@ fn nested_two_target_selection_ignores_target_and_choice_declaration_order() {
             .compile()
             .unwrap();
         let mut session = compiled.instantiate(STREAM).unwrap();
-        let SessionState::Ready { current } = session.update(update(1, 0x00)).unwrap() else {
+        let SessionState::Ready { current } = session.commit(update(1, 0x00)).unwrap() else {
             panic!("the second explicitly ordered joint tuple must certify");
         };
         (
@@ -1070,7 +1071,7 @@ fn bijective_source_target_and_candidate_renaming_preserves_joint_evidence() {
     let run = |program: Program<Wcag22Srgb8V1>| {
         let compiled = program.compile().unwrap();
         let mut session = compiled.instantiate(STREAM).unwrap();
-        let SessionState::Ready { current } = session.update(update(1, 0x00)).unwrap() else {
+        let SessionState::Ready { current } = session.commit(update(1, 0x00)).unwrap() else {
             panic!("the second logical state must certify after the first is rejected");
         };
         assert_eq!(current.selected_state_index(), Some(1));
@@ -1173,7 +1174,7 @@ fn rejected_state_runs_once_and_selected_state_runs_fresh_recheck_twice() {
     .unwrap();
     let mut session = compiled.instantiate(STREAM).unwrap();
 
-    let SessionState::Ready { current } = session.update(update(1, 0x00)).unwrap() else {
+    let SessionState::Ready { current } = session.commit(update(1, 0x00)).unwrap() else {
         panic!("the second candidate must certify after a fresh full recheck");
     };
     assert_eq!(current.selected_state_index(), Some(1));
@@ -1216,7 +1217,7 @@ fn report_evaluator_error_cannot_poison_candidate_search_or_change_selection() {
     .unwrap();
     let mut session = compiled.instantiate(STREAM).unwrap();
 
-    let SessionState::Ready { current } = session.update(update(1, 0x00)).unwrap() else {
+    let SessionState::Ready { current } = session.commit(update(1, 0x00)).unwrap() else {
         panic!("diagnostics without selection authority cannot poison hard candidate search");
     };
     assert_eq!(current.selected_state_index(), Some(1));
@@ -1264,7 +1265,7 @@ fn hard_conflict_runs_report_only_once_in_the_exhaustive_full_pass() {
     .unwrap();
     let mut session = compiled.instantiate(STREAM).unwrap();
 
-    let SessionState::Failed { cause, previous } = session.update(update(1, 0xFF)).unwrap() else {
+    let SessionState::Failed { cause, previous } = session.commit(update(1, 0xFF)).unwrap() else {
         panic!("both states must fail the hard large-text criterion on white");
     };
     assert!(previous.is_none());
@@ -1303,7 +1304,7 @@ fn fixed_program_without_finite_targets_executes_one_complete_evidence_pass() {
     .unwrap();
     let mut session = compiled.instantiate(STREAM).unwrap();
 
-    let SessionState::Ready { current } = session.update(update(1, 0x00)).unwrap() else {
+    let SessionState::Ready { current } = session.commit(update(1, 0x00)).unwrap() else {
         panic!("a fixed Program must retain diagnostics in its sole complete pass");
     };
     assert_eq!(current.selected_state_index(), None);
@@ -1338,7 +1339,7 @@ fn fixed_hard_conflict_still_collects_report_only_evidence() {
     .unwrap();
     let mut session = compiled.instantiate(STREAM).unwrap();
 
-    let SessionState::Failed { cause, previous } = session.update(update(1, 0xFF)).unwrap() else {
+    let SessionState::Failed { cause, previous } = session.commit(update(1, 0xFF)).unwrap() else {
         panic!("a fixed hard conflict must retain its complete diagnostic report");
     };
     assert!(previous.is_none());
@@ -1393,7 +1394,7 @@ fn exhaustive_conflict_freezes_every_state_case_hard_cell_before_any_diagnostic(
     let mut session = compiled.instantiate(STREAM).unwrap();
 
     let SessionState::Failed { cause, previous } =
-        session.update(update_cases(1, &[0x00, 0xFF])).unwrap()
+        session.commit(update_cases(1, &[0x00, 0xFF])).unwrap()
     else {
         panic!("diagnostics cannot poison hard evidence in a later case or state");
     };
@@ -1452,12 +1453,12 @@ fn successful_search_allocations_do_not_scale_with_rejected_states() {
     let mut rejected_session = after_rejection.instantiate(STREAM).unwrap();
 
     let (_, direct_allocations) = crate::test_support::measured_allocations(|| {
-        let SessionState::Ready { .. } = direct_session.update(update(1, 0x00)).unwrap() else {
+        let SessionState::Ready { .. } = direct_session.commit(update(1, 0x00)).unwrap() else {
             panic!("direct candidate must certify");
         };
     });
     let (_, rejected_allocations) = crate::test_support::measured_allocations(|| {
-        let SessionState::Ready { current } = rejected_session.update(update(1, 0x00)).unwrap()
+        let SessionState::Ready { current } = rejected_session.commit(update(1, 0x00)).unwrap()
         else {
             panic!("later candidate must certify");
         };
@@ -1533,7 +1534,7 @@ fn every_fallible_joint_preflight_reservation_precedes_evaluator_work() {
 
         let result = {
             let _failure = fail_program_preflight_reservation_for_test(reservation_index);
-            session.update(update(1, 0x00))
+            session.commit(update(1, 0x00))
         };
         if reservation_index == FIRST_UNUSED_RESERVATION_INDEX {
             assert!(
@@ -1600,7 +1601,7 @@ fn every_fallible_fixed_preflight_reservation_precedes_evaluator_work() {
 
         let result = {
             let _failure = fail_program_preflight_reservation_for_test(reservation_index);
-            session.update(update(1, 0x00))
+            session.commit(update(1, 0x00))
         };
         if reservation_index == FIRST_UNUSED_RESERVATION_INDEX {
             assert!(
@@ -1669,7 +1670,7 @@ fn expired_program_generation_precedes_composition_and_evaluation_without_alloca
     let mut session = compiled.instantiate(STREAM).unwrap();
 
     crate::composition::reset_source_over_evaluation_count();
-    let SessionState::Ready { current } = session.update(update(1, 0x00)).unwrap() else {
+    let SessionState::Ready { current } = session.commit(update(1, 0x00)).unwrap() else {
         panic!("control generation must certify");
     };
     assert_eq!(current.report().observation().revision(), Revision::new(1));
@@ -1679,7 +1680,7 @@ fn expired_program_generation_precedes_composition_and_evaluation_without_alloca
     drop(compiled);
     let expired_update = update(2, 0x00);
     let (error, allocations) = crate::test_support::measured_allocations(|| {
-        session.update(expired_update).map(|_| ()).unwrap_err()
+        session.commit(expired_update).map(|_| ()).unwrap_err()
     });
     assert_eq!(error, SessionUpdateError::OwnerExpired);
     assert_eq!(allocations, 0);
@@ -1699,7 +1700,7 @@ fn equivalent_recompiled_owner_is_a_new_generation_and_cannot_revive_old_session
     let mut compiled = counting_fixed_program(first_evaluator);
     let first_content_identity = compiled.content_identity();
     let mut old_session = compiled.instantiate(STREAM).unwrap();
-    let SessionState::Ready { current } = old_session.update(update(1, 0x00)).unwrap() else {
+    let SessionState::Ready { current } = old_session.commit(update(1, 0x00)).unwrap() else {
         panic!("the first owner must certify its admitted input");
     };
     assert_eq!(current.report().content_identity(), first_content_identity);
@@ -1709,7 +1710,7 @@ fn equivalent_recompiled_owner_is_a_new_generation_and_cannot_revive_old_session
     compiled = counting_fixed_program(replacement_evaluator);
     assert_eq!(compiled.content_identity(), first_content_identity);
     assert!(matches!(
-        old_session.update(update(2, 0x00)),
+        old_session.commit(update(2, 0x00)),
         Err(SessionUpdateError::OwnerExpired),
     ));
     assert_eq!(first_calls.calls().len(), 1);
@@ -1718,7 +1719,7 @@ fn equivalent_recompiled_owner_is_a_new_generation_and_cannot_revive_old_session
 
     let mut replacement_session = compiled.instantiate(STREAM).unwrap();
     assert!(matches!(
-        replacement_session.update(update(1, 0x00)).unwrap(),
+        replacement_session.commit(update(1, 0x00)).unwrap(),
         SessionState::Ready { .. }
     ));
     assert_eq!(replacement_calls.calls().len(), 1);
@@ -1754,11 +1755,11 @@ fn lower_id_diagnostic_cannot_consume_the_selected_state_final_recheck() {
     let mut session = compiled.instantiate(STREAM).unwrap();
 
     assert!(matches!(
-        session.update(update(1, 0x00)).unwrap(),
+        session.commit(update(1, 0x00)).unwrap(),
         SessionState::Ready { .. }
     ));
     control.arm();
-    let error = match session.update(update(2, 0x00)) {
+    let error = match session.commit(update(2, 0x00)) {
         Ok(_) => panic!("a lower-ID diagnostic must not consume the hard final recheck"),
         Err(error) => error,
     };
@@ -1802,7 +1803,7 @@ fn diagnostic_error_cannot_mask_a_selected_state_final_recheck_violation() {
     .unwrap();
     let mut session = compiled.instantiate(STREAM).unwrap();
 
-    let error = match session.update(update(1, 0x00)) {
+    let error = match session.commit(update(1, 0x00)) {
         Ok(_) => panic!("a diagnostic error must not mask the hard final-recheck verdict"),
         Err(error) => error,
     };
@@ -1862,13 +1863,13 @@ fn final_recheck_violation_is_typed_and_retains_the_previous_certificate() {
     .unwrap();
     let mut session = compiled.instantiate(STREAM).unwrap();
 
-    let SessionState::Ready { current } = session.update(update(1, 0x00)).unwrap() else {
+    let SessionState::Ready { current } = session.commit(update(1, 0x00)).unwrap() else {
         panic!("control revision must certify before the mutant is armed");
     };
     assert_eq!(current.outputs()[0].source_signal(), signal(0xFF));
 
     control.arm();
-    let error = match session.update(update(2, 0x00)) {
+    let error = match session.commit(update(2, 0x00)) {
         Ok(_) => panic!("a failing final recheck must not commit"),
         Err(error) => error,
     };
