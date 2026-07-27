@@ -154,11 +154,11 @@ pub(crate) enum PointSinkIntentV1<'a, SinkOutputId, Stamp> {
 /// scope одной атомарной публикацией. Любой отказ сохраняет прежние наблюдаемые
 /// scope→value snapshot, revision и равный по [`Eq`] Stamp.
 pub(crate) trait PreparedPointSinkWriteV1 {
-    type Stamp: Clone + Eq;
+    type Stamp: Copy + Eq;
     type Error;
 
     /// Stamp точного снимка, который опубликует успешный install.
-    fn proposed_stamp(&self) -> &Self::Stamp;
+    fn proposed_stamp(&self) -> Self::Stamp;
 
     /// Единственная fallible-операция после parsing, allocations и CAS setup.
     ///
@@ -179,7 +179,7 @@ pub(crate) trait PreparedPointSinkWriteV1 {
 /// Линейное владение одним точным физическим point-sink scope.
 pub(crate) trait LinearPointSinkLeaseV1: sink_private::Sealed {
     type OutputId: Copy + Eq;
-    type Stamp: Clone + Eq;
+    type Stamp: Copy + Eq;
     type Error;
     type Prepared<'lease>: PreparedPointSinkWriteV1<Stamp = Self::Stamp, Error = Self::Error>
     where
@@ -511,9 +511,6 @@ where
     committed_render_patch: Vec<AttachedRenderPatchEntryV1<L::OutputId>>,
     scratch_render_patch: Vec<AttachedRenderPatchEntryV1<L::OutputId>>,
     published_stamp: Option<PublishedAttachmentStampV1<L::Stamp>>,
-    // Прошлый control block переносится сюда после install и освобождается до
-    // следующей транзакции, но не в infallible commit tail.
-    retired_stamp: Option<PublishedAttachmentStampV1<L::Stamp>>,
     // Вытеснённые Session evidence и transaction owner после install только
     // переносятся сюда и освобождаются до следующего prepare.
     retired_session: Option<CoreDeferredSessionRetirementV1>,
@@ -788,7 +785,6 @@ where
             committed_render_patch,
             scratch_render_patch,
             published_stamp: None,
-            retired_stamp: None,
             retired_session: None,
             _owner_pin: owner_pin,
         })
@@ -797,7 +793,6 @@ where
     /// Готовит, атомарно устанавливает и infallibly публикует целый update.
     pub(crate) fn update(&mut self, update: UpdateV1<'_>) -> AttachmentUpdateResultV1<'_, L> {
         drop(self.retired_session.take());
-        drop(self.retired_stamp.take());
         let transition = self
             .session
             .prepare_update(update)
@@ -869,13 +864,13 @@ where
             PreparedAttachmentUpdateV1::new(transition, sink_prepared);
         let next_stamp = PublishedAttachmentStampV1 {
             revision: action.revision(),
-            sink: prepared.proposed_stamp().clone(),
+            sink: prepared.proposed_stamp(),
         };
         if matches!(&action, PreparedPatchActionV1::ConfirmExact { .. }) {
             let expected = confirmed_stamp.ok_or(AttachmentUpdateErrorV1::InternalInvariant(
                 AttachmentInvariantV1::MissingPublishedStamp,
             ))?;
-            if &next_stamp.sink != expected {
+            if next_stamp.sink != *expected {
                 return Err(AttachmentUpdateErrorV1::InternalInvariant(
                     AttachmentInvariantV1::ConfirmStampMismatch,
                 ));
@@ -899,8 +894,6 @@ where
             }
             PreparedPatchActionV1::ConfirmExact { .. } => {}
         }
-        let previous_stamp = self.published_stamp.take();
-        self.retired_stamp = previous_stamp;
         let published_stamp = self.published_stamp.insert(next_stamp);
         installed_sink.finish_after_session();
 
@@ -1004,7 +997,7 @@ where
         Self { transition, sink }
     }
 
-    fn proposed_stamp(&self) -> &L::Stamp {
+    fn proposed_stamp(&self) -> L::Stamp {
         self.sink.proposed_stamp()
     }
 

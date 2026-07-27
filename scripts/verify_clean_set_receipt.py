@@ -77,6 +77,7 @@ PRODUCT_ARTIFACT_PATHS = {
     "joint_selection_source": "crates/labcolors-core/src/joint.rs",
     "module_registration_source": "crates/labcolors-core/src/lib.rs",
     "observation_runtime_source": "crates/labcolors-core/src/observation.rs",
+    "point_attachment_allocator_oracle": "crates/labcolors-core/src/test_support.rs",
     "point_attachment_source": "crates/labcolors-core/src/program/attachment.rs",
     "point_attachment_test_support": "crates/labcolors-core/src/program/attachment/support.rs",
     "point_attachment_tests": "crates/labcolors-core/src/program/attachment/tests.rs",

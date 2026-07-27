@@ -62,25 +62,32 @@
       "sha256": "90e2ca62acac950fc38e711369a9fd3ef24262f7776f1e8ed2aeac92733a4911"
     },
     {
-      "bytes": 38023,
+      "bytes": 7951,
+      "license": "MIT",
+      "path": "crates/labcolors-core/src/test_support.rs",
+      "role": "point_attachment_allocator_oracle",
+      "sha256": "ec6585496208972e183d3a5bcd1f67bae4d89cc8e6a797d9c6443d8e0754502b"
+    },
+    {
+      "bytes": 37562,
       "license": "MIT",
       "path": "crates/labcolors-core/src/program/attachment.rs",
       "role": "point_attachment_source",
-      "sha256": "ea0774ed2719c4a5642ddf053b8fcb60ad10ee056b102b26e5884ab57febbe71"
+      "sha256": "b1bb2f4c25e748ba7c3711454e968bca24ed934f18f00ccdca4a1a2c572bceb7"
     },
     {
-      "bytes": 17072,
+      "bytes": 17406,
       "license": "MIT",
       "path": "crates/labcolors-core/src/program/attachment/support.rs",
       "role": "point_attachment_test_support",
-      "sha256": "21afe869e4b0e9abacb266ee92dea893a98c48f7da4f58a352ab5b8caca8f231"
+      "sha256": "df2350e853302ffb636abf01d7c1301331fc76f4708ca00d076ea91dac0b14bb"
     },
     {
-      "bytes": 28964,
+      "bytes": 31748,
       "license": "MIT",
       "path": "crates/labcolors-core/src/program/attachment/tests.rs",
       "role": "point_attachment_tests",
-      "sha256": "d52f10afab0765e3cfced403b32e9c1294bed152b8f3f6b831c972da90b4f2e2"
+      "sha256": "6ea55c62333a803929fd4b96245362148a555ca2ac5261721a6fad6de9bf7eac"
     },
     {
       "bytes": 162073,
@@ -139,18 +146,18 @@
       "sha256": "6c95324eb05476f35f75375a9af0b2b4a41b8b2978c46e67d2ce1aea5adde342"
     },
     {
-      "bytes": 39567,
+      "bytes": 39653,
       "license": "MIT",
       "path": "scripts/verify_clean_set_receipt.py",
       "role": "verifier_source",
-      "sha256": "6e07ec6d9d72e5cfe084773b27e45cf6ea7df8c98eca860d19f8646a893afd62"
+      "sha256": "1fe3cb719f883b7968bf05bbf613353235445e55ad7942bb7f8a83145cb97b09"
     },
     {
-      "bytes": 31977,
+      "bytes": 32018,
       "license": "MIT",
       "path": "scripts/test_verify_clean_set_receipt.py",
       "role": "verifier_tests",
-      "sha256": "0c54a269c5412baf24f393c6d38a695ad0143d7d1e62fdf0ce8da2a15132dbcd"
+      "sha256": "337fe7585aa44359c2a90655fafbd0b4fbbd4fdf8bd30a9735df6640010d9e29"
     }
   ],
   "excluded_claims": [
