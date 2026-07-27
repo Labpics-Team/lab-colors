@@ -493,7 +493,7 @@ where
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum AttachmentInvariantV1 {
     EmptyIdempotentHead,
-    MissingPublishedStamp,
+    MissingCommittedRevision,
     PublishedRevisionMismatch,
     OutputCountMismatch,
     OutputIdentityMismatch,
@@ -571,18 +571,11 @@ impl PreparedPatchActionV1 {
     }
 }
 
-/// Borrowed exact stamp снимка, принадлежащего одному Attachment.
+/// Компактное заимствованное представление exact stamp одного Attachment.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct AttachedPublishedStampV1<'a> {
     revision: u64,
     sink: &'a PointSinkStampV1,
-}
-
-impl Copy for AttachedPublishedStampV1<'_> {}
-
-impl Clone for AttachedPublishedStampV1<'_> {
-    fn clone(&self) -> Self {
-        *self
-    }
 }
 
 impl<'a> AttachedPublishedStampV1<'a> {
@@ -590,8 +583,8 @@ impl<'a> AttachedPublishedStampV1<'a> {
         self.revision
     }
 
-    pub(crate) const fn sink_stamp(self) -> &'a PointSinkStampV1 {
-        self.sink
+    pub(crate) const fn sink_stamp(self) -> PointSinkStampV1 {
+        *self.sink
     }
 }
 
@@ -785,9 +778,22 @@ impl OwnerV1 {
                 return Err(AttachmentCreateFailureV1::sink_admission(cause, sink));
             }
         };
-        // Admission был последней fallible-операцией: ниже только Copy/moves.
+        // Возвращаемый `Self`, а не `Result`, типом закрывает fallible-границу.
+        Ok(Attachment::from_closed_admission(prepared, admission))
+    }
+}
+
+impl<L> Attachment<L>
+where
+    L: ClosedPointSinkLeaseV1,
+{
+    fn from_closed_admission(
+        prepared: PreparedAttachmentColdV1<L::OutputId>,
+        admission: ClosedPointSinkAdmissionV1<L>,
+    ) -> Self {
+        // POST_ADMISSION_TAIL_START_V1
         let (sink, initial_sink_stamp) = admission.into_parts();
-        Ok(Attachment {
+        let attachment = Self {
             sink,
             session: prepared.session,
             emissions: prepared.emissions,
@@ -800,7 +806,9 @@ impl OwnerV1 {
             committed_revision: None,
             retired_session: None,
             _owner_pin: prepared.owner_pin,
-        })
+        };
+        // POST_ADMISSION_TAIL_END_V1
+        attachment
     }
 }
 
@@ -1040,7 +1048,7 @@ where
                 let published_revision =
                     self.committed_revision
                         .ok_or(AttachmentUpdateErrorV1::InternalInvariant(
-                            AttachmentInvariantV1::MissingPublishedStamp,
+                            AttachmentInvariantV1::MissingCommittedRevision,
                         ))?;
                 if published_revision != *revision {
                     return Err(AttachmentUpdateErrorV1::InternalInvariant(

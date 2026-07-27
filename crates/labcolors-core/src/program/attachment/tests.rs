@@ -295,6 +295,8 @@ fn every_host_binding_axis_is_checked_before_sink_mutation() {
             attachment.session.evidence().observation_head(),
             super::super::ObservationHeadV1::Empty
         ));
+        // Generation монотонна: восстановление сырых host-фактов не может
+        // воскресить полномочие уже привязанного closed lease.
         probe.restore_host_binding();
         let restored_facts_stamp = probe.stamp();
         assert_ne!(restored_facts_stamp, drifted_stamp, "axis {axis:?}");
@@ -514,7 +516,7 @@ fn closed_revoke_is_confirmable_from_one_expected_stamp_source_of_truth() {
     let committed = attachment.update(observed(2, &scenarios)).unwrap();
     let output = committed.render_outputs().next().unwrap();
     assert_eq!(output.published_stamp().revision(), 2);
-    assert_eq!(*output.published_stamp().sink_stamp(), probe.stamp());
+    assert_eq!(output.published_stamp().sink_stamp(), probe.stamp());
     assert_eq!(attachment.committed_revision, Some(2));
 }
 
@@ -527,7 +529,7 @@ enum ModelSnapshotV1 {
 proptest! {
     #[test]
     fn admitted_state_machine_never_exposes_ambient_fallback(
-        actions in prop::collection::vec(0_u8..12, 0..64),
+        actions in prop::collection::vec(0_u8..11, 0..64),
     ) {
         let owner = owner(
             Srgb8::new([12, 34, 56]),
@@ -607,17 +609,27 @@ proptest! {
                         ))
                     ));
                 }
-                4 if revision != 0 => match model {
-                    ModelSnapshotV1::Closed => {
+                4 => {
+                    if revision == 0 {
+                        revision = 1;
                         attachment.update(UpdateV1::Unknown {
                             revision,
                             reason_id: 77,
                         }).unwrap();
+                        model = ModelSnapshotV1::Closed;
                     }
-                    ModelSnapshotV1::Published => {
-                        attachment.update(observed(revision, &scenarios)).unwrap();
+                    match model {
+                        ModelSnapshotV1::Closed => {
+                            attachment.update(UpdateV1::Unknown {
+                                revision,
+                                reason_id: 77,
+                            }).unwrap();
+                        }
+                        ModelSnapshotV1::Published => {
+                            attachment.update(observed(revision, &scenarios)).unwrap();
+                        }
                     }
-                },
+                }
                 5..=10 => {
                     let axis = match action {
                         5 => TestHostBindingAxisV1::Realm,
@@ -640,7 +652,7 @@ proptest! {
                     ));
                     binding_valid = false;
                 }
-                _ => {}
+                _ => unreachable!("стратегия генерирует только действия 0..=10"),
             }
 
             prop_assert!(!probe.ambient_fallback_is_exposed());
@@ -1286,17 +1298,34 @@ fn source_guards_keep_the_post_install_tail_destructor_free() {
         .find("sink.try_admit_closed(permit)")
         .expect("Attachment must cross one closed admission seam");
     assert!(cold_prepare < admission);
-    let post_admission = attachment_source
-        .split("// Admission был последней fallible-операцией")
+    let post_admission_function = attachment_source
+        .split("fn from_closed_admission(")
         .nth(1)
-        .expect("post-admission infallible tail marker must exist")
-        .split("impl<SinkOutputId> PreparedAttachmentColdV1")
+        .expect("post-admission построение должно иметь отдельную типизированную функцию");
+    let post_admission_signature = post_admission_function
+        .split("// POST_ADMISSION_TAIL_START_V1")
         .next()
-        .expect("cold preparation implementation must follow Owner attach");
-    for forbidden in ["?", "try_reserve", ".map_err", ".instantiate(", "drop("] {
+        .expect("маркер начала post-admission tail должен следовать после сигнатуры");
+    assert!(post_admission_signature.contains("-> Self"));
+    let post_admission = post_admission_function
+        .split("// POST_ADMISSION_TAIL_START_V1")
+        .nth(1)
+        .expect("маркер начала post-admission tail обязателен")
+        .split("// POST_ADMISSION_TAIL_END_V1")
+        .next()
+        .expect("маркер конца post-admission tail обязателен");
+    for forbidden in [
+        "try_reserve",
+        ".map_err",
+        ".instantiate(",
+        ".unwrap(",
+        ".expect(",
+        "panic!",
+        "drop(",
+    ] {
         assert!(
             !post_admission.contains(forbidden),
-            "post-admission construction contains fallible/destructive work: {forbidden}",
+            "post-admission построение содержит fallible/destructive operation: {forbidden}",
         );
     }
     assert!(post_admission.contains("admission.into_parts()"));
