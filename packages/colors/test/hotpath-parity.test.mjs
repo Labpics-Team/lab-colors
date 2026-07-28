@@ -20,10 +20,21 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { adaptTheme } from "../adapt-theme.js";
 import * as ebg from "../effective-bg.js";
+import { buildMissRing, rustCacheCapacity } from "../bench/misses.mjs";
+import {
+  benchmarkOccurrencesFromRoles,
+  materializeOccurrences,
+} from "../bench/occurrences.mjs";
+import { __over, initSync, LabColors } from "../pkg/labcolors.js";
 
 const { oklabLerp } = ebg;
+
+initSync({
+  module: new WebAssembly.Module(readFileSync(new URL("../pkg/labcolors_bg.wasm", import.meta.url))),
+});
 
 // ── deterministic mini-harness (small, self-contained hot-path replay) ───────
 
@@ -35,6 +46,8 @@ const TL_COUNT = 4;
 const hex2 = (n) => n.toString(16).padStart(2, "0");
 const toneHex = (t) => `#${hex2(t & 0xff)}${hex2((t * 3) & 0xff)}${hex2((t * 7) & 0xff)}`.toUpperCase();
 const bgTone = (bg) => parseInt(bg.slice(1, 3), 16);
+const pack = (hex) => Number.parseInt(hex.slice(1), 16) >>> 0;
+const unpack = (word) => `#${word.toString(16).padStart(6, "0").toUpperCase()}`;
 
 const fnv1a = (h, str) => {
   for (let i = 0; i < str.length; i++) {
@@ -91,8 +104,18 @@ function makeStubEngine() {
       }
       for (let i = 0; i < TL_COUNT; i++) {
         const cssVar = `--lab-tl-${i}`;
-        vars[cssVar] = `oklch(80.0% 0.0200 ${(i * 31) % 360} / 0.6)`;
-        roles[`tl${i}`] = { kind: "translucent", cssVar };
+        const css = `oklch(80.0% 0.0200 ${(i * 31) % 360} / 0.6)`;
+        const tintHex = ebg.toHex(ebg.parseCssColor(css));
+        const alpha = 0.6;
+        vars[cssVar] = css;
+        roles[`tl${i}`] = {
+          kind: "translucent",
+          cssVar,
+          tintHex,
+          alpha,
+          compositeHex: unpack(__over(pack(tintHex), alpha, pack(bg))),
+          compositeLc: 60,
+        };
       }
       return { vars, roles };
     },
@@ -212,4 +235,99 @@ test("compiled pair ≡ string path, 500 random pairs", { skip: !hasCompiled }, 
 test("compileLerpPair falls back (null) on unparseable endpoints", { skip: !hasCompiled }, () => {
   assert.equal(ebg.compileLerpPair("blah", "#112233"), null);
   assert.equal(ebg.compileLerpPair("#112233", "hsl(1,2%,3%)"), null);
+});
+
+test("the boundary benchmark materializes opaque and alpha occurrences behaviorally", () => {
+  const occurrences = benchmarkOccurrencesFromRoles(
+    {
+      label: { kind: "color", hex: "#010203" },
+      veil: { kind: "translucent", tintHex: "#C0B2FA", alpha: 0.122 },
+      unresolved: { kind: "failure" },
+    },
+    pack,
+  );
+  const black = materializeOccurrences(
+    occurrences,
+    pack("#000000"),
+    new Uint32Array(occurrences.length),
+    __over,
+  );
+  const white = materializeOccurrences(
+    occurrences,
+    pack("#FFFFFF"),
+    new Uint32Array(occurrences.length),
+    __over,
+  );
+
+  assert.deepEqual([...black], [pack("#010203"), pack("#17161F")]);
+  assert.deepEqual([...white], [pack("#010203"), pack("#F7F6FE")]);
+  assert.equal(black[0], white[0], "opaque occurrence must be backdrop-independent");
+  assert.notEqual(black[1], white[1], "alpha occurrence must be rematerialized per backdrop");
+  assert.throws(
+    () => materializeOccurrences(
+      [occurrences[1]],
+      pack("#000000"),
+      new Uint32Array(1),
+      () => 0xFFFFFFFF,
+    ),
+    { name: "RangeError", message: /Core rejected admitted opacity/u },
+  );
+});
+
+test("rustCacheCapacity accepts formatting-preserving Rust literal variants", () => {
+  for (const source of [
+    "const CACHE_CAPACITY: usize = 4096;",
+    "  pub const  CACHE_CAPACITY : usize = 4_096 ; // policy",
+    "pub(crate)\tconst CACHE_CAPACITY:\tusize=4_096usize; /* policy */",
+  ]) {
+    assert.equal(rustCacheCapacity(source), 4096, source);
+  }
+  assert.throws(
+    () => rustCacheCapacity("const CACHE_CAPACITY: usize = 1 << 12;"),
+    /capacity is absent or outside/u,
+  );
+});
+
+test("the cache-miss benchmark corpus is admissible and never masks conflict", () => {
+  const engineSource = readFileSync(
+    new URL("../../../crates/labcolors-wasm/src/engine.rs", import.meta.url),
+    "utf8",
+  );
+  const capacity = rustCacheCapacity(engineSource);
+  const solveBackground = "#3A3A3C";
+  const ring = buildMissRing(pack(solveBackground), capacity);
+
+  assert.equal(ring.length, capacity + 1);
+  assert.equal(new Set(ring).size, ring.length);
+  assert.equal(ring.includes(solveBackground), false);
+
+  const colors = new LabColors();
+  colors.loadConfig(
+    readFileSync(
+      new URL("../../../crates/labcolors-wasm/tests/data/labui.config.json", import.meta.url),
+      "utf8",
+    ),
+  );
+  for (const background of ring) {
+    assert.doesNotThrow(
+      () => colors.resolveTheme(background, "dark"),
+      `cache-miss background ${background} must admit a successful latency sample`,
+    );
+  }
+
+  let conflict;
+  try {
+    colors.resolveTheme("#1099FF", "dark");
+  } catch (error) {
+    conflict = error;
+  }
+  assert.ok(conflict instanceof Error, "the historical arbitrary sweep witness must conflict");
+  assert.equal(conflict.code, "output_conflict");
+  assert.deepEqual(
+    conflict.conflicts.map(({ role, code }) => ({ role, code })),
+    [
+      { role: "border-warning-strong", code: "floor_unreachable" },
+      { role: "border-success-strong", code: "floor_unreachable" },
+    ],
+  );
 });

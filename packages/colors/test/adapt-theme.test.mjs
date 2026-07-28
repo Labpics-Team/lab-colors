@@ -3763,16 +3763,338 @@ function mixedWithUnresolved(hex, lc) {
         cssVar: "--lab-veil",
         tintHex: "#808080",
         alpha: 0.5,
-        // Occurrence descriptor emitted by the real engine (core→dto→projection)
-        // for a translucent role: the encoded-sRGB8 reference composite over the
-        // resolve background and its signed composite contrast estimate. These
-        // are what let the translucent role ride a recheck lane (C8d E1).
+        // Occurrence descriptor emitted by the real engine (core→dto→projection).
+        // The runtime must retain source+alpha; the reference composite is only
+        // solve-time evidence and must never stand in for a later occurrence.
         compositeHex: "#55757F",
         compositeLc: -41.5,
       },
     },
   };
 }
+
+const translucentOnly = ({
+  tintHex = "#C0B2FA",
+  alpha = 0.122,
+  compositeHex = "#F7F6FE",
+  compositeLc = -40,
+} = {}) => ({
+  vars: { "--lab-veil": `rgba(192 178 250 / ${alpha})` },
+  roles: {
+    veil: {
+      kind: "translucent",
+      cssVar: "--lab-veil",
+      tintHex,
+      alpha,
+      compositeHex,
+      compositeLc,
+    },
+  },
+});
+
+test("translucent recheck materializes the emitted source over the current backdrop", () => {
+  const el = fakeElement();
+  let bg = "#FFFFFF";
+  const seen = [];
+  const colors = {
+    resolveTheme: () => translucentOnly(),
+    recheckContrast(backdrop, foregrounds) {
+      seen.push({ backdrop, foregrounds: [...foregrounds] });
+      return [...foregrounds].flatMap(() => [100, 10]);
+    },
+  };
+  const ctrl = adaptTheme(el, {
+    colors,
+    theme: "light",
+    background: () => bg,
+    target: el,
+    now: () => 1,
+    win: {},
+  });
+
+  bg = "#000000";
+  ctrl.tick();
+
+  const recheck = seen.at(-1);
+  assert.equal(recheck.backdrop, pk("#000000"));
+  assert.deepEqual(
+    recheck.foregrounds,
+    [pk("#17161F")],
+    "the visible occurrence must be recomposited from tint+alpha on the current backdrop",
+  );
+  assert.notDeepEqual(
+    recheck.foregrounds,
+    [pk("#F7F6FE")],
+    "the solve-time composite is stale after the backdrop changes",
+  );
+  ctrl.stop();
+});
+
+test("translucent multi-sample recheck builds one foreground row per backdrop", () => {
+  const el = fakeElement();
+  let samples = ["#FFFFFF", "#FFFFFF"];
+  const single = [];
+  let multiCalls = 0;
+  const colors = {
+    resolveTheme: () => translucentOnly(),
+    recheckContrast(backdrop, foregrounds) {
+      single.push({ backdrop, foregrounds: [...foregrounds] });
+      return [...foregrounds].flatMap(() => [100, 10]);
+    },
+    recheckContrastMulti(backdrops, foregrounds) {
+      multiCalls++;
+      return [...backdrops].flatMap(() =>
+        [...foregrounds].flatMap(() => [100, 10]));
+    },
+  };
+  const ctrl = adaptTheme(el, {
+    colors,
+    theme: "light",
+    background: () => samples,
+    target: el,
+    now: () => 1,
+    win: {},
+  });
+  const singleAtStart = single.length;
+  const multiAtStart = multiCalls;
+
+  samples = ["#000000", "#FFFFFF"];
+  ctrl.tick();
+
+  assert.equal(
+    multiCalls,
+    multiAtStart,
+    "a shared-foreground batch cannot represent a backdrop-dependent alpha occurrence",
+  );
+  assert.deepEqual(single.slice(singleAtStart), [
+    { backdrop: pk("#000000"), foregrounds: [pk("#17161F")] },
+    { backdrop: pk("#FFFFFF"), foregrounds: [pk("#F7F6FE")] },
+  ]);
+  ctrl.stop();
+});
+
+const mixedOccurrenceSet = () => ({
+  vars: {
+    "--lab-label": "#010203",
+    "--lab-veil": "rgba(192 178 250 / 0.122)",
+  },
+  roles: {
+    label: {
+      kind: "color",
+      cssVar: "--lab-label",
+      hex: "#010203",
+      lc: 100,
+    },
+    veil: {
+      kind: "translucent",
+      cssVar: "--lab-veil",
+      tintHex: "#C0B2FA",
+      alpha: 0.122,
+      compositeHex: "#F7F6FE",
+      compositeLc: 100,
+    },
+  },
+});
+
+function replayMixedOccurrenceSamples(nextSamples) {
+  const el = fakeElement();
+  let samples = ["#FFFFFF"];
+  let now = 1;
+  const resolves = [];
+  const rechecks = [];
+  const colors = {
+    resolveTheme(backdrop) {
+      resolves.push(backdrop);
+      return mixedOccurrenceSet();
+    },
+    recheckContrast(backdrop, foregrounds) {
+      const row = [...foregrounds];
+      rechecks.push({ backdrop, row });
+      const translucentLc = backdrop === pk("#000000") ? 0 : 100;
+      return [100, 10, translucentLc, 10];
+    },
+  };
+  const ctrl = adaptTheme(el, {
+    colors,
+    theme: "light",
+    background: () => samples,
+    target: el,
+    now: () => now,
+    win: {},
+    sustainMs: 0,
+    dwellMs: 0,
+  });
+  resolves.length = 0;
+  rechecks.length = 0;
+
+  samples = nextSamples;
+  now++;
+  ctrl.tick();
+  ctrl.stop();
+  return { resolves, rechecks };
+}
+
+test("mixed occurrence rows preserve order and materialize alpha per backdrop", () => {
+  const replay = replayMixedOccurrenceSamples(["#000000", "#FFFFFF"]);
+  const expected = new Map([
+    [pk("#000000"), [pk("#010203"), pk("#17161F")]],
+    [pk("#FFFFFF"), [pk("#010203"), pk("#F7F6FE")]],
+  ]);
+
+  for (const { backdrop, row } of replay.rechecks) {
+    assert.deepEqual(row, expected.get(backdrop));
+  }
+  assert.deepEqual(
+    replay.rechecks.map(({ backdrop }) => backdrop),
+    [pk("#000000"), pk("#FFFFFF"), pk("#000000"), pk("#FFFFFF")],
+    "current and candidate-admission passes must each recheck every sample in declared order",
+  );
+  assert.deepEqual(replay.resolves, ["#000000"], "the sole breaching sample seeds re-solve");
+});
+
+test("sample permutation preserves occurrence mapping and breach witness", () => {
+  const forward = replayMixedOccurrenceSamples(["#000000", "#FFFFFF"]);
+  const reverse = replayMixedOccurrenceSamples(["#FFFFFF", "#000000"]);
+  const canonical = (calls) =>
+    [...new Map(calls.map(({ backdrop, row }) => [backdrop, row])).entries()]
+      .sort(([left], [right]) => left - right);
+
+  assert.deepEqual(canonical(forward.rechecks), canonical(reverse.rechecks));
+  assert.deepEqual(forward.resolves, ["#000000"]);
+  assert.deepEqual(reverse.resolves, ["#000000"]);
+});
+
+test("alpha one is the opaque identity and retains the packed batch path", () => {
+  const el = fakeElement();
+  let samples = ["#FFFFFF", "#FFFFFF"];
+  const batches = [];
+  let now = 1;
+  const colors = {
+    resolveTheme: () => translucentOnly({ alpha: 1 }),
+    recheckContrast: () => {
+      throw new Error("opaque identity must retain the batch path");
+    },
+    recheckContrastMulti(backdrops, foregrounds) {
+      batches.push({ backdrops: [...backdrops], foregrounds: [...foregrounds] });
+      return [...backdrops].flatMap(() =>
+        [...foregrounds].flatMap(() => [100, 10]));
+    },
+  };
+  const ctrl = adaptTheme(el, {
+    colors,
+    theme: "light",
+    background: () => samples,
+    target: el,
+    now: () => now,
+    win: {},
+  });
+  batches.length = 0;
+
+  samples = ["#000000", "#FFFFFF"];
+  now++;
+  ctrl.tick();
+
+  assert.deepEqual(batches, [{
+    backdrops: [pk("#000000"), pk("#FFFFFF")],
+    foregrounds: [pk("#C0B2FA")],
+  }]);
+  ctrl.stop();
+});
+
+test("malformed translucent occurrence fails before the first DOM mutation", () => {
+  const el = fakeElement();
+  assert.throws(
+    () =>
+      adaptTheme(el, {
+        colors: {
+          resolveTheme: () => translucentOnly({ tintHex: null }),
+          recheckContrast: () => [],
+        },
+        theme: "light",
+        background: "#FFFFFF",
+        target: el,
+        now: () => 1,
+        win: {},
+      }),
+    /translucent.*tintHex/u,
+  );
+  assert.deepEqual(el.mutations, []);
+
+  assert.throws(
+    () =>
+      adaptTheme(el, {
+        colors: {
+          resolveTheme: () => translucentOnly({ alpha: "0.5" }),
+          recheckContrast: () => [],
+        },
+        theme: "light",
+        background: "#FFFFFF",
+        target: el,
+        now: () => 1,
+        win: {},
+      }),
+    /requires numeric opacity/u,
+  );
+  assert.deepEqual(el.mutations, []);
+
+  assert.throws(
+    () =>
+      adaptTheme(el, {
+        colors: {
+          resolveTheme: () => translucentOnly({ alpha: 1.1 }),
+          recheckContrast: () => [],
+        },
+        theme: "light",
+        background: "#FFFFFF",
+        target: el,
+        now: () => 1,
+        win: {},
+      }),
+    /opacity in \(0,1\]/u,
+  );
+  assert.deepEqual(el.mutations, []);
+});
+
+test("malformed translucent re-solve preserves the committed DOM and state", () => {
+  const el = fakeElement();
+  let bg = "#FFFFFF";
+  let now = 1;
+  let resolveCount = 0;
+  let breach = false;
+  const colors = {
+    resolveTheme() {
+      resolveCount++;
+      return resolveCount === 1
+        ? translucentOnly()
+        : translucentOnly({ alpha: 0 });
+    },
+    recheckContrast(_backdrop, foregrounds) {
+      return [...foregrounds].flatMap(() => [breach ? 0 : 100, 10]);
+    },
+  };
+  const ctrl = adaptTheme(el, {
+    colors,
+    theme: "light",
+    background: () => bg,
+    target: el,
+    now: () => now,
+    win: {},
+    sustainMs: 0,
+    dwellMs: 0,
+  });
+  const committedCurrent = ctrl.current();
+  const committedProps = [...el.props];
+  const committedMutationCount = el.mutations.length;
+
+  breach = true;
+  bg = "#000000";
+  now++;
+  assert.throws(() => ctrl.tick(), /opacity in \(0,1\]/u);
+  assert.deepEqual(ctrl.current(), committedCurrent);
+  assert.deepEqual([...el.props], committedProps);
+  assert.equal(el.mutations.length, committedMutationCount);
+  ctrl.stop();
+});
 
 test("admitted Unresolved stays inert through init, breach re-solve and ease", () => {
   const h = harness();
@@ -3791,8 +4113,8 @@ test("admitted Unresolved stays inert through init, breach re-solve and ease", (
     recheckContrast(b, fgs) {
       seenRecheckWords.push(...fgs);
       for (const f of fgs) {
-        // Packed boundary: recheck now sees only packed `0x00RRGGBB` color words
-        // (high byte zero) — never a hex string, never a translucent role.
+        // Packed boundary: recheck sees only materialized `0x00RRGGBB`
+        // occurrences (high byte zero), never role metadata or hex strings.
         assert.ok(
           Number.isInteger(f) && f >= 0 && f <= 0x00ffffff,
           "recheck must only ever see packed color words (0x00RRGGBB)",
@@ -3839,17 +4161,17 @@ test("admitted Unresolved stays inert through init, breach re-solve and ease", (
 
 // ── C8d E1: translucent recheck lanes (X2 alpha-only adapts) ────────────────
 //
-// Translucent roles carry an occurrence descriptor {compositeHex, compositeLc}
-// — the reference composite over the resolve background. Dropping the
-// kind==="color" filter on the RECHECK path lets a translucent role ride a
-// recheck lane (compositeHex as the foreground word, |compositeLc| as the drift
-// floor) WITHOUT joining the ease set, so its live oklch(tint/alpha) var stays
-// intact. A contrast-drifting alpha-only theme must then re-adapt through the
-// same graph path (C8 exit X2).
+// Solid and translucent outputs share one physical recheck descriptor. For a
+// translucent output, the foreground occurrence is recomposited from tint and
+// alpha on every current backdrop; compositeLc remains the solve-time drift
+// baseline. The role does not join the ease set, so its live tint/alpha CSS var
+// stays intact. A contrast-drifting alpha-only theme must still re-adapt through
+// the same graph path (C8 exit X2).
 
 test("alpha_only_theme_readapts: a translucent-only contrast drop re-solves through the same graph", () => {
   const el = fakeElement();
-  const VEIL_COMPOSITE = "#55757F"; // matches the enriched veil stub
+  const SOLVE_TIME_COMPOSITE = "#55757F";
+  const CURRENT_OCCURRENCE = "#B7B7B7"; // #808080 at 0.5 over #EEEEEE
   let bg = "#FFFFFF";
   let now = 1000;
   const seenRecheckWords = [];
@@ -3868,10 +4190,10 @@ test("alpha_only_theme_readapts: a translucent-only contrast drop re-solves thro
           Number.isInteger(f) && f >= 0 && f <= 0x00ffffff,
           "recheck must only ever see packed color words (0x00RRGGBB)",
         );
-        // ONLY the translucent lane's composite drops below its |compositeLc| *
+        // ONLY the translucent lane's current occurrence drops below its |compositeLc| *
         // (1 - dropFraction) floor (41.5 * 0.8 = 33.2); the color role passes.
         // No color-role drift at all — the change is alpha-only.
-        out.push(f === pk(VEIL_COMPOSITE) ? 5 : 100);
+        out.push(f === pk(CURRENT_OCCURRENCE) ? 5 : 100);
         out.push(10);
       }
       return out;
@@ -3900,8 +4222,13 @@ test("alpha_only_theme_readapts: a translucent-only contrast drop re-solves thro
   ctrl.tick();
 
   assert.ok(
-    seenRecheckWords.includes(pk(VEIL_COMPOSITE)),
-    "translucent compositeHex must reach the recheck lane",
+    seenRecheckWords.includes(pk(CURRENT_OCCURRENCE)),
+    "tint+alpha must materialize the current occurrence before recheck",
+  );
+  assert.equal(
+    seenRecheckWords.includes(pk(SOLVE_TIME_COMPOSITE)),
+    false,
+    "the solve-time composite must not survive a backdrop change",
   );
   assert.ok(
     colors.resolveCount >= 2,
@@ -3912,12 +4239,13 @@ test("alpha_only_theme_readapts: a translucent-only contrast drop re-solves thro
 
 test("translucent_lanes_participate: translucent rides a recheck lane 1:1 but is never eased", () => {
   // (1) MIXED set: a color role AND a translucent role. The recheck foreground
-  // words must include BOTH the color hex and the translucent compositeHex, and
+  // words must include BOTH the color hex and the materialized alpha occurrence, and
   // every recheck call is 1:1 (one foreground word per role in the set). The
   // color role breaches → an ease actually runs on its var, while the veil's
   // live oklch(tint/alpha) var is never overwritten with a hex.
   const el = fakeElement();
-  const VEIL_COMPOSITE = "#55757F";
+  const SOLVE_TIME_COMPOSITE = "#55757F";
+  const CURRENT_OCCURRENCE = "#B7B7B7"; // #808080 at 0.5 over #EEEEEE
   let bg = "#FFFFFF";
   let now = 1000;
   const perCallFgCounts = [];
@@ -3935,7 +4263,7 @@ test("translucent_lanes_participate: translucent rides a recheck lane 1:1 but is
       const out = [];
       for (const f of fgs) {
         // Color role breaches (10 < 80); translucent passes (100 ≥ 33.2).
-        out.push(f === pk(VEIL_COMPOSITE) ? 100 : 10);
+        out.push(f === pk(CURRENT_OCCURRENCE) ? 100 : 10);
         out.push(10);
       }
       return out;
@@ -3967,8 +4295,13 @@ test("translucent_lanes_participate: translucent rides a recheck lane 1:1 but is
     "color role hex present among recheck foreground words",
   );
   assert.ok(
-    seenRecheckWords.includes(pk(VEIL_COMPOSITE)),
-    "translucent compositeHex present among recheck foreground words (lane participation)",
+    seenRecheckWords.includes(pk(CURRENT_OCCURRENCE)),
+    "materialized alpha occurrence participates in the recheck row",
+  );
+  assert.equal(
+    seenRecheckWords.includes(pk(SOLVE_TIME_COMPOSITE)),
+    false,
+    "the recheck row must not reuse solve-time compositeHex",
   );
   assert.ok(
     perCallFgCounts.every((n) => n === 2),
@@ -3984,7 +4317,7 @@ test("translucent_lanes_participate: translucent rides a recheck lane 1:1 but is
   );
 
   // (2) TRANSLUCENT-ONLY set: no color role at all. The glow-only fast-path
-  // guard must key off the RECHECK set (recheckRoles.length), not the ease set
+  // guard must key off the RECHECK set (recheckOccurrences.length), not the ease set
   // (roles.length) — otherwise a translucent-only set routes to the glow branch
   // and is never rechecked/re-solved.
   const el2 = fakeElement();
@@ -3998,7 +4331,7 @@ test("translucent_lanes_participate: translucent rides a recheck lane 1:1 but is
         cssVar: "--lab-veil",
         tintHex: "#808080",
         alpha: 0.5,
-        compositeHex: VEIL_COMPOSITE,
+        compositeHex: SOLVE_TIME_COMPOSITE,
         compositeLc: -41.5,
       },
     },
