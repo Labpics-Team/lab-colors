@@ -422,6 +422,43 @@ fn finite_target_intent_has_no_dead_source_axis() {
 }
 
 #[test]
+fn joint_module_contains_only_the_canonical_finite_order_admission() {
+    for retired in [
+        "CandidateOrdinalV1",
+        "JointCandidateTupleV1",
+        "JointCandidateSetV1",
+        "PointwiseJointPointProgramV1",
+        "PointwiseFullHardReportV1",
+        "PointwiseHardFeasibilityV1",
+        "DeclaredTotalOrderV1",
+        "PointwiseSelectedJointTupleV1",
+        "PointwiseVerifiedSelectionV1",
+    ] {
+        assert!(
+            !contains_rust_identifier(JOINT_SOURCE, retired),
+            "the runtime-unused V2a solver must not return through `{retired}`",
+        );
+    }
+    for canonical in [
+        "FiniteDomainOrdinalV1",
+        "AdmittedFiniteJointOrderV1",
+        "FiniteJointOrderErrorV1",
+        "admit_finite_joint_order_v1",
+    ] {
+        assert!(
+            contains_rust_identifier(JOINT_SOURCE, canonical),
+            "joint.rs must retain the sole Program order-admission primitive `{canonical}`",
+        );
+    }
+    assert!(
+        !LIB_SOURCE.contains(
+            "joint-selection internals are used only through the staged Program contract",
+        ),
+        "the canonical Program path must not hide a second joint engine behind dead_code",
+    );
+}
+
+#[test]
 fn staged_session_is_evidence_only_and_retired_operation_authority_cannot_return() {
     assert_eq!(
         normalized_source_scope(
