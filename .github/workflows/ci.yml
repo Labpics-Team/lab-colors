@@ -485,7 +485,8 @@ jobs:
         #     runner.temp first: shared self-hosted images can retain stale lists
         #     whose package URLs already return 404. `apt-get download` fetches
         #     .deb and `dpkg --extract` unpacks it without root.
-        #     Chrome/chromedriver need libnspr4, libnss3, libasound2t64, libgbm1
+        #     Chrome/chromedriver need libnspr4, libnss3, distro-versioned ALSA,
+        #     and libgbm1
         #     which are absent on the slim WSL runner image.
         #  3. Diagnose chromedriver session creation (Chrome's stderr) before wasm-pack.
         run: |
@@ -528,6 +529,22 @@ jobs:
           source /etc/os-release
           : "${ID:?missing distro ID}"
           : "${VERSION_CODENAME:?missing distro codename}"
+          # Debian 12 / Ubuntu 22.04 predate the time64 package rename; Debian
+          # 13 / Ubuntu 24.04 use the t64 ABI name. Unknown images fail closed
+          # instead of guessing a package from mutable ambient APT metadata.
+          case "$ID:$VERSION_CODENAME" in
+            debian:bookworm|ubuntu:jammy)
+              ALSA_PACKAGE=libasound2
+              ;;
+            debian:trixie|ubuntu:noble)
+              ALSA_PACKAGE=libasound2t64
+              ;;
+            *)
+              echo "unsupported Chrome dependency release: $ID:$VERSION_CODENAME" >&2
+              exit 1
+              ;;
+          esac
+          readonly ALSA_PACKAGE
           case "$ID" in
             debian)
               DISTRO_KEYRING=/usr/share/keyrings/debian-archive-keyring.gpg
@@ -552,6 +569,7 @@ jobs:
               exit 1
               ;;
           esac
+          readonly DISTRO_KEYRING
           # Все изменяемые пути APT и полный inventory sources принадлежат job;
           # keyring и dpkg status остаются read-only входами.
           APT_OPTIONS=(
@@ -567,9 +585,9 @@ jobs:
           readonly APT_OPTIONS
           apt-get "${APT_OPTIONS[@]}" update
           # libnspr4/libnss3: NSS/NSPR crypto deps for Chrome and chromedriver.
-          # libasound2t64: ALSA after the current Debian/Ubuntu time64 transition.
+          # ALSA package: selected above from the explicit supported distro matrix.
           # libgbm1: GPU buffer manager (needed by Chrome headless for DRM/render node).
-          (cd "$DEBS_DIR" && apt-get "${APT_OPTIONS[@]}" download libnspr4 libnss3 libasound2t64 libgbm1 2>&1)
+          (cd "$DEBS_DIR" && apt-get "${APT_OPTIONS[@]}" download libnspr4 libnss3 "$ALSA_PACKAGE" libgbm1 2>&1)
           for deb in "$DEBS_DIR"/*.deb; do
             dpkg --extract "$deb" "$DEPS_DIR"
           done

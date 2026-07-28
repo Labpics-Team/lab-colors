@@ -523,6 +523,43 @@ test("MSRV and packaged Rust crate gates are executable CI contracts", () => {
     }
     assert.match(active, /^: "\$\{ID:\?missing distro ID\}"$/mu);
     assert.match(active, /^: "\$\{VERSION_CODENAME:\?missing distro codename\}"$/mu);
+    assert.match(active, /^case "\$ID:\$VERSION_CODENAME" in$/mu);
+    assert.match(
+      active,
+      /^\s*debian:bookworm\|ubuntu:jammy\)\n\s+ALSA_PACKAGE=libasound2\n\s+;;$/mu,
+    );
+    assert.match(
+      active,
+      /^\s*debian:trixie\|ubuntu:noble\)\n\s+ALSA_PACKAGE=libasound2t64\n\s+;;$/mu,
+    );
+    assert.match(
+      active,
+      /^\s*\*\)\n\s+echo "unsupported Chrome dependency release: \$ID:\$VERSION_CODENAME" >&2\n\s+exit 1\n\s+;;$/mu,
+    );
+    assert.equal(active.match(/^readonly ALSA_PACKAGE$/gmu)?.length, 1);
+    const trustedSourceLines = [
+      '"deb [signed-by=$DISTRO_KEYRING] https://deb.debian.org/debian $VERSION_CODENAME main" \\',
+      '"deb [signed-by=$DISTRO_KEYRING] https://deb.debian.org/debian $VERSION_CODENAME-updates main" \\',
+      '"deb [signed-by=$DISTRO_KEYRING] https://security.debian.org/debian-security $VERSION_CODENAME-security main" \\',
+      '"deb [signed-by=$DISTRO_KEYRING] https://archive.ubuntu.com/ubuntu $VERSION_CODENAME main" \\',
+      '"deb [signed-by=$DISTRO_KEYRING] https://archive.ubuntu.com/ubuntu $VERSION_CODENAME-updates main" \\',
+      '"deb [signed-by=$DISTRO_KEYRING] https://security.ubuntu.com/ubuntu $VERSION_CODENAME-security main" \\',
+    ];
+    const activeLines = active.split("\n").map((line) => line.trim());
+    assert.deepEqual(
+      activeLines.filter((line) => line.startsWith('"deb [signed-by=')),
+      trustedSourceLines,
+      "the generated source inventory must contain only the six exact distro sources",
+    );
+    assert.deepEqual(
+      activeLines.filter((line) => line.startsWith("DISTRO_KEYRING=")),
+      [
+        "DISTRO_KEYRING=/usr/share/keyrings/debian-archive-keyring.gpg",
+        "DISTRO_KEYRING=/usr/share/keyrings/ubuntu-archive-keyring.gpg",
+      ],
+      "each distro branch must bind its official archive keyring exactly once",
+    );
+    assert.equal(active.match(/^readonly DISTRO_KEYRING$/gmu)?.length, 1);
     assert.equal(active.match(/^\s*test -r "\$DISTRO_KEYRING"$/gmu)?.length, 2);
     assert.match(
       active,
@@ -542,7 +579,7 @@ test("MSRV and packaged Rust crate gates are executable CI contracts", () => {
         .filter((line) => /(?:^|[\s;&(|])apt(?:-get)?(?=\s)/u.test(line)),
       [
         'apt-get "${APT_OPTIONS[@]}" update',
-        '(cd "$DEBS_DIR" && apt-get "${APT_OPTIONS[@]}" download libnspr4 libnss3 libasound2t64 libgbm1 2>&1)',
+        '(cd "$DEBS_DIR" && apt-get "${APT_OPTIONS[@]}" download libnspr4 libnss3 "$ALSA_PACKAGE" libgbm1 2>&1)',
       ],
       "every APT invocation must use the one immutable isolated option set",
     );
@@ -572,6 +609,26 @@ test("MSRV and packaged Rust crate gates are executable CI contracts", () => {
     ci.replace(
       '          apt-get "${APT_OPTIONS[@]}" update',
       '          apt-get download libnss3\n          apt-get "${APT_OPTIONS[@]}" update',
+    ),
+    ci.replace(
+      "debian:bookworm|ubuntu:jammy)",
+      "debian:bookworm|ubuntu:noble)",
+    ),
+    ci.replace(
+      "https://deb.debian.org/debian $VERSION_CODENAME main",
+      "https://example.invalid/debian $VERSION_CODENAME main",
+    ),
+    ci.replace(
+      "[signed-by=$DISTRO_KEYRING] https://archive.ubuntu.com/ubuntu",
+      "[signed-by=/tmp/forged.gpg] https://archive.ubuntu.com/ubuntu",
+    ),
+    ci.replace(
+      "DISTRO_KEYRING=/usr/share/keyrings/debian-archive-keyring.gpg",
+      "DISTRO_KEYRING=/tmp/forged.gpg",
+    ),
+    ci.replace(
+      "https://security.ubuntu.com/ubuntu $VERSION_CODENAME-security main",
+      "https://security.ubuntu.com/ubuntu stable-security main",
     ),
   ]) {
     assert.notEqual(mutant, ci, "hostile APT mutation must bite");
