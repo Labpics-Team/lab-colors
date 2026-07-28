@@ -6,7 +6,7 @@
 //! occurrences, and outputs bind opaque slots back to Paints. The compiled
 //! result owns only admitted, canonical topology. Every finite candidate is
 //! one atomic source-plus-straight-alpha Paint value, so selection cannot
-//! synthesize an undeclared Cartesian combination. Runtime observation and
+//! synthesize an undeclared cross-product combination. Runtime observation and
 //! lifecycle belong to the sole revision-bound Session. Attachment, renderer
 //! and actual terminal sink are outside this module.
 //! Finite candidate search executes only hard constraints. Every fresh hard
