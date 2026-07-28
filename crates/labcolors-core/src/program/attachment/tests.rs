@@ -1023,7 +1023,7 @@ fn allocator_owner() -> OwnerV1 {
     draft.push_source_over_occurrence(INNER, PAINT, INPUT_SURFACE, context);
     draft.push_point_presentation_root(ROOT, INNER);
     draft.push_point_presentation_target(ROOT, INNER);
-    draft.push_wcag22_hard(
+    draft.push_wcag22_visible_unary_hard(
         ConstraintIdV1::new(10),
         INNER,
         Wcag22CriterionV1::Sc143TextDefault,
@@ -1075,7 +1075,7 @@ fn owner_with_terminal_presentation(
     if include_terminal {
         draft.push_point_presentation_target(ROOT, TERMINAL);
     }
-    draft.push_exact_hard(ConstraintIdV1::new(10), INNER, expected);
+    draft.push_exact_visible_unary_hard(ConstraintIdV1::new(10), INNER, expected);
     for output in outputs {
         draft.push_output(*output, PAINT);
     }
@@ -1352,7 +1352,7 @@ fn selected_nonopaque_finite_paint_reaches_sink_and_render_authority_atomically(
     draft.push_source_over_occurrence(INNER, PAINT, INPUT_SURFACE, context);
     draft.push_point_presentation_root(ROOT, INNER);
     draft.push_point_presentation_target(ROOT, INNER);
-    draft.push_exact_hard(ConstraintIdV1::new(10), INNER, Srgb8::new([0x80; 3]));
+    draft.push_exact_visible_unary_hard(ConstraintIdV1::new(10), INNER, Srgb8::new([0x80; 3]));
     draft.push_output(OUTPUT_A, PAINT);
 
     let owner = draft.compile().unwrap();

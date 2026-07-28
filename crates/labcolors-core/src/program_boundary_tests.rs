@@ -9,7 +9,7 @@ use crate::Srgb8;
 use crate::program::{
     AppearanceContextErrorKindV1, AppearanceContextFieldV1, AppearanceContextV1, AssessmentV1,
     CertificateV1, CompileErrorHandleV1, CompileErrorKindV1, CompileErrorV1, ConstraintIdV1,
-    ConstraintSubjectV1, ContentIdentityV5, DraftErrorV1, DraftV1, EvidenceBoundsErrorV1,
+    ConstraintSubjectV1, ContentIdentityV6, DraftErrorV1, DraftV1, EvidenceBoundsErrorV1,
     EvidenceViewV1, FinitePaintDomainV1, InstantiateErrorV1, JointChoiceV1, JointOrderErrorV1,
     JointStateV1, NumericDomainErrorV1, ObservationHeadV1, OccurrenceIdV1, OpacityInputIdV1,
     OutputSlotIdV1, OwnerV1, PaintIdV1, PaintValueV1, PhysicalPointV1, PresentationRootIdV1,
@@ -115,7 +115,7 @@ fn assert_evidence_snapshot(view: EvidenceViewV1<'_>) {
                 let _ = cell.case_index();
                 let _ = cell.constraint().value();
                 match cell.subject() {
-                    ConstraintSubjectV1::ModeledOccurrence {
+                    ConstraintSubjectV1::VisibleUnary {
                         occurrence,
                         context,
                     } => {
@@ -130,6 +130,16 @@ fn assert_evidence_snapshot(view: EvidenceViewV1<'_>) {
                         let _ = root.value();
                         let _ = occurrence.value();
                         let _ = terminal.value();
+                    }
+                    ConstraintSubjectV1::IntrinsicUnary { target } => {
+                        let _ = target.value();
+                    }
+                    ConstraintSubjectV1::IntrinsicRelation { reference } => {
+                        let _ = reference.value();
+                    }
+                    ConstraintSubjectV1::VisibleRelation { reference, context } => {
+                        let _ = reference.value();
+                        let _ = context.adapting_luminance_cd_m2();
                     }
                 }
                 let _ = cell.mode();
@@ -152,6 +162,14 @@ fn assert_evidence_snapshot(view: EvidenceViewV1<'_>) {
                         let _ = evidence.visible();
                         let _ = evidence.violation();
                         let _ = evidence.rejected_blue_interval();
+                        None
+                    }
+                    AssessmentV1::IntrinsicUnary(evidence) => {
+                        let _ = evidence.verdict();
+                        None
+                    }
+                    AssessmentV1::Relation(evidence) => {
+                        let _ = evidence.member_count();
                         None
                     }
                 };
@@ -260,8 +278,8 @@ fn fixed_nested_draft(
         derived_surface,
         context,
     );
-    draft.push_exact_hard(exact, NESTED_INNER_OCCURRENCE, Srgb8::new([0; 3]));
-    draft.push_wcag22_report_only(
+    draft.push_exact_visible_unary_hard(exact, NESTED_INNER_OCCURRENCE, Srgb8::new([0; 3]));
+    draft.push_wcag22_visible_unary_report_only(
         wcag,
         NESTED_TERMINAL_OCCURRENCE,
         Wcag22CriterionV1::Sc143TextDefault,
@@ -422,7 +440,7 @@ fn attach_target_assessment(draft: &mut DraftV1, target: TargetIdV1) {
     let context = AppearanceContextV1::try_new(64.0, 0.2, SurroundV1::Average).unwrap();
     draft.push_solid_paint(paint, target);
     draft.push_source_over_occurrence(occurrence, paint, NESTED_INPUT_SURFACE, context);
-    draft.push_exact_report_only(constraint, occurrence, Srgb8::new([0; 3]));
+    draft.push_exact_visible_unary_report_only(constraint, occurrence, Srgb8::new([0; 3]));
 }
 
 fn joint_draft(hard: bool) -> DraftV1 {
@@ -456,9 +474,9 @@ fn joint_draft(hard: bool) -> DraftV1 {
     draft.push_input_surface(surface, input);
     draft.push_source_over_occurrence(occurrence, paint, surface, context);
     if hard {
-        draft.push_exact_hard(constraint, occurrence, Srgb8::new([128; 3]));
+        draft.push_exact_visible_unary_hard(constraint, occurrence, Srgb8::new([128; 3]));
     } else {
-        draft.push_exact_report_only(constraint, occurrence, Srgb8::new([0; 3]));
+        draft.push_exact_visible_unary_report_only(constraint, occurrence, Srgb8::new([0; 3]));
     }
     draft.push_output(output, paint);
     draft
@@ -501,7 +519,7 @@ fn finite_paint_candidates_are_not_a_cartesian_source_opacity_domain() {
     draft.push_solid_paint(paint, target);
     draft.push_input_surface(surface, input);
     draft.push_source_over_occurrence(occurrence, paint, surface, context);
-    draft.push_exact_hard(constraint, occurrence, Srgb8::new([0xFF; 3]));
+    draft.push_exact_visible_unary_hard(constraint, occurrence, Srgb8::new([0xFF; 3]));
     draft.push_output(output, paint);
 
     let owner = draft.compile().unwrap();
@@ -595,7 +613,7 @@ fn evidence_cell_bounds_are_independent_of_internal_causal_replay_storage() {
     draft.push_source_over_occurrence(inner, paint, input_surface, context);
     draft.push_occurrence_surface(derived_surface, inner);
     draft.push_source_over_occurrence(terminal, paint, derived_surface, context);
-    draft.push_exact_hard(constraint, terminal, Srgb8::new([0; 3]));
+    draft.push_exact_visible_unary_hard(constraint, terminal, Srgb8::new([0; 3]));
     draft.push_point_presentation_root(root, terminal);
     draft.push_point_presentation_target(root, inner);
     draft.push_output(output, paint);
@@ -753,13 +771,13 @@ fn staged_authoring_lowers_the_actual_closed_program_and_returns_canonical_input
     draft.push_input_surface(low_surface, low_input);
     draft.push_source_over_occurrence(high_occurrence, paint, high_surface, context);
     draft.push_source_over_occurrence(low_occurrence, paint, low_surface, context);
-    draft.push_exact_report_only(exact, high_occurrence, Srgb8::new([0; 3]));
-    draft.push_wcag22_hard(
+    draft.push_exact_visible_unary_report_only(exact, high_occurrence, Srgb8::new([0; 3]));
+    draft.push_wcag22_visible_unary_hard(
         high_wcag,
         high_occurrence,
         Wcag22CriterionV1::Sc143TextDefault,
     );
-    draft.push_wcag22_hard(
+    draft.push_wcag22_visible_unary_hard(
         low_wcag,
         low_occurrence,
         Wcag22CriterionV1::Sc143TextDefault,
@@ -991,7 +1009,7 @@ fn owner_and_update_errors_preserve_content_and_input_identity() {
     let owner = fixed_nested_draft(1.0, SourceIdV1::new(1), input, input)
         .compile()
         .unwrap();
-    let owner_identity: ContentIdentityV5 = owner.content_identity();
+    let owner_identity: ContentIdentityV6 = owner.content_identity();
     let mut session = owner.instantiate(13).unwrap();
 
     let no_scenarios = [];
@@ -1148,7 +1166,7 @@ fn certificate_and_set_retain_the_same_nonunit_opacity() {
     draft.push_opacity_paint(translucent, solid, opacity);
     draft.push_input_surface(surface, input);
     draft.push_source_over_occurrence(occurrence, translucent, surface, context);
-    draft.push_exact_hard(constraint, occurrence, Srgb8::new([0x80; 3]));
+    draft.push_exact_visible_unary_hard(constraint, occurrence, Srgb8::new([0x80; 3]));
     draft.push_output(output, translucent);
 
     let owner = draft.compile().unwrap();

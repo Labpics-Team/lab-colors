@@ -1215,6 +1215,19 @@ impl AdmittedAppearanceBindings {
         Ok(())
     }
 
+    /// Читает одно заранее связанное значение Target без поиска и аллокации.
+    ///
+    /// Slot минтит тот же compiled graph, которому принадлежат bindings.
+    /// Проверка ordinal и номинального ID не даёт evidence прочитать значение
+    /// через slot чужого поколения.
+    pub(crate) fn paint_input_at(
+        &self,
+        slot: CompiledPaintInputSlotV1,
+    ) -> Option<EncodedPointPaintValueV1> {
+        let (bound, value) = self.paint_inputs.get(slot.index)?;
+        (*bound == slot.id).then_some(*value)
+    }
+
     /// Borrow the admitted Surface-input slice in its exact canonical order.
     pub(crate) fn surface_inputs_canonical(
         &self,

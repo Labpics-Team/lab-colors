@@ -301,6 +301,63 @@ impl ProgramConstraintEvaluatorSetV1 for FinalViolationDiagnosticErrorEvaluatorS
     }
 }
 
+/// Один кандидат с четырьмя hard cells и report-only poison: search проходит
+/// полностью, fresh recheck сохраняет PASS, затем три VIOLATION. Любой
+/// вызов report-only возвращает VIOLATION, поэтому exact count доказывает
+/// исключение диагностики из терминального hard-вердикта.
+#[derive(Debug, Clone, Default)]
+struct MultiViolationFinalRecheckEvaluatorSetV1 {
+    calls: std::rc::Rc<std::cell::Cell<usize>>,
+}
+
+impl MultiViolationFinalRecheckEvaluatorSetV1 {
+    fn calls(&self) -> usize {
+        self.calls.get()
+    }
+}
+
+impl ProgramConstraintEvaluatorSetV1 for MultiViolationFinalRecheckEvaluatorSetV1 {
+    type Invocation = Srgb8;
+    type PassEvidence = DiagnosticPoisonPassV1;
+    type ViolationEvidence = DiagnosticPoisonViolationV1;
+    type Error = core::convert::Infallible;
+
+    fn assess(
+        &self,
+        point: ProgramPointOccurrenceV1,
+        invocation: Self::Invocation,
+    ) -> Result<
+        HardDecision<Self::PassEvidence, Self::ViolationEvidence>,
+        ProgramPointAssessmentErrorV1<Self::Error>,
+    > {
+        let call = self.calls.get();
+        self.calls.set(call + 1);
+        let binding = point.binding();
+        if invocation == DIAGNOSTIC_INVOCATION {
+            return Ok(HardDecision::Violation(DiagnosticPoisonViolationV1(
+                binding,
+            )));
+        }
+        Ok(match call {
+            0..=4 => HardDecision::Pass(DiagnosticPoisonPassV1(binding)),
+            5..=7 => HardDecision::Violation(DiagnosticPoisonViolationV1(binding)),
+            _ => unreachable!("fixture has exactly one four-cell search and recheck"),
+        })
+    }
+
+    fn pass_binding(evidence: &Self::PassEvidence) -> ProgramVisiblePointBindingV1 {
+        evidence.0
+    }
+
+    fn violation_binding(evidence: &Self::ViolationEvidence) -> ProgramVisiblePointBindingV1 {
+        evidence.0
+    }
+
+    fn constraint_content(&self, invocation: Self::Invocation) -> ProgramConstraintContentV1 {
+        ExactSrgb8IdentityV1.program_constraint_content_v1(invocation)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum InjectedEvaluatorFailureV1 {
     CandidateSearch,
@@ -632,7 +689,7 @@ fn nested_two_target_program(
             ),
         ],
         ConstraintSet::new(
-            vec![ConstraintInvocation::hard(
+            vec![ConstraintInvocation::visible_unary_hard(
                 ConstraintId::new(1),
                 UPPER_OCCURRENCE,
                 Wcag22CriterionV1::Sc143TextLargeScale,
@@ -714,7 +771,7 @@ fn nested_alpha_exact_program() -> Program<ExactSrgb8IdentityV1> {
             ),
         ],
         ConstraintSet::new(
-            vec![ConstraintInvocation::hard(
+            vec![ConstraintInvocation::visible_unary_hard(
                 ConstraintId::new(1),
                 UPPER_OCCURRENCE,
                 Srgb8::new([0x80; 3]),
@@ -829,7 +886,7 @@ fn alpha_renamed_nested_program(
             ),
         ],
         ConstraintSet::new(
-            vec![ConstraintInvocation::hard(
+            vec![ConstraintInvocation::visible_unary_hard(
                 ConstraintId::new(1),
                 UPPER_OCCURRENCE,
                 Wcag22CriterionV1::Sc143TextLargeScale,
@@ -881,7 +938,7 @@ fn evaluator_unwind_does_not_consume_the_reusable_evaluation_arena() {
     let compiled = point_program(
         signal(0),
         Target::fixed(TARGET, SOURCE),
-        vec![ConstraintInvocation::hard(
+        vec![ConstraintInvocation::visible_unary_hard(
             ConstraintId::new(1),
             OCCURRENCE,
             Wcag22CriterionV1::Sc143TextDefault,
@@ -921,7 +978,7 @@ fn prepared_transition_unwind_returns_the_reusable_evaluation_arena() {
     let compiled = point_program(
         signal(0),
         Target::fixed(TARGET, SOURCE),
-        vec![ConstraintInvocation::hard(
+        vec![ConstraintInvocation::visible_unary_hard(
             ConstraintId::new(1),
             OCCURRENCE,
             Wcag22CriterionV1::Sc143TextDefault,
@@ -985,7 +1042,7 @@ fn terminal_safety_rejects_an_output_outside_every_assessment_cone() {
             appearance_context(),
         )],
         ConstraintSet::new(
-            vec![ConstraintInvocation::hard(
+            vec![ConstraintInvocation::visible_unary_hard(
                 ConstraintId::new(1),
                 OCCURRENCE,
                 Wcag22CriterionV1::Sc143TextLargeScale,
@@ -1038,7 +1095,7 @@ fn terminal_safety_rejects_an_unconstrained_finite_target() {
             appearance_context(),
         )],
         ConstraintSet::new(
-            vec![ConstraintInvocation::hard(
+            vec![ConstraintInvocation::visible_unary_hard(
                 ConstraintId::new(1),
                 UPPER_OCCURRENCE,
                 Wcag22CriterionV1::Sc143TextLargeScale,
@@ -1114,12 +1171,12 @@ fn independent_finite_target_components_are_rejected_before_global_product_searc
         ],
         ConstraintSet::new(
             vec![
-                ConstraintInvocation::hard(
+                ConstraintInvocation::visible_unary_hard(
                     ConstraintId::new(1),
                     OCCURRENCE,
                     Wcag22CriterionV1::Sc143TextLargeScale,
                 ),
-                ConstraintInvocation::hard(
+                ConstraintInvocation::visible_unary_hard(
                     ConstraintId::new(2),
                     UPPER_OCCURRENCE,
                     Wcag22CriterionV1::Sc143TextLargeScale,
@@ -1151,12 +1208,12 @@ fn independent_finite_target_components_are_rejected_before_global_product_searc
 fn candidate_passing_one_hard_cell_and_failing_another_is_never_certified() {
     let compiled = program(
         vec![
-            ConstraintInvocation::hard(
+            ConstraintInvocation::visible_unary_hard(
                 ConstraintId::new(1),
                 OCCURRENCE,
                 Wcag22CriterionV1::Sc143TextLargeScale,
             ),
-            ConstraintInvocation::hard(
+            ConstraintInvocation::visible_unary_hard(
                 ConstraintId::new(2),
                 OCCURRENCE,
                 Wcag22CriterionV1::Sc143TextDefault,
@@ -1189,12 +1246,12 @@ fn candidate_passing_one_hard_cell_and_failing_another_is_never_certified() {
 #[test]
 fn report_only_violation_is_retained_but_does_not_select() {
     let compiled = program(
-        vec![ConstraintInvocation::hard(
+        vec![ConstraintInvocation::visible_unary_hard(
             ConstraintId::new(1),
             OCCURRENCE,
             Wcag22CriterionV1::Sc143TextLargeScale,
         )],
-        vec![ConstraintInvocation::report_only(
+        vec![ConstraintInvocation::visible_unary_report_only(
             ConstraintId::new(2),
             OCCURRENCE,
             Wcag22CriterionV1::Sc143TextDefault,
@@ -1223,7 +1280,7 @@ fn report_only_violation_is_retained_but_does_not_select() {
 fn report_only_assessment_admits_output_but_cannot_override_explicit_selection_order() {
     let compiled = program(
         vec![],
-        vec![ConstraintInvocation::report_only(
+        vec![ConstraintInvocation::visible_unary_report_only(
             ConstraintId::new(1),
             OCCURRENCE,
             Wcag22CriterionV1::Sc143TextDefault,
@@ -1247,7 +1304,7 @@ fn report_only_assessment_admits_output_but_cannot_override_explicit_selection_o
 #[test]
 fn no_feasible_joint_state_commits_no_output_and_retains_previous_certificate() {
     let compiled = program(
-        vec![ConstraintInvocation::hard(
+        vec![ConstraintInvocation::visible_unary_hard(
             ConstraintId::new(1),
             OCCURRENCE,
             Wcag22CriterionV1::Sc143TextLargeScale,
@@ -1287,7 +1344,7 @@ fn no_feasible_joint_state_commits_no_output_and_retains_previous_certificate() 
 fn candidate_declaration_permutation_preserves_explicit_physical_order() {
     let make = |candidates| {
         program(
-            vec![ConstraintInvocation::hard(
+            vec![ConstraintInvocation::visible_unary_hard(
                 ConstraintId::new(1),
                 OCCURRENCE,
                 Wcag22CriterionV1::Sc143TextLargeScale,
@@ -1499,7 +1556,7 @@ fn rejected_state_runs_once_and_selected_state_runs_fresh_recheck_twice() {
             appearance_context(),
         )],
         ConstraintSet::new(
-            vec![ConstraintInvocation::hard(
+            vec![ConstraintInvocation::visible_unary_hard(
                 ConstraintId::new(1),
                 OCCURRENCE,
                 Wcag22CriterionV1::Sc143TextLargeScale,
@@ -1543,7 +1600,7 @@ fn evaluator_error_aborts_both_candidate_search_and_fresh_recheck() {
         let compiled = point_program(
             signal(0),
             target(vec![candidate(FIRST, 0xFF)]),
-            vec![ConstraintInvocation::hard(
+            vec![ConstraintInvocation::visible_unary_hard(
                 constraint,
                 OCCURRENCE,
                 Srgb8::new([0xFF; 3]),
@@ -1591,12 +1648,12 @@ fn report_evaluator_error_cannot_poison_candidate_search_or_change_selection() {
     let compiled = point_program(
         signal(0),
         target(vec![candidate(FIRST, 0x55), candidate(SECOND, 0xFF)]),
-        vec![ConstraintInvocation::hard(
+        vec![ConstraintInvocation::visible_unary_hard(
             ConstraintId::new(1),
             OCCURRENCE,
             Wcag22CriterionV1::Sc143TextLargeScale,
         )],
-        vec![ConstraintInvocation::report_only(
+        vec![ConstraintInvocation::visible_unary_report_only(
             ConstraintId::new(2),
             OCCURRENCE,
             report_invocation,
@@ -1639,12 +1696,12 @@ fn hard_conflict_runs_report_only_once_in_the_exhaustive_full_pass() {
     let compiled = point_program(
         signal(0),
         target(vec![candidate(FIRST, 0xAA), candidate(SECOND, 0xFF)]),
-        vec![ConstraintInvocation::hard(
+        vec![ConstraintInvocation::visible_unary_hard(
             ConstraintId::new(1),
             OCCURRENCE,
             Wcag22CriterionV1::Sc143TextLargeScale,
         )],
-        vec![ConstraintInvocation::report_only(
+        vec![ConstraintInvocation::visible_unary_report_only(
             ConstraintId::new(2),
             OCCURRENCE,
             Wcag22CriterionV1::Sc143TextDefault,
@@ -1687,7 +1744,7 @@ fn fixed_program_without_finite_targets_executes_one_complete_evidence_pass() {
         signal(0xFF),
         Target::fixed(TARGET, SOURCE),
         vec![],
-        vec![ConstraintInvocation::report_only(
+        vec![ConstraintInvocation::visible_unary_report_only(
             ConstraintId::new(1),
             OCCURRENCE,
             Wcag22CriterionV1::Sc143TextDefault,
@@ -1717,12 +1774,12 @@ fn fixed_hard_conflict_still_collects_report_only_evidence() {
     let compiled = point_program(
         signal(0xAA),
         Target::fixed(TARGET, SOURCE),
-        vec![ConstraintInvocation::hard(
+        vec![ConstraintInvocation::visible_unary_hard(
             hard,
             OCCURRENCE,
             Wcag22CriterionV1::Sc143TextLargeScale,
         )],
-        vec![ConstraintInvocation::report_only(
+        vec![ConstraintInvocation::visible_unary_report_only(
             report,
             OCCURRENCE,
             Wcag22CriterionV1::Sc143TextDefault,
@@ -1767,12 +1824,12 @@ fn exhaustive_conflict_freezes_every_state_case_hard_cell_before_any_diagnostic(
     let compiled = point_program(
         signal(0),
         target(vec![candidate(FIRST, 0xAA), candidate(SECOND, 0xBB)]),
-        vec![ConstraintInvocation::hard(
+        vec![ConstraintInvocation::visible_unary_hard(
             hard,
             OCCURRENCE,
             HARD_INVOCATION,
         )],
-        vec![ConstraintInvocation::report_only(
+        vec![ConstraintInvocation::visible_unary_report_only(
             report,
             OCCURRENCE,
             DIAGNOSTIC_INVOCATION,
@@ -1826,7 +1883,7 @@ fn exhaustive_conflict_freezes_every_state_case_hard_cell_before_any_diagnostic(
 fn successful_search_allocations_do_not_scale_with_rejected_states() {
     let compile = |candidates, order| {
         program(
-            vec![ConstraintInvocation::hard(
+            vec![ConstraintInvocation::visible_unary_hard(
                 ConstraintId::new(1),
                 OCCURRENCE,
                 Wcag22CriterionV1::Sc143TextLargeScale,
@@ -1910,7 +1967,7 @@ fn every_required_joint_arena_reservation_is_fail_before_work_and_retryable() {
                 appearance_context(),
             )],
             ConstraintSet::new(
-                vec![ConstraintInvocation::hard(
+                vec![ConstraintInvocation::visible_unary_hard(
                     ConstraintId::new(1),
                     OCCURRENCE,
                     Wcag22CriterionV1::Sc143TextLargeScale,
@@ -1991,7 +2048,7 @@ fn every_fallible_fixed_preflight_reservation_precedes_evaluator_work() {
                 appearance_context(),
             )],
             ConstraintSet::new(
-                vec![ConstraintInvocation::hard(
+                vec![ConstraintInvocation::visible_unary_hard(
                     ConstraintId::new(1),
                     OCCURRENCE,
                     Wcag22CriterionV1::Sc143TextLargeScale,
@@ -2081,7 +2138,7 @@ fn counting_fixed_program(
             appearance_context(),
         )],
         ConstraintSet::new(
-            vec![ConstraintInvocation::hard(
+            vec![ConstraintInvocation::visible_unary_hard(
                 ConstraintId::new(1),
                 OCCURRENCE,
                 Wcag22CriterionV1::Sc143TextLargeScale,
@@ -2170,12 +2227,12 @@ fn lower_id_diagnostic_cannot_consume_the_selected_state_final_recheck() {
     let compiled = point_program(
         signal(0),
         target(vec![candidate(FIRST, 0xFF)]),
-        vec![ConstraintInvocation::hard(
+        vec![ConstraintInvocation::visible_unary_hard(
             hard,
             OCCURRENCE,
             Srgb8::new([0xFF; 3]),
         )],
-        vec![ConstraintInvocation::report_only(
+        vec![ConstraintInvocation::visible_unary_report_only(
             ConstraintId::new(1),
             OCCURRENCE,
             Srgb8::new([0xFF; 3]),
@@ -2202,7 +2259,7 @@ fn lower_id_diagnostic_cannot_consume_the_selected_state_final_recheck() {
             state_index: 0,
             case_index: 0,
             constraint: hard,
-            subject: ProgramConstraintSubjectV1::ModeledOccurrence {
+            subject: ProgramConstraintSubjectV1::VisibleUnary {
                 occurrence: OCCURRENCE,
                 context: appearance_context(),
             },
@@ -2219,12 +2276,12 @@ fn diagnostic_error_cannot_mask_a_selected_state_final_recheck_violation() {
     let compiled = point_program(
         signal(0),
         target(vec![candidate(FIRST, 0xFF)]),
-        vec![ConstraintInvocation::hard(
+        vec![ConstraintInvocation::visible_unary_hard(
             hard,
             OCCURRENCE,
             HARD_INVOCATION,
         )],
-        vec![ConstraintInvocation::report_only(
+        vec![ConstraintInvocation::visible_unary_report_only(
             ConstraintId::new(2),
             OCCURRENCE,
             DIAGNOSTIC_INVOCATION,
@@ -2246,7 +2303,7 @@ fn diagnostic_error_cannot_mask_a_selected_state_final_recheck_violation() {
             state_index: 0,
             case_index: 0,
             constraint: hard,
-            subject: ProgramConstraintSubjectV1::ModeledOccurrence {
+            subject: ProgramConstraintSubjectV1::VisibleUnary {
                 occurrence: OCCURRENCE,
                 context: appearance_context(),
             },
@@ -2254,6 +2311,72 @@ fn diagnostic_error_cannot_mask_a_selected_state_final_recheck_violation() {
         }),
     );
     assert_eq!(probe.diagnostic_calls(), 0);
+}
+
+#[test]
+fn final_recheck_reports_only_hard_violations_and_their_exact_count() {
+    let evaluator = MultiViolationFinalRecheckEvaluatorSetV1::default();
+    let probe = evaluator.clone();
+    let first_violation = ConstraintId::new(2);
+    let compiled = point_program(
+        signal(0),
+        target(vec![candidate(FIRST, 0xFF)]),
+        vec![
+            ConstraintInvocation::visible_unary_hard(
+                ConstraintId::new(1),
+                OCCURRENCE,
+                Srgb8::new([1; 3]),
+            ),
+            ConstraintInvocation::visible_unary_hard(
+                first_violation,
+                OCCURRENCE,
+                Srgb8::new([2; 3]),
+            ),
+            ConstraintInvocation::visible_unary_hard(
+                ConstraintId::new(3),
+                OCCURRENCE,
+                Srgb8::new([3; 3]),
+            ),
+            ConstraintInvocation::visible_unary_hard(
+                ConstraintId::new(4),
+                OCCURRENCE,
+                Srgb8::new([4; 3]),
+            ),
+        ],
+        vec![ConstraintInvocation::visible_unary_report_only(
+            ConstraintId::new(5),
+            OCCURRENCE,
+            DIAGNOSTIC_INVOCATION,
+        )],
+        evaluator,
+    )
+    .with_joint_selection(DeclaredJointSelectionV1::new(vec![state(FIRST)]))
+    .compile()
+    .unwrap();
+    let mut session = compiled.instantiate(STREAM).unwrap();
+
+    let error = match session.commit(update(1, 0x00)) {
+        Ok(_) => panic!("three failures in the fresh recheck must reject the selected state"),
+        Err(error) => error,
+    };
+    assert_eq!(
+        error,
+        SessionUpdateError::Plan(ProgramSessionEvaluationError::FinalRecheckViolation {
+            state_index: 0,
+            case_index: 0,
+            constraint: first_violation,
+            subject: ProgramConstraintSubjectV1::VisibleUnary {
+                occurrence: OCCURRENCE,
+                context: appearance_context(),
+            },
+            hard_violation_count: 3,
+        }),
+    );
+    assert_eq!(
+        probe.calls(),
+        8,
+        "search and fresh hard recheck must be complete without invoking report-only poison"
+    );
 }
 
 #[test]
@@ -2281,7 +2404,7 @@ fn final_recheck_violation_is_typed_and_retains_the_previous_certificate() {
             appearance_context(),
         )],
         ConstraintSet::new(
-            vec![ConstraintInvocation::hard(
+            vec![ConstraintInvocation::visible_unary_hard(
                 ConstraintId::new(1),
                 OCCURRENCE,
                 Srgb8::new([0xFF; 3]),
@@ -2312,7 +2435,7 @@ fn final_recheck_violation_is_typed_and_retains_the_previous_certificate() {
             state_index: 0,
             case_index: 0,
             constraint: ConstraintId::new(1),
-            subject: ProgramConstraintSubjectV1::ModeledOccurrence {
+            subject: ProgramConstraintSubjectV1::VisibleUnary {
                 occurrence: OCCURRENCE,
                 context: appearance_context(),
             },
@@ -2328,7 +2451,7 @@ fn final_recheck_violation_is_typed_and_retains_the_previous_certificate() {
 #[test]
 fn duplicate_physical_candidate_value_is_typed_and_declaration_order_invariant() {
     let compile = |candidates| match program(
-        vec![ConstraintInvocation::hard(
+        vec![ConstraintInvocation::visible_unary_hard(
             ConstraintId::new(1),
             OCCURRENCE,
             Wcag22CriterionV1::Sc143TextLargeScale,
@@ -2364,7 +2487,7 @@ fn equal_sources_with_distinct_opacity_are_distinct_admitted_candidates() {
     {
         let compiled = program(
             vec![],
-            vec![ConstraintInvocation::report_only(
+            vec![ConstraintInvocation::visible_unary_report_only(
                 ConstraintId::new(1),
                 OCCURRENCE,
                 Wcag22CriterionV1::Sc143TextLargeScale,
@@ -2391,7 +2514,7 @@ fn equal_sources_with_distinct_opacity_are_distinct_admitted_candidates() {
 #[test]
 fn selected_atomic_candidate_preserves_opacity_through_fresh_recheck_and_output() {
     let compiled = program(
-        vec![ConstraintInvocation::hard(
+        vec![ConstraintInvocation::visible_unary_hard(
             ConstraintId::new(1),
             OCCURRENCE,
             Wcag22CriterionV1::Sc143TextLargeScale,
@@ -2415,7 +2538,7 @@ fn selected_atomic_candidate_preserves_opacity_through_fresh_recheck_and_output(
 #[test]
 fn atomic_candidate_matches_fixed_opacity_topology_physics_but_not_identity() {
     let finite = program(
-        vec![ConstraintInvocation::hard(
+        vec![ConstraintInvocation::visible_unary_hard(
             ConstraintId::new(1),
             OCCURRENCE,
             Wcag22CriterionV1::Sc143TextLargeScale,
@@ -2458,7 +2581,7 @@ fn atomic_candidate_matches_fixed_opacity_topology_physics_but_not_identity() {
             appearance_context(),
         )],
         ConstraintSet::new(
-            vec![ConstraintInvocation::hard(
+            vec![ConstraintInvocation::visible_unary_hard(
                 ConstraintId::new(1),
                 OCCURRENCE,
                 Wcag22CriterionV1::Sc143TextLargeScale,
@@ -2496,7 +2619,7 @@ fn atomic_candidate_matches_fixed_opacity_topology_physics_but_not_identity() {
 #[test]
 fn duplicate_joint_tuple_is_rejected_before_runtime() {
     let error = match program(
-        vec![ConstraintInvocation::hard(
+        vec![ConstraintInvocation::visible_unary_hard(
             ConstraintId::new(1),
             OCCURRENCE,
             Wcag22CriterionV1::Sc143TextLargeScale,

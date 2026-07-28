@@ -22,6 +22,7 @@ use crate::program_session::{
     Target, TargetCandidateChoiceV1, TargetCandidateId, TargetCandidateV1, TargetId,
     checked_program_point_causal_cardinality_for_test, fail_program_preflight_reservation_for_test,
     program_report_cardinality_is_exact_for_test, selected_program_storage_is_prepared_for_test,
+    storage_has_spare_capacity_for_test,
 };
 use crate::session::{SessionState, SessionUpdateError};
 use crate::session_tests::CommitSessionUpdateForTest as _;
@@ -77,7 +78,7 @@ fn preflight_program_with_mode(
 ) -> crate::program_session::CompiledProgram<CountingProgramWcag22Srgb8V1> {
     let constraints = if hard {
         ConstraintSet::new(
-            vec![ConstraintInvocation::hard(
+            vec![ConstraintInvocation::visible_unary_hard(
                 CONSTRAINT,
                 OCCURRENCE,
                 Wcag22CriterionV1::Sc143TextLargeScale,
@@ -87,7 +88,7 @@ fn preflight_program_with_mode(
     } else {
         ConstraintSet::new(
             vec![],
-            vec![ConstraintInvocation::report_only(
+            vec![ConstraintInvocation::visible_unary_report_only(
                 CONSTRAINT,
                 OCCURRENCE,
                 Wcag22CriterionV1::Sc143TextLargeScale,
@@ -167,7 +168,7 @@ fn joint_preflight_program(
             context(),
         )],
         ConstraintSet::new(
-            vec![ConstraintInvocation::hard(
+            vec![ConstraintInvocation::visible_unary_hard(
                 CONSTRAINT,
                 OCCURRENCE,
                 Wcag22CriterionV1::Sc143TextLargeScale,
@@ -319,7 +320,7 @@ fn fanout_program() -> crate::program_session::CompiledProgram<ExactSrgb8Identit
             ),
         ],
         ConstraintSet::new(
-            vec![ConstraintInvocation::hard(
+            vec![ConstraintInvocation::visible_unary_hard(
                 CONSTRAINT,
                 OCCURRENCE,
                 Srgb8::new([252; 3]),
@@ -434,7 +435,7 @@ fn finite_fanout_program() -> crate::program_session::CompiledProgram<ExactSrgb8
             ),
         ],
         ConstraintSet::new(
-            vec![ConstraintInvocation::hard(
+            vec![ConstraintInvocation::visible_unary_hard(
                 CONSTRAINT,
                 OCCURRENCE,
                 // Ни один из четырёх выведенных выше кодов не равен 128,
@@ -667,7 +668,9 @@ fn finite_program_with_candidates(
             context(),
         )],
         ConstraintSet::new(
-            vec![ConstraintInvocation::hard(CONSTRAINT, OCCURRENCE, expected)],
+            vec![ConstraintInvocation::visible_unary_hard(
+                CONSTRAINT, OCCURRENCE, expected,
+            )],
             vec![],
         ),
         vec![OutputBinding::new(OUTPUT, PAINT)],
@@ -970,11 +973,11 @@ fn causal_cardinality_is_the_exact_state_case_presentation_product() {
 
 #[test]
 fn report_cardinality_rejects_each_independent_storage_drift() {
-    let expected = [3, 5, 7];
+    let expected = [3, 5, 7, 11];
     assert!(program_report_cardinality_is_exact_for_test(
         expected, expected
     ));
-    for actual in [[2, 5, 7], [3, 4, 7], [3, 5, 6]] {
+    for actual in [[2, 5, 7, 11], [3, 4, 7, 11], [3, 5, 6, 11], [3, 5, 7, 10]] {
         assert!(
             !program_report_cardinality_is_exact_for_test(actual, expected),
             "one drifting storage dimension must invalidate {actual:?}"
@@ -984,29 +987,59 @@ fn report_cardinality_rejects_each_independent_storage_drift() {
 
 #[test]
 fn selected_storage_precondition_rejects_each_independent_drift() {
-    let empty = [0, 0, 0, 0];
-    let required = [3, 5, 7, 11];
+    let empty = [0, 0, 0, 0, 0];
+    let required = [3, 5, 7, 11, 13];
     assert!(selected_program_storage_is_prepared_for_test(
         empty, required, required
     ));
     assert!(selected_program_storage_is_prepared_for_test(
         empty,
-        [4, 6, 8, 12],
+        [4, 6, 8, 12, 14],
         required
     ));
 
-    for lengths in [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]] {
+    for lengths in [
+        [1, 0, 0, 0, 0],
+        [0, 1, 0, 0, 0],
+        [0, 0, 1, 0, 0],
+        [0, 0, 0, 1, 0],
+        [0, 0, 0, 0, 1],
+    ] {
         assert!(
             !selected_program_storage_is_prepared_for_test(lengths, required, required),
             "every arena must be empty before evaluation: {lengths:?}"
         );
     }
-    for capacities in [[2, 5, 7, 11], [3, 4, 7, 11], [3, 5, 6, 11], [3, 5, 7, 10]] {
+    for capacities in [
+        [2, 5, 7, 11, 13],
+        [3, 4, 7, 11, 13],
+        [3, 5, 6, 11, 13],
+        [3, 5, 7, 10, 13],
+        [3, 5, 7, 11, 12],
+    ] {
         assert!(
             !selected_program_storage_is_prepared_for_test(empty, capacities, required),
             "every arena must independently satisfy preflight: {capacities:?}"
         );
     }
+}
+
+#[test]
+fn spare_capacity_is_one_checked_coordinate_law_for_every_arena() {
+    assert!(storage_has_spare_capacity_for_test([2, 3], [5, 7], [3, 4]));
+    assert!(storage_has_spare_capacity_for_test([2, 3], [6, 8], [3, 4]));
+    assert!(storage_has_spare_capacity_for_test([2], [2], [0]));
+
+    for capacities in [[4, 7], [5, 6]] {
+        assert!(
+            !storage_has_spare_capacity_for_test([2, 3], capacities, [3, 4]),
+            "one short coordinate must reject the whole arena set: {capacities:?}"
+        );
+    }
+    assert!(
+        !storage_has_spare_capacity_for_test([3], [2], [0]),
+        "an impossible length above capacity must fail closed"
+    );
 }
 
 #[test]

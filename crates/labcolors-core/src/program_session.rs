@@ -43,10 +43,12 @@ use crate::clean_set::{
 };
 use crate::composition::CompositionProfileV1;
 use crate::constraints::{
-    Evaluator, ExactSrgb8IdentityV1, HardDecision, ProgramConstraintContentV1,
-    ProgramPointAssessmentErrorV1, ProgramPointEvaluatorContentV1, ProgramPointEvaluatorV1,
-    ProgramPointInvocation, ProgramPointOccurrenceV1, ProgramPointTargetV1,
-    ProgramVisiblePointBindingV1, ProgramVisiblePointPassEvidence,
+    CoreIntrinsicUnaryInvocationV1, CoreIntrinsicUnaryMeasurementV1, CoreIntrinsicUnaryPassV1,
+    CoreIntrinsicUnaryViolationV1, CoreRelationInvocationV1, CoreRelationMeasurementV1,
+    CoreRelationPassV1, CoreRelationViolationV1, Evaluator, ExactSrgb8IdentityV1, HardDecision,
+    ProgramConstraintContentV1, ProgramPointAssessmentErrorV1, ProgramPointEvaluatorContentV1,
+    ProgramPointEvaluatorV1, ProgramPointInvocation, ProgramPointOccurrenceV1,
+    ProgramPointTargetV1, ProgramVisiblePointBindingV1, ProgramVisiblePointPassEvidence,
     ProgramVisiblePointViolationEvidence, Wcag22Srgb8V1, assess_program_point_hard,
 };
 use crate::joint::{
@@ -55,10 +57,11 @@ use crate::joint::{
 };
 use crate::lcs_occurrence::{AppearanceContextId, ColorSignal};
 use crate::observation::{
-    CanonicalObservationSchemaV1, OBSERVATION_ARENA_SLOT_COUNT_V1, ObservationArenaSlotV1,
-    ObservationError, ObservationGroupId, ObservationSchemaMismatchV1, ObservationStreamId,
-    RevisionBoundObservationV1, canonicalize_observation_schema,
+    CanonicalObservationSchemaV1, NonEmptyScenarioSetV1, OBSERVATION_ARENA_SLOT_COUNT_V1,
+    ObservationArenaSlotV1, ObservationError, ObservationGroupId, ObservationSchemaMismatchV1,
+    ObservationStreamId, RevisionBoundObservationV1, canonicalize_observation_schema,
 };
+use crate::relation::DirectedRelationV1;
 use crate::session::{
     Session, SessionDecision, SessionEvidenceV1, SessionObservationBindingPermitV1, SessionPlanV1,
     private as session_private,
@@ -67,7 +70,11 @@ use crate::wcag22::Wcag22CriterionV1;
 
 #[path = "program_identity.rs"]
 mod identity;
-pub(crate) use identity::ProgramContentIdentityV5;
+pub(crate) use identity::ProgramContentIdentityV6;
+#[cfg(test)]
+pub(crate) use identity::edge_role_count_for_test as program_identity_edge_role_count_for_test;
+#[cfg(test)]
+pub(crate) use identity::graph_schema_for_test as program_identity_graph_schema_for_test;
 
 /// Opaque identity of one immutable authored colour source.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -486,11 +493,23 @@ pub enum ReportModeV1 {}
 /// объектом. Закрытая сумма не позволяет оценщику `Occurrence` и конвенции
 /// `PointPresentation` притвориться взаимозаменяемыми либо хранить объект
 /// ограничения отдельным полем.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ProgramConstraintBodyV1<Invocation> {
-    ModeledOccurrence {
+    VisibleUnary {
         occurrence: OccurrenceId,
         invocation: Invocation,
+    },
+    IntrinsicUnary {
+        target: TargetId,
+        invocation: CoreIntrinsicUnaryInvocationV1,
+    },
+    IntrinsicRelation {
+        relation: DirectedRelationV1<TargetId>,
+        invocation: CoreRelationInvocationV1,
+    },
+    VisibleRelation {
+        relation: DirectedRelationV1<OccurrenceId>,
+        invocation: CoreRelationInvocationV1,
     },
     DeclaredSrgb8CleanSet {
         target: PointPresentationTargetV1,
@@ -502,7 +521,7 @@ pub(crate) enum ProgramConstraintBodyV1<Invocation> {
 }
 
 /// Одно атомарное типизированное ограничение над одним точным физическим объектом.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConstraintInvocation<Invocation, Mode> {
     id: ConstraintId,
     body: ProgramConstraintBodyV1<Invocation>,
@@ -510,12 +529,59 @@ pub struct ConstraintInvocation<Invocation, Mode> {
 }
 
 impl<Invocation> ConstraintInvocation<Invocation, HardModeV1> {
-    pub const fn hard(id: ConstraintId, target: OccurrenceId, invocation: Invocation) -> Self {
+    pub const fn visible_unary_hard(
+        id: ConstraintId,
+        occurrence: OccurrenceId,
+        invocation: Invocation,
+    ) -> Self {
         Self {
             id,
-            body: ProgramConstraintBodyV1::ModeledOccurrence {
-                occurrence: target,
+            body: ProgramConstraintBodyV1::VisibleUnary {
+                occurrence,
                 invocation,
+            },
+            mode: PhantomData,
+        }
+    }
+
+    pub(crate) const fn exact_intrinsic_unary_hard(
+        id: ConstraintId,
+        target: TargetId,
+        expected: Srgb8,
+    ) -> Self {
+        Self {
+            id,
+            body: ProgramConstraintBodyV1::IntrinsicUnary {
+                target,
+                invocation: CoreIntrinsicUnaryInvocationV1::exact_srgb8(expected),
+            },
+            mode: PhantomData,
+        }
+    }
+
+    pub(crate) const fn exact_intrinsic_relation_hard(
+        id: ConstraintId,
+        relation: DirectedRelationV1<TargetId>,
+    ) -> Self {
+        Self {
+            id,
+            body: ProgramConstraintBodyV1::IntrinsicRelation {
+                relation,
+                invocation: CoreRelationInvocationV1::exact_srgb8(),
+            },
+            mode: PhantomData,
+        }
+    }
+
+    pub(crate) const fn exact_visible_relation_hard(
+        id: ConstraintId,
+        relation: DirectedRelationV1<OccurrenceId>,
+    ) -> Self {
+        Self {
+            id,
+            body: ProgramConstraintBodyV1::VisibleRelation {
+                relation,
+                invocation: CoreRelationInvocationV1::exact_srgb8(),
             },
             mode: PhantomData,
         }
@@ -547,15 +613,15 @@ impl<Invocation> ConstraintInvocation<Invocation, HardModeV1> {
 }
 
 impl<Invocation> ConstraintInvocation<Invocation, ReportModeV1> {
-    pub const fn report_only(
+    pub const fn visible_unary_report_only(
         id: ConstraintId,
-        target: OccurrenceId,
+        occurrence: OccurrenceId,
         invocation: Invocation,
     ) -> Self {
         Self {
             id,
-            body: ProgramConstraintBodyV1::ModeledOccurrence {
-                occurrence: target,
+            body: ProgramConstraintBodyV1::VisibleUnary {
+                occurrence,
                 invocation,
             },
             mode: PhantomData,
@@ -1024,6 +1090,46 @@ impl CoreProgramDraftV1 {
         self.program.constraints.hard.push(constraint);
     }
 
+    pub(crate) fn push_exact_intrinsic_relation_hard(
+        &mut self,
+        id: ConstraintId,
+        relation: DirectedRelationV1<TargetId>,
+    ) {
+        self.program
+            .constraints
+            .hard
+            .push(ConstraintInvocation::exact_intrinsic_relation_hard(
+                id, relation,
+            ));
+    }
+
+    pub(crate) fn push_exact_intrinsic_unary_hard(
+        &mut self,
+        id: ConstraintId,
+        target: TargetId,
+        expected: Srgb8,
+    ) {
+        self.program
+            .constraints
+            .hard
+            .push(ConstraintInvocation::exact_intrinsic_unary_hard(
+                id, target, expected,
+            ));
+    }
+
+    pub(crate) fn push_exact_visible_relation_hard(
+        &mut self,
+        id: ConstraintId,
+        relation: DirectedRelationV1<OccurrenceId>,
+    ) {
+        self.program
+            .constraints
+            .hard
+            .push(ConstraintInvocation::exact_visible_relation_hard(
+                id, relation,
+            ));
+    }
+
     pub(crate) fn push_report_constraint(
         &mut self,
         constraint: ConstraintInvocation<CoreProgramConstraintInvocationV1, ReportModeV1>,
@@ -1230,6 +1336,35 @@ pub enum ProgramCompileError {
         constraint: ConstraintId,
         occurrence: OccurrenceId,
     },
+    MissingIntrinsicUnaryTarget {
+        constraint: ConstraintId,
+        target: TargetId,
+    },
+    MissingIntrinsicRelationReference {
+        constraint: ConstraintId,
+        reference: TargetId,
+    },
+    MissingIntrinsicRelationCandidate {
+        constraint: ConstraintId,
+        candidate: TargetId,
+    },
+    MissingVisibleRelationReference {
+        constraint: ConstraintId,
+        reference: OccurrenceId,
+    },
+    MissingVisibleRelationCandidate {
+        constraint: ConstraintId,
+        candidate: OccurrenceId,
+    },
+    SolverDependentIntrinsicRelationReference {
+        constraint: ConstraintId,
+        reference: TargetId,
+    },
+    SolverDependentVisibleRelationReference {
+        constraint: ConstraintId,
+        reference: OccurrenceId,
+        target: TargetId,
+    },
     MissingConstraintPresentationTarget {
         constraint: ConstraintId,
         root: PresentationRootId,
@@ -1341,13 +1476,40 @@ std::thread_local! {
     };
 }
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct CompiledIntrinsicRelationEndpointV1 {
+    target_id: TargetId,
+    target: CompiledPaintInputSlotV1,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct CompiledVisibleRelationEndpointV1 {
+    occurrence: OccurrenceId,
+    slot: CompiledOccurrenceSlotV1,
+    occurrence_context_index: usize,
+}
+
 enum CompiledProgramConstraintBodyV1<Invocation> {
-    ModeledOccurrence {
-        target_id: OccurrenceId,
-        target: CompiledOccurrenceSlotV1,
+    VisibleUnary {
+        occurrence: OccurrenceId,
+        slot: CompiledOccurrenceSlotV1,
         occurrence_context_index: usize,
         invocation: Invocation,
+    },
+    IntrinsicUnary {
+        target_id: TargetId,
+        target: CompiledPaintInputSlotV1,
+        invocation: CoreIntrinsicUnaryInvocationV1,
+    },
+    IntrinsicRelation {
+        reference: CompiledIntrinsicRelationEndpointV1,
+        candidates: Box<[CompiledIntrinsicRelationEndpointV1]>,
+        invocation: CoreRelationInvocationV1,
+    },
+    VisibleRelation {
+        reference: CompiledVisibleRelationEndpointV1,
+        candidates: Box<[CompiledVisibleRelationEndpointV1]>,
+        invocation: CoreRelationInvocationV1,
     },
     PointPresentation {
         presentation_ordinal: usize,
@@ -1360,6 +1522,18 @@ struct CompiledPointConstraint<Invocation> {
     id: ConstraintId,
     mode: CompiledConstraintModeV1,
     body: CompiledProgramConstraintBodyV1<Invocation>,
+}
+
+fn compiled_relation_member_count<Invocation>(
+    constraint: &CompiledPointConstraint<Invocation>,
+) -> usize {
+    match &constraint.body {
+        CompiledProgramConstraintBodyV1::IntrinsicRelation { candidates, .. } => candidates.len(),
+        CompiledProgramConstraintBodyV1::VisibleRelation { candidates, .. } => candidates.len(),
+        CompiledProgramConstraintBodyV1::VisibleUnary { .. }
+        | CompiledProgramConstraintBodyV1::IntrinsicUnary { .. }
+        | CompiledProgramConstraintBodyV1::PointPresentation { .. } => 0,
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1447,8 +1621,30 @@ pub(crate) enum PointOutputPresentationBindErrorV1 {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct CompiledOccurrenceContextV1 {
     occurrence: OccurrenceId,
-    target: CompiledOccurrenceSlotV1,
+    slot: CompiledOccurrenceSlotV1,
     context: AppearanceContextId,
+}
+
+fn coordinate_pair_matches<Left: PartialEq, Right: PartialEq>(
+    expected_left: &Left,
+    expected_right: &Right,
+    actual_left: &Left,
+    actual_right: &Right,
+) -> bool {
+    expected_left == actual_left && expected_right == actual_right
+}
+
+#[cfg(test)]
+pub(crate) fn compiled_occurrence_coordinate_pair_matches_for_test<
+    Left: PartialEq,
+    Right: PartialEq,
+>(
+    expected_left: Left,
+    expected_right: Right,
+    actual_left: Left,
+    actual_right: Right,
+) -> bool {
+    coordinate_pair_matches(&expected_left, &expected_right, &actual_left, &actual_right)
 }
 
 struct CompiledObservationGroupV1 {
@@ -1619,7 +1815,7 @@ where
     Evaluation: ProgramConstraintEvaluatorSetV1,
     ProgramConstraintInvocationOf<Evaluation>: Copy,
 {
-    content_identity: ProgramContentIdentityV5,
+    content_identity: ProgramContentIdentityV6,
     evaluator: Evaluation,
     graph: CompiledAppearanceGraph,
     binding_template: AdmittedAppearanceBindings,
@@ -1666,7 +1862,7 @@ where
     /// Opaque ID и порядок неупорядоченных объявлений исключены; явный joint
     /// order входит в адрес. Адрес не подтверждает поколение владельца и не
     /// заменяет revision-bound evidence.
-    pub fn content_identity(&self) -> ProgramContentIdentityV5 {
+    pub fn content_identity(&self) -> ProgramContentIdentityV6 {
         self.owner_generation.content_identity
     }
 
@@ -1861,14 +2057,196 @@ fn map_session_instantiate_error(error: BindingError) -> ProgramSessionInstantia
 /// `Occurrence`, и тем самым не подменяют финальный корень внутренним цветом.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ProgramConstraintSubjectV1 {
-    ModeledOccurrence {
+    VisibleUnary {
         occurrence: OccurrenceId,
+        context: AppearanceContextId,
+    },
+    IntrinsicUnary {
+        target: TargetId,
+    },
+    IntrinsicRelation {
+        reference: TargetId,
+    },
+    VisibleRelation {
+        reference: OccurrenceId,
         context: AppearanceContextId,
     },
     PointPresentation {
         target: PointPresentationTargetV1,
         terminal: OccurrenceId,
     },
+}
+
+/// Полная intrinsic-привязка Paint. Закон может читать только `source()`, но
+/// для аудита сохраняется всё атомарное значение source+alpha.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ProgramIntrinsicPaintBindingV1 {
+    target: TargetId,
+    value: EncodedPointPaintValueV1,
+}
+
+impl ProgramIntrinsicPaintBindingV1 {
+    pub(crate) const fn target(self) -> TargetId {
+        self.target
+    }
+
+    pub(crate) const fn value(self) -> EncodedPointPaintValueV1 {
+        self.value
+    }
+}
+
+/// Полная final-visible привязка одного моделируемого физического сценария.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ProgramVisibleRelationBindingV1 {
+    occurrence: OccurrenceId,
+    physical: ProgramVisiblePointBindingV1,
+}
+
+impl ProgramVisibleRelationBindingV1 {
+    pub(crate) const fn occurrence(self) -> OccurrenceId {
+        self.occurrence
+    }
+
+    pub(crate) const fn physical_ref(&self) -> &ProgramVisiblePointBindingV1 {
+        &self.physical
+    }
+}
+
+/// Вердикт участника хранится отдельно от сырого exact-измерения.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ProgramRelationMemberDecisionV1 {
+    Pass(CoreRelationPassV1),
+    Violation(CoreRelationViolationV1),
+}
+
+/// Одно однородное свидетельство reference→candidate в плоском report arena.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ProgramRelationMemberEvidenceV1 {
+    Intrinsic {
+        reference: ProgramIntrinsicPaintBindingV1,
+        candidate: ProgramIntrinsicPaintBindingV1,
+        measurement: CoreRelationMeasurementV1,
+        decision: ProgramRelationMemberDecisionV1,
+    },
+    Visible {
+        reference: ProgramVisibleRelationBindingV1,
+        candidate: ProgramVisibleRelationBindingV1,
+        measurement: CoreRelationMeasurementV1,
+        decision: ProgramRelationMemberDecisionV1,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ProgramIntrinsicUnaryPassEvidenceV1 {
+    binding: ProgramIntrinsicPaintBindingV1,
+    measurement: CoreIntrinsicUnaryMeasurementV1,
+    proof: CoreIntrinsicUnaryPassV1,
+}
+
+impl ProgramIntrinsicUnaryPassEvidenceV1 {
+    pub(crate) const fn binding(self) -> ProgramIntrinsicPaintBindingV1 {
+        self.binding
+    }
+
+    pub(crate) const fn measurement(self) -> CoreIntrinsicUnaryMeasurementV1 {
+        self.measurement
+    }
+
+    pub(crate) const fn proof(self) -> CoreIntrinsicUnaryPassV1 {
+        self.proof
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ProgramIntrinsicUnaryViolationEvidenceV1 {
+    binding: ProgramIntrinsicPaintBindingV1,
+    measurement: CoreIntrinsicUnaryMeasurementV1,
+    proof: CoreIntrinsicUnaryViolationV1,
+}
+
+impl ProgramIntrinsicUnaryViolationEvidenceV1 {
+    pub(crate) const fn binding(self) -> ProgramIntrinsicPaintBindingV1 {
+        self.binding
+    }
+
+    pub(crate) const fn measurement(self) -> CoreIntrinsicUnaryMeasurementV1 {
+        self.measurement
+    }
+
+    pub(crate) const fn proof(self) -> CoreIntrinsicUnaryViolationV1 {
+        self.proof
+    }
+}
+
+impl ProgramRelationMemberEvidenceV1 {
+    pub(crate) const fn measurement(self) -> CoreRelationMeasurementV1 {
+        match self {
+            Self::Intrinsic { measurement, .. } | Self::Visible { measurement, .. } => measurement,
+        }
+    }
+
+    pub(crate) const fn decision(self) -> ProgramRelationMemberDecisionV1 {
+        match self {
+            Self::Intrinsic { decision, .. } | Self::Visible { decision, .. } => decision,
+        }
+    }
+
+    pub(crate) const fn intrinsic_bindings(
+        &self,
+    ) -> Option<(
+        &ProgramIntrinsicPaintBindingV1,
+        &ProgramIntrinsicPaintBindingV1,
+    )> {
+        match self {
+            Self::Intrinsic {
+                reference,
+                candidate,
+                ..
+            } => Some((reference, candidate)),
+            Self::Visible { .. } => None,
+        }
+    }
+
+    pub(crate) const fn visible_bindings(
+        &self,
+    ) -> Option<(
+        &ProgramVisibleRelationBindingV1,
+        &ProgramVisibleRelationBindingV1,
+    )> {
+        match self {
+            Self::Visible {
+                reference,
+                candidate,
+                ..
+            } => Some((reference, candidate)),
+            Self::Intrinsic { .. } => None,
+        }
+    }
+}
+
+/// Непустой диапазон в плоском relation-member arena отчёта.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct NonEmptyRelationMemberSpanV1 {
+    start: usize,
+    len: NonZeroUsize,
+}
+
+impl NonEmptyRelationMemberSpanV1 {
+    fn from_start_and_len(start: usize, len: usize) -> Option<Self> {
+        start.checked_add(len)?;
+        Some(Self {
+            start,
+            len: NonZeroUsize::new(len)?,
+        })
+    }
+
+    fn get(
+        self,
+        storage: &[ProgramRelationMemberEvidenceV1],
+    ) -> Option<&[ProgramRelationMemberEvidenceV1]> {
+        let end = self.start.checked_add(self.len.get())?;
+        storage.get(self.start..end)
+    }
 }
 
 /// Точное положительное свидетельство закреплённого пакетом clean-set над
@@ -1917,7 +2295,9 @@ pub(crate) enum ProgramConstraintPassEvidenceV1<Evaluation>
 where
     Evaluation: ProgramConstraintEvaluatorSetV1,
 {
-    ModeledOccurrence(Evaluation::PassEvidence),
+    VisibleUnary(Evaluation::PassEvidence),
+    IntrinsicUnary(ProgramIntrinsicUnaryPassEvidenceV1),
+    Relation(NonEmptyRelationMemberSpanV1),
     DeclaredSrgb8CleanSet(DeclaredSrgb8CleanSetPassV1),
 }
 
@@ -1925,7 +2305,9 @@ pub(crate) enum ProgramConstraintViolationEvidenceV1<Evaluation>
 where
     Evaluation: ProgramConstraintEvaluatorSetV1,
 {
-    ModeledOccurrence(Evaluation::ViolationEvidence),
+    VisibleUnary(Evaluation::ViolationEvidence),
+    IntrinsicUnary(ProgramIntrinsicUnaryViolationEvidenceV1),
+    Relation(NonEmptyRelationMemberSpanV1),
     DeclaredSrgb8CleanSet(DeclaredSrgb8CleanSetViolationV1),
 }
 
@@ -2142,7 +2524,7 @@ pub(crate) enum ProgramPointCausalConsideredStateV1 {
 /// одного моделируемого terminal root. Оно ничего не утверждает о пикселе
 /// браузера, восприятии или качестве цвета.
 pub(crate) struct ProgramPointCausalEvidenceV1<'report, State> {
-    content_identity: ProgramContentIdentityV5,
+    content_identity: ProgramContentIdentityV6,
     observation: &'report RevisionBoundObservationV1,
     record: &'report ProgramPointCausalRecordV1,
     steps: &'report [PointOccurrenceAbsenceStepV1],
@@ -2163,7 +2545,7 @@ where
             .unwrap_or_else(|| unreachable!("тип replay span запрещает пустой пересчёт"))
     }
 
-    pub(crate) const fn content_identity(&self) -> ProgramContentIdentityV5 {
+    pub(crate) const fn content_identity(&self) -> ProgramContentIdentityV6 {
         self.content_identity
     }
 
@@ -2221,7 +2603,7 @@ pub struct ProgramReportV1<Evaluation>
 where
     Evaluation: ProgramConstraintEvaluatorSetV1,
 {
-    content_identity: ProgramContentIdentityV5,
+    content_identity: ProgramContentIdentityV6,
     observation: RevisionBoundObservationV1,
     arena: ProgramEvaluationArenaLeaseV1<Evaluation>,
 }
@@ -2232,7 +2614,7 @@ where
 {
     /// Адрес содержимого Program, по которому построен report; это не
     /// идентификатор поколения и не runtime-authority.
-    pub const fn content_identity(&self) -> ProgramContentIdentityV5 {
+    pub const fn content_identity(&self) -> ProgramContentIdentityV6 {
         self.content_identity
     }
 
@@ -2242,6 +2624,13 @@ where
 
     pub fn cells(&self) -> &[ProgramConstraintCellV1<Evaluation>] {
         &self.arena.storage.cells
+    }
+
+    pub(crate) fn relation_members_for(
+        &self,
+        span: NonEmptyRelationMemberSpanV1,
+    ) -> Option<&[ProgramRelationMemberEvidenceV1]> {
+        span.get(&self.arena.storage.relation_members)
     }
 
     #[cfg(test)]
@@ -2521,6 +2910,8 @@ where
 struct ProgramEvaluationCardinalityV1 {
     selected: usize,
     exhaustive_conflict: usize,
+    selected_relation_members: usize,
+    exhaustive_relation_members: usize,
     selected_point_records: usize,
     exhaustive_point_records: usize,
     selected_replay_steps: usize,
@@ -2532,6 +2923,7 @@ fn checked_program_evaluation_cardinality(
     constraint_count: usize,
     point_presentation_count: usize,
     replay_steps_per_case: usize,
+    relation_members_per_case: usize,
     state_count: usize,
     can_conflict: bool,
 ) -> Option<ProgramEvaluationCardinalityV1> {
@@ -2542,9 +2934,15 @@ fn checked_program_evaluation_cardinality(
         can_conflict,
     )?;
     let selected_point_records = physical_case_count.checked_mul(point_presentation_count)?;
+    let selected_relation_members = physical_case_count.checked_mul(relation_members_per_case)?;
     let selected_replay_steps = physical_case_count.checked_mul(replay_steps_per_case)?;
     let exhaustive_point_records = if can_conflict {
         selected_point_records.checked_mul(state_count)?
+    } else {
+        0
+    };
+    let exhaustive_relation_members = if can_conflict {
+        selected_relation_members.checked_mul(state_count)?
     } else {
         0
     };
@@ -2556,6 +2954,8 @@ fn checked_program_evaluation_cardinality(
     Some(ProgramEvaluationCardinalityV1 {
         selected: cells.selected,
         exhaustive_conflict: cells.exhaustive_conflict,
+        selected_relation_members,
+        exhaustive_relation_members,
         selected_point_records,
         exhaustive_point_records,
         selected_replay_steps,
@@ -2580,6 +2980,11 @@ where
         epoch.constraints.len(),
         epoch.point_presentations.len(),
         epoch.point_presentations.steps_per_case(),
+        epoch
+            .constraints
+            .iter()
+            .map(compiled_relation_member_count)
+            .try_fold(0_usize, usize::checked_add)?,
         state_count,
         can_conflict,
     )
@@ -2609,6 +3014,7 @@ pub(crate) fn checked_program_point_causal_cardinality_for_test(
         constraint_count,
         point_presentation_count,
         replay_steps_per_case,
+        0,
         state_count,
         can_conflict,
     )
@@ -2743,6 +3149,7 @@ where
     Evaluation: ProgramConstraintEvaluatorSetV1,
 {
     cells: Vec<ProgramConstraintCellV1<Evaluation>>,
+    relation_members: Vec<ProgramRelationMemberEvidenceV1>,
     point_causal_records: Vec<ProgramPointCausalRecordV1>,
     point_causal_steps: Vec<PointOccurrenceAbsenceStepV1>,
     outputs: Vec<ProgramPaintOutputV1>,
@@ -2755,6 +3162,7 @@ where
     const fn empty() -> Self {
         Self {
             cells: Vec::new(),
+            relation_members: Vec::new(),
             point_causal_records: Vec::new(),
             point_causal_steps: Vec::new(),
             outputs: Vec::new(),
@@ -2763,6 +3171,7 @@ where
 
     fn clear(&mut self) {
         self.cells.clear();
+        self.relation_members.clear();
         self.point_causal_records.clear();
         self.point_causal_steps.clear();
         self.outputs.clear();
@@ -2878,38 +3287,59 @@ where
 }
 
 // Порядок координат совпадает с физическим владением отчёта: constraint cells,
-// causal records и плоские replay steps.
-fn program_report_cardinality_is_exact(actual: [usize; 3], expected: [usize; 3]) -> bool {
+// relation members, causal records и плоские replay steps.
+fn program_report_cardinality_is_exact(actual: [usize; 4], expected: [usize; 4]) -> bool {
     actual == expected
 }
 
 #[cfg(test)]
 pub(crate) fn program_report_cardinality_is_exact_for_test(
-    actual: [usize; 3],
-    expected: [usize; 3],
+    actual: [usize; 4],
+    expected: [usize; 4],
 ) -> bool {
     program_report_cardinality_is_exact(actual, expected)
 }
 
-// Четвёртая координата — output arena. Избыточная ёмкость допустима, но все
-// арены обязаны быть пусты и независимо покрывать заранее рассчитанный объём.
-fn selected_program_storage_is_prepared(
-    lengths: [usize; 4],
-    capacities: [usize; 4],
-    required: [usize; 4],
+fn storage_has_spare_capacity<const N: usize>(
+    lengths: [usize; N],
+    capacities: [usize; N],
+    additional: [usize; N],
 ) -> bool {
-    lengths == [0; 4]
-        && capacities[0] >= required[0]
-        && capacities[1] >= required[1]
-        && capacities[2] >= required[2]
-        && capacities[3] >= required[3]
+    lengths
+        .into_iter()
+        .zip(capacities)
+        .zip(additional)
+        .all(|((length, capacity), additional)| {
+            capacity
+                .checked_sub(length)
+                .is_some_and(|spare| spare >= additional)
+        })
+}
+
+#[cfg(test)]
+pub(crate) fn storage_has_spare_capacity_for_test<const N: usize>(
+    lengths: [usize; N],
+    capacities: [usize; N],
+    additional: [usize; N],
+) -> bool {
+    storage_has_spare_capacity(lengths, capacities, additional)
+}
+
+// Пятая координата — output arena. Избыточная ёмкость допустима, но все арены
+// обязаны быть пусты и независимо покрывать заранее рассчитанный объём.
+fn selected_program_storage_is_prepared(
+    lengths: [usize; 5],
+    capacities: [usize; 5],
+    required: [usize; 5],
+) -> bool {
+    lengths == [0; 5] && storage_has_spare_capacity(lengths, capacities, required)
 }
 
 #[cfg(test)]
 pub(crate) fn selected_program_storage_is_prepared_for_test(
-    lengths: [usize; 4],
-    capacities: [usize; 4],
-    required: [usize; 4],
+    lengths: [usize; 5],
+    capacities: [usize; 5],
+    required: [usize; 5],
 ) -> bool {
     selected_program_storage_is_prepared(lengths, capacities, required)
 }
@@ -2920,11 +3350,120 @@ struct ProgramPointCausalBuffersV1<'buffers> {
     steps: &'buffers mut Vec<PointOccurrenceAbsenceStepV1>,
 }
 
+enum ProgramConstraintEvidenceCaptureV1<'buffers, Evaluation>
+where
+    Evaluation: ProgramConstraintEvaluatorSetV1,
+{
+    None,
+    Report {
+        cells: &'buffers mut Vec<ProgramConstraintCellV1<Evaluation>>,
+        relation_members: &'buffers mut Vec<ProgramRelationMemberEvidenceV1>,
+    },
+}
+
+/// Единственный accumulator плоской relation-arena. Физическая семья
+/// endpoint-ов влияет только на member payload; capacity, span и verdict едины.
+struct ProgramRelationEvidenceAccumulatorV1<'capture> {
+    relation_members: Option<&'capture mut Vec<ProgramRelationMemberEvidenceV1>>,
+    start: usize,
+    expected: NonZeroUsize,
+    written: usize,
+    has_violation: bool,
+}
+
+impl<'capture> ProgramRelationEvidenceAccumulatorV1<'capture> {
+    fn try_begin<'buffers, Evaluation>(
+        capture: &'capture mut ProgramConstraintEvidenceCaptureV1<'buffers, Evaluation>,
+        candidate_count: usize,
+    ) -> Result<Self, ()>
+    where
+        Evaluation: ProgramConstraintEvaluatorSetV1,
+    {
+        let expected = NonZeroUsize::new(candidate_count).ok_or(())?;
+        let relation_members = match capture {
+            ProgramConstraintEvidenceCaptureV1::None => None,
+            ProgramConstraintEvidenceCaptureV1::Report {
+                relation_members, ..
+            } => {
+                if !storage_has_spare_capacity(
+                    [relation_members.len()],
+                    [relation_members.capacity()],
+                    [candidate_count],
+                ) {
+                    return Err(());
+                }
+                Some(&mut **relation_members)
+            }
+        };
+        let start = relation_members.as_ref().map_or(0, |members| members.len());
+        Ok(Self {
+            relation_members,
+            start,
+            expected,
+            written: 0,
+            has_violation: false,
+        })
+    }
+
+    fn push(&mut self, member: ProgramRelationMemberEvidenceV1) -> Result<(), ()> {
+        if self.written >= self.expected.get() {
+            return Err(());
+        }
+        self.has_violation |= matches!(
+            member.decision(),
+            ProgramRelationMemberDecisionV1::Violation(_)
+        );
+        if let Some(relation_members) = self.relation_members.as_mut() {
+            relation_members.push(member);
+        }
+        self.written = self.written.checked_add(1).ok_or(())?;
+        Ok(())
+    }
+
+    fn finish(self) -> Option<(Option<NonEmptyRelationMemberSpanV1>, bool)> {
+        if self.written != self.expected.get() {
+            return None;
+        }
+        let span = match self.relation_members {
+            None => None,
+            Some(relation_members) => {
+                let expected_end = self.start.checked_add(self.expected.get())?;
+                if relation_members.len() != expected_end {
+                    return None;
+                }
+                Some(NonEmptyRelationMemberSpanV1::from_start_and_len(
+                    self.start,
+                    self.expected.get(),
+                )?)
+            }
+        };
+        Some((span, self.has_violation))
+    }
+}
+
+fn project_relation_result<Evaluation>(
+    span: Option<NonEmptyRelationMemberSpanV1>,
+    has_violation: bool,
+) -> Option<ProgramConstraintResultV1<Evaluation>>
+where
+    Evaluation: ProgramConstraintEvaluatorSetV1,
+{
+    span.map(|span| {
+        if has_violation {
+            ProgramConstraintResultV1::Violation(ProgramConstraintViolationEvidenceV1::Relation(
+                span,
+            ))
+        } else {
+            ProgramConstraintResultV1::Pass(ProgramConstraintPassEvidenceV1::Relation(span))
+        }
+    })
+}
+
 struct ProgramCandidateCollectionV1<'buffers, Evaluation>
 where
     Evaluation: ProgramConstraintEvaluatorSetV1,
 {
-    cells: Option<&'buffers mut Vec<ProgramConstraintCellV1<Evaluation>>>,
+    evidence: ProgramConstraintEvidenceCaptureV1<'buffers, Evaluation>,
     outputs: Option<&'buffers mut Vec<ProgramPaintOutputV1>>,
     point_causal: Option<ProgramPointCausalBuffersV1<'buffers>>,
 }
@@ -2935,7 +3474,7 @@ where
 {
     const fn none() -> Self {
         Self {
-            cells: None,
+            evidence: ProgramConstraintEvidenceCaptureV1::None,
             outputs: None,
             point_causal: None,
         }
@@ -2944,7 +3483,7 @@ where
 
 fn prepare_program_evaluation_arena<Evaluation>(
     epoch: &ProgramEpochV1<Evaluation>,
-    observation: &RevisionBoundObservationV1,
+    scenario_set: NonEmptyScenarioSetV1<'_>,
     arena: &mut ProgramEvaluationArenaV1<Evaluation>,
 ) -> Result<
     ProgramEvaluationCardinalityV1,
@@ -2954,9 +3493,8 @@ where
     Evaluation: ProgramConstraintEvaluatorSetV1,
     ProgramConstraintInvocationOf<Evaluation>: Copy,
 {
-    let counts =
-        checked_program_epoch_evaluation_cardinality(epoch, observation.physical_case_count())
-            .ok_or(ProgramSessionEvaluationError::ResourceExhausted)?;
+    let counts = checked_program_epoch_evaluation_cardinality(epoch, scenario_set.len().get())
+        .ok_or(ProgramSessionEvaluationError::ResourceExhausted)?;
 
     // Search и exhaustive conflict взаимоисключают друг друга в одном update.
     // Покомпонентный максимум резервируется до evaluator work: старые два
@@ -2965,6 +3503,13 @@ where
     try_reserve_program_evaluation_buffer(
         &mut arena.cells,
         counts.selected.max(counts.exhaustive_conflict),
+    )
+    .map_err(|()| ProgramSessionEvaluationError::ResourceExhausted)?;
+    try_reserve_program_evaluation_buffer(
+        &mut arena.relation_members,
+        counts
+            .selected_relation_members
+            .max(counts.exhaustive_relation_members),
     )
     .map_err(|()| ProgramSessionEvaluationError::ResourceExhausted)?;
     try_reserve_program_evaluation_buffer(
@@ -3088,11 +3633,13 @@ where
         workspace,
         presentation_cache,
     };
-    let counts = prepare_program_evaluation_arena(epoch, &observation, arena.storage_mut())?;
+    let scenario_set = NonEmptyScenarioSetV1::from_admitted(&observation)
+        .ok_or(ProgramSessionEvaluationError::InternalInvariant)?;
+    let counts = prepare_program_evaluation_arena(epoch, scenario_set, arena.storage_mut())?;
     let outcome = evaluate_program_session_into(
         &mut runtime,
         epoch,
-        &observation,
+        scenario_set,
         arena.storage_mut(),
         counts,
     )?;
@@ -3125,7 +3672,7 @@ where
 fn evaluate_program_session_into<Evaluation>(
     runtime: &mut ProgramEvaluationRuntimeV1<'_>,
     epoch: &ProgramEpochV1<Evaluation>,
-    observation: &RevisionBoundObservationV1,
+    scenario_set: NonEmptyScenarioSetV1<'_>,
     arena: &mut ProgramEvaluationArenaV1<Evaluation>,
     counts: ProgramEvaluationCardinalityV1,
 ) -> Result<
@@ -3141,7 +3688,7 @@ where
             return collect_program_candidate_into(
                 runtime,
                 epoch,
-                observation,
+                scenario_set,
                 None,
                 1,
                 arena,
@@ -3158,7 +3705,7 @@ where
         if !scan_program_candidate(
             runtime,
             epoch,
-            observation,
+            scenario_set,
             state_index,
             ProgramEvaluationPhaseV1::Hard,
             ProgramCandidateCollectionV1::none(),
@@ -3169,7 +3716,7 @@ where
             match collect_program_candidate_into(
                 runtime,
                 epoch,
-                observation,
+                scenario_set,
                 Some(state_index),
                 state_index + 1,
                 arena,
@@ -3193,18 +3740,21 @@ where
     if !selected_program_storage_is_prepared(
         [
             arena.cells.len(),
+            arena.relation_members.len(),
             arena.point_causal_records.len(),
             arena.point_causal_steps.len(),
             arena.outputs.len(),
         ],
         [
             arena.cells.capacity(),
+            arena.relation_members.capacity(),
             arena.point_causal_records.capacity(),
             arena.point_causal_steps.capacity(),
             arena.outputs.capacity(),
         ],
         [
             counts.exhaustive_conflict,
+            counts.exhaustive_relation_members,
             counts.exhaustive_point_records,
             counts.exhaustive_replay_steps,
             0,
@@ -3219,11 +3769,14 @@ where
         if !scan_program_candidate(
             runtime,
             epoch,
-            observation,
+            scenario_set,
             state_index,
             ProgramEvaluationPhaseV1::Hard,
             ProgramCandidateCollectionV1 {
-                cells: Some(&mut arena.cells),
+                evidence: ProgramConstraintEvidenceCaptureV1::Report {
+                    cells: &mut arena.cells,
+                    relation_members: &mut arena.relation_members,
+                },
                 outputs: None,
                 point_causal: Some(ProgramPointCausalBuffersV1 {
                     considered_state_index: Some(state_index),
@@ -3245,11 +3798,14 @@ where
             if scan_program_candidate(
                 runtime,
                 epoch,
-                observation,
+                scenario_set,
                 state_index,
                 ProgramEvaluationPhaseV1::ReportOnly,
                 ProgramCandidateCollectionV1 {
-                    cells: Some(&mut arena.cells),
+                    evidence: ProgramConstraintEvidenceCaptureV1::Report {
+                        cells: &mut arena.cells,
+                        relation_members: &mut arena.relation_members,
+                    },
                     outputs: None,
                     point_causal: None,
                 },
@@ -3261,11 +3817,13 @@ where
     if !program_report_cardinality_is_exact(
         [
             arena.cells.len(),
+            arena.relation_members.len(),
             arena.point_causal_records.len(),
             arena.point_causal_steps.len(),
         ],
         [
             counts.exhaustive_conflict,
+            counts.exhaustive_relation_members,
             counts.exhaustive_point_records,
             counts.exhaustive_replay_steps,
         ],
@@ -3299,7 +3857,7 @@ where
 fn collect_program_candidate_into<Evaluation>(
     runtime: &mut ProgramEvaluationRuntimeV1<'_>,
     epoch: &ProgramEpochV1<Evaluation>,
-    observation: &RevisionBoundObservationV1,
+    scenario_set: NonEmptyScenarioSetV1<'_>,
     selected_state_index: Option<usize>,
     considered_state_count: usize,
     arena: &mut ProgramEvaluationArenaV1<Evaluation>,
@@ -3313,23 +3871,27 @@ where
     ProgramConstraintInvocationOf<Evaluation>: Copy,
 {
     let expected_cell_count = counts.selected;
+    let expected_relation_member_count = counts.selected_relation_members;
     let expected_point_record_count = counts.selected_point_records;
     let expected_replay_step_count = counts.selected_replay_steps;
     if !selected_program_storage_is_prepared(
         [
             arena.cells.len(),
+            arena.relation_members.len(),
             arena.point_causal_records.len(),
             arena.point_causal_steps.len(),
             arena.outputs.len(),
         ],
         [
             arena.cells.capacity(),
+            arena.relation_members.capacity(),
             arena.point_causal_records.capacity(),
             arena.point_causal_steps.capacity(),
             arena.outputs.capacity(),
         ],
         [
             expected_cell_count,
+            expected_relation_member_count,
             expected_point_record_count,
             expected_replay_step_count,
             epoch.outputs.len(),
@@ -3348,11 +3910,14 @@ where
         scan_program_candidate(
             runtime,
             epoch,
-            observation,
+            scenario_set,
             candidate_state_index,
             ProgramEvaluationPhaseV1::Hard,
             ProgramCandidateCollectionV1 {
-                cells: Some(&mut arena.cells),
+                evidence: ProgramConstraintEvidenceCaptureV1::Report {
+                    cells: &mut arena.cells,
+                    relation_members: &mut arena.relation_members,
+                },
                 outputs: Some(&mut arena.outputs),
                 point_causal: Some(ProgramPointCausalBuffersV1 {
                     considered_state_index: None,
@@ -3367,10 +3932,13 @@ where
     if let Some(state_index) = selected_state_index.filter(|_| has_hard_violation) {
         // Search only nominates a finite state. Its fresh hard recheck owns the
         // terminal verdict, so diagnostics cannot mask or mutate that failure.
+        if arena.cells.iter().any(|cell| !cell.is_hard()) {
+            return Err(ProgramSessionEvaluationError::InternalInvariant);
+        }
         let mut violations = arena
             .cells
             .iter()
-            .filter(|cell| cell.is_hard() && cell.result().is_violation());
+            .filter(|cell| cell.result().is_violation());
         let first = violations
             .next()
             .ok_or(ProgramSessionEvaluationError::InternalInvariant)?;
@@ -3392,11 +3960,14 @@ where
         if scan_program_candidate(
             runtime,
             epoch,
-            observation,
+            scenario_set,
             candidate_state_index,
             ProgramEvaluationPhaseV1::ReportOnly,
             ProgramCandidateCollectionV1 {
-                cells: Some(&mut arena.cells),
+                evidence: ProgramConstraintEvidenceCaptureV1::Report {
+                    cells: &mut arena.cells,
+                    relation_members: &mut arena.relation_members,
+                },
                 outputs: (!has_hard_constraints).then_some(&mut arena.outputs),
                 point_causal,
             },
@@ -3407,11 +3978,13 @@ where
     if !program_report_cardinality_is_exact(
         [
             arena.cells.len(),
+            arena.relation_members.len(),
             arena.point_causal_records.len(),
             arena.point_causal_steps.len(),
         ],
         [
             expected_cell_count,
+            expected_relation_member_count,
             expected_point_record_count,
             expected_replay_step_count,
         ],
@@ -3442,10 +4015,38 @@ where
     });
 }
 
+fn resolve_visible_relation_endpoint(
+    evaluation: &AppearanceEvaluationView<'_, '_>,
+    contexts: &[CompiledOccurrenceContextV1],
+    endpoint: CompiledVisibleRelationEndpointV1,
+) -> Option<(Srgb8, ProgramVisibleRelationBindingV1)> {
+    let source = evaluation.occurrence_at(endpoint.slot)?;
+    if source.visible() != source.certificate().output_rgb() {
+        return None;
+    }
+    let context = contexts.get(endpoint.occurrence_context_index)?;
+    if !coordinate_pair_matches(
+        &context.occurrence,
+        &context.slot,
+        &endpoint.occurrence,
+        &endpoint.slot,
+    ) {
+        return None;
+    }
+    let point = ProgramPointOccurrenceV1::from_resolved(source, context.context);
+    Some((
+        Srgb8::new(source.visible()),
+        ProgramVisibleRelationBindingV1 {
+            occurrence: endpoint.occurrence,
+            physical: point.binding(),
+        },
+    ))
+}
+
 fn scan_program_candidate<Evaluation>(
     runtime: &mut ProgramEvaluationRuntimeV1<'_>,
     epoch: &ProgramEpochV1<Evaluation>,
-    observation: &RevisionBoundObservationV1,
+    scenario_set: NonEmptyScenarioSetV1<'_>,
     candidate_state_index: usize,
     phase: ProgramEvaluationPhaseV1,
     collection: ProgramCandidateCollectionV1<'_, Evaluation>,
@@ -3455,10 +4056,11 @@ where
     ProgramConstraintInvocationOf<Evaluation>: Copy,
 {
     let ProgramCandidateCollectionV1 {
-        mut cells,
+        mut evidence,
         mut outputs,
         mut point_causal,
     } = collection;
+    let observation = scenario_set.observation();
     let schema = &epoch.observation_group.schema;
     if !observation.shares_schema_backing_with(schema) {
         observation
@@ -3467,11 +4069,11 @@ where
         return Err(ProgramSessionEvaluationError::InternalInvariant);
     }
 
-    let case_count = observation.physical_case_count();
+    let case_count = scenario_set.len().get();
     let mut has_hard_violation = false;
     let mut output_mismatch = None;
     for case_index in 0..case_count {
-        let values = observation
+        let values = scenario_set
             .physical_values(case_index)
             .ok_or(ProgramSessionEvaluationError::InternalInvariant)?;
         if values.len() != schema.as_slice().len() {
@@ -3500,17 +4102,17 @@ where
         if let Some(point_causal) = point_causal.as_mut() {
             // Предварительный расчёт зарезервировал арены целиком. Локальная
             // проверка не даёт причинному replay незаметно начать аллоцировать.
-            if point_causal
-                .records
-                .capacity()
-                .saturating_sub(point_causal.records.len())
-                < epoch.point_presentations.len()
-                || point_causal
-                    .steps
-                    .capacity()
-                    .saturating_sub(point_causal.steps.len())
-                    < epoch.point_presentations.steps_per_case()
-            {
+            if !storage_has_spare_capacity(
+                [point_causal.records.len(), point_causal.steps.len()],
+                [
+                    point_causal.records.capacity(),
+                    point_causal.steps.capacity(),
+                ],
+                [
+                    epoch.point_presentations.len(),
+                    epoch.point_presentations.steps_per_case(),
+                ],
+            ) {
                 return Err(ProgramSessionEvaluationError::InternalInvariant);
             }
             for (presentation_ordinal, presentation) in epoch.point_presentations.iter().enumerate()
@@ -3542,40 +4144,45 @@ where
             .iter()
             .filter(|constraint| phase.includes(constraint.mode))
         {
-            let (subject, result) = match constraint.body {
-                CompiledProgramConstraintBodyV1::ModeledOccurrence {
-                    target_id,
-                    target,
+            let (subject, result, is_violation) = match &constraint.body {
+                CompiledProgramConstraintBodyV1::VisibleUnary {
+                    occurrence,
+                    slot,
                     occurrence_context_index,
                     invocation,
                 } => {
                     let source = evaluation
-                        .occurrence_at(target)
+                        .occurrence_at(*slot)
                         .ok_or(ProgramSessionEvaluationError::InternalInvariant)?;
                     if source.visible() != source.certificate().output_rgb() {
                         return Err(ProgramSessionEvaluationError::InternalInvariant);
                     }
                     let binding = epoch
                         .occurrence_contexts
-                        .get(occurrence_context_index)
+                        .get(*occurrence_context_index)
                         .ok_or(ProgramSessionEvaluationError::InternalInvariant)?;
-                    if binding.occurrence != target_id || binding.target != target {
+                    if !coordinate_pair_matches(
+                        &binding.occurrence,
+                        &binding.slot,
+                        occurrence,
+                        slot,
+                    ) {
                         return Err(ProgramSessionEvaluationError::InternalInvariant);
                     }
                     let point = ProgramPointOccurrenceV1::from_resolved(source, binding.context);
-                    let decision = Evaluation::assess(&epoch.evaluator, point, invocation)
+                    let decision = Evaluation::assess(&epoch.evaluator, point, *invocation)
                         .map_err(|error| match error {
                             ProgramPointAssessmentErrorV1::Evaluator(source) => {
                                 ProgramSessionEvaluationError::Evaluator {
                                     case_index,
                                     constraint: constraint.id,
-                                    occurrence: target_id,
+                                    occurrence: *occurrence,
                                     context: binding.context,
                                     source,
                                 }
                             }
                         })?;
-                    let result = match decision {
+                    let (result, is_violation) = match decision {
                         HardDecision::Pass(evidence) => {
                             debug_assert_eq!(
                                 Evaluation::pass_binding(&evidence).physical(),
@@ -3585,8 +4192,11 @@ where
                                 Evaluation::pass_binding(&evidence).context(),
                                 binding.context,
                             );
-                            ProgramConstraintResultV1::Pass(
-                                ProgramConstraintPassEvidenceV1::ModeledOccurrence(evidence),
+                            (
+                                ProgramConstraintResultV1::Pass(
+                                    ProgramConstraintPassEvidenceV1::VisibleUnary(evidence),
+                                ),
+                                false,
                             )
                         }
                         HardDecision::Violation(evidence) => {
@@ -3598,17 +4208,175 @@ where
                                 Evaluation::violation_binding(&evidence).context(),
                                 binding.context,
                             );
-                            ProgramConstraintResultV1::Violation(
-                                ProgramConstraintViolationEvidenceV1::ModeledOccurrence(evidence),
+                            (
+                                ProgramConstraintResultV1::Violation(
+                                    ProgramConstraintViolationEvidenceV1::VisibleUnary(evidence),
+                                ),
+                                true,
                             )
                         }
                     };
                     (
-                        ProgramConstraintSubjectV1::ModeledOccurrence {
-                            occurrence: target_id,
+                        ProgramConstraintSubjectV1::VisibleUnary {
+                            occurrence: *occurrence,
                             context: binding.context,
                         },
-                        result,
+                        Some(result),
+                        is_violation,
+                    )
+                }
+                CompiledProgramConstraintBodyV1::IntrinsicUnary {
+                    target_id,
+                    target,
+                    invocation,
+                } => {
+                    let value = runtime
+                        .bindings
+                        .paint_input_at(*target)
+                        .ok_or(ProgramSessionEvaluationError::InternalInvariant)?;
+                    let binding = ProgramIntrinsicPaintBindingV1 {
+                        target: *target_id,
+                        value,
+                    };
+                    let (measurement, decision) = invocation.assess(value.source());
+                    let (result, is_violation) = match decision {
+                        HardDecision::Pass(proof) => (
+                            ProgramConstraintResultV1::Pass(
+                                ProgramConstraintPassEvidenceV1::IntrinsicUnary(
+                                    ProgramIntrinsicUnaryPassEvidenceV1 {
+                                        binding,
+                                        measurement,
+                                        proof,
+                                    },
+                                ),
+                            ),
+                            false,
+                        ),
+                        HardDecision::Violation(proof) => (
+                            ProgramConstraintResultV1::Violation(
+                                ProgramConstraintViolationEvidenceV1::IntrinsicUnary(
+                                    ProgramIntrinsicUnaryViolationEvidenceV1 {
+                                        binding,
+                                        measurement,
+                                        proof,
+                                    },
+                                ),
+                            ),
+                            true,
+                        ),
+                    };
+                    (
+                        ProgramConstraintSubjectV1::IntrinsicUnary { target: *target_id },
+                        Some(result),
+                        is_violation,
+                    )
+                }
+                CompiledProgramConstraintBodyV1::IntrinsicRelation {
+                    reference,
+                    candidates,
+                    invocation,
+                } => {
+                    let mut relation_evidence = ProgramRelationEvidenceAccumulatorV1::try_begin(
+                        &mut evidence,
+                        candidates.len(),
+                    )
+                    .map_err(|()| ProgramSessionEvaluationError::InternalInvariant)?;
+                    let reference_value = runtime
+                        .bindings
+                        .paint_input_at(reference.target)
+                        .ok_or(ProgramSessionEvaluationError::InternalInvariant)?;
+                    let reference_binding = ProgramIntrinsicPaintBindingV1 {
+                        target: reference.target_id,
+                        value: reference_value,
+                    };
+                    for candidate in candidates.iter() {
+                        let candidate_value = runtime
+                            .bindings
+                            .paint_input_at(candidate.target)
+                            .ok_or(ProgramSessionEvaluationError::InternalInvariant)?;
+                        let candidate_binding = ProgramIntrinsicPaintBindingV1 {
+                            target: candidate.target_id,
+                            value: candidate_value,
+                        };
+                        let (measurement, decision) =
+                            invocation.assess(reference_value.source(), candidate_value.source());
+                        let decision = match decision {
+                            HardDecision::Pass(pass) => ProgramRelationMemberDecisionV1::Pass(pass),
+                            HardDecision::Violation(evidence) => {
+                                ProgramRelationMemberDecisionV1::Violation(evidence)
+                            }
+                        };
+                        relation_evidence
+                            .push(ProgramRelationMemberEvidenceV1::Intrinsic {
+                                reference: reference_binding,
+                                candidate: candidate_binding,
+                                measurement,
+                                decision,
+                            })
+                            .map_err(|()| ProgramSessionEvaluationError::InternalInvariant)?;
+                    }
+                    let (span, has_violation) = relation_evidence
+                        .finish()
+                        .ok_or(ProgramSessionEvaluationError::InternalInvariant)?;
+                    (
+                        ProgramConstraintSubjectV1::IntrinsicRelation {
+                            reference: reference.target_id,
+                        },
+                        project_relation_result(span, has_violation),
+                        has_violation,
+                    )
+                }
+                CompiledProgramConstraintBodyV1::VisibleRelation {
+                    reference,
+                    candidates,
+                    invocation,
+                } => {
+                    let mut relation_evidence = ProgramRelationEvidenceAccumulatorV1::try_begin(
+                        &mut evidence,
+                        candidates.len(),
+                    )
+                    .map_err(|()| ProgramSessionEvaluationError::InternalInvariant)?;
+                    let (reference_visible, reference_binding) = resolve_visible_relation_endpoint(
+                        &evaluation,
+                        &epoch.occurrence_contexts,
+                        *reference,
+                    )
+                    .ok_or(ProgramSessionEvaluationError::InternalInvariant)?;
+                    for candidate in candidates.iter().copied() {
+                        let (candidate_visible, candidate_binding) =
+                            resolve_visible_relation_endpoint(
+                                &evaluation,
+                                &epoch.occurrence_contexts,
+                                candidate,
+                            )
+                            .ok_or(ProgramSessionEvaluationError::InternalInvariant)?;
+                        let (measurement, decision) =
+                            invocation.assess(reference_visible, candidate_visible);
+                        let decision = match decision {
+                            HardDecision::Pass(pass) => ProgramRelationMemberDecisionV1::Pass(pass),
+                            HardDecision::Violation(evidence) => {
+                                ProgramRelationMemberDecisionV1::Violation(evidence)
+                            }
+                        };
+                        relation_evidence
+                            .push(ProgramRelationMemberEvidenceV1::Visible {
+                                reference: reference_binding,
+                                candidate: candidate_binding,
+                                measurement,
+                                decision,
+                            })
+                            .map_err(|()| ProgramSessionEvaluationError::InternalInvariant)?;
+                    }
+                    let (span, has_violation) = relation_evidence
+                        .finish()
+                        .ok_or(ProgramSessionEvaluationError::InternalInvariant)?;
+                    (
+                        ProgramConstraintSubjectV1::VisibleRelation {
+                            reference: reference.occurrence,
+                            context: reference_binding.physical.context(),
+                        },
+                        project_relation_result(span, has_violation),
+                        has_violation,
                     )
                 }
                 CompiledProgramConstraintBodyV1::PointPresentation {
@@ -3619,14 +4387,14 @@ where
                     let presentation = epoch
                         .point_presentations
                         .entries
-                        .get(presentation_ordinal)
+                        .get(*presentation_ordinal)
                         .ok_or(ProgramSessionEvaluationError::InternalInvariant)?;
-                    if presentation.terminal != terminal {
+                    if presentation.terminal != *terminal {
                         return Err(ProgramSessionEvaluationError::InternalInvariant);
                     }
                     let resolved = runtime
                         .presentation_cache
-                        .resolve(&evaluation, presentation_ordinal, presentation, None)
+                        .resolve(&evaluation, *presentation_ordinal, presentation, None)
                         .map_err(|()| ProgramSessionEvaluationError::InternalInvariant)?;
                     let result = if convention.forces_absent_mutation() {
                         ProgramConstraintResultV1::Violation(
@@ -3667,6 +4435,7 @@ where
                             }
                         }
                     };
+                    let is_violation = result.is_violation();
                     (
                         ProgramConstraintSubjectV1::PointPresentation {
                             target: PointPresentationTargetV1 {
@@ -3674,16 +4443,18 @@ where
                                 occurrence: presentation.target,
                                 absence_release: presentation.absence_release,
                             },
-                            terminal,
+                            terminal: *terminal,
                         },
-                        result,
+                        Some(result),
+                        is_violation,
                     )
                 }
             };
-            if constraint.mode.rejects_candidate() && result.is_violation() {
+            if constraint.mode.rejects_candidate() && is_violation {
                 has_hard_violation = true;
             }
-            if let Some(cells) = cells.as_deref_mut() {
+            if let ProgramConstraintEvidenceCaptureV1::Report { cells, .. } = &mut evidence {
+                let result = result.ok_or(ProgramSessionEvaluationError::InternalInvariant)?;
                 cells.push(ProgramConstraintCellV1 {
                     candidate_state_index,
                     case_index,
@@ -3847,18 +4618,28 @@ where
         &mut program.presentation_roots,
         &mut program.presentation_targets,
     )?;
+    let dependency_index = index_program_dependencies(&program)?;
+    let mut dependency_scratch = ProgramDependencyScratchV1::new(&program)?;
     let mut constraints = compile_constraints::<Evaluation>(
+        &program,
         &graph,
+        &dependency_index,
+        &mut dependency_scratch,
         &all_occurrence_contexts,
         &point_presentations,
         &program.constraints,
     )?;
-    validate_terminal_dependency_cone(&program, &constraints)?;
+    validate_terminal_dependency_cone(
+        &program,
+        &constraints,
+        &dependency_index,
+        &mut dependency_scratch,
+    )?;
     let constraint_phases = CompiledConstraintPhasesV1::from_authored(&program.constraints);
     let occurrence_contexts =
         compact_constraint_contexts(&all_occurrence_contexts, &mut constraints)?;
     let outputs = compile_outputs(&graph, &mut program.outputs)?;
-    let content_identity = identity::compile_program_content_identity_v5(&program)?;
+    let content_identity = identity::compile_program_content_identity_v6(&program)?;
     Ok(ProgramEpochV1 {
         content_identity,
         evaluator: program.evaluator,
@@ -4191,6 +4972,8 @@ fn false_slots(len: usize) -> Result<Vec<bool>, ProgramCompileError> {
 fn validate_terminal_dependency_cone<Evaluation>(
     program: &Program<Evaluation>,
     constraints: &[CompiledPointConstraint<ProgramConstraintInvocationOf<Evaluation>>],
+    index: &IndexedProgramDependenciesV1,
+    scratch: &mut ProgramDependencyScratchV1,
 ) -> Result<(), ProgramCompileError>
 where
     Evaluation: ProgramConstraintEvaluatorSetV1,
@@ -4206,14 +4989,21 @@ where
         return Ok(());
     }
 
-    let index = index_program_dependencies(program)?;
-    let mut scratch = ProgramDependencyScratchV1::new(program)?;
-    scratch.scan(
-        &index,
-        constraints.iter().map(compiled_constraint_dependency_root),
-    )?;
+    let mut constrained_targets = false_slots(program.targets.len())?;
+    let mut assessed_paints = false_slots(program.paints.len())?;
+    for constraint in constraints {
+        mark_constraint_coverage(
+            program,
+            index,
+            scratch,
+            constraint,
+            &mut constrained_targets,
+            Some(&mut assessed_paints),
+        )?;
+    }
     for (target_index, target) in program.targets.iter().enumerate() {
-        if matches!(&target.intent, TargetIntentV1::Finite(_)) && !scratch.targets[target_index] {
+        if matches!(&target.intent, TargetIntentV1::Finite(_)) && !constrained_targets[target_index]
+        {
             return Err(ProgramCompileError::UnconstrainedFiniteTarget { target: target.id });
         }
     }
@@ -4221,7 +5011,7 @@ where
         let paint_index = index
             .paint(output.paint)
             .ok_or(ProgramCompileError::InternalInvariant)?;
-        if !scratch.paints[paint_index] {
+        if !assessed_paints[paint_index] {
             return Err(ProgramCompileError::UnassessedOutput {
                 output: output.output,
                 paint: output.paint,
@@ -4236,10 +5026,20 @@ where
         .count();
     if finite_count > 1 {
         let mut has_common_assessment = false;
-        for target in constraints.iter().map(compiled_constraint_dependency_root) {
-            scratch.scan(&index, [target])?;
+        let mut per_constraint_targets = false_slots(program.targets.len())?;
+        for constraint in constraints {
+            per_constraint_targets.fill(false);
+            mark_constraint_coverage(
+                program,
+                index,
+                scratch,
+                constraint,
+                &mut per_constraint_targets,
+                None,
+            )?;
             if program.targets.iter().enumerate().all(|(index, target)| {
-                !matches!(&target.intent, TargetIntentV1::Finite(_)) || scratch.targets[index]
+                !matches!(&target.intent, TargetIntentV1::Finite(_))
+                    || per_constraint_targets[index]
             }) {
                 has_common_assessment = true;
                 break;
@@ -4252,13 +5052,103 @@ where
     Ok(())
 }
 
-fn compiled_constraint_dependency_root<Invocation>(
+fn mark_constraint_coverage<Invocation, Evaluation>(
+    program: &Program<Evaluation>,
+    index: &IndexedProgramDependenciesV1,
+    scratch: &mut ProgramDependencyScratchV1,
     constraint: &CompiledPointConstraint<Invocation>,
-) -> OccurrenceId {
+    constrained_targets: &mut [bool],
+    assessed_paints: Option<&mut [bool]>,
+) -> Result<(), ProgramCompileError>
+where
+    Evaluation: ProgramConstraintEvaluatorSetV1,
+    ProgramConstraintInvocationOf<Evaluation>: Copy,
+{
     match &constraint.body {
-        CompiledProgramConstraintBodyV1::ModeledOccurrence { target_id, .. } => *target_id,
-        CompiledProgramConstraintBodyV1::PointPresentation { terminal, .. } => *terminal,
+        CompiledProgramConstraintBodyV1::IntrinsicUnary { target_id, .. } => {
+            let ordinal = program
+                .targets
+                .binary_search_by_key(target_id, |candidate| candidate.id)
+                .map_err(|_| ProgramCompileError::InternalInvariant)?;
+            *constrained_targets
+                .get_mut(ordinal)
+                .ok_or(ProgramCompileError::InternalInvariant)? = true;
+            Ok(())
+        }
+        CompiledProgramConstraintBodyV1::IntrinsicRelation {
+            reference,
+            candidates,
+            ..
+        } => {
+            for target in std::iter::once(reference.target_id)
+                .chain(candidates.iter().map(|candidate| candidate.target_id))
+            {
+                let ordinal = program
+                    .targets
+                    .binary_search_by_key(&target, |candidate| candidate.id)
+                    .map_err(|_| ProgramCompileError::InternalInvariant)?;
+                *constrained_targets
+                    .get_mut(ordinal)
+                    .ok_or(ProgramCompileError::InternalInvariant)? = true;
+            }
+            Ok(())
+        }
+        CompiledProgramConstraintBodyV1::VisibleUnary { occurrence, .. } => {
+            merge_visible_constraint_coverage(
+                index,
+                scratch,
+                [*occurrence],
+                constrained_targets,
+                assessed_paints,
+            )
+        }
+        CompiledProgramConstraintBodyV1::VisibleRelation {
+            reference,
+            candidates,
+            ..
+        } => merge_visible_constraint_coverage(
+            index,
+            scratch,
+            std::iter::once(reference.occurrence)
+                .chain(candidates.iter().map(|candidate| candidate.occurrence)),
+            constrained_targets,
+            assessed_paints,
+        ),
+        CompiledProgramConstraintBodyV1::PointPresentation { terminal, .. } => {
+            merge_visible_constraint_coverage(
+                index,
+                scratch,
+                [*terminal],
+                constrained_targets,
+                assessed_paints,
+            )
+        }
     }
+}
+
+fn merge_visible_constraint_coverage(
+    index: &IndexedProgramDependenciesV1,
+    scratch: &mut ProgramDependencyScratchV1,
+    roots: impl IntoIterator<Item = OccurrenceId>,
+    constrained_targets: &mut [bool],
+    assessed_paints: Option<&mut [bool]>,
+) -> Result<(), ProgramCompileError> {
+    scratch.scan(index, roots)?;
+    if scratch.targets.len() != constrained_targets.len() {
+        return Err(ProgramCompileError::InternalInvariant);
+    }
+    for (destination, reached) in constrained_targets.iter_mut().zip(&scratch.targets) {
+        *destination |= *reached;
+    }
+    if let Some(assessed_paints) = assessed_paints {
+        if scratch.paints.len() != assessed_paints.len() {
+            return Err(ProgramCompileError::InternalInvariant);
+        }
+        for (destination, reached) in assessed_paints.iter_mut().zip(&scratch.paints) {
+            *destination |= *reached;
+        }
+    }
+    Ok(())
 }
 
 fn map_observation_schema_compile_error(error: ObservationError) -> ProgramCompileError {
@@ -4268,10 +5158,10 @@ fn map_observation_schema_compile_error(error: ObservationError) -> ProgramCompi
     }
 }
 
-struct LoweredConstraint<Invocation> {
+struct LoweredConstraint<'a, Invocation> {
     id: ConstraintId,
     mode: CompiledConstraintModeV1,
-    body: ProgramConstraintBodyV1<Invocation>,
+    body: &'a ProgramConstraintBodyV1<Invocation>,
 }
 
 fn compile_targets(
@@ -4480,12 +5370,12 @@ fn compile_occurrence_contexts(
         let index = contexts
             .binary_search_by_key(&occurrence, |(declared, _)| *declared)
             .map_err(|_| ProgramCompileError::InternalInvariant)?;
-        let target = graph
+        let slot = graph
             .bind_occurrence(occurrence)
             .ok_or(ProgramCompileError::InternalInvariant)?;
         compiled.push(CompiledOccurrenceContextV1 {
             occurrence,
-            target,
+            slot,
             context: contexts[index].1,
         });
     }
@@ -4525,7 +5415,10 @@ fn compile_declared_clean_set_body<Invocation>(
 }
 
 fn compile_constraints<Evaluation>(
+    program: &Program<Evaluation>,
     graph: &CompiledAppearanceGraph,
+    dependency_index: &IndexedProgramDependenciesV1,
+    dependency_scratch: &mut ProgramDependencyScratchV1,
     occurrence_contexts: &[CompiledOccurrenceContextV1],
     presentations: &CompiledPointPresentationsV1,
     authored: &ConstraintSet<ProgramConstraintInvocationOf<Evaluation>>,
@@ -4549,7 +5442,7 @@ where
     lowered.extend(authored.hard.iter().map(|constraint| LoweredConstraint {
         id: constraint.id,
         mode: CompiledConstraintModeV1::Hard,
-        body: *constraint.body(),
+        body: constraint.body(),
     }));
     lowered.extend(
         authored
@@ -4558,7 +5451,7 @@ where
             .map(|constraint| LoweredConstraint {
                 id: constraint.id,
                 mode: CompiledConstraintModeV1::ReportOnly,
-                body: *constraint.body(),
+                body: constraint.body(),
             }),
     );
     lowered.sort_unstable_by_key(|constraint| constraint.id);
@@ -4577,34 +5470,180 @@ where
         .map_err(|_| ProgramCompileError::ResourceExhausted)?;
     for constraint in lowered {
         let body = match constraint.body {
-            ProgramConstraintBodyV1::ModeledOccurrence {
+            ProgramConstraintBodyV1::VisibleUnary {
                 occurrence,
                 invocation,
             } => {
-                let target = graph.bind_occurrence(occurrence).ok_or(
+                let slot = graph.bind_occurrence(*occurrence).ok_or(
                     ProgramCompileError::MissingConstraintOccurrence {
                         constraint: constraint.id,
-                        occurrence,
+                        occurrence: *occurrence,
                     },
                 )?;
                 let occurrence_context_index = occurrence_contexts
-                    .binary_search_by_key(&occurrence, |binding| binding.occurrence)
+                    .binary_search_by_key(occurrence, |binding| binding.occurrence)
                     .map_err(|_| ProgramCompileError::InternalInvariant)?;
-                if occurrence_contexts[occurrence_context_index].target != target {
+                if occurrence_contexts[occurrence_context_index].slot != slot {
                     return Err(ProgramCompileError::InternalInvariant);
                 }
-                CompiledProgramConstraintBodyV1::ModeledOccurrence {
-                    target_id: occurrence,
-                    target,
+                CompiledProgramConstraintBodyV1::VisibleUnary {
+                    occurrence: *occurrence,
+                    slot,
                     occurrence_context_index,
-                    invocation,
+                    invocation: *invocation,
+                }
+            }
+            ProgramConstraintBodyV1::IntrinsicUnary { target, invocation } => {
+                if program
+                    .targets
+                    .binary_search_by_key(target, |candidate| candidate.id)
+                    .is_err()
+                {
+                    return Err(ProgramCompileError::MissingIntrinsicUnaryTarget {
+                        constraint: constraint.id,
+                        target: *target,
+                    });
+                }
+                CompiledProgramConstraintBodyV1::IntrinsicUnary {
+                    target_id: *target,
+                    target: graph
+                        .bind_paint_input(target_paint_input_id(*target))
+                        .ok_or(ProgramCompileError::InternalInvariant)?,
+                    invocation: *invocation,
+                }
+            }
+            ProgramConstraintBodyV1::IntrinsicRelation {
+                relation,
+                invocation,
+            } => {
+                let reference_id = relation.reference();
+                let reference_index = program
+                    .targets
+                    .binary_search_by_key(&reference_id, |target| target.id)
+                    .map_err(|_| ProgramCompileError::MissingIntrinsicRelationReference {
+                        constraint: constraint.id,
+                        reference: reference_id,
+                    })?;
+                if matches!(
+                    program.targets[reference_index].intent,
+                    TargetIntentV1::Finite(_)
+                ) {
+                    return Err(
+                        ProgramCompileError::SolverDependentIntrinsicRelationReference {
+                            constraint: constraint.id,
+                            reference: reference_id,
+                        },
+                    );
+                }
+                let reference = CompiledIntrinsicRelationEndpointV1 {
+                    target_id: reference_id,
+                    target: graph
+                        .bind_paint_input(target_paint_input_id(reference_id))
+                        .ok_or(ProgramCompileError::InternalInvariant)?,
+                };
+                let mut candidates = Vec::new();
+                candidates
+                    .try_reserve_exact(relation.candidates().len())
+                    .map_err(|_| ProgramCompileError::ResourceExhausted)?;
+                for candidate_id in relation.candidates().iter().copied() {
+                    if program
+                        .targets
+                        .binary_search_by_key(&candidate_id, |target| target.id)
+                        .is_err()
+                    {
+                        return Err(ProgramCompileError::MissingIntrinsicRelationCandidate {
+                            constraint: constraint.id,
+                            candidate: candidate_id,
+                        });
+                    }
+                    candidates.push(CompiledIntrinsicRelationEndpointV1 {
+                        target_id: candidate_id,
+                        target: graph
+                            .bind_paint_input(target_paint_input_id(candidate_id))
+                            .ok_or(ProgramCompileError::InternalInvariant)?,
+                    });
+                }
+                CompiledProgramConstraintBodyV1::IntrinsicRelation {
+                    reference,
+                    candidates: candidates.into_boxed_slice(),
+                    invocation: *invocation,
+                }
+            }
+            ProgramConstraintBodyV1::VisibleRelation {
+                relation,
+                invocation,
+            } => {
+                let compile_endpoint = |occurrence: OccurrenceId,
+                                        missing: ProgramCompileError|
+                 -> Result<
+                    CompiledVisibleRelationEndpointV1,
+                    ProgramCompileError,
+                > {
+                    let slot = graph.bind_occurrence(occurrence).ok_or(missing)?;
+                    let occurrence_context_index = occurrence_contexts
+                        .binary_search_by_key(&occurrence, |binding| binding.occurrence)
+                        .map_err(|_| ProgramCompileError::InternalInvariant)?;
+                    if occurrence_contexts[occurrence_context_index].slot != slot {
+                        return Err(ProgramCompileError::InternalInvariant);
+                    }
+                    Ok(CompiledVisibleRelationEndpointV1 {
+                        occurrence,
+                        slot,
+                        occurrence_context_index,
+                    })
+                };
+                let reference_id = relation.reference();
+                let reference = compile_endpoint(
+                    reference_id,
+                    ProgramCompileError::MissingVisibleRelationReference {
+                        constraint: constraint.id,
+                        reference: reference_id,
+                    },
+                )?;
+                let mut candidates = Vec::new();
+                candidates
+                    .try_reserve_exact(relation.candidates().len())
+                    .map_err(|_| ProgramCompileError::ResourceExhausted)?;
+                for candidate_id in relation.candidates().iter().copied() {
+                    candidates.push(compile_endpoint(
+                        candidate_id,
+                        ProgramCompileError::MissingVisibleRelationCandidate {
+                            constraint: constraint.id,
+                            candidate: candidate_id,
+                        },
+                    )?);
+                }
+                dependency_scratch.scan(dependency_index, [reference_id])?;
+                if let Some(target) =
+                    program
+                        .targets
+                        .iter()
+                        .enumerate()
+                        .find_map(|(index, target)| {
+                            (dependency_scratch.targets[index]
+                                && matches!(target.intent, TargetIntentV1::Finite(_)))
+                            .then_some(target.id)
+                        })
+                {
+                    return Err(
+                        ProgramCompileError::SolverDependentVisibleRelationReference {
+                            constraint: constraint.id,
+                            reference: reference_id,
+                            target,
+                        },
+                    );
+                }
+                CompiledProgramConstraintBodyV1::VisibleRelation {
+                    reference,
+                    candidates: candidates.into_boxed_slice(),
+                    invocation: *invocation,
                 }
             }
             ProgramConstraintBodyV1::DeclaredSrgb8CleanSet { target } => {
                 compile_declared_clean_set_body(
                     presentations,
                     constraint.id,
-                    target,
+                    *target,
                     DeclaredSrgb8CleanSetV1::package_pinned(),
                 )?
             }
@@ -4613,7 +5652,7 @@ where
                 compile_declared_clean_set_body(
                     presentations,
                     constraint.id,
-                    target,
+                    *target,
                     DeclaredSrgb8CleanSetV1::final_recheck_mutant(),
                 )?
             }
@@ -4631,20 +5670,42 @@ fn compact_constraint_contexts<Invocation>(
     all: &[CompiledOccurrenceContextV1],
     constraints: &mut [CompiledPointConstraint<Invocation>],
 ) -> Result<Box<[CompiledOccurrenceContextV1]>, ProgramCompileError> {
+    let target_count = constraints
+        .iter()
+        .try_fold(0_usize, |count, constraint| {
+            count.checked_add(match &constraint.body {
+                CompiledProgramConstraintBodyV1::VisibleUnary { .. } => 1,
+                CompiledProgramConstraintBodyV1::VisibleRelation { candidates, .. } => {
+                    candidates.len().checked_add(1)?
+                }
+                CompiledProgramConstraintBodyV1::IntrinsicUnary { .. }
+                | CompiledProgramConstraintBodyV1::IntrinsicRelation { .. }
+                | CompiledProgramConstraintBodyV1::PointPresentation { .. } => 0,
+            })
+        })
+        .ok_or(ProgramCompileError::ResourceExhausted)?;
     let mut targets = Vec::new();
     targets
-        .try_reserve_exact(constraints.len())
+        .try_reserve_exact(target_count)
         .map_err(|_| ProgramCompileError::ResourceExhausted)?;
-    targets.extend(
-        constraints
-            .iter()
-            .filter_map(|constraint| match &constraint.body {
-                CompiledProgramConstraintBodyV1::ModeledOccurrence { target_id, .. } => {
-                    Some(*target_id)
-                }
-                CompiledProgramConstraintBodyV1::PointPresentation { .. } => None,
-            }),
-    );
+    for constraint in constraints.iter() {
+        match &constraint.body {
+            CompiledProgramConstraintBodyV1::VisibleUnary { occurrence, .. } => {
+                targets.push(*occurrence);
+            }
+            CompiledProgramConstraintBodyV1::VisibleRelation {
+                reference,
+                candidates,
+                ..
+            } => {
+                targets.push(reference.occurrence);
+                targets.extend(candidates.iter().map(|candidate| candidate.occurrence));
+            }
+            CompiledProgramConstraintBodyV1::IntrinsicUnary { .. }
+            | CompiledProgramConstraintBodyV1::IntrinsicRelation { .. }
+            | CompiledProgramConstraintBodyV1::PointPresentation { .. } => {}
+        }
+    }
     targets.sort_unstable();
     targets.dedup();
 
@@ -4660,20 +5721,36 @@ fn compact_constraint_contexts<Invocation>(
     }
 
     for constraint in constraints {
-        if let CompiledProgramConstraintBodyV1::ModeledOccurrence {
-            target_id,
-            target,
+        if let CompiledProgramConstraintBodyV1::VisibleUnary {
+            occurrence,
+            slot,
             occurrence_context_index,
             ..
         } = &mut constraint.body
         {
             let index = compact
-                .binary_search_by_key(target_id, |binding| binding.occurrence)
+                .binary_search_by_key(occurrence, |binding| binding.occurrence)
                 .map_err(|_| ProgramCompileError::InternalInvariant)?;
-            if compact[index].target != *target {
+            if compact[index].slot != *slot {
                 return Err(ProgramCompileError::InternalInvariant);
             }
             *occurrence_context_index = index;
+        }
+        if let CompiledProgramConstraintBodyV1::VisibleRelation {
+            reference,
+            candidates,
+            ..
+        } = &mut constraint.body
+        {
+            for endpoint in std::iter::once(reference).chain(candidates.iter_mut()) {
+                let index = compact
+                    .binary_search_by_key(&endpoint.occurrence, |binding| binding.occurrence)
+                    .map_err(|_| ProgramCompileError::InternalInvariant)?;
+                if compact[index].slot != endpoint.slot {
+                    return Err(ProgramCompileError::InternalInvariant);
+                }
+                endpoint.occurrence_context_index = index;
+            }
         }
     }
     Ok(compact.into_boxed_slice())

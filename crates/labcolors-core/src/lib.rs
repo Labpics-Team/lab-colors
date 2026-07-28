@@ -59,6 +59,7 @@ pub(crate) mod program;
     )
 )]
 pub(crate) mod program_session;
+pub(crate) mod relation;
 #[cfg_attr(
     not(test),
     expect(
@@ -124,6 +125,8 @@ mod program_boundary_tests;
 mod program_api_tests;
 #[cfg(test)]
 mod program_clean_set_tests;
+#[cfg(test)]
+mod program_relation_tests;
 
 #[cfg(test)]
 mod release_registry_tests;

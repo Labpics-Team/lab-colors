@@ -23,6 +23,15 @@ pub(crate) use exact::{
 #[cfg(test)]
 pub(crate) use exact::ExactIdentityPassV1;
 
+mod relation;
+pub(crate) use relation::{
+    CoreIntrinsicUnaryInvocationV1, CoreIntrinsicUnaryMeasurementV1, CoreIntrinsicUnaryPassV1,
+    CoreIntrinsicUnaryViolationV1, CoreRelationInvocationV1, CoreRelationMeasurementV1,
+    CoreRelationPassV1, CoreRelationViolationV1, ExactSrgb8IntrinsicUnaryCapabilityV1,
+    ExactSrgb8IntrinsicUnaryIdentityV1, ExactSrgb8IntrinsicUnaryReleaseV1,
+    ExactSrgb8RelationCapabilityV1, ExactSrgb8RelationIdentityV1, ExactSrgb8RelationReleaseV1,
+};
+
 mod wcag22;
 
 pub(crate) use wcag22::{
@@ -495,6 +504,17 @@ pub(crate) enum ProgramConstraintContentV1 {
         release: Wcag22ProfileIdV1,
         capability: Wcag22Srgb8CapabilityV1,
         criterion: Wcag22CriterionV1,
+    },
+    ExactSrgb8IntrinsicUnary {
+        identity: ExactSrgb8IntrinsicUnaryIdentityV1,
+        release: ExactSrgb8IntrinsicUnaryReleaseV1,
+        capability: ExactSrgb8IntrinsicUnaryCapabilityV1,
+        expected: Srgb8,
+    },
+    ExactSrgb8Relation {
+        identity: ExactSrgb8RelationIdentityV1,
+        release: ExactSrgb8RelationReleaseV1,
+        capability: ExactSrgb8RelationCapabilityV1,
     },
     #[cfg(test)]
     ModeledLcsProbe {

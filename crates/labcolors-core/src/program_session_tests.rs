@@ -176,7 +176,7 @@ fn exact_compiled_with_point_presentations(
         0.5,
         BACKDROP,
         ConstraintSet::new(
-            vec![ConstraintInvocation::hard(
+            vec![ConstraintInvocation::visible_unary_hard(
                 REQUIRED,
                 OCCURRENCE,
                 Srgb8::new([0x80; 3]),
@@ -202,14 +202,18 @@ fn exact_compiled_with_point_presentations(
 
 #[test]
 fn authored_modes_are_marker_typed_and_values_preserve_exact_ids() {
-    let hard = ConstraintInvocation::hard(REQUIRED, OCCURRENCE, Srgb8::new([0x80; 3]));
-    let report =
-        ConstraintInvocation::report_only(ConstraintId::new(51), OCCURRENCE, Srgb8::new([0x81; 3]));
+    let hard =
+        ConstraintInvocation::visible_unary_hard(REQUIRED, OCCURRENCE, Srgb8::new([0x80; 3]));
+    let report = ConstraintInvocation::visible_unary_report_only(
+        ConstraintId::new(51),
+        OCCURRENCE,
+        Srgb8::new([0x81; 3]),
+    );
     let set = ConstraintSet::new(vec![hard], vec![report]);
     assert_eq!(set.hard()[0].id(), REQUIRED);
     assert_eq!(
         *set.hard()[0].body(),
-        ProgramConstraintBodyV1::ModeledOccurrence {
+        ProgramConstraintBodyV1::VisibleUnary {
             occurrence: OCCURRENCE,
             invocation: Srgb8::new([0x80; 3]),
         },
@@ -282,7 +286,7 @@ fn empty_domains_have_stable_precedence() {
             appearance_context(),
         )],
         ConstraintSet::new(
-            vec![ConstraintInvocation::hard(
+            vec![ConstraintInvocation::visible_unary_hard(
                 REQUIRED,
                 OCCURRENCE,
                 Srgb8::new([0; 3]),
@@ -315,7 +319,7 @@ fn empty_domains_have_stable_precedence() {
         }],
         vec![],
         ConstraintSet::new(
-            vec![ConstraintInvocation::hard(
+            vec![ConstraintInvocation::visible_unary_hard(
                 REQUIRED,
                 OCCURRENCE,
                 Srgb8::new([0; 3]),
@@ -346,7 +350,7 @@ fn empty_domains_have_stable_precedence() {
         0.5,
         BACKDROP,
         ConstraintSet::new(
-            vec![ConstraintInvocation::hard(
+            vec![ConstraintInvocation::visible_unary_hard(
                 REQUIRED,
                 OCCURRENCE,
                 Srgb8::new([0x80; 3]),
@@ -370,12 +374,12 @@ fn physical_errors_precede_constraint_and_output_errors() {
         0.5,
         missing_surface,
         ConstraintSet::new(
-            vec![ConstraintInvocation::hard(
+            vec![ConstraintInvocation::visible_unary_hard(
                 duplicate,
                 OccurrenceId::new(998),
                 Srgb8::new([0; 3]),
             )],
-            vec![ConstraintInvocation::report_only(
+            vec![ConstraintInvocation::visible_unary_report_only(
                 duplicate,
                 OccurrenceId::new(997),
                 Srgb8::new([0; 3]),
@@ -404,12 +408,12 @@ fn constraint_and_output_error_precedence_is_canonical() {
         0.5,
         BACKDROP,
         ConstraintSet::new(
-            vec![ConstraintInvocation::hard(
+            vec![ConstraintInvocation::visible_unary_hard(
                 duplicate,
                 missing_occurrence,
                 Srgb8::new([0; 3]),
             )],
-            vec![ConstraintInvocation::report_only(
+            vec![ConstraintInvocation::visible_unary_report_only(
                 duplicate,
                 OCCURRENCE,
                 Srgb8::new([0; 3]),
@@ -432,7 +436,7 @@ fn constraint_and_output_error_precedence_is_canonical() {
         0.5,
         BACKDROP,
         ConstraintSet::new(
-            vec![ConstraintInvocation::hard(
+            vec![ConstraintInvocation::visible_unary_hard(
                 REQUIRED,
                 missing_occurrence,
                 Srgb8::new([0; 3]),
@@ -457,7 +461,7 @@ fn constraint_and_output_error_precedence_is_canonical() {
         0.5,
         BACKDROP,
         ConstraintSet::new(
-            vec![ConstraintInvocation::hard(
+            vec![ConstraintInvocation::visible_unary_hard(
                 REQUIRED,
                 OCCURRENCE,
                 Srgb8::new([0x80; 3]),
@@ -480,7 +484,7 @@ fn constraint_and_output_error_precedence_is_canonical() {
         0.5,
         BACKDROP,
         ConstraintSet::new(
-            vec![ConstraintInvocation::hard(
+            vec![ConstraintInvocation::visible_unary_hard(
                 REQUIRED,
                 OCCURRENCE,
                 Srgb8::new([0x80; 3]),
@@ -509,12 +513,12 @@ fn compile_canonicalizes_constraints_and_outputs_independent_of_mode_lists() {
         0.5,
         BACKDROP,
         ConstraintSet::new(
-            vec![ConstraintInvocation::hard(
+            vec![ConstraintInvocation::visible_unary_hard(
                 high,
                 OCCURRENCE,
                 Srgb8::new([0x80; 3]),
             )],
-            vec![ConstraintInvocation::report_only(
+            vec![ConstraintInvocation::visible_unary_report_only(
                 low,
                 OCCURRENCE,
                 Srgb8::new([0x80; 3]),
@@ -630,7 +634,7 @@ fn point_output_presentation_uses_the_selected_target_subject_not_the_terminal_s
             ),
         ],
         ConstraintSet::new(
-            vec![ConstraintInvocation::hard(
+            vec![ConstraintInvocation::visible_unary_hard(
                 REQUIRED,
                 terminal_occurrence,
                 Srgb8::new([40, 50, 60]),
@@ -710,7 +714,7 @@ fn point_output_presentation_binding_reports_each_exact_failure() {
 #[test]
 fn compiled_program_owner_pin_keeps_the_exact_generation_alive_until_drop() {
     let compiled = exact_compiled(ConstraintSet::new(
-        vec![ConstraintInvocation::hard(
+        vec![ConstraintInvocation::visible_unary_hard(
             REQUIRED,
             OCCURRENCE,
             Srgb8::new([0x80; 3]),
@@ -760,7 +764,7 @@ fn canonical_helpers_and_checked_cardinality_fail_closed() {
 #[test]
 fn independently_instantiated_streams_expire_with_their_compiled_owner_generation() {
     let compiled = exact_compiled(ConstraintSet::new(
-        vec![ConstraintInvocation::hard(
+        vec![ConstraintInvocation::visible_unary_hard(
             REQUIRED,
             OCCURRENCE,
             Srgb8::new([0x80; 3]),
@@ -788,7 +792,7 @@ fn independently_instantiated_streams_expire_with_their_compiled_owner_generatio
 #[test]
 fn program_sessions_each_prewarm_three_arenas_over_the_owner_canonical_schema() {
     let compiled = exact_compiled(ConstraintSet::new(
-        vec![ConstraintInvocation::hard(
+        vec![ConstraintInvocation::visible_unary_hard(
             REQUIRED,
             OCCURRENCE,
             Srgb8::new([0x80; 3]),
@@ -879,8 +883,8 @@ fn multi_case_hard_failure_retains_the_full_matrix_without_outputs() {
     let high = ConstraintId::new(2);
     let compiled = exact_compiled(ConstraintSet::new(
         vec![
-            ConstraintInvocation::hard(high, OCCURRENCE, Srgb8::new([0x00; 3])),
-            ConstraintInvocation::hard(low, OCCURRENCE, Srgb8::new([0x80; 3])),
+            ConstraintInvocation::visible_unary_hard(high, OCCURRENCE, Srgb8::new([0x00; 3])),
+            ConstraintInvocation::visible_unary_hard(low, OCCURRENCE, Srgb8::new([0x80; 3])),
         ],
         vec![],
     ));
@@ -917,7 +921,7 @@ fn multi_case_hard_failure_retains_the_full_matrix_without_outputs() {
     assert!(cells.iter().all(|cell| cell.is_hard()));
     assert!(cells.iter().all(|cell| {
         cell.subject()
-            == ProgramConstraintSubjectV1::ModeledOccurrence {
+            == ProgramConstraintSubjectV1::VisibleUnary {
                 occurrence: OCCURRENCE,
                 context: appearance_context(),
             }
@@ -938,12 +942,12 @@ fn mixed_modes_retain_the_full_canonical_matrix_without_outputs_on_hard_failure(
     let diagnostic = ConstraintId::new(1);
     let required = ConstraintId::new(2);
     let compiled = exact_compiled(ConstraintSet::new(
-        vec![ConstraintInvocation::hard(
+        vec![ConstraintInvocation::visible_unary_hard(
             required,
             OCCURRENCE,
             Srgb8::new([0x00; 3]),
         )],
-        vec![ConstraintInvocation::report_only(
+        vec![ConstraintInvocation::visible_unary_report_only(
             diagnostic,
             OCCURRENCE,
             Srgb8::new([0x80; 3]),
@@ -985,7 +989,7 @@ fn mixed_modes_retain_the_full_canonical_matrix_without_outputs_on_hard_failure(
     );
     assert!(cells.iter().all(|cell| {
         cell.subject()
-            == ProgramConstraintSubjectV1::ModeledOccurrence {
+            == ProgramConstraintSubjectV1::VisibleUnary {
                 occurrence: OCCURRENCE,
                 context: appearance_context(),
             }
@@ -999,7 +1003,7 @@ fn report_only_violations_do_not_block_program_scope_paint_outputs() {
     let diagnostic = ConstraintId::new(7);
     let compiled = exact_compiled(ConstraintSet::new(
         vec![],
-        vec![ConstraintInvocation::report_only(
+        vec![ConstraintInvocation::visible_unary_report_only(
             diagnostic,
             OCCURRENCE,
             Srgb8::new([0x7F; 3]),
@@ -1102,7 +1106,7 @@ fn nested_surface_uses_the_lower_occurrence_before_assessing_the_upper() {
             ),
         ],
         ConstraintSet::new(
-            vec![ConstraintInvocation::hard(
+            vec![ConstraintInvocation::visible_unary_hard(
                 REQUIRED,
                 UPPER,
                 Srgb8::new([0xC0; 3]),
@@ -1132,7 +1136,7 @@ fn nested_surface_uses_the_lower_occurrence_before_assessing_the_upper() {
 #[test]
 fn raw_head_and_program_report_share_one_observation_backing() {
     let compiled = exact_compiled(ConstraintSet::new(
-        vec![ConstraintInvocation::hard(
+        vec![ConstraintInvocation::visible_unary_hard(
             REQUIRED,
             OCCURRENCE,
             Srgb8::new([0x80; 3]),
