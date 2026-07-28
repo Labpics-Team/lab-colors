@@ -77,7 +77,7 @@ fn preflight_program_with_mode(
 ) -> crate::program_session::CompiledProgram<CountingProgramWcag22Srgb8V1> {
     let constraints = if hard {
         ConstraintSet::new(
-            vec![ConstraintInvocation::hard(
+            vec![ConstraintInvocation::visible_unary_hard(
                 CONSTRAINT,
                 OCCURRENCE,
                 Wcag22CriterionV1::Sc143TextLargeScale,
@@ -87,7 +87,7 @@ fn preflight_program_with_mode(
     } else {
         ConstraintSet::new(
             vec![],
-            vec![ConstraintInvocation::report_only(
+            vec![ConstraintInvocation::visible_unary_report_only(
                 CONSTRAINT,
                 OCCURRENCE,
                 Wcag22CriterionV1::Sc143TextLargeScale,
@@ -167,7 +167,7 @@ fn joint_preflight_program(
             context(),
         )],
         ConstraintSet::new(
-            vec![ConstraintInvocation::hard(
+            vec![ConstraintInvocation::visible_unary_hard(
                 CONSTRAINT,
                 OCCURRENCE,
                 Wcag22CriterionV1::Sc143TextLargeScale,
@@ -319,7 +319,7 @@ fn fanout_program() -> crate::program_session::CompiledProgram<ExactSrgb8Identit
             ),
         ],
         ConstraintSet::new(
-            vec![ConstraintInvocation::hard(
+            vec![ConstraintInvocation::visible_unary_hard(
                 CONSTRAINT,
                 OCCURRENCE,
                 Srgb8::new([252; 3]),
@@ -434,7 +434,7 @@ fn finite_fanout_program() -> crate::program_session::CompiledProgram<ExactSrgb8
             ),
         ],
         ConstraintSet::new(
-            vec![ConstraintInvocation::hard(
+            vec![ConstraintInvocation::visible_unary_hard(
                 CONSTRAINT,
                 OCCURRENCE,
                 // Ни один из четырёх выведенных выше кодов не равен 128,
@@ -667,7 +667,9 @@ fn finite_program_with_candidates(
             context(),
         )],
         ConstraintSet::new(
-            vec![ConstraintInvocation::hard(CONSTRAINT, OCCURRENCE, expected)],
+            vec![ConstraintInvocation::visible_unary_hard(
+                CONSTRAINT, OCCURRENCE, expected,
+            )],
             vec![],
         ),
         vec![OutputBinding::new(OUTPUT, PAINT)],

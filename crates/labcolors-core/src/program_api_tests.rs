@@ -31,7 +31,7 @@ fn staged_program_api_is_module_qualified_without_transport_prefixes() {
     draft.push_source_over_occurrence(occurrence, paint, surface, context);
     draft.push_point_presentation_root(root, occurrence);
     draft.push_point_presentation_target(root, occurrence);
-    draft.push_exact_hard(constraint, occurrence, Srgb8::new([0, 0, 0]));
+    draft.push_exact_visible_unary_hard(constraint, occurrence, Srgb8::new([0, 0, 0]));
     draft.push_output(output, paint);
 
     let owner = draft.compile().unwrap();

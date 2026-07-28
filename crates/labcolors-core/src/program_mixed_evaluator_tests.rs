@@ -150,12 +150,12 @@ fn finite_program_with_outputs(
             context(),
         )],
         ConstraintSet::new(
-            vec![ConstraintInvocation::hard(
+            vec![ConstraintInvocation::visible_unary_hard(
                 WCAG_CONSTRAINT,
                 OCCURRENCE,
                 CoreProgramConstraintInvocationV1::Wcag22Srgb8(Wcag22CriterionV1::Sc143TextDefault),
             )],
-            vec![ConstraintInvocation::report_only(
+            vec![ConstraintInvocation::visible_unary_report_only(
                 EXACT_CONSTRAINT,
                 OCCURRENCE,
                 CoreProgramConstraintInvocationV1::ExactSrgb8(Srgb8::new([0; 3])),
@@ -204,7 +204,7 @@ fn fixed_translucent_program() -> CompiledCoreProgramV1 {
             context(),
         )],
         ConstraintSet::new(
-            vec![ConstraintInvocation::hard(
+            vec![ConstraintInvocation::visible_unary_hard(
                 EXACT_CONSTRAINT,
                 OCCURRENCE,
                 CoreProgramConstraintInvocationV1::ExactSrgb8(Srgb8::new([0x80; 3])),
@@ -326,6 +326,9 @@ fn assert_public_binding_matches_core(
         AssessmentV1::DeclaredSrgb8CleanSet(_) => {
             panic!("fixture contains only occurrence-subject evaluators")
         }
+        AssessmentV1::IntrinsicUnary(_) | AssessmentV1::Relation(_) => {
+            panic!("fixture contains only visible-unary evaluators")
+        }
     };
     let PhysicalPointV1::EncodedSrgb8SourceOver(public_physical) = public_binding.physical();
     assert_eq!(
@@ -427,7 +430,7 @@ fn assert_public_assessment_matches_core(
     match (public, core) {
         (
             AssessmentV1::ExactSrgb8(public),
-            ProgramConstraintResultV1::Pass(ProgramConstraintPassEvidenceV1::ModeledOccurrence(
+            ProgramConstraintResultV1::Pass(ProgramConstraintPassEvidenceV1::VisibleUnary(
                 CoreProgramPassEvidenceV1::ExactSrgb8(core),
             )),
         ) => assert_exact_matches(
@@ -441,7 +444,7 @@ fn assert_public_assessment_matches_core(
         (
             AssessmentV1::ExactSrgb8(public),
             ProgramConstraintResultV1::Violation(
-                ProgramConstraintViolationEvidenceV1::ModeledOccurrence(
+                ProgramConstraintViolationEvidenceV1::VisibleUnary(
                     CoreProgramViolationEvidenceV1::ExactSrgb8(core),
                 ),
             ),
@@ -455,7 +458,7 @@ fn assert_public_assessment_matches_core(
         ),
         (
             AssessmentV1::Wcag22Srgb8(public),
-            ProgramConstraintResultV1::Pass(ProgramConstraintPassEvidenceV1::ModeledOccurrence(
+            ProgramConstraintResultV1::Pass(ProgramConstraintPassEvidenceV1::VisibleUnary(
                 CoreProgramPassEvidenceV1::Wcag22Srgb8(core),
             )),
         ) => assert_wcag_matches(
@@ -468,7 +471,7 @@ fn assert_public_assessment_matches_core(
         (
             AssessmentV1::Wcag22Srgb8(public),
             ProgramConstraintResultV1::Violation(
-                ProgramConstraintViolationEvidenceV1::ModeledOccurrence(
+                ProgramConstraintViolationEvidenceV1::VisibleUnary(
                     CoreProgramViolationEvidenceV1::Wcag22Srgb8(core),
                 ),
             ),
@@ -492,17 +495,22 @@ fn assert_verified_cell_matches_core(
     assert_eq!(public.case_index(), core.case_index());
     assert_eq!(public.constraint().value(), core.constraint().value());
     let (occurrence, context) = match core.subject() {
-        ProgramConstraintSubjectV1::ModeledOccurrence {
+        ProgramConstraintSubjectV1::VisibleUnary {
             occurrence,
             context,
         } => (occurrence, context),
         ProgramConstraintSubjectV1::PointPresentation { .. } => {
             panic!("fixture contains only occurrence-subject evaluators")
         }
+        ProgramConstraintSubjectV1::IntrinsicUnary { .. }
+        | ProgramConstraintSubjectV1::IntrinsicRelation { .. }
+        | ProgramConstraintSubjectV1::VisibleRelation { .. } => {
+            panic!("fixture contains only visible-unary evaluators")
+        }
     };
     assert_eq!(
         public.subject(),
-        ConstraintSubjectV1::ModeledOccurrence {
+        ConstraintSubjectV1::VisibleUnary {
             occurrence: crate::program::OccurrenceIdV1::new(occurrence.value()),
             context: crate::program::AppearanceContextV1::try_new(
                 context.adapting_luminance_cd_m2(),
@@ -531,15 +539,20 @@ fn assert_conflict_cell_matches_core(
     assert_eq!(public.case_index(), core.case_index());
     assert_eq!(public.constraint().value(), core.constraint().value());
     let (occurrence, context) = match core.subject() {
-        ProgramConstraintSubjectV1::ModeledOccurrence {
+        ProgramConstraintSubjectV1::VisibleUnary {
             occurrence,
             context,
         } => (occurrence, context),
         ProgramConstraintSubjectV1::PointPresentation { .. } => {
             panic!("fixture contains only occurrence-subject evaluators")
         }
+        ProgramConstraintSubjectV1::IntrinsicUnary { .. }
+        | ProgramConstraintSubjectV1::IntrinsicRelation { .. }
+        | ProgramConstraintSubjectV1::VisibleRelation { .. } => {
+            panic!("fixture contains only visible-unary evaluators")
+        }
     };
-    let ConstraintSubjectV1::ModeledOccurrence {
+    let ConstraintSubjectV1::VisibleUnary {
         occurrence: public_occurrence,
         context: public_context,
     } = public.subject()
@@ -673,6 +686,9 @@ fn consume_public_assessment(assessment: AssessmentV1<'_>, probe: &mut EvidenceP
             );
             None
         }
+        AssessmentV1::IntrinsicUnary(_) | AssessmentV1::Relation(_) => {
+            panic!("fixture contains no intrinsic or relation constraints")
+        }
     };
 
     let Some(binding) = binding else {
@@ -805,7 +821,7 @@ fn consume_public_evidence(view: EvidenceViewV1<'_>) -> EvidenceProbe {
                     probe.mix(cell.case_index() as u64);
                     probe.mix(u64::from(cell.constraint().value()));
                     match cell.subject() {
-                        ConstraintSubjectV1::ModeledOccurrence { occurrence, .. } => {
+                        ConstraintSubjectV1::VisibleUnary { occurrence, .. } => {
                             probe.mix(u64::from(occurrence.value()));
                         }
                         ConstraintSubjectV1::PointPresentation {
@@ -816,6 +832,15 @@ fn consume_public_evidence(view: EvidenceViewV1<'_>) -> EvidenceProbe {
                             probe.mix(u64::from(root.value()));
                             probe.mix(u64::from(occurrence.value()));
                             probe.mix(u64::from(terminal.value()));
+                        }
+                        ConstraintSubjectV1::IntrinsicUnary { target } => {
+                            probe.mix(u64::from(target.value()));
+                        }
+                        ConstraintSubjectV1::IntrinsicRelation { reference } => {
+                            probe.mix(u64::from(reference.value()));
+                        }
+                        ConstraintSubjectV1::VisibleRelation { reference, .. } => {
+                            probe.mix(u64::from(reference.value()));
                         }
                     }
                     probe.mix(match cell.mode() {
@@ -840,7 +865,7 @@ fn consume_public_evidence(view: EvidenceViewV1<'_>) -> EvidenceProbe {
                     probe.mix(cell.case_index() as u64);
                     probe.mix(u64::from(cell.constraint().value()));
                     match cell.subject() {
-                        ConstraintSubjectV1::ModeledOccurrence { occurrence, .. } => {
+                        ConstraintSubjectV1::VisibleUnary { occurrence, .. } => {
                             probe.mix(u64::from(occurrence.value()));
                         }
                         ConstraintSubjectV1::PointPresentation {
@@ -851,6 +876,15 @@ fn consume_public_evidence(view: EvidenceViewV1<'_>) -> EvidenceProbe {
                             probe.mix(u64::from(root.value()));
                             probe.mix(u64::from(occurrence.value()));
                             probe.mix(u64::from(terminal.value()));
+                        }
+                        ConstraintSubjectV1::IntrinsicUnary { target } => {
+                            probe.mix(u64::from(target.value()));
+                        }
+                        ConstraintSubjectV1::IntrinsicRelation { reference } => {
+                            probe.mix(u64::from(reference.value()));
+                        }
+                        ConstraintSubjectV1::VisibleRelation { reference, .. } => {
+                            probe.mix(u64::from(reference.value()));
                         }
                     }
                     probe.mix(match cell.mode() {
@@ -917,12 +951,12 @@ fn one_program_retains_typed_exact_and_wcag22_outcomes() {
         )],
         ConstraintSet::new(
             vec![
-                ConstraintInvocation::hard(
+                ConstraintInvocation::visible_unary_hard(
                     EXACT_CONSTRAINT,
                     OCCURRENCE,
                     CoreProgramConstraintInvocationV1::ExactSrgb8(Srgb8::new([0; 3])),
                 ),
-                ConstraintInvocation::hard(
+                ConstraintInvocation::visible_unary_hard(
                     WCAG_CONSTRAINT,
                     OCCURRENCE,
                     CoreProgramConstraintInvocationV1::Wcag22Srgb8(
@@ -945,7 +979,7 @@ fn one_program_retains_typed_exact_and_wcag22_outcomes() {
         panic!("one case times two heterogeneous constraints must produce two cells");
     };
 
-    let ProgramConstraintResultV1::Pass(ProgramConstraintPassEvidenceV1::ModeledOccurrence(
+    let ProgramConstraintResultV1::Pass(ProgramConstraintPassEvidenceV1::VisibleUnary(
         CoreProgramPassEvidenceV1::ExactSrgb8(evidence),
     )) = exact.result()
     else {
@@ -962,7 +996,7 @@ fn one_program_retains_typed_exact_and_wcag22_outcomes() {
     );
     assert_eq!(evidence.binding().context(), declared_context);
 
-    let ProgramConstraintResultV1::Pass(ProgramConstraintPassEvidenceV1::ModeledOccurrence(
+    let ProgramConstraintResultV1::Pass(ProgramConstraintPassEvidenceV1::VisibleUnary(
         CoreProgramPassEvidenceV1::Wcag22Srgb8(evidence),
     )) = wcag.result()
     else {
@@ -1037,7 +1071,7 @@ fn mixed_families_select_only_a_state_that_passes_every_case_then_recheck_it() {
     for cell in [cells[0].result(), cells[2].result()] {
         assert!(matches!(
             cell,
-            ProgramConstraintResultV1::Pass(ProgramConstraintPassEvidenceV1::ModeledOccurrence(
+            ProgramConstraintResultV1::Pass(ProgramConstraintPassEvidenceV1::VisibleUnary(
                 CoreProgramPassEvidenceV1::ExactSrgb8(_)
             ))
         ));
@@ -1045,7 +1079,7 @@ fn mixed_families_select_only_a_state_that_passes_every_case_then_recheck_it() {
     for cell in [cells[1].result(), cells[3].result()] {
         assert!(matches!(
             cell,
-            ProgramConstraintResultV1::Pass(ProgramConstraintPassEvidenceV1::ModeledOccurrence(
+            ProgramConstraintResultV1::Pass(ProgramConstraintPassEvidenceV1::VisibleUnary(
                 CoreProgramPassEvidenceV1::Wcag22Srgb8(_)
             ))
         ));
@@ -1082,19 +1116,15 @@ fn mixed_family_conflict_is_exhaustive_and_keeps_report_only_non_gating() {
     assert!(cells.iter().all(|cell| cell.result().is_violation()));
     assert!(matches!(
         cells[0].result(),
-        ProgramConstraintResultV1::Violation(
-            ProgramConstraintViolationEvidenceV1::ModeledOccurrence(
-                CoreProgramViolationEvidenceV1::ExactSrgb8(_)
-            )
-        )
+        ProgramConstraintResultV1::Violation(ProgramConstraintViolationEvidenceV1::VisibleUnary(
+            CoreProgramViolationEvidenceV1::ExactSrgb8(_)
+        ))
     ));
     assert!(matches!(
         cells[1].result(),
-        ProgramConstraintResultV1::Violation(
-            ProgramConstraintViolationEvidenceV1::ModeledOccurrence(
-                CoreProgramViolationEvidenceV1::Wcag22Srgb8(_)
-            )
-        )
+        ProgramConstraintResultV1::Violation(ProgramConstraintViolationEvidenceV1::VisibleUnary(
+            CoreProgramViolationEvidenceV1::Wcag22Srgb8(_)
+        ))
     ));
 }
 

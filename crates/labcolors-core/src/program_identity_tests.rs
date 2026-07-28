@@ -13,10 +13,11 @@ use crate::program_session::{
     CoreProgramConstraintInvocationV1, CoreProgramEvaluatorsV1, CoreProgramV1,
     DeclaredJointSelectionV1, FinitePaintDomainV1, JointCandidateStateV1, ObservationGroup,
     Occurrence, OpacityInput, OutputBinding, OutputSlotId, Paint, PointPresentationRootV1,
-    PointPresentationTargetV1, PresentationRootId, Program, ProgramContentIdentityV5, Source,
+    PointPresentationTargetV1, PresentationRootId, Program, ProgramContentIdentityV6, Source,
     SourceId, Surface, Target, TargetCandidateChoiceV1, TargetCandidateId, TargetCandidateV1,
     TargetId,
 };
+use crate::relation::DirectedRelationV1;
 use crate::wcag22::Wcag22CriterionV1;
 
 fn signal(value: [u8; 3]) -> ColorSignal {
@@ -133,12 +134,12 @@ fn fixed_program(
         ),
     ];
     let mut hard = vec![
-        ConstraintInvocation::hard(
+        ConstraintInvocation::visible_unary_hard(
             ids.constraints[0],
             ids.occurrences[0],
             CoreProgramConstraintInvocationV1::ExactSrgb8(Srgb8::new([0x10, 0x20, 0x30])),
         ),
-        ConstraintInvocation::hard(
+        ConstraintInvocation::visible_unary_hard(
             ids.constraints[1],
             ids.occurrences[1],
             CoreProgramConstraintInvocationV1::ExactSrgb8(second_signal),
@@ -273,7 +274,7 @@ fn presentation_topology_ignores_root_names_and_declaration_order() {
 }
 
 #[test]
-fn presentation_root_terminal_relation_changes_v5_identity() {
+fn presentation_root_terminal_relation_changes_v6_identity() {
     let ids = canonical_full_ids();
     let root = PresentationRootId::new(1);
     let first = full_program(ids, false, FullMutation::None)
@@ -294,7 +295,7 @@ fn presentation_root_terminal_relation_changes_v5_identity() {
 }
 
 #[test]
-fn presentation_target_relation_and_multiplicity_change_v5_identity() {
+fn presentation_target_relation_and_multiplicity_change_v6_identity() {
     let ids = canonical_full_ids();
     let root = PresentationRootId::new(1);
     let nested_target = full_program(ids, false, FullMutation::None)
@@ -336,7 +337,7 @@ fn presentation_target_relation_and_multiplicity_change_v5_identity() {
 }
 
 #[test]
-fn canonical_v5_digest_is_cross_platform_golden() {
+fn canonical_v6_digest_is_cross_platform_golden() {
     let ids = FixedIds {
         sources: [SourceId::new(10), SourceId::new(20)],
         targets: [TargetId::new(30), TargetId::new(40)],
@@ -357,12 +358,12 @@ fn canonical_v5_digest_is_cross_platform_golden() {
     .compile()
     .unwrap();
 
-    let identity: ProgramContentIdentityV5 = compiled.content_identity();
+    let identity: ProgramContentIdentityV6 = compiled.content_identity();
     assert_eq!(
         identity.as_bytes(),
         &[
-            238, 31, 74, 246, 76, 225, 22, 249, 250, 182, 134, 250, 248, 170, 128, 78, 215, 239,
-            212, 220, 176, 186, 208, 196, 83, 238, 38, 240, 187, 77, 186, 122,
+            22, 145, 115, 252, 75, 115, 120, 67, 104, 170, 31, 25, 152, 105, 250, 250, 144, 214,
+            124, 251, 74, 89, 154, 255, 6, 58, 32, 21, 25, 171, 71, 214,
         ]
     );
 }
@@ -549,7 +550,7 @@ fn full_program(ids: FullIds, reverse_unordered: bool, mutation: FullMutation) -
             context(SurroundProfileId::DarkV1),
         ),
     ];
-    let mut hard = vec![ConstraintInvocation::hard(
+    let mut hard = vec![ConstraintInvocation::visible_unary_hard(
         ids.constraints[0],
         if matches!(mutation, FullMutation::ConstraintTarget) {
             ids.occurrences[1]
@@ -571,37 +572,82 @@ fn full_program(ids: FullIds, reverse_unordered: bool, mutation: FullMutation) -
     };
     let mut report_only = Vec::new();
     if matches!(mutation, FullMutation::ConstraintMode) {
-        report_only.push(ConstraintInvocation::report_only(
+        report_only.push(ConstraintInvocation::visible_unary_report_only(
             ids.constraints[1],
             ids.occurrences[1],
             second_invocation,
         ));
     } else {
-        hard.push(ConstraintInvocation::hard(
+        hard.push(ConstraintInvocation::visible_unary_hard(
             ids.constraints[1],
             ids.occurrences[1],
             second_invocation,
         ));
     }
     if matches!(mutation, FullMutation::CompleteSchemaGolden) {
-        report_only.push(ConstraintInvocation::report_only(
+        report_only.push(ConstraintInvocation::visible_unary_report_only(
             ConstraintId::new(1_001),
             ids.occurrences[2],
             CoreProgramConstraintInvocationV1::Wcag22Srgb8(
                 Wcag22CriterionV1::Sc1411GraphicalObject,
             ),
         ));
+        report_only.push(ConstraintInvocation::visible_unary_report_only(
+            ConstraintId::new(1_010),
+            ids.occurrences[2],
+            CoreProgramConstraintInvocationV1::ExactSrgb8(Srgb8::new([0x21, 0x32, 0x43])),
+        ));
+        hard.push(ConstraintInvocation::visible_unary_hard(
+            ConstraintId::new(1_011),
+            ids.occurrences[2],
+            CoreProgramConstraintInvocationV1::Wcag22Srgb8(
+                Wcag22CriterionV1::Sc1411UiComponentOrState,
+            ),
+        ));
     }
-    hard.push(ConstraintInvocation::hard(
+    hard.push(ConstraintInvocation::visible_unary_hard(
         ids.constraints[2],
         ids.occurrences[2],
         CoreProgramConstraintInvocationV1::ExactSrgb8(Srgb8::new([0x21, 0x32, 0x43])),
     ));
     if matches!(mutation, FullMutation::ConstraintMultiplicity) {
-        hard.push(ConstraintInvocation::hard(
+        hard.push(ConstraintInvocation::visible_unary_hard(
             ConstraintId::new(1_000),
             ids.occurrences[1],
             CoreProgramConstraintInvocationV1::ExactSrgb8(Srgb8::new([0x44, 0x55, 0x66])),
+        ));
+    }
+    if matches!(mutation, FullMutation::CompleteSchemaGolden) {
+        let fixed_target = TargetId::new(1_003);
+        let fixed_occurrence = OccurrenceId::new(1_005);
+        targets.push(Target::fixed(fixed_target, ids.sources[0]));
+        paints.push(Paint::Solid {
+            id: PaintId::new(1_004),
+            target: fixed_target,
+        });
+        occurrences.push(Occurrence::new(
+            fixed_occurrence,
+            PaintId::new(1_004),
+            ids.surfaces[0],
+            CompositionProfile::EncodedSrgb8SourceOverV1,
+            context(SurroundProfileId::AverageV1),
+        ));
+        hard.push(ConstraintInvocation::exact_intrinsic_unary_hard(
+            ConstraintId::new(1_006),
+            ids.targets[0],
+            candidate_signals[0][0].srgb8(),
+        ));
+        hard.push(ConstraintInvocation::exact_intrinsic_relation_hard(
+            ConstraintId::new(1_007),
+            DirectedRelationV1::try_new(fixed_target, vec![ids.targets[0]]).unwrap(),
+        ));
+        hard.push(ConstraintInvocation::exact_visible_relation_hard(
+            ConstraintId::new(1_008),
+            DirectedRelationV1::try_new(fixed_occurrence, vec![ids.occurrences[0]]).unwrap(),
+        ));
+        hard.push(ConstraintInvocation::declared_srgb8_clean_set_hard(
+            ConstraintId::new(1_009),
+            PointPresentationTargetV1::new(PresentationRootId::new(1_002), ids.occurrences[0]),
         ));
     }
     let mut outputs = vec![
@@ -719,9 +765,9 @@ fn canonical_full_ids() -> FullIds {
 }
 
 #[test]
-fn complete_program_schema_v5_digest_is_cross_platform_golden() {
-    // Вместе с fixed golden этот Program содержит каждый V5 vertex/edge tag,
-    // обе constraint families и оба режима. Случайная смена кодировки требует
+fn complete_program_schema_v6_digest_is_cross_platform_golden() {
+    // Вместе с fixed golden этот Program содержит каждый V6 vertex/edge tag,
+    // все constraint topology и оба режима. Случайная смена кодировки требует
     // явной смены версии, а не тихого перевыпуска прежнего content address.
     let compiled = full_program(
         canonical_full_ids(),
@@ -731,11 +777,20 @@ fn complete_program_schema_v5_digest_is_cross_platform_golden() {
     .compile()
     .unwrap();
 
+    let schema = crate::program_session::program_identity_graph_schema_for_test(&full_program(
+        canonical_full_ids(),
+        false,
+        FullMutation::CompleteSchemaGolden,
+    ))
+    .unwrap();
+    assert_eq!(schema.0, (1_u8..=21).collect::<Vec<_>>());
+    assert_eq!(schema.1, (1_u8..=27).collect::<Vec<_>>());
+
     assert_eq!(
         compiled.content_identity().as_bytes(),
         &[
-            96, 211, 110, 208, 129, 129, 17, 133, 60, 202, 30, 74, 62, 176, 156, 216, 200, 37, 22,
-            103, 116, 138, 153, 152, 50, 46, 193, 238, 135, 21, 22, 38,
+            221, 253, 12, 128, 175, 69, 147, 163, 56, 186, 249, 2, 80, 29, 40, 110, 150, 16, 126,
+            147, 176, 229, 2, 154, 50, 91, 7, 120, 82, 36, 247, 174,
         ]
     );
 }
@@ -903,7 +958,7 @@ fn nested_surface_program(
                 .copied()
                 .enumerate()
                 .map(|(index, occurrence)| {
-                    ConstraintInvocation::hard(
+                    ConstraintInvocation::visible_unary_hard(
                         ConstraintId::new(14 + index as u32),
                         occurrence,
                         CoreProgramConstraintInvocationV1::ExactSrgb8(Srgb8::new([
@@ -1009,7 +1064,7 @@ fn paint_shape_program(shape: SubjectPaintShape) -> CoreProgramV1 {
             context(SurroundProfileId::AverageV1),
         )],
         ConstraintSet::new(
-            vec![ConstraintInvocation::hard(
+            vec![ConstraintInvocation::visible_unary_hard(
                 ConstraintId::new(13),
                 occurrence,
                 CoreProgramConstraintInvocationV1::ExactSrgb8(Srgb8::new([0x20, 0x30, 0x40])),
@@ -1101,12 +1156,12 @@ fn source_alias_program(shared: bool) -> CoreProgramV1 {
         ],
         ConstraintSet::new(
             vec![
-                ConstraintInvocation::hard(
+                ConstraintInvocation::visible_unary_hard(
                     ConstraintId::new(12),
                     occurrences[0],
                     CoreProgramConstraintInvocationV1::ExactSrgb8(Srgb8::new([0x30, 0x40, 0x50])),
                 ),
-                ConstraintInvocation::hard(
+                ConstraintInvocation::visible_unary_hard(
                     ConstraintId::new(13),
                     occurrences[1],
                     CoreProgramConstraintInvocationV1::ExactSrgb8(Srgb8::new([0x30, 0x40, 0x50])),
@@ -1172,7 +1227,7 @@ fn finite_program_with_opacity(reverse_order: bool, first_opacity: f64) -> CoreP
             context(SurroundProfileId::AverageV1),
         )],
         ConstraintSet::new(
-            vec![ConstraintInvocation::hard(
+            vec![ConstraintInvocation::visible_unary_hard(
                 ConstraintId::new(10),
                 occurrence,
                 CoreProgramConstraintInvocationV1::ExactSrgb8(Srgb8::new([0; 3])),
@@ -1231,7 +1286,7 @@ fn finite_program_with_permuted_source_colors(swap_source_signals: bool) -> Core
             context(SurroundProfileId::AverageV1),
         )],
         ConstraintSet::new(
-            vec![ConstraintInvocation::hard(
+            vec![ConstraintInvocation::visible_unary_hard(
                 ConstraintId::new(11),
                 occurrence,
                 CoreProgramConstraintInvocationV1::ExactSrgb8(Srgb8::new([0; 3])),
@@ -1289,7 +1344,7 @@ fn fixed_single_target_program() -> CoreProgramV1 {
             context(SurroundProfileId::AverageV1),
         )],
         ConstraintSet::new(
-            vec![ConstraintInvocation::hard(
+            vec![ConstraintInvocation::visible_unary_hard(
                 ConstraintId::new(10),
                 occurrence,
                 CoreProgramConstraintInvocationV1::ExactSrgb8(Srgb8::new([0; 3])),
@@ -1318,7 +1373,7 @@ fn content_identity_retains_the_explicit_joint_state_order() {
 }
 
 #[test]
-fn finite_candidate_opacity_is_part_of_v5_content_identity() {
+fn finite_candidate_opacity_is_part_of_v6_content_identity() {
     let quarter = finite_program_with_opacity(false, 0.25).compile().unwrap();
     let half = finite_program_with_opacity(false, 0.5).compile().unwrap();
 
@@ -1376,7 +1431,7 @@ fn regular_incidence_program(kind: RegularIncidence) -> CoreProgramV1 {
         .iter()
         .enumerate()
         .map(|(index, occurrence)| {
-            ConstraintInvocation::hard(
+            ConstraintInvocation::visible_unary_hard(
                 ConstraintId::new(60 + index as u32),
                 occurrence.id(),
                 CoreProgramConstraintInvocationV1::ExactSrgb8(Srgb8::new([0x20; 3])),

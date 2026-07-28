@@ -1,0 +1,292 @@
+use crate::Srgb8;
+use crate::constraints::{HardDecision, ProgramConstraintContentV1};
+
+fn exact_srgb8_equal(left: Srgb8, right: Srgb8) -> bool {
+    left.bytes() == right.bytes()
+}
+
+/// Принадлежащая Core identity точного байтового равенства однородных endpoints.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ExactSrgb8RelationIdentityV1 {
+    HomogeneousEndpointEqualityV1,
+}
+
+/// Версия точного закона для пары endpoints.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ExactSrgb8RelationReleaseV1 {
+    V1,
+}
+
+/// Capability намеренно уже перцептивной либо renderer identity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ExactSrgb8RelationCapabilityV1 {
+    HomogeneousEncodedSrgb8PairV1,
+}
+
+/// Сырая пара хранится независимо от жёсткой классификации.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ExactSrgb8RelationMeasurementV1 {
+    reference: Srgb8,
+    candidate: Srgb8,
+}
+
+impl ExactSrgb8RelationMeasurementV1 {
+    pub(crate) const fn reference(self) -> Srgb8 {
+        self.reference
+    }
+
+    pub(crate) const fn candidate(self) -> Srgb8 {
+        self.candidate
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ExactSrgb8RelationPassV1;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ExactSrgb8RelationViolationV1;
+
+/// Профиль точного технического отношения без перцептивных утверждений.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct ExactSrgb8RelationV1;
+
+impl ExactSrgb8RelationV1 {
+    pub(crate) const fn identity(self) -> ExactSrgb8RelationIdentityV1 {
+        ExactSrgb8RelationIdentityV1::HomogeneousEndpointEqualityV1
+    }
+
+    pub(crate) const fn release(self) -> ExactSrgb8RelationReleaseV1 {
+        ExactSrgb8RelationReleaseV1::V1
+    }
+
+    pub(crate) const fn capability(self) -> ExactSrgb8RelationCapabilityV1 {
+        ExactSrgb8RelationCapabilityV1::HomogeneousEncodedSrgb8PairV1
+    }
+
+    pub(crate) fn assess(
+        self,
+        reference: Srgb8,
+        candidate: Srgb8,
+    ) -> (
+        ExactSrgb8RelationMeasurementV1,
+        HardDecision<ExactSrgb8RelationPassV1, ExactSrgb8RelationViolationV1>,
+    ) {
+        let measurement = ExactSrgb8RelationMeasurementV1 {
+            reference,
+            candidate,
+        };
+        let decision = if exact_srgb8_equal(reference, candidate) {
+            HardDecision::Pass(ExactSrgb8RelationPassV1)
+        } else {
+            HardDecision::Violation(ExactSrgb8RelationViolationV1)
+        };
+        (measurement, decision)
+    }
+}
+
+/// Принадлежащая Core identity точного равенства source одного intrinsic Paint.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ExactSrgb8IntrinsicUnaryIdentityV1 {
+    SourceEqualityV1,
+}
+
+/// Версия точного unary-закона над source Paint.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ExactSrgb8IntrinsicUnaryReleaseV1 {
+    V1,
+}
+
+/// Capability не обещает равенство alpha или результата композитинга.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ExactSrgb8IntrinsicUnaryCapabilityV1 {
+    EncodedSrgb8PaintSourceV1,
+}
+
+/// Сырые expected и actual сохраняются независимо от вердикта.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ExactSrgb8IntrinsicUnaryMeasurementV1 {
+    expected: Srgb8,
+    actual: Srgb8,
+}
+
+impl ExactSrgb8IntrinsicUnaryMeasurementV1 {
+    pub(crate) const fn expected(self) -> Srgb8 {
+        self.expected
+    }
+
+    pub(crate) const fn actual(self) -> Srgb8 {
+        self.actual
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ExactSrgb8IntrinsicUnaryPassV1;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ExactSrgb8IntrinsicUnaryViolationV1;
+
+/// Точный unary-профиль проверяет только source и не теряет полный Paint binding.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct ExactSrgb8IntrinsicUnaryV1;
+
+impl ExactSrgb8IntrinsicUnaryV1 {
+    pub(crate) const fn identity(self) -> ExactSrgb8IntrinsicUnaryIdentityV1 {
+        ExactSrgb8IntrinsicUnaryIdentityV1::SourceEqualityV1
+    }
+
+    pub(crate) const fn release(self) -> ExactSrgb8IntrinsicUnaryReleaseV1 {
+        ExactSrgb8IntrinsicUnaryReleaseV1::V1
+    }
+
+    pub(crate) const fn capability(self) -> ExactSrgb8IntrinsicUnaryCapabilityV1 {
+        ExactSrgb8IntrinsicUnaryCapabilityV1::EncodedSrgb8PaintSourceV1
+    }
+
+    pub(crate) fn assess(
+        self,
+        expected: Srgb8,
+        actual: Srgb8,
+    ) -> (
+        ExactSrgb8IntrinsicUnaryMeasurementV1,
+        HardDecision<ExactSrgb8IntrinsicUnaryPassV1, ExactSrgb8IntrinsicUnaryViolationV1>,
+    ) {
+        let measurement = ExactSrgb8IntrinsicUnaryMeasurementV1 { expected, actual };
+        let decision = if exact_srgb8_equal(expected, actual) {
+            HardDecision::Pass(ExactSrgb8IntrinsicUnaryPassV1)
+        } else {
+            HardDecision::Violation(ExactSrgb8IntrinsicUnaryViolationV1)
+        };
+        (measurement, decision)
+    }
+}
+
+/// Закрытый registry intrinsic-unary профилей Core.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CoreIntrinsicUnaryInvocationV1 {
+    ExactSrgb8 { expected: Srgb8 },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CoreIntrinsicUnaryMeasurementV1 {
+    ExactSrgb8(ExactSrgb8IntrinsicUnaryMeasurementV1),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CoreIntrinsicUnaryPassV1 {
+    ExactSrgb8(ExactSrgb8IntrinsicUnaryPassV1),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CoreIntrinsicUnaryViolationV1 {
+    ExactSrgb8(ExactSrgb8IntrinsicUnaryViolationV1),
+}
+
+impl CoreIntrinsicUnaryInvocationV1 {
+    pub(crate) const fn exact_srgb8(expected: Srgb8) -> Self {
+        Self::ExactSrgb8 { expected }
+    }
+
+    pub(crate) const fn content(self) -> ProgramConstraintContentV1 {
+        match self {
+            Self::ExactSrgb8 { expected } => {
+                let profile = ExactSrgb8IntrinsicUnaryV1;
+                ProgramConstraintContentV1::ExactSrgb8IntrinsicUnary {
+                    identity: profile.identity(),
+                    release: profile.release(),
+                    capability: profile.capability(),
+                    expected,
+                }
+            }
+        }
+    }
+
+    pub(crate) fn assess(
+        self,
+        actual: Srgb8,
+    ) -> (
+        CoreIntrinsicUnaryMeasurementV1,
+        HardDecision<CoreIntrinsicUnaryPassV1, CoreIntrinsicUnaryViolationV1>,
+    ) {
+        match self {
+            Self::ExactSrgb8 { expected } => {
+                let (measurement, decision) = ExactSrgb8IntrinsicUnaryV1.assess(expected, actual);
+                let decision = match decision {
+                    HardDecision::Pass(proof) => {
+                        HardDecision::Pass(CoreIntrinsicUnaryPassV1::ExactSrgb8(proof))
+                    }
+                    HardDecision::Violation(proof) => {
+                        HardDecision::Violation(CoreIntrinsicUnaryViolationV1::ExactSrgb8(proof))
+                    }
+                };
+                (
+                    CoreIntrinsicUnaryMeasurementV1::ExactSrgb8(measurement),
+                    decision,
+                )
+            }
+        }
+    }
+}
+
+/// Закрытый registry однородных directional-профилей Core.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CoreRelationInvocationV1 {
+    ExactSrgb8,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CoreRelationMeasurementV1 {
+    ExactSrgb8(ExactSrgb8RelationMeasurementV1),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CoreRelationPassV1 {
+    ExactSrgb8(ExactSrgb8RelationPassV1),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CoreRelationViolationV1 {
+    ExactSrgb8(ExactSrgb8RelationViolationV1),
+}
+
+impl CoreRelationInvocationV1 {
+    pub(crate) const fn exact_srgb8() -> Self {
+        Self::ExactSrgb8
+    }
+
+    pub(crate) const fn content(self) -> ProgramConstraintContentV1 {
+        match self {
+            Self::ExactSrgb8 => {
+                let profile = ExactSrgb8RelationV1;
+                ProgramConstraintContentV1::ExactSrgb8Relation {
+                    identity: profile.identity(),
+                    release: profile.release(),
+                    capability: profile.capability(),
+                }
+            }
+        }
+    }
+
+    pub(crate) fn assess(
+        self,
+        reference: Srgb8,
+        candidate: Srgb8,
+    ) -> (
+        CoreRelationMeasurementV1,
+        HardDecision<CoreRelationPassV1, CoreRelationViolationV1>,
+    ) {
+        match self {
+            Self::ExactSrgb8 => {
+                let (measurement, decision) = ExactSrgb8RelationV1.assess(reference, candidate);
+                let decision = match decision {
+                    HardDecision::Pass(proof) => {
+                        HardDecision::Pass(CoreRelationPassV1::ExactSrgb8(proof))
+                    }
+                    HardDecision::Violation(proof) => {
+                        HardDecision::Violation(CoreRelationViolationV1::ExactSrgb8(proof))
+                    }
+                };
+                (CoreRelationMeasurementV1::ExactSrgb8(measurement), decision)
+            }
+        }
+    }
+}

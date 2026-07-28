@@ -24,7 +24,7 @@
 //! [`CertificateV1::Verified`] хранит выбранное состояние, все клетки
 //! доказательства и сертифицированные Paint outputs. [`CertificateV1::Conflict`]
 //! хранит исчерпывающий конфликт по всем рассмотренным состояниям.
-//! [`ContentIdentityV5`] идентифицирует каноническое содержание, но не даёт
+//! [`ContentIdentityV6`] идентифицирует каноническое содержание, но не даёт
 //! полномочий живого [`OwnerV1`].
 
 #![forbid(unreachable_pub)]
@@ -40,7 +40,9 @@ use crate::appearance::{
 };
 use crate::composition::{AdmittedOpacityV1, CompositionProfileV1, OpacityAdmissionErrorV1};
 use crate::constraints::{
-    ApplicableWcag22EvaluationErrorV1, ExactSrgb8IdentityV1, ProgramVisiblePointBindingV1,
+    ApplicableWcag22EvaluationErrorV1, CoreIntrinsicUnaryMeasurementV1, CoreIntrinsicUnaryPassV1,
+    CoreIntrinsicUnaryViolationV1, CoreRelationMeasurementV1, CoreRelationPassV1,
+    CoreRelationViolationV1, ExactSrgb8IdentityV1, ProgramVisiblePointBindingV1,
     ProgramVisiblePointPassEvidence, ProgramVisiblePointViolationEvidence, Wcag22Srgb8V1,
 };
 use crate::joint::FiniteJointOrderErrorV1;
@@ -67,11 +69,17 @@ use crate::program_session::{
     PointPresentationRootV1, PointPresentationTargetV1, PresentationRootId, ProgramCompileError,
     ProgramConflictV1, ProgramConstraintCellV1, ProgramConstraintPassEvidenceV1,
     ProgramConstraintResultV1, ProgramConstraintSubjectV1, ProgramConstraintViolationEvidenceV1,
-    ProgramContentIdentityV5, ProgramPaintOutputV1, ProgramSessionEvaluationError,
-    ProgramSessionInstantiateError, ProgramSessionPlan, ProgramVerifiedV1, Source, SourceId,
-    Surface, Target, TargetCandidateChoiceV1, TargetCandidateId,
-    TargetCandidateV1 as CoreTargetCandidateV1, TargetId,
+    ProgramContentIdentityV6, ProgramIntrinsicPaintBindingV1, ProgramIntrinsicUnaryPassEvidenceV1,
+    ProgramIntrinsicUnaryViolationEvidenceV1, ProgramPaintOutputV1,
+    ProgramRelationMemberDecisionV1, ProgramRelationMemberEvidenceV1, ProgramReportV1,
+    ProgramSessionEvaluationError, ProgramSessionInstantiateError, ProgramSessionPlan,
+    ProgramVerifiedV1, ProgramVisibleRelationBindingV1, Source, SourceId, Surface, Target,
+    TargetCandidateChoiceV1, TargetCandidateId, TargetCandidateV1 as CoreTargetCandidateV1,
+    TargetId,
 };
+#[cfg(test)]
+pub(crate) use crate::relation::DirectedRelationErrorV1;
+pub(crate) use crate::relation::DirectedRelationV1;
 use crate::session::{
     PreparedSessionTransition, Session, SessionState, SessionUpdateError, SessionView,
 };
@@ -89,6 +97,7 @@ type CoreProgramSessionViewV1<'a> = SessionView<'a, CoreProgramPlanV1>;
 type CorePreparedSessionTransitionV1<'a> = PreparedSessionTransition<'a, CoreProgramPlanV1>;
 type CoreProgramPlanErrorV1 = ProgramSessionEvaluationError<CoreProgramEvaluatorErrorV1>;
 type CoreProgramConstraintCellV1 = ProgramConstraintCellV1<CoreProgramEvaluatorsV1>;
+type CoreProgramReportV1 = ProgramReportV1<CoreProgramEvaluatorsV1>;
 type CoreExactPassEvidenceV1 = ProgramVisiblePointPassEvidence<ExactSrgb8IdentityV1>;
 type CoreExactViolationEvidenceV1 = ProgramVisiblePointViolationEvidence<ExactSrgb8IdentityV1>;
 type CoreWcag22PassEvidenceV1 = ProgramVisiblePointPassEvidence<Wcag22Srgb8V1>;
@@ -266,6 +275,10 @@ pub(crate) enum PaintValueErrorV1 {
 pub(crate) struct PaintValueV1(EncodedPointPaintValueV1);
 
 impl PaintValueV1 {
+    const fn from_core(value: EncodedPointPaintValueV1) -> Self {
+        Self(value)
+    }
+
     /// Принимает только физически определённый straight alpha и канонизирует
     /// оба знака нуля, чтобы одно значение имело одно identity-представление.
     pub(crate) fn try_new(source: Srgb8, opacity: f64) -> Result<Self, PaintValueErrorV1> {
@@ -545,6 +558,13 @@ pub(crate) enum CompileErrorKindV1 {
     MissingOccurrenceBackdrop,
     /// Ограничение ссылается на отсутствующий Occurrence.
     MissingConstraintOccurrence,
+    MissingIntrinsicUnaryTarget,
+    MissingIntrinsicRelationReference,
+    MissingIntrinsicRelationCandidate,
+    MissingVisibleRelationReference,
+    MissingVisibleRelationCandidate,
+    SolverDependentIntrinsicRelationReference,
+    SolverDependentVisibleRelationReference,
     /// Ограничение clean-set ссылается на необъявленную цель представления.
     MissingConstraintPresentationTarget,
     /// Выход ссылается на отсутствующий Paint.
@@ -973,6 +993,35 @@ pub(crate) enum CompileErrorV1 {
         /// Отсутствующий Occurrence.
         occurrence: OccurrenceIdV1,
     },
+    MissingIntrinsicUnaryTarget {
+        constraint: ConstraintIdV1,
+        target: TargetIdV1,
+    },
+    MissingIntrinsicRelationReference {
+        constraint: ConstraintIdV1,
+        reference: TargetIdV1,
+    },
+    MissingIntrinsicRelationCandidate {
+        constraint: ConstraintIdV1,
+        candidate: TargetIdV1,
+    },
+    MissingVisibleRelationReference {
+        constraint: ConstraintIdV1,
+        reference: OccurrenceIdV1,
+    },
+    MissingVisibleRelationCandidate {
+        constraint: ConstraintIdV1,
+        candidate: OccurrenceIdV1,
+    },
+    SolverDependentIntrinsicRelationReference {
+        constraint: ConstraintIdV1,
+        reference: TargetIdV1,
+    },
+    SolverDependentVisibleRelationReference {
+        constraint: ConstraintIdV1,
+        reference: OccurrenceIdV1,
+        target: TargetIdV1,
+    },
     /// Ограничение clean-set ссылается не на целиком объявленную цель представления.
     MissingConstraintPresentationTarget {
         /// Ошибочное ограничение.
@@ -1060,6 +1109,21 @@ impl CompileErrorV1 {
             Self::EmptyOutputSet => Kind::EmptyOutputSet,
             Self::DuplicateConstraint { .. } => Kind::DuplicateConstraint,
             Self::MissingConstraintOccurrence { .. } => Kind::MissingConstraintOccurrence,
+            Self::MissingIntrinsicUnaryTarget { .. } => Kind::MissingIntrinsicUnaryTarget,
+            Self::MissingIntrinsicRelationReference { .. } => {
+                Kind::MissingIntrinsicRelationReference
+            }
+            Self::MissingIntrinsicRelationCandidate { .. } => {
+                Kind::MissingIntrinsicRelationCandidate
+            }
+            Self::MissingVisibleRelationReference { .. } => Kind::MissingVisibleRelationReference,
+            Self::MissingVisibleRelationCandidate { .. } => Kind::MissingVisibleRelationCandidate,
+            Self::SolverDependentIntrinsicRelationReference { .. } => {
+                Kind::SolverDependentIntrinsicRelationReference
+            }
+            Self::SolverDependentVisibleRelationReference { .. } => {
+                Kind::SolverDependentVisibleRelationReference
+            }
             Self::MissingConstraintPresentationTarget { .. } => {
                 Kind::MissingConstraintPresentationTarget
             }
@@ -1120,6 +1184,13 @@ impl CompileErrorV1 {
             | Self::MissingOutputPaint { output, .. } => Some(Handle::OutputSlot(*output)),
             Self::DuplicateConstraint { constraint }
             | Self::MissingConstraintOccurrence { constraint, .. }
+            | Self::MissingIntrinsicUnaryTarget { constraint, .. }
+            | Self::MissingIntrinsicRelationReference { constraint, .. }
+            | Self::MissingIntrinsicRelationCandidate { constraint, .. }
+            | Self::MissingVisibleRelationReference { constraint, .. }
+            | Self::MissingVisibleRelationCandidate { constraint, .. }
+            | Self::SolverDependentIntrinsicRelationReference { constraint, .. }
+            | Self::SolverDependentVisibleRelationReference { constraint, .. }
             | Self::MissingConstraintPresentationTarget { constraint, .. } => {
                 Some(Handle::Constraint(*constraint))
             }
@@ -1153,6 +1224,14 @@ impl CompileErrorV1 {
             Self::MissingSurfaceInputPort { input, .. } => Some(Handle::SurfaceInputPort(*input)),
             Self::MissingSurfaceOccurrence { occurrence, .. }
             | Self::MissingConstraintOccurrence { occurrence, .. }
+            | Self::MissingVisibleRelationReference {
+                reference: occurrence,
+                ..
+            }
+            | Self::MissingVisibleRelationCandidate {
+                candidate: occurrence,
+                ..
+            }
             | Self::MissingConstraintPresentationTarget { occurrence, .. }
             | Self::MissingPresentationRootOccurrence { occurrence, .. }
             | Self::PresentationRootConsumedDownstream { occurrence, .. }
@@ -1160,6 +1239,19 @@ impl CompileErrorV1 {
             | Self::MissingPointPresentationOccurrence { occurrence, .. }
             | Self::PointPresentationOccurrenceOutsideRootAncestry { occurrence, .. } => {
                 Some(Handle::Occurrence(*occurrence))
+            }
+            Self::MissingIntrinsicRelationReference { reference, .. }
+            | Self::MissingIntrinsicUnaryTarget {
+                target: reference, ..
+            }
+            | Self::SolverDependentIntrinsicRelationReference { reference, .. } => {
+                Some(Handle::Target(*reference))
+            }
+            Self::MissingIntrinsicRelationCandidate { candidate, .. } => {
+                Some(Handle::Target(*candidate))
+            }
+            Self::SolverDependentVisibleRelationReference { target, .. } => {
+                Some(Handle::Target(*target))
             }
             Self::MissingOccurrencePaint { paint, .. }
             | Self::UnassessedOutput { paint, .. }
@@ -1382,29 +1474,14 @@ impl DraftV1 {
     }
 
     /// Добавляет обязательное точное сравнение видимого sRGB8 результата.
-    pub(crate) fn push_exact_hard(
-        &mut self,
-        id: ConstraintIdV1,
-        occurrence: OccurrenceIdV1,
-        expected: Srgb8,
-    ) -> &mut Self {
-        self.inner.push_hard_constraint(ConstraintInvocation::hard(
-            id.into_core(),
-            occurrence.into_core(),
-            CoreProgramConstraintInvocationV1::ExactSrgb8(expected),
-        ));
-        self
-    }
-
-    /// Добавляет диагностическое точное сравнение, не влияющее на выбор.
-    pub(crate) fn push_exact_report_only(
+    pub(crate) fn push_exact_visible_unary_hard(
         &mut self,
         id: ConstraintIdV1,
         occurrence: OccurrenceIdV1,
         expected: Srgb8,
     ) -> &mut Self {
         self.inner
-            .push_report_constraint(ConstraintInvocation::report_only(
+            .push_hard_constraint(ConstraintInvocation::visible_unary_hard(
                 id.into_core(),
                 occurrence.into_core(),
                 CoreProgramConstraintInvocationV1::ExactSrgb8(expected),
@@ -1412,30 +1489,85 @@ impl DraftV1 {
         self
     }
 
-    /// Добавляет обязательный критерий WCAG 2.2 для видимого результата.
-    pub(crate) fn push_wcag22_hard(
+    /// Добавляет диагностическое точное сравнение, не влияющее на выбор.
+    pub(crate) fn push_exact_visible_unary_report_only(
         &mut self,
         id: ConstraintIdV1,
         occurrence: OccurrenceIdV1,
-        criterion: Wcag22CriterionV1,
+        expected: Srgb8,
     ) -> &mut Self {
-        self.inner.push_hard_constraint(ConstraintInvocation::hard(
-            id.into_core(),
-            occurrence.into_core(),
-            CoreProgramConstraintInvocationV1::Wcag22Srgb8(criterion),
-        ));
+        self.inner
+            .push_report_constraint(ConstraintInvocation::visible_unary_report_only(
+                id.into_core(),
+                occurrence.into_core(),
+                CoreProgramConstraintInvocationV1::ExactSrgb8(expected),
+            ));
         self
     }
 
-    /// Добавляет диагностический критерий WCAG 2.2, не влияющий на выбор.
-    pub(crate) fn push_wcag22_report_only(
+    /// Добавляет обязательную exact-проверку intrinsic source одной Target.
+    pub(crate) fn push_exact_intrinsic_unary_hard(
+        &mut self,
+        id: ConstraintIdV1,
+        target: TargetIdV1,
+        expected: Srgb8,
+    ) -> &mut Self {
+        self.inner
+            .push_exact_intrinsic_unary_hard(id.into_core(), target.into_core(), expected);
+        self
+    }
+
+    /// Добавляет обязательное exact-отношение между intrinsic Target signals.
+    pub(crate) fn push_exact_intrinsic_relation_hard(
+        &mut self,
+        id: ConstraintIdV1,
+        relation: DirectedRelationV1<TargetIdV1>,
+    ) -> &mut Self {
+        self.inner.push_exact_intrinsic_relation_hard(
+            id.into_core(),
+            relation.map_ordered(TargetIdV1::into_core),
+        );
+        self
+    }
+
+    /// Добавляет обязательное exact-отношение между final modeled Occurrences.
+    pub(crate) fn push_exact_visible_relation_hard(
+        &mut self,
+        id: ConstraintIdV1,
+        relation: DirectedRelationV1<OccurrenceIdV1>,
+    ) -> &mut Self {
+        self.inner.push_exact_visible_relation_hard(
+            id.into_core(),
+            relation.map_ordered(OccurrenceIdV1::into_core),
+        );
+        self
+    }
+
+    /// Добавляет обязательный критерий WCAG 2.2 для видимого результата.
+    pub(crate) fn push_wcag22_visible_unary_hard(
         &mut self,
         id: ConstraintIdV1,
         occurrence: OccurrenceIdV1,
         criterion: Wcag22CriterionV1,
     ) -> &mut Self {
         self.inner
-            .push_report_constraint(ConstraintInvocation::report_only(
+            .push_hard_constraint(ConstraintInvocation::visible_unary_hard(
+                id.into_core(),
+                occurrence.into_core(),
+                CoreProgramConstraintInvocationV1::Wcag22Srgb8(criterion),
+            ));
+        self
+    }
+
+    /// Добавляет диагностический критерий WCAG 2.2, не влияющий на выбор.
+    pub(crate) fn push_wcag22_visible_unary_report_only(
+        &mut self,
+        id: ConstraintIdV1,
+        occurrence: OccurrenceIdV1,
+        criterion: Wcag22CriterionV1,
+    ) -> &mut Self {
+        self.inner
+            .push_report_constraint(ConstraintInvocation::visible_unary_report_only(
                 id.into_core(),
                 occurrence.into_core(),
                 CoreProgramConstraintInvocationV1::Wcag22Srgb8(criterion),
@@ -1558,8 +1690,8 @@ impl OwnerV1 {
     ///
     /// Identity доступна до первого update, но не заменяет полномочия этой
     /// конкретной owner-эпохи.
-    pub(crate) fn content_identity(&self) -> ContentIdentityV5 {
-        ContentIdentityV5::from_core(self.compiled.content_identity())
+    pub(crate) fn content_identity(&self) -> ContentIdentityV6 {
+        ContentIdentityV6::from_core(self.compiled.content_identity())
     }
 
     /// Вычисляет верхние границы клеток для prospective Observed-update.
@@ -1879,10 +2011,10 @@ impl<'session> PreparedSessionTransitionV1<'session> {
 /// Identity не идентифицирует owner-эпоху и не даёт runtime-полномочий.
 #[repr(transparent)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(crate) struct ContentIdentityV5([u8; 32]);
+pub(crate) struct ContentIdentityV6([u8; 32]);
 
-impl ContentIdentityV5 {
-    const fn from_core(value: ProgramContentIdentityV5) -> Self {
+impl ContentIdentityV6 {
+    const fn from_core(value: ProgramContentIdentityV6) -> Self {
         Self(*value.as_bytes())
     }
 
@@ -1900,8 +2032,8 @@ pub(crate) struct VerifiedCertificateV1<'a> {
 
 impl<'a> VerifiedCertificateV1<'a> {
     /// Возвращает identity скомпилированного содержания.
-    pub(crate) const fn content_identity(self) -> ContentIdentityV5 {
-        ContentIdentityV5::from_core(self.inner.report().content_identity())
+    pub(crate) const fn content_identity(self) -> ContentIdentityV6 {
+        ContentIdentityV6::from_core(self.inner.report().content_identity())
     }
 
     /// Возвращает точное наблюдение, на котором выдан сертификат.
@@ -1920,11 +2052,11 @@ impl<'a> VerifiedCertificateV1<'a> {
     pub(crate) fn cells(
         self,
     ) -> impl ExactSizeIterator<Item = VerifiedCellV1<'a>> + FusedIterator + 'a {
-        self.inner
-            .report()
+        let report = self.inner.report();
+        report
             .cells()
             .iter()
-            .map(VerifiedCellV1::from_core)
+            .map(move |cell| VerifiedCellV1::from_core(report, cell))
     }
 
     /// Возвращает все сертифицированные Paint outputs в каноническом порядке.
@@ -1946,8 +2078,8 @@ pub(crate) struct ConflictCertificateV1<'a> {
 
 impl<'a> ConflictCertificateV1<'a> {
     /// Возвращает identity скомпилированного содержания.
-    pub(crate) const fn content_identity(self) -> ContentIdentityV5 {
-        ContentIdentityV5::from_core(self.inner.report().content_identity())
+    pub(crate) const fn content_identity(self) -> ContentIdentityV6 {
+        ContentIdentityV6::from_core(self.inner.report().content_identity())
     }
 
     /// Возвращает точное наблюдение, вызвавшее конфликт.
@@ -1966,11 +2098,11 @@ impl<'a> ConflictCertificateV1<'a> {
     pub(crate) fn cells(
         self,
     ) -> impl ExactSizeIterator<Item = ConflictCellV1<'a>> + FusedIterator + 'a {
-        self.inner
-            .report()
+        let report = self.inner.report();
+        report
             .cells()
             .iter()
-            .map(ConflictCellV1::from_core)
+            .map(move |cell| ConflictCellV1::from_core(report, cell))
     }
 }
 
@@ -1996,7 +2128,7 @@ impl<'a> CertificateV1<'a> {
     }
 
     /// Возвращает identity скомпилированного содержания.
-    pub(crate) const fn content_identity(self) -> ContentIdentityV5 {
+    pub(crate) const fn content_identity(self) -> ContentIdentityV6 {
         match self {
             Self::Verified(value) => value.content_identity(),
             Self::Conflict(value) => value.content_identity(),
@@ -2122,8 +2254,18 @@ pub(crate) enum ConstraintModeV1 {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ConstraintSubjectV1 {
     /// Видимый результат одного `Occurrence` в объявленном для него контексте.
-    ModeledOccurrence {
+    VisibleUnary {
         occurrence: OccurrenceIdV1,
+        context: AppearanceContextV1,
+    },
+    IntrinsicUnary {
+        target: TargetIdV1,
+    },
+    IntrinsicRelation {
+        reference: TargetIdV1,
+    },
+    VisibleRelation {
+        reference: OccurrenceIdV1,
         context: AppearanceContextV1,
     },
     /// Итоговый вклад целевого `Occurrence` в конкретный терминальный корень.
@@ -2136,13 +2278,29 @@ pub(crate) enum ConstraintSubjectV1 {
 
 const fn project_constraint_subject(subject: ProgramConstraintSubjectV1) -> ConstraintSubjectV1 {
     match subject {
-        ProgramConstraintSubjectV1::ModeledOccurrence {
+        ProgramConstraintSubjectV1::VisibleUnary {
             occurrence,
             context,
-        } => ConstraintSubjectV1::ModeledOccurrence {
+        } => ConstraintSubjectV1::VisibleUnary {
             occurrence: OccurrenceIdV1::from_core(occurrence),
             context: AppearanceContextV1::from_core(context),
         },
+        ProgramConstraintSubjectV1::IntrinsicUnary { target } => {
+            ConstraintSubjectV1::IntrinsicUnary {
+                target: TargetIdV1::from_core(target),
+            }
+        }
+        ProgramConstraintSubjectV1::IntrinsicRelation { reference } => {
+            ConstraintSubjectV1::IntrinsicRelation {
+                reference: TargetIdV1::from_core(reference),
+            }
+        }
+        ProgramConstraintSubjectV1::VisibleRelation { reference, context } => {
+            ConstraintSubjectV1::VisibleRelation {
+                reference: OccurrenceIdV1::from_core(reference),
+                context: AppearanceContextV1::from_core(context),
+            }
+        }
         ProgramConstraintSubjectV1::PointPresentation { target, terminal } => {
             ConstraintSubjectV1::PointPresentation {
                 root: PresentationRootIdV1::from_core(target.root()),
@@ -2156,12 +2314,16 @@ const fn project_constraint_subject(subject: ProgramConstraintSubjectV1) -> Cons
 /// Одна клетка `case × constraint` выбранного или fixed состояния.
 #[derive(Clone, Copy)]
 pub(crate) struct VerifiedCellV1<'a> {
+    report: &'a CoreProgramReportV1,
     inner: &'a CoreProgramConstraintCellV1,
 }
 
 impl<'a> VerifiedCellV1<'a> {
-    const fn from_core(inner: &'a CoreProgramConstraintCellV1) -> Self {
-        Self { inner }
+    const fn from_core(
+        report: &'a CoreProgramReportV1,
+        inner: &'a CoreProgramConstraintCellV1,
+    ) -> Self {
+        Self { report, inner }
     }
 
     /// Возвращает индекс физического case.
@@ -2186,19 +2348,23 @@ impl<'a> VerifiedCellV1<'a> {
 
     /// Возвращает типизированное сохранённое evidence.
     pub(crate) fn assessment(self) -> AssessmentV1<'a> {
-        project_assessment(self.inner)
+        project_assessment(self.report, self.inner)
     }
 }
 
 /// Одна исчерпывающая клетка `state × case × constraint` конфликта.
 #[derive(Clone, Copy)]
 pub(crate) struct ConflictCellV1<'a> {
+    report: &'a CoreProgramReportV1,
     inner: &'a CoreProgramConstraintCellV1,
 }
 
 impl<'a> ConflictCellV1<'a> {
-    const fn from_core(inner: &'a CoreProgramConstraintCellV1) -> Self {
-        Self { inner }
+    const fn from_core(
+        report: &'a CoreProgramReportV1,
+        inner: &'a CoreProgramConstraintCellV1,
+    ) -> Self {
+        Self { report, inner }
     }
 
     /// Возвращает индекс рассмотренного состояния.
@@ -2228,7 +2394,7 @@ impl<'a> ConflictCellV1<'a> {
 
     /// Возвращает типизированное сохранённое evidence.
     pub(crate) fn assessment(self) -> AssessmentV1<'a> {
-        project_assessment(self.inner)
+        project_assessment(self.report, self.inner)
     }
 }
 
@@ -2240,27 +2406,30 @@ const fn project_constraint_mode(cell: &CoreProgramConstraintCellV1) -> Constrai
     }
 }
 
-fn project_assessment(cell: &CoreProgramConstraintCellV1) -> AssessmentV1<'_> {
+fn project_assessment<'a>(
+    report: &'a CoreProgramReportV1,
+    cell: &'a CoreProgramConstraintCellV1,
+) -> AssessmentV1<'a> {
     match cell.result() {
-        ProgramConstraintResultV1::Pass(ProgramConstraintPassEvidenceV1::ModeledOccurrence(
+        ProgramConstraintResultV1::Pass(ProgramConstraintPassEvidenceV1::VisibleUnary(
             CoreProgramPassEvidenceV1::ExactSrgb8(evidence),
         )) => AssessmentV1::ExactSrgb8(ExactSrgb8EvidenceV1 {
             inner: ExactSrgb8EvidenceRefV1::Pass(evidence),
         }),
         ProgramConstraintResultV1::Violation(
-            ProgramConstraintViolationEvidenceV1::ModeledOccurrence(
+            ProgramConstraintViolationEvidenceV1::VisibleUnary(
                 CoreProgramViolationEvidenceV1::ExactSrgb8(evidence),
             ),
         ) => AssessmentV1::ExactSrgb8(ExactSrgb8EvidenceV1 {
             inner: ExactSrgb8EvidenceRefV1::Violation(evidence),
         }),
-        ProgramConstraintResultV1::Pass(ProgramConstraintPassEvidenceV1::ModeledOccurrence(
+        ProgramConstraintResultV1::Pass(ProgramConstraintPassEvidenceV1::VisibleUnary(
             CoreProgramPassEvidenceV1::Wcag22Srgb8(evidence),
         )) => AssessmentV1::Wcag22Srgb8(Wcag22Srgb8EvidenceV1 {
             inner: Wcag22Srgb8EvidenceRefV1::Pass(evidence),
         }),
         ProgramConstraintResultV1::Violation(
-            ProgramConstraintViolationEvidenceV1::ModeledOccurrence(
+            ProgramConstraintViolationEvidenceV1::VisibleUnary(
                 CoreProgramViolationEvidenceV1::Wcag22Srgb8(evidence),
             ),
         ) => AssessmentV1::Wcag22Srgb8(Wcag22Srgb8EvidenceV1 {
@@ -2276,6 +2445,32 @@ fn project_assessment(cell: &CoreProgramConstraintCellV1) -> AssessmentV1<'_> {
         ) => AssessmentV1::DeclaredSrgb8CleanSet(DeclaredSrgb8CleanSetEvidenceV1 {
             inner: DeclaredSrgb8CleanSetEvidenceRefV1::Violation(evidence),
         }),
+        ProgramConstraintResultV1::Pass(ProgramConstraintPassEvidenceV1::IntrinsicUnary(
+            evidence,
+        )) => AssessmentV1::IntrinsicUnary(IntrinsicUnaryEvidenceV1 {
+            inner: IntrinsicUnaryEvidenceRefV1::Pass(evidence),
+        }),
+        ProgramConstraintResultV1::Violation(
+            ProgramConstraintViolationEvidenceV1::IntrinsicUnary(evidence),
+        ) => AssessmentV1::IntrinsicUnary(IntrinsicUnaryEvidenceV1 {
+            inner: IntrinsicUnaryEvidenceRefV1::Violation(evidence),
+        }),
+        ProgramConstraintResultV1::Pass(ProgramConstraintPassEvidenceV1::Relation(span)) => {
+            AssessmentV1::Relation(RelationEvidenceV1 {
+                verdict: VerdictV1::Pass,
+                members: report
+                    .relation_members_for(*span)
+                    .unwrap_or_else(|| unreachable!("report owns every relation span")),
+            })
+        }
+        ProgramConstraintResultV1::Violation(ProgramConstraintViolationEvidenceV1::Relation(
+            span,
+        )) => AssessmentV1::Relation(RelationEvidenceV1 {
+            verdict: VerdictV1::Violation,
+            members: report
+                .relation_members_for(*span)
+                .unwrap_or_else(|| unreachable!("report owns every relation span")),
+        }),
     }
 }
 
@@ -2286,6 +2481,8 @@ pub(crate) enum AssessmentV1<'a> {
     ExactSrgb8(ExactSrgb8EvidenceV1<'a>),
     /// Evidence применимого критерия WCAG 2.2.
     Wcag22Srgb8(Wcag22Srgb8EvidenceV1<'a>),
+    IntrinsicUnary(IntrinsicUnaryEvidenceV1<'a>),
+    Relation(RelationEvidenceV1<'a>),
     /// Свидетельство закреплённого пакетом clean-set над финальным результатом
     /// представления.
     DeclaredSrgb8CleanSet(DeclaredSrgb8CleanSetEvidenceV1<'a>),
@@ -2297,7 +2494,304 @@ impl AssessmentV1<'_> {
         match self {
             Self::ExactSrgb8(value) => value.verdict(),
             Self::Wcag22Srgb8(value) => value.verdict(),
+            Self::IntrinsicUnary(value) => value.verdict(),
+            Self::Relation(value) => value.verdict(),
             Self::DeclaredSrgb8CleanSet(value) => value.verdict(),
+        }
+    }
+}
+
+/// Полное заимствованное evidence одного intrinsic-unary ограничения.
+#[derive(Clone, Copy)]
+enum IntrinsicUnaryEvidenceRefV1<'a> {
+    Pass(&'a ProgramIntrinsicUnaryPassEvidenceV1),
+    Violation(&'a ProgramIntrinsicUnaryViolationEvidenceV1),
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct IntrinsicUnaryEvidenceV1<'a> {
+    inner: IntrinsicUnaryEvidenceRefV1<'a>,
+}
+
+impl IntrinsicUnaryEvidenceV1<'_> {
+    pub(crate) const fn verdict(self) -> VerdictV1 {
+        match self.inner {
+            IntrinsicUnaryEvidenceRefV1::Pass(_) => VerdictV1::Pass,
+            IntrinsicUnaryEvidenceRefV1::Violation(_) => VerdictV1::Violation,
+        }
+    }
+
+    pub(crate) const fn binding(self) -> IntrinsicPaintBindingV1 {
+        let binding = match self.inner {
+            IntrinsicUnaryEvidenceRefV1::Pass(value) => value.binding(),
+            IntrinsicUnaryEvidenceRefV1::Violation(value) => value.binding(),
+        };
+        IntrinsicPaintBindingV1::from_core(binding)
+    }
+
+    pub(crate) const fn measurement(self) -> IntrinsicUnaryMeasurementV1 {
+        let measurement = match self.inner {
+            IntrinsicUnaryEvidenceRefV1::Pass(value) => value.measurement(),
+            IntrinsicUnaryEvidenceRefV1::Violation(value) => value.measurement(),
+        };
+        match measurement {
+            CoreIntrinsicUnaryMeasurementV1::ExactSrgb8(value) => {
+                IntrinsicUnaryMeasurementV1::ExactSrgb8(ExactSrgb8UnaryMeasurementV1 {
+                    expected: value.expected(),
+                    actual: value.actual(),
+                })
+            }
+        }
+    }
+
+    pub(crate) const fn proof(self) -> IntrinsicUnaryProofV1 {
+        match self.inner {
+            IntrinsicUnaryEvidenceRefV1::Pass(value) => match value.proof() {
+                CoreIntrinsicUnaryPassV1::ExactSrgb8(_) => IntrinsicUnaryProofV1::ExactSrgb8Pass,
+            },
+            IntrinsicUnaryEvidenceRefV1::Violation(value) => match value.proof() {
+                CoreIntrinsicUnaryViolationV1::ExactSrgb8(_) => {
+                    IntrinsicUnaryProofV1::ExactSrgb8Violation
+                }
+            },
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct IntrinsicPaintBindingV1 {
+    target: TargetIdV1,
+    value: PaintValueV1,
+}
+
+impl IntrinsicPaintBindingV1 {
+    const fn from_core(value: ProgramIntrinsicPaintBindingV1) -> Self {
+        Self {
+            target: TargetIdV1::from_core(value.target()),
+            value: PaintValueV1::from_core(value.value()),
+        }
+    }
+
+    pub(crate) const fn target(self) -> TargetIdV1 {
+        self.target
+    }
+
+    pub(crate) const fn value(self) -> PaintValueV1 {
+        self.value
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ExactSrgb8UnaryMeasurementV1 {
+    expected: Srgb8,
+    actual: Srgb8,
+}
+
+impl ExactSrgb8UnaryMeasurementV1 {
+    pub(crate) const fn expected(self) -> Srgb8 {
+        self.expected
+    }
+
+    pub(crate) const fn actual(self) -> Srgb8 {
+        self.actual
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum IntrinsicUnaryMeasurementV1 {
+    ExactSrgb8(ExactSrgb8UnaryMeasurementV1),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum IntrinsicUnaryProofV1 {
+    ExactSrgb8Pass,
+    ExactSrgb8Violation,
+}
+
+/// Полное заимствованное member-evidence одного directional-ограничения.
+#[derive(Clone, Copy)]
+pub(crate) struct RelationEvidenceV1<'a> {
+    verdict: VerdictV1,
+    members: &'a [ProgramRelationMemberEvidenceV1],
+}
+
+impl<'a> RelationEvidenceV1<'a> {
+    pub(crate) const fn verdict(self) -> VerdictV1 {
+        self.verdict
+    }
+
+    pub(crate) fn member_count(self) -> usize {
+        self.members.len()
+    }
+
+    pub(crate) fn members(
+        self,
+    ) -> impl ExactSizeIterator<Item = RelationMemberV1<'a>> + FusedIterator + 'a {
+        self.members.iter().map(RelationMemberV1::from_core)
+    }
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum RelationMemberV1<'a> {
+    Intrinsic(IntrinsicRelationMemberV1<'a>),
+    Visible(VisibleRelationMemberV1<'a>),
+}
+
+impl<'a> RelationMemberV1<'a> {
+    fn from_core(inner: &'a ProgramRelationMemberEvidenceV1) -> Self {
+        match inner {
+            ProgramRelationMemberEvidenceV1::Intrinsic { .. } => {
+                Self::Intrinsic(IntrinsicRelationMemberV1 { inner })
+            }
+            ProgramRelationMemberEvidenceV1::Visible { .. } => {
+                Self::Visible(VisibleRelationMemberV1 { inner })
+            }
+        }
+    }
+
+    pub(crate) const fn measurement(self) -> RelationMeasurementV1 {
+        let measurement = match self {
+            Self::Intrinsic(value) => value.inner.measurement(),
+            Self::Visible(value) => value.inner.measurement(),
+        };
+        project_relation_measurement(measurement)
+    }
+
+    pub(crate) const fn verdict(self) -> VerdictV1 {
+        match self {
+            Self::Intrinsic(value) => value.verdict(),
+            Self::Visible(value) => value.verdict(),
+        }
+    }
+
+    pub(crate) const fn proof(self) -> RelationMemberProofV1 {
+        let decision = match self {
+            Self::Intrinsic(value) => value.inner.decision(),
+            Self::Visible(value) => value.inner.decision(),
+        };
+        project_relation_proof(decision)
+    }
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct IntrinsicRelationMemberV1<'a> {
+    inner: &'a ProgramRelationMemberEvidenceV1,
+}
+
+impl IntrinsicRelationMemberV1<'_> {
+    pub(crate) const fn reference(self) -> IntrinsicPaintBindingV1 {
+        let Some((reference, _)) = self.inner.intrinsic_bindings() else {
+            unreachable!()
+        };
+        IntrinsicPaintBindingV1::from_core(*reference)
+    }
+
+    pub(crate) const fn candidate(self) -> IntrinsicPaintBindingV1 {
+        let Some((_, candidate)) = self.inner.intrinsic_bindings() else {
+            unreachable!()
+        };
+        IntrinsicPaintBindingV1::from_core(*candidate)
+    }
+
+    pub(crate) const fn verdict(self) -> VerdictV1 {
+        project_relation_verdict(self.inner.decision())
+    }
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct VisibleRelationMemberV1<'a> {
+    inner: &'a ProgramRelationMemberEvidenceV1,
+}
+
+impl<'a> VisibleRelationMemberV1<'a> {
+    pub(crate) const fn reference(self) -> VisibleRelationEndpointV1<'a> {
+        let Some((reference, _)) = self.inner.visible_bindings() else {
+            unreachable!()
+        };
+        VisibleRelationEndpointV1 { inner: reference }
+    }
+
+    pub(crate) const fn candidate(self) -> VisibleRelationEndpointV1<'a> {
+        let Some((_, candidate)) = self.inner.visible_bindings() else {
+            unreachable!()
+        };
+        VisibleRelationEndpointV1 { inner: candidate }
+    }
+
+    pub(crate) const fn verdict(self) -> VerdictV1 {
+        project_relation_verdict(self.inner.decision())
+    }
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct VisibleRelationEndpointV1<'a> {
+    inner: &'a ProgramVisibleRelationBindingV1,
+}
+
+impl<'a> VisibleRelationEndpointV1<'a> {
+    pub(crate) const fn occurrence(self) -> OccurrenceIdV1 {
+        OccurrenceIdV1::from_core(self.inner.occurrence())
+    }
+
+    pub(crate) const fn binding(self) -> PointBindingV1<'a> {
+        PointBindingV1 {
+            inner: self.inner.physical_ref(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ExactSrgb8RelationMeasurementV1 {
+    reference: Srgb8,
+    candidate: Srgb8,
+}
+
+impl ExactSrgb8RelationMeasurementV1 {
+    pub(crate) const fn reference(self) -> Srgb8 {
+        self.reference
+    }
+
+    pub(crate) const fn candidate(self) -> Srgb8 {
+        self.candidate
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RelationMeasurementV1 {
+    ExactSrgb8(ExactSrgb8RelationMeasurementV1),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RelationMemberProofV1 {
+    ExactSrgb8Pass,
+    ExactSrgb8Violation,
+}
+
+const fn project_relation_measurement(value: CoreRelationMeasurementV1) -> RelationMeasurementV1 {
+    match value {
+        CoreRelationMeasurementV1::ExactSrgb8(value) => {
+            RelationMeasurementV1::ExactSrgb8(ExactSrgb8RelationMeasurementV1 {
+                reference: value.reference(),
+                candidate: value.candidate(),
+            })
+        }
+    }
+}
+
+const fn project_relation_verdict(value: ProgramRelationMemberDecisionV1) -> VerdictV1 {
+    match value {
+        ProgramRelationMemberDecisionV1::Pass(_) => VerdictV1::Pass,
+        ProgramRelationMemberDecisionV1::Violation(_) => VerdictV1::Violation,
+    }
+}
+
+const fn project_relation_proof(value: ProgramRelationMemberDecisionV1) -> RelationMemberProofV1 {
+    match value {
+        ProgramRelationMemberDecisionV1::Pass(CoreRelationPassV1::ExactSrgb8(_)) => {
+            RelationMemberProofV1::ExactSrgb8Pass
+        }
+        ProgramRelationMemberDecisionV1::Violation(CoreRelationViolationV1::ExactSrgb8(_)) => {
+            RelationMemberProofV1::ExactSrgb8Violation
         }
     }
 }
@@ -3238,6 +3732,56 @@ fn map_program_compile_error(error: ProgramCompileError) -> CompileErrorV1 {
             constraint: ConstraintIdV1::from_core(constraint),
             occurrence: OccurrenceIdV1::from_core(occurrence),
         },
+        ProgramCompileError::MissingIntrinsicUnaryTarget { constraint, target } => {
+            CompileErrorV1::MissingIntrinsicUnaryTarget {
+                constraint: ConstraintIdV1::from_core(constraint),
+                target: TargetIdV1::from_core(target),
+            }
+        }
+        ProgramCompileError::MissingIntrinsicRelationReference {
+            constraint,
+            reference,
+        } => CompileErrorV1::MissingIntrinsicRelationReference {
+            constraint: ConstraintIdV1::from_core(constraint),
+            reference: TargetIdV1::from_core(reference),
+        },
+        ProgramCompileError::MissingIntrinsicRelationCandidate {
+            constraint,
+            candidate,
+        } => CompileErrorV1::MissingIntrinsicRelationCandidate {
+            constraint: ConstraintIdV1::from_core(constraint),
+            candidate: TargetIdV1::from_core(candidate),
+        },
+        ProgramCompileError::MissingVisibleRelationReference {
+            constraint,
+            reference,
+        } => CompileErrorV1::MissingVisibleRelationReference {
+            constraint: ConstraintIdV1::from_core(constraint),
+            reference: OccurrenceIdV1::from_core(reference),
+        },
+        ProgramCompileError::MissingVisibleRelationCandidate {
+            constraint,
+            candidate,
+        } => CompileErrorV1::MissingVisibleRelationCandidate {
+            constraint: ConstraintIdV1::from_core(constraint),
+            candidate: OccurrenceIdV1::from_core(candidate),
+        },
+        ProgramCompileError::SolverDependentIntrinsicRelationReference {
+            constraint,
+            reference,
+        } => CompileErrorV1::SolverDependentIntrinsicRelationReference {
+            constraint: ConstraintIdV1::from_core(constraint),
+            reference: TargetIdV1::from_core(reference),
+        },
+        ProgramCompileError::SolverDependentVisibleRelationReference {
+            constraint,
+            reference,
+            target,
+        } => CompileErrorV1::SolverDependentVisibleRelationReference {
+            constraint: ConstraintIdV1::from_core(constraint),
+            reference: OccurrenceIdV1::from_core(reference),
+            target: TargetIdV1::from_core(target),
+        },
         ProgramCompileError::MissingConstraintPresentationTarget {
             constraint,
             root,
@@ -3789,7 +4333,7 @@ mod update_error_projection_tests {
                 state_index: 1,
                 case_index: 2,
                 constraint: ConstraintId::new(3),
-                subject: ProgramConstraintSubjectV1::ModeledOccurrence {
+                subject: ProgramConstraintSubjectV1::VisibleUnary {
                     occurrence: OccurrenceId::new(4),
                     context: subject_context,
                 },
@@ -3799,7 +4343,7 @@ mod update_error_projection_tests {
                 state_index: 1,
                 case_index: 2,
                 constraint: ConstraintIdV1::new(3),
-                subject: ConstraintSubjectV1::ModeledOccurrence {
+                subject: ConstraintSubjectV1::VisibleUnary {
                     occurrence: OccurrenceIdV1::new(4),
                     context: AppearanceContextV1::from_core(subject_context),
                 },

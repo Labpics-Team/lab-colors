@@ -8,6 +8,7 @@ const APPEARANCE_SOURCE: &str = include_str!("appearance.rs");
 const CLEAN_SET_SOURCE: &str = include_str!("clean_set.rs");
 const CONSTRAINTS_SOURCE: &str = include_str!("constraints/mod.rs");
 const EXACT_CONSTRAINT_SOURCE: &str = include_str!("constraints/exact.rs");
+const RELATION_CONSTRAINT_SOURCE: &str = include_str!("constraints/relation.rs");
 const JOINT_SOURCE: &str = include_str!("joint.rs");
 const LIB_SOURCE: &str = include_str!("lib.rs");
 const LCS_OCCURRENCE_SOURCE: &str = include_str!("lcs_occurrence.rs");
@@ -18,15 +19,18 @@ const PROGRAM_SOURCE: &str = include_str!("program.rs");
 const POINT_SUPPORT_SOURCE: &str = include_str!("point_support.rs");
 const PROGRAM_IDENTITY_SOURCE: &str = include_str!("program_identity.rs");
 const PROGRAM_SESSION_SOURCE: &str = include_str!("program_session.rs");
+const RELATION_SOURCE: &str = include_str!("relation.rs");
 const SESSION_SOURCE: &str = include_str!("session.rs");
 const WCAG22_CONSTRAINT_SOURCE: &str = include_str!("constraints/wcag22.rs");
 
-const GENERIC_SOURCES: [(&str, &str); 5] = [
+const GENERIC_SOURCES: [(&str, &str); 7] = [
     ("appearance.rs", APPEARANCE_SOURCE),
+    ("constraints/relation.rs", RELATION_CONSTRAINT_SOURCE),
     ("lcs_occurrence.rs", LCS_OCCURRENCE_SOURCE),
     ("program/attachment.rs", PROGRAM_ATTACHMENT_SOURCE),
     ("program_identity.rs", PROGRAM_IDENTITY_SOURCE),
     ("program_session.rs", PROGRAM_SESSION_SOURCE),
+    ("relation.rs", RELATION_SOURCE),
 ];
 
 const CLEAN_SET_PROGRAM_SOURCES: &[(&str, &str)] = &[
@@ -262,6 +266,16 @@ fn production_rust_sources() -> Vec<(String, String)> {
     }
     sources.sort_unstable_by(|left, right| left.0.cmp(&right.0));
     sources
+}
+
+#[test]
+fn generic_source_inventory_covers_relation_topology_and_evaluators() {
+    for required in ["relation.rs", "constraints/relation.rs"] {
+        assert!(
+            GENERIC_SOURCES.iter().any(|(path, _)| *path == required),
+            "generic vocabulary ratchet must cover {required}",
+        );
+    }
 }
 
 #[test]
@@ -1299,7 +1313,7 @@ fn program_session_keeps_physical_evidence_separate_from_lazy_lcs_capability() {
         "ModeledLcsOccurrenceV1::from_signal_in_context(",
         "modeled_occurrences: Vec<Option<ModeledLcsOccurrenceV1>>",
         "ProgramPointAssessmentErrorV1::Binding",
-        "ProgramSessionEvaluationError::ModeledOccurrence",
+        "ProgramSessionEvaluationError::VisibleUnary",
     ] {
         assert!(
             !PROGRAM_SESSION_SOURCE.contains(forbidden),
@@ -1431,7 +1445,7 @@ fn program_session_keeps_physical_evidence_separate_from_lazy_lcs_capability() {
         "let outputs = compile_outputs(",
     );
     for required in [
-        "compile_constraints::<Evaluation>( &graph, &all_occurrence_contexts, &point_presentations, &program.constraints, )?",
+        "compile_constraints::<Evaluation>( &program, &graph, &dependency_index, &mut dependency_scratch, &all_occurrence_contexts, &point_presentations, &program.constraints, )?",
         "compact_constraint_contexts(&all_occurrence_contexts, &mut constraints)?",
     ] {
         assert!(
@@ -1447,9 +1461,9 @@ fn program_session_keeps_physical_evidence_separate_from_lazy_lcs_capability() {
     );
     for required in [
         "targets.sort_unstable(); targets.dedup();",
-        "CompiledProgramConstraintBodyV1::ModeledOccurrence { target_id, .. } => { Some(*target_id) }",
-        "CompiledProgramConstraintBodyV1::PointPresentation { .. } => None",
-        ".binary_search_by_key(target_id, |binding| binding.occurrence)",
+        "CompiledProgramConstraintBodyV1::VisibleUnary { occurrence, .. } => { targets.push(*occurrence); }",
+        "CompiledProgramConstraintBodyV1::VisibleRelation",
+        ".binary_search_by_key(occurrence, |binding| binding.occurrence)",
         "*occurrence_context_index = index;",
     ] {
         assert!(
@@ -1467,7 +1481,7 @@ fn program_session_keeps_physical_evidence_separate_from_lazy_lcs_capability() {
         !hot_evaluation.contains("binary_search"),
         "hot Program evaluation must consume compile-time direct indices without searching",
     );
-    assert!(hot_evaluation.contains(".get(occurrence_context_index)"));
+    assert!(hot_evaluation.contains(".get(*occurrence_context_index)"));
 
     for required in [
         "pub(crate) struct ProgramLcsPointAdapterV1",
@@ -1543,11 +1557,16 @@ fn program_identity_binds_lcs_releases_only_through_lcs_constraint_content() {
         "DOMAIN_V4",
         "PROGRAM_SCHEMA_V4",
         "compile_program_content_identity_v4",
+        "ProgramContentIdentityV5",
+        "ContentIdentityV5",
+        "DOMAIN_V5",
+        "PROGRAM_SCHEMA_V5",
+        "compile_program_content_identity_v5",
     ] {
         for (path, source) in identity_sources {
             assert!(
                 !contains_rust_identifier(source, retired),
-                "the V5 content-address cut must not retain legacy identity symbol `{retired}` in {path}",
+                "the V6 content-address cut must not retain legacy identity symbol `{retired}` in {path}",
             );
         }
     }
@@ -1555,13 +1574,14 @@ fn program_identity_binds_lcs_releases_only_through_lcs_constraint_content() {
     assert!(!PROGRAM_IDENTITY_SOURCE.contains("labcolors.program-content-identity.v2"));
     assert!(!PROGRAM_IDENTITY_SOURCE.contains("labcolors.program-content-identity.v3"));
     assert!(!PROGRAM_IDENTITY_SOURCE.contains("labcolors.program-content-identity.v4"));
+    assert!(!PROGRAM_IDENTITY_SOURCE.contains("labcolors.program-content-identity.v5"));
     for required in [
-        "const DOMAIN_V5: &[u8] = b\"labcolors.program-content-identity.v5\\0\";",
-        "pub(super) const PROGRAM_SCHEMA_V5: u8 = 5;",
+        "const DOMAIN_V6: &[u8] = b\"labcolors.program-content-identity.v6\\0\";",
+        "pub(super) const PROGRAM_SCHEMA_V6: u8 = 6;",
     ] {
         assert!(
             PROGRAM_IDENTITY_SOURCE.contains(required),
-            "the V5 content-address type must bind its exact domain and schema tag; missing `{required}`",
+            "the V6 content-address type must bind its exact domain and schema tag; missing `{required}`",
         );
     }
 
@@ -1932,7 +1952,6 @@ fn current_og0_program_epoch_has_one_explicit_group_without_scenario_scope_creep
     for forbidden in [
         "Vec<ObservationGroup>",
         "ScenarioId",
-        "ScenarioSet",
         "ObservedScenarioSet",
         "GraphTemplate",
         "Cartesian",
@@ -1946,6 +1965,7 @@ fn current_og0_program_epoch_has_one_explicit_group_without_scenario_scope_creep
             "current OG0 transport module must not acquire `{forbidden}` scope"
         );
     }
+    assert!(PROGRAM_SESSION_SOURCE.contains("NonEmptyScenarioSetV1"));
 }
 
 #[test]

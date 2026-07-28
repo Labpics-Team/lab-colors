@@ -6,6 +6,7 @@
 
 use core::cmp::Ordering;
 use core::ops::Range;
+use std::num::NonZeroUsize;
 use std::rc::Rc;
 
 use crate::Srgb8;
@@ -451,6 +452,37 @@ impl RevisionBoundObservationV1 {
     #[cfg(test)]
     pub(crate) fn schema_ptr_for_test(&self) -> *const SurfaceInputPortId {
         self.backing.schema().backing_ptr_for_test()
+    }
+}
+
+/// Типизированное представление доказывает непустоту набора допущенных
+/// физических сценариев до входа в evaluator hot path.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct NonEmptyScenarioSetV1<'a> {
+    observation: &'a RevisionBoundObservationV1,
+    len: NonZeroUsize,
+}
+
+impl<'a> NonEmptyScenarioSetV1<'a> {
+    /// `None` здесь означает нарушение приватного инварианта, а не пустой
+    /// восстанавливаемый public input.
+    pub(crate) fn from_admitted(observation: &'a RevisionBoundObservationV1) -> Option<Self> {
+        Some(Self {
+            observation,
+            len: NonZeroUsize::new(observation.physical_case_count())?,
+        })
+    }
+
+    pub(crate) const fn observation(self) -> &'a RevisionBoundObservationV1 {
+        self.observation
+    }
+
+    pub(crate) const fn len(self) -> NonZeroUsize {
+        self.len
+    }
+
+    pub(crate) fn physical_values(self, case_index: usize) -> Option<&'a [ColorSignal]> {
+        self.observation.physical_values(case_index)
     }
 }
 

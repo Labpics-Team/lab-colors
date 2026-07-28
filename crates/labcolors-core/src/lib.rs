@@ -63,6 +63,14 @@ pub(crate) mod program_session;
     not(test),
     expect(
         dead_code,
+        reason = "relation admission becomes reachable with the staged Program facade"
+    )
+)]
+pub(crate) mod relation;
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
         reason = "release-registry internals are projected only through typed Program evidence"
     )
 )]
@@ -124,6 +132,8 @@ mod program_boundary_tests;
 mod program_api_tests;
 #[cfg(test)]
 mod program_clean_set_tests;
+#[cfg(test)]
+mod program_relation_tests;
 
 #[cfg(test)]
 mod release_registry_tests;

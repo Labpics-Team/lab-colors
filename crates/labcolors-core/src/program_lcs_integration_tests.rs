@@ -139,7 +139,7 @@ fn compiled_program(
     let mut hard = declarations
         .iter()
         .map(|(occurrence, constraint, _)| {
-            ConstraintInvocation::hard(*constraint, *occurrence, expected_visible)
+            ConstraintInvocation::visible_unary_hard(*constraint, *occurrence, expected_visible)
         })
         .collect::<Vec<_>>();
     let mut outputs = vec![OutputBinding::new(BLACK_OUTPUT, TRANSLUCENT_BLACK)];
@@ -211,7 +211,7 @@ fn compiled_wcag_program(opacity: f64) -> CompiledProgram<Wcag22Srgb8V1> {
             context(SurroundProfileId::AverageV1),
         )],
         ConstraintSet::new(
-            vec![ConstraintInvocation::hard(
+            vec![ConstraintInvocation::visible_unary_hard(
                 AVERAGE_CONSTRAINT,
                 AVERAGE_OCCURRENCE,
                 Wcag22CriterionV1::Sc143TextDefault,
@@ -256,12 +256,12 @@ fn compiled_duplicate_constraint_program() -> CompiledProgram<ExactSrgb8Identity
         ConstraintSet::new(
             vec![],
             vec![
-                ConstraintInvocation::report_only(
+                ConstraintInvocation::visible_unary_report_only(
                     AVERAGE_CONSTRAINT,
                     AVERAGE_OCCURRENCE,
                     Srgb8::new([0x80; 3]),
                 ),
-                ConstraintInvocation::report_only(
+                ConstraintInvocation::visible_unary_report_only(
                     DIM_CONSTRAINT,
                     AVERAGE_OCCURRENCE,
                     Srgb8::new([0x80; 3]),
@@ -307,14 +307,13 @@ fn ready_cell_binds_the_actual_visible_signal_and_declared_context_without_lcs()
 
     assert_eq!(
         cell.subject(),
-        ProgramConstraintSubjectV1::ModeledOccurrence {
+        ProgramConstraintSubjectV1::VisibleUnary {
             occurrence: AVERAGE_OCCURRENCE,
             context: average,
         },
     );
-    let ProgramConstraintResultV1::Pass(ProgramConstraintPassEvidenceV1::ModeledOccurrence(
-        evidence,
-    )) = cell.result()
+    let ProgramConstraintResultV1::Pass(ProgramConstraintPassEvidenceV1::VisibleUnary(evidence)) =
+        cell.result()
     else {
         panic!("exact equality must retain typed pass evidence");
     };
@@ -346,20 +345,20 @@ fn identical_physical_bytes_keep_distinct_declared_contexts_without_deriving_vie
     };
     assert_eq!(
         average_cell.subject(),
-        ProgramConstraintSubjectV1::ModeledOccurrence {
+        ProgramConstraintSubjectV1::VisibleUnary {
             occurrence: AVERAGE_OCCURRENCE,
             context: average,
         },
     );
     assert_eq!(
         dim_cell.subject(),
-        ProgramConstraintSubjectV1::ModeledOccurrence {
+        ProgramConstraintSubjectV1::VisibleUnary {
             occurrence: DIM_OCCURRENCE,
             context: dim,
         },
     );
     for cell in [average_cell, dim_cell] {
-        let ProgramConstraintResultV1::Pass(ProgramConstraintPassEvidenceV1::ModeledOccurrence(
+        let ProgramConstraintResultV1::Pass(ProgramConstraintPassEvidenceV1::VisibleUnary(
             evidence,
         )) = cell.result()
         else {
@@ -392,14 +391,13 @@ fn exact_black_visible_occurrence_does_not_construct_a_colorimetric_view() {
     };
     assert_eq!(
         cell.subject(),
-        ProgramConstraintSubjectV1::ModeledOccurrence {
+        ProgramConstraintSubjectV1::VisibleUnary {
             occurrence: AVERAGE_OCCURRENCE,
             context: average,
         },
     );
-    let ProgramConstraintResultV1::Pass(ProgramConstraintPassEvidenceV1::ModeledOccurrence(
-        evidence,
-    )) = cell.result()
+    let ProgramConstraintResultV1::Pass(ProgramConstraintPassEvidenceV1::VisibleUnary(evidence)) =
+        cell.result()
     else {
         panic!("exact black identity must pass");
     };
@@ -430,14 +428,14 @@ fn hard_violation_retains_physical_binding_and_context_without_current_outputs()
     assert!(cell.result().is_violation());
     assert_eq!(
         cell.subject(),
-        ProgramConstraintSubjectV1::ModeledOccurrence {
+        ProgramConstraintSubjectV1::VisibleUnary {
             occurrence: AVERAGE_OCCURRENCE,
             context: average,
         },
     );
-    let ProgramConstraintResultV1::Violation(
-        ProgramConstraintViolationEvidenceV1::ModeledOccurrence(evidence),
-    ) = cell.result()
+    let ProgramConstraintResultV1::Violation(ProgramConstraintViolationEvidenceV1::VisibleUnary(
+        evidence,
+    )) = cell.result()
     else {
         panic!("exact mismatch must retain typed violation evidence");
     };
@@ -459,9 +457,8 @@ fn program_wcag_pass_binds_physical_occurrence_and_declared_context() {
     let [cell] = current.report().cells() else {
         panic!("one WCAG declaration must produce one report cell");
     };
-    let ProgramConstraintResultV1::Pass(ProgramConstraintPassEvidenceV1::ModeledOccurrence(
-        evidence,
-    )) = cell.result()
+    let ProgramConstraintResultV1::Pass(ProgramConstraintPassEvidenceV1::VisibleUnary(evidence)) =
+        cell.result()
     else {
         panic!("WCAG pass must retain typed pass evidence");
     };
@@ -493,9 +490,9 @@ fn program_wcag_violation_retains_physical_evidence_without_current_outputs() {
     let [cell] = cause.report().cells() else {
         panic!("one WCAG declaration must produce one failed report cell");
     };
-    let ProgramConstraintResultV1::Violation(
-        ProgramConstraintViolationEvidenceV1::ModeledOccurrence(evidence),
-    ) = cell.result()
+    let ProgramConstraintResultV1::Violation(ProgramConstraintViolationEvidenceV1::VisibleUnary(
+        evidence,
+    )) = cell.result()
     else {
         panic!("WCAG failure must retain typed violation evidence");
     };
@@ -685,7 +682,7 @@ fn encoded_only_program_is_not_rejected_by_an_lcs_incompatible_declared_context(
     };
     assert_eq!(
         cell.subject(),
-        ProgramConstraintSubjectV1::ModeledOccurrence {
+        ProgramConstraintSubjectV1::VisibleUnary {
             occurrence: AVERAGE_OCCURRENCE,
             context: incompatible,
         },

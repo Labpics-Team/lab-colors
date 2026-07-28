@@ -7,15 +7,20 @@
 
 use super::*;
 
-const DOMAIN_V5: &[u8] = b"labcolors.program-content-identity.v5\0";
-// Максимальный V5-цвет принадлежит ограничению clean-set: тег вершины,
+const DOMAIN_V6: &[u8] = b"labcolors.program-content-identity.v6\0";
+// Максимальный V6-цвет принадлежит ограничению clean-set: тег вершины,
 // семейство и полный дайджест выпуска. Явная граница устраняет аллокацию на
 // каждую вершину и требует пересмотра при расширении схемы вместо скрытого
 // лимита времени исполнения.
-const COLOR_CAPACITY: usize = 1 + 1 + 32;
+const CLEAN_SET_COLOR_BYTES_V1: usize = 1 + 1 + 32;
+const MAX_TYPED_CONSTRAINT_COLOR_BYTES_V6: usize = 1 + 1 + 3 + 3;
+const COLOR_CAPACITY: usize = {
+    assert!(CLEAN_SET_COLOR_BYTES_V1 >= MAX_TYPED_CONSTRAINT_COLOR_BYTES_V6);
+    CLEAN_SET_COLOR_BYTES_V1
+};
 
 mod release_tag {
-    pub(super) const PROGRAM_SCHEMA_V5: u8 = 5;
+    pub(super) const PROGRAM_SCHEMA_V6: u8 = 6;
     pub(super) const DECLARED_TOTAL_ORDER_V1: u8 = 1;
     pub(super) const FRESH_FULL_RECHECK_V1: u8 = 1;
     pub(super) const ATOMIC_OBSERVATION_GROUP_V1: u8 = 1;
@@ -47,6 +52,14 @@ mod release_tag {
     pub(super) const EXACT_SRGB8_IDENTITY_V1: u8 = 1;
     pub(super) const EXACT_SRGB8_RELEASE_V1: u8 = 1;
     pub(super) const EXACT_SRGB8_CAPABILITY_V1: u8 = 1;
+    pub(super) const EXACT_SRGB8_INTRINSIC_UNARY_FAMILY_V1: u8 = 4;
+    pub(super) const EXACT_SRGB8_INTRINSIC_UNARY_IDENTITY_V1: u8 = 1;
+    pub(super) const EXACT_SRGB8_INTRINSIC_UNARY_RELEASE_V1: u8 = 1;
+    pub(super) const EXACT_SRGB8_INTRINSIC_UNARY_CAPABILITY_V1: u8 = 1;
+    pub(super) const EXACT_SRGB8_RELATION_FAMILY_V1: u8 = 5;
+    pub(super) const EXACT_SRGB8_RELATION_IDENTITY_V1: u8 = 1;
+    pub(super) const EXACT_SRGB8_RELATION_RELEASE_V1: u8 = 1;
+    pub(super) const EXACT_SRGB8_RELATION_CAPABILITY_V1: u8 = 1;
     #[cfg(test)]
     pub(super) const EXACT_SRGB8_IDENTITY_MUTATION_SENTINEL_V1: u8 = 2;
     #[cfg(test)]
@@ -63,17 +76,17 @@ mod release_tag {
     pub(super) const WCAG22_SC_1_4_11_GRAPHICAL_OBJECT: u8 = 4;
     pub(super) const DECLARED_SRGB8_CLEAN_SET_FAMILY_V1: u8 = 3;
     #[cfg(test)]
-    pub(super) const MODELED_LCS_PROBE_FAMILY_V1: u8 = 4;
+    pub(super) const MODELED_LCS_PROBE_FAMILY_V1: u8 = 6;
 }
 
-/// Устойчивый к коллизиям адрес канонизированного содержимого Program V5.
+/// Устойчивый к коллизиям адрес канонизированного содержимого Program V6.
 ///
 /// SHA-256 не делает адрес инъективным. Адрес не связывает пространства opaque
 /// ID и не подтверждает владельца, поколение либо revision.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(crate) struct ProgramContentIdentityV5([u8; 32]);
+pub(crate) struct ProgramContentIdentityV6([u8; 32]);
 
-impl ProgramContentIdentityV5 {
+impl ProgramContentIdentityV6 {
     pub(crate) const fn as_bytes(&self) -> &[u8; 32] {
         &self.0
     }
@@ -166,7 +179,7 @@ enum EdgeRoleV1 {
     DerivedSurfaceOccurrence = 9,
     OccurrenceSubjectPaint = 10,
     OccurrenceBackdropSurface = 11,
-    ConstraintOccurrence = 12,
+    VisibleUnary = 12,
     OutputPaint = 13,
     SelectionState = 14,
     StateChoice = 15,
@@ -176,6 +189,12 @@ enum EdgeRoleV1 {
     PresentationTargetRoot = 19,
     PresentationTargetOccurrence = 20,
     ConstraintPresentationTarget = 21,
+    IntrinsicUnary = 22,
+    IntrinsicReference = 23,
+    IntrinsicCandidate = 24,
+    VisibleReference = 25,
+    VisibleCandidate = 26,
+    ScenarioGroup = 27,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -338,7 +357,7 @@ fn program_root_color() -> Result<VertexColorV1, ProgramCompileError> {
     // производных возможностей связываются только с теми ограничениями,
     // которые их исполняют.
     for release in [
-        release_tag::PROGRAM_SCHEMA_V5,
+        release_tag::PROGRAM_SCHEMA_V6,
         release_tag::DECLARED_TOTAL_ORDER_V1,
         release_tag::FRESH_FULL_RECHECK_V1,
         release_tag::ATOMIC_OBSERVATION_GROUP_V1,
@@ -521,6 +540,52 @@ fn constraint_color(
             })?;
             color.push_u8(wcag_criterion_tag(criterion))?;
         }
+        ProgramConstraintContentV1::ExactSrgb8IntrinsicUnary {
+            identity,
+            release,
+            capability,
+            expected,
+        } => {
+            color.push_u8(release_tag::EXACT_SRGB8_INTRINSIC_UNARY_FAMILY_V1)?;
+            color.push_u8(match identity {
+                crate::constraints::ExactSrgb8IntrinsicUnaryIdentityV1::SourceEqualityV1 => {
+                    release_tag::EXACT_SRGB8_INTRINSIC_UNARY_IDENTITY_V1
+                }
+            })?;
+            color.push_u8(match release {
+                crate::constraints::ExactSrgb8IntrinsicUnaryReleaseV1::V1 => {
+                    release_tag::EXACT_SRGB8_INTRINSIC_UNARY_RELEASE_V1
+                }
+            })?;
+            color.push_u8(match capability {
+                crate::constraints::ExactSrgb8IntrinsicUnaryCapabilityV1::EncodedSrgb8PaintSourceV1 => {
+                    release_tag::EXACT_SRGB8_INTRINSIC_UNARY_CAPABILITY_V1
+                }
+            })?;
+            color.push_srgb8(expected)?;
+        }
+        ProgramConstraintContentV1::ExactSrgb8Relation {
+            identity,
+            release,
+            capability,
+        } => {
+            color.push_u8(release_tag::EXACT_SRGB8_RELATION_FAMILY_V1)?;
+            color.push_u8(match identity {
+                crate::constraints::ExactSrgb8RelationIdentityV1::HomogeneousEndpointEqualityV1 => {
+                    release_tag::EXACT_SRGB8_RELATION_IDENTITY_V1
+                }
+            })?;
+            color.push_u8(match release {
+                crate::constraints::ExactSrgb8RelationReleaseV1::V1 => {
+                    release_tag::EXACT_SRGB8_RELATION_RELEASE_V1
+                }
+            })?;
+            color.push_u8(match capability {
+                crate::constraints::ExactSrgb8RelationCapabilityV1::HomogeneousEncodedSrgb8PairV1 => {
+                    release_tag::EXACT_SRGB8_RELATION_CAPABILITY_V1
+                }
+            })?;
+        }
         #[cfg(test)]
         ProgramConstraintContentV1::ModeledLcsProbe { release } => {
             color.push_u8(release_tag::MODELED_LCS_PROBE_FAMILY_V1)?;
@@ -587,44 +652,109 @@ fn presentation_target_vertex(
     Ok(vertex)
 }
 
+struct ConstraintGraphBindingContextV1<'a, Evaluation> {
+    evaluator: &'a Evaluation,
+    presentation_targets: &'a [(PointPresentationTargetV1, usize)],
+    targets: &'a IdIndexV1<TargetId>,
+    occurrences: &'a IdIndexV1<OccurrenceId>,
+    scenario_group: usize,
+}
+
 fn add_constraint_graph_binding<Evaluation>(
     graph: &mut GraphBuilderV1,
-    evaluator: &Evaluation,
-    presentation_targets: &[(PointPresentationTargetV1, usize)],
-    occurrences: &IdIndexV1<OccurrenceId>,
+    context: &ConstraintGraphBindingContextV1<'_, Evaluation>,
     mode_tag: u8,
-    body: ProgramConstraintBodyV1<ProgramConstraintInvocationOf<Evaluation>>,
+    body: &ProgramConstraintBodyV1<ProgramConstraintInvocationOf<Evaluation>>,
 ) -> Result<(), ProgramCompileError>
 where
     Evaluation: ProgramConstraintEvaluatorSetV1,
 {
-    let (color, target, role) = match body {
-        ProgramConstraintBodyV1::ModeledOccurrence {
+    let color = match body {
+        ProgramConstraintBodyV1::VisibleUnary {
             occurrence,
             invocation,
-        } => (
-            constraint_color(mode_tag, evaluator.constraint_content(invocation))?,
-            occurrences.get(occurrence)?,
-            EdgeRoleV1::ConstraintOccurrence,
-        ),
-        ProgramConstraintBodyV1::DeclaredSrgb8CleanSet { target } => (
-            declared_srgb8_clean_set_constraint_color(mode_tag)?,
-            presentation_target_vertex(presentation_targets, target)?,
-            EdgeRoleV1::ConstraintPresentationTarget,
-        ),
+        } => {
+            let _ = occurrence;
+            constraint_color(mode_tag, context.evaluator.constraint_content(*invocation))?
+        }
+        ProgramConstraintBodyV1::IntrinsicUnary { invocation, .. } => {
+            constraint_color(mode_tag, invocation.content())?
+        }
+        ProgramConstraintBodyV1::IntrinsicRelation { invocation, .. }
+        | ProgramConstraintBodyV1::VisibleRelation { invocation, .. } => {
+            constraint_color(mode_tag, invocation.content())?
+        }
+        ProgramConstraintBodyV1::DeclaredSrgb8CleanSet { .. } => {
+            declared_srgb8_clean_set_constraint_color(mode_tag)?
+        }
         #[cfg(test)]
-        ProgramConstraintBodyV1::DeclaredSrgb8CleanSetFinalRecheckMutant { target } => {
+        ProgramConstraintBodyV1::DeclaredSrgb8CleanSetFinalRecheckMutant { .. } => {
             let mut release = crate::clean_set::EXACT_NOMINAL_SRGB8_CLEAN_SET_RELEASE_SHA256_V1;
             release[0] ^= 1;
-            (
-                declared_srgb8_clean_set_constraint_color_for_release(mode_tag, release)?,
-                presentation_target_vertex(presentation_targets, target)?,
-                EdgeRoleV1::ConstraintPresentationTarget,
-            )
+            declared_srgb8_clean_set_constraint_color_for_release(mode_tag, release)?
         }
     };
     let vertex = graph.add_member(color)?;
-    graph.add_edge(vertex, target, role)
+    match body {
+        ProgramConstraintBodyV1::VisibleUnary { occurrence, .. } => {
+            graph.add_edge(
+                vertex,
+                context.occurrences.get(*occurrence)?,
+                EdgeRoleV1::VisibleUnary,
+            )?;
+        }
+        ProgramConstraintBodyV1::IntrinsicUnary { target, .. } => {
+            graph.add_edge(
+                vertex,
+                context.targets.get(*target)?,
+                EdgeRoleV1::IntrinsicUnary,
+            )?;
+        }
+        ProgramConstraintBodyV1::IntrinsicRelation { relation, .. } => {
+            graph.add_edge(
+                vertex,
+                context.targets.get(relation.reference())?,
+                EdgeRoleV1::IntrinsicReference,
+            )?;
+            for candidate in relation.candidates().iter().copied() {
+                graph.add_edge(
+                    vertex,
+                    context.targets.get(candidate)?,
+                    EdgeRoleV1::IntrinsicCandidate,
+                )?;
+            }
+        }
+        ProgramConstraintBodyV1::VisibleRelation { relation, .. } => {
+            graph.add_edge(
+                vertex,
+                context.occurrences.get(relation.reference())?,
+                EdgeRoleV1::VisibleReference,
+            )?;
+            for candidate in relation.candidates().iter().copied() {
+                graph.add_edge(
+                    vertex,
+                    context.occurrences.get(candidate)?,
+                    EdgeRoleV1::VisibleCandidate,
+                )?;
+            }
+        }
+        ProgramConstraintBodyV1::DeclaredSrgb8CleanSet { target } => {
+            graph.add_edge(
+                vertex,
+                presentation_target_vertex(context.presentation_targets, *target)?,
+                EdgeRoleV1::ConstraintPresentationTarget,
+            )?;
+        }
+        #[cfg(test)]
+        ProgramConstraintBodyV1::DeclaredSrgb8CleanSetFinalRecheckMutant { target } => {
+            graph.add_edge(
+                vertex,
+                presentation_target_vertex(context.presentation_targets, *target)?,
+                EdgeRoleV1::ConstraintPresentationTarget,
+            )?;
+        }
+    }
+    graph.add_edge(vertex, context.scenario_group, EdgeRoleV1::ScenarioGroup)
 }
 
 fn build_graph<Evaluation>(
@@ -817,24 +947,27 @@ where
         )?;
     }
 
+    let constraint_context = ConstraintGraphBindingContextV1 {
+        evaluator: &program.evaluator,
+        presentation_targets: &presentation_targets,
+        targets: &targets,
+        occurrences: &occurrences,
+        scenario_group: group,
+    };
     for constraint in &program.constraints.hard {
         add_constraint_graph_binding(
             &mut graph,
-            &program.evaluator,
-            &presentation_targets,
-            &occurrences,
+            &constraint_context,
             vertex_tag::CONSTRAINT_HARD,
-            *constraint.body(),
+            constraint.body(),
         )?;
     }
     for constraint in &program.constraints.report_only {
         add_constraint_graph_binding(
             &mut graph,
-            &program.evaluator,
-            &presentation_targets,
-            &occurrences,
+            &constraint_context,
             vertex_tag::CONSTRAINT_REPORT_ONLY,
-            *constraint.body(),
+            constraint.body(),
         )?;
     }
     for output in &program.outputs {
@@ -870,6 +1003,40 @@ where
     }
 
     graph.finish()
+}
+
+#[cfg(test)]
+pub(crate) fn graph_schema_for_test<Evaluation>(
+    program: &Program<Evaluation>,
+) -> Result<(Vec<u8>, Vec<u8>), ProgramCompileError>
+where
+    Evaluation: ProgramConstraintEvaluatorSetV1,
+    ProgramConstraintInvocationOf<Evaluation>: Copy,
+{
+    let graph = build_graph(program)?;
+    let mut vertex_tags = Vec::new();
+    vertex_tags
+        .try_reserve_exact(graph.colors.len())
+        .map_err(|_| ProgramCompileError::ResourceExhausted)?;
+    vertex_tags.extend(graph.colors.iter().map(|color| color.as_slice()[0]));
+    vertex_tags.sort_unstable();
+    vertex_tags.dedup();
+
+    let mut edge_roles = Vec::new();
+    edge_roles
+        .try_reserve_exact(graph.edge_count)
+        .map_err(|_| ProgramCompileError::ResourceExhausted)?;
+    for adjacency in &graph.adjacency {
+        edge_roles.extend(
+            adjacency
+                .iter()
+                .filter(|arc| arc.direction == 0)
+                .map(|arc| arc.role as u8),
+        );
+    }
+    edge_roles.sort_unstable();
+    edge_roles.dedup();
+    Ok((vertex_tags, edge_roles))
 }
 
 struct PartitionV1 {
@@ -1137,7 +1304,7 @@ fn serialize_leaf(
             .and_then(|value| value.checked_add(color.as_slice().len()))
             .ok_or(ProgramCompileError::ResourceExhausted)
     })?;
-    let capacity = DOMAIN_V5
+    let capacity = DOMAIN_V6
         .len()
         .checked_add(16)
         .and_then(|value| value.checked_add(color_bytes))
@@ -1147,7 +1314,7 @@ fn serialize_leaf(
     output
         .try_reserve_exact(capacity)
         .map_err(|_| ProgramCompileError::ResourceExhausted)?;
-    output.extend_from_slice(DOMAIN_V5);
+    output.extend_from_slice(DOMAIN_V6);
     push_u64_bytes(&mut output, usize_as_u64(graph.colors.len())?);
     push_u64_bytes(&mut output, usize_as_u64(graph.edge_count)?);
 
@@ -1481,9 +1648,9 @@ fn canonical_preimage(graph: &CanonicalGraphV1) -> Result<Vec<u8>, ProgramCompil
     canonical_search(graph).map(|(preimage, _)| preimage)
 }
 
-pub(super) fn compile_program_content_identity_v5<Evaluation>(
+pub(super) fn compile_program_content_identity_v6<Evaluation>(
     program: &Program<Evaluation>,
-) -> Result<ProgramContentIdentityV5, ProgramCompileError>
+) -> Result<ProgramContentIdentityV6, ProgramCompileError>
 where
     Evaluation: ProgramConstraintEvaluatorSetV1,
     ProgramConstraintInvocationOf<Evaluation>: Copy,
@@ -1491,7 +1658,7 @@ where
     let graph = build_graph(program)?;
     let preimage = canonical_preimage(&graph)?;
     let digest = crate::sha256::digest(&preimage);
-    Ok(ProgramContentIdentityV5(*digest.as_bytes()))
+    Ok(ProgramContentIdentityV6(*digest.as_bytes()))
 }
 
 #[cfg(test)]
