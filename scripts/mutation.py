@@ -11,14 +11,15 @@ import os
 from pathlib import Path, PurePosixPath
 import re
 import shutil
+import stat
 import subprocess
 import sys
 from typing import Any, Iterable
 
 
-SCHEMA_MANIFEST = "lab-colors-mutation-population-v2"
-SCHEMA_SHARD = "lab-colors-mutation-shard-v2"
-SCHEMA_AGGREGATE = "lab-colors-mutation-aggregate-v2"
+SCHEMA_MANIFEST = "lab-colors-mutation-population-v3"
+SCHEMA_SHARD = "lab-colors-mutation-shard-v3"
+SCHEMA_AGGREGATE = "lab-colors-mutation-aggregate-v3"
 SHARD_COUNT = 32
 SHARD_ALGORITHM = "round-robin"
 TOOL_VERSION = "25.3.1"
@@ -34,6 +35,7 @@ TOOL_ARCHIVE_SHA256 = (
     "be41e6f74b633452fb17ef3b6b6113e180130f7b5693863b400c58b39e476726"
 )
 CONFIG_RELPATH = ".cargo/mutants.toml"
+EXECUTION_SOURCE_DIGEST_LAW = "canonical-json-full-root-mode-content-symlink-v1"
 CARGO_TOOLCHAIN_ID = "1.96.0-x86_64-unknown-linux-gnu"
 CARGO_BINARY_SUFFIX = f"toolchains/{CARGO_TOOLCHAIN_ID}/bin/cargo"
 EXECUTION_COMMANDS = {
@@ -129,6 +131,44 @@ def write_json(path: Path, value: Any) -> None:
         )
     except (OSError, TypeError, ValueError) as error:
         raise ContractError(f"cannot write JSON {path}: {error}") from error
+
+
+def _direct_regular_directory(parent: Path, name: str, label: str) -> Path:
+    if parent.is_symlink() or not parent.is_dir():
+        raise ContractError(f"{label} parent is missing or is a symlink")
+    root = parent.resolve()
+    path = parent / name
+    if path.is_symlink() or not path.is_dir():
+        raise ContractError(f"{label} is missing or is not a regular directory")
+    resolved = path.resolve()
+    if resolved.parent != root:
+        raise ContractError(f"{label} escapes its declared parent")
+    return resolved
+
+
+def _direct_regular_file(parent: Path, name: str, label: str) -> Path:
+    if parent.is_symlink() or not parent.is_dir():
+        raise ContractError(f"{label} parent is missing or is a symlink")
+    root = parent.resolve()
+    path = parent / name
+    if path.is_symlink() or not path.is_file():
+        raise ContractError(f"{label} is missing or is not a regular file")
+    resolved = path.resolve()
+    if resolved.parent != root:
+        raise ContractError(f"{label} escapes its declared parent")
+    return resolved
+
+
+def _safe_json_output(parent: Path, name: str, label: str) -> Path:
+    if parent.is_symlink() or not parent.is_dir():
+        raise ContractError(f"{label} parent is missing or is a symlink")
+    root = parent.resolve()
+    path = parent / name
+    if path.is_symlink() or (path.exists() and not path.is_file()):
+        raise ContractError(f"{label} output is a symlink or is not a regular file")
+    if path.resolve(strict=False).parent != root:
+        raise ContractError(f"{label} output escapes its declared parent")
+    return path
 
 
 def _expect_dict(value: Any, label: str) -> dict[str, Any]:
@@ -265,6 +305,26 @@ def _git_output(repo_root: Path, arguments: list[str], label: str) -> str:
         raise ContractError(f"{label} returned non-UTF-8 output") from error
 
 
+def _reject_forbidden_index_flags(repo_root: Path) -> None:
+    raw = _run_bytes(
+        ["git", "ls-files", "-v", "-z"],
+        cwd=repo_root,
+        label="Git index flag inventory",
+    )
+    for record in raw.split(b"\0"):
+        if not record:
+            continue
+        if len(record) < 3 or record[1:2] != b" ":
+            raise ContractError("Git index flag inventory is malformed")
+        tag = record[:1]
+        if tag != b"H":
+            path = record[2:].decode("utf-8", errors="replace")
+            raise ContractError(
+                f"forbidden Git index flag {tag.decode('ascii', errors='replace')!r} "
+                f"on execution input {path!r}"
+            )
+
+
 def _tracked_git_tree(repo_root: Path, revision: str) -> str:
     repo_root = repo_root.resolve()
     if not repo_root.is_dir():
@@ -277,13 +337,14 @@ def _tracked_git_tree(repo_root: Path, revision: str) -> str:
     head = _git_output(repo_root, ["rev-parse", "--verify", "HEAD"], "git HEAD lookup")
     if head != revision:
         raise ContractError(f"Git HEAD mismatch: expected {revision}, got {head}")
+    _reject_forbidden_index_flags(repo_root)
     tracked_status = _run_bytes(
         ["git", "status", "--porcelain=v1", "--untracked-files=no"],
         cwd=repo_root,
         label="tracked worktree status",
     )
     if tracked_status:
-        raise ContractError("tracked worktree is dirty; source snapshot is not exact")
+        raise ContractError("tracked worktree is dirty; execution source is not exact")
     tree = _git_output(
         repo_root,
         ["rev-parse", "--verify", f"{revision}^{{tree}}"],
@@ -294,38 +355,280 @@ def _tracked_git_tree(repo_root: Path, revision: str) -> str:
     return tree
 
 
-def _source_snapshot_payload(snapshot: dict[str, Any]) -> dict[str, Any]:
-    payload = dict(snapshot)
+def _execution_source_payload(execution_source: dict[str, Any]) -> dict[str, Any]:
+    payload = dict(execution_source)
     payload.pop("sha256", None)
     return payload
 
 
-def _build_source_snapshot(
-    repo_root: Path,
-    revision: str,
-    source_paths: Iterable[str],
-) -> dict[str, Any]:
+def _git_blob_bytes(repo_root: Path, object_ids: Iterable[str]) -> dict[str, bytes]:
+    ordered = list(dict.fromkeys(object_ids))
+    if not ordered:
+        return {}
+    try:
+        result = subprocess.run(
+            ["git", "cat-file", "--batch"],
+            cwd=repo_root,
+            check=False,
+            input=("\n".join(ordered) + "\n").encode("ascii"),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+    except OSError as error:
+        raise ContractError(f"cannot read committed execution inputs: {error}") from error
+    if result.returncode != 0:
+        detail = result.stderr.decode("utf-8", errors="replace").strip()
+        raise ContractError(
+            f"committed execution input lookup failed with exit {result.returncode}: {detail}"
+        )
+    cursor = 0
+    blobs: dict[str, bytes] = {}
+    for expected_oid in ordered:
+        newline = result.stdout.find(b"\n", cursor)
+        if newline < 0:
+            raise ContractError("committed execution input stream ended before its header")
+        header = result.stdout[cursor:newline].split(b" ")
+        if len(header) != 3 or header[1] != b"blob":
+            raise ContractError("committed execution input is not a Git blob")
+        try:
+            observed_oid = header[0].decode("ascii")
+            size = int(header[2])
+        except (UnicodeDecodeError, ValueError) as error:
+            raise ContractError("committed execution input header is invalid") from error
+        cursor = newline + 1
+        end = cursor + size
+        if (
+            observed_oid != expected_oid
+            or end >= len(result.stdout)
+            or result.stdout[end : end + 1] != b"\n"
+        ):
+            raise ContractError("committed execution input stream is inconsistent")
+        blobs[expected_oid] = result.stdout[cursor:end]
+        cursor = end + 1
+    if cursor != len(result.stdout):
+        raise ContractError("committed execution input stream has trailing bytes")
+    return blobs
+
+
+def _build_execution_source(repo_root: Path, revision: str) -> dict[str, Any]:
     repo_root = repo_root.resolve()
     git_tree = _tracked_git_tree(repo_root, revision)
-    files: list[dict[str, str]] = []
-    for path_text in sorted(set(source_paths)):
-        relative = _safe_relative(path_text, "source snapshot path")
-        _run_bytes(
-            ["git", "ls-files", "--error-unmatch", "--", relative.as_posix()],
-            cwd=repo_root,
-            label=f"tracked source lookup for {relative.as_posix()}",
-        )
-        source = repo_root.joinpath(*relative.parts)
-        if not source.is_file() or source.is_symlink():
+    raw = _run_bytes(
+        ["git", "ls-tree", "-rz", "--full-tree", "-r", revision],
+        cwd=repo_root,
+        label="committed execution input inventory",
+    )
+    parsed: list[tuple[str, str, str]] = []
+    seen_paths: set[str] = set()
+    for record in raw.split(b"\0"):
+        if not record:
+            continue
+        try:
+            header, raw_path = record.split(b"\t", 1)
+            mode, object_type, object_id = header.decode("ascii").split(" ")
+            path_text = raw_path.decode("utf-8")
+        except (ValueError, UnicodeDecodeError) as error:
+            raise ContractError("committed execution input inventory is malformed") from error
+        relative = _safe_relative(path_text, "execution input path")
+        if object_type != "blob" or mode not in {"100644", "100755", "120000"}:
             raise ContractError(
-                f"source snapshot path is not a regular tracked file: {relative.as_posix()}"
+                f"unsupported committed execution input {path_text!r}: {mode} {object_type}"
             )
-        files.append({"path": relative.as_posix(), "sha256": _digest_file(source)})
-    if not files:
-        raise ContractError("source snapshot must contain at least one tracked source")
-    snapshot: dict[str, Any] = {"files": files, "git_tree": git_tree}
-    snapshot["sha256"] = _digest_value(_source_snapshot_payload(snapshot))
-    return snapshot
+        if relative.as_posix() in seen_paths:
+            raise ContractError(f"duplicate committed execution input: {path_text!r}")
+        seen_paths.add(relative.as_posix())
+        parsed.append((mode, object_id, relative.as_posix()))
+    if not parsed:
+        raise ContractError("execution source must contain at least one committed input")
+    blobs = _git_blob_bytes(repo_root, (object_id for _, object_id, _ in parsed))
+    entries: list[dict[str, str]] = []
+    for mode, object_id, path_text in sorted(parsed, key=lambda item: item[2]):
+        data = blobs[object_id]
+        entry = {
+            "mode": mode,
+            "path": path_text,
+            "sha256": hashlib.sha256(data).hexdigest(),
+        }
+        if mode == "120000":
+            try:
+                target = data.decode("utf-8")
+            except UnicodeDecodeError as error:
+                raise ContractError(
+                    f"execution symlink target is not UTF-8: {path_text!r}"
+                ) from error
+            if not target or "\x00" in target:
+                raise ContractError(f"execution symlink target is invalid: {path_text!r}")
+            entry["symlink_target"] = target
+        entries.append(entry)
+    execution_source: dict[str, Any] = {
+        "digest_law": EXECUTION_SOURCE_DIGEST_LAW,
+        "entries": entries,
+        "git_tree": git_tree,
+    }
+    execution_source["sha256"] = _digest_value(
+        _execution_source_payload(execution_source)
+    )
+    return execution_source
+
+
+def _entry_directories(paths: Iterable[str]) -> set[str]:
+    directories: set[str] = set()
+    for path_text in paths:
+        parts = PurePosixPath(path_text).parts[:-1]
+        for length in range(1, len(parts) + 1):
+            directories.add(PurePosixPath(*parts[:length]).as_posix())
+    return directories
+
+
+def _walk_materialized_source(source_root: Path) -> tuple[dict[str, os.DirEntry[str]], set[str]]:
+    files: dict[str, os.DirEntry[str]] = {}
+    directories: set[str] = set()
+
+    def walk(directory: Path, relative_parent: PurePosixPath | None = None) -> None:
+        try:
+            children = sorted(os.scandir(directory), key=lambda entry: entry.name)
+        except OSError as error:
+            raise ContractError(f"cannot inspect execution source {directory}: {error}") from error
+        for child in children:
+            relative = (
+                PurePosixPath(child.name)
+                if relative_parent is None
+                else relative_parent / child.name
+            )
+            path_text = relative.as_posix()
+            if child.is_symlink() or child.is_file(follow_symlinks=False):
+                files[path_text] = child
+            elif child.is_dir(follow_symlinks=False):
+                directories.add(path_text)
+                walk(Path(child.path), relative)
+            else:
+                raise ContractError(f"execution source contains unsupported entry: {path_text!r}")
+
+    walk(source_root)
+    return files, directories
+
+
+def _verify_materialized_execution_source(
+    source_root: Path,
+    execution_source: dict[str, Any],
+) -> None:
+    execution_source = _validate_execution_source(execution_source)
+    if source_root.is_symlink() or not source_root.is_dir():
+        raise ContractError("execution source root is missing or is a symlink")
+    root = source_root.resolve()
+    observed, observed_directories = _walk_materialized_source(root)
+    expected = {entry["path"]: entry for entry in execution_source["entries"]}
+    if set(observed) != set(expected):
+        missing = sorted(set(expected) - set(observed))
+        extra = sorted(set(observed) - set(expected))
+        raise ContractError(
+            f"execution source entry set mismatch; missing={missing}, extra={extra}"
+        )
+    expected_directories = _entry_directories(expected)
+    if observed_directories != expected_directories:
+        missing = sorted(expected_directories - observed_directories)
+        extra = sorted(observed_directories - expected_directories)
+        raise ContractError(
+            f"execution source directory set mismatch; missing={missing}, extra={extra}"
+        )
+    for path_text, expected_entry in expected.items():
+        path = root.joinpath(*PurePosixPath(path_text).parts)
+        observed_entry = observed[path_text]
+        if expected_entry["mode"] == "120000":
+            if not observed_entry.is_symlink():
+                raise ContractError(f"execution source mode mismatch: {path_text!r}")
+            target = os.readlink(path)
+            if target != expected_entry["symlink_target"]:
+                raise ContractError(f"execution source symlink target mismatch: {path_text!r}")
+            try:
+                path.resolve(strict=True).relative_to(root)
+            except (OSError, RuntimeError, ValueError) as error:
+                raise ContractError(
+                    f"execution source symlink escapes or is dangling: {path_text!r}"
+                ) from error
+        else:
+            if not observed_entry.is_file(follow_symlinks=False):
+                raise ContractError(f"execution source mode mismatch: {path_text!r}")
+            expected_mode = 0o755 if expected_entry["mode"] == "100755" else 0o644
+            if stat.S_IMODE(path.lstat().st_mode) != expected_mode:
+                raise ContractError(f"execution source file mode mismatch: {path_text!r}")
+            if _digest_file(path) != expected_entry["sha256"]:
+                raise ContractError(f"execution source content mismatch: {path_text!r}")
+
+
+def validate_execution_layout(source_root: Path, external_paths: dict[str, Path]) -> None:
+    if source_root.is_symlink() or not source_root.is_dir():
+        raise ContractError("execution source root is missing or is a symlink")
+    root = source_root.resolve()
+    for label, raw_path in external_paths.items():
+        path = Path(raw_path).resolve(strict=False)
+        try:
+            path.relative_to(root)
+        except ValueError:
+            continue
+        raise ContractError(f"{label} must remain outside execution source root")
+
+
+def _tool_external_paths() -> dict[str, Path]:
+    paths: dict[str, Path] = {}
+    for variable, label in (
+        ("CARGO_HOME", "Cargo home"),
+        ("RUSTUP_HOME", "Rustup home"),
+        ("TMPDIR", "temporary directory"),
+    ):
+        value = os.environ.get(variable)
+        if not value:
+            raise ContractError(f"{variable} must be explicitly isolated for mutation execution")
+        paths[label] = Path(value)
+    executable = shutil.which("cargo-mutants")
+    if not executable:
+        raise ContractError("cargo-mutants executable is unavailable for layout verification")
+    paths["cargo-mutants tool home"] = Path(executable).parent
+    return paths
+
+
+def materialize_execution_source(
+    repo_root: Path,
+    revision: str,
+    source_root: Path,
+) -> dict[str, Any]:
+    repo_root = repo_root.resolve()
+    source_root = source_root.absolute()
+    repo_ancestor = repo_root == source_root or repo_root in source_root.parents
+    source_ancestor = source_root in repo_root.parents
+    if repo_ancestor or source_ancestor:
+        raise ContractError("execution source root must be disjoint from the Git worktree")
+    if source_root.is_symlink() or source_root.exists():
+        raise ContractError("execution source root must not already exist")
+    execution_source = _build_execution_source(repo_root, revision)
+    raw_tree = _run_bytes(
+        ["git", "ls-tree", "-rz", "--full-tree", "-r", revision],
+        cwd=repo_root,
+        label="committed execution materialization inventory",
+    )
+    object_by_path: dict[str, str] = {}
+    for record in raw_tree.split(b"\0"):
+        if not record:
+            continue
+        header, raw_path = record.split(b"\t", 1)
+        _, _, object_id = header.decode("ascii").split(" ")
+        object_by_path[raw_path.decode("utf-8")] = object_id
+    blobs = _git_blob_bytes(repo_root, object_by_path.values())
+    source_root.mkdir(parents=True, mode=0o700)
+    try:
+        for entry in execution_source["entries"]:
+            path = source_root.joinpath(*PurePosixPath(entry["path"]).parts)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            data = blobs[object_by_path[entry["path"]]]
+            if entry["mode"] == "120000":
+                path.symlink_to(entry["symlink_target"])
+            else:
+                path.write_bytes(data)
+                path.chmod(0o755 if entry["mode"] == "100755" else 0o644)
+    except OSError as error:
+        raise ContractError(f"cannot materialize execution source: {error}") from error
+    _verify_materialized_execution_source(source_root, execution_source)
+    return execution_source
 
 
 def _build_execution_contract(
@@ -450,10 +753,12 @@ def build_manifest(
     revision: str,
     run_id: int,
     run_attempt: int,
+    source_root: Path | None = None,
 ) -> dict[str, Any]:
     repo_root = repo_root.resolve()
     config_path = config_path.resolve()
-    if config_path != repo_root / CONFIG_RELPATH or not config_path.is_file():
+    config_root = repo_root if source_root is None else source_root.resolve()
+    if config_path != config_root / CONFIG_RELPATH or not config_path.is_file():
         raise ContractError(f"config must be the regular file {CONFIG_RELPATH}")
     if not REPOSITORY.fullmatch(repository):
         raise ContractError(f"invalid repository identity: {repository!r}")
@@ -473,11 +778,10 @@ def build_manifest(
         seen.add(mutant_id)
         entries.append({"id": mutant_id, "spec": spec})
     specs = [entry["spec"] for entry in entries]
-    source_snapshot = _build_source_snapshot(
-        repo_root,
-        revision,
-        (spec["file"] for spec in specs),
-    )
+    execution_source = _build_execution_source(repo_root, revision)
+    _validate_execution_source(execution_source, {spec["file"] for spec in specs})
+    if source_root is not None:
+        _verify_materialized_execution_source(source_root, execution_source)
     manifest: dict[str, Any] = {
         "config": {
             "path": CONFIG_RELPATH,
@@ -494,7 +798,7 @@ def build_manifest(
         "run": {"attempt": run_attempt, "id": run_id},
         "schema": SCHEMA_MANIFEST,
         "sharding": {"algorithm": SHARD_ALGORITHM, "count": SHARD_COUNT},
-        "source_snapshot": source_snapshot,
+        "execution_source": execution_source,
         "tool": _tool_provenance(),
     }
     manifest["manifest_sha256"] = _digest_value(_manifest_payload(manifest))
@@ -502,36 +806,71 @@ def build_manifest(
     return manifest
 
 
-def _validate_source_snapshot(value: Any, expected_paths: set[str]) -> dict[str, Any]:
-    snapshot = _expect_dict(value, "manifest.source_snapshot")
+def _validate_execution_source(
+    value: Any,
+    expected_mutant_paths: set[str] | None = None,
+) -> dict[str, Any]:
+    execution_source = _expect_dict(value, "manifest.execution_source")
     _expect_exact_keys(
-        snapshot,
-        {"files", "git_tree", "sha256"},
-        "manifest.source_snapshot",
+        execution_source,
+        {"digest_law", "entries", "git_tree", "sha256"},
+        "manifest.execution_source",
     )
-    if not isinstance(snapshot["git_tree"], str) or not HEX40.fullmatch(snapshot["git_tree"]):
-        raise ContractError("manifest source Git tree is invalid")
-    if not isinstance(snapshot["sha256"], str) or not HEX64.fullmatch(snapshot["sha256"]):
-        raise ContractError("manifest source snapshot digest is invalid")
-    files = _expect_list(snapshot["files"], "manifest.source_snapshot.files")
+    if execution_source["digest_law"] != EXECUTION_SOURCE_DIGEST_LAW:
+        raise ContractError("manifest execution source digest law is invalid")
+    if not isinstance(execution_source["git_tree"], str) or not HEX40.fullmatch(
+        execution_source["git_tree"]
+    ):
+        raise ContractError("manifest execution source Git tree is invalid")
+    if not isinstance(execution_source["sha256"], str) or not HEX64.fullmatch(
+        execution_source["sha256"]
+    ):
+        raise ContractError("manifest execution source digest is invalid")
+    entries = _expect_list(
+        execution_source["entries"], "manifest.execution_source.entries"
+    )
     observed_paths: list[str] = []
-    for index, raw_file in enumerate(files):
-        label = f"manifest.source_snapshot.files[{index}]"
-        source = _expect_dict(raw_file, label)
-        _expect_exact_keys(source, {"path", "sha256"}, label)
-        relative = _safe_relative(source["path"], "source snapshot path")
-        if (
-            relative.suffix != ".rs"
-            or not isinstance(source["sha256"], str)
-            or not HEX64.fullmatch(source["sha256"])
-        ):
+    modes_by_path: dict[str, str] = {}
+    for index, raw_entry in enumerate(entries):
+        label = f"manifest.execution_source.entries[{index}]"
+        entry = _expect_dict(raw_entry, label)
+        mode = entry.get("mode")
+        expected_keys = (
+            {"mode", "path", "sha256", "symlink_target"}
+            if mode == "120000"
+            else {"mode", "path", "sha256"}
+        )
+        _expect_exact_keys(entry, expected_keys, label)
+        relative = _safe_relative(entry["path"], "execution input path")
+        if mode not in {"100644", "100755", "120000"}:
+            raise ContractError(f"{label}.mode is invalid")
+        if not isinstance(entry["sha256"], str) or not HEX64.fullmatch(entry["sha256"]):
             raise ContractError(f"{label} is invalid")
+        if mode == "120000":
+            target = entry["symlink_target"]
+            if not isinstance(target, str) or not target or "\x00" in target:
+                raise ContractError(f"{label}.symlink_target is invalid")
+            if hashlib.sha256(target.encode("utf-8")).hexdigest() != entry["sha256"]:
+                raise ContractError(f"{label} symlink target digest mismatch")
         observed_paths.append(relative.as_posix())
-    if observed_paths != sorted(expected_paths) or len(observed_paths) != len(set(observed_paths)):
-        raise ContractError("source snapshot does not exactly cover population source files")
-    if snapshot["sha256"] != _digest_value(_source_snapshot_payload(snapshot)):
-        raise ContractError("manifest source snapshot digest mismatch")
-    return snapshot
+        modes_by_path[relative.as_posix()] = mode
+    if observed_paths != sorted(observed_paths) or len(observed_paths) != len(set(observed_paths)):
+        raise ContractError("manifest execution source paths are not exact sorted unique inputs")
+    if expected_mutant_paths is not None:
+        missing = sorted(expected_mutant_paths - set(observed_paths))
+        non_regular = sorted(
+            path for path in expected_mutant_paths if modes_by_path.get(path) == "120000"
+        )
+        if missing or non_regular:
+            raise ContractError(
+                f"mutation population is outside the execution source; "
+                f"missing={missing}, non_regular={non_regular}"
+            )
+    if execution_source["sha256"] != _digest_value(
+        _execution_source_payload(execution_source)
+    ):
+        raise ContractError("manifest execution source digest mismatch")
+    return execution_source
 
 
 def _validate_execution_contract(
@@ -598,7 +937,7 @@ def validate_manifest(value: Any) -> dict[str, Any]:
             "run",
             "schema",
             "sharding",
-            "source_snapshot",
+            "execution_source",
             "tool",
         },
         "manifest",
@@ -642,8 +981,8 @@ def validate_manifest(value: Any) -> dict[str, Any]:
         specs.append(spec)
     if population["sha256"] != _digest_value(specs):
         raise ContractError("manifest population digest mismatch")
-    _validate_source_snapshot(
-        manifest["source_snapshot"],
+    _validate_execution_source(
+        manifest["execution_source"],
         {spec["file"] for spec in specs},
     )
     _validate_execution_contract(manifest["execution"], specs)
@@ -659,10 +998,12 @@ def _validate_checkout(
     repo_root: Path,
     config_path: Path,
     observed_revision: str,
+    source_root: Path | None = None,
 ) -> None:
     repo_root = repo_root.resolve()
     config_path = config_path.resolve()
-    if config_path != repo_root / CONFIG_RELPATH or not config_path.is_file():
+    config_root = repo_root if source_root is None else source_root.resolve()
+    if config_path != config_root / CONFIG_RELPATH or not config_path.is_file():
         raise ContractError(f"config must be the regular file {CONFIG_RELPATH}")
     if observed_revision != manifest["revision"]:
         raise ContractError(
@@ -673,13 +1014,11 @@ def _validate_checkout(
         raise ContractError(
             f"config digest mismatch: expected {manifest['config']['sha256']}, got {actual_config}"
         )
-    expected_snapshot = _build_source_snapshot(
-        repo_root,
-        observed_revision,
-        (entry["spec"]["file"] for entry in manifest["population"]["mutants"]),
-    )
-    if expected_snapshot != manifest["source_snapshot"]:
-        raise ContractError("source snapshot does not match exact tracked checkout bytes")
+    expected_source = _build_execution_source(repo_root, observed_revision)
+    if expected_source != manifest["execution_source"]:
+        raise ContractError("execution source does not match the exact committed root")
+    if source_root is not None:
+        _verify_materialized_execution_source(source_root, expected_source)
 
 
 def expected_shard_entries(manifest: dict[str, Any], shard_index: int) -> list[dict[str, Any]]:
@@ -967,6 +1306,7 @@ def validate_and_record_shard(
     observed_revision: str,
     tool_version_output: str,
     exit_code: int,
+    source_root: Path | None = None,
 ) -> dict[str, Any]:
     manifest = validate_manifest(manifest_value)
     _validate_checkout(
@@ -974,6 +1314,7 @@ def validate_and_record_shard(
         repo_root=repo_root,
         config_path=config_path,
         observed_revision=observed_revision,
+        source_root=source_root,
     )
     if tool_version_output.strip() != TOOL_VERSION_OUTPUT:
         raise ContractError(
@@ -982,11 +1323,13 @@ def validate_and_record_shard(
         )
     expected_entries = expected_shard_entries(manifest, shard_index)
     expected_specs = [entry["spec"] for entry in expected_entries]
+    if output_parent.is_symlink() or not output_parent.is_dir():
+        raise ContractError("output parent is missing or is a symlink")
+    if source_root is not None:
+        validate_execution_layout(source_root, {"output parent": output_parent})
     output_parent = output_parent.resolve()
-    out_dir = output_parent / "mutants.out"
-    if not out_dir.is_dir() or out_dir.is_symlink():
-        raise ContractError("mutants.out is missing or is not a regular directory")
-    lock_path = out_dir / "lock.json"
+    out_dir = _direct_regular_directory(output_parent, "mutants.out", "mutants.out")
+    lock_path = _direct_regular_file(out_dir, "lock.json", "lock.json")
     lock = _expect_dict(read_json(lock_path), "lock.json")
     _expect_exact_keys(
         lock,
@@ -1001,7 +1344,7 @@ def validate_and_record_shard(
     for field in ("hostname", "start_time", "username"):
         if not isinstance(lock[field], str) or not lock[field]:
             raise ContractError(f"lock.json.{field} must be a non-empty string")
-    mutants_path = out_dir / "mutants.json"
+    mutants_path = _direct_regular_file(out_dir, "mutants.json", "mutants.json")
     observed_specs = _expect_list(read_json(mutants_path), "mutants.json")
     for index, spec in enumerate(observed_specs):
         _validate_mutant(spec, f"mutants.json[{index}]")
@@ -1010,7 +1353,7 @@ def validate_and_record_shard(
     observed_ids = [_digest_value(spec) for spec in observed_specs]
     if len(observed_ids) != len(set(observed_ids)):
         raise ContractError("duplicate mutant IDs inside shard")
-    outcomes_path = out_dir / "outcomes.json"
+    outcomes_path = _direct_regular_file(out_dir, "outcomes.json", "outcomes.json")
     counts, summaries, referenced_artifacts, cargo_binary = _validate_outcomes(
         read_json(outcomes_path),
         expected_specs,
@@ -1050,7 +1393,7 @@ def validate_and_record_shard(
             "mutant_ids": observed_ids,
             "sha256": _digest_value(observed_specs),
         },
-        "source_snapshot_sha256": manifest["source_snapshot"]["sha256"],
+        "execution_source_sha256": manifest["execution_source"]["sha256"],
         "tool": _tool_provenance(),
     }
     record["record_sha256"] = _digest_value(_shard_payload(record))
@@ -1074,7 +1417,7 @@ def _validate_record_header(value: Any) -> dict[str, Any]:
             "schema",
             "shard",
             "slice",
-            "source_snapshot_sha256",
+            "execution_source_sha256",
             "tool",
         },
         "shard.json",
@@ -1128,10 +1471,10 @@ def _validate_record_header(value: Any) -> dict[str, Any]:
         ):
             raise ContractError(f"{label} is invalid")
         seen_paths.add(relative.as_posix())
-    if not isinstance(record["source_snapshot_sha256"], str) or not HEX64.fullmatch(
-        record["source_snapshot_sha256"]
+    if not isinstance(record["execution_source_sha256"], str) or not HEX64.fullmatch(
+        record["execution_source_sha256"]
     ):
-        raise ContractError("shard source snapshot identity is invalid")
+        raise ContractError("shard execution source identity is invalid")
     shard = _expect_dict(record["shard"], "shard.json.shard")
     _expect_exact_keys(shard, {"algorithm", "count", "index"}, "shard.json.shard")
     if shard["algorithm"] != SHARD_ALGORITHM or shard["count"] != SHARD_COUNT:
@@ -1154,6 +1497,7 @@ def aggregate(
     config_path: Path,
     shards_root: Path,
     observed_revision: str,
+    source_root: Path | None = None,
 ) -> dict[str, Any]:
     manifest = validate_manifest(manifest_value)
     _validate_checkout(
@@ -1161,10 +1505,13 @@ def aggregate(
         repo_root=repo_root,
         config_path=config_path,
         observed_revision=observed_revision,
+        source_root=source_root,
     )
-    shards_root = shards_root.resolve()
     if not shards_root.is_dir() or shards_root.is_symlink():
         raise ContractError("shards root is missing or unsafe")
+    if source_root is not None:
+        validate_execution_layout(source_root, {"shards root": shards_root})
+    shards_root = shards_root.resolve()
     expected_names = {f"mutation-shard-{index}" for index in range(SHARD_COUNT)}
     entries = list(shards_root.iterdir())
     actual_names = {entry.name for entry in entries}
@@ -1180,7 +1527,8 @@ def aggregate(
         raise ContractError("shard artifacts must be exactly 32 regular directories")
     headers: dict[int, tuple[Path, dict[str, Any]]] = {}
     for directory in sorted(entries, key=lambda entry: entry.name):
-        record = _validate_record_header(read_json(directory / "shard.json"))
+        shard_json = _direct_regular_file(directory, "shard.json", "shard.json")
+        record = _validate_record_header(read_json(shard_json))
         index = record["shard"]["index"]
         if index in headers:
             raise ContractError(f"duplicate shard index: {index}")
@@ -1205,8 +1553,8 @@ def aggregate(
             raise ContractError(f"revision provenance mismatch in shard {index}")
         if stored["config_sha256"] != manifest["config"]["sha256"]:
             raise ContractError(f"config provenance mismatch in shard {index}")
-        if stored["source_snapshot_sha256"] != manifest["source_snapshot"]["sha256"]:
-            raise ContractError(f"source snapshot provenance mismatch in shard {index}")
+        if stored["execution_source_sha256"] != manifest["execution_source"]["sha256"]:
+            raise ContractError(f"execution source provenance mismatch in shard {index}")
         if stored["execution"]["contract_sha256"] != _digest_value(manifest["execution"]):
             raise ContractError(f"execution provenance mismatch in shard {index}")
         if stored["tool"] != _tool_provenance():
@@ -1220,6 +1568,7 @@ def aggregate(
             observed_revision=observed_revision,
             tool_version_output=TOOL_VERSION_OUTPUT,
             exit_code=stored["exit_code"],
+            source_root=source_root,
         )
         if stored != regenerated:
             raise ContractError(f"shard record does not bind exact artifact bytes: {index}")
@@ -1249,7 +1598,7 @@ def aggregate(
             "count": SHARD_COUNT,
             "record_sha256": shard_digests,
         },
-        "source_snapshot_sha256": manifest["source_snapshot"]["sha256"],
+        "execution_source_sha256": manifest["execution_source"]["sha256"],
         "tool": _tool_provenance(),
     }
     report["aggregate_sha256"] = _digest_value(_aggregate_payload(report))
@@ -1260,22 +1609,52 @@ def _manifest_command(arguments: argparse.Namespace) -> None:
     verify_tool_archive(Path(arguments.tool_archive), arguments.tool_version_output)
     population = _expect_list(read_json(Path(arguments.population_json)), "population listing")
     repo_root = Path(arguments.repo_root)
+    source_root = Path(arguments.source_root)
+    validate_execution_layout(
+        source_root,
+        {
+            "population listing": Path(arguments.population_json),
+            "tool archive": Path(arguments.tool_archive),
+            "manifest output": Path(arguments.output),
+            **_tool_external_paths(),
+        },
+    )
     manifest = build_manifest(
         population,
         repo_root=repo_root,
         config_path=Path(arguments.config),
-        package_versions=_cargo_package_versions(repo_root, population),
+        package_versions=_cargo_package_versions(source_root, population),
         repository=arguments.repository,
         revision=arguments.revision,
         run_id=arguments.run_id,
         run_attempt=arguments.run_attempt,
+        source_root=source_root,
     )
-    write_json(Path(arguments.output), manifest)
+    output = Path(arguments.output)
+    write_json(_safe_json_output(output.parent, output.name, "manifest"), manifest)
+
+
+def _materialize_command(arguments: argparse.Namespace) -> None:
+    materialize_execution_source(
+        Path(arguments.repo_root),
+        arguments.revision,
+        Path(arguments.source_root),
+    )
 
 
 def _record_command(arguments: argparse.Namespace) -> None:
     verify_tool_archive(Path(arguments.tool_archive), arguments.tool_version_output)
     manifest = read_json(Path(arguments.manifest))
+    source_root = Path(arguments.source_root)
+    validate_execution_layout(
+        source_root,
+        {
+            "manifest": Path(arguments.manifest),
+            "tool archive": Path(arguments.tool_archive),
+            "output parent": Path(arguments.output_parent),
+            **_tool_external_paths(),
+        },
+    )
     record = validate_and_record_shard(
         manifest,
         repo_root=Path(arguments.repo_root),
@@ -1285,20 +1664,33 @@ def _record_command(arguments: argparse.Namespace) -> None:
         observed_revision=arguments.observed_revision,
         tool_version_output=arguments.tool_version_output,
         exit_code=arguments.exit_code,
+        source_root=source_root,
     )
-    write_json(Path(arguments.output_parent) / "shard.json", record)
+    output_parent = Path(arguments.output_parent)
+    write_json(_safe_json_output(output_parent, "shard.json", "shard.json"), record)
 
 
 def _aggregate_command(arguments: argparse.Namespace) -> None:
     manifest = read_json(Path(arguments.manifest))
+    source_root = Path(arguments.source_root)
+    validate_execution_layout(
+        source_root,
+        {
+            "manifest": Path(arguments.manifest),
+            "shards root": Path(arguments.shards_root),
+            "aggregate output": Path(arguments.output),
+        },
+    )
     report = aggregate(
         manifest,
         repo_root=Path(arguments.repo_root),
         config_path=Path(arguments.config),
         shards_root=Path(arguments.shards_root),
         observed_revision=arguments.observed_revision,
+        source_root=source_root,
     )
-    write_json(Path(arguments.output), report)
+    output = Path(arguments.output)
+    write_json(_safe_json_output(output.parent, output.name, "aggregate"), report)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -1311,12 +1703,25 @@ def build_parser() -> argparse.ArgumentParser:
     )
     commands = parser.add_subparsers(dest="command", required=True)
 
+    materialize = commands.add_parser(
+        "materialize-source",
+        help=(
+            "материализовать exact committed execution root "
+            "вне checkout/cache/output"
+        ),
+    )
+    materialize.add_argument("--repo-root", required=True)
+    materialize.add_argument("--revision", required=True)
+    materialize.add_argument("--source-root", required=True)
+    materialize.set_defaults(handler=_materialize_command)
+
     manifest = commands.add_parser(
         "manifest",
         help="связать exact discovered population с revision/config/tool provenance",
     )
     manifest.add_argument("--population-json", required=True)
     manifest.add_argument("--repo-root", required=True)
+    manifest.add_argument("--source-root", required=True)
     manifest.add_argument("--config", required=True)
     manifest.add_argument("--repository", required=True)
     manifest.add_argument("--revision", required=True)
@@ -1336,6 +1741,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     record.add_argument("--manifest", required=True)
     record.add_argument("--repo-root", required=True)
+    record.add_argument("--source-root", required=True)
     record.add_argument("--config", required=True)
     record.add_argument("--output-parent", required=True)
     record.add_argument("--shard-index", required=True, type=int)
@@ -1351,6 +1757,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     aggregate_parser.add_argument("--manifest", required=True)
     aggregate_parser.add_argument("--repo-root", required=True)
+    aggregate_parser.add_argument("--source-root", required=True)
     aggregate_parser.add_argument("--config", required=True)
     aggregate_parser.add_argument("--shards-root", required=True)
     aggregate_parser.add_argument("--observed-revision", required=True)

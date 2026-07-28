@@ -34,9 +34,11 @@ jobs:
           persist-credentials: false
       - name: isolate tool homes
         run: |
-          echo "RUSTUP_HOME=$RUNNER_TEMP/rustup-$GITHUB_JOB" >> "$GITHUB_ENV"
-          echo "CARGO_HOME=$RUNNER_TEMP/cargo-$GITHUB_JOB" >> "$GITHUB_ENV"
-          echo "TMPDIR=$RUNNER_TEMP/tmp-$GITHUB_JOB" >> "$GITHUB_ENV"
+          {
+            echo "RUSTUP_HOME=$RUNNER_TEMP/rustup-$GITHUB_JOB"
+            echo "CARGO_HOME=$RUNNER_TEMP/cargo-$GITHUB_JOB"
+            echo "TMPDIR=$RUNNER_TEMP/tmp-$GITHUB_JOB"
+          } >> "$GITHUB_ENV"
           mkdir -p "$RUNNER_TEMP/tmp-$GITHUB_JOB"
       - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master @ 2026-03-27
         with:
@@ -56,13 +58,21 @@ jobs:
             = "$MUTANTS_VERSION_OUTPUT"
       - name: discover and bind exact population
         run: |
+          source_root="$RUNNER_TEMP/mutation-source-$GITHUB_JOB"
           mkdir -p "$RUNNER_TEMP/mutation-manifest"
-          cargo mutants --baseline=run --no-shuffle --list --json \
-            > "$RUNNER_TEMP/population.json"
-          python3 scripts/mutation.py manifest \
+          python3 scripts/mutation.py materialize-source \
+            --repo-root "$GITHUB_WORKSPACE" \
+            --revision "$GITHUB_SHA" \
+            --source-root "$source_root"
+          (
+            cd "$source_root"
+            cargo mutants --baseline=run --gitignore=false --no-shuffle --list --json
+          ) > "$RUNNER_TEMP/population.json"
+          python3 "$source_root/scripts/mutation.py" manifest \
             --population-json "$RUNNER_TEMP/population.json" \
             --repo-root "$GITHUB_WORKSPACE" \
-            --config "$GITHUB_WORKSPACE/.cargo/mutants.toml" \
+            --source-root "$source_root" \
+            --config "$source_root/.cargo/mutants.toml" \
             --repository "$GITHUB_REPOSITORY" \
             --revision "$GITHUB_SHA" \
             --run-id "$GITHUB_RUN_ID" \
@@ -128,9 +138,11 @@ jobs:
           persist-credentials: false
       - name: isolate tool homes
         run: |
-          echo "RUSTUP_HOME=$RUNNER_TEMP/rustup-$GITHUB_JOB-$SHARD_INDEX" >> "$GITHUB_ENV"
-          echo "CARGO_HOME=$RUNNER_TEMP/cargo-$GITHUB_JOB-$SHARD_INDEX" >> "$GITHUB_ENV"
-          echo "TMPDIR=$RUNNER_TEMP/tmp-$GITHUB_JOB-$SHARD_INDEX" >> "$GITHUB_ENV"
+          {
+            echo "RUSTUP_HOME=$RUNNER_TEMP/rustup-$GITHUB_JOB-$SHARD_INDEX"
+            echo "CARGO_HOME=$RUNNER_TEMP/cargo-$GITHUB_JOB-$SHARD_INDEX"
+            echo "TMPDIR=$RUNNER_TEMP/tmp-$GITHUB_JOB-$SHARD_INDEX"
+          } >> "$GITHUB_ENV"
           mkdir -p "$RUNNER_TEMP/tmp-$GITHUB_JOB-$SHARD_INDEX"
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -155,20 +167,30 @@ jobs:
             = "$MUTANTS_VERSION_OUTPUT"
       - name: run isolated shard with its own baseline
         run: |
+          source_root="$RUNNER_TEMP/mutation-source-$GITHUB_JOB-$SHARD_INDEX"
           output_parent="$RUNNER_TEMP/mutation-shard-$SHARD_INDEX"
           mkdir -p "$output_parent"
+          python3 scripts/mutation.py materialize-source \
+            --repo-root "$GITHUB_WORKSPACE" \
+            --revision "$GITHUB_SHA" \
+            --source-root "$source_root"
           set +e
-          cargo mutants \
-            --baseline=run \
-            --no-shuffle \
-            --shard "$SHARD_INDEX/32" \
-            --output "$output_parent"
+          (
+            cd "$source_root"
+            cargo mutants \
+              --baseline=run \
+              --gitignore=false \
+              --no-shuffle \
+              --shard "$SHARD_INDEX/32" \
+              --output "$output_parent"
+          )
           mutants_exit=$?
           set -e
-          python3 scripts/mutation.py record-shard \
+          python3 "$source_root/scripts/mutation.py" record-shard \
             --manifest "$RUNNER_TEMP/mutation-manifest/mutation-manifest.json" \
             --repo-root "$GITHUB_WORKSPACE" \
-            --config "$GITHUB_WORKSPACE/.cargo/mutants.toml" \
+            --source-root "$source_root" \
+            --config "$source_root/.cargo/mutants.toml" \
             --output-parent "$output_parent" \
             --shard-index "$SHARD_INDEX" \
             --observed-revision "$(git rev-parse HEAD)" \
@@ -206,11 +228,17 @@ jobs:
           merge-multiple: false
       - name: verify exact non-overlapping aggregate
         run: |
+          source_root="$RUNNER_TEMP/mutation-source-$GITHUB_JOB"
           mkdir -p "$RUNNER_TEMP/mutation-report"
-          python3 scripts/mutation.py aggregate \
+          python3 scripts/mutation.py materialize-source \
+            --repo-root "$GITHUB_WORKSPACE" \
+            --revision "$GITHUB_SHA" \
+            --source-root "$source_root"
+          python3 "$source_root/scripts/mutation.py" aggregate \
             --manifest "$RUNNER_TEMP/mutation-manifest/mutation-manifest.json" \
             --repo-root "$GITHUB_WORKSPACE" \
-            --config "$GITHUB_WORKSPACE/.cargo/mutants.toml" \
+            --source-root "$source_root" \
+            --config "$source_root/.cargo/mutants.toml" \
             --shards-root "$RUNNER_TEMP/mutation-shards" \
             --observed-revision "$(git rev-parse HEAD)" \
             --output "$RUNNER_TEMP/mutation-report/mutation-aggregate.json"
