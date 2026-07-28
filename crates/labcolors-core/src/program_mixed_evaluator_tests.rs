@@ -15,8 +15,9 @@ use crate::lcs_occurrence::{
     MODELED_TRISTIMULUS_DERIVATION_CALLS, SurroundProfileId,
 };
 use crate::observation::{
-    ObservationGroupId, ObservationPayloadInput, ObservationStreamId, ObservationUpdateInput,
-    ObservedScenarioSetInput, Revision, ScenarioId, ScenarioInput, SurfaceInputBinding,
+    OBSERVATION_ARENA_SLOT_COUNT_V1, ObservationGroupId, ObservationPayloadInput,
+    ObservationStreamId, ObservationUpdateInput, ObservedScenarioSetInput, Revision, ScenarioId,
+    ScenarioInput, SurfaceInputBinding,
 };
 use crate::program::{
     AssessmentV1, CertificateV1, ConflictCellV1, ConstraintModeV1, ConstraintSubjectV1,
@@ -37,7 +38,7 @@ use crate::program_session::{
     ProgramConstraintSubjectV1, ProgramConstraintViolationEvidenceV1, Source, SourceId, Surface,
     Target, TargetCandidateChoiceV1, TargetCandidateId, TargetCandidateV1, TargetId,
 };
-use crate::session::SessionState;
+use crate::session::{PreparedSessionDispositionV1, SessionState};
 use crate::session_tests::CommitSessionUpdateForTest as _;
 use crate::wcag22::{Wcag22CriterionV1, wcag22_profile_v1};
 
@@ -2419,6 +2420,139 @@ fn historical_evidence_identity_probe_rejects_recreated_equal_certificates() {
         historical_evidence_identities(first_projection),
         historical_evidence_identities(recreated_projection),
         "the probe must reject value-equivalent evidence recreated in another Session",
+    );
+}
+
+#[test]
+fn failed_state_and_prospective_update_require_three_distinct_storage_leases() {
+    assert_eq!(
+        OBSERVATION_ARENA_SLOT_COUNT_V1, 3,
+        "Ready A + Failed B(cause, previous A) + prospective C is the exact storage high-water",
+    );
+    let compiled = finite_program([[0; 3], [0x80; 3]]);
+    let mut session = compiled.instantiate(STREAM).unwrap();
+    let update = |revision: u64, backdrops: &[[u8; 3]]| ObservationUpdateInput {
+        stream: STREAM,
+        revision: Revision::new(revision),
+        payload: ObservationPayloadInput::Scenarios(ObservedScenarioSetInput {
+            scenarios: backdrops
+                .iter()
+                .enumerate()
+                .map(|(index, backdrop)| ScenarioInput {
+                    id: ScenarioId::new(index as u32 + 1),
+                    bindings: vec![SurfaceInputBinding::new(SURFACE_PORT, signal(*backdrop))],
+                })
+                .collect(),
+        }),
+    };
+
+    let SessionState::Ready { .. } = session.commit(update(1, &[[0xFF; 3]])).unwrap() else {
+        panic!("black must verify on white");
+    };
+    let SessionState::Failed {
+        cause,
+        previous: Some(previous),
+    } = session.commit(update(2, &[[0xFF; 3], [0; 3]])).unwrap()
+    else {
+        panic!("opposing backdrops must retain cause B and previous A");
+    };
+
+    let previous_fingerprint = (
+        previous.report().observation().revision(),
+        previous.report().observation().backing_ptr_for_test(),
+        previous.report().cells().as_ptr(),
+        previous.report().cells().len(),
+        previous
+            .report()
+            .cells()
+            .iter()
+            .filter(|cell| cell.result().is_violation())
+            .count(),
+        previous.outputs().as_ptr(),
+        previous.outputs().len(),
+        previous.selected_state_index(),
+    );
+    let cause_fingerprint = (
+        cause.report().observation().revision(),
+        cause.report().observation().backing_ptr_for_test(),
+        cause.report().cells().as_ptr(),
+        cause.report().cells().len(),
+        cause
+            .report()
+            .cells()
+            .iter()
+            .filter(|cell| cell.result().is_violation())
+            .count(),
+        cause.considered_state_count(),
+    );
+    assert_ne!(previous_fingerprint.1, cause_fingerprint.1);
+    assert_ne!(previous_fingerprint.2, cause_fingerprint.2);
+
+    let prepared = session
+        .prepare_update(update(3, &[[0xFF; 3]]))
+        .expect("a lawful prospective C needs the third logical lease");
+    let PreparedSessionDispositionV1::Verified(prospective) = prepared.disposition() else {
+        panic!("the prospective black-on-white state must verify");
+    };
+    let prospective_observation = prospective.report().observation();
+    assert_ne!(
+        prospective_observation.backing_ptr_for_test(),
+        previous_fingerprint.1,
+    );
+    assert_ne!(
+        prospective_observation.backing_ptr_for_test(),
+        cause_fingerprint.1,
+    );
+    assert_ne!(
+        prospective.report().cells().as_ptr(),
+        previous_fingerprint.2
+    );
+    assert_ne!(prospective.report().cells().as_ptr(), cause_fingerprint.2);
+    assert_ne!(prospective.outputs().as_ptr(), previous_fingerprint.5);
+    drop(prepared);
+
+    let SessionState::Failed {
+        cause,
+        previous: Some(previous),
+    } = session.state()
+    else {
+        panic!("dropping prospective C must preserve the exact failed state");
+    };
+    assert_eq!(
+        (
+            previous.report().observation().revision(),
+            previous.report().observation().backing_ptr_for_test(),
+            previous.report().cells().as_ptr(),
+            previous.report().cells().len(),
+            previous
+                .report()
+                .cells()
+                .iter()
+                .filter(|cell| cell.result().is_violation())
+                .count(),
+            previous.outputs().as_ptr(),
+            previous.outputs().len(),
+            previous.selected_state_index(),
+        ),
+        previous_fingerprint,
+        "prospective materialization must not overwrite previous A",
+    );
+    assert_eq!(
+        (
+            cause.report().observation().revision(),
+            cause.report().observation().backing_ptr_for_test(),
+            cause.report().cells().as_ptr(),
+            cause.report().cells().len(),
+            cause
+                .report()
+                .cells()
+                .iter()
+                .filter(|cell| cell.result().is_violation())
+                .count(),
+            cause.considered_state_count(),
+        ),
+        cause_fingerprint,
+        "prospective materialization must not overwrite cause B",
     );
 }
 

@@ -1,10 +1,6 @@
 use std::ffi::OsStr;
 use std::path::PathBuf;
 
-#[expect(
-    dead_code,
-    reason = "the shared scanner also exposes a syntax projection for sibling integration gates"
-)]
 #[path = "../tests/common/source.rs"]
 mod source_scanner;
 
@@ -94,6 +90,35 @@ fn normalized_production_code(source: &str) -> String {
         .collect::<Vec<_>>()
         .join("\n")
         .to_ascii_lowercase()
+}
+
+pub(crate) fn compact_production_syntax(source: &str) -> String {
+    let mut compact = String::new();
+    for (_, line) in source_scanner::production_syntax_lines(source) {
+        compact.extend(line.chars().filter(|character| !character.is_whitespace()));
+    }
+    compact
+}
+
+#[test]
+fn program_arena_return_route_has_one_slot_authority() {
+    let lease = source_scope(
+        PROGRAM_SESSION_SOURCE,
+        "struct ProgramEvaluationArenaLeaseV1<Evaluation>",
+        "/// Единственный return-route появляется при retirement",
+    );
+    assert!(
+        !lease.contains("slot: ObservationArenaSlotV1"),
+        "an evaluator lease must not duplicate the observation-owned arena route",
+    );
+
+    let report = source_scope(
+        PROGRAM_SESSION_SOURCE,
+        "impl<Evaluation> ProgramReportV1<Evaluation>",
+        "/// Один encoded Paint из Program",
+    );
+    assert!(report.contains("let slot = observation.arena_slot();"));
+    assert!(report.contains("ProgramEvaluationArenaReturnV1 {"));
 }
 
 #[test]
@@ -494,8 +519,8 @@ fn staged_session_is_evidence_only_and_retired_operation_authority_cannot_return
     for required in [
         "raw_head: &'session mut SessionObservationHeadV1,",
         "state: &'session mut SessionState<Plan::Verified, Plan::Violation>,",
-        "pending: PendingSessionTransition<Plan::Verified, Plan::Violation>,",
-        "owner: Plan::OwnerLease,",
+        "deferred_retirement: &'session mut Option<DeferredSessionRetirement<Plan>>,",
+        "guard: PendingSessionTransitionGuard<'session, Plan>,",
     ] {
         assert_eq!(
             prepared_owner.matches(required).count(),
@@ -507,14 +532,45 @@ fn staged_session_is_evidence_only_and_retired_operation_authority_cannot_return
         !prepared_owner.contains("derive(Clone") && !prepared_owner.contains("derive(Copy"),
         "prepared lifecycle authority must remain linear",
     );
+
+    let abort_guard = source_scope(
+        SESSION_SOURCE,
+        "struct PendingSessionTransitionGuard<'session, Plan: SessionPlanV1> {",
+        "impl<Plan: SessionPlanV1> PendingSessionTransitionGuard<'_, Plan>",
+    );
+    for required in [
+        "plan: &'session mut Plan,",
+        "pending: Option<PendingSessionTransition<Plan::Verified, Plan::Violation>>,",
+        "owner: Option<Plan::OwnerLease>,",
+    ] {
+        assert_eq!(
+            abort_guard.matches(required).count(),
+            1,
+            "the abort guard must own exactly one `{required}`",
+        );
+    }
     assert!(
-        prepared_owner
-            .find("pending: PendingSessionTransition<Plan::Verified, Plan::Violation>,")
-            .expect("prepared transition must own pending evidence")
-            < prepared_owner
-                .find("owner: Plan::OwnerLease,")
-                .expect("prepared transition must retain its exact owner lease"),
+        abort_guard
+            .find("pending: Option<PendingSessionTransition<Plan::Verified, Plan::Violation>>,")
+            .expect("abort guard must own pending evidence")
+            < abort_guard
+                .find("owner: Option<Plan::OwnerLease>,")
+                .expect("abort guard must retain its exact owner lease"),
         "Rust drops fields in declaration order, so pending evidence must precede its owner lease",
+    );
+    let abort_drop = source_scope(
+        SESSION_SOURCE,
+        "impl<Plan: SessionPlanV1> Drop for PendingSessionTransitionGuard<'_, Plan>",
+        "/// Линейный, полностью вычисленный",
+    );
+    assert!(
+        abort_drop
+            .find("retire_pending_transition(self.plan, pending);")
+            .expect("abort must recycle prospective evidence")
+            < abort_drop
+                .find("drop(self.owner.take());")
+                .expect("abort must release the exact owner"),
+        "prospective evidence must retire before the exact owner, including unwind cleanup",
     );
 
     let core_commit = source_scope(
@@ -538,8 +594,10 @@ fn staged_session_is_evidence_only_and_retired_operation_authority_cannot_return
         );
     }
     for required in [
-        "let (view, retirement) = self.commit_deferred();",
-        "drop(retirement);",
+        "let (pending, owner) = guard.take_parts();",
+        "let (view, retirement) = publish_session_transition(",
+        "retirement.retire_into(guard.plan);",
+        "*deferred_retirement = Some(retirement);",
         "mem::replace(raw_head,",
         "mem::replace(state, next_state)",
         "_owner: owner,",
@@ -566,16 +624,38 @@ fn staged_session_is_evidence_only_and_retired_operation_authority_cannot_return
         "pub(crate) struct DeferredSessionRetirement<Plan: SessionPlanV1>",
         "/// Линейный, полностью вычисленный",
     );
-    let retired_evidence = deferred_retirement
-        .find("_retired_verified: Option<Plan::Verified>,")
-        .expect("retirement must own displaced verified evidence");
     let retired_owner = deferred_retirement
         .find("_owner: Plan::OwnerLease,")
         .expect("retirement must retain the exact owner");
-    assert!(
-        retired_evidence < retired_owner,
-        "retired evidence must drop before its exact owner",
+    for retired in [
+        "retired_raw_head: Option<SessionObservationHeadV1>,",
+        "retired_verified: Option<Plan::Verified>,",
+        "retired_violation: Option<Plan::Violation>,",
+        "displaced_placeholder: SessionState<Plan::Verified, Plan::Violation>,",
+    ] {
+        assert!(
+            deferred_retirement
+                .find(retired)
+                .unwrap_or_else(|| panic!("retirement must own `{retired}`"))
+                < retired_owner,
+            "`{retired}` must drop before its exact owner, including unwind cleanup",
+        );
+    }
+    let retirement_impl = source_scope(
+        SESSION_SOURCE,
+        "impl<Plan: SessionPlanV1> DeferredSessionRetirement<Plan>",
+        "/// Abort-guard:",
     );
+    for required in [
+        "plan.retire_verified(verified);",
+        "plan.retire_violation(violation);",
+        "drop(self.retired_raw_head.take());",
+    ] {
+        assert!(
+            retirement_impl.contains(required),
+            "retirement must recycle arenas while the exact owner is pinned; missing `{required}`",
+        );
+    }
 
     let concrete_prepared = source_scope(
         PROGRAM_SOURCE,
@@ -633,34 +713,74 @@ fn staged_session_is_evidence_only_and_retired_operation_authority_cannot_return
 
 #[test]
 fn shared_observation_ssot_has_one_backing_without_lifecycle_or_adapter_facades() {
-    assert_eq!(
-        normalized_source_scope(
-            OBSERVATION_SOURCE,
-            "struct ObservedScenarioSet {",
-            "impl ObservedScenarioSet",
-        ),
-        concat!(
-            "struct ObservedScenarioSet { ",
-            "cases: Box<[PhysicalScenario]>, ",
-            "values: Box<[ColorSignal]>, ",
-            "provenance: Box<[ScenarioId]>, ",
-            "}",
-        ),
-        "the canonical scenario set must keep one flat physical backing",
+    let observation_syntax = compact_production_syntax(OBSERVATION_SOURCE);
+    let scenario_set = source_scope(
+        OBSERVATION_SOURCE,
+        "struct ObservedScenarioSet {",
+        "impl ObservedScenarioSet",
+    );
+    for reusable_field in [
+        "cases: Vec<PhysicalScenario>,",
+        "values: Vec<ColorSignal>,",
+        "provenance: Vec<ScenarioId>,",
+    ] {
+        assert_eq!(
+            scenario_set.matches(reusable_field).count(),
+            1,
+            "the canonical scenario set must own exactly one reusable `{reusable_field}`",
+        );
+    }
+    for retired_storage in ["Box<[", "Rc<", "RefCell<"] {
+        assert!(
+            !scenario_set.contains(retired_storage),
+            "the canonical scenario arrays must remain direct reusable Vec storage, not `{retired_storage}`",
+        );
+    }
+
+    let observation_backing = source_scope(
+        OBSERVATION_SOURCE,
+        "pub(super) struct ObservationBackingV1 {",
+        "impl ObservationBackingV1",
+    );
+    for backing_field in [
+        "arena_slot: ObservationArenaSlotV1,",
+        "schema: CanonicalObservationSchemaV1,",
+        "set: ObservedScenarioSet,",
+    ] {
+        assert_eq!(
+            observation_backing.matches(backing_field).count(),
+            1,
+            "one backing must own exactly one `{backing_field}`",
+        );
+    }
+    let observation_pool = source_scope(
+        OBSERVATION_SOURCE,
+        "pub(crate) struct ObservationArenaPoolV1 {",
+        "use arena::ObservationBackingV1;",
     );
     assert_eq!(
-        normalized_source_scope(
-            OBSERVATION_SOURCE,
-            "struct ObservationBackingV1 {",
-            "/// Sealed observation admitted",
-        ),
-        concat!(
-            "struct ObservationBackingV1 { ",
-            "schema: CanonicalObservationSchemaV1, ",
-            "set: ObservedScenarioSet, ",
-            "}",
-        ),
-        "the shared backing must own only canonical schema and scenario data",
+        observation_pool
+            .matches("slots: [Rc<ObservationBackingV1>; OBSERVATION_ARENA_SLOT_COUNT_V1],",)
+            .count(),
+        1,
+        "one Session-owned pool must retain every reusable observation backing",
+    );
+    for required in [
+        "pub(crate)constOBSERVATION_ARENA_SLOT_COUNT_V1:usize=3;",
+        "Rc::new(ObservationBackingV1{",
+        "Rc::get_mut(&mutself.slots[slot_index])",
+        "Ok(Rc::clone(&self.slots[slot_index]))",
+    ] {
+        assert!(
+            observation_syntax.contains(required),
+            "the three-slot reuse proof is incomplete; missing `{required}`",
+        );
+    }
+    assert!(
+        OBSERVATION_SOURCE.contains("mod arena {")
+            && OBSERVATION_SOURCE.contains("use arena::ObservationBackingV1;")
+            && OBSERVATION_SOURCE.contains("pub(crate) use arena::ObservationArenaPoolV1;"),
+        "compiler privacy must isolate backing construction inside the arena module",
     );
     assert_eq!(
         normalized_source_scope(
@@ -703,8 +823,8 @@ fn shared_observation_ssot_has_one_backing_without_lifecycle_or_adapter_facades(
         OBSERVATION_SOURCE
             .matches("schema.share_for_observation()")
             .count(),
-        2,
-        "only keyed and schema-ordered admission may share a schema handle",
+        1,
+        "only the persistent arena-pool constructor may share a schema handle",
     );
     assert!(
         !OBSERVATION_SOURCE.contains("schema: schema.clone()"),
@@ -754,8 +874,10 @@ fn shared_observation_ssot_has_one_backing_without_lifecycle_or_adapter_facades(
         "impl<Plan: SessionPlanV1> Session<Plan>",
     );
     for required in [
+        "observation_arenas: ObservationArenaPoolV1,",
         "raw_head: SessionObservationHeadV1,",
         "state: SessionState<Plan::Verified, Plan::Violation>,",
+        "deferred_retirement: Option<DeferredSessionRetirement<Plan>>,",
     ] {
         assert_eq!(
             session_owner.matches(required).count(),
@@ -766,6 +888,24 @@ fn shared_observation_ssot_has_one_backing_without_lifecycle_or_adapter_facades(
     assert!(
         !session_owner.contains("schema: CanonicalObservationSchemaV1,"),
         "the concrete plan is the sole Session-local owner of its canonical schema",
+    );
+    assert!(
+        !PROGRAM_ATTACHMENT_SOURCE.contains("retired_session"),
+        "deferred Session retirement belongs to Session, never Attachment",
+    );
+    let session_prepare = source_scope(
+        SESSION_SOURCE,
+        "pub(crate) fn prepare_update(",
+        "/// Stream-affine `Unknown` admission",
+    );
+    assert!(
+        session_prepare
+            .find("self.drain_deferred_retirement();")
+            .expect("prepare must drain internal retirement")
+            < session_prepare
+                .find(".try_acquire_owner()")
+                .expect("prepare must acquire the exact owner"),
+        "internal retirement must drain before owner acquisition or admission",
     );
     for forbidden in [
         "current_unknown",

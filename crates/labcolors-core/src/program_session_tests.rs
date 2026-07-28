@@ -6,9 +6,9 @@ use crate::lcs_occurrence::{
     BackgroundLuminanceRatio, ColorSignal, IEC_SRGB_D65_XYZ_FRAME_V1, SurroundProfileId,
 };
 use crate::observation::{
-    ObservationGroupId, ObservationHeadViewV1, ObservationPayloadInput, ObservationStreamId,
-    ObservationUpdateInput, ObservedScenarioSetInput, Revision, ScenarioId, ScenarioInput,
-    SurfaceInputBinding,
+    OBSERVATION_ARENA_SLOT_COUNT_V1, ObservationGroupId, ObservationHeadViewV1,
+    ObservationPayloadInput, ObservationStreamId, ObservationUpdateInput, ObservedScenarioSetInput,
+    Revision, ScenarioId, ScenarioInput, SurfaceInputBinding,
 };
 use crate::program_session::{
     CompositionProfile, ConstraintId, ConstraintInvocation, ConstraintSet, ObservationGroup,
@@ -786,7 +786,7 @@ fn independently_instantiated_streams_expire_with_their_compiled_owner_generatio
 }
 
 #[test]
-fn program_sessions_reuse_the_owner_canonical_schema_handle() {
+fn program_sessions_each_prewarm_three_arenas_over_the_owner_canonical_schema() {
     let compiled = exact_compiled(ConstraintSet::new(
         vec![ConstraintInvocation::hard(
             REQUIRED,
@@ -799,12 +799,22 @@ fn program_sessions_reuse_the_owner_canonical_schema_handle() {
     assert_eq!(compiled.observation_schema_strong_count_for_test(), 1);
 
     let mut first = compiled.instantiate(STREAM_A).unwrap();
-    assert_eq!(compiled.observation_schema_strong_count_for_test(), 1);
+    assert_eq!(
+        compiled.observation_schema_strong_count_for_test(),
+        1 + OBSERVATION_ARENA_SLOT_COUNT_V1,
+    );
     let second = compiled.instantiate(STREAM_B).unwrap();
-    assert_eq!(compiled.observation_schema_strong_count_for_test(), 1);
+    assert_eq!(
+        compiled.observation_schema_strong_count_for_test(),
+        1 + 2 * OBSERVATION_ARENA_SLOT_COUNT_V1,
+    );
 
     drop(second);
-    assert_eq!(compiled.observation_schema_strong_count_for_test(), 1);
+    let one_session_schema_handle_count = 1 + OBSERVATION_ARENA_SLOT_COUNT_V1;
+    assert_eq!(
+        compiled.observation_schema_strong_count_for_test(),
+        one_session_schema_handle_count,
+    );
 
     let schema_ptr = {
         let owner = first.plan().try_acquire_owner().unwrap();
@@ -813,11 +823,14 @@ fn program_sessions_reuse_the_owner_canonical_schema_handle() {
             .observation_schema(&owner)
             .backing_ptr_for_test()
     };
-    let report_schema_ptr = match first
+    let (report_schema_ptr, report_backing_ptr) = match first
         .commit(observed_update(STREAM_A, 1, &[(1, [0xFF; 3])]))
         .unwrap()
     {
-        SessionState::Ready { current } => current.report().observation().schema_ptr_for_test(),
+        SessionState::Ready { current } => (
+            current.report().observation().schema_ptr_for_test(),
+            current.report().observation().backing_ptr_for_test(),
+        ),
         _ => panic!("the exact Program must verify"),
     };
     assert_eq!(report_schema_ptr, schema_ptr);
@@ -825,12 +838,36 @@ fn program_sessions_reuse_the_owner_canonical_schema_handle() {
         panic!("the raw head must retain the admitted observation");
     };
     assert_eq!(raw.schema_ptr_for_test(), schema_ptr);
-    assert_eq!(compiled.observation_schema_strong_count_for_test(), 2);
+    assert_eq!(raw.backing_ptr_for_test(), report_backing_ptr);
+    assert_eq!(
+        compiled.observation_schema_strong_count_for_test(),
+        one_session_schema_handle_count,
+    );
 
-    first
+    let idempotent_report_backing_ptr = match first
         .commit(observed_update(STREAM_A, 1, &[(1, [0xFF; 3])]))
-        .unwrap();
-    assert_eq!(compiled.observation_schema_strong_count_for_test(), 2);
+        .unwrap()
+    {
+        SessionState::Ready { current } => current.report().observation().backing_ptr_for_test(),
+        _ => panic!("an exact replay must retain the verified Program report"),
+    };
+    assert_eq!(idempotent_report_backing_ptr, report_backing_ptr);
+    assert_eq!(
+        compiled.observation_schema_strong_count_for_test(),
+        one_session_schema_handle_count,
+    );
+
+    let observation_clone = match first.state() {
+        SessionState::Ready { current } => current.report().observation().clone(),
+        _ => panic!("the verified Program report must remain current"),
+    };
+    assert_eq!(observation_clone.schema_ptr_for_test(), schema_ptr);
+    assert_eq!(
+        compiled.observation_schema_strong_count_for_test(),
+        one_session_schema_handle_count,
+        "cloning an observation must not add a canonical schema Rc",
+    );
+    drop(observation_clone);
 
     drop(first);
     assert_eq!(compiled.observation_schema_strong_count_for_test(), 1);
@@ -859,6 +896,11 @@ fn multi_case_hard_failure_retains_the_full_matrix_without_outputs() {
         panic!("each candidate target fails on one admitted physical case");
     };
     assert!(previous.is_none());
+    assert_eq!(
+        cause.retained_output_value_count_for_test(),
+        0,
+        "conflict evidence must not retain output values without output authority",
+    );
     let cells = cause.report().cells();
     assert_eq!(
         cells.len(),

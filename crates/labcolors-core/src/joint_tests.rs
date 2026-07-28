@@ -12,10 +12,10 @@ use crate::joint::{
 };
 use crate::lcs_occurrence::ColorSignal;
 use crate::observation::{
-    ObservationHeadViewV1, ObservationOwnerV1, ObservationPayloadInput, ObservationStreamId,
-    ObservationUpdateInput, ObservedScenarioSetInput, PreparedObservationUpdateV1, Revision,
-    RevisionBoundObservationV1, ScenarioId, ScenarioInput, SurfaceInputBinding,
-    canonicalize_observation_schema, prepare_observation,
+    ObservationArenaPoolV1, ObservationHeadViewV1, ObservationOwnerV1, ObservationPayloadInput,
+    ObservationStreamId, ObservationUpdateInput, ObservedScenarioSetInput,
+    PreparedObservationUpdateV1, Revision, RevisionBoundObservationV1, ScenarioId, ScenarioInput,
+    SurfaceInputBinding, canonicalize_observation_schema, prepare_observation,
 };
 use crate::session::SessionObservationBindingPermitV1;
 use crate::wcag22::Wcag22CriterionV1;
@@ -84,8 +84,10 @@ fn exact_lower(id: u32, target: [u8; 3]) -> PointwiseJointHardConstraintV1<Exact
 fn observation(revision: u64, cases: Vec<(u32, [u8; 3])>) -> RevisionBoundObservationV1 {
     let mut owner = EmptyObservationOwner;
     let schema = canonicalize_observation_schema(vec![ROOT]).unwrap();
+    let mut arenas = ObservationArenaPoolV1::new(&schema);
     let prepared = prepare_observation(
         &mut owner,
+        &mut arenas,
         STREAM,
         &schema,
         ObservationUpdateInput {
@@ -121,8 +123,10 @@ fn observation_with_unrelated_surface(
     let unrelated_surface = SurfaceInputPortId::new(ROOT.value() - 1);
     let mut owner = EmptyObservationOwner;
     let schema = canonicalize_observation_schema(vec![ROOT, unrelated_surface]).unwrap();
+    let mut arenas = ObservationArenaPoolV1::new(&schema);
     let prepared = prepare_observation(
         &mut owner,
+        &mut arenas,
         STREAM,
         &schema,
         ObservationUpdateInput {

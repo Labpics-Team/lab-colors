@@ -58,7 +58,7 @@ SITE_ID = "point-support-retained-reference-surplus-v1"
 SOURCE_BINDING_LAW = "point-support-rust-whole-file-semantic-cone-v2"
 SOURCE_BINDING_DOMAIN = b"labcolors.point-support.rust-whole-file-semantic-cone.v2"
 EXPECTED_SOURCE_CAPSULE_SHA256 = (
-    "bc676c172691493be0b2a2a0910505a9b6047ca02e3e49d39fb4ffa8dbd92e4f"
+    "472d7e40538fc8864b66ddc65ab45728183b3a8cd309efa49011f3ce2b9f6619"
 )
 EXPECTED_Q55_PROOF_SHA256 = (
     "ac59cf89503170c789223b91d775213a19d4e571ef930f2ea609fcd51b14defd"
@@ -198,8 +198,8 @@ def verify_source_binding() -> tuple[str, int]:
         (POINT_SOURCE, b"    if !observation.shares_schema_backing_with(&plan.surface_schema) {\n", b"    if observation.shares_schema_backing_with(&plan.surface_schema) {\n"),
         (POINT_SOURCE, b"        _permit: SessionObservationBindingPermitV1,\n", b"        _permit: (),\n"),
         (POINT_SOURCE, b"use crate::wcag22::{Wcag22CriterionV1, Wcag22MeasurementV1, measure_wcag22_srgb8};", b"use crate::wcag22::{Wcag22CriterionV1, Wcag22MeasurementV1, measure_wcag22_srgb8 as canonical_measure_wcag22_srgb8};\nfn measure_wcag22_srgb8(foreground: [u8; 3], background: [u8; 3]) -> Wcag22MeasurementV1 { canonical_measure_wcag22_srgb8(background, foreground) }"),
-        (OBSERVATION_SOURCE, b"        self.backing.set.values(case_index)\n", b"        None\n"),
-        (OBSERVATION_SOURCE, b"        values.extend(bindings.iter().map(|binding| binding.value));\n", b"        values.extend(bindings.iter().map(|_| Srgb8::new([0, 0, 0])));\n"),
+        (OBSERVATION_SOURCE, b"        self.backing.set().values(case_index)\n", b"        None\n"),
+        (OBSERVATION_SOURCE, b"            .extend(bindings.iter().map(|binding| binding.value));\n", b"            .extend(bindings.iter().map(|_| ColorSignal::from_srgb8(Srgb8::new([0, 0, 0]))));\n"),
         (OBSERVATION_SOURCE, b"        Rc::ptr_eq(&self.0, &other.0)\n", b"        self == other\n"),
         (OBSERVATION_SOURCE, b"        Self(Rc::clone(&self.0))\n", b"        Self(Rc::from(self.as_slice()))\n"),
         (OBSERVATION_SOURCE, b"if expected_input != actual_input", b"if expected_input == actual_input"),
@@ -209,11 +209,11 @@ def verify_source_binding() -> tuple[str, int]:
         (LCS_OCCURRENCE_SOURCE, b"    pub(crate) const fn srgb8(self) -> Srgb8 {\n        self.srgb8\n    }", b"    pub(crate) const fn srgb8(self) -> Srgb8 {\n        Srgb8::new([0, 0, 0])\n    }"),
         (SESSION_SOURCE, b"            Self::Observed(observation) => ObservationHeadViewV1::Observed(observation),\n", b"            Self::Observed(_) => ObservationHeadViewV1::Empty,\n"),
         (SESSION_SOURCE, b"            let (raw_head, observation) = prepared.into_parts();\n            let raw_observation = observation.clone();\n", b"            let (raw_head, observation) = prepared.into_parts();\n            *raw_head = SessionObservationHeadV1::Observed(observation.clone());\n            let raw_observation = observation.clone();\n"),
-        (SESSION_SOURCE, b"                    let retired_raw_head = mem::replace(\n                        raw_head,\n                        SessionObservationHeadV1::Observed(raw_observation),\n                    );\n", b"                    let retired_raw_head = mem::replace(\n                        raw_head,\n                        SessionObservationHeadV1::Empty,\n                    );\n"),
+        (SESSION_SOURCE, b"                let retired_raw_head = mem::replace(\n                    raw_head,\n                    SessionObservationHeadV1::Observed(raw_observation),\n                );\n", b"                let retired_raw_head = mem::replace(\n                    raw_head,\n                    SessionObservationHeadV1::Empty,\n                );\n"),
         (SESSION_SOURCE, b"                Some(previous) => SessionState::Stale { previous },", b"                Some(_) => SessionState::Waiting,"),
         (SESSION_SOURCE, b"                    SessionObservationBindingPermitV1::mint(),", b"                    SessionObservationBindingPermitV1::for_test(),"),
-        (SESSION_SOURCE, b"                        SessionDecision::Verified(current) => {\n                            (SessionState::Ready { current }, last_verified)\n                        }\n", b"                        SessionDecision::Verified(current) => {\n                            (SessionState::Stale { previous: current }, last_verified)\n                        }\n"),
-        (SESSION_SOURCE, b"                        SessionDecision::Violation(cause) => (\n                            SessionState::Failed {\n                                cause,\n                                previous: last_verified,\n                            },\n                            None,\n                        ),\n", b"                        SessionDecision::Violation(_) => (\n                            SessionState::Waiting,\n                            last_verified,\n                        ),\n"),
+        (SESSION_SOURCE, b"                    SessionDecision::Verified(current) => {\n                        (SessionState::Ready { current }, last_verified)\n                    }\n", b"                    SessionDecision::Verified(current) => {\n                        (SessionState::Stale { previous: current }, last_verified)\n                    }\n"),
+        (SESSION_SOURCE, b"                    SessionDecision::Violation(cause) => (\n                        SessionState::Failed {\n                            cause,\n                            previous: last_verified,\n                        },\n                        None,\n                    ),\n", b"                    SessionDecision::Violation(_) => (\n                        SessionState::Waiting,\n                        last_verified,\n                    ),\n"),
         (SESSION_SOURCE, b"                return Err(SessionUpdateError::EvidenceBindingInvariant);\n", b"                unreachable!();\n"),
         (NUMERICS_SOURCE, b"proof_ids: [NumericalProofIdV2::PointSupportReferenceSurplusIntegerV1],\n            bound_status: Available", b"proof_ids: [NumericalProofIdV2::PointSupportReferenceSurplusIntegerV1],\n            bound_status: Unavailable"),
         (COMPOSITION_SOURCE, b"f64::from(backdrop) + alpha * (f64::from(tint) - f64::from(backdrop))", b"f64::from(tint)"),

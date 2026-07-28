@@ -12,11 +12,12 @@ use crate::appearance::{
 };
 use crate::lcs_occurrence::ColorSignal;
 use crate::observation::{
-    CanonicalObservationSchemaV1, ObservationError, ObservationHeadViewV1, ObservationOwnerV1,
-    ObservationPayloadInput, ObservationStreamId, ObservationUpdateInput, ObservedScenarioSetInput,
-    PreparedObservationUpdateV1, Revision, RevisionBoundObservationV1, RevisionBoundUnknownV1,
-    ScenarioId, ScenarioInput, SchemaOrderedScenarioSourceV1, SurfaceInputBinding, UnknownReasonId,
-    canonicalize_observation_schema, prepare_observation, prepare_schema_ordered_observation,
+    CanonicalObservationSchemaV1, ObservationArenaPoolV1, ObservationError, ObservationHeadViewV1,
+    ObservationOwnerV1, ObservationPayloadInput, ObservationStreamId, ObservationUpdateInput,
+    ObservedScenarioSetInput, PreparedObservationUpdateV1, Revision, RevisionBoundObservationV1,
+    RevisionBoundUnknownV1, ScenarioId, ScenarioInput, SchemaOrderedScenarioSourceV1,
+    SurfaceInputBinding, UnknownReasonId, canonicalize_observation_schema, prepare_observation,
+    prepare_schema_ordered_observation,
 };
 
 const PORT_A: SurfaceInputPortId = SurfaceInputPortId::new(10);
@@ -46,21 +47,44 @@ impl ObservationOwnerV1 for TestOwner {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug)]
 struct TestState {
     stream: ObservationStreamId,
     schema: CanonicalObservationSchemaV1,
+    arenas: ObservationArenaPoolV1,
     owner: TestOwner,
 }
+
+impl Clone for TestState {
+    fn clone(&self) -> Self {
+        let schema = self.schema.clone();
+        Self {
+            stream: self.stream,
+            arenas: ObservationArenaPoolV1::new(&schema),
+            schema,
+            owner: self.owner.clone(),
+        }
+    }
+}
+
+impl PartialEq for TestState {
+    fn eq(&self, other: &Self) -> bool {
+        self.stream == other.stream && self.schema == other.schema && self.owner == other.owner
+    }
+}
+
+impl Eq for TestState {}
 
 impl TestState {
     fn new(
         stream: ObservationStreamId,
         schema: Vec<SurfaceInputPortId>,
     ) -> Result<Self, ObservationError> {
+        let schema = canonicalize_observation_schema(schema)?;
         Ok(Self {
             stream,
-            schema: canonicalize_observation_schema(schema)?,
+            arenas: ObservationArenaPoolV1::new(&schema),
+            schema,
             owner: TestOwner::Empty,
         })
     }
@@ -69,7 +93,13 @@ impl TestState {
         &mut self,
         update: ObservationUpdateInput,
     ) -> Result<PreparedObservationUpdateV1<'_, TestOwner>, ObservationError> {
-        prepare_observation(&mut self.owner, self.stream, &self.schema, update)
+        prepare_observation(
+            &mut self.owner,
+            &mut self.arenas,
+            self.stream,
+            &self.schema,
+            update,
+        )
     }
 
     fn apply(
@@ -265,6 +295,7 @@ fn prepare_ordered<'owner>(
 ) -> Result<PreparedObservationUpdateV1<'owner, TestOwner>, ObservationError> {
     prepare_schema_ordered_observation(
         &mut state.owner,
+        &mut state.arenas,
         state.stream,
         &state.schema,
         Revision::new(revision),
@@ -537,10 +568,12 @@ fn keyed_schema_is_intrinsic_to_revision_bound_observation_identity() {
     );
 
     let alternate_schema = canonicalize_observation_schema(vec![PORT_B]).unwrap();
+    let mut alternate_arenas = ObservationArenaPoolV1::new(&alternate_schema);
     let before = left.clone();
     assert!(matches!(
         prepare_observation(
             &mut left.owner,
+            &mut alternate_arenas,
             STREAM,
             &alternate_schema,
             observed_update(
@@ -1034,6 +1067,7 @@ fn schema_ordered_scratch_exhaustion_precedes_every_source_access() {
     assert!(matches!(
         prepare_schema_ordered_observation(
             &mut state.owner,
+            &mut state.arenas,
             state.stream,
             &state.schema,
             Revision::new(1),

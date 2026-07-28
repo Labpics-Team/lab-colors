@@ -5,10 +5,11 @@ use crate::Srgb8;
 use crate::appearance::SurfaceInputPortId;
 use crate::lcs_occurrence::ColorSignal;
 use crate::observation::{
-    CanonicalObservationSchemaV1, ObservationError, ObservationHeadViewV1, ObservationPayloadInput,
-    ObservationStreamId, ObservationUpdateInput, ObservedScenarioSetInput, Revision,
-    RevisionBoundObservationV1, ScenarioId, ScenarioInput, SchemaOrderedScenarioSourceV1,
-    SurfaceInputBinding, UnknownReasonId, canonicalize_observation_schema,
+    CanonicalObservationSchemaV1, OBSERVATION_ARENA_SLOT_COUNT_V1, ObservationError,
+    ObservationHeadViewV1, ObservationPayloadInput, ObservationStreamId, ObservationUpdateInput,
+    ObservedScenarioSetInput, Revision, RevisionBoundObservationV1, ScenarioId, ScenarioInput,
+    SchemaOrderedScenarioSourceV1, SurfaceInputBinding, UnknownReasonId,
+    canonicalize_observation_schema,
 };
 use crate::session::{
     PreparedSessionDispositionV1, Session, SessionDecision, SessionEvidenceV1,
@@ -605,14 +606,15 @@ fn exact_replay_is_idempotent_and_never_invokes_the_plan() {
 }
 
 #[test]
-fn schema_ordered_admission_shares_only_the_plan_schema_handle() {
+fn schema_ordered_admission_reuses_the_prewarmed_canonical_schema_arenas() {
     let (mut session, control, schema_ptr) = session();
+    let session_schema_handle_count = 1 + OBSERVATION_ARENA_SLOT_COUNT_V1;
     assert_eq!(
         session
             .plan()
             .observation_schema(&())
             .strong_count_for_test(),
-        1,
+        session_schema_handle_count,
     );
     let source = OneOrderedScenario {
         id: ScenarioId::new(1),
@@ -627,26 +629,60 @@ fn schema_ordered_admission_shares_only_the_plan_schema_handle() {
         panic!("white sentinel input must verify");
     };
     assert_eq!(current.observation.schema_ptr_for_test(), schema_ptr);
+    let observation_backing_ptr = current.observation.backing_ptr_for_test();
     assert_eq!(
         session
             .plan()
             .observation_schema(&())
             .strong_count_for_test(),
-        2,
+        session_schema_handle_count,
     );
     assert_eq!(control.evaluation_count(), 1);
 
-    session
+    let idempotent_observation_backing_ptr = match session
         .commit_schema_ordered(Revision::new(1), &source, &mut order_scratch)
-        .unwrap();
+        .unwrap()
+    {
+        SessionState::Ready { current } => current.observation.backing_ptr_for_test(),
+        _ => panic!("an exact schema-ordered replay must retain Ready"),
+    };
+    assert_eq!(idempotent_observation_backing_ptr, observation_backing_ptr);
     assert_eq!(
         session
             .plan()
             .observation_schema(&())
             .strong_count_for_test(),
-        2,
+        session_schema_handle_count,
     );
     assert_eq!(control.evaluation_count(), 1);
+
+    let observation_clone = match session.state() {
+        SessionState::Ready { current } => current.observation.clone(),
+        _ => panic!("the verified observation must remain current"),
+    };
+    assert_eq!(observation_clone.schema_ptr_for_test(), schema_ptr);
+    assert_eq!(
+        session
+            .plan()
+            .observation_schema(&())
+            .strong_count_for_test(),
+        session_schema_handle_count,
+        "cloning an observation must not clone the canonical schema Rc",
+    );
+    drop(observation_clone);
+
+    let schema_probe = session.plan().observation_schema(&()).clone();
+    assert_eq!(
+        schema_probe.strong_count_for_test(),
+        session_schema_handle_count + 1,
+    );
+    drop(session);
+    assert_eq!(schema_probe.backing_ptr_for_test(), schema_ptr);
+    assert_eq!(
+        schema_probe.strong_count_for_test(),
+        1,
+        "dropping the Session must release all three persistent arena schema handles",
+    );
 }
 
 #[test]
@@ -804,13 +840,13 @@ fn deferred_commit_returns_before_hostile_retirement_destructor_runs() {
     panic_on_next_drop.set(true);
     let committed =
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| prepared.commit_deferred()));
-    let (view, retirement) = committed.expect("deferred commit must only move retirement");
+    let view = committed.expect("deferred commit must only park retirement");
     assert_eq!(view.raw_head().revision(), Some(Revision::new(2)));
     assert!(matches!(view.state(), SessionState::Ready { .. }));
     assert_eq!(drops.get(), 0);
 
     let retirement = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        drop(retirement);
+        let _ = session.prepare_update(observed_update(3, [255; 3]));
     }));
     assert!(
         retirement.is_err(),
@@ -851,10 +887,15 @@ fn deferred_retirement_keeps_its_exact_owner_alive_through_old_evidence_drop() {
     drop(generation);
     assert!(alive.get());
 
-    let (_view, retirement) = prepared.commit_deferred();
+    let view = prepared.commit_deferred();
     assert!(events.borrow().is_empty());
     assert!(alive.get());
-    drop(retirement);
+    assert_eq!(view.raw_head().revision(), Some(Revision::new(2)));
+
+    assert!(matches!(
+        session.prepare_update(observed_update(3, [255; 3])),
+        Err(SessionUpdateError::OwnerExpired)
+    ));
 
     assert!(!alive.get());
     assert!(generation_weak.upgrade().is_none());

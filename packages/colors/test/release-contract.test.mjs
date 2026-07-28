@@ -482,6 +482,215 @@ test("MSRV and packaged Rust crate gates are executable CI contracts", () => {
   assert.match(ci, /DEPS_DIR="\$RUNNER_TEMP\/chrome-deps-\$GITHUB_JOB"/);
   assert.match(ci, /APT_LISTS="\$DEPS_DIR\/apt-lists"/);
   assert.match(ci, /APT_CACHE="\$DEPS_DIR\/apt-cache"/);
+  const chromeInstallStep = "name: install Chrome + dependencies (Chrome for Testing + apt-get download)";
+  const assertAptSourceIsolation = (workflow) => {
+    const active = workflowRunScript(workflow, chromeInstallStep)
+      .split("\n")
+      .filter((line) => !line.trimStart().startsWith("#"))
+      .join("\n");
+    const activeLines = active.split("\n").map((line) => line.trim());
+    assert.equal(
+      activeLines[0],
+      "set -euo pipefail",
+      "Chrome dependency install must start in fail-closed shell mode",
+    );
+    assert.deepEqual(
+      activeLines.filter((line) => /\bset\b/u.test(line)),
+      ["set -euo pipefail"],
+      "Chrome dependency install cannot weaken fail-closed shell mode",
+    );
+    assert.equal(
+      active.match(/^readonly APT_SOURCES="\$DEPS_DIR\/apt-sources"$/gmu)?.length,
+      1,
+      "Chrome APT source root must have one active job-local authority",
+    );
+    assert.equal(
+      active.match(/\bAPT_SOURCES(?:\[[^\]\n]*\])?\s*\+?=/gu)?.length,
+      1,
+      "Chrome APT source authority must be assigned exactly once",
+    );
+    assert.doesNotMatch(active, /\bunset\b[^\n;]*\bAPT_SOURCES\b/gu);
+    const optionArrays = [...active.matchAll(
+      /^[ \t]*APT_OPTIONS=\(\n(?<body>(?:[ \t]+[^\n]*\n)+)^[ \t]*\)$/gmu,
+    )];
+    assert.equal(optionArrays.length, 1, "Chrome step must have one active APT_OPTIONS array");
+    assert.equal(
+      active.match(/\bAPT_OPTIONS(?:\[[^\]\n]*\])?\s*\+?=/gu)?.length,
+      1,
+      "Chrome APT options must be assigned exactly once",
+    );
+    assert.equal(active.match(/^readonly APT_OPTIONS$/gmu)?.length, 1);
+    assert.doesNotMatch(active, /\bunset\b[^\n;]*\bAPT_OPTIONS\b/gu);
+    const optionBody = optionArrays[0].groups?.body ?? "";
+    for (const option of [
+      '-o "Dir::Etc::sourcelist=$APT_SOURCES/sources.list"',
+      '-o "Dir::Etc::sourceparts=$APT_SOURCES/sources.list.d"',
+    ]) {
+      assert.equal(
+        optionBody.split("\n").filter((line) => line.trim() === option).length,
+        1,
+        `missing active isolated-source option: ${option}`,
+      );
+    }
+    assert.match(active, /^: "\$\{ID:\?missing distro ID\}"$/mu);
+    assert.match(active, /^: "\$\{VERSION_CODENAME:\?missing distro codename\}"$/mu);
+    assert.match(active, /^case "\$ID:\$VERSION_CODENAME" in$/mu);
+    assert.match(
+      active,
+      /^\s*debian:bookworm\|ubuntu:jammy\)\n\s+ALSA_PACKAGE=libasound2\n\s+;;$/mu,
+    );
+    assert.match(
+      active,
+      /^\s*debian:trixie\|ubuntu:noble\)\n\s+ALSA_PACKAGE=libasound2t64\n\s+;;$/mu,
+    );
+    assert.match(
+      active,
+      /^\s*\*\)\n\s+echo "unsupported Chrome dependency release: \$ID:\$VERSION_CODENAME" >&2\n\s+exit 1\n\s+;;$/mu,
+    );
+    assert.deepEqual(
+      activeLines.filter((line) => /\bALSA_PACKAGE\b/u.test(line)),
+      [
+        "ALSA_PACKAGE=libasound2",
+        "ALSA_PACKAGE=libasound2t64",
+        "readonly ALSA_PACKAGE",
+        '(cd "$DEBS_DIR" && apt-get "${APT_OPTIONS[@]}" download libnspr4 libnss3 "$ALSA_PACKAGE" libgbm1 2>&1)',
+      ],
+      "the release matrix must be the sole ALSA package authority",
+    );
+    const trustedSourceLines = [
+      '"deb [signed-by=$DISTRO_KEYRING] https://deb.debian.org/debian $VERSION_CODENAME main" \\',
+      '"deb [signed-by=$DISTRO_KEYRING] https://deb.debian.org/debian $VERSION_CODENAME-updates main" \\',
+      '"deb [signed-by=$DISTRO_KEYRING] https://security.debian.org/debian-security $VERSION_CODENAME-security main" \\',
+      '"deb [signed-by=$DISTRO_KEYRING] https://archive.ubuntu.com/ubuntu $VERSION_CODENAME main" \\',
+      '"deb [signed-by=$DISTRO_KEYRING] https://archive.ubuntu.com/ubuntu $VERSION_CODENAME-updates main" \\',
+      '"deb [signed-by=$DISTRO_KEYRING] https://security.ubuntu.com/ubuntu $VERSION_CODENAME-security main" \\',
+    ];
+    assert.deepEqual(
+      activeLines.filter((line) => /(?:^|["'])deb\s/u.test(line)),
+      trustedSourceLines,
+      "the generated source inventory must contain only the six exact distro sources",
+    );
+    assert.deepEqual(
+      activeLines.filter((line) => /\$\{?APT_SOURCES\}?\/sources\.list/u.test(line)),
+      [
+        '"$APT_SOURCES/sources.list.d"',
+        '> "$APT_SOURCES/sources.list"',
+        '> "$APT_SOURCES/sources.list"',
+        '-o "Dir::Etc::sourcelist=$APT_SOURCES/sources.list"',
+        '-o "Dir::Etc::sourceparts=$APT_SOURCES/sources.list.d"',
+      ],
+      "the isolated source inventory must have one closed set of readers and writers",
+    );
+    assert.deepEqual(
+      activeLines.filter((line) => line.startsWith("DISTRO_KEYRING=")),
+      [
+        "DISTRO_KEYRING=/usr/share/keyrings/debian-archive-keyring.gpg",
+        "DISTRO_KEYRING=/usr/share/keyrings/ubuntu-archive-keyring.gpg",
+      ],
+      "each distro branch must bind its official archive keyring exactly once",
+    );
+    assert.equal(active.match(/^readonly DISTRO_KEYRING$/gmu)?.length, 1);
+    assert.equal(active.match(/^\s*test -r "\$DISTRO_KEYRING"$/gmu)?.length, 2);
+    assert.match(
+      active,
+      /^\s*\*\)\n\s+echo "unsupported Chrome dependency distro: \$ID" >&2\n\s+exit 1\n\s+;;$/mu,
+    );
+
+    const optionsEnd = optionArrays[0].index + optionArrays[0][0].length;
+    const afterOptions = active.slice(optionsEnd);
+    assert.match(afterOptions, /^\nreadonly APT_OPTIONS\napt-get /u);
+    const update = active.indexOf('apt-get "${APT_OPTIONS[@]}" update', optionsEnd);
+    const download = active.indexOf('apt-get "${APT_OPTIONS[@]}" download', update);
+    assert.ok(optionsEnd < update && update < download);
+    assert.deepEqual(
+      active
+        .split("\n")
+        .map((line) => line.trim())
+        .filter((line) => /(?:^|[\s;&(|])apt(?:-get)?(?=\s)/u.test(line)),
+      [
+        'apt-get "${APT_OPTIONS[@]}" update',
+        '(cd "$DEBS_DIR" && apt-get "${APT_OPTIONS[@]}" download libnspr4 libnss3 "$ALSA_PACKAGE" libgbm1 2>&1)',
+      ],
+      "every APT invocation must use the one immutable isolated option set",
+    );
+  };
+  assertAptSourceIsolation(ci);
+  for (const mutant of [
+    ci.replace(
+      '            -o "Dir::Etc::sourcelist=$APT_SOURCES/sources.list"',
+      '            # -o "Dir::Etc::sourcelist=$APT_SOURCES/sources.list"',
+    ),
+    ci.replace(
+      '          apt-get "${APT_OPTIONS[@]}" update',
+      '          APT_OPTIONS=()\n          apt-get "${APT_OPTIONS[@]}" update',
+    ),
+    ci.replace(
+      '          apt-get "${APT_OPTIONS[@]}" update',
+      '          APT_SOURCES=/etc/apt\n          apt-get "${APT_OPTIONS[@]}" update',
+    ),
+    ci.replace(
+      '          apt-get "${APT_OPTIONS[@]}" update',
+      '          :; APT_OPTIONS=()\n          apt-get "${APT_OPTIONS[@]}" update',
+    ),
+    ci.replace(
+      '          (cd "$DEBS_DIR" && apt-get',
+      '          unset APT_OPTIONS\n          (cd "$DEBS_DIR" && apt-get',
+    ),
+    ci.replace(
+      '          apt-get "${APT_OPTIONS[@]}" update',
+      '          apt-get download libnss3\n          apt-get "${APT_OPTIONS[@]}" update',
+    ),
+    ci.replace(
+      "debian:bookworm|ubuntu:jammy)",
+      "debian:bookworm|ubuntu:noble)",
+    ),
+    ci.replace(
+      "https://deb.debian.org/debian $VERSION_CODENAME main",
+      "https://example.invalid/debian $VERSION_CODENAME main",
+    ),
+    ci.replace(
+      "[signed-by=$DISTRO_KEYRING] https://archive.ubuntu.com/ubuntu",
+      "[signed-by=/tmp/forged.gpg] https://archive.ubuntu.com/ubuntu",
+    ),
+    ci.replace(
+      "DISTRO_KEYRING=/usr/share/keyrings/debian-archive-keyring.gpg",
+      "DISTRO_KEYRING=/tmp/forged.gpg",
+    ),
+    ci.replace(
+      "https://security.ubuntu.com/ubuntu $VERSION_CODENAME-security main",
+      "https://security.ubuntu.com/ubuntu stable-security main",
+    ),
+    ci.replace(
+      '          readonly ALSA_PACKAGE\n          case "$ID" in',
+      '          if [[ "$ID:$VERSION_CODENAME" == ubuntu:jammy ]]; then ALSA_PACKAGE=libasound2t64; fi\n' +
+        '          readonly ALSA_PACKAGE\n          case "$ID" in',
+    ),
+    ci.replace(
+      "          readonly DISTRO_KEYRING\n",
+      "          readonly DISTRO_KEYRING\n" +
+        '          echo "deb [trusted=yes] https://deb.debian.org/debian sid main" >> "$APT_SOURCES/sources.list"\n',
+    ),
+    ci.replace(
+      "        run: |\n          set -euo pipefail\n          # -- CfT chrome + chromedriver --",
+      "        run: |\n          set +e\n          # -- CfT chrome + chromedriver --",
+    ),
+    ci.replace(
+      '          readonly ALSA_PACKAGE\n          case "$ID" in',
+      '          ALSA_PACKAGE+=t64\n          readonly ALSA_PACKAGE\n          case "$ID" in',
+    ),
+    ci.replace(
+      "          readonly ALSA_PACKAGE\n",
+      "          readonly ALSA_PACKAGE\n          :; set +e\n",
+    ),
+    ci.replace(
+      "          readonly DISTRO_KEYRING\n",
+      "          readonly DISTRO_KEYRING\n" +
+        '          echo "deb https://example.invalid/debian sid main" >> $APT_SOURCES/sources.list\n',
+    ),
+  ]) {
+    assert.notEqual(mutant, ci, "hostile APT mutation must bite");
+    assert.throws(() => assertAptSourceIsolation(mutant));
+  }
   assert.match(ci, /Dir::State::lists=\$APT_LISTS/);
   assert.match(ci, /Dir::State::status=\/var\/lib\/dpkg\/status/);
   assert.match(ci, /Dir::Cache=\$APT_CACHE/);

@@ -70,8 +70,7 @@ use crate::program_session::{
     TargetCandidateV1 as CoreTargetCandidateV1, TargetId,
 };
 use crate::session::{
-    DeferredSessionRetirement, PreparedSessionTransition, Session, SessionState,
-    SessionUpdateError, SessionView,
+    PreparedSessionTransition, Session, SessionState, SessionUpdateError, SessionView,
 };
 use crate::wcag22::{
     Wcag22ClientDeclaredNotApplicableV1, Wcag22CriterionV1, Wcag22EvaluationErrorV1,
@@ -85,7 +84,6 @@ type CoreProgramSessionV1 = Session<CoreProgramPlanV1>;
 type CoreProgramStateV1 = SessionState<CoreVerifiedV1, CoreConflictV1>;
 type CoreProgramSessionViewV1<'a> = SessionView<'a, CoreProgramPlanV1>;
 type CorePreparedSessionTransitionV1<'a> = PreparedSessionTransition<'a, CoreProgramPlanV1>;
-type CoreDeferredSessionRetirementV1 = DeferredSessionRetirement<CoreProgramPlanV1>;
 type CoreProgramPlanErrorV1 = ProgramSessionEvaluationError<CoreProgramEvaluatorErrorV1>;
 type CoreProgramConstraintCellV1 = ProgramConstraintCellV1<CoreProgramEvaluatorsV1>;
 type CoreExactPassEvidenceV1 = ProgramVisiblePointPassEvidence<ExactSrgb8IdentityV1>;
@@ -2751,6 +2749,8 @@ pub(crate) enum EvaluatorProtocolFailureV1 {
 pub(crate) enum UpdateInvariantV1 {
     /// Заимствованный matching Owner не удержал свою эпоху живой.
     OwnerAuthority,
+    /// Закрытое хранилище наблюдений нарушило собственный arena-контракт.
+    ObservationStorage,
     /// Каноническая observation schema разошлась со скомпилированным binding.
     ObservationBinding,
     /// Сохранённое evidence не принадлежит допускаемому observation.
@@ -2773,6 +2773,8 @@ pub(crate) enum UpdateInvariantV1 {
 pub(crate) enum UpdateInvariantFailureV1 {
     /// Заимствованный matching Owner не удержал свою эпоху живой.
     OwnerAuthority,
+    /// Закрытое хранилище наблюдений нарушило собственный arena-контракт.
+    ObservationStorage,
     /// Каноническая observation schema разошлась со скомпилированным binding.
     ObservationBinding {
         /// Точное расхождение schema или stream.
@@ -2824,6 +2826,7 @@ impl UpdateInvariantFailureV1 {
     pub(crate) const fn contract(&self) -> UpdateInvariantV1 {
         match self {
             Self::OwnerAuthority => UpdateInvariantV1::OwnerAuthority,
+            Self::ObservationStorage => UpdateInvariantV1::ObservationStorage,
             Self::ObservationBinding { .. } => UpdateInvariantV1::ObservationBinding,
             Self::EvidenceBinding => UpdateInvariantV1::EvidenceBinding,
             Self::EvaluatorProtocol { .. } => UpdateInvariantV1::EvaluatorProtocol,
@@ -3322,6 +3325,9 @@ fn map_observation_error(error: ObservationError) -> UpdateErrorV1 {
         ObservationError::ResourceExhausted => UpdateErrorV1::ResourceExhausted {
             phase: UpdatePhaseV1::ObservationAdmission,
         },
+        ObservationError::InternalInvariant => UpdateErrorV1::InternalInvariant {
+            source: UpdateInvariantFailureV1::ObservationStorage,
+        },
     }
 }
 
@@ -3665,6 +3671,9 @@ mod update_error_projection_tests {
                     UpdateInvariantFailureV1::OwnerAuthority => {
                         UpdateInvariantV1::OwnerAuthority
                     }
+                    UpdateInvariantFailureV1::ObservationStorage => {
+                        UpdateInvariantV1::ObservationStorage
+                    }
                     UpdateInvariantFailureV1::ObservationBinding { .. } => {
                         UpdateInvariantV1::ObservationBinding
                     }
@@ -3690,6 +3699,10 @@ mod update_error_projection_tests {
         assert_invariant(
             map_session_update_error(SessionUpdateError::OwnerExpired),
             UpdateInvariantFailureV1::OwnerAuthority,
+        );
+        assert_invariant(
+            map_observation_error(ObservationError::InternalInvariant),
+            UpdateInvariantFailureV1::ObservationStorage,
         );
         assert_invariant(
             map_session_update_error(SessionUpdateError::EvidenceBindingInvariant),

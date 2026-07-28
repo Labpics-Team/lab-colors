@@ -53,6 +53,73 @@ class ProgramPublicSurfaceTests(unittest.TestCase):
         self.assertEqual(count, 1)
         self.assertEqual([leak.public_item for leak in leaks], ["struct.AnyClientName.html"])
 
+    def test_arbitrary_session_alias_is_rejected_by_origin(self) -> None:
+        self.write_all("struct.SessionAlias.html")
+        self.write_item(
+            "struct.SessionAlias.html",
+            '<a class="src" href="../src/labcolors_core/session.rs.html#367">Source</a>',
+        )
+        _, leaks = program_public_surface(self.crate)
+        self.assertEqual(len(leaks), 1)
+
+    def test_public_page_inside_forbidden_module_is_rejected(self) -> None:
+        for module in ("observation", "program", "program_session", "session"):
+            with self.subTest(module=module):
+                item = f"{module}/struct.InternalItem.html"
+                self.write_all(item)
+                self.write_item(
+                    item,
+                    (
+                        '<a class="src" href="../../src/labcolors_core/'
+                        'srgb8.rs.html#1">Source</a>'
+                    ),
+                )
+                count, leaks = program_public_surface(self.crate)
+                self.assertEqual(count, 1)
+                self.assertEqual(len(leaks), 1)
+                self.assertEqual(leaks[0].public_item, item)
+                self.assertEqual(
+                    leaks[0].route,
+                    f"labcolors_core/{item}",
+                )
+
+    def test_similar_module_name_is_not_rejected(self) -> None:
+        self.write_all("sessionish/struct.ClientItem.html")
+        self.write_item(
+            "sessionish/struct.ClientItem.html",
+            (
+                '<a class="src" href="../../src/labcolors_core/'
+                'srgb8.rs.html#1">Source</a>'
+            ),
+        )
+        count, leaks = program_public_surface(self.crate)
+        self.assertEqual(count, 1)
+        self.assertEqual(leaks, [])
+
+    def test_arbitrary_program_session_alias_is_rejected_by_origin(self) -> None:
+        self.write_all("struct.ProgramSessionAlias.html")
+        self.write_item(
+            "struct.ProgramSessionAlias.html",
+            (
+                '<a class="src" href="../src/labcolors_core/'
+                'program_session.rs.html#2729">Source</a>'
+            ),
+        )
+        _, leaks = program_public_surface(self.crate)
+        self.assertEqual(len(leaks), 1)
+
+    def test_arbitrary_observation_alias_is_rejected_by_origin(self) -> None:
+        self.write_all("struct.ObservationAlias.html")
+        self.write_item(
+            "struct.ObservationAlias.html",
+            (
+                '<a class="src" href="../src/labcolors_core/'
+                'observation.rs.html#249">Source</a>'
+            ),
+        )
+        _, leaks = program_public_surface(self.crate)
+        self.assertEqual(len(leaks), 1)
+
     def test_nested_alias_is_rejected_without_a_name_allowlist(self) -> None:
         self.write_all("facade/struct.UnrelatedName.html")
         self.write_item(

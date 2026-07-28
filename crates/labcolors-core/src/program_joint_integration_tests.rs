@@ -24,7 +24,7 @@ use crate::program_session::{
     ProgramConstraintEvaluatorSetV1, ProgramConstraintSubjectV1, ProgramSessionEvaluationError,
     ReportModeV1, Source, SourceId, Surface, Target, TargetCandidateChoiceV1, TargetCandidateId,
     TargetCandidateV1, TargetDomainV1, TargetId, checked_program_evaluation_cell_counts_for_test,
-    fail_program_preflight_reservation_for_test,
+    fail_program_preflight_reservation_for_test, program_preflight_failure_remaining_for_test,
 };
 use crate::session::{SessionState, SessionUpdateError};
 use crate::session_tests::CommitSessionUpdateForTest as _;
@@ -289,6 +289,68 @@ impl ProgramConstraintEvaluatorSetV1 for FinalViolationDiagnosticErrorEvaluatorS
 
     fn constraint_content(&self, invocation: Self::Invocation) -> ProgramConstraintContentV1 {
         ExactSrgb8IdentityV1.program_constraint_content_v1(invocation)
+    }
+}
+
+#[derive(Debug)]
+struct PanicOnceEvaluatorControlV1 {
+    armed: std::cell::Cell<bool>,
+    calls: std::cell::Cell<usize>,
+}
+
+/// Паникует только на первой реальной оценке: тест отличает unwind после
+/// получения evaluation-arena lease от более ранней паники.
+#[derive(Debug, Clone)]
+struct PanicOnceEvaluatorSetV1 {
+    control: std::rc::Rc<PanicOnceEvaluatorControlV1>,
+}
+
+impl PanicOnceEvaluatorSetV1 {
+    fn new() -> Self {
+        Self {
+            control: std::rc::Rc::new(PanicOnceEvaluatorControlV1 {
+                armed: std::cell::Cell::new(true),
+                calls: std::cell::Cell::new(0),
+            }),
+        }
+    }
+
+    fn calls(&self) -> usize {
+        self.control.calls.get()
+    }
+}
+
+impl ProgramConstraintEvaluatorSetV1 for PanicOnceEvaluatorSetV1 {
+    type Invocation = Wcag22CriterionV1;
+    type PassEvidence = ProgramVisiblePointPassEvidence<Wcag22Srgb8V1>;
+    type ViolationEvidence = ProgramVisiblePointViolationEvidence<Wcag22Srgb8V1>;
+    type Error = ApplicableWcag22EvaluationErrorV1;
+
+    fn assess(
+        &self,
+        point: ProgramPointOccurrenceV1,
+        invocation: Self::Invocation,
+    ) -> Result<
+        HardDecision<Self::PassEvidence, Self::ViolationEvidence>,
+        ProgramPointAssessmentErrorV1<Self::Error>,
+    > {
+        self.control.calls.set(self.control.calls.get() + 1);
+        if self.control.armed.replace(false) {
+            panic!("hostile evaluator panic after the arena lease was acquired");
+        }
+        assess_program_point_hard(point, &Wcag22Srgb8V1, invocation)
+    }
+
+    fn pass_binding(evidence: &Self::PassEvidence) -> ProgramVisiblePointBindingV1 {
+        *evidence.binding()
+    }
+
+    fn violation_binding(evidence: &Self::ViolationEvidence) -> ProgramVisiblePointBindingV1 {
+        *evidence.binding()
+    }
+
+    fn constraint_content(&self, invocation: Self::Invocation) -> ProgramConstraintContentV1 {
+        Wcag22Srgb8V1.program_constraint_content_v1(invocation)
     }
 }
 
@@ -641,6 +703,82 @@ fn authored_finite_target_values_keep_only_opaque_identity_and_explicit_policy()
     assert_eq!(state.choices(), &[choice]);
     let order = DeclaredJointSelectionV1::new(vec![state.clone()]);
     assert_eq!(order.states(), &[state]);
+}
+
+#[test]
+fn evaluator_unwind_does_not_consume_the_reusable_evaluation_arena() {
+    let evaluator = PanicOnceEvaluatorSetV1::new();
+    let probe = evaluator.clone();
+    let compiled = point_program(
+        signal(0),
+        Target::fixed(TARGET, SOURCE),
+        vec![ConstraintInvocation::hard(
+            ConstraintId::new(1),
+            OCCURRENCE,
+            Wcag22CriterionV1::Sc143TextDefault,
+        )],
+        vec![],
+        evaluator,
+    )
+    .compile()
+    .unwrap();
+    let mut session = compiled.instantiate(STREAM).unwrap();
+
+    let first = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _ = session.commit(update(1, 0xFF));
+    }));
+    assert!(first.is_err(), "the hostile evaluator must exercise unwind");
+    assert_eq!(
+        probe.calls(),
+        1,
+        "the panic must originate inside the evaluator, after arena acquisition",
+    );
+
+    let SessionState::Ready { current } = session
+        .commit(update(1, 0xFF))
+        .expect("unwind must return the arena slot for the lawful retry")
+    else {
+        panic!("opaque black on white must remain a normal verified outcome");
+    };
+    assert_eq!(current.outputs()[0].source_signal(), signal(0));
+    assert!(
+        probe.calls() > 1,
+        "the retry must reach the evaluator again"
+    );
+}
+
+#[test]
+fn prepared_transition_unwind_returns_the_reusable_evaluation_arena() {
+    let compiled = point_program(
+        signal(0),
+        Target::fixed(TARGET, SOURCE),
+        vec![ConstraintInvocation::hard(
+            ConstraintId::new(1),
+            OCCURRENCE,
+            Wcag22CriterionV1::Sc143TextDefault,
+        )],
+        vec![],
+        Wcag22Srgb8V1,
+    )
+    .compile()
+    .unwrap();
+    let mut session = compiled.instantiate(STREAM).unwrap();
+
+    let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _prepared = session
+            .prepare_update(update(1, 0xFF))
+            .expect("the transition must own one reusable arena before unwind");
+        panic!("host unwound after prepare and before commit");
+    }));
+    assert!(unwind.is_err(), "the hostile host unwind must be observed");
+
+    let SessionState::Ready { current } = session
+        .commit(update(1, 0xFF))
+        .expect("unwind retirement must return the exact arena for retry")
+    else {
+        panic!("opaque black on white must remain a normal verified outcome");
+    };
+    assert_eq!(current.outputs()[0].source_signal(), signal(0));
 }
 
 #[test]
@@ -1484,8 +1622,10 @@ fn evaluation_cell_cardinality_checks_both_products_without_a_numeric_cap() {
 }
 
 #[test]
-fn every_fallible_joint_preflight_reservation_precedes_evaluator_work() {
-    const FIRST_UNUSED_RESERVATION_INDEX: usize = 3;
+fn every_required_joint_arena_reservation_is_fail_before_work_and_retryable() {
+    // Joint-оценка без point-causal evidence имеет две непустые координаты
+    // arena: constraint cells и committed outputs.
+    const FIRST_UNUSED_RESERVATION_INDEX: usize = 2;
 
     for reservation_index in 0..=FIRST_UNUSED_RESERVATION_INDEX {
         let evaluator = CountingProgramWcag22Srgb8V1::default();
@@ -1554,6 +1694,16 @@ fn every_fallible_joint_preflight_reservation_precedes_evaluator_work() {
         );
         assert!(calls.calls().is_empty());
         assert!(matches!(session.state(), SessionState::Waiting));
+        assert_eq!(session.raw_head(), ObservationHeadViewV1::Empty);
+
+        let SessionState::Ready { current } = session
+            .commit(update(1, 0x00))
+            .expect("a failed preflight must return the arena for an exact retry")
+        else {
+            panic!("the retry must select the first certifying joint state");
+        };
+        assert_eq!(current.selected_state_index(), Some(1));
+        assert!(!calls.calls().is_empty());
     }
 }
 
@@ -1622,6 +1772,33 @@ fn every_fallible_fixed_preflight_reservation_precedes_evaluator_work() {
         assert!(calls.calls().is_empty());
         assert!(matches!(session.state(), SessionState::Waiting));
     }
+}
+
+#[test]
+fn warmed_program_preflight_still_visits_every_nonempty_coordinate() {
+    const NONEMPTY_COORDINATE_COUNT: usize = 2;
+
+    let evaluator = CountingProgramWcag22Srgb8V1::default();
+    let calls = evaluator.clone();
+    let compiled = counting_fixed_program(evaluator);
+    let mut session = compiled.instantiate(STREAM).unwrap();
+    assert!(matches!(
+        session.commit(update(1, 0x00)).unwrap(),
+        SessionState::Ready { .. }
+    ));
+    assert!(matches!(
+        session.commit(update(2, 0x00)).unwrap(),
+        SessionState::Ready { .. }
+    ));
+    let calls_before = calls.calls().len();
+
+    let _failure = fail_program_preflight_reservation_for_test(NONEMPTY_COORDINATE_COUNT);
+    assert!(matches!(
+        session.commit(update(3, 0x00)).unwrap(),
+        SessionState::Ready { .. }
+    ));
+    assert_eq!(program_preflight_failure_remaining_for_test(), Some(0));
+    assert!(calls.calls().len() > calls_before);
 }
 
 fn counting_fixed_program(

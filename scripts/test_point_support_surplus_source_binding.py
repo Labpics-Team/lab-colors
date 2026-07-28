@@ -55,7 +55,7 @@ class PointSupportSurplusSourceBindingTests(unittest.TestCase):
             ),
             (
                 self.observation_path,
-                b"        self.backing.set.values(case_index)\n",
+                b"        self.backing.set().values(case_index)\n",
                 b"        None\n",
             ),
             (

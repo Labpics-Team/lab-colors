@@ -670,32 +670,26 @@ fn finite_program_with_candidates(
 }
 
 #[test]
-fn verified_report_storage_does_not_retain_exhaustive_joint_capacity() {
-    let capacities = |candidate_codes: &[[u8; 3]]| {
-        let compiled =
-            finite_program_with_candidates(Srgb8::new(candidate_codes[0]), candidate_codes);
-        let mut session = compiled.instantiate(STREAM).unwrap();
-        let SessionState::Ready { current } = session.commit(observed_backdrop(1, [0; 3])).unwrap()
-        else {
-            panic!("the first authored state must verify");
-        };
-        current.report().storage_capacities_for_test()
-    };
-    let small = [[0; 3], [1; 3]];
+fn verified_report_keeps_one_exhaustive_high_water_arena_but_only_selected_evidence() {
     let large = (0_u8..64).map(|code| [code; 3]).collect::<Vec<_>>();
 
-    let small_capacities = capacities(&small);
-    let large_capacities = capacities(&large);
+    let compiled = finite_program_with_candidates(Srgb8::new(large[0]), &large);
+    let mut session = compiled.instantiate(STREAM).unwrap();
+    let SessionState::Ready { current } = session.commit(observed_backdrop(1, [0; 3])).unwrap()
+    else {
+        panic!("the first authored state must verify");
+    };
+    let selected_capacities = current.report().storage_capacities_for_test();
+    assert_eq!(current.report().cells().len(), 1);
+    assert_eq!(current.point_causal_certificates().len(), 1);
     assert_eq!(
-        small_capacities, large_capacities,
-        "a verified report owns one selected state, not exhaustive conflict storage"
+        current
+            .point_causal_certificates()
+            .map(|certificate| certificate.steps().len())
+            .sum::<usize>(),
+        1
     );
-    assert!(
-        large_capacities
-            .into_iter()
-            .all(|capacity| capacity >= 1 && capacity < large.len()),
-        "try_reserve_exact may over-allocate, but selected storage must remain non-empty and smaller than the exhaustive candidate set: {large_capacities:?}"
-    );
+    assert_eq!(current.outputs().len(), 1);
 
     let compiled = finite_program_with_candidates(Srgb8::new([255; 3]), &large);
     let mut session = compiled.instantiate(STREAM).unwrap();
@@ -704,11 +698,19 @@ fn verified_report_storage_does_not_retain_exhaustive_joint_capacity() {
         panic!("none of the authored states may satisfy the exact target");
     };
     let conflict_capacities = cause.report().storage_capacities_for_test();
-    assert!(
-        conflict_capacities
-            .into_iter()
-            .all(|capacity| capacity >= large.len()),
-        "an exhaustive conflict must own every considered state even if the allocator over-reserves: {conflict_capacities:?}"
+    assert_eq!(
+        selected_capacities, conflict_capacities,
+        "selected and exhaustive outcomes must use the same coordinate-wise max arena"
+    );
+    assert_eq!(cause.report().cells().len(), large.len());
+    assert_eq!(cause.considered_state_count(), large.len());
+    assert_eq!(cause.considered_point_causal_evidence().len(), large.len());
+    assert_eq!(
+        cause
+            .considered_point_causal_evidence()
+            .map(|evidence| evidence.steps().len())
+            .sum::<usize>(),
+        large.len()
     );
 }
 
@@ -1090,8 +1092,10 @@ fn every_causal_preflight_reservation_precedes_graph_and_evaluator_work() {
 }
 
 #[test]
-fn every_joint_causal_preflight_reservation_is_transactional() {
-    const FIRST_UNUSED_RESERVATION_INDEX: usize = 7;
+fn every_joint_causal_arena_reservation_is_fail_before_work_and_transactional() {
+    // Joint point-causal оценка заполняет каждую координату arena: constraint
+    // cells, causal records, replay steps и committed outputs.
+    const FIRST_UNUSED_RESERVATION_INDEX: usize = 4;
 
     for reservation_index in 0..FIRST_UNUSED_RESERVATION_INDEX {
         let evaluator = CountingProgramWcag22Srgb8V1::default();
