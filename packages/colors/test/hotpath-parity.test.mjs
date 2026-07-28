@@ -24,6 +24,10 @@ import { readFileSync } from "node:fs";
 import { adaptTheme } from "../adapt-theme.js";
 import * as ebg from "../effective-bg.js";
 import { buildMissRing, rustCacheCapacity } from "../bench/misses.mjs";
+import {
+  benchmarkOccurrencesFromRoles,
+  materializeOccurrences,
+} from "../bench/occurrences.mjs";
 import { __over, initSync, LabColors } from "../pkg/labcolors.js";
 
 const { oklabLerp } = ebg;
@@ -233,18 +237,55 @@ test("compileLerpPair falls back (null) on unparseable endpoints", { skip: !hasC
   assert.equal(ebg.compileLerpPair("#112233", "hsl(1,2%,3%)"), null);
 });
 
-test("the boundary benchmark measures the shipping mixed occurrence path", () => {
-  const bench = readFileSync(
-    new URL("../bench/wasm-boundary.bench.mjs", import.meta.url),
-    "utf8",
+test("the boundary benchmark materializes opaque and alpha occurrences behaviorally", () => {
+  const occurrences = benchmarkOccurrencesFromRoles(
+    {
+      label: { kind: "color", hex: "#010203" },
+      veil: { kind: "translucent", tintHex: "#C0B2FA", alpha: 0.122 },
+      unresolved: { kind: "failure" },
+    },
+    pack,
+  );
+  const black = materializeOccurrences(
+    occurrences,
+    pack("#000000"),
+    new Uint32Array(occurrences.length),
+    __over,
+  );
+  const white = materializeOccurrences(
+    occurrences,
+    pack("#FFFFFF"),
+    new Uint32Array(occurrences.length),
+    __over,
   );
 
-  assert.match(bench, /role\.kind === "translucent"/u);
-  assert.match(bench, /\b__over\(/u);
-  assert.match(bench, /recheckMixed/u);
-  assert.match(bench, /buildMissRing/u);
-  assert.match(bench, /rustCacheCapacity/u);
-  assert.doesNotMatch(bench, /true\s+~?28-role foreground set/u);
+  assert.deepEqual([...black], [pack("#010203"), pack("#17161F")]);
+  assert.deepEqual([...white], [pack("#010203"), pack("#F7F6FE")]);
+  assert.equal(black[0], white[0], "opaque occurrence must be backdrop-independent");
+  assert.notEqual(black[1], white[1], "alpha occurrence must be rematerialized per backdrop");
+  assert.throws(
+    () => materializeOccurrences(
+      [occurrences[1]],
+      pack("#000000"),
+      new Uint32Array(1),
+      () => 0xFFFFFFFF,
+    ),
+    { name: "RangeError", message: /Core rejected admitted opacity/u },
+  );
+});
+
+test("rustCacheCapacity accepts formatting-preserving Rust literal variants", () => {
+  for (const source of [
+    "const CACHE_CAPACITY: usize = 4096;",
+    "  pub const  CACHE_CAPACITY : usize = 4_096 ; // policy",
+    "pub(crate)\tconst CACHE_CAPACITY:\tusize=4_096usize; /* policy */",
+  ]) {
+    assert.equal(rustCacheCapacity(source), 4096, source);
+  }
+  assert.throws(
+    () => rustCacheCapacity("const CACHE_CAPACITY: usize = 1 << 12;"),
+    /capacity is absent or outside/u,
+  );
 });
 
 test("the cache-miss benchmark corpus is admissible and never masks conflict", () => {
@@ -267,7 +308,12 @@ test("the cache-miss benchmark corpus is admissible and never masks conflict", (
       "utf8",
     ),
   );
-  for (const background of ring) colors.resolveTheme(background, "dark");
+  for (const background of ring) {
+    assert.doesNotThrow(
+      () => colors.resolveTheme(background, "dark"),
+      `cache-miss background ${background} must admit a successful latency sample`,
+    );
+  }
 
   let conflict;
   try {

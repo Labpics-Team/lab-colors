@@ -435,6 +435,9 @@ export function adaptTheme(element, options) {
           }
           foregroundRow[i] = visible;
         }
+        // This scratch row is overwritten for the next backdrop. The engine
+        // must consume it synchronously and must not retain, cache or inspect
+        // the Uint32Array after recheckContrast returns.
         flat = recheckContrast(backdrop, foregroundRow, themeArg);
         checkpoint(owner);
       }

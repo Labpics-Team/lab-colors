@@ -3944,7 +3944,11 @@ test("mixed occurrence rows preserve order and materialize alpha per backdrop", 
   for (const { backdrop, row } of replay.rechecks) {
     assert.deepEqual(row, expected.get(backdrop));
   }
-  assert.ok(replay.rechecks.length >= 2, "every declared sample must be rechecked");
+  assert.deepEqual(
+    replay.rechecks.map(({ backdrop }) => backdrop),
+    [pk("#000000"), pk("#FFFFFF"), pk("#000000"), pk("#FFFFFF")],
+    "current and candidate-admission passes must each recheck every sample in declared order",
+  );
   assert.deepEqual(replay.resolves, ["#000000"], "the sole breaching sample seeds re-solve");
 });
 

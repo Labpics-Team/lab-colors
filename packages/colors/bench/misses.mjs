@@ -2,8 +2,11 @@ const CHANNEL_MAX = 0xff;
 const RGB24_MAX = 0xffffff;
 
 export function rustCacheCapacity(source) {
-  const match = source.match(/^const CACHE_CAPACITY: usize = (\d+);$/mu);
-  const capacity = Number(match?.[1]);
+  const match = source.match(
+    /^\s*(?:pub(?:\([^)]*\))?\s+)?const\s+CACHE_CAPACITY\s*:\s*usize\s*=\s*([\d_]+)(?:usize)?\s*;/mu,
+  );
+  const literal = match?.[1].replaceAll("_", "");
+  const capacity = Number(literal);
   if (!Number.isSafeInteger(capacity) || capacity < 1 || capacity >= RGB24_MAX) {
     throw new Error("Rust cache capacity is absent or outside the finite RGB24 domain");
   }
