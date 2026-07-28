@@ -475,17 +475,35 @@ fn joint_module_contains_only_the_canonical_finite_order_admission() {
         !JOINT_SOURCE.contains("unreachable!") && !JOINT_SOURCE.contains("panic!"),
         "order admission must type internal drift instead of exposing a panic route",
     );
+    for required in [
+        "AdmittedCompiledJointSpaceV1",
+        "AdmittedCompiledJointStateV1",
+        "CompiledTargetSelectionV1",
+    ] {
+        assert!(
+            contains_rust_identifier(PROGRAM_SESSION_SOURCE, required),
+            "the sealed joint space must stay reachable through `{required}`",
+        );
+    }
+    // Exact snippets intentionally make representation drift loud; a rustfmt
+    // rewrite must update this anti-regrowth gate in the same reviewed change.
     assert!(
-        contains_rust_identifier(PROGRAM_SESSION_SOURCE, "AdmittedCompiledJointSpaceV1")
-            && contains_rust_identifier(PROGRAM_SESSION_SOURCE, "AdmittedCompiledJointStateV1")
-            && contains_rust_identifier(PROGRAM_SESSION_SOURCE, "CompiledTargetSelectionV1")
-            && PROGRAM_SESSION_SOURCE.contains("Finite(AdmittedCompiledJointSpaceV1)")
-            && !PROGRAM_SESSION_SOURCE
-                .contains("joint_selection: Option<CompiledJointSelectionV1>")
-            && !PROGRAM_SESSION_SOURCE.contains("finite_targets: Box<[CompiledFiniteTargetV1]>")
-            && !PROGRAM_SESSION_SOURCE.contains("Finite { targets, order }")
-            && !contains_rust_identifier(PROGRAM_SESSION_SOURCE, "CompiledJointSelectionV1"),
-        "runtime must receive only a sealed joint space derived from its actual compiled targets",
+        PROGRAM_SESSION_SOURCE.contains("Finite(AdmittedCompiledJointSpaceV1)"),
+        "target selection must carry the admitted space itself",
+    );
+    for retired in [
+        "joint_selection: Option<CompiledJointSelectionV1>",
+        "finite_targets: Box<[CompiledFiniteTargetV1]>",
+        "Finite { targets, order }",
+    ] {
+        assert!(
+            !PROGRAM_SESSION_SOURCE.contains(retired),
+            "the epoch must not resurrect the split joint runtime through `{retired}`",
+        );
+    }
+    assert!(
+        !contains_rust_identifier(PROGRAM_SESSION_SOURCE, "CompiledJointSelectionV1"),
+        "runtime must receive only a sealed joint space derived from its compiled targets",
     );
 }
 

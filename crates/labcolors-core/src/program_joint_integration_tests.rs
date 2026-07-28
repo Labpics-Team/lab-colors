@@ -310,15 +310,19 @@ enum InjectedEvaluatorFailureV1 {
 #[derive(Debug, Clone)]
 struct InjectedEvaluatorFailureSetV1 {
     failure: InjectedEvaluatorFailureV1,
-    calls: std::cell::Cell<usize>,
+    calls: std::rc::Rc<std::cell::Cell<usize>>,
 }
 
 impl InjectedEvaluatorFailureSetV1 {
-    const fn new(failure: InjectedEvaluatorFailureV1) -> Self {
+    fn new(failure: InjectedEvaluatorFailureV1) -> Self {
         Self {
             failure,
-            calls: std::cell::Cell::new(0),
+            calls: std::rc::Rc::new(std::cell::Cell::new(0)),
         }
+    }
+
+    fn call_count(&self) -> usize {
+        self.calls.get()
     }
 }
 
@@ -1535,6 +1539,7 @@ fn evaluator_error_aborts_both_candidate_search_and_fresh_recheck() {
         InjectedEvaluatorFailureV1::FreshRecheck,
     ] {
         let evaluator = InjectedEvaluatorFailureSetV1::new(failure);
+        let probe = evaluator.clone();
         let compiled = point_program(
             signal(0),
             target(vec![candidate(FIRST, 0xFF)]),
@@ -1564,6 +1569,14 @@ fn evaluator_error_aborts_both_candidate_search_and_fresh_recheck() {
                 context: appearance_context(),
                 source: failure,
             })
+        );
+        assert_eq!(
+            probe.call_count(),
+            match failure {
+                InjectedEvaluatorFailureV1::CandidateSearch => 1,
+                InjectedEvaluatorFailureV1::FreshRecheck => 2,
+            },
+            "one hard cell is assessed once in candidate search and only a passing candidate reaches fresh recheck",
         );
         assert!(matches!(session.state(), SessionState::Waiting));
     }
@@ -2525,6 +2538,25 @@ fn finite_joint_order_admission_is_total_over_typed_nonempty_domains() {
             .map(|tuple| tuple.iter().map(|item| item.index()).collect::<Vec<_>>())
             .collect::<Vec<_>>(),
         vec![vec![1], vec![0]],
+    );
+
+    let admitted = admit_finite_joint_order_v1(
+        &domains(2, vec![nonzero(2)]),
+        vec![
+            vec![ordinal(1), ordinal(0)],
+            vec![ordinal(0), ordinal(1)],
+            vec![ordinal(1), ordinal(1)],
+            vec![ordinal(0), ordinal(0)],
+        ],
+    )
+    .unwrap();
+    assert_eq!(admitted.state_count(), 4);
+    assert_eq!(
+        admitted
+            .tuples()
+            .map(|tuple| tuple.iter().map(|item| item.index()).collect::<Vec<_>>())
+            .collect::<Vec<_>>(),
+        vec![vec![1, 0], vec![0, 1], vec![1, 1], vec![0, 0]],
     );
 
     for (domain_lengths, authored, expected) in [
