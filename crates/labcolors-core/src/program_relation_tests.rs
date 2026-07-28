@@ -1,7 +1,21 @@
 //! Контракт типизированных направленных отношений Program.
 
 use crate::program_boundary_tests::CommitProgramUpdateForTest as _;
+use crate::program_session::compiled_occurrence_coordinate_pair_matches_for_test;
 use crate::{Srgb8, program};
+
+#[test]
+fn compiled_occurrence_context_requires_both_exact_coordinates() {
+    assert!(compiled_occurrence_coordinate_pair_matches_for_test(
+        1_u8, 2_u8, 1_u8, 2_u8,
+    ));
+    for actual in [(9, 2), (1, 9), (9, 9)] {
+        assert!(
+            !compiled_occurrence_coordinate_pair_matches_for_test(1_u8, 2_u8, actual.0, actual.1,),
+            "a single mismatched coordinate must invalidate {actual:?}",
+        );
+    }
+}
 
 #[test]
 fn directed_relation_rejects_invalid_topology_before_draft() {

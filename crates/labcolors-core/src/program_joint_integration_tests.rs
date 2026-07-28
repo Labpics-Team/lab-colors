@@ -301,6 +301,57 @@ impl ProgramConstraintEvaluatorSetV1 for FinalViolationDiagnosticErrorEvaluatorS
     }
 }
 
+/// Один кандидат с тремя hard cells: search проходит полностью, fresh recheck
+/// сохраняет PASS, затем две VIOLATION. Паттерн делает смешанный терминальный
+/// отчёт наблюдаемым без изменения production evaluator-ов.
+#[derive(Debug, Clone, Default)]
+struct MultiViolationFinalRecheckEvaluatorSetV1 {
+    calls: std::rc::Rc<std::cell::Cell<usize>>,
+}
+
+impl MultiViolationFinalRecheckEvaluatorSetV1 {
+    fn calls(&self) -> usize {
+        self.calls.get()
+    }
+}
+
+impl ProgramConstraintEvaluatorSetV1 for MultiViolationFinalRecheckEvaluatorSetV1 {
+    type Invocation = Srgb8;
+    type PassEvidence = DiagnosticPoisonPassV1;
+    type ViolationEvidence = DiagnosticPoisonViolationV1;
+    type Error = core::convert::Infallible;
+
+    fn assess(
+        &self,
+        point: ProgramPointOccurrenceV1,
+        _invocation: Self::Invocation,
+    ) -> Result<
+        HardDecision<Self::PassEvidence, Self::ViolationEvidence>,
+        ProgramPointAssessmentErrorV1<Self::Error>,
+    > {
+        let call = self.calls.get();
+        self.calls.set(call + 1);
+        let binding = point.binding();
+        Ok(match call {
+            0..=3 => HardDecision::Pass(DiagnosticPoisonPassV1(binding)),
+            4..=5 => HardDecision::Violation(DiagnosticPoisonViolationV1(binding)),
+            _ => unreachable!("fixture has exactly one three-cell search and recheck"),
+        })
+    }
+
+    fn pass_binding(evidence: &Self::PassEvidence) -> ProgramVisiblePointBindingV1 {
+        evidence.0
+    }
+
+    fn violation_binding(evidence: &Self::ViolationEvidence) -> ProgramVisiblePointBindingV1 {
+        evidence.0
+    }
+
+    fn constraint_content(&self, invocation: Self::Invocation) -> ProgramConstraintContentV1 {
+        ExactSrgb8IdentityV1.program_constraint_content_v1(invocation)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum InjectedEvaluatorFailureV1 {
     CandidateSearch,
@@ -2254,6 +2305,63 @@ fn diagnostic_error_cannot_mask_a_selected_state_final_recheck_violation() {
         }),
     );
     assert_eq!(probe.diagnostic_calls(), 0);
+}
+
+#[test]
+fn final_recheck_reports_only_hard_violations_and_their_exact_count() {
+    let evaluator = MultiViolationFinalRecheckEvaluatorSetV1::default();
+    let probe = evaluator.clone();
+    let first_violation = ConstraintId::new(2);
+    let compiled = point_program(
+        signal(0),
+        target(vec![candidate(FIRST, 0xFF)]),
+        vec![
+            ConstraintInvocation::visible_unary_hard(
+                ConstraintId::new(1),
+                OCCURRENCE,
+                Srgb8::new([1; 3]),
+            ),
+            ConstraintInvocation::visible_unary_hard(
+                first_violation,
+                OCCURRENCE,
+                Srgb8::new([2; 3]),
+            ),
+            ConstraintInvocation::visible_unary_hard(
+                ConstraintId::new(3),
+                OCCURRENCE,
+                Srgb8::new([3; 3]),
+            ),
+        ],
+        vec![],
+        evaluator,
+    )
+    .with_joint_selection(DeclaredJointSelectionV1::new(vec![state(FIRST)]))
+    .compile()
+    .unwrap();
+    let mut session = compiled.instantiate(STREAM).unwrap();
+
+    let error = match session.commit(update(1, 0x00)) {
+        Ok(_) => panic!("two failures in the fresh recheck must reject the selected state"),
+        Err(error) => error,
+    };
+    assert_eq!(
+        error,
+        SessionUpdateError::Plan(ProgramSessionEvaluationError::FinalRecheckViolation {
+            state_index: 0,
+            case_index: 0,
+            constraint: first_violation,
+            subject: ProgramConstraintSubjectV1::VisibleUnary {
+                occurrence: OCCURRENCE,
+                context: appearance_context(),
+            },
+            hard_violation_count: 2,
+        }),
+    );
+    assert_eq!(
+        probe.calls(),
+        6,
+        "search and fresh recheck must both be complete"
+    );
 }
 
 #[test]

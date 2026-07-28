@@ -1624,6 +1624,34 @@ struct CompiledOccurrenceContextV1 {
     context: AppearanceContextId,
 }
 
+impl CompiledOccurrenceContextV1 {
+    fn matches(self, occurrence: OccurrenceId, slot: CompiledOccurrenceSlotV1) -> bool {
+        coordinate_pair_matches(&self.occurrence, &self.slot, &occurrence, &slot)
+    }
+}
+
+fn coordinate_pair_matches<Left: PartialEq, Right: PartialEq>(
+    expected_left: &Left,
+    expected_right: &Right,
+    actual_left: &Left,
+    actual_right: &Right,
+) -> bool {
+    expected_left == actual_left && expected_right == actual_right
+}
+
+#[cfg(test)]
+pub(crate) fn compiled_occurrence_coordinate_pair_matches_for_test<
+    Left: PartialEq,
+    Right: PartialEq,
+>(
+    expected_left: Left,
+    expected_right: Right,
+    actual_left: Left,
+    actual_right: Right,
+) -> bool {
+    coordinate_pair_matches(&expected_left, &expected_right, &actual_left, &actual_right)
+}
+
 struct CompiledObservationGroupV1 {
     id: ObservationGroupId,
     schema: CanonicalObservationSchemaV1,
@@ -3264,42 +3292,59 @@ where
 }
 
 // Порядок координат совпадает с физическим владением отчёта: constraint cells,
-// causal records и плоские replay steps.
-fn program_report_cardinality_is_exact(actual: [usize; 3], expected: [usize; 3]) -> bool {
+// relation members, causal records и плоские replay steps.
+fn program_report_cardinality_is_exact(actual: [usize; 4], expected: [usize; 4]) -> bool {
     actual == expected
 }
 
 #[cfg(test)]
 pub(crate) fn program_report_cardinality_is_exact_for_test(
-    actual: [usize; 3],
-    expected: [usize; 3],
+    actual: [usize; 4],
+    expected: [usize; 4],
 ) -> bool {
     program_report_cardinality_is_exact(actual, expected)
 }
 
-// Четвёртая координата — output arena. Избыточная ёмкость допустима, но все
-// арены обязаны быть пусты и независимо покрывать заранее рассчитанный объём.
-fn selected_program_storage_is_prepared(
-    lengths: [usize; 4],
-    capacities: [usize; 4],
-    required: [usize; 4],
+fn storage_has_spare_capacity<const N: usize>(
+    lengths: [usize; N],
+    capacities: [usize; N],
+    additional: [usize; N],
 ) -> bool {
-    lengths == [0; 4]
-        && capacities[0] >= required[0]
-        && capacities[1] >= required[1]
-        && capacities[2] >= required[2]
-        && capacities[3] >= required[3]
+    lengths
+        .into_iter()
+        .zip(capacities)
+        .zip(additional)
+        .all(|((length, capacity), additional)| {
+            capacity
+                .checked_sub(length)
+                .is_some_and(|spare| spare >= additional)
+        })
 }
 
-fn relation_member_storage_is_prepared(length: usize, capacity: usize, required: usize) -> bool {
-    length == 0 && capacity >= required
+#[cfg(test)]
+pub(crate) fn storage_has_spare_capacity_for_test<const N: usize>(
+    lengths: [usize; N],
+    capacities: [usize; N],
+    additional: [usize; N],
+) -> bool {
+    storage_has_spare_capacity(lengths, capacities, additional)
+}
+
+// Пятая координата — output arena. Избыточная ёмкость допустима, но все арены
+// обязаны быть пусты и независимо покрывать заранее рассчитанный объём.
+fn selected_program_storage_is_prepared(
+    lengths: [usize; 5],
+    capacities: [usize; 5],
+    required: [usize; 5],
+) -> bool {
+    lengths == [0; 5] && storage_has_spare_capacity(lengths, capacities, required)
 }
 
 #[cfg(test)]
 pub(crate) fn selected_program_storage_is_prepared_for_test(
-    lengths: [usize; 4],
-    capacities: [usize; 4],
-    required: [usize; 4],
+    lengths: [usize; 5],
+    capacities: [usize; 5],
+    required: [usize; 5],
 ) -> bool {
     selected_program_storage_is_prepared(lengths, capacities, required)
 }
@@ -3602,26 +3647,25 @@ where
     if !selected_program_storage_is_prepared(
         [
             arena.cells.len(),
+            arena.relation_members.len(),
             arena.point_causal_records.len(),
             arena.point_causal_steps.len(),
             arena.outputs.len(),
         ],
         [
             arena.cells.capacity(),
+            arena.relation_members.capacity(),
             arena.point_causal_records.capacity(),
             arena.point_causal_steps.capacity(),
             arena.outputs.capacity(),
         ],
         [
             counts.exhaustive_conflict,
+            counts.exhaustive_relation_members,
             counts.exhaustive_point_records,
             counts.exhaustive_replay_steps,
             0,
         ],
-    ) || !relation_member_storage_is_prepared(
-        arena.relation_members.len(),
-        arena.relation_members.capacity(),
-        counts.exhaustive_relation_members,
     ) {
         return Err(ProgramSessionEvaluationError::InternalInvariant);
     }
@@ -3680,16 +3724,17 @@ where
     if !program_report_cardinality_is_exact(
         [
             arena.cells.len(),
+            arena.relation_members.len(),
             arena.point_causal_records.len(),
             arena.point_causal_steps.len(),
         ],
         [
             counts.exhaustive_conflict,
+            counts.exhaustive_relation_members,
             counts.exhaustive_point_records,
             counts.exhaustive_replay_steps,
         ],
-    ) || arena.relation_members.len() != counts.exhaustive_relation_members
-    {
+    ) {
         return Err(ProgramSessionEvaluationError::InternalInvariant);
     }
     canonicalize_program_report_cells(&mut arena.cells);
@@ -3739,26 +3784,25 @@ where
     if !selected_program_storage_is_prepared(
         [
             arena.cells.len(),
+            arena.relation_members.len(),
             arena.point_causal_records.len(),
             arena.point_causal_steps.len(),
             arena.outputs.len(),
         ],
         [
             arena.cells.capacity(),
+            arena.relation_members.capacity(),
             arena.point_causal_records.capacity(),
             arena.point_causal_steps.capacity(),
             arena.outputs.capacity(),
         ],
         [
             expected_cell_count,
+            expected_relation_member_count,
             expected_point_record_count,
             expected_replay_step_count,
             epoch.outputs.len(),
         ],
-    ) || !relation_member_storage_is_prepared(
-        arena.relation_members.len(),
-        arena.relation_members.capacity(),
-        expected_relation_member_count,
     ) {
         return Err(ProgramSessionEvaluationError::InternalInvariant);
     }
@@ -3795,10 +3839,13 @@ where
     if let Some(state_index) = selected_state_index.filter(|_| has_hard_violation) {
         // Search only nominates a finite state. Its fresh hard recheck owns the
         // terminal verdict, so diagnostics cannot mask or mutate that failure.
+        if arena.cells.iter().any(|cell| !cell.is_hard()) {
+            return Err(ProgramSessionEvaluationError::InternalInvariant);
+        }
         let mut violations = arena
             .cells
             .iter()
-            .filter(|cell| cell.is_hard() && cell.result().is_violation());
+            .filter(|cell| cell.result().is_violation());
         let first = violations
             .next()
             .ok_or(ProgramSessionEvaluationError::InternalInvariant)?;
@@ -3838,16 +3885,17 @@ where
     if !program_report_cardinality_is_exact(
         [
             arena.cells.len(),
+            arena.relation_members.len(),
             arena.point_causal_records.len(),
             arena.point_causal_steps.len(),
         ],
         [
             expected_cell_count,
+            expected_relation_member_count,
             expected_point_record_count,
             expected_replay_step_count,
         ],
-    ) || arena.relation_members.len() != expected_relation_member_count
-    {
+    ) {
         return Err(ProgramSessionEvaluationError::InternalInvariant);
     }
     canonicalize_program_report_cells(&mut arena.cells);
@@ -3884,7 +3932,7 @@ fn resolve_visible_relation_endpoint(
         return None;
     }
     let context = contexts.get(endpoint.occurrence_context_index)?;
-    if context.occurrence != endpoint.occurrence || context.slot != endpoint.slot {
+    if !context.matches(endpoint.occurrence, endpoint.slot) {
         return None;
     }
     let point = ProgramPointOccurrenceV1::from_resolved(source, context.context);
@@ -3956,17 +4004,17 @@ where
         if let Some(point_causal) = point_causal.as_mut() {
             // Предварительный расчёт зарезервировал арены целиком. Локальная
             // проверка не даёт причинному replay незаметно начать аллоцировать.
-            if point_causal
-                .records
-                .capacity()
-                .saturating_sub(point_causal.records.len())
-                < epoch.point_presentations.len()
-                || point_causal
-                    .steps
-                    .capacity()
-                    .saturating_sub(point_causal.steps.len())
-                    < epoch.point_presentations.steps_per_case()
-            {
+            if !storage_has_spare_capacity(
+                [point_causal.records.len(), point_causal.steps.len()],
+                [
+                    point_causal.records.capacity(),
+                    point_causal.steps.capacity(),
+                ],
+                [
+                    epoch.point_presentations.len(),
+                    epoch.point_presentations.steps_per_case(),
+                ],
+            ) {
                 return Err(ProgramSessionEvaluationError::InternalInvariant);
             }
             for (presentation_ordinal, presentation) in epoch.point_presentations.iter().enumerate()
@@ -4018,7 +4066,7 @@ where
                         .occurrence_contexts
                         .get(*occurrence_context_index)
                         .ok_or(ProgramSessionEvaluationError::InternalInvariant)?;
-                    if binding.occurrence != *occurrence || binding.slot != *slot {
+                    if !binding.matches(*occurrence, *slot) {
                         return Err(ProgramSessionEvaluationError::InternalInvariant);
                     }
                     let point = ProgramPointOccurrenceV1::from_resolved(source, binding.context);
@@ -4133,11 +4181,11 @@ where
                         ProgramConstraintEvidenceCaptureV1::Report {
                             relation_members, ..
                         } => {
-                            if relation_members
-                                .capacity()
-                                .saturating_sub(relation_members.len())
-                                < candidates.len()
-                            {
+                            if !storage_has_spare_capacity(
+                                [relation_members.len()],
+                                [relation_members.capacity()],
+                                [candidates.len()],
+                            ) {
                                 return Err(ProgramSessionEvaluationError::InternalInvariant);
                             }
                             Some(relation_members.len())
@@ -4220,11 +4268,11 @@ where
                         ProgramConstraintEvidenceCaptureV1::Report {
                             relation_members, ..
                         } => {
-                            if relation_members
-                                .capacity()
-                                .saturating_sub(relation_members.len())
-                                < candidates.len()
-                            {
+                            if !storage_has_spare_capacity(
+                                [relation_members.len()],
+                                [relation_members.capacity()],
+                                [candidates.len()],
+                            ) {
                                 return Err(ProgramSessionEvaluationError::InternalInvariant);
                             }
                             Some(relation_members.len())
