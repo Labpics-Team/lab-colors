@@ -12,6 +12,7 @@ import re
 import subprocess
 import tempfile
 import unittest
+from unittest import mock
 
 
 SCRIPT = Path(__file__).with_name("mutation.py")
@@ -492,7 +493,11 @@ class MutationTruthTest(unittest.TestCase):
         self.assertNotIn("ignored-build.rs", {entry["path"] for entry in snapshot["entries"]})
         (source_root / "copied-extra.rs").write_text("extra\n", encoding="utf-8")
         with self.assertRaisesRegex(mutation.ContractError, "entry set mismatch"):
-            mutation._verify_materialized_execution_source(source_root, snapshot)
+            mutation._verify_materialized_execution_source(
+                source_root,
+                snapshot,
+                repo_root=self.root,
+            )
 
     def test_execution_source_digest_binds_all_tracked_modes_and_symlink_targets(self) -> None:
         baseline = mutation._build_execution_source(self.root, self.revision)
@@ -586,6 +591,36 @@ class MutationTruthTest(unittest.TestCase):
                 self.external / "execution-source",
             )
 
+    def test_materialized_execution_source_rejects_file_with_directory_suffix(self) -> None:
+        link = self.root / "not-a-directory"
+        link.symlink_to("Cargo.toml/.")
+        subprocess.run(["git", "add", "not-a-directory"], cwd=self.root, check=True)
+        subprocess.run(
+            [
+                "git",
+                "-c",
+                "user.name=Mutation Truth Test",
+                "-c",
+                "user.email=mutation@example.invalid",
+                "commit",
+                "--quiet",
+                "-m",
+                "hostile directory suffix",
+            ],
+            cwd=self.root,
+            check=True,
+        )
+        self.revision = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=self.root, text=True
+        ).strip()
+
+        with self.assertRaisesRegex(mutation.ContractError, "symlink escapes or is dangling"):
+            mutation.materialize_execution_source(
+                self.root,
+                self.revision,
+                self.external / "execution-source",
+            )
+
     def test_materialization_rejects_symlink_parent_resolving_inside_worktree(self) -> None:
         physical_parent = self.root / "untracked-execution-parent"
         physical_parent.mkdir()
@@ -597,6 +632,65 @@ class MutationTruthTest(unittest.TestCase):
                 self.root,
                 self.revision,
                 linked_parent / "execution-source",
+            )
+
+    def test_materialization_rejects_dangling_destination_symlink(self) -> None:
+        destination = self.external / "execution-source"
+        destination.symlink_to(self.external / "missing-target", target_is_directory=True)
+
+        with self.assertRaisesRegex(mutation.ContractError, "symlink"):
+            mutation.materialize_execution_source(
+                self.root,
+                self.revision,
+                destination,
+            )
+
+    def test_parent_swap_after_containment_proof_cannot_redirect_writes(self) -> None:
+        swappable_parent = self.external / "swappable-parent"
+        swappable_parent.mkdir()
+        source_root = swappable_parent / "execution-source"
+        original_parent = self.external / "original-parent"
+        redirected_parent = self.root / "redirected-parent"
+        redirected_parent.mkdir()
+        real_verify_binding = mutation._verify_source_root_binding
+        calls = 0
+
+        def verify_then_swap(repo_fd: int, candidate: Path, source_fd: int) -> None:
+            nonlocal calls
+            real_verify_binding(repo_fd, candidate, source_fd)
+            calls += 1
+            if calls == 1:
+                swappable_parent.rename(original_parent)
+                swappable_parent.symlink_to(redirected_parent, target_is_directory=True)
+
+        with mock.patch.object(
+            mutation,
+            "_verify_source_root_binding",
+            side_effect=verify_then_swap,
+        ):
+            with self.assertRaisesRegex(mutation.ContractError, "changed|disjoint"):
+                mutation.materialize_execution_source(
+                    self.root,
+                    self.revision,
+                    source_root,
+                )
+        self.assertEqual(list(redirected_parent.rglob("*")), [])
+
+    def test_verification_reproves_physical_disjointness(self) -> None:
+        source_root = self.external / "execution-source"
+        snapshot = mutation.materialize_execution_source(
+            self.root,
+            self.revision,
+            source_root,
+        )
+        hostile_root = self.root / "untracked-execution-source"
+        source_root.rename(hostile_root)
+
+        with self.assertRaisesRegex(mutation.ContractError, "disjoint from the Git worktree"):
+            mutation._verify_materialized_execution_source(
+                hostile_root,
+                snapshot,
+                repo_root=self.root,
             )
 
     def test_execution_layout_keeps_output_caches_and_tool_homes_external(self) -> None:
@@ -615,8 +709,17 @@ class MutationTruthTest(unittest.TestCase):
             with self.subTest(label=label):
                 hostile = dict(paths)
                 hostile[label] = source_root / label
-                with self.assertRaisesRegex(mutation.ContractError, "outside execution source"):
+                with self.assertRaisesRegex(mutation.ContractError, "overlap execution source"):
                     mutation.validate_execution_layout(source_root, hostile)
+
+        containing_cache = self.external / "containing-cache"
+        nested_source = containing_cache / "execution-source"
+        nested_source.mkdir(parents=True)
+        with self.assertRaisesRegex(mutation.ContractError, "overlap execution source"):
+            mutation.validate_execution_layout(
+                nested_source,
+                {"cargo_home": containing_cache},
+            )
 
     def test_shard_json_inputs_reject_symlinks_and_symlinked_output_parent(self) -> None:
         manifest = self.make_manifest()

@@ -480,15 +480,123 @@ def _entry_directories(paths: Iterable[str]) -> set[str]:
     return directories
 
 
-def _walk_materialized_source(source_root: Path) -> tuple[dict[str, os.DirEntry[str]], set[str]]:
-    files: dict[str, os.DirEntry[str]] = {}
+_DIRECTORY_OPEN_FLAGS = (
+    os.O_RDONLY
+    | getattr(os, "O_CLOEXEC", 0)
+    | getattr(os, "O_DIRECTORY", 0)
+    | getattr(os, "O_NOFOLLOW", 0)
+)
+
+
+def _file_identity(metadata: os.stat_result) -> tuple[int, int]:
+    return metadata.st_dev, metadata.st_ino
+
+
+def _directory_fd_is_at_or_below(
+    ancestor: tuple[int, int],
+    directory_fd: int,
+) -> bool:
+    current_fd = os.dup(directory_fd)
+    try:
+        while True:
+            current = _file_identity(os.fstat(current_fd))
+            if current == ancestor:
+                return True
+            parent_fd = os.open("..", _DIRECTORY_OPEN_FLAGS, dir_fd=current_fd)
+            try:
+                parent = _file_identity(os.fstat(parent_fd))
+            except BaseException:
+                os.close(parent_fd)
+                raise
+            os.close(current_fd)
+            current_fd = parent_fd
+            if parent == current:
+                return False
+    finally:
+        os.close(current_fd)
+
+
+def _assert_directory_fds_disjoint(repo_fd: int, source_fd: int) -> None:
+    repo_identity = _file_identity(os.fstat(repo_fd))
+    source_identity = _file_identity(os.fstat(source_fd))
+    try:
+        overlaps = _directory_fd_is_at_or_below(
+            repo_identity,
+            source_fd,
+        ) or _directory_fd_is_at_or_below(source_identity, repo_fd)
+    except OSError as error:
+        raise ContractError(
+            f"cannot prove physical execution source containment: {error}"
+        ) from error
+    if overlaps:
+        raise ContractError("execution source root must be disjoint from the Git worktree")
+
+
+def _open_repo_fd(repo_root: Path) -> tuple[Path, int]:
+    descriptor = -1
+    try:
+        canonical = repo_root.resolve(strict=True)
+        descriptor = os.open(canonical, _DIRECTORY_OPEN_FLAGS)
+        path_identity = _file_identity(os.stat(canonical, follow_symlinks=False))
+        if _file_identity(os.fstat(descriptor)) != path_identity:
+            os.close(descriptor)
+            raise ContractError("Git worktree root changed while it was opened")
+    except ContractError:
+        raise
+    except OSError as error:
+        if descriptor >= 0:
+            os.close(descriptor)
+        raise ContractError(f"cannot open Git worktree root: {error}") from error
+    return canonical, descriptor
+
+
+def _open_source_root(source_root: Path) -> int:
+    try:
+        metadata = os.lstat(source_root)
+        if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
+            raise ContractError("execution source root is missing or is a symlink")
+        return os.open(source_root, _DIRECTORY_OPEN_FLAGS)
+    except ContractError:
+        raise
+    except OSError as error:
+        raise ContractError(f"cannot open execution source root: {error}") from error
+
+
+def _verify_source_root_binding(
+    repo_fd: int,
+    source_root: Path,
+    source_fd: int,
+) -> None:
+    try:
+        current_fd = _open_source_root(source_root)
+    except ContractError as error:
+        raise ContractError("execution source root changed during verification") from error
+    try:
+        if _file_identity(os.fstat(current_fd)) != _file_identity(os.fstat(source_fd)):
+            raise ContractError("execution source root changed during verification")
+        _assert_directory_fds_disjoint(repo_fd, current_fd)
+    finally:
+        os.close(current_fd)
+
+
+def _digest_fd(descriptor: int) -> str:
+    digest = hashlib.sha256()
+    while block := os.read(descriptor, 1024 * 1024):
+        digest.update(block)
+    return digest.hexdigest()
+
+
+def _walk_materialized_source_fd(
+    source_fd: int,
+) -> tuple[dict[str, tuple[str, int, str]], set[str]]:
+    files: dict[str, tuple[str, int, str]] = {}
     directories: set[str] = set()
 
-    def walk(directory: Path, relative_parent: PurePosixPath | None = None) -> None:
+    def walk(directory_fd: int, relative_parent: PurePosixPath | None = None) -> None:
         try:
-            children = sorted(os.scandir(directory), key=lambda entry: entry.name)
+            children = sorted(os.scandir(directory_fd), key=lambda entry: entry.name)
         except OSError as error:
-            raise ContractError(f"cannot inspect execution source {directory}: {error}") from error
+            raise ContractError(f"cannot inspect execution source: {error}") from error
         for child in children:
             relative = (
                 PurePosixPath(child.name)
@@ -496,27 +604,135 @@ def _walk_materialized_source(source_root: Path) -> tuple[dict[str, os.DirEntry[
                 else relative_parent / child.name
             )
             path_text = relative.as_posix()
-            if child.is_symlink() or child.is_file(follow_symlinks=False):
-                files[path_text] = child
-            elif child.is_dir(follow_symlinks=False):
-                directories.add(path_text)
-                walk(Path(child.path), relative)
-            else:
-                raise ContractError(f"execution source contains unsupported entry: {path_text!r}")
+            try:
+                metadata = os.stat(
+                    child.name,
+                    dir_fd=directory_fd,
+                    follow_symlinks=False,
+                )
+                if stat.S_ISLNK(metadata.st_mode):
+                    files[path_text] = (
+                        "120000",
+                        stat.S_IMODE(metadata.st_mode),
+                        os.readlink(child.name, dir_fd=directory_fd),
+                    )
+                elif stat.S_ISREG(metadata.st_mode):
+                    descriptor = os.open(
+                        child.name,
+                        os.O_RDONLY
+                        | getattr(os, "O_CLOEXEC", 0)
+                        | getattr(os, "O_NOFOLLOW", 0),
+                        dir_fd=directory_fd,
+                    )
+                    try:
+                        opened = os.fstat(descriptor)
+                        if not stat.S_ISREG(opened.st_mode):
+                            raise ContractError(
+                                f"execution source mode mismatch: {path_text!r}"
+                            )
+                        files[path_text] = (
+                            "100000",
+                            stat.S_IMODE(opened.st_mode),
+                            _digest_fd(descriptor),
+                        )
+                    finally:
+                        os.close(descriptor)
+                elif stat.S_ISDIR(metadata.st_mode):
+                    directories.add(path_text)
+                    child_fd = os.open(
+                        child.name,
+                        _DIRECTORY_OPEN_FLAGS,
+                        dir_fd=directory_fd,
+                    )
+                    try:
+                        walk(child_fd, relative)
+                    finally:
+                        os.close(child_fd)
+                else:
+                    raise ContractError(
+                        f"execution source contains unsupported entry: {path_text!r}"
+                    )
+            except ContractError:
+                raise
+            except OSError as error:
+                raise ContractError(
+                    f"cannot inspect execution source entry {path_text!r}: {error}"
+                ) from error
 
-    walk(source_root)
+    walk(source_fd)
     return files, directories
 
 
-def _verify_materialized_execution_source(
-    source_root: Path,
+def _assert_snapshot_symlinks_are_internal(
+    expected: dict[str, dict[str, Any]],
+    directories: set[str],
+) -> None:
+    symlinks = {
+        path_text: entry["symlink_target"]
+        for path_text, entry in expected.items()
+        if entry["mode"] == "120000"
+    }
+    namespace = set(expected) | directories | {""}
+
+    def target_components(target: str) -> list[str]:
+        # split preserves trailing slash and dot components because both make
+        # the preceding component require directory semantics during lookup.
+        return target.split("/")
+
+    for link_path, initial_target in symlinks.items():
+        resolved = list(PurePosixPath(link_path).parts[:-1])
+        pending = target_components(initial_target)
+        expansions = 0
+        if PurePosixPath(initial_target).is_absolute():
+            raise ContractError(
+                f"execution source symlink escapes or is dangling: {link_path!r}"
+            )
+        while pending:
+            component = pending.pop(0)
+            if component in {"", "."}:
+                continue
+            if component == "..":
+                if not resolved:
+                    raise ContractError(
+                        f"execution source symlink escapes or is dangling: {link_path!r}"
+                    )
+                resolved.pop()
+                continue
+            resolved.append(component)
+            candidate = PurePosixPath(*resolved).as_posix()
+            if candidate in symlinks:
+                expansions += 1
+                # The Linux mutation runner stops after 40 symlink expansions;
+                # matching that ceiling rejects cycles without rejecting a
+                # valid path that deliberately revisits a link.
+                if expansions > 40:
+                    raise ContractError(
+                        f"execution source symlink escapes or is dangling: {link_path!r}"
+                    )
+                target = symlinks[candidate]
+                if PurePosixPath(target).is_absolute():
+                    raise ContractError(
+                        f"execution source symlink escapes or is dangling: {link_path!r}"
+                    )
+                resolved.pop()
+                pending = target_components(target) + pending
+            elif pending and candidate not in directories:
+                raise ContractError(
+                    f"execution source symlink escapes or is dangling: {link_path!r}"
+                )
+        destination = PurePosixPath(*resolved).as_posix() if resolved else ""
+        if destination not in namespace:
+            raise ContractError(
+                f"execution source symlink escapes or is dangling: {link_path!r}"
+            )
+
+
+def _verify_materialized_execution_source_fd(
+    source_fd: int,
     execution_source: dict[str, Any],
 ) -> None:
     execution_source = _validate_execution_source(execution_source)
-    if source_root.is_symlink() or not source_root.is_dir():
-        raise ContractError("execution source root is missing or is a symlink")
-    root = source_root.resolve()
-    observed, observed_directories = _walk_materialized_source(root)
+    observed, observed_directories = _walk_materialized_source_fd(source_fd)
     expected = {entry["path"]: entry for entry in execution_source["entries"]}
     if set(observed) != set(expected):
         missing = sorted(set(expected) - set(observed))
@@ -532,28 +748,40 @@ def _verify_materialized_execution_source(
             f"execution source directory set mismatch; missing={missing}, extra={extra}"
         )
     for path_text, expected_entry in expected.items():
-        path = root.joinpath(*PurePosixPath(path_text).parts)
-        observed_entry = observed[path_text]
+        observed_type, observed_mode, observed_value = observed[path_text]
         if expected_entry["mode"] == "120000":
-            if not observed_entry.is_symlink():
+            if observed_type != "120000":
                 raise ContractError(f"execution source mode mismatch: {path_text!r}")
-            target = os.readlink(path)
-            if target != expected_entry["symlink_target"]:
+            if observed_value != expected_entry["symlink_target"]:
                 raise ContractError(f"execution source symlink target mismatch: {path_text!r}")
-            try:
-                path.resolve(strict=True).relative_to(root)
-            except (OSError, RuntimeError, ValueError) as error:
-                raise ContractError(
-                    f"execution source symlink escapes or is dangling: {path_text!r}"
-                ) from error
         else:
-            if not observed_entry.is_file(follow_symlinks=False):
+            if observed_type != "100000":
                 raise ContractError(f"execution source mode mismatch: {path_text!r}")
             expected_mode = 0o755 if expected_entry["mode"] == "100755" else 0o644
-            if stat.S_IMODE(path.lstat().st_mode) != expected_mode:
+            if observed_mode != expected_mode:
                 raise ContractError(f"execution source file mode mismatch: {path_text!r}")
-            if _digest_file(path) != expected_entry["sha256"]:
+            if observed_value != expected_entry["sha256"]:
                 raise ContractError(f"execution source content mismatch: {path_text!r}")
+    _assert_snapshot_symlinks_are_internal(expected, expected_directories)
+
+
+def _verify_materialized_execution_source(
+    source_root: Path,
+    execution_source: dict[str, Any],
+    *,
+    repo_root: Path,
+) -> None:
+    _, repo_fd = _open_repo_fd(repo_root)
+    source_fd = -1
+    try:
+        source_fd = _open_source_root(source_root)
+        _assert_directory_fds_disjoint(repo_fd, source_fd)
+        _verify_materialized_execution_source_fd(source_fd, execution_source)
+        _verify_source_root_binding(repo_fd, source_root, source_fd)
+    finally:
+        if source_fd >= 0:
+            os.close(source_fd)
+        os.close(repo_fd)
 
 
 def validate_execution_layout(source_root: Path, external_paths: dict[str, Path]) -> None:
@@ -562,11 +790,8 @@ def validate_execution_layout(source_root: Path, external_paths: dict[str, Path]
     root = source_root.resolve()
     for label, raw_path in external_paths.items():
         path = Path(raw_path).resolve(strict=False)
-        try:
-            path.relative_to(root)
-        except ValueError:
-            continue
-        raise ContractError(f"{label} must remain outside execution source root")
+        if path == root or path in root.parents or root in path.parents:
+            raise ContractError(f"{label} must not overlap execution source root")
 
 
 def _tool_external_paths() -> dict[str, Path]:
@@ -601,47 +826,169 @@ def _canonical_disjoint_source_root(repo_root: Path, source_root: Path) -> Path:
     return canonical
 
 
+def _create_execution_source_root(
+    repo_fd: int,
+    repo_root: Path,
+    source_root: Path,
+) -> tuple[Path, int]:
+    raw_source_root = source_root.absolute()
+    try:
+        metadata = os.lstat(raw_source_root)
+    except FileNotFoundError:
+        pass
+    except OSError as error:
+        raise ContractError(f"cannot inspect execution source destination: {error}") from error
+    else:
+        if stat.S_ISLNK(metadata.st_mode):
+            raise ContractError("execution source destination must not be a symlink")
+        raise ContractError("execution source root must not already exist")
+
+    try:
+        parent = raw_source_root.parent.resolve(strict=True)
+    except (OSError, RuntimeError) as error:
+        raise ContractError(f"cannot canonicalize execution source parent: {error}") from error
+    _canonical_disjoint_source_root(repo_root, parent / raw_source_root.name)
+    parent_fd = -1
+    source_fd = -1
+    source_owned_by_caller = False
+    try:
+        parent_fd = os.open(parent, _DIRECTORY_OPEN_FLAGS)
+        if _file_identity(os.fstat(parent_fd)) != _file_identity(
+            os.stat(parent, follow_symlinks=False)
+        ):
+            raise ContractError("execution source parent changed while it was opened")
+        repo_identity = _file_identity(os.fstat(repo_fd))
+        if _directory_fd_is_at_or_below(repo_identity, parent_fd):
+            raise ContractError("execution source root must be disjoint from the Git worktree")
+        os.mkdir(raw_source_root.name, mode=0o700, dir_fd=parent_fd)
+        source_fd = os.open(
+            raw_source_root.name,
+            _DIRECTORY_OPEN_FLAGS,
+            dir_fd=parent_fd,
+        )
+        os.fchmod(source_fd, 0o700)
+        _assert_directory_fds_disjoint(repo_fd, source_fd)
+        _verify_source_root_binding(repo_fd, raw_source_root, source_fd)
+        source_owned_by_caller = True
+    except ContractError:
+        raise
+    except OSError as error:
+        raise ContractError(f"cannot create execution source root: {error}") from error
+    finally:
+        try:
+            if parent_fd >= 0:
+                os.close(parent_fd)
+        finally:
+            if source_fd >= 0 and not source_owned_by_caller:
+                os.close(source_fd)
+    return raw_source_root, source_fd
+
+
+def _materialize_execution_source_fd(
+    source_fd: int,
+    execution_source: dict[str, Any],
+    object_by_path: dict[str, str],
+    blobs: dict[str, bytes],
+) -> None:
+    directory_fds: dict[str, int] = {"": source_fd}
+    opened_directories: list[int] = []
+    try:
+        directories = sorted(
+            _entry_directories(entry["path"] for entry in execution_source["entries"]),
+            key=lambda path_text: (len(PurePosixPath(path_text).parts), path_text),
+        )
+        for path_text in directories:
+            relative = PurePosixPath(path_text)
+            parent_text = PurePosixPath(*relative.parts[:-1]).as_posix()
+            if parent_text == ".":
+                parent_text = ""
+            parent_fd = directory_fds[parent_text]
+            os.mkdir(relative.name, mode=0o755, dir_fd=parent_fd)
+            descriptor = os.open(
+                relative.name,
+                _DIRECTORY_OPEN_FLAGS,
+                dir_fd=parent_fd,
+            )
+            directory_fds[path_text] = descriptor
+            opened_directories.append(descriptor)
+
+        for entry in execution_source["entries"]:
+            relative = PurePosixPath(entry["path"])
+            parent_text = PurePosixPath(*relative.parts[:-1]).as_posix()
+            if parent_text == ".":
+                parent_text = ""
+            parent_fd = directory_fds[parent_text]
+            if entry["mode"] == "120000":
+                os.symlink(entry["symlink_target"], relative.name, dir_fd=parent_fd)
+                continue
+            descriptor = os.open(
+                relative.name,
+                os.O_WRONLY
+                | os.O_CREAT
+                | os.O_EXCL
+                | getattr(os, "O_CLOEXEC", 0)
+                | getattr(os, "O_NOFOLLOW", 0),
+                0o600,
+                dir_fd=parent_fd,
+            )
+            try:
+                data = memoryview(blobs[object_by_path[entry["path"]]])
+                while data:
+                    written = os.write(descriptor, data)
+                    if written <= 0:
+                        raise OSError("short write while materializing execution source")
+                    data = data[written:]
+                os.fchmod(descriptor, 0o755 if entry["mode"] == "100755" else 0o644)
+            finally:
+                os.close(descriptor)
+    finally:
+        for descriptor in reversed(opened_directories):
+            os.close(descriptor)
+
+
 def materialize_execution_source(
     repo_root: Path,
     revision: str,
     source_root: Path,
 ) -> dict[str, Any]:
-    repo_root = repo_root.resolve()
-    source_root = _canonical_disjoint_source_root(repo_root, source_root.absolute())
-    if source_root.is_symlink() or source_root.exists():
-        raise ContractError("execution source root must not already exist")
-    execution_source = _build_execution_source(repo_root, revision)
-    raw_tree = _run_bytes(
-        ["git", "ls-tree", "-rz", "--full-tree", "-r", revision],
-        cwd=repo_root,
-        label="committed execution materialization inventory",
-    )
-    object_by_path: dict[str, str] = {}
-    for record in raw_tree.split(b"\0"):
-        if not record:
-            continue
-        header, raw_path = record.split(b"\t", 1)
-        _, _, object_id = header.decode("ascii").split(" ")
-        object_by_path[raw_path.decode("utf-8")] = object_id
-    blobs = _git_blob_bytes(repo_root, object_by_path.values())
-    source_root.mkdir(parents=True, mode=0o700)
-    canonical_after_mkdir = _canonical_disjoint_source_root(repo_root, source_root)
-    if canonical_after_mkdir != source_root:
-        raise ContractError("execution source root changed while it was created")
-    source_root = canonical_after_mkdir
+    repo_root, repo_fd = _open_repo_fd(repo_root)
+    source_fd = -1
     try:
-        for entry in execution_source["entries"]:
-            path = source_root.joinpath(*PurePosixPath(entry["path"]).parts)
-            path.parent.mkdir(parents=True, exist_ok=True)
-            data = blobs[object_by_path[entry["path"]]]
-            if entry["mode"] == "120000":
-                path.symlink_to(entry["symlink_target"])
-            else:
-                path.write_bytes(data)
-                path.chmod(0o755 if entry["mode"] == "100755" else 0o644)
+        execution_source = _build_execution_source(repo_root, revision)
+        raw_tree = _run_bytes(
+            ["git", "ls-tree", "-rz", "--full-tree", "-r", revision],
+            cwd=repo_root,
+            label="committed execution materialization inventory",
+        )
+        object_by_path: dict[str, str] = {}
+        for record in raw_tree.split(b"\0"):
+            if not record:
+                continue
+            header, raw_path = record.split(b"\t", 1)
+            _, _, object_id = header.decode("ascii").split(" ")
+            object_by_path[raw_path.decode("utf-8")] = object_id
+        blobs = _git_blob_bytes(repo_root, object_by_path.values())
+        source_root, source_fd = _create_execution_source_root(
+            repo_fd,
+            repo_root,
+            source_root,
+        )
+        _materialize_execution_source_fd(
+            source_fd,
+            execution_source,
+            object_by_path,
+            blobs,
+        )
+        _verify_materialized_execution_source_fd(source_fd, execution_source)
+        _verify_source_root_binding(repo_fd, source_root, source_fd)
+    except ContractError:
+        raise
     except OSError as error:
         raise ContractError(f"cannot materialize execution source: {error}") from error
-    _verify_materialized_execution_source(source_root, execution_source)
+    finally:
+        if source_fd >= 0:
+            os.close(source_fd)
+        os.close(repo_fd)
     return execution_source
 
 
@@ -770,14 +1117,22 @@ def build_manifest(
     source_root: Path | None = None,
 ) -> dict[str, Any]:
     repo_root = repo_root.resolve()
-    config_path = config_path.resolve()
-    config_root = repo_root if source_root is None else source_root.resolve()
-    if config_path != config_root / CONFIG_RELPATH or not config_path.is_file():
-        raise ContractError(f"config must be the regular file {CONFIG_RELPATH}")
     if not REPOSITORY.fullmatch(repository):
         raise ContractError(f"invalid repository identity: {repository!r}")
     if not HEX40.fullmatch(revision):
         raise ContractError(f"invalid revision: {revision!r}")
+    execution_source: dict[str, Any] | None = None
+    if source_root is not None:
+        execution_source = _build_execution_source(repo_root, revision)
+        _verify_materialized_execution_source(
+            source_root,
+            execution_source,
+            repo_root=repo_root,
+        )
+    config_path = config_path.resolve()
+    config_root = repo_root if source_root is None else source_root.resolve()
+    if config_path != config_root / CONFIG_RELPATH or not config_path.is_file():
+        raise ContractError(f"config must be the regular file {CONFIG_RELPATH}")
     run_id = _positive_int(run_id, "run_id")
     run_attempt = _positive_int(run_attempt, "run_attempt")
     if not isinstance(population, list) or not population:
@@ -792,10 +1147,9 @@ def build_manifest(
         seen.add(mutant_id)
         entries.append({"id": mutant_id, "spec": spec})
     specs = [entry["spec"] for entry in entries]
-    execution_source = _build_execution_source(repo_root, revision)
+    if execution_source is None:
+        execution_source = _build_execution_source(repo_root, revision)
     _validate_execution_source(execution_source, {spec["file"] for spec in specs})
-    if source_root is not None:
-        _verify_materialized_execution_source(source_root, execution_source)
     manifest: dict[str, Any] = {
         "config": {
             "path": CONFIG_RELPATH,
@@ -1015,24 +1369,33 @@ def _validate_checkout(
     source_root: Path | None = None,
 ) -> None:
     repo_root = repo_root.resolve()
-    config_path = config_path.resolve()
-    config_root = repo_root if source_root is None else source_root.resolve()
-    if config_path != config_root / CONFIG_RELPATH or not config_path.is_file():
-        raise ContractError(f"config must be the regular file {CONFIG_RELPATH}")
     if observed_revision != manifest["revision"]:
         raise ContractError(
             f"revision mismatch: expected {manifest['revision']}, got {observed_revision}"
         )
+    expected_source: dict[str, Any] | None = None
+    if source_root is not None:
+        expected_source = _build_execution_source(repo_root, observed_revision)
+        if expected_source != manifest["execution_source"]:
+            raise ContractError("execution source does not match the exact committed root")
+        _verify_materialized_execution_source(
+            source_root,
+            expected_source,
+            repo_root=repo_root,
+        )
+    config_path = config_path.resolve()
+    config_root = repo_root if source_root is None else source_root.resolve()
+    if config_path != config_root / CONFIG_RELPATH or not config_path.is_file():
+        raise ContractError(f"config must be the regular file {CONFIG_RELPATH}")
     actual_config = _digest_file(config_path)
     if actual_config != manifest["config"]["sha256"]:
         raise ContractError(
             f"config digest mismatch: expected {manifest['config']['sha256']}, got {actual_config}"
         )
-    expected_source = _build_execution_source(repo_root, observed_revision)
-    if expected_source != manifest["execution_source"]:
-        raise ContractError("execution source does not match the exact committed root")
-    if source_root is not None:
-        _verify_materialized_execution_source(source_root, expected_source)
+    if expected_source is None:
+        expected_source = _build_execution_source(repo_root, observed_revision)
+        if expected_source != manifest["execution_source"]:
+            raise ContractError("execution source does not match the exact committed root")
 
 
 def expected_shard_entries(manifest: dict[str, Any], shard_index: int) -> list[dict[str, Any]]:
