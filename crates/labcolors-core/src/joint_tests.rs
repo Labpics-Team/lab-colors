@@ -1,5 +1,7 @@
 use crate::Srgb8;
-use crate::appearance::{EncodedPointPaintV1, PaintId, SurfaceInputPortId};
+use crate::appearance::{
+    EncodedPointPaintV1, EncodedPointPaintValueV1, PaintId, SurfaceInputPortId,
+};
 use crate::composition::AdmittedOpacityV1;
 use crate::constraints::{ExactSrgb8IdentityV1, HardDecision, Wcag22Srgb8V1};
 use crate::joint::{
@@ -40,10 +42,12 @@ impl ObservationOwnerV1 for EmptyObservationOwner {
 }
 
 fn paint(id: PaintId, bytes: [u8; 3], opacity: f64) -> EncodedPointPaintV1 {
-    EncodedPointPaintV1::from_admitted(
+    EncodedPointPaintV1::from_value(
         id,
-        Srgb8::new(bytes),
-        AdmittedOpacityV1::new(opacity).unwrap(),
+        EncodedPointPaintValueV1::from_admitted(
+            Srgb8::new(bytes),
+            AdmittedOpacityV1::new(opacity).unwrap(),
+        ),
     )
 }
 

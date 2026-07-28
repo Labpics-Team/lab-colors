@@ -8,9 +8,9 @@ use proptest::prelude::*;
 
 use crate::Srgb8;
 use crate::appearance::{
-    AppearanceBindings, AppearanceGraphSpec, ColorInputId, CompositionProfileV1,
-    ExactFinalOwnedPointDomainV1, OccurrenceId, OccurrenceSpec, OpacityInputId, PaintId, PaintSpec,
-    PointOccurrenceAbsenceReleaseV1, PointOccurrenceAbsenceReplayErrorV1,
+    AppearanceBindings, AppearanceGraphSpec, CompositionProfileV1, EncodedPointPaintValueV1,
+    ExactFinalOwnedPointDomainV1, OccurrenceId, OccurrenceSpec, OpacityInputId, PaintId,
+    PaintInputId, PaintSpec, PointOccurrenceAbsenceReleaseV1, PointOccurrenceAbsenceReplayErrorV1,
     PointOccurrenceAbsenceStepV1, SurfaceId, SurfaceInputPortId, SurfaceSpec,
 };
 
@@ -25,8 +25,8 @@ struct ReplaySummary {
     steps: Vec<PointOccurrenceAbsenceStepV1>,
 }
 
-fn color(index: usize) -> ColorInputId {
-    ColorInputId::new(u32::try_from(10 + index).unwrap())
+fn paint_input(index: usize) -> PaintInputId {
+    PaintInputId::new(u32::try_from(10 + index).unwrap())
 }
 
 fn opacity(index: usize) -> OpacityInputId {
@@ -59,7 +59,7 @@ fn chain(
     assert!(!layers.is_empty());
     let input = SurfaceInputPortId::new(300);
     let input_surface = SurfaceId::new(301);
-    let mut colors = Vec::new();
+    let mut paint_inputs = Vec::new();
     let mut opacities = Vec::new();
     let mut paints = Vec::new();
     let mut surfaces = vec![SurfaceSpec::Input {
@@ -67,15 +67,15 @@ fn chain(
         port: input,
     }];
     let mut occurrences = Vec::new();
-    let mut color_bindings = Vec::new();
+    let mut paint_input_bindings = Vec::new();
     let mut opacity_bindings = Vec::new();
 
     for (index, &(source, alpha)) in layers.iter().enumerate() {
-        colors.push(color(index));
+        paint_inputs.push(paint_input(index));
         opacities.push(opacity(index));
-        paints.push(PaintSpec::Solid {
+        paints.push(PaintSpec::Input {
             id: solid(index),
-            color: color(index),
+            input: paint_input(index),
         });
         paints.push(PaintSpec::Opacity {
             id: translucent(index),
@@ -96,7 +96,10 @@ fn chain(
             id: derived_surface(index),
             occurrence: occurrence(index),
         });
-        color_bindings.push((color(index), Srgb8::new(source)));
+        paint_input_bindings.push((
+            paint_input(index),
+            EncodedPointPaintValueV1::opaque(Srgb8::new(source)),
+        ));
         opacity_bindings.push((opacity(index), alpha));
     }
 
@@ -106,7 +109,7 @@ fn chain(
     surfaces.reverse();
     occurrences.reverse();
     let graph = AppearanceGraphSpec::new(
-        colors,
+        paint_inputs,
         vec![input],
         opacities,
         paints,
@@ -116,7 +119,7 @@ fn chain(
     .compile()
     .unwrap();
     let bindings = AppearanceBindings::new(
-        color_bindings,
+        paint_input_bindings,
         vec![(input, Srgb8::new(backdrop))],
         opacity_bindings,
     );
@@ -355,9 +358,9 @@ fn final_domain_is_scoped_to_one_selected_root_in_a_fanout_graph() {
     let shared_surface = derived_surface(0);
     let mut paints = Vec::new();
     for index in 0..3 {
-        paints.push(PaintSpec::Solid {
+        paints.push(PaintSpec::Input {
             id: solid(index),
-            color: color(index),
+            input: paint_input(index),
         });
         paints.push(PaintSpec::Opacity {
             id: translucent(index),
@@ -367,7 +370,7 @@ fn final_domain_is_scoped_to_one_selected_root_in_a_fanout_graph() {
     }
     paints.reverse();
     let graph = AppearanceGraphSpec::new(
-        (0..3).map(color).collect(),
+        (0..3).map(paint_input).collect(),
         vec![input],
         (0..3).map(opacity).collect(),
         paints,
@@ -406,9 +409,18 @@ fn final_domain_is_scoped_to_one_selected_root_in_a_fanout_graph() {
     .unwrap();
     let bindings = AppearanceBindings::new(
         vec![
-            (color(0), Srgb8::new([240, 30, 10])),
-            (color(1), Srgb8::new([5, 200, 90])),
-            (color(2), Srgb8::new([220, 180, 70])),
+            (
+                paint_input(0),
+                EncodedPointPaintValueV1::opaque(Srgb8::new([240, 30, 10])),
+            ),
+            (
+                paint_input(1),
+                EncodedPointPaintValueV1::opaque(Srgb8::new([5, 200, 90])),
+            ),
+            (
+                paint_input(2),
+                EncodedPointPaintValueV1::opaque(Srgb8::new([220, 180, 70])),
+            ),
         ],
         vec![(input, Srgb8::new([31, 47, 89]))],
         vec![(opacity(0), 0.5), (opacity(1), 1.0), (opacity(2), 0.25)],

@@ -1,6 +1,7 @@
 use crate::Srgb8;
 use crate::appearance::{
-    EncodedPointPaintV1, OccurrenceId, PaintId, PhysicalProgramIdentityV1, SurfaceInputPortId,
+    EncodedPointPaintV1, EncodedPointPaintValueV1, OccurrenceId, PaintId,
+    PhysicalProgramIdentityV1, SurfaceInputPortId,
 };
 use crate::composition::{AdmittedOpacityV1, CompositionProfileV1};
 use crate::lcs_occurrence::ColorSignal;
@@ -30,10 +31,12 @@ const PAINT_A: PaintId = PaintId::new(41);
 const PAINT_B: PaintId = PaintId::new(42);
 
 fn paint(id: PaintId, source: [u8; 3], opacity: f64) -> EncodedPointPaintV1 {
-    EncodedPointPaintV1::from_admitted(
+    EncodedPointPaintV1::from_value(
         id,
-        Srgb8::new(source),
-        AdmittedOpacityV1::new(opacity).unwrap(),
+        EncodedPointPaintValueV1::from_admitted(
+            Srgb8::new(source),
+            AdmittedOpacityV1::new(opacity).unwrap(),
+        ),
     )
 }
 
@@ -418,7 +421,7 @@ fn exact_wcag_and_stability_are_independent_axes_and_baseline_binds_once() {
     );
     assert_eq!(
         report.physical_program(),
-        PhysicalProgramIdentityV1::SolidOpacityOverSurfaceEncodedSrgb8V1
+        PhysicalProgramIdentityV1::InputOpacityOverSurfaceEncodedSrgb8V1
     );
     let cell = report.cells().next().unwrap();
     assert_eq!(cell.provenance(), &[ScenarioId::new(44)]);

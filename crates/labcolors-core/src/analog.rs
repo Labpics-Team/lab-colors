@@ -452,7 +452,7 @@ mod tests {
 
         assert_eq!(
             evidence.physical,
-            PhysicalProgramIdentityV1::SolidOpacityOverSurfaceEncodedSrgb8V1
+            PhysicalProgramIdentityV1::InputOpacityOverSurfaceEncodedSrgb8V1
         );
         assert_eq!(
             evidence.constraint,

@@ -6,9 +6,10 @@ use proptest::test_runner::{Config, RngAlgorithm, TestRng, TestRunner};
 
 use crate::Srgb8;
 use crate::appearance::{
-    AppearanceBindings, AppearanceGraphSpec, BindingError, ColorInputId, CompositionProfileV1,
-    OccurrenceId, OccurrenceSpec, PaintId, PaintSpec, PointOpacityError, PointOpacityOverSurfaceV1,
-    ResolvedOccurrence, SurfaceId, SurfaceInputPortId, SurfaceSpec,
+    AppearanceBindings, AppearanceGraphSpec, BindingError, CompositionProfileV1,
+    EncodedPointPaintValueV1, OccurrenceId, OccurrenceSpec, PaintId, PaintInputId, PaintSpec,
+    PointOpacityError, PointOpacityOverSurfaceV1, ResolvedOccurrence, SurfaceId,
+    SurfaceInputPortId, SurfaceSpec,
 };
 use crate::lcs_occurrence::ColorSignal;
 use crate::observation::{
@@ -305,22 +306,25 @@ fn prepare_ordered<'owner>(
 }
 
 #[test]
-fn authored_color_and_observed_surface_ports_are_distinct_through_execution() {
+fn authored_paint_and_observed_surface_ports_are_distinct_through_execution() {
     let _sealed_adapter_contract: fn(
         [u8; 3],
         f64,
         [u8; 3],
     ) -> Result<ResolvedOccurrence, PointOpacityError> = PointOpacityOverSurfaceV1::evaluate;
-    let color = ColorInputId::new(7);
+    let paint_input = PaintInputId::new(7);
     let surface_port = SurfaceInputPortId::new(7);
     let paint = PaintId::new(1);
     let surface = SurfaceId::new(1);
     let occurrence = OccurrenceId::new(1);
     let graph = AppearanceGraphSpec::new(
-        vec![color],
+        vec![paint_input],
         vec![surface_port],
         vec![],
-        vec![PaintSpec::Solid { id: paint, color }],
+        vec![PaintSpec::Input {
+            id: paint,
+            input: paint_input,
+        }],
         vec![SurfaceSpec::Input {
             id: surface,
             port: surface_port,
@@ -337,7 +341,10 @@ fn authored_color_and_observed_surface_ports_are_distinct_through_execution() {
 
     let evaluation = graph
         .evaluate(&AppearanceBindings::new(
-            vec![(color, Srgb8::new([1, 2, 3]))],
+            vec![(
+                paint_input,
+                EncodedPointPaintValueV1::opaque(Srgb8::new([1, 2, 3])),
+            )],
             vec![(surface_port, Srgb8::new([240, 241, 242]))],
             vec![],
         ))
@@ -348,7 +355,10 @@ fn authored_color_and_observed_surface_ports_are_distinct_through_execution() {
     );
     assert_eq!(
         graph.evaluate(&AppearanceBindings::new(
-            vec![(color, Srgb8::new([1, 2, 3]))],
+            vec![(
+                paint_input,
+                EncodedPointPaintValueV1::opaque(Srgb8::new([1, 2, 3])),
+            )],
             vec![],
             vec![],
         )),
