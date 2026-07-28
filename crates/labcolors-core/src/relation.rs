@@ -61,26 +61,44 @@ where
         &self.candidates
     }
 
-    /// Переносит уже доказанную topology через инъективную смену ID-типа.
+    /// Переносит topology в другой ID-тип и заново доказывает её инварианты.
     ///
-    /// Используется только sealed lowering facade-ID → Core-ID. Closure обязана
-    /// сохранять равенство и порядок; поэтому повторная public admission здесь
-    /// создала бы второй источник истины того же инварианта.
-    pub(crate) fn map_ordered<U>(self, mut map: impl FnMut(T) -> U) -> DirectedRelationV1<U>
+    /// Даже внутренний mapper нельзя считать инъективным по комментарию: типы
+    /// обязаны не позволять ему создать повтор кандидата или reference.
+    pub(crate) fn try_map<U>(
+        self,
+        mut map: impl FnMut(T) -> U,
+    ) -> Result<DirectedRelationV1<U>, DirectedRelationErrorV1<U>>
     where
         U: Copy + Ord,
     {
         let reference = map(self.reference);
-        let candidates = self
-            .candidates
-            .iter()
-            .copied()
-            .map(map)
-            .collect::<Vec<_>>()
-            .into_boxed_slice();
-        DirectedRelationV1 {
-            reference,
-            candidates,
-        }
+        let candidates = self.candidates.iter().copied().map(map).collect::<Vec<_>>();
+        DirectedRelationV1::try_new(reference, candidates)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn remap_rechecks_reference_exclusion_instead_of_trusting_the_mapper() {
+        let relation = DirectedRelationV1::try_new(0_u8, vec![1_u8]).unwrap();
+
+        assert_eq!(
+            relation.try_map(|_| 0_u16),
+            Err(DirectedRelationErrorV1::ReferenceInCandidates { reference: 0 })
+        );
+    }
+
+    #[test]
+    fn remap_rechecks_candidate_uniqueness_instead_of_trusting_the_mapper() {
+        let relation = DirectedRelationV1::try_new(0_u8, vec![1_u8, 2_u8]).unwrap();
+
+        assert_eq!(
+            relation.try_map(|id| u16::from(id != 0)),
+            Err(DirectedRelationErrorV1::DuplicateCandidate { candidate: 1 })
+        );
     }
 }

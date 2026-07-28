@@ -1525,7 +1525,9 @@ impl DraftV1 {
     ) -> &mut Self {
         self.inner.push_exact_intrinsic_relation_hard(
             id.into_core(),
-            relation.map_ordered(TargetIdV1::into_core),
+            relation
+                .try_map(TargetIdV1::into_core)
+                .expect("facade TargetId is a transparent bijection over Core TargetId"),
         );
         self
     }
@@ -1538,7 +1540,9 @@ impl DraftV1 {
     ) -> &mut Self {
         self.inner.push_exact_visible_relation_hard(
             id.into_core(),
-            relation.map_ordered(OccurrenceIdV1::into_core),
+            relation
+                .try_map(OccurrenceIdV1::into_core)
+                .expect("facade OccurrenceId is a transparent bijection over Core OccurrenceId"),
         );
         self
     }

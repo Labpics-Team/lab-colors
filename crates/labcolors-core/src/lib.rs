@@ -59,13 +59,6 @@ pub(crate) mod program;
     )
 )]
 pub(crate) mod program_session;
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "relation admission becomes reachable with the staged Program facade"
-    )
-)]
 pub(crate) mod relation;
 #[cfg_attr(
     not(test),
