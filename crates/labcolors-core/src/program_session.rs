@@ -67,7 +67,7 @@ use crate::wcag22::Wcag22CriterionV1;
 
 #[path = "program_identity.rs"]
 mod identity;
-pub(crate) use identity::ProgramContentIdentityV4;
+pub(crate) use identity::ProgramContentIdentityV5;
 
 /// Opaque identity of one immutable authored colour source.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -154,12 +154,44 @@ impl TargetCandidateV1 {
     }
 }
 
-/// Closed authored freedom of one Target. Fixed targets use their Source
-/// signal exactly; finite targets can select only from the explicit domain.
+/// Admission failure for an authored finite Paint domain.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FinitePaintDomainAdmissionErrorV1 {
+    Empty,
+}
+
+/// A non-empty closed set of atomic Paint candidates.
+///
+/// Candidate order is authored data only until the declared joint order binds
+/// it; an empty set is structurally impossible after admission.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum TargetDomainV1 {
-    Fixed,
-    Finite(Vec<TargetCandidateV1>),
+pub struct FinitePaintDomainV1(Vec<TargetCandidateV1>);
+
+impl FinitePaintDomainV1 {
+    pub fn try_new(
+        candidates: Vec<TargetCandidateV1>,
+    ) -> Result<Self, FinitePaintDomainAdmissionErrorV1> {
+        if candidates.is_empty() {
+            return Err(FinitePaintDomainAdmissionErrorV1::Empty);
+        }
+        Ok(Self(candidates))
+    }
+
+    pub fn candidates(&self) -> &[TargetCandidateV1] {
+        &self.0
+    }
+
+    fn candidates_mut(&mut self) -> &mut [TargetCandidateV1] {
+        &mut self.0
+    }
+}
+
+/// Closed authored intent of one Target. Fixed targets reference immutable
+/// source data; finite targets own all of their physical freedom directly.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TargetIntentV1 {
+    FixedSource(SourceId),
+    Finite(FinitePaintDomainV1),
 }
 
 /// A Paint-addressable target distinct from both source data and appearance
@@ -167,37 +199,28 @@ pub enum TargetDomainV1 {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Target {
     id: TargetId,
-    source: SourceId,
-    domain: TargetDomainV1,
+    intent: TargetIntentV1,
 }
 
 impl Target {
-    pub const fn new(id: TargetId, source: SourceId, domain: TargetDomainV1) -> Self {
-        Self { id, source, domain }
+    pub const fn new(id: TargetId, intent: TargetIntentV1) -> Self {
+        Self { id, intent }
     }
 
     pub const fn fixed(id: TargetId, source: SourceId) -> Self {
-        Self::new(id, source, TargetDomainV1::Fixed)
+        Self::new(id, TargetIntentV1::FixedSource(source))
     }
 
-    pub const fn finite(
-        id: TargetId,
-        source: SourceId,
-        candidates: Vec<TargetCandidateV1>,
-    ) -> Self {
-        Self::new(id, source, TargetDomainV1::Finite(candidates))
+    pub const fn finite(id: TargetId, domain: FinitePaintDomainV1) -> Self {
+        Self::new(id, TargetIntentV1::Finite(domain))
     }
 
     pub const fn id(&self) -> TargetId {
         self.id
     }
 
-    pub const fn source(&self) -> SourceId {
-        self.source
-    }
-
-    pub const fn domain(&self) -> &TargetDomainV1 {
-        &self.domain
+    pub const fn intent(&self) -> &TargetIntentV1 {
+        &self.intent
     }
 }
 
@@ -1061,7 +1084,7 @@ pub enum ProgramCompileError {
     DuplicateTarget {
         target: TargetId,
     },
-    MissingTargetSource {
+    MissingFixedSource {
         target: TargetId,
         source: SourceId,
     },
@@ -1156,9 +1179,6 @@ pub enum ProgramCompileError {
     OpacityOutOfDomain {
         input: OpacityInputId,
     },
-    EmptyTargetDomain {
-        target: TargetId,
-    },
     DuplicateTargetCandidate {
         target: TargetId,
         candidate: TargetCandidateId,
@@ -1169,7 +1189,7 @@ pub enum ProgramCompileError {
         duplicate: TargetCandidateId,
         value: EncodedPointPaintValueV1,
     },
-    UnconstrainedTarget {
+    UnconstrainedFiniteTarget {
         target: TargetId,
     },
     DisconnectedFiniteTargets,
@@ -1477,7 +1497,7 @@ where
     Evaluation: ProgramConstraintEvaluatorSetV1,
     ProgramConstraintInvocationOf<Evaluation>: Copy,
 {
-    content_identity: ProgramContentIdentityV4,
+    content_identity: ProgramContentIdentityV5,
     evaluator: Evaluation,
     graph: CompiledAppearanceGraph,
     binding_template: AdmittedAppearanceBindings,
@@ -1525,7 +1545,7 @@ where
     /// Opaque ID и порядок неупорядоченных объявлений исключены; явный joint
     /// order входит в адрес. Адрес не подтверждает поколение владельца и не
     /// заменяет revision-bound evidence.
-    pub fn content_identity(&self) -> ProgramContentIdentityV4 {
+    pub fn content_identity(&self) -> ProgramContentIdentityV5 {
         self.owner_generation.content_identity
     }
 
@@ -2001,7 +2021,7 @@ pub(crate) enum ProgramPointCausalConsideredStateV1 {
 /// одного моделируемого terminal root. Оно ничего не утверждает о пикселе
 /// браузера, восприятии или качестве цвета.
 pub(crate) struct ProgramPointCausalEvidenceV1<'report, State> {
-    content_identity: ProgramContentIdentityV4,
+    content_identity: ProgramContentIdentityV5,
     observation: &'report RevisionBoundObservationV1,
     record: &'report ProgramPointCausalRecordV1,
     steps: &'report [PointOccurrenceAbsenceStepV1],
@@ -2022,7 +2042,7 @@ where
             .unwrap_or_else(|| unreachable!("тип replay span запрещает пустой пересчёт"))
     }
 
-    pub(crate) const fn content_identity(&self) -> ProgramContentIdentityV4 {
+    pub(crate) const fn content_identity(&self) -> ProgramContentIdentityV5 {
         self.content_identity
     }
 
@@ -2080,7 +2100,7 @@ pub struct ProgramReportV1<Evaluation>
 where
     Evaluation: ProgramConstraintEvaluatorSetV1,
 {
-    content_identity: ProgramContentIdentityV4,
+    content_identity: ProgramContentIdentityV5,
     observation: RevisionBoundObservationV1,
     arena: ProgramEvaluationArenaLeaseV1<Evaluation>,
 }
@@ -2091,7 +2111,7 @@ where
 {
     /// Адрес содержимого Program, по которому построен report; это не
     /// идентификатор поколения и не runtime-authority.
-    pub const fn content_identity(&self) -> ProgramContentIdentityV4 {
+    pub const fn content_identity(&self) -> ProgramContentIdentityV5 {
         self.content_identity
     }
 
@@ -3721,7 +3741,7 @@ where
     let occurrence_contexts =
         compact_constraint_contexts(&all_occurrence_contexts, &mut constraints)?;
     let outputs = compile_outputs(&graph, &mut program.outputs)?;
-    let content_identity = identity::compile_program_content_identity_v4(&program)?;
+    let content_identity = identity::compile_program_content_identity_v5(&program)?;
     Ok(ProgramEpochV1 {
         content_identity,
         evaluator: program.evaluator,
@@ -3768,14 +3788,17 @@ where
         return Err(ProgramCompileError::DuplicateTarget { target });
     }
     for target in &program.targets {
+        let TargetIntentV1::FixedSource(source) = target.intent else {
+            continue;
+        };
         if program
             .sources
-            .binary_search_by_key(&target.source, |source| source.id)
+            .binary_search_by_key(&source, |candidate| candidate.id)
             .is_err()
         {
-            return Err(ProgramCompileError::MissingTargetSource {
+            return Err(ProgramCompileError::MissingFixedSource {
                 target: target.id,
-                source: target.source,
+                source,
             });
         }
     }
@@ -4074,8 +4097,8 @@ where
         constraints.iter().map(compiled_constraint_dependency_root),
     )?;
     for (target_index, target) in program.targets.iter().enumerate() {
-        if matches!(&target.domain, TargetDomainV1::Finite(_)) && !scratch.targets[target_index] {
-            return Err(ProgramCompileError::UnconstrainedTarget { target: target.id });
+        if matches!(&target.intent, TargetIntentV1::Finite(_)) && !scratch.targets[target_index] {
+            return Err(ProgramCompileError::UnconstrainedFiniteTarget { target: target.id });
         }
     }
     for output in &program.outputs {
@@ -4093,14 +4116,14 @@ where
     let finite_count = program
         .targets
         .iter()
-        .filter(|target| matches!(&target.domain, TargetDomainV1::Finite(_)))
+        .filter(|target| matches!(&target.intent, TargetIntentV1::Finite(_)))
         .count();
     if finite_count > 1 {
         let mut has_common_assessment = false;
         for target in constraints.iter().map(compiled_constraint_dependency_root) {
             scratch.scan(&index, [target])?;
             if program.targets.iter().enumerate().all(|(index, target)| {
-                !matches!(&target.domain, TargetDomainV1::Finite(_)) || scratch.targets[index]
+                !matches!(&target.intent, TargetIntentV1::Finite(_)) || scratch.targets[index]
             }) {
                 has_common_assessment = true;
                 break;
@@ -4157,12 +4180,10 @@ fn compile_targets(
         .try_reserve_exact(authored_targets.len())
         .map_err(|_| ProgramCompileError::ResourceExhausted)?;
     for target in authored_targets {
-        let TargetDomainV1::Finite(candidates) = &mut target.domain else {
+        let TargetIntentV1::Finite(domain) = &mut target.intent else {
             continue;
         };
-        if candidates.is_empty() {
-            return Err(ProgramCompileError::EmptyTargetDomain { target: target.id });
-        }
+        let candidates = domain.candidates_mut();
         let binding = graph
             .bind_paint_input(target_paint_input_id(target.id))
             .ok_or(ProgramCompileError::InternalInvariant)?;
@@ -4807,14 +4828,31 @@ where
         .try_reserve_exact(program.targets.len())
         .map_err(|_| ProgramCompileError::ResourceExhausted)?;
     for target in &program.targets {
-        let source_index = program
-            .sources
-            .binary_search_by_key(&target.source, |source| source.id)
-            .map_err(|_| ProgramCompileError::InternalInvariant)?;
-        paint_inputs.push((
-            target_paint_input_id(target.id),
-            EncodedPointPaintValueV1::opaque(program.sources[source_index].signal.srgb8()),
-        ));
+        let value = match &target.intent {
+            TargetIntentV1::FixedSource(source) => {
+                let source_index = program
+                    .sources
+                    .binary_search_by_key(source, |candidate| candidate.id)
+                    .map_err(|_| ProgramCompileError::InternalInvariant)?;
+                EncodedPointPaintValueV1::opaque(program.sources[source_index].signal.srgb8())
+            }
+            TargetIntentV1::Finite(domain) => domain
+                .candidates()
+                .iter()
+                // A canonical admitted value exists only to satisfy the cold
+                // graph binding. Every search pass overwrites it atomically;
+                // physical ordering avoids client-ID and declaration-order
+                // influence even on this non-authoritative seed.
+                .min_by_key(|candidate| {
+                    (
+                        candidate.value.source().bytes(),
+                        candidate.value.opacity_bits(),
+                    )
+                })
+                .map(|candidate| candidate.value)
+                .ok_or(ProgramCompileError::InternalInvariant)?,
+        };
+        paint_inputs.push((target_paint_input_id(target.id), value));
     }
     let surfaces = try_collect_program(
         program.observation_group.surface_input_ports.len(),

@@ -33,9 +33,9 @@ use crate::program_session::{
     CORE_PROGRAM_ASSESSMENT_CALLS, CompiledCoreProgramV1, CompositionProfile, ConstraintId,
     ConstraintInvocation, ConstraintSet, CoreProgramConstraintInvocationV1,
     CoreProgramEvaluatorsV1, CoreProgramPassEvidenceV1, CoreProgramV1,
-    CoreProgramViolationEvidenceV1, DeclaredJointSelectionV1, JointCandidateStateV1,
-    ObservationGroup, Occurrence, OpacityInput, OutputBinding, OutputSlotId, Paint,
-    PointPresentationRootV1, PointPresentationTargetV1, PresentationRootId, Program,
+    CoreProgramViolationEvidenceV1, DeclaredJointSelectionV1, FinitePaintDomainV1,
+    JointCandidateStateV1, ObservationGroup, Occurrence, OpacityInput, OutputBinding, OutputSlotId,
+    Paint, PointPresentationRootV1, PointPresentationTargetV1, PresentationRootId, Program,
     ProgramConstraintCellV1, ProgramConstraintPassEvidenceV1, ProgramConstraintResultV1,
     ProgramConstraintSubjectV1, ProgramConstraintViolationEvidenceV1, Source, SourceId, Surface,
     Target, TargetCandidateChoiceV1, TargetCandidateId, TargetCandidateV1, TargetId,
@@ -61,6 +61,10 @@ const PRESENTATION_ROOT: PresentationRootId = PresentationRootId::new(21);
 
 fn signal(bytes: [u8; 3]) -> ColorSignal {
     ColorSignal::from_srgb8(Srgb8::new(bytes))
+}
+
+fn finite_domain(candidates: Vec<TargetCandidateV1>) -> FinitePaintDomainV1 {
+    FinitePaintDomainV1::try_new(candidates).unwrap()
 }
 
 fn context() -> AppearanceContextId {
@@ -117,8 +121,7 @@ fn finite_program_with_outputs(
         vec![Source::new(SOURCE, signal(candidate_signals[0]))],
         vec![Target::finite(
             TARGET,
-            SOURCE,
-            vec![
+            finite_domain(vec![
                 TargetCandidateV1::new(
                     FIRST,
                     EncodedPointPaintValueV1::opaque(Srgb8::new(candidate_signals[0])),
@@ -127,7 +130,7 @@ fn finite_program_with_outputs(
                     SECOND,
                     EncodedPointPaintValueV1::opaque(Srgb8::new(candidate_signals[1])),
                 ),
-            ],
+            ]),
         )],
         ObservationGroup::new(GROUP, vec![SURFACE_PORT]),
         vec![],

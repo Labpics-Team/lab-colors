@@ -15,7 +15,7 @@ use crate::program_session::{
     Occurrence, OpacityInput, OutputBinding, OutputSlotId, Paint,
     PointOutputPresentationBindErrorV1, PointPresentationRootV1, PointPresentationTargetV1,
     PresentationRootId, Program, ProgramCompileError, ProgramConstraintBodyV1,
-    ProgramConstraintSubjectV1, Source, SourceId, Surface, Target, TargetId,
+    ProgramConstraintSubjectV1, Source, SourceId, Surface, Target, TargetId, TargetIntentV1,
     canonical_surface_input_port_sequence_matches, check_render_node_count,
 };
 use crate::session::{SessionPlanV1, SessionState, SessionUpdateError};
@@ -231,7 +231,7 @@ fn authored_modes_are_marker_typed_and_values_preserve_exact_ids() {
     );
     let target = Target::fixed(TARGET, SOURCE);
     assert_eq!(target.id(), TARGET);
-    assert_eq!(target.source(), SOURCE);
+    assert_eq!(target.intent(), &TargetIntentV1::FixedSource(SOURCE));
     let opacity = OpacityInput::new(OPACITY, 0.375);
     assert_eq!(opacity.id(), OPACITY);
     assert_eq!(opacity.value(), 0.375);

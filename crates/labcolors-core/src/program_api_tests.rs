@@ -94,7 +94,38 @@ fn finite_paint_value_admission_is_typed_and_canonical() {
     assert_eq!(canonical.opacity().to_bits(), 0.0_f64.to_bits());
 }
 
+#[test]
+fn finite_paint_domain_is_nonempty_before_it_can_enter_a_draft() {
+    assert_eq!(
+        program::FinitePaintDomainV1::try_new(Vec::new()),
+        Err(program::FinitePaintDomainErrorV1::Empty),
+    );
+
+    let candidate = program::TargetCandidateV1::new(
+        program::TargetCandidateIdV1::new(1),
+        program::PaintValueV1::opaque(Srgb8::new([1, 2, 3])),
+    );
+    assert!(program::FinitePaintDomainV1::try_new(vec![candidate]).is_ok());
+}
+
 proptest! {
+    #[test]
+    fn every_nonempty_finite_paint_domain_is_admitted(
+        source in any::<[u8; 3]>(),
+        candidate_count in 1_usize..64,
+    ) {
+        let candidates = (0..candidate_count)
+            .map(|index| {
+                program::TargetCandidateV1::new(
+                    program::TargetCandidateIdV1::new(index as u32),
+                    program::PaintValueV1::opaque(Srgb8::new(source)),
+                )
+            })
+            .collect();
+
+        prop_assert!(program::FinitePaintDomainV1::try_new(candidates).is_ok());
+    }
+
     #[test]
     fn admitted_finite_paint_value_round_trips_source_and_unit_opacity(
         source in any::<[u8; 3]>(),

@@ -384,6 +384,44 @@ fn staged_program_draft_wraps_the_single_canonical_core_graph() {
 }
 
 #[test]
+fn finite_target_intent_has_no_dead_source_axis() {
+    assert_eq!(
+        normalized_source_scope(
+            PROGRAM_SESSION_SOURCE,
+            "pub enum TargetIntentV1 {",
+            "/// A Paint-addressable target",
+        ),
+        "pub enum TargetIntentV1 { FixedSource(SourceId), Finite(FinitePaintDomainV1), }",
+        "Target intent must remain a closed sum instead of a source × domain product",
+    );
+    assert_eq!(
+        normalized_source_scope(
+            PROGRAM_SESSION_SOURCE,
+            "pub struct Target {",
+            "impl Target {",
+        ),
+        "pub struct Target { id: TargetId, intent: TargetIntentV1, }",
+        "a finite Target must have no physically dead Source field",
+    );
+    let target_impl = source_scope(
+        PROGRAM_SESSION_SOURCE,
+        "impl Target {",
+        "/// One typed target/candidate assignment",
+    );
+    assert!(
+        target_impl
+            .contains("pub const fn finite(id: TargetId, domain: FinitePaintDomainV1) -> Self",),
+        "finite construction must consume an already admitted domain without SourceId",
+    );
+    for retired in ["TargetDomainV1", "EmptyTargetDomain", "MissingTargetSource"] {
+        assert!(
+            !contains_rust_identifier(PROGRAM_SESSION_SOURCE, retired),
+            "retired product-state symbol `{retired}` must not return",
+        );
+    }
+}
+
+#[test]
 fn staged_session_is_evidence_only_and_retired_operation_authority_cannot_return() {
     assert_eq!(
         normalized_source_scope(
@@ -1414,24 +1452,30 @@ fn program_identity_binds_lcs_releases_only_through_lcs_constraint_content() {
         "DOMAIN_V3",
         "PROGRAM_SCHEMA_V3",
         "compile_program_content_identity_v3",
+        "ProgramContentIdentityV4",
+        "ContentIdentityV4",
+        "DOMAIN_V4",
+        "PROGRAM_SCHEMA_V4",
+        "compile_program_content_identity_v4",
     ] {
         for (path, source) in identity_sources {
             assert!(
                 !contains_rust_identifier(source, retired),
-                "the V4 content-address cut must not retain legacy identity symbol `{retired}` in {path}",
+                "the V5 content-address cut must not retain legacy identity symbol `{retired}` in {path}",
             );
         }
     }
     assert!(!PROGRAM_IDENTITY_SOURCE.contains("labcolors.program-content-identity.v1"));
     assert!(!PROGRAM_IDENTITY_SOURCE.contains("labcolors.program-content-identity.v2"));
     assert!(!PROGRAM_IDENTITY_SOURCE.contains("labcolors.program-content-identity.v3"));
+    assert!(!PROGRAM_IDENTITY_SOURCE.contains("labcolors.program-content-identity.v4"));
     for required in [
-        "const DOMAIN_V4: &[u8] = b\"labcolors.program-content-identity.v4\\0\";",
-        "pub(super) const PROGRAM_SCHEMA_V4: u8 = 4;",
+        "const DOMAIN_V5: &[u8] = b\"labcolors.program-content-identity.v5\\0\";",
+        "pub(super) const PROGRAM_SCHEMA_V5: u8 = 5;",
     ] {
         assert!(
             PROGRAM_IDENTITY_SOURCE.contains(required),
-            "the V4 content-address type must bind its exact domain and schema tag; missing `{required}`",
+            "the V5 content-address type must bind its exact domain and schema tag; missing `{required}`",
         );
     }
 
@@ -1558,7 +1602,8 @@ fn cold_program_normalization_reuses_owned_unordered_buffers() {
     for required in [
         "authored_targets: &mut [Target]",
         "authored_selection: Option<&mut DeclaredJointSelectionV1>",
-        "let TargetDomainV1::Finite(candidates) = &mut target.domain",
+        "let TargetIntentV1::Finite(domain) = &mut target.intent",
+        "let candidates = domain.candidates_mut()",
         "authored_state .choices .sort_unstable_by_key",
         "authored: &mut [OutputBinding]",
     ] {
