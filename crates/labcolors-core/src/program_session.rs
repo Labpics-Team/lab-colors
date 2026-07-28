@@ -28,12 +28,13 @@ use std::rc::{Rc, Weak};
 use crate::Srgb8;
 use crate::appearance::{
     AdmittedAppearanceBindings, AppearanceBindings, AppearanceEvaluationView, AppearanceGraphSpec,
-    AppearanceWorkspace, BindingError, ColorInputId, CompileError, CompiledAppearanceGraph,
-    CompiledColorInputSlotV1, CompiledOccurrenceSlotV1, CompiledPaintSlotV1,
-    CompiledPointPresentationPathV1, EncodedPointPaintV1, ExactFinalOwnedPointDomainV1,
-    OccurrenceId, OccurrenceSpec, OpacityInputId, PaintId, PaintSpec,
-    PointOccurrenceAbsenceReleaseV1, PointOccurrenceAbsenceStepV1, PointOccurrenceAbsenceSummaryV1,
-    PointPresentationPathErrorV1, SurfaceId, SurfaceInputPortId, SurfaceSpec,
+    AppearanceWorkspace, BindingError, CompileError, CompiledAppearanceGraph,
+    CompiledOccurrenceSlotV1, CompiledPaintInputSlotV1, CompiledPaintSlotV1,
+    CompiledPointPresentationPathV1, EncodedPointPaintV1, EncodedPointPaintValueV1,
+    ExactFinalOwnedPointDomainV1, OccurrenceId, OccurrenceSpec, OpacityInputId, PaintId,
+    PaintInputId, PaintSpec, PointOccurrenceAbsenceReleaseV1, PointOccurrenceAbsenceStepV1,
+    PointOccurrenceAbsenceSummaryV1, PointPresentationPathErrorV1, SurfaceId, SurfaceInputPortId,
+    SurfaceSpec,
 };
 use crate::clean_set::{
     ClosedRejectedBlueIntervalV1, ExactNominalSrgb8CleanSetDecisionV1, ExactNominalSrgb8CleanSetV1,
@@ -1467,7 +1468,7 @@ impl CompiledPointPresentationsV1 {
 }
 
 struct CompiledFiniteTargetV1 {
-    binding: CompiledColorInputSlotV1,
+    binding: CompiledPaintInputSlotV1,
     candidates: Box<[ColorSignal]>,
 }
 
@@ -3156,7 +3157,10 @@ where
             .ok_or(ProgramSessionEvaluationError::InternalInvariant)?;
         runtime
             .bindings
-            .overwrite_color_at(target.binding, candidate.srgb8())
+            .overwrite_paint_input_at(
+                target.binding,
+                EncodedPointPaintValueV1::opaque(candidate.srgb8()),
+            )
             .map_err(map_program_execution_binding_error)?;
     }
     Ok(())
@@ -4151,7 +4155,7 @@ fn compile_targets(
 > {
     struct CanonicalFiniteTargetV1<'a> {
         id: TargetId,
-        binding: CompiledColorInputSlotV1,
+        binding: CompiledPaintInputSlotV1,
         candidates: &'a [TargetCandidateV1],
     }
 
@@ -4167,7 +4171,7 @@ fn compile_targets(
             return Err(ProgramCompileError::EmptyTargetDomain { target: target.id });
         }
         let binding = graph
-            .bind_color_input(target_color_input_id(target.id))
+            .bind_paint_input(target_paint_input_id(target.id))
             .ok_or(ProgramCompileError::InternalInvariant)?;
         candidates.sort_unstable_by_key(|candidate| candidate.id);
         if let Some(candidate) = candidates
@@ -4699,8 +4703,8 @@ pub(crate) fn canonical_surface_input_port_sequence_matches(
     actual.into_iter().eq(expected.iter().copied())
 }
 
-const fn target_color_input_id(target: TargetId) -> ColorInputId {
-    ColorInputId::new(target.value())
+const fn target_paint_input_id(target: TargetId) -> PaintInputId {
+    PaintInputId::new(target.value())
 }
 
 fn try_collect_program<T>(
@@ -4722,12 +4726,12 @@ where
     Evaluation: ProgramConstraintEvaluatorSetV1,
     ProgramConstraintInvocationOf<Evaluation>: Copy,
 {
-    let colors = try_collect_program(
+    let paint_inputs = try_collect_program(
         program.targets.len(),
         program
             .targets
             .iter()
-            .map(|target| target_color_input_id(target.id)),
+            .map(|target| target_paint_input_id(target.id)),
     )?;
     let surface_inputs = try_collect_program(
         program.observation_group.surface_input_ports.len(),
@@ -4744,9 +4748,9 @@ where
     let paints = try_collect_program(
         program.paints.len(),
         program.paints.iter().map(|paint| match *paint {
-            Paint::Solid { id, target } => PaintSpec::Solid {
+            Paint::Solid { id, target } => PaintSpec::Input {
                 id,
-                color: target_color_input_id(target),
+                input: target_paint_input_id(target),
             },
             Paint::Opacity {
                 id,
@@ -4782,7 +4786,7 @@ where
         }),
     )?;
     Ok(AppearanceGraphSpec::new(
-        colors,
+        paint_inputs,
         surface_inputs,
         opacities,
         paints,
@@ -4798,8 +4802,8 @@ where
     Evaluation: ProgramConstraintEvaluatorSetV1,
     ProgramConstraintInvocationOf<Evaluation>: Copy,
 {
-    let mut colors = Vec::new();
-    colors
+    let mut paint_inputs = Vec::new();
+    paint_inputs
         .try_reserve_exact(program.targets.len())
         .map_err(|_| ProgramCompileError::ResourceExhausted)?;
     for target in &program.targets {
@@ -4807,9 +4811,9 @@ where
             .sources
             .binary_search_by_key(&target.source, |source| source.id)
             .map_err(|_| ProgramCompileError::InternalInvariant)?;
-        colors.push((
-            target_color_input_id(target.id),
-            program.sources[source_index].signal.srgb8(),
+        paint_inputs.push((
+            target_paint_input_id(target.id),
+            EncodedPointPaintValueV1::opaque(program.sources[source_index].signal.srgb8()),
         ));
     }
     let surfaces = try_collect_program(
@@ -4827,12 +4831,12 @@ where
             .iter()
             .map(|input| (input.id, input.value)),
     )?;
-    Ok(AppearanceBindings::new(colors, surfaces, opacities))
+    Ok(AppearanceBindings::new(paint_inputs, surfaces, opacities))
 }
 
 fn map_compile_error(error: CompileError) -> ProgramCompileError {
     match error {
-        CompileError::DuplicateColorInput { .. } => ProgramCompileError::InternalInvariant,
+        CompileError::DuplicatePaintInput { .. } => ProgramCompileError::InternalInvariant,
         CompileError::DuplicateOpacityInput { input } => {
             ProgramCompileError::DuplicateOpacityInput { input }
         }
@@ -4846,7 +4850,7 @@ fn map_compile_error(error: CompileError) -> ProgramCompileError {
         CompileError::DuplicateOccurrence { occurrence } => {
             ProgramCompileError::DuplicateOccurrence { occurrence }
         }
-        CompileError::MissingPaintColorInput { .. } => ProgramCompileError::InternalInvariant,
+        CompileError::MissingPaintInput { .. } => ProgramCompileError::InternalInvariant,
         CompileError::MissingPaintSource { paint, source } => {
             ProgramCompileError::MissingPaintSource { paint, source }
         }

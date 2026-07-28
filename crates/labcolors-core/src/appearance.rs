@@ -31,11 +31,11 @@ use std::sync::Arc;
 use crate::Srgb8;
 pub(crate) use crate::composition::CompositionProfileV1;
 
-/// Непрозрачный handle цветового входа. Число — только идентичность.
+/// Непрозрачный handle атомарного Paint-входа. Число — только идентичность.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) struct ColorInputId(u32);
+pub(crate) struct PaintInputId(u32);
 
-impl ColorInputId {
+impl PaintInputId {
     pub(crate) const fn new(raw: u32) -> Self {
         Self(raw)
     }
@@ -43,7 +43,7 @@ impl ColorInputId {
 
 /// Непрозрачный handle наблюдаемого point-входа поверхности.
 ///
-/// Он намеренно не взаимозаменяем с [`ColorInputId`]: authored Paint source и
+/// Он намеренно не взаимозаменяем с [`PaintInputId`]: authored Paint и
 /// runtime backdrop имеют разные lifecycle и admission contract.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct SurfaceInputPortId(u32);
@@ -122,7 +122,7 @@ impl OccurrenceId {
 /// topology/opcode/profile, а не числовые handles декларации или client ID.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PhysicalProgramIdentityV1 {
-    SolidOpacityOverSurfaceEncodedSrgb8V1,
+    InputOpacityOverSurfaceEncodedSrgb8V1,
 }
 
 /// Routing внутри одной compiled point-программы отделён от физического
@@ -151,10 +151,11 @@ impl ProgramOccurrenceBindingV1 {
 /// Paint-конструкторы point-домена. Ни один вариант не знает Surface.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PaintSpec {
-    /// Непрозрачный encoded-sRGB8 Paint из цветового входа.
-    Solid { id: PaintId, color: ColorInputId },
+    /// Атомарное encoded-sRGB8 + straight-alpha значение Paint-входа.
+    Input { id: PaintId, input: PaintInputId },
     /// Модуляция straight alpha существующего Paint.
     ///
+    /// Связанный scalar является множителем, а не абсолютным новым alpha.
     /// Рёбра задают порядок операций: узел вычисляет одно binary64-произведение
     /// alpha источника и связанного scalar. Перегруппировка создаёт другую
     /// численную программу; алгебраическая ассоциативность f64 не заявляется.
@@ -169,7 +170,7 @@ pub(crate) enum PaintSpec {
 impl PaintSpec {
     fn id(&self) -> PaintId {
         match self {
-            Self::Solid { id, .. } | Self::Opacity { id, .. } => *id,
+            Self::Input { id, .. } | Self::Opacity { id, .. } => *id,
         }
     }
 }
@@ -208,8 +209,8 @@ pub(crate) struct OccurrenceSpec {
 /// Ошибки атомарной AOT-компиляции физической декларации.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum CompileError {
-    DuplicateColorInput {
-        input: ColorInputId,
+    DuplicatePaintInput {
+        input: PaintInputId,
     },
     DuplicateOpacityInput {
         input: OpacityInputId,
@@ -226,9 +227,9 @@ pub(crate) enum CompileError {
     DuplicateOccurrence {
         occurrence: OccurrenceId,
     },
-    MissingPaintColorInput {
+    MissingPaintInput {
         paint: PaintId,
-        input: ColorInputId,
+        input: PaintInputId,
     },
     MissingPaintSource {
         paint: PaintId,
@@ -269,8 +270,8 @@ pub(crate) enum CompileError {
 /// полной проверки, поэтому частичного результата нет.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum BindingError {
-    DuplicateColorBinding {
-        input: ColorInputId,
+    DuplicatePaintInputBinding {
+        input: PaintInputId,
     },
     DuplicateOpacityBinding {
         input: OpacityInputId,
@@ -278,8 +279,8 @@ pub(crate) enum BindingError {
     DuplicateSurfaceInputBinding {
         input: SurfaceInputPortId,
     },
-    MissingColorBinding {
-        input: ColorInputId,
+    MissingPaintInputBinding {
+        input: PaintInputId,
     },
     MissingOpacityBinding {
         input: OpacityInputId,
@@ -287,8 +288,8 @@ pub(crate) enum BindingError {
     MissingSurfaceInputBinding {
         input: SurfaceInputPortId,
     },
-    UnexpectedColorBinding {
-        input: ColorInputId,
+    UnexpectedPaintInputBinding {
+        input: PaintInputId,
     },
     UnexpectedOpacityBinding {
         input: OpacityInputId,
@@ -327,7 +328,7 @@ impl PointOpacityError {
 /// Плоские декларации до атомарной компиляции. Порядок списков смысла не несёт.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct AppearanceGraphSpec {
-    color_inputs: Vec<ColorInputId>,
+    paint_inputs: Vec<PaintInputId>,
     surface_input_ports: Vec<SurfaceInputPortId>,
     opacity_inputs: Vec<OpacityInputId>,
     paints: Vec<PaintSpec>,
@@ -337,7 +338,7 @@ pub(crate) struct AppearanceGraphSpec {
 
 impl AppearanceGraphSpec {
     pub(crate) fn new(
-        color_inputs: Vec<ColorInputId>,
+        paint_inputs: Vec<PaintInputId>,
         surface_input_ports: Vec<SurfaceInputPortId>,
         opacity_inputs: Vec<OpacityInputId>,
         paints: Vec<PaintSpec>,
@@ -345,7 +346,7 @@ impl AppearanceGraphSpec {
         occurrences: Vec<OccurrenceSpec>,
     ) -> Self {
         Self {
-            color_inputs,
+            paint_inputs,
             surface_input_ports,
             opacity_inputs,
             paints,
@@ -358,7 +359,7 @@ impl AppearanceGraphSpec {
     /// детерминированных topo: Paint DAG и совместный Surface/Occurrence DAG.
     pub(crate) fn compile(self) -> Result<CompiledAppearanceGraph, CompileError> {
         let Self {
-            mut color_inputs,
+            mut paint_inputs,
             mut surface_input_ports,
             mut opacity_inputs,
             mut paints,
@@ -366,9 +367,9 @@ impl AppearanceGraphSpec {
             mut occurrences,
         } = self;
 
-        color_inputs.sort_unstable();
-        if let Some(duplicate) = adjacent_duplicate(&color_inputs) {
-            return Err(CompileError::DuplicateColorInput { input: duplicate });
+        paint_inputs.sort_unstable();
+        if let Some(duplicate) = adjacent_duplicate(&paint_inputs) {
+            return Err(CompileError::DuplicatePaintInput { input: duplicate });
         }
 
         surface_input_ports.sort_unstable();
@@ -411,7 +412,7 @@ impl AppearanceGraphSpec {
             });
         }
 
-        let has_color = |id: ColorInputId| color_inputs.binary_search(&id).is_ok();
+        let has_paint_input = |id: PaintInputId| paint_inputs.binary_search(&id).is_ok();
         let has_surface_input =
             |id: SurfaceInputPortId| surface_input_ports.binary_search(&id).is_ok();
         let has_opacity = |id: OpacityInputId| opacity_inputs.binary_search(&id).is_ok();
@@ -426,12 +427,9 @@ impl AppearanceGraphSpec {
 
         for paint in &paints {
             match *paint {
-                PaintSpec::Solid { id, color } => {
-                    if !has_color(color) {
-                        return Err(CompileError::MissingPaintColorInput {
-                            paint: id,
-                            input: color,
-                        });
+                PaintSpec::Input { id, input } => {
+                    if !has_paint_input(input) {
+                        return Err(CompileError::MissingPaintInput { paint: id, input });
                     }
                 }
                 PaintSpec::Opacity {
@@ -491,7 +489,7 @@ impl AppearanceGraphSpec {
         let paint_dependencies: Vec<Option<usize>> = paints
             .iter()
             .map(|paint| match *paint {
-                PaintSpec::Solid { .. } => None,
+                PaintSpec::Input { .. } => None,
                 PaintSpec::Opacity { source, .. } => paint_index(source),
             })
             .collect();
@@ -559,7 +557,7 @@ impl AppearanceGraphSpec {
         let compiled_paints = paints
             .iter()
             .map(|paint| match *paint {
-                PaintSpec::Solid { id, color } => CompiledPaintSpec::Solid { id, color },
+                PaintSpec::Input { id, input } => CompiledPaintSpec::Input { id, input },
                 PaintSpec::Opacity {
                     id,
                     source,
@@ -601,7 +599,7 @@ impl AppearanceGraphSpec {
 
         Ok(CompiledAppearanceGraph {
             instance: Arc::new(()),
-            color_inputs,
+            paint_inputs,
             surface_input_ports,
             opacity_inputs,
             paints: compiled_paints,
@@ -719,9 +717,9 @@ enum RenderNode {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum CompiledPaintSpec {
-    Solid {
+    Input {
         id: PaintId,
-        color: ColorInputId,
+        input: PaintInputId,
     },
     Opacity {
         id: PaintId,
@@ -733,7 +731,7 @@ enum CompiledPaintSpec {
 impl CompiledPaintSpec {
     const fn id(&self) -> PaintId {
         match self {
-            Self::Solid { id, .. } | Self::Opacity { id, .. } => *id,
+            Self::Input { id, .. } | Self::Opacity { id, .. } => *id,
         }
     }
 }
@@ -779,14 +777,14 @@ pub(crate) struct CompiledPaintSlotV1 {
     id: PaintId,
 }
 
-/// Cold-bound canonical colour-input position used by finite Program targets.
+/// Cold-bound canonical Paint-input position used by finite Program targets.
 /// The nominal ID is retained and rechecked on every overwrite. This rejects
 /// stale or mismatched index/ID pairs, but does not claim graph-instance
 /// identity when two graphs have the same canonical input at that position.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct CompiledColorInputSlotV1 {
+pub(crate) struct CompiledPaintInputSlotV1 {
     index: usize,
-    id: ColorInputId,
+    id: PaintInputId,
 }
 
 /// Cold-bound canonical Occurrence position for allocation-free repeated
@@ -877,7 +875,7 @@ pub(crate) enum PointOccurrenceAbsenceReplayErrorV1 {
 #[derive(Debug)]
 pub(crate) struct CompiledAppearanceGraph {
     instance: Arc<()>,
-    color_inputs: Vec<ColorInputId>,
+    paint_inputs: Vec<PaintInputId>,
     surface_input_ports: Vec<SurfaceInputPortId>,
     opacity_inputs: Vec<OpacityInputId>,
     paints: Vec<CompiledPaintSpec>,
@@ -892,19 +890,19 @@ pub(crate) struct CompiledAppearanceGraph {
 /// заранее доказанную топологию без повторной компиляции.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct CompiledInputSchema<'a> {
-    color_inputs: &'a [ColorInputId],
+    paint_inputs: &'a [PaintInputId],
     surface_input_ports: &'a [SurfaceInputPortId],
     opacity_inputs: &'a [OpacityInputId],
 }
 
 impl<'a> CompiledInputSchema<'a> {
     const fn new(
-        color_inputs: &'a [ColorInputId],
+        paint_inputs: &'a [PaintInputId],
         surface_input_ports: &'a [SurfaceInputPortId],
         opacity_inputs: &'a [OpacityInputId],
     ) -> Self {
         Self {
-            color_inputs,
+            paint_inputs,
             surface_input_ports,
             opacity_inputs,
         }
@@ -913,7 +911,7 @@ impl<'a> CompiledInputSchema<'a> {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct CompiledAppearanceProgram<'a> {
-    color_inputs: &'a [ColorInputId],
+    paint_inputs: &'a [PaintInputId],
     surface_input_ports: &'a [SurfaceInputPortId],
     opacity_inputs: &'a [OpacityInputId],
     paints: &'a [CompiledPaintSpec],
@@ -936,7 +934,7 @@ impl<'a> CompiledAppearanceProgram<'a> {
         render_topo: &'a [RenderNode],
     ) -> Self {
         Self {
-            color_inputs: inputs.color_inputs,
+            paint_inputs: inputs.paint_inputs,
             surface_input_ports: inputs.surface_input_ports,
             opacity_inputs: inputs.opacity_inputs,
             paints,
@@ -948,7 +946,7 @@ impl<'a> CompiledAppearanceProgram<'a> {
     }
 }
 
-const POINT_SOURCE: ColorInputId = ColorInputId::new(0);
+const POINT_PAINT_INPUT: PaintInputId = PaintInputId::new(0);
 const POINT_CONTEXT: SurfaceInputPortId = SurfaceInputPortId::new(0);
 const POINT_OPACITY: OpacityInputId = OpacityInputId::new(0);
 const POINT_SOLID_PAINT: PaintId = PaintId::new(0);
@@ -957,13 +955,13 @@ const POINT_CONTEXT_SURFACE: SurfaceId = SurfaceId::new(0);
 const POINT_DERIVED_SURFACE: SurfaceId = SurfaceId::new(1);
 const POINT_OCCURRENCE: OccurrenceId = OccurrenceId::new(0);
 
-const POINT_COLOR_INPUTS: [ColorInputId; 1] = [POINT_SOURCE];
+const POINT_PAINT_INPUTS: [PaintInputId; 1] = [POINT_PAINT_INPUT];
 const POINT_SURFACE_INPUT_PORTS: [SurfaceInputPortId; 1] = [POINT_CONTEXT];
 const POINT_OPACITY_INPUTS: [OpacityInputId; 1] = [POINT_OPACITY];
 const POINT_PAINTS: [CompiledPaintSpec; 2] = [
-    CompiledPaintSpec::Solid {
+    CompiledPaintSpec::Input {
         id: POINT_SOLID_PAINT,
-        color: POINT_SOURCE,
+        input: POINT_PAINT_INPUT,
     },
     CompiledPaintSpec::Opacity {
         id: POINT_OPACITY_PAINT,
@@ -998,7 +996,7 @@ const POINT_RENDER_TOPO: [RenderNode; 3] = [
 const POINT_OPACITY_OVER_SURFACE_V1: CompiledAppearanceProgram<'static> =
     CompiledAppearanceProgram::from_validated_parts(
         CompiledInputSchema::new(
-            &POINT_COLOR_INPUTS,
+            &POINT_PAINT_INPUTS,
             &POINT_SURFACE_INPUT_PORTS,
             &POINT_OPACITY_INPUTS,
         ),
@@ -1015,7 +1013,7 @@ pub(crate) struct PointOpacityOverSurfaceV1;
 
 impl PointOpacityOverSurfaceV1 {
     pub(crate) const fn physical_identity() -> PhysicalProgramIdentityV1 {
-        PhysicalProgramIdentityV1::SolidOpacityOverSurfaceEncodedSrgb8V1
+        PhysicalProgramIdentityV1::InputOpacityOverSurfaceEncodedSrgb8V1
     }
 
     pub(crate) const fn composition_profile() -> CompositionProfileV1 {
@@ -1054,8 +1052,8 @@ impl PointOpacityOverSurfaceV1 {
         let mut occurrences = [None; 1];
         POINT_OPACITY_OVER_SURFACE_V1.execute_into(
             |id| {
-                debug_assert_eq!(id, POINT_SOURCE);
-                Srgb8::new(source)
+                debug_assert_eq!(id, POINT_PAINT_INPUT);
+                EncodedPointPaintValueV1::opaque(Srgb8::new(source))
             },
             |id| {
                 debug_assert_eq!(id, POINT_CONTEXT);
@@ -1076,13 +1074,13 @@ impl PointOpacityOverSurfaceV1 {
 #[cfg(test)]
 pub(crate) fn point_opacity_over_surface_declarative_spec() -> AppearanceGraphSpec {
     AppearanceGraphSpec::new(
-        POINT_COLOR_INPUTS.to_vec(),
+        POINT_PAINT_INPUTS.to_vec(),
         POINT_SURFACE_INPUT_PORTS.to_vec(),
         POINT_OPACITY_INPUTS.to_vec(),
         vec![
-            PaintSpec::Solid {
+            PaintSpec::Input {
                 id: POINT_SOLID_PAINT,
-                color: POINT_SOURCE,
+                input: POINT_PAINT_INPUT,
             },
             PaintSpec::Opacity {
                 id: POINT_OPACITY_PAINT,
@@ -1117,22 +1115,22 @@ pub(crate) fn point_program_matches(compiled: &CompiledAppearanceGraph) -> bool 
 /// Runtime bindings одного атомарного evaluate.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct AppearanceBindings {
-    colors: Vec<(ColorInputId, Srgb8)>,
+    paint_inputs: Vec<(PaintInputId, EncodedPointPaintValueV1)>,
     surfaces: Vec<(SurfaceInputPortId, Srgb8)>,
     opacities: Vec<(OpacityInputId, f64)>,
 }
 
 impl AppearanceBindings {
     pub(crate) fn new(
-        mut colors: Vec<(ColorInputId, Srgb8)>,
+        mut paint_inputs: Vec<(PaintInputId, EncodedPointPaintValueV1)>,
         mut surfaces: Vec<(SurfaceInputPortId, Srgb8)>,
         mut opacities: Vec<(OpacityInputId, f64)>,
     ) -> Self {
-        colors.sort_unstable_by_key(|(id, _)| *id);
+        paint_inputs.sort_unstable_by_key(|(id, _)| *id);
         surfaces.sort_unstable_by_key(|(id, _)| *id);
         opacities.sort_unstable_by_key(|(id, _)| *id);
         Self {
-            colors,
+            paint_inputs,
             surfaces,
             opacities,
         }
@@ -1147,7 +1145,7 @@ impl AppearanceBindings {
 /// steady-state evaluate не повторяет numeric admission.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct AdmittedAppearanceBindings {
-    colors: Vec<(ColorInputId, Srgb8)>,
+    paint_inputs: Vec<(PaintInputId, EncodedPointPaintValueV1)>,
     surfaces: Vec<(SurfaceInputPortId, Srgb8)>,
     opacities: Vec<(OpacityInputId, crate::composition::AdmittedOpacityV1)>,
 }
@@ -1169,7 +1167,7 @@ impl AdmittedAppearanceBindings {
         }
 
         Ok(Self {
-            colors: copy_vec(&self.colors)?,
+            paint_inputs: copy_vec(&self.paint_inputs)?,
             surfaces: copy_vec(&self.surfaces)?,
             opacities: copy_vec(&self.opacities)?,
         })
@@ -1202,12 +1200,12 @@ impl AdmittedAppearanceBindings {
 
     /// Overwrite one prebound finite-target input without lookup or allocation.
     /// The canonical index and nominal ID must both match before mutation.
-    pub(crate) fn overwrite_color_at(
+    pub(crate) fn overwrite_paint_input_at(
         &mut self,
-        slot: CompiledColorInputSlotV1,
-        value: Srgb8,
+        slot: CompiledPaintInputSlotV1,
+        value: EncodedPointPaintValueV1,
     ) -> Result<(), BindingError> {
-        let Some((bound, destination)) = self.colors.get_mut(slot.index) else {
+        let Some((bound, destination)) = self.paint_inputs.get_mut(slot.index) else {
             return Err(BindingError::IncompatibleAdmittedBindings);
         };
         if *bound != slot.id {
@@ -1233,13 +1231,13 @@ impl AdmittedAppearanceBindings {
     }
 
     fn matches_schema(&self, schema: CompiledInputSchema<'_>) -> bool {
-        schema.color_inputs.len() == self.colors.len()
+        schema.paint_inputs.len() == self.paint_inputs.len()
             && schema.surface_input_ports.len() == self.surfaces.len()
             && schema.opacity_inputs.len() == self.opacities.len()
             && schema
-                .color_inputs
+                .paint_inputs
                 .iter()
-                .zip(&self.colors)
+                .zip(&self.paint_inputs)
                 .all(|(declared, (bound, _))| declared == bound)
             && schema
                 .surface_input_ports
@@ -1254,33 +1252,26 @@ impl AdmittedAppearanceBindings {
     }
 }
 
-/// Материализованный encoded point Paint вне зависимости от стадии владения.
+/// ID-free атомарное значение encoded point Paint.
 ///
-/// Graph materialization и downstream recheck разделяют это одно физическое
-/// значение. Тип alpha делает повторную admission перед каждым occurrence
-/// невозможной; его биты без потерь переходят в certificate.
+/// Источник и straight alpha изменяются только вместе: это не позволяет solver-у
+/// создать не объявленную клиентом декартову комбинацию двух независимых осей.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct EncodedPointPaintV1 {
-    id: PaintId,
+pub(crate) struct EncodedPointPaintValueV1 {
     source: Srgb8,
     opacity: crate::composition::AdmittedOpacityV1,
 }
 
-impl EncodedPointPaintV1 {
+impl EncodedPointPaintValueV1 {
     pub(crate) const fn from_admitted(
-        id: PaintId,
         source: Srgb8,
         opacity: crate::composition::AdmittedOpacityV1,
     ) -> Self {
-        Self {
-            id,
-            source,
-            opacity,
-        }
+        Self { source, opacity }
     }
 
-    pub(crate) const fn id(self) -> PaintId {
-        self.id
+    pub(crate) const fn opaque(source: Srgb8) -> Self {
+        Self::from_admitted(source, crate::composition::AdmittedOpacityV1::OPAQUE)
     }
 
     pub(crate) const fn source(self) -> Srgb8 {
@@ -1293,6 +1284,43 @@ impl EncodedPointPaintV1 {
 
     pub(crate) const fn opacity_bits(self) -> u64 {
         self.opacity.bits()
+    }
+}
+
+/// Материализованный encoded point Paint вне зависимости от стадии владения.
+///
+/// Graph materialization и downstream recheck разделяют это одно физическое
+/// значение. Тип alpha делает повторную admission перед каждым occurrence
+/// невозможной; его биты без потерь переходят в certificate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct EncodedPointPaintV1 {
+    id: PaintId,
+    value: EncodedPointPaintValueV1,
+}
+
+impl EncodedPointPaintV1 {
+    pub(crate) const fn from_value(id: PaintId, value: EncodedPointPaintValueV1) -> Self {
+        Self { id, value }
+    }
+
+    pub(crate) const fn id(self) -> PaintId {
+        self.id
+    }
+
+    pub(crate) const fn source(self) -> Srgb8 {
+        self.value.source()
+    }
+
+    pub(crate) const fn opacity(self) -> crate::composition::AdmittedOpacityV1 {
+        self.value.opacity()
+    }
+
+    pub(crate) const fn opacity_bits(self) -> u64 {
+        self.value.opacity_bits()
+    }
+
+    pub(crate) const fn value(self) -> EncodedPointPaintValueV1 {
+        self.value
     }
 }
 
@@ -1890,7 +1918,7 @@ impl CompiledAppearanceGraph {
     fn program(&self) -> CompiledAppearanceProgram<'_> {
         CompiledAppearanceProgram::from_validated_parts(
             CompiledInputSchema::new(
-                &self.color_inputs,
+                &self.paint_inputs,
                 &self.surface_input_ports,
                 &self.opacity_inputs,
             ),
@@ -1907,11 +1935,11 @@ impl CompiledAppearanceGraph {
         self.program() == program
     }
 
-    /// Bind one colour input to its canonical compiled ordinal. Runtime target
+    /// Bind one Paint input to its canonical compiled ordinal. Runtime target
     /// selection consumes the sealed slot instead of repeating an ID search.
-    pub(crate) fn bind_color_input(&self, id: ColorInputId) -> Option<CompiledColorInputSlotV1> {
-        let index = self.color_inputs.binary_search(&id).ok()?;
-        Some(CompiledColorInputSlotV1 { index, id })
+    pub(crate) fn bind_paint_input(&self, id: PaintInputId) -> Option<CompiledPaintInputSlotV1> {
+        let index = self.paint_inputs.binary_search(&id).ok()?;
+        Some(CompiledPaintInputSlotV1 { index, id })
     }
 
     /// Bind one Paint identity to its canonical compiled ordinal.
@@ -2085,7 +2113,7 @@ impl CompiledAppearanceGraph {
 impl<'program> CompiledAppearanceProgram<'program> {
     const fn input_schema(self) -> CompiledInputSchema<'program> {
         CompiledInputSchema::new(
-            self.color_inputs,
+            self.paint_inputs,
             self.surface_input_ports,
             self.opacity_inputs,
         )
@@ -2095,9 +2123,12 @@ impl<'program> CompiledAppearanceProgram<'program> {
         &self,
         bindings: &AppearanceBindings,
     ) -> Result<AdmittedAppearanceBindings, BindingError> {
-        let colors = &bindings.colors;
-        if let Some(window) = colors.windows(2).find(|window| window[0].0 == window[1].0) {
-            return Err(BindingError::DuplicateColorBinding { input: window[0].0 });
+        let paint_inputs = &bindings.paint_inputs;
+        if let Some(window) = paint_inputs
+            .windows(2)
+            .find(|window| window[0].0 == window[1].0)
+        {
+            return Err(BindingError::DuplicatePaintInputBinding { input: window[0].0 });
         }
         let opacities = &bindings.opacities;
         if let Some(window) = opacities
@@ -2114,12 +2145,12 @@ impl<'program> CompiledAppearanceProgram<'program> {
             return Err(BindingError::DuplicateSurfaceInputBinding { input: window[0].0 });
         }
 
-        for declared in self.color_inputs {
-            if colors
+        for declared in self.paint_inputs {
+            if paint_inputs
                 .binary_search_by_key(declared, |(id, _)| *id)
                 .is_err()
             {
-                return Err(BindingError::MissingColorBinding { input: *declared });
+                return Err(BindingError::MissingPaintInputBinding { input: *declared });
             }
         }
         for declared in self.opacity_inputs {
@@ -2138,9 +2169,9 @@ impl<'program> CompiledAppearanceProgram<'program> {
                 return Err(BindingError::MissingSurfaceInputBinding { input: *declared });
             }
         }
-        for (bound, _) in colors {
-            if self.color_inputs.binary_search(bound).is_err() {
-                return Err(BindingError::UnexpectedColorBinding { input: *bound });
+        for (bound, _) in paint_inputs {
+            if self.paint_inputs.binary_search(bound).is_err() {
+                return Err(BindingError::UnexpectedPaintInputBinding { input: *bound });
             }
         }
         for (bound, _) in opacities {
@@ -2154,11 +2185,11 @@ impl<'program> CompiledAppearanceProgram<'program> {
             }
         }
 
-        let mut admitted_colors = Vec::new();
-        admitted_colors
-            .try_reserve_exact(colors.len())
+        let mut admitted_paint_inputs = Vec::new();
+        admitted_paint_inputs
+            .try_reserve_exact(paint_inputs.len())
             .map_err(|_| BindingError::ResourceExhausted)?;
-        admitted_colors.extend(colors.iter().copied());
+        admitted_paint_inputs.extend(paint_inputs.iter().copied());
 
         let mut admitted_surfaces = Vec::new();
         admitted_surfaces
@@ -2181,7 +2212,7 @@ impl<'program> CompiledAppearanceProgram<'program> {
         }
 
         Ok(AdmittedAppearanceBindings {
-            colors: admitted_colors,
+            paint_inputs: admitted_paint_inputs,
             surfaces: admitted_surfaces,
             opacities: admitted_opacities,
         })
@@ -2198,15 +2229,15 @@ impl<'program> CompiledAppearanceProgram<'program> {
         }
         workspace.prepare(self)?;
 
-        let colors = &bindings.colors;
+        let paint_inputs = &bindings.paint_inputs;
         let surfaces = &bindings.surfaces;
         let opacities = &bindings.opacities;
 
-        let color_value = |id: ColorInputId| -> Srgb8 {
-            let index = colors
+        let paint_input_value = |id: PaintInputId| -> EncodedPointPaintValueV1 {
+            let index = paint_inputs
                 .binary_search_by_key(&id, |(bound, _)| *bound)
                 .unwrap_or_else(|_| unreachable!("bindings were matched before evaluation"));
-            colors[index].1
+            paint_inputs[index].1
         };
         let surface_value = |id: SurfaceInputPortId| -> Srgb8 {
             let index = surfaces
@@ -2222,7 +2253,7 @@ impl<'program> CompiledAppearanceProgram<'program> {
         };
 
         self.execute_into(
-            color_value,
+            paint_input_value,
             surface_value,
             opacity_value,
             &mut workspace.paints,
@@ -2240,16 +2271,16 @@ impl<'program> CompiledAppearanceProgram<'program> {
     /// Единственное исполнение compiled IR. Scratch принадлежит caller-у:
     /// static adapter использует stack arrays, generic admission —
     /// владеющие buffers. Алгоритм и сертификат при этом общие.
-    fn execute_into<C, S, O>(
+    fn execute_into<P, S, O>(
         &self,
-        color_value: C,
+        paint_input_value: P,
         surface_value: S,
         opacity_value: O,
         resolved_paints: &mut [Option<EncodedPointPaintV1>],
         resolved_surfaces: &mut [Option<Srgb8>],
         resolved_occurrences: &mut [Option<ResolvedOccurrence>],
     ) where
-        C: Fn(ColorInputId) -> Srgb8,
+        P: Fn(PaintInputId) -> EncodedPointPaintValueV1,
         S: Fn(SurfaceInputPortId) -> Srgb8,
         O: Fn(OpacityInputId) -> crate::composition::AdmittedOpacityV1,
     {
@@ -2259,11 +2290,9 @@ impl<'program> CompiledAppearanceProgram<'program> {
 
         for &index in self.paint_topo {
             let paint = match self.paints[index] {
-                CompiledPaintSpec::Solid { id, color } => EncodedPointPaintV1::from_admitted(
-                    id,
-                    color_value(color),
-                    crate::composition::AdmittedOpacityV1::OPAQUE,
-                ),
+                CompiledPaintSpec::Input { id, input } => {
+                    EncodedPointPaintV1::from_value(id, paint_input_value(input))
+                }
                 CompiledPaintSpec::Opacity {
                     id,
                     source,
@@ -2272,10 +2301,13 @@ impl<'program> CompiledAppearanceProgram<'program> {
                     // Валидированный `paint_topo` всегда материализует source
                     // раньше зависимого Opacity-узла.
                     let source = resolved_paints[source].unwrap_or_else(|| unreachable!());
-                    EncodedPointPaintV1::from_admitted(
+                    let value = source.value();
+                    EncodedPointPaintV1::from_value(
                         id,
-                        source.source,
-                        source.opacity.multiply(opacity_value(opacity)),
+                        EncodedPointPaintValueV1::from_admitted(
+                            value.source(),
+                            value.opacity().multiply(opacity_value(opacity)),
+                        ),
                     )
                 }
             };
@@ -2302,8 +2334,8 @@ impl<'program> CompiledAppearanceProgram<'program> {
                         resolved_surfaces[spec.against].unwrap_or_else(|| unreachable!());
                     let certificate = SourceOverCertificateV1::compose(
                         spec.profile,
-                        subject.source.bytes(),
-                        subject.opacity,
+                        subject.source().bytes(),
+                        subject.opacity(),
                         backdrop.bytes(),
                     );
                     let visible = certificate.output_rgb();

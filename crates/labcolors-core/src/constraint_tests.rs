@@ -2,9 +2,9 @@ use proptest::prelude::*;
 
 use crate::Srgb8;
 use crate::appearance::{
-    AppearanceBindings, AppearanceGraphSpec, ColorInputId, CompositionProfileV1, OccurrenceId,
-    OccurrenceSpec, OpacityInputId, PaintId, PaintSpec, PointOpacityOverSurfaceV1, SurfaceId,
-    SurfaceInputPortId, SurfaceSpec, VisiblePointBindingV1,
+    AppearanceBindings, AppearanceGraphSpec, CompositionProfileV1, EncodedPointPaintValueV1,
+    OccurrenceId, OccurrenceSpec, OpacityInputId, PaintId, PaintInputId, PaintSpec,
+    PointOpacityOverSurfaceV1, SurfaceId, SurfaceInputPortId, SurfaceSpec, VisiblePointBindingV1,
 };
 use crate::constraints::{
     ApplicableWcag22EvaluationErrorV1, ApplicableWcag22MeasurementV1, ClassifiedMeasurement,
@@ -262,7 +262,7 @@ fn modeled_target_has_no_binding_or_source_capability() {
 }
 
 fn two_equal_physical_occurrences() -> [crate::appearance::ResolvedOccurrence; 2] {
-    let source = ColorInputId::new(0);
+    let source = PaintInputId::new(0);
     let backdrop = SurfaceInputPortId::new(1);
     let opacity = OpacityInputId::new(0);
     let solid = PaintId::new(0);
@@ -277,9 +277,9 @@ fn two_equal_physical_occurrences() -> [crate::appearance::ResolvedOccurrence; 2
         vec![backdrop],
         vec![opacity],
         vec![
-            PaintSpec::Solid {
+            PaintSpec::Input {
                 id: solid,
-                color: source,
+                input: source,
             },
             PaintSpec::Opacity {
                 id: translucent,
@@ -320,7 +320,10 @@ fn two_equal_physical_occurrences() -> [crate::appearance::ResolvedOccurrence; 2
     .expect("acyclic typed graph must compile");
     let evaluation = graph
         .evaluate(&AppearanceBindings::new(
-            vec![(source, crate::Srgb8::new([0, 64, 255]))],
+            vec![(
+                source,
+                EncodedPointPaintValueV1::opaque(crate::Srgb8::new([0, 64, 255])),
+            )],
             vec![(backdrop, crate::Srgb8::new([255, 255, 255]))],
             vec![(opacity, 0.5)],
         ))
