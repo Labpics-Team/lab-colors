@@ -44,6 +44,9 @@ fn next_test_sink_epoch() -> Option<PointSinkBindingEpochV1> {
 pub(crate) enum InMemoryPointSinkErrorV1 {
     Busy,
     BindingDrift,
+    /// Test sink observed either a stale stamp or a patch whose shape/output
+    /// does not match its single admitted scope; production semantics do not
+    /// require those oracle diagnostics to be distinguished.
     StampMismatch,
     RejectedPrepare,
     RejectedInstall,

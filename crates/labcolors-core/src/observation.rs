@@ -323,20 +323,14 @@ mod arena {
             &mut self,
             materialize: impl FnOnce(&mut ObservedScenarioSet) -> Result<(), ObservationError>,
         ) -> Result<Rc<ObservationBackingV1>, ObservationError> {
-            let mut free_slot = None;
             for slot_index in 0..OBSERVATION_ARENA_SLOT_COUNT_V1 {
-                if Rc::get_mut(&mut self.slots[slot_index]).is_some() {
-                    free_slot = Some(slot_index);
-                    break;
-                }
+                let Some(backing) = Rc::get_mut(&mut self.slots[slot_index]) else {
+                    continue;
+                };
+                materialize(&mut backing.set)?;
+                return Ok(Rc::clone(&self.slots[slot_index]));
             }
-            let Some(slot_index) = free_slot else {
-                return Err(ObservationError::InternalInvariant);
-            };
-            let backing = Rc::get_mut(&mut self.slots[slot_index])
-                .ok_or(ObservationError::InternalInvariant)?;
-            materialize(&mut backing.set)?;
-            Ok(Rc::clone(&self.slots[slot_index]))
+            Err(ObservationError::InternalInvariant)
         }
 
         pub(super) fn shares_schema_backing_with(
@@ -1115,11 +1109,9 @@ fn materialize_scenarios_into(
         let values_end = set.values.len();
         let provenance_start = set.provenance.len();
         set.provenance.push(first_id);
-        while matches!(scenarios.peek(), Some(candidate) if candidate.bindings.as_slice() == bindings.as_slice())
+        while let Some(ScenarioInput { id, .. }) =
+            scenarios.next_if(|candidate| candidate.bindings.as_slice() == bindings.as_slice())
         {
-            let ScenarioInput { id, .. } = scenarios
-                .next()
-                .unwrap_or_else(|| unreachable!("peek observed the next scenario"));
             set.provenance.push(id);
         }
         let provenance_end = set.provenance.len();

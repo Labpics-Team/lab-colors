@@ -748,6 +748,40 @@ fn evaluator_unwind_does_not_consume_the_reusable_evaluation_arena() {
 }
 
 #[test]
+fn prepared_transition_unwind_returns_the_reusable_evaluation_arena() {
+    let compiled = point_program(
+        signal(0),
+        Target::fixed(TARGET, SOURCE),
+        vec![ConstraintInvocation::hard(
+            ConstraintId::new(1),
+            OCCURRENCE,
+            Wcag22CriterionV1::Sc143TextDefault,
+        )],
+        vec![],
+        Wcag22Srgb8V1,
+    )
+    .compile()
+    .unwrap();
+    let mut session = compiled.instantiate(STREAM).unwrap();
+
+    let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _prepared = session
+            .prepare_update(update(1, 0xFF))
+            .expect("the transition must own one reusable arena before unwind");
+        panic!("host unwound after prepare and before commit");
+    }));
+    assert!(unwind.is_err(), "the hostile host unwind must be observed");
+
+    let SessionState::Ready { current } = session
+        .commit(update(1, 0xFF))
+        .expect("unwind retirement must return the exact arena for retry")
+    else {
+        panic!("opaque black on white must remain a normal verified outcome");
+    };
+    assert_eq!(current.outputs()[0].source_signal(), signal(0));
+}
+
+#[test]
 fn terminal_safety_rejects_an_output_outside_every_assessment_cone() {
     let error = match Program::new(
         vec![
