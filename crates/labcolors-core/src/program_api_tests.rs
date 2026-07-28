@@ -2,6 +2,7 @@
 
 use crate::program_boundary_tests::CommitProgramUpdateForTest as _;
 use crate::{Srgb8, program};
+use proptest::prelude::*;
 
 #[test]
 fn staged_program_api_is_module_qualified_without_transport_prefixes() {
@@ -87,4 +88,18 @@ fn finite_paint_value_admission_is_typed_and_canonical() {
     let canonical = program::PaintValueV1::try_new(Srgb8::new([1, 2, 3]), -0.0).unwrap();
     assert_eq!(canonical.source(), Srgb8::new([1, 2, 3]));
     assert_eq!(canonical.opacity().to_bits(), 0.0_f64.to_bits());
+}
+
+proptest! {
+    #[test]
+    fn admitted_finite_paint_value_round_trips_source_and_unit_opacity(
+        source in any::<[u8; 3]>(),
+        opacity_numerator in 0_u16..=1024,
+    ) {
+        let opacity = f64::from(opacity_numerator) / 1024.0;
+        let value = program::PaintValueV1::try_new(Srgb8::new(source), opacity).unwrap();
+
+        prop_assert_eq!(value.source(), Srgb8::new(source));
+        prop_assert_eq!(value.opacity().to_bits(), opacity.to_bits());
+    }
 }
