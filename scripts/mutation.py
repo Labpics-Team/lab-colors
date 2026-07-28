@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+from collections.abc import Iterable
 import hashlib
 import json
 import math
@@ -14,12 +15,12 @@ import shutil
 import stat
 import subprocess
 import sys
-from typing import Any, Iterable
+from typing import Any
 
 
-SCHEMA_MANIFEST = "lab-colors-mutation-population-v3"
-SCHEMA_SHARD = "lab-colors-mutation-shard-v3"
-SCHEMA_AGGREGATE = "lab-colors-mutation-aggregate-v3"
+SCHEMA_MANIFEST = "lab-colors-mutation-population-v4"
+SCHEMA_SHARD = "lab-colors-mutation-shard-v4"
+SCHEMA_AGGREGATE = "lab-colors-mutation-aggregate-v4"
 SHARD_COUNT = 32
 SHARD_ALGORITHM = "round-robin"
 TOOL_VERSION = "25.3.1"
@@ -48,9 +49,16 @@ REPOSITORY = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\Z")
 PACKAGE_NAME = re.compile(r"[A-Za-z0-9_.-]+\Z")
 PACKAGE_VERSION = re.compile(r"[0-9][0-9A-Za-z.+-]*\Z")
 MUTANT_GENRES = {"FnValue", "BinaryOperator", "UnaryOperator", "MatchArm", "MatchArmGuard"}
-MUTANT_SUMMARIES = {"CaughtMutant", "MissedMutant", "Timeout", "Unviable"}
+MUTANT_SUMMARIES = {
+    "CaughtMutant",
+    "Failure",
+    "MissedMutant",
+    "Timeout",
+    "Unviable",
+}
 COUNT_FIELDS = {
     "CaughtMutant": "caught",
+    "Failure": "failure",
     "MissedMutant": "missed",
     "Timeout": "timeout",
     "Unviable": "unviable",
@@ -81,7 +89,13 @@ def read_json(path: Path) -> Any:
             object_pairs_hook=_object_without_duplicate_keys,
             parse_constant=_reject_constant,
         )
-    except (OSError, UnicodeError, json.JSONDecodeError, ContractError) as error:
+    except (
+        OSError,
+        UnicodeError,
+        json.JSONDecodeError,
+        ContractError,
+        RecursionError,
+    ) as error:
         if isinstance(error, ContractError) and str(error).startswith("invalid JSON"):
             raise
         raise ContractError(f"invalid JSON in {path}: {error}") from error
@@ -96,7 +110,7 @@ def _canonical_bytes(value: Any) -> bytes:
             sort_keys=True,
             separators=(",", ":"),
         ).encode("utf-8")
-    except (TypeError, ValueError) as error:
+    except (TypeError, ValueError, RecursionError) as error:
         raise ContractError(f"value is not canonical JSON: {error}") from error
 
 
@@ -116,8 +130,8 @@ def _digest_file(path: Path) -> str:
 
 
 def write_json(path: Path, value: Any) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
     try:
+        path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(
             json.dumps(
                 value,
@@ -129,7 +143,7 @@ def write_json(path: Path, value: Any) -> None:
             + "\n",
             encoding="utf-8",
         )
-    except (OSError, TypeError, ValueError) as error:
+    except (OSError, TypeError, ValueError, RecursionError) as error:
         raise ContractError(f"cannot write JSON {path}: {error}") from error
 
 
@@ -246,6 +260,10 @@ def _validate_mutant(value: Any, label: str, repo_root: Path | None = None) -> d
     if relative.suffix != ".rs":
         raise ContractError(f"unsafe mutant file: {item['file']!r}")
     if repo_root is not None:
+        try:
+            repo_root = repo_root.resolve()
+        except (OSError, RuntimeError) as error:
+            raise ContractError(f"cannot canonicalize mutant repo root: {error}") from error
         source = repo_root.joinpath(*relative.parts)
         try:
             resolved_source = source.resolve(strict=True)
@@ -410,7 +428,10 @@ def _git_blob_bytes(repo_root: Path, object_ids: Iterable[str]) -> dict[str, byt
     return blobs
 
 
-def _build_execution_source(repo_root: Path, revision: str) -> dict[str, Any]:
+def _build_execution_source_inventory(
+    repo_root: Path,
+    revision: str,
+) -> tuple[dict[str, Any], dict[str, str], dict[str, bytes]]:
     repo_root = repo_root.resolve()
     git_tree = _tracked_git_tree(repo_root, revision)
     raw = _run_bytes(
@@ -468,6 +489,14 @@ def _build_execution_source(repo_root: Path, revision: str) -> dict[str, Any]:
     execution_source["sha256"] = _digest_value(
         _execution_source_payload(execution_source)
     )
+    object_by_path = {
+        path_text: object_id for _, object_id, path_text in parsed
+    }
+    return execution_source, object_by_path, blobs
+
+
+def _build_execution_source(repo_root: Path, revision: str) -> dict[str, Any]:
+    execution_source, _, _ = _build_execution_source_inventory(repo_root, revision)
     return execution_source
 
 
@@ -594,7 +623,8 @@ def _walk_materialized_source_fd(
 
     def walk(directory_fd: int, relative_parent: PurePosixPath | None = None) -> None:
         try:
-            children = sorted(os.scandir(directory_fd), key=lambda entry: entry.name)
+            with os.scandir(directory_fd) as iterator:
+                children = sorted(iterator, key=lambda entry: entry.name)
         except OSError as error:
             raise ContractError(f"cannot inspect execution source: {error}") from error
         for child in children:
@@ -954,20 +984,10 @@ def materialize_execution_source(
     repo_root, repo_fd = _open_repo_fd(repo_root)
     source_fd = -1
     try:
-        execution_source = _build_execution_source(repo_root, revision)
-        raw_tree = _run_bytes(
-            ["git", "ls-tree", "-rz", "--full-tree", "-r", revision],
-            cwd=repo_root,
-            label="committed execution materialization inventory",
+        execution_source, object_by_path, blobs = _build_execution_source_inventory(
+            repo_root,
+            revision,
         )
-        object_by_path: dict[str, str] = {}
-        for record in raw_tree.split(b"\0"):
-            if not record:
-                continue
-            header, raw_path = record.split(b"\t", 1)
-            _, _, object_id = header.decode("ascii").split(" ")
-            object_by_path[raw_path.decode("utf-8")] = object_id
-        blobs = _git_blob_bytes(repo_root, object_by_path.values())
         source_root, source_fd = _create_execution_source_root(
             repo_fd,
             repo_root,
@@ -1046,7 +1066,7 @@ def _cargo_package_versions(
             object_pairs_hook=_object_without_duplicate_keys,
             parse_constant=_reject_constant,
         )
-    except (UnicodeError, json.JSONDecodeError, ContractError) as error:
+    except (UnicodeError, json.JSONDecodeError, ContractError, RecursionError) as error:
         raise ContractError(f"cargo metadata is invalid JSON: {error}") from error
     metadata = _expect_dict(metadata, "cargo metadata")
     packages = _expect_list(metadata.get("packages"), "cargo metadata.packages")
@@ -1398,13 +1418,20 @@ def _validate_checkout(
             raise ContractError("execution source does not match the exact committed root")
 
 
-def expected_shard_entries(manifest: dict[str, Any], shard_index: int) -> list[dict[str, Any]]:
-    validate_manifest(manifest)
+def _expected_shard_entries_from_valid_manifest(
+    manifest: dict[str, Any],
+    shard_index: int,
+) -> list[dict[str, Any]]:
     if isinstance(shard_index, bool) or not isinstance(shard_index, int):
         raise ContractError("shard index must be an integer")
     if not 0 <= shard_index < SHARD_COUNT:
         raise ContractError(f"shard index outside 0..{SHARD_COUNT - 1}: {shard_index}")
     return manifest["population"]["mutants"][shard_index::SHARD_COUNT]
+
+
+def expected_shard_entries(manifest: dict[str, Any], shard_index: int) -> list[dict[str, Any]]:
+    validate_manifest(manifest)
+    return _expected_shard_entries_from_valid_manifest(manifest, shard_index)
 
 
 def expected_shard_specs(manifest: dict[str, Any], shard_index: int) -> list[dict[str, Any]]:
@@ -1519,6 +1546,8 @@ def _derive_summary(
             return "Timeout", cargo_binary
         if build_status == "Failure":
             return ("Failure" if scenario == "Baseline" else "Unviable"), cargo_binary
+        if build_status in {"Signalled", "Other"}:
+            return "Failure", cargo_binary
         raise ContractError(f"{label} phase automaton has unsupported Build status")
     test_status = parsed[1][1]
     if test_status == "Timeout":
@@ -1527,6 +1556,8 @@ def _derive_summary(
         return ("Success" if scenario == "Baseline" else "MissedMutant"), cargo_binary
     if test_status == "Failure":
         return ("Failure" if scenario == "Baseline" else "CaughtMutant"), cargo_binary
+    if test_status in {"Signalled", "Other"}:
+        return "Failure", cargo_binary
     raise ContractError(f"{label} phase automaton has unsupported Test status")
 
 
@@ -1673,32 +1704,21 @@ def _shard_payload(record: dict[str, Any]) -> dict[str, Any]:
     return payload
 
 
-def validate_and_record_shard(
-    manifest_value: Any,
+def _regenerate_shard_record(
+    manifest: dict[str, Any],
     *,
-    repo_root: Path,
-    config_path: Path,
     output_parent: Path,
     shard_index: int,
-    observed_revision: str,
     tool_version_output: str,
     exit_code: int,
     source_root: Path | None = None,
 ) -> dict[str, Any]:
-    manifest = validate_manifest(manifest_value)
-    _validate_checkout(
-        manifest,
-        repo_root=repo_root,
-        config_path=config_path,
-        observed_revision=observed_revision,
-        source_root=source_root,
-    )
     if tool_version_output.strip() != TOOL_VERSION_OUTPUT:
         raise ContractError(
             f"tool version output mismatch: expected {TOOL_VERSION_OUTPUT!r}, "
             f"got {tool_version_output.strip()!r}"
         )
-    expected_entries = expected_shard_entries(manifest, shard_index)
+    expected_entries = _expected_shard_entries_from_valid_manifest(manifest, shard_index)
     expected_specs = [entry["spec"] for entry in expected_entries]
     if output_parent.is_symlink() or not output_parent.is_dir():
         raise ContractError("output parent is missing or is a symlink")
@@ -1775,6 +1795,36 @@ def validate_and_record_shard(
     }
     record["record_sha256"] = _digest_value(_shard_payload(record))
     return record
+
+
+def validate_and_record_shard(
+    manifest_value: Any,
+    *,
+    repo_root: Path,
+    config_path: Path,
+    output_parent: Path,
+    shard_index: int,
+    observed_revision: str,
+    tool_version_output: str,
+    exit_code: int,
+    source_root: Path | None = None,
+) -> dict[str, Any]:
+    manifest = validate_manifest(manifest_value)
+    _validate_checkout(
+        manifest,
+        repo_root=repo_root,
+        config_path=config_path,
+        observed_revision=observed_revision,
+        source_root=source_root,
+    )
+    return _regenerate_shard_record(
+        manifest,
+        output_parent=output_parent,
+        shard_index=shard_index,
+        tool_version_output=tool_version_output,
+        exit_code=exit_code,
+        source_root=source_root,
+    )
 
 
 def _validate_record_header(value: Any) -> dict[str, Any]:
@@ -1890,7 +1940,10 @@ def aggregate(
         validate_execution_layout(source_root, {"shards root": shards_root})
     shards_root = shards_root.resolve()
     expected_names = {f"mutation-shard-{index}" for index in range(SHARD_COUNT)}
-    entries = list(shards_root.iterdir())
+    try:
+        entries = list(shards_root.iterdir())
+    except OSError as error:
+        raise ContractError(f"cannot inspect shards root: {error}") from error
     actual_names = {entry.name for entry in entries}
     foreign = sorted(actual_names - expected_names)
     missing_names = sorted(expected_names - actual_names)
@@ -1936,16 +1989,12 @@ def aggregate(
             raise ContractError(f"execution provenance mismatch in shard {index}")
         if stored["tool"] != _tool_provenance():
             raise ContractError(f"tool provenance mismatch in shard {index}")
-        regenerated = validate_and_record_shard(
+        regenerated = _regenerate_shard_record(
             manifest,
-            repo_root=repo_root,
-            config_path=config_path,
             output_parent=directory,
             shard_index=index,
-            observed_revision=observed_revision,
             tool_version_output=TOOL_VERSION_OUTPUT,
             exit_code=stored["exit_code"],
-            source_root=source_root,
         )
         if stored != regenerated:
             raise ContractError(f"shard record does not bind exact artifact bytes: {index}")
@@ -1958,6 +2007,13 @@ def aggregate(
         raise ContractError("overlap/duplicate mutant IDs across shards")
     if set(all_ids) != set(expected_ids) or len(all_ids) != len(expected_ids):
         raise ContractError("aggregate does not exactly cover the discovered population")
+    _validate_checkout(
+        manifest,
+        repo_root=repo_root,
+        config_path=config_path,
+        observed_revision=observed_revision,
+        source_root=source_root,
+    )
     report: dict[str, Any] = {
         "complete": True,
         "counts": totals,
@@ -2074,7 +2130,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
             "Проверяет полноту scheduled mutation run. PR1 — report-only: "
-            "missed/timeout публикуются, но не становятся quality "
+            "missed/timeout/unviable/failure публикуются, но не становятся quality "
             "threshold."
         )
     )

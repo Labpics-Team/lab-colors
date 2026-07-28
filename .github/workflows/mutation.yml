@@ -1,8 +1,8 @@
 name: mutation (scheduled, report-only)
 
-# PR1 сертифицирует полноту измерения, но не mutation score. Missed, timeout и
-# unviable остаются видимыми данными, пока полный baseline не обоснует отдельный
-# явный ratchet.
+# PR1 сертифицирует полноту измерения, но не mutation score. Missed, timeout,
+# unviable и unattributed failure остаются видимыми данными, пока полный
+# baseline не обоснует отдельный явный ratchet.
 on:
   schedule:
     - cron: "0 4 * * 1"
@@ -54,6 +54,8 @@ jobs:
           tar -xzf "$RUNNER_TEMP/cargo-mutants.tar.gz" -C "$RUNNER_TEMP/mutants-bin"
           chmod 0755 "$RUNNER_TEMP/mutants-bin/cargo-mutants"
           echo "$RUNNER_TEMP/mutants-bin" >> "$GITHUB_PATH"
+          # Direct release asset still expects Cargo's literal subcommand slot;
+          # exact v25.3.1 rejects a bare --version.
           test "$("$RUNNER_TEMP/mutants-bin/cargo-mutants" mutants --version)" \
             = "$MUTANTS_VERSION_OUTPUT"
       - name: discover and bind exact population
@@ -66,7 +68,7 @@ jobs:
             --source-root "$source_root"
           (
             cd "$source_root"
-            cargo mutants --baseline=run --gitignore=false --no-shuffle --list --json
+            cargo mutants --gitignore=false --no-shuffle --list --json
           ) > "$RUNNER_TEMP/population.json"
           python3 "$source_root/scripts/mutation.py" manifest \
             --population-json "$RUNNER_TEMP/population.json" \
@@ -163,6 +165,8 @@ jobs:
           tar -xzf "$RUNNER_TEMP/cargo-mutants.tar.gz" -C "$RUNNER_TEMP/mutants-bin"
           chmod 0755 "$RUNNER_TEMP/mutants-bin/cargo-mutants"
           echo "$RUNNER_TEMP/mutants-bin" >> "$GITHUB_PATH"
+          # Direct release asset still expects Cargo's literal subcommand slot;
+          # exact v25.3.1 rejects a bare --version.
           test "$("$RUNNER_TEMP/mutants-bin/cargo-mutants" mutants --version)" \
             = "$MUTANTS_VERSION_OUTPUT"
       - name: run isolated shard with its own baseline
@@ -174,16 +178,14 @@ jobs:
             --repo-root "$GITHUB_WORKSPACE" \
             --revision "$GITHUB_SHA" \
             --source-root "$source_root"
+          cd "$source_root"
           set +e
-          (
-            cd "$source_root"
-            cargo mutants \
-              --baseline=run \
-              --gitignore=false \
-              --no-shuffle \
-              --shard "$SHARD_INDEX/32" \
-              --output "$output_parent"
-          )
+          cargo mutants \
+            --baseline=run \
+            --gitignore=false \
+            --no-shuffle \
+            --shard "$SHARD_INDEX/32" \
+            --output "$output_parent"
           mutants_exit=$?
           set -e
           python3 "$source_root/scripts/mutation.py" record-shard \
@@ -193,7 +195,7 @@ jobs:
             --config "$source_root/.cargo/mutants.toml" \
             --output-parent "$output_parent" \
             --shard-index "$SHARD_INDEX" \
-            --observed-revision "$(git rev-parse HEAD)" \
+            --observed-revision "$GITHUB_SHA" \
             --tool-archive "$RUNNER_TEMP/cargo-mutants.tar.gz" \
             --tool-version-output "$(cargo mutants --version)" \
             --exit-code "$mutants_exit"

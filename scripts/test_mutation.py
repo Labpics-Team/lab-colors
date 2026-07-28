@@ -4,11 +4,14 @@
 from __future__ import annotations
 
 import copy
+import contextlib
 import importlib.util
+import io
 import json
 import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -72,8 +75,10 @@ def phase(summary: str) -> list[dict]:
         ]
     elif summary == "Success":
         terminal = "Success"
+    elif summary == "Failure":
+        terminal = {"Signalled": 9}
     else:
-        terminal = {"Failure": 1}
+        raise ValueError(f"unsupported summary: {summary!r}")
     return [
         {
             "phase": "Build",
@@ -107,6 +112,28 @@ class MutationTruthTest(unittest.TestCase):
         self.external_temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name)
         self.external = Path(self.external_temp.name)
+        self.git_binary = shutil.which("git")
+        self.assertIsNotNone(self.git_binary)
+        self.git_env = {
+            **os.environ,
+            "GIT_CONFIG_GLOBAL": os.devnull,
+            "GIT_CONFIG_SYSTEM": os.devnull,
+            "GIT_CONFIG_NOSYSTEM": "1",
+            "GIT_CONFIG_COUNT": "6",
+            "GIT_CONFIG_KEY_0": "user.name",
+            "GIT_CONFIG_VALUE_0": "Mutation Truth Test",
+            "GIT_CONFIG_KEY_1": "user.email",
+            "GIT_CONFIG_VALUE_1": "mutation@example.invalid",
+            "GIT_CONFIG_KEY_2": "commit.gpgsign",
+            "GIT_CONFIG_VALUE_2": "false",
+            "GIT_CONFIG_KEY_3": "core.hooksPath",
+            "GIT_CONFIG_VALUE_3": os.devnull,
+            "GIT_CONFIG_KEY_4": "init.templateDir",
+            "GIT_CONFIG_VALUE_4": "",
+            "GIT_CONFIG_KEY_5": "init.defaultBranch",
+            "GIT_CONFIG_VALUE_5": "main",
+            "GIT_TERMINAL_PROMPT": "0",
+        }
         self.config = self.root / ".cargo" / "mutants.toml"
         self.config.parent.mkdir(parents=True)
         self.config.write_text(
@@ -124,30 +151,32 @@ class MutationTruthTest(unittest.TestCase):
             '[package]\nname = "core"\nversion = "0.1.0"\nedition = "2021"\n',
             encoding="utf-8",
         )
-        subprocess.run(["git", "init", "--quiet"], cwd=self.root, check=True)
-        subprocess.run(["git", "add", "."], cwd=self.root, check=True)
-        subprocess.run(
-            [
-                "git",
-                "-c",
-                "user.name=Mutation Truth Test",
-                "-c",
-                "user.email=mutation@example.invalid",
-                "commit",
-                "--quiet",
-                "-m",
-                "fixture",
-            ],
-            cwd=self.root,
-            check=True,
-        )
-        self.revision = subprocess.check_output(
-            ["git", "rev-parse", "HEAD"], cwd=self.root, text=True
-        ).strip()
+        self.git("init", "--quiet")
+        self.git("add", ".")
+        self.git("commit", "--quiet", "-m", "fixture")
+        self.revision = self.git_output("rev-parse", "HEAD")
 
     def tearDown(self) -> None:
         self.temp.cleanup()
         self.external_temp.cleanup()
+
+    def git(
+        self,
+        *arguments: str,
+        check: bool = True,
+    ) -> subprocess.CompletedProcess:
+        assert self.git_binary is not None
+        return subprocess.run(
+            [self.git_binary, *arguments],
+            cwd=self.root,
+            check=check,
+            env=self.git_env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+
+    def git_output(self, *arguments: str) -> str:
+        return self.git(*arguments).stdout.decode("utf-8").strip()
 
     def make_manifest(self, population: list[dict] | None = None) -> dict:
         return mutation.build_manifest(
@@ -159,6 +188,24 @@ class MutationTruthTest(unittest.TestCase):
             revision=self.revision,
             run_id=123,
             run_attempt=1,
+        )
+
+    def make_bound_manifest(self, source_root: Path) -> dict:
+        mutation.materialize_execution_source(
+            self.root,
+            self.revision,
+            source_root,
+        )
+        return mutation.build_manifest(
+            [mutant(index) for index in range(64)],
+            repo_root=self.root,
+            config_path=source_root / ".cargo" / "mutants.toml",
+            package_versions={"core": "0.1.0"},
+            repository="Labpics-Team/lab-colors",
+            revision=self.revision,
+            run_id=123,
+            run_attempt=1,
+            source_root=source_root,
         )
 
     def replace_with_symlink(self, path: Path) -> None:
@@ -177,7 +224,14 @@ class MutationTruthTest(unittest.TestCase):
         mutants: list[dict],
         summaries: list[str] | None = None,
     ) -> None:
-        summaries = summaries or ["CaughtMutant"] * len(mutants)
+        summaries = (
+            ["CaughtMutant"] * len(mutants) if summaries is None else summaries
+        )
+        if len(summaries) != len(mutants):
+            raise ValueError(
+                "fixture summary count must equal the mutant count: "
+                f"{len(summaries)} != {len(mutants)}"
+            )
         out = parent / "mutants.out"
         (out / "log").mkdir(parents=True, exist_ok=True)
         (out / "diff").mkdir(exist_ok=True)
@@ -203,6 +257,7 @@ class MutationTruthTest(unittest.TestCase):
         (out / "log" / "baseline.log").write_text("baseline\n", encoding="utf-8")
         counts = {
             "CaughtMutant": 0,
+            "Failure": 0,
             "MissedMutant": 0,
             "Timeout": 0,
             "Unviable": 0,
@@ -286,6 +341,46 @@ class MutationTruthTest(unittest.TestCase):
         )
         self.assertNotEqual(manifest["population"]["sha256"], manifest["manifest_sha256"])
 
+    def test_mutant_validation_accepts_canonical_equivalent_repo_roots(self) -> None:
+        relative_root = Path(os.path.relpath(self.root, Path.cwd()))
+        linked_root = self.external / "linked-repo"
+        linked_root.symlink_to(self.root, target_is_directory=True)
+
+        for candidate in (relative_root, linked_root):
+            with self.subTest(candidate=candidate):
+                self.assertEqual(
+                    mutation._validate_mutant(mutant(0), "mutant", candidate),
+                    mutant(0),
+                )
+
+        loop = self.external / "loop"
+        loop.symlink_to("loop", target_is_directory=True)
+        with self.assertRaisesRegex(mutation.ContractError, "canonicalize mutant repo root"):
+            mutation._validate_mutant(mutant(0), "mutant", loop)
+
+    def test_git_fixture_ignores_hostile_global_configuration(self) -> None:
+        hostile_home = self.external / "hostile-home"
+        hostile_home.mkdir()
+        hostile_hooks = hostile_home / "hooks"
+        hostile_hooks.mkdir()
+        pre_commit = hostile_hooks / "pre-commit"
+        pre_commit.write_text("#!/bin/sh\nexit 97\n", encoding="utf-8")
+        pre_commit.chmod(0o755)
+        (hostile_home / ".gitconfig").write_text(
+            "[commit]\n"
+            "\tgpgsign = true\n"
+            "[core]\n"
+            f"\thooksPath = {hostile_hooks}\n"
+            "[hostile]\n"
+            "\tmarker = visible\n",
+            encoding="utf-8",
+        )
+
+        with mock.patch.dict(self.git_env, {"HOME": str(hostile_home)}):
+            marker = self.git("config", "--get", "hostile.marker", check=False)
+            self.assertEqual(marker.returncode, 1)
+            self.git("commit", "--allow-empty", "--quiet", "-m", "isolated commit")
+
     def test_manifest_rejects_duplicate_and_foreign_mutants(self) -> None:
         duplicate = mutant(0)
         with self.assertRaisesRegex(mutation.ContractError, "duplicate mutant"):
@@ -294,6 +389,25 @@ class MutationTruthTest(unittest.TestCase):
             self.make_manifest([mutant(0, "../../outside.rs")])
         with self.assertRaisesRegex(mutation.ContractError, "does not exist"):
             self.make_manifest([mutant(0, "crates/core/src/foreign.rs")])
+
+    def test_v4_evidence_rejects_pre_failure_count_schemas(self) -> None:
+        manifest = self.make_manifest()
+        old_manifest = copy.deepcopy(manifest)
+        old_manifest["schema"] = "lab-colors-mutation-population-v3"
+        old_manifest["manifest_sha256"] = mutation._digest_value(
+            mutation._manifest_payload(old_manifest)
+        )
+        with self.assertRaisesRegex(mutation.ContractError, "manifest schema"):
+            mutation.validate_manifest(old_manifest)
+
+        _, record = self.record(manifest, 0)
+        old_record = copy.deepcopy(record)
+        old_record["schema"] = "lab-colors-mutation-shard-v3"
+        old_record["record_sha256"] = mutation._digest_value(
+            mutation._shard_payload(old_record)
+        )
+        with self.assertRaisesRegex(mutation.ContractError, "shard record schema"):
+            mutation._validate_record_header(old_record)
 
     def test_shard_rejects_wrong_version_revision_config_and_exit_code(self) -> None:
         manifest = self.make_manifest()
@@ -380,20 +494,12 @@ class MutationTruthTest(unittest.TestCase):
         expected = mutation.expected_shard_specs(manifest, 0)
         parent = self.root / "mutation-shard-0"
         self.write_outcomes(parent, expected)
-        subprocess.run(
-            ["git", "update-index", "--assume-unchanged", "crates/core/src/lib.rs"],
-            cwd=self.root,
-            check=True,
-        )
+        self.git("update-index", "--assume-unchanged", "crates/core/src/lib.rs")
         self.source.write_text(
             "pub fn value() -> bool { false }\n",
             encoding="utf-8",
         )
-        status = subprocess.check_output(
-            ["git", "status", "--porcelain=v1", "--untracked-files=no"],
-            cwd=self.root,
-            text=True,
-        )
+        status = self.git_output("status", "--porcelain=v1", "--untracked-files=no")
         self.assertEqual(status, "")
         with self.assertRaisesRegex(mutation.ContractError, "index flag|execution source"):
             mutation.validate_and_record_shard(
@@ -411,20 +517,16 @@ class MutationTruthTest(unittest.TestCase):
         original = (self.root / "Cargo.toml").read_bytes()
         for flag in ("--assume-unchanged", "--skip-worktree"):
             with self.subTest(flag=flag):
-                subprocess.run(
-                    ["git", "update-index", flag, "Cargo.toml"],
-                    cwd=self.root,
-                    check=True,
-                )
+                self.git("update-index", flag, "Cargo.toml")
                 try:
                     (self.root / "Cargo.toml").write_text(
                         '[workspace]\nmembers = ["crates/core", "hidden-input"]\nresolver = "2"\n',
                         encoding="utf-8",
                     )
-                    status = subprocess.check_output(
-                        ["git", "status", "--porcelain=v1", "--untracked-files=no"],
-                        cwd=self.root,
-                        text=True,
+                    status = self.git_output(
+                        "status",
+                        "--porcelain=v1",
+                        "--untracked-files=no",
                     )
                     self.assertEqual(status, "")
                     with self.assertRaisesRegex(mutation.ContractError, "index flag"):
@@ -436,11 +538,7 @@ class MutationTruthTest(unittest.TestCase):
                         if flag == "--assume-unchanged"
                         else "--no-skip-worktree"
                     )
-                    subprocess.run(
-                        ["git", "update-index", clear, "Cargo.toml"],
-                        cwd=self.root,
-                        check=True,
-                    )
+                    self.git("update-index", clear, "Cargo.toml")
 
     def test_materialized_execution_source_excludes_untracked_and_ignored_inputs(self) -> None:
         untracked = self.root / "tests" / "integration_input.rs"
@@ -449,31 +547,11 @@ class MutationTruthTest(unittest.TestCase):
         ignored = self.root / "ignored-build.rs"
         ignored.write_text("compile_error!(\"ignored input executed\");\n", encoding="utf-8")
         (self.root / ".gitignore").write_text("ignored-build.rs\n", encoding="utf-8")
-        subprocess.run(["git", "add", ".gitignore"], cwd=self.root, check=True)
-        subprocess.run(
-            [
-                "git",
-                "-c",
-                "user.name=Mutation Truth Test",
-                "-c",
-                "user.email=mutation@example.invalid",
-                "commit",
-                "--quiet",
-                "-m",
-                "ignore hostile execution input",
-            ],
-            cwd=self.root,
-            check=True,
-        )
-        self.revision = subprocess.check_output(
-            ["git", "rev-parse", "HEAD"], cwd=self.root, text=True
-        ).strip()
+        self.git("add", ".gitignore")
+        self.git("commit", "--quiet", "-m", "ignore hostile execution input")
+        self.revision = self.git_output("rev-parse", "HEAD")
         self.assertEqual(
-            subprocess.run(
-                ["git", "check-ignore", "--quiet", "ignored-build.rs"],
-                cwd=self.root,
-                check=False,
-            ).returncode,
+            self.git("check-ignore", "--quiet", "ignored-build.rs", check=False).returncode,
             0,
         )
 
@@ -499,6 +577,79 @@ class MutationTruthTest(unittest.TestCase):
                 repo_root=self.root,
             )
 
+    def test_materialized_execution_source_closes_every_scandir_iterator(self) -> None:
+        source_root = self.external / "execution-source"
+        snapshot = mutation.materialize_execution_source(
+            self.root,
+            self.revision,
+            source_root,
+        )
+        real_scandir = os.scandir
+        opened = 0
+        closed = 0
+
+        class Probe:
+            def __init__(self, descriptor: int) -> None:
+                nonlocal opened
+                self.iterator = real_scandir(descriptor)
+                opened += 1
+
+            def __iter__(self):
+                return iter(self.iterator)
+
+            def __enter__(self):
+                return self.iterator
+
+            def __exit__(self, exc_type, exc_value, traceback) -> None:
+                nonlocal closed
+                self.iterator.close()
+                closed += 1
+
+        with mock.patch.object(mutation.os, "scandir", side_effect=Probe):
+            mutation._verify_materialized_execution_source(
+                source_root,
+                snapshot,
+                repo_root=self.root,
+            )
+
+        self.assertGreater(opened, 1)
+        self.assertEqual(closed, opened)
+
+    def test_materialization_consumes_one_validated_git_inventory(self) -> None:
+        real_run_bytes = mutation._run_bytes
+        inventory_calls = 0
+
+        def observe_inventory(argv, *, cwd, label):
+            nonlocal inventory_calls
+            if argv[0:2] == ["git", "ls-tree"]:
+                inventory_calls += 1
+            return real_run_bytes(argv, cwd=cwd, label=label)
+
+        with mock.patch.object(mutation, "_run_bytes", side_effect=observe_inventory):
+            mutation.materialize_execution_source(
+                self.root,
+                self.revision,
+                self.external / "execution-source",
+            )
+
+        self.assertEqual(inventory_calls, 1)
+
+    def test_materialization_rejects_malformed_git_inventory_as_contract_error(self) -> None:
+        real_run_bytes = mutation._run_bytes
+
+        def malformed_inventory(argv, *, cwd, label):
+            if argv[0:2] == ["git", "ls-tree"]:
+                return b"malformed\0"
+            return real_run_bytes(argv, cwd=cwd, label=label)
+
+        with mock.patch.object(mutation, "_run_bytes", side_effect=malformed_inventory):
+            with self.assertRaisesRegex(mutation.ContractError, "inventory is malformed"):
+                mutation.materialize_execution_source(
+                    self.root,
+                    self.revision,
+                    self.external / "execution-source",
+                )
+
     def test_execution_source_digest_binds_all_tracked_modes_and_symlink_targets(self) -> None:
         baseline = mutation._build_execution_source(self.root, self.revision)
         executable = self.root / "scripts" / "integration.sh"
@@ -507,29 +658,9 @@ class MutationTruthTest(unittest.TestCase):
         executable.chmod(0o755)
         link = self.root / "integration-link"
         link.symlink_to("Cargo.toml")
-        subprocess.run(
-            ["git", "add", "scripts/integration.sh", "integration-link"],
-            cwd=self.root,
-            check=True,
-        )
-        subprocess.run(
-            [
-                "git",
-                "-c",
-                "user.name=Mutation Truth Test",
-                "-c",
-                "user.email=mutation@example.invalid",
-                "commit",
-                "--quiet",
-                "-m",
-                "tracked execution inputs",
-            ],
-            cwd=self.root,
-            check=True,
-        )
-        self.revision = subprocess.check_output(
-            ["git", "rev-parse", "HEAD"], cwd=self.root, text=True
-        ).strip()
+        self.git("add", "scripts/integration.sh", "integration-link")
+        self.git("commit", "--quiet", "-m", "tracked execution inputs")
+        self.revision = self.git_output("rev-parse", "HEAD")
         source_root = self.external / "execution-source"
 
         snapshot = mutation.materialize_execution_source(
@@ -539,17 +670,14 @@ class MutationTruthTest(unittest.TestCase):
         )
         entries = {entry["path"]: entry for entry in snapshot["entries"]}
         committed_paths = set(
-            subprocess.check_output(
-                ["git", "ls-tree", "-r", "--name-only", self.revision],
-                cwd=self.root,
-                text=True,
+            self.git_output(
+                "ls-tree",
+                "-r",
+                "--name-only",
+                self.revision,
             ).splitlines()
         )
-        committed_tree = subprocess.check_output(
-            ["git", "rev-parse", f"{self.revision}^{{tree}}"],
-            cwd=self.root,
-            text=True,
-        ).strip()
+        committed_tree = self.git_output("rev-parse", f"{self.revision}^{{tree}}")
 
         self.assertNotEqual(snapshot["sha256"], baseline["sha256"])
         self.assertEqual(set(entries), committed_paths)
@@ -561,28 +689,39 @@ class MutationTruthTest(unittest.TestCase):
         self.assertTrue((source_root / "integration-link").is_symlink())
         self.assertEqual(os.readlink(source_root / "integration-link"), "Cargo.toml")
 
+        executable.chmod(0o644)
+        self.git("add", "scripts/integration.sh")
+        self.git("commit", "--quiet", "-m", "change tracked mode only")
+        mode_revision = self.git_output("rev-parse", "HEAD")
+        mode_snapshot = mutation._build_execution_source(self.root, mode_revision)
+        self.assertEqual(
+            {entry["path"] for entry in mode_snapshot["entries"]},
+            set(entries),
+        )
+        self.assertNotEqual(mode_snapshot["sha256"], snapshot["sha256"])
+
+        executable.chmod(0o755)
+        link.unlink()
+        link.symlink_to(".cargo/mutants.toml")
+        self.git("add", "scripts/integration.sh", "integration-link")
+        self.git("commit", "--quiet", "-m", "change tracked link target only")
+        link_revision = self.git_output("rev-parse", "HEAD")
+        link_snapshot = mutation._build_execution_source(self.root, link_revision)
+        self.assertEqual(
+            {entry["path"] for entry in link_snapshot["entries"]},
+            set(entries),
+        )
+        self.assertNotEqual(link_snapshot["sha256"], snapshot["sha256"])
+
     def test_materialized_execution_source_rejects_external_symlink_target(self) -> None:
+        outside = self.external / "outside-input"
+        outside.write_text("existing external input\n", encoding="utf-8")
         link = self.root / "external-input"
         link.symlink_to("../outside-input")
-        subprocess.run(["git", "add", "external-input"], cwd=self.root, check=True)
-        subprocess.run(
-            [
-                "git",
-                "-c",
-                "user.name=Mutation Truth Test",
-                "-c",
-                "user.email=mutation@example.invalid",
-                "commit",
-                "--quiet",
-                "-m",
-                "hostile external symlink",
-            ],
-            cwd=self.root,
-            check=True,
-        )
-        self.revision = subprocess.check_output(
-            ["git", "rev-parse", "HEAD"], cwd=self.root, text=True
-        ).strip()
+        self.git("add", "external-input")
+        self.git("commit", "--quiet", "-m", "hostile external symlink")
+        self.revision = self.git_output("rev-parse", "HEAD")
+        self.assertTrue(outside.is_file())
 
         with self.assertRaisesRegex(mutation.ContractError, "symlink escapes or is dangling"):
             mutation.materialize_execution_source(
@@ -594,25 +733,9 @@ class MutationTruthTest(unittest.TestCase):
     def test_materialized_execution_source_rejects_file_with_directory_suffix(self) -> None:
         link = self.root / "not-a-directory"
         link.symlink_to("Cargo.toml/.")
-        subprocess.run(["git", "add", "not-a-directory"], cwd=self.root, check=True)
-        subprocess.run(
-            [
-                "git",
-                "-c",
-                "user.name=Mutation Truth Test",
-                "-c",
-                "user.email=mutation@example.invalid",
-                "commit",
-                "--quiet",
-                "-m",
-                "hostile directory suffix",
-            ],
-            cwd=self.root,
-            check=True,
-        )
-        self.revision = subprocess.check_output(
-            ["git", "rev-parse", "HEAD"], cwd=self.root, text=True
-        ).strip()
+        self.git("add", "not-a-directory")
+        self.git("commit", "--quiet", "-m", "hostile directory suffix")
+        self.revision = self.git_output("rev-parse", "HEAD")
 
         with self.assertRaisesRegex(mutation.ContractError, "symlink escapes or is dangling"):
             mutation.materialize_execution_source(
@@ -657,8 +780,8 @@ class MutationTruthTest(unittest.TestCase):
 
         def verify_then_swap(repo_fd: int, candidate: Path, source_fd: int) -> None:
             nonlocal calls
-            real_verify_binding(repo_fd, candidate, source_fd)
             calls += 1
+            real_verify_binding(repo_fd, candidate, source_fd)
             if calls == 1:
                 swappable_parent.rename(original_parent)
                 swappable_parent.symlink_to(redirected_parent, target_is_directory=True)
@@ -674,6 +797,7 @@ class MutationTruthTest(unittest.TestCase):
                     self.revision,
                     source_root,
                 )
+        self.assertGreaterEqual(calls, 2)
         self.assertEqual(list(redirected_parent.rglob("*")), [])
 
     def test_verification_reproves_physical_disjointness(self) -> None:
@@ -775,6 +899,27 @@ class MutationTruthTest(unittest.TestCase):
                 observed_revision=self.revision,
             )
 
+    def test_aggregate_types_shard_inventory_io_failure(self) -> None:
+        manifest = self.make_manifest()
+        shards = self.complete_shards(manifest)
+
+        with mock.patch.object(
+            Path,
+            "iterdir",
+            side_effect=OSError("hostile enumeration failure"),
+        ):
+            with self.assertRaisesRegex(
+                mutation.ContractError,
+                "cannot inspect shards root",
+            ):
+                mutation.aggregate(
+                    manifest,
+                    repo_root=self.root,
+                    config_path=self.config,
+                    shards_root=shards,
+                    observed_revision=self.revision,
+                )
+
     def test_phase_automaton_rejects_work_after_a_failed_check(self) -> None:
         manifest = self.make_manifest()
         expected = mutation.expected_shard_specs(manifest, 0)
@@ -822,6 +967,137 @@ class MutationTruthTest(unittest.TestCase):
                 tool_version_output=mutation.TOOL_VERSION_OUTPUT,
                 exit_code=0,
             )
+
+    def test_phase_fixture_rejects_unknown_summary(self) -> None:
+        with self.assertRaisesRegex(ValueError, "unsupported summary"):
+            phase("Caught")
+
+    def test_unattributed_tool_statuses_are_preserved_as_failure(self) -> None:
+        manifest = self.make_manifest()
+        expected = mutation.expected_shard_specs(manifest, 0)
+        summaries = ["Failure"] + ["CaughtMutant"] * (len(expected) - 1)
+        parent = self.root / "mutation-shard-0"
+        self.write_outcomes(parent, expected, summaries)
+
+        record = mutation.validate_and_record_shard(
+            manifest,
+            repo_root=self.root,
+            config_path=self.config,
+            output_parent=parent,
+            shard_index=0,
+            observed_revision=self.revision,
+            tool_version_output=mutation.TOOL_VERSION_OUTPUT,
+            exit_code=0,
+        )
+
+        self.assertEqual(record["schema"], "lab-colors-mutation-shard-v4")
+        self.assertEqual(record["counts"]["failure"], 1)
+        self.assertEqual(record["exit_code"], 0)
+
+    def test_pinned_process_automaton_matrix_is_exhaustive(self) -> None:
+        execution = self.make_manifest()["execution"]
+        statuses = {
+            "Failure": {"Failure": 101},
+            "Other": "Other",
+            "Signalled": {"Signalled": 9},
+            "Success": "Success",
+            "Timeout": "Timeout",
+        }
+
+        def phases(build: str, test: str | None = None) -> list[dict]:
+            result = phase("Success")
+            result[0]["process_status"] = statuses[build]
+            if test is None:
+                return result[:1]
+            result[1]["process_status"] = statuses[test]
+            return result
+
+        cases = [
+            ("Baseline", "Failure", None, "Failure"),
+            ("Baseline", "Signalled", None, "Failure"),
+            ("Baseline", "Other", None, "Failure"),
+            ("Baseline", "Timeout", None, "Timeout"),
+            ("Baseline", "Success", "Success", "Success"),
+            ("Baseline", "Success", "Failure", "Failure"),
+            ("Baseline", "Success", "Signalled", "Failure"),
+            ("Baseline", "Success", "Other", "Failure"),
+            ("Baseline", "Success", "Timeout", "Timeout"),
+            ("Mutant", "Failure", None, "Unviable"),
+            ("Mutant", "Signalled", None, "Failure"),
+            ("Mutant", "Other", None, "Failure"),
+            ("Mutant", "Timeout", None, "Timeout"),
+            ("Mutant", "Success", "Success", "MissedMutant"),
+            ("Mutant", "Success", "Failure", "CaughtMutant"),
+            ("Mutant", "Success", "Signalled", "Failure"),
+            ("Mutant", "Success", "Other", "Failure"),
+            ("Mutant", "Success", "Timeout", "Timeout"),
+        ]
+        for scenario, build_status, test_status, expected in cases:
+            with self.subTest(
+                scenario=scenario,
+                build=build_status,
+                test=test_status,
+            ):
+                self.assertEqual(
+                    mutation._derive_summary(
+                        scenario,
+                        phases(build_status, test_status),
+                        "outcome",
+                        package_names=["core"],
+                        execution=execution,
+                    )[0],
+                    expected,
+                )
+
+        for terminal in ("Failure", "Signalled", "Other", "Timeout"):
+            with self.subTest(continued_after=terminal):
+                with self.assertRaisesRegex(
+                    mutation.ContractError,
+                    "continued after a terminal Build",
+                ):
+                    mutation._derive_summary(
+                        "Mutant",
+                        phases(terminal, "Success"),
+                        "outcome",
+                        package_names=["core"],
+                        execution=execution,
+                    )
+
+    def test_exit_priority_is_exhaustive_and_rejects_unbound_process_codes(self) -> None:
+        summaries = sorted(mutation.MUTANT_SUMMARIES)
+        for mask in range(1 << len(summaries)):
+            subset = [
+                summary
+                for index, summary in enumerate(summaries)
+                if mask & (1 << index)
+            ]
+            expected = (
+                3
+                if "Timeout" in subset
+                else 2
+                if "MissedMutant" in subset
+                else 0
+            )
+            with self.subTest(subset=subset):
+                self.assertEqual(mutation.expected_exit_code(subset), expected)
+
+        manifest = self.make_manifest()
+        expected = mutation.expected_shard_specs(manifest, 0)
+        parent = self.root / "mutation-shard-0"
+        self.write_outcomes(parent, expected)
+        for exit_code in (1, 4, 5, 6, 70, 143):
+            with self.subTest(exit_code=exit_code):
+                with self.assertRaisesRegex(mutation.ContractError, "exit code mismatch"):
+                    mutation.validate_and_record_shard(
+                        manifest,
+                        repo_root=self.root,
+                        config_path=self.config,
+                        output_parent=parent,
+                        shard_index=0,
+                        observed_revision=self.revision,
+                        tool_version_output=mutation.TOOL_VERSION_OUTPUT,
+                        exit_code=exit_code,
+                    )
 
     def test_phase_rejects_substituted_command_identity(self) -> None:
         manifest = self.make_manifest()
@@ -895,6 +1171,8 @@ class MutationTruthTest(unittest.TestCase):
         outcomes_path = parent / "mutants.out" / "outcomes.json"
         outcomes = json.loads(outcomes_path.read_text(encoding="utf-8"))
         outcomes["outcomes"][1]["summary"] = "Success"
+        outcomes["caught"] -= 1
+        outcomes["success"] += 1
         mutation.write_json(outcomes_path, outcomes)
         with self.assertRaisesRegex(mutation.ContractError, "summary"):
             mutation.validate_and_record_shard(
@@ -1011,6 +1289,68 @@ class MutationTruthTest(unittest.TestCase):
                 observed_revision=self.revision,
             )
 
+    def test_aggregate_rechecks_bound_source_before_and_after_artifacts(self) -> None:
+        source_root = self.external / "execution-source"
+        manifest = self.make_bound_manifest(source_root)
+        shards = self.complete_shards(manifest)
+
+        with (
+            mock.patch.object(
+                mutation,
+                "_validate_checkout",
+                wraps=mutation._validate_checkout,
+            ) as validate_checkout,
+            mock.patch.object(
+                mutation,
+                "validate_manifest",
+                wraps=mutation.validate_manifest,
+            ) as validate_manifest,
+        ):
+            mutation.aggregate(
+                manifest,
+                repo_root=self.root,
+                config_path=source_root / ".cargo" / "mutants.toml",
+                shards_root=shards,
+                observed_revision=self.revision,
+                source_root=source_root,
+            )
+
+        self.assertEqual(validate_checkout.call_count, 2)
+        self.assertEqual(validate_manifest.call_count, 1)
+
+    def test_aggregate_rejects_source_swap_during_artifact_regeneration(self) -> None:
+        source_root = self.external / "execution-source"
+        manifest = self.make_bound_manifest(source_root)
+        shards = self.complete_shards(manifest)
+        real_read_json = mutation.read_json
+        tampered = False
+
+        def read_then_tamper(path: Path):
+            nonlocal tampered
+            value = real_read_json(path)
+            if path.name == "shard.json" and not tampered:
+                (source_root / "crates" / "core" / "src" / "lib.rs").write_text(
+                    "pub fn value() -> bool { false }\n",
+                    encoding="utf-8",
+                )
+                tampered = True
+            return value
+
+        with mock.patch.object(mutation, "read_json", side_effect=read_then_tamper):
+            with self.assertRaisesRegex(
+                mutation.ContractError,
+                "execution source content mismatch",
+            ):
+                mutation.aggregate(
+                    manifest,
+                    repo_root=self.root,
+                    config_path=source_root / ".cargo" / "mutants.toml",
+                    shards_root=shards,
+                    observed_revision=self.revision,
+                    source_root=source_root,
+                )
+        self.assertTrue(tampered)
+
     def test_report_only_accepts_complete_missed_and_timeout_outcomes(self) -> None:
         manifest = self.make_manifest()
         shards = self.complete_shards(manifest)
@@ -1018,13 +1358,15 @@ class MutationTruthTest(unittest.TestCase):
             (0, "MissedMutant"),
             (1, "Timeout"),
             (2, "Unviable"),
+            (3, "Failure"),
         ]:
             parent = shards / f"mutation-shard-{index}"
             expected = mutation.expected_shard_specs(manifest, index)
+            summaries = [summary] + ["CaughtMutant"] * (len(expected) - 1)
             self.write_outcomes(
                 parent,
                 expected,
-                [summary] + ["CaughtMutant"] * (len(expected) - 1),
+                summaries,
             )
             record = mutation.validate_and_record_shard(
                 manifest,
@@ -1034,7 +1376,7 @@ class MutationTruthTest(unittest.TestCase):
                 shard_index=index,
                 observed_revision=self.revision,
                 tool_version_output="cargo-mutants 25.3.1",
-                exit_code=mutation.expected_exit_code([summary]),
+                exit_code=mutation.expected_exit_code(summaries),
             )
             mutation.write_json(parent / "shard.json", record)
         aggregate = mutation.aggregate(
@@ -1048,6 +1390,16 @@ class MutationTruthTest(unittest.TestCase):
         self.assertEqual(aggregate["counts"]["missed"], 1)
         self.assertEqual(aggregate["counts"]["timeout"], 1)
         self.assertEqual(aggregate["counts"]["unviable"], 1)
+        self.assertEqual(aggregate["counts"]["failure"], 1)
+        self.assertEqual(aggregate["schema"], "lab-colors-mutation-aggregate-v4")
+
+    def test_outcome_fixture_rejects_missing_or_extra_summaries(self) -> None:
+        parent = self.root / "fixture-length"
+        entries = [mutant(0), mutant(1)]
+        for summaries in ([], ["CaughtMutant"], ["CaughtMutant"] * 3):
+            with self.subTest(summaries=summaries):
+                with self.assertRaisesRegex(ValueError, "summary count"):
+                    self.write_outcomes(parent, entries, summaries)
 
     def test_invalid_json_and_tool_archive_fail_closed(self) -> None:
         manifest = self.make_manifest()
@@ -1069,27 +1421,120 @@ class MutationTruthTest(unittest.TestCase):
         self.assertIn("aggregate", help_text)
         self.assertIn("report-only", help_text)
 
+    def test_json_boundaries_type_runtime_failures_without_hiding_bugs(self) -> None:
+        deep_json = self.root / "deep.json"
+        deep_json.write_text("[" * 1100 + "]" * 1100, encoding="utf-8")
+        with self.assertRaisesRegex(mutation.ContractError, "invalid JSON"):
+            mutation.read_json(deep_json)
+        with (
+            mock.patch.dict(os.environ, {"CARGO": "/usr/bin/true"}),
+            mock.patch.object(mutation, "_run_bytes", return_value=deep_json.read_bytes()),
+            self.assertRaisesRegex(
+                mutation.ContractError,
+                "cargo metadata is invalid JSON",
+            ),
+        ):
+            mutation._cargo_package_versions(self.root, [mutant(0)])
+        with self.assertRaisesRegex(mutation.ContractError, "cannot write JSON"):
+            mutation.write_json(Path("/dev/null/child.json"), {})
+
+        parser = mock.Mock()
+        arguments = mock.Mock()
+        arguments.handler.side_effect = lambda _: mutation.read_json(deep_json)
+        parser.parse_args.return_value = arguments
+        stderr = io.StringIO()
+        with (
+            mock.patch.object(mutation, "build_parser", return_value=parser),
+            contextlib.redirect_stderr(stderr),
+        ):
+            self.assertEqual(mutation.main([]), 2)
+        self.assertIn("mutation truth error:", stderr.getvalue())
+        self.assertNotIn("Traceback", stderr.getvalue())
+
+        arguments.handler.side_effect = KeyError("internal invariant")
+        with (
+            mock.patch.object(mutation, "build_parser", return_value=parser),
+            self.assertRaises(KeyError),
+        ):
+            mutation.main([])
+
     def test_workflow_and_scope_lock_the_truth_contract(self) -> None:
         repo = Path(__file__).resolve().parents[1]
         workflow = (repo / ".github" / "workflows" / "mutation.yml").read_text(
             encoding="utf-8"
         )
         config = (repo / ".cargo" / "mutants.toml").read_text(encoding="utf-8")
-        self.assertNotIn("--in-place", workflow)
-        self.assertNotIn("full_workspace", workflow)
-        self.assertEqual(workflow.count("materialize-source"), 3)
-        self.assertEqual(workflow.count("--gitignore=false"), 2)
-        self.assertEqual(workflow.count('cd "$source_root"'), 2)
-        self.assertNotIn('--config "$GITHUB_WORKSPACE/.cargo/mutants.toml"', workflow)
-        self.assertIn('--config "$source_root/.cargo/mutants.toml"', workflow)
-        self.assertIn('RUSTUP_HOME=$RUNNER_TEMP/', workflow)
-        self.assertIn('CARGO_HOME=$RUNNER_TEMP/', workflow)
-        self.assertIn('TMPDIR=$RUNNER_TEMP/', workflow)
-        self.assertIn("max-parallel: 4", workflow)
-        self.assertIn("--baseline=run", workflow)
-        self.assertIn('--shard "$SHARD_INDEX/32"', workflow)
+        ci = (repo / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+        self.assertLess(
+            ci.index("      - name: mutation evidence verifier hostile tests\n"),
+            ci.index("      - name: cargo test\n"),
+        )
+        manifest_job = workflow.split("\n  manifest:\n", 1)[1].split(
+            "\n  shard:\n",
+            1,
+        )[0]
+        shard_job = workflow.split("\n  shard:\n", 1)[1].split(
+            "\n  aggregate:\n",
+            1,
+        )[0]
+        shard_step = workflow.split(
+            "      - name: run isolated shard with its own baseline\n",
+            1,
+        )[1].split("      - name:", 1)[0]
+        manifest_step = workflow.split(
+            "      - name: discover and bind exact population\n",
+            1,
+        )[1].split("      - name:", 1)[0]
+        aggregate_step = workflow.split(
+            "      - name: verify exact non-overlapping aggregate\n",
+            1,
+        )[1].split("      - name:", 1)[0]
+
+        for step in (manifest_step, shard_step, aggregate_step):
+            self.assertNotIn("--in-place", step)
+            self.assertNotIn("full_workspace", step)
+            self.assertEqual(step.count("materialize-source"), 1)
+            self.assertIn('--config "$source_root/.cargo/mutants.toml"', step)
+            self.assertNotIn('--config "$GITHUB_WORKSPACE/.cargo/mutants.toml"', step)
+        self.assertEqual(manifest_step.count("--gitignore=false"), 1)
+        self.assertEqual(shard_step.count("--gitignore=false"), 1)
+        self.assertEqual(manifest_step.count('cd "$source_root"'), 1)
+        self.assertEqual(shard_step.count('cd "$source_root"'), 1)
+        for job in (manifest_job, shard_job):
+            self.assertIn('RUSTUP_HOME=$RUNNER_TEMP/', job)
+            self.assertIn('CARGO_HOME=$RUNNER_TEMP/', job)
+            self.assertIn('TMPDIR=$RUNNER_TEMP/', job)
+            self.assertEqual(
+                job.count(
+                    '"$RUNNER_TEMP/mutants-bin/cargo-mutants" mutants --version'
+                ),
+                1,
+            )
+            self.assertNotIn(
+                '"$RUNNER_TEMP/mutants-bin/cargo-mutants" --version',
+                job,
+            )
+        self.assertRegex(shard_job, r"(?m)^\s+max-parallel:\s*4\s*$")
+        self.assertIn("--baseline=run", shard_step)
+        self.assertIn('--shard "$SHARD_INDEX/32"', shard_step)
+        self.assertLess(
+            shard_step.index('cd "$source_root"'),
+            shard_step.index("set +e"),
+        )
+        self.assertIn('--observed-revision "$GITHUB_SHA"', shard_step)
+        self.assertNotIn("git rev-parse HEAD", shard_step)
+        self.assertNotIn("--baseline=run", manifest_step)
+        matrix_match = re.search(
+            r"(?m)^\s+shard:\s*\n(?P<items>(?:\s+-\s+\d+\s*\n)+)",
+            shard_job,
+        )
+        if matrix_match is None:
+            self.fail("matrix.shard list is missing")
         self.assertEqual(
-            re.findall(r"^          - ([0-9]+)$", workflow, flags=re.MULTILINE),
+            re.findall(
+                r"(?m)^\s*-\s+(\d+)\s*$",
+                matrix_match.group("items"),
+            ),
             [str(index) for index in range(mutation.SHARD_COUNT)],
         )
         self.assertIn(mutation.TOOL_ARCHIVE_SHA256, workflow)
