@@ -9,12 +9,13 @@ use crate::Srgb8;
 use crate::program::{
     AppearanceContextErrorKindV1, AppearanceContextFieldV1, AppearanceContextV1, AssessmentV1,
     CertificateV1, CompileErrorHandleV1, CompileErrorKindV1, CompileErrorV1, ConstraintIdV1,
-    ConstraintSubjectV1, ContentIdentityV3, DraftErrorV1, DraftV1, EvidenceBoundsErrorV1,
+    ConstraintSubjectV1, ContentIdentityV4, DraftErrorV1, DraftV1, EvidenceBoundsErrorV1,
     EvidenceViewV1, InstantiateErrorV1, JointChoiceV1, JointOrderErrorV1, JointStateV1,
     NumericDomainErrorV1, ObservationHeadV1, OccurrenceIdV1, OpacityInputIdV1, OutputSlotIdV1,
-    OwnerV1, PaintIdV1, PhysicalPointV1, PresentationRootIdV1, ScenarioV1, SessionV1, SignalV1,
-    SourceIdV1, StateKindV1, SurfaceIdV1, SurfaceInputPortIdV1, SurroundV1, TargetCandidateIdV1,
-    TargetCandidateV1, TargetIdV1, UpdateErrorKindV1, UpdateErrorV1, UpdateV1, VerdictV1,
+    OwnerV1, PaintIdV1, PaintValueV1, PhysicalPointV1, PresentationRootIdV1, ScenarioV1, SessionV1,
+    SignalV1, SourceIdV1, StateKindV1, SurfaceIdV1, SurfaceInputPortIdV1, SurroundV1,
+    TargetCandidateIdV1, TargetCandidateV1, TargetIdV1, UpdateErrorKindV1, UpdateErrorV1, UpdateV1,
+    VerdictV1,
 };
 use crate::wcag22::Wcag22CriterionV1;
 
@@ -439,8 +440,8 @@ fn joint_draft(hard: bool) -> DraftV1 {
         target,
         source,
         vec![
-            TargetCandidateV1::new(black, Srgb8::new([0; 3])),
-            TargetCandidateV1::new(white, Srgb8::new([255; 3])),
+            TargetCandidateV1::new(black, PaintValueV1::opaque(Srgb8::new([0; 3]))),
+            TargetCandidateV1::new(white, PaintValueV1::opaque(Srgb8::new([255; 3]))),
         ],
     );
     draft
@@ -460,6 +461,68 @@ fn joint_draft(hard: bool) -> DraftV1 {
     }
     draft.push_output(output, paint);
     draft
+}
+
+#[test]
+fn finite_paint_candidates_are_not_a_cartesian_source_opacity_domain() {
+    let source = SourceIdV1::new(1);
+    let target = TargetIdV1::new(2);
+    let translucent_white = TargetCandidateIdV1::new(3);
+    let opaque_gray = TargetCandidateIdV1::new(4);
+    let input = SurfaceInputPortIdV1::new(5);
+    let paint = PaintIdV1::new(6);
+    let surface = SurfaceIdV1::new(7);
+    let occurrence = OccurrenceIdV1::new(8);
+    let constraint = ConstraintIdV1::new(9);
+    let output = OutputSlotIdV1::new(10);
+    let context = AppearanceContextV1::try_new(64.0, 0.2, SurroundV1::Average).unwrap();
+
+    let mut draft = DraftV1::new();
+    draft.push_source(source, Srgb8::new([0; 3]));
+    draft.push_finite_target(
+        target,
+        source,
+        vec![
+            TargetCandidateV1::new(
+                translucent_white,
+                PaintValueV1::try_new(Srgb8::new([0xFF; 3]), 0.25).unwrap(),
+            ),
+            TargetCandidateV1::new(
+                opaque_gray,
+                PaintValueV1::try_new(Srgb8::new([0x40; 3]), 1.0).unwrap(),
+            ),
+        ],
+    );
+    draft
+        .set_joint_selection(vec![
+            JointStateV1::new(vec![JointChoiceV1::new(target, translucent_white)]),
+            JointStateV1::new(vec![JointChoiceV1::new(target, opaque_gray)]),
+        ])
+        .unwrap();
+    draft.push_surface_input_port(input);
+    draft.push_solid_paint(paint, target);
+    draft.push_input_surface(surface, input);
+    draft.push_source_over_occurrence(occurrence, paint, surface, context);
+    draft.push_exact_hard(constraint, occurrence, Srgb8::new([0xFF; 3]));
+    draft.push_output(output, paint);
+
+    let owner = draft.compile().unwrap();
+    let mut session = owner.instantiate(1).unwrap();
+    let black = [Srgb8::new([0; 3])];
+    let scenarios = [ScenarioV1::new(1, &black)];
+    let projection = owner
+        .commit(
+            &mut session,
+            UpdateV1::Observed {
+                revision: 1,
+                scenarios: &scenarios,
+            },
+        )
+        .unwrap();
+    let Some(CertificateV1::Conflict(conflict)) = projection.certificates().next() else {
+        panic!("only the two declared atomic Paint values may be considered");
+    };
+    assert_eq!(conflict.considered_state_count(), 2);
 }
 
 #[test]
@@ -674,8 +737,8 @@ fn staged_authoring_lowers_the_actual_closed_program_and_returns_canonical_input
         target,
         source,
         vec![
-            TargetCandidateV1::new(gray, Srgb8::new([0x80; 3])),
-            TargetCandidateV1::new(black, Srgb8::new([0; 3])),
+            TargetCandidateV1::new(gray, PaintValueV1::opaque(Srgb8::new([0x80; 3]))),
+            TargetCandidateV1::new(black, PaintValueV1::opaque(Srgb8::new([0; 3]))),
         ],
     );
     draft
@@ -931,7 +994,7 @@ fn owner_and_update_errors_preserve_content_and_input_identity() {
     let owner = fixed_nested_draft(1.0, SourceIdV1::new(1), input, input)
         .compile()
         .unwrap();
-    let owner_identity: ContentIdentityV3 = owner.content_identity();
+    let owner_identity: ContentIdentityV4 = owner.content_identity();
     let mut session = owner.instantiate(13).unwrap();
 
     let no_scenarios = [];
@@ -1227,7 +1290,7 @@ fn declared_input_ports_form_an_exact_bijection_with_input_surfaces() {
 }
 
 #[test]
-fn duplicate_candidate_signal_preserves_both_candidates_and_exact_stimulus() {
+fn duplicate_candidate_value_preserves_both_candidates_and_exact_stimulus() {
     let input = SurfaceInputPortIdV1::new(50);
     let target = TargetIdV1::new(70);
     let first = TargetCandidateIdV1::new(701);
@@ -1238,19 +1301,19 @@ fn duplicate_candidate_signal_preserves_both_candidates_and_exact_stimulus() {
         target,
         SourceIdV1::new(1),
         vec![
-            TargetCandidateV1::new(first, encoded_srgb8),
-            TargetCandidateV1::new(duplicate, encoded_srgb8),
+            TargetCandidateV1::new(first, PaintValueV1::opaque(encoded_srgb8)),
+            TargetCandidateV1::new(duplicate, PaintValueV1::opaque(encoded_srgb8)),
         ],
     );
     attach_target_assessment(&mut draft, target);
 
     assert_eq!(
         compile_error(draft),
-        CompileErrorV1::DuplicateTargetCandidateSignal {
+        CompileErrorV1::DuplicateTargetCandidateValue {
             target,
             first,
             duplicate,
-            encoded_srgb8,
+            value: PaintValueV1::opaque(encoded_srgb8),
         }
     );
 }
@@ -1262,8 +1325,8 @@ fn joint_diagnostics_preserve_state_and_total_order_details() {
     let first = TargetCandidateIdV1::new(701);
     let second = TargetCandidateIdV1::new(702);
     let candidates = vec![
-        TargetCandidateV1::new(first, Srgb8::new([0; 3])),
-        TargetCandidateV1::new(second, Srgb8::new([255; 3])),
+        TargetCandidateV1::new(first, PaintValueV1::opaque(Srgb8::new([0; 3]))),
+        TargetCandidateV1::new(second, PaintValueV1::opaque(Srgb8::new([255; 3]))),
     ];
 
     let mut duplicate_target = fixed_nested_draft(1.0, SourceIdV1::new(1), input, input);

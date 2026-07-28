@@ -150,8 +150,8 @@ fn finite_search_skips_dirty_and_freshly_rechecks_the_first_clean_state() {
         TARGET,
         SOURCE,
         vec![
-            program::TargetCandidateV1::new(dirty_id, dirty),
-            program::TargetCandidateV1::new(clean_id, clean),
+            program::TargetCandidateV1::new(dirty_id, program::PaintValueV1::opaque(dirty)),
+            program::TargetCandidateV1::new(clean_id, program::PaintValueV1::opaque(clean)),
         ],
     );
     draft
@@ -384,7 +384,10 @@ fn clean_family_fresh_recheck_failure_retains_the_presentation_subject() {
     draft.push_finite_target(
         TARGET,
         SOURCE,
-        vec![program::TargetCandidateV1::new(candidate, clean)],
+        vec![program::TargetCandidateV1::new(
+            candidate,
+            program::PaintValueV1::opaque(clean),
+        )],
     );
     draft
         .set_joint_selection(vec![program::JointStateV1::new(vec![
@@ -439,7 +442,7 @@ fn clean_family_fresh_recheck_failure_retains_the_presentation_subject() {
     );
 }
 
-fn opaque_named_clean_identity(name: u32) -> program::ContentIdentityV3 {
+fn opaque_named_clean_identity(name: u32) -> program::ContentIdentityV4 {
     let source = program::SourceIdV1::new(name);
     let target = program::TargetIdV1::new(name);
     let port = program::SurfaceInputPortIdV1::new(name);
@@ -503,7 +506,7 @@ fn finite_clean_owner(colors: &[Srgb8]) -> program::OwnerV1 {
         .map(|(index, color)| {
             program::TargetCandidateV1::new(
                 program::TargetCandidateIdV1::new(index as u32 + 20),
-                color,
+                program::PaintValueV1::opaque(color),
             )
         })
         .collect::<Vec<_>>();

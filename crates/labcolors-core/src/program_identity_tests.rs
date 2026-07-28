@@ -1,5 +1,8 @@
 use crate::Srgb8;
-use crate::appearance::{OccurrenceId, OpacityInputId, PaintId, SurfaceId, SurfaceInputPortId};
+use crate::appearance::{
+    EncodedPointPaintValueV1, OccurrenceId, OpacityInputId, PaintId, SurfaceId, SurfaceInputPortId,
+};
+use crate::composition::AdmittedOpacityV1;
 use crate::lcs_occurrence::{
     AdaptingLuminanceCdM2, AppearanceContextId, AppearanceContextSchemaReleaseId,
     BackgroundLuminanceRatio, ColorSignal, IEC_SRGB_D65_XYZ_FRAME_V1, SurroundProfileId,
@@ -10,13 +13,24 @@ use crate::program_session::{
     CoreProgramConstraintInvocationV1, CoreProgramEvaluatorsV1, CoreProgramV1,
     DeclaredJointSelectionV1, JointCandidateStateV1, ObservationGroup, Occurrence, OpacityInput,
     OutputBinding, OutputSlotId, Paint, PointPresentationRootV1, PointPresentationTargetV1,
-    PresentationRootId, Program, ProgramContentIdentityV3, Source, SourceId, Surface, Target,
+    PresentationRootId, Program, ProgramContentIdentityV4, Source, SourceId, Surface, Target,
     TargetCandidateChoiceV1, TargetCandidateId, TargetCandidateV1, TargetId,
 };
 use crate::wcag22::Wcag22CriterionV1;
 
 fn signal(value: [u8; 3]) -> ColorSignal {
     ColorSignal::from_srgb8(Srgb8::new(value))
+}
+
+fn opaque_value(signal: ColorSignal) -> EncodedPointPaintValueV1 {
+    EncodedPointPaintValueV1::opaque(signal.srgb8())
+}
+
+fn paint_value(signal: ColorSignal, opacity: f64) -> EncodedPointPaintValueV1 {
+    EncodedPointPaintValueV1::from_admitted(
+        signal.srgb8(),
+        AdmittedOpacityV1::new(opacity).unwrap(),
+    )
 }
 
 fn context(surround: SurroundProfileId) -> AppearanceContextId {
@@ -254,7 +268,7 @@ fn presentation_topology_ignores_root_names_and_declaration_order() {
 }
 
 #[test]
-fn presentation_root_terminal_relation_changes_v3_identity() {
+fn presentation_root_terminal_relation_changes_v4_identity() {
     let ids = canonical_full_ids();
     let root = PresentationRootId::new(1);
     let first = full_program(ids, false, FullMutation::None)
@@ -275,7 +289,7 @@ fn presentation_root_terminal_relation_changes_v3_identity() {
 }
 
 #[test]
-fn presentation_target_relation_and_multiplicity_change_v3_identity() {
+fn presentation_target_relation_and_multiplicity_change_v4_identity() {
     let ids = canonical_full_ids();
     let root = PresentationRootId::new(1);
     let nested_target = full_program(ids, false, FullMutation::None)
@@ -317,7 +331,7 @@ fn presentation_target_relation_and_multiplicity_change_v3_identity() {
 }
 
 #[test]
-fn canonical_v3_digest_is_cross_platform_golden() {
+fn canonical_v4_digest_is_cross_platform_golden() {
     let ids = FixedIds {
         sources: [SourceId::new(10), SourceId::new(20)],
         targets: [TargetId::new(30), TargetId::new(40)],
@@ -338,12 +352,12 @@ fn canonical_v3_digest_is_cross_platform_golden() {
     .compile()
     .unwrap();
 
-    let identity: ProgramContentIdentityV3 = compiled.content_identity();
+    let identity: ProgramContentIdentityV4 = compiled.content_identity();
     assert_eq!(
         identity.as_bytes(),
         &[
-            211, 179, 135, 69, 69, 109, 110, 86, 153, 187, 96, 120, 151, 187, 168, 80, 219, 230,
-            123, 39, 214, 9, 163, 4, 100, 108, 41, 75, 133, 240, 235, 243,
+            132, 20, 224, 27, 199, 182, 194, 5, 234, 7, 128, 37, 116, 110, 26, 26, 17, 145, 90,
+            151, 250, 35, 207, 226, 129, 68, 73, 248, 148, 242, 11, 63,
         ]
     );
 }
@@ -448,7 +462,7 @@ fn full_program(ids: FullIds, reverse_unordered: bool, mutation: FullMutation) -
                 .map(|candidate| {
                     TargetCandidateV1::new(
                         ids.candidates[target][candidate],
-                        candidate_signals[target][candidate],
+                        opaque_value(candidate_signals[target][candidate]),
                     )
                 })
                 .collect::<Vec<_>>();
@@ -700,8 +714,8 @@ fn canonical_full_ids() -> FullIds {
 }
 
 #[test]
-fn complete_program_schema_v3_digest_is_cross_platform_golden() {
-    // Вместе с fixed golden этот Program содержит каждый V3 vertex/edge tag,
+fn complete_program_schema_v4_digest_is_cross_platform_golden() {
+    // Вместе с fixed golden этот Program содержит каждый V4 vertex/edge tag,
     // обе constraint families и оба режима. Случайная смена кодировки требует
     // явной смены версии, а не тихого перевыпуска прежнего content address.
     let compiled = full_program(
@@ -715,8 +729,8 @@ fn complete_program_schema_v3_digest_is_cross_platform_golden() {
     assert_eq!(
         compiled.content_identity().as_bytes(),
         &[
-            15, 108, 204, 68, 241, 35, 134, 151, 201, 150, 216, 202, 77, 2, 70, 32, 150, 16, 125,
-            38, 103, 99, 132, 86, 227, 246, 128, 42, 234, 33, 53, 173,
+            172, 144, 124, 212, 139, 155, 130, 237, 103, 57, 71, 71, 86, 246, 26, 129, 122, 66,
+            180, 212, 177, 227, 117, 231, 82, 243, 135, 176, 3, 129, 250, 87,
         ]
     );
 }
@@ -1111,7 +1125,7 @@ fn shared_content_and_equal_duplicated_content_have_distinct_identity() {
     assert_ne!(shared.content_identity(), duplicated.content_identity());
 }
 
-fn finite_program(reverse_order: bool) -> CoreProgramV1 {
+fn finite_program_with_opacity(reverse_order: bool, first_opacity: f64) -> CoreProgramV1 {
     let source = SourceId::new(1);
     let target = TargetId::new(2);
     let first = TargetCandidateId::new(3);
@@ -1135,8 +1149,8 @@ fn finite_program(reverse_order: bool) -> CoreProgramV1 {
             target,
             source,
             vec![
-                TargetCandidateV1::new(first, signal([0; 3])),
-                TargetCandidateV1::new(second, signal([0xFF; 3])),
+                TargetCandidateV1::new(first, paint_value(signal([0; 3]), first_opacity)),
+                TargetCandidateV1::new(second, opaque_value(signal([0xFF; 3]))),
             ],
         )],
         ObservationGroup::new(ObservationGroupId::new(9), vec![port]),
@@ -1165,6 +1179,10 @@ fn finite_program(reverse_order: bool) -> CoreProgramV1 {
         CoreProgramEvaluatorsV1,
     )
     .with_joint_selection(DeclaredJointSelectionV1::new(states))
+}
+
+fn finite_program(reverse_order: bool) -> CoreProgramV1 {
+    finite_program_with_opacity(reverse_order, 1.0)
 }
 
 fn fixed_single_target_program() -> CoreProgramV1 {
@@ -1219,6 +1237,14 @@ fn content_identity_retains_the_explicit_joint_state_order() {
     let reversed = finite_program(true).compile().unwrap();
 
     assert_ne!(forward.content_identity(), reversed.content_identity());
+}
+
+#[test]
+fn finite_candidate_opacity_is_part_of_v4_content_identity() {
+    let quarter = finite_program_with_opacity(false, 0.25).compile().unwrap();
+    let half = finite_program_with_opacity(false, 0.5).compile().unwrap();
+
+    assert_ne!(quarter.content_identity(), half.content_identity());
 }
 
 #[derive(Clone, Copy)]

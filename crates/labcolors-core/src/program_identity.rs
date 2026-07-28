@@ -7,19 +7,20 @@
 
 use super::*;
 
-const DOMAIN_V3: &[u8] = b"labcolors.program-content-identity.v3\0";
-// Максимальный V3-цвет принадлежит ограничению clean-set: тег вершины,
+const DOMAIN_V4: &[u8] = b"labcolors.program-content-identity.v4\0";
+// Максимальный V4-цвет принадлежит ограничению clean-set: тег вершины,
 // семейство и полный дайджест выпуска. Явная граница устраняет аллокацию на
 // каждую вершину и требует пересмотра при расширении схемы вместо скрытого
 // лимита времени исполнения.
 const COLOR_CAPACITY: usize = 1 + 1 + 32;
 
 mod release_tag {
-    pub(super) const PROGRAM_SCHEMA_V3: u8 = 3;
+    pub(super) const PROGRAM_SCHEMA_V4: u8 = 4;
     pub(super) const DECLARED_TOTAL_ORDER_V1: u8 = 1;
     pub(super) const FRESH_FULL_RECHECK_V1: u8 = 1;
     pub(super) const ATOMIC_OBSERVATION_GROUP_V1: u8 = 1;
     pub(super) const ENCODED_PAINT_OUTPUT_ROUTING_V1: u8 = 1;
+    pub(super) const FINITE_ATOMIC_PAINT_CANDIDATE_V1: u8 = 1;
     pub(super) const MODELED_POINT_PRESENTATION_V1: u8 = 1;
     pub(super) const POINT_ABSENCE_BYPASS_OWN_BACKDROP_V1: u8 = 1;
     #[cfg(test)]
@@ -65,14 +66,14 @@ mod release_tag {
     pub(super) const MODELED_LCS_PROBE_FAMILY_V1: u8 = 4;
 }
 
-/// Устойчивый к коллизиям адрес канонизированного содержимого Program V3.
+/// Устойчивый к коллизиям адрес канонизированного содержимого Program V4.
 ///
 /// SHA-256 не делает адрес инъективным. Адрес не связывает пространства opaque
 /// ID и не подтверждает владельца, поколение либо revision.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(crate) struct ProgramContentIdentityV3([u8; 32]);
+pub(crate) struct ProgramContentIdentityV4([u8; 32]);
 
-impl ProgramContentIdentityV3 {
+impl ProgramContentIdentityV4 {
     pub(crate) const fn as_bytes(&self) -> &[u8; 32] {
         &self.0
     }
@@ -337,11 +338,12 @@ fn program_root_color() -> Result<VertexColorV1, ProgramCompileError> {
     // производных возможностей связываются только с теми ограничениями,
     // которые их исполняют.
     for release in [
-        release_tag::PROGRAM_SCHEMA_V3,
+        release_tag::PROGRAM_SCHEMA_V4,
         release_tag::DECLARED_TOTAL_ORDER_V1,
         release_tag::FRESH_FULL_RECHECK_V1,
         release_tag::ATOMIC_OBSERVATION_GROUP_V1,
         release_tag::ENCODED_PAINT_OUTPUT_ROUTING_V1,
+        release_tag::FINITE_ATOMIC_PAINT_CANDIDATE_V1,
         release_tag::MODELED_POINT_PRESENTATION_V1,
     ] {
         color.push_u8(release)?;
@@ -379,7 +381,9 @@ fn source_color(source: Source) -> Result<VertexColorV1, ProgramCompileError> {
 
 fn candidate_color(candidate: TargetCandidateV1) -> Result<VertexColorV1, ProgramCompileError> {
     let mut color = VertexColorV1::new(vertex_tag::CANDIDATE);
-    write_signal(&mut color, candidate.signal())?;
+    let value = candidate.value();
+    write_signal(&mut color, ColorSignal::from_srgb8(value.source()))?;
+    color.push_u64(value.opacity_bits())?;
     Ok(color)
 }
 
@@ -1131,7 +1135,7 @@ fn serialize_leaf(
             .and_then(|value| value.checked_add(color.as_slice().len()))
             .ok_or(ProgramCompileError::ResourceExhausted)
     })?;
-    let capacity = DOMAIN_V3
+    let capacity = DOMAIN_V4
         .len()
         .checked_add(16)
         .and_then(|value| value.checked_add(color_bytes))
@@ -1141,7 +1145,7 @@ fn serialize_leaf(
     output
         .try_reserve_exact(capacity)
         .map_err(|_| ProgramCompileError::ResourceExhausted)?;
-    output.extend_from_slice(DOMAIN_V3);
+    output.extend_from_slice(DOMAIN_V4);
     push_u64_bytes(&mut output, usize_as_u64(graph.colors.len())?);
     push_u64_bytes(&mut output, usize_as_u64(graph.edge_count)?);
 
@@ -1475,9 +1479,9 @@ fn canonical_preimage(graph: &CanonicalGraphV1) -> Result<Vec<u8>, ProgramCompil
     canonical_search(graph).map(|(preimage, _)| preimage)
 }
 
-pub(super) fn compile_program_content_identity_v3<Evaluation>(
+pub(super) fn compile_program_content_identity_v4<Evaluation>(
     program: &Program<Evaluation>,
-) -> Result<ProgramContentIdentityV3, ProgramCompileError>
+) -> Result<ProgramContentIdentityV4, ProgramCompileError>
 where
     Evaluation: ProgramConstraintEvaluatorSetV1,
     ProgramConstraintInvocationOf<Evaluation>: Copy,
@@ -1485,7 +1489,7 @@ where
     let graph = build_graph(program)?;
     let preimage = canonical_preimage(&graph)?;
     let digest = crate::sha256::digest(&preimage);
-    Ok(ProgramContentIdentityV3(*digest.as_bytes()))
+    Ok(ProgramContentIdentityV4(*digest.as_bytes()))
 }
 
 #[cfg(test)]

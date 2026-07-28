@@ -1,6 +1,6 @@
 use crate::Srgb8;
 use crate::appearance::{
-    ExactFinalOwnedPointDomainV1, OccurrenceId, OpacityInputId, PaintId,
+    EncodedPointPaintValueV1, ExactFinalOwnedPointDomainV1, OccurrenceId, OpacityInputId, PaintId,
     PointOccurrenceAbsenceReleaseV1, SurfaceId, SurfaceInputPortId,
 };
 use crate::constraints::{CountingProgramWcag22Srgb8V1, ExactSrgb8IdentityV1};
@@ -136,8 +136,14 @@ fn joint_preflight_program(
             TARGET,
             SOURCE,
             vec![
-                TargetCandidateV1::new(lower, signal([0xEE; 3])),
-                TargetCandidateV1::new(higher, signal([0xFF; 3])),
+                TargetCandidateV1::new(
+                    lower,
+                    EncodedPointPaintValueV1::opaque(Srgb8::new([0xEE; 3])),
+                ),
+                TargetCandidateV1::new(
+                    higher,
+                    EncodedPointPaintValueV1::opaque(Srgb8::new([0xFF; 3])),
+                ),
             ],
         )],
         ObservationGroup::new(GROUP, vec![PORT]),
@@ -355,8 +361,11 @@ fn finite_fanout_program() -> crate::program_session::CompiledProgram<ExactSrgb8
             TARGET,
             SOURCE,
             vec![
-                TargetCandidateV1::new(dark, signal([0; 3])),
-                TargetCandidateV1::new(light, signal([255; 3])),
+                TargetCandidateV1::new(dark, EncodedPointPaintValueV1::opaque(Srgb8::new([0; 3]))),
+                TargetCandidateV1::new(
+                    light,
+                    EncodedPointPaintValueV1::opaque(Srgb8::new([255; 3])),
+                ),
             ],
         )],
         ObservationGroup::new(GROUP, vec![PORT]),
@@ -624,7 +633,9 @@ fn finite_program_with_candidates(
         .iter()
         .copied()
         .zip(candidate_codes.iter().copied())
-        .map(|(id, codes)| TargetCandidateV1::new(id, signal(codes)))
+        .map(|(id, codes)| {
+            TargetCandidateV1::new(id, EncodedPointPaintValueV1::opaque(Srgb8::new(codes)))
+        })
         .collect();
     let states = candidate_ids
         .iter()

@@ -4,7 +4,9 @@ use proptest::prelude::*;
 use proptest::test_runner::{Config, RngAlgorithm, TestRng, TestRunner};
 
 use crate::Srgb8;
-use crate::appearance::{OccurrenceId, OpacityInputId, PaintId, SurfaceId, SurfaceInputPortId};
+use crate::appearance::{
+    EncodedPointPaintValueV1, OccurrenceId, OpacityInputId, PaintId, SurfaceId, SurfaceInputPortId,
+};
 use crate::constraints::{
     ApplicableWcag22MeasurementV1, ExactConstraintIdentityV1, ExactIdentityCapabilityV1,
     ExactIdentityReleaseV1, ProgramVisiblePointBindingV1,
@@ -117,8 +119,14 @@ fn finite_program_with_outputs(
             TARGET,
             SOURCE,
             vec![
-                TargetCandidateV1::new(FIRST, signal(candidate_signals[0])),
-                TargetCandidateV1::new(SECOND, signal(candidate_signals[1])),
+                TargetCandidateV1::new(
+                    FIRST,
+                    EncodedPointPaintValueV1::opaque(Srgb8::new(candidate_signals[0])),
+                ),
+                TargetCandidateV1::new(
+                    SECOND,
+                    EncodedPointPaintValueV1::opaque(Srgb8::new(candidate_signals[1])),
+                ),
             ],
         )],
         ObservationGroup::new(GROUP, vec![SURFACE_PORT]),
