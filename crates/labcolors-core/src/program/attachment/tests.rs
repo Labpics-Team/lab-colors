@@ -5,9 +5,9 @@ use super::support::{
 use super::*;
 use crate::Srgb8;
 use crate::program::{
-    AppearanceContextV1, ConstraintIdV1, DraftV1, JointChoiceV1, JointStateV1, PaintIdV1,
-    PaintValueV1, ScenarioV1, SourceIdV1, StateKindV1, SurfaceIdV1, SurfaceInputPortIdV1,
-    SurroundV1, TargetCandidateIdV1, TargetCandidateV1, TargetIdV1,
+    AppearanceContextV1, ConstraintIdV1, DraftV1, FinitePaintDomainV1, JointChoiceV1, JointStateV1,
+    PaintIdV1, PaintValueV1, ScenarioV1, SourceIdV1, StateKindV1, SurfaceIdV1,
+    SurfaceInputPortIdV1, SurroundV1, TargetCandidateIdV1, TargetCandidateV1, TargetIdV1,
 };
 use crate::wcag22::Wcag22CriterionV1;
 use proptest::prelude::*;
@@ -23,6 +23,10 @@ const MIDDLE: OccurrenceIdV1 = OccurrenceIdV1::new(15);
 const ROOT: PresentationRootIdV1 = PresentationRootIdV1::new(51);
 const OUTPUT_A: OutputSlotIdV1 = OutputSlotIdV1::new(12);
 const OUTPUT_B: OutputSlotIdV1 = OutputSlotIdV1::new(13);
+
+fn finite_domain(candidates: Vec<TargetCandidateV1>) -> FinitePaintDomainV1 {
+    FinitePaintDomainV1::try_new(candidates).unwrap()
+}
 
 #[test]
 fn terminal_stamp_is_a_fixed_two_word_copy_value() {
@@ -1002,11 +1006,10 @@ fn allocator_owner() -> OwnerV1 {
     draft.push_source(SOURCE, Srgb8::new([0; 3]));
     draft.push_finite_target(
         TARGET,
-        SOURCE,
-        vec![
+        finite_domain(vec![
             TargetCandidateV1::new(BLACK, PaintValueV1::opaque(Srgb8::new([0; 3]))),
             TargetCandidateV1::new(GRAY, PaintValueV1::opaque(Srgb8::new([0x80; 3]))),
-        ],
+        ]),
     );
     draft
         .set_joint_selection(vec![
@@ -1333,11 +1336,10 @@ fn selected_nonopaque_finite_paint_reaches_sink_and_render_authority_atomically(
     draft.push_source(SOURCE, Srgb8::new([0; 3]));
     draft.push_finite_target(
         TARGET,
-        SOURCE,
-        vec![TargetCandidateV1::new(
+        finite_domain(vec![TargetCandidateV1::new(
             HALF_WHITE,
             PaintValueV1::try_new(Srgb8::new([0xFF; 3]), 0.5).unwrap(),
-        )],
+        )]),
     );
     draft
         .set_joint_selection(vec![JointStateV1::new(vec![JointChoiceV1::new(

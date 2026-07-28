@@ -22,12 +22,13 @@ use crate::observation::{
 };
 use crate::program_session::{
     CompositionProfile, ConstraintId, ConstraintInvocation, ConstraintSet,
-    DeclaredJointSelectionV1, HardModeV1, JointCandidateStateV1, ObservationGroup, Occurrence,
-    OpacityInput, OutputBinding, OutputSlotId, Paint, Program, ProgramCompileError,
-    ProgramConstraintEvaluatorSetV1, ProgramConstraintSubjectV1, ProgramSessionEvaluationError,
-    ReportModeV1, Source, SourceId, Surface, Target, TargetCandidateChoiceV1, TargetCandidateId,
-    TargetCandidateV1, TargetDomainV1, TargetId, checked_program_evaluation_cell_counts_for_test,
-    fail_program_preflight_reservation_for_test, program_preflight_failure_remaining_for_test,
+    DeclaredJointSelectionV1, FinitePaintDomainV1, HardModeV1, JointCandidateStateV1,
+    ObservationGroup, Occurrence, OpacityInput, OutputBinding, OutputSlotId, Paint, Program,
+    ProgramCompileError, ProgramConstraintEvaluatorSetV1, ProgramConstraintSubjectV1,
+    ProgramSessionEvaluationError, ReportModeV1, Source, SourceId, Surface, Target,
+    TargetCandidateChoiceV1, TargetCandidateId, TargetCandidateV1, TargetId, TargetIntentV1,
+    checked_program_evaluation_cell_counts_for_test, fail_program_preflight_reservation_for_test,
+    program_preflight_failure_remaining_for_test,
 };
 use crate::session::{SessionState, SessionUpdateError};
 use crate::session_tests::CommitSessionUpdateForTest as _;
@@ -389,8 +390,12 @@ fn state(candidate: TargetCandidateId) -> JointCandidateStateV1 {
     JointCandidateStateV1::new(vec![TargetCandidateChoiceV1::new(TARGET, candidate)])
 }
 
+fn finite_domain(candidates: Vec<TargetCandidateV1>) -> FinitePaintDomainV1 {
+    FinitePaintDomainV1::try_new(candidates).unwrap()
+}
+
 fn target(candidates: Vec<TargetCandidateV1>) -> Target {
-    Target::finite(TARGET, SOURCE, candidates)
+    Target::finite(TARGET, finite_domain(candidates))
 }
 
 fn point_program<Evaluation>(
@@ -499,13 +504,14 @@ fn nested_two_target_program(
 ) -> Program<Wcag22Srgb8V1> {
     let lower = Target::finite(
         TARGET,
-        SOURCE,
-        vec![candidate(FIRST, 0x00), candidate(SECOND, 0xFF)],
+        finite_domain(vec![candidate(FIRST, 0x00), candidate(SECOND, 0xFF)]),
     );
     let upper = Target::finite(
         UPPER_TARGET,
-        UPPER_SOURCE,
-        vec![candidate(UPPER_FIRST, 0x55), candidate(UPPER_SECOND, 0xFF)],
+        finite_domain(vec![
+            candidate(UPPER_FIRST, 0x55),
+            candidate(UPPER_SECOND, 0xFF),
+        ]),
     );
     let mut targets = vec![lower, upper];
     if reverse_targets {
@@ -612,8 +618,8 @@ fn alpha_renamed_nested_program(
         upper_candidates.reverse();
     }
     let mut targets = vec![
-        Target::finite(ids.lower_target, ids.lower_source, lower_candidates),
-        Target::finite(ids.upper_target, ids.upper_source, upper_candidates),
+        Target::finite(ids.lower_target, finite_domain(lower_candidates)),
+        Target::finite(ids.upper_target, finite_domain(upper_candidates)),
     ];
     if permute_declarations {
         targets.reverse();
@@ -703,11 +709,10 @@ fn authored_finite_target_values_keep_only_opaque_identity_and_explicit_policy()
 
     let target = target(vec![first]);
     assert_eq!(target.id(), TARGET);
-    assert_eq!(target.source(), SOURCE);
-    let TargetDomainV1::Finite(candidates) = target.domain() else {
+    let TargetIntentV1::Finite(domain) = target.intent() else {
         panic!("target must retain its explicit finite domain");
     };
-    assert_eq!(candidates, &[first]);
+    assert_eq!(domain.candidates(), &[first]);
 
     let choice = TargetCandidateChoiceV1::new(TARGET, FIRST);
     assert_eq!(choice.target(), TARGET);
@@ -903,7 +908,7 @@ fn terminal_safety_rejects_an_unconstrained_finite_target() {
     };
     assert_eq!(
         error,
-        ProgramCompileError::UnconstrainedTarget { target: TARGET }
+        ProgramCompileError::UnconstrainedFiniteTarget { target: TARGET }
     );
 }
 
@@ -918,8 +923,10 @@ fn independent_finite_target_components_are_rejected_before_global_product_searc
             target(vec![candidate(FIRST, 0), candidate(SECOND, 0xFF)]),
             Target::finite(
                 UPPER_TARGET,
-                UPPER_SOURCE,
-                vec![candidate(UPPER_FIRST, 0x55), candidate(UPPER_SECOND, 0xFF)],
+                finite_domain(vec![
+                    candidate(UPPER_FIRST, 0x55),
+                    candidate(UPPER_SECOND, 0xFF),
+                ]),
             ),
         ],
         ObservationGroup::new(GROUP, vec![SURFACE_PORT]),

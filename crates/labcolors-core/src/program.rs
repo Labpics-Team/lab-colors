@@ -24,7 +24,7 @@
 //! [`CertificateV1::Verified`] хранит выбранное состояние, все клетки
 //! доказательства и сертифицированные Paint outputs. [`CertificateV1::Conflict`]
 //! хранит исчерпывающий конфликт по всем рассмотренным состояниям.
-//! [`ContentIdentityV4`] идентифицирует каноническое содержание, но не даёт
+//! [`ContentIdentityV5`] идентифицирует каноническое содержание, но не даёт
 //! полномочий живого [`OwnerV1`].
 
 #![forbid(unreachable_pub)]
@@ -62,11 +62,12 @@ use crate::program_session::{
     CoreProgramViolationEvidenceV1, DeclaredJointSelectionV1,
     DeclaredSrgb8CleanSetPassV1 as CoreDeclaredSrgb8CleanSetPassV1,
     DeclaredSrgb8CleanSetViolationV1 as CoreDeclaredSrgb8CleanSetViolationV1,
+    FinitePaintDomainAdmissionErrorV1, FinitePaintDomainV1 as CoreFinitePaintDomainV1,
     JointCandidateStateV1, Occurrence, OpacityInput, OutputBinding, OutputSlotId, Paint,
     PointPresentationRootV1, PointPresentationTargetV1, PresentationRootId, ProgramCompileError,
     ProgramConflictV1, ProgramConstraintCellV1, ProgramConstraintPassEvidenceV1,
     ProgramConstraintResultV1, ProgramConstraintSubjectV1, ProgramConstraintViolationEvidenceV1,
-    ProgramContentIdentityV4, ProgramPaintOutputV1, ProgramSessionEvaluationError,
+    ProgramContentIdentityV5, ProgramPaintOutputV1, ProgramSessionEvaluationError,
     ProgramSessionInstantiateError, ProgramSessionPlan, ProgramVerifiedV1, Source, SourceId,
     Surface, Target, TargetCandidateChoiceV1, TargetCandidateId,
     TargetCandidateV1 as CoreTargetCandidateV1, TargetId,
@@ -218,6 +219,36 @@ impl TargetCandidateV1 {
     /// Связывает непрозрачный ID с одним неделимым физическим Paint value.
     pub(crate) const fn new(id: TargetCandidateIdV1, value: PaintValueV1) -> Self {
         Self(CoreTargetCandidateV1::new(id.into_core(), value.0))
+    }
+}
+
+/// Admission-ошибка конечного физического домена.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FinitePaintDomainErrorV1 {
+    /// Конечный домен обязан содержать хотя бы один атомарный Paint-кандидат.
+    Empty,
+}
+
+/// Непустой конечный набор атомарных Paint-кандидатов одной цели.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct FinitePaintDomainV1(CoreFinitePaintDomainV1);
+
+impl FinitePaintDomainV1 {
+    /// Допускает домен до помещения в Draft, поэтому пустое состояние не может
+    /// дожить до компиляции графа.
+    pub(crate) fn try_new(
+        candidates: Vec<TargetCandidateV1>,
+    ) -> Result<Self, FinitePaintDomainErrorV1> {
+        CoreFinitePaintDomainV1::try_new(
+            candidates
+                .into_iter()
+                .map(|candidate| candidate.0)
+                .collect(),
+        )
+        .map(Self)
+        .map_err(|error| match error {
+            FinitePaintDomainAdmissionErrorV1::Empty => FinitePaintDomainErrorV1::Empty,
+        })
     }
 }
 
@@ -496,8 +527,8 @@ pub(crate) enum CompileErrorKindV1 {
     DuplicateConstraint,
     /// Повторно объявлен выходной слот.
     DuplicateOutputSlot,
-    /// Цель ссылается на отсутствующий исходный сигнал.
-    MissingTargetSource,
+    /// Фиксированная цель ссылается на отсутствующий исходный сигнал.
+    MissingFixedSource,
     /// Paint ссылается на отсутствующую цель.
     MissingPaintTarget,
     /// Paint ссылается на отсутствующий Paint.
@@ -524,10 +555,8 @@ pub(crate) enum CompileErrorKindV1 {
     RenderCycle,
     /// Значение прозрачности находится вне `[0, 1]` или не конечно.
     OpacityOutOfDomain,
-    /// Конечная цель не содержит кандидатов.
-    EmptyTargetDomain,
     /// Конечная цель не участвует ни в одном ограничении.
-    UnconstrainedTarget,
+    UnconstrainedFiniteTarget,
     /// Конечные цели образуют несвязанные компоненты.
     DisconnectedFiniteTargets,
     /// Выходной Paint не покрыт ни одним ограничением.
@@ -707,9 +736,9 @@ pub(crate) enum CompileErrorV1 {
         /// Повторный ID.
         target: TargetIdV1,
     },
-    /// Цель ссылается на отсутствующий исходный сигнал.
-    MissingTargetSource {
-        /// Ошибочная цель.
+    /// Фиксированная цель ссылается на отсутствующий исходный сигнал.
+    MissingFixedSource {
+        /// Ошибочная фиксированная цель.
         target: TargetIdV1,
         /// Отсутствующий исходный сигнал.
         source: SourceIdV1,
@@ -863,11 +892,6 @@ pub(crate) enum CompileErrorV1 {
         /// Ошибочный вход.
         input: OpacityInputIdV1,
     },
-    /// Конечная цель не содержит кандидатов.
-    EmptyTargetDomain {
-        /// Пустая цель.
-        target: TargetIdV1,
-    },
     /// В одной цели повторно объявлен ID кандидата.
     DuplicateTargetCandidate {
         /// Цель кандидата.
@@ -887,7 +911,7 @@ pub(crate) enum CompileErrorV1 {
         value: PaintValueV1,
     },
     /// Конечная цель не участвует ни в одном ограничении.
-    UnconstrainedTarget {
+    UnconstrainedFiniteTarget {
         /// Неограниченная цель.
         target: TargetIdV1,
     },
@@ -991,7 +1015,7 @@ impl CompileErrorV1 {
         match self {
             Self::DuplicateSource { .. } => Kind::DuplicateSource,
             Self::DuplicateTarget { .. } => Kind::DuplicateTarget,
-            Self::MissingTargetSource { .. } => Kind::MissingTargetSource,
+            Self::MissingFixedSource { .. } => Kind::MissingFixedSource,
             Self::DuplicateOpacityInput { .. } => Kind::DuplicateOpacityInput,
             Self::DuplicateSurfaceInputPort { .. } => Kind::DuplicateSurfaceInputPort,
             Self::UnusedSurfaceInputPort { .. } => Kind::UnusedSurfaceInputPort,
@@ -1025,10 +1049,9 @@ impl CompileErrorV1 {
             Self::PaintCycle(_) => Kind::PaintCycle,
             Self::RenderCycle(_) => Kind::RenderCycle,
             Self::OpacityOutOfDomain { .. } => Kind::OpacityOutOfDomain,
-            Self::EmptyTargetDomain { .. } => Kind::EmptyTargetDomain,
             Self::DuplicateTargetCandidate { .. } => Kind::DuplicateTargetCandidate,
             Self::DuplicateTargetCandidateValue { .. } => Kind::DuplicateTargetCandidateValue,
-            Self::UnconstrainedTarget { .. } => Kind::UnconstrainedTarget,
+            Self::UnconstrainedFiniteTarget { .. } => Kind::UnconstrainedFiniteTarget,
             Self::DisconnectedFiniteTargets => Kind::DisconnectedFiniteTargets,
             Self::UnassessedOutput { .. } => Kind::UnassessedOutput,
             Self::MissingJointSelection => Kind::MissingJointSelection,
@@ -1061,13 +1084,12 @@ impl CompileErrorV1 {
         match self {
             Self::DuplicateSource { source } => Some(Handle::Source(*source)),
             Self::DuplicateTarget { target }
-            | Self::EmptyTargetDomain { target }
-            | Self::UnconstrainedTarget { target }
+            | Self::UnconstrainedFiniteTarget { target }
             | Self::JointStateDuplicateTarget { target, .. }
             | Self::JointStateMissingTarget { target, .. }
             | Self::JointStateUnknownTarget { target, .. }
             | Self::JointStateUnknownCandidate { target, .. }
-            | Self::MissingTargetSource { target, .. }
+            | Self::MissingFixedSource { target, .. }
             | Self::DuplicateTargetCandidate { target, .. }
             | Self::DuplicateTargetCandidateValue { target, .. } => Some(Handle::Target(*target)),
             Self::DuplicateOpacityInput { input } | Self::OpacityOutOfDomain { input } => {
@@ -1128,7 +1150,7 @@ impl CompileErrorV1 {
         use CompileErrorHandleV1 as Handle;
 
         match self {
-            Self::MissingTargetSource { source, .. } => Some(Handle::Source(*source)),
+            Self::MissingFixedSource { source, .. } => Some(Handle::Source(*source)),
             Self::DuplicateSurfaceInputBinding { duplicate, .. } => {
                 Some(Handle::Surface(*duplicate))
             }
@@ -1172,8 +1194,7 @@ impl CompileErrorV1 {
             | Self::PaintCycle(_)
             | Self::RenderCycle(_)
             | Self::OpacityOutOfDomain { .. }
-            | Self::EmptyTargetDomain { .. }
-            | Self::UnconstrainedTarget { .. }
+            | Self::UnconstrainedFiniteTarget { .. }
             | Self::DisconnectedFiniteTargets
             | Self::MissingJointSelection
             | Self::JointSelectionWithoutTargets
@@ -1232,17 +1253,10 @@ impl DraftV1 {
     pub(crate) fn push_finite_target(
         &mut self,
         id: TargetIdV1,
-        source: SourceIdV1,
-        candidates: Vec<TargetCandidateV1>,
+        domain: FinitePaintDomainV1,
     ) -> &mut Self {
-        self.inner.push_target(Target::finite(
-            id.into_core(),
-            source.into_core(),
-            candidates
-                .into_iter()
-                .map(|candidate| candidate.0)
-                .collect(),
-        ));
+        self.inner
+            .push_target(Target::finite(id.into_core(), domain.0));
         self
     }
 
@@ -1551,8 +1565,8 @@ impl OwnerV1 {
     ///
     /// Identity доступна до первого update, но не заменяет полномочия этой
     /// конкретной owner-эпохи.
-    pub(crate) fn content_identity(&self) -> ContentIdentityV4 {
-        ContentIdentityV4::from_core(self.compiled.content_identity())
+    pub(crate) fn content_identity(&self) -> ContentIdentityV5 {
+        ContentIdentityV5::from_core(self.compiled.content_identity())
     }
 
     /// Вычисляет верхние границы клеток для prospective Observed-update.
@@ -1872,10 +1886,10 @@ impl<'session> PreparedSessionTransitionV1<'session> {
 /// Identity не идентифицирует owner-эпоху и не даёт runtime-полномочий.
 #[repr(transparent)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(crate) struct ContentIdentityV4([u8; 32]);
+pub(crate) struct ContentIdentityV5([u8; 32]);
 
-impl ContentIdentityV4 {
-    const fn from_core(value: ProgramContentIdentityV4) -> Self {
+impl ContentIdentityV5 {
+    const fn from_core(value: ProgramContentIdentityV5) -> Self {
         Self(*value.as_bytes())
     }
 
@@ -1893,8 +1907,8 @@ pub(crate) struct VerifiedCertificateV1<'a> {
 
 impl<'a> VerifiedCertificateV1<'a> {
     /// Возвращает identity скомпилированного содержания.
-    pub(crate) const fn content_identity(self) -> ContentIdentityV4 {
-        ContentIdentityV4::from_core(self.inner.report().content_identity())
+    pub(crate) const fn content_identity(self) -> ContentIdentityV5 {
+        ContentIdentityV5::from_core(self.inner.report().content_identity())
     }
 
     /// Возвращает точное наблюдение, на котором выдан сертификат.
@@ -1939,8 +1953,8 @@ pub(crate) struct ConflictCertificateV1<'a> {
 
 impl<'a> ConflictCertificateV1<'a> {
     /// Возвращает identity скомпилированного содержания.
-    pub(crate) const fn content_identity(self) -> ContentIdentityV4 {
-        ContentIdentityV4::from_core(self.inner.report().content_identity())
+    pub(crate) const fn content_identity(self) -> ContentIdentityV5 {
+        ContentIdentityV5::from_core(self.inner.report().content_identity())
     }
 
     /// Возвращает точное наблюдение, вызвавшее конфликт.
@@ -1989,7 +2003,7 @@ impl<'a> CertificateV1<'a> {
     }
 
     /// Возвращает identity скомпилированного содержания.
-    pub(crate) const fn content_identity(self) -> ContentIdentityV4 {
+    pub(crate) const fn content_identity(self) -> ContentIdentityV5 {
         match self {
             Self::Verified(value) => value.content_identity(),
             Self::Conflict(value) => value.content_identity(),
@@ -3008,8 +3022,8 @@ fn map_program_compile_error(error: ProgramCompileError) -> CompileErrorV1 {
         ProgramCompileError::DuplicateTarget { target } => CompileErrorV1::DuplicateTarget {
             target: TargetIdV1::from_core(target),
         },
-        ProgramCompileError::MissingTargetSource { target, source } => {
-            CompileErrorV1::MissingTargetSource {
+        ProgramCompileError::MissingFixedSource { target, source } => {
+            CompileErrorV1::MissingFixedSource {
                 target: TargetIdV1::from_core(target),
                 source: SourceIdV1::from_core(source),
             }
@@ -3154,9 +3168,6 @@ fn map_program_compile_error(error: ProgramCompileError) -> CompileErrorV1 {
         ProgramCompileError::OpacityOutOfDomain { input } => CompileErrorV1::OpacityOutOfDomain {
             input: OpacityInputIdV1::from_core(input),
         },
-        ProgramCompileError::EmptyTargetDomain { target } => CompileErrorV1::EmptyTargetDomain {
-            target: TargetIdV1::from_core(target),
-        },
         ProgramCompileError::DuplicateTargetCandidate { target, candidate } => {
             CompileErrorV1::DuplicateTargetCandidate {
                 target: TargetIdV1::from_core(target),
@@ -3174,8 +3185,8 @@ fn map_program_compile_error(error: ProgramCompileError) -> CompileErrorV1 {
             duplicate: TargetCandidateIdV1::from_core(duplicate),
             value: PaintValueV1(value),
         },
-        ProgramCompileError::UnconstrainedTarget { target } => {
-            CompileErrorV1::UnconstrainedTarget {
+        ProgramCompileError::UnconstrainedFiniteTarget { target } => {
+            CompileErrorV1::UnconstrainedFiniteTarget {
                 target: TargetIdV1::from_core(target),
             }
         }

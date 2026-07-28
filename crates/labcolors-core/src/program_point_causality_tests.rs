@@ -15,9 +15,9 @@ use crate::observation::{
 };
 use crate::program_session::{
     CompositionProfile, ConstraintId, ConstraintInvocation, ConstraintSet,
-    DeclaredJointSelectionV1, JointCandidateStateV1, ObservationGroup, Occurrence, OpacityInput,
-    OutputBinding, OutputSlotId, Paint, PointPresentationRootV1, PointPresentationTargetV1,
-    PresentationRootId, Program, ProgramPointCausalConsideredStateV1,
+    DeclaredJointSelectionV1, FinitePaintDomainV1, JointCandidateStateV1, ObservationGroup,
+    Occurrence, OpacityInput, OutputBinding, OutputSlotId, Paint, PointPresentationRootV1,
+    PointPresentationTargetV1, PresentationRootId, Program, ProgramPointCausalConsideredStateV1,
     ProgramPointCausalSelectedStateV1, ProgramSessionEvaluationError, Source, SourceId, Surface,
     Target, TargetCandidateChoiceV1, TargetCandidateId, TargetCandidateV1, TargetId,
     checked_program_point_causal_cardinality_for_test, fail_program_preflight_reservation_for_test,
@@ -51,6 +51,10 @@ fn context() -> AppearanceContextId {
         BackgroundLuminanceRatio::try_new(0.2).unwrap(),
         SurroundProfileId::AverageV1,
     )
+}
+
+fn finite_domain(candidates: Vec<TargetCandidateV1>) -> FinitePaintDomainV1 {
+    FinitePaintDomainV1::try_new(candidates).unwrap()
 }
 
 fn preflight_program(
@@ -134,8 +138,7 @@ fn joint_preflight_program(
         vec![Source::new(SOURCE, signal([0xEE; 3]))],
         vec![Target::finite(
             TARGET,
-            SOURCE,
-            vec![
+            finite_domain(vec![
                 TargetCandidateV1::new(
                     lower,
                     EncodedPointPaintValueV1::opaque(Srgb8::new([0xEE; 3])),
@@ -144,7 +147,7 @@ fn joint_preflight_program(
                     higher,
                     EncodedPointPaintValueV1::opaque(Srgb8::new([0xFF; 3])),
                 ),
-            ],
+            ]),
         )],
         ObservationGroup::new(GROUP, vec![PORT]),
         vec![],
@@ -359,14 +362,13 @@ fn finite_fanout_program() -> crate::program_session::CompiledProgram<ExactSrgb8
         vec![Source::new(SOURCE, signal([0; 3]))],
         vec![Target::finite(
             TARGET,
-            SOURCE,
-            vec![
+            finite_domain(vec![
                 TargetCandidateV1::new(dark, EncodedPointPaintValueV1::opaque(Srgb8::new([0; 3]))),
                 TargetCandidateV1::new(
                     light,
                     EncodedPointPaintValueV1::opaque(Srgb8::new([255; 3])),
                 ),
-            ],
+            ]),
         )],
         ObservationGroup::new(GROUP, vec![PORT]),
         vec![
@@ -646,7 +648,7 @@ fn finite_program_with_candidates(
         .collect();
     Program::new(
         vec![Source::new(SOURCE, signal([0; 3]))],
-        vec![Target::finite(TARGET, SOURCE, candidates)],
+        vec![Target::finite(TARGET, finite_domain(candidates))],
         ObservationGroup::new(GROUP, vec![PORT]),
         vec![],
         vec![Paint::Solid {

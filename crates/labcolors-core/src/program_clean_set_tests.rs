@@ -13,6 +13,10 @@ const CONSTRAINT: program::ConstraintIdV1 = program::ConstraintIdV1::new(7);
 const OUTPUT: program::OutputSlotIdV1 = program::OutputSlotIdV1::new(8);
 const ROOT: program::PresentationRootIdV1 = program::PresentationRootIdV1::new(9);
 
+fn finite_domain(candidates: Vec<program::TargetCandidateV1>) -> program::FinitePaintDomainV1 {
+    program::FinitePaintDomainV1::try_new(candidates).unwrap()
+}
+
 fn context() -> program::AppearanceContextV1 {
     program::AppearanceContextV1::try_new(64.0, 0.2, program::SurroundV1::Average).unwrap()
 }
@@ -148,11 +152,10 @@ fn finite_search_skips_dirty_and_freshly_rechecks_the_first_clean_state() {
     draft.push_source(SOURCE, dirty);
     draft.push_finite_target(
         TARGET,
-        SOURCE,
-        vec![
+        finite_domain(vec![
             program::TargetCandidateV1::new(dirty_id, program::PaintValueV1::opaque(dirty)),
             program::TargetCandidateV1::new(clean_id, program::PaintValueV1::opaque(clean)),
-        ],
+        ]),
     );
     draft
         .set_joint_selection(vec![
@@ -383,11 +386,10 @@ fn clean_family_fresh_recheck_failure_retains_the_presentation_subject() {
     draft.push_source(SOURCE, clean);
     draft.push_finite_target(
         TARGET,
-        SOURCE,
-        vec![program::TargetCandidateV1::new(
+        finite_domain(vec![program::TargetCandidateV1::new(
             candidate,
             program::PaintValueV1::opaque(clean),
-        )],
+        )]),
     );
     draft
         .set_joint_selection(vec![program::JointStateV1::new(vec![
@@ -442,7 +444,7 @@ fn clean_family_fresh_recheck_failure_retains_the_presentation_subject() {
     );
 }
 
-fn opaque_named_clean_identity(name: u32) -> program::ContentIdentityV4 {
+fn opaque_named_clean_identity(name: u32) -> program::ContentIdentityV5 {
     let source = program::SourceIdV1::new(name);
     let target = program::TargetIdV1::new(name);
     let port = program::SurfaceInputPortIdV1::new(name);
@@ -520,7 +522,7 @@ fn finite_clean_owner(colors: &[Srgb8]) -> program::OwnerV1 {
         .collect::<Vec<_>>();
     let mut draft = program::DraftV1::new();
     draft.push_source(SOURCE, colors[0]);
-    draft.push_finite_target(TARGET, SOURCE, candidates);
+    draft.push_finite_target(TARGET, finite_domain(candidates));
     draft.set_joint_selection(states).unwrap();
     draft.push_surface_input_port(PORT);
     draft.push_solid_paint(PAINT, TARGET);

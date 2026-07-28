@@ -7,15 +7,15 @@
 
 use super::*;
 
-const DOMAIN_V4: &[u8] = b"labcolors.program-content-identity.v4\0";
-// Максимальный V4-цвет принадлежит ограничению clean-set: тег вершины,
+const DOMAIN_V5: &[u8] = b"labcolors.program-content-identity.v5\0";
+// Максимальный V5-цвет принадлежит ограничению clean-set: тег вершины,
 // семейство и полный дайджест выпуска. Явная граница устраняет аллокацию на
 // каждую вершину и требует пересмотра при расширении схемы вместо скрытого
 // лимита времени исполнения.
 const COLOR_CAPACITY: usize = 1 + 1 + 32;
 
 mod release_tag {
-    pub(super) const PROGRAM_SCHEMA_V4: u8 = 4;
+    pub(super) const PROGRAM_SCHEMA_V5: u8 = 5;
     pub(super) const DECLARED_TOTAL_ORDER_V1: u8 = 1;
     pub(super) const FRESH_FULL_RECHECK_V1: u8 = 1;
     pub(super) const ATOMIC_OBSERVATION_GROUP_V1: u8 = 1;
@@ -66,14 +66,14 @@ mod release_tag {
     pub(super) const MODELED_LCS_PROBE_FAMILY_V1: u8 = 4;
 }
 
-/// Устойчивый к коллизиям адрес канонизированного содержимого Program V4.
+/// Устойчивый к коллизиям адрес канонизированного содержимого Program V5.
 ///
 /// SHA-256 не делает адрес инъективным. Адрес не связывает пространства opaque
 /// ID и не подтверждает владельца, поколение либо revision.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(crate) struct ProgramContentIdentityV4([u8; 32]);
+pub(crate) struct ProgramContentIdentityV5([u8; 32]);
 
-impl ProgramContentIdentityV4 {
+impl ProgramContentIdentityV5 {
     pub(crate) const fn as_bytes(&self) -> &[u8; 32] {
         &self.0
     }
@@ -338,7 +338,7 @@ fn program_root_color() -> Result<VertexColorV1, ProgramCompileError> {
     // производных возможностей связываются только с теми ограничениями,
     // которые их исполняют.
     for release in [
-        release_tag::PROGRAM_SCHEMA_V4,
+        release_tag::PROGRAM_SCHEMA_V5,
         release_tag::DECLARED_TOTAL_ORDER_V1,
         release_tag::FRESH_FULL_RECHECK_V1,
         release_tag::ATOMIC_OBSERVATION_GROUP_V1,
@@ -653,14 +653,14 @@ where
         sources.insert(source.id(), graph.add_member(source_color(*source)?)?)?;
     }
     for target in &program.targets {
-        let target_color = match target.domain() {
-            TargetDomainV1::Fixed => VertexColorV1::new(vertex_tag::TARGET_FIXED),
-            TargetDomainV1::Finite(_) => VertexColorV1::new(vertex_tag::TARGET_FINITE),
+        let target_color = match target.intent() {
+            TargetIntentV1::FixedSource(_) => VertexColorV1::new(vertex_tag::TARGET_FIXED),
+            TargetIntentV1::Finite(_) => VertexColorV1::new(vertex_tag::TARGET_FINITE),
         };
         let target_vertex = graph.add_member(target_color)?;
         targets.insert(target.id(), target_vertex)?;
-        if let TargetDomainV1::Finite(domain) = target.domain() {
-            for candidate in domain {
+        if let TargetIntentV1::Finite(domain) = target.intent() {
+            for candidate in domain.candidates() {
                 let vertex = graph.add_member(candidate_color(*candidate)?)?;
                 candidates.insert((target.id(), candidate.id()), vertex)?;
             }
@@ -726,13 +726,15 @@ where
 
     for target in &program.targets {
         let target_vertex = targets.get(target.id())?;
-        graph.add_edge(
-            target_vertex,
-            sources.get(target.source())?,
-            EdgeRoleV1::TargetSource,
-        )?;
-        if let TargetDomainV1::Finite(domain) = target.domain() {
-            for candidate in domain {
+        if let TargetIntentV1::FixedSource(source) = target.intent() {
+            graph.add_edge(
+                target_vertex,
+                sources.get(*source)?,
+                EdgeRoleV1::TargetSource,
+            )?;
+        }
+        if let TargetIntentV1::Finite(domain) = target.intent() {
+            for candidate in domain.candidates() {
                 graph.add_edge(
                     target_vertex,
                     candidates.get((target.id(), candidate.id()))?,
@@ -1135,7 +1137,7 @@ fn serialize_leaf(
             .and_then(|value| value.checked_add(color.as_slice().len()))
             .ok_or(ProgramCompileError::ResourceExhausted)
     })?;
-    let capacity = DOMAIN_V4
+    let capacity = DOMAIN_V5
         .len()
         .checked_add(16)
         .and_then(|value| value.checked_add(color_bytes))
@@ -1145,7 +1147,7 @@ fn serialize_leaf(
     output
         .try_reserve_exact(capacity)
         .map_err(|_| ProgramCompileError::ResourceExhausted)?;
-    output.extend_from_slice(DOMAIN_V4);
+    output.extend_from_slice(DOMAIN_V5);
     push_u64_bytes(&mut output, usize_as_u64(graph.colors.len())?);
     push_u64_bytes(&mut output, usize_as_u64(graph.edge_count)?);
 
@@ -1479,9 +1481,9 @@ fn canonical_preimage(graph: &CanonicalGraphV1) -> Result<Vec<u8>, ProgramCompil
     canonical_search(graph).map(|(preimage, _)| preimage)
 }
 
-pub(super) fn compile_program_content_identity_v4<Evaluation>(
+pub(super) fn compile_program_content_identity_v5<Evaluation>(
     program: &Program<Evaluation>,
-) -> Result<ProgramContentIdentityV4, ProgramCompileError>
+) -> Result<ProgramContentIdentityV5, ProgramCompileError>
 where
     Evaluation: ProgramConstraintEvaluatorSetV1,
     ProgramConstraintInvocationOf<Evaluation>: Copy,
@@ -1489,7 +1491,7 @@ where
     let graph = build_graph(program)?;
     let preimage = canonical_preimage(&graph)?;
     let digest = crate::sha256::digest(&preimage);
-    Ok(ProgramContentIdentityV4(*digest.as_bytes()))
+    Ok(ProgramContentIdentityV5(*digest.as_bytes()))
 }
 
 #[cfg(test)]

@@ -9,13 +9,13 @@ use crate::Srgb8;
 use crate::program::{
     AppearanceContextErrorKindV1, AppearanceContextFieldV1, AppearanceContextV1, AssessmentV1,
     CertificateV1, CompileErrorHandleV1, CompileErrorKindV1, CompileErrorV1, ConstraintIdV1,
-    ConstraintSubjectV1, ContentIdentityV4, DraftErrorV1, DraftV1, EvidenceBoundsErrorV1,
-    EvidenceViewV1, InstantiateErrorV1, JointChoiceV1, JointOrderErrorV1, JointStateV1,
-    NumericDomainErrorV1, ObservationHeadV1, OccurrenceIdV1, OpacityInputIdV1, OutputSlotIdV1,
-    OwnerV1, PaintIdV1, PaintValueV1, PhysicalPointV1, PresentationRootIdV1, ScenarioV1, SessionV1,
-    SignalV1, SourceIdV1, StateKindV1, SurfaceIdV1, SurfaceInputPortIdV1, SurroundV1,
-    TargetCandidateIdV1, TargetCandidateV1, TargetIdV1, UpdateErrorKindV1, UpdateErrorV1, UpdateV1,
-    VerdictV1,
+    ConstraintSubjectV1, ContentIdentityV5, DraftErrorV1, DraftV1, EvidenceBoundsErrorV1,
+    EvidenceViewV1, FinitePaintDomainV1, InstantiateErrorV1, JointChoiceV1, JointOrderErrorV1,
+    JointStateV1, NumericDomainErrorV1, ObservationHeadV1, OccurrenceIdV1, OpacityInputIdV1,
+    OutputSlotIdV1, OwnerV1, PaintIdV1, PaintValueV1, PhysicalPointV1, PresentationRootIdV1,
+    ScenarioV1, SessionV1, SignalV1, SourceIdV1, StateKindV1, SurfaceIdV1, SurfaceInputPortIdV1,
+    SurroundV1, TargetCandidateIdV1, TargetCandidateV1, TargetIdV1, UpdateErrorKindV1,
+    UpdateErrorV1, UpdateV1, VerdictV1,
 };
 use crate::wcag22::Wcag22CriterionV1;
 
@@ -42,6 +42,10 @@ impl CommitProgramUpdateForTest for OwnerV1 {
 
 fn exact_size<I: ExactSizeIterator + FusedIterator>(iterator: I) -> I {
     iterator
+}
+
+fn finite_domain(candidates: Vec<TargetCandidateV1>) -> FinitePaintDomainV1 {
+    FinitePaintDomainV1::try_new(candidates).unwrap()
 }
 
 fn compile_error(draft: DraftV1) -> CompileErrorV1 {
@@ -422,7 +426,6 @@ fn attach_target_assessment(draft: &mut DraftV1, target: TargetIdV1) {
 }
 
 fn joint_draft(hard: bool) -> DraftV1 {
-    let source = SourceIdV1::new(1);
     let target = TargetIdV1::new(2);
     let black = TargetCandidateIdV1::new(3);
     let white = TargetCandidateIdV1::new(4);
@@ -435,14 +438,12 @@ fn joint_draft(hard: bool) -> DraftV1 {
     let context = AppearanceContextV1::try_new(64.0, 0.2, SurroundV1::Average).unwrap();
 
     let mut draft = DraftV1::new();
-    draft.push_source(source, Srgb8::new([0; 3]));
     draft.push_finite_target(
         target,
-        source,
-        vec![
+        finite_domain(vec![
             TargetCandidateV1::new(black, PaintValueV1::opaque(Srgb8::new([0; 3]))),
             TargetCandidateV1::new(white, PaintValueV1::opaque(Srgb8::new([255; 3]))),
-        ],
+        ]),
     );
     draft
         .set_joint_selection(vec![
@@ -465,7 +466,6 @@ fn joint_draft(hard: bool) -> DraftV1 {
 
 #[test]
 fn finite_paint_candidates_are_not_a_cartesian_source_opacity_domain() {
-    let source = SourceIdV1::new(1);
     let target = TargetIdV1::new(2);
     let translucent_white = TargetCandidateIdV1::new(3);
     let opaque_gray = TargetCandidateIdV1::new(4);
@@ -478,11 +478,9 @@ fn finite_paint_candidates_are_not_a_cartesian_source_opacity_domain() {
     let context = AppearanceContextV1::try_new(64.0, 0.2, SurroundV1::Average).unwrap();
 
     let mut draft = DraftV1::new();
-    draft.push_source(source, Srgb8::new([0; 3]));
     draft.push_finite_target(
         target,
-        source,
-        vec![
+        finite_domain(vec![
             TargetCandidateV1::new(
                 translucent_white,
                 PaintValueV1::try_new(Srgb8::new([0xFF; 3]), 0.25).unwrap(),
@@ -491,7 +489,7 @@ fn finite_paint_candidates_are_not_a_cartesian_source_opacity_domain() {
                 opaque_gray,
                 PaintValueV1::try_new(Srgb8::new([0x40; 3]), 1.0).unwrap(),
             ),
-        ],
+        ]),
     );
     draft
         .set_joint_selection(vec![
@@ -735,11 +733,10 @@ fn staged_authoring_lowers_the_actual_closed_program_and_returns_canonical_input
     draft.push_source(source, Srgb8::new([0x80; 3]));
     draft.push_finite_target(
         target,
-        source,
-        vec![
+        finite_domain(vec![
             TargetCandidateV1::new(gray, PaintValueV1::opaque(Srgb8::new([0x80; 3]))),
             TargetCandidateV1::new(black, PaintValueV1::opaque(Srgb8::new([0; 3]))),
-        ],
+        ]),
     );
     draft
         .set_joint_selection(vec![
@@ -994,7 +991,7 @@ fn owner_and_update_errors_preserve_content_and_input_identity() {
     let owner = fixed_nested_draft(1.0, SourceIdV1::new(1), input, input)
         .compile()
         .unwrap();
-    let owner_identity: ContentIdentityV4 = owner.content_identity();
+    let owner_identity: ContentIdentityV5 = owner.content_identity();
     let mut session = owner.instantiate(13).unwrap();
 
     let no_scenarios = [];
@@ -1214,7 +1211,7 @@ fn relational_compile_errors_keep_both_typed_handles() {
         Ok(_) => panic!("a target cannot reference an undeclared source"),
         Err(error) => error,
     };
-    assert_eq!(error.kind(), CompileErrorKindV1::MissingTargetSource);
+    assert_eq!(error.kind(), CompileErrorKindV1::MissingFixedSource);
     assert_eq!(
         error.primary_handle(),
         Some(CompileErrorHandleV1::Target(TargetIdV1::new(2)))
@@ -1299,11 +1296,10 @@ fn duplicate_candidate_value_preserves_both_candidates_and_exact_stimulus() {
     let mut draft = fixed_nested_draft(1.0, SourceIdV1::new(1), input, input);
     draft.push_finite_target(
         target,
-        SourceIdV1::new(1),
-        vec![
+        finite_domain(vec![
             TargetCandidateV1::new(first, PaintValueV1::opaque(encoded_srgb8)),
             TargetCandidateV1::new(duplicate, PaintValueV1::opaque(encoded_srgb8)),
-        ],
+        ]),
     );
     attach_target_assessment(&mut draft, target);
 
@@ -1330,7 +1326,7 @@ fn joint_diagnostics_preserve_state_and_total_order_details() {
     ];
 
     let mut duplicate_target = fixed_nested_draft(1.0, SourceIdV1::new(1), input, input);
-    duplicate_target.push_finite_target(target, SourceIdV1::new(1), candidates.clone());
+    duplicate_target.push_finite_target(target, finite_domain(candidates.clone()));
     attach_target_assessment(&mut duplicate_target, target);
     duplicate_target
         .set_joint_selection(vec![JointStateV1::new(vec![
@@ -1344,7 +1340,7 @@ fn joint_diagnostics_preserve_state_and_total_order_details() {
     );
 
     let mut incomplete = fixed_nested_draft(1.0, SourceIdV1::new(1), input, input);
-    incomplete.push_finite_target(target, SourceIdV1::new(1), candidates);
+    incomplete.push_finite_target(target, finite_domain(candidates));
     attach_target_assessment(&mut incomplete, target);
     incomplete
         .set_joint_selection(vec![JointStateV1::new(vec![JointChoiceV1::new(
