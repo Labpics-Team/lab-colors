@@ -50,8 +50,8 @@ use crate::constraints::{
     ProgramVisiblePointViolationEvidence, Wcag22Srgb8V1, assess_program_point_hard,
 };
 use crate::joint::{
-    AdmittedFiniteJointOrderV1, FiniteDomainOrdinalV1, FiniteJointOrderErrorV1,
-    admit_finite_joint_order_v1,
+    AdmittedFiniteJointOrderV1, FiniteDomainOrdinalV1, FiniteJointOrderAdmissionErrorV1,
+    FiniteJointOrderErrorV1, NonEmptyFiniteDomainCardinalitiesV1, admit_finite_joint_order_v1,
 };
 use crate::lcs_occurrence::{AppearanceContextId, ColorSignal};
 use crate::observation::{
@@ -1488,8 +1488,130 @@ struct CompiledFiniteTargetV1 {
     candidates: Box<[EncodedPointPaintValueV1]>,
 }
 
-struct CompiledJointSelectionV1 {
-    order: AdmittedFiniteJointOrderV1,
+struct CompiledFiniteTargetsV1 {
+    first: CompiledFiniteTargetV1,
+    rest: Box<[CompiledFiniteTargetV1]>,
+}
+
+impl CompiledFiniteTargetsV1 {
+    fn iter(&self) -> impl Iterator<Item = &CompiledFiniteTargetV1> {
+        std::iter::once(&self.first).chain(self.rest.iter())
+    }
+
+    fn len(&self) -> usize {
+        self.rest.len() + 1
+    }
+}
+
+mod admitted_compiled_joint_space {
+    use super::*;
+
+    pub(super) enum AdmissionErrorV1 {
+        Authored(FiniteJointOrderErrorV1),
+        ResourceExhausted,
+        InternalInvariant,
+    }
+
+    pub(super) struct AdmittedCompiledJointSpaceV1 {
+        targets: CompiledFiniteTargetsV1,
+        order: AdmittedFiniteJointOrderV1,
+    }
+
+    pub(super) struct AdmittedCompiledJointStateV1<'space> {
+        index: usize,
+        targets: &'space CompiledFiniteTargetsV1,
+        tuple: &'space [FiniteDomainOrdinalV1],
+    }
+
+    impl AdmittedCompiledJointSpaceV1 {
+        pub(super) fn admit(
+            targets: CompiledFiniteTargetsV1,
+            authored: Vec<Vec<FiniteDomainOrdinalV1>>,
+        ) -> Result<Self, AdmissionErrorV1> {
+            let remaining_target_count = targets.len() - 1;
+            let mut target_dimensions = targets.iter();
+            let first = target_dimensions
+                .next()
+                .and_then(|target| NonZeroUsize::new(target.candidates.len()))
+                .ok_or(AdmissionErrorV1::InternalInvariant)?;
+            let mut rest = Vec::new();
+            rest.try_reserve_exact(remaining_target_count)
+                .map_err(|_| AdmissionErrorV1::ResourceExhausted)?;
+            for target in target_dimensions {
+                rest.push(
+                    NonZeroUsize::new(target.candidates.len())
+                        .ok_or(AdmissionErrorV1::InternalInvariant)?,
+                );
+            }
+            let cardinalities =
+                NonEmptyFiniteDomainCardinalitiesV1::new(first, rest.into_boxed_slice());
+            let order = match admit_finite_joint_order_v1(&cardinalities, authored) {
+                Ok(order) => order,
+                Err(FiniteJointOrderAdmissionErrorV1::Authored(error)) => {
+                    return Err(AdmissionErrorV1::Authored(error));
+                }
+                Err(FiniteJointOrderAdmissionErrorV1::ResourceExhausted) => {
+                    return Err(AdmissionErrorV1::ResourceExhausted);
+                }
+                Err(FiniteJointOrderAdmissionErrorV1::InternalInvariant) => {
+                    return Err(AdmissionErrorV1::InternalInvariant);
+                }
+            };
+            Ok(Self { targets, order })
+        }
+
+        pub(super) fn state_count(&self) -> usize {
+            self.order.state_count()
+        }
+
+        pub(super) fn states(&self) -> impl Iterator<Item = AdmittedCompiledJointStateV1<'_>> {
+            self.order
+                .tuples()
+                .enumerate()
+                .map(|(index, tuple)| AdmittedCompiledJointStateV1 {
+                    index,
+                    targets: &self.targets,
+                    tuple,
+                })
+        }
+    }
+
+    impl AdmittedCompiledJointStateV1<'_> {
+        pub(super) fn index(&self) -> usize {
+            self.index
+        }
+
+        pub(super) fn assignments(
+            &self,
+        ) -> impl Iterator<Item = (&CompiledFiniteTargetV1, EncodedPointPaintValueV1)> {
+            self.targets
+                .iter()
+                .zip(self.tuple)
+                .map(|(target, ordinal)| {
+                    let candidate = target.candidates[ordinal.index()];
+                    (target, candidate)
+                })
+        }
+    }
+}
+
+use admitted_compiled_joint_space::{
+    AdmissionErrorV1 as CompiledJointSpaceAdmissionErrorV1, AdmittedCompiledJointSpaceV1,
+    AdmittedCompiledJointStateV1,
+};
+
+enum CompiledTargetSelectionV1 {
+    FixedOnly,
+    Finite(AdmittedCompiledJointSpaceV1),
+}
+
+impl CompiledTargetSelectionV1 {
+    fn state_count(&self) -> usize {
+        match self {
+            Self::FixedOnly => 1,
+            Self::Finite(space) => space.state_count(),
+        }
+    }
 }
 
 struct ProgramEpochV1<Evaluation>
@@ -1507,8 +1629,7 @@ where
     constraint_phases: CompiledConstraintPhasesV1,
     point_presentations: CompiledPointPresentationsV1,
     outputs: Box<[CompiledOutputBinding]>,
-    finite_targets: Box<[CompiledFiniteTargetV1]>,
-    joint_selection: Option<CompiledJointSelectionV1>,
+    target_selection: CompiledTargetSelectionV1,
 }
 
 /// Strong pin одной точной compiled generation Program. Транзакция получает
@@ -2384,11 +2505,7 @@ where
     Evaluation: ProgramConstraintEvaluatorSetV1,
     ProgramConstraintInvocationOf<Evaluation>: Copy,
 {
-    let state_count = epoch
-        .joint_selection
-        .as_ref()
-        .map(|selection| selection.order.state_count())
-        .unwrap_or(1);
+    let state_count = epoch.target_selection.state_count();
     let can_conflict = epoch
         .constraint_phases
         .contains(ProgramEvaluationPhaseV1::Hard);
@@ -2454,13 +2571,7 @@ where
     Evaluation: ProgramConstraintEvaluatorSetV1,
     ProgramConstraintInvocationOf<Evaluation>: Copy,
 {
-    let state_count = epoch
-        .joint_selection
-        .as_ref()
-        .map(|selection| selection.order.state_count())
-        // Without joint selection the epoch has one fixed configuration, so
-        // the exhaustive-cell multiplier remains the multiplicative identity.
-        .unwrap_or(1);
+    let state_count = epoch.target_selection.state_count();
     let can_conflict = epoch
         .constraint_phases
         .contains(ProgramEvaluationPhaseV1::Hard);
@@ -3025,13 +3136,25 @@ where
     Evaluation: ProgramConstraintEvaluatorSetV1,
     ProgramConstraintInvocationOf<Evaluation>: Copy,
 {
-    let Some(selection) = &epoch.joint_selection else {
-        return collect_program_candidate_into(runtime, epoch, observation, None, 1, arena, counts);
+    let space = match &epoch.target_selection {
+        CompiledTargetSelectionV1::FixedOnly => {
+            return collect_program_candidate_into(
+                runtime,
+                epoch,
+                observation,
+                None,
+                1,
+                arena,
+                counts,
+            );
+        }
+        CompiledTargetSelectionV1::Finite(space) => space,
     };
 
-    let state_count = selection.order.state_count();
-    for (state_index, tuple) in selection.order.tuples().enumerate() {
-        apply_joint_candidate::<Evaluation>(runtime, &epoch.finite_targets, tuple)?;
+    let state_count = space.state_count();
+    for state in space.states() {
+        let state_index = state.index();
+        apply_joint_candidate::<Evaluation>(runtime, &state)?;
         if !scan_program_candidate(
             runtime,
             epoch,
@@ -3042,7 +3165,7 @@ where
         )? {
             // A selected tuple is never certified from its allocation-free
             // search pass. Re-apply and collect fresh terminal evidence.
-            apply_joint_candidate::<Evaluation>(runtime, &epoch.finite_targets, tuple)?;
+            apply_joint_candidate::<Evaluation>(runtime, &state)?;
             match collect_program_candidate_into(
                 runtime,
                 epoch,
@@ -3090,8 +3213,9 @@ where
         return Err(ProgramSessionEvaluationError::InternalInvariant);
     }
 
-    for (state_index, tuple) in selection.order.tuples().enumerate() {
-        apply_joint_candidate::<Evaluation>(runtime, &epoch.finite_targets, tuple)?;
+    for state in space.states() {
+        let state_index = state.index();
+        apply_joint_candidate::<Evaluation>(runtime, &state)?;
         if !scan_program_candidate(
             runtime,
             epoch,
@@ -3115,8 +3239,9 @@ where
         .constraint_phases
         .contains(ProgramEvaluationPhaseV1::ReportOnly)
     {
-        for (state_index, tuple) in selection.order.tuples().enumerate() {
-            apply_joint_candidate::<Evaluation>(runtime, &epoch.finite_targets, tuple)?;
+        for state in space.states() {
+            let state_index = state.index();
+            apply_joint_candidate::<Evaluation>(runtime, &state)?;
             if scan_program_candidate(
                 runtime,
                 epoch,
@@ -3156,24 +3281,16 @@ where
 
 fn apply_joint_candidate<Evaluation>(
     runtime: &mut ProgramEvaluationRuntimeV1<'_>,
-    targets: &[CompiledFiniteTargetV1],
-    tuple: &[FiniteDomainOrdinalV1],
+    state: &AdmittedCompiledJointStateV1<'_>,
 ) -> Result<(), ProgramSessionEvaluationError<ProgramEvaluatorError<Evaluation>>>
 where
     Evaluation: ProgramConstraintEvaluatorSetV1,
     ProgramConstraintInvocationOf<Evaluation>: Copy,
 {
-    if targets.len() != tuple.len() {
-        return Err(ProgramSessionEvaluationError::InternalInvariant);
-    }
-    for (target, ordinal) in targets.iter().zip(tuple) {
-        let candidate = target
-            .candidates
-            .get(ordinal.index())
-            .ok_or(ProgramSessionEvaluationError::InternalInvariant)?;
+    for (target, candidate) in state.assignments() {
         runtime
             .bindings
-            .overwrite_paint_input_at(target.binding, *candidate)
+            .overwrite_paint_input_at(target.binding, candidate)
             .map_err(map_program_execution_binding_error)?;
     }
     Ok(())
@@ -3719,7 +3836,7 @@ where
     let observation_schema = canonicalize_observation_schema(surface_input_ports)
         .map_err(map_observation_schema_compile_error)?;
 
-    let (finite_targets, joint_selection) = compile_targets(
+    let target_selection = compile_targets(
         &graph,
         &mut program.targets,
         program.joint_selection.as_mut(),
@@ -3756,8 +3873,7 @@ where
         constraint_phases,
         point_presentations,
         outputs,
-        finite_targets,
-        joint_selection,
+        target_selection,
     })
 }
 
@@ -4162,17 +4278,11 @@ fn compile_targets(
     graph: &CompiledAppearanceGraph,
     authored_targets: &mut [Target],
     authored_selection: Option<&mut DeclaredJointSelectionV1>,
-) -> Result<
-    (
-        Box<[CompiledFiniteTargetV1]>,
-        Option<CompiledJointSelectionV1>,
-    ),
-    ProgramCompileError,
-> {
+) -> Result<CompiledTargetSelectionV1, ProgramCompileError> {
     struct CanonicalFiniteTargetV1<'a> {
         id: TargetId,
         binding: CompiledPaintInputSlotV1,
-        candidates: &'a [TargetCandidateV1],
+        domain: &'a FinitePaintDomainV1,
     }
 
     let mut compiled = Vec::new();
@@ -4226,13 +4336,13 @@ fn compile_targets(
         compiled.push(CanonicalFiniteTargetV1 {
             id: target.id,
             binding,
-            candidates,
+            domain,
         });
     }
 
     if compiled.is_empty() {
         return match authored_selection {
-            None => Ok((Box::new([]), None)),
+            None => Ok(CompiledTargetSelectionV1::FixedOnly),
             Some(_) => Err(ProgramCompileError::JointSelectionWithoutTargets),
         };
     }
@@ -4284,7 +4394,8 @@ fn compile_targets(
                 })?;
             let choice = authored_state.choices[choice_index];
             let candidate_index = target
-                .candidates
+                .domain
+                .candidates()
                 .binary_search_by_key(&choice.candidate, |candidate| candidate.id)
                 .map_err(|_| ProgramCompileError::JointStateUnknownCandidate {
                     state: state_index,
@@ -4296,32 +4407,54 @@ fn compile_targets(
         authored_tuples.push(tuple);
     }
 
-    let mut domain_lengths = Vec::new();
-    domain_lengths
-        .try_reserve_exact(compiled.len())
-        .map_err(|_| ProgramCompileError::ResourceExhausted)?;
-    domain_lengths.extend(compiled.iter().map(|target| target.candidates.len()));
-    let order = admit_finite_joint_order_v1(&domain_lengths, authored_tuples)
-        .map_err(ProgramCompileError::InvalidJointOrder)?;
-    let mut runtime_targets = Vec::new();
-    runtime_targets
-        .try_reserve_exact(compiled.len())
-        .map_err(|_| ProgramCompileError::ResourceExhausted)?;
-    for target in compiled {
+    let lower_target = |target: CanonicalFiniteTargetV1<'_>| {
         let mut candidates = Vec::new();
         candidates
-            .try_reserve_exact(target.candidates.len())
+            .try_reserve_exact(target.domain.candidates().len())
             .map_err(|_| ProgramCompileError::ResourceExhausted)?;
-        candidates.extend(target.candidates.iter().map(|candidate| candidate.value()));
-        runtime_targets.push(CompiledFiniteTargetV1 {
+        candidates.extend(
+            target
+                .domain
+                .candidates()
+                .iter()
+                .map(|candidate| candidate.value()),
+        );
+        Ok(CompiledFiniteTargetV1 {
             binding: target.binding,
             candidates: candidates.into_boxed_slice(),
-        });
+        })
+    };
+    let mut compiled = compiled.into_iter();
+    let first = lower_target(
+        compiled
+            .next()
+            .ok_or(ProgramCompileError::InternalInvariant)?,
+    )?;
+    let mut rest = Vec::new();
+    rest.try_reserve_exact(compiled.len())
+        .map_err(|_| ProgramCompileError::ResourceExhausted)?;
+    for target in compiled {
+        rest.push(lower_target(target)?);
     }
-    Ok((
-        runtime_targets.into_boxed_slice(),
-        Some(CompiledJointSelectionV1 { order }),
-    ))
+    let targets = CompiledFiniteTargetsV1 {
+        first,
+        rest: rest.into_boxed_slice(),
+    };
+    let space =
+        AdmittedCompiledJointSpaceV1::admit(targets, authored_tuples).map_err(
+            |error| match error {
+                CompiledJointSpaceAdmissionErrorV1::Authored(error) => {
+                    ProgramCompileError::InvalidJointOrder(error)
+                }
+                CompiledJointSpaceAdmissionErrorV1::ResourceExhausted => {
+                    ProgramCompileError::ResourceExhausted
+                }
+                CompiledJointSpaceAdmissionErrorV1::InternalInvariant => {
+                    ProgramCompileError::InternalInvariant
+                }
+            },
+        )?;
+    Ok(CompiledTargetSelectionV1::Finite(space))
 }
 
 fn compile_occurrence_contexts(

@@ -41,18 +41,18 @@
       "sha256": "57f3eb04c91a3562d40523a601d435caf1181dd0a24df0d9162100c13a7c5262"
     },
     {
-      "bytes": 45142,
+      "bytes": 7686,
       "license": "MIT",
       "path": "crates/labcolors-core/src/joint.rs",
       "role": "joint_selection_source",
-      "sha256": "5add7d50fbaacd4849552f81461d6c7c584b985be0f4485112c4b5705dee991a"
+      "sha256": "8bf5d5a1c0f00ce245a1ecb18b923aa1631483345962d72b633e466c242a8a1d"
     },
     {
-      "bytes": 13873,
+      "bytes": 13680,
       "license": "MIT",
       "path": "crates/labcolors-core/src/lib.rs",
       "role": "module_registration_source",
-      "sha256": "b30300edd3910e3d9da1e56896ce14c3db508b1a6fc5608e01032a5ad95777b1"
+      "sha256": "db3be029d1ee35471f8c311ae4ec59babd06fcca26f8a1dcd381ef28bc937690"
     },
     {
       "bytes": 38255,
@@ -90,11 +90,11 @@
       "sha256": "2c0876c61196f6492d0f250789ded9644bad1de9ff92c9dea2a14fc55e87f18e"
     },
     {
-      "bytes": 165362,
+      "bytes": 164302,
       "license": "MIT",
       "path": "crates/labcolors-core/src/program.rs",
       "role": "program_facade_source",
-      "sha256": "7067a2108a7fe224302ca7e2b6effdff97966d63328ce5e0b93ca0bcd3a9fda3"
+      "sha256": "a2e3f0cf8fd5445a474c804bbd962d244d9eb42ce2c7ca099ac8c0793de6563e"
     },
     {
       "bytes": 71867,
@@ -104,11 +104,11 @@
       "sha256": "b59f1f5fe0c71637471498635240de6a381c6b8f11308424e81c0f3e0c6b12d0"
     },
     {
-      "bytes": 170258,
+      "bytes": 174358,
       "license": "MIT",
       "path": "crates/labcolors-core/src/program_session.rs",
       "role": "program_source",
-      "sha256": "86a035d09bfee36cac9d5761254b21803a41f6f75b2072c1a5df11967ea006de"
+      "sha256": "13306b6a817c5509eba31550a1358c5a1d6deaae9d4344ff915d98738f8fd12f"
     },
     {
       "bytes": 21872,
@@ -125,11 +125,11 @@
       "sha256": "aa6aa7c0b630437f1c1ba8c2ceafb0dadf6551c42331559504076a6cd44e6331"
     },
     {
-      "bytes": 26928,
+      "bytes": 26829,
       "license": "MIT",
       "path": "crates/labcolors-core/src/session.rs",
       "role": "session_runtime_source",
-      "sha256": "c7a1706ad4837adfdfbe58a302d20b613912530ebff260fd877a47210b02ef46"
+      "sha256": "383b163f9e715e3f5b313a3c29f962968dec3df2414cc8172e2def6b43236a83"
     },
     {
       "bytes": 34105,

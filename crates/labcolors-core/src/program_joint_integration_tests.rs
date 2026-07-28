@@ -1,3 +1,5 @@
+use core::num::NonZeroUsize;
+
 use crate::Srgb8;
 use crate::appearance::{
     EncodedPointPaintValueV1, OccurrenceId, OpacityInputId, PaintId, SurfaceId, SurfaceInputPortId,
@@ -10,7 +12,10 @@ use crate::constraints::{
     ProgramVisiblePointBindingV1, ProgramVisiblePointPassEvidence,
     ProgramVisiblePointViolationEvidence, Wcag22Srgb8V1, assess_program_point_hard,
 };
-use crate::joint::FiniteJointOrderErrorV1;
+use crate::joint::{
+    FiniteDomainOrdinalV1, FiniteJointOrderAdmissionErrorV1, FiniteJointOrderErrorV1,
+    NonEmptyFiniteDomainCardinalitiesV1, admit_finite_joint_order_v1,
+};
 use crate::lcs_occurrence::{
     AdaptingLuminanceCdM2, AppearanceContextId, AppearanceContextSchemaReleaseId,
     BackgroundLuminanceRatio, ColorSignal, IEC_SRGB_D65_XYZ_FRAME_V1, SurroundProfileId,
@@ -281,6 +286,70 @@ impl ProgramConstraintEvaluatorSetV1 for FinalViolationDiagnosticErrorEvaluatorS
                 binding,
             )))
         }
+    }
+
+    fn pass_binding(evidence: &Self::PassEvidence) -> ProgramVisiblePointBindingV1 {
+        evidence.0
+    }
+
+    fn violation_binding(evidence: &Self::ViolationEvidence) -> ProgramVisiblePointBindingV1 {
+        evidence.0
+    }
+
+    fn constraint_content(&self, invocation: Self::Invocation) -> ProgramConstraintContentV1 {
+        ExactSrgb8IdentityV1.program_constraint_content_v1(invocation)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum InjectedEvaluatorFailureV1 {
+    CandidateSearch,
+    FreshRecheck,
+}
+
+#[derive(Debug, Clone)]
+struct InjectedEvaluatorFailureSetV1 {
+    failure: InjectedEvaluatorFailureV1,
+    calls: std::rc::Rc<std::cell::Cell<usize>>,
+}
+
+impl InjectedEvaluatorFailureSetV1 {
+    fn new(failure: InjectedEvaluatorFailureV1) -> Self {
+        Self {
+            failure,
+            calls: std::rc::Rc::new(std::cell::Cell::new(0)),
+        }
+    }
+
+    fn call_count(&self) -> usize {
+        self.calls.get()
+    }
+}
+
+impl ProgramConstraintEvaluatorSetV1 for InjectedEvaluatorFailureSetV1 {
+    type Invocation = Srgb8;
+    type PassEvidence = DiagnosticPoisonPassV1;
+    type ViolationEvidence = DiagnosticPoisonViolationV1;
+    type Error = InjectedEvaluatorFailureV1;
+
+    fn assess(
+        &self,
+        point: ProgramPointOccurrenceV1,
+        _invocation: Self::Invocation,
+    ) -> Result<
+        HardDecision<Self::PassEvidence, Self::ViolationEvidence>,
+        ProgramPointAssessmentErrorV1<Self::Error>,
+    > {
+        let call = self.calls.get();
+        self.calls.set(call + 1);
+        let must_fail = match self.failure {
+            InjectedEvaluatorFailureV1::CandidateSearch => call == 0,
+            InjectedEvaluatorFailureV1::FreshRecheck => call == 1,
+        };
+        if must_fail {
+            return Err(ProgramPointAssessmentErrorV1::Evaluator(self.failure));
+        }
+        Ok(HardDecision::Pass(DiagnosticPoisonPassV1(point.binding())))
     }
 
     fn pass_binding(evidence: &Self::PassEvidence) -> ProgramVisiblePointBindingV1 {
@@ -581,6 +650,88 @@ fn nested_two_target_program(
         paired_state(SECOND, UPPER_FIRST, reverse_choices),
         paired_state(FIRST, UPPER_SECOND, reverse_choices),
         paired_state(SECOND, UPPER_SECOND, reverse_choices),
+    ]))
+}
+
+fn nested_alpha_exact_program() -> Program<ExactSrgb8IdentityV1> {
+    Program::new(
+        vec![
+            Source::new(SOURCE, signal(0)),
+            Source::new(UPPER_SOURCE, signal(0)),
+        ],
+        vec![
+            Target::finite(
+                TARGET,
+                finite_domain(vec![
+                    candidate_with_opacity(FIRST, 0x00, 0.5),
+                    candidate_with_opacity(SECOND, 0x00, 1.0),
+                ]),
+            ),
+            Target::finite(
+                UPPER_TARGET,
+                finite_domain(vec![
+                    candidate_with_opacity(UPPER_FIRST, 0xFF, 0.5),
+                    candidate_with_opacity(UPPER_SECOND, 0x80, 1.0),
+                ]),
+            ),
+        ],
+        ObservationGroup::new(GROUP, vec![SURFACE_PORT]),
+        vec![],
+        vec![
+            Paint::Solid {
+                id: PAINT,
+                target: TARGET,
+            },
+            Paint::Solid {
+                id: UPPER_PAINT,
+                target: UPPER_TARGET,
+            },
+        ],
+        vec![
+            Surface::Input {
+                id: BACKDROP,
+                input: SURFACE_PORT,
+            },
+            Surface::FromOccurrence {
+                id: DERIVED_SURFACE,
+                occurrence: OCCURRENCE,
+            },
+        ],
+        vec![
+            Occurrence::new(
+                OCCURRENCE,
+                PAINT,
+                BACKDROP,
+                CompositionProfile::EncodedSrgb8SourceOverV1,
+                appearance_context(),
+            ),
+            Occurrence::new(
+                UPPER_OCCURRENCE,
+                UPPER_PAINT,
+                DERIVED_SURFACE,
+                CompositionProfile::EncodedSrgb8SourceOverV1,
+                appearance_context(),
+            ),
+        ],
+        ConstraintSet::new(
+            vec![ConstraintInvocation::hard(
+                ConstraintId::new(1),
+                UPPER_OCCURRENCE,
+                Srgb8::new([0x80; 3]),
+            )],
+            vec![],
+        ),
+        vec![
+            OutputBinding::new(OUTPUT, PAINT),
+            OutputBinding::new(UPPER_OUTPUT, UPPER_PAINT),
+        ],
+        ExactSrgb8IdentityV1,
+    )
+    .with_joint_selection(DeclaredJointSelectionV1::new(vec![
+        paired_state(FIRST, UPPER_FIRST, false),
+        paired_state(SECOND, UPPER_FIRST, false),
+        paired_state(FIRST, UPPER_SECOND, false),
+        paired_state(SECOND, UPPER_SECOND, false),
     ]))
 }
 
@@ -1200,6 +1351,40 @@ fn nested_two_target_selection_ignores_target_and_choice_declaration_order() {
 }
 
 #[test]
+fn exact_joint_oracle_covers_nested_alpha_and_every_observed_backdrop() {
+    // Independent source-over arithmetic for the first two authored states:
+    // half-white over (half-black over black) is 128, while the same stack over
+    // white is 192. Making the lower black opaque produces 128 over both
+    // backdrops, so the second state is the first globally feasible state.
+    let half_over = |source: u16, backdrop: u16| (source + backdrop).div_ceil(2);
+    assert_eq!(half_over(0xFF, half_over(0x00, 0x00)), 0x80);
+    assert_eq!(half_over(0xFF, half_over(0x00, 0xFF)), 0xC0);
+    assert_eq!(half_over(0xFF, 0x00), 0x80);
+
+    let compiled = nested_alpha_exact_program().compile().unwrap();
+    let mut session = compiled.instantiate(STREAM).unwrap();
+    let SessionState::Ready { current } = session.commit(update_cases(1, &[0x00, 0xFF])).unwrap()
+    else {
+        panic!("the second declared state must be the first exact match over the full ScenarioSet");
+    };
+
+    assert_eq!(current.selected_state_index(), Some(1));
+    assert_eq!(current.report().cells().len(), 2);
+    assert!(
+        current
+            .report()
+            .cells()
+            .iter()
+            .all(|cell| cell.candidate_state_index() == 1 && !cell.result().is_violation())
+    );
+    let outputs = current.outputs();
+    assert_eq!(outputs[0].source_signal(), signal(0x00));
+    assert_eq!(outputs[0].paint().opacity_bits(), 1.0_f64.to_bits());
+    assert_eq!(outputs[1].source_signal(), signal(0xFF));
+    assert_eq!(outputs[1].paint().opacity_bits(), 0.5_f64.to_bits());
+}
+
+#[test]
 fn bijective_source_target_and_candidate_renaming_preserves_joint_evidence() {
     let canonical_ids = AlphaRenamedJointIds {
         lower_source: SourceId::new(100),
@@ -1344,6 +1529,57 @@ fn rejected_state_runs_once_and_selected_state_runs_fresh_recheck_twice() {
             Srgb8::new([0xFF; 3]),
         ]
     );
+}
+
+#[test]
+fn evaluator_error_aborts_both_candidate_search_and_fresh_recheck() {
+    let constraint = ConstraintId::new(1);
+    for failure in [
+        InjectedEvaluatorFailureV1::CandidateSearch,
+        InjectedEvaluatorFailureV1::FreshRecheck,
+    ] {
+        let evaluator = InjectedEvaluatorFailureSetV1::new(failure);
+        let probe = evaluator.clone();
+        let compiled = point_program(
+            signal(0),
+            target(vec![candidate(FIRST, 0xFF)]),
+            vec![ConstraintInvocation::hard(
+                constraint,
+                OCCURRENCE,
+                Srgb8::new([0xFF; 3]),
+            )],
+            vec![],
+            evaluator,
+        )
+        .with_joint_selection(DeclaredJointSelectionV1::new(vec![state(FIRST)]))
+        .compile()
+        .unwrap();
+        let mut session = compiled.instantiate(STREAM).unwrap();
+
+        let error = match session.commit(update(1, 0x00)) {
+            Ok(_) => panic!("an evaluator failure must invalidate the whole prospective update"),
+            Err(error) => error,
+        };
+        assert_eq!(
+            error,
+            SessionUpdateError::Plan(ProgramSessionEvaluationError::Evaluator {
+                case_index: 0,
+                constraint,
+                occurrence: OCCURRENCE,
+                context: appearance_context(),
+                source: failure,
+            })
+        );
+        assert_eq!(
+            probe.call_count(),
+            match failure {
+                InjectedEvaluatorFailureV1::CandidateSearch => 1,
+                InjectedEvaluatorFailureV1::FreshRecheck => 2,
+            },
+            "one hard cell is assessed once in candidate search and only a passing candidate reaches fresh recheck",
+        );
+        assert!(matches!(session.state(), SessionState::Waiting));
+    }
 }
 
 #[test]
@@ -2281,4 +2517,98 @@ fn duplicate_joint_tuple_is_rejected_before_runtime() {
             duplicate: 1,
         })
     );
+}
+
+#[test]
+fn finite_joint_order_admission_is_total_over_typed_nonempty_domains() {
+    let ordinal = |index| FiniteDomainOrdinalV1::new(index);
+    let nonzero = |value| NonZeroUsize::new(value).unwrap();
+    let domains = |first, rest: Vec<NonZeroUsize>| {
+        NonEmptyFiniteDomainCardinalitiesV1::new(nonzero(first), rest.into_boxed_slice())
+    };
+
+    let admitted = admit_finite_joint_order_v1(
+        &domains(2, vec![]),
+        vec![vec![ordinal(1)], vec![ordinal(0)]],
+    )
+    .unwrap();
+    assert_eq!(
+        admitted
+            .tuples()
+            .map(|tuple| tuple.iter().map(|item| item.index()).collect::<Vec<_>>())
+            .collect::<Vec<_>>(),
+        vec![vec![1], vec![0]],
+    );
+
+    let admitted = admit_finite_joint_order_v1(
+        &domains(2, vec![nonzero(2)]),
+        vec![
+            vec![ordinal(1), ordinal(0)],
+            vec![ordinal(0), ordinal(1)],
+            vec![ordinal(1), ordinal(1)],
+            vec![ordinal(0), ordinal(0)],
+        ],
+    )
+    .unwrap();
+    assert_eq!(admitted.state_count(), 4);
+    assert_eq!(
+        admitted
+            .tuples()
+            .map(|tuple| tuple.iter().map(|item| item.index()).collect::<Vec<_>>())
+            .collect::<Vec<_>>(),
+        vec![vec![1, 0], vec![0, 1], vec![1, 1], vec![0, 0]],
+    );
+
+    for (domain_lengths, authored, expected) in [
+        (
+            domains(1, vec![]),
+            vec![],
+            FiniteJointOrderErrorV1::EmptyOrder,
+        ),
+        (
+            domains(2, vec![]),
+            vec![vec![ordinal(0)]],
+            FiniteJointOrderErrorV1::IncompleteOrder {
+                expected: 2,
+                actual: 1,
+            },
+        ),
+        (
+            domains(1, vec![]),
+            vec![vec![]],
+            FiniteJointOrderErrorV1::TupleArity {
+                tuple: 0,
+                expected: 1,
+                actual: 0,
+            },
+        ),
+        (
+            domains(1, vec![]),
+            vec![vec![ordinal(1)]],
+            FiniteJointOrderErrorV1::OrdinalOutOfDomain {
+                tuple: 0,
+                dimension: 0,
+                ordinal: 1,
+                domain_len: 1,
+            },
+        ),
+        (
+            domains(2, vec![]),
+            vec![vec![ordinal(0)], vec![ordinal(0)]],
+            FiniteJointOrderErrorV1::DuplicateTuple {
+                first: 0,
+                duplicate: 1,
+            },
+        ),
+        (
+            domains(usize::MAX, vec![nonzero(2)]),
+            vec![vec![ordinal(0), ordinal(0)]],
+            FiniteJointOrderErrorV1::CardinalityOverflow,
+        ),
+    ] {
+        assert_eq!(
+            admit_finite_joint_order_v1(&domain_lengths, authored),
+            Err(FiniteJointOrderAdmissionErrorV1::Authored(expected)),
+        );
+    }
 }

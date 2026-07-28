@@ -422,6 +422,92 @@ fn finite_target_intent_has_no_dead_source_axis() {
 }
 
 #[test]
+fn joint_module_contains_only_the_canonical_finite_order_admission() {
+    for retired in [
+        "CandidateOrdinalV1",
+        "JointPointEvaluatorV1",
+        "JointCandidateTupleV1",
+        "JointCandidateSetV1",
+        "JointObservationV1",
+        "StaticJointObservationV1",
+        "PointwiseJointPointProgramV1",
+        "checked_joint_cardinality",
+        "PointwiseFullHardReportV1",
+        "PointwiseHardFeasibilityV1",
+        "DeclaredTotalOrderV1",
+        "PointwiseSelectedJointTupleV1",
+        "PointwiseVerifiedSelectionV1",
+    ] {
+        assert!(
+            !contains_rust_identifier(JOINT_SOURCE, retired),
+            "the runtime-unused V2a solver must not return through `{retired}`",
+        );
+    }
+    for canonical in [
+        "FiniteDomainOrdinalV1",
+        "NonEmptyFiniteDomainCardinalitiesV1",
+        "AdmittedFiniteJointOrderV1",
+        "FiniteJointOrderAdmissionErrorV1",
+        "FiniteJointOrderErrorV1",
+        "admit_finite_joint_order_v1",
+    ] {
+        assert!(
+            contains_rust_identifier(JOINT_SOURCE, canonical),
+            "joint.rs must retain the sole Program order-admission primitive `{canonical}`",
+        );
+    }
+    assert!(
+        !LIB_SOURCE.contains(
+            "joint-selection internals are used only through the staged Program contract",
+        ),
+        "the canonical Program path must not hide a second joint engine behind dead_code",
+    );
+    assert!(
+        !LIB_SOURCE.contains("mod joint_tests;"),
+        "tests for the retired solver must not keep its architecture alive",
+    );
+    assert!(
+        !contains_rust_identifier(JOINT_SOURCE, "EmptyDomain")
+            && !contains_rust_identifier(PROGRAM_SOURCE, "EmptyDomain"),
+        "a finite domain is admitted as non-empty before joint-order admission",
+    );
+    assert!(
+        !JOINT_SOURCE.contains("unreachable!") && !JOINT_SOURCE.contains("panic!"),
+        "order admission must type internal drift instead of exposing a panic route",
+    );
+    for required in [
+        "AdmittedCompiledJointSpaceV1",
+        "AdmittedCompiledJointStateV1",
+        "CompiledTargetSelectionV1",
+    ] {
+        assert!(
+            contains_rust_identifier(PROGRAM_SESSION_SOURCE, required),
+            "the sealed joint space must stay reachable through `{required}`",
+        );
+    }
+    // Exact snippets intentionally make representation drift loud; a rustfmt
+    // rewrite must update this anti-regrowth gate in the same reviewed change.
+    assert!(
+        PROGRAM_SESSION_SOURCE.contains("Finite(AdmittedCompiledJointSpaceV1)"),
+        "target selection must carry the admitted space itself",
+    );
+    for retired in [
+        "joint_selection: Option<CompiledJointSelectionV1>",
+        "finite_targets: Box<[CompiledFiniteTargetV1]>",
+        "Finite { targets, order }",
+    ] {
+        assert!(
+            !PROGRAM_SESSION_SOURCE.contains(retired),
+            "the epoch must not resurrect the split joint runtime through `{retired}`",
+        );
+    }
+    assert!(
+        !contains_rust_identifier(PROGRAM_SESSION_SOURCE, "CompiledJointSelectionV1"),
+        "runtime must receive only a sealed joint space derived from its compiled targets",
+    );
+}
+
+#[test]
 fn staged_session_is_evidence_only_and_retired_operation_authority_cannot_return() {
     assert_eq!(
         normalized_source_scope(
