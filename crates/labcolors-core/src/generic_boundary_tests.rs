@@ -425,9 +425,13 @@ fn finite_target_intent_has_no_dead_source_axis() {
 fn joint_module_contains_only_the_canonical_finite_order_admission() {
     for retired in [
         "CandidateOrdinalV1",
+        "JointPointEvaluatorV1",
         "JointCandidateTupleV1",
         "JointCandidateSetV1",
+        "JointObservationV1",
+        "StaticJointObservationV1",
         "PointwiseJointPointProgramV1",
+        "checked_joint_cardinality",
         "PointwiseFullHardReportV1",
         "PointwiseHardFeasibilityV1",
         "DeclaredTotalOrderV1",
@@ -441,7 +445,9 @@ fn joint_module_contains_only_the_canonical_finite_order_admission() {
     }
     for canonical in [
         "FiniteDomainOrdinalV1",
+        "NonEmptyFiniteDomainCardinalitiesV1",
         "AdmittedFiniteJointOrderV1",
+        "FiniteJointOrderAdmissionErrorV1",
         "FiniteJointOrderErrorV1",
         "admit_finite_joint_order_v1",
     ] {
@@ -455,6 +461,31 @@ fn joint_module_contains_only_the_canonical_finite_order_admission() {
             "joint-selection internals are used only through the staged Program contract",
         ),
         "the canonical Program path must not hide a second joint engine behind dead_code",
+    );
+    assert!(
+        !LIB_SOURCE.contains("mod joint_tests;"),
+        "tests for the retired solver must not keep its architecture alive",
+    );
+    assert!(
+        !contains_rust_identifier(JOINT_SOURCE, "EmptyDomain")
+            && !contains_rust_identifier(PROGRAM_SOURCE, "EmptyDomain"),
+        "a finite domain is admitted as non-empty before joint-order admission",
+    );
+    assert!(
+        !JOINT_SOURCE.contains("unreachable!") && !JOINT_SOURCE.contains("panic!"),
+        "order admission must type internal drift instead of exposing a panic route",
+    );
+    assert!(
+        contains_rust_identifier(PROGRAM_SESSION_SOURCE, "AdmittedCompiledJointSpaceV1")
+            && contains_rust_identifier(PROGRAM_SESSION_SOURCE, "AdmittedCompiledJointStateV1")
+            && contains_rust_identifier(PROGRAM_SESSION_SOURCE, "CompiledTargetSelectionV1")
+            && PROGRAM_SESSION_SOURCE.contains("Finite(AdmittedCompiledJointSpaceV1)")
+            && !PROGRAM_SESSION_SOURCE
+                .contains("joint_selection: Option<CompiledJointSelectionV1>")
+            && !PROGRAM_SESSION_SOURCE.contains("finite_targets: Box<[CompiledFiniteTargetV1]>")
+            && !PROGRAM_SESSION_SOURCE.contains("Finite { targets, order }")
+            && !contains_rust_identifier(PROGRAM_SESSION_SOURCE, "CompiledJointSelectionV1"),
+        "runtime must receive only a sealed joint space derived from its actual compiled targets",
     );
 }
 

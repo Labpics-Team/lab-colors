@@ -673,11 +673,6 @@ impl RenderCycleV1 {
 /// Точная причина отказа явно объявленного конечного совместного порядка.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum JointOrderErrorV1 {
-    /// Одно измерение не содержит кандидатов.
-    EmptyDomain {
-        /// Индекс пустого измерения.
-        dimension: usize,
-    },
     /// Декартова мощность измерений не представима в `usize`.
     CardinalityOverflow,
     /// Явный порядок не содержит состояний.
@@ -716,8 +711,6 @@ pub(crate) enum JointOrderErrorV1 {
         /// Фактическое число состояний.
         actual: usize,
     },
-    /// Для проверки порядка недостаточно ресурсов.
-    ResourceExhausted,
 }
 
 /// Атомарная и полная ошибка компиляции объявленной программы.
@@ -2976,9 +2969,6 @@ impl UpdateErrorV1 {
 
 fn map_joint_order_error(error: FiniteJointOrderErrorV1) -> JointOrderErrorV1 {
     match error {
-        FiniteJointOrderErrorV1::EmptyDomain { dimension } => {
-            JointOrderErrorV1::EmptyDomain { dimension }
-        }
         FiniteJointOrderErrorV1::CardinalityOverflow => JointOrderErrorV1::CardinalityOverflow,
         FiniteJointOrderErrorV1::EmptyOrder => JointOrderErrorV1::EmptyOrder,
         FiniteJointOrderErrorV1::TupleArity {
@@ -3010,7 +3000,6 @@ fn map_joint_order_error(error: FiniteJointOrderErrorV1) -> JointOrderErrorV1 {
         FiniteJointOrderErrorV1::IncompleteOrder { expected, actual } => {
             JointOrderErrorV1::IncompleteOrder { expected, actual }
         }
-        FiniteJointOrderErrorV1::ResourceExhausted => JointOrderErrorV1::ResourceExhausted,
     }
 }
 
@@ -3820,24 +3809,6 @@ mod update_error_projection_tests {
         assert_invariant(
             map_plan_error(ProgramSessionEvaluationError::InternalInvariant),
             UpdateInvariantFailureV1::ProgramEvaluation,
-        );
-    }
-}
-
-#[cfg(test)]
-mod compile_error_projection_tests {
-    use super::*;
-
-    #[test]
-    fn nested_joint_resource_exhaustion_keeps_its_exact_reason_and_site_kind() {
-        let error = map_program_compile_error(ProgramCompileError::InvalidJointOrder(
-            FiniteJointOrderErrorV1::ResourceExhausted,
-        ));
-
-        assert_eq!(error.kind(), CompileErrorKindV1::InvalidJointOrder);
-        assert_eq!(
-            error,
-            CompileErrorV1::InvalidJointOrder(JointOrderErrorV1::ResourceExhausted)
         );
     }
 }

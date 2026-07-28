@@ -34,11 +34,6 @@ impl SessionObservationBindingPermitV1 {
     const fn mint() -> Self {
         Self { _private: () }
     }
-
-    #[cfg(test)]
-    pub(crate) const fn for_test() -> Self {
-        Self { _private: () }
-    }
 }
 
 /// Complete result of evaluating one admitted observation.

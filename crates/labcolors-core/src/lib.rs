@@ -158,17 +158,7 @@ pub(crate) mod session;
 #[cfg(test)]
 mod session_tests;
 
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "joint-selection internals are used only through the staged Program contract"
-    )
-)]
 pub(crate) mod joint;
-
-#[cfg(test)]
-mod joint_tests;
 
 #[cfg(test)]
 mod constraint_tests;
