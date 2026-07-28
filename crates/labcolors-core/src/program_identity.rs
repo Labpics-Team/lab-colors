@@ -135,6 +135,12 @@ impl VertexColorV1 {
     fn as_slice(&self) -> &[u8] {
         &self.bytes[..usize::from(self.len)]
     }
+
+    const fn tag(&self) -> u8 {
+        // `new` делает tag частью типа вершины до любого fallible writer-а;
+        // фиксированный backing array поэтому не требует slice-индексации.
+        self.bytes[0]
+    }
 }
 
 mod vertex_tag {
@@ -161,9 +167,20 @@ mod vertex_tag {
     pub(super) const PRESENTATION_TARGET: u8 = 21;
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-#[repr(u8)]
-enum EdgeRoleV1 {
+macro_rules! declare_edge_roles_v1 {
+    ($($name:ident = $value:literal),+ $(,)?) => {
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+        #[repr(u8)]
+        enum EdgeRoleV1 {
+            $($name = $value),+
+        }
+
+        #[cfg(test)]
+        const EDGE_ROLES_V1: &[EdgeRoleV1] = &[$(EdgeRoleV1::$name),+];
+    };
+}
+
+declare_edge_roles_v1! {
     ProgramMember = 1,
     TargetSource = 2,
     TargetCandidate = 3,
@@ -190,7 +207,7 @@ enum EdgeRoleV1 {
     IntrinsicCandidate = 24,
     VisibleReference = 25,
     VisibleCandidate = 26,
-    ScenarioGroup = 27,
+    ObservationGroup = 27,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -662,7 +679,7 @@ struct ConstraintGraphBindingContextV1<'a, Evaluation> {
     presentation_targets: &'a [(PointPresentationTargetV1, usize)],
     targets: &'a IdIndexV1<TargetId>,
     occurrences: &'a IdIndexV1<OccurrenceId>,
-    scenario_group: usize,
+    observation_group: usize,
 }
 
 fn add_constraint_graph_binding<Evaluation>(
@@ -675,11 +692,7 @@ where
     Evaluation: ProgramConstraintEvaluatorSetV1,
 {
     let color = match body {
-        ProgramConstraintBodyV1::VisibleUnary {
-            occurrence,
-            invocation,
-        } => {
-            let _ = occurrence;
+        ProgramConstraintBodyV1::VisibleUnary { invocation, .. } => {
             constraint_color(mode_tag, context.evaluator.constraint_content(*invocation))?
         }
         ProgramConstraintBodyV1::IntrinsicUnary { invocation, .. } => {
@@ -760,7 +773,11 @@ where
             )?;
         }
     }
-    graph.add_edge(vertex, context.scenario_group, EdgeRoleV1::ScenarioGroup)
+    graph.add_edge(
+        vertex,
+        context.observation_group,
+        EdgeRoleV1::ObservationGroup,
+    )
 }
 
 fn build_graph<Evaluation>(
@@ -958,7 +975,7 @@ where
         presentation_targets: &presentation_targets,
         targets: &targets,
         occurrences: &occurrences,
-        scenario_group: group,
+        observation_group: group,
     };
     for constraint in &program.constraints.hard {
         add_constraint_graph_binding(
@@ -1024,7 +1041,7 @@ where
     vertex_tags
         .try_reserve_exact(graph.colors.len())
         .map_err(|_| ProgramCompileError::ResourceExhausted)?;
-    vertex_tags.extend(graph.colors.iter().map(|color| color.as_slice()[0]));
+    vertex_tags.extend(graph.colors.iter().map(VertexColorV1::tag));
     vertex_tags.sort_unstable();
     vertex_tags.dedup();
 
@@ -1043,6 +1060,11 @@ where
     edge_roles.sort_unstable();
     edge_roles.dedup();
     Ok((vertex_tags, edge_roles))
+}
+
+#[cfg(test)]
+pub(crate) const fn edge_role_count_for_test() -> usize {
+    EDGE_ROLES_V1.len()
 }
 
 struct PartitionV1 {

@@ -558,12 +558,19 @@ pub(crate) enum CompileErrorKindV1 {
     MissingOccurrenceBackdrop,
     /// Ограничение ссылается на отсутствующий Occurrence.
     MissingConstraintOccurrence,
+    /// Intrinsic-unary ограничение ссылается на отсутствующую Target.
     MissingIntrinsicUnaryTarget,
+    /// Reference intrinsic-отношения ссылается на отсутствующую Target.
     MissingIntrinsicRelationReference,
+    /// Candidate intrinsic-отношения ссылается на отсутствующую Target.
     MissingIntrinsicRelationCandidate,
+    /// Reference visible-отношения ссылается на отсутствующий Occurrence.
     MissingVisibleRelationReference,
+    /// Candidate visible-отношения ссылается на отсутствующий Occurrence.
     MissingVisibleRelationCandidate,
+    /// Intrinsic reference зависит от выбираемого finite Target.
     SolverDependentIntrinsicRelationReference,
+    /// Visible reference зависит от выбираемого finite Target.
     SolverDependentVisibleRelationReference,
     /// Ограничение clean-set ссылается на необъявленную цель представления.
     MissingConstraintPresentationTarget,
@@ -993,33 +1000,55 @@ pub(crate) enum CompileErrorV1 {
         /// Отсутствующий Occurrence.
         occurrence: OccurrenceIdV1,
     },
+    /// Intrinsic-unary ограничение ссылается на отсутствующую Target.
     MissingIntrinsicUnaryTarget {
+        /// Ошибочное ограничение.
         constraint: ConstraintIdV1,
+        /// Отсутствующая Target.
         target: TargetIdV1,
     },
+    /// Reference intrinsic-отношения ссылается на отсутствующую Target.
     MissingIntrinsicRelationReference {
+        /// Ошибочное ограничение.
         constraint: ConstraintIdV1,
+        /// Отсутствующий reference.
         reference: TargetIdV1,
     },
+    /// Candidate intrinsic-отношения ссылается на отсутствующую Target.
     MissingIntrinsicRelationCandidate {
+        /// Ошибочное ограничение.
         constraint: ConstraintIdV1,
+        /// Отсутствующий candidate.
         candidate: TargetIdV1,
     },
+    /// Reference visible-отношения ссылается на отсутствующий Occurrence.
     MissingVisibleRelationReference {
+        /// Ошибочное ограничение.
         constraint: ConstraintIdV1,
+        /// Отсутствующий reference.
         reference: OccurrenceIdV1,
     },
+    /// Candidate visible-отношения ссылается на отсутствующий Occurrence.
     MissingVisibleRelationCandidate {
+        /// Ошибочное ограничение.
         constraint: ConstraintIdV1,
+        /// Отсутствующий candidate.
         candidate: OccurrenceIdV1,
     },
+    /// Intrinsic reference зависит от выбираемого finite Target.
     SolverDependentIntrinsicRelationReference {
+        /// Ошибочное ограничение.
         constraint: ConstraintIdV1,
+        /// Solver-зависимый reference.
         reference: TargetIdV1,
     },
+    /// Visible reference зависит от выбираемого finite Target.
     SolverDependentVisibleRelationReference {
+        /// Ошибочное ограничение.
         constraint: ConstraintIdV1,
+        /// Solver-зависимый reference.
         reference: OccurrenceIdV1,
+        /// Finite Target, из-за которого reference зависит от solver state.
         target: TargetIdV1,
     },
     /// Ограничение clean-set ссылается не на целиком объявленную цель представления.

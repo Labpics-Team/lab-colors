@@ -72,6 +72,8 @@ use crate::wcag22::Wcag22CriterionV1;
 mod identity;
 pub(crate) use identity::ProgramContentIdentityV6;
 #[cfg(test)]
+pub(crate) use identity::edge_role_count_for_test as program_identity_edge_role_count_for_test;
+#[cfg(test)]
 pub(crate) use identity::graph_schema_for_test as program_identity_graph_schema_for_test;
 
 /// Opaque identity of one immutable authored colour source.
@@ -1519,7 +1521,6 @@ enum CompiledProgramConstraintBodyV1<Invocation> {
 struct CompiledPointConstraint<Invocation> {
     id: ConstraintId,
     mode: CompiledConstraintModeV1,
-    scenario_group: ObservationGroupId,
     body: CompiledProgramConstraintBodyV1<Invocation>,
 }
 
@@ -1622,12 +1623,6 @@ struct CompiledOccurrenceContextV1 {
     occurrence: OccurrenceId,
     slot: CompiledOccurrenceSlotV1,
     context: AppearanceContextId,
-}
-
-impl CompiledOccurrenceContextV1 {
-    fn matches(self, occurrence: OccurrenceId, slot: CompiledOccurrenceSlotV1) -> bool {
-        coordinate_pair_matches(&self.occurrence, &self.slot, &occurrence, &slot)
-    }
 }
 
 fn coordinate_pair_matches<Left: PartialEq, Right: PartialEq>(
@@ -3366,6 +3361,104 @@ where
     },
 }
 
+/// Единственный accumulator плоской relation-arena. Физическая семья
+/// endpoint-ов влияет только на member payload; capacity, span и verdict едины.
+struct ProgramRelationEvidenceAccumulatorV1<'capture> {
+    relation_members: Option<&'capture mut Vec<ProgramRelationMemberEvidenceV1>>,
+    start: usize,
+    expected: NonZeroUsize,
+    written: usize,
+    has_violation: bool,
+}
+
+impl<'capture> ProgramRelationEvidenceAccumulatorV1<'capture> {
+    fn try_begin<'buffers, Evaluation>(
+        capture: &'capture mut ProgramConstraintEvidenceCaptureV1<'buffers, Evaluation>,
+        candidate_count: usize,
+    ) -> Result<Self, ()>
+    where
+        Evaluation: ProgramConstraintEvaluatorSetV1,
+    {
+        let expected = NonZeroUsize::new(candidate_count).ok_or(())?;
+        let relation_members = match capture {
+            ProgramConstraintEvidenceCaptureV1::None => None,
+            ProgramConstraintEvidenceCaptureV1::Report {
+                relation_members, ..
+            } => {
+                if !storage_has_spare_capacity(
+                    [relation_members.len()],
+                    [relation_members.capacity()],
+                    [candidate_count],
+                ) {
+                    return Err(());
+                }
+                Some(&mut **relation_members)
+            }
+        };
+        let start = relation_members.as_ref().map_or(0, |members| members.len());
+        Ok(Self {
+            relation_members,
+            start,
+            expected,
+            written: 0,
+            has_violation: false,
+        })
+    }
+
+    fn push(&mut self, member: ProgramRelationMemberEvidenceV1) -> Result<(), ()> {
+        if self.written >= self.expected.get() {
+            return Err(());
+        }
+        self.has_violation |= matches!(
+            member.decision(),
+            ProgramRelationMemberDecisionV1::Violation(_)
+        );
+        if let Some(relation_members) = self.relation_members.as_mut() {
+            relation_members.push(member);
+        }
+        self.written = self.written.checked_add(1).ok_or(())?;
+        Ok(())
+    }
+
+    fn finish(self) -> Option<(Option<NonEmptyRelationMemberSpanV1>, bool)> {
+        if self.written != self.expected.get() {
+            return None;
+        }
+        let span = match self.relation_members {
+            None => None,
+            Some(relation_members) => {
+                let expected_end = self.start.checked_add(self.expected.get())?;
+                if relation_members.len() != expected_end {
+                    return None;
+                }
+                Some(NonEmptyRelationMemberSpanV1::from_start_and_len(
+                    self.start,
+                    self.expected.get(),
+                )?)
+            }
+        };
+        Some((span, self.has_violation))
+    }
+}
+
+fn project_relation_result<Evaluation>(
+    span: Option<NonEmptyRelationMemberSpanV1>,
+    has_violation: bool,
+) -> Option<ProgramConstraintResultV1<Evaluation>>
+where
+    Evaluation: ProgramConstraintEvaluatorSetV1,
+{
+    span.map(|span| {
+        if has_violation {
+            ProgramConstraintResultV1::Violation(ProgramConstraintViolationEvidenceV1::Relation(
+                span,
+            ))
+        } else {
+            ProgramConstraintResultV1::Pass(ProgramConstraintPassEvidenceV1::Relation(span))
+        }
+    })
+}
+
 struct ProgramCandidateCollectionV1<'buffers, Evaluation>
 where
     Evaluation: ProgramConstraintEvaluatorSetV1,
@@ -3932,7 +4025,12 @@ fn resolve_visible_relation_endpoint(
         return None;
     }
     let context = contexts.get(endpoint.occurrence_context_index)?;
-    if !context.matches(endpoint.occurrence, endpoint.slot) {
+    if !coordinate_pair_matches(
+        &context.occurrence,
+        &context.slot,
+        &endpoint.occurrence,
+        &endpoint.slot,
+    ) {
         return None;
     }
     let point = ProgramPointOccurrenceV1::from_resolved(source, context.context);
@@ -4046,9 +4144,6 @@ where
             .iter()
             .filter(|constraint| phase.includes(constraint.mode))
         {
-            if constraint.scenario_group != epoch.observation_group.id {
-                return Err(ProgramSessionEvaluationError::InternalInvariant);
-            }
             let (subject, result, is_violation) = match &constraint.body {
                 CompiledProgramConstraintBodyV1::VisibleUnary {
                     occurrence,
@@ -4066,7 +4161,12 @@ where
                         .occurrence_contexts
                         .get(*occurrence_context_index)
                         .ok_or(ProgramSessionEvaluationError::InternalInvariant)?;
-                    if !binding.matches(*occurrence, *slot) {
+                    if !coordinate_pair_matches(
+                        &binding.occurrence,
+                        &binding.slot,
+                        occurrence,
+                        slot,
+                    ) {
                         return Err(ProgramSessionEvaluationError::InternalInvariant);
                     }
                     let point = ProgramPointOccurrenceV1::from_resolved(source, binding.context);
@@ -4176,21 +4276,11 @@ where
                     candidates,
                     invocation,
                 } => {
-                    let capture_start = match &mut evidence {
-                        ProgramConstraintEvidenceCaptureV1::None => None,
-                        ProgramConstraintEvidenceCaptureV1::Report {
-                            relation_members, ..
-                        } => {
-                            if !storage_has_spare_capacity(
-                                [relation_members.len()],
-                                [relation_members.capacity()],
-                                [candidates.len()],
-                            ) {
-                                return Err(ProgramSessionEvaluationError::InternalInvariant);
-                            }
-                            Some(relation_members.len())
-                        }
-                    };
+                    let mut relation_evidence = ProgramRelationEvidenceAccumulatorV1::try_begin(
+                        &mut evidence,
+                        candidates.len(),
+                    )
+                    .map_err(|()| ProgramSessionEvaluationError::InternalInvariant)?;
                     let reference_value = runtime
                         .bindings
                         .paint_input_at(reference.target)
@@ -4199,7 +4289,6 @@ where
                         target: reference.target_id,
                         value: reference_value,
                     };
-                    let mut violation = false;
                     for candidate in candidates.iter() {
                         let candidate_value = runtime
                             .bindings
@@ -4213,49 +4302,28 @@ where
                             invocation.assess(reference_value.source(), candidate_value.source());
                         let decision = match decision {
                             HardDecision::Pass(pass) => ProgramRelationMemberDecisionV1::Pass(pass),
-                            HardDecision::Violation(violation_evidence) => {
-                                violation = true;
-                                ProgramRelationMemberDecisionV1::Violation(violation_evidence)
+                            HardDecision::Violation(evidence) => {
+                                ProgramRelationMemberDecisionV1::Violation(evidence)
                             }
                         };
-                        if let ProgramConstraintEvidenceCaptureV1::Report {
-                            relation_members, ..
-                        } = &mut evidence
-                        {
-                            relation_members.push(ProgramRelationMemberEvidenceV1::Intrinsic {
+                        relation_evidence
+                            .push(ProgramRelationMemberEvidenceV1::Intrinsic {
                                 reference: reference_binding,
                                 candidate: candidate_binding,
                                 measurement,
                                 decision,
-                            });
-                        }
+                            })
+                            .map_err(|()| ProgramSessionEvaluationError::InternalInvariant)?;
                     }
-                    let result = capture_start
-                        .map(|start| {
-                            NonEmptyRelationMemberSpanV1::from_start_and_len(
-                                start,
-                                candidates.len(),
-                            )
-                            .ok_or(ProgramSessionEvaluationError::InternalInvariant)
-                        })
-                        .transpose()?
-                        .map(|span| {
-                            if violation {
-                                ProgramConstraintResultV1::Violation(
-                                    ProgramConstraintViolationEvidenceV1::Relation(span),
-                                )
-                            } else {
-                                ProgramConstraintResultV1::Pass(
-                                    ProgramConstraintPassEvidenceV1::Relation(span),
-                                )
-                            }
-                        });
+                    let (span, has_violation) = relation_evidence
+                        .finish()
+                        .ok_or(ProgramSessionEvaluationError::InternalInvariant)?;
                     (
                         ProgramConstraintSubjectV1::IntrinsicRelation {
                             reference: reference.target_id,
                         },
-                        result,
-                        violation,
+                        project_relation_result(span, has_violation),
+                        has_violation,
                     )
                 }
                 CompiledProgramConstraintBodyV1::VisibleRelation {
@@ -4263,28 +4331,17 @@ where
                     candidates,
                     invocation,
                 } => {
-                    let capture_start = match &mut evidence {
-                        ProgramConstraintEvidenceCaptureV1::None => None,
-                        ProgramConstraintEvidenceCaptureV1::Report {
-                            relation_members, ..
-                        } => {
-                            if !storage_has_spare_capacity(
-                                [relation_members.len()],
-                                [relation_members.capacity()],
-                                [candidates.len()],
-                            ) {
-                                return Err(ProgramSessionEvaluationError::InternalInvariant);
-                            }
-                            Some(relation_members.len())
-                        }
-                    };
+                    let mut relation_evidence = ProgramRelationEvidenceAccumulatorV1::try_begin(
+                        &mut evidence,
+                        candidates.len(),
+                    )
+                    .map_err(|()| ProgramSessionEvaluationError::InternalInvariant)?;
                     let (reference_visible, reference_binding) = resolve_visible_relation_endpoint(
                         &evaluation,
                         &epoch.occurrence_contexts,
                         *reference,
                     )
                     .ok_or(ProgramSessionEvaluationError::InternalInvariant)?;
-                    let mut violation = false;
                     for candidate in candidates.iter().copied() {
                         let (candidate_visible, candidate_binding) =
                             resolve_visible_relation_endpoint(
@@ -4297,50 +4354,29 @@ where
                             invocation.assess(reference_visible, candidate_visible);
                         let decision = match decision {
                             HardDecision::Pass(pass) => ProgramRelationMemberDecisionV1::Pass(pass),
-                            HardDecision::Violation(violation_evidence) => {
-                                violation = true;
-                                ProgramRelationMemberDecisionV1::Violation(violation_evidence)
+                            HardDecision::Violation(evidence) => {
+                                ProgramRelationMemberDecisionV1::Violation(evidence)
                             }
                         };
-                        if let ProgramConstraintEvidenceCaptureV1::Report {
-                            relation_members, ..
-                        } = &mut evidence
-                        {
-                            relation_members.push(ProgramRelationMemberEvidenceV1::Visible {
+                        relation_evidence
+                            .push(ProgramRelationMemberEvidenceV1::Visible {
                                 reference: reference_binding,
                                 candidate: candidate_binding,
                                 measurement,
                                 decision,
-                            });
-                        }
+                            })
+                            .map_err(|()| ProgramSessionEvaluationError::InternalInvariant)?;
                     }
-                    let result = capture_start
-                        .map(|start| {
-                            NonEmptyRelationMemberSpanV1::from_start_and_len(
-                                start,
-                                candidates.len(),
-                            )
-                            .ok_or(ProgramSessionEvaluationError::InternalInvariant)
-                        })
-                        .transpose()?
-                        .map(|span| {
-                            if violation {
-                                ProgramConstraintResultV1::Violation(
-                                    ProgramConstraintViolationEvidenceV1::Relation(span),
-                                )
-                            } else {
-                                ProgramConstraintResultV1::Pass(
-                                    ProgramConstraintPassEvidenceV1::Relation(span),
-                                )
-                            }
-                        });
+                    let (span, has_violation) = relation_evidence
+                        .finish()
+                        .ok_or(ProgramSessionEvaluationError::InternalInvariant)?;
                     (
                         ProgramConstraintSubjectV1::VisibleRelation {
                             reference: reference.occurrence,
                             context: reference_binding.physical.context(),
                         },
-                        result,
-                        violation,
+                        project_relation_result(span, has_violation),
+                        has_violation,
                     )
                 }
                 CompiledProgramConstraintBodyV1::PointPresentation {
@@ -5624,7 +5660,6 @@ where
         compiled.push(CompiledPointConstraint {
             id: constraint.id,
             mode: constraint.mode,
-            scenario_group: program.observation_group.id,
             body,
         });
     }

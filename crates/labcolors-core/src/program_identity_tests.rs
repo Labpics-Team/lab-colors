@@ -784,7 +784,12 @@ fn complete_program_schema_v6_digest_is_cross_platform_golden() {
     ))
     .unwrap();
     assert_eq!(schema.0, (1_u8..=21).collect::<Vec<_>>());
-    assert_eq!(schema.1, (1_u8..=27).collect::<Vec<_>>());
+    let edge_role_count = crate::program_session::program_identity_edge_role_count_for_test();
+    assert_eq!(schema.1.len(), edge_role_count);
+    assert_eq!(
+        schema.1,
+        (1_u8..=u8::try_from(edge_role_count).unwrap()).collect::<Vec<_>>()
+    );
 
     assert_eq!(
         compiled.content_identity().as_bytes(),

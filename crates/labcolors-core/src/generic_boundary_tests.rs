@@ -1313,6 +1313,8 @@ fn program_session_keeps_physical_evidence_separate_from_lazy_lcs_capability() {
         "ModeledLcsOccurrenceV1::from_signal_in_context(",
         "modeled_occurrences: Vec<Option<ModeledLcsOccurrenceV1>>",
         "ProgramPointAssessmentErrorV1::Binding",
+        // Evaluation failures stay evaluator-generic; a topology-specific
+        // error variant would recreate a parallel unary execution contract.
         "ProgramSessionEvaluationError::VisibleUnary",
     ] {
         assert!(

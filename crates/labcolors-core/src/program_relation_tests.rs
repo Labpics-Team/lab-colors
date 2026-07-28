@@ -40,7 +40,7 @@ fn directed_relation_rejects_invalid_topology_before_draft() {
 }
 
 #[test]
-fn exact_relation_draft_api_requires_an_explicit_physical_level() {
+fn exact_relation_draft_methods_encode_the_physical_level_in_their_id_types() {
     let intrinsic = program::DirectedRelationV1::try_new(
         program::TargetIdV1::new(1),
         vec![program::TargetIdV1::new(2)],
@@ -53,8 +53,10 @@ fn exact_relation_draft_api_requires_an_explicit_physical_level() {
     .unwrap();
     let mut draft = program::DraftV1::new();
 
-    draft.push_exact_intrinsic_relation_hard(program::ConstraintIdV1::new(5), intrinsic);
-    draft.push_exact_visible_relation_hard(program::ConstraintIdV1::new(6), visible);
+    let _: &mut program::DraftV1 =
+        draft.push_exact_intrinsic_relation_hard(program::ConstraintIdV1::new(5), intrinsic);
+    let _: &mut program::DraftV1 =
+        draft.push_exact_visible_relation_hard(program::ConstraintIdV1::new(6), visible);
 }
 
 fn finite_intrinsic_unary_draft(include_visible_assessment: bool) -> program::DraftV1 {
@@ -352,6 +354,114 @@ fn relation_endpoints_and_intrinsic_unary_target_fail_with_typed_errors() {
     );
 }
 
+#[test]
+fn both_relation_levels_select_the_matching_finite_candidate_before_fresh_capture() {
+    for visible in [false, true] {
+        let reference_source = program::SourceIdV1::new(80);
+        let reference_target = program::TargetIdV1::new(81);
+        let finite_target = program::TargetIdV1::new(82);
+        let mismatch = program::TargetCandidateIdV1::new(83);
+        let matching = program::TargetCandidateIdV1::new(84);
+        let reference_paint = program::PaintIdV1::new(85);
+        let finite_paint = program::PaintIdV1::new(86);
+        let port = program::SurfaceInputPortIdV1::new(87);
+        let surface = program::SurfaceIdV1::new(88);
+        let reference_occurrence = program::OccurrenceIdV1::new(89);
+        let finite_occurrence = program::OccurrenceIdV1::new(90);
+        let context =
+            program::AppearanceContextV1::try_new(64.0, 0.2, program::SurroundV1::Average).unwrap();
+        let expected = Srgb8::new([0x20; 3]);
+        let mut draft = program::DraftV1::new();
+        draft.push_source(reference_source, expected);
+        draft.push_fixed_target(reference_target, reference_source);
+        draft.push_finite_target(
+            finite_target,
+            program::FinitePaintDomainV1::try_new(vec![
+                program::TargetCandidateV1::new(
+                    mismatch,
+                    program::PaintValueV1::opaque(Srgb8::new([0x10; 3])),
+                ),
+                program::TargetCandidateV1::new(matching, program::PaintValueV1::opaque(expected)),
+            ])
+            .unwrap(),
+        );
+        draft
+            .set_joint_selection(vec![
+                program::JointStateV1::new(vec![program::JointChoiceV1::new(
+                    finite_target,
+                    mismatch,
+                )]),
+                program::JointStateV1::new(vec![program::JointChoiceV1::new(
+                    finite_target,
+                    matching,
+                )]),
+            ])
+            .unwrap();
+        draft.push_solid_paint(reference_paint, reference_target);
+        draft.push_solid_paint(finite_paint, finite_target);
+        draft.push_surface_input_port(port);
+        draft.push_input_surface(surface, port);
+        draft.push_source_over_occurrence(reference_occurrence, reference_paint, surface, context);
+        draft.push_source_over_occurrence(finite_occurrence, finite_paint, surface, context);
+        let relation_id = program::ConstraintIdV1::new(91);
+        if visible {
+            draft.push_exact_visible_relation_hard(
+                relation_id,
+                program::DirectedRelationV1::try_new(reference_occurrence, vec![finite_occurrence])
+                    .unwrap(),
+            );
+        } else {
+            draft.push_exact_intrinsic_relation_hard(
+                relation_id,
+                program::DirectedRelationV1::try_new(reference_target, vec![finite_target])
+                    .unwrap(),
+            );
+        }
+        draft.push_exact_visible_unary_report_only(
+            program::ConstraintIdV1::new(92),
+            finite_occurrence,
+            expected,
+        );
+        draft.push_output(program::OutputSlotIdV1::new(93), finite_paint);
+
+        let owner = draft.compile().unwrap();
+        let mut session = owner.instantiate(94).unwrap();
+        let backdrop = [Srgb8::new([0; 3])];
+        let scenarios = [program::ScenarioV1::new(95, &backdrop)];
+        let evidence = owner
+            .commit(
+                &mut session,
+                program::UpdateV1::Observed {
+                    revision: 1,
+                    scenarios: &scenarios,
+                },
+            )
+            .unwrap();
+        let Some(program::CertificateV1::Verified(verified)) = evidence.certificates().next()
+        else {
+            panic!("the matching finite candidate must be selected");
+        };
+        assert_eq!(verified.selected_state_index(), Some(1));
+        assert_eq!(verified.outputs().next().unwrap().source(), expected);
+        let relation = verified
+            .cells()
+            .find_map(|cell| match cell.assessment() {
+                program::AssessmentV1::Relation(relation) => Some(relation),
+                _ => None,
+            })
+            .expect("fresh selected-state recheck must retain relation evidence");
+        assert_eq!(relation.verdict(), program::VerdictV1::Pass);
+        assert_eq!(relation.member_count(), 1);
+        assert_eq!(
+            matches!(
+                relation.members().next().unwrap(),
+                program::RelationMemberV1::Visible(_)
+            ),
+            visible,
+        );
+    }
+}
+
 fn solver_dependent_reference_draft(visible: bool) -> program::DraftV1 {
     let fixed_source = program::SourceIdV1::new(60);
     let finite_target = program::TargetIdV1::new(61);
@@ -460,9 +570,16 @@ fn relation_identity(offset: u32, reverse_candidates: bool) -> program::ContentI
 
 #[test]
 fn relation_identity_ignores_opaque_names_and_candidate_declaration_order() {
+    let canonical = relation_identity(100, false);
     assert_eq!(
-        relation_identity(100, false),
-        relation_identity(1_000, true)
+        canonical,
+        relation_identity(1_000, false),
+        "opaque ID renaming must not change content identity",
+    );
+    assert_eq!(
+        canonical,
+        relation_identity(100, true),
+        "candidate declaration order must not change content identity",
     );
 }
 
@@ -483,9 +600,12 @@ fn visible_relation_checks_every_candidate_in_every_admitted_scenario() {
     let reference = program::OccurrenceIdV1::new(11);
     let first_candidate = program::OccurrenceIdV1::new(12);
     let second_candidate = program::OccurrenceIdV1::new(13);
-    let relation =
-        program::DirectedRelationV1::try_new(reference, vec![first_candidate, second_candidate])
-            .unwrap();
+    let third_candidate = program::OccurrenceIdV1::new(14);
+    let relation = program::DirectedRelationV1::try_new(
+        reference,
+        vec![first_candidate, second_candidate, third_candidate],
+    )
+    .unwrap();
     let mut draft = program::DraftV1::new();
 
     draft.push_source(white_source, Srgb8::new([0xFF; 3]));
@@ -501,6 +621,7 @@ fn visible_relation_checks_every_candidate_in_every_admitted_scenario() {
     draft.push_source_over_occurrence(reference, half_white_paint, backdrop, context);
     draft.push_source_over_occurrence(first_candidate, half_white_paint, backdrop, context);
     draft.push_source_over_occurrence(second_candidate, middle_paint, backdrop, context);
+    draft.push_source_over_occurrence(third_candidate, middle_paint, backdrop, context);
     draft.push_exact_visible_relation_hard(program::ConstraintIdV1::new(14), relation);
     draft.push_output(program::OutputSlotIdV1::new(15), half_white_paint);
     draft.push_output(program::OutputSlotIdV1::new(16), middle_paint);
@@ -524,9 +645,9 @@ fn visible_relation_checks_every_candidate_in_every_admitted_scenario() {
         .unwrap();
 
     // На чёрном фоне half-white и opaque #808080 оба дают #808080. На белом
-    // первый candidate по-прежнему совпадает с reference (#FFFFFF), а второй
-    // остаётся #808080. Поэтому только координата candidate[1] × scenario[1]
-    // нарушает relation; пропуск любого измерения ложно выдал бы Verified.
+    // первый candidate по-прежнему совпадает с reference (#FFFFFF), а два
+    // следующих остаются #808080. Два нарушения в одной клетке доказывают OR,
+    // а не parity-fold; пропуск любого измерения ложно выдал бы Verified.
     assert_eq!(evidence.kind(), program::StateKindV1::Failed);
     let mut certificates = evidence.certificates();
     let Some(program::CertificateV1::Conflict(conflict)) = certificates.next() else {
@@ -545,7 +666,7 @@ fn visible_relation_checks_every_candidate_in_every_admitted_scenario() {
         let program::AssessmentV1::Relation(relation) = cell.assessment() else {
             panic!("directional constraint must expose relation evidence");
         };
-        assert_eq!(relation.member_count(), 2);
+        assert_eq!(relation.member_count(), 3);
         let mut cell_has_violation = false;
         for (candidate_index, member) in relation.members().enumerate() {
             observed_member_count += 1;
@@ -553,7 +674,8 @@ fn visible_relation_checks_every_candidate_in_every_admitted_scenario() {
                 panic!("visible relation cannot project intrinsic endpoints");
             };
             assert_eq!(member.reference().occurrence(), reference);
-            let expected_candidate = [first_candidate, second_candidate][candidate_index];
+            let expected_candidate =
+                [first_candidate, second_candidate, third_candidate][candidate_index];
             assert_eq!(member.candidate().occurrence(), expected_candidate);
 
             let program::RelationMeasurementV1::ExactSrgb8(measurement) =
@@ -589,6 +711,6 @@ fn visible_relation_checks_every_candidate_in_every_admitted_scenario() {
             "cell passes iff every member passes",
         );
     }
-    assert_eq!(observed_member_count, 4);
-    assert_eq!(violating_coordinates, vec![(1, 1)]);
+    assert_eq!(observed_member_count, 6);
+    assert_eq!(violating_coordinates, vec![(1, 1), (1, 2)]);
 }
