@@ -166,14 +166,19 @@ class MutationTruthTest(unittest.TestCase):
         check: bool = True,
     ) -> subprocess.CompletedProcess:
         assert self.git_binary is not None
-        return subprocess.run(
+        result = subprocess.run(
             [self.git_binary, *arguments],
             cwd=self.root,
-            check=check,
+            check=False,
             env=self.git_env,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            capture_output=True,
         )
+        if check and result.returncode != 0:
+            diagnostic = result.stderr.decode("utf-8", errors="replace").strip()
+            raise AssertionError(
+                f"git {' '.join(arguments)} failed with {result.returncode}: {diagnostic}"
+            )
+        return result
 
     def git_output(self, *arguments: str) -> str:
         return self.git(*arguments).stdout.decode("utf-8").strip()
@@ -605,7 +610,16 @@ class MutationTruthTest(unittest.TestCase):
                 self.iterator.close()
                 closed += 1
 
-        with mock.patch.object(mutation.os, "scandir", side_effect=Probe):
+        def observe_descriptor(path):
+            if isinstance(path, int):
+                return Probe(path)
+            return real_scandir(path)
+
+        with mock.patch.object(
+            mutation.os,
+            "scandir",
+            side_effect=observe_descriptor,
+        ):
             mutation._verify_materialized_execution_source(
                 source_root,
                 snapshot,
@@ -1476,6 +1490,14 @@ class MutationTruthTest(unittest.TestCase):
             mutation.main([])
 
     def test_workflow_and_scope_lock_the_truth_contract(self) -> None:
+        def between(source: str, start: str, end: str, label: str) -> str:
+            if start not in source:
+                self.fail(f"{label} start anchor is missing: {start!r}")
+            tail = source.split(start, 1)[1]
+            if end not in tail:
+                self.fail(f"{label} end anchor is missing: {end!r}")
+            return tail.split(end, 1)[0]
+
         repo = Path(__file__).resolve().parents[1]
         workflow = (repo / ".github" / "workflows" / "mutation.yml").read_text(
             encoding="utf-8"
@@ -1486,26 +1508,36 @@ class MutationTruthTest(unittest.TestCase):
             ci.index("      - name: mutation evidence verifier hostile tests\n"),
             ci.index("      - name: cargo test\n"),
         )
-        manifest_job = workflow.split("\n  manifest:\n", 1)[1].split(
+        manifest_job = between(
+            workflow,
+            "\n  manifest:\n",
             "\n  shard:\n",
-            1,
-        )[0]
-        shard_job = workflow.split("\n  shard:\n", 1)[1].split(
+            "manifest job",
+        )
+        shard_job = between(
+            workflow,
+            "\n  shard:\n",
             "\n  aggregate:\n",
-            1,
-        )[0]
-        shard_step = workflow.split(
+            "shard job",
+        )
+        shard_step = between(
+            workflow,
             "      - name: run isolated shard with its own baseline\n",
-            1,
-        )[1].split("      - name:", 1)[0]
-        manifest_step = workflow.split(
+            "      - name:",
+            "shard execution step",
+        )
+        manifest_step = between(
+            workflow,
             "      - name: discover and bind exact population\n",
-            1,
-        )[1].split("      - name:", 1)[0]
-        aggregate_step = workflow.split(
+            "      - name:",
+            "manifest discovery step",
+        )
+        aggregate_step = between(
+            workflow,
             "      - name: verify exact non-overlapping aggregate\n",
-            1,
-        )[1].split("      - name:", 1)[0]
+            "      - name:",
+            "aggregate verification step",
+        )
 
         for step in (manifest_step, shard_step, aggregate_step):
             self.assertNotIn("--in-place", step)
