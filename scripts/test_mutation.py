@@ -586,6 +586,19 @@ class MutationTruthTest(unittest.TestCase):
                 self.external / "execution-source",
             )
 
+    def test_materialization_rejects_symlink_parent_resolving_inside_worktree(self) -> None:
+        physical_parent = self.root / "untracked-execution-parent"
+        physical_parent.mkdir()
+        linked_parent = self.external / "linked-parent"
+        linked_parent.symlink_to(physical_parent, target_is_directory=True)
+
+        with self.assertRaisesRegex(mutation.ContractError, "disjoint from the Git worktree"):
+            mutation.materialize_execution_source(
+                self.root,
+                self.revision,
+                linked_parent / "execution-source",
+            )
+
     def test_execution_layout_keeps_output_caches_and_tool_homes_external(self) -> None:
         source_root = self.external / "execution-source"
         source_root.mkdir()

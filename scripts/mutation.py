@@ -587,17 +587,27 @@ def _tool_external_paths() -> dict[str, Path]:
     return paths
 
 
+def _canonical_disjoint_source_root(repo_root: Path, source_root: Path) -> Path:
+    try:
+        canonical = source_root.resolve(strict=False)
+    except (OSError, RuntimeError) as error:
+        raise ContractError(f"cannot canonicalize execution source root: {error}") from error
+    if (
+        canonical == repo_root
+        or repo_root in canonical.parents
+        or canonical in repo_root.parents
+    ):
+        raise ContractError("execution source root must be disjoint from the Git worktree")
+    return canonical
+
+
 def materialize_execution_source(
     repo_root: Path,
     revision: str,
     source_root: Path,
 ) -> dict[str, Any]:
     repo_root = repo_root.resolve()
-    source_root = source_root.absolute()
-    repo_ancestor = repo_root == source_root or repo_root in source_root.parents
-    source_ancestor = source_root in repo_root.parents
-    if repo_ancestor or source_ancestor:
-        raise ContractError("execution source root must be disjoint from the Git worktree")
+    source_root = _canonical_disjoint_source_root(repo_root, source_root.absolute())
     if source_root.is_symlink() or source_root.exists():
         raise ContractError("execution source root must not already exist")
     execution_source = _build_execution_source(repo_root, revision)
@@ -615,6 +625,10 @@ def materialize_execution_source(
         object_by_path[raw_path.decode("utf-8")] = object_id
     blobs = _git_blob_bytes(repo_root, object_by_path.values())
     source_root.mkdir(parents=True, mode=0o700)
+    canonical_after_mkdir = _canonical_disjoint_source_root(repo_root, source_root)
+    if canonical_after_mkdir != source_root:
+        raise ContractError("execution source root changed while it was created")
+    source_root = canonical_after_mkdir
     try:
         for entry in execution_source["entries"]:
             path = source_root.joinpath(*PurePosixPath(entry["path"]).parts)
