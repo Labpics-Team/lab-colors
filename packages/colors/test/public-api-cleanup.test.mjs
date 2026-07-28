@@ -90,6 +90,13 @@ test("the unsupported strict transition recipe cannot re-enter source or shipped
   assert.doesNotMatch(runtime, /floorBlend|lerpPairLuminance|wcagLuminanceCached/u);
 });
 
+test("runtime documentation names the declared canvas instead of the removed fallback option", () => {
+  const docs = read("packages", "colors", "README.md");
+
+  assert.doesNotMatch(docs, /^\s*fallback\??\s*:/mu);
+  assert.match(docs, /^\s*canvas\??\s*:/mu);
+});
+
 test("the unshipped JavaScript FNV mirror stays deleted", () => {
   for (const path of [
     ["packages", "colors", "fnv1a.js"],
