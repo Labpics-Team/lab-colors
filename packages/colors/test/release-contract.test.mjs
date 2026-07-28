@@ -488,6 +488,17 @@ test("MSRV and packaged Rust crate gates are executable CI contracts", () => {
       .split("\n")
       .filter((line) => !line.trimStart().startsWith("#"))
       .join("\n");
+    const activeLines = active.split("\n").map((line) => line.trim());
+    assert.equal(
+      activeLines[0],
+      "set -euo pipefail",
+      "Chrome dependency install must start in fail-closed shell mode",
+    );
+    assert.deepEqual(
+      activeLines.filter((line) => /\bset\b/u.test(line)),
+      ["set -euo pipefail"],
+      "Chrome dependency install cannot weaken fail-closed shell mode",
+    );
     assert.equal(
       active.match(/^readonly APT_SOURCES="\$DEPS_DIR\/apt-sources"$/gmu)?.length,
       1,
@@ -536,7 +547,16 @@ test("MSRV and packaged Rust crate gates are executable CI contracts", () => {
       active,
       /^\s*\*\)\n\s+echo "unsupported Chrome dependency release: \$ID:\$VERSION_CODENAME" >&2\n\s+exit 1\n\s+;;$/mu,
     );
-    assert.equal(active.match(/^readonly ALSA_PACKAGE$/gmu)?.length, 1);
+    assert.deepEqual(
+      activeLines.filter((line) => /\bALSA_PACKAGE\b/u.test(line)),
+      [
+        "ALSA_PACKAGE=libasound2",
+        "ALSA_PACKAGE=libasound2t64",
+        "readonly ALSA_PACKAGE",
+        '(cd "$DEBS_DIR" && apt-get "${APT_OPTIONS[@]}" download libnspr4 libnss3 "$ALSA_PACKAGE" libgbm1 2>&1)',
+      ],
+      "the release matrix must be the sole ALSA package authority",
+    );
     const trustedSourceLines = [
       '"deb [signed-by=$DISTRO_KEYRING] https://deb.debian.org/debian $VERSION_CODENAME main" \\',
       '"deb [signed-by=$DISTRO_KEYRING] https://deb.debian.org/debian $VERSION_CODENAME-updates main" \\',
@@ -545,11 +565,21 @@ test("MSRV and packaged Rust crate gates are executable CI contracts", () => {
       '"deb [signed-by=$DISTRO_KEYRING] https://archive.ubuntu.com/ubuntu $VERSION_CODENAME-updates main" \\',
       '"deb [signed-by=$DISTRO_KEYRING] https://security.ubuntu.com/ubuntu $VERSION_CODENAME-security main" \\',
     ];
-    const activeLines = active.split("\n").map((line) => line.trim());
     assert.deepEqual(
-      activeLines.filter((line) => line.startsWith('"deb [signed-by=')),
+      activeLines.filter((line) => /(?:^|["'])deb\s/u.test(line)),
       trustedSourceLines,
       "the generated source inventory must contain only the six exact distro sources",
+    );
+    assert.deepEqual(
+      activeLines.filter((line) => /\$\{?APT_SOURCES\}?\/sources\.list/u.test(line)),
+      [
+        '"$APT_SOURCES/sources.list.d"',
+        '> "$APT_SOURCES/sources.list"',
+        '> "$APT_SOURCES/sources.list"',
+        '-o "Dir::Etc::sourcelist=$APT_SOURCES/sources.list"',
+        '-o "Dir::Etc::sourceparts=$APT_SOURCES/sources.list.d"',
+      ],
+      "the isolated source inventory must have one closed set of readers and writers",
     );
     assert.deepEqual(
       activeLines.filter((line) => line.startsWith("DISTRO_KEYRING=")),
@@ -629,6 +659,33 @@ test("MSRV and packaged Rust crate gates are executable CI contracts", () => {
     ci.replace(
       "https://security.ubuntu.com/ubuntu $VERSION_CODENAME-security main",
       "https://security.ubuntu.com/ubuntu stable-security main",
+    ),
+    ci.replace(
+      '          readonly ALSA_PACKAGE\n          case "$ID" in',
+      '          if [[ "$ID:$VERSION_CODENAME" == ubuntu:jammy ]]; then ALSA_PACKAGE=libasound2t64; fi\n' +
+        '          readonly ALSA_PACKAGE\n          case "$ID" in',
+    ),
+    ci.replace(
+      "          readonly DISTRO_KEYRING\n",
+      "          readonly DISTRO_KEYRING\n" +
+        '          echo "deb [trusted=yes] https://deb.debian.org/debian sid main" >> "$APT_SOURCES/sources.list"\n',
+    ),
+    ci.replace(
+      "        run: |\n          set -euo pipefail\n          # -- CfT chrome + chromedriver --",
+      "        run: |\n          set +e\n          # -- CfT chrome + chromedriver --",
+    ),
+    ci.replace(
+      '          readonly ALSA_PACKAGE\n          case "$ID" in',
+      '          ALSA_PACKAGE+=t64\n          readonly ALSA_PACKAGE\n          case "$ID" in',
+    ),
+    ci.replace(
+      "          readonly ALSA_PACKAGE\n",
+      "          readonly ALSA_PACKAGE\n          :; set +e\n",
+    ),
+    ci.replace(
+      "          readonly DISTRO_KEYRING\n",
+      "          readonly DISTRO_KEYRING\n" +
+        '          echo "deb https://example.invalid/debian sid main" >> $APT_SOURCES/sources.list\n',
     ),
   ]) {
     assert.notEqual(mutant, ci, "hostile APT mutation must bite");
