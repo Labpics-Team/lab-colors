@@ -6,8 +6,8 @@ use super::*;
 use crate::Srgb8;
 use crate::program::{
     AppearanceContextV1, ConstraintIdV1, DraftV1, JointChoiceV1, JointStateV1, PaintIdV1,
-    ScenarioV1, SourceIdV1, StateKindV1, SurfaceIdV1, SurfaceInputPortIdV1, SurroundV1,
-    TargetCandidateIdV1, TargetCandidateV1, TargetIdV1,
+    PaintValueV1, ScenarioV1, SourceIdV1, StateKindV1, SurfaceIdV1, SurfaceInputPortIdV1,
+    SurroundV1, TargetCandidateIdV1, TargetCandidateV1, TargetIdV1,
 };
 use crate::wcag22::Wcag22CriterionV1;
 use proptest::prelude::*;
@@ -1004,8 +1004,8 @@ fn allocator_owner() -> OwnerV1 {
         TARGET,
         SOURCE,
         vec![
-            TargetCandidateV1::new(BLACK, Srgb8::new([0; 3])),
-            TargetCandidateV1::new(GRAY, Srgb8::new([0x80; 3])),
+            TargetCandidateV1::new(BLACK, PaintValueV1::opaque(Srgb8::new([0; 3]))),
+            TargetCandidateV1::new(GRAY, PaintValueV1::opaque(Srgb8::new([0x80; 3]))),
         ],
     );
     draft

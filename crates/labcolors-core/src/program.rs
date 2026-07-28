@@ -24,7 +24,7 @@
 //! [`CertificateV1::Verified`] хранит выбранное состояние, все клетки
 //! доказательства и сертифицированные Paint outputs. [`CertificateV1::Conflict`]
 //! хранит исчерпывающий конфликт по всем рассмотренным состояниям.
-//! [`ContentIdentityV3`] идентифицирует каноническое содержание, но не даёт
+//! [`ContentIdentityV4`] идентифицирует каноническое содержание, но не даёт
 //! полномочий живого [`OwnerV1`].
 
 #![forbid(unreachable_pub)]
@@ -35,8 +35,10 @@ pub(crate) mod attachment;
 use core::iter::FusedIterator;
 
 use crate::Srgb8;
-use crate::appearance::{OccurrenceId, OpacityInputId, PaintId, SurfaceId, SurfaceInputPortId};
-use crate::composition::CompositionProfileV1;
+use crate::appearance::{
+    EncodedPointPaintValueV1, OccurrenceId, OpacityInputId, PaintId, SurfaceId, SurfaceInputPortId,
+};
+use crate::composition::{AdmittedOpacityV1, CompositionProfileV1, OpacityAdmissionErrorV1};
 use crate::constraints::{
     ApplicableWcag22EvaluationErrorV1, ExactSrgb8IdentityV1, ProgramVisiblePointBindingV1,
     ProgramVisiblePointPassEvidence, ProgramVisiblePointViolationEvidence, Wcag22Srgb8V1,
@@ -64,7 +66,7 @@ use crate::program_session::{
     PointPresentationRootV1, PointPresentationTargetV1, PresentationRootId, ProgramCompileError,
     ProgramConflictV1, ProgramConstraintCellV1, ProgramConstraintPassEvidenceV1,
     ProgramConstraintResultV1, ProgramConstraintSubjectV1, ProgramConstraintViolationEvidenceV1,
-    ProgramContentIdentityV3, ProgramPaintOutputV1, ProgramSessionEvaluationError,
+    ProgramContentIdentityV4, ProgramPaintOutputV1, ProgramSessionEvaluationError,
     ProgramSessionInstantiateError, ProgramSessionPlan, ProgramVerifiedV1, Source, SourceId,
     Surface, Target, TargetCandidateChoiceV1, TargetCandidateId,
     TargetCandidateV1 as CoreTargetCandidateV1, TargetId,
@@ -213,9 +215,51 @@ projected_id!(
 pub(crate) struct TargetCandidateV1(CoreTargetCandidateV1);
 
 impl TargetCandidateV1 {
-    /// Связывает непрозрачный ID кандидата с конкретным encoded sRGB8 сигналом.
-    pub(crate) const fn new(id: TargetCandidateIdV1, source: Srgb8) -> Self {
-        Self(CoreTargetCandidateV1::from_srgb8(id.into_core(), source))
+    /// Связывает непрозрачный ID с одним неделимым физическим Paint value.
+    pub(crate) const fn new(id: TargetCandidateIdV1, value: PaintValueV1) -> Self {
+        Self(CoreTargetCandidateV1::new(id.into_core(), value.0))
+    }
+}
+
+/// Admission-ошибка атомарного значения конечного Paint-кандидата.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PaintValueErrorV1 {
+    /// Straight alpha не является конечным binary64.
+    NonFiniteOpacity,
+    /// Straight alpha находится вне замкнутого `[0, 1]`.
+    OpacityOutsideUnitInterval,
+}
+
+/// Одно неделимое encoded-sRGB8 source + straight-alpha значение Paint.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct PaintValueV1(EncodedPointPaintValueV1);
+
+impl PaintValueV1 {
+    /// Принимает только физически определённый straight alpha и канонизирует
+    /// оба знака нуля, чтобы одно значение имело одно identity-представление.
+    pub(crate) fn try_new(source: Srgb8, opacity: f64) -> Result<Self, PaintValueErrorV1> {
+        let opacity = AdmittedOpacityV1::new(opacity).map_err(|error| match error {
+            OpacityAdmissionErrorV1::NonFinite => PaintValueErrorV1::NonFiniteOpacity,
+            OpacityAdmissionErrorV1::OutsideUnitInterval => {
+                PaintValueErrorV1::OpacityOutsideUnitInterval
+            }
+        })?;
+        Ok(Self(EncodedPointPaintValueV1::from_admitted(
+            source, opacity,
+        )))
+    }
+
+    /// Явный shorthand для распространённого непрозрачного значения.
+    pub(crate) const fn opaque(source: Srgb8) -> Self {
+        Self(EncodedPointPaintValueV1::opaque(source))
+    }
+
+    pub(crate) const fn source(self) -> Srgb8 {
+        self.0.source()
+    }
+
+    pub(crate) const fn opacity(self) -> f64 {
+        self.0.opacity().value()
     }
 }
 
@@ -416,8 +460,8 @@ pub(crate) enum CompileErrorKindV1 {
     DuplicateTarget,
     /// В одной цели повторно объявлен ID кандидата.
     DuplicateTargetCandidate,
-    /// Два кандидата одной цели задают одинаковый сигнал.
-    DuplicateTargetCandidateSignal,
+    /// Два кандидата одной цели задают одинаковое атомарное Paint value.
+    DuplicateTargetCandidateValue,
     /// Повторно объявлен вход прозрачности.
     DuplicateOpacityInput,
     /// Повторно объявлен входной порт поверхности.
@@ -831,16 +875,16 @@ pub(crate) enum CompileErrorV1 {
         /// Повторный кандидат.
         candidate: TargetCandidateIdV1,
     },
-    /// Два кандидата одной цели имеют одинаковый физический сигнал.
-    DuplicateTargetCandidateSignal {
+    /// Два кандидата одной цели имеют одинаковое физическое Paint value.
+    DuplicateTargetCandidateValue {
         /// Цель кандидатов.
         target: TargetIdV1,
         /// Первый кандидат.
         first: TargetCandidateIdV1,
         /// Повторный кандидат.
         duplicate: TargetCandidateIdV1,
-        /// Совпавший encoded sRGB8 сигнал.
-        encoded_srgb8: Srgb8,
+        /// Совпавшая неделимая пара source + straight alpha.
+        value: PaintValueV1,
     },
     /// Конечная цель не участвует ни в одном ограничении.
     UnconstrainedTarget {
@@ -983,7 +1027,7 @@ impl CompileErrorV1 {
             Self::OpacityOutOfDomain { .. } => Kind::OpacityOutOfDomain,
             Self::EmptyTargetDomain { .. } => Kind::EmptyTargetDomain,
             Self::DuplicateTargetCandidate { .. } => Kind::DuplicateTargetCandidate,
-            Self::DuplicateTargetCandidateSignal { .. } => Kind::DuplicateTargetCandidateSignal,
+            Self::DuplicateTargetCandidateValue { .. } => Kind::DuplicateTargetCandidateValue,
             Self::UnconstrainedTarget { .. } => Kind::UnconstrainedTarget,
             Self::DisconnectedFiniteTargets => Kind::DisconnectedFiniteTargets,
             Self::UnassessedOutput { .. } => Kind::UnassessedOutput,
@@ -1025,7 +1069,7 @@ impl CompileErrorV1 {
             | Self::JointStateUnknownCandidate { target, .. }
             | Self::MissingTargetSource { target, .. }
             | Self::DuplicateTargetCandidate { target, .. }
-            | Self::DuplicateTargetCandidateSignal { target, .. } => Some(Handle::Target(*target)),
+            | Self::DuplicateTargetCandidateValue { target, .. } => Some(Handle::Target(*target)),
             Self::DuplicateOpacityInput { input } | Self::OpacityOutOfDomain { input } => {
                 Some(Handle::OpacityInput(*input))
             }
@@ -1107,7 +1151,7 @@ impl CompileErrorV1 {
             | Self::MissingOutputPaint { paint, .. } => Some(Handle::Paint(*paint)),
             Self::MissingOccurrenceBackdrop { surface, .. } => Some(Handle::Surface(*surface)),
             Self::DuplicateTargetCandidate { candidate, .. }
-            | Self::DuplicateTargetCandidateSignal {
+            | Self::DuplicateTargetCandidateValue {
                 duplicate: candidate,
                 ..
             }
@@ -1507,8 +1551,8 @@ impl OwnerV1 {
     ///
     /// Identity доступна до первого update, но не заменяет полномочия этой
     /// конкретной owner-эпохи.
-    pub(crate) fn content_identity(&self) -> ContentIdentityV3 {
-        ContentIdentityV3::from_core(self.compiled.content_identity())
+    pub(crate) fn content_identity(&self) -> ContentIdentityV4 {
+        ContentIdentityV4::from_core(self.compiled.content_identity())
     }
 
     /// Вычисляет верхние границы клеток для prospective Observed-update.
@@ -1828,10 +1872,10 @@ impl<'session> PreparedSessionTransitionV1<'session> {
 /// Identity не идентифицирует owner-эпоху и не даёт runtime-полномочий.
 #[repr(transparent)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(crate) struct ContentIdentityV3([u8; 32]);
+pub(crate) struct ContentIdentityV4([u8; 32]);
 
-impl ContentIdentityV3 {
-    const fn from_core(value: ProgramContentIdentityV3) -> Self {
+impl ContentIdentityV4 {
+    const fn from_core(value: ProgramContentIdentityV4) -> Self {
         Self(*value.as_bytes())
     }
 
@@ -1849,8 +1893,8 @@ pub(crate) struct VerifiedCertificateV1<'a> {
 
 impl<'a> VerifiedCertificateV1<'a> {
     /// Возвращает identity скомпилированного содержания.
-    pub(crate) const fn content_identity(self) -> ContentIdentityV3 {
-        ContentIdentityV3::from_core(self.inner.report().content_identity())
+    pub(crate) const fn content_identity(self) -> ContentIdentityV4 {
+        ContentIdentityV4::from_core(self.inner.report().content_identity())
     }
 
     /// Возвращает точное наблюдение, на котором выдан сертификат.
@@ -1895,8 +1939,8 @@ pub(crate) struct ConflictCertificateV1<'a> {
 
 impl<'a> ConflictCertificateV1<'a> {
     /// Возвращает identity скомпилированного содержания.
-    pub(crate) const fn content_identity(self) -> ContentIdentityV3 {
-        ContentIdentityV3::from_core(self.inner.report().content_identity())
+    pub(crate) const fn content_identity(self) -> ContentIdentityV4 {
+        ContentIdentityV4::from_core(self.inner.report().content_identity())
     }
 
     /// Возвращает точное наблюдение, вызвавшее конфликт.
@@ -1945,7 +1989,7 @@ impl<'a> CertificateV1<'a> {
     }
 
     /// Возвращает identity скомпилированного содержания.
-    pub(crate) const fn content_identity(self) -> ContentIdentityV3 {
+    pub(crate) const fn content_identity(self) -> ContentIdentityV4 {
         match self {
             Self::Verified(value) => value.content_identity(),
             Self::Conflict(value) => value.content_identity(),
@@ -3119,16 +3163,16 @@ fn map_program_compile_error(error: ProgramCompileError) -> CompileErrorV1 {
                 candidate: TargetCandidateIdV1::from_core(candidate),
             }
         }
-        ProgramCompileError::DuplicateTargetCandidateSignal {
+        ProgramCompileError::DuplicateTargetCandidateValue {
             target,
             first,
             duplicate,
-            signal,
-        } => CompileErrorV1::DuplicateTargetCandidateSignal {
+            value,
+        } => CompileErrorV1::DuplicateTargetCandidateValue {
             target: TargetIdV1::from_core(target),
             first: TargetCandidateIdV1::from_core(first),
             duplicate: TargetCandidateIdV1::from_core(duplicate),
-            encoded_srgb8: signal.srgb8(),
+            value: PaintValueV1(value),
         },
         ProgramCompileError::UnconstrainedTarget { target } => {
             CompileErrorV1::UnconstrainedTarget {

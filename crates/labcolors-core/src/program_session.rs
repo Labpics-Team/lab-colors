@@ -4,7 +4,9 @@
 //! source-plus-straight-alpha programs, occurrences are modeled applications of
 //! Paint to Surface, constraints declare assessments of those exact
 //! occurrences, and outputs bind opaque slots back to Paints. The compiled
-//! result owns only admitted, canonical topology; runtime observation and
+//! result owns only admitted, canonical topology. Every finite candidate is
+//! one atomic source-plus-straight-alpha Paint value, so selection cannot
+//! synthesize an undeclared Cartesian combination. Runtime observation and
 //! lifecycle belong to the sole revision-bound Session. Attachment, renderer
 //! and actual terminal sink are outside this module.
 //! Finite candidate search executes only hard constraints. Every fresh hard
@@ -65,7 +67,7 @@ use crate::wcag22::Wcag22CriterionV1;
 
 #[path = "program_identity.rs"]
 mod identity;
-pub(crate) use identity::ProgramContentIdentityV3;
+pub(crate) use identity::ProgramContentIdentityV4;
 
 /// Opaque identity of one immutable authored colour source.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -131,30 +133,24 @@ impl TargetCandidateId {
     }
 }
 
-/// One candidate signal in a finite target domain.
+/// One atomic source-plus-straight-alpha value in a finite target domain.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TargetCandidateV1 {
     id: TargetCandidateId,
-    signal: ColorSignal,
+    value: EncodedPointPaintValueV1,
 }
 
 impl TargetCandidateV1 {
-    pub const fn new(id: TargetCandidateId, signal: ColorSignal) -> Self {
-        Self { id, signal }
-    }
-
-    /// Bind one encoded sRGB8 candidate through the sole admitted signal
-    /// profile. Package authoring never carries a free-form profile tag.
-    pub const fn from_srgb8(id: TargetCandidateId, value: Srgb8) -> Self {
-        Self::new(id, ColorSignal::from_srgb8(value))
+    pub const fn new(id: TargetCandidateId, value: EncodedPointPaintValueV1) -> Self {
+        Self { id, value }
     }
 
     pub const fn id(self) -> TargetCandidateId {
         self.id
     }
 
-    pub const fn signal(self) -> ColorSignal {
-        self.signal
+    pub const fn value(self) -> EncodedPointPaintValueV1 {
+        self.value
     }
 }
 
@@ -1167,11 +1163,11 @@ pub enum ProgramCompileError {
         target: TargetId,
         candidate: TargetCandidateId,
     },
-    DuplicateTargetCandidateSignal {
+    DuplicateTargetCandidateValue {
         target: TargetId,
         first: TargetCandidateId,
         duplicate: TargetCandidateId,
-        signal: ColorSignal,
+        value: EncodedPointPaintValueV1,
     },
     UnconstrainedTarget {
         target: TargetId,
@@ -1469,7 +1465,7 @@ impl CompiledPointPresentationsV1 {
 
 struct CompiledFiniteTargetV1 {
     binding: CompiledPaintInputSlotV1,
-    candidates: Box<[ColorSignal]>,
+    candidates: Box<[EncodedPointPaintValueV1]>,
 }
 
 struct CompiledJointSelectionV1 {
@@ -1481,7 +1477,7 @@ where
     Evaluation: ProgramConstraintEvaluatorSetV1,
     ProgramConstraintInvocationOf<Evaluation>: Copy,
 {
-    content_identity: ProgramContentIdentityV3,
+    content_identity: ProgramContentIdentityV4,
     evaluator: Evaluation,
     graph: CompiledAppearanceGraph,
     binding_template: AdmittedAppearanceBindings,
@@ -1529,7 +1525,7 @@ where
     /// Opaque ID и порядок неупорядоченных объявлений исключены; явный joint
     /// order входит в адрес. Адрес не подтверждает поколение владельца и не
     /// заменяет revision-bound evidence.
-    pub fn content_identity(&self) -> ProgramContentIdentityV3 {
+    pub fn content_identity(&self) -> ProgramContentIdentityV4 {
         self.owner_generation.content_identity
     }
 
@@ -2005,7 +2001,7 @@ pub(crate) enum ProgramPointCausalConsideredStateV1 {
 /// одного моделируемого terminal root. Оно ничего не утверждает о пикселе
 /// браузера, восприятии или качестве цвета.
 pub(crate) struct ProgramPointCausalEvidenceV1<'report, State> {
-    content_identity: ProgramContentIdentityV3,
+    content_identity: ProgramContentIdentityV4,
     observation: &'report RevisionBoundObservationV1,
     record: &'report ProgramPointCausalRecordV1,
     steps: &'report [PointOccurrenceAbsenceStepV1],
@@ -2026,7 +2022,7 @@ where
             .unwrap_or_else(|| unreachable!("тип replay span запрещает пустой пересчёт"))
     }
 
-    pub(crate) const fn content_identity(&self) -> ProgramContentIdentityV3 {
+    pub(crate) const fn content_identity(&self) -> ProgramContentIdentityV4 {
         self.content_identity
     }
 
@@ -2084,7 +2080,7 @@ pub struct ProgramReportV1<Evaluation>
 where
     Evaluation: ProgramConstraintEvaluatorSetV1,
 {
-    content_identity: ProgramContentIdentityV3,
+    content_identity: ProgramContentIdentityV4,
     observation: RevisionBoundObservationV1,
     arena: ProgramEvaluationArenaLeaseV1<Evaluation>,
 }
@@ -2095,7 +2091,7 @@ where
 {
     /// Адрес содержимого Program, по которому построен report; это не
     /// идентификатор поколения и не runtime-authority.
-    pub const fn content_identity(&self) -> ProgramContentIdentityV3 {
+    pub const fn content_identity(&self) -> ProgramContentIdentityV4 {
         self.content_identity
     }
 
@@ -3157,10 +3153,7 @@ where
             .ok_or(ProgramSessionEvaluationError::InternalInvariant)?;
         runtime
             .bindings
-            .overwrite_paint_input_at(
-                target.binding,
-                EncodedPointPaintValueV1::opaque(candidate.srgb8()),
-            )
+            .overwrite_paint_input_at(target.binding, *candidate)
             .map_err(map_program_execution_binding_error)?;
     }
     Ok(())
@@ -3728,7 +3721,7 @@ where
     let occurrence_contexts =
         compact_constraint_contexts(&all_occurrence_contexts, &mut constraints)?;
     let outputs = compile_outputs(&graph, &mut program.outputs)?;
-    let content_identity = identity::compile_program_content_identity_v3(&program)?;
+    let content_identity = identity::compile_program_content_identity_v4(&program)?;
     Ok(ProgramEpochV1 {
         content_identity,
         evaluator: program.evaluator,
@@ -4188,18 +4181,25 @@ fn compile_targets(
         physical
             .try_reserve_exact(candidates.len())
             .map_err(|_| ProgramCompileError::ResourceExhausted)?;
-        physical.extend(
-            candidates
-                .iter()
-                .map(|candidate| (candidate.signal, candidate.id)),
-        );
-        physical.sort_unstable();
-        if let Some(pair) = physical.windows(2).find(|pair| pair[0].0 == pair[1].0) {
-            return Err(ProgramCompileError::DuplicateTargetCandidateSignal {
+        physical.extend(candidates.iter().map(|candidate| {
+            (
+                candidate.value.source(),
+                candidate.value.opacity_bits(),
+                candidate.id,
+                candidate.value,
+            )
+        }));
+        physical
+            .sort_unstable_by_key(|(source, opacity_bits, id, _)| (*source, *opacity_bits, *id));
+        if let Some(pair) = physical
+            .windows(2)
+            .find(|pair| pair[0].0 == pair[1].0 && pair[0].1 == pair[1].1)
+        {
+            return Err(ProgramCompileError::DuplicateTargetCandidateValue {
                 target: target.id,
-                first: pair[0].1,
-                duplicate: pair[1].1,
-                signal: pair[0].0,
+                first: pair[0].2,
+                duplicate: pair[1].2,
+                value: pair[0].3,
             });
         }
         compiled.push(CanonicalFiniteTargetV1 {
@@ -4291,7 +4291,7 @@ fn compile_targets(
         candidates
             .try_reserve_exact(target.candidates.len())
             .map_err(|_| ProgramCompileError::ResourceExhausted)?;
-        candidates.extend(target.candidates.iter().map(|candidate| candidate.signal()));
+        candidates.extend(target.candidates.iter().map(|candidate| candidate.value()));
         runtime_targets.push(CompiledFiniteTargetV1 {
             binding: target.binding,
             candidates: candidates.into_boxed_slice(),

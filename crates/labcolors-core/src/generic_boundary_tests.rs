@@ -1409,23 +1409,29 @@ fn program_identity_binds_lcs_releases_only_through_lcs_constraint_content() {
         "DOMAIN_V2",
         "PROGRAM_SCHEMA_V2",
         "compile_program_content_identity_v2",
+        "ProgramContentIdentityV3",
+        "ContentIdentityV3",
+        "DOMAIN_V3",
+        "PROGRAM_SCHEMA_V3",
+        "compile_program_content_identity_v3",
     ] {
         for (path, source) in identity_sources {
             assert!(
                 !contains_rust_identifier(source, retired),
-                "the V3 content-address cut must not retain legacy identity symbol `{retired}` in {path}",
+                "the V4 content-address cut must not retain legacy identity symbol `{retired}` in {path}",
             );
         }
     }
     assert!(!PROGRAM_IDENTITY_SOURCE.contains("labcolors.program-content-identity.v1"));
     assert!(!PROGRAM_IDENTITY_SOURCE.contains("labcolors.program-content-identity.v2"));
+    assert!(!PROGRAM_IDENTITY_SOURCE.contains("labcolors.program-content-identity.v3"));
     for required in [
-        "const DOMAIN_V3: &[u8] = b\"labcolors.program-content-identity.v3\\0\";",
-        "pub(super) const PROGRAM_SCHEMA_V3: u8 = 3;",
+        "const DOMAIN_V4: &[u8] = b\"labcolors.program-content-identity.v4\\0\";",
+        "pub(super) const PROGRAM_SCHEMA_V4: u8 = 4;",
     ] {
         assert!(
             PROGRAM_IDENTITY_SOURCE.contains(required),
-            "the V3 content-address type must bind its exact domain and schema tag; missing `{required}`",
+            "the V4 content-address type must bind its exact domain and schema tag; missing `{required}`",
         );
     }
 

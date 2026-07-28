@@ -94,10 +94,12 @@ token как угодно; Core не выводит физику из имени
 возвращает значения ролей в порядке объявления.
 
 Реализованный point-домен приватного appearance-графа содержит путь
-`Paint::Solid → Paint::Opacity → Occurrence(fill over input surface) →
-Surface::FromOccurrence`. Occurrence моделирует композицию в объявленном
-encoded-sRGB8 профиле; это не наблюдение фактических пикселей host. Видимый
-результат становится производной поверхностью без повторной композиции.
+`Paint::Input → Occurrence(fill over input surface) → Surface::FromOccurrence`.
+Каждый конечный кандидат Target объявляет одну неделимую пару encoded-sRGB8
+source и straight alpha; Core не образует их декартовы комбинации. Occurrence
+моделирует композицию в объявленном encoded-sRGB8 профиле; это не наблюдение
+фактических пикселей host. Видимый результат становится производной
+поверхностью без повторной композиции.
 
 Code-owned adapter хранит sealed static compiler-verified IR; production
 исполняет его общим runtime evaluator-ом без startup-компиляции. На валидном

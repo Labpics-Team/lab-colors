@@ -68,3 +68,23 @@ fn staged_internal_failure_keeps_fact_and_contract_as_one_consistent_value() {
     let error = program::UpdateErrorV1::InternalInvariant { source };
     assert_eq!(error.kind(), program::UpdateErrorKindV1::InternalInvariant);
 }
+
+#[test]
+fn finite_paint_value_admission_is_typed_and_canonical() {
+    for opacity in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+        assert_eq!(
+            program::PaintValueV1::try_new(Srgb8::new([1, 2, 3]), opacity),
+            Err(program::PaintValueErrorV1::NonFiniteOpacity),
+        );
+    }
+    for opacity in [-f64::EPSILON, 1.0 + f64::EPSILON] {
+        assert_eq!(
+            program::PaintValueV1::try_new(Srgb8::new([1, 2, 3]), opacity),
+            Err(program::PaintValueErrorV1::OpacityOutsideUnitInterval),
+        );
+    }
+
+    let canonical = program::PaintValueV1::try_new(Srgb8::new([1, 2, 3]), -0.0).unwrap();
+    assert_eq!(canonical.source(), Srgb8::new([1, 2, 3]));
+    assert_eq!(canonical.opacity().to_bits(), 0.0_f64.to_bits());
+}

@@ -1,5 +1,8 @@
 use crate::Srgb8;
-use crate::appearance::{OccurrenceId, PaintId, SurfaceId, SurfaceInputPortId};
+use crate::appearance::{
+    EncodedPointPaintValueV1, OccurrenceId, OpacityInputId, PaintId, SurfaceId, SurfaceInputPortId,
+};
+use crate::composition::AdmittedOpacityV1;
 use crate::constraints::{
     ApplicableWcag22EvaluationErrorV1, CountingProgramWcag22Srgb8V1, ExactSrgb8IdentityV1,
     FinalRecheckMutantProgramEvaluatorV1, HardDecision, ProgramConstraintContentV1,
@@ -20,7 +23,7 @@ use crate::observation::{
 use crate::program_session::{
     CompositionProfile, ConstraintId, ConstraintInvocation, ConstraintSet,
     DeclaredJointSelectionV1, HardModeV1, JointCandidateStateV1, ObservationGroup, Occurrence,
-    OutputBinding, OutputSlotId, Paint, Program, ProgramCompileError,
+    OpacityInput, OutputBinding, OutputSlotId, Paint, Program, ProgramCompileError,
     ProgramConstraintEvaluatorSetV1, ProgramConstraintSubjectV1, ProgramSessionEvaluationError,
     ReportModeV1, Source, SourceId, Surface, Target, TargetCandidateChoiceV1, TargetCandidateId,
     TargetCandidateV1, TargetDomainV1, TargetId, checked_program_evaluation_cell_counts_for_test,
@@ -369,7 +372,17 @@ fn signal(value: u8) -> ColorSignal {
 }
 
 fn candidate(id: TargetCandidateId, value: u8) -> TargetCandidateV1 {
-    TargetCandidateV1::new(id, signal(value))
+    TargetCandidateV1::new(id, EncodedPointPaintValueV1::opaque(Srgb8::new([value; 3])))
+}
+
+fn candidate_with_opacity(id: TargetCandidateId, value: u8, opacity: f64) -> TargetCandidateV1 {
+    TargetCandidateV1::new(
+        id,
+        EncodedPointPaintValueV1::from_admitted(
+            Srgb8::new([value; 3]),
+            AdmittedOpacityV1::new(opacity).unwrap(),
+        ),
+    )
 }
 
 fn state(candidate: TargetCandidateId) -> JointCandidateStateV1 {
@@ -686,7 +699,7 @@ fn authored_finite_target_values_keep_only_opaque_identity_and_explicit_policy()
     assert_eq!(TARGET.value(), 50);
     assert_eq!(FIRST.value(), 60);
     assert_eq!(first.id(), FIRST);
-    assert_eq!(first.signal(), signal(0x66));
+    assert_eq!(first.value().source(), Srgb8::new([0x66; 3]));
 
     let target = target(vec![first]);
     assert_eq!(target.id(), TARGET);
@@ -2070,7 +2083,7 @@ fn final_recheck_violation_is_typed_and_retains_the_previous_certificate() {
 }
 
 #[test]
-fn duplicate_physical_candidate_signal_is_typed_and_declaration_order_invariant() {
+fn duplicate_physical_candidate_value_is_typed_and_declaration_order_invariant() {
     let compile = |candidates| match program(
         vec![ConstraintInvocation::hard(
             ConstraintId::new(1),
@@ -2083,19 +2096,144 @@ fn duplicate_physical_candidate_signal_is_typed_and_declaration_order_invariant(
     )
     .compile()
     {
-        Ok(_) => panic!("duplicate physical candidate signals must not compile"),
+        Ok(_) => panic!("duplicate physical candidate values must not compile"),
         Err(error) => error,
     };
     let canonical = compile(vec![candidate(FIRST, 0x66), candidate(SECOND, 0x66)]);
     let permuted = compile(vec![candidate(SECOND, 0x66), candidate(FIRST, 0x66)]);
-    let expected = ProgramCompileError::DuplicateTargetCandidateSignal {
+    let expected = ProgramCompileError::DuplicateTargetCandidateValue {
         target: TARGET,
         first: FIRST,
         duplicate: SECOND,
-        signal: signal(0x66),
+        value: EncodedPointPaintValueV1::opaque(Srgb8::new([0x66; 3])),
     };
     assert_eq!(canonical, expected);
     assert_eq!(permuted, expected);
+}
+
+#[test]
+fn equal_sources_with_distinct_opacity_are_distinct_admitted_candidates() {
+    let compiled = program(
+        vec![ConstraintInvocation::hard(
+            ConstraintId::new(1),
+            OCCURRENCE,
+            Wcag22CriterionV1::Sc143TextLargeScale,
+        )],
+        vec![],
+        vec![
+            candidate_with_opacity(FIRST, 0x66, 0.25),
+            candidate_with_opacity(SECOND, 0x66, 0.75),
+        ],
+        vec![state(FIRST), state(SECOND)],
+    )
+    .compile();
+
+    assert!(compiled.is_ok());
+}
+
+#[test]
+fn selected_atomic_candidate_preserves_opacity_through_fresh_recheck_and_output() {
+    let compiled = program(
+        vec![ConstraintInvocation::hard(
+            ConstraintId::new(1),
+            OCCURRENCE,
+            Wcag22CriterionV1::Sc143TextLargeScale,
+        )],
+        vec![],
+        vec![candidate_with_opacity(FIRST, 0xFF, 0.5)],
+        vec![state(FIRST)],
+    )
+    .compile()
+    .unwrap();
+    let mut session = compiled.instantiate(STREAM).unwrap();
+
+    let SessionState::Ready { current } = session.commit(update(1, 0x00)).unwrap() else {
+        panic!("half-white over black must pass the declared large-text contrast");
+    };
+    let output = &current.outputs()[0];
+    assert_eq!(output.source_signal(), signal(0xFF));
+    assert_eq!(output.paint().opacity_bits(), 0.5_f64.to_bits());
+}
+
+#[test]
+fn atomic_candidate_matches_fixed_opacity_topology_physics_but_not_identity() {
+    let finite = program(
+        vec![ConstraintInvocation::hard(
+            ConstraintId::new(1),
+            OCCURRENCE,
+            Wcag22CriterionV1::Sc143TextLargeScale,
+        )],
+        vec![],
+        vec![candidate_with_opacity(FIRST, 0xFF, 0.5)],
+        vec![state(FIRST)],
+    )
+    .compile()
+    .unwrap();
+
+    let opacity = OpacityInputId::new(90);
+    let solid = PaintId::new(91);
+    let translucent = PaintId::new(92);
+    let fixed = Program::new(
+        vec![Source::new(SOURCE, signal(0xFF))],
+        vec![Target::fixed(TARGET, SOURCE)],
+        ObservationGroup::new(GROUP, vec![SURFACE_PORT]),
+        vec![OpacityInput::new(opacity, 0.5)],
+        vec![
+            Paint::Solid {
+                id: solid,
+                target: TARGET,
+            },
+            Paint::Opacity {
+                id: translucent,
+                source: solid,
+                opacity,
+            },
+        ],
+        vec![Surface::Input {
+            id: BACKDROP,
+            input: SURFACE_PORT,
+        }],
+        vec![Occurrence::new(
+            OCCURRENCE,
+            translucent,
+            BACKDROP,
+            CompositionProfile::EncodedSrgb8SourceOverV1,
+            appearance_context(),
+        )],
+        ConstraintSet::new(
+            vec![ConstraintInvocation::hard(
+                ConstraintId::new(1),
+                OCCURRENCE,
+                Wcag22CriterionV1::Sc143TextLargeScale,
+            )],
+            vec![],
+        ),
+        vec![OutputBinding::new(OUTPUT, translucent)],
+        Wcag22Srgb8V1,
+    )
+    .compile()
+    .unwrap();
+
+    let mut finite_session = finite.instantiate(STREAM).unwrap();
+    let mut fixed_session = fixed.instantiate(STREAM).unwrap();
+    let SessionState::Ready {
+        current: finite_certificate,
+    } = finite_session.commit(update(1, 0x00)).unwrap()
+    else {
+        panic!("finite control must certify");
+    };
+    let SessionState::Ready {
+        current: fixed_certificate,
+    } = fixed_session.commit(update(1, 0x00)).unwrap()
+    else {
+        panic!("fixed control must certify");
+    };
+
+    let finite_paint = finite_certificate.outputs()[0].paint();
+    let fixed_paint = fixed_certificate.outputs()[0].paint();
+    assert_eq!(finite_paint.source(), fixed_paint.source());
+    assert_eq!(finite_paint.opacity_bits(), fixed_paint.opacity_bits());
+    assert_ne!(finite.content_identity(), fixed.content_identity());
 }
 
 #[test]
