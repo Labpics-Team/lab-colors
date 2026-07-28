@@ -597,10 +597,12 @@ fn visible_relation_checks_every_candidate_in_every_admitted_scenario() {
     let middle_paint = program::PaintIdV1::new(8);
     let surface_port = program::SurfaceInputPortIdV1::new(9);
     let backdrop = program::SurfaceIdV1::new(10);
-    let reference = program::OccurrenceIdV1::new(11);
-    let first_candidate = program::OccurrenceIdV1::new(12);
-    let second_candidate = program::OccurrenceIdV1::new(13);
-    let third_candidate = program::OccurrenceIdV1::new(14);
+    let leading_unconstrained_occurrence = program::OccurrenceIdV1::new(11);
+    let reference = program::OccurrenceIdV1::new(12);
+    let first_candidate = program::OccurrenceIdV1::new(13);
+    let interleaved_unconstrained_occurrence = program::OccurrenceIdV1::new(14);
+    let second_candidate = program::OccurrenceIdV1::new(15);
+    let third_candidate = program::OccurrenceIdV1::new(16);
     let relation = program::DirectedRelationV1::try_new(
         reference,
         vec![first_candidate, second_candidate, third_candidate],
@@ -618,21 +620,36 @@ fn visible_relation_checks_every_candidate_in_every_admitted_scenario() {
     draft.push_solid_paint(middle_paint, middle_target);
     draft.push_surface_input_port(surface_port);
     draft.push_input_surface(backdrop, surface_port);
+    // Unconstrained occurrences до reference и между candidates делают сдвиг
+    // full→compact неаффинным. Evidence ниже поэтому кусает как полный пропуск
+    // remap, так и prefix/ordinal mutant для reference и любого candidate.
+    draft.push_source_over_occurrence(
+        leading_unconstrained_occurrence,
+        middle_paint,
+        backdrop,
+        context,
+    );
     draft.push_source_over_occurrence(reference, half_white_paint, backdrop, context);
-    draft.push_source_over_occurrence(first_candidate, half_white_paint, backdrop, context);
+    draft.push_source_over_occurrence(first_candidate, middle_paint, backdrop, context);
+    draft.push_source_over_occurrence(
+        interleaved_unconstrained_occurrence,
+        half_white_paint,
+        backdrop,
+        context,
+    );
     draft.push_source_over_occurrence(second_candidate, middle_paint, backdrop, context);
-    draft.push_source_over_occurrence(third_candidate, middle_paint, backdrop, context);
-    draft.push_exact_visible_relation_hard(program::ConstraintIdV1::new(14), relation);
-    draft.push_output(program::OutputSlotIdV1::new(15), half_white_paint);
-    draft.push_output(program::OutputSlotIdV1::new(16), middle_paint);
+    draft.push_source_over_occurrence(third_candidate, half_white_paint, backdrop, context);
+    draft.push_exact_visible_relation_hard(program::ConstraintIdV1::new(22), relation);
+    draft.push_output(program::OutputSlotIdV1::new(17), half_white_paint);
+    draft.push_output(program::OutputSlotIdV1::new(18), middle_paint);
 
     let owner = draft.compile().unwrap();
-    let mut session = owner.instantiate(17).unwrap();
+    let mut session = owner.instantiate(19).unwrap();
     let black = [Srgb8::new([0x00; 3])];
     let white = [Srgb8::new([0xFF; 3])];
     let scenarios = [
-        program::ScenarioV1::new(18, &black),
-        program::ScenarioV1::new(19, &white),
+        program::ScenarioV1::new(20, &black),
+        program::ScenarioV1::new(21, &white),
     ];
     let evidence = owner
         .commit(
@@ -645,9 +662,9 @@ fn visible_relation_checks_every_candidate_in_every_admitted_scenario() {
         .unwrap();
 
     // На чёрном фоне half-white и opaque #808080 оба дают #808080. На белом
-    // первый candidate по-прежнему совпадает с reference (#FFFFFF), а два
-    // следующих остаются #808080. Два нарушения в одной клетке доказывают OR,
-    // а не parity-fold; пропуск любого измерения ложно выдал бы Verified.
+    // reference и последний candidate дают #FFFFFF, а первые два candidates —
+    // #808080. Вектор violation, violation, pass сохраняет два нарушения для
+    // XOR-mutant и одновременно кусает перестановку candidate measurements.
     assert_eq!(evidence.kind(), program::StateKindV1::Failed);
     let mut certificates = evidence.certificates();
     let Some(program::CertificateV1::Conflict(conflict)) = certificates.next() else {
@@ -712,5 +729,5 @@ fn visible_relation_checks_every_candidate_in_every_admitted_scenario() {
         );
     }
     assert_eq!(observed_member_count, 6);
-    assert_eq!(violating_coordinates, vec![(1, 1), (1, 2)]);
+    assert_eq!(violating_coordinates, vec![(1, 0), (1, 1)]);
 }

@@ -301,9 +301,10 @@ impl ProgramConstraintEvaluatorSetV1 for FinalViolationDiagnosticErrorEvaluatorS
     }
 }
 
-/// Один кандидат с тремя hard cells: search проходит полностью, fresh recheck
-/// сохраняет PASS, затем две VIOLATION. Паттерн делает смешанный терминальный
-/// отчёт наблюдаемым без изменения production evaluator-ов.
+/// Один кандидат с четырьмя hard cells и report-only poison: search проходит
+/// полностью, fresh recheck сохраняет PASS, затем три VIOLATION. Любой
+/// вызов report-only возвращает VIOLATION, поэтому exact count доказывает
+/// исключение диагностики из терминального hard-вердикта.
 #[derive(Debug, Clone, Default)]
 struct MultiViolationFinalRecheckEvaluatorSetV1 {
     calls: std::rc::Rc<std::cell::Cell<usize>>,
@@ -324,7 +325,7 @@ impl ProgramConstraintEvaluatorSetV1 for MultiViolationFinalRecheckEvaluatorSetV
     fn assess(
         &self,
         point: ProgramPointOccurrenceV1,
-        _invocation: Self::Invocation,
+        invocation: Self::Invocation,
     ) -> Result<
         HardDecision<Self::PassEvidence, Self::ViolationEvidence>,
         ProgramPointAssessmentErrorV1<Self::Error>,
@@ -332,10 +333,15 @@ impl ProgramConstraintEvaluatorSetV1 for MultiViolationFinalRecheckEvaluatorSetV
         let call = self.calls.get();
         self.calls.set(call + 1);
         let binding = point.binding();
+        if invocation == DIAGNOSTIC_INVOCATION {
+            return Ok(HardDecision::Violation(DiagnosticPoisonViolationV1(
+                binding,
+            )));
+        }
         Ok(match call {
-            0..=3 => HardDecision::Pass(DiagnosticPoisonPassV1(binding)),
-            4..=5 => HardDecision::Violation(DiagnosticPoisonViolationV1(binding)),
-            _ => unreachable!("fixture has exactly one three-cell search and recheck"),
+            0..=4 => HardDecision::Pass(DiagnosticPoisonPassV1(binding)),
+            5..=7 => HardDecision::Violation(DiagnosticPoisonViolationV1(binding)),
+            _ => unreachable!("fixture has exactly one four-cell search and recheck"),
         })
     }
 
@@ -2331,8 +2337,17 @@ fn final_recheck_reports_only_hard_violations_and_their_exact_count() {
                 OCCURRENCE,
                 Srgb8::new([3; 3]),
             ),
+            ConstraintInvocation::visible_unary_hard(
+                ConstraintId::new(4),
+                OCCURRENCE,
+                Srgb8::new([4; 3]),
+            ),
         ],
-        vec![],
+        vec![ConstraintInvocation::visible_unary_report_only(
+            ConstraintId::new(5),
+            OCCURRENCE,
+            DIAGNOSTIC_INVOCATION,
+        )],
         evaluator,
     )
     .with_joint_selection(DeclaredJointSelectionV1::new(vec![state(FIRST)]))
@@ -2341,7 +2356,7 @@ fn final_recheck_reports_only_hard_violations_and_their_exact_count() {
     let mut session = compiled.instantiate(STREAM).unwrap();
 
     let error = match session.commit(update(1, 0x00)) {
-        Ok(_) => panic!("two failures in the fresh recheck must reject the selected state"),
+        Ok(_) => panic!("three failures in the fresh recheck must reject the selected state"),
         Err(error) => error,
     };
     assert_eq!(
@@ -2354,13 +2369,13 @@ fn final_recheck_reports_only_hard_violations_and_their_exact_count() {
                 occurrence: OCCURRENCE,
                 context: appearance_context(),
             },
-            hard_violation_count: 2,
+            hard_violation_count: 3,
         }),
     );
     assert_eq!(
         probe.calls(),
-        6,
-        "search and fresh recheck must both be complete"
+        8,
+        "search and fresh hard recheck must be complete without invoking report-only poison"
     );
 }
 

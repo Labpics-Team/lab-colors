@@ -1464,13 +1464,12 @@ fn program_session_keeps_physical_evidence_separate_from_lazy_lcs_capability() {
     for required in [
         "targets.sort_unstable(); targets.dedup();",
         "CompiledProgramConstraintBodyV1::VisibleUnary { occurrence, .. } => { targets.push(*occurrence); }",
-        "CompiledProgramConstraintBodyV1::VisibleRelation",
         ".binary_search_by_key(occurrence, |binding| binding.occurrence)",
         "*occurrence_context_index = index;",
     ] {
         assert!(
             compaction.contains(required),
-            "cold compilation must deduplicate targets and remap every constraint; missing `{required}`",
+            "cold compilation must deduplicate targets and remap unary constraints; missing `{required}`",
         );
     }
 
