@@ -23,7 +23,8 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { adaptTheme } from "../adapt-theme.js";
 import * as ebg from "../effective-bg.js";
-import { __over, initSync } from "../pkg/labcolors.js";
+import { buildMissRing, rustCacheCapacity } from "../bench/misses.mjs";
+import { __over, initSync, LabColors } from "../pkg/labcolors.js";
 
 const { oklabLerp } = ebg;
 
@@ -230,4 +231,57 @@ test("compiled pair ≡ string path, 500 random pairs", { skip: !hasCompiled }, 
 test("compileLerpPair falls back (null) on unparseable endpoints", { skip: !hasCompiled }, () => {
   assert.equal(ebg.compileLerpPair("blah", "#112233"), null);
   assert.equal(ebg.compileLerpPair("#112233", "hsl(1,2%,3%)"), null);
+});
+
+test("the boundary benchmark measures the shipping mixed occurrence path", () => {
+  const bench = readFileSync(
+    new URL("../bench/wasm-boundary.bench.mjs", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(bench, /role\.kind === "translucent"/u);
+  assert.match(bench, /\b__over\(/u);
+  assert.match(bench, /recheckMixed/u);
+  assert.match(bench, /buildMissRing/u);
+  assert.match(bench, /rustCacheCapacity/u);
+  assert.doesNotMatch(bench, /true\s+~?28-role foreground set/u);
+});
+
+test("the cache-miss benchmark corpus is admissible and never masks conflict", () => {
+  const engineSource = readFileSync(
+    new URL("../../../crates/labcolors-wasm/src/engine.rs", import.meta.url),
+    "utf8",
+  );
+  const capacity = rustCacheCapacity(engineSource);
+  const solveBackground = "#3A3A3C";
+  const ring = buildMissRing(pack(solveBackground), capacity);
+
+  assert.equal(ring.length, capacity + 1);
+  assert.equal(new Set(ring).size, ring.length);
+  assert.equal(ring.includes(solveBackground), false);
+
+  const colors = new LabColors();
+  colors.loadConfig(
+    readFileSync(
+      new URL("../../../crates/labcolors-wasm/tests/data/labui.config.json", import.meta.url),
+      "utf8",
+    ),
+  );
+  for (const background of ring) colors.resolveTheme(background, "dark");
+
+  let conflict;
+  try {
+    colors.resolveTheme("#1099FF", "dark");
+  } catch (error) {
+    conflict = error;
+  }
+  assert.ok(conflict instanceof Error, "the historical arbitrary sweep witness must conflict");
+  assert.equal(conflict.code, "output_conflict");
+  assert.deepEqual(
+    conflict.conflicts.map(({ role, code }) => ({ role, code })),
+    [
+      { role: "border-warning-strong", code: "floor_unreachable" },
+      { role: "border-success-strong", code: "floor_unreachable" },
+    ],
+  );
 });

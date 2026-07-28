@@ -7,8 +7,10 @@
 // byte-identical.
 //
 // Fixture: the frozen canonical labui passport, resolved on a representative
-// background, giving the true ~28-role foreground set the runtime rechecks each
-// frame (the controller passes `colorRoles.map(r => r.hex)` to recheckContrast).
+// background. The shipping measurement uses every solid and translucent
+// occurrence: alpha sources are composited again on each current backdrop
+// before the packed contrast call, exactly like `adaptTheme`. The opaque-only
+// batch remains a lower-level capability measurement, not a controller claim.
 //
 // Reports median ns/call after warmup (medians resist GC/JIT jitter better than
 // means). With `--expose-gc` it also reports a heap-allocation proxy: bytes of JS
@@ -21,7 +23,8 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import { performance } from "node:perf_hooks";
-import { initSync, LabColors } from "../pkg/labcolors.js";
+import { buildMissRing, rustCacheCapacity } from "./misses.mjs";
+import { __over, initSync, LabColors } from "../pkg/labcolors.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 initSync({ module: readFileSync(resolve(here, "../pkg/labcolors_bg.wasm")) });
@@ -42,9 +45,16 @@ engine.loadConfig(CONFIG);
 const SOLVE_BG = "#3A3A3C"; // a representative surface (mid dark)
 const THEME = "dark";
 const resolved = engine.resolveTheme(SOLVE_BG, THEME);
-const FGS = Object.values(resolved.roles)
-  .filter((r) => r.kind === "color")
-  .map((r) => r.hex);
+const occurrenceDescriptors = Object.values(resolved.roles).flatMap((role) => {
+  if (role.kind === "color") return [{ sourceHex: role.hex, opacity: 1 }];
+  if (role.kind === "translucent") {
+    return [{ sourceHex: role.tintHex, opacity: role.alpha }];
+  }
+  return [];
+});
+const opaqueSourceHexes = occurrenceDescriptors
+  .filter(({ opacity }) => opacity === 1)
+  .map(({ sourceHex }) => sourceHex);
 
 // Three worst-case samples of a varying backdrop (what strict/gradient mode feeds).
 const SAMPLES = ["#38383A", "#404042", "#2E2E30"];
@@ -61,7 +71,11 @@ const pk = (hex) => {
   return Number.parseInt(six, 16) >>> 0;
 };
 const THEME_HANDLE = engine.themeHandle(THEME);
-const FGSW = Uint32Array.from(FGS, pk);
+const OCCURRENCES = occurrenceDescriptors.map(({ sourceHex, opacity }) => ({
+  sourceRgb24: pk(sourceHex),
+  opacity,
+}));
+const OPAQUE_FGSW = Uint32Array.from(opaqueSourceHexes, pk);
 const SAMPLESW = Uint32Array.from(SAMPLES, pk);
 
 // ── timing core ─────────────────────────────────────────────────────────────
@@ -107,43 +121,69 @@ function allocPerCall(fn, n) {
 
 // ── the calls under test ────────────────────────────────────────────────────
 
-// One frame with a solid background = ONE recheck of the whole fg set.
-const recheck1 = () => engine.recheckContrast(SAMPLESW[0], FGSW, THEME_HANDLE);
-// One frame with a 3-sample varying backdrop = THREE rechecks (worst-case loop).
-const recheck3 = () => {
+const materializeOccurrences = (backdrop, row) => {
+  for (let i = 0; i < OCCURRENCES.length; i++) {
+    const occurrence = OCCURRENCES[i];
+    row[i] = occurrence.opacity === 1
+      ? occurrence.sourceRgb24
+      : __over(occurrence.sourceRgb24, occurrence.opacity, backdrop);
+  }
+};
+
+// Shipping frame with one current backdrop: allocate one row, materialize every
+// occurrence on that backdrop, then cross the packed recheck boundary once.
+const recheckMixed1 = () => {
+  const row = new Uint32Array(OCCURRENCES.length);
+  materializeOccurrences(SAMPLESW[0], row);
+  return engine.recheckContrast(SAMPLESW[0], row, THEME_HANDLE);
+};
+// Shipping frame with a finite three-sample support. The row allocation is
+// shared across samples, while alpha occurrences are rematerialized per sample.
+const recheckMixed3 = () => {
+  const row = new Uint32Array(OCCURRENCES.length);
   let last;
-  for (let s = 0; s < 3; s++) last = engine.recheckContrast(SAMPLESW[s], FGSW, THEME_HANDLE);
+  for (let s = 0; s < SAMPLESW.length; s++) {
+    materializeOccurrences(SAMPLESW[s], row);
+    last = engine.recheckContrast(SAMPLESW[s], row, THEME_HANDLE);
+  }
   return last;
 };
-// The same 3-sample frame as `recheck3`, but batched into ONE call so each
-// foreground's CAM16 forward is computed once and shared across samples.
-// Byte-identical to `recheck3`; the public batch API the controller now uses.
-const recheckMulti3 = () => engine.recheckContrastMulti(SAMPLESW, FGSW, THEME_HANDLE);
+// Capability microbench: valid only for an all-opaque occurrence set, where one
+// foreground row is physically shared by every backdrop.
+const recheckOpaqueMulti3 = () =>
+  engine.recheckContrastMulti(SAMPLESW, OPAQUE_FGSW, THEME_HANDLE);
 // Re-solve, cache HIT (same bg repeatedly): pays only the JS-object projection.
 const resolveHit = () => engine.resolveTheme(SOLVE_BG, THEME);
-// Re-solve, cache MISS (distinct bg each call): full solve + projection. Sweep
-// 4096 distinct backgrounds so we never repeat within the cache window.
-let missTone = 0;
+// Re-solve, cache MISS (distinct bg each call): full solve + projection. A ring
+// one element larger than the Rust cache cannot reach a still-resident key.
+// Nearby encoded colours avoid mixing legitimate contract conflicts into a
+// successful-resolve latency sample; the test suite exhaustively admits them.
+const cacheCapacity = rustCacheCapacity(
+  readFileSync(resolve(here, "../../../crates/labcolors-wasm/src/engine.rs"), "utf8"),
+);
+const cacheMissBackgrounds = buildMissRing(pk(SOLVE_BG), cacheCapacity);
+let missIndex = 0;
 const resolveMiss = () => {
-  const t = missTone++ & 0xfff;
-  const hex = `#${(0x100000 + t * 17).toString(16).slice(-6).toUpperCase()}`;
-  return engine.resolveTheme(hex, THEME);
+  const background = cacheMissBackgrounds[missIndex++ % cacheMissBackgrounds.length];
+  return engine.resolveTheme(background, THEME);
 };
 
 // ── run ─────────────────────────────────────────────────────────────────────
 
 const gcOn = typeof globalThis.gc === "function";
 console.log(
-  `node ${process.version} | roles=${FGS.length} color fgs | theme=${THEME} | alloc-proxy=${gcOn}`,
+  `node ${process.version} | occurrences=${OCCURRENCES.length} ` +
+    `(opaque=${OPAQUE_FGSW.length}, alpha=${OCCURRENCES.length - OPAQUE_FGSW.length}) | ` +
+    `theme=${THEME} | alloc-proxy=${gcOn}`,
 );
 console.log("");
 console.log("call                              median ns   min ns   ns/role   alloc B/call");
 
 // [label, fn, batches, inner, allocN, perRoleDivisor]
 const plan = [
-  ["recheckContrast ×1 (28 roles)", recheck1, 40, 20000, 40000, FGS.length],
-  ["recheckContrast ×3 (28 roles)", recheck3, 40, 7000, 15000, FGS.length * 3],
-  ["recheckContrastMulti 3bg", recheckMulti3, 40, 7000, 15000, FGS.length * 3],
+  ["mixed occurrence ×1", recheckMixed1, 40, 10000, 20000, OCCURRENCES.length],
+  ["mixed occurrence ×3", recheckMixed3, 40, 3000, 7000, OCCURRENCES.length * 3],
+  ["opaque batch capability ×3", recheckOpaqueMulti3, 40, 7000, 15000, OPAQUE_FGSW.length * 3],
   ["resolveTheme cache-hit", resolveHit, 25, 4000, 8000, 0],
   ["resolveTheme cache-miss", resolveMiss, 20, 1500, 4000, 0],
 ];
@@ -170,7 +210,11 @@ function fnv1aF64(hash, arr) {
   return h >>> 0;
 }
 let fp = 0x811c9dc5;
-for (const s of SAMPLESW) fp = fnv1aF64(fp, engine.recheckContrast(s, FGSW, THEME_HANDLE));
+const fingerprintRow = new Uint32Array(OCCURRENCES.length);
+for (const sample of SAMPLESW) {
+  materializeOccurrences(sample, fingerprintRow);
+  fp = fnv1aF64(fp, engine.recheckContrast(sample, fingerprintRow, THEME_HANDLE));
+}
 // Include a resolveTheme vars fingerprint too (the projection is under test).
 const vfp = (() => {
   let h = 0x811c9dc5;
