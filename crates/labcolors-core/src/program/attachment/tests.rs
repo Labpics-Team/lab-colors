@@ -1325,6 +1325,57 @@ fn verified_snapshot_mints_attached_render_output_and_exact_confirm_only_for_ide
 }
 
 #[test]
+fn selected_nonopaque_finite_paint_reaches_sink_and_render_authority_atomically() {
+    const HALF_WHITE: TargetCandidateIdV1 = TargetCandidateIdV1::new(101);
+
+    let context = AppearanceContextV1::try_new(64.0, 0.2, SurroundV1::Average).unwrap();
+    let mut draft = DraftV1::new();
+    draft.push_source(SOURCE, Srgb8::new([0; 3]));
+    draft.push_finite_target(
+        TARGET,
+        SOURCE,
+        vec![TargetCandidateV1::new(
+            HALF_WHITE,
+            PaintValueV1::try_new(Srgb8::new([0xFF; 3]), 0.5).unwrap(),
+        )],
+    );
+    draft
+        .set_joint_selection(vec![JointStateV1::new(vec![JointChoiceV1::new(
+            TARGET, HALF_WHITE,
+        )])])
+        .unwrap();
+    draft.push_surface_input_port(INPUT);
+    draft.push_solid_paint(PAINT, TARGET);
+    draft.push_input_surface(INPUT_SURFACE, INPUT);
+    draft.push_source_over_occurrence(INNER, PAINT, INPUT_SURFACE, context);
+    draft.push_point_presentation_root(ROOT, INNER);
+    draft.push_point_presentation_target(ROOT, INNER);
+    draft.push_exact_hard(ConstraintIdV1::new(10), INNER, Srgb8::new([0x80; 3]));
+    draft.push_output(OUTPUT_A, PAINT);
+
+    let owner = draft.compile().unwrap();
+    let (sink, probe) = in_memory_point_sink(&[900]);
+    let emissions = [authored_emission(OUTPUT_A.value(), 900)];
+    let presentations = [authored_presentation(
+        OUTPUT_A.value(),
+        ROOT.value(),
+        INNER.value(),
+    )];
+    let mut attachment = owner.attach(71, &emissions, &presentations, sink).unwrap();
+    let black = [Srgb8::new([0; 3])];
+    let scenarios = [ScenarioV1::new(44, &black)];
+
+    let committed = attachment.update(observed(1, &scenarios)).unwrap();
+    let render = committed.render_outputs().next().unwrap().paint();
+    let snapshot = probe.snapshot();
+
+    assert_eq!(snapshot.len(), 1);
+    assert_eq!(snapshot[0].paint(), render);
+    assert_eq!(render.source(), Srgb8::new([0xFF; 3]));
+    assert_eq!(render.opacity_bits(), 0.5_f64.to_bits());
+}
+
+#[test]
 fn one_emission_fans_out_to_every_distinct_attached_presentation() {
     let owner = owner(
         Srgb8::new([21, 22, 23]),
