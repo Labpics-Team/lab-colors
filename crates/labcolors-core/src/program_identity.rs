@@ -8,16 +8,12 @@
 use super::*;
 
 const DOMAIN_V6: &[u8] = b"labcolors.program-content-identity.v6\0";
-// Максимальный V6-цвет принадлежит ограничению clean-set: тег вершины,
-// семейство и полный дайджест выпуска. Явная граница устраняет аллокацию на
-// каждую вершину и требует пересмотра при расширении схемы вместо скрытого
-// лимита времени исполнения.
+// V6 резервирует фиксированную protocol boundary под два тега и полный
+// clean-set release digest. Это не ручный список размеров остальных вариантов:
+// каждый writer использует проверяемый push и отвергает расширение схемы вместо
+// усечения данных или аллокации на вершину.
 const CLEAN_SET_COLOR_BYTES_V1: usize = 1 + 1 + 32;
-const MAX_TYPED_CONSTRAINT_COLOR_BYTES_V6: usize = 1 + 1 + 3 + 3;
-const COLOR_CAPACITY: usize = {
-    assert!(CLEAN_SET_COLOR_BYTES_V1 >= MAX_TYPED_CONSTRAINT_COLOR_BYTES_V6);
-    CLEAN_SET_COLOR_BYTES_V1
-};
+const COLOR_CAPACITY: usize = CLEAN_SET_COLOR_BYTES_V1;
 
 mod release_tag {
     pub(super) const PROGRAM_SCHEMA_V6: u8 = 6;
@@ -623,6 +619,15 @@ fn declared_srgb8_clean_set_constraint_color(
     )
 }
 
+#[cfg(test)]
+fn clean_set_final_recheck_mutant_release_v1() -> [u8; 32] {
+    let mut release = crate::clean_set::EXACT_NOMINAL_SRGB8_CLEAN_SET_RELEASE_SHA256_V1;
+    // Инъекция меняет один заранее объявленный бит: тест доказывает, что
+    // final-recheck связывает новый release, а не случайно другой дайджест.
+    release[0] ^= 1;
+    release
+}
+
 fn declared_srgb8_clean_set_constraint_color_for_release(
     mode_tag: u8,
     release: [u8; 32],
@@ -689,9 +694,10 @@ where
         }
         #[cfg(test)]
         ProgramConstraintBodyV1::DeclaredSrgb8CleanSetFinalRecheckMutant { .. } => {
-            let mut release = crate::clean_set::EXACT_NOMINAL_SRGB8_CLEAN_SET_RELEASE_SHA256_V1;
-            release[0] ^= 1;
-            declared_srgb8_clean_set_constraint_color_for_release(mode_tag, release)?
+            declared_srgb8_clean_set_constraint_color_for_release(
+                mode_tag,
+                clean_set_final_recheck_mutant_release_v1(),
+            )?
         }
     };
     let vertex = graph.add_member(color)?;
@@ -1664,6 +1670,15 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn clean_set_final_recheck_mutant_release_changes_exactly_one_declared_bit() {
+        let source = crate::clean_set::EXACT_NOMINAL_SRGB8_CLEAN_SET_RELEASE_SHA256_V1;
+        let mutant = clean_set_final_recheck_mutant_release_v1();
+
+        assert_eq!(mutant[0], source[0] ^ 1);
+        assert_eq!(&mutant[1..], &source[1..]);
+    }
 
     #[test]
     fn declared_clean_set_constraint_color_binds_every_release_digest_byte() {
