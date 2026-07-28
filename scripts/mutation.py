@@ -261,7 +261,7 @@ def _validate_mutant(value: Any, label: str, repo_root: Path | None = None) -> d
         raise ContractError(f"unsafe mutant file: {item['file']!r}")
     if repo_root is not None:
         try:
-            repo_root = repo_root.resolve()
+            repo_root = repo_root.resolve(strict=True)
         except (OSError, RuntimeError) as error:
             raise ContractError(f"cannot canonicalize mutant repo root: {error}") from error
         source = repo_root.joinpath(*relative.parts)

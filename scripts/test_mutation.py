@@ -1422,13 +1422,25 @@ class MutationTruthTest(unittest.TestCase):
         self.assertIn("report-only", help_text)
 
     def test_json_boundaries_type_runtime_failures_without_hiding_bugs(self) -> None:
-        deep_json = self.root / "deep.json"
-        deep_json.write_text("[" * 1100 + "]" * 1100, encoding="utf-8")
-        with self.assertRaisesRegex(mutation.ContractError, "invalid JSON"):
-            mutation.read_json(deep_json)
+        json_input = self.root / "runtime-failure.json"
+        json_input.write_text("[]", encoding="utf-8")
+        with (
+            mock.patch.object(
+                mutation.json,
+                "loads",
+                side_effect=RecursionError("hostile nesting"),
+            ),
+            self.assertRaisesRegex(mutation.ContractError, "invalid JSON"),
+        ):
+            mutation.read_json(json_input)
         with (
             mock.patch.dict(os.environ, {"CARGO": "/usr/bin/true"}),
-            mock.patch.object(mutation, "_run_bytes", return_value=deep_json.read_bytes()),
+            mock.patch.object(mutation, "_run_bytes", return_value=b"[]"),
+            mock.patch.object(
+                mutation.json,
+                "loads",
+                side_effect=RecursionError("hostile nesting"),
+            ),
             self.assertRaisesRegex(
                 mutation.ContractError,
                 "cargo metadata is invalid JSON",
@@ -1440,11 +1452,16 @@ class MutationTruthTest(unittest.TestCase):
 
         parser = mock.Mock()
         arguments = mock.Mock()
-        arguments.handler.side_effect = lambda _: mutation.read_json(deep_json)
+        arguments.handler.side_effect = lambda _: mutation.read_json(json_input)
         parser.parse_args.return_value = arguments
         stderr = io.StringIO()
         with (
             mock.patch.object(mutation, "build_parser", return_value=parser),
+            mock.patch.object(
+                mutation.json,
+                "loads",
+                side_effect=RecursionError("hostile nesting"),
+            ),
             contextlib.redirect_stderr(stderr),
         ):
             self.assertEqual(mutation.main([]), 2)
