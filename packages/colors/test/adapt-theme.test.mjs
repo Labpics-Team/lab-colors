@@ -3997,40 +3997,6 @@ test("alpha one is the opaque identity and retains the packed batch path", () =>
   ctrl.stop();
 });
 
-test("alpha zero is the transparent identity and rechecks the current backdrop", () => {
-  const el = fakeElement();
-  let bg = "#FFFFFF";
-  const seen = [];
-  const colors = {
-    resolveTheme: () => translucentOnly({
-      alpha: 0,
-      compositeHex: "#FFFFFF",
-      compositeLc: 0,
-    }),
-    recheckContrast(backdrop, foregrounds) {
-      seen.push({ backdrop, foregrounds: [...foregrounds] });
-      return [...foregrounds].flatMap(() => [0, 10]);
-    },
-  };
-  const ctrl = adaptTheme(el, {
-    colors,
-    theme: "light",
-    background: () => bg,
-    target: el,
-    now: () => 1,
-    win: {},
-  });
-
-  bg = "#123456";
-  ctrl.tick();
-
-  assert.deepEqual(seen.at(-1), {
-    backdrop: pk("#123456"),
-    foregrounds: [pk("#123456")],
-  });
-  ctrl.stop();
-});
-
 test("malformed translucent occurrence fails before the first DOM mutation", () => {
   const el = fakeElement();
   assert.throws(
@@ -4066,6 +4032,23 @@ test("malformed translucent occurrence fails before the first DOM mutation", () 
     /requires numeric opacity/u,
   );
   assert.deepEqual(el.mutations, []);
+
+  assert.throws(
+    () =>
+      adaptTheme(el, {
+        colors: {
+          resolveTheme: () => translucentOnly({ alpha: 1.1 }),
+          recheckContrast: () => [],
+        },
+        theme: "light",
+        background: "#FFFFFF",
+        target: el,
+        now: () => 1,
+        win: {},
+      }),
+    /opacity in \(0,1\]/u,
+  );
+  assert.deepEqual(el.mutations, []);
 });
 
 test("malformed translucent re-solve preserves the committed DOM and state", () => {
@@ -4079,7 +4062,7 @@ test("malformed translucent re-solve preserves the committed DOM and state", () 
       resolveCount++;
       return resolveCount === 1
         ? translucentOnly()
-        : translucentOnly({ alpha: -0.1 });
+        : translucentOnly({ alpha: 0 });
     },
     recheckContrast(_backdrop, foregrounds) {
       return [...foregrounds].flatMap(() => [breach ? 0 : 100, 10]);
@@ -4102,7 +4085,7 @@ test("malformed translucent re-solve preserves the committed DOM and state", () 
   breach = true;
   bg = "#000000";
   now++;
-  assert.throws(() => ctrl.tick(), /opacity in \[0,1\]/u);
+  assert.throws(() => ctrl.tick(), /opacity in \(0,1\]/u);
   assert.deepEqual(ctrl.current(), committedCurrent);
   assert.deepEqual([...el.props], committedProps);
   assert.equal(el.mutations.length, committedMutationCount);
