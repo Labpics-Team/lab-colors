@@ -611,9 +611,9 @@ export function adaptTheme(element, options) {
           `adaptTheme: ${role.kind} role '${key}' requires numeric opacity`,
         );
       }
-      if (!Number.isFinite(opacity) || opacity <= 0 || opacity > 1) {
+      if (!Number.isFinite(opacity) || opacity < 0 || opacity > 1) {
         throw new RangeError(
-          `adaptTheme: ${role.kind} role '${key}' requires opacity in (0,1]`,
+          `adaptTheme: ${role.kind} role '${key}' requires opacity in [0,1]`,
         );
       }
       nextRecheckOccurrences.push({
