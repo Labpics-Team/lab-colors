@@ -1189,7 +1189,7 @@ fn finite_program(reverse_order: bool) -> CoreProgramV1 {
     finite_program_with_opacity(reverse_order, 1.0)
 }
 
-fn finite_program_with_swapped_unbound_sources(swap_source_signals: bool) -> CoreProgramV1 {
+fn finite_program_with_permuted_source_colors(swap_source_signals: bool) -> CoreProgramV1 {
     let sources = [SourceId::new(1), SourceId::new(2)];
     let target = TargetId::new(3);
     let first = TargetCandidateId::new(4);
@@ -1248,11 +1248,15 @@ fn finite_program_with_swapped_unbound_sources(swap_source_signals: bool) -> Cor
 }
 
 #[test]
-fn finite_target_dead_source_cannot_change_physical_content_identity() {
-    let first = finite_program_with_swapped_unbound_sources(false)
+fn finite_target_has_no_source_incidence_in_content_identity() {
+    // Оба Source намеренно остаются членами Program: перестановка их цветов
+    // сохраняет мультимножество вершин, но меняет цвет вершины, которую выделило
+    // бы запрещённое finite Target→Source ребро. Равенство тем самым доказывает
+    // отсутствие ребра, не заявляя, что прочие декларации исчезают из identity.
+    let first = finite_program_with_permuted_source_colors(false)
         .compile()
         .unwrap();
-    let second = finite_program_with_swapped_unbound_sources(true)
+    let second = finite_program_with_permuted_source_colors(true)
         .compile()
         .unwrap();
 
