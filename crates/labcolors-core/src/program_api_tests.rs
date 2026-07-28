@@ -4,6 +4,10 @@ use crate::program_boundary_tests::CommitProgramUpdateForTest as _;
 use crate::{Srgb8, program};
 use proptest::prelude::*;
 
+// Степень двойки даёт точную бинарную сетку с обеими публичными границами
+// интервала, не смешивая проверяемое свойство с десятичным округлением.
+const OPACITY_GRID_DENOMINATOR: u16 = 1024;
+
 #[test]
 fn staged_program_api_is_module_qualified_without_transport_prefixes() {
     let source = program::SourceIdV1::new(1);
@@ -94,9 +98,9 @@ proptest! {
     #[test]
     fn admitted_finite_paint_value_round_trips_source_and_unit_opacity(
         source in any::<[u8; 3]>(),
-        opacity_numerator in 0_u16..=1024,
+        opacity_numerator in 0_u16..=OPACITY_GRID_DENOMINATOR,
     ) {
-        let opacity = f64::from(opacity_numerator) / 1024.0;
+        let opacity = f64::from(opacity_numerator) / f64::from(OPACITY_GRID_DENOMINATOR);
         let value = program::PaintValueV1::try_new(Srgb8::new(source), opacity).unwrap();
 
         prop_assert_eq!(value.source(), Srgb8::new(source));

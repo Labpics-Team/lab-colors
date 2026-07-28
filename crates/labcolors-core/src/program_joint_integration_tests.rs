@@ -2113,22 +2113,36 @@ fn duplicate_physical_candidate_value_is_typed_and_declaration_order_invariant()
 
 #[test]
 fn equal_sources_with_distinct_opacity_are_distinct_admitted_candidates() {
-    let compiled = program(
-        vec![ConstraintInvocation::hard(
-            ConstraintId::new(1),
-            OCCURRENCE,
-            Wcag22CriterionV1::Sc143TextLargeScale,
-        )],
-        vec![],
-        vec![
-            candidate_with_opacity(FIRST, 0x66, 0.25),
-            candidate_with_opacity(SECOND, 0x66, 0.75),
-        ],
-        vec![state(FIRST), state(SECOND)],
-    )
-    .compile();
+    // Диагностическая проверка удерживает выход в конусе оценки, но не выбирает
+    // за policy; обратный порядок поэтому исполняет каждое атомарное значение и
+    // кусает потерю альфы как на admission-, так и на output-пути.
+    for (selected, alternate, expected_opacity) in
+        [(FIRST, SECOND, 0.25_f64), (SECOND, FIRST, 0.75_f64)]
+    {
+        let compiled = program(
+            vec![],
+            vec![ConstraintInvocation::report_only(
+                ConstraintId::new(1),
+                OCCURRENCE,
+                Wcag22CriterionV1::Sc143TextLargeScale,
+            )],
+            vec![
+                candidate_with_opacity(FIRST, 0x66, 0.25),
+                candidate_with_opacity(SECOND, 0x66, 0.75),
+            ],
+            vec![state(selected), state(alternate)],
+        )
+        .compile()
+        .unwrap();
+        let mut session = compiled.instantiate(STREAM).unwrap();
 
-    assert!(compiled.is_ok());
+        let SessionState::Ready { current } = session.commit(update(1, 0x00)).unwrap() else {
+            panic!("report-only evidence must not gate the selected atomic candidate");
+        };
+        let output = &current.outputs()[0];
+        assert_eq!(output.source_signal(), signal(0x66));
+        assert_eq!(output.paint().opacity_bits(), expected_opacity.to_bits());
+    }
 }
 
 #[test]
