@@ -1,16 +1,11 @@
-# cargo-mutants — конфиг мутационного тестирования (Класс Д Фаулера: тест тестов).
+# cargo-mutants — выбранный correctness-срез для scheduled mutation evidence.
 #
-# КАДЕНС: по расписанию, НЕ per-PR (мутация дорога — каждый мутант = полный прогон
-# набора). Запускается ночным workflow `.github/workflows/mutation.yml`.
+# Запуск по расписанию разбивает ровно одну обнаруженную популяцию на 32
+# round-robin shard. Report-only PR1 доказывает полноту измерения, но ещё не
+# превращает первый фактический результат в quality threshold.
 #
-# СКОУП: детерминированное ядро математики и границы correctness-evidence:
-# exact alpha/composite, typed numerical decisions, observation admission и
-# revision-bound recheck. Гигантские config.rs/solve.rs/semantic.rs не мутируются
-# по умолчанию (часы прогона, малая маржинальная ценность). Полный workspace-прогон
-# — отдельный ручной/расширенный запуск (см. workflow).
-#
-# ЧТО ПРОВЕРЯЕТ: что property/golden/characterization тесты РЕАЛЬНО кусаются —
-# выживший мутант = молчаливая дыра в наборе (coverage=пол, mutation=правда).
+# Список является явным выбранным срезом, а не «полным workspace». Расширение
+# скоупа меняет discovered-population digest и потому не может пройти незаметно.
 examine_globs = [
     "crates/labcolors-core/src/alpha.rs",
     "crates/labcolors-core/src/analog.rs",
@@ -23,7 +18,8 @@ examine_globs = [
     "crates/labcolors-core/src/numerical_plan.rs",
     "crates/labcolors-core/src/numerics.rs",
     "crates/labcolors-core/src/observation.rs",
-    "crates/labcolors-core/src/recheck.rs",
+    "crates/labcolors-core/src/point_support.rs",
+    "crates/labcolors-core/src/program_identity.rs",
     "crates/labcolors-core/src/srgb8.rs",
     "crates/labcolors-core/src/wcag22.rs",
     "crates/labcolors-core/src/wcag22_evidence.rs",
