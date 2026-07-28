@@ -69,6 +69,15 @@ class ContractError(RuntimeError):
     """Артефакты не доказывают полноту scheduled-прогона."""
 
 
+def _resolve_path(path: Path, label: str, *, strict: bool = False) -> Path:
+    # pathlib отделяет symlink-loop от обычных IO-сбоев через RuntimeError;
+    # для внешнего пути оба исхода принадлежат одному типизированному контракту.
+    try:
+        return path.resolve(strict=strict)
+    except (OSError, RuntimeError) as error:
+        raise ContractError(f"cannot canonicalize {label}: {error}") from error
+
+
 def _reject_constant(value: str) -> None:
     raise ContractError(f"invalid JSON numeric constant: {value}")
 
@@ -150,11 +159,11 @@ def write_json(path: Path, value: Any) -> None:
 def _direct_regular_directory(parent: Path, name: str, label: str) -> Path:
     if parent.is_symlink() or not parent.is_dir():
         raise ContractError(f"{label} parent is missing or is a symlink")
-    root = parent.resolve()
+    root = _resolve_path(parent, f"{label} parent")
     path = parent / name
     if path.is_symlink() or not path.is_dir():
         raise ContractError(f"{label} is missing or is not a regular directory")
-    resolved = path.resolve()
+    resolved = _resolve_path(path, label)
     if resolved.parent != root:
         raise ContractError(f"{label} escapes its declared parent")
     return resolved
@@ -163,11 +172,11 @@ def _direct_regular_directory(parent: Path, name: str, label: str) -> Path:
 def _direct_regular_file(parent: Path, name: str, label: str) -> Path:
     if parent.is_symlink() or not parent.is_dir():
         raise ContractError(f"{label} parent is missing or is a symlink")
-    root = parent.resolve()
+    root = _resolve_path(parent, f"{label} parent")
     path = parent / name
     if path.is_symlink() or not path.is_file():
         raise ContractError(f"{label} is missing or is not a regular file")
-    resolved = path.resolve()
+    resolved = _resolve_path(path, label)
     if resolved.parent != root:
         raise ContractError(f"{label} escapes its declared parent")
     return resolved
@@ -176,11 +185,11 @@ def _direct_regular_file(parent: Path, name: str, label: str) -> Path:
 def _safe_json_output(parent: Path, name: str, label: str) -> Path:
     if parent.is_symlink() or not parent.is_dir():
         raise ContractError(f"{label} parent is missing or is a symlink")
-    root = parent.resolve()
+    root = _resolve_path(parent, f"{label} parent")
     path = parent / name
     if path.is_symlink() or (path.exists() and not path.is_file()):
         raise ContractError(f"{label} output is a symlink or is not a regular file")
-    if path.resolve(strict=False).parent != root:
+    if _resolve_path(path, f"{label} output").parent != root:
         raise ContractError(f"{label} output escapes its declared parent")
     return path
 
@@ -267,7 +276,7 @@ def _validate_mutant(value: Any, label: str, repo_root: Path | None = None) -> d
         source = repo_root.joinpath(*relative.parts)
         try:
             resolved_source = source.resolve(strict=True)
-        except OSError as error:
+        except (OSError, RuntimeError) as error:
             raise ContractError(
                 f"mutant source does not exist as a regular file: {item['file']}"
             ) from error
@@ -298,12 +307,21 @@ def _validate_mutant(value: Any, label: str, repo_root: Path | None = None) -> d
     return item
 
 
-def _run_bytes(argv: list[str], *, cwd: Path, label: str) -> bytes:
+def _run_bytes(
+    argv: list[str],
+    *,
+    cwd: Path,
+    label: str,
+    input_bytes: bytes | None = None,
+    environment: dict[str, str] | None = None,
+) -> bytes:
     try:
         result = subprocess.run(
             argv,
             cwd=cwd,
             check=False,
+            input=input_bytes,
+            env=environment,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
         )
@@ -315,8 +333,45 @@ def _run_bytes(argv: list[str], *, cwd: Path, label: str) -> bytes:
     return result.stdout
 
 
+def _git_authority_environment() -> dict[str, str]:
+    # Git permits environment variables to replace its repository, index,
+    # objects and config. Evidence authority must be derived from cwd plus the
+    # explicit revision only, never from mutable runner state.
+    environment = {
+        key: value for key, value in os.environ.items() if not key.startswith("GIT_")
+    }
+    environment.update(
+        {
+            "GIT_NO_REPLACE_OBJECTS": "1",
+            "GIT_CONFIG_NOSYSTEM": "1",
+            "GIT_CONFIG_GLOBAL": os.devnull,
+            "GIT_CONFIG_SYSTEM": os.devnull,
+            "GIT_TERMINAL_PROMPT": "0",
+            "GIT_OPTIONAL_LOCKS": "0",
+            "LC_ALL": "C",
+        }
+    )
+    return environment
+
+
+def _run_git_bytes(
+    repo_root: Path,
+    arguments: list[str],
+    label: str,
+    *,
+    input_bytes: bytes | None = None,
+) -> bytes:
+    return _run_bytes(
+        ["git", "--no-replace-objects", *arguments],
+        cwd=repo_root,
+        label=label,
+        input_bytes=input_bytes,
+        environment=_git_authority_environment(),
+    )
+
+
 def _git_output(repo_root: Path, arguments: list[str], label: str) -> str:
-    raw = _run_bytes(["git", *arguments], cwd=repo_root, label=label)
+    raw = _run_git_bytes(repo_root, arguments, label)
     try:
         return raw.decode("utf-8").strip()
     except UnicodeDecodeError as error:
@@ -324,10 +379,10 @@ def _git_output(repo_root: Path, arguments: list[str], label: str) -> str:
 
 
 def _reject_forbidden_index_flags(repo_root: Path) -> None:
-    raw = _run_bytes(
-        ["git", "ls-files", "-v", "-z"],
-        cwd=repo_root,
-        label="Git index flag inventory",
+    raw = _run_git_bytes(
+        repo_root,
+        ["ls-files", "-v", "-z"],
+        "Git index flag inventory",
     )
     for record in raw.split(b"\0"):
         if not record:
@@ -343,23 +398,48 @@ def _reject_forbidden_index_flags(repo_root: Path) -> None:
             )
 
 
+def _reject_replace_refs(repo_root: Path) -> None:
+    refs = _git_output(
+        repo_root,
+        ["for-each-ref", "--format=%(refname)", "refs/replace/"],
+        "Git replace ref inventory",
+    )
+    if refs:
+        raise ContractError("Git replace ref is forbidden in the evidence worktree")
+
+
 def _tracked_git_tree(repo_root: Path, revision: str) -> str:
-    repo_root = repo_root.resolve()
+    repo_root = _resolve_path(repo_root, "Git worktree root")
     if not repo_root.is_dir():
         raise ContractError("repo root is not a directory")
-    top_level = Path(
-        _git_output(repo_root, ["rev-parse", "--show-toplevel"], "git top-level lookup")
-    ).resolve()
+    top_level = _resolve_path(
+        Path(
+            _git_output(
+                repo_root,
+                ["rev-parse", "--show-toplevel"],
+                "git top-level lookup",
+            )
+        ),
+        "Git top-level",
+    )
     if top_level != repo_root:
         raise ContractError("repo root is not the exact Git worktree root")
+    _reject_replace_refs(repo_root)
+    object_format = _git_output(
+        repo_root,
+        ["rev-parse", "--show-object-format"],
+        "Git object format lookup",
+    )
+    if object_format != "sha1":
+        raise ContractError(f"unsupported Git object format: {object_format!r}")
     head = _git_output(repo_root, ["rev-parse", "--verify", "HEAD"], "git HEAD lookup")
     if head != revision:
         raise ContractError(f"Git HEAD mismatch: expected {revision}, got {head}")
     _reject_forbidden_index_flags(repo_root)
-    tracked_status = _run_bytes(
-        ["git", "status", "--porcelain=v1", "--untracked-files=no"],
-        cwd=repo_root,
-        label="tracked worktree status",
+    tracked_status = _run_git_bytes(
+        repo_root,
+        ["status", "--porcelain=v1", "--untracked-files=no"],
+        "tracked worktree status",
     )
     if tracked_status:
         raise ContractError("tracked worktree is dirty; execution source is not exact")
@@ -383,29 +463,19 @@ def _git_blob_bytes(repo_root: Path, object_ids: Iterable[str]) -> dict[str, byt
     ordered = list(dict.fromkeys(object_ids))
     if not ordered:
         return {}
-    try:
-        result = subprocess.run(
-            ["git", "cat-file", "--batch"],
-            cwd=repo_root,
-            check=False,
-            input=("\n".join(ordered) + "\n").encode("ascii"),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-        )
-    except OSError as error:
-        raise ContractError(f"cannot read committed execution inputs: {error}") from error
-    if result.returncode != 0:
-        detail = result.stderr.decode("utf-8", errors="replace").strip()
-        raise ContractError(
-            f"committed execution input lookup failed with exit {result.returncode}: {detail}"
-        )
+    stream = _run_git_bytes(
+        repo_root,
+        ["cat-file", "--batch"],
+        "committed execution input lookup",
+        input_bytes=("\n".join(ordered) + "\n").encode("ascii"),
+    )
     cursor = 0
     blobs: dict[str, bytes] = {}
     for expected_oid in ordered:
-        newline = result.stdout.find(b"\n", cursor)
+        newline = stream.find(b"\n", cursor)
         if newline < 0:
             raise ContractError("committed execution input stream ended before its header")
-        header = result.stdout[cursor:newline].split(b" ")
+        header = stream[cursor:newline].split(b" ")
         if len(header) != 3 or header[1] != b"blob":
             raise ContractError("committed execution input is not a Git blob")
         try:
@@ -417,13 +487,23 @@ def _git_blob_bytes(repo_root: Path, object_ids: Iterable[str]) -> dict[str, byt
         end = cursor + size
         if (
             observed_oid != expected_oid
-            or end >= len(result.stdout)
-            or result.stdout[end : end + 1] != b"\n"
+            or end >= len(stream)
+            or stream[end : end + 1] != b"\n"
         ):
             raise ContractError("committed execution input stream is inconsistent")
-        blobs[expected_oid] = result.stdout[cursor:end]
+        payload = stream[cursor:end]
+        # A replace ref can preserve cat-file's requested header while serving
+        # replacement bytes. Git's SHA-1 blob law independently binds payload
+        # length and content; SHA-1 is identity here, not a security primitive.
+        identity = hashlib.sha1(
+            b"blob " + str(len(payload)).encode("ascii") + b"\0" + payload,
+            usedforsecurity=False,
+        ).hexdigest()
+        if identity != expected_oid:
+            raise ContractError("committed execution input object ID mismatch")
+        blobs[expected_oid] = payload
         cursor = end + 1
-    if cursor != len(result.stdout):
+    if cursor != len(stream):
         raise ContractError("committed execution input stream has trailing bytes")
     return blobs
 
@@ -432,12 +512,12 @@ def _build_execution_source_inventory(
     repo_root: Path,
     revision: str,
 ) -> tuple[dict[str, Any], dict[str, str], dict[str, bytes]]:
-    repo_root = repo_root.resolve()
+    repo_root = _resolve_path(repo_root, "Git worktree root")
     git_tree = _tracked_git_tree(repo_root, revision)
-    raw = _run_bytes(
-        ["git", "ls-tree", "-rz", "--full-tree", "-r", revision],
-        cwd=repo_root,
-        label="committed execution input inventory",
+    raw = _run_git_bytes(
+        repo_root,
+        ["ls-tree", "-rz", "--full-tree", "-r", revision],
+        "committed execution input inventory",
     )
     parsed: list[tuple[str, str, str]] = []
     seen_paths: set[str] = set()
@@ -564,7 +644,7 @@ def _assert_directory_fds_disjoint(repo_fd: int, source_fd: int) -> None:
 def _open_repo_fd(repo_root: Path) -> tuple[Path, int]:
     descriptor = -1
     try:
-        canonical = repo_root.resolve(strict=True)
+        canonical = _resolve_path(repo_root, "Git worktree root", strict=True)
         descriptor = os.open(canonical, _DIRECTORY_OPEN_FLAGS)
         path_identity = _file_identity(os.stat(canonical, follow_symlinks=False))
         if _file_identity(os.fstat(descriptor)) != path_identity:
@@ -817,9 +897,9 @@ def _verify_materialized_execution_source(
 def validate_execution_layout(source_root: Path, external_paths: dict[str, Path]) -> None:
     if source_root.is_symlink() or not source_root.is_dir():
         raise ContractError("execution source root is missing or is a symlink")
-    root = source_root.resolve()
+    root = _resolve_path(source_root, "execution source root")
     for label, raw_path in external_paths.items():
-        path = Path(raw_path).resolve(strict=False)
+        path = _resolve_path(Path(raw_path), label)
         if path == root or path in root.parents or root in path.parents:
             raise ContractError(f"{label} must not overlap execution source root")
 
@@ -1136,7 +1216,7 @@ def build_manifest(
     run_attempt: int,
     source_root: Path | None = None,
 ) -> dict[str, Any]:
-    repo_root = repo_root.resolve()
+    repo_root = _resolve_path(repo_root, "Git worktree root")
     if not REPOSITORY.fullmatch(repository):
         raise ContractError(f"invalid repository identity: {repository!r}")
     if not HEX40.fullmatch(revision):
@@ -1149,8 +1229,12 @@ def build_manifest(
             execution_source,
             repo_root=repo_root,
         )
-    config_path = config_path.resolve()
-    config_root = repo_root if source_root is None else source_root.resolve()
+    config_path = _resolve_path(config_path, "mutation config")
+    config_root = (
+        repo_root
+        if source_root is None
+        else _resolve_path(source_root, "execution source root")
+    )
     if config_path != config_root / CONFIG_RELPATH or not config_path.is_file():
         raise ContractError(f"config must be the regular file {CONFIG_RELPATH}")
     run_id = _positive_int(run_id, "run_id")
@@ -1388,7 +1472,7 @@ def _validate_checkout(
     observed_revision: str,
     source_root: Path | None = None,
 ) -> None:
-    repo_root = repo_root.resolve()
+    repo_root = _resolve_path(repo_root, "Git worktree root")
     if observed_revision != manifest["revision"]:
         raise ContractError(
             f"revision mismatch: expected {manifest['revision']}, got {observed_revision}"
@@ -1403,8 +1487,12 @@ def _validate_checkout(
             expected_source,
             repo_root=repo_root,
         )
-    config_path = config_path.resolve()
-    config_root = repo_root if source_root is None else source_root.resolve()
+    config_path = _resolve_path(config_path, "mutation config")
+    config_root = (
+        repo_root
+        if source_root is None
+        else _resolve_path(source_root, "execution source root")
+    )
     if config_path != config_root / CONFIG_RELPATH or not config_path.is_file():
         raise ContractError(f"config must be the regular file {CONFIG_RELPATH}")
     actual_config = _digest_file(config_path)
@@ -1565,8 +1653,8 @@ def _artifact_file(root: Path, path_text: Any, label: str, first_component: str)
     relative = _safe_relative(path_text, label, first_component)
     path = root.joinpath(*relative.parts)
     try:
-        path.resolve().relative_to(root.resolve())
-    except (OSError, ValueError) as error:
+        _resolve_path(path, label).relative_to(_resolve_path(root, f"{label} root"))
+    except (ContractError, ValueError) as error:
         raise ContractError(f"unsafe {label}: {path_text!r}") from error
     if not path.is_file() or path.is_symlink():
         raise ContractError(f"{label} does not name a regular artifact file: {path_text!r}")
@@ -1724,7 +1812,7 @@ def _regenerate_shard_record(
         raise ContractError("output parent is missing or is a symlink")
     if source_root is not None:
         validate_execution_layout(source_root, {"output parent": output_parent})
-    output_parent = output_parent.resolve()
+    output_parent = _resolve_path(output_parent, "output parent")
     out_dir = _direct_regular_directory(output_parent, "mutants.out", "mutants.out")
     lock_path = _direct_regular_file(out_dir, "lock.json", "lock.json")
     lock = _expect_dict(read_json(lock_path), "lock.json")
@@ -1938,7 +2026,7 @@ def aggregate(
         raise ContractError("shards root is missing or unsafe")
     if source_root is not None:
         validate_execution_layout(source_root, {"shards root": shards_root})
-    shards_root = shards_root.resolve()
+    shards_root = _resolve_path(shards_root, "shards root")
     expected_names = {f"mutation-shard-{index}" for index in range(SHARD_COUNT)}
     try:
         entries = list(shards_root.iterdir())

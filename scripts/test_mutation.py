@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import copy
 import contextlib
+import hashlib
 import importlib.util
 import io
 import json
@@ -518,6 +519,76 @@ class MutationTruthTest(unittest.TestCase):
                 exit_code=0,
             )
 
+    def test_commit_replace_ref_cannot_change_the_committed_execution_source(self) -> None:
+        original_revision = self.revision
+        self.source.write_text(
+            "pub fn value() -> bool { false }\n",
+            encoding="utf-8",
+        )
+        self.git("add", "crates/core/src/lib.rs")
+        self.git("commit", "--quiet", "-m", "hostile alternate commit")
+        alternate_revision = self.git_output("rev-parse", "HEAD")
+        self.git("reset", "--soft", original_revision)
+        self.git("replace", original_revision, alternate_revision)
+        self.assertEqual(
+            self.git_output("status", "--porcelain=v1", "--untracked-files=no"),
+            "",
+        )
+
+        with self.assertRaisesRegex(mutation.ContractError, "replace ref"):
+            mutation.materialize_execution_source(
+                self.root,
+                original_revision,
+                self.external / "execution-source",
+            )
+
+    def test_blob_payload_must_match_its_reported_git_object_id(self) -> None:
+        original = b"original\n"
+        replacement = b"replacement\n"
+        expected_oid = hashlib.sha1(
+            b"blob " + str(len(original)).encode("ascii") + b"\0" + original
+        ).hexdigest()
+        forged_stream = (
+            f"{expected_oid} blob {len(replacement)}\n".encode("ascii")
+            + replacement
+            + b"\n"
+        )
+        completed = subprocess.CompletedProcess(
+            args=["git", "cat-file", "--batch"],
+            returncode=0,
+            stdout=forged_stream,
+            stderr=b"",
+        )
+
+        with (
+            mock.patch.object(mutation.subprocess, "run", return_value=completed),
+            self.assertRaisesRegex(mutation.ContractError, "object ID"),
+        ):
+            mutation._git_blob_bytes(self.root, [expected_oid])
+
+    def test_git_authority_environment_drops_host_overrides(self) -> None:
+        hostile = {
+            "GIT_DIR": str(self.external / "foreign-git-dir"),
+            "GIT_WORK_TREE": str(self.external / "foreign-worktree"),
+            "GIT_COMMON_DIR": str(self.external / "foreign-common-dir"),
+            "GIT_INDEX_FILE": str(self.external / "foreign-index"),
+            "GIT_OBJECT_DIRECTORY": str(self.external / "foreign-objects"),
+            "GIT_ALTERNATE_OBJECT_DIRECTORIES": str(self.external / "foreign-alternates"),
+            "GIT_REPLACE_REF_BASE": "refs/hostile/",
+            "GIT_CONFIG_COUNT": "1",
+            "GIT_CONFIG_KEY_0": "core.repositoryformatversion",
+            "GIT_CONFIG_VALUE_0": "99",
+        }
+        with mock.patch.dict(os.environ, hostile):
+            environment = mutation._git_authority_environment()
+
+        for variable in hostile:
+            self.assertNotIn(variable, environment)
+        self.assertEqual(environment["GIT_NO_REPLACE_OBJECTS"], "1")
+        self.assertEqual(environment["GIT_CONFIG_NOSYSTEM"], "1")
+        self.assertEqual(environment["GIT_CONFIG_GLOBAL"], os.devnull)
+        self.assertEqual(environment["GIT_CONFIG_SYSTEM"], os.devnull)
+
     def test_execution_source_rejects_forbidden_index_flags_outside_population(self) -> None:
         original = (self.root / "Cargo.toml").read_bytes()
         for flag in ("--assume-unchanged", "--skip-worktree"):
@@ -633,11 +704,11 @@ class MutationTruthTest(unittest.TestCase):
         real_run_bytes = mutation._run_bytes
         inventory_calls = 0
 
-        def observe_inventory(argv, *, cwd, label):
+        def observe_inventory(argv, *, cwd, label, **kwargs):
             nonlocal inventory_calls
-            if argv[0:2] == ["git", "ls-tree"]:
+            if "ls-tree" in argv:
                 inventory_calls += 1
-            return real_run_bytes(argv, cwd=cwd, label=label)
+            return real_run_bytes(argv, cwd=cwd, label=label, **kwargs)
 
         with mock.patch.object(mutation, "_run_bytes", side_effect=observe_inventory):
             mutation.materialize_execution_source(
@@ -651,10 +722,10 @@ class MutationTruthTest(unittest.TestCase):
     def test_materialization_rejects_malformed_git_inventory_as_contract_error(self) -> None:
         real_run_bytes = mutation._run_bytes
 
-        def malformed_inventory(argv, *, cwd, label):
-            if argv[0:2] == ["git", "ls-tree"]:
+        def malformed_inventory(argv, *, cwd, label, **kwargs):
+            if "ls-tree" in argv:
                 return b"malformed\0"
-            return real_run_bytes(argv, cwd=cwd, label=label)
+            return real_run_bytes(argv, cwd=cwd, label=label, **kwargs)
 
         with mock.patch.object(mutation, "_run_bytes", side_effect=malformed_inventory):
             with self.assertRaisesRegex(mutation.ContractError, "inventory is malformed"):
@@ -781,6 +852,38 @@ class MutationTruthTest(unittest.TestCase):
                 self.revision,
                 destination,
             )
+
+    def test_cli_types_symlink_loop_in_repo_root(self) -> None:
+        first = self.external / "loop-a"
+        second = self.external / "loop-b"
+        first.symlink_to(second)
+        second.symlink_to(first)
+        source_root = self.external / "source-root"
+        source_root.mkdir()
+        with self.assertRaisesRegex(mutation.ContractError, "aggregate output"):
+            mutation.validate_execution_layout(
+                source_root,
+                {"aggregate output": first / "aggregate.json"},
+            )
+        stderr = io.StringIO()
+
+        with contextlib.redirect_stderr(stderr):
+            result = mutation.main(
+                [
+                    "materialize-source",
+                    "--repo-root",
+                    str(first),
+                    "--revision",
+                    self.revision,
+                    "--source-root",
+                    str(self.external / "execution-source"),
+                ]
+            )
+
+        self.assertEqual(result, 2)
+        self.assertIn("mutation truth error:", stderr.getvalue())
+        self.assertIn("Git worktree root", stderr.getvalue())
+        self.assertNotIn("Traceback", stderr.getvalue())
 
     def test_parent_swap_after_containment_proof_cannot_redirect_writes(self) -> None:
         swappable_parent = self.external / "swappable-parent"
@@ -1508,6 +1611,8 @@ class MutationTruthTest(unittest.TestCase):
             ci.index("      - name: mutation evidence verifier hostile tests\n"),
             ci.index("      - name: cargo test\n"),
         )
+        self.assertNotIn("$(git rev-parse HEAD)", workflow)
+        self.assertEqual(workflow.count('--observed-revision "$GITHUB_SHA"'), 2)
         manifest_job = between(
             workflow,
             "\n  manifest:\n",

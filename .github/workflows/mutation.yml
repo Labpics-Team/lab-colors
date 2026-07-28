@@ -242,7 +242,7 @@ jobs:
             --source-root "$source_root" \
             --config "$source_root/.cargo/mutants.toml" \
             --shards-root "$RUNNER_TEMP/mutation-shards" \
-            --observed-revision "$(git rev-parse HEAD)" \
+            --observed-revision "$GITHUB_SHA" \
             --output "$RUNNER_TEMP/mutation-report/mutation-aggregate.json"
           cp "$RUNNER_TEMP/mutation-manifest/mutation-manifest.json" \
             "$RUNNER_TEMP/mutation-report/mutation-manifest.json"
