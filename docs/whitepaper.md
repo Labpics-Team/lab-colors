@@ -93,12 +93,14 @@ token как угодно; Core не выводит физику из имени
 `resolve_named_set` принимает локальный `BgInput` и `ViewingConditions`, затем
 возвращает значения ролей в порядке объявления.
 
-Реализованный point-домен приватного appearance-графа содержит путь
-`Paint::Input → Occurrence(fill over input surface) → Surface::FromOccurrence`.
-Каждый конечный кандидат Target объявляет одну неделимую пару encoded-sRGB8
-source и straight alpha; Core не образует их декартовы комбинации. Occurrence
-моделирует композицию в объявленном encoded-sRGB8 профиле; это не наблюдение
-фактических пикселей host. Видимый результат становится производной
+Реализованный point-домен приватного appearance-графа содержит `Paint::Input`,
+необязательную цепь `Paint::Opacity` и
+`Occurrence(fill over input surface) → Surface::FromOccurrence`. Каждый
+конечный кандидат Target объявляет одну неделимую пару encoded-sRGB8 source и
+base straight alpha; Core не образует их декартовы комбинации. Явные
+`Paint::Opacity`-узлы остаются общими последовательными множителями этой alpha.
+Occurrence моделирует композицию в объявленном encoded-sRGB8 профиле; это не
+наблюдение фактических пикселей host. Видимый результат становится производной
 поверхностью без повторной композиции.
 
 Code-owned adapter хранит sealed static compiler-verified IR; production
