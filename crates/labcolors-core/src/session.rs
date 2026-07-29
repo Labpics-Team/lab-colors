@@ -451,11 +451,13 @@ fn publish_session_transition<'session, Plan: SessionPlanV1>(
 /// after commit or rollback.
 pub(crate) struct Session<Plan: SessionPlanV1> {
     stream: ObservationStreamId,
-    plan: Plan,
     observation_arenas: ObservationArenaPoolV1,
     raw_head: SessionObservationHeadV1,
     state: SessionState<Plan::Verified, Plan::Violation>,
     deferred_retirement: Option<DeferredSessionRetirement<Plan>>,
+    // Plan может владеть большим executable artifact storage. Evidence и
+    // retirement должны освободиться раньше него, поэтому Plan всегда последний.
+    plan: Plan,
 }
 
 impl<Plan: SessionPlanV1> Session<Plan> {
@@ -467,11 +469,11 @@ impl<Plan: SessionPlanV1> Session<Plan> {
         drop(owner);
         Self {
             stream,
-            plan,
             observation_arenas,
             raw_head: SessionObservationHeadV1::Empty,
             state: SessionState::Waiting,
             deferred_retirement: None,
+            plan,
         }
     }
 

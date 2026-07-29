@@ -7,6 +7,7 @@
 use core::{fmt, iter::FusedIterator, mem, num::NonZeroU64};
 
 use crate::appearance::EncodedPointPaintV1;
+use crate::family_artifact::{FamilyArtifactBundleV2, FamilyExecutionBindingsV2};
 use crate::program_session::{
     CompiledPointOutputPresentationV1, CoreProgramEvaluatorsV1, PointOutputPresentationBindErrorV1,
     ProgramOwnerLeaseV1, ProgramPaintOutputV1,
@@ -427,65 +428,123 @@ pub(crate) enum AttachmentCreateErrorV1<SinkOutputId> {
     InternalInvariant,
 }
 
-/// Точная причина cold attach failure; lease хранится один раз во внешнем
-/// owning-контейнере и не дублируется по вариантам.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum AttachmentCreateCauseV1<SinkOutputId, SinkAdmissionError> {
-    Contract(AttachmentCreateErrorV1<SinkOutputId>),
-    SinkAdmission(SinkAdmissionError),
-}
-
-/// Cold failure сохраняет тот же unbound lease для исправления и retry.
-pub(crate) struct AttachmentCreateFailureV1<L>
+/// Contract failure ещё не построил Session и возвращает оба linear input-а.
+pub(crate) struct UnpreparedAttachmentRetryV2<L>
 where
     L: UnboundPointSinkLeaseV1,
 {
-    cause: AttachmentCreateCauseV1<L::OutputId, L::AdmissionError>,
     sink: L,
+    family_artifacts: FamilyArtifactBundleV2,
 }
 
-impl<L> fmt::Debug for AttachmentCreateFailureV1<L>
+impl<L> UnpreparedAttachmentRetryV2<L>
+where
+    L: UnboundPointSinkLeaseV1,
+{
+    pub(crate) fn into_parts(self) -> (L, FamilyArtifactBundleV2) {
+        (self.sink, self.family_artifacts)
+    }
+}
+
+/// Sink admission failure сохраняет всю уже подготовленную Session.
+///
+/// Retry повторяет только host admission: artifact loader, semantic binding и
+/// все cold allocation уже завершены и не запускаются снова.
+pub(crate) struct PreparedAttachmentRetryV2<L>
+where
+    L: UnboundPointSinkLeaseV1,
+{
+    sink: L,
+    prepared: PreparedAttachmentColdV1<L::OutputId>,
+}
+
+impl<L> PreparedAttachmentRetryV2<L>
+where
+    L: UnboundPointSinkLeaseV1,
+    L::OutputId: Copy + Eq,
+{
+    #[expect(
+        clippy::result_large_err,
+        reason = "the cold retry must return the exact prepared Session without a compensating heap allocation"
+    )]
+    pub(crate) fn retry(
+        self,
+    ) -> Result<Attachment<L::Closed>, PreparedAttachmentAdmissionFailureV2<L>> {
+        admit_prepared_attachment(self.prepared, self.sink)
+    }
+}
+
+/// Повторный отказ уже подготовленного объекта остаётся только sink-отказом.
+pub(crate) struct PreparedAttachmentAdmissionFailureV2<L>
+where
+    L: UnboundPointSinkLeaseV1,
+{
+    cause: L::AdmissionError,
+    retry: PreparedAttachmentRetryV2<L>,
+}
+
+impl<L> PreparedAttachmentAdmissionFailureV2<L>
+where
+    L: UnboundPointSinkLeaseV1,
+{
+    pub(crate) const fn cause(&self) -> &L::AdmissionError {
+        &self.cause
+    }
+
+    pub(crate) fn into_parts(self) -> (L::AdmissionError, PreparedAttachmentRetryV2<L>) {
+        (self.cause, self.retry)
+    }
+}
+
+impl<L> fmt::Debug for PreparedAttachmentAdmissionFailureV2<L>
+where
+    L: UnboundPointSinkLeaseV1,
+    L::AdmissionError: fmt::Debug,
+{
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("PreparedAttachmentAdmissionFailureV2")
+            .field("cause", &self.cause)
+            .finish_non_exhaustive()
+    }
+}
+
+/// Тип failure не допускает pairing contract cause с уже построенной Session.
+#[expect(
+    clippy::large_enum_variant,
+    reason = "the owning cold failure preserves the exact prepared Session; boxing would add an allocation to every attach"
+)]
+pub(crate) enum AttachmentCreateFailureV2<L>
+where
+    L: UnboundPointSinkLeaseV1,
+{
+    Contract {
+        cause: AttachmentCreateErrorV1<L::OutputId>,
+        retry: UnpreparedAttachmentRetryV2<L>,
+    },
+    SinkAdmission {
+        cause: L::AdmissionError,
+        retry: PreparedAttachmentRetryV2<L>,
+    },
+}
+
+impl<L> fmt::Debug for AttachmentCreateFailureV2<L>
 where
     L: UnboundPointSinkLeaseV1,
     L::OutputId: fmt::Debug,
     L::AdmissionError: fmt::Debug,
 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("AttachmentCreateFailureV1")
-            .field("cause", &self.cause)
-            .finish_non_exhaustive()
-    }
-}
-
-impl<L> AttachmentCreateFailureV1<L>
-where
-    L: UnboundPointSinkLeaseV1,
-{
-    const fn contract(cause: AttachmentCreateErrorV1<L::OutputId>, sink: L) -> Self {
-        Self {
-            cause: AttachmentCreateCauseV1::Contract(cause),
-            sink,
+        match self {
+            Self::Contract { cause, .. } => formatter
+                .debug_struct("AttachmentCreateFailureV2")
+                .field("contract", cause)
+                .finish_non_exhaustive(),
+            Self::SinkAdmission { cause, .. } => formatter
+                .debug_struct("AttachmentCreateFailureV2")
+                .field("sink_admission", cause)
+                .finish_non_exhaustive(),
         }
-    }
-
-    const fn sink_admission(cause: L::AdmissionError, sink: L) -> Self {
-        Self {
-            cause: AttachmentCreateCauseV1::SinkAdmission(cause),
-            sink,
-        }
-    }
-
-    pub(crate) const fn cause(&self) -> &AttachmentCreateCauseV1<L::OutputId, L::AdmissionError> {
-        &self.cause
-    }
-
-    pub(crate) fn into_sink(self) -> L {
-        self.sink
-    }
-
-    pub(crate) fn into_parts(self) -> (AttachmentCreateCauseV1<L::OutputId, L::AdmissionError>, L) {
-        (self.cause, self.sink)
     }
 }
 
@@ -636,6 +695,7 @@ impl<'a, SinkOutputId: Copy> AttachedRenderOutputV1<'a, SinkOutputId> {
 /// Точный post-commit view; historical evidence и render authority не смешаны.
 pub(crate) struct AttachmentCommitV1<'a, SinkOutputId> {
     evidence: EvidenceViewV1<'a>,
+    session: &'a SessionV1,
     committed_render_patch: &'a [AttachedRenderPatchEntryV1<SinkOutputId>],
     committed_revision: u64,
     committed_sink_stamp: &'a PointSinkStampV1,
@@ -652,6 +712,12 @@ impl<SinkOutputId> Clone for AttachmentCommitV1<'_, SinkOutputId> {
 impl<'a, SinkOutputId: Copy> AttachmentCommitV1<'a, SinkOutputId> {
     pub(crate) const fn evidence(self) -> EvidenceViewV1<'a> {
         self.evidence
+    }
+
+    /// Exact semantic release и artifact receipt исполняемой Session.
+    /// Historical evidence по-прежнему не получает storage identity.
+    pub(crate) fn family_execution_bindings(self) -> FamilyExecutionBindingsV2<'a> {
+        self.session.session.family_execution_bindings()
     }
 
     pub(crate) fn render_outputs(self) -> AttachedRenderOutputsV1<'a, SinkOutputId> {
@@ -730,6 +796,16 @@ where
 }
 
 /// Все fallible Core-части cold attach, завершённые до host admission.
+struct PreparedAttachmentBindingsV1<SinkOutputId> {
+    emissions: Vec<AttachedPointEmissionV1<SinkOutputId>>,
+    presentations: Vec<AttachedPointPresentationV1<SinkOutputId>>,
+    committed_sink_patch: Vec<PointSinkPatchEntryV1<SinkOutputId>>,
+    scratch_sink_patch: Vec<PointSinkPatchEntryV1<SinkOutputId>>,
+    committed_render_patch: Vec<AttachedRenderPatchEntryV1<SinkOutputId>>,
+    scratch_render_patch: Vec<AttachedRenderPatchEntryV1<SinkOutputId>>,
+}
+
+/// Полностью подготовленная Session и её terminal host bindings.
 struct PreparedAttachmentColdV1<SinkOutputId> {
     session: SessionV1,
     emissions: Vec<AttachedPointEmissionV1<SinkOutputId>>,
@@ -742,41 +818,90 @@ struct PreparedAttachmentColdV1<SinkOutputId> {
 }
 
 impl OwnerV1 {
-    /// Создаёт один terminal attachment этой exact compiled generation.
+    /// Создаёт terminal attachment с exact family artifact generation.
+    ///
+    /// Contract failure возвращает исходные sink и bundle. После полной cold
+    /// подготовки sink failure сохраняет сам prepared объект, поэтому retry не
+    /// повторяет loader, semantic binding, Session allocation или generation.
+    #[expect(
+        clippy::result_large_err,
+        reason = "the cold failure owns retryable linear resources instead of allocating an error box"
+    )]
     pub(crate) fn attach<L>(
         &self,
         stream_id: u32,
         authored_emissions: &[AuthoredPointEmissionBindingV1<L::OutputId>],
         authored_presentations: &[AuthoredPointPresentationBindingV1],
+        family_artifacts: FamilyArtifactBundleV2,
         sink: L,
-    ) -> Result<Attachment<L::Closed>, AttachmentCreateFailureV1<L>>
+    ) -> Result<Attachment<L::Closed>, AttachmentCreateFailureV2<L>>
     where
         L: UnboundPointSinkLeaseV1,
     {
-        let prepared = match PreparedAttachmentColdV1::try_new(
+        let bindings = match PreparedAttachmentBindingsV1::try_new(
             self,
-            stream_id,
             authored_emissions,
             authored_presentations,
             &sink,
         ) {
-            Ok(prepared) => prepared,
-            Err(cause) => return Err(AttachmentCreateFailureV1::contract(cause, sink)),
-        };
-        let permit = BoundPointSinkScopePermitV1 {
-            _owner: &prepared.owner_pin,
-            emissions: &prepared.emissions,
-            _presentations: &prepared.presentations,
-        };
-        let admission = match sink.try_admit_closed(permit) {
-            Ok(admission) => admission,
-            Err(failure) => {
-                let (cause, sink) = failure.into_parts();
-                return Err(AttachmentCreateFailureV1::sink_admission(cause, sink));
+            Ok(bindings) => bindings,
+            Err(cause) => {
+                return Err(AttachmentCreateFailureV2::Contract {
+                    cause,
+                    retry: UnpreparedAttachmentRetryV2 {
+                        sink,
+                        family_artifacts,
+                    },
+                });
             }
         };
-        // Возвращаемый `Self`, а не `Result`, типом закрывает fallible-границу.
-        Ok(Attachment::from_closed_admission(prepared, admission))
+        let session = match self.instantiate_with_family_artifacts(stream_id, family_artifacts) {
+            Ok(session) => session,
+            Err(failure) => {
+                let (cause, family_artifacts) = failure.into_parts();
+                return Err(AttachmentCreateFailureV2::Contract {
+                    cause: AttachmentCreateErrorV1::Instantiate(cause),
+                    retry: UnpreparedAttachmentRetryV2 {
+                        sink,
+                        family_artifacts,
+                    },
+                });
+            }
+        };
+        let prepared = bindings.finish(session, self.compiled.pin_owner());
+        admit_prepared_attachment(prepared, sink).map_err(
+            |PreparedAttachmentAdmissionFailureV2 { cause, retry }| {
+                AttachmentCreateFailureV2::SinkAdmission { cause, retry }
+            },
+        )
+    }
+}
+
+#[expect(
+    clippy::result_large_err,
+    reason = "host rejection returns the exact prepared Session without another cold-path allocation"
+)]
+fn admit_prepared_attachment<L>(
+    prepared: PreparedAttachmentColdV1<L::OutputId>,
+    sink: L,
+) -> Result<Attachment<L::Closed>, PreparedAttachmentAdmissionFailureV2<L>>
+where
+    L: UnboundPointSinkLeaseV1,
+{
+    let permit = BoundPointSinkScopePermitV1 {
+        _owner: &prepared.owner_pin,
+        emissions: &prepared.emissions,
+        _presentations: &prepared.presentations,
+    };
+    match sink.try_admit_closed(permit) {
+        Ok(admission) => Ok(Attachment::from_closed_admission(prepared, admission)),
+        Err(failure) => {
+            let (cause, sink) = failure.into_parts();
+            Err(PreparedAttachmentAdmissionFailureV2 {
+                cause,
+                retry: PreparedAttachmentRetryV2 { sink, prepared },
+            })
+        }
     }
 }
 
@@ -807,14 +932,13 @@ where
     }
 }
 
-impl<SinkOutputId> PreparedAttachmentColdV1<SinkOutputId>
+impl<SinkOutputId> PreparedAttachmentBindingsV1<SinkOutputId>
 where
     SinkOutputId: Copy + Eq,
 {
-    /// Связывает authored IDs и pin той же exact compiled generation до host admission.
+    /// Проверяет authored terminal bindings и завершает все их allocation.
     fn try_new<L>(
         owner: &OwnerV1,
-        stream_id: u32,
         authored_emissions: &[AuthoredPointEmissionBindingV1<SinkOutputId>],
         authored_presentations: &[AuthoredPointPresentationBindingV1],
         sink: &L,
@@ -1007,20 +1131,31 @@ where
             .try_reserve_exact(presentations.len())
             .map_err(|_| AttachmentCreateErrorV1::ResourceExhausted)?;
 
-        let session = owner
-            .instantiate(stream_id)
-            .map_err(AttachmentCreateErrorV1::Instantiate)?;
-        let owner_pin = owner.compiled.pin_owner();
         Ok(Self {
-            session,
             emissions,
             presentations,
             committed_sink_patch,
             scratch_sink_patch,
             committed_render_patch,
             scratch_render_patch,
-            owner_pin,
         })
+    }
+
+    fn finish(
+        self,
+        session: SessionV1,
+        owner_pin: ProgramOwnerLeaseV1<CoreProgramEvaluatorsV1>,
+    ) -> PreparedAttachmentColdV1<SinkOutputId> {
+        PreparedAttachmentColdV1 {
+            session,
+            emissions: self.emissions,
+            presentations: self.presentations,
+            committed_sink_patch: self.committed_sink_patch,
+            scratch_sink_patch: self.scratch_sink_patch,
+            committed_render_patch: self.committed_render_patch,
+            scratch_render_patch: self.scratch_render_patch,
+            owner_pin,
+        }
     }
 }
 
@@ -1139,6 +1274,7 @@ where
 
         Ok(AttachmentCommitV1 {
             evidence: self.session.evidence(),
+            session: &self.session,
             committed_render_patch: &self.committed_render_patch,
             committed_revision: action.revision(),
             committed_sink_stamp: &self.expected_sink_stamp,

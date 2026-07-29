@@ -52,7 +52,11 @@ use crate::constraints::{
     ProgramPointTargetV1, ProgramVisiblePointBindingV1, ProgramVisiblePointPassEvidence,
     ProgramVisiblePointViolationEvidence, Wcag22Srgb8V1, assess_program_point_hard,
 };
-use crate::family::{FamilyDeclarationV1, FamilyId};
+use crate::family::{FamilyDeclarationV2, FamilyId};
+use crate::family_artifact::{
+    BoundFamilyArtifactBundleV2, FamilyArtifactBindErrorV2, FamilyArtifactBundleV2,
+    FamilyArtifactContractErrorV2, FamilyExecutionBindingsV2,
+};
 use crate::joint::{
     AdmittedFiniteJointOrderV1, FiniteDomainOrdinalV1, FiniteJointOrderAdmissionErrorV1,
     FiniteJointOrderErrorV1, NonEmptyFiniteDomainCardinalitiesV1, admit_finite_joint_order_v1,
@@ -954,7 +958,7 @@ where
 {
     sources: Vec<Source>,
     targets: Vec<Target>,
-    families: Vec<FamilyDeclarationV1>,
+    families: Vec<FamilyDeclarationV2>,
     joint_selection: Option<DeclaredJointSelectionV1>,
     observation_group: ObservationGroup,
     opacities: Vec<OpacityInput>,
@@ -1012,7 +1016,7 @@ where
         self
     }
 
-    pub(crate) fn with_families(mut self, families: Vec<FamilyDeclarationV1>) -> Self {
+    pub(crate) fn with_families(mut self, families: Vec<FamilyDeclarationV2>) -> Self {
         self.families = families;
         self
     }
@@ -1080,7 +1084,7 @@ impl CoreProgramDraftV1 {
         self.program.targets.push(target);
     }
 
-    pub(crate) fn push_family(&mut self, family: FamilyDeclarationV1) {
+    pub(crate) fn push_family(&mut self, family: FamilyDeclarationV2) {
         self.program.families.push(family);
     }
 
@@ -1259,9 +1263,6 @@ pub enum ProgramCompileError {
         target: TargetId,
     },
     DuplicateFamily {
-        family: FamilyId,
-    },
-    InvalidFamilyImage {
         family: FamilyId,
     },
     UnusedFamily {
@@ -1898,7 +1899,8 @@ where
 {
     content_identity: ProgramContentIdentityV7,
     evaluator: Evaluation,
-    families: Box<[FamilyDeclarationV1]>,
+    families: Box<[FamilyDeclarationV2]>,
+    required_family_releases: Box<[crate::family::SemanticFamilyReleaseIdV2]>,
     graph: CompiledAppearanceGraph,
     binding_template: AdmittedAppearanceBindings,
     observation_group: CompiledObservationGroupV1,
@@ -2054,6 +2056,13 @@ where
         self.owner_generation.outputs.len()
     }
 
+    /// Unique semantic artifacts required by this Program, in canonical order.
+    /// A trusted host registry supplies the full certificate for each release;
+    /// client-owned FamilyId never participates in that transport lookup.
+    pub(crate) fn required_family_releases(&self) -> &[crate::family::SemanticFamilyReleaseIdV2] {
+        &self.owner_generation.required_family_releases
+    }
+
     pub(crate) fn evidence_cell_bounds(&self, scenario_count: usize) -> Option<(usize, usize)> {
         checked_program_epoch_evaluation_cell_counts(&self.owner_generation, scenario_count)
             .map(|counts| (counts.selected, counts.exhaustive_conflict))
@@ -2094,19 +2103,76 @@ where
         &self,
         stream: ObservationStreamId,
     ) -> Result<Session<ProgramSessionPlan<Evaluation>>, ProgramSessionInstantiateError> {
+        self.instantiate_with_family_artifacts(stream, FamilyArtifactBundleV2::empty())
+            .map_err(|failure| failure.cause)
+    }
+
+    /// Создаёт Session и перемещает в неё exact artifact generation.
+    ///
+    /// Program остаётся semantic-only; при любом cold failure тот же loaded
+    /// bundle возвращается вызывающему коду без reload/decode.
+    pub(crate) fn instantiate_with_family_artifacts(
+        &self,
+        stream: ObservationStreamId,
+        family_artifacts: FamilyArtifactBundleV2,
+    ) -> Result<Session<ProgramSessionPlan<Evaluation>>, ProgramSessionInstantiateFailureV2> {
+        let family_artifacts = match family_artifacts.bind(&self.owner_generation.families) {
+            Ok(bound) => bound,
+            Err(failure) => {
+                let (cause, family_artifacts) = failure.into_parts();
+                let cause = match cause {
+                    FamilyArtifactBindErrorV2::Contract(cause) => {
+                        ProgramSessionInstantiateError::FamilyArtifacts(cause)
+                    }
+                    FamilyArtifactBindErrorV2::ResourceExhausted => {
+                        ProgramSessionInstantiateError::ResourceExhausted
+                    }
+                };
+                return Err(ProgramSessionInstantiateFailureV2 {
+                    cause,
+                    family_artifacts,
+                });
+            }
+        };
         let bindings = self
             .owner_generation
             .binding_template
             .try_clone_v1()
-            .map_err(map_session_instantiate_error)?;
+            .map_err(map_session_instantiate_error);
+        let bindings = match bindings {
+            Ok(bindings) => bindings,
+            Err(cause) => {
+                return Err(ProgramSessionInstantiateFailureV2 {
+                    cause,
+                    family_artifacts: family_artifacts.into_unbound(),
+                });
+            }
+        };
         let workspace = self
             .owner_generation
             .graph
             .new_workspace()
-            .map_err(map_session_instantiate_error)?;
+            .map_err(map_session_instantiate_error);
+        let workspace = match workspace {
+            Ok(workspace) => workspace,
+            Err(cause) => {
+                return Err(ProgramSessionInstantiateFailureV2 {
+                    cause,
+                    family_artifacts: family_artifacts.into_unbound(),
+                });
+            }
+        };
         let presentation_cache =
-            ProgramPresentationCacheV1::try_new(&self.owner_generation.point_presentations)
-                .map_err(|()| ProgramSessionInstantiateError::ResourceExhausted)?;
+            ProgramPresentationCacheV1::try_new(&self.owner_generation.point_presentations);
+        let presentation_cache = match presentation_cache {
+            Ok(cache) => cache,
+            Err(()) => {
+                return Err(ProgramSessionInstantiateFailureV2 {
+                    cause: ProgramSessionInstantiateError::ResourceExhausted,
+                    family_artifacts: family_artifacts.into_unbound(),
+                });
+            }
+        };
         Ok(Session::new(
             stream,
             ProgramSessionPlan {
@@ -2115,6 +2181,7 @@ where
                 workspace,
                 presentation_cache,
                 evaluation_arenas: ProgramEvaluationArenaPoolV1::new(),
+                family_artifacts,
             },
         ))
     }
@@ -2125,6 +2192,19 @@ where
 pub enum ProgramSessionInstantiateError {
     ResourceExhausted,
     InternalInvariant,
+    FamilyArtifacts(FamilyArtifactContractErrorV2),
+}
+
+/// Failed Session construction returns the same admitted artifact storage.
+pub(crate) struct ProgramSessionInstantiateFailureV2 {
+    cause: ProgramSessionInstantiateError,
+    family_artifacts: FamilyArtifactBundleV2,
+}
+
+impl ProgramSessionInstantiateFailureV2 {
+    pub(crate) fn into_parts(self) -> (ProgramSessionInstantiateError, FamilyArtifactBundleV2) {
+        (self.cause, self.family_artifacts)
+    }
 }
 
 fn map_session_instantiate_error(error: BindingError) -> ProgramSessionInstantiateError {
@@ -3629,6 +3709,19 @@ where
     workspace: AppearanceWorkspace,
     presentation_cache: ProgramPresentationCacheV1,
     evaluation_arenas: ProgramEvaluationArenaPoolV1<Evaluation>,
+    // Последнее owning-поле Plan: Session сначала уничтожает evidence/arenas,
+    // затем executable artifact storage этой generation.
+    family_artifacts: BoundFamilyArtifactBundleV2,
+}
+
+impl<Evaluation> Session<ProgramSessionPlan<Evaluation>>
+where
+    Evaluation: ProgramConstraintEvaluatorSetV1,
+    ProgramConstraintInvocationOf<Evaluation>: Copy,
+{
+    pub(crate) fn family_execution_bindings(&self) -> FamilyExecutionBindingsV2<'_> {
+        self.plan().family_artifacts.execution_bindings()
+    }
 }
 
 /// Mutable execution state не владеет arena: guard удерживает непересекающееся
@@ -3637,6 +3730,7 @@ struct ProgramEvaluationRuntimeV1<'plan> {
     bindings: &'plan mut AdmittedAppearanceBindings,
     workspace: &'plan mut AppearanceWorkspace,
     presentation_cache: &'plan mut ProgramPresentationCacheV1,
+    family_artifacts: &'plan BoundFamilyArtifactBundleV2,
 }
 
 impl<Evaluation> session_private::PlanSealed for ProgramSessionPlan<Evaluation>
@@ -3706,6 +3800,7 @@ where
         workspace,
         presentation_cache,
         evaluation_arenas,
+        family_artifacts,
     } = plan;
     let mut arena = evaluation_arenas
         .guard(slot)
@@ -3714,6 +3809,7 @@ where
         bindings,
         workspace,
         presentation_cache,
+        family_artifacts,
     };
     let scenario_set = NonEmptyScenarioSetV1::from_admitted(&observation)
         .ok_or(ProgramSessionEvaluationError::InternalInvariant)?;
@@ -4321,7 +4417,7 @@ where
                         value,
                     };
                     let (measurement, decision) = invocation
-                        .assess(value.source(), &epoch.families)
+                        .assess(value.source(), runtime.family_artifacts)
                         .ok_or(ProgramSessionEvaluationError::InternalInvariant)?;
                     let (result, is_violation) = match decision {
                         HardDecision::Pass(proof) => (
@@ -4667,7 +4763,8 @@ where
         .checked_len()
         .ok_or(ProgramCompileError::ResourceExhausted)?;
     canonicalize_sources_and_targets(&mut program)?;
-    canonicalize_and_verify_families(&mut program.families)?;
+    canonicalize_families(&mut program.families)?;
+    let required_family_releases = canonical_required_family_releases(&program.families)?;
 
     let graph = lower_graph(&program)?
         .compile()
@@ -4731,6 +4828,7 @@ where
         content_identity,
         evaluator: program.evaluator,
         families,
+        required_family_releases,
         graph,
         binding_template,
         observation_group: CompiledObservationGroupV1 {
@@ -4746,10 +4844,21 @@ where
     })
 }
 
-fn canonicalize_and_verify_families(
-    families: &mut Vec<FamilyDeclarationV1>,
-) -> Result<(), ProgramCompileError> {
-    families.sort_unstable_by_key(FamilyDeclarationV1::id);
+fn canonical_required_family_releases(
+    families: &[FamilyDeclarationV2],
+) -> Result<Box<[crate::family::SemanticFamilyReleaseIdV2]>, ProgramCompileError> {
+    let mut releases = Vec::new();
+    releases
+        .try_reserve_exact(families.len())
+        .map_err(|_| ProgramCompileError::ResourceExhausted)?;
+    releases.extend(families.iter().map(|family| family.semantic()));
+    releases.sort_unstable();
+    releases.dedup();
+    Ok(releases.into_boxed_slice())
+}
+
+fn canonicalize_families(families: &mut [FamilyDeclarationV2]) -> Result<(), ProgramCompileError> {
+    families.sort_unstable_by_key(|family| family.id());
     if let Some(family) = families
         .windows(2)
         .find(|pair| pair[0].id() == pair[1].id())
@@ -4757,19 +4866,11 @@ fn canonicalize_and_verify_families(
     {
         return Err(ProgramCompileError::DuplicateFamily { family });
     }
-    for family in families {
-        family
-            .set()
-            .verify()
-            .map_err(|_| ProgramCompileError::InvalidFamilyImage {
-                family: family.id(),
-            })?;
-    }
     Ok(())
 }
 
 fn validate_compiled_family_usage<Invocation>(
-    families: &[FamilyDeclarationV1],
+    families: &[FamilyDeclarationV2],
     constraints: &[CompiledPointConstraint<Invocation>],
 ) -> Result<(), ProgramCompileError> {
     let mut used = false_slots(families.len())?;
@@ -5656,7 +5757,7 @@ where
                     CoreIntrinsicUnaryInvocationV1::FamilyMembership { family } => {
                         let family_index = program
                             .families
-                            .binary_search_by_key(&family, FamilyDeclarationV1::id)
+                            .binary_search_by_key(&family, |declaration| declaration.id())
                             .map_err(|_| ProgramCompileError::MissingConstraintFamily {
                                 constraint: constraint.id,
                                 family,

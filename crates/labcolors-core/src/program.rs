@@ -32,7 +32,7 @@
 /// Транзакционный point-output attachment и его линейный sink-контракт.
 pub(crate) mod attachment;
 
-use core::iter::FusedIterator;
+use core::{fmt, iter::FusedIterator};
 
 use crate::Srgb8;
 use crate::appearance::{
@@ -46,11 +46,11 @@ use crate::constraints::{
     ProgramVisiblePointPassEvidence, ProgramVisiblePointViolationEvidence, Wcag22Srgb8V1,
 };
 use crate::family::{
-    AdmittedFamilySetV1, FamilyContentIdentityV1 as CoreFamilyContentIdentityV1,
-    FamilyDeclarationV1, FamilyId, FamilyImageErrorV1,
-    FamilyMembershipMeasurementV1 as CoreFamilyMembershipMeasurementV1,
-    admit_declared_family_image_v1,
+    FamilyDeclarationV2, FamilyId,
+    FamilyMembershipMeasurementV2 as CoreFamilyMembershipMeasurementV2,
+    SemanticFamilyReleaseIdV2 as CoreSemanticFamilyReleaseIdV2,
 };
+use crate::family_artifact::{FamilyArtifactBundleV2, FamilyArtifactContractErrorV2};
 use crate::joint::FiniteJointOrderErrorV1;
 use crate::lcs_occurrence::{
     AdaptingLuminanceCdM2, AppearanceContextDomainErrorV1,
@@ -226,52 +226,22 @@ projected_id!(
     ObservationStreamId
 );
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct FamilySetV1(AdmittedFamilySetV1);
+/// Representation-independent semantic release одной family declaration.
+#[repr(transparent)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub(crate) struct FamilySemanticReleaseV2(CoreSemanticFamilyReleaseIdV2);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum FamilySetAdmissionErrorV1 {
-    Empty,
-    ResourceExhausted,
-    InternalInvariant,
-}
-
-impl FamilySetV1 {
-    pub(crate) fn try_from_srgb8_image(
-        image: Vec<Srgb8>,
-    ) -> Result<Self, FamilySetAdmissionErrorV1> {
-        let mut signals = Vec::new();
-        signals
-            .try_reserve_exact(image.len())
-            .map_err(|_| FamilySetAdmissionErrorV1::ResourceExhausted)?;
-        signals.extend(image.into_iter().map(ColorSignal::from_srgb8));
-        admit_declared_family_image_v1(signals)
-            .map(Self)
-            .map_err(|error| match error {
-                FamilyImageErrorV1::EmptyGeneratorDomain => FamilySetAdmissionErrorV1::Empty,
-                FamilyImageErrorV1::ResourceExhausted => {
-                    FamilySetAdmissionErrorV1::ResourceExhausted
-                }
-                FamilyImageErrorV1::NonCanonicalAdmittedImage
-                | FamilyImageErrorV1::CertificateMismatch => {
-                    FamilySetAdmissionErrorV1::InternalInvariant
-                }
-                #[cfg(test)]
-                FamilyImageErrorV1::ImageMismatch { .. } => {
-                    FamilySetAdmissionErrorV1::InternalInvariant
-                }
-            })
+impl FamilySemanticReleaseV2 {
+    pub(crate) const fn from_core(value: CoreSemanticFamilyReleaseIdV2) -> Self {
+        Self(value)
     }
 
-    /// Возвращает адрес неизменяемого сертификата допущенного family-set.
-    pub(crate) const fn content_identity(&self) -> FamilyContentIdentityV1 {
-        FamilyContentIdentityV1::from_core(self.0.certificate().family_content_identity())
-    }
-
-    #[cfg(test)]
-    pub(crate) fn corrupt_first_member_for_test(&mut self, replacement: Srgb8) {
+    pub(crate) const fn into_core(self) -> CoreSemanticFamilyReleaseIdV2 {
         self.0
-            .corrupt_first_member_for_test(ColorSignal::from_srgb8(replacement));
+    }
+
+    pub(crate) const fn as_bytes(&self) -> &[u8; 32] {
+        self.0.as_bytes()
     }
 }
 projected_id!(
@@ -564,8 +534,6 @@ pub(crate) enum CompileErrorKindV1 {
     DuplicateTarget,
     /// Повторно объявлен family-set.
     DuplicateFamily,
-    /// Сертификат family-set не прошёл полный replay.
-    InvalidFamilyImage,
     /// Family-set объявлен, но не связан ни с одним ограничением.
     UnusedFamily,
     /// В одной цели повторно объявлен ID кандидата.
@@ -830,11 +798,6 @@ pub(crate) enum CompileErrorV1 {
     /// Повторно объявлен один opaque family ID.
     DuplicateFamily {
         /// Повторный family ID.
-        family: FamilyIdV1,
-    },
-    /// Допущенный образ family не прошёл повторную верификацию.
-    InvalidFamilyImage {
-        /// Ошибочный family ID.
         family: FamilyIdV1,
     },
     /// Объявленный family-set не используется ни одним constraint.
@@ -1180,7 +1143,6 @@ impl CompileErrorV1 {
             Self::DuplicateSource { .. } => Kind::DuplicateSource,
             Self::DuplicateTarget { .. } => Kind::DuplicateTarget,
             Self::DuplicateFamily { .. } => Kind::DuplicateFamily,
-            Self::InvalidFamilyImage { .. } => Kind::InvalidFamilyImage,
             Self::UnusedFamily { .. } => Kind::UnusedFamily,
             Self::MissingFixedSource { .. } => Kind::MissingFixedSource,
             Self::DuplicateOpacityInput { .. } => Kind::DuplicateOpacityInput,
@@ -1275,9 +1237,9 @@ impl CompileErrorV1 {
             | Self::MissingFixedSource { target, .. }
             | Self::DuplicateTargetCandidate { target, .. }
             | Self::DuplicateTargetCandidateValue { target, .. } => Some(Handle::Target(*target)),
-            Self::DuplicateFamily { family }
-            | Self::InvalidFamilyImage { family }
-            | Self::UnusedFamily { family } => Some(Handle::Family(*family)),
+            Self::DuplicateFamily { family } | Self::UnusedFamily { family } => {
+                Some(Handle::Family(*family))
+            }
             Self::DuplicateOpacityInput { input } | Self::OpacityOutOfDomain { input } => {
                 Some(Handle::OpacityInput(*input))
             }
@@ -1399,7 +1361,6 @@ impl CompileErrorV1 {
             Self::DuplicateSource { .. }
             | Self::DuplicateTarget { .. }
             | Self::DuplicateFamily { .. }
-            | Self::InvalidFamilyImage { .. }
             | Self::UnusedFamily { .. }
             | Self::DuplicateOpacityInput { .. }
             | Self::DuplicateSurfaceInputPort { .. }
@@ -1480,9 +1441,15 @@ impl DraftV1 {
     }
 
     /// Объявляет одно точное допущенное множество без клиентской семантики.
-    pub(crate) fn push_family(&mut self, id: FamilyIdV1, set: FamilySetV1) -> &mut Self {
-        self.inner
-            .push_family(FamilyDeclarationV1::new(id.into_core(), set.0));
+    pub(crate) fn push_family(
+        &mut self,
+        id: FamilyIdV1,
+        semantic: FamilySemanticReleaseV2,
+    ) -> &mut Self {
+        self.inner.push_family(FamilyDeclarationV2::new(
+            id.into_core(),
+            semantic.into_core(),
+        ));
         self
     }
 
@@ -1926,6 +1893,18 @@ impl OwnerV1 {
             .map(|(slot, _paint)| OutputSlotIdV1::from_core(slot))
     }
 
+    /// Unique semantic releases that the host must resolve through its trusted
+    /// artifact manifest before constructing a Session or Attachment.
+    pub(crate) fn required_family_releases(
+        &self,
+    ) -> impl ExactSizeIterator<Item = FamilySemanticReleaseV2> + '_ {
+        self.compiled
+            .required_family_releases()
+            .iter()
+            .copied()
+            .map(FamilySemanticReleaseV2::from_core)
+    }
+
     /// Допускает update без изменения зафиксированных raw head и lifecycle.
     ///
     /// Несовпадение Owner проверяется до admission, аллокаций и вычисления.
@@ -1954,6 +1933,55 @@ impl OwnerV1 {
             scenario_order_scratch: Vec::new(),
             session,
         })
+    }
+
+    pub(crate) fn instantiate_with_family_artifacts(
+        &self,
+        stream_id: u32,
+        family_artifacts: FamilyArtifactBundleV2,
+    ) -> Result<SessionV1, InstantiateFailureV2> {
+        let stream = ObservationStreamId::new(stream_id);
+        match self
+            .compiled
+            .instantiate_with_family_artifacts(stream, family_artifacts)
+        {
+            Ok(session) => Ok(SessionV1 {
+                scenario_order_scratch: Vec::new(),
+                session,
+            }),
+            Err(failure) => {
+                let (cause, family_artifacts) = failure.into_parts();
+                Err(InstantiateFailureV2 {
+                    cause: InstantiateErrorV1::from_core(cause),
+                    family_artifacts,
+                })
+            }
+        }
+    }
+}
+
+/// Cold Session failure retains the same loaded family storage for retry.
+pub(crate) struct InstantiateFailureV2 {
+    cause: InstantiateErrorV1,
+    family_artifacts: FamilyArtifactBundleV2,
+}
+
+impl fmt::Debug for InstantiateFailureV2 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("InstantiateFailureV2")
+            .field("cause", &self.cause)
+            .finish_non_exhaustive()
+    }
+}
+
+impl InstantiateFailureV2 {
+    pub(crate) const fn cause(&self) -> InstantiateErrorV1 {
+        self.cause
+    }
+
+    pub(crate) fn into_parts(self) -> (InstantiateErrorV1, FamilyArtifactBundleV2) {
+        (self.cause, self.family_artifacts)
     }
 }
 
@@ -2720,7 +2748,7 @@ impl IntrinsicUnaryEvidenceV1<'_> {
                 family,
                 measurement,
             } => IntrinsicUnaryMeasurementV1::FamilyMembership(
-                FamilyMembershipMeasurementV1::from_core(family, measurement),
+                FamilyMembershipMeasurementV2::from_core(family, measurement),
             ),
         }
     }
@@ -2789,38 +2817,22 @@ pub(crate) enum IntrinsicUnaryMeasurementV1 {
     /// Измерение точного равенства.
     ExactSrgb8(ExactSrgb8UnaryMeasurementV1),
     /// Измерение принадлежности точному образу family.
-    FamilyMembership(FamilyMembershipMeasurementV1),
+    FamilyMembership(FamilyMembershipMeasurementV2),
 }
 
-/// Устойчивый к коллизиям адрес одного допущенного сертификата family.
-#[repr(transparent)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(crate) struct FamilyContentIdentityV1([u8; 32]);
-
-impl FamilyContentIdentityV1 {
-    const fn from_core(value: CoreFamilyContentIdentityV1) -> Self {
-        Self(*value.as_bytes())
-    }
-
-    /// Возвращает точные байты адреса.
-    pub(crate) const fn as_bytes(&self) -> &[u8; 32] {
-        &self.0
-    }
-}
-
-/// Точный сигнал и сертификат family, проверенные одним вызовом.
+/// Точный сигнал и semantic family release, проверенные одним вызовом.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct FamilyMembershipMeasurementV1 {
+pub(crate) struct FamilyMembershipMeasurementV2 {
     family: FamilyIdV1,
-    content: FamilyContentIdentityV1,
+    semantic: FamilySemanticReleaseV2,
     signal: Srgb8,
 }
 
-impl FamilyMembershipMeasurementV1 {
-    const fn from_core(family: FamilyId, value: CoreFamilyMembershipMeasurementV1) -> Self {
+impl FamilyMembershipMeasurementV2 {
+    const fn from_core(family: FamilyId, value: CoreFamilyMembershipMeasurementV2) -> Self {
         Self {
             family: FamilyIdV1::from_core(family),
-            content: FamilyContentIdentityV1::from_core(value.family()),
+            semantic: FamilySemanticReleaseV2::from_core(value.semantic()),
             signal: value.signal().srgb8(),
         }
     }
@@ -2830,9 +2842,9 @@ impl FamilyMembershipMeasurementV1 {
         self.family
     }
 
-    /// Возвращает адрес полного допущенного сертификата family.
-    pub(crate) const fn content(self) -> FamilyContentIdentityV1 {
-        self.content
+    /// Возвращает representation-independent semantic release family.
+    pub(crate) const fn semantic(self) -> FamilySemanticReleaseV2 {
+        self.semantic
     }
 
     /// Возвращает классифицированный точный исходный сигнал.
@@ -3370,47 +3382,47 @@ impl<'a> Iterator for CertificatesV1<'a> {
 impl ExactSizeIterator for CertificatesV1<'_> {}
 impl FusedIterator for CertificatesV1<'_> {}
 
-/// Закрытая классификация ошибки создания Session.
+/// Точное несовпадение semantic artifact pool с требованиями Program.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum InstantiateErrorKindV1 {
-    /// Для создания Session недостаточно ресурсов.
-    ResourceExhausted,
-    /// Нарушен внутренний инвариант скомпилированной Program.
-    InternalInvariant,
+pub(crate) enum FamilyArtifactErrorV2 {
+    Missing { semantic: FamilySemanticReleaseV2 },
+    Extra { semantic: FamilySemanticReleaseV2 },
+    Duplicate { semantic: FamilySemanticReleaseV2 },
 }
 
-/// Непрозрачная ошибка создания Session.
+impl FamilyArtifactErrorV2 {
+    const fn from_core(error: FamilyArtifactContractErrorV2) -> Self {
+        match error {
+            FamilyArtifactContractErrorV2::Missing { semantic } => Self::Missing {
+                semantic: FamilySemanticReleaseV2::from_core(semantic),
+            },
+            FamilyArtifactContractErrorV2::Extra { semantic } => Self::Extra {
+                semantic: FamilySemanticReleaseV2::from_core(semantic),
+            },
+            FamilyArtifactContractErrorV2::Duplicate { semantic } => Self::Duplicate {
+                semantic: FamilySemanticReleaseV2::from_core(semantic),
+            },
+        }
+    }
+}
+
+/// Ошибочные состояния создания Session представлены закрытой суммой.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct InstantiateErrorV1 {
-    kind: InstantiateErrorKindV1,
+pub(crate) enum InstantiateErrorV1 {
+    ResourceExhausted,
+    InternalInvariant,
+    FamilyArtifacts(FamilyArtifactErrorV2),
 }
 
 impl InstantiateErrorV1 {
-    const fn new(kind: InstantiateErrorKindV1) -> Self {
-        Self { kind }
-    }
-
     fn from_core(error: ProgramSessionInstantiateError) -> Self {
-        let kind = match error {
-            ProgramSessionInstantiateError::ResourceExhausted => {
-                InstantiateErrorKindV1::ResourceExhausted
+        match error {
+            ProgramSessionInstantiateError::ResourceExhausted => Self::ResourceExhausted,
+            ProgramSessionInstantiateError::InternalInvariant => Self::InternalInvariant,
+            ProgramSessionInstantiateError::FamilyArtifacts(cause) => {
+                Self::FamilyArtifacts(FamilyArtifactErrorV2::from_core(cause))
             }
-            ProgramSessionInstantiateError::InternalInvariant => {
-                InstantiateErrorKindV1::InternalInvariant
-            }
-        };
-        Self::new(kind)
-    }
-
-    /// Возвращает стабильный класс ошибки.
-    pub(crate) const fn kind(self) -> InstantiateErrorKindV1 {
-        self.kind
-    }
-}
-
-impl From<InstantiateErrorKindV1> for InstantiateErrorV1 {
-    fn from(kind: InstantiateErrorKindV1) -> Self {
-        Self::new(kind)
+        }
     }
 }
 
@@ -3752,9 +3764,6 @@ fn map_program_compile_error(error: ProgramCompileError) -> CompileErrorV1 {
             target: TargetIdV1::from_core(target),
         },
         ProgramCompileError::DuplicateFamily { family } => CompileErrorV1::DuplicateFamily {
-            family: FamilyIdV1::from_core(family),
-        },
-        ProgramCompileError::InvalidFamilyImage { family } => CompileErrorV1::InvalidFamilyImage {
             family: FamilyIdV1::from_core(family),
         },
         ProgramCompileError::UnusedFamily { family } => CompileErrorV1::UnusedFamily {
