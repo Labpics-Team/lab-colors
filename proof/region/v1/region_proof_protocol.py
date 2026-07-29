@@ -718,13 +718,13 @@ class ComparatorManifestV1:
     kind: ComparatorKindV1
     engine_release: bytes
     upstream_source: bytes
-    arithmetic_closure: bytes
+    arithmetic_input_set: bytes
     wrapper_source: bytes
     evaluator_source: bytes
     build_identity: bytes
     operation_allowlist: bytes
-    test_receipt: bytes
-    license_closure: bytes
+    test_observation: bytes
+    legal_file_set: bytes
     exclusions: bytes
 
     def __post_init__(self) -> None:

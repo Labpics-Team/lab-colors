@@ -144,13 +144,13 @@ def manifest(kind: ComparatorKindV1, seed: int) -> ContentResolvedComparatorMani
             kind=kind,
             engine_release=digest(seed),
             upstream_source=digest(seed + 1),
-            arithmetic_closure=digest(seed + 2),
+            arithmetic_input_set=digest(seed + 2),
             wrapper_source=digest(seed + 3),
             evaluator_source=digest(seed + 4),
             build_identity=digest(seed + 5),
             operation_allowlist=digest(seed + 6),
-            test_receipt=digest(seed + 7),
-            license_closure=digest(seed + 8),
+            test_observation=digest(seed + 7),
+            legal_file_set=digest(seed + 8),
             exclusions=digest(seed + 9),
         )
     )
@@ -682,13 +682,13 @@ class ManifestTranscriptComparisonTests(unittest.TestCase):
         for field in (
             "engine_release",
             "upstream_source",
-            "arithmetic_closure",
+            "arithmetic_input_set",
             "wrapper_source",
             "evaluator_source",
             "build_identity",
             "operation_allowlist",
-            "test_receipt",
-            "license_closure",
+            "test_observation",
+            "legal_file_set",
             "exclusions",
         ):
             changed = admit_manifest(

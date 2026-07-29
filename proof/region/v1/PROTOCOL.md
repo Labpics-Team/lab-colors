@@ -144,6 +144,34 @@ definition. Job задаёт единственный канонический i
 вычислителей; только controlled-executor slice сможет доказать отсутствие
 ambient inputs. Альтернативный JSON/TOML definition запрещён протоколом.
 
+## Source lock и integrity observations
+
+`SourceReleaseLockV1` фиксирует bytes и структурный состав архива. Поле
+`.integrity` содержит один `SourceIntegrityPolicyV1`; это требование проверки,
+а не заявление о publisher origin. Поле
+`legal_files` — только точный project-pinned набор находящихся в архиве legal
+files; оно не заявляет полноту legal-набора или compliance распространяемого
+бинарника. Несовпадение этого набора имеет отдельную причину
+`legal_files_mismatch`.
+
+Для GMP и MPFR locked detached signature, key packets и исторический
+`VALIDSIG` связываются только в
+`HistoricalPathRecheckedSignatureDiagnosticV1`. Digest и version запущенного
+`gpgv` остаются диагностикой. Этот тип не устанавливает текущего publisher,
+текущий статус или отзыв ключа, происхождение полученных bytes и exact sealed
+execution verifier. Такой diagnostic не может заменить будущий source-bound
+receipt.
+
+Для FLINT `GitContentRelationPolicyV1` фиксирует commit, tree, исключённые
+paths и отдельные `project_pinned_release_only_files`. `run_git_tree`
+независимо пересчитывает commit, commit-to-tree edge, recursive tree и каждый
+blob. Поэтому admission создаёт один `RecomputedGitContentRelationV1`: paths
+архива должны быть точным дизъюнктным объединением общих Git files и
+project-pinned release-only files, а исключённые paths обязаны отсутствовать.
+Git executable/version, repository URL и tag являются диагностикой или
+координатами поиска и не входят в authority этой relation. Relation доказывает
+совпадение content graph, но не publisher или канал получения архива.
+
 ## `ComparatorManifestV1`
 
 Wire после `LCMAN1\0\0` содержит comparator kind `u8`
@@ -152,13 +180,13 @@ Wire после `LCMAN1\0\0` содержит comparator kind `u8`
 
 1. engine release;
 2. upstream source;
-3. arithmetic closure;
+3. arithmetic input set;
 4. wrapper source;
 5. evaluator source;
 6. build identity, включая compiler, target и exact flags;
 7. operation allowlist;
-8. test receipt;
-9. license closure;
+8. test observation;
+9. legal file set;
 10. exclusions.
 
 Результат wire parse — только raw `ComparatorManifestV1`: его ненулевые
