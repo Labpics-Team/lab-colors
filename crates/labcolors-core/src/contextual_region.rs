@@ -178,6 +178,11 @@ mod exact_dyadic_product_laws {
 
         assert_eq!(factored.cmp(&squared), core::cmp::Ordering::Equal);
         assert_eq!(factored, squared);
+
+        let one =
+            ExactDyadicProductV1::of(exact(0x3ff0_0000_0000_0000), exact(0x3ff0_0000_0000_0000));
+        assert_ne!(factored.cmp(&one), core::cmp::Ordering::Equal);
+        assert_ne!(factored, one);
     }
 }
 
