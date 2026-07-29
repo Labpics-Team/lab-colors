@@ -286,6 +286,8 @@ pub(crate) enum PiecewiseLinearCartesianTubeErrorV1 {
 /// Замкнутая область: между строго упорядоченными tone knots линейно
 /// интерполируются центр и `radius_squared`; точка `z` принадлежит области,
 /// когда `(z - center(t))ᵀ G (z - center(t)) <= radius_squared(t)`.
+/// Здесь `t = J′`, `z = [a′, b′]` в identity-bound rectangular CAM16-UCS view;
+/// tone-домен замкнут от первого до последнего knot, а один knot задаёт singleton.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct PiecewiseLinearCartesianTubeV1 {
     shape: Shape2V1,
