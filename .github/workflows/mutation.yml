@@ -230,12 +230,19 @@ jobs:
           merge-multiple: false
       - name: verify exact non-overlapping aggregate
         run: |
+          set -euo pipefail
           source_root="$RUNNER_TEMP/mutation-source-$GITHUB_JOB"
-          mkdir -p "$RUNNER_TEMP/mutation-report"
+          report_root="$RUNNER_TEMP/mutation-report"
+          mkdir -p "$report_root"
+          diagnostic="$report_root/aggregate.log"
+          : > "$diagnostic"
+          cp "$RUNNER_TEMP/mutation-manifest/mutation-manifest.json" \
+            "$report_root/mutation-manifest.json"
           python3 scripts/mutation.py materialize-source \
             --repo-root "$GITHUB_WORKSPACE" \
             --revision "$GITHUB_SHA" \
-            --source-root "$source_root"
+            --source-root "$source_root" \
+            2>&1 | tee -a "$diagnostic"
           python3 "$source_root/scripts/mutation.py" aggregate \
             --manifest "$RUNNER_TEMP/mutation-manifest/mutation-manifest.json" \
             --repo-root "$GITHUB_WORKSPACE" \
@@ -243,9 +250,8 @@ jobs:
             --config "$source_root/.cargo/mutants.toml" \
             --shards-root "$RUNNER_TEMP/mutation-shards" \
             --observed-revision "$GITHUB_SHA" \
-            --output "$RUNNER_TEMP/mutation-report/mutation-aggregate.json"
-          cp "$RUNNER_TEMP/mutation-manifest/mutation-manifest.json" \
-            "$RUNNER_TEMP/mutation-report/mutation-manifest.json"
+            --output "$report_root/mutation-aggregate.json" \
+            2>&1 | tee -a "$diagnostic"
       - name: upload report-only aggregate
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2

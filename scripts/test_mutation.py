@@ -14,6 +14,7 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from unittest import mock
@@ -308,7 +309,9 @@ class MutationTruthTest(unittest.TestCase):
         self.write_outcomes(parent, expected, summaries)
         if exit_code is None:
             exit_code = mutation.expected_exit_code(
-                summaries or ["CaughtMutant"] * len(expected)
+                ["CaughtMutant"] * len(expected)
+                if summaries is None
+                else summaries
             )
         record = mutation.validate_and_record_shard(
             manifest,
@@ -699,6 +702,29 @@ class MutationTruthTest(unittest.TestCase):
 
         self.assertGreater(opened, 1)
         self.assertEqual(closed, opened)
+
+    def test_materialized_execution_source_walk_is_not_python_stack_bounded(self) -> None:
+        source_root = self.external / "deep-source"
+        source_root.mkdir()
+        leaf_parent = source_root
+        depth = 160
+        for _ in range(depth):
+            leaf_parent /= "d"
+            leaf_parent.mkdir()
+        (leaf_parent / "leaf").write_bytes(b"content")
+
+        descriptor = os.open(source_root, mutation._DIRECTORY_OPEN_FLAGS)
+        original_limit = sys.getrecursionlimit()
+        try:
+            sys.setrecursionlimit(96)
+            files, directories = mutation._walk_materialized_source_fd(descriptor)
+        finally:
+            sys.setrecursionlimit(original_limit)
+            os.close(descriptor)
+
+        leaf_path = "/".join(["d"] * depth + ["leaf"])
+        self.assertEqual(files[leaf_path][0], "100000")
+        self.assertEqual(len(directories), depth)
 
     def test_materialization_consumes_one_validated_git_inventory(self) -> None:
         real_run_bytes = mutation._run_bytes
@@ -1616,6 +1642,37 @@ class MutationTruthTest(unittest.TestCase):
         ):
             mutation.main([])
 
+    def test_external_command_timeout_is_a_typed_contract_failure(self) -> None:
+        expired = subprocess.TimeoutExpired(cmd=["git", "status"], timeout=1)
+        with (
+            mock.patch.object(mutation.subprocess, "run", side_effect=expired) as run,
+            self.assertRaisesRegex(mutation.ContractError, "timed out"),
+        ):
+            mutation._run_bytes(
+                ["git", "status"],
+                cwd=self.root,
+                label="git status",
+            )
+
+        self.assertEqual(
+            run.call_args.kwargs["timeout"],
+            mutation.EXTERNAL_COMMAND_TIMEOUT_SECONDS,
+        )
+
+    def test_execution_contract_does_not_alias_module_command_templates(self) -> None:
+        first = mutation._build_execution_contract(
+            [mutant(0)],
+            {"core": "0.1.0"},
+        )
+        first["commands"]["Build"][0] = "hostile"
+        second = mutation._build_execution_contract(
+            [mutant(0)],
+            {"core": "0.1.0"},
+        )
+
+        self.assertEqual(mutation.EXECUTION_COMMANDS["Build"][0], "test")
+        self.assertEqual(second["commands"]["Build"][0], "test")
+
     def test_workflow_and_scope_lock_the_truth_contract(self) -> None:
         def between(source: str, start: str, end: str, label: str) -> str:
             if start not in source:
@@ -1666,6 +1723,14 @@ class MutationTruthTest(unittest.TestCase):
             "      - name: verify exact non-overlapping aggregate\n",
             "      - name:",
             "aggregate verification step",
+        )
+
+        self.assertIn("set -euo pipefail", aggregate_step)
+        self.assertIn('diagnostic="$report_root/aggregate.log"', aggregate_step)
+        self.assertIn(': > "$diagnostic"', aggregate_step)
+        self.assertEqual(
+            aggregate_step.count('2>&1 | tee -a "$diagnostic"'),
+            2,
         )
 
         for step in (manifest_step, shard_step, aggregate_step):

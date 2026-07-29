@@ -43,6 +43,11 @@ EXECUTION_COMMANDS = {
     "Build": ["test", "--no-run", "--verbose"],
     "Test": ["test", "--verbose"],
 }
+# Git inventory and locked Cargo metadata are local, bounded evidence reads. Five
+# minutes reserves most of the shortest 30-minute workflow envelope for emitting
+# and uploading a diagnostic instead of letting one wedged child own the job.
+# Change this only together with measured runner latency and that job envelope.
+EXTERNAL_COMMAND_TIMEOUT_SECONDS = 5 * 60
 HEX40 = re.compile(r"[0-9a-f]{40}\Z")
 HEX64 = re.compile(r"[0-9a-f]{64}\Z")
 REPOSITORY = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\Z")
@@ -348,7 +353,12 @@ def _run_bytes(
             env=environment,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
+            timeout=EXTERNAL_COMMAND_TIMEOUT_SECONDS,
         )
+    except subprocess.TimeoutExpired as error:
+        raise ContractError(
+            f"{label} timed out after {EXTERNAL_COMMAND_TIMEOUT_SECONDS} seconds"
+        ) from error
     except OSError as error:
         raise ContractError(f"cannot execute {label}: {error}") from error
     if result.returncode != 0:
@@ -725,22 +735,37 @@ def _walk_materialized_source_fd(
     files: dict[str, tuple[str, int, str]] = {}
     directories: set[str] = set()
 
-    def walk(directory_fd: int, relative_parent: PurePosixPath | None = None) -> None:
+    def child_names(directory_fd: int) -> list[str]:
         try:
             with os.scandir(directory_fd) as iterator:
-                children = sorted(iterator, key=lambda entry: entry.name)
+                return sorted(entry.name for entry in iterator)
         except OSError as error:
             raise ContractError(f"cannot inspect execution source: {error}") from error
-        for child in children:
+
+    # Each frame owns only its opened directory descriptor. The explicit stack
+    # preserves the old lexicographic depth-first law without making hostile
+    # tracked depth a Python recursion limit or traceback boundary.
+    stack = [(source_fd, None, iter(child_names(source_fd)), False)]
+    try:
+        while stack:
+            directory_fd, relative_parent, children, owns_descriptor = stack[-1]
+            try:
+                child_name = next(children)
+            except StopIteration:
+                stack.pop()
+                if owns_descriptor:
+                    os.close(directory_fd)
+                continue
+
             relative = (
-                PurePosixPath(child.name)
+                PurePosixPath(child_name)
                 if relative_parent is None
-                else relative_parent / child.name
+                else relative_parent / child_name
             )
             path_text = relative.as_posix()
             try:
                 metadata = os.stat(
-                    child.name,
+                    child_name,
                     dir_fd=directory_fd,
                     follow_symlinks=False,
                 )
@@ -748,11 +773,11 @@ def _walk_materialized_source_fd(
                     files[path_text] = (
                         "120000",
                         stat.S_IMODE(metadata.st_mode),
-                        os.readlink(child.name, dir_fd=directory_fd),
+                        os.readlink(child_name, dir_fd=directory_fd),
                     )
                 elif stat.S_ISREG(metadata.st_mode):
                     descriptor = os.open(
-                        child.name,
+                        child_name,
                         os.O_RDONLY
                         | getattr(os, "O_CLOEXEC", 0)
                         | getattr(os, "O_NOFOLLOW", 0),
@@ -774,14 +799,17 @@ def _walk_materialized_source_fd(
                 elif stat.S_ISDIR(metadata.st_mode):
                     directories.add(path_text)
                     child_fd = os.open(
-                        child.name,
+                        child_name,
                         _DIRECTORY_OPEN_FLAGS,
                         dir_fd=directory_fd,
                     )
                     try:
-                        walk(child_fd, relative)
-                    finally:
+                        stack.append(
+                            (child_fd, relative, iter(child_names(child_fd)), True)
+                        )
+                    except BaseException:
                         os.close(child_fd)
+                        raise
                 else:
                     raise ContractError(
                         f"execution source contains unsupported entry: {path_text!r}"
@@ -792,8 +820,10 @@ def _walk_materialized_source_fd(
                 raise ContractError(
                     f"cannot inspect execution source entry {path_text!r}: {error}"
                 ) from error
-
-    walk(source_fd)
+    finally:
+        for directory_fd, _, _, owns_descriptor in reversed(stack):
+            if owns_descriptor:
+                os.close(directory_fd)
     return files, directories
 
 
@@ -1140,7 +1170,10 @@ def _build_execution_contract(
     return {
         "baseline": "run",
         "cargo_binary_suffix": CARGO_BINARY_SUFFIX,
-        "commands": EXECUTION_COMMANDS,
+        "commands": {
+            phase: list(arguments)
+            for phase, arguments in EXECUTION_COMMANDS.items()
+        },
         "mutant_test_scope": "mutated-package",
         "packages": packages,
         "phases": ["Build", "Test"],
