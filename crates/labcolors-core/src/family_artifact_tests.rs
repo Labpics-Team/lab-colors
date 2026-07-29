@@ -373,6 +373,37 @@ fn full_srgb8_set_cardinality_reaches_codec_admission() {
 }
 
 #[test]
+#[ignore = "full 24-bit domain oracle runs once in CI outside mutation tests"]
+fn axis_membership_matches_the_full_srgb8_cube_oracle() {
+    let members = (0_u16..=255)
+        .map(|value| {
+            let value = value as u8;
+            ColorSignal::from_srgb8(Srgb8::new([value; 3]))
+        })
+        .collect::<Vec<_>>();
+    let (certificate, encoded) = encode_fixture_family_artifact_v2(
+        definition(),
+        &members,
+        FixtureFamilyArtifactCodecV1::CanonicalMembersV1,
+    )
+    .unwrap();
+    let admitted = load_fixture(certificate, encoded).unwrap();
+
+    for red in 0_u16..=255 {
+        for green in 0_u16..=255 {
+            for blue in 0_u16..=255 {
+                let bytes = [red as u8, green as u8, blue as u8];
+                assert_eq!(
+                    admitted.contains(ColorSignal::from_srgb8(Srgb8::new(bytes))),
+                    bytes[0] == bytes[1] && bytes[1] == bytes[2],
+                    "full-domain disagreement at {bytes:?}",
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn central_loader_rejects_a_decoder_that_lies_about_member_count() {
     let members = signals(&[[0, 0, 1], [0, 0, 2]]);
     let (certificate, encoded) = encode_fixture_family_artifact_v2(
