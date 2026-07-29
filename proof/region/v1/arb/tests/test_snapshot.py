@@ -12,6 +12,7 @@ import tarfile
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 PROOF = Path(__file__).resolve().parents[2]
@@ -104,6 +105,17 @@ class SourceSnapshotTests(unittest.TestCase):
                 with self.subTest(destination=destination):
                     with self.assertRaises(snapshot.SnapshotErrorV1):
                         snapshot.materialize_source_archive(lock, admitted, destination)
+
+    def test_timestamp_normalization_must_verify_the_filesystem_postcondition(self) -> None:
+        lock, archive_bytes = fixture()
+        admitted = provenance.admit_source_archive(lock, archive_bytes)
+        with tempfile.TemporaryDirectory() as temporary:
+            destination = Path(temporary) / "fixture-1"
+            with mock.patch.object(snapshot.os, "utime", return_value=None):
+                with self.assertRaises(snapshot.SnapshotErrorV1) as caught:
+                    snapshot.materialize_source_archive(lock, admitted, destination)
+
+        self.assertEqual(caught.exception.reason, snapshot.SnapshotReasonV1.IO_FAILURE)
 
 
 if __name__ == "__main__":

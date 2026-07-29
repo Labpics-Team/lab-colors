@@ -299,6 +299,9 @@ def pipeline_policy_identity_v1(
             b"no-new-privileges=true",
             b"inputs=readonly-bind",
             b"workspace=readonly-bind",
+            f"source-snapshot-mtime-ns={snapshot.SOURCE_SNAPSHOT_MTIME_NS_V1}".encode(
+                "ascii"
+            ),
             b"fresh-container-count=2",
         ),
     )

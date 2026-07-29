@@ -82,40 +82,51 @@ def _ensure_parent(root: Path, relative_parent: Path) -> None:
             _fail(SnapshotReasonV1.IO_FAILURE, "cannot normalize source directory")
 
 
-def _normalize_snapshot_times(root: Path, relative_paths: set[str]) -> None:
-    directories = {root}
+def _set_exact_snapshot_time(path: Path, *, directory: bool) -> None:
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    if directory:
+        flags |= getattr(os, "O_DIRECTORY", 0)
+    descriptor = -1
     try:
-        for relative in relative_paths:
-            target = root / relative
-            metadata = target.lstat()
-            if not stat.S_ISREG(metadata.st_mode) or stat.S_ISLNK(metadata.st_mode):
-                _fail(SnapshotReasonV1.MATERIALIZATION_MISMATCH, relative)
-            os.utime(
-                target,
-                ns=(SOURCE_SNAPSHOT_MTIME_NS_V1, SOURCE_SNAPSHOT_MTIME_NS_V1),
-                follow_symlinks=False,
-            )
-            parent = target.parent
-            while parent != root:
-                directories.add(parent)
-                parent = parent.parent
-        for directory in sorted(
-            directories,
-            key=lambda item: len(item.relative_to(root).parts),
-            reverse=True,
+        descriptor = os.open(path, flags)
+        before = os.fstat(descriptor)
+        expected_kind = stat.S_ISDIR if directory else stat.S_ISREG
+        if not expected_kind(before.st_mode):
+            _fail(SnapshotReasonV1.MATERIALIZATION_MISMATCH, "snapshot node kind")
+        os.utime(
+            descriptor,
+            ns=(SOURCE_SNAPSHOT_MTIME_NS_V1, SOURCE_SNAPSHOT_MTIME_NS_V1),
+        )
+        after = os.fstat(descriptor)
+        if (
+            (after.st_dev, after.st_ino) != (before.st_dev, before.st_ino)
+            or not expected_kind(after.st_mode)
+            or after.st_mtime_ns != SOURCE_SNAPSHOT_MTIME_NS_V1
         ):
-            metadata = directory.lstat()
-            if not stat.S_ISDIR(metadata.st_mode) or stat.S_ISLNK(metadata.st_mode):
-                _fail(SnapshotReasonV1.MATERIALIZATION_MISMATCH, "parent collision")
-            os.utime(
-                directory,
-                ns=(SOURCE_SNAPSHOT_MTIME_NS_V1, SOURCE_SNAPSHOT_MTIME_NS_V1),
-                follow_symlinks=False,
-            )
+            _fail(SnapshotReasonV1.IO_FAILURE, "source timestamp postcondition")
     except SnapshotErrorV1:
         raise
     except OSError:
         _fail(SnapshotReasonV1.IO_FAILURE, "cannot normalize source timestamps")
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+
+
+def _normalize_snapshot_times(root: Path, relative_paths: set[str]) -> None:
+    directories = {root}
+    for relative in sorted(relative_paths):
+        target = root / relative
+        _set_exact_snapshot_time(target, directory=False)
+        parent = target.parent
+        while parent != root:
+            directories.add(parent)
+            parent = parent.parent
+    for directory in sorted(
+        directories,
+        key=lambda item: (-len(item.relative_to(root).parts), item.as_posix()),
+    ):
+        _set_exact_snapshot_time(directory, directory=True)
 
 
 def materialize_source_archive(

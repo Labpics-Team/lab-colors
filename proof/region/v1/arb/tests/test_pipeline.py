@@ -661,6 +661,19 @@ class ComparatorDerivationTests(unittest.TestCase):
 
 
 class CausalPipelineTests(unittest.TestCase):
+    def test_pipeline_policy_identity_binds_the_snapshot_timestamp_policy(self) -> None:
+        trust = pipeline.HostTrustBoundaryV1.PERSISTENT_SELF_HOSTED_DOCKER
+        original = pipeline.pipeline_policy_identity_v1(trust)
+
+        with mock.patch.object(
+            pipeline.snapshot,
+            "SOURCE_SNAPSHOT_MTIME_NS_V1",
+            pipeline.snapshot.SOURCE_SNAPSHOT_MTIME_NS_V1 + 1,
+        ):
+            changed = pipeline.pipeline_policy_identity_v1(trust)
+
+        self.assertNotEqual(original, changed)
+
     def test_build_only_does_not_probe_or_execute_run_backend(self) -> None:
         binary = _static_elf(b"build-only")
         controller = pipeline.ControlledPipelineV1(
