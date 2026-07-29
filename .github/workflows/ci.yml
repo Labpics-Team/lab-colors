@@ -30,9 +30,10 @@ env:
   # Минимальный consumer runtime проверяется отдельно от release packer.
   # Node 22 остаётся поддерживаемой upstream LTS-веткой.
   NODE_CONSUMER_FLOOR: 22.11.0
-  # Offline proof codecs are executable release tooling too; interpreter drift
-  # must not silently change parser or integer/enum behavior.
-  PYTHON_TOOLCHAIN: 3.14.6
+  # Offline proof codecs are executable release tooling too. The image is pinned
+  # to the linux/amd64 manifest because setup-python does not publish Debian 13
+  # builds and the self-hosted fleet must not supply interpreter semantics.
+  PYTHON_PROOF_IMAGE: python:3.14.6-slim@sha256:d4fea6e20c09820028eea3f5c17f5b8ebd2ecb9c2bf28e561681a74a96090e4f
   # Browser parity is release evidence too: pin both CfT archives byte-for-byte.
   CHROME_FOR_TESTING_VERSION: 150.0.7871.115
   CHROME_FOR_TESTING_SHA256: 1be2db033133c5e2dd1a4e8664bf67b19a61bcf6ed28d2b00f433b3f0b4f9585
@@ -208,31 +209,31 @@ jobs:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           persist-credentials: false
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: ${{ env.PYTHON_TOOLCHAIN }}
       - name: canonical region-proof protocol
+        shell: bash
         run: |
-          export TMPDIR="$RUNNER_TEMP/region-proof-$GITHUB_JOB"
-          mkdir -p "$TMPDIR"
-          PYTHONDONTWRITEBYTECODE=1 python3 - <<'PY'
-          import unittest
-
-          suite = unittest.defaultTestLoader.discover(
-              "proof/region/v1/tests",
-              pattern="test_*.py",
-          )
-          count = suite.countTestCases()
-          if count != 19:
-              raise SystemExit(f"region-proof test discovery drifted: {count} != 19")
-          print(f"region-proof exact test count: {count}")
-          PY
-          PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover \
-            -s proof/region/v1/tests -p 'test_*.py' -v
-          PYTHONDONTWRITEBYTECODE=1 PYTHONOPTIMIZE=2 python3 -m unittest discover \
-            -s proof/region/v1/tests -p 'test_*.py' -v
-          PYTHONDONTWRITEBYTECODE=1 python3 proof/region/v1/controller.py \
-            verify-fixtures --repo-root "$GITHUB_WORKSPACE"
+          set -euo pipefail
+          proof_tmp="$RUNNER_TEMP/region-proof-$GITHUB_JOB"
+          mkdir -p "$proof_tmp"
+          docker run --rm --pull always \
+            --read-only \
+            --network none \
+            --cap-drop ALL \
+            --security-opt no-new-privileges \
+            --user "$(id -u):$(id -g)" \
+            --mount "type=bind,src=$GITHUB_WORKSPACE,dst=/workspace,readonly" \
+            --mount "type=bind,src=$proof_tmp,dst=/tmp" \
+            --workdir /workspace \
+            --env PYTHONDONTWRITEBYTECODE=1 \
+            --env PYTHONHASHSEED=0 \
+            "$PYTHON_PROOF_IMAGE" \
+            sh -euc '
+              python -c '\''import sys; expected = (3, 14, 6); actual = sys.version_info[:3]; assert actual == expected, (actual, expected)'\''
+              python -c '\''import unittest; suite = unittest.defaultTestLoader.discover("proof/region/v1/tests", pattern="test_*.py"); count = suite.countTestCases(); assert count == 19, f"region-proof test discovery drifted: {count} != 19"; print(f"region-proof exact test count: {count}")'\''
+              python -m unittest discover -s proof/region/v1/tests -p "test_*.py" -v
+              PYTHONOPTIMIZE=2 python -m unittest discover -s proof/region/v1/tests -p "test_*.py" -v
+              python proof/region/v1/controller.py verify-fixtures --repo-root /workspace
+            '
       - name: toolchain env (runner.temp)
         # runner-контекст недоступен в job-level env — только в шагах; поэтому
         # RUSTUP_HOME/CARGO_HOME назначаются здесь через GITHUB_ENV. Смысл тот
