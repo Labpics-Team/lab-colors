@@ -31,3 +31,7 @@ crates/labcolors-core/LICENSES/*.txt text eol=lf whitespace=-blank-at-eof
 crates/labcolors-core/NOTICE.md text eol=lf
 scripts/verify_clean_set_receipt.py text eol=lf
 scripts/test_verify_clean_set_receipt.py text eol=lf
+# Formula releases are identified by their exact repository bytes. They remain
+# human-readable, but Git must never rewrite line endings before admission.
+crates/labcolors-core/contracts/*.lcir -text
+proof/region/v1/fixtures/*.bin binary
