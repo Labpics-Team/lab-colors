@@ -83,6 +83,17 @@ class SourceSnapshotTests(unittest.TestCase):
             self.assertEqual((destination / "src/tool").read_bytes(), b"tool")
             self.assertEqual(stat.S_IMODE((destination / "LICENSE").stat().st_mode), 0o644)
             self.assertEqual(stat.S_IMODE((destination / "src/tool").stat().st_mode), 0o755)
+            for path in (
+                destination,
+                destination / "LICENSE",
+                destination / "src",
+                destination / "src/tool",
+            ):
+                with self.subTest(path=path):
+                    self.assertEqual(
+                        path.stat().st_mtime_ns,
+                        snapshot.SOURCE_SNAPSHOT_MTIME_NS_V1,
+                    )
 
     def test_destination_must_be_new_exact_release_root(self) -> None:
         lock, archive_bytes = fixture()

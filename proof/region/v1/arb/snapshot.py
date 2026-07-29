@@ -16,6 +16,12 @@ from typing import NoReturn
 import provenance
 
 
+# Archive timestamps are deliberately outside source admission.  One epoch for
+# every materialized node prevents Make-style freshness checks from observing
+# extraction order; changing it is therefore a versioned snapshot-policy change.
+SOURCE_SNAPSHOT_MTIME_NS_V1 = 0
+
+
 class SnapshotReasonV1(StrEnum):
     FOREIGN_CAPABILITY = "foreign_capability"
     INVALID_DESTINATION = "invalid_destination"
@@ -74,6 +80,42 @@ def _ensure_parent(root: Path, relative_parent: Path) -> None:
             os.chmod(current, 0o755, follow_symlinks=False)
         except OSError:
             _fail(SnapshotReasonV1.IO_FAILURE, "cannot normalize source directory")
+
+
+def _normalize_snapshot_times(root: Path, relative_paths: set[str]) -> None:
+    directories = {root}
+    try:
+        for relative in relative_paths:
+            target = root / relative
+            metadata = target.lstat()
+            if not stat.S_ISREG(metadata.st_mode) or stat.S_ISLNK(metadata.st_mode):
+                _fail(SnapshotReasonV1.MATERIALIZATION_MISMATCH, relative)
+            os.utime(
+                target,
+                ns=(SOURCE_SNAPSHOT_MTIME_NS_V1, SOURCE_SNAPSHOT_MTIME_NS_V1),
+                follow_symlinks=False,
+            )
+            parent = target.parent
+            while parent != root:
+                directories.add(parent)
+                parent = parent.parent
+        for directory in sorted(
+            directories,
+            key=lambda item: len(item.relative_to(root).parts),
+            reverse=True,
+        ):
+            metadata = directory.lstat()
+            if not stat.S_ISDIR(metadata.st_mode) or stat.S_ISLNK(metadata.st_mode):
+                _fail(SnapshotReasonV1.MATERIALIZATION_MISMATCH, "parent collision")
+            os.utime(
+                directory,
+                ns=(SOURCE_SNAPSHOT_MTIME_NS_V1, SOURCE_SNAPSHOT_MTIME_NS_V1),
+                follow_symlinks=False,
+            )
+    except SnapshotErrorV1:
+        raise
+    except OSError:
+        _fail(SnapshotReasonV1.IO_FAILURE, "cannot normalize source timestamps")
 
 
 def materialize_source_archive(
@@ -164,6 +206,7 @@ def materialize_source_archive(
         _fail(SnapshotReasonV1.IO_FAILURE, "materialization failed")
     if seen != set(expected_files):
         _fail(SnapshotReasonV1.MATERIALIZATION_MISMATCH, "missing source file")
+    _normalize_snapshot_times(destination, seen)
     return MaterializedSourceTreeV1(
         admitted.tree_identity,
         admitted.regular_file_count,
