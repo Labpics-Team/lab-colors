@@ -24,6 +24,7 @@ mod release_tag {
     pub(super) const MODELED_POINT_PRESENTATION_V1: u8 = 1;
     pub(super) const POINT_ABSENCE_BYPASS_OWN_BACKDROP_V1: u8 = 1;
     pub(super) const FAMILY_CERTIFICATE_VERTEX_V1: u8 = 1;
+    pub(super) const FAMILY_SEMANTIC_RELEASE_VERTEX_V2: u8 = 2;
     #[cfg(test)]
     pub(super) const MODELED_LCS_OCCURRENCE_V1: u8 = 1;
     #[cfg(test)]
@@ -59,6 +60,7 @@ mod release_tag {
     pub(super) const FAMILY_MEMBERSHIP_FAMILY_V1: u8 = 6;
     pub(super) const FAMILY_MEMBERSHIP_IDENTITY_V1: u8 = 1;
     pub(super) const FAMILY_MEMBERSHIP_RELEASE_V1: u8 = 1;
+    pub(super) const FAMILY_MEMBERSHIP_RELEASE_V2: u8 = 2;
     pub(super) const FAMILY_MEMBERSHIP_CAPABILITY_V1: u8 = 1;
     #[cfg(test)]
     pub(super) const EXACT_SRGB8_IDENTITY_MUTATION_SENTINEL_V1: u8 = 2;
@@ -417,11 +419,11 @@ fn source_color(source: Source) -> Result<VertexColorV1, ProgramCompileError> {
     Ok(color)
 }
 
-fn family_color(family: &FamilyDeclarationV1) -> Result<VertexColorV1, ProgramCompileError> {
-    let identity = family.set().certificate().family_content_identity();
+fn family_color(family: &FamilyDeclarationV2) -> Result<VertexColorV1, ProgramCompileError> {
+    let semantic = family.semantic();
     let mut color = VertexColorV1::new(vertex_tag::FAMILY);
-    color.push_u8(release_tag::FAMILY_CERTIFICATE_VERTEX_V1)?;
-    for byte in identity.as_bytes() {
+    color.push_u8(release_tag::FAMILY_SEMANTIC_RELEASE_VERTEX_V2)?;
+    for byte in semantic.as_bytes() {
         color.push_u8(*byte)?;
     }
     Ok(color)
@@ -605,8 +607,8 @@ fn constraint_color(
                 }
             })?;
             color.push_u8(match release {
-                crate::constraints::FamilyMembershipReleaseV1::V1 => {
-                    release_tag::FAMILY_MEMBERSHIP_RELEASE_V1
+                crate::constraints::FamilyMembershipReleaseV2::V2 => {
+                    release_tag::FAMILY_MEMBERSHIP_RELEASE_V2
                 }
             })?;
             color.push_u8(match capability {
@@ -1746,20 +1748,20 @@ mod tests {
     use super::*;
 
     #[test]
-    fn family_vertex_codec_binds_release_and_certificate_identity_without_opaque_id() {
-        let set = crate::family::admit_declared_family_image_v1(vec![ColorSignal::from_srgb8(
-            Srgb8::new([0x12, 0x34, 0x56]),
-        )])
-        .unwrap();
-        let expected = set.certificate().family_content_identity();
-        let family = FamilyDeclarationV1::new(FamilyId::new(u32::MAX), set);
+    fn family_vertex_codec_binds_semantic_release_without_opaque_id_or_artifact_receipt() {
+        assert_eq!(release_tag::FAMILY_CERTIFICATE_VERTEX_V1, 1);
+        assert_eq!(release_tag::FAMILY_MEMBERSHIP_RELEASE_V1, 1);
+        assert_eq!(release_tag::FAMILY_SEMANTIC_RELEASE_VERTEX_V2, 2);
+        assert_eq!(release_tag::FAMILY_MEMBERSHIP_RELEASE_V2, 2);
+        let expected = crate::family::SemanticFamilyReleaseIdV2::from_digest([0xA5; 32]);
+        let family = FamilyDeclarationV2::new(FamilyId::new(u32::MAX), expected);
 
         let color = family_color(&family).unwrap();
 
         assert_eq!(color.as_slice()[0], vertex_tag::FAMILY);
         assert_eq!(
             color.as_slice()[1],
-            release_tag::FAMILY_CERTIFICATE_VERTEX_V1
+            release_tag::FAMILY_SEMANTIC_RELEASE_VERTEX_V2
         );
         assert_eq!(&color.as_slice()[2..], expected.as_bytes());
     }

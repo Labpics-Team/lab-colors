@@ -22,8 +22,8 @@ pub(crate) use exact::{
 
 mod family;
 pub(crate) use family::{
-    FamilyMembershipCapabilityV1, FamilyMembershipIdentityV1, FamilyMembershipReleaseV1,
-    FamilyMembershipV1,
+    FamilyMembershipCapabilityV1, FamilyMembershipIdentityV1, FamilyMembershipReleaseV2,
+    FamilyMembershipV2,
 };
 
 #[cfg(test)]
@@ -520,7 +520,7 @@ pub(crate) enum ProgramConstraintContentV1 {
     },
     FamilyMembership {
         identity: FamilyMembershipIdentityV1,
-        release: FamilyMembershipReleaseV1,
+        release: FamilyMembershipReleaseV2,
         capability: FamilyMembershipCapabilityV1,
     },
     ExactSrgb8Relation {

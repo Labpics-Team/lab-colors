@@ -1,9 +1,9 @@
 use crate::Srgb8;
-use crate::constraints::{FamilyMembershipV1, HardDecision, ProgramConstraintContentV1};
+use crate::constraints::{FamilyMembershipV2, HardDecision, ProgramConstraintContentV1};
 use crate::family::{
-    FamilyDeclarationV1, FamilyId, FamilyMembershipMeasurementV1, FamilyMembershipPassV1,
-    FamilyMembershipViolationV1,
+    FamilyId, FamilyMembershipMeasurementV2, FamilyMembershipPassV1, FamilyMembershipViolationV1,
 };
+use crate::family_artifact::BoundFamilyArtifactBundleV2;
 use crate::lcs_occurrence::ColorSignal;
 
 fn exact_srgb8_equal(left: Srgb8, right: Srgb8) -> bool {
@@ -188,7 +188,7 @@ pub(crate) enum CoreIntrinsicUnaryMeasurementV1 {
     ExactSrgb8(ExactSrgb8IntrinsicUnaryMeasurementV1),
     FamilyMembership {
         family: FamilyId,
-        measurement: FamilyMembershipMeasurementV1,
+        measurement: FamilyMembershipMeasurementV2,
     },
 }
 
@@ -225,7 +225,7 @@ impl CoreIntrinsicUnaryInvocationV1 {
                 }
             }
             Self::FamilyMembership { .. } => {
-                let profile = FamilyMembershipV1;
+                let profile = FamilyMembershipV2;
                 ProgramConstraintContentV1::FamilyMembership {
                     identity: profile.identity(),
                     release: profile.release(),
@@ -240,7 +240,7 @@ impl CompiledCoreIntrinsicUnaryInvocationV1 {
     pub(crate) fn assess(
         self,
         actual: Srgb8,
-        families: &[FamilyDeclarationV1],
+        families: &BoundFamilyArtifactBundleV2,
     ) -> Option<(
         CoreIntrinsicUnaryMeasurementV1,
         HardDecision<CoreIntrinsicUnaryPassV1, CoreIntrinsicUnaryViolationV1>,
@@ -265,16 +265,12 @@ impl CompiledCoreIntrinsicUnaryInvocationV1 {
                 family,
                 family_index,
             } => {
-                // Compile-time связывает индекс с этим exact FamilyId; `None`
-                // здесь означает порчу compiled graph, а не штатное отсутствие
-                // evidence, и вызывающий слой переводит его в InternalInvariant.
-                let declaration = families.get(family_index)?;
-                if declaration.id() != family {
-                    return None;
-                }
-                let set = declaration.set();
+                // Compile-time ordinal и Session projection независимо
+                // связываются через semantic release; runtime lookup не читает
+                // opaque FamilyId. `None` поэтому означает порчу compiled state.
+                let artifact = families.artifact(family_index)?;
                 let (measurement, decision) =
-                    FamilyMembershipV1.assess(set, ColorSignal::from_srgb8(actual));
+                    FamilyMembershipV2.assess(artifact, ColorSignal::from_srgb8(actual));
                 let decision = match decision {
                     HardDecision::Pass(proof) => {
                         HardDecision::Pass(CoreIntrinsicUnaryPassV1::FamilyMembership(proof))

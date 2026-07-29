@@ -3,7 +3,10 @@ use crate::appearance::{
     EncodedPointPaintValueV1, OccurrenceId, OpacityInputId, PaintId, SurfaceId, SurfaceInputPortId,
 };
 use crate::composition::AdmittedOpacityV1;
-use crate::family::{FamilyDeclarationV1, FamilyId, admit_declared_family_image_v1};
+use crate::family::{
+    FamilyDeclarationV2, FamilyDefinitionDigestV2, FamilyId, canonical_family_image_digest_v2,
+    semantic_family_release_id_v2,
+};
 use crate::lcs_occurrence::{
     AdaptingLuminanceCdM2, AppearanceContextId, AppearanceContextSchemaReleaseId,
     BackgroundLuminanceRatio, ColorSignal, IEC_SRGB_D65_XYZ_FRAME_V1, SurroundProfileId,
@@ -50,11 +53,18 @@ fn context(surround: SurroundProfileId) -> AppearanceContextId {
     )
 }
 
-fn declared_family(id: FamilyId, members: &[[u8; 3]]) -> FamilyDeclarationV1 {
-    FamilyDeclarationV1::new(
-        id,
-        admit_declared_family_image_v1(members.iter().copied().map(signal).collect()).unwrap(),
+fn declared_family(id: FamilyId, members: &[[u8; 3]]) -> FamilyDeclarationV2 {
+    let mut members = members.iter().copied().map(signal).collect::<Vec<_>>();
+    members.sort_unstable_by_key(|member| member.srgb8().bytes());
+    members.dedup_by_key(|member| member.srgb8().bytes());
+    let image = canonical_family_image_digest_v2(
+        crate::lcs_occurrence::OutputProfileId::Iec61966Srgb8D65V1,
+        &members,
     )
+    .unwrap();
+    let count = u64::try_from(members.len()).unwrap();
+    let definition = FamilyDefinitionDigestV2::from_fixture_bytes_v2(b"identity-test-family");
+    FamilyDeclarationV2::new(id, semantic_family_release_id_v2(definition, image, count))
 }
 
 fn family_identity_program(
@@ -1016,8 +1026,8 @@ fn complete_program_schema_v7_digest_is_cross_platform_golden() {
     assert_eq!(
         compiled.content_identity().as_bytes(),
         &[
-            91, 190, 49, 64, 54, 146, 143, 130, 182, 127, 204, 161, 237, 77, 36, 163, 46, 147, 135,
-            196, 165, 104, 201, 64, 177, 26, 222, 181, 175, 25, 176, 163,
+            7, 48, 234, 107, 255, 142, 19, 44, 100, 188, 151, 23, 132, 32, 125, 8, 223, 146, 164,
+            87, 8, 134, 38, 127, 130, 32, 197, 17, 118, 227, 166, 95,
         ]
     );
 }

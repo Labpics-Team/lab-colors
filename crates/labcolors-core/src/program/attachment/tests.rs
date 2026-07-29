@@ -4,10 +4,17 @@ use super::support::{
 };
 use super::*;
 use crate::Srgb8;
+use crate::family::FamilyDefinitionDigestV2;
+use crate::family_artifact::{
+    FAMILY_ARTIFACT_DECODER_CALLS, FamilyArtifactBundleV2, FamilyArtifactLoaderV1,
+    FamilyArtifactReceiptIdV2, FixtureFamilyArtifactCodecV1, encode_fixture_family_artifact_v2,
+};
+use crate::lcs_occurrence::ColorSignal;
 use crate::program::{
-    AppearanceContextV1, ConstraintIdV1, DraftV1, FinitePaintDomainV1, JointChoiceV1, JointStateV1,
-    PaintIdV1, PaintValueV1, ScenarioV1, SourceIdV1, StateKindV1, SurfaceIdV1,
-    SurfaceInputPortIdV1, SurroundV1, TargetCandidateIdV1, TargetCandidateV1, TargetIdV1,
+    AppearanceContextV1, ConstraintIdV1, DraftV1, FamilyIdV1, FamilySemanticReleaseV2,
+    FinitePaintDomainV1, JointChoiceV1, JointStateV1, PaintIdV1, PaintValueV1, ScenarioV1,
+    SourceIdV1, StateKindV1, SurfaceIdV1, SurfaceInputPortIdV1, SurroundV1, TargetCandidateIdV1,
+    TargetCandidateV1, TargetIdV1,
 };
 use crate::wcag22::Wcag22CriterionV1;
 use proptest::prelude::*;
@@ -23,6 +30,7 @@ const MIDDLE: OccurrenceIdV1 = OccurrenceIdV1::new(15);
 const ROOT: PresentationRootIdV1 = PresentationRootIdV1::new(51);
 const OUTPUT_A: OutputSlotIdV1 = OutputSlotIdV1::new(12);
 const OUTPUT_B: OutputSlotIdV1 = OutputSlotIdV1::new(13);
+const FAMILY: FamilyIdV1 = FamilyIdV1::new(21);
 
 fn finite_domain(candidates: Vec<TargetCandidateV1>) -> FinitePaintDomainV1 {
     FinitePaintDomainV1::try_new(candidates).unwrap()
@@ -58,13 +66,29 @@ fn a_stale_copy_stamp_cannot_cross_a_sequential_sink_epoch() {
     };
 
     let (first, first_probe) = in_memory_point_sink(&[900]);
-    let mut first = owner.attach(1, &emissions, &presentations, first).unwrap();
+    let mut first = owner
+        .attach(
+            1,
+            &emissions,
+            &presentations,
+            FamilyArtifactBundleV2::empty(),
+            first,
+        )
+        .unwrap();
     first.update(unknown).unwrap();
     let stale = first_probe.stamp();
     drop(first);
 
     let (second, second_probe) = in_memory_point_sink(&[900]);
-    let mut second = owner.attach(1, &emissions, &presentations, second).unwrap();
+    let mut second = owner
+        .attach(
+            1,
+            &emissions,
+            &presentations,
+            FamilyArtifactBundleV2::empty(),
+            second,
+        )
+        .unwrap();
     second.update(unknown).unwrap();
     assert_ne!(second_probe.stamp(), stale);
     assert!(matches!(
@@ -92,25 +116,209 @@ fn cold_attach_failure_preserves_the_same_unbound_lease_for_retry() {
         INNER.value(),
     )];
 
-    let failure = match owner.attach(1, &emissions, &[], sink) {
+    let failure = match owner.attach(1, &emissions, &[], FamilyArtifactBundleV2::empty(), sink) {
         Ok(_) => panic!("incomplete presentation binding must fail"),
         Err(failure) => failure,
     };
-    assert!(matches!(
-        failure.cause(),
-        &AttachmentCreateCauseV1::Contract(AttachmentCreateErrorV1::EmptyPresentations)
-    ));
+    let retry = match failure {
+        AttachmentCreateFailureV2::Contract { cause, retry } => {
+            assert_eq!(cause, AttachmentCreateErrorV1::EmptyPresentations);
+            retry
+        }
+        AttachmentCreateFailureV2::SinkAdmission { .. } => {
+            panic!("invalid bindings must not reach host admission")
+        }
+    };
     assert!(probe.ambient_fallback_is_exposed());
     assert!(!probe.lease_was_dropped());
 
-    let sink = failure.into_sink();
-    let attachment = owner.attach(1, &emissions, &presentations, sink).unwrap();
+    let (sink, family_artifacts) = retry.into_parts();
+    let attachment = owner
+        .attach(1, &emissions, &presentations, family_artifacts, sink)
+        .unwrap();
     assert!(probe.is_closed());
     assert!(!probe.ambient_fallback_is_exposed());
 
     attachment.dispose();
     assert!(probe.is_closed());
     assert!(!probe.ambient_fallback_is_exposed());
+}
+
+#[test]
+fn family_contract_failure_returns_the_same_sink_and_loaded_bundle_for_retry() {
+    FAMILY_ARTIFACT_DECODER_CALLS.with(|calls| calls.set(0));
+    let FamilyAttachmentFixtureV2 {
+        owner,
+        artifacts,
+        semantic,
+        receipt,
+    } = family_attachment_fixture();
+    assert_eq!(FAMILY_ARTIFACT_DECODER_CALLS.with(core::cell::Cell::get), 1,);
+    let (sink, probe) = in_memory_point_sink(&[900]);
+    let emissions = [authored_emission(OUTPUT_A.value(), 900)];
+    let presentations = [authored_presentation(
+        OUTPUT_A.value(),
+        ROOT.value(),
+        INNER.value(),
+    )];
+
+    let failure = match owner.attach(31, &emissions, &[], artifacts, sink) {
+        Ok(_) => panic!("incomplete presentation binding must fail"),
+        Err(failure) => failure,
+    };
+    let retry = match failure {
+        AttachmentCreateFailureV2::Contract { cause, retry } => {
+            assert_eq!(cause, AttachmentCreateErrorV1::EmptyPresentations);
+            retry
+        }
+        AttachmentCreateFailureV2::SinkAdmission { .. } => {
+            panic!("contract failure must not reach host admission")
+        }
+    };
+    assert!(probe.ambient_fallback_is_exposed());
+    assert!(!probe.lease_was_dropped());
+    assert_eq!(
+        FAMILY_ARTIFACT_DECODER_CALLS.with(core::cell::Cell::get),
+        1,
+        "cold contract retry must retain the loaded generation",
+    );
+
+    let (sink, artifacts) = retry.into_parts();
+    let mut attachment = owner
+        .attach(31, &emissions, &presentations, artifacts, sink)
+        .unwrap();
+    assert!(probe.is_closed());
+    assert_eq!(
+        FAMILY_ARTIFACT_DECODER_CALLS.with(core::cell::Cell::get),
+        1,
+        "corrected attach must consume the returned bundle without reload",
+    );
+
+    let surface = [Srgb8::new([0, 0, 0])];
+    let scenarios = [ScenarioV1::new(1, &surface)];
+    let committed = attachment.update(observed(1, &scenarios)).unwrap();
+    let execution = committed.family_execution_bindings().next().unwrap();
+    assert_eq!(execution.semantic(), semantic.into_core());
+    assert_eq!(execution.receipt(), receipt);
+}
+
+#[test]
+fn family_sink_admission_retry_reuses_the_prepared_session_without_allocator_or_decode() {
+    FAMILY_ARTIFACT_DECODER_CALLS.with(|calls| calls.set(0));
+    let FamilyAttachmentFixtureV2 {
+        owner,
+        artifacts,
+        semantic,
+        receipt,
+    } = family_attachment_fixture();
+    let (sink, probe) = in_memory_point_sink(&[900]);
+    let emissions = [authored_emission(OUTPUT_A.value(), 900)];
+    let presentations = [authored_presentation(
+        OUTPUT_A.value(),
+        ROOT.value(),
+        INNER.value(),
+    )];
+
+    probe.reject_next_admission();
+    let failure = match owner.attach(32, &emissions, &presentations, artifacts, sink) {
+        Ok(_) => panic!("sink admission rejection must retain cold preparation"),
+        Err(failure) => failure,
+    };
+    let retry = match failure {
+        AttachmentCreateFailureV2::SinkAdmission { cause, retry } => {
+            assert_eq!(
+                cause,
+                InMemoryPointSinkAdmissionErrorV1::RejectedBeforeInstall,
+            );
+            retry
+        }
+        AttachmentCreateFailureV2::Contract { .. } => {
+            panic!("valid family attachment must reach host admission")
+        }
+    };
+    assert!(probe.ambient_fallback_is_exposed());
+    assert_eq!(probe.admitted_stamp(), None);
+    assert_eq!(FAMILY_ARTIFACT_DECODER_CALLS.with(core::cell::Cell::get), 1,);
+
+    probe.reject_next_admission_after_install();
+    let (failure, events) =
+        crate::test_support::measured_allocator_events(|| match retry.retry() {
+            Ok(_) => panic!("second sink admission rejection must retain cold preparation"),
+            Err(failure) => failure,
+        });
+    assert_eq!(events, crate::test_support::AllocatorEvents::default());
+    assert_eq!(
+        failure.cause(),
+        &InMemoryPointSinkAdmissionErrorV1::RejectedAfterInstall,
+    );
+    let (cause, retry) = failure.into_parts();
+    assert_eq!(
+        cause,
+        InMemoryPointSinkAdmissionErrorV1::RejectedAfterInstall,
+    );
+    assert_eq!(probe.admitted_stamp(), None);
+    assert_eq!(
+        FAMILY_ARTIFACT_DECODER_CALLS.with(core::cell::Cell::get),
+        1,
+        "rejected prepared retry must not reconstruct the artifact generation",
+    );
+
+    let (mut attachment, events) =
+        crate::test_support::measured_allocator_events(|| match retry.retry() {
+            Ok(attachment) => attachment,
+            Err(_) => panic!("third sink admission must accept the retained preparation"),
+        });
+    assert_eq!(events, crate::test_support::AllocatorEvents::default());
+    assert_eq!(
+        FAMILY_ARTIFACT_DECODER_CALLS.with(core::cell::Cell::get),
+        1,
+        "successful prepared retry must not reconstruct the artifact generation",
+    );
+    assert!(probe.is_closed());
+
+    let surface = [Srgb8::new([0, 0, 0])];
+    let scenarios = [ScenarioV1::new(1, &surface)];
+    let committed = attachment.update(observed(1, &scenarios)).unwrap();
+    let execution = committed.family_execution_bindings().next().unwrap();
+    assert_eq!(execution.semantic(), semantic.into_core());
+    assert_eq!(execution.receipt(), receipt);
+}
+
+#[test]
+fn attachment_pins_owner_and_artifact_until_explicit_dispose() {
+    let drops = std::rc::Rc::new(core::cell::Cell::new(0));
+    let FamilyAttachmentFixtureV2 {
+        owner,
+        artifacts,
+        semantic: _,
+        receipt: _,
+    } = family_attachment_fixture_with_drop_counter(drops.clone());
+    let (sink, _) = in_memory_point_sink(&[900]);
+    let emissions = [authored_emission(OUTPUT_A.value(), 900)];
+    let presentations = [authored_presentation(
+        OUTPUT_A.value(),
+        ROOT.value(),
+        INNER.value(),
+    )];
+    let mut attachment = owner
+        .attach(40, &emissions, &presentations, artifacts, sink)
+        .unwrap();
+
+    assert_eq!(drops.get(), 0);
+    drop(owner);
+    let surface = [Srgb8::new([0, 0, 0])];
+    let scenarios = [ScenarioV1::new(1, &surface)];
+    assert_eq!(
+        attachment
+            .update(observed(1, &scenarios))
+            .unwrap()
+            .evidence()
+            .kind(),
+        StateKindV1::Ready,
+    );
+    assert_eq!(drops.get(), 0);
+    attachment.dispose();
+    assert_eq!(drops.get(), 1);
 }
 
 #[test]
@@ -129,25 +337,31 @@ fn create_failure_debug_reports_the_typed_cause_without_sink_internals() {
     )];
 
     let (sink, _) = in_memory_point_sink(&[900]);
-    let contract = match owner.attach(1, &emissions, &[], sink) {
+    let contract = match owner.attach(1, &emissions, &[], FamilyArtifactBundleV2::empty(), sink) {
         Ok(_) => panic!("contract failure was expected"),
         Err(failure) => failure,
     };
     let contract_debug = format!("{contract:?}");
-    assert!(contract_debug.contains("AttachmentCreateFailureV1"));
-    assert!(contract_debug.contains("Contract(EmptyPresentations)"));
+    assert!(contract_debug.contains("AttachmentCreateFailureV2"));
+    assert!(contract_debug.contains("contract: EmptyPresentations"));
     assert!(!contract_debug.contains("owned_scope"));
     assert!(!contract_debug.contains("TestSinkSharedV1"));
 
     let (sink, probe) = in_memory_point_sink(&[900]);
     probe.reject_next_admission();
-    let admission = match owner.attach(2, &emissions, &presentations, sink) {
+    let admission = match owner.attach(
+        2,
+        &emissions,
+        &presentations,
+        FamilyArtifactBundleV2::empty(),
+        sink,
+    ) {
         Ok(_) => panic!("admission failure was expected"),
         Err(failure) => failure,
     };
     let admission_debug = format!("{admission:?}");
-    assert!(admission_debug.contains("AttachmentCreateFailureV1"));
-    assert!(admission_debug.contains("SinkAdmission(RejectedBeforeInstall)"));
+    assert!(admission_debug.contains("AttachmentCreateFailureV2"));
+    assert!(admission_debug.contains("sink_admission: RejectedBeforeInstall"));
     assert!(!admission_debug.contains("owned_scope"));
     assert!(!admission_debug.contains("TestSinkSharedV1"));
 }
@@ -169,37 +383,45 @@ fn failed_closed_admission_is_atomic_and_mints_epoch_only_after_install() {
     )];
 
     probe.reject_next_admission();
-    let failure = match owner.attach(2, &emissions, &presentations, sink) {
+    let failure = match owner.attach(
+        2,
+        &emissions,
+        &presentations,
+        FamilyArtifactBundleV2::empty(),
+        sink,
+    ) {
         Ok(_) => panic!("pre-install admission fault must return the lease"),
         Err(failure) => failure,
     };
-    assert!(matches!(
-        failure.cause(),
-        &AttachmentCreateCauseV1::SinkAdmission(
-            InMemoryPointSinkAdmissionErrorV1::RejectedBeforeInstall
-        )
-    ));
+    let retry = match failure {
+        AttachmentCreateFailureV2::SinkAdmission { cause, retry } => {
+            assert_eq!(
+                cause,
+                InMemoryPointSinkAdmissionErrorV1::RejectedBeforeInstall
+            );
+            retry
+        }
+        AttachmentCreateFailureV2::Contract { .. } => {
+            panic!("valid bindings must reach host admission")
+        }
+    };
     assert!(probe.ambient_fallback_is_exposed());
     assert_eq!(probe.admitted_stamp(), None);
 
-    let sink = failure.into_sink();
     probe.reject_next_admission_after_install();
-    let failure = match owner.attach(2, &emissions, &presentations, sink) {
+    let failure = match retry.retry() {
         Ok(_) => panic!("post-install fault must roll the tombstone back"),
         Err(failure) => failure,
     };
-    assert!(matches!(
+    assert_eq!(
         failure.cause(),
-        &AttachmentCreateCauseV1::SinkAdmission(
-            InMemoryPointSinkAdmissionErrorV1::RejectedAfterInstall
-        )
-    ));
+        &InMemoryPointSinkAdmissionErrorV1::RejectedAfterInstall
+    );
     assert!(probe.ambient_fallback_is_exposed());
     assert_eq!(probe.admitted_stamp(), None);
 
-    let attachment = owner
-        .attach(2, &emissions, &presentations, failure.into_sink())
-        .unwrap();
+    let (_, retry) = failure.into_parts();
+    let attachment = retry.retry().unwrap();
     let admitted = probe.stamp();
     assert_eq!(admitted.sequence(), 0);
     assert!(probe.is_closed());
@@ -228,7 +450,13 @@ fn initial_unknown_and_violation_keep_the_host_scope_closed() {
     );
     let (sink, unknown_probe) = in_memory_point_sink(&[900]);
     let mut attachment = pass_owner
-        .attach(3, &emissions, &presentations, sink)
+        .attach(
+            3,
+            &emissions,
+            &presentations,
+            FamilyArtifactBundleV2::empty(),
+            sink,
+        )
         .unwrap();
     assert!(unknown_probe.is_closed());
     attachment.update(unknown).unwrap();
@@ -243,7 +471,13 @@ fn initial_unknown_and_violation_keep_the_host_scope_closed() {
     );
     let (sink, violation_probe) = in_memory_point_sink(&[900]);
     let mut conflict = conflict_owner
-        .attach(4, &emissions, &presentations, sink)
+        .attach(
+            4,
+            &emissions,
+            &presentations,
+            FamilyArtifactBundleV2::empty(),
+            sink,
+        )
         .unwrap();
     let values = [Srgb8::new([0, 0, 0])];
     let scenarios = [ScenarioV1::new(1, &values)];
@@ -279,7 +513,13 @@ fn every_host_binding_axis_is_checked_before_sink_mutation() {
     {
         let (sink, probe) = in_memory_point_sink(&[900]);
         let mut attachment = owner
-            .attach(5 + index as u32, &emissions, &presentations, sink)
+            .attach(
+                5 + index as u32,
+                &emissions,
+                &presentations,
+                FamilyArtifactBundleV2::empty(),
+                sink,
+            )
             .unwrap();
         let initial_stamp = probe.stamp();
         probe.drift_host_binding(axis);
@@ -338,7 +578,15 @@ fn every_sink_intent_cas_checks_the_same_current_binding_stamp() {
         INNER.value(),
     )];
     let (sink, probe) = in_memory_point_sink(&[900]);
-    let mut attachment = owner.attach(6, &emissions, &presentations, sink).unwrap();
+    let mut attachment = owner
+        .attach(
+            6,
+            &emissions,
+            &presentations,
+            FamilyArtifactBundleV2::empty(),
+            sink,
+        )
+        .unwrap();
     let values = [Srgb8::new([0, 0, 0])];
     let scenarios = [ScenarioV1::new(1, &values)];
     attachment.update(observed(1, &scenarios)).unwrap();
@@ -348,7 +596,13 @@ fn every_sink_intent_cas_checks_the_same_current_binding_stamp() {
     let baseline_counts = probe.intent_counts();
     let (foreign, foreign_probe) = in_memory_point_sink(&[900]);
     let foreign = owner
-        .attach(7, &emissions, &presentations, foreign)
+        .attach(
+            7,
+            &emissions,
+            &presentations,
+            FamilyArtifactBundleV2::empty(),
+            foreign,
+        )
         .unwrap();
     let foreign_stamp = foreign_probe.stamp();
     let foreign_transition = PointSinkMutationStampV1::new(foreign_stamp).unwrap();
@@ -403,7 +657,15 @@ fn core_mints_the_exact_successor_for_every_mutating_intent() {
         INNER.value(),
     )];
     let (sink, probe) = in_memory_point_sink(&[900]);
-    let mut attachment = owner.attach(8, &emissions, &presentations, sink).unwrap();
+    let mut attachment = owner
+        .attach(
+            8,
+            &emissions,
+            &presentations,
+            FamilyArtifactBundleV2::empty(),
+            sink,
+        )
+        .unwrap();
     let values = [Srgb8::new([0, 0, 0])];
     let scenarios = [ScenarioV1::new(1, &values)];
 
@@ -459,7 +721,15 @@ fn exhausted_stamp_fails_before_sink_prepare_or_session_commit() {
         INNER.value(),
     )];
     let (sink, probe) = in_memory_point_sink(&[900]);
-    let mut attachment = owner.attach(8, &emissions, &presentations, sink).unwrap();
+    let mut attachment = owner
+        .attach(
+            8,
+            &emissions,
+            &presentations,
+            FamilyArtifactBundleV2::empty(),
+            sink,
+        )
+        .unwrap();
     let exhausted = PointSinkStampV1::new(u64::MAX, probe.stamp().binding_epoch());
     probe.force_stamp_sequence(u64::MAX);
     attachment.expected_sink_stamp = exhausted;
@@ -496,7 +766,15 @@ fn closed_revoke_is_confirmable_from_one_expected_stamp_source_of_truth() {
         ROOT.value(),
         INNER.value(),
     )];
-    let mut attachment = owner.attach(8, &emissions, &presentations, sink).unwrap();
+    let mut attachment = owner
+        .attach(
+            8,
+            &emissions,
+            &presentations,
+            FamilyArtifactBundleV2::empty(),
+            sink,
+        )
+        .unwrap();
     let admission_stamp = attachment.expected_sink_stamp;
     assert_eq!(attachment.committed_revision, None);
 
@@ -551,7 +829,7 @@ proptest! {
             INNER.value(),
         )];
         let mut attachment = owner
-            .attach(9, &emissions, &presentations, sink)
+            .attach(9, &emissions, &presentations, FamilyArtifactBundleV2::empty(), sink)
             .unwrap();
         let values = [Srgb8::new([0, 0, 0])];
         let scenarios = [ScenarioV1::new(1, &values)];
@@ -701,7 +979,15 @@ fn attachment_terminal_tail_has_no_allocator_events() {
         ROOT.value(),
         INNER.value(),
     )];
-    let mut attachment = owner.attach(1, &emissions, &presentations, sink).unwrap();
+    let mut attachment = owner
+        .attach(
+            1,
+            &emissions,
+            &presentations,
+            FamilyArtifactBundleV2::empty(),
+            sink,
+        )
+        .unwrap();
     let values = [Srgb8::new([0, 0, 0])];
     let scenarios = [ScenarioV1::new(44, &values)];
 
@@ -741,7 +1027,15 @@ fn warmed_attachment_complete_lifecycle_has_no_allocator_events() {
         ROOT.value(),
         INNER.value(),
     )];
-    let mut attachment = owner.attach(1, &emissions, &presentations, sink).unwrap();
+    let mut attachment = owner
+        .attach(
+            1,
+            &emissions,
+            &presentations,
+            FamilyArtifactBundleV2::empty(),
+            sink,
+        )
+        .unwrap();
     let white = [Srgb8::new([0xFF; 3])];
     let light = [Srgb8::new([0xF0; 3])];
     let black = [Srgb8::new([0; 3])];
@@ -939,7 +1233,15 @@ fn allocator_sink_missing_stamp_is_a_typed_prepare_failure() {
         ROOT.value(),
         INNER.value(),
     )];
-    let mut attachment = owner.attach(1, &emissions, &presentations, sink).unwrap();
+    let mut attachment = owner
+        .attach(
+            1,
+            &emissions,
+            &presentations,
+            FamilyArtifactBundleV2::empty(),
+            sink,
+        )
+        .unwrap();
 
     probe.clear_stamp_for_test();
     assert!(matches!(
@@ -1041,6 +1343,70 @@ fn owner(
     owner_with_terminal_presentation(source, expected, extra_topology, outputs, false)
 }
 
+struct FamilyAttachmentFixtureV2 {
+    owner: OwnerV1,
+    artifacts: FamilyArtifactBundleV2,
+    semantic: FamilySemanticReleaseV2,
+    receipt: FamilyArtifactReceiptIdV2,
+}
+
+fn family_attachment_fixture() -> FamilyAttachmentFixtureV2 {
+    family_attachment_fixture_inner(None)
+}
+
+fn family_attachment_fixture_with_drop_counter(
+    counter: std::rc::Rc<core::cell::Cell<usize>>,
+) -> FamilyAttachmentFixtureV2 {
+    family_attachment_fixture_inner(Some(counter))
+}
+
+fn family_attachment_fixture_inner(
+    drop_counter: Option<std::rc::Rc<core::cell::Cell<usize>>>,
+) -> FamilyAttachmentFixtureV2 {
+    let member = Srgb8::new([12, 34, 56]);
+    let definition =
+        FamilyDefinitionDigestV2::from_fixture_bytes_v2(b"attachment-tests/exact-family");
+    let (certificate, encoded) = encode_fixture_family_artifact_v2(
+        definition,
+        &[ColorSignal::from_srgb8(member)],
+        FixtureFamilyArtifactCodecV1::CanonicalMembersV1,
+    )
+    .unwrap();
+    let semantic = FamilySemanticReleaseV2::from_core(certificate.semantic_release());
+    let receipt = certificate.artifact_receipt();
+    let artifact = FamilyArtifactLoaderV1::load_fixture(certificate, encoded).unwrap();
+    let artifact = match drop_counter {
+        Some(counter) => artifact.with_drop_counter_for_test(counter),
+        None => artifact,
+    };
+    let artifacts = FamilyArtifactBundleV2::from_artifacts(vec![artifact]);
+
+    let context = AppearanceContextV1::try_new(64.0, 0.2, SurroundV1::Dim).unwrap();
+    let inner_surface = SurfaceIdV1::new(7);
+    let mut draft = DraftV1::new();
+    draft.push_source(SOURCE, member);
+    draft.push_fixed_target(TARGET, SOURCE);
+    draft.push_family(FAMILY, semantic);
+    draft.push_surface_input_port(INPUT);
+    draft.push_solid_paint(PAINT, TARGET);
+    draft.push_input_surface(INPUT_SURFACE, INPUT);
+    draft.push_source_over_occurrence(INNER, PAINT, INPUT_SURFACE, context);
+    draft.push_occurrence_surface(inner_surface, INNER);
+    draft.push_source_over_occurrence(TERMINAL, PAINT, inner_surface, context);
+    draft.push_point_presentation_root(ROOT, TERMINAL);
+    draft.push_point_presentation_target(ROOT, INNER);
+    draft.push_intrinsic_family_membership_hard(ConstraintIdV1::new(10), TARGET, FAMILY);
+    draft.push_exact_visible_unary_hard(ConstraintIdV1::new(11), INNER, member);
+    draft.push_output(OUTPUT_A, PAINT);
+
+    FamilyAttachmentFixtureV2 {
+        owner: draft.compile().unwrap(),
+        artifacts,
+        semantic,
+        receipt,
+    }
+}
+
 fn owner_with_terminal_presentation(
     source: Srgb8,
     expected: Srgb8,
@@ -1090,7 +1456,7 @@ fn observed<'a>(revision: u64, scenarios: &'a [ScenarioV1<'a>]) -> UpdateV1<'a> 
 }
 
 fn contract_error<L>(
-    result: Result<Attachment<L::Closed>, AttachmentCreateFailureV1<L>>,
+    result: Result<Attachment<L::Closed>, AttachmentCreateFailureV2<L>>,
 ) -> AttachmentCreateErrorV1<L::OutputId>
 where
     L: UnboundPointSinkLeaseV1,
@@ -1099,9 +1465,9 @@ where
         Ok(_) => panic!("cold contract error was expected"),
         Err(failure) => failure,
     };
-    match failure.into_parts().0 {
-        AttachmentCreateCauseV1::Contract(cause) => cause,
-        AttachmentCreateCauseV1::SinkAdmission(_) => {
+    match failure {
+        AttachmentCreateFailureV2::Contract { cause, .. } => cause,
+        AttachmentCreateFailureV2::SinkAdmission { .. } => {
             panic!("contract test reached host admission")
         }
     }
@@ -1126,7 +1492,13 @@ fn attach_rejects_missing_extra_duplicate_and_accepts_reordered_sink_scope() {
 
     let (missing, missing_probe) = in_memory_point_sink(&[900]);
     assert!(matches!(
-        contract_error(owner.attach(1, &emissions, &presentations, missing)),
+        contract_error(owner.attach(
+            1,
+            &emissions,
+            &presentations,
+            FamilyArtifactBundleV2::empty(),
+            missing
+        )),
         AttachmentCreateErrorV1::SinkScopeCount {
             expected: 2,
             actual: 1
@@ -1137,7 +1509,13 @@ fn attach_rejects_missing_extra_duplicate_and_accepts_reordered_sink_scope() {
 
     let (extra, _) = in_memory_point_sink(&[900, 901, 902]);
     assert!(matches!(
-        contract_error(owner.attach(1, &emissions, &presentations, extra)),
+        contract_error(owner.attach(
+            1,
+            &emissions,
+            &presentations,
+            FamilyArtifactBundleV2::empty(),
+            extra
+        )),
         AttachmentCreateErrorV1::SinkScopeCount {
             expected: 2,
             actual: 3
@@ -1146,13 +1524,25 @@ fn attach_rejects_missing_extra_duplicate_and_accepts_reordered_sink_scope() {
 
     let (duplicate, _) = in_memory_point_sink(&[900, 900]);
     assert!(matches!(
-        contract_error(owner.attach(1, &emissions, &presentations, duplicate)),
+        contract_error(owner.attach(
+            1,
+            &emissions,
+            &presentations,
+            FamilyArtifactBundleV2::empty(),
+            duplicate
+        )),
         AttachmentCreateErrorV1::DuplicateSinkScopeOutput { .. }
     ));
 
     let (reordered, reordered_probe) = in_memory_point_sink(&[901, 900]);
     let reordered = owner
-        .attach(1, &emissions, &presentations, reordered)
+        .attach(
+            1,
+            &emissions,
+            &presentations,
+            FamilyArtifactBundleV2::empty(),
+            reordered,
+        )
         .unwrap();
     assert!(reordered_probe.is_closed());
     reordered.dispose();
@@ -1163,7 +1553,13 @@ fn attach_rejects_missing_extra_duplicate_and_accepts_reordered_sink_scope() {
     ];
     let (sink, _) = in_memory_point_sink(&[900, 901]);
     assert!(matches!(
-        contract_error(owner.attach(1, &duplicate_emission, &presentations, sink)),
+        contract_error(owner.attach(
+            1,
+            &duplicate_emission,
+            &presentations,
+            FamilyArtifactBundleV2::empty(),
+            sink
+        )),
         AttachmentCreateErrorV1::SinkOutputAliased { .. }
     ));
 }
@@ -1187,7 +1583,13 @@ fn attach_requires_exact_bijection_over_compiled_presentations() {
     ];
     let (sink, probe) = in_memory_point_sink(&[900, 901]);
     assert!(matches!(
-        contract_error(owner.attach(2, &emissions, &omitted_terminal, sink)),
+        contract_error(owner.attach(
+            2,
+            &emissions,
+            &omitted_terminal,
+            FamilyArtifactBundleV2::empty(),
+            sink
+        )),
         AttachmentCreateErrorV1::PresentationCount {
             expected: 3,
             actual: 2
@@ -1215,7 +1617,13 @@ fn alias_outputs_cannot_claim_the_same_compiled_presentation() {
     ];
     let (sink, _) = in_memory_point_sink(&[900, 901]);
     assert!(matches!(
-        contract_error(owner.attach(3, &emissions, &duplicate_actual_target, sink)),
+        contract_error(owner.attach(
+            3,
+            &emissions,
+            &duplicate_actual_target,
+            FamilyArtifactBundleV2::empty(),
+            sink
+        )),
         AttachmentCreateErrorV1::DuplicatePresentation {
             root: ROOT,
             occurrence: INNER,
@@ -1244,7 +1652,13 @@ fn every_emission_requires_at_least_one_distinct_compiled_presentation() {
     let (sink, _) = in_memory_point_sink(&[900, 901]);
 
     assert!(matches!(
-        contract_error(owner.attach(4, &emissions, &only_output_a, sink)),
+        contract_error(owner.attach(
+            4,
+            &emissions,
+            &only_output_a,
+            FamilyArtifactBundleV2::empty(),
+            sink
+        )),
         AttachmentCreateErrorV1::MissingOutputPresentation { output: OUTPUT_B }
     ));
 }
@@ -1268,7 +1682,13 @@ fn duplicate_emission_output_has_its_exact_typed_error() {
     let (sink, _) = in_memory_point_sink(&[900, 901]);
 
     assert!(matches!(
-        contract_error(owner.attach(5, &duplicate_output, &presentations, sink)),
+        contract_error(owner.attach(
+            5,
+            &duplicate_output,
+            &presentations,
+            FamilyArtifactBundleV2::empty(),
+            sink
+        )),
         AttachmentCreateErrorV1::DuplicateEmissionOutput { output: OUTPUT_A }
     ));
 }
@@ -1290,7 +1710,15 @@ fn verified_snapshot_mints_attached_render_output_and_exact_confirm_only_for_ide
         authored_presentation(OUTPUT_B.value(), ROOT.value(), MIDDLE.value()),
         authored_presentation(OUTPUT_A.value(), ROOT.value(), INNER.value()),
     ];
-    let mut attachment = owner.attach(7, &emissions, &presentations, sink).unwrap();
+    let mut attachment = owner
+        .attach(
+            7,
+            &emissions,
+            &presentations,
+            FamilyArtifactBundleV2::empty(),
+            sink,
+        )
+        .unwrap();
     let values = [Srgb8::new([0, 0, 0])];
     let scenarios = [ScenarioV1::new(44, &values)];
 
@@ -1363,7 +1791,15 @@ fn selected_nonopaque_finite_paint_reaches_sink_and_render_authority_atomically(
         ROOT.value(),
         INNER.value(),
     )];
-    let mut attachment = owner.attach(71, &emissions, &presentations, sink).unwrap();
+    let mut attachment = owner
+        .attach(
+            71,
+            &emissions,
+            &presentations,
+            FamilyArtifactBundleV2::empty(),
+            sink,
+        )
+        .unwrap();
     let black = [Srgb8::new([0; 3])];
     let scenarios = [ScenarioV1::new(44, &black)];
 
@@ -1391,7 +1827,15 @@ fn one_emission_fans_out_to_every_distinct_attached_presentation() {
         authored_presentation(OUTPUT_A.value(), ROOT.value(), MIDDLE.value()),
         authored_presentation(OUTPUT_A.value(), ROOT.value(), INNER.value()),
     ];
-    let mut attachment = owner.attach(70, &emissions, &presentations, sink).unwrap();
+    let mut attachment = owner
+        .attach(
+            70,
+            &emissions,
+            &presentations,
+            FamilyArtifactBundleV2::empty(),
+            sink,
+        )
+        .unwrap();
     let values = [Srgb8::new([0, 0, 0])];
     let scenarios = [ScenarioV1::new(44, &values)];
 
@@ -1425,7 +1869,13 @@ fn unknown_and_known_violation_revoke_the_complete_snapshot() {
         INNER.value(),
     )];
     let mut attachment = pass_owner
-        .attach(8, &emissions, &presentations, sink)
+        .attach(
+            8,
+            &emissions,
+            &presentations,
+            FamilyArtifactBundleV2::empty(),
+            sink,
+        )
         .unwrap();
     let values = [Srgb8::new([0, 0, 0])];
     let scenarios = [ScenarioV1::new(1, &values)];
@@ -1454,7 +1904,13 @@ fn unknown_and_known_violation_revoke_the_complete_snapshot() {
     );
     let (sink, conflict_probe) = in_memory_point_sink(&[900]);
     let mut conflict = conflict_owner
-        .attach(9, &emissions, &presentations, sink)
+        .attach(
+            9,
+            &emissions,
+            &presentations,
+            FamilyArtifactBundleV2::empty(),
+            sink,
+        )
         .unwrap();
     let committed = conflict.update(observed(1, &scenarios)).unwrap();
     assert_eq!(committed.evidence().kind(), StateKindV1::Failed);
@@ -1480,7 +1936,15 @@ fn rejected_install_keeps_session_snapshot_and_releases_busy() {
         ROOT.value(),
         INNER.value(),
     )];
-    let mut attachment = owner.attach(10, &emissions, &presentations, sink).unwrap();
+    let mut attachment = owner
+        .attach(
+            10,
+            &emissions,
+            &presentations,
+            FamilyArtifactBundleV2::empty(),
+            sink,
+        )
+        .unwrap();
     let values = [Srgb8::new([0, 0, 0])];
     let scenarios = [ScenarioV1::new(1, &values)];
     attachment.update(observed(1, &scenarios)).unwrap();
@@ -1523,7 +1987,15 @@ fn every_fallible_sink_boundary_is_all_or_nothing() {
         ROOT.value(),
         INNER.value(),
     )];
-    let mut attachment = owner.attach(73, &emissions, &presentations, sink).unwrap();
+    let mut attachment = owner
+        .attach(
+            73,
+            &emissions,
+            &presentations,
+            FamilyArtifactBundleV2::empty(),
+            sink,
+        )
+        .unwrap();
     let values = [Srgb8::new([0, 0, 0])];
     let scenarios = [ScenarioV1::new(1, &values)];
     let initial_stamp = probe.stamp();
@@ -1604,7 +2076,15 @@ fn installed_retirement_waits_for_the_next_preinstall_drain_and_retry_is_clean()
         ROOT.value(),
         INNER.value(),
     )];
-    let mut attachment = owner.attach(71, &emissions, &presentations, sink).unwrap();
+    let mut attachment = owner
+        .attach(
+            71,
+            &emissions,
+            &presentations,
+            FamilyArtifactBundleV2::empty(),
+            sink,
+        )
+        .unwrap();
     let values = [Srgb8::new([0, 0, 0])];
     let scenarios = [ScenarioV1::new(1, &values)];
 
@@ -1649,8 +2129,17 @@ fn source_guards_keep_the_post_install_tail_destructor_free() {
     let session_source = include_str!("../../session.rs");
     let support_source = include_str!("support.rs");
 
+    assert_eq!(
+        attachment_source
+            .matches("pub(crate) fn attach<L>(")
+            .count(),
+        1,
+        "one canonical attach path must own both family and family-free sessions",
+    );
+    assert!(!attachment_source.contains("attach_with_family_artifacts"));
+
     let cold_prepare = attachment_source
-        .find("PreparedAttachmentColdV1::try_new(")
+        .find("PreparedAttachmentBindingsV1::try_new(")
         .expect("all fallible Core preparation must precede host admission");
     let admission = attachment_source
         .find("sink.try_admit_closed(permit)")
@@ -1823,7 +2312,15 @@ fn dispose_revokes_before_hostile_retirement_destructor_runs() {
         ROOT.value(),
         INNER.value(),
     )];
-    let mut attachment = owner.attach(72, &emissions, &presentations, sink).unwrap();
+    let mut attachment = owner
+        .attach(
+            72,
+            &emissions,
+            &presentations,
+            FamilyArtifactBundleV2::empty(),
+            sink,
+        )
+        .unwrap();
     let values = [Srgb8::new([0, 0, 0])];
     let scenarios = [ScenarioV1::new(1, &values)];
 
@@ -1887,7 +2384,13 @@ fn same_ids_and_ordinals_cannot_pair_a_foreign_generation_token_with_the_pin() {
         authored_presentation(OUTPUT_A.value(), ROOT.value(), MIDDLE.value()),
     ];
     let mut attachment = owner_b
-        .attach(11, &emissions, &presentations, sink)
+        .attach(
+            11,
+            &emissions,
+            &presentations,
+            FamilyArtifactBundleV2::empty(),
+            sink,
+        )
         .unwrap();
     drop(owner_a);
     drop(owner_b);
@@ -1916,7 +2419,15 @@ fn dispose_revokes_before_lease_session_and_owner_pin_release() {
         ROOT.value(),
         INNER.value(),
     )];
-    let mut attachment = owner.attach(12, &emissions, &presentations, sink).unwrap();
+    let mut attachment = owner
+        .attach(
+            12,
+            &emissions,
+            &presentations,
+            FamilyArtifactBundleV2::empty(),
+            sink,
+        )
+        .unwrap();
     drop(owner);
     let values = [Srgb8::new([0, 0, 0])];
     let scenarios = [ScenarioV1::new(1, &values)];

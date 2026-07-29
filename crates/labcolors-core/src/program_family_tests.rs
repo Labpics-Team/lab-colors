@@ -1,6 +1,12 @@
 //! Интеграция точного допущенного образа family в Program.
 
 use crate::family::FAMILY_MEMBERSHIP_ASSESS_CALLS;
+use crate::family::FamilyDefinitionDigestV2;
+use crate::family_artifact::{
+    AdmittedFamilyArtifactV2, FamilyArtifactBundleV2, FamilyArtifactLoaderV1,
+    FixtureFamilyArtifactCodecV1, encode_fixture_family_artifact_v2,
+};
+use crate::lcs_occurrence::ColorSignal;
 use crate::program_boundary_tests::CommitProgramUpdateForTest as _;
 use crate::{Srgb8, program};
 
@@ -20,11 +26,49 @@ fn context() -> program::AppearanceContextV1 {
     program::AppearanceContextV1::try_new(64.0, 0.2, program::SurroundV1::Average).unwrap()
 }
 
-fn family(values: &[[u8; 3]]) -> program::FamilySetV1 {
-    program::FamilySetV1::try_from_srgb8_image(
-        values.iter().copied().map(Srgb8::new).collect::<Vec<_>>(),
-    )
-    .unwrap()
+struct LoadedFamilyFixtureV2 {
+    semantic: program::FamilySemanticReleaseV2,
+    artifact: AdmittedFamilyArtifactV2,
+}
+
+fn family(values: &[[u8; 3]]) -> LoadedFamilyFixtureV2 {
+    family_with_codec(values, FixtureFamilyArtifactCodecV1::CanonicalMembersV1)
+}
+
+fn family_with_codec(
+    values: &[[u8; 3]],
+    codec: FixtureFamilyArtifactCodecV1,
+) -> LoadedFamilyFixtureV2 {
+    let members = values
+        .iter()
+        .copied()
+        .map(Srgb8::new)
+        .map(ColorSignal::from_srgb8)
+        .collect::<Vec<_>>();
+    let definition =
+        FamilyDefinitionDigestV2::from_fixture_bytes_v2(b"program-family-tests/declared-set");
+    let (certificate, encoded) =
+        encode_fixture_family_artifact_v2(definition, &members, codec).unwrap();
+    let semantic = program::FamilySemanticReleaseV2::from_core(certificate.semantic_release());
+    let artifact = FamilyArtifactLoaderV1::load_fixture(certificate, encoded).unwrap();
+    LoadedFamilyFixtureV2 { semantic, artifact }
+}
+
+struct FamilyDraftFixtureV2 {
+    draft: program::DraftV1,
+    artifacts: FamilyArtifactBundleV2,
+    semantic: Option<program::FamilySemanticReleaseV2>,
+}
+
+fn instantiate_with_family_artifacts(
+    owner: &program::OwnerV1,
+    stream_id: u32,
+    artifacts: FamilyArtifactBundleV2,
+) -> program::SessionV1 {
+    match owner.instantiate_with_family_artifacts(stream_id, artifacts) {
+        Ok(session) => session,
+        Err(failure) => panic!("family artifact admission failed: {:?}", failure.cause()),
+    }
 }
 
 fn finite_base_draft(
@@ -70,10 +114,15 @@ fn finite_family_draft(
     declare_family: bool,
     family_mode_hard: bool,
     expected_visible: Srgb8,
-) -> program::DraftV1 {
+) -> FamilyDraftFixtureV2 {
     let mut draft = finite_base_draft(candidates);
+    let mut artifacts = Vec::new();
+    let mut semantic = None;
     if declare_family {
-        draft.push_family(FAMILY, family(family_values));
+        let fixture = family(family_values);
+        semantic = Some(fixture.semantic);
+        draft.push_family(FAMILY, fixture.semantic);
+        artifacts.push(fixture.artifact);
     }
     if family_mode_hard {
         draft.push_intrinsic_family_membership_hard(FAMILY_CONSTRAINT, TARGET, FAMILY);
@@ -81,7 +130,11 @@ fn finite_family_draft(
         draft.push_intrinsic_family_membership_report_only(FAMILY_CONSTRAINT, TARGET, FAMILY);
     }
     draft.push_exact_visible_unary_hard(VISIBLE_CONSTRAINT, OCCURRENCE, expected_visible);
-    draft
+    FamilyDraftFixtureV2 {
+        draft,
+        artifacts: FamilyArtifactBundleV2::from_artifacts(artifacts),
+        semantic,
+    }
 }
 
 #[test]
@@ -90,17 +143,16 @@ fn hard_family_membership_selects_a_member_rechecks_it_and_retains_alpha() {
     let accepted = program::TargetCandidateIdV1::new(11);
     let red = Srgb8::new([255, 0, 0]);
     let blue = Srgb8::new([0, 0, 255]);
-    let expected_family_content = family(&[[0, 0, 0], [0, 0, 254], [0, 0, 255]]).content_identity();
-    let owner = finite_family_draft(
+    let fixture = finite_family_draft(
         &[(rejected, red, 0.25), (accepted, blue, 0.5)],
         &[[0, 0, 0], [0, 0, 254], [0, 0, 255]],
         true,
         true,
         Srgb8::new([0, 0, 128]),
-    )
-    .compile()
-    .unwrap();
-    let mut session = owner.instantiate(12).unwrap();
+    );
+    let expected_semantic = fixture.semantic.unwrap();
+    let owner = fixture.draft.compile().unwrap();
+    let mut session = instantiate_with_family_artifacts(&owner, 12, fixture.artifacts);
     let black = [Srgb8::new([0; 3])];
     let scenarios = [program::ScenarioV1::new(13, &black)];
     FAMILY_MEMBERSHIP_ASSESS_CALLS.with(|calls| calls.set(0));
@@ -144,7 +196,7 @@ fn hard_family_membership_selects_a_member_rechecks_it_and_retains_alpha() {
     };
     assert_eq!(measurement.family(), FAMILY);
     assert_eq!(measurement.signal(), blue);
-    assert_eq!(measurement.content(), expected_family_content);
+    assert_eq!(measurement.semantic(), expected_semantic);
     let program::IntrinsicUnaryProofV1::FamilyMembershipPass = intrinsic.proof() else {
         panic!("selected family member must carry an inclusion witness");
     };
@@ -156,7 +208,7 @@ fn missing_family_is_a_typed_atomic_compile_error() {
     let blue = Srgb8::new([0, 0, 255]);
     let draft = finite_family_draft(&[(candidate, blue, 1.0)], &[[0, 0, 255]], false, true, blue);
 
-    let error = match draft.compile() {
+    let error = match draft.draft.compile() {
         Ok(_) => panic!("an unresolved family edge must not compile"),
         Err(error) => error,
     };
@@ -248,11 +300,92 @@ fn family_id_and_error_handle_preserve_a_nontrivial_opaque_value() {
 }
 
 #[test]
-fn facade_family_content_bytes_change_with_the_admitted_image() {
-    let blue = family(&[[0, 0, 255]]).content_identity();
-    let red = family(&[[255, 0, 0]]).content_identity();
+fn semantic_release_bytes_change_with_the_exact_image() {
+    let blue = family(&[[0, 0, 255]]).semantic;
+    let red = family(&[[255, 0, 0]]).semantic;
 
     assert_ne!(blue.as_bytes(), red.as_bytes());
+}
+
+#[test]
+fn representation_receipt_is_session_provenance_not_program_semantics() {
+    let candidate = program::TargetCandidateIdV1::new(23);
+    let blue = Srgb8::new([0, 0, 255]);
+    let canonical = family_with_codec(
+        &[[0, 0, 1], [0, 0, 255]],
+        FixtureFamilyArtifactCodecV1::CanonicalMembersV1,
+    );
+    let reversed = family_with_codec(
+        &[[0, 0, 1], [0, 0, 255]],
+        FixtureFamilyArtifactCodecV1::ReversedMembersV1,
+    );
+    assert_eq!(canonical.semantic, reversed.semantic);
+    let canonical_receipt = canonical.artifact.artifact_receipt();
+    let reversed_receipt = reversed.artifact.artifact_receipt();
+    assert_ne!(canonical_receipt, reversed_receipt);
+
+    let compile = || {
+        let mut draft = finite_base_draft(&[(candidate, blue, 1.0)]);
+        draft.push_family(FAMILY, canonical.semantic);
+        draft.push_intrinsic_family_membership_hard(FAMILY_CONSTRAINT, TARGET, FAMILY);
+        draft.push_exact_visible_unary_hard(VISIBLE_CONSTRAINT, OCCURRENCE, blue);
+        draft.compile().unwrap()
+    };
+    let canonical_owner = compile();
+    let reversed_owner = compile();
+    assert_eq!(
+        canonical_owner.content_identity(),
+        reversed_owner.content_identity(),
+    );
+
+    let mut canonical_session = instantiate_with_family_artifacts(
+        &canonical_owner,
+        24,
+        FamilyArtifactBundleV2::from_artifacts(vec![canonical.artifact]),
+    );
+    let mut reversed_session = instantiate_with_family_artifacts(
+        &reversed_owner,
+        25,
+        FamilyArtifactBundleV2::from_artifacts(vec![reversed.artifact]),
+    );
+
+    let black = [Srgb8::new([0; 3])];
+    let scenarios = [program::ScenarioV1::new(26, &black)];
+    for (owner, session) in [
+        (&canonical_owner, &mut canonical_session),
+        (&reversed_owner, &mut reversed_session),
+    ] {
+        let evidence = owner
+            .commit(
+                session,
+                program::UpdateV1::Observed {
+                    revision: 1,
+                    scenarios: &scenarios,
+                },
+            )
+            .unwrap();
+        let Some(program::CertificateV1::Verified(verified)) = evidence.certificates().next()
+        else {
+            panic!("both transport representations must execute the same semantic family");
+        };
+        let measurement = verified
+            .cells()
+            .find_map(|cell| match cell.assessment() {
+                program::AssessmentV1::IntrinsicUnary(intrinsic) => match intrinsic.measurement() {
+                    program::IntrinsicUnaryMeasurementV1::FamilyMembership(measurement) => {
+                        Some(measurement)
+                    }
+                    _ => None,
+                },
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(
+            measurement.semantic().as_bytes(),
+            canonical.semantic.as_bytes(),
+        );
+        assert_eq!(measurement.signal(), blue);
+    }
 }
 
 #[test]
@@ -261,17 +394,16 @@ fn report_only_family_violation_is_retained_but_does_not_steer_selection() {
     let second = program::TargetCandidateIdV1::new(31);
     let red = Srgb8::new([255, 0, 0]);
     let blue = Srgb8::new([0, 0, 255]);
-    let expected_family_content = family(&[[0, 0, 255]]).content_identity();
-    let owner = finite_family_draft(
+    let fixture = finite_family_draft(
         &[(first, red, 0.25), (second, blue, 0.5)],
         &[[0, 0, 255]],
         true,
         false,
         Srgb8::new([64, 0, 0]),
-    )
-    .compile()
-    .unwrap();
-    let mut session = owner.instantiate(32).unwrap();
+    );
+    let expected_semantic = fixture.semantic.unwrap();
+    let owner = fixture.draft.compile().unwrap();
+    let mut session = instantiate_with_family_artifacts(&owner, 32, fixture.artifacts);
     let black = [Srgb8::new([0; 3])];
     let scenarios = [program::ScenarioV1::new(33, &black)];
     let evidence = owner
@@ -307,7 +439,7 @@ fn report_only_family_violation_is_retained_but_does_not_steer_selection() {
     };
     assert_eq!(measurement.family(), FAMILY);
     assert_eq!(measurement.signal(), red);
-    assert_eq!(measurement.content(), expected_family_content);
+    assert_eq!(measurement.semantic(), expected_semantic);
     let program::IntrinsicUnaryProofV1::FamilyMembershipViolation = intrinsic.proof() else {
         panic!("the non-member must retain an exact exclusion witness");
     };
@@ -318,14 +450,20 @@ fn compiled_family_index_resolves_the_requested_nonzero_declaration() {
     let candidate = program::TargetCandidateIdV1::new(34);
     let blue = Srgb8::new([0, 0, 255]);
     let mut draft = finite_base_draft(&[(candidate, blue, 1.0)]);
-    draft.push_family(FAMILY, family(&[[255, 0, 0]]));
-    draft.push_family(SECOND_FAMILY, family(&[[0, 0, 255]]));
+    let first_family = family(&[[255, 0, 0]]);
+    let second_family = family(&[[0, 0, 255]]);
+    draft.push_family(FAMILY, first_family.semantic);
+    draft.push_family(SECOND_FAMILY, second_family.semantic);
     draft.push_intrinsic_family_membership_report_only(FAMILY_CONSTRAINT, TARGET, FAMILY);
     let second_constraint = program::ConstraintIdV1::new(35);
     draft.push_intrinsic_family_membership_hard(second_constraint, TARGET, SECOND_FAMILY);
     draft.push_exact_visible_unary_hard(VISIBLE_CONSTRAINT, OCCURRENCE, blue);
     let owner = draft.compile().unwrap();
-    let mut session = owner.instantiate(36).unwrap();
+    let mut session = instantiate_with_family_artifacts(
+        &owner,
+        36,
+        FamilyArtifactBundleV2::from_artifacts(vec![first_family.artifact, second_family.artifact]),
+    );
     let black = [Srgb8::new([0; 3])];
     let scenarios = [program::ScenarioV1::new(37, &black)];
     let evidence = owner
@@ -364,14 +502,19 @@ fn two_invalid_states_produce_an_exhaustive_conflict_with_exact_family_witnesses
     let between = program::TargetCandidateIdV1::new(41);
     let below_signal = Srgb8::new([5; 3]);
     let between_signal = Srgb8::new([15; 3]);
-    let expected_family_content = family(&[[10; 3], [20; 3]]).content_identity();
+    let family = family(&[[10; 3], [20; 3]]);
+    let expected_semantic = family.semantic;
     let mut draft =
         finite_base_draft(&[(below, below_signal, 1.0), (between, between_signal, 1.0)]);
-    draft.push_family(FAMILY, family(&[[10; 3], [20; 3]]));
+    draft.push_family(FAMILY, family.semantic);
     draft.push_intrinsic_family_membership_hard(FAMILY_CONSTRAINT, TARGET, FAMILY);
     draft.push_exact_visible_unary_report_only(VISIBLE_CONSTRAINT, OCCURRENCE, Srgb8::new([0; 3]));
     let owner = draft.compile().unwrap();
-    let mut session = owner.instantiate(42).unwrap();
+    let mut session = instantiate_with_family_artifacts(
+        &owner,
+        42,
+        FamilyArtifactBundleV2::from_artifacts(vec![family.artifact]),
+    );
     let black = [Srgb8::new([0; 3])];
     let scenarios = [program::ScenarioV1::new(43, &black)];
     FAMILY_MEMBERSHIP_ASSESS_CALLS.with(|calls| calls.set(0));
@@ -415,7 +558,7 @@ fn two_invalid_states_produce_an_exhaustive_conflict_with_exact_family_witnesses
             panic!("every family violation must retain typed membership measurement");
         };
         assert_eq!(measurement.family(), FAMILY);
-        assert_eq!(measurement.content(), expected_family_content);
+        assert_eq!(measurement.semantic(), expected_semantic);
         let expected_signal = match cell.state_index() {
             0 => below_signal,
             1 => between_signal,
@@ -433,16 +576,15 @@ fn equal_sources_with_distinct_opacity_remain_distinct_candidate_states() {
     let translucent = program::TargetCandidateIdV1::new(50);
     let opaque = program::TargetCandidateIdV1::new(51);
     let blue = Srgb8::new([0, 0, 255]);
-    let owner = finite_family_draft(
+    let fixture = finite_family_draft(
         &[(translucent, blue, 0.5), (opaque, blue, 1.0)],
         &[[0, 0, 255]],
         true,
         true,
         blue,
-    )
-    .compile()
-    .unwrap();
-    let mut session = owner.instantiate(52).unwrap();
+    );
+    let owner = fixture.draft.compile().unwrap();
+    let mut session = instantiate_with_family_artifacts(&owner, 52, fixture.artifacts);
     let black = [Srgb8::new([0; 3])];
     let scenarios = [program::ScenarioV1::new(53, &black)];
     let evidence = owner
@@ -470,13 +612,18 @@ fn family_and_declared_set_verdicts(
 ) -> (program::StateKindV1, [program::VerdictV1; 2]) {
     let candidate = program::TargetCandidateIdV1::new(60);
     let mut draft = finite_base_draft(&[(candidate, signal, 1.0)]);
-    draft.push_family(FAMILY, family(admitted_family));
+    let family = family(admitted_family);
+    draft.push_family(FAMILY, family.semantic);
     draft.push_point_presentation_root(ROOT, OCCURRENCE);
     draft.push_point_presentation_target(ROOT, OCCURRENCE);
     draft.push_intrinsic_family_membership_hard(FAMILY_CONSTRAINT, TARGET, FAMILY);
     draft.push_declared_srgb8_clean_set_hard(VISIBLE_CONSTRAINT, ROOT, OCCURRENCE);
     let owner = draft.compile().unwrap();
-    let mut session = owner.instantiate(61).unwrap();
+    let mut session = instantiate_with_family_artifacts(
+        &owner,
+        61,
+        FamilyArtifactBundleV2::from_artifacts(vec![family.artifact]),
+    );
     let black = [Srgb8::new([0; 3])];
     let scenarios = [program::ScenarioV1::new(62, &black)];
     let evidence = owner
@@ -563,21 +710,13 @@ fn family_and_declared_point_convention_are_independent_hard_constraints_over_th
 }
 
 #[test]
-fn empty_family_image_is_rejected_before_a_draft_can_represent_it() {
-    assert_eq!(
-        program::FamilySetV1::try_from_srgb8_image(Vec::new()),
-        Err(program::FamilySetAdmissionErrorV1::Empty),
-    );
-}
-
-#[test]
 fn duplicate_and_unused_families_are_typed_compile_errors() {
     let candidate = program::TargetCandidateIdV1::new(70);
     let blue = Srgb8::new([0, 0, 255]);
 
     let mut duplicate = finite_base_draft(&[(candidate, blue, 1.0)]);
-    duplicate.push_family(FAMILY, family(&[[0, 0, 255]]));
-    duplicate.push_family(FAMILY, family(&[[255, 0, 0]]));
+    duplicate.push_family(FAMILY, family(&[[0, 0, 255]]).semantic);
+    duplicate.push_family(FAMILY, family(&[[255, 0, 0]]).semantic);
     duplicate.push_intrinsic_family_membership_hard(FAMILY_CONSTRAINT, TARGET, FAMILY);
     let duplicate_error = match duplicate.compile() {
         Ok(_) => panic!("a duplicate family must not compile"),
@@ -598,7 +737,7 @@ fn duplicate_and_unused_families_are_typed_compile_errors() {
     assert_eq!(duplicate_error.related_handle(), None);
 
     let mut unused = finite_base_draft(&[(candidate, blue, 1.0)]);
-    unused.push_family(FAMILY, family(&[[0, 0, 255]]));
+    unused.push_family(FAMILY, family(&[[0, 0, 255]]).semantic);
     unused.push_exact_visible_unary_hard(VISIBLE_CONSTRAINT, OCCURRENCE, blue);
     let unused_error = match unused.compile() {
         Ok(_) => panic!("an unused family must not compile"),
@@ -620,30 +759,86 @@ fn duplicate_and_unused_families_are_typed_compile_errors() {
 }
 
 #[test]
-fn replay_corruption_is_a_typed_invalid_family_image_compile_error() {
+fn missing_loaded_artifact_is_rejected_before_a_session_exists() {
+    FAMILY_MEMBERSHIP_ASSESS_CALLS.with(|calls| calls.set(0));
     let candidate = program::TargetCandidateIdV1::new(80);
     let blue = Srgb8::new([0, 0, 255]);
-    let mut corrupted = family(&[[0, 0, 255]]);
-    corrupted.corrupt_first_member_for_test(Srgb8::new([255, 0, 0]));
+    let family = family(&[[0, 0, 255]]);
     let mut draft = finite_base_draft(&[(candidate, blue, 1.0)]);
-    draft.push_family(FAMILY, corrupted);
+    draft.push_family(FAMILY, family.semantic);
     draft.push_intrinsic_family_membership_hard(FAMILY_CONSTRAINT, TARGET, FAMILY);
+    draft.push_exact_visible_unary_hard(VISIBLE_CONSTRAINT, OCCURRENCE, blue);
+    let owner = draft.compile().unwrap();
 
-    let error = match draft.compile() {
-        Ok(_) => panic!("a corrupted admitted family must fail replay"),
-        Err(error) => error,
+    let failure = match owner.instantiate_with_family_artifacts(81, FamilyArtifactBundleV2::empty())
+    {
+        Ok(_) => panic!("semantic declarations require the exact loaded artifact bundle"),
+        Err(failure) => failure,
     };
+
     assert_eq!(
-        error,
-        program::CompileErrorV1::InvalidFamilyImage { family: FAMILY },
+        failure.cause(),
+        program::InstantiateErrorV1::FamilyArtifacts(program::FamilyArtifactErrorV2::Missing {
+            semantic: family.semantic,
+        }),
     );
+    let (_, returned) = failure.into_parts();
+    let mut artifacts = returned.into_artifacts();
+    artifacts.push(family.artifact);
+    let retry = owner
+        .instantiate_with_family_artifacts(81, FamilyArtifactBundleV2::from_artifacts(artifacts));
+    assert!(
+        retry.is_ok(),
+        "adding the missing semantic must repair retry"
+    );
+}
+
+#[test]
+fn required_family_releases_are_unique_semantic_keys_not_opaque_aliases() {
+    let candidate = program::TargetCandidateIdV1::new(90);
+    let blue = Srgb8::new([0, 0, 255]);
+    let shared = family(&[[0, 0, 255]]);
+    let mut draft = finite_base_draft(&[(candidate, blue, 1.0)]);
+    draft.push_family(FAMILY, shared.semantic);
+    draft.push_family(SECOND_FAMILY, shared.semantic);
+    draft.push_intrinsic_family_membership_hard(FAMILY_CONSTRAINT, TARGET, FAMILY);
+    draft.push_intrinsic_family_membership_hard(
+        program::ConstraintIdV1::new(107),
+        TARGET,
+        SECOND_FAMILY,
+    );
+    draft.push_exact_visible_unary_hard(VISIBLE_CONSTRAINT, OCCURRENCE, blue);
+    let owner = draft.compile().unwrap();
+
     assert_eq!(
-        error.kind(),
-        program::CompileErrorKindV1::InvalidFamilyImage
+        owner.required_family_releases().collect::<Vec<_>>(),
+        vec![shared.semantic],
     );
-    assert_eq!(
-        error.primary_handle(),
-        Some(program::CompileErrorHandleV1::Family(FAMILY)),
+}
+
+#[test]
+fn session_owns_artifact_generation_until_session_drop_after_owner_release() {
+    let candidate = program::TargetCandidateIdV1::new(91);
+    let blue = Srgb8::new([0, 0, 255]);
+    let loaded = family(&[[0, 0, 255]]);
+    let semantic = loaded.semantic;
+    let drops = std::rc::Rc::new(core::cell::Cell::new(0));
+    let artifact = loaded.artifact.with_drop_counter_for_test(drops.clone());
+    let mut draft = finite_base_draft(&[(candidate, blue, 1.0)]);
+    draft.push_family(FAMILY, semantic);
+    draft.push_intrinsic_family_membership_hard(FAMILY_CONSTRAINT, TARGET, FAMILY);
+    draft.push_exact_visible_unary_hard(VISIBLE_CONSTRAINT, OCCURRENCE, blue);
+    let owner = draft.compile().unwrap();
+    let session = instantiate_with_family_artifacts(
+        &owner,
+        92,
+        FamilyArtifactBundleV2::from_artifacts(vec![artifact]),
     );
-    assert_eq!(error.related_handle(), None);
+
+    assert_eq!(drops.get(), 0);
+    drop(owner);
+    assert_eq!(session.evidence().kind(), program::StateKindV1::Waiting);
+    assert_eq!(drops.get(), 0);
+    drop(session);
+    assert_eq!(drops.get(), 1);
 }
