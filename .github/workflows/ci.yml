@@ -5,12 +5,11 @@ on:
     branches: [main]
   pull_request:
 
-# Первый запуск PR делит группу номера PR: новый SHA освобождает раннеры от
-# предшественника. Re-run старого события получает уникальный run_id и все его
-# jobs пропускаются: он не может отменить более новый SHA или занять раннер.
-# Push evidence остаётся exact-run и не отменяется следующим push.
+# Первый запуск PR делит типизированную pr-группу: новый SHA освобождает раннеры
+# от предшественника. Re-run получает собственную run-группу и выполняет полный
+# набор проверок, не отменяя новый SHA. Push evidence тоже остаётся exact-run.
 concurrency:
-  group: ci-${{ github.event_name == 'pull_request' && github.run_attempt == 1 && github.event.pull_request.number || github.run_id }}
+  group: ci-${{ github.event_name == 'pull_request' && github.run_attempt == 1 && format('pr-{0}', github.event.pull_request.number) || format('run-{0}', github.run_id) }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' && github.run_attempt == 1 }}
 
 # Least privilege: CI only reads the repo. Override per-job if a job needs more.
@@ -42,7 +41,6 @@ jobs:
     runs-on: [self-hosted, Linux, X64]
     needs: wasm
     if: >-
-      (github.event_name != 'pull_request' || github.run_attempt == 1) &&
       (github.event_name != 'pull_request' ||
       github.event.pull_request.head.repo.full_name == github.repository)
     steps:
@@ -69,7 +67,6 @@ jobs:
     name: MSRV workspace check
     runs-on: [self-hosted, Linux, X64]
     if: >-
-      (github.event_name != 'pull_request' || github.run_attempt == 1) &&
       (github.event_name != 'pull_request' ||
       github.event.pull_request.head.repo.full_name == github.repository)
     steps:
@@ -101,7 +98,6 @@ jobs:
     # и same-repo PR (коллаборатор) — гоняются. Тот же паттерн, что уже принят
     # в native-conformance.yml (PR #194, ветка feat/native-conformance-swift).
     if: >-
-      (github.event_name != 'pull_request' || github.run_attempt == 1) &&
       (github.event_name != 'pull_request' ||
       github.event.pull_request.head.repo.full_name == github.repository)
     # Isolate RUSTUP_HOME/CARGO_HOME per job under runner.temp: the runner wipes
@@ -144,7 +140,6 @@ jobs:
     runs-on: [self-hosted, Linux, X64]
     # Защита от fork-PR — см. комментарий в job `lint` выше.
     if: >-
-      (github.event_name != 'pull_request' || github.run_attempt == 1) &&
       (github.event_name != 'pull_request' ||
       github.event.pull_request.head.repo.full_name == github.repository)
     steps:
@@ -204,7 +199,6 @@ jobs:
     runs-on: [self-hosted, Linux, X64]
     # Защита от fork-PR — см. комментарий в job `lint` выше.
     if: >-
-      (github.event_name != 'pull_request' || github.run_attempt == 1) &&
       (github.event_name != 'pull_request' ||
       github.event.pull_request.head.repo.full_name == github.repository)
     steps:
@@ -337,7 +331,6 @@ jobs:
     runs-on: [self-hosted, Linux, X64]
     # Защита от fork-PR — см. комментарий в job `lint` выше.
     if: >-
-      (github.event_name != 'pull_request' || github.run_attempt == 1) &&
       (github.event_name != 'pull_request' ||
       github.event.pull_request.head.repo.full_name == github.repository)
     steps:
@@ -388,7 +381,6 @@ jobs:
     runs-on: [self-hosted, Linux, X64]
     # Защита от fork-PR — см. комментарий в job `lint` выше.
     if: >-
-      (github.event_name != 'pull_request' || github.run_attempt == 1) &&
       (github.event_name != 'pull_request' ||
       github.event.pull_request.head.repo.full_name == github.repository)
     steps:

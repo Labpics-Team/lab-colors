@@ -1710,14 +1710,14 @@ class MutationTruthTest(unittest.TestCase):
 
         group_tail = (
             "${{ github.event_name == 'pull_request' && github.run_attempt == 1 "
-            "&& github.event.pull_request.number || github.run_id }}"
+            "&& format('pr-{0}', github.event.pull_request.number) || "
+            "format('run-{0}', github.run_id) }}"
         )
         cancel_rule = (
             "${{ github.event_name == 'pull_request' && github.run_attempt == 1 }}"
         )
-        rerun_guard = (
-            "(github.event_name != 'pull_request' || github.run_attempt == 1) &&\n"
-            "      (github.event_name != 'pull_request' ||\n"
+        fork_guard = (
+            "(github.event_name != 'pull_request' ||\n"
             "      github.event.pull_request.head.repo.full_name == github.repository)"
         )
         for workflow_name, workflow in (
@@ -1730,21 +1730,44 @@ class MutationTruthTest(unittest.TestCase):
                 f"  cancel-in-progress: {cancel_rule}\n",
                 workflow,
             )
-        self.assertEqual(ci_workflow.count(rerun_guard), 7)
-        self.assertEqual(native_workflow.count(rerun_guard), 1)
+        self.assertEqual(ci_workflow.count(fork_guard), 7)
+        self.assertEqual(native_workflow.count(fork_guard), 1)
+        ci_jobs = ci_workflow.split("\njobs:\n", 1)[1]
+        native_jobs = native_workflow.split("\njobs:\n", 1)[1]
+        self.assertNotIn("github.run_attempt == 1", ci_jobs)
+        self.assertNotIn("github.run_attempt == 1", native_jobs)
 
         def run_policy(
-            event: str, attempt: int, pr_number: int, run_id: int
+            event: str,
+            attempt: int,
+            pr_number: int,
+            run_id: int,
+            *,
+            same_repo: bool = True,
         ) -> tuple[str, bool, bool]:
             initial_pr = event == "pull_request" and attempt == 1
-            group_value = pr_number if initial_pr else run_id
-            eligible = event != "pull_request" or attempt == 1
-            return str(group_value), initial_pr, eligible
+            group_value = f"pr-{pr_number}" if initial_pr else f"run-{run_id}"
+            eligible = event != "pull_request" or same_repo
+            return group_value, initial_pr, eligible
 
-        self.assertEqual(run_policy("pull_request", 1, 42, 100), ("42", True, True))
-        self.assertEqual(run_policy("pull_request", 1, 42, 101), ("42", True, True))
-        self.assertEqual(run_policy("pull_request", 2, 42, 100), ("100", False, False))
-        self.assertEqual(run_policy("push", 2, 0, 100), ("100", False, True))
+        self.assertEqual(
+            run_policy("pull_request", 1, 42, 100), ("pr-42", True, True)
+        )
+        self.assertEqual(
+            run_policy("pull_request", 1, 42, 101), ("pr-42", True, True)
+        )
+        self.assertEqual(
+            run_policy("pull_request", 2, 42, 42), ("run-42", False, True)
+        )
+        self.assertEqual(
+            run_policy("pull_request", 2, 42, 42, same_repo=False),
+            ("run-42", False, False),
+        )
+        self.assertEqual(run_policy("push", 2, 0, 100), ("run-100", False, True))
+        self.assertNotEqual(
+            run_policy("pull_request", 1, 42, 42)[0],
+            run_policy("pull_request", 2, 42, 42)[0],
+        )
 
     def test_workflow_and_scope_lock_the_truth_contract(self) -> None:
         def between(source: str, start: str, end: str, label: str) -> str:

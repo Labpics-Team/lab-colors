@@ -21,11 +21,11 @@ on:
   pull_request:
   workflow_dispatch:
 
-# Первый запуск PR делит группу номера PR. Re-run старого события получает
-# уникальный run_id и self-hosted job пропускается, поэтому не отменяет новый SHA.
-# Push evidence и ручной reference остаются независимыми exact-run.
+# Первый запуск PR делит типизированную pr-группу. Re-run получает собственную
+# run-группу, выполняет conformance и не отменяет новый SHA. Push evidence и
+# ручной reference остаются независимыми exact-run.
 concurrency:
-  group: native-conformance-${{ github.event_name == 'pull_request' && github.run_attempt == 1 && github.event.pull_request.number || github.run_id }}
+  group: native-conformance-${{ github.event_name == 'pull_request' && github.run_attempt == 1 && format('pr-{0}', github.event.pull_request.number) || format('run-{0}', github.run_id) }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' && github.run_attempt == 1 }}
 
 permissions:
@@ -44,7 +44,6 @@ jobs:
     # Защита от fork-PR: НЕ гоняем недоверенный код форков на своей инфре.
     # Форк-PR пропускается; push в main и same-repo PR — гоняются.
     if: >-
-      (github.event_name != 'pull_request' || github.run_attempt == 1) &&
       (github.event_name != 'pull_request' ||
       github.event.pull_request.head.repo.full_name == github.repository)
     steps:
