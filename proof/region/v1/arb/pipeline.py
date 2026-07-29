@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Controlled offline BUILD/RUN observations for the Arb evaluator.
 
-The Docker daemon and its persistent Linux host are explicitly inside this
-V1 trust boundary.  This module neither claims a fresh VM nor emits SLSA or
-source-bound receipts. It observes two fresh-container builds, owns the exact
-post-exit output bytes, and can feed that same bytes object to an explicitly
-diagnostic, unsealed RUN observation.
+The unsealed Linux x64 host and its Docker daemon are explicitly inside this
+V1 trust boundary. Provider identity and host freshness are not observable
+here. This module emits neither SLSA nor source-bound receipts: it observes two
+fresh-container builds, owns the exact post-exit output bytes, and can feed that
+same bytes object to an explicitly diagnostic, unsealed RUN observation.
 """
 
 from __future__ import annotations
@@ -283,7 +283,7 @@ def admit_build_sources_v1(
 
 
 class HostTrustBoundaryV1(StrEnum):
-    PERSISTENT_SELF_HOSTED_DOCKER = "persistent-self-hosted-linux-docker-host"
+    UNSEALED_LINUX_X64_DOCKER_HOST = "unsealed-linux-x64-docker-host"
 
 
 def pipeline_policy_identity_v1(
@@ -948,7 +948,7 @@ def _derive_arb_comparator_for_build_v1(
     exclusions = _comparator_preimage_v1(
         b"labcolors.proof-region.arb-comparator.exclusions.v1\0",
         (
-            b"gap:trusted-persistent-docker-host-and-daemon",
+            b"gap:host-and-docker-daemon-not-source-bound",
             b"gap:unsealed-diagnostic-build-observer",
             b"gap:unsealed-diagnostic-run-observer",
             b"gap:libc-libm-libpthread-libgcc-and-build-utility-source",
@@ -1172,7 +1172,7 @@ def _derive_arb_comparator_for_build_v1(
 
 
 class NativeDockerBuildBackendV1:
-    """Docker adapter for one explicitly trusted persistent Linux host."""
+    """Docker adapter whose probe observes only Linux x64 and its daemon."""
 
     def __init__(
         self,

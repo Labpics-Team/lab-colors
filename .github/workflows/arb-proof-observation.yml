@@ -24,7 +24,8 @@ concurrency:
 jobs:
   diagnostic-build-runtime:
     name: two offline builds and runtime tests (no artifact)
-    runs-on: [self-hosted, Linux, X64]
+    # A PR can replace every invoked script, so Docker authority must die with the job VM.
+    runs-on: ubuntu-24.04
     timeout-minutes: 360
     if: >-
       (github.event_name != 'pull_request' ||
@@ -117,6 +118,7 @@ jobs:
           set -euo pipefail
           log="$RUNNER_TEMP/arb-evaluator-build-runtime.log"
           python3 -m unittest -v \
+            proof.region.v1.arb.tests.test_build_recipe \
             proof.region.v1.arb.tests.test_pipeline.NativeBuildIntegrationTests \
             2>&1 | tee "$log"
           if grep --ignore-case --quiet skipped "$log"; then

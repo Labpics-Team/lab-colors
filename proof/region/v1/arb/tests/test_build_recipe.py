@@ -11,9 +11,21 @@ from pathlib import Path
 
 ARB = Path(__file__).resolve().parents[1]
 BUILD = ARB / "build.sh"
+WORKFLOW = ARB.parents[3] / ".github" / "workflows" / "arb-proof-observation.yml"
 
 
 class ArbBuildRecipeTests(unittest.TestCase):
+    def test_pr_gate_uses_a_fresh_github_hosted_vm(self) -> None:
+        source = WORKFLOW.read_text(encoding="utf-8")
+        runner_contracts = [
+            line.strip()
+            for line in source.splitlines()
+            if line.lstrip().startswith("runs-on:")
+        ]
+
+        self.assertEqual(runner_contracts, ["runs-on: ubuntu-24.04"])
+        self.assertIn("proof.region.v1.arb.tests.test_build_recipe", source)
+
     def test_recipe_is_offline_static_and_platform_explicit(self) -> None:
         source = BUILD.read_text(encoding="utf-8")
 

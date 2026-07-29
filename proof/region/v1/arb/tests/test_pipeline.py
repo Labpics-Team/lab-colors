@@ -259,7 +259,7 @@ def _request(**changes: object) -> pipeline.PipelineRequestV1:
         "build_sources": _build_sources(),
         "job": _job(),
         "execution_limits": _limits(),
-        "host_trust": pipeline.HostTrustBoundaryV1.PERSISTENT_SELF_HOSTED_DOCKER,
+        "host_trust": pipeline.HostTrustBoundaryV1.UNSEALED_LINUX_X64_DOCKER_HOST,
     }
     values.update(changes)
     return pipeline.PipelineRequestV1(**values)
@@ -534,6 +534,12 @@ class ComparatorDerivationTests(unittest.TestCase):
         self.assertEqual(admitted.pipeline_policy_identity, result.pipeline_policy_identity)
         self.assertEqual(admitted.binary_sha256, result.binary_sha256)
         self.assertEqual(admitted.rebuild_sha256s, result.rebuild_sha256s)
+        self.assertIn(
+            b"gap:host-and-docker-daemon-not-source-bound",
+            admitted.preimages.exclusions,
+        )
+        self.assertNotIn(b"persistent", admitted.preimages.exclusions)
+        self.assertNotIn(b"github-hosted", admitted.preimages.exclusions)
 
     def test_mutated_or_reordered_preimages_cannot_replay_the_manifest(self) -> None:
         admitted = self._result().comparator
@@ -661,8 +667,20 @@ class ComparatorDerivationTests(unittest.TestCase):
 
 
 class CausalPipelineTests(unittest.TestCase):
+    def test_host_trust_claims_only_backend_observable_facts(self) -> None:
+        trust = pipeline.HostTrustBoundaryV1.UNSEALED_LINUX_X64_DOCKER_HOST
+
+        self.assertEqual(tuple(pipeline.HostTrustBoundaryV1), (trust,))
+        self.assertEqual(trust.value, "unsealed-linux-x64-docker-host")
+        self.assertFalse(
+            hasattr(
+                pipeline.HostTrustBoundaryV1,
+                "PERSISTENT_SELF_HOSTED_DOCKER",
+            )
+        )
+
     def test_pipeline_policy_identity_binds_the_snapshot_timestamp_policy(self) -> None:
-        trust = pipeline.HostTrustBoundaryV1.PERSISTENT_SELF_HOSTED_DOCKER
+        trust = pipeline.HostTrustBoundaryV1.UNSEALED_LINUX_X64_DOCKER_HOST
         original = pipeline.pipeline_policy_identity_v1(trust)
 
         with mock.patch.object(
@@ -675,7 +693,7 @@ class CausalPipelineTests(unittest.TestCase):
         self.assertNotEqual(original, changed)
 
     def test_pipeline_policy_identity_binds_the_private_tmpfs_policy(self) -> None:
-        trust = pipeline.HostTrustBoundaryV1.PERSISTENT_SELF_HOSTED_DOCKER
+        trust = pipeline.HostTrustBoundaryV1.UNSEALED_LINUX_X64_DOCKER_HOST
         original = pipeline.pipeline_policy_identity_v1(trust)
 
         with mock.patch.object(
@@ -778,7 +796,10 @@ class CausalPipelineTests(unittest.TestCase):
         self.assertFalse(hasattr(result, "build_source_identity"))
         self.assertFalse(hasattr(result, "build_policy_identity"))
         self.assertFalse(hasattr(result, "commit_derived_source_identity"))
-        self.assertEqual(result.host_trust, pipeline.HostTrustBoundaryV1.PERSISTENT_SELF_HOSTED_DOCKER)
+        self.assertEqual(
+            result.host_trust,
+            pipeline.HostTrustBoundaryV1.UNSEALED_LINUX_X64_DOCKER_HOST,
+        )
         self.assertEqual(result.oci_image_reference, pipeline.OCI_IMAGE_REFERENCE_V1)
         self.assertEqual(result.oci_platform, pipeline.OCI_PLATFORM_V1)
         self.assertFalse(hasattr(result, "slsa_level"))
