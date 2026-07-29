@@ -9,6 +9,7 @@ pub mod wcag22_evidence;
 
 pub(crate) mod clean_set;
 pub(crate) mod composition;
+mod family;
 pub(crate) mod spaces;
 
 pub use srgb8::Srgb8;
@@ -129,6 +130,9 @@ mod program_clean_set_tests;
 mod program_relation_tests;
 
 #[cfg(test)]
+mod program_family_tests;
+
+#[cfg(test)]
 mod release_registry_tests;
 
 #[cfg(test)]
@@ -165,6 +169,9 @@ pub(crate) mod joint;
 
 #[cfg(test)]
 mod constraint_tests;
+
+#[cfg(test)]
+mod family_tests;
 
 #[cfg(test)]
 mod clean_set_tests;
