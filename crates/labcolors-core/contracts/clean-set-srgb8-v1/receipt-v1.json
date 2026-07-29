@@ -195,10 +195,10 @@
         "sha256": "819952e6aab56e930031c6d68d0b87363e89f10f0bcf20e4ed4179916a296650"
       },
       {
-        "bytes": 1065,
+        "bytes": 1064,
         "path": "LICENSE",
         "role": "mit_text",
-        "sha256": "af88b29f7cdf9f243ab5a72807e9e90cd31403a5517dda61731ea639a2c73ac1"
+        "sha256": "37ffb21a9e03804a978f4203134bf7a2088864b3dd3c0c5ee3809a3a99391c4b"
       }
     ],
     "receipt_spdx": "CC-BY-4.0 AND CC-BY-SA-4.0",
