@@ -158,31 +158,57 @@ impl FamilyMembershipMeasurementV2 {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn canonical_family_image_digest_v2(
     output_profile: OutputProfileId,
     members: &[ColorSignal],
 ) -> Result<CanonicalFamilyImageDigestV2, CanonicalFamilyImageErrorV2> {
-    if members
-        .iter()
-        .copied()
-        .any(|member| member.output_profile() != output_profile)
-        || members
-            .windows(2)
-            .any(|pair| family_image_member_key(pair[0]) >= family_image_member_key(pair[1]))
-    {
-        return Err(CanonicalFamilyImageErrorV2::NonCanonicalAdmittedImage);
-    }
-    let count = members.len() as u64;
+    canonical_family_image_digest_from_ordered_members_v2(
+        output_profile,
+        members.len() as u64,
+        members.iter().copied(),
+    )
+    .map_err(|_| CanonicalFamilyImageErrorV2::NonCanonicalAdmittedImage)
+}
+
+/// Один canonical preimage для slice-oracle и streaming artifact codec-ов.
+///
+/// `expected_count` входит в preimage до самих members, поэтому
+/// расхождение с фактическим потоком является отдельным
+/// certificate violation, а не другим образом того же множества.
+pub(crate) fn canonical_family_image_digest_from_ordered_members_v2(
+    output_profile: OutputProfileId,
+    expected_count: u64,
+    members: impl IntoIterator<Item = ColorSignal>,
+) -> Result<CanonicalFamilyImageDigestV2, CanonicalFamilyImageStreamErrorV2> {
     let mut hasher = Hasher::new();
     hasher.update(FAMILY_IMAGE_DOMAIN_V2);
     hasher.update(&[
         FAMILY_IMAGE_ENCODING_RELEASE_V2,
         output_profile_tag(output_profile) as u8,
     ]);
-    hasher.update(&count.to_be_bytes());
-    for member in members.iter().copied() {
+    hasher.update(&expected_count.to_be_bytes());
+    let mut previous = None;
+    let mut actual_count = 0_u64;
+    for member in members {
+        let key = family_image_member_key(member);
+        if member.output_profile() != output_profile
+            || previous.is_some_and(|previous| previous >= key)
+        {
+            return Err(CanonicalFamilyImageStreamErrorV2::NonCanonicalAdmittedImage);
+        }
+        actual_count = actual_count
+            .checked_add(1)
+            .ok_or(CanonicalFamilyImageStreamErrorV2::NonCanonicalAdmittedImage)?;
         hasher.update(&[output_profile_tag(member.output_profile()) as u8]);
         hasher.update(&member.srgb8().bytes());
+        previous = Some(key);
+    }
+    if actual_count != expected_count {
+        return Err(CanonicalFamilyImageStreamErrorV2::MemberCountMismatch {
+            expected: expected_count,
+            actual: actual_count,
+        });
     }
     Ok(CanonicalFamilyImageDigestV2(*hasher.finalize().as_bytes()))
 }
@@ -216,7 +242,14 @@ pub(crate) struct FamilyMembershipPassV1;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct FamilyMembershipViolationV1;
 
+#[cfg(test)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum CanonicalFamilyImageErrorV2 {
     NonCanonicalAdmittedImage,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CanonicalFamilyImageStreamErrorV2 {
+    NonCanonicalAdmittedImage,
+    MemberCountMismatch { expected: u64, actual: u64 },
 }

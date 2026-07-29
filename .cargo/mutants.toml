@@ -17,6 +17,8 @@ examine_globs = [
     "crates/labcolors-core/src/constraints/exact.rs",
     "crates/labcolors-core/src/constraints/family.rs",
     "crates/labcolors-core/src/family.rs",
+    "crates/labcolors-core/src/family_artifact.rs",
+    "crates/labcolors-core/src/family_artifact/raw_bitmap24.rs",
     "crates/labcolors-core/src/glow.rs",
     "crates/labcolors-core/src/material.rs",
     "crates/labcolors-core/src/numerical_plan.rs",

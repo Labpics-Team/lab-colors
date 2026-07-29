@@ -5,6 +5,7 @@ use crate::family::FamilyDefinitionDigestV2;
 use crate::family_artifact::{
     AdmittedFamilyArtifactV2, FamilyArtifactBundleV2, FamilyArtifactLoaderV1,
     FixtureFamilyArtifactCodecV1, encode_fixture_family_artifact_v2,
+    encode_raw_bitmap24_family_artifact_v2_for_test,
 };
 use crate::lcs_occurrence::ColorSignal;
 use crate::program_boundary_tests::CommitProgramUpdateForTest as _;
@@ -32,7 +33,19 @@ struct LoadedFamilyFixtureV2 {
 }
 
 fn family(values: &[[u8; 3]]) -> LoadedFamilyFixtureV2 {
-    family_with_codec(values, FixtureFamilyArtifactCodecV1::CanonicalMembersV1)
+    let members = values
+        .iter()
+        .copied()
+        .map(Srgb8::new)
+        .map(ColorSignal::from_srgb8)
+        .collect::<Vec<_>>();
+    let definition =
+        FamilyDefinitionDigestV2::from_fixture_bytes_v2(b"program-family-tests/declared-set");
+    let (certificate, encoded) =
+        encode_raw_bitmap24_family_artifact_v2_for_test(definition, &members).unwrap();
+    let semantic = program::FamilySemanticReleaseV2::from_core(certificate.semantic_release());
+    let artifact = FamilyArtifactLoaderV1::load(certificate, encoded).unwrap();
+    LoadedFamilyFixtureV2 { semantic, artifact }
 }
 
 fn family_with_codec(

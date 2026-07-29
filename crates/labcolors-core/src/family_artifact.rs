@@ -2,25 +2,35 @@
 //!
 //! Semantic release описывает семейство независимо от хранения. Artifact
 //! receipt отдельно связывает envelope, codec и payload. Loader допускает bytes
-//! до появления executable view; V5b2p намеренно не содержит production codec.
+//! в allocation-free executable RawBitmap24 view, не материализуя второе множество.
 
 #![cfg_attr(
     not(test),
     expect(
         dead_code,
-        reason = "V5b2p is a private loader precursor; V5b2a supplies its first production codec and caller"
+        reason = "V5b2a keeps the exact artifact loader private until the public family provider cutover"
     )
 )]
 
 use core::fmt;
 
+mod raw_bitmap24;
+
+#[cfg(test)]
+pub(crate) use raw_bitmap24::PAYLOAD_LEN_V1 as RAW_BITMAP24_PAYLOAD_LEN_V1;
+#[cfg(test)]
+pub(crate) use raw_bitmap24::encode_for_test as encode_raw_bitmap24_family_artifact_v2_for_test;
+
 use crate::family::{
-    CanonicalFamilyImageDigestV2, CanonicalFamilyImageErrorV2, FamilyDeclarationV2,
-    FamilyDefinitionDigestV2, FamilyMembershipMeasurementV2, FamilyMembershipPassV1,
-    FamilyMembershipViolationV1, SemanticFamilyReleaseIdV2, canonical_family_image_digest_v2,
-    semantic_family_release_id_v2,
+    CanonicalFamilyImageDigestV2, FamilyDeclarationV2, FamilyDefinitionDigestV2,
+    FamilyMembershipMeasurementV2, FamilyMembershipPassV1, FamilyMembershipViolationV1,
+    SemanticFamilyReleaseIdV2, semantic_family_release_id_v2,
 };
-use crate::lcs_occurrence::{ColorSignal, OutputProfileId};
+#[cfg(test)]
+use crate::family::{CanonicalFamilyImageErrorV2, canonical_family_image_digest_v2};
+use crate::lcs_occurrence::ColorSignal;
+#[cfg(test)]
+use crate::lcs_occurrence::OutputProfileId;
 use crate::sha256::Hasher;
 
 const MAGIC_V2: &[u8; 8] = b"LCFAM2\0\0";
@@ -29,8 +39,10 @@ const SIGNAL_DOMAIN_SRGB8_D65_V1: u8 = 1;
 // Полная кардинальность sRGB8: большее exact-множество обязано повторить сигнал.
 const MAX_SRGB8_MEMBER_COUNT_V1: u64 = 1 << 24;
 const SIGNAL_ORDINAL_RGB_BIG_ENDIAN_V1: u8 = 1;
-const PROOF_RELEASE_FIXTURE_EXACT_IMAGE_V1: u8 = 1;
-const VERIFIER_RELEASE_FIXTURE_REPLAY_V1: u8 = 1;
+// Loader не минтит и не перепроверяет proof: он принимает только
+// certificate, точно равный trusted expected value от внешнего registry.
+const PROOF_RELEASE_EXPECTED_EXACT_IMAGE_V1: u8 = 1;
+const VERIFIER_RELEASE_EXPECTED_REPLAY_V1: u8 = 1;
 // magic + 6 release/domain tags + 6 SHA-256 identities + 2 u64 lengths + receipt.
 // Любое изменение certificate layout обязано синхронно менять этот размер.
 const HEADER_LEN_V2: usize = 254;
@@ -257,6 +269,16 @@ impl EncodedFamilyArtifactV2 {
     }
 
     #[cfg(test)]
+    pub(crate) fn allocation_ptr_for_test(&self) -> *const u8 {
+        self.0.as_ptr()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn payload_byte_for_test(&self, index: usize) -> u8 {
+        self.0[HEADER_LEN_V2 + index]
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_raw_bytes_for_test(bytes: Vec<u8>) -> Self {
         Self(bytes.into_boxed_slice())
     }
@@ -314,6 +336,33 @@ impl EncodedFamilyArtifactV2 {
     pub(crate) fn truncate_inside_header_for_test(self) -> Self {
         Self(self.0[..HEADER_LEN_V2 - 1].into())
     }
+
+    #[cfg(test)]
+    pub(crate) fn set_raw_bitmap_member_for_test(&mut self, rgb: [u8; 3], member: bool) {
+        raw_bitmap24::set_member(&mut self.0[HEADER_LEN_V2..], rgb, member);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn resize_payload_for_test(&mut self, payload_len: usize) {
+        let mut bytes = core::mem::take(&mut self.0).into_vec();
+        bytes.resize(HEADER_LEN_V2 + payload_len, 0);
+        self.0 = bytes.into_boxed_slice();
+    }
+
+    #[cfg(test)]
+    pub(crate) fn reseal_payload_for_test(
+        &mut self,
+        mut certificate: FamilyImageCertificateV2,
+    ) -> FamilyImageCertificateV2 {
+        let payload = &self.0[HEADER_LEN_V2..];
+        certificate.payload_len = payload.len() as u64;
+        certificate.payload_digest = payload_digest(payload);
+        certificate.artifact_receipt = artifact_receipt(certificate);
+        let mut encoded = Vec::with_capacity(HEADER_LEN_V2 - MAGIC_V2.len());
+        encode_certificate(&mut encoded, certificate);
+        self.0[MAGIC_V2.len()..HEADER_LEN_V2].copy_from_slice(&encoded);
+        certificate
+    }
 }
 
 #[cfg(test)]
@@ -327,12 +376,27 @@ pub(crate) enum FixtureEnvelopeFieldV1 {
 }
 
 /// Executable storage after all envelope, digest and semantic checks.
-#[derive(Debug)]
 pub(crate) struct AdmittedFamilyArtifactV2 {
     certificate: FamilyImageCertificateV2,
-    members: Box<[ColorSignal]>,
+    storage: ExecutableFamilyStorageV2,
     #[cfg(test)]
     drop_probe: Option<ArtifactDropProbeV1>,
+}
+
+enum ExecutableFamilyStorageV2 {
+    RawBitmap24V1(raw_bitmap24::RawBitmap24V1),
+    #[cfg(test)]
+    FixtureMembersV1(Box<[ColorSignal]>),
+}
+
+impl fmt::Debug for AdmittedFamilyArtifactV2 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("AdmittedFamilyArtifactV2")
+            .field("semantic_release", &self.semantic_release())
+            .field("artifact_receipt", &self.artifact_receipt())
+            .finish_non_exhaustive()
+    }
 }
 
 #[cfg(test)]
@@ -356,9 +420,13 @@ impl AdmittedFamilyArtifactV2 {
     }
 
     pub(crate) fn contains(&self, signal: ColorSignal) -> bool {
-        self.members
-            .binary_search_by_key(&signal_key(signal), |member| signal_key(*member))
-            .is_ok()
+        match &self.storage {
+            ExecutableFamilyStorageV2::RawBitmap24V1(bitmap) => bitmap.contains(signal),
+            #[cfg(test)]
+            ExecutableFamilyStorageV2::FixtureMembersV1(members) => members
+                .binary_search_by_key(&signal_key(signal), |member| signal_key(*member))
+                .is_ok(),
+        }
     }
 
     pub(crate) fn assess(
@@ -387,6 +455,14 @@ impl AdmittedFamilyArtifactV2 {
         self.drop_probe = Some(ArtifactDropProbeV1(counter));
         self
     }
+
+    #[cfg(test)]
+    pub(crate) fn allocation_ptr_for_test(&self) -> Option<*const u8> {
+        match &self.storage {
+            ExecutableFamilyStorageV2::RawBitmap24V1(bitmap) => Some(bitmap.allocation_ptr()),
+            ExecutableFamilyStorageV2::FixtureMembersV1(_) => None,
+        }
+    }
 }
 
 /// Loader отказывается до decoder-а при любом transport/certificate mismatch.
@@ -400,14 +476,25 @@ pub(crate) enum FamilyArtifactLoadErrorV1 {
     UnsupportedProofRelease,
     UnsupportedVerifierRelease,
     InvalidMemberCount,
-    ExactLengthMismatch { expected: usize, actual: usize },
+    ExactLengthMismatch {
+        expected: usize,
+        actual: usize,
+    },
     ForeignCertificate,
     PayloadDigestMismatch,
     ArtifactReceiptMismatch,
     SemanticReleaseMismatch,
     UnsupportedCodec,
+    CodecPayloadLengthMismatch {
+        codec_release: u8,
+        expected: u64,
+        actual: u64,
+    },
     InvalidCodecPayload,
-    DecodedMemberCountMismatch { expected: u64, actual: u64 },
+    MemberCountMismatch {
+        expected: u64,
+        actual: u64,
+    },
     ImageDigestMismatch,
     ResourceExhausted,
 }
@@ -447,12 +534,18 @@ impl FamilyArtifactLoaderV1 {
         expected: FamilyImageCertificateV2,
         encoded: EncodedFamilyArtifactV2,
     ) -> Result<AdmittedFamilyArtifactV2, FamilyArtifactLoadFailureV1> {
-        Self::load_with_codec(
-            expected,
-            encoded,
-            reject_unreleased_codec,
-            decode_unreachable_codec,
-        )
+        let verified = Self::try_load_raw_bitmap24(expected, &encoded);
+        match verified {
+            Ok(certificate) => Ok(AdmittedFamilyArtifactV2 {
+                certificate,
+                storage: ExecutableFamilyStorageV2::RawBitmap24V1(
+                    raw_bitmap24::RawBitmap24V1::from_verified(encoded),
+                ),
+                #[cfg(test)]
+                drop_probe: None,
+            }),
+            Err(cause) => Err(FamilyArtifactLoadFailureV1 { cause, encoded }),
+        }
     }
 
     #[cfg(test)]
@@ -460,7 +553,7 @@ impl FamilyArtifactLoaderV1 {
         expected: FamilyImageCertificateV2,
         encoded: EncodedFamilyArtifactV2,
     ) -> Result<AdmittedFamilyArtifactV2, FamilyArtifactLoadFailureV1> {
-        Self::load_with_codec(
+        Self::load_fixture_with_codec(
             expected,
             encoded,
             preflight_fixture_payload,
@@ -474,7 +567,7 @@ impl FamilyArtifactLoaderV1 {
         encoded: EncodedFamilyArtifactV2,
         decoder: impl FnOnce(u8, u64, &[u8]) -> Result<Box<[ColorSignal]>, FamilyArtifactLoadErrorV1>,
     ) -> Result<AdmittedFamilyArtifactV2, FamilyArtifactLoadFailureV1> {
-        Self::load_with_codec(expected, encoded, preflight_fixture_payload, decoder)
+        Self::load_fixture_with_codec(expected, encoded, preflight_fixture_payload, decoder)
     }
 
     #[cfg(test)]
@@ -484,27 +577,58 @@ impl FamilyArtifactLoaderV1 {
         preflight: impl FnOnce(u8, u64, u64) -> Result<(), FamilyArtifactLoadErrorV1>,
         decoder: impl FnOnce(u8, u64, &[u8]) -> Result<Box<[ColorSignal]>, FamilyArtifactLoadErrorV1>,
     ) -> Result<AdmittedFamilyArtifactV2, FamilyArtifactLoadFailureV1> {
-        Self::load_with_codec(expected, encoded, preflight, decoder)
+        Self::load_fixture_with_codec(expected, encoded, preflight, decoder)
     }
 
-    fn load_with_codec(
+    #[cfg(test)]
+    fn load_fixture_with_codec(
         expected: FamilyImageCertificateV2,
         encoded: EncodedFamilyArtifactV2,
         preflight: impl FnOnce(u8, u64, u64) -> Result<(), FamilyArtifactLoadErrorV1>,
         decoder: impl FnOnce(u8, u64, &[u8]) -> Result<Box<[ColorSignal]>, FamilyArtifactLoadErrorV1>,
     ) -> Result<AdmittedFamilyArtifactV2, FamilyArtifactLoadFailureV1> {
-        match Self::try_load_with_codec(expected, &encoded, preflight, decoder) {
-            Ok(admitted) => Ok(admitted),
+        match Self::try_load_fixture_with_codec(expected, &encoded, preflight, decoder) {
+            Ok(verified) => Ok(AdmittedFamilyArtifactV2 {
+                certificate: verified.certificate,
+                storage: ExecutableFamilyStorageV2::FixtureMembersV1(verified.decoded),
+                drop_probe: None,
+            }),
             Err(cause) => Err(FamilyArtifactLoadFailureV1 { cause, encoded }),
         }
     }
 
-    fn try_load_with_codec(
+    fn try_load_raw_bitmap24(
+        expected: FamilyImageCertificateV2,
+        encoded: &EncodedFamilyArtifactV2,
+    ) -> Result<FamilyImageCertificateV2, FamilyArtifactLoadErrorV1> {
+        let parsed = Self::verify_bound_envelope(expected, encoded, |codec, _, payload_len| {
+            raw_bitmap24::preflight(codec, payload_len)
+        })?;
+        let payload = &encoded.0[HEADER_LEN_V2..];
+        let image = raw_bitmap24::verify_image(payload, parsed.certificate.member_count)?;
+        if image != parsed.certificate.image_digest {
+            return Err(FamilyArtifactLoadErrorV1::ImageDigestMismatch);
+        }
+        Ok(parsed.certificate)
+    }
+
+    #[cfg(test)]
+    fn try_load_fixture_with_codec(
         expected: FamilyImageCertificateV2,
         encoded: &EncodedFamilyArtifactV2,
         preflight: impl FnOnce(u8, u64, u64) -> Result<(), FamilyArtifactLoadErrorV1>,
         decoder: impl FnOnce(u8, u64, &[u8]) -> Result<Box<[ColorSignal]>, FamilyArtifactLoadErrorV1>,
-    ) -> Result<AdmittedFamilyArtifactV2, FamilyArtifactLoadErrorV1> {
+    ) -> Result<VerifiedFamilyArtifactEnvelopeV2, FamilyArtifactLoadErrorV1> {
+        let parsed = Self::verify_bound_envelope(expected, encoded, preflight)?;
+        let payload = &encoded.0[HEADER_LEN_V2..];
+        VerifiedFamilyArtifactEnvelopeV2::decode(parsed, payload, decoder)
+    }
+
+    fn verify_bound_envelope(
+        expected: FamilyImageCertificateV2,
+        encoded: &EncodedFamilyArtifactV2,
+        preflight: impl FnOnce(u8, u64, u64) -> Result<(), FamilyArtifactLoadErrorV1>,
+    ) -> Result<ParsedFamilyArtifactEnvelopeV2, FamilyArtifactLoadErrorV1> {
         let parsed = ParsedFamilyArtifactEnvelopeV2::parse(&encoded.0)?;
         if parsed.certificate != expected {
             return Err(FamilyArtifactLoadErrorV1::ForeignCertificate);
@@ -529,13 +653,7 @@ impl FamilyArtifactLoaderV1 {
         if semantic != parsed.certificate.semantic_release {
             return Err(FamilyArtifactLoadErrorV1::SemanticReleaseMismatch);
         }
-        let verified = VerifiedFamilyArtifactEnvelopeV2::decode(parsed, payload, decoder)?;
-        Ok(AdmittedFamilyArtifactV2 {
-            certificate: verified.certificate,
-            members: verified.members,
-            #[cfg(test)]
-            drop_probe: None,
-        })
+        Ok(parsed)
     }
 }
 
@@ -561,10 +679,10 @@ impl ParsedFamilyArtifactEnvelopeV2 {
         if certificate.signal_ordinal != SIGNAL_ORDINAL_RGB_BIG_ENDIAN_V1 {
             return Err(FamilyArtifactLoadErrorV1::UnsupportedSignalOrdinal);
         }
-        if certificate.proof_release != PROOF_RELEASE_FIXTURE_EXACT_IMAGE_V1 {
+        if certificate.proof_release != PROOF_RELEASE_EXPECTED_EXACT_IMAGE_V1 {
             return Err(FamilyArtifactLoadErrorV1::UnsupportedProofRelease);
         }
-        if certificate.verifier_release != VERIFIER_RELEASE_FIXTURE_REPLAY_V1 {
+        if certificate.verifier_release != VERIFIER_RELEASE_EXPECTED_REPLAY_V1 {
             return Err(FamilyArtifactLoadErrorV1::UnsupportedVerifierRelease);
         }
         if certificate.member_count > MAX_SRGB8_MEMBER_COUNT_V1 {
@@ -585,11 +703,13 @@ impl ParsedFamilyArtifactEnvelopeV2 {
     }
 }
 
+#[cfg(test)]
 struct VerifiedFamilyArtifactEnvelopeV2 {
     certificate: FamilyImageCertificateV2,
-    members: Box<[ColorSignal]>,
+    decoded: Box<[ColorSignal]>,
 }
 
+#[cfg(test)]
 impl VerifiedFamilyArtifactEnvelopeV2 {
     fn decode(
         parsed: ParsedFamilyArtifactEnvelopeV2,
@@ -603,7 +723,7 @@ impl VerifiedFamilyArtifactEnvelopeV2 {
         )?;
         let actual_count = members.len() as u64;
         if actual_count != parsed.certificate.member_count {
-            return Err(FamilyArtifactLoadErrorV1::DecodedMemberCountMismatch {
+            return Err(FamilyArtifactLoadErrorV1::MemberCountMismatch {
                 expected: parsed.certificate.member_count,
                 actual: actual_count,
             });
@@ -617,7 +737,7 @@ impl VerifiedFamilyArtifactEnvelopeV2 {
         }
         Ok(Self {
             certificate: parsed.certificate,
-            members,
+            decoded: members,
         })
     }
 }
@@ -628,22 +748,6 @@ impl VerifiedFamilyArtifactEnvelopeV2 {
 pub(crate) enum FixtureFamilyArtifactCodecV1 {
     CanonicalMembersV1 = 0xF1,
     ReversedMembersV1 = 0xF2,
-}
-
-fn reject_unreleased_codec(
-    _codec: u8,
-    _member_count: u64,
-    _payload_len: u64,
-) -> Result<(), FamilyArtifactLoadErrorV1> {
-    Err(FamilyArtifactLoadErrorV1::UnsupportedCodec)
-}
-
-fn decode_unreachable_codec(
-    _codec: u8,
-    _member_count: u64,
-    _payload: &[u8],
-) -> Result<Box<[ColorSignal]>, FamilyArtifactLoadErrorV1> {
-    Err(FamilyArtifactLoadErrorV1::UnsupportedCodec)
 }
 
 #[cfg(test)]
@@ -775,8 +879,8 @@ pub(crate) fn encode_fixture_family_artifact_v2(
         codec_release: codec as u8,
         signal_domain: SIGNAL_DOMAIN_SRGB8_D65_V1,
         signal_ordinal: SIGNAL_ORDINAL_RGB_BIG_ENDIAN_V1,
-        proof_release: PROOF_RELEASE_FIXTURE_EXACT_IMAGE_V1,
-        verifier_release: VERIFIER_RELEASE_FIXTURE_REPLAY_V1,
+        proof_release: PROOF_RELEASE_EXPECTED_EXACT_IMAGE_V1,
+        verifier_release: VERIFIER_RELEASE_EXPECTED_REPLAY_V1,
         proof_artifact,
         verifier_identity,
         definition_digest: definition,
@@ -840,8 +944,8 @@ fn fixture_verifier_identity() -> FamilyVerifierIdentityV2 {
     let mut hasher = Hasher::new();
     hasher.update(FIXTURE_VERIFIER_IDENTITY_DOMAIN_V2);
     hasher.update(&[
-        PROOF_RELEASE_FIXTURE_EXACT_IMAGE_V1,
-        VERIFIER_RELEASE_FIXTURE_REPLAY_V1,
+        PROOF_RELEASE_EXPECTED_EXACT_IMAGE_V1,
+        VERIFIER_RELEASE_EXPECTED_REPLAY_V1,
     ]);
     FamilyVerifierIdentityV2(*hasher.finalize().as_bytes())
 }
