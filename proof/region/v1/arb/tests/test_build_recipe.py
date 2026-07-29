@@ -32,6 +32,8 @@ class ArbBuildRecipeTests(unittest.TestCase):
         )
         self.assertIn("proof/region/v1/arb/tests/gate.py", source)
         self.assertIn("proof/region/v1/arb/tests/native_gate.py", source)
+        self.assertEqual(source.count("- .github/workflows/arb.yml"), 2)
+        self.assertNotIn("arb-proof-observation.yml", source)
         for required in (
             "sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0",
             'mkdir "$scope/tasks" "$scope/proof"',

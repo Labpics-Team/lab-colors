@@ -5,12 +5,12 @@ on:
   push:
     branches: [main]
     paths:
-      - .github/workflows/arb-proof-observation.yml
+      - .github/workflows/arb.yml
       - crates/labcolors-core/contracts/contextual-region-formula-v1.lcir
       - proof/region/v1/**
   pull_request:
     paths:
-      - .github/workflows/arb-proof-observation.yml
+      - .github/workflows/arb.yml
       - crates/labcolors-core/contracts/contextual-region-formula-v1.lcir
       - proof/region/v1/**
 
