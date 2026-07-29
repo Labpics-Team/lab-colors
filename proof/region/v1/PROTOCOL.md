@@ -10,8 +10,10 @@ processes. `region_proof_protocol.py` определяет только structur
 admission функций сравнения. Текущий `controller.py` безопасно читает и
 повторно проверяет пять frozen protocol fixtures; он ещё не строит и не
 запускает evaluator, не разрешает comparator manifest и не создаёт provenance
-receipt. Ни один текущий модуль не вычисляет цвет или interval enclosure и не
-создаёт semantic proof type.
+receipt. Structural protocol и controller не вычисляют formula или interval
+enclosure. Диагностический `arb/evaluator` вычисляет Arb-enclosures и выпускает
+связанные transcript bytes, но не проверяет их независимым replay и не создаёт
+semantic proof type.
 
 `V5b2c-0` определяет protocol/admission, но сам не является математическим
 proof. В c0 нет `DualProofReceiptV1`: structural agreement кодируется
