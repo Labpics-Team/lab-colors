@@ -423,6 +423,25 @@ pub(crate) enum ContextualRegionPipelineErrorV1 {
     },
 }
 
+/// Математическая семантика offline-вычисления контекстной family-области.
+///
+/// `NominalExactRealLiftV1` трактует зарегистрированные binary64 bit-patterns
+/// decode-table, коэффициентов, context и region как точные dyadic constants,
+/// а арифметические операции и трансцендентные функции — как операции над
+/// действительными числами без промежуточного binary64 rounding и platform
+/// `libm`. Это nominal mathematical lift связанных formula releases, а не claim
+/// об идеальной source-algebraic семантике IEC/CIE; такая семантика потребует
+/// нового release ID.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ContextualRegionFormulaReleaseIdV1 {
+    NominalExactRealLiftV1,
+    #[cfg(test)]
+    MutationSentinelV1,
+}
+
+pub(crate) const CONTEXTUAL_REGION_FORMULA_RELEASE_V1: ContextualRegionFormulaReleaseIdV1 =
+    ContextualRegionFormulaReleaseIdV1::NominalExactRealLiftV1;
+
 /// Полный versioned pipeline, относительно которого definition имеет смысл.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct ContextualRegionPipelineV1 {
@@ -432,6 +451,7 @@ pub(crate) struct ContextualRegionPipelineV1 {
     context: AppearanceContextId,
     cam16_view: Cam16ViewReleaseId,
     rectangular_view: Cam16UcsViewReleaseId,
+    formula: ContextualRegionFormulaReleaseIdV1,
 }
 
 impl ContextualRegionPipelineV1 {
@@ -442,6 +462,7 @@ impl ContextualRegionPipelineV1 {
         context: AppearanceContextId,
         cam16_view: Cam16ViewReleaseId,
         rectangular_view: Cam16UcsViewReleaseId,
+        formula: ContextualRegionFormulaReleaseIdV1,
     ) -> Result<Self, ContextualRegionPipelineErrorV1> {
         if output_profile != lowering.signal_output_profile() {
             return Err(ContextualRegionPipelineErrorV1::OutputProfileMismatch {
@@ -462,6 +483,7 @@ impl ContextualRegionPipelineV1 {
             context,
             cam16_view,
             rectangular_view,
+            formula,
         })
     }
 }
@@ -625,6 +647,14 @@ fn rectangular_view_tag(value: Cam16UcsViewReleaseId) -> u8 {
     }
 }
 
+fn formula_release_tag(value: ContextualRegionFormulaReleaseIdV1) -> u8 {
+    match value {
+        ContextualRegionFormulaReleaseIdV1::NominalExactRealLiftV1 => 1,
+        #[cfg(test)]
+        ContextualRegionFormulaReleaseIdV1::MutationSentinelV1 => 2,
+    }
+}
+
 fn identity_encoding_tag(value: ContextualRegionIdentityEncodingReleaseIdV1) -> u8 {
     match value {
         ContextualRegionIdentityEncodingReleaseIdV1::LengthPrefixedBigEndianV1 => 1,
@@ -698,6 +728,7 @@ fn write_identity(
     write_field(sink, &[surround_tag(pipeline.context.surround_profile())]);
     write_field(sink, &[cam16_view_tag(pipeline.cam16_view)]);
     write_field(sink, &[rectangular_view_tag(pipeline.rectangular_view)]);
+    write_field(sink, &[formula_release_tag(pipeline.formula)]);
     write_field(sink, &[region_release_tag(releases.region)]);
     write_field(sink, &region.shape.g00.bits().to_be_bytes());
     write_field(sink, &region.shape.g01.bits().to_be_bytes());

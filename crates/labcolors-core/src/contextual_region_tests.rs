@@ -3,8 +3,9 @@ use core::cmp::Ordering;
 use proptest::prelude::*;
 
 use crate::contextual_region::{
-    ContextualRegionDefinitionReleasesV1, ContextualRegionFamilyProviderReleaseIdV1,
-    ContextualRegionFamilyProviderV1, ContextualRegionIdentityEncodingReleaseIdV1,
+    CONTEXTUAL_REGION_FORMULA_RELEASE_V1, ContextualRegionDefinitionReleasesV1,
+    ContextualRegionFamilyProviderReleaseIdV1, ContextualRegionFamilyProviderV1,
+    ContextualRegionFormulaReleaseIdV1, ContextualRegionIdentityEncodingReleaseIdV1,
     ContextualRegionPipelineErrorV1, ContextualRegionPipelineV1, ExactDyadic64ErrorV1,
     ExactDyadic64V1, PiecewiseLinearCartesianTubeErrorV1, PiecewiseLinearCartesianTubeReleaseIdV1,
     PiecewiseLinearCartesianTubeV1, Shape2BitsV1, Shape2ErrorV1, TubeCoordinateV1, TubeKnotBitsV1,
@@ -83,6 +84,23 @@ fn pipeline_with_release(
         context,
         CAM16_VIEW_RELEASE_V1,
         CAM16_UCS_VIEW_RELEASE_V1,
+        CONTEXTUAL_REGION_FORMULA_RELEASE_V1,
+    )
+    .unwrap()
+}
+
+fn pipeline_with_formula_release(
+    context: AppearanceContextId,
+    formula: ContextualRegionFormulaReleaseIdV1,
+) -> ContextualRegionPipelineV1 {
+    ContextualRegionPipelineV1::try_new(
+        OutputProfileId::Iec61966Srgb8D65V1,
+        ADMITTED_SRGB8_TRISTIMULUS_BINDING_V1,
+        MODELED_LCS_OCCURRENCE_RELEASE_V1,
+        context,
+        CAM16_VIEW_RELEASE_V1,
+        CAM16_UCS_VIEW_RELEASE_V1,
+        formula,
     )
     .unwrap()
 }
@@ -316,6 +334,7 @@ fn contextual_pipeline_rejects_a_foreign_context_frame() {
         context(MUTATION_SENTINEL_XYZ_FRAME_V1),
         CAM16_VIEW_RELEASE_V1,
         CAM16_UCS_VIEW_RELEASE_V1,
+        CONTEXTUAL_REGION_FORMULA_RELEASE_V1,
     );
     assert_eq!(
         error,
@@ -352,6 +371,13 @@ fn typed_pipeline_and_region_mutations_change_definition_identity() {
         pipeline_with_release(
             base_context,
             ModeledLcsOccurrenceReleaseId::MutationSentinelV1,
+        ),
+        &base_region,
+    );
+    assert_changed(
+        pipeline_with_formula_release(
+            base_context,
+            ContextualRegionFormulaReleaseIdV1::MutationSentinelV1,
         ),
         &base_region,
     );
@@ -515,7 +541,7 @@ fn canonical_identity_is_length_prefixed_big_endian_and_golden() {
         ContextualRegionFamilyProviderV1::canonical_identity_bytes_for_test(pipeline, &region);
 
     let fields = decode_fields(&bytes);
-    assert_eq!(fields.len(), 29);
+    assert_eq!(fields.len(), 30);
     assert_eq!(
         fields[0],
         b"labcolors.contextual-region-family-provider.v1\0"
@@ -536,22 +562,23 @@ fn canonical_identity_is_length_prefixed_big_endian_and_golden() {
     assert_eq!(fields[14], &[1]);
     assert_eq!(fields[15], &[1]);
     assert_eq!(fields[16], &[1]);
-    assert_eq!(fields[17], &ONE.to_be_bytes());
-    assert_eq!(fields[18], &POSITIVE_ZERO.to_be_bytes());
-    assert_eq!(fields[19], &ONE.to_be_bytes());
-    assert_eq!(fields[20], &2_u64.to_be_bytes());
-    assert_eq!(fields[21], &ONE.to_be_bytes());
-    assert_eq!(fields[22], &POSITIVE_ZERO.to_be_bytes());
+    assert_eq!(fields[17], &[1]);
+    assert_eq!(fields[18], &ONE.to_be_bytes());
+    assert_eq!(fields[19], &POSITIVE_ZERO.to_be_bytes());
+    assert_eq!(fields[20], &ONE.to_be_bytes());
+    assert_eq!(fields[21], &2_u64.to_be_bytes());
+    assert_eq!(fields[22], &ONE.to_be_bytes());
     assert_eq!(fields[23], &POSITIVE_ZERO.to_be_bytes());
-    assert_eq!(fields[24], &FOUR.to_be_bytes());
-    assert_eq!(fields[25], &TWO.to_be_bytes());
-    assert_eq!(fields[26], &POSITIVE_ZERO.to_be_bytes());
+    assert_eq!(fields[24], &POSITIVE_ZERO.to_be_bytes());
+    assert_eq!(fields[25], &FOUR.to_be_bytes());
+    assert_eq!(fields[26], &TWO.to_be_bytes());
     assert_eq!(fields[27], &POSITIVE_ZERO.to_be_bytes());
-    assert_eq!(fields[28], &FOUR.to_be_bytes());
+    assert_eq!(fields[28], &POSITIVE_ZERO.to_be_bytes());
+    assert_eq!(fields[29], &FOUR.to_be_bytes());
 
     assert_eq!(
         hex(ContextualRegionFamilyProviderV1::definition_digest(pipeline, &region,).as_bytes()),
-        "e21c15eda47d9d2a3f17e7adfcdcf2e6b47d9c316d9deb92fbb09ce1a56855a4",
+        "72d4329c98db9942c5992d718079cb94745615d78943e9323381ffc917bf6b91",
     );
 }
 
@@ -563,7 +590,7 @@ fn every_canonical_identity_field_changes_the_digest() {
         ContextualRegionFamilyProviderV1::canonical_identity_bytes_for_test(pipeline, &region);
     let baseline = crate::sha256::digest(&bytes);
     let ranges = field_payload_ranges(&bytes);
-    assert_eq!(ranges.len(), 29);
+    assert_eq!(ranges.len(), 30);
 
     for (field, range) in ranges.into_iter().enumerate() {
         let mut mutated = bytes.clone();
