@@ -59,6 +59,10 @@ impl ExactDyadic64V1 {
     const fn magnitude_parts(self) -> (u64, i32) {
         let exponent = ((self.0 & EXPONENT_MASK) >> 52) as i32;
         let fraction = self.0 & FRACTION_MASK;
+        // Fraction занимает 52 младших бита, normal significand дополнен
+        // скрытым `2^52`, а binary64 bias равен 1023. Поэтому normal value
+        // имеет масштаб `exponent - 1023 - 52 = exponent - 1075`, тогда как
+        // subnormal value по определению имеет фиксированный масштаб `-1074`.
         if exponent == 0 {
             (fraction, -1074)
         } else {
@@ -86,7 +90,7 @@ impl PartialOrd for ExactDyadic64V1 {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy)]
 struct ExactDyadicProductV1 {
     negative: bool,
     significand: u128,
@@ -122,12 +126,24 @@ impl ExactDyadicProductV1 {
                 let common_exponent = self.exponent.min(other.exponent);
                 let self_shift = (self.exponent - common_exponent) as u32;
                 let other_shift = (other.exponent - common_exponent) as u32;
+                // Произведение двух binary64 significands занимает не более
+                // 106 бит. При одинаковом top-bit выравнивание к меньшему
+                // exponent сохраняет ту же итоговую bit length, поэтому оба
+                // сдвига помещаются в u128 без потери старших битов.
                 (self.significand << self_shift).cmp(&(other.significand << other_shift))
             }
             order => order,
         }
     }
 }
+
+impl PartialEq for ExactDyadicProductV1 {
+    fn eq(&self, other: &Self) -> bool {
+        self.cmp(other) == Ordering::Equal
+    }
+}
+
+impl Eq for ExactDyadicProductV1 {}
 
 impl Ord for ExactDyadicProductV1 {
     fn cmp(&self, other: &Self) -> Ordering {
@@ -143,6 +159,29 @@ impl Ord for ExactDyadicProductV1 {
 impl PartialOrd for ExactDyadicProductV1 {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
+    }
+}
+
+#[cfg(test)]
+mod exact_dyadic_product_laws {
+    use super::{ExactDyadic64V1, ExactDyadicProductV1};
+
+    #[test]
+    fn equality_and_ordering_use_the_same_exact_value() {
+        let exact = |bits| ExactDyadic64V1::try_from_bits(bits).unwrap();
+        // `2.25 × 1` и `1.5²` — одно exact-dyadic значение, но raw products
+        // отличаются удвоенной significand и уменьшенным на единицу exponent.
+        let factored = ExactDyadicProductV1::of(
+            exact(0x4002_0000_0000_0000),
+            exact(0x3ff0_0000_0000_0000),
+        );
+        let squared = ExactDyadicProductV1::of(
+            exact(0x3ff8_0000_0000_0000),
+            exact(0x3ff8_0000_0000_0000),
+        );
+
+        assert_eq!(factored.cmp(&squared), core::cmp::Ordering::Equal);
+        assert_eq!(factored, squared);
     }
 }
 

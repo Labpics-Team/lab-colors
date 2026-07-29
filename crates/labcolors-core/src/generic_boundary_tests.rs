@@ -293,6 +293,7 @@ fn generic_source_inventory_covers_relation_topology_and_evaluators() {
 #[test]
 fn contextual_region_is_definition_only_and_has_no_semantic_recipe_branch() {
     let production = normalized_production_code(CONTEXTUAL_REGION_SOURCE);
+    let compact = compact_production_syntax(CONTEXTUAL_REGION_SOURCE).to_ascii_lowercase();
     for forbidden in [
         "familyid",
         "semanticfamilyreleaseidv2",
@@ -321,8 +322,8 @@ fn contextual_region_is_definition_only_and_has_no_semantic_recipe_branch() {
             "center strength must remain data of one law; found `{forbidden_branch}`",
         );
     }
-    assert!(production.contains("-> familydefinitiondigestv2"));
-    assert!(production.contains("familydefinitiondigestv2::from_digest"));
+    assert!(compact.contains("->familydefinitiondigestv2"));
+    assert!(compact.contains("familydefinitiondigestv2::from_digest"));
 }
 
 #[test]
