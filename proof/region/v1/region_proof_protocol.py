@@ -49,7 +49,8 @@ POLICY_MAGIC_V1 = b"LCPOL1\0\0"
 JOB_MAGIC_V1 = b"LCJOB1\0\0"
 MANIFEST_MAGIC_V1 = b"LCMAN1\0\0"
 TRANSCRIPT_MAGIC_V1 = b"LCTRN1\0\0"
-RUN_MAGIC_V1 = b"LCRUN1\0\0"
+RUN_CLAIM_MAGIC_V1 = b"LCRUN1\0\0"
+PROVENANCE_CLAIM_MAGIC_V1 = b"LCPRV1\0\0"
 COMPARISON_MAGIC_V1 = b"LCCMP1\0\0"
 
 DOMAIN_ID_LABEL_V1 = b"labcolors.proof-region.domain.v1\0"
@@ -57,7 +58,8 @@ POLICY_ID_LABEL_V1 = b"labcolors.proof-region.policy.v1\0"
 JOB_ID_LABEL_V1 = b"labcolors.proof-region.job.v1\0"
 MANIFEST_ID_LABEL_V1 = b"labcolors.proof-region.comparator-manifest.v1\0"
 TRANSCRIPT_ID_LABEL_V1 = b"labcolors.proof-region.transcript.v1\0"
-RUN_ID_LABEL_V1 = b"labcolors.proof-region.run-receipt.v1\0"
+RUN_CLAIM_ID_LABEL_V1 = b"labcolors.proof-region.run-claim.v1\0"
+PROVENANCE_CLAIM_ID_LABEL_V1 = b"labcolors.proof-region.evaluator-provenance-claim.v1\0"
 COMPARISON_ID_LABEL_V1 = b"labcolors.proof-region.dual-comparison.v1\0"
 
 
@@ -81,7 +83,7 @@ class ProtocolReasonV1(StrEnum):
     INVALID_TRANSCRIPT = "invalid_transcript"
     MISSING_EQUALITY_WITNESS = "missing_equality_witness"
     FOREIGN_BINDING = "foreign_binding"
-    NOT_INDEPENDENT = "not_independent"
+    SHARED_DIVERSITY_COORDINATE = "shared_diversity_coordinate"
     UNRESOLVED_TRANSCRIPT = "unresolved_transcript"
     DISAGREEMENT = "disagreement"
 
@@ -770,10 +772,9 @@ class ContentResolvedComparatorManifestV1:
         manifest: ComparatorManifestV1,
         resolve_content_address: Callable[[bytes], bytes | Iterable[bytes] | None],
     ) -> "ContentResolvedComparatorManifestV1":
-        # A digest declaration alone is not source binding. The imperative
-        # controller supplies a resolver backed by its verified content store;
-        # the functional protocol only grants the refined type after every
-        # coordinate has been resolved.
+        # A digest declaration alone is not source binding. This structural
+        # transition only re-hashes caller-provided bytes; a future controlled
+        # replay must establish where those bytes came from.
         if type(manifest) is not ComparatorManifestV1:
             _fail(
                 "comparator-manifest-v1",
@@ -1479,7 +1480,7 @@ class DecisionTranscriptV1:
 
 
 @dataclass(frozen=True)
-class RunReceiptV1:
+class RunClaimV1:
     job_identity: bytes
     comparator_identity: bytes
     binary_identity: bytes
@@ -1489,7 +1490,7 @@ class RunReceiptV1:
 
     def __post_init__(self) -> None:
         for field in fields(self):
-            _require_digest(getattr(self, field.name), "run-receipt-v1", field.name)
+            _require_digest(getattr(self, field.name), "run-claim-v1", field.name)
 
     @classmethod
     def for_transcript(
@@ -1500,27 +1501,66 @@ class RunReceiptV1:
         binary_identity: bytes,
         invocation_identity: bytes,
         platform_identity: bytes,
-    ) -> "RunReceiptV1":
+    ) -> "RunClaimV1":
         if transcript.job_identity != job.identity or transcript.comparator_identity != comparator.identity:
-            _fail("run-receipt-v1", 0, ProtocolReasonV1.FOREIGN_BINDING, "transcript binding mismatch")
+            _fail("run-claim-v1", 0, ProtocolReasonV1.FOREIGN_BINDING, "transcript binding mismatch")
         return cls(job.identity, comparator.identity, binary_identity, invocation_identity, platform_identity, transcript.identity)
 
     @classmethod
-    def parse(cls, data: bytes) -> "RunReceiptV1":
-        reader = _Reader(data, "run-receipt-v1")
-        reader.magic(RUN_MAGIC_V1)
+    def parse(cls, data: bytes) -> "RunClaimV1":
+        reader = _Reader(data, "run-claim-v1")
+        reader.magic(RUN_CLAIM_MAGIC_V1)
         result = cls(*(reader.exact(32) for _ in range(6)))
         reader.finish()
         if result.encode() != data:
-            _fail(reader.artifact, 0, ProtocolReasonV1.FOREIGN_BINDING, "run receipt re-encode drift")
+            _fail(reader.artifact, 0, ProtocolReasonV1.FOREIGN_BINDING, "run claim re-encode drift")
         return result
 
     def encode(self) -> bytes:
-        return RUN_MAGIC_V1 + b"".join(getattr(self, field.name) for field in fields(self))
+        return RUN_CLAIM_MAGIC_V1 + b"".join(getattr(self, field.name) for field in fields(self))
 
     @cached_property
     def identity(self) -> bytes:
-        return _identity(RUN_ID_LABEL_V1, self.encode())
+        return _identity(RUN_CLAIM_ID_LABEL_V1, self.encode())
+
+
+@dataclass(frozen=True)
+class EvaluatorProvenanceClaimV1:
+    provenance_policy_identity: bytes
+    run_claim_identity: bytes
+    replay_evidence_identity: bytes
+
+    def __post_init__(self) -> None:
+        for field in fields(self):
+            _require_digest(
+                getattr(self, field.name),
+                "evaluator-provenance-claim-v1",
+                field.name,
+            )
+
+    @classmethod
+    def parse(cls, data: bytes) -> "EvaluatorProvenanceClaimV1":
+        reader = _Reader(data, "evaluator-provenance-claim-v1")
+        reader.magic(PROVENANCE_CLAIM_MAGIC_V1)
+        result = cls(*(reader.exact(32) for _ in range(3)))
+        reader.finish()
+        if result.encode() != data:
+            _fail(
+                reader.artifact,
+                0,
+                ProtocolReasonV1.FOREIGN_BINDING,
+                "provenance claim re-encode drift",
+            )
+        return result
+
+    def encode(self) -> bytes:
+        return PROVENANCE_CLAIM_MAGIC_V1 + b"".join(
+            getattr(self, field.name) for field in fields(self)
+        )
+
+    @cached_property
+    def identity(self) -> bytes:
+        return _identity(PROVENANCE_CLAIM_ID_LABEL_V1, self.encode())
 
 
 @dataclass(frozen=True)
@@ -1531,7 +1571,7 @@ class DualComparisonClaimV1:
     policy_identity: bytes
     domain_point_count: int
     comparator_identities: tuple[bytes, bytes]
-    run_identities: tuple[bytes, bytes]
+    run_claim_identities: tuple[bytes, bytes]
     transcript_identities: tuple[bytes, bytes]
     decision_digest: bytes
 
@@ -1546,7 +1586,7 @@ class DualComparisonClaimV1:
             type(pair) is not tuple or len(pair) != 2
             for pair in (
                 self.comparator_identities,
-                self.run_identities,
+                self.run_claim_identities,
                 self.transcript_identities,
             )
         ):
@@ -1557,7 +1597,7 @@ class DualComparisonClaimV1:
             self.domain_identity,
             self.policy_identity,
             *self.comparator_identities,
-            *self.run_identities,
+            *self.run_claim_identities,
             *self.transcript_identities,
             self.decision_digest,
         ):
@@ -1586,7 +1626,7 @@ class DualComparisonClaimV1:
                 self.policy_identity,
                 self.domain_point_count.to_bytes(8, "big"),
                 *self.comparator_identities,
-                *self.run_identities,
+                *self.run_claim_identities,
                 *self.transcript_identities,
                 self.decision_digest,
             )
@@ -1629,7 +1669,7 @@ def _admit_transcript(
     job: ProofJobV1,
     comparator: ContentResolvedComparatorManifestV1,
     transcript: DecisionTranscriptV1,
-    run: RunReceiptV1,
+    run: RunClaimV1,
     *,
     job_identity: bytes,
     domain_identity: bytes,
@@ -1659,17 +1699,17 @@ def compare_dual_transcripts(
     job: ProofJobV1,
     first_manifest: ContentResolvedComparatorManifestV1,
     first_transcript: DecisionTranscriptV1,
-    first_run: RunReceiptV1,
+    first_run: RunClaimV1,
     second_manifest: ContentResolvedComparatorManifestV1,
     second_transcript: DecisionTranscriptV1,
-    second_run: RunReceiptV1,
+    second_run: RunClaimV1,
 ) -> DualComparisonCandidateV1:
     if (
         type(job) is not ProofJobV1
         or type(first_transcript) is not DecisionTranscriptV1
-        or type(first_run) is not RunReceiptV1
+        or type(first_run) is not RunClaimV1
         or type(second_transcript) is not DecisionTranscriptV1
-        or type(second_run) is not RunReceiptV1
+        or type(second_run) is not RunClaimV1
     ):
         _fail(
             "dual-admission-v1",
@@ -1698,11 +1738,21 @@ def compare_dual_transcripts(
         or first.wrapper_source == second.wrapper_source
         or first.evaluator_source == second.evaluator_source
     ):
-        _fail("dual-admission-v1", 0, ProtocolReasonV1.NOT_INDEPENDENT, "comparators share an independence coordinate")
+        _fail(
+            "dual-admission-v1",
+            0,
+            ProtocolReasonV1.SHARED_DIVERSITY_COORDINATE,
+            "comparators share a required-distinct coordinate",
+        )
     if (first.kind, second.kind) != (ComparatorKindV1.ARB, ComparatorKindV1.MPFI):
         _fail("dual-admission-v1", 0, ProtocolReasonV1.NONCANONICAL_ORDER, "dual order is Arb then MPFI")
     if first_run.binary_identity == second_run.binary_identity:
-        _fail("dual-comparison-v1", 0, ProtocolReasonV1.NOT_INDEPENDENT, "comparators share one binary identity")
+        _fail(
+            "dual-comparison-v1",
+            0,
+            ProtocolReasonV1.SHARED_DIVERSITY_COORDINATE,
+            "comparators share one binary identity",
+        )
     job_identity = job.identity
     domain_identity = job.domain.identity
     policy_identity = job.policy.identity
