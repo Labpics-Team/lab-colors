@@ -1673,6 +1673,102 @@ class MutationTruthTest(unittest.TestCase):
         self.assertEqual(mutation.EXECUTION_COMMANDS["Build"][0], "test")
         self.assertEqual(second["commands"]["Build"][0], "test")
 
+    def test_shared_runner_workflows_cancel_stale_prs_without_canceling_evidence(
+        self,
+    ) -> None:
+        repo = Path(__file__).resolve().parents[1]
+        workflows = repo / ".github" / "workflows"
+        mutation_workflow = (workflows / "mutation.yml").read_text(encoding="utf-8")
+        ci_workflow = (workflows / "ci.yml").read_text(encoding="utf-8")
+        native_workflow = (workflows / "native-conformance.yml").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn(
+            "concurrency:\n"
+            "  group: mutation\n"
+            "  queue: max\n",
+            mutation_workflow,
+        )
+        mutation_concurrency = mutation_workflow.split("concurrency:\n", 1)[1].split(
+            "\nenv:", 1
+        )[0]
+        self.assertNotIn("cancel-in-progress", mutation_concurrency)
+
+        def enqueue_three(queue_mode: str) -> tuple[list[str], list[str]]:
+            pending: list[str] = []
+            cancelled: list[str] = []
+            for run in ("R2", "R3"):
+                if queue_mode == "single" and pending:
+                    cancelled.extend(pending)
+                    pending = []
+                pending.append(run)
+            return pending, cancelled
+
+        self.assertEqual(enqueue_three("max"), (["R2", "R3"], []))
+        self.assertEqual(enqueue_three("single"), (["R3"], ["R2"]))
+
+        group_tail = (
+            "${{ github.event_name == 'pull_request' && github.run_attempt == 1 "
+            "&& format('pr-{0}', github.event.pull_request.number) || "
+            "format('run-{0}', github.run_id) }}"
+        )
+        cancel_rule = (
+            "${{ github.event_name == 'pull_request' && github.run_attempt == 1 }}"
+        )
+        fork_guard = (
+            "(github.event_name != 'pull_request' ||\n"
+            "      github.event.pull_request.head.repo.full_name == github.repository)"
+        )
+        for workflow_name, workflow in (
+            ("ci", ci_workflow),
+            ("native-conformance", native_workflow),
+        ):
+            self.assertIn(
+                "concurrency:\n"
+                f"  group: {workflow_name}-{group_tail}\n"
+                f"  cancel-in-progress: {cancel_rule}\n",
+                workflow,
+            )
+        self.assertEqual(ci_workflow.count(fork_guard), 7)
+        self.assertEqual(native_workflow.count(fork_guard), 1)
+        ci_jobs = ci_workflow.split("\njobs:\n", 1)[1]
+        native_jobs = native_workflow.split("\njobs:\n", 1)[1]
+        self.assertNotIn("github.run_attempt == 1", ci_jobs)
+        self.assertNotIn("github.run_attempt == 1", native_jobs)
+
+        def run_policy(
+            event: str,
+            attempt: int,
+            pr_number: int,
+            run_id: int,
+            *,
+            same_repo: bool = True,
+        ) -> tuple[str, bool, bool]:
+            initial_pr = event == "pull_request" and attempt == 1
+            group_value = f"pr-{pr_number}" if initial_pr else f"run-{run_id}"
+            eligible = event != "pull_request" or same_repo
+            return group_value, initial_pr, eligible
+
+        self.assertEqual(
+            run_policy("pull_request", 1, 42, 100), ("pr-42", True, True)
+        )
+        self.assertEqual(
+            run_policy("pull_request", 1, 42, 101), ("pr-42", True, True)
+        )
+        self.assertEqual(
+            run_policy("pull_request", 2, 42, 42), ("run-42", False, True)
+        )
+        self.assertEqual(
+            run_policy("pull_request", 2, 42, 42, same_repo=False),
+            ("run-42", False, False),
+        )
+        self.assertEqual(run_policy("push", 2, 0, 100), ("run-100", False, True))
+        self.assertNotEqual(
+            run_policy("pull_request", 1, 42, 42)[0],
+            run_policy("pull_request", 2, 42, 42)[0],
+        )
+
     def test_workflow_and_scope_lock_the_truth_contract(self) -> None:
         def between(source: str, start: str, end: str, label: str) -> str:
             if start not in source:
@@ -1757,7 +1853,7 @@ class MutationTruthTest(unittest.TestCase):
                 '"$RUNNER_TEMP/mutants-bin/cargo-mutants" --version',
                 job,
             )
-        self.assertRegex(shard_job, r"(?m)^\s+max-parallel:\s*4\s*$")
+        self.assertRegex(shard_job, r"(?m)^\s+max-parallel:\s*3\s*$")
         self.assertIn("--baseline=run", shard_step)
         self.assertIn('--shard "$SHARD_INDEX/32"', shard_step)
         self.assertLess(
