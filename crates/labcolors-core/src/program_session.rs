@@ -43,14 +43,16 @@ use crate::clean_set::{
 };
 use crate::composition::CompositionProfileV1;
 use crate::constraints::{
-    CoreIntrinsicUnaryInvocationV1, CoreIntrinsicUnaryMeasurementV1, CoreIntrinsicUnaryPassV1,
-    CoreIntrinsicUnaryViolationV1, CoreRelationInvocationV1, CoreRelationMeasurementV1,
-    CoreRelationPassV1, CoreRelationViolationV1, Evaluator, ExactSrgb8IdentityV1, HardDecision,
+    CompiledCoreIntrinsicUnaryInvocationV1, CoreIntrinsicUnaryInvocationV1,
+    CoreIntrinsicUnaryMeasurementV1, CoreIntrinsicUnaryPassV1, CoreIntrinsicUnaryViolationV1,
+    CoreRelationInvocationV1, CoreRelationMeasurementV1, CoreRelationPassV1,
+    CoreRelationViolationV1, Evaluator, ExactSrgb8IdentityV1, HardDecision,
     ProgramConstraintContentV1, ProgramPointAssessmentErrorV1, ProgramPointEvaluatorContentV1,
     ProgramPointEvaluatorV1, ProgramPointInvocation, ProgramPointOccurrenceV1,
     ProgramPointTargetV1, ProgramVisiblePointBindingV1, ProgramVisiblePointPassEvidence,
     ProgramVisiblePointViolationEvidence, Wcag22Srgb8V1, assess_program_point_hard,
 };
+use crate::family::{FamilyDeclarationV1, FamilyId};
 use crate::joint::{
     AdmittedFiniteJointOrderV1, FiniteDomainOrdinalV1, FiniteJointOrderAdmissionErrorV1,
     FiniteJointOrderErrorV1, NonEmptyFiniteDomainCardinalitiesV1, admit_finite_joint_order_v1,
@@ -70,7 +72,7 @@ use crate::wcag22::Wcag22CriterionV1;
 
 #[path = "program_identity.rs"]
 mod identity;
-pub(crate) use identity::ProgramContentIdentityV6;
+pub(crate) use identity::ProgramContentIdentityV7;
 #[cfg(test)]
 pub(crate) use identity::edge_role_count_for_test as program_identity_edge_role_count_for_test;
 #[cfg(test)]
@@ -559,6 +561,21 @@ impl<Invocation> ConstraintInvocation<Invocation, HardModeV1> {
         }
     }
 
+    pub(crate) const fn intrinsic_family_membership_hard(
+        id: ConstraintId,
+        target: TargetId,
+        family: FamilyId,
+    ) -> Self {
+        Self {
+            id,
+            body: ProgramConstraintBodyV1::IntrinsicUnary {
+                target,
+                invocation: CoreIntrinsicUnaryInvocationV1::family_membership(family),
+            },
+            mode: PhantomData,
+        }
+    }
+
     pub(crate) const fn exact_intrinsic_relation_hard(
         id: ConstraintId,
         relation: DirectedRelationV1<TargetId>,
@@ -623,6 +640,21 @@ impl<Invocation> ConstraintInvocation<Invocation, ReportModeV1> {
             body: ProgramConstraintBodyV1::VisibleUnary {
                 occurrence,
                 invocation,
+            },
+            mode: PhantomData,
+        }
+    }
+
+    pub(crate) const fn intrinsic_family_membership_report_only(
+        id: ConstraintId,
+        target: TargetId,
+        family: FamilyId,
+    ) -> Self {
+        Self {
+            id,
+            body: ProgramConstraintBodyV1::IntrinsicUnary {
+                target,
+                invocation: CoreIntrinsicUnaryInvocationV1::family_membership(family),
             },
             mode: PhantomData,
         }
@@ -922,6 +954,7 @@ where
 {
     sources: Vec<Source>,
     targets: Vec<Target>,
+    families: Vec<FamilyDeclarationV1>,
     joint_selection: Option<DeclaredJointSelectionV1>,
     observation_group: ObservationGroup,
     opacities: Vec<OpacityInput>,
@@ -956,6 +989,7 @@ where
         Self {
             sources,
             targets,
+            families: Vec::new(),
             joint_selection: None,
             observation_group,
             opacities,
@@ -975,6 +1009,11 @@ where
     /// declaration position.
     pub fn with_joint_selection(mut self, selection: DeclaredJointSelectionV1) -> Self {
         self.joint_selection = Some(selection);
+        self
+    }
+
+    pub(crate) fn with_families(mut self, families: Vec<FamilyDeclarationV1>) -> Self {
+        self.families = families;
         self
     }
 
@@ -1039,6 +1078,10 @@ impl CoreProgramDraftV1 {
 
     pub(crate) fn push_target(&mut self, target: Target) {
         self.program.targets.push(target);
+    }
+
+    pub(crate) fn push_family(&mut self, family: FamilyDeclarationV1) {
+        self.program.families.push(family);
     }
 
     pub(crate) fn set_joint_selection(
@@ -1117,6 +1160,31 @@ impl CoreProgramDraftV1 {
             ));
     }
 
+    pub(crate) fn push_intrinsic_family_membership_hard(
+        &mut self,
+        id: ConstraintId,
+        target: TargetId,
+        family: FamilyId,
+    ) {
+        self.program
+            .constraints
+            .hard
+            .push(ConstraintInvocation::intrinsic_family_membership_hard(
+                id, target, family,
+            ));
+    }
+
+    pub(crate) fn push_intrinsic_family_membership_report_only(
+        &mut self,
+        id: ConstraintId,
+        target: TargetId,
+        family: FamilyId,
+    ) {
+        self.program.constraints.report_only.push(
+            ConstraintInvocation::intrinsic_family_membership_report_only(id, target, family),
+        );
+    }
+
     pub(crate) fn push_exact_visible_relation_hard(
         &mut self,
         id: ConstraintId,
@@ -1189,6 +1257,15 @@ pub enum ProgramCompileError {
     },
     DuplicateTarget {
         target: TargetId,
+    },
+    DuplicateFamily {
+        family: FamilyId,
+    },
+    InvalidFamilyImage {
+        family: FamilyId,
+    },
+    UnusedFamily {
+        family: FamilyId,
     },
     MissingFixedSource {
         target: TargetId,
@@ -1339,6 +1416,10 @@ pub enum ProgramCompileError {
     MissingIntrinsicUnaryTarget {
         constraint: ConstraintId,
         target: TargetId,
+    },
+    MissingConstraintFamily {
+        constraint: ConstraintId,
+        family: FamilyId,
     },
     MissingIntrinsicRelationReference {
         constraint: ConstraintId,
@@ -1499,7 +1580,7 @@ enum CompiledProgramConstraintBodyV1<Invocation> {
     IntrinsicUnary {
         target_id: TargetId,
         target: CompiledPaintInputSlotV1,
-        invocation: CoreIntrinsicUnaryInvocationV1,
+        invocation: CompiledCoreIntrinsicUnaryInvocationV1,
     },
     IntrinsicRelation {
         reference: CompiledIntrinsicRelationEndpointV1,
@@ -1815,8 +1896,9 @@ where
     Evaluation: ProgramConstraintEvaluatorSetV1,
     ProgramConstraintInvocationOf<Evaluation>: Copy,
 {
-    content_identity: ProgramContentIdentityV6,
+    content_identity: ProgramContentIdentityV7,
     evaluator: Evaluation,
+    families: Box<[FamilyDeclarationV1]>,
     graph: CompiledAppearanceGraph,
     binding_template: AdmittedAppearanceBindings,
     observation_group: CompiledObservationGroupV1,
@@ -1862,7 +1944,7 @@ where
     /// Opaque ID и порядок неупорядоченных объявлений исключены; явный joint
     /// order входит в адрес. Адрес не подтверждает поколение владельца и не
     /// заменяет revision-bound evidence.
-    pub fn content_identity(&self) -> ProgramContentIdentityV6 {
+    pub fn content_identity(&self) -> ProgramContentIdentityV7 {
         self.owner_generation.content_identity
     }
 
@@ -2524,7 +2606,7 @@ pub(crate) enum ProgramPointCausalConsideredStateV1 {
 /// одного моделируемого terminal root. Оно ничего не утверждает о пикселе
 /// браузера, восприятии или качестве цвета.
 pub(crate) struct ProgramPointCausalEvidenceV1<'report, State> {
-    content_identity: ProgramContentIdentityV6,
+    content_identity: ProgramContentIdentityV7,
     observation: &'report RevisionBoundObservationV1,
     record: &'report ProgramPointCausalRecordV1,
     steps: &'report [PointOccurrenceAbsenceStepV1],
@@ -2545,7 +2627,7 @@ where
             .unwrap_or_else(|| unreachable!("тип replay span запрещает пустой пересчёт"))
     }
 
-    pub(crate) const fn content_identity(&self) -> ProgramContentIdentityV6 {
+    pub(crate) const fn content_identity(&self) -> ProgramContentIdentityV7 {
         self.content_identity
     }
 
@@ -2603,7 +2685,7 @@ pub struct ProgramReportV1<Evaluation>
 where
     Evaluation: ProgramConstraintEvaluatorSetV1,
 {
-    content_identity: ProgramContentIdentityV6,
+    content_identity: ProgramContentIdentityV7,
     observation: RevisionBoundObservationV1,
     arena: ProgramEvaluationArenaLeaseV1<Evaluation>,
 }
@@ -2614,7 +2696,7 @@ where
 {
     /// Адрес содержимого Program, по которому построен report; это не
     /// идентификатор поколения и не runtime-authority.
-    pub const fn content_identity(&self) -> ProgramContentIdentityV6 {
+    pub const fn content_identity(&self) -> ProgramContentIdentityV7 {
         self.content_identity
     }
 
@@ -4238,7 +4320,9 @@ where
                         target: *target_id,
                         value,
                     };
-                    let (measurement, decision) = invocation.assess(value.source());
+                    let (measurement, decision) = invocation
+                        .assess(value.source(), &epoch.families)
+                        .ok_or(ProgramSessionEvaluationError::InternalInvariant)?;
                     let (result, is_violation) = match decision {
                         HardDecision::Pass(proof) => (
                             ProgramConstraintResultV1::Pass(
@@ -4583,6 +4667,7 @@ where
         .checked_len()
         .ok_or(ProgramCompileError::ResourceExhausted)?;
     canonicalize_sources_and_targets(&mut program)?;
+    canonicalize_and_verify_families(&mut program.families)?;
 
     let graph = lower_graph(&program)?
         .compile()
@@ -4629,6 +4714,7 @@ where
         &point_presentations,
         &program.constraints,
     )?;
+    validate_compiled_family_usage(&program.families, &constraints)?;
     validate_terminal_dependency_cone(
         &program,
         &constraints,
@@ -4639,10 +4725,12 @@ where
     let occurrence_contexts =
         compact_constraint_contexts(&all_occurrence_contexts, &mut constraints)?;
     let outputs = compile_outputs(&graph, &mut program.outputs)?;
-    let content_identity = identity::compile_program_content_identity_v6(&program)?;
+    let content_identity = identity::compile_program_content_identity_v7(&program)?;
+    let families = program.families.into_boxed_slice();
     Ok(ProgramEpochV1 {
         content_identity,
         evaluator: program.evaluator,
+        families,
         graph,
         binding_template,
         observation_group: CompiledObservationGroupV1 {
@@ -4656,6 +4744,63 @@ where
         outputs,
         target_selection,
     })
+}
+
+fn canonicalize_and_verify_families(
+    families: &mut Vec<FamilyDeclarationV1>,
+) -> Result<(), ProgramCompileError> {
+    families.sort_unstable_by_key(FamilyDeclarationV1::id);
+    if let Some(family) = families
+        .windows(2)
+        .find(|pair| pair[0].id() == pair[1].id())
+        .map(|pair| pair[0].id())
+    {
+        return Err(ProgramCompileError::DuplicateFamily { family });
+    }
+    for family in families {
+        family
+            .set()
+            .verify()
+            .map_err(|_| ProgramCompileError::InvalidFamilyImage {
+                family: family.id(),
+            })?;
+    }
+    Ok(())
+}
+
+fn validate_compiled_family_usage<Invocation>(
+    families: &[FamilyDeclarationV1],
+    constraints: &[CompiledPointConstraint<Invocation>],
+) -> Result<(), ProgramCompileError> {
+    let mut used = false_slots(families.len())?;
+    for constraint in constraints {
+        let CompiledProgramConstraintBodyV1::IntrinsicUnary {
+            invocation:
+                CompiledCoreIntrinsicUnaryInvocationV1::FamilyMembership {
+                    family,
+                    family_index,
+                },
+            ..
+        } = &constraint.body
+        else {
+            continue;
+        };
+        let declaration = families
+            .get(*family_index)
+            .ok_or(ProgramCompileError::InternalInvariant)?;
+        if declaration.id() != *family {
+            return Err(ProgramCompileError::InternalInvariant);
+        }
+        used[*family_index] = true;
+    }
+    if let Some(family) = families
+        .iter()
+        .zip(used)
+        .find_map(|(family, used)| (!used).then_some(family.id()))
+    {
+        return Err(ProgramCompileError::UnusedFamily { family });
+    }
+    Ok(())
 }
 
 fn canonicalize_sources_and_targets<Evaluation>(
@@ -5504,12 +5649,30 @@ where
                         target: *target,
                     });
                 }
+                let invocation = match *invocation {
+                    CoreIntrinsicUnaryInvocationV1::ExactSrgb8 { expected } => {
+                        CompiledCoreIntrinsicUnaryInvocationV1::ExactSrgb8 { expected }
+                    }
+                    CoreIntrinsicUnaryInvocationV1::FamilyMembership { family } => {
+                        let family_index = program
+                            .families
+                            .binary_search_by_key(&family, FamilyDeclarationV1::id)
+                            .map_err(|_| ProgramCompileError::MissingConstraintFamily {
+                                constraint: constraint.id,
+                                family,
+                            })?;
+                        CompiledCoreIntrinsicUnaryInvocationV1::FamilyMembership {
+                            family,
+                            family_index,
+                        }
+                    }
+                };
                 CompiledProgramConstraintBodyV1::IntrinsicUnary {
                     target_id: *target,
                     target: graph
                         .bind_paint_input(target_paint_input_id(*target))
                         .ok_or(ProgramCompileError::InternalInvariant)?,
-                    invocation: *invocation,
+                    invocation,
                 }
             }
             ProgramConstraintBodyV1::IntrinsicRelation {

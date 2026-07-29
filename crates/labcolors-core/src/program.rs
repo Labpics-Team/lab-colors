@@ -24,7 +24,7 @@
 //! [`CertificateV1::Verified`] хранит выбранное состояние, все клетки
 //! доказательства и сертифицированные Paint outputs. [`CertificateV1::Conflict`]
 //! хранит исчерпывающий конфликт по всем рассмотренным состояниям.
-//! [`ContentIdentityV6`] идентифицирует каноническое содержание, но не даёт
+//! [`ContentIdentityV7`] идентифицирует каноническое содержание, но не даёт
 //! полномочий живого [`OwnerV1`].
 
 #![forbid(unreachable_pub)]
@@ -44,6 +44,12 @@ use crate::constraints::{
     CoreIntrinsicUnaryViolationV1, CoreRelationMeasurementV1, CoreRelationPassV1,
     CoreRelationViolationV1, ExactSrgb8IdentityV1, ProgramVisiblePointBindingV1,
     ProgramVisiblePointPassEvidence, ProgramVisiblePointViolationEvidence, Wcag22Srgb8V1,
+};
+use crate::family::{
+    AdmittedFamilySetV1, FamilyContentIdentityV1 as CoreFamilyContentIdentityV1,
+    FamilyDeclarationV1, FamilyId, FamilyImageErrorV1,
+    FamilyMembershipMeasurementV1 as CoreFamilyMembershipMeasurementV1,
+    admit_declared_family_image_v1,
 };
 use crate::joint::FiniteJointOrderErrorV1;
 use crate::lcs_occurrence::{
@@ -69,7 +75,7 @@ use crate::program_session::{
     PointPresentationRootV1, PointPresentationTargetV1, PresentationRootId, ProgramCompileError,
     ProgramConflictV1, ProgramConstraintCellV1, ProgramConstraintPassEvidenceV1,
     ProgramConstraintResultV1, ProgramConstraintSubjectV1, ProgramConstraintViolationEvidenceV1,
-    ProgramContentIdentityV6, ProgramIntrinsicPaintBindingV1, ProgramIntrinsicUnaryPassEvidenceV1,
+    ProgramContentIdentityV7, ProgramIntrinsicPaintBindingV1, ProgramIntrinsicUnaryPassEvidenceV1,
     ProgramIntrinsicUnaryViolationEvidenceV1, ProgramPaintOutputV1,
     ProgramRelationMemberDecisionV1, ProgramRelationMemberEvidenceV1, ProgramReportV1,
     ProgramSessionEvaluationError, ProgramSessionInstantiateError, ProgramSessionPlan,
@@ -173,6 +179,11 @@ authored_id!(
 );
 authored_id!("Идентификатор решаемой цели.", TargetIdV1, TargetId);
 authored_id!(
+    "Идентификатор объявленного family-set.",
+    FamilyIdV1,
+    FamilyId
+);
+authored_id!(
     "Идентификатор конечного кандидата одной цели.",
     TargetCandidateIdV1,
     TargetCandidateId
@@ -214,6 +225,55 @@ projected_id!(
     StreamIdV1,
     ObservationStreamId
 );
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct FamilySetV1(AdmittedFamilySetV1);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FamilySetAdmissionErrorV1 {
+    Empty,
+    ResourceExhausted,
+    InternalInvariant,
+}
+
+impl FamilySetV1 {
+    pub(crate) fn try_from_srgb8_image(
+        image: Vec<Srgb8>,
+    ) -> Result<Self, FamilySetAdmissionErrorV1> {
+        let mut signals = Vec::new();
+        signals
+            .try_reserve_exact(image.len())
+            .map_err(|_| FamilySetAdmissionErrorV1::ResourceExhausted)?;
+        signals.extend(image.into_iter().map(ColorSignal::from_srgb8));
+        admit_declared_family_image_v1(signals)
+            .map(Self)
+            .map_err(|error| match error {
+                FamilyImageErrorV1::EmptyGeneratorDomain => FamilySetAdmissionErrorV1::Empty,
+                FamilyImageErrorV1::ResourceExhausted => {
+                    FamilySetAdmissionErrorV1::ResourceExhausted
+                }
+                FamilyImageErrorV1::NonCanonicalAdmittedImage
+                | FamilyImageErrorV1::CertificateMismatch => {
+                    FamilySetAdmissionErrorV1::InternalInvariant
+                }
+                #[cfg(test)]
+                FamilyImageErrorV1::ImageMismatch { .. } => {
+                    FamilySetAdmissionErrorV1::InternalInvariant
+                }
+            })
+    }
+
+    /// Возвращает адрес неизменяемого сертификата допущенного family-set.
+    pub(crate) const fn content_identity(&self) -> FamilyContentIdentityV1 {
+        FamilyContentIdentityV1::from_core(self.0.certificate().family_content_identity())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn corrupt_first_member_for_test(&mut self, replacement: Srgb8) {
+        self.0
+            .corrupt_first_member_for_test(ColorSignal::from_srgb8(replacement));
+    }
+}
 projected_id!(
     "Идентификатор сценария, сохранённый как provenance.",
     ScenarioIdV1,
@@ -502,6 +562,12 @@ pub(crate) enum CompileErrorKindV1 {
     DuplicateSource,
     /// Повторно объявлена цель.
     DuplicateTarget,
+    /// Повторно объявлен family-set.
+    DuplicateFamily,
+    /// Сертификат family-set не прошёл полный replay.
+    InvalidFamilyImage,
+    /// Family-set объявлен, но не связан ни с одним ограничением.
+    UnusedFamily,
     /// В одной цели повторно объявлен ID кандидата.
     DuplicateTargetCandidate,
     /// Два кандидата одной цели задают одинаковое атомарное Paint value.
@@ -560,6 +626,8 @@ pub(crate) enum CompileErrorKindV1 {
     MissingConstraintOccurrence,
     /// Intrinsic-unary ограничение ссылается на отсутствующую Target.
     MissingIntrinsicUnaryTarget,
+    /// Family membership ссылается на отсутствующий family-set.
+    MissingConstraintFamily,
     /// Reference intrinsic-отношения ссылается на отсутствующую Target.
     MissingIntrinsicRelationReference,
     /// Candidate intrinsic-отношения ссылается на отсутствующую Target.
@@ -623,6 +691,8 @@ pub(crate) enum CompileErrorHandleV1 {
     Source(SourceIdV1),
     /// Цель.
     Target(TargetIdV1),
+    /// Точное множество family.
+    Family(FamilyIdV1),
     /// Кандидат цели.
     TargetCandidate(TargetCandidateIdV1),
     /// Вход прозрачности.
@@ -649,6 +719,7 @@ impl CompileErrorHandleV1 {
         match self {
             Self::Source(value) => value.value(),
             Self::Target(value) => value.value(),
+            Self::Family(value) => value.value(),
             Self::TargetCandidate(value) => value.value(),
             Self::OpacityInput(value) => value.value(),
             Self::Paint(value) => value.value(),
@@ -755,6 +826,21 @@ pub(crate) enum CompileErrorV1 {
     DuplicateTarget {
         /// Повторный ID.
         target: TargetIdV1,
+    },
+    /// Повторно объявлен один opaque family ID.
+    DuplicateFamily {
+        /// Повторный family ID.
+        family: FamilyIdV1,
+    },
+    /// Допущенный образ family не прошёл повторную верификацию.
+    InvalidFamilyImage {
+        /// Ошибочный family ID.
+        family: FamilyIdV1,
+    },
+    /// Объявленный family-set не используется ни одним constraint.
+    UnusedFamily {
+        /// Неиспользуемый family ID.
+        family: FamilyIdV1,
     },
     /// Фиксированная цель ссылается на отсутствующий исходный сигнал.
     MissingFixedSource {
@@ -1007,6 +1093,13 @@ pub(crate) enum CompileErrorV1 {
         /// Отсутствующая Target.
         target: TargetIdV1,
     },
+    /// Ограничение принадлежности ссылается на отсутствующий family-set.
+    MissingConstraintFamily {
+        /// Ошибочное ограничение.
+        constraint: ConstraintIdV1,
+        /// Отсутствующий family ID.
+        family: FamilyIdV1,
+    },
     /// Reference intrinsic-отношения ссылается на отсутствующую Target.
     MissingIntrinsicRelationReference {
         /// Ошибочное ограничение.
@@ -1086,6 +1179,9 @@ impl CompileErrorV1 {
         match self {
             Self::DuplicateSource { .. } => Kind::DuplicateSource,
             Self::DuplicateTarget { .. } => Kind::DuplicateTarget,
+            Self::DuplicateFamily { .. } => Kind::DuplicateFamily,
+            Self::InvalidFamilyImage { .. } => Kind::InvalidFamilyImage,
+            Self::UnusedFamily { .. } => Kind::UnusedFamily,
             Self::MissingFixedSource { .. } => Kind::MissingFixedSource,
             Self::DuplicateOpacityInput { .. } => Kind::DuplicateOpacityInput,
             Self::DuplicateSurfaceInputPort { .. } => Kind::DuplicateSurfaceInputPort,
@@ -1139,6 +1235,7 @@ impl CompileErrorV1 {
             Self::DuplicateConstraint { .. } => Kind::DuplicateConstraint,
             Self::MissingConstraintOccurrence { .. } => Kind::MissingConstraintOccurrence,
             Self::MissingIntrinsicUnaryTarget { .. } => Kind::MissingIntrinsicUnaryTarget,
+            Self::MissingConstraintFamily { .. } => Kind::MissingConstraintFamily,
             Self::MissingIntrinsicRelationReference { .. } => {
                 Kind::MissingIntrinsicRelationReference
             }
@@ -1178,6 +1275,9 @@ impl CompileErrorV1 {
             | Self::MissingFixedSource { target, .. }
             | Self::DuplicateTargetCandidate { target, .. }
             | Self::DuplicateTargetCandidateValue { target, .. } => Some(Handle::Target(*target)),
+            Self::DuplicateFamily { family }
+            | Self::InvalidFamilyImage { family }
+            | Self::UnusedFamily { family } => Some(Handle::Family(*family)),
             Self::DuplicateOpacityInput { input } | Self::OpacityOutOfDomain { input } => {
                 Some(Handle::OpacityInput(*input))
             }
@@ -1214,6 +1314,7 @@ impl CompileErrorV1 {
             Self::DuplicateConstraint { constraint }
             | Self::MissingConstraintOccurrence { constraint, .. }
             | Self::MissingIntrinsicUnaryTarget { constraint, .. }
+            | Self::MissingConstraintFamily { constraint, .. }
             | Self::MissingIntrinsicRelationReference { constraint, .. }
             | Self::MissingIntrinsicRelationCandidate { constraint, .. }
             | Self::MissingVisibleRelationReference { constraint, .. }
@@ -1279,6 +1380,7 @@ impl CompileErrorV1 {
             Self::MissingIntrinsicRelationCandidate { candidate, .. } => {
                 Some(Handle::Target(*candidate))
             }
+            Self::MissingConstraintFamily { family, .. } => Some(Handle::Family(*family)),
             Self::SolverDependentVisibleRelationReference { target, .. } => {
                 Some(Handle::Target(*target))
             }
@@ -1296,6 +1398,9 @@ impl CompileErrorV1 {
             }
             Self::DuplicateSource { .. }
             | Self::DuplicateTarget { .. }
+            | Self::DuplicateFamily { .. }
+            | Self::InvalidFamilyImage { .. }
+            | Self::UnusedFamily { .. }
             | Self::DuplicateOpacityInput { .. }
             | Self::DuplicateSurfaceInputPort { .. }
             | Self::UnusedSurfaceInputPort { .. }
@@ -1371,6 +1476,13 @@ impl DraftV1 {
     ) -> &mut Self {
         self.inner
             .push_target(Target::finite(id.into_core(), domain.0));
+        self
+    }
+
+    /// Объявляет одно точное допущенное множество без клиентской семантики.
+    pub(crate) fn push_family(&mut self, id: FamilyIdV1, set: FamilySetV1) -> &mut Self {
+        self.inner
+            .push_family(FamilyDeclarationV1::new(id.into_core(), set.0));
         self
     }
 
@@ -1543,6 +1655,36 @@ impl DraftV1 {
     ) -> &mut Self {
         self.inner
             .push_exact_intrinsic_unary_hard(id.into_core(), target.into_core(), expected);
+        self
+    }
+
+    /// Требует принадлежности исходного сигнала объявленному точному множеству.
+    pub(crate) fn push_intrinsic_family_membership_hard(
+        &mut self,
+        id: ConstraintIdV1,
+        target: TargetIdV1,
+        family: FamilyIdV1,
+    ) -> &mut Self {
+        self.inner.push_intrinsic_family_membership_hard(
+            id.into_core(),
+            target.into_core(),
+            family.into_core(),
+        );
+        self
+    }
+
+    /// Диагностирует принадлежность без права исключать состояние-кандидат.
+    pub(crate) fn push_intrinsic_family_membership_report_only(
+        &mut self,
+        id: ConstraintIdV1,
+        target: TargetIdV1,
+        family: FamilyIdV1,
+    ) -> &mut Self {
+        self.inner.push_intrinsic_family_membership_report_only(
+            id.into_core(),
+            target.into_core(),
+            family.into_core(),
+        );
         self
     }
 
@@ -1723,8 +1865,8 @@ impl OwnerV1 {
     ///
     /// Identity доступна до первого update, но не заменяет полномочия этой
     /// конкретной owner-эпохи.
-    pub(crate) fn content_identity(&self) -> ContentIdentityV6 {
-        ContentIdentityV6::from_core(self.compiled.content_identity())
+    pub(crate) fn content_identity(&self) -> ContentIdentityV7 {
+        ContentIdentityV7::from_core(self.compiled.content_identity())
     }
 
     /// Вычисляет верхние границы клеток для prospective Observed-update.
@@ -2044,10 +2186,10 @@ impl<'session> PreparedSessionTransitionV1<'session> {
 /// Identity не идентифицирует owner-эпоху и не даёт runtime-полномочий.
 #[repr(transparent)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(crate) struct ContentIdentityV6([u8; 32]);
+pub(crate) struct ContentIdentityV7([u8; 32]);
 
-impl ContentIdentityV6 {
-    const fn from_core(value: ProgramContentIdentityV6) -> Self {
+impl ContentIdentityV7 {
+    const fn from_core(value: ProgramContentIdentityV7) -> Self {
         Self(*value.as_bytes())
     }
 
@@ -2065,8 +2207,8 @@ pub(crate) struct VerifiedCertificateV1<'a> {
 
 impl<'a> VerifiedCertificateV1<'a> {
     /// Возвращает identity скомпилированного содержания.
-    pub(crate) const fn content_identity(self) -> ContentIdentityV6 {
-        ContentIdentityV6::from_core(self.inner.report().content_identity())
+    pub(crate) const fn content_identity(self) -> ContentIdentityV7 {
+        ContentIdentityV7::from_core(self.inner.report().content_identity())
     }
 
     /// Возвращает точное наблюдение, на котором выдан сертификат.
@@ -2111,8 +2253,8 @@ pub(crate) struct ConflictCertificateV1<'a> {
 
 impl<'a> ConflictCertificateV1<'a> {
     /// Возвращает identity скомпилированного содержания.
-    pub(crate) const fn content_identity(self) -> ContentIdentityV6 {
-        ContentIdentityV6::from_core(self.inner.report().content_identity())
+    pub(crate) const fn content_identity(self) -> ContentIdentityV7 {
+        ContentIdentityV7::from_core(self.inner.report().content_identity())
     }
 
     /// Возвращает точное наблюдение, вызвавшее конфликт.
@@ -2161,7 +2303,7 @@ impl<'a> CertificateV1<'a> {
     }
 
     /// Возвращает identity скомпилированного содержания.
-    pub(crate) const fn content_identity(self) -> ContentIdentityV6 {
+    pub(crate) const fn content_identity(self) -> ContentIdentityV7 {
         match self {
             Self::Verified(value) => value.content_identity(),
             Self::Conflict(value) => value.content_identity(),
@@ -2574,6 +2716,12 @@ impl IntrinsicUnaryEvidenceV1<'_> {
                     actual: value.actual(),
                 })
             }
+            CoreIntrinsicUnaryMeasurementV1::FamilyMembership {
+                family,
+                measurement,
+            } => IntrinsicUnaryMeasurementV1::FamilyMembership(
+                FamilyMembershipMeasurementV1::from_core(family, measurement),
+            ),
         }
     }
 
@@ -2581,10 +2729,16 @@ impl IntrinsicUnaryEvidenceV1<'_> {
         match self.inner {
             IntrinsicUnaryEvidenceRefV1::Pass(value) => match value.proof() {
                 CoreIntrinsicUnaryPassV1::ExactSrgb8(_) => IntrinsicUnaryProofV1::ExactSrgb8Pass,
+                CoreIntrinsicUnaryPassV1::FamilyMembership(_) => {
+                    IntrinsicUnaryProofV1::FamilyMembershipPass
+                }
             },
             IntrinsicUnaryEvidenceRefV1::Violation(value) => match value.proof() {
                 CoreIntrinsicUnaryViolationV1::ExactSrgb8(_) => {
                     IntrinsicUnaryProofV1::ExactSrgb8Violation
+                }
+                CoreIntrinsicUnaryViolationV1::FamilyMembership(_) => {
+                    IntrinsicUnaryProofV1::FamilyMembershipViolation
                 }
             },
         }
@@ -2632,13 +2786,72 @@ impl ExactSrgb8UnaryMeasurementV1 {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum IntrinsicUnaryMeasurementV1 {
+    /// Измерение точного равенства.
     ExactSrgb8(ExactSrgb8UnaryMeasurementV1),
+    /// Измерение принадлежности точному образу family.
+    FamilyMembership(FamilyMembershipMeasurementV1),
 }
 
+/// Устойчивый к коллизиям адрес одного допущенного сертификата family.
+#[repr(transparent)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub(crate) struct FamilyContentIdentityV1([u8; 32]);
+
+impl FamilyContentIdentityV1 {
+    const fn from_core(value: CoreFamilyContentIdentityV1) -> Self {
+        Self(*value.as_bytes())
+    }
+
+    /// Возвращает точные байты адреса.
+    pub(crate) const fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
+}
+
+/// Точный сигнал и сертификат family, проверенные одним вызовом.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct FamilyMembershipMeasurementV1 {
+    family: FamilyIdV1,
+    content: FamilyContentIdentityV1,
+    signal: Srgb8,
+}
+
+impl FamilyMembershipMeasurementV1 {
+    const fn from_core(family: FamilyId, value: CoreFamilyMembershipMeasurementV1) -> Self {
+        Self {
+            family: FamilyIdV1::from_core(family),
+            content: FamilyContentIdentityV1::from_core(value.family()),
+            signal: value.signal().srgb8(),
+        }
+    }
+
+    /// Возвращает opaque-объявление family, связанное ограничением.
+    pub(crate) const fn family(self) -> FamilyIdV1 {
+        self.family
+    }
+
+    /// Возвращает адрес полного допущенного сертификата family.
+    pub(crate) const fn content(self) -> FamilyContentIdentityV1 {
+        self.content
+    }
+
+    /// Возвращает классифицированный точный исходный сигнал.
+    pub(crate) const fn signal(self) -> Srgb8 {
+        self.signal
+    }
+}
+
+/// Взаимоисключающие точные доказательства одного intrinsic-unary вызова.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum IntrinsicUnaryProofV1 {
+    /// Точное равенство выполнено.
     ExactSrgb8Pass,
+    /// Точное равенство нарушено.
     ExactSrgb8Violation,
+    /// Принадлежность точному образу family подтверждена.
+    FamilyMembershipPass,
+    /// Принадлежность точному образу family нарушена.
+    FamilyMembershipViolation,
 }
 
 /// Полное заимствованное member-evidence одного directional-ограничения.
@@ -3538,6 +3751,15 @@ fn map_program_compile_error(error: ProgramCompileError) -> CompileErrorV1 {
         ProgramCompileError::DuplicateTarget { target } => CompileErrorV1::DuplicateTarget {
             target: TargetIdV1::from_core(target),
         },
+        ProgramCompileError::DuplicateFamily { family } => CompileErrorV1::DuplicateFamily {
+            family: FamilyIdV1::from_core(family),
+        },
+        ProgramCompileError::InvalidFamilyImage { family } => CompileErrorV1::InvalidFamilyImage {
+            family: FamilyIdV1::from_core(family),
+        },
+        ProgramCompileError::UnusedFamily { family } => CompileErrorV1::UnusedFamily {
+            family: FamilyIdV1::from_core(family),
+        },
         ProgramCompileError::MissingFixedSource { target, source } => {
             CompileErrorV1::MissingFixedSource {
                 target: TargetIdV1::from_core(target),
@@ -3769,6 +3991,12 @@ fn map_program_compile_error(error: ProgramCompileError) -> CompileErrorV1 {
             CompileErrorV1::MissingIntrinsicUnaryTarget {
                 constraint: ConstraintIdV1::from_core(constraint),
                 target: TargetIdV1::from_core(target),
+            }
+        }
+        ProgramCompileError::MissingConstraintFamily { constraint, family } => {
+            CompileErrorV1::MissingConstraintFamily {
+                constraint: ConstraintIdV1::from_core(constraint),
+                family: FamilyIdV1::from_core(family),
             }
         }
         ProgramCompileError::MissingIntrinsicRelationReference {

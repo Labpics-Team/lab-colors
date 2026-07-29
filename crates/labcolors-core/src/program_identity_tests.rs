@@ -3,6 +3,7 @@ use crate::appearance::{
     EncodedPointPaintValueV1, OccurrenceId, OpacityInputId, PaintId, SurfaceId, SurfaceInputPortId,
 };
 use crate::composition::AdmittedOpacityV1;
+use crate::family::{FamilyDeclarationV1, FamilyId, admit_declared_family_image_v1};
 use crate::lcs_occurrence::{
     AdaptingLuminanceCdM2, AppearanceContextId, AppearanceContextSchemaReleaseId,
     BackgroundLuminanceRatio, ColorSignal, IEC_SRGB_D65_XYZ_FRAME_V1, SurroundProfileId,
@@ -13,7 +14,7 @@ use crate::program_session::{
     CoreProgramConstraintInvocationV1, CoreProgramEvaluatorsV1, CoreProgramV1,
     DeclaredJointSelectionV1, FinitePaintDomainV1, JointCandidateStateV1, ObservationGroup,
     Occurrence, OpacityInput, OutputBinding, OutputSlotId, Paint, PointPresentationRootV1,
-    PointPresentationTargetV1, PresentationRootId, Program, ProgramContentIdentityV6, Source,
+    PointPresentationTargetV1, PresentationRootId, Program, ProgramContentIdentityV7, Source,
     SourceId, Surface, Target, TargetCandidateChoiceV1, TargetCandidateId, TargetCandidateV1,
     TargetId,
 };
@@ -47,6 +48,216 @@ fn context(surround: SurroundProfileId) -> AppearanceContextId {
         BackgroundLuminanceRatio::try_new(0.2).unwrap(),
         surround,
     )
+}
+
+fn declared_family(id: FamilyId, members: &[[u8; 3]]) -> FamilyDeclarationV1 {
+    FamilyDeclarationV1::new(
+        id,
+        admit_declared_family_image_v1(members.iter().copied().map(signal).collect()).unwrap(),
+    )
+}
+
+fn family_identity_program(
+    declarations: Vec<(FamilyId, Vec<[u8; 3]>)>,
+    bindings: [FamilyId; 2],
+) -> CoreProgramV1 {
+    let sources = [SourceId::new(1), SourceId::new(2)];
+    let targets = [TargetId::new(3), TargetId::new(4)];
+    let paints = [PaintId::new(5), PaintId::new(6)];
+    let port = SurfaceInputPortId::new(7);
+    let surface = SurfaceId::new(8);
+    let occurrences = [OccurrenceId::new(9), OccurrenceId::new(10)];
+    let source_signals = [signal([0x20, 0x40, 0x60]), signal([0x80, 0x60, 0x40])];
+
+    Program::new(
+        vec![
+            Source::new(sources[0], source_signals[0]),
+            Source::new(sources[1], source_signals[1]),
+        ],
+        vec![
+            Target::fixed(targets[0], sources[0]),
+            Target::fixed(targets[1], sources[1]),
+        ],
+        ObservationGroup::new(ObservationGroupId::new(11), vec![port]),
+        vec![],
+        vec![
+            Paint::Solid {
+                id: paints[0],
+                target: targets[0],
+            },
+            Paint::Solid {
+                id: paints[1],
+                target: targets[1],
+            },
+        ],
+        vec![Surface::Input {
+            id: surface,
+            input: port,
+        }],
+        vec![
+            Occurrence::new(
+                occurrences[0],
+                paints[0],
+                surface,
+                CompositionProfile::EncodedSrgb8SourceOverV1,
+                context(SurroundProfileId::AverageV1),
+            ),
+            Occurrence::new(
+                occurrences[1],
+                paints[1],
+                surface,
+                CompositionProfile::EncodedSrgb8SourceOverV1,
+                context(SurroundProfileId::AverageV1),
+            ),
+        ],
+        ConstraintSet::new(
+            vec![
+                ConstraintInvocation::intrinsic_family_membership_hard(
+                    ConstraintId::new(12),
+                    targets[0],
+                    bindings[0],
+                ),
+                ConstraintInvocation::intrinsic_family_membership_hard(
+                    ConstraintId::new(13),
+                    targets[1],
+                    bindings[1],
+                ),
+                ConstraintInvocation::visible_unary_hard(
+                    ConstraintId::new(14),
+                    occurrences[0],
+                    CoreProgramConstraintInvocationV1::ExactSrgb8(source_signals[0].srgb8()),
+                ),
+                ConstraintInvocation::visible_unary_hard(
+                    ConstraintId::new(15),
+                    occurrences[1],
+                    CoreProgramConstraintInvocationV1::ExactSrgb8(source_signals[1].srgb8()),
+                ),
+            ],
+            vec![],
+        ),
+        vec![
+            OutputBinding::new(OutputSlotId::new(16), paints[0]),
+            OutputBinding::new(OutputSlotId::new(17), paints[1]),
+        ],
+        CoreProgramEvaluatorsV1,
+    )
+    .with_families(
+        declarations
+            .into_iter()
+            .map(|(id, members)| declared_family(id, &members))
+            .collect(),
+    )
+}
+
+#[test]
+fn family_ids_and_declaration_order_are_alpha_invariant_in_v7() {
+    let first = FamilyId::new(100);
+    let second = FamilyId::new(200);
+    let renamed_first = FamilyId::new(900);
+    let renamed_second = FamilyId::new(700);
+    let first_members = vec![[0x20, 0x40, 0x60], [0x80, 0x60, 0x40], [0x10, 0x30, 0x50]];
+    let second_members = vec![[0x20, 0x40, 0x60], [0x80, 0x60, 0x40], [0x90, 0x70, 0x50]];
+
+    let canonical = family_identity_program(
+        vec![
+            (first, first_members.clone()),
+            (second, second_members.clone()),
+        ],
+        [first, second],
+    )
+    .compile()
+    .unwrap();
+    let renamed = family_identity_program(
+        vec![
+            (renamed_second, second_members),
+            (renamed_first, first_members),
+        ],
+        [renamed_first, renamed_second],
+    )
+    .compile()
+    .unwrap();
+
+    assert_eq!(canonical.content_identity(), renamed.content_identity());
+}
+
+#[test]
+fn family_content_is_bound_into_v7_identity() {
+    let first = FamilyId::new(100);
+    let second = FamilyId::new(200);
+    let baseline = family_identity_program(
+        vec![
+            (
+                first,
+                vec![[0x20, 0x40, 0x60], [0x80, 0x60, 0x40], [0x10, 0x30, 0x50]],
+            ),
+            (
+                second,
+                vec![[0x20, 0x40, 0x60], [0x80, 0x60, 0x40], [0x90, 0x70, 0x50]],
+            ),
+        ],
+        [first, second],
+    )
+    .compile()
+    .unwrap();
+    let changed = family_identity_program(
+        vec![
+            (
+                first,
+                vec![[0x20, 0x40, 0x60], [0x80, 0x60, 0x40], [0x10, 0x30, 0x50]],
+            ),
+            (
+                second,
+                vec![[0x20, 0x40, 0x60], [0x80, 0x60, 0x40], [0x91, 0x70, 0x50]],
+            ),
+        ],
+        [first, second],
+    )
+    .compile()
+    .unwrap();
+
+    assert_ne!(baseline.content_identity(), changed.content_identity());
+}
+
+#[test]
+fn constraint_family_binding_topology_is_bound_into_v7_identity() {
+    let first = FamilyId::new(100);
+    let second = FamilyId::new(200);
+    let declarations = vec![
+        (
+            first,
+            vec![[0x20, 0x40, 0x60], [0x80, 0x60, 0x40], [0x10, 0x30, 0x50]],
+        ),
+        (
+            second,
+            vec![[0x20, 0x40, 0x60], [0x80, 0x60, 0x40], [0x90, 0x70, 0x50]],
+        ),
+    ];
+    let direct = family_identity_program(declarations.clone(), [first, second])
+        .compile()
+        .unwrap();
+    let crossed = family_identity_program(declarations, [second, first])
+        .compile()
+        .unwrap();
+
+    assert_ne!(direct.content_identity(), crossed.content_identity());
+}
+
+#[test]
+fn shared_and_duplicated_equal_families_have_distinct_v7_identity() {
+    let first = FamilyId::new(100);
+    let second = FamilyId::new(200);
+    let members = vec![[0x20, 0x40, 0x60], [0x80, 0x60, 0x40]];
+    let shared = family_identity_program(vec![(first, members.clone())], [first, first])
+        .compile()
+        .unwrap();
+    let duplicated = family_identity_program(
+        vec![(first, members.clone()), (second, members)],
+        [first, second],
+    )
+    .compile()
+    .unwrap();
+
+    assert_ne!(shared.content_identity(), duplicated.content_identity());
 }
 
 #[derive(Clone, Copy)]
@@ -274,7 +485,7 @@ fn presentation_topology_ignores_root_names_and_declaration_order() {
 }
 
 #[test]
-fn presentation_root_terminal_relation_changes_v6_identity() {
+fn presentation_root_terminal_relation_changes_v7_identity() {
     let ids = canonical_full_ids();
     let root = PresentationRootId::new(1);
     let first = full_program(ids, false, FullMutation::None)
@@ -295,7 +506,7 @@ fn presentation_root_terminal_relation_changes_v6_identity() {
 }
 
 #[test]
-fn presentation_target_relation_and_multiplicity_change_v6_identity() {
+fn presentation_target_relation_and_multiplicity_change_v7_identity() {
     let ids = canonical_full_ids();
     let root = PresentationRootId::new(1);
     let nested_target = full_program(ids, false, FullMutation::None)
@@ -337,7 +548,7 @@ fn presentation_target_relation_and_multiplicity_change_v6_identity() {
 }
 
 #[test]
-fn canonical_v6_digest_is_cross_platform_golden() {
+fn canonical_v7_digest_is_cross_platform_golden() {
     let ids = FixedIds {
         sources: [SourceId::new(10), SourceId::new(20)],
         targets: [TargetId::new(30), TargetId::new(40)],
@@ -358,12 +569,12 @@ fn canonical_v6_digest_is_cross_platform_golden() {
     .compile()
     .unwrap();
 
-    let identity: ProgramContentIdentityV6 = compiled.content_identity();
+    let identity: ProgramContentIdentityV7 = compiled.content_identity();
     assert_eq!(
         identity.as_bytes(),
         &[
-            22, 145, 115, 252, 75, 115, 120, 67, 104, 170, 31, 25, 152, 105, 250, 250, 144, 214,
-            124, 251, 74, 89, 154, 255, 6, 58, 32, 21, 25, 171, 71, 214,
+            154, 204, 81, 85, 156, 9, 26, 195, 87, 171, 96, 24, 34, 25, 217, 167, 60, 142, 99, 146,
+            3, 34, 238, 113, 105, 97, 144, 203, 111, 224, 244, 136,
         ]
     );
 }
@@ -637,6 +848,11 @@ fn full_program(ids: FullIds, reverse_unordered: bool, mutation: FullMutation) -
             ids.targets[0],
             candidate_signals[0][0].srgb8(),
         ));
+        hard.push(ConstraintInvocation::intrinsic_family_membership_hard(
+            ConstraintId::new(1_012),
+            ids.targets[0],
+            FamilyId::new(1_013),
+        ));
         hard.push(ConstraintInvocation::exact_intrinsic_relation_hard(
             ConstraintId::new(1_007),
             DirectedRelationV1::try_new(fixed_target, vec![ids.targets[0]]).unwrap(),
@@ -717,16 +933,21 @@ fn full_program(ids: FullIds, reverse_unordered: bool, mutation: FullMutation) -
     .with_joint_selection(DeclaredJointSelectionV1::new(states));
 
     if matches!(mutation, FullMutation::CompleteSchemaGolden) {
-        program.with_point_presentations(
-            vec![PointPresentationRootV1::new(
-                PresentationRootId::new(1_002),
-                ids.occurrences[1],
-            )],
-            vec![PointPresentationTargetV1::new(
-                PresentationRootId::new(1_002),
-                ids.occurrences[0],
-            )],
-        )
+        program
+            .with_families(vec![declared_family(
+                FamilyId::new(1_013),
+                &[[0x10, 0x20, 0x30], [0x30, 0x20, 0x10]],
+            )])
+            .with_point_presentations(
+                vec![PointPresentationRootV1::new(
+                    PresentationRootId::new(1_002),
+                    ids.occurrences[1],
+                )],
+                vec![PointPresentationTargetV1::new(
+                    PresentationRootId::new(1_002),
+                    ids.occurrences[0],
+                )],
+            )
     } else {
         program
     }
@@ -765,8 +986,8 @@ fn canonical_full_ids() -> FullIds {
 }
 
 #[test]
-fn complete_program_schema_v6_digest_is_cross_platform_golden() {
-    // Вместе с fixed golden этот Program содержит каждый V6 vertex/edge tag,
+fn complete_program_schema_v7_digest_is_cross_platform_golden() {
+    // Вместе с fixed golden этот Program содержит каждый V7 vertex/edge tag,
     // все constraint topology и оба режима. Случайная смена кодировки требует
     // явной смены версии, а не тихого перевыпуска прежнего content address.
     let compiled = full_program(
@@ -783,8 +1004,9 @@ fn complete_program_schema_v6_digest_is_cross_platform_golden() {
         FullMutation::CompleteSchemaGolden,
     ))
     .unwrap();
-    assert_eq!(schema.0, (1_u8..=21).collect::<Vec<_>>());
+    assert_eq!(schema.0, (1_u8..=22).collect::<Vec<_>>());
     let edge_role_count = crate::program_session::program_identity_edge_role_count_for_test();
+    assert_eq!(edge_role_count, 28);
     assert_eq!(schema.1.len(), edge_role_count);
     assert_eq!(
         schema.1,
@@ -794,8 +1016,8 @@ fn complete_program_schema_v6_digest_is_cross_platform_golden() {
     assert_eq!(
         compiled.content_identity().as_bytes(),
         &[
-            221, 253, 12, 128, 175, 69, 147, 163, 56, 186, 249, 2, 80, 29, 40, 110, 150, 16, 126,
-            147, 176, 229, 2, 154, 50, 91, 7, 120, 82, 36, 247, 174,
+            91, 190, 49, 64, 54, 146, 143, 130, 182, 127, 204, 161, 237, 77, 36, 163, 46, 147, 135,
+            196, 165, 104, 201, 64, 177, 26, 222, 181, 175, 25, 176, 163,
         ]
     );
 }
@@ -1378,7 +1600,7 @@ fn content_identity_retains_the_explicit_joint_state_order() {
 }
 
 #[test]
-fn finite_candidate_opacity_is_part_of_v6_content_identity() {
+fn finite_candidate_opacity_is_part_of_v7_content_identity() {
     let quarter = finite_program_with_opacity(false, 0.25).compile().unwrap();
     let half = finite_program_with_opacity(false, 0.5).compile().unwrap();
 

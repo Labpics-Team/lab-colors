@@ -7,16 +7,15 @@
 
 use super::*;
 
-const DOMAIN_V6: &[u8] = b"labcolors.program-content-identity.v6\0";
-// V6 резервирует фиксированную protocol boundary под два тега и полный
-// clean-set release digest. Это не ручный список размеров остальных вариантов:
-// каждый writer использует проверяемый push и отвергает расширение схемы вместо
-// усечения данных или аллокации на вершину.
-const CLEAN_SET_COLOR_BYTES_V1: usize = 1 + 1 + 32;
-const COLOR_CAPACITY: usize = CLEAN_SET_COLOR_BYTES_V1;
+const DOMAIN_V7: &[u8] = b"labcolors.program-content-identity.v7\0";
+// V7 резервирует фиксированную protocol boundary под type/family tag и полный
+// content digest. Каждый writer использует проверяемый push и отвергает
+// расширение схемы вместо усечения данных или аллокации на вершину.
+const HASH_BOUND_COLOR_BYTES_V7: usize = 1 + 1 + 32;
+const COLOR_CAPACITY: usize = HASH_BOUND_COLOR_BYTES_V7;
 
 mod release_tag {
-    pub(super) const PROGRAM_SCHEMA_V6: u8 = 6;
+    pub(super) const PROGRAM_SCHEMA_V7: u8 = 7;
     pub(super) const DECLARED_TOTAL_ORDER_V1: u8 = 1;
     pub(super) const FRESH_FULL_RECHECK_V1: u8 = 1;
     pub(super) const ATOMIC_OBSERVATION_GROUP_V1: u8 = 1;
@@ -24,6 +23,7 @@ mod release_tag {
     pub(super) const FINITE_ATOMIC_PAINT_CANDIDATE_V1: u8 = 1;
     pub(super) const MODELED_POINT_PRESENTATION_V1: u8 = 1;
     pub(super) const POINT_ABSENCE_BYPASS_OWN_BACKDROP_V1: u8 = 1;
+    pub(super) const FAMILY_CERTIFICATE_VERTEX_V1: u8 = 1;
     #[cfg(test)]
     pub(super) const MODELED_LCS_OCCURRENCE_V1: u8 = 1;
     #[cfg(test)]
@@ -56,6 +56,10 @@ mod release_tag {
     pub(super) const EXACT_SRGB8_RELATION_IDENTITY_V1: u8 = 1;
     pub(super) const EXACT_SRGB8_RELATION_RELEASE_V1: u8 = 1;
     pub(super) const EXACT_SRGB8_RELATION_CAPABILITY_V1: u8 = 1;
+    pub(super) const FAMILY_MEMBERSHIP_FAMILY_V1: u8 = 6;
+    pub(super) const FAMILY_MEMBERSHIP_IDENTITY_V1: u8 = 1;
+    pub(super) const FAMILY_MEMBERSHIP_RELEASE_V1: u8 = 1;
+    pub(super) const FAMILY_MEMBERSHIP_CAPABILITY_V1: u8 = 1;
     #[cfg(test)]
     pub(super) const EXACT_SRGB8_IDENTITY_MUTATION_SENTINEL_V1: u8 = 2;
     #[cfg(test)]
@@ -72,17 +76,17 @@ mod release_tag {
     pub(super) const WCAG22_SC_1_4_11_GRAPHICAL_OBJECT: u8 = 4;
     pub(super) const DECLARED_SRGB8_CLEAN_SET_FAMILY_V1: u8 = 3;
     #[cfg(test)]
-    pub(super) const MODELED_LCS_PROBE_FAMILY_V1: u8 = 6;
+    pub(super) const MODELED_LCS_PROBE_FAMILY_V1: u8 = 7;
 }
 
-/// Устойчивый к коллизиям адрес канонизированного содержимого Program V6.
+/// Устойчивый к коллизиям адрес канонизированного содержимого Program V7.
 ///
 /// SHA-256 не делает адрес инъективным. Адрес не связывает пространства opaque
 /// ID и не подтверждает владельца, поколение либо revision.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(crate) struct ProgramContentIdentityV6([u8; 32]);
+pub(crate) struct ProgramContentIdentityV7([u8; 32]);
 
-impl ProgramContentIdentityV6 {
+impl ProgramContentIdentityV7 {
     pub(crate) const fn as_bytes(&self) -> &[u8; 32] {
         &self.0
     }
@@ -165,6 +169,7 @@ mod vertex_tag {
     pub(super) const JOINT_CHOICE: u8 = 19;
     pub(super) const PRESENTATION_ROOT: u8 = 20;
     pub(super) const PRESENTATION_TARGET: u8 = 21;
+    pub(super) const FAMILY: u8 = 22;
 }
 
 macro_rules! declare_edge_roles_v1 {
@@ -208,6 +213,7 @@ declare_edge_roles_v1! {
     VisibleReference = 25,
     VisibleCandidate = 26,
     ObservationGroup = 27,
+    ConstraintFamily = 28,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -370,7 +376,7 @@ fn program_root_color() -> Result<VertexColorV1, ProgramCompileError> {
     // производных возможностей связываются только с теми ограничениями,
     // которые их исполняют.
     for release in [
-        release_tag::PROGRAM_SCHEMA_V6,
+        release_tag::PROGRAM_SCHEMA_V7,
         release_tag::DECLARED_TOTAL_ORDER_V1,
         release_tag::FRESH_FULL_RECHECK_V1,
         release_tag::ATOMIC_OBSERVATION_GROUP_V1,
@@ -408,6 +414,16 @@ fn write_signal(color: &mut VertexColorV1, signal: ColorSignal) -> Result<(), Pr
 fn source_color(source: Source) -> Result<VertexColorV1, ProgramCompileError> {
     let mut color = VertexColorV1::new(vertex_tag::SOURCE);
     write_signal(&mut color, source.signal())?;
+    Ok(color)
+}
+
+fn family_color(family: &FamilyDeclarationV1) -> Result<VertexColorV1, ProgramCompileError> {
+    let identity = family.set().certificate().family_content_identity();
+    let mut color = VertexColorV1::new(vertex_tag::FAMILY);
+    color.push_u8(release_tag::FAMILY_CERTIFICATE_VERTEX_V1)?;
+    for byte in identity.as_bytes() {
+        color.push_u8(*byte)?;
+    }
     Ok(color)
 }
 
@@ -577,6 +593,28 @@ fn constraint_color(
             })?;
             color.push_srgb8(expected)?;
         }
+        ProgramConstraintContentV1::FamilyMembership {
+            identity,
+            release,
+            capability,
+        } => {
+            color.push_u8(release_tag::FAMILY_MEMBERSHIP_FAMILY_V1)?;
+            color.push_u8(match identity {
+                crate::constraints::FamilyMembershipIdentityV1::ExactImageMembershipV1 => {
+                    release_tag::FAMILY_MEMBERSHIP_IDENTITY_V1
+                }
+            })?;
+            color.push_u8(match release {
+                crate::constraints::FamilyMembershipReleaseV1::V1 => {
+                    release_tag::FAMILY_MEMBERSHIP_RELEASE_V1
+                }
+            })?;
+            color.push_u8(match capability {
+                crate::constraints::FamilyMembershipCapabilityV1::Iec61966Srgb8D65V1 => {
+                    release_tag::FAMILY_MEMBERSHIP_CAPABILITY_V1
+                }
+            })?;
+        }
         ProgramConstraintContentV1::ExactSrgb8Relation {
             identity,
             release,
@@ -678,6 +716,7 @@ struct ConstraintGraphBindingContextV1<'a, Evaluation> {
     evaluator: &'a Evaluation,
     presentation_targets: &'a [(PointPresentationTargetV1, usize)],
     targets: &'a IdIndexV1<TargetId>,
+    families: &'a IdIndexV1<FamilyId>,
     occurrences: &'a IdIndexV1<OccurrenceId>,
     observation_group: usize,
 }
@@ -722,12 +761,19 @@ where
                 EdgeRoleV1::VisibleUnary,
             )?;
         }
-        ProgramConstraintBodyV1::IntrinsicUnary { target, .. } => {
+        ProgramConstraintBodyV1::IntrinsicUnary { target, invocation } => {
             graph.add_edge(
                 vertex,
                 context.targets.get(*target)?,
                 EdgeRoleV1::IntrinsicUnary,
             )?;
+            if let CoreIntrinsicUnaryInvocationV1::FamilyMembership { family } = invocation {
+                graph.add_edge(
+                    vertex,
+                    context.families.get(*family)?,
+                    EdgeRoleV1::ConstraintFamily,
+                )?;
+            }
         }
         ProgramConstraintBodyV1::IntrinsicRelation { relation, .. } => {
             graph.add_edge(
@@ -790,6 +836,7 @@ where
     let mut graph = GraphBuilderV1::new(program_root_color()?)?;
     let mut sources = IdIndexV1::new();
     let mut targets = IdIndexV1::new();
+    let mut families = IdIndexV1::new();
     let mut candidates = IdIndexV1::new();
     let mut opacities = IdIndexV1::new();
     let mut paints = IdIndexV1::new();
@@ -818,6 +865,9 @@ where
                 candidates.insert((target.id(), candidate.id()), vertex)?;
             }
         }
+    }
+    for family in &program.families {
+        families.insert(family.id(), graph.add_member(family_color(family)?)?)?;
     }
     for opacity in &program.opacities {
         opacities.insert(opacity.id(), graph.add_member(opacity_color(*opacity)?)?)?;
@@ -869,6 +919,7 @@ where
 
     sources.finish()?;
     targets.finish()?;
+    families.finish()?;
     candidates.finish()?;
     opacities.finish()?;
     paints.finish()?;
@@ -974,6 +1025,7 @@ where
         evaluator: &program.evaluator,
         presentation_targets: &presentation_targets,
         targets: &targets,
+        families: &families,
         occurrences: &occurrences,
         observation_group: group,
     };
@@ -1332,7 +1384,7 @@ fn serialize_leaf(
             .and_then(|value| value.checked_add(color.as_slice().len()))
             .ok_or(ProgramCompileError::ResourceExhausted)
     })?;
-    let capacity = DOMAIN_V6
+    let capacity = DOMAIN_V7
         .len()
         .checked_add(16)
         .and_then(|value| value.checked_add(color_bytes))
@@ -1342,7 +1394,7 @@ fn serialize_leaf(
     output
         .try_reserve_exact(capacity)
         .map_err(|_| ProgramCompileError::ResourceExhausted)?;
-    output.extend_from_slice(DOMAIN_V6);
+    output.extend_from_slice(DOMAIN_V7);
     push_u64_bytes(&mut output, usize_as_u64(graph.colors.len())?);
     push_u64_bytes(&mut output, usize_as_u64(graph.edge_count)?);
 
@@ -1676,9 +1728,9 @@ fn canonical_preimage(graph: &CanonicalGraphV1) -> Result<Vec<u8>, ProgramCompil
     canonical_search(graph).map(|(preimage, _)| preimage)
 }
 
-pub(super) fn compile_program_content_identity_v6<Evaluation>(
+pub(super) fn compile_program_content_identity_v7<Evaluation>(
     program: &Program<Evaluation>,
-) -> Result<ProgramContentIdentityV6, ProgramCompileError>
+) -> Result<ProgramContentIdentityV7, ProgramCompileError>
 where
     Evaluation: ProgramConstraintEvaluatorSetV1,
     ProgramConstraintInvocationOf<Evaluation>: Copy,
@@ -1686,12 +1738,31 @@ where
     let graph = build_graph(program)?;
     let preimage = canonical_preimage(&graph)?;
     let digest = crate::sha256::digest(&preimage);
-    Ok(ProgramContentIdentityV6(*digest.as_bytes()))
+    Ok(ProgramContentIdentityV7(*digest.as_bytes()))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn family_vertex_codec_binds_release_and_certificate_identity_without_opaque_id() {
+        let set = crate::family::admit_declared_family_image_v1(vec![ColorSignal::from_srgb8(
+            Srgb8::new([0x12, 0x34, 0x56]),
+        )])
+        .unwrap();
+        let expected = set.certificate().family_content_identity();
+        let family = FamilyDeclarationV1::new(FamilyId::new(u32::MAX), set);
+
+        let color = family_color(&family).unwrap();
+
+        assert_eq!(color.as_slice()[0], vertex_tag::FAMILY);
+        assert_eq!(
+            color.as_slice()[1],
+            release_tag::FAMILY_CERTIFICATE_VERTEX_V1
+        );
+        assert_eq!(&color.as_slice()[2..], expected.as_bytes());
+    }
 
     #[test]
     fn clean_set_final_recheck_mutant_release_changes_exactly_one_declared_bit() {

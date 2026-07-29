@@ -9,7 +9,7 @@ use crate::Srgb8;
 use crate::program::{
     AppearanceContextErrorKindV1, AppearanceContextFieldV1, AppearanceContextV1, AssessmentV1,
     CertificateV1, CompileErrorHandleV1, CompileErrorKindV1, CompileErrorV1, ConstraintIdV1,
-    ConstraintSubjectV1, ContentIdentityV6, DraftErrorV1, DraftV1, EvidenceBoundsErrorV1,
+    ConstraintSubjectV1, ContentIdentityV7, DraftErrorV1, DraftV1, EvidenceBoundsErrorV1,
     EvidenceViewV1, FinitePaintDomainV1, InstantiateErrorV1, JointChoiceV1, JointOrderErrorV1,
     JointStateV1, NumericDomainErrorV1, ObservationHeadV1, OccurrenceIdV1, OpacityInputIdV1,
     OutputSlotIdV1, OwnerV1, PaintIdV1, PaintValueV1, PhysicalPointV1, PresentationRootIdV1,
@@ -1009,7 +1009,7 @@ fn owner_and_update_errors_preserve_content_and_input_identity() {
     let owner = fixed_nested_draft(1.0, SourceIdV1::new(1), input, input)
         .compile()
         .unwrap();
-    let owner_identity: ContentIdentityV6 = owner.content_identity();
+    let owner_identity: ContentIdentityV7 = owner.content_identity();
     let mut session = owner.instantiate(13).unwrap();
 
     let no_scenarios = [];

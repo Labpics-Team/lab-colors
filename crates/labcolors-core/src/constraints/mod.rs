@@ -20,14 +20,21 @@ pub(crate) use exact::{
     ExactPassEvidenceV1, ExactSrgb8IdentityV1, ExactViolationEvidenceV1,
 };
 
+mod family;
+pub(crate) use family::{
+    FamilyMembershipCapabilityV1, FamilyMembershipIdentityV1, FamilyMembershipReleaseV1,
+    FamilyMembershipV1,
+};
+
 #[cfg(test)]
 pub(crate) use exact::ExactIdentityPassV1;
 
 mod relation;
 pub(crate) use relation::{
-    CoreIntrinsicUnaryInvocationV1, CoreIntrinsicUnaryMeasurementV1, CoreIntrinsicUnaryPassV1,
-    CoreIntrinsicUnaryViolationV1, CoreRelationInvocationV1, CoreRelationMeasurementV1,
-    CoreRelationPassV1, CoreRelationViolationV1, ExactSrgb8IntrinsicUnaryCapabilityV1,
+    CompiledCoreIntrinsicUnaryInvocationV1, CoreIntrinsicUnaryInvocationV1,
+    CoreIntrinsicUnaryMeasurementV1, CoreIntrinsicUnaryPassV1, CoreIntrinsicUnaryViolationV1,
+    CoreRelationInvocationV1, CoreRelationMeasurementV1, CoreRelationPassV1,
+    CoreRelationViolationV1, ExactSrgb8IntrinsicUnaryCapabilityV1,
     ExactSrgb8IntrinsicUnaryIdentityV1, ExactSrgb8IntrinsicUnaryReleaseV1,
     ExactSrgb8RelationCapabilityV1, ExactSrgb8RelationIdentityV1, ExactSrgb8RelationReleaseV1,
 };
@@ -510,6 +517,11 @@ pub(crate) enum ProgramConstraintContentV1 {
         release: ExactSrgb8IntrinsicUnaryReleaseV1,
         capability: ExactSrgb8IntrinsicUnaryCapabilityV1,
         expected: Srgb8,
+    },
+    FamilyMembership {
+        identity: FamilyMembershipIdentityV1,
+        release: FamilyMembershipReleaseV1,
+        capability: FamilyMembershipCapabilityV1,
     },
     ExactSrgb8Relation {
         identity: ExactSrgb8RelationIdentityV1,

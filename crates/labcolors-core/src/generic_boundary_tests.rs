@@ -8,6 +8,8 @@ const APPEARANCE_SOURCE: &str = include_str!("appearance.rs");
 const CLEAN_SET_SOURCE: &str = include_str!("clean_set.rs");
 const CONSTRAINTS_SOURCE: &str = include_str!("constraints/mod.rs");
 const EXACT_CONSTRAINT_SOURCE: &str = include_str!("constraints/exact.rs");
+const FAMILY_CONSTRAINT_SOURCE: &str = include_str!("constraints/family.rs");
+const FAMILY_SOURCE: &str = include_str!("family.rs");
 const RELATION_CONSTRAINT_SOURCE: &str = include_str!("constraints/relation.rs");
 const JOINT_SOURCE: &str = include_str!("joint.rs");
 const LIB_SOURCE: &str = include_str!("lib.rs");
@@ -23,9 +25,11 @@ const RELATION_SOURCE: &str = include_str!("relation.rs");
 const SESSION_SOURCE: &str = include_str!("session.rs");
 const WCAG22_CONSTRAINT_SOURCE: &str = include_str!("constraints/wcag22.rs");
 
-const GENERIC_SOURCES: [(&str, &str); 7] = [
+const GENERIC_SOURCES: [(&str, &str); 9] = [
     ("appearance.rs", APPEARANCE_SOURCE),
+    ("constraints/family.rs", FAMILY_CONSTRAINT_SOURCE),
     ("constraints/relation.rs", RELATION_CONSTRAINT_SOURCE),
+    ("family.rs", FAMILY_SOURCE),
     ("lcs_occurrence.rs", LCS_OCCURRENCE_SOURCE),
     ("program/attachment.rs", PROGRAM_ATTACHMENT_SOURCE),
     ("program_identity.rs", PROGRAM_IDENTITY_SOURCE),
@@ -270,7 +274,12 @@ fn production_rust_sources() -> Vec<(String, String)> {
 
 #[test]
 fn generic_source_inventory_covers_relation_topology_and_evaluators() {
-    for required in ["relation.rs", "constraints/relation.rs"] {
+    for required in [
+        "family.rs",
+        "constraints/family.rs",
+        "relation.rs",
+        "constraints/relation.rs",
+    ] {
         assert!(
             GENERIC_SOURCES.iter().any(|(path, _)| *path == required),
             "generic vocabulary ratchet must cover {required}",
@@ -1563,11 +1572,16 @@ fn program_identity_binds_lcs_releases_only_through_lcs_constraint_content() {
         "DOMAIN_V5",
         "PROGRAM_SCHEMA_V5",
         "compile_program_content_identity_v5",
+        "ProgramContentIdentityV6",
+        "ContentIdentityV6",
+        "DOMAIN_V6",
+        "PROGRAM_SCHEMA_V6",
+        "compile_program_content_identity_v6",
     ] {
         for (path, source) in identity_sources {
             assert!(
                 !contains_rust_identifier(source, retired),
-                "the V6 content-address cut must not retain legacy identity symbol `{retired}` in {path}",
+                "the V7 content-address cut must not retain legacy identity symbol `{retired}` in {path}",
             );
         }
     }
@@ -1576,13 +1590,14 @@ fn program_identity_binds_lcs_releases_only_through_lcs_constraint_content() {
     assert!(!PROGRAM_IDENTITY_SOURCE.contains("labcolors.program-content-identity.v3"));
     assert!(!PROGRAM_IDENTITY_SOURCE.contains("labcolors.program-content-identity.v4"));
     assert!(!PROGRAM_IDENTITY_SOURCE.contains("labcolors.program-content-identity.v5"));
+    assert!(!PROGRAM_IDENTITY_SOURCE.contains("labcolors.program-content-identity.v6"));
     for required in [
-        "const DOMAIN_V6: &[u8] = b\"labcolors.program-content-identity.v6\\0\";",
-        "pub(super) const PROGRAM_SCHEMA_V6: u8 = 6;",
+        "const DOMAIN_V7: &[u8] = b\"labcolors.program-content-identity.v7\\0\";",
+        "pub(super) const PROGRAM_SCHEMA_V7: u8 = 7;",
     ] {
         assert!(
             PROGRAM_IDENTITY_SOURCE.contains(required),
-            "the V6 content-address type must bind its exact domain and schema tag; missing `{required}`",
+            "the V7 content-address type must bind its exact domain and schema tag; missing `{required}`",
         );
     }
 

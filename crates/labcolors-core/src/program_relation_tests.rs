@@ -143,7 +143,10 @@ fn intrinsic_unary_filters_finite_target_without_pretending_to_assess_its_output
     assert_eq!(binding.target(), program::TargetIdV1::new(21));
     assert_eq!(binding.value().source(), Srgb8::new([0xFF; 3]));
     assert_eq!(binding.value().opacity().to_bits(), 0.5_f64.to_bits());
-    let program::IntrinsicUnaryMeasurementV1::ExactSrgb8(measurement) = evidence.measurement();
+    let program::IntrinsicUnaryMeasurementV1::ExactSrgb8(measurement) = evidence.measurement()
+    else {
+        panic!("the exact constraint must retain exact evidence");
+    };
     assert_eq!(measurement.expected(), Srgb8::new([0xFF; 3]));
     assert_eq!(measurement.actual(), Srgb8::new([0xFF; 3]));
 }
@@ -530,7 +533,7 @@ fn directional_reference_cannot_move_with_solver_state() {
     );
 }
 
-fn relation_identity(offset: u32, reverse_candidates: bool) -> program::ContentIdentityV6 {
+fn relation_identity(offset: u32, reverse_candidates: bool) -> program::ContentIdentityV7 {
     let sources = [0, 1, 2].map(|index| program::SourceIdV1::new(offset + index));
     let targets = [0, 1, 2].map(|index| program::TargetIdV1::new(offset + 10 + index));
     let paints = [0, 1, 2].map(|index| program::PaintIdV1::new(offset + 20 + index));

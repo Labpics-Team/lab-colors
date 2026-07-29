@@ -1,5 +1,10 @@
 use crate::Srgb8;
-use crate::constraints::{HardDecision, ProgramConstraintContentV1};
+use crate::constraints::{FamilyMembershipV1, HardDecision, ProgramConstraintContentV1};
+use crate::family::{
+    FamilyDeclarationV1, FamilyId, FamilyMembershipMeasurementV1, FamilyMembershipPassV1,
+    FamilyMembershipViolationV1,
+};
+use crate::lcs_occurrence::ColorSignal;
 
 fn exact_srgb8_equal(left: Srgb8, right: Srgb8) -> bool {
     left.bytes() == right.bytes()
@@ -164,26 +169,48 @@ impl ExactSrgb8IntrinsicUnaryV1 {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CoreIntrinsicUnaryInvocationV1 {
     ExactSrgb8 { expected: Srgb8 },
+    FamilyMembership { family: FamilyId },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CompiledCoreIntrinsicUnaryInvocationV1 {
+    ExactSrgb8 {
+        expected: Srgb8,
+    },
+    FamilyMembership {
+        family: FamilyId,
+        family_index: usize,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CoreIntrinsicUnaryMeasurementV1 {
     ExactSrgb8(ExactSrgb8IntrinsicUnaryMeasurementV1),
+    FamilyMembership {
+        family: FamilyId,
+        measurement: FamilyMembershipMeasurementV1,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CoreIntrinsicUnaryPassV1 {
     ExactSrgb8(ExactSrgb8IntrinsicUnaryPassV1),
+    FamilyMembership(FamilyMembershipPassV1),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CoreIntrinsicUnaryViolationV1 {
     ExactSrgb8(ExactSrgb8IntrinsicUnaryViolationV1),
+    FamilyMembership(FamilyMembershipViolationV1),
 }
 
 impl CoreIntrinsicUnaryInvocationV1 {
     pub(crate) const fn exact_srgb8(expected: Srgb8) -> Self {
         Self::ExactSrgb8 { expected }
+    }
+
+    pub(crate) const fn family_membership(family: FamilyId) -> Self {
+        Self::FamilyMembership { family }
     }
 
     pub(crate) const fn content(self) -> ProgramConstraintContentV1 {
@@ -197,16 +224,27 @@ impl CoreIntrinsicUnaryInvocationV1 {
                     expected,
                 }
             }
+            Self::FamilyMembership { .. } => {
+                let profile = FamilyMembershipV1;
+                ProgramConstraintContentV1::FamilyMembership {
+                    identity: profile.identity(),
+                    release: profile.release(),
+                    capability: profile.capability(),
+                }
+            }
         }
     }
+}
 
+impl CompiledCoreIntrinsicUnaryInvocationV1 {
     pub(crate) fn assess(
         self,
         actual: Srgb8,
-    ) -> (
+        families: &[FamilyDeclarationV1],
+    ) -> Option<(
         CoreIntrinsicUnaryMeasurementV1,
         HardDecision<CoreIntrinsicUnaryPassV1, CoreIntrinsicUnaryViolationV1>,
-    ) {
+    )> {
         match self {
             Self::ExactSrgb8 { expected } => {
                 let (measurement, decision) = ExactSrgb8IntrinsicUnaryV1.assess(expected, actual);
@@ -218,10 +256,40 @@ impl CoreIntrinsicUnaryInvocationV1 {
                         HardDecision::Violation(CoreIntrinsicUnaryViolationV1::ExactSrgb8(proof))
                     }
                 };
-                (
+                Some((
                     CoreIntrinsicUnaryMeasurementV1::ExactSrgb8(measurement),
                     decision,
-                )
+                ))
+            }
+            Self::FamilyMembership {
+                family,
+                family_index,
+            } => {
+                // Compile-time связывает индекс с этим exact FamilyId; `None`
+                // здесь означает порчу compiled graph, а не штатное отсутствие
+                // evidence, и вызывающий слой переводит его в InternalInvariant.
+                let declaration = families.get(family_index)?;
+                if declaration.id() != family {
+                    return None;
+                }
+                let set = declaration.set();
+                let (measurement, decision) =
+                    FamilyMembershipV1.assess(set, ColorSignal::from_srgb8(actual));
+                let decision = match decision {
+                    HardDecision::Pass(proof) => {
+                        HardDecision::Pass(CoreIntrinsicUnaryPassV1::FamilyMembership(proof))
+                    }
+                    HardDecision::Violation(proof) => HardDecision::Violation(
+                        CoreIntrinsicUnaryViolationV1::FamilyMembership(proof),
+                    ),
+                };
+                Some((
+                    CoreIntrinsicUnaryMeasurementV1::FamilyMembership {
+                        family,
+                        measurement,
+                    },
+                    decision,
+                ))
             }
         }
     }
