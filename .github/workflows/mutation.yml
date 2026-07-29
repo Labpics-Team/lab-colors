@@ -11,9 +11,11 @@ on:
 permissions:
   contents: read
 
+# Все report-only прогоны делят FIFO-очередь репозитория: queue=max сохраняет до
+# 100 pending runs вместо default single, который отменяет предыдущий pending.
 concurrency:
-  group: mutation-${{ github.ref }}
-  cancel-in-progress: false
+  group: mutation
+  queue: max
 
 env:
   CARGO_INCREMENTAL: 0
@@ -97,7 +99,9 @@ jobs:
     timeout-minutes: 180
     strategy:
       fail-fast: false
-      max-parallel: 4
+      # Fair-share для восьмислотового org-пула de02: report-only работа берёт
+      # не более трёх слотов, оставляя большинство release- и infra-CI.
+      max-parallel: 3
       matrix:
         shard:
           - 0
