@@ -802,11 +802,12 @@ class MutationTruthTest(unittest.TestCase):
         outside = self.external / "outside-input"
         outside.write_text("existing external input\n", encoding="utf-8")
         link = self.root / "external-input"
-        link.symlink_to("../outside-input")
+        link.symlink_to(os.path.relpath(outside, link.parent))
         self.git("add", "external-input")
         self.git("commit", "--quiet", "-m", "hostile external symlink")
         self.revision = self.git_output("rev-parse", "HEAD")
         self.assertTrue(outside.is_file())
+        self.assertEqual(link.resolve(strict=True), outside.resolve(strict=True))
 
         with self.assertRaisesRegex(mutation.ContractError, "symlink escapes or is dangling"):
             mutation.materialize_execution_source(
@@ -884,6 +885,29 @@ class MutationTruthTest(unittest.TestCase):
         self.assertIn("mutation truth error:", stderr.getvalue())
         self.assertIn("Git worktree root", stderr.getvalue())
         self.assertNotIn("Traceback", stderr.getvalue())
+
+    def test_execution_layout_resolves_missing_outputs_but_rejects_dangling_prefix(
+        self,
+    ) -> None:
+        source_root = self.external / "source-root"
+        source_root.mkdir()
+        output_parent = self.external / "output-parent"
+        output_parent.mkdir()
+        linked_parent = self.external / "linked-output-parent"
+        linked_parent.symlink_to(output_parent, target_is_directory=True)
+        mutation.validate_execution_layout(
+            source_root,
+            {"aggregate output": linked_parent / "missing" / "aggregate.json"},
+        )
+
+        dangling = self.external / "dangling-output"
+        dangling.symlink_to(self.external / "missing-output", target_is_directory=True)
+
+        with self.assertRaisesRegex(mutation.ContractError, "aggregate output"):
+            mutation.validate_execution_layout(
+                source_root,
+                {"aggregate output": dangling / "aggregate.json"},
+            )
 
     def test_parent_swap_after_containment_proof_cannot_redirect_writes(self) -> None:
         swappable_parent = self.external / "swappable-parent"

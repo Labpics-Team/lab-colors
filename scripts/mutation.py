@@ -70,12 +70,36 @@ class ContractError(RuntimeError):
 
 
 def _resolve_path(path: Path, label: str, *, strict: bool = False) -> Path:
-    # pathlib отделяет symlink-loop от обычных IO-сбоев через RuntimeError;
-    # для внешнего пути оба исхода принадлежат одному типизированному контракту.
     try:
-        return path.resolve(strict=strict)
+        candidate = Path(os.path.abspath(path))
     except (OSError, RuntimeError) as error:
         raise ContractError(f"cannot canonicalize {label}: {error}") from error
+    missing_suffix: list[str] = []
+    while True:
+        try:
+            resolved = candidate.resolve(strict=True)
+        except FileNotFoundError as error:
+            if strict:
+                raise ContractError(f"cannot canonicalize {label}: {error}") from error
+            try:
+                os.lstat(candidate)
+            except FileNotFoundError:
+                parent = candidate.parent
+                if parent == candidate:
+                    raise ContractError(f"cannot canonicalize {label}: {error}") from error
+                missing_suffix.append(candidate.name)
+                candidate = parent
+                continue
+            except OSError as inspection_error:
+                raise ContractError(
+                    f"cannot canonicalize {label}: {inspection_error}"
+                ) from inspection_error
+            # A directory entry exists but strict resolution could not reach it:
+            # accepting it as an ordinary missing output would hide a dangling link.
+            raise ContractError(f"cannot canonicalize {label}: {error}") from error
+        except (OSError, RuntimeError) as error:
+            raise ContractError(f"cannot canonicalize {label}: {error}") from error
+        return resolved.joinpath(*reversed(missing_suffix))
 
 
 def _reject_constant(value: str) -> None:
