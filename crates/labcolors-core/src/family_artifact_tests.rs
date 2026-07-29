@@ -1,4 +1,4 @@
-//! Hostile-контракт transport artifact семейства до первого production codec.
+//! Hostile-контракт transport artifact и exact RawBitmap24 codec.
 
 use proptest::prelude::*;
 
@@ -12,7 +12,8 @@ use crate::family_artifact::{
     FAMILY_ARTIFACT_PAYLOAD_DIGEST_CALLS, FamilyArtifactBindErrorV2, FamilyArtifactBundleV2,
     FamilyArtifactContractErrorV2, FamilyArtifactLoadErrorV1, FamilyArtifactLoaderV1,
     FamilyImageCertificateV2, FixtureEnvelopeFieldV1, FixtureFamilyArtifactCodecV1,
-    encode_fixture_family_artifact_v2,
+    RAW_BITMAP24_PAYLOAD_LEN_V1, encode_fixture_family_artifact_v2,
+    encode_raw_bitmap24_family_artifact_v2_for_test,
 };
 use crate::lcs_occurrence::ColorSignal;
 use crate::lcs_occurrence::OutputProfileId;
@@ -46,6 +47,108 @@ fn owned_transport_round_trips_without_copy_or_private_constructor() {
 
     assert_eq!(returned.as_ptr(), pointer);
     assert_eq!(&*returned, &[1, 2, 3, 4]);
+}
+
+#[test]
+fn raw_bitmap_uses_rgb_big_endian_ordinal_and_msb_zero_at_every_boundary() {
+    let members = signals(&[
+        [0, 0, 0],
+        [0, 0, 7],
+        [0, 0, 8],
+        [0, 0, 255],
+        [0, 1, 0],
+        [1, 0, 0],
+        [127, 255, 255],
+        [128, 0, 0],
+        [255, 255, 255],
+    ]);
+    let (certificate, encoded) =
+        encode_raw_bitmap24_family_artifact_v2_for_test(definition(), &members).unwrap();
+    assert_eq!(encoded.payload_byte_for_test(0), 0x81);
+    assert_eq!(encoded.payload_byte_for_test(1), 0x80);
+    assert_eq!(encoded.payload_byte_for_test(31), 0x01);
+    assert_eq!(encoded.payload_byte_for_test(32), 0x80);
+    assert_eq!(encoded.payload_byte_for_test(8_192), 0x80);
+    assert_eq!(encoded.payload_byte_for_test(1_048_575), 0x01);
+    assert_eq!(encoded.payload_byte_for_test(1_048_576), 0x80);
+    assert_eq!(
+        encoded.payload_byte_for_test(RAW_BITMAP24_PAYLOAD_LEN_V1 - 1),
+        0x01
+    );
+    let admitted = FamilyArtifactLoaderV1::load(certificate, encoded).unwrap();
+
+    for member in members {
+        assert!(
+            admitted.contains(member),
+            "missing boundary member {member:?}"
+        );
+    }
+    for nonmember in signals(&[
+        [0, 0, 1],
+        [0, 0, 6],
+        [0, 0, 9],
+        [0, 1, 1],
+        [1, 0, 1],
+        [127, 255, 254],
+        [128, 0, 1],
+        [255, 255, 254],
+    ]) {
+        assert!(
+            !admitted.contains(nonmember),
+            "false boundary member {nonmember:?}"
+        );
+    }
+}
+
+#[test]
+fn raw_bitmap_and_slice_oracle_share_the_independent_canonical_image_golden() {
+    let members = signals(&[[0, 0, 1], [0, 0, 2], [0, 0, 255]]);
+    let expected = [
+        0x3c, 0xe1, 0x50, 0x04, 0xfc, 0x39, 0x7b, 0xad, 0x7c, 0x95, 0x5f, 0x28, 0x90, 0xcb, 0x9c,
+        0x99, 0x01, 0x86, 0x0b, 0x93, 0x5a, 0x24, 0xc2, 0xb5, 0xb8, 0x56, 0xec, 0xb6, 0x60, 0xe5,
+        0xcf, 0x20,
+    ];
+    let slice =
+        canonical_family_image_digest_v2(OutputProfileId::Iec61966Srgb8D65V1, &members).unwrap();
+    let (raw, encoded) =
+        encode_raw_bitmap24_family_artifact_v2_for_test(definition(), &members).unwrap();
+
+    // Golden получен независимым Python hashlib над явным V2 preimage.
+    assert_eq!(slice.as_bytes(), &expected);
+    assert_eq!(raw.image_digest().as_bytes(), &expected);
+    FamilyArtifactLoaderV1::load(raw, encoded).unwrap();
+}
+
+#[test]
+fn raw_and_fixture_codecs_preserve_semantics_but_not_transport_receipt() {
+    let members = signals(&[[0, 0, 1], [0, 0, 2], [0, 0, 255]]);
+    let (raw_certificate, raw_encoded) =
+        encode_raw_bitmap24_family_artifact_v2_for_test(definition(), &members).unwrap();
+    let (fixture_certificate, fixture_encoded) = encode_fixture_family_artifact_v2(
+        definition(),
+        &members,
+        FixtureFamilyArtifactCodecV1::CanonicalMembersV1,
+    )
+    .unwrap();
+
+    assert_eq!(
+        raw_certificate.semantic_release(),
+        fixture_certificate.semantic_release()
+    );
+    assert_eq!(
+        raw_certificate.image_digest(),
+        fixture_certificate.image_digest()
+    );
+    assert_ne!(
+        raw_certificate.artifact_receipt(),
+        fixture_certificate.artifact_receipt()
+    );
+    let raw = FamilyArtifactLoaderV1::load(raw_certificate, raw_encoded).unwrap();
+    let fixture = load_fixture(fixture_certificate, fixture_encoded).unwrap();
+    for member in members {
+        assert!(raw.contains(member));
+        assert!(fixture.contains(member));
+    }
 }
 
 #[test]
@@ -180,6 +283,85 @@ fn payload_corruption_is_rejected_before_decoder_dispatch() {
         FamilyArtifactLoadErrorV1::PayloadDigestMismatch,
     );
     assert_eq!(FAMILY_ARTIFACT_DECODER_CALLS.with(core::cell::Cell::get), 0);
+}
+
+#[test]
+fn raw_payload_flip_is_rejected_before_bitmap_scan() {
+    let members = signals(&[[0, 0, 1], [0, 0, 2]]);
+    let (certificate, mut encoded) =
+        encode_raw_bitmap24_family_artifact_v2_for_test(definition(), &members).unwrap();
+    encoded.flip_first_payload_bit_for_test();
+
+    assert_eq!(
+        FamilyArtifactLoaderV1::load(certificate, encoded)
+            .unwrap_err()
+            .cause(),
+        FamilyArtifactLoadErrorV1::PayloadDigestMismatch,
+    );
+}
+
+#[test]
+fn coherent_wrong_raw_length_is_typed_and_precedes_payload_hashing() {
+    let members = signals(&[[0, 0, 1], [0, 0, 2]]);
+    let (certificate, mut encoded) =
+        encode_raw_bitmap24_family_artifact_v2_for_test(definition(), &members).unwrap();
+    encoded.resize_payload_for_test(RAW_BITMAP24_PAYLOAD_LEN_V1 - 1);
+    let certificate = encoded.reseal_payload_for_test(certificate);
+    FAMILY_ARTIFACT_PAYLOAD_DIGEST_CALLS.with(|calls| calls.set(0));
+
+    assert_eq!(
+        FamilyArtifactLoaderV1::load(certificate, encoded)
+            .unwrap_err()
+            .cause(),
+        FamilyArtifactLoadErrorV1::CodecPayloadLengthMismatch {
+            codec_release: 0x01,
+            expected: RAW_BITMAP24_PAYLOAD_LEN_V1 as u64,
+            actual: (RAW_BITMAP24_PAYLOAD_LEN_V1 - 1) as u64,
+        },
+    );
+    assert_eq!(
+        FAMILY_ARTIFACT_PAYLOAD_DIGEST_CALLS.with(core::cell::Cell::get),
+        0
+    );
+}
+
+#[test]
+fn resealed_raw_missing_or_extra_bit_is_a_member_count_mismatch() {
+    let cases = [
+        ([0, 0, 1], false, 2_u64, 1_u64),
+        ([0, 0, 3], true, 2_u64, 3_u64),
+    ];
+    for (rgb, member, expected, actual) in cases {
+        let members = signals(&[[0, 0, 1], [0, 0, 2]]);
+        let (certificate, mut encoded) =
+            encode_raw_bitmap24_family_artifact_v2_for_test(definition(), &members).unwrap();
+        encoded.set_raw_bitmap_member_for_test(rgb, member);
+        let certificate = encoded.reseal_payload_for_test(certificate);
+
+        assert_eq!(
+            FamilyArtifactLoaderV1::load(certificate, encoded)
+                .unwrap_err()
+                .cause(),
+            FamilyArtifactLoadErrorV1::MemberCountMismatch { expected, actual },
+        );
+    }
+}
+
+#[test]
+fn resealed_same_count_raw_substitution_is_an_image_mismatch() {
+    let members = signals(&[[0, 0, 1], [0, 0, 2]]);
+    let (certificate, mut encoded) =
+        encode_raw_bitmap24_family_artifact_v2_for_test(definition(), &members).unwrap();
+    encoded.set_raw_bitmap_member_for_test([0, 0, 1], false);
+    encoded.set_raw_bitmap_member_for_test([0, 0, 3], true);
+    let certificate = encoded.reseal_payload_for_test(certificate);
+
+    assert_eq!(
+        FamilyArtifactLoaderV1::load(certificate, encoded)
+            .unwrap_err()
+            .cause(),
+        FamilyArtifactLoadErrorV1::ImageDigestMismatch,
+    );
 }
 
 #[test]
@@ -365,7 +547,7 @@ fn full_srgb8_set_cardinality_reaches_codec_admission() {
     assert!(decoder_reached.get());
     assert_eq!(
         failure.cause(),
-        FamilyArtifactLoadErrorV1::DecodedMemberCountMismatch {
+        FamilyArtifactLoadErrorV1::MemberCountMismatch {
             expected: 1_u64 << 24,
             actual: 0,
         },
@@ -381,26 +563,29 @@ fn axis_membership_matches_the_full_srgb8_cube_oracle() {
             ColorSignal::from_srgb8(Srgb8::new([value; 3]))
         })
         .collect::<Vec<_>>();
-    let (certificate, encoded) = encode_fixture_family_artifact_v2(
-        definition(),
-        &members,
-        FixtureFamilyArtifactCodecV1::CanonicalMembersV1,
-    )
-    .unwrap();
-    let admitted = load_fixture(certificate, encoded).unwrap();
+    let (certificate, encoded) =
+        encode_raw_bitmap24_family_artifact_v2_for_test(definition(), &members).unwrap();
+    let admitted = FamilyArtifactLoaderV1::load(certificate, encoded).unwrap();
+    let mut visited = 0_u64;
+    let mut observed_members = 0_u64;
 
     for red in 0_u16..=255 {
         for green in 0_u16..=255 {
             for blue in 0_u16..=255 {
                 let bytes = [red as u8, green as u8, blue as u8];
+                visited += 1;
+                let actual = admitted.contains(ColorSignal::from_srgb8(Srgb8::new(bytes)));
+                observed_members += u64::from(actual);
                 assert_eq!(
-                    admitted.contains(ColorSignal::from_srgb8(Srgb8::new(bytes))),
+                    actual,
                     bytes[0] == bytes[1] && bytes[1] == bytes[2],
                     "full-domain disagreement at {bytes:?}",
                 );
             }
         }
     }
+    assert_eq!(visited, 1_u64 << 24);
+    assert_eq!(observed_members, 256);
 }
 
 #[test]
@@ -422,7 +607,7 @@ fn central_loader_rejects_a_decoder_that_lies_about_member_count() {
 
     assert_eq!(
         failure.cause(),
-        FamilyArtifactLoadErrorV1::DecodedMemberCountMismatch {
+        FamilyArtifactLoadErrorV1::MemberCountMismatch {
             expected: 2,
             actual: 1,
         },
@@ -449,6 +634,30 @@ fn truncation_and_extension_fail_exact_length_before_decoder_dispatch() {
             Err(FamilyArtifactLoadErrorV1::ExactLengthMismatch { .. }),
         ));
         assert_eq!(FAMILY_ARTIFACT_DECODER_CALLS.with(core::cell::Cell::get), 0);
+    }
+}
+
+#[test]
+fn raw_truncation_and_extension_return_exact_length_mismatch_before_hashing() {
+    let members = signals(&[[0, 0, 1], [0, 0, 2]]);
+    let (certificate, encoded) =
+        encode_raw_bitmap24_family_artifact_v2_for_test(definition(), &members).unwrap();
+
+    for malformed in [
+        encoded.clone().truncate_one_byte_for_test(),
+        encoded.extend_one_byte_for_test(),
+    ] {
+        FAMILY_ARTIFACT_PAYLOAD_DIGEST_CALLS.with(|calls| calls.set(0));
+        assert!(matches!(
+            FamilyArtifactLoaderV1::load(certificate, malformed)
+                .unwrap_err()
+                .cause(),
+            FamilyArtifactLoadErrorV1::ExactLengthMismatch { .. },
+        ));
+        assert_eq!(
+            FAMILY_ARTIFACT_PAYLOAD_DIGEST_CALLS.with(core::cell::Cell::get),
+            0
+        );
     }
 }
 
@@ -490,6 +699,69 @@ fn admitted_storage_does_not_borrow_transport_bytes() {
     let admitted = load_fixture(certificate, encoded).unwrap();
 
     assert!(admitted.contains(member));
+}
+
+#[test]
+fn raw_admission_moves_the_original_allocation_into_executable_storage() {
+    let members = signals(&[[0, 0, 1], [0, 0, 2], [255, 255, 255]]);
+    let (certificate, encoded) =
+        encode_raw_bitmap24_family_artifact_v2_for_test(definition(), &members).unwrap();
+    let original = encoded.allocation_ptr_for_test();
+
+    let (admitted, events) = crate::test_support::measured_allocator_events(|| {
+        FamilyArtifactLoaderV1::load(certificate, encoded).unwrap()
+    });
+
+    assert_eq!(admitted.allocation_ptr_for_test(), Some(original));
+    assert_eq!(events, crate::test_support::AllocatorEvents::default());
+    let debug = format!("{admitted:?}");
+    assert!(debug.starts_with("AdmittedFamilyArtifactV2 { semantic_release: "));
+    assert!(debug.contains(", artifact_receipt: ") && debug.ends_with(", .. }"));
+    assert!(
+        !debug.contains("LCFAM2"),
+        "Debug must not expose transport bytes"
+    );
+}
+
+#[test]
+fn raw_contains_and_assess_are_allocator_free_hot_lookups() {
+    let members = signals(&[[0, 0, 1], [0, 0, 2], [255, 255, 255]]);
+    let (certificate, encoded) =
+        encode_raw_bitmap24_family_artifact_v2_for_test(definition(), &members).unwrap();
+    let admitted = FamilyArtifactLoaderV1::load(certificate, encoded).unwrap();
+    let hit = ColorSignal::from_srgb8(Srgb8::new([255, 255, 255]));
+    let miss = ColorSignal::from_srgb8(Srgb8::new([255, 255, 254]));
+
+    let ((contains_hit, contains_miss, (_, pass), (_, violation)), events) =
+        crate::test_support::measured_allocator_events(|| {
+            (
+                admitted.contains(hit),
+                admitted.contains(miss),
+                admitted.assess(hit),
+                admitted.assess(miss),
+            )
+        });
+
+    assert!(contains_hit);
+    assert!(!contains_miss);
+    assert!(matches!(pass, crate::constraints::HardDecision::Pass(_)));
+    assert!(matches!(
+        violation,
+        crate::constraints::HardDecision::Violation(_)
+    ));
+    assert_eq!(events, crate::test_support::AllocatorEvents::default());
+}
+
+#[test]
+fn production_family_storage_has_no_decoded_member_box_or_binary_search_path() {
+    let source = include_str!("family_artifact.rs");
+    assert!(
+        !source.contains("members: Box<[ColorSignal]>")
+            && !source.contains("self.members\n            .binary_search_by_key"),
+        "production admission must execute the owned bitmap instead of a second decoded set",
+    );
+    let raw = include_str!("family_artifact/raw_bitmap24.rs");
+    assert!(!raw.contains("Box<[ColorSignal]>") && !raw.contains("binary_search"));
 }
 
 #[test]
