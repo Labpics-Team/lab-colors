@@ -189,6 +189,9 @@ mod clean_set_tests;
 mod contextual_region_tests;
 
 #[cfg(test)]
+mod contextual_region_formula_tests;
+
+#[cfg(test)]
 mod wcag22_tests;
 
 #[cfg(test)]

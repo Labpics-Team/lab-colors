@@ -291,7 +291,7 @@ fn generic_source_inventory_covers_relation_topology_and_evaluators() {
 }
 
 #[test]
-fn contextual_region_is_definition_only_and_has_no_semantic_recipe_branch() {
+fn contextual_region_is_definition_only_and_semantically_agnostic() {
     let production = normalized_production_code(CONTEXTUAL_REGION_SOURCE);
     let compact = compact_production_syntax(CONTEXTUAL_REGION_SOURCE).to_ascii_lowercase();
     for forbidden in [
@@ -311,15 +311,18 @@ fn contextual_region_is_definition_only_and_has_no_semantic_recipe_branch() {
             "contextual_region.rs must remain a generic definition provider; found `{forbidden}`",
         );
     }
-    for forbidden_branch in [
+    // Это узкий syntax-guard, а не доказательство отсутствия любого ветвления:
+    // он не даёт незаметно вернуть прежнюю center-conditioned рецептуру, пока
+    // round-trip/property tests отдельно доказывают, что центр остаётся данными.
+    for explicit_recipe_syntax in [
         "if center",
         "match center",
         "if knot.center",
         "match knot.center",
     ] {
         assert!(
-            !production.contains(forbidden_branch),
-            "center strength must remain data of one law; found `{forbidden_branch}`",
+            !production.contains(explicit_recipe_syntax),
+            "direct center-conditioned recipe syntax is forbidden; found `{explicit_recipe_syntax}`",
         );
     }
     assert!(compact.contains("->familydefinitiondigestv2"));

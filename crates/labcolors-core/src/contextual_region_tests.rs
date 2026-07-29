@@ -18,6 +18,8 @@ use crate::lcs_occurrence::{
     MUTATION_SENTINEL_XYZ_FRAME_V1, ModeledLcsOccurrenceReleaseId, OutputProfileId,
     SurroundProfileId,
 };
+const FORMULA_SPEC_BYTES: &[u8] = include_bytes!("../contracts/contextual-region-formula-v1.lcir");
+const FORMULA_SPEC_DOMAIN: &[u8] = b"labcolors.nominal-exact-real-lift.ascii-ssa.v1\0";
 
 const POSITIVE_ZERO: u64 = 0x0000_0000_0000_0000;
 const NEGATIVE_ZERO: u64 = 0x8000_0000_0000_0000;
@@ -305,10 +307,58 @@ fn region_parser_rejects_every_invalid_structural_state() {
             reason: ExactDyadic64ErrorV1::NonFinite,
         }),
     );
+    for (shape_index, coordinate) in [
+        (0, TubeCoordinateV1::ShapeG00),
+        (1, TubeCoordinateV1::ShapeG01),
+        (2, TubeCoordinateV1::ShapeG11),
+    ] {
+        let mut shape = [ONE, POSITIVE_ZERO, ONE];
+        shape[shape_index] = f64::NAN.to_bits();
+        assert_eq!(
+            PiecewiseLinearCartesianTubeV1::try_from_bits(
+                Shape2BitsV1::new(shape[0], shape[1], shape[2]),
+                &[knot(ONE, POSITIVE_ZERO, POSITIVE_ZERO, ONE)],
+            ),
+            Err(PiecewiseLinearCartesianTubeErrorV1::Coordinate {
+                index: None,
+                coordinate,
+                reason: ExactDyadic64ErrorV1::NonFinite,
+            }),
+        );
+    }
+    for (raw_knot, coordinate, reason) in [
+        (
+            knot(NEGATIVE_ZERO, POSITIVE_ZERO, POSITIVE_ZERO, ONE),
+            TubeCoordinateV1::Tone,
+            ExactDyadic64ErrorV1::NegativeZero,
+        ),
+        (
+            knot(ONE, POSITIVE_ZERO, f64::NAN.to_bits(), ONE),
+            TubeCoordinateV1::CenterB,
+            ExactDyadic64ErrorV1::NonFinite,
+        ),
+        (
+            knot(ONE, POSITIVE_ZERO, POSITIVE_ZERO, f64::NAN.to_bits()),
+            TubeCoordinateV1::RadiusSquared,
+            ExactDyadic64ErrorV1::NonFinite,
+        ),
+    ] {
+        assert_eq!(
+            PiecewiseLinearCartesianTubeV1::try_from_bits(
+                Shape2BitsV1::new(ONE, POSITIVE_ZERO, ONE),
+                &[raw_knot],
+            ),
+            Err(PiecewiseLinearCartesianTubeErrorV1::Coordinate {
+                index: Some(0),
+                coordinate,
+                reason,
+            }),
+        );
+    }
 }
 
 #[test]
-fn all_center_strengths_are_data_of_one_region_law() {
+fn all_center_strengths_round_trip_as_data_of_one_region_law() {
     let zero = region_with_centers([
         [POSITIVE_ZERO, POSITIVE_ZERO],
         [POSITIVE_ZERO, POSITIVE_ZERO],
@@ -322,6 +372,22 @@ fn all_center_strengths_are_data_of_one_region_law() {
     assert_eq!(weak.shape(), chromatic.shape());
     assert_eq!(zero.knots()[0].tone().bits(), ONE);
     assert_eq!(zero.knots()[0].center().map(ExactDyadic64V1::bits), [0; 2]);
+    assert_eq!(
+        weak.knots()[0].center().map(ExactDyadic64V1::bits),
+        [MIN_SUBNORMAL, HALF],
+    );
+    assert_eq!(
+        weak.knots()[1].center().map(ExactDyadic64V1::bits),
+        [ONE, HALF],
+    );
+    assert_eq!(
+        chromatic.knots()[0].center().map(ExactDyadic64V1::bits),
+        [TWO, THREE],
+    );
+    assert_eq!(
+        chromatic.knots()[1].center().map(ExactDyadic64V1::bits),
+        [THREE, FOUR],
+    );
     assert_eq!(zero.knots()[0].radius_squared().bits(), FOUR);
 }
 
@@ -534,6 +600,36 @@ fn typed_local_release_mutations_change_definition_identity() {
 }
 
 #[test]
+fn exact_real_formula_release_is_domain_separated_canonical_content() {
+    let mut hasher = crate::sha256::Hasher::new();
+    hasher.update(FORMULA_SPEC_DOMAIN);
+    hasher.update(&(FORMULA_SPEC_BYTES.len() as u64).to_be_bytes());
+    hasher.update(FORMULA_SPEC_BYTES);
+    let release = *hasher.finalize().as_bytes();
+    assert_eq!(
+        release,
+        [
+            0x2c, 0x62, 0x6d, 0x8e, 0xe6, 0x0e, 0xeb, 0x62, 0xae, 0x4d, 0xb5, 0x36, 0x60, 0xd6,
+            0x1b, 0xbc, 0x25, 0xe0, 0xef, 0xd4, 0xe5, 0x57, 0xf0, 0xdc, 0x1e, 0x77, 0x56, 0x5c,
+            0x13, 0x0b, 0x6e, 0x52,
+        ],
+    );
+
+    let mut mutated = FORMULA_SPEC_BYTES.to_vec();
+    let payload = mutated
+        .windows(b"literal p3_8 400e666666666666".len())
+        .position(|window| window == b"literal p3_8 400e666666666666")
+        .expect("hue-offset literal is present")
+        + b"literal p3_8 ".len();
+    mutated[payload] = b'5';
+    let mut mutant_hasher = crate::sha256::Hasher::new();
+    mutant_hasher.update(FORMULA_SPEC_DOMAIN);
+    mutant_hasher.update(&(mutated.len() as u64).to_be_bytes());
+    mutant_hasher.update(&mutated);
+    assert_ne!(mutant_hasher.finalize().as_bytes(), &release);
+}
+
+#[test]
 fn canonical_identity_is_length_prefixed_big_endian_and_golden() {
     let pipeline = pipeline(context(IEC_SRGB_D65_XYZ_FRAME_V1));
     let region = region_with_centers([[POSITIVE_ZERO; 2]; 2]);
@@ -561,7 +657,14 @@ fn canonical_identity_is_length_prefixed_big_endian_and_golden() {
     assert_eq!(fields[13], &[1]);
     assert_eq!(fields[14], &[1]);
     assert_eq!(fields[15], &[1]);
-    assert_eq!(fields[16], &[1]);
+    assert_eq!(
+        fields[16],
+        &[
+            0x2c, 0x62, 0x6d, 0x8e, 0xe6, 0x0e, 0xeb, 0x62, 0xae, 0x4d, 0xb5, 0x36, 0x60, 0xd6,
+            0x1b, 0xbc, 0x25, 0xe0, 0xef, 0xd4, 0xe5, 0x57, 0xf0, 0xdc, 0x1e, 0x77, 0x56, 0x5c,
+            0x13, 0x0b, 0x6e, 0x52,
+        ],
+    );
     assert_eq!(fields[17], &[1]);
     assert_eq!(fields[18], &ONE.to_be_bytes());
     assert_eq!(fields[19], &POSITIVE_ZERO.to_be_bytes());
@@ -578,7 +681,7 @@ fn canonical_identity_is_length_prefixed_big_endian_and_golden() {
 
     assert_eq!(
         hex(ContextualRegionFamilyProviderV1::definition_digest(pipeline, &region,).as_bytes()),
-        "72d4329c98db9942c5992d718079cb94745615d78943e9323381ffc917bf6b91",
+        "0a8d1c3d2f0052be84b5783071699861aad0ac83dae62de3275267754681cdc9",
     );
 }
 
@@ -614,11 +717,25 @@ fn field_payload_ranges(bytes: &[u8]) -> Vec<core::ops::Range<usize>> {
     let mut fields = Vec::new();
     let mut cursor = 0;
     while cursor < bytes.len() {
-        let length_end = cursor + 8;
-        let length = u64::from_be_bytes(bytes[cursor..length_end].try_into().unwrap()) as usize;
+        let length_end = cursor
+            .checked_add(8)
+            .expect("length-prefix offset overflows usize");
+        assert!(
+            length_end <= bytes.len(),
+            "truncated length prefix at offset {cursor}",
+        );
+        let length = usize::try_from(u64::from_be_bytes(
+            bytes[cursor..length_end].try_into().unwrap(),
+        ))
+        .expect("field length exceeds platform usize");
         let start = length_end;
-        let end = start + length;
-        assert!(end <= bytes.len());
+        let end = start
+            .checked_add(length)
+            .expect("field payload end overflows usize");
+        assert!(
+            end <= bytes.len(),
+            "field payload at offset {start} exceeds the buffer",
+        );
         fields.push(start..end);
         cursor = end;
     }

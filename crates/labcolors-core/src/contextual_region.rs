@@ -431,7 +431,16 @@ pub(crate) enum ContextualRegionPipelineErrorV1 {
 /// действительными числами без промежуточного binary64 rounding и platform
 /// `libm`. Это nominal mathematical lift связанных formula releases, а не claim
 /// об идеальной source-algebraic семантике IEC/CIE; такая семантика потребует
-/// нового release ID.
+/// нового release ID. Сам release является content address канонического
+/// `contracts/contextual-region-formula-v1.lcir`, а не именем этой Rust-ветви
+/// или хешем реализации evaluator-а.
+///
+/// `exact_real_v1` задаёт обычные операции над ℝ; `root3` — единственный
+/// неотрицательный кубический корень, `pow_pos(x, p) = exp(p·log(x))` при
+/// `x > 0`, `pow_nn(0, p) = 0` при `p > 0` и иначе совпадает с `pow_pos`, а
+/// `ratio0(0, 0) = 0` и иначе является делением при строго положительном знаменателе.
+/// Эти domain-условия обязаны быть доказаны offline evaluator-ом: нарушение не
+/// превращается в NaN, fallback или член family.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ContextualRegionFormulaReleaseIdV1 {
     NominalExactRealLiftV1,
@@ -441,6 +450,11 @@ pub(crate) enum ContextualRegionFormulaReleaseIdV1 {
 
 pub(crate) const CONTEXTUAL_REGION_FORMULA_RELEASE_V1: ContextualRegionFormulaReleaseIdV1 =
     ContextualRegionFormulaReleaseIdV1::NominalExactRealLiftV1;
+
+const CONTEXTUAL_REGION_FORMULA_RELEASE_DIGEST_V1: [u8; 32] = [
+    0x2c, 0x62, 0x6d, 0x8e, 0xe6, 0x0e, 0xeb, 0x62, 0xae, 0x4d, 0xb5, 0x36, 0x60, 0xd6, 0x1b, 0xbc,
+    0x25, 0xe0, 0xef, 0xd4, 0xe5, 0x57, 0xf0, 0xdc, 0x1e, 0x77, 0x56, 0x5c, 0x13, 0x0b, 0x6e, 0x52,
+];
 
 /// Полный versioned pipeline, относительно которого definition имеет смысл.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -647,11 +661,13 @@ fn rectangular_view_tag(value: Cam16UcsViewReleaseId) -> u8 {
     }
 }
 
-fn formula_release_tag(value: ContextualRegionFormulaReleaseIdV1) -> u8 {
+fn formula_release_digest(value: ContextualRegionFormulaReleaseIdV1) -> [u8; 32] {
     match value {
-        ContextualRegionFormulaReleaseIdV1::NominalExactRealLiftV1 => 1,
+        ContextualRegionFormulaReleaseIdV1::NominalExactRealLiftV1 => {
+            CONTEXTUAL_REGION_FORMULA_RELEASE_DIGEST_V1
+        }
         #[cfg(test)]
-        ContextualRegionFormulaReleaseIdV1::MutationSentinelV1 => 2,
+        ContextualRegionFormulaReleaseIdV1::MutationSentinelV1 => [0xa5; 32],
     }
 }
 
@@ -728,7 +744,7 @@ fn write_identity(
     write_field(sink, &[surround_tag(pipeline.context.surround_profile())]);
     write_field(sink, &[cam16_view_tag(pipeline.cam16_view)]);
     write_field(sink, &[rectangular_view_tag(pipeline.rectangular_view)]);
-    write_field(sink, &[formula_release_tag(pipeline.formula)]);
+    write_field(sink, &formula_release_digest(pipeline.formula));
     write_field(sink, &[region_release_tag(releases.region)]);
     write_field(sink, &region.shape.g00.bits().to_be_bytes());
     write_field(sink, &region.shape.g01.bits().to_be_bytes());

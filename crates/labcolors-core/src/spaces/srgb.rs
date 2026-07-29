@@ -36,6 +36,28 @@ const SRGB_TO_XYZ_D65: [[f64; 3]; 3] = [
     [ 0.019_330_818_715_591_82,  0.119_194_779_794_625_98,  0.950_532_152_249_660_7  ],
 ];
 
+/// Точные числовые владельцы, используемые artifact-ом contextual-region.
+///
+/// Test-only доступ связывает artifact с production-константами преобразования,
+/// не добавляя символов или работы в release-сборку.
+#[cfg(test)]
+pub(crate) fn contextual_region_formula_literals_v1() -> &'static [(&'static str, f64)] {
+    &[
+        ("d65_x", D65_WHITE[0]),
+        ("one", D65_WHITE[1]),
+        ("d65_z", D65_WHITE[2]),
+        ("srgb_m00", SRGB_TO_XYZ_D65[0][0]),
+        ("srgb_m01", SRGB_TO_XYZ_D65[0][1]),
+        ("srgb_m02", SRGB_TO_XYZ_D65[0][2]),
+        ("srgb_m10", SRGB_TO_XYZ_D65[1][0]),
+        ("srgb_m11", SRGB_TO_XYZ_D65[1][1]),
+        ("srgb_m12", SRGB_TO_XYZ_D65[1][2]),
+        ("srgb_m20", SRGB_TO_XYZ_D65[2][0]),
+        ("srgb_m21", SRGB_TO_XYZ_D65[2][1]),
+        ("srgb_m22", SRGB_TO_XYZ_D65[2][2]),
+    ]
+}
+
 // ------------------------------------------------------------------
 //  XYZ(D65) → sRGB linear
 // ------------------------------------------------------------------
