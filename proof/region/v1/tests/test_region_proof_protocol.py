@@ -47,7 +47,7 @@ from region_proof_protocol import (  # noqa: E402
     ProtocolReasonV1,
     ReducedDomainManifestV1,
     ResourceLimitWitnessV1,
-    RunReceiptV1,
+    RunClaimV1,
     WitnessStoreV1,
     ContentResolvedComparatorManifestV1,
     compare_dual_transcripts,
@@ -79,11 +79,11 @@ MANIFEST_IDENTITY = bytes.fromhex(
 TRANSCRIPT_IDENTITY = bytes.fromhex(
     "d75c7f5d1c8176fdef78cca226e42ecd0cd61bab69b636fe4397e6a763af8582"
 )
-RUN_IDENTITY = bytes.fromhex(
-    "014326eaf09c99c9ec8e2edbaa9867928dbe40050c1e54f5b37d7f9c47b780e8"
+RUN_CLAIM_IDENTITY = bytes.fromhex(
+    "3ffae955c59e0cffa53cfa560713fff64f4c63f7ae103eae67c62a068e124b72"
 )
 COMPARISON_IDENTITY = bytes.fromhex(
-    "a335ccaed332f0e43f7add6bf6e0536ee037aa454d0a36e96c43a027344fd596"
+    "94be6dfc28c1bcc98b703f9fda6e7231984a129e22db554655d4026dae5c4ba0"
 )
 
 
@@ -1121,7 +1121,7 @@ class ManifestTranscriptComparisonTests(unittest.TestCase):
             ),
         )
 
-    def test_unresolved_or_nonindependent_paths_cannot_produce_comparison(self) -> None:
+    def test_unresolved_or_shared_diversity_paths_cannot_produce_comparison(self) -> None:
         job = ProofJobV1.parse((FIXTURES / "proof-job-v1.bin").read_bytes())
         arb = manifest(ComparatorKindV1.ARB, 30)
         mpfi = manifest(ComparatorKindV1.MPFI, 50)
@@ -1134,8 +1134,8 @@ class ManifestTranscriptComparisonTests(unittest.TestCase):
         tb = DecisionTranscriptV1.from_decisions(
             job, mpfi, decisions, (witness,), digest(301)
         )
-        ra = RunReceiptV1.for_transcript(job, arb, ta, digest(302), digest(303), digest(304))
-        rb = RunReceiptV1.for_transcript(job, mpfi, tb, digest(305), digest(306), digest(307))
+        ra = RunClaimV1.for_transcript(job, arb, ta, digest(302), digest(303), digest(304))
+        rb = RunClaimV1.for_transcript(job, mpfi, tb, digest(305), digest(306), digest(307))
         expect_reason(
             self,
             ProtocolReasonV1.UNRESOLVED_TRANSCRIPT,
@@ -1156,13 +1156,13 @@ class ManifestTranscriptComparisonTests(unittest.TestCase):
             )
             expect_reason(
                 self,
-                ProtocolReasonV1.NOT_INDEPENDENT,
+                ProtocolReasonV1.SHARED_DIVERSITY_COORDINATE,
                 lambda shared_coordinate=shared_coordinate: compare_dual_transcripts(
                     job, arb, ta, ra, shared_coordinate, tb, rb
                 ),
             )
 
-        shared_binary = RunReceiptV1.for_transcript(
+        shared_binary = RunClaimV1.for_transcript(
             job,
             mpfi,
             tb,
@@ -1172,7 +1172,7 @@ class ManifestTranscriptComparisonTests(unittest.TestCase):
         )
         expect_reason(
             self,
-            ProtocolReasonV1.NOT_INDEPENDENT,
+            ProtocolReasonV1.SHARED_DIVERSITY_COORDINATE,
             lambda: compare_dual_transcripts(
                 job, arb, ta, ra, mpfi, tb, shared_binary
             ),
@@ -1185,10 +1185,10 @@ class ManifestTranscriptComparisonTests(unittest.TestCase):
         decisions = (DecisionV1.INSIDE, DecisionV1.OUTSIDE) * 256
         ta = DecisionTranscriptV1.from_decisions(job, arb, decisions, (), digest(320))
         tb = DecisionTranscriptV1.from_decisions(job, mpfi, decisions, (), digest(321))
-        ra = RunReceiptV1.for_transcript(
+        ra = RunClaimV1.for_transcript(
             job, arb, ta, digest(322), digest(323), digest(324)
         )
-        rb = RunReceiptV1.for_transcript(
+        rb = RunClaimV1.for_transcript(
             job, mpfi, tb, digest(325), digest(326), digest(327)
         )
 
@@ -1227,8 +1227,8 @@ class ManifestTranscriptComparisonTests(unittest.TestCase):
         decisions = (DecisionV1.INSIDE, DecisionV1.OUTSIDE) * 256
         ta = DecisionTranscriptV1.from_decisions(job, arb, decisions, (), digest(400))
         tb = DecisionTranscriptV1.from_decisions(job, mpfi, decisions, (), digest(401))
-        ra = RunReceiptV1.for_transcript(job, arb, ta, digest(402), digest(403), digest(404))
-        rb = RunReceiptV1.for_transcript(job, mpfi, tb, digest(405), digest(406), digest(407))
+        ra = RunClaimV1.for_transcript(job, arb, ta, digest(402), digest(403), digest(404))
+        rb = RunClaimV1.for_transcript(job, mpfi, tb, digest(405), digest(406), digest(407))
 
         with patch.object(
             WitnessStoreV1,
@@ -1255,12 +1255,12 @@ class ManifestTranscriptComparisonTests(unittest.TestCase):
                 ra,
                 200,
                 "5af9da154b5c2e6f5dbdf88b538324fe809366dab712227f95a67657046d06b2",
-                RUN_IDENTITY,
+                RUN_CLAIM_IDENTITY,
             ),
             (
                 candidate,
                 368,
-                "761c6595405e96fc1c2f3d8955041494d6d114a2027b54984b363de4465b9e70",
+                "f27fb4ad6fc8e14d16f815b394f67e181d29d02099c2d640f5dec07e38e63f3d",
                 COMPARISON_IDENTITY,
             ),
         ):
@@ -1291,7 +1291,7 @@ class ManifestTranscriptComparisonTests(unittest.TestCase):
                 candidate.claim.policy_identity,
                 candidate.claim.domain_point_count,
                 (candidate.claim.comparator_identities[0],),  # type: ignore[arg-type]
-                candidate.claim.run_identities,
+                candidate.claim.run_claim_identities,
                 candidate.claim.transcript_identities,
                 candidate.claim.decision_digest,
             ),
@@ -1308,7 +1308,7 @@ class ManifestTranscriptComparisonTests(unittest.TestCase):
                 ForeignTuple(  # type: ignore[arg-type]
                     candidate.claim.comparator_identities
                 ),
-                candidate.claim.run_identities,
+                candidate.claim.run_claim_identities,
                 candidate.claim.transcript_identities,
                 candidate.claim.decision_digest,
             ),
@@ -1323,7 +1323,7 @@ class ManifestTranscriptComparisonTests(unittest.TestCase):
                 candidate.claim.policy_identity,
                 1.5,  # type: ignore[arg-type]
                 candidate.claim.comparator_identities,
-                candidate.claim.run_identities,
+                candidate.claim.run_claim_identities,
                 candidate.claim.transcript_identities,
                 candidate.claim.decision_digest,
             ),
@@ -1336,7 +1336,7 @@ class ManifestTranscriptComparisonTests(unittest.TestCase):
             (),
             digest(408),
         )
-        divergent_run = RunReceiptV1.for_transcript(
+        divergent_run = RunClaimV1.for_transcript(
             job, mpfi, divergent, digest(405), digest(406), digest(407)
         )
         expect_reason(
@@ -1356,10 +1356,10 @@ class ManifestTranscriptComparisonTests(unittest.TestCase):
         equality_tb = DecisionTranscriptV1.from_decisions(
             job, mpfi, decisions, (equality_b,), digest(413)
         )
-        equality_ra = RunReceiptV1.for_transcript(
+        equality_ra = RunClaimV1.for_transcript(
             job, arb, equality_ta, digest(414), digest(415), digest(416)
         )
-        equality_rb = RunReceiptV1.for_transcript(
+        equality_rb = RunClaimV1.for_transcript(
             job, mpfi, equality_tb, digest(417), digest(418), digest(419)
         )
         expect_reason(
