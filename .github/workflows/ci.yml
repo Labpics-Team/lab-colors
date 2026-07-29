@@ -215,6 +215,8 @@ jobs:
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+      - name: mutation evidence verifier hostile tests
+        run: python3 scripts/test_mutation.py
       - name: cargo test
         run: cargo test --workspace --locked
       - name: prove core capability projection boundary
