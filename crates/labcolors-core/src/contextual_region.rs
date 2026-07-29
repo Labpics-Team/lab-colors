@@ -283,7 +283,9 @@ pub(crate) enum PiecewiseLinearCartesianTubeErrorV1 {
     ResourceExhausted,
 }
 
-/// Непрерывная closed region: linear center/radius между ordered tone knots.
+/// Замкнутая область: между строго упорядоченными tone knots линейно
+/// интерполируются центр и `radius_squared`; точка `z` принадлежит области,
+/// когда `(z - center(t))ᵀ G (z - center(t)) <= radius_squared(t)`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct PiecewiseLinearCartesianTubeV1 {
     shape: Shape2V1,
