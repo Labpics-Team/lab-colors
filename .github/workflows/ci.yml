@@ -220,10 +220,16 @@ jobs:
       - name: cargo test
         run: cargo test --workspace --locked
       - name: exhaustive 24-bit family membership oracle
-        run: >-
-          cargo test -p labcolors-core
-          family_tests::axis_membership_matches_the_full_srgb8_cube_oracle
-          --locked -- --ignored --exact
+        shell: bash
+        run: |
+          set -euo pipefail
+          test_name='family_artifact_tests::axis_membership_matches_the_full_srgb8_cube_oracle'
+          cargo test -p labcolors-core --lib --locked -- --ignored --list --format terse |
+            awk -v expected="${test_name}: test" '
+              $0 == expected { matches += 1 }
+              END { exit(matches == 1 ? 0 : 1) }
+            '
+          cargo test -p labcolors-core --lib "${test_name}" --locked -- --ignored --exact
       - name: prove core capability projection boundary
         shell: bash
         run: |
