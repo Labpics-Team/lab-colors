@@ -84,6 +84,7 @@ fn exact_axis_and_chromatic_fixture_use_one_verifier_and_membership_law() {
 }
 
 #[test]
+#[ignore = "full 24-bit domain oracle runs once in CI outside mutation tests"]
 fn axis_membership_matches_the_full_srgb8_cube_oracle() {
     let generator = CompleteFamilyGeneratorV1::encoded_srgb8_equal_channel_axis_v1();
     let image = UnverifiedFamilyImageV1::new(

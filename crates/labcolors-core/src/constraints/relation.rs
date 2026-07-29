@@ -265,6 +265,9 @@ impl CompiledCoreIntrinsicUnaryInvocationV1 {
                 family,
                 family_index,
             } => {
+                // Compile-time связывает индекс с этим exact FamilyId; `None`
+                // здесь означает порчу compiled graph, а не штатное отсутствие
+                // evidence, и вызывающий слой переводит его в InternalInvariant.
                 let declaration = families.get(family_index)?;
                 if declaration.id() != family {
                     return None;

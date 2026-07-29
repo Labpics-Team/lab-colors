@@ -932,26 +932,22 @@ fn full_program(ids: FullIds, reverse_unordered: bool, mutation: FullMutation) -
     )
     .with_joint_selection(DeclaredJointSelectionV1::new(states));
 
-    let program = if matches!(mutation, FullMutation::CompleteSchemaGolden) {
-        program.with_families(vec![declared_family(
-            FamilyId::new(1_013),
-            &[[0x10, 0x20, 0x30], [0x30, 0x20, 0x10]],
-        )])
-    } else {
-        program
-    };
-
     if matches!(mutation, FullMutation::CompleteSchemaGolden) {
-        program.with_point_presentations(
-            vec![PointPresentationRootV1::new(
-                PresentationRootId::new(1_002),
-                ids.occurrences[1],
-            )],
-            vec![PointPresentationTargetV1::new(
-                PresentationRootId::new(1_002),
-                ids.occurrences[0],
-            )],
-        )
+        program
+            .with_families(vec![declared_family(
+                FamilyId::new(1_013),
+                &[[0x10, 0x20, 0x30], [0x30, 0x20, 0x10]],
+            )])
+            .with_point_presentations(
+                vec![PointPresentationRootV1::new(
+                    PresentationRootId::new(1_002),
+                    ids.occurrences[1],
+                )],
+                vec![PointPresentationTargetV1::new(
+                    PresentationRootId::new(1_002),
+                    ids.occurrences[0],
+                )],
+            )
     } else {
         program
     }
