@@ -21,6 +21,12 @@ on:
   pull_request:
   workflow_dispatch:
 
+# Устаревшие SHA одной PR делят очередь и освобождают раннер. Push evidence и
+# ручной macOS reference остаются независимыми exact-run через уникальный run_id.
+concurrency:
+  group: native-conformance-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 permissions:
   contents: read
 

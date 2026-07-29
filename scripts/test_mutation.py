@@ -1673,6 +1673,36 @@ class MutationTruthTest(unittest.TestCase):
         self.assertEqual(mutation.EXECUTION_COMMANDS["Build"][0], "test")
         self.assertEqual(second["commands"]["Build"][0], "test")
 
+    def test_shared_runner_workflows_cancel_stale_prs_without_canceling_evidence(
+        self,
+    ) -> None:
+        repo = Path(__file__).resolve().parents[1]
+        workflows = repo / ".github" / "workflows"
+        mutation_workflow = (workflows / "mutation.yml").read_text(encoding="utf-8")
+        ci_workflow = (workflows / "ci.yml").read_text(encoding="utf-8")
+        native_workflow = (workflows / "native-conformance.yml").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn(
+            "concurrency:\n"
+            "  group: mutation\n"
+            "  cancel-in-progress: false\n",
+            mutation_workflow,
+        )
+        for workflow_name, workflow in (
+            ("ci", ci_workflow),
+            ("native-conformance", native_workflow),
+        ):
+            self.assertIn(
+                "concurrency:\n"
+                f"  group: {workflow_name}-"
+                "${{ github.event.pull_request.number || github.run_id }}\n"
+                "  cancel-in-progress: "
+                "${{ github.event_name == 'pull_request' }}\n",
+                workflow,
+            )
+
     def test_workflow_and_scope_lock_the_truth_contract(self) -> None:
         def between(source: str, start: str, end: str, label: str) -> str:
             if start not in source:
@@ -1757,7 +1787,7 @@ class MutationTruthTest(unittest.TestCase):
                 '"$RUNNER_TEMP/mutants-bin/cargo-mutants" --version',
                 job,
             )
-        self.assertRegex(shard_job, r"(?m)^\s+max-parallel:\s*4\s*$")
+        self.assertRegex(shard_job, r"(?m)^\s+max-parallel:\s*3\s*$")
         self.assertIn("--baseline=run", shard_step)
         self.assertIn('--shard "$SHARD_INDEX/32"', shard_step)
         self.assertLess(
