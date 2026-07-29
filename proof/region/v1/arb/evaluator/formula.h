@@ -5,6 +5,8 @@
 
 #include "interval.h"
 
+/* Point evaluation owns three output coordinates, so its caller supplies an
+   array of exactly three initialized Arb elements rather than one arb_t. */
 lc_status lc_formula_point(
     arb_ptr output,
     const uint8_t rgb[3],

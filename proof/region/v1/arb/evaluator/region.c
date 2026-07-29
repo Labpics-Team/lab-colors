@@ -157,11 +157,17 @@ lc_region_decide(
     arb_t intersection;
 
     reset_result(result);
+    /* FLINT's two-bit minimum applies to the public decision entry point too;
+       otherwise a singleton can bypass the policy before any segment exists. */
+    if (precision < 2) {
+        result->formula_status = LC_DOMAIN_UNPROVEN;
+        return;
+    }
     if (region->knot_count == 1) {
         evaluate_singleton(result, point, region, precision, branch_grant);
         return;
     }
-    if (region->knot_count < 2 || precision < 2) {
+    if (region->knot_count < 2) {
         result->formula_status = LC_DOMAIN_UNPROVEN;
         return;
     }

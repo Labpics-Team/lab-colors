@@ -24,12 +24,10 @@ concurrency:
 jobs:
   diagnostic-build-runtime:
     name: two offline builds and runtime tests (no artifact)
-    # A PR can replace every invoked script, so Docker authority must die with the job VM.
-    runs-on: ubuntu-24.04
+    # Docker is root-equivalent, so this label is provisioned only on a fresh
+    # one-job VM whose runner group is bound to this exact workflow revision.
+    runs-on: [self-hosted, Linux, X64, labcolors-ephemeral]
     timeout-minutes: 360
-    if: >-
-      (github.event_name != 'pull_request' ||
-      github.event.pull_request.head.repo.full_name == github.repository)
     env:
       PYTHONDONTWRITEBYTECODE: "1"
       PYTHONHASHSEED: "0"
@@ -37,6 +35,25 @@ jobs:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           persist-credentials: false
+
+      - name: complete fast Arb contract with exact skip manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 proof/region/v1/arb/tests/gate.py
+          PYTHONOPTIMIZE=2 python3 proof/region/v1/arb/tests/gate.py
+
+      - name: bind run-local native paths after the fast gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          scope="/sys/fs/cgroup/labcolors-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          binary="$RUNNER_TEMP/arb-native-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          {
+            echo "LABCOLORS_CGROUP_SCOPE_V1=$scope"
+            echo "LABCOLORS_EXECUTOR_CGROUP_V1=$scope/proof"
+            echo "LABCOLORS_ARB_NATIVE_BINARY=$binary"
+          } >> "$GITHUB_ENV"
 
       - name: acquire and hash-check exact source archives
         shell: bash
@@ -61,7 +78,9 @@ jobs:
           count=0
           while IFS=$'\t' read -r role url digest length; do
             archive="$source_dir/${role}.archive"
-            curl --fail --location --silent --show-error "$url" --output "$archive"
+            curl --fail --location --silent --show-error \
+              --connect-timeout 30 --max-time 600 --retry 3 --retry-all-errors \
+              "$url" --output "$archive"
             test "$(stat --format=%s "$archive")" = "$length"
             echo "$digest  $archive" | sha256sum --check --strict
             case "$role" in
@@ -88,7 +107,8 @@ jobs:
           PY
           )"
           "$docker_path" image inspect "$image" >/dev/null 2>&1 ||
-            "$docker_path" pull "$image"
+            /usr/bin/timeout --signal=TERM --kill-after=30s 15m \
+              "$docker_path" pull "$image"
           echo "LABCOLORS_ARB_PIPELINE_DOCKER=$docker_path" >> "$GITHUB_ENV"
 
       - name: require the exact diagnostic Docker boundary
@@ -112,28 +132,88 @@ jobs:
               sys.exit(78)
           PY
 
-      - name: two fresh offline builds and all evaluator tests
+      - name: delegate one disposable cgroup subtree
         shell: bash
         run: |
           set -euo pipefail
-          log="$RUNNER_TEMP/arb-evaluator-build-runtime.log"
-          python3 -m unittest -v \
-            proof.region.v1.arb.tests.test_build_recipe \
-            proof.region.v1.arb.tests.test_pipeline.NativeBuildIntegrationTests \
-            2>&1 | tee "$log"
-          if grep --ignore-case --quiet skipped "$log"; then
-            echo "Arb build/runtime integration was vacuously skipped" >&2
-            exit 1
-          fi
+          test -f /proc/sys/kernel/apparmor_restrict_unprivileged_userns
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          test "$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns)" = 0
+          scope="$LABCOLORS_CGROUP_SCOPE_V1"
+          sudo mkdir "$scope"
+          sudo chown "$(id -u):$(id -g)" \
+            "$scope" \
+            "$scope/cgroup.procs" \
+            "$scope/cgroup.threads" \
+            "$scope/cgroup.subtree_control"
+          printf '+memory +pids' > "$scope/cgroup.subtree_control"
+          mkdir "$scope/tasks" "$scope/proof"
+          printf '+memory +pids' > "$scope/proof/cgroup.subtree_control"
+          printf '2' > "$scope/proof/pids.max"
+          mkdir "$scope/proof/observer"
+          grep --fixed-strings --quiet 'memory' "$scope/proof/cgroup.subtree_control"
+          grep --fixed-strings --quiet 'pids' "$scope/proof/cgroup.subtree_control"
+          test "$(cat "$scope/proof/pids.max")" = 2
+
+      - name: two fresh offline builds and evaluator runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "$$" | sudo tee \
+            "$LABCOLORS_CGROUP_SCOPE_V1/tasks/cgroup.procs" >/dev/null
+          python3 proof/region/v1/arb/tests/native_gate.py build
+          test -f "$LABCOLORS_ARB_NATIVE_BINARY"
+          test "$(stat --format=%a "$LABCOLORS_ARB_NATIVE_BINARY")" = 400
+
+      - name: native containment under an atomic two-task subtree
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "$$" | sudo tee \
+            "$LABCOLORS_EXECUTOR_CGROUP_V1/observer/cgroup.procs" >/dev/null
+          exec python3 proof/region/v1/arb/tests/native_gate.py executor
 
       # No upload step: the static binary is an ephemeral observation until a
       # linker/member inventory plus notices/source/relink distribution gate exists.
 
-      - name: remove acquired source archives
+      - name: remove disposable inputs and cgroup
         if: always()
         shell: bash
         run: |
-          set -euo pipefail
+          set -uo pipefail
+          status=0
+          record_failure() {
+            local code="$?"
+            if (( status == 0 )); then
+              status="$code"
+            fi
+          }
           if [[ -n "${LABCOLORS_ARB_SOURCE_DIR:-}" ]]; then
-            rm -rf -- "$LABCOLORS_ARB_SOURCE_DIR"
+            rm -rf -- "$LABCOLORS_ARB_SOURCE_DIR" || record_failure
           fi
+          if [[ -n "${LABCOLORS_ARB_NATIVE_BINARY:-}" ]]; then
+            rm -f -- "$LABCOLORS_ARB_NATIVE_BINARY" || record_failure
+          fi
+          if [[ -n "${LABCOLORS_CGROUP_SCOPE_V1:-}" && \
+                -d "$LABCOLORS_CGROUP_SCOPE_V1" ]]; then
+            if [[ -f "$LABCOLORS_CGROUP_SCOPE_V1/cgroup.kill" ]]; then
+              echo 1 | sudo tee "$LABCOLORS_CGROUP_SCOPE_V1/cgroup.kill" \
+                >/dev/null || record_failure
+            fi
+            if [[ -f "$LABCOLORS_CGROUP_SCOPE_V1/cgroup.events" ]]; then
+              for _ in {1..100}; do
+                grep --fixed-strings --quiet 'populated 0' \
+                  "$LABCOLORS_CGROUP_SCOPE_V1/cgroup.events" && break
+                sleep 0.01
+              done
+              grep --fixed-strings --quiet 'populated 0' \
+                "$LABCOLORS_CGROUP_SCOPE_V1/cgroup.events" || record_failure
+            fi
+            for child in proof/observer proof tasks; do
+              if [[ -d "$LABCOLORS_CGROUP_SCOPE_V1/$child" ]]; then
+                sudo rmdir "$LABCOLORS_CGROUP_SCOPE_V1/$child" || record_failure
+              fi
+            done
+            sudo rmdir "$LABCOLORS_CGROUP_SCOPE_V1" || record_failure
+          fi
+          exit "$status"

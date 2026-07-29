@@ -7,18 +7,14 @@ import base64
 import binascii
 import hashlib
 import os
-import selectors
-import signal
 import stat
-import subprocess
 import tempfile
-import time
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from enum import StrEnum
 from functools import cmp_to_key
 from pathlib import Path
-from typing import NoReturn
+from typing import NoReturn, Protocol
 
 import provenance
 
@@ -420,15 +416,90 @@ def _read_regular_file_descriptor(descriptor: int) -> bytes:
         offset += len(chunk)
     return b"".join(chunks)
 
+@dataclass(frozen=True)
+class DiagnosticProcessRequestV1:
+    """Client-owned diagnostic execution request with no authority semantics."""
+
+    argv: tuple[str, ...]
+    stdin: bytes | None
+    cwd: Path
+    environment: dict[str, str]
+    pass_fds: tuple[int, ...]
+    timeout_seconds: int | float
+    stdout_limit: int
+    stderr_limit: int
+
+    def __post_init__(self) -> None:
+        if (
+            type(self.argv) is not tuple
+            or not self.argv
+            or any(type(item) is not str or not item for item in self.argv)
+            or (self.stdin is not None and type(self.stdin) is not bytes)
+            or not isinstance(self.cwd, Path)
+            or type(self.environment) is not dict
+            or any(
+                type(key) is not str or type(value) is not str
+                for key, value in self.environment.items()
+            )
+            or type(self.pass_fds) is not tuple
+            or any(type(fd) is not int or fd < 0 for fd in self.pass_fds)
+            or type(self.timeout_seconds) not in (int, float)
+            or self.timeout_seconds <= 0
+            or type(self.stdout_limit) is not int
+            or self.stdout_limit < 0
+            or type(self.stderr_limit) is not int
+            or self.stderr_limit < 0
+        ):
+            raise TypeError("invalid diagnostic process request")
+
 
 @dataclass(frozen=True)
-class _BoundedProcessObservationV1:
+class DiagnosticProcessObservationV1:
+    """Untrusted bytes returned by client-owned diagnostic execution."""
+
     returncode: int
     stdout: bytes
     stderr: bytes
 
+    def __post_init__(self) -> None:
+        if (
+            type(self.returncode) is not int
+            or not -(1 << 31) <= self.returncode < 1 << 31
+            or type(self.stdout) is not bytes
+            or type(self.stderr) is not bytes
+        ):
+            raise TypeError("invalid diagnostic process observation")
 
-def _run_bounded(
+
+class DiagnosticProcessRunnerV1(Protocol):
+    """Client-owned resource runner; this interface grants no sandbox claim."""
+
+    def run(
+        self,
+        request: DiagnosticProcessRequestV1,
+    ) -> DiagnosticProcessObservationV1: ...
+
+
+def _observe_diagnostic_process_v1(
+    runner: DiagnosticProcessRunnerV1,
+    request: DiagnosticProcessRequestV1,
+) -> DiagnosticProcessObservationV1:
+    try:
+        observed = runner.run(request)
+    except Exception:
+        _fail(OriginReasonV1.VERIFIER_UNAVAILABLE, "diagnostic runner failed")
+    if type(observed) is not DiagnosticProcessObservationV1:
+        _fail(OriginReasonV1.VERIFIER_UNAVAILABLE, "foreign diagnostic observation")
+    if (
+        len(observed.stdout) > request.stdout_limit
+        or len(observed.stderr) > request.stderr_limit
+    ):
+        _fail(OriginReasonV1.VERIFIER_OUTPUT_LIMIT, "diagnostic output exceeded policy")
+    return observed
+
+
+def _run_diagnostic_v1(
+    runner: DiagnosticProcessRunnerV1,
     argv: tuple[str, ...],
     *,
     stdin: bytes | None,
@@ -438,112 +509,20 @@ def _run_bounded(
     timeout_seconds: int | float,
     stdout_limit: int,
     stderr_limit: int,
-) -> _BoundedProcessObservationV1:
-    """Capture verifier output without letting a child allocate past policy."""
-
-    if (
-        type(argv) is not tuple
-        or not argv
-        or any(type(item) is not str or not item for item in argv)
-        or (stdin is not None and type(stdin) is not bytes)
-        or not isinstance(cwd, Path)
-        or type(environment) is not dict
-        or type(pass_fds) is not tuple
-        or type(timeout_seconds) not in (int, float)
-        or timeout_seconds <= 0
-        or type(stdout_limit) is not int
-        or stdout_limit < 0
-        or type(stderr_limit) is not int
-        or stderr_limit < 0
-    ):
-        raise TypeError("invalid bounded process request")
-
-    child: subprocess.Popen[bytes] | None = None
-    input_file = None
-    selector = selectors.DefaultSelector()
-    try:
-        if stdin is None:
-            child_stdin: int | object = subprocess.DEVNULL
-        else:
-            input_file = tempfile.TemporaryFile(mode="w+b")
-            input_file.write(stdin)
-            input_file.seek(0)
-            child_stdin = input_file
-        child = subprocess.Popen(
+) -> DiagnosticProcessObservationV1:
+    return _observe_diagnostic_process_v1(
+        runner,
+        DiagnosticProcessRequestV1(
             argv,
-            stdin=child_stdin,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            cwd=cwd,
-            env=environment,
-            pass_fds=pass_fds,
-            start_new_session=True,
-        )
-        if child.stdout is None or child.stderr is None:
-            _fail(OriginReasonV1.VERIFIER_UNAVAILABLE, "verifier pipes unavailable")
-        stdout_descriptor = child.stdout.fileno()
-        stderr_descriptor = child.stderr.fileno()
-        streams = {
-            stdout_descriptor: (child.stdout, bytearray(), stdout_limit, "stdout"),
-            stderr_descriptor: (child.stderr, bytearray(), stderr_limit, "stderr"),
-        }
-        for descriptor, (stream, _buffer, _limit, _name) in streams.items():
-            os.set_blocking(descriptor, False)
-            selector.register(stream, selectors.EVENT_READ, descriptor)
-
-        deadline = time.monotonic() + float(timeout_seconds)
-        while selector.get_map():
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                _fail(OriginReasonV1.VERIFIER_TIMEOUT, "verifier exceeded deadline")
-            events = selector.select(remaining)
-            if not events:
-                _fail(OriginReasonV1.VERIFIER_TIMEOUT, "verifier exceeded deadline")
-            for key, _mask in events:
-                descriptor = key.data
-                stream, buffer, limit, name = streams[descriptor]
-                try:
-                    chunk = os.read(descriptor, 64 * 1024)
-                except BlockingIOError:
-                    continue
-                if not chunk:
-                    selector.unregister(stream)
-                    stream.close()
-                    continue
-                if len(chunk) > limit - len(buffer):
-                    _fail(
-                        OriginReasonV1.VERIFIER_OUTPUT_LIMIT,
-                        f"verifier {name} exceeded {limit} bytes",
-                    )
-                buffer.extend(chunk)
-
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            _fail(OriginReasonV1.VERIFIER_TIMEOUT, "verifier exceeded deadline")
-        try:
-            returncode = child.wait(timeout=remaining)
-        except subprocess.TimeoutExpired:
-            _fail(OriginReasonV1.VERIFIER_TIMEOUT, "verifier exceeded deadline")
-        stdout = bytes(streams[stdout_descriptor][1])
-        stderr = bytes(streams[stderr_descriptor][1])
-        return _BoundedProcessObservationV1(returncode, stdout, stderr)
-    except OSError:
-        _fail(OriginReasonV1.VERIFIER_UNAVAILABLE, "verifier execution failed")
-    finally:
-        selector.close()
-        if child is not None:
-            try:
-                os.killpg(child.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-            if child.poll() is None:
-                child.wait()
-        if child is not None:
-            for stream in (child.stdout, child.stderr):
-                if stream is not None and not stream.closed:
-                    stream.close()
-        if input_file is not None:
-            input_file.close()
+            stdin,
+            cwd,
+            environment,
+            pass_fds,
+            timeout_seconds,
+            stdout_limit,
+            stderr_limit,
+        ),
+    )
 
 
 def run_gpgv(
@@ -552,8 +531,9 @@ def run_gpgv(
     public_key_armour: bytes,
     *,
     executable: Path,
+    runner: DiagnosticProcessRunnerV1,
 ) -> GpgvProcessObservationV1:
-    """Run gpgv for a historical, path-rechecked diagnostic replay."""
+    """Request a client-owned gpgv diagnostic; never mint execution authority."""
 
     if type(source) is not provenance.SafeSourceArchiveV1:
         raise TypeError("source must be SafeSourceArchiveV1")
@@ -595,7 +575,8 @@ def run_gpgv(
                 "LC_ALL": "C",
                 "TZ": "UTC",
             }
-            version = _run_bounded(
+            version = _run_diagnostic_v1(
+                runner,
                 (descriptor_path, "--version"),
                 stdin=None,
                 cwd=root,
@@ -605,7 +586,8 @@ def run_gpgv(
                 stdout_limit=64 * 1024,
                 stderr_limit=64 * 1024,
             )
-            verified = _run_bounded(
+            verified = _run_diagnostic_v1(
+                runner,
                 (
                     descriptor_path,
                     "--homedir",
@@ -1084,8 +1066,9 @@ def run_git_tree(
     expected_tree: bytes,
     *,
     executable: Path,
+    runner: DiagnosticProcessRunnerV1,
 ) -> GitTreeProcessObservationV1:
-    """Replay an already acquired exact commit/tree without trusting a tag label."""
+    """Parse a client-owned Git diagnostic and recompute every content edge."""
 
     commit = _sha1(expected_commit, "expected Git commit")
     tree = _sha1(expected_tree, "expected Git tree")
@@ -1133,7 +1116,8 @@ def run_git_tree(
             timeout: int = 60,
             stdout_limit: int = 64 * 1024,
         ) -> bytes:
-            process = _run_bounded(
+            process = _run_diagnostic_v1(
+                runner,
                 (executable_path, "-C", str(root), *arguments),
                 stdin=stdin,
                 cwd=root,
@@ -1147,7 +1131,8 @@ def run_git_tree(
                 _fail(OriginReasonV1.VERIFIER_FAILED, "Git command rejected")
             return process.stdout
 
-        version_process = _run_bounded(
+        version_process = _run_diagnostic_v1(
+            runner,
             (executable_path, "--version"),
             stdin=None,
             cwd=root,

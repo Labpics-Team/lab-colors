@@ -163,11 +163,7 @@ def materialize_source_archive(
         or replayed.files != admitted.files
     ):
         _fail(SnapshotReasonV1.FOREIGN_CAPABILITY, "archive replay drift")
-    raw_tar = provenance._decompress_exact(  # same parser as admission
-        admitted.archive_bytes,
-        expected.archive_format,
-        expected.tar_stream_length,
-    )
+    raw_tar = provenance.decompress_locked_tar_v1(expected, admitted)
     expected_files = {item.path: item for item in admitted.files}
     seen: set[str] = set()
     try:

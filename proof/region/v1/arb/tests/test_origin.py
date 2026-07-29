@@ -6,16 +6,15 @@ from __future__ import annotations
 import hashlib
 import gzip
 import io
-import os
 import signal
 import sys
 import tarfile
 import tempfile
-import time
 import unittest
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
+from unittest import mock
 
 
 PROOF = Path(__file__).resolve().parents[2]
@@ -156,73 +155,77 @@ class PublicKeyArmourTests(unittest.TestCase):
                     origin.decode_public_key_armour(mutant)
 
 
-class BoundedProcessTests(unittest.TestCase):
-    def test_verifier_output_is_stopped_at_the_declared_limit(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            for stream in ("stdout", "stderr"):
-                with self.subTest(stream=stream):
-                    statement = (
-                        "import sys;"
-                        f"sys.{stream}.buffer.write(b'x'*65537);"
-                        f"sys.{stream}.flush()"
-                    )
-                    with self.assertRaises(origin.OriginErrorV1) as caught:
-                        origin._run_bounded(
-                            (sys.executable, "-c", statement),
-                            stdin=None,
-                            cwd=Path(temporary),
-                            environment={"LANG": "C"},
-                            pass_fds=(),
-                            timeout_seconds=2,
-                            stdout_limit=1_024,
-                            stderr_limit=1_024,
-                        )
-                    self.assertEqual(
-                        caught.exception.reason,
-                        origin.OriginReasonV1.VERIFIER_OUTPUT_LIMIT,
-                    )
+class _DiagnosticRunner:
+    def __init__(
+        self,
+        *observations: origin.DiagnosticProcessObservationV1 | object,
+    ) -> None:
+        self.observations = list(observations)
+        self.requests: list[origin.DiagnosticProcessRequestV1] = []
 
-    def test_timeout_kills_the_verifier_process_group(self) -> None:
-        if not hasattr(os, "fork"):
-            self.skipTest("POSIX process groups unavailable")
-        with tempfile.TemporaryDirectory() as temporary:
-            pid_path = Path(temporary) / "descendant.pid"
-            statement = """
-import os, pathlib, sys, time
-pid = os.fork()
-if pid == 0:
-    pathlib.Path(sys.argv[1]).write_text(str(os.getpid()), encoding='ascii')
-    time.sleep(30)
-    os._exit(0)
-os._exit(0)
-"""
-            with self.assertRaises(origin.OriginErrorV1) as caught:
-                origin._run_bounded(
-                    (sys.executable, "-c", statement, str(pid_path)),
-                    stdin=None,
-                    cwd=Path(temporary),
-                    environment={"LANG": "C"},
-                    pass_fds=(),
-                    timeout_seconds=0.2,
-                    stdout_limit=1_024,
-                    stderr_limit=1_024,
-                )
-            self.assertEqual(
-                caught.exception.reason,
-                origin.OriginReasonV1.VERIFIER_TIMEOUT,
-            )
-            descendant = int(pid_path.read_text(encoding="ascii"))
-            for _ in range(100):
-                try:
-                    os.kill(descendant, 0)
-                except ProcessLookupError:
-                    break
-                time.sleep(0.01)
-            else:
-                os.kill(descendant, signal.SIGKILL)
-                self.fail("verifier descendant survived timeout cleanup")
+    def run(
+        self,
+        request: origin.DiagnosticProcessRequestV1,
+    ) -> origin.DiagnosticProcessObservationV1:
+        self.requests.append(request)
+        if not self.observations:
+            raise RuntimeError("unexpected diagnostic invocation")
+        return self.observations.pop(0)  # type: ignore[return-value]
 
 
+class DiagnosticProcessBoundaryTests(unittest.TestCase):
+    def test_core_has_no_builtin_process_or_process_group_runner(self) -> None:
+        self.assertFalse(hasattr(origin, "_run_bounded"))
+        self.assertFalse(hasattr(origin, "subprocess"))
+        self.assertFalse(hasattr(origin, "selectors"))
+
+    def test_client_owned_diagnostic_bytes_remain_bounded_and_untrusted(self) -> None:
+        request = origin.DiagnosticProcessRequestV1(
+            ("verifier", "--version"),
+            None,
+            Path("/"),
+            {"LANG": "C"},
+            (),
+            1,
+            4,
+            4,
+        )
+        cases = (
+            (
+                _DiagnosticRunner(
+                    origin.DiagnosticProcessObservationV1(0, b"12345", b"")
+                ),
+                origin.OriginReasonV1.VERIFIER_OUTPUT_LIMIT,
+            ),
+            (
+                _DiagnosticRunner(SimpleNamespace(returncode=0, stdout=b"", stderr=b"")),
+                origin.OriginReasonV1.VERIFIER_UNAVAILABLE,
+            ),
+        )
+        for runner, reason in cases:
+            with self.subTest(reason=reason):
+                with self.assertRaises(origin.OriginErrorV1) as caught:
+                    origin._observe_diagnostic_process_v1(runner, request)
+                self.assertEqual(caught.exception.reason, reason)
+
+    def test_diagnostic_runner_receives_every_resource_bound_explicitly(self) -> None:
+        observed = origin.DiagnosticProcessObservationV1(0, b"ok", b"")
+        runner = _DiagnosticRunner(observed)
+        request = origin.DiagnosticProcessRequestV1(
+            ("verifier", "arg"),
+            b"input",
+            Path("/tmp"),
+            {"LANG": "C", "TZ": "UTC"},
+            (7,),
+            3,
+            8,
+            9,
+        )
+
+        actual = origin._observe_diagnostic_process_v1(runner, request)
+
+        self.assertIs(actual, observed)
+        self.assertEqual(runner.requests, [request])
 class GpgStatusTests(unittest.TestCase):
     FINGERPRINT = bytes.fromhex("343c2ff0fbee5ec2edbef399f3599ff828c67298")
 
@@ -340,12 +343,11 @@ class GpgStatusTests(unittest.TestCase):
         expected, admitted = signed_source_fixture()
         with tempfile.TemporaryDirectory() as temporary:
             executable = Path(temporary) / "gpgv"
-            executable.write_bytes(
-                b"#!/bin/sh\n"
-                b"if [ \"$1\" = --version ]; then printf 'gpgv fixture\\n'; exit 0; fi\n"
-                b"kill -SEGV $$\n"
+            executable.write_bytes(b"diagnostic executable bytes")
+            runner = _DiagnosticRunner(
+                origin.DiagnosticProcessObservationV1(0, b"gpgv fixture\n", b""),
+                origin.DiagnosticProcessObservationV1(-signal.SIGSEGV, b"", b""),
             )
-            executable.chmod(0o755)
 
             with self.assertRaises(origin.OriginErrorV1) as caught:
                 origin.run_gpgv(
@@ -353,6 +355,7 @@ class GpgStatusTests(unittest.TestCase):
                     b"signature",
                     (ARB / "keys/gmp.asc").read_bytes(),
                     executable=executable,
+                    runner=runner,
                 )
         self.assertEqual(caught.exception.reason, origin.OriginReasonV1.VERIFIER_FAILED)
 

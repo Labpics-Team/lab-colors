@@ -10,7 +10,10 @@ import os
 import signal
 import struct
 import sys
+import tempfile
+import threading
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path
 from unittest import mock
@@ -36,7 +39,7 @@ def _static_elf(*, interpreter: bool = False, needed: bool = False) -> bytes:
             struct.pack("<IIQQQQQQ", 3, 4, 0, 0, 0, 0, 0, 1)
         )
     if needed:
-        dynamic_offset = 64 + 56 * 2
+        dynamic_offset = 64 + 56 * (len(program_headers) + 1)
         dynamic = struct.pack("<QQQQ", 1, 1, 0, 0)
         program_headers.append(
             struct.pack(
@@ -73,6 +76,14 @@ def _static_elf(*, interpreter: bool = False, needed: bool = False) -> bytes:
         0,
     )
     return bytes(body) + b"".join(program_headers) + dynamic
+
+
+def _program_headers(elf: bytes) -> tuple[tuple[int, ...], ...]:
+    count = struct.unpack_from("<H", elf, 56)[0]
+    return tuple(
+        struct.unpack_from("<IIQQQQQQ", elf, 64 + 56 * index)
+        for index in range(count)
+    )
 
 
 def _linux_executable_elf(code: bytes) -> bytes:
@@ -114,6 +125,17 @@ def _linux_executable_elf(code: bytes) -> bytes:
 _LINUX_EXIT_ZERO = bytes.fromhex("bf00000000b83c0000000f05")
 _LINUX_BUSY_LOOP = bytes.fromhex("ebfe")
 _LINUX_SIGILL = bytes.fromhex("0f0b")
+_LINUX_FOREIGN_PRLIMIT = bytes.fromhex(
+    "48c7c02e010000"  # mov rax, 302 (prlimit64)
+    "48c7c701000000"  # mov rdi, 1 (foreign PID)
+    "4831f6"          # xor rsi, rsi
+    "4831d2"          # xor rdx, rdx
+    "4d31d2"          # xor r10, r10
+    "0f05"            # syscall
+    "bf4d000000"      # mov edi, 77 (must be unreachable)
+    "b83c000000"      # mov eax, 60 (exit)
+    "0f05"            # syscall
+)
 _LINUX_ECHO_FOUR = bytes.fromhex(
     "4883ec0831c031ff4889e6ba040000000f05"
     "b801000000bf010000004889e6ba040000000f05"
@@ -174,15 +196,23 @@ class _Backend:
     ) -> None:
         self.probe_result = probe_result
         self.run_result = run_result
-        self.received: list[executor.ExecutionRequestV1] = []
+        self.probe_calls = 0
+        self.received: list[
+            tuple[executor.ExecutionRequestV1, executor.SupportedV1]
+        ] = []
 
-    def probe(self) -> executor.CapabilityReportV1:
+    def probe(self, guard: object) -> executor.CapabilityReportV1:
+        self.probe_calls += 1
+        if not guard.is_current():  # type: ignore[attr-defined]
+            raise AssertionError("controller supplied a stale probe guard")
         return self.probe_result
 
     def run(
-        self, request: executor.ExecutionRequestV1
+        self,
+        request: executor.ExecutionRequestV1,
+        capability: executor.SupportedV1,
     ) -> executor.ExecutionResultV1:
-        self.received.append(request)
+        self.received.append((request, capability))
         if self.run_result is None:
             raise AssertionError("unsupported backend must not be run")
         return self.run_result
@@ -274,12 +304,45 @@ class _ProbeOperations(_MemfdOperations):
 
 class _LateThreadOperations(_ProbeOperations):
     def probe_single_threaded(self) -> None:
+        self.probes.append("single_threaded")
         raise OSError(errno.EBUSY, "late thread")
+
+
+class _OverlapAfterSingleThreadOperations(_ProbeOperations):
+    def __init__(self) -> None:
+        super().__init__()
+        self.single_thread_passed = threading.Event()
+        self.release_outer_probe = threading.Event()
+        self.blocked_once = False
+
+    def probe_single_threaded(self) -> None:
+        super().probe_single_threaded()
+        if not self.blocked_once:
+            self.blocked_once = True
+            self.single_thread_passed.set()
+            if not self.release_outer_probe.wait(timeout=1):
+                raise AssertionError("overlap test did not release the outer probe")
+
+
+class _SecondSingleThreadFailureOperations(_ProbeOperations):
+    def __init__(self) -> None:
+        super().__init__()
+        self.single_thread_probes = 0
+
+    def probe_single_threaded(self) -> None:
+        super().probe_single_threaded()
+        self.single_thread_probes += 1
+        if self.single_thread_probes == 2:
+            raise OSError(errno.EBUSY, "thread appeared before fork")
 
 
 class _CgroupFactory:
     def __init__(self) -> None:
+        self.observer_budgets: list[Path] = []
         self.probed: list[Path] = []
+
+    def probe_observer_task_budget(self, parent: Path) -> None:
+        self.observer_budgets.append(parent)
 
     def probe(self, parent: Path) -> None:
         self.probed.append(parent)
@@ -311,6 +374,17 @@ class _ReadbackCgroup(executor._CgroupV2V1):
 
 
 class RequestAdmissionTests(unittest.TestCase):
+    def test_combined_dynamic_fixture_points_after_its_full_header_table(self) -> None:
+        elf = _static_elf(interpreter=True, needed=True)
+        headers = _program_headers(elf)
+        dynamic = next(header for header in headers if header[0] == 2)
+
+        self.assertEqual(dynamic[2], 64 + 56 * len(headers))
+        self.assertEqual(
+            elf[dynamic[2] : dynamic[2] + dynamic[5]],
+            struct.pack("<QQQQ", 1, 1, 0, 0),
+        )
+
     def assert_rejected(
         self,
         reason: executor.RequestReasonV1,
@@ -390,6 +464,12 @@ class RequestAdmissionTests(unittest.TestCase):
             executable=_static_elf(needed=True),
         )
 
+    def test_cross_module_verifiers_are_explicit_versioned_api(self) -> None:
+        self.assertTrue(callable(executor.require_static_x86_64_elf_v1))
+        self.assertTrue(callable(executor.result_matches_request_v1))
+        self.assertFalse(hasattr(executor, "_require_static_x86_64_elf"))
+        self.assertFalse(hasattr(executor, "_result_matches_request"))
+
 
 class CapabilityAndExecutionTests(unittest.TestCase):
     def test_non_linux_host_fails_closed_before_any_run(self) -> None:
@@ -398,7 +478,8 @@ class CapabilityAndExecutionTests(unittest.TestCase):
             platform_name="darwin",
             machine_name="arm64",
         )
-        report = native.probe()
+        controller = executor.ControlledExecutorV1(native)
+        report = controller.probe()
 
         self.assertIs(type(report), executor.UnsupportedV1)
         self.assertEqual(
@@ -410,7 +491,7 @@ class CapabilityAndExecutionTests(unittest.TestCase):
                 ),
             ),
         )
-        result = executor.ControlledExecutorV1(native).execute(_request())
+        result = controller.execute(_request())
         self.assertEqual(result, report)
 
     def test_linux_without_an_explicit_delegated_cgroup_is_unsupported(self) -> None:
@@ -419,7 +500,7 @@ class CapabilityAndExecutionTests(unittest.TestCase):
             platform_name="linux",
             machine_name="x86_64",
         )
-        report = native.probe()
+        report = executor.ControlledExecutorV1(native).probe()
 
         self.assertIs(type(report), executor.UnsupportedV1)
         self.assertIn(
@@ -441,7 +522,7 @@ class CapabilityAndExecutionTests(unittest.TestCase):
             cgroup_factory=cgroups,
         )
 
-        report = native.probe()
+        report = executor.ControlledExecutorV1(native).probe()
 
         self.assertEqual(
             report,
@@ -457,44 +538,429 @@ class CapabilityAndExecutionTests(unittest.TestCase):
                 "single_threaded",
                 "execveat",
                 "close_range",
+                "single_threaded",
                 "namespaces",
+                "single_threaded",
                 "seccomp",
             ],
         )
+        self.assertEqual(
+            cgroups.observer_budgets,
+            [Path("/delegated-proof-cgroup")],
+        )
         self.assertEqual(cgroups.probed, [Path("/delegated-proof-cgroup")])
 
-    def test_exact_request_is_forwarded_only_after_a_successful_probe(self) -> None:
+    def test_overlap_after_single_thread_gate_cancels_before_fork_and_revokes_authority(self) -> None:
+        operations = _OverlapAfterSingleThreadOperations()
+        native = executor.NativeLinuxBackendV1(
+            cgroup_parent="/delegated-proof-cgroup",
+            platform_name="linux",
+            machine_name="x86_64",
+            operations=operations,
+            cgroup_factory=_CgroupFactory(),
+        )
+        controller = executor.ControlledExecutorV1(native)
+        reports: list[executor.CapabilityReportV1] = []
+        worker = threading.Thread(
+            target=lambda: reports.append(controller.probe()),
+            daemon=True,
+        )
+
+        worker.start()
+        self.assertTrue(
+            operations.single_thread_passed.wait(timeout=1),
+            "outer probe did not reach the single-thread gate",
+        )
+        overlap = controller.probe()
+        operations.release_outer_probe.set()
+        worker.join(timeout=1)
+
+        self.assertFalse(worker.is_alive(), "overlapping probe deadlocked")
+        self.assertEqual(len(reports), 1)
+        invalidated = executor.UnsupportedV1(
+            (
+                executor.CapabilityFailureV1(
+                    executor.CapabilityReasonV1.OBSERVATION_INVALIDATED,
+                    errno.EBUSY,
+                ),
+            )
+        )
+        self.assertEqual(overlap, invalidated)
+        self.assertEqual(reports[0], invalidated)
+        self.assertEqual(operations.probes, ["standard_fds", "single_threaded"])
+        self.assertIsNone(controller._issued_capability)
+        self.assertEqual(
+            controller.probe(),
+            executor.SupportedV1(
+                "linux-x86_64",
+                executor.SANDBOX_POLICY_RELEASE_V1,
+            ),
+        )
+
+    def test_failed_single_thread_gate_suppresses_every_forking_probe(self) -> None:
+        operations = _LateThreadOperations()
+        cgroups = _CgroupFactory()
+        native = executor.NativeLinuxBackendV1(
+            cgroup_parent="/delegated-proof-cgroup",
+            platform_name="linux",
+            machine_name="x86_64",
+            operations=operations,
+            cgroup_factory=cgroups,
+        )
+
+        report = executor.ControlledExecutorV1(native).probe()
+
+        self.assertEqual(
+            report,
+            executor.UnsupportedV1(
+                (
+                    executor.CapabilityFailureV1(
+                        executor.CapabilityReasonV1.OBSERVER_NOT_SINGLE_THREADED,
+                        errno.EBUSY,
+                    ),
+                )
+            ),
+        )
+        self.assertEqual(operations.probes, ["standard_fds", "single_threaded"])
+        self.assertEqual(cgroups.observer_budgets, [])
+        self.assertEqual(cgroups.probed, [])
+
+    def test_second_single_thread_gate_suppresses_forking_probe(self) -> None:
+        operations = _SecondSingleThreadFailureOperations()
+        native = executor.NativeLinuxBackendV1(
+            cgroup_parent="/delegated-proof-cgroup",
+            platform_name="linux",
+            machine_name="x86_64",
+            operations=operations,
+            cgroup_factory=_CgroupFactory(),
+        )
+
+        report = executor.ControlledExecutorV1(native).probe()
+
+        self.assertEqual(
+            report,
+            executor.UnsupportedV1(
+                (
+                    executor.CapabilityFailureV1(
+                        executor.CapabilityReasonV1.OBSERVER_NOT_SINGLE_THREADED,
+                        errno.EBUSY,
+                    ),
+                )
+            ),
+        )
+        self.assertEqual(
+            operations.probes,
+            ["standard_fds", "single_threaded", "execveat", "close_range", "single_threaded"],
+        )
+
+    def test_one_probe_capability_is_forwarded_to_exactly_one_run(self) -> None:
+        capability = executor.SupportedV1(
+            "linux-x86_64",
+            executor.SANDBOX_POLICY_RELEASE_V1,
+        )
         expected = executor.CompletedV1(
             binary_sha256=hashlib.sha256(_static_elf()).digest(),
             stdout=b"answer",
             stderr=b"",
         )
-        backend = _Backend(
-            executor.SupportedV1("linux-x86_64", executor.SANDBOX_POLICY_RELEASE_V1),
-            expected,
-        )
+        backend = _Backend(capability, expected)
         request = _request()
 
         actual = executor.ControlledExecutorV1(backend).execute(request)
 
         self.assertEqual(actual, expected)
-        self.assertEqual(backend.received, [request])
+        self.assertEqual(backend.probe_calls, 1)
+        self.assertEqual(len(backend.received), 1)
+        received_request, received_capability = backend.received[0]
+        self.assertIs(received_request, request)
+        self.assertEqual(received_capability, capability)
+        self.assertIsNot(received_capability, capability)
+
+    def test_preprobed_capability_is_consumed_without_a_second_probe(self) -> None:
+        capability = executor.SupportedV1(
+            "linux-x86_64",
+            executor.SANDBOX_POLICY_RELEASE_V1,
+        )
+        request = _request()
+        expected = executor.CompletedV1(
+            binary_sha256=hashlib.sha256(request.executable).digest(),
+            stdout=b"answer",
+            stderr=b"",
+        )
+        backend = _Backend(capability, expected)
+        controller = executor.ControlledExecutorV1(backend)
+        issued = controller.probe()
+        self.assertEqual(issued, capability)
+        self.assertIsNot(issued, capability)
+
+        with mock.patch.object(
+            backend,
+            "probe",
+            side_effect=AssertionError("execute must consume the supplied observation"),
+        ):
+            actual = controller.execute(request, issued)
+
+        self.assertEqual(actual, expected)
+        self.assertEqual(backend.probe_calls, 1)
+        self.assertEqual(
+            controller.execute(request, issued),
+            executor.ObserverFailureV1(executor.ObserverReasonV1.PROBE_FAILED),
+        )
+
+    def test_backend_reused_report_cannot_renew_a_stale_controller_lease(self) -> None:
+        backend_report = executor.SupportedV1(
+            "linux-x86_64",
+            executor.SANDBOX_POLICY_RELEASE_V1,
+        )
+        request = _request()
+        expected = executor.CompletedV1(
+            binary_sha256=hashlib.sha256(request.executable).digest(),
+            stdout=b"answer",
+            stderr=b"",
+        )
+        backend = _Backend(backend_report, expected)
+        controller = executor.ControlledExecutorV1(backend)
+
+        stale = controller.probe()
+        fresh = controller.probe()
+
+        self.assertIs(type(stale), executor.SupportedV1)
+        self.assertIs(type(fresh), executor.SupportedV1)
+        self.assertIsNot(stale, fresh)
+        self.assertEqual(
+            controller.execute(request, stale),
+            executor.ObserverFailureV1(executor.ObserverReasonV1.PROBE_FAILED),
+        )
+        self.assertEqual(backend.received, [])
+        self.assertEqual(controller.execute(request, fresh), expected)
+        self.assertEqual(len(backend.received), 1)
+
+    def test_controller_capability_cannot_be_duplicated_across_fork(self) -> None:
+        backend_report = executor.SupportedV1(
+            "linux-x86_64",
+            executor.SANDBOX_POLICY_RELEASE_V1,
+        )
+        request = _request()
+        expected = executor.CompletedV1(
+            binary_sha256=hashlib.sha256(request.executable).digest(),
+            stdout=b"answer",
+            stderr=b"",
+        )
+        backend = _Backend(backend_report, expected)
+        controller = executor.ControlledExecutorV1(backend)
+        capability = controller.probe()
+        read_descriptor, write_descriptor = os.pipe()
+
+        child = os.fork()
+        if child == 0:
+            os.close(read_descriptor)
+            try:
+                result = controller.execute(request, capability)
+                payload = (
+                    b"blocked"
+                    if result
+                    == executor.ObserverFailureV1(
+                        executor.ObserverReasonV1.PROBE_FAILED
+                    )
+                    else b"executed"
+                )
+                os.write(write_descriptor, payload)
+                status = 0
+            except BaseException:
+                status = 1
+            finally:
+                os.close(write_descriptor)
+            os._exit(status)
+
+        os.close(write_descriptor)
+        try:
+            payload = os.read(read_descriptor, 32)
+        finally:
+            os.close(read_descriptor)
+        waited, status = os.waitpid(child, 0)
+
+        self.assertEqual(waited, child)
+        self.assertTrue(os.WIFEXITED(status))
+        self.assertEqual(os.WEXITSTATUS(status), 0)
+        self.assertEqual(payload, b"blocked")
+        self.assertEqual(controller.execute(request, capability), expected)
+        self.assertEqual(len(backend.received), 1)
+
+    def test_capability_cannot_cross_a_backend_replacement(self) -> None:
+        request = _request()
+        capability = executor.SupportedV1(
+            "linux-x86_64",
+            executor.SANDBOX_POLICY_RELEASE_V1,
+        )
+        expected = executor.CompletedV1(
+            binary_sha256=hashlib.sha256(request.executable).digest(),
+            stdout=b"answer",
+            stderr=b"",
+        )
+        original = _Backend(capability, expected)
+        replacement = _Backend(capability, expected)
+        controller = executor.ControlledExecutorV1(original)
+        issued = controller.probe()
+        self.assertEqual(issued, capability)
+        self.assertIsNot(issued, capability)
+        controller._backend = replacement
+
+        result = controller.execute(request, issued)
+
+        self.assertEqual(
+            result,
+            executor.ObserverFailureV1(executor.ObserverReasonV1.PROBE_FAILED),
+        )
+        self.assertEqual(original.received, [])
+        self.assertEqual(replacement.received, [])
+
+    def test_native_run_consumes_capability_without_reprobe_and_rejects_foreign(self) -> None:
+        operations = _ProbeOperations()
+        native = executor.NativeLinuxBackendV1(
+            cgroup_parent="/delegated-proof-cgroup",
+            platform_name="linux",
+            machine_name="x86_64",
+            operations=operations,
+            cgroup_factory=_CgroupFactory(),
+        )
+        controller = executor.ControlledExecutorV1(native)
+        capability = controller.probe()
+        self.assertIs(type(capability), executor.SupportedV1)
+        creates_after_probe = operations.events.count("create")
+        request = _request(cwd=b"/definitely-missing-labcolors-cwd")
+
+        with mock.patch.object(
+            native,
+            "probe",
+            side_effect=AssertionError("run must consume, not repeat, capability probe"),
+        ):
+            result = controller.execute(request, capability)
+
+        self.assertIs(type(result), executor.SandboxSetupFailedV1)
+        self.assertEqual(result.stage, executor.SetupStageV1.CWD)
+        self.assertEqual(operations.events.count("create"), creates_after_probe + 1)
+
+        equal_but_foreign = executor.SupportedV1(
+            capability.platform,
+            capability.sandbox_policy_release,
+        )
+        self.assertEqual(equal_but_foreign, capability)
+        self.assertIsNot(equal_but_foreign, capability)
+        for invalid in (capability, equal_but_foreign, object()):
+            with self.subTest(invalid=invalid):
+                with mock.patch.object(
+                    executor,
+                    "_seal_executable_v1",
+                    side_effect=AssertionError("foreign capability must not execute"),
+                ):
+                    rejected = controller.execute(  # type: ignore[arg-type]
+                        request,
+                        invalid,
+                    )
+                self.assertEqual(
+                    rejected,
+                    executor.ObserverFailureV1(
+                        executor.ObserverReasonV1.PROBE_FAILED,
+                    ),
+                )
+
+    def test_native_capability_has_one_atomic_consumer(self) -> None:
+        operations = _ProbeOperations()
+        native = executor.NativeLinuxBackendV1(
+            cgroup_parent="/delegated-proof-cgroup",
+            platform_name="linux",
+            machine_name="x86_64",
+            operations=operations,
+            cgroup_factory=_CgroupFactory(),
+        )
+        controller = executor.ControlledExecutorV1(native)
+        capability = controller.probe()
+        self.assertIs(type(capability), executor.SupportedV1)
+        creates_after_probe = operations.events.count("create")
+        request = _request(cwd=b"/definitely-missing-labcolors-cwd")
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            results = tuple(
+                pool.map(
+                    lambda _index: controller.execute(request, capability),
+                    range(2),
+                )
+            )
+
+        self.assertEqual(operations.events.count("create"), creates_after_probe + 1)
+        self.assertEqual(
+            sum(type(result) is executor.SandboxSetupFailedV1 for result in results),
+            1,
+        )
+        self.assertEqual(
+            sum(
+                result
+                == executor.ObserverFailureV1(executor.ObserverReasonV1.PROBE_FAILED)
+                for result in results
+            ),
+            1,
+        )
+
+    def test_failed_native_probe_revokes_earlier_capability(self) -> None:
+        native = executor.NativeLinuxBackendV1(
+            cgroup_parent="/delegated-proof-cgroup",
+            platform_name="linux",
+            machine_name="x86_64",
+            operations=_ProbeOperations(),
+            cgroup_factory=_CgroupFactory(),
+        )
+        controller = executor.ControlledExecutorV1(native)
+        stale = controller.probe()
+        self.assertIs(type(stale), executor.SupportedV1)
+        native._platform_name = "darwin"
+
+        failed = controller.probe()
+
+        self.assertIs(type(failed), executor.UnsupportedV1)
+        with mock.patch.object(
+            executor,
+            "_seal_executable_v1",
+            side_effect=AssertionError("failed probe must revoke earlier capability"),
+        ):
+            rejected = controller.execute(_request(), stale)
+        self.assertEqual(
+            rejected,
+            executor.ObserverFailureV1(executor.ObserverReasonV1.PROBE_FAILED),
+        )
 
     def test_untrusted_backend_cannot_return_unbounded_output(self) -> None:
-        backend = _Backend(
-            executor.SupportedV1("linux-x86_64", executor.SANDBOX_POLICY_RELEASE_V1),
+        class ExplosiveEquality:
+            def __eq__(self, _other: object) -> bool:
+                raise RuntimeError("comparison escaped")
+
+        invalid_results = (
             executor.CompletedV1(
                 binary_sha256=b"x" * 32,
                 stdout=b"17 bytes overflow",
                 stderr=b"",
             ),
+            executor.CompletedV1(ExplosiveEquality(), b"", b""),
+            executor.ObserverFailureV1(ExplosiveEquality()),
         )
+        for invalid in invalid_results:
+            with self.subTest(invalid=type(invalid).__name__):
+                self.assertFalse(executor.result_matches_request_v1(invalid, _request()))
+                backend = _Backend(
+                    executor.SupportedV1(
+                        "linux-x86_64",
+                        executor.SANDBOX_POLICY_RELEASE_V1,
+                    ),
+                    invalid,
+                )
 
-        result = executor.ControlledExecutorV1(backend).execute(_request())
+                result = executor.ControlledExecutorV1(backend).execute(_request())
 
-        self.assertIs(type(result), executor.ObserverFailureV1)
-        self.assertEqual(result.reason, executor.ObserverReasonV1.BACKEND_CONTRACT)
-        self.assertFalse(hasattr(result, "stdout"))
+                self.assertIs(type(result), executor.ObserverFailureV1)
+                self.assertEqual(
+                    result.reason,
+                    executor.ObserverReasonV1.BACKEND_CONTRACT,
+                )
+                self.assertFalse(hasattr(result, "stdout"))
 
     def test_process_failures_remain_distinct_from_evaluator_resource_outcome(self) -> None:
         digest = hashlib.sha256(_static_elf()).digest()
@@ -567,6 +1033,20 @@ class SameObjectAndObserverProtocolTests(unittest.TestCase):
         for syscall_number in (2, 41, 56, 257, 319):
             with self.subTest(syscall_number=syscall_number):
                 self.assertEqual(self._seccomp_verdict(program, syscall_number), killed)
+        self.assertEqual(
+            self._seccomp_verdict(program, 302, arguments=(0, 0, 0, 0, 0, 0)),
+            allowed,
+        )
+        for foreign_pid in (1, 42, 0xFFFFFFFFFFFFFFFF):
+            with self.subTest(prlimit_pid=foreign_pid):
+                self.assertEqual(
+                    self._seccomp_verdict(
+                        program,
+                        302,
+                        arguments=(foreign_pid, 0, 0, 0, 0, 0),
+                    ),
+                    killed,
+                )
         self.assertEqual(
             self._seccomp_verdict(
                 program,
@@ -698,6 +1178,34 @@ class SameObjectAndObserverProtocolTests(unittest.TestCase):
                         pids_max=1,
                     )
                 self.assertEqual(caught.exception.errno, errno.EPROTO)
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            parent = root / "proof"
+            observer = parent / "observer"
+            observer.mkdir(parents=True)
+            (parent / "pids.max").write_bytes(b"2\n")
+            (parent / "pids.current").write_bytes(b"1\n")
+            (observer / "pids.current").write_bytes(b"1\n")
+            with mock.patch.object(
+                executor,
+                "_current_unified_cgroup_v1",
+                return_value=observer,
+            ):
+                executor._CgroupV2V1.probe_observer_task_budget(parent)
+                for path, hostile in (
+                    (parent / "pids.max", b"3\n"),
+                    (parent / "pids.current", b"2\n"),
+                    (observer / "pids.current", b"2\n"),
+                ):
+                    original = path.read_bytes()
+                    path.write_bytes(hostile)
+                    with self.subTest(path=path.name, hostile=hostile):
+                        with self.assertRaises(OSError):
+                            executor._CgroupV2V1.probe_observer_task_budget(
+                                parent
+                            )
+                    path.write_bytes(original)
 
     def test_observer_initialization_failure_closes_fds_and_reaps_child(self) -> None:
         stdin_read, stdin_write = os.pipe()
@@ -845,7 +1353,8 @@ class NativeLinuxIntegrationTests(unittest.TestCase):
         raw_parent = os.environ["LABCOLORS_EXECUTOR_CGROUP_V1"]
         self.cgroup_parent = Path(raw_parent)
         self.backend = executor.NativeLinuxBackendV1(self.cgroup_parent)
-        report = self.backend.probe()
+        self.controller = executor.ControlledExecutorV1(self.backend)
+        report = self.controller.probe()
         self.assertEqual(
             report,
             executor.SupportedV1(
@@ -892,7 +1401,7 @@ class NativeLinuxIntegrationTests(unittest.TestCase):
 
     def test_real_kernel_success_output_timeout_signal_oom_and_cleanup(self) -> None:
         before = self._owned_cgroups()
-        controlled = executor.ControlledExecutorV1(self.backend)
+        controlled = self.controller
 
         exit_request = self._native_request(_LINUX_EXIT_ZERO)
         exit_result = controlled.execute(exit_request)
@@ -957,6 +1466,11 @@ class NativeLinuxIntegrationTests(unittest.TestCase):
             ),
         )
 
+        foreign_prlimit_request = self._native_request(_LINUX_FOREIGN_PRLIMIT)
+        foreign_prlimit_result = controlled.execute(foreign_prlimit_request)
+        self.assertIs(type(foreign_prlimit_result), executor.SignaledV1)
+        self.assertEqual(foreign_prlimit_result.signal_number, signal.SIGSYS)
+
         oom_request = self._native_request(
             _LINUX_ALLOCATE_UNTIL_OOM,
             timeout_ns=5_000_000_000,
@@ -965,11 +1479,6 @@ class NativeLinuxIntegrationTests(unittest.TestCase):
         oom_result = controlled.execute(oom_request)
         self.assertIs(type(oom_result), executor.OomKilledV1)
         self.assertGreater(oom_result.oom_kill_delta, 0)
-
-        setup_request = _request(cwd=b"/")
-        setup_result = controlled.execute(setup_request)
-        self.assertIs(type(setup_result), executor.SandboxSetupFailedV1)
-        self.assertEqual(setup_result.stage, executor.SetupStageV1.EXECVEAT)
 
         self.assertEqual(self._owned_cgroups(), before)
 

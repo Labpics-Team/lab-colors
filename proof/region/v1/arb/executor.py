@@ -21,11 +21,12 @@ import selectors
 import signal
 import struct
 import sys
+import threading
 import time
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Protocol, TypeAlias
+from typing import Callable, Protocol, TypeAlias
 
 
 SANDBOX_POLICY_RELEASE_V1 = "labcolors.arb.executor.linux-x86_64.v1"
@@ -55,6 +56,7 @@ _AT_EMPTY_PATH = 0x1000
 _SYS_SECCOMP_X86_64 = 317
 _SYS_EXECVEAT_X86_64 = 322
 _SYS_CLOSE_RANGE_X86_64 = 436
+_SYS_PRLIMIT64_X86_64 = 302
 
 _CLONE_NEWNS = 0x00020000
 _CLONE_NEWUSER = 0x10000000
@@ -115,6 +117,8 @@ class CapabilityReasonV1(str, Enum):
     SECCOMP_FILTER_UNAVAILABLE = "seccomp_filter_unavailable"
     STANDARD_FDS_UNAVAILABLE = "standard_fds_unavailable"
     OBSERVER_NOT_SINGLE_THREADED = "observer_not_single_threaded"
+    OBSERVER_TASK_BUDGET_UNAVAILABLE = "observer_task_budget_unavailable"
+    OBSERVATION_INVALIDATED = "observation_invalidated"
     KERNEL_API_UNAVAILABLE = "kernel_api_unavailable"
 
 
@@ -157,6 +161,17 @@ class SupportedV1:
 
 
 CapabilityReportV1: TypeAlias = SupportedV1 | UnsupportedV1
+
+
+def _invalidated_capability_report_v1() -> UnsupportedV1:
+    return UnsupportedV1(
+        (
+            CapabilityFailureV1(
+                CapabilityReasonV1.OBSERVATION_INVALIDATED,
+                errno_module.EBUSY,
+            ),
+        )
+    )
 
 
 @dataclass(frozen=True)
@@ -211,7 +226,7 @@ class ExecutionRequestV1:
             _request_fail(RequestReasonV1.WRONG_TYPE, "executable")
         if not self.executable or len(self.executable) > self.limits.max_executable_bytes:
             _request_fail(RequestReasonV1.LIMIT_EXCEEDED, "executable")
-        _require_static_x86_64_elf(self.executable)
+        require_static_x86_64_elf_v1(self.executable)
 
         if type(self.argv) is not tuple or not self.argv:
             _request_fail(RequestReasonV1.WRONG_TYPE, "argv")
@@ -273,7 +288,9 @@ def _require_bytes_without_nul(value: object, field: str) -> None:
         _request_fail(RequestReasonV1.NUL_BYTE, field)
 
 
-def _require_static_x86_64_elf(data: bytes) -> None:
+def require_static_x86_64_elf_v1(data: bytes) -> None:
+    if type(data) is not bytes:
+        _request_fail(RequestReasonV1.WRONG_TYPE, "executable")
     if len(data) < _ELF_HEADER.size:
         _request_fail(RequestReasonV1.INVALID_ELF, "executable")
     try:
@@ -467,21 +484,83 @@ ExecutionResultV1: TypeAlias = (
 )
 
 
-class ExecutionBackendV1(Protocol):
-    def probe(self) -> CapabilityReportV1: ...
+@dataclass(frozen=True)
+class _ProbeGuardV1:
+    """One controller-owned lease; a backend may observe but never renew it."""
 
-    def run(self, request: ExecutionRequestV1) -> ExecutionResultV1: ...
+    _is_current: Callable[[], bool]
+
+    def is_current(self) -> bool:
+        try:
+            return self._is_current()
+        except Exception:
+            return False
+
+
+class ExecutionBackendV1(Protocol):
+    def probe(self, guard: _ProbeGuardV1) -> CapabilityReportV1: ...
+
+    def run(
+        self,
+        request: ExecutionRequestV1,
+        capability: SupportedV1,
+    ) -> ExecutionResultV1: ...
 
 
 class ControlledExecutorV1:
     def __init__(self, backend: ExecutionBackendV1 | None = None) -> None:
         self._backend = backend if backend is not None else NativeLinuxBackendV1()
+        # A fork snapshots Python locks and object identity, so an inherited
+        # controller cannot share the creator process's one-shot authority.
+        self._owner_pid = os.getpid()
+        self._capability_lock = threading.Lock()
+        self._capability_generation = 0
+        self._capability_conflict_generation = 0
+        self._active_capability_probes = 0
+        self._issued_capability: SupportedV1 | None = None
+        self._issued_backend: ExecutionBackendV1 | None = None
+
+    def _probe_is_current_v1(
+        self,
+        generation: int,
+        conflict_generation: int,
+        backend: ExecutionBackendV1,
+    ) -> bool:
+        with self._capability_lock:
+            return (
+                os.getpid() == self._owner_pid
+                and generation == self._capability_generation
+                and conflict_generation == self._capability_conflict_generation
+                and backend is self._backend
+            )
 
     def probe(self) -> CapabilityReportV1:
+        if os.getpid() != self._owner_pid:
+            return _invalidated_capability_report_v1()
+        with self._capability_lock:
+            self._capability_generation += 1
+            generation = self._capability_generation
+            if self._active_capability_probes != 0:
+                self._capability_conflict_generation += 1
+                self._issued_capability = None
+                self._issued_backend = None
+                return _invalidated_capability_report_v1()
+            conflict_generation = self._capability_conflict_generation
+            self._active_capability_probes += 1
+            self._issued_capability = None
+            self._issued_backend = None
+            backend = self._backend
+        guard = _ProbeGuardV1(
+            lambda: self._probe_is_current_v1(
+                generation,
+                conflict_generation,
+                backend,
+            )
+        )
         try:
-            report = self._backend.probe()
+            report = backend.probe(guard)
         except Exception:
-            return UnsupportedV1(
+            report = UnsupportedV1(
                 (
                     CapabilityFailureV1(
                         CapabilityReasonV1.KERNEL_API_UNAVAILABLE,
@@ -489,8 +568,15 @@ class ControlledExecutorV1:
                     ),
                 )
             )
+        except BaseException:
+            with self._capability_lock:
+                self._active_capability_probes -= 1
+                self._capability_conflict_generation += 1
+                self._issued_capability = None
+                self._issued_backend = None
+            raise
         if type(report) not in (SupportedV1, UnsupportedV1):
-            return UnsupportedV1(
+            report = UnsupportedV1(
                 (
                     CapabilityFailureV1(
                         CapabilityReasonV1.KERNEL_API_UNAVAILABLE,
@@ -498,24 +584,87 @@ class ControlledExecutorV1:
                     ),
                 )
             )
+        with self._capability_lock:
+            self._active_capability_probes -= 1
+            invalidated = (
+                generation != self._capability_generation
+                or conflict_generation != self._capability_conflict_generation
+                or backend is not self._backend
+            )
+            if invalidated:
+                self._issued_capability = None
+                self._issued_backend = None
+                return _invalidated_capability_report_v1()
+            if type(report) is SupportedV1:
+                # The backend reports host facts; it cannot mint authority.
+                # A fresh controller-owned object binds this exact successful
+                # probe generation, even when a backend reuses its report.
+                issued = SupportedV1(
+                    report.platform,
+                    report.sandbox_policy_release,
+                )
+                self._issued_capability = issued
+                self._issued_backend = backend
+                return issued
         return report
 
-    def execute(self, request: ExecutionRequestV1) -> ExecutionResultV1:
+    def execute(
+        self,
+        request: ExecutionRequestV1,
+        capability: SupportedV1 | None = None,
+    ) -> ExecutionResultV1:
+        if os.getpid() != self._owner_pid:
+            return ObserverFailureV1(ObserverReasonV1.PROBE_FAILED)
         if type(request) is not ExecutionRequestV1:
             raise ExecutionRequestErrorV1(RequestReasonV1.WRONG_TYPE, "request")
-        report = self.probe()
-        if type(report) is UnsupportedV1:
-            return report
+        if capability is None:
+            report = self.probe()
+            if type(report) is UnsupportedV1:
+                return report
+            capability = report
+        if type(capability) is not SupportedV1:
+            return ObserverFailureV1(ObserverReasonV1.PROBE_FAILED)
+        with self._capability_lock:
+            backend = self._issued_backend
+            if (
+                capability is not self._issued_capability
+                or backend is None
+                or backend is not self._backend
+            ):
+                return ObserverFailureV1(ObserverReasonV1.PROBE_FAILED)
+            # The controller is the sole owner. Consumption precedes every
+            # backend operation, so retries and backend replacement fail shut.
+            self._issued_capability = None
+            self._issued_backend = None
         try:
-            result = self._backend.run(request)
+            result = backend.run(request, capability)
         except Exception:
             return ObserverFailureV1(ObserverReasonV1.BACKEND_EXCEPTION)
-        if not _result_matches_request(result, request):
+        if not result_matches_request_v1(result, request):
             return ObserverFailureV1(ObserverReasonV1.BACKEND_CONTRACT)
         return result
 
 
-def _result_matches_request(result: object, request: ExecutionRequestV1) -> bool:
+def _unsupported_is_well_typed_v1(report: UnsupportedV1) -> bool:
+    failures = report.failures
+    return (
+        type(failures) is tuple
+        and bool(failures)
+        and all(
+            type(failure) is CapabilityFailureV1
+            and type(failure.reason) is CapabilityReasonV1
+            and (
+                failure.errno is None
+                or (type(failure.errno) is int and failure.errno > 0)
+            )
+            for failure in failures
+        )
+    )
+
+
+def _result_matches_request_v1(result: object, request: ExecutionRequestV1) -> bool:
+    if type(request) is not ExecutionRequestV1:
+        return False
     known = (
         CompletedV1,
         ExitNonZeroV1,
@@ -530,8 +679,10 @@ def _result_matches_request(result: object, request: ExecutionRequestV1) -> bool
     )
     if type(result) not in known:
         return False
-    if type(result) in (ObserverFailureV1, UnsupportedV1):
-        return True
+    if type(result) is ObserverFailureV1:
+        return type(result.reason) is ObserverReasonV1
+    if type(result) is UnsupportedV1:
+        return _unsupported_is_well_typed_v1(result)
 
     stdout = result.stdout
     stderr = result.stderr
@@ -544,14 +695,22 @@ def _result_matches_request(result: object, request: ExecutionRequestV1) -> bool
         return False
     expected_digest = hashlib.sha256(request.executable).digest()
     if type(result) is SandboxSetupFailedV1:
-        if result.binary_sha256 is not None and result.binary_sha256 != expected_digest:
+        if result.binary_sha256 is not None and (
+            type(result.binary_sha256) is not bytes
+            or len(result.binary_sha256) != len(expected_digest)
+            or result.binary_sha256 != expected_digest
+        ):
             return False
         return (
             type(result.stage) is SetupStageV1
             and type(result.errno) is int
             and result.errno > 0
         )
-    if result.binary_sha256 != expected_digest:
+    if (
+        type(result.binary_sha256) is not bytes
+        or len(result.binary_sha256) != len(expected_digest)
+        or result.binary_sha256 != expected_digest
+    ):
         return False
     if type(result) is ExitNonZeroV1:
         return type(result.exit_code) is int and result.exit_code > 0
@@ -562,7 +721,10 @@ def _result_matches_request(result: object, request: ExecutionRequestV1) -> bool
             and type(result.core_dumped) is bool
         )
     if type(result) is TimedOutV1:
-        return result.deadline_ns == request.limits.wall_timeout_ns
+        return (
+            type(result.deadline_ns) is int
+            and result.deadline_ns == request.limits.wall_timeout_ns
+        )
     if type(result) is OomKilledV1:
         return type(result.oom_kill_delta) is int and result.oom_kill_delta > 0
     if type(result) is OutputLimitExceededV1:
@@ -573,9 +735,27 @@ def _result_matches_request(result: object, request: ExecutionRequestV1) -> bool
             if result.stream is OutputStreamV1.STDERR
             else None
         )
-        captured = result.stdout if result.stream is OutputStreamV1.STDOUT else result.stderr
-        return expected_limit is not None and result.limit == expected_limit and len(captured) == expected_limit
+        captured = (
+            result.stdout
+            if result.stream is OutputStreamV1.STDOUT
+            else result.stderr
+        )
+        return (
+            expected_limit is not None
+            and type(result.limit) is int
+            and result.limit == expected_limit
+            and len(captured) == expected_limit
+        )
     return True
+
+
+def result_matches_request_v1(result: object, request: ExecutionRequestV1) -> bool:
+    """Total validation for observations returned by an injected backend."""
+
+    try:
+        return _result_matches_request_v1(result, request)
+    except Exception:
+        return False
 
 
 class _MemfdOperationsV1(Protocol):
@@ -712,7 +892,6 @@ class _NativeLinuxOperationsV1:
         218,  # set_tid_address
         231,  # exit_group
         273,  # set_robust_list
-        302,  # prlimit64
         334,  # rseq
     )
 
@@ -931,6 +1110,21 @@ class _NativeLinuxOperationsV1:
             _bpf(_BPF_JMP_JEQ_K, 0, 0, 0),
             _bpf(_BPF_RET_K, 0, 0, _SECCOMP_RET_ALLOW),
         ]
+        restricted_start = len(instructions)
+        # glibc may query or tighten this process's own limits after exec. A
+        # foreign PID would instead give the evaluator authority over another
+        # same-UID process, so both words of pid_t must encode the kernel's
+        # canonical self selector (zero).
+        instructions.extend(
+            (
+                _bpf(_BPF_JMP_JEQ_K, 0, 5, _SYS_PRLIMIT64_X86_64),
+                _bpf(_BPF_LD_W_ABS, 0, 0, 16),
+                _bpf(_BPF_JMP_JEQ_K, 0, 0, 0),
+                _bpf(_BPF_LD_W_ABS, 0, 0, 20),
+                _bpf(_BPF_JMP_JEQ_K, 0, 0, 0),
+                _bpf(_BPF_RET_K, 0, 0, _SECCOMP_RET_ALLOW),
+            )
+        )
         generic_start = len(instructions)
         # setup_error_fd is CLOEXEC, so this write capability disappears at the
         # successful exec boundary together with the descriptor itself.
@@ -944,7 +1138,7 @@ class _NativeLinuxOperationsV1:
             )
         final_kill = len(instructions)
         instructions.append(_bpf(_BPF_RET_K, 0, 0, _SECCOMP_RET_KILL_PROCESS))
-        for index in (6, 8, 10, 12):
+        for index in (6, 8, 10, 12, restricted_start + 2, restricted_start + 4):
             distance = final_kill - index - 1
             instructions[index].jf = distance
 
@@ -952,7 +1146,7 @@ class _NativeLinuxOperationsV1:
         # and the CLOEXEC setup fd.  No executable or filesystem fd survives.
         if setup_error_fd not in (4,):
             raise OSError(errno_module.EINVAL, "noncanonical setup fd")
-        if generic_start != 14:
+        if restricted_start != 14 or generic_start != 20:
             raise AssertionError("seccomp branch offset drift")
         return instructions
 
@@ -988,6 +1182,37 @@ def _wait_exact_child(pid: int) -> int:
 
 
 _CGROUP_NAMES = itertools.count()
+_CGROUP_ROOT_V1 = Path("/sys/fs/cgroup")
+# One observer plus one child is the whole process tree.  The kernel pids
+# controller makes thread creation and fork contend for the same final slot.
+_OBSERVER_SUBTREE_TASK_LIMIT_V1 = 2
+
+
+def _current_unified_cgroup_v1() -> Path:
+    descriptor = os.open(
+        "/proc/self/cgroup",
+        os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW,
+    )
+    try:
+        raw = os.read(descriptor, 4097)
+    finally:
+        os.close(descriptor)
+    if len(raw) > 4096 or not raw.endswith(b"\n") or raw.count(b"\n") != 1:
+        raise OSError(errno_module.EPROTO, "noncanonical unified cgroup record")
+    prefix = b"0::"
+    if not raw.startswith(prefix):
+        raise OSError(errno_module.ENOTSUP, "unified cgroup v2 is required")
+    try:
+        relative = raw[len(prefix) : -1].decode("ascii")
+    except UnicodeDecodeError as error:
+        raise OSError(errno_module.EPROTO, "non-ASCII cgroup path") from error
+    if (
+        not relative.startswith("/")
+        or relative != posixpath.normpath(relative)
+        or any(part in ("", ".", "..") for part in relative[1:].split("/"))
+    ):
+        raise OSError(errno_module.EPROTO, "noncanonical cgroup path")
+    return _CGROUP_ROOT_V1 / relative[1:]
 
 
 class _CgroupV2V1:
@@ -995,6 +1220,51 @@ class _CgroupV2V1:
         self._parent_fd = parent_fd
         self._directory_fd = directory_fd
         self._name = name
+
+    @classmethod
+    def probe_observer_task_budget(cls, parent: Path) -> None:
+        parent_fd = os.open(
+            os.fsencode(parent),
+            os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW,
+        )
+        current_fd = -1
+        current_parent_fd = -1
+        try:
+            current = _current_unified_cgroup_v1()
+            current_fd = os.open(
+                os.fsencode(current),
+                os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW,
+            )
+            current_parent_fd = os.open(
+                os.fsencode(current.parent),
+                os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW,
+            )
+            parent_stat = os.fstat(parent_fd)
+            current_parent_stat = os.fstat(current_parent_fd)
+            if (
+                parent_stat.st_dev != current_parent_stat.st_dev
+                or parent_stat.st_ino != current_parent_stat.st_ino
+            ):
+                raise OSError(
+                    errno_module.EXDEV,
+                    "observer must be in a direct child of the delegated parent",
+                )
+            expected_limit = f"{_OBSERVER_SUBTREE_TASK_LIMIT_V1}\n".encode("ascii")
+            if (
+                _read_cgroup_file(parent_fd, b"pids.max") != expected_limit
+                or _read_cgroup_file(parent_fd, b"pids.current") != b"1\n"
+                or _read_cgroup_file(current_fd, b"pids.current") != b"1\n"
+            ):
+                raise OSError(
+                    errno_module.EBUSY,
+                    "observer subtree must contain exactly one of two permitted tasks",
+                )
+        finally:
+            if current_parent_fd >= 0:
+                os.close(current_parent_fd)
+            if current_fd >= 0:
+                os.close(current_fd)
+            os.close(parent_fd)
 
     @classmethod
     def create(
@@ -1235,9 +1505,10 @@ def _classify_process_v1(
 class NativeLinuxBackendV1:
     """Native backend for a dedicated, single-threaded Linux helper process.
 
-    The task-count checks are fail-closed observations that minimise, but do not
-    eliminate, the observation-to-fork race.  Correctness therefore requires a
-    dedicated process in which thread creation is architecturally forbidden.
+    Correctness requires a dedicated helper whose delegated cgroup permits
+    exactly the observer and one controlled child across the whole subtree.
+    The kernel pids controller then arbitrates thread creation against fork,
+    eliminating the observation-to-fork race rather than timing around it.
     Native threads created outside CPython and instruction-level inputs such as
     CPUID/RDTSC or auxv remain outside this observation boundary, so this result
     alone cannot establish ambient-free reproducibility.
@@ -1260,7 +1531,22 @@ class NativeLinuxBackendV1:
         self._cgroup_factory = cgroup_factory
         self._monotonic_ns = monotonic_ns
 
-    def probe(self) -> CapabilityReportV1:
+    def probe(self, guard: _ProbeGuardV1) -> CapabilityReportV1:
+        if type(guard) is not _ProbeGuardV1 or not guard.is_current():
+            return _invalidated_capability_report_v1()
+        try:
+            return self._probe_capability_v1(guard)
+        except Exception:
+            return UnsupportedV1(
+                (
+                    CapabilityFailureV1(
+                        CapabilityReasonV1.KERNEL_API_UNAVAILABLE,
+                        None,
+                    ),
+                )
+            )
+
+    def _probe_capability_v1(self, guard: _ProbeGuardV1) -> CapabilityReportV1:
         if self._platform_name != "linux":
             return UnsupportedV1(
                 (CapabilityFailureV1(CapabilityReasonV1.HOST_NOT_LINUX, None),)
@@ -1312,16 +1598,73 @@ class NativeLinuxBackendV1:
             CapabilityReasonV1.STANDARD_FDS_UNAVAILABLE,
             failures,
         )
+        if failures or not guard.is_current():
+            if not failures:
+                return _invalidated_capability_report_v1()
+            return UnsupportedV1(tuple(failures))
         _probe_operation(
             operations.probe_single_threaded,
             CapabilityReasonV1.OBSERVER_NOT_SINGLE_THREADED,
             failures,
         )
+        if failures or not guard.is_current():
+            if not failures:
+                return _invalidated_capability_report_v1()
+            return UnsupportedV1(tuple(failures))
+        _probe_operation(
+            lambda: self._cgroup_factory.probe_observer_task_budget(
+                self._cgroup_parent
+            ),
+            CapabilityReasonV1.OBSERVER_TASK_BUDGET_UNAVAILABLE,
+            failures,
+        )
+        if failures or not guard.is_current():
+            if not failures:
+                return _invalidated_capability_report_v1()
+            return UnsupportedV1(tuple(failures))
         self._probe_sealed_memfd(operations, failures)
+        if failures or not guard.is_current():
+            if not failures:
+                return _invalidated_capability_report_v1()
+            return UnsupportedV1(tuple(failures))
         _probe_operation(operations.probe_execveat, CapabilityReasonV1.EXECVEAT_UNAVAILABLE, failures)
+        if failures or not guard.is_current():
+            if not failures:
+                return _invalidated_capability_report_v1()
+            return UnsupportedV1(tuple(failures))
         _probe_operation(operations.probe_close_range, CapabilityReasonV1.CLOSE_RANGE_UNAVAILABLE, failures)
+        if failures or not guard.is_current():
+            if not failures:
+                return _invalidated_capability_report_v1()
+            return UnsupportedV1(tuple(failures))
+        _probe_operation(
+            operations.probe_single_threaded,
+            CapabilityReasonV1.OBSERVER_NOT_SINGLE_THREADED,
+            failures,
+        )
+        if failures or not guard.is_current():
+            if not failures:
+                return _invalidated_capability_report_v1()
+            return UnsupportedV1(tuple(failures))
         _probe_operation(operations.probe_namespaces, CapabilityReasonV1.NETWORK_NAMESPACE_UNAVAILABLE, failures)
+        if failures or not guard.is_current():
+            if not failures:
+                return _invalidated_capability_report_v1()
+            return UnsupportedV1(tuple(failures))
+        _probe_operation(
+            operations.probe_single_threaded,
+            CapabilityReasonV1.OBSERVER_NOT_SINGLE_THREADED,
+            failures,
+        )
+        if failures or not guard.is_current():
+            if not failures:
+                return _invalidated_capability_report_v1()
+            return UnsupportedV1(tuple(failures))
         _probe_operation(operations.probe_seccomp, CapabilityReasonV1.SECCOMP_FILTER_UNAVAILABLE, failures)
+        if failures or not guard.is_current():
+            if not failures:
+                return _invalidated_capability_report_v1()
+            return UnsupportedV1(tuple(failures))
         _probe_operation(
             lambda: self._cgroup_factory.probe(self._cgroup_parent),
             CapabilityReasonV1.CGROUP_V2_UNAVAILABLE,
@@ -1362,10 +1705,11 @@ class NativeLinuxBackendV1:
         finally:
             operations.close(fd)
 
-    def run(self, request: ExecutionRequestV1) -> ExecutionResultV1:
-        report = self.probe()
-        if type(report) is UnsupportedV1:
-            return report
+    def run(
+        self,
+        request: ExecutionRequestV1,
+        capability: SupportedV1,
+    ) -> ExecutionResultV1:
         operations = self._operations
         if operations is None or self._cgroup_parent is None:
             return ObserverFailureV1(ObserverReasonV1.PROBE_FAILED)
@@ -1479,11 +1823,16 @@ class NativeLinuxBackendV1:
             start_write,
         ) = all_fds
         try:
-            # Keep this as the final operation before fork to minimise the
-            # observation-to-fork window.  It is a fail-closed observation, not
-            # an atomic proof; the backend must run in a dedicated process where
-            # thread creation is architecturally forbidden.
+            # The task count is observational; the delegated pids.max=2
+            # subtree is the atomic law.  Once the observer occupies one slot,
+            # either a new thread or the controlled child can claim the other,
+            # never both.
             operations.probe_single_threaded()
+            if self._cgroup_parent is None:
+                raise OSError(errno_module.EINVAL, "missing cgroup parent")
+            self._cgroup_factory.probe_observer_task_budget(
+                self._cgroup_parent
+            )
         except OSError as error:
             _close_many(all_fds)
             return SandboxSetupFailedV1(

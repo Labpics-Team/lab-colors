@@ -814,6 +814,35 @@ def _decompress_exact(
     return output
 
 
+def decompress_locked_tar_v1(
+    expected: SourceReleaseLockV1,
+    admitted: SafeSourceArchiveV1,
+) -> bytes:
+    """Replay bounded decompression from one exact admitted capability."""
+
+    if type(expected) is not SourceReleaseLockV1:
+        raise TypeError("expected must be SourceReleaseLockV1")
+    if type(admitted) is not SafeSourceArchiveV1:
+        raise TypeError("admitted must be SafeSourceArchiveV1")
+    archive = admitted.archive_bytes
+    if (
+        admitted.source_lock_identity != expected.identity
+        or admitted.archive_sha256 != expected.archive_sha256
+        or len(archive) != expected.archive_length
+        or hashlib.sha256(archive).digest() != expected.archive_sha256
+    ):
+        _fail(
+            "source-archive-v1",
+            ProvenanceReasonV1.ARCHIVE_DIGEST_MISMATCH,
+            "admitted archive no longer matches its lock",
+        )
+    return _decompress_exact(
+        archive,
+        expected.archive_format,
+        expected.tar_stream_length,
+    )
+
+
 def _tree_identity(files: tuple[ArchiveFileV1, ...]) -> bytes:
     chunks = [len(files).to_bytes(8, "big")]
     for item in files:

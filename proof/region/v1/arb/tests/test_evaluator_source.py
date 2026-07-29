@@ -17,6 +17,22 @@ EVALUATOR = ARB / "evaluator"
 REPO = ARB.parents[3]
 FORMULA = REPO / "crates/labcolors-core/contracts/contextual-region-formula-v1.lcir"
 GENERATOR = EVALUATOR / "formula.py"
+sys.path.insert(0, str(REPO / "proof/region/v1"))
+
+from region_proof_protocol import (  # noqa: E402
+    BoundaryUnprovenWitnessV1,
+    ComparatorBudgetV1,
+    ComparatorKindV1,
+    ComparatorManifestV2,
+    ContextualRegionDefinitionV1,
+    DecisionTranscriptV1,
+    DecisionV1,
+    ExactZeroSignalTraceV1,
+    ProofJobV1,
+    ProofPolicyV1,
+    ReducedDomainManifestV1,
+    ResourceLimitWitnessV1,
+)
 
 
 def generate(source: bytes) -> subprocess.CompletedProcess[bytes]:
@@ -38,11 +54,11 @@ def generate(source: bytes) -> subprocess.CompletedProcess[bytes]:
 def assert_transcript_wire_coordinates(
     case: unittest.TestCase,
     wire: bytes,
-    transcript: object,
+    transcript: DecisionTranscriptV1,
     manifest_identity: bytes,
 ) -> None:
-    decision_bits = getattr(transcript, "decision_bits")
-    accounting_digest = getattr(transcript, "accounting_digest")
+    decision_bits = transcript.decision_bits
+    accounting_digest = transcript.accounting_digest
     case.assertEqual(wire[:8], b"LCTRN1\0\0")
     case.assertEqual(wire[72:104], manifest_identity)
     accounting_offset = 160 + len(decision_bits)
@@ -168,6 +184,13 @@ class StandaloneSourceTests(unittest.TestCase):
         self.assertLess(guard, formula_call)
         self.assertIn("minimum working precision", evaluator[:formula_call])
 
+        decision = region[
+            region.index("lc_region_decide(") : region.index("lc_region_evaluate_rgb(")
+        ]
+        decision_guard = decision.index("if (precision < 2)")
+        singleton_dispatch = decision.index("if (region->knot_count == 1)")
+        self.assertLess(decision_guard, singleton_dispatch)
+
     def test_sha256_has_literal_standard_vectors_and_no_external_crypto(self) -> None:
         source = (EVALUATOR / "hash.c").read_text(encoding="utf-8")
         header = (EVALUATOR / "hash.h").read_text(encoding="utf-8")
@@ -227,20 +250,6 @@ class ExactBoundaryRuntimeTests(unittest.TestCase):
         "set LABCOLORS_ARB_EVALUATOR to the controlled C17 binary",
     )
     def test_black_exact_zero_runs_through_job_parser_formula_and_closed_driver(self) -> None:
-        sys.path.insert(0, str(REPO / "proof/region/v1"))
-        from region_proof_protocol import (  # noqa: PLC0415
-            ComparatorBudgetV1,
-            ComparatorKindV1,
-            ComparatorManifestV1,
-            ContextualRegionDefinitionV1,
-            DecisionTranscriptV1,
-            DecisionV1,
-            ExactZeroSignalTraceV1,
-            ProofJobV1,
-            ProofPolicyV1,
-            ReducedDomainManifestV1,
-        )
-
         registered = ContextualRegionDefinitionV1.parse(
             (REPO / "proof/region/v1/fixtures/v5b2b-definition-0a8d1c3d.bin").read_bytes()
         )
@@ -260,7 +269,7 @@ class ExactBoundaryRuntimeTests(unittest.TestCase):
             ReducedDomainManifestV1.from_ordinals((0,)),
             policy,
         )
-        manifest = ComparatorManifestV1(
+        manifest = ComparatorManifestV2(
             ComparatorKindV1.ARB,
             *(hashlib.sha256(f"arb-manifest-{index}".encode()).digest() for index in range(10)),
         )
@@ -308,7 +317,7 @@ class ExactBoundaryRuntimeTests(unittest.TestCase):
             ).digest(),
         )
 
-        alternate_manifest = ComparatorManifestV1(
+        alternate_manifest = ComparatorManifestV2(
             ComparatorKindV1.ARB,
             *(hashlib.sha256(f"arb-alternate-{index}".encode()).digest() for index in range(10)),
         )
@@ -358,20 +367,6 @@ class ExactBoundaryRuntimeTests(unittest.TestCase):
         "set LABCOLORS_ARB_EVALUATOR to the controlled C17 binary",
     )
     def test_multisegment_exact_trace_selects_first_canonical_branch(self) -> None:
-        sys.path.insert(0, str(REPO / "proof/region/v1"))
-        from region_proof_protocol import (  # noqa: PLC0415
-            ComparatorBudgetV1,
-            ComparatorKindV1,
-            ComparatorManifestV1,
-            ContextualRegionDefinitionV1,
-            DecisionTranscriptV1,
-            DecisionV1,
-            ExactZeroSignalTraceV1,
-            ProofJobV1,
-            ProofPolicyV1,
-            ReducedDomainManifestV1,
-        )
-
         registered = ContextualRegionDefinitionV1.parse(
             (REPO / "proof/region/v1/fixtures/v5b2b-definition-0a8d1c3d.bin").read_bytes()
         )
@@ -406,7 +401,7 @@ class ExactBoundaryRuntimeTests(unittest.TestCase):
                 ),
             ),
         )
-        manifest = ComparatorManifestV1(
+        manifest = ComparatorManifestV2(
             ComparatorKindV1.ARB,
             *(hashlib.sha256(f"arb-multisegment-{index}".encode()).digest() for index in range(10)),
         )
@@ -446,17 +441,6 @@ class ExactBoundaryRuntimeTests(unittest.TestCase):
         "set LABCOLORS_ARB_EVALUATOR to the controlled C17 binary",
     )
     def test_frozen_seam_cube_resolves_one_inside_and_511_outside(self) -> None:
-        sys.path.insert(0, str(REPO / "proof/region/v1"))
-        from region_proof_protocol import (  # noqa: PLC0415
-            BoundaryUnprovenWitnessV1,
-            ComparatorBudgetV1,
-            ComparatorKindV1,
-            ComparatorManifestV1,
-            DecisionTranscriptV1,
-            ProofJobV1,
-            ProofPolicyV1,
-        )
-
         frozen = ProofJobV1.parse(
             (REPO / "proof/region/v1/fixtures/proof-job-v1.bin").read_bytes()
         )
@@ -470,7 +454,7 @@ class ExactBoundaryRuntimeTests(unittest.TestCase):
             frozen.domain,
             ProofPolicyV1(1, budget),
         )
-        manifest = ComparatorManifestV1(
+        manifest = ComparatorManifestV2(
             ComparatorKindV1.ARB,
             *(hashlib.sha256(f"arb-manifest-{index}".encode()).digest() for index in range(10)),
         )
@@ -575,17 +559,6 @@ class ExactBoundaryRuntimeTests(unittest.TestCase):
         "set LABCOLORS_ARB_EVALUATOR to the controlled C17 binary",
     )
     def test_zero_grant_emits_canonical_resource_witnesses(self) -> None:
-        sys.path.insert(0, str(REPO / "proof/region/v1"))
-        from region_proof_protocol import (  # noqa: PLC0415
-            ComparatorBudgetV1,
-            ComparatorKindV1,
-            ComparatorManifestV1,
-            DecisionTranscriptV1,
-            ProofJobV1,
-            ProofPolicyV1,
-            ResourceLimitWitnessV1,
-        )
-
         frozen = ProofJobV1.parse(
             (REPO / "proof/region/v1/fixtures/proof-job-v1.bin").read_bytes()
         )
@@ -599,7 +572,7 @@ class ExactBoundaryRuntimeTests(unittest.TestCase):
             frozen.domain,
             ProofPolicyV1(1, zero_grant),
         )
-        manifest = ComparatorManifestV1(
+        manifest = ComparatorManifestV2(
             ComparatorKindV1.ARB,
             *(hashlib.sha256(f"arb-zero-grant-{index}".encode()).digest() for index in range(10)),
         )
@@ -644,19 +617,6 @@ class ExactBoundaryRuntimeTests(unittest.TestCase):
         "set LABCOLORS_ARB_EVALUATOR to the controlled C17 binary",
     )
     def test_global_pregrant_is_never_transferred_between_points(self) -> None:
-        sys.path.insert(0, str(REPO / "proof/region/v1"))
-        from region_proof_protocol import (  # noqa: PLC0415
-            ComparatorBudgetV1,
-            ComparatorKindV1,
-            ComparatorManifestV1,
-            DecisionTranscriptV1,
-            DecisionV1,
-            ProofJobV1,
-            ProofPolicyV1,
-            ReducedDomainManifestV1,
-            ResourceLimitWitnessV1,
-        )
-
         frozen = ProofJobV1.parse(
             (REPO / "proof/region/v1/fixtures/proof-job-v1.bin").read_bytes()
         )
@@ -672,7 +632,7 @@ class ExactBoundaryRuntimeTests(unittest.TestCase):
                 ),
             ),
         )
-        manifest = ComparatorManifestV1(
+        manifest = ComparatorManifestV2(
             ComparatorKindV1.ARB,
             *(hashlib.sha256(f"arb-pregrant-{index}".encode()).digest() for index in range(10)),
         )
@@ -707,23 +667,11 @@ class ExactBoundaryRuntimeTests(unittest.TestCase):
         "set LABCOLORS_ARB_EVALUATOR to the controlled C17 binary",
     )
     def test_subminimum_precision_is_unresolved_and_a_later_valid_rung_recovers(self) -> None:
-        sys.path.insert(0, str(REPO / "proof/region/v1"))
-        from region_proof_protocol import (  # noqa: PLC0415
-            ComparatorBudgetV1,
-            ComparatorKindV1,
-            ComparatorManifestV1,
-            DecisionTranscriptV1,
-            DecisionV1,
-            ProofJobV1,
-            ProofPolicyV1,
-            ReducedDomainManifestV1,
-        )
-
         frozen = ProofJobV1.parse(
             (REPO / "proof/region/v1/fixtures/proof-job-v1.bin").read_bytes()
         )
         domain = ReducedDomainManifestV1.from_ordinals((0, 65_793))
-        manifest = ComparatorManifestV1(
+        manifest = ComparatorManifestV2(
             ComparatorKindV1.ARB,
             *(hashlib.sha256(f"arb-minimum-precision-{index}".encode()).digest() for index in range(10)),
         )
@@ -789,19 +737,6 @@ class ExactBoundaryRuntimeTests(unittest.TestCase):
         "set LABCOLORS_ARB_EVALUATOR to the controlled C17 binary",
     )
     def test_resource_witness_accounts_for_work_consumed_on_earlier_rungs(self) -> None:
-        sys.path.insert(0, str(REPO / "proof/region/v1"))
-        from region_proof_protocol import (  # noqa: PLC0415
-            ComparatorBudgetV1,
-            ComparatorKindV1,
-            ComparatorManifestV1,
-            DecisionTranscriptV1,
-            DecisionV1,
-            ProofJobV1,
-            ProofPolicyV1,
-            ReducedDomainManifestV1,
-            ResourceLimitWitnessV1,
-        )
-
         frozen = ProofJobV1.parse(
             (REPO / "proof/region/v1/fixtures/proof-job-v1.bin").read_bytes()
         )
@@ -817,7 +752,7 @@ class ExactBoundaryRuntimeTests(unittest.TestCase):
                 ),
             ),
         )
-        manifest = ComparatorManifestV1(
+        manifest = ComparatorManifestV2(
             ComparatorKindV1.ARB,
             *(hashlib.sha256(f"arb-cross-rung-{index}".encode()).digest() for index in range(10)),
         )
@@ -851,18 +786,6 @@ class ExactBoundaryRuntimeTests(unittest.TestCase):
         "set LABCOLORS_ARB_EVALUATOR to the controlled C17 binary",
     )
     def test_spd_admission_is_exact_across_the_full_binary64_exponent_range(self) -> None:
-        sys.path.insert(0, str(REPO / "proof/region/v1"))
-        from region_proof_protocol import (  # noqa: PLC0415
-            ComparatorBudgetV1,
-            ComparatorKindV1,
-            ComparatorManifestV1,
-            ContextualRegionDefinitionV1,
-            DecisionTranscriptV1,
-            ProofJobV1,
-            ProofPolicyV1,
-            ReducedDomainManifestV1,
-        )
-
         frozen = ProofJobV1.parse(
             (REPO / "proof/region/v1/fixtures/proof-job-v1.bin").read_bytes()
         )
@@ -886,7 +809,7 @@ class ExactBoundaryRuntimeTests(unittest.TestCase):
                 ),
             ),
         )
-        manifest = ComparatorManifestV1(
+        manifest = ComparatorManifestV2(
             ComparatorKindV1.ARB,
             *(hashlib.sha256(f"arb-exact-spd-{index}".encode()).digest() for index in range(10)),
         )

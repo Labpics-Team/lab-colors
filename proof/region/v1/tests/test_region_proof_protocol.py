@@ -33,7 +33,7 @@ from region_proof_protocol import (  # noqa: E402
     FORMULA_RELEASE_DOMAIN_V1,
     ComparatorBudgetV1,
     ComparatorKindV1,
-    ComparatorManifestV1,
+    ComparatorManifestV2,
     BoundaryUnprovenWitnessV1,
     ContextualRegionDefinitionV1,
     DecisionTranscriptV1,
@@ -49,7 +49,7 @@ from region_proof_protocol import (  # noqa: E402
     ResourceLimitWitnessV1,
     RunClaimV1,
     WitnessStoreV1,
-    ContentResolvedComparatorManifestV1,
+    ContentResolvedComparatorManifestV2,
     compare_dual_transcripts,
     encode_contextual_definition_fields_v1,
 )
@@ -74,16 +74,16 @@ JOB_IDENTITY = bytes.fromhex(
     "6e493856d3c81f0d5b12bf1221985c66210ae98c8b6c79c7c5b4aabf243c0116"
 )
 MANIFEST_IDENTITY = bytes.fromhex(
-    "77373d7025d4a673db27e7ce2ca45e61f9f191f7e017f97731602997430b5739"
+    "805c3710b9b38189f4b9c0bb69aaf429c944637a4ee38d1ffa56ee2d72ec09d9"
 )
 TRANSCRIPT_IDENTITY = bytes.fromhex(
-    "d75c7f5d1c8176fdef78cca226e42ecd0cd61bab69b636fe4397e6a763af8582"
+    "8de25059cf372364da4d6cea05f9a45def3a3a9edfd385443cc31e7d82b59136"
 )
 RUN_CLAIM_IDENTITY = bytes.fromhex(
-    "3ffae955c59e0cffa53cfa560713fff64f4c63f7ae103eae67c62a068e124b72"
+    "2c2e2ea8f0737e77a456306ad15332ab1dda609b872260c6bf76229c04b1ad9b"
 )
 COMPARISON_IDENTITY = bytes.fromhex(
-    "94be6dfc28c1bcc98b703f9fda6e7231984a129e22db554655d4026dae5c4ba0"
+    "45ee817424540eaed060fcbfc7a43aebb1e0d484759f8a88803c2ed1a2648b9f"
 )
 
 
@@ -102,9 +102,9 @@ SYNTHETIC_CONTENT = {
 
 
 def admit_manifest(
-    value: ComparatorManifestV1,
-) -> ContentResolvedComparatorManifestV1:
-    return ContentResolvedComparatorManifestV1.admit(
+    value: ComparatorManifestV2,
+) -> ContentResolvedComparatorManifestV2:
+    return ContentResolvedComparatorManifestV2.admit(
         value,
         SYNTHETIC_CONTENT.get,
     )
@@ -138,9 +138,9 @@ def fixture_policy() -> ProofPolicyV1:
     )
 
 
-def manifest(kind: ComparatorKindV1, seed: int) -> ContentResolvedComparatorManifestV1:
+def manifest(kind: ComparatorKindV1, seed: int) -> ContentResolvedComparatorManifestV2:
     return admit_manifest(
-        ComparatorManifestV1(
+        ComparatorManifestV2(
             kind=kind,
             engine_release=digest(seed),
             upstream_source=digest(seed + 1),
@@ -671,11 +671,59 @@ class ManifestTranscriptComparisonTests(unittest.TestCase):
     def test_protocol_slice_cannot_name_structural_agreement_a_proof(self) -> None:
         self.assertFalse(hasattr(protocol, "DualProofReceiptV1"))
 
+    def test_manifest_v1_surface_is_hard_deleted(self) -> None:
+        for name in (
+            "MANIFEST_MAGIC_V1",
+            "MANIFEST_ID_LABEL_V1",
+            "ComparatorManifestV1",
+            "ContentResolvedComparatorManifestV1",
+        ):
+            with self.subTest(name=name):
+                self.assertFalse(hasattr(protocol, name))
+
+    def test_manifest_v2_rejects_the_historical_v1_wire_domain(self) -> None:
+        coordinates = tuple(digest(index) for index in range(10, 20))
+        legacy_wire = (
+            b"LCMAN1\0\0"
+            + bytes((int(ComparatorKindV1.ARB),))
+            + b"".join(coordinates)
+        )
+
+        expect_reason(
+            self,
+            ProtocolReasonV1.BAD_MAGIC,
+            lambda: protocol.ComparatorManifestV2.parse(legacy_wire),
+        )
+
+    def test_manifest_v2_has_a_distinct_wire_and_identity_domain(self) -> None:
+        current = protocol.ComparatorManifestV2(
+            ComparatorKindV1.ARB,
+            *(digest(index) for index in range(10, 20)),
+        )
+        encoded = current.encode()
+
+        self.assertEqual(encoded[:8], b"LCMAN2\0\0")
+        self.assertEqual(
+            current.identity,
+            hashlib.sha256(
+                b"labcolors.proof-region.comparator-manifest.v2\0"
+                + len(encoded).to_bytes(8, "big")
+                + encoded
+            ).digest(),
+        )
+        legacy_wire = b"LCMAN1\0\0" + encoded[8:]
+        legacy_identity = hashlib.sha256(
+            b"labcolors.proof-region.comparator-manifest.v1\0"
+            + len(legacy_wire).to_bytes(8, "big")
+            + legacy_wire
+        ).digest()
+        self.assertNotEqual(current.identity, legacy_identity)
+
     def test_manifest_is_content_resolved_and_each_field_changes_identity(self) -> None:
         base = manifest(ComparatorKindV1.ARB, 10)
         self.assertEqual(
             admit_manifest(
-                ComparatorManifestV1.parse(base.manifest.encode())
+                ComparatorManifestV2.parse(base.manifest.encode())
             ).identity,
             base.identity,
         )
@@ -702,7 +750,7 @@ class ManifestTranscriptComparisonTests(unittest.TestCase):
             expect_reason(
                 self,
                 ProtocolReasonV1.INVALID_MANIFEST,
-                lambda coordinate=coordinate: ContentResolvedComparatorManifestV1.admit(
+                lambda coordinate=coordinate: ContentResolvedComparatorManifestV2.admit(
                     base.manifest,
                     lambda current: (
                         None
@@ -714,7 +762,7 @@ class ManifestTranscriptComparisonTests(unittest.TestCase):
             expect_reason(
                 self,
                 ProtocolReasonV1.DIGEST_MISMATCH,
-                lambda coordinate=coordinate: ContentResolvedComparatorManifestV1.admit(
+                lambda coordinate=coordinate: ContentResolvedComparatorManifestV2.admit(
                     base.manifest,
                     lambda current: (
                         b"wrong"
@@ -727,7 +775,7 @@ class ManifestTranscriptComparisonTests(unittest.TestCase):
         expect_reason(
             self,
             ProtocolReasonV1.UNKNOWN_RELEASE,
-            lambda: ComparatorManifestV1(
+            lambda: ComparatorManifestV2(
                 3,  # type: ignore[arg-type]
                 *(digest(index) for index in range(300, 310)),
             ),
@@ -743,13 +791,13 @@ class ManifestTranscriptComparisonTests(unittest.TestCase):
         expect_reason(
             self,
             ProtocolReasonV1.INVALID_MANIFEST,
-            lambda: ContentResolvedComparatorManifestV1.admit(  # type: ignore[arg-type]
+            lambda: ContentResolvedComparatorManifestV2.admit(  # type: ignore[arg-type]
                 lookalike,
                 SYNTHETIC_CONTENT.get,
             ),
         )
         with self.assertRaises(TypeError):
-            ContentResolvedComparatorManifestV1()  # type: ignore[call-arg]
+            ContentResolvedComparatorManifestV2()  # type: ignore[call-arg]
         class ForeignBytes(bytes):
             pass
 
@@ -765,7 +813,7 @@ class ManifestTranscriptComparisonTests(unittest.TestCase):
             expect_reason(
                 self,
                 ProtocolReasonV1.INVALID_MANIFEST,
-                lambda invalid_content=invalid_content: ContentResolvedComparatorManifestV1.admit(
+                lambda invalid_content=invalid_content: ContentResolvedComparatorManifestV2.admit(
                     base.manifest,
                     lambda _coordinate: invalid_content,  # type: ignore[return-value]
                 ),
@@ -1242,25 +1290,25 @@ class ManifestTranscriptComparisonTests(unittest.TestCase):
             (
                 arb.manifest,
                 329,
-                "6323e41b60305ef9cf19b4ad65450779079adc87968ed1fdf8a70952f7b39166",
+                "884625d5983131234d0570f90b482e0e9de2801b773f7f03e34eb2138b104c30",
                 MANIFEST_IDENTITY,
             ),
             (
                 ta,
                 328,
-                "ae55a7e363a6fdd2f8cb1455ecc45b4ef937538421c017014e033e9a955c3402",
+                "b1bc17383b99683302d9156ef1b784a0f094e6eba4e99a346a0a3331c47db3cb",
                 TRANSCRIPT_IDENTITY,
             ),
             (
                 ra,
                 200,
-                "5af9da154b5c2e6f5dbdf88b538324fe809366dab712227f95a67657046d06b2",
+                "4a23db54ac34d2117326d645b17fae098a49a8ec54ea1cc3955d5a1328c7053c",
                 RUN_CLAIM_IDENTITY,
             ),
             (
                 candidate,
                 368,
-                "f27fb4ad6fc8e14d16f815b394f67e181d29d02099c2d640f5dec07e38e63f3d",
+                "017dd72a3dcf001acdd267f91a79a32926da8351874a534ce968c0cf016c0026",
                 COMPARISON_IDENTITY,
             ),
         ):

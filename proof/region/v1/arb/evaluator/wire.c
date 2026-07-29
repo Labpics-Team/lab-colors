@@ -558,6 +558,8 @@ lc_domain_iterator_next(lc_domain_iterator *iterator, uint32_t *ordinal)
     ++iterator->ordinal;
     if (iterator->ordinal == iterator->domain->ranges[iterator->range_index].end
         && iterator->emitted != iterator->domain->point_count) {
+        /* Canonical parsing proves ordered disjoint ranges whose sizes sum to
+           point_count, so remaining output implies that a next range exists. */
         ++iterator->range_index;
         iterator->ordinal = iterator->domain->ranges[iterator->range_index].start;
     }

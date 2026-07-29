@@ -55,11 +55,14 @@ artifact, а повторный encode обязан вернуть byte-identica
 | `ReducedDomainManifestV1` | `LCDOM1\0\0` | `labcolors.proof-region.domain.v1` |
 | `ProofPolicyV1` | `LCPOL1\0\0` | `labcolors.proof-region.policy.v1` |
 | `ProofJobV1` | `LCJOB1\0\0` | `labcolors.proof-region.job.v1` |
-| `ComparatorManifestV1` | `LCMAN1\0\0` | `labcolors.proof-region.comparator-manifest.v1` |
+| `ComparatorManifestV2` | `LCMAN2\0\0` | `labcolors.proof-region.comparator-manifest.v2` |
 | `DecisionTranscriptV1` | `LCTRN1\0\0` | `labcolors.proof-region.transcript.v1` |
 | `RunClaimV1` | `LCRUN1\0\0` | `labcolors.proof-region.run-claim.v1` |
 | `EvaluatorProvenanceClaimV1` | `LCPRV1\0\0` | `labcolors.proof-region.evaluator-provenance-claim.v1` |
 | `DualComparisonClaimV1` | `LCCMP1\0\0` | `labcolors.proof-region.dual-comparison.v1` |
+
+Версия принадлежит отдельному artifact type. Composite V1 wire связывает
+identity независимо версионированного comparator manifest как opaque digest.
 
 ## `ContextualRegionDefinitionV1`
 
@@ -159,14 +162,18 @@ files; оно не заявляет полноту legal-набора или com
 Для GMP и MPFR locked detached signature, key packets и исторический
 `VALIDSIG` связываются только в
 `HistoricalPathRecheckedSignatureDiagnosticV1`. Digest и version запущенного
-`gpgv` остаются диагностикой. Этот тип не устанавливает текущего publisher,
+`gpgv` остаются диагностикой. Запуск принадлежит переданному клиентом
+`DiagnosticProcessRunnerV1`: Core ограничивает и парсит возвращённые bytes, но
+не выдаёт runner за sandbox, containment или provenance authority. Встроенного
+`Popen` fallback нет. Этот тип не устанавливает текущего publisher,
 текущий статус или отзыв ключа, происхождение полученных bytes и exact sealed
 execution verifier. Такой diagnostic не может заменить будущий source-bound
 receipt.
 
 Для FLINT `GitContentRelationPolicyV1` фиксирует commit, tree, исключённые
-paths и отдельные `project_pinned_release_only_files`. `run_git_tree`
-независимо пересчитывает commit, commit-to-tree edge, recursive tree и каждый
+paths и отдельные `project_pinned_release_only_files`. `run_git_tree` принимает
+такой же client-owned diagnostic runner, после чего Core независимо
+пересчитывает commit, commit-to-tree edge, recursive tree и каждый
 blob. Поэтому admission создаёт один `RecomputedGitContentRelationV1`: paths
 архива должны быть точным дизъюнктным объединением общих Git files и
 project-pinned release-only files, а исключённые paths обязаны отсутствовать.
@@ -174,9 +181,29 @@ Git executable/version, repository URL и tag являются диагност�
 координатами поиска и не входят в authority этой relation. Relation доказывает
 совпадение content graph, но не publisher или канал получения архива.
 
-## `ComparatorManifestV1`
+## Diagnostic execution boundary
 
-Wire после `LCMAN1\0\0` содержит comparator kind `u8`
+`ControlledExecutorV1` — единственный владелец one-shot capability: новый,
+неуспешный, перекрывающийся probe или замена backend отзывают ранее выданный
+объект до RUN. Capability выпускается контроллером для одного probe-поколения
+и одного process id; fork не дублирует право запуска. Backend сообщает только
+наблюдённые свойства хоста, получает guard текущего probe и не может продлить
+жизнь capability повторно используемым report-объектом.
+
+Linux backend допускается лишь в отдельном helper process. Helper находится в
+прямом дочернем cgroup объявленного parent, а весь parent subtree имеет
+`pids.max = 2` и перед probe содержит ровно observer. Эти два task slots имеют
+не эвристический смысл: один занимает observer, второй — либо новый thread,
+либо единственный controlled child. Kernel pids controller атомарно разрешает
+только один из вариантов; поэтому check→fork race не маскируется повторным
+опросом `/proc`. Execution child дополнительно получает собственный
+`pids.max = 1`, memory limit и `cgroup.kill`; фактические limits читаются назад
+до запуска. Отсутствие этой структуры возвращает typed unsupported/setup
+outcome. Этот runtime остаётся diagnostic observation и не создаёт receipt.
+
+## `ComparatorManifestV2`
+
+Wire после `LCMAN2\0\0` содержит comparator kind `u8`
 (`1 = Arb`, `2 = MPFI`), затем десять digest coordinates в фиксированном
 порядке:
 
@@ -191,9 +218,9 @@ Wire после `LCMAN1\0\0` содержит comparator kind `u8`
 9. legal file set;
 10. exclusions.
 
-Результат wire parse — только raw `ComparatorManifestV1`: его ненулевые
+Результат wire parse — только raw `ComparatorManifestV2`: его ненулевые
 coordinates являются заявленными content addresses, а не доказанным
-source binding. `ContentResolvedComparatorManifestV1` создаётся только
+source binding. `ContentResolvedComparatorManifestV2` создаётся только
 после того, как переданный вызывающим `resolve_content_address` для каждой из десяти
 coordinates вернул exact `bytes` или `Iterable[bytes]`. Сам protocol повторяет
 SHA-256 по этим bytes/chunks и сравнивает результат с coordinate. Boolean,
@@ -361,7 +388,7 @@ raw claim. Он никогда не возвращает admitted candidate. Н�
 refined type.
 
 Candidate строится в canonical order Arb → MPFI из двух
-`ContentResolvedComparatorManifestV1`, согласованных `RunClaimV1` и
+`ContentResolvedComparatorManifestV2`, согласованных `RunClaimV1` и
 structurally admitted transcripts. Все bindings ведут к одному job, definition,
 domain и policy; `domain_point_count` равен count связанного manifest.
 Unresolved counters равны нулю, decision payloads совпадают побайтно,

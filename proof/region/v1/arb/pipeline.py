@@ -48,21 +48,21 @@ GENERATED_FORMULA_SHA256_V1 = "9958f20c8ca598625db0593a45f8f8bc79e4b2f22b53263b6
 
 # This is a drift gate, not documentation copied from memory.  Admission below
 # hashes every exact input and rejects a local source edit until this manifest
-# is deliberately updated together with its causal tests.
+# is deliberately updated together with its binding tests.
 _PINNED_BUILD_SOURCE_SHA256_V1 = {
     FORMULA_SPEC_PATH_V1: FORMULA_SPEC_SHA256_V1,
     GENERATED_FORMULA_PATH_V1: GENERATED_FORMULA_SHA256_V1,
     BUILD_RECIPE_PATH_V1: "cf25dc9f3754bb34c74fb0bf44ffe1eae3552dc83ed05936b65e2f48f491342d",
     FORMULA_GENERATOR_PATH_V1: "16629cc3a2ef745ae244ae4762f8946a6546972886f96beeb9ee4920b043040c",
-    "proof/region/v1/arb/evaluator/formula.h": "b118f31b0f11ceb04b8239e0762385ac47aeb06b7be0f3b5e29e8e7fcadf20c7",
+    "proof/region/v1/arb/evaluator/formula.h": "46fd5ad1b68b728efcd990a71d1dcc273b75e3391d8c06ef2fd0ac6a4d7dfdbd",
     "proof/region/v1/arb/evaluator/hash.c": "c28e6281208f09ca15fa74aea0091f27726ed68efc3480c34a7db33b8ca3567e",
     "proof/region/v1/arb/evaluator/hash.h": "a62c07f2eca9294b4c1c802e2a9e6cff6ad9f8fd696a74b54a21489d56fab6c4",
     "proof/region/v1/arb/evaluator/interval.c": "93f206258b83fc0f373ae865787ebf266c9d011f2578567ed913a7cb6c0ed899",
     "proof/region/v1/arb/evaluator/interval.h": "f9d7416059d4b09979c22e6823a747f252c576558c750fe3e2ff92509894c7b3",
     "proof/region/v1/arb/evaluator/main.c": "e9a3fa6b70b3a25eb6d6cf7eaba9a98d2fbe5cb7fdd3c1790219efb7fe20918d",
-    "proof/region/v1/arb/evaluator/region.c": "c665de00b3226912112c2d75bf85ce078ef1461bfebdb7e42453b639343c566f",
+    "proof/region/v1/arb/evaluator/region.c": "0026d501077911eae58933487a4cac0a83003cd70d1dbf0966890c29bfff8f99",
     "proof/region/v1/arb/evaluator/region.h": "95da5117bb162c707b441242637d5e0e1bbeef2532ac1f10248f2b93ab16dcc8",
-    "proof/region/v1/arb/evaluator/wire.c": "5f5eb984f953cc3b49cf5b3b31ee44efe70a89f74f736e9a2cf1cbc865ed58b7",
+    "proof/region/v1/arb/evaluator/wire.c": "4edb1120a8274774b8790eceea877c664f599bb9e039b0aa6e6ba8dafe124d47",
     "proof/region/v1/arb/evaluator/wire.h": "bdf2ce9be9fce95a38c61e923b45038efb7bfab78842e38296114f0e83266c98",
 }
 
@@ -552,7 +552,7 @@ class DiagnosticArbComparatorV1:
     """Manifest declaration derived from admitted inputs and diagnostic BUILD."""
 
     preimages: ArbComparatorPreimagesV1
-    manifest: protocol.ContentResolvedComparatorManifestV1
+    manifest: protocol.ContentResolvedComparatorManifestV2
     structural_source_identity: bytes
     build_input_identity: bytes
     pipeline_policy_identity: bytes
@@ -567,7 +567,7 @@ class DiagnosticArbComparatorV1:
     def __init__(
         self,
         preimages: ArbComparatorPreimagesV1,
-        manifest: protocol.ContentResolvedComparatorManifestV1,
+        manifest: protocol.ContentResolvedComparatorManifestV2,
         structural_source_identity: bytes,
         build_input_identity: bytes,
         pipeline_policy_identity: bytes,
@@ -581,7 +581,7 @@ class DiagnosticArbComparatorV1:
         if type(preimages) is not ArbComparatorPreimagesV1:
             raise TypeError("invalid comparator preimages")
         if (
-            type(manifest) is not protocol.ContentResolvedComparatorManifestV1
+            type(manifest) is not protocol.ContentResolvedComparatorManifestV2
             or manifest.manifest.kind is not protocol.ComparatorKindV1.ARB
         ):
             raise TypeError("invalid Arb comparator manifest")
@@ -595,7 +595,7 @@ class DiagnosticArbComparatorV1:
             hashlib.sha256(getattr(preimages, name)).digest(): getattr(preimages, name)
             for name in preimage_names
         }
-        replayed = protocol.ContentResolvedComparatorManifestV1.admit(
+        replayed = protocol.ContentResolvedComparatorManifestV2.admit(
             manifest.manifest,
             by_digest.get,
         )
@@ -614,9 +614,16 @@ class DiagnosticArbComparatorV1:
             or rebuild_sha256s != (binary_sha256, binary_sha256)
         ):
             raise TypeError("invalid comparator rebuild binding")
-        for name, value in locals().items():
-            if name in self.__dataclass_fields__:
-                object.__setattr__(self, name, value)
+        for field_name, field_value in (
+            ("preimages", preimages),
+            ("manifest", manifest),
+            ("structural_source_identity", structural_source_identity),
+            ("build_input_identity", build_input_identity),
+            ("pipeline_policy_identity", pipeline_policy_identity),
+            ("binary_sha256", binary_sha256),
+            ("rebuild_sha256s", rebuild_sha256s),
+        ):
+            object.__setattr__(self, field_name, field_value)
 
     @property
     def identity(self) -> bytes:
@@ -1147,7 +1154,7 @@ def _derive_arb_comparator_for_build_v1(
         hashlib.sha256(getattr(preimages, item.name)).digest()
         for item in fields(preimages)
     )
-    manifest_value = protocol.ComparatorManifestV1(
+    manifest_value = protocol.ComparatorManifestV2(
         protocol.ComparatorKindV1.ARB,
         *coordinates,
     )
@@ -1155,7 +1162,7 @@ def _derive_arb_comparator_for_build_v1(
         coordinate: getattr(preimages, item.name)
         for coordinate, item in zip(coordinates, fields(preimages), strict=True)
     }
-    resolved = protocol.ContentResolvedComparatorManifestV1.admit(
+    resolved = protocol.ContentResolvedComparatorManifestV2.admit(
         manifest_value,
         by_digest.get,
     )
@@ -1185,10 +1192,9 @@ class NativeDockerBuildBackendV1:
         if not isinstance(docker_path, Path) or not docker_path.is_absolute():
             raise TypeError("docker_path must be an absolute Path")
         self._docker_path = docker_path
-        self._platform_name = sys_platform = (
+        self._platform_name = (
             platform.system().lower() if platform_name is None else platform_name
         )
-        self._platform_name = "linux" if sys_platform == "linux" else sys_platform
         self._machine_name = platform.machine() if machine_name is None else machine_name
         self._monotonic_ns = monotonic_ns
 
@@ -1771,9 +1777,34 @@ class DiagnosticBuildObservationV1:
             raise TypeError("comparator does not bind this diagnostic build")
         if type(binary) is not bytes or hashlib.sha256(binary).digest() != binary_sha256:
             raise TypeError("invalid owned binary")
-        for name, value in locals().items():
-            if name in self.__dataclass_fields__ and not name.startswith("_"):
-                object.__setattr__(self, name, value)
+        for field_name, field_value in (
+            ("structural_source_identity", structural_source_identity),
+            ("flint_commit_content_identity", flint_commit_content_identity),
+            ("flint_commit_content_file_count", flint_commit_content_file_count),
+            (
+                "flint_project_pinned_release_only_identity",
+                flint_project_pinned_release_only_identity,
+            ),
+            (
+                "flint_project_pinned_release_only_file_count",
+                flint_project_pinned_release_only_file_count,
+            ),
+            ("build_input_identity", build_input_identity),
+            ("formula_support_identity", formula_support_identity),
+            ("pipeline_policy_identity", pipeline_policy_identity),
+            (
+                "docker_daemon_observation_sha256",
+                docker_daemon_observation_sha256,
+            ),
+            ("oci_image_reference", oci_image_reference),
+            ("oci_platform", oci_platform),
+            ("binary_sha256", binary_sha256),
+            ("rebuild_sha256s", rebuild_sha256s),
+            ("host_trust", host_trust),
+            ("build_processes", build_processes),
+            ("comparator", comparator),
+        ):
+            object.__setattr__(self, field_name, field_value)
         object.__setattr__(self, "_binary", binary)
 
     @property
@@ -2123,15 +2154,25 @@ def _read_build_output(directory: Path, maximum: int) -> bytes:
         os.close(directory_fd)
 
 
+class ExecutionControllerV1(Protocol):
+    def probe(self) -> executor.CapabilityReportV1: ...
+
+    def execute(
+        self,
+        request: executor.ExecutionRequestV1,
+        capability: executor.SupportedV1,
+    ) -> executor.ExecutionResultV1: ...
+
+
 class ControlledPipelineV1:
     def __init__(
         self,
         *,
         build_backend: DockerBuildBackendV1,
-        executor: object,
+        execution_controller: ExecutionControllerV1 | None,
     ) -> None:
         self._build_backend = build_backend
-        self._executor = executor
+        self._execution_controller = execution_controller
 
     def build(self, request: PipelineRequestV1) -> BuildResultV1:
         """Observe two fresh equal builds without requiring a RUN capability."""
@@ -2206,8 +2247,13 @@ class ControlledPipelineV1:
         build_observation = self.build(request)
         if type(build_observation) is not DiagnosticBuildObservationV1:
             return build_observation
+        if self._execution_controller is None:
+            return ExecutionRejectedV1(
+                ExecutionFailureReasonV1.BACKEND_CONTRACT,
+                "execution controller is unavailable",
+            )
         try:
-            execution_report = self._executor.probe()
+            execution_report = self._execution_controller.probe()
         except Exception:
             return ExecutionRejectedV1(
                 ExecutionFailureReasonV1.BACKEND_CONTRACT,
@@ -2250,14 +2296,17 @@ class ControlledPipelineV1:
         invocation_identity = invocation_identity_v1(invocation)
         platform_identity = platform_identity_v1(execution_report)
         try:
-            execution_result = self._executor.execute(invocation)
+            execution_result = self._execution_controller.execute(
+                invocation,
+                execution_report,
+            )
         except Exception:
             return ExecutionRejectedV1(
                 ExecutionFailureReasonV1.BACKEND_CONTRACT,
                 "executor raised",
             )
         if type(execution_result) is not executor.CompletedV1:
-            if not executor._result_matches_request(execution_result, invocation):
+            if not executor.result_matches_request_v1(execution_result, invocation):
                 return ExecutionRejectedV1(
                     ExecutionFailureReasonV1.BACKEND_CONTRACT,
                     execution_result,
@@ -2271,7 +2320,7 @@ class ControlledPipelineV1:
                 ExecutionFailureReasonV1.BINARY_MISMATCH,
                 execution_result,
             )
-        if not executor._result_matches_request(execution_result, invocation):
+        if not executor.result_matches_request_v1(execution_result, invocation):
             return ExecutionRejectedV1(
                 ExecutionFailureReasonV1.BACKEND_CONTRACT,
                 execution_result,
@@ -2301,7 +2350,7 @@ class ControlledPipelineV1:
                 "transcript does not bind the exact job/domain/comparator",
             )
         try:
-            protocol._validate_witness_alignment(
+            protocol.validate_witness_alignment_v1(
                 request.job.domain,
                 transcript.decision_bits,
                 transcript.point_count,
@@ -2476,7 +2525,7 @@ class ControlledPipelineV1:
                         output,
                         request.execution_limits.max_executable_bytes,
                     )
-                    executor._require_static_x86_64_elf(binary)
+                    executor.require_static_x86_64_elf_v1(binary)
                 except (OSError, _TreeMismatchV1, executor.ExecutionRequestErrorV1):
                     return BuildRejectedV1(
                         attempt,

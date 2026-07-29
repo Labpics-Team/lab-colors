@@ -71,6 +71,11 @@ def fixture() -> tuple[provenance.SourceReleaseLockV1, bytes]:
 
 
 class SourceSnapshotTests(unittest.TestCase):
+    def test_snapshot_depends_only_on_public_provenance_surface(self) -> None:
+        source = (ARB / "snapshot.py").read_text(encoding="utf-8")
+
+        self.assertNotIn("provenance._", source)
+
     def test_only_admitted_regular_files_materialize_with_exact_modes(self) -> None:
         lock, archive_bytes = fixture()
         admitted = provenance.admit_source_archive(lock, archive_bytes)
