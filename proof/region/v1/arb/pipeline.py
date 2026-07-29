@@ -79,6 +79,12 @@ DOCKER_PROBE_TIMEOUT_NS_V1 = 30 * 1_000_000_000
 MAX_BUILD_SOURCE_FILE_BYTES_V1 = 16 * 1024 * 1024
 MAX_BUILD_SOURCE_TOTAL_BYTES_V1 = 32 * 1024 * 1024
 
+# FLINT's exact locked qsieve path uses /tmp directly rather than TMPDIR.  A
+# container-private tmpfs preserves a read-only root without a host bind,
+# volume, or reusable writable-layer scratch.  POSIX sticky-directory mode is
+# required because the container runs as the unprivileged host runner identity.
+_BUILD_TMPFS_SPEC_V1 = "/tmp:rw,noexec,nosuid,nodev,mode=1777"
+
 _BUILD_SOURCES_ID_LABEL_V1 = b"labcolors.proof-region.arb-build-sources.v1\0"
 _BUILD_INPUT_ID_LABEL_V1 = b"labcolors.proof-region.arb-compiler-inputs.v1\0"
 _FORMULA_SUPPORT_ID_LABEL_V1 = b"labcolors.proof-region.arb-formula-support.v1\0"
@@ -295,6 +301,7 @@ def pipeline_policy_identity_v1(
             b"run-observation=diagnostic-unsealed-v1",
             b"network=none",
             b"rootfs=readonly",
+            b"scratch-tmpfs=" + _BUILD_TMPFS_SPEC_V1.encode("ascii"),
             b"cap-drop=all",
             b"no-new-privileges=true",
             b"inputs=readonly-bind",
@@ -1302,6 +1309,8 @@ class NativeDockerBuildBackendV1:
             "--network",
             "none",
             "--read-only",
+            "--tmpfs",
+            _BUILD_TMPFS_SPEC_V1,
             "--cap-drop",
             "ALL",
             "--security-opt",

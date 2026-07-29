@@ -674,6 +674,19 @@ class CausalPipelineTests(unittest.TestCase):
 
         self.assertNotEqual(original, changed)
 
+    def test_pipeline_policy_identity_binds_the_private_tmpfs_policy(self) -> None:
+        trust = pipeline.HostTrustBoundaryV1.PERSISTENT_SELF_HOSTED_DOCKER
+        original = pipeline.pipeline_policy_identity_v1(trust)
+
+        with mock.patch.object(
+            pipeline,
+            "_BUILD_TMPFS_SPEC_V1",
+            "/tmp:rw,exec,suid,dev,mode=1777",
+        ):
+            changed = pipeline.pipeline_policy_identity_v1(trust)
+
+        self.assertNotEqual(original, changed)
+
     def test_build_only_does_not_probe_or_execute_run_backend(self) -> None:
         binary = _static_elf(b"build-only")
         controller = pipeline.ControlledPipelineV1(
@@ -1040,7 +1053,9 @@ class DockerCommandContractTests(unittest.TestCase):
     def test_command_is_exact_digest_offline_read_only_and_capability_free(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary).resolve()
-            directories = tuple(root / name for name in ("inputs", "workspace", "build", "out"))
+            directories = tuple(
+                root / name for name in ("inputs", "workspace", "build", "out")
+            )
             for directory in directories:
                 directory.mkdir()
             request = pipeline.DockerBuildRequestV1(
@@ -1081,6 +1096,53 @@ class DockerCommandContractTests(unittest.TestCase):
                 self.assertIn(fragment, joined)
         for forbidden in ("--privileged", "--network host", ":latest"):
             self.assertNotIn(forbidden, joined)
+
+    def test_command_exposes_only_a_private_non_executable_standard_tmp(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            directories = tuple(root / name for name in ("inputs", "workspace", "build", "out"))
+            for directory in directories:
+                directory.mkdir()
+            request = pipeline.DockerBuildRequestV1(
+                1,
+                root,
+                *directories,
+                root / "container.cid",
+                "labcolors-arb-build-v1-test",
+            )
+            command = pipeline.NativeDockerBuildBackendV1(
+                Path("/usr/bin/docker"),
+                platform_name="linux",
+                machine_name="x86_64",
+            ).command_for(request)
+
+        tmpfs_indexes = tuple(
+            index for index, item in enumerate(command) if item == "--tmpfs"
+        )
+        self.assertEqual(len(tmpfs_indexes), 1)
+        self.assertEqual(
+            command[tmpfs_indexes[0] + 1],
+            "/tmp:rw,noexec,nosuid,nodev,mode=1777",
+        )
+        self.assertNotIn("src=", command[tmpfs_indexes[0] + 1])
+        mount_indexes = tuple(
+            index for index, item in enumerate(command) if item == "--mount"
+        )
+        self.assertEqual(len(mount_indexes), 4)
+        mount_specs = tuple(command[index + 1] for index in mount_indexes)
+        mount_destinations = tuple(
+            item.removeprefix("dst=")
+            for spec in mount_specs
+            for item in spec.split(",")
+            if item.startswith("dst=")
+        )
+        self.assertEqual(
+            mount_destinations,
+            ("/inputs", "/workspace", "/build", "/out"),
+        )
+        self.assertTrue(all("dst=/tmp" not in spec for spec in mount_specs))
+        self.assertNotIn("-v", command)
+        self.assertNotIn("--volume", command)
 
     def test_native_probe_fails_closed_without_linux_or_exact_docker(self) -> None:
         non_linux = pipeline.NativeDockerBuildBackendV1(
