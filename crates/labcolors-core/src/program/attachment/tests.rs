@@ -417,6 +417,14 @@ fn failed_closed_admission_is_atomic_and_mints_epoch_only_after_install() {
         failure.cause(),
         &InMemoryPointSinkAdmissionErrorV1::RejectedAfterInstall
     );
+    assert_eq!(
+        format!("{failure:?}"),
+        format!(
+            "PreparedAttachmentAdmissionFailureV2 {{ cause: {:?}, .. }}",
+            failure.cause(),
+        ),
+        "prepared retry failures must not expose the retained Session or sink",
+    );
     assert!(probe.ambient_fallback_is_exposed());
     assert_eq!(probe.admitted_stamp(), None);
 

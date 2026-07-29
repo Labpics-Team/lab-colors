@@ -83,11 +83,11 @@
       "sha256": "0c8a7bb59464e1ddcace07b01ba24a64f8c9d3aeff547651dc38c276a0fc3322"
     },
     {
-      "bytes": 84056,
+      "bytes": 84322,
       "license": "MIT",
       "path": "crates/labcolors-core/src/program/attachment/tests.rs",
       "role": "point_attachment_tests",
-      "sha256": "c0cc95e19cd1c6997095d5ec553ede65b74d437151a96775674f4d83ec264ce4"
+      "sha256": "ec01bb517beca62783c9b0a5335a6ef73fea420afcbf53e315deb28938de3382"
     },
     {
       "bytes": 195771,
@@ -97,11 +97,11 @@
       "sha256": "6e187abc464884db41da7ab1fbec49abf97eb1a83a111f1c62e3a24ec0c069f9"
     },
     {
-      "bytes": 82622,
+      "bytes": 82656,
       "license": "MIT",
       "path": "crates/labcolors-core/src/program_identity.rs",
       "role": "program_identity_source",
-      "sha256": "7665fcb4b49b577e6e2b97cc9684904731683f96cf580e5487a20eb90f041cef"
+      "sha256": "a1b7a592ad5046a686920102fd212319f000ee550ba179d1e20e846960fa781b"
     },
     {
       "bytes": 224928,

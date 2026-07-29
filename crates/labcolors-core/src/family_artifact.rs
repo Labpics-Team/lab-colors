@@ -26,10 +26,13 @@ use crate::sha256::Hasher;
 const MAGIC_V2: &[u8; 8] = b"LCFAM2\0\0";
 const ENVELOPE_RELEASE_V2: u8 = 2;
 const SIGNAL_DOMAIN_SRGB8_D65_V1: u8 = 1;
+// Полная кардинальность sRGB8: большее exact-множество обязано повторить сигнал.
 const MAX_SRGB8_MEMBER_COUNT_V1: u64 = 1 << 24;
 const SIGNAL_ORDINAL_RGB_BIG_ENDIAN_V1: u8 = 1;
 const PROOF_RELEASE_FIXTURE_EXACT_IMAGE_V1: u8 = 1;
 const VERIFIER_RELEASE_FIXTURE_REPLAY_V1: u8 = 1;
+// magic + 6 release/domain tags + 6 SHA-256 identities + 2 u64 lengths + receipt.
+// Любое изменение certificate layout обязано синхронно менять этот размер.
 const HEADER_LEN_V2: usize = 254;
 const PAYLOAD_DIGEST_DOMAIN_V2: &[u8] = b"labcolors.family-artifact-payload.v2\0";
 const RECEIPT_DOMAIN_V2: &[u8] = b"labcolors.family-artifact-receipt.v2\0";
@@ -332,14 +335,6 @@ pub(crate) struct AdmittedFamilyArtifactV2 {
     drop_probe: Option<ArtifactDropProbeV1>,
 }
 
-impl PartialEq for AdmittedFamilyArtifactV2 {
-    fn eq(&self, other: &Self) -> bool {
-        self.certificate == other.certificate && self.members == other.members
-    }
-}
-
-impl Eq for AdmittedFamilyArtifactV2 {}
-
 #[cfg(test)]
 #[derive(Debug)]
 struct ArtifactDropProbeV1(std::rc::Rc<core::cell::Cell<usize>>);
@@ -606,8 +601,7 @@ impl VerifiedFamilyArtifactEnvelopeV2 {
             parsed.certificate.member_count,
             payload,
         )?;
-        let actual_count = u64::try_from(members.len())
-            .map_err(|_| FamilyArtifactLoadErrorV1::ResourceExhausted)?;
+        let actual_count = members.len() as u64;
         if actual_count != parsed.certificate.member_count {
             return Err(FamilyArtifactLoadErrorV1::DecodedMemberCountMismatch {
                 expected: parsed.certificate.member_count,
@@ -615,11 +609,8 @@ impl VerifiedFamilyArtifactEnvelopeV2 {
             });
         }
         let image = canonical_family_image_digest_v2(OutputProfileId::Iec61966Srgb8D65V1, &members)
-            .map_err(|error| match error {
-                CanonicalFamilyImageErrorV2::ResourceExhausted => {
-                    FamilyArtifactLoadErrorV1::ResourceExhausted
-                }
-                _ => FamilyArtifactLoadErrorV1::InvalidCodecPayload,
+            .map_err(|CanonicalFamilyImageErrorV2::NonCanonicalAdmittedImage| {
+                FamilyArtifactLoadErrorV1::InvalidCodecPayload
             })?;
         if image != parsed.certificate.image_digest {
             return Err(FamilyArtifactLoadErrorV1::ImageDigestMismatch);
@@ -734,6 +725,7 @@ fn decode_fixture_payload(
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum FamilyArtifactBuildErrorV1 {
     ResourceExhausted,
+    NonCanonicalFixture,
 }
 
 #[cfg(test)]
@@ -749,11 +741,13 @@ pub(crate) fn encode_fixture_family_artifact_v2(
     canonical.extend_from_slice(members);
     canonical.sort_unstable_by_key(|member| signal_key(*member));
     canonical.dedup_by_key(|member| signal_key(*member));
-    let member_count = u64::try_from(canonical.len())
-        .map_err(|_| FamilyArtifactBuildErrorV1::ResourceExhausted)?;
+    let member_count = canonical.len() as u64;
     let image_digest =
-        canonical_family_image_digest_v2(OutputProfileId::Iec61966Srgb8D65V1, &canonical)
-            .map_err(|_| FamilyArtifactBuildErrorV1::ResourceExhausted)?;
+        canonical_family_image_digest_v2(OutputProfileId::Iec61966Srgb8D65V1, &canonical).map_err(
+            |CanonicalFamilyImageErrorV2::NonCanonicalAdmittedImage| {
+                FamilyArtifactBuildErrorV1::NonCanonicalFixture
+            },
+        )?;
     let semantic_release = semantic_family_release_id_v2(definition, image_digest, member_count);
     let proof_artifact =
         fixture_proof_artifact_id(definition, image_digest, semantic_release, member_count);
@@ -775,8 +769,7 @@ pub(crate) fn encode_fixture_family_artifact_v2(
     for member in encoded_order {
         payload.extend_from_slice(&member.srgb8().bytes());
     }
-    let payload_len =
-        u64::try_from(payload.len()).map_err(|_| FamilyArtifactBuildErrorV1::ResourceExhausted)?;
+    let payload_len = payload.len() as u64;
     let mut certificate = FamilyImageCertificateV2 {
         envelope_release: ENVELOPE_RELEASE_V2,
         codec_release: codec as u8,
@@ -958,7 +951,7 @@ fn decode_certificate(bytes: &[u8]) -> FamilyImageCertificateV2 {
 ///
 /// Transport не повторяет client-owned `FamilyId → semantic`: один artifact
 /// обслуживает все opaque aliases одного semantic release.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug)]
 pub(crate) struct FamilyArtifactBundleV2 {
     artifacts: Box<[AdmittedFamilyArtifactV2]>,
 }
@@ -1000,16 +993,26 @@ impl FamilyArtifactBundleV2 {
                 artifacts,
             ));
         }
-        if let Some(semantic) = declarations
-            .iter()
-            .map(|declaration| declaration.semantic())
-            .filter(|semantic| {
-                artifacts
-                    .binary_search_by_key(semantic, AdmittedFamilyArtifactV2::semantic_release)
-                    .is_err()
-            })
-            .min()
-        {
+        let mut slots = Vec::new();
+        if slots.try_reserve_exact(declarations.len()).is_err() {
+            return Err(bind_failure(
+                FamilyArtifactBindErrorV2::ResourceExhausted,
+                artifacts,
+            ));
+        }
+        let mut missing: Option<SemanticFamilyReleaseIdV2> = None;
+        for declaration in declarations.iter().copied() {
+            let semantic = declaration.semantic();
+            match artifacts
+                .binary_search_by_key(&semantic, AdmittedFamilyArtifactV2::semantic_release)
+            {
+                Ok(index) => slots.push(index),
+                Err(_) => {
+                    missing = Some(missing.map_or(semantic, |current| current.min(semantic)));
+                }
+            }
+        }
+        if let Some(semantic) = missing {
             return Err(bind_failure(
                 FamilyArtifactBindErrorV2::Contract(FamilyArtifactContractErrorV2::Missing {
                     semantic,
@@ -1018,13 +1021,6 @@ impl FamilyArtifactBundleV2 {
             ));
         }
 
-        let mut slots = Vec::new();
-        if slots.try_reserve_exact(declarations.len()).is_err() {
-            return Err(bind_failure(
-                FamilyArtifactBindErrorV2::ResourceExhausted,
-                artifacts,
-            ));
-        }
         let mut used = Vec::new();
         if used.try_reserve_exact(artifacts.len()).is_err() {
             return Err(bind_failure(
@@ -1033,24 +1029,8 @@ impl FamilyArtifactBundleV2 {
             ));
         }
         used.resize(artifacts.len(), false);
-
-        for declaration in declarations.iter().copied() {
-            let semantic = declaration.semantic();
-            let artifact_index = match artifacts
-                .binary_search_by_key(&semantic, AdmittedFamilyArtifactV2::semantic_release)
-            {
-                Ok(index) => index,
-                Err(_) => {
-                    return Err(bind_failure(
-                        FamilyArtifactBindErrorV2::Contract(
-                            FamilyArtifactContractErrorV2::Missing { semantic },
-                        ),
-                        artifacts,
-                    ));
-                }
-            };
+        for artifact_index in slots.iter().copied() {
             used[artifact_index] = true;
-            slots.push(artifact_index);
         }
         if let Some((artifact_index, _)) = used.iter().enumerate().find(|(_, used)| !**used) {
             return Err(bind_failure(
@@ -1091,7 +1071,6 @@ pub(crate) enum FamilyArtifactBindErrorV2 {
 }
 
 /// Failed binding returns the same loaded storage without reload or decode.
-#[derive(PartialEq, Eq)]
 pub(crate) struct FamilyArtifactBindFailureV2 {
     cause: FamilyArtifactBindErrorV2,
     bundle: FamilyArtifactBundleV2,
@@ -1117,7 +1096,7 @@ impl FamilyArtifactBindFailureV2 {
 }
 
 /// Canonical family-index aligned executable storage of one Session generation.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug)]
 pub(crate) struct BoundFamilyArtifactBundleV2 {
     artifacts: Box<[AdmittedFamilyArtifactV2]>,
     family_artifact_indices: Box<[usize]>,
@@ -1131,8 +1110,7 @@ impl BoundFamilyArtifactBundleV2 {
 
     pub(crate) fn execution_bindings(&self) -> FamilyExecutionBindingsV2<'_> {
         FamilyExecutionBindingsV2 {
-            artifacts: &self.artifacts,
-            index: 0,
+            artifacts: self.artifacts.iter(),
         }
     }
 
@@ -1160,16 +1138,14 @@ impl FamilyExecutionBindingV2 {
 }
 
 pub(crate) struct FamilyExecutionBindingsV2<'a> {
-    artifacts: &'a [AdmittedFamilyArtifactV2],
-    index: usize,
+    artifacts: core::slice::Iter<'a, AdmittedFamilyArtifactV2>,
 }
 
 impl Iterator for FamilyExecutionBindingsV2<'_> {
     type Item = FamilyExecutionBindingV2;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let artifact = self.artifacts.get(self.index)?;
-        self.index += 1;
+        let artifact = self.artifacts.next()?;
         Some(FamilyExecutionBindingV2 {
             semantic: artifact.semantic_release(),
             receipt: artifact.artifact_receipt(),
@@ -1177,8 +1153,7 @@ impl Iterator for FamilyExecutionBindingsV2<'_> {
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
-        let remaining = self.artifacts.len().saturating_sub(self.index);
-        (remaining, Some(remaining))
+        self.artifacts.size_hint()
     }
 }
 

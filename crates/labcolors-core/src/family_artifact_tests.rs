@@ -176,8 +176,8 @@ fn payload_corruption_is_rejected_before_decoder_dispatch() {
     FAMILY_ARTIFACT_DECODER_CALLS.with(|calls| calls.set(0));
 
     assert_eq!(
-        load_fixture(certificate, encoded),
-        Err(FamilyArtifactLoadErrorV1::PayloadDigestMismatch),
+        load_fixture(certificate, encoded).unwrap_err(),
+        FamilyArtifactLoadErrorV1::PayloadDigestMismatch,
     );
     assert_eq!(FAMILY_ARTIFACT_DECODER_CALLS.with(core::cell::Cell::get), 0);
 }
@@ -232,7 +232,7 @@ fn envelope_discriminants_are_rejected_before_certificate_or_decoder_admission()
 
     for (malformed, expected) in cases {
         FAMILY_ARTIFACT_DECODER_CALLS.with(|calls| calls.set(0));
-        assert_eq!(load_fixture(certificate, malformed), Err(expected));
+        assert_eq!(load_fixture(certificate, malformed).unwrap_err(), expected);
         assert_eq!(FAMILY_ARTIFACT_DECODER_CALLS.with(core::cell::Cell::get), 0);
     }
 }
@@ -253,8 +253,9 @@ fn receipt_semantic_codec_and_image_checks_reach_their_own_branches() {
         load_fixture(
             invalid_receipt,
             encoded.clone().with_certificate_for_test(invalid_receipt),
-        ),
-        Err(FamilyArtifactLoadErrorV1::ArtifactReceiptMismatch),
+        )
+        .unwrap_err(),
+        FamilyArtifactLoadErrorV1::ArtifactReceiptMismatch,
     );
     assert_eq!(FAMILY_ARTIFACT_DECODER_CALLS.with(core::cell::Cell::get), 0);
 
@@ -264,8 +265,9 @@ fn receipt_semantic_codec_and_image_checks_reach_their_own_branches() {
         load_fixture(
             invalid_semantic,
             encoded.clone().with_certificate_for_test(invalid_semantic),
-        ),
-        Err(FamilyArtifactLoadErrorV1::SemanticReleaseMismatch),
+        )
+        .unwrap_err(),
+        FamilyArtifactLoadErrorV1::SemanticReleaseMismatch,
     );
     assert_eq!(FAMILY_ARTIFACT_DECODER_CALLS.with(core::cell::Cell::get), 0);
 
@@ -275,8 +277,9 @@ fn receipt_semantic_codec_and_image_checks_reach_their_own_branches() {
         load_fixture(
             unsupported_codec,
             encoded.clone().with_certificate_for_test(unsupported_codec),
-        ),
-        Err(FamilyArtifactLoadErrorV1::UnsupportedCodec),
+        )
+        .unwrap_err(),
+        FamilyArtifactLoadErrorV1::UnsupportedCodec,
     );
     assert_eq!(FAMILY_ARTIFACT_DECODER_CALLS.with(core::cell::Cell::get), 0);
 
@@ -286,8 +289,9 @@ fn receipt_semantic_codec_and_image_checks_reach_their_own_branches() {
         load_fixture(
             invalid_image,
             encoded.with_certificate_for_test(invalid_image),
-        ),
-        Err(FamilyArtifactLoadErrorV1::ImageDigestMismatch),
+        )
+        .unwrap_err(),
+        FamilyArtifactLoadErrorV1::ImageDigestMismatch,
     );
     assert_eq!(FAMILY_ARTIFACT_DECODER_CALLS.with(core::cell::Cell::get), 1);
 
@@ -304,8 +308,9 @@ fn receipt_semantic_codec_and_image_checks_reach_their_own_branches() {
         load_fixture(
             wrong_decoder,
             reversed.with_certificate_for_test(wrong_decoder),
-        ),
-        Err(FamilyArtifactLoadErrorV1::InvalidCodecPayload),
+        )
+        .unwrap_err(),
+        FamilyArtifactLoadErrorV1::InvalidCodecPayload,
     );
     assert_eq!(FAMILY_ARTIFACT_DECODER_CALLS.with(core::cell::Cell::get), 1);
 }
@@ -323,8 +328,8 @@ fn impossible_srgb8_set_cardinality_is_rejected_before_decoder_dispatch() {
     let impossible = certificate.member_count_with_coherent_certificate_for_test((1_u64 << 24) + 1);
     FAMILY_ARTIFACT_DECODER_CALLS.with(|calls| calls.set(0));
     assert_eq!(
-        load_fixture(impossible, encoded.with_certificate_for_test(impossible),),
-        Err(FamilyArtifactLoadErrorV1::InvalidMemberCount),
+        load_fixture(impossible, encoded.with_certificate_for_test(impossible),).unwrap_err(),
+        FamilyArtifactLoadErrorV1::InvalidMemberCount,
     );
     assert_eq!(FAMILY_ARTIFACT_DECODER_CALLS.with(core::cell::Cell::get), 0);
 }
@@ -435,8 +440,8 @@ fn a_structurally_valid_foreign_certificate_is_not_a_generic_digest_error() {
     FAMILY_ARTIFACT_DECODER_CALLS.with(|calls| calls.set(0));
 
     assert_eq!(
-        load_fixture(expected, encoded),
-        Err(FamilyArtifactLoadErrorV1::ForeignCertificate),
+        load_fixture(expected, encoded).unwrap_err(),
+        FamilyArtifactLoadErrorV1::ForeignCertificate,
     );
     assert_eq!(FAMILY_ARTIFACT_DECODER_CALLS.with(core::cell::Cell::get), 0);
 }
@@ -469,8 +474,8 @@ fn every_certificate_identity_field_is_bound_before_decode() {
     for mutant in certificate.identity_mutants_for_test() {
         FAMILY_ARTIFACT_DECODER_CALLS.with(|calls| calls.set(0));
         assert_eq!(
-            load_fixture(mutant, encoded.clone()),
-            Err(FamilyArtifactLoadErrorV1::ForeignCertificate),
+            load_fixture(mutant, encoded.clone()).unwrap_err(),
+            FamilyArtifactLoadErrorV1::ForeignCertificate,
         );
         assert_eq!(FAMILY_ARTIFACT_DECODER_CALLS.with(core::cell::Cell::get), 0);
     }
@@ -510,13 +515,29 @@ fn exact_pool_binding_is_repairable_without_redecoding_retained_artifacts() {
             semantic: second_semantic,
         }),
     );
+    assert_eq!(
+        format!("{failure:?}"),
+        format!(
+            "FamilyArtifactBindFailureV2 {{ cause: {:?}, .. }}",
+            failure.cause(),
+        ),
+        "owning bind failures must expose only their typed cause",
+    );
     let (_, returned) = failure.into_parts();
     let mut retained = returned.into_artifacts();
     retained.push(second_artifact);
     let bound = FamilyArtifactBundleV2::from_artifacts(retained)
         .bind(&declarations)
         .unwrap();
-    assert_eq!(bound.execution_bindings().len(), 2);
+    let mut execution = bound.execution_bindings();
+    assert_eq!(execution.len(), 2);
+    let first = execution.next().unwrap();
+    assert_eq!(execution.len(), 1);
+    let second = execution.next().unwrap();
+    assert_ne!(first.semantic(), second.semantic());
+    assert_eq!(execution.len(), 0);
+    assert_eq!(execution.next(), None);
+    assert_eq!(execution.next(), None, "the iterator must stay fused");
     assert_eq!(
         FAMILY_ARTIFACT_DECODER_CALLS.with(core::cell::Cell::get),
         2,

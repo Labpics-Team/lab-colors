@@ -23,6 +23,13 @@ mod assess_counter {
 const FAMILY_DEFINITION_DOMAIN_V2: &[u8] = b"labcolors.family-definition.v2\0";
 const FAMILY_IMAGE_DOMAIN_V2: &[u8] = b"labcolors.family-canonical-image.v2\0";
 const FAMILY_SEMANTIC_RELEASE_DOMAIN_V2: &[u8] = b"labcolors.family-semantic-release.v2\0";
+// Image и semantic preimage развиваются независимо; общий literal мог бы
+// незаметно переиспользовать старый content address при изменении только одного.
+const FAMILY_IMAGE_ENCODING_RELEASE_V2: u8 = 2;
+const FAMILY_SEMANTIC_ENCODING_RELEASE_V2: u8 = 2;
+// Канонические кодеки пишут длины как u64. Этот закон платформы делает каждое
+// usize → u64 преобразование точным вместо ложной runtime-ветки ошибки.
+const _: () = assert!(usize::BITS <= u64::BITS);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 #[repr(u8)]
@@ -165,11 +172,13 @@ pub(crate) fn canonical_family_image_digest_v2(
     {
         return Err(CanonicalFamilyImageErrorV2::NonCanonicalAdmittedImage);
     }
-    let count =
-        u64::try_from(members.len()).map_err(|_| CanonicalFamilyImageErrorV2::ResourceExhausted)?;
+    let count = members.len() as u64;
     let mut hasher = Hasher::new();
     hasher.update(FAMILY_IMAGE_DOMAIN_V2);
-    hasher.update(&[2, output_profile_tag(output_profile) as u8]);
+    hasher.update(&[
+        FAMILY_IMAGE_ENCODING_RELEASE_V2,
+        output_profile_tag(output_profile) as u8,
+    ]);
     hasher.update(&count.to_be_bytes());
     for member in members.iter().copied() {
         hasher.update(&[output_profile_tag(member.output_profile()) as u8]);
@@ -192,7 +201,7 @@ pub(crate) fn semantic_family_release_id_v2(
 ) -> SemanticFamilyReleaseIdV2 {
     let mut hasher = Hasher::new();
     hasher.update(FAMILY_SEMANTIC_RELEASE_DOMAIN_V2);
-    hasher.update(&[2]);
+    hasher.update(&[FAMILY_SEMANTIC_ENCODING_RELEASE_V2]);
     hasher.update(definition.as_bytes());
     hasher.update(image.as_bytes());
     hasher.update(&member_count.to_be_bytes());
@@ -210,5 +219,4 @@ pub(crate) struct FamilyMembershipViolationV1;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum CanonicalFamilyImageErrorV2 {
     NonCanonicalAdmittedImage,
-    ResourceExhausted,
 }

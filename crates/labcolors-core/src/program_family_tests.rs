@@ -782,6 +782,19 @@ fn missing_loaded_artifact_is_rejected_before_a_session_exists() {
             semantic: family.semantic,
         }),
     );
+    assert_eq!(
+        format!("{failure:?}"),
+        format!(
+            "InstantiateFailureV2 {{ cause: {:?}, .. }}",
+            failure.cause(),
+        ),
+        "owning instantiate failures must expose only their typed cause",
+    );
+    assert_eq!(
+        FAMILY_MEMBERSHIP_ASSESS_CALLS.with(core::cell::Cell::get),
+        0,
+        "rejected admission must not reach membership assessment",
+    );
     let (_, returned) = failure.into_parts();
     let mut artifacts = returned.into_artifacts();
     artifacts.push(family.artifact);

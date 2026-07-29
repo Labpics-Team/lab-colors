@@ -23,6 +23,7 @@ mod release_tag {
     pub(super) const FINITE_ATOMIC_PAINT_CANDIDATE_V1: u8 = 1;
     pub(super) const MODELED_POINT_PRESENTATION_V1: u8 = 1;
     pub(super) const POINT_ABSENCE_BYPASS_OWN_BACKDROP_V1: u8 = 1;
+    #[cfg(test)]
     pub(super) const FAMILY_CERTIFICATE_VERTEX_V1: u8 = 1;
     pub(super) const FAMILY_SEMANTIC_RELEASE_VERTEX_V2: u8 = 2;
     #[cfg(test)]
@@ -59,6 +60,7 @@ mod release_tag {
     pub(super) const EXACT_SRGB8_RELATION_CAPABILITY_V1: u8 = 1;
     pub(super) const FAMILY_MEMBERSHIP_FAMILY_V1: u8 = 6;
     pub(super) const FAMILY_MEMBERSHIP_IDENTITY_V1: u8 = 1;
+    #[cfg(test)]
     pub(super) const FAMILY_MEMBERSHIP_RELEASE_V1: u8 = 1;
     pub(super) const FAMILY_MEMBERSHIP_RELEASE_V2: u8 = 2;
     pub(super) const FAMILY_MEMBERSHIP_CAPABILITY_V1: u8 = 1;
