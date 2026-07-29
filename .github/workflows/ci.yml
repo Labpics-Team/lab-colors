@@ -234,7 +234,7 @@ jobs:
               python -c '\''import sys; expected = (3, 14, 6); actual = sys.version_info[:3]; assert actual == expected, (actual, expected)'\''
               test -f proof/region/v1/tests/test_provenance.py
               python -m unittest proof/region/v1/tests/test_provenance.py -v
-              python -c '\''import unittest; suite = unittest.defaultTestLoader.discover("proof/region/v1/tests", pattern="test_*.py"); count = suite.countTestCases(); minimum = 25; assert count >= minimum, f"region-proof test ratchet regressed: {count} < {minimum}"; print(f"region-proof discovered tests: {count}")'\''
+              python -c '\''import unittest; suite = unittest.defaultTestLoader.discover("proof/region/v1/tests", pattern="test_*.py"); count = suite.countTestCases(); minimum = 25; assert count >= minimum, f"region-proof anti-vacuum floor failed: {count} < {minimum}"; print(f"region-proof discovered tests: {count}")'\''
               python -m unittest discover -s proof/region/v1/tests -p "test_*.py" -v
               PYTHONOPTIMIZE=2 python -m unittest discover -s proof/region/v1/tests -p "test_*.py" -v
               python proof/region/v1/controller.py verify-fixtures --repo-root /workspace
