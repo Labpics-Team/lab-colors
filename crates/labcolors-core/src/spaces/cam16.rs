@@ -27,9 +27,55 @@ use crate::spaces::vc::ViewingConditions;
 const RESPONSE_SCALE: f64 = 400.0;
 const RESPONSE_OFFSET: f64 = 27.13;
 const RESPONSE_EXPONENT: f64 = 0.42;
+const ONE: f64 = 1.0;
 const ACHROMATIC_RED_WEIGHT: f64 = 2.0;
 const ACHROMATIC_BLUE_DIVISOR: f64 = 20.0;
 const ACHROMATIC_WEIGHTS: [f64; 3] = [ACHROMATIC_RED_WEIGHT, 1.0, 1.0 / ACHROMATIC_BLUE_DIVISOR];
+const OPPONENT_A_M_WEIGHT: f64 = 12.0;
+const OPPONENT_A_DIVISOR: f64 = 11.0;
+const OPPONENT_B_DIVISOR: f64 = 9.0;
+const ECCENTRICITY_SCALE: f64 = 0.25;
+const ECCENTRICITY_PHASE_RADIANS: f64 = 2.0;
+const ECCENTRICITY_OFFSET: f64 = 3.8;
+const T_NUMERATOR_SCALE: f64 = 50_000.0;
+const T_NUMERATOR_DIVISOR: f64 = 13.0;
+const T_BLUE_WEIGHT: f64 = 1.05;
+const T_DENOMINATOR_OFFSET: f64 = 0.305;
+const COLORFULNESS_EXPONENT: f64 = 0.9;
+const HUNDRED: f64 = 100.0;
+const UCS_J_SCALE: f64 = 1.7;
+const UCS_J_CURVATURE: f64 = 0.007;
+const UCS_M_CURVATURE: f64 = 0.0228;
+
+/// Точные числовые владельцы, используемые artifact-ом contextual-region.
+///
+/// Test-only view открывает константы, реально используемые production-математикой:
+/// он не дублирует их значения и не добавляет данные или ветви в release-сборку.
+#[cfg(test)]
+pub(crate) fn contextual_region_formula_literals_v1() -> &'static [(&'static str, f64)] {
+    &[
+        ("one", ONE),
+        ("p0_007", UCS_J_CURVATURE),
+        ("p0_0228", UCS_M_CURVATURE),
+        ("p0_25", ECCENTRICITY_SCALE),
+        ("p0_305", T_DENOMINATOR_OFFSET),
+        ("p0_42", RESPONSE_EXPONENT),
+        ("p0_9", COLORFULNESS_EXPONENT),
+        ("p1_05", T_BLUE_WEIGHT),
+        ("p1_7", UCS_J_SCALE),
+        ("two", ACHROMATIC_RED_WEIGHT),
+        ("p3_8", ECCENTRICITY_OFFSET),
+        ("nine", OPPONENT_B_DIVISOR),
+        ("eleven", OPPONENT_A_DIVISOR),
+        ("twelve", OPPONENT_A_M_WEIGHT),
+        ("thirteen", T_NUMERATOR_DIVISOR),
+        ("twenty", ACHROMATIC_BLUE_DIVISOR),
+        ("hundred", HUNDRED),
+        ("p27_13", RESPONSE_OFFSET),
+        ("four_hundred", RESPONSE_SCALE),
+        ("fifty_thousand", T_NUMERATOR_SCALE),
+    ]
+}
 
 #[cfg(test)]
 thread_local! {
@@ -49,7 +95,7 @@ thread_local! {
 /// compression), later formalised in CIE 248:2022. (Not CIE 170-2:2015, which
 /// is the cone-fundamental standard and does not specify CAM16.)
 pub(crate) fn adapt(c: f64, fl: f64) -> f64 {
-    let x = fl * c.abs() / 100.0;
+    let x = fl * c.abs() / HUNDRED;
     let y = x.powf(RESPONSE_EXPONENT);
     // Магнитуда `400·y/(y+27.13)` ≥ 0 (y ≥ 0), а знак берётся у входа `c`. Раньше
     // это делалось умножением на `c.signum()` (∈ {−1, +1} на конечных входах);
@@ -75,7 +121,7 @@ pub(crate) fn unadapt(a: f64, fl: f64) -> f64 {
     // магнитуда 0.0 → copysign(0.0, ±0.0)=±0.0). Свип 0/6.86M расхождений; вход `a`
     // (инверсия конечного J'/M') на этом пути всегда конечен. Убирает ветвящийся
     // `signum` и лишнее умножение из пер-цветового обратного хода (`to_xyz`).
-    (100.0 * y.powf(1.0 / RESPONSE_EXPONENT) / fl).copysign(a)
+    (HUNDRED * y.powf(ONE / RESPONSE_EXPONENT) / fl).copysign(a)
 }
 
 /// CAM16 lightness `J` of a D65-axis stimulus with relative luminance `y`.
@@ -107,9 +153,9 @@ pub(crate) fn gray_y_analytic(j: f64, vc: &ViewingConditions) -> f64 {
     }
 
     let rgb_w = cat16::xyz_to_cone([
-        D65_WHITE[0] * 100.0,
-        D65_WHITE[1] * 100.0,
-        D65_WHITE[2] * 100.0,
+        D65_WHITE[0] * HUNDRED,
+        D65_WHITE[1] * HUNDRED,
+        D65_WHITE[2] * HUNDRED,
     ]);
     let k = [
         rgb_w[0] * vc.rgb_d[0],
@@ -118,7 +164,7 @@ pub(crate) fn gray_y_analytic(j: f64, vc: &ViewingConditions) -> f64 {
     ];
     let w_sum = ACHROMATIC_WEIGHTS[0] + ACHROMATIC_WEIGHTS[1] + ACHROMATIC_WEIGHTS[2];
 
-    let target = vc.aw * (j / 100.0).powf(1.0 / (vc.c * vc.z)) / vc.nbb;
+    let target = vc.aw * (j / HUNDRED).powf(ONE / (vc.c * vc.z)) / vc.nbb;
     let s = target / w_sum;
     if s <= 0.0 {
         return 0.0;
@@ -132,14 +178,14 @@ pub(crate) fn gray_y_analytic(j: f64, vc: &ViewingConditions) -> f64 {
         + ACHROMATIC_WEIGHTS[2] * k[2])
         / w_sum;
     let p = RESPONSE_OFFSET * s / (RESPONSE_SCALE - s);
-    let mut y = p.powf(1.0 / RESPONSE_EXPONENT) * 100.0 / (vc.fl * k_eff);
+    let mut y = p.powf(ONE / RESPONSE_EXPONENT) * HUNDRED / (vc.fl * k_eff);
 
     let residual_slope = |y: f64| -> (f64, f64) {
         let mut f = 0.0;
         let mut df = 0.0;
         for i in 0..3 {
             let c = k[i] * y;
-            let x = vc.fl * c / 100.0;
+            let x = vc.fl * c / HUNDRED;
             let pp = x.powf(RESPONSE_EXPONENT);
             let denominator = pp + RESPONSE_OFFSET;
             f += ACHROMATIC_WEIGHTS[i] * RESPONSE_SCALE * pp / denominator;
@@ -154,7 +200,7 @@ pub(crate) fn gray_y_analytic(j: f64, vc: &ViewingConditions) -> f64 {
         y -= error / slope;
     }
 
-    y.clamp(0.0, 1.0)
+    y.clamp(0.0, ONE)
 }
 
 /// Fixed-iteration oracle for [`gray_y_analytic`].
@@ -343,7 +389,7 @@ pub(crate) fn forward_correlates_v1(xyz: [f64; 3], vc: &ViewingConditions) -> Ca
 
 /// The CIECAM16 forward math itself (cache-free); see [`forward`].
 fn forward_compute(xyz: [f64; 3], vc: &ViewingConditions) -> (f64, f64, f64) {
-    let xyz = [xyz[0] * 100.0, xyz[1] * 100.0, xyz[2] * 100.0];
+    let xyz = [xyz[0] * HUNDRED, xyz[1] * HUNDRED, xyz[2] * HUNDRED];
 
     let lms = cat16::xyz_to_cone(xyz);
     let lms_a = [
@@ -357,8 +403,9 @@ fn forward_compute(xyz: [f64; 3], vc: &ViewingConditions) -> (f64, f64, f64) {
         adapt(lms_a[2], vc.fl),
     ];
 
-    let a = lms_aa[0] - 12.0 * lms_aa[1] / 11.0 + lms_aa[2] / 11.0;
-    let b = (lms_aa[0] + lms_aa[1] - 2.0 * lms_aa[2]) / 9.0;
+    let a = lms_aa[0] - OPPONENT_A_M_WEIGHT * lms_aa[1] / OPPONENT_A_DIVISOR
+        + lms_aa[2] / OPPONENT_A_DIVISOR;
+    let b = (lms_aa[0] + lms_aa[1] - ACHROMATIC_RED_WEIGHT * lms_aa[2]) / OPPONENT_B_DIVISOR;
     // `atan2` даёт угол в (−π, π], `to_degrees()` → (−180, 180]. На этом диапазоне
     // `rem_euclid(360)` тождественно сводится к одной условной прибавке 360: для
     // deg < 0 это deg + 360 (floor(deg/360) = −1), иначе deg без изменений. Замена
@@ -370,23 +417,24 @@ fn forward_compute(xyz: [f64; 3], vc: &ViewingConditions) -> (f64, f64, f64) {
     let h = if deg < 0.0 { deg + 360.0 } else { deg };
     let hr = h.to_radians();
 
-    let e_hue = 0.25 * ((hr + 2.0).cos() + 3.8);
+    let e_hue =
+        ECCENTRICITY_SCALE * ((hr + ECCENTRICITY_PHASE_RADIANS).cos() + ECCENTRICITY_OFFSET);
     let a_achrom =
         (ACHROMATIC_RED_WEIGHT * lms_aa[0] + lms_aa[1] + lms_aa[2] / ACHROMATIC_BLUE_DIVISOR)
             * vc.nbb;
-    let j = 100.0 * (a_achrom / vc.aw).powf(vc.c * vc.z);
+    let j = HUNDRED * (a_achrom / vc.aw).powf(vc.c * vc.z);
 
     let u = (a * a + b * b).sqrt();
     // N_c · N_cb per the CAM16 `t` equation; N_cb = N_bb by construction (vc.rs
     // sets `ncb: nbb`), so `vc.ncb` is byte-identical to the prior `vc.nbb`.
-    let t = (50000.0 / 13.0) * e_hue * vc.nc * vc.ncb * u
-        / (lms_aa[0] + lms_aa[1] + 1.05 * lms_aa[2] + 0.305);
+    let t = (T_NUMERATOR_SCALE / T_NUMERATOR_DIVISOR) * e_hue * vc.nc * vc.ncb * u
+        / (lms_aa[0] + lms_aa[1] + T_BLUE_WEIGHT * lms_aa[2] + T_DENOMINATOR_OFFSET);
     // `vc.t_inner` == `(1.64 - 0.29^n)^0.73`, `vc.fl_pow_025` == `fl^0.25` — обе
     // вынесены в `ViewingConditions::build` (пер-VC константы, считаются раз на
     // резолв, а не на каждый цвет). Те же операнды, тот же порядок умножения
     // слева-направо → байт-идентично инлайн-форме, которую оракул ниже
     // (`forward_reference`) по-прежнему расписывает явно.
-    let m = t.powf(0.9) * (j / 100.0).sqrt() * vc.t_inner * vc.fl_pow_025;
+    let m = t.powf(COLORFULNESS_EXPONENT) * (j / HUNDRED).sqrt() * vc.t_inner * vc.fl_pow_025;
 
     (j, m, h)
 }
@@ -409,22 +457,22 @@ fn forward_compute(xyz: [f64; 3], vc: &ViewingConditions) -> (f64, f64, f64) {
 
 /// CAM16-UCS lightness rescale `J → J'`.
 pub(crate) fn ucs_j(j: f64) -> f64 {
-    1.7 * j / (1.0 + 0.007 * j)
+    UCS_J_SCALE * j / (ONE + UCS_J_CURVATURE * j)
 }
 
 /// Inverse CAM16-UCS lightness rescale `J' → J`.
 pub(crate) fn ucs_j_inv(jp: f64) -> f64 {
-    jp / (1.7 - 0.007 * jp)
+    jp / (UCS_J_SCALE - UCS_J_CURVATURE * jp)
 }
 
 /// CAM16-UCS colourfulness rescale `M → M'`.
 pub(crate) fn ucs_m(m: f64) -> f64 {
-    (1.0 + 0.0228 * m).ln() / 0.0228
+    (ONE + UCS_M_CURVATURE * m).ln() / UCS_M_CURVATURE
 }
 
 /// Inverse CAM16-UCS colourfulness rescale `M' → M`.
 pub(crate) fn ucs_m_inv(mp: f64) -> f64 {
-    (0.0228 * mp).exp_m1() / 0.0228
+    (UCS_M_CURVATURE * mp).exp_m1() / UCS_M_CURVATURE
 }
 
 #[cfg(test)]

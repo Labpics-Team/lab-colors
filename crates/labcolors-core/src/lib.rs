@@ -9,6 +9,14 @@ pub mod wcag22_evidence;
 
 pub(crate) mod clean_set;
 pub(crate) mod composition;
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "the contextual family definition is staged before its offline proof kernel"
+    )
+)]
+pub(crate) mod contextual_region;
 mod family;
 mod family_artifact;
 pub(crate) mod spaces;
@@ -176,6 +184,12 @@ mod family_artifact_tests;
 
 #[cfg(test)]
 mod clean_set_tests;
+
+#[cfg(test)]
+mod contextual_region_tests;
+
+#[cfg(test)]
+mod contextual_region_formula_tests;
 
 #[cfg(test)]
 mod wcag22_tests;

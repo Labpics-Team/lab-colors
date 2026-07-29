@@ -1,0 +1,701 @@
+labcolors_exact_real_ssa 1
+arithmetic exact_real_v1
+types 4
+type u8 unsigned_integer_0_255
+type real mathematical_real
+type bool exact_boolean
+type surround_profile closed_enum
+operators 20
+operator lookup 2 real table_u8_exact_dyadic_at_ordinal
+operator eq 2 bool exact_same_type_equality
+operator select 3 same bool_true_second_else_third
+operator add 2 real exact_x_plus_y
+operator sub 2 real exact_x_minus_y
+operator mul 2 real exact_x_times_y
+operator div 2 real domain_y_ne_zero_x_div_y_else_domain_unproven
+operator min 2 real exact_lesser_real
+operator max 2 real exact_greater_real
+operator root3 1 real domain_x_ge_zero_unique_y_ge_zero_y_cubed_eq_x_else_domain_unproven
+operator sqrt 1 real domain_x_ge_zero_unique_y_ge_zero_y_squared_eq_x_else_domain_unproven
+operator exp 1 real analytic_natural_exponential
+operator log 1 real domain_x_gt_zero_analytic_natural_logarithm_else_domain_unproven
+operator sin 1 real analytic_sine_radians
+operator cos 1 real analytic_cosine_radians
+operator abs 1 real exact_absolute_value
+operator sign 1 real negative_minus_one_zero_zero_positive_one
+operator pow_pos 2 real domain_x_gt_zero_exp_y_mul_log_x_else_domain_unproven
+operator pow_nn 2 real if_x_eq_zero_and_y_gt_zero_zero_else_pow_pos
+operator ratio0 2 real if_x_eq_zero_and_y_eq_zero_zero_else_domain_y_gt_zero_x_div_y
+decode_table decode_srgb8 256
+decode 00 0000000000000000
+decode 01 3f33e45677c176f7
+decode 02 3f43e45677c176f7
+decode 03 3f4dd681b3a23272
+decode 04 3f53e45677c176f7
+decode 05 3f58dd6c15b1d4b4
+decode 06 3f5dd681b3a23272
+decode 07 3f6167cba8c94818
+decode 08 3f63e45677c176f7
+decode 09 3f6660e146b9a5d5
+decode 0a 3f68dd6c15b1d4b4
+decode 0b 3f6b6a31b5259c99
+decode 0c 3f6e1e31d70c99dd
+decode 0d 3f707c38bf8583a9
+decode 0e 3f71fcc2beed6421
+decode 0f 3f7390ffaf95e279
+decode 10 3f753936cc7bc928
+decode 11 3f76f5addb50c915
+decode 12 3f78c6a94031b561
+decode 13 3f7aac6c0fb97351
+decode 14 3f7ca7381f9f602b
+decode 15 3f7eb74e160978d0
+decode 16 3f806e76bbda92b8
+decode 17 3f818c2a5a8a8044
+decode 18 3f82b4e09b3f0ae3
+decode 19 3f83e8b7b3bde965
+decode 1a 3f8527cd60af8b85
+decode 1b 3f86723eea8d3709
+decode 1c 3f87c8292a3db6b3
+decode 1d 3f8929a88d67b521
+decode 1e 3f8a96d91a8016bd
+decode 1f 3f8c0fd67499fab6
+decode 20 3f8d94bbdefd740e
+decode 21 3f8f25a44089883f
+decode 22 3f9061551372c694
+decode 23 3f9135f3e4c2cce2
+decode 24 3f9210bb8642b172
+decode 25 3f92f1b8c1ae46bd
+decode 26 3f93d8f839b79c0b
+decode 27 3f94c6866b3e9fa4
+decode 28 3f95ba6fae794313
+decode 29 3f96b4c0380d2dee
+decode 2a 3f97b5841a1bf3ac
+decode 2b 3f98bcc74542addb
+decode 2c 3f99ca95898dc8b5
+decode 2d 3f9adefa9761c020
+decode 2e 3f9bfa0200597bd9
+decode 2f 3f9d1bb7381aec1f
+decode 30 3f9e442595227bca
+decode 31 3f9f73585185e1b5
+decode 32 3fa054ad45d76878
+decode 33 3fa0f31ba386ff26
+decode 34 3fa194fcb663747b
+decode 35 3fa23a55e62a662a
+decode 36 3fa2e32c8e148d11
+decode 37 3fa38f85fd21eacf
+decode 38 3fa43f67766310ff
+decode 39 3fa4f2d6313fa8d0
+decode 3a 3fa5a9d759ba5ed0
+decode 3b 3fa6647010b254ee
+decode 3c 3fa722a56c2239ee
+decode 3d 3fa7e47c775d2427
+decode 3e 3fa8a9fa33494b07
+decode 3f 3fa973239698b9cc
+decode 40 3faa3ffd8e001389
+decode 41 3fab108cfc6b7fbc
+decode 42 3fabe4d6bb31d522
+decode 43 3facbcdf9a4616f2
+decode 44 3fad98ac60675833
+decode 45 3fae7841cb4f16df
+decode 46 3faf5ba48fde2048
+decode 47 3fb0216cad240765
+decode 48 3fb096f2671eb815
+decode 49 3fb10e65c38a5192
+decode 4a 3fb187c90bf8bce2
+decode 4b 3fb2031e85f5d6da
+decode 4c 3fb28068731a1952
+decode 4d 3fb2ffa9111cb94b
+decode 4e 3fb380e299e53f92
+decode 4f 3fb40417439ca10f
+decode 50 3fb4894940bddbfb
+decode 51 3fb5107ac0261e59
+decode 52 3fb599aded247aac
+decode 53 3fb624e4ef892ed4
+decode 54 3fb6b221ebb4817e
+decode 55 3fb7416702a539d1
+decode 56 3fb7d2b65206b527
+decode 57 3fb86611f43e9e6a
+decode 58 3fb8fb7c007a4a70
+decode 59 3fb992f68abbbc89
+decode 5a 3fba2c83a3e6566d
+decode 5b 3fbac82559cb3644
+decode 5c 3fbb65ddb7354604
+decode 5d 3fbc05aec3f4fe5e
+decode 5e 3fbca79a84ebe030
+decode 5f 3fbd4ba2fc17a6a5
+decode 60 3fbdf1ca289d34b8
+decode 61 3fbe9a1206d34003
+decode 62 3fbf447c904cbb4e
+decode 63 3fbff10bbbe302c2
+decode 64 3fc04fe0bedfe5f1
+decode 65 3fc0a84fe3b36d8f
+decode 66 3fc101d443dfc06f
+decode 67 3fc15c6ed58eefdf
+decode 68 3fc1b8208da5fef0
+decode 69 3fc214ea5fc9514a
+decode 6a 3fc272cd3e610123
+decode 6b 3fc2d1ca1a9d1cfb
+decode 6c 3fc331e1e479cdf5
+decode 6d 3fc393158ac3674e
+decode 6e 3fc3f565fb1a5fd5
+decode 6f 3fc458d421f735df
+decode 70 3fc4bd60eaae3e73
+decode 71 3fc5230d3f736034
+decode 72 3fc589da095dbaa1
+decode 73 3fc5f1c8306b3a3c
+decode 74 3fc65ad89b841a2b
+decode 75 3fc6c50c307e53bf
+decode 76 3fc73063d420fc80
+decode 77 3fc79ce06a279303
+decode 78 3fc80a82d5453b5d
+decode 79 3fc8794bf727eb3f
+decode 7a 3fc8e93cb07b8679
+decode 7b 3fc95a55e0ecec0b
+decode 7c 3fc9cc98672cf47e
+decode 7d 3fca400520f3619c
+decode 7e 3fcab49ceb01c003
+decode 7f 3fcb2a60a1263b0a
+decode 80 3fcba1511e3e632d
+decode 81 3fcc196f3c39e76f
+decode 82 3fcc92bbd41d41fe
+decode 83 3fcd0d37be045851
+decode 84 3fcd88e3d1250f68
+decode 85 3fce05c0e3d1d3e0
+decode 86 3fce83cfcb7c16f0
+decode 87 3fcf03115cb6bfd3
+decode 88 3fcf83866b38924d
+decode 89 3fd00297e4ef4553
+decode 8a 3fd044072557177a
+decode 8b 3fd086115f6beb3a
+decode 8c 3fd0c8b6fb5c735e
+decode 8d 3fd10bf860ef039a
+decode 8e 3fd14fd5f782a5a6
+decode 8f 3fd1945026102997
+decode 90 3fd1d967532b31b1
+decode 91 3fd21f1be50339e7
+decode 92 3fd2656e41649ae3
+decode 93 3fd2ac5ecdb988f8
+decode 94 3fd2f3edef0b0ed8
+decode 95 3fd33c1c0a020438
+decode 96 3fd384e982e800b1
+decode 97 3fd3ce56bda84a81
+decode 98 3fd418641dd0c1bc
+decode 99 3fd463120692c7af
+decode 9a 3fd4ae60dac4229d
+decode 9b 3fd4fa50fcdfde15
+decode 9c 3fd546e2cf0727a9
+decode 9d 3fd59416b3022858
+decode 9e 3fd5e1ed0a40daab
+decode 9f 3fd6306635dbdd7b
+decode a0 3fd67f82969543a2
+decode a1 3fd6cf428cd96079
+decode a2 3fd71fa678bf915d
+decode a3 3fd770aeba0b042a
+decode a4 3fd7c25bb02b7ac5
+decode a5 3fd814adba3e0bd9
+decode a6 3fd867a5370de0b1
+decode a7 3fd8bb428514f067
+decode a8 3fd90f86027cb84e
+decode a9 3fd964700d1ef1b1
+decode aa 3fd9ba0102864521
+decode ab 3fda10393feefafd
+decode ac 3fda67192247a9be
+decode ad 3fdabea10631e195
+decode ae 3fdb16d14802d5ca
+decode af 3fdb6faa43c403bb
+decode b0 3fdbc92c5533d785
+decode b1 3fdc2357d7c64e5d
+decode b2 3fdc7e2d26a596de
+decode b3 3fdcd9ac9cb2aef2
+decode b4 3fdd35d69485ffc5
+decode b5 3fdd92ab686ff782
+decode b6 3fddf02b7279a10d
+decode b7 3fde4e570c6539c5
+decode b8 3fdead2e8faec526
+decode b9 3fdf0cb2558c9ea4
+decode ba 3fdf6ce2b6f00983
+decode bb 3fdfcdc00c85bec2
+decode bc 3fe017a5575b3cb2
+decode bd 3fe048c17ad3c04b
+decode be 3fe07a349c9d9837
+decode bf 3fe0abfee888c050
+decode c0 3fe0de208a4444c8
+decode c1 3fe11099ad5e83eb
+decode c2 3fe1436a7d456eef
+decode c3 3fe176932546ca12
+decode c4 3fe1aa13d0906bda
+decode c5 3fe1ddecaa307b85
+decode c6 3fe2121ddd15aece
+decode c7 3fe246a7940f86d1
+decode c8 3fe27b89f9ce8c4b
+decode c9 3fe2b0c538e48b07
+decode ca 3fe2e6597bc4cca0
+decode cb 3fe31c46ecc4528d
+decode cc 3fe3528db61a0f73
+decode cd 3fe3892e01df1fcc
+decode ce 3fe3c027fa0f01eb
+decode cf 3fe3f77bc887cd3b
+decode d0 3fe42f29970a68f8
+decode d1 3fe467318f3ac22d
+decode d2 3fe49f93daa00113
+decode d3 3fe4d850a2a4bde1
+decode d4 3fe51168109734e5
+decode d5 3fe54ada4da97a1b
+decode d6 3fe584a782f1ac23
+decode d7 3fe5becfd96a2698
+decode d8 3fe5f95379f1b3ed
+decode d9 3fe634328d4bbe97
+decode da 3fe66f6d3c2081cf
+decode db 3fe6ab03aefd39aa
+decode dc 3fe6e6f60e5452b1
+decode dd 3fe72344827d98f6
+decode de 3fe75fef33b6669b
+decode df 3fe79cf64a21d1e2
+decode e0 3fe7da59edc8dab0
+decode e1 3fe8181a469a9787
+decode e2 3fe856377c6c6224
+decode e3 3fe894b1b6fa0377
+decode e4 3fe8d3891de5df49
+decode e5 3fe912bdd8b91f45
+decode e6 3fe952500ee3dda5
+decode e7 3fe9923fe7bd4f67
+decode e8 3fe9d28d8a83edfc
+decode e9 3fea13391e5da09f
+decode ea 3fea5442ca57e52e
+decode eb 3fea95aab567f88f
+decode ec 3fead771066afec2
+decode ed 3feb1995e4262a69
+decode ee 3feb5c197546e3f8
+decode ef 3feb9efbe062f086
+decode f0 3febe23d4bf8981b
+decode f1 3fec25ddde6ecbbb
+decode f2 3fec69ddbe154af1
+decode f3 3fecae3d1124c90b
+decode f4 3fecf2fbfdbf11f1
+decode f5 3fed381aa9ef2e82
+decode f6 3fed7d993ba988d4
+decode f7 3fedc377d8cc0fd5
+decode f8 3fee09b6a71e5aa6
+decode f9 3fee5055cc51cbb4
+decode fa 3fee97556e01b351
+decode fb 3feedeb5b1b37216
+decode fc 3fef2676bcd69ade
+decode fd 3fef6e98b4c51466
+decode fe 3fefb71bbec33ab2
+decode ff 3ff0000000000000
+literals 56
+literal zero 0000000000000000
+literal p0_007 3f7cac083126e979
+literal p0_0228 3f9758e219652bd4
+literal p0_1 3fb999999999999a
+literal srgb_m20 3f93cb7548c0e47c
+literal cat_m21 3fa9103c8e25c811
+literal cat_m12 3fa77a2cecc814d7
+literal p0_2 3fc999999999999a
+literal p0_25 3fd0000000000000
+literal p0_29 3fd28f5c28f5c28f
+literal p0_305 3fd3851eb851eb85
+literal p0_42 3fdae147ae147ae1
+literal p0_525 3fe0cccccccccccd
+literal p0_59 3fe2e147ae147ae1
+literal p0_69 3fe6147ae147ae14
+literal p0_725 3fe7333333333333
+literal p0_73 3fe75c28f5c28f5c
+literal p0_8 3fe999999999999a
+literal p0_9 3feccccccccccccd
+literal d65_x 3fee6a228c5f3dc7
+literal d65_z 3ff16cc7d1ef8103
+literal srgb_m00 3fda649c610130ae
+literal srgb_m01 3fd6e2a96ccdcb18
+literal srgb_m02 3fc719fe95deff92
+literal srgb_m10 3fcb37c144093a33
+literal srgb_m11 3fe6e2a96ccdcb18
+literal srgb_m12 3fb27b32117f32db
+literal srgb_m21 3fbe838c9112641e
+literal srgb_m22 3fee6ac26776ae5f
+literal cat_m00 3fd9aeb3dd11be6e
+literal cat_m01 3fe4ce379b77c02b
+literal cat_m02 bfaa5918a009f623
+literal cat_m10 bfd0046412cf0f9d
+literal cat_m11 3ff345479d4d8341
+literal cat_m20 bf6107faa044ae86
+literal cat_m22 3fee800431bde82d
+literal one 3ff0000000000000
+literal p1_05 3ff0cccccccccccd
+literal p1_48 3ff7ae147ae147ae
+literal p1_64 3ffa3d70a3d70a3d
+literal p1_7 3ffb333333333333
+literal two 4000000000000000
+literal p3_6 400ccccccccccccd
+literal p3_8 400e666666666666
+literal five 4014000000000000
+literal nine 4022000000000000
+literal eleven 4026000000000000
+literal twelve 4028000000000000
+literal thirteen 402a000000000000
+literal twenty 4034000000000000
+literal p27_13 403b2147ae147ae1
+literal forty_two 4045000000000000
+literal ninety_two 4057000000000000
+literal hundred 4059000000000000
+literal four_hundred 4079000000000000
+literal fifty_thousand 40e86a0000000000
+enum_type surround_profile 3
+enum surround_profile surround_average 01
+enum surround_profile surround_dim 02
+enum surround_profile surround_dark 03
+point_inputs 6
+input r8 u8
+input g8 u8
+input b8 u8
+input adapting_luminance real
+input background_ratio real
+input surround surround_profile
+point_nodes 226
+node linear_r real lookup decode_srgb8 r8
+node linear_g real lookup decode_srgb8 g8
+node linear_b real lookup decode_srgb8 b8
+node xyz_x_r real mul srgb_m00 linear_r
+node xyz_x_g real mul srgb_m01 linear_g
+node xyz_x_b real mul srgb_m02 linear_b
+node xyz_x_rg real add xyz_x_r xyz_x_g
+node xyz_x real add xyz_x_rg xyz_x_b
+node xyz_y_r real mul srgb_m10 linear_r
+node xyz_y_g real mul srgb_m11 linear_g
+node xyz_y_b real mul srgb_m12 linear_b
+node xyz_y_rg real add xyz_y_r xyz_y_g
+node xyz_y real add xyz_y_rg xyz_y_b
+node xyz_z_r real mul srgb_m20 linear_r
+node xyz_z_g real mul srgb_m21 linear_g
+node xyz_z_b real mul srgb_m22 linear_b
+node xyz_z_rg real add xyz_z_r xyz_z_g
+node xyz_z real add xyz_z_rg xyz_z_b
+node is_average bool eq surround surround_average
+node is_dim bool eq surround surround_dim
+node surround_f_tail real select is_dim p0_9 p0_8
+node surround_f real select is_average one surround_f_tail
+node surround_c_tail real select is_dim p0_59 p0_525
+node surround_c real select is_average p0_69 surround_c_tail
+node surround_nc_tail real select is_dim p0_9 p0_8
+node surround_nc real select is_average one surround_nc_tail
+node n real add background_ratio zero
+node five_la real mul five adapting_luminance
+node k_denominator real add five_la one
+node k real div one k_denominator
+node k_squared real mul k k
+node k_fourth real mul k_squared k_squared
+node fl_direct real mul k_fourth adapting_luminance
+node one_minus_k_fourth real sub one k_fourth
+node one_minus_k_fourth_squared real mul one_minus_k_fourth one_minus_k_fourth
+node five_la_root real root3 five_la
+node fl_indirect_a real mul p0_1 one_minus_k_fourth_squared
+node fl_indirect real mul fl_indirect_a five_la_root
+node fl real add fl_direct fl_indirect
+node negative_p0_2 real sub zero p0_2
+node n_power real pow_pos n negative_p0_2
+node nbb real mul p0_725 n_power
+node n_root real sqrt n
+node z real add p1_48 n_root
+node white_x real mul d65_x hundred
+node white_y real mul one hundred
+node white_z real mul d65_z hundred
+node white_lms_l_x real mul cat_m00 white_x
+node white_lms_l_y real mul cat_m01 white_y
+node white_lms_l_z real mul cat_m02 white_z
+node white_lms_l_xy real add white_lms_l_x white_lms_l_y
+node white_lms_l real add white_lms_l_xy white_lms_l_z
+node white_lms_m_x real mul cat_m10 white_x
+node white_lms_m_y real mul cat_m11 white_y
+node white_lms_m_z real mul cat_m12 white_z
+node white_lms_m_xy real add white_lms_m_x white_lms_m_y
+node white_lms_m real add white_lms_m_xy white_lms_m_z
+node white_lms_s_x real mul cat_m20 white_x
+node white_lms_s_y real mul cat_m21 white_y
+node white_lms_s_z real mul cat_m22 white_z
+node white_lms_s_xy real add white_lms_s_x white_lms_s_y
+node white_lms_s real add white_lms_s_xy white_lms_s_z
+node negative_la real sub zero adapting_luminance
+node negative_la_minus_42 real sub negative_la forty_two
+node d_exp_arg real div negative_la_minus_42 ninety_two
+node d_exp real exp d_exp_arg
+node inverse_3_6 real div one p3_6
+node d_exp_scaled real mul inverse_3_6 d_exp
+node d_inner real sub one d_exp_scaled
+node d_raw real mul surround_f d_inner
+node d_nonnegative real max zero d_raw
+node d real min one d_nonnegative
+node one_minus_d real sub one d
+node white_ratio_l real div hundred white_lms_l
+node white_ratio_m real div hundred white_lms_m
+node white_ratio_s real div hundred white_lms_s
+node rgb_d_l_a real mul d white_ratio_l
+node rgb_d_l real add rgb_d_l_a one_minus_d
+node rgb_d_m_a real mul d white_ratio_m
+node rgb_d_m real add rgb_d_m_a one_minus_d
+node rgb_d_s_a real mul d white_ratio_s
+node rgb_d_s real add rgb_d_s_a one_minus_d
+node white_adapted_l real mul white_lms_l rgb_d_l
+node white_adapted_m real mul white_lms_m rgb_d_m
+node white_adapted_s real mul white_lms_s rgb_d_s
+node white_abs_l real abs white_adapted_l
+node white_x_l_a real mul fl white_abs_l
+node white_x_l real div white_x_l_a hundred
+node white_y_l real pow_nn white_x_l p0_42
+node white_mag_l_num real mul four_hundred white_y_l
+node white_mag_l_den real add white_y_l p27_13
+node white_mag_l real div white_mag_l_num white_mag_l_den
+node white_sign_l real sign white_adapted_l
+node white_response_l real mul white_sign_l white_mag_l
+node white_abs_m real abs white_adapted_m
+node white_x_m_a real mul fl white_abs_m
+node white_x_m real div white_x_m_a hundred
+node white_y_m real pow_nn white_x_m p0_42
+node white_mag_m_num real mul four_hundred white_y_m
+node white_mag_m_den real add white_y_m p27_13
+node white_mag_m real div white_mag_m_num white_mag_m_den
+node white_sign_m real sign white_adapted_m
+node white_response_m real mul white_sign_m white_mag_m
+node white_abs_s real abs white_adapted_s
+node white_x_s_a real mul fl white_abs_s
+node white_x_s real div white_x_s_a hundred
+node white_y_s real pow_nn white_x_s p0_42
+node white_mag_s_num real mul four_hundred white_y_s
+node white_mag_s_den real add white_y_s p27_13
+node white_mag_s real div white_mag_s_num white_mag_s_den
+node white_sign_s real sign white_adapted_s
+node white_response_s real mul white_sign_s white_mag_s
+node aw_l real mul two white_response_l
+node aw_s real div white_response_s twenty
+node aw_lm real add aw_l white_response_m
+node aw_lms real add aw_lm aw_s
+node aw real mul aw_lms nbb
+node p0_29_power_n real pow_pos p0_29 n
+node t_inner_base real sub p1_64 p0_29_power_n
+node t_inner real pow_pos t_inner_base p0_73
+node fl_pow_025 real pow_pos fl p0_25
+node stimulus_x real mul xyz_x hundred
+node stimulus_y real mul xyz_y hundred
+node stimulus_z real mul xyz_z hundred
+node lms_l_x real mul cat_m00 stimulus_x
+node lms_l_y real mul cat_m01 stimulus_y
+node lms_l_z real mul cat_m02 stimulus_z
+node lms_l_xy real add lms_l_x lms_l_y
+node lms_l real add lms_l_xy lms_l_z
+node lms_m_x real mul cat_m10 stimulus_x
+node lms_m_y real mul cat_m11 stimulus_y
+node lms_m_z real mul cat_m12 stimulus_z
+node lms_m_xy real add lms_m_x lms_m_y
+node lms_m real add lms_m_xy lms_m_z
+node lms_s_x real mul cat_m20 stimulus_x
+node lms_s_y real mul cat_m21 stimulus_y
+node lms_s_z real mul cat_m22 stimulus_z
+node lms_s_xy real add lms_s_x lms_s_y
+node lms_s real add lms_s_xy lms_s_z
+node adapted_l real mul lms_l rgb_d_l
+node adapted_m real mul lms_m rgb_d_m
+node adapted_s real mul lms_s rgb_d_s
+node adapted_abs_l real abs adapted_l
+node adapted_x_l_a real mul fl adapted_abs_l
+node adapted_x_l real div adapted_x_l_a hundred
+node adapted_y_l real pow_nn adapted_x_l p0_42
+node adapted_mag_l_num real mul four_hundred adapted_y_l
+node adapted_mag_l_den real add adapted_y_l p27_13
+node adapted_mag_l real div adapted_mag_l_num adapted_mag_l_den
+node adapted_sign_l real sign adapted_l
+node response_l real mul adapted_sign_l adapted_mag_l
+node adapted_abs_m real abs adapted_m
+node adapted_x_m_a real mul fl adapted_abs_m
+node adapted_x_m real div adapted_x_m_a hundred
+node adapted_y_m real pow_nn adapted_x_m p0_42
+node adapted_mag_m_num real mul four_hundred adapted_y_m
+node adapted_mag_m_den real add adapted_y_m p27_13
+node adapted_mag_m real div adapted_mag_m_num adapted_mag_m_den
+node adapted_sign_m real sign adapted_m
+node response_m real mul adapted_sign_m adapted_mag_m
+node adapted_abs_s real abs adapted_s
+node adapted_x_s_a real mul fl adapted_abs_s
+node adapted_x_s real div adapted_x_s_a hundred
+node adapted_y_s real pow_nn adapted_x_s p0_42
+node adapted_mag_s_num real mul four_hundred adapted_y_s
+node adapted_mag_s_den real add adapted_y_s p27_13
+node adapted_mag_s real div adapted_mag_s_num adapted_mag_s_den
+node adapted_sign_s real sign adapted_s
+node response_s real mul adapted_sign_s adapted_mag_s
+node opponent_a_m_scaled real mul twelve response_m
+node opponent_a_m real div opponent_a_m_scaled eleven
+node opponent_a_s real div response_s eleven
+node opponent_a_lm real sub response_l opponent_a_m
+node opponent_a real add opponent_a_lm opponent_a_s
+node opponent_b_lm real add response_l response_m
+node opponent_b_s real mul two response_s
+node opponent_b_num real sub opponent_b_lm opponent_b_s
+node opponent_b real div opponent_b_num nine
+node opponent_a_squared real mul opponent_a opponent_a
+node opponent_b_squared real mul opponent_b opponent_b
+node opponent_norm_squared real add opponent_a_squared opponent_b_squared
+node opponent_norm real sqrt opponent_norm_squared
+node achrom_l real mul two response_l
+node achrom_s real div response_s twenty
+node achrom_lm real add achrom_l response_m
+node achrom_lms real add achrom_lm achrom_s
+node achrom real mul achrom_lms nbb
+node j_base real div achrom aw
+node j_exponent real mul surround_c z
+node j_power real pow_nn j_base j_exponent
+node j real mul hundred j_power
+node cos_two real cos two
+node sin_two real sin two
+node a_cos_two real mul opponent_a cos_two
+node b_sin_two real mul opponent_b sin_two
+node hue_projection real sub a_cos_two b_sin_two
+node norm_hue_offset real mul p3_8 opponent_norm
+node hue_sum real add hue_projection norm_hue_offset
+node e_hue_times_norm real mul p0_25 hue_sum
+node t_scale real div fifty_thousand thirteen
+node t_num_0 real mul t_scale e_hue_times_norm
+node t_num_1 real mul t_num_0 surround_nc
+node t_num real mul t_num_1 nbb
+node t_den_s real mul p1_05 response_s
+node t_den_lm real add response_l response_m
+node t_den_lms real add t_den_lm t_den_s
+node t_den real add t_den_lms p0_305
+node t real div t_num t_den
+node t_power real pow_nn t p0_9
+node j_fraction real div j hundred
+node j_root real sqrt j_fraction
+node m_0 real mul t_power j_root
+node m_1 real mul m_0 t_inner
+node m real mul m_1 fl_pow_025
+node jp_num real mul p1_7 j
+node jp_den_scaled real mul p0_007 j
+node jp_den real add one jp_den_scaled
+node jp real div jp_num jp_den
+node mp_scaled real mul p0_0228 m
+node mp_log_arg real add one mp_scaled
+node mp_log real log mp_log_arg
+node mp real div mp_log p0_0228
+node opponent_a_direction real ratio0 opponent_a opponent_norm
+node opponent_b_direction real ratio0 opponent_b opponent_norm
+node ap real mul mp opponent_a_direction
+node bp real mul mp opponent_b_direction
+point_checkpoints 39
+checkpoint decoded_r linear_r
+checkpoint decoded_g linear_g
+checkpoint decoded_b linear_b
+checkpoint xyz_x xyz_x
+checkpoint xyz_y xyz_y
+checkpoint xyz_z xyz_z
+checkpoint surround_f surround_f
+checkpoint surround_c surround_c
+checkpoint surround_nc surround_nc
+checkpoint n n
+checkpoint fl fl
+checkpoint nbb nbb
+checkpoint ncb nbb
+checkpoint z z
+checkpoint d d
+checkpoint rgb_d_l rgb_d_l
+checkpoint rgb_d_m rgb_d_m
+checkpoint rgb_d_s rgb_d_s
+checkpoint aw aw
+checkpoint t_inner t_inner
+checkpoint fl_pow_025 fl_pow_025
+checkpoint lms_l lms_l
+checkpoint lms_m lms_m
+checkpoint lms_s lms_s
+checkpoint response_l response_l
+checkpoint response_m response_m
+checkpoint response_s response_s
+checkpoint opponent_a opponent_a
+checkpoint opponent_b opponent_b
+checkpoint opponent_norm opponent_norm
+checkpoint achrom achrom
+checkpoint j j
+checkpoint e_hue_times_norm e_hue_times_norm
+checkpoint t t
+checkpoint m m
+checkpoint jp jp
+checkpoint mp mp
+checkpoint ap ap
+checkpoint bp bp
+point_outputs 3
+output jp real
+output ap real
+output bp real
+segment_inputs 14
+input segment_t real
+input segment_a real
+input segment_b real
+input segment_t0 real
+input segment_t1 real
+input segment_c0a real
+input segment_c0b real
+input segment_c1a real
+input segment_c1b real
+input segment_rho0 real
+input segment_rho1 real
+input segment_g00 real
+input segment_g01 real
+input segment_g11 real
+segment_nodes 27
+node segment_d real sub segment_t1 segment_t0
+node segment_alpha real sub segment_t1 segment_t
+node segment_beta real sub segment_t segment_t0
+node segment_ca0 real mul segment_alpha segment_c0a
+node segment_ca1 real mul segment_beta segment_c1a
+node segment_ca real add segment_ca0 segment_ca1
+node segment_cb0 real mul segment_alpha segment_c0b
+node segment_cb1 real mul segment_beta segment_c1b
+node segment_cb real add segment_cb0 segment_cb1
+node segment_r0 real mul segment_alpha segment_rho0
+node segment_r1 real mul segment_beta segment_rho1
+node segment_r real add segment_r0 segment_r1
+node segment_da real mul segment_d segment_a
+node segment_db real mul segment_d segment_b
+node segment_ua real sub segment_da segment_ca
+node segment_ub real sub segment_db segment_cb
+node segment_ua_squared real mul segment_ua segment_ua
+node segment_term_a real mul segment_g00 segment_ua_squared
+node segment_ua_ub real mul segment_ua segment_ub
+node segment_cross_a real mul segment_g01 segment_ua_ub
+node segment_cross real mul two segment_cross_a
+node segment_ub_squared real mul segment_ub segment_ub
+node segment_term_b real mul segment_g11 segment_ub_squared
+node segment_quadratic_a real add segment_term_a segment_cross
+node segment_quadratic real add segment_quadratic_a segment_term_b
+node segment_radius real mul segment_d segment_r
+node segment_f real sub segment_quadratic segment_radius
+segment_outputs 1
+output segment_f real
+singleton_inputs 8
+input singleton_a real
+input singleton_b real
+input singleton_ca real
+input singleton_cb real
+input singleton_rho real
+input singleton_g00 real
+input singleton_g01 real
+input singleton_g11 real
+singleton_nodes 12
+node singleton_ua real sub singleton_a singleton_ca
+node singleton_ub real sub singleton_b singleton_cb
+node singleton_ua_squared real mul singleton_ua singleton_ua
+node singleton_term_a real mul singleton_g00 singleton_ua_squared
+node singleton_ua_ub real mul singleton_ua singleton_ub
+node singleton_cross_a real mul singleton_g01 singleton_ua_ub
+node singleton_cross real mul two singleton_cross_a
+node singleton_ub_squared real mul singleton_ub singleton_ub
+node singleton_term_b real mul singleton_g11 singleton_ub_squared
+node singleton_quadratic_a real add singleton_term_a singleton_cross
+node singleton_quadratic real add singleton_quadratic_a singleton_term_b
+node singleton_f real sub singleton_quadratic singleton_rho
+singleton_outputs 1
+output singleton_f real
+driver 6
+rule tone_domain closed_first_last
+rule out_of_tone_domain outside
+rule one_knot_tone exact_equality_required
+rule one_knot_predicate singleton_f_le_zero
+rule multi_knot_predicate piecewise_linear_segment_f_le_zero
+rule boundary inclusive
+end

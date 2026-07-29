@@ -15,6 +15,25 @@ const XYZ_TO_CONE: [[f64; 3]; 3] = [
     [-0.002079,  0.048952,  0.953127],
 ];
 
+/// Точные числовые владельцы, используемые artifact-ом contextual-region.
+///
+/// Accessor существует только в тестах, а каждое возвращаемое значение — та же
+/// константа, которую использует production-умножение CAT16.
+#[cfg(test)]
+pub(crate) fn contextual_region_formula_literals_v1() -> &'static [(&'static str, f64)] {
+    &[
+        ("cat_m00", XYZ_TO_CONE[0][0]),
+        ("cat_m01", XYZ_TO_CONE[0][1]),
+        ("cat_m02", XYZ_TO_CONE[0][2]),
+        ("cat_m10", XYZ_TO_CONE[1][0]),
+        ("cat_m11", XYZ_TO_CONE[1][1]),
+        ("cat_m12", XYZ_TO_CONE[1][2]),
+        ("cat_m20", XYZ_TO_CONE[2][0]),
+        ("cat_m21", XYZ_TO_CONE[2][1]),
+        ("cat_m22", XYZ_TO_CONE[2][2]),
+    ]
+}
+
 /// Inverse CAT16: cone responses → CIE XYZ.
 ///
 /// The *printed* inverse from Li et al. 2017 (8-decimal published values), not a

@@ -17,6 +17,63 @@ use std::sync::OnceLock;
 
 use super::{cam16::adapt, cat16::xyz_to_cone};
 
+// Именованные коэффициенты модели общие для production-математики и test-only
+// exact-real binding ниже. Константы компилируются без runtime-цены, а имена не
+// позволяют копии формулы получить второй независимо изменяемый набор чисел.
+const ZERO: f64 = 0.0;
+const ONE: f64 = 1.0;
+const TWO: f64 = 2.0;
+const FIVE: f64 = 5.0;
+const TWENTY: f64 = 20.0;
+const FORTY_TWO: f64 = 42.0;
+const NINETY_TWO: f64 = 92.0;
+const HUNDRED: f64 = 100.0;
+const FL_INDIRECT_SCALE: f64 = 0.1;
+const NBB_EXPONENT_MAGNITUDE: f64 = 0.2;
+const FL_QUARTER_EXPONENT: f64 = 0.25;
+const T_INNER_POWER_BASE: f64 = 0.29;
+const SURROUND_DARK_C: f64 = 0.525;
+const SURROUND_DIM_C: f64 = 0.59;
+const SURROUND_AVERAGE_C: f64 = 0.69;
+const NBB_SCALE: f64 = 0.725;
+const T_INNER_EXPONENT: f64 = 0.73;
+const SURROUND_DARK_F_NC: f64 = 0.8;
+const SURROUND_DIM_F_NC: f64 = 0.9;
+const Z_OFFSET: f64 = 1.48;
+const T_INNER_OFFSET: f64 = 1.64;
+const ADAPTATION_DECAY_DIVISOR: f64 = 3.6;
+
+/// Точные числовые владельцы, используемые artifact-ом contextual-region.
+///
+/// Повторяющиеся имена намеренно сверяют общие с CAM16 коэффициенты: потребитель
+/// registry отвергает владельцев, которые разошлись хотя бы одним битом.
+#[cfg(test)]
+pub(crate) fn contextual_region_formula_literals_v1() -> &'static [(&'static str, f64)] {
+    &[
+        ("one", ONE),
+        ("p0_1", FL_INDIRECT_SCALE),
+        ("p0_2", NBB_EXPONENT_MAGNITUDE),
+        ("p0_25", FL_QUARTER_EXPONENT),
+        ("p0_29", T_INNER_POWER_BASE),
+        ("p0_525", SURROUND_DARK_C),
+        ("p0_59", SURROUND_DIM_C),
+        ("p0_69", SURROUND_AVERAGE_C),
+        ("p0_725", NBB_SCALE),
+        ("p0_73", T_INNER_EXPONENT),
+        ("p0_8", SURROUND_DARK_F_NC),
+        ("p0_9", SURROUND_DIM_F_NC),
+        ("p1_48", Z_OFFSET),
+        ("p1_64", T_INNER_OFFSET),
+        ("two", TWO),
+        ("p3_6", ADAPTATION_DECAY_DIVISOR),
+        ("five", FIVE),
+        ("twenty", TWENTY),
+        ("forty_two", FORTY_TWO),
+        ("ninety_two", NINETY_TWO),
+        ("hundred", HUNDRED),
+    ]
+}
+
 /// Closed CIECAM16 surround tuple admitted by the F0 occurrence context.
 ///
 /// Keeping the triplets behind variants prevents callers from independently
@@ -98,13 +155,13 @@ impl ViewingConditions {
         surround: Cam16SurroundV1,
     ) -> Self {
         let (f, c, nc) = match surround {
-            Cam16SurroundV1::Average => (1.0, 0.69, 1.0),
-            Cam16SurroundV1::Dim => (0.9, 0.59, 0.9),
-            Cam16SurroundV1::Dark => (0.8, 0.525, 0.8),
+            Cam16SurroundV1::Average => (ONE, SURROUND_AVERAGE_C, ONE),
+            Cam16SurroundV1::Dim => (SURROUND_DIM_F_NC, SURROUND_DIM_C, SURROUND_DIM_F_NC),
+            Cam16SurroundV1::Dark => (SURROUND_DARK_F_NC, SURROUND_DARK_C, SURROUND_DARK_F_NC),
         };
         Self::build(
             adapting_luminance_cd_m2,
-            background_luminance_ratio * 100.0,
+            background_luminance_ratio * HUNDRED,
             f,
             c,
             nc,
@@ -172,7 +229,7 @@ impl ViewingConditions {
     /// colour-science in `golden_tests`.
     pub fn srgb() -> Self {
         // colour-science / colorjs.io surroundMap["average"] = [1.0, 0.69, 1.0]
-        Self::build(64.0, 20.0, 1.0, 0.69, 1.0)
+        Self::build(64.0, TWENTY, ONE, SURROUND_AVERAGE_C, ONE)
     }
 
     /// Standard sRGB viewing conditions with Increased Contrast (IC).
@@ -208,7 +265,13 @@ impl ViewingConditions {
     /// ```
     pub fn dim_surround() -> Self {
         // colour-science / colorjs.io surroundMap["dim"] = [0.9, 0.59, 0.9]
-        Self::build(64.0, 20.0, 0.9, 0.59, 0.9)
+        Self::build(
+            64.0,
+            TWENTY,
+            SURROUND_DIM_F_NC,
+            SURROUND_DIM_C,
+            SURROUND_DIM_F_NC,
+        )
     }
 
     /// Dim surround viewing conditions with Increased Contrast (IC).
@@ -223,7 +286,13 @@ impl ViewingConditions {
     /// grey-axis LUT's fall-back-to-bisection path for an unsupported VC.
     #[cfg(test)]
     pub(crate) fn dark_surround() -> Self {
-        Self::build(64.0, 20.0, 0.8, 0.525, 0.8)
+        Self::build(
+            64.0,
+            TWENTY,
+            SURROUND_DARK_F_NC,
+            SURROUND_DARK_C,
+            SURROUND_DARK_F_NC,
+        )
     }
 
     /// Core constructor shared by all surround presets.
@@ -234,25 +303,27 @@ impl ViewingConditions {
     /// * `c`   — chromatic adaptation induction factor from surround table.
     /// * `nc`  — chromatic induction factor from surround table.
     fn build(la: f64, y_b: f64, f: f64, c: f64, nc: f64) -> Self {
-        let k = 1.0_f64 / (5.0 * la + 1.0);
+        let k = ONE / (FIVE * la + ONE);
         let k4 = k * k * k * k;
-        let fl = k4 * la + 0.1_f64 * (1.0 - k4).powi(2) * (5.0 * la).cbrt();
+        let fl = k4 * la + FL_INDIRECT_SCALE * (ONE - k4).powi(2) * (FIVE * la).cbrt();
 
-        let n = y_b / 100.0_f64;
-        let nbb = 0.725_f64 * n.powf(-0.2);
-        let z = 1.48_f64 + n.sqrt();
+        let n = y_b / HUNDRED;
+        let nbb = NBB_SCALE * n.powf(-NBB_EXPONENT_MAGNITUDE);
+        let z = Z_OFFSET + n.sqrt();
 
         let xyz_w = [
-            D65_WHITE[0] * 100.0,
-            D65_WHITE[1] * 100.0,
-            D65_WHITE[2] * 100.0,
+            D65_WHITE[0] * HUNDRED,
+            D65_WHITE[1] * HUNDRED,
+            D65_WHITE[2] * HUNDRED,
         ];
         let rgb_w = xyz_to_cone(xyz_w);
-        let d = (f * (1.0 - (1.0 / 3.6) * ((-la - 42.0) / 92.0).exp())).clamp(0.0, 1.0);
+        let d = (f
+            * (ONE - (ONE / ADAPTATION_DECAY_DIVISOR) * ((-la - FORTY_TWO) / NINETY_TWO).exp()))
+        .clamp(ZERO, ONE);
         let rgb_d = [
-            d * (100.0 / rgb_w[0]) + 1.0 - d,
-            d * (100.0 / rgb_w[1]) + 1.0 - d,
-            d * (100.0 / rgb_w[2]) + 1.0 - d,
+            d * (HUNDRED / rgb_w[0]) + ONE - d,
+            d * (HUNDRED / rgb_w[1]) + ONE - d,
+            d * (HUNDRED / rgb_w[2]) + ONE - d,
         ];
 
         let rgb_w_adapted = [
@@ -265,7 +336,7 @@ impl ViewingConditions {
             adapt(rgb_w_adapted[1], fl),
             adapt(rgb_w_adapted[2], fl),
         ];
-        let aw = (2.0 * rgb_aw[0] + rgb_aw[1] + rgb_aw[2] / 20.0) * nbb;
+        let aw = (TWO * rgb_aw[0] + rgb_aw[1] + rgb_aw[2] / TWENTY) * nbb;
 
         // Пер-VC константы колорфулнесс, вынесенные из пер-цветового прямого и
         // обратного хода. Считаются здесь ровно на тех операндах, что использовали
@@ -273,8 +344,8 @@ impl ViewingConditions {
         // это устранение общего подвыражения (CSE), а не численное изменение
         // (пинится `derived_constants_are_bit_identical_to_inline_recompute` и,
         // ниже по потоку, bit-identity оракулом `cam16::forward`).
-        let fl_pow_025 = fl.powf(0.25);
-        let t_inner = (1.64 - 0.29_f64.powf(n)).powf(0.73);
+        let fl_pow_025 = fl.powf(FL_QUARTER_EXPONENT);
+        let t_inner = (T_INNER_OFFSET - T_INNER_POWER_BASE.powf(n)).powf(T_INNER_EXPONENT);
 
         Self {
             n,
