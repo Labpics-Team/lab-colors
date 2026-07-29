@@ -7,6 +7,7 @@ mod source_scanner;
 const APPEARANCE_SOURCE: &str = include_str!("appearance.rs");
 const CLEAN_SET_SOURCE: &str = include_str!("clean_set.rs");
 const CONSTRAINTS_SOURCE: &str = include_str!("constraints/mod.rs");
+const CONTEXTUAL_REGION_SOURCE: &str = include_str!("contextual_region.rs");
 const EXACT_CONSTRAINT_SOURCE: &str = include_str!("constraints/exact.rs");
 const FAMILY_CONSTRAINT_SOURCE: &str = include_str!("constraints/family.rs");
 const FAMILY_SOURCE: &str = include_str!("family.rs");
@@ -25,10 +26,11 @@ const RELATION_SOURCE: &str = include_str!("relation.rs");
 const SESSION_SOURCE: &str = include_str!("session.rs");
 const WCAG22_CONSTRAINT_SOURCE: &str = include_str!("constraints/wcag22.rs");
 
-const GENERIC_SOURCES: [(&str, &str); 9] = [
+const GENERIC_SOURCES: [(&str, &str); 10] = [
     ("appearance.rs", APPEARANCE_SOURCE),
     ("constraints/family.rs", FAMILY_CONSTRAINT_SOURCE),
     ("constraints/relation.rs", RELATION_CONSTRAINT_SOURCE),
+    ("contextual_region.rs", CONTEXTUAL_REGION_SOURCE),
     ("family.rs", FAMILY_SOURCE),
     ("lcs_occurrence.rs", LCS_OCCURRENCE_SOURCE),
     ("program/attachment.rs", PROGRAM_ATTACHMENT_SOURCE),
@@ -279,12 +281,48 @@ fn generic_source_inventory_covers_relation_topology_and_evaluators() {
         "constraints/family.rs",
         "relation.rs",
         "constraints/relation.rs",
+        "contextual_region.rs",
     ] {
         assert!(
             GENERIC_SOURCES.iter().any(|(path, _)| *path == required),
             "generic vocabulary ratchet must cover {required}",
         );
     }
+}
+
+#[test]
+fn contextual_region_is_definition_only_and_has_no_semantic_recipe_branch() {
+    let production = normalized_production_code(CONTEXTUAL_REGION_SOURCE);
+    for forbidden in [
+        "familyid",
+        "semanticfamilyreleaseidv2",
+        "canonicalfamilyimagedigestv2",
+        "familyartifact",
+        "familymembership",
+        "familyimagecertificate",
+        "colorsignal",
+        "hue",
+        "neutral",
+        "clean",
+    ] {
+        assert!(
+            !production.contains(forbidden),
+            "contextual_region.rs must remain a generic definition provider; found `{forbidden}`",
+        );
+    }
+    for forbidden_branch in [
+        "if center",
+        "match center",
+        "if knot.center",
+        "match knot.center",
+    ] {
+        assert!(
+            !production.contains(forbidden_branch),
+            "center strength must remain data of one law; found `{forbidden_branch}`",
+        );
+    }
+    assert!(production.contains("-> familydefinitiondigestv2"));
+    assert!(production.contains("familydefinitiondigestv2::from_digest"));
 }
 
 #[test]
@@ -1878,6 +1916,7 @@ fn existing_encoded_evaluators_delegate_program_targets_without_parallel_formula
 #[test]
 fn staged_program_and_lcs_occurrence_modules_remain_private() {
     for required in [
+        "pub(crate) mod contextual_region;",
         "pub(crate) mod lcs_occurrence;",
         "pub(crate) mod program;",
         "pub(crate) mod program_session;",
@@ -1888,6 +1927,7 @@ fn staged_program_and_lcs_occurrence_modules_remain_private() {
         );
     }
     for forbidden in [
+        "pub mod contextual_region;",
         "pub mod lcs_occurrence;",
         "pub mod program;",
         "pub mod program_session;",
