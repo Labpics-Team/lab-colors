@@ -14,7 +14,7 @@ from proof.region.v1.arb.tests import gate as arb_gate
 
 ARB = Path(__file__).resolve().parents[1]
 BUILD = ARB / "build.sh"
-WORKFLOW = ARB.parents[3] / ".github" / "workflows" / "arb-proof-observation.yml"
+WORKFLOW = ARB.parents[3] / ".github" / "workflows" / "arb.yml"
 
 
 class ArbBuildRecipeTests(unittest.TestCase):
