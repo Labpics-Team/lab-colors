@@ -171,14 +171,10 @@ mod exact_dyadic_product_laws {
         let exact = |bits| ExactDyadic64V1::try_from_bits(bits).unwrap();
         // `2.25 × 1` и `1.5²` — одно exact-dyadic значение, но raw products
         // отличаются удвоенной significand и уменьшенным на единицу exponent.
-        let factored = ExactDyadicProductV1::of(
-            exact(0x4002_0000_0000_0000),
-            exact(0x3ff0_0000_0000_0000),
-        );
-        let squared = ExactDyadicProductV1::of(
-            exact(0x3ff8_0000_0000_0000),
-            exact(0x3ff8_0000_0000_0000),
-        );
+        let factored =
+            ExactDyadicProductV1::of(exact(0x4002_0000_0000_0000), exact(0x3ff0_0000_0000_0000));
+        let squared =
+            ExactDyadicProductV1::of(exact(0x3ff8_0000_0000_0000), exact(0x3ff8_0000_0000_0000));
 
         assert_eq!(factored.cmp(&squared), core::cmp::Ordering::Equal);
         assert_eq!(factored, squared);
