@@ -80,7 +80,11 @@ require_empty_directory "$output"
 
 /usr/bin/mkdir "$build/prefix" "$build/gmp" "$build/mpfr" "$build/flint" "$build/tmp"
 
-readonly common_cflags='-O2 -g0 -fno-ident -fno-fast-math -ffp-contract=off -fno-lto -march=x86-64 -mtune=generic -ffile-prefix-map=/build=. -fdebug-prefix-map=/build=.'
+# GCC 15 changed its implicit dialect to GNU C23, where GMP 6.3.0's locked
+# no-prototype configure probes have different semantics.  GNU C17 is the last
+# default those probes targeted; changing it requires a source/toolchain slice
+# and a fresh live build, not reliance on a compiler's moving default.
+readonly common_cflags='-O2 -g0 -fno-ident -fno-fast-math -ffp-contract=off -fno-lto -std=gnu17 -march=x86-64 -mtune=generic -ffile-prefix-map=/build=. -fdebug-prefix-map=/build=.'
 readonly common_ldflags='-Wl,--build-id=none -fno-lto'
 readonly prefix="$build/prefix"
 

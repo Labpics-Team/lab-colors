@@ -37,6 +37,7 @@ class ArbBuildRecipeTests(unittest.TestCase):
             "-fno-fast-math",
             "-ffp-contract=off",
             "-fno-lto",
+            "-std=gnu17",
             "-march=x86-64",
             "-mtune=generic",
             "-Wl,--build-id=none",
