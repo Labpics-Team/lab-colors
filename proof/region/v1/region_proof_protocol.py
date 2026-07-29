@@ -4,12 +4,12 @@
 from __future__ import annotations
 
 import hashlib
-from dataclasses import dataclass, fields
+from dataclasses import dataclass, field, fields
 from enum import IntEnum, StrEnum
 from fractions import Fraction
 from functools import cached_property
 from itertools import pairwise
-from typing import Callable, Iterable, Iterator, TypeAlias
+from typing import Callable, Iterable, Iterator, NoReturn, TypeAlias
 
 
 FORMULA_RELEASE_DOMAIN_V1 = b"labcolors.nominal-exact-real-lift.ascii-ssa.v1\0"
@@ -102,8 +102,16 @@ def _fail(
     offset: int,
     reason: ProtocolReasonV1,
     detail: str,
-) -> None:
+) -> NoReturn:
     raise ProtocolErrorV1(artifact, offset, reason, detail)
+
+
+def _formula_release_v1(specification: bytes) -> bytes:
+    return hashlib.sha256(
+        FORMULA_RELEASE_DOMAIN_V1
+        + len(specification).to_bytes(8, "big")
+        + specification
+    ).digest()
 
 
 def _identity(label: bytes, encoded: bytes) -> bytes:
@@ -420,7 +428,12 @@ class ReducedDomainManifestV1:
         try:
             first = next(iterator)
         except StopIteration:
-            return cls((), 0)
+            _fail(
+                "reduced-domain-v1",
+                0,
+                ProtocolReasonV1.EMPTY_DOMAIN,
+                "domain must be nonempty",
+            )
         if type(first) is not int or first < 0 or first >= OUTPUT_CARDINALITY_V1:
             _fail("reduced-domain-v1", 0, ProtocolReasonV1.INVALID_RANGE, "ordinal outside sRGB8")
         ranges: list[tuple[int, int]] = []
@@ -468,7 +481,7 @@ class ReducedDomainManifestV1:
             )
         required = range_count * 8
         if required != reader.remaining:
-            reason = ProtocolReasonV1.COUNT_MISMATCH if required > reader.remaining else ProtocolReasonV1.TRAILING_BYTES
+            reason = ProtocolReasonV1.TRUNCATED if required > reader.remaining else ProtocolReasonV1.TRAILING_BYTES
             _fail(reader.artifact, reader.offset, reason, "range count does not consume exact body")
         ranges_list: list[tuple[int, int]] = []
         total = 0
@@ -644,11 +657,7 @@ class ProofJobV1:
             or type(self.policy) is not ProofPolicyV1
         ):
             _fail("proof-job-v1", 0, ProtocolReasonV1.INVALID_DEFINITION, "job coordinates are not canonical V1 types")
-        release = hashlib.sha256(
-            FORMULA_RELEASE_DOMAIN_V1
-            + len(self.formula_spec).to_bytes(8, "big")
-            + self.formula_spec
-        ).digest()
+        release = _formula_release_v1(self.formula_spec)
         if release != self.definition.formula_release:
             _fail("proof-job-v1", 0, ProtocolReasonV1.DIGEST_MISMATCH, "formula does not bind definition")
 
@@ -663,10 +672,7 @@ class ProofJobV1:
             _fail(reader.artifact, 8, ProtocolReasonV1.DIGEST_MISMATCH, "definition digest mismatch")
         formula_release = reader.exact(32)
         formula_spec = reader.blob(exact_length=FORMULA_SPEC_BYTES_V1)
-        actual_formula_release = hashlib.sha256(
-            FORMULA_RELEASE_DOMAIN_V1 + len(formula_spec).to_bytes(8, "big") + formula_spec
-        ).digest()
-        if actual_formula_release != formula_release or formula_release != definition.formula_release:
+        if formula_release != definition.formula_release:
             _fail(reader.artifact, reader.offset, ProtocolReasonV1.DIGEST_MISMATCH, "formula release mismatch")
         domain_identity = reader.exact(32)
         domain = ReducedDomainManifestV1.parse(reader.blob())
@@ -1065,6 +1071,7 @@ class WitnessStoreV1:
     wire_length: int
     count: int
     counts: tuple[int, int, int]
+    _hash: int | None = field(init=False, repr=False, compare=False, default=None)
 
     def __init__(self, body: bytes, count: int):
         if type(body) is not bytes:
@@ -1140,6 +1147,7 @@ class WitnessStoreV1:
         object.__setattr__(self, "wire_length", wire_length)
         object.__setattr__(self, "count", count)
         object.__setattr__(self, "counts", counts)
+        object.__setattr__(self, "_hash", None)
 
     @classmethod
     def from_witnesses(cls, witnesses: Iterable[WitnessV1]) -> "WitnessStoreV1":
@@ -1171,6 +1179,7 @@ class WitnessStoreV1:
         object.__setattr__(result, "wire_length", len(source))
         object.__setattr__(result, "count", count)
         object.__setattr__(result, "counts", tuple(counts))
+        object.__setattr__(result, "_hash", None)
         return result
 
     def __eq__(self, other: object) -> bool:
@@ -1187,6 +1196,18 @@ class WitnessStoreV1:
             f"WitnessStoreV1(count={self.count}, counts={self.counts}, "
             f"wire_length={self.wire_length})"
         )
+
+    def __hash__(self) -> int:
+        cached = self._hash
+        if cached is None:
+            # A view preserves value hashing without copying a potentially
+            # full-domain body; the cache prevents every mapping lookup from
+            # rescanning it while leaving the observable value immutable.
+            cached = hash(
+                (self.count, self.counts, self.wire_length, self.body_view())
+            )
+            object.__setattr__(self, "_hash", cached)
+        return cached
 
     def body_view(self) -> memoryview:
         return memoryview(self._source)[

@@ -213,6 +213,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          formula_path='crates/labcolors-core/contracts/contextual-region-formula-v1.lcir'
+          test "$(git check-attr text -- "$formula_path")" = "$formula_path: text: unset"
+          test "$(git check-attr eol -- "$formula_path")" = "$formula_path: eol: unspecified"
           proof_tmp="$RUNNER_TEMP/region-proof-$GITHUB_JOB"
           mkdir -p "$proof_tmp"
           docker run --rm --pull always \

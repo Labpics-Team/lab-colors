@@ -4,11 +4,14 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import itertools
+import json
 import struct
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stderr
 from dataclasses import fields as dataclass_fields
 from dataclasses import make_dataclass, replace
 from pathlib import Path
@@ -18,6 +21,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 import region_proof_protocol as protocol  # noqa: E402
+import controller as fixture_controller  # noqa: E402
 from controller import (  # noqa: E402
     ControllerErrorV1,
     FrozenInputV1,
@@ -181,6 +185,110 @@ class DefinitionAndJobTests(unittest.TestCase):
             with self.assertRaises(ControllerErrorV1):
                 _read_frozen(root, frozen)
 
+            actual_directory = root / "actual-directory"
+            actual_directory.mkdir()
+            nested = actual_directory / "nested.bin"
+            nested.write_bytes(b"good")
+            directory_alias = root / "directory-alias"
+            directory_alias.symlink_to(actual_directory, target_is_directory=True)
+            with self.assertRaises(ControllerErrorV1):
+                _read_frozen(
+                    root,
+                    FrozenInputV1(
+                        "directory-alias/nested.bin",
+                        4,
+                        hashlib.sha256(b"good").hexdigest(),
+                    ),
+                )
+
+            missing = FrozenInputV1(
+                "missing.bin",
+                0,
+                hashlib.sha256(b"").hexdigest(),
+            )
+            with self.assertRaises(ControllerErrorV1):
+                _read_frozen(root, missing)
+
+            actual_root = root / "actual"
+            actual_root.mkdir()
+            actual_fixture = actual_root / "fixture.bin"
+            actual_fixture.write_bytes(b"good")
+            root_alias = root / "root-alias"
+            root_alias.symlink_to(actual_root, target_is_directory=True)
+            aliased = FrozenInputV1(
+                "fixture.bin",
+                4,
+                hashlib.sha256(b"good").hexdigest(),
+            )
+            self.assertEqual(_read_frozen(root_alias, aliased), b"good")
+
+            with patch.object(
+                fixture_controller.os,
+                "open",
+                side_effect=PermissionError("host detail must not escape"),
+            ):
+                with self.assertRaises(ControllerErrorV1):
+                    _read_frozen(actual_root, aliased)
+
+            values = (0, 1, 10, 11, 127, 128, 254, 255)
+            seam_cube = tuple(
+                (red << 16) | (green << 8) | blue
+                for red, green, blue in itertools.product(values, repeat=3)
+            )
+
+            class ShortDomain:
+                point_count = 512
+
+                @staticmethod
+                def iter_ordinals():
+                    return iter(seam_cube[:-1])
+
+            class LongDomain:
+                point_count = 512
+
+                @staticmethod
+                def iter_ordinals():
+                    return iter((*seam_cube, seam_cube[-1] + 1))
+
+            admitted_job = ProofJobV1.parse(
+                (FIXTURES / "proof-job-v1.bin").read_bytes()
+            )
+            for drifted_domain in (ShortDomain(), LongDomain()):
+                with (
+                    patch.object(
+                        fixture_controller.ReducedDomainManifestV1,
+                        "parse",
+                        return_value=drifted_domain,
+                    ),
+                    patch.object(
+                        fixture_controller.ProofJobV1,
+                        "parse",
+                        return_value=admitted_job,
+                    ),
+                ):
+                    with self.assertRaises(ControllerErrorV1):
+                        verify_fixtures(REPO)
+
+            stderr = io.StringIO()
+            with (
+                patch.object(
+                    fixture_controller,
+                    "verify_fixtures",
+                    side_effect=ControllerErrorV1("fixture rejected"),
+                ),
+                redirect_stderr(stderr),
+            ):
+                self.assertEqual(
+                    fixture_controller.main(
+                        ["verify-fixtures", "--repo-root", str(root)]
+                    ),
+                    1,
+                )
+            self.assertEqual(
+                json.loads(stderr.getvalue()),
+                {"error": "fixture rejected", "status": "protocol-fixtures-rejected"},
+            )
+
     def test_v5b2b_definition_fixture_reencodes_byte_identically(self) -> None:
         raw = (FIXTURES / "v5b2b-definition-0a8d1c3d.bin").read_bytes()
         definition = ContextualRegionDefinitionV1.parse(raw)
@@ -296,7 +404,31 @@ class DefinitionAndJobTests(unittest.TestCase):
 
     def test_committed_job_fixture_reencodes_and_replays_nested_digests(self) -> None:
         raw = (FIXTURES / "proof-job-v1.bin").read_bytes()
-        job = ProofJobV1.parse(raw)
+        sha256 = protocol.hashlib.sha256
+        formula_release_calls = 0
+
+        def count_formula_release(data=b"", *args, **kwargs):
+            nonlocal formula_release_calls
+            if data.startswith(FORMULA_RELEASE_DOMAIN_V1):
+                formula_release_calls += 1
+            return sha256(data, *args, **kwargs)
+
+        with patch.object(protocol.hashlib, "sha256", new=count_formula_release):
+            job = ProofJobV1.parse(raw)
+        self.assertEqual(formula_release_calls, 1)
+
+        definition_length = int.from_bytes(raw[40:48], "big")
+        formula_offset = 48 + definition_length + 32 + 8
+        corrupted = bytearray(raw)
+        corrupted[formula_offset] ^= 1
+        formula_release_calls = 0
+        with patch.object(protocol.hashlib, "sha256", new=count_formula_release):
+            expect_reason(
+                self,
+                ProtocolReasonV1.DIGEST_MISMATCH,
+                lambda: ProofJobV1.parse(bytes(corrupted)),
+            )
+        self.assertEqual(formula_release_calls, 1)
         formula = FORMULA.read_bytes()
 
         self.assertEqual(job.encode(), raw)
@@ -376,6 +508,11 @@ class DomainAndPolicyTests(unittest.TestCase):
         self.assertTrue(all(left[1] < right[0] for left, right in zip(domain.ranges, domain.ranges[1:])))
 
     def test_domain_rejects_empty_reorder_overlap_adjacency_and_wrong_count(self) -> None:
+        expect_reason(
+            self,
+            ProtocolReasonV1.EMPTY_DOMAIN,
+            lambda: ReducedDomainManifestV1.from_ordinals(()),
+        )
         for ranges, count, reason in (
             ((), 0, ProtocolReasonV1.EMPTY_DOMAIN),
             (((10, 12), (1, 2)), 3, ProtocolReasonV1.NONCANONICAL_ORDER),
@@ -453,6 +590,14 @@ class DomainAndPolicyTests(unittest.TestCase):
                 lambda: ReducedDomainManifestV1.parse(invalid_first_record),
             )
         self.assertEqual(reads, 2)
+
+        expect_reason(
+            self,
+            ProtocolReasonV1.TRUNCATED,
+            lambda: ReducedDomainManifestV1.parse(
+                (FIXTURES / "reduced-domain-srgb8-seams-v1.bin").read_bytes()[:-1]
+            ),
+        )
 
     def test_policy_requires_strict_ladders_and_accepts_zero_grant(self) -> None:
         policy = fixture_policy()
@@ -838,6 +983,17 @@ class ManifestTranscriptComparisonTests(unittest.TestCase):
             digest(234),
         )
         resource_wire = resource.encode()
+        parsed_resource = DecisionTranscriptV1.parse(resource_wire)
+        self.assertIsNone(parsed_resource.witness_store._hash)
+        self.assertEqual(hash(resource), hash(parsed_resource))
+        cached_hash = parsed_resource.witness_store._hash
+        self.assertIsNotNone(cached_hash)
+        with patch.object(
+            WitnessStoreV1,
+            "body_view",
+            side_effect=AssertionError("cached hash rescanned witness body"),
+        ):
+            self.assertEqual(hash(parsed_resource.witness_store), cached_hash)
         with patch.object(
             protocol,
             "ResourceLimitWitnessV1",

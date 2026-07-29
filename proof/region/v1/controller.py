@@ -9,6 +9,7 @@ import itertools
 import json
 import os
 import stat
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -18,6 +19,7 @@ from region_proof_protocol import (
     ContextualRegionDefinitionV1,
     ProofJobV1,
     ProofPolicyV1,
+    ProtocolErrorV1,
     ReducedDomainManifestV1,
 )
 
@@ -65,23 +67,48 @@ class ControllerErrorV1(RuntimeError):
 
 
 def _read_frozen(repo_root: Path, item: FrozenInputV1) -> bytes:
-    path = repo_root / item.relative_path
-    if path.resolve(strict=True) != path.absolute():
+    try:
+        root = repo_root.resolve(strict=True)
+    except (OSError, RuntimeError):
+        raise ControllerErrorV1("repository root is unavailable") from None
+    if not root.is_dir():
+        raise ControllerErrorV1("repository root is not a directory")
+
+    relative = Path(item.relative_path)
+    if relative.is_absolute() or not relative.parts or any(
+        part in ("", ".", "..") for part in relative.parts
+    ):
+        raise ControllerErrorV1(f"invalid frozen input path: {item.relative_path}")
+    path = root / relative
+    try:
+        resolved = path.resolve(strict=True)
+    except (OSError, RuntimeError):
+        raise ControllerErrorV1(
+            f"frozen input is unavailable: {item.relative_path}"
+        ) from None
+    if resolved != path:
         raise ControllerErrorV1(f"symlinked input path: {item.relative_path}")
     flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
-    descriptor = os.open(path, flags)
     try:
-        metadata = os.fstat(descriptor)
-        if not stat.S_ISREG(metadata.st_mode):
-            raise ControllerErrorV1(f"not a regular owned input: {item.relative_path}")
-        if metadata.st_size != item.length:
-            raise ControllerErrorV1(
-                f"length mismatch for {item.relative_path}: {metadata.st_size} != {item.length}"
-            )
-        with os.fdopen(descriptor, "rb", closefd=False) as source:
-            data = source.read(item.length + 1)
-    finally:
-        os.close(descriptor)
+        descriptor = os.open(resolved, flags)
+        try:
+            metadata = os.fstat(descriptor)
+            if not stat.S_ISREG(metadata.st_mode):
+                raise ControllerErrorV1(
+                    f"not a regular frozen input: {item.relative_path}"
+                )
+            if metadata.st_size != item.length:
+                raise ControllerErrorV1(
+                    f"length mismatch for {item.relative_path}: {metadata.st_size} != {item.length}"
+                )
+            with os.fdopen(descriptor, "rb", closefd=False) as source:
+                data = source.read(item.length + 1)
+        finally:
+            os.close(descriptor)
+    except OSError:
+        raise ControllerErrorV1(
+            f"frozen input cannot be read: {item.relative_path}"
+        ) from None
     if len(data) != item.length:
         raise ControllerErrorV1(f"bounded read drifted for {item.relative_path}")
     actual = hashlib.sha256(data).hexdigest()
@@ -93,7 +120,12 @@ def _read_frozen(repo_root: Path, item: FrozenInputV1) -> bytes:
 
 
 def verify_fixtures(repo_root: Path) -> dict[str, int | str]:
-    root = repo_root.resolve(strict=True)
+    try:
+        root = repo_root.resolve(strict=True)
+    except (OSError, RuntimeError):
+        raise ControllerErrorV1("repository root is unavailable") from None
+    if not root.is_dir():
+        raise ControllerErrorV1("repository root is not a directory")
     admitted = {
         item.relative_path: _read_frozen(root, item) for item in FROZEN_INPUTS_V1
     }
@@ -103,10 +135,13 @@ def verify_fixtures(repo_root: Path) -> dict[str, int | str]:
     policy_raw = admitted[FROZEN_INPUTS_V1[3].relative_path]
     job_raw = admitted[FROZEN_INPUTS_V1[4].relative_path]
 
-    definition = ContextualRegionDefinitionV1.parse(definition_raw)
-    domain = ReducedDomainManifestV1.parse(domain_raw)
-    policy = ProofPolicyV1.parse(policy_raw)
-    job = ProofJobV1.parse(job_raw)
+    try:
+        definition = ContextualRegionDefinitionV1.parse(definition_raw)
+        domain = ReducedDomainManifestV1.parse(domain_raw)
+        policy = ProofPolicyV1.parse(policy_raw)
+        job = ProofJobV1.parse(job_raw)
+    except ProtocolErrorV1 as error:
+        raise ControllerErrorV1(f"frozen protocol input was rejected: {error}") from None
 
     formula_release = hashlib.sha256(
         FORMULA_RELEASE_DOMAIN_V1 + len(formula).to_bytes(8, "big") + formula
@@ -119,12 +154,11 @@ def verify_fixtures(repo_root: Path) -> dict[str, int | str]:
         (red << 16) | (green << 8) | blue
         for red, green, blue in itertools.product(values, repeat=3)
     )
-    if any(
+    sentinel = object()
+    if domain.point_count != len(values) ** 3 or any(
         actual != expected
-        for actual, expected in zip(
-            domain.iter_ordinals(),
-            expected_ordinals,
-            strict=True,
+        for actual, expected in itertools.zip_longest(
+            domain.iter_ordinals(), expected_ordinals, fillvalue=sentinel
         )
     ):
         raise ControllerErrorV1("reduced domain is not the frozen seam cube")
@@ -161,16 +195,32 @@ def verify_fixtures(repo_root: Path) -> dict[str, int | str]:
     }
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     subcommands = parser.add_subparsers(dest="command", required=True)
     verify = subcommands.add_parser("verify-fixtures")
     verify.add_argument("--repo-root", type=Path, required=True)
-    arguments = parser.parse_args()
+    arguments = parser.parse_args(argv)
 
     if arguments.command == "verify-fixtures":
-        print(json.dumps(verify_fixtures(arguments.repo_root), sort_keys=True))
+        try:
+            evidence = verify_fixtures(arguments.repo_root)
+        except ControllerErrorV1 as error:
+            print(
+                json.dumps(
+                    {
+                        "error": str(error),
+                        "status": "protocol-fixtures-rejected",
+                    },
+                    sort_keys=True,
+                ),
+                file=sys.stderr,
+            )
+            return 1
+        print(json.dumps(evidence, sort_keys=True))
+        return 0
+    raise AssertionError("argparse admitted an unknown command")
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
