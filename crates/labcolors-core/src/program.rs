@@ -49,8 +49,7 @@ use crate::family::{
     AdmittedFamilySetV1, FamilyContentIdentityV1 as CoreFamilyContentIdentityV1,
     FamilyDeclarationV1, FamilyId, FamilyImageErrorV1,
     FamilyMembershipMeasurementV1 as CoreFamilyMembershipMeasurementV1,
-    FamilyMembershipPassV1 as CoreFamilyMembershipPassV1,
-    FamilyMembershipViolationV1 as CoreFamilyMembershipViolationV1, admit_declared_family_image_v1,
+    admit_declared_family_image_v1,
 };
 use crate::joint::FiniteJointOrderErrorV1;
 use crate::lcs_occurrence::{
@@ -2730,18 +2729,16 @@ impl IntrinsicUnaryEvidenceV1<'_> {
         match self.inner {
             IntrinsicUnaryEvidenceRefV1::Pass(value) => match value.proof() {
                 CoreIntrinsicUnaryPassV1::ExactSrgb8(_) => IntrinsicUnaryProofV1::ExactSrgb8Pass,
-                CoreIntrinsicUnaryPassV1::FamilyMembership(proof) => {
-                    IntrinsicUnaryProofV1::FamilyMembershipPass(FamilyMembershipPassV1(proof))
+                CoreIntrinsicUnaryPassV1::FamilyMembership(_) => {
+                    IntrinsicUnaryProofV1::FamilyMembershipPass
                 }
             },
             IntrinsicUnaryEvidenceRefV1::Violation(value) => match value.proof() {
                 CoreIntrinsicUnaryViolationV1::ExactSrgb8(_) => {
                     IntrinsicUnaryProofV1::ExactSrgb8Violation
                 }
-                CoreIntrinsicUnaryViolationV1::FamilyMembership(proof) => {
-                    IntrinsicUnaryProofV1::FamilyMembershipViolation(FamilyMembershipViolationV1(
-                        proof,
-                    ))
+                CoreIntrinsicUnaryViolationV1::FamilyMembership(_) => {
+                    IntrinsicUnaryProofV1::FamilyMembershipViolation
                 }
             },
         }
@@ -2844,46 +2841,6 @@ impl FamilyMembershipMeasurementV1 {
     }
 }
 
-/// Канонический свидетель включения в проверенный точный образ.
-#[repr(transparent)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct FamilyMembershipPassV1(CoreFamilyMembershipPassV1);
-
-impl FamilyMembershipPassV1 {
-    /// Возвращает канонический ранг элемента, а не внутренний handle хранилища.
-    pub(crate) const fn rank(self) -> usize {
-        self.0.rank()
-    }
-}
-
-/// Канонический свидетель исключения вокруг отсутствующего сигнала.
-#[repr(transparent)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct FamilyMembershipViolationV1(CoreFamilyMembershipViolationV1);
-
-impl FamilyMembershipViolationV1 {
-    /// Возвращает каноническую позицию вставки.
-    pub(crate) const fn insertion_rank(self) -> usize {
-        self.0.insertion_rank()
-    }
-
-    /// Возвращает предшествующий точный элемент, если он существует.
-    pub(crate) const fn lower(self) -> Option<Srgb8> {
-        match self.0.lower() {
-            Some(value) => Some(value.srgb8()),
-            None => None,
-        }
-    }
-
-    /// Возвращает следующий точный элемент, если он существует.
-    pub(crate) const fn upper(self) -> Option<Srgb8> {
-        match self.0.upper() {
-            Some(value) => Some(value.srgb8()),
-            None => None,
-        }
-    }
-}
-
 /// Взаимоисключающие точные доказательства одного intrinsic-unary вызова.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum IntrinsicUnaryProofV1 {
@@ -2892,9 +2849,9 @@ pub(crate) enum IntrinsicUnaryProofV1 {
     /// Точное равенство нарушено.
     ExactSrgb8Violation,
     /// Принадлежность точному образу family подтверждена.
-    FamilyMembershipPass(FamilyMembershipPassV1),
+    FamilyMembershipPass,
     /// Принадлежность точному образу family нарушена.
-    FamilyMembershipViolation(FamilyMembershipViolationV1),
+    FamilyMembershipViolation,
 }
 
 /// Полное заимствованное member-evidence одного directional-ограничения.

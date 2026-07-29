@@ -145,10 +145,9 @@ fn hard_family_membership_selects_a_member_rechecks_it_and_retains_alpha() {
     assert_eq!(measurement.family(), FAMILY);
     assert_eq!(measurement.signal(), blue);
     assert_eq!(measurement.content(), expected_family_content);
-    let program::IntrinsicUnaryProofV1::FamilyMembershipPass(proof) = intrinsic.proof() else {
+    let program::IntrinsicUnaryProofV1::FamilyMembershipPass = intrinsic.proof() else {
         panic!("selected family member must carry an inclusion witness");
     };
-    assert_eq!(proof.rank(), 2);
 }
 
 #[test]
@@ -262,6 +261,7 @@ fn report_only_family_violation_is_retained_but_does_not_steer_selection() {
     let second = program::TargetCandidateIdV1::new(31);
     let red = Srgb8::new([255, 0, 0]);
     let blue = Srgb8::new([0, 0, 255]);
+    let expected_family_content = family(&[[0, 0, 255]]).content_identity();
     let owner = finite_family_draft(
         &[(first, red, 0.25), (second, blue, 0.5)],
         &[[0, 0, 255]],
@@ -300,12 +300,17 @@ fn report_only_family_violation_is_retained_but_does_not_steer_selection() {
         panic!("family membership must remain intrinsic-unary evidence");
     };
     assert_eq!(intrinsic.verdict(), program::VerdictV1::Violation);
-    let program::IntrinsicUnaryProofV1::FamilyMembershipViolation(proof) = intrinsic.proof() else {
+    let program::IntrinsicUnaryMeasurementV1::FamilyMembership(measurement) =
+        intrinsic.measurement()
+    else {
+        panic!("family violation must retain typed membership measurement");
+    };
+    assert_eq!(measurement.family(), FAMILY);
+    assert_eq!(measurement.signal(), red);
+    assert_eq!(measurement.content(), expected_family_content);
+    let program::IntrinsicUnaryProofV1::FamilyMembershipViolation = intrinsic.proof() else {
         panic!("the non-member must retain an exact exclusion witness");
     };
-    assert_eq!(proof.insertion_rank(), 1);
-    assert_eq!(proof.lower(), Some(blue));
-    assert_eq!(proof.upper(), None);
 }
 
 #[test]
@@ -357,12 +362,11 @@ fn compiled_family_index_resolves_the_requested_nonzero_declaration() {
 fn two_invalid_states_produce_an_exhaustive_conflict_with_exact_family_witnesses() {
     let below = program::TargetCandidateIdV1::new(40);
     let between = program::TargetCandidateIdV1::new(41);
-    let lower_member = Srgb8::new([10; 3]);
-    let upper_member = Srgb8::new([20; 3]);
-    let mut draft = finite_base_draft(&[
-        (below, Srgb8::new([5; 3]), 1.0),
-        (between, Srgb8::new([15; 3]), 1.0),
-    ]);
+    let below_signal = Srgb8::new([5; 3]);
+    let between_signal = Srgb8::new([15; 3]);
+    let expected_family_content = family(&[[10; 3], [20; 3]]).content_identity();
+    let mut draft =
+        finite_base_draft(&[(below, below_signal, 1.0), (between, between_signal, 1.0)]);
     draft.push_family(FAMILY, family(&[[10; 3], [20; 3]]));
     draft.push_intrinsic_family_membership_hard(FAMILY_CONSTRAINT, TARGET, FAMILY);
     draft.push_exact_visible_unary_report_only(VISIBLE_CONSTRAINT, OCCURRENCE, Srgb8::new([0; 3]));
@@ -405,23 +409,22 @@ fn two_invalid_states_produce_an_exhaustive_conflict_with_exact_family_witnesses
         let program::AssessmentV1::IntrinsicUnary(intrinsic) = cell.assessment() else {
             panic!("every retained cell must carry family evidence");
         };
-        let program::IntrinsicUnaryProofV1::FamilyMembershipViolation(proof) = intrinsic.proof()
+        let program::IntrinsicUnaryMeasurementV1::FamilyMembership(measurement) =
+            intrinsic.measurement()
         else {
+            panic!("every family violation must retain typed membership measurement");
+        };
+        assert_eq!(measurement.family(), FAMILY);
+        assert_eq!(measurement.content(), expected_family_content);
+        let expected_signal = match cell.state_index() {
+            0 => below_signal,
+            1 => between_signal,
+            state => panic!("unexpected state {state}"),
+        };
+        assert_eq!(measurement.signal(), expected_signal);
+        let program::IntrinsicUnaryProofV1::FamilyMembershipViolation = intrinsic.proof() else {
             panic!("both candidate signals are absent from the family");
         };
-        match cell.state_index() {
-            0 => {
-                assert_eq!(proof.insertion_rank(), 0);
-                assert_eq!(proof.lower(), None);
-                assert_eq!(proof.upper(), Some(lower_member));
-            }
-            1 => {
-                assert_eq!(proof.insertion_rank(), 1);
-                assert_eq!(proof.lower(), Some(lower_member));
-                assert_eq!(proof.upper(), Some(upper_member));
-            }
-            state => panic!("unexpected state {state}"),
-        }
     }
 }
 

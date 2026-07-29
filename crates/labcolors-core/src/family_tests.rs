@@ -4,7 +4,8 @@ use crate::Srgb8;
 use crate::constraints::HardDecision;
 use crate::family::{
     AdmittedFamilySetV1, CompleteFamilyGeneratorV1, FamilyImageErrorV1, FamilyImageProofReleaseV1,
-    UnverifiedFamilyImageV1, admit_declared_family_image_v1, verify_complete_family_image_v1,
+    FamilyMembershipPassV1, FamilyMembershipViolationV1, UnverifiedFamilyImageV1,
+    admit_declared_family_image_v1, verify_complete_family_image_v1,
 };
 use crate::lcs_occurrence::ColorSignal;
 use proptest::prelude::*;
@@ -174,6 +175,12 @@ fn production_declared_set_is_nonempty_canonical_and_content_addressed() {
     );
     assert!(is_member(&first, signal([1, 2, 3])));
     assert!(!is_member(&first, signal([1, 2, 4])));
+}
+
+#[test]
+fn membership_proofs_carry_no_storage_coordinates() {
+    assert_eq!(core::mem::size_of::<FamilyMembershipPassV1>(), 0);
+    assert_eq!(core::mem::size_of::<FamilyMembershipViolationV1>(), 0,);
 }
 
 #[test]
@@ -370,35 +377,36 @@ fn generator_identity_binds_parameters_even_when_quantized_output_is_identical()
 }
 
 #[test]
-fn exclusion_witnesses_cover_below_between_and_above() {
+fn membership_measurement_carries_family_and_signal_for_every_exact_verdict() {
     let admitted = admit_declared_family_image_v1(vec![signal([10; 3]), signal([20; 3])]).unwrap();
     let expected_family = admitted.certificate().family_content_identity();
-    for (query, insertion, lower, upper) in [
-        (signal([0; 3]), 0, None, Some(signal([10; 3]))),
-        (
-            signal([15; 3]),
-            1,
-            Some(signal([10; 3])),
-            Some(signal([20; 3])),
-        ),
-        (signal([30; 3]), 2, Some(signal([20; 3])), None),
-    ] {
+    let mut expected_violation = None;
+    for query in [signal([0; 3]), signal([15; 3]), signal([30; 3])] {
         let (measurement, HardDecision::Violation(proof)) = admitted.assess(query) else {
             panic!("every query is outside the declared set");
         };
         assert_eq!(measurement.family(), expected_family);
         assert_eq!(measurement.signal(), query);
-        assert_eq!(proof.insertion_rank(), insertion);
-        assert_eq!(proof.lower(), lower);
-        assert_eq!(proof.upper(), upper);
+        if let Some(expected) = expected_violation {
+            assert_eq!(proof, expected);
+        } else {
+            expected_violation = Some(proof);
+        }
     }
 
-    let included = signal([10; 3]);
-    let (measurement, HardDecision::Pass(_)) = admitted.assess(included) else {
-        panic!("declared member must pass");
-    };
-    assert_eq!(measurement.family(), expected_family);
-    assert_eq!(measurement.signal(), included);
+    let mut expected_pass = None;
+    for included in [signal([10; 3]), signal([20; 3])] {
+        let (measurement, HardDecision::Pass(proof)) = admitted.assess(included) else {
+            panic!("declared member must pass");
+        };
+        assert_eq!(measurement.family(), expected_family);
+        assert_eq!(measurement.signal(), included);
+        if let Some(expected) = expected_pass {
+            assert_eq!(proof, expected);
+        } else {
+            expected_pass = Some(proof);
+        }
+    }
 }
 
 #[test]
@@ -485,8 +493,8 @@ fn repeated_membership_assessment_allocates_nothing() {
             let (measurement, decision) = admitted.assess(value);
             checksum ^= measurement.signal().srgb8().bytes()[0] as usize;
             checksum ^= match decision {
-                HardDecision::Pass(proof) => proof.rank(),
-                HardDecision::Violation(proof) => proof.insertion_rank(),
+                HardDecision::Pass(_) => 0xA5,
+                HardDecision::Violation(_) => 0x5A,
             };
         }
         checksum

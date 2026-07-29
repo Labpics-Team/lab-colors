@@ -368,15 +368,8 @@ impl AdmittedFamilySetV1 {
             .binary_search_by_key(&canonical_signal_key(signal), |member| {
                 canonical_signal_key(*member)
             }) {
-            Ok(rank) => HardDecision::Pass(FamilyMembershipPassV1 { rank }),
-            Err(insertion_rank) => HardDecision::Violation(FamilyMembershipViolationV1 {
-                insertion_rank,
-                lower: insertion_rank
-                    .checked_sub(1)
-                    .and_then(|rank| self.members.get(rank))
-                    .copied(),
-                upper: self.members.get(insertion_rank).copied(),
-            }),
+            Ok(_) => HardDecision::Pass(FamilyMembershipPassV1),
+            Err(_) => HardDecision::Violation(FamilyMembershipViolationV1),
         };
         (measurement, decision)
     }
@@ -524,37 +517,13 @@ impl FamilyMembershipMeasurementV1 {
     }
 }
 
+/// Membership связывают family identity и исходный сигнал в measurement;
+/// proof не повторяет координаты конкретного физического представления set-а.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct FamilyMembershipPassV1 {
-    rank: usize,
-}
-
-impl FamilyMembershipPassV1 {
-    pub(crate) const fn rank(self) -> usize {
-        self.rank
-    }
-}
+pub(crate) struct FamilyMembershipPassV1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct FamilyMembershipViolationV1 {
-    insertion_rank: usize,
-    lower: Option<ColorSignal>,
-    upper: Option<ColorSignal>,
-}
-
-impl FamilyMembershipViolationV1 {
-    pub(crate) const fn insertion_rank(self) -> usize {
-        self.insertion_rank
-    }
-
-    pub(crate) const fn lower(self) -> Option<ColorSignal> {
-        self.lower
-    }
-
-    pub(crate) const fn upper(self) -> Option<ColorSignal> {
-        self.upper
-    }
-}
+pub(crate) struct FamilyMembershipViolationV1;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum FamilyImageErrorV1 {
