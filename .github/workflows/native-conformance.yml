@@ -21,11 +21,12 @@ on:
   pull_request:
   workflow_dispatch:
 
-# Устаревшие SHA одной PR делят очередь и освобождают раннер. Push evidence и
-# ручной macOS reference остаются независимыми exact-run через уникальный run_id.
+# Первый запуск PR делит группу номера PR. Re-run старого события получает
+# уникальный run_id и self-hosted job пропускается, поэтому не отменяет новый SHA.
+# Push evidence и ручной reference остаются независимыми exact-run.
 concurrency:
-  group: native-conformance-${{ github.event.pull_request.number || github.run_id }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: native-conformance-${{ github.event_name == 'pull_request' && github.run_attempt == 1 && github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' && github.run_attempt == 1 }}
 
 permissions:
   contents: read
@@ -43,8 +44,9 @@ jobs:
     # Защита от fork-PR: НЕ гоняем недоверенный код форков на своей инфре.
     # Форк-PR пропускается; push в main и same-repo PR — гоняются.
     if: >-
-      github.event_name != 'pull_request' ||
-      github.event.pull_request.head.repo.full_name == github.repository
+      (github.event_name != 'pull_request' || github.run_attempt == 1) &&
+      (github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name == github.repository)
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:

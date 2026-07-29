@@ -11,11 +11,11 @@ on:
 permissions:
   contents: read
 
-# Все report-only прогоны делят одну очередь репозитория: ручной запуск ветки не
-# размножает scheduled run, а активный прогон не отменяется с потерей evidence.
+# Все report-only прогоны делят FIFO-очередь репозитория: queue=max сохраняет до
+# 100 pending runs вместо default single, который отменяет предыдущий pending.
 concurrency:
   group: mutation
-  cancel-in-progress: false
+  queue: max
 
 env:
   CARGO_INCREMENTAL: 0

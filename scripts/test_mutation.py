@@ -1687,8 +1687,38 @@ class MutationTruthTest(unittest.TestCase):
         self.assertIn(
             "concurrency:\n"
             "  group: mutation\n"
-            "  cancel-in-progress: false\n",
+            "  queue: max\n",
             mutation_workflow,
+        )
+        mutation_concurrency = mutation_workflow.split("concurrency:\n", 1)[1].split(
+            "\nenv:", 1
+        )[0]
+        self.assertNotIn("cancel-in-progress", mutation_concurrency)
+
+        def enqueue_three(queue_mode: str) -> tuple[list[str], list[str]]:
+            pending: list[str] = []
+            cancelled: list[str] = []
+            for run in ("R2", "R3"):
+                if queue_mode == "single" and pending:
+                    cancelled.extend(pending)
+                    pending = []
+                pending.append(run)
+            return pending, cancelled
+
+        self.assertEqual(enqueue_three("max"), (["R2", "R3"], []))
+        self.assertEqual(enqueue_three("single"), (["R3"], ["R2"]))
+
+        group_tail = (
+            "${{ github.event_name == 'pull_request' && github.run_attempt == 1 "
+            "&& github.event.pull_request.number || github.run_id }}"
+        )
+        cancel_rule = (
+            "${{ github.event_name == 'pull_request' && github.run_attempt == 1 }}"
+        )
+        rerun_guard = (
+            "(github.event_name != 'pull_request' || github.run_attempt == 1) &&\n"
+            "      (github.event_name != 'pull_request' ||\n"
+            "      github.event.pull_request.head.repo.full_name == github.repository)"
         )
         for workflow_name, workflow in (
             ("ci", ci_workflow),
@@ -1696,12 +1726,25 @@ class MutationTruthTest(unittest.TestCase):
         ):
             self.assertIn(
                 "concurrency:\n"
-                f"  group: {workflow_name}-"
-                "${{ github.event.pull_request.number || github.run_id }}\n"
-                "  cancel-in-progress: "
-                "${{ github.event_name == 'pull_request' }}\n",
+                f"  group: {workflow_name}-{group_tail}\n"
+                f"  cancel-in-progress: {cancel_rule}\n",
                 workflow,
             )
+        self.assertEqual(ci_workflow.count(rerun_guard), 7)
+        self.assertEqual(native_workflow.count(rerun_guard), 1)
+
+        def run_policy(
+            event: str, attempt: int, pr_number: int, run_id: int
+        ) -> tuple[str, bool, bool]:
+            initial_pr = event == "pull_request" and attempt == 1
+            group_value = pr_number if initial_pr else run_id
+            eligible = event != "pull_request" or attempt == 1
+            return str(group_value), initial_pr, eligible
+
+        self.assertEqual(run_policy("pull_request", 1, 42, 100), ("42", True, True))
+        self.assertEqual(run_policy("pull_request", 1, 42, 101), ("42", True, True))
+        self.assertEqual(run_policy("pull_request", 2, 42, 100), ("100", False, False))
+        self.assertEqual(run_policy("push", 2, 0, 100), ("100", False, True))
 
     def test_workflow_and_scope_lock_the_truth_contract(self) -> None:
         def between(source: str, start: str, end: str, label: str) -> str:
