@@ -31,3 +31,4 @@ crates/labcolors-core/LICENSES/*.txt text eol=lf whitespace=-blank-at-eof
 crates/labcolors-core/NOTICE.md text eol=lf
 scripts/verify_clean_set_receipt.py text eol=lf
 scripts/test_verify_clean_set_receipt.py text eol=lf
+proof/region/v1/fixtures/*.bin binary
