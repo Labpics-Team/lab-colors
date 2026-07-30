@@ -514,7 +514,11 @@ Glow-свидетельств и подготовка перехода обра�
 
 Raw-размер WASM — hard gate. SSOT текущего exact Linux-x64 size-бюджета
 `runtime` — self-contained `packages/colors/bench/wasm.json`: он закрепляет
-полный toolchain/recipe, источник измерения и потолок с нулевым headroom.
+текущий compiler/orchestrator release, exact archives и binaries двух
+byte-transforming builders, recipe и потолок с нулевым headroom. Отдельный
+`baselineSource` сообщает только происхождение численного ratchet; он не
+приписывает историческому run текущую builder- или runner-роль. Это не identity
+всего host toolchain.
 Предыдущие состояния восстанавливаются из Git и не дублируются в live tree.
 `scripts/check-wasm-size-budget.mjs` закрепляет канонические байты этого
 контракта и отклоняет numbered snapshots. Size policy не притворяется
@@ -524,8 +528,15 @@ tarball при публикации. Release-equivalent CI требует точ
 неизменного рецепта сборки. CI собирает артефакт, выполняет `cargo clean`,
 повторяет сборку и сравнивает результаты внутри одного Linux job с закреплённым
 toolchain; это проверка повторяемости в данном job, а не утверждение о cross-run
-или cross-host reproducibility. На других host-платформах checker сообщает
-только raw/gzip/SHA-диагностику и не выдаёт локальные байты за канонический
+или cross-host reproducibility. Job допускается только на одноразовой x86_64 VM:
+до распаковки он сверяет SHA-256 обоих архивов, устанавливает builders в первый
+PATH-prefix, проверяет metadata и хеширует bytes через тот же файловый
+дескриптор до и после каждой сборки. `--mode no-install` запрещает wasm-pack
+скачать fallback builder. Строка версии и переданный
+receipt не считаются идентичностью. Эта роль — size/repeatability gate в
+доверенной disposable-границе, не provenance attestation недоверенного workflow.
+Любой иной запуск сообщает только raw/gzip/SHA-диагностику — даже если host
+представляется как Linux x64 — и не выдаёт локальные байты за канонический
 release artifact.
 
 Будет ли runtime-загрузка критическим путём первого рендера, определяет

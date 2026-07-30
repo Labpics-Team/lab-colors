@@ -412,7 +412,9 @@ jobs:
 
   wasm:
     name: wasm build + headless test + size
-    runs-on: [self-hosted, Linux, X64]
+    # Release-equivalent verdict исполняет только одноразовая x86_64 VM;
+    # обычный persistent host не получает этот trust label.
+    runs-on: [self-hosted, Linux, X64, labcolors-ephemeral-vm]
     # Защита от fork-PR — см. комментарий в job `lint` выше.
     if: >-
       (github.event_name != 'pull_request' ||
@@ -427,14 +429,18 @@ jobs:
         # же: изоляция per job под runner.temp, который раннер вайпит между
         # джобами (класс утечки /tmp закрыт, см. историю #143).
         run: |
-          echo "RUSTUP_HOME=$RUNNER_TEMP/rustup-$GITHUB_JOB" >> "$GITHUB_ENV"
-          echo "CARGO_HOME=$RUNNER_TEMP/cargo-$GITHUB_JOB" >> "$GITHUB_ENV"
-          echo "WASM_PACK_CACHE=$RUNNER_TEMP/wasm-pack-$GITHUB_JOB" >> "$GITHUB_ENV"
+          cache="$RUNNER_TEMP/wasm-pack-$GITHUB_JOB"
+          rm -rf "$cache"
+          {
+            echo "RUSTUP_HOME=$RUNNER_TEMP/rustup-$GITHUB_JOB"
+            echo "CARGO_HOME=$RUNNER_TEMP/cargo-$GITHUB_JOB"
+            echo "WASM_PACK_CACHE=$cache"
           # TMPDIR тоже изолирован под runner.temp: /tmp на de-02 — 8ГБ tmpfs;
           # при исчерпании места (4КБ свободно) все
           # джобы умирали «abnormal exit»/cc без stderr, 2026-07-03 18:34Z.
-          echo "TMPDIR=$RUNNER_TEMP/tmp-$GITHUB_JOB" >> "$GITHUB_ENV"
-          mkdir -p "$RUNNER_TEMP/tmp-$GITHUB_JOB" "$RUNNER_TEMP/wasm-pack-$GITHUB_JOB"
+            echo "TMPDIR=$RUNNER_TEMP/tmp-$GITHUB_JOB"
+          } >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/tmp-$GITHUB_JOB" "$cache"
       - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master @ 2026-03-27
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
@@ -442,30 +448,114 @@ jobs:
           targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
       - name: install wasm-pack
-        # Pinned for reproducibility; --locked respects the tool's own lockfile.
-        # wasm-pack vendors a matching wasm-opt and downloads a matching
-        # chromedriver for the headless run below.
+        # Pinned orchestrator; exact byte-transforming builders допускаются
+        # отдельно ниже до первого исполнения.
         # $CARGO_HOME/bin → PATH explicitly: with a custom CARGO_HOME the
         # toolchain action does not add it, so the installed `wasm-pack` binary
         # was unreachable (exit 127 "command not found" on the de-02 farm).
         run: |
           cargo install wasm-pack --version 0.13.1 --locked
           echo "$CARGO_HOME/bin" >> "$GITHUB_PATH"
-      - name: repeat runtime WASM build in one toolchain-pinned CI job
+      - uses: actions/setup-node@2028fbc5c25fe9cf00d9f06a71cc4710d4507903 # v6.0.0
+        with:
+          node-version: ${{ env.NODE_TOOLCHAIN }}
+          cache: npm
+          cache-dependency-path: packages/colors/package-lock.json
+      - name: admit exact builders and repeat runtime WASM build
         # Rust error locations otherwise embed the self-hosted runner's mutable
         # workspace/CARGO_HOME roots and make identical source hash differently.
-        # The second build follows `cargo clean`; equality checks repeatability
-        # for this source inside this toolchain-pinned job, not cross-run or
-        # cross-host identity.
+        # Архивы builders допускаются по digest до распаковки и исполнения.
+        # Managed PATH затем делает эти exact binaries единственными, которые
+        # может выбрать pinned wasm-pack; проверка повторяется после каждой
+        # сборки. Второй build после `cargo clean` доказывает repeatability
+        # только внутри этого job, не cross-run/cross-host identity.
         run: |
           set -euo pipefail
+          for builder in wasm-bindgen wasm-opt; do
+            if command -v "$builder" >/dev/null 2>&1; then
+              echo "ambient $builder would bypass the managed builder contract" >&2
+              exit 1
+            fi
+          done
+          test -z "$(find "$WASM_PACK_CACHE" -mindepth 1 -print -quit)"
+
+          managed="$RUNNER_TEMP/wasm-builders-$GITHUB_JOB"
+          rm -rf "$managed"
+          mkdir -p \
+            "$managed/archives" \
+            "$managed/bindgen" \
+            "$managed/binaryen" \
+            "$managed/bin"
+          mapfile -t builder_plan < <(
+            node scripts/check-wasm-size-budget.mjs --builder-plan
+          )
+          if (( ${#builder_plan[@]} != 4 )); then
+            echo "canonical builder plan must contain four lines" >&2
+            exit 1
+          fi
+          wasm_bindgen_archive="$managed/archives/wasm-bindgen.tar.gz"
+          wasm_opt_archive="$managed/archives/wasm-opt.tar.gz"
+          curl --fail --location --silent --show-error \
+            --proto '=https' --proto-redir '=https' --tlsv1.2 \
+            --output "$wasm_bindgen_archive" "${builder_plan[0]}"
+          curl --fail --location --silent --show-error \
+            --proto '=https' --proto-redir '=https' --tlsv1.2 \
+            --output "$wasm_opt_archive" "${builder_plan[2]}"
+          printf '%s  %s\n' "${builder_plan[1]}" "$wasm_bindgen_archive" \
+            | sha256sum --check --strict
+          printf '%s  %s\n' "${builder_plan[3]}" "$wasm_opt_archive" \
+            | sha256sum --check --strict
+          tar --extract --gzip --file "$wasm_bindgen_archive" \
+            --directory "$managed/bindgen" --no-same-owner --no-same-permissions
+          tar --extract --gzip --file "$wasm_opt_archive" \
+            --directory "$managed/binaryen" --no-same-owner --no-same-permissions
+
+          discover_archive_binary() {
+            local root="$1"
+            local binary="$2"
+            local -a candidates
+            mapfile -d '' candidates < <(
+              find "$root" -type f -name "$binary" -print0
+            )
+            if (( ${#candidates[@]} != 1 )); then
+              echo "expected one $binary in admitted archive, found ${#candidates[@]}" >&2
+              exit 1
+            fi
+            realpath "${candidates[0]}"
+          }
+          install -m 0755 \
+            "$(discover_archive_binary "$managed/bindgen" wasm-bindgen)" \
+            "$managed/bin/wasm-bindgen"
+          install -m 0755 \
+            "$(discover_archive_binary "$managed/binaryen" wasm-opt)" \
+            "$managed/bin/wasm-opt"
+          wasm_bindgen_cli="$managed/bin/wasm-bindgen"
+          wasm_opt="$managed/bin/wasm-opt"
+
+          admit_managed_builders() {
+            test "$(command -v wasm-bindgen)" = "$wasm_bindgen_cli"
+            test "$(command -v wasm-opt)" = "$wasm_opt"
+            test -z "$(find "$WASM_PACK_CACHE" -mindepth 1 -print -quit)"
+            node scripts/check-wasm-size-budget.mjs \
+              --admit-builders \
+              --wasm-bindgen-archive "$wasm_bindgen_archive" \
+              --wasm-opt-archive "$wasm_opt_archive" \
+              --wasm-bindgen-cli "$wasm_bindgen_cli" \
+              --wasm-opt "$wasm_opt"
+            "$wasm_bindgen_cli" --version
+            "$wasm_opt" --version
+          }
+          export PATH="$managed/bin:$PATH"
+          admit_managed_builders
+
           export CARGO_ENCODED_RUSTFLAGS="--remap-path-prefix=$GITHUB_WORKSPACE=/workspace/lab-colors"$'\x1f'"--remap-path-prefix=$CARGO_HOME=/cargo-home"
           build_runtime() {
-            wasm-pack build crates/labcolors-wasm --release --target web --out-dir ../../packages/colors/pkg --out-name labcolors --locked
+            wasm-pack build crates/labcolors-wasm --release --target web --out-dir ../../packages/colors/pkg --out-name labcolors --locked --mode no-install
           }
 
           rm -rf packages/colors/pkg
           build_runtime
+          admit_managed_builders
 
           first="$RUNNER_TEMP/wasm-first-$GITHUB_JOB"
           rm -rf "$first"
@@ -475,6 +565,7 @@ jobs:
           cargo clean
           rm -rf packages/colors/pkg
           build_runtime
+          admit_managed_builders
 
           if ! diff --no-dereference --recursive "$first/pkg" packages/colors/pkg; then
             echo "runtime WASM output changed between builds" >&2
@@ -489,15 +580,10 @@ jobs:
             fi
           done
           sha256sum packages/colors/pkg/labcolors_bg.wasm
-      - uses: actions/setup-node@2028fbc5c25fe9cf00d9f06a71cc4710d4507903 # v6.0.0
-        with:
-          node-version: ${{ env.NODE_TOOLCHAIN }}
-          cache: npm
-          cache-dependency-path: packages/colors/package-lock.json
-      - name: enforce measured WASM runtime budget
-        # Exact Linux x64 zero-headroom ratchet. gzip remains transport
-        # diagnostics only.
-        run: node scripts/check-wasm-size-budget.mjs
+          node scripts/check-wasm-size-budget.mjs \
+            --release-equivalent \
+            --wasm-bindgen-cli "$wasm_bindgen_cli" \
+            --wasm-opt "$wasm_opt"
       - name: "@labpics/colors: typecheck + runtime tests"
         # Now that pkg/ exists (built above), the package's public types resolve
         # against the *real* wasm-bindgen declarations — so the type-level smoke

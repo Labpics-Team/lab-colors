@@ -11,6 +11,7 @@ import {
   readdirSync,
   readlinkSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -81,6 +82,22 @@ function workflowRunScript(workflow, stepName) {
   }
   assert.ok(body.some((line) => line.length > 0), `empty run block: ${stepName}`);
   return body.join("\n");
+}
+
+function continuedShellCommands(script, prefix) {
+  const lines = script.split("\n");
+  const commands = [];
+  for (let index = 0; index < lines.length; index += 1) {
+    if (!lines[index].startsWith(prefix)) continue;
+    const command = [lines[index]];
+    while (command.at(-1).endsWith("\\")) {
+      index += 1;
+      assert.ok(index < lines.length, `unterminated shell command: ${prefix}`);
+      command.push(lines[index]);
+    }
+    commands.push(command.join("\n"));
+  }
+  return commands;
 }
 
 function assertCheckoutCredentialsAreEphemeral(workflow, name) {
@@ -472,10 +489,10 @@ test("MSRV and packaged Rust crate gates are executable CI contracts", () => {
     verified < uploaded && uploaded < browserInstall && browserInstall < browserGate,
     "verified artifact must be uploaded before the pinned Chrome dependency executes",
   );
-  assert.match(ci, /WASM_PACK_CACHE=\$RUNNER_TEMP\/wasm-pack-\$GITHUB_JOB/);
+  assert.match(ci, /WASM_PACK_CACHE=\$cache/);
   assert.match(
     ci,
-    /mkdir -p "\$RUNNER_TEMP\/tmp-\$GITHUB_JOB" "\$RUNNER_TEMP\/wasm-pack-\$GITHUB_JOB"/,
+    /mkdir -p "\$RUNNER_TEMP\/tmp-\$GITHUB_JOB" "\$cache"/,
   );
   assert.doesNotMatch(ci, /chromedriver-bb6facf4ea9511f6|Pre-seeded wasm-pack/);
   assert.match(ci, /CHROME_ROOT="\$RUNNER_TEMP\/chrome-\$GITHUB_JOB"/);
@@ -1673,34 +1690,35 @@ test("WASM runtime budget is one canonical self-contained exact contract", async
     budget,
     "the pinned canonical document must parse",
   );
+  const wasmCargo = read("crates", "labcolors-wasm", "Cargo.toml");
+  const expectedWasmOptArguments = `wasm-opt = [${budget.toolchain.wasmOpt.arguments
+    .map((argument) => JSON.stringify(argument))
+    .join(", ")}]`;
+  assert.ok(
+    wasmCargo.includes(expectedWasmOptArguments),
+    "the live wasm-opt arguments must equal the builder contract",
+  );
 
   const ci = read(".github", "workflows", "ci.yml");
-  assert.match(ci, /name: enforce measured WASM runtime budget/u);
-  const exactBudgetCommand = "        run: node scripts/check-wasm-size-budget.mjs";
-  const assertExactBudgetCommand = (workflow) => {
-    assert.deepEqual(
-      workflow
-        .split("\n")
-        .filter((line) => line.includes("run: node scripts/check-wasm-size-budget.mjs")),
-      [exactBudgetCommand],
-      "CI must execute the canonical budget and built artifact without overrides",
-    );
-  };
-  assertExactBudgetCommand(ci);
-  for (const bypass of [
-    `${exactBudgetCommand} --budget attacker.json`,
-    `${exactBudgetCommand} --runtime-wasm attacker.wasm`,
-  ]) {
-    const mutated = ci.replace(exactBudgetCommand, bypass);
-    assert.notEqual(mutated, ci, "budget CLI mutation must bite the live workflow");
-    assert.throws(() => assertExactBudgetCommand(mutated));
-  }
+  assert.match(ci, /name: admit exact builders and repeat runtime WASM build/u);
 
   const wasmJob = ci.match(
     /\n  wasm:\n(?<body>[\s\S]*?)(?=\n  [a-z][a-z0-9_-]*:\n|\s*$)/u,
   )?.groups?.body;
   assert.ok(wasmJob, "CI must contain a bounded wasm job");
-  assert.match(wasmJob, /runs-on: \[self-hosted, Linux, X64\]/u);
+  assert.match(
+    wasmJob,
+    /runs-on: \[self-hosted, Linux, X64, labcolors-ephemeral-vm\]/u,
+  );
+  assert.equal(
+    read(".github", "actionlint.yaml"),
+    "self-hosted-runner:\n  labels:\n    - labcolors-ephemeral-vm\n",
+  );
+  assert.doesNotMatch(
+    wasmJob.replace(", labcolors-ephemeral-vm", ""),
+    /runs-on: \[self-hosted, Linux, X64, labcolors-ephemeral-vm\]/u,
+    "the release-equivalent job must not fall back to a persistent runner",
+  );
   assert.ok(
     ci.includes(`  RUST_TOOLCHAIN: ${budget.toolchain.rust}`),
     "the live Rust toolchain must equal the budget declaration",
@@ -1716,9 +1734,32 @@ test("WASM runtime budget is one canonical self-contained exact contract", async
     "the live WASM target must equal the budget declaration",
   );
 
+  const toolchainEnv = workflowRunScript(wasmJob, "name: toolchain env (runner.temp)");
+  const freshCache = [
+    'cache="$RUNNER_TEMP/wasm-pack-$GITHUB_JOB"',
+    'rm -rf "$cache"',
+    'mkdir -p "$RUNNER_TEMP/tmp-$GITHUB_JOB" "$cache"',
+  ];
+  const assertFreshCacheContract = (script) => {
+    for (const line of freshCache) {
+      assert.ok(script.includes(line), `fresh managed cache is missing ${line}`);
+    }
+    assert.ok(
+      script.indexOf(freshCache[0]) < script.indexOf(freshCache[1]) &&
+        script.indexOf(freshCache[1]) < script.indexOf(freshCache[2]),
+      "the managed cache must be named, removed, then recreated",
+    );
+  };
+  assertFreshCacheContract(toolchainEnv);
+  for (const line of freshCache) {
+    const mutated = toolchainEnv.replace(line, ":");
+    assert.notEqual(mutated, toolchainEnv, `${line} mutation must bite live CI`);
+    assert.throws(() => assertFreshCacheContract(mutated));
+  }
+
   const repetition = workflowRunScript(
     ci,
-    "name: repeat runtime WASM build in one toolchain-pinned CI job",
+    "name: admit exact builders and repeat runtime WASM build",
   );
   const recipePrefix = "CARGO_ENCODED_RUSTFLAGS=<rustPathRemap> ";
   const expectedRemapExport = `export CARGO_ENCODED_RUSTFLAGS=${budget.recipe.rustPathRemap
@@ -1730,6 +1771,11 @@ test("WASM runtime budget is one canonical self-contained exact contract", async
     .join("$'\\x1f'")}`;
   assert.ok(budget.recipe.command.startsWith(recipePrefix));
   const expectedBuild = budget.recipe.command.slice(recipePrefix.length);
+  assert.match(
+    expectedBuild,
+    /(?:^| )--mode no-install(?: |$)/u,
+    "the release recipe must forbid wasm-pack from downloading fallback builders",
+  );
   const expectedDiffBlock = [
     'if ! diff --no-dereference --recursive "$first/pkg" packages/colors/pkg; then',
     '  echo "runtime WASM output changed between builds" >&2',
@@ -1743,6 +1789,60 @@ test("WASM runtime budget is one canonical self-contained exact contract", async
     "    exit 1",
     "  fi",
     "done",
+  ].join("\n");
+  const expectedAmbientGuard = [
+    "for builder in wasm-bindgen wasm-opt; do",
+    '  if command -v "$builder" >/dev/null 2>&1; then',
+    '    echo "ambient $builder would bypass the managed builder contract" >&2',
+    "    exit 1",
+    "  fi",
+    "done",
+    'test -z "$(find "$WASM_PACK_CACHE" -mindepth 1 -print -quit)"',
+  ].join("\n");
+  const expectedDiscovery = [
+    "discover_archive_binary() {",
+    '  local root="$1"',
+    '  local binary="$2"',
+  ].join("\n");
+  const expectedBuilderAdmission = [
+    "admit_managed_builders() {",
+    '  test "$(command -v wasm-bindgen)" = "$wasm_bindgen_cli"',
+    '  test "$(command -v wasm-opt)" = "$wasm_opt"',
+    '  test -z "$(find "$WASM_PACK_CACHE" -mindepth 1 -print -quit)"',
+    "  node scripts/check-wasm-size-budget.mjs \\",
+    "    --admit-builders \\",
+    '    --wasm-bindgen-archive "$wasm_bindgen_archive" \\',
+    '    --wasm-opt-archive "$wasm_opt_archive" \\',
+    '    --wasm-bindgen-cli "$wasm_bindgen_cli" \\',
+    '    --wasm-opt "$wasm_opt"',
+    '  "$wasm_bindgen_cli" --version',
+    '  "$wasm_opt" --version',
+    "}",
+  ].join("\n");
+  const expectedReleaseCommand = [
+    "node scripts/check-wasm-size-budget.mjs \\",
+    "  --release-equivalent \\",
+    '  --wasm-bindgen-cli "$wasm_bindgen_cli" \\',
+    '  --wasm-opt "$wasm_opt"',
+  ].join("\n");
+  const archiveChecks = [
+    'printf \'%s  %s\\n\' "${builder_plan[1]}" "$wasm_bindgen_archive" \\\n  | sha256sum --check --strict',
+    'printf \'%s  %s\\n\' "${builder_plan[3]}" "$wasm_opt_archive" \\\n  | sha256sum --check --strict',
+  ];
+  const exactDiscoveryBody = [
+    "discover_archive_binary() {",
+    '  local root="$1"',
+    '  local binary="$2"',
+    "  local -a candidates",
+    "  mapfile -d '' candidates < <(",
+    '    find "$root" -type f -name "$binary" -print0',
+    "  )",
+    "  if (( ${#candidates[@]} != 1 )); then",
+    '    echo "expected one $binary in admitted archive, found ${#candidates[@]}" >&2',
+    "    exit 1",
+    "  fi",
+    '  realpath "${candidates[0]}"',
+    "}",
   ].join("\n");
   const assertRepeatabilityContract = (script) => {
     assert.match(script, /^set -euo pipefail$/mu);
@@ -1767,6 +1867,48 @@ test("WASM runtime budget is one canonical self-contained exact contract", async
     );
     assert.match(script, /^cargo clean$/mu);
     assert.match(script, /^cp -a packages\/colors\/pkg "\$first\/pkg"$/mu);
+    assert.ok(script.includes(expectedAmbientGuard), "ambient builders must fail closed");
+    assert.ok(
+      script.includes(expectedDiscovery) && script.includes(exactDiscoveryBody),
+      "each admitted archive must contain exactly one named regular binary",
+    );
+    for (const check of archiveChecks) {
+      assert.ok(script.includes(check), "archive digest must be checked before extraction");
+    }
+    assert.ok(
+      script.includes(expectedBuilderAdmission),
+      "PATH resolution and all four admitted files must be rechecked together",
+    );
+    assert.deepEqual(
+      continuedShellCommands(
+        script,
+        "node scripts/check-wasm-size-budget.mjs",
+      ).filter((command) => command.includes("--release-equivalent")),
+      [expectedReleaseCommand],
+      "size verdict must use only the canonical budget, built artifact and exact builders",
+    );
+    const firstBuild = script.indexOf("\nbuild_runtime\n");
+    const secondBuild = script.indexOf("\nbuild_runtime\n", firstBuild + 1);
+    const firstArchiveCheck = script.indexOf(archiveChecks[0]);
+    const firstExtraction = script.indexOf("tar --extract --gzip");
+    const managedPath = script.indexOf('export PATH="$managed/bin:$PATH"');
+    const firstAdmission = script.indexOf("\nadmit_managed_builders\n");
+    const finalVerdict = script.indexOf(expectedReleaseCommand);
+    assert.ok(
+      script.indexOf(expectedAmbientGuard) < firstArchiveCheck &&
+        firstArchiveCheck < firstExtraction &&
+        firstExtraction < managedPath &&
+        managedPath < firstAdmission &&
+        firstAdmission < firstBuild &&
+        firstBuild < secondBuild &&
+        secondBuild < finalVerdict,
+      "archives, binaries, PATH, two builds and final verdict must remain causally ordered",
+    );
+    assert.equal(
+      script.match(/^admit_managed_builders$/gmu)?.length,
+      3,
+      "builders must be admitted before and after both builds",
+    );
     assert.deepEqual(
       [...script.matchAll(/^if ! diff[^\n]+\n  echo [^\n]+\n  exit 1\nfi$/gmu)]
         .map((match) => match[0]),
@@ -1796,6 +1938,40 @@ test("WASM runtime budget is one canonical self-contained exact contract", async
       "path guard",
       repetition.replace(expectedPathGuard, expectedPathGuard.replace("    exit 1", "    :")),
     ],
+    [
+      "ambient builder guard",
+      repetition.replace(
+        expectedAmbientGuard,
+        expectedAmbientGuard.replace("    exit 1", "    :"),
+      ),
+    ],
+    [
+      "managed builder cardinality",
+      repetition.replace("${#candidates[@]} != 1", "${#candidates[@]} < 1"),
+    ],
+    [
+      "archive digest",
+      repetition.replace("sha256sum --check --strict", "sha256sum --status"),
+    ],
+    [
+      "managed PATH",
+      repetition.replace('export PATH="$managed/bin:$PATH"', ':'),
+    ],
+    [
+      "builder re-admission",
+      repetition.replace(/^admit_managed_builders$/mu, ':'),
+    ],
+    [
+      "release-equivalent verdict",
+      repetition.replace(expectedReleaseCommand, ':'),
+    ],
+    [
+      "release-equivalent overrides",
+      repetition.replace(
+        expectedReleaseCommand,
+        `${expectedReleaseCommand} --budget attacker.json --runtime-wasm attacker.wasm`,
+      ),
+    ],
   ]) {
     assert.notEqual(mutated, repetition, `${name} mutation must bite live CI`);
     assert.throws(() => assertRepeatabilityContract(mutated));
@@ -1805,12 +1981,33 @@ test("WASM runtime budget is one canonical self-contained exact contract", async
   try {
     const runtimePath = join(temporary, "runtime.wasm");
     const fixtureBudgetPath = join(temporary, "budget.json");
+    const wasmBindgenArchivePath = join(temporary, "wasm-bindgen.tar.gz");
+    const wasmOptArchivePath = join(temporary, "wasm-opt.tar.gz");
+    const wasmBindgenPath = join(temporary, "wasm-bindgen");
+    const wasmOptPath = join(temporary, "wasm-opt");
     const runtimeBytes = Buffer.alloc(16);
     runtimeBytes.set([0x00, 0x61, 0x73, 0x6d]);
+    const wasmBindgenBytes = Buffer.from("managed wasm-bindgen 0.2.126");
+    const wasmOptBytes = Buffer.from("managed wasm-opt 117");
+    const wasmBindgenArchiveBytes = Buffer.from("verified wasm-bindgen archive");
+    const wasmOptArchiveBytes = Buffer.from("verified wasm-opt archive");
     const fixture = structuredClone(budget);
     fixture.measurement.rawBytes = runtimeBytes.length;
     fixture.policy.maxRawBytes = runtimeBytes.length;
+    fixture.toolchain.wasmBindgen.archiveSha256 = sha256(wasmBindgenArchiveBytes);
+    fixture.toolchain.wasmBindgen.binarySha256 = sha256(wasmBindgenBytes);
+    fixture.toolchain.wasmOpt.archiveSha256 = sha256(wasmOptArchiveBytes);
+    fixture.toolchain.wasmOpt.binarySha256 = sha256(wasmOptBytes);
+    // Строка версии не является идентичностью: даже один изменённый бит
+    // digest обязан сработать раньше verdict-а по размеру артефакта.
+    const foreignWasmBindgenSha256 =
+      `${fixture.toolchain.wasmBindgen.binarySha256[0] === "0" ? "1" : "0"}` +
+      fixture.toolchain.wasmBindgen.binarySha256.slice(1);
     writeFileSync(runtimePath, runtimeBytes);
+    writeFileSync(wasmBindgenArchivePath, wasmBindgenArchiveBytes);
+    writeFileSync(wasmOptArchivePath, wasmOptArchiveBytes);
+    writeFileSync(wasmBindgenPath, wasmBindgenBytes, { mode: 0o755 });
+    writeFileSync(wasmOptPath, wasmOptBytes, { mode: 0o755 });
     writeFileSync(fixtureBudgetPath, canonicalJson(fixture));
     assert.doesNotThrow(() =>
       checker.parseBudgetDocument(readFileSync(fixtureBudgetPath), fixtureBudgetPath)
@@ -1828,9 +2025,256 @@ test("WASM runtime budget is one canonical self-contained exact contract", async
       { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
     );
     const run = () => runWith(fixtureBudgetPath, runtimePath);
+    const archiveAndBuilderArgs = [
+      "--wasm-bindgen-archive",
+      wasmBindgenArchivePath,
+      "--wasm-opt-archive",
+      wasmOptArchivePath,
+      "--wasm-bindgen-cli",
+      wasmBindgenPath,
+      "--wasm-opt",
+      wasmOptPath,
+    ];
+    const runBuilderAdmission = (...args) => execFileSync(
+      process.execPath,
+      [
+        checkerPath,
+        "--admit-builders",
+        "--budget",
+        fixtureBudgetPath,
+        ...args,
+      ],
+      { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
+    );
+    const runReleaseEquivalent = (...builderArgs) => execFileSync(
+      process.execPath,
+      [
+        checkerPath,
+        "--release-equivalent",
+        "--budget",
+        fixtureBudgetPath,
+        "--runtime-wasm",
+        runtimePath,
+        ...builderArgs,
+      ],
+      { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
+    );
     assert.match(
       run(),
-      /role=runtime raw=16B .*artifact-sha256=[0-9a-f]{64}/u,
+      /WASM size budget DIAGNOSTIC role=runtime raw=16B .*artifact-sha256=[0-9a-f]{64}/u,
+    );
+    assert.deepEqual(
+      execFileSync(
+        process.execPath,
+        [checkerPath, "--builder-plan", "--budget", fixtureBudgetPath],
+        { cwd: root, encoding: "utf8" },
+      ).trimEnd().split("\n"),
+      [
+        fixture.toolchain.wasmBindgen.origin,
+        fixture.toolchain.wasmBindgen.archiveSha256,
+        fixture.toolchain.wasmOpt.origin,
+        fixture.toolchain.wasmOpt.archiveSha256,
+      ],
+    );
+    assert.match(
+      runBuilderAdmission(...archiveAndBuilderArgs),
+      /WASM builders PASS .*wasm-bindgen-archive-sha256=[0-9a-f]{64} .*wasm-opt-sha256=[0-9a-f]{64}/u,
+    );
+    assert.throws(
+      () => execFileSync(
+        process.execPath,
+        [
+          checkerPath,
+          "--release-equivalent",
+          "--release-equivalent",
+          "--budget",
+          fixtureBudgetPath,
+          "--runtime-wasm",
+          runtimePath,
+        ],
+        { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
+      ),
+      /--release-equivalent may appear only once/u,
+    );
+    for (const incomplete of [
+      [],
+      ["--wasm-bindgen-cli", wasmBindgenPath],
+      ["--wasm-opt", wasmOptPath],
+    ]) {
+      assert.throws(
+        () => runReleaseEquivalent(...incomplete),
+        /requires exactly --wasm-bindgen-cli and --wasm-opt/u,
+      );
+    }
+    for (const omittedIndex of [0, 2, 4, 6]) {
+      const incomplete = archiveAndBuilderArgs.filter(
+        (_value, index) => index !== omittedIndex && index !== omittedIndex + 1,
+      );
+      assert.throws(
+        () => runBuilderAdmission(...incomplete),
+        /requires both archives and both executable paths/u,
+      );
+    }
+    for (const pathOnly of [
+      ["--wasm-bindgen-cli", wasmBindgenPath],
+      ["--wasm-opt", wasmOptPath],
+    ]) {
+      assert.throws(
+        () => execFileSync(
+          process.execPath,
+          [
+            checkerPath,
+            "--budget",
+            fixtureBudgetPath,
+            "--runtime-wasm",
+            runtimePath,
+            ...pathOnly,
+          ],
+          { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
+        ),
+        /builder paths require --admit-builders or --release-equivalent/u,
+      );
+    }
+    const wrongArchiveClaim = structuredClone(fixture);
+    wrongArchiveClaim.toolchain.wasmBindgen.archiveSha256 = "0".repeat(64);
+    writeFileSync(fixtureBudgetPath, canonicalJson(wrongArchiveClaim));
+    assert.throws(
+      () => runBuilderAdmission(...archiveAndBuilderArgs),
+      /wasm-bindgen archive digest mismatch/u,
+      "an archive claim must be consumed before any builder can be admitted",
+    );
+    writeFileSync(fixtureBudgetPath, canonicalJson(fixture));
+    const bindgenSymlink = join(temporary, "wasm-bindgen-link");
+    symlinkSync(wasmBindgenPath, bindgenSymlink);
+    assert.throws(
+      () => runReleaseEquivalent(
+        "--wasm-bindgen-cli",
+        bindgenSymlink,
+        "--wasm-opt",
+        wasmOptPath,
+      ),
+      /executable regular non-symlink file/u,
+    );
+    const builderDirectory = join(temporary, "builder-directory");
+    mkdirSync(builderDirectory);
+    assert.throws(
+      () => runReleaseEquivalent(
+        "--wasm-bindgen-cli",
+        builderDirectory,
+        "--wasm-opt",
+        wasmOptPath,
+      ),
+      /executable regular non-symlink file/u,
+    );
+    chmodSync(wasmBindgenPath, 0o644);
+    assert.throws(
+      () => runReleaseEquivalent(
+        "--wasm-bindgen-cli",
+        wasmBindgenPath,
+        "--wasm-opt",
+        wasmOptPath,
+      ),
+      /executable regular non-symlink file/u,
+    );
+    if (typeof process.geteuid !== "function" || process.geteuid() !== 0) {
+      chmodSync(wasmBindgenPath, 0o401);
+      assert.throws(
+        () => runReleaseEquivalent(
+          "--wasm-bindgen-cli",
+          wasmBindgenPath,
+          "--wasm-opt",
+          wasmOptPath,
+        ),
+        /executable regular non-symlink file/u,
+        "another class's execute bit must not impersonate current-user executability",
+      );
+    }
+    chmodSync(wasmBindgenPath, 0o755);
+    writeFileSync(wasmBindgenPath, Buffer.from(wasmBindgenBytes).fill(0x41));
+    assert.throws(
+      () => runReleaseEquivalent(
+        "--wasm-bindgen-cli",
+        wasmBindgenPath,
+        "--wasm-opt",
+        wasmOptPath,
+      ),
+      /wasm-bindgen CLI digest mismatch/u,
+      "release-equivalent mode must hash builder bytes instead of trusting a receipt",
+    );
+    writeFileSync(wasmBindgenPath, wasmBindgenBytes, { mode: 0o755 });
+    const runReleaseEquivalentWithHook = (hookPath, bindgenPath, swapTarget) =>
+      execFileSync(
+        process.execPath,
+        [
+          checkerPath,
+          "--release-equivalent",
+          "--budget",
+          fixtureBudgetPath,
+          "--runtime-wasm",
+          runtimePath,
+          "--wasm-bindgen-cli",
+          bindgenPath,
+          "--wasm-opt",
+          wasmOptPath,
+        ],
+        {
+          cwd: root,
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            NODE_OPTIONS: `--require=${hookPath}`,
+            LABCOLORS_SWAP_PATH: bindgenPath,
+            LABCOLORS_SWAP_TARGET: swapTarget,
+          },
+          stdio: ["ignore", "pipe", "pipe"],
+        },
+      );
+    const canonicalSwapTarget = join(temporary, "canonical-wasm-bindgen");
+    writeFileSync(canonicalSwapTarget, wasmBindgenBytes, { mode: 0o755 });
+    const fstatSwapVictim = join(temporary, "fstat-swap-victim");
+    writeFileSync(fstatSwapVictim, Buffer.from("another foreign executable"), {
+      mode: 0o755,
+    });
+    const fstatSwapHook = join(temporary, "swap-after-fstat.cjs");
+    writeFileSync(
+      fstatSwapHook,
+      [
+        'const fs = require("node:fs");',
+        'const { syncBuiltinESMExports } = require("node:module");',
+        "const original = fs.fstatSync;",
+        "let swapped = false;",
+        "fs.fstatSync = function (descriptor, ...args) {",
+        "  const result = original(descriptor, ...args);",
+        "  if (!swapped) {",
+        "    swapped = true;",
+        "    fs.rmSync(process.env.LABCOLORS_SWAP_PATH);",
+        "    fs.symlinkSync(",
+        "      process.env.LABCOLORS_SWAP_TARGET,",
+        "      process.env.LABCOLORS_SWAP_PATH,",
+        "    );",
+        "  }",
+        "  return result;",
+        "};",
+        "syncBuiltinESMExports();",
+        "",
+      ].join("\n"),
+    );
+    assert.throws(
+      () => runReleaseEquivalentWithHook(
+        fstatSwapHook,
+        fstatSwapVictim,
+        canonicalSwapTarget,
+      ),
+      /wasm-bindgen CLI digest mismatch/u,
+      "the digest must come from the same descriptor that fstat admitted",
+    );
+    assert.throws(
+      () => execFileSync(
+        process.execPath,
+        [checkerPath, "--builder-receipt", join(temporary, "claim.json")],
+        { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
+      ),
+      /unknown argument --builder-receipt/u,
     );
 
     const schemaMutations = [
@@ -1840,6 +2284,23 @@ test("WASM runtime budget is one canonical self-contained exact contract", async
         `toolchain.${key}`,
         (value) => { value.toolchain[key] = ""; },
       ]),
+      ...Object.keys(budget.toolchain.wasmBindgen).map((key) => [
+        `toolchain.wasmBindgen.${key}`,
+        (value) => { value.toolchain.wasmBindgen[key] = ""; },
+      ]),
+      ...Object.keys(budget.toolchain.wasmOpt).map((key) => [
+        `toolchain.wasmOpt.${key}`,
+        (value) => { value.toolchain.wasmOpt[key] = ""; },
+      ]),
+      ["wasm-bindgen extra", (value) => {
+        value.toolchain.wasmBindgen.extra = "forbidden";
+      }],
+      ["wasm-opt extra", (value) => {
+        value.toolchain.wasmOpt.extra = "forbidden";
+      }],
+      ["wasm-opt duplicate argument", (value) => {
+        value.toolchain.wasmOpt.arguments[1] = value.toolchain.wasmOpt.arguments[0];
+      }],
       ["toolchain line", (value) => { value.toolchain.rust += "\nother"; }],
       ["toolchain extra", (value) => { value.toolchain.extra = "forbidden"; }],
       ["path remap syntax", (value) => { value.recipe.rustPathRemap[0] = "OTHER"; }],
@@ -1850,7 +2311,7 @@ test("WASM runtime budget is one canonical self-contained exact contract", async
       ["recipe command", (value) => { value.recipe.command = "wasm-pack build"; }],
       ["recipe command line", (value) => { value.recipe.command += "\nother"; }],
       ["recipe extra", (value) => { value.recipe.digest = "0".repeat(64); }],
-      ["measurement source", (value) => { value.measurement.source = "other"; }],
+      ["baseline source", (value) => { value.measurement.baselineSource = "other"; }],
       ["measurement platform", (value) => { value.measurement.platform = "darwin-arm64"; }],
       ["zero bytes", (value) => { value.measurement.rawBytes = 0; }],
       ["fractional bytes", (value) => { value.measurement.rawBytes = 1.5; }],
@@ -1872,7 +2333,7 @@ test("WASM runtime budget is one canonical self-contained exact contract", async
         policy: value.policy,
       })],
     ];
-    assert.equal(schemaMutations.length, 30, "schema mutation matrix changed");
+    assert.equal(schemaMutations.length, 43, "schema mutation matrix changed");
     for (const [name, mutate] of schemaMutations) {
       const invalid = structuredClone(fixture);
       const result = mutate(invalid) ?? invalid;
@@ -1891,7 +2352,7 @@ test("WASM runtime budget is one canonical self-contained exact contract", async
     writeFileSync(fixtureBudgetPath, canonicalJson(schemaFirst));
     assert.throws(
       () => runWith(fixtureBudgetPath, join(temporary, "missing-runtime.wasm")),
-      /schemaVersion must be 1/u,
+      /schemaVersion must be 2/u,
       "schema must fail before a missing artifact is read",
     );
 
@@ -1900,13 +2361,26 @@ test("WASM runtime budget is one canonical self-contained exact contract", async
     writeFileSync(
       fixtureBudgetPath,
       canonicalJson(fixture).replace(
-        '  "schemaVersion": 1,\n',
-        '  "schemaVersion": 1,\n  "schemaVersion": 1,\n',
+        '  "schemaVersion": 2,\n',
+        '  "schemaVersion": 2,\n  "schemaVersion": 2,\n',
       ),
     );
     assert.throws(run, /canonical JSON/u, "duplicate JSON fields must fail");
 
-    const canonical = checker.evaluateWasmBudget(fixture, runtimeBytes, "linux-x64");
+    const exactBuilders = {
+      wasmBindgenSha256: sha256(wasmBindgenBytes),
+      wasmOptSha256: sha256(wasmOptBytes),
+    };
+    const releaseContext = (builders = exactBuilders, platform = "linux-x64") => ({
+      platform,
+      role: "release-equivalent",
+      builders,
+    });
+    const canonical = checker.evaluateWasmBudget(
+      fixture,
+      runtimeBytes,
+      releaseContext(),
+    );
     assert.equal(canonical.status, "PASS");
     assert.equal(canonical.artifactSha256, sha256(runtimeBytes));
     const sameSizeMutation = Buffer.from(runtimeBytes);
@@ -1914,7 +2388,7 @@ test("WASM runtime budget is one canonical self-contained exact contract", async
     const sameSize = checker.evaluateWasmBudget(
       fixture,
       sameSizeMutation,
-      "linux-x64",
+      releaseContext(),
     );
     assert.equal(sameSize.status, "PASS");
     assert.notEqual(sameSize.artifactSha256, canonical.artifactSha256);
@@ -1922,17 +2396,66 @@ test("WASM runtime budget is one canonical self-contained exact contract", async
       Buffer.concat([runtimeBytes, Buffer.from([0])]),
       runtimeBytes.subarray(0, -1),
     ]) {
+      assert.equal(
+        checker.evaluateWasmBudget(fixture, differentSize, {
+          platform: "linux-x64",
+          role: "diagnostic",
+        }).status,
+        "DIAGNOSTIC",
+        "platform identity alone must never opt a caller into enforcement",
+      );
       assert.throws(
-        () => checker.evaluateWasmBudget(fixture, differentSize, "linux-x64"),
+        () => checker.evaluateWasmBudget(fixture, differentSize, releaseContext()),
         /length mismatch/u,
       );
     }
+    assert.throws(
+      () => checker.evaluateWasmBudget(
+        fixture,
+        Buffer.concat([runtimeBytes, Buffer.from([0])]),
+        releaseContext({
+          ...exactBuilders,
+          wasmBindgenSha256: foreignWasmBindgenSha256,
+        }),
+      ),
+      /wasm-bindgen CLI digest mismatch/u,
+      "builder identity must fail before an artifact-size verdict",
+    );
     assert.equal(
-      checker.evaluateWasmBudget(fixture, sameSizeMutation, "darwin-arm64").status,
+      checker.evaluateWasmBudget(fixture, sameSizeMutation, {
+        platform: "linux-x64",
+        role: "diagnostic",
+      }).status,
       "DIAGNOSTIC",
     );
     assert.throws(
-      () => checker.evaluateWasmBudget(fixture, Buffer.alloc(16), "linux-x64"),
+      () => checker.evaluateWasmBudget(
+        fixture,
+        runtimeBytes,
+        releaseContext(exactBuilders, "darwin-arm64"),
+      ),
+      /release-equivalent role requires linux-x64/u,
+    );
+    assert.throws(
+      () => checker.evaluateWasmBudget(fixture, runtimeBytes, {
+        platform: "linux-x64",
+        role: "unknown",
+      }),
+      /role must be diagnostic or release-equivalent/u,
+    );
+    assert.throws(
+      () => checker.evaluateWasmBudget(fixture, runtimeBytes, {
+        platform: "linux-x64",
+        role: "diagnostic",
+        inferredFromPlatform: true,
+      }),
+      /diagnostic evaluation context must contain exactly platform and role/u,
+    );
+    assert.throws(
+      () => checker.evaluateWasmBudget(fixture, Buffer.alloc(16), {
+        platform: "linux-x64",
+        role: "diagnostic",
+      }),
       /not a WebAssembly binary/u,
     );
 

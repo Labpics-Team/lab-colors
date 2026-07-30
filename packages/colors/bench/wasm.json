@@ -1,25 +1,41 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "artifact": "packages/colors/pkg/labcolors_bg.wasm",
   "toolchain": {
     "rust": "1.96.0",
     "rustcCommit": "ac68faa20",
     "wasmPack": "0.13.1",
-    "wasmBindgen": "0.2.126",
     "target": "wasm32-unknown-unknown",
     "cargoProfile": "release",
-    "wasmOpt": "-Oz",
-    "wasmOptVersion": "117"
+    "wasmBindgen": {
+      "version": "0.2.126",
+      "target": "x86_64-unknown-linux-musl",
+      "origin": "https://github.com/rustwasm/wasm-bindgen/releases/download/0.2.126/wasm-bindgen-0.2.126-x86_64-unknown-linux-musl.tar.gz",
+      "archiveSha256": "064948d58e2d6c0a745216477a639ba696216d6309aaa902939d1b865b1d869d",
+      "binarySha256": "d8d94635b40d1d8a93562fc7ced6093488252600dba39ce1dbab410b89157d8b"
+    },
+    "wasmOpt": {
+      "version": "117",
+      "target": "x86_64-linux",
+      "origin": "https://github.com/WebAssembly/binaryen/releases/download/version_117/binaryen-version_117-x86_64-linux.tar.gz",
+      "archiveSha256": "3dc677006555b355ea2da5e82602065a161d5e83eaefd3f759afa00b96e83212",
+      "binarySha256": "621b5a984f16d0323ea7aa8b389ac9ccda0950ddee5de0e99292970129f571ed",
+      "arguments": [
+        "-Oz",
+        "--enable-bulk-memory",
+        "--enable-nontrapping-float-to-int"
+      ]
+    }
   },
   "recipe": {
     "rustPathRemap": [
       "GITHUB_WORKSPACE=/workspace/lab-colors",
       "CARGO_HOME=/cargo-home"
     ],
-    "command": "CARGO_ENCODED_RUSTFLAGS=<rustPathRemap> wasm-pack build crates/labcolors-wasm --release --target web --out-dir ../../packages/colors/pkg --out-name labcolors --locked"
+    "command": "CARGO_ENCODED_RUSTFLAGS=<rustPathRemap> wasm-pack build crates/labcolors-wasm --release --target web --out-dir ../../packages/colors/pkg --out-name labcolors --locked --mode no-install"
   },
   "measurement": {
-    "source": "github-actions-run-30324408912",
+    "baselineSource": "github-actions-run-30324408912",
     "platform": "linux-x64",
     "rawBytes": 376675
   },
