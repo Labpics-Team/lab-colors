@@ -36,7 +36,10 @@ class ArbBuildRecipeTests(unittest.TestCase):
         self.assertEqual(source.count("- .github/workflows/arb.yml"), 2)
         self.assertNotIn("arb-proof-observation.yml", source)
         for required in (
+            'original_userns="$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns)"',
+            'echo "LABCOLORS_APPARMOR_USERNS_V1=$original_userns"',
             "sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0",
+            'kernel.apparmor_restrict_unprivileged_userns=$LABCOLORS_APPARMOR_USERNS_V1',
             'mkdir "$scope/tasks" "$scope/proof"',
             "printf '+memory +pids' > \"$scope/cgroup.subtree_control\"",
             "printf '+memory +pids' > \"$scope/proof/cgroup.subtree_control\"",
@@ -187,6 +190,7 @@ class ArbBuildRecipeTests(unittest.TestCase):
         self.assertNotIn("readelf -d \"$build/arb-evaluator-v1\" 2>&1 |", source)
 
     def test_recipe_rejects_ambient_or_incomplete_invocation_before_build(self) -> None:
+        self.assertTrue(os.access(BUILD, os.X_OK), BUILD)
         result = subprocess.run(
             [str(BUILD)],
             check=False,

@@ -2533,7 +2533,12 @@ class ControlledPipelineV1:
                         process,
                     )
                 return binary, process
-        except (OSError, snapshot.SnapshotErrorV1, BuildSourceAdmissionErrorV1):
+        except (
+            OSError,
+            _TreeMismatchV1,
+            snapshot.SnapshotErrorV1,
+            BuildSourceAdmissionErrorV1,
+        ):
             return BuildRejectedV1(
                 attempt,
                 BuildFailureReasonV1.BACKEND_CONTRACT,

@@ -17,6 +17,10 @@ EVALUATOR = ARB / "evaluator"
 REPO = ARB.parents[3]
 FORMULA = REPO / "crates/labcolors-core/contracts/contextual-region-formula-v1.lcir"
 GENERATOR = EVALUATOR / "formula.py"
+# CI watchdogs bound broken test processes; they are not performance claims.
+# Change them only with a measured exact native-gate workload and its job budget.
+GENERATOR_TIMEOUT_SECONDS = 60
+EVALUATOR_TIMEOUT_SECONDS = 300
 sys.path.insert(0, str(REPO / "proof/region/v1"))
 
 from region_proof_protocol import (  # noqa: E402
@@ -43,12 +47,27 @@ def generate(source: bytes) -> subprocess.CompletedProcess[bytes]:
             [sys.executable, str(GENERATOR), str(formula)],
             check=False,
             capture_output=True,
+            stdin=subprocess.DEVNULL,
+            timeout=GENERATOR_TIMEOUT_SECONDS,
             env={
                 "PATH": os.environ.get("PATH", ""),
                 "PYTHONDONTWRITEBYTECODE": "1",
                 "PYTHONHASHSEED": "0",
             },
         )
+
+
+def run_evaluator(
+    command: list[str] | tuple[str, ...],
+    stdin: bytes,
+) -> subprocess.CompletedProcess[bytes]:
+    return subprocess.run(
+        command,
+        input=stdin,
+        check=False,
+        capture_output=True,
+        timeout=EVALUATOR_TIMEOUT_SECONDS,
+    )
 
 
 def assert_transcript_wire_coordinates(
@@ -220,16 +239,11 @@ class ExactBoundaryRuntimeTests(unittest.TestCase):
         )
         for arguments in invalid_invocations:
             with self.subTest(arguments=arguments):
-                result = subprocess.run(
-                    (executable, *arguments),
-                    input=b"",
-                    check=False,
-                    capture_output=True,
-                )
+                result = run_evaluator((executable, *arguments), b"")
                 self.assertEqual(result.returncode, 64)
                 self.assertEqual(result.stdout, b"")
 
-        accepted = subprocess.run(
+        accepted = run_evaluator(
             (
                 executable,
                 "--manifest-identity",
@@ -237,9 +251,7 @@ class ExactBoundaryRuntimeTests(unittest.TestCase):
                 "--job",
                 "/dev/stdin",
             ),
-            input=b"",
-            check=False,
-            capture_output=True,
+            b"",
         )
         self.assertEqual(accepted.returncode, 1)
         self.assertEqual(accepted.stdout, b"")
@@ -274,7 +286,7 @@ class ExactBoundaryRuntimeTests(unittest.TestCase):
             *(hashlib.sha256(f"arb-manifest-{index}".encode()).digest() for index in range(10)),
         )
         executable = os.environ["LABCOLORS_ARB_EVALUATOR"]
-        result = subprocess.run(
+        result = run_evaluator(
             [
                 executable,
                 "--manifest-identity",
@@ -282,9 +294,7 @@ class ExactBoundaryRuntimeTests(unittest.TestCase):
                 "--job",
                 "/dev/stdin",
             ],
-            input=job.encode(),
-            check=False,
-            capture_output=True,
+            job.encode(),
         )
 
         self.assertEqual(result.returncode, 0, result.stderr.decode())
@@ -321,7 +331,7 @@ class ExactBoundaryRuntimeTests(unittest.TestCase):
             ComparatorKindV1.ARB,
             *(hashlib.sha256(f"arb-alternate-{index}".encode()).digest() for index in range(10)),
         )
-        alternate = subprocess.run(
+        alternate = run_evaluator(
             [
                 executable,
                 "--manifest-identity",
@@ -329,9 +339,7 @@ class ExactBoundaryRuntimeTests(unittest.TestCase):
                 "--job",
                 "/dev/stdin",
             ],
-            input=job.encode(),
-            check=False,
-            capture_output=True,
+            job.encode(),
         )
         self.assertEqual(alternate.returncode, 0, alternate.stderr.decode())
         alternate_transcript = DecisionTranscriptV1.parse(alternate.stdout)
@@ -347,7 +355,7 @@ class ExactBoundaryRuntimeTests(unittest.TestCase):
 
         corrupted = bytearray(job.encode())
         corrupted[-1] ^= 1
-        rejected = subprocess.run(
+        rejected = run_evaluator(
             [
                 executable,
                 "--manifest-identity",
@@ -355,9 +363,7 @@ class ExactBoundaryRuntimeTests(unittest.TestCase):
                 "--job",
                 "/dev/stdin",
             ],
-            input=corrupted,
-            check=False,
-            capture_output=True,
+            bytes(corrupted),
         )
         self.assertNotEqual(rejected.returncode, 0)
         self.assertEqual(rejected.stdout, b"")
@@ -405,7 +411,7 @@ class ExactBoundaryRuntimeTests(unittest.TestCase):
             ComparatorKindV1.ARB,
             *(hashlib.sha256(f"arb-multisegment-{index}".encode()).digest() for index in range(10)),
         )
-        result = subprocess.run(
+        result = run_evaluator(
             (
                 os.environ["LABCOLORS_ARB_EVALUATOR"],
                 "--manifest-identity",
@@ -413,9 +419,7 @@ class ExactBoundaryRuntimeTests(unittest.TestCase):
                 "--job",
                 "/dev/stdin",
             ),
-            input=job.encode(),
-            check=False,
-            capture_output=True,
+            job.encode(),
         )
 
         self.assertEqual(result.returncode, 0, result.stderr.decode())
@@ -465,18 +469,8 @@ class ExactBoundaryRuntimeTests(unittest.TestCase):
             "--job",
             "/dev/stdin",
         ]
-        first = subprocess.run(
-            invocation,
-            input=job.encode(),
-            check=False,
-            capture_output=True,
-        )
-        second = subprocess.run(
-            invocation,
-            input=job.encode(),
-            check=False,
-            capture_output=True,
-        )
+        first = run_evaluator(invocation, job.encode())
+        second = run_evaluator(invocation, job.encode())
 
         self.assertEqual(first.returncode, 0, first.stderr.decode())
         self.assertEqual(second.returncode, 0, second.stderr.decode())
@@ -509,18 +503,8 @@ class ExactBoundaryRuntimeTests(unittest.TestCase):
                 ),
             ),
         )
-        low_first = subprocess.run(
-            invocation,
-            input=low_precision.encode(),
-            check=False,
-            capture_output=True,
-        )
-        low_second = subprocess.run(
-            invocation,
-            input=low_precision.encode(),
-            check=False,
-            capture_output=True,
-        )
+        low_first = run_evaluator(invocation, low_precision.encode())
+        low_second = run_evaluator(invocation, low_precision.encode())
         self.assertEqual(low_first.returncode, 0, low_first.stderr.decode())
         self.assertEqual(low_second.returncode, 0, low_second.stderr.decode())
         self.assertEqual(low_first.stdout, low_second.stdout)
@@ -576,7 +560,7 @@ class ExactBoundaryRuntimeTests(unittest.TestCase):
             ComparatorKindV1.ARB,
             *(hashlib.sha256(f"arb-zero-grant-{index}".encode()).digest() for index in range(10)),
         )
-        result = subprocess.run(
+        result = run_evaluator(
             (
                 os.environ["LABCOLORS_ARB_EVALUATOR"],
                 "--manifest-identity",
@@ -584,9 +568,7 @@ class ExactBoundaryRuntimeTests(unittest.TestCase):
                 "--job",
                 "/dev/stdin",
             ),
-            input=job.encode(),
-            check=False,
-            capture_output=True,
+            job.encode(),
         )
 
         self.assertEqual(result.returncode, 0, result.stderr.decode())
@@ -636,7 +618,7 @@ class ExactBoundaryRuntimeTests(unittest.TestCase):
             ComparatorKindV1.ARB,
             *(hashlib.sha256(f"arb-pregrant-{index}".encode()).digest() for index in range(10)),
         )
-        result = subprocess.run(
+        result = run_evaluator(
             (
                 os.environ["LABCOLORS_ARB_EVALUATOR"],
                 "--manifest-identity",
@@ -644,9 +626,7 @@ class ExactBoundaryRuntimeTests(unittest.TestCase):
                 "--job",
                 "/dev/stdin",
             ),
-            input=job.encode(),
-            check=False,
-            capture_output=True,
+            job.encode(),
         )
 
         self.assertEqual(result.returncode, 0, result.stderr.decode())
@@ -706,12 +686,7 @@ class ExactBoundaryRuntimeTests(unittest.TestCase):
                     ),
                 ),
             )
-            result = subprocess.run(
-                invocation,
-                input=job.encode(),
-                check=False,
-                capture_output=True,
-            )
+            result = run_evaluator(invocation, job.encode())
             self.assertEqual(result.returncode, 0, result.stderr.decode())
             transcript = DecisionTranscriptV1.parse(result.stdout)
             self.assertEqual(transcript.encode(), result.stdout)
@@ -756,7 +731,7 @@ class ExactBoundaryRuntimeTests(unittest.TestCase):
             ComparatorKindV1.ARB,
             *(hashlib.sha256(f"arb-cross-rung-{index}".encode()).digest() for index in range(10)),
         )
-        result = subprocess.run(
+        result = run_evaluator(
             (
                 os.environ["LABCOLORS_ARB_EVALUATOR"],
                 "--manifest-identity",
@@ -764,9 +739,7 @@ class ExactBoundaryRuntimeTests(unittest.TestCase):
                 "--job",
                 "/dev/stdin",
             ),
-            input=job.encode(),
-            check=False,
-            capture_output=True,
+            job.encode(),
         )
 
         self.assertEqual(result.returncode, 0, result.stderr.decode())
@@ -813,7 +786,7 @@ class ExactBoundaryRuntimeTests(unittest.TestCase):
             ComparatorKindV1.ARB,
             *(hashlib.sha256(f"arb-exact-spd-{index}".encode()).digest() for index in range(10)),
         )
-        result = subprocess.run(
+        result = run_evaluator(
             (
                 os.environ["LABCOLORS_ARB_EVALUATOR"],
                 "--manifest-identity",
@@ -821,9 +794,7 @@ class ExactBoundaryRuntimeTests(unittest.TestCase):
                 "--job",
                 "/dev/stdin",
             ),
-            input=job.encode(),
-            check=False,
-            capture_output=True,
+            job.encode(),
         )
 
         self.assertEqual(result.returncode, 0, result.stderr.decode())

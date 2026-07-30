@@ -730,9 +730,13 @@ class ComparatorManifestV2:
     def __post_init__(self) -> None:
         if type(self.kind) is not ComparatorKindV1:
             _fail("comparator-manifest-v2", 0, ProtocolReasonV1.UNKNOWN_RELEASE, "unknown comparator kind")
-        for field in fields(self):
-            if field.name != "kind":
-                _require_digest(getattr(self, field.name), "comparator-manifest-v2", field.name)
+        for manifest_field in fields(self):
+            if manifest_field.name != "kind":
+                _require_digest(
+                    getattr(self, manifest_field.name),
+                    "comparator-manifest-v2",
+                    manifest_field.name,
+                )
 
     @classmethod
     def parse(cls, data: bytes) -> "ComparatorManifestV2":
@@ -752,7 +756,9 @@ class ComparatorManifestV2:
 
     def encode(self) -> bytes:
         return MANIFEST_MAGIC_V2 + bytes((int(self.kind),)) + b"".join(
-            getattr(self, field.name) for field in fields(self) if field.name != "kind"
+            getattr(self, manifest_field.name)
+            for manifest_field in fields(self)
+            if manifest_field.name != "kind"
         )
 
     @cached_property

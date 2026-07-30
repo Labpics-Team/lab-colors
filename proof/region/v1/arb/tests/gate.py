@@ -14,7 +14,7 @@ TEST_DIRECTORY = Path(__file__).resolve().parent
 REPO = Path(__file__).resolve().parents[5]
 sys.path.insert(0, str(REPO))
 EXPECTED_TEST_INVENTORY_SHA256 = (
-    "ab21c48b5e3347c55a3c69ff2c76dee93f8e23f28eab54220729252fd2f6f1fc"
+    "7cccde0a6088de17be742af5207cc16229cf40d1960f371482d2a20d89995a80"
 )
 _EVALUATOR_REASON = "set LABCOLORS_ARB_EVALUATOR to the controlled C17 binary"
 EXPECTED_SKIPS = frozenset(
@@ -49,7 +49,8 @@ EXPECTED_SKIPS = frozenset(
         (
             "test_pipeline.NativePipelineIntegrationTests."
             "test_prepared_two_build_binary_runs_through_controlled_pipeline",
-            "requires Linux and an explicit delegated cgroup v2 parent",
+            "requires Linux, the native binary path, and an explicit "
+            "delegated cgroup v2 parent",
         ),
     }
 )

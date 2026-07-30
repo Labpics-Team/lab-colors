@@ -885,6 +885,28 @@ class ControlledPipelineTests(unittest.TestCase):
                 self.assertEqual(result.reason, reason)
                 self.assertEqual(run.requests, [])
 
+    def test_workspace_materialization_collision_is_a_typed_failure(self) -> None:
+        run = _Executor()
+        controlled = pipeline.ControlledPipelineV1(
+            build_backend=_BuildBackend((_static_elf(),)),
+            execution_controller=run,
+        )
+
+        with mock.patch.object(
+            pipeline,
+            "_write_exact_file",
+            side_effect=pipeline._TreeMismatchV1("parent collision"),
+        ):
+            result = controlled.execute(_request())
+
+        self.assertIs(type(result), pipeline.BuildRejectedV1)
+        self.assertEqual(result.attempt, 1)
+        self.assertEqual(
+            result.reason,
+            pipeline.BuildFailureReasonV1.BACKEND_CONTRACT,
+        )
+        self.assertEqual(run.requests, [])
+
     def test_docker_inability_to_observe_build_edge_is_a_design_blocker(self) -> None:
         build = _BuildBackend(
             (),
@@ -1398,8 +1420,11 @@ class NativeBuildIntegrationTests(unittest.TestCase):
 
 
 @unittest.skipUnless(
-    sys.platform == "linux" and os.environ.get("LABCOLORS_EXECUTOR_CGROUP_V1"),
-    "requires Linux and an explicit delegated cgroup v2 parent",
+    sys.platform == "linux"
+    and os.environ.get("LABCOLORS_ARB_NATIVE_BINARY")
+    and os.environ.get("LABCOLORS_EXECUTOR_CGROUP_V1"),
+    "requires Linux, the native binary path, and an explicit delegated "
+    "cgroup v2 parent",
 )
 class NativePipelineIntegrationTests(unittest.TestCase):
     def test_prepared_two_build_binary_runs_through_controlled_pipeline(self) -> None:

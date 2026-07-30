@@ -137,6 +137,12 @@ jobs:
         run: |
           set -euo pipefail
           test -f /proc/sys/kernel/apparmor_restrict_unprivileged_userns
+          original_userns="$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns)"
+          case "$original_userns" in
+            0|1) ;;
+            *) exit 78 ;;
+          esac
+          echo "LABCOLORS_APPARMOR_USERNS_V1=$original_userns" >> "$GITHUB_ENV"
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           test "$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns)" = 0
           scope="$LABCOLORS_CGROUP_SCOPE_V1"
@@ -215,5 +221,10 @@ jobs:
               fi
             done
             sudo rmdir "$LABCOLORS_CGROUP_SCOPE_V1" || record_failure
+          fi
+          if [[ -n "${LABCOLORS_APPARMOR_USERNS_V1:-}" ]]; then
+            sudo sysctl -w \
+              "kernel.apparmor_restrict_unprivileged_userns=$LABCOLORS_APPARMOR_USERNS_V1" \
+              >/dev/null || record_failure
           fi
           exit "$status"
