@@ -12,8 +12,9 @@ protocol fixtures и не является evaluator runner. `arb/evaluator` в�
 Arb-enclosures и выпускает связанные transcript bytes;
 `SourceBoundArbControllerV1` заново собирает evaluator, запускает его и создаёт
 только provenance receipt. Ни один из этих путей не выполняет независимый
-semantic replay и не создаёт mathematical proof type. MPFI evaluator/provenance
-path и semantic verifier в текущем release отсутствуют.
+semantic replay и не создаёт mathematical proof type. MPFI source lock и
+archive admission уже представлены, но MPFI evaluator/source-bound receipt и
+semantic verifier в текущем release отсутствуют.
 
 Structural protocol/admission сам не является математическим proof.
 `DualComparisonCandidateV1` кодирует только structural agreement и не создаёт
@@ -27,8 +28,9 @@ evidence. В тесте протокола такое значение явно 
 
 Протокол не входит в Cargo workspace, Core, WASM, FFI, bindings или packages.
 Текущий `SourceBoundEvaluatorReceiptV1` подтверждает причинную цепь только Arb.
-MPFI provenance, cross-path dependency overlap и diversity не представлены
-admitted типом; structural coordinates не восполняют это отсутствие.
+MPFI source closure ещё не является provenance исполнения: MPFI source-bound
+receipt, cross-path dependency overlap и diversity не представлены admitted
+типом; structural coordinates не восполняют это отсутствие.
 
 ## Wire и identity
 
@@ -153,8 +155,8 @@ Arb controller связывает его с наблюдёнными BUILD/RUN �
 ## Source lock и integrity observations
 
 `SourceReleaseLockV1` фиксирует bytes и структурный состав архива. Поле
-`.integrity` содержит один `SourceIntegrityPolicyV1`; это требование проверки,
-а не заявление о publisher origin. Поле
+`.integrity` содержит один `SourceIntegrityPolicyV1`; это точная граница
+доступного evidence, а не безусловное заявление о publisher origin. Поле
 `legal_files` — только точный project-pinned набор находящихся в архиве legal
 files; оно не заявляет полноту legal-набора или compliance распространяемого
 бинарника. Несовпадение этого набора имеет отдельную причину
@@ -181,6 +183,14 @@ project-pinned release-only files, а исключённые paths обязан�
 Git executable/version, repository URL и tag являются диагностикой или
 координатами поиска и не входят в authority этой relation. Relation доказывает
 совпадение content graph, но не publisher или канал получения архива.
+
+Для MPFI 1.5.4 не подтверждены detached signature, опубликованный upstream
+checksum или равенство release-архива Git tag/tree. Поэтому
+`ProjectPinnedArchiveDigestPolicyV1` намеренно не содержит внешнего payload:
+Lab Colors фиксирует exact HTTPS URL, длину и SHA-256 полученных archive bytes,
+но не приписывает этот digest издателю и не заявляет publisher authentication.
+`MpfiSourceLockV1` использует те же единичные GMP/MPFR source declarations, что
+и Arb, однако имеет отдельную aggregate identity и отдельный typed admission.
 
 ## Diagnostic execution boundary
 

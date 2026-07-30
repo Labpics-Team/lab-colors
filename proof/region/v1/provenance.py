@@ -25,8 +25,9 @@ SOURCE_LOCK_MAGIC_V1 = b"LCSRC1\0\0"
 SOURCE_LOCK_ID_LABEL_V1 = b"labcolors.proof-region.source-lock.v1\0"
 SOURCE_TREE_ID_LABEL_V1 = b"labcolors.proof-region.safe-source-tree.v1\0"
 ADMITTED_ARB_SOURCES_ID_LABEL_V1 = b"labcolors.proof-region.admitted-arb-sources.v1\0"
+ADMITTED_MPFI_SOURCES_ID_LABEL_V1 = b"labcolors.proof-region.admitted-mpfi-sources.v1\0"
 SOURCE_LOCK_RELEASE_V1 = 1
-ARBITRARY_PRECISION_SOURCE_COUNT_V1 = 3
+SOURCE_CLOSURE_COUNT_V1 = 3
 SHA256_BYTES = 32
 SHA1_BYTES = 20
 OPENPGP_V4_FINGERPRINT_BYTES = 20
@@ -210,11 +211,13 @@ class SourceRoleV1(IntEnum):
     GMP = 1
     MPFR = 2
     FLINT_ARB = 3
+    MPFI = 4
 
 
 class IntegrityKindV1(IntEnum):
     DETACHED_SIGNATURE = 1
     GIT_CONTENT_RELATION = 2
+    PROJECT_PINNED_ARCHIVE_DIGEST = 3
 
 
 @dataclass(frozen=True)
@@ -411,8 +414,32 @@ class GitContentRelationPolicyV1:
         return cls(repository, tag, commit, tree, common_file_count, omitted, release_only)
 
 
+@dataclass(frozen=True)
+class ProjectPinnedArchiveDigestPolicyV1:
+    """State that the project pins archive bytes without upstream authentication.
+
+    The digest and exact archive coordinates live in ``SourceReleaseLockV1``.
+    This marker prevents an HTTPS download plus a project-chosen digest from
+    being misreported as a publisher signature or a verified Git relation.
+    """
+
+    kind: IntegrityKindV1 = field(
+        init=False,
+        default=IntegrityKindV1.PROJECT_PINNED_ARCHIVE_DIGEST,
+    )
+
+    def encode_payload(self) -> bytes:
+        return b""
+
+    @classmethod
+    def parse_from(cls, _reader: _Reader) -> "ProjectPinnedArchiveDigestPolicyV1":
+        return cls()
+
+
 SourceIntegrityPolicyV1: TypeAlias = (
-    DetachedSignaturePolicyV1 | GitContentRelationPolicyV1
+    DetachedSignaturePolicyV1
+    | GitContentRelationPolicyV1
+    | ProjectPinnedArchiveDigestPolicyV1
 )
 
 
@@ -424,7 +451,11 @@ def _parse_integrity_policy(reader: _Reader) -> SourceIntegrityPolicyV1:
         _fail(reader.artifact, ProvenanceReasonV1.UNKNOWN_ENUM, "integrity kind")
     if kind is IntegrityKindV1.DETACHED_SIGNATURE:
         return DetachedSignaturePolicyV1.parse_from(reader)
-    return GitContentRelationPolicyV1.parse_from(reader)
+    if kind is IntegrityKindV1.GIT_CONTENT_RELATION:
+        return GitContentRelationPolicyV1.parse_from(reader)
+    if kind is IntegrityKindV1.PROJECT_PINNED_ARCHIVE_DIGEST:
+        return ProjectPinnedArchiveDigestPolicyV1.parse_from(reader)
+    _fail(reader.artifact, ProvenanceReasonV1.UNKNOWN_ENUM, "integrity kind")
 
 
 @dataclass(frozen=True)
@@ -469,6 +500,7 @@ class SourceReleaseLockV1:
         if type(self.integrity) not in (
             DetachedSignaturePolicyV1,
             GitContentRelationPolicyV1,
+            ProjectPinnedArchiveDigestPolicyV1,
         ):
             _fail(
                 "source-release-lock-v1",
@@ -553,12 +585,44 @@ class SourceReleaseLockV1:
         return _identity(b"labcolors.proof-region.source-release-lock.v1\0", self.encode())
 
 
+_SourceClosureV1: TypeAlias = tuple[
+    SourceReleaseLockV1,
+    SourceReleaseLockV1,
+    SourceReleaseLockV1,
+]
+
+
+def _encode_source_closure_v1(sources: _SourceClosureV1) -> bytes:
+    return (
+        SOURCE_LOCK_MAGIC_V1
+        + bytes((SOURCE_LOCK_RELEASE_V1, len(sources)))
+        + b"".join(source.encode() for source in sources)
+    )
+
+
+def _parse_source_closure_v1(data: bytes, artifact: str) -> _SourceClosureV1:
+    reader = _Reader(data, artifact)
+    if reader.exact(len(SOURCE_LOCK_MAGIC_V1)) != SOURCE_LOCK_MAGIC_V1:
+        _fail(reader.artifact, ProvenanceReasonV1.BAD_MAGIC, "source lock magic")
+    if reader.u8() != SOURCE_LOCK_RELEASE_V1:
+        _fail(reader.artifact, ProvenanceReasonV1.UNKNOWN_RELEASE, "source lock release")
+    if reader.u8() != SOURCE_CLOSURE_COUNT_V1:
+        _fail(reader.artifact, ProvenanceReasonV1.INVALID_FIELD, "source count")
+    result = (
+        SourceReleaseLockV1.parse_from(reader),
+        SourceReleaseLockV1.parse_from(reader),
+        SourceReleaseLockV1.parse_from(reader),
+    )
+    reader.finish()
+    return result
+
+
 @dataclass(frozen=True)
 class ArbSourceLockV1:
-    sources: tuple[SourceReleaseLockV1, SourceReleaseLockV1, SourceReleaseLockV1]
+    sources: _SourceClosureV1
 
     def __post_init__(self) -> None:
-        if type(self.sources) is not tuple or len(self.sources) != ARBITRARY_PRECISION_SOURCE_COUNT_V1:
+        if type(self.sources) is not tuple or len(self.sources) != SOURCE_CLOSURE_COUNT_V1:
             _fail("arb-source-lock-v1", ProvenanceReasonV1.INVALID_FIELD, "source count")
         if any(type(value) is not SourceReleaseLockV1 for value in self.sources):
             _fail("arb-source-lock-v1", ProvenanceReasonV1.INVALID_FIELD, "source type")
@@ -582,25 +646,60 @@ class ArbSourceLockV1:
             )
 
     def encode(self) -> bytes:
-        return (
-            SOURCE_LOCK_MAGIC_V1
-            + bytes((SOURCE_LOCK_RELEASE_V1, len(self.sources)))
-            + b"".join(source.encode() for source in self.sources)
-        )
+        return _encode_source_closure_v1(self.sources)
 
     @classmethod
     def parse(cls, data: bytes) -> "ArbSourceLockV1":
-        reader = _Reader(data, "arb-source-lock-v1")
-        if reader.exact(len(SOURCE_LOCK_MAGIC_V1)) != SOURCE_LOCK_MAGIC_V1:
-            _fail(reader.artifact, ProvenanceReasonV1.BAD_MAGIC, "source lock magic")
-        if reader.u8() != SOURCE_LOCK_RELEASE_V1:
-            _fail(reader.artifact, ProvenanceReasonV1.UNKNOWN_RELEASE, "source lock release")
-        if reader.u8() != ARBITRARY_PRECISION_SOURCE_COUNT_V1:
-            _fail(reader.artifact, ProvenanceReasonV1.INVALID_FIELD, "source count")
-        result = cls(tuple(SourceReleaseLockV1.parse_from(reader) for _ in range(3)))
-        reader.finish()
+        result = cls(_parse_source_closure_v1(data, "arb-source-lock-v1"))
         if result.encode() != data:
-            _fail(reader.artifact, ProvenanceReasonV1.FOREIGN_BINDING, "re-encode drift")
+            _fail("arb-source-lock-v1", ProvenanceReasonV1.FOREIGN_BINDING, "re-encode drift")
+        return result
+
+    @cached_property
+    def identity(self) -> bytes:
+        return _identity(SOURCE_LOCK_ID_LABEL_V1, self.encode())
+
+
+@dataclass(frozen=True)
+class MpfiSourceLockV1:
+    sources: _SourceClosureV1
+
+    def __post_init__(self) -> None:
+        if type(self.sources) is not tuple or len(self.sources) != SOURCE_CLOSURE_COUNT_V1:
+            _fail("mpfi-source-lock-v1", ProvenanceReasonV1.INVALID_FIELD, "source count")
+        if any(type(value) is not SourceReleaseLockV1 for value in self.sources):
+            _fail("mpfi-source-lock-v1", ProvenanceReasonV1.INVALID_FIELD, "source type")
+        if tuple(value.role for value in self.sources) != (
+            SourceRoleV1.GMP,
+            SourceRoleV1.MPFR,
+            SourceRoleV1.MPFI,
+        ):
+            _fail(
+                "mpfi-source-lock-v1",
+                ProvenanceReasonV1.NONCANONICAL_ORDER,
+                "GMP, MPFR, MPFI",
+            )
+        if any(
+            not isinstance(value.integrity, DetachedSignaturePolicyV1)
+            for value in self.sources[:2]
+        ) or not isinstance(
+            self.sources[2].integrity,
+            ProjectPinnedArchiveDigestPolicyV1,
+        ):
+            _fail(
+                "mpfi-source-lock-v1",
+                ProvenanceReasonV1.INTEGRITY_KIND_MISMATCH,
+                "integrity policy",
+            )
+
+    def encode(self) -> bytes:
+        return _encode_source_closure_v1(self.sources)
+
+    @classmethod
+    def parse(cls, data: bytes) -> "MpfiSourceLockV1":
+        result = cls(_parse_source_closure_v1(data, "mpfi-source-lock-v1"))
+        if result.encode() != data:
+            _fail("mpfi-source-lock-v1", ProvenanceReasonV1.FOREIGN_BINDING, "re-encode drift")
         return result
 
     @cached_property
@@ -618,6 +717,7 @@ class ArchiveFileV1:
 
 _SAFE_ARCHIVE_TOKEN = object()
 _ADMITTED_ARB_SOURCES_TOKEN = object()
+_ADMITTED_MPFI_SOURCES_TOKEN = object()
 
 
 @dataclass(frozen=True, init=False)
@@ -746,54 +846,109 @@ def source_archive_replay_coordinates_v1(
     )
 
 
+_SafeSourceClosureV1: TypeAlias = tuple[
+    SafeSourceArchiveV1,
+    SafeSourceArchiveV1,
+    SafeSourceArchiveV1,
+]
+
+
+def _validate_admitted_source_closure_v1(
+    source_lock_identity: bytes,
+    sources: _SafeSourceClosureV1,
+    artifact: str,
+) -> None:
+    _digest(source_lock_identity, artifact, "source_lock_identity")
+    if (
+        type(sources) is not tuple
+        or len(sources) != SOURCE_CLOSURE_COUNT_V1
+        or any(type(source) is not SafeSourceArchiveV1 for source in sources)
+    ):
+        raise TypeError(f"invalid admitted source tuple for {artifact}")
+
+
+def _admitted_source_closure_identity_v1(
+    label: bytes,
+    source_lock_identity: bytes,
+    sources: _SafeSourceClosureV1,
+) -> bytes:
+    chunks = [source_lock_identity]
+    for ordinal, source in enumerate(sources):
+        chunks.extend(
+            (
+                bytes((ordinal,)),
+                source.source_lock_identity,
+                source.archive_sha256,
+                source.tree_identity,
+            )
+        )
+    return _identity(label, b"".join(chunks))
+
+
 @dataclass(frozen=True, init=False)
 class AdmittedArbSourcesV1:
     """One ordered capability for the complete locked Arb dependency closure."""
 
     source_lock_identity: bytes
-    sources: tuple[SafeSourceArchiveV1, SafeSourceArchiveV1, SafeSourceArchiveV1]
+    sources: _SafeSourceClosureV1
 
     def __init__(
         self,
         source_lock_identity: bytes,
-        sources: tuple[
-            SafeSourceArchiveV1,
-            SafeSourceArchiveV1,
-            SafeSourceArchiveV1,
-        ],
+        sources: _SafeSourceClosureV1,
         *,
         _token: object,
     ) -> None:
         if _token is not _ADMITTED_ARB_SOURCES_TOKEN:
             raise TypeError("AdmittedArbSourcesV1 is created only by source admission")
-        _digest(
+        _validate_admitted_source_closure_v1(
             source_lock_identity,
+            sources,
             "admitted-arb-sources-v1",
-            "source_lock_identity",
         )
-        if (
-            type(sources) is not tuple
-            or len(sources) != ARBITRARY_PRECISION_SOURCE_COUNT_V1
-            or any(type(source) is not SafeSourceArchiveV1 for source in sources)
-        ):
-            raise TypeError("invalid admitted Arb source tuple")
         object.__setattr__(self, "source_lock_identity", source_lock_identity)
         object.__setattr__(self, "sources", sources)
 
     @cached_property
     def identity(self) -> bytes:
-        chunks = [self.source_lock_identity]
-        for ordinal, source in enumerate(self.sources):
-            chunks.extend(
-                (
-                    bytes((ordinal,)),
-                    source.source_lock_identity,
-                    source.archive_sha256,
-                    source.tree_identity,
-                )
-            )
-        encoded = b"".join(chunks)
-        return _identity(ADMITTED_ARB_SOURCES_ID_LABEL_V1, encoded)
+        return _admitted_source_closure_identity_v1(
+            ADMITTED_ARB_SOURCES_ID_LABEL_V1,
+            self.source_lock_identity,
+            self.sources,
+        )
+
+
+@dataclass(frozen=True, init=False)
+class AdmittedMpfiSourcesV1:
+    """One ordered capability for the complete locked MPFI dependency closure."""
+
+    source_lock_identity: bytes
+    sources: _SafeSourceClosureV1
+
+    def __init__(
+        self,
+        source_lock_identity: bytes,
+        sources: _SafeSourceClosureV1,
+        *,
+        _token: object,
+    ) -> None:
+        if _token is not _ADMITTED_MPFI_SOURCES_TOKEN:
+            raise TypeError("AdmittedMpfiSourcesV1 is created only by source admission")
+        _validate_admitted_source_closure_v1(
+            source_lock_identity,
+            sources,
+            "admitted-mpfi-sources-v1",
+        )
+        object.__setattr__(self, "source_lock_identity", source_lock_identity)
+        object.__setattr__(self, "sources", sources)
+
+    @cached_property
+    def identity(self) -> bytes:
+        return _admitted_source_closure_identity_v1(
+            ADMITTED_MPFI_SOURCES_ID_LABEL_V1,
+            self.source_lock_identity,
+            self.sources,
+        )
 
 
 def _decompress_exact(
@@ -1095,25 +1250,18 @@ def replay_admitted_source_archive_v1(
     return _admit_source_archive_once(expected, admitted.archive_bytes)
 
 
-def admit_arb_sources(
-    expected: ArbSourceLockV1,
-    sources: tuple[
-        SafeSourceArchiveV1,
-        SafeSourceArchiveV1,
-        SafeSourceArchiveV1,
-    ],
-) -> AdmittedArbSourcesV1:
-    """Collapse three individually admitted archives into one ordered capability."""
-
-    if type(expected) is not ArbSourceLockV1:
-        raise TypeError("expected must be ArbSourceLockV1")
+def _validate_source_capability_closure_v1(
+    expected_sources: _SourceClosureV1,
+    sources: _SafeSourceClosureV1,
+    artifact: str,
+) -> None:
     if (
         type(sources) is not tuple
-        or len(sources) != ARBITRARY_PRECISION_SOURCE_COUNT_V1
+        or len(sources) != SOURCE_CLOSURE_COUNT_V1
         or any(type(source) is not SafeSourceArchiveV1 for source in sources)
     ):
         raise TypeError("sources must be three SafeSourceArchiveV1 values")
-    for lock, source in zip(expected.sources, sources, strict=True):
+    for lock, source in zip(expected_sources, sources, strict=True):
         if (
             source.source_lock_identity != lock.identity
             or source.archive_sha256 != lock.archive_sha256
@@ -1121,10 +1269,25 @@ def admit_arb_sources(
             or source.regular_file_bytes != lock.regular_file_bytes
         ):
             _fail(
-                "admitted-arb-sources-v1",
+                artifact,
                 ProvenanceReasonV1.FOREIGN_BINDING,
                 "source capability does not match ordered lock",
             )
+
+
+def admit_arb_sources(
+    expected: ArbSourceLockV1,
+    sources: _SafeSourceClosureV1,
+) -> AdmittedArbSourcesV1:
+    """Collapse three individually admitted archives into one ordered capability."""
+
+    if type(expected) is not ArbSourceLockV1:
+        raise TypeError("expected must be ArbSourceLockV1")
+    _validate_source_capability_closure_v1(
+        expected.sources,
+        sources,
+        "admitted-arb-sources-v1",
+    )
     return AdmittedArbSourcesV1(
         expected.identity,
         sources,
@@ -1132,14 +1295,32 @@ def admit_arb_sources(
     )
 
 
+def admit_mpfi_sources(
+    expected: MpfiSourceLockV1,
+    sources: _SafeSourceClosureV1,
+) -> AdmittedMpfiSourcesV1:
+    """Collapse the exact MPFI source closure into one ordered capability."""
+
+    if type(expected) is not MpfiSourceLockV1:
+        raise TypeError("expected must be MpfiSourceLockV1")
+    _validate_source_capability_closure_v1(
+        expected.sources,
+        sources,
+        "admitted-mpfi-sources-v1",
+    )
+    return AdmittedMpfiSourcesV1(
+        expected.identity,
+        sources,
+        _token=_ADMITTED_MPFI_SOURCES_TOKEN,
+    )
+
+
 def _legal_file(path: str, length: int, digest_hex: str) -> LegalFileV1:
     return LegalFileV1(path, length, bytes.fromhex(digest_hex))
 
 
-def arb_source_lock_v1() -> ArbSourceLockV1:
-    """Return the exact published source declarations for the first Arb lane."""
-
-    gmp = SourceReleaseLockV1(
+def _gmp_source_release_v1() -> SourceReleaseLockV1:
+    return SourceReleaseLockV1(
         SourceRoleV1.GMP,
         "6.3.0",
         "https://ftp.gnu.org/gnu/gmp/gmp-6.3.0.tar.xz",
@@ -1165,7 +1346,10 @@ def arb_source_lock_v1() -> ArbSourceLockV1:
             bytes.fromhex("343c2ff0fbee5ec2edbef399f3599ff828c67298"),
         ),
     )
-    mpfr = SourceReleaseLockV1(
+
+
+def _mpfr_source_release_v1() -> SourceReleaseLockV1:
+    return SourceReleaseLockV1(
         SourceRoleV1.MPFR,
         "4.2.2",
         "https://www.mpfr.org/mpfr-4.2.2/mpfr-4.2.2.tar.xz",
@@ -1189,6 +1373,13 @@ def arb_source_lock_v1() -> ArbSourceLockV1:
             bytes.fromhex("a534be3f83e241d918280aeb5831d11a0d4db02a"),
         ),
     )
+
+
+def arb_source_lock_v1() -> ArbSourceLockV1:
+    """Return the exact published source declarations for the first Arb lane."""
+
+    gmp = _gmp_source_release_v1()
+    mpfr = _mpfr_source_release_v1()
     omitted = (
         ".gitattributes",
         ".github/ISSUE_TEMPLATE/bug_report.md",
@@ -1264,3 +1455,48 @@ def arb_source_lock_v1() -> ArbSourceLockV1:
         ),
     )
     return ArbSourceLockV1((gmp, mpfr, flint))
+
+
+def mpfi_source_lock_v1() -> MpfiSourceLockV1:
+    """Return the exact source declarations for the first MPFI lane.
+
+    MPFI 1.5.4 has no verified detached signature or archive-to-Git content
+    relation.  Its archive is therefore named honestly as a project-pinned
+    byte digest while GMP and MPFR retain their independently signed locks.
+    """
+
+    mpfi = SourceReleaseLockV1(
+        SourceRoleV1.MPFI,
+        "1.5.4",
+        "https://perso.ens-lyon.fr/nathalie.revol/softwares/mpfi-1.5.4.tar.xz",
+        ArchiveFormatV1.TAR_XZ,
+        370_932,
+        bytes.fromhex(
+            "819e98bc7dad7cf7e67c9ddb592f44545c300de143fe30bc29ca1b422b55306a"
+        ),
+        3_502_080,
+        "mpfi-1.5.4/",
+        495,
+        3_117_639,
+        (
+            _legal_file(
+                "COPYING",
+                35_147,
+                "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903",
+            ),
+            _legal_file(
+                "COPYING.LESSER",
+                7_651,
+                "da7eabb7bafdf7d3ae5e9f223aa5bdc1eece45ac569dc21b3b037520b4464768",
+            ),
+            _legal_file(
+                "README",
+                1_336,
+                "dab7a52115f111ff3771dc4311a837919d45ffaa654e64c110af78bd2a003e20",
+            ),
+        ),
+        ProjectPinnedArchiveDigestPolicyV1(),
+    )
+    return MpfiSourceLockV1(
+        (_gmp_source_release_v1(), _mpfr_source_release_v1(), mpfi)
+    )
