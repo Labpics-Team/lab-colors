@@ -217,8 +217,9 @@ class MpfiSourceLockTests(unittest.TestCase):
         self.assertIs(type(admitted), AdmittedMpfiSourcesV1)
         self.assertEqual(admitted.source_lock_identity, lock.identity)
         self.assertEqual(admitted.sources, sources)
-        with self.assertRaises((ProvenanceErrorV1, TypeError)):
+        with self.assertRaises(ProvenanceErrorV1) as caught:
             admit_mpfi_sources(lock, (sources[1], sources[0], sources[2]))
+        self.assertEqual(caught.exception.reason, ProvenanceReasonV1.FOREIGN_BINDING)
         with self.assertRaises(TypeError):
             AdmittedMpfiSourcesV1(lock.identity, sources, _token=object())
 

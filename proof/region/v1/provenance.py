@@ -432,7 +432,7 @@ class ProjectPinnedArchiveDigestPolicyV1:
         return b""
 
     @classmethod
-    def parse_from(cls, _reader: _Reader) -> "ProjectPinnedArchiveDigestPolicyV1":
+    def parse_from(cls, _reader: _Reader) -> ProjectPinnedArchiveDigestPolicyV1:
         return cls()
 
 
@@ -649,7 +649,7 @@ class ArbSourceLockV1:
         return _encode_source_closure_v1(self.sources)
 
     @classmethod
-    def parse(cls, data: bytes) -> "ArbSourceLockV1":
+    def parse(cls, data: bytes) -> ArbSourceLockV1:
         result = cls(_parse_source_closure_v1(data, "arb-source-lock-v1"))
         if result.encode() != data:
             _fail("arb-source-lock-v1", ProvenanceReasonV1.FOREIGN_BINDING, "re-encode drift")
@@ -696,7 +696,7 @@ class MpfiSourceLockV1:
         return _encode_source_closure_v1(self.sources)
 
     @classmethod
-    def parse(cls, data: bytes) -> "MpfiSourceLockV1":
+    def parse(cls, data: bytes) -> MpfiSourceLockV1:
         result = cls(_parse_source_closure_v1(data, "mpfi-source-lock-v1"))
         if result.encode() != data:
             _fail("mpfi-source-lock-v1", ProvenanceReasonV1.FOREIGN_BINDING, "re-encode drift")
