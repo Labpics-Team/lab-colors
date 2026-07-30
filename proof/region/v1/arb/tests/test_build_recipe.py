@@ -15,6 +15,7 @@ from proof.region.v1.arb.tests import gate as arb_gate
 ARB = Path(__file__).resolve().parents[1]
 BUILD = ARB / "build.sh"
 WORKFLOW = ARB.parents[3] / ".github" / "workflows" / "arb.yml"
+RECIPE_REJECTION_TIMEOUT_SECONDS = 5
 
 
 class ArbBuildRecipeTests(unittest.TestCase):
@@ -172,6 +173,19 @@ class ArbBuildRecipeTests(unittest.TestCase):
             with self.subTest(forbidden=forbidden):
                 self.assertNotIn(forbidden, source)
 
+        self.assertIn(
+            'if ! /usr/bin/readelf -l "$build/arb-evaluator-v1" '
+            '> "$build/program-headers"; then',
+            source,
+        )
+        self.assertIn(
+            'if ! /usr/bin/readelf -d "$build/arb-evaluator-v1" '
+            '> "$build/dynamic-section"; then',
+            source,
+        )
+        self.assertNotIn("readelf -l \"$build/arb-evaluator-v1\" |", source)
+        self.assertNotIn("readelf -d \"$build/arb-evaluator-v1\" 2>&1 |", source)
+
     def test_recipe_rejects_ambient_or_incomplete_invocation_before_build(self) -> None:
         result = subprocess.run(
             [str(BUILD)],
@@ -181,6 +195,8 @@ class ArbBuildRecipeTests(unittest.TestCase):
                 "PATH": os.environ.get("PATH", ""),
                 "UNDECLARED": "must-not-be-observed",
             },
+            stdin=subprocess.DEVNULL,
+            timeout=RECIPE_REJECTION_TIMEOUT_SECONDS,
         )
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(result.stdout, b"")

@@ -814,35 +814,6 @@ def _decompress_exact(
     return output
 
 
-def decompress_locked_tar_v1(
-    expected: SourceReleaseLockV1,
-    admitted: SafeSourceArchiveV1,
-) -> bytes:
-    """Replay bounded decompression from one exact admitted capability."""
-
-    if type(expected) is not SourceReleaseLockV1:
-        raise TypeError("expected must be SourceReleaseLockV1")
-    if type(admitted) is not SafeSourceArchiveV1:
-        raise TypeError("admitted must be SafeSourceArchiveV1")
-    archive = admitted.archive_bytes
-    if (
-        admitted.source_lock_identity != expected.identity
-        or admitted.archive_sha256 != expected.archive_sha256
-        or len(archive) != expected.archive_length
-        or hashlib.sha256(archive).digest() != expected.archive_sha256
-    ):
-        _fail(
-            "source-archive-v1",
-            ProvenanceReasonV1.ARCHIVE_DIGEST_MISMATCH,
-            "admitted archive no longer matches its lock",
-        )
-    return _decompress_exact(
-        archive,
-        expected.archive_format,
-        expected.tar_stream_length,
-    )
-
-
 def _tree_identity(files: tuple[ArchiveFileV1, ...]) -> bytes:
     chunks = [len(files).to_bytes(8, "big")]
     for item in files:
@@ -951,8 +922,10 @@ def _scan_tar(expected: SourceReleaseLockV1, raw_tar: bytes) -> tuple[ArchiveFil
     return tuple(sorted(files, key=lambda item: item.path))
 
 
-def admit_source_archive(expected: SourceReleaseLockV1, archive: bytes) -> SafeSourceArchiveV1:
-    """Hash then scan one locked archive; this establishes no origin trust."""
+def _admit_source_archive_once(
+    expected: SourceReleaseLockV1,
+    archive: bytes,
+) -> tuple[SafeSourceArchiveV1, bytes]:
 
     if type(expected) is not SourceReleaseLockV1:
         raise TypeError("expected must be SourceReleaseLockV1")
@@ -1005,7 +978,7 @@ def admit_source_archive(expected: SourceReleaseLockV1, archive: bytes) -> SafeS
                     release_only.path,
                 )
     tree_identity = _tree_identity(files)
-    return SafeSourceArchiveV1(
+    admitted = SafeSourceArchiveV1(
         expected.identity,
         archive_sha256,
         tree_identity,
@@ -1015,6 +988,31 @@ def admit_source_archive(expected: SourceReleaseLockV1, archive: bytes) -> SafeS
         archive,
         _token=_SAFE_ARCHIVE_TOKEN,
     )
+    return admitted, raw_tar
+
+
+def admit_source_archive(expected: SourceReleaseLockV1, archive: bytes) -> SafeSourceArchiveV1:
+    """Hash then scan one locked archive; this establishes no origin trust."""
+
+    admitted, _raw_tar = _admit_source_archive_once(expected, archive)
+    return admitted
+
+
+def replay_admitted_source_archive_v1(
+    expected: SourceReleaseLockV1,
+    admitted: SafeSourceArchiveV1,
+) -> tuple[SafeSourceArchiveV1, bytes]:
+    """Re-admit owned bytes and return the raw tar from that exact pass.
+
+    The caller cannot supply a second tar stream, so replay coordinates and
+    materialization bytes remain causally bound without decompressing twice.
+    """
+
+    if type(expected) is not SourceReleaseLockV1:
+        raise TypeError("expected must be SourceReleaseLockV1")
+    if type(admitted) is not SafeSourceArchiveV1:
+        raise TypeError("admitted must be SafeSourceArchiveV1")
+    return _admit_source_archive_once(expected, admitted.archive_bytes)
 
 
 def admit_arb_sources(

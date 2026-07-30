@@ -1303,10 +1303,11 @@ class DockerCommandContractTests(unittest.TestCase):
 @unittest.skipUnless(
     sys.platform == "linux"
     and os.environ.get("LABCOLORS_ARB_PIPELINE_DOCKER")
+    and os.environ.get("LABCOLORS_ARB_NATIVE_BINARY")
     and os.environ.get("LABCOLORS_GMP_ARCHIVE")
     and os.environ.get("LABCOLORS_MPFR_ARCHIVE")
     and os.environ.get("LABCOLORS_FLINT_ARCHIVE"),
-    "requires Linux, Docker, and all three exact source archives",
+    "requires Linux, Docker, the native binary path, and all three exact source archives",
 )
 class NativeBuildIntegrationTests(unittest.TestCase):
     def test_real_two_builds_and_ephemeral_evaluator_runtime_tests(self) -> None:

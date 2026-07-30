@@ -26,7 +26,7 @@ import time
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Callable, Protocol, TypeAlias
+from typing import Callable, NoReturn, Protocol, TypeAlias
 
 
 SANDBOX_POLICY_RELEASE_V1 = "labcolors.arb.executor.linux-x86_64.v1"
@@ -277,7 +277,7 @@ class ExecutionRequestV1:
             _request_fail(RequestReasonV1.INVALID_LIMIT, "umask")
 
 
-def _request_fail(reason: RequestReasonV1, field: str) -> None:
+def _request_fail(reason: RequestReasonV1, field: str) -> NoReturn:
     raise ExecutionRequestErrorV1(reason, field)
 
 
@@ -1627,12 +1627,20 @@ class NativeLinuxBackendV1:
             if not failures:
                 return _invalidated_capability_report_v1()
             return UnsupportedV1(tuple(failures))
-        _probe_operation(operations.probe_execveat, CapabilityReasonV1.EXECVEAT_UNAVAILABLE, failures)
+        _probe_operation(
+            operations.probe_execveat,
+            CapabilityReasonV1.EXECVEAT_UNAVAILABLE,
+            failures,
+        )
         if failures or not guard.is_current():
             if not failures:
                 return _invalidated_capability_report_v1()
             return UnsupportedV1(tuple(failures))
-        _probe_operation(operations.probe_close_range, CapabilityReasonV1.CLOSE_RANGE_UNAVAILABLE, failures)
+        _probe_operation(
+            operations.probe_close_range,
+            CapabilityReasonV1.CLOSE_RANGE_UNAVAILABLE,
+            failures,
+        )
         if failures or not guard.is_current():
             if not failures:
                 return _invalidated_capability_report_v1()
@@ -1646,7 +1654,11 @@ class NativeLinuxBackendV1:
             if not failures:
                 return _invalidated_capability_report_v1()
             return UnsupportedV1(tuple(failures))
-        _probe_operation(operations.probe_namespaces, CapabilityReasonV1.NETWORK_NAMESPACE_UNAVAILABLE, failures)
+        _probe_operation(
+            operations.probe_namespaces,
+            CapabilityReasonV1.NETWORK_NAMESPACE_UNAVAILABLE,
+            failures,
+        )
         if failures or not guard.is_current():
             if not failures:
                 return _invalidated_capability_report_v1()
@@ -1660,7 +1672,11 @@ class NativeLinuxBackendV1:
             if not failures:
                 return _invalidated_capability_report_v1()
             return UnsupportedV1(tuple(failures))
-        _probe_operation(operations.probe_seccomp, CapabilityReasonV1.SECCOMP_FILTER_UNAVAILABLE, failures)
+        _probe_operation(
+            operations.probe_seccomp,
+            CapabilityReasonV1.SECCOMP_FILTER_UNAVAILABLE,
+            failures,
+        )
         if failures or not guard.is_current():
             if not failures:
                 return _invalidated_capability_report_v1()
@@ -1670,7 +1686,9 @@ class NativeLinuxBackendV1:
             CapabilityReasonV1.CGROUP_V2_UNAVAILABLE,
             failures,
         )
-        if failures:
+        if failures or not guard.is_current():
+            if not failures:
+                return _invalidated_capability_report_v1()
             return UnsupportedV1(tuple(failures))
         return SupportedV1("linux-x86_64", SANDBOX_POLICY_RELEASE_V1)
 

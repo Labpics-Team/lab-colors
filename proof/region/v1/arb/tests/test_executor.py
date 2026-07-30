@@ -550,6 +550,29 @@ class CapabilityAndExecutionTests(unittest.TestCase):
         )
         self.assertEqual(cgroups.probed, [Path("/delegated-proof-cgroup")])
 
+    def test_final_probe_cannot_outlive_its_controller_lease(self) -> None:
+        current = True
+
+        class InvalidatingCgroupFactory(_CgroupFactory):
+            def probe(self, parent: Path) -> None:
+                nonlocal current
+                super().probe(parent)
+                current = False
+
+        native = executor.NativeLinuxBackendV1(
+            cgroup_parent="/delegated-proof-cgroup",
+            platform_name="linux",
+            machine_name="x86_64",
+            operations=_ProbeOperations(),
+            cgroup_factory=InvalidatingCgroupFactory(),
+        )
+
+        report = native._probe_capability_v1(
+            executor._ProbeGuardV1(lambda: current)
+        )
+
+        self.assertEqual(report, executor._invalidated_capability_report_v1())
+
     def test_overlap_after_single_thread_gate_cancels_before_fork_and_revokes_authority(self) -> None:
         operations = _OverlapAfterSingleThreadOperations()
         native = executor.NativeLinuxBackendV1(

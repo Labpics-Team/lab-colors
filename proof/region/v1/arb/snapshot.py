@@ -156,14 +156,18 @@ def materialize_source_archive(
         _fail(SnapshotReasonV1.INVALID_DESTINATION, "destination parent is not a directory")
     destination = parent / destination.name
 
-    replayed = provenance.admit_source_archive(expected, admitted.archive_bytes)
+    replayed, raw_tar = provenance.replay_admitted_source_archive_v1(
+        expected,
+        admitted,
+    )
     if (
-        replayed.tree_identity != admitted.tree_identity
-        or replayed.archive_sha256 != admitted.archive_sha256
+        replayed.archive_sha256 != admitted.archive_sha256
+        or replayed.tree_identity != admitted.tree_identity
+        or replayed.regular_file_count != admitted.regular_file_count
+        or replayed.regular_file_bytes != admitted.regular_file_bytes
         or replayed.files != admitted.files
     ):
         _fail(SnapshotReasonV1.FOREIGN_CAPABILITY, "archive replay drift")
-    raw_tar = provenance.decompress_locked_tar_v1(expected, admitted)
     expected_files = {item.path: item for item in admitted.files}
     seen: set[str] = set()
     try:

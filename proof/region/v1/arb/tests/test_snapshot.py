@@ -101,6 +101,54 @@ class SourceSnapshotTests(unittest.TestCase):
                         snapshot.SOURCE_SNAPSHOT_MTIME_NS_V1,
                     )
 
+    def test_materialization_decompresses_the_owned_archive_once(self) -> None:
+        lock, archive_bytes = fixture()
+        admitted = provenance.admit_source_archive(lock, archive_bytes)
+        with tempfile.TemporaryDirectory() as temporary:
+            destination = Path(temporary) / "fixture-1"
+            with mock.patch.object(
+                provenance,
+                "_decompress_exact",
+                wraps=provenance._decompress_exact,
+            ) as decompress:
+                snapshot.materialize_source_archive(lock, admitted, destination)
+
+        self.assertEqual(decompress.call_count, 1)
+
+    def test_single_pass_replay_rejects_capability_coordinate_drift(self) -> None:
+        lock, archive_bytes = fixture()
+        original = provenance.admit_source_archive(lock, archive_bytes)
+        mutations = (
+            ("archive_sha256", bytes.fromhex("ff" * 32)),
+            ("tree_identity", bytes.fromhex("ff" * 32)),
+            ("regular_file_count", original.regular_file_count + 1),
+            ("regular_file_bytes", original.regular_file_bytes + 1),
+            ("files", original.files[:-1]),
+        )
+        for field, value in mutations:
+            with self.subTest(field=field):
+                with tempfile.TemporaryDirectory() as temporary:
+                    admitted = provenance.admit_source_archive(lock, archive_bytes)
+                    object.__setattr__(admitted, field, value)
+                    destination = Path(temporary) / "fixture-1"
+                    with mock.patch.object(
+                        provenance,
+                        "_decompress_exact",
+                        wraps=provenance._decompress_exact,
+                    ) as decompress:
+                        with self.assertRaises(snapshot.SnapshotErrorV1) as caught:
+                            snapshot.materialize_source_archive(
+                                lock,
+                                admitted,
+                                destination,
+                            )
+
+                    self.assertEqual(
+                        caught.exception.reason,
+                        snapshot.SnapshotReasonV1.FOREIGN_CAPABILITY,
+                    )
+                    self.assertEqual(decompress.call_count, 1)
+
     def test_destination_must_be_new_exact_release_root(self) -> None:
         lock, archive_bytes = fixture()
         admitted = provenance.admit_source_archive(lock, archive_bytes)

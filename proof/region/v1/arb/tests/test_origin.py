@@ -340,7 +340,7 @@ class GpgStatusTests(unittest.TestCase):
         self.assertEqual(caught.exception.reason, origin.OriginReasonV1.COORDINATE_MISMATCH)
 
     def test_crashed_gpgv_is_a_typed_process_failure(self) -> None:
-        expected, admitted = signed_source_fixture()
+        _expected, admitted = signed_source_fixture()
         with tempfile.TemporaryDirectory() as temporary:
             executable = Path(temporary) / "gpgv"
             executable.write_bytes(b"diagnostic executable bytes")

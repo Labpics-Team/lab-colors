@@ -146,13 +146,33 @@ cd "$workspace/proof/region/v1/arb/evaluator"
     -lm -lpthread \
     -o "$build/arb-evaluator-v1"
 
-if /usr/bin/readelf -l "$build/arb-evaluator-v1" | /usr/bin/grep -q INTERP; then
-    printf '%s\n' 'evaluator unexpectedly contains PT_INTERP' >&2
+if ! /usr/bin/readelf -l "$build/arb-evaluator-v1" > "$build/program-headers"; then
+    printf '%s\n' 'cannot inspect evaluator program headers' >&2
     exit 70
 fi
-if /usr/bin/readelf -d "$build/arb-evaluator-v1" 2>&1 | /usr/bin/grep -q NEEDED; then
+if /usr/bin/grep -q INTERP "$build/program-headers"; then
+    printf '%s\n' 'evaluator unexpectedly contains PT_INTERP' >&2
+    exit 70
+else
+    grep_status=$?
+    if [ "$grep_status" -ne 1 ]; then
+        printf '%s\n' 'cannot search evaluator program headers' >&2
+        exit 70
+    fi
+fi
+if ! /usr/bin/readelf -d "$build/arb-evaluator-v1" > "$build/dynamic-section"; then
+    printf '%s\n' 'cannot inspect evaluator dynamic section' >&2
+    exit 70
+fi
+if /usr/bin/grep -q NEEDED "$build/dynamic-section"; then
     printf '%s\n' 'evaluator unexpectedly contains DT_NEEDED' >&2
     exit 70
+else
+    grep_status=$?
+    if [ "$grep_status" -ne 1 ]; then
+        printf '%s\n' 'cannot search evaluator dynamic section' >&2
+        exit 70
+    fi
 fi
 
 /usr/bin/install -m 0555 "$build/arb-evaluator-v1" "$output/arb-evaluator-v1"

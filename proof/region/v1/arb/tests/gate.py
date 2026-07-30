@@ -14,7 +14,7 @@ TEST_DIRECTORY = Path(__file__).resolve().parent
 REPO = Path(__file__).resolve().parents[5]
 sys.path.insert(0, str(REPO))
 EXPECTED_TEST_INVENTORY_SHA256 = (
-    "4723f451084dbd42ec8232cd04d3b8b14065bb5b5980dc5445747f14a27a1c07"
+    "ab21c48b5e3347c55a3c69ff2c76dee93f8e23f28eab54220729252fd2f6f1fc"
 )
 _EVALUATOR_REASON = "set LABCOLORS_ARB_EVALUATOR to the controlled C17 binary"
 EXPECTED_SKIPS = frozenset(
@@ -44,7 +44,7 @@ EXPECTED_SKIPS = frozenset(
         (
             "test_pipeline.NativeBuildIntegrationTests."
             "test_real_two_builds_and_ephemeral_evaluator_runtime_tests",
-            "requires Linux, Docker, and all three exact source archives",
+            "requires Linux, Docker, the native binary path, and all three exact source archives",
         ),
         (
             "test_pipeline.NativePipelineIntegrationTests."
@@ -93,7 +93,7 @@ def run_exact_suite_v1(
     ):
         print(
             "Arb test inventory drift: "
-            f"count={len(tests)} sha256={actual_inventory_sha256} ",
+            f"count={len(tests)} sha256={actual_inventory_sha256} "
             f"expected={expected_inventory_sha256}",
             file=sys.stderr,
         )
