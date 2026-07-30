@@ -5,9 +5,12 @@ from __future__ import annotations
 
 import hashlib
 import os
+import select
+import signal
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from dataclasses import replace
 from pathlib import Path
@@ -36,6 +39,11 @@ from test_pipeline import (  # noqa: E402
     _request,
     _static_elf,
 )
+
+
+# Test-hang ceiling only: the child uses local pipe IPC and has no product
+# deadline, but a broken fork branch must not occupy CI indefinitely.
+_FORK_REPORT_TIMEOUT_SECONDS = 5.0
 
 
 def _digest(label: str) -> bytes:
@@ -281,7 +289,12 @@ class SourceBoundReceiptTests(unittest.TestCase):
     def test_root_and_build_coordinates_are_recomputed(self) -> None:
         result, _backend = _execute()
         dag = result.evidence
-        for field_name in ("source_identity", "build_identity", "run_identity", "_identity"):
+        for field_name in (
+            "source_identity",
+            "build_identity",
+            "run_identity",
+            "_identity",
+        ):
             with self.subTest(root=field_name):
                 self.assertFalse(
                     receipt.replay_evidence_is_well_bound_v1(
@@ -572,38 +585,71 @@ class SourceBoundReceiptTests(unittest.TestCase):
         with patches[0], patches[1], patches[2], patches[3], patches[4]:
             child_pid = os.fork()
             if child_pid == 0:
-                os.close(read_fd)
+                exit_status = 1
                 try:
+                    os.close(read_fd)
                     child = controller.execute(request)
                     payload = (
                         f"{type(child).__name__}:"
                         f"{child.reason.value}:"
                         f"{child.detail}"
-                    ).encode("utf-8")
+                    ).encode()
                     os.write(write_fd, payload)
                     exit_status = 0
-                except BaseException as error:
-                    os.write(
-                        write_fd,
-                        f"ERROR:{type(error).__name__}:{error}".encode("utf-8"),
-                    )
-                    exit_status = 1
+                except Exception as error:
+                    try:
+                        os.write(
+                            write_fd,
+                            f"ERROR:{type(error).__name__}:{error}".encode(),
+                        )
+                    except OSError:
+                        pass
                 finally:
-                    os.close(write_fd)
-                    os._exit(exit_status)
+                    try:
+                        os.close(write_fd)
+                    finally:
+                        os._exit(exit_status)
             os.close(write_fd)
-            child_payload = b""
-            while chunk := os.read(read_fd, 4096):
-                child_payload += chunk
-            os.close(read_fd)
+            os.set_blocking(read_fd, False)
+            child_payload = bytearray()
+            deadline = time.monotonic() + _FORK_REPORT_TIMEOUT_SECONDS
+            timed_out = False
+            try:
+                while True:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        timed_out = True
+                        break
+                    readable, _writable, _exceptional = select.select(
+                        (read_fd,), (), (), remaining
+                    )
+                    if not readable:
+                        timed_out = True
+                        break
+                    chunk = os.read(read_fd, 4096)
+                    if not chunk:
+                        break
+                    child_payload.extend(chunk)
+            finally:
+                os.close(read_fd)
+            if timed_out:
+                try:
+                    os.kill(child_pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
             waited_pid, status = os.waitpid(child_pid, 0)
+            if timed_out:
+                self.fail(
+                    "forked authority probe did not report within "
+                    f"{_FORK_REPORT_TIMEOUT_SECONDS:g} seconds"
+                )
             parent = controller.execute(request)
 
         self.assertEqual(waited_pid, child_pid)
         self.assertTrue(os.WIFEXITED(status), status)
         self.assertEqual(os.WEXITSTATUS(status), 0)
         self.assertEqual(
-            child_payload.decode("utf-8"),
+            bytes(child_payload).decode(),
             "SourceBoundRejectedV1:controller_process_changed:"
             "controller authority cannot cross a process boundary",
         )

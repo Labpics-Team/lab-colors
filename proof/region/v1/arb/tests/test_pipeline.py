@@ -782,15 +782,21 @@ class ControlledPipelineTests(unittest.TestCase):
 
     def test_snapshot_modes_are_normalized_independently_of_host_umask(self) -> None:
         binary = _static_elf(b"umask-independent")
-        previous = os.umask(0o077)
-        try:
-            result = pipeline.ControlledPipelineV1(
-                build_backend=_BuildBackend((binary, binary)),
-            ).build(_request())
-        finally:
-            os.umask(previous)
+        identities: list[tuple[bytes, bytes]] = []
+        for mask in (0o077, 0o022):
+            previous = os.umask(mask)
+            try:
+                result = pipeline.ControlledPipelineV1(
+                    build_backend=_BuildBackend((binary, binary)),
+                ).build(_request())
+            finally:
+                os.umask(previous)
+            self.assertIs(type(result), pipeline.DiagnosticBuildObservationV1)
+            identities.append(
+                (result.input_bundle_identity, result.input_bundle_sha256)
+            )
 
-        self.assertIs(type(result), pipeline.DiagnosticBuildObservationV1)
+        self.assertEqual(identities[0], identities[1])
 
     def test_pipeline_exports_no_receipt_or_self_report_admission_api(self) -> None:
         names = dir(pipeline)

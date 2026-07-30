@@ -430,15 +430,11 @@ def sealed_build_input_bundle_is_well_bound_v1(value: object) -> bool:
 def _canonical_tar_v1(
     entries: tuple[tuple[str, int, bytes], ...],
 ) -> bytes:
-    if (
-        type(entries) is not tuple
-        or not entries
-        or tuple(path for path, _mode, _contents in entries)
-        != tuple(sorted(path for path, _mode, _contents in entries))
-        or len({path for path, _mode, _contents in entries}) != len(entries)
-    ):
+    if type(entries) is not tuple or not entries:
         raise TypeError("build bundle entries must be a canonical nonempty set")
     paths = tuple(path for path, _mode, _contents in entries)
+    if paths != tuple(sorted(paths)) or len(set(paths)) != len(entries):
+        raise TypeError("build bundle entries must be a canonical nonempty set")
     folded_paths: set[str] = set()
     directories: set[str] = set()
     for path, _mode, _contents in entries:
@@ -2027,11 +2023,21 @@ class NativeDockerBuildBackendV1:
         except Exception:
             observer_failed = True
         finally:
-            selector.close()
-            if process.stdin is not None and not process.stdin.closed:
-                process.stdin.close()
-            if bundle_view is not None:
-                bundle_view.release()
+            try:
+                try:
+                    selector.close()
+                except OSError:
+                    observer_failed = True
+            finally:
+                try:
+                    if process.stdin is not None and not process.stdin.closed:
+                        try:
+                            process.stdin.close()
+                        except OSError:
+                            observer_failed = True
+                finally:
+                    if bundle_view is not None:
+                        bundle_view.release()
 
         input_progress: BuildInputTransferProgressV1 | None = None
         if input_bundle is not None:

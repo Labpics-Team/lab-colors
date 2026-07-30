@@ -3,9 +3,12 @@
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import io
+import inspect
 import os
+import subprocess
 import sys
 import tarfile
 import tempfile
@@ -246,6 +249,39 @@ class BuildInputObserverTests(unittest.TestCase):
             hashlib.sha256(bundle._contents[: closed.written_length]).digest(),
         )
 
+    def test_final_stdin_close_failure_is_a_typed_observer_failure(self) -> None:
+        real_popen = subprocess.Popen
+
+        class CloseFailsOnce:
+            def __init__(self, stream: object) -> None:
+                self._stream = stream
+
+            @property
+            def closed(self) -> bool:
+                return self._stream.closed
+
+            def fileno(self) -> int:
+                return self._stream.fileno()
+
+            def close(self) -> None:
+                self._stream.close()
+                raise BrokenPipeError("forced close failure")
+
+        def spawn(*args: object, **kwargs: object) -> subprocess.Popen[bytes]:
+            process = real_popen(*args, **kwargs)
+            self.assertIsNotNone(process.stdin)
+            process.stdin = CloseFailsOnce(process.stdin)
+            return process
+
+        with mock.patch.object(pipeline.subprocess, "Popen", side_effect=spawn):
+            result = _observe(
+                "import time; time.sleep(1)",
+                _bundle(2 * 1024 * 1024),
+                timeout_ns=100_000_000,
+            )
+
+        self.assertIs(type(result), pipeline.DockerBuildObserverFailureV1, result)
+
     def test_full_duplex_backpressure_does_not_deadlock_or_drop_bytes(self) -> None:
         bundle = _bundle(512 * 1024)
         result = _observe(
@@ -310,12 +346,12 @@ class BuildInputObserverTests(unittest.TestCase):
 
 class SealedBuildTransportContractTests(unittest.TestCase):
     def test_controller_owns_one_sealed_bundle_for_both_builds(self) -> None:
-        build_source = __import__("inspect").getsource(pipeline.ControlledPipelineV1.build)
+        build_source = inspect.getsource(pipeline.ControlledPipelineV1.build)
         self.assertEqual(build_source.count("_seal_build_input_bundle_v1("), 1)
         self.assertIn("for attempt in (1, 2)", build_source)
 
     def test_docker_request_has_no_semantic_host_path_authority(self) -> None:
-        fields = {item.name for item in __import__("dataclasses").fields(pipeline.DockerBuildRequestV1)}
+        fields = {item.name for item in dataclasses.fields(pipeline.DockerBuildRequestV1)}
         self.assertEqual(
             fields,
             {"attempt", "input_bundle", "max_executable_bytes", "cid_file", "container_name"},
