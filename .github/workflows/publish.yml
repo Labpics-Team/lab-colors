@@ -29,7 +29,7 @@ jobs:
     permissions:
       contents: read
       actions: read
-    uses: Labpics-Team/lab-colors/.github/workflows/publish-worker.yml@dc972fafa323bc0a7f7f87275708a6d6fb6b7708
+    uses: Labpics-Team/lab-colors/.github/workflows/publish-worker.yml@7de5904d7404e9c008ff997a12d7fd852e957775
     # Обязателен: publish-step читает NPM_TOKEN из environment `npm-publish`,
     # который объявлен на job'е worker'а. Без inherit секрет туда не доедет.
     secrets: inherit
