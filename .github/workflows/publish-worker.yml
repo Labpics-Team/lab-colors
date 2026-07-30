@@ -203,8 +203,12 @@ jobs:
             );
             const failures = [];
             for (const name of spec.requiredJobs) {
+              // Caller/worker-схема публикует имя как «<caller-job> / <job>»;
+              // суффиксная форма покрывает её и легаси-прогоны разом, а
+              // требование ровно одного совпадения ниже ловит неоднозначность.
               const matches = jobs.filter((job) =>
-                job.name === name && Number(job.run_id) === Number(run.id));
+                (job.name === name || job.name.endsWith(` / ${name}`)) &&
+                Number(job.run_id) === Number(run.id));
               if (matches.length !== 1) {
                 failures.push(`${name}: expected one job in run ${run.id}, got ${matches.length}`);
                 continue;
