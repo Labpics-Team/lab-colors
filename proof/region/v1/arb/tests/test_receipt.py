@@ -423,6 +423,43 @@ class SourceBoundReceiptTests(unittest.TestCase):
             receipt.replay_evidence_is_well_bound_v1(_tamper(dag, "build", build))
         )
 
+    def test_source_replay_rejects_a_self_consistent_forged_manifest(self) -> None:
+        request = _request()
+        lock = request.source_lock.sources[2]
+        source = request.admitted_sources.sources[2]
+        forged_files = list(source.files)
+        forged_files[1] = replace(forged_files[1], path=forged_files[0].path)
+        forged_files_value = tuple(sorted(forged_files, key=lambda item: item.path))
+
+        with self.subTest(boundary="manifest"):
+            with self.assertRaises(TypeError):
+                provenance.archive_file_manifest_bytes_v1(forged_files_value)
+
+        case_collision = list(source.files)
+        case_collision[1] = replace(
+            case_collision[1],
+            path=case_collision[0].path.lower(),
+        )
+        with self.subTest(boundary="ASCII case normalization"):
+            with self.assertRaises(TypeError):
+                provenance.archive_file_manifest_bytes_v1(
+                    tuple(sorted(case_collision, key=lambda item: item.path))
+                )
+
+        forged_source = _tamper(source, "files", forged_files_value)
+        forged_source = _tamper(
+            forged_source,
+            "tree_identity",
+            provenance._tree_identity(forged_files_value),
+        )
+        with self.subTest(boundary="archive replay"):
+            with self.assertRaises(provenance.ProvenanceErrorV1) as caught:
+                provenance.source_archive_replay_coordinates_v1(lock, forged_source)
+            self.assertEqual(
+                caught.exception.reason,
+                provenance.ProvenanceReasonV1.FOREIGN_BINDING,
+            )
+
     def test_invocation_process_and_same_object_mutations_fail(self) -> None:
         result, _backend = _execute()
         dag = result.evidence
@@ -525,7 +562,54 @@ class SourceBoundReceiptTests(unittest.TestCase):
                 self.assertIs(type(result), pipeline.ExecutionRejectedV1)
                 self.assertIs(result.observation, outcome)
 
-    def test_controller_is_process_bound_and_one_shot(self) -> None:
+    def test_controller_rejects_a_forked_child_without_consuming_parent_authority(
+        self,
+    ) -> None:
+        backend = _NativeRunBackend()
+        controller, patches = _controller(_static_elf(b"source-bound-receipt"), backend)
+        request = _request()
+        read_fd, write_fd = os.pipe()
+        with patches[0], patches[1], patches[2], patches[3], patches[4]:
+            child_pid = os.fork()
+            if child_pid == 0:
+                os.close(read_fd)
+                try:
+                    child = controller.execute(request)
+                    payload = (
+                        f"{type(child).__name__}:"
+                        f"{child.reason.value}:"
+                        f"{child.detail}"
+                    ).encode("utf-8")
+                    os.write(write_fd, payload)
+                    exit_status = 0
+                except BaseException as error:
+                    os.write(
+                        write_fd,
+                        f"ERROR:{type(error).__name__}:{error}".encode("utf-8"),
+                    )
+                    exit_status = 1
+                finally:
+                    os.close(write_fd)
+                    os._exit(exit_status)
+            os.close(write_fd)
+            child_payload = b""
+            while chunk := os.read(read_fd, 4096):
+                child_payload += chunk
+            os.close(read_fd)
+            waited_pid, status = os.waitpid(child_pid, 0)
+            parent = controller.execute(request)
+
+        self.assertEqual(waited_pid, child_pid)
+        self.assertTrue(os.WIFEXITED(status), status)
+        self.assertEqual(os.WEXITSTATUS(status), 0)
+        self.assertEqual(
+            child_payload.decode("utf-8"),
+            "SourceBoundRejectedV1:controller_process_changed:"
+            "controller authority cannot cross a process boundary",
+        )
+        self.assertIs(type(parent), receipt.SourceBoundEvaluatorReceiptV1)
+
+    def test_controller_is_one_shot(self) -> None:
         backend = _NativeRunBackend()
         controller, patches = _controller(_static_elf(b"source-bound-receipt"), backend)
         with patches[0], patches[1], patches[2], patches[3], patches[4]:

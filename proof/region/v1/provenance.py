@@ -671,11 +671,16 @@ def archive_file_manifest_bytes_v1(
 ) -> bytes:
     """Encode the one canonical retained-file manifest owned by provenance."""
 
+    if type(files_value) is not tuple or any(
+        type(item) is not ArchiveFileV1 for item in files_value
+    ):
+        raise TypeError("invalid archive file manifest")
+    paths = tuple(item.path for item in files_value)
     if (
-        type(files_value) is not tuple
-        or any(type(item) is not ArchiveFileV1 for item in files_value)
-        or tuple(item.path for item in files_value)
-        != tuple(sorted(item.path for item in files_value))
+        any(type(path) is not str for path in paths)
+        or paths != tuple(sorted(paths))
+        or len(paths) != len(set(paths))
+        or len(paths) != len({path.lower() for path in paths})
     ):
         raise TypeError("invalid archive file manifest")
     chunks: list[bytes] = [len(files_value).to_bytes(8, "big")]
@@ -711,37 +716,33 @@ def source_archive_replay_coordinates_v1(
         raise TypeError("expected must be SourceReleaseLockV1")
     if type(admitted) is not SafeSourceArchiveV1:
         raise TypeError("admitted must be SafeSourceArchiveV1")
-    archive = admitted.archive_bytes
-    manifest = archive_file_manifest_bytes_v1(admitted.files)
+    replayed, _raw_tar = replay_admitted_source_archive_v1(expected, admitted)
     if (
-        type(archive) is not bytes
-        or admitted.source_lock_identity != expected.identity
-        or admitted.archive_sha256 != expected.archive_sha256
-        or len(archive) != expected.archive_length
-        or hashlib.sha256(archive).digest() != admitted.archive_sha256
-        or admitted.regular_file_count != expected.regular_file_count
-        or admitted.regular_file_count != len(admitted.files)
-        or admitted.regular_file_bytes != expected.regular_file_bytes
-        or admitted.regular_file_bytes
-        != sum(item.length for item in admitted.files)
-        or admitted.tree_identity != _tree_identity(admitted.files)
+        admitted.source_lock_identity != replayed.source_lock_identity
+        or admitted.archive_sha256 != replayed.archive_sha256
+        or admitted.tree_identity != replayed.tree_identity
+        or admitted.regular_file_count != replayed.regular_file_count
+        or admitted.regular_file_bytes != replayed.regular_file_bytes
+        or admitted.files != replayed.files
     ):
         _fail(
             "source-archive-replay-v1",
             ProvenanceReasonV1.FOREIGN_BINDING,
             "retained source coordinates changed",
         )
+    archive = replayed.archive_bytes
+    manifest = archive_file_manifest_bytes_v1(replayed.files)
     return (
         bytes((int(expected.role),)),
         expected.encode(),
-        admitted.source_lock_identity,
-        admitted.archive_sha256,
-        admitted.tree_identity,
-        admitted.regular_file_count.to_bytes(8, "big"),
-        admitted.regular_file_bytes.to_bytes(8, "big"),
+        replayed.source_lock_identity,
+        replayed.archive_sha256,
+        replayed.tree_identity,
+        replayed.regular_file_count.to_bytes(8, "big"),
+        replayed.regular_file_bytes.to_bytes(8, "big"),
         manifest,
         len(archive).to_bytes(8, "big"),
-        hashlib.sha256(archive).digest(),
+        replayed.archive_sha256,
     )
 
 
