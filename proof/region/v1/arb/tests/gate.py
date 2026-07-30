@@ -11,10 +11,11 @@ from pathlib import Path
 
 
 TEST_DIRECTORY = Path(__file__).resolve().parent
+SHARED_TEST_DIRECTORY = TEST_DIRECTORY.parents[1] / "tests"
 REPO = Path(__file__).resolve().parents[5]
 sys.path.insert(0, str(REPO))
 EXPECTED_TEST_INVENTORY_SHA256 = (
-    "6e73ade1e7d5b21d50fe9826a1b39e4043e63bcd090b504dbee5e1c38515e373"
+    "b503cae0e038d81026115ed0fac415128fa695cc97ac7fd682342909847bfb13"
 )
 _EVALUATOR_REASON = "set LABCOLORS_ARB_EVALUATOR to the controlled C17 binary"
 EXPECTED_SKIPS = frozenset(
@@ -69,6 +70,23 @@ def test_inventory_sha256_v1(suite: unittest.TestSuite) -> str:
     return hashlib.sha256(_inventory_preimage_v1(test_ids)).hexdigest()
 
 
+def full_suite_v1() -> unittest.TestSuite:
+    """Compose the shared execution contract and Arb-only contract once each."""
+
+    return unittest.TestSuite(
+        (
+            unittest.defaultTestLoader.discover(
+                str(SHARED_TEST_DIRECTORY),
+                pattern="test_executor.py",
+            ),
+            unittest.defaultTestLoader.discover(
+                str(TEST_DIRECTORY),
+                pattern="test_*.py",
+            ),
+        )
+    )
+
+
 def run_exact_suite_v1(
     suite: unittest.TestSuite,
     *,
@@ -121,10 +139,7 @@ def run_exact_suite_v1(
 
 
 def main() -> int:
-    suite = unittest.defaultTestLoader.discover(
-        str(TEST_DIRECTORY),
-        pattern="test_*.py",
-    )
+    suite = full_suite_v1()
     return run_exact_suite_v1(
         suite,
         expected_inventory_sha256=EXPECTED_TEST_INVENTORY_SHA256,

@@ -581,6 +581,10 @@ class ControlledPipelineTests(unittest.TestCase):
         ):
             with self.subTest(forbidden=forbidden):
                 self.assertNotIn(forbidden, source)
+        self.assertTrue(callable(executor.invocation_identity_v1))
+        self.assertTrue(callable(executor.platform_identity_v1))
+        self.assertFalse(hasattr(pipeline, "invocation_identity_v1"))
+        self.assertFalse(hasattr(pipeline, "platform_identity_v1"))
 
     def test_host_trust_claims_only_backend_observable_facts(self) -> None:
         trust = pipeline.HostTrustBoundaryV1.UNSEALED_LINUX_X64_DOCKER_HOST

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fail-closed Linux process boundary for the Arb evaluator.
+"""Fail-closed Linux process boundary for proof evaluators.
 
 This module returns process observations only.  A caller must bind those
 observations to source/build evidence elsewhere; no value here can certify that
@@ -23,14 +23,17 @@ import struct
 import sys
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from enum import Enum
 from pathlib import Path
 from typing import Callable, NoReturn, Protocol, TypeAlias
 
 
 EXECUTION_PLATFORM_V1 = "linux-x86_64"
-SANDBOX_POLICY_RELEASE_V1 = "labcolors.arb.executor.linux-x86_64.v1"
+SANDBOX_POLICY_RELEASE_V1 = "labcolors.proof-region.executor.linux-x86_64.v1"
+
+_INVOCATION_ID_LABEL_V1 = b"labcolors.proof-region.execution-invocation.v1\0"
+_PLATFORM_ID_LABEL_V1 = b"labcolors.proof-region.execution-platform.v1\0"
 
 # Linux UAPI values are fixed by fcntl.h.  Requiring F_SEAL_EXEC makes an older
 # kernel an explicit Unsupported host instead of silently weakening the object.
@@ -81,6 +84,11 @@ _CHILD_PACKET_MAGIC = b"LCXE"
 _ELF_HEADER = struct.Struct("<16sHHIQQQIHHHHHH")
 _ELF_PROGRAM_HEADER = struct.Struct("<IIQQQQQQ")
 _ELF_DYNAMIC_ENTRY = struct.Struct("<QQ")
+
+
+def _execution_identity_v1(label: bytes, chunks: tuple[bytes, ...]) -> bytes:
+    payload = b"".join(len(chunk).to_bytes(8, "big") + chunk for chunk in chunks)
+    return hashlib.sha256(label + len(payload).to_bytes(8, "big") + payload).digest()
 
 
 class RequestReasonV1(str, Enum):
@@ -276,6 +284,62 @@ class ExecutionRequestV1:
             _request_fail(RequestReasonV1.LIMIT_EXCEEDED, "stdin")
         if type(self.umask) is not int or not 0 <= self.umask <= 0o777:
             _request_fail(RequestReasonV1.INVALID_LIMIT, "umask")
+
+
+def invocation_identity_v1(request: ExecutionRequestV1) -> bytes:
+    """Bind one admitted invocation without assigning evaluator semantics."""
+
+    if type(request) is not ExecutionRequestV1:
+        raise TypeError("request must be ExecutionRequestV1")
+    replayed_limits = ExecutionLimitsV1(
+        *(getattr(request.limits, item.name) for item in fields(request.limits))
+    )
+    replayed = ExecutionRequestV1(
+        request.executable,
+        request.argv,
+        request.environment,
+        request.cwd,
+        request.stdin,
+        request.umask,
+        replayed_limits,
+    )
+    if replayed != request:
+        raise TypeError("execution request changed after admission")
+    chunks: list[bytes] = [hashlib.sha256(request.executable).digest()]
+    chunks.append(len(request.argv).to_bytes(4, "big"))
+    chunks.extend(request.argv)
+    chunks.append(len(request.environment).to_bytes(4, "big"))
+    for key, value in request.environment:
+        chunks.extend((key, value))
+    chunks.extend(
+        (
+            request.cwd,
+            hashlib.sha256(request.stdin).digest(),
+            len(request.stdin).to_bytes(8, "big"),
+            request.umask.to_bytes(4, "big"),
+        )
+    )
+    for item in fields(request.limits):
+        chunks.append(getattr(request.limits, item.name).to_bytes(8, "big"))
+    return _execution_identity_v1(_INVOCATION_ID_LABEL_V1, tuple(chunks))
+
+
+def platform_identity_v1(report: SupportedV1) -> bytes:
+    """Bind the exact admitted execution platform and sandbox policy."""
+
+    if (
+        type(report) is not SupportedV1
+        or report.platform != EXECUTION_PLATFORM_V1
+        or report.sandbox_policy_release != SANDBOX_POLICY_RELEASE_V1
+    ):
+        raise TypeError("report must be the exact V1 supported platform")
+    return _execution_identity_v1(
+        _PLATFORM_ID_LABEL_V1,
+        (
+            report.platform.encode("ascii"),
+            report.sandbox_policy_release.encode("ascii"),
+        ),
+    )
 
 
 def _request_fail(reason: RequestReasonV1, field: str) -> NoReturn:
@@ -903,7 +967,7 @@ class _NativeLinuxOperationsV1:
         if not hasattr(os, "memfd_create"):
             raise OSError(errno_module.ENOSYS, "memfd_create unavailable")
         return os.memfd_create(
-            "labcolors-arb-evaluator",
+            "labcolors-proof-evaluator",
             _MFD_CLOEXEC | _MFD_ALLOW_SEALING | _MFD_EXEC,
         )
 

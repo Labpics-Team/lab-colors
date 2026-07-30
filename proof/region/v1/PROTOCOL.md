@@ -184,6 +184,13 @@ Git executable/version, repository URL и tag являются диагност�
 
 ## Diagnostic execution boundary
 
+`proof/region/v1/executor.py` — общий для enclosure engines leaf без импорта
+Arb/MPFI, formula или comparator semantics. Он же единолично кодирует
+`execution-invocation.v1` и `execution-platform.v1`; engine pipeline не может
+вводить параллельную identity того же процесса. Sandbox release
+`labcolors.proof-region.executor.linux-x86_64.v1` намеренно не сохраняет
+старую Arb-domain identity: это hard cut, а не compatibility alias.
+
 `ControlledExecutorV1` — единственный владелец one-shot capability: новый,
 неуспешный, перекрывающийся probe или замена backend отзывают ранее выданный
 объект до RUN. Capability выпускается контроллером для одного probe-поколения

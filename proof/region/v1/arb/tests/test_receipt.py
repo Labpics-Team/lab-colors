@@ -217,13 +217,16 @@ class SourceBoundReceiptTests(unittest.TestCase):
         self.assertFalse(hasattr(pipeline, "DiagnosticPipelineObservationV1"))
         self.assertFalse(hasattr(receipt.SourceBoundEvaluatorReceiptV1, "parse"))
 
-    def test_receipt_uses_only_versioned_public_pipeline_verifiers(self) -> None:
+    def test_receipt_uses_only_versioned_public_cross_module_verifiers(self) -> None:
         source = (ARB / "receipt.py").read_text(encoding="utf-8")
 
         self.assertNotIn("pipeline._sealed_build_input_bundle_is_well_bound_v1", source)
         self.assertNotIn("pipeline._build_process_bytes_v1", source)
+        self.assertNotIn("executor._execution_identity_v1", source)
         self.assertTrue(hasattr(pipeline, "sealed_build_input_bundle_is_well_bound_v1"))
         self.assertTrue(hasattr(pipeline, "build_process_bytes_v1"))
+        self.assertTrue(hasattr(executor, "invocation_identity_v1"))
+        self.assertTrue(hasattr(executor, "platform_identity_v1"))
 
     def test_reference_does_not_describe_shipped_arb_receipt_as_future(self) -> None:
         documentation = (PROOF / "PROTOCOL.md").read_text(encoding="utf-8")
@@ -501,8 +504,8 @@ class SourceBoundReceiptTests(unittest.TestCase):
                 dag.build.comparator.manifest,
                 dag.transcript,
                 dag.build.binary_sha256,
-                pipeline.invocation_identity_v1(invocation),
-                pipeline.platform_identity_v1(dag.platform),
+                executor.invocation_identity_v1(invocation),
+                executor.platform_identity_v1(dag.platform),
             )
             with self.assertRaises(TypeError):
                 receipt.ContentResolvedEvaluatorReplayV1(

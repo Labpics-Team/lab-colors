@@ -19,6 +19,26 @@ RECIPE_REJECTION_TIMEOUT_SECONDS = 5
 
 
 class ArbBuildRecipeTests(unittest.TestCase):
+    def test_fast_gate_includes_the_shared_executor_suite_exactly_once(self) -> None:
+        tests = tuple(arb_gate._iter_tests_v1(arb_gate.full_suite_v1()))
+        identifiers = tuple(test.id() for test in tests)
+        executor_identifiers = tuple(
+            identifier for identifier in identifiers if identifier.startswith("test_executor.")
+        )
+        expected = tuple(
+            test.id()
+            for test in arb_gate._iter_tests_v1(
+                unittest.defaultTestLoader.discover(
+                    str(arb_gate.SHARED_TEST_DIRECTORY),
+                    pattern="test_executor.py",
+                )
+            )
+        )
+
+        self.assertTrue(executor_identifiers)
+        self.assertEqual(executor_identifiers, expected)
+        self.assertEqual(len(identifiers), len(set(identifiers)))
+
     def test_pr_gate_requires_a_disposable_exact_workflow_runner(self) -> None:
         source = WORKFLOW.read_text(encoding="utf-8")
         runner_contracts = [

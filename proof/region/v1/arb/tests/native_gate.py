@@ -12,7 +12,7 @@ REPO = Path(__file__).resolve().parents[5]
 sys.path.insert(0, str(REPO))
 
 from proof.region.v1.arb.tests import gate  # noqa: E402
-from proof.region.v1.arb.tests.test_executor import (  # noqa: E402
+from proof.region.v1.tests.test_executor import (  # noqa: E402
     NativeLinuxIntegrationTests,
 )
 from proof.region.v1.arb.tests.test_receipt import (  # noqa: E402

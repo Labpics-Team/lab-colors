@@ -288,8 +288,8 @@ def _run_identity_v1(
         transcript.counters,
         transcript.witness_store,
     )
-    invocation_identity = pipeline.invocation_identity_v1(invocation)
-    platform_identity = pipeline.platform_identity_v1(platform_value)
+    invocation_identity = executor.invocation_identity_v1(invocation)
+    platform_identity = executor.platform_identity_v1(platform_value)
     expected_claim = protocol.RunClaimV1.for_transcript(
         request.job,
         build.comparator.manifest,
@@ -716,8 +716,8 @@ class SourceBoundArbControllerV1:
                 str(error),
             )
         try:
-            invocation_identity = pipeline.invocation_identity_v1(invocation)
-            platform_identity = pipeline.platform_identity_v1(capability)
+            invocation_identity = executor.invocation_identity_v1(invocation)
+            platform_identity = executor.platform_identity_v1(capability)
             run_claim = protocol.RunClaimV1.for_transcript(
                 replay_request.job,
                 built.comparator.manifest,

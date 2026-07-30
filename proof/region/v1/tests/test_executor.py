@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Hostile tests for the Linux-only Arb process boundary."""
+"""Hostile tests for the shared Linux-only proof process boundary."""
 
 from __future__ import annotations
 
@@ -19,9 +19,8 @@ from pathlib import Path
 from unittest import mock
 
 
-ROOT = Path(__file__).resolve().parents[2]
-ARB_ROOT = ROOT / "arb"
-sys.path.insert(0, str(ARB_ROOT))
+PROOF = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(PROOF))
 
 import executor  # noqa: E402
 
@@ -172,7 +171,7 @@ def _request(**changes: object) -> executor.ExecutionRequestV1:
     values: dict[str, object] = {
         "executable": _static_elf(),
         "argv": (
-            b"arb-evaluator",
+            b"proof-evaluator",
             b"--manifest-identity",
             b"1" * 64,
             b"--job",
@@ -373,6 +372,90 @@ class _ReadbackCgroup(executor._CgroupV2V1):
         return self.values[name]
 
 
+class SharedExecutorBoundaryTests(unittest.TestCase):
+    def test_executor_is_one_shared_leaf_outside_engine_packages(self) -> None:
+        shared = PROOF / "executor.py"
+
+        self.assertTrue(shared.is_file())
+        self.assertFalse((PROOF / "arb/executor.py").exists())
+        self.assertEqual(Path(executor.__file__).resolve(), shared.resolve())
+        source = shared.read_text(encoding="utf-8")
+        self.assertNotIn("Arb", source)
+        self.assertNotIn("labcolors-arb", source.lower())
+        self.assertNotIn("mpfi", source.lower())
+        for engine_import in (
+            "import arb",
+            "from arb",
+            ".arb",
+            "import mpfi",
+            "from mpfi",
+            ".mpfi",
+        ):
+            with self.subTest(engine_import=engine_import):
+                self.assertNotIn(engine_import, source.lower())
+
+    def test_execution_identities_match_independent_literal_goldens(self) -> None:
+        request = _request()
+        platform_value = executor.SupportedV1(
+            "linux-x86_64",
+            executor.SANDBOX_POLICY_RELEASE_V1,
+        )
+
+        self.assertEqual(
+            executor.invocation_identity_v1(request).hex(),
+            "4c5bf676852b086fe7909a572bdbcc497ea52cec8d5affbe162fcd776605c384",
+        )
+        self.assertEqual(
+            executor.platform_identity_v1(platform_value).hex(),
+            "0e37fa87cadce6814466528b2ea419e964554339bcbcb8d27c2da66c95dabc51",
+        )
+
+        object.__setattr__(platform_value, "sandbox_policy_release", "foreign")
+        with self.assertRaises(TypeError):
+            executor.platform_identity_v1(platform_value)
+
+    def test_invocation_identity_binds_every_representable_coordinate(self) -> None:
+        request = _request()
+        baseline = executor.invocation_identity_v1(request)
+        limit_mutations = (
+            {"max_executable_bytes": request.limits.max_executable_bytes + 1},
+            {"max_stdin_bytes": request.limits.max_stdin_bytes + 1},
+            {"max_argument_bytes": request.limits.max_argument_bytes + 1},
+            {"max_stdout_bytes": request.limits.max_stdout_bytes + 1},
+            {"max_stderr_bytes": request.limits.max_stderr_bytes + 1},
+            {"wall_timeout_ns": request.limits.wall_timeout_ns + 1},
+            {"memory_max_bytes": request.limits.memory_max_bytes + 1},
+        )
+        mutants = (
+            _request(executable=request.executable + b"x"),
+            _request(argv=request.argv + (b"--strict",)),
+            _request(
+                environment=((b"LC_ALL", b"POSIX"), (b"TZ", b"UTC")),
+            ),
+            _request(cwd=b"/"),
+            _request(stdin=request.stdin + b"x"),
+            _request(umask=0o022),
+            *(
+                _request(limits=replace(request.limits, **changes))
+                for changes in limit_mutations
+            ),
+        )
+
+        self.assertEqual(len(mutants), 13)
+        identities = {executor.invocation_identity_v1(item) for item in mutants}
+        self.assertEqual(len(identities), 13)
+        self.assertTrue(
+            all(executor.invocation_identity_v1(item) != baseline for item in mutants)
+        )
+
+    def test_invalidated_request_cannot_be_reidentified(self) -> None:
+        request = _request()
+        object.__setattr__(request.limits, "pids_max", 2)
+
+        with self.assertRaises(executor.ExecutionRequestErrorV1):
+            executor.invocation_identity_v1(request)
+
+
 class RequestAdmissionTests(unittest.TestCase):
     def test_combined_dynamic_fixture_points_after_its_full_header_table(self) -> None:
         elf = _static_elf(interpreter=True, needed=True)
@@ -400,7 +483,7 @@ class RequestAdmissionTests(unittest.TestCase):
         self.assertEqual(
             request.argv,
             (
-                b"arb-evaluator",
+                b"proof-evaluator",
                 b"--manifest-identity",
                 b"1" * 64,
                 b"--job",
@@ -415,7 +498,7 @@ class RequestAdmissionTests(unittest.TestCase):
 
     def test_argv_environment_cwd_and_stdin_are_strict_bytes(self) -> None:
         cases = (
-            ({"argv": [b"arb-evaluator"]}, executor.RequestReasonV1.WRONG_TYPE),
+            ({"argv": [b"proof-evaluator"]}, executor.RequestReasonV1.WRONG_TYPE),
             ({"argv": (b"",)}, executor.RequestReasonV1.EMPTY_ARGV_ZERO),
             ({"argv": (b"arb\0evil",)}, executor.RequestReasonV1.NUL_BYTE),
             ({"environment": {b"LC_ALL": b"C"}}, executor.RequestReasonV1.WRONG_TYPE),
@@ -1105,7 +1188,7 @@ class SameObjectAndObserverProtocolTests(unittest.TestCase):
 
         sealed = executor._seal_executable_v1(executable, operations)
         sealed.execveat(
-            (b"arb-evaluator",),
+            (b"proof-evaluator",),
             ((b"LC_ALL", b"C"),),
             operations,
         )

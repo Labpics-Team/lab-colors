@@ -132,8 +132,6 @@ _PIPELINE_POLICY_ID_LABEL_V1 = b"labcolors.proof-region.arb-pipeline-policy.v1\0
 _BUILD_INPUT_BUNDLE_ID_LABEL_V1 = (
     b"labcolors.proof-region.arb-build-input-bundle.v1\0"
 )
-_INVOCATION_ID_LABEL_V1 = b"labcolors.proof-region.arb-invocation.v1\0"
-_PLATFORM_ID_LABEL_V1 = b"labcolors.proof-region.arb-run-platform.v1\0"
 _BUILD_SOURCES_TOKEN = object()
 _COMPARATOR_TOKEN = object()
 _BUILD_OBSERVATION_TOKEN = object()
@@ -2513,44 +2511,6 @@ BuildResultV1: TypeAlias = (
     | BuildRejectedV1
     | NonReproducibleBuildV1
 )
-
-
-def invocation_identity_v1(request: executor.ExecutionRequestV1) -> bytes:
-    if type(request) is not executor.ExecutionRequestV1:
-        raise TypeError("request must be ExecutionRequestV1")
-    chunks: list[bytes] = [hashlib.sha256(request.executable).digest()]
-    chunks.append(len(request.argv).to_bytes(4, "big"))
-    chunks.extend(request.argv)
-    chunks.append(len(request.environment).to_bytes(4, "big"))
-    for key, value in request.environment:
-        chunks.extend((key, value))
-    chunks.extend(
-        (
-            request.cwd,
-            hashlib.sha256(request.stdin).digest(),
-            len(request.stdin).to_bytes(8, "big"),
-            request.umask.to_bytes(4, "big"),
-        )
-    )
-    for item in fields(request.limits):
-        chunks.append(getattr(request.limits, item.name).to_bytes(8, "big"))
-    return _identity(_INVOCATION_ID_LABEL_V1, tuple(chunks))
-
-
-def platform_identity_v1(report: executor.SupportedV1) -> bytes:
-    if (
-        type(report) is not executor.SupportedV1
-        or report.platform != executor.EXECUTION_PLATFORM_V1
-        or report.sandbox_policy_release != executor.SANDBOX_POLICY_RELEASE_V1
-    ):
-        raise TypeError("report must be the exact V1 supported platform")
-    return _identity(
-        _PLATFORM_ID_LABEL_V1,
-        (
-            report.platform.encode("ascii"),
-            report.sandbox_policy_release.encode("ascii"),
-        ),
-    )
 
 
 class ControlledPipelineV1:
