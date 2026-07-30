@@ -1,16 +1,17 @@
 #!/usr/bin/env python3
-"""Controlled offline BUILD/RUN observations for the Arb evaluator.
+"""Controlled offline BUILD observations for the Arb evaluator.
 
 The unsealed Linux x64 host and its Docker daemon are explicitly inside this
 V1 trust boundary. Provider identity and host freshness are not observable
 here. This module emits neither SLSA nor source-bound receipts: it observes two
-fresh-container builds, owns the exact post-exit output bytes, and can feed that
-same bytes object to an explicitly diagnostic, unsealed RUN observation.
+fresh-container builds and owns their exact output bytes.  The one-shot
+source-bound controller owns RUN and receipt sealing in ``receipt.py``.
 """
 
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import os
 import platform
@@ -18,18 +19,18 @@ import selectors
 import signal
 import stat
 import subprocess
+import tarfile
 import tempfile
 import time
-from dataclasses import dataclass, fields
+from dataclasses import dataclass, field, fields
 from enum import StrEnum
 from functools import cached_property
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from typing import NoReturn, Protocol, TypeAlias
 
 import executor
 import provenance
 import region_proof_protocol as protocol
-import snapshot
 
 
 OCI_IMAGE_MANIFEST_SHA256_V1 = (
@@ -52,7 +53,7 @@ GENERATED_FORMULA_SHA256_V1 = "9958f20c8ca598625db0593a45f8f8bc79e4b2f22b53263b6
 _PINNED_BUILD_SOURCE_SHA256_V1 = {
     FORMULA_SPEC_PATH_V1: FORMULA_SPEC_SHA256_V1,
     GENERATED_FORMULA_PATH_V1: GENERATED_FORMULA_SHA256_V1,
-    BUILD_RECIPE_PATH_V1: "9fadd62db18ecd1a879363c70ad43c08479f34edc536d40eb197177ae78edfe7",
+    BUILD_RECIPE_PATH_V1: "92d6de1a321d5e097e122eeda68111d75283089b0c75adc0d359d46494a65390",
     FORMULA_GENERATOR_PATH_V1: "16629cc3a2ef745ae244ae4762f8946a6546972886f96beeb9ee4920b043040c",
     "proof/region/v1/arb/evaluator/formula.h": "46fd5ad1b68b728efcd990a71d1dcc273b75e3391d8c06ef2fd0ac6a4d7dfdbd",
     "proof/region/v1/arb/evaluator/hash.c": "c28e6281208f09ca15fa74aea0091f27726ed68efc3480c34a7db33b8ca3567e",
@@ -79,11 +80,44 @@ DOCKER_PROBE_TIMEOUT_NS_V1 = 30 * 1_000_000_000
 MAX_BUILD_SOURCE_FILE_BYTES_V1 = 16 * 1024 * 1024
 MAX_BUILD_SOURCE_TOTAL_BYTES_V1 = 32 * 1024 * 1024
 
-# FLINT's exact locked qsieve path uses /tmp directly rather than TMPDIR.  A
-# container-private tmpfs preserves a read-only root without a host bind,
-# volume, or reusable writable-layer scratch.  POSIX sticky-directory mode is
-# required because the container runs as the unprivileged host runner identity.
-_BUILD_TMPFS_SPEC_V1 = "/tmp:rw,noexec,nosuid,nodev,mode=1777"
+# FLINT's exact locked qsieve path uses /tmp directly rather than TMPDIR.  This
+# independent operational cap is part of the build policy; overflow rejects.
+BUILD_TMP_LIMIT_BYTES_V1 = 512 * 1024 * 1024
+_BUILD_TMPFS_SPEC_V1 = (
+    f"/tmp:rw,noexec,nosuid,nodev,size={BUILD_TMP_LIMIT_BYTES_V1},mode=1777"
+)
+
+# This is a versioned resource policy, not a mathematical constant.  Four GiB
+# is the first shipping cap for one serial GMP/MPFR/FLINT build plus their
+# upstream test artifacts.  The no-skip native gate is the authority for
+# lowering it; exhaustion rejects the build instead of falling back to a host
+# directory or an unbounded Docker volume.
+BUILD_STATE_LIMIT_BYTES_V1 = 4 * 1024 * 1024 * 1024
+_BUILD_STATE_TMPFS_SPEC_V1 = (
+    f"/build:rw,exec,nosuid,nodev,size={BUILD_STATE_LIMIT_BYTES_V1},mode=0777"
+)
+
+_BUILD_BOOTSTRAP_V1 = r"""set -eu
+exec 3>&1
+exec 1>&2
+umask 077
+readonly bundle=/build/input.bundle
+readonly snapshot=/build/snapshot
+/usr/bin/cat > "$bundle"
+actual_length=$(/usr/bin/wc -c < "$bundle")
+if [ "$actual_length" != "$1" ]; then
+    printf '%s\n' 'build input bundle length mismatch' >&2
+    exit 65
+fi
+printf '%s  %s\n' "$2" "$bundle" | /usr/bin/sha256sum --check --strict -
+/usr/bin/mkdir "$snapshot" /build/work
+umask 022
+/usr/bin/tar --extract --file "$bundle" --directory "$snapshot" --no-same-owner
+/usr/bin/rm "$bundle"
+umask 077
+/bin/sh "$snapshot/workspace/proof/region/v1/arb/build.sh"
+/usr/bin/cat /build/work/arb-evaluator-v1 >&3
+"""
 
 _BUILD_SOURCES_ID_LABEL_V1 = b"labcolors.proof-region.arb-build-sources.v1\0"
 _BUILD_INPUT_ID_LABEL_V1 = b"labcolors.proof-region.arb-compiler-inputs.v1\0"
@@ -95,12 +129,19 @@ _FLINT_RELEASE_ONLY_ID_LABEL_V1 = (
     b"labcolors.proof-region.flint-project-pinned-release-only.v1\0"
 )
 _PIPELINE_POLICY_ID_LABEL_V1 = b"labcolors.proof-region.arb-pipeline-policy.v1\0"
+_BUILD_INPUT_BUNDLE_ID_LABEL_V1 = (
+    b"labcolors.proof-region.arb-build-input-bundle.v1\0"
+)
 _INVOCATION_ID_LABEL_V1 = b"labcolors.proof-region.arb-invocation.v1\0"
 _PLATFORM_ID_LABEL_V1 = b"labcolors.proof-region.arb-run-platform.v1\0"
 _BUILD_SOURCES_TOKEN = object()
 _COMPARATOR_TOKEN = object()
 _BUILD_OBSERVATION_TOKEN = object()
-_PIPELINE_OBSERVATION_TOKEN = object()
+_BUILD_INPUT_BUNDLE_TOKEN = object()
+_BUILD_INPUT_PROGRESS_TOKEN = object()
+_BUILD_INPUT_TRANSFER_TOKEN = object()
+_DOCKER_COMMAND_EXITED_TOKEN = object()
+_DOCKER_BUILD_EXITED_TOKEN = object()
 
 
 def _blob(value: bytes) -> bytes:
@@ -239,6 +280,31 @@ class AdmittedBuildSourcesV1:
         return _source_subset_identity(_FORMULA_SUPPORT_ID_LABEL_V1, support)
 
 
+def build_source_manifest_bytes_v1(sources: AdmittedBuildSourcesV1) -> bytes:
+    """Replay and encode the canonical retained build-source manifest."""
+
+    if type(sources) is not AdmittedBuildSourcesV1:
+        raise TypeError("sources must be AdmittedBuildSourcesV1")
+    replayed = admit_build_sources_v1(sources.files)
+    if (
+        replayed.identity != sources.identity
+        or replayed.build_input_identity != sources.build_input_identity
+        or replayed.formula_support_identity != sources.formula_support_identity
+    ):
+        raise TypeError("retained build-source coordinates changed")
+    chunks: list[bytes] = [len(sources.files).to_bytes(4, "big")]
+    for item in sources.files:
+        chunks.extend(
+            (
+                item.path.encode("ascii"),
+                item.mode.to_bytes(4, "big"),
+                len(item.contents).to_bytes(8, "big"),
+                hashlib.sha256(item.contents).digest(),
+            )
+        )
+    return b"".join(_blob(chunk) for chunk in chunks)
+
+
 def _source_subset_identity(
     label: bytes,
     files_value: tuple[BuildSourceFileV1, ...],
@@ -282,6 +348,238 @@ def admit_build_sources_v1(
     )
 
 
+@dataclass(frozen=True, init=False)
+class SealedBuildInputBundleV1:
+    """One controller-owned immutable byte object reused by both BUILDs."""
+
+    source_identity: bytes
+    build_input_identity: bytes
+    sha256: bytes
+    length: int
+    identity: bytes
+    _contents: bytes = field(repr=False, compare=False)
+
+    def __init__(
+        self,
+        source_identity: bytes,
+        build_input_identity: bytes,
+        contents: bytes,
+        *,
+        _token: object,
+    ) -> None:
+        if _token is not _BUILD_INPUT_BUNDLE_TOKEN:
+            raise TypeError(
+                "SealedBuildInputBundleV1 is created only by the build controller"
+            )
+        if not _valid_digest(source_identity) or not _valid_digest(
+            build_input_identity
+        ):
+            raise TypeError("invalid build input coordinates")
+        if type(contents) is not bytes or not contents:
+            raise TypeError("build input bundle must be owned nonempty bytes")
+        digest = hashlib.sha256(contents).digest()
+        identity = _identity(
+            _BUILD_INPUT_BUNDLE_ID_LABEL_V1,
+            (
+                source_identity,
+                build_input_identity,
+                len(contents).to_bytes(8, "big"),
+                digest,
+                hashlib.sha256(_BUILD_BOOTSTRAP_V1.encode("utf-8")).digest(),
+            ),
+        )
+        for name, value in (
+            ("source_identity", source_identity),
+            ("build_input_identity", build_input_identity),
+            ("sha256", digest),
+            ("length", len(contents)),
+            ("identity", identity),
+            ("_contents", contents),
+        ):
+            object.__setattr__(self, name, value)
+
+
+def sealed_build_input_bundle_is_well_bound_v1(value: object) -> bool:
+    if type(value) is not SealedBuildInputBundleV1:
+        return False
+    try:
+        digest = hashlib.sha256(value._contents).digest()
+        identity = _identity(
+            _BUILD_INPUT_BUNDLE_ID_LABEL_V1,
+            (
+                value.source_identity,
+                value.build_input_identity,
+                len(value._contents).to_bytes(8, "big"),
+                digest,
+                hashlib.sha256(_BUILD_BOOTSTRAP_V1.encode("utf-8")).digest(),
+            ),
+        )
+        return (
+            _valid_digest(value.source_identity)
+            and _valid_digest(value.build_input_identity)
+            and type(value._contents) is bytes
+            and bool(value._contents)
+            and value.length == len(value._contents)
+            and value.sha256 == digest
+            and value.identity == identity
+        )
+    except Exception:
+        return False
+
+
+def _canonical_tar_v1(
+    entries: tuple[tuple[str, int, bytes], ...],
+) -> bytes:
+    if (
+        type(entries) is not tuple
+        or not entries
+        or tuple(path for path, _mode, _contents in entries)
+        != tuple(sorted(path for path, _mode, _contents in entries))
+        or len({path for path, _mode, _contents in entries}) != len(entries)
+    ):
+        raise TypeError("build bundle entries must be a canonical nonempty set")
+    paths = tuple(path for path, _mode, _contents in entries)
+    folded_paths: set[str] = set()
+    directories: set[str] = set()
+    for path, _mode, _contents in entries:
+        _logical_path(path)
+        folded = path.lower()
+        if folded in folded_paths:
+            raise TypeError("build bundle paths must be case-distinct")
+        folded_paths.add(folded)
+        parts = path.split("/")[:-1]
+        for length in range(1, len(parts) + 1):
+            directories.add("/".join(parts[:length]))
+    if directories.intersection(paths):
+        raise TypeError("build bundle file cannot also be a directory")
+    output = io.BytesIO()
+    with tarfile.open(fileobj=output, mode="w", format=tarfile.USTAR_FORMAT) as archive:
+        for path in sorted(directories, key=lambda value: (value.count("/"), value)):
+            member = tarfile.TarInfo(path)
+            member.type = tarfile.DIRTYPE
+            member.mode = 0o755
+            member.uid = 0
+            member.gid = 0
+            member.uname = ""
+            member.gname = ""
+            member.mtime = 0
+            member.size = 0
+            archive.addfile(member)
+        for path, mode, contents in entries:
+            _logical_path(path)
+            if (
+                type(mode) is not int
+                or mode not in (0o644, 0o755)
+                or type(contents) is not bytes
+            ):
+                raise TypeError("invalid build bundle entry")
+            member = tarfile.TarInfo(path)
+            member.type = tarfile.REGTYPE
+            member.mode = mode
+            member.uid = 0
+            member.gid = 0
+            member.uname = ""
+            member.gname = ""
+            member.mtime = 0
+            member.size = len(contents)
+            archive.addfile(member, io.BytesIO(contents))
+    return output.getvalue()
+
+
+def _normalized_source_entries_v1(
+    lock: provenance.SourceReleaseLockV1,
+    admitted: provenance.SafeSourceArchiveV1,
+) -> tuple[tuple[str, int, bytes], ...]:
+    replayed, raw_tar = provenance.replay_admitted_source_archive_v1(
+        lock,
+        admitted,
+    )
+    if (
+        replayed.source_lock_identity != admitted.source_lock_identity
+        or replayed.archive_sha256 != admitted.archive_sha256
+        or replayed.tree_identity != admitted.tree_identity
+        or replayed.regular_file_count != admitted.regular_file_count
+        or replayed.regular_file_bytes != admitted.regular_file_bytes
+        or replayed.files != admitted.files
+    ):
+        raise TypeError("admitted source coordinates changed before bundle sealing")
+    expected = {item.path: item for item in replayed.files}
+    values: list[tuple[str, int, bytes]] = []
+    seen: set[str] = set()
+    with tarfile.open(fileobj=io.BytesIO(raw_tar), mode="r:") as archive:
+        for member in archive:
+            if member.isdir():
+                continue
+            if not member.isreg() or not member.name.startswith(lock.root_prefix):
+                raise TypeError("admitted source replay contains a foreign member")
+            relative = member.name[len(lock.root_prefix) :]
+            coordinate = expected.get(relative)
+            if coordinate is None or relative in seen:
+                raise TypeError("admitted source replay changed its file set")
+            stream = archive.extractfile(member)
+            if stream is None:
+                raise TypeError("admitted source replay lost a regular file")
+            chunks: list[bytes] = []
+            length = 0
+            hasher = hashlib.sha256()
+            while True:
+                chunk = stream.read(provenance.READ_CHUNK_BYTES)
+                if not chunk:
+                    break
+                length += len(chunk)
+                if length > coordinate.length:
+                    raise TypeError("admitted source replay exceeded locked length")
+                chunks.append(chunk)
+                hasher.update(chunk)
+            if length != coordinate.length or hasher.digest() != coordinate.sha256:
+                raise TypeError("admitted source replay changed locked contents")
+            values.append(
+                (
+                    f"inputs/{lock.root_prefix[:-1]}/{relative}",
+                    coordinate.mode,
+                    b"".join(chunks),
+                )
+            )
+            seen.add(relative)
+    if seen != set(expected):
+        raise TypeError("admitted source replay is incomplete")
+    return tuple(sorted(values))
+
+
+def _seal_build_input_bundle_v1(
+    request: "PipelineRequestV1",
+) -> SealedBuildInputBundleV1:
+    if type(request) is not PipelineRequestV1:
+        raise TypeError("request must be PipelineRequestV1")
+    source_entries = tuple(
+        entry
+        for lock, admitted in zip(
+            request.source_lock.sources,
+            request.admitted_sources.sources,
+            strict=True,
+        )
+        for entry in _normalized_source_entries_v1(lock, admitted)
+    )
+    workspace_entries = tuple(
+        (
+            "inputs/formula.generated.c"
+            if item.path == GENERATED_FORMULA_PATH_V1
+            else f"workspace/{item.path}",
+            item.mode,
+            item.contents,
+        )
+        for item in request.build_sources.files
+        if item.path not in (FORMULA_SPEC_PATH_V1, FORMULA_GENERATOR_PATH_V1)
+    )
+    contents = _canonical_tar_v1(tuple(sorted(source_entries + workspace_entries)))
+    return SealedBuildInputBundleV1(
+        request.admitted_sources.identity,
+        request.build_sources.build_input_identity,
+        contents,
+        _token=_BUILD_INPUT_BUNDLE_TOKEN,
+    )
+
+
 class HostTrustBoundaryV1(StrEnum):
     UNSEALED_LINUX_X64_DOCKER_HOST = "unsealed-linux-x64-docker-host"
 
@@ -298,17 +596,17 @@ def pipeline_policy_identity_v1(
             OCI_PLATFORM_V1.encode("ascii"),
             host_trust.value.encode("ascii"),
             b"build-observation=diagnostic-unsealed-v1",
-            b"run-observation=diagnostic-unsealed-v1",
             b"network=none",
             b"rootfs=readonly",
             b"scratch-tmpfs=" + _BUILD_TMPFS_SPEC_V1.encode("ascii"),
+            b"build-state-tmpfs=" + _BUILD_STATE_TMPFS_SPEC_V1.encode("ascii"),
             b"cap-drop=all",
             b"no-new-privileges=true",
-            b"inputs=readonly-bind",
-            b"workspace=readonly-bind",
-            f"source-snapshot-mtime-ns={snapshot.SOURCE_SNAPSHOT_MTIME_NS_V1}".encode(
-                "ascii"
-            ),
+            b"inputs=one-controller-sealed-normalized-tree-ustar",
+            b"transport=bounded-docker-stdin-v1",
+            b"container-admission=exact-length-and-sha256-before-extraction",
+            b"output=bounded-docker-stdout-v1",
+            hashlib.sha256(_BUILD_BOOTSTRAP_V1.encode("utf-8")).digest(),
             b"fresh-container-count=2",
         ),
     )
@@ -670,7 +968,8 @@ class PipelineRequestV1:
             for key, value in ((b"LC_ALL", b"C"), (b"TZ", b"UTC"))
         )
         if (
-            len(job_bytes) > self.execution_limits.max_stdin_bytes
+            self.execution_limits.max_executable_bytes > BUILD_STDOUT_LIMIT_V1
+            or len(job_bytes) > self.execution_limits.max_stdin_bytes
             or invocation_bytes > self.execution_limits.max_argument_bytes
         ):
             raise PipelineInputErrorV1(
@@ -684,8 +983,6 @@ class DockerBlockerReasonV1(StrEnum):
     DOCKER_UNAVAILABLE = "docker_unavailable"
     IMAGE_UNAVAILABLE = "image_unavailable"
     IMAGE_IDENTITY_MISMATCH = "image_identity_mismatch"
-    ISOLATION_UNAVAILABLE = "isolation_unavailable"
-    SAME_OBJECT_OUTPUT_UNAVAILABLE = "same_object_output_unavailable"
     BACKEND_CONTRACT = "backend_contract"
 
 
@@ -744,37 +1041,24 @@ def _container_name(value: object) -> str:
 @dataclass(frozen=True)
 class DockerBuildRequestV1:
     attempt: int
-    root_directory: Path
-    inputs_directory: Path
-    workspace_directory: Path
-    build_directory: Path
-    output_directory: Path
+    input_bundle: SealedBuildInputBundleV1
+    max_executable_bytes: int
     cid_file: Path
     container_name: str
 
     def __post_init__(self) -> None:
         if type(self.attempt) is not int or self.attempt not in (1, 2):
             raise TypeError("attempt must be 1 or 2")
-        paths = tuple(
-            _absolute_path(getattr(self, field_name), field_name)
-            for field_name in (
-                "root_directory",
-                "inputs_directory",
-                "workspace_directory",
-                "build_directory",
-                "output_directory",
-                "cid_file",
-            )
-        )
+        if not sealed_build_input_bundle_is_well_bound_v1(self.input_bundle):
+            raise TypeError("input_bundle must be controller sealed and well bound")
+        if (
+            type(self.max_executable_bytes) is not int
+            or self.max_executable_bytes <= 0
+            or self.max_executable_bytes > BUILD_STDOUT_LIMIT_V1
+        ):
+            raise TypeError("invalid executable output limit")
+        _absolute_path(self.cid_file, "cid_file")
         _container_name(self.container_name)
-        root = self.root_directory
-        if len(set(paths)) != len(paths):
-            raise TypeError("build paths must be distinct")
-        for path in paths[1:]:
-            try:
-                path.relative_to(root)
-            except ValueError:
-                raise TypeError("build path escapes controller root") from None
 
 
 def _bounded_bytes(value: object, maximum: int, field_name: str) -> bytes:
@@ -783,27 +1067,214 @@ def _bounded_bytes(value: object, maximum: int, field_name: str) -> bytes:
     return value
 
 
-@dataclass(frozen=True)
-class DockerBuildExitedV1:
+@dataclass(frozen=True, init=False)
+class BuildInputTransferProgressV1:
+    bundle_identity: bytes
+    expected_length: int
+    expected_sha256: bytes
+    written_length: int
+    written_sha256: bytes
+
+    def __init__(
+        self,
+        bundle_identity: bytes,
+        expected_length: int,
+        expected_sha256: bytes,
+        written_length: int,
+        written_sha256: bytes,
+        *,
+        _token: object,
+    ) -> None:
+        if _token is not _BUILD_INPUT_PROGRESS_TOKEN:
+            raise TypeError("build input progress is controller-observed")
+        if not _valid_digest(bundle_identity) or not _valid_digest(expected_sha256):
+            raise TypeError("invalid build input progress coordinates")
+        if (
+            type(expected_length) is not int
+            or expected_length <= 0
+            or type(written_length) is not int
+            or written_length < 0
+            or written_length > expected_length
+            or type(written_sha256) is not bytes
+            or len(written_sha256) != 32
+        ):
+            raise TypeError("invalid build input progress")
+        for name, value in (
+            ("bundle_identity", bundle_identity),
+            ("expected_length", expected_length),
+            ("expected_sha256", expected_sha256),
+            ("written_length", written_length),
+            ("written_sha256", written_sha256),
+        ):
+            object.__setattr__(self, name, value)
+
+
+def _build_input_progress_v1(
+    bundle: SealedBuildInputBundleV1,
+    written_length: int,
+    written_sha256: bytes,
+) -> BuildInputTransferProgressV1:
+    if not sealed_build_input_bundle_is_well_bound_v1(bundle):
+        raise TypeError("build input bundle is not well bound")
+    if (
+        type(written_length) is not int
+        or written_length < 0
+        or written_length > bundle.length
+        or type(written_sha256) is not bytes
+        or written_sha256
+        != hashlib.sha256(bundle._contents[:written_length]).digest()
+    ):
+        raise TypeError("build input progress does not match the sealed bytes")
+    return BuildInputTransferProgressV1(
+        bundle.identity,
+        bundle.length,
+        bundle.sha256,
+        written_length,
+        written_sha256,
+        _token=_BUILD_INPUT_PROGRESS_TOKEN,
+    )
+
+
+@dataclass(frozen=True, init=False)
+class BuildInputTransferV1:
+    bundle_identity: bytes
+    expected_length: int
+    expected_sha256: bytes
+    written_length: int
+    written_sha256: bytes
+
+    def __init__(
+        self,
+        progress: BuildInputTransferProgressV1,
+        *,
+        _token: object,
+    ) -> None:
+        if _token is not _BUILD_INPUT_TRANSFER_TOKEN:
+            raise TypeError("build input transfer is controller-observed")
+        if (
+            type(progress) is not BuildInputTransferProgressV1
+            or progress.written_length != progress.expected_length
+            or progress.written_sha256 != progress.expected_sha256
+        ):
+            raise TypeError("completed build input transfer must be exact")
+        for name in (
+            "bundle_identity",
+            "expected_length",
+            "expected_sha256",
+            "written_length",
+            "written_sha256",
+        ):
+            object.__setattr__(self, name, getattr(progress, name))
+
+
+def _completed_build_input_transfer_v1(
+    bundle: SealedBuildInputBundleV1,
+    written_length: int,
+    written_sha256: bytes,
+) -> BuildInputTransferV1:
+    progress = _build_input_progress_v1(bundle, written_length, written_sha256)
+    return BuildInputTransferV1(
+        progress,
+        _token=_BUILD_INPUT_TRANSFER_TOKEN,
+    )
+
+
+@dataclass(frozen=True, init=False)
+class _DockerCommandExitedV1:
     returncode: int
     stdout: bytes
     stderr: bytes
 
-    def __post_init__(self) -> None:
-        if type(self.returncode) is not int:
+    def __init__(
+        self,
+        returncode: int,
+        stdout: bytes,
+        stderr: bytes,
+        *,
+        _token: object,
+    ) -> None:
+        if _token is not _DOCKER_COMMAND_EXITED_TOKEN:
+            raise TypeError("Docker command exit is controller-observed")
+        if type(returncode) is not int:
             raise TypeError("invalid Docker returncode")
-        _bounded_bytes(self.stdout, BUILD_STDOUT_LIMIT_V1, "stdout")
-        _bounded_bytes(self.stderr, BUILD_STDERR_LIMIT_V1, "stderr")
+        _bounded_bytes(stdout, BUILD_STDOUT_LIMIT_V1, "stdout")
+        _bounded_bytes(stderr, BUILD_STDERR_LIMIT_V1, "stderr")
+        object.__setattr__(self, "returncode", returncode)
+        object.__setattr__(self, "stdout", stdout)
+        object.__setattr__(self, "stderr", stderr)
+
+
+def _docker_command_exited_v1(
+    returncode: int,
+    stdout: bytes,
+    stderr: bytes,
+) -> _DockerCommandExitedV1:
+    return _DockerCommandExitedV1(
+        returncode,
+        stdout,
+        stderr,
+        _token=_DOCKER_COMMAND_EXITED_TOKEN,
+    )
+
+
+@dataclass(frozen=True, init=False)
+class DockerBuildExitedV1:
+    returncode: int
+    stdout: bytes
+    stderr: bytes
+    input_transfer: BuildInputTransferV1
+
+    def __init__(
+        self,
+        returncode: int,
+        stdout: bytes,
+        stderr: bytes,
+        input_transfer: BuildInputTransferV1,
+        *,
+        _token: object,
+    ) -> None:
+        if _token is not _DOCKER_BUILD_EXITED_TOKEN:
+            raise TypeError("Docker build exit is controller-observed")
+        if type(returncode) is not int:
+            raise TypeError("invalid Docker returncode")
+        _bounded_bytes(stdout, BUILD_STDOUT_LIMIT_V1, "stdout")
+        _bounded_bytes(stderr, BUILD_STDERR_LIMIT_V1, "stderr")
+        if type(input_transfer) is not BuildInputTransferV1:
+            raise TypeError("invalid Docker build input transfer")
+        object.__setattr__(self, "returncode", returncode)
+        object.__setattr__(self, "stdout", stdout)
+        object.__setattr__(self, "stderr", stderr)
+        object.__setattr__(self, "input_transfer", input_transfer)
+
+
+def _docker_build_exited_v1(
+    returncode: int,
+    stdout: bytes,
+    stderr: bytes,
+    input_transfer: BuildInputTransferV1,
+) -> DockerBuildExitedV1:
+    return DockerBuildExitedV1(
+        returncode,
+        stdout,
+        stderr,
+        input_transfer,
+        _token=_DOCKER_BUILD_EXITED_TOKEN,
+    )
 
 
 @dataclass(frozen=True)
 class DockerBuildTimedOutV1:
     stdout: bytes
     stderr: bytes
+    input_progress: BuildInputTransferProgressV1 | None = None
 
     def __post_init__(self) -> None:
         _bounded_bytes(self.stdout, BUILD_STDOUT_LIMIT_V1, "stdout")
         _bounded_bytes(self.stderr, BUILD_STDERR_LIMIT_V1, "stderr")
+        if self.input_progress is not None and type(
+            self.input_progress
+        ) is not BuildInputTransferProgressV1:
+            raise TypeError("invalid timed-out build input progress")
 
 
 class DockerOutputStreamV1(StrEnum):
@@ -816,12 +1287,17 @@ class DockerBuildOutputLimitV1:
     stream: DockerOutputStreamV1
     stdout: bytes
     stderr: bytes
+    input_progress: BuildInputTransferProgressV1 | None = None
 
     def __post_init__(self) -> None:
         if type(self.stream) is not DockerOutputStreamV1:
             raise TypeError("invalid Docker output stream")
         _bounded_bytes(self.stdout, BUILD_STDOUT_LIMIT_V1, "stdout")
         _bounded_bytes(self.stderr, BUILD_STDERR_LIMIT_V1, "stderr")
+        if self.input_progress is not None and type(
+            self.input_progress
+        ) is not BuildInputTransferProgressV1:
+            raise TypeError("invalid output-limited build input progress")
 
 
 @dataclass(frozen=True)
@@ -833,8 +1309,30 @@ class DockerBuildObserverFailureV1:
             raise TypeError("invalid Docker observer failure")
 
 
+@dataclass(frozen=True)
+class DockerBuildInputRejectedV1:
+    input_progress: BuildInputTransferProgressV1
+    stdout: bytes
+    stderr: bytes
+
+    def __post_init__(self) -> None:
+        if type(self.input_progress) is not BuildInputTransferProgressV1:
+            raise TypeError("invalid partial build input progress")
+        _bounded_bytes(self.stdout, BUILD_STDOUT_LIMIT_V1, "stdout")
+        _bounded_bytes(self.stderr, BUILD_STDERR_LIMIT_V1, "stderr")
+
+    @property
+    def written_length(self) -> int:
+        return self.input_progress.written_length
+
+    @property
+    def written_sha256(self) -> bytes:
+        return self.input_progress.written_sha256
+
+
 class DockerCleanupTriggerV1(StrEnum):
     PROCESS_EXIT = "process_exit"
+    INPUT_TRANSFER = "input_transfer"
     TIMEOUT = "timeout"
     OUTPUT_LIMIT = "output_limit"
     OBSERVER_FAILURE = "observer_failure"
@@ -846,6 +1344,7 @@ class DockerBuildCleanupFailureV1:
     detail: str
     stdout: bytes
     stderr: bytes
+    input_progress: BuildInputTransferProgressV1 | None = None
 
     def __post_init__(self) -> None:
         if type(self.trigger) is not DockerCleanupTriggerV1:
@@ -854,6 +1353,10 @@ class DockerBuildCleanupFailureV1:
             raise TypeError("invalid Docker cleanup failure")
         _bounded_bytes(self.stdout, BUILD_STDOUT_LIMIT_V1, "stdout")
         _bounded_bytes(self.stderr, BUILD_STDERR_LIMIT_V1, "stderr")
+        if self.input_progress is not None and type(
+            self.input_progress
+        ) is not BuildInputTransferProgressV1:
+            raise TypeError("invalid cleanup build input progress")
 
 
 DockerBuildProcessObservationV1: TypeAlias = (
@@ -861,7 +1364,12 @@ DockerBuildProcessObservationV1: TypeAlias = (
     | DockerBuildTimedOutV1
     | DockerBuildOutputLimitV1
     | DockerBuildObserverFailureV1
+    | DockerBuildInputRejectedV1
     | DockerBuildCleanupFailureV1
+)
+
+_DockerCommandObservationV1: TypeAlias = (
+    _DockerCommandExitedV1 | DockerBuildProcessObservationV1
 )
 
 
@@ -874,42 +1382,11 @@ class DockerBuildBackendV1(Protocol):
     ) -> DockerBuildProcessObservationV1: ...
 
 
-def _archive_file_manifest_bytes_v1(
-    files_value: tuple[provenance.ArchiveFileV1, ...],
-) -> bytes:
-    chunks: list[bytes] = [len(files_value).to_bytes(8, "big")]
-    for item in files_value:
-        chunks.extend(
-            (
-                item.path.encode("ascii"),
-                item.mode.to_bytes(4, "big"),
-                item.length.to_bytes(8, "big"),
-                item.sha256,
-            )
-        )
-    return b"".join(_blob(chunk) for chunk in chunks)
-
-
-def _source_snapshot_chunks_v1(
-    lock: provenance.SourceReleaseLockV1,
-    source: provenance.SafeSourceArchiveV1,
-) -> tuple[bytes, ...]:
-    return (
-        bytes((int(lock.role),)),
-        lock.encode(),
-        source.source_lock_identity,
-        source.archive_sha256,
-        source.tree_identity,
-        source.regular_file_count.to_bytes(8, "big"),
-        source.regular_file_bytes.to_bytes(8, "big"),
-        _archive_file_manifest_bytes_v1(source.files),
-        len(source.archive_bytes).to_bytes(8, "big"),
-        hashlib.sha256(source.archive_bytes).digest(),
-    )
-
-
-def _build_process_bytes_v1(process: DockerBuildExitedV1) -> bytes:
-    if type(process) is not DockerBuildExitedV1:
+def build_process_bytes_v1(process: DockerBuildExitedV1) -> bytes:
+    if (
+        type(process) is not DockerBuildExitedV1
+        or type(process.input_transfer) is not BuildInputTransferV1
+    ):
         raise TypeError("only successful typed build observations are encodable")
     return b"".join(
         (
@@ -918,6 +1395,11 @@ def _build_process_bytes_v1(process: DockerBuildExitedV1) -> bytes:
             hashlib.sha256(process.stdout).digest(),
             len(process.stderr).to_bytes(8, "big"),
             hashlib.sha256(process.stderr).digest(),
+            process.input_transfer.bundle_identity,
+            process.input_transfer.expected_length.to_bytes(8, "big"),
+            process.input_transfer.expected_sha256,
+            process.input_transfer.written_length.to_bytes(8, "big"),
+            process.input_transfer.written_sha256,
         )
     )
 
@@ -957,14 +1439,12 @@ def _derive_arb_comparator_for_build_v1(
         (
             b"gap:host-and-docker-daemon-not-source-bound",
             b"gap:unsealed-diagnostic-build-observer",
-            b"gap:unsealed-diagnostic-run-observer",
             b"gap:libc-libm-libpthread-libgcc-and-build-utility-source",
             b"gap:no-per-test-result-records",
             b"gap:no-git-derivation-for-project-pinned-release-only-files",
             b"gap:no-origin-authority-reverification",
             request.host_trust.value.encode("ascii"),
             b"build-observation=diagnostic-unsealed-v1",
-            b"run-observation=diagnostic-unsealed-v1",
             len(flint_lock.integrity.omitted_paths).to_bytes(4, "big"),
             *(
                 path.encode("ascii")
@@ -990,7 +1470,9 @@ def _derive_arb_comparator_for_build_v1(
         request.admitted_sources.sources,
         strict=True,
     ):
-        upstream_chunks.extend(_source_snapshot_chunks_v1(lock, source))
+        upstream_chunks.extend(
+            provenance.source_archive_replay_coordinates_v1(lock, source)
+        )
     upstream_source = _comparator_preimage_v1(
         b"labcolors.proof-region.arb-comparator.upstream-source.v1\0",
         tuple(upstream_chunks),
@@ -1058,7 +1540,7 @@ def _derive_arb_comparator_for_build_v1(
         evaluator_files,
     )
 
-    process_bytes = tuple(_build_process_bytes_v1(item) for item in build_processes)
+    process_bytes = tuple(build_process_bytes_v1(item) for item in build_processes)
     build_identity = _comparator_preimage_v1(
         b"labcolors.proof-region.arb-comparator.build-identity.v1\0",
         (
@@ -1251,7 +1733,7 @@ class NativeDockerBuildBackendV1:
                 cid_file=None,
             )
             if (
-                type(result) is not DockerBuildExitedV1
+                type(result) is not _DockerCommandExitedV1
                 or result.returncode != 0
                 or not result.stdout
                 or result.stderr
@@ -1298,16 +1780,11 @@ class NativeDockerBuildBackendV1:
     def command_for(self, request: DockerBuildRequestV1) -> tuple[str, ...]:
         if type(request) is not DockerBuildRequestV1:
             raise TypeError("request must be DockerBuildRequestV1")
-        mounts = (
-            f"type=bind,src={request.inputs_directory},dst=/inputs,readonly,bind-propagation=private",
-            f"type=bind,src={request.workspace_directory},dst=/workspace,readonly,bind-propagation=private",
-            f"type=bind,src={request.build_directory},dst=/build,bind-propagation=private",
-            f"type=bind,src={request.output_directory},dst=/out,bind-propagation=private",
-        )
         command = [
             str(self._docker_path),
             "run",
             "--rm",
+            "--interactive",
             "--pull",
             "never",
             "--platform",
@@ -1317,6 +1794,8 @@ class NativeDockerBuildBackendV1:
             "--read-only",
             "--tmpfs",
             _BUILD_TMPFS_SPEC_V1,
+            "--tmpfs",
+            _BUILD_STATE_TMPFS_SPEC_V1,
             "--cap-drop",
             "ALL",
             "--security-opt",
@@ -1332,14 +1811,23 @@ class NativeDockerBuildBackendV1:
             "--cidfile",
             str(request.cid_file),
         ]
-        for mount in mounts:
-            command.extend(("--mount", mount))
         command.extend(
             (
-                "--entrypoint",
-                "/bin/sh",
+            "--entrypoint",
+                "/usr/bin/env",
                 OCI_IMAGE_REFERENCE_V1,
-                f"/workspace/{BUILD_RECIPE_PATH_V1}",
+                "-i",
+                "PATH=/usr/local/bin:/usr/bin:/bin",
+                "LC_ALL=C",
+                "LANG=C",
+                "TZ=UTC",
+                "HOME=/nonexistent",
+                "/bin/sh",
+                "-c",
+                _BUILD_BOOTSTRAP_V1,
+                "labcolors-arb-build-bootstrap-v1",
+                str(request.input_bundle.length),
+                request.input_bundle.sha256.hex(),
             )
         )
         return tuple(command)
@@ -1352,11 +1840,12 @@ class NativeDockerBuildBackendV1:
             raise TypeError("request must be DockerBuildRequestV1")
         return self._observe_command(
             self.command_for(request),
-            stdout_limit=BUILD_STDOUT_LIMIT_V1,
+            stdout_limit=request.max_executable_bytes,
             stderr_limit=BUILD_STDERR_LIMIT_V1,
             timeout_ns=BUILD_TIMEOUT_NS_V1,
             cid_file=request.cid_file,
             container_name=request.container_name,
+            input_bundle=request.input_bundle,
         )
 
     def _observe_command(
@@ -1368,7 +1857,8 @@ class NativeDockerBuildBackendV1:
         timeout_ns: int,
         cid_file: Path | None,
         container_name: str | None = None,
-    ) -> DockerBuildProcessObservationV1:
+        input_bundle: SealedBuildInputBundleV1 | None = None,
+    ) -> _DockerCommandObservationV1:
         if (
             type(command) is not tuple
             or not command
@@ -1392,10 +1882,16 @@ class NativeDockerBuildBackendV1:
         if cid_file is not None:
             _absolute_path(cid_file, "cid_file")
             _container_name(container_name)
+        if input_bundle is not None and type(input_bundle) is not SealedBuildInputBundleV1:
+            raise TypeError("input_bundle must be controller sealed")
+        if input_bundle is not None and not sealed_build_input_bundle_is_well_bound_v1(
+            input_bundle
+        ):
+            return DockerBuildObserverFailureV1("build input bundle is not well bound")
         try:
             process = subprocess.Popen(
                 command,
-                stdin=subprocess.DEVNULL,
+                stdin=subprocess.PIPE if input_bundle is not None else subprocess.DEVNULL,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 cwd="/",
@@ -1405,7 +1901,20 @@ class NativeDockerBuildBackendV1:
             )
         except OSError:
             return DockerBuildObserverFailureV1("cannot start Docker CLI")
-        if process.stdout is None or process.stderr is None:
+        if (
+            process.stdout is None
+            or process.stderr is None
+            or (input_bundle is not None and process.stdin is None)
+        ):
+            input_progress = (
+                _build_input_progress_v1(
+                    input_bundle,
+                    0,
+                    hashlib.sha256(b"").digest(),
+                )
+                if input_bundle is not None
+                else None
+            )
             stop_detail = self._stop_process(process)
             cleanup_detail = (
                 self._cleanup_container(cid_file, container_name)
@@ -1418,23 +1927,52 @@ class NativeDockerBuildBackendV1:
                     stop_detail or cleanup_detail or "Docker cleanup failed",
                     b"",
                     b"",
+                    input_progress,
                 )
             return DockerBuildObserverFailureV1("Docker pipes unavailable")
 
         stdout = bytearray()
         stderr = bytearray()
-        streams = {
-            process.stdout.fileno(): (DockerOutputStreamV1.STDOUT, stdout, stdout_limit),
-            process.stderr.fileno(): (DockerOutputStreamV1.STDERR, stderr, stderr_limit),
-        }
         selector = selectors.DefaultSelector()
         terminal: DockerOutputStreamV1 | None = None
         timed_out = False
         observer_failed = False
+        input_failed = False
+        written = 0
+        input_hasher = hashlib.sha256()
+        bundle_view = (
+            memoryview(input_bundle._contents) if input_bundle is not None else None
+        )
         try:
-            for descriptor in streams:
+            streams = (
+                (
+                    process.stdout.fileno(),
+                    DockerOutputStreamV1.STDOUT,
+                    stdout,
+                    stdout_limit,
+                ),
+                (
+                    process.stderr.fileno(),
+                    DockerOutputStreamV1.STDERR,
+                    stderr,
+                    stderr_limit,
+                ),
+            )
+            for descriptor, stream, target, maximum in streams:
                 os.set_blocking(descriptor, False)
-                selector.register(descriptor, selectors.EVENT_READ)
+                selector.register(
+                    descriptor,
+                    selectors.EVENT_READ,
+                    ("read", stream, target, maximum),
+                )
+            if process.stdin is not None:
+                input_descriptor = process.stdin.fileno()
+                os.set_blocking(input_descriptor, False)
+                selector.register(
+                    input_descriptor,
+                    selectors.EVENT_WRITE,
+                    ("write",),
+                )
             start = self._clock()
             deadline = start + timeout_ns
             while selector.get_map() or process.poll() is None:
@@ -1444,35 +1982,79 @@ class NativeDockerBuildBackendV1:
                     break
                 timeout = min((deadline - now) / 1_000_000_000, 0.1)
                 for key, _events in selector.select(timeout):
-                    stream, target, maximum = streams[key.fd]
+                    if key.data[0] == "read":
+                        _kind, stream, target, maximum = key.data
+                        try:
+                            chunk = os.read(
+                                key.fd,
+                                min(64 * 1024, maximum + 1 - len(target)),
+                            )
+                        except BlockingIOError:
+                            continue
+                        if not chunk:
+                            selector.unregister(key.fd)
+                            continue
+                        target.extend(chunk)
+                        if len(target) > maximum:
+                            del target[maximum:]
+                            terminal = stream
+                            break
+                        continue
+                    if input_bundle is None or bundle_view is None:
+                        observer_failed = True
+                        break
                     try:
-                        chunk = os.read(key.fd, min(64 * 1024, maximum + 1 - len(target)))
+                        count = os.write(
+                            key.fd,
+                            bundle_view[written : written + 64 * 1024],
+                        )
                     except BlockingIOError:
                         continue
-                    if not chunk:
-                        selector.unregister(key.fd)
-                        continue
-                    target.extend(chunk)
-                    if len(target) > maximum:
-                        del target[maximum:]
-                        terminal = stream
+                    except BrokenPipeError:
+                        input_failed = True
                         break
-                if terminal is not None:
+                    if count <= 0:
+                        input_failed = True
+                        break
+                    input_hasher.update(bundle_view[written : written + count])
+                    written += count
+                    if written == input_bundle.length:
+                        selector.unregister(key.fd)
+                        if process.stdin is not None:
+                            process.stdin.close()
+                if terminal is not None or input_failed or observer_failed:
                     break
         except Exception:
             observer_failed = True
         finally:
             selector.close()
+            if process.stdin is not None and not process.stdin.closed:
+                process.stdin.close()
+            if bundle_view is not None:
+                bundle_view.release()
+
+        input_progress: BuildInputTransferProgressV1 | None = None
+        if input_bundle is not None:
+            try:
+                input_progress = _build_input_progress_v1(
+                    input_bundle,
+                    written,
+                    input_hasher.digest(),
+                )
+            except Exception:
+                observer_failed = True
 
         stop_detail: str | None = None
-        if timed_out or terminal is not None or observer_failed:
+        if (
+            timed_out
+            or terminal is not None
+            or observer_failed
+            or input_failed
+        ):
             stop_detail = self._stop_process(process)
-        else:
-            try:
-                process.wait(timeout=30)
-            except subprocess.TimeoutExpired:
-                timed_out = True
-                stop_detail = self._stop_process(process)
+        elif process.poll() is None:
+            timed_out = True
+            stop_detail = self._stop_process(process)
         process.stdout.close()
         process.stderr.close()
         cleanup_detail = (
@@ -1488,21 +2070,67 @@ class NativeDockerBuildBackendV1:
                 trigger = DockerCleanupTriggerV1.OUTPUT_LIMIT
             elif timed_out:
                 trigger = DockerCleanupTriggerV1.TIMEOUT
+            elif input_failed:
+                trigger = DockerCleanupTriggerV1.INPUT_TRANSFER
             return DockerBuildCleanupFailureV1(
                 trigger,
                 stop_detail or cleanup_detail or "Docker cleanup failed",
+                bytes(stdout),
+                bytes(stderr),
+                input_progress,
+            )
+        if input_failed:
+            if input_progress is None:
+                return DockerBuildObserverFailureV1(
+                    "build input progress could not be retained"
+                )
+            return DockerBuildInputRejectedV1(
+                input_progress,
                 bytes(stdout),
                 bytes(stderr),
             )
         if observer_failed:
             return DockerBuildObserverFailureV1("Docker output observation failed")
         if terminal is not None:
-            return DockerBuildOutputLimitV1(terminal, bytes(stdout), bytes(stderr))
+            return DockerBuildOutputLimitV1(
+                terminal,
+                bytes(stdout),
+                bytes(stderr),
+                input_progress,
+            )
         if timed_out:
-            return DockerBuildTimedOutV1(bytes(stdout), bytes(stderr))
+            return DockerBuildTimedOutV1(
+                bytes(stdout),
+                bytes(stderr),
+                input_progress,
+            )
         if type(process.returncode) is not int:
             return DockerBuildObserverFailureV1("Docker returncode unavailable")
-        return DockerBuildExitedV1(process.returncode, bytes(stdout), bytes(stderr))
+        if input_bundle is not None:
+            if (
+                input_progress is None
+                or written != input_bundle.length
+                or input_hasher.digest() != input_bundle.sha256
+            ):
+                return DockerBuildObserverFailureV1(
+                    "completed build input transfer invariant failed"
+                )
+            input_transfer = _completed_build_input_transfer_v1(
+                input_bundle,
+                written,
+                input_hasher.digest(),
+            )
+            return _docker_build_exited_v1(
+                process.returncode,
+                bytes(stdout),
+                bytes(stderr),
+                input_transfer,
+            )
+        return _docker_command_exited_v1(
+            process.returncode,
+            bytes(stdout),
+            bytes(stderr),
+        )
 
     def _clock(self) -> int:
         value = self._monotonic_ns()
@@ -1569,7 +2197,7 @@ class NativeDockerBuildBackendV1:
     def _observe_cleanup_command(
         self,
         command: tuple[str, ...],
-    ) -> DockerBuildProcessObservationV1:
+    ) -> _DockerCommandObservationV1:
         return self._observe_command(
             command,
             stdout_limit=DOCKER_PROBE_OUTPUT_LIMIT_V1,
@@ -1615,7 +2243,7 @@ class NativeDockerBuildBackendV1:
                     )
                 )
                 if (
-                    type(observation) is not DockerBuildExitedV1
+                    type(observation) is not _DockerCommandExitedV1
                     or observation.returncode != 0
                     or observation.stdout
                     or observation.stderr
@@ -1630,7 +2258,7 @@ class BuildFailureReasonV1(StrEnum):
     BACKEND_CONTRACT = "backend_contract"
     PROCESS_FAILED = "process_failed"
     CLEANUP_FAILED = "cleanup_failed"
-    INPUT_CHANGED = "input_changed"
+    INPUT_TRANSFER_FAILED = "input_transfer_failed"
     INVALID_OUTPUT = "invalid_output"
 
 
@@ -1696,9 +2324,14 @@ class DiagnosticBuildObservationV1:
     binary_sha256: bytes
     rebuild_sha256s: tuple[bytes, bytes]
     host_trust: HostTrustBoundaryV1
+    input_bundle_identity: bytes
+    input_bundle_sha256: bytes
+    input_bundle_length: int
     build_processes: tuple[DockerBuildExitedV1, DockerBuildExitedV1]
     comparator: DiagnosticArbComparatorV1
     _binary: bytes
+    _rebuild_binaries: tuple[bytes, bytes]
+    _input_bundle: SealedBuildInputBundleV1
 
     def __init__(
         self,
@@ -1716,9 +2349,13 @@ class DiagnosticBuildObservationV1:
         binary_sha256: bytes,
         rebuild_sha256s: tuple[bytes, bytes],
         host_trust: HostTrustBoundaryV1,
+        input_bundle_identity: bytes,
+        input_bundle_sha256: bytes,
+        input_bundle_length: int,
         build_processes: tuple[DockerBuildExitedV1, DockerBuildExitedV1],
         comparator: DiagnosticArbComparatorV1,
-        binary: bytes,
+        rebuild_binaries: tuple[bytes, bytes],
+        input_bundle: SealedBuildInputBundleV1,
         *,
         _token: object,
     ) -> None:
@@ -1736,6 +2373,8 @@ class DiagnosticBuildObservationV1:
             ("pipeline_policy_identity", pipeline_policy_identity),
             ("docker_daemon_observation_sha256", docker_daemon_observation_sha256),
             ("binary_sha256", binary_sha256),
+            ("input_bundle_identity", input_bundle_identity),
+            ("input_bundle_sha256", input_bundle_sha256),
         ):
             if not _valid_digest(value):
                 raise TypeError(f"invalid {name}")
@@ -1757,6 +2396,17 @@ class DiagnosticBuildObservationV1:
             raise TypeError("invalid reproducible-build digests")
         if type(host_trust) is not HostTrustBoundaryV1:
             raise TypeError("invalid host trust boundary")
+        if type(input_bundle_length) is not int or input_bundle_length <= 0:
+            raise TypeError("invalid build input bundle length")
+        if (
+            not sealed_build_input_bundle_is_well_bound_v1(input_bundle)
+            or input_bundle.identity != input_bundle_identity
+            or input_bundle.sha256 != input_bundle_sha256
+            or input_bundle.length != input_bundle_length
+            or input_bundle.build_input_identity != build_input_identity
+            or input_bundle.source_identity != structural_source_identity
+        ):
+            raise TypeError("diagnostic build lost its sealed input bundle")
         if pipeline_policy_identity != pipeline_policy_identity_v1(host_trust):
             raise TypeError("pipeline policy is not the fixed diagnostic policy")
         if (
@@ -1767,6 +2417,17 @@ class DiagnosticBuildObservationV1:
         ):
             raise TypeError("invalid build process observations")
         if (
+            any(
+                item.input_transfer.bundle_identity != input_bundle_identity
+                or item.input_transfer.expected_length != input_bundle_length
+                or item.input_transfer.expected_sha256 != input_bundle_sha256
+                or item.input_transfer.written_length != input_bundle_length
+                or item.input_transfer.written_sha256 != input_bundle_sha256
+                for item in build_processes
+            )
+        ):
+            raise TypeError("builds did not consume the exact sealed input bundle")
+        if (
             type(comparator) is not DiagnosticArbComparatorV1
             or comparator.structural_source_identity != structural_source_identity
             or comparator.build_input_identity != build_input_identity
@@ -1775,8 +2436,15 @@ class DiagnosticBuildObservationV1:
             or comparator.rebuild_sha256s != rebuild_sha256s
         ):
             raise TypeError("comparator does not bind this diagnostic build")
-        if type(binary) is not bytes or hashlib.sha256(binary).digest() != binary_sha256:
-            raise TypeError("invalid owned binary")
+        if (
+            type(rebuild_binaries) is not tuple
+            or len(rebuild_binaries) != 2
+            or any(type(item) is not bytes for item in rebuild_binaries)
+            or rebuild_binaries[0] != rebuild_binaries[1]
+            or tuple(hashlib.sha256(item).digest() for item in rebuild_binaries)
+            != rebuild_sha256s
+        ):
+            raise TypeError("invalid owned rebuild binaries")
         for field_name, field_value in (
             ("structural_source_identity", structural_source_identity),
             ("flint_commit_content_identity", flint_commit_content_identity),
@@ -1801,139 +2469,36 @@ class DiagnosticBuildObservationV1:
             ("binary_sha256", binary_sha256),
             ("rebuild_sha256s", rebuild_sha256s),
             ("host_trust", host_trust),
+            ("input_bundle_identity", input_bundle_identity),
+            ("input_bundle_sha256", input_bundle_sha256),
+            ("input_bundle_length", input_bundle_length),
             ("build_processes", build_processes),
             ("comparator", comparator),
         ):
             object.__setattr__(self, field_name, field_value)
-        object.__setattr__(self, "_binary", binary)
+        object.__setattr__(self, "_binary", rebuild_binaries[0])
+        object.__setattr__(self, "_rebuild_binaries", rebuild_binaries)
+        object.__setattr__(self, "_input_bundle", input_bundle)
 
     @property
     def binary(self) -> bytes:
         return self._binary
 
-
-@dataclass(frozen=True, init=False)
-class DiagnosticPipelineObservationV1:
-    """Diagnostic BUILD plus diagnostic RUN; never a receipt or native proof."""
-
-    build_observation: DiagnosticBuildObservationV1
-    invocation_identity: bytes
-    platform_identity: bytes
-    transcript: protocol.DecisionTranscriptV1
-    run_claim: protocol.RunClaimV1
-    _transcript_bytes: bytes
-
-    def __init__(
-        self,
-        build_observation: DiagnosticBuildObservationV1,
-        invocation_identity: bytes,
-        platform_identity: bytes,
-        transcript: protocol.DecisionTranscriptV1,
-        run_claim: protocol.RunClaimV1,
-        transcript_bytes: bytes,
-        *,
-        _token: object,
-    ) -> None:
-        if _token is not _PIPELINE_OBSERVATION_TOKEN:
-            raise TypeError("DiagnosticPipelineObservationV1 is controller-only")
-        if type(build_observation) is not DiagnosticBuildObservationV1:
-            raise TypeError("invalid diagnostic build observation")
-        if not _valid_digest(invocation_identity) or not _valid_digest(platform_identity):
-            raise TypeError("invalid RUN observation identities")
-        if type(transcript) is not protocol.DecisionTranscriptV1:
-            raise TypeError("invalid transcript")
-        if type(run_claim) is not protocol.RunClaimV1:
-            raise TypeError("invalid run claim")
-        if (
-            transcript.comparator_identity != build_observation.comparator.identity
-            or run_claim.job_identity != transcript.job_identity
-            or run_claim.comparator_identity != build_observation.comparator.identity
-            or run_claim.binary_identity != build_observation.binary_sha256
-            or run_claim.invocation_identity != invocation_identity
-            or run_claim.platform_identity != platform_identity
-            or run_claim.transcript_identity != transcript.identity
-        ):
-            raise TypeError("run claim does not bind diagnostic observations")
-        if type(transcript_bytes) is not bytes or transcript.encode() != transcript_bytes:
-            raise TypeError("invalid owned transcript")
-        object.__setattr__(self, "build_observation", build_observation)
-        object.__setattr__(self, "invocation_identity", invocation_identity)
-        object.__setattr__(self, "platform_identity", platform_identity)
-        object.__setattr__(self, "transcript", transcript)
-        object.__setattr__(self, "run_claim", run_claim)
-        object.__setattr__(self, "_transcript_bytes", transcript_bytes)
+    @property
+    def rebuild_binaries(self) -> tuple[bytes, bytes]:
+        return self._rebuild_binaries
 
     @property
-    def comparator(self) -> DiagnosticArbComparatorV1:
-        return self.build_observation.comparator
+    def input_transfers(self) -> tuple[BuildInputTransferV1, BuildInputTransferV1]:
+        first = self.build_processes[0].input_transfer
+        second = self.build_processes[1].input_transfer
+        if type(first) is not BuildInputTransferV1 or type(second) is not BuildInputTransferV1:
+            raise RuntimeError("sealed build observation lost its input transfer")
+        return first, second
 
     @property
-    def structural_source_identity(self) -> bytes:
-        return self.build_observation.structural_source_identity
-
-    @property
-    def flint_commit_content_identity(self) -> bytes:
-        return self.build_observation.flint_commit_content_identity
-
-    @property
-    def flint_commit_content_file_count(self) -> int:
-        return self.build_observation.flint_commit_content_file_count
-
-    @property
-    def flint_project_pinned_release_only_identity(self) -> bytes:
-        return self.build_observation.flint_project_pinned_release_only_identity
-
-    @property
-    def flint_project_pinned_release_only_file_count(self) -> int:
-        return self.build_observation.flint_project_pinned_release_only_file_count
-
-    @property
-    def build_input_identity(self) -> bytes:
-        return self.build_observation.build_input_identity
-
-    @property
-    def formula_support_identity(self) -> bytes:
-        return self.build_observation.formula_support_identity
-
-    @property
-    def pipeline_policy_identity(self) -> bytes:
-        return self.build_observation.pipeline_policy_identity
-
-    @property
-    def docker_daemon_observation_sha256(self) -> bytes:
-        return self.build_observation.docker_daemon_observation_sha256
-
-    @property
-    def oci_image_reference(self) -> str:
-        return self.build_observation.oci_image_reference
-
-    @property
-    def oci_platform(self) -> str:
-        return self.build_observation.oci_platform
-
-    @property
-    def binary_sha256(self) -> bytes:
-        return self.build_observation.binary_sha256
-
-    @property
-    def rebuild_sha256s(self) -> tuple[bytes, bytes]:
-        return self.build_observation.rebuild_sha256s
-
-    @property
-    def host_trust(self) -> HostTrustBoundaryV1:
-        return self.build_observation.host_trust
-
-    @property
-    def build_processes(self) -> tuple[DockerBuildExitedV1, DockerBuildExitedV1]:
-        return self.build_observation.build_processes
-
-    @property
-    def binary(self) -> bytes:
-        return self.build_observation.binary
-
-    @property
-    def transcript_bytes(self) -> bytes:
-        return self._transcript_bytes
+    def input_bundle(self) -> SealedBuildInputBundleV1:
+        return self._input_bundle
 
 
 BuildResultV1: TypeAlias = (
@@ -1941,16 +2506,6 @@ BuildResultV1: TypeAlias = (
     | PipelineBlockedV1
     | BuildRejectedV1
     | NonReproducibleBuildV1
-)
-
-
-PipelineResultV1: TypeAlias = (
-    DiagnosticPipelineObservationV1
-    | PipelineBlockedV1
-    | BuildRejectedV1
-    | NonReproducibleBuildV1
-    | ExecutionRejectedV1
-    | TranscriptRejectedV1
 )
 
 
@@ -1977,8 +2532,12 @@ def invocation_identity_v1(request: executor.ExecutionRequestV1) -> bytes:
 
 
 def platform_identity_v1(report: executor.SupportedV1) -> bytes:
-    if type(report) is not executor.SupportedV1:
-        raise TypeError("report must be SupportedV1")
+    if (
+        type(report) is not executor.SupportedV1
+        or report.platform != executor.EXECUTION_PLATFORM_V1
+        or report.sandbox_policy_release != executor.SANDBOX_POLICY_RELEASE_V1
+    ):
+        raise TypeError("report must be the exact V1 supported platform")
     return _identity(
         _PLATFORM_ID_LABEL_V1,
         (
@@ -1988,191 +2547,13 @@ def platform_identity_v1(report: executor.SupportedV1) -> bytes:
     )
 
 
-class _TreeMismatchV1(RuntimeError):
-    pass
-
-
-def _write_all(descriptor: int, contents: bytes) -> None:
-    cursor = 0
-    while cursor < len(contents):
-        written = os.write(descriptor, contents[cursor:])
-        if written <= 0:
-            raise OSError("short write")
-        cursor += written
-
-
-def _write_exact_file(root: Path, item: BuildSourceFileV1) -> None:
-    target = root / item.path
-    current = root
-    for part in PurePosixPath(item.path).parent.parts:
-        current = current / part
-        try:
-            current.mkdir(mode=0o755)
-        except FileExistsError:
-            metadata = current.lstat()
-            if not stat.S_ISDIR(metadata.st_mode) or stat.S_ISLNK(metadata.st_mode):
-                raise _TreeMismatchV1("parent collision")
-        current.chmod(0o755)
-    descriptor = os.open(
-        target,
-        os.O_WRONLY
-        | os.O_CREAT
-        | os.O_EXCL
-        | getattr(os, "O_CLOEXEC", 0)
-        | getattr(os, "O_NOFOLLOW", 0),
-        item.mode,
-    )
-    try:
-        _write_all(descriptor, item.contents)
-        os.fchmod(descriptor, item.mode)
-    finally:
-        os.close(descriptor)
-
-
-def _expected_directories(paths: set[str]) -> set[str]:
-    result = {"."}
-    for path in paths:
-        parent = PurePosixPath(path).parent
-        while str(parent) != ".":
-            result.add(str(parent))
-            parent = parent.parent
-    return result
-
-
-def _verify_exact_tree(
-    root: Path,
-    expected: dict[str, tuple[int, int, bytes]],
-) -> None:
-    actual_files: set[str] = set()
-    actual_directories: set[str] = {"."}
-    for directory, directory_names, file_names in os.walk(root, followlinks=False):
-        base = Path(directory)
-        relative_base = base.relative_to(root)
-        metadata = base.lstat()
-        if not stat.S_ISDIR(metadata.st_mode) or stat.S_ISLNK(metadata.st_mode):
-            raise _TreeMismatchV1("non-directory in tree")
-        if stat.S_IMODE(metadata.st_mode) != 0o755:
-            raise _TreeMismatchV1("directory mode drift")
-        for name in directory_names:
-            target = base / name
-            target_metadata = target.lstat()
-            if not stat.S_ISDIR(target_metadata.st_mode) or stat.S_ISLNK(target_metadata.st_mode):
-                raise _TreeMismatchV1("link or non-directory parent")
-            relative = (relative_base / name).as_posix()
-            actual_directories.add(relative)
-        for name in file_names:
-            target = base / name
-            relative = (relative_base / name).as_posix()
-            coordinate = expected.get(relative)
-            if coordinate is None:
-                raise _TreeMismatchV1("extra file")
-            metadata = target.lstat()
-            mode, length, digest = coordinate
-            if (
-                not stat.S_ISREG(metadata.st_mode)
-                or stat.S_ISLNK(metadata.st_mode)
-                or metadata.st_nlink != 1
-                or stat.S_IMODE(metadata.st_mode) != mode
-                or metadata.st_size != length
-            ):
-                raise _TreeMismatchV1("file metadata drift")
-            hasher = hashlib.sha256()
-            with target.open("rb") as stream:
-                while chunk := stream.read(64 * 1024):
-                    hasher.update(chunk)
-            if hasher.digest() != digest:
-                raise _TreeMismatchV1("file content drift")
-            actual_files.add(relative)
-    if actual_files != set(expected) or actual_directories != _expected_directories(set(expected)):
-        raise _TreeMismatchV1("tree shape drift")
-
-
-def _read_build_output(directory: Path, maximum: int) -> bytes:
-    try:
-        names = tuple(item.name for item in directory.iterdir())
-    except OSError as error:
-        raise _TreeMismatchV1("cannot list build output") from error
-    if names != (EVALUATOR_OUTPUT_NAME_V1,):
-        raise _TreeMismatchV1("build output must contain exactly one file")
-    directory_fd = os.open(
-        directory,
-        os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_CLOEXEC", 0),
-    )
-    try:
-        descriptor = os.open(
-            EVALUATOR_OUTPUT_NAME_V1,
-            os.O_RDONLY
-            | getattr(os, "O_CLOEXEC", 0)
-            | getattr(os, "O_NOFOLLOW", 0),
-            dir_fd=directory_fd,
-        )
-    except OSError as error:
-        os.close(directory_fd)
-        raise _TreeMismatchV1("cannot open exact build output") from error
-    try:
-        before = os.fstat(descriptor)
-        if (
-            not stat.S_ISREG(before.st_mode)
-            or before.st_nlink != 1
-            or stat.S_IMODE(before.st_mode) != 0o555
-            or before.st_size <= 0
-            or before.st_size > maximum
-        ):
-            raise _TreeMismatchV1("invalid build output metadata")
-        chunks: list[bytes] = []
-        length = 0
-        while True:
-            chunk = os.read(descriptor, min(64 * 1024, maximum + 1 - length))
-            if not chunk:
-                break
-            chunks.append(chunk)
-            length += len(chunk)
-            if length > maximum:
-                raise _TreeMismatchV1("oversized build output")
-        after = os.fstat(descriptor)
-        coordinates_before = (
-            before.st_dev,
-            before.st_ino,
-            before.st_size,
-            before.st_mtime_ns,
-            before.st_ctime_ns,
-        )
-        coordinates_after = (
-            after.st_dev,
-            after.st_ino,
-            after.st_size,
-            after.st_mtime_ns,
-            after.st_ctime_ns,
-        )
-        if coordinates_before != coordinates_after or length != before.st_size:
-            raise _TreeMismatchV1("build output changed during observation")
-        return b"".join(chunks)
-    except OSError as error:
-        raise _TreeMismatchV1("cannot read exact build output") from error
-    finally:
-        os.close(descriptor)
-        os.close(directory_fd)
-
-
-class ExecutionControllerV1(Protocol):
-    def probe(self) -> executor.CapabilityReportV1: ...
-
-    def execute(
-        self,
-        request: executor.ExecutionRequestV1,
-        capability: executor.SupportedV1,
-    ) -> executor.ExecutionResultV1: ...
-
-
 class ControlledPipelineV1:
     def __init__(
         self,
         *,
         build_backend: DockerBuildBackendV1,
-        execution_controller: ExecutionControllerV1 | None,
     ) -> None:
         self._build_backend = build_backend
-        self._execution_controller = execution_controller
 
     def build(self, request: PipelineRequestV1) -> BuildResultV1:
         """Observe two fresh equal builds without requiring a RUN capability."""
@@ -2194,9 +2575,23 @@ class ControlledPipelineV1:
                 "Docker capability report is not typed",
             )
 
+        try:
+            input_bundle = _seal_build_input_bundle_v1(request)
+        except (
+            OSError,
+            TypeError,
+            ValueError,
+            tarfile.TarError,
+            BuildSourceAdmissionErrorV1,
+            provenance.ProvenanceErrorV1,
+        ):
+            return BuildRejectedV1(
+                1,
+                BuildFailureReasonV1.BACKEND_CONTRACT,
+            )
         builds: list[tuple[bytes, DockerBuildExitedV1]] = []
         for attempt in (1, 2):
-            built = self._build_once(request, attempt)
+            built = self._build_once(request, attempt, input_bundle)
             if type(built) is BuildRejectedV1:
                 return built
             builds.append(built)
@@ -2235,204 +2630,39 @@ class ControlledPipelineV1:
             first_digest,
             rebuild_sha256s,
             request.host_trust,
+            input_bundle.identity,
+            input_bundle.sha256,
+            input_bundle.length,
             build_processes,
             comparator,
-            binary,
+            (first[0], second[0]),
+            input_bundle,
             _token=_BUILD_OBSERVATION_TOKEN,
-        )
-
-    def execute(self, request: PipelineRequestV1) -> PipelineResultV1:
-        if type(request) is not PipelineRequestV1:
-            raise PipelineInputErrorV1(PipelineInputReasonV1.WRONG_TYPE, "request")
-        build_observation = self.build(request)
-        if type(build_observation) is not DiagnosticBuildObservationV1:
-            return build_observation
-        if self._execution_controller is None:
-            return ExecutionRejectedV1(
-                ExecutionFailureReasonV1.BACKEND_CONTRACT,
-                "execution controller is unavailable",
-            )
-        try:
-            execution_report = self._execution_controller.probe()
-        except Exception:
-            return ExecutionRejectedV1(
-                ExecutionFailureReasonV1.BACKEND_CONTRACT,
-                "executor capability probe raised",
-            )
-        if type(execution_report) is executor.UnsupportedV1:
-            return ExecutionRejectedV1(
-                ExecutionFailureReasonV1.UNSUPPORTED,
-                execution_report,
-            )
-        if type(execution_report) is not executor.SupportedV1:
-            return ExecutionRejectedV1(
-                ExecutionFailureReasonV1.BACKEND_CONTRACT,
-                execution_report,
-            )
-
-        # This is the exact first post-exit bytes object retained by BUILD.
-        binary = build_observation.binary
-        try:
-            invocation = executor.ExecutionRequestV1(
-                executable=binary,
-                argv=(
-                    b"arb-evaluator",
-                    b"--manifest-identity",
-                    build_observation.comparator.identity.hex().encode("ascii"),
-                    b"--job",
-                    b"/dev/stdin",
-                ),
-                environment=((b"LC_ALL", b"C"), (b"TZ", b"UTC")),
-                cwd=b"/",
-                stdin=request.job.encode(),
-                umask=0o077,
-                limits=request.execution_limits,
-            )
-        except executor.ExecutionRequestErrorV1 as error:
-            return ExecutionRejectedV1(
-                ExecutionFailureReasonV1.BACKEND_CONTRACT,
-                error,
-            )
-        invocation_identity = invocation_identity_v1(invocation)
-        platform_identity = platform_identity_v1(execution_report)
-        try:
-            execution_result = self._execution_controller.execute(
-                invocation,
-                execution_report,
-            )
-        except Exception:
-            return ExecutionRejectedV1(
-                ExecutionFailureReasonV1.BACKEND_CONTRACT,
-                "executor raised",
-            )
-        if type(execution_result) is not executor.CompletedV1:
-            if not executor.result_matches_request_v1(execution_result, invocation):
-                return ExecutionRejectedV1(
-                    ExecutionFailureReasonV1.BACKEND_CONTRACT,
-                    execution_result,
-                )
-            return ExecutionRejectedV1(
-                ExecutionFailureReasonV1.PROCESS_FAILED,
-                execution_result,
-            )
-        if execution_result.binary_sha256 != build_observation.binary_sha256:
-            return ExecutionRejectedV1(
-                ExecutionFailureReasonV1.BINARY_MISMATCH,
-                execution_result,
-            )
-        if not executor.result_matches_request_v1(execution_result, invocation):
-            return ExecutionRejectedV1(
-                ExecutionFailureReasonV1.BACKEND_CONTRACT,
-                execution_result,
-            )
-        if execution_result.stderr:
-            return ExecutionRejectedV1(
-                ExecutionFailureReasonV1.STDERR_NOT_EMPTY,
-                execution_result,
-            )
-        transcript_bytes = execution_result.stdout
-        try:
-            transcript = protocol.DecisionTranscriptV1.parse(transcript_bytes)
-        except protocol.ProtocolErrorV1 as error:
-            return TranscriptRejectedV1(
-                TranscriptFailureReasonV1.INVALID_WIRE,
-                str(error),
-            )
-        if (
-            transcript.encode() != transcript_bytes
-            or transcript.job_identity != request.job.identity
-            or transcript.domain_identity != request.job.domain.identity
-            or transcript.comparator_identity != build_observation.comparator.identity
-            or transcript.point_count != request.job.domain.point_count
-        ):
-            return TranscriptRejectedV1(
-                TranscriptFailureReasonV1.FOREIGN_BINDING,
-                "transcript does not bind the exact job/domain/comparator",
-            )
-        try:
-            protocol.validate_witness_alignment_v1(
-                request.job.domain,
-                transcript.decision_bits,
-                transcript.point_count,
-                transcript.counters,
-                transcript.witness_store,
-            )
-        except protocol.ProtocolErrorV1 as error:
-            return TranscriptRejectedV1(
-                TranscriptFailureReasonV1.FOREIGN_BINDING,
-                str(error),
-            )
-        try:
-            run_claim = protocol.RunClaimV1.for_transcript(
-                request.job,
-                build_observation.comparator.manifest,
-                transcript,
-                build_observation.binary_sha256,
-                invocation_identity,
-                platform_identity,
-            )
-        except protocol.ProtocolErrorV1 as error:
-            return TranscriptRejectedV1(
-                TranscriptFailureReasonV1.FOREIGN_BINDING,
-                str(error),
-            )
-        return DiagnosticPipelineObservationV1(
-            build_observation,
-            invocation_identity,
-            platform_identity,
-            transcript,
-            run_claim,
-            transcript_bytes,
-            _token=_PIPELINE_OBSERVATION_TOKEN,
         )
 
     def _build_once(
         self,
         request: PipelineRequestV1,
         attempt: int,
+        input_bundle: SealedBuildInputBundleV1,
     ) -> tuple[bytes, DockerBuildExitedV1] | BuildRejectedV1:
+        if (
+            not sealed_build_input_bundle_is_well_bound_v1(input_bundle)
+            or input_bundle.source_identity != request.admitted_sources.identity
+            or input_bundle.build_input_identity
+            != request.build_sources.build_input_identity
+        ):
+            return BuildRejectedV1(
+                attempt,
+                BuildFailureReasonV1.BACKEND_CONTRACT,
+            )
         try:
             with tempfile.TemporaryDirectory(prefix=f"labcolors-arb-build-v1-{attempt}-") as temporary:
                 root = Path(temporary).resolve()
-                inputs = root / "inputs"
-                workspace = root / "workspace"
-                build = root / "build"
-                output = root / "out"
-                for directory in (inputs, workspace, build, output):
-                    directory.mkdir(mode=0o755)
-                    directory.chmod(0o755)
-
-                for lock, admitted in zip(
-                    request.source_lock.sources,
-                    request.admitted_sources.sources,
-                    strict=True,
-                ):
-                    destination = inputs / lock.root_prefix[:-1]
-                    snapshot.materialize_source_archive(
-                        lock,
-                        admitted,
-                        destination,
-                    )
-                    destination.chmod(0o755)
-                workspace_files: list[BuildSourceFileV1] = []
-                for item in request.build_sources.files:
-                    if item.path == GENERATED_FORMULA_PATH_V1:
-                        generated = BuildSourceFileV1(
-                            "formula.generated.c",
-                            item.mode,
-                            item.contents,
-                        )
-                        _write_exact_file(inputs, generated)
-                    else:
-                        _write_exact_file(workspace, item)
-                        workspace_files.append(item)
                 build_request = DockerBuildRequestV1(
                     attempt,
-                    root,
-                    inputs,
-                    workspace,
-                    build,
-                    output,
+                    input_bundle,
+                    request.execution_limits.max_executable_bytes,
                     root / "container.cid",
                     _CONTAINER_NAME_PREFIX_V1
                     + hashlib.sha256(
@@ -2451,6 +2681,7 @@ class ControlledPipelineV1:
                     DockerBuildTimedOutV1,
                     DockerBuildOutputLimitV1,
                     DockerBuildObserverFailureV1,
+                    DockerBuildInputRejectedV1,
                     DockerBuildCleanupFailureV1,
                 )
                 if type(process) not in known_process_types:
@@ -2464,81 +2695,43 @@ class ControlledPipelineV1:
                         BuildFailureReasonV1.CLEANUP_FAILED,
                         process,
                     )
+                if type(process) is DockerBuildInputRejectedV1:
+                    return BuildRejectedV1(
+                        attempt,
+                        BuildFailureReasonV1.INPUT_TRANSFER_FAILED,
+                        process,
+                    )
                 if type(process) is not DockerBuildExitedV1 or process.returncode != 0:
                     return BuildRejectedV1(
                         attempt,
                         BuildFailureReasonV1.PROCESS_FAILED,
                         process,
                     )
-                try:
-                    for lock, admitted in zip(
-                        request.source_lock.sources,
-                        request.admitted_sources.sources,
-                        strict=True,
-                    ):
-                        expected = {
-                            item.path: (item.mode, item.length, item.sha256)
-                            for item in admitted.files
-                        }
-                        _verify_exact_tree(inputs / lock.root_prefix[:-1], expected)
-                    expected_workspace = {
-                        item.path: (
-                            item.mode,
-                            len(item.contents),
-                            hashlib.sha256(item.contents).digest(),
-                        )
-                        for item in workspace_files
-                    }
-                    _verify_exact_tree(workspace, expected_workspace)
-                    generated = request.build_sources.generated_formula
-                    _verify_exact_tree(
-                        inputs,
-                        {
-                            "formula.generated.c": (
-                                0o644,
-                                len(generated),
-                                hashlib.sha256(generated).digest(),
-                            ),
-                            **{
-                                f"{lock.root_prefix[:-1]}/{item.path}": (
-                                    item.mode,
-                                    item.length,
-                                    item.sha256,
-                                )
-                                for lock, admitted in zip(
-                                    request.source_lock.sources,
-                                    request.admitted_sources.sources,
-                                    strict=True,
-                                )
-                                for item in admitted.files
-                            },
-                        },
-                    )
-                except _TreeMismatchV1:
+                transfer = process.input_transfer
+                if (
+                    type(transfer) is not BuildInputTransferV1
+                    or transfer.bundle_identity != input_bundle.identity
+                    or transfer.expected_length != input_bundle.length
+                    or transfer.expected_sha256 != input_bundle.sha256
+                    or transfer.written_length != input_bundle.length
+                    or transfer.written_sha256 != input_bundle.sha256
+                ):
                     return BuildRejectedV1(
                         attempt,
-                        BuildFailureReasonV1.INPUT_CHANGED,
+                        BuildFailureReasonV1.BACKEND_CONTRACT,
                         process,
                     )
+                binary = process.stdout
                 try:
-                    binary = _read_build_output(
-                        output,
-                        request.execution_limits.max_executable_bytes,
-                    )
                     executor.require_static_x86_64_elf_v1(binary)
-                except (OSError, _TreeMismatchV1, executor.ExecutionRequestErrorV1):
+                except executor.ExecutionRequestErrorV1:
                     return BuildRejectedV1(
                         attempt,
                         BuildFailureReasonV1.INVALID_OUTPUT,
                         process,
                     )
                 return binary, process
-        except (
-            OSError,
-            _TreeMismatchV1,
-            snapshot.SnapshotErrorV1,
-            BuildSourceAdmissionErrorV1,
-        ):
+        except OSError:
             return BuildRejectedV1(
                 attempt,
                 BuildFailureReasonV1.BACKEND_CONTRACT,

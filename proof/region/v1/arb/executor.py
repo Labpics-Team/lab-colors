@@ -29,6 +29,7 @@ from pathlib import Path
 from typing import Callable, NoReturn, Protocol, TypeAlias
 
 
+EXECUTION_PLATFORM_V1 = "linux-x86_64"
 SANDBOX_POLICY_RELEASE_V1 = "labcolors.arb.executor.linux-x86_64.v1"
 
 # Linux UAPI values are fixed by fcntl.h.  Requiring F_SEAL_EXEC makes an older
@@ -154,8 +155,8 @@ class SupportedV1:
     sandbox_policy_release: str
 
     def __post_init__(self) -> None:
-        if type(self.platform) is not str or not self.platform:
-            raise TypeError("platform must be a nonempty str")
+        if self.platform != EXECUTION_PLATFORM_V1:
+            raise TypeError("unknown execution platform")
         if self.sandbox_policy_release != SANDBOX_POLICY_RELEASE_V1:
             raise TypeError("unknown sandbox policy release")
 
@@ -1690,7 +1691,7 @@ class NativeLinuxBackendV1:
             if not failures:
                 return _invalidated_capability_report_v1()
             return UnsupportedV1(tuple(failures))
-        return SupportedV1("linux-x86_64", SANDBOX_POLICY_RELEASE_V1)
+        return SupportedV1(EXECUTION_PLATFORM_V1, SANDBOX_POLICY_RELEASE_V1)
 
     def _probe_sealed_memfd(
         self,

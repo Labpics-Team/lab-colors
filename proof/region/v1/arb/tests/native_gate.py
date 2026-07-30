@@ -15,27 +15,26 @@ from proof.region.v1.arb.tests import gate  # noqa: E402
 from proof.region.v1.arb.tests.test_executor import (  # noqa: E402
     NativeLinuxIntegrationTests,
 )
-from proof.region.v1.arb.tests.test_pipeline import (  # noqa: E402
-    NativeBuildIntegrationTests,
-    NativePipelineIntegrationTests,
+from proof.region.v1.arb.tests.test_receipt import (  # noqa: E402
+    NativeSourceBoundReceiptIntegrationTests,
 )
 
 
 _MODES = {
-    "build": (
-        (NativeBuildIntegrationTests,),
-        "a6f8057d55a19bee9e924fa3bea2f082455ece0b8a9be5caf022b4a61aa9d15e",
-    ),
     "executor": (
-        (NativeLinuxIntegrationTests, NativePipelineIntegrationTests),
-        "0a7135fc2c259f125aa3cb692ea480550549d3aed5fdb95c47a3ddc999969a4d",
+        (NativeLinuxIntegrationTests,),
+        "df08a48aafe395458593899c9321d306bc91143236bc9e511d0b6c39952e9369",
+    ),
+    "receipt": (
+        (NativeSourceBoundReceiptIntegrationTests,),
+        "d5092e566c23b45f4b81ef850ca8abc8f003fa1a98c15030643660a636b04c6a",
     ),
 }
 
 
 def main() -> int:
     if len(sys.argv) != 2 or sys.argv[1] not in _MODES:
-        print("usage: native_gate.py {build|executor}", file=sys.stderr)
+        print("usage: native_gate.py {executor|receipt}", file=sys.stderr)
         return 64
     test_cases, inventory = _MODES[sys.argv[1]]
     suite = unittest.TestSuite(

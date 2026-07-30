@@ -5,19 +5,19 @@
 
 ## Граница
 
-Протокол переносит immutable job и заявленные результаты будущих Arb/MPFI
-processes. `region_proof_protocol.py` определяет только structural codecs и
-admission функций сравнения. Текущий `controller.py` безопасно читает и
-повторно проверяет пять frozen protocol fixtures; он ещё не строит и не
-запускает evaluator, не разрешает comparator manifest и не создаёт provenance
-receipt. Structural protocol и controller не вычисляют formula или interval
-enclosure. Диагностический `arb/evaluator` вычисляет Arb-enclosures и выпускает
-связанные transcript bytes, но не проверяет их независимым replay и не создаёт
-semantic proof type.
+Протокол переносит immutable job и structural claims результатов evaluator
+processes. `region_proof_protocol.py` определяет только codecs и admission
+функций сравнения, а `controller.py` повторно проверяет committed frozen
+protocol fixtures и не является evaluator runner. `arb/evaluator` вычисляет
+Arb-enclosures и выпускает связанные transcript bytes;
+`SourceBoundArbControllerV1` заново собирает evaluator, запускает его и создаёт
+только provenance receipt. Ни один из этих путей не выполняет независимый
+semantic replay и не создаёт mathematical proof type. MPFI evaluator/provenance
+path и semantic verifier в текущем release отсутствуют.
 
-`V5b2c-0` определяет protocol/admission, но сам не является математическим
-proof. В c0 нет `DualProofReceiptV1`: structural agreement кодируется
-только как `DualComparisonCandidateV1`. C0 не создаёт полный family image,
+Structural protocol/admission сам не является математическим proof.
+`DualComparisonCandidateV1` кодирует только structural agreement и не создаёт
+`DualProofReceiptV1`, полный family image,
 `SemanticFamilyReleaseIdV2`, `FamilyArtifactReceiptIdV2` или
 `FamilyImageCertificateV2`.
 
@@ -26,9 +26,9 @@ evidence. В тесте протокола такое значение явно 
 хранится или не публикуется как proof artifact.
 
 Протокол не входит в Cargo workspace, Core, WASM, FFI, bindings или packages.
-Раздельные evaluator implementations и их допустимый общий dependency overlap
-появятся в следующих срезах; c1a ещё не подтверждает их происхождение или
-diversity.
+Текущий `SourceBoundEvaluatorReceiptV1` подтверждает причинную цепь только Arb.
+MPFI provenance, cross-path dependency overlap и diversity не представлены
+admitted типом; structural coordinates не восполняют это отсутствие.
 
 ## Wire и identity
 
@@ -66,7 +66,7 @@ identity независимо версионированного comparator mani
 
 ## `ContextualRegionDefinitionV1`
 
-Definition не получает protocol magic. Это точный V5b2b canonical preimage:
+Definition не получает protocol magic. Это точный canonical preimage:
 последовательность полей `u64be(field_length) || field_bytes`. Grammar содержит
 `22 + 4 × knot_count` полей; fixture-specific count не является grammar.
 Поле 21 содержит `knot_count: u64be`; count ненулевой, но не имеет ad-hoc cap.
@@ -74,8 +74,8 @@ Definition не получает protocol magic. Это точный V5b2b canon
 `knot_count × 4 × (8-byte length + 8-byte payload)`. Так wire bytes, а не
 произвольный protocol limit, ограничивают count до цикла по records.
 
-Admission строго парсит typed V5b2b definition, проверяет его domain-инварианты,
-повторно кодирует и требует byte-identical preimage. Заявленный
+Admission строго парсит typed contextual definition, проверяет его
+domain-инварианты, повторно кодирует и требует byte-identical preimage. Заявленный
 `FamilyDefinitionDigestV2` равен `SHA256(definition_preimage)`.
 
 Formula digest внутри definition должен совпасть с приложенным immutable strict
@@ -145,9 +145,10 @@ Wire после `LCJOB1\0\0`, по порядку:
 
 Admission проверяет definition и formula identities, canonical re-encode и
 identity каждого вложенного artifact. Formula release обязан совпасть с полем
-definition. Job задаёт единственный канонический input contract будущих
-вычислителей; только controlled-executor slice сможет доказать отсутствие
-ambient inputs. Альтернативный JSON/TOML definition запрещён протоколом.
+definition. Job задаёт единственный канонический input contract evaluator-ов.
+Arb controller связывает его с наблюдёнными BUILD/RUN внутри объявленной ниже
+границы доверия; receipt не заявляет отсутствие ambient inputs за пределами этой
+границы. Альтернативный JSON/TOML definition запрещён протоколом.
 
 ## Source lock и integrity observations
 
@@ -167,8 +168,8 @@ files; оно не заявляет полноту legal-набора или com
 не выдаёт runner за sandbox, containment или provenance authority. Встроенного
 `Popen` fallback нет. Этот тип не устанавливает текущего publisher,
 текущий статус или отзыв ключа, происхождение полученных bytes и exact sealed
-execution verifier. Такой diagnostic не может заменить будущий source-bound
-receipt.
+execution verifier. Такой diagnostic сам по себе не создаёт и не заменяет
+`SourceBoundEvaluatorReceiptV1` и не усиливает его до publisher claim.
 
 Для FLINT `GitContentRelationPolicyV1` фиксирует commit, tree, исключённые
 paths и отдельные `project_pinned_release_only_files`. `run_git_tree` принимает
@@ -200,6 +201,54 @@ Linux backend допускается лишь в отдельном helper proce
 `pids.max = 1`, memory limit и `cgroup.kill`; фактические limits читаются назад
 до запуска. Отсутствие этой структуры возвращает typed unsupported/setup
 outcome. Этот runtime остаётся diagnostic observation и не создаёт receipt.
+Самостоятельный `ControlledExecutorV1` по-прежнему остаётся только такой
+observation. Право на Arb receipt получает не executor, а отдельный one-shot
+`SourceBoundArbControllerV1`, который владеет всей цепью BUILD → RUN и не
+принимает backend, capability либо diagnostic observation от вызывающего.
+
+## Source-bound Arb replay
+
+`SourceBoundArbControllerV1` сначала повторно парсит source lock и job,
+повторно допускает exact owned archive/build-input bytes и строит из regular
+files один canonical USTAR с нормализованными metadata. Один immutable bundle
+object дважды передаётся через bounded stdin; каждый свежий контейнер до
+распаковки сверяет exact length и SHA-256, распаковывает только в private
+bounded tmpfs, а executable возвращает через stdout. Semantic host bind mounts,
+host output path и повторное открытие результата отсутствуют. Эта граница
+доказывает точный controller-observed byte stream, а не непрерывность inode
+между host и Docker daemon; сам daemon остаётся явно доверенным V1 input.
+
+Успешный replay хранится одним token-closed
+`ContentResolvedEvaluatorReplayV1`, который повторно выводит три причинные
+identity без зеркальных промежуточных dataclass:
+
+1. source identity связывает lock, три admitted archive closures, build inputs
+   и formula support. Job сюда не входит: одинаковый evaluator build не меняет
+   source identity от конкретного RUN;
+2. build identity связывает source identity, versioned transport/isolation
+   policy, trust boundary, pinned OCI toolchain, один sealed bundle object, два
+   exact transfer и два byte-identical executable stdout. Comparator verifier
+   строит свежий canonical manifest из SHA-256 retained preimage bytes и
+   сверяет все его поля и identity с build observation; это проверка retained
+   причинных данных, а не заявление о независимом втором выводе preimages;
+3. run identity впервые связывает canonical job с тем же retained executable
+   bytes object, exact argv/env/cwd/stdin/limits, единственной допустимой
+   `linux-x86_64` sandbox platform, typed child exit, stdout, canonical
+   transcript и `RunClaimV1`.
+
+Только one-shot controller может собрать этот корень, создать raw
+`EvaluatorProvenanceClaimV1` и privately sealed
+`SourceBoundEvaluatorReceiptV1`. Отдельного pipeline RUN-authority и public
+promotion пути нет.
+
+Ни raw claim, ни digest/content resolver, ни diagnostic BUILD/RUN object, ни
+public constructor не создают receipt. Receipt доказывает только наблюдённую
+причинность source → build → exact executable → run → stdout/transcript в
+объявленной границе доверия. Он допустим для canonical transcript с
+`BoundaryUnproven` или `ResourceLimitReached`. Semantic correctness, Arb/MPFI
+diversity, mathematical proof и `DualProofReceiptV1` этим типом не представлены.
+Host/Docker, instruction-level inputs, publisher origin и distribution
+compliance не усиливаются и не называются SLSA/in-toto attestation.
 
 ## `ComparatorManifestV2`
 
@@ -238,8 +287,9 @@ V1 не доказывает independence. Как anti-vacuum declared-diversity
 `ComparatorKindV1.MPFI` и попарно различные `engine_release`,
 `upstream_source`, `wrapper_source`, `evaluator_source` и
 `RunClaimV1.binary_identity`. Это лишь различие заявленных coordinates: оно не
-доказывает разное происхождение или реализацию. Допустимый общий GMP/MPFR
-overlap и обязательные distinct edges появятся в typed replay evidence.
+доказывает разное происхождение или реализацию. Arb receipt уже связывает свой
+dependency graph; cross-path GMP/MPFR overlap и обязательные distinct edges не
+считаются установленными без отдельного MPFI receipt.
 
 ## `DecisionTranscriptV1`
 
@@ -312,15 +362,16 @@ Witness ordinals строго возрастают, уникальны и при
 а число таких records равно exact-equality count. Missing/extra/foreign witness
 не может быть исправлен самим битом `Inside`.
 
-`trace_digest` и `enclosure_digest` в c0 — только ненулевые content
-coordinates, а не доказательство replay или enclosure. Будущий semantic
-verifier receipt обязан разрешить и replay эти records, проверить exact
-equality/enclosure math и связать результат с job, comparator, run и transcript.
-Controller этого не делает. Любая недоказанная transcendental equality
+`trace_digest` и `enclosure_digest` — только ненулевые content
+coordinates, а не доказательство replay или enclosure. Semantic verification
+требует разрешить и replay эти records, проверить exact equality/enclosure math
+и связать результат с job, comparator, run и transcript; такого admitted
+receipt в текущем release нет. Arb controller этого не делает. Любая
+недоказанная transcendental equality
 остаётся `BoundaryUnproven`: epsilon или midpoint не превращают её в
 `Inside`.
 
-`DecisionTranscriptV1` в c0 остаётся structural claim. Нулевые unresolved
+`DecisionTranscriptV1` остаётся structural claim. Нулевые unresolved
 counters не превращают его в semantic resolved/proven type.
 
 ## `RunClaimV1`
@@ -337,27 +388,30 @@ Wire после `LCRUN1\0\0` содержит шесть digest coordinates:
 Wire parse и `for_transcript` создают только structural run claim из заявленных
 coordinates. `for_transcript` проверяет лишь bindings job/comparator/transcript;
 binary, invocation и platform получает от вызывающего и не наблюдает. Причинную
-цепь сможет установить только будущий controlled rebuild/replay.
+цепь устанавливает только `SourceBoundArbControllerV1`; raw claim сам этого
+права не имеет.
 
 ## `EvaluatorProvenanceClaimV1`
 
 Wire после `LCPRV1\0\0` содержит три unresolved digest declarations:
 
-1. provenance policy identity — versioned правила и trust boundary будущего replay;
+1. provenance policy identity — versioned правила и trust boundary replay;
 2. `RunClaimV1` identity — subject, к которому относится заявление;
-3. replay evidence identity — predicate с будущей source/build/run цепью.
+3. replay evidence identity — unresolved coordinate source/build/run predicate.
 
 Этот тип аналогичен структурному statement, а не attestation о выполненном
-build. `parse` проверяет только canonical wire и ненулевые coordinates. В c1a
-нет `SourceBoundEvaluatorReceiptV1`, public admission, resolver или флага
-успешного replay. Sealed receipt появится только из реально наблюдаемого
-rebuild/run и будет иметь отдельную domain-separated identity.
+build. `parse` проверяет только canonical wire и ненулевые coordinates. Сам raw
+тип не имеет public admission, resolver или флага успешного replay. Первый
+sealed `SourceBoundEvaluatorReceiptV1` создаёт только Arb controller после
+фактически наблюдённого typed replay DAG. Receipt identity равна identity
+связанного claim и не дублирует subject отдельным digest; parse raw claim этого
+права не даёт.
 
 Назначение трёх внутренних coordinates только вдохновлено разделением ролей в
 [in-toto Statement V1.2.0](https://github.com/in-toto/attestation/blob/v1.2.0/spec/v1/statement.md)
 и definition/run model в
 [SLSA Build Provenance V1.2](https://slsa.dev/spec/v1.2/build-provenance).
-Wire остаётся внутренним бинарным протоколом Lab Colors; c1a не заявляет
+Wire остаётся внутренним бинарным протоколом Lab Colors и не заявляет
 in-toto Statement/ResourceDescriptor/predicate schema, envelope/signature,
 SLSA level или соответствие SLSA builder contract.
 
@@ -400,8 +454,9 @@ failure и не создают candidate. Успешный candidate фикси�
 структурное согласие над exact bound domain manifest; он не является proof
 receipt и не доказывает correctness ни одного evaluator.
 
-Математический proof требует будущих semantic verifier receipts для обоих
-evaluator paths и независимой проверки их bindings/replay. Family mint
+`DualProofReceiptV1` требует semantic verification receipts для обоих evaluator
+paths и независимой проверки их bindings/replay; этих admitted типов текущий
+release не содержит. Family mint
 дополнительно разрешает `domain_identity` и допускает отдельно exact full
 manifest: единственный range `[0, 2^24)` и point count `2^24`. Совпадение
 только point count или reduced-domain candidate этот gate не проходят.

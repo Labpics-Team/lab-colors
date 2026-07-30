@@ -48,11 +48,9 @@ jobs:
         run: |
           set -euo pipefail
           scope="/sys/fs/cgroup/labcolors-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
-          binary="$RUNNER_TEMP/arb-native-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
           {
             echo "LABCOLORS_CGROUP_SCOPE_V1=$scope"
             echo "LABCOLORS_EXECUTOR_CGROUP_V1=$scope/proof"
-            echo "LABCOLORS_ARB_NATIVE_BINARY=$binary"
           } >> "$GITHUB_ENV"
 
       - name: acquire and hash-check exact source archives
@@ -161,15 +159,11 @@ jobs:
           grep --fixed-strings --quiet 'pids' "$scope/proof/cgroup.subtree_control"
           test "$(cat "$scope/proof/pids.max")" = 2
 
-      - name: two fresh offline builds and evaluator runtime
+      - name: one source-bound BUILD to RUN receipt and evaluator runtime
         shell: bash
         run: |
           set -euo pipefail
-          echo "$$" | sudo tee \
-            "$LABCOLORS_CGROUP_SCOPE_V1/tasks/cgroup.procs" >/dev/null
-          python3 proof/region/v1/arb/tests/native_gate.py build
-          test -f "$LABCOLORS_ARB_NATIVE_BINARY"
-          test "$(stat --format=%a "$LABCOLORS_ARB_NATIVE_BINARY")" = 400
+          exec python3 proof/region/v1/arb/tests/native_gate.py receipt
 
       - name: native containment under an atomic two-task subtree
         shell: bash
@@ -196,9 +190,6 @@ jobs:
           }
           if [[ -n "${LABCOLORS_ARB_SOURCE_DIR:-}" ]]; then
             rm -rf -- "$LABCOLORS_ARB_SOURCE_DIR" || record_failure
-          fi
-          if [[ -n "${LABCOLORS_ARB_NATIVE_BINARY:-}" ]]; then
-            rm -f -- "$LABCOLORS_ARB_NATIVE_BINARY" || record_failure
           fi
           if [[ -n "${LABCOLORS_CGROUP_SCOPE_V1:-}" && \
                 -d "$LABCOLORS_CGROUP_SCOPE_V1" ]]; then

@@ -1,5 +1,5 @@
 #!/bin/sh
-# Build the offline Arb evaluator from already admitted, read-only inputs.
+# Build the offline Arb evaluator from one admitted controller stream.
 # Acquisition and origin verification intentionally happen before this
 # network-free boundary; this recipe never resolves a tool or dependency online.
 
@@ -20,7 +20,7 @@ if [ "${LC_BUILD_ENV_V1-}" != 1 ]; then
         LANG=C \
         TZ=UTC \
         HOME=/nonexistent \
-        TMPDIR=/build/tmp \
+        TMPDIR=/build/work/tmp \
         SOURCE_DATE_EPOCH=0 \
         ZERO_AR_DATE=1 \
         ARFLAGS=crD \
@@ -30,10 +30,9 @@ unset LC_BUILD_ENV_V1
 
 umask 022
 
-readonly inputs=/inputs
-readonly workspace=/workspace
-readonly build=/build
-readonly output=/out
+readonly inputs=/build/snapshot/inputs
+readonly workspace=/build/snapshot/workspace
+readonly build=/build/work
 
 require_regular() {
     if [ ! -f "$1" ] || [ -L "$1" ]; then
@@ -76,7 +75,6 @@ for header in wire.h hash.h interval.h region.h; do
     require_regular "$workspace/proof/region/v1/arb/evaluator/$header"
 done
 require_empty_directory "$build"
-require_empty_directory "$output"
 
 /usr/bin/mkdir "$build/prefix" "$build/gmp" "$build/mpfr" "$build/flint" "$build/tmp"
 
@@ -175,5 +173,4 @@ else
     fi
 fi
 
-/usr/bin/install -m 0555 "$build/arb-evaluator-v1" "$output/arb-evaluator-v1"
-/usr/bin/sha256sum "$output/arb-evaluator-v1"
+/usr/bin/sha256sum "$build/arb-evaluator-v1"

@@ -6,6 +6,7 @@ from __future__ import annotations
 import gzip
 import hashlib
 import io
+import inspect
 import os
 import stat
 import struct
@@ -34,8 +35,6 @@ from region_proof_protocol import (  # noqa: E402
     ComparatorKindV1,
     ComparatorManifestV2,
     ContentResolvedComparatorManifestV2,
-    DecisionTranscriptV1,
-    DecisionV1,
     ProofJobV1,
     ProtocolErrorV1,
 )
@@ -222,21 +221,6 @@ def _foreign_comparator() -> ContentResolvedComparatorManifestV2:
     return ContentResolvedComparatorManifestV2.admit(manifest, by_digest.get)
 
 
-@cache
-def _transcript(
-    manifest_identity: bytes = _digest("foreign-manifest-identity"),
-) -> bytes:
-    job = _job()
-    transcript = DecisionTranscriptV1.from_decisions(
-        job,
-        _foreign_comparator(),
-        (DecisionV1.OUTSIDE for _ in range(job.domain.point_count)),
-        (),
-        _digest("accounting"),
-    )
-    return replace(transcript, comparator_identity=manifest_identity).encode()
-
-
 def _limits() -> executor.ExecutionLimitsV1:
     return executor.ExecutionLimitsV1(
         max_executable_bytes=16 * 1024 * 1024,
@@ -270,10 +254,10 @@ class _BuildBackend:
         outputs: tuple[bytes, ...],
         *,
         probe: pipeline.DockerCapabilityReportV1 | None = None,
-        mutate_inputs: bool = False,
-        hardlink_input: bool = False,
-        symlink_output: bool = False,
-        reported_stdout: bytes | None = None,
+        reject_input: bool = False,
+        omit_transfer: bool = False,
+        foreign_transfer: bool = False,
+        reported_stderr: bytes = b"",
     ) -> None:
         self.outputs = list(outputs)
         self.probe_result = probe or pipeline.DockerSupportedV1(
@@ -281,10 +265,10 @@ class _BuildBackend:
             pipeline.OCI_PLATFORM_V1,
             _digest("docker-daemon"),
         )
-        self.mutate_inputs = mutate_inputs
-        self.hardlink_input = hardlink_input
-        self.symlink_output = symlink_output
-        self.reported_stdout = reported_stdout
+        self.reject_input = reject_input
+        self.omit_transfer = omit_transfer
+        self.foreign_transfer = foreign_transfer
+        self.reported_stderr = reported_stderr
         self.requests: list[pipeline.DockerBuildRequestV1] = []
 
     def probe(self) -> pipeline.DockerCapabilityReportV1:
@@ -296,115 +280,34 @@ class _BuildBackend:
     ) -> pipeline.DockerBuildProcessObservationV1:
         self.requests.append(request)
         output = self.outputs.pop(0)
-        target = request.output_directory / pipeline.EVALUATOR_OUTPUT_NAME_V1
-        if self.symlink_output:
-            outside = request.root_directory / "outside"
-            outside.write_bytes(output)
-            target.symlink_to(outside)
-        else:
-            target.write_bytes(output)
-            target.chmod(0o555)
-        if self.mutate_inputs:
-            victim = request.workspace_directory / "proof/region/v1/arb/evaluator/main.c"
-            victim.chmod(0o644)
-            victim.write_bytes(b"mutated")
-        if self.hardlink_input:
-            victim = request.workspace_directory / "proof/region/v1/arb/evaluator/main.c"
-            outside = request.root_directory / "input-hardlink"
-            outside.write_bytes(victim.read_bytes())
-            outside.chmod(0o644)
-            victim.unlink()
-            os.link(outside, victim)
-        return pipeline.DockerBuildExitedV1(
-            0,
-            self.reported_stdout
-            if self.reported_stdout is not None
-            else b"sha256:" + _digest("self-reported-output").hex().encode(),
-            b"",
-        )
-
-
-class _Executor:
-    def __init__(self, result_factory: object | None = None) -> None:
-        self.requests: list[executor.ExecutionRequestV1] = []
-        self.capabilities: list[executor.SupportedV1] = []
-        self.results: list[executor.ExecutionResultV1] = []
-        self.result_factory = result_factory
-        self.probe_calls = 0
-
-    def probe(self) -> executor.CapabilityReportV1:
-        self.probe_calls += 1
-        return executor.SupportedV1(
-            "linux-x86_64",
-            executor.SANDBOX_POLICY_RELEASE_V1,
-        )
-
-    def execute(
-        self,
-        request: executor.ExecutionRequestV1,
-        capability: executor.SupportedV1,
-    ) -> executor.ExecutionResultV1:
-        self.requests.append(request)
-        self.capabilities.append(capability)
-        if self.result_factory is not None:
-            result = self.result_factory(request)
-        else:
-            manifest_identity = bytes.fromhex(request.argv[2].decode("ascii"))
-            result = executor.CompletedV1(
-                hashlib.sha256(request.executable).digest(),
-                _transcript(manifest_identity),
+        if self.reject_input:
+            return pipeline.DockerBuildInputRejectedV1(
+                pipeline._build_input_progress_v1(
+                    request.input_bundle,
+                    1,
+                    hashlib.sha256(request.input_bundle._contents[:1]).digest(),
+                ),
+                b"",
                 b"",
             )
-        self.results.append(result)
-        return result
-
-
-class _MasqueradingControlledExecutor(executor.ControlledExecutorV1):
-    pass
-
-
-class _MasqueradingNativeBackend(executor.NativeLinuxBackendV1):
-    def probe(self, _guard: object) -> executor.CapabilityReportV1:
-        return executor.SupportedV1(
-            "linux-x86_64",
-            executor.SANDBOX_POLICY_RELEASE_V1,
+        if self.omit_transfer:
+            return pipeline._docker_command_exited_v1(0, output, self.reported_stderr)
+        transfer = pipeline._completed_build_input_transfer_v1(
+            request.input_bundle,
+            request.input_bundle.length,
+            request.input_bundle.sha256,
         )
-
-    def run(
-        self,
-        request: executor.ExecutionRequestV1,
-        _capability: executor.SupportedV1,
-    ) -> executor.ExecutionResultV1:
-        manifest_identity = bytes.fromhex(request.argv[2].decode("ascii"))
-        return executor.CompletedV1(
-            hashlib.sha256(request.executable).digest(),
-            _transcript(manifest_identity),
-            b"",
-        )
-
-
-class _SelfMutatingExecutionBackend:
-    owner: executor.ControlledExecutorV1
-
-    def probe(self, _guard: object) -> executor.CapabilityReportV1:
-        return executor.SupportedV1(
-            "linux-x86_64",
-            executor.SANDBOX_POLICY_RELEASE_V1,
-        )
-
-    def run(
-        self,
-        request: executor.ExecutionRequestV1,
-        _capability: executor.SupportedV1,
-    ) -> executor.ExecutionResultV1:
-        self.owner._backend = executor.NativeLinuxBackendV1(
-            Path("/sys/fs/cgroup/labcolors")
-        )
-        manifest_identity = bytes.fromhex(request.argv[2].decode("ascii"))
-        return executor.CompletedV1(
-            hashlib.sha256(request.executable).digest(),
-            _transcript(manifest_identity),
-            b"",
+        if self.foreign_transfer:
+            object.__setattr__(
+                transfer,
+                "bundle_identity",
+                _digest("foreign-bundle"),
+            )
+        return pipeline._docker_build_exited_v1(
+            0,
+            output,
+            self.reported_stderr,
+            transfer,
         )
 
 
@@ -497,13 +400,12 @@ class FlintSourcePartitionTests(unittest.TestCase):
 
 
 class ComparatorDerivationTests(unittest.TestCase):
-    def _result(self) -> pipeline.DiagnosticPipelineObservationV1:
+    def _result(self) -> pipeline.DiagnosticBuildObservationV1:
         binary = _static_elf(b"derived-comparator")
         result = pipeline.ControlledPipelineV1(
             build_backend=_BuildBackend((binary, binary)),
-            execution_controller=_Executor(),
-        ).execute(_request())
-        self.assertIs(type(result), pipeline.DiagnosticPipelineObservationV1)
+        ).build(_request())
+        self.assertIs(type(result), pipeline.DiagnosticBuildObservationV1)
         return result
 
     def test_request_cannot_supply_an_arbitrary_comparator(self) -> None:
@@ -648,12 +550,11 @@ class ComparatorDerivationTests(unittest.TestCase):
         result = pipeline.ControlledPipelineV1(
             build_backend=_BuildBackend(
                 (binary, binary),
-                reported_stdout=report,
+                reported_stderr=report,
             ),
-            execution_controller=_Executor(),
-        ).execute(_request())
+        ).build(_request())
 
-        self.assertIs(type(result), pipeline.DiagnosticPipelineObservationV1)
+        self.assertIs(type(result), pipeline.DiagnosticBuildObservationV1)
         self.assertNotEqual(result.comparator.identity, foreign.identity)
         coordinates = tuple(
             getattr(result.comparator.manifest.manifest, field.name)
@@ -661,25 +562,8 @@ class ComparatorDerivationTests(unittest.TestCase):
             if field.name != "kind"
         )
         self.assertNotIn(foreign.identity, coordinates)
-        self.assertEqual(result.build_processes[0].stdout, report)
-
-    def test_foreign_comparator_transcript_is_rejected(self) -> None:
-        binary = _static_elf(b"foreign-transcript")
-        run = _Executor(
-            lambda request: executor.CompletedV1(
-                hashlib.sha256(request.executable).digest(),
-                _transcript(_foreign_comparator().identity),
-                b"",
-            )
-        )
-
-        result = pipeline.ControlledPipelineV1(
-            build_backend=_BuildBackend((binary, binary)),
-            execution_controller=run,
-        ).execute(_request())
-
-        self.assertIs(type(result), pipeline.TranscriptRejectedV1)
-        self.assertEqual(result.reason, pipeline.TranscriptFailureReasonV1.FOREIGN_BINDING)
+        self.assertEqual(result.build_processes[0].stdout, binary)
+        self.assertEqual(result.build_processes[0].stderr, report)
 
     def test_diagnostic_comparator_has_no_public_constructor(self) -> None:
         with self.assertRaises(TypeError):
@@ -710,14 +594,14 @@ class ControlledPipelineTests(unittest.TestCase):
             )
         )
 
-    def test_pipeline_policy_identity_binds_the_snapshot_timestamp_policy(self) -> None:
+    def test_pipeline_policy_identity_binds_the_stream_bootstrap(self) -> None:
         trust = pipeline.HostTrustBoundaryV1.UNSEALED_LINUX_X64_DOCKER_HOST
         original = pipeline.pipeline_policy_identity_v1(trust)
 
         with mock.patch.object(
-            pipeline.snapshot,
-            "SOURCE_SNAPSHOT_MTIME_NS_V1",
-            pipeline.snapshot.SOURCE_SNAPSHOT_MTIME_NS_V1 + 1,
+            pipeline,
+            "_BUILD_BOOTSTRAP_V1",
+            pipeline._BUILD_BOOTSTRAP_V1 + "\nexit 1",
         ):
             changed = pipeline.pipeline_policy_identity_v1(trust)
 
@@ -740,7 +624,6 @@ class ControlledPipelineTests(unittest.TestCase):
         binary = _static_elf(b"build-only")
         controller = pipeline.ControlledPipelineV1(
             build_backend=_BuildBackend((binary, binary)),
-            execution_controller=None,
         )
 
         result = controller.build(_request())
@@ -750,47 +633,33 @@ class ControlledPipelineTests(unittest.TestCase):
         self.assertEqual(result.rebuild_sha256s, (result.binary_sha256,) * 2)
         self.assertIs(type(result.comparator), pipeline.DiagnosticArbComparatorV1)
 
-    def test_two_fresh_equal_builds_feed_exact_observed_bytes_to_executor(self) -> None:
+    def test_two_fresh_equal_builds_retain_one_input_and_exact_outputs(self) -> None:
         binary = _static_elf(b"observed-output")
         build = _BuildBackend((binary, binary))
-        run = _Executor()
-        controller = pipeline.ControlledPipelineV1(build_backend=build, execution_controller=run)
+        controller = pipeline.ControlledPipelineV1(build_backend=build)
 
-        result = controller.execute(_request())
+        result = controller.build(_request())
 
-        self.assertIs(type(result), pipeline.DiagnosticPipelineObservationV1)
+        self.assertIs(type(result), pipeline.DiagnosticBuildObservationV1)
         self.assertEqual(len(build.requests), 2)
         self.assertEqual(tuple(item.attempt for item in build.requests), (1, 2))
-        self.assertNotEqual(
-            build.requests[0].root_directory,
-            build.requests[1].root_directory,
-        )
-        self.assertTrue(
-            all(not item.root_directory.exists() for item in build.requests),
-            "fresh build roots must be removed after post-exit observation",
-        )
-        self.assertEqual(len(run.requests), 1)
-        self.assertEqual(run.probe_calls, 1)
-        self.assertIs(type(run.capabilities[0]), executor.SupportedV1)
-        self.assertIs(run.requests[0].executable, result.binary)
+        self.assertIs(build.requests[0].input_bundle, build.requests[1].input_bundle)
         self.assertEqual(result.binary, binary)
         self.assertEqual(result.binary_sha256, hashlib.sha256(binary).digest())
         self.assertEqual(
             result.rebuild_sha256s,
             (result.binary_sha256, result.binary_sha256),
         )
-        self.assertNotEqual(
-            result.binary_sha256,
-            _digest("self-reported-output"),
-        )
-        self.assertIs(result.transcript_bytes, run.results[0].stdout)
+        self.assertIs(result.rebuild_binaries[0], result.binary)
+        self.assertEqual(result.rebuild_binaries, (binary, binary))
         self.assertEqual(
-            result.transcript_bytes,
-            _transcript(result.comparator.identity),
+            result.input_transfers[0].bundle_identity,
+            result.input_bundle_identity,
         )
-        self.assertEqual(result.transcript.encode(), result.transcript_bytes)
-        self.assertEqual(result.run_claim.binary_identity, result.binary_sha256)
-        self.assertEqual(result.run_claim.transcript_identity, result.transcript.identity)
+        self.assertEqual(
+            result.input_transfers,
+            tuple(item.input_transfer for item in result.build_processes),
+        )
         self.assertEqual(
             result.structural_source_identity,
             _request().admitted_sources.identity,
@@ -825,7 +694,6 @@ class ControlledPipelineTests(unittest.TestCase):
             pipeline.pipeline_policy_identity_v1(result.host_trust),
         )
         self.assertFalse(hasattr(result, "build_observer_kind"))
-        self.assertFalse(hasattr(result, "run_observer_kind"))
         self.assertFalse(hasattr(result, "build_source_identity"))
         self.assertFalse(hasattr(result, "build_policy_identity"))
         self.assertFalse(hasattr(result, "commit_derived_source_identity"))
@@ -838,15 +706,13 @@ class ControlledPipelineTests(unittest.TestCase):
         self.assertFalse(hasattr(result, "slsa_level"))
         self.assertFalse(hasattr(result, "fresh_vm"))
 
-    def test_builds_must_be_byte_identical_before_any_run(self) -> None:
+    def test_builds_must_be_byte_identical(self) -> None:
         first = _static_elf(b"first")
         second = _static_elf(b"second")
-        run = _Executor()
 
         result = pipeline.ControlledPipelineV1(
             build_backend=_BuildBackend((first, second)),
-            execution_controller=run,
-        ).execute(_request())
+        ).build(_request())
 
         self.assertEqual(
             result,
@@ -855,82 +721,35 @@ class ControlledPipelineTests(unittest.TestCase):
                 hashlib.sha256(second).digest(),
             ),
         )
-        self.assertEqual(run.requests, [])
 
-    def test_build_input_mutation_or_symlink_output_is_typed_failure(self) -> None:
+    def test_input_transport_or_invalid_binary_is_typed_failure(self) -> None:
         binary = _static_elf()
         cases = (
             (
-                _BuildBackend((binary,), mutate_inputs=True),
-                pipeline.BuildFailureReasonV1.INPUT_CHANGED,
+                _BuildBackend((binary,), reject_input=True),
+                pipeline.BuildFailureReasonV1.INPUT_TRANSFER_FAILED,
             ),
             (
-                _BuildBackend((binary,), hardlink_input=True),
-                pipeline.BuildFailureReasonV1.INPUT_CHANGED,
+                _BuildBackend((binary,), omit_transfer=True),
+                pipeline.BuildFailureReasonV1.BACKEND_CONTRACT,
             ),
             (
-                _BuildBackend((binary,), symlink_output=True),
+                _BuildBackend((binary,), foreign_transfer=True),
+                pipeline.BuildFailureReasonV1.BACKEND_CONTRACT,
+            ),
+            (
+                _BuildBackend((b"not-an-elf",)),
                 pipeline.BuildFailureReasonV1.INVALID_OUTPUT,
             ),
         )
         for backend, reason in cases:
             with self.subTest(reason=reason):
-                run = _Executor()
                 result = pipeline.ControlledPipelineV1(
                     build_backend=backend,
-                    execution_controller=run,
-                ).execute(_request())
+                ).build(_request())
                 self.assertIs(type(result), pipeline.BuildRejectedV1)
                 self.assertEqual(result.attempt, 1)
                 self.assertEqual(result.reason, reason)
-                self.assertEqual(run.requests, [])
-
-    def test_workspace_materialization_collision_is_a_typed_failure(self) -> None:
-        run = _Executor()
-        controlled = pipeline.ControlledPipelineV1(
-            build_backend=_BuildBackend((_static_elf(),)),
-            execution_controller=run,
-        )
-
-        with mock.patch.object(
-            pipeline,
-            "_write_exact_file",
-            side_effect=pipeline._TreeMismatchV1("parent collision"),
-        ):
-            result = controlled.execute(_request())
-
-        self.assertIs(type(result), pipeline.BuildRejectedV1)
-        self.assertEqual(result.attempt, 1)
-        self.assertEqual(
-            result.reason,
-            pipeline.BuildFailureReasonV1.BACKEND_CONTRACT,
-        )
-        self.assertEqual(run.requests, [])
-
-    def test_docker_inability_to_observe_build_edge_is_a_design_blocker(self) -> None:
-        build = _BuildBackend(
-            (),
-            probe=pipeline.DockerUnsupportedV1(
-                pipeline.DockerBlockerReasonV1.SAME_OBJECT_OUTPUT_UNAVAILABLE,
-                "post-exit owned-byte observation unavailable",
-            ),
-        )
-        run = _Executor()
-
-        result = pipeline.ControlledPipelineV1(
-            build_backend=build,
-            execution_controller=run,
-        ).execute(_request())
-
-        self.assertEqual(
-            result,
-            pipeline.PipelineBlockedV1(
-                pipeline.DockerBlockerReasonV1.SAME_OBJECT_OUTPUT_UNAVAILABLE,
-                "post-exit owned-byte observation unavailable",
-            ),
-        )
-        self.assertEqual(build.requests, [])
-        self.assertEqual(run.requests, [])
 
     def test_job_that_exceeds_exact_run_limits_is_rejected_before_build(self) -> None:
         with self.assertRaises(pipeline.PipelineInputErrorV1) as caught:
@@ -946,123 +765,48 @@ class ControlledPipelineTests(unittest.TestCase):
             pipeline.PipelineInputReasonV1.EXECUTION_LIMIT_MISMATCH,
         )
 
+    def test_build_output_limit_is_rejected_at_pipeline_admission(self) -> None:
+        with self.assertRaises(pipeline.PipelineInputErrorV1) as caught:
+            _request(
+                execution_limits=replace(
+                    _limits(),
+                    max_executable_bytes=pipeline.BUILD_STDOUT_LIMIT_V1 + 1,
+                )
+            )
+
+        self.assertEqual(
+            caught.exception.reason,
+            pipeline.PipelineInputReasonV1.EXECUTION_LIMIT_MISMATCH,
+        )
+        self.assertEqual(caught.exception.field, "execution_limits")
+
     def test_snapshot_modes_are_normalized_independently_of_host_umask(self) -> None:
         binary = _static_elf(b"umask-independent")
         previous = os.umask(0o077)
         try:
             result = pipeline.ControlledPipelineV1(
                 build_backend=_BuildBackend((binary, binary)),
-                execution_controller=_Executor(),
-            ).execute(_request())
+            ).build(_request())
         finally:
             os.umask(previous)
 
-        self.assertIs(type(result), pipeline.DiagnosticPipelineObservationV1)
-
-    def test_binary_digest_from_executor_must_match_the_owned_build_object(self) -> None:
-        binary = _static_elf()
-        run = _Executor(
-            lambda _request: executor.CompletedV1(
-                _digest("foreign-binary"),
-                _transcript(),
-                b"",
-            )
-        )
-
-        result = pipeline.ControlledPipelineV1(
-            build_backend=_BuildBackend((binary, binary)),
-            execution_controller=run,
-        ).execute(_request())
-
-        self.assertIs(type(result), pipeline.ExecutionRejectedV1)
-        self.assertEqual(result.reason, pipeline.ExecutionFailureReasonV1.BINARY_MISMATCH)
-
-    def test_only_completed_empty_stderr_canonical_bound_transcript_is_admitted(self) -> None:
-        binary = _static_elf()
-        foreign = bytearray(_transcript())
-        foreign[16] ^= 1
-        cases = (
-            (
-                lambda request: executor.ExitNonZeroV1(
-                    hashlib.sha256(request.executable).digest(), b"", b"failed", 7
-                ),
-                pipeline.ExecutionRejectedV1,
-            ),
-            (
-                lambda request: executor.CompletedV1(
-                    hashlib.sha256(request.executable).digest(), _transcript(), b"warning"
-                ),
-                pipeline.ExecutionRejectedV1,
-            ),
-            (
-                lambda request: executor.CompletedV1(
-                    hashlib.sha256(request.executable).digest(), bytes(foreign), b""
-                ),
-                pipeline.TranscriptRejectedV1,
-            ),
-        )
-        for factory, expected_type in cases:
-            with self.subTest(expected_type=expected_type):
-                result = pipeline.ControlledPipelineV1(
-                    build_backend=_BuildBackend((binary, binary)),
-                    execution_controller=_Executor(factory),
-                ).execute(_request())
-                self.assertIs(type(result), expected_type)
-
-    def test_controller_derives_exact_invocation_without_backend_metadata(self) -> None:
-        binary = _static_elf()
-        run = _Executor()
-        request = _request()
-
-        result = pipeline.ControlledPipelineV1(
-            build_backend=_BuildBackend((binary, binary)),
-            execution_controller=run,
-        ).execute(request)
-
-        self.assertIs(type(result), pipeline.DiagnosticPipelineObservationV1)
-        invocation = run.requests[0]
-        self.assertEqual(
-            invocation.argv,
-            (
-                b"arb-evaluator",
-                b"--manifest-identity",
-                result.comparator.identity.hex().encode("ascii"),
-                b"--job",
-                b"/dev/stdin",
-            ),
-        )
-        self.assertEqual(invocation.environment, ((b"LC_ALL", b"C"), (b"TZ", b"UTC")))
-        self.assertEqual(invocation.cwd, b"/")
-        self.assertEqual(invocation.stdin, request.job.encode())
-        self.assertEqual(invocation.umask, 0o077)
-        self.assertEqual(
-            result.invocation_identity,
-            pipeline.invocation_identity_v1(invocation),
-        )
+        self.assertIs(type(result), pipeline.DiagnosticBuildObservationV1)
 
     def test_pipeline_exports_no_receipt_or_self_report_admission_api(self) -> None:
         names = dir(pipeline)
+        source = (ARB / "pipeline.py").read_text(encoding="utf-8")
         self.assertFalse(any("Receipt" in name for name in names))
+        self.assertFalse(hasattr(pipeline, "DiagnosticPipelineObservationV1"))
+        self.assertFalse(hasattr(pipeline, "PipelineResultV1"))
+        self.assertFalse(hasattr(pipeline, "ExecutionControllerV1"))
+        self.assertFalse(hasattr(pipeline.ControlledPipelineV1, "execute"))
+        self.assertEqual(
+            tuple(inspect.signature(pipeline.ControlledPipelineV1).parameters),
+            ("build_backend",),
+        )
         self.assertFalse(hasattr(pipeline.ControlledPipelineV1, "admit_report"))
         self.assertFalse(hasattr(pipeline.ControlledPipelineV1, "mint"))
-
-    def test_fake_executor_wrapper_or_native_subclass_stays_diagnostic(self) -> None:
-        binary = _static_elf(b"run-kind")
-        wrapped = _MasqueradingControlledExecutor(
-            _MasqueradingNativeBackend()
-        )
-        exact_executor_with_fake_native = executor.ControlledExecutorV1(
-            _MasqueradingNativeBackend()
-        )
-        for run in (_Executor(), wrapped, exact_executor_with_fake_native):
-            with self.subTest(executor_type=type(run).__name__):
-                result = pipeline.ControlledPipelineV1(
-                    build_backend=_BuildBackend((binary, binary)),
-                    execution_controller=run,
-                ).execute(_request())
-
-                self.assertIs(type(result), pipeline.DiagnosticPipelineObservationV1)
-                self.assertFalse(hasattr(result, "run_observer_kind"))
+        self.assertNotIn("run-observation=diagnostic", source)
 
     def test_native_observer_promotion_is_not_representable_in_v1(self) -> None:
         for name in (
@@ -1074,20 +818,6 @@ class ControlledPipelineTests(unittest.TestCase):
         ):
             with self.subTest(name=name):
                 self.assertFalse(hasattr(pipeline, name))
-
-    def test_self_mutating_executor_cannot_upgrade_fabricated_run(self) -> None:
-        binary = _static_elf(b"self-mutating-run")
-        backend = _SelfMutatingExecutionBackend()
-        run = executor.ControlledExecutorV1(backend)
-        backend.owner = run
-
-        result = pipeline.ControlledPipelineV1(
-            build_backend=_BuildBackend((binary, binary)),
-            execution_controller=run,
-        ).execute(_request())
-
-        self.assertIs(type(result), pipeline.DiagnosticPipelineObservationV1)
-        self.assertFalse(hasattr(result, "run_observer_kind"))
 
     def test_mutable_exact_native_build_backend_cannot_upgrade_fabricated_build(self) -> None:
         binary = _static_elf(b"self-mutating-build")
@@ -1108,20 +838,21 @@ class ControlledPipelineTests(unittest.TestCase):
             _self: object,
             request: pipeline.DockerBuildRequestV1,
         ) -> pipeline.DockerBuildProcessObservationV1:
-            target = request.output_directory / pipeline.EVALUATOR_OUTPUT_NAME_V1
-            target.write_bytes(binary)
-            target.chmod(0o555)
-            return pipeline.DockerBuildExitedV1(0, b"self-reported-native", b"")
+            transfer = pipeline._completed_build_input_transfer_v1(
+                request.input_bundle,
+                request.input_bundle.length,
+                request.input_bundle.sha256,
+            )
+            return pipeline._docker_build_exited_v1(0, binary, b"", transfer)
 
         backend.probe = MethodType(probe, backend)
         backend.run_build = MethodType(run_build, backend)
 
         result = pipeline.ControlledPipelineV1(
             build_backend=backend,
-            execution_controller=_Executor(),
-        ).execute(_request())
+        ).build(_request())
 
-        self.assertIs(type(result), pipeline.DiagnosticPipelineObservationV1)
+        self.assertIs(type(result), pipeline.DiagnosticBuildObservationV1)
         self.assertFalse(hasattr(result, "build_observer_kind"))
 
 
@@ -1129,15 +860,10 @@ class DockerCommandContractTests(unittest.TestCase):
     def test_command_is_exact_digest_offline_read_only_and_capability_free(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary).resolve()
-            directories = tuple(
-                root / name for name in ("inputs", "workspace", "build", "out")
-            )
-            for directory in directories:
-                directory.mkdir()
             request = pipeline.DockerBuildRequestV1(
                 1,
-                root,
-                *directories,
+                pipeline._seal_build_input_bundle_v1(_request()),
+                _limits().max_executable_bytes,
                 root / "container.cid",
                 "labcolors-arb-build-v1-test",
             )
@@ -1158,14 +884,10 @@ class DockerCommandContractTests(unittest.TestCase):
             "--platform linux/amd64",
             "--network none",
             "--read-only",
+            "--interactive",
             "--cap-drop ALL",
             "--security-opt no-new-privileges:true",
             "--name labcolors-arb-build-v1-test",
-            "readonly,bind-propagation=private",
-            "dst=/inputs",
-            "dst=/workspace",
-            "dst=/build",
-            "dst=/out",
             "--rm",
         ):
             with self.subTest(fragment=fragment):
@@ -1176,13 +898,10 @@ class DockerCommandContractTests(unittest.TestCase):
     def test_command_exposes_only_a_private_non_executable_standard_tmp(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary).resolve()
-            directories = tuple(root / name for name in ("inputs", "workspace", "build", "out"))
-            for directory in directories:
-                directory.mkdir()
             request = pipeline.DockerBuildRequestV1(
                 1,
-                root,
-                *directories,
+                pipeline._seal_build_input_bundle_v1(_request()),
+                _limits().max_executable_bytes,
                 root / "container.cid",
                 "labcolors-arb-build-v1-test",
             )
@@ -1195,28 +914,18 @@ class DockerCommandContractTests(unittest.TestCase):
         tmpfs_indexes = tuple(
             index for index, item in enumerate(command) if item == "--tmpfs"
         )
-        self.assertEqual(len(tmpfs_indexes), 1)
+        self.assertEqual(len(tmpfs_indexes), 2)
         self.assertEqual(
-            command[tmpfs_indexes[0] + 1],
-            "/tmp:rw,noexec,nosuid,nodev,mode=1777",
+            tuple(command[index + 1] for index in tmpfs_indexes),
+            (pipeline._BUILD_TMPFS_SPEC_V1, pipeline._BUILD_STATE_TMPFS_SPEC_V1),
         )
-        self.assertNotIn("src=", command[tmpfs_indexes[0] + 1])
+        self.assertTrue(
+            all("src=" not in command[index + 1] for index in tmpfs_indexes)
+        )
         mount_indexes = tuple(
             index for index, item in enumerate(command) if item == "--mount"
         )
-        self.assertEqual(len(mount_indexes), 4)
-        mount_specs = tuple(command[index + 1] for index in mount_indexes)
-        mount_destinations = tuple(
-            item.removeprefix("dst=")
-            for spec in mount_specs
-            for item in spec.split(",")
-            if item.startswith("dst=")
-        )
-        self.assertEqual(
-            mount_destinations,
-            ("/inputs", "/workspace", "/build", "/out"),
-        )
-        self.assertTrue(all("dst=/tmp" not in spec for spec in mount_specs))
+        self.assertEqual(mount_indexes, ())
         self.assertNotIn("-v", command)
         self.assertNotIn("--volume", command)
 
@@ -1277,8 +986,8 @@ class DockerCommandContractTests(unittest.TestCase):
                     if cid_contents is not None:
                         cid_file.write_bytes(cid_contents)
                     observations = (
-                        pipeline.DockerBuildExitedV1(1, b"", b"not found"),
-                        pipeline.DockerBuildExitedV1(0, b"", b""),
+                        pipeline._docker_command_exited_v1(1, b"", b"not found"),
+                        pipeline._docker_command_exited_v1(0, b"", b""),
                     )
                     with mock.patch.object(
                         backend,
@@ -1319,138 +1028,6 @@ class DockerCommandContractTests(unittest.TestCase):
         self.assertEqual(
             result.trigger,
             pipeline.DockerCleanupTriggerV1.PROCESS_EXIT,
-        )
-
-
-@unittest.skipUnless(
-    sys.platform == "linux"
-    and os.environ.get("LABCOLORS_ARB_PIPELINE_DOCKER")
-    and os.environ.get("LABCOLORS_ARB_NATIVE_BINARY")
-    and os.environ.get("LABCOLORS_GMP_ARCHIVE")
-    and os.environ.get("LABCOLORS_MPFR_ARCHIVE")
-    and os.environ.get("LABCOLORS_FLINT_ARCHIVE"),
-    "requires Linux, Docker, the native binary path, and all three exact source archives",
-)
-class NativeBuildIntegrationTests(unittest.TestCase):
-    def test_real_two_builds_and_ephemeral_evaluator_runtime_tests(self) -> None:
-        source_lock = provenance.arb_source_lock_v1()
-        archive_names = (
-            "LABCOLORS_GMP_ARCHIVE",
-            "LABCOLORS_MPFR_ARCHIVE",
-            "LABCOLORS_FLINT_ARCHIVE",
-        )
-        safe = tuple(
-            provenance.admit_source_archive(lock, Path(os.environ[name]).read_bytes())
-            for lock, name in zip(source_lock.sources, archive_names, strict=True)
-        )
-        admitted = provenance.admit_arb_sources(source_lock, safe)
-        controller = pipeline.ControlledPipelineV1(
-            build_backend=pipeline.NativeDockerBuildBackendV1(
-                Path(os.environ["LABCOLORS_ARB_PIPELINE_DOCKER"])
-            ),
-            execution_controller=None,
-        )
-
-        result = controller.build(
-            _request(source_lock=source_lock, admitted_sources=admitted)
-        )
-
-        self.assertIs(type(result), pipeline.DiagnosticBuildObservationV1, result)
-        self.assertEqual(result.rebuild_sha256s, (result.binary_sha256,) * 2)
-
-        # This executable is deliberately ephemeral and is never uploaded: a
-        # distributable static artifact needs a separate linker/legal gate.
-        with tempfile.TemporaryDirectory(prefix="labcolors-arb-evaluator-tests-") as temporary:
-            executable = Path(temporary) / pipeline.EVALUATOR_OUTPUT_NAME_V1
-            executable.write_bytes(result.binary)
-            executable.chmod(0o555)
-            environment = {
-                "LABCOLORS_ARB_EVALUATOR": str(executable),
-                "LC_ALL": "C",
-                "PATH": os.environ.get("PATH", ""),
-                "PYTHONDONTWRITEBYTECODE": "1",
-                "PYTHONHASHSEED": "0",
-                "TZ": "UTC",
-            }
-            runtime = subprocess.run(
-                (
-                    sys.executable,
-                    str(
-                        REPO
-                        / "proof/region/v1/arb/tests/runtime_gate.py"
-                    ),
-                ),
-                check=False,
-                capture_output=True,
-                cwd=REPO,
-                env=environment,
-                timeout=300,
-            )
-
-        self.assertEqual(
-            runtime.returncode,
-            0,
-            (runtime.stdout + runtime.stderr).decode("utf-8", "replace"),
-        )
-        binary_path = Path(os.environ["LABCOLORS_ARB_NATIVE_BINARY"])
-        self.assertTrue(binary_path.is_absolute())
-        descriptor = os.open(
-            binary_path,
-            os.O_WRONLY
-            | os.O_CREAT
-            | os.O_EXCL
-            | os.O_CLOEXEC
-            | getattr(os, "O_NOFOLLOW", 0),
-            0o400,
-        )
-        try:
-            view = memoryview(result.binary)
-            offset = 0
-            while offset < len(view):
-                try:
-                    written = os.write(descriptor, view[offset:])
-                except InterruptedError:
-                    continue
-                if written <= 0:
-                    raise OSError("short native binary write")
-                offset += written
-            os.fsync(descriptor)
-        finally:
-            os.close(descriptor)
-
-
-@unittest.skipUnless(
-    sys.platform == "linux"
-    and os.environ.get("LABCOLORS_ARB_NATIVE_BINARY")
-    and os.environ.get("LABCOLORS_EXECUTOR_CGROUP_V1"),
-    "requires Linux, the native binary path, and an explicit delegated "
-    "cgroup v2 parent",
-)
-class NativePipelineIntegrationTests(unittest.TestCase):
-    def test_prepared_two_build_binary_runs_through_controlled_pipeline(self) -> None:
-        binary = Path(os.environ["LABCOLORS_ARB_NATIVE_BINARY"]).read_bytes()
-        request = _request()
-        controlled = pipeline.ControlledPipelineV1(
-            build_backend=_BuildBackend((binary, binary)),
-            execution_controller=executor.ControlledExecutorV1(
-                executor.NativeLinuxBackendV1(
-                    Path(os.environ["LABCOLORS_EXECUTOR_CGROUP_V1"])
-                )
-            ),
-        )
-
-        result = controlled.execute(request)
-
-        self.assertIs(type(result), pipeline.DiagnosticPipelineObservationV1, result)
-        self.assertEqual(result.build_observation.binary, binary)
-        self.assertEqual(
-            result.build_observation.binary_sha256,
-            hashlib.sha256(binary).digest(),
-        )
-        self.assertEqual(result.transcript.job_identity, request.job.identity)
-        self.assertEqual(
-            result.transcript.comparator_identity,
-            result.comparator.identity,
         )
 
 

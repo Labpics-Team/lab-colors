@@ -666,6 +666,85 @@ class SafeSourceArchiveV1:
         return self._archive_bytes
 
 
+def archive_file_manifest_bytes_v1(
+    files_value: tuple[ArchiveFileV1, ...],
+) -> bytes:
+    """Encode the one canonical retained-file manifest owned by provenance."""
+
+    if (
+        type(files_value) is not tuple
+        or any(type(item) is not ArchiveFileV1 for item in files_value)
+        or tuple(item.path for item in files_value)
+        != tuple(sorted(item.path for item in files_value))
+    ):
+        raise TypeError("invalid archive file manifest")
+    chunks: list[bytes] = [len(files_value).to_bytes(8, "big")]
+    for item in files_value:
+        path = _relative_path(item.path, "archive-file-manifest-v1", "path")
+        if (
+            type(item.mode) is not int
+            or item.mode not in ALLOWED_REGULAR_MODES_V1
+            or type(item.length) is not int
+            or item.length < 0
+            or item.length >= 1 << 64
+        ):
+            raise TypeError("invalid archive file coordinate")
+        _digest(item.sha256, "archive-file-manifest-v1", "sha256")
+        chunks.extend(
+            (
+                path,
+                item.mode.to_bytes(4, "big"),
+                item.length.to_bytes(8, "big"),
+                item.sha256,
+            )
+        )
+    return b"".join(_blob(chunk) for chunk in chunks)
+
+
+def source_archive_replay_coordinates_v1(
+    expected: SourceReleaseLockV1,
+    admitted: SafeSourceArchiveV1,
+) -> tuple[bytes, ...]:
+    """Recompute the retained source coordinates without reopening a path."""
+
+    if type(expected) is not SourceReleaseLockV1:
+        raise TypeError("expected must be SourceReleaseLockV1")
+    if type(admitted) is not SafeSourceArchiveV1:
+        raise TypeError("admitted must be SafeSourceArchiveV1")
+    archive = admitted.archive_bytes
+    manifest = archive_file_manifest_bytes_v1(admitted.files)
+    if (
+        type(archive) is not bytes
+        or admitted.source_lock_identity != expected.identity
+        or admitted.archive_sha256 != expected.archive_sha256
+        or len(archive) != expected.archive_length
+        or hashlib.sha256(archive).digest() != admitted.archive_sha256
+        or admitted.regular_file_count != expected.regular_file_count
+        or admitted.regular_file_count != len(admitted.files)
+        or admitted.regular_file_bytes != expected.regular_file_bytes
+        or admitted.regular_file_bytes
+        != sum(item.length for item in admitted.files)
+        or admitted.tree_identity != _tree_identity(admitted.files)
+    ):
+        _fail(
+            "source-archive-replay-v1",
+            ProvenanceReasonV1.FOREIGN_BINDING,
+            "retained source coordinates changed",
+        )
+    return (
+        bytes((int(expected.role),)),
+        expected.encode(),
+        admitted.source_lock_identity,
+        admitted.archive_sha256,
+        admitted.tree_identity,
+        admitted.regular_file_count.to_bytes(8, "big"),
+        admitted.regular_file_bytes.to_bytes(8, "big"),
+        manifest,
+        len(archive).to_bytes(8, "big"),
+        hashlib.sha256(archive).digest(),
+    )
+
+
 @dataclass(frozen=True, init=False)
 class AdmittedArbSourcesV1:
     """One ordered capability for the complete locked Arb dependency closure."""

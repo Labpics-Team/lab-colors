@@ -14,7 +14,7 @@ TEST_DIRECTORY = Path(__file__).resolve().parent
 REPO = Path(__file__).resolve().parents[5]
 sys.path.insert(0, str(REPO))
 EXPECTED_TEST_INVENTORY_SHA256 = (
-    "7cccde0a6088de17be742af5207cc16229cf40d1960f371482d2a20d89995a80"
+    "849db6d3e81dafaa337a10a5978a7cbcfd57082076725e9ab760864f25664fe5"
 )
 _EVALUATOR_REASON = "set LABCOLORS_ARB_EVALUATOR to the controlled C17 binary"
 EXPECTED_SKIPS = frozenset(
@@ -42,15 +42,9 @@ EXPECTED_SKIPS = frozenset(
             "requires Linux and an explicit delegated cgroup v2 parent",
         ),
         (
-            "test_pipeline.NativeBuildIntegrationTests."
-            "test_real_two_builds_and_ephemeral_evaluator_runtime_tests",
-            "requires Linux, Docker, the native binary path, and all three exact source archives",
-        ),
-        (
-            "test_pipeline.NativePipelineIntegrationTests."
-            "test_prepared_two_build_binary_runs_through_controlled_pipeline",
-            "requires Linux, the native binary path, and an explicit "
-            "delegated cgroup v2 parent",
+            "test_receipt.NativeSourceBoundReceiptIntegrationTests."
+            "test_real_build_run_and_seal_are_one_source_bound_controller_execution",
+            "requires Linux, Docker, a delegated cgroup, and all three exact source archives",
         ),
     }
 )
