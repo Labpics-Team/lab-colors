@@ -23,7 +23,7 @@ import struct
 import sys
 import threading
 import time
-from dataclasses import dataclass, fields
+from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 from typing import Callable, NoReturn, Protocol, TypeAlias
@@ -84,11 +84,17 @@ _CHILD_PACKET_MAGIC = b"LCXE"
 _ELF_HEADER = struct.Struct("<16sHHIQQQIHHHHHH")
 _ELF_PROGRAM_HEADER = struct.Struct("<IIQQQQQQ")
 _ELF_DYNAMIC_ENTRY = struct.Struct("<QQ")
+# Invocation wire uses four bytes for argv/environment cardinalities.
+_U32_CARDINALITY_LIMIT_V1 = 1 << 32
 
 
 def _execution_identity_v1(label: bytes, chunks: tuple[bytes, ...]) -> bytes:
     payload = b"".join(len(chunk).to_bytes(8, "big") + chunk for chunk in chunks)
     return hashlib.sha256(label + len(payload).to_bytes(8, "big") + payload).digest()
+
+
+def _sequence_count_v1(value: tuple[object, ...]) -> int:
+    return len(value)
 
 
 class RequestReasonV1(str, Enum):
@@ -111,6 +117,24 @@ class ExecutionRequestErrorV1(ValueError):
         super().__init__(f"{field}: {reason.value}")
         self.reason = reason
         self.field = field
+
+
+class ExecutionIdentityReasonV1(str, Enum):
+    WRONG_REQUEST_TYPE = "wrong_request_type"
+    REQUEST_NOT_ADMITTED = "request_not_admitted"
+    FOREIGN_PLATFORM = "foreign_platform"
+
+
+@dataclass(frozen=True)
+class ExecutionIdentityRejectedV1:
+    reason: ExecutionIdentityReasonV1
+
+    def __post_init__(self) -> None:
+        if type(self.reason) is not ExecutionIdentityReasonV1:
+            raise TypeError("reason must be ExecutionIdentityReasonV1")
+
+
+ExecutionIdentityResultV1: TypeAlias = bytes | ExecutionIdentityRejectedV1
 
 
 class CapabilityReasonV1(str, Enum):
@@ -157,16 +181,32 @@ class UnsupportedV1:
             raise TypeError("failures must be a nonempty unique tuple")
 
 
-@dataclass(frozen=True)
-class SupportedV1:
-    platform: str
-    sandbox_policy_release: str
+class SupportedV1(tuple):
+    """Exact immutable coordinates of one supported execution platform."""
 
-    def __post_init__(self) -> None:
-        if self.platform != EXECUTION_PLATFORM_V1:
+    __slots__ = ()
+
+    def __new__(
+        cls,
+        platform: str,
+        sandbox_policy_release: str,
+    ) -> SupportedV1:
+        if type(platform) is not str or platform != EXECUTION_PLATFORM_V1:
             raise TypeError("unknown execution platform")
-        if self.sandbox_policy_release != SANDBOX_POLICY_RELEASE_V1:
+        if (
+            type(sandbox_policy_release) is not str
+            or sandbox_policy_release != SANDBOX_POLICY_RELEASE_V1
+        ):
             raise TypeError("unknown sandbox policy release")
+        return tuple.__new__(cls, (platform, sandbox_policy_release))
+
+    @property
+    def platform(self) -> str:
+        return self[0]
+
+    @property
+    def sandbox_policy_release(self) -> str:
+        return self[1]
 
 
 CapabilityReportV1: TypeAlias = SupportedV1 | UnsupportedV1
@@ -183,72 +223,125 @@ def _invalidated_capability_report_v1() -> UnsupportedV1:
     )
 
 
-@dataclass(frozen=True)
-class ExecutionLimitsV1:
-    max_executable_bytes: int
-    max_stdin_bytes: int
-    max_argument_bytes: int
-    max_stdout_bytes: int
-    max_stderr_bytes: int
-    wall_timeout_ns: int
-    memory_max_bytes: int
-    pids_max: int
-
-    def __post_init__(self) -> None:
-        positive = (
-            "max_executable_bytes",
-            "max_stdin_bytes",
-            "max_argument_bytes",
-            "wall_timeout_ns",
-            "memory_max_bytes",
-            "pids_max",
+def _kernel_api_unavailable_report_v1() -> UnsupportedV1:
+    return UnsupportedV1(
+        (
+            CapabilityFailureV1(
+                CapabilityReasonV1.KERNEL_API_UNAVAILABLE,
+                None,
+            ),
         )
-        nonnegative = ("max_stdout_bytes", "max_stderr_bytes")
-        for field_name in positive:
-            value = getattr(self, field_name)
-            if type(value) is not int or value <= 0:
-                raise ExecutionRequestErrorV1(RequestReasonV1.INVALID_LIMIT, field_name)
-        for field_name in nonnegative:
-            value = getattr(self, field_name)
-            if type(value) is not int or value < 0:
+    )
+
+
+_EXECUTION_LIMIT_FIELDS_V1 = (
+    "max_executable_bytes",
+    "max_stdin_bytes",
+    "max_argument_bytes",
+    "max_stdout_bytes",
+    "max_stderr_bytes",
+    "wall_timeout_ns",
+    "memory_max_bytes",
+    "pids_max",
+)
+
+
+class ExecutionLimitsV1(tuple):
+    """Immutable resource coordinates admitted by the execution wire."""
+
+    __slots__ = ()
+
+    def __new__(
+        cls,
+        max_executable_bytes: int,
+        max_stdin_bytes: int,
+        max_argument_bytes: int,
+        max_stdout_bytes: int,
+        max_stderr_bytes: int,
+        wall_timeout_ns: int,
+        memory_max_bytes: int,
+        pids_max: int,
+    ) -> ExecutionLimitsV1:
+        values = (
+            max_executable_bytes,
+            max_stdin_bytes,
+            max_argument_bytes,
+            max_stdout_bytes,
+            max_stderr_bytes,
+            wall_timeout_ns,
+            memory_max_bytes,
+            pids_max,
+        )
+        # Every limit is encoded as u64 in the invocation identity. Admission
+        # owns that representability boundary so identity derivation is total.
+        positive = frozenset((0, 1, 2, 5, 6, 7))
+        for index, (field_name, value) in enumerate(
+            zip(_EXECUTION_LIMIT_FIELDS_V1, values, strict=True)
+        ):
+            minimum = 1 if index in positive else 0
+            if type(value) is not int or value < minimum or value >= 1 << 64:
                 raise ExecutionRequestErrorV1(RequestReasonV1.INVALID_LIMIT, field_name)
         # V1's syscall policy denies clone/fork/vfork; a larger cgroup task
         # budget would advertise a concurrency capability the executor lacks.
-        if self.pids_max != 1:
+        if pids_max != 1:
             raise ExecutionRequestErrorV1(RequestReasonV1.INVALID_LIMIT, "pids_max")
+        return tuple.__new__(cls, values)
+
+    max_executable_bytes = property(lambda self: self[0])
+    max_stdin_bytes = property(lambda self: self[1])
+    max_argument_bytes = property(lambda self: self[2])
+    max_stdout_bytes = property(lambda self: self[3])
+    max_stderr_bytes = property(lambda self: self[4])
+    wall_timeout_ns = property(lambda self: self[5])
+    memory_max_bytes = property(lambda self: self[6])
+    pids_max = property(lambda self: self[7])
 
 
-@dataclass(frozen=True)
-class ExecutionRequestV1:
-    executable: bytes
-    argv: tuple[bytes, ...]
-    environment: tuple[tuple[bytes, bytes], ...]
-    cwd: bytes
-    stdin: bytes
-    umask: int
-    limits: ExecutionLimitsV1
+class ExecutionRequestV1(tuple):
+    """Deeply immutable invocation coordinates admitted as one value."""
 
-    def __post_init__(self) -> None:
-        if type(self.limits) is not ExecutionLimitsV1:
+    __slots__ = ()
+
+    def __new__(
+        cls,
+        executable: bytes,
+        argv: tuple[bytes, ...],
+        environment: tuple[tuple[bytes, bytes], ...],
+        cwd: bytes,
+        stdin: bytes,
+        umask: int,
+        limits: ExecutionLimitsV1,
+    ) -> ExecutionRequestV1:
+        if type(limits) is not ExecutionLimitsV1:
             _request_fail(RequestReasonV1.WRONG_TYPE, "limits")
-        if type(self.executable) is not bytes:
+        try:
+            limits = ExecutionLimitsV1(*limits)
+        except ExecutionRequestErrorV1:
+            raise
+        except Exception:
+            _request_fail(RequestReasonV1.WRONG_TYPE, "limits")
+        if type(executable) is not bytes:
             _request_fail(RequestReasonV1.WRONG_TYPE, "executable")
-        if not self.executable or len(self.executable) > self.limits.max_executable_bytes:
+        if not executable or len(executable) > limits.max_executable_bytes:
             _request_fail(RequestReasonV1.LIMIT_EXCEEDED, "executable")
-        require_static_x86_64_elf_v1(self.executable)
+        require_static_x86_64_elf_v1(executable)
 
-        if type(self.argv) is not tuple or not self.argv:
+        if type(argv) is not tuple or not argv:
             _request_fail(RequestReasonV1.WRONG_TYPE, "argv")
-        for index, item in enumerate(self.argv):
+        if _sequence_count_v1(argv) >= _U32_CARDINALITY_LIMIT_V1:
+            _request_fail(RequestReasonV1.LIMIT_EXCEEDED, "argv")
+        for index, item in enumerate(argv):
             _require_bytes_without_nul(item, f"argv[{index}]")
-        if not self.argv[0]:
+        if not argv[0]:
             _request_fail(RequestReasonV1.EMPTY_ARGV_ZERO, "argv[0]")
 
-        if type(self.environment) is not tuple:
+        if type(environment) is not tuple:
             _request_fail(RequestReasonV1.WRONG_TYPE, "environment")
+        if _sequence_count_v1(environment) >= _U32_CARDINALITY_LIMIT_V1:
+            _request_fail(RequestReasonV1.LIMIT_EXCEEDED, "environment")
         previous: bytes | None = None
-        argument_bytes = sum(len(item) + 1 for item in self.argv)
-        for index, item in enumerate(self.environment):
+        argument_bytes = sum(len(item) + 1 for item in argv)
+        for index, item in enumerate(environment):
             if type(item) is not tuple or len(item) != 2:
                 _request_fail(RequestReasonV1.WRONG_TYPE, f"environment[{index}]")
             key, value = item
@@ -265,46 +358,40 @@ class ExecutionRequestV1:
                 _request_fail(RequestReasonV1.NONCANONICAL_ENVIRONMENT, "environment")
             previous = key
             argument_bytes += len(key) + len(value) + 2
-        if argument_bytes > self.limits.max_argument_bytes:
+        if argument_bytes > limits.max_argument_bytes:
             _request_fail(RequestReasonV1.LIMIT_EXCEEDED, "argv+environment")
 
-        _require_bytes_without_nul(self.cwd, "cwd")
-        if not self.cwd.startswith(b"/"):
+        _require_bytes_without_nul(cwd, "cwd")
+        if not cwd.startswith(b"/"):
             _request_fail(RequestReasonV1.RELATIVE_CWD, "cwd")
         if (
-            posixpath.normpath(self.cwd) != self.cwd
-            or self.cwd.startswith(b"//")
-            or (self.cwd != b"/" and self.cwd.endswith(b"/"))
+            posixpath.normpath(cwd) != cwd
+            or cwd.startswith(b"//")
+            or (cwd != b"/" and cwd.endswith(b"/"))
         ):
             _request_fail(RequestReasonV1.NONCANONICAL_CWD, "cwd")
 
-        if type(self.stdin) is not bytes:
+        if type(stdin) is not bytes:
             _request_fail(RequestReasonV1.WRONG_TYPE, "stdin")
-        if len(self.stdin) > self.limits.max_stdin_bytes:
+        if len(stdin) > limits.max_stdin_bytes:
             _request_fail(RequestReasonV1.LIMIT_EXCEEDED, "stdin")
-        if type(self.umask) is not int or not 0 <= self.umask <= 0o777:
+        if type(umask) is not int or not 0 <= umask <= 0o777:
             _request_fail(RequestReasonV1.INVALID_LIMIT, "umask")
+        return tuple.__new__(
+            cls,
+            (executable, argv, environment, cwd, stdin, umask, limits),
+        )
+
+    executable = property(lambda self: self[0])
+    argv = property(lambda self: self[1])
+    environment = property(lambda self: self[2])
+    cwd = property(lambda self: self[3])
+    stdin = property(lambda self: self[4])
+    umask = property(lambda self: self[5])
+    limits = property(lambda self: self[6])
 
 
-def invocation_identity_v1(request: ExecutionRequestV1) -> bytes:
-    """Bind one admitted invocation without assigning evaluator semantics."""
-
-    if type(request) is not ExecutionRequestV1:
-        raise TypeError("request must be ExecutionRequestV1")
-    replayed_limits = ExecutionLimitsV1(
-        *(getattr(request.limits, item.name) for item in fields(request.limits))
-    )
-    replayed = ExecutionRequestV1(
-        request.executable,
-        request.argv,
-        request.environment,
-        request.cwd,
-        request.stdin,
-        request.umask,
-        replayed_limits,
-    )
-    if replayed != request:
-        raise TypeError("execution request changed after admission")
+def _invocation_identity_from_fields_v1(request: ExecutionRequestV1) -> bytes:
     chunks: list[bytes] = [hashlib.sha256(request.executable).digest()]
     chunks.append(len(request.argv).to_bytes(4, "big"))
     chunks.extend(request.argv)
@@ -319,27 +406,64 @@ def invocation_identity_v1(request: ExecutionRequestV1) -> bytes:
             request.umask.to_bytes(4, "big"),
         )
     )
-    for item in fields(request.limits):
-        chunks.append(getattr(request.limits, item.name).to_bytes(8, "big"))
+    for value in request.limits:
+        chunks.append(value.to_bytes(8, "big"))
     return _execution_identity_v1(_INVOCATION_ID_LABEL_V1, tuple(chunks))
 
 
-def platform_identity_v1(report: SupportedV1) -> bytes:
+def invocation_identity_v1(request: object) -> ExecutionIdentityResultV1:
+    """Bind exactly the invocation state that passed request admission."""
+
+    if type(request) is not ExecutionRequestV1:
+        return ExecutionIdentityRejectedV1(
+            ExecutionIdentityReasonV1.WRONG_REQUEST_TYPE
+        )
+    try:
+        if type(request.limits) is not ExecutionLimitsV1:
+            raise TypeError("foreign execution limits")
+        replayed_limits = ExecutionLimitsV1(*request.limits)
+        replayed = ExecutionRequestV1(
+            request.executable,
+            request.argv,
+            request.environment,
+            request.cwd,
+            request.stdin,
+            request.umask,
+            replayed_limits,
+        )
+    except Exception:
+        return ExecutionIdentityRejectedV1(
+            ExecutionIdentityReasonV1.REQUEST_NOT_ADMITTED
+        )
+    if replayed != request:
+        return ExecutionIdentityRejectedV1(
+            ExecutionIdentityReasonV1.REQUEST_NOT_ADMITTED
+        )
+    return _invocation_identity_from_fields_v1(replayed)
+
+
+def platform_identity_v1(report: object) -> ExecutionIdentityResultV1:
     """Bind the exact admitted execution platform and sandbox policy."""
 
-    if (
-        type(report) is not SupportedV1
-        or report.platform != EXECUTION_PLATFORM_V1
-        or report.sandbox_policy_release != SANDBOX_POLICY_RELEASE_V1
-    ):
-        raise TypeError("report must be the exact V1 supported platform")
-    return _execution_identity_v1(
-        _PLATFORM_ID_LABEL_V1,
-        (
-            report.platform.encode("ascii"),
-            report.sandbox_policy_release.encode("ascii"),
-        ),
-    )
+    if type(report) is not SupportedV1:
+        return ExecutionIdentityRejectedV1(
+            ExecutionIdentityReasonV1.FOREIGN_PLATFORM
+        )
+    try:
+        replayed = SupportedV1(report.platform, report.sandbox_policy_release)
+        if replayed != report:
+            raise TypeError("platform coordinates did not replay")
+        return _execution_identity_v1(
+            _PLATFORM_ID_LABEL_V1,
+            (
+                replayed.platform.encode("ascii"),
+                replayed.sandbox_policy_release.encode("ascii"),
+            ),
+        )
+    except Exception:
+        return ExecutionIdentityRejectedV1(
+            ExecutionIdentityReasonV1.FOREIGN_PLATFORM
+        )
 
 
 def _request_fail(reason: RequestReasonV1, field: str) -> NoReturn:
@@ -457,6 +581,7 @@ class SetupStageV1(int, Enum):
 
 
 class ObserverReasonV1(str, Enum):
+    REQUEST_NOT_ADMITTED = "request_not_admitted"
     PROBE_FAILED = "probe_failed"
     BACKEND_EXCEPTION = "backend_exception"
     BACKEND_CONTRACT = "backend_contract"
@@ -625,14 +750,7 @@ class ControlledExecutorV1:
         try:
             report = backend.probe(guard)
         except Exception:
-            report = UnsupportedV1(
-                (
-                    CapabilityFailureV1(
-                        CapabilityReasonV1.KERNEL_API_UNAVAILABLE,
-                        None,
-                    ),
-                )
-            )
+            report = _kernel_api_unavailable_report_v1()
         except BaseException:
             with self._capability_lock:
                 self._active_capability_probes -= 1
@@ -641,14 +759,24 @@ class ControlledExecutorV1:
                 self._issued_backend = None
             raise
         if type(report) not in (SupportedV1, UnsupportedV1):
-            report = UnsupportedV1(
-                (
-                    CapabilityFailureV1(
-                        CapabilityReasonV1.KERNEL_API_UNAVAILABLE,
-                        None,
-                    ),
+            report = _kernel_api_unavailable_report_v1()
+        elif (
+            type(report) is SupportedV1
+            and type(platform_identity_v1(report)) is not bytes
+        ):
+            report = _kernel_api_unavailable_report_v1()
+        elif type(report) is UnsupportedV1:
+            try:
+                if not _unsupported_is_well_typed_v1(report):
+                    raise TypeError("unsupported capability report did not replay")
+                report = UnsupportedV1(
+                    tuple(
+                        CapabilityFailureV1(failure.reason, failure.errno)
+                        for failure in report.failures
+                    )
                 )
-            )
+            except Exception:
+                report = _kernel_api_unavailable_report_v1()
         with self._capability_lock:
             self._active_capability_probes -= 1
             invalidated = (
@@ -675,13 +803,17 @@ class ControlledExecutorV1:
 
     def execute(
         self,
-        request: ExecutionRequestV1,
+        request: object,
         capability: SupportedV1 | None = None,
     ) -> ExecutionResultV1:
         if os.getpid() != self._owner_pid:
             return ObserverFailureV1(ObserverReasonV1.PROBE_FAILED)
-        if type(request) is not ExecutionRequestV1:
-            raise ExecutionRequestErrorV1(RequestReasonV1.WRONG_TYPE, "request")
+        request_identity = invocation_identity_v1(request)
+        if (
+            type(request) is not ExecutionRequestV1
+            or type(request_identity) is not bytes
+        ):
+            return ObserverFailureV1(ObserverReasonV1.REQUEST_NOT_ADMITTED)
         if capability is None:
             report = self.probe()
             if type(report) is UnsupportedV1:
@@ -1602,14 +1734,7 @@ class NativeLinuxBackendV1:
         try:
             return self._probe_capability_v1(guard)
         except Exception:
-            return UnsupportedV1(
-                (
-                    CapabilityFailureV1(
-                        CapabilityReasonV1.KERNEL_API_UNAVAILABLE,
-                        None,
-                    ),
-                )
-            )
+            return _kernel_api_unavailable_report_v1()
 
     def _probe_capability_v1(self, guard: _ProbeGuardV1) -> CapabilityReportV1:
         if self._platform_name != "linux":
@@ -1646,14 +1771,7 @@ class NativeLinuxBackendV1:
         operations = self._operations
         if operations is None:
             if sys.platform != "linux":
-                return UnsupportedV1(
-                    (
-                        CapabilityFailureV1(
-                            CapabilityReasonV1.KERNEL_API_UNAVAILABLE,
-                            None,
-                        ),
-                    )
-                )
+                return _kernel_api_unavailable_report_v1()
             operations = _NativeLinuxOperationsV1()
             self._operations = operations
 

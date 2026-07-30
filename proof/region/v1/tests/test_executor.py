@@ -167,6 +167,27 @@ def _limits(**changes: int) -> executor.ExecutionLimitsV1:
     return executor.ExecutionLimitsV1(**values)
 
 
+def _replace_limits(
+    value: executor.ExecutionLimitsV1,
+    **changes: int,
+) -> executor.ExecutionLimitsV1:
+    values = {
+        name: getattr(value, name)
+        for name in (
+            "max_executable_bytes",
+            "max_stdin_bytes",
+            "max_argument_bytes",
+            "max_stdout_bytes",
+            "max_stderr_bytes",
+            "wall_timeout_ns",
+            "memory_max_bytes",
+            "pids_max",
+        )
+    }
+    values.update(changes)
+    return executor.ExecutionLimitsV1(**values)
+
+
 def _request(**changes: object) -> executor.ExecutionRequestV1:
     values: dict[str, object] = {
         "executable": _static_elf(),
@@ -410,9 +431,16 @@ class SharedExecutorBoundaryTests(unittest.TestCase):
             "0e37fa87cadce6814466528b2ea419e964554339bcbcb8d27c2da66c95dabc51",
         )
 
-        object.__setattr__(platform_value, "sandbox_policy_release", "foreign")
-        with self.assertRaises(TypeError):
-            executor.platform_identity_v1(platform_value)
+        platform_value = tuple.__new__(
+            executor.SupportedV1,
+            (executor.EXECUTION_PLATFORM_V1, "foreign"),
+        )
+        self.assertEqual(
+            executor.platform_identity_v1(platform_value),
+            executor.ExecutionIdentityRejectedV1(
+                executor.ExecutionIdentityReasonV1.FOREIGN_PLATFORM,
+            ),
+        )
 
     def test_invocation_identity_binds_every_representable_coordinate(self) -> None:
         request = _request()
@@ -436,7 +464,7 @@ class SharedExecutorBoundaryTests(unittest.TestCase):
             _request(stdin=request.stdin + b"x"),
             _request(umask=0o022),
             *(
-                _request(limits=replace(request.limits, **changes))
+                _request(limits=_replace_limits(request.limits, **changes))
                 for changes in limit_mutations
             ),
         )
@@ -444,16 +472,63 @@ class SharedExecutorBoundaryTests(unittest.TestCase):
         self.assertEqual(len(mutants), 13)
         identities = {executor.invocation_identity_v1(item) for item in mutants}
         self.assertEqual(len(identities), 13)
+        self.assertTrue(all(type(identity) is bytes for identity in identities))
         self.assertTrue(
             all(executor.invocation_identity_v1(item) != baseline for item in mutants)
         )
 
-    def test_invalidated_request_cannot_be_reidentified(self) -> None:
-        request = _request()
-        object.__setattr__(request.limits, "pids_max", 2)
+    def test_identity_api_returns_typed_rejections_for_foreign_inputs(self) -> None:
+        cases = (
+            (
+                object(),
+                executor.ExecutionIdentityReasonV1.WRONG_REQUEST_TYPE,
+            ),
+            (
+                tuple.__new__(executor.ExecutionRequestV1, ()),
+                executor.ExecutionIdentityReasonV1.REQUEST_NOT_ADMITTED,
+            ),
+        )
+        for value, reason in cases:
+            with self.subTest(reason=reason):
+                self.assertEqual(
+                    executor.invocation_identity_v1(value),
+                    executor.ExecutionIdentityRejectedV1(reason),
+                )
+        self.assertEqual(
+            executor.platform_identity_v1(object()),
+            executor.ExecutionIdentityRejectedV1(
+                executor.ExecutionIdentityReasonV1.FOREIGN_PLATFORM,
+            ),
+        )
 
-        with self.assertRaises(executor.ExecutionRequestErrorV1):
-            executor.invocation_identity_v1(request)
+    def test_post_admission_request_mutation_cannot_receive_an_identity(self) -> None:
+        request = _request()
+        capability = executor.SupportedV1(
+            executor.EXECUTION_PLATFORM_V1,
+            executor.SANDBOX_POLICY_RELEASE_V1,
+        )
+        invocation_identity = executor.invocation_identity_v1(request)
+        platform_identity = executor.platform_identity_v1(capability)
+
+        with self.assertRaises((AttributeError, TypeError)):
+            object.__setattr__(request, "stdin", request.stdin + b"x")
+        with self.assertRaises((AttributeError, TypeError)):
+            object.__setattr__(request.limits, "wall_timeout_ns", 1)
+        with self.assertRaises((AttributeError, TypeError)):
+            object.__setattr__(capability, "sandbox_policy_release", "foreign")
+        self.assertEqual(executor.invocation_identity_v1(request), invocation_identity)
+        self.assertEqual(executor.platform_identity_v1(capability), platform_identity)
+
+    def test_supported_platform_rejects_hostile_string_subclasses(self) -> None:
+        class HostileString(str):
+            def encode(self, *_args: object, **_kwargs: object) -> bytes:
+                raise RuntimeError("hostile encoding")
+
+        with self.assertRaises(TypeError):
+            executor.SupportedV1(
+                HostileString(executor.EXECUTION_PLATFORM_V1),
+                HostileString(executor.SANDBOX_POLICY_RELEASE_V1),
+            )
 
 
 class RequestAdmissionTests(unittest.TestCase):
@@ -493,8 +568,19 @@ class RequestAdmissionTests(unittest.TestCase):
         self.assertEqual(request.environment, ((b"LC_ALL", b"C"), (b"TZ", b"UTC")))
         self.assertEqual(request.cwd, b"/work")
         self.assertEqual(request.stdin, b"LCJOB1\0\0")
-        self.assertNotIn("network_isolated", request.__dataclass_fields__)
-        self.assertNotIn("cgroup_isolated", request.__dataclass_fields__)
+        self.assertFalse(hasattr(request, "network_isolated"))
+        self.assertFalse(hasattr(request, "cgroup_isolated"))
+
+    def test_request_rejects_forged_exact_limit_values(self) -> None:
+        forged = tuple.__new__(
+            executor.ExecutionLimitsV1,
+            (4096, 4096, 4096, 16, 16, 1_000_000_000, 64 * 1024 * 1024, 2),
+        )
+
+        with self.assertRaises(executor.ExecutionRequestErrorV1) as caught:
+            _request(limits=forged)
+
+        self.assertEqual(caught.exception.reason, executor.RequestReasonV1.INVALID_LIMIT)
 
     def test_argv_environment_cwd_and_stdin_are_strict_bytes(self) -> None:
         cases = (
@@ -530,11 +616,49 @@ class RequestAdmissionTests(unittest.TestCase):
             executable=_static_elf() + b"x" * 4096,
         )
         with self.assertRaises(executor.ExecutionRequestErrorV1) as caught:
-            replace(_limits(), pids_max=True)  # type: ignore[arg-type]
+            _replace_limits(_limits(), pids_max=True)  # type: ignore[arg-type]
         self.assertEqual(caught.exception.reason, executor.RequestReasonV1.INVALID_LIMIT)
         with self.assertRaises(executor.ExecutionRequestErrorV1) as caught:
-            replace(_limits(), pids_max=2)
+            _replace_limits(_limits(), pids_max=2)
         self.assertEqual(caught.exception.reason, executor.RequestReasonV1.INVALID_LIMIT)
+        for field_name in (
+            "max_executable_bytes",
+            "max_stdin_bytes",
+            "max_argument_bytes",
+            "max_stdout_bytes",
+            "max_stderr_bytes",
+            "wall_timeout_ns",
+            "memory_max_bytes",
+            "pids_max",
+        ):
+            with self.subTest(u64_field=field_name):
+                with self.assertRaises(executor.ExecutionRequestErrorV1) as caught:
+                    _replace_limits(_limits(), **{field_name: 1 << 64})
+                self.assertEqual(
+                    caught.exception.reason,
+                    executor.RequestReasonV1.INVALID_LIMIT,
+                )
+        cardinalities = (
+            ("argv", (b"proof-evaluator",)),
+            ("environment", ((b"LC_ALL", b"C"),)),
+        )
+        for field_name, target in cardinalities:
+            with self.subTest(u32_cardinality=field_name):
+                with mock.patch.object(
+                    executor,
+                    "_sequence_count_v1",
+                    side_effect=lambda value, target=target: (
+                        1 << 32 if value is target else len(value)
+                    ),
+                ):
+                    with self.assertRaises(
+                        executor.ExecutionRequestErrorV1
+                    ) as caught:
+                        _request(**{field_name: target})
+                self.assertEqual(
+                    caught.exception.reason,
+                    executor.RequestReasonV1.LIMIT_EXCEEDED,
+                )
 
     def test_only_static_x86_64_elf_is_admitted(self) -> None:
         self.assert_rejected(executor.RequestReasonV1.INVALID_ELF, executable=b"#!/bin/sh\n")
@@ -781,6 +905,76 @@ class CapabilityAndExecutionTests(unittest.TestCase):
         self.assertIs(received_request, request)
         self.assertEqual(received_capability, capability)
         self.assertIsNot(received_capability, capability)
+
+    def test_forged_exact_capability_is_rejected_without_exception(self) -> None:
+        forged = tuple.__new__(executor.SupportedV1, ())
+        backend = _Backend(forged)
+
+        report = executor.ControlledExecutorV1(backend).probe()
+
+        self.assertEqual(
+            report,
+            executor.UnsupportedV1(
+                (
+                    executor.CapabilityFailureV1(
+                        executor.CapabilityReasonV1.KERNEL_API_UNAVAILABLE,
+                        None,
+                    ),
+                )
+            ),
+        )
+
+    def test_forged_exact_unsupported_report_is_rejected_without_exception(self) -> None:
+        forged = object.__new__(executor.UnsupportedV1)
+        backend = _Backend(forged)
+
+        report = executor.ControlledExecutorV1(backend).probe()
+
+        self.assertEqual(
+            report,
+            executor.UnsupportedV1(
+                (
+                    executor.CapabilityFailureV1(
+                        executor.CapabilityReasonV1.KERNEL_API_UNAVAILABLE,
+                        None,
+                    ),
+                )
+            ),
+        )
+
+    def test_unadmitted_exact_request_never_reaches_the_backend(self) -> None:
+        admitted = _request()
+        forged_limits = tuple.__new__(
+            executor.ExecutionLimitsV1,
+            (*admitted.limits[:-1], 2),
+        )
+        forged = tuple.__new__(
+            executor.ExecutionRequestV1,
+            (*admitted[:-1], forged_limits),
+        )
+        capability = executor.SupportedV1(
+            executor.EXECUTION_PLATFORM_V1,
+            executor.SANDBOX_POLICY_RELEASE_V1,
+        )
+        backend = _Backend(
+            capability,
+            executor.CompletedV1(
+                hashlib.sha256(admitted.executable).digest(),
+                b"answer",
+                b"",
+            ),
+        )
+
+        result = executor.ControlledExecutorV1(backend).execute(forged)
+
+        self.assertEqual(
+            result,
+            executor.ObserverFailureV1(
+                executor.ObserverReasonV1.REQUEST_NOT_ADMITTED
+            ),
+        )
+        self.assertEqual(backend.probe_calls, 0)
+        self.assertEqual(backend.received, [])
 
     def test_preprobed_capability_is_consumed_without_a_second_probe(self) -> None:
         capability = executor.SupportedV1(

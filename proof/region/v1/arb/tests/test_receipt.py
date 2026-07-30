@@ -102,16 +102,18 @@ class _NativeRunBackend:
     def run(
         self,
         request: executor.ExecutionRequestV1,
-        _capability: executor.SupportedV1,
+        capability: executor.SupportedV1,
     ) -> executor.ExecutionResultV1:
         self.requests.append(request)
         if self.result is not None:
-            return self.result
-        return executor.CompletedV1(
-            hashlib.sha256(request.executable).digest(),
-            _transcript_for_request(request, unresolved=self.unresolved),
-            b"",
-        )
+            result = self.result
+        else:
+            result = executor.CompletedV1(
+                hashlib.sha256(request.executable).digest(),
+                _transcript_for_request(request, unresolved=self.unresolved),
+                b"",
+            )
+        return result
 
 
 def _controller(
@@ -160,7 +162,10 @@ def _execute(
     unresolved: bool = False,
     process_result: executor.ExecutionResultV1 | None = None,
 ) -> tuple[receipt.SourceBoundResultV1, _NativeRunBackend]:
-    backend = _NativeRunBackend(unresolved=unresolved, result=process_result)
+    backend = _NativeRunBackend(
+        unresolved=unresolved,
+        result=process_result,
+    )
     controller, patches = _controller(_static_elf(b"source-bound-receipt"), backend)
     with patches[0], patches[1], patches[2], patches[3], patches[4]:
         return controller.execute(_request()), backend
@@ -174,7 +179,93 @@ def _tamper(value: object, field: str, replacement: object) -> object:
     return clone
 
 
+def _replace_limits(
+    value: executor.ExecutionLimitsV1,
+    **changes: int,
+) -> executor.ExecutionLimitsV1:
+    values = {
+        name: getattr(value, name)
+        for name in (
+            "max_executable_bytes",
+            "max_stdin_bytes",
+            "max_argument_bytes",
+            "max_stdout_bytes",
+            "max_stderr_bytes",
+            "wall_timeout_ns",
+            "memory_max_bytes",
+            "pids_max",
+        )
+    }
+    values.update(changes)
+    return executor.ExecutionLimitsV1(**values)
+
+
+def _replace_invocation(
+    value: executor.ExecutionRequestV1,
+    **changes: object,
+) -> executor.ExecutionRequestV1:
+    values: dict[str, object] = {
+        "executable": value.executable,
+        "argv": value.argv,
+        "environment": value.environment,
+        "cwd": value.cwd,
+        "stdin": value.stdin,
+        "umask": value.umask,
+        "limits": value.limits,
+    }
+    values.update(changes)
+    return executor.ExecutionRequestV1(**values)
+
+
 class SourceBoundReceiptTests(unittest.TestCase):
+    def test_source_bound_policy_identity_binds_immutable_coordinates(self) -> None:
+        self.assertEqual(
+            receipt.source_bound_policy_identity_v1().hex(),
+            "a7cf0c142397a1e8ce3f9bb9dd4168120cdf78814745d1d4596d08a8e88a6b1b",
+        )
+
+    def test_identity_rejection_remains_typed_at_the_receipt_boundary(self) -> None:
+        invocation_rejection = executor.ExecutionIdentityRejectedV1(
+            executor.ExecutionIdentityReasonV1.REQUEST_NOT_ADMITTED,
+        )
+        admitted_invocation_identity = hashlib.sha256(b"admitted invocation").digest()
+        with mock.patch.object(
+            receipt.executor,
+            "invocation_identity_v1",
+            side_effect=(admitted_invocation_identity, invocation_rejection),
+        ):
+            result, _backend = _execute()
+        self.assertEqual(
+            result,
+            pipeline.ExecutionRejectedV1(
+                pipeline.ExecutionFailureReasonV1.BACKEND_CONTRACT,
+                invocation_rejection,
+            ),
+        )
+
+        platform_rejection = executor.ExecutionIdentityRejectedV1(
+            executor.ExecutionIdentityReasonV1.FOREIGN_PLATFORM,
+        )
+        admitted_platform_identity = executor.platform_identity_v1(
+            executor.SupportedV1(
+                executor.EXECUTION_PLATFORM_V1,
+                executor.SANDBOX_POLICY_RELEASE_V1,
+            )
+        )
+        with mock.patch.object(
+            receipt.executor,
+            "platform_identity_v1",
+            side_effect=(admitted_platform_identity, platform_rejection),
+        ):
+            result, _backend = _execute()
+        self.assertEqual(
+            result,
+            pipeline.ExecutionRejectedV1(
+                pipeline.ExecutionFailureReasonV1.BACKEND_CONTRACT,
+                platform_rejection,
+            ),
+        )
+
     def test_only_controller_execution_can_seal_a_receipt(self) -> None:
         result, backend = _execute()
 
@@ -483,15 +574,18 @@ class SourceBoundReceiptTests(unittest.TestCase):
         self.assertEqual(equal_executable_copy, dag.invocation.executable)
         self.assertIsNot(equal_executable_copy, dag.invocation.executable)
         mutants = (
-            replace(dag.invocation, executable=equal_executable_copy),
-            replace(dag.invocation, argv=dag.invocation.argv + (b"ambient",)),
-            replace(
+            _replace_invocation(dag.invocation, executable=equal_executable_copy),
+            _replace_invocation(
+                dag.invocation,
+                argv=dag.invocation.argv + (b"ambient",),
+            ),
+            _replace_invocation(
                 dag.invocation,
                 environment=((b"LC_ALL", b"POSIX"), (b"TZ", b"UTC")),
             ),
-            replace(dag.invocation, cwd=b"/tmp"),
-            replace(dag.invocation, stdin=dag.invocation.stdin + b"x"),
-            replace(dag.invocation, umask=0o022),
+            _replace_invocation(dag.invocation, cwd=b"/tmp"),
+            _replace_invocation(dag.invocation, stdin=dag.invocation.stdin + b"x"),
+            _replace_invocation(dag.invocation, umask=0o022),
         )
         for invocation in mutants:
             self.assertFalse(
@@ -518,7 +612,7 @@ class SourceBoundReceiptTests(unittest.TestCase):
                     forged_claim,
                     _token=receipt._EVIDENCE_TOKEN,
                 )
-        mutated_limits = replace(
+        mutated_limits = _replace_limits(
             dag.request.execution_limits,
             wall_timeout_ns=dag.request.execution_limits.wall_timeout_ns - 1,
         )
@@ -547,7 +641,13 @@ class SourceBoundReceiptTests(unittest.TestCase):
                 _tamper(
                     dag,
                     "platform",
-                    _tamper(dag.platform, "platform", "foreign-linux-x86_64"),
+                    tuple.__new__(
+                        executor.SupportedV1,
+                        (
+                            "foreign-linux-x86_64",
+                            executor.SANDBOX_POLICY_RELEASE_V1,
+                        ),
+                    ),
                 )
             )
         )

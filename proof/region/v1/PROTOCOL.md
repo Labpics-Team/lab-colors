@@ -198,6 +198,14 @@ Arb/MPFI, formula или comparator semantics. Он же единолично к
 наблюдённые свойства хоста, получает guard текущего probe и не может продлить
 жизнь capability повторно используемым report-объектом.
 
+`ExecutionRequestV1`, его limits и `SupportedV1` являются структурно
+неизменяемыми значениями. Публичные execution identity functions воспроизводят
+admission из точных координат и возвращают
+`bytes | ExecutionIdentityRejectedV1`: foreign или даже намеренно forged
+malformed value становится versioned typed rejection, а не новой identity и не
+exception-channel. `ControlledExecutorV1` отвергает такой request до probe и
+backend run как `ObserverFailureV1(REQUEST_NOT_ADMITTED)`.
+
 Linux backend допускается лишь в отдельном helper process. Helper находится в
 прямом дочернем cgroup объявленного parent, а весь parent subtree имеет
 `pids.max = 2` и перед probe содержит ровно observer. Эти два task slots имеют

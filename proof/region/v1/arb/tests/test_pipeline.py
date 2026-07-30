@@ -221,17 +221,19 @@ def _foreign_comparator() -> ContentResolvedComparatorManifestV2:
     return ContentResolvedComparatorManifestV2.admit(manifest, by_digest.get)
 
 
-def _limits() -> executor.ExecutionLimitsV1:
-    return executor.ExecutionLimitsV1(
-        max_executable_bytes=16 * 1024 * 1024,
-        max_stdin_bytes=16 * 1024 * 1024,
-        max_argument_bytes=4096,
-        max_stdout_bytes=16 * 1024 * 1024,
-        max_stderr_bytes=64 * 1024,
-        wall_timeout_ns=60_000_000_000,
-        memory_max_bytes=1024 * 1024 * 1024,
-        pids_max=1,
-    )
+def _limits(**changes: int) -> executor.ExecutionLimitsV1:
+    values = {
+        "max_executable_bytes": 16 * 1024 * 1024,
+        "max_stdin_bytes": 16 * 1024 * 1024,
+        "max_argument_bytes": 4096,
+        "max_stdout_bytes": 16 * 1024 * 1024,
+        "max_stderr_bytes": 64 * 1024,
+        "wall_timeout_ns": 60_000_000_000,
+        "memory_max_bytes": 1024 * 1024 * 1024,
+        "pids_max": 1,
+    }
+    values.update(changes)
+    return executor.ExecutionLimitsV1(**values)
 
 
 def _request(**changes: object) -> pipeline.PipelineRequestV1:
@@ -758,10 +760,7 @@ class ControlledPipelineTests(unittest.TestCase):
     def test_job_that_exceeds_exact_run_limits_is_rejected_before_build(self) -> None:
         with self.assertRaises(pipeline.PipelineInputErrorV1) as caught:
             _request(
-                execution_limits=replace(
-                    _limits(),
-                    max_stdin_bytes=1,
-                )
+                execution_limits=_limits(max_stdin_bytes=1)
             )
 
         self.assertEqual(
@@ -772,8 +771,7 @@ class ControlledPipelineTests(unittest.TestCase):
     def test_build_output_limit_is_rejected_at_pipeline_admission(self) -> None:
         with self.assertRaises(pipeline.PipelineInputErrorV1) as caught:
             _request(
-                execution_limits=replace(
-                    _limits(),
+                execution_limits=_limits(
                     max_executable_bytes=pipeline.BUILD_STDOUT_LIMIT_V1 + 1,
                 )
             )

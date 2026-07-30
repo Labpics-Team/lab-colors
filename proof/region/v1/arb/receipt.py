@@ -60,6 +60,7 @@ def source_bound_policy_identity_v1() -> bytes:
             b"source=lock-plus-owned-archive-and-build-input-replay",
             b"build=one-sealed-bundle-two-fresh-byte-equal-attempts",
             b"run=retained-executable-object-one-contained-process",
+            b"identity=immutable-coordinates-total-rejection-v1",
             b"claim=provenance-only-no-numerical-semantics",
             b"trust=unsealed-linux-x64-host-and-docker-daemon",
         ),
@@ -290,6 +291,11 @@ def _run_identity_v1(
     )
     invocation_identity = executor.invocation_identity_v1(invocation)
     platform_identity = executor.platform_identity_v1(platform_value)
+    if (
+        type(invocation_identity) is not bytes
+        or type(platform_identity) is not bytes
+    ):
+        raise TypeError("execution identity replay was rejected")
     expected_claim = protocol.RunClaimV1.for_transcript(
         request.job,
         build.comparator.manifest,
@@ -526,7 +532,7 @@ SourceBoundResultV1: TypeAlias = (
 
 
 def _limits_copy_v1(value: executor.ExecutionLimitsV1) -> executor.ExecutionLimitsV1:
-    return executor.ExecutionLimitsV1(*(getattr(value, item.name) for item in fields(value)))
+    return executor.ExecutionLimitsV1(*value)
 
 
 def _resolve_request_v1(
@@ -717,7 +723,25 @@ class SourceBoundArbControllerV1:
             )
         try:
             invocation_identity = executor.invocation_identity_v1(invocation)
+            if type(invocation_identity) is executor.ExecutionIdentityRejectedV1:
+                return pipeline.ExecutionRejectedV1(
+                    pipeline.ExecutionFailureReasonV1.BACKEND_CONTRACT,
+                    invocation_identity,
+                )
             platform_identity = executor.platform_identity_v1(capability)
+            if type(platform_identity) is executor.ExecutionIdentityRejectedV1:
+                return pipeline.ExecutionRejectedV1(
+                    pipeline.ExecutionFailureReasonV1.BACKEND_CONTRACT,
+                    platform_identity,
+                )
+            if (
+                type(invocation_identity) is not bytes
+                or type(platform_identity) is not bytes
+            ):
+                return pipeline.ExecutionRejectedV1(
+                    pipeline.ExecutionFailureReasonV1.BACKEND_CONTRACT,
+                    (invocation_identity, platform_identity),
+                )
             run_claim = protocol.RunClaimV1.for_transcript(
                 replay_request.job,
                 built.comparator.manifest,
