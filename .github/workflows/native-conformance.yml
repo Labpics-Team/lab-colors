@@ -1,19 +1,10 @@
 name: Native conformance (Swift)
 
-# Нативная стратегия (#84): доказательство ДИНАМИЧНОГО рантайм-ядра.
-# Swift зовёт ядро Rust В РАНТАЙМЕ через UniFFI; conformance-пак прогоняется
-# против выхода FFI.
-#
-# ВАЖНО (владелец, 2026-07-08): GitHub-hosted macOS-раннеры платные и ИСКЛЮЧЕНЫ
-# навсегда — биллинг чиниться не будет. Поэтому Swift валидируется на
-# self-hosted Linux-раннере (de-02) в официальном swift-контейнере — тот же
-# UniFFI-биндинг, тот же пак, ядро под x86_64-unknown-linux-gnu. Числовые
-# семейства пака держатся толерантностью DRIFT_TOL=1e-6
-# (см. conformance/README.md). Glow stable проверяется как типизированный
-# Indeterminate; для legacy CAM16 bit parity не заявляется.
-#
-# Линтеры/аудит/wasm/основной `cargo test --workspace` (включая толерантный
-# раннер-референс пака на Linux) — в ci.yml. Здесь — Swift-слой.
+# Тонкий caller: только триггеры, concurrency и права. Job graph, пины и env-пины
+# (Rust 1.96.0, swift-контейнер по digest) закреплены в immutable
+# native-conformance-worker.yml на полном commit SHA — runner-group ACL допускает
+# в одноразовую gVisor-ячейку DE-02 только jobs из закреплённых worker'ов.
+# Своих inputs у worker нет by design.
 
 on:
   push:
@@ -31,75 +22,12 @@ concurrency:
 permissions:
   contents: read
 
-env:
-  RUST_TOOLCHAIN: 1.96.0
-  SWIFT_CONTAINER: swift:6.1.3@sha256:e1cdaf7ddc9de37d8561da7a260535236694fca8c1b67d3129d47d8b180a9394
-
 jobs:
-  # АКТИВНЫЙ ГЕЙТ: Swift-conformance на self-hosted Linux через swift-контейнер.
-  # Зеркало проверенного локального прогона (bindings/swift/ci/run-conformance.sh).
-  swift-conformance-linux:
-    name: swift conformance (self-hosted Linux, swift container)
-    runs-on: [self-hosted, Linux, X64]
-    # Защита от fork-PR: НЕ гоняем недоверенный код форков на своей инфре.
-    # Форк-PR пропускается; push в main и same-repo PR — гоняются.
-    if: >-
-      (github.event_name != 'pull_request' ||
-      github.event.pull_request.head.repo.full_name == github.repository)
-    steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
-        with:
-          persist-credentials: false
-
-      # Официальный Swift 6.1.3 (Ubuntu), pinned по manifest-list digest.
-      # Внутри ставится pinned Rust, ядро собирается
-      # под Linux, генерятся Swift-биндинги, swift test прогоняет пак. Скрипт —
-      # единый источник с локальным прогоном (bindings/swift/ci/run-conformance.sh).
-      # $GITHUB_WORKSPACE монтируется read-only; сборка идёт в /work в контейнере.
-      - name: swift conformance in swift:6.1.3 container
-        run: |
-          docker run --rm \
-            -v "$GITHUB_WORKSPACE":/src:ro \
-            "$SWIFT_CONTAINER" \
-            bash /src/bindings/swift/ci/run-conformance.sh
-
-  # ССЫЛОЧНАЯ джоба (НЕ активный гейт): нативный macOS/arm64. Требует ПЛАТНЫХ
-  # GitHub-hosted macOS-минут, которые владелец исключил навсегда — поэтому
-  # гейтирована `workflow_dispatch` и НЕ запускается на PR/push (не блокирует).
-  # Оставлена как задокументированный путь на случай появления бесплатного
-  # macOS-раннера (напр. self-hosted Mac). Активная валидация — job выше.
-  swift-conformance-macos-reference:
-    name: swift test (macOS arm64 — ручной запуск, платные раннеры off)
-    if: github.event_name == 'workflow_dispatch'
-    runs-on: macos-15
-    steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
-        with:
-          persist-credentials: false
-      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master @ 2026-03-27
-        with:
-          toolchain: ${{ env.RUST_TOOLCHAIN }}
-      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
-      - name: versions
-        run: |
-          swift --version
-          rustc --version
-      - name: cargo test (reference runner + ffi units)
-        run: cargo +${{ env.RUST_TOOLCHAIN }} test -p labcolors-conformance -p labcolors-ffi --locked
-      - name: build labcolors-ffi (+ bindgen bin)
-        run: cargo +${{ env.RUST_TOOLCHAIN }} build -p labcolors-ffi --features cli --locked
-      - name: generate Swift bindings
-        run: |
-          cargo +${{ env.RUST_TOOLCHAIN }} run -p labcolors-ffi --features cli --bin uniffi-bindgen --locked -- \
-            generate --library target/debug/liblabcolors.dylib \
-            --language swift --out-dir bindings/swift/generated
-      - name: arrange generated bindings
-        run: |
-          set -euo pipefail
-          gen=bindings/swift/generated
-          cp "$gen/labcolors.swift"        bindings/swift/Sources/LabColors/labcolors.swift
-          cp "$gen/labcolorsFFI.h"         bindings/swift/Sources/labcolorsFFI/labcolorsFFI.h
-          cp "$gen/labcolorsFFI.modulemap" bindings/swift/Sources/labcolorsFFI/module.modulemap
-      - name: swift test (conformance pack vs FFI)
-        working-directory: bindings/swift
-        run: swift test -Xlinker -L"$GITHUB_WORKSPACE/target/debug"
+  # ИМЯ JOB'А НЕ МЕНЯТЬ БЕЗ ПРАВКИ publish.yml: GitHub публикует job'ы reusable-
+  # воркфлоу как «<имя этого job'а> / <имя job'а worker'а>», а publish-гейт сверяет
+  # эти имена буквально.
+  worker:
+    name: Native conformance (Swift)
+    permissions:
+      contents: read
+    uses: Labpics-Team/lab-colors/.github/workflows/native-conformance-worker.yml@dc972fafa323bc0a7f7f87275708a6d6fb6b7708
