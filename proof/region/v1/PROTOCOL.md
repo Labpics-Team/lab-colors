@@ -280,7 +280,7 @@ cleanup, без ложного заявления о reap CLI. `TwoBuildObservat
 универсальным доказательством воспроизводимости. При отказе после создания
 валидной session сохраняется весь уже завершённый causal prefix. Context-free
 contract violation, обнаруженный до создания session (например, невалидная
-session или сбой `TemporaryDirectory`), может вернуть `BuildRejectedV1` без
+session или сбой создания приватного CID-root через `mkdtemp`), может вернуть `BuildRejectedV1` без
 `session` и `completed_processes`.
 Transport не знает formula, ELF, comparator или
 source provenance: lane отдельно перепроверяет semantic input binding перед
