@@ -110,13 +110,13 @@ def _policy_mutants(
     return tuple(mutants)
 
 
-def _arb_input_binding_oracle_v1(
+def _arb_input_binding_oracle_v2(
     source_identity: bytes,
     build_input_identity: bytes,
     contents: bytes,
     bootstrap: str,
 ) -> bytes:
-    """Independent frozen formula for the unchanged Arb input binding."""
+    """Independent frozen formula for the V2 Arb input binding."""
 
     chunks = (
         source_identity,
@@ -129,7 +129,7 @@ def _arb_input_binding_oracle_v1(
         len(chunk).to_bytes(8, "big") + chunk for chunk in chunks
     )
     return hashlib.sha256(
-        b"labcolors.proof-region.arb-build-input-bundle.v1\0"
+        b"labcolors.proof-region.arb-build-input-bundle.v2\0"
         + len(payload).to_bytes(8, "big")
         + payload
     ).digest()
@@ -276,7 +276,7 @@ class BuildIdentityV2Tests(unittest.TestCase):
         request = _request()
         baseline_policy = pipeline.ARB_BUILD_TRANSPORT_POLICY_V1
         baseline = pipeline._seal_build_input_bundle_v1(request, baseline_policy)
-        expected = _arb_input_binding_oracle_v1(
+        expected = _arb_input_binding_oracle_v2(
             request.admitted_sources.identity,
             request.build_sources.build_input_identity,
             baseline.contents,
@@ -301,7 +301,7 @@ class BuildIdentityV2Tests(unittest.TestCase):
                     changed,
                 )
             )
-        expected_changed = _arb_input_binding_oracle_v1(
+        expected_changed = _arb_input_binding_oracle_v2(
             request.admitted_sources.identity,
             request.build_sources.build_input_identity,
             changed.contents,
@@ -373,7 +373,7 @@ class BuildIdentityV2Tests(unittest.TestCase):
             pipeline.ARB_BUILD_TRANSPORT_POLICY_V1 = original_policy
 
         self.assertIs(type(result), pipeline.DiagnosticBuildObservationV1)
-        expected = _arb_input_binding_oracle_v1(
+        expected = _arb_input_binding_oracle_v2(
             request.admitted_sources.identity,
             request.build_sources.build_input_identity,
             result.input_bundle.contents,

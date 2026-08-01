@@ -2493,11 +2493,9 @@ class NativeDockerBuildBackendV1:
             fallback_detail = (
                 "native Docker build observation is not canonical; " + detail
             )
-            # Preserve a canonical cleanup diagnostic when it fits. A complete
-            # one can fill the budget, so overflow has the declared dual-failure
-            # meaning rather than turning the typed fallback into an exception.
-            if _canonical_diagnostic_detail_v1(fallback_detail) is None:
-                fallback_detail = _OBSERVER_AND_CID_ROOT_CLEANUP_FAILURE_V1
+            # Keep the joined diagnostic typed and bounded even when cleanup
+            # supplies the full diagnostic budget.
+            fallback_detail = fallback_detail[:_DIAGNOSTIC_DETAIL_TEXT_LIMIT_V1]
             return DockerBuildObserverFailureV1(
                 fallback_detail,
                 b"",
