@@ -156,7 +156,7 @@ def _controller(
                 capability,
             ),
         ),
-        mock.patch.object(receipt, "_enter_observer_cgroup_v1", return_value=None),
+        mock.patch.object(executor, "enter_observer_cgroup_v1", return_value=None),
     )
 
 
@@ -232,6 +232,51 @@ class SourceBoundReceiptTests(unittest.TestCase):
                 request.host_trust,
             ).hex(),
             "f223e1a1569ca5cf6251fd012af8a789a75aedd830e3ccb8f13db77d7ac67bd4",
+        )
+
+    def test_controller_uses_shared_observer_placement_and_fails_closed(self) -> None:
+        backend = _NativeRunBackend()
+        controller, patches = _controller(
+            _static_elf(b"shared-observer-placement"),
+            backend,
+        )
+        with patches[0], patches[1], patches[2], patches[3], mock.patch.object(
+            executor,
+            "enter_observer_cgroup_v1",
+            return_value=None,
+        ) as placement:
+            result = controller.execute(_request())
+
+        self.assertIs(type(result), receipt.SourceBoundEvaluatorReceiptV1)
+        placement.assert_called_once_with(Path("/sys/fs/cgroup/labcolors/proof"))
+        self.assertFalse(hasattr(receipt, "_enter_observer_cgroup_v1"))
+
+        failed_backend = _NativeRunBackend()
+        failed_controller, failed_patches = _controller(
+            _static_elf(b"shared-observer-placement-failure"),
+            failed_backend,
+        )
+        with failed_patches[0], failed_patches[1], failed_patches[2], failed_patches[3], mock.patch.object(
+            executor,
+            "enter_observer_cgroup_v1",
+            side_effect=OSError("observer group unavailable"),
+        ):
+            failed = failed_controller.execute(_request())
+
+        self.assertEqual(
+            failed,
+            receipt.SourceBoundRejectedV1(
+                receipt.SourceBoundFailureReasonV1.OBSERVER_PLACEMENT_FAILED,
+                "dedicated controller could not enter the observer cgroup",
+            ),
+        )
+        self.assertEqual(failed_backend.requests, [])
+        self.assertEqual(
+            failed_controller.execute(_request()),
+            receipt.SourceBoundRejectedV1(
+                receipt.SourceBoundFailureReasonV1.CONTROLLER_CONSUMED,
+                "controller authority is one-shot",
+            ),
         )
 
     def test_source_bound_policy_identity_consumes_explicit_trust_coordinate(self) -> None:
@@ -338,6 +383,7 @@ class SourceBoundReceiptTests(unittest.TestCase):
         self.assertNotIn("pipeline._sealed_build_input_bundle_is_well_bound_v1", source)
         self.assertNotIn("pipeline._build_process_bytes_v1", source)
         self.assertNotIn("executor._execution_identity_v1", source)
+        self.assertNotIn("executor._enter_observer_cgroup_v1", source)
         self.assertNotIn("sealed_build_input_bundle_is_well_bound_v1", source)
         self.assertIn("pipeline.arb_input_is_bound_v1", source)
         self.assertIn("build_transport.build_process_bytes_v1", source)
@@ -345,6 +391,7 @@ class SourceBoundReceiptTests(unittest.TestCase):
         self.assertTrue(hasattr(build_transport, "build_process_bytes_v1"))
         self.assertTrue(hasattr(executor, "invocation_identity_v1"))
         self.assertTrue(hasattr(executor, "platform_identity_v1"))
+        self.assertTrue(hasattr(executor, "enter_observer_cgroup_v1"))
 
     def test_reference_does_not_describe_shipped_arb_receipt_as_future(self) -> None:
         documentation = (PROOF / "PROTOCOL.md").read_text(encoding="utf-8")
@@ -355,6 +402,7 @@ class SourceBoundReceiptTests(unittest.TestCase):
             documentation,
         )
         self.assertIn("SourceBoundEvaluatorReceiptV1", documentation)
+        self.assertIn("executor.enter_observer_cgroup_v1", documentation)
         for stale_claim in (
             "заявленные результаты будущих Arb/MPFI processes",
             "он ещё не строит и не запускает evaluator",

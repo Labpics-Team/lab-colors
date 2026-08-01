@@ -19,6 +19,7 @@ import posixpath
 import resource
 import selectors
 import signal
+import stat
 import struct
 import sys
 import threading
@@ -1410,6 +1411,34 @@ def _current_unified_cgroup_v1() -> Path:
     ):
         raise OSError(errno_module.EPROTO, "noncanonical cgroup path")
     return _CGROUP_ROOT_V1 / relative[1:]
+
+
+def enter_observer_cgroup_v1(parent: Path) -> None:
+    """Move the dedicated controller into the declared observer group."""
+
+    if not isinstance(parent, Path) or not parent.is_absolute():
+        raise TypeError("cgroup parent must be an absolute Path")
+    directory_fd = os.open(
+        os.fsencode(parent / "observer"),
+        os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW,
+    )
+    try:
+        metadata = os.fstat(directory_fd)
+        if not stat.S_ISDIR(metadata.st_mode):
+            raise OSError("observer cgroup is not a directory")
+        procs_fd = os.open(
+            b"cgroup.procs",
+            os.O_WRONLY | os.O_CLOEXEC | os.O_NOFOLLOW,
+            dir_fd=directory_fd,
+        )
+        try:
+            payload = str(os.getpid()).encode("ascii")
+            if os.write(procs_fd, payload) != len(payload):
+                raise OSError("short cgroup placement write")
+        finally:
+            os.close(procs_fd)
+    finally:
+        os.close(directory_fd)
 
 
 class _CgroupV2V1:

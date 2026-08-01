@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import hashlib
 import os
-import stat
 import threading
 from dataclasses import dataclass, fields
 from enum import StrEnum
@@ -593,34 +592,6 @@ def _resolve_request_v1(
     )
 
 
-def _enter_observer_cgroup_v1(parent: Path) -> None:
-    """Move this dedicated one-shot controller into the declared observer group."""
-
-    if not isinstance(parent, Path) or not parent.is_absolute():
-        raise TypeError("cgroup parent must be an absolute Path")
-    directory_fd = os.open(
-        os.fsencode(parent / "observer"),
-        os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW,
-    )
-    try:
-        metadata = os.fstat(directory_fd)
-        if not stat.S_ISDIR(metadata.st_mode):
-            raise OSError("observer cgroup is not a directory")
-        procs_fd = os.open(
-            b"cgroup.procs",
-            os.O_WRONLY | os.O_CLOEXEC | os.O_NOFOLLOW,
-            dir_fd=directory_fd,
-        )
-        try:
-            payload = str(os.getpid()).encode("ascii")
-            if os.write(procs_fd, payload) != len(payload):
-                raise OSError("short cgroup placement write")
-        finally:
-            os.close(procs_fd)
-    finally:
-        os.close(directory_fd)
-
-
 class SourceBoundArbControllerV1:
     """One-shot authority that owns native BUILD, RUN, replay and sealing."""
 
@@ -688,7 +659,7 @@ class SourceBoundArbControllerV1:
         if type(built) is not pipeline.DiagnosticBuildObservationV1:
             return built
         try:
-            _enter_observer_cgroup_v1(self._cgroup_parent)
+            executor.enter_observer_cgroup_v1(self._cgroup_parent)
         except Exception:
             return SourceBoundRejectedV1(
                 SourceBoundFailureReasonV1.OBSERVER_PLACEMENT_FAILED,
