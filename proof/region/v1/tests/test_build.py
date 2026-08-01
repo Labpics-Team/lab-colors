@@ -8,10 +8,12 @@ import dis
 import gc
 import hashlib
 import importlib
+import json
 import os
 import select
 import subprocess
 import sys
+import tempfile
 import threading
 import unittest
 from pathlib import Path
@@ -977,6 +979,94 @@ class SharedBuildTransportTargetTests(unittest.TestCase):
                 platform_name="linux",
                 machine_name="x86_64",
             )
+        self.assertEqual(
+            transport.docker_command_coordinate_v1(Path("/usr/bin/true")).path,
+            Path("/usr/bin/true"),
+        )
+        for path in (
+            object(),
+            Path("relative"),
+            Path("/tmp/\ud800"),
+            Path("/tmp/docker\0"),
+            Path("/tmp/docker\n"),
+            Path("/tmp/docker,comma"),
+        ):
+            with self.subTest(path=type(path).__name__):
+                with self.assertRaises(TypeError):
+                    transport.docker_command_coordinate_v1(path)
+        for exact_path in (
+            Path("/usr/bin/../bin/true"),
+            Path("//usr/bin/true"),
+        ):
+            with self.subTest(exact_path=str(exact_path)):
+                self.assertEqual(
+                    transport.docker_command_coordinate_v1(exact_path).path,
+                    exact_path,
+                )
+
+    def test_native_probe_never_follows_docker_path_aliases(self) -> None:
+        transport = importlib.import_module("build.transport")
+        policy = pipeline.ARB_BUILD_TRANSPORT_POLICY_V1
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            real = root / "реальный"
+            real.mkdir()
+            docker = real / "docker"
+            docker.write_bytes(b"fixture")
+            docker.chmod(0o755)
+            alias = root / "alias"
+            alias.symlink_to(real, target_is_directory=True)
+            final_alias = root / "docker-alias"
+            final_alias.symlink_to(docker)
+
+            image_observation = json.dumps(
+                [
+                    {
+                        "Os": "linux",
+                        "Architecture": "amd64",
+                        "RepoDigests": [policy.image_reference],
+                    }
+                ],
+                separators=(",", ":"),
+            ).encode("ascii")
+
+            for path, expected_type, expected_calls in (
+                (docker, transport.DockerSupportedV1, 2),
+                (alias / "docker", transport.DockerUnsupportedV1, 0),
+                (final_alias, transport.DockerUnsupportedV1, 0),
+            ):
+                backend = transport.NativeDockerBuildBackendV1(
+                    path,
+                    policy,
+                    host_user=(501, 20),
+                    platform_name="linux",
+                    machine_name="x86_64",
+                )
+                with self.subTest(path=str(path)), mock.patch.object(
+                    backend,
+                    "_observe_command",
+                    side_effect=(
+                        transport._docker_command_exited_v1(
+                            0,
+                            b'{"Version":"fixture"}',
+                            b"",
+                        ),
+                        transport._docker_command_exited_v1(
+                            0,
+                            image_observation,
+                            b"",
+                        ),
+                    ),
+                ) as observe:
+                    report = backend.probe()
+                self.assertIs(type(report), expected_type)
+                self.assertEqual(observe.call_count, expected_calls)
+                if type(report) is transport.DockerUnsupportedV1:
+                    self.assertEqual(
+                        report.reason,
+                        transport.DockerBlockerReasonV1.DOCKER_UNAVAILABLE,
+                    )
 
     def test_native_backend_defers_host_user_observation_to_supported_probe(self) -> None:
         transport = importlib.import_module("build.transport")

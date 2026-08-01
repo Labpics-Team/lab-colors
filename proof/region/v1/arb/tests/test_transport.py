@@ -816,7 +816,7 @@ class SealedBuildTransportContractTests(unittest.TestCase):
     def test_successful_probe_keeps_machine_readable_stdout_despite_cli_warning(self) -> None:
         policy = pipeline.ARB_BUILD_TRANSPORT_POLICY_V1
         with tempfile.TemporaryDirectory() as temporary:
-            docker_path = Path(temporary) / "docker"
+            docker_path = Path(temporary).resolve() / "docker"
             docker_path.write_bytes(b"fixture")
             docker_path.chmod(0o755)
             backend = build_transport.NativeDockerBuildBackendV1(

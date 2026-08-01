@@ -1110,6 +1110,50 @@ def _absolute_path(value: object, field_name: str) -> Path:
     return value
 
 
+def docker_command_coordinate_v1(value: object) -> NativeCommandCoordinateV1:
+    """Admit one Docker command coordinate before native authority exists."""
+
+    return native_command_coordinate_v1(_absolute_path(value, "docker_path"))
+
+
+def _open_docker_command_v1(path: Path) -> int:
+    """Open the current Docker CLI path without following any symlink segment."""
+
+    encoded = os.fsencode(docker_command_coordinate_v1(path).path)
+    directory_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW
+    command_flags = os.O_RDONLY | os.O_NONBLOCK | os.O_CLOEXEC | os.O_NOFOLLOW
+    # This coordinate deliberately preserves exact argv spelling. On Linux,
+    # empty segments are root and `..` is traversed through the pinned parent;
+    # neither case authorizes filesystem resolution or a symlink transition.
+    components = tuple(component for component in encoded.split(b"/")[1:] if component)
+    descriptor = os.open(b"/", directory_flags)
+    try:
+        for index, component in enumerate(components):
+            next_descriptor = os.open(
+                component,
+                command_flags if index == len(components) - 1 else directory_flags,
+                dir_fd=descriptor,
+            )
+            # The Linux close contract consumes its numeric descriptor before
+            # a late interruption can be observed, so ownership moves first.
+            previous_descriptor, descriptor = descriptor, next_descriptor
+            try:
+                os.close(previous_descriptor)
+            except BaseException as primary:
+                cleanup_descriptor, descriptor = descriptor, -1
+                try:
+                    os.close(cleanup_descriptor)
+                except BaseException as cleanup:
+                    raise primary.with_traceback(primary.__traceback__) from cleanup
+                raise
+        result = descriptor
+        descriptor = -1
+        return result
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+
+
 def _host_user_coordinates(value: object) -> tuple[int, int]:
     if (
         type(value) is not tuple
@@ -2062,7 +2106,7 @@ class NativeDockerBuildBackendV1:
         monotonic_ns: object = time.monotonic_ns,
         host_user: tuple[int, int] | None = None,
     ) -> None:
-        _absolute_path(docker_path, "docker_path")
+        command_coordinate = docker_command_coordinate_v1(docker_path)
         if not docker_policy_is_valid_v1(policy):
             raise TypeError("policy must be DockerBuildPolicyV1")
         if policy.user_mode is not DockerUserModeV1.HOST_EFFECTIVE_IDS:
@@ -2076,7 +2120,7 @@ class NativeDockerBuildBackendV1:
         observed_machine = (
             platform.machine() if machine_name is None else machine_name
         )
-        self._command_coordinate = native_command_coordinate_v1(docker_path)
+        self._command_coordinate = command_coordinate
         self._policy = DockerBuildPolicyV1(*tuple(policy))
         self._platform_name = _encoded_policy_text(
             observed_platform,
@@ -2122,13 +2166,19 @@ class NativeDockerBuildBackendV1:
                     "host effective uid/gid are unavailable",
                 )
         try:
-            metadata = self._command_coordinate.path.lstat()
+            command_descriptor = _open_docker_command_v1(
+                self._command_coordinate.path
+            )
+            try:
+                metadata = os.fstat(command_descriptor)
+            finally:
+                os.close(command_descriptor)
         except OSError:
             return DockerUnsupportedV1(
                 DockerBlockerReasonV1.DOCKER_UNAVAILABLE,
                 "exact Docker CLI path is unavailable",
             )
-        if not stat.S_ISREG(metadata.st_mode) or stat.S_ISLNK(metadata.st_mode):
+        if not stat.S_ISREG(metadata.st_mode):
             return DockerUnsupportedV1(
                 DockerBlockerReasonV1.DOCKER_UNAVAILABLE,
                 "Docker CLI must be one regular non-symlink path",

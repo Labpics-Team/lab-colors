@@ -1091,14 +1091,23 @@ class SourceBoundArbControllerV1:
 
     def __init__(self, docker_path: Path, cgroup_parent: Path) -> None:
         if (
-            not isinstance(docker_path, Path)
-            or not docker_path.is_absolute()
-            or not isinstance(cgroup_parent, Path)
-            or not cgroup_parent.is_absolute()
+            type(docker_path) is not type(Path("/"))
+            or type(cgroup_parent) is not type(Path("/"))
         ):
-            raise TypeError("controller paths must be absolute Path values")
-        self._docker_path = docker_path
-        self._cgroup_parent = cgroup_parent
+            raise TypeError(
+                "controller requires an admitted Docker command Path and canonical cgroup parent"
+            )
+        try:
+            self._docker_path = build_transport.docker_command_coordinate_v1(
+                docker_path
+            ).path
+            self._cgroup_parent = executor.canonical_cgroup_parent_v1(
+                cgroup_parent
+            )
+        except TypeError as error:
+            raise TypeError(
+                "controller requires an admitted Docker command Path and canonical cgroup parent"
+            ) from error
         self._owner_pid = os.getpid()
         self._consumed = False
         self._lock = threading.Lock()
