@@ -223,10 +223,27 @@ def _replace_invocation(
 class SourceBoundReceiptTests(unittest.TestCase):
     def test_source_bound_policy_identity_binds_immutable_coordinates(self) -> None:
         capability = _docker_capability()
+        request = _request()
+        # This golden belongs to the exact observed capability fixture; changing
+        # its daemon, CLI path or host user must deliberately rederive it.
         self.assertEqual(
-            receipt.source_bound_policy_identity_v2(capability).hex(),
+            receipt.source_bound_policy_identity_v2(
+                capability,
+                request.host_trust,
+            ).hex(),
             "f223e1a1569ca5cf6251fd012af8a789a75aedd830e3ccb8f13db77d7ac67bd4",
         )
+
+    def test_source_bound_policy_identity_consumes_explicit_trust_coordinate(self) -> None:
+        capability = _docker_capability()
+        trust = object()
+        with mock.patch.object(
+            receipt.pipeline,
+            "pipeline_policy_identity_v2",
+            return_value=_digest("pipeline-policy"),
+        ) as policy_identity:
+            receipt.source_bound_policy_identity_v2(capability, trust)
+        policy_identity.assert_called_once_with(trust, capability.policy)
 
     def test_identity_rejection_remains_typed_at_the_receipt_boundary(self) -> None:
         invocation_rejection = executor.ExecutionIdentityRejectedV1(
@@ -280,7 +297,8 @@ class SourceBoundReceiptTests(unittest.TestCase):
         self.assertEqual(
             result.claim.provenance_policy_identity,
             receipt.source_bound_policy_identity_v2(
-                result.evidence.build.docker_capability
+                result.evidence.build.docker_capability,
+                result.evidence.request.host_trust,
             ),
         )
         self.assertTrue(receipt.replay_evidence_is_well_bound_v1(result.evidence))
@@ -494,10 +512,55 @@ class SourceBoundReceiptTests(unittest.TestCase):
         first = dag.build.build_processes[0]
         self.assertFalse(hasattr(first.input_transfer, "__dict__"))
         self.assertFalse(hasattr(first, "__dict__"))
-        with self.assertRaises(TypeError):
-            object.__new__(type(first.input_transfer))
-        with self.assertRaises(TypeError):
-            object.__new__(type(first))
+        forged_transfer = tuple.__new__(
+            type(first.input_transfer),
+            (
+                first.input_transfer.bundle_identity,
+                first.input_transfer.expected_length + 1,
+                first.input_transfer.expected_sha256,
+                first.input_transfer.written_length,
+                first.input_transfer.written_sha256,
+            ),
+        )
+        forged_process = tuple.__new__(
+            type(first),
+            (
+                first.returncode,
+                first.stdout,
+                first.stderr,
+                forged_transfer,
+            ),
+        )
+        forged_build = _tamper(
+            dag.build,
+            "build_processes",
+            (forged_process, dag.build.build_processes[1]),
+        )
+        self.assertFalse(
+            receipt.replay_evidence_is_well_bound_v1(
+                _tamper(dag, "build", forged_build)
+            )
+        )
+
+        forged_process = tuple.__new__(
+            type(first),
+            (
+                first.returncode + 1,
+                first.stdout,
+                first.stderr,
+                first.input_transfer,
+            ),
+        )
+        forged_build = _tamper(
+            dag.build,
+            "build_processes",
+            (forged_process, dag.build.build_processes[1]),
+        )
+        self.assertFalse(
+            receipt.replay_evidence_is_well_bound_v1(
+                _tamper(dag, "build", forged_build)
+            )
+        )
 
         preimages = _tamper(
             dag.build.comparator.preimages,

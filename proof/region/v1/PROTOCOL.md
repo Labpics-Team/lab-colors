@@ -276,8 +276,10 @@ streams и очистить допущенный container. Во время са
 handle может ещё отсутствовать: тогда возможна только best-effort попытка CID
 cleanup, без ложного заявления о reap CLI. `TwoBuildObservationV1` хранит обе успешные попытки и только
 классифицирует их байты как identical или different, не называя пару
-универсальным доказательством воспроизводимости. При отказе сохраняется весь
-уже завершённый causal prefix. Transport не знает formula, ELF, comparator или
+универсальным доказательством воспроизводимости. При отказе после создания
+валидной session сохраняется весь уже завершённый causal prefix; нарушение
+контракта, выявленное до неё, может не иметь ни session, ни process prefix.
+Transport не знает formula, ELF, comparator или
 source provenance: lane отдельно перепроверяет semantic input binding перед
 каждым process и передаёт output admission. Arb объявляет собственную exact
 policy; MPFI обязан объявить другую, а не заимствовать Arb semantics.

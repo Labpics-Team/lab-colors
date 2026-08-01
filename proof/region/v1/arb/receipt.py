@@ -50,6 +50,7 @@ def _identity(label: bytes, chunks: tuple[bytes, ...]) -> bytes:
 
 def source_bound_policy_identity_v2(
     capability: build_transport.DockerSupportedV1,
+    host_trust: pipeline.HostTrustBoundaryV1,
 ) -> bytes:
     """Identity of the exact observation rules and observed BUILD capability."""
 
@@ -59,7 +60,7 @@ def source_bound_policy_identity_v2(
         _SOURCE_BOUND_POLICY_ID_LABEL_V2,
         (
             pipeline.pipeline_policy_identity_v2(
-                pipeline.HostTrustBoundaryV1.UNSEALED_LINUX_X64_DOCKER_HOST,
+                host_trust,
                 capability.policy,
             ),
             capability_identity,
@@ -506,7 +507,10 @@ class SourceBoundEvaluatorReceiptV1:
             raise TypeError("SourceBoundEvaluatorReceiptV1 is controller-sealed")
         if (
             claim.provenance_policy_identity
-            != source_bound_policy_identity_v2(evidence.build.docker_capability)
+            != source_bound_policy_identity_v2(
+                evidence.build.docker_capability,
+                evidence.request.host_trust,
+            )
             or claim.run_claim_identity != evidence.run_claim.identity
             or claim.replay_evidence_identity != evidence.identity
         ):
@@ -800,7 +804,10 @@ class SourceBoundArbControllerV1:
                 _token=_EVIDENCE_TOKEN,
             )
             claim = protocol.EvaluatorProvenanceClaimV1(
-                source_bound_policy_identity_v2(built.docker_capability),
+                source_bound_policy_identity_v2(
+                    built.docker_capability,
+                    replay_request.host_trust,
+                ),
                 run_claim.identity,
                 evidence.identity,
             )

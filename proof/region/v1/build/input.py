@@ -120,8 +120,12 @@ def _limits_are_valid(value: object) -> bool:
         return False
 
 
-def _ustar_path_is_encodable(path: str) -> bool:
+def _ustar_path_is_encodable(path: str, *, directory: bool = False) -> bool:
     encoded = path.encode("ascii")
+    if directory:
+        # tarfile writes DIRTYPE without a trailing separator as one with it;
+        # the USTAR prefix split must validate the exact emitted header name.
+        encoded += b"/"
     if len(encoded) <= 100:
         return True
     return any(
@@ -266,7 +270,7 @@ def canonical_ustar_v1(
         for length in range(1, len(parts) + 1):
             directories.add("/".join(parts[:length]))
     for path in directories:
-        if not _ustar_path_is_encodable(path):
+        if not _ustar_path_is_encodable(path, directory=True):
             _fail(InputReasonV1.INVALID_PATH, path)
     namespace: dict[str, tuple[str, str]] = {}
     for kind, values in (("directory", tuple(sorted(directories))), ("file", paths)):

@@ -20,7 +20,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Callable, Protocol, TypeAlias
 
-from . import input
+from . import input as _build_input
 
 
 # These versioned observer bounds are not physical constants or a claim that
@@ -1084,14 +1084,14 @@ class DockerBuildRequestV1(tuple):
         cls,
         attempt: int,
         capability: DockerSupportedV1,
-        input_bundle: input.SealedInputV1,
+        input_bundle: _build_input.SealedInputV1,
         max_output_bytes: int,
     ) -> DockerBuildRequestV1:
         if type(attempt) is not int or attempt not in (1, 2):
             raise TypeError("attempt must be 1 or 2")
         if not _docker_supported_is_valid_v1(capability):
             raise TypeError("capability must be canonical DockerSupportedV1")
-        if not input.sealed_input_is_intact_v1(input_bundle):
+        if not _build_input.sealed_input_is_intact_v1(input_bundle):
             raise TypeError("input_bundle must preserve exact sealed bytes")
         if (
             type(max_output_bytes) is not int
@@ -1118,7 +1118,7 @@ class DockerBuildRequestV1(tuple):
         return self[1]
 
     @property
-    def input_bundle(self) -> input.SealedInputV1:
+    def input_bundle(self) -> _build_input.SealedInputV1:
         return self[2]
 
     @property
@@ -1140,7 +1140,7 @@ def _docker_build_request_is_valid_v1(
         return (
             tuple(canonical) == tuple(value)
             and canonical.capability == capability
-            and input.sealed_input_is_intact_v1(canonical.input_bundle)
+            and _build_input.sealed_input_is_intact_v1(canonical.input_bundle)
         )
     except Exception:
         return False
@@ -1297,11 +1297,11 @@ class BuildInputTransferProgressV1(tuple):
 
 
 def _build_input_progress_v1(
-    bundle: input.SealedInputV1,
+    bundle: _build_input.SealedInputV1,
     written_length: int,
     written_sha256: bytes,
 ) -> BuildInputTransferProgressV1:
-    if not input.sealed_input_is_intact_v1(bundle):
+    if not _build_input.sealed_input_is_intact_v1(bundle):
         raise TypeError("build input bytes are not intact")
     if (
         type(written_length) is not int
@@ -1324,11 +1324,11 @@ def _build_input_progress_v1(
 
 def _input_progress_matches_v1(
     value: object,
-    bundle: input.SealedInputV1,
+    bundle: _build_input.SealedInputV1,
 ) -> bool:
     if (
         type(value) is not BuildInputTransferProgressV1
-        or not input.sealed_input_is_intact_v1(bundle)
+        or not _build_input.sealed_input_is_intact_v1(bundle)
     ):
         return False
     try:
@@ -1400,7 +1400,7 @@ def _input_transfer_is_structurally_valid_v1(value: object) -> bool:
 
 
 def _completed_build_input_transfer_v1(
-    bundle: input.SealedInputV1,
+    bundle: _build_input.SealedInputV1,
     written_length: int,
     written_sha256: bytes,
 ) -> BuildInputTransferV1:
@@ -1515,13 +1515,13 @@ def _docker_build_exited_v1(
 
 def docker_build_exited_is_valid_v1(
     value: object,
-    input_value: input.SealedInputV1,
+    input_value: _build_input.SealedInputV1,
     max_output_bytes: int,
     max_stderr_bytes: int,
 ) -> bool:
     if (
         type(value) is not DockerBuildExitedV1
-        or not input.sealed_input_is_intact_v1(input_value)
+        or not _build_input.sealed_input_is_intact_v1(input_value)
         or type(max_output_bytes) is not int
         or max_output_bytes <= 0
         or type(max_stderr_bytes) is not int
@@ -1829,7 +1829,7 @@ _DockerCommandObservationV1: TypeAlias = (
 
 def _canonical_progress_v1(
     value: object,
-    input_value: input.SealedInputV1,
+    input_value: _build_input.SealedInputV1,
 ) -> BuildInputTransferProgressV1 | None:
     if value is None:
         return None
@@ -1844,14 +1844,14 @@ def _canonical_progress_v1(
 
 def _canonical_process_observation_v1(
     value: object,
-    input_value: input.SealedInputV1,
+    input_value: _build_input.SealedInputV1,
     max_output_bytes: int,
     max_stderr_bytes: int,
 ) -> DockerBuildProcessObservationV1:
     """Own a backend observation before classification or retention."""
 
     if (
-        not input.sealed_input_is_intact_v1(input_value)
+        not _build_input.sealed_input_is_intact_v1(input_value)
         or type(max_output_bytes) is not int
         or max_output_bytes <= 0
         or type(max_stderr_bytes) is not int
@@ -2112,11 +2112,12 @@ class NativeDockerBuildBackendV1:
                 stderr_limit=self._policy.probe_output_limit,
                 timeout_ns=self._policy.probe_timeout_ns,
             )
+            # The versioned capability observes machine-readable stdout;
+            # successful Docker CLI warnings are diagnostic, not absence proof.
             if (
                 type(result) is not _DockerCommandExitedV1
                 or result.returncode != 0
                 or not result.stdout
-                or result.stderr
             ):
                 return DockerUnsupportedV1(
                     DockerBlockerReasonV1.DOCKER_UNAVAILABLE
@@ -2437,7 +2438,7 @@ class NativeDockerBuildBackendV1:
         stderr_limit: int,
         timeout_ns: int,
         lease: _NativeRunLeaseV1 | None = None,
-        input_bundle: input.SealedInputV1 | None = None,
+        input_bundle: _build_input.SealedInputV1 | None = None,
     ) -> _DockerCommandObservationV1:
         if (
             type(command) is not tuple
@@ -2471,9 +2472,9 @@ class NativeDockerBuildBackendV1:
                 b"",
                 b"",
             )
-        if input_bundle is not None and type(input_bundle) is not input.SealedInputV1:
+        if input_bundle is not None and type(input_bundle) is not _build_input.SealedInputV1:
             raise TypeError("input_bundle must be controller sealed")
-        if input_bundle is not None and not input.sealed_input_is_intact_v1(
+        if input_bundle is not None and not _build_input.sealed_input_is_intact_v1(
             input_bundle
         ):
             return DockerBuildObserverFailureV1(
@@ -3126,7 +3127,7 @@ class BuildSessionV1(tuple):
     def __new__(
         cls,
         capability: DockerSupportedV1,
-        input_value: input.SealedInputV1,
+        input_value: _build_input.SealedInputV1,
         max_output_bytes: int,
         *,
         _token: object,
@@ -3134,7 +3135,7 @@ class BuildSessionV1(tuple):
         if (
             _token is not _BUILD_SESSION_TOKEN
             or not _docker_supported_is_valid_v1(capability)
-            or not input.sealed_input_is_intact_v1(input_value)
+            or not _build_input.sealed_input_is_intact_v1(input_value)
             or type(max_output_bytes) is not int
             or max_output_bytes <= 0
             or max_output_bytes > capability.policy.stdout_limit
@@ -3158,11 +3159,8 @@ class BuildSessionV1(tuple):
         return self[0]
 
     @property
-    def input_value(self) -> input.SealedInputV1:
-        value = self[1]
-        if not input.sealed_input_is_intact_v1(value):
-            raise RuntimeError("build session lost exact input bytes")
-        return value
+    def input_value(self) -> _build_input.SealedInputV1:
+        return self[1]
 
     @property
     def max_output_bytes(self) -> int:
@@ -3171,7 +3169,7 @@ class BuildSessionV1(tuple):
 
 def _build_session_v1(
     capability: DockerSupportedV1,
-    input_value: input.SealedInputV1,
+    input_value: _build_input.SealedInputV1,
     max_output_bytes: int,
 ) -> BuildSessionV1:
     return BuildSessionV1(
@@ -3256,7 +3254,7 @@ class TwoBuildObservationV1(tuple):
         return self.session.capability
 
     @property
-    def input_value(self) -> input.SealedInputV1:
+    def input_value(self) -> _build_input.SealedInputV1:
         return self.session.input_value
 
     @property
@@ -3517,10 +3515,10 @@ class ControlledBuildTransportV1:
     def build(
         self,
         capability: DockerSupportedV1,
-        input_value: input.SealedInputV1,
+        input_value: _build_input.SealedInputV1,
         max_output_bytes: int,
         *,
-        input_admission: Callable[[input.SealedInputV1], bool],
+        input_admission: Callable[[_build_input.SealedInputV1], bool],
         output_admission: Callable[[bytes], bool],
     ) -> BuildTransportResultV1:
         if not self._in_owner_process_v1():
@@ -3533,7 +3531,7 @@ class ControlledBuildTransportV1:
             or max_output_bytes > capability.policy.stdout_limit
             or not callable(input_admission)
             or not callable(output_admission)
-            or not input.sealed_input_is_intact_v1(input_value)
+            or not _build_input.sealed_input_is_intact_v1(input_value)
         ):
             return BuildRejectedV1(1, BuildFailureReasonV1.CONTRACT_VIOLATION)
         if not self._in_owner_process_v1():
@@ -3562,7 +3560,7 @@ class ControlledBuildTransportV1:
             ):
                 return BuildRejectedV1(1, BuildFailureReasonV1.CONTRACT_VIOLATION)
             self._consumed = True
-        if not input.sealed_input_is_intact_v1(input_value):
+        if not _build_input.sealed_input_is_intact_v1(input_value):
             return BuildRejectedV1(1, BuildFailureReasonV1.CONTRACT_VIOLATION)
         try:
             session = _build_session_v1(
@@ -3576,7 +3574,7 @@ class ControlledBuildTransportV1:
         for attempt in (1, 2):
             if (
                 not self._in_owner_process_v1()
-                or not input.sealed_input_is_intact_v1(input_value)
+                or not _build_input.sealed_input_is_intact_v1(input_value)
                 or not self._admitted(input_admission, input_value)
                 or not self._in_owner_process_v1()
             ):

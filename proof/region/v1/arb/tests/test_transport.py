@@ -6,10 +6,12 @@ from __future__ import annotations
 import hashlib
 import io
 import inspect
+import json
 import os
 import subprocess
 import sys
 import tarfile
+import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -203,11 +205,6 @@ class CanonicalBuildBundleTests(unittest.TestCase):
                 build_input.InputReasonV1.NONCANONICAL_SET,
                 "A",
             ),
-            (
-                ((("a" * 120) + "/f", 0o644, b"x"),),
-                build_input.InputReasonV1.INVALID_PATH,
-                "a" * 120,
-            ),
         ):
             with self.subTest(hostile=repr(hostile)):
                 reject(hostile, reason, field)
@@ -252,6 +249,26 @@ class CanonicalBuildBundleTests(unittest.TestCase):
             len(build_input.canonical_ustar_v1((("a", 0o644, b"x"),), exact_cap)),
             exact_cap.max_encoded_bytes,
         )
+
+    def test_long_implicit_directory_uses_the_ustar_trailing_separator(self) -> None:
+        directory = "d" * 155
+        entries = ((f"{directory}/f", 0o644, b"x"),)
+        limits = build_input.CanonicalInputLimitsV1(2, 1, 1)
+
+        encoded = build_input.canonical_ustar_v1(entries, limits)
+
+        with tarfile.open(fileobj=io.BytesIO(encoded), mode="r:") as archive:
+            self.assertEqual(
+                tuple(member.name for member in archive),
+                (directory, f"{directory}/f"),
+            )
+        with self.assertRaises(build_input.InputErrorV1) as caught:
+            build_input.canonical_ustar_v1(
+                ((f"{'d' * 156}/f", 0o644, b"x"),),
+                limits,
+            )
+        self.assertEqual(caught.exception.reason, build_input.InputReasonV1.INVALID_PATH)
+        self.assertEqual(caught.exception.field, f"{'d' * 156}/f")
 
     def test_omission_or_content_mutation_changes_bundle_identity(self) -> None:
         entries = (("a", 0o644, b"x"), ("b", 0o644, b"y"))
@@ -506,6 +523,53 @@ class BuildInputObserverTests(unittest.TestCase):
 
 
 class SealedBuildTransportContractTests(unittest.TestCase):
+    def test_successful_probe_keeps_machine_readable_stdout_despite_cli_warning(self) -> None:
+        policy = pipeline.ARB_BUILD_TRANSPORT_POLICY_V1
+        with tempfile.TemporaryDirectory() as temporary:
+            docker_path = Path(temporary) / "docker"
+            docker_path.write_bytes(b"fixture")
+            docker_path.chmod(0o755)
+            backend = build_transport.NativeDockerBuildBackendV1(
+                docker_path,
+                policy,
+                platform_name="linux",
+                machine_name="x86_64",
+                host_user=(501, 20),
+            )
+            image = json.dumps(
+                [
+                    {
+                        "Os": "linux",
+                        "Architecture": "amd64",
+                        "RepoDigests": [policy.image_reference],
+                    }
+                ],
+                separators=(",", ":"),
+            ).encode("ascii")
+            with mock.patch.object(
+                backend,
+                "_observe_command",
+                side_effect=(
+                    build_transport._docker_command_exited_v1(
+                        0,
+                        b'{"Version":"fixture"}',
+                        b"warning: CLI hint\n",
+                    ),
+                    build_transport._docker_command_exited_v1(
+                        0,
+                        image,
+                        b"warning: local metadata\n",
+                    ),
+                ),
+            ):
+                capability = backend.probe()
+
+        self.assertIs(type(capability), build_transport.DockerSupportedV1)
+        self.assertEqual(
+            capability.daemon_observation.server_stdout,
+            b'{"Version":"fixture"}',
+        )
+
     def test_controller_owns_one_sealed_bundle_for_both_builds(self) -> None:
         pipeline_source = inspect.getsource(pipeline.ControlledPipelineV1.build)
         transport_source = inspect.getsource(

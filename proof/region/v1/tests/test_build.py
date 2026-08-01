@@ -21,7 +21,8 @@ from unittest import mock
 PROOF = Path(__file__).resolve().parents[1]
 ARB = PROOF / "arb"
 ARB_TESTS = ARB / "tests"
-sys.path[:0] = (str(PROOF), str(ARB), str(ARB_TESTS))
+REPO = PROOF.parents[2]
+sys.path[:0] = (str(REPO), str(PROOF), str(ARB), str(ARB_TESTS))
 
 import pipeline  # noqa: E402
 from proof.region.v1.arb.tests import gate as arb_gate  # noqa: E402
@@ -37,10 +38,10 @@ from test_receipt import _execute  # noqa: E402
 # tests deliberately change this inventory and must update both values from the
 # gate's independent enumeration in the same slice.
 ARB_INVENTORY_SHA256_V1 = (
-    "4853e06c6e8c1864bc65e0b4c0cd9cdbe0881e0d5907daecb6c8a9fea42f3643"
+    "e93060f8fa2ff5035bcc394f92dccc5f7f8baf7f9e019fc13cda933295393dce"
 )
 ARB_ORDER_SHA256_V1 = (
-    "82b8e00867bc0bed7bd4020f8d9b9531cd195f7c712ddff9a4d73ef7fc0484d5"
+    "78712585ffac242f31c3a385ab98c047a3501df1037b5830d5428ec9f39bf9d6"
 )
 
 MOVED_INPUT_SURFACE_V1 = (
@@ -103,7 +104,9 @@ FORBIDDEN_INPUT_IMPORTS_V1 = (
     "provenance",
 )
 
-FORBIDDEN_TRANSPORT_IMPORTS_V1 = FORBIDDEN_INPUT_IMPORTS_V1 + ("provenance",)
+# Both shared leaves must remain unaware of engine semantics; separate names
+# keep the two contracts legible without making their import policy diverge.
+FORBIDDEN_TRANSPORT_IMPORTS_V1 = FORBIDDEN_INPUT_IMPORTS_V1
 
 
 def _imported_modules(source: str) -> tuple[str, ...]:
@@ -268,8 +271,8 @@ class ExistingArbGateTests(unittest.TestCase):
             identifier.encode("utf-8") + b"\n" for identifier in identifiers
         )
 
-        self.assertEqual(len(identifiers), 166)
-        self.assertEqual(len(set(identifiers)), 166)
+        self.assertEqual(len(identifiers), 169)
+        self.assertEqual(len(set(identifiers)), 169)
         self.assertEqual(
             arb_gate.test_inventory_sha256_v1(arb_gate.full_suite_v1()),
             ARB_INVENTORY_SHA256_V1,
@@ -363,7 +366,8 @@ class SharedBuildExtractionTests(unittest.TestCase):
         )
         self.assertFalse((ARB / "build").exists())
         self.assertFalse((PROOF / "mpfi/build").exists())
-        self.assertIs(transport.input, build_input)
+        self.assertFalse(hasattr(transport, "input"))
+        self.assertFalse(hasattr(transport, "build_input"))
         self.assertFalse(hasattr(build_input, "normalized_source_entries_v1"))
         for name in MOVED_INPUT_SURFACE_V1:
             with self.subTest(name=name):
@@ -491,6 +495,22 @@ class SharedBuildExtractionTests(unittest.TestCase):
 
 
 class SharedBuildTransportTargetTests(unittest.TestCase):
+    def test_session_property_is_pure_while_boundary_validator_rejects_forgery(self) -> None:
+        transport = importlib.import_module("build.transport")
+        build_input = importlib.import_module("build.input")
+        forged_input = tuple.__new__(build_input.SealedInputV1, ())
+        session = tuple.__new__(
+            transport.BuildSessionV1,
+            (
+                _docker_capability_fixture(pipeline.ARB_BUILD_TRANSPORT_POLICY_V1),
+                forged_input,
+                64,
+            ),
+        )
+
+        self.assertIs(session.input_value, forged_input)
+        self.assertFalse(transport._build_session_is_valid_v1(session))
+
     def test_overlapping_probe_is_rejected_without_a_second_backend_probe(self) -> None:
         transport = importlib.import_module("build.transport")
         policy = pipeline.ARB_BUILD_TRANSPORT_POLICY_V1

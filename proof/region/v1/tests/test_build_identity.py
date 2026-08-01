@@ -163,6 +163,8 @@ _NATIVE_PROCESS_STDOUT_V1 = "pipe"
 _NATIVE_PROCESS_STDERR_V1 = "pipe"
 
 
+# This literal oracle intentionally does not call production encoders: changing
+# a production preimage silently must turn a test failure, not rewrite its proof.
 def _blob(value: bytes) -> bytes:
     return len(value).to_bytes(8, "big") + value
 
@@ -181,7 +183,8 @@ def _policy_coordinates(policy: object) -> dict[str, object]:
 def _policy_chunks(coordinates: dict[str, object]) -> tuple[bytes, ...]:
     tmpfs_specs = coordinates["tmpfs_specs"]
     user_mode = coordinates["user_mode"]
-    assert type(tmpfs_specs) is tuple
+    if type(tmpfs_specs) is not tuple:
+        raise TypeError("tmpfs_specs must be an exact tuple")
     return (
         coordinates["image_reference"].encode("utf-8"),
         coordinates["platform"].encode("utf-8"),
@@ -358,6 +361,13 @@ def _assert_deeply_immutable(
         object.__setattr__(value, "foreign", object())
 
 
+class _AlternateUserMode:
+    """Test-only value with the encoder surface of the closed production enum."""
+
+    def __init__(self, value: str) -> None:
+        self.value = value
+
+
 class BuildIdentitySurfaceTests(unittest.TestCase):
     def test_identity_surface_is_exact_and_has_no_legacy_report_aliases(self) -> None:
         for name in (
@@ -482,12 +492,12 @@ class BuildIdentitySurfaceTests(unittest.TestCase):
                     identity,
                 )
 
+    def test_literal_oracle_rejects_non_tuple_without_asserts(self) -> None:
+        coordinates = _policy_coordinates(_policy())
+        coordinates["tmpfs_specs"] = object()
 
-class _AlternateUserMode:
-    """Test-only value with the encoder surface of the closed production enum."""
-
-    def __init__(self, value: str) -> None:
-        self.value = value
+        with self.assertRaises(TypeError):
+            _policy_chunks(coordinates)
 
 
 class BuildCapabilityIdentityTests(unittest.TestCase):

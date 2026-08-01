@@ -175,7 +175,8 @@ def _observed_build_coordinates(
             result,
         )
         source_bound_policy = receipt.source_bound_policy_identity_v2(
-            result.docker_capability
+            result.docker_capability,
+            request.host_trust,
         )
     process_encodings = tuple(
         build_transport.build_process_bytes_v1(process)
@@ -367,8 +368,7 @@ class BuildIdentityV2Tests(unittest.TestCase):
                     bundle_bytes,
                     source_bound_policy,
                 ) = variant
-                if name != "hostname":
-                    self.assertNotEqual(capability_identity, baseline_capability)
+                self.assertNotEqual(capability_identity, baseline_capability)
                 self.assertNotEqual(comparator_build, baseline_comparator_build)
                 self.assertNotEqual(receipt_build, baseline_receipt_build)
                 self.assertNotEqual(
