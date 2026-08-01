@@ -277,8 +277,10 @@ handle может ещё отсутствовать: тогда возможна
 cleanup, без ложного заявления о reap CLI. `TwoBuildObservationV1` хранит обе успешные попытки и только
 классифицирует их байты как identical или different, не называя пару
 универсальным доказательством воспроизводимости. При отказе после создания
-валидной session сохраняется весь уже завершённый causal prefix; нарушение
-контракта, выявленное до неё, может не иметь ни session, ни process prefix.
+валидной session сохраняется весь уже завершённый causal prefix. Context-free
+contract violation, обнаруженный до создания session (например, невалидная
+session или сбой `TemporaryDirectory`), может вернуть `BuildRejectedV1` без
+`session` и `completed_processes`.
 Transport не знает formula, ELF, comparator или
 source provenance: lane отдельно перепроверяет semantic input binding перед
 каждым process и передаёт output admission. Arb объявляет собственную exact

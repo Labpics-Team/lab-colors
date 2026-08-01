@@ -124,8 +124,8 @@ _FLINT_RELEASE_ONLY_ID_LABEL_V1 = (
     b"labcolors.proof-region.flint-project-pinned-release-only.v1\0"
 )
 _PIPELINE_POLICY_ID_LABEL_V2 = b"labcolors.proof-region.arb-pipeline-policy.v2\0"
-_BUILD_INPUT_BUNDLE_ID_LABEL_V1 = (
-    b"labcolors.proof-region.arb-build-input-bundle.v1\0"
+_BUILD_INPUT_BUNDLE_ID_LABEL_V2 = (
+    b"labcolors.proof-region.arb-build-input-bundle.v2\0"
 )
 _BUILD_SOURCES_TOKEN = object()
 _COMPARATOR_TOKEN = object()
@@ -352,7 +352,7 @@ ARB_BUILD_TRANSPORT_POLICY_V1 = build_transport.DockerBuildPolicyV1(
 )
 
 
-def _arb_input_binding_identity_v1(
+def _arb_input_binding_identity_v2(
     source_identity: bytes,
     build_input_identity: bytes,
     contents: bytes,
@@ -368,7 +368,7 @@ def _arb_input_binding_identity_v1(
         raise TypeError("invalid Arb build input binding coordinates")
     digest = hashlib.sha256(contents).digest()
     return _identity(
-        _BUILD_INPUT_BUNDLE_ID_LABEL_V1,
+        _BUILD_INPUT_BUNDLE_ID_LABEL_V2,
         (
             source_identity,
             build_input_identity,
@@ -399,7 +399,7 @@ def arb_input_is_bound_v1(
     ):
         return False
     try:
-        return value.binding_identity == _arb_input_binding_identity_v1(
+        return value.binding_identity == _arb_input_binding_identity_v2(
             request.admitted_sources.identity,
             request.build_sources.build_input_identity,
             value.contents,
@@ -457,7 +457,7 @@ def _seal_build_input_bundle_v1(
         ),
     )
     return build_input.seal_input_v1(
-        _arb_input_binding_identity_v1(
+        _arb_input_binding_identity_v2(
             request.admitted_sources.identity,
             request.build_sources.build_input_identity,
             contents,
@@ -1412,7 +1412,7 @@ class DiagnosticBuildObservationV1:
             or input_bundle.sha256 != input_bundle_sha256
             or input_bundle.length != input_bundle_length
             or input_bundle.binding_identity
-            != _arb_input_binding_identity_v1(
+            != _arb_input_binding_identity_v2(
                 structural_source_identity,
                 build_input_identity,
                 input_bundle.contents,
