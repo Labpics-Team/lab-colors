@@ -38,10 +38,10 @@ from test_receipt import _execute  # noqa: E402
 # позволил бы согласованной правке gate скрыть drift; осознанная смена набора
 # тестов обновляет оба значения только по свежему перечислению.
 ARB_INVENTORY_SHA256_V1 = (
-    "6a616daac6d2437b372d93e8e5fe03787557e7a75aea25475ca9d349568669aa"
+    "8adbe7c5ed352e7f100d943a98bbbeec1bace8a60080933364cfdc737ebbe644"
 )
 ARB_ORDER_SHA256_V1 = (
-    "160269a28292a0d60b2a04189fa20add09a2e5fad958592ad5ef3c33aad51f48"
+    "9e1a1569a2766f9e3c0eefe6ed901231b84bb8f3629207a926449b3e85f9675f"
 )
 ARB_TEST_COUNT_V1 = 231
 

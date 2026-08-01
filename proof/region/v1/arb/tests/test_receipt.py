@@ -12,7 +12,7 @@ import sys
 import tempfile
 import time
 import unittest
-from dataclasses import replace
+from dataclasses import fields, replace
 from pathlib import Path
 from unittest import mock
 
@@ -424,12 +424,12 @@ class SourceBoundReceiptTests(unittest.TestCase):
             ("transcript", lambda evidence: evidence.transcript, "identity"),
             ("run claim", lambda evidence: evidence.run_claim, "identity"),
         )
-        for name, select, field_name in targets:
+        for name, target_selector, field_name in targets:
             with self.subTest(cache=name):
                 result, _backend = _execute()
                 self.assertIs(type(result), receipt.SourceBoundEvaluatorReceiptV1)
                 evidence = result.evidence
-                target = select(evidence)
+                target = target_selector(evidence)
                 original_identity = getattr(target, field_name)
                 forged_identity = _digest(f"forged {name}")
                 real_replay = provenance.replay_admitted_source_closure_v1
@@ -938,11 +938,12 @@ class SourceBoundReceiptTests(unittest.TestCase):
         # Keep the BUILD preimage itself intact: a verifier that only checks
         # self-consistency would otherwise accept this fully well-formed but
         # source-unrelated comparator manifest.
+        preimage_fields = fields(pipeline.ArbComparatorPreimagesV1)
         preimage_values = tuple(
             dag.build.comparator.preimages.build_identity
-            if index == 5
+            if field.name == "build_identity"
             else f"forged-comparator-{index}".encode("ascii")
-            for index in range(10)
+            for index, field in enumerate(preimage_fields)
         )
         self.assertEqual(len(set(preimage_values)), len(preimage_values))
         preimages = pipeline.ArbComparatorPreimagesV1(*preimage_values)

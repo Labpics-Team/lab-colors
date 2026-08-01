@@ -583,7 +583,7 @@ class SourceReleaseLockV1:
         )
 
     @classmethod
-    def parse(cls, data: bytes) -> "SourceReleaseLockV1":
+    def parse(cls, data: bytes) -> SourceReleaseLockV1:
         """Rebuild one source declaration before it crosses a replay boundary."""
 
         reader = _Reader(data, "source-release-lock-v1")

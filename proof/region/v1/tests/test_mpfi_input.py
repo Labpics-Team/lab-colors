@@ -293,17 +293,15 @@ class MpfiSourceInputTests(unittest.TestCase):
             encoder.assert_not_called()
         finally:
             object.__setattr__(admitted, "sources", original_sources)
-            admitted.__dict__.pop("identity", None)
         self.assertEqual(
             caught.exception.reason,
             mpfi_input.MpfiSourceInputReasonV1.FOREIGN_SOURCE_CAPABILITY,
         )
 
-    def test_cached_lock_identity_cannot_hide_source_or_capability_drift(self) -> None:
+    def test_lock_identity_cannot_hide_source_or_capability_drift(self) -> None:
         lock, admitted, expected_entries = _admitted_closure()
         limits = _limits_for_entries(expected_entries)
         sealed = mpfi_input.seal_mpfi_source_input_v1(lock, admitted, limits)
-        cached_lock_identity = lock.identity
         original_version = lock.sources[0].version
         object.__setattr__(lock.sources[0], "version", "2")
         try:
@@ -314,8 +312,6 @@ class MpfiSourceInputTests(unittest.TestCase):
             )
         finally:
             object.__setattr__(lock.sources[0], "version", original_version)
-            lock.__dict__.pop("identity", None)
-            lock.__dict__["identity"] = cached_lock_identity
         self.assertEqual(
             caught.exception.reason,
             mpfi_input.MpfiSourceInputReasonV1.FOREIGN_SOURCE_CAPABILITY,

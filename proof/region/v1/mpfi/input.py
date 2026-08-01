@@ -72,19 +72,19 @@ def _fresh_admitted_sources_v1(
         _fail(MpfiSourceInputReasonV1.WRONG_TYPE, "admitted_sources")
     try:
         source_lock_identity = admitted_sources.source_lock_identity
-        if (
-            type(source_lock_identity) is not bytes
-            or len(source_lock_identity) != 32
-            or source_lock_identity == bytes(32)
-            or source_lock_identity != source_lock.identity
-        ):
-            _fail(
-                MpfiSourceInputReasonV1.FOREIGN_SOURCE_CAPABILITY,
-                "admitted_sources",
-            )
     except Exception:
         # Exact type не делает retained capability неуязвимой к post-admission
         # подмене; ordinary hostile failure обязан остаться typed rejection.
+        _fail(
+            MpfiSourceInputReasonV1.FOREIGN_SOURCE_CAPABILITY,
+            "admitted_sources",
+        )
+    if (
+        type(source_lock_identity) is not bytes
+        or len(source_lock_identity) != 32
+        or source_lock_identity == bytes(32)
+        or source_lock_identity != source_lock.identity
+    ):
         _fail(
             MpfiSourceInputReasonV1.FOREIGN_SOURCE_CAPABILITY,
             "admitted_sources",
