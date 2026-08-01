@@ -736,6 +736,38 @@ class BuildInputObserverTests(unittest.TestCase):
 
 
 class SealedBuildTransportContractTests(unittest.TestCase):
+    def test_closed_user_mode_keeps_policy_identity_when_enum_payload_is_tampered(
+        self,
+    ) -> None:
+        """The wire coordinate follows the admitted member, never mutable Enum data."""
+
+        policy = pipeline.ARB_BUILD_TRANSPORT_POLICY_V1
+        baseline_identity = build_transport.transport_policy_identity_v1(policy)
+        user_mode = build_transport.DockerUserModeV1.HOST_EFFECTIVE_IDS
+        original_value = user_mode._value_
+        object.__setattr__(
+            user_mode,
+            "_value_",
+            "forged_host_effective_ids",
+        )
+        try:
+            self.assertEqual(user_mode.value, "forged_host_effective_ids")
+            self.assertTrue(build_transport.docker_policy_is_valid_v1(policy))
+            self.assertEqual(
+                build_transport.transport_policy_identity_v1(policy),
+                baseline_identity,
+            )
+            backend = build_transport.NativeDockerBuildBackendV1(
+                Path("/usr/bin/true"),
+                policy,
+                platform_name="linux",
+                machine_name="x86_64",
+                host_user=(501, 20),
+            )
+            self.assertIs(backend._policy.user_mode, user_mode)
+        finally:
+            object.__setattr__(user_mode, "_value_", original_value)
+
     def test_diagnostic_details_have_one_strict_admission_law(self) -> None:
         constructors = (
             (
@@ -829,11 +861,22 @@ class SealedBuildTransportContractTests(unittest.TestCase):
         )
 
     def test_controller_owns_one_sealed_bundle_for_both_builds(self) -> None:
-        pipeline_source = inspect.getsource(pipeline.ControlledPipelineV1.build)
+        public_pipeline_source = inspect.getsource(pipeline.ControlledPipelineV1.build)
+        owned_pipeline_source = inspect.getsource(
+            pipeline.ControlledPipelineV1._build_snapshot_v1
+        )
         transport_source = inspect.getsource(
             build_transport.ControlledBuildTransportV1.build
         )
-        self.assertEqual(pipeline_source.count("_seal_build_input_bundle_v1("), 1)
+        self.assertEqual(
+            public_pipeline_source.count("_snapshot_pipeline_operation_v1("),
+            1,
+        )
+        self.assertIn("return self._build_snapshot_v1(snapshot)", public_pipeline_source)
+        self.assertEqual(
+            owned_pipeline_source.count("_seal_build_input_from_snapshot_v1("),
+            1,
+        )
         self.assertIn("for attempt in (1, 2)", transport_source)
 
     def test_docker_request_carries_only_semantic_build_coordinates(self) -> None:

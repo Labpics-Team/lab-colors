@@ -244,7 +244,8 @@ class MpfiSourceLockTests(unittest.TestCase):
         reference = (ROOT / "PROTOCOL.md").read_text(encoding="utf-8")
 
         self.assertIn("ProjectPinnedArchiveDigestPolicyV1", reference)
-        self.assertIn("materialize_admitted_source_files_v1", reference)
+        self.assertIn("replay_materialize_admitted_source_v1", reference)
+        self.assertIn("bounded-decompresses", reference)
         self.assertIn("не приписывает этот digest издателю", reference)
         self.assertIn("не заявляет publisher authentication", reference)
 

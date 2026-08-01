@@ -713,6 +713,71 @@ class ProofJobV1:
         return _identity(JOB_ID_LABEL_V1, self.encode())
 
 
+def _snapshot_contextual_region_definition_v1(
+    value: object,
+) -> ContextualRegionDefinitionV1:
+    if type(value) is not ContextualRegionDefinitionV1:
+        raise TypeError("definition must be ContextualRegionDefinitionV1")
+    fields_value = value.fields
+    if type(fields_value) is not tuple:
+        raise TypeError("definition fields must be an exact tuple")
+    return ContextualRegionDefinitionV1(tuple(fields_value), value.knot_count)
+
+
+def _snapshot_reduced_domain_manifest_v1(
+    value: object,
+) -> ReducedDomainManifestV1:
+    if type(value) is not ReducedDomainManifestV1:
+        raise TypeError("domain must be ReducedDomainManifestV1")
+    ranges = value.ranges
+    if type(ranges) is not tuple:
+        raise TypeError("domain ranges must be an exact tuple")
+    return ReducedDomainManifestV1(tuple(ranges), value.point_count)
+
+
+def _snapshot_comparator_budget_v1(value: object) -> ComparatorBudgetV1:
+    if type(value) is not ComparatorBudgetV1:
+        raise TypeError("comparator budget must be ComparatorBudgetV1")
+    ladder = value.precision_ladder
+    if type(ladder) is not tuple:
+        raise TypeError("precision ladder must be an exact tuple")
+    return ComparatorBudgetV1(
+        value.kind,
+        tuple(ladder),
+        value.per_point_work,
+        value.global_pregrant,
+    )
+
+
+def _snapshot_proof_policy_v1(value: object) -> ProofPolicyV1:
+    if type(value) is not ProofPolicyV1:
+        raise TypeError("policy must be ProofPolicyV1")
+    comparators = value.comparators
+    if type(comparators) is not tuple or len(comparators) != 2:
+        raise TypeError("policy comparators must be an exact pair")
+    arb, mpfi = comparators
+    return ProofPolicyV1(
+        value.equality_release,
+        (
+            _snapshot_comparator_budget_v1(arb),
+            _snapshot_comparator_budget_v1(mpfi),
+        ),
+    )
+
+
+def snapshot_proof_job_v1(value: object) -> ProofJobV1:
+    """Return a detached job from raw coordinates, never caller-dispatched wire methods."""
+
+    if type(value) is not ProofJobV1:
+        raise TypeError("job must be ProofJobV1")
+    return ProofJobV1(
+        _snapshot_contextual_region_definition_v1(value.definition),
+        value.formula_spec,
+        _snapshot_reduced_domain_manifest_v1(value.domain),
+        _snapshot_proof_policy_v1(value.policy),
+    )
+
+
 @dataclass(frozen=True)
 class ComparatorManifestV2:
     kind: ComparatorKindV1

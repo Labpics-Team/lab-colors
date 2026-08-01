@@ -582,6 +582,21 @@ class SourceReleaseLockV1:
             integrity,
         )
 
+    @classmethod
+    def parse(cls, data: bytes) -> "SourceReleaseLockV1":
+        """Rebuild one source declaration before it crosses a replay boundary."""
+
+        reader = _Reader(data, "source-release-lock-v1")
+        result = cls.parse_from(reader)
+        reader.finish()
+        if result.encode() != data:
+            _fail(
+                "source-release-lock-v1",
+                ProvenanceReasonV1.FOREIGN_BINDING,
+                "re-encode drift",
+            )
+        return result
+
     @property
     def identity(self) -> bytes:
         return _identity(b"labcolors.proof-region.source-release-lock.v1\0", self.encode())
@@ -709,6 +724,101 @@ class MpfiSourceLockV1:
         return _identity(SOURCE_LOCK_ID_LABEL_V1, self.encode())
 
 
+def _rebuild_legal_file_v1(value: object) -> LegalFileV1:
+    if type(value) is not LegalFileV1:
+        raise TypeError("legal file must be LegalFileV1")
+    return LegalFileV1(value.path, value.length, value.sha256)
+
+
+def _rebuild_project_pinned_release_only_file_v1(
+    value: object,
+) -> ProjectPinnedReleaseOnlyFileV1:
+    if type(value) is not ProjectPinnedReleaseOnlyFileV1:
+        raise TypeError("release-only file must be ProjectPinnedReleaseOnlyFileV1")
+    return ProjectPinnedReleaseOnlyFileV1(
+        value.path,
+        value.mode,
+        value.length,
+        value.sha256,
+    )
+
+
+def _rebuild_integrity_policy_v1(value: object) -> SourceIntegrityPolicyV1:
+    """Copies only primitive policy coordinates; never dispatches caller methods."""
+
+    if type(value) is DetachedSignaturePolicyV1:
+        return DetachedSignaturePolicyV1(
+            value.signature_url,
+            value.signature_length,
+            value.signature_sha256,
+            value.public_key_packets_sha256,
+            value.signer_fingerprint,
+        )
+    if type(value) is GitContentRelationPolicyV1:
+        omitted_paths = value.omitted_paths
+        release_only = value.project_pinned_release_only_files
+        if type(omitted_paths) is not tuple or type(release_only) is not tuple:
+            raise TypeError("git policy collections must be exact tuples")
+        return GitContentRelationPolicyV1(
+            value.repository_url,
+            value.tag,
+            value.commit,
+            value.tree,
+            value.common_file_count,
+            tuple(omitted_paths),
+            tuple(
+                _rebuild_project_pinned_release_only_file_v1(item)
+                for item in release_only
+            ),
+        )
+    if type(value) is ProjectPinnedArchiveDigestPolicyV1:
+        return ProjectPinnedArchiveDigestPolicyV1()
+    raise TypeError("unknown source integrity policy")
+
+
+def _rebuild_source_release_lock_v1(expected: object) -> SourceReleaseLockV1:
+    """Makes a fresh lock before a boundary can derive an authority identity."""
+
+    if type(expected) is not SourceReleaseLockV1:
+        raise TypeError("expected must be SourceReleaseLockV1")
+    legal_files = expected.legal_files
+    if type(legal_files) is not tuple:
+        raise TypeError("legal files must be an exact tuple")
+    return SourceReleaseLockV1(
+        expected.role,
+        expected.version,
+        expected.archive_url,
+        expected.archive_format,
+        expected.archive_length,
+        expected.archive_sha256,
+        expected.tar_stream_length,
+        expected.root_prefix,
+        expected.regular_file_count,
+        expected.regular_file_bytes,
+        tuple(_rebuild_legal_file_v1(item) for item in legal_files),
+        _rebuild_integrity_policy_v1(expected.integrity),
+    )
+
+
+def _rebuild_source_closure_lock_v1(
+    expected: object,
+) -> ArbSourceLockV1 | MpfiSourceLockV1:
+    if type(expected) not in (ArbSourceLockV1, MpfiSourceLockV1):
+        raise TypeError("expected must be an exact three-source lock")
+    sources = expected.sources
+    if type(sources) is not tuple or len(sources) != SOURCE_CLOSURE_COUNT_V1:
+        raise TypeError("source closure must be an exact three-source tuple")
+    first, second, third = sources
+    rebuilt = (
+        _rebuild_source_release_lock_v1(first),
+        _rebuild_source_release_lock_v1(second),
+        _rebuild_source_release_lock_v1(third),
+    )
+    if type(expected) is ArbSourceLockV1:
+        return ArbSourceLockV1(rebuilt)
+    return MpfiSourceLockV1(rebuilt)
+
+
 @dataclass(frozen=True)
 class ArchiveFileV1:
     path: str
@@ -720,6 +830,8 @@ class ArchiveFileV1:
 _SAFE_ARCHIVE_TOKEN = object()
 _ADMITTED_ARB_SOURCES_TOKEN = object()
 _ADMITTED_MPFI_SOURCES_TOKEN = object()
+_REPLAYED_SOURCE_MATERIALIZATION_TOKEN = object()
+_REPLAYED_SOURCE_CLOSURE_TOKEN = object()
 
 
 @dataclass(frozen=True, init=False)
@@ -768,6 +880,49 @@ class SafeSourceArchiveV1:
         return self._archive_bytes
 
 
+@dataclass(frozen=True, init=False)
+class ReplayedSourceMaterializationV1:
+    """One private replay snapshot: lock, archive metadata and file bytes move together.
+
+    Public callers may mutate a nominally frozen input after admission.  This
+    value therefore owns a freshly parsed lock and re-admitted archive before
+    any downstream identity or USTAR layout is derived from it.
+    """
+
+    source_lock: SourceReleaseLockV1
+    source: SafeSourceArchiveV1
+    files: tuple[tuple[str, int, bytes], ...]
+
+    def __init__(
+        self,
+        source_lock: SourceReleaseLockV1,
+        source: SafeSourceArchiveV1,
+        files: tuple[tuple[str, int, bytes], ...],
+        *,
+        _token: object,
+    ) -> None:
+        if _token is not _REPLAYED_SOURCE_MATERIALIZATION_TOKEN:
+            raise TypeError(
+                "ReplayedSourceMaterializationV1 is created only by source replay"
+            )
+        if (
+            type(source_lock) is not SourceReleaseLockV1
+            or type(source) is not SafeSourceArchiveV1
+            or type(files) is not tuple
+            or not files
+            or any(
+                type(path) is not str
+                or type(mode) is not int
+                or type(contents) is not bytes
+                for path, mode, contents in files
+            )
+        ):
+            raise TypeError("invalid replayed source materialization")
+        object.__setattr__(self, "source_lock", source_lock)
+        object.__setattr__(self, "source", source)
+        object.__setattr__(self, "files", files)
+
+
 def archive_file_manifest_bytes_v1(
     files_value: tuple[ArchiveFileV1, ...],
 ) -> bytes:
@@ -808,18 +963,29 @@ def archive_file_manifest_bytes_v1(
     return b"".join(_blob(chunk) for chunk in chunks)
 
 
-def source_archive_replay_coordinates_v1(
-    expected: SourceReleaseLockV1,
-    admitted: SafeSourceArchiveV1,
+def _source_archive_coordinates_from_replayed_v1(
+    source_lock: SourceReleaseLockV1,
+    replayed: SafeSourceArchiveV1,
 ) -> tuple[bytes, ...]:
-    """Recompute the retained source coordinates without reopening a path."""
+    """Encode the sole coordinate tuple shared by replay and owned snapshots.
 
-    replayed, _raw_tar = replay_admitted_source_archive_v1(expected, admitted)
+    This is deliberately a leaf: callers establish whether their snapshot is
+    fresh or retained.  Keeping only the wire projection here prevents those
+    two ownership paths from quietly acquiring different source identities.
+    """
+
+    if (
+        type(source_lock) is not SourceReleaseLockV1
+        or type(replayed) is not SafeSourceArchiveV1
+    ):
+        raise TypeError("invalid replayed source snapshot")
     archive = replayed.archive_bytes
+    if type(archive) is not bytes:
+        raise TypeError("invalid replayed source archive")
     manifest = archive_file_manifest_bytes_v1(replayed.files)
     return (
-        bytes((int(expected.role),)),
-        expected.encode(),
+        bytes((int(source_lock.role),)),
+        source_lock.encode(),
         replayed.source_lock_identity,
         replayed.archive_sha256,
         replayed.tree_identity,
@@ -828,6 +994,32 @@ def source_archive_replay_coordinates_v1(
         manifest,
         len(archive).to_bytes(8, "big"),
         replayed.archive_sha256,
+    )
+
+
+def source_archive_replay_coordinates_v1(
+    expected: SourceReleaseLockV1,
+    admitted: SafeSourceArchiveV1,
+) -> tuple[bytes, ...]:
+    """Replay coordinates without creating separate extracted file-byte buffers."""
+
+    source_lock, replayed, _raw_tar = _replay_admitted_source_archive_snapshot_v1(
+        expected,
+        admitted,
+    )
+    return _source_archive_coordinates_from_replayed_v1(source_lock, replayed)
+
+
+def _materialized_source_coordinates_v1(
+    value: ReplayedSourceMaterializationV1,
+) -> tuple[bytes, ...]:
+    """Encode coordinates already owned by one operation without replaying it."""
+
+    if type(value) is not ReplayedSourceMaterializationV1:
+        raise TypeError("value must be ReplayedSourceMaterializationV1")
+    return _source_archive_coordinates_from_replayed_v1(
+        value.source_lock,
+        value.source,
     )
 
 
@@ -934,6 +1126,47 @@ class AdmittedMpfiSourcesV1:
             self.source_lock_identity,
             self.sources,
         )
+
+
+@dataclass(frozen=True, init=False)
+class ReplayedSourceClosureV1:
+    """One operation-owned three-source snapshot without caller-held refs."""
+
+    source_lock: ArbSourceLockV1 | MpfiSourceLockV1
+    admitted_sources: AdmittedArbSourcesV1 | AdmittedMpfiSourcesV1
+    sources: tuple[
+        ReplayedSourceMaterializationV1,
+        ReplayedSourceMaterializationV1,
+        ReplayedSourceMaterializationV1,
+    ]
+
+    def __init__(
+        self,
+        source_lock: ArbSourceLockV1 | MpfiSourceLockV1,
+        admitted_sources: AdmittedArbSourcesV1 | AdmittedMpfiSourcesV1,
+        sources: tuple[
+            ReplayedSourceMaterializationV1,
+            ReplayedSourceMaterializationV1,
+            ReplayedSourceMaterializationV1,
+        ],
+        *,
+        _token: object,
+    ) -> None:
+        if _token is not _REPLAYED_SOURCE_CLOSURE_TOKEN:
+            raise TypeError("ReplayedSourceClosureV1 is created only by closure replay")
+        if (
+            type(source_lock) not in (ArbSourceLockV1, MpfiSourceLockV1)
+            or type(admitted_sources)
+            not in (AdmittedArbSourcesV1, AdmittedMpfiSourcesV1)
+            or type(sources) is not tuple
+            or len(sources) != SOURCE_CLOSURE_COUNT_V1
+            or any(type(source) is not ReplayedSourceMaterializationV1 for source in sources)
+            or tuple(source.source for source in sources) != admitted_sources.sources
+        ):
+            raise TypeError("invalid replayed source closure")
+        object.__setattr__(self, "source_lock", source_lock)
+        object.__setattr__(self, "admitted_sources", admitted_sources)
+        object.__setattr__(self, "sources", sources)
 
 
 def _decompress_exact(
@@ -1214,46 +1447,142 @@ def _admit_source_archive_once(
 def admit_source_archive(expected: SourceReleaseLockV1, archive: bytes) -> SafeSourceArchiveV1:
     """Hash then scan one locked archive; this establishes no origin trust."""
 
-    admitted, _raw_tar = _admit_source_archive_once(expected, archive)
+    source_lock = _canonical_source_lock_for_replay_v1(expected)
+    admitted, _raw_tar = _admit_source_archive_once(source_lock, archive)
     return admitted
 
 
-def replay_admitted_source_archive_v1(
+def _canonical_source_lock_for_replay_v1(
     expected: SourceReleaseLockV1,
-    admitted: SafeSourceArchiveV1,
-) -> tuple[SafeSourceArchiveV1, bytes]:
-    """Re-admit owned bytes and require their retained coordinates to agree.
-
-    The caller cannot supply a second tar stream, so replay coordinates and
-    materialization bytes remain causally bound without decompressing twice.
-    """
-
+) -> SourceReleaseLockV1:
     if type(expected) is not SourceReleaseLockV1:
         raise TypeError("expected must be SourceReleaseLockV1")
+    try:
+        return _rebuild_source_release_lock_v1(expected)
+    except (
+        ProvenanceErrorV1,
+        AttributeError,
+        TypeError,
+        ValueError,
+        OverflowError,
+        UnicodeError,
+    ):
+        _fail(
+            "source-archive-replay-v1",
+            ProvenanceReasonV1.FOREIGN_BINDING,
+            "invalid retained source lock",
+        )
+
+
+_RetainedSourceArchiveSnapshotV1: TypeAlias = tuple[
+    bytes,
+    bytes,
+    bytes,
+    int,
+    int,
+    bytes,
+    bytes,
+]
+
+
+def _retained_source_archive_snapshot_v1(
+    admitted: SafeSourceArchiveV1,
+) -> _RetainedSourceArchiveSnapshotV1:
+    """Copies only exact primitives before a replay can re-enter caller code."""
+
     if type(admitted) is not SafeSourceArchiveV1:
         raise TypeError("admitted must be SafeSourceArchiveV1")
     try:
-        replayed, raw_tar = _admit_source_archive_once(
-            expected,
-            admitted.archive_bytes,
+        source_lock_identity = admitted.source_lock_identity
+        archive_sha256 = admitted.archive_sha256
+        tree_identity = admitted.tree_identity
+        regular_file_count = admitted.regular_file_count
+        regular_file_bytes = admitted.regular_file_bytes
+        files = admitted.files
+        archive = admitted.archive_bytes
+        _digest(
+            source_lock_identity,
+            "source-archive-replay-v1",
+            "source_lock_identity",
         )
-        retained_coordinates_match = (
-            admitted.source_lock_identity == replayed.source_lock_identity
-            and admitted.archive_sha256 == replayed.archive_sha256
-            and admitted.tree_identity == replayed.tree_identity
-            and admitted.regular_file_count == replayed.regular_file_count
-            and admitted.regular_file_bytes == replayed.regular_file_bytes
-            and admitted.files == replayed.files
+        _digest(
+            archive_sha256,
+            "source-archive-replay-v1",
+            "archive_sha256",
         )
-    except ProvenanceErrorV1:
-        raise
-    except Exception:
+        _digest(tree_identity, "source-archive-replay-v1", "tree_identity")
+        _positive(
+            regular_file_count,
+            "source-archive-replay-v1",
+            "regular_file_count",
+        )
+        _positive(
+            regular_file_bytes,
+            "source-archive-replay-v1",
+            "regular_file_bytes",
+        )
+        if type(archive) is not bytes:
+            raise TypeError("archive must be exact bytes")
+        manifest = archive_file_manifest_bytes_v1(files)
+    except (
+        ProvenanceErrorV1,
+        AttributeError,
+        TypeError,
+        ValueError,
+        OverflowError,
+        UnicodeError,
+    ):
         _fail(
             "source-archive-replay-v1",
             ProvenanceReasonV1.FOREIGN_BINDING,
             "invalid retained source capability",
         )
-    if not retained_coordinates_match:
+    return (
+        source_lock_identity,
+        archive_sha256,
+        tree_identity,
+        regular_file_count,
+        regular_file_bytes,
+        manifest,
+        archive,
+    )
+
+
+def _replay_source_archive_from_retained_v1(
+    source_lock: SourceReleaseLockV1,
+    retained: _RetainedSourceArchiveSnapshotV1,
+) -> tuple[SafeSourceArchiveV1, bytes]:
+    """Re-admit one copied archive before extracting individual file-byte buffers."""
+
+    (
+        retained_source_lock_identity,
+        retained_archive_sha256,
+        retained_tree_identity,
+        retained_file_count,
+        retained_file_bytes,
+        retained_manifest,
+        archive,
+    ) = retained
+
+    try:
+        replayed, raw_tar = _admit_source_archive_once(source_lock, archive)
+        replayed_manifest = archive_file_manifest_bytes_v1(replayed.files)
+    except ProvenanceErrorV1:
+        raise
+    except (AttributeError, TypeError, ValueError, OverflowError):
+        _fail(
+            "source-archive-replay-v1",
+            ProvenanceReasonV1.FOREIGN_BINDING,
+            "archive replay failed",
+        )
+    if (
+        retained_source_lock_identity != replayed.source_lock_identity
+        or retained_archive_sha256 != replayed.archive_sha256
+        or retained_tree_identity != replayed.tree_identity
+        or retained_file_count != replayed.regular_file_count
+        or retained_file_bytes != replayed.regular_file_bytes
+        or retained_manifest != replayed_manifest
+    ):
         _fail(
             "source-archive-replay-v1",
             ProvenanceReasonV1.FOREIGN_BINDING,
@@ -1262,17 +1591,27 @@ def replay_admitted_source_archive_v1(
     return replayed, raw_tar
 
 
-def materialize_admitted_source_files_v1(
+def _replay_admitted_source_archive_snapshot_v1(
     expected: SourceReleaseLockV1,
     admitted: SafeSourceArchiveV1,
+) -> tuple[SourceReleaseLockV1, SafeSourceArchiveV1, bytes]:
+    """Makes the source-owned replay needed by metadata and body consumers."""
+
+    source_lock = _canonical_source_lock_for_replay_v1(expected)
+    replayed, raw_tar = _replay_source_archive_from_retained_v1(
+        source_lock,
+        _retained_source_archive_snapshot_v1(admitted),
+    )
+    return source_lock, replayed, raw_tar
+
+
+def _materialize_replayed_source_files_v1(
+    source_lock: SourceReleaseLockV1,
+    replayed: SafeSourceArchiveV1,
+    raw_tar: bytes,
 ) -> tuple[tuple[str, int, bytes], ...]:
-    """Return exact relative regular files from one replayed source capability.
+    """Reads only one locally replayed archive and its canonical lock snapshot."""
 
-    This shared leaf owns archive replay, not an engine's USTAR namespace or
-    build recipe.  Callers choose their own layout after this function returns.
-    """
-
-    replayed, raw_tar = replay_admitted_source_archive_v1(expected, admitted)
     expected_by_path = {item.path: item for item in replayed.files}
     values: list[tuple[str, int, bytes]] = []
     seen: set[str] = set()
@@ -1281,13 +1620,13 @@ def materialize_admitted_source_files_v1(
             for member in archive:
                 if member.isdir():
                     continue
-                if not member.isreg() or not member.name.startswith(expected.root_prefix):
+                if not member.isreg() or not member.name.startswith(source_lock.root_prefix):
                     _fail(
                         "source-archive-materialization-v1",
                         ProvenanceReasonV1.FOREIGN_BINDING,
                         "unexpected archive member",
                     )
-                relative = member.name[len(expected.root_prefix) :]
+                relative = member.name[len(source_lock.root_prefix) :]
                 coordinate = expected_by_path.get(relative)
                 if (
                     coordinate is None
@@ -1351,69 +1690,363 @@ def materialize_admitted_source_files_v1(
     return tuple(sorted(values))
 
 
-def _validate_source_capability_closure_v1(
+def replay_materialize_admitted_source_v1(
+    expected: SourceReleaseLockV1,
+    admitted: SafeSourceArchiveV1,
+) -> ReplayedSourceMaterializationV1:
+    """Builds one owned replay snapshot for all source-derived consumers.
+
+    The snapshot is deliberately below engine and recipe layers.  Its lock,
+    archive identity and materialized bytes originate from the same fresh
+    replay, so a caller-held capability cannot relabel already-read bytes.
+    """
+
+    source_lock, replayed, raw_tar = _replay_admitted_source_archive_snapshot_v1(
+        expected,
+        admitted,
+    )
+    files = _materialize_replayed_source_files_v1(source_lock, replayed, raw_tar)
+    return ReplayedSourceMaterializationV1(
+        source_lock,
+        replayed,
+        files,
+        _token=_REPLAYED_SOURCE_MATERIALIZATION_TOKEN,
+    )
+
+
+def replay_admitted_source_archive_v1(
+    expected: SourceReleaseLockV1,
+    admitted: SafeSourceArchiveV1,
+) -> tuple[SafeSourceArchiveV1, bytes]:
+    """Return a bounded-decompressed replay without extracted file-byte buffers."""
+
+    _source_lock, replayed, raw_tar = _replay_admitted_source_archive_snapshot_v1(
+        expected,
+        admitted,
+    )
+    return replayed, raw_tar
+
+
+def materialize_admitted_source_files_v1(
+    expected: SourceReleaseLockV1,
+    admitted: SafeSourceArchiveV1,
+) -> tuple[tuple[str, int, bytes], ...]:
+    """Return exact relative files from one owned replay snapshot."""
+
+    return replay_materialize_admitted_source_v1(expected, admitted).files
+
+
+def _source_closure_lock_snapshot_v1(
+    expected: ArbSourceLockV1 | MpfiSourceLockV1,
+) -> ArbSourceLockV1 | MpfiSourceLockV1:
+    try:
+        return _rebuild_source_closure_lock_v1(expected)
+    except (
+        ProvenanceErrorV1,
+        AttributeError,
+        TypeError,
+        ValueError,
+        OverflowError,
+        UnicodeError,
+    ):
+        _fail(
+            "source-closure-replay-v1",
+            ProvenanceReasonV1.FOREIGN_BINDING,
+            "invalid retained source closure lock",
+        )
+
+
+def snapshot_source_closure_lock_v1(
+    expected: object,
+) -> ArbSourceLockV1 | MpfiSourceLockV1:
+    """Return a detached structural lock snapshot before a public replay."""
+
+    return _source_closure_lock_snapshot_v1(expected)
+
+
+def _source_capability_matches_lock_v1(
+    lock: SourceReleaseLockV1,
+    source: SafeSourceArchiveV1,
+) -> _RetainedSourceArchiveSnapshotV1:
+    retained = _retained_source_archive_snapshot_v1(source)
+    (
+        retained_lock_identity,
+        retained_archive_sha256,
+        _retained_tree_identity,
+        retained_file_count,
+        retained_file_bytes,
+        _retained_manifest,
+        _archive,
+    ) = retained
+    if (
+        retained_lock_identity != lock.identity
+        or retained_archive_sha256 != lock.archive_sha256
+        or retained_file_count != lock.regular_file_count
+        or retained_file_bytes != lock.regular_file_bytes
+    ):
+        _fail(
+            "source-closure-replay-v1",
+            ProvenanceReasonV1.FOREIGN_BINDING,
+            "source capability does not match ordered lock",
+        )
+    return retained
+
+
+def snapshot_admitted_source_closure_v1(
+    expected: object,
+    admitted: object,
+) -> AdmittedArbSourcesV1 | AdmittedMpfiSourcesV1:
+    """Return a detached source-closure declaration without extracted file buffers.
+
+    The archive is re-admitted so the retained manifest, tree and compressed
+    bytes agree.  Re-admission bounded-decompresses and scans the tar, but
+    unlike an operation replay it does not retain separate file-byte buffers;
+    consumers that need those buffers must still call
+    ``replay_admitted_source_closure_v1``.
+    """
+
+    canonical_lock = _source_closure_lock_snapshot_v1(expected)
+    if (
+        (
+            type(canonical_lock) is ArbSourceLockV1
+            and type(admitted) is not AdmittedArbSourcesV1
+        )
+        or (
+            type(canonical_lock) is MpfiSourceLockV1
+            and type(admitted) is not AdmittedMpfiSourcesV1
+        )
+    ):
+        raise TypeError("admitted sources do not match the source lock kind")
+    try:
+        retained_lock_identity = admitted.source_lock_identity
+        retained_sources = admitted.sources
+        _digest(
+            retained_lock_identity,
+            "source-closure-snapshot-v1",
+            "source_lock_identity",
+        )
+        if retained_lock_identity != canonical_lock.identity:
+            _fail(
+                "source-closure-snapshot-v1",
+                ProvenanceReasonV1.FOREIGN_BINDING,
+                "admitted closure lock identity changed",
+            )
+        sources = _validate_source_replay_arguments_v1(
+            canonical_lock.sources,
+            retained_sources,
+        )
+        snapshots = _replay_source_archives_v1(
+            canonical_lock.sources,
+            sources,
+        )
+    except ProvenanceErrorV1:
+        raise
+    except (
+        AttributeError,
+        TypeError,
+        ValueError,
+        OverflowError,
+        UnicodeError,
+    ):
+        _fail(
+            "source-closure-snapshot-v1",
+            ProvenanceReasonV1.FOREIGN_BINDING,
+            "invalid retained admitted closure",
+        )
+    return _fresh_admitted_source_closure_v1(canonical_lock, snapshots)
+
+
+def _validate_source_replay_arguments_v1(
     expected_sources: _SourceClosureV1,
     sources: _SafeSourceClosureV1,
-    artifact: str,
-) -> None:
+) -> tuple[SafeSourceArchiveV1, SafeSourceArchiveV1, SafeSourceArchiveV1]:
+    if (
+        type(expected_sources) is not tuple
+        or len(expected_sources) != SOURCE_CLOSURE_COUNT_V1
+        or any(type(lock) is not SourceReleaseLockV1 for lock in expected_sources)
+    ):
+        raise TypeError("expected sources must be three SourceReleaseLockV1 values")
     if (
         type(sources) is not tuple
         or len(sources) != SOURCE_CLOSURE_COUNT_V1
         or any(type(source) is not SafeSourceArchiveV1 for source in sources)
     ):
         raise TypeError("sources must be three SafeSourceArchiveV1 values")
-    for lock, source in zip(expected_sources, sources, strict=True):
-        if (
-            source.source_lock_identity != lock.identity
-            or source.archive_sha256 != lock.archive_sha256
-            or source.regular_file_count != lock.regular_file_count
-            or source.regular_file_bytes != lock.regular_file_bytes
-        ):
-            _fail(
-                artifact,
-                ProvenanceReasonV1.FOREIGN_BINDING,
-                "source capability does not match ordered lock",
+    first, second, third = sources
+    return first, second, third
+
+
+def _replay_source_archives_v1(
+    expected_sources: _SourceClosureV1,
+    sources: _SafeSourceClosureV1,
+) -> _SafeSourceClosureV1:
+    """Re-admit a closure for metadata without retaining file-byte buffers."""
+
+    admitted_sources = _validate_source_replay_arguments_v1(expected_sources, sources)
+    replayed: list[SafeSourceArchiveV1] = []
+    for lock, source in zip(expected_sources, admitted_sources, strict=True):
+        retained = _source_capability_matches_lock_v1(lock, source)
+        fresh, _raw_tar = _replay_source_archive_from_retained_v1(lock, retained)
+        replayed.append(fresh)
+    first, second, third = replayed
+    return first, second, third
+
+
+def _replay_source_materializations_v1(
+    expected_sources: _SourceClosureV1,
+    sources: _SafeSourceClosureV1,
+) -> tuple[
+    ReplayedSourceMaterializationV1,
+    ReplayedSourceMaterializationV1,
+    ReplayedSourceMaterializationV1,
+]:
+    """Materialize only the operation path that actually needs source bytes."""
+
+    admitted_sources = _validate_source_replay_arguments_v1(expected_sources, sources)
+    materializations: list[ReplayedSourceMaterializationV1] = []
+    for lock, source in zip(expected_sources, admitted_sources, strict=True):
+        retained = _source_capability_matches_lock_v1(lock, source)
+        replayed, raw_tar = _replay_source_archive_from_retained_v1(lock, retained)
+        materializations.append(
+            ReplayedSourceMaterializationV1(
+                lock,
+                replayed,
+                _materialize_replayed_source_files_v1(lock, replayed, raw_tar),
+                _token=_REPLAYED_SOURCE_MATERIALIZATION_TOKEN,
             )
+        )
+    first, second, third = materializations
+    return first, second, third
+
+
+def _fresh_admitted_source_closure_v1(
+    source_lock: ArbSourceLockV1 | MpfiSourceLockV1,
+    sources: _SafeSourceClosureV1,
+) -> AdmittedArbSourcesV1 | AdmittedMpfiSourcesV1:
+    if type(source_lock) is ArbSourceLockV1:
+        return AdmittedArbSourcesV1(
+            source_lock.identity,
+            sources,
+            _token=_ADMITTED_ARB_SOURCES_TOKEN,
+        )
+    if type(source_lock) is MpfiSourceLockV1:
+        return AdmittedMpfiSourcesV1(
+            source_lock.identity,
+            sources,
+            _token=_ADMITTED_MPFI_SOURCES_TOKEN,
+        )
+    raise TypeError("source lock is not a supported closure")
+
+
+def _admitted_closure_snapshot_v1(
+    source_lock: ArbSourceLockV1 | MpfiSourceLockV1,
+    admitted: AdmittedArbSourcesV1 | AdmittedMpfiSourcesV1,
+) -> ReplayedSourceClosureV1:
+    canonical_lock = _source_closure_lock_snapshot_v1(source_lock)
+    if (
+        (
+            type(canonical_lock) is ArbSourceLockV1
+            and type(admitted) is not AdmittedArbSourcesV1
+        )
+        or (
+            type(canonical_lock) is MpfiSourceLockV1
+            and type(admitted) is not AdmittedMpfiSourcesV1
+        )
+    ):
+        raise TypeError("admitted sources do not match the source lock kind")
+    try:
+        retained_lock_identity = admitted.source_lock_identity
+        retained_sources = admitted.sources
+        _digest(
+            retained_lock_identity,
+            "source-closure-replay-v1",
+            "source_lock_identity",
+        )
+        if retained_lock_identity != canonical_lock.identity:
+            _fail(
+                "source-closure-replay-v1",
+                ProvenanceReasonV1.FOREIGN_BINDING,
+                "admitted closure lock identity changed",
+            )
+        _validate_source_replay_arguments_v1(
+            canonical_lock.sources,
+            retained_sources,
+        )
+    except ProvenanceErrorV1:
+        raise
+    except (
+        AttributeError,
+        TypeError,
+        ValueError,
+        OverflowError,
+        UnicodeError,
+    ):
+        _fail(
+            "source-closure-replay-v1",
+            ProvenanceReasonV1.FOREIGN_BINDING,
+            "invalid retained admitted closure",
+        )
+    snapshots = _replay_source_materializations_v1(
+        canonical_lock.sources,
+        retained_sources,
+    )
+    fresh = _fresh_admitted_source_closure_v1(
+        canonical_lock,
+        tuple(snapshot.source for snapshot in snapshots),
+    )
+    return ReplayedSourceClosureV1(
+        canonical_lock,
+        fresh,
+        snapshots,
+        _token=_REPLAYED_SOURCE_CLOSURE_TOKEN,
+    )
 
 
 def admit_arb_sources(
     expected: ArbSourceLockV1,
     sources: _SafeSourceClosureV1,
 ) -> AdmittedArbSourcesV1:
-    """Collapse three individually admitted archives into one ordered capability."""
+    """Replay and own three archives before minting one Arb closure capability."""
 
     if type(expected) is not ArbSourceLockV1:
         raise TypeError("expected must be ArbSourceLockV1")
-    _validate_source_capability_closure_v1(
-        expected.sources,
+    canonical_lock = _source_closure_lock_snapshot_v1(expected)
+    replayed_sources = _replay_source_archives_v1(
+        canonical_lock.sources,
         sources,
-        "admitted-arb-sources-v1",
     )
-    return AdmittedArbSourcesV1(
-        expected.identity,
-        sources,
-        _token=_ADMITTED_ARB_SOURCES_TOKEN,
-    )
+    fresh = _fresh_admitted_source_closure_v1(canonical_lock, replayed_sources)
+    if type(fresh) is not AdmittedArbSourcesV1:
+        raise AssertionError("Arb closure kind changed during admission")
+    return fresh
 
 
 def admit_mpfi_sources(
     expected: MpfiSourceLockV1,
     sources: _SafeSourceClosureV1,
 ) -> AdmittedMpfiSourcesV1:
-    """Collapse the exact MPFI source closure into one ordered capability."""
+    """Replay and own three archives before minting one MPFI closure capability."""
 
     if type(expected) is not MpfiSourceLockV1:
         raise TypeError("expected must be MpfiSourceLockV1")
-    _validate_source_capability_closure_v1(
-        expected.sources,
+    canonical_lock = _source_closure_lock_snapshot_v1(expected)
+    replayed_sources = _replay_source_archives_v1(
+        canonical_lock.sources,
         sources,
-        "admitted-mpfi-sources-v1",
     )
-    return AdmittedMpfiSourcesV1(
-        expected.identity,
-        sources,
-        _token=_ADMITTED_MPFI_SOURCES_TOKEN,
-    )
+    fresh = _fresh_admitted_source_closure_v1(canonical_lock, replayed_sources)
+    if type(fresh) is not AdmittedMpfiSourcesV1:
+        raise AssertionError("MPFI closure kind changed during admission")
+    return fresh
+
+
+def replay_admitted_source_closure_v1(
+    expected: ArbSourceLockV1 | MpfiSourceLockV1,
+    admitted: AdmittedArbSourcesV1 | AdmittedMpfiSourcesV1,
+) -> ReplayedSourceClosureV1:
+    """Take one local source-closure snapshot for a build-like operation."""
+
+    return _admitted_closure_snapshot_v1(expected, admitted)
 
 
 def _legal_file(path: str, length: int, digest_hex: str) -> LegalFileV1:

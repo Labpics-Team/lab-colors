@@ -34,16 +34,16 @@ from test_pipeline import (  # noqa: E402
 from test_receipt import _execute  # noqa: E402
 
 
-# These literals are an independent outer oracle for the Arb gate: importing
-# its expected hash here would let a coordinated gate edit hide inventory drift.
-# A deliberate test-set change updates both values from fresh enumeration.
+# Эти литералы — независимый внешний оракул proof fast gate. Импорт его hash
+# позволил бы согласованной правке gate скрыть drift; осознанная смена набора
+# тестов обновляет оба значения только по свежему перечислению.
 ARB_INVENTORY_SHA256_V1 = (
-    "c74942a9240b68327921160f86fd948532849234bb6da00a0075a137fef098cc"
+    "6a616daac6d2437b372d93e8e5fe03787557e7a75aea25475ca9d349568669aa"
 )
 ARB_ORDER_SHA256_V1 = (
-    "bbf8711108939c4658e0b17bc037c5b592499fdf73c67121c492e5edea4635e9"
+    "160269a28292a0d60b2a04189fa20add09a2e5fad958592ad5ef3c33aad51f48"
 )
-ARB_TEST_COUNT_V1 = 198
+ARB_TEST_COUNT_V1 = 231
 
 MOVED_INPUT_SURFACE_V1 = (
     "CanonicalInputLimitsV1",

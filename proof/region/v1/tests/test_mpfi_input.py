@@ -10,6 +10,7 @@ import lzma
 import sys
 import tarfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from unittest import mock
 
@@ -383,11 +384,11 @@ class MpfiSourceInputTests(unittest.TestCase):
             with self.subTest(limit=field):
                 with mock.patch.object(
                     mpfi_input.provenance,
-                    "materialize_admitted_source_files_v1",
-                ) as materialize:
+                    "replay_admitted_source_closure_v1",
+                ) as replay_closure:
                     with self.assertRaises(build_input.InputErrorV1) as caught:
                         mpfi_input.seal_mpfi_source_input_v1(lock, admitted, limits)
-                materialize.assert_not_called()
+                replay_closure.assert_not_called()
                 self.assertEqual(caught.exception.reason, build_input.InputReasonV1.RESOURCE_LIMIT)
                 self.assertEqual(caught.exception.field, field)
 
@@ -447,6 +448,7 @@ class MpfiSourceInputTests(unittest.TestCase):
             caught.exception.reason,
             mpfi_input.MpfiSourceInputReasonV1.FOREIGN_SOURCE_CAPABILITY,
         )
+        self.assertEqual(caught.exception.field, "admitted_sources")
 
         class ExplodesOnComparison:
             def __ne__(self, _other: object) -> bool:
@@ -461,6 +463,116 @@ class MpfiSourceInputTests(unittest.TestCase):
         self.assertEqual(
             caught.exception.reason,
             mpfi_input.MpfiSourceInputReasonV1.FOREIGN_SOURCE_CAPABILITY,
+        )
+        self.assertEqual(caught.exception.field, "admitted_sources")
+
+    def test_hostile_exact_source_capability_stays_a_typed_replay_failure(
+        self,
+    ) -> None:
+        lock, admitted, expected_entries = _admitted_closure()
+        limits = _limits_for_entries(expected_entries)
+        sealed = mpfi_input.seal_mpfi_source_input_v1(lock, admitted, limits)
+        source = admitted.sources[0]
+        original = source.source_lock_identity
+
+        class ExplodesOnComparison:
+            def __ne__(self, _other: object) -> bool:
+                raise RuntimeError("comparison ran")
+
+        object.__setattr__(source, "source_lock_identity", ExplodesOnComparison())
+        try:
+            with self.assertRaises(provenance.ProvenanceErrorV1) as caught:
+                mpfi_input.seal_mpfi_source_input_v1(lock, admitted, limits)
+            self.assertFalse(
+                mpfi_input.mpfi_source_input_is_bound_v1(
+                    lock,
+                    admitted,
+                    limits,
+                    sealed,
+                )
+            )
+        finally:
+            object.__setattr__(source, "source_lock_identity", original)
+        self.assertEqual(
+            caught.exception.reason,
+            provenance.ProvenanceReasonV1.FOREIGN_BINDING,
+        )
+
+    def test_source_input_keeps_one_snapshot_across_reentrant_source_mutation(
+        self,
+    ) -> None:
+        lock, admitted, expected_entries = _admitted_closure()
+        limits = _limits_for_entries(expected_entries)
+        source = admitted.sources[0]
+        original_tree_identity = source.tree_identity
+        real_encoder = build_input.canonical_ustar_v1
+
+        def encode_then_mutate(
+            entries: tuple[tuple[str, int, bytes], ...],
+            encoder_limits: build_input.CanonicalInputLimitsV1,
+        ) -> bytes:
+            encoded = real_encoder(entries, encoder_limits)
+            object.__setattr__(source, "tree_identity", _sha256(b"reentrant-tree"))
+            return encoded
+
+        try:
+            with mock.patch.object(
+                mpfi_input.build_input,
+                "canonical_ustar_v1",
+                side_effect=encode_then_mutate,
+            ):
+                sealed = mpfi_input.seal_mpfi_source_input_v1(
+                    lock,
+                    admitted,
+                    limits,
+                )
+            self.assertFalse(
+                mpfi_input.mpfi_source_input_is_bound_v1(
+                    lock,
+                    admitted,
+                    limits,
+                    sealed,
+                )
+            )
+        finally:
+            object.__setattr__(source, "tree_identity", original_tree_identity)
+        self.assertTrue(
+            mpfi_input.mpfi_source_input_is_bound_v1(
+                lock,
+                admitted,
+                limits,
+                sealed,
+            )
+        )
+
+    def test_hostile_replayed_source_stays_a_typed_provenance_failure(self) -> None:
+        lock, admitted, expected_entries = _admitted_closure()
+        limits = _limits_for_entries(expected_entries)
+        sealed = mpfi_input.seal_mpfi_source_input_v1(lock, admitted, limits)
+        source = admitted.sources[0]
+        original = source.files
+
+        class ExplodesOnComparison:
+            def __eq__(self, _other: object) -> bool:
+                raise RuntimeError("comparison ran")
+
+        object.__setattr__(source, "files", ExplodesOnComparison())
+        try:
+            with self.assertRaises(provenance.ProvenanceErrorV1) as caught:
+                mpfi_input.seal_mpfi_source_input_v1(lock, admitted, limits)
+            self.assertFalse(
+                mpfi_input.mpfi_source_input_is_bound_v1(
+                    lock,
+                    admitted,
+                    limits,
+                    sealed,
+                )
+            )
+        finally:
+            object.__setattr__(source, "files", original)
+        self.assertEqual(
+            caught.exception.reason,
+            provenance.ProvenanceReasonV1.FOREIGN_BINDING,
         )
 
     def test_noncanonical_exact_type_lock_is_a_typed_rejection(self) -> None:
@@ -480,6 +592,81 @@ class MpfiSourceInputTests(unittest.TestCase):
             caught.exception.reason,
             mpfi_input.MpfiSourceInputReasonV1.FOREIGN_SOURCE_CAPABILITY,
         )
+
+    def test_hostile_exact_lock_cannot_escape_public_boundary(self) -> None:
+        lock, admitted, expected_entries = _admitted_closure()
+        limits = _limits_for_entries(expected_entries)
+        sealed = mpfi_input.seal_mpfi_source_input_v1(lock, admitted, limits)
+        original_sources = lock.sources
+
+        class ExplodesOnEncode:
+            def encode(self) -> bytes:
+                raise RuntimeError("encode ran")
+
+        object.__setattr__(lock, "sources", (ExplodesOnEncode(),) * 3)
+        try:
+            with self.assertRaises(mpfi_input.MpfiSourceInputErrorV1) as caught:
+                mpfi_input.seal_mpfi_source_input_v1(lock, admitted, limits)
+            self.assertFalse(
+                mpfi_input.mpfi_source_input_is_bound_v1(
+                    lock,
+                    admitted,
+                    limits,
+                    sealed,
+                )
+            )
+        finally:
+            object.__setattr__(lock, "sources", original_sources)
+        self.assertEqual(
+            caught.exception.reason,
+            mpfi_input.MpfiSourceInputReasonV1.FOREIGN_SOURCE_CAPABILITY,
+        )
+        self.assertEqual(caught.exception.field, "source_lock")
+
+    def test_source_lock_encoder_shadow_cannot_select_foreign_closure(self) -> None:
+        lock, admitted, expected_entries = _admitted_closure()
+        limits = _limits_for_entries(expected_entries)
+        foreign_releases = list(lock.sources)
+        foreign_releases[0] = replace(foreign_releases[0], version="shadowed")
+        foreign_lock = provenance.MpfiSourceLockV1(tuple(foreign_releases))
+        foreign_sources = tuple(
+            provenance.admit_source_archive(release, source.archive_bytes)
+            for release, source in zip(
+                foreign_lock.sources,
+                admitted.sources,
+                strict=True,
+            )
+        )
+        foreign_admitted = provenance.admit_mpfi_sources(
+            foreign_lock,
+            foreign_sources,
+        )
+        lock.__dict__["encode"] = lambda: provenance.MpfiSourceLockV1.encode(
+            foreign_lock
+        )
+        try:
+            with self.assertRaises(mpfi_input.MpfiSourceInputErrorV1) as caught:
+                mpfi_input.seal_mpfi_source_input_v1(
+                    lock,
+                    foreign_admitted,
+                    limits,
+                )
+            self.assertEqual(
+                caught.exception.reason,
+                mpfi_input.MpfiSourceInputReasonV1.FOREIGN_SOURCE_CAPABILITY,
+            )
+
+            sealed = mpfi_input.seal_mpfi_source_input_v1(lock, admitted, limits)
+            self.assertTrue(
+                mpfi_input.mpfi_source_input_is_bound_v1(
+                    lock,
+                    admitted,
+                    limits,
+                    sealed,
+                )
+            )
+        finally:
+            del lock.__dict__["encode"]
 
     def test_source_input_owner_has_no_engine_dependency(self) -> None:
         source_path = ROOT / "mpfi" / "input.py"

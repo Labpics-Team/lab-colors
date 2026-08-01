@@ -19,7 +19,7 @@ SHARED_FAST_TEST_PATTERNS_V1 = (
     "test_mpfi_input.py",
 )
 EXPECTED_TEST_INVENTORY_SHA256 = (
-    "c74942a9240b68327921160f86fd948532849234bb6da00a0075a137fef098cc"
+    "6a616daac6d2437b372d93e8e5fe03787557e7a75aea25475ca9d349568669aa"
 )
 _EVALUATOR_REASON = "set LABCOLORS_ARB_EVALUATOR to the controlled C17 binary"
 EXPECTED_SKIPS = frozenset(
@@ -112,7 +112,7 @@ def run_exact_suite_v1(
         or actual_inventory_sha256 != expected_inventory_sha256
     ):
         print(
-            "Arb test inventory drift: "
+            "Proof fast gate inventory drift: "
             f"count={len(tests)} sha256={actual_inventory_sha256} "
             f"expected={expected_inventory_sha256}",
             file=sys.stderr,

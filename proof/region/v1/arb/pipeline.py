@@ -272,14 +272,20 @@ def build_source_manifest_bytes_v1(sources: AdmittedBuildSourcesV1) -> bytes:
     if type(sources) is not AdmittedBuildSourcesV1:
         raise TypeError("sources must be AdmittedBuildSourcesV1")
     replayed = admit_build_sources_v1(sources.files)
+    retained_identity = sources.identity
+    retained_build_input_identity = sources.build_input_identity
+    retained_formula_support_identity = sources.formula_support_identity
     if (
-        replayed.identity != sources.identity
-        or replayed.build_input_identity != sources.build_input_identity
-        or replayed.formula_support_identity != sources.formula_support_identity
+        not _valid_digest(retained_identity)
+        or not _valid_digest(retained_build_input_identity)
+        or not _valid_digest(retained_formula_support_identity)
+        or retained_identity != replayed.identity
+        or retained_build_input_identity != replayed.build_input_identity
+        or retained_formula_support_identity != replayed.formula_support_identity
     ):
         raise TypeError("retained build-source coordinates changed")
-    chunks: list[bytes] = [len(sources.files).to_bytes(4, "big")]
-    for item in sources.files:
+    chunks: list[bytes] = [len(replayed.files).to_bytes(4, "big")]
+    for item in replayed.files:
         chunks.extend(
             (
                 item.path.encode("ascii"),
@@ -312,13 +318,30 @@ def _build_sources_identity(files_value: tuple[BuildSourceFileV1, ...]) -> bytes
     return _source_subset_identity(_BUILD_SOURCES_ID_LABEL_V1, files_value)
 
 
-def admit_build_sources_v1(
+def _snapshot_build_source_files_v1(
     files_value: tuple[BuildSourceFileV1, ...],
-) -> AdmittedBuildSourcesV1:
+) -> tuple[BuildSourceFileV1, ...]:
+    """Copies exact primitives before admission derives any retained identity."""
+
     if type(files_value) is not tuple or any(
         type(item) is not BuildSourceFileV1 for item in files_value
     ):
         _source_fail(BuildSourceReasonV1.WRONG_TYPE, "files")
+    try:
+        return tuple(
+            BuildSourceFileV1(item.path, item.mode, item.contents)
+            for item in files_value
+        )
+    except BuildSourceAdmissionErrorV1:
+        raise
+    except Exception:
+        _source_fail(BuildSourceReasonV1.WRONG_TYPE, "files")
+
+
+def admit_build_sources_v1(
+    files_value: tuple[BuildSourceFileV1, ...],
+) -> AdmittedBuildSourcesV1:
+    files_value = _snapshot_build_source_files_v1(files_value)
     actual = tuple((item.path, item.mode) for item in files_value)
     if actual != REQUIRED_BUILD_SOURCE_MODES_V1:
         _source_fail(BuildSourceReasonV1.NONCANONICAL_SET, "files")
@@ -388,48 +411,65 @@ def arb_input_is_bound_v1(
     exact_policy: object,
     value: object,
 ) -> bool:
-    """Recompute Arb semantics independently of generic byte integrity."""
+    """Independently replay public input; never trust its retained identities."""
+
+    if type(value) is not build_input.SealedInputV1:
+        return False
+    try:
+        snapshot = _snapshot_pipeline_operation_v1(request)
+        expected = _seal_build_input_from_snapshot_v1(
+            snapshot,
+            exact_policy,
+        )
+        return _owned_arb_input_is_bound_v1(value, expected)
+    except Exception:
+        return False
+
+
+def _owned_arb_input_is_bound_v1(
+    value: object,
+    expected: build_input.SealedInputV1,
+) -> bool:
+    """Cheap transport recheck against one private operation snapshot."""
 
     if (
-        type(request) is not PipelineRequestV1
-        or type(value) is not build_input.SealedInputV1
+        type(value) is not build_input.SealedInputV1
         or not build_input.sealed_input_is_intact_v1(value)
     ):
         return False
     try:
-        return value.binding_identity == _arb_input_binding_identity_v1(
-            request.admitted_sources.identity,
-            request.build_sources.build_input_identity,
-            value.contents,
-            exact_policy,
+        return (
+            value.binding_identity == expected.binding_identity
+            and value.sha256 == expected.sha256
+            and value.length == expected.length
+            and value.contents == expected.contents
         )
     except Exception:
         return False
 
 
-def _seal_build_input_bundle_v1(
-    request: "PipelineRequestV1",
+def _seal_build_input_from_snapshot_v1(
+    snapshot: _PipelineOperationSnapshotV1,
     exact_policy: build_transport.DockerBuildPolicyV1,
 ) -> build_input.SealedInputV1:
-    if type(request) is not PipelineRequestV1:
-        raise TypeError("request must be PipelineRequestV1")
+    if type(snapshot) is not _PipelineOperationSnapshotV1:
+        raise TypeError("snapshot must be _PipelineOperationSnapshotV1")
     if not build_transport.docker_policy_is_valid_v1(exact_policy):
         raise TypeError("exact_policy must be canonical DockerBuildPolicyV1")
+    request = snapshot.request
+    source_closure = snapshot.source_closure
     source_entries = tuple(
         (
             f"inputs/{lock.root_prefix[:-1]}/{relative}",
             mode,
             contents,
         )
-        for lock, admitted in zip(
-            request.source_lock.sources,
-            request.admitted_sources.sources,
+        for lock, materialized in zip(
+            source_closure.source_lock.sources,
+            source_closure.sources,
             strict=True,
         )
-        for relative, mode, contents in provenance.materialize_admitted_source_files_v1(
-            lock,
-            admitted,
-        )
+        for relative, mode, contents in materialized.files
     )
     workspace_entries = tuple(
         (
@@ -454,11 +494,14 @@ def _seal_build_input_bundle_v1(
                 MAX_BUILD_SOURCE_FILE_BYTES_V1,
                 *(
                     lock.regular_file_bytes
-                    for lock in request.source_lock.sources
+                    for lock in source_closure.source_lock.sources
                 ),
             ),
             MAX_BUILD_SOURCE_TOTAL_BYTES_V1
-            + sum(lock.regular_file_bytes for lock in request.source_lock.sources),
+            + sum(
+                lock.regular_file_bytes
+                for lock in source_closure.source_lock.sources
+            ),
         ),
     )
     return build_input.seal_input_v1(
@@ -472,16 +515,37 @@ def _seal_build_input_bundle_v1(
     )
 
 
+def _seal_build_input_bundle_v1(
+    request: "PipelineRequestV1",
+    exact_policy: build_transport.DockerBuildPolicyV1,
+) -> build_input.SealedInputV1:
+    """Seal one public request through a detached operation snapshot."""
+
+    return _seal_build_input_from_snapshot_v1(
+        _snapshot_pipeline_operation_v1(request),
+        exact_policy,
+    )
+
+
 class HostTrustBoundaryV1(StrEnum):
     UNSEALED_LINUX_X64_DOCKER_HOST = "unsealed-linux-x64-docker-host"
+
+
+_UNSEALED_LINUX_X64_DOCKER_HOST_WIRE_V1 = b"unsealed-linux-x64-docker-host"
+
+
+def _host_trust_wire_v1(value: object) -> bytes:
+    """Own the sole V1 host declaration without reading mutable enum storage."""
+
+    if value is not HostTrustBoundaryV1.UNSEALED_LINUX_X64_DOCKER_HOST:
+        raise TypeError("unknown host trust boundary")
+    return _UNSEALED_LINUX_X64_DOCKER_HOST_WIRE_V1
 
 
 def pipeline_policy_identity_v2(
     host_trust: HostTrustBoundaryV1,
     exact_policy: build_transport.DockerBuildPolicyV1,
 ) -> bytes:
-    if type(host_trust) is not HostTrustBoundaryV1:
-        raise TypeError("host_trust must be HostTrustBoundaryV1")
     if not build_transport.docker_policy_is_valid_v1(exact_policy):
         raise TypeError("exact_policy must be canonical DockerBuildPolicyV1")
     return _identity(
@@ -489,7 +553,7 @@ def pipeline_policy_identity_v2(
         (
             build_transport.transport_policy_identity_v1(exact_policy),
             build_transport.native_command_contract_identity_v1(),
-            host_trust.value.encode("ascii"),
+            _host_trust_wire_v1(host_trust),
             b"build-observation=diagnostic-unsealed-v1",
             b"inputs=one-controller-sealed-normalized-tree-ustar",
             b"container-admission=exact-length-and-sha256-before-extraction",
@@ -501,6 +565,7 @@ def pipeline_policy_identity_v2(
 class PipelineInputReasonV1(StrEnum):
     WRONG_TYPE = "wrong_type"
     FOREIGN_SOURCE_CAPABILITY = "foreign_source_capability"
+    INVALID_RETAINED_INPUT = "invalid_retained_input"
     FORMULA_MISMATCH = "formula_mismatch"
     EXECUTION_LIMIT_MISMATCH = "execution_limit_mismatch"
 
@@ -564,27 +629,62 @@ def _require_bound_source_capability_v1(
     source_lock: provenance.ArbSourceLockV1,
     admitted_sources: provenance.AdmittedArbSourcesV1,
 ) -> None:
-    if source_lock.identity != admitted_sources.source_lock_identity:
+    if (
+        type(source_lock) is not provenance.ArbSourceLockV1
+        or type(admitted_sources) is not provenance.AdmittedArbSourcesV1
+    ):
+        raise PipelineInputErrorV1(
+            PipelineInputReasonV1.WRONG_TYPE,
+            "source_lock/admitted_sources",
+        )
+    try:
+        closure_identity = admitted_sources.source_lock_identity
+        sources = admitted_sources.sources
+        if (
+            not _valid_digest(closure_identity)
+            or type(sources) is not tuple
+            or len(sources) != provenance.SOURCE_CLOSURE_COUNT_V1
+            or any(type(source) is not provenance.SafeSourceArchiveV1 for source in sources)
+        ):
+            raise TypeError("invalid retained source closure")
+    except (AttributeError, TypeError, ValueError, OverflowError) as error:
+        raise PipelineInputErrorV1(
+            PipelineInputReasonV1.FOREIGN_SOURCE_CAPABILITY,
+            "admitted_sources",
+        ) from error
+    if source_lock.identity != closure_identity:
         raise PipelineInputErrorV1(
             PipelineInputReasonV1.FOREIGN_SOURCE_CAPABILITY,
             "admitted_sources",
         )
     for lock, admitted in zip(
         source_lock.sources,
-        admitted_sources.sources,
+        sources,
         strict=True,
     ):
-        if lock.identity != admitted.source_lock_identity:
+        try:
+            admitted_lock_identity = admitted.source_lock_identity
+        except AttributeError as error:
+            raise PipelineInputErrorV1(
+                PipelineInputReasonV1.FOREIGN_SOURCE_CAPABILITY,
+                "admitted_sources",
+            ) from error
+        if (
+            not _valid_digest(admitted_lock_identity)
+            or lock.identity != admitted_lock_identity
+        ):
             raise PipelineInputErrorV1(
                 PipelineInputReasonV1.FOREIGN_SOURCE_CAPABILITY,
                 "admitted_sources",
             )
 
 
-def flint_source_content_partition_v1(
+def _owned_flint_source_content_partition_v1(
     source_lock: provenance.ArbSourceLockV1,
     admitted_sources: provenance.AdmittedArbSourcesV1,
 ) -> FlintSourceContentPartitionV1:
+    """Derive FLINT partitions from one already-detached source closure."""
+
     if type(source_lock) is not provenance.ArbSourceLockV1:
         raise PipelineInputErrorV1(PipelineInputReasonV1.WRONG_TYPE, "source_lock")
     if type(admitted_sources) is not provenance.AdmittedArbSourcesV1:
@@ -637,6 +737,49 @@ def flint_source_content_partition_v1(
     )
 
 
+def flint_source_content_partition_v1(
+    source_lock: provenance.ArbSourceLockV1,
+    admitted_sources: provenance.AdmittedArbSourcesV1,
+) -> FlintSourceContentPartitionV1:
+    """Independently derive FLINT partitions from a public retained closure."""
+
+    if type(source_lock) is not provenance.ArbSourceLockV1:
+        raise PipelineInputErrorV1(PipelineInputReasonV1.WRONG_TYPE, "source_lock")
+    if type(admitted_sources) is not provenance.AdmittedArbSourcesV1:
+        raise PipelineInputErrorV1(
+            PipelineInputReasonV1.WRONG_TYPE,
+            "admitted_sources",
+        )
+    try:
+        canonical_lock = provenance.snapshot_source_closure_lock_v1(source_lock)
+        canonical_sources = provenance.snapshot_admitted_source_closure_v1(
+            canonical_lock,
+            admitted_sources,
+        )
+        if type(canonical_lock) is not provenance.ArbSourceLockV1 or type(
+            canonical_sources
+        ) is not provenance.AdmittedArbSourcesV1:
+            raise TypeError("FLINT requires an Arb source closure")
+        return _owned_flint_source_content_partition_v1(
+            canonical_lock,
+            canonical_sources,
+        )
+    except PipelineInputErrorV1:
+        raise
+    except (
+        provenance.ProvenanceErrorV1,
+        AttributeError,
+        TypeError,
+        ValueError,
+        OverflowError,
+        UnicodeError,
+    ) as error:
+        raise PipelineInputErrorV1(
+            PipelineInputReasonV1.FOREIGN_SOURCE_CAPABILITY,
+            "admitted_sources",
+        ) from error
+
+
 def _comparator_preimage_v1(label: bytes, chunks: tuple[bytes, ...]) -> bytes:
     """Encode one independently versioned, ordered comparator preimage."""
 
@@ -671,7 +814,7 @@ def _comparator_preimage_v2(label: bytes, chunks: tuple[bytes, ...]) -> bytes:
     )
 
 
-def comparator_build_preimage_v2(
+def _comparator_build_preimage_v2(
     build_sources: AdmittedBuildSourcesV1,
     docker_capability_identity: bytes,
     pipeline_policy_identity: bytes,
@@ -911,37 +1054,309 @@ class PipelineRequestV1:
         for field_name, value, expected_type in expected_types:
             if type(value) is not expected_type:
                 raise PipelineInputErrorV1(PipelineInputReasonV1.WRONG_TYPE, field_name)
-        _require_bound_source_capability_v1(self.source_lock, self.admitted_sources)
-        flint_source_content_partition_v1(self.source_lock, self.admitted_sources)
-        if self.build_sources.formula_spec != self.job.formula_spec:
-            raise PipelineInputErrorV1(PipelineInputReasonV1.FORMULA_MISMATCH, "job")
-        job_bytes = self.job.encode()
-        invocation_bytes = sum(
-            len(value) + 1
-            for value in (
-                b"arb-evaluator",
-                b"--manifest-identity",
-                bytes(32).hex().encode("ascii"),
-                b"--job",
-                b"/dev/stdin",
+        try:
+            source_lock = provenance.snapshot_source_closure_lock_v1(self.source_lock)
+        except (
+            provenance.ProvenanceErrorV1,
+            AttributeError,
+            TypeError,
+            ValueError,
+            OverflowError,
+            UnicodeError,
+        ) as error:
+            raise PipelineInputErrorV1(
+                PipelineInputReasonV1.FOREIGN_SOURCE_CAPABILITY,
+                "source_lock",
+            ) from error
+        if type(source_lock) is not provenance.ArbSourceLockV1:
+            raise PipelineInputErrorV1(
+                PipelineInputReasonV1.FOREIGN_SOURCE_CAPABILITY,
+                "source_lock",
             )
-        ) + sum(
-            len(key) + len(value) + 2
-            for key, value in ((b"LC_ALL", b"C"), (b"TZ", b"UTC"))
+        try:
+            admitted_sources = provenance.snapshot_admitted_source_closure_v1(
+                source_lock,
+                self.admitted_sources,
+            )
+            if type(admitted_sources) is not provenance.AdmittedArbSourcesV1:
+                raise TypeError("Arb request retained a non-Arb source closure")
+        except (
+            provenance.ProvenanceErrorV1,
+            AttributeError,
+            TypeError,
+            ValueError,
+            OverflowError,
+            UnicodeError,
+        ) as error:
+            raise PipelineInputErrorV1(
+                PipelineInputReasonV1.FOREIGN_SOURCE_CAPABILITY,
+                "admitted_sources",
+            ) from error
+        try:
+            build_sources = admit_build_sources_v1(self.build_sources.files)
+        except (
+            BuildSourceAdmissionErrorV1,
+            AttributeError,
+            TypeError,
+            ValueError,
+            OverflowError,
+            UnicodeError,
+        ) as error:
+            raise PipelineInputErrorV1(
+                PipelineInputReasonV1.INVALID_RETAINED_INPUT,
+                "build_sources",
+            ) from error
+        try:
+            job = protocol.snapshot_proof_job_v1(self.job)
+        except (
+            protocol.ProtocolErrorV1,
+            AttributeError,
+            TypeError,
+            ValueError,
+            OverflowError,
+            UnicodeError,
+        ) as error:
+            raise PipelineInputErrorV1(
+                PipelineInputReasonV1.INVALID_RETAINED_INPUT,
+                "job",
+            ) from error
+        try:
+            execution_limits = executor.ExecutionLimitsV1(*tuple(self.execution_limits))
+        except (
+            executor.ExecutionRequestErrorV1,
+            AttributeError,
+            TypeError,
+            ValueError,
+            OverflowError,
+        ) as error:
+            raise PipelineInputErrorV1(
+                PipelineInputReasonV1.INVALID_RETAINED_INPUT,
+                "execution_limits",
+            ) from error
+        try:
+            _host_trust_wire_v1(self.host_trust)
+        except TypeError as error:
+            raise PipelineInputErrorV1(
+                PipelineInputReasonV1.INVALID_RETAINED_INPUT,
+                "host_trust",
+            ) from error
+        _validate_pipeline_request_coordinates_v1(
+            source_lock,
+            admitted_sources,
+            build_sources,
+            job,
+            execution_limits,
+            self.host_trust,
         )
+        object.__setattr__(self, "source_lock", source_lock)
+        object.__setattr__(self, "admitted_sources", admitted_sources)
+        object.__setattr__(self, "build_sources", build_sources)
+        object.__setattr__(self, "job", job)
+        object.__setattr__(self, "execution_limits", execution_limits)
+
+
+_PIPELINE_OWNED_REQUEST_TOKEN = object()
+
+
+def _validate_pipeline_request_coordinates_v1(
+    source_lock: provenance.ArbSourceLockV1,
+    admitted_sources: provenance.AdmittedArbSourcesV1,
+    build_sources: AdmittedBuildSourcesV1,
+    job: protocol.ProofJobV1,
+    execution_limits: executor.ExecutionLimitsV1,
+    host_trust: HostTrustBoundaryV1,
+) -> None:
+    """Check a detached request without reopening its already-owned archives."""
+
+    expected_types = (
+        ("source_lock", source_lock, provenance.ArbSourceLockV1),
+        ("admitted_sources", admitted_sources, provenance.AdmittedArbSourcesV1),
+        ("build_sources", build_sources, AdmittedBuildSourcesV1),
+        ("job", job, protocol.ProofJobV1),
+        ("execution_limits", execution_limits, executor.ExecutionLimitsV1),
+        ("host_trust", host_trust, HostTrustBoundaryV1),
+    )
+    for field_name, value, expected_type in expected_types:
+        if type(value) is not expected_type:
+            raise PipelineInputErrorV1(PipelineInputReasonV1.WRONG_TYPE, field_name)
+    try:
+        _require_bound_source_capability_v1(source_lock, admitted_sources)
+        _owned_flint_source_content_partition_v1(source_lock, admitted_sources)
+    except PipelineInputErrorV1:
+        raise
+    except (AttributeError, TypeError, ValueError, OverflowError) as error:
+        raise PipelineInputErrorV1(
+            PipelineInputReasonV1.FOREIGN_SOURCE_CAPABILITY,
+            "admitted_sources",
+        ) from error
+    if build_sources.formula_spec != job.formula_spec:
+        raise PipelineInputErrorV1(PipelineInputReasonV1.FORMULA_MISMATCH, "job")
+    job_bytes = protocol.ProofJobV1.encode(job)
+    invocation_bytes = sum(
+        len(value) + 1
+        for value in (
+            b"arb-evaluator",
+            b"--manifest-identity",
+            bytes(32).hex().encode("ascii"),
+            b"--job",
+            b"/dev/stdin",
+        )
+    ) + sum(
+        len(key) + len(value) + 2
+        for key, value in ((b"LC_ALL", b"C"), (b"TZ", b"UTC"))
+    )
+    if (
+        execution_limits.max_executable_bytes > BUILD_STDOUT_LIMIT_V1
+        or len(job_bytes) > execution_limits.max_stdin_bytes
+        or invocation_bytes > execution_limits.max_argument_bytes
+    ):
+        raise PipelineInputErrorV1(
+            PipelineInputReasonV1.EXECUTION_LIMIT_MISMATCH,
+            "execution_limits",
+        )
+
+
+def _owned_pipeline_request_v1(
+    source_lock: provenance.ArbSourceLockV1,
+    admitted_sources: provenance.AdmittedArbSourcesV1,
+    build_sources: AdmittedBuildSourcesV1,
+    job: protocol.ProofJobV1,
+    execution_limits: executor.ExecutionLimitsV1,
+    host_trust: HostTrustBoundaryV1,
+    *,
+    _token: object,
+) -> PipelineRequestV1:
+    """Mint the request half of a private operation from already-owned values."""
+
+    if _token is not _PIPELINE_OWNED_REQUEST_TOKEN:
+        raise TypeError("owned pipeline requests are created only by operation replay")
+    _validate_pipeline_request_coordinates_v1(
+        source_lock,
+        admitted_sources,
+        build_sources,
+        job,
+        execution_limits,
+        host_trust,
+    )
+    request = object.__new__(PipelineRequestV1)
+    for field_name, value in (
+        ("source_lock", source_lock),
+        ("admitted_sources", admitted_sources),
+        ("build_sources", build_sources),
+        ("job", job),
+        ("execution_limits", execution_limits),
+        ("host_trust", host_trust),
+    ):
+        object.__setattr__(request, field_name, value)
+    return request
+
+
+_PIPELINE_OPERATION_SNAPSHOT_TOKEN = object()
+
+
+@dataclass(frozen=True, init=False)
+class _PipelineOperationSnapshotV1:
+    """One private operation capability; its contents never alias caller input."""
+
+    request: PipelineRequestV1
+    source_closure: provenance.ReplayedSourceClosureV1
+
+    def __init__(
+        self,
+        request: PipelineRequestV1,
+        source_closure: provenance.ReplayedSourceClosureV1,
+        *,
+        _token: object,
+    ) -> None:
+        if _token is not _PIPELINE_OPERATION_SNAPSHOT_TOKEN:
+            raise TypeError("PipelineOperationSnapshotV1 is created only by pipeline replay")
         if (
-            self.execution_limits.max_executable_bytes > BUILD_STDOUT_LIMIT_V1
-            or len(job_bytes) > self.execution_limits.max_stdin_bytes
-            or invocation_bytes > self.execution_limits.max_argument_bytes
+            type(request) is not PipelineRequestV1
+            or type(source_closure) is not provenance.ReplayedSourceClosureV1
+            or type(source_closure.source_lock) is not provenance.ArbSourceLockV1
+            or type(source_closure.admitted_sources) is not provenance.AdmittedArbSourcesV1
+            or request.source_lock.identity != source_closure.source_lock.identity
+            or request.admitted_sources.identity != source_closure.admitted_sources.identity
+        ):
+            raise TypeError("operation snapshot must retain one coherent Arb closure")
+        object.__setattr__(self, "request", request)
+        object.__setattr__(self, "source_closure", source_closure)
+
+
+def _snapshot_pipeline_operation_v1(
+    request: object,
+) -> _PipelineOperationSnapshotV1:
+    """Rebuild every authority-bearing request coordinate before any probe/spawn."""
+
+    if type(request) is not PipelineRequestV1:
+        raise PipelineInputErrorV1(PipelineInputReasonV1.WRONG_TYPE, "request")
+    try:
+        source_lock = request.source_lock
+        admitted_sources = request.admitted_sources
+        build_sources = request.build_sources
+        job = request.job
+        execution_limits = request.execution_limits
+        host_trust = request.host_trust
+        if (
+            type(source_lock) is not provenance.ArbSourceLockV1
+            or type(admitted_sources) is not provenance.AdmittedArbSourcesV1
+            or type(build_sources) is not AdmittedBuildSourcesV1
+            or type(job) is not protocol.ProofJobV1
+            or type(execution_limits) is not executor.ExecutionLimitsV1
+            or type(host_trust) is not HostTrustBoundaryV1
         ):
             raise PipelineInputErrorV1(
-                PipelineInputReasonV1.EXECUTION_LIMIT_MISMATCH,
-                "execution_limits",
+                PipelineInputReasonV1.WRONG_TYPE,
+                "request",
             )
+        # Copy all non-source coordinates before archive replay can do work or
+        # trigger a reentrant hostile fixture.  The protocol-owned copier reads
+        # raw fields rather than a mutable instance ``encode`` or cached digest.
+        canonical_job = protocol.snapshot_proof_job_v1(job)
+        canonical_build_sources = admit_build_sources_v1(build_sources.files)
+        canonical_execution_limits = executor.ExecutionLimitsV1(
+            *tuple(execution_limits)
+        )
+        _host_trust_wire_v1(host_trust)
+        source_closure = provenance.replay_admitted_source_closure_v1(
+            source_lock,
+            admitted_sources,
+        )
+        if type(source_closure.source_lock) is not provenance.ArbSourceLockV1:
+            raise PipelineInputErrorV1(
+                PipelineInputReasonV1.FOREIGN_SOURCE_CAPABILITY,
+                "admitted_sources",
+            )
+        if type(source_closure.admitted_sources) is not provenance.AdmittedArbSourcesV1:
+            raise PipelineInputErrorV1(
+                PipelineInputReasonV1.FOREIGN_SOURCE_CAPABILITY,
+                "admitted_sources",
+            )
+        canonical_request = _owned_pipeline_request_v1(
+            source_closure.source_lock,
+            source_closure.admitted_sources,
+            canonical_build_sources,
+            canonical_job,
+            canonical_execution_limits,
+            host_trust,
+            _token=_PIPELINE_OWNED_REQUEST_TOKEN,
+        )
+    except PipelineInputErrorV1:
+        raise
+    except Exception as error:
+        raise PipelineInputErrorV1(
+            PipelineInputReasonV1.FOREIGN_SOURCE_CAPABILITY,
+            "request",
+        ) from error
+    return _PipelineOperationSnapshotV1(
+        canonical_request,
+        source_closure,
+        _token=_PIPELINE_OPERATION_SNAPSHOT_TOKEN,
+    )
 
 
 def _derive_arb_comparator_for_build_v1(
-    request: PipelineRequestV1,
+    snapshot: _PipelineOperationSnapshotV1,
     docker_capability: build_transport.DockerSupportedV1,
     binary: bytes,
     rebuild_sha256s: tuple[bytes, bytes],
@@ -952,8 +1367,9 @@ def _derive_arb_comparator_for_build_v1(
 ) -> DiagnosticArbComparatorV1:
     """Derive all ten coordinates without accepting a caller digest/resolver."""
 
-    if type(request) is not PipelineRequestV1:
-        raise TypeError("request must be PipelineRequestV1")
+    if type(snapshot) is not _PipelineOperationSnapshotV1:
+        raise TypeError("snapshot must be _PipelineOperationSnapshotV1")
+    request = snapshot.request
     if type(docker_capability) is not build_transport.DockerSupportedV1:
         raise TypeError("docker_capability must be DockerSupportedV1")
     if type(binary) is not bytes or not binary:
@@ -991,7 +1407,7 @@ def _derive_arb_comparator_for_build_v1(
             b"gap:no-per-test-result-records",
             b"gap:no-git-derivation-for-project-pinned-release-only-files",
             b"gap:no-origin-authority-reverification",
-            request.host_trust.value.encode("ascii"),
+            _host_trust_wire_v1(request.host_trust),
             b"build-observation=diagnostic-unsealed-v1",
             len(flint_lock.integrity.omitted_paths).to_bytes(4, "big"),
             *(
@@ -1013,13 +1429,9 @@ def _derive_arb_comparator_for_build_v1(
         request.admitted_sources.source_lock_identity,
         len(request.source_lock.sources).to_bytes(4, "big"),
     ]
-    for lock, source in zip(
-        request.source_lock.sources,
-        request.admitted_sources.sources,
-        strict=True,
-    ):
+    for materialized in snapshot.source_closure.sources:
         upstream_chunks.extend(
-            provenance.source_archive_replay_coordinates_v1(lock, source)
+            provenance._materialized_source_coordinates_v1(materialized)
         )
     upstream_source = _comparator_preimage_v1(
         b"labcolors.proof-region.arb-comparator.upstream-source.v1\0",
@@ -1091,7 +1503,7 @@ def _derive_arb_comparator_for_build_v1(
     process_bytes = tuple(
         build_transport.build_process_bytes_v1(item) for item in build_processes
     )
-    build_identity = comparator_build_preimage_v2(
+    build_identity = _comparator_build_preimage_v2(
         request.build_sources,
         docker_capability_identity,
         pipeline_policy_identity,
@@ -1324,8 +1736,7 @@ class DiagnosticBuildObservationV1:
             or rebuild_sha256s != (binary_sha256, binary_sha256)
         ):
             raise TypeError("invalid observed two-build digests")
-        if type(host_trust) is not HostTrustBoundaryV1:
-            raise TypeError("invalid host trust boundary")
+        _host_trust_wire_v1(host_trust)
         if type(input_bundle_length) is not int or input_bundle_length <= 0:
             raise TypeError("invalid build input bundle length")
         if (
@@ -1484,6 +1895,24 @@ class ControlledPipelineV1:
 
         if type(request) is not PipelineRequestV1:
             raise PipelineInputErrorV1(PipelineInputReasonV1.WRONG_TYPE, "request")
+        try:
+            snapshot = _snapshot_pipeline_operation_v1(request)
+        except Exception:
+            return build_transport.BuildRejectedV1(
+                1,
+                build_transport.BuildFailureReasonV1.CONTRACT_VIOLATION,
+            )
+        return self._build_snapshot_v1(snapshot)
+
+    def _build_snapshot_v1(
+        self,
+        snapshot: _PipelineOperationSnapshotV1,
+    ) -> BuildResultV1:
+        """Consume one controller-owned snapshot without replaying its closure."""
+
+        if type(snapshot) is not _PipelineOperationSnapshotV1:
+            raise TypeError("snapshot must be _PipelineOperationSnapshotV1")
+        request = snapshot.request
         probe_result = self._transport.probe()
         if type(probe_result) is build_transport.DockerUnsupportedV1:
             return PipelineBlockedV1(probe_result.reason, probe_result.detail)
@@ -1494,8 +1923,8 @@ class ControlledPipelineV1:
             )
         docker_capability = probe_result
         try:
-            input_bundle = _seal_build_input_bundle_v1(
-                request,
+            input_bundle = _seal_build_input_from_snapshot_v1(
+                snapshot,
                 docker_capability.policy,
             )
         except (
@@ -1514,10 +1943,9 @@ class ControlledPipelineV1:
             docker_capability,
             input_bundle,
             request.execution_limits.max_executable_bytes,
-            input_admission=lambda value: arb_input_is_bound_v1(
-                request,
-                docker_capability.policy,
+            input_admission=lambda value: _owned_arb_input_is_bound_v1(
                 value,
+                input_bundle,
             ),
             output_admission=self._admit_arb_output_v1,
         )
@@ -1550,13 +1978,13 @@ class ControlledPipelineV1:
         )
         build_processes = built.processes
         comparator = _derive_arb_comparator_for_build_v1(
-            request,
+            snapshot,
             docker_capability,
             binary,
             rebuild_sha256s,
             build_processes,
         )
-        flint_partition = flint_source_content_partition_v1(
+        flint_partition = _owned_flint_source_content_partition_v1(
             request.source_lock,
             request.admitted_sources,
         )

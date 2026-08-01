@@ -72,6 +72,29 @@ def admitted_closure_identity(
     return canonical_identity(label, b"".join(chunks))
 
 
+def _replay_source(
+    lock: SourceReleaseLockV1,
+    admitted: provenance.SafeSourceArchiveV1,
+) -> provenance.ReplayedSourceMaterializationV1:
+    """Exercise the one source materialization contract from a fresh replay."""
+
+    return provenance.replay_materialize_admitted_source_v1(lock, admitted)
+
+
+def _source_files(
+    lock: SourceReleaseLockV1,
+    admitted: provenance.SafeSourceArchiveV1,
+) -> tuple[tuple[str, int, bytes], ...]:
+    return _replay_source(lock, admitted).files
+
+
+def _source_coordinates(
+    lock: SourceReleaseLockV1,
+    admitted: provenance.SafeSourceArchiveV1,
+) -> tuple[bytes, ...]:
+    return provenance.source_archive_replay_coordinates_v1(lock, admitted)
+
+
 def tar_gz(
     entries: tuple[tuple[str, bytes | None, bytes | None], ...],
 ) -> bytes:
@@ -457,6 +480,79 @@ class SafeArchiveAdmissionTests(unittest.TestCase):
                 _token=object(),
             )
 
+    def test_aggregate_admission_replays_each_source_before_it_owns_the_closure(
+        self,
+    ) -> None:
+        gmp = fixture_lock(GOOD_ARCHIVE)
+        mpfr = replace(gmp, role=SourceRoleV1.MPFR)
+        arb_third = replace(
+            gmp,
+            role=SourceRoleV1.FLINT_ARB,
+            integrity=GitContentRelationPolicyV1(
+                "https://example.invalid/fixture.git",
+                "v1",
+                bytes.fromhex("11" * 20),
+                bytes.fromhex("22" * 20),
+                1,
+                ("missing",),
+                (
+                    ProjectPinnedReleaseOnlyFileV1(
+                        "value",
+                        0o644,
+                        4,
+                        sha256(b"data"),
+                    ),
+                ),
+            ),
+        )
+        mpfi_third = replace(
+            gmp,
+            role=SourceRoleV1.MPFI,
+            integrity=ProjectPinnedArchiveDigestPolicyV1(),
+        )
+
+        class CounterfeitDigest(bytes):
+            def __eq__(self, _other: object) -> bool:
+                return True
+
+            def __ne__(self, _other: object) -> bool:
+                return False
+
+        cases = (
+            (
+                provenance.ArbSourceLockV1((gmp, mpfr, arb_third)),
+                admit_arb_sources,
+            ),
+            (
+                MpfiSourceLockV1((gmp, mpfr, mpfi_third)),
+                admit_mpfi_sources,
+            ),
+        )
+        for lock, admit in cases:
+            with self.subTest(lock_type=type(lock).__name__):
+                sources = tuple(
+                    admit_source_archive(release, GOOD_ARCHIVE)
+                    for release in lock.sources
+                )
+                original = sources[0].archive_sha256
+                object.__setattr__(
+                    sources[0],
+                    "archive_sha256",
+                    CounterfeitDigest(b"\x92" * 32),
+                )
+                try:
+                    with self.assertRaises(ProvenanceErrorV1) as caught:
+                        admit(lock, sources)
+                finally:
+                    object.__setattr__(sources[0], "archive_sha256", original)
+                self.assertEqual(
+                    caught.exception.reason,
+                    ProvenanceReasonV1.FOREIGN_BINDING,
+                )
+
+                fresh = admit(lock, sources)
+                self.assertIsNot(fresh.sources[0], sources[0])
+
     def test_archive_is_hash_checked_then_scanned_without_extracting(self) -> None:
         lock = fixture_lock(GOOD_ARCHIVE)
         admitted = admit_source_archive(lock, GOOD_ARCHIVE)
@@ -517,11 +613,8 @@ class SafeArchiveAdmissionTests(unittest.TestCase):
         self.assertEqual(release.identity, release_identity)
         admitted_release = admit_source_archive(release, GOOD_ARCHIVE)
         self.assertEqual(admitted_release.source_lock_identity, release_identity)
-        replayed_release, _ = provenance.replay_admitted_source_archive_v1(
-            release,
-            admitted_release,
-        )
-        self.assertEqual(replayed_release.source_lock_identity, release_identity)
+        replay = _replay_source(release, admitted_release)
+        self.assertEqual(replay.source.source_lock_identity, release_identity)
         self.assertEqual(
             provenance.source_archive_replay_coordinates_v1(
                 release,
@@ -530,10 +623,7 @@ class SafeArchiveAdmissionTests(unittest.TestCase):
             release_identity,
         )
         self.assertEqual(
-            provenance.materialize_admitted_source_files_v1(
-                release,
-                admitted_release,
-            ),
+            replay.files,
             (("LICENSE", 0o644, b"license"), ("value", 0o644, b"data")),
         )
 
@@ -608,12 +698,195 @@ class SafeArchiveAdmissionTests(unittest.TestCase):
         mpfi_admitted.__dict__["identity"] = poison
         self.assertEqual(mpfi_admitted.identity, mpfi_admitted_identity)
 
+    def test_operation_owned_source_coordinates_have_no_public_projection(self) -> None:
+        self.assertFalse(hasattr(provenance, "materialized_source_coordinates_v1"))
+
+    def test_replay_rejects_an_instance_encode_shadow(self) -> None:
+        """A frozen dataclass can still shadow a method through ``__dict__``."""
+
+        lock = fixture_lock(GOOD_ARCHIVE)
+        admitted = admit_source_archive(lock, GOOD_ARCHIVE)
+        foreign_lock = replace(lock, version="2")
+        foreign_admitted = admit_source_archive(foreign_lock, GOOD_ARCHIVE)
+        lock.__dict__["encode"] = lambda: SourceReleaseLockV1.encode(foreign_lock)
+        try:
+            with self.assertRaises(ProvenanceErrorV1) as caught:
+                provenance.replay_materialize_admitted_source_v1(
+                    lock,
+                    foreign_admitted,
+                )
+            self.assertEqual(caught.exception.reason, ProvenanceReasonV1.FOREIGN_BINDING)
+
+            replay = provenance.replay_materialize_admitted_source_v1(lock, admitted)
+            self.assertEqual(replay.source_lock.version, "1")
+        finally:
+            del lock.__dict__["encode"]
+
+    def test_replay_rejects_a_nested_encoder_shadow(self) -> None:
+        lock = fixture_lock(GOOD_ARCHIVE)
+        admitted = admit_source_archive(lock, GOOD_ARCHIVE)
+        foreign_legal_file = LegalFileV1("value", 4, sha256(b"data"))
+        foreign_lock = replace(lock, legal_files=(foreign_legal_file,))
+        foreign_admitted = admit_source_archive(foreign_lock, GOOD_ARCHIVE)
+        legal_file = lock.legal_files[0]
+        legal_file.__dict__["encode"] = lambda: LegalFileV1.encode(foreign_legal_file)
+        try:
+            with self.assertRaises(ProvenanceErrorV1) as caught:
+                provenance.replay_materialize_admitted_source_v1(
+                    lock,
+                    foreign_admitted,
+                )
+            self.assertEqual(caught.exception.reason, ProvenanceReasonV1.FOREIGN_BINDING)
+
+            replay = provenance.replay_materialize_admitted_source_v1(lock, admitted)
+            self.assertEqual(replay.source_lock.legal_files[0].path, "LICENSE")
+        finally:
+            del legal_file.__dict__["encode"]
+
+    def test_metadata_replays_do_not_materialize_file_bodies(self) -> None:
+        gmp = fixture_lock(GOOD_ARCHIVE)
+        mpfr = replace(gmp, role=SourceRoleV1.MPFR)
+        mpfi = replace(
+            gmp,
+            role=SourceRoleV1.MPFI,
+            integrity=ProjectPinnedArchiveDigestPolicyV1(),
+        )
+        lock = MpfiSourceLockV1((gmp, mpfr, mpfi))
+        sources = tuple(
+            admit_source_archive(release, GOOD_ARCHIVE)
+            for release in lock.sources
+        )
+
+        with mock.patch.object(
+            provenance,
+            "_materialize_replayed_source_files_v1",
+        ) as materialize:
+            provenance.source_archive_replay_coordinates_v1(gmp, sources[0])
+            admitted = admit_mpfi_sources(lock, sources)
+
+        materialize.assert_not_called()
+        self.assertIs(type(admitted), AdmittedMpfiSourcesV1)
+
+    def test_closure_snapshot_replays_metadata_without_materializing_bodies(
+        self,
+    ) -> None:
+        gmp = fixture_lock(GOOD_ARCHIVE)
+        mpfr = replace(gmp, role=SourceRoleV1.MPFR)
+        flint = replace(
+            gmp,
+            role=SourceRoleV1.FLINT_ARB,
+            integrity=GitContentRelationPolicyV1(
+                "https://example.invalid/fixture.git",
+                "v1",
+                bytes.fromhex("11" * 20),
+                bytes.fromhex("22" * 20),
+                1,
+                ("missing",),
+                (
+                    ProjectPinnedReleaseOnlyFileV1(
+                        "value",
+                        0o644,
+                        4,
+                        sha256(b"data"),
+                    ),
+                ),
+            ),
+        )
+        lock = provenance.ArbSourceLockV1((gmp, mpfr, flint))
+        sources = tuple(
+            admit_source_archive(release, GOOD_ARCHIVE)
+            for release in lock.sources
+        )
+        admitted = admit_arb_sources(lock, sources)
+        real_admit = provenance._admit_source_archive_once
+        real_materialize = provenance._materialize_replayed_source_files_v1
+
+        with (
+            mock.patch.object(
+                provenance,
+                "_admit_source_archive_once",
+                wraps=real_admit,
+            ) as replay,
+            mock.patch.object(
+                provenance,
+                "_materialize_replayed_source_files_v1",
+                wraps=real_materialize,
+            ) as materialize,
+        ):
+            snapshot = provenance.snapshot_admitted_source_closure_v1(lock, admitted)
+
+        self.assertIs(type(snapshot), AdmittedArbSourcesV1)
+        self.assertEqual(snapshot.identity, admitted.identity)
+        self.assertEqual(replay.call_count, 3)
+        self.assertEqual(materialize.call_count, 0)
+        self.assertTrue(
+            all(
+                snapshot_source is not retained_source
+                for snapshot_source, retained_source in zip(
+                    snapshot.sources,
+                    admitted.sources,
+                    strict=True,
+                )
+            )
+        )
+
+        flint_source = admitted.sources[2]
+        original_files = flint_source.files
+        for replacement in (
+            list(original_files),
+            (replace(original_files[0], path="LICENSE-FORGED"), *original_files[1:]),
+        ):
+            with self.subTest(retained_manifest=type(replacement).__name__):
+                object.__setattr__(flint_source, "files", replacement)
+                try:
+                    with self.assertRaises(ProvenanceErrorV1) as caught:
+                        provenance.snapshot_admitted_source_closure_v1(lock, admitted)
+                finally:
+                    object.__setattr__(flint_source, "files", original_files)
+                self.assertEqual(caught.exception.reason, ProvenanceReasonV1.FOREIGN_BINDING)
+
+        original_archive = flint_source.archive_bytes
+        corrupted_archive = bytes((original_archive[0] ^ 1,)) + original_archive[1:]
+        object.__setattr__(flint_source, "_archive_bytes", corrupted_archive)
+        try:
+            with self.assertRaises(ProvenanceErrorV1) as caught:
+                provenance.snapshot_admitted_source_closure_v1(lock, admitted)
+        finally:
+            object.__setattr__(flint_source, "_archive_bytes", original_archive)
+        self.assertEqual(
+            caught.exception.reason,
+            ProvenanceReasonV1.ARCHIVE_DIGEST_MISMATCH,
+        )
+
+    def test_public_closure_replay_totalizes_a_mutated_source_tuple(self) -> None:
+        gmp = fixture_lock(GOOD_ARCHIVE)
+        mpfr = replace(gmp, role=SourceRoleV1.MPFR)
+        mpfi = replace(
+            gmp,
+            role=SourceRoleV1.MPFI,
+            integrity=ProjectPinnedArchiveDigestPolicyV1(),
+        )
+        lock = MpfiSourceLockV1((gmp, mpfr, mpfi))
+        sources = tuple(
+            admit_source_archive(release, GOOD_ARCHIVE)
+            for release in lock.sources
+        )
+        admitted = admit_mpfi_sources(lock, sources)
+        original = admitted.sources
+        object.__setattr__(admitted, "sources", object())
+        try:
+            with self.assertRaises(ProvenanceErrorV1) as caught:
+                provenance.replay_admitted_source_closure_v1(lock, admitted)
+        finally:
+            object.__setattr__(admitted, "sources", original)
+        self.assertEqual(caught.exception.reason, ProvenanceReasonV1.FOREIGN_BINDING)
+
     def test_shared_materializer_replays_only_the_exact_admitted_archive(self) -> None:
         lock = fixture_lock(GOOD_ARCHIVE)
         admitted = admit_source_archive(lock, GOOD_ARCHIVE)
 
         self.assertEqual(
-            provenance.materialize_admitted_source_files_v1(lock, admitted),
+            _source_files(lock, admitted),
             (
                 ("LICENSE", 0o644, b"license"),
                 ("value", 0o644, b"data"),
@@ -634,7 +907,7 @@ class SafeArchiveAdmissionTests(unittest.TestCase):
                 object.__setattr__(admitted, field_name, replacement)
                 try:
                     with self.assertRaises(ProvenanceErrorV1) as caught:
-                        provenance.materialize_admitted_source_files_v1(lock, admitted)
+                        _source_files(lock, admitted)
                 finally:
                     object.__setattr__(admitted, field_name, original)
                 self.assertEqual(
@@ -646,7 +919,7 @@ class SafeArchiveAdmissionTests(unittest.TestCase):
         object.__setattr__(admitted, "_archive_bytes", GOOD_ARCHIVE[:-1])
         try:
             with self.assertRaises(ProvenanceErrorV1) as caught:
-                provenance.materialize_admitted_source_files_v1(lock, admitted)
+                _source_files(lock, admitted)
         finally:
             object.__setattr__(admitted, "_archive_bytes", original_archive_bytes)
         self.assertEqual(
@@ -658,7 +931,7 @@ class SafeArchiveAdmissionTests(unittest.TestCase):
         object.__setattr__(lock, "role", 999)
         try:
             with self.assertRaises(ProvenanceErrorV1) as caught:
-                provenance.materialize_admitted_source_files_v1(lock, admitted)
+                _source_files(lock, admitted)
         finally:
             object.__setattr__(lock, "role", original_role)
         self.assertEqual(caught.exception.reason, ProvenanceReasonV1.FOREIGN_BINDING)
@@ -666,10 +939,7 @@ class SafeArchiveAdmissionTests(unittest.TestCase):
         for hostile_lock, hostile_admitted in ((object(), admitted), (lock, object())):
             with self.subTest(hostile=type(hostile_lock).__name__):
                 with self.assertRaises(TypeError):
-                    provenance.materialize_admitted_source_files_v1(
-                        hostile_lock,
-                        hostile_admitted,
-                    )
+                    _source_files(hostile_lock, hostile_admitted)
 
     def test_replay_boundary_totalizes_hostile_nominal_coordinates(self) -> None:
         lock = fixture_lock(GOOD_ARCHIVE)
@@ -683,27 +953,7 @@ class SafeArchiveAdmissionTests(unittest.TestCase):
         object.__setattr__(lock, "archive_length", ExplodingCoordinate())
         try:
             for name, operation in (
-                (
-                    "replay",
-                    lambda: provenance.replay_admitted_source_archive_v1(
-                        lock,
-                        admitted,
-                    ),
-                ),
-                (
-                    "materialize",
-                    lambda: provenance.materialize_admitted_source_files_v1(
-                        lock,
-                        admitted,
-                    ),
-                ),
-                (
-                    "coordinates",
-                    lambda: provenance.source_archive_replay_coordinates_v1(
-                        lock,
-                        admitted,
-                    ),
-                ),
+                ("atomic-source-snapshot", lambda: _replay_source(lock, admitted)),
             ):
                 with self.subTest(operation=name):
                     with self.assertRaises(ProvenanceErrorV1) as caught:
@@ -716,15 +966,104 @@ class SafeArchiveAdmissionTests(unittest.TestCase):
             object.__setattr__(lock, "archive_length", original_length)
 
         class InterruptedCoordinate:
-            def __ne__(self, _other: object) -> bool:
+            def to_bytes(self, _length: int, _order: str) -> bytes:
                 raise KeyboardInterrupt("source lock interruption")
 
         object.__setattr__(lock, "archive_length", InterruptedCoordinate())
         try:
-            with self.assertRaises(KeyboardInterrupt):
-                provenance.replay_admitted_source_archive_v1(lock, admitted)
+            with self.assertRaises(ProvenanceErrorV1) as caught:
+                _replay_source(lock, admitted)
         finally:
             object.__setattr__(lock, "archive_length", original_length)
+        self.assertEqual(caught.exception.reason, ProvenanceReasonV1.FOREIGN_BINDING)
+
+    def test_replay_rejects_counterfeit_retained_coordinates_before_equality(
+        self,
+    ) -> None:
+        lock = fixture_lock(GOOD_ARCHIVE)
+        admitted = admit_source_archive(lock, GOOD_ARCHIVE)
+
+        class CounterfeitDigest(bytes):
+            def __eq__(self, _other: object) -> bool:
+                return True
+
+            def __ne__(self, _other: object) -> bool:
+                return False
+
+        originals = {
+            field_name: getattr(admitted, field_name)
+            for field_name in (
+                "source_lock_identity",
+                "archive_sha256",
+                "tree_identity",
+            )
+        }
+        for field_name, original in originals.items():
+            with self.subTest(retained_coordinate=field_name):
+                object.__setattr__(
+                    admitted,
+                    field_name,
+                    CounterfeitDigest(b"\xa5" * 32),
+                )
+                try:
+                    for operation in (lambda: _replay_source(lock, admitted),):
+                        with self.assertRaises(ProvenanceErrorV1) as caught:
+                            operation()
+                        self.assertEqual(
+                            caught.exception.reason,
+                            ProvenanceReasonV1.FOREIGN_BINDING,
+                        )
+                finally:
+                    object.__setattr__(admitted, field_name, original)
+
+        original_file = admitted.files[0]
+        original_digest = original_file.sha256
+        object.__setattr__(
+            original_file,
+            "sha256",
+            CounterfeitDigest(b"\x91" * 32),
+        )
+        try:
+            with self.assertRaises(ProvenanceErrorV1) as caught:
+                _replay_source(lock, admitted)
+        finally:
+            object.__setattr__(original_file, "sha256", original_digest)
+        self.assertEqual(caught.exception.reason, ProvenanceReasonV1.FOREIGN_BINDING)
+
+    def test_replay_coordinates_keep_one_lock_snapshot_across_reentrancy(self) -> None:
+        lock = fixture_lock(GOOD_ARCHIVE)
+        admitted = admit_source_archive(lock, GOOD_ARCHIVE)
+        original_root_prefix = lock.root_prefix
+        real_admit = provenance._admit_source_archive_once
+        mutated = False
+
+        def admit_then_mutate(
+            expected: SourceReleaseLockV1,
+            archive: bytes,
+        ) -> tuple[provenance.SafeSourceArchiveV1, bytes]:
+            nonlocal mutated
+            replayed = real_admit(expected, archive)
+            object.__setattr__(lock, "root_prefix", "other/")
+            mutated = True
+            return replayed
+
+        try:
+            with mock.patch.object(
+                provenance,
+                "_admit_source_archive_once",
+                side_effect=admit_then_mutate,
+            ):
+                coordinates = _source_coordinates(lock, admitted)
+        finally:
+            object.__setattr__(lock, "root_prefix", original_root_prefix)
+        self.assertTrue(mutated)
+        self.assertEqual(
+            canonical_identity(
+                b"labcolors.proof-region.source-release-lock.v1\0",
+                coordinates[1],
+            ),
+            coordinates[2],
+        )
 
     def test_shared_materializer_is_invariant_under_regular_member_permutation(self) -> None:
         expected = (
@@ -798,7 +1137,7 @@ class SafeArchiveAdmissionTests(unittest.TestCase):
             with self.subTest(mutation=name):
                 with mock.patch.object(
                     provenance,
-                    "replay_admitted_source_archive_v1",
+                    "_admit_source_archive_once",
                     return_value=(replayed, raw_tar),
                 ):
                     with self.assertRaises(ProvenanceErrorV1) as caught:

@@ -30,6 +30,9 @@ import provenance  # noqa: E402
 import receipt  # noqa: E402
 from region_proof_protocol import (  # noqa: E402
     BoundaryUnprovenWitnessV1,
+    ComparatorKindV1,
+    ComparatorManifestV2,
+    ContentResolvedComparatorManifestV2,
     DecisionTranscriptV1,
     DecisionV1,
     RunClaimV1,
@@ -221,6 +224,243 @@ def _replace_invocation(
 
 
 class SourceBoundReceiptTests(unittest.TestCase):
+    def test_public_verifier_rejects_a_top_level_switch_during_replay(self) -> None:
+        result, _backend = _execute()
+        self.assertIs(type(result), receipt.SourceBoundEvaluatorReceiptV1)
+        evidence = _tamper(result.evidence, "request", result.evidence.request)
+        switched_request = _request(
+            execution_limits=_replace_limits(
+                result.evidence.request.execution_limits,
+                wall_timeout_ns=result.evidence.request.execution_limits.wall_timeout_ns
+                - 1,
+            )
+        )
+        real_replay = provenance.replay_admitted_source_closure_v1
+        switched = False
+
+        def replay_then_switch(
+            *args: object,
+            **kwargs: object,
+        ) -> provenance.ReplayedSourceClosureV1:
+            nonlocal switched
+            replayed = real_replay(*args, **kwargs)
+            object.__setattr__(evidence, "request", switched_request)
+            switched = True
+            return replayed
+
+        with mock.patch.object(
+            provenance,
+            "replay_admitted_source_closure_v1",
+            side_effect=replay_then_switch,
+        ):
+            self.assertFalse(receipt.replay_evidence_is_well_bound_v1(evidence))
+
+        self.assertTrue(switched)
+        self.assertFalse(receipt.replay_evidence_is_well_bound_v1(evidence))
+
+    def test_public_verifier_rejects_a_nested_request_switch_during_replay(
+        self,
+    ) -> None:
+        result, _backend = _execute()
+        self.assertIs(type(result), receipt.SourceBoundEvaluatorReceiptV1)
+        evidence = _tamper(result.evidence, "request", result.evidence.request)
+        switched_limits = _replace_limits(
+            evidence.request.execution_limits,
+            wall_timeout_ns=evidence.request.execution_limits.wall_timeout_ns - 1,
+        )
+        real_replay = provenance.replay_admitted_source_closure_v1
+        switched = False
+
+        def replay_then_switch(
+            *args: object,
+            **kwargs: object,
+        ) -> provenance.ReplayedSourceClosureV1:
+            nonlocal switched
+            replayed = real_replay(*args, **kwargs)
+            object.__setattr__(evidence.request, "execution_limits", switched_limits)
+            switched = True
+            return replayed
+
+        with mock.patch.object(
+            provenance,
+            "replay_admitted_source_closure_v1",
+            side_effect=replay_then_switch,
+        ):
+            self.assertFalse(receipt.replay_evidence_is_well_bound_v1(evidence))
+
+        self.assertTrue(switched)
+        self.assertFalse(receipt.replay_evidence_is_well_bound_v1(evidence))
+
+    def test_public_verifier_rejects_a_source_archive_switch_during_replay(
+        self,
+    ) -> None:
+        result, _backend = _execute()
+        self.assertIs(type(result), receipt.SourceBoundEvaluatorReceiptV1)
+        evidence = _tamper(result.evidence, "request", result.evidence.request)
+        source = evidence.request.admitted_sources.sources[0]
+        original_archive = source.archive_bytes
+        real_replay = provenance.replay_admitted_source_closure_v1
+        switched = False
+
+        def replay_then_switch(
+            *args: object,
+            **kwargs: object,
+        ) -> provenance.ReplayedSourceClosureV1:
+            nonlocal switched
+            replayed = real_replay(*args, **kwargs)
+            object.__setattr__(source, "_archive_bytes", original_archive + b"x")
+            switched = True
+            return replayed
+
+        try:
+            with mock.patch.object(
+                provenance,
+                "replay_admitted_source_closure_v1",
+                side_effect=replay_then_switch,
+            ):
+                self.assertFalse(receipt.replay_evidence_is_well_bound_v1(evidence))
+        finally:
+            object.__setattr__(source, "_archive_bytes", original_archive)
+
+        self.assertTrue(switched)
+        self.assertTrue(receipt.replay_evidence_is_well_bound_v1(evidence))
+
+    def test_public_verifier_rejects_a_build_repair_during_replay(self) -> None:
+        result, _backend = _execute()
+        self.assertIs(type(result), receipt.SourceBoundEvaluatorReceiptV1)
+        original_binary = result.evidence.build.binary
+        evidence = _tamper(
+            result.evidence,
+            "build",
+            _tamper(result.evidence.build, "_binary", b"corrupt"),
+        )
+        real_replay = provenance.replay_admitted_source_closure_v1
+        switched = False
+
+        def replay_then_repair(
+            *args: object,
+            **kwargs: object,
+        ) -> provenance.ReplayedSourceClosureV1:
+            nonlocal switched
+            replayed = real_replay(*args, **kwargs)
+            object.__setattr__(evidence.build, "_binary", original_binary)
+            switched = True
+            return replayed
+
+        with mock.patch.object(
+            provenance,
+            "replay_admitted_source_closure_v1",
+            side_effect=replay_then_repair,
+        ):
+            self.assertFalse(receipt.replay_evidence_is_well_bound_v1(evidence))
+
+        self.assertTrue(switched)
+        self.assertTrue(receipt.replay_evidence_is_well_bound_v1(evidence))
+
+    def test_public_verifier_rejects_a_process_repair_during_replay(self) -> None:
+        result, _backend = _execute()
+        self.assertIs(type(result), receipt.SourceBoundEvaluatorReceiptV1)
+        evidence = _tamper(result.evidence, "process", result.evidence.process)
+        original_stdout = evidence.process.stdout
+        object.__setattr__(evidence.process, "stdout", b"corrupt")
+        real_replay = provenance.replay_admitted_source_closure_v1
+        switched = False
+
+        def replay_then_repair(
+            *args: object,
+            **kwargs: object,
+        ) -> provenance.ReplayedSourceClosureV1:
+            nonlocal switched
+            replayed = real_replay(*args, **kwargs)
+            object.__setattr__(evidence.process, "stdout", original_stdout)
+            switched = True
+            return replayed
+
+        try:
+            with mock.patch.object(
+                provenance,
+                "replay_admitted_source_closure_v1",
+                side_effect=replay_then_repair,
+            ):
+                self.assertFalse(receipt.replay_evidence_is_well_bound_v1(evidence))
+        finally:
+            object.__setattr__(evidence.process, "stdout", original_stdout)
+
+        self.assertTrue(switched)
+        self.assertTrue(receipt.replay_evidence_is_well_bound_v1(evidence))
+
+    def test_public_verifier_rejects_a_poisoned_cached_identity_before_replay(
+        self,
+    ) -> None:
+        """Cached identities are observable state, not an unguarded speed cache."""
+
+        targets = (
+            (
+                "request definition",
+                lambda evidence: evidence.request.job.definition,
+                "definition_digest",
+            ),
+            (
+                "request domain",
+                lambda evidence: evidence.request.job.domain,
+                "identity",
+            ),
+            (
+                "request policy",
+                lambda evidence: evidence.request.job.policy,
+                "identity",
+            ),
+            ("request job", lambda evidence: evidence.request.job, "identity"),
+            (
+                "inner comparator manifest",
+                lambda evidence: evidence.build.comparator.manifest.manifest,
+                "identity",
+            ),
+            (
+                "resolved comparator manifest",
+                lambda evidence: evidence.build.comparator.manifest,
+                "identity",
+            ),
+            ("transcript", lambda evidence: evidence.transcript, "identity"),
+            ("run claim", lambda evidence: evidence.run_claim, "identity"),
+        )
+        for name, select, field_name in targets:
+            with self.subTest(cache=name):
+                result, _backend = _execute()
+                self.assertIs(type(result), receipt.SourceBoundEvaluatorReceiptV1)
+                evidence = result.evidence
+                target = select(evidence)
+                original_identity = getattr(target, field_name)
+                forged_identity = _digest(f"forged {name}")
+                real_replay = provenance.replay_admitted_source_closure_v1
+                repaired = False
+                object.__setattr__(target, field_name, forged_identity)
+
+                def replay_then_repair(
+                    *args: object,
+                    **kwargs: object,
+                ) -> provenance.ReplayedSourceClosureV1:
+                    nonlocal repaired
+                    replayed = real_replay(*args, **kwargs)
+                    object.__setattr__(target, field_name, original_identity)
+                    repaired = True
+                    return replayed
+
+                try:
+                    with mock.patch.object(
+                        provenance,
+                        "replay_admitted_source_closure_v1",
+                        side_effect=replay_then_repair,
+                    ):
+                        self.assertFalse(
+                            receipt.replay_evidence_is_well_bound_v1(evidence)
+                        )
+                finally:
+                    object.__setattr__(target, field_name, original_identity)
+
+                self.assertFalse(repaired)
+                self.assertTrue(receipt.replay_evidence_is_well_bound_v1(evidence))
+
     def test_source_bound_policy_identity_binds_immutable_coordinates(self) -> None:
         capability = _docker_capability()
         request = _request()
@@ -292,6 +532,8 @@ class SourceBoundReceiptTests(unittest.TestCase):
 
         self.assertIs(type(result), receipt.SourceBoundEvaluatorReceiptV1)
         self.assertIs(type(result.comparator), pipeline.DiagnosticArbComparatorV1)
+        self.assertFalse(hasattr(result.evidence, "source_closure"))
+        self.assertFalse(hasattr(result.evidence, "operation"))
         self.assertEqual(result.run_claim.identity, result.claim.run_claim_identity)
         self.assertEqual(result.evidence.identity, result.claim.replay_evidence_identity)
         self.assertEqual(
@@ -313,6 +555,106 @@ class SourceBoundReceiptTests(unittest.TestCase):
             second.input_transfer.bundle_identity,
         )
 
+    def test_source_bound_controller_uses_one_source_operation_snapshot(self) -> None:
+        request = _request()
+        run_backend = _NativeRunBackend()
+        controller, patches = _controller(
+            _static_elf(b"one-source-bound-operation"),
+            run_backend,
+        )
+        real_admit = provenance._admit_source_archive_once
+        real_materialize = provenance._materialize_replayed_source_files_v1
+
+        with (
+            patches[0],
+            patches[1],
+            patches[2],
+            patches[3],
+            patches[4],
+            mock.patch.object(
+                provenance,
+                "_admit_source_archive_once",
+                wraps=real_admit,
+            ) as replay,
+            mock.patch.object(
+                provenance,
+                "_materialize_replayed_source_files_v1",
+                wraps=real_materialize,
+            ) as materialize,
+        ):
+            result = controller.execute(request)
+
+        self.assertIs(type(result), receipt.SourceBoundEvaluatorReceiptV1)
+        self.assertEqual(len(run_backend.requests), 1)
+        self.assertEqual(replay.call_count, 3)
+        self.assertEqual(materialize.call_count, 3)
+
+    def test_source_bound_snapshot_survives_source_replay_reentrancy(self) -> None:
+        request = _request()
+        original_domain = request.job.domain
+        foreign_domain = type(original_domain).from_ordinals((0,))
+        run_backend = _NativeRunBackend()
+        controller, patches = _controller(
+            _static_elf(b"source-bound-reentrancy"),
+            run_backend,
+        )
+        real_replay = provenance.replay_admitted_source_closure_v1
+        replay_calls = 0
+
+        def replay_then_mutate(
+            source_lock: provenance.ArbSourceLockV1,
+            admitted_sources: provenance.AdmittedArbSourcesV1,
+        ) -> provenance.ReplayedSourceClosureV1:
+            nonlocal replay_calls
+            replay_calls += 1
+            snapshot = real_replay(source_lock, admitted_sources)
+            object.__setattr__(request.job, "domain", foreign_domain)
+            return snapshot
+
+        try:
+            with (
+                patches[0],
+                patches[1],
+                patches[2],
+                patches[3],
+                patches[4],
+                mock.patch.object(
+                    provenance,
+                    "replay_admitted_source_closure_v1",
+                    side_effect=replay_then_mutate,
+                ),
+            ):
+                result = controller.execute(request)
+        finally:
+            object.__setattr__(request.job, "domain", original_domain)
+
+        self.assertIs(type(result), receipt.SourceBoundEvaluatorReceiptV1)
+        self.assertEqual(replay_calls, 1)
+        self.assertEqual(result.evidence.request.job.domain, original_domain)
+
+    def test_evidence_verifier_owns_one_fresh_source_operation_snapshot(self) -> None:
+        result, _backend = _execute()
+        self.assertIs(type(result), receipt.SourceBoundEvaluatorReceiptV1)
+        real_admit = provenance._admit_source_archive_once
+        real_materialize = provenance._materialize_replayed_source_files_v1
+
+        with (
+            mock.patch.object(
+                provenance,
+                "_admit_source_archive_once",
+                wraps=real_admit,
+            ) as replay,
+            mock.patch.object(
+                provenance,
+                "_materialize_replayed_source_files_v1",
+                wraps=real_materialize,
+            ) as materialize,
+        ):
+            self.assertTrue(receipt.replay_evidence_is_well_bound_v1(result.evidence))
+
+        self.assertEqual(replay.call_count, 3)
+        self.assertEqual(materialize.call_count, 3)
+
     def test_no_public_object_or_diagnostic_can_mint(self) -> None:
         result, _backend = _execute()
         with self.assertRaises(TypeError):
@@ -332,16 +674,18 @@ class SourceBoundReceiptTests(unittest.TestCase):
         self.assertFalse(hasattr(pipeline, "DiagnosticPipelineObservationV1"))
         self.assertFalse(hasattr(receipt.SourceBoundEvaluatorReceiptV1, "parse"))
 
-    def test_receipt_uses_only_versioned_public_cross_module_verifiers(self) -> None:
+    def test_receipt_keeps_snapshot_only_on_the_private_operation_path(self) -> None:
         source = (ARB / "receipt.py").read_text(encoding="utf-8")
 
         self.assertNotIn("pipeline._sealed_build_input_bundle_is_well_bound_v1", source)
         self.assertNotIn("pipeline._build_process_bytes_v1", source)
         self.assertNotIn("executor._execution_identity_v1", source)
         self.assertNotIn("sealed_build_input_bundle_is_well_bound_v1", source)
-        self.assertIn("pipeline.arb_input_is_bound_v1", source)
+        self.assertIn("pipeline._seal_build_input_from_snapshot_v1", source)
+        self.assertIn("pipeline._owned_arb_input_is_bound_v1", source)
+        self.assertIn("pipeline._derive_arb_comparator_for_build_v1", source)
         self.assertIn("build_transport.build_process_bytes_v1", source)
-        self.assertTrue(hasattr(pipeline, "arb_input_is_bound_v1"))
+        self.assertNotIn("pipeline.replay_pipeline_request_v1", source)
         self.assertTrue(hasattr(build_transport, "build_process_bytes_v1"))
         self.assertTrue(hasattr(executor, "invocation_identity_v1"))
         self.assertTrue(hasattr(executor, "platform_identity_v1"))
@@ -591,6 +935,43 @@ class SourceBoundReceiptTests(unittest.TestCase):
             receipt.replay_evidence_is_well_bound_v1(_tamper(dag, "build", build))
         )
 
+        # Keep the BUILD preimage itself intact: a verifier that only checks
+        # self-consistency would otherwise accept this fully well-formed but
+        # source-unrelated comparator manifest.
+        preimage_values = tuple(
+            dag.build.comparator.preimages.build_identity
+            if index == 5
+            else f"forged-comparator-{index}".encode("ascii")
+            for index in range(10)
+        )
+        self.assertEqual(len(set(preimage_values)), len(preimage_values))
+        preimages = pipeline.ArbComparatorPreimagesV1(*preimage_values)
+        manifest = ComparatorManifestV2(
+            ComparatorKindV1.ARB,
+            *(hashlib.sha256(value).digest() for value in preimage_values),
+        )
+        by_digest = {
+            hashlib.sha256(value).digest(): value for value in preimage_values
+        }
+        resolved = ContentResolvedComparatorManifestV2.admit(
+            manifest,
+            by_digest.get,
+        )
+        comparator = pipeline.DiagnosticArbComparatorV1(
+            preimages,
+            resolved,
+            dag.build.structural_source_identity,
+            dag.build.build_input_identity,
+            dag.build.pipeline_policy_identity,
+            dag.build.binary_sha256,
+            dag.build.rebuild_sha256s,
+            _token=pipeline._COMPARATOR_TOKEN,
+        )
+        build = _tamper(dag.build, "comparator", comparator)
+        self.assertFalse(
+            receipt.replay_evidence_is_well_bound_v1(_tamper(dag, "build", build))
+        )
+
     def test_source_replay_rejects_a_self_consistent_forged_manifest(self) -> None:
         request = _request()
         lock = request.source_lock.sources[2]
@@ -634,6 +1015,20 @@ class SourceBoundReceiptTests(unittest.TestCase):
         equal_executable_copy = bytes(bytearray(dag.invocation.executable))
         self.assertEqual(equal_executable_copy, dag.invocation.executable)
         self.assertIsNot(equal_executable_copy, dag.invocation.executable)
+        operation = pipeline._snapshot_pipeline_operation_v1(dag.request)
+        request = operation.request
+        baseline = receipt.ContentResolvedEvaluatorReplayV1(
+            request,
+            dag.build,
+            dag.invocation,
+            dag.platform,
+            dag.process,
+            dag.transcript,
+            dag.run_claim,
+            _operation=operation,
+            _token=receipt._EVIDENCE_TOKEN,
+        )
+        self.assertEqual(baseline.identity, dag.identity)
         mutants = (
             _replace_invocation(dag.invocation, executable=equal_executable_copy),
             _replace_invocation(
@@ -655,7 +1050,7 @@ class SourceBoundReceiptTests(unittest.TestCase):
                 )
             )
             forged_claim = RunClaimV1.for_transcript(
-                dag.request.job,
+                request.job,
                 dag.build.comparator.manifest,
                 dag.transcript,
                 dag.build.binary_sha256,
@@ -664,13 +1059,14 @@ class SourceBoundReceiptTests(unittest.TestCase):
             )
             with self.assertRaises(TypeError):
                 receipt.ContentResolvedEvaluatorReplayV1(
-                    dag.request,
+                    request,
                     dag.build,
                     invocation,
                     dag.platform,
                     dag.process,
                     dag.transcript,
                     forged_claim,
+                    _operation=operation,
                     _token=receipt._EVIDENCE_TOKEN,
                 )
         mutated_limits = _replace_limits(

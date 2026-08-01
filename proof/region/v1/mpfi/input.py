@@ -49,17 +49,25 @@ def _canonical_lock_v1(
     if type(source_lock) is not provenance.MpfiSourceLockV1:
         _fail(MpfiSourceInputReasonV1.WRONG_TYPE, "source_lock")
     try:
-        return provenance.MpfiSourceLockV1.parse(source_lock.encode())
-    except provenance.ProvenanceErrorV1:
+        canonical = provenance.snapshot_source_closure_lock_v1(source_lock)
+    except (
+        provenance.ProvenanceErrorV1,
+        AttributeError,
+        TypeError,
+        ValueError,
+        OverflowError,
+        UnicodeError,
+    ):
         _fail(MpfiSourceInputReasonV1.FOREIGN_SOURCE_CAPABILITY, "source_lock")
-    except (AttributeError, TypeError, ValueError, OverflowError):
+    if type(canonical) is not provenance.MpfiSourceLockV1:
         _fail(MpfiSourceInputReasonV1.FOREIGN_SOURCE_CAPABILITY, "source_lock")
+    return canonical
 
 
 def _fresh_admitted_sources_v1(
     source_lock: provenance.MpfiSourceLockV1,
     admitted_sources: provenance.AdmittedMpfiSourcesV1,
-) -> provenance.AdmittedMpfiSourcesV1:
+) -> provenance.ReplayedSourceClosureV1:
     if type(admitted_sources) is not provenance.AdmittedMpfiSourcesV1:
         _fail(MpfiSourceInputReasonV1.WRONG_TYPE, "admitted_sources")
     try:
@@ -74,21 +82,29 @@ def _fresh_admitted_sources_v1(
                 MpfiSourceInputReasonV1.FOREIGN_SOURCE_CAPABILITY,
                 "admitted_sources",
             )
-        # Re-admission сохраняет semantic slot order: сортировка выдала бы
-        # forged GMP/MPFR exchange за легитимный closure.
-        return provenance.admit_mpfi_sources(source_lock, admitted_sources.sources)
+    except Exception:
+        # Exact type не делает retained capability неуязвимой к post-admission
+        # подмене; ordinary hostile failure обязан остаться typed rejection.
+        _fail(
+            MpfiSourceInputReasonV1.FOREIGN_SOURCE_CAPABILITY,
+            "admitted_sources",
+        )
+    # Replay owns nested archive evidence; its typed provenance taxonomy must
+    # survive instead of being flattened into an MPFI declaration error.
+    try:
+        return provenance.replay_admitted_source_closure_v1(
+            source_lock,
+            admitted_sources,
+        )
     except provenance.ProvenanceErrorV1 as error:
-        if error.reason is provenance.ProvenanceReasonV1.FOREIGN_BINDING:
+        if error.artifact == "source-closure-replay-v1":
             _fail(
                 MpfiSourceInputReasonV1.FOREIGN_SOURCE_CAPABILITY,
                 "admitted_sources",
             )
         raise
-    except (AttributeError, TypeError, ValueError, OverflowError):
-        _fail(
-            MpfiSourceInputReasonV1.FOREIGN_SOURCE_CAPABILITY,
-            "admitted_sources",
-        )
+    except TypeError:
+        _fail(MpfiSourceInputReasonV1.FOREIGN_SOURCE_CAPABILITY, "admitted_sources")
 
 
 def _canonical_limits_v1(
@@ -138,8 +154,7 @@ def _preflight_declared_resource_bounds_v1(
 
 
 def _source_entries_v1(
-    source_lock: provenance.MpfiSourceLockV1,
-    admitted_sources: provenance.AdmittedMpfiSourcesV1,
+    snapshot: provenance.ReplayedSourceClosureV1,
 ) -> tuple[tuple[str, int, bytes], ...]:
     entries = tuple(
         (
@@ -147,15 +162,12 @@ def _source_entries_v1(
             mode,
             contents,
         )
-        for lock, admitted in zip(
-            source_lock.sources,
-            admitted_sources.sources,
+        for lock, materialized in zip(
+            snapshot.source_lock.sources,
+            snapshot.sources,
             strict=True,
         )
-        for relative, mode, contents in provenance.materialize_admitted_source_files_v1(
-            lock,
-            admitted,
-        )
+        for relative, mode, contents in materialized.files
     )
     if not entries:
         _fail(MpfiSourceInputReasonV1.FOREIGN_SOURCE_CAPABILITY, "admitted_sources")
@@ -198,12 +210,19 @@ def seal_mpfi_source_input_v1(
 
     canonical_lock = _canonical_lock_v1(source_lock)
     canonical_limits = _canonical_limits_v1(limits)
-    canonical_admitted = _fresh_admitted_sources_v1(canonical_lock, admitted_sources)
+    # Declared totals are authenticated by the canonical release lock.  Check
+    # them before archive replay so an impossible caller budget cannot force
+    # archive-body allocation merely to learn it is impossible.
     _preflight_declared_resource_bounds_v1(canonical_lock, canonical_limits)
-    entries = _source_entries_v1(canonical_lock, canonical_admitted)
+    snapshot = _fresh_admitted_sources_v1(canonical_lock, admitted_sources)
+    entries = _source_entries_v1(snapshot)
     contents = build_input.canonical_ustar_v1(entries, canonical_limits)
     return build_input.seal_input_v1(
-        _binding_identity_v1(canonical_lock, canonical_admitted, contents),
+        _binding_identity_v1(
+            snapshot.source_lock,
+            snapshot.admitted_sources,
+            contents,
+        ),
         contents,
     )
 

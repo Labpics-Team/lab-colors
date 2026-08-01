@@ -469,14 +469,20 @@ class BuildIdentityV2Tests(unittest.TestCase):
         comparator_calls = _called_names(
             pipeline._derive_arb_comparator_for_build_v1
         )
-        comparator_replay_calls = _called_names(receipt._comparator_replays_v1)
+        comparator_replay = receipt._comparator_replays_from_operation_v1
+        comparator_replay_calls = _called_names(comparator_replay)
         receipt_build_calls = _called_names(receipt._build_identity_v2)
+        receipt_owned_build_calls = _called_names(
+            receipt._build_identity_from_operation_v2
+        )
         source_bound_calls = _called_names(
             receipt.source_bound_policy_identity_v2
         )
         self.assertIn("docker_capability_identity_v1", comparator_calls)
-        self.assertIn("docker_capability_identity_v1", comparator_replay_calls)
-        self.assertIn("docker_capability_identity_v1", receipt_build_calls)
+        self.assertIn("_derive_arb_comparator_for_build_v1", comparator_replay_calls)
+        self.assertIn("build.docker_capability", inspect.getsource(comparator_replay))
+        self.assertIn("_build_identity_from_operation_v2", receipt_build_calls)
+        self.assertIn("docker_capability_identity_v1", receipt_owned_build_calls)
         self.assertIn("docker_capability_identity_v1", source_bound_calls)
 
     def test_path_uid_daemon_and_hostname_flow_to_downstream_build_identity_only(self) -> None:

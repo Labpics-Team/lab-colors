@@ -236,19 +236,25 @@ observation. Право на Arb receipt получает не executor, а от
 
 ## Общая граница BUILD
 
-`provenance.materialize_admitted_source_files_v1` повторно допускает один
-admitted archive и выдаёт только exact relative regular files. Он не вводит
-USTAR namespace, recipe или engine semantics. Lane выбирает layout и связывает
-собственный aggregate source capability; общий materializer не создаёт generic
-source closure. `proof/region/v1/build/input.py` принимает уже нормализованные
-lane entries, кодирует один канонический USTAR и владеет точными input bytes.
+Source replay имеет две намеренно разные стадии. Сначала provenance канонически
+перепарсивает source lock, bounded-decompresses и сканирует archive, чтобы
+сверить lock, manifest, tree и compressed bytes. Эта metadata replay не создаёт
+отдельные file-byte buffers. Затем
+`provenance.replay_materialize_admitted_source_v1` из одного такого replay
+создаёт token-closed снимок lock, archive и exact relative regular files.
+Aggregate Arb/MPFI admission владеет только свежими replayed archives; runtime
+получает все три file-byte materializations только через один
+`replay_admitted_source_closure_v1`. Общий leaf не вводит USTAR namespace,
+recipe или engine semantics. Lane выбирает layout и связывает собственный
+aggregate source capability. `proof/region/v1/build/input.py` принимает уже
+нормализованные lane entries, кодирует один канонический USTAR и владеет точными input bytes.
 `SealedInputV1` структурно неизменяем, связывает целостность байтов с opaque
 caller digest и не утверждает recipe либо engine semantics. Resource bounds
 передаёт lane: общий encoder не вводит собственный fixture-specific cap.
 
-`mpfi/input.py` строит `SealedInputV1` только из заново допущенной пары
-`MpfiSourceLockV1` и `AdmittedMpfiSourcesV1`. Он повторно материализует exact
-regular files, помещает их в versioned MPFI-only namespace
+`mpfi/input.py` строит `SealedInputV1` только из одного owned replay snapshot
+пары `MpfiSourceLockV1` и `AdmittedMpfiSourcesV1`. Тот же снимок даёт exact
+regular files, aggregate identity и versioned MPFI-only namespace
 `sources/<role>/<relative>` и связывает свежую aggregate source capability с
 exact USTAR bytes. Роль, а не archive root, разделяет три source trees: lock
 не требует уникальности root. Целостность `SealedInputV1` сама по себе не
@@ -307,10 +313,23 @@ source provenance: engine lane отдельно перепроверяет св�
 
 ## Воспроизведение Arb, связанное с источником
 
-`SourceBoundArbControllerV1` сначала повторно парсит source lock и job,
-повторно допускает exact owned archive/build-input bytes и строит из regular
-files один canonical USTAR с нормализованными metadata. Один immutable bundle
-object дважды передаётся через bounded stdin; каждый свежий контейнер до
+`PipelineRequestV1` до операции отдельно перепроверяет и владеет metadata-only
+source closure: это ранняя integrity boundary для public input, не shared cache
+операции. Затем `SourceBoundArbControllerV1` получает один detached operation
+snapshot: канонический source lock, owned replayed archives и единственные для
+этой операции file-byte materializations, заново допущенные копии build files,
+job и limits. Он передаёт этот же private snapshot в `ControlledPipelineV1`;
+самостоятельный BUILD создаёт snapshot сам до probe/spawn. Внутренний transport
+recheck сверяет только owned snapshot, а public verifier независимо строит
+новый snapshot из request, сохранённого внутри evidence, а не из исходного
+объекта вызывающего. До replay он фиксирует structural projection всех
+evidence coordinates и сверяет каждый используемый protocol identity cache с
+независимо восстановленным canonical wire. Он принимает результат только если
+та же projection на входе, после source replay и после edge replay совпадает.
+Projection сверяет retained bytes, manifests и protocol wire, но не открывает
+вторую source materialization; она доказывает стабильность значения в пределах
+одного вызова, а не неизменность объекта после возврата. Один
+immutable bundle object дважды передаётся через bounded stdin; каждый свежий контейнер до
 распаковки сверяет exact length и SHA-256, распаковывает только в private
 bounded tmpfs, а executable возвращает через stdout. Semantic host bind mounts,
 host output path и повторное открытие результата отсутствуют. Эта граница
@@ -328,9 +347,10 @@ identity без зеркальных промежуточных dataclass:
 2. build identity связывает source identity, versioned Docker capability,
    pipeline policy, trust boundary, один sealed bundle object, два exact
    transfer и два byte-identical executable stdout. Comparator verifier
-   строит свежий canonical manifest из SHA-256 retained preimage bytes и
-   сверяет все его поля и identity с build observation; это проверка retained
-   причинных данных, а не заявление о независимом втором выводе preimages;
+   заново выводит все десять preimage bytes и canonical manifest из того же
+   operation snapshot и retained BUILD observation, затем сверяет все поля и
+   identity с build observation. Это не независимая реализация или semantic
+   replay, а exact re-derivation тех же причинных координат;
 3. run identity впервые связывает canonical job с тем же retained executable
    bytes object, exact argv/env/cwd/stdin/limits, единственной допустимой
    `linux-x86_64` sandbox platform, typed child exit, stdout, canonical

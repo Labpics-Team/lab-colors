@@ -408,6 +408,47 @@ class BuildSourceAdmissionTests(unittest.TestCase):
                 _token=object(),
             )
 
+    def test_admission_owns_a_fresh_build_file_snapshot(self) -> None:
+        source_files = tuple(
+            pipeline.BuildSourceFileV1(item.path, item.mode, item.contents)
+            for item in _build_sources().files
+        )
+        admitted = pipeline.admit_build_sources_v1(source_files)
+        original = source_files[0].contents
+        object.__setattr__(source_files[0], "contents", b"forged")
+        try:
+            self.assertEqual(admitted.contents(source_files[0].path), original)
+            self.assertEqual(
+                admitted.identity,
+                pipeline.admit_build_sources_v1(admitted.files).identity,
+            )
+        finally:
+            object.__setattr__(source_files[0], "contents", original)
+
+    def test_manifest_replay_rejects_forged_retained_identities(self) -> None:
+        sources = _build_sources()
+        sentinel = object()
+        originals = {
+            name: sources.__dict__.get(name, sentinel)
+            for name in (
+                "identity",
+                "build_input_identity",
+                "formula_support_identity",
+            )
+        }
+
+        for name, original in originals.items():
+            with self.subTest(retained_coordinate=name):
+                object.__setattr__(sources, name, _digest(f"forged-{name}"))
+                try:
+                    with self.assertRaises(TypeError):
+                        pipeline.build_source_manifest_bytes_v1(sources)
+                finally:
+                    if original is sentinel:
+                        del sources.__dict__[name]
+                    else:
+                        sources.__dict__[name] = original
+
 
 class FlintSourcePartitionTests(unittest.TestCase):
     def test_partition_is_nonempty_and_separately_binds_both_content_sets(self) -> None:
@@ -645,6 +686,470 @@ class ControlledPipelineTests(unittest.TestCase):
         self.assertTrue(callable(executor.platform_identity_v1))
         self.assertFalse(hasattr(pipeline, "invocation_identity_v1"))
         self.assertFalse(hasattr(pipeline, "platform_identity_v1"))
+        self.assertFalse(hasattr(pipeline, "comparator_build_preimage_v2"))
+
+    def test_arb_input_keeps_one_source_snapshot_across_reentrant_mutation(
+        self,
+    ) -> None:
+        request = _request()
+        source = request.admitted_sources.sources[0]
+        original_tree_identity = source.tree_identity
+        real_encoder = pipeline.build_input.canonical_ustar_v1
+
+        def encode_then_mutate(
+            entries: tuple[tuple[str, int, bytes], ...],
+            limits: build_input.CanonicalInputLimitsV1,
+        ) -> bytes:
+            encoded = real_encoder(entries, limits)
+            object.__setattr__(source, "tree_identity", _digest("reentrant-tree"))
+            return encoded
+
+        try:
+            with mock.patch.object(
+                pipeline.build_input,
+                "canonical_ustar_v1",
+                side_effect=encode_then_mutate,
+            ):
+                sealed = pipeline._seal_build_input_bundle_v1(
+                    request,
+                    pipeline.ARB_BUILD_TRANSPORT_POLICY_V1,
+                )
+            self.assertFalse(
+                pipeline.arb_input_is_bound_v1(
+                    request,
+                    pipeline.ARB_BUILD_TRANSPORT_POLICY_V1,
+                    sealed,
+                )
+            )
+        finally:
+            object.__setattr__(source, "tree_identity", original_tree_identity)
+        self.assertTrue(
+            pipeline.arb_input_is_bound_v1(
+                request,
+                pipeline.ARB_BUILD_TRANSPORT_POLICY_V1,
+                sealed,
+            )
+        )
+
+    def test_arb_input_rejects_reentrant_unadmitted_build_source(self) -> None:
+        request = _request()
+        build_file = next(
+            item
+            for item in request.build_sources.files
+            if item.path == pipeline.BUILD_RECIPE_PATH_V1
+        )
+        original_contents = build_file.contents
+        real_encoder = pipeline.build_input.canonical_ustar_v1
+
+        def encode_then_mutate(
+            entries: tuple[tuple[str, int, bytes], ...],
+            limits: build_input.CanonicalInputLimitsV1,
+        ) -> bytes:
+            encoded = real_encoder(entries, limits)
+            object.__setattr__(
+                build_file,
+                "contents",
+                b"#!/bin/sh\nprintf '%s\\n' forged-build-source\n",
+            )
+            return encoded
+
+        try:
+            with mock.patch.object(
+                pipeline.build_input,
+                "canonical_ustar_v1",
+                side_effect=encode_then_mutate,
+            ):
+                sealed = pipeline._seal_build_input_bundle_v1(
+                    request,
+                    pipeline.ARB_BUILD_TRANSPORT_POLICY_V1,
+                )
+            self.assertFalse(
+                pipeline.arb_input_is_bound_v1(
+                    request,
+                    pipeline.ARB_BUILD_TRANSPORT_POLICY_V1,
+                    sealed,
+                )
+            )
+        finally:
+            object.__setattr__(build_file, "contents", original_contents)
+        self.assertTrue(
+            pipeline.arb_input_is_bound_v1(
+                request,
+                pipeline.ARB_BUILD_TRANSPORT_POLICY_V1,
+                sealed,
+            )
+        )
+
+    def test_pipeline_rederives_both_cached_build_coordinates(self) -> None:
+        for field_name in ("build_input_identity", "formula_support_identity"):
+            with self.subTest(cached_coordinate=field_name):
+                request = _request()
+                fresh = pipeline.admit_build_sources_v1(request.build_sources.files)
+                original = request.build_sources.__dict__.get(field_name)
+                forged = _digest(f"forged-{field_name}")
+                request.build_sources.__dict__[field_name] = forged
+                binary = _static_elf(b"cached-coordinate")
+                backend = _BuildBackend((binary, binary))
+                try:
+                    result = pipeline.ControlledPipelineV1(
+                        build_backend=backend,
+                    ).build(request)
+                finally:
+                    if original is None:
+                        request.build_sources.__dict__.pop(field_name, None)
+                    else:
+                        request.build_sources.__dict__[field_name] = original
+                self.assertIs(type(result), pipeline.DiagnosticBuildObservationV1)
+                self.assertEqual(len(backend.requests), 2)
+                self.assertEqual(
+                    getattr(result, field_name),
+                    getattr(fresh, field_name),
+                )
+                self.assertNotEqual(getattr(result, field_name), forged)
+
+    def test_constructor_rejects_a_nominal_forged_build_capability(
+        self,
+    ) -> None:
+        normal = _request()
+        forged_files = tuple(
+            replace(
+                item,
+                contents=b"#!/bin/sh\nprintf '%s\\n' forged-build-source\n",
+            )
+            if item.path == pipeline.BUILD_RECIPE_PATH_V1
+            else item
+            for item in normal.build_sources.files
+        )
+        forged = object.__new__(pipeline.AdmittedBuildSourcesV1)
+        object.__setattr__(forged, "files", forged_files)
+        object.__setattr__(forged, "identity", _digest("forged-build-closure"))
+        with self.assertRaises(pipeline.PipelineInputErrorV1) as caught:
+            _request(build_sources=forged)
+
+        self.assertEqual(
+            caught.exception.reason,
+            pipeline.PipelineInputReasonV1.INVALID_RETAINED_INPUT,
+        )
+        self.assertEqual(caught.exception.field, "build_sources")
+
+    def test_private_build_recheck_keeps_the_entry_snapshot_across_attempts(
+        self,
+    ) -> None:
+        request = _request()
+        source = request.admitted_sources.sources[0]
+        original_tree_identity = source.tree_identity
+        binary = _static_elf(b"snapshot-attempt")
+        backend = _BuildBackend((binary, binary))
+        real_run_build = backend.run_build
+        mutated = False
+
+        def run_then_mutate(
+            value: build_transport.DockerBuildRequestV1,
+        ) -> build_transport.DockerBuildProcessObservationV1:
+            nonlocal mutated
+            if not mutated:
+                object.__setattr__(source, "tree_identity", _digest("late-tree"))
+                mutated = True
+            return real_run_build(value)
+
+        backend.run_build = run_then_mutate  # type: ignore[method-assign]
+        try:
+            result = pipeline.ControlledPipelineV1(build_backend=backend).build(request)
+            self.assertFalse(
+                pipeline.arb_input_is_bound_v1(
+                    request,
+                    pipeline.ARB_BUILD_TRANSPORT_POLICY_V1,
+                    result.input_bundle,
+                )
+            )
+        finally:
+            object.__setattr__(source, "tree_identity", original_tree_identity)
+        self.assertTrue(mutated)
+        self.assertIs(type(result), pipeline.DiagnosticBuildObservationV1)
+        self.assertEqual(len(backend.requests), 2)
+        self.assertTrue(
+            pipeline.arb_input_is_bound_v1(
+                request,
+                pipeline.ARB_BUILD_TRANSPORT_POLICY_V1,
+                result.input_bundle,
+            )
+        )
+
+    def test_snapshot_captures_job_before_source_replay(self) -> None:
+        request = _request()
+        original_domain = request.job.domain
+        foreign_job = replace(
+            request.job,
+            domain=type(original_domain).from_ordinals((0,)),
+        )
+        real_replay = provenance.replay_admitted_source_closure_v1
+
+        def replay_then_mutate(
+            source_lock: provenance.ArbSourceLockV1,
+            admitted_sources: provenance.AdmittedArbSourcesV1,
+        ) -> provenance.ReplayedSourceClosureV1:
+            snapshot = real_replay(source_lock, admitted_sources)
+            object.__setattr__(request.job, "domain", foreign_job.domain)
+            return snapshot
+
+        try:
+            with mock.patch.object(
+                provenance,
+                "replay_admitted_source_closure_v1",
+                side_effect=replay_then_mutate,
+            ):
+                snapshot = pipeline._snapshot_pipeline_operation_v1(request)
+        finally:
+            object.__setattr__(request.job, "domain", original_domain)
+
+        self.assertEqual(
+            snapshot.request.job.domain.point_count,
+            original_domain.point_count,
+        )
+
+    def test_snapshot_ignores_a_proof_job_encoder_shadow(self) -> None:
+        request = _request()
+        job = request.job
+        original_identity = job.identity
+        foreign_budget = replace(
+            job.policy.comparators[0],
+            global_pregrant=job.policy.comparators[0].global_pregrant + 1,
+        )
+        foreign_policy = replace(
+            job.policy,
+            comparators=(foreign_budget, job.policy.comparators[1]),
+        )
+        foreign_job = replace(job, policy=foreign_policy)
+        job.__dict__["encode"] = lambda: ProofJobV1.encode(foreign_job)
+        try:
+            snapshot = pipeline._snapshot_pipeline_operation_v1(request)
+        finally:
+            del job.__dict__["encode"]
+
+        self.assertEqual(snapshot.request.job.identity, original_identity)
+
+    def test_snapshot_uses_raw_nested_job_coordinates_not_caches_or_encoders(
+        self,
+    ) -> None:
+        request = _request()
+        job = request.job
+        original_identity = job.identity
+        sentinel = object()
+        shadows = (
+            (job.definition, "encode"),
+            (job.definition, "definition_digest"),
+            (job.domain, "encode"),
+            (job.domain, "identity"),
+            (job.policy, "encode"),
+            (job.policy, "identity"),
+        )
+        originals = [
+            (value, name, value.__dict__.get(name, sentinel))
+            for value, name in shadows
+        ]
+
+        def explode() -> bytes:
+            raise AssertionError("snapshot dispatched caller-owned job state")
+
+        for value, name in shadows:
+            value.__dict__[name] = explode if name == "encode" else _digest(name)
+        try:
+            snapshot = pipeline._snapshot_pipeline_operation_v1(request)
+        finally:
+            for value, name, original in originals:
+                if original is sentinel:
+                    del value.__dict__[name]
+                else:
+                    value.__dict__[name] = original
+
+        self.assertEqual(snapshot.request.job.identity, original_identity)
+
+    def test_private_operation_snapshot_cannot_be_constructed_by_a_caller(self) -> None:
+        snapshot = pipeline._snapshot_pipeline_operation_v1(_request())
+
+        with self.assertRaises(TypeError):
+            pipeline._PipelineOperationSnapshotV1(
+                snapshot.request,
+                snapshot.source_closure,
+                _token=object(),
+            )
+
+    def test_constructor_rejects_a_foreign_admitted_source_closure(self) -> None:
+        request = _request()
+        foreign_flint = replace(
+            request.source_lock.sources[2],
+            version="foreign-release",
+        )
+        foreign_lock = provenance.ArbSourceLockV1(
+            request.source_lock.sources[:2] + (foreign_flint,)
+        )
+
+        with self.assertRaises(pipeline.PipelineInputErrorV1) as caught:
+            pipeline.PipelineRequestV1(
+                foreign_lock,
+                request.admitted_sources,
+                request.build_sources,
+                request.job,
+                request.execution_limits,
+                request.host_trust,
+            )
+
+        self.assertEqual(
+            caught.exception.reason,
+            pipeline.PipelineInputReasonV1.FOREIGN_SOURCE_CAPABILITY,
+        )
+        self.assertEqual(caught.exception.field, "admitted_sources")
+
+    def test_constructor_rejects_a_noncanonical_retained_source_manifest(
+        self,
+    ) -> None:
+        """A nominal capability cannot retain a mutable manifest container."""
+
+        request = _request()
+        source = request.admitted_sources.sources[2]
+        original_files = source.files
+        object.__setattr__(source, "files", list(original_files))
+        try:
+            with self.assertRaises(pipeline.PipelineInputErrorV1) as caught:
+                pipeline.PipelineRequestV1(
+                    request.source_lock,
+                    request.admitted_sources,
+                    request.build_sources,
+                    request.job,
+                    request.execution_limits,
+                    request.host_trust,
+                )
+        finally:
+            object.__setattr__(source, "files", original_files)
+
+        self.assertEqual(
+            caught.exception.reason,
+            pipeline.PipelineInputReasonV1.FOREIGN_SOURCE_CAPABILITY,
+        )
+        self.assertEqual(caught.exception.field, "admitted_sources")
+
+    def test_constructor_totalizes_a_hostile_retained_source_path(self) -> None:
+        request = _request()
+        source = request.admitted_sources.sources[2]
+        archive_file = source.files[0]
+        original_path = archive_file.path
+
+        class HashBomb:
+            def __hash__(self) -> int:
+                raise RuntimeError("unexpected hash dispatch")
+
+        object.__setattr__(archive_file, "path", HashBomb())
+        try:
+            with self.assertRaises(pipeline.PipelineInputErrorV1) as caught:
+                pipeline.PipelineRequestV1(
+                    request.source_lock,
+                    request.admitted_sources,
+                    request.build_sources,
+                    request.job,
+                    request.execution_limits,
+                    request.host_trust,
+                )
+        finally:
+            object.__setattr__(archive_file, "path", original_path)
+
+        self.assertEqual(
+            caught.exception.reason,
+            pipeline.PipelineInputReasonV1.FOREIGN_SOURCE_CAPABILITY,
+        )
+        self.assertEqual(caught.exception.field, "admitted_sources")
+
+    def test_build_uses_one_source_operation_snapshot(self) -> None:
+        request = _request()
+        binary = _static_elf(b"one-source-operation")
+        backend = _BuildBackend((binary, binary))
+        real_admit = provenance._admit_source_archive_once
+        real_materialize = provenance._materialize_replayed_source_files_v1
+
+        with (
+            mock.patch.object(
+                provenance,
+                "_admit_source_archive_once",
+                wraps=real_admit,
+            ) as replay,
+            mock.patch.object(
+                provenance,
+                "_materialize_replayed_source_files_v1",
+                wraps=real_materialize,
+            ) as materialize,
+        ):
+            result = pipeline.ControlledPipelineV1(build_backend=backend).build(request)
+
+        self.assertIs(type(result), pipeline.DiagnosticBuildObservationV1)
+        self.assertEqual(len(backend.requests), 2)
+        self.assertEqual(replay.call_count, 3)
+        self.assertEqual(materialize.call_count, 3)
+
+    def test_request_admission_rechecks_separately_from_its_operation(
+        self,
+    ) -> None:
+        """Request admission and a later operation must not share mutable evidence."""
+
+        source_lock, admitted_sources = _source_fixture()
+        build_sources = _build_sources()
+        job = _job()
+        limits = _limits()
+        binary = _static_elf(b"request-then-one-operation")
+        backend = _BuildBackend((binary, binary))
+        real_admit = provenance._admit_source_archive_once
+        real_materialize = provenance._materialize_replayed_source_files_v1
+
+        with (
+            mock.patch.object(
+                provenance,
+                "_admit_source_archive_once",
+                wraps=real_admit,
+            ) as replay,
+            mock.patch.object(
+                provenance,
+                "_materialize_replayed_source_files_v1",
+                wraps=real_materialize,
+            ) as materialize,
+        ):
+            request = pipeline.PipelineRequestV1(
+                source_lock,
+                admitted_sources,
+                build_sources,
+                job,
+                limits,
+                pipeline.HostTrustBoundaryV1.UNSEALED_LINUX_X64_DOCKER_HOST,
+            )
+            self.assertEqual(replay.call_count, 3)
+            self.assertEqual(materialize.call_count, 0)
+            result = pipeline.ControlledPipelineV1(build_backend=backend).build(request)
+
+        self.assertIs(type(result), pipeline.DiagnosticBuildObservationV1)
+        self.assertEqual(replay.call_count, 6)
+        self.assertEqual(materialize.call_count, 3)
+
+    def test_build_rejects_mutated_request_before_it_can_start_a_build(self) -> None:
+        for field_name, replacement in (
+            ("host_trust", "foreign"),
+            ("execution_limits", "foreign"),
+        ):
+            with self.subTest(field=field_name):
+                request = _request()
+                original = getattr(request, field_name)
+                backend = _BuildBackend((_static_elf(b"first"), _static_elf(b"second")))
+                object.__setattr__(request, field_name, replacement)
+                try:
+                    result = pipeline.ControlledPipelineV1(
+                        build_backend=backend,
+                    ).build(request)
+                finally:
+                    object.__setattr__(request, field_name, original)
+                self.assertEqual(len(backend.requests), 0)
+                self.assertEqual(
+                    result,
+                    build_transport.BuildRejectedV1(
+                        1,
+                        build_transport.BuildFailureReasonV1.CONTRACT_VIOLATION,
+                    ),
+                )
 
     def test_host_trust_claims_only_backend_observable_facts(self) -> None:
         trust = pipeline.HostTrustBoundaryV1.UNSEALED_LINUX_X64_DOCKER_HOST
@@ -657,6 +1162,20 @@ class ControlledPipelineTests(unittest.TestCase):
                 "PERSISTENT_SELF_HOSTED_DOCKER",
             )
         )
+
+    def test_host_trust_wire_is_private_and_does_not_read_mutable_enum_storage(
+        self,
+    ) -> None:
+        trust = pipeline.HostTrustBoundaryV1.UNSEALED_LINUX_X64_DOCKER_HOST
+        policy = pipeline.ARB_BUILD_TRANSPORT_POLICY_V1
+        baseline = pipeline.pipeline_policy_identity_v2(trust, policy)
+        self.assertFalse(hasattr(pipeline, "host_trust_wire_v1"))
+        original_value = trust._value_
+        object.__setattr__(trust, "_value_", "forged-host-boundary")
+        try:
+            self.assertEqual(pipeline.pipeline_policy_identity_v2(trust, policy), baseline)
+        finally:
+            object.__setattr__(trust, "_value_", original_value)
 
     def test_pipeline_policy_identity_binds_the_stream_bootstrap(self) -> None:
         trust = pipeline.HostTrustBoundaryV1.UNSEALED_LINUX_X64_DOCKER_HOST

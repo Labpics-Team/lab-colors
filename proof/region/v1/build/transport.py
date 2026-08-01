@@ -167,6 +167,17 @@ class DockerUserModeV1(StrEnum):
     HOST_EFFECTIVE_IDS = "host_effective_ids"
 
 
+_DOCKER_USER_MODE_HOST_EFFECTIVE_IDS_WIRE_V1 = b"host_effective_ids"
+
+
+def _docker_user_mode_wire_v1(value: object) -> bytes:
+    """Render a closed semantic member without reading mutable Enum payloads."""
+
+    if value is DockerUserModeV1.HOST_EFFECTIVE_IDS:
+        return _DOCKER_USER_MODE_HOST_EFFECTIVE_IDS_WIRE_V1
+    raise TypeError("invalid Docker user mode")
+
+
 class DockerBuildPolicyV1(tuple):
     """Deeply immutable coordinates for one bounded Docker build transport."""
 
@@ -232,8 +243,7 @@ class DockerBuildPolicyV1(tuple):
         tmpfs_specs = tuple(owned_tmpfs)
         if len(set(tmpfs_specs)) != len(tmpfs_specs):
             raise TypeError("invalid tmpfs_specs")
-        if type(user_mode) is not DockerUserModeV1:
-            raise TypeError("invalid Docker user mode")
+        _docker_user_mode_wire_v1(user_mode)
         limits = (
             (stdout_limit, BUILD_STDOUT_LIMIT_V1, "stdout_limit"),
             (stderr_limit, BUILD_STDERR_LIMIT_V1, "stderr_limit"),
@@ -337,7 +347,7 @@ def transport_policy_identity_v1(policy: DockerBuildPolicyV1) -> bytes:
             policy.bootstrap_argv0.encode("utf-8"),
             len(policy.tmpfs_specs).to_bytes(4, "big"),
             *(spec.encode("utf-8") for spec in policy.tmpfs_specs),
-            policy.user_mode.value.encode("ascii"),
+            _docker_user_mode_wire_v1(policy.user_mode),
             policy.stdout_limit.to_bytes(8, "big"),
             policy.stderr_limit.to_bytes(8, "big"),
             policy.build_timeout_ns.to_bytes(8, "big"),
