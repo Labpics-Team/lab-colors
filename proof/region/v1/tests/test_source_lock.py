@@ -527,9 +527,24 @@ class SafeArchiveAdmissionTests(unittest.TestCase):
                 provenance.materialize_admitted_source_files_v1(lock, admitted)
         finally:
             object.__setattr__(lock, "role", original_role)
+            lock.__dict__.pop("identity", None)
             if cached_identity is not None:
                 lock.__dict__["identity"] = cached_identity
         self.assertEqual(caught.exception.reason, ProvenanceReasonV1.FOREIGN_BINDING)
+        self.assertEqual(lock.__dict__.get("identity"), cached_identity)
+
+        uncached_lock = fixture_lock(GOOD_ARCHIVE)
+        self.assertNotIn("identity", uncached_lock.__dict__)
+        original_role = uncached_lock.role
+        object.__setattr__(uncached_lock, "role", SourceRoleV1.MPFI)
+        try:
+            with self.assertRaises(ProvenanceErrorV1):
+                provenance.materialize_admitted_source_files_v1(uncached_lock, admitted)
+            self.assertIn("identity", uncached_lock.__dict__)
+        finally:
+            object.__setattr__(uncached_lock, "role", original_role)
+            uncached_lock.__dict__.pop("identity", None)
+        self.assertNotIn("identity", uncached_lock.__dict__)
 
         for hostile_lock, hostile_admitted in ((object(), admitted), (lock, object())):
             with self.subTest(hostile=type(hostile_lock).__name__):
