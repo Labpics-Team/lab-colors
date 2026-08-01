@@ -1809,13 +1809,14 @@ class SameObjectAndObserverProtocolTests(unittest.TestCase):
             observer.chmod(0o111)
             procs.chmod(0o222)
             try:
-                executor.enter_observer_cgroup_v1(parent)
+                with self.subTest(scenario="search-only-success"):
+                    executor.enter_observer_cgroup_v1(parent)
             finally:
                 procs.chmod(0o644)
                 observer.chmod(0o755)
                 parent.chmod(0o755)
-
-            self.assertEqual(procs.read_bytes(), str(os.getpid()).encode("ascii"))
+            with self.subTest(scenario="search-only-success-result"):
+                self.assertEqual(procs.read_bytes(), str(os.getpid()).encode("ascii"))
 
         for invalid in (
             object(),
@@ -1840,9 +1841,9 @@ class SameObjectAndObserverProtocolTests(unittest.TestCase):
             procs = observer / "cgroup.procs"
             procs.write_bytes(b"")
 
-            executor.enter_observer_cgroup_v1(ExplodingPath(str(parent)))
-
-            self.assertEqual(procs.read_bytes(), str(os.getpid()).encode("ascii"))
+            with self.subTest(scenario="hostile-path-operator"):
+                executor.enter_observer_cgroup_v1(ExplodingPath(str(parent)))
+                self.assertEqual(procs.read_bytes(), str(os.getpid()).encode("ascii"))
 
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary).resolve()
@@ -1854,10 +1855,10 @@ class SameObjectAndObserverProtocolTests(unittest.TestCase):
             procs.write_bytes(b"")
             parent.symlink_to(target, target_is_directory=True)
 
-            with self.assertRaises(OSError):
-                executor.enter_observer_cgroup_v1(parent)
-
-            self.assertEqual(procs.read_bytes(), b"")
+            with self.subTest(scenario="parent-symlink"):
+                with self.assertRaises(OSError):
+                    executor.enter_observer_cgroup_v1(parent)
+                self.assertEqual(procs.read_bytes(), b"")
 
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary).resolve()
@@ -1870,10 +1871,10 @@ class SameObjectAndObserverProtocolTests(unittest.TestCase):
             alias = root / "alias"
             alias.symlink_to(target, target_is_directory=True)
 
-            with self.assertRaises(OSError):
-                executor.enter_observer_cgroup_v1(alias / "proof")
-
-            self.assertEqual(procs.read_bytes(), b"")
+            with self.subTest(scenario="path-component-symlink"):
+                with self.assertRaises(OSError):
+                    executor.enter_observer_cgroup_v1(alias / "proof")
+                self.assertEqual(procs.read_bytes(), b"")
 
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary).resolve()
@@ -1884,8 +1885,9 @@ class SameObjectAndObserverProtocolTests(unittest.TestCase):
             (target / "cgroup.procs").write_bytes(b"")
             (parent / "observer").symlink_to(target, target_is_directory=True)
 
-            with self.assertRaises(OSError):
-                executor.enter_observer_cgroup_v1(parent)
+            with self.subTest(scenario="observer-symlink"):
+                with self.assertRaises(OSError):
+                    executor.enter_observer_cgroup_v1(parent)
 
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary).resolve()
@@ -1896,8 +1898,9 @@ class SameObjectAndObserverProtocolTests(unittest.TestCase):
             target.write_bytes(b"")
             (observer / "cgroup.procs").symlink_to(target)
 
-            with self.assertRaises(OSError):
-                executor.enter_observer_cgroup_v1(parent)
+            with self.subTest(scenario="cgroup-procs-symlink"):
+                with self.assertRaises(OSError):
+                    executor.enter_observer_cgroup_v1(parent)
 
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary).resolve()
@@ -1913,21 +1916,22 @@ class SameObjectAndObserverProtocolTests(unittest.TestCase):
                 opened.append(descriptor)
                 return descriptor
 
-            with mock.patch.object(
-                executor.os,
-                "open",
-                side_effect=track_open,
-            ), mock.patch.object(executor.os, "write", return_value=0):
-                with self.assertRaises(OSError) as caught:
-                    executor.enter_observer_cgroup_v1(parent)
-            self.assertEqual(caught.exception.errno, errno.EIO)
-
-            self.assertEqual(len(opened), len(parent.parts) + 2)
-            for descriptor in opened:
-                with self.subTest(descriptor=descriptor):
+            with self.subTest(scenario="short-write"):
+                with mock.patch.object(
+                    executor.os,
+                    "open",
+                    side_effect=track_open,
+                ), mock.patch.object(executor.os, "write", return_value=0):
                     with self.assertRaises(OSError) as caught:
-                        os.fstat(descriptor)
-                    self.assertEqual(caught.exception.errno, errno.EBADF)
+                        executor.enter_observer_cgroup_v1(parent)
+                self.assertEqual(caught.exception.errno, errno.EIO)
+
+                self.assertEqual(len(opened), len(parent.parts) + 2)
+                for descriptor in opened:
+                    with self.subTest(descriptor=descriptor):
+                        with self.assertRaises(OSError) as caught:
+                            os.fstat(descriptor)
+                        self.assertEqual(caught.exception.errno, errno.EBADF)
 
     def test_observer_initialization_failure_closes_fds_and_reaps_child(self) -> None:
         stdin_read, stdin_write = os.pipe()
