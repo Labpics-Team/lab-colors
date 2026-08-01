@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import ast
 import dis
+import errno
 import gc
 import hashlib
 import importlib
@@ -40,11 +41,11 @@ from test_receipt import _execute  # noqa: E402
 # would let a coordinated gate edit hide inventory drift.
 ARB_INVENTORY_SHA256_V1 = (
     "666c0a04cf327bf59c2d1e67d534f7f8d25867eb5da0143edaa0d73d8a260576"
- )
-ARB_ORDER_SHA256_V1 = (
-    "ecb3e7b2b8a6b207513618a519e524446c41bc2f26257097f41111d273d0745f"
 )
-ARB_TEST_COUNT_V1 = 190
+ARB_ORDER_SHA256_V1 = (
+    "f5cc1942b21bf2aa1219c1ba058fe9142395b1306d4ea209bbbabb4f45b8109b"
+)
+ARB_TEST_COUNT_V1 = 193
 
 MOVED_INPUT_SURFACE_V1 = (
     "CanonicalInputLimitsV1",
@@ -1017,6 +1018,15 @@ class SharedBuildTransportTargetTests(unittest.TestCase):
             docker = real / "docker"
             docker.write_bytes(b"fixture")
             docker.chmod(0o755)
+            # Searching a command coordinate needs execute permission, not
+            # directory-read permission, on every intermediate component.
+            real.chmod(0o111)
+            execute_only = root / "docker-execute-only"
+            execute_only.write_bytes(b"fixture")
+            # The native preflight observes metadata; requiring read permission
+            # here would reject a valid executable-only Docker CLI before it can
+            # ever reach the command observer.
+            execute_only.chmod(0o111)
             alias = root / "alias"
             alias.symlink_to(real, target_is_directory=True)
             final_alias = root / "docker-alias"
@@ -1035,6 +1045,7 @@ class SharedBuildTransportTargetTests(unittest.TestCase):
 
             for path, expected_type, expected_calls in (
                 (docker, transport.DockerSupportedV1, 2),
+                (execute_only, transport.DockerSupportedV1, 2),
                 (alias / "docker", transport.DockerUnsupportedV1, 0),
                 (final_alias, transport.DockerUnsupportedV1, 0),
             ):
@@ -1069,6 +1080,76 @@ class SharedBuildTransportTargetTests(unittest.TestCase):
                         report.reason,
                         transport.DockerBlockerReasonV1.DOCKER_UNAVAILABLE,
                     )
+
+
+    def test_docker_metadata_mode_fails_closed_without_positive_linux_o_path(self) -> None:
+        transport = importlib.import_module("build.transport")
+        for unavailable in (None, 0):
+            with self.subTest(o_path=unavailable), mock.patch.object(
+                transport.sys,
+                "platform",
+                "linux",
+            ), mock.patch.object(
+                transport.os,
+                "O_PATH",
+                unavailable,
+                create=True,
+            ):
+                with self.assertRaises(OSError) as caught:
+                    transport._docker_coordinate_metadata_flags_v1()
+                self.assertEqual(caught.exception.errno, errno.ENOTSUP)
+
+    def test_docker_coordinate_open_propagates_the_selected_metadata_mode(self) -> None:
+        transport = importlib.import_module("build.transport")
+        marker = 1 << 50
+        opened: list[tuple[object, int, int | None]] = []
+        descriptors = iter((31, 32, 33, 34))
+
+        def open_coordinate(
+            path: object,
+            flags: int,
+            mode: int = 0o777,
+            *,
+            dir_fd: int | None = None,
+        ) -> int:
+            del mode
+            opened.append((path, flags, dir_fd))
+            return next(descriptors)
+
+        directory_flags = marker | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW
+        command_flags = marker | os.O_NONBLOCK | os.O_CLOEXEC | os.O_NOFOLLOW
+        coordinate = transport.docker_command_coordinate_v1(Path("/docker/root/cli"))
+        self.assertEqual(
+            marker
+            & (os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW | os.O_NONBLOCK),
+            0,
+        )
+        with mock.patch.object(
+            transport.sys,
+            "platform",
+            "linux",
+        ), mock.patch.object(
+            transport.os,
+            "O_PATH",
+            marker,
+            create=True,
+        ), mock.patch.object(transport.os, "open", side_effect=open_coordinate), mock.patch.object(
+            transport.os,
+            "close",
+        ) as close:
+            descriptor = transport._open_docker_command_v1(coordinate)
+
+        self.assertEqual(descriptor, 34)
+        self.assertEqual(
+            opened,
+            [
+                (b"/", directory_flags, None),
+                (b"docker", directory_flags, 31),
+                (b"root", directory_flags, 32),
+                (b"cli", command_flags, 33),
+            ],
+        )
+        self.assertEqual(close.call_args_list, [mock.call(31), mock.call(32), mock.call(33)])
 
     def test_native_backend_defers_host_user_observation_to_supported_probe(self) -> None:
         transport = importlib.import_module("build.transport")

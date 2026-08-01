@@ -1606,6 +1606,90 @@ class SameObjectAndObserverProtocolTests(unittest.TestCase):
                 with self.assertRaises(OSError):
                     executor._CgroupV2V1.probe_observer_task_budget(actual_parent)
 
+    def test_cgroup_directory_coordinates_allow_search_only_components(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            search_only = root / "search-only"
+            parent = search_only / "proof"
+            parent.mkdir(parents=True)
+
+            for name, search_mode, parent_mode in (
+                ("intermediate", 0o111, 0o755),
+                ("final", 0o755, 0o111),
+            ):
+                descriptor = -1
+                try:
+                    search_only.chmod(search_mode)
+                    parent.chmod(parent_mode)
+                    with self.subTest(component=name):
+                        descriptor = executor._open_cgroup_directory_v1(parent)
+                        self.assertTrue(stat.S_ISDIR(os.fstat(descriptor).st_mode))
+                finally:
+                    if descriptor >= 0:
+                        os.close(descriptor)
+                    parent.chmod(0o755)
+                    search_only.chmod(0o755)
+
+    def test_cgroup_metadata_mode_fails_closed_without_positive_linux_o_path(self) -> None:
+        for unavailable in (None, 0):
+            with self.subTest(o_path=unavailable), mock.patch.object(
+                executor.sys,
+                "platform",
+                "linux",
+            ), mock.patch.object(
+                executor.os,
+                "O_PATH",
+                unavailable,
+                create=True,
+            ):
+                with self.assertRaises(OSError) as caught:
+                    executor._cgroup_coordinate_metadata_flags_v1()
+                self.assertEqual(caught.exception.errno, errno.ENOTSUP)
+
+    def test_cgroup_coordinate_open_propagates_the_selected_metadata_mode(self) -> None:
+        marker = 1 << 50
+        opened: list[tuple[object, int, int | None]] = []
+        descriptors = iter((41, 42, 43))
+
+        def open_coordinate(
+            path: object,
+            flags: int,
+            mode: int = 0o777,
+            *,
+            dir_fd: int | None = None,
+        ) -> int:
+            del mode
+            opened.append((path, flags, dir_fd))
+            return next(descriptors)
+
+        directory_flags = marker | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW
+        self.assertEqual(marker & (os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW), 0)
+        with mock.patch.object(
+            executor.sys,
+            "platform",
+            "linux",
+        ), mock.patch.object(
+            executor.os,
+            "O_PATH",
+            marker,
+            create=True,
+        ), mock.patch.object(executor.os, "open", side_effect=open_coordinate), mock.patch.object(
+            executor.os,
+            "close",
+        ) as close:
+            descriptor = executor._open_cgroup_directory_v1(Path("/proof/parent"))
+
+        self.assertEqual(descriptor, 43)
+        self.assertEqual(
+            opened,
+            [
+                (b"/", directory_flags, None),
+                (b"proof", directory_flags, 41),
+                (b"parent", directory_flags, 42),
+            ],
+        )
+        self.assertEqual(close.call_args_list, [mock.call(41), mock.call(42)])
+
     def test_cgroup_parent_parser_is_total_and_preserves_root(self) -> None:
         class ExplodingPathLike:
             def __fspath__(self) -> str:
@@ -1743,7 +1827,15 @@ class SameObjectAndObserverProtocolTests(unittest.TestCase):
             procs = observer / "cgroup.procs"
             procs.write_bytes(b"")
 
-            executor.enter_observer_cgroup_v1(parent)
+            parent.chmod(0o111)
+            observer.chmod(0o111)
+            procs.chmod(0o222)
+            try:
+                executor.enter_observer_cgroup_v1(parent)
+            finally:
+                procs.chmod(0o644)
+                observer.chmod(0o755)
+                parent.chmod(0o755)
 
             self.assertEqual(procs.read_bytes(), str(os.getpid()).encode("ascii"))
 

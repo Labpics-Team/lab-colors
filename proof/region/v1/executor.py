@@ -1472,17 +1472,52 @@ def canonical_cgroup_parent_v1(value: object) -> Path:
     return Path(raw)
 
 
+def _cgroup_coordinate_metadata_flags_v1() -> int:
+    """Return the read-free native descriptor mode for cgroup coordinates."""
+
+    if sys.platform == "linux":
+        flag = getattr(os, "O_PATH", None)
+        detail = "Linux cgroup coordinate inspection requires O_PATH"
+    else:
+        flag = getattr(os, "O_EXEC", None)
+        detail = "native cgroup coordinate inspection requires O_EXEC"
+    if type(flag) is not int or flag <= 0:
+        raise OSError(errno_module.ENOTSUP, detail)
+    return flag
+
+
+def _cgroup_coordinate_directory_flags_v1() -> int:
+    """Derive the only descriptor mode used for a cgroup directory coordinate."""
+
+    return (
+        _cgroup_coordinate_metadata_flags_v1()
+        | os.O_DIRECTORY
+        | os.O_CLOEXEC
+        | os.O_NOFOLLOW
+    )
+
+
+def _open_cgroup_child_directory_v1(parent_fd: int, component: bytes) -> int:
+    """Open one named cgroup child without changing its coordinate semantics."""
+
+    return os.open(
+        component,
+        _cgroup_coordinate_directory_flags_v1(),
+        dir_fd=parent_fd,
+    )
+
+
 def _open_cgroup_directory_v1(parent: object) -> int:
     """Open an absolute canonical cgroup directory without following symlinks."""
 
     encoded = os.fsencode(canonical_cgroup_parent_v1(parent))
-    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW
+    flags = _cgroup_coordinate_directory_flags_v1()
     descriptor = os.open(b"/", flags)
     try:
         for component in encoded.split(b"/")[1:]:
             if not component:
                 continue
-            next_descriptor = os.open(component, flags, dir_fd=descriptor)
+            next_descriptor = _open_cgroup_child_directory_v1(descriptor, component)
             # Linux releases a descriptor number even when close reports a
             # late interruption. Transfer ownership first: retrying that
             # number could close an unrelated descriptor that reused it.
@@ -1513,11 +1548,7 @@ def enter_observer_cgroup_v1(parent: Path) -> None:
     # a symlink before this controller can prove which cgroup it entered.
     parent_fd = _open_cgroup_directory_v1(parent)
     try:
-        directory_fd = os.open(
-            b"observer",
-            os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW,
-            dir_fd=parent_fd,
-        )
+        directory_fd = _open_cgroup_child_directory_v1(parent_fd, b"observer")
         try:
             procs_fd = os.open(
                 b"cgroup.procs",
@@ -1595,11 +1626,7 @@ class _CgroupV2V1:
             if not {b"memory", b"pids"} <= controllers or not {b"memory", b"pids"} <= subtree:
                 raise OSError(errno_module.ENOTSUP, "memory/pids controllers are not delegated")
             os.mkdir(name, mode=0o700, dir_fd=parent_fd)
-            directory_fd = os.open(
-                name,
-                os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW,
-                dir_fd=parent_fd,
-            )
+            directory_fd = _open_cgroup_child_directory_v1(parent_fd, name)
             group = cls(parent_fd, directory_fd, name)
             group._write(b"memory.max", b"max" if memory_max is None else str(memory_max).encode("ascii"))
             group._write(b"memory.swap.max", b"0")
