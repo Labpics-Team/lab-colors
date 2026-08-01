@@ -129,6 +129,50 @@ class EvaluatorSourceTests(unittest.TestCase):
             errors = operations.validate_sources(copy)
             self.assertTrue(any("forbidden operation mpfi_div_ext" in error for error in errors))
 
+    def test_forbidden_operation_aliases_and_asm_names_are_red(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            copy = Path(temporary)
+            for path in EVALUATOR.glob("*.c"):
+                (copy / path.name).write_text(path.read_text(encoding="utf-8"), encoding="utf-8")
+            for path in EVALUATOR.glob("*.h"):
+                (copy / path.name).write_text(path.read_text(encoding="utf-8"), encoding="utf-8")
+            interval = copy / "interval.c"
+            interval.write_text(
+                interval.read_text(encoding="utf-8")
+                + "\n#define hidden_division mpfi_div_ext\n"
+                + "static void hidden_call(void) { hidden_division; }\n"
+                + 'static const char *hidden_asm_name = "mpfi_div_ext";\n',
+                encoding="utf-8",
+            )
+            errors = operations.validate_sources(copy)
+            self.assertTrue(any("forbidden operation mpfi_div_ext" in error for error in errors))
+
+    def test_elf_absence_checks_are_fail_closed_on_inspection_error(self) -> None:
+        recipe = (MPFI / "build.sh").read_text(encoding="utf-8")
+        start = recipe.index("require_absent_pattern()")
+        end = recipe.index("\nrequire_regular", start)
+        checker = recipe[start:end]
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary) / "not-a-file"
+            directory.mkdir()
+            failed = subprocess.run(
+                ["/bin/sh", "-c", checker + "\nrequire_absent_pattern X \"$1\" message inspection\n", "sh", str(directory)],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(failed.returncode, 70)
+
+            absent = Path(temporary) / "absent"
+            absent.write_text("nothing\n", encoding="utf-8")
+            passed = subprocess.run(
+                ["/bin/sh", "-c", checker + "\nrequire_absent_pattern X \"$1\" message inspection\n", "sh", str(absent)],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(passed.returncode, 0, passed.stderr)
+
     def test_build_recipe_is_closed_and_requires_clang_19(self) -> None:
         recipe = (MPFI / "build.sh").read_text(encoding="utf-8")
         self.assertIn("/usr/bin/clang-19", recipe)

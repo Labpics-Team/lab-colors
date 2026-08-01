@@ -4,6 +4,11 @@
 This file is intentionally small: it is the source-level gate for the
 evaluator, not a claim about every symbol shipped by the MPFI distribution.
 The dependency's broader API remains outside the comparator's authority.
+
+The gate is deliberately conservative.  A forbidden dependency name is
+rejected wherever it appears, not only when it is followed by ``(``: a macro,
+function pointer, or assembler alias can otherwise hide the call from a
+call-shaped regular expression.
 """
 
 from __future__ import annotations
@@ -128,7 +133,7 @@ def validate_sources(directory: Path) -> tuple[str, ...]:
         text = path.read_text(encoding="utf-8")
         seen.update(called_symbols(text))
         for forbidden in FORBIDDEN_MPFI_CALLS:
-            if re.search(rf"\b{re.escape(forbidden)}\s*\(", text):
+            if re.search(rf"\b{re.escape(forbidden)}\b", text):
                 errors.append(f"{path.name}: forbidden operation {forbidden}")
         for marker in ("arb", "flint", "long double", "strtod", "fallback"):
             if marker in text.lower():

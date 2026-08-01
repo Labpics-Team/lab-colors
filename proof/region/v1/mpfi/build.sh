@@ -61,6 +61,23 @@ require_empty_directory() {
     fi
 }
 
+require_absent_pattern() {
+    pattern=$1
+    path=$2
+    message=$3
+    inspection_error=$4
+    if /usr/bin/grep -q "$pattern" "$path"; then
+        printf '%s\n' "$message" >&2
+        exit 70
+    else
+        grep_status=$?
+        if [ "$grep_status" -ne 1 ]; then
+            printf '%s\n' "$inspection_error" >&2
+            exit 70
+        fi
+    fi
+}
+
 require_regular "$inputs/formula.generated.c"
 require_directory "$inputs/sources/gmp"
 require_directory "$inputs/sources/mpfr"
@@ -145,17 +162,19 @@ if ! /usr/bin/readelf -l "$build/mpfi-evaluator-v1" > "$build/program-headers"; 
     printf '%s\n' 'cannot inspect evaluator program headers' >&2
     exit 70
 fi
-if /usr/bin/grep -q INTERP "$build/program-headers"; then
-    printf '%s\n' 'evaluator unexpectedly contains PT_INTERP' >&2
-    exit 70
-fi
+require_absent_pattern \
+    INTERP \
+    "$build/program-headers" \
+    'evaluator unexpectedly contains PT_INTERP' \
+    'cannot inspect evaluator program headers'
 if ! /usr/bin/readelf -d "$build/mpfi-evaluator-v1" > "$build/dynamic-section"; then
     printf '%s\n' 'cannot inspect evaluator dynamic section' >&2
     exit 70
 fi
-if /usr/bin/grep -q NEEDED "$build/dynamic-section"; then
-    printf '%s\n' 'evaluator unexpectedly contains DT_NEEDED' >&2
-    exit 70
-fi
+require_absent_pattern \
+    NEEDED \
+    "$build/dynamic-section" \
+    'evaluator unexpectedly contains DT_NEEDED' \
+    'cannot inspect evaluator dynamic section'
 
 /usr/bin/sha256sum "$build/mpfi-evaluator-v1"
