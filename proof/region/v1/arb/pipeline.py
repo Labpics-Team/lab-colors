@@ -65,11 +65,13 @@ REQUIRED_BUILD_SOURCE_MODES_V1 = tuple(
     for path in sorted(_PINNED_BUILD_SOURCE_SHA256_V1)
 )
 
-BUILD_STDOUT_LIMIT_V1 = 16 * 1024 * 1024
-BUILD_STDERR_LIMIT_V1 = 16 * 1024 * 1024
-BUILD_TIMEOUT_NS_V1 = 2 * 60 * 60 * 1_000_000_000
-DOCKER_PROBE_OUTPUT_LIMIT_V1 = 1024 * 1024
-DOCKER_PROBE_TIMEOUT_NS_V1 = 30 * 1_000_000_000
+# The generic transport owns universal observer ceilings.  This lane binds to
+# those coordinates rather than recreating a coincident copy of the policy.
+BUILD_STDOUT_LIMIT_V1 = build_transport.BUILD_STDOUT_LIMIT_V1
+BUILD_STDERR_LIMIT_V1 = build_transport.BUILD_STDERR_LIMIT_V1
+BUILD_TIMEOUT_NS_V1 = build_transport.BUILD_TIMEOUT_NS_V1
+DOCKER_PROBE_OUTPUT_LIMIT_V1 = build_transport.DOCKER_PROBE_OUTPUT_LIMIT_V1
+DOCKER_PROBE_TIMEOUT_NS_V1 = build_transport.DOCKER_PROBE_TIMEOUT_NS_V1
 MAX_BUILD_SOURCE_FILE_BYTES_V1 = 16 * 1024 * 1024
 MAX_BUILD_SOURCE_TOTAL_BYTES_V1 = 32 * 1024 * 1024
 
@@ -338,7 +340,6 @@ ARB_BUILD_TRANSPORT_POLICY_V1 = build_transport.DockerBuildPolicyV1(
     OCI_IMAGE_REFERENCE_V1,
     OCI_PLATFORM_V1,
     "labcolors-arb-build-v1",
-    "labcolors-arb-build-v1-",
     _BUILD_BOOTSTRAP_V1,
     "labcolors-arb-build-bootstrap-v1",
     (_BUILD_TMPFS_SPEC_V1, _BUILD_STATE_TMPFS_SPEC_V1),

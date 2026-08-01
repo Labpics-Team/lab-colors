@@ -9,10 +9,12 @@ import os
 import platform
 import re
 import selectors
+import shutil
 import signal
 import stat
 import subprocess
 import tempfile
+import threading
 import time
 from enum import StrEnum
 from pathlib import Path
@@ -21,31 +23,37 @@ from typing import Callable, Protocol, TypeAlias
 from . import input
 
 
-# These ceilings preserve the already shipped Arb V1 observer contract; they
-# are not physical constants or evidence that every build fits. Changing one
-# requires a new transport version, a streaming/resource design review, and a
-# targeted native high-water gate. A lane policy may only tighten them.
+# These versioned observer bounds are not physical constants or a claim that
+# every client build fits. Changing one requires a transport-version,
+# streaming/resource review, and a targeted native high-water gate. A client
+# policy may only tighten them.
 BUILD_STDOUT_LIMIT_V1 = 16 * 1024 * 1024
 BUILD_STDERR_LIMIT_V1 = 16 * 1024 * 1024
 BUILD_TIMEOUT_NS_V1 = 2 * 60 * 60 * 1_000_000_000
 DOCKER_PROBE_OUTPUT_LIMIT_V1 = 1024 * 1024
 DOCKER_PROBE_TIMEOUT_NS_V1 = 30 * 1_000_000_000
 
-# These are observer scheduling/termination mechanics retained from Arb V1,
-# not successful-build evidence coordinates. CPU, RAM and PID containment is
-# owned by the declared disposable worker, outside this Docker transport.
+# These are observer scheduling/termination mechanics, not successful-build
+# evidence coordinates. CPU, RAM and PID containment belong to the declared
+# disposable worker, outside this Docker transport.
 _IO_CHUNK_BYTES_V1 = 64 * 1024
 _POLL_SLICE_SECONDS_V1 = 0.1
 _PROCESS_STOP_TIMEOUT_SECONDS_V1 = 30
 _PATH_TYPE = type(Path("/"))
+_NATIVE_CID_ROOT_PREFIX_V1 = "labcolors-docker-cid-"
 
 _BUILD_INPUT_PROGRESS_TOKEN = object()
 _BUILD_INPUT_TRANSFER_TOKEN = object()
 _DOCKER_COMMAND_EXITED_TOKEN = object()
 _DOCKER_BUILD_EXITED_TOKEN = object()
-_BUILD_CLEANUP_FAILURE_TOKEN = object()
+_NATIVE_RUN_LEASE_TOKEN = object()
+_DOCKER_ISSUED_CONTAINER_ID_TOKEN = object()
 _BUILD_SESSION_TOKEN = object()
 _TWO_BUILD_OBSERVATION_TOKEN = object()
+
+
+class _NativeOwnershipLostV1(RuntimeError):
+    """A post-fork copy must not act on its creator's native resources."""
 
 
 def _valid_digest(value: object) -> bool:
@@ -134,7 +142,6 @@ class DockerBuildPolicyV1(tuple):
         image_reference: str,
         platform: str,
         hostname: str,
-        container_name_prefix: str,
         bootstrap: str,
         bootstrap_argv0: str,
         tmpfs_specs: tuple[str, ...],
@@ -156,7 +163,6 @@ class DockerBuildPolicyV1(tuple):
                 ("image_reference", image_reference, 512),
                 ("platform", platform, 64),
                 ("hostname", hostname, 64),
-                ("container_name_prefix", container_name_prefix, 64),
                 ("bootstrap", bootstrap, 64 * 1024),
                 ("bootstrap_argv0", bootstrap_argv0, 128),
             )
@@ -165,7 +171,6 @@ class DockerBuildPolicyV1(tuple):
             image_reference,
             platform,
             hostname,
-            container_name_prefix,
             bootstrap,
             bootstrap_argv0,
         ) = strings
@@ -179,13 +184,8 @@ class DockerBuildPolicyV1(tuple):
                 character not in "abcdefghijklmnopqrstuvwxyz0123456789-"
                 for character in hostname
             )
-            or any(
-                character not in "abcdefghijklmnopqrstuvwxyz0123456789-"
-                for character in container_name_prefix
-            )
-            or not container_name_prefix.endswith("-")
         ):
-            raise TypeError("invalid Docker names")
+            raise TypeError("invalid Docker hostname")
         if type(tmpfs_specs) is not tuple or not tmpfs_specs:
             raise TypeError("invalid tmpfs_specs")
         owned_tmpfs: list[str] = []
@@ -217,7 +217,6 @@ class DockerBuildPolicyV1(tuple):
                 image_reference,
                 platform,
                 hostname,
-                container_name_prefix,
                 bootstrap,
                 bootstrap_argv0,
                 tmpfs_specs,
@@ -243,44 +242,40 @@ class DockerBuildPolicyV1(tuple):
         return self[2]
 
     @property
-    def container_name_prefix(self) -> str:
+    def bootstrap(self) -> str:
         return self[3]
 
     @property
-    def bootstrap(self) -> str:
+    def bootstrap_argv0(self) -> str:
         return self[4]
 
     @property
-    def bootstrap_argv0(self) -> str:
+    def tmpfs_specs(self) -> tuple[str, ...]:
         return self[5]
 
     @property
-    def tmpfs_specs(self) -> tuple[str, ...]:
+    def user_mode(self) -> DockerUserModeV1:
         return self[6]
 
     @property
-    def user_mode(self) -> DockerUserModeV1:
+    def stdout_limit(self) -> int:
         return self[7]
 
     @property
-    def stdout_limit(self) -> int:
+    def stderr_limit(self) -> int:
         return self[8]
 
     @property
-    def stderr_limit(self) -> int:
+    def build_timeout_ns(self) -> int:
         return self[9]
 
     @property
-    def build_timeout_ns(self) -> int:
+    def probe_output_limit(self) -> int:
         return self[10]
 
     @property
-    def probe_output_limit(self) -> int:
-        return self[11]
-
-    @property
     def probe_timeout_ns(self) -> int:
-        return self[12]
+        return self[11]
 
 
 def docker_policy_is_valid_v1(value: object) -> bool:
@@ -303,7 +298,6 @@ def transport_policy_identity_v1(policy: DockerBuildPolicyV1) -> bytes:
             policy.image_reference.encode("utf-8"),
             policy.platform.encode("utf-8"),
             policy.hostname.encode("utf-8"),
-            policy.container_name_prefix.encode("utf-8"),
             policy.bootstrap.encode("utf-8"),
             policy.bootstrap_argv0.encode("utf-8"),
             len(policy.tmpfs_specs).to_bytes(4, "big"),
@@ -323,7 +317,6 @@ class _NativeCommandSlotV1(StrEnum):
     IMAGE_REFERENCE = "image_reference"
     PLATFORM = "platform"
     ORDERED_TMPFS_SPECS = "ordered_tmpfs_specs"
-    CONTAINER_NAME = "container_name"
     HOSTNAME = "hostname"
     HOST_USER = "host_user"
     CID_FILE = "cid_file"
@@ -413,8 +406,6 @@ _NATIVE_COMMAND_TEMPLATES_V1: tuple[
             _literal_v1("ALL"),
             _literal_v1("--security-opt"),
             _literal_v1("no-new-privileges:true"),
-            _literal_v1("--name"),
-            _slot_v1(_NativeCommandSlotV1.CONTAINER_NAME),
             _literal_v1("--hostname"),
             _slot_v1(_NativeCommandSlotV1.HOSTNAME),
             _literal_v1("--user"),
@@ -451,6 +442,17 @@ _NATIVE_COMMAND_TEMPLATES_V1: tuple[
         ),
     ),
     (
+        "cleanup_inspect",
+        (
+            _slot_v1(_NativeCommandSlotV1.CLI_PATH),
+            _literal_v1("container"),
+            _literal_v1("inspect"),
+            _literal_v1("--format"),
+            _literal_v1("{{.Id}}"),
+            _slot_v1(_NativeCommandSlotV1.CONTAINER_COORDINATE),
+        ),
+    ),
+    (
         "cleanup_ls",
         (
             _slot_v1(_NativeCommandSlotV1.CLI_PATH),
@@ -463,6 +465,224 @@ _NATIVE_COMMAND_TEMPLATES_V1: tuple[
             _slot_v1(_NativeCommandSlotV1.CONTAINER_FILTER),
         ),
     ),
+)
+
+
+class _NativeStdioModeV1(StrEnum):
+    PIPE = "pipe"
+    DEVNULL = "devnull"
+
+
+def _native_stdio_value_v1(mode: _NativeStdioModeV1) -> int:
+    if type(mode) is not _NativeStdioModeV1:
+        raise TypeError("invalid native stdio mode")
+    if mode is _NativeStdioModeV1.PIPE:
+        return subprocess.PIPE
+    if mode is _NativeStdioModeV1.DEVNULL:
+        return subprocess.DEVNULL
+    raise TypeError("invalid native stdio mode")
+
+
+class _NativeProcessContextV1(tuple):
+    """One fixed, identity-bound child-launch context for the Docker CLI."""
+
+    __slots__ = ()
+
+    def __new__(
+        cls,
+        environment: tuple[tuple[str, str], ...],
+        cwd: str,
+        umask: int,
+        close_fds: bool,
+        restore_signals: bool,
+        start_new_session: bool,
+        stdin_with_input: _NativeStdioModeV1,
+        stdin_without_input: _NativeStdioModeV1,
+        stdout: _NativeStdioModeV1,
+        stderr: _NativeStdioModeV1,
+    ) -> _NativeProcessContextV1:
+        if type(environment) is not tuple or not environment:
+            raise TypeError("invalid native process environment")
+        owned_environment: list[tuple[str, str]] = []
+        for entry in environment:
+            if type(entry) is not tuple or len(entry) != 2:
+                raise TypeError("invalid native process environment")
+            name, value = entry
+            if (
+                type(name) is not str
+                or not name
+                or re.fullmatch(r"[A-Z_][A-Z0-9_]*", name) is None
+                or type(value) is not str
+                or "\0" in value
+                or "\n" in value
+                or "\r" in value
+            ):
+                raise TypeError("invalid native process environment")
+            try:
+                value.encode("utf-8")
+            except UnicodeEncodeError as error:
+                raise TypeError("invalid native process environment") from error
+            owned_environment.append((name, value))
+        canonical_environment = tuple(owned_environment)
+        if (
+            canonical_environment != tuple(sorted(canonical_environment))
+            or len({name for name, _value in canonical_environment})
+            != len(canonical_environment)
+        ):
+            raise TypeError("native process environment must be ordered and unique")
+        if (
+            type(cwd) is not str
+            or not cwd
+            or "\0" in cwd
+            or "\n" in cwd
+            or "\r" in cwd
+            or not os.path.isabs(cwd)
+        ):
+            raise TypeError("invalid native process cwd")
+        try:
+            cwd.encode("utf-8")
+        except UnicodeEncodeError as error:
+            raise TypeError("invalid native process cwd") from error
+        if type(umask) is not int or umask < 0 or umask > 0o777:
+            raise TypeError("invalid native process umask")
+        if any(
+            type(value) is not bool
+            for value in (close_fds, restore_signals, start_new_session)
+        ):
+            raise TypeError("invalid native process launch flags")
+        if any(
+            type(value) is not _NativeStdioModeV1
+            for value in (
+                stdin_with_input,
+                stdin_without_input,
+                stdout,
+                stderr,
+            )
+        ):
+            raise TypeError("invalid native stdio topology")
+        return tuple.__new__(
+            cls,
+            (
+                canonical_environment,
+                cwd,
+                umask,
+                close_fds,
+                restore_signals,
+                start_new_session,
+                stdin_with_input,
+                stdin_without_input,
+                stdout,
+                stderr,
+            ),
+        )
+
+    @property
+    def environment(self) -> tuple[tuple[str, str], ...]:
+        return self[0]
+
+    @property
+    def cwd(self) -> str:
+        return self[1]
+
+    @property
+    def umask(self) -> int:
+        return self[2]
+
+    @property
+    def close_fds(self) -> bool:
+        return self[3]
+
+    @property
+    def restore_signals(self) -> bool:
+        return self[4]
+
+    @property
+    def start_new_session(self) -> bool:
+        return self[5]
+
+    @property
+    def stdin_with_input(self) -> _NativeStdioModeV1:
+        return self[6]
+
+    @property
+    def stdin_without_input(self) -> _NativeStdioModeV1:
+        return self[7]
+
+    @property
+    def stdout(self) -> _NativeStdioModeV1:
+        return self[8]
+
+    @property
+    def stderr(self) -> _NativeStdioModeV1:
+        return self[9]
+
+    def identity_chunks_v1(self) -> tuple[bytes, ...]:
+        return (
+            b"native-process-context.v1",
+            len(self.environment).to_bytes(4, "big"),
+            *(
+                chunk
+                for name, value in self.environment
+                for chunk in (name.encode("ascii"), value.encode("utf-8"))
+            ),
+            self.cwd.encode("utf-8"),
+            self.umask.to_bytes(4, "big"),
+            bytes((self.close_fds,)),
+            bytes((self.restore_signals,)),
+            bytes((self.start_new_session,)),
+            b"native-stdio-topology.v1",
+            b"stdin-with-input",
+            self.stdin_with_input.value.encode("ascii"),
+            b"stdin-without-input",
+            self.stdin_without_input.value.encode("ascii"),
+            b"stdout",
+            self.stdout.value.encode("ascii"),
+            b"stderr",
+            self.stderr.value.encode("ascii"),
+        )
+
+    def popen_kwargs_v1(self, receives_stdin: bool) -> dict[str, object]:
+        if type(receives_stdin) is not bool:
+            raise TypeError("receives_stdin must be bool")
+        return {
+            "stdin": _native_stdio_value_v1(
+                self.stdin_with_input
+                if receives_stdin
+                else self.stdin_without_input
+            ),
+            "stdout": _native_stdio_value_v1(self.stdout),
+            "stderr": _native_stdio_value_v1(self.stderr),
+            "cwd": self.cwd,
+            "env": dict(self.environment),
+            "close_fds": self.close_fds,
+            "restore_signals": self.restore_signals,
+            "start_new_session": self.start_new_session,
+            "umask": self.umask,
+        }
+
+
+# The Docker CLI is part of an evidence-producing observation.  Its launch
+# cannot inherit locale, config, cwd, umask or session state from the host:
+# this immutable value both renders Popen kwargs and enters the command
+# identity, so a future change cannot silently alter what the observer ran.
+_NATIVE_PROCESS_CONTEXT_V1 = _NativeProcessContextV1(
+    (
+        ("DOCKER_CONFIG", "/nonexistent"),
+        ("HOME", "/nonexistent"),
+        ("LANG", "C"),
+        ("LC_ALL", "C"),
+        ("PATH", "/usr/bin:/bin"),
+        ("TZ", "UTC"),
+    ),
+    "/",
+    0o077,
+    True,
+    True,
+    True,
+    _NativeStdioModeV1.PIPE,
+    _NativeStdioModeV1.DEVNULL,
+    _NativeStdioModeV1.PIPE,
+    _NativeStdioModeV1.PIPE,
 )
 
 
@@ -482,6 +702,7 @@ def native_command_contract_identity_v1() -> bytes:
                     ),
                 )
             )
+    chunks.extend(_NATIVE_PROCESS_CONTEXT_V1.identity_chunks_v1())
     return _identity(
         b"labcolors.proof-region.native-command-contract.v1\0",
         tuple(chunks),
@@ -627,6 +848,7 @@ def _render_native_command_v1(
 
 class DockerBlockerReasonV1(StrEnum):
     HOST_NOT_LINUX_AMD64 = "host_not_linux_amd64"
+    HOST_USER_UNAVAILABLE = "host_user_unavailable"
     DOCKER_UNAVAILABLE = "docker_unavailable"
     IMAGE_UNAVAILABLE = "image_unavailable"
     IMAGE_IDENTITY_MISMATCH = "image_identity_mismatch"
@@ -853,19 +1075,9 @@ def _host_user_coordinates(value: object) -> tuple[int, int]:
     return value
 
 
-def _container_name(value: object, prefix: str) -> str:
-    if (
-        type(value) is not str
-        or type(prefix) is not str
-        or not value.startswith(prefix)
-        or len(value) > 128
-        or any(character not in "abcdefghijklmnopqrstuvwxyz0123456789-" for character in value)
-    ):
-        raise TypeError("invalid controller-owned Docker container name")
-    return value
-
-
 class DockerBuildRequestV1(tuple):
+    """Semantic BUILD coordinates; the adapter owns all host resources."""
+
     __slots__ = ()
 
     def __new__(
@@ -874,8 +1086,6 @@ class DockerBuildRequestV1(tuple):
         capability: DockerSupportedV1,
         input_bundle: input.SealedInputV1,
         max_output_bytes: int,
-        cid_file: Path,
-        container_name: str,
     ) -> DockerBuildRequestV1:
         if type(attempt) is not int or attempt not in (1, 2):
             raise TypeError("attempt must be 1 or 2")
@@ -889,8 +1099,6 @@ class DockerBuildRequestV1(tuple):
             or max_output_bytes > capability.policy.stdout_limit
         ):
             raise TypeError("invalid executable output limit")
-        _absolute_path(cid_file, "cid_file")
-        _container_name(container_name, capability.policy.container_name_prefix)
         return tuple.__new__(
             cls,
             (
@@ -898,8 +1106,6 @@ class DockerBuildRequestV1(tuple):
                 capability,
                 input_bundle,
                 max_output_bytes,
-                cid_file,
-                container_name,
             ),
         )
 
@@ -918,14 +1124,6 @@ class DockerBuildRequestV1(tuple):
     @property
     def max_output_bytes(self) -> int:
         return self[3]
-
-    @property
-    def cid_file(self) -> Path:
-        return self[4]
-
-    @property
-    def container_name(self) -> str:
-        return self[5]
 
 
 def _docker_build_request_is_valid_v1(
@@ -946,6 +1144,89 @@ def _docker_build_request_is_valid_v1(
         )
     except Exception:
         return False
+
+
+class _NativeRunLeaseV1:
+    """Adapter-owned authority for one Docker-issued container ID file."""
+
+    __slots__ = (
+        "_owner",
+        "_creator_pid",
+        "_capability",
+        "_root",
+        "_cid_file",
+        "_launched",
+        "_released",
+    )
+
+    def __init__(
+        self,
+        owner: object,
+        creator_pid: int,
+        capability: DockerSupportedV1,
+        root: Path,
+        cid_file: Path,
+        *,
+        _token: object,
+    ) -> None:
+        if (
+            _token is not _NATIVE_RUN_LEASE_TOKEN
+            or type(owner) is not object
+            or type(creator_pid) is not int
+            or creator_pid <= 0
+            or not _docker_supported_is_valid_v1(capability)
+            or type(root) is not _PATH_TYPE
+            or not root.is_absolute()
+            or type(cid_file) is not _PATH_TYPE
+            or not cid_file.is_absolute()
+        ):
+            raise TypeError("native run lease is adapter-owned")
+        self._owner = owner
+        self._creator_pid = creator_pid
+        self._capability = capability
+        self._root = root
+        self._cid_file = cid_file
+        self._launched = False
+        self._released = False
+
+    @property
+    def owner(self) -> object:
+        return self._owner
+
+    @property
+    def creator_pid(self) -> int:
+        return self._creator_pid
+
+    @property
+    def capability(self) -> DockerSupportedV1:
+        return self._capability
+
+    @property
+    def cid_file(self) -> Path:
+        return self._cid_file
+
+    @property
+    def launched(self) -> bool:
+        return self._launched
+
+
+class _DockerIssuedContainerIdV1(str):
+    """A full ID read from the adapter-private CID file Docker created."""
+
+    def __new__(
+        cls,
+        value: str,
+        *,
+        _token: object,
+    ) -> _DockerIssuedContainerIdV1:
+        if (
+            _token is not _DOCKER_ISSUED_CONTAINER_ID_TOKEN
+            or type(value) is not str
+            or len(value) != 64
+            or any(character not in "0123456789abcdef" for character in value)
+        ):
+            raise TypeError("invalid Docker-issued container ID")
+        return str.__new__(cls, value)
 
 
 def _bounded_bytes(value: object, maximum: int, field_name: str) -> bytes:
@@ -1424,7 +1705,7 @@ class DockerCleanupTriggerV1(StrEnum):
 class CleanupResourceV1(StrEnum):
     DOCKER_CLI_PROCESS = "docker_cli_process"
     DOCKER_CONTAINER = "docker_container"
-    TEMPORARY_ROOT = "temporary_root"
+    DOCKER_CID_ROOT = "docker_cid_root"
 
 
 class CleanupFailureRecordV1(tuple):
@@ -1490,6 +1771,7 @@ class DockerBuildCleanupFailureV1(tuple):
             (
                 CleanupResourceV1.DOCKER_CLI_PROCESS,
                 CleanupResourceV1.DOCKER_CONTAINER,
+                CleanupResourceV1.DOCKER_CID_ROOT,
             ),
         )
         _bounded_bytes(stdout, BUILD_STDOUT_LIMIT_V1, "stdout")
@@ -1538,44 +1820,6 @@ DockerBuildProcessObservationV1: TypeAlias = (
     | DockerBuildInputRejectedV1
     | DockerBuildCleanupFailureV1
 )
-
-
-class BuildCleanupFailureV1(tuple):
-    """Controller-owned cleanup failure with any preceding backend observation."""
-
-    __slots__ = ()
-
-    def __new__(
-        cls,
-        failures: tuple[CleanupFailureRecordV1, ...],
-        current_process: DockerBuildProcessObservationV1 | None,
-        *,
-        _token: object,
-    ) -> BuildCleanupFailureV1:
-        if _token is not _BUILD_CLEANUP_FAILURE_TOKEN:
-            raise TypeError("build cleanup failure is controller-observed")
-        owned_failures = _cleanup_failure_records_v1(
-            failures,
-            (CleanupResourceV1.TEMPORARY_ROOT,),
-        )
-        if current_process is not None and type(current_process) not in (
-            DockerBuildExitedV1,
-            DockerBuildTimedOutV1,
-            DockerBuildOutputLimitV1,
-            DockerBuildObserverFailureV1,
-            DockerBuildInputRejectedV1,
-            DockerBuildCleanupFailureV1,
-        ):
-            raise TypeError("cleanup failure lost its current process observation")
-        return tuple.__new__(cls, (owned_failures, current_process))
-
-    @property
-    def failures(self) -> tuple[CleanupFailureRecordV1, ...]:
-        return self[0]
-
-    @property
-    def current_process(self) -> DockerBuildProcessObservationV1 | None:
-        return self[1]
 
 
 _DockerCommandObservationV1: TypeAlias = (
@@ -1716,53 +1960,6 @@ def _canonical_process_observation_v1(
     raise TypeError("backend returned an unknown process observation")
 
 
-def _build_cleanup_failure_v1(
-    current_process: DockerBuildProcessObservationV1 | None,
-    detail: str,
-) -> BuildCleanupFailureV1:
-    return BuildCleanupFailureV1(
-        (
-            CleanupFailureRecordV1(
-                CleanupResourceV1.TEMPORARY_ROOT,
-                detail,
-            ),
-        ),
-        current_process,
-        _token=_BUILD_CLEANUP_FAILURE_TOKEN,
-    )
-
-
-def _canonical_build_cleanup_failure_v1(
-    value: object,
-    input_value: input.SealedInputV1,
-    max_output_bytes: int,
-    max_stderr_bytes: int,
-) -> BuildCleanupFailureV1:
-    if type(value) is not BuildCleanupFailureV1:
-        raise TypeError("unknown build cleanup observation")
-    try:
-        canonical_process = (
-            None
-            if value.current_process is None
-            else _canonical_process_observation_v1(
-                value.current_process,
-                input_value,
-                max_output_bytes,
-                max_stderr_bytes,
-            )
-        )
-        canonical = BuildCleanupFailureV1(
-            value.failures,
-            canonical_process,
-            _token=_BUILD_CLEANUP_FAILURE_TOKEN,
-        )
-        if tuple(canonical) != tuple(value):
-            raise TypeError("build cleanup observation is not canonical")
-        return canonical
-    except (AttributeError, IndexError, TypeError, ValueError) as error:
-        raise TypeError("build cleanup observation is not canonical") from error
-
-
 class DockerBuildBackendV1(Protocol):
     def probe(self) -> DockerCapabilityReportV1: ...
 
@@ -1826,7 +2023,7 @@ class NativeDockerBuildBackendV1:
         if policy.user_mode is not DockerUserModeV1.HOST_EFFECTIVE_IDS:
             raise TypeError("unsupported Docker user policy")
         observed_user = (
-            (os.geteuid(), os.getegid()) if host_user is None else host_user
+            None if host_user is None else _host_user_coordinates(host_user)
         )
         observed_platform = (
             platform.system().lower() if platform_name is None else platform_name
@@ -1847,19 +2044,21 @@ class NativeDockerBuildBackendV1:
             "machine_name",
         )
         self._monotonic_ns = monotonic_ns
-        self._host_user = _host_user_coordinates(observed_user)
+        self._configured_host_user = observed_user
+        self._run_lease_owner = object()
+        self._owner_pid = os.getpid()
         self._probed_capability: DockerSupportedV1 | None = None
 
-    @staticmethod
-    def _environment() -> dict[str, str]:
-        return {
-            "HOME": "/nonexistent",
-            "PATH": "/usr/bin:/bin",
-            "DOCKER_CONFIG": "/nonexistent",
-        }
+    def _in_owner_process_v1(self) -> bool:
+        return os.getpid() == self._owner_pid
 
     def probe(self) -> DockerCapabilityReportV1:
         self._probed_capability = None
+        if not self._in_owner_process_v1():
+            return DockerUnsupportedV1(
+                DockerBlockerReasonV1.BACKEND_CONTRACT,
+                "native Docker capability belongs to its creator process",
+            )
         if self._platform_name != "linux" or self._machine_name.lower() not in (
             "x86_64",
             "amd64",
@@ -1868,6 +2067,15 @@ class NativeDockerBuildBackendV1:
                 DockerBlockerReasonV1.HOST_NOT_LINUX_AMD64,
                 "controlled build requires a Linux amd64 Docker host",
             )
+        host_user = self._configured_host_user
+        if host_user is None:
+            try:
+                host_user = _host_user_coordinates((os.geteuid(), os.getegid()))
+            except (AttributeError, OSError, TypeError):
+                return DockerUnsupportedV1(
+                    DockerBlockerReasonV1.HOST_USER_UNAVAILABLE,
+                    "host effective uid/gid are unavailable",
+                )
         try:
             metadata = self._command_coordinate.path.lstat()
         except OSError:
@@ -1903,7 +2111,6 @@ class NativeDockerBuildBackendV1:
                 stdout_limit=self._policy.probe_output_limit,
                 stderr_limit=self._policy.probe_output_limit,
                 timeout_ns=self._policy.probe_timeout_ns,
-                cid_file=None,
             )
             if (
                 type(result) is not _DockerCommandExitedV1
@@ -1948,12 +2155,15 @@ class NativeDockerBuildBackendV1:
             self._policy,
             daemon_observation,
             self._command_coordinate,
-            self._host_user,
+            host_user,
         )
         self._probed_capability = capability
         return capability
 
-    def command_for(self, request: DockerBuildRequestV1) -> tuple[str, ...]:
+    def _bound_request_capability_v1(
+        self,
+        request: DockerBuildRequestV1,
+    ) -> DockerSupportedV1:
         if type(request) is not DockerBuildRequestV1:
             raise TypeError("request must be DockerBuildRequestV1")
         try:
@@ -1966,6 +2176,101 @@ class NativeDockerBuildBackendV1:
             or capability is not self._probed_capability
         ):
             raise TypeError("request capability does not match this backend probe")
+        return capability
+
+    def _next_run_lease_v1(
+        self,
+        capability: DockerSupportedV1,
+    ) -> _NativeRunLeaseV1:
+        if not self._in_owner_process_v1():
+            raise RuntimeError("native Docker build belongs to its creator process")
+        if not _docker_supported_is_valid_v1(capability):
+            raise TypeError("run lease requires one canonical Docker capability")
+        root = Path(
+            tempfile.mkdtemp(
+                prefix=_NATIVE_CID_ROOT_PREFIX_V1,
+                dir="/tmp",
+            )
+        )
+        try:
+            metadata = root.lstat()
+            if (
+                not root.is_absolute()
+                or not stat.S_ISDIR(metadata.st_mode)
+                or stat.S_ISLNK(metadata.st_mode)
+                or metadata.st_mode & 0o077
+            ):
+                raise RuntimeError("native Docker CID root is not private")
+            cid_file = root / "cid"
+            if cid_file.exists() or cid_file.is_symlink():
+                raise RuntimeError("fresh native Docker CID path already exists")
+            return _NativeRunLeaseV1(
+                self._run_lease_owner,
+                self._owner_pid,
+                capability,
+                root,
+                cid_file,
+                _token=_NATIVE_RUN_LEASE_TOKEN,
+            )
+        except BaseException:
+            try:
+                shutil.rmtree(root)
+            except BaseException:
+                pass
+            raise
+
+    def _owns_run_lease_v1(self, lease: object) -> bool:
+        if type(lease) is not _NativeRunLeaseV1:
+            return False
+        try:
+            return (
+                lease.owner is self._run_lease_owner
+                and lease.creator_pid == self._owner_pid
+                and _docker_supported_is_valid_v1(lease.capability)
+                and lease.cid_file.is_absolute()
+            )
+        except (AttributeError, TypeError):
+            return False
+
+    def _lease_belongs_to_current_process_v1(self, lease: _NativeRunLeaseV1) -> bool:
+        return self._owns_run_lease_v1(lease) and os.getpid() == lease.creator_pid
+
+    def _mark_run_lease_launched_v1(self, lease: _NativeRunLeaseV1) -> None:
+        if not self._lease_belongs_to_current_process_v1(lease):
+            raise RuntimeError("native Docker run lease belongs to another process")
+        if lease._released:
+            raise RuntimeError("native Docker run lease was already released")
+        lease._launched = True
+
+    def _release_run_lease_v1(self, lease: _NativeRunLeaseV1) -> str | None:
+        if not self._owns_run_lease_v1(lease):
+            raise TypeError("native run lease does not belong to this adapter")
+        if os.getpid() != lease.creator_pid:
+            return None
+        if lease._released:
+            return None
+        try:
+            shutil.rmtree(lease._root)
+        except Exception:
+            return "native Docker CID root cleanup failed"
+        # This flag certifies completed removal, not merely an attempted one:
+        # an interrupted caller may safely retry with the same private lease.
+        lease._released = True
+        return None
+
+    def _command_for_v1(
+        self,
+        request: DockerBuildRequestV1,
+        lease: _NativeRunLeaseV1,
+    ) -> tuple[str, ...]:
+        if not self._owns_run_lease_v1(lease):
+            raise TypeError("native run lease does not belong to this adapter")
+        capability = lease.capability
+        if (
+            not _docker_build_request_is_valid_v1(request, capability)
+            or request.capability is not capability
+        ):
+            raise TypeError("request capability does not match this native run lease")
         policy = capability.policy
         return _render_native_command_v1(
             "build",
@@ -1973,12 +2278,11 @@ class NativeDockerBuildBackendV1:
             {
                 _NativeCommandSlotV1.PLATFORM: (policy.platform,),
                 _NativeCommandSlotV1.ORDERED_TMPFS_SPECS: policy.tmpfs_specs,
-                _NativeCommandSlotV1.CONTAINER_NAME: (request.container_name,),
                 _NativeCommandSlotV1.HOSTNAME: (policy.hostname,),
                 _NativeCommandSlotV1.HOST_USER: (
                     f"{capability.host_user[0]}:{capability.host_user[1]}",
                 ),
-                _NativeCommandSlotV1.CID_FILE: (str(request.cid_file),),
+                _NativeCommandSlotV1.CID_FILE: (str(lease.cid_file),),
                 _NativeCommandSlotV1.IMAGE_REFERENCE: (policy.image_reference,),
                 _NativeCommandSlotV1.BOOTSTRAP: (policy.bootstrap,),
                 _NativeCommandSlotV1.BOOTSTRAP_ARGV0: (policy.bootstrap_argv0,),
@@ -1995,17 +2299,134 @@ class NativeDockerBuildBackendV1:
         self,
         request: DockerBuildRequestV1,
     ) -> DockerBuildProcessObservationV1:
-        command = self.command_for(request)
-        capability = request.capability
-        policy = capability.policy
-        return self._observe_command(
-            command,
-            stdout_limit=request.max_output_bytes,
-            stderr_limit=policy.stderr_limit,
-            timeout_ns=policy.build_timeout_ns,
-            cid_file=request.cid_file,
-            container_name=request.container_name,
-            input_bundle=request.input_bundle,
+        if not self._in_owner_process_v1():
+            return DockerBuildObserverFailureV1(
+                "native Docker build belongs to its creator process",
+                b"",
+                b"",
+            )
+        lease: _NativeRunLeaseV1 | None = None
+        observation: DockerBuildProcessObservationV1 | None = None
+        retained_base_exception: BaseException | None = None
+        try:
+            capability = self._bound_request_capability_v1(request)
+            lease = self._next_run_lease_v1(capability)
+            command = self._command_for_v1(request, lease)
+            if not self._lease_belongs_to_current_process_v1(lease):
+                return DockerBuildObserverFailureV1(
+                    "native Docker build belongs to its creator process",
+                    b"",
+                    b"",
+                )
+            policy = capability.policy
+            observation = self._observe_command(
+                command,
+                stdout_limit=request.max_output_bytes,
+                stderr_limit=policy.stderr_limit,
+                timeout_ns=policy.build_timeout_ns,
+                lease=lease,
+                input_bundle=request.input_bundle,
+            )
+        except Exception:
+            observation = DockerBuildObserverFailureV1(
+                "native Docker build request could not be materialized",
+                b"",
+                b"",
+            )
+        except BaseException as error:
+            retained_base_exception = error
+        finally:
+            release_detail: str | None = None
+            if lease is not None:
+                try:
+                    release_detail = self._release_run_lease_v1(lease)
+                except Exception:
+                    release_detail = "native Docker CID root cleanup observer raised"
+                except BaseException as error:
+                    retained_base_exception = retained_base_exception or error
+                    release_detail = "native Docker CID root cleanup was interrupted"
+            if retained_base_exception is None and release_detail is not None:
+                observation = self._with_cid_root_cleanup_failure_v1(
+                    observation,
+                    release_detail,
+                )
+        if retained_base_exception is not None:
+            raise retained_base_exception.with_traceback(
+                retained_base_exception.__traceback__
+            )
+        if observation is None:
+            return DockerBuildObserverFailureV1(
+                "native Docker build observation was unavailable",
+                b"",
+                b"",
+            )
+        return observation
+
+    @staticmethod
+    def _with_cid_root_cleanup_failure_v1(
+        observation: DockerBuildProcessObservationV1 | None,
+        detail: str,
+    ) -> DockerBuildProcessObservationV1:
+        """Retain a completed causal prefix when native CID-root release fails."""
+
+        if observation is None:
+            return DockerBuildObserverFailureV1(detail, b"", b"")
+        if type(observation) is DockerBuildCleanupFailureV1:
+            return DockerBuildCleanupFailureV1(
+                observation.trigger,
+                observation.failures
+                + (
+                    CleanupFailureRecordV1(
+                        CleanupResourceV1.DOCKER_CID_ROOT,
+                        detail,
+                    ),
+                ),
+                observation.stdout,
+                observation.stderr,
+                observation.input_progress,
+            )
+        if type(observation) is DockerBuildExitedV1:
+            transfer = observation.input_transfer
+            progress = BuildInputTransferProgressV1(
+                transfer.bundle_identity,
+                transfer.expected_length,
+                transfer.expected_sha256,
+                transfer.written_length,
+                transfer.written_sha256,
+                _token=_BUILD_INPUT_PROGRESS_TOKEN,
+            )
+            trigger = DockerCleanupTriggerV1.PROCESS_EXIT
+        elif type(observation) is DockerBuildTimedOutV1:
+            progress = observation.input_progress
+            trigger = DockerCleanupTriggerV1.TIMEOUT
+        elif type(observation) is DockerBuildOutputLimitV1:
+            progress = observation.input_progress
+            trigger = DockerCleanupTriggerV1.OUTPUT_LIMIT
+        elif type(observation) is DockerBuildInputRejectedV1:
+            progress = observation.input_progress
+            trigger = DockerCleanupTriggerV1.INPUT_TRANSFER
+        elif type(observation) is DockerBuildObserverFailureV1:
+            progress = observation.input_progress
+            trigger = DockerCleanupTriggerV1.OBSERVER_FAILURE
+        else:
+            raise TypeError("unknown native Docker build observation")
+        if progress is None:
+            return DockerBuildObserverFailureV1(
+                detail,
+                observation.stdout,
+                observation.stderr,
+            )
+        return DockerBuildCleanupFailureV1(
+            trigger,
+            (
+                CleanupFailureRecordV1(
+                    CleanupResourceV1.DOCKER_CID_ROOT,
+                    detail,
+                ),
+            ),
+            observation.stdout,
+            observation.stderr,
+            progress,
         )
 
     def _observe_command(
@@ -2015,8 +2436,7 @@ class NativeDockerBuildBackendV1:
         stdout_limit: int,
         stderr_limit: int,
         timeout_ns: int,
-        cid_file: Path | None,
-        container_name: str | None = None,
+        lease: _NativeRunLeaseV1 | None = None,
         input_bundle: input.SealedInputV1 | None = None,
     ) -> _DockerCommandObservationV1:
         if (
@@ -2041,16 +2461,16 @@ class NativeDockerBuildBackendV1:
             or timeout_ns > BUILD_TIMEOUT_NS_V1
         ):
             raise TypeError("invalid Docker observation limits")
-        if (cid_file is None) != (container_name is None):
-            raise TypeError("Docker cleanup requires both CID file and exact name")
-        if cid_file is not None:
-            _absolute_path(cid_file, "cid_file")
-            active_policy = (
-                self._probed_capability.policy
-                if self._probed_capability is not None
-                else self._policy
+        if lease is not None and not self._owns_run_lease_v1(lease):
+            raise TypeError("native run lease does not belong to this adapter")
+        if not self._in_owner_process_v1() or (
+            lease is not None and not self._lease_belongs_to_current_process_v1(lease)
+        ):
+            return DockerBuildObserverFailureV1(
+                "native Docker observation belongs to its creator process",
+                b"",
+                b"",
             )
-            _container_name(container_name, active_policy.container_name_prefix)
         if input_bundle is not None and type(input_bundle) is not input.SealedInputV1:
             raise TypeError("input_bundle must be controller sealed")
         if input_bundle is not None and not input.sealed_input_is_intact_v1(
@@ -2061,25 +2481,11 @@ class NativeDockerBuildBackendV1:
                 b"",
                 b"",
             )
-        try:
-            process = subprocess.Popen(
-                command,
-                stdin=subprocess.PIPE if input_bundle is not None else subprocess.DEVNULL,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                cwd="/",
-                env=self._environment(),
-                close_fds=True,
-                start_new_session=True,
-            )
-        except (OSError, UnicodeEncodeError):
-            return DockerBuildObserverFailureV1(
-                "cannot start Docker CLI",
-                b"",
-                b"",
-            )
-        stdout = bytearray()
-        stderr = bytearray()
+        # The one protected region starts before Popen.  Once Popen returns
+        # its handle, every following Python bytecode has that handle under
+        # the finalizer; state allocation cannot create a post-spawn gap.
+        stdout: bytearray | bytes = b""
+        stderr: bytearray | bytes = b""
         selector: selectors.BaseSelector | None = None
         terminal: DockerOutputStreamV1 | None = None
         timed_out = False
@@ -2094,7 +2500,27 @@ class NativeDockerBuildBackendV1:
         input_descriptor: int | None = None
         stdout_descriptor: int | None = None
         stderr_descriptor: int | None = None
+        retained_base_exception: BaseException | None = None
+        ownership_lost = False
+        process: subprocess.Popen[bytes] | None = None
         try:
+            try:
+                process = subprocess.Popen(
+                    command,
+                    **_NATIVE_PROCESS_CONTEXT_V1.popen_kwargs_v1(
+                        input_bundle is not None
+                    ),
+                )
+            except (OSError, UnicodeEncodeError):
+                return DockerBuildObserverFailureV1(
+                    "cannot start Docker CLI",
+                    b"",
+                    b"",
+                )
+            stdout = bytearray()
+            stderr = bytearray()
+            if lease is not None:
+                self._mark_run_lease_launched_v1(lease)
             if (
                 process.stdout is None
                 or process.stderr is None
@@ -2197,65 +2623,131 @@ class NativeDockerBuildBackendV1:
                             process.stdin.close()
                 if terminal is not None or input_failed or observer_failed:
                     break
+        except _NativeOwnershipLostV1:
+            ownership_lost = True
+            observer_failed = True
         except Exception:
             observer_failed = True
+        except BaseException as error:
+            # Cancellation is not an excuse to leak a child or a container.  It
+            # is re-raised only after every independently-owned resource got a
+            # best-effort deterministic release attempt.
+            retained_base_exception = error
         finally:
-            if selector is not None:
-                try:
-                    selector.close()
-                except Exception:
-                    observer_failed = True
-            if process.stdin is not None:
-                if self._close_owned_stream(process.stdin, input_descriptor):
-                    observer_failed = True
-            if bundle_view is not None:
-                try:
-                    bundle_view.release()
-                except Exception:
-                    observer_failed = True
-            if input_bundle is not None:
-                try:
-                    input_progress = _build_input_progress_v1(
-                        input_bundle,
-                        written,
-                        input_hasher.digest(),
+            if process is None:
+                # Popen can itself be interrupted after the daemon received a
+                # launch request but before Python returned a handle.  There
+                # is no safe CLI PID to reap then, yet a CID cleanup attempt
+                # can still release a Docker container without replacing the
+                # caller's original interruption.
+                if retained_base_exception is not None and lease is not None:
+                    try:
+                        self._cleanup_container(
+                            lease,
+                            spawn_may_have_started=True,
+                        )
+                    except BaseException:
+                        pass
+            else:
+                if selector is not None:
+                    try:
+                        selector.close()
+                    except Exception:
+                        observer_failed = True
+                    except BaseException as error:
+                        retained_base_exception = retained_base_exception or error
+                        observer_failed = True
+                if process.stdin is not None:
+                    close_failed, close_interrupt = self._close_owned_stream(
+                        process.stdin,
+                        input_descriptor,
                     )
-                except Exception:
-                    observer_failed = True
-            try:
-                process_running = process.poll() is None
-            except Exception:
-                process_running = True
-                stop_detail = "Docker CLI process state could not be observed"
-            if process_running:
-                if not (
-                    timed_out
-                    or terminal is not None
-                    or observer_failed
-                    or input_failed
+                    if close_failed:
+                        observer_failed = True
+                    retained_base_exception = retained_base_exception or close_interrupt
+                if bundle_view is not None:
+                    try:
+                        bundle_view.release()
+                    except Exception:
+                        observer_failed = True
+                    except BaseException as error:
+                        retained_base_exception = retained_base_exception or error
+                        observer_failed = True
+                if input_bundle is not None:
+                    try:
+                        input_progress = _build_input_progress_v1(
+                            input_bundle,
+                            written,
+                            input_hasher.digest(),
+                        )
+                    except Exception:
+                        observer_failed = True
+                    except BaseException as error:
+                        retained_base_exception = retained_base_exception or error
+                        observer_failed = True
+                ownership_lost = ownership_lost or not self._in_owner_process_v1()
+                if not ownership_lost:
+                    try:
+                        process_running = process.poll() is None
+                    except Exception:
+                        process_running = True
+                        stop_detail = "Docker CLI process state could not be observed"
+                    except BaseException as error:
+                        retained_base_exception = retained_base_exception or error
+                        process_running = True
+                        stop_detail = "Docker CLI process state observation was interrupted"
+                    if process_running:
+                        if not (
+                            timed_out
+                            or terminal is not None
+                            or observer_failed
+                            or input_failed
+                        ):
+                            timed_out = True
+                        try:
+                            observed_stop = self._stop_process(process)
+                        except Exception:
+                            observed_stop = "Docker CLI process termination raised"
+                        except BaseException as error:
+                            retained_base_exception = retained_base_exception or error
+                            observed_stop = "Docker CLI process termination was interrupted"
+                        fallback_stop = self._force_reap_after_interruption_v1(process)
+                        stop_detail = stop_detail or observed_stop or fallback_stop
+                for stream, descriptor in (
+                    (process.stdout, stdout_descriptor),
+                    (process.stderr, stderr_descriptor),
                 ):
-                    timed_out = True
-                try:
-                    observed_stop = self._stop_process(process)
-                except Exception:
-                    observed_stop = "Docker CLI process termination raised"
-                stop_detail = stop_detail or observed_stop
-            for stream, descriptor in (
-                (process.stdout, stdout_descriptor),
-                (process.stderr, stderr_descriptor),
-            ):
-                if stream is None:
-                    continue
-                if self._close_owned_stream(stream, descriptor):
-                    observer_failed = True
-            if cid_file is not None and container_name is not None:
-                try:
-                    cleanup_detail = self._cleanup_container(
-                        cid_file,
-                        container_name,
+                    if stream is None:
+                        continue
+                    close_failed, close_interrupt = self._close_owned_stream(
+                        stream,
+                        descriptor,
                     )
-                except Exception:
-                    cleanup_detail = "Docker container cleanup observer raised"
+                    if close_failed:
+                        observer_failed = True
+                    retained_base_exception = retained_base_exception or close_interrupt
+                if lease is not None and not ownership_lost:
+                    try:
+                        cleanup_detail = self._cleanup_container(
+                            lease,
+                            spawn_may_have_started=True,
+                        )
+                    except Exception:
+                        cleanup_detail = "Docker container cleanup observer raised"
+                    except BaseException as error:
+                        retained_base_exception = retained_base_exception or error
+                        cleanup_detail = "Docker container cleanup was interrupted"
+        if retained_base_exception is not None:
+            raise retained_base_exception.with_traceback(
+                retained_base_exception.__traceback__
+            )
+        if ownership_lost:
+            return DockerBuildObserverFailureV1(
+                "native Docker observation left its creator process",
+                bytes(stdout),
+                bytes(stderr),
+                input_progress,
+            )
         if stop_detail is not None or cleanup_detail is not None:
             trigger = DockerCleanupTriggerV1.PROCESS_EXIT
             if observer_failed:
@@ -2358,29 +2850,50 @@ class NativeDockerBuildBackendV1:
         )
 
     @staticmethod
-    def _close_owned_stream(stream: object, descriptor: int | None) -> bool:
-        """Close the file object, then its captured owned FD if close raised."""
+    def _close_owned_stream(
+        stream: object,
+        descriptor: int | None,
+    ) -> tuple[bool, BaseException | None]:
+        """Release a stream even when one release operation is interrupted."""
 
         close_failed = False
+        retained_base_exception: BaseException | None = None
         try:
             closed = stream.closed is True
         except Exception:
             closed = False
             close_failed = True
+        except BaseException as error:
+            closed = False
+            close_failed = True
+            retained_base_exception = error
         if not closed:
             try:
                 stream.close()
             except Exception:
                 close_failed = True
+            except BaseException as error:
+                close_failed = True
+                retained_base_exception = retained_base_exception or error
         if close_failed and type(descriptor) is int and descriptor >= 0:
             try:
                 os.close(descriptor)
             except Exception:
                 pass
-        return close_failed
+            except BaseException as error:
+                retained_base_exception = retained_base_exception or error
+        return close_failed, retained_base_exception
 
     def _clock(self) -> int:
+        if not self._in_owner_process_v1():
+            raise _NativeOwnershipLostV1(
+                "native Docker observation belongs to its creator process"
+            )
         value = self._monotonic_ns()
+        if not self._in_owner_process_v1():
+            raise _NativeOwnershipLostV1(
+                "native Docker observation left its creator process"
+            )
         if type(value) is not int or value < 0:
             raise RuntimeError("invalid monotonic clock")
         return value
@@ -2410,10 +2923,49 @@ class NativeDockerBuildBackendV1:
         return "Docker CLI process could not be terminated" if failed else None
 
     @staticmethod
-    def _admitted_container_id(cid_file: Path) -> str | None:
+    def _force_reap_after_interruption_v1(
+        process: subprocess.Popen[bytes],
+    ) -> str | None:
+        """Use an independent, interruption-safe kill/reap path after stop fails."""
+
+        failed = False
+        try:
+            running = process.poll() is None
+        except BaseException:
+            running = True
+            failed = True
+        if running:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            except BaseException:
+                try:
+                    process.kill()
+                except ProcessLookupError:
+                    pass
+                except BaseException:
+                    failed = True
+        try:
+            process.wait(timeout=_PROCESS_STOP_TIMEOUT_SECONDS_V1)
+        except BaseException:
+            failed = True
+        try:
+            if process.poll() is None:
+                failed = True
+        except BaseException:
+            failed = True
+        return "Docker CLI process could not be force-reaped" if failed else None
+
+    @staticmethod
+    def _docker_issued_container_id_v1(
+        lease: _NativeRunLeaseV1,
+    ) -> _DockerIssuedContainerIdV1 | None:
+        """Admit only the exact ID written into this fresh private CID path."""
+
         try:
             descriptor = os.open(
-                cid_file,
+                lease.cid_file,
                 os.O_RDONLY
                 | getattr(os, "O_CLOEXEC", 0)
                 | getattr(os, "O_NOFOLLOW", 0),
@@ -2432,78 +2984,121 @@ class NativeDockerBuildBackendV1:
         except OSError:
             return None
         finally:
-            os.close(descriptor)
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
         if len(raw) == 65 and raw.endswith(b"\n"):
             raw = raw[:-1]
-        if len(raw) != 64 or any(
-            byte not in b"0123456789abcdef" for byte in raw
-        ):
+        if len(raw) != 64 or any(byte not in b"0123456789abcdef" for byte in raw):
             return None
-        return raw.decode("ascii")
+        return _DockerIssuedContainerIdV1(
+            raw.decode("ascii"),
+            _token=_DOCKER_ISSUED_CONTAINER_ID_TOKEN,
+        )
 
     def _observe_cleanup_command(
         self,
+        capability: DockerSupportedV1,
         command: tuple[str, ...],
     ) -> _DockerCommandObservationV1:
-        if self._probed_capability is None:
-            raise TypeError("Docker cleanup requires an observed capability")
-        policy = self._probed_capability.policy
+        if not self._in_owner_process_v1():
+            raise RuntimeError("native Docker cleanup belongs to its creator process")
+        if not _docker_supported_is_valid_v1(capability):
+            raise TypeError("Docker cleanup requires one observed capability")
+        policy = capability.policy
         return self._observe_command(
             command,
             stdout_limit=policy.probe_output_limit,
             stderr_limit=policy.probe_output_limit,
             timeout_ns=policy.probe_timeout_ns,
-            cid_file=None,
         )
 
-    def _cleanup_container(self, cid_file: Path, container_name: str) -> str | None:
-        if self._probed_capability is None:
-            raise TypeError("Docker cleanup requires an observed capability")
-        capability = self._probed_capability
-        policy = capability.policy
-        _absolute_path(cid_file, "cid_file")
-        _container_name(container_name, policy.container_name_prefix)
-        container_id = self._admitted_container_id(cid_file)
-        removal_coordinates = (
-            (container_id, container_name)
-            if container_id is not None
-            else (container_name,)
+    def _container_is_absent_v1(
+        self,
+        capability: DockerSupportedV1,
+        container_id: _DockerIssuedContainerIdV1,
+    ) -> bool:
+        observation = self._observe_cleanup_command(
+            capability,
+            _render_native_command_v1(
+                "cleanup_ls",
+                capability.command_coordinate,
+                {
+                    _NativeCommandSlotV1.CONTAINER_FILTER: (
+                        f"id={str(container_id)}",
+                    ),
+                },
+            ),
         )
+        return (
+            type(observation) is _DockerCommandExitedV1
+            and observation.returncode == 0
+            and observation.stdout == b""
+            and observation.stderr == b""
+        )
+
+    def _cleanup_container(
+        self,
+        lease: _NativeRunLeaseV1,
+        *,
+        spawn_may_have_started: bool = False,
+    ) -> str | None:
+        if not self._owns_run_lease_v1(lease):
+            raise TypeError("native run lease does not belong to this adapter")
+        if type(spawn_may_have_started) is not bool:
+            raise TypeError("native Docker spawn state must be bool")
+        if not self._lease_belongs_to_current_process_v1(lease):
+            return "native Docker run lease belongs to another process"
+        if not lease.launched and not spawn_may_have_started:
+            return None
+        capability = lease.capability
+        container_id = self._docker_issued_container_id_v1(lease)
+        if container_id is None:
+            return "Docker-issued cleanup ID is unavailable"
         try:
-            for coordinate in removal_coordinates:
-                self._observe_cleanup_command(
-                    _render_native_command_v1(
-                        "cleanup_rm",
-                        capability.command_coordinate,
-                        {
-                            _NativeCommandSlotV1.CONTAINER_COORDINATE: (
-                                coordinate,
-                            ),
-                        },
-                    )
+            inspection = self._observe_cleanup_command(
+                capability,
+                _render_native_command_v1(
+                    "cleanup_inspect",
+                    capability.command_coordinate,
+                    {
+                        _NativeCommandSlotV1.CONTAINER_COORDINATE: (
+                            str(container_id),
+                        ),
+                    },
+                ),
+            )
+            if (
+                type(inspection) is _DockerCommandExitedV1
+                and inspection.returncode != 0
+            ):
+                return (
+                    None
+                    if self._container_is_absent_v1(capability, container_id)
+                    else "Docker container absence could not be verified"
                 )
-            filters = [f"name=^/{container_name}$"]
-            if container_id is not None:
-                filters.append(f"id={container_id}")
-            for filter_value in filters:
-                observation = self._observe_cleanup_command(
-                    _render_native_command_v1(
-                        "cleanup_ls",
-                        capability.command_coordinate,
-                        {
-                            _NativeCommandSlotV1.CONTAINER_FILTER: (
-                                filter_value,
-                            ),
-                        },
-                    )
+            if (
+                type(inspection) is not _DockerCommandExitedV1
+                or inspection.returncode != 0
+                or inspection.stdout != container_id.encode("ascii") + b"\n"
+                or inspection.stderr
+            ):
+                return "Docker-issued cleanup ID did not resolve exactly"
+            self._observe_cleanup_command(
+                capability,
+                _render_native_command_v1(
+                    "cleanup_rm",
+                    capability.command_coordinate,
+                    {
+                        _NativeCommandSlotV1.CONTAINER_COORDINATE: (
+                            str(container_id),
+                        ),
+                    },
                 )
-                if (
-                    type(observation) is not _DockerCommandExitedV1
-                    or observation.returncode != 0
-                    or observation.stdout
-                    or observation.stderr
-                ):
-                    return "Docker container absence could not be verified"
+            )
+            if not self._container_is_absent_v1(capability, container_id):
+                return "Docker container absence could not be verified"
         except Exception:
             return "Docker container cleanup observer raised"
         return None
@@ -2520,9 +3115,7 @@ class BuildFailureReasonV1(StrEnum):
     INVALID_OUTPUT = "invalid_output"
 
 
-BuildAttemptObservationV1: TypeAlias = (
-    DockerBuildProcessObservationV1 | BuildCleanupFailureV1
-)
+BuildAttemptObservationV1: TypeAlias = DockerBuildProcessObservationV1
 
 
 class BuildSessionV1(tuple):
@@ -2736,13 +3329,6 @@ class BuildRejectedV1(tuple):
             owned_completed.append(canonical)
         if process is None:
             owned_process: BuildAttemptObservationV1 | None = None
-        elif type(process) is BuildCleanupFailureV1:
-            owned_process = _canonical_build_cleanup_failure_v1(
-                process,
-                session.input_value,
-                session.max_output_bytes,
-                session.policy.stderr_limit,
-            )
         else:
             owned_process = _canonical_process_observation_v1(
                 process,
@@ -2753,10 +3339,7 @@ class BuildRejectedV1(tuple):
         expected_process_types: dict[BuildFailureReasonV1, tuple[type, ...]] = {
             BuildFailureReasonV1.CONTRACT_VIOLATION: (),
             BuildFailureReasonV1.PROCESS_FAILED: (DockerBuildExitedV1,),
-            BuildFailureReasonV1.CLEANUP_FAILED: (
-                DockerBuildCleanupFailureV1,
-                BuildCleanupFailureV1,
-            ),
+            BuildFailureReasonV1.CLEANUP_FAILED: (DockerBuildCleanupFailureV1,),
             BuildFailureReasonV1.INPUT_TRANSFER_FAILED: (
                 DockerBuildInputRejectedV1,
             ),
@@ -2854,39 +3437,82 @@ class ControlledBuildTransportV1:
             raise TypeError("policy must be DockerBuildPolicyV1")
         self._policy = DockerBuildPolicyV1(*tuple(policy))
         self._backend = backend
+        # Fork copies Python object state and may copy a locked mutex.  This
+        # controller's capability is therefore valid only in its creator;
+        # every public operation checks PID before it can touch that mutex.
+        self._owner_pid = os.getpid()
         self._probed_capability: DockerSupportedV1 | None = None
         self._consumed = False
+        # Probe result and its one-shot BUILD right are one causal state.  A
+        # lock makes the state transition indivisible across reentrant or
+        # concurrent callers without holding it during caller/backend IO.
+        self._lease_lock = threading.Lock()
+        self._probe_in_flight = False
+
+    def _in_owner_process_v1(self) -> bool:
+        return os.getpid() == self._owner_pid
 
     def probe(self) -> DockerCapabilityReportV1:
-        if self._consumed or self._probed_capability is not None:
+        if not self._in_owner_process_v1():
             return DockerUnsupportedV1(
                 DockerBlockerReasonV1.BACKEND_CONTRACT,
-                "build transport capability is one-shot",
+                "build transport capability belongs to its creator process",
             )
+        with self._lease_lock:
+            if (
+                self._consumed
+                or self._probed_capability is not None
+                or self._probe_in_flight
+            ):
+                return DockerUnsupportedV1(
+                    DockerBlockerReasonV1.BACKEND_CONTRACT,
+                    "build transport capability is one-shot",
+                )
+            self._probe_in_flight = True
+        outcome: DockerCapabilityReportV1 | None = None
         try:
             report = self._backend.probe()
         except Exception:
-            return DockerUnsupportedV1(
+            outcome: DockerCapabilityReportV1 = DockerUnsupportedV1(
                 DockerBlockerReasonV1.BACKEND_CONTRACT,
                 "Docker capability probe raised",
             )
-        if type(report) is DockerUnsupportedV1:
-            if _docker_unsupported_is_valid_v1(report):
-                return DockerUnsupportedV1(*tuple(report))
-            return DockerUnsupportedV1(
-                DockerBlockerReasonV1.BACKEND_CONTRACT,
-                "Docker capability rejection is not canonical",
-            )
-        if (
-            not _docker_supported_is_valid_v1(report)
-            or report.policy != self._policy
-        ):
-            return DockerUnsupportedV1(
-                DockerBlockerReasonV1.BACKEND_CONTRACT,
-                "Docker capability report does not match build policy",
-            )
-        self._probed_capability = report
-        return report
+        else:
+            if type(report) is DockerUnsupportedV1:
+                if _docker_unsupported_is_valid_v1(report):
+                    outcome = DockerUnsupportedV1(*tuple(report))
+                else:
+                    outcome = DockerUnsupportedV1(
+                        DockerBlockerReasonV1.BACKEND_CONTRACT,
+                        "Docker capability rejection is not canonical",
+                    )
+            elif (
+                not _docker_supported_is_valid_v1(report)
+                or report.policy != self._policy
+            ):
+                outcome = DockerUnsupportedV1(
+                    DockerBlockerReasonV1.BACKEND_CONTRACT,
+                    "Docker capability report does not match build policy",
+                )
+            else:
+                outcome = report
+        finally:
+            # BaseException must not permanently leave this controller in the
+            # transient PROBING state.  It still propagates to the caller; the
+            # cleanup only revokes that incomplete external observation.
+            if not self._in_owner_process_v1():
+                outcome = DockerUnsupportedV1(
+                    DockerBlockerReasonV1.BACKEND_CONTRACT,
+                    "build transport capability belongs to its creator process",
+                )
+            else:
+                with self._lease_lock:
+                    self._probe_in_flight = False
+                    if type(outcome) is DockerSupportedV1:
+                        self._probed_capability = outcome
+        if outcome is None:
+            raise RuntimeError("probe outcome was not produced")
+        return outcome
 
     def build(
         self,
@@ -2897,16 +3523,12 @@ class ControlledBuildTransportV1:
         input_admission: Callable[[input.SealedInputV1], bool],
         output_admission: Callable[[bytes], bool],
     ) -> BuildTransportResultV1:
-        if (
-            self._consumed
-            or capability is not self._probed_capability
-            or not _docker_supported_is_valid_v1(capability)
-            or capability.policy != self._policy
-        ):
+        if not self._in_owner_process_v1():
             return BuildRejectedV1(1, BuildFailureReasonV1.CONTRACT_VIOLATION)
-        self._consumed = True
         if (
-            type(max_output_bytes) is not int
+            not _docker_supported_is_valid_v1(capability)
+            or capability.policy != self._policy
+            or type(max_output_bytes) is not int
             or max_output_bytes <= 0
             or max_output_bytes > capability.policy.stdout_limit
             or not callable(input_admission)
@@ -2914,16 +3536,49 @@ class ControlledBuildTransportV1:
             or not input.sealed_input_is_intact_v1(input_value)
         ):
             return BuildRejectedV1(1, BuildFailureReasonV1.CONTRACT_VIOLATION)
-        session = _build_session_v1(
-            capability,
-            input_value,
-            max_output_bytes,
-        )
+        if not self._in_owner_process_v1():
+            return BuildRejectedV1(1, BuildFailureReasonV1.CONTRACT_VIOLATION)
+        with self._lease_lock:
+            if (
+                self._consumed
+                or capability is not self._probed_capability
+                or not _docker_supported_is_valid_v1(capability)
+                or capability.policy != self._policy
+            ):
+                return BuildRejectedV1(1, BuildFailureReasonV1.CONTRACT_VIOLATION)
+        # A rejected declaration has not reached an owned execution attempt,
+        # so it must not burn the lease. Recheck after claim below because a
+        # callback is external and may be reentrant or mutate hostile input.
+        if not self._admitted(input_admission, input_value):
+            return BuildRejectedV1(1, BuildFailureReasonV1.CONTRACT_VIOLATION)
+        if not self._in_owner_process_v1():
+            return BuildRejectedV1(1, BuildFailureReasonV1.CONTRACT_VIOLATION)
+        with self._lease_lock:
+            if (
+                self._consumed
+                or capability is not self._probed_capability
+                or not _docker_supported_is_valid_v1(capability)
+                or capability.policy != self._policy
+            ):
+                return BuildRejectedV1(1, BuildFailureReasonV1.CONTRACT_VIOLATION)
+            self._consumed = True
+        if not input.sealed_input_is_intact_v1(input_value):
+            return BuildRejectedV1(1, BuildFailureReasonV1.CONTRACT_VIOLATION)
+        try:
+            session = _build_session_v1(
+                capability,
+                input_value,
+                max_output_bytes,
+            )
+        except Exception:
+            return BuildRejectedV1(1, BuildFailureReasonV1.CONTRACT_VIOLATION)
         completed: list[DockerBuildExitedV1] = []
         for attempt in (1, 2):
             if (
-                not input.sealed_input_is_intact_v1(input_value)
+                not self._in_owner_process_v1()
+                or not input.sealed_input_is_intact_v1(input_value)
                 or not self._admitted(input_admission, input_value)
+                or not self._in_owner_process_v1()
             ):
                 return BuildRejectedV1(
                     attempt,
@@ -2937,6 +3592,13 @@ class ControlledBuildTransportV1:
                 output_admission,
                 tuple(completed),
             )
+            if not self._in_owner_process_v1():
+                return BuildRejectedV1(
+                    attempt,
+                    BuildFailureReasonV1.CONTRACT_VIOLATION,
+                    session=session,
+                    completed_processes=tuple(completed),
+                )
             if type(built) is BuildRejectedV1:
                 return built
             completed.append(built)
@@ -2975,40 +3637,14 @@ class ControlledBuildTransportV1:
             completed_processes=completed_processes,
         )
         try:
-            temporary_root = tempfile.TemporaryDirectory(
-                prefix=f"{session.policy.container_name_prefix}{attempt}-"
-            )
-        except Exception:
-            return contract_rejection
-        current_process: DockerBuildProcessObservationV1 | None = None
-        try:
-            result, current_process = self._observe_build_attempt_v1(
+            return self._observe_build_attempt_v1(
                 attempt,
                 session,
                 output_admission,
                 completed_processes,
-                Path(temporary_root.name).resolve(),
             )
         except Exception:
-            result = contract_rejection
-        try:
-            temporary_root.cleanup()
-        except Exception:
-            try:
-                cleanup = _build_cleanup_failure_v1(
-                    current_process,
-                    "temporary build root cleanup failed",
-                )
-                return BuildRejectedV1(
-                    attempt,
-                    BuildFailureReasonV1.CLEANUP_FAILED,
-                    cleanup,
-                    session=session,
-                    completed_processes=completed_processes,
-                )
-            except Exception:
-                return contract_rejection
-        return result
+            return contract_rejection
 
     def _observe_build_attempt_v1(
         self,
@@ -3016,11 +3652,7 @@ class ControlledBuildTransportV1:
         session: BuildSessionV1,
         output_admission: Callable[[bytes], bool],
         completed_processes: tuple[DockerBuildExitedV1, ...],
-        root: Path,
-    ) -> tuple[
-        DockerBuildExitedV1 | BuildRejectedV1,
-        DockerBuildProcessObservationV1 | None,
-    ]:
+    ) -> DockerBuildExitedV1 | BuildRejectedV1:
         contract_rejection = BuildRejectedV1(
             attempt,
             BuildFailureReasonV1.CONTRACT_VIOLATION,
@@ -3032,16 +3664,13 @@ class ControlledBuildTransportV1:
             session.capability,
             session.input_value,
             session.max_output_bytes,
-            root / "container.cid",
-            session.policy.container_name_prefix
-            + hashlib.sha256(
-                os.fsencode(root) + bytes((attempt,))
-            ).hexdigest(),
         )
         try:
             observed = self._backend.run_build(request)
         except Exception:
-            return contract_rejection, None
+            return contract_rejection
+        if not self._in_owner_process_v1():
+            return contract_rejection
         try:
             process = _canonical_process_observation_v1(
                 observed,
@@ -3050,7 +3679,7 @@ class ControlledBuildTransportV1:
                 session.policy.stderr_limit,
             )
         except TypeError:
-            return contract_rejection, None
+            return contract_rejection
         reason_by_type: dict[type, BuildFailureReasonV1] = {
             DockerBuildCleanupFailureV1: BuildFailureReasonV1.CLEANUP_FAILED,
             DockerBuildInputRejectedV1: BuildFailureReasonV1.INPUT_TRANSFER_FAILED,
@@ -3060,35 +3689,29 @@ class ControlledBuildTransportV1:
         }
         failure_reason = reason_by_type.get(type(process))
         if failure_reason is not None:
-            return (
-                BuildRejectedV1(
-                    attempt,
-                    failure_reason,
-                    process,
-                    session=session,
-                    completed_processes=completed_processes,
-                ),
+            return BuildRejectedV1(
+                attempt,
+                failure_reason,
                 process,
+                session=session,
+                completed_processes=completed_processes,
             )
         if type(process) is not DockerBuildExitedV1:
-            return contract_rejection, None
+            return contract_rejection
         if not docker_build_exited_is_valid_v1(
             process,
             session.input_value,
             session.max_output_bytes,
             session.policy.stderr_limit,
         ):
-            return contract_rejection, None
+            return contract_rejection
         if process.returncode != 0:
-            return (
-                BuildRejectedV1(
-                    attempt,
-                    BuildFailureReasonV1.PROCESS_FAILED,
-                    process,
-                    session=session,
-                    completed_processes=completed_processes,
-                ),
+            return BuildRejectedV1(
+                attempt,
+                BuildFailureReasonV1.PROCESS_FAILED,
                 process,
+                session=session,
+                completed_processes=completed_processes,
             )
         transfer = process.input_transfer
         if (
@@ -3099,16 +3722,15 @@ class ControlledBuildTransportV1:
             or transfer.written_length != session.input_value.length
             or transfer.written_sha256 != session.input_value.sha256
         ):
-            return contract_rejection, None
+            return contract_rejection
         if not self._admitted(output_admission, process.stdout):
-            return (
-                BuildRejectedV1(
-                    attempt,
-                    BuildFailureReasonV1.INVALID_OUTPUT,
-                    process,
-                    session=session,
-                    completed_processes=completed_processes,
-                ),
+            return BuildRejectedV1(
+                attempt,
+                BuildFailureReasonV1.INVALID_OUTPUT,
                 process,
+                session=session,
+                completed_processes=completed_processes,
             )
-        return process, process
+        if not self._in_owner_process_v1():
+            return contract_rejection
+        return process

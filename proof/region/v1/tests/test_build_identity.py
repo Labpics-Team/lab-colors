@@ -7,6 +7,7 @@ import hashlib
 import inspect
 import json
 import os
+import subprocess
 import sys
 import unittest
 from pathlib import Path
@@ -24,7 +25,6 @@ _POLICY_FIELDS_V1 = (
     "image_reference",
     "platform",
     "hostname",
-    "container_name_prefix",
     "bootstrap",
     "bootstrap_argv0",
     "tmpfs_specs",
@@ -83,8 +83,6 @@ _NATIVE_COMMAND_TEMPLATES_V1 = (
             _literal("ALL"),
             _literal("--security-opt"),
             _literal("no-new-privileges:true"),
-            _literal("--name"),
-            _slot("container_name"),
             _literal("--hostname"),
             _slot("hostname"),
             _literal("--user"),
@@ -121,6 +119,17 @@ _NATIVE_COMMAND_TEMPLATES_V1 = (
         ),
     ),
     (
+        "cleanup_inspect",
+        (
+            _slot("cli_path"),
+            _literal("container"),
+            _literal("inspect"),
+            _literal("--format"),
+            _literal("{{.Id}}"),
+            _slot("container_coordinate"),
+        ),
+    ),
+    (
         "cleanup_ls",
         (
             _slot("cli_path"),
@@ -134,6 +143,24 @@ _NATIVE_COMMAND_TEMPLATES_V1 = (
         ),
     ),
 )
+
+_NATIVE_PROCESS_ENVIRONMENT_V1 = (
+    ("DOCKER_CONFIG", "/nonexistent"),
+    ("HOME", "/nonexistent"),
+    ("LANG", "C"),
+    ("LC_ALL", "C"),
+    ("PATH", "/usr/bin:/bin"),
+    ("TZ", "UTC"),
+)
+_NATIVE_PROCESS_CWD_V1 = "/"
+_NATIVE_PROCESS_UMASK_V1 = 0o077
+_NATIVE_PROCESS_CLOSE_FDS_V1 = True
+_NATIVE_PROCESS_RESTORE_SIGNALS_V1 = True
+_NATIVE_PROCESS_START_NEW_SESSION_V1 = True
+_NATIVE_PROCESS_STDIN_WITH_INPUT_V1 = "pipe"
+_NATIVE_PROCESS_STDIN_WITHOUT_INPUT_V1 = "devnull"
+_NATIVE_PROCESS_STDOUT_V1 = "pipe"
+_NATIVE_PROCESS_STDERR_V1 = "pipe"
 
 
 def _blob(value: bytes) -> bytes:
@@ -159,7 +186,6 @@ def _policy_chunks(coordinates: dict[str, object]) -> tuple[bytes, ...]:
         coordinates["image_reference"].encode("utf-8"),
         coordinates["platform"].encode("utf-8"),
         coordinates["hostname"].encode("utf-8"),
-        coordinates["container_name_prefix"].encode("utf-8"),
         coordinates["bootstrap"].encode("utf-8"),
         coordinates["bootstrap_argv0"].encode("utf-8"),
         len(tmpfs_specs).to_bytes(4, "big"),
@@ -186,6 +212,31 @@ def _expected_command_contract_identity() -> bytes:
         chunks.extend((name.encode("ascii"), len(tokens).to_bytes(4, "big")))
         for tag, value in tokens:
             chunks.extend((tag.encode("ascii"), value.encode("utf-8")))
+    chunks.extend(
+        (
+            b"native-process-context.v1",
+            len(_NATIVE_PROCESS_ENVIRONMENT_V1).to_bytes(4, "big"),
+            *(
+                item
+                for key, value in _NATIVE_PROCESS_ENVIRONMENT_V1
+                for item in (key.encode("ascii"), value.encode("utf-8"))
+            ),
+            _NATIVE_PROCESS_CWD_V1.encode("ascii"),
+            _NATIVE_PROCESS_UMASK_V1.to_bytes(4, "big"),
+            bytes((_NATIVE_PROCESS_CLOSE_FDS_V1,)),
+            bytes((_NATIVE_PROCESS_RESTORE_SIGNALS_V1,)),
+            bytes((_NATIVE_PROCESS_START_NEW_SESSION_V1,)),
+            b"native-stdio-topology.v1",
+            b"stdin-with-input",
+            _NATIVE_PROCESS_STDIN_WITH_INPUT_V1.encode("ascii"),
+            b"stdin-without-input",
+            _NATIVE_PROCESS_STDIN_WITHOUT_INPUT_V1.encode("ascii"),
+            b"stdout",
+            _NATIVE_PROCESS_STDOUT_V1.encode("ascii"),
+            b"stderr",
+            _NATIVE_PROCESS_STDERR_V1.encode("ascii"),
+        )
+    )
     return _identity(
         b"labcolors.proof-region.native-command-contract.v1\0",
         tuple(chunks),
@@ -244,7 +295,6 @@ def _policy(**changes: object) -> object:
         ),
         "platform": "linux/amd64",
         "hostname": "lc-build",
-        "container_name_prefix": "lc-build-",
         "bootstrap": "set -eu\ncat",
         "bootstrap_argv0": "labcolors-build-v1",
         "tmpfs_specs": (
@@ -341,8 +391,6 @@ class BuildIdentitySurfaceTests(unittest.TestCase):
                 "capability",
                 "input_bundle",
                 "max_output_bytes",
-                "cid_file",
-                "container_name",
             ),
         )
         self.assertFalse(hasattr(transport, "docker_report_matches_policy_v1"))
@@ -357,8 +405,6 @@ class BuildIdentitySurfaceTests(unittest.TestCase):
             capability,
             _sealed_input(),
             64,
-            Path("/tmp/lab-colors-identity.cid"),
-            capability.policy.container_name_prefix + "identity",
         )
         for legacy in (
             "image_reference",
@@ -368,6 +414,8 @@ class BuildIdentitySurfaceTests(unittest.TestCase):
             with self.subTest(legacy_capability_property=legacy):
                 self.assertFalse(hasattr(capability, legacy))
         self.assertFalse(hasattr(request, "policy"))
+        self.assertFalse(hasattr(request, "cid_file"))
+        self.assertFalse(hasattr(request, "container_name"))
         self.assertIs(request.capability, capability)
 
         with self.assertRaises(TypeError):
@@ -378,7 +426,7 @@ class BuildIdentitySurfaceTests(unittest.TestCase):
                 capability.host_user,
             )
 
-    def test_policy_identity_binds_all_thirteen_coordinates(self) -> None:
+    def test_policy_identity_binds_all_twelve_coordinates(self) -> None:
         policy = _policy()
         coordinates = _policy_coordinates(policy)
         identity = transport.transport_policy_identity_v1(policy)
@@ -402,7 +450,6 @@ class BuildIdentitySurfaceTests(unittest.TestCase):
             ),
             "platform": "linux/arm64",
             "hostname": "lc-build-alt",
-            "container_name_prefix": "lc-alt-",
             "bootstrap": "set -eu\nprintf changed",
             "bootstrap_argv0": "labcolors-build-v1-alt",
             "tmpfs_specs": coordinates["tmpfs_specs"] + ("/run:rw,size=4096",),
@@ -596,6 +643,62 @@ class BuildCapabilityIdentityTests(unittest.TestCase):
 
 
 class NativeCommandAndRequestTests(unittest.TestCase):
+    def test_native_process_context_is_one_identity_bound_launch_renderer(self) -> None:
+        expected_base = {
+            "stdout": subprocess.PIPE,
+            "stderr": subprocess.PIPE,
+            "cwd": _NATIVE_PROCESS_CWD_V1,
+            "env": dict(_NATIVE_PROCESS_ENVIRONMENT_V1),
+            "close_fds": _NATIVE_PROCESS_CLOSE_FDS_V1,
+            "restore_signals": _NATIVE_PROCESS_RESTORE_SIGNALS_V1,
+            "start_new_session": _NATIVE_PROCESS_START_NEW_SESSION_V1,
+            "umask": _NATIVE_PROCESS_UMASK_V1,
+        }
+        context = transport._NATIVE_PROCESS_CONTEXT_V1
+        for receives_stdin, stdin in (
+            (False, subprocess.DEVNULL),
+            (True, subprocess.PIPE),
+        ):
+            with self.subTest(receives_stdin=receives_stdin):
+                expected = {"stdin": stdin, **expected_base}
+                first = context.popen_kwargs_v1(receives_stdin)
+                second = context.popen_kwargs_v1(receives_stdin)
+                self.assertEqual(first, expected)
+                self.assertEqual(second, expected)
+                self.assertIsNot(first, second)
+                self.assertIsNot(first["env"], second["env"])
+
+        backend = transport.NativeDockerBuildBackendV1(
+            Path("/usr/bin/true"),
+            _policy(),
+            platform_name="linux",
+            machine_name="x86_64",
+            host_user=(501, 20),
+        )
+        with mock.patch.object(
+            transport.subprocess,
+            "Popen",
+            side_effect=OSError("do not launch in identity test"),
+        ) as spawn:
+            for receives_stdin, stdin in (
+                (False, subprocess.DEVNULL),
+                (True, subprocess.PIPE),
+            ):
+                with self.subTest(receives_stdin=receives_stdin):
+                    result = backend._observe_command(
+                        ("/usr/bin/true",),
+                        stdout_limit=64,
+                        stderr_limit=64,
+                        timeout_ns=1_000_000_000,
+                        input_bundle=_sealed_input() if receives_stdin else None,
+                    )
+                    self.assertIs(
+                        type(result),
+                        transport.DockerBuildObserverFailureV1,
+                    )
+                    expected = {"stdin": stdin, **expected_base}
+                    self.assertEqual(spawn.call_args.kwargs, expected)
+
     def test_native_backend_requires_its_exact_probe_lease(self) -> None:
         policy = _policy()
         backend = transport.NativeDockerBuildBackendV1(
@@ -611,11 +714,9 @@ class NativeCommandAndRequestTests(unittest.TestCase):
             unobserved,
             _sealed_input(),
             64,
-            Path("/tmp/lab-colors-identity.cid"),
-            policy.container_name_prefix + "identity",
         )
         with self.assertRaises(TypeError):
-            backend.command_for(request)
+            backend._bound_request_capability_v1(request)
 
         server_stdout = b'{"Version":"identity-test"}\n'
         image_stdout = json.dumps(
@@ -644,13 +745,11 @@ class NativeCommandAndRequestTests(unittest.TestCase):
             equal_but_foreign,
             _sealed_input(),
             64,
-            Path("/tmp/lab-colors-identity.cid"),
-            policy.container_name_prefix + "identity",
         )
         with self.assertRaises(TypeError):
-            backend.command_for(cloned_request)
+            backend._bound_request_capability_v1(cloned_request)
 
-    def test_command_for_expands_the_versioned_template_to_exact_argv(self) -> None:
+    def test_native_adapter_expands_the_versioned_template_to_exact_argv(self) -> None:
         policy = _policy()
         docker_path = Path("/usr/bin/true")
         backend = transport.NativeDockerBuildBackendV1(
@@ -684,73 +783,71 @@ class NativeCommandAndRequestTests(unittest.TestCase):
         self.assertIs(type(capability), transport.DockerSupportedV1)
 
         input_bundle = _sealed_input()
-        cid_file = Path("/tmp/lab-colors-identity.cid")
-        container_name = policy.container_name_prefix + "identity"
         request = transport.DockerBuildRequestV1(
             1,
             capability,
             input_bundle,
             64,
-            cid_file,
-            container_name,
         )
-        command = backend.command_for(request)
-        expected = (
-            str(docker_path),
-            "run",
-            "--rm",
-            "--interactive",
-            "--pull",
-            "never",
-            "--platform",
-            policy.platform,
-            "--network",
-            "none",
-            "--read-only",
-            "--tmpfs",
-            policy.tmpfs_specs[0],
-            "--tmpfs",
-            policy.tmpfs_specs[1],
-            "--cap-drop",
-            "ALL",
-            "--security-opt",
-            "no-new-privileges:true",
-            "--name",
-            container_name,
-            "--hostname",
-            policy.hostname,
-            "--user",
-            "501:20",
-            "--workdir",
-            "/",
-            "--cidfile",
-            str(cid_file),
-            "--entrypoint",
-            "/usr/bin/env",
-            policy.image_reference,
-            "-i",
-            "PATH=/usr/local/bin:/usr/bin:/bin",
-            "LC_ALL=C",
-            "LANG=C",
-            "TZ=UTC",
-            "HOME=/nonexistent",
-            "/bin/sh",
-            "-c",
-            policy.bootstrap,
-            policy.bootstrap_argv0,
-            str(input_bundle.length),
-            input_bundle.sha256.hex(),
-        )
-        self.assertEqual(command, expected)
-        self.assertEqual(command.count("--tmpfs"), len(policy.tmpfs_specs))
-        self.assertLess(
-            command.index(policy.tmpfs_specs[0]),
-            command.index(policy.tmpfs_specs[1]),
-        )
-        self.assertEqual(
-            transport.native_command_contract_identity_v1(),
-            _expected_command_contract_identity(),
-        )
+        lease = backend._next_run_lease_v1(capability)
+        try:
+            command = backend._command_for_v1(request, lease)
+            expected = (
+                str(docker_path),
+                "run",
+                "--rm",
+                "--interactive",
+                "--pull",
+                "never",
+                "--platform",
+                policy.platform,
+                "--network",
+                "none",
+                "--read-only",
+                "--tmpfs",
+                policy.tmpfs_specs[0],
+                "--tmpfs",
+                policy.tmpfs_specs[1],
+                "--cap-drop",
+                "ALL",
+                "--security-opt",
+                "no-new-privileges:true",
+                "--hostname",
+                policy.hostname,
+                "--user",
+                "501:20",
+                "--workdir",
+                "/",
+                "--cidfile",
+                str(lease.cid_file),
+                "--entrypoint",
+                "/usr/bin/env",
+                policy.image_reference,
+                "-i",
+                "PATH=/usr/local/bin:/usr/bin:/bin",
+                "LC_ALL=C",
+                "LANG=C",
+                "TZ=UTC",
+                "HOME=/nonexistent",
+                "/bin/sh",
+                "-c",
+                policy.bootstrap,
+                policy.bootstrap_argv0,
+                str(input_bundle.length),
+                input_bundle.sha256.hex(),
+            )
+            self.assertEqual(command, expected)
+            self.assertEqual(command.count("--tmpfs"), len(policy.tmpfs_specs))
+            self.assertLess(
+                command.index(policy.tmpfs_specs[0]),
+                command.index(policy.tmpfs_specs[1]),
+            )
+            self.assertEqual(
+                transport.native_command_contract_identity_v1(),
+                _expected_command_contract_identity(),
+            )
+        finally:
+            backend._release_run_lease_v1(lease)
 
     def test_foreign_capability_is_rejected_before_backend_run(self) -> None:
         policy = _policy()
@@ -795,8 +892,6 @@ class NativeCommandAndRequestTests(unittest.TestCase):
             capability,
             _sealed_input(),
             64,
-            Path("/tmp/lab-colors-identity.cid"),
-            capability.policy.container_name_prefix + "identity",
         )
 
         self.assertIs(request.capability, capability)

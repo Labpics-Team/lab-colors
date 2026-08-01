@@ -15,7 +15,7 @@ SHARED_TEST_DIRECTORY = TEST_DIRECTORY.parents[1] / "tests"
 REPO = Path(__file__).resolve().parents[5]
 sys.path.insert(0, str(REPO))
 EXPECTED_TEST_INVENTORY_SHA256 = (
-    "383672bd1ac2a2d472fdba33d3ec4c770a897ecd13192ec41e7c12dc1e563219"
+    "4853e06c6e8c1864bc65e0b4c0cd9cdbe0881e0d5907daecb6c8a9fea42f3643"
 )
 _EVALUATOR_REASON = "set LABCOLORS_ARB_EVALUATOR to the controlled C17 binary"
 EXPECTED_SKIPS = frozenset(

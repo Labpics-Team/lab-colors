@@ -249,15 +249,32 @@ fixture-specific cap.
 
 1. transport policy identity связывает все поля точной policy;
 2. native command contract identity связывает один типизированный grammar для
-   probe, build и cleanup; фактический argv строится только этим grammar;
+   probe, build и cleanup и один immutable child-launch context
+   (environment, cwd, umask, stdio topology, FD и session behavior); фактический argv и
+   Popen kwargs строятся только этими значениями;
 3. daemon observation identity связывает только два raw probe stdout;
 4. Docker capability identity связывает policy, command contract и exact CLI
    path, daemon observation и наблюдённые host uid/gid.
 
-`BuildSessionV1` и каждый `DockerBuildRequestV1` сохраняют ту же capability,
-те же input bytes и output cap. Чужая либо не полученная текущим probe
-capability отвергается до process spawn; ambient path/user повторно не
-считываются. `TwoBuildObservationV1` хранит обе успешные попытки и только
+`BuildSessionV1` и каждый `DockerBuildRequestV1` сохраняют только ту же
+capability, те же input bytes и output cap. Request не содержит host path,
+CID file или имя контейнера: native adapter сам создаёт свежий приватный CID
+path. Native cleanup поддерживается только в fresh one-job VM workflow Arb:
+другой субъект с тем же effective UID либо Docker-daemon authority там не
+сосуществует. Права `0700` закрывают лишь cross-UID pathname access и не
+аутентифицируют same-UID writer. В этой объявленной operational boundary для
+cleanup допускается только полный ID, который Docker записал в CID path; перед
+`rm --force <id>` adapter сверяет, что `docker container inspect` вернул тот же
+ID. Имя контейнера и fallback-координата в cleanup не участвуют. Вне этой
+границы CID path не является доказательством ownership. Чужая либо не
+полученная текущим probe capability отвергается до process spawn; ambient
+path/user повторно не считываются. Разрешение принадлежит создавшему process:
+fork и конкурентное повторное использование отвергаются до блокировки. После
+возврата Popen handle `BaseException` до повторного выброса исходного
+interruption запускает детерминированные попытки остановить и reap CLI, закрыть
+streams и очистить допущенный container. Во время самого Popen construction
+handle может ещё отсутствовать: тогда возможна только best-effort попытка CID
+cleanup, без ложного заявления о reap CLI. `TwoBuildObservationV1` хранит обе успешные попытки и только
 классифицирует их байты как identical или different, не называя пару
 универсальным доказательством воспроизводимости. При отказе сохраняется весь
 уже завершённый causal prefix. Transport не знает formula, ELF, comparator или

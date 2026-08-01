@@ -4,12 +4,15 @@
 from __future__ import annotations
 
 import ast
+import dis
+import gc
 import hashlib
 import importlib
 import os
+import select
 import subprocess
 import sys
-import tempfile
+import threading
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -34,10 +37,10 @@ from test_receipt import _execute  # noqa: E402
 # tests deliberately change this inventory and must update both values from the
 # gate's independent enumeration in the same slice.
 ARB_INVENTORY_SHA256_V1 = (
-    "383672bd1ac2a2d472fdba33d3ec4c770a897ecd13192ec41e7c12dc1e563219"
+    "4853e06c6e8c1864bc65e0b4c0cd9cdbe0881e0d5907daecb6c8a9fea42f3643"
 )
 ARB_ORDER_SHA256_V1 = (
-    "c020118a926070e36f14757f0b281ac05dc460b8affa03947f827baa73d5d172"
+    "82b8e00867bc0bed7bd4020f8d9b9531cd195f7c712ddff9a4d73ef7fc0484d5"
 )
 
 MOVED_INPUT_SURFACE_V1 = (
@@ -73,7 +76,6 @@ MOVED_TRANSPORT_SURFACE_V1 = (
     "CleanupResourceV1",
     "CleanupFailureRecordV1",
     "DockerBuildCleanupFailureV1",
-    "BuildCleanupFailureV1",
     "DockerBuildBackendV1",
     "NativeDockerBuildBackendV1",
     "ControlledBuildTransportV1",
@@ -176,6 +178,61 @@ class _ScriptedBuildBackend:
         return self._observations.pop(0)
 
 
+def _racing_build_transport(
+    transport: object,
+    *,
+    policy: object,
+    backend: object,
+) -> object:
+    """Force the former unlocked check→consume race without scheduler guesses."""
+
+    class TrackingLock:
+        def __init__(self) -> None:
+            self._lock = threading.Lock()
+            self._owner: int | None = None
+
+        def __enter__(self) -> TrackingLock:
+            self._lock.acquire()
+            self._owner = threading.get_ident()
+            return self
+
+        def __exit__(
+            self,
+            _exception_type: object,
+            _exception: object,
+            _traceback: object,
+        ) -> None:
+            self._owner = None
+            self._lock.release()
+
+        def held_by_current_thread(self) -> bool:
+            return self._owner == threading.get_ident()
+
+    class RacingController(transport.ControlledBuildTransportV1):
+        def __init__(self) -> None:
+            self._consume_barrier = threading.Barrier(2)
+            self._race_armed = False
+            super().__init__(policy=policy, backend=backend)
+            self._lease_lock = TrackingLock()
+
+        def arm_consume_race(self) -> None:
+            self._race_armed = True
+
+        def __getattribute__(self, name: str) -> object:
+            if (
+                name == "_consumed"
+                and object.__getattribute__(self, "_race_armed")
+                and not object.__getattribute__(
+                    self,
+                    "_lease_lock",
+                ).held_by_current_thread()
+            ):
+                object.__getattribute__(self, "_consume_barrier").wait(timeout=2)
+            return super().__getattribute__(name)
+
+    return RacingController()
+
+
 def _controlled_build(
     transport: object,
     policy: object,
@@ -211,8 +268,8 @@ class ExistingArbGateTests(unittest.TestCase):
             identifier.encode("utf-8") + b"\n" for identifier in identifiers
         )
 
-        self.assertEqual(len(identifiers), 160)
-        self.assertEqual(len(set(identifiers)), 160)
+        self.assertEqual(len(identifiers), 166)
+        self.assertEqual(len(set(identifiers)), 166)
         self.assertEqual(
             arb_gate.test_inventory_sha256_v1(arb_gate.full_suite_v1()),
             ARB_INVENTORY_SHA256_V1,
@@ -247,7 +304,7 @@ class ArbBuildIdentityCharacterizationTests(unittest.TestCase):
                 request.host_trust,
                 observed.docker_capability.policy,
             ).hex(),
-            "66af6f844dda8eae548eac026f277845ccde1842c14c39824c5108f027247f39",
+            "5ff9cac8af5fee7ffb05d18da33721842150dafe43edd6f0e356566c7be12144",
         )
         self.assertEqual(len(process_bytes), 196)
         self.assertEqual(
@@ -256,7 +313,7 @@ class ArbBuildIdentityCharacterizationTests(unittest.TestCase):
         )
         self.assertEqual(
             result.comparator.identity.hex(),
-            "e4e8e4dd47ddda5585531f67bfe3112f157a032cb728cd1c61766edf26de6c6c",
+            "965004e9a45d4ff724f2ca39043086adf29bf860efc9b47367f67473ba6c52ac",
         )
         self.assertEqual(
             result.evidence.source_identity.hex(),
@@ -264,19 +321,19 @@ class ArbBuildIdentityCharacterizationTests(unittest.TestCase):
         )
         self.assertEqual(
             result.evidence.build_identity.hex(),
-            "dfe01f51132d938be3f8a8fad32c91d99fc7b22d69c4c9f488c07f2d00806412",
+            "5200b47ecae538174dea9f9c67e487859af70f59dd77eb46ca870d337b866bf9",
         )
         self.assertEqual(
             result.evidence.run_identity.hex(),
-            "0033f6e70d0090ff2839d364cccaf1a3f5bf79eb2c857ce762b236cbbc730542",
+            "3036f9f4e49d0822d48447eaa08a0a2aaf052923e2f6cdb9362585dd044acc8e",
         )
         self.assertEqual(
             result.evidence.identity.hex(),
-            "80dd866e156d882a749a78b768cfc66838f92f6608baaf9ddfbf3f3a31870324",
+            "5a3041c6462401a919940d3a7ad1ed99039c7654d3d6b946901e44dd69c9dc53",
         )
         self.assertEqual(
             result.claim.identity.hex(),
-            "c0c200282fc3cd800bb0aa53a8e3c2d3fa2edf1a6350185aeff86f410ccef1bb",
+            "71d1e5d6580404cd8ff4fef677d7664ba18e4fc99cbacb0a942756d56d59eb25",
         )
 
 
@@ -341,11 +398,16 @@ class SharedBuildExtractionTests(unittest.TestCase):
             encoding="utf-8"
         )
         pipeline_source = (ARB / "pipeline.py").read_text(encoding="utf-8")
+        protocol_source = (PROOF / "PROTOCOL.md").read_text(encoding="utf-8")
         self.assertNotIn(
             "backend-contract rejection cannot retain authority",
             transport_source,
         )
         self.assertNotIn("invalid reproducible-build digests", pipeline_source)
+        self.assertIn("fresh one-job VM workflow Arb", protocol_source)
+        self.assertIn("same-UID writer", protocol_source)
+        self.assertIn("Popen construction", protocol_source)
+        self.assertNotIn("cleanup выполняет только по его точному имени", protocol_source)
 
     def test_arb_consumers_move_atomically_without_compatibility_reexports(self) -> None:
         build_input = importlib.import_module("build.input")
@@ -371,6 +433,20 @@ class SharedBuildExtractionTests(unittest.TestCase):
                 self.assertFalse(hasattr(arb_pipeline, name))
             with self.subTest(consumer=arb_receipt.__name__, removed=name):
                 self.assertFalse(hasattr(arb_receipt, name))
+
+    def test_arb_policy_reuses_generic_observer_ceiling_ssot(self) -> None:
+        transport = importlib.import_module("build.transport")
+        pipeline_source = (ARB / "pipeline.py").read_text(encoding="utf-8")
+        for name in (
+            "BUILD_STDOUT_LIMIT_V1",
+            "BUILD_STDERR_LIMIT_V1",
+            "BUILD_TIMEOUT_NS_V1",
+            "DOCKER_PROBE_OUTPUT_LIMIT_V1",
+            "DOCKER_PROBE_TIMEOUT_NS_V1",
+        ):
+            with self.subTest(name=name):
+                self.assertIs(getattr(pipeline, name), getattr(transport, name))
+                self.assertIn(f"build_transport.{name}", pipeline_source)
 
     def test_shared_input_and_policy_are_deeply_immutable_coordinates(self) -> None:
         build_input = importlib.import_module("build.input")
@@ -415,6 +491,248 @@ class SharedBuildExtractionTests(unittest.TestCase):
 
 
 class SharedBuildTransportTargetTests(unittest.TestCase):
+    def test_overlapping_probe_is_rejected_without_a_second_backend_probe(self) -> None:
+        transport = importlib.import_module("build.transport")
+        policy = pipeline.ARB_BUILD_TRANSPORT_POLICY_V1
+        capability = _docker_capability_fixture(policy)
+
+        class BlockingBackend:
+            def __init__(self) -> None:
+                self.entered = threading.Event()
+                self.release = threading.Event()
+                self.calls = 0
+
+            def probe(self) -> object:
+                self.calls += 1
+                self.entered.set()
+                self.release.wait(timeout=2)
+                return capability
+
+            def run_build(self, _request: object) -> object:
+                raise AssertionError("probe-only test reached build")
+
+        backend = BlockingBackend()
+        controller = transport.ControlledBuildTransportV1(
+            policy=policy,
+            backend=backend,
+        )
+        first_results: list[object] = []
+        second_results: list[object] = []
+        second_done = threading.Event()
+        first = threading.Thread(target=lambda: first_results.append(controller.probe()))
+
+        def second_probe() -> None:
+            try:
+                second_results.append(controller.probe())
+            finally:
+                second_done.set()
+
+        second = threading.Thread(target=second_probe)
+        first.start()
+        self.assertTrue(backend.entered.wait(timeout=1))
+        second.start()
+        try:
+            self.assertTrue(second_done.wait(timeout=1))
+        finally:
+            backend.release.set()
+        first.join(timeout=2)
+        second.join(timeout=2)
+
+        self.assertFalse(first.is_alive())
+        self.assertFalse(second.is_alive())
+        self.assertEqual(backend.calls, 1)
+        self.assertEqual(first_results, [capability])
+        self.assertEqual(len(second_results), 1)
+        self.assertIs(type(second_results[0]), transport.DockerUnsupportedV1)
+        self.assertEqual(
+            second_results[0].reason,
+            transport.DockerBlockerReasonV1.BACKEND_CONTRACT,
+        )
+
+    def test_one_probe_lease_cannot_start_two_concurrent_two_build_sessions(self) -> None:
+        transport = importlib.import_module("build.transport")
+        policy = pipeline.ARB_BUILD_TRANSPORT_POLICY_V1
+        input_value = _sealed_input()
+        capability = _docker_capability_fixture(policy)
+        backend = _ScriptedBuildBackend(
+            capability,
+            tuple(
+                _completed_process(transport, input_value, b"same executable")
+                for _ in range(4)
+            ),
+        )
+        controller = _racing_build_transport(
+            transport,
+            policy=policy,
+            backend=backend,
+        )
+        owned_capability = controller.probe()
+        controller.arm_consume_race()
+        start = threading.Barrier(3)
+        results: list[object] = []
+        failures: list[BaseException] = []
+
+        def build() -> None:
+            try:
+                start.wait(timeout=2)
+                results.append(
+                    controller.build(
+                        owned_capability,
+                        input_value,
+                        64,
+                        input_admission=lambda _value: True,
+                        output_admission=lambda _value: True,
+                    )
+                )
+            except BaseException as error:
+                failures.append(error)
+
+        workers = tuple(threading.Thread(target=build) for _ in range(2))
+        for worker in workers:
+            worker.start()
+        start.wait(timeout=2)
+        for worker in workers:
+            worker.join(timeout=3)
+            self.assertFalse(worker.is_alive())
+
+        self.assertEqual(failures, [])
+        self.assertEqual(len(results), 2)
+        self.assertEqual(
+            sum(type(result) is transport.TwoBuildObservationV1 for result in results),
+            1,
+        )
+        rejections = tuple(
+            result
+            for result in results
+            if type(result) is transport.BuildRejectedV1
+        )
+        self.assertEqual(len(rejections), 1)
+        self.assertEqual(
+            rejections[0].reason,
+            transport.BuildFailureReasonV1.CONTRACT_VIOLATION,
+        )
+        self.assertEqual(len(backend.requests), 2)
+
+    def test_rejected_preflight_preserves_the_unconsumed_build_lease(self) -> None:
+        transport = importlib.import_module("build.transport")
+        policy = pipeline.ARB_BUILD_TRANSPORT_POLICY_V1
+        input_value = _sealed_input()
+        capability = _docker_capability_fixture(policy)
+        backend = _ScriptedBuildBackend(
+            capability,
+            (
+                _completed_process(transport, input_value, b"same executable"),
+                _completed_process(transport, input_value, b"same executable"),
+            ),
+        )
+        controller = transport.ControlledBuildTransportV1(
+            policy=policy,
+            backend=backend,
+        )
+        owned_capability = controller.probe()
+
+        rejected = controller.build(
+            owned_capability,
+            input_value,
+            64,
+            input_admission=lambda _value: False,
+            output_admission=lambda _value: True,
+        )
+        self.assertIs(type(rejected), transport.BuildRejectedV1)
+        self.assertEqual(
+            rejected.reason,
+            transport.BuildFailureReasonV1.CONTRACT_VIOLATION,
+        )
+        self.assertEqual(backend.requests, [])
+
+        admitted = controller.build(
+            owned_capability,
+            input_value,
+            64,
+            input_admission=lambda _value: True,
+            output_admission=lambda _value: True,
+        )
+        self.assertIs(type(admitted), transport.TwoBuildObservationV1)
+        self.assertEqual(len(backend.requests), 2)
+
+    @unittest.skipUnless(hasattr(os, "fork"), "requires POSIX fork")
+    def test_forked_child_cannot_wait_on_or_duplicate_a_build_lease(self) -> None:
+        transport = importlib.import_module("build.transport")
+        policy = pipeline.ARB_BUILD_TRANSPORT_POLICY_V1
+        input_value = _sealed_input()
+        capability = _docker_capability_fixture(policy)
+        backend = _ScriptedBuildBackend(
+            capability,
+            (
+                _completed_process(transport, input_value, b"same executable"),
+                _completed_process(transport, input_value, b"same executable"),
+            ),
+        )
+        controller = transport.ControlledBuildTransportV1(
+            policy=policy,
+            backend=backend,
+        )
+        owned_capability = controller.probe()
+        read_fd, write_fd = os.pipe()
+        controller._lease_lock.acquire()
+        child_pid: int | None = None
+        child_reaped = False
+        try:
+            child_pid = os.fork()
+            if child_pid == 0:
+                os.close(read_fd)
+                try:
+                    child_result = controller.build(
+                        owned_capability,
+                        input_value,
+                        64,
+                        input_admission=lambda _value: True,
+                        output_admission=lambda _value: True,
+                    )
+                    os.write(
+                        write_fd,
+                        (
+                            f"{type(child_result).__name__}:"
+                            f"{len(backend.requests)}"
+                        ).encode("ascii"),
+                    )
+                finally:
+                    os.close(write_fd)
+                    os._exit(0)
+            os.close(write_fd)
+            ready, _write_ready, _errors = select.select([read_fd], [], [], 1)
+            self.assertEqual(ready, [read_fd])
+            child_message = os.read(read_fd, 128).decode("ascii")
+            _waited_pid, status = os.waitpid(child_pid, 0)
+            child_reaped = True
+        finally:
+            controller._lease_lock.release()
+            if child_pid is not None and not child_reaped:
+                try:
+                    os.kill(child_pid, 9)
+                except ProcessLookupError:
+                    pass
+                try:
+                    os.waitpid(child_pid, 0)
+                except ChildProcessError:
+                    pass
+            try:
+                os.close(read_fd)
+            except OSError:
+                pass
+
+        self.assertTrue(os.WIFEXITED(status))
+        self.assertEqual(child_message, "BuildRejectedV1:0")
+        parent_result = controller.build(
+            owned_capability,
+            input_value,
+            64,
+            input_admission=lambda _value: True,
+            output_admission=lambda _value: True,
+        )
+        self.assertIs(type(parent_result), transport.TwoBuildObservationV1)
+        self.assertEqual(len(backend.requests), 2)
+
     def test_public_build_contract_violations_are_typed_before_backend(self) -> None:
         build_input = importlib.import_module("build.input")
         transport = importlib.import_module("build.transport")
@@ -460,7 +778,6 @@ class SharedBuildTransportTargetTests(unittest.TestCase):
             "image_reference": shipped.image_reference,
             "platform": shipped.platform,
             "hostname": shipped.hostname,
-            "container_name_prefix": shipped.container_name_prefix,
             "bootstrap": shipped.bootstrap,
             "bootstrap_argv0": shipped.bootstrap_argv0,
             "tmpfs_specs": shipped.tmpfs_specs,
@@ -492,11 +809,18 @@ class SharedBuildTransportTargetTests(unittest.TestCase):
                 capability,
                 input_value,
                 64,
-                Path("/tmp/lab-colors-red-user.cid"),
-                policy.container_name_prefix + "red-user",
             )
             for capability in capabilities
         )
+        commands: list[tuple[str, ...]] = []
+
+        def observe(
+            command: tuple[str, ...],
+            **_kwargs: object,
+        ) -> object:
+            commands.append(command)
+            return _completed_process(transport, input_value, b"")
+
         with mock.patch.object(
             transport.os,
             "geteuid",
@@ -506,11 +830,26 @@ class SharedBuildTransportTargetTests(unittest.TestCase):
             "getegid",
             side_effect=AssertionError("command_for performed ambient gid IO"),
         ):
-            commands = tuple(
-                backend.command_for(request)
-                for backend, request in zip(backends, requests, strict=True)
-            )
-        self.assertEqual(commands[0], commands[1])
+            for backend, request in zip(backends, requests, strict=True):
+                with mock.patch.object(
+                    backend,
+                    "_observe_command",
+                    side_effect=observe,
+                ):
+                    self.assertIs(
+                        type(backend.run_build(request)),
+                        transport.DockerBuildExitedV1,
+                    )
+        self.assertEqual(len(commands), 2)
+
+        def without_native_cid_path(command: tuple[str, ...]) -> tuple[str, ...]:
+            index = command.index("--cidfile")
+            return command[: index + 1] + command[index + 2 :]
+
+        self.assertEqual(
+            without_native_cid_path(commands[0]),
+            without_native_cid_path(commands[1]),
+        )
         user_index = commands[0].index("--user")
         self.assertEqual(commands[0][user_index + 1], "501:20")
 
@@ -531,6 +870,79 @@ class SharedBuildTransportTargetTests(unittest.TestCase):
                 platform_name="linux",
                 machine_name="x86_64",
             )
+
+    def test_native_backend_defers_host_user_observation_to_supported_probe(self) -> None:
+        transport = importlib.import_module("build.transport")
+        policy = pipeline.ARB_BUILD_TRANSPORT_POLICY_V1
+
+        with mock.patch.object(
+            transport.os,
+            "geteuid",
+            side_effect=AttributeError("not available on this host"),
+        ), mock.patch.object(
+            transport.os,
+            "getegid",
+            side_effect=AttributeError("not available on this host"),
+        ):
+            unsupported_backend = transport.NativeDockerBuildBackendV1(
+                Path("/usr/bin/true"),
+                policy,
+                platform_name="windows",
+                machine_name="amd64",
+            )
+            unsupported = unsupported_backend.probe()
+
+        self.assertIs(type(unsupported), transport.DockerUnsupportedV1)
+        self.assertEqual(
+            unsupported.reason,
+            transport.DockerBlockerReasonV1.HOST_NOT_LINUX_AMD64,
+        )
+
+        supported_backend = transport.NativeDockerBuildBackendV1(
+            Path("/usr/bin/true"),
+            policy,
+            platform_name="linux",
+            machine_name="x86_64",
+        )
+        with mock.patch.object(
+            transport.os,
+            "geteuid",
+            side_effect=AttributeError("not available on this host"),
+        ):
+            unavailable = supported_backend.probe()
+
+        self.assertIs(type(unavailable), transport.DockerUnsupportedV1)
+        self.assertEqual(
+            unavailable.reason,
+            transport.DockerBlockerReasonV1.HOST_USER_UNAVAILABLE,
+        )
+
+    def test_native_probe_observes_unconfigured_host_user_each_time(self) -> None:
+        """Ambient uid/gid belong to a capability observation, never backend cache."""
+
+        transport = importlib.import_module("build.transport")
+        policy = pipeline.ARB_BUILD_TRANSPORT_POLICY_V1
+        backend = transport.NativeDockerBuildBackendV1(
+            Path("/usr/bin/true"),
+            policy,
+            platform_name="linux",
+            machine_name="x86_64",
+        )
+
+        with mock.patch.object(
+            transport.os,
+            "geteuid",
+            side_effect=(501, 502),
+        ), mock.patch.object(
+            transport.os,
+            "getegid",
+            side_effect=(20, 21),
+        ):
+            first = _probe_native_backend(backend, policy)
+            second = _probe_native_backend(backend, policy)
+
+        self.assertEqual(first.host_user, (501, 20))
+        self.assertEqual(second.host_user, (502, 21))
 
     def test_native_host_coordinates_are_exact_strings_and_oci_ports_are_ascii(self) -> None:
         transport = importlib.import_module("build.transport")
@@ -565,7 +977,6 @@ class SharedBuildTransportTargetTests(unittest.TestCase):
             ),
             "platform": policy.platform,
             "hostname": policy.hostname,
-            "container_name_prefix": policy.container_name_prefix,
             "bootstrap": policy.bootstrap,
             "bootstrap_argv0": policy.bootstrap_argv0,
             "tmpfs_specs": policy.tmpfs_specs,
@@ -643,7 +1054,6 @@ class SharedBuildTransportTargetTests(unittest.TestCase):
                     stdout_limit=64,
                     stderr_limit=64,
                     timeout_ns=1_000_000_000,
-                    cid_file=None,
                     input_bundle=input_value,
                 )
         finally:
@@ -685,15 +1095,15 @@ class SharedBuildTransportTargetTests(unittest.TestCase):
                 machine_name="x86_64",
             )
             spawned: list[subprocess.Popen[bytes]] = []
-            cleanup_calls: list[tuple[Path, str]] = []
+            cleanup_calls: list[object] = []
 
             def spawn(*args: object, **kwargs: object) -> subprocess.Popen[bytes]:
                 process = real_popen(*args, **kwargs)
                 spawned.append(process)
                 return process
 
-            def cleanup(cid_file: Path, container_name: str) -> None:
-                cleanup_calls.append((cid_file, container_name))
+            def cleanup(lease: object, **_kwargs: object) -> None:
+                cleanup_calls.append(lease)
                 return None
 
             def stop_raises(process: subprocess.Popen[bytes]) -> None:
@@ -719,7 +1129,11 @@ class SharedBuildTransportTargetTests(unittest.TestCase):
                 "-c",
                 "pass" if selector_failure else "import time; time.sleep(5)",
             )
-            with tempfile.TemporaryDirectory() as temporary, mock.patch.object(
+            lease = backend._next_run_lease_v1(
+                _docker_capability_fixture(pipeline.ARB_BUILD_TRANSPORT_POLICY_V1)
+            )
+            self.addCleanup(backend._release_run_lease_v1, lease)
+            with mock.patch.object(
                 transport.subprocess,
                 "Popen",
                 side_effect=spawn,
@@ -734,11 +1148,7 @@ class SharedBuildTransportTargetTests(unittest.TestCase):
                         stdout_limit=64,
                         stderr_limit=64,
                         timeout_ns=1 if not selector_failure else 1_000_000_000,
-                        cid_file=Path(temporary).resolve() / "container.cid",
-                        container_name=(
-                            pipeline.ARB_BUILD_TRANSPORT_POLICY_V1.container_name_prefix
-                            + ("selector-red" if selector_failure else "stop-red")
-                        ),
+                        lease=lease,
                     )
                 except Exception as error:
                     result = error
@@ -776,6 +1186,511 @@ class SharedBuildTransportTargetTests(unittest.TestCase):
         self.assertTrue(stop_closed)
         self.assertEqual(stop_cleanups, 1)
 
+    def test_base_exception_during_stop_still_reaps_streams_and_container(self) -> None:
+        transport = importlib.import_module("build.transport")
+        backend = transport.NativeDockerBuildBackendV1(
+            Path("/bin/true"),
+            pipeline.ARB_BUILD_TRANSPORT_POLICY_V1,
+            host_user=(501, 20),
+            platform_name="linux",
+            machine_name="x86_64",
+        )
+        real_popen = subprocess.Popen
+        spawned: list[subprocess.Popen[bytes]] = []
+        cleanup_calls: list[object] = []
+
+        def spawn(*args: object, **kwargs: object) -> subprocess.Popen[bytes]:
+            process = real_popen(*args, **kwargs)
+            spawned.append(process)
+            return process
+
+        def cleanup(lease: object, **_kwargs: object) -> None:
+            cleanup_calls.append(lease)
+
+        lease = backend._next_run_lease_v1(
+            _docker_capability_fixture(pipeline.ARB_BUILD_TRANSPORT_POLICY_V1)
+        )
+        self.addCleanup(backend._release_run_lease_v1, lease)
+
+        with mock.patch.object(
+            transport.subprocess,
+            "Popen",
+            side_effect=spawn,
+        ), mock.patch.object(
+            backend,
+            "_stop_process",
+            side_effect=KeyboardInterrupt("interrupt during stop"),
+        ), mock.patch.object(
+            backend,
+            "_cleanup_container",
+            side_effect=cleanup,
+        ):
+            with self.assertRaises(KeyboardInterrupt):
+                backend._observe_command(
+                    (sys.executable, "-c", "import time; time.sleep(5)"),
+                    stdout_limit=64,
+                    stderr_limit=64,
+                    timeout_ns=1,
+                    lease=lease,
+                )
+            process = spawned[0]
+            running_before_test_cleanup = process.poll() is None
+            streams_closed = bool(
+                process.stdout is not None
+                and process.stdout.closed
+                and process.stderr is not None
+                and process.stderr.closed
+            )
+            if running_before_test_cleanup:
+                process.kill()
+                process.wait(timeout=5)
+            for stream in (process.stdin, process.stdout, process.stderr):
+                if stream is not None and not stream.closed:
+                    stream.close()
+
+        self.assertFalse(running_before_test_cleanup)
+        self.assertTrue(streams_closed)
+        self.assertEqual(len(cleanup_calls), 1)
+
+    def test_interrupt_after_spawn_still_reaps_and_attempts_cid_cleanup(self) -> None:
+        """A post-spawn interruption cannot bypass the native finalizer."""
+
+        transport = importlib.import_module("build.transport")
+        backend = transport.NativeDockerBuildBackendV1(
+            Path("/bin/true"),
+            pipeline.ARB_BUILD_TRANSPORT_POLICY_V1,
+            host_user=(501, 20),
+            platform_name="linux",
+            machine_name="x86_64",
+        )
+        lease = backend._next_run_lease_v1(
+            _docker_capability_fixture(pipeline.ARB_BUILD_TRANSPORT_POLICY_V1)
+        )
+        self.addCleanup(backend._release_run_lease_v1, lease)
+        real_popen = subprocess.Popen
+        spawned: list[subprocess.Popen[bytes]] = []
+
+        def spawn(*args: object, **kwargs: object) -> subprocess.Popen[bytes]:
+            process = real_popen(*args, **kwargs)
+            spawned.append(process)
+            return process
+
+        with mock.patch.object(
+            transport.subprocess,
+            "Popen",
+            side_effect=spawn,
+        ), mock.patch.object(
+            backend,
+            "_mark_run_lease_launched_v1",
+            side_effect=KeyboardInterrupt("interrupt after spawn"),
+        ), mock.patch.object(
+            backend,
+            "_cleanup_container",
+            return_value=None,
+        ) as cleanup:
+            with self.assertRaisesRegex(KeyboardInterrupt, "after spawn"):
+                backend._observe_command(
+                    (sys.executable, "-c", "import time; time.sleep(5)"),
+                    stdout_limit=64,
+                    stderr_limit=64,
+                    timeout_ns=1,
+                    lease=lease,
+                )
+
+        process = spawned[0]
+        self.assertIsNotNone(process.poll())
+        cleanup.assert_called_once_with(lease, spawn_may_have_started=True)
+
+    def test_interrupt_during_post_spawn_state_initialization_reaps_and_cleans(self) -> None:
+        """No allocation between Popen and the finalizer may leak a child."""
+
+        transport = importlib.import_module("build.transport")
+        backend = transport.NativeDockerBuildBackendV1(
+            Path("/bin/true"),
+            pipeline.ARB_BUILD_TRANSPORT_POLICY_V1,
+            host_user=(501, 20),
+            platform_name="linux",
+            machine_name="x86_64",
+        )
+        lease = backend._next_run_lease_v1(
+            _docker_capability_fixture(pipeline.ARB_BUILD_TRANSPORT_POLICY_V1)
+        )
+        self.addCleanup(backend._release_run_lease_v1, lease)
+        real_popen = subprocess.Popen
+        spawned: list[subprocess.Popen[bytes]] = []
+
+        def spawn(*args: object, **kwargs: object) -> subprocess.Popen[bytes]:
+            process = real_popen(*args, **kwargs)
+            spawned.append(process)
+            return process
+
+        with mock.patch.object(
+            transport.subprocess,
+            "Popen",
+            side_effect=spawn,
+        ), mock.patch.object(
+            transport,
+            "bytearray",
+            side_effect=KeyboardInterrupt("interrupt during post-spawn allocation"),
+            create=True,
+        ), mock.patch.object(
+            backend,
+            "_cleanup_container",
+            return_value=None,
+        ) as cleanup:
+            with self.assertRaisesRegex(
+                KeyboardInterrupt,
+                "post-spawn allocation",
+            ):
+                backend._observe_command(
+                    (sys.executable, "-c", "import time; time.sleep(5)"),
+                    stdout_limit=64,
+                    stderr_limit=64,
+                    timeout_ns=1,
+                    lease=lease,
+                )
+
+        process = spawned[0]
+        try:
+            self.assertIsNotNone(process.poll())
+            cleanup.assert_called_once_with(lease, spawn_may_have_started=True)
+        finally:
+            if process.poll() is None:
+                process.kill()
+                process.wait(timeout=5)
+            for stream in (process.stdin, process.stdout, process.stderr):
+                if stream is not None and not stream.closed:
+                    stream.close()
+
+    def test_post_popen_handler_gap_cannot_bypass_finalizer(self) -> None:
+        """An interrupt at the first bytecode after Popen still owns its child."""
+
+        transport = importlib.import_module("build.transport")
+        backend = transport.NativeDockerBuildBackendV1(
+            Path("/bin/true"),
+            pipeline.ARB_BUILD_TRANSPORT_POLICY_V1,
+            host_user=(501, 20),
+            platform_name="linux",
+            machine_name="x86_64",
+        )
+        lease = backend._next_run_lease_v1(
+            _docker_capability_fixture(pipeline.ARB_BUILD_TRANSPORT_POLICY_V1)
+        )
+        self.addCleanup(backend._release_run_lease_v1, lease)
+        observe = backend._observe_command
+        instructions = tuple(dis.Bytecode(observe))
+        process_store = next(
+            index
+            for index, instruction in enumerate(instructions)
+            if (
+                instruction.opname == "STORE_FAST"
+                and instruction.argval == "process"
+                and index > 0
+                and instructions[index - 1].opname == "CALL_FUNCTION_EX"
+            )
+        )
+        interruption_offset = instructions[process_store + 1].offset
+        real_popen = subprocess.Popen
+        spawned: list[subprocess.Popen[bytes]] = []
+        injected = False
+
+        def spawn(*args: object, **kwargs: object) -> subprocess.Popen[bytes]:
+            process = real_popen(*args, **kwargs)
+            spawned.append(process)
+            return process
+
+        def tracer(frame: object, event: str, _arg: object) -> object:
+            nonlocal injected
+            if getattr(frame, "f_code", None) is observe.__code__:
+                frame.f_trace_opcodes = True
+                if (
+                    not injected
+                    and event == "opcode"
+                    and frame.f_lasti == interruption_offset
+                ):
+                    injected = True
+                    raise KeyboardInterrupt("interrupt in post-Popen handler gap")
+            return tracer
+
+        with mock.patch.object(
+            transport.subprocess,
+            "Popen",
+            side_effect=spawn,
+        ), mock.patch.object(
+            backend,
+            "_cleanup_container",
+            return_value=None,
+        ) as cleanup:
+            previous = sys.gettrace()
+            sys.settrace(tracer)
+            try:
+                with self.assertRaisesRegex(KeyboardInterrupt, "handler gap"):
+                    observe(
+                        (sys.executable, "-c", "import time; time.sleep(5)"),
+                        stdout_limit=64,
+                        stderr_limit=64,
+                        timeout_ns=1,
+                        lease=lease,
+                    )
+            finally:
+                sys.settrace(previous)
+
+        self.assertTrue(injected)
+        process = spawned[0]
+        try:
+            self.assertIsNotNone(process.poll())
+            cleanup.assert_called_once_with(lease, spawn_may_have_started=True)
+        finally:
+            if process.poll() is None:
+                process.kill()
+                process.wait(timeout=5)
+            for stream in (process.stdin, process.stdout, process.stderr):
+                if stream is not None and not stream.closed:
+                    stream.close()
+
+    def test_popen_construction_interrupt_attempts_cid_cleanup_without_a_handle(self) -> None:
+        """The pre-handle boundary retains the interruption and tries CID cleanup."""
+
+        transport = importlib.import_module("build.transport")
+        backend = transport.NativeDockerBuildBackendV1(
+            Path("/bin/true"),
+            pipeline.ARB_BUILD_TRANSPORT_POLICY_V1,
+            host_user=(501, 20),
+            platform_name="linux",
+            machine_name="x86_64",
+        )
+        lease = backend._next_run_lease_v1(
+            _docker_capability_fixture(pipeline.ARB_BUILD_TRANSPORT_POLICY_V1)
+        )
+        self.addCleanup(backend._release_run_lease_v1, lease)
+
+        with mock.patch.object(
+            transport.subprocess,
+            "Popen",
+            side_effect=KeyboardInterrupt("interrupt during Popen construction"),
+        ), mock.patch.object(
+            backend,
+            "_cleanup_container",
+            return_value=None,
+        ) as cleanup:
+            with self.assertRaisesRegex(KeyboardInterrupt, "Popen construction"):
+                backend._observe_command(
+                    (sys.executable, "-c", "pass"),
+                    stdout_limit=64,
+                    stderr_limit=64,
+                    timeout_ns=1,
+                    lease=lease,
+                )
+
+        cleanup.assert_called_once_with(lease, spawn_may_have_started=True)
+
+    @unittest.skipUnless(hasattr(os, "fork"), "requires POSIX fork")
+    def test_forked_child_gc_cannot_delete_parent_cid_root(self) -> None:
+        transport = importlib.import_module("build.transport")
+        backend = transport.NativeDockerBuildBackendV1(
+            Path("/bin/true"),
+            pipeline.ARB_BUILD_TRANSPORT_POLICY_V1,
+            host_user=(501, 20),
+            platform_name="linux",
+            machine_name="x86_64",
+        )
+        lease = backend._next_run_lease_v1(
+            _docker_capability_fixture(pipeline.ARB_BUILD_TRANSPORT_POLICY_V1)
+        )
+        root = lease.cid_file.parent
+        try:
+            child = os.fork()
+            if child == 0:
+                del lease
+                gc.collect()
+                os._exit(0)
+            _pid, status = os.waitpid(child, 0)
+            self.assertEqual(os.waitstatus_to_exitcode(status), 0)
+            self.assertTrue(root.is_dir())
+        finally:
+            backend._release_run_lease_v1(lease)
+
+    def test_interrupted_cid_root_release_remains_retryable(self) -> None:
+        """A failed root release must not permanently consume its cleanup lease."""
+
+        transport = importlib.import_module("build.transport")
+        backend = transport.NativeDockerBuildBackendV1(
+            Path("/bin/true"),
+            pipeline.ARB_BUILD_TRANSPORT_POLICY_V1,
+            host_user=(501, 20),
+            platform_name="linux",
+            machine_name="x86_64",
+        )
+        lease = backend._next_run_lease_v1(
+            _docker_capability_fixture(pipeline.ARB_BUILD_TRANSPORT_POLICY_V1)
+        )
+        root = lease.cid_file.parent
+        real_rmtree = transport.shutil.rmtree
+        try:
+            with mock.patch.object(
+                transport.shutil,
+                "rmtree",
+                side_effect=KeyboardInterrupt("interrupt during CID-root release"),
+            ):
+                with self.assertRaisesRegex(KeyboardInterrupt, "CID-root release"):
+                    backend._release_run_lease_v1(lease)
+
+            self.assertTrue(root.is_dir())
+            self.assertFalse(lease._released)
+            self.assertIsNone(backend._release_run_lease_v1(lease))
+            self.assertFalse(root.exists())
+        finally:
+            if root.exists():
+                real_rmtree(root)
+
+    def test_stop_interrupt_survives_container_cleanup_failure(self) -> None:
+        """A later cleanup error cannot replace the caller's interruption."""
+
+        transport = importlib.import_module("build.transport")
+        backend = transport.NativeDockerBuildBackendV1(
+            Path("/bin/true"),
+            pipeline.ARB_BUILD_TRANSPORT_POLICY_V1,
+            host_user=(501, 20),
+            platform_name="linux",
+            machine_name="x86_64",
+        )
+        real_popen = subprocess.Popen
+        spawned: list[subprocess.Popen[bytes]] = []
+
+        def spawn(*args: object, **kwargs: object) -> subprocess.Popen[bytes]:
+            process = real_popen(*args, **kwargs)
+            spawned.append(process)
+            return process
+
+        lease = backend._next_run_lease_v1(
+            _docker_capability_fixture(pipeline.ARB_BUILD_TRANSPORT_POLICY_V1)
+        )
+        self.addCleanup(backend._release_run_lease_v1, lease)
+
+        with mock.patch.object(
+            transport.subprocess,
+            "Popen",
+            side_effect=spawn,
+        ), mock.patch.object(
+            backend,
+            "_stop_process",
+            side_effect=KeyboardInterrupt("interrupt during stop"),
+        ), mock.patch.object(
+            backend,
+            "_cleanup_container",
+            side_effect=OSError("cleanup failed after interruption"),
+        ) as cleanup:
+            with self.assertRaisesRegex(KeyboardInterrupt, "interrupt during stop"):
+                backend._observe_command(
+                    (sys.executable, "-c", "import time; time.sleep(5)"),
+                    stdout_limit=64,
+                    stderr_limit=64,
+                    timeout_ns=1,
+                    lease=lease,
+                )
+            process = spawned[0]
+            running_before_test_cleanup = process.poll() is None
+            streams_closed = bool(
+                process.stdout is not None
+                and process.stdout.closed
+                and process.stderr is not None
+                and process.stderr.closed
+            )
+            if running_before_test_cleanup:
+                process.kill()
+                process.wait(timeout=5)
+            for stream in (process.stdin, process.stdout, process.stderr):
+                if stream is not None and not stream.closed:
+                    stream.close()
+
+        self.assertFalse(running_before_test_cleanup)
+        self.assertTrue(streams_closed)
+        self.assertEqual(cleanup.call_count, 1)
+
+    def test_stream_close_interrupt_still_closes_siblings_and_cleans_container(self) -> None:
+        transport = importlib.import_module("build.transport")
+        backend = transport.NativeDockerBuildBackendV1(
+            Path("/bin/true"),
+            pipeline.ARB_BUILD_TRANSPORT_POLICY_V1,
+            host_user=(501, 20),
+            platform_name="linux",
+            machine_name="x86_64",
+        )
+        real_popen = subprocess.Popen
+        spawned: list[subprocess.Popen[bytes]] = []
+        wrapped_stdout: list[object] = []
+        cleanup_calls: list[object] = []
+
+        class CloseInterrupts:
+            def __init__(self, wrapped: object) -> None:
+                self.wrapped = wrapped
+                self.descriptor = wrapped.fileno()
+
+            @property
+            def closed(self) -> bool:
+                return False
+
+            def fileno(self) -> int:
+                return self.descriptor
+
+            def close(self) -> None:
+                raise KeyboardInterrupt("interrupt during stdout close")
+
+        def spawn(*args: object, **kwargs: object) -> subprocess.Popen[bytes]:
+            process = real_popen(*args, **kwargs)
+            spawned.append(process)
+            wrapper = CloseInterrupts(process.stdout)
+            wrapped_stdout.append(wrapper)
+            process.stdout = wrapper
+            return process
+
+        def cleanup(lease: object, **_kwargs: object) -> None:
+            cleanup_calls.append(lease)
+
+        lease = backend._next_run_lease_v1(
+            _docker_capability_fixture(pipeline.ARB_BUILD_TRANSPORT_POLICY_V1)
+        )
+        self.addCleanup(backend._release_run_lease_v1, lease)
+        with mock.patch.object(
+            transport.subprocess,
+            "Popen",
+            side_effect=spawn,
+        ), mock.patch.object(
+            backend,
+            "_cleanup_container",
+            side_effect=cleanup,
+        ):
+            with self.assertRaisesRegex(KeyboardInterrupt, "stdout close"):
+                backend._observe_command(
+                    (sys.executable, "-c", "pass"),
+                    stdout_limit=64,
+                    stderr_limit=64,
+                    timeout_ns=1_000_000_000,
+                    lease=lease,
+                )
+            process = spawned[0]
+            stderr_closed = process.stderr is not None and process.stderr.closed
+            try:
+                os.fstat(wrapped_stdout[0].descriptor)
+            except OSError:
+                stdout_descriptor_closed = True
+            else:
+                stdout_descriptor_closed = False
+            if process.poll() is None:
+                process.kill()
+                process.wait(timeout=5)
+            for stream in (process.stdin, process.stderr):
+                if stream is not None and not stream.closed:
+                    stream.close()
+            try:
+                wrapped_stdout[0].wrapped.close()
+            except OSError:
+                pass
+
+        self.assertTrue(stderr_closed)
+        self.assertTrue(stdout_descriptor_closed)
+        self.assertEqual(cleanup_calls, [lease])
+
     def test_process_and_container_cleanup_failures_are_both_retained_in_order(self) -> None:
         transport = importlib.import_module("build.transport")
         backend = transport.NativeDockerBuildBackendV1(
@@ -792,7 +1707,12 @@ class SharedBuildTransportTargetTests(unittest.TestCase):
             process.wait(timeout=5)
             return "process stop failed"
 
-        with tempfile.TemporaryDirectory() as temporary, mock.patch.object(
+        lease = backend._next_run_lease_v1(
+            _docker_capability_fixture(pipeline.ARB_BUILD_TRANSPORT_POLICY_V1)
+        )
+        self.addCleanup(backend._release_run_lease_v1, lease)
+
+        with mock.patch.object(
             transport.subprocess,
             "Popen",
             side_effect=real_popen,
@@ -810,11 +1730,7 @@ class SharedBuildTransportTargetTests(unittest.TestCase):
                 stdout_limit=64,
                 stderr_limit=64,
                 timeout_ns=1,
-                cid_file=Path(temporary).resolve() / "container.cid",
-                container_name=(
-                    pipeline.ARB_BUILD_TRANSPORT_POLICY_V1.container_name_prefix
-                    + "cleanup-records"
-                ),
+                lease=lease,
                 input_bundle=_sealed_input(),
             )
 
@@ -872,117 +1788,62 @@ class SharedBuildTransportTargetTests(unittest.TestCase):
                 )
                 self.assertIsNone(result.process)
 
-    def test_temporary_root_cleanup_failure_retains_current_process_generically(self) -> None:
+    def test_controller_passes_only_semantic_build_request_to_its_backend(self) -> None:
         transport = importlib.import_module("build.transport")
         policy = pipeline.ARB_BUILD_TRANSPORT_POLICY_V1
         input_value = _sealed_input()
-        first = _completed_process(transport, input_value, b"first")
-        current = _completed_process(transport, input_value, b"second")
-        real_temporary_directory = tempfile.TemporaryDirectory
-        allocated: list[object] = []
-        allocations = 0
-
-        class CleanupFailsOnce:
-            def __init__(self, *args: object, **kwargs: object) -> None:
-                self._inner = real_temporary_directory(*args, **kwargs)
-                self.name = self._inner.name
-                self._failed = False
-                allocated.append(self)
-
-            def __enter__(self) -> str:
-                return self.name
-
-            def __exit__(self, *_args: object) -> None:
-                self.cleanup()
-
-            def cleanup(self) -> None:
-                if not self._failed:
-                    self._failed = True
-                    raise OSError("forced temporary-root cleanup failure")
-                self._inner.cleanup()
-
-        def temporary_directory(*args: object, **kwargs: object) -> object:
-            nonlocal allocations
-            allocations += 1
-            if allocations == 1:
-                return real_temporary_directory(*args, **kwargs)
-            return CleanupFailsOnce(*args, **kwargs)
-
-        try:
-            with mock.patch.object(
-                transport.tempfile,
-                "TemporaryDirectory",
-                side_effect=temporary_directory,
-            ):
-                result, _backend, _report, _input = _controlled_build(
-                    transport,
-                    policy,
-                    (first, current),
-                    input_value=input_value,
-                )
-        finally:
-            for temporary in allocated:
-                temporary.cleanup()
-
-        self.assertIs(type(result), transport.BuildRejectedV1)
-        self.assertEqual(
-            result.reason,
-            transport.BuildFailureReasonV1.CLEANUP_FAILED,
+        observations = (
+            _completed_process(transport, input_value, b"first"),
+            _completed_process(transport, input_value, b"second"),
         )
-        self.assertEqual(result.attempt, 2)
-        self.assertEqual(result.completed_processes, (first,))
-        self.assertIs(type(result.process), transport.BuildCleanupFailureV1)
-        self.assertIs(result.process.current_process, current)
-        self.assertEqual(len(result.process.failures), 1)
-        self.assertEqual(
-            result.process.failures[0].resource,
-            transport.CleanupResourceV1.TEMPORARY_ROOT,
+        result, backend, _capability, _input = _controlled_build(
+            transport,
+            policy,
+            observations,
+            input_value=input_value,
         )
 
-    def test_temporary_root_cleanup_failure_is_typed_without_a_process(self) -> None:
+        self.assertIs(type(result), transport.TwoBuildObservationV1)
+        self.assertEqual(len(backend.requests), 2)
+        for request in backend.requests:
+            self.assertEqual(len(tuple(request)), 4)
+            self.assertFalse(hasattr(request, "cid_file"))
+            self.assertFalse(hasattr(request, "container_name"))
+
+    def test_backend_interrupt_propagates_without_controller_cleanup_authority(self) -> None:
         transport = importlib.import_module("build.transport")
         policy = pipeline.ARB_BUILD_TRANSPORT_POLICY_V1
-        real_temporary_directory = tempfile.TemporaryDirectory
-        inner = real_temporary_directory()
+        input_value = _sealed_input()
+        capability = _docker_capability_fixture(policy)
 
-        class CleanupFailsOnce:
-            name = inner.name
-
+        class InterruptingBackend:
             def __init__(self) -> None:
-                self.failed = False
+                self.requests: list[object] = []
 
-            def cleanup(self) -> None:
-                if not self.failed:
-                    self.failed = True
-                    raise OSError("forced temporary-root cleanup failure")
-                inner.cleanup()
+            def probe(self) -> object:
+                return capability
 
-        temporary = CleanupFailsOnce()
-        try:
-            with mock.patch.object(
-                transport.tempfile,
-                "TemporaryDirectory",
-                return_value=temporary,
-            ):
-                result, _backend, _capability, _input = _controlled_build(
-                    transport,
-                    policy,
-                    (),
-                )
-        finally:
-            temporary.cleanup()
+            def run_build(self, request: object) -> object:
+                self.requests.append(request)
+                raise KeyboardInterrupt("interrupt during build observation")
 
-        self.assertIs(type(result), transport.BuildRejectedV1)
-        self.assertEqual(
-            result.reason,
-            transport.BuildFailureReasonV1.CLEANUP_FAILED,
+        backend = InterruptingBackend()
+        controller = transport.ControlledBuildTransportV1(
+            policy=policy,
+            backend=backend,
         )
-        self.assertIs(type(result.process), transport.BuildCleanupFailureV1)
-        self.assertIsNone(result.process.current_process)
-        self.assertEqual(
-            tuple(record.resource for record in result.process.failures),
-            (transport.CleanupResourceV1.TEMPORARY_ROOT,),
-        )
+        owned_capability = controller.probe()
+        with self.assertRaisesRegex(KeyboardInterrupt, "interrupt during build observation"):
+            controller.build(
+                owned_capability,
+                input_value,
+                64,
+                input_admission=lambda _value: True,
+                output_admission=lambda _value: True,
+            )
+
+        self.assertEqual(len(backend.requests), 1)
+        self.assertEqual(len(tuple(backend.requests[0])), 4)
 
     def test_forged_backend_failures_canonicalize_to_contract_violation(self) -> None:
         transport = importlib.import_module("build.transport")
@@ -993,7 +1854,6 @@ class SharedBuildTransportTargetTests(unittest.TestCase):
             transport.DockerBuildObserverFailureV1,
             transport.DockerBuildInputRejectedV1,
             transport.DockerBuildCleanupFailureV1,
-            transport.BuildCleanupFailureV1,
         ):
             with self.subTest(failure=failure_type.__name__):
                 forged = _forged_exact_type(failure_type)

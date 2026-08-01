@@ -30,7 +30,6 @@ _POLICY_FIELDS = (
     "image_reference",
     "platform",
     "hostname",
-    "container_name_prefix",
     "bootstrap",
     "bootstrap_argv0",
     "tmpfs_specs",
@@ -94,10 +93,6 @@ def _policy_mutants(
             ),
         ),
         ("hostname", _policy_with(policy, hostname="labcolors-build-mutant")),
-        (
-            "container_name_prefix",
-            _policy_with(policy, container_name_prefix="labcolors-mutant-"),
-        ),
         ("bootstrap", _policy_with(policy, bootstrap=policy.bootstrap + "\n:")),
         (
             "bootstrap_argv0",

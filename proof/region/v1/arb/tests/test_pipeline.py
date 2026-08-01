@@ -662,7 +662,7 @@ class ControlledPipelineTests(unittest.TestCase):
         trust = pipeline.HostTrustBoundaryV1.UNSEALED_LINUX_X64_DOCKER_HOST
         policy = pipeline.ARB_BUILD_TRANSPORT_POLICY_V1
         coordinates = list(policy)
-        coordinates[4] = policy.bootstrap + "\nexit 1"
+        coordinates[3] = policy.bootstrap + "\nexit 1"
         changed_policy = build_transport.DockerBuildPolicyV1(*coordinates)
         original = pipeline.pipeline_policy_identity_v2(trust, policy)
         changed = pipeline.pipeline_policy_identity_v2(trust, changed_policy)
@@ -673,7 +673,7 @@ class ControlledPipelineTests(unittest.TestCase):
         trust = pipeline.HostTrustBoundaryV1.UNSEALED_LINUX_X64_DOCKER_HOST
         policy = pipeline.ARB_BUILD_TRANSPORT_POLICY_V1
         coordinates = list(policy)
-        coordinates[6] = (
+        coordinates[5] = (
             "/tmp:rw,exec,suid,dev,size=536870912,mode=1777",
             policy.tmpfs_specs[1],
         )
@@ -940,73 +940,75 @@ class ControlledPipelineTests(unittest.TestCase):
 
 class DockerCommandContractTests(unittest.TestCase):
     def test_command_is_exact_digest_offline_read_only_and_capability_bound(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary).resolve()
-            backend = build_transport.NativeDockerBuildBackendV1(
-                Path("/usr/bin/true"),
-                pipeline.ARB_BUILD_TRANSPORT_POLICY_V1,
-                platform_name="linux",
-                machine_name="x86_64",
-                host_user=(501, 20),
-            )
-            capability = _probe_native_backend(
-                backend,
-                pipeline.ARB_BUILD_TRANSPORT_POLICY_V1,
-            )
-            request = build_transport.DockerBuildRequestV1(
-                1,
-                capability,
-                pipeline._seal_build_input_bundle_v1(_request()),
-                _limits().max_executable_bytes,
-                root / "container.cid",
-                "labcolors-arb-build-v1-test",
-            )
+        backend = build_transport.NativeDockerBuildBackendV1(
+            Path("/usr/bin/true"),
+            pipeline.ARB_BUILD_TRANSPORT_POLICY_V1,
+            platform_name="linux",
+            machine_name="x86_64",
+            host_user=(501, 20),
+        )
+        capability = _probe_native_backend(
+            backend,
+            pipeline.ARB_BUILD_TRANSPORT_POLICY_V1,
+        )
+        request = build_transport.DockerBuildRequestV1(
+            1,
+            capability,
+            pipeline._seal_build_input_bundle_v1(_request()),
+            _limits().max_executable_bytes,
+        )
+        lease = backend._next_run_lease_v1(capability)
+        try:
+            command = backend._command_for_v1(request, lease)
 
-            command = backend.command_for(request)
-
-        joined = " ".join(command)
-        self.assertEqual(command[0], "/usr/bin/true")
-        self.assertIn(pipeline.OCI_IMAGE_REFERENCE_V1, command)
-        self.assertNotIn("gcc:latest", joined)
-        for fragment in (
-            "--pull never",
-            "--platform linux/amd64",
-            "--network none",
-            "--read-only",
-            "--interactive",
-            "--cap-drop ALL",
-            "--security-opt no-new-privileges:true",
-            "--name labcolors-arb-build-v1-test",
-            "--rm",
-        ):
-            with self.subTest(fragment=fragment):
-                self.assertIn(fragment, joined)
-        for forbidden in ("--privileged", "--network host", ":latest"):
-            self.assertNotIn(forbidden, joined)
+            joined = " ".join(command)
+            self.assertEqual(command[0], "/usr/bin/true")
+            self.assertIn(pipeline.OCI_IMAGE_REFERENCE_V1, command)
+            self.assertNotIn("gcc:latest", joined)
+            for fragment in (
+                "--pull never",
+                "--platform linux/amd64",
+                "--network none",
+                "--read-only",
+                "--interactive",
+                "--cap-drop ALL",
+                "--security-opt no-new-privileges:true",
+                f"--cidfile {lease.cid_file}",
+                "--rm",
+            ):
+                with self.subTest(fragment=fragment):
+                    self.assertIn(fragment, joined)
+            for forbidden in (
+                "--name",
+                "--privileged",
+                "--network host",
+                ":latest",
+            ):
+                self.assertNotIn(forbidden, joined)
+        finally:
+            backend._release_run_lease_v1(lease)
 
     def test_command_exposes_only_a_private_non_executable_standard_tmp(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary).resolve()
-            backend = build_transport.NativeDockerBuildBackendV1(
-                Path("/usr/bin/true"),
-                pipeline.ARB_BUILD_TRANSPORT_POLICY_V1,
-                platform_name="linux",
-                machine_name="x86_64",
-                host_user=(501, 20),
-            )
-            capability = _probe_native_backend(
-                backend,
-                pipeline.ARB_BUILD_TRANSPORT_POLICY_V1,
-            )
-            request = build_transport.DockerBuildRequestV1(
-                1,
-                capability,
-                pipeline._seal_build_input_bundle_v1(_request()),
-                _limits().max_executable_bytes,
-                root / "container.cid",
-                "labcolors-arb-build-v1-test",
-            )
-            command = backend.command_for(request)
+        backend = build_transport.NativeDockerBuildBackendV1(
+            Path("/usr/bin/true"),
+            pipeline.ARB_BUILD_TRANSPORT_POLICY_V1,
+            platform_name="linux",
+            machine_name="x86_64",
+            host_user=(501, 20),
+        )
+        capability = _probe_native_backend(
+            backend,
+            pipeline.ARB_BUILD_TRANSPORT_POLICY_V1,
+        )
+        request = build_transport.DockerBuildRequestV1(
+            1,
+            capability,
+            pipeline._seal_build_input_bundle_v1(_request()),
+            _limits().max_executable_bytes,
+        )
+        lease = backend._next_run_lease_v1(capability)
+        self.addCleanup(backend._release_run_lease_v1, lease)
+        command = backend._command_for_v1(request, lease)
 
         tmpfs_indexes = tuple(
             index for index, item in enumerate(command) if item == "--tmpfs"
@@ -1060,7 +1062,6 @@ class DockerCommandContractTests(unittest.TestCase):
             stdout_limit=8,
             stderr_limit=8,
             timeout_ns=5_000_000_000,
-            cid_file=None,
         )
 
         self.assertEqual(
@@ -1072,7 +1073,190 @@ class DockerCommandContractTests(unittest.TestCase):
             ),
         )
 
-    def test_cleanup_falls_back_to_exact_name_for_absent_or_invalid_cidfile(self) -> None:
+    def test_cleanup_uses_only_a_docker_issued_id_from_its_private_lease(self) -> None:
+        backend = build_transport.NativeDockerBuildBackendV1(
+            Path("/usr/bin/true"),
+            pipeline.ARB_BUILD_TRANSPORT_POLICY_V1,
+            platform_name="linux",
+            machine_name="x86_64",
+            host_user=(501, 20),
+        )
+        capability = _probe_native_backend(
+            backend,
+            pipeline.ARB_BUILD_TRANSPORT_POLICY_V1,
+        )
+        lease = backend._next_run_lease_v1(capability)
+        lease.cid_file.write_text("b" * 64 + "\n", encoding="ascii")
+        backend._mark_run_lease_launched_v1(lease)
+        foreign_id = "a" * 64
+        observations = (
+            build_transport._docker_command_exited_v1(0, b"b" * 64 + b"\n", b""),
+            build_transport._docker_command_exited_v1(0, b"b" * 64 + b"\n", b""),
+            build_transport._docker_command_exited_v1(0, b"", b""),
+        )
+        try:
+            with mock.patch.object(
+                backend,
+                "_observe_cleanup_command",
+                side_effect=observations,
+            ) as observe:
+                detail = backend._cleanup_container(lease)
+
+            self.assertIsNone(detail)
+            commands = tuple(call.args[1] for call in observe.call_args_list)
+            self.assertEqual(len(commands), 3)
+            self.assertEqual(commands[0][-1], "b" * 64)
+            self.assertEqual(commands[1][-1], "b" * 64)
+            self.assertIn("id=" + "b" * 64, commands[2])
+            self.assertNotIn(
+                foreign_id,
+                " ".join(" ".join(command) for command in commands),
+            )
+            self.assertNotIn("name=", " ".join(" ".join(command) for command in commands))
+        finally:
+            backend._release_run_lease_v1(lease)
+
+    def test_absent_cidfile_never_falls_back_to_a_name_or_docker_io(self) -> None:
+        backend = build_transport.NativeDockerBuildBackendV1(
+            Path("/usr/bin/true"),
+            pipeline.ARB_BUILD_TRANSPORT_POLICY_V1,
+            platform_name="linux",
+            machine_name="x86_64",
+            host_user=(501, 20),
+        )
+        capability = _probe_native_backend(
+            backend,
+            pipeline.ARB_BUILD_TRANSPORT_POLICY_V1,
+        )
+        lease = backend._next_run_lease_v1(capability)
+        try:
+            with mock.patch.object(backend, "_observe_cleanup_command") as observe:
+                self.assertIsNone(backend._cleanup_container(lease))
+            observe.assert_not_called()
+            backend._mark_run_lease_launched_v1(lease)
+            with mock.patch.object(backend, "_observe_cleanup_command") as observe:
+                self.assertEqual(
+                    backend._cleanup_container(lease),
+                    "Docker-issued cleanup ID is unavailable",
+                )
+            observe.assert_not_called()
+        finally:
+            backend._release_run_lease_v1(lease)
+
+    def test_malformed_or_aliased_cid_never_reaches_destructive_cleanup(self) -> None:
+        backend = build_transport.NativeDockerBuildBackendV1(
+            Path("/usr/bin/true"),
+            pipeline.ARB_BUILD_TRANSPORT_POLICY_V1,
+            platform_name="linux",
+            machine_name="x86_64",
+            host_user=(501, 20),
+        )
+        capability = _probe_native_backend(
+            backend,
+            pipeline.ARB_BUILD_TRANSPORT_POLICY_V1,
+        )
+        for raw, alias in ((b"B" * 64, False), (b"c" * 64, True)):
+            with self.subTest(alias=alias, raw=raw[:1]):
+                lease = backend._next_run_lease_v1(capability)
+                try:
+                    lease.cid_file.write_bytes(raw)
+                    if alias:
+                        os.link(lease.cid_file, lease.cid_file.parent / "cid-alias")
+                    backend._mark_run_lease_launched_v1(lease)
+                    with mock.patch.object(
+                        backend,
+                        "_observe_cleanup_command",
+                    ) as observe:
+                        self.assertEqual(
+                            backend._cleanup_container(lease),
+                            "Docker-issued cleanup ID is unavailable",
+                        )
+                    observe.assert_not_called()
+                finally:
+                    backend._release_run_lease_v1(lease)
+
+    def test_foreign_name_matching_a_stale_id_never_reaches_rm(self) -> None:
+        backend = build_transport.NativeDockerBuildBackendV1(
+            Path("/usr/bin/true"),
+            pipeline.ARB_BUILD_TRANSPORT_POLICY_V1,
+            platform_name="linux",
+            machine_name="x86_64",
+            host_user=(501, 20),
+        )
+        capability = _probe_native_backend(
+            backend,
+            pipeline.ARB_BUILD_TRANSPORT_POLICY_V1,
+        )
+        lease = backend._next_run_lease_v1(capability)
+        container_id = "d" * 64
+        foreign_id = "e" * 64
+        try:
+            lease.cid_file.write_text(container_id + "\n", encoding="ascii")
+            backend._mark_run_lease_launched_v1(lease)
+            with mock.patch.object(
+                backend,
+                "_observe_cleanup_command",
+                return_value=build_transport._docker_command_exited_v1(
+                    0,
+                    foreign_id.encode("ascii") + b"\n",
+                    b"",
+                ),
+            ) as observe:
+                self.assertEqual(
+                    backend._cleanup_container(lease),
+                    "Docker-issued cleanup ID did not resolve exactly",
+                )
+            commands = tuple(call.args[1] for call in observe.call_args_list)
+            self.assertEqual(len(commands), 1)
+            self.assertIn("inspect", commands[0])
+            self.assertNotIn("rm", commands[0])
+        finally:
+            backend._release_run_lease_v1(lease)
+
+    def test_cleanup_uses_capability_captured_by_the_run_lease(self) -> None:
+        backend = build_transport.NativeDockerBuildBackendV1(
+            Path("/usr/bin/true"),
+            pipeline.ARB_BUILD_TRANSPORT_POLICY_V1,
+            platform_name="linux",
+            machine_name="x86_64",
+            host_user=(501, 20),
+        )
+        capability = _probe_native_backend(
+            backend,
+            pipeline.ARB_BUILD_TRANSPORT_POLICY_V1,
+        )
+        lease = backend._next_run_lease_v1(capability)
+        try:
+            lease.cid_file.write_text("f" * 64 + "\n", encoding="ascii")
+            backend._mark_run_lease_launched_v1(lease)
+            backend._probed_capability = None
+            observations = (
+                build_transport._docker_command_exited_v1(
+                    0,
+                    b"f" * 64 + b"\n",
+                    b"",
+                ),
+                build_transport._docker_command_exited_v1(
+                    0,
+                    b"f" * 64 + b"\n",
+                    b"",
+                ),
+                build_transport._docker_command_exited_v1(0, b"", b""),
+            )
+            with mock.patch.object(
+                backend,
+                "_observe_cleanup_command",
+                side_effect=observations,
+            ) as observe:
+                self.assertIsNone(backend._cleanup_container(lease))
+            self.assertEqual(
+                tuple(call.args[0] for call in observe.call_args_list),
+                (capability, capability, capability),
+            )
+        finally:
+            backend._release_run_lease_v1(lease)
+
+    def test_cleanup_rejects_another_adapter_lease_before_docker_io(self) -> None:
         backend = build_transport.NativeDockerBuildBackendV1(
             Path("/usr/bin/true"),
             pipeline.ARB_BUILD_TRANSPORT_POLICY_V1,
@@ -1081,29 +1265,26 @@ class DockerCommandContractTests(unittest.TestCase):
             host_user=(501, 20),
         )
         _probe_native_backend(backend, pipeline.ARB_BUILD_TRANSPORT_POLICY_V1)
-        name = "labcolors-arb-build-v1-cleanup-test"
-        for cid_contents in (None, b"partial-or-foreign"):
-            with self.subTest(cid_contents=cid_contents):
-                with tempfile.TemporaryDirectory() as temporary:
-                    cid_file = Path(temporary) / "container.cid"
-                    if cid_contents is not None:
-                        cid_file.write_bytes(cid_contents)
-                    observations = (
-                        build_transport._docker_command_exited_v1(1, b"", b"not found"),
-                        build_transport._docker_command_exited_v1(0, b"", b""),
-                    )
-                    with mock.patch.object(
-                        backend,
-                        "_observe_cleanup_command",
-                        side_effect=observations,
-                    ) as observe:
-                        detail = backend._cleanup_container(cid_file, name)
+        foreign_backend = build_transport.NativeDockerBuildBackendV1(
+            Path("/usr/bin/true"),
+            pipeline.ARB_BUILD_TRANSPORT_POLICY_V1,
+            platform_name="linux",
+            machine_name="x86_64",
+            host_user=(501, 20),
+        )
+        foreign_capability = _probe_native_backend(
+            foreign_backend,
+            pipeline.ARB_BUILD_TRANSPORT_POLICY_V1,
+        )
+        foreign_lease = foreign_backend._next_run_lease_v1(foreign_capability)
+        try:
+            with mock.patch.object(backend, "_observe_cleanup_command") as observe:
+                with self.assertRaises(TypeError):
+                    backend._cleanup_container(foreign_lease)
 
-                self.assertIsNone(detail)
-                commands = tuple(call.args[0] for call in observe.call_args_list)
-                self.assertEqual(commands[0][-1], name)
-                self.assertIn(f"name=^/{name}$", commands[1])
-                self.assertNotIn("partial-or-foreign", " ".join(commands[0]))
+            observe.assert_not_called()
+        finally:
+            foreign_backend._release_run_lease_v1(foreign_lease)
 
     def test_unverified_container_removal_is_typed_cleanup_failure(self) -> None:
         backend = build_transport.NativeDockerBuildBackendV1(
@@ -1112,21 +1293,23 @@ class DockerCommandContractTests(unittest.TestCase):
             platform_name="linux",
             machine_name="x86_64",
         )
-        with tempfile.TemporaryDirectory() as temporary:
-            cid_file = Path(temporary).resolve() / "container.cid"
-            with mock.patch.object(
-                backend,
-                "_cleanup_container",
-                return_value="container absence could not be verified",
-            ):
-                result = backend._observe_command(
-                    (sys.executable, "-c", "pass"),
-                    stdout_limit=8,
-                    stderr_limit=8,
-                    timeout_ns=5_000_000_000,
-                    cid_file=cid_file,
-                    container_name="labcolors-arb-build-v1-cleanup-failure",
-                )
+        capability = _docker_capability(
+            pipeline.ARB_BUILD_TRANSPORT_POLICY_V1,
+            docker_path=Path("/bin/sh"),
+        )
+        lease = backend._next_run_lease_v1(capability)
+        with mock.patch.object(
+            backend,
+            "_cleanup_container",
+            return_value="container absence could not be verified",
+        ):
+            result = backend._observe_command(
+                (sys.executable, "-c", "pass"),
+                stdout_limit=8,
+                stderr_limit=8,
+                timeout_ns=5_000_000_000,
+                lease=lease,
+            )
 
         self.assertIs(type(result), build_transport.DockerBuildCleanupFailureV1)
         self.assertEqual(

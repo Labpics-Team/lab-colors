@@ -225,7 +225,7 @@ class SourceBoundReceiptTests(unittest.TestCase):
         capability = _docker_capability()
         self.assertEqual(
             receipt.source_bound_policy_identity_v2(capability).hex(),
-            "522f089a81e68062f0db4260b00c6e6e0ed2074322247229a99d4714cc5997a5",
+            "f223e1a1569ca5cf6251fd012af8a789a75aedd830e3ccb8f13db77d7ac67bd4",
         )
 
     def test_identity_rejection_remains_typed_at_the_receipt_boundary(self) -> None:

@@ -10,7 +10,6 @@ import os
 import subprocess
 import sys
 import tarfile
-import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -69,7 +68,6 @@ def _observe(
         stdout_limit=stdout_limit,
         stderr_limit=stderr_limit,
         timeout_ns=timeout_ns,
-        cid_file=None,
         input_bundle=bundle,
     )
 
@@ -478,20 +476,28 @@ class BuildInputObserverTests(unittest.TestCase):
     def test_cleanup_failure_preserves_input_trigger_and_progress(self) -> None:
         bundle = _bundle()
         backend = _backend()
-        with tempfile.TemporaryDirectory() as temporary, mock.patch.object(
-            backend,
-            "_cleanup_container",
-            return_value="forced cleanup failure",
-        ):
-            result = backend._observe_command(
-                (sys.executable, "-c", "import os,time; os.close(0); time.sleep(1)"),
-                stdout_limit=1024,
-                stderr_limit=1024,
-                timeout_ns=5_000_000_000,
-                cid_file=Path(temporary).resolve() / "container.cid",
-                container_name="labcolors-arb-build-v1-transport-test",
-                input_bundle=bundle,
+        lease = backend._next_run_lease_v1(
+            _docker_capability(
+                pipeline.ARB_BUILD_TRANSPORT_POLICY_V1,
+                docker_path=Path("/bin/true"),
             )
+        )
+        try:
+            with mock.patch.object(
+                backend,
+                "_cleanup_container",
+                return_value="forced cleanup failure",
+            ):
+                result = backend._observe_command(
+                    (sys.executable, "-c", "import os,time; os.close(0); time.sleep(1)"),
+                    stdout_limit=1024,
+                    stderr_limit=1024,
+                    timeout_ns=5_000_000_000,
+                    lease=lease,
+                    input_bundle=bundle,
+                )
+        finally:
+            backend._release_run_lease_v1(lease)
         self.assertIs(type(result), build_transport.DockerBuildCleanupFailureV1, result)
         self.assertEqual(result.trigger, build_transport.DockerCleanupTriggerV1.INPUT_TRANSFER)
         self.assertEqual(result.detail, "forced cleanup failure")
@@ -508,7 +514,7 @@ class SealedBuildTransportContractTests(unittest.TestCase):
         self.assertEqual(pipeline_source.count("_seal_build_input_bundle_v1("), 1)
         self.assertIn("for attempt in (1, 2)", transport_source)
 
-    def test_docker_request_has_no_semantic_host_path_authority(self) -> None:
+    def test_docker_request_carries_only_semantic_build_coordinates(self) -> None:
         fields = set(inspect.signature(build_transport.DockerBuildRequestV1).parameters)
         self.assertEqual(
             fields,
@@ -517,8 +523,6 @@ class SealedBuildTransportContractTests(unittest.TestCase):
                 "capability",
                 "input_bundle",
                 "max_output_bytes",
-                "cid_file",
-                "container_name",
             },
         )
         backend = build_transport.NativeDockerBuildBackendV1(
@@ -532,23 +536,53 @@ class SealedBuildTransportContractTests(unittest.TestCase):
             backend,
             pipeline.ARB_BUILD_TRANSPORT_POLICY_V1,
         )
-        command = backend.command_for(
+        request = build_transport.DockerBuildRequestV1(
+            1,
+            capability,
+            _bundle(1024),
+            1024,
+        )
+        self.assertFalse(hasattr(request, "cid_file"))
+        self.assertFalse(hasattr(request, "container_name"))
+        with self.assertRaises(TypeError):
             build_transport.DockerBuildRequestV1(
                 1,
                 capability,
                 _bundle(1024),
                 1024,
-                Path("/tmp/container.cid"),
-                "labcolors-arb-build-v1-command-test",
+                Path("/tmp/foreign.cid"),
+                "labcolors-arb-build-v1-foreign",
             )
+
+    def test_native_adapter_mints_private_docker_issued_cleanup_authority(self) -> None:
+        backend = build_transport.NativeDockerBuildBackendV1(
+            Path("/usr/bin/true"),
+            pipeline.ARB_BUILD_TRANSPORT_POLICY_V1,
+            platform_name="linux",
+            machine_name="x86_64",
+            host_user=(501, 20),
         )
-        self.assertNotIn("--mount", command)
-        self.assertEqual(command.count("--tmpfs"), 2)
-        self.assertIn(pipeline._BUILD_TMPFS_SPEC_V1, command)
-        self.assertIn(pipeline._BUILD_STATE_TMPFS_SPEC_V1, command)
-        self.assertIn("--interactive", command)
-        self.assertIn("/usr/bin/env", command)
-        self.assertIn("-i", command)
+        capability = _probe_native_backend(
+            backend,
+            pipeline.ARB_BUILD_TRANSPORT_POLICY_V1,
+        )
+        request = build_transport.DockerBuildRequestV1(
+            1,
+            capability,
+            _bundle(1024),
+            1024,
+        )
+        lease = backend._next_run_lease_v1(capability)
+        try:
+            command = backend._command_for_v1(request, lease)
+
+            self.assertIn("--cidfile", command)
+            self.assertNotIn("--name", command)
+            self.assertFalse(hasattr(lease, "container_name"))
+            self.assertTrue(lease.cid_file.is_absolute())
+            self.assertFalse(lease.cid_file.exists())
+        finally:
+            backend._release_run_lease_v1(lease)
 
     def test_recipe_is_transport_agnostic_and_bootstrap_owns_binary_stdout(self) -> None:
         source = BUILD_RECIPE.read_text(encoding="utf-8")
