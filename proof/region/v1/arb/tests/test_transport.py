@@ -756,8 +756,8 @@ class SealedBuildTransportContractTests(unittest.TestCase):
         )
         self.assertFalse(hasattr(request, "cid_file"))
         self.assertFalse(hasattr(request, "container_name"))
-        # The request has no positional slot for adapter-owned host cleanup
-        # authority; extra values cannot smuggle a CID path or container name.
+        # The field assertion above proves no cleanup coordinate is modeled.
+        # This call separately guards the fixed-arity boundary against extras.
         with self.assertRaises(TypeError):
             build_transport.DockerBuildRequestV1(
                 1,
