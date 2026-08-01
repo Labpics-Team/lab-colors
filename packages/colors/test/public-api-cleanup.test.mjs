@@ -97,6 +97,19 @@ test("runtime documentation names the declared canvas instead of the removed fal
   assert.match(docs, /^\s*canvas\??\s*:/mu);
 });
 
+test("repository docs preserve the Point-or-Unknown observation contract", () => {
+  const rootReadme = read("README.md");
+  const whitepaper = read("docs", "whitepaper.md");
+
+  assert.doesNotMatch(rootReadme, /^### `effectiveBackground`/mu);
+  assert.doesNotMatch(
+    whitepaper,
+    /legacy helper.*(?:белую базу|white base)/isu,
+  );
+  assert.match(rootReadme, /типизированным `Unknown`/u);
+  assert.match(whitepaper, /типизированный исход `Unknown`/u);
+});
+
 test("the unshipped JavaScript FNV mirror stays deleted", () => {
   for (const path of [
     ["packages", "colors", "fnv1a.js"],
