@@ -36,13 +36,15 @@ from test_pipeline import (  # noqa: E402
 from test_receipt import _execute  # noqa: E402
 
 
-# The gate owns the inventory contract; this test reuses the same SSOT instead
-# of maintaining a second literal that could drift from the executed gate.
-ARB_INVENTORY_SHA256_V1 = arb_gate.EXPECTED_TEST_INVENTORY_SHA256
+# Keep an independent outer oracle: importing the gate's expected hash here
+# would let a coordinated gate edit hide inventory drift.
+ARB_INVENTORY_SHA256_V1 = (
+    "666c0a04cf327bf59c2d1e67d534f7f8d25867eb5da0143edaa0d73d8a260576"
+ )
 ARB_ORDER_SHA256_V1 = (
-    "dacf853f0dc565a18c6528a1c6a29e6d0d14c9173709511e204d9cd4a75b301c"
+    "ecb3e7b2b8a6b207513618a519e524446c41bc2f26257097f41111d273d0745f"
 )
-ARB_TEST_COUNT_V1 = arb_gate.EXPECTED_TEST_COUNT
+ARB_TEST_COUNT_V1 = 190
 
 MOVED_INPUT_SURFACE_V1 = (
     "CanonicalInputLimitsV1",
