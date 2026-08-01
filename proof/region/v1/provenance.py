@@ -15,7 +15,6 @@ import tarfile
 import zlib
 from dataclasses import dataclass, field
 from enum import IntEnum, StrEnum
-from functools import cached_property
 from pathlib import PurePosixPath
 from typing import NoReturn, TypeAlias
 from urllib.parse import urlsplit
@@ -36,6 +35,9 @@ TAR_END_MARKER_BYTES = TAR_BLOCK_BYTES * 2
 READ_CHUNK_BYTES = 64 * 1024
 ALLOWED_REGULAR_MODES_V1 = frozenset((0o644, 0o700, 0o755))
 ALLOWED_DIRECTORY_MODE_V1 = 0o755
+
+# Derived identities are capability coordinates, never cache state: a frozen
+# dataclass still has a writable __dict__ through hostile object mutation.
 
 
 class ProvenanceReasonV1(StrEnum):
@@ -580,7 +582,7 @@ class SourceReleaseLockV1:
             integrity,
         )
 
-    @cached_property
+    @property
     def identity(self) -> bytes:
         return _identity(b"labcolors.proof-region.source-release-lock.v1\0", self.encode())
 
@@ -655,7 +657,7 @@ class ArbSourceLockV1:
             _fail("arb-source-lock-v1", ProvenanceReasonV1.FOREIGN_BINDING, "re-encode drift")
         return result
 
-    @cached_property
+    @property
     def identity(self) -> bytes:
         return _identity(SOURCE_LOCK_ID_LABEL_V1, self.encode())
 
@@ -702,7 +704,7 @@ class MpfiSourceLockV1:
             _fail("mpfi-source-lock-v1", ProvenanceReasonV1.FOREIGN_BINDING, "re-encode drift")
         return result
 
-    @cached_property
+    @property
     def identity(self) -> bytes:
         return _identity(SOURCE_LOCK_ID_LABEL_V1, self.encode())
 
@@ -892,7 +894,7 @@ class AdmittedArbSourcesV1:
         object.__setattr__(self, "source_lock_identity", source_lock_identity)
         object.__setattr__(self, "sources", sources)
 
-    @cached_property
+    @property
     def identity(self) -> bytes:
         return _admitted_source_closure_identity_v1(
             ADMITTED_ARB_SOURCES_ID_LABEL_V1,
@@ -925,7 +927,7 @@ class AdmittedMpfiSourcesV1:
         object.__setattr__(self, "source_lock_identity", source_lock_identity)
         object.__setattr__(self, "sources", sources)
 
-    @cached_property
+    @property
     def identity(self) -> bytes:
         return _admitted_source_closure_identity_v1(
             ADMITTED_MPFI_SOURCES_ID_LABEL_V1,
@@ -1245,7 +1247,7 @@ def replay_admitted_source_archive_v1(
         )
     except ProvenanceErrorV1:
         raise
-    except (AttributeError, TypeError, ValueError, OverflowError):
+    except Exception:
         _fail(
             "source-archive-replay-v1",
             ProvenanceReasonV1.FOREIGN_BINDING,

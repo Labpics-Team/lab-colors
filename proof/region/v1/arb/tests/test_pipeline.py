@@ -850,6 +850,30 @@ class ControlledPipelineTests(unittest.TestCase):
         )
         self.assertEqual(backend.requests, [])
 
+    def test_hostile_nominal_source_coordinate_is_typed_before_build(self) -> None:
+        request = _request()
+        source = request.source_lock.sources[0]
+        original_length = source.archive_length
+
+        class ExplodingCoordinate:
+            def __ne__(self, _other: object) -> bool:
+                raise RuntimeError("hostile coordinate comparison")
+
+        object.__setattr__(source, "archive_length", ExplodingCoordinate())
+        backend = _BuildBackend((_static_elf(), _static_elf()))
+        try:
+            result = pipeline.ControlledPipelineV1(build_backend=backend).build(request)
+        finally:
+            object.__setattr__(source, "archive_length", original_length)
+
+        self.assertIs(type(result), build_transport.BuildRejectedV1)
+        self.assertEqual(result.attempt, 1)
+        self.assertIs(
+            result.reason,
+            build_transport.BuildFailureReasonV1.CONTRACT_VIOLATION,
+        )
+        self.assertEqual(backend.requests, [])
+
     def test_job_that_exceeds_exact_run_limits_is_rejected_before_build(self) -> None:
         with self.assertRaises(pipeline.PipelineInputErrorV1) as caught:
             _request(
