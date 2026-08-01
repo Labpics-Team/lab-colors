@@ -1413,32 +1413,99 @@ def _current_unified_cgroup_v1() -> Path:
     return _CGROUP_ROOT_V1 / relative[1:]
 
 
+def canonical_cgroup_parent_v1(value: object) -> Path:
+    """Parse one declared cgroup parent without resolving symbolic links."""
+
+    try:
+        raw = os.fspath(value)
+    except Exception as error:
+        raise TypeError(
+            "cgroup parent must be an absolute canonical Path"
+        ) from error
+    if (
+        type(raw) is not str
+        or "\0" in raw
+        or not raw.startswith("/")
+        or raw.startswith("//")
+        or raw != posixpath.normpath(raw)
+        or (
+            raw != "/"
+            and any(part in ("", ".", "..") for part in raw[1:].split("/"))
+        )
+    ):
+        raise TypeError("cgroup parent must be an absolute canonical Path")
+    try:
+        os.fsencode(raw)
+    except (TypeError, UnicodeError) as error:
+        raise TypeError("cgroup parent must be filesystem-encodable") from error
+    return Path(raw)
+
+
+def _open_cgroup_directory_v1(parent: object) -> int:
+    """Open an absolute canonical cgroup directory without following symlinks."""
+
+    encoded = os.fsencode(canonical_cgroup_parent_v1(parent))
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW
+    descriptor = os.open(b"/", flags)
+    try:
+        for component in encoded.split(b"/")[1:]:
+            if not component:
+                continue
+            next_descriptor = os.open(component, flags, dir_fd=descriptor)
+            # Linux releases a descriptor number even when close reports a
+            # late interruption. Transfer ownership first: retrying that
+            # number could close an unrelated descriptor that reused it.
+            previous_descriptor, descriptor = descriptor, next_descriptor
+            try:
+                os.close(previous_descriptor)
+            except BaseException as primary:
+                cleanup_descriptor, descriptor = descriptor, -1
+                try:
+                    os.close(cleanup_descriptor)
+                except BaseException as cleanup:
+                    raise primary.with_traceback(primary.__traceback__) from cleanup
+                raise
+        result = descriptor
+        descriptor = -1
+        return result
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+
+
 def enter_observer_cgroup_v1(parent: Path) -> None:
     """Move the dedicated controller into the declared observer group."""
 
-    if not isinstance(parent, Path) or not parent.is_absolute():
-        raise TypeError("cgroup parent must be an absolute Path")
-    directory_fd = os.open(
-        os.fsencode(parent / "observer"),
-        os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW,
-    )
+    if not isinstance(parent, Path):
+        raise TypeError("cgroup parent must be an absolute canonical Path")
+    # Descriptors pin every path component; resolving a pathname would follow
+    # a symlink before this controller can prove which cgroup it entered.
+    parent_fd = _open_cgroup_directory_v1(parent)
     try:
-        metadata = os.fstat(directory_fd)
-        if not stat.S_ISDIR(metadata.st_mode):
-            raise OSError("observer cgroup is not a directory")
-        procs_fd = os.open(
-            b"cgroup.procs",
-            os.O_WRONLY | os.O_CLOEXEC | os.O_NOFOLLOW,
-            dir_fd=directory_fd,
+        directory_fd = os.open(
+            b"observer",
+            os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW,
+            dir_fd=parent_fd,
         )
         try:
-            payload = str(os.getpid()).encode("ascii")
-            if os.write(procs_fd, payload) != len(payload):
-                raise OSError("short cgroup placement write")
+            metadata = os.fstat(directory_fd)
+            if not stat.S_ISDIR(metadata.st_mode):
+                raise OSError("observer cgroup is not a directory")
+            procs_fd = os.open(
+                b"cgroup.procs",
+                os.O_WRONLY | os.O_CLOEXEC | os.O_NOFOLLOW,
+                dir_fd=directory_fd,
+            )
+            try:
+                payload = str(os.getpid()).encode("ascii")
+                if os.write(procs_fd, payload) != len(payload):
+                    raise OSError("short cgroup placement write")
+            finally:
+                os.close(procs_fd)
         finally:
-            os.close(procs_fd)
+            os.close(directory_fd)
     finally:
-        os.close(directory_fd)
+        os.close(parent_fd)
 
 
 class _CgroupV2V1:
@@ -1449,22 +1516,13 @@ class _CgroupV2V1:
 
     @classmethod
     def probe_observer_task_budget(cls, parent: Path) -> None:
-        parent_fd = os.open(
-            os.fsencode(parent),
-            os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW,
-        )
+        parent_fd = _open_cgroup_directory_v1(parent)
         current_fd = -1
         current_parent_fd = -1
         try:
             current = _current_unified_cgroup_v1()
-            current_fd = os.open(
-                os.fsencode(current),
-                os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW,
-            )
-            current_parent_fd = os.open(
-                os.fsencode(current.parent),
-                os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW,
-            )
+            current_fd = _open_cgroup_directory_v1(current)
+            current_parent_fd = _open_cgroup_directory_v1(current.parent)
             parent_stat = os.fstat(parent_fd)
             current_parent_stat = os.fstat(current_parent_fd)
             if (
@@ -1500,10 +1558,7 @@ class _CgroupV2V1:
         memory_max: int | None,
         pids_max: int,
     ) -> "_CgroupV2V1":
-        parent_fd = os.open(
-            os.fsencode(parent),
-            os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW,
-        )
+        parent_fd = _open_cgroup_directory_v1(parent)
         name = f"labcolors-executor-{os.getpid()}-{next(_CGROUP_NAMES)}".encode("ascii")
         directory_fd = -1
         try:
@@ -1750,7 +1805,11 @@ class NativeLinuxBackendV1:
         cgroup_factory: object = _CgroupV2V1,
         monotonic_ns: object = time.monotonic_ns,
     ) -> None:
-        self._cgroup_parent = None if cgroup_parent is None else Path(cgroup_parent)
+        self._cgroup_parent = (
+            None
+            if cgroup_parent is None
+            else canonical_cgroup_parent_v1(cgroup_parent)
+        )
         self._platform_name = sys.platform if platform_name is None else platform_name
         self._machine_name = platform.machine() if machine_name is None else machine_name
         self._operations = operations
@@ -1785,15 +1844,6 @@ class NativeLinuxBackendV1:
                     CapabilityFailureV1(
                         CapabilityReasonV1.CGROUP_PARENT_NOT_DECLARED,
                         None,
-                    ),
-                )
-            )
-        if not self._cgroup_parent.is_absolute():
-            return UnsupportedV1(
-                (
-                    CapabilityFailureV1(
-                        CapabilityReasonV1.CGROUP_V2_UNAVAILABLE,
-                        errno_module.EINVAL,
                     ),
                 )
             )

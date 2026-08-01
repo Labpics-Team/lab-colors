@@ -256,13 +256,35 @@ class SourceBoundReceiptTests(unittest.TestCase):
             _static_elf(b"shared-observer-placement-failure"),
             failed_backend,
         )
-        with failed_patches[0], failed_patches[1], failed_patches[2], failed_patches[3], mock.patch.object(
+        forbidden_run_backend = mock.Mock(
+            side_effect=AssertionError(
+                "RUN backend must not be constructed after placement failure"
+            )
+        )
+        placement_build_calls: list[int] = []
+
+        def fail_placement(_parent: Path) -> None:
+            placement_build_calls.append(build_runs.call_count)
+            raise OSError("observer group unavailable")
+
+        with failed_patches[0], failed_patches[1] as build_runs, failed_patches[2], failed_patches[3], mock.patch.object(
             executor,
             "enter_observer_cgroup_v1",
-            side_effect=OSError("observer group unavailable"),
+            side_effect=fail_placement,
+        ) as placement, mock.patch.object(
+            receipt,
+            "_NATIVE_RUN_BACKEND_TYPE",
+            new=forbidden_run_backend,
+        ), mock.patch.object(
+            executor,
+            "NativeLinuxBackendV1",
+            new=forbidden_run_backend,
         ):
             failed = failed_controller.execute(_request())
 
+        placement.assert_called_once_with(Path("/sys/fs/cgroup/labcolors/proof"))
+        self.assertEqual(placement_build_calls, [2])
+        forbidden_run_backend.assert_not_called()
         self.assertEqual(
             failed,
             receipt.SourceBoundRejectedV1(
@@ -278,6 +300,42 @@ class SourceBoundReceiptTests(unittest.TestCase):
                 "controller authority is one-shot",
             ),
         )
+
+    def test_controller_rejects_hostile_native_coordinates_on_construction(self) -> None:
+        class ExplodingPath(type(Path())):
+            def is_absolute(self) -> bool:
+                raise RuntimeError("hostile path predicate")
+
+        class ExplodingFilesystemPath(type(Path())):
+            def __fspath__(self) -> str:
+                raise RuntimeError("hostile filesystem path")
+
+        valid_docker = Path("/usr/bin/docker")
+        valid_parent = Path("/sys/fs/cgroup/labcolors/proof")
+        for docker_path, cgroup_parent in (
+            (object(), valid_parent),
+            (Path("relative"), valid_parent),
+            (Path("/docker\0"), valid_parent),
+            (Path("/docker\n"), valid_parent),
+            (Path("/docker,comma"), valid_parent),
+            (Path("/docker\ud800"), valid_parent),
+            (ExplodingPath("/usr/bin/docker"), valid_parent),
+            (valid_docker, object()),
+            (valid_docker, Path("relative")),
+            (valid_docker, Path("/proof\0")),
+            (valid_docker, Path("/proof\ud800")),
+            (valid_docker, Path("//proof")),
+            (valid_docker, ExplodingFilesystemPath("/proof")),
+        ):
+            with self.subTest(
+                docker_path=type(docker_path).__name__,
+                cgroup_parent=type(cgroup_parent).__name__,
+            ):
+                with self.assertRaises(TypeError):
+                    receipt.SourceBoundArbControllerV1(  # type: ignore[arg-type]
+                        docker_path,
+                        cgroup_parent,
+                    )
 
     def test_source_bound_policy_identity_consumes_explicit_trust_coordinate(self) -> None:
         capability = _docker_capability()
@@ -384,13 +442,17 @@ class SourceBoundReceiptTests(unittest.TestCase):
         self.assertNotIn("pipeline._build_process_bytes_v1", source)
         self.assertNotIn("executor._execution_identity_v1", source)
         self.assertNotIn("executor._enter_observer_cgroup_v1", source)
+        self.assertNotIn("executor._canonical_cgroup_parent_v1", source)
         self.assertNotIn("sealed_build_input_bundle_is_well_bound_v1", source)
         self.assertIn("pipeline.arb_input_is_bound_v1", source)
         self.assertIn("build_transport.build_process_bytes_v1", source)
+        self.assertIn("build_transport.docker_command_coordinate_v1", source)
         self.assertTrue(hasattr(pipeline, "arb_input_is_bound_v1"))
         self.assertTrue(hasattr(build_transport, "build_process_bytes_v1"))
+        self.assertTrue(hasattr(build_transport, "docker_command_coordinate_v1"))
         self.assertTrue(hasattr(executor, "invocation_identity_v1"))
         self.assertTrue(hasattr(executor, "platform_identity_v1"))
+        self.assertTrue(hasattr(executor, "canonical_cgroup_parent_v1"))
         self.assertTrue(hasattr(executor, "enter_observer_cgroup_v1"))
 
     def test_reference_does_not_describe_shipped_arb_receipt_as_future(self) -> None:

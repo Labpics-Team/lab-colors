@@ -218,11 +218,14 @@ malformed value становится versioned typed rejection, а не ново
 exception-channel. `ControlledExecutorV1` отвергает такой request до probe и
 backend run как `ObserverFailureV1(REQUEST_NOT_ADMITTED)`.
 
-`executor.enter_observer_cgroup_v1` — единственная versioned
-межмодульная операция размещения: engine controller передаёт абсолютный
-parent, а executor помещает текущий controller в `parent/observer` и
-пробрасывает отказ для typed mapping вызывающего. Engine не копирует этот
-descriptor protocol.
+`executor.canonical_cgroup_parent_v1` разбирает объявленный parent без
+filesystem resolution. `executor.enter_observer_cgroup_v1` — единственная
+versioned межмодульная операция размещения: engine controller передаёт этот
+абсолютный канонический parent, а executor помещает текущий controller в
+`parent/observer` и пробрасывает отказ для typed mapping вызывающего. Engine не
+копирует этот descriptor protocol. Executor открывает каждый сегмент parent
+descriptor-relative с `O_NOFOLLOW`, поэтому symbolic link не может незаметно
+связать controller с другой cgroup.
 
 Linux backend допускается лишь в отдельном helper process. Helper находится в
 прямом дочернем cgroup объявленного parent, а весь parent subtree имеет
@@ -261,6 +264,13 @@ fixture-specific cap.
 3. daemon observation identity связывает только два raw probe stdout;
 4. Docker capability identity связывает policy, command contract и exact CLI
    path, daemon observation и наблюдённые host uid/gid.
+
+`docker_command_coordinate_v1` допускает exact absolute Docker-safe argv path
+без filesystem resolution. Перед native probe adapter descriptor-relative
+открывает каждый его сегмент с `O_NOFOLLOW` и принимает только текущий regular
+CLI file. Это проверка pathname, а не заявление о неизменном file object между
+probe и BUILD: native host, его Docker CLI и daemon остаются явной unsealed
+trust boundary.
 
 `BuildSessionV1` и каждый `DockerBuildRequestV1` сохраняют только ту же
 capability, те же input bytes и output cap. Request не содержит host path,

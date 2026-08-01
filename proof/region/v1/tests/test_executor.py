@@ -8,6 +8,7 @@ import fcntl
 import hashlib
 import os
 import signal
+import stat
 import struct
 import sys
 import tempfile
@@ -674,9 +675,11 @@ class RequestAdmissionTests(unittest.TestCase):
     def test_cross_module_verifiers_are_explicit_versioned_api(self) -> None:
         self.assertTrue(callable(executor.require_static_x86_64_elf_v1))
         self.assertTrue(callable(executor.result_matches_request_v1))
+        self.assertTrue(callable(executor.canonical_cgroup_parent_v1))
         self.assertTrue(callable(executor.enter_observer_cgroup_v1))
         self.assertFalse(hasattr(executor, "_require_static_x86_64_elf"))
         self.assertFalse(hasattr(executor, "_result_matches_request"))
+        self.assertFalse(hasattr(executor, "_canonical_cgroup_parent_v1"))
         self.assertFalse(hasattr(executor, "_enter_observer_cgroup_v1"))
 
 
@@ -719,6 +722,27 @@ class CapabilityAndExecutionTests(unittest.TestCase):
             ),
             report.failures,
         )
+
+    def test_native_backend_rejects_noncanonical_cgroup_configuration(self) -> None:
+        class ExplodingPathLike:
+            def __fspath__(self) -> str:
+                raise RuntimeError("hostile cgroup path")
+
+        for invalid in (
+            object(),
+            b"/delegated-proof-cgroup",
+            "relative",
+            "/delegated-proof-cgroup\0",
+            "/delegated-proof-cgroup\ud800",
+            "/delegated/./proof-cgroup",
+            "/delegated/../proof-cgroup",
+            "//delegated/proof-cgroup",
+            "/delegated/proof-cgroup/",
+            ExplodingPathLike(),
+        ):
+            with self.subTest(invalid=type(invalid).__name__):
+                with self.assertRaises(TypeError):
+                    executor.NativeLinuxBackendV1(cgroup_parent=invalid)  # type: ignore[arg-type]
 
     def test_supported_probe_executes_every_required_mechanism(self) -> None:
         operations = _ProbeOperations()
@@ -1482,7 +1506,7 @@ class SameObjectAndObserverProtocolTests(unittest.TestCase):
                 self.assertEqual(caught.exception.errno, errno.EPROTO)
 
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             parent = root / "proof"
             observer = parent / "observer"
             observer.mkdir(parents=True)
@@ -1509,9 +1533,189 @@ class SameObjectAndObserverProtocolTests(unittest.TestCase):
                             )
                     path.write_bytes(original)
 
+    def test_cgroup_directory_coordinates_never_follow_aliases(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            target = root / "target"
+            parent = target / "proof"
+            observer = parent / "observer"
+            observer.mkdir(parents=True)
+            alias = root / "alias"
+            alias.symlink_to(target, target_is_directory=True)
+            declared_parent = alias / "proof"
+
+            with mock.patch.object(
+                executor,
+                "_current_unified_cgroup_v1",
+            ) as current:
+                with self.assertRaises(OSError):
+                    executor._CgroupV2V1.probe_observer_task_budget(declared_parent)
+            current.assert_not_called()
+
+            before = tuple(parent.iterdir())
+            with mock.patch.object(
+                executor,
+                "_read_cgroup_file",
+                side_effect=AssertionError("alias must fail before cgroup IO"),
+            ) as read_cgroup_file:
+                with self.assertRaises(OSError):
+                    executor._CgroupV2V1.create(
+                        declared_parent,
+                        memory_max=None,
+                        pids_max=1,
+                    )
+            read_cgroup_file.assert_not_called()
+            self.assertEqual(tuple(parent.iterdir()), before)
+
+            current_target = root / "current-target"
+            actual_parent = current_target / "proof"
+            current_observer = actual_parent / "observer"
+            current_observer.mkdir(parents=True)
+            (actual_parent / "pids.max").write_bytes(b"2\n")
+            (actual_parent / "pids.current").write_bytes(b"1\n")
+            (current_observer / "pids.current").write_bytes(b"1\n")
+            current_alias = root / "current-alias"
+            current_alias.symlink_to(current_target, target_is_directory=True)
+            with mock.patch.object(
+                executor,
+                "_current_unified_cgroup_v1",
+                return_value=current_alias / "proof" / "observer",
+            ):
+                with self.assertRaises(OSError):
+                    executor._CgroupV2V1.probe_observer_task_budget(actual_parent)
+
+    def test_cgroup_parent_parser_is_total_and_preserves_root(self) -> None:
+        class ExplodingPathLike:
+            def __fspath__(self) -> str:
+                raise RuntimeError("hostile cgroup path")
+
+        self.assertEqual(
+            executor.canonical_cgroup_parent_v1("/delegated/proof"),
+            Path("/delegated/proof"),
+        )
+        self.assertEqual(executor.canonical_cgroup_parent_v1(Path("/")), Path("/"))
+        root_fd = executor._open_cgroup_directory_v1(Path("/"))
+        try:
+            self.assertTrue(stat.S_ISDIR(os.fstat(root_fd).st_mode))
+        finally:
+            os.close(root_fd)
+
+        for invalid in (
+            object(),
+            b"/delegated/proof",
+            "relative",
+            "/delegated/proof\0",
+            "/delegated/proof\ud800",
+            "/delegated/./proof",
+            "/delegated/../proof",
+            "//delegated/proof",
+            "/delegated/proof/",
+            ExplodingPathLike(),
+        ):
+            with self.subTest(invalid=type(invalid).__name__):
+                with self.assertRaises(TypeError):
+                    executor.canonical_cgroup_parent_v1(invalid)
+
+    def test_cgroup_directory_walk_never_recloses_a_released_descriptor(self) -> None:
+        """A late close interruption must not target a reused descriptor number."""
+
+        with tempfile.TemporaryDirectory() as temporary:
+            parent = Path(temporary).resolve() / "delegated" / "proof"
+            parent.mkdir(parents=True)
+            real_open = os.open
+            real_close = os.close
+            released_descriptor: int | None = None
+            successor_descriptor: int | None = None
+            close_calls: list[int] = []
+            opened_descriptors: list[int] = []
+
+            def record_open(*args: object, **kwargs: object) -> int:
+                descriptor = real_open(*args, **kwargs)
+                opened_descriptors.append(descriptor)
+                return descriptor
+
+            def close_after_release(descriptor: int) -> None:
+                nonlocal released_descriptor, successor_descriptor
+                close_calls.append(descriptor)
+                if released_descriptor is None:
+                    successor_descriptor = opened_descriptors[-1]
+                    real_close(descriptor)
+                    released_descriptor = real_open(
+                        os.devnull,
+                        os.O_RDONLY | os.O_CLOEXEC,
+                    )
+                    raise KeyboardInterrupt("interrupted after descriptor release")
+                real_close(descriptor)
+
+            try:
+                with mock.patch.object(executor.os, "open", side_effect=record_open), mock.patch.object(
+                    executor.os, "close", side_effect=close_after_release
+                ):
+                    with self.assertRaisesRegex(
+                        KeyboardInterrupt,
+                        "interrupted after descriptor release",
+                    ):
+                        executor._open_cgroup_directory_v1(parent)
+                self.assertIsNotNone(released_descriptor)
+                self.assertEqual(close_calls.count(released_descriptor), 1)
+                os.fstat(released_descriptor)
+                self.assertIsNotNone(successor_descriptor)
+                with self.assertRaises(OSError):
+                    os.fstat(successor_descriptor)
+            finally:
+                if released_descriptor is not None:
+                    try:
+                        real_close(released_descriptor)
+                    except OSError:
+                        pass
+
+    def test_cgroup_directory_walk_preserves_primary_close_interruption(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            parent = Path(temporary).resolve() / "delegated" / "proof"
+            parent.mkdir(parents=True)
+            real_close = os.close
+            replacement: int | None = None
+            close_stage = 0
+
+            def close_with_two_interruptions(descriptor: int) -> None:
+                nonlocal close_stage, replacement
+                if close_stage == 0:
+                    close_stage += 1
+                    real_close(descriptor)
+                    replacement = os.open(os.devnull, os.O_RDONLY | os.O_CLOEXEC)
+                    raise KeyboardInterrupt("primary close interruption")
+                if close_stage == 1:
+                    close_stage += 1
+                    real_close(descriptor)
+                    raise KeyboardInterrupt("cleanup close interruption")
+                real_close(descriptor)
+
+            try:
+                with mock.patch.object(
+                    executor.os,
+                    "close",
+                    side_effect=close_with_two_interruptions,
+                ):
+                    with self.assertRaisesRegex(
+                        KeyboardInterrupt,
+                        "primary close interruption",
+                    ) as caught:
+                        executor._open_cgroup_directory_v1(parent)
+                self.assertIsInstance(caught.exception.__cause__, KeyboardInterrupt)
+                self.assertEqual(str(caught.exception.__cause__), "cleanup close interruption")
+                self.assertIsNotNone(replacement)
+                os.fstat(replacement)
+            finally:
+                if replacement is not None:
+                    try:
+                        real_close(replacement)
+                    except OSError:
+                        pass
+
     def test_observer_cgroup_placement_is_exact_and_fail_closed(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            parent = Path(temporary) / "proof"
+            root = Path(temporary).resolve()
+            parent = root / "proof"
             observer = parent / "observer"
             observer.mkdir(parents=True)
             procs = observer / "cgroup.procs"
@@ -1521,14 +1725,68 @@ class SameObjectAndObserverProtocolTests(unittest.TestCase):
 
             self.assertEqual(procs.read_bytes(), str(os.getpid()).encode("ascii"))
 
-        for invalid in (object(), Path("relative"), "/absolute"):
+        for invalid in (
+            object(),
+            Path("relative"),
+            Path("/absolute\0"),
+            Path("/absolute\ud800"),
+            "/absolute",
+        ):
             with self.subTest(invalid=invalid):
                 with self.assertRaises(TypeError):
                     executor.enter_observer_cgroup_v1(invalid)  # type: ignore[arg-type]
 
+        class ExplodingPath(type(Path())):
+            def __truediv__(self, _other: object) -> Path:
+                raise RuntimeError("hostile path operator")
+
         with tempfile.TemporaryDirectory() as temporary:
-            parent = Path(temporary) / "proof"
-            target = Path(temporary) / "target"
+            root = Path(temporary).resolve()
+            parent = root / "proof"
+            observer = parent / "observer"
+            observer.mkdir(parents=True)
+            procs = observer / "cgroup.procs"
+            procs.write_bytes(b"")
+
+            executor.enter_observer_cgroup_v1(ExplodingPath(str(parent)))
+
+            self.assertEqual(procs.read_bytes(), str(os.getpid()).encode("ascii"))
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            parent = root / "proof"
+            target = root / "target"
+            observer = target / "observer"
+            observer.mkdir(parents=True)
+            procs = observer / "cgroup.procs"
+            procs.write_bytes(b"")
+            parent.symlink_to(target, target_is_directory=True)
+
+            with self.assertRaises(OSError):
+                executor.enter_observer_cgroup_v1(parent)
+
+            self.assertEqual(procs.read_bytes(), b"")
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            target = root / "target"
+            parent = target / "proof"
+            observer = parent / "observer"
+            observer.mkdir(parents=True)
+            procs = observer / "cgroup.procs"
+            procs.write_bytes(b"")
+            alias = root / "alias"
+            alias.symlink_to(target, target_is_directory=True)
+
+            with self.assertRaises(OSError):
+                executor.enter_observer_cgroup_v1(alias / "proof")
+
+            self.assertEqual(procs.read_bytes(), b"")
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            parent = root / "proof"
+            target = root / "target"
             parent.mkdir()
             target.mkdir()
             (target / "cgroup.procs").write_bytes(b"")
@@ -1538,10 +1796,11 @@ class SameObjectAndObserverProtocolTests(unittest.TestCase):
                 executor.enter_observer_cgroup_v1(parent)
 
         with tempfile.TemporaryDirectory() as temporary:
-            parent = Path(temporary) / "proof"
+            root = Path(temporary).resolve()
+            parent = root / "proof"
             observer = parent / "observer"
             observer.mkdir(parents=True)
-            target = Path(temporary) / "foreign-procs"
+            target = root / "foreign-procs"
             target.write_bytes(b"")
             (observer / "cgroup.procs").symlink_to(target)
 
@@ -1549,7 +1808,8 @@ class SameObjectAndObserverProtocolTests(unittest.TestCase):
                 executor.enter_observer_cgroup_v1(parent)
 
         with tempfile.TemporaryDirectory() as temporary:
-            parent = Path(temporary) / "proof"
+            root = Path(temporary).resolve()
+            parent = root / "proof"
             observer = parent / "observer"
             observer.mkdir(parents=True)
             (observer / "cgroup.procs").write_bytes(b"")
@@ -1569,7 +1829,7 @@ class SameObjectAndObserverProtocolTests(unittest.TestCase):
                 with self.assertRaises(OSError):
                     executor.enter_observer_cgroup_v1(parent)
 
-            self.assertEqual(len(opened), 2)
+            self.assertEqual(len(opened), len(parent.parts) + 2)
             for descriptor in opened:
                 with self.subTest(descriptor=descriptor):
                     with self.assertRaises(OSError) as caught:
