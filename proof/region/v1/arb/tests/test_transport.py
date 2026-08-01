@@ -671,6 +671,51 @@ class BuildInputObserverTests(unittest.TestCase):
 
 
 class SealedBuildTransportContractTests(unittest.TestCase):
+    def test_diagnostic_details_have_one_strict_admission_law(self) -> None:
+        constructors = (
+            (
+                "unsupported",
+                lambda detail: build_transport.DockerUnsupportedV1(
+                    build_transport.DockerBlockerReasonV1.BACKEND_CONTRACT,
+                    detail,
+                ),
+            ),
+            (
+                "observer-failure",
+                lambda detail: build_transport.DockerBuildObserverFailureV1(
+                    detail,
+                    b"",
+                    b"",
+                ),
+            ),
+            (
+                "cleanup-record",
+                lambda detail: build_transport.CleanupFailureRecordV1(
+                    build_transport.CleanupResourceV1.DOCKER_CID_ROOT,
+                    detail,
+                ),
+            ),
+        )
+
+        class DetailSubclass(str):
+            pass
+
+        for constructor_name, constructor in constructors:
+            with self.subTest(constructor=constructor_name, detail="valid"):
+                self.assertIsNotNone(constructor("valid diagnostic detail"))
+            for name, invalid_detail in (
+                ("empty", ""),
+                ("subclass", DetailSubclass("detail")),
+                (
+                    "too-long",
+                    "x" * (build_transport._DIAGNOSTIC_DETAIL_TEXT_LIMIT_V1 + 1),
+                ),
+                ("wrong-type", object()),
+            ):
+                with self.subTest(constructor=constructor_name, detail=name):
+                    with self.assertRaises(TypeError):
+                        constructor(invalid_detail)
+
     def test_successful_probe_keeps_machine_readable_stdout_despite_cli_warning(self) -> None:
         policy = pipeline.ARB_BUILD_TRANSPORT_POLICY_V1
         with tempfile.TemporaryDirectory() as temporary:
@@ -798,7 +843,393 @@ class SealedBuildTransportContractTests(unittest.TestCase):
         finally:
             backend._release_run_lease_v1(lease)
 
-    def test_native_adapter_keeps_cleanup_failure_typed_for_unknown_observation(self) -> None:
+    def test_native_adapter_rejects_malformed_nominal_observations_typed(self) -> None:
+        raw_observations = (
+            ("unknown", object()),
+            *(
+                (kind.__name__, tuple.__new__(kind, ()))
+                for kind in (
+                    build_transport.DockerBuildExitedV1,
+                    build_transport.DockerBuildTimedOutV1,
+                    build_transport.DockerBuildOutputLimitV1,
+                    build_transport.DockerBuildObserverFailureV1,
+                    build_transport.DockerBuildInputRejectedV1,
+                    build_transport.DockerBuildCleanupFailureV1,
+                )
+            ),
+            (
+                "DockerBuildObserverFailureV1/invalid-progress",
+                tuple.__new__(
+                    build_transport.DockerBuildObserverFailureV1,
+                    ("forged", b"untrusted stdout", b"untrusted stderr", object()),
+                ),
+            ),
+        )
+
+        def observe(raw: object, *, cleanup_fails: bool) -> object:
+            backend = build_transport.NativeDockerBuildBackendV1(
+                Path("/usr/bin/true"),
+                pipeline.ARB_BUILD_TRANSPORT_POLICY_V1,
+                platform_name="linux",
+                machine_name="x86_64",
+                host_user=(501, 20),
+            )
+            capability = _probe_native_backend(
+                backend,
+                pipeline.ARB_BUILD_TRANSPORT_POLICY_V1,
+            )
+            request = build_transport.DockerBuildRequestV1(
+                1,
+                capability,
+                _bundle(1024),
+                1024,
+            )
+            if not cleanup_fails:
+                with mock.patch.object(
+                    backend,
+                    "_observe_command",
+                    return_value=raw,
+                ):
+                    return backend.run_build(request)
+
+            release = backend._release_run_lease_v1
+
+            def report_cleanup_failure(lease: object) -> str:
+                self.assertIsNone(release(lease))
+                return "forced CID-root cleanup failure"
+
+            with mock.patch.object(
+                backend,
+                "_observe_command",
+                return_value=raw,
+            ), mock.patch.object(
+                backend,
+                "_release_run_lease_v1",
+                side_effect=report_cleanup_failure,
+            ):
+                return backend.run_build(request)
+
+        for name, raw in raw_observations:
+            with self.subTest(observation=name, cleanup_fails=False):
+                without_cleanup_failure = observe(raw, cleanup_fails=False)
+                self.assertIs(
+                    type(without_cleanup_failure),
+                    build_transport.DockerBuildObserverFailureV1,
+                )
+                self.assertEqual(
+                    without_cleanup_failure.detail,
+                    "native Docker build observation is not canonical",
+                )
+                self.assertEqual(without_cleanup_failure.stdout, b"")
+                self.assertEqual(without_cleanup_failure.stderr, b"")
+                self.assertIsNone(without_cleanup_failure.input_progress)
+            with self.subTest(observation=name, cleanup_fails=True):
+                with_cleanup_failure = observe(raw, cleanup_fails=True)
+                self.assertIs(
+                    type(with_cleanup_failure),
+                    build_transport.DockerBuildObserverFailureV1,
+                )
+                self.assertEqual(
+                    with_cleanup_failure.detail,
+                    "native Docker build observation is not canonical; "
+                    "forced CID-root cleanup failure",
+                )
+                self.assertEqual(with_cleanup_failure.stdout, b"")
+                self.assertEqual(with_cleanup_failure.stderr, b"")
+                self.assertIsNone(with_cleanup_failure.input_progress)
+
+    def test_native_adapter_rejects_a_preexisting_cid_root_claim(self) -> None:
+        backend = build_transport.NativeDockerBuildBackendV1(
+            Path("/usr/bin/true"),
+            pipeline.ARB_BUILD_TRANSPORT_POLICY_V1,
+            platform_name="linux",
+            machine_name="x86_64",
+            host_user=(501, 20),
+        )
+        capability = _probe_native_backend(
+            backend,
+            pipeline.ARB_BUILD_TRANSPORT_POLICY_V1,
+        )
+        bundle = _bundle(1024)
+        request = build_transport.DockerBuildRequestV1(
+            1,
+            capability,
+            bundle,
+            1024,
+        )
+        raw = build_transport.DockerBuildCleanupFailureV1(
+            build_transport.DockerCleanupTriggerV1.PROCESS_EXIT,
+            (
+                build_transport.CleanupFailureRecordV1(
+                    build_transport.CleanupResourceV1.DOCKER_CID_ROOT,
+                    "forged prior CID-root cleanup failure",
+                ),
+            ),
+            b"retained stdout",
+            b"retained stderr",
+            build_transport._build_input_progress_v1(
+                bundle,
+                bundle.length,
+                bundle.sha256,
+            ),
+        )
+        with mock.patch.object(
+            backend,
+            "_observe_command",
+            return_value=raw,
+        ):
+            without_cleanup_failure = backend.run_build(request)
+
+        self.assertIs(
+            type(without_cleanup_failure),
+            build_transport.DockerBuildObserverFailureV1,
+        )
+        self.assertEqual(
+            without_cleanup_failure.detail,
+            "native Docker build observation already contains a CID-root "
+            "cleanup failure",
+        )
+        self.assertEqual(without_cleanup_failure.stdout, b"retained stdout")
+        self.assertEqual(without_cleanup_failure.stderr, b"retained stderr")
+        self.assertIsNone(without_cleanup_failure.input_progress)
+
+        release = backend._release_run_lease_v1
+
+        def report_cleanup_failure(lease: object) -> str:
+            self.assertIsNone(release(lease))
+            return "forced CID-root cleanup failure"
+
+        with mock.patch.object(
+            backend,
+            "_observe_command",
+            return_value=raw,
+        ), mock.patch.object(
+            backend,
+            "_release_run_lease_v1",
+            side_effect=report_cleanup_failure,
+        ):
+            with_cleanup_failure = backend.run_build(request)
+
+        self.assertIs(
+            type(with_cleanup_failure),
+            build_transport.DockerBuildObserverFailureV1,
+        )
+        self.assertEqual(
+            with_cleanup_failure.detail,
+            "native Docker build observation already contains a CID-root "
+            "cleanup failure; forced CID-root cleanup failure",
+        )
+        self.assertEqual(with_cleanup_failure.stdout, b"retained stdout")
+        self.assertEqual(with_cleanup_failure.stderr, b"retained stderr")
+        self.assertIsNone(with_cleanup_failure.input_progress)
+
+    def test_native_adapter_appends_cid_root_to_canonical_cleanup_prefix(self) -> None:
+        backend = build_transport.NativeDockerBuildBackendV1(
+            Path("/usr/bin/true"),
+            pipeline.ARB_BUILD_TRANSPORT_POLICY_V1,
+            platform_name="linux",
+            machine_name="x86_64",
+            host_user=(501, 20),
+        )
+        capability = _probe_native_backend(
+            backend,
+            pipeline.ARB_BUILD_TRANSPORT_POLICY_V1,
+        )
+        bundle = _bundle(1024)
+        request = build_transport.DockerBuildRequestV1(
+            1,
+            capability,
+            bundle,
+            1024,
+        )
+        progress = build_transport._build_input_progress_v1(
+            bundle,
+            bundle.length,
+            bundle.sha256,
+        )
+        raw = build_transport.DockerBuildCleanupFailureV1(
+            build_transport.DockerCleanupTriggerV1.PROCESS_EXIT,
+            (
+                build_transport.CleanupFailureRecordV1(
+                    build_transport.CleanupResourceV1.DOCKER_CLI_PROCESS,
+                    "prior CLI cleanup failure",
+                ),
+                build_transport.CleanupFailureRecordV1(
+                    build_transport.CleanupResourceV1.DOCKER_CONTAINER,
+                    "prior container cleanup failure",
+                ),
+            ),
+            b"retained stdout",
+            b"retained stderr",
+            progress,
+        )
+        release = backend._release_run_lease_v1
+
+        def report_cleanup_failure(lease: object) -> str:
+            self.assertIsNone(release(lease))
+            return "forced CID-root cleanup failure"
+
+        with mock.patch.object(
+            backend,
+            "_observe_command",
+            return_value=raw,
+        ), mock.patch.object(
+            backend,
+            "_release_run_lease_v1",
+            side_effect=report_cleanup_failure,
+        ):
+            result = backend.run_build(request)
+
+        self.assertIs(type(result), build_transport.DockerBuildCleanupFailureV1)
+        self.assertEqual(result.trigger, build_transport.DockerCleanupTriggerV1.PROCESS_EXIT)
+        self.assertEqual(
+            tuple(record.resource for record in result.failures),
+            (
+                build_transport.CleanupResourceV1.DOCKER_CLI_PROCESS,
+                build_transport.CleanupResourceV1.DOCKER_CONTAINER,
+                build_transport.CleanupResourceV1.DOCKER_CID_ROOT,
+            ),
+        )
+        self.assertEqual(
+            tuple(record.detail for record in result.failures),
+            (
+                "prior CLI cleanup failure",
+                "prior container cleanup failure",
+                "forced CID-root cleanup failure",
+            ),
+        )
+        self.assertEqual(result.stdout, b"retained stdout")
+        self.assertEqual(result.stderr, b"retained stderr")
+        self.assertIs(result.input_progress, progress)
+
+    def test_native_adapter_reowns_invalid_cid_cleanup_details(self) -> None:
+        backend = build_transport.NativeDockerBuildBackendV1(
+            Path("/usr/bin/true"),
+            pipeline.ARB_BUILD_TRANSPORT_POLICY_V1,
+            platform_name="linux",
+            machine_name="x86_64",
+            host_user=(501, 20),
+        )
+        capability = _probe_native_backend(
+            backend,
+            pipeline.ARB_BUILD_TRANSPORT_POLICY_V1,
+        )
+        bundle = _bundle(1024)
+        request = build_transport.DockerBuildRequestV1(
+            1,
+            capability,
+            bundle,
+            1024,
+        )
+        transfer = build_transport._completed_build_input_transfer_v1(
+            bundle,
+            bundle.length,
+            bundle.sha256,
+        )
+        raw = build_transport._docker_build_exited_v1(
+            0,
+            b"built stdout",
+            b"built stderr",
+            transfer,
+        )
+        release = backend._release_run_lease_v1
+
+        for name, invalid_detail in (
+            ("empty", ""),
+            ("wrong-type", object()),
+            (
+                "too-long",
+                "x" * (build_transport._DIAGNOSTIC_DETAIL_TEXT_LIMIT_V1 + 1),
+            ),
+        ):
+            with self.subTest(detail=name):
+
+                def release_with_invalid_detail(
+                    lease: object,
+                    *,
+                    detail: object = invalid_detail,
+                ) -> object:
+                    self.assertIsNone(release(lease))
+                    return detail
+
+                with mock.patch.object(
+                    backend,
+                    "_observe_command",
+                    return_value=raw,
+                ), mock.patch.object(
+                    backend,
+                    "_release_run_lease_v1",
+                    side_effect=release_with_invalid_detail,
+                ):
+                    result = backend.run_build(request)
+
+                self.assertIs(type(result), build_transport.DockerBuildCleanupFailureV1)
+                self.assertEqual(
+                    result.detail,
+                    "native Docker CID root cleanup detail is not canonical",
+                )
+                self.assertEqual(result.stdout, b"built stdout")
+                self.assertEqual(result.stderr, b"built stderr")
+                self.assertEqual(
+                    result.input_progress,
+                    build_transport._build_input_progress_v1(
+                        bundle,
+                        bundle.length,
+                        bundle.sha256,
+                    ),
+                )
+
+    def test_native_adapter_keeps_dual_failure_typed_at_detail_limit(self) -> None:
+        backend = build_transport.NativeDockerBuildBackendV1(
+            Path("/usr/bin/true"),
+            pipeline.ARB_BUILD_TRANSPORT_POLICY_V1,
+            platform_name="linux",
+            machine_name="x86_64",
+            host_user=(501, 20),
+        )
+        capability = _probe_native_backend(
+            backend,
+            pipeline.ARB_BUILD_TRANSPORT_POLICY_V1,
+        )
+        request = build_transport.DockerBuildRequestV1(
+            1,
+            capability,
+            _bundle(1024),
+            1024,
+        )
+        raw = build_transport.DockerBuildObserverFailureV1(
+            "x" * build_transport._DIAGNOSTIC_DETAIL_TEXT_LIMIT_V1,
+            b"retained stdout",
+            b"retained stderr",
+        )
+        release = backend._release_run_lease_v1
+
+        def report_cleanup_failure(lease: object) -> str:
+            self.assertIsNone(release(lease))
+            return "forced CID-root cleanup failure"
+
+        with mock.patch.object(
+            backend,
+            "_observe_command",
+            return_value=raw,
+        ), mock.patch.object(
+            backend,
+            "_release_run_lease_v1",
+            side_effect=report_cleanup_failure,
+        ):
+            result = backend.run_build(request)
+
+        self.assertIs(type(result), build_transport.DockerBuildObserverFailureV1)
+        self.assertEqual(
+            result.detail,
+            "native Docker build observation and CID root cleanup both failed",
+        )
+        self.assertEqual(result.stdout, b"retained stdout")
+        self.assertEqual(result.stderr, b"retained stderr")
+
+    def test_native_adapter_releases_before_propagating_first_canonicalization_interruption(
+        self,
+    ) -> None:
         backend = build_transport.NativeDockerBuildBackendV1(
             Path("/usr/bin/true"),
             pipeline.ARB_BUILD_TRANSPORT_POLICY_V1,
@@ -817,28 +1248,37 @@ class SealedBuildTransportContractTests(unittest.TestCase):
             1024,
         )
         release = backend._release_run_lease_v1
+        released: list[None] = []
 
-        def report_cleanup_failure(lease: object) -> str:
+        class FalseyInterrupt(BaseException):
+            def __bool__(self) -> bool:
+                return False
+
+        original = FalseyInterrupt("first interruption")
+
+        def release_then_record(lease: object) -> None:
             self.assertIsNone(release(lease))
-            return "forced CID-root cleanup failure"
+            released.append(None)
+            raise KeyboardInterrupt("later cleanup interruption")
 
-        with mock.patch.object(backend, "_observe_command", return_value=object()):
-            with mock.patch.object(
-                backend,
-                "_release_run_lease_v1",
-                side_effect=report_cleanup_failure,
-            ):
-                result = backend.run_build(request)
+        with mock.patch.object(
+            backend,
+            "_observe_command",
+            return_value=object(),
+        ), mock.patch.object(
+            build_transport,
+            "_canonical_process_observation_v1",
+            side_effect=original,
+        ), mock.patch.object(
+            backend,
+            "_release_run_lease_v1",
+            side_effect=release_then_record,
+        ):
+            with self.assertRaises(FalseyInterrupt) as raised:
+                backend.run_build(request)
 
-        self.assertIs(type(result), build_transport.DockerBuildObserverFailureV1)
-        self.assertEqual(
-            result.detail,
-            "native Docker build observation is not canonical; "
-            "forced CID-root cleanup failure",
-        )
-        self.assertEqual(result.stdout, b"")
-        self.assertEqual(result.stderr, b"")
-        self.assertIsNone(result.input_progress)
+        self.assertIs(raised.exception, original)
+        self.assertEqual(released, [None])
 
     def test_recipe_is_transport_agnostic_and_bootstrap_owns_binary_stdout(self) -> None:
         source = BUILD_RECIPE.read_text(encoding="utf-8")

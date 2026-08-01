@@ -39,6 +39,12 @@ DOCKER_PROBE_TIMEOUT_NS_V1 = 30 * 1_000_000_000
 _IO_CHUNK_BYTES_V1 = 64 * 1024
 _POLL_SLICE_SECONDS_V1 = 0.1
 _PROCESS_STOP_TIMEOUT_SECONDS_V1 = 30
+# Details enter receipts as bounded diagnostic evidence; this avoids allowing
+# an adapter error string to become an unbounded transport payload.
+_DIAGNOSTIC_DETAIL_TEXT_LIMIT_V1 = 4096
+_INVALID_CID_ROOT_CLEANUP_DETAIL_V1 = (
+    "native Docker CID root cleanup detail is not canonical"
+)
 _PATH_TYPE = type(Path("/"))
 _NATIVE_CID_ROOT_PREFIX_V1 = "labcolors-docker-cid-"
 
@@ -67,6 +73,32 @@ def _blob(value: bytes) -> bytes:
 def _identity(label: bytes, chunks: tuple[bytes, ...]) -> bytes:
     payload = b"".join(_blob(chunk) for chunk in chunks)
     return hashlib.sha256(label + len(payload).to_bytes(8, "big") + payload).digest()
+
+
+def _retain_first_base_exception_v1(
+    retained: BaseException | None,
+    current: BaseException,
+) -> BaseException:
+    return retained if retained is not None else current
+
+
+def _canonical_diagnostic_detail_v1(value: object) -> str | None:
+    if (
+        type(value) is str
+        and value
+        and len(value) <= _DIAGNOSTIC_DETAIL_TEXT_LIMIT_V1
+    ):
+        return value
+    return None
+
+
+def _canonical_cid_root_cleanup_detail_v1(value: object) -> str | None:
+    if value is None:
+        return None
+    detail = _canonical_diagnostic_detail_v1(value)
+    if detail is not None:
+        return detail
+    return _INVALID_CID_ROOT_CLEANUP_DETAIL_V1
 
 
 def _pinned_image_reference(value: object) -> bool:
@@ -865,7 +897,7 @@ class DockerUnsupportedV1(tuple):
     ) -> DockerUnsupportedV1:
         if type(reason) is not DockerBlockerReasonV1:
             raise TypeError("invalid Docker blocker reason")
-        if type(detail) is not str or not detail or len(detail) > 4096:
+        if _canonical_diagnostic_detail_v1(detail) is None:
             raise TypeError("invalid Docker blocker detail")
         return tuple.__new__(cls, (reason, detail))
 
@@ -1631,7 +1663,7 @@ class DockerBuildObserverFailureV1(tuple):
         stderr: bytes,
         input_progress: BuildInputTransferProgressV1 | None = None,
     ) -> DockerBuildObserverFailureV1:
-        if type(detail) is not str or not detail or len(detail) > 4096:
+        if _canonical_diagnostic_detail_v1(detail) is None:
             raise TypeError("invalid Docker observer failure")
         _bounded_bytes(stdout, BUILD_STDOUT_LIMIT_V1, "stdout")
         _bounded_bytes(stderr, BUILD_STDERR_LIMIT_V1, "stderr")
@@ -1718,7 +1750,7 @@ class CleanupFailureRecordV1(tuple):
     ) -> CleanupFailureRecordV1:
         if type(resource) is not CleanupResourceV1:
             raise TypeError("invalid cleanup resource")
-        if type(detail) is not str or not detail or len(detail) > 4096:
+        if _canonical_diagnostic_detail_v1(detail) is None:
             raise TypeError("invalid cleanup failure detail")
         return tuple.__new__(cls, (resource, detail))
 
@@ -2320,7 +2352,7 @@ class NativeDockerBuildBackendV1:
                     b"",
                 )
             policy = capability.policy
-            observation = self._observe_command(
+            raw_observation = self._observe_command(
                 command,
                 stdout_limit=request.max_output_bytes,
                 stderr_limit=policy.stderr_limit,
@@ -2328,6 +2360,35 @@ class NativeDockerBuildBackendV1:
                 lease=lease,
                 input_bundle=request.input_bundle,
             )
+            try:
+                canonical_observation = _canonical_process_observation_v1(
+                    raw_observation,
+                    request.input_bundle,
+                    request.max_output_bytes,
+                    policy.stderr_limit,
+                )
+            except Exception:
+                observation = DockerBuildObserverFailureV1(
+                    "native Docker build observation is not canonical",
+                    b"",
+                    b"",
+                )
+            else:
+                if (
+                    type(canonical_observation) is DockerBuildCleanupFailureV1
+                    and any(
+                        record.resource is CleanupResourceV1.DOCKER_CID_ROOT
+                        for record in canonical_observation.failures
+                    )
+                ):
+                    observation = DockerBuildObserverFailureV1(
+                        "native Docker build observation already contains a "
+                        "CID-root cleanup failure",
+                        canonical_observation.stdout,
+                        canonical_observation.stderr,
+                    )
+                else:
+                    observation = canonical_observation
         except Exception:
             observation = DockerBuildObserverFailureV1(
                 "native Docker build request could not be materialized",
@@ -2340,11 +2401,16 @@ class NativeDockerBuildBackendV1:
             release_detail: str | None = None
             if lease is not None:
                 try:
-                    release_detail = self._release_run_lease_v1(lease)
+                    release_detail = _canonical_cid_root_cleanup_detail_v1(
+                        self._release_run_lease_v1(lease)
+                    )
                 except Exception:
                     release_detail = "native Docker CID root cleanup observer raised"
                 except BaseException as error:
-                    retained_base_exception = retained_base_exception or error
+                    retained_base_exception = _retain_first_base_exception_v1(
+                        retained_base_exception,
+                        error,
+                    )
                     release_detail = "native Docker CID root cleanup was interrupted"
             if retained_base_exception is None and release_detail is not None:
                 observation = self._with_cid_root_cleanup_failure_v1(
@@ -2416,6 +2482,19 @@ class NativeDockerBuildBackendV1:
                 b"",
             )
         if progress is None:
+            if type(observation) is DockerBuildObserverFailureV1:
+                try:
+                    return DockerBuildObserverFailureV1(
+                        observation.detail + "; " + detail,
+                        observation.stdout,
+                        observation.stderr,
+                    )
+                except Exception:
+                    return DockerBuildObserverFailureV1(
+                        "native Docker build observation and CID root cleanup both failed",
+                        observation.stdout,
+                        observation.stderr,
+                    )
             return DockerBuildObserverFailureV1(
                 detail,
                 observation.stdout,
@@ -2660,7 +2739,10 @@ class NativeDockerBuildBackendV1:
                     except Exception:
                         observer_failed = True
                     except BaseException as error:
-                        retained_base_exception = retained_base_exception or error
+                        retained_base_exception = _retain_first_base_exception_v1(
+                            retained_base_exception,
+                            error,
+                        )
                         observer_failed = True
                 if process.stdin is not None:
                     close_failed, close_interrupt = self._close_owned_stream(
@@ -2668,14 +2750,21 @@ class NativeDockerBuildBackendV1:
                     )
                     if close_failed:
                         observer_failed = True
-                    retained_base_exception = retained_base_exception or close_interrupt
+                    if close_interrupt is not None:
+                        retained_base_exception = _retain_first_base_exception_v1(
+                            retained_base_exception,
+                            close_interrupt,
+                        )
                 if bundle_view is not None:
                     try:
                         bundle_view.release()
                     except Exception:
                         observer_failed = True
                     except BaseException as error:
-                        retained_base_exception = retained_base_exception or error
+                        retained_base_exception = _retain_first_base_exception_v1(
+                            retained_base_exception,
+                            error,
+                        )
                         observer_failed = True
                 if input_bundle is not None:
                     try:
@@ -2687,7 +2776,10 @@ class NativeDockerBuildBackendV1:
                     except Exception:
                         observer_failed = True
                     except BaseException as error:
-                        retained_base_exception = retained_base_exception or error
+                        retained_base_exception = _retain_first_base_exception_v1(
+                            retained_base_exception,
+                            error,
+                        )
                         observer_failed = True
                 ownership_lost = ownership_lost or not self._in_owner_process_v1()
                 if not ownership_lost:
@@ -2697,7 +2789,10 @@ class NativeDockerBuildBackendV1:
                         process_running = True
                         stop_detail = "Docker CLI process state could not be observed"
                     except BaseException as error:
-                        retained_base_exception = retained_base_exception or error
+                        retained_base_exception = _retain_first_base_exception_v1(
+                            retained_base_exception,
+                            error,
+                        )
                         process_running = True
                         stop_detail = "Docker CLI process state observation was interrupted"
                     if process_running:
@@ -2713,7 +2808,10 @@ class NativeDockerBuildBackendV1:
                         except Exception:
                             observed_stop = "Docker CLI process termination raised"
                         except BaseException as error:
-                            retained_base_exception = retained_base_exception or error
+                            retained_base_exception = _retain_first_base_exception_v1(
+                                retained_base_exception,
+                                error,
+                            )
                             observed_stop = "Docker CLI process termination was interrupted"
                         fallback_stop = self._force_reap_after_interruption_v1(process)
                         stop_detail = stop_detail or observed_stop or fallback_stop
@@ -2725,7 +2823,11 @@ class NativeDockerBuildBackendV1:
                     )
                     if close_failed:
                         observer_failed = True
-                    retained_base_exception = retained_base_exception or close_interrupt
+                    if close_interrupt is not None:
+                        retained_base_exception = _retain_first_base_exception_v1(
+                            retained_base_exception,
+                            close_interrupt,
+                        )
                 if lease is not None and not ownership_lost:
                     try:
                         cleanup_detail = self._cleanup_container(
@@ -2735,7 +2837,10 @@ class NativeDockerBuildBackendV1:
                     except Exception:
                         cleanup_detail = "Docker container cleanup observer raised"
                     except BaseException as error:
-                        retained_base_exception = retained_base_exception or error
+                        retained_base_exception = _retain_first_base_exception_v1(
+                            retained_base_exception,
+                            error,
+                        )
                         cleanup_detail = "Docker container cleanup was interrupted"
         if retained_base_exception is not None:
             raise retained_base_exception.with_traceback(
@@ -2876,14 +2981,20 @@ class NativeDockerBuildBackendV1:
             except BaseException as error:
                 close_failed = True
                 close_raised = True
-                retained_base_exception = retained_base_exception or error
+                retained_base_exception = _retain_first_base_exception_v1(
+                    retained_base_exception,
+                    error,
+                )
         if close_raised:
             try:
                 still_open = stream.closed is False
             except Exception:
                 still_open = False
             except BaseException as error:
-                retained_base_exception = retained_base_exception or error
+                retained_base_exception = _retain_first_base_exception_v1(
+                    retained_base_exception,
+                    error,
+                )
                 still_open = False
             if still_open:
                 # close() may fail before it releases the resource, but a
@@ -2896,7 +3007,10 @@ class NativeDockerBuildBackendV1:
                     close_failed = True
                 except BaseException as error:
                     close_failed = True
-                    retained_base_exception = retained_base_exception or error
+                    retained_base_exception = _retain_first_base_exception_v1(
+                        retained_base_exception,
+                        error,
+                    )
         return close_failed, retained_base_exception
 
     def _clock(self) -> int:
