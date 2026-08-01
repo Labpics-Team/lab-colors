@@ -157,6 +157,19 @@ Arb controller связывает его с наблюдёнными BUILD/RUN �
 границы доверия; receipt не заявляет отсутствие ambient inputs за пределами этой
 границы. Альтернативный JSON/TOML definition запрещён протоколом.
 
+### MPFI runtime profile V1
+
+Wire grammar сама не превращается в неограниченный allocator. Прямой M1.5
+executable принимает только профиль `LC-MPFI-RUNTIME-V1`: stdin job не более
+16 MiB, не более 4096 bits на precision rung, не более 32 rung-ов, не более
+1024 contextual knots и не более 16 MiB transcript output. Это operational
+admission profile, а не математический предел definition/domain: лимиты job,
+precision, rung-ов и knots возвращают typed `resource_limit` до MPFI
+allocation, а переполнение transcript — typed `output_limit`. M2a обязан
+связать тот же профиль с immutable executor limits и включить его в
+source-bound BUILD/RUN evidence; прямой бинарь до этого не является
+самостоятельным public evaluator API.
+
 ## Фиксация источников и наблюдения целостности
 
 `SourceReleaseLockV1` фиксирует bytes и структурный состав архива. Поле

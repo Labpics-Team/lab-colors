@@ -43,6 +43,13 @@ jobs:
           python3 proof/region/v1/arb/tests/gate.py
           PYTHONOPTIMIZE=2 python3 proof/region/v1/arb/tests/gate.py
 
+      - name: complete fast MPFI source contract with exact inventory
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 proof/region/v1/mpfi/tests/gate.py
+          PYTHONOPTIMIZE=2 python3 proof/region/v1/mpfi/tests/gate.py
+
       - name: bind run-local native paths after the fast gate
         shell: bash
         run: |

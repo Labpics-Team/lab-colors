@@ -147,6 +147,17 @@ class EvaluatorSourceTests(unittest.TestCase):
             errors = operations.validate_sources(copy)
             self.assertTrue(any("forbidden operation mpfi_div_ext" in error for error in errors))
 
+    def test_linked_undefined_operation_symbols_are_closed(self) -> None:
+        errors = operations.validate_undefined_symbols(
+            "                 U mpfi_div_ext\n"
+            "                 U mpfi_div\n"
+        )
+        self.assertEqual(errors, ("forbidden undefined external symbol mpfi_div_ext",))
+        self.assertEqual(
+            operations.validate_undefined_symbols("                 U mpfi_formula_point\n"),
+            ("unexpected undefined external symbol mpfi_formula_point",),
+        )
+
     def test_elf_absence_checks_are_fail_closed_on_inspection_error(self) -> None:
         recipe = (MPFI / "build.sh").read_text(encoding="utf-8")
         start = recipe.index("require_absent_pattern()")
@@ -182,7 +193,29 @@ class EvaluatorSourceTests(unittest.TestCase):
         self.assertIn("-fno-lto", recipe)
         self.assertIn("mpfi-evaluator-v1", recipe)
         self.assertIn("readelf", recipe)
+        self.assertIn("--undefined-only", recipe)
+        self.assertIn("--undefined-symbols", recipe)
         self.assertNotIn("gcc", recipe.lower())
+
+    def test_runtime_profile_is_explicit_and_checked_before_allocation(self) -> None:
+        wire = (EVALUATOR / "wire.h").read_text(encoding="utf-8")
+        wire_source = (EVALUATOR / "wire.c").read_text(encoding="utf-8")
+        main = (EVALUATOR / "main.c").read_text(encoding="utf-8")
+        for name in (
+            "LC_MPFI_MAX_JOB_BYTES_V1",
+            "LC_MPFI_MAX_OUTPUT_BYTES_V1",
+            "LC_MPFI_MAX_PRECISION_BITS_V1",
+            "LC_MPFI_MAX_POLICY_RUNGS_V1",
+            "LC_MPFI_MAX_KNOTS_V1",
+        ):
+            with self.subTest(name=name):
+                self.assertIn(name, wire)
+        self.assertIn("LC_MPFI_MAX_JOB_BYTES_V1", wire_source)
+        self.assertIn("LC_MPFI_MAX_PRECISION_BITS_V1", wire_source)
+        self.assertIn("LC_MPFI_MAX_KNOTS_V1", wire_source)
+        self.assertIn("LC_MPFI_MAX_JOB_BYTES_V1", main)
+        self.assertIn("LC_MPFI_MAX_OUTPUT_BYTES_V1", main)
+        self.assertIn("output_limit", main)
 
     def test_no_pre_run_receipt_or_arb_compatibility_layer_exists(self) -> None:
         self.assertFalse((MPFI / "receipt.py").exists())
@@ -293,6 +326,28 @@ class RuntimeTests(unittest.TestCase):
                 + (0).to_bytes(8, "big")
             ).digest(),
         )
+
+    @unittest.skipUnless(
+        os.environ.get("LABCOLORS_MPFI_EVALUATOR"),
+        "set LABCOLORS_MPFI_EVALUATOR to the controlled C17 binary",
+    )
+    def test_input_limit_is_enforced_before_wire_parse(self) -> None:
+        result = subprocess.run(
+            [
+                os.environ["LABCOLORS_MPFI_EVALUATOR"],
+                "--manifest-identity",
+                ("01" + "23" * 31),
+                "--job",
+                "/dev/stdin",
+            ],
+            input=bytes(16 * 1024 * 1024 + 1),
+            check=False,
+            capture_output=True,
+            timeout=60,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(result.stdout, b"")
+        self.assertEqual(result.stderr, b"job read failed: input_limit\n")
 
 
 if __name__ == "__main__":

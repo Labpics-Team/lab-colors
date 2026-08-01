@@ -295,7 +295,13 @@ parse_definition(
     for (size_t index = 0; index < 8; ++index) {
         knot_count = (knot_count << 8) | fields[21].bytes[index];
     }
-    if (knot_count == 0 || knot_count > SIZE_MAX / 64
+    if (knot_count == 0) {
+        return reject(&input, LC_MPFI_WIRE_NONCANONICAL);
+    }
+    if (knot_count > LC_MPFI_MAX_KNOTS_V1) {
+        return reject(&input, LC_MPFI_WIRE_RESOURCE_LIMIT);
+    }
+    if (knot_count > SIZE_MAX / 64
         || available(&input) != (size_t) knot_count * 64) {
         return reject(&input, LC_MPFI_WIRE_NONCANONICAL);
     }
@@ -561,6 +567,9 @@ parse_policy(
             || rung_count > (available(&input) - minimum_tail) / 4) {
             return reject(&input, LC_MPFI_WIRE_NONCANONICAL);
         }
+        if (rung_count > LC_MPFI_MAX_POLICY_RUNGS_V1) {
+            return reject(&input, LC_MPFI_WIRE_RESOURCE_LIMIT);
+        }
         if (expected_kind == 2) {
             if ((size_t) rung_count > SIZE_MAX / sizeof(*policy->precision_ladder)) {
                 return reject(&input, LC_MPFI_WIRE_LENGTH_OUT_OF_BOUNDS);
@@ -581,6 +590,10 @@ parse_policy(
                 || (uint64_t) precision > (uint64_t) MPFR_PREC_MAX) {
                 free(ladder);
                 return reject(&input, LC_MPFI_WIRE_NONCANONICAL);
+            }
+            if (precision > LC_MPFI_MAX_PRECISION_BITS_V1) {
+                free(ladder);
+                return reject(&input, LC_MPFI_WIRE_RESOURCE_LIMIT);
             }
             if (ladder != NULL) {
                 ladder[index] = precision;
@@ -658,6 +671,10 @@ lc_mpfi_parse_job(
 
     memset(job, 0, sizeof(*job));
     *error = LC_MPFI_WIRE_OK;
+    if (length > (size_t) LC_MPFI_MAX_JOB_BYTES_V1) {
+        *error = LC_MPFI_WIRE_RESOURCE_LIMIT;
+        return false;
+    }
     input = (mpfi_reader) {bytes, length, 0, error};
     if (!expect(&input, job_magic, sizeof(job_magic), LC_MPFI_WIRE_BAD_MAGIC)
         || !take(&input, 32, &definition_digest)
@@ -775,6 +792,7 @@ lc_mpfi_wire_error_name(lc_mpfi_wire_error error)
         "noncanonical",
         "digest_mismatch",
         "allocation_failed",
+        "resource_limit",
     };
 
     return (unsigned) error < sizeof(names) / sizeof(names[0])

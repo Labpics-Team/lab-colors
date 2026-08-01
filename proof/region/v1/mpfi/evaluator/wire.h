@@ -7,6 +7,20 @@
 
 #include "region.h"
 
+/*
+ * M1.5's direct executable has an explicit resource profile.  These are
+ * operational admission bounds, not mathematical restrictions on the
+ * contextual-region wire grammar; M2a must bind the same profile to its
+ * controller/executor limits before minting any observation.
+ */
+#define LC_MPFI_MAX_JOB_BYTES_V1 \
+    (UINT64_C(16) * UINT64_C(1024) * UINT64_C(1024))
+#define LC_MPFI_MAX_OUTPUT_BYTES_V1 \
+    (UINT64_C(16) * UINT64_C(1024) * UINT64_C(1024))
+#define LC_MPFI_MAX_PRECISION_BITS_V1 UINT32_C(4096)
+#define LC_MPFI_MAX_POLICY_RUNGS_V1 UINT32_C(32)
+#define LC_MPFI_MAX_KNOTS_V1 UINT64_C(1024)
+
 typedef enum {
     LC_MPFI_WIRE_OK = 0,
     LC_MPFI_WIRE_TRUNCATED = 1,
@@ -16,7 +30,8 @@ typedef enum {
     LC_MPFI_WIRE_UNKNOWN_RELEASE = 5,
     LC_MPFI_WIRE_NONCANONICAL = 6,
     LC_MPFI_WIRE_DIGEST_MISMATCH = 7,
-    LC_MPFI_WIRE_ALLOCATION_FAILED = 8
+    LC_MPFI_WIRE_ALLOCATION_FAILED = 8,
+    LC_MPFI_WIRE_RESOURCE_LIMIT = 9
 } lc_mpfi_wire_error;
 
 typedef struct {

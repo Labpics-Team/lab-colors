@@ -237,6 +237,9 @@ jobs:
               python -c '\''import unittest; suite = unittest.defaultTestLoader.discover("proof/region/v1/tests", pattern="test_*.py"); count = suite.countTestCases(); minimum = 25; assert count >= minimum, f"region-proof anti-vacuum floor failed: {count} < {minimum}"; print(f"region-proof discovered tests: {count}")'\''
               python -m unittest discover -s proof/region/v1/tests -p "test_*.py" -v
               PYTHONOPTIMIZE=2 python -m unittest discover -s proof/region/v1/tests -p "test_*.py" -v
+              test -f proof/region/v1/mpfi/tests/gate.py
+              python proof/region/v1/mpfi/tests/gate.py
+              PYTHONOPTIMIZE=2 python proof/region/v1/mpfi/tests/gate.py
               python proof/region/v1/controller.py verify-fixtures --repo-root /workspace
             '
       - name: toolchain env (runner.temp)

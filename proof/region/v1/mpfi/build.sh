@@ -5,6 +5,9 @@
 
 set -eu
 
+# The compiler flag string is a sealed, space-delimited profile; word splitting
+# is intentional because the recipe runs without a shell-generated environment.
+
 if [ "$#" -ne 0 ]; then
     printf '%s\n' 'mpfi build takes no arguments' >&2
     exit 64
@@ -35,6 +38,7 @@ readonly compiler=/usr/bin/clang-19
 readonly common_cflags='-O2 -g0 -fno-ident -fno-fast-math -ffp-contract=off -fno-lto -std=gnu17 -march=x86-64 -mtune=generic -ffile-prefix-map=/build=. -fdebug-prefix-map=/build=.'
 readonly evaluator_cflags='-O2 -g0 -fno-ident -fno-fast-math -ffp-contract=off -fno-lto -march=x86-64 -mtune=generic -ffile-prefix-map=/build=. -fdebug-prefix-map=/build=. -std=c17 -Wall -Wextra -Werror -pedantic'
 readonly prefix="$build/prefix"
+readonly evaluator_sources='main.c wire.c hash.c interval.c region.c'
 
 require_regular() {
     if [ ! -f "$1" ] || [ -L "$1" ]; then
@@ -150,9 +154,29 @@ CC="$compiler" CFLAGS="$common_cflags" \
 /usr/bin/make install
 
 cd "$workspace/proof/region/v1/mpfi/evaluator"
+for source in $evaluator_sources; do
+    object="$build/${source%.c}.o"
+    # shellcheck disable=SC2086
+    "$compiler" $evaluator_cflags \
+        -I. -I"$prefix/include" \
+        -c "$source" \
+        -o "$object"
+done
+# shellcheck disable=SC2086
 "$compiler" $evaluator_cflags \
     -I. -I"$prefix/include" \
-    main.c wire.c hash.c interval.c region.c "$inputs/formula.generated.c" \
+    -c "$inputs/formula.generated.c" \
+    -o "$build/formula.generated.o"
+if ! /usr/bin/nm --undefined-only "$build"/*.o > "$build/evaluator-undefined-symbols"; then
+    printf '%s\n' 'cannot inspect evaluator undefined symbols' >&2
+    exit 70
+fi
+/usr/bin/python3 "$workspace/proof/region/v1/mpfi/operations.py" \
+    --undefined-symbols "$build/evaluator-undefined-symbols"
+# shellcheck disable=SC2086
+"$compiler" $evaluator_cflags \
+    "$build/main.o" "$build/wire.o" "$build/hash.o" "$build/interval.o" \
+    "$build/region.o" "$build/formula.generated.o" \
     -static -Wl,--build-id=none -fno-lto \
     "$prefix/lib/libmpfi.a" "$prefix/lib/libmpfr.a" "$prefix/lib/libgmp.a" \
     -lm -lpthread \

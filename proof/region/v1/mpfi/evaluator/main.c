@@ -14,7 +14,22 @@ typedef struct {
     uint8_t *bytes;
     size_t length;
     size_t capacity;
+    size_t maximum;
+    bool limit_exceeded;
 } mpfi_buffer;
+
+typedef enum {
+    LC_MPFI_READ_OK = 0,
+    LC_MPFI_READ_EMPTY = 1,
+    LC_MPFI_READ_TOO_LARGE = 2,
+    LC_MPFI_READ_FAILED = 3
+} lc_mpfi_read_status;
+
+typedef enum {
+    LC_MPFI_EVALUATION_OK = 0,
+    LC_MPFI_EVALUATION_RESOURCE_LIMIT = 1,
+    LC_MPFI_EVALUATION_FAILED = 2
+} lc_mpfi_evaluation_status;
 
 static const uint8_t transcript_magic[8] = {'L', 'C', 'T', 'R', 'N', '1', 0, 0};
 static const uint8_t accounting_domain[] =
@@ -42,6 +57,10 @@ buffer_reserve(mpfi_buffer *buffer, size_t additional)
         return false;
     }
     required = buffer->length + additional;
+    if (buffer->maximum != 0 && required > buffer->maximum) {
+        buffer->limit_exceeded = true;
+        return false;
+    }
     if (required <= buffer->capacity) {
         return required == 0 || buffer->bytes != NULL;
     }
@@ -100,7 +119,7 @@ buffer_u64(mpfi_buffer *buffer, uint64_t value)
     return buffer_append(buffer, encoded, sizeof(encoded));
 }
 
-static bool
+static lc_mpfi_read_status
 read_stdin(mpfi_buffer *input)
 {
     uint8_t chunk[16384];
@@ -112,13 +131,17 @@ read_stdin(mpfi_buffer *input)
             if (errno == EINTR) {
                 continue;
             }
-            return false;
+            return LC_MPFI_READ_FAILED;
         }
         if (count == 0) {
-            return input->length != 0;
+            return input->length == 0 ? LC_MPFI_READ_EMPTY : LC_MPFI_READ_OK;
+        }
+        if (input->maximum != 0
+            && (size_t) count > input->maximum - input->length) {
+            return LC_MPFI_READ_TOO_LARGE;
         }
         if (!buffer_append(input, chunk, (size_t) count)) {
-            return false;
+            return LC_MPFI_READ_FAILED;
         }
     }
 }
@@ -320,7 +343,7 @@ smaller(uint64_t left, uint64_t right)
     return left < right ? left : right;
 }
 
-static bool
+static lc_mpfi_evaluation_status
 evaluate_job(
     const lc_mpfi_job *job,
     const uint8_t comparator_identity[32],
@@ -337,19 +360,22 @@ evaluate_job(
     uint64_t witness_count = 0;
     uint64_t remaining_global = job->policy.global_pregrant;
     uint8_t accounting_digest[32];
-    bool success = false;
+    lc_mpfi_evaluation_status status = LC_MPFI_EVALUATION_FAILED;
+
+    decisions.maximum = (size_t) LC_MPFI_MAX_OUTPUT_BYTES_V1;
+    witnesses.maximum = (size_t) LC_MPFI_MAX_OUTPUT_BYTES_V1;
 
     if (job->domain.point_count == 0
         || job->policy.precision_count == 0
         || job->domain.point_count > SIZE_MAX - 3
         || !lc_mpfi_region_result_init(&result, job->maximum_precision)) {
-        return false;
+        return LC_MPFI_EVALUATION_FAILED;
     }
     size_t decision_length = ((size_t) job->domain.point_count + 3) / 4;
     if (decision_length == 0
         || !buffer_reserve(&decisions, decision_length)
         || decisions.bytes == NULL) {
-        goto cleanup_result;
+        goto cleanup_buffers;
     }
     memset(decisions.bytes, 0, decision_length);
     decisions.length = decision_length;
@@ -464,14 +490,19 @@ evaluate_job(
         || !buffer_append(output, witnesses.bytes, witnesses.length)) {
         goto cleanup_buffers;
     }
-    success = true;
+    status = LC_MPFI_EVALUATION_OK;
 
 cleanup_buffers:
+    if (status != LC_MPFI_EVALUATION_OK
+        && (decisions.limit_exceeded
+            || witnesses.limit_exceeded
+            || output->limit_exceeded)) {
+        status = LC_MPFI_EVALUATION_RESOURCE_LIMIT;
+    }
     buffer_clear(&witnesses);
     buffer_clear(&decisions);
-cleanup_result:
     lc_mpfi_region_result_clear(&result);
-    return success;
+    return status;
 }
 
 int
@@ -483,6 +514,10 @@ main(int argc, char **argv)
     lc_mpfi_wire_error error;
     uint8_t comparator_identity[32];
     int status = 1;
+    lc_mpfi_read_status read_status;
+
+    input.maximum = (size_t) LC_MPFI_MAX_JOB_BYTES_V1;
+    output.maximum = (size_t) LC_MPFI_MAX_OUTPUT_BYTES_V1;
 
     if (argc != 5
         || strcmp(argv[1], "--manifest-identity") != 0
@@ -495,16 +530,29 @@ main(int argc, char **argv)
         );
         return 64;
     }
-    if (!read_stdin(&input)) {
-        fputs("job read failed\n", stderr);
+    read_status = read_stdin(&input);
+    if (read_status != LC_MPFI_READ_OK) {
+        const char *reason = read_status == LC_MPFI_READ_TOO_LARGE
+            ? "input_limit"
+            : read_status == LC_MPFI_READ_EMPTY ? "empty_input" : "io";
+
+        fprintf(stderr, "job read failed: %s\n", reason);
         goto cleanup_input;
     }
     if (!lc_mpfi_parse_job(&job, input.bytes, input.length, &error)) {
         fprintf(stderr, "job rejected: %s\n", lc_mpfi_wire_error_name(error));
         goto cleanup_input;
     }
-    if (!evaluate_job(&job, comparator_identity, &output)) {
-        fputs("evaluation failed\n", stderr);
+    lc_mpfi_evaluation_status evaluation =
+        evaluate_job(&job, comparator_identity, &output);
+    if (evaluation != LC_MPFI_EVALUATION_OK) {
+        fprintf(
+            stderr,
+            "evaluation failed: %s\n",
+            evaluation == LC_MPFI_EVALUATION_RESOURCE_LIMIT
+                ? "output_limit"
+                : "internal"
+        );
         goto cleanup_job;
     }
     if (!lc_mpfi_write_all(STDOUT_FILENO, output.bytes, output.length)) {

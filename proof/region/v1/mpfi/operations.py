@@ -117,10 +117,34 @@ ALLOWED_GMP_CALLS = frozenset(
 )
 
 _CALL = re.compile(r"\b((?:mpfi|mpfr|mpq|mpz)_[A-Za-z0-9_]+)\s*\(")
+_EXTERNAL_SYMBOL = re.compile(r"\b(?:mpfi|mpfr|mpq|mpz)_[A-Za-z0-9_]+\b")
 
 
 def called_symbols(source: str) -> frozenset[str]:
     return frozenset(_CALL.findall(source))
+
+
+def undefined_symbols(nm_output: str) -> frozenset[str]:
+    """Extract dependency symbols from ``nm -u`` without trusting formatting."""
+
+    return frozenset(_EXTERNAL_SYMBOL.findall(nm_output))
+
+
+def validate_undefined_symbols(nm_output: str) -> tuple[str, ...]:
+    """Check the symbols the compiler left unresolved in evaluator objects."""
+
+    seen = undefined_symbols(nm_output)
+    allowed = ALLOWED_MPFI_CALLS | ALLOWED_MPFR_CALLS | ALLOWED_GMP_CALLS
+    errors: list[str] = []
+    errors.extend(
+        f"forbidden undefined external symbol {symbol}"
+        for symbol in sorted(seen & FORBIDDEN_MPFI_CALLS)
+    )
+    errors.extend(
+        f"unexpected undefined external symbol {symbol}"
+        for symbol in sorted(seen - allowed - FORBIDDEN_MPFI_CALLS)
+    )
+    return tuple(errors)
 
 
 def validate_sources(directory: Path) -> tuple[str, ...]:
@@ -151,10 +175,17 @@ def validate_sources(directory: Path) -> tuple[str, ...]:
 
 
 def main(argv: list[str]) -> int:
-    if len(argv) != 2:
-        print("usage: operations.py EVALUATOR_DIRECTORY", file=sys.stderr)
+    if len(argv) == 2:
+        errors = validate_sources(Path(argv[1]))
+    elif len(argv) == 3 and argv[1] == "--undefined-symbols":
+        errors = validate_undefined_symbols(Path(argv[2]).read_text(encoding="utf-8"))
+    else:
+        print(
+            "usage: operations.py EVALUATOR_DIRECTORY | "
+            "--undefined-symbols NM_OUTPUT",
+            file=sys.stderr,
+        )
         return 2
-    errors = validate_sources(Path(argv[1]))
     if errors:
         for error in errors:
             print(error, file=sys.stderr)
