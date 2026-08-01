@@ -1832,12 +1832,29 @@ class SharedBuildTransportTargetTests(unittest.TestCase):
                 self.close_calls += 1
                 raise KeyboardInterrupt("persistent stdout close interrupt")
 
+        def cleanup_spawned(
+            process: subprocess.Popen[bytes],
+            wrapper: CloseAlwaysInterrupts,
+        ) -> None:
+            if process.poll() is None:
+                try:
+                    process.kill()
+                except ProcessLookupError:
+                    pass
+            process.wait(timeout=5)
+            for stream in (process.stdin, process.stderr):
+                if stream is not None and not stream.closed:
+                    stream.close()
+            if not wrapper.wrapped.closed:
+                wrapper.wrapped.close()
+
         def spawn(*args: object, **kwargs: object) -> subprocess.Popen[bytes]:
             process = real_popen(*args, **kwargs)
             spawned.append(process)
             wrapper = CloseAlwaysInterrupts(process.stdout)
             wrapped_stdout.append(wrapper)
             process.stdout = wrapper
+            self.addCleanup(cleanup_spawned, process, wrapper)
             return process
 
         def cleanup(lease: object, **_kwargs: object) -> None:
@@ -1867,13 +1884,6 @@ class SharedBuildTransportTargetTests(unittest.TestCase):
             process = spawned[0]
             stderr_closed = process.stderr is not None and process.stderr.closed
             os.fstat(wrapped_stdout[0].descriptor)
-            if process.poll() is None:
-                process.kill()
-                process.wait(timeout=5)
-            for stream in (process.stdin, process.stderr):
-                if stream is not None and not stream.closed:
-                    stream.close()
-            wrapped_stdout[0].wrapped.close()
 
         self.assertTrue(stderr_closed)
         self.assertEqual(wrapped_stdout[0].close_calls, 2)
