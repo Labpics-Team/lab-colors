@@ -757,7 +757,7 @@ class MpfiSourceInputTests(unittest.TestCase):
             reference,
         )
         self.assertIn(
-            "MPFI sealed source input ещё не является MPFI build policy",
+            "MPFI sealed source input сам по себе не является MPFI build policy",
             transport_reference,
         )
         self.assertIn("engine-owned input binding", transport_reference)

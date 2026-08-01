@@ -13,8 +13,9 @@ Arb-enclosures и выпускает связанные transcript bytes;
 `SourceBoundArbControllerV1` заново собирает evaluator, запускает его и создаёт
 только provenance receipt. Ни один из этих путей не выполняет независимый
 semantic replay и не создаёт mathematical proof type. MPFI source lock,
-archive admission и sealed source input (не evaluator replay) уже представлены, но MPFI
-evaluator/source-bound receipt и semantic verifier в текущем release
+archive admission и sealed source input (не evaluator replay) уже представлены.
+`mpfi/evaluator` теперь содержит отдельный source-owned M1.5 build/run path;
+MPFI source-bound receipt и semantic verifier в текущем release всё ещё
 отсутствуют.
 
 Structural protocol/admission сам не является математическим proof.
@@ -29,9 +30,9 @@ evidence. В тесте протокола такое значение явно 
 
 Протокол не входит в Cargo workspace, Core, WASM, FFI, bindings или packages.
 Текущий `SourceBoundEvaluatorReceiptV1` подтверждает причинную цепь только Arb.
-MPFI source closure ещё не является provenance исполнения: MPFI source-bound
+MPFI evaluator output ещё не является provenance исполнения: MPFI source-bound
 receipt, cross-path dependency overlap и diversity не представлены admitted
-типом; structural coordinates не восполняют это отсутствие.
+типом; structural coordinates и локальная сборка этого не восполняют.
 
 ## Бинарный формат и идентичность
 
@@ -310,9 +311,10 @@ session или сбой `TemporaryDirectory`), может вернуть `BuildR
 `session` и `completed_processes`.
 Transport не знает formula, ELF, comparator или
 source provenance: engine lane отдельно перепроверяет свой engine-owned input binding перед
-каждым process и передаёт output admission. MPFI sealed source input ещё не
-является MPFI build policy; будущая policy должна быть объявлена отдельно и не
-может заимствовать Arb semantics.
+каждым process и передаёт output admission. MPFI sealed source input сам по себе
+не является MPFI build policy; `mpfi/build.sh` теперь объявляет source-owned
+recipe, но его BUILD/RUN observation и receipt ещё не admitted. Recipe не
+заимствует Arb semantics.
 
 ## Воспроизведение Arb, связанное с источником
 
