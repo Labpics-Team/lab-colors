@@ -1834,7 +1834,7 @@ class SharedBuildTransportTargetTests(unittest.TestCase):
 
         def cleanup_spawned(
             process: subprocess.Popen[bytes],
-            wrapper: CloseAlwaysInterrupts,
+            original_stdout: object,
         ) -> None:
             if process.poll() is None:
                 try:
@@ -1842,19 +1842,19 @@ class SharedBuildTransportTargetTests(unittest.TestCase):
                 except ProcessLookupError:
                     pass
             process.wait(timeout=5)
-            for stream in (process.stdin, process.stderr):
+            for stream in (process.stdin, process.stderr, original_stdout):
                 if stream is not None and not stream.closed:
                     stream.close()
-            if not wrapper.wrapped.closed:
-                wrapper.wrapped.close()
 
         def spawn(*args: object, **kwargs: object) -> subprocess.Popen[bytes]:
             process = real_popen(*args, **kwargs)
+            # Fixture setup may fail after Popen; ownership starts with its
+            # original stream, before the hostile wrapper exists.
+            self.addCleanup(cleanup_spawned, process, process.stdout)
             spawned.append(process)
             wrapper = CloseAlwaysInterrupts(process.stdout)
             wrapped_stdout.append(wrapper)
             process.stdout = wrapper
-            self.addCleanup(cleanup_spawned, process, wrapper)
             return process
 
         def cleanup(lease: object, **_kwargs: object) -> None:
