@@ -3477,11 +3477,16 @@ class ControlledBuildTransportV1:
                     "build transport capability is one-shot",
                 )
             self._probe_in_flight = True
-        outcome: DockerCapabilityReportV1 | None = None
+        # Start at a typed rejection before foreign IO so every ordinary exit
+        # has a public report.  A BaseException still propagates unchanged.
+        outcome: DockerCapabilityReportV1 = DockerUnsupportedV1(
+            DockerBlockerReasonV1.BACKEND_CONTRACT,
+            "Docker capability probe produced no canonical report",
+        )
         try:
             report = self._backend.probe()
         except Exception:
-            outcome: DockerCapabilityReportV1 = DockerUnsupportedV1(
+            outcome = DockerUnsupportedV1(
                 DockerBlockerReasonV1.BACKEND_CONTRACT,
                 "Docker capability probe raised",
             )
@@ -3518,8 +3523,6 @@ class ControlledBuildTransportV1:
                     self._probe_in_flight = False
                     if type(outcome) is DockerSupportedV1:
                         self._probed_capability = outcome
-        if outcome is None:
-            raise RuntimeError("probe outcome was not produced")
         return outcome
 
     def build(

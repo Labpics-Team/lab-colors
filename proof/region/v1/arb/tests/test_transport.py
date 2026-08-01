@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import ast
 from collections.abc import Callable
 import hashlib
 import io
@@ -13,6 +14,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import textwrap
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -76,6 +78,58 @@ def _observe(
 
 
 class CanonicalBuildBundleTests(unittest.TestCase):
+    def test_public_probe_starts_with_a_typed_terminal_outcome(self) -> None:
+        """A backend cannot leave the public probe in a non-report state."""
+
+        source = inspect.getsource(build_transport.ControlledBuildTransportV1.probe)
+        tree = ast.parse(textwrap.dedent(source))
+        function = tree.body[0]
+        if not isinstance(function, ast.FunctionDef):
+            self.fail("public probe source must remain one function definition")
+        typed_initializers = [
+            node
+            for node in function.body
+            if isinstance(node, ast.AnnAssign)
+            and isinstance(node.target, ast.Name)
+            and node.target.id == "outcome"
+            and isinstance(node.annotation, ast.Name)
+            and node.annotation.id == "DockerCapabilityReportV1"
+            and isinstance(node.value, ast.Call)
+            and isinstance(node.value.func, ast.Name)
+            and node.value.func.id == "DockerUnsupportedV1"
+        ]
+        self.assertEqual(len(typed_initializers), 1)
+        self.assertNotIn('raise RuntimeError("probe outcome was not produced")', source)
+
+    def test_probe_releases_its_transient_lease_after_backend_failure(self) -> None:
+        report = _docker_capability(pipeline.ARB_BUILD_TRANSPORT_POLICY_V1)
+
+        class FlakyProbeBackend:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def probe(self) -> object:
+                self.calls += 1
+                if self.calls == 1:
+                    raise ValueError("forced backend failure")
+                return report
+
+        backend = FlakyProbeBackend()
+        controller = build_transport.ControlledBuildTransportV1(
+            policy=pipeline.ARB_BUILD_TRANSPORT_POLICY_V1,
+            backend=backend,
+        )
+        first = controller.probe()
+        second = controller.probe()
+
+        self.assertIs(type(first), build_transport.DockerUnsupportedV1)
+        self.assertEqual(
+            first.reason,
+            build_transport.DockerBlockerReasonV1.BACKEND_CONTRACT,
+        )
+        self.assertIs(second, report)
+        self.assertEqual(backend.calls, 2)
+
     def test_public_input_constructors_use_typed_value_errors(self) -> None:
         def reject(
             constructor: Callable[[], object],

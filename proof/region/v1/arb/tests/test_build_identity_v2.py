@@ -112,6 +112,31 @@ def _policy_mutants(
     return tuple(mutants)
 
 
+def _arb_input_binding_oracle_v1(
+    source_identity: bytes,
+    build_input_identity: bytes,
+    contents: bytes,
+    bootstrap: str,
+) -> bytes:
+    """Independent frozen formula for the unchanged Arb input binding."""
+
+    chunks = (
+        source_identity,
+        build_input_identity,
+        len(contents).to_bytes(8, "big"),
+        hashlib.sha256(contents).digest(),
+        hashlib.sha256(bootstrap.encode("utf-8")).digest(),
+    )
+    payload = b"".join(
+        len(chunk).to_bytes(8, "big") + chunk for chunk in chunks
+    )
+    return hashlib.sha256(
+        b"labcolors.proof-region.arb-build-input-bundle.v1\0"
+        + len(payload).to_bytes(8, "big")
+        + payload
+    ).digest()
+
+
 def _capability(
     docker_path: Path,
     policy: build_transport.DockerBuildPolicyV1,
@@ -246,6 +271,41 @@ class BuildIdentityV2Tests(unittest.TestCase):
                     build_transport.transport_policy_identity_v1(surrogate)
                 with self.assertRaises(TypeError):
                     pipeline.pipeline_policy_identity_v2(trust, surrogate)
+
+    def test_generic_sealing_preserves_the_frozen_arb_binding_formula(self) -> None:
+        """Moving byte storage cannot silently change an unchanged protocol ID."""
+
+        request = _request()
+        baseline_policy = pipeline.ARB_BUILD_TRANSPORT_POLICY_V1
+        baseline = pipeline._seal_build_input_bundle_v1(request)
+        expected = _arb_input_binding_oracle_v1(
+            request.admitted_sources.identity,
+            request.build_sources.build_input_identity,
+            baseline.contents,
+            baseline_policy.bootstrap,
+        )
+        self.assertEqual(baseline.binding_identity, expected)
+
+        changed_policy = _policy_with(
+            baseline_policy,
+            bootstrap=baseline_policy.bootstrap + "\n:",
+        )
+        with mock.patch.object(
+            pipeline,
+            "ARB_BUILD_TRANSPORT_POLICY_V1",
+            changed_policy,
+        ):
+            changed = pipeline._seal_build_input_bundle_v1(request)
+            self.assertTrue(pipeline.arb_input_is_bound_v1(request, changed))
+        expected_changed = _arb_input_binding_oracle_v1(
+            request.admitted_sources.identity,
+            request.build_sources.build_input_identity,
+            changed.contents,
+            changed_policy.bootstrap,
+        )
+        self.assertEqual(changed.contents, baseline.contents)
+        self.assertEqual(changed.binding_identity, expected_changed)
+        self.assertNotEqual(changed.binding_identity, baseline.binding_identity)
 
     def test_every_admitted_policy_mutation_changes_transport_and_pipeline_identity(self) -> None:
         trust = pipeline.HostTrustBoundaryV1.UNSEALED_LINUX_X64_DOCKER_HOST
