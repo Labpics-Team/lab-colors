@@ -831,6 +831,25 @@ class ControlledPipelineTests(unittest.TestCase):
                 self.assertEqual(result.attempt, 1)
                 self.assertEqual(result.reason, reason)
 
+    def test_forged_source_coordinate_is_rejected_before_build_without_escape(self) -> None:
+        request = _request()
+        source = request.admitted_sources.sources[0]
+        original_tree_identity = source.tree_identity
+        object.__setattr__(source, "tree_identity", _digest("foreign-tree"))
+        backend = _BuildBackend((_static_elf(), _static_elf()))
+        try:
+            result = pipeline.ControlledPipelineV1(build_backend=backend).build(request)
+        finally:
+            object.__setattr__(source, "tree_identity", original_tree_identity)
+
+        self.assertIs(type(result), build_transport.BuildRejectedV1)
+        self.assertEqual(result.attempt, 1)
+        self.assertIs(
+            result.reason,
+            build_transport.BuildFailureReasonV1.CONTRACT_VIOLATION,
+        )
+        self.assertEqual(backend.requests, [])
+
     def test_job_that_exceeds_exact_run_limits_is_rejected_before_build(self) -> None:
         with self.assertRaises(pipeline.PipelineInputErrorV1) as caught:
             _request(

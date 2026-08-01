@@ -12,6 +12,7 @@ import tarfile
 import unittest
 from dataclasses import replace
 from pathlib import Path
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -68,6 +69,25 @@ def tar_gz(
                 member.size = len(body)
                 archive.addfile(member, io.BytesIO(body))
     return gzip.compress(raw.getvalue(), compresslevel=9, mtime=0)
+
+
+def raw_ustar(
+    entries: tuple[tuple[str, bytes, int], ...],
+) -> bytes:
+    """Build a replay fixture without reusing admission's compressed input."""
+
+    raw = io.BytesIO()
+    with tarfile.open(fileobj=raw, mode="w", format=tarfile.USTAR_FORMAT) as archive:
+        root = tarfile.TarInfo("fixture-1/")
+        root.type = tarfile.DIRTYPE
+        root.mode = 0o755
+        archive.addfile(root)
+        for name, body, mode in entries:
+            member = tarfile.TarInfo(f"fixture-1/{name}")
+            member.mode = mode
+            member.size = len(body)
+            archive.addfile(member, io.BytesIO(body))
+    return raw.getvalue()
 
 
 def fixture_lock(
@@ -452,6 +472,151 @@ class SafeArchiveAdmissionTests(unittest.TestCase):
             caught.exception.reason,
             ProvenanceReasonV1.LEGAL_FILES_MISMATCH,
         )
+
+    def test_shared_materializer_replays_only_the_exact_admitted_archive(self) -> None:
+        lock = fixture_lock(GOOD_ARCHIVE)
+        admitted = admit_source_archive(lock, GOOD_ARCHIVE)
+
+        self.assertEqual(
+            provenance.materialize_admitted_source_files_v1(lock, admitted),
+            (
+                ("LICENSE", 0o644, b"license"),
+                ("value", 0o644, b"data"),
+            ),
+        )
+
+        mutations = (
+            ("source_lock_identity", sha256(b"foreign-lock")),
+            ("archive_sha256", sha256(b"foreign-archive")),
+            ("tree_identity", sha256(b"foreign-tree")),
+            ("regular_file_count", admitted.regular_file_count + 1),
+            ("regular_file_bytes", admitted.regular_file_bytes + 1),
+            ("files", tuple(reversed(admitted.files))),
+        )
+        for field_name, replacement in mutations:
+            with self.subTest(retained_coordinate=field_name):
+                original = getattr(admitted, field_name)
+                object.__setattr__(admitted, field_name, replacement)
+                try:
+                    with self.assertRaises(ProvenanceErrorV1) as caught:
+                        provenance.materialize_admitted_source_files_v1(lock, admitted)
+                finally:
+                    object.__setattr__(admitted, field_name, original)
+                self.assertEqual(
+                    caught.exception.reason,
+                    ProvenanceReasonV1.FOREIGN_BINDING,
+                )
+
+        original_archive_bytes = admitted.archive_bytes
+        object.__setattr__(admitted, "_archive_bytes", GOOD_ARCHIVE[:-1])
+        try:
+            with self.assertRaises(ProvenanceErrorV1) as caught:
+                provenance.materialize_admitted_source_files_v1(lock, admitted)
+        finally:
+            object.__setattr__(admitted, "_archive_bytes", original_archive_bytes)
+        self.assertEqual(
+            caught.exception.reason,
+            ProvenanceReasonV1.ARCHIVE_LENGTH_MISMATCH,
+        )
+
+        original_role = lock.role
+        cached_identity = lock.__dict__.pop("identity", None)
+        object.__setattr__(lock, "role", 999)
+        try:
+            with self.assertRaises(ProvenanceErrorV1) as caught:
+                provenance.materialize_admitted_source_files_v1(lock, admitted)
+        finally:
+            object.__setattr__(lock, "role", original_role)
+            if cached_identity is not None:
+                lock.__dict__["identity"] = cached_identity
+        self.assertEqual(caught.exception.reason, ProvenanceReasonV1.FOREIGN_BINDING)
+
+        for hostile_lock, hostile_admitted in ((object(), admitted), (lock, object())):
+            with self.subTest(hostile=type(hostile_lock).__name__):
+                with self.assertRaises(TypeError):
+                    provenance.materialize_admitted_source_files_v1(
+                        hostile_lock,
+                        hostile_admitted,
+                    )
+
+    def test_shared_materializer_is_invariant_under_regular_member_permutation(self) -> None:
+        expected = (
+            ("LICENSE", 0o644, b"license"),
+            ("value", 0o644, b"data"),
+        )
+        for entries in (
+            (
+                ("fixture-1/", None, None),
+                ("fixture-1/LICENSE", b"license", None),
+                ("fixture-1/value", b"data", None),
+            ),
+            (
+                ("fixture-1/", None, None),
+                ("fixture-1/value", b"data", None),
+                ("fixture-1/LICENSE", b"license", None),
+            ),
+        ):
+            with self.subTest(member_order=entries):
+                archive = tar_gz(entries)
+                lock = fixture_lock(archive)
+                admitted = admit_source_archive(lock, archive)
+                self.assertEqual(
+                    provenance.materialize_admitted_source_files_v1(lock, admitted),
+                    expected,
+                )
+
+    def test_shared_materializer_rechecks_the_replayed_tar_before_returning_files(self) -> None:
+        lock = fixture_lock(GOOD_ARCHIVE)
+        admitted = admit_source_archive(lock, GOOD_ARCHIVE)
+        replayed, _ = provenance.replay_admitted_source_archive_v1(lock, admitted)
+        cases = (
+            (
+                "body",
+                raw_ustar(
+                    (
+                        ("LICENSE", b"license", 0o644),
+                        ("value", b"evil", 0o644),
+                    )
+                ),
+                ProvenanceReasonV1.FILE_CONTENT_MISMATCH,
+            ),
+            (
+                "mode",
+                raw_ustar(
+                    (
+                        ("LICENSE", b"license", 0o644),
+                        ("value", b"data", 0o755),
+                    )
+                ),
+                ProvenanceReasonV1.FOREIGN_BINDING,
+            ),
+            (
+                "duplicate",
+                raw_ustar(
+                    (
+                        ("LICENSE", b"license", 0o644),
+                        ("value", b"data", 0o644),
+                        ("value", b"data", 0o644),
+                    )
+                ),
+                ProvenanceReasonV1.FOREIGN_BINDING,
+            ),
+            (
+                "missing",
+                raw_ustar((("LICENSE", b"license", 0o644),)),
+                ProvenanceReasonV1.FOREIGN_BINDING,
+            ),
+        )
+        for name, raw_tar, reason in cases:
+            with self.subTest(mutation=name):
+                with mock.patch.object(
+                    provenance,
+                    "replay_admitted_source_archive_v1",
+                    return_value=(replayed, raw_tar),
+                ):
+                    with self.assertRaises(ProvenanceErrorV1) as caught:
+                        provenance.materialize_admitted_source_files_v1(lock, admitted)
+                self.assertEqual(caught.exception.reason, reason)
 
     def test_unsafe_member_kinds_and_paths_are_rejected(self) -> None:
         fixtures = (

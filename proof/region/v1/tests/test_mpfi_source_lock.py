@@ -223,10 +223,28 @@ class MpfiSourceLockTests(unittest.TestCase):
         with self.assertRaises(TypeError):
             AdmittedMpfiSourcesV1(lock.identity, sources, _token=object())
 
+    def test_mpfi_archive_uses_the_shared_engine_neutral_materializer(self) -> None:
+        archive = fixture_archive()
+        lock = fixture_release(
+            SourceRoleV1.MPFI,
+            archive,
+            ProjectPinnedArchiveDigestPolicyV1(),
+        )
+        admitted = admit_source_archive(lock, archive)
+
+        self.assertEqual(
+            provenance.materialize_admitted_source_files_v1(lock, admitted),
+            (
+                ("LICENSE", 0o644, b"license"),
+                ("value", 0o644, b"data"),
+            ),
+        )
+
     def test_reference_does_not_upgrade_the_mpfi_digest_to_publisher_evidence(self) -> None:
         reference = (ROOT / "PROTOCOL.md").read_text(encoding="utf-8")
 
         self.assertIn("ProjectPinnedArchiveDigestPolicyV1", reference)
+        self.assertIn("materialize_admitted_source_files_v1", reference)
         self.assertIn("не приписывает этот digest издателю", reference)
         self.assertIn("не заявляет publisher authentication", reference)
 

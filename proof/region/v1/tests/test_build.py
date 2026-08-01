@@ -417,6 +417,7 @@ class SharedBuildExtractionTests(unittest.TestCase):
     def test_arb_consumers_move_atomically_without_compatibility_reexports(self) -> None:
         build_input = importlib.import_module("build.input")
         transport = importlib.import_module("build.transport")
+        provenance = importlib.import_module("provenance")
         arb_pipeline = pipeline
         arb_receipt = importlib.import_module("receipt")
         request = _request()
@@ -428,6 +429,10 @@ class SharedBuildExtractionTests(unittest.TestCase):
         self.assertIs(arb_pipeline.build_input, build_input)
         self.assertIs(arb_pipeline.build_transport, transport)
         self.assertIs(arb_receipt.build_transport, transport)
+        self.assertTrue(
+            hasattr(provenance, "materialize_admitted_source_files_v1")
+        )
+        self.assertFalse(hasattr(arb_pipeline, "_normalized_source_entries_v1"))
         self.assertFalse(hasattr(arb_receipt, "build_input"))
         self.assertIs(type(bundle), build_input.SealedInputV1)
         for name in MOVED_INPUT_SURFACE_V1 + MOVED_TRANSPORT_SURFACE_V1:
@@ -475,8 +480,7 @@ class SharedBuildExtractionTests(unittest.TestCase):
         self.assertIs(type(sealed), build_input.SealedInputV1)
         self.assertIs(type(policy), transport.DockerBuildPolicyV1)
 
-    def test_forged_source_authorities_fail_in_the_arb_taxonomy(self) -> None:
-        build_input = importlib.import_module("build.input")
+    def test_forged_source_authorities_fail_in_shared_provenance_taxonomy(self) -> None:
         provenance = importlib.import_module("provenance")
         request = _request()
         lock = request.source_lock.sources[0]
@@ -487,14 +491,14 @@ class SharedBuildExtractionTests(unittest.TestCase):
             (lock, object.__new__(provenance.SafeSourceArchiveV1)),
         ):
             with self.subTest(authority=type(hostile_lock).__name__):
-                with self.assertRaises(pipeline.PipelineInputErrorV1) as raised:
-                    pipeline._normalized_source_entries_v1(
+                with self.assertRaises(provenance.ProvenanceErrorV1) as raised:
+                    provenance.materialize_admitted_source_files_v1(
                         hostile_lock,
                         hostile_admitted,
                     )
                 self.assertEqual(
                     raised.exception.reason,
-                    pipeline.PipelineInputReasonV1.FOREIGN_SOURCE_CAPABILITY,
+                    provenance.ProvenanceReasonV1.FOREIGN_BINDING,
                 )
 
 

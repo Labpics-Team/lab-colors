@@ -812,24 +812,7 @@ def source_archive_replay_coordinates_v1(
 ) -> tuple[bytes, ...]:
     """Recompute the retained source coordinates without reopening a path."""
 
-    if type(expected) is not SourceReleaseLockV1:
-        raise TypeError("expected must be SourceReleaseLockV1")
-    if type(admitted) is not SafeSourceArchiveV1:
-        raise TypeError("admitted must be SafeSourceArchiveV1")
     replayed, _raw_tar = replay_admitted_source_archive_v1(expected, admitted)
-    if (
-        admitted.source_lock_identity != replayed.source_lock_identity
-        or admitted.archive_sha256 != replayed.archive_sha256
-        or admitted.tree_identity != replayed.tree_identity
-        or admitted.regular_file_count != replayed.regular_file_count
-        or admitted.regular_file_bytes != replayed.regular_file_bytes
-        or admitted.files != replayed.files
-    ):
-        _fail(
-            "source-archive-replay-v1",
-            ProvenanceReasonV1.FOREIGN_BINDING,
-            "retained source coordinates changed",
-        )
     archive = replayed.archive_bytes
     manifest = archive_file_manifest_bytes_v1(replayed.files)
     return (
@@ -1237,7 +1220,7 @@ def replay_admitted_source_archive_v1(
     expected: SourceReleaseLockV1,
     admitted: SafeSourceArchiveV1,
 ) -> tuple[SafeSourceArchiveV1, bytes]:
-    """Re-admit owned bytes and return the raw tar from that exact pass.
+    """Re-admit owned bytes and require their retained coordinates to agree.
 
     The caller cannot supply a second tar stream, so replay coordinates and
     materialization bytes remain causally bound without decompressing twice.
@@ -1247,7 +1230,123 @@ def replay_admitted_source_archive_v1(
         raise TypeError("expected must be SourceReleaseLockV1")
     if type(admitted) is not SafeSourceArchiveV1:
         raise TypeError("admitted must be SafeSourceArchiveV1")
-    return _admit_source_archive_once(expected, admitted.archive_bytes)
+    try:
+        replayed, raw_tar = _admit_source_archive_once(
+            expected,
+            admitted.archive_bytes,
+        )
+        retained_coordinates_match = (
+            admitted.source_lock_identity == replayed.source_lock_identity
+            and admitted.archive_sha256 == replayed.archive_sha256
+            and admitted.tree_identity == replayed.tree_identity
+            and admitted.regular_file_count == replayed.regular_file_count
+            and admitted.regular_file_bytes == replayed.regular_file_bytes
+            and admitted.files == replayed.files
+        )
+    except ProvenanceErrorV1:
+        raise
+    except (AttributeError, TypeError, ValueError, OverflowError):
+        _fail(
+            "source-archive-replay-v1",
+            ProvenanceReasonV1.FOREIGN_BINDING,
+            "invalid retained source capability",
+        )
+    if not retained_coordinates_match:
+        _fail(
+            "source-archive-replay-v1",
+            ProvenanceReasonV1.FOREIGN_BINDING,
+            "retained source coordinates changed",
+        )
+    return replayed, raw_tar
+
+
+def materialize_admitted_source_files_v1(
+    expected: SourceReleaseLockV1,
+    admitted: SafeSourceArchiveV1,
+) -> tuple[tuple[str, int, bytes], ...]:
+    """Return exact relative regular files from one replayed source capability.
+
+    This shared leaf owns archive replay, not an engine's USTAR namespace or
+    build recipe.  Callers choose their own layout after this function returns.
+    """
+
+    replayed, raw_tar = replay_admitted_source_archive_v1(expected, admitted)
+    expected_by_path = {item.path: item for item in replayed.files}
+    values: list[tuple[str, int, bytes]] = []
+    seen: set[str] = set()
+    try:
+        with tarfile.open(fileobj=io.BytesIO(raw_tar), mode="r:") as archive:
+            for member in archive:
+                if member.isdir():
+                    continue
+                if not member.isreg() or not member.name.startswith(expected.root_prefix):
+                    _fail(
+                        "source-archive-materialization-v1",
+                        ProvenanceReasonV1.FOREIGN_BINDING,
+                        "unexpected archive member",
+                    )
+                relative = member.name[len(expected.root_prefix) :]
+                coordinate = expected_by_path.get(relative)
+                if (
+                    coordinate is None
+                    or relative in seen
+                    or member.mode != coordinate.mode
+                    or member.size != coordinate.length
+                ):
+                    _fail(
+                        "source-archive-materialization-v1",
+                        ProvenanceReasonV1.FOREIGN_BINDING,
+                        "archive file set changed",
+                    )
+                stream = archive.extractfile(member)
+                if stream is None:
+                    _fail(
+                        "source-archive-materialization-v1",
+                        ProvenanceReasonV1.FILE_CONTENT_MISMATCH,
+                        relative,
+                    )
+                chunks: list[bytes] = []
+                length = 0
+                hasher = hashlib.sha256()
+                while True:
+                    chunk = stream.read(READ_CHUNK_BYTES)
+                    if not chunk:
+                        break
+                    length += len(chunk)
+                    if length > coordinate.length:
+                        _fail(
+                            "source-archive-materialization-v1",
+                            ProvenanceReasonV1.FILE_CONTENT_MISMATCH,
+                            relative,
+                        )
+                    chunks.append(chunk)
+                    hasher.update(chunk)
+                if (
+                    length != coordinate.length
+                    or hasher.digest() != coordinate.sha256
+                ):
+                    _fail(
+                        "source-archive-materialization-v1",
+                        ProvenanceReasonV1.FILE_CONTENT_MISMATCH,
+                        relative,
+                    )
+                values.append((relative, coordinate.mode, b"".join(chunks)))
+                seen.add(relative)
+    except ProvenanceErrorV1:
+        raise
+    except (OSError, tarfile.TarError, ValueError):
+        _fail(
+            "source-archive-materialization-v1",
+            ProvenanceReasonV1.NONCANONICAL_TAR,
+            "archive replay failed",
+        )
+    if seen != set(expected_by_path):
+        _fail(
+            "source-archive-materialization-v1",
+            ProvenanceReasonV1.FOREIGN_BINDING,
+            "archive file set is incomplete",
+        )
+    return tuple(sorted(values))
 
 
 def _validate_source_capability_closure_v1(

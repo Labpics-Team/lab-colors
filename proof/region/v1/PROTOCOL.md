@@ -235,13 +235,15 @@ observation. Право на Arb receipt получает не executor, а от
 
 ## Общая граница BUILD
 
-`proof/region/v1/build/input.py` принимает уже нормализованные lane entries,
-кодирует один канонический USTAR и владеет точными input bytes. Он не
-импортирует и не перепроверяет source capability: это ответственность
-потребляющего lane. `SealedInputV1` структурно неизменяем, связывает
-целостность байтов с opaque caller digest и не утверждает recipe либо engine
-semantics. Resource bounds передаёт lane: общий encoder не вводит собственный
-fixture-specific cap.
+`provenance.materialize_admitted_source_files_v1` повторно допускает один
+admitted archive и выдаёт только exact relative regular files. Он не вводит
+USTAR namespace, recipe или engine semantics. Lane выбирает layout и связывает
+собственный aggregate source capability; общий materializer не создаёт generic
+source closure. `proof/region/v1/build/input.py` принимает уже нормализованные
+lane entries, кодирует один канонический USTAR и владеет точными input bytes.
+`SealedInputV1` структурно неизменяем, связывает целостность байтов с opaque
+caller digest и не утверждает recipe либо engine semantics. Resource bounds
+передаёт lane: общий encoder не вводит собственный fixture-specific cap.
 
 `proof/region/v1/build/transport.py` владеет immutable Docker policy,
 одноразовым probe→build lease, bounded stdin/stdout observation, cleanup и

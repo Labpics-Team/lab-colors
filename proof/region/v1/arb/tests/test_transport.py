@@ -30,6 +30,7 @@ sys.path.insert(0, str(TESTS))
 from build import input as build_input  # noqa: E402
 from build import transport as build_transport  # noqa: E402
 import pipeline  # noqa: E402
+import provenance  # noqa: E402
 from test_pipeline import (  # noqa: E402
     _docker_capability,
     _probe_native_backend,
@@ -278,15 +279,27 @@ class CanonicalBuildBundleTests(unittest.TestCase):
         self.assertEqual(first.sha256, second.sha256)
         self.assertEqual(first.binding_identity, second.binding_identity)
         self.assertTrue(pipeline.arb_input_is_bound_v1(request, policy, first))
+        self.assertEqual(
+            first.sha256.hex(),
+            "5d6e789a721aeed1a8ff023f0af5389711f85f6fe95294d8290b20301235f4df",
+        )
+        self.assertEqual(first.length, 174_080)
 
         source_entries = tuple(
-            entry
+            (
+                f"inputs/{lock.root_prefix[:-1]}/{relative}",
+                mode,
+                contents,
+            )
             for lock, admitted in zip(
                 request.source_lock.sources,
                 request.admitted_sources.sources,
                 strict=True,
             )
-            for entry in pipeline._normalized_source_entries_v1(lock, admitted)
+            for relative, mode, contents in provenance.materialize_admitted_source_files_v1(
+                lock,
+                admitted,
+            )
         )
         workspace_entries = tuple(
             (
@@ -491,8 +504,8 @@ class CanonicalBuildBundleTests(unittest.TestCase):
         original = admitted.tree_identity
         object.__setattr__(admitted, "tree_identity", _digest("mutated-tree"))
         try:
-            with self.assertRaises(pipeline.PipelineInputErrorV1):
-                pipeline._normalized_source_entries_v1(
+            with self.assertRaises(provenance.ProvenanceErrorV1):
+                provenance.materialize_admitted_source_files_v1(
                     request.source_lock.sources[0],
                     admitted,
                 )

@@ -11,8 +11,6 @@ source-bound controller owns RUN and receipt sealing in ``receipt.py``.
 from __future__ import annotations
 
 import hashlib
-import io
-import tarfile
 from dataclasses import dataclass, fields
 from enum import StrEnum
 from functools import cached_property
@@ -418,13 +416,20 @@ def _seal_build_input_bundle_v1(
     if not build_transport.docker_policy_is_valid_v1(exact_policy):
         raise TypeError("exact_policy must be canonical DockerBuildPolicyV1")
     source_entries = tuple(
-        entry
+        (
+            f"inputs/{lock.root_prefix[:-1]}/{relative}",
+            mode,
+            contents,
+        )
         for lock, admitted in zip(
             request.source_lock.sources,
             request.admitted_sources.sources,
             strict=True,
         )
-        for entry in _normalized_source_entries_v1(lock, admitted)
+        for relative, mode, contents in provenance.materialize_admitted_source_files_v1(
+            lock,
+            admitted,
+        )
     )
     workspace_entries = tuple(
         (
@@ -507,89 +512,6 @@ class PipelineInputErrorV1(ValueError):
 
     def __str__(self) -> str:
         return f"{self.reason.value}: {self.field}"
-
-
-def _normalized_source_entries_v1(
-    lock: provenance.SourceReleaseLockV1,
-    admitted: provenance.SafeSourceArchiveV1,
-) -> tuple[tuple[str, int, bytes], ...]:
-    """Replay Arb-owned source authority into generic canonical-tree entries."""
-
-    def reject(field_name: str) -> NoReturn:
-        raise PipelineInputErrorV1(
-            PipelineInputReasonV1.FOREIGN_SOURCE_CAPABILITY,
-            field_name,
-        )
-
-    if type(lock) is not provenance.SourceReleaseLockV1:
-        reject("lock")
-    if type(admitted) is not provenance.SafeSourceArchiveV1:
-        reject("admitted")
-    try:
-        replayed, raw_tar = provenance.replay_admitted_source_archive_v1(
-            lock,
-            admitted,
-        )
-    except Exception:
-        reject("admitted")
-    if (
-        replayed.source_lock_identity != admitted.source_lock_identity
-        or replayed.archive_sha256 != admitted.archive_sha256
-        or replayed.tree_identity != admitted.tree_identity
-        or replayed.regular_file_count != admitted.regular_file_count
-        or replayed.regular_file_bytes != admitted.regular_file_bytes
-        or replayed.files != admitted.files
-    ):
-        reject("admitted")
-    expected = {item.path: item for item in replayed.files}
-    values: list[tuple[str, int, bytes]] = []
-    seen: set[str] = set()
-    try:
-        with tarfile.open(fileobj=io.BytesIO(raw_tar), mode="r:") as archive:
-            for member in archive:
-                if member.isdir():
-                    continue
-                if not member.isreg() or not member.name.startswith(lock.root_prefix):
-                    reject("member")
-                relative = member.name[len(lock.root_prefix) :]
-                coordinate = expected.get(relative)
-                if coordinate is None or relative in seen:
-                    reject("file set")
-                stream = archive.extractfile(member)
-                if stream is None:
-                    reject("regular file")
-                chunks: list[bytes] = []
-                length = 0
-                hasher = hashlib.sha256()
-                while True:
-                    chunk = stream.read(provenance.READ_CHUNK_BYTES)
-                    if not chunk:
-                        break
-                    length += len(chunk)
-                    if length > coordinate.length:
-                        reject("file length")
-                    chunks.append(chunk)
-                    hasher.update(chunk)
-                if (
-                    length != coordinate.length
-                    or hasher.digest() != coordinate.sha256
-                ):
-                    reject("file contents")
-                values.append(
-                    (
-                        f"inputs/{lock.root_prefix[:-1]}/{relative}",
-                        coordinate.mode,
-                        b"".join(chunks),
-                    )
-                )
-                seen.add(relative)
-    except PipelineInputErrorV1:
-        raise
-    except (OSError, tarfile.TarError, ValueError):
-        reject("archive")
-    if seen != set(expected):
-        reject("incomplete archive")
-    return tuple(sorted(values))
 
 
 @dataclass(frozen=True)
@@ -1580,7 +1502,6 @@ class ControlledPipelineV1:
             OSError,
             TypeError,
             ValueError,
-            tarfile.TarError,
             BuildSourceAdmissionErrorV1,
             provenance.ProvenanceErrorV1,
             build_input.InputErrorV1,
