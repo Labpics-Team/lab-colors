@@ -130,6 +130,10 @@ def undefined_symbols(nm_output: str) -> frozenset[str]:
         if not fields:
             continue
         symbol = fields[-1].lstrip("_")
+        # ELF GMP exports commonly spell mpq/mpz calls as __gmpq/__gmpz;
+        # normalize that ABI spelling before comparing the closed call set.
+        if symbol.startswith("gmp") and len(symbol) > 4 and symbol[3] != "_":
+            symbol = "mp" + symbol[3:]
         if symbol.startswith(("mpfi_", "mpfr_", "mpq_", "mpz_")):
             symbols.add(symbol)
     return frozenset(symbols)

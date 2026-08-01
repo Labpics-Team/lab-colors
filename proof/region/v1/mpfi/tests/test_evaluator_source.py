@@ -158,6 +158,10 @@ class EvaluatorSourceTests(unittest.TestCase):
             operations.validate_undefined_symbols("                 U mpfi_formula_point\n"),
             ("unexpected undefined external symbol mpfi_formula_point",),
         )
+        self.assertEqual(
+            operations.validate_undefined_symbols("                 U __gmpz_not_allowed\n"),
+            ("unexpected undefined external symbol mpz_not_allowed",),
+        )
 
     def test_elf_absence_checks_are_fail_closed_on_inspection_error(self) -> None:
         recipe = (MPFI / "build.sh").read_text(encoding="utf-8")
