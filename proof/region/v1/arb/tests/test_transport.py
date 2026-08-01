@@ -369,6 +369,14 @@ class CanonicalBuildBundleTests(unittest.TestCase):
             hashlib.sha256(encoded).hexdigest(),
             "11bc313cba907e89535876eb8ce46194472367007053ab58b723338676f99427",
         )
+        private_mode = build_input.canonical_ustar_v1(
+            (("private", 0o700, b"x"),),
+            _TEST_CANONICAL_LIMITS,
+        )
+        with tarfile.open(fileobj=io.BytesIO(private_mode), mode="r:") as archive:
+            member = archive.getmember("private")
+            self.assertTrue(member.isreg())
+            self.assertEqual(member.mode, 0o700)
         for hostile, reason, field in (
             (
                 tuple(reversed(entries)),

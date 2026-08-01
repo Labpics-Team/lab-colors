@@ -12,9 +12,10 @@ protocol fixtures и не является evaluator runner. `arb/evaluator` в�
 Arb-enclosures и выпускает связанные transcript bytes;
 `SourceBoundArbControllerV1` заново собирает evaluator, запускает его и создаёт
 только provenance receipt. Ни один из этих путей не выполняет независимый
-semantic replay и не создаёт mathematical proof type. MPFI source lock и
-archive admission уже представлены, но MPFI evaluator/source-bound receipt и
-semantic verifier в текущем release отсутствуют.
+semantic replay и не создаёт mathematical proof type. MPFI source lock,
+archive admission и sealed source input уже представлены, но MPFI
+evaluator/source-bound receipt и semantic verifier в текущем release
+отсутствуют.
 
 Structural protocol/admission сам не является математическим proof.
 `DualComparisonCandidateV1` кодирует только structural agreement и не создаёт
@@ -245,6 +246,22 @@ lane entries, кодирует один канонический USTAR и вла
 caller digest и не утверждает recipe либо engine semantics. Resource bounds
 передаёт lane: общий encoder не вводит собственный fixture-specific cap.
 
+`mpfi/input.py` строит `SealedInputV1` только из заново допущенной пары
+`MpfiSourceLockV1` и `AdmittedMpfiSourcesV1`. Он повторно материализует exact
+regular files, помещает их в versioned MPFI-only namespace
+`sources/<role>/<relative>` и связывает свежую aggregate source capability с
+exact USTAR bytes. Роль, а не archive root, разделяет три source trees: lock
+не требует уникальности root. Целостность `SealedInputV1` сама по себе не
+доказывает принадлежность MPFI closure; это отдельно перепроверяет MPFI
+binding. Caller передаёт canonical `CanonicalInputLimitsV1`: lane сверяет
+declared exact file count и payload closure до replay, а общий encoder сверяет
+все final USTAR bounds после materialization. Limits — operational boundary, не
+координата MPFI source binding и не build policy. Для неверного public
+capability boundary возвращается `MpfiSourceInputErrorV1`; failure exact source
+replay остаётся `ProvenanceErrorV1`, а limits/USTAR rejection — `InputErrorV1`.
+Эта ступень не вводит recipe, Docker policy, BUILD/RUN authority, executable,
+comparator, receipt или semantic verifier.
+
 `proof/region/v1/build/transport.py` владеет immutable Docker policy,
 одноразовым probe→build lease, bounded stdin/stdout observation, cleanup и
 двумя свежими попытками. Доказательные координаты разделены по причинам:
@@ -283,8 +300,9 @@ cleanup, без ложного заявления о reap CLI. `TwoBuildObservat
 контракта, выявленное до неё, может не иметь ни session, ни process prefix.
 Transport не знает formula, ELF, comparator или
 source provenance: lane отдельно перепроверяет semantic input binding перед
-каждым process и передаёт output admission. Arb объявляет собственную exact
-policy; MPFI обязан объявить другую, а не заимствовать Arb semantics.
+каждым process и передаёт output admission. MPFI sealed source input ещё не
+является MPFI build policy; будущая policy должна быть объявлена отдельно и не
+может заимствовать Arb semantics.
 
 ## Воспроизведение Arb, связанное с источником
 

@@ -15,6 +15,9 @@ _SEALED_INPUT_TOKEN = object()
 _USTAR_BLOCK_BYTES = 512
 _USTAR_RECORD_BYTES = 20 * _USTAR_BLOCK_BYTES
 _USTAR_EOF_BLOCKS = 2
+# Канонический input сохраняет privacy bit допущенного regular file: замена
+# 0700 на 0755 незаметно меняла бы owned bytes и смысл сборки.
+_REGULAR_FILE_MODES_V1 = frozenset((0o644, 0o700, 0o755))
 
 
 def _valid_digest(value: object) -> bool:
@@ -270,7 +273,7 @@ def canonical_ustar_v1(
         path = _logical_path(path)
         if not _ustar_path_is_encodable(path):
             _fail(InputReasonV1.INVALID_PATH, path)
-        if type(mode) is not int or mode not in (0o644, 0o755):
+        if type(mode) is not int or mode not in _REGULAR_FILE_MODES_V1:
             _fail(InputReasonV1.INVALID_MODE, path)
         if type(contents) is not bytes:
             _fail(InputReasonV1.WRONG_TYPE, path)
