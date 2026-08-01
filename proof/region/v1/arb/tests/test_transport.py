@@ -1027,7 +1027,12 @@ class SealedBuildTransportContractTests(unittest.TestCase):
             (
                 "bounded",
                 "x" * build_transport._DIAGNOSTIC_DETAIL_TEXT_LIMIT_V1,
-                "native Docker build observation and CID root cleanup both failed",
+                prefix
+                + "x"
+                * (
+                    build_transport._DIAGNOSTIC_DETAIL_TEXT_LIMIT_V1
+                    - len(prefix)
+                ),
             ),
         ):
             with self.subTest(detail=name):

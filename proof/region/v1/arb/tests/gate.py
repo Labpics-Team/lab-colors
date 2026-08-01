@@ -17,6 +17,7 @@ sys.path.insert(0, str(REPO))
 EXPECTED_TEST_INVENTORY_SHA256 = (
     "b83e1677356d2a53fa475d0c006a38a49cdb1cbb58bc032df8d8402edfc1075c"
 )
+EXPECTED_TEST_COUNT = 193
 _EVALUATOR_REASON = "set LABCOLORS_ARB_EVALUATOR to the controlled C17 binary"
 EXPECTED_SKIPS = frozenset(
     {
