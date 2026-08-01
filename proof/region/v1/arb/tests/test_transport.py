@@ -329,7 +329,7 @@ class CanonicalBuildBundleTests(unittest.TestCase):
         report = _docker_capability()
         self.assertFalse(hasattr(report, "__dict__"))
         with self.assertRaises((AttributeError, TypeError)):
-            object.__setattr__(report, "platform", "foreign")
+            object.__setattr__(report, "host_user", (0, 0))
         forged_policy = tuple.__new__(build_transport.DockerBuildPolicyV1, ())
         with self.assertRaises(TypeError):
             build_transport.ControlledBuildTransportV1(
@@ -608,6 +608,8 @@ class SealedBuildTransportContractTests(unittest.TestCase):
         )
         self.assertFalse(hasattr(request, "cid_file"))
         self.assertFalse(hasattr(request, "container_name"))
+        # The request has no positional slot for adapter-owned host cleanup
+        # authority; extra values cannot smuggle a CID path or container name.
         with self.assertRaises(TypeError):
             build_transport.DockerBuildRequestV1(
                 1,

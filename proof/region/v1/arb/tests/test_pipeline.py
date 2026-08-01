@@ -1298,6 +1298,7 @@ class DockerCommandContractTests(unittest.TestCase):
             docker_path=Path("/bin/sh"),
         )
         lease = backend._next_run_lease_v1(capability)
+        self.addCleanup(backend._release_run_lease_v1, lease)
         with mock.patch.object(
             backend,
             "_cleanup_container",

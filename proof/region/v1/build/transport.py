@@ -2661,7 +2661,6 @@ class NativeDockerBuildBackendV1:
                 if process.stdin is not None:
                     close_failed, close_interrupt = self._close_owned_stream(
                         process.stdin,
-                        input_descriptor,
                     )
                     if close_failed:
                         observer_failed = True
@@ -2714,15 +2713,11 @@ class NativeDockerBuildBackendV1:
                             observed_stop = "Docker CLI process termination was interrupted"
                         fallback_stop = self._force_reap_after_interruption_v1(process)
                         stop_detail = stop_detail or observed_stop or fallback_stop
-                for stream, descriptor in (
-                    (process.stdout, stdout_descriptor),
-                    (process.stderr, stderr_descriptor),
-                ):
+                for stream in (process.stdout, process.stderr):
                     if stream is None:
                         continue
                     close_failed, close_interrupt = self._close_owned_stream(
                         stream,
-                        descriptor,
                     )
                     if close_failed:
                         observer_failed = True
@@ -2853,11 +2848,11 @@ class NativeDockerBuildBackendV1:
     @staticmethod
     def _close_owned_stream(
         stream: object,
-        descriptor: int | None,
     ) -> tuple[bool, BaseException | None]:
-        """Release a stream even when one release operation is interrupted."""
+        """Release through the stream owner without aliasing its descriptor."""
 
         close_failed = False
+        close_raised = False
         retained_base_exception: BaseException | None = None
         try:
             closed = stream.closed is True
@@ -2873,16 +2868,31 @@ class NativeDockerBuildBackendV1:
                 stream.close()
             except Exception:
                 close_failed = True
+                close_raised = True
             except BaseException as error:
                 close_failed = True
+                close_raised = True
                 retained_base_exception = retained_base_exception or error
-        if close_failed and type(descriptor) is int and descriptor >= 0:
+        if close_raised:
             try:
-                os.close(descriptor)
+                still_open = stream.closed is False
             except Exception:
-                pass
+                still_open = False
             except BaseException as error:
                 retained_base_exception = retained_base_exception or error
+                still_open = False
+            if still_open:
+                # close() may fail before it releases the resource, but a
+                # saved FD can already name another resource.  Retrying the
+                # same owner is the only bounded release attempt that keeps
+                # ownership unambiguous.
+                try:
+                    stream.close()
+                except Exception:
+                    close_failed = True
+                except BaseException as error:
+                    close_failed = True
+                    retained_base_exception = retained_base_exception or error
         return close_failed, retained_base_exception
 
     def _clock(self) -> int:

@@ -34,15 +34,16 @@ from test_pipeline import (  # noqa: E402
 from test_receipt import _execute  # noqa: E402
 
 
-# These inventory goldens describe the complete Arb gate. Identity-version
-# tests deliberately change this inventory and must update both values from the
-# gate's independent enumeration in the same slice.
+# These literals are an independent outer oracle for the Arb gate: importing
+# its expected hash here would let a coordinated gate edit hide inventory drift.
+# A deliberate test-set change updates both values from fresh enumeration.
 ARB_INVENTORY_SHA256_V1 = (
     "e93060f8fa2ff5035bcc394f92dccc5f7f8baf7f9e019fc13cda933295393dce"
 )
 ARB_ORDER_SHA256_V1 = (
     "78712585ffac242f31c3a385ab98c047a3501df1037b5830d5428ec9f39bf9d6"
 )
+ARB_TEST_COUNT_V1 = 169
 
 MOVED_INPUT_SURFACE_V1 = (
     "CanonicalInputLimitsV1",
@@ -271,8 +272,8 @@ class ExistingArbGateTests(unittest.TestCase):
             identifier.encode("utf-8") + b"\n" for identifier in identifiers
         )
 
-        self.assertEqual(len(identifiers), 169)
-        self.assertEqual(len(set(identifiers)), 169)
+        self.assertEqual(len(identifiers), ARB_TEST_COUNT_V1)
+        self.assertEqual(len(set(identifiers)), ARB_TEST_COUNT_V1)
         self.assertEqual(
             arb_gate.test_inventory_sha256_v1(arb_gate.full_suite_v1()),
             ARB_INVENTORY_SHA256_V1,
@@ -495,6 +496,88 @@ class SharedBuildExtractionTests(unittest.TestCase):
 
 
 class SharedBuildTransportTargetTests(unittest.TestCase):
+    def test_stream_close_fallback_requires_current_stream_ownership(self) -> None:
+        transport = importlib.import_module("build.transport")
+        real_close = os.close
+
+        descriptor = os.open(os.devnull, os.O_RDONLY)
+
+        class ClosesThenRaises:
+            closed = False
+            replacement: int | None = None
+            close_calls = 0
+
+            def close(self) -> None:
+                self.close_calls += 1
+                real_close(descriptor)
+                self.closed = True
+                self.replacement = os.open(os.devnull, os.O_RDONLY)
+                raise OSError("stream close released its descriptor")
+
+        stream = ClosesThenRaises()
+        try:
+            with mock.patch.object(
+                transport.os,
+                "close",
+                side_effect=AssertionError("helper closed a numeric descriptor"),
+            ) as direct_close:
+                failed, interruption = (
+                    transport.NativeDockerBuildBackendV1._close_owned_stream(
+                        stream,
+                    )
+                )
+
+            self.assertTrue(failed)
+            self.assertIsNone(interruption)
+            self.assertEqual(stream.replacement, descriptor)
+            self.assertEqual(stream.close_calls, 1)
+            direct_close.assert_not_called()
+            os.fstat(descriptor)
+        finally:
+            if stream.replacement is not None:
+                try:
+                    real_close(stream.replacement)
+                except OSError:
+                    pass
+
+        descriptor = os.open(os.devnull, os.O_RDONLY)
+
+        class RaisesBeforeClose:
+            closed = False
+            close_calls = 0
+
+            def close(self) -> None:
+                self.close_calls += 1
+                if self.close_calls == 1:
+                    raise OSError("stream close kept its descriptor")
+                real_close(descriptor)
+                self.closed = True
+
+        stream = RaisesBeforeClose()
+        try:
+            with mock.patch.object(
+                transport.os,
+                "close",
+                side_effect=AssertionError("helper closed a numeric descriptor"),
+            ) as direct_close:
+                failed, interruption = (
+                    transport.NativeDockerBuildBackendV1._close_owned_stream(
+                        stream,
+                    )
+                )
+
+            self.assertTrue(failed)
+            self.assertIsNone(interruption)
+            self.assertEqual(stream.close_calls, 2)
+            direct_close.assert_not_called()
+            with self.assertRaises(OSError):
+                os.fstat(descriptor)
+        finally:
+            try:
+                real_close(descriptor)
+            except OSError:
+                pass
+
     def test_session_property_is_pure_while_boundary_validator_rejects_forgery(self) -> None:
         transport = importlib.import_module("build.transport")
         build_input = importlib.import_module("build.input")
@@ -1010,7 +1093,7 @@ class SharedBuildTransportTargetTests(unittest.TestCase):
         with self.assertRaises(TypeError):
             transport.DockerBuildPolicyV1(**hostile_policy)
 
-    def test_stream_close_failure_fallback_closes_fd_and_retains_evidence(self) -> None:
+    def test_stream_close_failure_retries_owner_and_retains_evidence(self) -> None:
         transport = importlib.import_module("build.transport")
         backend = transport.NativeDockerBuildBackendV1(
             Path("/bin/true"),
@@ -1020,9 +1103,7 @@ class SharedBuildTransportTargetTests(unittest.TestCase):
             machine_name="x86_64",
         )
         real_popen = subprocess.Popen
-        real_close = os.close
         spawned: list[subprocess.Popen[bytes]] = []
-        fallback_closed: list[int] = []
         wrapped_streams: list[object] = []
 
         class CloseRaises:
@@ -1033,14 +1114,16 @@ class SharedBuildTransportTargetTests(unittest.TestCase):
 
             @property
             def closed(self) -> bool:
-                return False
+                return self.wrapped.closed
 
             def fileno(self) -> int:
                 return self.descriptor
 
             def close(self) -> None:
                 self.close_calls += 1
-                raise OSError("forced close failure")
+                if self.close_calls == 1:
+                    raise OSError("forced close failure")
+                self.wrapped.close()
 
         def spawn(*args: object, **kwargs: object) -> subprocess.Popen[bytes]:
             process = real_popen(*args, **kwargs)
@@ -1049,10 +1132,6 @@ class SharedBuildTransportTargetTests(unittest.TestCase):
             wrapped_streams.append(wrapped)
             process.stdout = wrapped
             return process
-
-        def close(descriptor: int) -> None:
-            fallback_closed.append(descriptor)
-            real_close(descriptor)
 
         input_value = _sealed_input()
         command = (
@@ -1068,7 +1147,7 @@ class SharedBuildTransportTargetTests(unittest.TestCase):
                 transport.subprocess,
                 "Popen",
                 side_effect=spawn,
-            ), mock.patch.object(transport.os, "close", side_effect=close):
+            ):
                 result = backend._observe_command(
                     command,
                     stdout_limit=64,
@@ -1085,10 +1164,8 @@ class SharedBuildTransportTargetTests(unittest.TestCase):
                     if stream is not None and not stream.closed:
                         stream.close()
                 original = wrapped_streams[0].wrapped
-                try:
+                if not original.closed:
                     original.close()
-                except OSError:
-                    pass
 
         self.assertIs(type(result), transport.DockerBuildObserverFailureV1)
         self.assertEqual(result.stdout, b"evidence")
@@ -1096,8 +1173,8 @@ class SharedBuildTransportTargetTests(unittest.TestCase):
         self.assertIsNotNone(result.input_progress)
         self.assertEqual(result.input_progress.written_length, input_value.length)
         self.assertEqual(result.input_progress.written_sha256, input_value.sha256)
-        self.assertIn(wrapped_streams[0].descriptor, fallback_closed)
-        self.assertEqual(wrapped_streams[0].close_calls, 1)
+        self.assertTrue(wrapped_streams[0].wrapped.closed)
+        self.assertEqual(wrapped_streams[0].close_calls, 2)
 
     def test_post_popen_failures_always_close_streams_and_cleanup_once(self) -> None:
         transport = importlib.import_module("build.transport")
@@ -1400,15 +1477,23 @@ class SharedBuildTransportTargetTests(unittest.TestCase):
         observe = backend._observe_command
         instructions = tuple(dis.Bytecode(observe))
         process_store = next(
-            index
-            for index, instruction in enumerate(instructions)
-            if (
-                instruction.opname == "STORE_FAST"
-                and instruction.argval == "process"
-                and index > 0
-                and instructions[index - 1].opname == "CALL_FUNCTION_EX"
-            )
+            (
+                index
+                for index, instruction in enumerate(instructions)
+                if (
+                    instruction.opname == "STORE_FAST"
+                    and instruction.argval == "process"
+                    and index > 0
+                    and instructions[index - 1].opname == "CALL_FUNCTION_EX"
+                )
+            ),
+            None,
         )
+        if process_store is None:
+            self.fail(
+                "CPython bytecode no longer exposes CALL_FUNCTION_EX before "
+                f"STORE_FAST process (Python {sys.version})"
+            )
         interruption_offset = instructions[process_store + 1].offset
         real_popen = subprocess.Popen
         spawned: list[subprocess.Popen[bytes]] = []
@@ -1645,16 +1730,20 @@ class SharedBuildTransportTargetTests(unittest.TestCase):
             def __init__(self, wrapped: object) -> None:
                 self.wrapped = wrapped
                 self.descriptor = wrapped.fileno()
+                self.close_calls = 0
 
             @property
             def closed(self) -> bool:
-                return False
+                return self.wrapped.closed
 
             def fileno(self) -> int:
                 return self.descriptor
 
             def close(self) -> None:
-                raise KeyboardInterrupt("interrupt during stdout close")
+                self.close_calls += 1
+                if self.close_calls == 1:
+                    raise KeyboardInterrupt("interrupt during stdout close")
+                self.wrapped.close()
 
         def spawn(*args: object, **kwargs: object) -> subprocess.Popen[bytes]:
             process = real_popen(*args, **kwargs)
@@ -1709,6 +1798,85 @@ class SharedBuildTransportTargetTests(unittest.TestCase):
 
         self.assertTrue(stderr_closed)
         self.assertTrue(stdout_descriptor_closed)
+        self.assertEqual(wrapped_stdout[0].close_calls, 2)
+        self.assertEqual(cleanup_calls, [lease])
+
+    def test_persistent_stream_close_interrupt_keeps_release_failure_honest(self) -> None:
+        transport = importlib.import_module("build.transport")
+        backend = transport.NativeDockerBuildBackendV1(
+            Path("/bin/true"),
+            pipeline.ARB_BUILD_TRANSPORT_POLICY_V1,
+            host_user=(501, 20),
+            platform_name="linux",
+            machine_name="x86_64",
+        )
+        real_popen = subprocess.Popen
+        spawned: list[subprocess.Popen[bytes]] = []
+        wrapped_stdout: list[object] = []
+        cleanup_calls: list[object] = []
+
+        class CloseAlwaysInterrupts:
+            def __init__(self, wrapped: object) -> None:
+                self.wrapped = wrapped
+                self.descriptor = wrapped.fileno()
+                self.close_calls = 0
+
+            @property
+            def closed(self) -> bool:
+                return False
+
+            def fileno(self) -> int:
+                return self.descriptor
+
+            def close(self) -> None:
+                self.close_calls += 1
+                raise KeyboardInterrupt("persistent stdout close interrupt")
+
+        def spawn(*args: object, **kwargs: object) -> subprocess.Popen[bytes]:
+            process = real_popen(*args, **kwargs)
+            spawned.append(process)
+            wrapper = CloseAlwaysInterrupts(process.stdout)
+            wrapped_stdout.append(wrapper)
+            process.stdout = wrapper
+            return process
+
+        def cleanup(lease: object, **_kwargs: object) -> None:
+            cleanup_calls.append(lease)
+
+        lease = backend._next_run_lease_v1(
+            _docker_capability_fixture(pipeline.ARB_BUILD_TRANSPORT_POLICY_V1)
+        )
+        self.addCleanup(backend._release_run_lease_v1, lease)
+        with mock.patch.object(
+            transport.subprocess,
+            "Popen",
+            side_effect=spawn,
+        ), mock.patch.object(
+            backend,
+            "_cleanup_container",
+            side_effect=cleanup,
+        ):
+            with self.assertRaisesRegex(KeyboardInterrupt, "persistent stdout"):
+                backend._observe_command(
+                    (sys.executable, "-c", "pass"),
+                    stdout_limit=64,
+                    stderr_limit=64,
+                    timeout_ns=1_000_000_000,
+                    lease=lease,
+                )
+            process = spawned[0]
+            stderr_closed = process.stderr is not None and process.stderr.closed
+            os.fstat(wrapped_stdout[0].descriptor)
+            if process.poll() is None:
+                process.kill()
+                process.wait(timeout=5)
+            for stream in (process.stdin, process.stderr):
+                if stream is not None and not stream.closed:
+                    stream.close()
+            wrapped_stdout[0].wrapped.close()
+
+        self.assertTrue(stderr_closed)
+        self.assertEqual(wrapped_stdout[0].close_calls, 2)
         self.assertEqual(cleanup_calls, [lease])
 
     def test_process_and_container_cleanup_failures_are_both_retained_in_order(self) -> None:
