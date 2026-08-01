@@ -82,7 +82,6 @@ def _fixture_release(
     *,
     license_body: bytes,
     value_body: bytes,
-    value_mode: int = 0o644,
 ) -> provenance.SourceReleaseLockV1:
     raw_tar = lzma.decompress(archive)
     integrity: (
@@ -138,7 +137,6 @@ def _admitted_closure(
                 archive,
                 license_body=license_body,
                 value_body=value_body,
-                value_mode=value_mode,
             )
         )
         namespace = role.name.lower()
@@ -486,8 +484,9 @@ class MpfiSourceInputTests(unittest.TestCase):
     def test_source_input_owner_has_no_engine_dependency(self) -> None:
         source_path = ROOT / "mpfi" / "input.py"
         self.assertTrue(source_path.is_file())
-        tree = ast.parse(source_path.read_text(encoding="utf-8"))
-        imported_modules = _imported_module_names(source_path.read_text(encoding="utf-8"))
+        source = source_path.read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        imported_modules = _imported_module_names(source)
         forbidden = (
             "arb",
             "pipeline",
@@ -509,10 +508,14 @@ class MpfiSourceInputTests(unittest.TestCase):
             any(
                 isinstance(node, ast.Call)
                 and (
-                    isinstance(node.func, ast.Name)
-                    and node.func.id == "__import__"
-                    or isinstance(node.func, ast.Attribute)
-                    and node.func.attr == "import_module"
+                    (
+                        isinstance(node.func, ast.Name)
+                        and node.func.id == "__import__"
+                    )
+                    or (
+                        isinstance(node.func, ast.Attribute)
+                        and node.func.attr == "import_module"
+                    )
                 )
                 for node in ast.walk(tree)
             ),
