@@ -2365,10 +2365,10 @@ class NativeDockerBuildBackendV1:
 
     @staticmethod
     def _with_cid_root_cleanup_failure_v1(
-        observation: DockerBuildProcessObservationV1 | None,
+        observation: object,
         detail: str,
     ) -> DockerBuildProcessObservationV1:
-        """Retain a completed causal prefix when native CID-root release fails."""
+        """Retain a canonical prefix, otherwise report a typed observer failure."""
 
         if observation is None:
             return DockerBuildObserverFailureV1(detail, b"", b"")
@@ -2410,7 +2410,11 @@ class NativeDockerBuildBackendV1:
             progress = observation.input_progress
             trigger = DockerCleanupTriggerV1.OBSERVER_FAILURE
         else:
-            raise TypeError("unknown native Docker build observation")
+            return DockerBuildObserverFailureV1(
+                "native Docker build observation is not canonical; " + detail,
+                b"",
+                b"",
+            )
         if progress is None:
             return DockerBuildObserverFailureV1(
                 detail,

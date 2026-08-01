@@ -38,12 +38,12 @@ from test_receipt import _execute  # noqa: E402
 # its expected hash here would let a coordinated gate edit hide inventory drift.
 # A deliberate test-set change updates both values from fresh enumeration.
 ARB_INVENTORY_SHA256_V1 = (
-    "8a6c293af9283193dffe24ba45b864e343ad5c7d64fed2519fdd1d87c8b28d34"
+    "3c03f5b9ad9f19c24fa78380b6b9a78ce559a175cf603b2f065e85cba285030b"
 )
 ARB_ORDER_SHA256_V1 = (
-    "b3c75d673b4878623c9383daffe043ed4000b208632b9e33a7e944ed13568098"
+    "e58edaad85f3f89ef29124e038a6aebe5e58f5caa1a58ae81297ce4f3c392e67"
 )
-ARB_TEST_COUNT_V1 = 173
+ARB_TEST_COUNT_V1 = 174
 
 MOVED_INPUT_SURFACE_V1 = (
     "CanonicalInputLimitsV1",
