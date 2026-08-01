@@ -79,12 +79,13 @@ def _fresh_admitted_sources_v1(
             MpfiSourceInputReasonV1.FOREIGN_SOURCE_CAPABILITY,
             "admitted_sources",
         )
-    if (
-        type(source_lock_identity) is not bytes
-        or len(source_lock_identity) != 32
-        or source_lock_identity == bytes(32)
-        or source_lock_identity != source_lock.identity
-    ):
+    bound = (
+        type(source_lock_identity) is bytes
+        and len(source_lock_identity) == 32
+        and source_lock_identity != bytes(32)
+        and source_lock_identity == source_lock.identity
+    )
+    if not bound:
         _fail(
             MpfiSourceInputReasonV1.FOREIGN_SOURCE_CAPABILITY,
             "admitted_sources",
