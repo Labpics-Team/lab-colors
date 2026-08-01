@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""RED-контракт границы MPFI admitted-source → sealed-input."""
+"""Контракт границы MPFI admitted-source → sealed input."""
 
 from __future__ import annotations
 
@@ -529,25 +529,54 @@ class MpfiSourceInputTests(unittest.TestCase):
         )
 
     def test_protocol_keeps_the_source_input_boundary_below_build_authority(self) -> None:
-        reference = " ".join(
-            (ROOT / "PROTOCOL.md").read_text(encoding="utf-8").split()
+        protocol = (ROOT / "PROTOCOL.md").read_text(encoding="utf-8")
+        source_input_start = protocol.index("`mpfi/input.py`")
+        transport_start = protocol.index(
+            "`proof/region/v1/build/transport.py`",
+            source_input_start,
         )
+        arb_replay_start = protocol.index("## Воспроизведение Arb", transport_start)
+        reference = " ".join(protocol[source_input_start:transport_start].split())
+        transport_reference = " ".join(protocol[transport_start:arb_replay_start].split())
+        source_path = ROOT / "mpfi" / "input.py"
+        source_text = source_path.read_text(encoding="utf-8")
+        # Тест намеренно запускается с ``-OO``. Явно выключаем оптимизацию
+        # parser-а, чтобы контракт документации наблюдался по исходнику, а не
+        # случайно зависел от сохранения runtime ``__doc__``.
+        source_tree = compile(
+            source_text,
+            str(source_path),
+            "exec",
+            flags=ast.PyCF_ONLY_AST,
+            optimize=0,
+        )
+        seal_function = next(
+            node
+            for node in source_tree.body
+            if isinstance(node, ast.FunctionDef)
+            and node.name == "seal_mpfi_source_input_v1"
+        )
+        seal_reference = ast.get_docstring(seal_function)
 
-        self.assertIn("`mpfi/input.py`", reference)
         self.assertIn("`sources/<role>/<relative>`", reference)
         self.assertIn("не требует уникальности root", reference)
         self.assertIn("Caller передаёт canonical `CanonicalInputLimitsV1`", reference)
         self.assertIn("`MpfiSourceInputErrorV1`", reference)
         self.assertIn("`ProvenanceErrorV1`", reference)
         self.assertIn("`InputErrorV1`", reference)
+        self.assertIn("MPFI source-input binding", reference)
+        self.assertIn("materialization archive", reference)
         self.assertIn(
             "не вводит recipe, Docker policy, BUILD/RUN authority",
             reference,
         )
         self.assertIn(
             "MPFI sealed source input ещё не является MPFI build policy",
-            reference,
+            transport_reference,
         )
+        self.assertIn("engine-owned input binding", transport_reference)
+        self.assertIsNotNone(seal_reference)
+        self.assertIn("failure exact archive replay", seal_reference)
 
 
 if __name__ == "__main__":

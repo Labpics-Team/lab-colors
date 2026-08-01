@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""MPFI-owned source closure, materialized как один sealed generic input."""
+"""MPFI-замыкание исходников, материализуемое в единый sealed input."""
 
 from __future__ import annotations
 
@@ -192,7 +192,7 @@ def seal_mpfi_source_input_v1(
     """Запечатывает MPFI source closure в caller-owned resource bounds.
 
     `MpfiSourceInputErrorV1` означает invalid public capability boundary,
-    `ProvenanceErrorV1` — failure exact source replay, а `InputErrorV1` —
+    `ProvenanceErrorV1` — failure exact archive replay, а `InputErrorV1` —
     canonical USTAR или resource-bound rejection.
     """
 

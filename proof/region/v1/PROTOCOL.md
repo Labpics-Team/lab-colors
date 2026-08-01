@@ -13,7 +13,7 @@ Arb-enclosures и выпускает связанные transcript bytes;
 `SourceBoundArbControllerV1` заново собирает evaluator, запускает его и создаёт
 только provenance receipt. Ни один из этих путей не выполняет независимый
 semantic replay и не создаёт mathematical proof type. MPFI source lock,
-archive admission и sealed source input уже представлены, но MPFI
+archive admission и sealed source input (не evaluator replay) уже представлены, но MPFI
 evaluator/source-bound receipt и semantic verifier в текущем release
 отсутствуют.
 
@@ -253,11 +253,12 @@ regular files, помещает их в versioned MPFI-only namespace
 exact USTAR bytes. Роль, а не archive root, разделяет три source trees: lock
 не требует уникальности root. Целостность `SealedInputV1` сама по себе не
 доказывает принадлежность MPFI closure; это отдельно перепроверяет MPFI
-binding. Caller передаёт canonical `CanonicalInputLimitsV1`: lane сверяет
-declared exact file count и payload closure до replay, а общий encoder сверяет
-все final USTAR bounds после materialization. Limits — operational boundary, не
-координата MPFI source binding и не build policy. Для неверного public
-capability boundary возвращается `MpfiSourceInputErrorV1`; failure exact source
+source-input binding. Caller передаёт canonical `CanonicalInputLimitsV1`: lane сверяет
+declared exact file count и payload closure до повторной materialization archive
+bytes, а общий encoder сверяет все final USTAR bounds после materialization.
+Limits — operational boundary, не
+координата MPFI source-input binding и не build policy. Для неверного public
+capability boundary возвращается `MpfiSourceInputErrorV1`; failure exact archive
 replay остаётся `ProvenanceErrorV1`, а limits/USTAR rejection — `InputErrorV1`.
 Эта ступень не вводит recipe, Docker policy, BUILD/RUN authority, executable,
 comparator, receipt или semantic verifier.
@@ -299,7 +300,7 @@ cleanup, без ложного заявления о reap CLI. `TwoBuildObservat
 валидной session сохраняется весь уже завершённый causal prefix; нарушение
 контракта, выявленное до неё, может не иметь ни session, ни process prefix.
 Transport не знает formula, ELF, comparator или
-source provenance: lane отдельно перепроверяет semantic input binding перед
+source provenance: engine lane отдельно перепроверяет свой engine-owned input binding перед
 каждым process и передаёт output admission. MPFI sealed source input ещё не
 является MPFI build policy; будущая policy должна быть объявлена отдельно и не
 может заимствовать Arb semantics.

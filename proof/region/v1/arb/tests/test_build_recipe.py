@@ -19,25 +19,57 @@ RECIPE_REJECTION_TIMEOUT_SECONDS = 5
 
 
 class ArbBuildRecipeTests(unittest.TestCase):
-    def test_fast_gate_includes_the_shared_executor_suite_exactly_once(self) -> None:
+    def test_fast_gate_includes_each_shared_contract_suite_exactly_once(self) -> None:
         tests = tuple(arb_gate._iter_tests_v1(arb_gate.full_suite_v1()))
         identifiers = tuple(test.id() for test in tests)
-        executor_identifiers = tuple(
-            identifier for identifier in identifiers if identifier.startswith("test_executor.")
-        )
-        expected = tuple(
-            test.id()
-            for test in arb_gate._iter_tests_v1(
-                unittest.defaultTestLoader.discover(
-                    str(arb_gate.SHARED_TEST_DIRECTORY),
-                    pattern="test_executor.py",
+        for pattern, module_prefix in (
+            ("test_executor.py", "test_executor."),
+            ("test_mpfi_input.py", "test_mpfi_input."),
+        ):
+            with self.subTest(pattern=pattern):
+                included = tuple(
+                    identifier
+                    for identifier in identifiers
+                    if identifier.startswith(module_prefix)
                 )
-            )
-        )
+                expected = tuple(
+                    test.id()
+                    for test in arb_gate._iter_tests_v1(
+                        unittest.defaultTestLoader.discover(
+                            str(arb_gate.SHARED_TEST_DIRECTORY),
+                            pattern=pattern,
+                        )
+                    )
+                )
 
-        self.assertTrue(executor_identifiers)
-        self.assertEqual(executor_identifiers, expected)
+                self.assertTrue(expected)
+                self.assertEqual(included, expected)
         self.assertEqual(len(identifiers), len(set(identifiers)))
+
+    def test_mpfi_input_contract_cannot_green_by_skipping(self) -> None:
+        suite = unittest.defaultTestLoader.discover(
+            str(arb_gate.SHARED_TEST_DIRECTORY),
+            pattern="test_mpfi_input.py",
+        )
+        test_ids = tuple(test.id() for test in arb_gate._iter_tests_v1(suite))
+        result = unittest.TestResult()
+
+        suite.run(result)
+
+        self.assertTrue(test_ids)
+        self.assertTrue(
+            all(test_id.startswith("test_mpfi_input.") for test_id in test_ids)
+        )
+        expected_skip_ids = {
+            test_id for test_id, _reason in arb_gate.EXPECTED_SKIPS
+        }
+        self.assertTrue(set(test_ids).isdisjoint(expected_skip_ids))
+        self.assertEqual(result.testsRun, len(test_ids))
+        self.assertFalse(result.skipped)
+        self.assertFalse(result.expectedFailures)
+        self.assertFalse(result.unexpectedSuccesses)
+        self.assertFalse(result.failures)
+        self.assertFalse(result.errors)
 
     def test_pr_gate_requires_a_disposable_exact_workflow_runner(self) -> None:
         source = WORKFLOW.read_text(encoding="utf-8")

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the complete fast Arb contract with an exact skip manifest."""
+"""Запускает обязательные быстрые proof-контракты с точным manifest skips."""
 
 from __future__ import annotations
 
@@ -14,8 +14,12 @@ TEST_DIRECTORY = Path(__file__).resolve().parent
 SHARED_TEST_DIRECTORY = TEST_DIRECTORY.parents[1] / "tests"
 REPO = Path(__file__).resolve().parents[5]
 sys.path.insert(0, str(REPO))
+SHARED_FAST_TEST_PATTERNS_V1 = (
+    "test_executor.py",
+    "test_mpfi_input.py",
+)
 EXPECTED_TEST_INVENTORY_SHA256 = (
-    "721fcceb07c3d73e30032814a181e9c3d86f2185cfb3382cc79b34e05618fa48"
+    "c74942a9240b68327921160f86fd948532849234bb6da00a0075a137fef098cc"
 )
 _EVALUATOR_REASON = "set LABCOLORS_ARB_EVALUATOR to the controlled C17 binary"
 EXPECTED_SKIPS = frozenset(
@@ -71,14 +75,17 @@ def test_inventory_sha256_v1(suite: unittest.TestSuite) -> str:
 
 
 def full_suite_v1() -> unittest.TestSuite:
-    """Compose the shared execution contract and Arb-only contract once each."""
+    """Собирает обязательные общие proof-контракты и Arb-only contract."""
 
     return unittest.TestSuite(
-        (
+        tuple(
             unittest.defaultTestLoader.discover(
                 str(SHARED_TEST_DIRECTORY),
-                pattern="test_executor.py",
-            ),
+                pattern=pattern,
+            )
+            for pattern in SHARED_FAST_TEST_PATTERNS_V1
+        )
+        + (
             unittest.defaultTestLoader.discover(
                 str(TEST_DIRECTORY),
                 pattern="test_*.py",
@@ -131,7 +138,7 @@ def run_exact_suite_v1(
         )
         return 1
     print(
-        f"Arb fast gate: {len(tests)} tests, "
+        f"Proof fast gate: {len(tests)} tests, "
         f"inventory {actual_inventory_sha256}, "
         f"exact {len(actual_skips)}-skip manifest"
     )
