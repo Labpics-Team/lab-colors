@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 import hashlib
 import io
 import inspect
@@ -75,6 +76,99 @@ def _observe(
 
 
 class CanonicalBuildBundleTests(unittest.TestCase):
+    def test_public_input_constructors_use_typed_value_errors(self) -> None:
+        def reject(
+            constructor: Callable[[], object],
+            reason: build_input.InputReasonV1,
+            field: str,
+        ) -> None:
+            with self.assertRaises(build_input.InputErrorV1) as caught:
+                constructor()
+            self.assertEqual(caught.exception.reason, reason)
+            self.assertEqual(caught.exception.field, field)
+
+        def limits(
+            max_members: object = 1,
+            max_file_bytes: object = 1,
+            max_payload_bytes: object = 1,
+            max_encoded_bytes: object = None,
+        ) -> object:
+            return build_input.CanonicalInputLimitsV1(
+                max_members,
+                max_file_bytes,
+                max_payload_bytes,
+                max_encoded_bytes,
+            )
+
+        def seal(
+            binding_identity: object = _digest("binding"),
+            contents: object = b"x",
+        ) -> object:
+            return build_input.seal_input_v1(binding_identity, contents)
+
+        limit_fields = (
+            "max_members",
+            "max_file_bytes",
+            "max_payload_bytes",
+            "max_encoded_bytes",
+        )
+        self.assertIs(
+            type(build_input.CanonicalInputLimitsV1(1, 1, 1, None)),
+            build_input.CanonicalInputLimitsV1,
+        )
+        for field, value in (
+            ("max_members", True),
+            ("max_file_bytes", 1.0),
+            ("max_payload_bytes", object()),
+            ("max_encoded_bytes", b"1"),
+        ):
+            with self.subTest(kind="wrong_type", field=field):
+                reject(
+                    lambda field=field, value=value: limits(**{field: value}),
+                    build_input.InputReasonV1.WRONG_TYPE,
+                    field,
+                )
+        for field in limit_fields:
+            for value in (0, 1 << 64):
+                with self.subTest(kind="invalid_limit", field=field, value=value):
+                    reject(
+                        lambda field=field, value=value: limits(**{field: value}),
+                        build_input.InputReasonV1.INVALID_VALUE,
+                        field,
+                    )
+        reject(
+            lambda: limits(max_payload_bytes=(1 << 64) - 1),
+            build_input.InputReasonV1.INVALID_VALUE,
+            "max_encoded_bytes",
+        )
+
+        for field, constructor in (
+            ("binding_identity", lambda: seal(bytearray(_digest("binding")))),
+            ("contents", lambda: seal(contents=bytearray(b"x"))),
+        ):
+            with self.subTest(kind="wrong_type", field=field):
+                reject(constructor, build_input.InputReasonV1.WRONG_TYPE, field)
+        for field, constructor in (
+            ("binding_identity", lambda: seal(bytes(32))),
+            ("binding_identity", lambda: seal(b"x" * 31)),
+            ("contents", lambda: seal(contents=b"")),
+        ):
+            with self.subTest(kind="invalid_value", field=field):
+                reject(constructor, build_input.InputReasonV1.INVALID_VALUE, field)
+
+        for constructor in (
+            lambda: build_input.CanonicalInputLimitsV1(1, 1),
+            lambda: build_input.seal_input_v1(_digest("binding")),
+            lambda: build_input.SealedInputV1(
+                _digest("binding"),
+                b"x",
+                _token=object(),
+            ),
+        ):
+            with self.subTest(kind="private_or_call_shape"):
+                with self.assertRaises(TypeError):
+                    constructor()
+
     def test_bundle_is_reproducible_normalized_ustar_with_no_host_authority(self) -> None:
         request = _request()
         first = pipeline._seal_build_input_bundle_v1(request)

@@ -23,6 +23,7 @@ def _valid_digest(value: object) -> bool:
 
 class InputReasonV1(StrEnum):
     WRONG_TYPE = "wrong_type"
+    INVALID_VALUE = "invalid_value"
     INVALID_PATH = "invalid_path"
     INVALID_MODE = "invalid_mode"
     NONCANONICAL_SET = "noncanonical_set"
@@ -40,6 +41,14 @@ class InputErrorV1(ValueError):
 
 def _fail(reason: InputReasonV1, field_name: str) -> NoReturn:
     raise InputErrorV1(reason, field_name)
+
+
+def _positive_u64(value: object, field_name: str) -> int:
+    if type(value) is not int:
+        _fail(InputReasonV1.WRONG_TYPE, field_name)
+    if value <= 0 or value >= 1 << 64:
+        _fail(InputReasonV1.INVALID_VALUE, field_name)
+    return value
 
 
 def _logical_path(value: object) -> str:
@@ -70,12 +79,9 @@ class CanonicalInputLimitsV1(tuple):
         max_payload_bytes: int,
         max_encoded_bytes: int | None = None,
     ) -> CanonicalInputLimitsV1:
-        base_values = (max_members, max_file_bytes, max_payload_bytes)
-        if any(
-            type(value) is not int or value <= 0 or value >= 1 << 64
-            for value in base_values
-        ):
-            raise TypeError("canonical input limits must be positive u64 values")
+        max_members = _positive_u64(max_members, "max_members")
+        max_file_bytes = _positive_u64(max_file_bytes, "max_file_bytes")
+        max_payload_bytes = _positive_u64(max_payload_bytes, "max_payload_bytes")
         if max_encoded_bytes is None:
             # USTAR adds one header block per member, at most one partial data
             # block per member, two EOF blocks, then pads to one record. This
@@ -89,10 +95,16 @@ class CanonicalInputLimitsV1(tuple):
                 maximum_unpadded,
                 _USTAR_RECORD_BYTES,
             )
-        values = (*base_values, max_encoded_bytes)
-        if any(type(value) is not int or value <= 0 or value >= 1 << 64 for value in values):
-            raise TypeError("canonical input limits must be positive u64 values")
-        return tuple.__new__(cls, values)
+        max_encoded_bytes = _positive_u64(max_encoded_bytes, "max_encoded_bytes")
+        return tuple.__new__(
+            cls,
+            (
+                max_members,
+                max_file_bytes,
+                max_payload_bytes,
+                max_encoded_bytes,
+            ),
+        )
 
     @property
     def max_members(self) -> int:
@@ -203,6 +215,14 @@ class SealedInputV1(tuple):
 def seal_input_v1(binding_identity: bytes, contents: bytes) -> SealedInputV1:
     """Seal exact bytes while treating their semantic binding as opaque."""
 
+    if type(binding_identity) is not bytes:
+        _fail(InputReasonV1.WRONG_TYPE, "binding_identity")
+    if not _valid_digest(binding_identity):
+        _fail(InputReasonV1.INVALID_VALUE, "binding_identity")
+    if type(contents) is not bytes:
+        _fail(InputReasonV1.WRONG_TYPE, "contents")
+    if not contents:
+        _fail(InputReasonV1.INVALID_VALUE, "contents")
     return SealedInputV1(
         binding_identity,
         contents,
