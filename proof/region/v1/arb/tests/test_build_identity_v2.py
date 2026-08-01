@@ -31,19 +31,12 @@ from test_pipeline import (  # noqa: E402
 )
 
 
-_POLICY_FIELDS = (
-    "image_reference",
-    "platform",
-    "hostname",
-    "bootstrap",
-    "bootstrap_argv0",
-    "tmpfs_specs",
-    "user_mode",
-    "stdout_limit",
-    "stderr_limit",
-    "build_timeout_ns",
-    "probe_output_limit",
-    "probe_timeout_ns",
+_POLICY_FIELDS = tuple(
+    name
+    for name in inspect.signature(
+        build_transport.DockerBuildPolicyV1.__new__
+    ).parameters
+    if name != "cls"
 )
 
 
