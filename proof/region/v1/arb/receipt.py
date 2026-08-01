@@ -17,6 +17,8 @@ from enum import StrEnum
 from pathlib import Path
 from typing import TypeAlias
 
+from build import transport as build_transport
+
 import executor
 import pipeline
 import provenance
@@ -25,15 +27,15 @@ import region_proof_protocol as protocol
 
 _EVIDENCE_TOKEN = object()
 _RECEIPT_TOKEN = object()
-_NATIVE_BUILD_BACKEND_TYPE = pipeline.NativeDockerBuildBackendV1
+_NATIVE_BUILD_BACKEND_TYPE = build_transport.NativeDockerBuildBackendV1
 _NATIVE_RUN_BACKEND_TYPE = executor.NativeLinuxBackendV1
 
 _SOURCE_ID_LABEL_V1 = b"labcolors.proof-region.arb-source-replay.v1\0"
-_BUILD_ID_LABEL_V1 = b"labcolors.proof-region.arb-build-replay.v1\0"
+_BUILD_ID_LABEL_V2 = b"labcolors.proof-region.arb-build-replay.v2\0"
 _RUN_ID_LABEL_V1 = b"labcolors.proof-region.arb-run-replay.v1\0"
 _EVIDENCE_ID_LABEL_V1 = b"labcolors.proof-region.arb-evaluator-replay.v1\0"
-_SOURCE_BOUND_POLICY_ID_LABEL_V1 = (
-    b"labcolors.proof-region.arb-source-bound-policy.v1\0"
+_SOURCE_BOUND_POLICY_ID_LABEL_V2 = (
+    b"labcolors.proof-region.arb-source-bound-policy.v2\0"
 )
 
 
@@ -46,23 +48,29 @@ def _identity(label: bytes, chunks: tuple[bytes, ...]) -> bytes:
     return hashlib.sha256(label + len(payload).to_bytes(8, "big") + payload).digest()
 
 
-def source_bound_policy_identity_v1() -> bytes:
-    """Identity of the exact V1 observation rules and trust boundary."""
+def source_bound_policy_identity_v2(
+    capability: build_transport.DockerSupportedV1,
+) -> bytes:
+    """Identity of the exact observation rules and observed BUILD capability."""
+
+    capability_identity = build_transport.docker_capability_identity_v1(capability)
 
     return _identity(
-        _SOURCE_BOUND_POLICY_ID_LABEL_V1,
+        _SOURCE_BOUND_POLICY_ID_LABEL_V2,
         (
-            pipeline.pipeline_policy_identity_v1(
-                pipeline.HostTrustBoundaryV1.UNSEALED_LINUX_X64_DOCKER_HOST
+            pipeline.pipeline_policy_identity_v2(
+                pipeline.HostTrustBoundaryV1.UNSEALED_LINUX_X64_DOCKER_HOST,
+                capability.policy,
             ),
+            capability_identity,
             executor.SANDBOX_POLICY_RELEASE_V1.encode("ascii"),
             b"authority=one-shot-native-controller",
             b"source=lock-plus-owned-archive-and-build-input-replay",
             b"build=one-sealed-bundle-two-fresh-byte-equal-attempts",
             b"run=retained-executable-object-one-contained-process",
-            b"identity=immutable-coordinates-total-rejection-v1",
+            b"identity=immutable-coordinates-total-rejection-v2",
             b"claim=provenance-only-no-numerical-semantics",
-            b"trust=unsealed-linux-x64-host-and-docker-daemon",
+            b"trust=unsealed-linux-x64-host-native-docker-cli-and-daemon",
         ),
     )
 
@@ -106,6 +114,22 @@ def _comparator_replays_v1(
 ) -> bool:
     try:
         comparator = build.comparator
+        capability_identity = build_transport.docker_capability_identity_v1(
+            build.docker_capability
+        )
+        expected_pipeline_policy = pipeline.pipeline_policy_identity_v2(
+            request.host_trust,
+            build.docker_capability.policy,
+        )
+        expected_build_preimage = pipeline.comparator_build_preimage_v2(
+            request.build_sources,
+            capability_identity,
+            expected_pipeline_policy,
+            build.build_processes,
+            build.binary_sha256,
+            build.rebuild_sha256s,
+            len(build.binary),
+        )
         if (
             type(comparator) is not pipeline.DiagnosticArbComparatorV1
             or comparator.structural_source_identity
@@ -113,6 +137,8 @@ def _comparator_replays_v1(
             or comparator.build_input_identity
             != request.build_sources.build_input_identity
             or comparator.pipeline_policy_identity != build.pipeline_policy_identity
+            or comparator.pipeline_policy_identity != expected_pipeline_policy
+            or comparator.preimages.build_identity != expected_build_preimage
             or comparator.binary_sha256 != build.binary_sha256
             or comparator.rebuild_sha256s != build.rebuild_sha256s
         ):
@@ -152,7 +178,7 @@ def _comparator_replays_v1(
         return False
 
 
-def _build_identity_v1(
+def _build_identity_v2(
     request: pipeline.PipelineRequestV1,
     source_identity: bytes,
     build: pipeline.DiagnosticBuildObservationV1,
@@ -162,6 +188,9 @@ def _build_identity_v1(
     bundle = build.input_bundle
     processes = build.build_processes
     binaries = build.rebuild_binaries
+    capability_identity = build_transport.docker_capability_identity_v1(
+        build.docker_capability
+    )
     flint_partition = pipeline.flint_source_content_partition_v1(
         request.source_lock,
         request.admitted_sources,
@@ -180,15 +209,23 @@ def _build_identity_v1(
         or build.formula_support_identity
         != request.build_sources.formula_support_identity
         or build.pipeline_policy_identity
-        != pipeline.pipeline_policy_identity_v1(request.host_trust)
+        != pipeline.pipeline_policy_identity_v2(
+            request.host_trust,
+            build.docker_capability.policy,
+        )
+        or build.docker_capability.policy
+        != pipeline.ARB_BUILD_TRANSPORT_POLICY_V1
         or build.host_trust is not request.host_trust
-        or not pipeline.sealed_build_input_bundle_is_well_bound_v1(bundle)
-        or build.input_bundle_identity != bundle.identity
+        or not pipeline.arb_input_is_bound_v1(request, bundle)
+        or build.input_bundle_identity != bundle.binding_identity
         or build.input_bundle_sha256 != bundle.sha256
         or build.input_bundle_length != bundle.length
         or type(processes) is not tuple
         or len(processes) != 2
-        or any(type(item) is not pipeline.DockerBuildExitedV1 for item in processes)
+        or any(
+            type(item) is not build_transport.DockerBuildExitedV1
+            for item in processes
+        )
         or type(binaries) is not tuple
         or len(binaries) != 2
         or binaries[0] is not processes[0].stdout
@@ -204,8 +241,8 @@ def _build_identity_v1(
         transfer = process.input_transfer
         if (
             process.returncode != 0
-            or type(transfer) is not pipeline.BuildInputTransferV1
-            or transfer.bundle_identity != bundle.identity
+            or type(transfer) is not build_transport.BuildInputTransferV1
+            or transfer.bundle_identity != bundle.binding_identity
             or transfer.expected_length != bundle.length
             or transfer.expected_sha256 != bundle.sha256
             or transfer.written_length != bundle.length
@@ -213,19 +250,17 @@ def _build_identity_v1(
         ):
             raise TypeError("BUILD transfer did not consume the sealed bundle")
     return _identity(
-        _BUILD_ID_LABEL_V1,
+        _BUILD_ID_LABEL_V2,
         (
             source_identity,
             build.pipeline_policy_identity,
             build.host_trust.value.encode("ascii"),
-            build.docker_daemon_observation_sha256,
-            build.oci_image_reference.encode("ascii"),
-            build.oci_platform.encode("ascii"),
-            bundle.identity,
+            capability_identity,
+            bundle.binding_identity,
             bundle.sha256,
             bundle.length.to_bytes(8, "big"),
-            pipeline.build_process_bytes_v1(processes[0]),
-            pipeline.build_process_bytes_v1(processes[1]),
+            build_transport.build_process_bytes_v1(processes[0]),
+            build_transport.build_process_bytes_v1(processes[1]),
             build.binary_sha256,
             len(build.binary).to_bytes(8, "big"),
             build.comparator.identity,
@@ -365,7 +400,7 @@ class ContentResolvedEvaluatorReplayV1:
         if _token is not _EVIDENCE_TOKEN:
             raise TypeError("ContentResolvedEvaluatorReplayV1 is controller-derived")
         source_identity = _source_identity_v1(request)
-        build_identity = _build_identity_v1(request, source_identity, build)
+        build_identity = _build_identity_v2(request, source_identity, build)
         run_identity = _run_identity_v1(
             request,
             build,
@@ -409,7 +444,7 @@ def replay_evidence_is_well_bound_v1(value: object) -> bool:
         if type(value) is not ContentResolvedEvaluatorReplayV1:
             return False
         source_identity = _source_identity_v1(value.request)
-        build_identity = _build_identity_v1(
+        build_identity = _build_identity_v2(
             value.request,
             source_identity,
             value.build,
@@ -470,7 +505,8 @@ class SourceBoundEvaluatorReceiptV1:
         ):
             raise TypeError("SourceBoundEvaluatorReceiptV1 is controller-sealed")
         if (
-            claim.provenance_policy_identity != source_bound_policy_identity_v1()
+            claim.provenance_policy_identity
+            != source_bound_policy_identity_v2(evidence.build.docker_capability)
             or claim.run_claim_identity != evidence.run_claim.identity
             or claim.replay_evidence_identity != evidence.identity
         ):
@@ -524,8 +560,8 @@ SourceBoundResultV1: TypeAlias = (
     SourceBoundEvaluatorReceiptV1
     | SourceBoundRejectedV1
     | pipeline.PipelineBlockedV1
-    | pipeline.BuildRejectedV1
-    | pipeline.NonReproducibleBuildV1
+    | build_transport.BuildRejectedV1
+    | build_transport.TwoBuildObservationV1
     | pipeline.ExecutionRejectedV1
     | pipeline.TranscriptRejectedV1
 )
@@ -631,7 +667,10 @@ class SourceBoundArbControllerV1:
                 "exact source, build input, or job replay failed",
             )
 
-        build_backend = _NATIVE_BUILD_BACKEND_TYPE(self._docker_path)
+        build_backend = _NATIVE_BUILD_BACKEND_TYPE(
+            self._docker_path,
+            pipeline.ARB_BUILD_TRANSPORT_POLICY_V1,
+        )
         if type(build_backend) is not _NATIVE_BUILD_BACKEND_TYPE:
             return SourceBoundRejectedV1(
                 SourceBoundFailureReasonV1.REPLAY_BINDING_FAILED,
@@ -761,7 +800,7 @@ class SourceBoundArbControllerV1:
                 _token=_EVIDENCE_TOKEN,
             )
             claim = protocol.EvaluatorProvenanceClaimV1(
-                source_bound_policy_identity_v1(),
+                source_bound_policy_identity_v2(built.docker_capability),
                 run_claim.identity,
                 evidence.identity,
             )

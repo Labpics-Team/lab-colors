@@ -32,7 +32,7 @@ MPFI source closure ещё не является provenance исполнения
 receipt, cross-path dependency overlap и diversity не представлены admitted
 типом; structural coordinates не восполняют это отсутствие.
 
-## Wire и identity
+## Бинарный формат и идентичность
 
 Для wire-artifact-ов из `region_proof_protocol.py` все целые беззнаковые и
 записаны big-endian как `u8`, `u32be` или `u64be`; `digest` — ровно 32
@@ -154,7 +154,7 @@ Arb controller связывает его с наблюдёнными BUILD/RUN �
 границы доверия; receipt не заявляет отсутствие ambient inputs за пределами этой
 границы. Альтернативный JSON/TOML definition запрещён протоколом.
 
-## Source lock и integrity observations
+## Фиксация источников и наблюдения целостности
 
 `SourceReleaseLockV1` фиксирует bytes и структурный состав архива. Поле
 `.integrity` содержит один `SourceIntegrityPolicyV1`; это точная граница
@@ -194,7 +194,7 @@ Lab Colors фиксирует exact HTTPS URL, длину и SHA-256 получ�
 `MpfiSourceLockV1` использует те же единичные GMP/MPFR source declarations, что
 и Arb, однако имеет отдельную aggregate identity и отдельный typed admission.
 
-## Diagnostic execution boundary
+## Диагностическая граница исполнения
 
 `proof/region/v1/executor.py` — общий для enclosure engines leaf без импорта
 Arb/MPFI, formula или comparator semantics. Он же единолично кодирует
@@ -233,7 +233,39 @@ observation. Право на Arb receipt получает не executor, а от
 `SourceBoundArbControllerV1`, который владеет всей цепью BUILD → RUN и не
 принимает backend, capability либо diagnostic observation от вызывающего.
 
-## Source-bound Arb replay
+## Общая граница BUILD
+
+`proof/region/v1/build/input.py` принимает уже нормализованные lane entries,
+кодирует один канонический USTAR и владеет точными input bytes. Он не
+импортирует и не перепроверяет source capability: это ответственность
+потребляющего lane. `SealedInputV1` структурно неизменяем, связывает
+целостность байтов с opaque caller digest и не утверждает recipe либо engine
+semantics. Resource bounds передаёт lane: общий encoder не вводит собственный
+fixture-specific cap.
+
+`proof/region/v1/build/transport.py` владеет immutable Docker policy,
+одноразовым probe→build lease, bounded stdin/stdout observation, cleanup и
+двумя свежими попытками. Доказательные координаты разделены по причинам:
+
+1. transport policy identity связывает все поля точной policy;
+2. native command contract identity связывает один типизированный grammar для
+   probe, build и cleanup; фактический argv строится только этим grammar;
+3. daemon observation identity связывает только два raw probe stdout;
+4. Docker capability identity связывает policy, command contract и exact CLI
+   path, daemon observation и наблюдённые host uid/gid.
+
+`BuildSessionV1` и каждый `DockerBuildRequestV1` сохраняют ту же capability,
+те же input bytes и output cap. Чужая либо не полученная текущим probe
+capability отвергается до process spawn; ambient path/user повторно не
+считываются. `TwoBuildObservationV1` хранит обе успешные попытки и только
+классифицирует их байты как identical или different, не называя пару
+универсальным доказательством воспроизводимости. При отказе сохраняется весь
+уже завершённый causal prefix. Transport не знает formula, ELF, comparator или
+source provenance: lane отдельно перепроверяет semantic input binding перед
+каждым process и передаёт output admission. Arb объявляет собственную exact
+policy; MPFI обязан объявить другую, а не заимствовать Arb semantics.
+
+## Воспроизведение Arb, связанное с источником
 
 `SourceBoundArbControllerV1` сначала повторно парсит source lock и job,
 повторно допускает exact owned archive/build-input bytes и строит из regular
@@ -243,7 +275,8 @@ object дважды передаётся через bounded stdin; каждый 
 bounded tmpfs, а executable возвращает через stdout. Semantic host bind mounts,
 host output path и повторное открытие результата отсутствуют. Эта граница
 доказывает точный controller-observed byte stream, а не непрерывность inode
-между host и Docker daemon; сам daemon остаётся явно доверенным V1 input.
+между host и Docker daemon. Raw daemon observation входит в capability, но сам
+daemon остаётся явно доверенным input объявленной границы.
 
 Успешный replay хранится одним token-closed
 `ContentResolvedEvaluatorReplayV1`, который повторно выводит три причинные
@@ -252,9 +285,9 @@ identity без зеркальных промежуточных dataclass:
 1. source identity связывает lock, три admitted archive closures, build inputs
    и formula support. Job сюда не входит: одинаковый evaluator build не меняет
    source identity от конкретного RUN;
-2. build identity связывает source identity, versioned transport/isolation
-   policy, trust boundary, pinned OCI toolchain, один sealed bundle object, два
-   exact transfer и два byte-identical executable stdout. Comparator verifier
+2. build identity связывает source identity, versioned Docker capability,
+   pipeline policy, trust boundary, один sealed bundle object, два exact
+   transfer и два byte-identical executable stdout. Comparator verifier
    строит свежий canonical manifest из SHA-256 retained preimage bytes и
    сверяет все его поля и identity с build observation; это проверка retained
    причинных данных, а не заявление о независимом втором выводе preimages;
@@ -488,7 +521,7 @@ release не содержит. Family mint
 manifest: единственный range `[0, 2^24)` и point count `2^24`. Совпадение
 только point count или reduced-domain candidate этот gate не проходят.
 
-## Ошибки admission
+## Ошибки допуска
 
 `ProtocolReasonV1` — закрытая сумма:
 

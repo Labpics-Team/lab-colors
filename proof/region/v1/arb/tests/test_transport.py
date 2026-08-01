@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import dataclasses
 import hashlib
 import io
 import inspect
@@ -24,31 +23,34 @@ sys.path.insert(0, str(PROOF))
 sys.path.insert(0, str(ARB))
 sys.path.insert(0, str(TESTS))
 
+from build import input as build_input  # noqa: E402
+from build import transport as build_transport  # noqa: E402
 import pipeline  # noqa: E402
-from test_pipeline import _request  # noqa: E402
+from test_pipeline import (  # noqa: E402
+    _docker_capability,
+    _probe_native_backend,
+    _request,
+)
 
 
 BUILD_RECIPE = ARB / "build.sh"
 NATIVE_GATE = ARB / "tests" / "native_gate.py"
+_TEST_CANONICAL_LIMITS = build_input.CanonicalInputLimitsV1(64, 1024, 4096)
 
 
 def _digest(label: str) -> bytes:
     return hashlib.sha256(label.encode("ascii")).digest()
 
 
-def _bundle(length: int = 1024 * 1024) -> pipeline.SealedBuildInputBundleV1:
+def _bundle(length: int = 1024 * 1024) -> build_input.SealedInputV1:
     contents = (b"0123456789abcdef" * ((length + 15) // 16))[:length]
-    return pipeline.SealedBuildInputBundleV1(
-        _digest("source"),
-        _digest("build-input"),
-        contents,
-        _token=pipeline._BUILD_INPUT_BUNDLE_TOKEN,
-    )
+    return build_input.seal_input_v1(_digest("opaque-binding"), contents)
 
 
-def _backend() -> pipeline.NativeDockerBuildBackendV1:
-    return pipeline.NativeDockerBuildBackendV1(
+def _backend() -> build_transport.NativeDockerBuildBackendV1:
+    return build_transport.NativeDockerBuildBackendV1(
         Path("/bin/true"),
+        pipeline.ARB_BUILD_TRANSPORT_POLICY_V1,
         platform_name="linux",
         machine_name="x86_64",
     )
@@ -56,12 +58,12 @@ def _backend() -> pipeline.NativeDockerBuildBackendV1:
 
 def _observe(
     source: str,
-    bundle: pipeline.SealedBuildInputBundleV1,
+    bundle: build_input.SealedInputV1,
     *,
     stdout_limit: int = 2 * 1024 * 1024,
     stderr_limit: int = 2 * 1024 * 1024,
     timeout_ns: int = 5_000_000_000,
-) -> pipeline.DockerBuildProcessObservationV1:
+) -> build_transport.DockerBuildProcessObservationV1:
     return _backend()._observe_command(
         (sys.executable, "-c", source),
         stdout_limit=stdout_limit,
@@ -79,11 +81,11 @@ class CanonicalBuildBundleTests(unittest.TestCase):
         second = pipeline._seal_build_input_bundle_v1(request)
 
         self.assertIsNot(first, second)
-        self.assertIs(first._contents, first._contents)
-        self.assertEqual(first._contents, second._contents)
+        self.assertIs(first.contents, first.contents)
+        self.assertEqual(first.contents, second.contents)
         self.assertEqual(first.sha256, second.sha256)
-        self.assertEqual(first.identity, second.identity)
-        self.assertTrue(pipeline.sealed_build_input_bundle_is_well_bound_v1(first))
+        self.assertEqual(first.binding_identity, second.binding_identity)
+        self.assertTrue(pipeline.arb_input_is_bound_v1(request, first))
 
         source_entries = tuple(
             entry
@@ -117,7 +119,7 @@ class CanonicalBuildBundleTests(unittest.TestCase):
             sorted(expected_directories, key=lambda value: (value.count("/"), value))
         ) + tuple(sorted(expected_files))
 
-        with tarfile.open(fileobj=io.BytesIO(first._contents), mode="r:") as archive:
+        with tarfile.open(fileobj=io.BytesIO(first.contents), mode="r:") as archive:
             members = tuple(archive)
             self.assertFalse(archive.pax_headers)
             self.assertEqual(tuple(member.name for member in members), expected_order)
@@ -145,36 +147,134 @@ class CanonicalBuildBundleTests(unittest.TestCase):
                         self.assertEqual(stream.read(), body)
 
     def test_canonical_encoder_rejects_reorder_collision_and_unencodable_path(self) -> None:
+        def reject(
+            values: object,
+            reason: build_input.InputReasonV1,
+            field: str,
+            limits: build_input.CanonicalInputLimitsV1 = _TEST_CANONICAL_LIMITS,
+        ) -> None:
+            with self.assertRaises(build_input.InputErrorV1) as caught:
+                build_input.canonical_ustar_v1(values, limits)
+            self.assertEqual(caught.exception.reason, reason)
+            self.assertEqual(caught.exception.field, field)
+
         entries = (("a/b", 0o644, b"x"), ("c", 0o755, b"y"))
-        encoded = pipeline._canonical_tar_v1(entries)
+        encoded = build_input.canonical_ustar_v1(entries, _TEST_CANONICAL_LIMITS)
         self.assertEqual(
             hashlib.sha256(encoded).hexdigest(),
             "11bc313cba907e89535876eb8ce46194472367007053ab58b723338676f99427",
         )
-        with self.assertRaises(TypeError):
-            pipeline._canonical_tar_v1(tuple(reversed(entries)))
-        with self.assertRaises(TypeError):
-            pipeline._canonical_tar_v1((("a", 0o644, b"x"), ("a/b", 0o644, b"y")))
-        with self.assertRaises(TypeError):
-            pipeline._canonical_tar_v1((("A", 0o644, b"x"), ("a", 0o644, b"y")))
-        with self.assertRaises((TypeError, ValueError)):
-            pipeline._canonical_tar_v1((("a" * 256, 0o644, b"x"),))
+        for hostile, reason, field in (
+            (
+                tuple(reversed(entries)),
+                build_input.InputReasonV1.NONCANONICAL_SET,
+                "entries",
+            ),
+            (
+                (("a", 0o644, b"x"), ("a/b", 0o644, b"y")),
+                build_input.InputReasonV1.NONCANONICAL_SET,
+                "a",
+            ),
+            (
+                (("A", 0o644, b"x"), ("a", 0o644, b"y")),
+                build_input.InputReasonV1.NONCANONICAL_SET,
+                "a",
+            ),
+            (
+                (("a" * 256, 0o644, b"x"),),
+                build_input.InputReasonV1.INVALID_PATH,
+                "a" * 256,
+            ),
+            (
+                ((1, 0o644, b"x"),),
+                build_input.InputReasonV1.INVALID_PATH,
+                "path",
+            ),
+            (
+                ((["a"], 0o644, b"x"),),
+                build_input.InputReasonV1.INVALID_PATH,
+                "path",
+            ),
+            (
+                (("a" * 101, 0o644, b"x"),),
+                build_input.InputReasonV1.INVALID_PATH,
+                "a" * 101,
+            ),
+            (
+                (("A", 0o644, b"x"), ("a/b", 0o644, b"y")),
+                build_input.InputReasonV1.NONCANONICAL_SET,
+                "A",
+            ),
+            (
+                ((("a" * 120) + "/f", 0o644, b"x"),),
+                build_input.InputReasonV1.INVALID_PATH,
+                "a" * 120,
+            ),
+        ):
+            with self.subTest(hostile=repr(hostile)):
+                reject(hostile, reason, field)
+
+        resource_cases = (
+            (
+                (("a", 0o644, b"x"), ("b", 0o644, b"y")),
+                build_input.CanonicalInputLimitsV1(1, 1, 2),
+                "max_members",
+            ),
+            (
+                (("a", 0o644, b"xy"),),
+                build_input.CanonicalInputLimitsV1(1, 1, 2),
+                "max_file_bytes",
+            ),
+            (
+                (("a", 0o644, b"x"), ("b", 0o644, b"y")),
+                build_input.CanonicalInputLimitsV1(2, 1, 1),
+                "max_payload_bytes",
+            ),
+            (
+                (("a/b", 0o644, b"x"),),
+                build_input.CanonicalInputLimitsV1(1, 1, 1),
+                "max_members",
+            ),
+            (
+                (("a", 0o644, b"x"),),
+                build_input.CanonicalInputLimitsV1(1, 1, 1, 10_239),
+                "max_encoded_bytes",
+            ),
+        )
+        for values, limits, field in resource_cases:
+            with self.subTest(resource=field):
+                reject(
+                    values,
+                    build_input.InputReasonV1.RESOURCE_LIMIT,
+                    field,
+                    limits,
+                )
+        exact_cap = build_input.CanonicalInputLimitsV1(1, 1, 1, 10_240)
+        self.assertEqual(
+            len(build_input.canonical_ustar_v1((("a", 0o644, b"x"),), exact_cap)),
+            exact_cap.max_encoded_bytes,
+        )
 
     def test_omission_or_content_mutation_changes_bundle_identity(self) -> None:
         entries = (("a", 0o644, b"x"), ("b", 0o644, b"y"))
-        original = pipeline._canonical_tar_v1(entries)
-        omitted = pipeline._canonical_tar_v1(entries[:1])
-        mutated = pipeline._canonical_tar_v1(
-            (("a", 0o644, b"x"), ("b", 0o644, b"z"))
+        original = build_input.canonical_ustar_v1(entries, _TEST_CANONICAL_LIMITS)
+        omitted = build_input.canonical_ustar_v1(
+            entries[:1],
+            _TEST_CANONICAL_LIMITS,
+        )
+        mutated = build_input.canonical_ustar_v1(
+            (("a", 0o644, b"x"), ("b", 0o644, b"z")),
+            _TEST_CANONICAL_LIMITS,
         )
         identities = {
-            pipeline.SealedBuildInputBundleV1(
-                _digest("source"),
-                _digest("build-input"),
-                body,
-                _token=pipeline._BUILD_INPUT_BUNDLE_TOKEN,
-            ).identity
+            (
+                sealed.binding_identity,
+                sealed.sha256,
+            )
             for body in (original, omitted, mutated)
+            for sealed in (
+                build_input.seal_input_v1(_digest("opaque-binding"), body),
+            )
         }
         self.assertEqual(len(identities), 3)
 
@@ -184,7 +284,7 @@ class CanonicalBuildBundleTests(unittest.TestCase):
         original = admitted.tree_identity
         object.__setattr__(admitted, "tree_identity", _digest("mutated-tree"))
         try:
-            with self.assertRaises(TypeError):
+            with self.assertRaises(pipeline.PipelineInputErrorV1):
                 pipeline._normalized_source_entries_v1(
                     request.source_lock.sources[0],
                     admitted,
@@ -195,17 +295,72 @@ class CanonicalBuildBundleTests(unittest.TestCase):
     def test_transport_authorities_cannot_be_directly_forged(self) -> None:
         bundle = _bundle(1024)
         with self.assertRaises(TypeError):
-            pipeline.BuildInputTransferProgressV1(
-                bundle.identity,
+            build_transport.BuildInputTransferProgressV1(
+                bundle.binding_identity,
                 bundle.length,
                 bundle.sha256,
                 bundle.length,
                 bundle.sha256,
             )
         with self.assertRaises(TypeError):
-            pipeline.BuildInputTransferV1(object())
+            build_transport.BuildInputTransferV1(object())
         with self.assertRaises(TypeError):
-            pipeline.DockerBuildExitedV1(0, b"binary", b"", object())
+            build_transport.DockerBuildExitedV1(0, b"binary", b"", object())
+        with self.assertRaises(TypeError):
+            build_transport.DockerBuildPolicyV1(
+                "gcc@sha256:bad@sha256:" + "0" * 64,
+                *pipeline.ARB_BUILD_TRANSPORT_POLICY_V1[1:],
+            )
+        report = _docker_capability()
+        self.assertFalse(hasattr(report, "__dict__"))
+        with self.assertRaises((AttributeError, TypeError)):
+            object.__setattr__(report, "platform", "foreign")
+        forged_policy = tuple.__new__(build_transport.DockerBuildPolicyV1, ())
+        with self.assertRaises(TypeError):
+            build_transport.ControlledBuildTransportV1(
+                policy=forged_policy,
+                backend=object(),
+            )
+
+        class ForgedProbeBackend:
+            def probe(self) -> object:
+                return tuple.__new__(build_transport.DockerSupportedV1, ())
+
+        probed = build_transport.ControlledBuildTransportV1(
+            policy=pipeline.ARB_BUILD_TRANSPORT_POLICY_V1,
+            backend=ForgedProbeBackend(),
+        ).probe()
+        self.assertIs(type(probed), build_transport.DockerUnsupportedV1)
+        self.assertEqual(
+            probed.reason,
+            build_transport.DockerBlockerReasonV1.BACKEND_CONTRACT,
+        )
+
+        class ForgedProcessBackend:
+            def probe(self) -> object:
+                return report
+
+            def run_build(self, _request: object) -> object:
+                return tuple.__new__(build_transport.DockerBuildExitedV1, ())
+
+        controller = build_transport.ControlledBuildTransportV1(
+            policy=pipeline.ARB_BUILD_TRANSPORT_POLICY_V1,
+            backend=ForgedProcessBackend(),
+        )
+        observed_report = controller.probe()
+        self.assertIs(type(observed_report), build_transport.DockerSupportedV1)
+        rejected = controller.build(
+            observed_report,
+            bundle,
+            1,
+            input_admission=lambda _value: True,
+            output_admission=lambda _value: True,
+        )
+        self.assertIs(type(rejected), build_transport.BuildRejectedV1)
+        self.assertEqual(
+            rejected.reason,
+            build_transport.BuildFailureReasonV1.CONTRACT_VIOLATION,
+        )
 
 
 class BuildInputObserverTests(unittest.TestCase):
@@ -216,7 +371,7 @@ class BuildInputObserverTests(unittest.TestCase):
         def partial_write(descriptor: int, contents: object) -> int:
             return real_write(descriptor, contents[:997])
 
-        with mock.patch.object(pipeline.os, "write", side_effect=partial_write):
+        with mock.patch.object(build_transport.os, "write", side_effect=partial_write):
             result = _observe(
                 "import hashlib,sys; d=sys.stdin.buffer.read(); "
                 "sys.stdout.buffer.write(hashlib.sha256(d).digest()); "
@@ -224,10 +379,10 @@ class BuildInputObserverTests(unittest.TestCase):
                 bundle,
             )
 
-        self.assertIs(type(result), pipeline.DockerBuildExitedV1, result)
+        self.assertIs(type(result), build_transport.DockerBuildExitedV1, result)
         self.assertEqual(result.stdout, bundle.sha256)
         self.assertEqual(result.stderr, b"observed")
-        self.assertEqual(result.input_transfer.bundle_identity, bundle.identity)
+        self.assertEqual(result.input_transfer.bundle_identity, bundle.binding_identity)
         self.assertEqual(result.input_transfer.expected_length, bundle.length)
         self.assertEqual(result.input_transfer.expected_sha256, bundle.sha256)
         self.assertEqual(result.input_transfer.written_length, bundle.length)
@@ -235,18 +390,18 @@ class BuildInputObserverTests(unittest.TestCase):
 
     def test_zero_write_and_epipe_are_typed_with_exact_partial_progress(self) -> None:
         bundle = _bundle()
-        with mock.patch.object(pipeline.os, "write", return_value=0):
+        with mock.patch.object(build_transport.os, "write", return_value=0):
             zero = _observe("import sys; sys.stdin.buffer.read()", bundle)
-        self.assertIs(type(zero), pipeline.DockerBuildInputRejectedV1, zero)
+        self.assertIs(type(zero), build_transport.DockerBuildInputRejectedV1, zero)
         self.assertEqual(zero.written_length, 0)
         self.assertEqual(zero.written_sha256, hashlib.sha256(b"").digest())
 
         closed = _observe("import os,time; os.close(0); time.sleep(1)", bundle)
-        self.assertIs(type(closed), pipeline.DockerBuildInputRejectedV1, closed)
+        self.assertIs(type(closed), build_transport.DockerBuildInputRejectedV1, closed)
         self.assertLess(closed.written_length, bundle.length)
         self.assertEqual(
             closed.written_sha256,
-            hashlib.sha256(bundle._contents[: closed.written_length]).digest(),
+            hashlib.sha256(bundle.contents[: closed.written_length]).digest(),
         )
 
     def test_final_stdin_close_failure_is_a_typed_observer_failure(self) -> None:
@@ -273,14 +428,14 @@ class BuildInputObserverTests(unittest.TestCase):
             process.stdin = CloseFailsOnce(process.stdin)
             return process
 
-        with mock.patch.object(pipeline.subprocess, "Popen", side_effect=spawn):
+        with mock.patch.object(build_transport.subprocess, "Popen", side_effect=spawn):
             result = _observe(
                 "import time; time.sleep(1)",
                 _bundle(2 * 1024 * 1024),
                 timeout_ns=100_000_000,
             )
 
-        self.assertIs(type(result), pipeline.DockerBuildObserverFailureV1, result)
+        self.assertIs(type(result), build_transport.DockerBuildObserverFailureV1, result)
 
     def test_full_duplex_backpressure_does_not_deadlock_or_drop_bytes(self) -> None:
         bundle = _bundle(512 * 1024)
@@ -293,7 +448,7 @@ class BuildInputObserverTests(unittest.TestCase):
             " os.write(2,b'e'*len(d))\n",
             bundle,
         )
-        self.assertIs(type(result), pipeline.DockerBuildExitedV1, result)
+        self.assertIs(type(result), build_transport.DockerBuildExitedV1, result)
         self.assertEqual(len(result.stdout), bundle.length)
         self.assertEqual(len(result.stderr), bundle.length)
         self.assertEqual(result.input_transfer.written_sha256, bundle.sha256)
@@ -305,8 +460,8 @@ class BuildInputObserverTests(unittest.TestCase):
             bundle,
             timeout_ns=100_000_000,
         )
-        self.assertIs(type(timed), pipeline.DockerBuildTimedOutV1, timed)
-        self.assertIs(type(timed.input_progress), pipeline.BuildInputTransferProgressV1)
+        self.assertIs(type(timed), build_transport.DockerBuildTimedOutV1, timed)
+        self.assertIs(type(timed.input_progress), build_transport.BuildInputTransferProgressV1)
         self.assertGreater(timed.input_progress.written_length, 0)
         self.assertLess(timed.input_progress.written_length, bundle.length)
 
@@ -315,10 +470,10 @@ class BuildInputObserverTests(unittest.TestCase):
             bundle,
             stdout_limit=8,
         )
-        self.assertIs(type(limited), pipeline.DockerBuildOutputLimitV1, limited)
-        self.assertEqual(limited.stream, pipeline.DockerOutputStreamV1.STDOUT)
+        self.assertIs(type(limited), build_transport.DockerBuildOutputLimitV1, limited)
+        self.assertEqual(limited.stream, build_transport.DockerOutputStreamV1.STDOUT)
         self.assertEqual(limited.stdout, b"x" * 8)
-        self.assertIs(type(limited.input_progress), pipeline.BuildInputTransferProgressV1)
+        self.assertIs(type(limited.input_progress), build_transport.BuildInputTransferProgressV1)
 
     def test_cleanup_failure_preserves_input_trigger_and_progress(self) -> None:
         bundle = _bundle()
@@ -337,32 +492,50 @@ class BuildInputObserverTests(unittest.TestCase):
                 container_name="labcolors-arb-build-v1-transport-test",
                 input_bundle=bundle,
             )
-        self.assertIs(type(result), pipeline.DockerBuildCleanupFailureV1, result)
-        self.assertEqual(result.trigger, pipeline.DockerCleanupTriggerV1.INPUT_TRANSFER)
+        self.assertIs(type(result), build_transport.DockerBuildCleanupFailureV1, result)
+        self.assertEqual(result.trigger, build_transport.DockerCleanupTriggerV1.INPUT_TRANSFER)
         self.assertEqual(result.detail, "forced cleanup failure")
-        self.assertIs(type(result.input_progress), pipeline.BuildInputTransferProgressV1)
+        self.assertIs(type(result.input_progress), build_transport.BuildInputTransferProgressV1)
         self.assertLess(result.input_progress.written_length, bundle.length)
 
 
 class SealedBuildTransportContractTests(unittest.TestCase):
     def test_controller_owns_one_sealed_bundle_for_both_builds(self) -> None:
-        build_source = inspect.getsource(pipeline.ControlledPipelineV1.build)
-        self.assertEqual(build_source.count("_seal_build_input_bundle_v1("), 1)
-        self.assertIn("for attempt in (1, 2)", build_source)
+        pipeline_source = inspect.getsource(pipeline.ControlledPipelineV1.build)
+        transport_source = inspect.getsource(
+            build_transport.ControlledBuildTransportV1.build
+        )
+        self.assertEqual(pipeline_source.count("_seal_build_input_bundle_v1("), 1)
+        self.assertIn("for attempt in (1, 2)", transport_source)
 
     def test_docker_request_has_no_semantic_host_path_authority(self) -> None:
-        fields = {item.name for item in dataclasses.fields(pipeline.DockerBuildRequestV1)}
+        fields = set(inspect.signature(build_transport.DockerBuildRequestV1).parameters)
         self.assertEqual(
             fields,
-            {"attempt", "input_bundle", "max_executable_bytes", "cid_file", "container_name"},
+            {
+                "attempt",
+                "capability",
+                "input_bundle",
+                "max_output_bytes",
+                "cid_file",
+                "container_name",
+            },
         )
-        command = pipeline.NativeDockerBuildBackendV1(
-            Path("/usr/bin/docker"),
+        backend = build_transport.NativeDockerBuildBackendV1(
+            Path("/usr/bin/true"),
+            pipeline.ARB_BUILD_TRANSPORT_POLICY_V1,
             platform_name="linux",
             machine_name="x86_64",
-        ).command_for(
-            pipeline.DockerBuildRequestV1(
+            host_user=(501, 20),
+        )
+        capability = _probe_native_backend(
+            backend,
+            pipeline.ARB_BUILD_TRANSPORT_POLICY_V1,
+        )
+        command = backend.command_for(
+            build_transport.DockerBuildRequestV1(
                 1,
+                capability,
                 _bundle(1024),
                 1024,
                 Path("/tmp/container.cid"),

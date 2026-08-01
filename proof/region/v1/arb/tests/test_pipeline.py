@@ -7,6 +7,7 @@ import gzip
 import hashlib
 import io
 import inspect
+import json
 import os
 import stat
 import struct
@@ -28,6 +29,8 @@ REPO = PROOF.parents[2]
 sys.path.insert(0, str(PROOF))
 sys.path.insert(0, str(ARB))
 
+from build import input as build_input  # noqa: E402
+from build import transport as build_transport  # noqa: E402
 import executor  # noqa: E402
 import pipeline  # noqa: E402
 import provenance  # noqa: E402
@@ -250,62 +253,117 @@ def _request(**changes: object) -> pipeline.PipelineRequestV1:
     return pipeline.PipelineRequestV1(**values)
 
 
+def _docker_capability(
+    policy: build_transport.DockerBuildPolicyV1 | None = None,
+    *,
+    docker_path: Path = Path("/usr/bin/docker"),
+    host_user: tuple[int, int] = (501, 20),
+    daemon_marker: bytes = b"docker-daemon-fixture",
+) -> build_transport.DockerSupportedV1:
+    owned_policy = pipeline.ARB_BUILD_TRANSPORT_POLICY_V1 if policy is None else policy
+    return build_transport.DockerSupportedV1(
+        owned_policy,
+        build_transport.DockerDaemonObservationV1(
+            daemon_marker,
+            b"docker-image-inspection-fixture",
+        ),
+        build_transport.native_command_coordinate_v1(docker_path),
+        host_user,
+    )
+
+
+def _probe_native_backend(
+    backend: build_transport.NativeDockerBuildBackendV1,
+    policy: build_transport.DockerBuildPolicyV1,
+) -> build_transport.DockerSupportedV1:
+    image_observation = json.dumps(
+        [
+            {
+                "Os": "linux",
+                "Architecture": "amd64",
+                "RepoDigests": [policy.image_reference],
+            }
+        ],
+        separators=(",", ":"),
+    ).encode("ascii")
+    with mock.patch.object(
+        backend,
+        "_observe_command",
+        side_effect=(
+            build_transport._docker_command_exited_v1(
+                0,
+                b'{"Version":"fixture"}',
+                b"",
+            ),
+            build_transport._docker_command_exited_v1(
+                0,
+                image_observation,
+                b"",
+            ),
+        ),
+    ):
+        capability = backend.probe()
+    if type(capability) is not build_transport.DockerSupportedV1:
+        raise AssertionError(capability)
+    return capability
+
+
 class _BuildBackend:
     def __init__(
         self,
         outputs: tuple[bytes, ...],
         *,
-        probe: pipeline.DockerCapabilityReportV1 | None = None,
+        probe: build_transport.DockerCapabilityReportV1 | None = None,
         reject_input: bool = False,
         omit_transfer: bool = False,
         foreign_transfer: bool = False,
         reported_stderr: bytes = b"",
     ) -> None:
         self.outputs = list(outputs)
-        self.probe_result = probe or pipeline.DockerSupportedV1(
-            pipeline.OCI_IMAGE_REFERENCE_V1,
-            pipeline.OCI_PLATFORM_V1,
-            _digest("docker-daemon"),
-        )
+        self.probe_result = probe or _docker_capability()
         self.reject_input = reject_input
         self.omit_transfer = omit_transfer
         self.foreign_transfer = foreign_transfer
         self.reported_stderr = reported_stderr
-        self.requests: list[pipeline.DockerBuildRequestV1] = []
+        self.requests: list[build_transport.DockerBuildRequestV1] = []
 
-    def probe(self) -> pipeline.DockerCapabilityReportV1:
+    def probe(self) -> build_transport.DockerCapabilityReportV1:
         return self.probe_result
 
     def run_build(
         self,
-        request: pipeline.DockerBuildRequestV1,
-    ) -> pipeline.DockerBuildProcessObservationV1:
+        request: build_transport.DockerBuildRequestV1,
+    ) -> build_transport.DockerBuildProcessObservationV1:
         self.requests.append(request)
         output = self.outputs.pop(0)
         if self.reject_input:
-            return pipeline.DockerBuildInputRejectedV1(
-                pipeline._build_input_progress_v1(
+            return build_transport.DockerBuildInputRejectedV1(
+                build_transport._build_input_progress_v1(
                     request.input_bundle,
                     1,
-                    hashlib.sha256(request.input_bundle._contents[:1]).digest(),
+                    hashlib.sha256(request.input_bundle.contents[:1]).digest(),
                 ),
                 b"",
                 b"",
             )
         if self.omit_transfer:
-            return pipeline._docker_command_exited_v1(0, output, self.reported_stderr)
-        transfer = pipeline._completed_build_input_transfer_v1(
+            return build_transport._docker_command_exited_v1(0, output, self.reported_stderr)
+        transfer = build_transport._completed_build_input_transfer_v1(
             request.input_bundle,
             request.input_bundle.length,
             request.input_bundle.sha256,
         )
         if self.foreign_transfer:
-            object.__setattr__(
-                transfer,
-                "bundle_identity",
+            foreign_input = build_input.seal_input_v1(
                 _digest("foreign-bundle"),
+                request.input_bundle.contents,
             )
-        return pipeline._docker_build_exited_v1(
+            transfer = build_transport._completed_build_input_transfer_v1(
+                foreign_input,
+                foreign_input.length,
+                foreign_input.sha256,
+            )
+        return build_transport._docker_build_exited_v1(
             0,
             output,
             self.reported_stderr,
@@ -602,27 +660,26 @@ class ControlledPipelineTests(unittest.TestCase):
 
     def test_pipeline_policy_identity_binds_the_stream_bootstrap(self) -> None:
         trust = pipeline.HostTrustBoundaryV1.UNSEALED_LINUX_X64_DOCKER_HOST
-        original = pipeline.pipeline_policy_identity_v1(trust)
-
-        with mock.patch.object(
-            pipeline,
-            "_BUILD_BOOTSTRAP_V1",
-            pipeline._BUILD_BOOTSTRAP_V1 + "\nexit 1",
-        ):
-            changed = pipeline.pipeline_policy_identity_v1(trust)
+        policy = pipeline.ARB_BUILD_TRANSPORT_POLICY_V1
+        coordinates = list(policy)
+        coordinates[4] = policy.bootstrap + "\nexit 1"
+        changed_policy = build_transport.DockerBuildPolicyV1(*coordinates)
+        original = pipeline.pipeline_policy_identity_v2(trust, policy)
+        changed = pipeline.pipeline_policy_identity_v2(trust, changed_policy)
 
         self.assertNotEqual(original, changed)
 
     def test_pipeline_policy_identity_binds_the_private_tmpfs_policy(self) -> None:
         trust = pipeline.HostTrustBoundaryV1.UNSEALED_LINUX_X64_DOCKER_HOST
-        original = pipeline.pipeline_policy_identity_v1(trust)
-
-        with mock.patch.object(
-            pipeline,
-            "_BUILD_TMPFS_SPEC_V1",
-            "/tmp:rw,exec,suid,dev,mode=1777",
-        ):
-            changed = pipeline.pipeline_policy_identity_v1(trust)
+        policy = pipeline.ARB_BUILD_TRANSPORT_POLICY_V1
+        coordinates = list(policy)
+        coordinates[6] = (
+            "/tmp:rw,exec,suid,dev,size=536870912,mode=1777",
+            policy.tmpfs_specs[1],
+        )
+        changed_policy = build_transport.DockerBuildPolicyV1(*coordinates)
+        original = pipeline.pipeline_policy_identity_v2(trust, policy)
+        changed = pipeline.pipeline_policy_identity_v2(trust, changed_policy)
 
         self.assertNotEqual(original, changed)
 
@@ -649,6 +706,12 @@ class ControlledPipelineTests(unittest.TestCase):
         self.assertIs(type(result), pipeline.DiagnosticBuildObservationV1)
         self.assertEqual(len(build.requests), 2)
         self.assertEqual(tuple(item.attempt for item in build.requests), (1, 2))
+        self.assertTrue(
+            all(
+                item.capability is result.docker_capability
+                for item in build.requests
+            )
+        )
         self.assertIs(build.requests[0].input_bundle, build.requests[1].input_bundle)
         self.assertEqual(result.binary, binary)
         self.assertEqual(result.binary_sha256, hashlib.sha256(binary).digest())
@@ -697,7 +760,10 @@ class ControlledPipelineTests(unittest.TestCase):
         )
         self.assertEqual(
             result.pipeline_policy_identity,
-            pipeline.pipeline_policy_identity_v1(result.host_trust),
+            pipeline.pipeline_policy_identity_v2(
+                result.host_trust,
+                result.docker_capability.policy,
+            ),
         )
         self.assertFalse(hasattr(result, "build_observer_kind"))
         self.assertFalse(hasattr(result, "build_source_identity"))
@@ -707,8 +773,16 @@ class ControlledPipelineTests(unittest.TestCase):
             result.host_trust,
             pipeline.HostTrustBoundaryV1.UNSEALED_LINUX_X64_DOCKER_HOST,
         )
-        self.assertEqual(result.oci_image_reference, pipeline.OCI_IMAGE_REFERENCE_V1)
-        self.assertEqual(result.oci_platform, pipeline.OCI_PLATFORM_V1)
+        self.assertEqual(
+            result.docker_capability.policy.image_reference,
+            pipeline.OCI_IMAGE_REFERENCE_V1,
+        )
+        self.assertEqual(
+            result.docker_capability.policy.platform,
+            pipeline.OCI_PLATFORM_V1,
+        )
+        self.assertFalse(hasattr(result, "oci_image_reference"))
+        self.assertFalse(hasattr(result, "oci_platform"))
         self.assertFalse(hasattr(result, "slsa_level"))
         self.assertFalse(hasattr(result, "fresh_vm"))
 
@@ -720,32 +794,32 @@ class ControlledPipelineTests(unittest.TestCase):
             build_backend=_BuildBackend((first, second)),
         ).build(_request())
 
-        self.assertEqual(
-            result,
-            pipeline.NonReproducibleBuildV1(
-                hashlib.sha256(first).digest(),
-                hashlib.sha256(second).digest(),
-            ),
+        self.assertIs(type(result), build_transport.TwoBuildObservationV1)
+        self.assertIs(
+            result.relation,
+            build_transport.BuildByteRelationV1.DIFFERENT,
         )
+        self.assertEqual(result.first_sha256, hashlib.sha256(first).digest())
+        self.assertEqual(result.second_sha256, hashlib.sha256(second).digest())
 
     def test_input_transport_or_invalid_binary_is_typed_failure(self) -> None:
         binary = _static_elf()
         cases = (
             (
                 _BuildBackend((binary,), reject_input=True),
-                pipeline.BuildFailureReasonV1.INPUT_TRANSFER_FAILED,
+                build_transport.BuildFailureReasonV1.INPUT_TRANSFER_FAILED,
             ),
             (
                 _BuildBackend((binary,), omit_transfer=True),
-                pipeline.BuildFailureReasonV1.BACKEND_CONTRACT,
+                build_transport.BuildFailureReasonV1.CONTRACT_VIOLATION,
             ),
             (
                 _BuildBackend((binary,), foreign_transfer=True),
-                pipeline.BuildFailureReasonV1.BACKEND_CONTRACT,
+                build_transport.BuildFailureReasonV1.CONTRACT_VIOLATION,
             ),
             (
                 _BuildBackend((b"not-an-elf",)),
-                pipeline.BuildFailureReasonV1.INVALID_OUTPUT,
+                build_transport.BuildFailureReasonV1.INVALID_OUTPUT,
             ),
         )
         for backend, reason in cases:
@@ -753,7 +827,7 @@ class ControlledPipelineTests(unittest.TestCase):
                 result = pipeline.ControlledPipelineV1(
                     build_backend=backend,
                 ).build(_request())
-                self.assertIs(type(result), pipeline.BuildRejectedV1)
+                self.assertIs(type(result), build_transport.BuildRejectedV1)
                 self.assertEqual(result.attempt, 1)
                 self.assertEqual(result.reason, reason)
 
@@ -829,29 +903,29 @@ class ControlledPipelineTests(unittest.TestCase):
 
     def test_mutable_exact_native_build_backend_cannot_upgrade_fabricated_build(self) -> None:
         binary = _static_elf(b"self-mutating-build")
-        backend = pipeline.NativeDockerBuildBackendV1(
+        backend = build_transport.NativeDockerBuildBackendV1(
             Path("/bin/true"),
+            pipeline.ARB_BUILD_TRANSPORT_POLICY_V1,
             platform_name="linux",
             machine_name="x86_64",
         )
 
-        def probe(_self: object) -> pipeline.DockerCapabilityReportV1:
-            return pipeline.DockerSupportedV1(
-                pipeline.OCI_IMAGE_REFERENCE_V1,
-                pipeline.OCI_PLATFORM_V1,
-                _digest("fabricated-daemon"),
+        def probe(_self: object) -> build_transport.DockerCapabilityReportV1:
+            return _docker_capability(
+                docker_path=Path("/bin/true"),
+                daemon_marker=b"fabricated-daemon",
             )
 
         def run_build(
             _self: object,
-            request: pipeline.DockerBuildRequestV1,
-        ) -> pipeline.DockerBuildProcessObservationV1:
-            transfer = pipeline._completed_build_input_transfer_v1(
+            request: build_transport.DockerBuildRequestV1,
+        ) -> build_transport.DockerBuildProcessObservationV1:
+            transfer = build_transport._completed_build_input_transfer_v1(
                 request.input_bundle,
                 request.input_bundle.length,
                 request.input_bundle.sha256,
             )
-            return pipeline._docker_build_exited_v1(0, binary, b"", transfer)
+            return build_transport._docker_build_exited_v1(0, binary, b"", transfer)
 
         backend.probe = MethodType(probe, backend)
         backend.run_build = MethodType(run_build, backend)
@@ -865,26 +939,33 @@ class ControlledPipelineTests(unittest.TestCase):
 
 
 class DockerCommandContractTests(unittest.TestCase):
-    def test_command_is_exact_digest_offline_read_only_and_capability_free(self) -> None:
+    def test_command_is_exact_digest_offline_read_only_and_capability_bound(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary).resolve()
-            request = pipeline.DockerBuildRequestV1(
+            backend = build_transport.NativeDockerBuildBackendV1(
+                Path("/usr/bin/true"),
+                pipeline.ARB_BUILD_TRANSPORT_POLICY_V1,
+                platform_name="linux",
+                machine_name="x86_64",
+                host_user=(501, 20),
+            )
+            capability = _probe_native_backend(
+                backend,
+                pipeline.ARB_BUILD_TRANSPORT_POLICY_V1,
+            )
+            request = build_transport.DockerBuildRequestV1(
                 1,
+                capability,
                 pipeline._seal_build_input_bundle_v1(_request()),
                 _limits().max_executable_bytes,
                 root / "container.cid",
                 "labcolors-arb-build-v1-test",
             )
-            backend = pipeline.NativeDockerBuildBackendV1(
-                Path("/usr/bin/docker"),
-                platform_name="linux",
-                machine_name="x86_64",
-            )
 
             command = backend.command_for(request)
 
         joined = " ".join(command)
-        self.assertEqual(command[0], "/usr/bin/docker")
+        self.assertEqual(command[0], "/usr/bin/true")
         self.assertIn(pipeline.OCI_IMAGE_REFERENCE_V1, command)
         self.assertNotIn("gcc:latest", joined)
         for fragment in (
@@ -906,18 +987,26 @@ class DockerCommandContractTests(unittest.TestCase):
     def test_command_exposes_only_a_private_non_executable_standard_tmp(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary).resolve()
-            request = pipeline.DockerBuildRequestV1(
+            backend = build_transport.NativeDockerBuildBackendV1(
+                Path("/usr/bin/true"),
+                pipeline.ARB_BUILD_TRANSPORT_POLICY_V1,
+                platform_name="linux",
+                machine_name="x86_64",
+                host_user=(501, 20),
+            )
+            capability = _probe_native_backend(
+                backend,
+                pipeline.ARB_BUILD_TRANSPORT_POLICY_V1,
+            )
+            request = build_transport.DockerBuildRequestV1(
                 1,
+                capability,
                 pipeline._seal_build_input_bundle_v1(_request()),
                 _limits().max_executable_bytes,
                 root / "container.cid",
                 "labcolors-arb-build-v1-test",
             )
-            command = pipeline.NativeDockerBuildBackendV1(
-                Path("/usr/bin/docker"),
-                platform_name="linux",
-                machine_name="x86_64",
-            ).command_for(request)
+            command = backend.command_for(request)
 
         tmpfs_indexes = tuple(
             index for index, item in enumerate(command) if item == "--tmpfs"
@@ -938,23 +1027,26 @@ class DockerCommandContractTests(unittest.TestCase):
         self.assertNotIn("--volume", command)
 
     def test_native_probe_fails_closed_without_linux_or_exact_docker(self) -> None:
-        non_linux = pipeline.NativeDockerBuildBackendV1(
+        non_linux = build_transport.NativeDockerBuildBackendV1(
             Path("/usr/bin/docker"),
+            pipeline.ARB_BUILD_TRANSPORT_POLICY_V1,
             platform_name="darwin",
             machine_name="arm64",
         ).probe()
-        missing = pipeline.NativeDockerBuildBackendV1(
+        missing = build_transport.NativeDockerBuildBackendV1(
             Path("/definitely/missing/docker"),
+            pipeline.ARB_BUILD_TRANSPORT_POLICY_V1,
             platform_name="linux",
             machine_name="x86_64",
         ).probe()
 
-        self.assertEqual(non_linux.reason, pipeline.DockerBlockerReasonV1.HOST_NOT_LINUX_AMD64)
-        self.assertEqual(missing.reason, pipeline.DockerBlockerReasonV1.DOCKER_UNAVAILABLE)
+        self.assertEqual(non_linux.reason, build_transport.DockerBlockerReasonV1.HOST_NOT_LINUX_AMD64)
+        self.assertEqual(missing.reason, build_transport.DockerBlockerReasonV1.DOCKER_UNAVAILABLE)
 
     def test_native_command_observer_caps_probe_output_before_allocation(self) -> None:
-        backend = pipeline.NativeDockerBuildBackendV1(
+        backend = build_transport.NativeDockerBuildBackendV1(
             Path("/bin/sh"),
+            pipeline.ARB_BUILD_TRANSPORT_POLICY_V1,
             platform_name="linux",
             machine_name="x86_64",
         )
@@ -973,19 +1065,22 @@ class DockerCommandContractTests(unittest.TestCase):
 
         self.assertEqual(
             result,
-            pipeline.DockerBuildOutputLimitV1(
-                pipeline.DockerOutputStreamV1.STDOUT,
+            build_transport.DockerBuildOutputLimitV1(
+                build_transport.DockerOutputStreamV1.STDOUT,
                 b"x" * 8,
                 b"",
             ),
         )
 
     def test_cleanup_falls_back_to_exact_name_for_absent_or_invalid_cidfile(self) -> None:
-        backend = pipeline.NativeDockerBuildBackendV1(
-            Path("/bin/sh"),
+        backend = build_transport.NativeDockerBuildBackendV1(
+            Path("/usr/bin/true"),
+            pipeline.ARB_BUILD_TRANSPORT_POLICY_V1,
             platform_name="linux",
             machine_name="x86_64",
+            host_user=(501, 20),
         )
+        _probe_native_backend(backend, pipeline.ARB_BUILD_TRANSPORT_POLICY_V1)
         name = "labcolors-arb-build-v1-cleanup-test"
         for cid_contents in (None, b"partial-or-foreign"):
             with self.subTest(cid_contents=cid_contents):
@@ -994,8 +1089,8 @@ class DockerCommandContractTests(unittest.TestCase):
                     if cid_contents is not None:
                         cid_file.write_bytes(cid_contents)
                     observations = (
-                        pipeline._docker_command_exited_v1(1, b"", b"not found"),
-                        pipeline._docker_command_exited_v1(0, b"", b""),
+                        build_transport._docker_command_exited_v1(1, b"", b"not found"),
+                        build_transport._docker_command_exited_v1(0, b"", b""),
                     )
                     with mock.patch.object(
                         backend,
@@ -1011,8 +1106,9 @@ class DockerCommandContractTests(unittest.TestCase):
                 self.assertNotIn("partial-or-foreign", " ".join(commands[0]))
 
     def test_unverified_container_removal_is_typed_cleanup_failure(self) -> None:
-        backend = pipeline.NativeDockerBuildBackendV1(
+        backend = build_transport.NativeDockerBuildBackendV1(
             Path("/bin/sh"),
+            pipeline.ARB_BUILD_TRANSPORT_POLICY_V1,
             platform_name="linux",
             machine_name="x86_64",
         )
@@ -1032,10 +1128,10 @@ class DockerCommandContractTests(unittest.TestCase):
                     container_name="labcolors-arb-build-v1-cleanup-failure",
                 )
 
-        self.assertIs(type(result), pipeline.DockerBuildCleanupFailureV1)
+        self.assertIs(type(result), build_transport.DockerBuildCleanupFailureV1)
         self.assertEqual(
             result.trigger,
-            pipeline.DockerCleanupTriggerV1.PROCESS_EXIT,
+            build_transport.DockerCleanupTriggerV1.PROCESS_EXIT,
         )
 
 

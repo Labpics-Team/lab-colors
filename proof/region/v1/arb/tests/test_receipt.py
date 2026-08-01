@@ -22,6 +22,8 @@ ARB = PROOF / "arb"
 TESTS = ARB / "tests"
 sys.path[:0] = [str(PROOF), str(ARB), str(TESTS)]
 
+from build import transport as build_transport  # noqa: E402
+
 import executor  # noqa: E402
 import pipeline  # noqa: E402
 import provenance  # noqa: E402
@@ -34,6 +36,7 @@ from region_proof_protocol import (  # noqa: E402
 )
 from test_pipeline import (  # noqa: E402
     _BuildBackend,
+    _docker_capability,
     _foreign_comparator,
     _job,
     _request,
@@ -127,13 +130,13 @@ def _controller(
     )
     return controller, (
         mock.patch.object(
-            pipeline.NativeDockerBuildBackendV1,
+            build_transport.NativeDockerBuildBackendV1,
             "probe",
             autospec=True,
             side_effect=lambda _self: build_backend.probe(),
         ),
         mock.patch.object(
-            pipeline.NativeDockerBuildBackendV1,
+            build_transport.NativeDockerBuildBackendV1,
             "run_build",
             autospec=True,
             side_effect=lambda _self, request: build_backend.run_build(request),
@@ -219,9 +222,10 @@ def _replace_invocation(
 
 class SourceBoundReceiptTests(unittest.TestCase):
     def test_source_bound_policy_identity_binds_immutable_coordinates(self) -> None:
+        capability = _docker_capability()
         self.assertEqual(
-            receipt.source_bound_policy_identity_v1().hex(),
-            "a7cf0c142397a1e8ce3f9bb9dd4168120cdf78814745d1d4596d08a8e88a6b1b",
+            receipt.source_bound_policy_identity_v2(capability).hex(),
+            "522f089a81e68062f0db4260b00c6e6e0ed2074322247229a99d4714cc5997a5",
         )
 
     def test_identity_rejection_remains_typed_at_the_receipt_boundary(self) -> None:
@@ -275,7 +279,9 @@ class SourceBoundReceiptTests(unittest.TestCase):
         self.assertEqual(result.evidence.identity, result.claim.replay_evidence_identity)
         self.assertEqual(
             result.claim.provenance_policy_identity,
-            receipt.source_bound_policy_identity_v1(),
+            receipt.source_bound_policy_identity_v2(
+                result.evidence.build.docker_capability
+            ),
         )
         self.assertTrue(receipt.replay_evidence_is_well_bound_v1(result.evidence))
         self.assertEqual(len(backend.requests), 1)
@@ -314,8 +320,11 @@ class SourceBoundReceiptTests(unittest.TestCase):
         self.assertNotIn("pipeline._sealed_build_input_bundle_is_well_bound_v1", source)
         self.assertNotIn("pipeline._build_process_bytes_v1", source)
         self.assertNotIn("executor._execution_identity_v1", source)
-        self.assertTrue(hasattr(pipeline, "sealed_build_input_bundle_is_well_bound_v1"))
-        self.assertTrue(hasattr(pipeline, "build_process_bytes_v1"))
+        self.assertNotIn("sealed_build_input_bundle_is_well_bound_v1", source)
+        self.assertIn("pipeline.arb_input_is_bound_v1", source)
+        self.assertIn("build_transport.build_process_bytes_v1", source)
+        self.assertTrue(hasattr(pipeline, "arb_input_is_bound_v1"))
+        self.assertTrue(hasattr(build_transport, "build_process_bytes_v1"))
         self.assertTrue(hasattr(executor, "invocation_identity_v1"))
         self.assertTrue(hasattr(executor, "platform_identity_v1"))
 
@@ -323,7 +332,10 @@ class SourceBoundReceiptTests(unittest.TestCase):
         documentation = (PROOF / "PROTOCOL.md").read_text(encoding="utf-8")
         prose = " ".join(documentation.split())
 
-        self.assertIn("## Source-bound Arb replay", documentation)
+        self.assertIn(
+            "## Воспроизведение Arb, связанное с источником",
+            documentation,
+        )
         self.assertIn("SourceBoundEvaluatorReceiptV1", documentation)
         for stale_claim in (
             "заявленные результаты будущих Arb/MPFI processes",
@@ -372,8 +384,8 @@ class SourceBoundReceiptTests(unittest.TestCase):
         self.assertEqual(first_source, second_source)
         self.assertEqual(first_build.input_bundle_identity, second_build.input_bundle_identity)
         self.assertEqual(
-            receipt._build_identity_v1(request, first_source, first_build),
-            receipt._build_identity_v1(
+            receipt._build_identity_v2(request, first_source, first_build),
+            receipt._build_identity_v2(
                 different_request,
                 second_source,
                 second_build,
@@ -402,7 +414,6 @@ class SourceBoundReceiptTests(unittest.TestCase):
             "pipeline_policy_identity",
             "flint_commit_content_identity",
             "flint_project_pinned_release_only_identity",
-            "docker_daemon_observation_sha256",
             "binary_sha256",
             "input_bundle_identity",
             "input_bundle_sha256",
@@ -414,6 +425,22 @@ class SourceBoundReceiptTests(unittest.TestCase):
                         _tamper(dag, "build", build)
                     )
                 )
+        different_capability = _docker_capability(
+            daemon_marker=b"different-docker-daemon"
+        )
+        self.assertFalse(
+            receipt.replay_evidence_is_well_bound_v1(
+                _tamper(
+                    dag,
+                    "build",
+                    _tamper(
+                        dag.build,
+                        "docker_capability",
+                        different_capability,
+                    ),
+                )
+            )
+        )
         for field_name in (
             "flint_commit_content_file_count",
             "flint_project_pinned_release_only_file_count",
@@ -465,41 +492,12 @@ class SourceBoundReceiptTests(unittest.TestCase):
         )
 
         first = dag.build.build_processes[0]
-        for field_name in ("bundle_identity", "expected_sha256", "written_sha256"):
-            with self.subTest(transfer=field_name):
-                transfer = _tamper(
-                    first.input_transfer,
-                    field_name,
-                    _digest(field_name),
-                )
-                process = _tamper(first, "input_transfer", transfer)
-                build = _tamper(
-                    dag.build,
-                    "build_processes",
-                    (process, dag.build.build_processes[1]),
-                )
-                self.assertFalse(
-                    receipt.replay_evidence_is_well_bound_v1(
-                        _tamper(dag, "build", build)
-                    )
-                )
-        for field_name in ("expected_length", "written_length"):
-            transfer = _tamper(
-                first.input_transfer,
-                field_name,
-                first.input_transfer.expected_length + 1,
-            )
-            process = _tamper(first, "input_transfer", transfer)
-            build = _tamper(
-                dag.build,
-                "build_processes",
-                (process, dag.build.build_processes[1]),
-            )
-            self.assertFalse(
-                receipt.replay_evidence_is_well_bound_v1(
-                    _tamper(dag, "build", build)
-                )
-            )
+        self.assertFalse(hasattr(first.input_transfer, "__dict__"))
+        self.assertFalse(hasattr(first, "__dict__"))
+        with self.assertRaises(TypeError):
+            object.__new__(type(first.input_transfer))
+        with self.assertRaises(TypeError):
+            object.__new__(type(first))
 
         preimages = _tamper(
             dag.build.comparator.preimages,
