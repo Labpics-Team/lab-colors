@@ -1826,8 +1826,9 @@ class SameObjectAndObserverProtocolTests(unittest.TestCase):
                 "open",
                 side_effect=track_open,
             ), mock.patch.object(executor.os, "write", return_value=0):
-                with self.assertRaises(OSError):
+                with self.assertRaises(OSError) as caught:
                     executor.enter_observer_cgroup_v1(parent)
+            self.assertEqual(caught.exception.errno, errno.EIO)
 
             self.assertEqual(len(opened), len(parent.parts) + 2)
             for descriptor in opened:

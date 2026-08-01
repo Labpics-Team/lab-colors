@@ -1106,10 +1106,10 @@ def docker_command_coordinate_v1(value: object) -> NativeCommandCoordinateV1:
     return native_command_coordinate_v1(_absolute_path(value, "docker_path"))
 
 
-def _open_docker_command_v1(path: Path) -> int:
+def _open_docker_command_v1(coordinate: NativeCommandCoordinateV1) -> int:
     """Open the current Docker CLI path without following any symlink segment."""
 
-    encoded = os.fsencode(docker_command_coordinate_v1(path).path)
+    encoded = os.fsencode(coordinate.path)
     directory_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW
     command_flags = os.O_RDONLY | os.O_NONBLOCK | os.O_CLOEXEC | os.O_NOFOLLOW
     # This coordinate deliberately preserves exact argv spelling. On Linux,
@@ -2156,9 +2156,7 @@ class NativeDockerBuildBackendV1:
                     "host effective uid/gid are unavailable",
                 )
         try:
-            command_descriptor = _open_docker_command_v1(
-                self._command_coordinate.path
-            )
+            command_descriptor = _open_docker_command_v1(self._command_coordinate)
             try:
                 metadata = os.fstat(command_descriptor)
             finally:
