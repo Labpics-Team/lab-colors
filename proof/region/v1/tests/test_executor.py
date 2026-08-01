@@ -1807,7 +1807,9 @@ class SameObjectAndObserverProtocolTests(unittest.TestCase):
 
             parent.chmod(0o111)
             observer.chmod(0o111)
-            procs.chmod(0o222)
+            # Проверяем owner-write/search-only contract без лишнего доступа
+            # для других пользователей, не моделируя world-writable файл.
+            procs.chmod(0o200)
             try:
                 with self.subTest(scenario="search-only-success"):
                     executor.enter_observer_cgroup_v1(parent)
