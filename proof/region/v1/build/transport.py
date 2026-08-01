@@ -45,6 +45,9 @@ _DIAGNOSTIC_DETAIL_TEXT_LIMIT_V1 = 4096
 _INVALID_CID_ROOT_CLEANUP_DETAIL_V1 = (
     "native Docker CID root cleanup detail is not canonical"
 )
+_OBSERVER_AND_CID_ROOT_CLEANUP_FAILURE_V1 = (
+    "native Docker build observation and CID root cleanup both failed"
+)
 _PATH_TYPE = type(Path("/"))
 _NATIVE_CID_ROOT_PREFIX_V1 = "labcolors-docker-cid-"
 
@@ -2386,6 +2389,7 @@ class NativeDockerBuildBackendV1:
                         "CID-root cleanup failure",
                         canonical_observation.stdout,
                         canonical_observation.stderr,
+                        canonical_observation.input_progress,
                     )
                 else:
                     observation = canonical_observation
@@ -2476,8 +2480,16 @@ class NativeDockerBuildBackendV1:
             progress = observation.input_progress
             trigger = DockerCleanupTriggerV1.OBSERVER_FAILURE
         else:
+            fallback_detail = (
+                "native Docker build observation is not canonical; " + detail
+            )
+            # Preserve a canonical cleanup diagnostic when it fits. A complete
+            # one can fill the budget, so overflow has the declared dual-failure
+            # meaning rather than turning the typed fallback into an exception.
+            if _canonical_diagnostic_detail_v1(fallback_detail) is None:
+                fallback_detail = _OBSERVER_AND_CID_ROOT_CLEANUP_FAILURE_V1
             return DockerBuildObserverFailureV1(
-                "native Docker build observation is not canonical; " + detail,
+                fallback_detail,
                 b"",
                 b"",
             )
@@ -2491,7 +2503,7 @@ class NativeDockerBuildBackendV1:
                     )
                 except Exception:
                     return DockerBuildObserverFailureV1(
-                        "native Docker build observation and CID root cleanup both failed",
+                        _OBSERVER_AND_CID_ROOT_CLEANUP_FAILURE_V1,
                         observation.stdout,
                         observation.stderr,
                     )
