@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import errno as errno_module
 import hashlib
 import json
 import os
@@ -13,6 +14,7 @@ import shutil
 import signal
 import stat
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -1106,12 +1108,30 @@ def docker_command_coordinate_v1(value: object) -> NativeCommandCoordinateV1:
     return native_command_coordinate_v1(_absolute_path(value, "docker_path"))
 
 
+def _docker_coordinate_metadata_flags_v1() -> int:
+    """Return the read-free native descriptor mode for one CLI coordinate."""
+
+    if sys.platform == "linux":
+        flag = getattr(os, "O_PATH", None)
+        detail = "Linux Docker coordinate inspection requires O_PATH"
+    else:
+        flag = getattr(os, "O_EXEC", None)
+        detail = "native Docker coordinate inspection requires O_EXEC"
+    if type(flag) is not int or flag <= 0:
+        raise OSError(errno_module.ENOTSUP, detail)
+    return flag
+
+
 def _open_docker_command_v1(coordinate: NativeCommandCoordinateV1) -> int:
     """Open the current Docker CLI path without following any symlink segment."""
 
     encoded = os.fsencode(coordinate.path)
-    directory_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW
-    command_flags = os.O_RDONLY | os.O_NONBLOCK | os.O_CLOEXEC | os.O_NOFOLLOW
+    # Metadata observation must not demand read permission from either an
+    # executable-only CLI or a search-only parent directory. Linux uses O_PATH
+    # rather than silently weakening that law when the runtime lacks it.
+    metadata_flags = _docker_coordinate_metadata_flags_v1()
+    directory_flags = metadata_flags | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW
+    command_flags = metadata_flags | os.O_NONBLOCK | os.O_CLOEXEC | os.O_NOFOLLOW
     # This coordinate deliberately preserves exact argv spelling. On Linux,
     # empty segments are root and `..` is traversed through the pinned parent;
     # neither case authorizes filesystem resolution or a symlink transition.
