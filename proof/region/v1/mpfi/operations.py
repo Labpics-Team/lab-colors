@@ -117,9 +117,6 @@ ALLOWED_GMP_CALLS = frozenset(
 )
 
 _CALL = re.compile(r"\b((?:mpfi|mpfr|mpq|mpz)_[A-Za-z0-9_]+)\s*\(")
-_EXTERNAL_SYMBOL = re.compile(r"\b(?:mpfi|mpfr|mpq|mpz)_[A-Za-z0-9_]+\b")
-
-
 def called_symbols(source: str) -> frozenset[str]:
     return frozenset(_CALL.findall(source))
 
@@ -127,7 +124,15 @@ def called_symbols(source: str) -> frozenset[str]:
 def undefined_symbols(nm_output: str) -> frozenset[str]:
     """Extract dependency symbols from ``nm -u`` without trusting formatting."""
 
-    return frozenset(_EXTERNAL_SYMBOL.findall(nm_output))
+    symbols: set[str] = set()
+    for line in nm_output.splitlines():
+        fields = line.split()
+        if not fields:
+            continue
+        symbol = fields[-1].lstrip("_")
+        if symbol.startswith(("mpfi_", "mpfr_", "mpq_", "mpz_")):
+            symbols.add(symbol)
+    return frozenset(symbols)
 
 
 def validate_undefined_symbols(nm_output: str) -> tuple[str, ...]:

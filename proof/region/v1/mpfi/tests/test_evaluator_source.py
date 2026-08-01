@@ -149,8 +149,9 @@ class EvaluatorSourceTests(unittest.TestCase):
 
     def test_linked_undefined_operation_symbols_are_closed(self) -> None:
         errors = operations.validate_undefined_symbols(
-            "                 U mpfi_div_ext\n"
+            "                 U _mpfi_div_ext\n"
             "                 U mpfi_div\n"
+            "                 U __gmpz_init_set_ui\n"
         )
         self.assertEqual(errors, ("forbidden undefined external symbol mpfi_div_ext",))
         self.assertEqual(
