@@ -32,11 +32,14 @@ diversity.
 
 ## Wire и identity
 
-Все целые беззнаковые и записаны big-endian как `u8`, `u32be` или `u64be`.
-`digest` — ровно 32 ненулевых bytes SHA-256. `blob` равен
-`u64be(length) || bytes`. Enum занимает один `u8` и принимает только
-перечисленные значения. Padding, alignment, reserved fields и trailing bytes
-отсутствуют.
+Для wire-artifact-ов из `region_proof_protocol.py` все целые беззнаковые и
+записаны big-endian как `u8`, `u32be` или `u64be`; `digest` — ровно 32
+ненулевых bytes SHA-256, а `blob` равен `u64be(length) || bytes`.
+`SourceReleaseLockV1` и связанные provenance-artifact-ы имеют отдельный codec
+в `provenance.py`: его `blob` равен `u32be(length) || bytes`; grammar также
+содержит свои `u16` и 20-byte OpenPGP/SHA-1 coordinates. Enum занимает один
+`u8` и принимает только перечисленные значения. Padding, alignment, reserved
+fields и trailing bytes отсутствуют.
 
 До allocation и цикла по records parser проверяет арифметику длины без
 переполнения, остаток input, точный или минимальный wire-размер всех
