@@ -2107,6 +2107,90 @@ class SharedBuildTransportTargetTests(unittest.TestCase):
                 )
                 self.assertIsNone(result.process)
 
+    def test_native_run_relabel_keeps_progress_when_cid_cleanup_is_already_failed(
+        self,
+    ) -> None:
+        """Relabeling a canonical CID-root failure must not erase input evidence."""
+
+        transport = importlib.import_module("build.transport")
+        policy = pipeline.ARB_BUILD_TRANSPORT_POLICY_V1
+        input_value = _sealed_input()
+        backend = transport.NativeDockerBuildBackendV1(
+            Path("/bin/true"),
+            policy,
+            host_user=(501, 20),
+            platform_name="linux",
+            machine_name="x86_64",
+        )
+        capability = _docker_capability_fixture(policy)
+        backend._probed_capability = capability
+        request = transport.DockerBuildRequestV1(1, capability, input_value, 64)
+        progress = _initial_progress(transport, input_value)
+        raw = transport.DockerBuildCleanupFailureV1(
+            transport.DockerCleanupTriggerV1.TIMEOUT,
+            (
+                transport.CleanupFailureRecordV1(
+                    transport.CleanupResourceV1.DOCKER_CID_ROOT,
+                    "CID-root cleanup failed while observing the build",
+                ),
+            ),
+            b"stdout",
+            b"stderr",
+            progress,
+        )
+        lease = backend._next_run_lease_v1(capability)
+        release = backend._release_run_lease_v1
+
+        with mock.patch.object(
+            backend,
+            "_next_run_lease_v1",
+            return_value=lease,
+        ), mock.patch.object(
+            backend,
+            "_command_for_v1",
+            return_value=("docker", "build"),
+        ), mock.patch.object(
+            backend,
+            "_observe_command",
+            return_value=raw,
+        ), mock.patch.object(
+            backend,
+            "_release_run_lease_v1",
+            side_effect=release,
+        ):
+            result = backend.run_build(request)
+
+        self.assertIs(type(result), transport.DockerBuildObserverFailureV1)
+        self.assertEqual(result.stdout, b"stdout")
+        self.assertEqual(result.stderr, b"stderr")
+        self.assertIsNotNone(result.input_progress)
+        self.assertEqual(result.input_progress.written_length, 0)
+        self.assertEqual(
+            result.input_progress.written_sha256,
+            hashlib.sha256(b"").digest(),
+        )
+
+    def test_noncanonical_cleanup_join_stays_bounded_and_typed(self) -> None:
+        """A full cleanup diagnostic must not turn the fallback into an exception."""
+
+        transport = importlib.import_module("build.transport")
+        detail = "x" * transport._DIAGNOSTIC_DETAIL_TEXT_LIMIT_V1
+        result = transport.NativeDockerBuildBackendV1._with_cid_root_cleanup_failure_v1(
+            object(),
+            detail,
+        )
+
+        self.assertIs(type(result), transport.DockerBuildObserverFailureV1)
+        self.assertLessEqual(
+            len(result.detail),
+            transport._DIAGNOSTIC_DETAIL_TEXT_LIMIT_V1,
+        )
+        self.assertTrue(
+            result.detail.startswith(
+                "native Docker build observation is not canonical; "
+            )
+        )
+
     def test_top_level_failure_reason_preserves_observer_outcome(self) -> None:
         transport = importlib.import_module("build.transport")
         policy = pipeline.ARB_BUILD_TRANSPORT_POLICY_V1
