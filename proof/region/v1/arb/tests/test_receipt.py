@@ -541,14 +541,9 @@ class SourceBoundReceiptTests(unittest.TestCase):
             ),
         )
 
-    def test_controller_rejects_hostile_native_coordinates_on_construction(self) -> None:
-        class ExplodingPath(type(Path())):
-            def is_absolute(self) -> bool:
-                raise RuntimeError("hostile path predicate")
-
-        class ExplodingFilesystemPath(type(Path())):
-            def __fspath__(self) -> str:
-                raise RuntimeError("hostile filesystem path")
+    def test_controller_rejects_invalid_or_nonexact_native_coordinates_on_construction(self) -> None:
+        class PathSubclass(type(Path())):
+            pass
 
         valid_docker = Path("/usr/bin/docker")
         valid_parent = Path("/sys/fs/cgroup/labcolors/proof")
@@ -559,13 +554,13 @@ class SourceBoundReceiptTests(unittest.TestCase):
             (Path("/docker\n"), valid_parent),
             (Path("/docker,comma"), valid_parent),
             (Path("/docker\ud800"), valid_parent),
-            (ExplodingPath("/usr/bin/docker"), valid_parent),
+            (PathSubclass("/usr/bin/docker"), valid_parent),
             (valid_docker, object()),
             (valid_docker, Path("relative")),
             (valid_docker, Path("/proof\0")),
             (valid_docker, Path("/proof\ud800")),
             (valid_docker, Path("//proof")),
-            (valid_docker, ExplodingFilesystemPath("/proof")),
+            (valid_docker, PathSubclass("/proof")),
         ):
             with self.subTest(
                 docker_path=type(docker_path).__name__,

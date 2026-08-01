@@ -19,7 +19,6 @@ import posixpath
 import resource
 import selectors
 import signal
-import stat
 import struct
 import sys
 import threading
@@ -1520,9 +1519,6 @@ def enter_observer_cgroup_v1(parent: Path) -> None:
             dir_fd=parent_fd,
         )
         try:
-            metadata = os.fstat(directory_fd)
-            if not stat.S_ISDIR(metadata.st_mode):
-                raise OSError("observer cgroup is not a directory")
             procs_fd = os.open(
                 b"cgroup.procs",
                 os.O_WRONLY | os.O_CLOEXEC | os.O_NOFOLLOW,
@@ -1531,7 +1527,7 @@ def enter_observer_cgroup_v1(parent: Path) -> None:
             try:
                 payload = str(os.getpid()).encode("ascii")
                 if os.write(procs_fd, payload) != len(payload):
-                    raise OSError("short cgroup placement write")
+                    raise OSError(errno_module.EIO, "short cgroup placement write")
             finally:
                 os.close(procs_fd)
         finally:
