@@ -38,12 +38,12 @@ from test_receipt import _execute  # noqa: E402
 # its expected hash here would let a coordinated gate edit hide inventory drift.
 # A deliberate test-set change updates both values from fresh enumeration.
 ARB_INVENTORY_SHA256_V1 = (
-    "cbacd035c919cb7a18a3f05d41319ae5bf6c93bbcca9612312357e9be23aedd5"
+    "75462b6e595a3642705ce5135ca6a38b5c634be61b0ef33ea81f73abe17b564b"
 )
 ARB_ORDER_SHA256_V1 = (
-    "506d3d1f82102affc23e846b9500fbe95334134552800a141147a0595b476aea"
+    "6700241b8685179ecaed8eab062e65581ae183fa544b02b039b464d26ce53d7c"
 )
-ARB_TEST_COUNT_V1 = 181
+ARB_TEST_COUNT_V1 = 182
 
 MOVED_INPUT_SURFACE_V1 = (
     "CanonicalInputLimitsV1",
@@ -420,7 +420,10 @@ class SharedBuildExtractionTests(unittest.TestCase):
         arb_pipeline = pipeline
         arb_receipt = importlib.import_module("receipt")
         request = _request()
-        bundle = arb_pipeline._seal_build_input_bundle_v1(request)
+        bundle = arb_pipeline._seal_build_input_bundle_v1(
+            request,
+            arb_pipeline.ARB_BUILD_TRANSPORT_POLICY_V1,
+        )
 
         self.assertIs(arb_pipeline.build_input, build_input)
         self.assertIs(arb_pipeline.build_transport, transport)

@@ -214,10 +214,12 @@ def _build_identity_v2(
             request.host_trust,
             build.docker_capability.policy,
         )
-        or build.docker_capability.policy
-        != pipeline.ARB_BUILD_TRANSPORT_POLICY_V1
         or build.host_trust is not request.host_trust
-        or not pipeline.arb_input_is_bound_v1(request, bundle)
+        or not pipeline.arb_input_is_bound_v1(
+            request,
+            build.docker_capability.policy,
+            bundle,
+        )
         or build.input_bundle_identity != bundle.binding_identity
         or build.input_bundle_sha256 != bundle.sha256
         or build.input_bundle_length != bundle.length

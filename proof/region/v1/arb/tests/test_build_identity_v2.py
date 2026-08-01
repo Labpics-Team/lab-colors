@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""RED contract for causal BUILD policy and capability identities."""
+"""Causal BUILD policy and capability identity contract."""
 
 from __future__ import annotations
 
@@ -23,7 +23,12 @@ from build import transport as build_transport  # noqa: E402
 
 import pipeline  # noqa: E402
 import receipt  # noqa: E402
-from test_pipeline import _BuildBackend, _request, _static_elf  # noqa: E402
+from test_pipeline import (  # noqa: E402
+    _BuildBackend,
+    _docker_capability,
+    _request,
+    _static_elf,
+)
 
 
 _POLICY_FIELDS = (
@@ -277,7 +282,7 @@ class BuildIdentityV2Tests(unittest.TestCase):
 
         request = _request()
         baseline_policy = pipeline.ARB_BUILD_TRANSPORT_POLICY_V1
-        baseline = pipeline._seal_build_input_bundle_v1(request)
+        baseline = pipeline._seal_build_input_bundle_v1(request, baseline_policy)
         expected = _arb_input_binding_oracle_v1(
             request.admitted_sources.identity,
             request.build_sources.build_input_identity,
@@ -295,8 +300,14 @@ class BuildIdentityV2Tests(unittest.TestCase):
             "ARB_BUILD_TRANSPORT_POLICY_V1",
             changed_policy,
         ):
-            changed = pipeline._seal_build_input_bundle_v1(request)
-            self.assertTrue(pipeline.arb_input_is_bound_v1(request, changed))
+            changed = pipeline._seal_build_input_bundle_v1(request, changed_policy)
+            self.assertTrue(
+                pipeline.arb_input_is_bound_v1(
+                    request,
+                    changed_policy,
+                    changed,
+                )
+            )
         expected_changed = _arb_input_binding_oracle_v1(
             request.admitted_sources.identity,
             request.build_sources.build_input_identity,
@@ -306,6 +317,108 @@ class BuildIdentityV2Tests(unittest.TestCase):
         self.assertEqual(changed.contents, baseline.contents)
         self.assertEqual(changed.binding_identity, expected_changed)
         self.assertNotEqual(changed.binding_identity, baseline.binding_identity)
+
+        # The fixed V1 bootstrap consumes $1 and $2 only.  Its shell argv0 is
+        # bound by the outer transport identity, so it cannot make identical
+        # source-to-tree bytes a second inner binding.
+        argv0_changed_policy = _policy_with(
+            baseline_policy,
+            bootstrap_argv0="labcolors-other-bootstrap-argv0",
+        )
+        argv0_changed = pipeline._seal_build_input_bundle_v1(
+            request,
+            argv0_changed_policy,
+        )
+        self.assertEqual(argv0_changed.binding_identity, baseline.binding_identity)
+        self.assertTrue(
+            pipeline.arb_input_is_bound_v1(
+                request,
+                argv0_changed_policy,
+                baseline,
+            )
+        )
+
+    def test_input_binding_follows_probed_capability_not_module_global(self) -> None:
+        """A reentrant backend cannot swap a post-probe sealing dependency."""
+
+        bound_policy = pipeline.ARB_BUILD_TRANSPORT_POLICY_V1
+        foreign_policy = _policy_with(
+            bound_policy,
+            bootstrap=bound_policy.bootstrap + "\n:",
+        )
+        request = _request()
+        binary = _static_elf(b"capability-bound-input")
+
+        class _GlobalSwitchingBackend(_BuildBackend):
+            def __init__(self) -> None:
+                super().__init__(
+                    (binary, binary),
+                    probe=_docker_capability(bound_policy),
+                )
+                self._attempts = 0
+
+            def probe(self) -> build_transport.DockerCapabilityReportV1:
+                pipeline.ARB_BUILD_TRANSPORT_POLICY_V1 = foreign_policy
+                return super().probe()
+
+            def run_build(
+                self,
+                value: build_transport.DockerBuildRequestV1,
+            ) -> build_transport.DockerBuildProcessObservationV1:
+                observed = super().run_build(value)
+                self._attempts += 1
+                if self._attempts == 2:
+                    pipeline.ARB_BUILD_TRANSPORT_POLICY_V1 = bound_policy
+                return observed
+
+        original_policy = pipeline.ARB_BUILD_TRANSPORT_POLICY_V1
+        try:
+            result = pipeline.ControlledPipelineV1(
+                build_backend=_GlobalSwitchingBackend(),
+            ).build(request)
+        finally:
+            pipeline.ARB_BUILD_TRANSPORT_POLICY_V1 = original_policy
+
+        self.assertIs(type(result), pipeline.DiagnosticBuildObservationV1)
+        expected = _arb_input_binding_oracle_v1(
+            request.admitted_sources.identity,
+            request.build_sources.build_input_identity,
+            result.input_bundle.contents,
+            bound_policy.bootstrap,
+        )
+        self.assertEqual(result.input_bundle.binding_identity, expected)
+        self.assertTrue(
+            pipeline.arb_input_is_bound_v1(
+                request,
+                bound_policy,
+                result.input_bundle,
+            )
+        )
+        expected_receipt_identity = receipt._build_identity_v2(
+            request,
+            receipt._source_identity_v1(request),
+            result,
+        )
+        with mock.patch.object(
+            pipeline,
+            "ARB_BUILD_TRANSPORT_POLICY_V1",
+            foreign_policy,
+        ):
+            self.assertTrue(
+                pipeline.arb_input_is_bound_v1(
+                    request,
+                    bound_policy,
+                    result.input_bundle,
+                )
+            )
+            self.assertEqual(
+                receipt._build_identity_v2(
+                    request,
+                    receipt._source_identity_v1(request),
+                    result,
+                ),
+                expected_receipt_identity,
+            )
 
     def test_every_admitted_policy_mutation_changes_transport_and_pipeline_identity(self) -> None:
         trust = pipeline.HostTrustBoundaryV1.UNSEALED_LINUX_X64_DOCKER_HOST

@@ -268,15 +268,16 @@ class CanonicalBuildBundleTests(unittest.TestCase):
 
     def test_bundle_is_reproducible_normalized_ustar_with_no_host_authority(self) -> None:
         request = _request()
-        first = pipeline._seal_build_input_bundle_v1(request)
-        second = pipeline._seal_build_input_bundle_v1(request)
+        policy = pipeline.ARB_BUILD_TRANSPORT_POLICY_V1
+        first = pipeline._seal_build_input_bundle_v1(request, policy)
+        second = pipeline._seal_build_input_bundle_v1(request, policy)
 
         self.assertIsNot(first, second)
         self.assertIs(first.contents, first.contents)
         self.assertEqual(first.contents, second.contents)
         self.assertEqual(first.sha256, second.sha256)
         self.assertEqual(first.binding_identity, second.binding_identity)
-        self.assertTrue(pipeline.arb_input_is_bound_v1(request, first))
+        self.assertTrue(pipeline.arb_input_is_bound_v1(request, policy, first))
 
         source_entries = tuple(
             entry

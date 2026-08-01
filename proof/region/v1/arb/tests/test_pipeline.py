@@ -954,7 +954,10 @@ class DockerCommandContractTests(unittest.TestCase):
         request = build_transport.DockerBuildRequestV1(
             1,
             capability,
-            pipeline._seal_build_input_bundle_v1(_request()),
+            pipeline._seal_build_input_bundle_v1(
+                _request(),
+                pipeline.ARB_BUILD_TRANSPORT_POLICY_V1,
+            ),
             _limits().max_executable_bytes,
         )
         lease = backend._next_run_lease_v1(capability)
@@ -1003,7 +1006,10 @@ class DockerCommandContractTests(unittest.TestCase):
         request = build_transport.DockerBuildRequestV1(
             1,
             capability,
-            pipeline._seal_build_input_bundle_v1(_request()),
+            pipeline._seal_build_input_bundle_v1(
+                _request(),
+                pipeline.ARB_BUILD_TRANSPORT_POLICY_V1,
+            ),
             _limits().max_executable_bytes,
         )
         lease = backend._next_run_lease_v1(capability)

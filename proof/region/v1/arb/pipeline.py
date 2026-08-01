@@ -356,12 +356,14 @@ def _arb_input_binding_identity_v1(
     source_identity: bytes,
     build_input_identity: bytes,
     contents: bytes,
+    exact_policy: build_transport.DockerBuildPolicyV1,
 ) -> bytes:
     if (
         not _valid_digest(source_identity)
         or not _valid_digest(build_input_identity)
         or type(contents) is not bytes
         or not contents
+        or not build_transport.docker_policy_is_valid_v1(exact_policy)
     ):
         raise TypeError("invalid Arb build input binding coordinates")
     digest = hashlib.sha256(contents).digest()
@@ -372,8 +374,12 @@ def _arb_input_binding_identity_v1(
             build_input_identity,
             len(contents).to_bytes(8, "big"),
             digest,
+            # This inner identity fixes only the stream-to-tree program.  V1
+            # never reads shell $0; argv0 instead remains in the outer
+            # transport identity.  A bootstrap that consumes $0 needs a new
+            # binding schema rather than silently widening this preimage.
             hashlib.sha256(
-                ARB_BUILD_TRANSPORT_POLICY_V1.bootstrap.encode("utf-8")
+                exact_policy.bootstrap.encode("utf-8")
             ).digest(),
         ),
     )
@@ -381,6 +387,7 @@ def _arb_input_binding_identity_v1(
 
 def arb_input_is_bound_v1(
     request: object,
+    exact_policy: object,
     value: object,
 ) -> bool:
     """Recompute Arb semantics independently of generic byte integrity."""
@@ -396,6 +403,7 @@ def arb_input_is_bound_v1(
             request.admitted_sources.identity,
             request.build_sources.build_input_identity,
             value.contents,
+            exact_policy,
         )
     except Exception:
         return False
@@ -403,9 +411,12 @@ def arb_input_is_bound_v1(
 
 def _seal_build_input_bundle_v1(
     request: "PipelineRequestV1",
+    exact_policy: build_transport.DockerBuildPolicyV1,
 ) -> build_input.SealedInputV1:
     if type(request) is not PipelineRequestV1:
         raise TypeError("request must be PipelineRequestV1")
+    if not build_transport.docker_policy_is_valid_v1(exact_policy):
+        raise TypeError("exact_policy must be canonical DockerBuildPolicyV1")
     source_entries = tuple(
         entry
         for lock, admitted in zip(
@@ -450,6 +461,7 @@ def _seal_build_input_bundle_v1(
             request.admitted_sources.identity,
             request.build_sources.build_input_identity,
             contents,
+            exact_policy,
         ),
         contents,
     )
@@ -1036,8 +1048,6 @@ def _derive_arb_comparator_for_build_v1(
         or rebuild_sha256s != (binary_sha256, binary_sha256)
     ):
         raise TypeError("comparator derivation requires two equal successful builds")
-    if docker_capability.policy != ARB_BUILD_TRANSPORT_POLICY_V1:
-        raise TypeError("Docker capability does not bind the Arb transport policy")
     docker_capability_identity = build_transport.docker_capability_identity_v1(
         docker_capability
     )
@@ -1383,10 +1393,7 @@ class DiagnosticBuildObservationV1:
         canonical_capability = build_transport.DockerSupportedV1(
             *tuple(docker_capability)
         )
-        if (
-            tuple(canonical_capability) != tuple(docker_capability)
-            or canonical_capability.policy != ARB_BUILD_TRANSPORT_POLICY_V1
-        ):
+        if tuple(canonical_capability) != tuple(docker_capability):
             raise TypeError("diagnostic build does not bind the exact Arb capability")
         if (
             type(rebuild_sha256s) is not tuple
@@ -1409,6 +1416,7 @@ class DiagnosticBuildObservationV1:
                 structural_source_identity,
                 build_input_identity,
                 input_bundle.contents,
+                canonical_capability.policy,
             )
         ):
             raise TypeError("diagnostic build lost its sealed input bundle")
@@ -1564,7 +1572,10 @@ class ControlledPipelineV1:
             )
         docker_capability = probe_result
         try:
-            input_bundle = _seal_build_input_bundle_v1(request)
+            input_bundle = _seal_build_input_bundle_v1(
+                request,
+                docker_capability.policy,
+            )
         except (
             OSError,
             TypeError,
@@ -1582,7 +1593,11 @@ class ControlledPipelineV1:
             docker_capability,
             input_bundle,
             request.execution_limits.max_executable_bytes,
-            input_admission=lambda value: arb_input_is_bound_v1(request, value),
+            input_admission=lambda value: arb_input_is_bound_v1(
+                request,
+                docker_capability.policy,
+                value,
+            ),
             output_admission=self._admit_arb_output_v1,
         )
         if type(built) is build_transport.BuildRejectedV1:
