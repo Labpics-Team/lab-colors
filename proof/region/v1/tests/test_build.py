@@ -26,6 +26,7 @@ sys.path[:0] = (str(REPO), str(PROOF), str(ARB), str(ARB_TESTS))
 
 import pipeline  # noqa: E402
 from proof.region.v1.arb.tests import gate as arb_gate  # noqa: E402
+from proof.region.v1.tests import gate as proof_gate  # noqa: E402
 from test_pipeline import (  # noqa: E402
     _docker_capability,
     _probe_native_backend,
@@ -44,6 +45,14 @@ ARB_ORDER_SHA256_V1 = (
     "ad40ffaf023f70b347c1ad691e0ebfa9e0dbfb53cdda45aacd86f1dbb2c5c999"
 )
 ARB_TEST_COUNT_V1 = 184
+
+# Независимый внешний oracle общего proof-suite. Он живёт в уже обязательном
+# discovery leaf, поэтому добавление/удаление MPFI-contract теста нельзя
+# незаметно прикрыть только редактированием будущего общего gate.
+SHARED_PROOF_TEST_INVENTORY_SHA256_V1 = (
+    "1690f11e76b57e532f9ca5fa7cccd298438b72fb9a5327192e57c3d84c899715"
+)
+SHARED_PROOF_TEST_COUNT_V1 = 166
 
 MOVED_INPUT_SURFACE_V1 = (
     "CanonicalInputLimitsV1",
@@ -282,6 +291,74 @@ class ExistingArbGateTests(unittest.TestCase):
             hashlib.sha256(ordered_preimage).hexdigest(),
             ARB_ORDER_SHA256_V1,
         )
+
+
+class ExistingSharedProofGateTests(unittest.TestCase):
+    def test_mandatory_shared_proof_suite_keeps_exact_inventory(self) -> None:
+        suite = proof_gate.full_suite_v1()
+
+        self.assertEqual(
+            proof_gate.test_count_v1(suite),
+            SHARED_PROOF_TEST_COUNT_V1,
+        )
+        self.assertEqual(
+            proof_gate.test_inventory_sha256_v1(suite),
+            SHARED_PROOF_TEST_INVENTORY_SHA256_V1,
+        )
+        self.assertTrue(proof_gate.inventory_is_exact_v1(suite))
+
+    def test_exact_inventory_rejects_a_missing_mpfi_input_contract(self) -> None:
+        suite = proof_gate.full_suite_v1()
+        without_mpfi_input = unittest.TestSuite(
+            test
+            for test in proof_gate._iter_tests_v1(suite)
+            if not test.id().startswith("test_mpfi_input.")
+        )
+
+        self.assertLess(
+            proof_gate.test_count_v1(without_mpfi_input),
+            proof_gate.test_count_v1(suite),
+        )
+        self.assertFalse(proof_gate.inventory_is_exact_v1(without_mpfi_input))
+
+    def test_exact_inventory_rejects_same_count_contract_replacement(self) -> None:
+        class ReplacementTest(unittest.TestCase):
+            def test_replacement(self) -> None:
+                pass
+
+        suite = proof_gate.full_suite_v1()
+        tests = tuple(proof_gate._iter_tests_v1(suite))
+        replaced = next(
+            test for test in tests if test.id().startswith("test_mpfi_input.")
+        )
+        replacement = unittest.defaultTestLoader.loadTestsFromTestCase(ReplacementTest)
+        same_count_replacement = unittest.TestSuite(
+            (*tuple(test for test in tests if test is not replaced), replacement)
+        )
+
+        self.assertEqual(
+            proof_gate.test_count_v1(same_count_replacement),
+            proof_gate.test_count_v1(suite),
+        )
+        self.assertFalse(proof_gate.inventory_is_exact_v1(same_count_replacement))
+
+    def test_mpfi_input_contract_cannot_green_by_skipping(self) -> None:
+        suite = unittest.defaultTestLoader.discover(
+            str(proof_gate.TEST_DIRECTORY),
+            pattern="test_mpfi_input.py",
+        )
+        test_ids = tuple(test.id() for test in proof_gate._iter_tests_v1(suite))
+        result = unittest.TestResult()
+
+        suite.run(result)
+
+        self.assertTrue(test_ids)
+        self.assertEqual(result.testsRun, len(test_ids))
+        self.assertFalse(result.skipped)
+        self.assertFalse(result.failures)
+        self.assertFalse(result.errors)
+        self.assertFalse(result.expectedFailures)
+        self.assertFalse(result.unexpectedSuccesses)
 
 
 class ArbBuildIdentityCharacterizationTests(unittest.TestCase):
