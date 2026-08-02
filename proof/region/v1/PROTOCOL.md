@@ -154,9 +154,10 @@ Wire после `LCJOB1\0\0`, по порядку:
 Admission проверяет definition и formula identities, canonical re-encode и
 identity каждого вложенного artifact. Formula release обязан совпасть с полем
 definition. Job задаёт единственный канонический input contract evaluator-ов.
-Arb controller связывает его с наблюдёнными BUILD/RUN внутри объявленной ниже
-границы доверия; receipt не заявляет отсутствие ambient inputs за пределами этой
-границы. Альтернативный JSON/TOML definition запрещён протоколом.
+Соответствующий source-bound controller связывает его с наблюдёнными BUILD/RUN
+внутри объявленной ниже границы доверия; receipt не заявляет отсутствие ambient
+inputs за пределами этой границы. Альтернативный JSON/TOML definition запрещён
+протоколом.
 
 ### MPFI runtime profile V1
 
@@ -393,10 +394,10 @@ identity без зеркальных промежуточных dataclass:
    `linux-x86_64` sandbox platform, typed child exit, stdout, canonical
    transcript и `RunClaimV1`.
 
-Только one-shot controller может собрать этот корень, создать raw
-`EvaluatorProvenanceClaimV1` и privately sealed
-`SourceBoundEvaluatorReceiptV1`. Отдельного pipeline RUN-authority и public
-promotion пути нет.
+Только соответствующий one-shot controller может собрать этот корень, создать
+raw `EvaluatorProvenanceClaimV1` и privately sealed
+`SourceBoundEvaluatorReceiptV1` либо `MpfiSourceBoundEvaluatorReceiptV1`.
+Отдельного pipeline RUN-authority и public promotion пути нет.
 
 Ни raw claim, ни digest/content resolver, ни diagnostic BUILD/RUN object, ни
 public constructor не создают receipt. Receipt доказывает только наблюдённую
@@ -558,11 +559,11 @@ Wire после `LCPRV1\0\0` содержит три unresolved digest declarati
 
 Этот тип аналогичен структурному statement, а не attestation о выполненном
 build. `parse` проверяет только canonical wire и ненулевые coordinates. Сам raw
-тип не имеет public admission, resolver или флага успешного replay. Первый
-sealed `SourceBoundEvaluatorReceiptV1` создаёт только Arb controller после
-фактически наблюдённого typed replay DAG. Receipt identity равна identity
-связанного claim и не дублирует subject отдельным digest; parse raw claim этого
-права не даёт.
+тип не имеет public admission, resolver или флага успешного replay. Sealed
+`SourceBoundEvaluatorReceiptV1` или `MpfiSourceBoundEvaluatorReceiptV1` создаёт
+только соответствующий controller после фактически наблюдённого typed replay
+DAG. Receipt identity равна identity связанного claim и не дублирует subject
+отдельным digest; parse raw claim этого права не даёт.
 
 Назначение трёх внутренних coordinates только вдохновлено разделением ролей в
 [in-toto Statement V1.2.0](https://github.com/in-toto/attestation/blob/v1.2.0/spec/v1/statement.md)
