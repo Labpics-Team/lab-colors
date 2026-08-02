@@ -7,6 +7,18 @@
 
 #include "region.h"
 
+/*
+ * M2a's direct executable has an explicit operational admission profile.
+ * These bounds cap transport and transcript storage; they do not change the
+ * mathematical wire grammar or the set of contextual regions it describes.
+ * The controller and executor must bind the same profile before minting an
+ * observation.
+ */
+#define LC_ARB_MAX_JOB_BYTES_V1 \
+    (UINT64_C(16) * UINT64_C(1024) * UINT64_C(1024))
+#define LC_ARB_MAX_OUTPUT_BYTES_V1 \
+    (UINT64_C(16) * UINT64_C(1024) * UINT64_C(1024))
+
 typedef enum {
     LC_WIRE_OK = 0,
     LC_WIRE_TRUNCATED = 1,

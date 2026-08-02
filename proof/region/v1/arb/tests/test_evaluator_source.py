@@ -210,6 +210,33 @@ class StandaloneSourceTests(unittest.TestCase):
         singleton_dispatch = decision.index("if (region->knot_count == 1)")
         self.assertLess(decision_guard, singleton_dispatch)
 
+    def test_runtime_profile_bounds_input_and_transcript_before_allocation(self) -> None:
+        wire = (EVALUATOR / "wire.h").read_text(encoding="utf-8")
+        main = (EVALUATOR / "main.c").read_text(encoding="utf-8")
+        for name in (
+            "LC_ARB_MAX_JOB_BYTES_V1",
+            "LC_ARB_MAX_OUTPUT_BYTES_V1",
+        ):
+            with self.subTest(name=name):
+                self.assertIn(name, wire)
+                self.assertIn(name, main)
+        self.assertIn("LC_ARB_EVALUATION_RESOURCE_LIMIT", main)
+        self.assertIn("limit_exceeded", main)
+        self.assertIn("input.maximum", main)
+        self.assertIn("output.maximum", main)
+        self.assertIn("witnesses.maximum", main)
+        self.assertIn("output_limit", main)
+        reserve = main[main.index("buffer_reserve(") : main.index("buffer_append(")]
+        self.assertLess(
+            reserve.index("required > buffer->maximum"),
+            reserve.index("realloc(buffer->bytes"),
+        )
+        reader = main[main.index("read_stdin(") : main.index("digest_is_nonzero(")]
+        self.assertLess(
+            reader.index("input->maximum"),
+            reader.index("buffer_append(input"),
+        )
+
     def test_sha256_has_literal_standard_vectors_and_no_external_crypto(self) -> None:
         source = (EVALUATOR / "hash.c").read_text(encoding="utf-8")
         header = (EVALUATOR / "hash.h").read_text(encoding="utf-8")

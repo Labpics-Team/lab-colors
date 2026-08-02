@@ -87,7 +87,7 @@ class ArbBuildRecipeTests(unittest.TestCase):
         )
         self.assertIn("proof/region/v1/arb/tests/gate.py", source)
         self.assertIn("proof/region/v1/arb/tests/native_gate.py", source)
-        self.assertEqual(source.count("- .github/workflows/arb.yml"), 2)
+        self.assertEqual(source.count("- .github/workflows/arb.yml"), 1)
         self.assertNotIn("arb-proof-observation.yml", source)
         self.assertIn(
             'echo "LABCOLORS_MPFI_ARCHIVE=$archive" >> "$GITHUB_ENV"',
@@ -130,6 +130,15 @@ class ArbBuildRecipeTests(unittest.TestCase):
         source = WORKFLOW.read_text(encoding="utf-8")
 
         self.assertNotIn("github.event.pull_request.head.repo.full_name", source)
+
+    def test_privileged_workflow_has_no_automatic_pull_request_trigger(self) -> None:
+        source = WORKFLOW.read_text(encoding="utf-8")
+
+        self.assertIn("\n  workflow_dispatch:\n", source)
+        self.assertIn("\n  push:\n", source)
+        self.assertIn("branches: [main]", source)
+        self.assertNotIn("\n  pull_request:\n", source)
+        self.assertNotIn("pull_request", source)
 
     def test_exact_suite_gate_rejects_expected_failure(self) -> None:
         class BrokenRequiredTest(unittest.TestCase):

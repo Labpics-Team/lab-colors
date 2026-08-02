@@ -8,18 +8,12 @@ on:
       - .github/workflows/arb.yml
       - crates/labcolors-core/contracts/contextual-region-formula-v1.lcir
       - proof/region/v1/**
-  pull_request:
-    paths:
-      - .github/workflows/arb.yml
-      - crates/labcolors-core/contracts/contextual-region-formula-v1.lcir
-      - proof/region/v1/**
-
 permissions:
   contents: read
 
 concurrency:
-  group: arb-evaluator-build-runtime-${{ github.event_name == 'pull_request' && github.event.pull_request.number || github.run_id }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: arb-evaluator-build-runtime-${{ github.run_id }}
+  cancel-in-progress: false
 
 jobs:
   diagnostic-build-runtime:

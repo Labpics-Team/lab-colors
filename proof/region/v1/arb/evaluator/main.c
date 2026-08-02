@@ -13,7 +13,22 @@ typedef struct {
     uint8_t *bytes;
     size_t length;
     size_t capacity;
+    size_t maximum;
+    bool limit_exceeded;
 } byte_buffer;
+
+typedef enum {
+    LC_ARB_READ_OK = 0,
+    LC_ARB_READ_EMPTY = 1,
+    LC_ARB_READ_TOO_LARGE = 2,
+    LC_ARB_READ_FAILED = 3
+} lc_arb_read_status;
+
+typedef enum {
+    LC_ARB_EVALUATION_OK = 0,
+    LC_ARB_EVALUATION_RESOURCE_LIMIT = 1,
+    LC_ARB_EVALUATION_FAILED = 2
+} lc_arb_evaluation_status;
 
 static const uint8_t transcript_magic[8] = "LCTRN1\0";
 static const uint8_t accounting_domain[] = "labcolors.arb-evaluation-accounting.v1\0";
@@ -40,6 +55,10 @@ buffer_reserve(byte_buffer *buffer, size_t additional)
         return false;
     }
     required = buffer->length + additional;
+    if (buffer->maximum != 0 && required > buffer->maximum) {
+        buffer->limit_exceeded = true;
+        return false;
+    }
     if (required <= buffer->capacity) {
         return required == 0 || buffer->bytes != NULL;
     }
@@ -98,7 +117,7 @@ buffer_u64(byte_buffer *buffer, uint64_t value)
     return buffer_append(buffer, bytes, sizeof(bytes));
 }
 
-static bool
+static lc_arb_read_status
 read_stdin(byte_buffer *input)
 {
     uint8_t chunk[16384];
@@ -110,13 +129,17 @@ read_stdin(byte_buffer *input)
             if (errno == EINTR) {
                 continue;
             }
-            return false;
+            return LC_ARB_READ_FAILED;
         }
         if (count == 0) {
-            return input->length != 0;
+            return input->length == 0 ? LC_ARB_READ_EMPTY : LC_ARB_READ_OK;
+        }
+        if (input->maximum != 0
+            && (size_t) count > input->maximum - input->length) {
+            return LC_ARB_READ_TOO_LARGE;
         }
         if (!buffer_append(input, chunk, (size_t) count)) {
-            return false;
+            return LC_ARB_READ_FAILED;
         }
     }
 }
@@ -310,7 +333,7 @@ lesser_u64(uint64_t left, uint64_t right)
     return left < right ? left : right;
 }
 
-static bool
+static lc_arb_evaluation_status
 evaluate(
     const lc_job *job,
     const uint8_t comparator_identity[32],
@@ -328,18 +351,25 @@ evaluate(
     uint64_t global_remaining = job->policy.global_pregrant;
     uint8_t accounting_digest[32];
     size_t decision_length;
-    bool success = false;
+    lc_arb_evaluation_status status = LC_ARB_EVALUATION_FAILED;
+
+    decisions.maximum = (size_t) LC_ARB_MAX_OUTPUT_BYTES_V1;
+    witnesses.maximum = (size_t) LC_ARB_MAX_OUTPUT_BYTES_V1;
 
     if (job->domain.point_count == 0
         || job->policy.precision_count == 0
         || job->domain.point_count > SIZE_MAX - 3) {
-        return false;
+        return LC_ARB_EVALUATION_FAILED;
     }
     decision_length = ((size_t) job->domain.point_count + 3) / 4;
     if (decision_length == 0
         || !buffer_reserve(&decisions, decision_length)
         || decisions.bytes == NULL) {
-        return false;
+        status = decisions.limit_exceeded
+            ? LC_ARB_EVALUATION_RESOURCE_LIMIT
+            : LC_ARB_EVALUATION_FAILED;
+        buffer_clear(&decisions);
+        return status;
     }
     memset(decisions.bytes, 0, decision_length);
     decisions.length = decision_length;
@@ -459,13 +489,19 @@ evaluate(
         || !buffer_append(output, witnesses.bytes, witnesses.length)) {
         goto cleanup;
     }
-    success = true;
+    status = LC_ARB_EVALUATION_OK;
 
 cleanup:
+    if (status != LC_ARB_EVALUATION_OK
+        && (decisions.limit_exceeded
+            || witnesses.limit_exceeded
+            || output->limit_exceeded)) {
+        status = LC_ARB_EVALUATION_RESOURCE_LIMIT;
+    }
     lc_region_result_clear(&result);
     buffer_clear(&witnesses);
     buffer_clear(&decisions);
-    return success;
+    return status;
 }
 
 int
@@ -477,6 +513,10 @@ main(int argc, char **argv)
     lc_wire_error error;
     uint8_t comparator_identity[32];
     int status = 1;
+    lc_arb_read_status read_status;
+
+    input.maximum = (size_t) LC_ARB_MAX_JOB_BYTES_V1;
+    output.maximum = (size_t) LC_ARB_MAX_OUTPUT_BYTES_V1;
 
     if (argc != 5
         || strcmp(argv[1], "--manifest-identity") != 0
@@ -489,16 +529,29 @@ main(int argc, char **argv)
         );
         return 64;
     }
-    if (!read_stdin(&input)) {
-        fputs("job read failed\n", stderr);
+    read_status = read_stdin(&input);
+    if (read_status != LC_ARB_READ_OK) {
+        const char *reason = read_status == LC_ARB_READ_TOO_LARGE
+            ? "input_limit"
+            : read_status == LC_ARB_READ_EMPTY ? "empty_input" : "io";
+
+        fprintf(stderr, "job read failed: %s\n", reason);
         goto cleanup_input;
     }
     if (!lc_parse_job(&job, input.bytes, input.length, &error)) {
         fprintf(stderr, "job rejected: %s\n", lc_wire_error_name(error));
         goto cleanup_input;
     }
-    if (!evaluate(&job, comparator_identity, &output)) {
-        fputs("evaluation failed\n", stderr);
+    lc_arb_evaluation_status evaluation =
+        evaluate(&job, comparator_identity, &output);
+    if (evaluation != LC_ARB_EVALUATION_OK) {
+        fprintf(
+            stderr,
+            "evaluation failed: %s\n",
+            evaluation == LC_ARB_EVALUATION_RESOURCE_LIMIT
+                ? "output_limit"
+                : "internal"
+        );
         goto cleanup_job;
     }
     if (!lc_write_all(STDOUT_FILENO, output.bytes, output.length)) {

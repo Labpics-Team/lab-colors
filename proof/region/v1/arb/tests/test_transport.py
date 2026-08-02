@@ -282,7 +282,7 @@ class CanonicalBuildBundleTests(unittest.TestCase):
         self.assertTrue(pipeline.arb_input_is_bound_v1(request, policy, first))
         self.assertEqual(
             first.sha256.hex(),
-            "5d6e789a721aeed1a8ff023f0af5389711f85f6fe95294d8290b20301235f4df",
+            "dfd7216be913be601f18e2fd461d9d9c8609355da2f9078dd99328f00ee33f34",
         )
         self.assertEqual(first.length, 174_080)
 
