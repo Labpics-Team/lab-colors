@@ -170,6 +170,15 @@ allocation, а переполнение transcript — typed `output_limit`. M2a
 source-bound BUILD/RUN evidence; прямой бинарь до этого не является
 самостоятельным public evaluator API.
 
+В коде один exact tuple `MpfiRuntimeProfileV1` владеет этими пятью
+координатами. `MpfiRuntimeBindingV1` связывает его с одним immutable
+`ExecutionLimitsV1`: `max_stdin_bytes` обязан равняться `max_job_bytes`, а
+`max_stdout_bytes` — `max_output_bytes`; остальные executor limits входят в
+ту же binding identity явно. Поэтому контроллер не может заменить память,
+время или stderr-лимит и сохранить тот же runtime-профиль. Ни executor, ни
+общий protocol leaf не импортируют MPFI: это lane-specific contract, который
+будет включён в source-bound receipt M2a.
+
 ## Фиксация источников и наблюдения целостности
 
 `SourceReleaseLockV1` фиксирует bytes и структурный состав архива. Поле
