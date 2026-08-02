@@ -39,6 +39,14 @@ permissions:
 jobs:
   publish:
     runs-on: { group: labpics-ci-sandbox, labels: [labpics-ci-gvisor-v1] }
+    # Environment secrets are resolved for this job. Keep the trust boundary
+    # intrinsic to the immutable worker so PR/workflow_call/wrong-repository
+    # invocations are skipped before `npm-publish` can expose NPM_TOKEN.
+    if: >-
+      github.repository == 'Labpics-Team/lab-colors' &&
+      github.event_name == 'push' &&
+      github.ref_type == 'tag' &&
+      startsWith(github.ref_name, 'colors-v')
     # 10 = двойной worst successful publish receipt перед cutover, округлённый
     # вверх до пяти минут; менять только после history-replay.
     timeout-minutes: 10
@@ -900,4 +908,4 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           TARBALL_PATH: ${{ steps.verified-artifact.outputs.tarball }}
-        run: npm publish --ignore-scripts "$TARBALL_PATH"
+        run: npm publish --ignore-scripts --@labpics:registry=https://registry.npmjs.org "$TARBALL_PATH"

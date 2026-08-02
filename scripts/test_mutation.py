@@ -1819,6 +1819,131 @@ class MutationTruthTest(unittest.TestCase):
         self.assertIn("    env:\n      BINARYEN_CORES: 1\n", wasm)
         self.assertEqual(workers["ci-worker.yml"].count("BINARYEN_CORES"), 1)
 
+    def test_publish_worker_secret_boundary_and_registry_are_fail_closed(self) -> None:
+        repo = Path(__file__).resolve().parents[1]
+        workflow = (
+            repo / ".github" / "workflows" / "publish-worker.yml"
+        ).read_text(encoding="utf-8")
+
+        jobs = workflow.split("\njobs:\n", 1)[1]
+        publish_anchor = re.search(r"(?m)^  publish:\n", jobs)
+        self.assertIsNotNone(publish_anchor)
+        assert publish_anchor is not None
+        publish_tail = jobs[publish_anchor.end() :]
+        next_job = re.search(r"(?m)^  [A-Za-z0-9_-]+:\n", publish_tail)
+        publish_job = publish_tail[: next_job.start() if next_job else len(publish_tail)]
+
+        job_if = re.search(
+            r"(?m)^    if:\s*>-\n(?P<expression>(?:^      [^\n]*\n)+)",
+            publish_job,
+        )
+        self.assertIsNotNone(job_if)
+        assert job_if is not None
+        expression = " ".join(
+            line.strip() for line in job_if.group("expression").splitlines()
+        )
+        expected_expression = (
+            "github.repository == 'Labpics-Team/lab-colors' && "
+            "github.event_name == 'push' && "
+            "github.ref_type == 'tag' && "
+            "startsWith(github.ref_name, 'colors-v')"
+        )
+        self.assertEqual(expression, expected_expression)
+
+        # `environment` is intentionally job-scoped. The immutable context guard
+        # must be present on the same secret-bearing job, not deferred to a step.
+        self.assertRegex(publish_job, r"(?m)^    environment: npm-publish\s*$")
+
+        def eligible(context: dict[str, str]) -> bool:
+            return (
+                context["repository"] == "Labpics-Team/lab-colors"
+                and context["event_name"] == "push"
+                and context["ref_type"] == "tag"
+                and context["ref_name"].startswith("colors-v")
+            )
+
+        self.assertTrue(
+            eligible(
+                {
+                    "repository": "Labpics-Team/lab-colors",
+                    "event_name": "push",
+                    "ref_type": "tag",
+                    "ref_name": "colors-v1.2.3",
+                }
+            )
+        )
+        for hostile in (
+            {
+                "repository": "attacker/lab-colors",
+                "event_name": "push",
+                "ref_type": "tag",
+                "ref_name": "colors-v1.2.3",
+            },
+            {
+                "repository": "Labpics-Team/lab-colors",
+                "event_name": "pull_request",
+                "ref_type": "branch",
+                "ref_name": "colors-v1.2.3",
+            },
+            {
+                "repository": "Labpics-Team/lab-colors",
+                "event_name": "workflow_call",
+                "ref_type": "tag",
+                "ref_name": "colors-v1.2.3",
+            },
+            {
+                "repository": "Labpics-Team/lab-colors",
+                "event_name": "push",
+                "ref_type": "branch",
+                "ref_name": "colors-v1.2.3",
+            },
+            {
+                "repository": "Labpics-Team/lab-colors",
+                "event_name": "push",
+                "ref_type": "tag",
+                "ref_name": "release-v1.2.3",
+            },
+        ):
+            with self.subTest(hostile=hostile):
+                self.assertFalse(eligible(hostile))
+
+        publish_step = re.search(
+            r"(?ms)^      - name: npm publish verified CI tarball .*?\n"
+            r"(?P<step>.*?)(?=^      - name:|\Z)",
+            publish_job,
+        )
+        self.assertIsNotNone(publish_step)
+        assert publish_step is not None
+        command = re.search(
+            r"(?m)^        run: (?P<command>npm publish .*)$",
+            publish_step.group("step"),
+        )
+        self.assertIsNotNone(command)
+        assert command is not None
+        publish_command = command.group("command")
+        expected_registry = "--@labpics:registry=https://registry.npmjs.org"
+        self.assertEqual(
+            publish_command,
+            f'npm publish --ignore-scripts {expected_registry} "$TARBALL_PATH"',
+        )
+        self.assertEqual(publish_command.count("npm publish"), 1)
+        self.assertIn('"$TARBALL_PATH"', publish_command)
+        self.assertNotIn("npm pack", publish_command)
+        self.assertNotIn("NPM_REGISTRY", publish_command)
+
+        # The command must not be able to drift to another registry or to a
+        # caller-controlled override while retaining the same tarball.
+        for replacement in (
+            "--@labpics:registry=https://registry.npmjs.com",
+            "--registry=https://registry.npmjs.org",
+            "--@labpics:registry=$NPM_REGISTRY",
+        ):
+            with self.subTest(replacement=replacement):
+                self.assertNotEqual(
+                    publish_command,
+                    f'npm publish --ignore-scripts {replacement} "$TARBALL_PATH"',
+                )
+
     def test_workflow_and_scope_lock_the_truth_contract(self) -> None:
         def between(source: str, start: str, end: str, label: str) -> str:
             if start not in source:
