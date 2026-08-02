@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import hashlib
+import ast
 import os
 import subprocess
 import sys
@@ -418,7 +419,14 @@ class EvaluatorSourceTests(unittest.TestCase):
 
     def test_source_bound_receipt_is_outside_evaluator_and_no_arb_compatibility_layer_exists(self) -> None:
         receipt = (MPFI / "receipt.py").read_text(encoding="utf-8")
-        self.assertIn("MpfiSourceBoundControllerV1", receipt)
+        self.assertTrue(
+            any(
+                isinstance(node, ast.ClassDef)
+                and node.name == "MpfiSourceBoundControllerV1"
+                for node in ast.parse(receipt).body
+            )
+        )
+        self.assertFalse((EVALUATOR / "receipt.py").exists())
         joined = "\n".join(
             path.read_text(encoding="utf-8")
             for path in EVALUATOR.glob("*.c")

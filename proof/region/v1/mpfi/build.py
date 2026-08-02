@@ -39,9 +39,8 @@ MPFI_FORMULA_SPEC_SHA256_V1 = (
 )
 
 _MPFI_SOURCE_ID_LABEL_V1 = b"labcolors.proof-region.mpfi-build-sources.v1\0"
+_MPFI_SOURCE_REPLAY_ID_LABEL_V1 = b"labcolors.proof-region.mpfi-source-replay.v1\0"
 _MPFI_INPUT_ID_LABEL_V1 = b"labcolors.proof-region.mpfi-build-input.v1\0"
-_MPFI_POLICY_ID_LABEL_V1 = b"labcolors.proof-region.mpfi-build-policy.v1\0"
-_BUILD_SOURCE_TOKEN = object()
 
 _BUILD_BOOTSTRAP_V1 = r"""set -eu
 exec 3>&1
@@ -231,7 +230,7 @@ def admit_mpfi_build_sources_v1(
     return AdmittedMpfiBuildSourcesV1(owned, _workspace_identity(owned))
 
 
-def _canonical_build_sources_v1(
+def canonical_build_sources_v1(
     value: object,
 ) -> AdmittedMpfiBuildSourcesV1:
     if type(value) is not AdmittedMpfiBuildSourcesV1:
@@ -263,7 +262,7 @@ def _source_entries_v1(
     return tuple(sorted(entries))
 
 
-def _source_identity_v1(
+def source_identity_v1(
     snapshot: provenance.ReplayedSourceClosureV1,
 ) -> bytes:
     chunks: list[bytes] = [
@@ -279,7 +278,54 @@ def _source_identity_v1(
                 hashlib.sha256(contents).digest(),
             )
         )
-    return _identity(b"labcolors.proof-region.mpfi-source-replay.v1\0", tuple(chunks))
+    return _identity(_MPFI_SOURCE_REPLAY_ID_LABEL_V1, tuple(chunks))
+
+
+def _canonical_input_entries_from_owned_v1(
+    snapshot: provenance.ReplayedSourceClosureV1,
+    build_sources: AdmittedMpfiBuildSourcesV1,
+    generated_formula: bytes,
+) -> tuple[tuple[str, int, bytes], ...]:
+    source_entries = _source_entries_v1(snapshot)
+    workspace_entries = tuple(
+        (f"workspace/{item.path}", item.mode, item.contents)
+        for item in build_sources.files
+    )
+    return tuple(
+        sorted(
+            source_entries
+            + (("inputs/formula.generated.c", 0o644, generated_formula),)
+            + workspace_entries
+        )
+    )
+
+
+def canonical_input_entries_v1(
+    snapshot: provenance.ReplayedSourceClosureV1,
+    build_sources: AdmittedMpfiBuildSourcesV1,
+    generated_formula: bytes,
+) -> tuple[tuple[str, int, bytes], ...]:
+    """Return the canonical source, formula and workspace file set."""
+
+    if type(snapshot) is not provenance.ReplayedSourceClosureV1:
+        raise TypeError("snapshot must be ReplayedSourceClosureV1")
+    if (
+        type(snapshot.source_lock) is not provenance.MpfiSourceLockV1
+        or type(snapshot.admitted_sources) is not provenance.AdmittedMpfiSourcesV1
+        or snapshot.admitted_sources.source_lock_identity
+        != snapshot.source_lock.identity
+    ):
+        raise TypeError("snapshot must retain MPFI source lock")
+    canonical = canonical_build_sources_v1(build_sources)
+    if type(generated_formula) is not bytes or not generated_formula:
+        raise TypeError("generated_formula must be nonempty bytes")
+    if hashlib.sha256(generated_formula).hexdigest() != MPFI_GENERATED_FORMULA_SHA256_V1:
+        raise ValueError("generated MPFI formula drift")
+    return _canonical_input_entries_from_owned_v1(
+        snapshot,
+        canonical,
+        generated_formula,
+    )
 
 
 def _input_binding_identity_v1(
@@ -314,7 +360,9 @@ def seal_mpfi_build_input_v1(
         raise TypeError("source_lock must be MpfiSourceLockV1")
     if type(admitted_sources) is not provenance.AdmittedMpfiSourcesV1:
         raise TypeError("admitted_sources must be AdmittedMpfiSourcesV1")
-    build_sources = _canonical_build_sources_v1(build_sources)
+    if type(limits) is not build_input.CanonicalInputLimitsV1:
+        raise TypeError("limits must be CanonicalInputLimitsV1")
+    build_sources = canonical_build_sources_v1(build_sources)
     if type(generated_formula) is not bytes or not generated_formula:
         raise TypeError("generated_formula must be nonempty bytes")
     if hashlib.sha256(generated_formula).hexdigest() != MPFI_GENERATED_FORMULA_SHA256_V1:
@@ -353,7 +401,7 @@ def seal_mpfi_build_input_from_snapshot_v1(
         != snapshot.source_lock.identity
     ):
         raise TypeError("snapshot must retain MPFI source lock")
-    build_sources = _canonical_build_sources_v1(build_sources)
+    build_sources = canonical_build_sources_v1(build_sources)
     if type(generated_formula) is not bytes or not generated_formula:
         raise TypeError("generated_formula must be nonempty bytes")
     if hashlib.sha256(generated_formula).hexdigest() != MPFI_GENERATED_FORMULA_SHA256_V1:
@@ -362,22 +410,15 @@ def seal_mpfi_build_input_from_snapshot_v1(
         raise TypeError("policy must be canonical DockerBuildPolicyV1")
     if type(limits) is not build_input.CanonicalInputLimitsV1:
         raise TypeError("limits must be CanonicalInputLimitsV1")
-    source_entries = _source_entries_v1(snapshot)
-    workspace_entries = tuple(
-        (f"workspace/{item.path}", item.mode, item.contents)
-        for item in build_sources.files
-    )
-    entries = tuple(
-        sorted(
-            source_entries
-            + (("inputs/formula.generated.c", 0o644, generated_formula),)
-            + workspace_entries
-        )
+    entries = _canonical_input_entries_from_owned_v1(
+        snapshot,
+        build_sources,
+        generated_formula,
     )
     canonical = build_input.canonical_ustar_v1(entries, limits)
     return build_input.seal_input_v1(
         _input_binding_identity_v1(
-            _source_identity_v1(snapshot),
+            source_identity_v1(snapshot),
             build_sources,
             generated_formula,
             policy,
@@ -399,6 +440,8 @@ def mpfi_build_input_is_bound_v1(
     if (
         type(value) is not build_input.SealedInputV1
         or not build_input.sealed_input_is_intact_v1(value)
+        or type(source_lock) is not provenance.MpfiSourceLockV1
+        or type(admitted_sources) is not provenance.AdmittedMpfiSourcesV1
         or type(build_sources) is not AdmittedMpfiBuildSourcesV1
         or type(generated_formula) is not bytes
         or type(limits) is not build_input.CanonicalInputLimitsV1
@@ -406,10 +449,44 @@ def mpfi_build_input_is_bound_v1(
     ):
         return False
     try:
-        canonical_build_sources = _canonical_build_sources_v1(build_sources)
-        expected = seal_mpfi_build_input_v1(
+        snapshot = provenance.replay_admitted_source_closure_v1(
             source_lock,
             admitted_sources,
+        )
+        return mpfi_build_input_is_bound_from_snapshot_v1(
+            snapshot,
+            build_sources,
+            generated_formula,
+            limits,
+            value,
+            policy,
+        )
+    except Exception:
+        return False
+
+
+def mpfi_build_input_is_bound_from_snapshot_v1(
+    snapshot: object,
+    build_sources: object,
+    generated_formula: object,
+    limits: object,
+    value: object,
+    policy: object = MPFI_BUILD_TRANSPORT_POLICY_V1,
+) -> bool:
+    if (
+        type(snapshot) is not provenance.ReplayedSourceClosureV1
+        or type(value) is not build_input.SealedInputV1
+        or not build_input.sealed_input_is_intact_v1(value)
+        or type(build_sources) is not AdmittedMpfiBuildSourcesV1
+        or type(generated_formula) is not bytes
+        or type(limits) is not build_input.CanonicalInputLimitsV1
+        or type(policy) is not build_transport.DockerBuildPolicyV1
+    ):
+        return False
+    try:
+        canonical_build_sources = canonical_build_sources_v1(build_sources)
+        expected = seal_mpfi_build_input_from_snapshot_v1(
+            snapshot,
             canonical_build_sources,
             generated_formula,
             limits,
@@ -417,4 +494,7 @@ def mpfi_build_input_is_bound_v1(
         )
     except Exception:
         return False
-    return value.binding_identity == expected.binding_identity and value.contents == expected.contents
+    return (
+        value.binding_identity == expected.binding_identity
+        and value.contents == expected.contents
+    )

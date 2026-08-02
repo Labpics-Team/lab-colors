@@ -17,7 +17,8 @@ from unittest import mock
 PROOF = Path(__file__).resolve().parents[2]
 TESTS = PROOF / "tests"
 ARB_TESTS = PROOF / "arb/tests"
-sys.path[:0] = [str(PROOF), str(TESTS), str(ARB_TESTS)]
+MPFI_TESTS = Path(__file__).resolve().parent
+sys.path[:0] = [str(PROOF), str(TESTS), str(ARB_TESTS), str(MPFI_TESTS)]
 
 import executor  # noqa: E402
 import region_proof_protocol as protocol  # noqa: E402
@@ -37,6 +38,10 @@ from test_pipeline import (  # noqa: E402
     _job,
     _static_elf,
 )
+try:
+    from .skip_contract import NATIVE_RECEIPT_SKIP_REASON_V1  # noqa: E402
+except ImportError:  # direct gate discovery imports this module as a top-level test
+    from skip_contract import NATIVE_RECEIPT_SKIP_REASON_V1  # noqa: E402
 
 
 def _digest(label: str) -> bytes:
@@ -96,7 +101,7 @@ class _NativeRunBackend:
         if not guard.is_current():
             raise AssertionError("controller supplied a stale probe guard")
         return executor.SupportedV1(
-            "linux-x86_64",
+            executor.EXECUTION_PLATFORM_V1,
             executor.SANDBOX_POLICY_RELEASE_V1,
         )
 
@@ -116,9 +121,18 @@ class _NativeRunBackend:
             (),
             _digest("accounting"),
         )
+        marker = b"--manifest-identity"
+        try:
+            marker_index = request.argv.index(marker)
+        except ValueError as error:
+            raise AssertionError("manifest identity marker is missing") from error
+        if marker_index + 1 >= len(request.argv):
+            raise AssertionError("manifest identity value is missing")
         transcript = replace(
             transcript,
-            comparator_identity=bytes.fromhex(request.argv[2].decode("ascii")),
+            comparator_identity=bytes.fromhex(
+                request.argv[marker_index + 1].decode("ascii")
+            ),
         )
         return executor.CompletedV1(
             hashlib.sha256(request.executable).digest(),
@@ -130,13 +144,16 @@ class _NativeRunBackend:
 def _execute(
     *,
     binary: bytes | None = None,
+    binaries: tuple[bytes, bytes] | None = None,
+    second: bool = False,
     result: executor.ExecutionResultV1 | None = None,
 ) -> tuple[receipt.MpfiSourceBoundResultV1, _NativeRunBackend]:
+    build_binaries = binaries or (
+        binary or _static_elf(b"mpfi-source-bound"),
+        binary or _static_elf(b"mpfi-source-bound"),
+    )
     build_backend = _BuildBackend(
-        (
-            binary or _static_elf(b"mpfi-source-bound"),
-            binary or _static_elf(b"mpfi-source-bound"),
-        ),
+        build_binaries,
         probe=_docker_capability(mpfi_build.MPFI_BUILD_TRANSPORT_POLICY_V1),
     )
     run_backend = _NativeRunBackend(result)
@@ -177,7 +194,12 @@ def _execute(
     with ExitStack() as stack:
         for patch in patches:
             stack.enter_context(patch)
-        return controller.execute(_request()), run_backend
+        first = controller.execute(_request())
+        if second:
+            if type(first) is not receipt.MpfiSourceBoundEvaluatorReceiptV1:
+                raise AssertionError(f"first execution failed: {first!r}")
+            return controller.execute(_request()), run_backend
+        return first, run_backend
 
 
 def _tamper(value: object, field: str, replacement: object) -> object:
@@ -189,6 +211,13 @@ def _tamper(value: object, field: str, replacement: object) -> object:
 
 
 class MpfiSourceBoundReceiptTests(unittest.TestCase):
+    def test_divergent_builds_return_an_explicit_nonidentical_observation(self) -> None:
+        result, _backend = _execute(
+            binaries=(_static_elf(b"first-build"), _static_elf(b"second-build")),
+        )
+        self.assertIs(type(result), build_transport.TwoBuildObservationV1)
+        self.assertIs(result.relation, build_transport.BuildByteRelationV1.DIFFERENT)
+
     def test_controller_seals_one_source_bound_receipt_and_consumes_authority(self) -> None:
         result, _backend = _execute()
         self.assertIs(type(result), receipt.MpfiSourceBoundEvaluatorReceiptV1)
@@ -196,12 +225,7 @@ class MpfiSourceBoundReceiptTests(unittest.TestCase):
         self.assertEqual(result.comparator.manifest.manifest.kind, protocol.ComparatorKindV1.MPFI)
         self.assertTrue(receipt.replay_mpfi_evidence_is_well_bound_v1(result.evidence))
 
-        controller = receipt.MpfiSourceBoundControllerV1(
-            Path("/usr/bin/docker"),
-            Path("/sys/fs/cgroup/labcolors/proof"),
-        )
-        self.assertIsNone(controller._consume())
-        consumed = controller.execute(_request())
+        consumed, _backend = _execute(second=True)
         self.assertIs(type(consumed), receipt.MpfiSourceBoundRejectedV1)
         self.assertEqual(
             consumed.reason,
@@ -219,7 +243,21 @@ class MpfiSourceBoundReceiptTests(unittest.TestCase):
         with self.assertRaises(TypeError):
             receipt.MpfiEvaluatorReplayV1(*tuple(result.evidence))
         with self.assertRaises(TypeError):
-            receipt.MpfiDiagnosticBuildObservationV1()
+            build = result.evidence.build
+            receipt.MpfiDiagnosticBuildObservationV1(
+                build.source_identity,
+                build.build_source_identity,
+                build.generated_formula_sha256,
+                build.runtime_binding_identity,
+                build.docker_capability,
+                build.input_bundle,
+                build.binary_sha256,
+                build.rebuild_sha256s,
+                build.processes,
+                build.binaries,
+                build.comparator,
+                _token=object(),
+            )
         with self.assertRaises(TypeError):
             receipt.MpfiSourceBoundRejectedV1(
                 "foreign-reason",
@@ -345,7 +383,8 @@ class MpfiSourceBoundReceiptTests(unittest.TestCase):
             request.source_lock,
             request.admitted_sources,
             request.build_sources,
-            request.generated_formula[:-1] + b"!",
+            request.generated_formula[:-1]
+            + bytes((request.generated_formula[-1] ^ 1,)),
             request.build_limits,
             request.job,
             request.runtime_binding,
@@ -387,7 +426,7 @@ class MpfiSourceBoundReceiptTests(unittest.TestCase):
             "LABCOLORS_MPFI_ARCHIVE",
         )
     ),
-    "requires Linux, Docker, a delegated cgroup, and all three exact MPFI source archives",
+    NATIVE_RECEIPT_SKIP_REASON_V1,
 )
 class NativeMpfiSourceBoundReceiptIntegrationTests(unittest.TestCase):
     def test_real_build_run_and_seal_are_one_source_bound_controller_execution(self) -> None:
@@ -403,12 +442,18 @@ class NativeMpfiSourceBoundReceiptIntegrationTests(unittest.TestCase):
         )
         admitted = provenance.admit_mpfi_sources(source_lock, safe)
         request = _request()
+        build_limits = _limits_for_bundle(
+            source_lock,
+            admitted,
+            request.build_sources,
+            request.generated_formula,
+        )
         request = receipt.MpfiPipelineRequestV1(
             source_lock,
             admitted,
             request.build_sources,
             request.generated_formula,
-            request.build_limits,
+            build_limits,
             request.job,
             request.runtime_binding,
         )

@@ -130,6 +130,7 @@ jobs:
                 curl --fail --location --silent --show-error \
                   --connect-timeout 30 --max-time 600 --retry 3 --retry-all-errors \
                   "$url" --output "$archive"
+                echo "LABCOLORS_MPFI_ARCHIVE=$archive" >> "$GITHUB_ENV"
                 ;;
               *) exit 64 ;;
             esac

@@ -9,6 +9,7 @@ import sys
 import tarfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -46,23 +47,8 @@ def _limits_for_bundle(
     generated: bytes,
 ) -> build_input.CanonicalInputLimitsV1:
     replayed = provenance.replay_admitted_source_closure_v1(source_lock, admitted)
-    entries = [
-        (
-            f"inputs/sources/{lock.role.name.lower()}/{relative}",
-            mode,
-            contents,
-        )
-        for lock, materialized in zip(
-            replayed.source_lock.sources,
-            replayed.sources,
-            strict=True,
-        )
-        for relative, mode, contents in materialized.files
-    ]
-    entries.append(("inputs/formula.generated.c", 0o644, generated))
-    entries.extend(
-        (f"workspace/{item.path}", item.mode, item.contents)
-        for item in sources.files
+    entries = list(
+        mpfi_build.canonical_input_entries_v1(replayed, sources, generated)
     )
     directories = {
         "/".join(path.split("/")[:length])
@@ -168,12 +154,15 @@ class MpfiBuildInputTests(unittest.TestCase):
         sources = _workspace_sources()
         generated = _generated_formula()
         limits = _limits_for_bundle(source_lock, admitted, sources, generated)
-        object.__setattr__(sources, "identity", hashlib.sha256(b"poison").digest())
+        poisoned = mpfi_build.AdmittedMpfiBuildSourcesV1(
+            sources.files,
+            hashlib.sha256(b"poison").digest(),
+        )
         with self.assertRaises(ValueError):
             mpfi_build.seal_mpfi_build_input_v1(
                 source_lock,
                 admitted,
-                sources,
+                poisoned,
                 generated,
                 limits,
             )
@@ -181,9 +170,81 @@ class MpfiBuildInputTests(unittest.TestCase):
     def test_policy_is_pinned_to_the_clang_19_linux_amd64_manifest(self) -> None:
         policy = mpfi_build.MPFI_BUILD_TRANSPORT_POLICY_V1
         self.assertEqual(policy.platform, "linux/amd64")
-        self.assertIn("silkeh/clang@sha256:", policy.image_reference)
+        self.assertEqual(
+            policy.image_reference,
+            mpfi_build.MPFI_BUILD_IMAGE_REFERENCE_V1,
+        )
+        self.assertEqual(
+            policy.image_reference,
+            "silkeh/clang@sha256:"
+            "f1d693e7af5ee954370e1f3605830d8cabc05f9731226fc99aa5e26127797c11",
+        )
         self.assertIn("/build/work/mpfi-evaluator-v1", policy.bootstrap)
         self.assertIn("proof/region/v1/mpfi/build.sh", policy.bootstrap)
+
+    def test_canonical_input_limits_reject_an_undersized_member_bound(self) -> None:
+        source_lock, admitted, _entries = _admitted_closure()
+        sources = _workspace_sources()
+        generated = _generated_formula()
+        limits = _limits_for_bundle(source_lock, admitted, sources, generated)
+        undersized = build_input.CanonicalInputLimitsV1(
+            limits.max_members - 1,
+            limits.max_file_bytes,
+            limits.max_payload_bytes,
+        )
+        with self.assertRaises(ValueError):
+            mpfi_build.seal_mpfi_build_input_v1(
+                source_lock,
+                admitted,
+                sources,
+                generated,
+                undersized,
+            )
+
+    def test_invalid_limits_are_rejected_before_source_replay(self) -> None:
+        source_lock, admitted, _entries = _admitted_closure()
+        sources = _workspace_sources()
+        generated = _generated_formula()
+        with mock.patch.object(
+            provenance,
+            "replay_admitted_source_closure_v1",
+            side_effect=AssertionError("source replay happened before limit admission"),
+        ):
+            with self.assertRaises(TypeError):
+                mpfi_build.seal_mpfi_build_input_v1(
+                    source_lock,
+                    admitted,
+                    sources,
+                    generated,
+                    object(),
+                )
+
+    def test_snapshot_bound_check_does_not_replay_an_owned_closure(self) -> None:
+        source_lock, admitted, _entries = _admitted_closure()
+        snapshot = provenance.replay_admitted_source_closure_v1(source_lock, admitted)
+        sources = _workspace_sources()
+        generated = _generated_formula()
+        limits = _limits_for_bundle(source_lock, admitted, sources, generated)
+        sealed = mpfi_build.seal_mpfi_build_input_from_snapshot_v1(
+            snapshot,
+            sources,
+            generated,
+            limits,
+        )
+        with mock.patch.object(
+            provenance,
+            "replay_admitted_source_closure_v1",
+            side_effect=AssertionError("snapshot path replayed the closure"),
+        ):
+            self.assertTrue(
+                mpfi_build.mpfi_build_input_is_bound_from_snapshot_v1(
+                    snapshot,
+                    sources,
+                    generated,
+                    limits,
+                    sealed,
+                )
+            )
 
 
 if __name__ == "__main__":

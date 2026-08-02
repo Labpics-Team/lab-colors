@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import TypeAlias
 
 from build import transport as build_transport
+from build import input as build_input
 
 import executor
 import provenance
@@ -124,7 +125,7 @@ class MpfiPipelineRequestV1(tuple):
                 MpfiRequestErrorReasonV1.WRONG_TYPE,
                 "generated_formula",
             )
-        if type(build_limits) is not mpfi_build.build_input.CanonicalInputLimitsV1:
+        if type(build_limits) is not build_input.CanonicalInputLimitsV1:
             raise MpfiRequestErrorV1(
                 MpfiRequestErrorReasonV1.WRONG_TYPE,
                 "build_limits",
@@ -188,9 +189,9 @@ def _snapshot_request_v1(
                 MpfiRequestErrorReasonV1.FOREIGN_SOURCE_CAPABILITY,
                 "admitted_sources",
             )
-        build_sources = mpfi_build._canonical_build_sources_v1(request.build_sources)
+        build_sources = mpfi_build.canonical_build_sources_v1(request.build_sources)
         job = protocol.snapshot_proof_job_v1(request.job)
-        build_limits = mpfi_build.build_input.CanonicalInputLimitsV1(
+        build_limits = build_input.CanonicalInputLimitsV1(
             *tuple(request.build_limits)
         )
         runtime_binding = mpfi_runtime.MpfiRuntimeBindingV1(
@@ -304,7 +305,7 @@ class _MpfiBuildCoordinatesV1:
     generated_formula_sha256: bytes
     runtime_binding_identity: bytes
     docker_capability: build_transport.DockerSupportedV1
-    input_bundle: mpfi_build.build_input.SealedInputV1
+    input_bundle: build_input.SealedInputV1
     binary_sha256: bytes
     rebuild_sha256s: tuple[bytes, bytes]
     processes: tuple[
@@ -321,7 +322,7 @@ class MpfiDiagnosticBuildObservationV1:
     generated_formula_sha256: bytes
     runtime_binding_identity: bytes
     docker_capability: build_transport.DockerSupportedV1
-    input_bundle: mpfi_build.build_input.SealedInputV1
+    input_bundle: build_input.SealedInputV1
     binary_sha256: bytes
     rebuild_sha256s: tuple[bytes, bytes]
     processes: tuple[
@@ -343,7 +344,7 @@ class MpfiDiagnosticBuildObservationV1:
         generated_formula_sha256: bytes,
         runtime_binding_identity: bytes,
         docker_capability: build_transport.DockerSupportedV1,
-        input_bundle: mpfi_build.build_input.SealedInputV1,
+        input_bundle: build_input.SealedInputV1,
         binary_sha256: bytes,
         rebuild_sha256s: tuple[bytes, bytes],
         processes: tuple[
@@ -357,14 +358,14 @@ class MpfiDiagnosticBuildObservationV1:
     ) -> None:
         if _token is not _BUILD_OBSERVATION_TOKEN:
             raise TypeError("MpfiDiagnosticBuildObservationV1 is controller-derived")
-        for name in (
-            "source_identity",
-            "build_source_identity",
-            "generated_formula_sha256",
-            "runtime_binding_identity",
-            "binary_sha256",
+        for name, value in (
+            ("source_identity", source_identity),
+            ("build_source_identity", build_source_identity),
+            ("generated_formula_sha256", generated_formula_sha256),
+            ("runtime_binding_identity", runtime_binding_identity),
+            ("binary_sha256", binary_sha256),
         ):
-            _digest(locals()[name], name)
+            _digest(value, name)
         if type(docker_capability) is not build_transport.DockerSupportedV1:
             raise TypeError("invalid MPFI Docker capability")
         canonical_capability = build_transport.DockerSupportedV1(
@@ -372,7 +373,7 @@ class MpfiDiagnosticBuildObservationV1:
         )
         if tuple(canonical_capability) != tuple(docker_capability):
             raise TypeError("MPFI Docker capability did not replay")
-        if not mpfi_build.build_input.sealed_input_is_intact_v1(input_bundle):
+        if not build_input.sealed_input_is_intact_v1(input_bundle):
             raise TypeError("invalid MPFI sealed build bundle")
         if (
             type(rebuild_sha256s) is not tuple
@@ -424,7 +425,7 @@ class MpfiDiagnosticBuildObservationV1:
 
 
 def _source_identity_v1(snapshot: _MpfiOperationSnapshotV1) -> bytes:
-    return mpfi_build._source_identity_v1(snapshot.source_closure)
+    return mpfi_build.source_identity_v1(snapshot.source_closure)
 
 
 def _build_identity_v1(
@@ -651,9 +652,8 @@ def replay_mpfi_evidence_is_well_bound_v1(value: object) -> bool:
             or value.build.runtime_binding_identity != runtime_identity
         ):
             return False
-        if not mpfi_build.mpfi_build_input_is_bound_v1(
-            snapshot.request.source_lock,
-            snapshot.request.admitted_sources,
+        if not mpfi_build.mpfi_build_input_is_bound_from_snapshot_v1(
+            snapshot.source_closure,
             snapshot.request.build_sources,
             snapshot.request.generated_formula,
             snapshot.request.build_limits,
@@ -926,9 +926,8 @@ class MpfiSourceBoundControllerV1:
             capability,
             bundle,
             snapshot.request.runtime_binding.limits.max_executable_bytes,
-            input_admission=lambda value: mpfi_build.mpfi_build_input_is_bound_v1(
-                snapshot.request.source_lock,
-                snapshot.request.admitted_sources,
+            input_admission=lambda value: mpfi_build.mpfi_build_input_is_bound_from_snapshot_v1(
+                snapshot.source_closure,
                 snapshot.request.build_sources,
                 snapshot.request.generated_formula,
                 snapshot.request.build_limits,
@@ -953,7 +952,6 @@ class MpfiSourceBoundControllerV1:
             build_identity = _build_identity_v1(snapshot, coordinates)
             comparator = _derive_comparator_v1(snapshot, coordinates, build_identity)
             build = _make_build_observation_v1(coordinates, comparator)
-            build_identity = _build_identity_v1(snapshot, build)
         except Exception as error:
             return MpfiSourceBoundRejectedV1(
                 MpfiSourceBoundFailureReasonV1.REPLAY_BINDING_FAILED,
@@ -1091,7 +1089,7 @@ def _static_binary_is_admitted_v1(value: bytes) -> bool:
 def _make_build_coordinates_v1(
     snapshot: _MpfiOperationSnapshotV1,
     capability: build_transport.DockerSupportedV1,
-    bundle: mpfi_build.build_input.SealedInputV1,
+    bundle: build_input.SealedInputV1,
     built: build_transport.TwoBuildObservationV1,
     binary: bytes,
 ) -> _MpfiBuildCoordinatesV1:

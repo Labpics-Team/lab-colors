@@ -19,6 +19,7 @@ import posixpath
 import resource
 import selectors
 import signal
+import stat
 import struct
 import sys
 import threading

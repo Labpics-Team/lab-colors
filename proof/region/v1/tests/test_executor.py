@@ -8,6 +8,7 @@ import fcntl
 import hashlib
 import os
 import signal
+import stat
 import struct
 import sys
 import tempfile
@@ -16,6 +17,7 @@ import unittest
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 
@@ -1296,6 +1298,27 @@ class CapabilityAndExecutionTests(unittest.TestCase):
 
 
 class SameObjectAndObserverProtocolTests(unittest.TestCase):
+    def test_observer_cgroup_uses_the_directory_type_guard(self) -> None:
+        payload_length = len(str(os.getpid()).encode("ascii"))
+        with (
+            mock.patch.object(executor.os, "open", side_effect=(11, 12)),
+            mock.patch.object(
+                executor.os,
+                "fstat",
+                return_value=SimpleNamespace(st_mode=stat.S_IFDIR),
+            ),
+            mock.patch.object(
+                executor.os,
+                "write",
+                return_value=payload_length,
+            ) as write,
+            mock.patch.object(executor.os, "close") as close,
+        ):
+            executor.enter_observer_cgroup_v1(Path("/sys/fs/cgroup/labcolors"))
+
+        write.assert_called_once()
+        self.assertEqual(close.call_count, 2)
+
     @staticmethod
     def _seccomp_verdict(
         program: list[object],

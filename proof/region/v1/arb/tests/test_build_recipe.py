@@ -87,6 +87,10 @@ class ArbBuildRecipeTests(unittest.TestCase):
         self.assertIn("proof/region/v1/arb/tests/native_gate.py", source)
         self.assertEqual(source.count("- .github/workflows/arb.yml"), 2)
         self.assertNotIn("arb-proof-observation.yml", source)
+        self.assertIn(
+            'echo "LABCOLORS_MPFI_ARCHIVE=$archive" >> "$GITHUB_ENV"',
+            source,
+        )
         for required in (
             'original_userns="$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns)"',
             'echo "LABCOLORS_APPARMOR_USERNS_V1=$original_userns"',

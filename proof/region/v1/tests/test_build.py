@@ -38,7 +38,7 @@ from test_receipt import _execute  # noqa: E402
 # of maintaining a second literal that could drift from the executed gate.
 ARB_INVENTORY_SHA256_V1 = arb_gate.EXPECTED_TEST_INVENTORY_SHA256
 ARB_ORDER_SHA256_V1 = (
-    "9e1a1569a2766f9e3c0eefe6ed901231b84bb8f3629207a926449b3e85f9675f"
+    "dacf853f0dc565a18c6528a1c6a29e6d0d14c9173709511e204d9cd4a75b301c"
 )
 ARB_TEST_COUNT_V1 = arb_gate.EXPECTED_TEST_COUNT
 

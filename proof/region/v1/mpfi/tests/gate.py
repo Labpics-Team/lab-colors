@@ -9,10 +9,12 @@ import unittest
 from collections.abc import Iterator
 from pathlib import Path
 
-
 TEST_DIRECTORY = Path(__file__).resolve().parent
-EXPECTED_TEST_COUNT = 28
-EXPECTED_TEST_INVENTORY_SHA256 = "58b604483d1e4cfbd60efbe40b589b9aa57269f7f466aec97d735585736f9194"
+from skip_contract import NATIVE_RECEIPT_SKIP_REASON_V1
+
+
+EXPECTED_TEST_COUNT = 29
+EXPECTED_TEST_INVENTORY_SHA256 = "8d14a07df84fd35968284422e5f5d15d97dc02fefc53d25b7f31fc9a1b175b88"
 _RUNTIME_REASON = "set LABCOLORS_MPFI_EVALUATOR to the controlled C17 binary"
 EXPECTED_SKIPS = frozenset(
     {
@@ -29,9 +31,11 @@ EXPECTED_SKIPS = frozenset(
             _RUNTIME_REASON,
         ),
         (
-            "test_receipt.NativeMpfiSourceBoundReceiptIntegrationTests."
-            "test_real_build_run_and_seal_are_one_source_bound_controller_execution",
-            "requires Linux, Docker, a delegated cgroup, and all three exact MPFI source archives",
+            (
+                "test_receipt.NativeMpfiSourceBoundReceiptIntegrationTests."
+                "test_real_build_run_and_seal_are_one_source_bound_controller_execution"
+            ),
+            NATIVE_RECEIPT_SKIP_REASON_V1,
         ),
     }
 )
