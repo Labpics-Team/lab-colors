@@ -6,8 +6,8 @@ name: Native conformance (Swift) worker
 #
 # ВАЖНО (владелец, 2026-07-08): GitHub-hosted macOS-раннеры платные и ИСКЛЮЧЕНЫ
 # навсегда — биллинг чиниться не будет. Поэтому Swift валидируется в одноразовой
-# gVisor-ячейке DE-02 в официальном swift-контейнере — тот же UniFFI-биндинг,
-# тот же пак, ядро под x86_64-unknown-linux-gnu. Числовые семейства пака
+# gVisor-ячейке DE-02 с pinned Swift capability — тот же UniFFI-биндинг, тот
+# же пак, ядро под x86_64-unknown-linux-gnu. Числовые семейства пака
 # держатся толерантностью DRIFT_TOL=1e-6 (см. conformance/README.md). Glow stable
 # проверяется как типизированный Indeterminate; для legacy CAM16 bit parity не
 # заявляется.
@@ -26,17 +26,17 @@ permissions:
 
 env:
   RUST_TOOLCHAIN: 1.96.0
-  SWIFT_CONTAINER: swift:6.1.3-noble-slim@sha256:8db18ceac0597e9f9ca1cfb111b9a2613e6a2c0001f5af2c002d149718635c9e
+  SWIFT_TOOLCHAIN: 6.1.3
 
 jobs:
-  # АКТИВНЫЙ ГЕЙТ: Swift-conformance в gVisor-ячейке через swift-контейнер.
+  # АКТИВНЫЙ ГЕЙТ: Swift-conformance в одноразовой gVisor-ячейке.
   # Зеркало проверенного локального прогона (bindings/swift/ci/run-conformance.sh).
   #
   # ИМЯ JOB'А НЕ МЕНЯТЬ: publish-worker.yml принимает ровно это имя либо
   # reusable-суффикс «<caller> / <это имя>» внутри canonical run. Строка
   # «self-hosted Linux» — контракт с publish-гейтом, а не описание раннера.
   swift-conformance-linux:
-    name: swift conformance (self-hosted Linux, swift container)
+    name: swift conformance (self-hosted Linux, pinned toolchain)
     runs-on: { group: labpics-ci-sandbox, labels: [labpics-ci-gvisor-v1] }
     # 65 = двойной worst successful receipt из 20 main-прогонов перед cutover,
     # округлённый вверх до пяти минут; менять только после history-replay.
@@ -51,20 +51,19 @@ jobs:
         with:
           persist-credentials: false
 
-      # Официальный Swift 6.1.3 (Ubuntu Noble slim), pinned по manifest-list
-      # digest. Slim сохраняет toolchain, но не переполняет эфемерный Docker
-      # ненужными SDK/runtime слоями полного образа.
-      # Docker-in-gVisor в ячейке есть, шаг перенесён дословно.
-      # Внутри ставится pinned Rust, ядро собирается
-      # под Linux, генерятся Swift-биндинги, swift test прогоняет пак. Скрипт —
-      # единый источник с локальным прогоном (bindings/swift/ci/run-conformance.sh).
-      # $GITHUB_WORKSPACE монтируется read-only; сборка идёт в /work в контейнере.
-      - name: swift conformance in swift:6.1.3 container
+      # Rust остаётся workflow-owned версией; mutable каталоги живут только в
+      # tmpfs конкретной job. Swift — проверенная capability immutable image.
+      - name: prepare isolated Rust toolchain
         run: |
-          docker run --rm \
-            -v "$GITHUB_WORKSPACE":/src:ro \
-            "$SWIFT_CONTAINER" \
-            bash /src/bindings/swift/ci/run-conformance.sh
+          {
+            echo "RUSTUP_HOME=$RUNNER_TEMP/rustup-$GITHUB_JOB"
+            echo "CARGO_HOME=$RUNNER_TEMP/cargo-$GITHUB_JOB"
+          } >> "$GITHUB_ENV"
+      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master @ 2026-03-27
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+      - name: swift conformance against UniFFI
+        run: bash bindings/swift/ci/run-conformance.sh
 
   # ССЫЛОЧНАЯ джоба (НЕ активный гейт): нативный macOS/arm64. Требует ПЛАТНЫХ
   # GitHub-hosted macOS-минут, которые владелец исключил навсегда — поэтому
