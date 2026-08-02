@@ -31,6 +31,7 @@ ARB_EXIT_IO_V1 = 74
 
 _PROFILE_ID_LABEL_V1 = b"labcolors.proof-region.arb-runtime-profile.v1\0"
 _BINDING_ID_LABEL_V1 = b"labcolors.proof-region.arb-runtime-binding.v1\0"
+_EXECUTION_LIMITS_ID_LABEL_V1 = b"labcolors.proof-region.execution-limits.v1\0"
 _PROFILE_VALUES_V1 = (
     ARB_MAX_JOB_BYTES_V1,
     ARB_MAX_OUTPUT_BYTES_V1,
@@ -155,7 +156,7 @@ def runtime_binding_identity_v1(value: object) -> ArbRuntimeIdentityResultV1:
         binding = ArbRuntimeBindingV1(*tuple(value))
         profile_identity = runtime_profile_identity_v1(binding.profile)
         limits_identity = _identity(
-            b"labcolors.proof-region.execution-limits.v1\0",
+            _EXECUTION_LIMITS_ID_LABEL_V1,
             tuple(item.to_bytes(8, "big") for item in binding.limits),
         )
     except (TypeError, ValueError, OverflowError):

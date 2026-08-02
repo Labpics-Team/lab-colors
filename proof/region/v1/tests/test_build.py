@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import ast
+import contextlib
 import dis
 import errno
 import gc
@@ -17,6 +18,7 @@ import sys
 import tempfile
 import threading
 import unittest
+from collections.abc import Iterator
 from pathlib import Path
 from unittest import mock
 
@@ -37,15 +39,27 @@ from test_pipeline import (  # noqa: E402
 from test_receipt import _execute  # noqa: E402
 
 
+@contextlib.contextmanager
+def _temporary_mode(path: Path, mode: int) -> Iterator[None]:
+    """Временно сменить mode и восстановить точное исходное значение."""
+
+    original_mode = path.stat().st_mode & 0o7777
+    path.chmod(mode)
+    try:
+        yield
+    finally:
+        path.chmod(original_mode)
+
+
 # Keep an independent outer oracle: importing the gate's expected hash here
 # would let a coordinated gate edit hide inventory drift.
 ARB_INVENTORY_SHA256_V1 = (
-    "1cdeb3e8d5100948504f981ad0fbff2114a4fad3e5dfce749cd9813d1e9bdfa7"
+    "c0225f12247e78f7e71029c2e58aff6b746e78a01b9c88c806c0b11ce9888718"
 )
 ARB_ORDER_SHA256_V1 = (
-    "80796a97b86eff573761ac6a86410d2abafe4937f680ca40a621bae1cf596a87"
+    "d79980238e07d7bbcac34fd4f0cc3679ad2b7821bec79a1d1c1344f17986baa2"
 )
-ARB_TEST_COUNT_V1 = 259
+ARB_TEST_COUNT_V1 = 266
 
 MOVED_INPUT_SURFACE_V1 = (
     "CanonicalInputLimitsV1",
@@ -1035,67 +1049,75 @@ class SharedBuildTransportTargetTests(unittest.TestCase):
             docker.chmod(0o755)
             # Searching a command coordinate needs execute permission, not
             # directory-read permission, on every intermediate component.
-            real.chmod(0o111)
             execute_only = root / "docker-execute-only"
             execute_only.write_bytes(b"fixture")
             # The native preflight observes metadata; requiring read permission
             # here would reject a valid executable-only Docker CLI before it can
             # ever reach the command observer.
-            execute_only.chmod(0o111)
-            alias = root / "alias"
-            alias.symlink_to(real, target_is_directory=True)
-            final_alias = root / "docker-alias"
-            final_alias.symlink_to(docker)
-
-            image_observation = json.dumps(
-                [
-                    {
-                        "Os": "linux",
-                        "Architecture": "amd64",
-                        "RepoDigests": [policy.image_reference],
-                    }
-                ],
-                separators=(",", ":"),
-            ).encode("ascii")
-
-            for path, expected_type, expected_calls in (
-                (docker, transport.DockerSupportedV1, 2),
-                (execute_only, transport.DockerSupportedV1, 2),
-                (alias / "docker", transport.DockerUnsupportedV1, 0),
-                (final_alias, transport.DockerUnsupportedV1, 0),
+            real_mode = real.stat().st_mode & 0o7777
+            execute_only_mode = execute_only.stat().st_mode & 0o7777
+            with _temporary_mode(real, 0o111), _temporary_mode(
+                execute_only,
+                0o111,
             ):
-                backend = transport.NativeDockerBuildBackendV1(
-                    path,
-                    policy,
-                    host_user=(501, 20),
-                    platform_name="linux",
-                    machine_name="x86_64",
-                )
-                with self.subTest(path=str(path)), mock.patch.object(
-                    backend,
-                    "_observe_command",
-                    side_effect=(
-                        transport._docker_command_exited_v1(
-                            0,
-                            b'{"Version":"fixture"}',
-                            b"",
-                        ),
-                        transport._docker_command_exited_v1(
-                            0,
-                            image_observation,
-                            b"",
-                        ),
-                    ),
-                ) as observe:
-                    report = backend.probe()
-                self.assertIs(type(report), expected_type)
-                self.assertEqual(observe.call_count, expected_calls)
-                if type(report) is transport.DockerUnsupportedV1:
-                    self.assertEqual(
-                        report.reason,
-                        transport.DockerBlockerReasonV1.DOCKER_UNAVAILABLE,
-                    )
+                alias = root / "alias"
+                alias.symlink_to(real, target_is_directory=True)
+                final_alias = root / "docker-alias"
+                final_alias.symlink_to(docker)
 
+                image_observation = json.dumps(
+                    [
+                        {
+                            "Os": "linux",
+                            "Architecture": "amd64",
+                            "RepoDigests": [policy.image_reference],
+                        }
+                    ],
+                    separators=(",", ":"),
+                ).encode("ascii")
+
+                for path, expected_type, expected_calls in (
+                    (docker, transport.DockerSupportedV1, 2),
+                    (execute_only, transport.DockerSupportedV1, 2),
+                    (alias / "docker", transport.DockerUnsupportedV1, 0),
+                    (final_alias, transport.DockerUnsupportedV1, 0),
+                ):
+                    backend = transport.NativeDockerBuildBackendV1(
+                        path,
+                        policy,
+                        host_user=(501, 20),
+                        platform_name="linux",
+                        machine_name="x86_64",
+                    )
+                    with self.subTest(path=str(path)), mock.patch.object(
+                        backend,
+                        "_observe_command",
+                        side_effect=(
+                            transport._docker_command_exited_v1(
+                                0,
+                                b'{"Version":"fixture"}',
+                                b"",
+                            ),
+                            transport._docker_command_exited_v1(
+                                0,
+                                image_observation,
+                                b"",
+                            ),
+                        ),
+                    ) as observe:
+                        report = backend.probe()
+                    self.assertIs(type(report), expected_type)
+                    self.assertEqual(observe.call_count, expected_calls)
+                    if type(report) is transport.DockerUnsupportedV1:
+                        self.assertEqual(
+                            report.reason,
+                            transport.DockerBlockerReasonV1.DOCKER_UNAVAILABLE,
+                        )
+            self.assertEqual(real.stat().st_mode & 0o7777, real_mode)
+            self.assertEqual(
+                execute_only.stat().st_mode & 0o7777,
+                execute_only_mode,
+            )
 
     def test_docker_metadata_mode_fails_closed_without_positive_linux_o_path(self) -> None:
         transport = importlib.import_module("build.transport")

@@ -29,6 +29,7 @@ MPFI_MAX_KNOTS_V1 = 1024
 
 _PROFILE_ID_LABEL_V1 = b"labcolors.proof-region.mpfi-runtime-profile.v1\0"
 _BINDING_ID_LABEL_V1 = b"labcolors.proof-region.mpfi-runtime-binding.v1\0"
+_EXECUTION_LIMITS_ID_LABEL_V1 = b"labcolors.proof-region.execution-limits.v1\0"
 _PROFILE_VALUES_V1 = (
     MPFI_MAX_JOB_BYTES_V1,
     MPFI_MAX_OUTPUT_BYTES_V1,
@@ -62,7 +63,7 @@ class MpfiRuntimeIdentityRejectedV1:
 
 
 class MpfiRuntimeProfileV1(tuple):
-    """One immutable, exact V1 MPFI runtime profile."""
+    """Один неизменяемый exact-профиль MPFI runtime V1."""
 
     __slots__ = ()
 
@@ -99,7 +100,7 @@ def mpfi_runtime_profile_v1() -> MpfiRuntimeProfileV1:
 
 
 class MpfiRuntimeBindingV1(tuple):
-    """Profile plus the exact immutable executor limits used by one RUN."""
+    """Профиль и exact immutable executor limits одного RUN."""
 
     __slots__ = ()
 
@@ -116,9 +117,9 @@ class MpfiRuntimeBindingV1(tuple):
         canonical_limits = executor.ExecutionLimitsV1(*tuple(limits))
         if tuple(canonical_profile) != tuple(profile) or tuple(canonical_limits) != tuple(limits):
             raise ValueError("runtime binding coordinates are not canonical")
-        # Job and transcript ceilings are the two profile coordinates exposed
-        # to the process.  Other executor limits stay explicit coordinates of
-        # the same binding; they are not silently invented from MPFI semantics.
+        # Пределы job и transcript — две доступные процессу координаты профиля.
+        # Остальные executor limits остаются явными координатами той же связи,
+        # а не молча выводятся из MPFI-семантики.
         if (
             canonical_limits.max_stdin_bytes != canonical_profile.max_job_bytes
             or canonical_limits.max_stdout_bytes != canonical_profile.max_output_bytes
@@ -160,7 +161,7 @@ def runtime_binding_identity_v1(
         binding = MpfiRuntimeBindingV1(*tuple(value))
         profile_identity = runtime_profile_identity_v1(binding.profile)
         limits_identity = _identity(
-            b"labcolors.proof-region.execution-limits.v1\0",
+            _EXECUTION_LIMITS_ID_LABEL_V1,
             tuple(item.to_bytes(8, "big") for item in binding.limits),
         )
     except (TypeError, ValueError, OverflowError):
