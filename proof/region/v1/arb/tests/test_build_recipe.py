@@ -6,6 +6,7 @@ from __future__ import annotations
 import hashlib
 import os
 import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -14,6 +15,7 @@ from proof.region.v1.arb.tests import gate as arb_gate
 
 ARB = Path(__file__).resolve().parents[1]
 BUILD = ARB / "build.sh"
+INNER_BUILD = ARB / "build-inner.sh"
 WORKFLOW = ARB.parents[3] / ".github" / "workflows" / "arb.yml"
 RECIPE_REJECTION_TIMEOUT_SECONDS = 5
 
@@ -181,11 +183,12 @@ class ArbBuildRecipeTests(unittest.TestCase):
         )
 
     def test_recipe_is_offline_static_and_platform_explicit(self) -> None:
-        source = BUILD.read_text(encoding="utf-8")
+        source = INNER_BUILD.read_text(encoding="utf-8")
+        entrypoint = BUILD.read_text(encoding="utf-8")
+        self.assertIn("/usr/bin/env -i", entrypoint)
+        self.assertNotIn("LC_BUILD_ENV_V1", entrypoint)
 
         for required in (
-            "/usr/bin/env -i",
-            "LC_BUILD_ENV_V1=1",
             'require_directory "$inputs/gmp-6.3.0"',
             'require_directory "$inputs/mpfr-4.2.2"',
             'require_directory "$inputs/flint-3.6.0"',
@@ -239,6 +242,53 @@ class ArbBuildRecipeTests(unittest.TestCase):
         )
         self.assertNotIn("readelf -l \"$build/arb-evaluator-v1\" |", source)
         self.assertNotIn("readelf -d \"$build/arb-evaluator-v1\" 2>&1 |", source)
+
+    def test_public_build_entrypoint_strips_hostile_environment_before_recipe(self) -> None:
+        entrypoint = BUILD.read_text(encoding="utf-8")
+        recipe = INNER_BUILD.read_text(encoding="utf-8")
+        self.assertIn("/usr/bin/env -i", entrypoint)
+        self.assertIn('inner="$script_dir/build-inner.sh"', entrypoint)
+        self.assertIn('/bin/sh "$inner"', entrypoint)
+        self.assertNotIn("LC_BUILD_ENV_V1", entrypoint)
+        self.assertNotIn("LC_BUILD_ENV_V1", recipe)
+        self.assertNotIn("/usr/bin/env -i", recipe)
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            entrypoint_copy = root / "build.sh"
+            inner = root / "build-inner.sh"
+            observed = root / "environment"
+            entrypoint_copy.write_text(entrypoint, encoding="utf-8")
+            entrypoint_copy.chmod(0o755)
+            inner.write_text(
+                "#!/bin/sh\n"
+                f"/usr/bin/env | /usr/bin/sort > '{observed}'\n",
+                encoding="utf-8",
+            )
+            result = subprocess.run(
+                [str(entrypoint_copy)],
+                check=False,
+                capture_output=True,
+                text=True,
+                env={
+                    "LC_BUILD_ENV_V1": "1",
+                    "MAKEFLAGS": "--jobserver-auth=spoof",
+                    "PYTHONPATH": "/host-controlled",
+                    "CONFIG_SITE": "/host-controlled/site",
+                    "PATH": "/host-controlled/bin",
+                },
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            environment = observed.read_text(encoding="utf-8")
+            self.assertIn("PATH=/usr/local/bin:/usr/bin:/bin\n", environment)
+            for forbidden in (
+                "LC_BUILD_ENV_V1=1",
+                "MAKEFLAGS=--jobserver-auth=spoof",
+                "PYTHONPATH=/host-controlled",
+                "CONFIG_SITE=/host-controlled/site",
+                "PATH=/host-controlled/bin",
+            ):
+                self.assertNotIn(forbidden, environment)
 
     def test_recipe_rejects_ambient_or_incomplete_invocation_before_build(self) -> None:
         self.assertTrue(os.access(BUILD, os.X_OK), BUILD)
