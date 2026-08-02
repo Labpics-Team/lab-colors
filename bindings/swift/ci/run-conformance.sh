@@ -9,7 +9,7 @@
 # Ожидает исходники репозитория в /src (read-only bind-mount); собирает в /work.
 # Запуск:
 #   docker run --rm -v "<repo>":/src:ro \
-#     swift:6.1.3@sha256:e1cdaf7ddc9de37d8561da7a260535236694fca8c1b67d3129d47d8b180a9394 \
+#     swift:6.1.3-noble-slim@sha256:8db18ceac0597e9f9ca1cfb111b9a2613e6a2c0001f5af2c002d149718635c9e \
 #     bash /src/bindings/swift/ci/run-conformance.sh
 set -euo pipefail
 
