@@ -40,12 +40,12 @@ from test_receipt import _execute  # noqa: E402
 # Keep an independent outer oracle: importing the gate's expected hash here
 # would let a coordinated gate edit hide inventory drift.
 ARB_INVENTORY_SHA256_V1 = (
-    "666c0a04cf327bf59c2d1e67d534f7f8d25867eb5da0143edaa0d73d8a260576"
+    "6c0db8a005a32d97ff597fd805b38395f8b51763546e1844c1bd8574328c1680"
 )
 ARB_ORDER_SHA256_V1 = (
-    "f5cc1942b21bf2aa1219c1ba058fe9142395b1306d4ea209bbbabb4f45b8109b"
+    "f773e61fa58367e2534044420526d77c5347466eed04901007750b13ccc8eed0"
 )
-ARB_TEST_COUNT_V1 = 193
+ARB_TEST_COUNT_V1 = 242
 
 MOVED_INPUT_SURFACE_V1 = (
     "CanonicalInputLimitsV1",

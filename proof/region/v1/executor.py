@@ -97,38 +97,6 @@ def _sequence_count_v1(value: tuple[object, ...]) -> int:
     return len(value)
 
 
-def enter_observer_cgroup_v1(parent: Path) -> None:
-    """Move this dedicated one-shot controller into its observer cgroup.
-
-    Placement is executor infrastructure, not an engine semantic concern;
-    every evaluator lane shares the exact ownership and no-follow boundary.
-    """
-
-    if not isinstance(parent, Path) or not parent.is_absolute():
-        raise TypeError("cgroup parent must be an absolute Path")
-    directory_fd = os.open(
-        os.fsencode(parent / "observer"),
-        os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW,
-    )
-    try:
-        metadata = os.fstat(directory_fd)
-        if not stat.S_ISDIR(metadata.st_mode):
-            raise OSError("observer cgroup is not a directory")
-        procs_fd = os.open(
-            b"cgroup.procs",
-            os.O_WRONLY | os.O_CLOEXEC | os.O_NOFOLLOW,
-            dir_fd=directory_fd,
-        )
-        try:
-            payload = str(os.getpid()).encode("ascii")
-            if os.write(procs_fd, payload) != len(payload):
-                raise OSError("short cgroup placement write")
-        finally:
-            os.close(procs_fd)
-    finally:
-        os.close(directory_fd)
-
-
 class RequestReasonV1(str, Enum):
     WRONG_TYPE = "wrong_type"
     INVALID_LIMIT = "invalid_limit"

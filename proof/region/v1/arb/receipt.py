@@ -1060,12 +1060,6 @@ SourceBoundResultV1: TypeAlias = (
     | pipeline.TranscriptRejectedV1
 )
 
-def _enter_observer_cgroup_v1(parent: Path) -> None:
-    """Keep the old controller seam while sharing executor placement code."""
-
-    executor.enter_observer_cgroup_v1(parent)
-
-
 def _limits_copy_v1(value: executor.ExecutionLimitsV1) -> executor.ExecutionLimitsV1:
     return executor.ExecutionLimitsV1(*value)
 
