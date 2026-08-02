@@ -66,6 +66,12 @@ def _iter_tests_v1(suite: unittest.TestSuite) -> Iterator[unittest.TestCase]:
             raise TypeError("suite contains a non-test object")
 
 
+def iter_tests_v1(suite: unittest.TestSuite) -> Iterator[unittest.TestCase]:
+    """Expose test enumeration without leaking the gate's private helper."""
+
+    return _iter_tests_v1(suite)
+
+
 def _inventory_preimage_v1(test_ids: tuple[str, ...]) -> bytes:
     return b"".join(test_id.encode("utf-8") + b"\n" for test_id in sorted(test_ids))
 

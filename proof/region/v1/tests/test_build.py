@@ -263,7 +263,7 @@ def _controlled_build(
 
 class ExistingArbGateTests(unittest.TestCase):
     def test_existing_arb_suite_keeps_exact_count_order_and_inventory(self) -> None:
-        tests = tuple(arb_gate._iter_tests_v1(arb_gate.full_suite_v1()))
+        tests = tuple(arb_gate.iter_tests_v1(arb_gate.full_suite_v1()))
         identifiers = tuple(test.id() for test in tests)
         ordered_preimage = b"".join(
             identifier.encode("utf-8") + b"\n" for identifier in identifiers
