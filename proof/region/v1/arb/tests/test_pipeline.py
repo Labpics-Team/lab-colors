@@ -623,6 +623,7 @@ class ComparatorDerivationTests(unittest.TestCase):
             pipeline.FORMULA_SPEC_PATH_V1,
             pipeline.FORMULA_GENERATOR_PATH_V1,
             pipeline.BUILD_RECIPE_PATH_V1,
+            pipeline.INNER_BUILD_RECIPE_PATH_V1,
         }
         wrapper_files = tuple(item for item in files if item.path in wrapper_paths)
         evaluator_files = tuple(item for item in files if item.path not in excluded)
@@ -641,6 +642,10 @@ class ComparatorDerivationTests(unittest.TestCase):
                 b"labcolors.proof-region.arb-comparator.evaluator-source.v1\0",
                 evaluator_files,
             ),
+        )
+        self.assertNotIn(
+            _build_sources().contents(pipeline.INNER_BUILD_RECIPE_PATH_V1),
+            result.comparator.preimages.evaluator_source,
         )
 
     def test_build_stdout_cannot_supply_a_foreign_manifest_or_coordinate(self) -> None:

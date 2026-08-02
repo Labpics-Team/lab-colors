@@ -319,7 +319,7 @@ class ArbBuildIdentityCharacterizationTests(unittest.TestCase):
         )
         self.assertEqual(
             result.comparator.identity.hex(),
-            "79598dc5e1ba8e6409439b6ffed326a77b3814e56afcbfbd3c54a5bedf471289",
+            "bf897e1980647fc05600563d9a17d03a9689b0434d458315f7f7a424d204d9fb",
         )
         self.assertEqual(
             result.evidence.source_identity.hex(),
@@ -327,19 +327,19 @@ class ArbBuildIdentityCharacterizationTests(unittest.TestCase):
         )
         self.assertEqual(
             result.evidence.build_identity.hex(),
-            "169cb8d67078b4a9cf6fb8ce3de7dca517681c72a89b2aa77cecb8aecdd5c397",
+            "566bc65670e34088cb606c390e541c516ff366b3cf25b60a8f7980f0bf7712b1",
         )
         self.assertEqual(
             result.evidence.run_identity.hex(),
-            "88a705e622cf3c391ba46f4f2cf88dfa1101cb2b6d23bf53e9ab80d94f6b65ba",
+            "d8184fbea75c55a0f614315e91f979a3c8c7ed01115a060839f38bfbc4e09a68",
         )
         self.assertEqual(
             result.evidence.identity.hex(),
-            "4d3f45b0807477dc8d9d61013038f0bab20a5f4187cd104a7388d82ce9eb1e39",
+            "19042961e27c0c8194a3fe1c4ebadb1d5b630bffed055b1341f265980cd20337",
         )
         self.assertEqual(
             result.claim.identity.hex(),
-            "ba163bf5efa78eff6524c1a66f5e374a2b69dac4194803e5c7f43f1874c5d12d",
+            "63c33215268d9822a5adf85a573a34030b2f6db5efe4c6e62aa373a24fcff27a",
         )
 
 

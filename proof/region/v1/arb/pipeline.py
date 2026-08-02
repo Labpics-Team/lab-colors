@@ -1490,6 +1490,7 @@ def _derive_arb_comparator_for_build_v1(
             FORMULA_SPEC_PATH_V1,
             FORMULA_GENERATOR_PATH_V1,
             BUILD_RECIPE_PATH_V1,
+            INNER_BUILD_RECIPE_PATH_V1,
         )
         and item.path not in wrapper_paths
     )
