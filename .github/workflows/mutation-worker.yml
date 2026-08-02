@@ -43,6 +43,9 @@ jobs:
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
       - name: install verified cargo-mutants release asset
+        # Блок намеренно повторён в manifest и shard: локальный composite action
+        # пришёл бы из checkout недоверенной revision и обошёл immutable worker.
+        # Оба экземпляра меняются атомарно вместе с digest/version env выше.
         run: |
           mkdir -p "$RUNNER_TEMP/mutants-bin"
           curl --fail --location --silent --show-error \
@@ -137,6 +140,8 @@ jobs:
     env:
       SHARD_INDEX: ${{ matrix.shard }}
     steps:
+      - name: precreate failure evidence namespace
+        run: mkdir -p "$RUNNER_TEMP/mutation-shard-$SHARD_INDEX"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -175,7 +180,6 @@ jobs:
         run: |
           source_root="$RUNNER_TEMP/mutation-source-$GITHUB_JOB-$SHARD_INDEX"
           output_parent="$RUNNER_TEMP/mutation-shard-$SHARD_INDEX"
-          mkdir -p "$output_parent"
           python3 scripts/mutation.py materialize-source \
             --repo-root "$GITHUB_WORKSPACE" \
             --revision "$GITHUB_SHA" \

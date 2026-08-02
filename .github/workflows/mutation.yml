@@ -13,12 +13,11 @@ on:
 permissions:
   contents: read
 
-# Report-only прогоны не отменяют уже выполняющийся запуск. GitHub Actions
-# допускает только один pending run на concurrency group; отдельного `queue`
-# параметра у схемы нет, поэтому расписание остаётся честно bounded.
+# Report-only прогоны не отменяют выполняющийся запуск и не вытесняют уже
+# ожидающее evidence: `queue: max` — штатный FIFO-режим GitHub Actions.
 concurrency:
   group: mutation
-  cancel-in-progress: false
+  queue: max
 
 jobs:
   worker:

@@ -1680,7 +1680,11 @@ class MutationTruthTest(unittest.TestCase):
         workflows = repo / ".github" / "workflows"
         mutation_workflow = (workflows / "mutation.yml").read_text(encoding="utf-8")
         ci_workflow = (workflows / "ci.yml").read_text(encoding="utf-8")
+        ci_worker = (workflows / "ci-worker.yml").read_text(encoding="utf-8")
         native_workflow = (workflows / "native-conformance.yml").read_text(
+            encoding="utf-8"
+        )
+        native_worker = (workflows / "native-conformance-worker.yml").read_text(
             encoding="utf-8"
         )
 
@@ -1730,10 +1734,10 @@ class MutationTruthTest(unittest.TestCase):
                 f"  cancel-in-progress: {cancel_rule}\n",
                 workflow,
             )
-        self.assertEqual(ci_workflow.count(fork_guard), 7)
-        self.assertEqual(native_workflow.count(fork_guard), 1)
-        ci_jobs = ci_workflow.split("\njobs:\n", 1)[1]
-        native_jobs = native_workflow.split("\njobs:\n", 1)[1]
+        self.assertEqual(ci_worker.count(fork_guard), 7)
+        self.assertEqual(native_worker.count(fork_guard), 1)
+        ci_jobs = ci_worker.split("\njobs:\n", 1)[1]
+        native_jobs = native_worker.split("\njobs:\n", 1)[1]
         self.assertNotIn("github.run_attempt == 1", ci_jobs)
         self.assertNotIn("github.run_attempt == 1", native_jobs)
 
@@ -1769,6 +1773,52 @@ class MutationTruthTest(unittest.TestCase):
             run_policy("pull_request", 2, 42, 42)[0],
         )
 
+    def test_reusable_workers_bound_jobs_and_binaryen_parallelism(self) -> None:
+        repo = Path(__file__).resolve().parents[1]
+        workflows = repo / ".github" / "workflows"
+
+        def job_blocks(source: str, label: str) -> dict[str, str]:
+            if "\njobs:\n" not in source:
+                self.fail(f"{label} has no jobs mapping")
+            jobs = source.split("\njobs:\n", 1)[1]
+            anchors = list(re.finditer(r"(?m)^  ([A-Za-z0-9_-]+):\n", jobs))
+            if not anchors:
+                self.fail(f"{label} has no statically declared jobs")
+            return {
+                anchor.group(1): jobs[
+                    anchor.start() : (
+                        anchors[index + 1].start()
+                        if index + 1 < len(anchors)
+                        else len(jobs)
+                    )
+                ]
+                for index, anchor in enumerate(anchors)
+            }
+
+        workers = {
+            name: (workflows / name).read_text(encoding="utf-8")
+            for name in (
+                "ci-worker.yml",
+                "mutation-worker.yml",
+                "native-conformance-worker.yml",
+                "publish-worker.yml",
+            )
+        }
+        for worker_name, source in workers.items():
+            for job_name, block in job_blocks(source, worker_name).items():
+                with self.subTest(worker=worker_name, job=job_name):
+                    timeout = re.search(
+                        r"(?m)^    timeout-minutes: ([1-9][0-9]*)\n",
+                        block,
+                    )
+                    self.assertIsNotNone(timeout)
+                    assert timeout is not None
+                    self.assertLess(int(timeout.group(1)), 360)
+
+        wasm = job_blocks(workers["ci-worker.yml"], "ci-worker.yml")["wasm"]
+        self.assertIn("    env:\n      BINARYEN_CORES: 1\n", wasm)
+        self.assertEqual(workers["ci-worker.yml"].count("BINARYEN_CORES"), 1)
+
     def test_workflow_and_scope_lock_the_truth_contract(self) -> None:
         def between(source: str, start: str, end: str, label: str) -> str:
             if start not in source:
@@ -1779,11 +1829,13 @@ class MutationTruthTest(unittest.TestCase):
             return tail.split(end, 1)[0]
 
         repo = Path(__file__).resolve().parents[1]
-        workflow = (repo / ".github" / "workflows" / "mutation.yml").read_text(
+        workflow = (
+            repo / ".github" / "workflows" / "mutation-worker.yml"
+        ).read_text(encoding="utf-8")
+        config = (repo / ".cargo" / "mutants.toml").read_text(encoding="utf-8")
+        ci = (repo / ".github" / "workflows" / "ci-worker.yml").read_text(
             encoding="utf-8"
         )
-        config = (repo / ".cargo" / "mutants.toml").read_text(encoding="utf-8")
-        ci = (repo / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
         self.assertLess(
             ci.index("      - name: mutation evidence verifier hostile tests\n"),
             ci.index("      - name: cargo test\n"),

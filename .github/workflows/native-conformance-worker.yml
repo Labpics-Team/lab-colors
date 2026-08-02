@@ -32,12 +32,15 @@ jobs:
   # АКТИВНЫЙ ГЕЙТ: Swift-conformance в gVisor-ячейке через swift-контейнер.
   # Зеркало проверенного локального прогона (bindings/swift/ci/run-conformance.sh).
   #
-  # ИМЯ JOB'А НЕ МЕНЯТЬ: publish.yml сверяет его буквально (requiredJobs) внутри
-  # canonical run. Строка «self-hosted Linux» здесь — контракт с publish-гейтом,
-  # а не описание раннера; переименование требует согласованной правки publish.
+  # ИМЯ JOB'А НЕ МЕНЯТЬ: publish-worker.yml принимает ровно это имя либо
+  # reusable-суффикс «<caller> / <это имя>» внутри canonical run. Строка
+  # «self-hosted Linux» — контракт с publish-гейтом, а не описание раннера.
   swift-conformance-linux:
     name: swift conformance (self-hosted Linux, swift container)
     runs-on: { group: labpics-ci-sandbox, labels: [labpics-ci-gvisor-v1] }
+    # 65 = двойной worst successful receipt из 20 main-прогонов перед cutover,
+    # округлённый вверх до пяти минут; менять только после history-replay.
+    timeout-minutes: 65
     # Защита от fork-PR: НЕ гоняем недоверенный код форков на своей инфре.
     # Форк-PR пропускается; push в main и same-repo PR — гоняются.
     if: >-
@@ -70,6 +73,7 @@ jobs:
     name: swift test (macOS arm64 — ручной запуск, платные раннеры off)
     if: github.event_name == 'workflow_dispatch'
     runs-on: macos-15
+    timeout-minutes: 65
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

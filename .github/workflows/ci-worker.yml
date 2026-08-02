@@ -37,9 +37,13 @@ env:
   CHROMEDRIVER_FOR_TESTING_SHA256: 6ac3919edd107ca13d08cccc118dc83821877e504014233f171bbd94cb01a80e
 
 jobs:
+  # Единый 25-минутный envelope = двойной худший successful job из последних
+  # 20 main-прогонов перед cutover, округлённый вверх до пяти минут. Менять
+  # только после повторного history-replay, а не под один медленный прогон.
   node-consumer-floor:
     name: Node 22 consumer floor
     runs-on: { group: labpics-ci-sandbox, labels: [labpics-ci-gvisor-v1] }
+    timeout-minutes: 25
     needs: wasm
     if: >-
       (github.event_name != 'pull_request' ||
@@ -71,6 +75,7 @@ jobs:
   msrv:
     name: MSRV workspace check
     runs-on: { group: labpics-ci-sandbox, labels: [labpics-ci-gvisor-v1] }
+    timeout-minutes: 25
     if: >-
       (github.event_name != 'pull_request' ||
       github.event.pull_request.head.repo.full_name == github.repository)
@@ -100,6 +105,7 @@ jobs:
   lint:
     name: clippy + rustfmt
     runs-on: { group: labpics-ci-sandbox, labels: [labpics-ci-gvisor-v1] }
+    timeout-minutes: 25
     # Защита от fork-PR: НЕ гоняем недоверенный код форков на своей инфре.
     # Форк-PR пропускается (job skipped, раннер не выделяется); push в main
     # и same-repo PR (коллаборатор) — гоняются. Тот же паттерн, что уже принят
@@ -147,6 +153,7 @@ jobs:
   docs:
     name: cargo doc (intra-doc links)
     runs-on: { group: labpics-ci-sandbox, labels: [labpics-ci-gvisor-v1] }
+    timeout-minutes: 25
     # Защита от fork-PR — см. комментарий в job `lint` выше.
     if: >-
       (github.event_name != 'pull_request' ||
@@ -208,6 +215,7 @@ jobs:
   test:
     name: test
     runs-on: { group: labpics-ci-sandbox, labels: [labpics-ci-gvisor-v1] }
+    timeout-minutes: 25
     # Защита от fork-PR — см. комментарий в job `lint` выше.
     if: >-
       (github.event_name != 'pull_request' ||
@@ -372,6 +380,7 @@ jobs:
   audit:
     name: cargo audit (rustsec)
     runs-on: { group: labpics-ci-sandbox, labels: [labpics-ci-gvisor-v1] }
+    timeout-minutes: 25
     # Защита от fork-PR — см. комментарий в job `lint` выше.
     if: >-
       (github.event_name != 'pull_request' ||
@@ -424,6 +433,14 @@ jobs:
   wasm:
     name: wasm build + headless test + size
     runs-on: { group: labpics-ci-sandbox, labels: [labpics-ci-gvisor-v1] }
+    timeout-minutes: 25
+    # wasm-pack 0.13.1 закрепляет Binaryen 117: тот считает потоки по host CPU,
+    # не учитывая Linux affinity. Официальный override исключает этот источник
+    # oversubscription, сохраняя тот же детерминированный optimizer и его версию.
+    # Удалять после перехода на Binaryen с affinity-aware getNumCores и
+    # дифференциального подтверждения byte-exact результата.
+    env:
+      BINARYEN_CORES: 1
     # Защита от fork-PR — см. комментарий в job `lint` выше.
     if: >-
       (github.event_name != 'pull_request' ||
@@ -509,7 +526,6 @@ jobs:
           # `cache` плюс явным гашением автокэша npm (`cache: false` там падает).
           package-manager-cache: false
           node-version: ${{ env.NODE_TOOLCHAIN }}
-          cache-dependency-path: packages/colors/package-lock.json
       - name: enforce measured WASM runtime budget
         # Exact Linux x64 zero-headroom ratchet. gzip remains transport
         # diagnostics only.
@@ -558,7 +574,6 @@ jobs:
         #     Chrome/chromedriver need libnspr4, libnss3, distro-versioned ALSA,
         #     and libgbm1
         #     which are absent on the slim WSL runner image.
-        #  3. Diagnose chromedriver session creation (Chrome's stderr) before wasm-pack.
         run: |
           set -euo pipefail
           # -- CfT chrome + chromedriver --
@@ -679,47 +694,6 @@ jobs:
           # (which leaks the full expanded PATH across jobs on shared self-hosted runners).
           echo "$CHROME_BIN_DIR" >> "$GITHUB_PATH"
           echo "Linked CfT Chrome under runner.temp"
-
-          # -- Diagnose: verify chromedriver can start a Chrome session (surfaces Chrome stderr) --
-          # Note: LD_LIBRARY_PATH in $GITHUB_ENV is not active in this step yet;
-          # must pass DEPS_LIB inline here.
-          echo "--- chromedriver session diagnostic ---"
-          LD_LIBRARY_PATH="${DEPS_LIB}:${LD_LIBRARY_PATH:-}" "$CHROMEDRIVER_BIN" --port=9515 --log-level=ALL 2>&1 &
-          CD_PID=$!
-          sleep 1
-          RESP=$(curl -s --max-time 10 -X POST http://localhost:9515/session \
-            -H "Content-Type: application/json" \
-            -d '{
-              "capabilities": {
-                "alwaysMatch": {
-                  "browserName": "chrome",
-                  "goog:chromeOptions": {
-                    "binary": "'"$CHROME_BIN"'",
-                    "args": [
-                      "--no-sandbox",
-                      "--disable-setuid-sandbox",
-                      "--disable-dev-shm-usage",
-                      "--disable-gpu",
-                      "--disable-software-rasterizer"
-                    ]
-                  }
-                }
-              }
-            }' 2>&1)
-          echo "Session response (first 300 chars):"
-          echo "$RESP" | head -c 300
-          # Clean up session if it was created
-          SESSION_ID=$(echo "$RESP" | node -e "let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>{try{const j=JSON.parse(d);console.log(j.value&&j.value.sessionId||'');}catch(e){}});" 2>/dev/null || true)
-          if [ -n "$SESSION_ID" ]; then
-            curl -s -X DELETE "http://localhost:9515/session/$SESSION_ID" || true
-            echo "Session created+deleted successfully! Chrome works via chromedriver."
-          else
-            echo "Session creation failed — see error above"
-          fi
-          kill $CD_PID 2>/dev/null || true
-          wait $CD_PID 2>/dev/null || true
-          echo "--- end diagnostic ---"
-          true # diagnostic is informational only — never fail the install step
       - name: wasm-pack test (headless chrome)
         # Chrome is provisioned above; the parity smoke runs against native
         # resolve_set inside the same wasm runtime. D1 default from the chapter.

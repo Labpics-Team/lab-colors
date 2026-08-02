@@ -39,6 +39,9 @@ permissions:
 jobs:
   publish:
     runs-on: { group: labpics-ci-sandbox, labels: [labpics-ci-gvisor-v1] }
+    # 10 = двойной worst successful publish receipt перед cutover, округлённый
+    # вверх до пяти минут; менять только после history-replay.
+    timeout-minutes: 10
     environment: npm-publish
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
