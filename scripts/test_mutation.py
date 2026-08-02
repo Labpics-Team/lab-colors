@@ -1820,15 +1820,22 @@ class MutationTruthTest(unittest.TestCase):
         self.assertEqual(workers["ci-worker.yml"].count("BINARYEN_CORES"), 1)
 
         native = workers["native-conformance-worker.yml"]
-        swift_image = (
-            "swift:6.1.3-noble-slim@"
-            "sha256:8db18ceac0597e9f9ca1cfb111b9a2613e6a2c0001f5af2c002d149718635c9e"
-        )
-        self.assertEqual(native.count(f"SWIFT_CONTAINER: {swift_image}"), 1)
-        self.assertNotIn(
-            "swift:6.1.3@sha256:e1cdaf7ddc9de37d8561da7a260535236694fca8c1b67d3129d47d8b180a9394",
+        self.assertEqual(native.count("SWIFT_TOOLCHAIN: 6.1.3"), 1)
+        self.assertNotIn("SWIFT_CONTAINER", native)
+        self.assertNotIn("docker run", native)
+        self.assertIn(
+            "run: bash bindings/swift/ci/run-conformance.sh",
             native,
         )
+
+        swift_runner = (
+            repo / "bindings" / "swift" / "ci" / "run-conformance.sh"
+        ).read_text(encoding="utf-8")
+        self.assertIn('expected_swift="Swift version ${SWIFT_TOOLCHAIN} ', swift_runner)
+        self.assertIn('readonly source_root="${GITHUB_WORKSPACE:-/src}"', swift_runner)
+        self.assertIn('readonly temp_root="${RUNNER_TEMP:-/work}"', swift_runner)
+        self.assertNotIn("apt-get", swift_runner)
+        self.assertNotIn("https://sh.rustup.rs", swift_runner)
 
     def test_publish_worker_secret_boundary_and_registry_are_fail_closed(self) -> None:
         repo = Path(__file__).resolve().parents[1]

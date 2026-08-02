@@ -6,8 +6,9 @@ Swift-поверхность динамического Rust-ядра через
 резолв, лестницы, подложка→α и низкоуровневое решение точки Glow.
 
 
-Текущее исполняемое доказательство этой поверхности — pinned Swift-контейнер на
-Linux x86_64. Оно не является аттестацией Apple ABI, macOS/arm64 или iOS.
+Текущее исполняемое доказательство этой поверхности — pinned Swift 6.1.3 в
+одноразовой Linux x86_64 gVisor-ячейке. Оно не является аттестацией Apple ABI,
+macOS/arm64 или iOS.
 
 ## Что здесь
 
@@ -20,19 +21,21 @@ Linux x86_64. Оно не является аттестацией Apple ABI, mac
 ## Сборка и тест
 
 Платные GitHub-hosted macOS-раннеры исключены владельцем — Swift валидируется в
-официальном **swift-контейнере на Linux x86_64** (тот же UniFFI-биндинг, тот же
-пак, ядро под `x86_64-unknown-linux-gnu`). `DRIFT_TOL` задаёт правило сравнения,
-но не заменяет прогоны на других платформах. Единый скрипт —
+immutable **gVisor-ячейке на Linux x86_64** (тот же UniFFI-биндинг, тот же пак,
+ядро под `x86_64-unknown-linux-gnu`). `DRIFT_TOL` задаёт правило сравнения, но
+не заменяет прогоны на других платформах. Единый скрипт —
 `ci/run-conformance.sh` — используют и локальный прогон, и self-hosted CI-джоба
 (`.github/workflows/native-conformance.yml`).
 
-Локально (нужен Docker):
+Локально на Linux x86_64 нужны точные Swift 6.1.3 и Rust 1.96.0:
 
 ```sh
 # из корня репозитория
-docker run --rm -v "$PWD":/src:ro \
-    swift:6.1.3-noble-slim@sha256:8db18ceac0597e9f9ca1cfb111b9a2613e6a2c0001f5af2c002d149718635c9e \
-    bash /src/bindings/swift/ci/run-conformance.sh
+RUST_TOOLCHAIN=1.96.0 \
+SWIFT_TOOLCHAIN=6.1.3 \
+GITHUB_WORKSPACE="$PWD" \
+RUNNER_TEMP="${TMPDIR:-/tmp}" \
+bash bindings/swift/ci/run-conformance.sh
 ```
 
 Нативный macOS/arm64 path сейчас представлен только ручной reference-джобой
