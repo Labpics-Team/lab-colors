@@ -1,7 +1,6 @@
 #!/bin/sh
-# Internal MPFI recipe. The public build.sh entrypoint always starts this file
-# through its sealed environment; keeping the recipe separate prevents an
-# environment variable from selecting a pre-sanitized execution path.
+# Internal MPFI recipe. The source-bound transport dispatches this file only
+# after establishing its clean child environment; it is not a standalone API.
 set -eu
 
 if [ "$#" -ne 0 ]; then
