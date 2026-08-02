@@ -40,12 +40,12 @@ from test_receipt import _execute  # noqa: E402
 # Keep an independent outer oracle: importing the gate's expected hash here
 # would let a coordinated gate edit hide inventory drift.
 ARB_INVENTORY_SHA256_V1 = (
-    "6c0db8a005a32d97ff597fd805b38395f8b51763546e1844c1bd8574328c1680"
+    "4b2ea28bcc31ff5344ec4dff50e556f0c2b38557fe6cee6e63973a5957500813"
 )
 ARB_ORDER_SHA256_V1 = (
-    "f773e61fa58367e2534044420526d77c5347466eed04901007750b13ccc8eed0"
+    "e1de64ada759d94494cb3575a5e45865ca3bb474e4d05f5a954244bf76ddb3b7"
 )
-ARB_TEST_COUNT_V1 = 242
+ARB_TEST_COUNT_V1 = 245
 
 MOVED_INPUT_SURFACE_V1 = (
     "CanonicalInputLimitsV1",
@@ -299,11 +299,11 @@ class ArbBuildIdentityCharacterizationTests(unittest.TestCase):
         self.assertEqual(observed.input_bundle_length, 174_080)
         self.assertEqual(
             observed.input_bundle_sha256.hex(),
-            "5d6e789a721aeed1a8ff023f0af5389711f85f6fe95294d8290b20301235f4df",
+            "dfd7216be913be601f18e2fd461d9d9c8609355da2f9078dd99328f00ee33f34",
         )
         self.assertEqual(
             observed.input_bundle_identity.hex(),
-            "a9194ab4318be3283dc37efed4390de9b15d8c5d65a5f8c10dd3c59e41ed9978",
+            "b07530505a10f05757f79c7c63d08eebb220869776f0a44d144d8c6f95fc4cd2",
         )
         self.assertEqual(
             pipeline.pipeline_policy_identity_v2(
@@ -315,31 +315,31 @@ class ArbBuildIdentityCharacterizationTests(unittest.TestCase):
         self.assertEqual(len(process_bytes), 196)
         self.assertEqual(
             hashlib.sha256(process_bytes).hexdigest(),
-            "d0bc7878be513e2b78515f35dfe33b54b4e4f45de27dc462be69f75a9f215073",
+            "a73323b9cd49dc2c6fb842f2ca0478bdde67f5572431b9c302e9adee0270b351",
         )
         self.assertEqual(
             result.comparator.identity.hex(),
-            "4758d9369c3fbe987e4431291739d61da03b8923d2b98ddd212b2fff96627a61",
+            "79598dc5e1ba8e6409439b6ffed326a77b3814e56afcbfbd3c54a5bedf471289",
         )
         self.assertEqual(
             result.evidence.source_identity.hex(),
-            "07d85ad695ec17104bdb34f6e9819d25be08afb3aa485918c44a363d7679f7c9",
+            "1324afb28beade4fc804579ef3c4e2eff8437f8b1fa10aa6c2a81067bb634eee",
         )
         self.assertEqual(
             result.evidence.build_identity.hex(),
-            "59643d08452643e9b747d832dab30cc642ba7fc98e2f6dbf588436fb7a5b08d7",
+            "169cb8d67078b4a9cf6fb8ce3de7dca517681c72a89b2aa77cecb8aecdd5c397",
         )
         self.assertEqual(
             result.evidence.run_identity.hex(),
-            "1255c905f657e0c1e9aee75828c9cdf6e0f3906c758535b1c58ca0723eb3715e",
+            "88a705e622cf3c391ba46f4f2cf88dfa1101cb2b6d23bf53e9ab80d94f6b65ba",
         )
         self.assertEqual(
             result.evidence.identity.hex(),
-            "829363f9e2fdb26356b3def25681c6afcaeb9637e5a0f81a539c7af6f6512737",
+            "4d3f45b0807477dc8d9d61013038f0bab20a5f4187cd104a7388d82ce9eb1e39",
         )
         self.assertEqual(
             result.claim.identity.hex(),
-            "edf6fb6e23b9af06289c19217f5a3b9e3f81335af0fb1bbecb0094f496263c55",
+            "ba163bf5efa78eff6524c1a66f5e374a2b69dac4194803e5c7f43f1874c5d12d",
         )
 
 
@@ -2401,7 +2401,7 @@ class SharedBuildTransportTargetTests(unittest.TestCase):
         self.assertEqual(len(encoded), 196)
         self.assertEqual(
             hashlib.sha256(encoded).hexdigest(),
-            "d0bc7878be513e2b78515f35dfe33b54b4e4f45de27dc462be69f75a9f215073",
+            "a73323b9cd49dc2c6fb842f2ca0478bdde67f5572431b9c302e9adee0270b351",
         )
 
         forged = tuple.__new__(transport.DockerBuildExitedV1, ())
