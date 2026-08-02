@@ -676,8 +676,10 @@ class RequestAdmissionTests(unittest.TestCase):
     def test_cross_module_verifiers_are_explicit_versioned_api(self) -> None:
         self.assertTrue(callable(executor.require_static_x86_64_elf_v1))
         self.assertTrue(callable(executor.result_matches_request_v1))
+        self.assertTrue(callable(executor.enter_observer_cgroup_v1))
         self.assertFalse(hasattr(executor, "_require_static_x86_64_elf"))
         self.assertFalse(hasattr(executor, "_result_matches_request"))
+        self.assertFalse(hasattr(executor, "_enter_observer_cgroup_v1"))
 
 
 class CapabilityAndExecutionTests(unittest.TestCase):
@@ -1529,6 +1531,73 @@ class SameObjectAndObserverProtocolTests(unittest.TestCase):
                                 parent
                             )
                     path.write_bytes(original)
+
+    def test_observer_cgroup_placement_is_exact_and_fail_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            parent = Path(temporary) / "proof"
+            observer = parent / "observer"
+            observer.mkdir(parents=True)
+            procs = observer / "cgroup.procs"
+            procs.write_bytes(b"")
+
+            executor.enter_observer_cgroup_v1(parent)
+
+            self.assertEqual(procs.read_bytes(), str(os.getpid()).encode("ascii"))
+
+        for invalid in (object(), Path("relative"), "/absolute"):
+            with self.subTest(invalid=invalid):
+                with self.assertRaises(TypeError):
+                    executor.enter_observer_cgroup_v1(invalid)  # type: ignore[arg-type]
+
+        with tempfile.TemporaryDirectory() as temporary:
+            parent = Path(temporary) / "proof"
+            target = Path(temporary) / "target"
+            parent.mkdir()
+            target.mkdir()
+            (target / "cgroup.procs").write_bytes(b"")
+            (parent / "observer").symlink_to(target, target_is_directory=True)
+
+            with self.assertRaises(OSError):
+                executor.enter_observer_cgroup_v1(parent)
+
+        with tempfile.TemporaryDirectory() as temporary:
+            parent = Path(temporary) / "proof"
+            observer = parent / "observer"
+            observer.mkdir(parents=True)
+            target = Path(temporary) / "foreign-procs"
+            target.write_bytes(b"")
+            (observer / "cgroup.procs").symlink_to(target)
+
+            with self.assertRaises(OSError):
+                executor.enter_observer_cgroup_v1(parent)
+
+        with tempfile.TemporaryDirectory() as temporary:
+            parent = Path(temporary) / "proof"
+            observer = parent / "observer"
+            observer.mkdir(parents=True)
+            (observer / "cgroup.procs").write_bytes(b"")
+            opened: list[int] = []
+            real_open = os.open
+
+            def track_open(*args: object, **kwargs: object) -> int:
+                descriptor = real_open(*args, **kwargs)
+                opened.append(descriptor)
+                return descriptor
+
+            with mock.patch.object(
+                executor.os,
+                "open",
+                side_effect=track_open,
+            ), mock.patch.object(executor.os, "write", return_value=0):
+                with self.assertRaises(OSError):
+                    executor.enter_observer_cgroup_v1(parent)
+
+            self.assertEqual(len(opened), 2)
+            for descriptor in opened:
+                with self.subTest(descriptor=descriptor):
+                    with self.assertRaises(OSError) as caught:
+                        os.fstat(descriptor)
+                    self.assertEqual(caught.exception.errno, errno.EBADF)
 
     def test_observer_initialization_failure_closes_fds_and_reaps_child(self) -> None:
         stdin_read, stdin_write = os.pipe()

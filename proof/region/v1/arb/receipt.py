@@ -1066,6 +1066,26 @@ def _enter_observer_cgroup_v1(parent: Path) -> None:
     executor.enter_observer_cgroup_v1(parent)
 
 
+def _limits_copy_v1(value: executor.ExecutionLimitsV1) -> executor.ExecutionLimitsV1:
+    return executor.ExecutionLimitsV1(*value)
+
+
+def _resolve_request_v1(
+    request: pipeline.PipelineRequestV1,
+) -> pipeline.PipelineRequestV1:
+    lock = provenance.ArbSourceLockV1.parse(request.source_lock.encode())
+    if lock.identity != request.source_lock.identity:
+        raise TypeError("source lock did not replay")
+    return pipeline.PipelineRequestV1(
+        lock,
+        request.admitted_sources,
+        pipeline.admit_build_sources_v1(request.build_sources.files),
+        protocol.ProofJobV1.parse(request.job.encode()),
+        _limits_copy_v1(request.execution_limits),
+        request.host_trust,
+    )
+
+
 class SourceBoundArbControllerV1:
     """One-shot authority that owns native BUILD, RUN, replay and sealing."""
 
@@ -1136,7 +1156,7 @@ class SourceBoundArbControllerV1:
         if type(built) is not pipeline.DiagnosticBuildObservationV1:
             return built
         try:
-            _enter_observer_cgroup_v1(self._cgroup_parent)
+            executor.enter_observer_cgroup_v1(self._cgroup_parent)
         except Exception:
             return SourceBoundRejectedV1(
                 SourceBoundFailureReasonV1.OBSERVER_PLACEMENT_FAILED,

@@ -245,6 +245,12 @@ malformed value становится versioned typed rejection, а не ново
 exception-channel. `ControlledExecutorV1` отвергает такой request до probe и
 backend run как `ObserverFailureV1(REQUEST_NOT_ADMITTED)`.
 
+`executor.enter_observer_cgroup_v1` — единственная versioned
+межмодульная операция размещения: engine controller передаёт абсолютный
+parent, а executor помещает текущий controller в `parent/observer` и
+пробрасывает отказ для typed mapping вызывающего. Engine не копирует этот
+descriptor protocol.
+
 Linux backend допускается лишь в отдельном helper process. Helper находится в
 прямом дочернем cgroup объявленного parent, а весь parent subtree имеет
 `pids.max = 2` и перед probe содержит ровно observer. Эти два task slots имеют
