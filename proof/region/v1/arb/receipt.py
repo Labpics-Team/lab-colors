@@ -135,7 +135,7 @@ def _comparator_replays_v1(
         # request and BUILD/RUN observation. Re-hashing a supplied comparator
         # only proves internal consistency; it cannot prove that its wrapper,
         # evaluator, or test-observation coordinates describe this DAG.
-        expected_comparator = pipeline._derive_arb_comparator_for_build_v1(
+        expected_comparator = pipeline.derive_arb_comparator_for_build_v1(
             request,
             build.docker_capability,
             build.binary,

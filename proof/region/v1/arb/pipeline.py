@@ -1032,7 +1032,7 @@ class PipelineRequestV1:
             )
 
 
-def _derive_arb_comparator_for_build_v1(
+def derive_arb_comparator_for_build_v1(
     request: PipelineRequestV1,
     docker_capability: build_transport.DockerSupportedV1,
     binary: bytes,
@@ -1647,7 +1647,7 @@ class ControlledPipelineV1:
             hashlib.sha256(item).digest() for item in built.outputs
         )
         build_processes = built.processes
-        comparator = _derive_arb_comparator_for_build_v1(
+        comparator = derive_arb_comparator_for_build_v1(
             request,
             docker_capability,
             binary,

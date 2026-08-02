@@ -467,7 +467,7 @@ class BuildIdentityV2Tests(unittest.TestCase):
                 self.assertNotIn(mirror, field_names)
 
         comparator_calls = _called_names(
-            pipeline._derive_arb_comparator_for_build_v1
+            pipeline.derive_arb_comparator_for_build_v1
         )
         comparator_replay_calls = _called_names(receipt._comparator_replays_v1)
         receipt_build_calls = _called_names(receipt._build_identity_v2)

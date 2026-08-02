@@ -618,7 +618,7 @@ class ComparatorDerivationTests(unittest.TestCase):
             _token=pipeline._BUILD_SOURCES_TOKEN,
         )
         mutated_request = replace(_request(), build_sources=mutated_sources)
-        mutated = pipeline._derive_arb_comparator_for_build_v1(
+        mutated = pipeline.derive_arb_comparator_for_build_v1(
             mutated_request,
             original.docker_capability,
             original._binary,
