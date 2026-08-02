@@ -38,6 +38,8 @@ _RUN_ID_LABEL_V1 = b"labcolors.proof-region.mpfi-run-replay.v1\0"
 _EVIDENCE_ID_LABEL_V1 = b"labcolors.proof-region.mpfi-evaluator-replay.v1\0"
 _POLICY_ID_LABEL_V1 = b"labcolors.proof-region.mpfi-source-bound-policy.v1\0"
 _PREIMAGE_LABEL = b"labcolors.proof-region.mpfi-comparator-preimage.v1\0"
+_MPFI_FAILURE_DETAIL_LIMIT_V1 = 4096
+_MPFI_FAILURE_DETAIL_FALLBACK_V1 = "MPFI source-bound operation failed"
 
 
 def _identity(label: bytes, chunks: tuple[bytes, ...]) -> bytes:
@@ -56,6 +58,18 @@ def _digest(value: object, field_name: str) -> bytes:
     if type(value) is not bytes or len(value) != 32 or value == bytes(32):
         raise TypeError(f"invalid {field_name}")
     return value
+
+
+def _failure_detail_v1(value: object) -> str:
+    """Keep rejection diagnostics bounded even when an adapter raises badly."""
+
+    try:
+        detail = str(value)
+    except Exception:
+        return _MPFI_FAILURE_DETAIL_FALLBACK_V1
+    if not detail or len(detail) > _MPFI_FAILURE_DETAIL_LIMIT_V1:
+        return _MPFI_FAILURE_DETAIL_FALLBACK_V1
+    return detail
 
 
 class MpfiRequestErrorReasonV1(StrEnum):
@@ -823,7 +837,11 @@ class MpfiSourceBoundRejectedV1:
     def __post_init__(self) -> None:
         if type(self.reason) is not MpfiSourceBoundFailureReasonV1:
             raise TypeError("invalid MPFI source-bound failure reason")
-        if type(self.detail) is not str or not self.detail or len(self.detail) > 4096:
+        if (
+            type(self.detail) is not str
+            or not self.detail
+            or len(self.detail) > _MPFI_FAILURE_DETAIL_LIMIT_V1
+        ):
             raise TypeError("invalid MPFI source-bound failure detail")
 
 
@@ -883,7 +901,7 @@ class MpfiSourceBoundControllerV1:
         except Exception as error:
             return MpfiSourceBoundRejectedV1(
                 MpfiSourceBoundFailureReasonV1.REQUEST_REJECTED,
-                str(error),
+                _failure_detail_v1(error),
             )
         backend = build_transport.NativeDockerBuildBackendV1(
             self._docker_path,
@@ -902,7 +920,7 @@ class MpfiSourceBoundControllerV1:
         if type(capability) is not build_transport.DockerSupportedV1:
             return MpfiSourceBoundRejectedV1(
                 MpfiSourceBoundFailureReasonV1.BUILD_FAILED,
-                repr(capability),
+                _failure_detail_v1(repr(capability)),
             )
         built = transport.build(
             capability,
@@ -939,14 +957,14 @@ class MpfiSourceBoundControllerV1:
         except Exception as error:
             return MpfiSourceBoundRejectedV1(
                 MpfiSourceBoundFailureReasonV1.REPLAY_BINDING_FAILED,
-                str(error),
+                _failure_detail_v1(error),
             )
         try:
             executor.enter_observer_cgroup_v1(self._cgroup_parent)
         except Exception as error:
             return MpfiSourceBoundRejectedV1(
                 MpfiSourceBoundFailureReasonV1.OBSERVER_PLACEMENT_FAILED,
-                str(error),
+                _failure_detail_v1(error),
             )
         run_backend = _NATIVE_RUN_BACKEND_TYPE(self._cgroup_parent)
         if type(run_backend) is not _NATIVE_RUN_BACKEND_TYPE:
@@ -959,7 +977,7 @@ class MpfiSourceBoundControllerV1:
         if type(platform_value) is not executor.SupportedV1:
             return MpfiSourceBoundRejectedV1(
                 MpfiSourceBoundFailureReasonV1.RUN_FAILED,
-                repr(platform_value),
+                _failure_detail_v1(repr(platform_value)),
             )
         try:
             invocation = executor.ExecutionRequestV1(
@@ -980,7 +998,7 @@ class MpfiSourceBoundControllerV1:
         except Exception as error:
             return MpfiSourceBoundRejectedV1(
                 MpfiSourceBoundFailureReasonV1.RUN_FAILED,
-                str(error),
+                _failure_detail_v1(error),
             )
         process = observed.execute(invocation, platform_value)
         if (
@@ -991,7 +1009,7 @@ class MpfiSourceBoundControllerV1:
         ):
             return MpfiSourceBoundRejectedV1(
                 MpfiSourceBoundFailureReasonV1.RUN_FAILED,
-                repr(process),
+                _failure_detail_v1(repr(process)),
             )
         try:
             transcript = protocol.DecisionTranscriptV1.parse(process.stdout)
@@ -1058,7 +1076,7 @@ class MpfiSourceBoundControllerV1:
         except Exception as error:
             return MpfiSourceBoundRejectedV1(
                 MpfiSourceBoundFailureReasonV1.REPLAY_BINDING_FAILED,
-                str(error),
+                _failure_detail_v1(error),
             )
 
 

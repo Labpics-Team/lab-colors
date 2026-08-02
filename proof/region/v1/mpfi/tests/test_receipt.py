@@ -351,6 +351,20 @@ class MpfiSourceBoundReceiptTests(unittest.TestCase):
         self.assertEqual(result.reason, receipt.MpfiSourceBoundFailureReasonV1.REQUEST_REJECTED)
         seal.assert_not_called()
 
+        controller = receipt.MpfiSourceBoundControllerV1(
+            Path("/usr/bin/docker"),
+            Path("/sys/fs/cgroup/labcolors/proof"),
+        )
+        with mock.patch.object(
+            receipt.mpfi_build,
+            "seal_mpfi_build_input_from_snapshot_v1",
+            side_effect=RuntimeError(),
+        ):
+            result = controller.execute(_request())
+        self.assertIs(type(result), receipt.MpfiSourceBoundRejectedV1)
+        self.assertEqual(result.reason, receipt.MpfiSourceBoundFailureReasonV1.REQUEST_REJECTED)
+        self.assertEqual(result.detail, "MPFI source-bound operation failed")
+
 
 @unittest.skipUnless(
     sys.platform == "linux"
