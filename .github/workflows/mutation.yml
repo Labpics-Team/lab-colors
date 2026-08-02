@@ -11,11 +11,11 @@ on:
 permissions:
   contents: read
 
-# GitHub Actions concurrency допускает только одну pending run на группу; старые
-# попытки не отменяются, чтобы report-only результат не скрывался молча.
+# Все report-only прогоны делят FIFO-очередь репозитория: queue=max сохраняет до
+# 100 pending runs вместо default single, который отменяет предыдущий pending.
 concurrency:
   group: mutation
-  cancel-in-progress: false
+  queue: max
 
 env:
   CARGO_INCREMENTAL: 0
