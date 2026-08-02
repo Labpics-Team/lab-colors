@@ -60,11 +60,11 @@ def _digest(value: object, field_name: str) -> bytes:
     return value
 
 
-def _failure_detail_v1(value: object) -> str:
+def _failure_detail_v1(value: object, *, diagnostic_repr: bool = False) -> str:
     """Keep rejection diagnostics bounded even when an adapter raises badly."""
 
     try:
-        detail = str(value)
+        detail = repr(value) if diagnostic_repr else str(value)
     except Exception:
         return _MPFI_FAILURE_DETAIL_FALLBACK_V1
     if not detail or len(detail) > _MPFI_FAILURE_DETAIL_LIMIT_V1:
@@ -920,7 +920,7 @@ class MpfiSourceBoundControllerV1:
         if type(capability) is not build_transport.DockerSupportedV1:
             return MpfiSourceBoundRejectedV1(
                 MpfiSourceBoundFailureReasonV1.BUILD_FAILED,
-                _failure_detail_v1(repr(capability)),
+                _failure_detail_v1(capability, diagnostic_repr=True),
             )
         built = transport.build(
             capability,
@@ -977,7 +977,7 @@ class MpfiSourceBoundControllerV1:
         if type(platform_value) is not executor.SupportedV1:
             return MpfiSourceBoundRejectedV1(
                 MpfiSourceBoundFailureReasonV1.RUN_FAILED,
-                _failure_detail_v1(repr(platform_value)),
+                _failure_detail_v1(platform_value, diagnostic_repr=True),
             )
         try:
             invocation = executor.ExecutionRequestV1(
@@ -1009,7 +1009,7 @@ class MpfiSourceBoundControllerV1:
         ):
             return MpfiSourceBoundRejectedV1(
                 MpfiSourceBoundFailureReasonV1.RUN_FAILED,
-                _failure_detail_v1(repr(process)),
+                _failure_detail_v1(process, diagnostic_repr=True),
             )
         try:
             transcript = protocol.DecisionTranscriptV1.parse(process.stdout)

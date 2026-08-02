@@ -236,6 +236,15 @@ class MpfiSourceBoundReceiptTests(unittest.TestCase):
                 "x" * 4097,
             )
 
+        class BadRepr:
+            def __repr__(self) -> str:
+                raise RuntimeError("repr failed")
+
+        self.assertEqual(
+            receipt._failure_detail_v1(BadRepr(), diagnostic_repr=True),
+            "MPFI source-bound operation failed",
+        )
+
     def test_replay_rejects_a_changed_build_transfer(self) -> None:
         result, _backend = _execute()
         self.assertIs(type(result), receipt.MpfiSourceBoundEvaluatorReceiptV1)
