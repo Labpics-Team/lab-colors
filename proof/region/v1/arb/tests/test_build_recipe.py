@@ -20,7 +20,7 @@ RECIPE_REJECTION_TIMEOUT_SECONDS = 5
 
 class ArbBuildRecipeTests(unittest.TestCase):
     def test_fast_gate_includes_each_shared_contract_suite_exactly_once(self) -> None:
-        tests = tuple(arb_gate._iter_tests_v1(arb_gate.full_suite_v1()))
+        tests = tuple(arb_gate.iter_tests_v1(arb_gate.full_suite_v1()))
         identifiers = tuple(test.id() for test in tests)
         for pattern, module_prefix in (
             ("test_executor.py", "test_executor."),
@@ -34,7 +34,7 @@ class ArbBuildRecipeTests(unittest.TestCase):
                 )
                 expected = tuple(
                     test.id()
-                    for test in arb_gate._iter_tests_v1(
+                    for test in arb_gate.iter_tests_v1(
                         unittest.defaultTestLoader.discover(
                             str(arb_gate.SHARED_TEST_DIRECTORY),
                             pattern=pattern,
@@ -51,7 +51,7 @@ class ArbBuildRecipeTests(unittest.TestCase):
             str(arb_gate.SHARED_TEST_DIRECTORY),
             pattern="test_mpfi_input.py",
         )
-        test_ids = tuple(test.id() for test in arb_gate._iter_tests_v1(suite))
+        test_ids = tuple(test.id() for test in arb_gate.iter_tests_v1(suite))
         result = unittest.TestResult()
 
         suite.run(result)
