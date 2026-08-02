@@ -29,4 +29,4 @@ jobs:
     permissions:
       contents: read
       actions: read
-    uses: Labpics-Team/lab-colors/.github/workflows/publish-worker.yml@3e6aabd404ec4ed6b3764a71e941fb83b40b71e4
+    uses: Labpics-Team/lab-colors/.github/workflows/publish-worker.yml@b6ebdb2df263a76cc4d7ae39c44e51790550b388
