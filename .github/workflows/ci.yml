@@ -31,4 +31,4 @@ jobs:
       contents: read
     # Caller выбирает revision, который чекаутит worker, включая код PR. Сам код
     # считается недоверенным и исполняется только внутри одноразовой ячейки.
-    uses: Labpics-Team/lab-colors/.github/workflows/ci-worker.yml@dc972fafa323bc0a7f7f87275708a6d6fb6b7708
+    uses: Labpics-Team/lab-colors/.github/workflows/ci-worker.yml@5fb585e197b0b250998d6897198f0e29b8787147
