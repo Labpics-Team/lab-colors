@@ -172,6 +172,12 @@ def validate_sources(directory: Path) -> tuple[str, ...]:
     for path in paths:
         text = path.read_text(encoding="utf-8")
         seen.update(called_symbols(text))
+        # Token-pasting can construct an operation name that this source gate
+        # cannot enumerate.  The linked undefined-symbol gate is a second
+        # defence, but admitting such source would make the static contract
+        # depend on the compiler rather than remain auditable from the tree.
+        if "##" in text:
+            errors.append(f"{path.name}: token-pasting is forbidden")
         for forbidden in FORBIDDEN_MPFI_CALLS:
             if re.search(rf"\b{re.escape(forbidden)}\b", text):
                 errors.append(f"{path.name}: forbidden operation {forbidden}")

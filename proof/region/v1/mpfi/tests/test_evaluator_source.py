@@ -147,6 +147,17 @@ class EvaluatorSourceTests(unittest.TestCase):
             errors = operations.validate_sources(copy)
             self.assertTrue(any("forbidden operation mpfi_div_ext" in error for error in errors))
 
+            interval.write_text(
+                interval.read_text(encoding="utf-8")
+                + "\n#define LABCOLOR_MPFI_NAME(part) mpfi_ ## part\n"
+                + "static void hidden_token(mpfi_ptr output, mpfi_srcptr left, mpfi_srcptr right) {\n"
+                + "    LABCOLOR_MPFI_NAME(div_ext)(output, left, right);\n"
+                + "}\n",
+                encoding="utf-8",
+            )
+            errors = operations.validate_sources(copy)
+            self.assertTrue(any("token-pasting" in error for error in errors))
+
     def test_linked_undefined_operation_symbols_are_closed(self) -> None:
         errors = operations.validate_undefined_symbols(
             "                 U _mpfi_div_ext\n"
