@@ -293,6 +293,14 @@ replay остаётся `ProvenanceErrorV1`, а limits/USTAR rejection — `Inpu
 Эта ступень не вводит recipe, Docker policy, BUILD/RUN authority, executable,
 comparator, receipt или semantic verifier.
 
+`mpfi/build.py` — следующая отдельная BUILD-граница: она повторно принимает
+только pinned workspace files, exact generated formula bytes и MPFI source
+snapshot, затем строит один USTAR bundle. `MPFI_BUILD_TRANSPORT_POLICY_V1`
+фиксирует отдельный linux/amd64 Clang-19 image manifest, bootstrap и bounded
+tmpfs; sealed input identity связывает их с source/build bytes. Это ещё не
+receipt: до source-bound controller и реального disposable BUILD→RUN здесь
+нет provenance claim.
+
 `proof/region/v1/build/transport.py` владеет immutable Docker policy,
 одноразовым probe→build lease, bounded stdin/stdout observation, cleanup и
 двумя свежими попытками. Доказательные координаты разделены по причинам:
