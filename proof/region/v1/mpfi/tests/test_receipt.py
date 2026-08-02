@@ -292,6 +292,29 @@ class MpfiSourceBoundReceiptTests(unittest.TestCase):
         changed_evidence = _tamper(result.evidence, "build", changed_build)
         self.assertFalse(receipt.replay_mpfi_evidence_is_well_bound_v1(changed_evidence))
 
+    def test_replay_rejects_a_raw_build_identity_preimage(self) -> None:
+        result, _backend = _execute()
+        self.assertIs(type(result), receipt.MpfiSourceBoundEvaluatorReceiptV1)
+        preimages = result.evidence.build.comparator.preimages
+        changed_preimages = replace(
+            preimages,
+            build_identity=preimages.build_identity[:-1] + bytes((
+                preimages.build_identity[-1] ^ 1,
+            )),
+        )
+        changed_comparator = _tamper(
+            result.evidence.build.comparator,
+            "preimages",
+            changed_preimages,
+        )
+        changed_build = _tamper(
+            result.evidence.build,
+            "comparator",
+            changed_comparator,
+        )
+        changed_evidence = _tamper(result.evidence, "build", changed_build)
+        self.assertFalse(receipt.replay_mpfi_evidence_is_well_bound_v1(changed_evidence))
+
     def test_malformed_generated_formula_is_rejected_before_transport(self) -> None:
         request = _request()
         malformed = receipt.MpfiPipelineRequestV1(
