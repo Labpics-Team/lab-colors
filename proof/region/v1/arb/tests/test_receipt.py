@@ -20,14 +20,14 @@ from unittest import mock
 PROOF = Path(__file__).resolve().parents[2]
 ARB = PROOF / "arb"
 TESTS = ARB / "tests"
-sys.path[:0] = [str(PROOF), str(ARB), str(TESTS)]
+sys.path[:0] = [str(PROOF), str(TESTS)]
 
 from build import transport as build_transport  # noqa: E402
 
 import executor  # noqa: E402
-import pipeline  # noqa: E402
 import provenance  # noqa: E402
-import receipt  # noqa: E402
+from arb import pipeline, receipt  # noqa: E402
+from arb import runtime as arb_runtime  # noqa: E402
 from region_proof_protocol import (  # noqa: E402
     BoundaryUnprovenWitnessV1,
     ComparatorKindV1,
@@ -206,6 +206,16 @@ def _replace_limits(
     return executor.ExecutionLimitsV1(**values)
 
 
+def _replace_runtime_binding(
+    value: arb_runtime.ArbRuntimeBindingV1,
+    **limit_changes: int,
+) -> arb_runtime.ArbRuntimeBindingV1:
+    return arb_runtime.ArbRuntimeBindingV1(
+        value.profile,
+        _replace_limits(value.limits, **limit_changes),
+    )
+
+
 def _replace_invocation(
     value: executor.ExecutionRequestV1,
     **changes: object,
@@ -229,9 +239,9 @@ class SourceBoundReceiptTests(unittest.TestCase):
         self.assertIs(type(result), receipt.SourceBoundEvaluatorReceiptV1)
         evidence = _tamper(result.evidence, "request", result.evidence.request)
         switched_request = _request(
-            execution_limits=_replace_limits(
-                result.evidence.request.execution_limits,
-                wall_timeout_ns=result.evidence.request.execution_limits.wall_timeout_ns
+            runtime_binding=_replace_runtime_binding(
+                result.evidence.request.runtime_binding,
+                wall_timeout_ns=result.evidence.request.runtime_binding.limits.wall_timeout_ns
                 - 1,
             )
         )
@@ -264,9 +274,9 @@ class SourceBoundReceiptTests(unittest.TestCase):
         result, _backend = _execute()
         self.assertIs(type(result), receipt.SourceBoundEvaluatorReceiptV1)
         evidence = _tamper(result.evidence, "request", result.evidence.request)
-        switched_limits = _replace_limits(
-            evidence.request.execution_limits,
-            wall_timeout_ns=evidence.request.execution_limits.wall_timeout_ns - 1,
+        switched_binding = _replace_runtime_binding(
+            evidence.request.runtime_binding,
+            wall_timeout_ns=evidence.request.runtime_binding.limits.wall_timeout_ns - 1,
         )
         real_replay = provenance.replay_admitted_source_closure_v1
         switched = False
@@ -277,7 +287,7 @@ class SourceBoundReceiptTests(unittest.TestCase):
         ) -> provenance.ReplayedSourceClosureV1:
             nonlocal switched
             replayed = real_replay(*args, **kwargs)
-            object.__setattr__(evidence.request, "execution_limits", switched_limits)
+            object.__setattr__(evidence.request, "runtime_binding", switched_binding)
             switched = True
             return replayed
 
@@ -467,11 +477,12 @@ class SourceBoundReceiptTests(unittest.TestCase):
         # This golden belongs to the exact observed capability fixture; changing
         # its daemon, CLI path or host user must deliberately rederive it.
         self.assertEqual(
-            receipt.source_bound_policy_identity_v2(
+            receipt.source_bound_policy_identity_v3(
                 capability,
                 request.host_trust,
+                request.runtime_binding,
             ).hex(),
-            "f223e1a1569ca5cf6251fd012af8a789a75aedd830e3ccb8f13db77d7ac67bd4",
+            "a94f16cb61a7a1951457a4254a328bbb5eb07c66cd54d570eaf794eaa5b6bb8e",
         )
 
     def test_controller_uses_shared_observer_placement_and_fails_closed(self) -> None:
@@ -574,13 +585,18 @@ class SourceBoundReceiptTests(unittest.TestCase):
 
     def test_source_bound_policy_identity_consumes_explicit_trust_coordinate(self) -> None:
         capability = _docker_capability()
+        request = _request()
         trust = object()
         with mock.patch.object(
             receipt.pipeline,
             "pipeline_policy_identity_v2",
             return_value=_digest("pipeline-policy"),
         ) as policy_identity:
-            receipt.source_bound_policy_identity_v2(capability, trust)
+            receipt.source_bound_policy_identity_v3(
+                capability,
+                trust,
+                request.runtime_binding,
+            )
         policy_identity.assert_called_once_with(trust, capability.policy)
 
     def test_identity_rejection_remains_typed_at_the_receipt_boundary(self) -> None:
@@ -636,9 +652,10 @@ class SourceBoundReceiptTests(unittest.TestCase):
         self.assertEqual(result.evidence.identity, result.claim.replay_evidence_identity)
         self.assertEqual(
             result.claim.provenance_policy_identity,
-            receipt.source_bound_policy_identity_v2(
+            receipt.source_bound_policy_identity_v3(
                 result.evidence.build.docker_capability,
                 result.evidence.request.host_trust,
+                result.evidence.request.runtime_binding,
             ),
         )
         self.assertTrue(receipt.replay_evidence_is_well_bound_v1(result.evidence))
@@ -1176,11 +1193,11 @@ class SourceBoundReceiptTests(unittest.TestCase):
                     _operation=operation,
                     _token=receipt._EVIDENCE_TOKEN,
                 )
-        mutated_limits = _replace_limits(
-            dag.request.execution_limits,
-            wall_timeout_ns=dag.request.execution_limits.wall_timeout_ns - 1,
+        mutated_binding = _replace_runtime_binding(
+            dag.request.runtime_binding,
+            wall_timeout_ns=dag.request.runtime_binding.limits.wall_timeout_ns - 1,
         )
-        request = _tamper(dag.request, "execution_limits", mutated_limits)
+        request = _tamper(dag.request, "runtime_binding", mutated_binding)
         self.assertFalse(
             receipt.replay_evidence_is_well_bound_v1(
                 _tamper(dag, "request", request)
@@ -1228,10 +1245,9 @@ class SourceBoundReceiptTests(unittest.TestCase):
         self.assertEqual(result.transcript.counters[3], 0)
         self.assertFalse(hasattr(result, "mathematical_proof"))
 
-    def test_crash_signal_timeout_and_oom_remain_typed_failures(self) -> None:
+    def test_signal_timeout_and_oom_remain_process_failures(self) -> None:
         binary_digest = hashlib.sha256(_static_elf(b"source-bound-receipt")).digest()
         outcomes = (
-            executor.ExitNonZeroV1(binary_digest, b"", b"crash", 70),
             executor.SignaledV1(binary_digest, b"", b"", 11, True),
             executor.TimedOutV1(binary_digest, b"", b"", 60_000_000_000),
             executor.OomKilledV1(binary_digest, b"", b"", 1),
@@ -1240,6 +1256,78 @@ class SourceBoundReceiptTests(unittest.TestCase):
             with self.subTest(outcome=type(outcome).__name__):
                 result, _backend = _execute(process_result=outcome)
                 self.assertIs(type(result), pipeline.ExecutionRejectedV1)
+                self.assertEqual(
+                    result.reason,
+                    pipeline.ExecutionFailureReasonV1.PROCESS_FAILED,
+                )
+                self.assertIs(result.observation, outcome)
+
+    def test_versioned_evaluator_exit_classes_remain_distinct(self) -> None:
+        binary_digest = hashlib.sha256(_static_elf(b"source-bound-receipt")).digest()
+        cases = (
+            (
+                arb_runtime.ARB_EXIT_INPUT_REJECTED_V1,
+                pipeline.ExecutionFailureReasonV1.EVALUATOR_INPUT_REJECTED,
+            ),
+            (
+                arb_runtime.ARB_EXIT_INPUT_LIMIT_V1,
+                pipeline.ExecutionFailureReasonV1.EVALUATOR_INPUT_LIMIT,
+            ),
+            (
+                arb_runtime.ARB_EXIT_OUTPUT_LIMIT_V1,
+                pipeline.ExecutionFailureReasonV1.EVALUATOR_OUTPUT_LIMIT,
+            ),
+            (
+                arb_runtime.ARB_EXIT_RESOURCE_LIMIT_V1,
+                pipeline.ExecutionFailureReasonV1.EVALUATOR_RESOURCE_LIMIT,
+            ),
+            (
+                arb_runtime.ARB_EXIT_INTERNAL_V1,
+                pipeline.ExecutionFailureReasonV1.EVALUATOR_INTERNAL,
+            ),
+            (
+                arb_runtime.ARB_EXIT_IO_V1,
+                pipeline.ExecutionFailureReasonV1.EVALUATOR_IO,
+            ),
+            (99, pipeline.ExecutionFailureReasonV1.BACKEND_CONTRACT),
+        )
+        for exit_code, expected in cases:
+            with self.subTest(exit_code=exit_code):
+                observed = executor.ExitNonZeroV1(
+                    binary_digest,
+                    b"",
+                    b"typed evaluator failure",
+                    exit_code,
+                )
+                result, _backend = _execute(process_result=observed)
+                self.assertEqual(result.reason, expected)
+                self.assertIs(result.observation, observed)
+
+    def test_impossible_evaluator_output_is_a_backend_contract_failure(self) -> None:
+        binary_digest = hashlib.sha256(_static_elf(b"source-bound-receipt")).digest()
+        output_limit = _request().runtime_binding.limits.max_stdout_bytes
+        outcomes = (
+            executor.ExitNonZeroV1(
+                binary_digest,
+                b"impossible partial transcript",
+                b"job rejected: bad_magic\n",
+                arb_runtime.ARB_EXIT_INPUT_REJECTED_V1,
+            ),
+            executor.OutputLimitExceededV1(
+                binary_digest,
+                bytes(output_limit),
+                b"",
+                executor.OutputStreamV1.STDOUT,
+                output_limit,
+            ),
+        )
+        for outcome in outcomes:
+            with self.subTest(outcome=type(outcome).__name__):
+                result, _backend = _execute(process_result=outcome)
+                self.assertEqual(
+                    result.reason,
+                    pipeline.ExecutionFailureReasonV1.BACKEND_CONTRACT,
+                )
                 self.assertIs(result.observation, outcome)
 
     def test_controller_rejects_a_forked_child_without_consuming_parent_authority(

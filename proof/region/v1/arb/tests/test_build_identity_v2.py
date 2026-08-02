@@ -17,12 +17,11 @@ from unittest import mock
 
 PROOF = Path(__file__).resolve().parents[2]
 ARB = PROOF / "arb"
-sys.path[:0] = [str(PROOF), str(ARB), str(ARB / "tests")]
+sys.path[:0] = [str(PROOF), str(ARB / "tests")]
 
 from build import transport as build_transport  # noqa: E402
 
-import pipeline  # noqa: E402
-import receipt  # noqa: E402
+from arb import pipeline, receipt  # noqa: E402
 from test_pipeline import (  # noqa: E402
     _BuildBackend,
     _docker_capability,
@@ -197,9 +196,10 @@ def _observed_build_coordinates(
             source_identity,
             result,
         )
-        source_bound_policy = receipt.source_bound_policy_identity_v2(
+        source_bound_policy = receipt.source_bound_policy_identity_v3(
             result.docker_capability,
             request.host_trust,
+            request.runtime_binding,
         )
     process_encodings = tuple(
         build_transport.build_process_bytes_v1(process)
@@ -222,7 +222,8 @@ class BuildIdentityV2Tests(unittest.TestCase):
         self.assertFalse(hasattr(receipt, "source_bound_policy_identity_v1"))
         self.assertFalse(hasattr(receipt, "_build_identity_v1"))
         self.assertTrue(callable(pipeline.pipeline_policy_identity_v2))
-        self.assertTrue(callable(receipt.source_bound_policy_identity_v2))
+        self.assertFalse(hasattr(receipt, "source_bound_policy_identity_v2"))
+        self.assertTrue(callable(receipt.source_bound_policy_identity_v3))
         self.assertTrue(callable(receipt._build_identity_v2))
 
         pipeline_source = (ARB / "pipeline.py").read_text(encoding="utf-8")
@@ -236,6 +237,7 @@ class BuildIdentityV2Tests(unittest.TestCase):
         for stale in (
             "labcolors.proof-region.arb-build-replay.v1",
             "labcolors.proof-region.arb-source-bound-policy.v1",
+            "labcolors.proof-region.arb-source-bound-policy.v2",
         ):
             with self.subTest(stale=stale):
                 self.assertNotIn(stale, receipt_source)
@@ -469,7 +471,7 @@ class BuildIdentityV2Tests(unittest.TestCase):
             receipt._build_identity_from_operation_v2
         )
         source_bound_calls = _called_names(
-            receipt.source_bound_policy_identity_v2
+            receipt.source_bound_policy_identity_v3
         )
         self.assertIn("docker_capability_identity_v1", comparator_calls)
         self.assertIn("_derive_arb_comparator_for_build_v1", comparator_replay_calls)
@@ -477,6 +479,7 @@ class BuildIdentityV2Tests(unittest.TestCase):
         self.assertIn("_build_identity_from_operation_v2", receipt_build_calls)
         self.assertIn("docker_capability_identity_v1", receipt_owned_build_calls)
         self.assertIn("docker_capability_identity_v1", source_bound_calls)
+        self.assertIn("runtime_binding_identity_v1", source_bound_calls)
 
     def test_path_uid_daemon_and_hostname_flow_to_downstream_build_identity_only(self) -> None:
         baseline_policy = pipeline.ARB_BUILD_TRANSPORT_POLICY_V1

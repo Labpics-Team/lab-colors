@@ -138,12 +138,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          export PYTHONPATH="$GITHUB_WORKSPACE/proof/region/v1:$GITHUB_WORKSPACE/proof/region/v1/arb"
+          export PYTHONPATH="$GITHUB_WORKSPACE/proof/region/v1"
           docker_path="$(realpath "$(command -v docker)")"
           test -f "$docker_path"
           test ! -L "$docker_path"
           image="$(python3 - <<'PY'
-          import pipeline
+          from arb import pipeline
           print(pipeline.OCI_IMAGE_REFERENCE_V1)
           PY
           )"
@@ -172,14 +172,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          export PYTHONPATH="$GITHUB_WORKSPACE/proof/region/v1:$GITHUB_WORKSPACE/proof/region/v1/arb"
+          export PYTHONPATH="$GITHUB_WORKSPACE/proof/region/v1"
           export LABCOLORS_ARB_PIPELINE_DOCKER
           python3 - <<'PY'
           import os
           import sys
           from pathlib import Path
 
-          import pipeline
+          from arb import pipeline
 
           docker = pipeline.NativeDockerBuildBackendV1(
               Path(os.environ["LABCOLORS_ARB_PIPELINE_DOCKER"])

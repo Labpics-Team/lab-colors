@@ -18,7 +18,7 @@ from proof.region.v1.arb.tests.test_evaluator_source import (  # noqa: E402
 
 
 EXPECTED_RUNTIME_INVENTORY_SHA256 = (
-    "bc169a72a472a67e206250f755006085fa204646ee76fe7c6e8752db072aa73a"
+    "b3694e51281e25a7b2f25fccede2845274cd8e3079d2b8997e2bf105ebdb1043"
 )
 
 

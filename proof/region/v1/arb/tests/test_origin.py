@@ -20,9 +20,8 @@ from unittest import mock
 PROOF = Path(__file__).resolve().parents[2]
 ARB = PROOF / "arb"
 sys.path.insert(0, str(PROOF))
-sys.path.insert(0, str(ARB))
 
-import origin  # noqa: E402
+from arb import origin  # noqa: E402
 import provenance  # noqa: E402
 
 

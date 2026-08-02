@@ -16,10 +16,11 @@ from enum import StrEnum
 from pathlib import Path
 from typing import TypeAlias
 
+from arb import pipeline
+from arb import runtime as arb_runtime
 from build import transport as build_transport
 
 import executor
-import pipeline
 import provenance
 import region_proof_protocol as protocol
 
@@ -36,8 +37,8 @@ _EVIDENCE_ID_LABEL_V1 = b"labcolors.proof-region.arb-evaluator-replay.v1\0"
 _EVIDENCE_STABILITY_LABEL_V1 = (
     b"labcolors.proof-region.arb-evaluator-stability.v1\0"
 )
-_SOURCE_BOUND_POLICY_ID_LABEL_V2 = (
-    b"labcolors.proof-region.arb-source-bound-policy.v2\0"
+_SOURCE_BOUND_POLICY_ID_LABEL_V3 = (
+    b"labcolors.proof-region.arb-source-bound-policy.v3\0"
 )
 
 _DIAGNOSTIC_BUILD_FIELDS_V1 = (
@@ -82,28 +83,33 @@ def _identity(label: bytes, chunks: tuple[bytes, ...]) -> bytes:
     return hashlib.sha256(label + len(payload).to_bytes(8, "big") + payload).digest()
 
 
-def source_bound_policy_identity_v2(
+def source_bound_policy_identity_v3(
     capability: build_transport.DockerSupportedV1,
     host_trust: pipeline.HostTrustBoundaryV1,
+    runtime_binding: arb_runtime.ArbRuntimeBindingV1,
 ) -> bytes:
     """Identity of the exact observation rules and observed BUILD capability."""
 
     capability_identity = build_transport.docker_capability_identity_v1(capability)
+    runtime_identity = arb_runtime.runtime_binding_identity_v1(runtime_binding)
+    if type(runtime_identity) is not bytes:
+        raise TypeError("runtime binding did not replay")
 
     return _identity(
-        _SOURCE_BOUND_POLICY_ID_LABEL_V2,
+        _SOURCE_BOUND_POLICY_ID_LABEL_V3,
         (
             pipeline.pipeline_policy_identity_v2(
                 host_trust,
                 capability.policy,
             ),
             capability_identity,
+            runtime_identity,
             executor.SANDBOX_POLICY_RELEASE_V1.encode("ascii"),
             b"authority=one-shot-native-controller",
             b"source=lock-plus-owned-archive-and-build-input-replay",
             b"build=one-sealed-bundle-two-fresh-byte-equal-attempts",
             b"run=retained-executable-object-one-contained-process",
-            b"identity=immutable-coordinates-total-rejection-v2",
+            b"identity=immutable-coordinates-total-rejection-v3",
             b"claim=provenance-only-no-numerical-semantics",
             b"trust=unsealed-linux-x64-host-native-docker-cli-and-daemon",
         ),
@@ -298,7 +304,7 @@ def _run_identity_v1(
         cwd=b"/",
         stdin=request.job.encode(),
         umask=0o077,
-        limits=request.execution_limits,
+        limits=request.runtime_binding.limits,
     )
     if (
         type(invocation) is not executor.ExecutionRequestV1
@@ -524,13 +530,13 @@ def _request_replay_coordinates_v1(
     admitted_sources = request.admitted_sources
     build_sources = request.build_sources
     job = request.job
-    execution_limits = request.execution_limits
+    runtime_binding = request.runtime_binding
     if (
         type(source_lock) is not provenance.ArbSourceLockV1
         or type(admitted_sources) is not provenance.AdmittedArbSourcesV1
         or type(build_sources) is not pipeline.AdmittedBuildSourcesV1
         or type(job) is not protocol.ProofJobV1
-        or type(execution_limits) is not executor.ExecutionLimitsV1
+        or type(runtime_binding) is not arb_runtime.ArbRuntimeBindingV1
         or admitted_sources.source_lock_identity != source_lock.identity
         or type(source_lock.sources) is not tuple
         or type(admitted_sources.sources) is not tuple
@@ -568,7 +574,13 @@ def _request_replay_coordinates_v1(
             provenance._source_archive_coordinates_from_replayed_v1(lock, source)
         )
     canonical_job = _canonical_proof_job_with_coherent_identities_v1(job)
-    canonical_limits = executor.ExecutionLimitsV1(*tuple(execution_limits))
+    canonical_binding = arb_runtime.ArbRuntimeBindingV1(*tuple(runtime_binding))
+    binding_identity = arb_runtime.runtime_binding_identity_v1(canonical_binding)
+    profile_identity = arb_runtime.runtime_profile_identity_v1(
+        canonical_binding.profile
+    )
+    if type(binding_identity) is not bytes or type(profile_identity) is not bytes:
+        raise TypeError("request runtime binding did not replay")
     return (
         source_lock.encode(),
         source_lock.identity,
@@ -580,10 +592,8 @@ def _request_replay_coordinates_v1(
         pipeline.build_source_manifest_bytes_v1(build_sources),
         canonical_job.encode(),
         canonical_job.identity,
-        *(
-            value.to_bytes(8, "big")
-            for value in canonical_limits
-        ),
+        profile_identity,
+        binding_identity,
         pipeline._host_trust_wire_v1(request.host_trust),
     )
 
@@ -997,9 +1007,10 @@ class SourceBoundEvaluatorReceiptV1:
             raise TypeError("SourceBoundEvaluatorReceiptV1 is controller-sealed")
         if (
             claim.provenance_policy_identity
-            != source_bound_policy_identity_v2(
+            != source_bound_policy_identity_v3(
                 evidence.build.docker_capability,
                 evidence.request.host_trust,
+                evidence.request.runtime_binding,
             )
             or claim.run_claim_identity != evidence.run_claim.identity
             or claim.replay_evidence_identity != evidence.identity
@@ -1060,8 +1071,41 @@ SourceBoundResultV1: TypeAlias = (
     | pipeline.TranscriptRejectedV1
 )
 
-def _limits_copy_v1(value: executor.ExecutionLimitsV1) -> executor.ExecutionLimitsV1:
-    return executor.ExecutionLimitsV1(*value)
+
+def _evaluator_process_failure_reason_v1(
+    observation: executor.ExecutionResultV1,
+) -> pipeline.ExecutionFailureReasonV1:
+    """Classify only versioned evaluator exits; never infer from stderr text."""
+
+    if type(observation) is executor.OutputLimitExceededV1:
+        return pipeline.ExecutionFailureReasonV1.BACKEND_CONTRACT
+    if type(observation) is not executor.ExitNonZeroV1:
+        return pipeline.ExecutionFailureReasonV1.PROCESS_FAILED
+    by_exit_code = {
+        arb_runtime.ARB_EXIT_INPUT_REJECTED_V1:
+            pipeline.ExecutionFailureReasonV1.EVALUATOR_INPUT_REJECTED,
+        arb_runtime.ARB_EXIT_INPUT_LIMIT_V1:
+            pipeline.ExecutionFailureReasonV1.EVALUATOR_INPUT_LIMIT,
+        arb_runtime.ARB_EXIT_OUTPUT_LIMIT_V1:
+            pipeline.ExecutionFailureReasonV1.EVALUATOR_OUTPUT_LIMIT,
+        arb_runtime.ARB_EXIT_RESOURCE_LIMIT_V1:
+            pipeline.ExecutionFailureReasonV1.EVALUATOR_RESOURCE_LIMIT,
+        arb_runtime.ARB_EXIT_INTERNAL_V1:
+            pipeline.ExecutionFailureReasonV1.EVALUATOR_INTERNAL,
+        arb_runtime.ARB_EXIT_IO_V1:
+            pipeline.ExecutionFailureReasonV1.EVALUATOR_IO,
+    }
+    reason = by_exit_code.get(
+        observation.exit_code,
+        pipeline.ExecutionFailureReasonV1.BACKEND_CONTRACT,
+    )
+    if (
+        reason is not pipeline.ExecutionFailureReasonV1.BACKEND_CONTRACT
+        and reason is not pipeline.ExecutionFailureReasonV1.EVALUATOR_IO
+        and observation.stdout
+    ):
+        return pipeline.ExecutionFailureReasonV1.BACKEND_CONTRACT
+    return reason
 
 
 def _resolve_request_v1(
@@ -1075,7 +1119,7 @@ def _resolve_request_v1(
         request.admitted_sources,
         pipeline.admit_build_sources_v1(request.build_sources.files),
         protocol.ProofJobV1.parse(request.job.encode()),
-        _limits_copy_v1(request.execution_limits),
+        arb_runtime.ArbRuntimeBindingV1(*tuple(request.runtime_binding)),
         request.host_trust,
     )
 
@@ -1197,7 +1241,7 @@ class SourceBoundArbControllerV1:
                 cwd=b"/",
                 stdin=replay_request.job.encode(),
                 umask=0o077,
-                limits=replay_request.execution_limits,
+                limits=replay_request.runtime_binding.limits,
             )
         except executor.ExecutionRequestErrorV1 as error:
             return pipeline.ExecutionRejectedV1(
@@ -1212,7 +1256,7 @@ class SourceBoundArbControllerV1:
                     observed,
                 )
             return pipeline.ExecutionRejectedV1(
-                pipeline.ExecutionFailureReasonV1.PROCESS_FAILED,
+                _evaluator_process_failure_reason_v1(observed),
                 observed,
             )
         if observed.binary_sha256 != built.binary_sha256:
@@ -1278,9 +1322,10 @@ class SourceBoundArbControllerV1:
                 _token=_EVIDENCE_TOKEN,
             )
             claim = protocol.EvaluatorProvenanceClaimV1(
-                source_bound_policy_identity_v2(
+                source_bound_policy_identity_v3(
                     built.docker_capability,
                     replay_request.host_trust,
+                    replay_request.runtime_binding,
                 ),
                 run_claim.identity,
                 evidence.identity,

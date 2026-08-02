@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import struct
 import subprocess
 import sys
 import tempfile
@@ -23,6 +24,7 @@ GENERATOR_TIMEOUT_SECONDS = 60
 EVALUATOR_TIMEOUT_SECONDS = 300
 sys.path.insert(0, str(REPO / "proof/region/v1"))
 
+from arb import runtime as arb_runtime  # noqa: E402
 from region_proof_protocol import (  # noqa: E402
     BoundaryUnprovenWitnessV1,
     ComparatorBudgetV1,
@@ -67,6 +69,59 @@ def run_evaluator(
         check=False,
         capture_output=True,
         timeout=EVALUATOR_TIMEOUT_SECONDS,
+    )
+
+
+def runtime_invocation() -> tuple[str, ...]:
+    return (
+        os.environ["LABCOLORS_ARB_EVALUATOR"],
+        "--manifest-identity",
+        "ab" + "00" * 31,
+        "--job",
+        "/dev/stdin",
+    )
+
+
+def runtime_profile_job(
+    *,
+    arb_ladder: tuple[int, ...] = (1,),
+    mpfi_ladder: tuple[int, ...] = (1,),
+    knot_count: int = 1,
+) -> ProofJobV1:
+    registered = ContextualRegionDefinitionV1.parse(
+        (REPO / "proof/region/v1/fixtures/v5b2b-definition-0a8d1c3d.bin").read_bytes()
+    )
+    zero = bytes(8)
+    knots = tuple(
+        coordinate
+        for index in range(knot_count)
+        for coordinate in (struct.pack(">d", float(index)), zero, zero, zero)
+    )
+    definition = ContextualRegionDefinitionV1(
+        registered.fields[:21] + (knot_count.to_bytes(8, "big"),) + knots,
+        knot_count,
+    )
+    return ProofJobV1(
+        definition,
+        FORMULA.read_bytes(),
+        ReducedDomainManifestV1.from_ordinals((0,)),
+        ProofPolicyV1(
+            1,
+            (
+                ComparatorBudgetV1(
+                    ComparatorKindV1.ARB,
+                    arb_ladder,
+                    0,
+                    0,
+                ),
+                ComparatorBudgetV1(
+                    ComparatorKindV1.MPFI,
+                    mpfi_ladder,
+                    0,
+                    0,
+                ),
+            ),
+        ),
     )
 
 
@@ -211,20 +266,59 @@ class StandaloneSourceTests(unittest.TestCase):
         self.assertLess(decision_guard, singleton_dispatch)
 
     def test_runtime_profile_bounds_input_and_transcript_before_allocation(self) -> None:
-        wire = (EVALUATOR / "wire.h").read_text(encoding="utf-8")
+        header = (EVALUATOR / "wire.h").read_text(encoding="utf-8")
+        wire = (EVALUATOR / "wire.c").read_text(encoding="utf-8")
         main = (EVALUATOR / "main.c").read_text(encoding="utf-8")
+        self.assertEqual(arb_runtime.ARB_MAX_JOB_BYTES_V1, 16_777_216)
+        self.assertEqual(arb_runtime.ARB_MAX_OUTPUT_BYTES_V1, 16_777_216)
+        self.assertEqual(arb_runtime.ARB_MAX_PRECISION_BITS_V1, 4_096)
+        self.assertEqual(arb_runtime.ARB_MAX_POLICY_RUNGS_V1, 32)
+        self.assertEqual(arb_runtime.ARB_MAX_KNOTS_V1, 1_024)
+        for declaration in (
+            "#define LC_ARB_MAX_PRECISION_BITS_V1 UINT32_C(4096)",
+            "#define LC_ARB_MAX_POLICY_RUNGS_V1 UINT32_C(32)",
+            "#define LC_ARB_MAX_KNOTS_V1 UINT64_C(1024)",
+            "#define LC_ARB_EXIT_USAGE_V1 64",
+            "#define LC_ARB_EXIT_INPUT_REJECTED_V1 65",
+            "#define LC_ARB_EXIT_INPUT_LIMIT_V1 66",
+            "#define LC_ARB_EXIT_OUTPUT_LIMIT_V1 67",
+            "#define LC_ARB_EXIT_RESOURCE_LIMIT_V1 68",
+            "#define LC_ARB_EXIT_INTERNAL_V1 70",
+            "#define LC_ARB_EXIT_IO_V1 74",
+        ):
+            with self.subTest(declaration=declaration):
+                self.assertIn(declaration, header)
+        self.assertIn("UINT64_C(16) * UINT64_C(1024) * UINT64_C(1024)", header)
         for name in (
             "LC_ARB_MAX_JOB_BYTES_V1",
             "LC_ARB_MAX_OUTPUT_BYTES_V1",
+            "LC_ARB_MAX_PRECISION_BITS_V1",
+            "LC_ARB_MAX_POLICY_RUNGS_V1",
+            "LC_ARB_MAX_KNOTS_V1",
         ):
             with self.subTest(name=name):
-                self.assertIn(name, wire)
-                self.assertIn(name, main)
+                self.assertIn(name, header)
+                self.assertIn(name, main + wire)
         self.assertIn("LC_ARB_EVALUATION_RESOURCE_LIMIT", main)
         self.assertIn("limit_exceeded", main)
         self.assertIn("input.maximum", main)
         self.assertIn("output.maximum", main)
-        self.assertIn("witnesses.maximum", main)
+        self.assertNotIn("byte_buffer decisions", main)
+        self.assertNotIn("byte_buffer witnesses", main)
+        self.assertIn("append_digest_witness(output", main)
+        self.assertIn("append_resource_witness(\n                    output", main)
+        digest_appender = main[
+            main.index("append_digest_witness(") : main.index("append_resource_witness(")
+        ]
+        resource_appender = main[
+            main.index("append_resource_witness(") : main.index("lesser_u64(")
+        ]
+        self.assertIn("uint8_t record[37]", digest_appender)
+        self.assertIn("buffer_append(output, record, sizeof(record))", digest_appender)
+        self.assertNotIn("buffer_u8", digest_appender)
+        self.assertIn("uint8_t record[22]", resource_appender)
+        self.assertIn("buffer_append(output, record, sizeof(record))", resource_appender)
+        self.assertNotIn("buffer_u8", resource_appender)
         self.assertIn("output_limit", main)
         reserve = main[main.index("buffer_reserve(") : main.index("buffer_append(")]
         self.assertLess(
@@ -236,6 +330,27 @@ class StandaloneSourceTests(unittest.TestCase):
             reader.index("input->maximum"),
             reader.index("buffer_append(input"),
         )
+        self.assertLess(
+            wire.index("knot_count > LC_ARB_MAX_KNOTS_V1"),
+            wire.index("lc_region_init(&job->region"),
+        )
+        self.assertLess(
+            wire.index("rung_count > LC_ARB_MAX_POLICY_RUNGS_V1"),
+            wire.index("policy->precision_ladder = calloc"),
+        )
+        read_failure = main[
+            main.index("if (read_status != LC_ARB_READ_OK)") :
+            main.index("if (!lc_parse_job")
+        ]
+        parse_failure_start = main.index("if (!lc_parse_job")
+        parse_failure = main[
+            parse_failure_start :
+            main.index("lc_arb_evaluation_status", parse_failure_start)
+        ]
+        self.assertIn("read_status == LC_ARB_READ_ALLOCATION_FAILED", read_failure)
+        self.assertIn("status = LC_ARB_EXIT_INTERNAL_V1", read_failure)
+        self.assertIn("error == LC_WIRE_ALLOCATION_FAILED", parse_failure)
+        self.assertIn("status = LC_ARB_EXIT_INTERNAL_V1", parse_failure)
 
     def test_sha256_has_literal_standard_vectors_and_no_external_crypto(self) -> None:
         source = (EVALUATOR / "hash.c").read_text(encoding="utf-8")
@@ -246,6 +361,27 @@ class StandaloneSourceTests(unittest.TestCase):
 
 
 class ExactBoundaryRuntimeTests(unittest.TestCase):
+    @unittest.skipUnless(
+        os.environ.get("LABCOLORS_ARB_EVALUATOR"),
+        "set LABCOLORS_ARB_EVALUATOR to the controlled C17 binary",
+    )
+    def test_closed_stdout_is_a_versioned_io_exit_not_an_untyped_signal(self) -> None:
+        read_descriptor, write_descriptor = os.pipe()
+        os.close(read_descriptor)
+        with os.fdopen(write_descriptor, "wb") as output:
+            process = subprocess.Popen(
+                runtime_invocation(),
+                stdin=subprocess.PIPE,
+                stdout=output,
+                stderr=subprocess.PIPE,
+            )
+            _stdout, stderr = process.communicate(
+                runtime_profile_job().encode(),
+                timeout=EVALUATOR_TIMEOUT_SECONDS,
+            )
+        self.assertEqual(process.returncode, arb_runtime.ARB_EXIT_IO_V1)
+        self.assertEqual(stderr, b"result write failed\n")
+
     @unittest.skipUnless(
         os.environ.get("LABCOLORS_ARB_EVALUATOR"),
         "set LABCOLORS_ARB_EVALUATOR to the controlled C17 binary",
@@ -267,7 +403,7 @@ class ExactBoundaryRuntimeTests(unittest.TestCase):
         for arguments in invalid_invocations:
             with self.subTest(arguments=arguments):
                 result = run_evaluator((executable, *arguments), b"")
-                self.assertEqual(result.returncode, 64)
+                self.assertEqual(result.returncode, arb_runtime.ARB_EXIT_USAGE_V1)
                 self.assertEqual(result.stdout, b"")
 
         accepted = run_evaluator(
@@ -280,9 +416,129 @@ class ExactBoundaryRuntimeTests(unittest.TestCase):
             ),
             b"",
         )
-        self.assertEqual(accepted.returncode, 1)
+        self.assertEqual(accepted.returncode, arb_runtime.ARB_EXIT_INPUT_REJECTED_V1)
         self.assertEqual(accepted.stdout, b"")
-        self.assertIn(b"job read failed", accepted.stderr)
+        self.assertEqual(accepted.stderr, b"job read failed: empty_input\n")
+
+    @unittest.skipUnless(
+        os.environ.get("LABCOLORS_ARB_EVALUATOR"),
+        "set LABCOLORS_ARB_EVALUATOR to the controlled C17 binary",
+    )
+    def test_job_transport_limit_precedes_wire_parsing(self) -> None:
+        at_limit = run_evaluator(
+            runtime_invocation(),
+            bytes(arb_runtime.ARB_MAX_JOB_BYTES_V1),
+        )
+        self.assertEqual(
+            at_limit.returncode,
+            arb_runtime.ARB_EXIT_INPUT_REJECTED_V1,
+        )
+        self.assertEqual(at_limit.stdout, b"")
+        self.assertEqual(at_limit.stderr, b"job rejected: bad_magic\n")
+
+        over_limit = run_evaluator(
+            runtime_invocation(),
+            bytes(arb_runtime.ARB_MAX_JOB_BYTES_V1 + 1),
+        )
+        self.assertEqual(over_limit.returncode, arb_runtime.ARB_EXIT_INPUT_LIMIT_V1)
+        self.assertEqual(over_limit.stdout, b"")
+        self.assertEqual(over_limit.stderr, b"job read failed: input_limit\n")
+
+    @unittest.skipUnless(
+        os.environ.get("LABCOLORS_ARB_EVALUATOR"),
+        "set LABCOLORS_ARB_EVALUATOR to the controlled C17 binary",
+    )
+    def test_allocation_profile_boundaries_are_enforced_by_the_native_parser(self) -> None:
+        accepted = (
+            runtime_profile_job(
+                arb_ladder=(arb_runtime.ARB_MAX_PRECISION_BITS_V1,),
+            ),
+            runtime_profile_job(
+                mpfi_ladder=(arb_runtime.ARB_MAX_PRECISION_BITS_V1,),
+            ),
+            runtime_profile_job(
+                arb_ladder=tuple(range(1, arb_runtime.ARB_MAX_POLICY_RUNGS_V1 + 1)),
+            ),
+            runtime_profile_job(
+                mpfi_ladder=tuple(range(1, arb_runtime.ARB_MAX_POLICY_RUNGS_V1 + 1)),
+            ),
+            runtime_profile_job(knot_count=arb_runtime.ARB_MAX_KNOTS_V1),
+        )
+        for index, job in enumerate(accepted):
+            with self.subTest(boundary=index):
+                result = run_evaluator(runtime_invocation(), job.encode())
+                self.assertEqual(result.returncode, 0, result.stderr.decode())
+                self.assertEqual(result.stderr, b"")
+                self.assertEqual(DecisionTranscriptV1.parse(result.stdout).encode(), result.stdout)
+
+        over_rungs = tuple(range(1, arb_runtime.ARB_MAX_POLICY_RUNGS_V1 + 2))
+        rejected = (
+            runtime_profile_job(
+                arb_ladder=(arb_runtime.ARB_MAX_PRECISION_BITS_V1 + 1,),
+            ),
+            runtime_profile_job(
+                mpfi_ladder=(arb_runtime.ARB_MAX_PRECISION_BITS_V1 + 1,),
+            ),
+            runtime_profile_job(arb_ladder=over_rungs),
+            runtime_profile_job(mpfi_ladder=over_rungs),
+            runtime_profile_job(knot_count=arb_runtime.ARB_MAX_KNOTS_V1 + 1),
+        )
+        for index, job in enumerate(rejected):
+            with self.subTest(over_limit=index):
+                result = run_evaluator(runtime_invocation(), job.encode())
+                self.assertEqual(
+                    result.returncode,
+                    arb_runtime.ARB_EXIT_RESOURCE_LIMIT_V1,
+                )
+                self.assertEqual(result.stdout, b"")
+                self.assertEqual(result.stderr, b"job rejected: resource_limit\n")
+
+    @unittest.skipUnless(
+        os.environ.get("LABCOLORS_ARB_EVALUATOR"),
+        "set LABCOLORS_ARB_EVALUATOR to the controlled C17 binary",
+    )
+    def test_aggregate_transcript_output_limit_is_exact(self) -> None:
+        frozen = ProofJobV1.parse(
+            (REPO / "proof/region/v1/fixtures/proof-job-v1.bin").read_bytes()
+        )
+        policy = ProofPolicyV1(
+            1,
+            (
+                ComparatorBudgetV1(ComparatorKindV1.ARB, (1,), 0, 0),
+                ComparatorBudgetV1(ComparatorKindV1.MPFI, (1,), 0, 0),
+            ),
+        )
+
+        def job(point_count: int) -> ProofJobV1:
+            return ProofJobV1(
+                frozen.definition,
+                frozen.formula_spec,
+                ReducedDomainManifestV1(((0, point_count),), point_count),
+                policy,
+            )
+
+        accepted_points = 450_389
+        accepted = run_evaluator(runtime_invocation(), job(accepted_points).encode())
+        decision_bytes = (accepted_points + 3) // 4
+        counters_offset = 120 + decision_bytes
+        self.assertEqual(accepted.returncode, 0, accepted.stderr.decode())
+        self.assertEqual(accepted.stderr, b"")
+        self.assertEqual(len(accepted.stdout), 16_777_191)
+        self.assertEqual(
+            tuple(
+                int.from_bytes(
+                    accepted.stdout[offset : offset + 8],
+                    "big",
+                )
+                for offset in range(counters_offset, counters_offset + 32, 8)
+            ),
+            (0, 0, accepted_points, 0),
+        )
+
+        rejected = run_evaluator(runtime_invocation(), job(450_390).encode())
+        self.assertEqual(rejected.returncode, arb_runtime.ARB_EXIT_OUTPUT_LIMIT_V1)
+        self.assertEqual(rejected.stdout, b"")
+        self.assertEqual(rejected.stderr, b"evaluation failed: output_limit\n")
 
     @unittest.skipUnless(
         os.environ.get("LABCOLORS_ARB_EVALUATOR"),

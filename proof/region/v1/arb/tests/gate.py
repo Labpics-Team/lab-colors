@@ -19,9 +19,8 @@ SHARED_FAST_TEST_PATTERNS_V1 = (
     "test_mpfi_input.py",
 )
 EXPECTED_TEST_INVENTORY_SHA256 = (
-    "4b2ea28bcc31ff5344ec4dff50e556f0c2b38557fe6cee6e63973a5957500813"
+    "1cdeb3e8d5100948504f981ad0fbff2114a4fad3e5dfce749cd9813d1e9bdfa7"
 )
-EXPECTED_TEST_COUNT = 245
 _EVALUATOR_REASON = "set LABCOLORS_ARB_EVALUATOR to the controlled C17 binary"
 EXPECTED_SKIPS = frozenset(
     {
@@ -30,11 +29,15 @@ EXPECTED_SKIPS = frozenset(
             _EVALUATOR_REASON,
         )
         for name in (
+            "test_allocation_profile_boundaries_are_enforced_by_the_native_parser",
             "test_black_exact_zero_runs_through_job_parser_formula_and_closed_driver",
             "test_cli_requires_one_nonzero_lowercase_manifest_identity",
+            "test_closed_stdout_is_a_versioned_io_exit_not_an_untyped_signal",
             "test_frozen_seam_cube_resolves_one_inside_and_511_outside",
             "test_global_pregrant_is_never_transferred_between_points",
+            "test_job_transport_limit_precedes_wire_parsing",
             "test_multisegment_exact_trace_selects_first_canonical_branch",
+            "test_aggregate_transcript_output_limit_is_exact",
             "test_resource_witness_accounts_for_work_consumed_on_earlier_rungs",
             "test_spd_admission_is_exact_across_the_full_binary64_exponent_range",
             "test_subminimum_precision_is_unresolved_and_a_later_valid_rung_recovers",

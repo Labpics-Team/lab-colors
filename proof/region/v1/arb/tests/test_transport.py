@@ -24,12 +24,11 @@ PROOF = Path(__file__).resolve().parents[2]
 ARB = PROOF / "arb"
 TESTS = ARB / "tests"
 sys.path.insert(0, str(PROOF))
-sys.path.insert(0, str(ARB))
 sys.path.insert(0, str(TESTS))
 
 from build import input as build_input  # noqa: E402
 from build import transport as build_transport  # noqa: E402
-import pipeline  # noqa: E402
+from arb import pipeline  # noqa: E402
 import provenance  # noqa: E402
 from test_pipeline import (  # noqa: E402
     _docker_capability,
@@ -282,7 +281,7 @@ class CanonicalBuildBundleTests(unittest.TestCase):
         self.assertTrue(pipeline.arb_input_is_bound_v1(request, policy, first))
         self.assertEqual(
             first.sha256.hex(),
-            "dfd7216be913be601f18e2fd461d9d9c8609355da2f9078dd99328f00ee33f34",
+            "0aacb746c062658b52132895dc0f330facd2bc91451f73c99146d7d05c7ebb60",
         )
         self.assertEqual(first.length, 174_080)
 

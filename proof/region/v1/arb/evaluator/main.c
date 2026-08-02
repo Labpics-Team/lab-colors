@@ -1,4 +1,5 @@
 #include <errno.h>
+#include <signal.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -15,13 +16,15 @@ typedef struct {
     size_t capacity;
     size_t maximum;
     bool limit_exceeded;
+    bool allocation_failed;
 } byte_buffer;
 
 typedef enum {
     LC_ARB_READ_OK = 0,
     LC_ARB_READ_EMPTY = 1,
     LC_ARB_READ_TOO_LARGE = 2,
-    LC_ARB_READ_FAILED = 3
+    LC_ARB_READ_IO_FAILED = 3,
+    LC_ARB_READ_ALLOCATION_FAILED = 4
 } lc_arb_read_status;
 
 typedef enum {
@@ -72,6 +75,7 @@ buffer_reserve(byte_buffer *buffer, size_t additional)
     }
     replacement = realloc(buffer->bytes, capacity);
     if (replacement == NULL) {
+        buffer->allocation_failed = true;
         return false;
     }
     buffer->bytes = replacement;
@@ -91,21 +95,6 @@ buffer_append(byte_buffer *buffer, const uint8_t *bytes, size_t length)
     memcpy(buffer->bytes + buffer->length, bytes, length);
     buffer->length += length;
     return true;
-}
-
-static bool
-buffer_u8(byte_buffer *buffer, uint8_t value)
-{
-    return buffer_append(buffer, &value, 1);
-}
-
-static bool
-buffer_u32(byte_buffer *buffer, uint32_t value)
-{
-    uint8_t bytes[4];
-
-    lc_write_u32_be(bytes, value);
-    return buffer_append(buffer, bytes, sizeof(bytes));
 }
 
 static bool
@@ -129,7 +118,7 @@ read_stdin(byte_buffer *input)
             if (errno == EINTR) {
                 continue;
             }
-            return LC_ARB_READ_FAILED;
+            return LC_ARB_READ_IO_FAILED;
         }
         if (count == 0) {
             return input->length == 0 ? LC_ARB_READ_EMPTY : LC_ARB_READ_OK;
@@ -139,7 +128,9 @@ read_stdin(byte_buffer *input)
             return LC_ARB_READ_TOO_LARGE;
         }
         if (!buffer_append(input, chunk, (size_t) count)) {
-            return LC_ARB_READ_FAILED;
+            return input->allocation_failed
+                ? LC_ARB_READ_ALLOCATION_FAILED
+                : LC_ARB_READ_IO_FAILED;
         }
     }
 }
@@ -301,30 +292,36 @@ account_point(
 
 static bool
 append_digest_witness(
-    byte_buffer *witnesses,
+    byte_buffer *output,
     uint8_t kind,
     uint32_t ordinal,
     const uint8_t digest[32]
 )
 {
-    return buffer_u8(witnesses, kind)
-        && buffer_u32(witnesses, ordinal)
-        && buffer_append(witnesses, digest, 32);
+    uint8_t record[37];
+
+    record[0] = kind;
+    lc_write_u32_be(record + 1, ordinal);
+    memcpy(record + 5, digest, 32);
+    return buffer_append(output, record, sizeof(record));
 }
 
 static bool
 append_resource_witness(
-    byte_buffer *witnesses,
+    byte_buffer *output,
     uint32_t ordinal,
     uint8_t scope,
     uint64_t grant
 )
 {
-    return buffer_u8(witnesses, 3)
-        && buffer_u32(witnesses, ordinal)
-        && buffer_u8(witnesses, scope)
-        && buffer_u64(witnesses, grant)
-        && buffer_u64(witnesses, grant);
+    uint8_t record[22];
+
+    record[0] = 3;
+    lc_write_u32_be(record + 1, ordinal);
+    record[5] = scope;
+    lc_write_u64_be(record + 6, grant);
+    lc_write_u64_be(record + 14, grant);
+    return buffer_append(output, record, sizeof(record));
 }
 
 static uint64_t
@@ -340,8 +337,6 @@ evaluate(
     byte_buffer *output
 )
 {
-    byte_buffer decisions = {0};
-    byte_buffer witnesses = {0};
     lc_domain_iterator iterator;
     lc_region_result result;
     lc_sha256_context accounting;
@@ -351,10 +346,13 @@ evaluate(
     uint64_t global_remaining = job->policy.global_pregrant;
     uint8_t accounting_digest[32];
     size_t decision_length;
+    size_t decision_offset;
+    size_t counters_offset;
+    size_t equality_count_offset;
+    size_t accounting_offset;
+    size_t witness_count_offset;
     lc_arb_evaluation_status status = LC_ARB_EVALUATION_FAILED;
-
-    decisions.maximum = (size_t) LC_ARB_MAX_OUTPUT_BYTES_V1;
-    witnesses.maximum = (size_t) LC_ARB_MAX_OUTPUT_BYTES_V1;
+    static const uint8_t zero_digest[32] = {0};
 
     if (job->domain.point_count == 0
         || job->policy.precision_count == 0
@@ -363,16 +361,50 @@ evaluate(
     }
     decision_length = ((size_t) job->domain.point_count + 3) / 4;
     if (decision_length == 0
-        || !buffer_reserve(&decisions, decision_length)
-        || decisions.bytes == NULL) {
-        status = decisions.limit_exceeded
+        || !buffer_append(output, transcript_magic, sizeof(transcript_magic))
+        || !buffer_append(output, job->job_identity, 32)
+        || !buffer_append(output, job->domain.identity, 32)
+        || !buffer_append(output, comparator_identity, 32)
+        || !buffer_u64(output, job->domain.point_count)
+        || !buffer_u64(output, decision_length)) {
+        return output->limit_exceeded
             ? LC_ARB_EVALUATION_RESOURCE_LIMIT
             : LC_ARB_EVALUATION_FAILED;
-        buffer_clear(&decisions);
-        return status;
     }
-    memset(decisions.bytes, 0, decision_length);
-    decisions.length = decision_length;
+    decision_offset = output->length;
+    if (!buffer_reserve(output, decision_length) || output->bytes == NULL) {
+        return output->limit_exceeded
+            ? LC_ARB_EVALUATION_RESOURCE_LIMIT
+            : LC_ARB_EVALUATION_FAILED;
+    }
+    memset(output->bytes + decision_offset, 0, decision_length);
+    output->length += decision_length;
+    counters_offset = output->length;
+    for (size_t index = 0; index < 4; ++index) {
+        if (!buffer_u64(output, 0)) {
+            return output->limit_exceeded
+                ? LC_ARB_EVALUATION_RESOURCE_LIMIT
+                : LC_ARB_EVALUATION_FAILED;
+        }
+    }
+    equality_count_offset = output->length;
+    if (!buffer_u64(output, 0)) {
+        return output->limit_exceeded
+            ? LC_ARB_EVALUATION_RESOURCE_LIMIT
+            : LC_ARB_EVALUATION_FAILED;
+    }
+    accounting_offset = output->length;
+    if (!buffer_append(output, zero_digest, sizeof(zero_digest))) {
+        return output->limit_exceeded
+            ? LC_ARB_EVALUATION_RESOURCE_LIMIT
+            : LC_ARB_EVALUATION_FAILED;
+    }
+    witness_count_offset = output->length;
+    if (!buffer_u64(output, 0)) {
+        return output->limit_exceeded
+            ? LC_ARB_EVALUATION_RESOURCE_LIMIT
+            : LC_ARB_EVALUATION_FAILED;
+    }
     lc_sha256_init(&accounting);
     lc_sha256_update(&accounting, accounting_domain, sizeof(accounting_domain) - 1);
     lc_sha256_update(&accounting, job->job_identity, 32);
@@ -427,7 +459,7 @@ evaluate(
         if ((unsigned) result.outcome > LC_REGION_RESOURCE_LIMIT_REACHED) {
             goto cleanup;
         }
-        decisions.bytes[point_index / 4] |= (uint8_t) result.outcome
+        output->bytes[decision_offset + point_index / 4] |= (uint8_t) result.outcome
             << (6U - 2U * (unsigned) (point_index % 4));
         ++counters[result.outcome];
         account_point(&accounting, ordinal, final_precision, point_consumed, result.outcome);
@@ -435,7 +467,7 @@ evaluate(
             uint8_t digest[32];
 
             if (!exact_trace_digest(job, ordinal, &result, digest)
-                || !append_digest_witness(&witnesses, 1, ordinal, digest)) {
+                || !append_digest_witness(output, 1, ordinal, digest)) {
                 goto cleanup;
             }
             ++equality_count;
@@ -450,14 +482,14 @@ evaluate(
                     &result,
                     digest
                 )
-                || !append_digest_witness(&witnesses, 2, ordinal, digest)) {
+                || !append_digest_witness(output, 2, ordinal, digest)) {
                 goto cleanup;
             }
             ++witness_count;
         } else if (result.outcome == LC_REGION_RESOURCE_LIMIT_REACHED) {
             if (point_consumed != point_grant
                 || !append_resource_witness(
-                    &witnesses,
+                    output,
                     ordinal,
                     resource_scope,
                     point_grant
@@ -468,39 +500,22 @@ evaluate(
         }
     }
     lc_sha256_finish(&accounting, accounting_digest);
-    if (!digest_is_nonzero(accounting_digest)
-        || !buffer_append(output, transcript_magic, sizeof(transcript_magic))
-        || !buffer_append(output, job->job_identity, 32)
-        || !buffer_append(output, job->domain.identity, 32)
-        || !buffer_append(output, comparator_identity, 32)
-        || !buffer_u64(output, job->domain.point_count)
-        || !buffer_u64(output, decisions.length)
-        || !buffer_append(output, decisions.bytes, decisions.length)) {
+    if (!digest_is_nonzero(accounting_digest)) {
         goto cleanup;
     }
     for (size_t index = 0; index < 4; ++index) {
-        if (!buffer_u64(output, counters[index])) {
-            goto cleanup;
-        }
+        lc_write_u64_be(output->bytes + counters_offset + index * 8, counters[index]);
     }
-    if (!buffer_u64(output, equality_count)
-        || !buffer_append(output, accounting_digest, 32)
-        || !buffer_u64(output, witness_count)
-        || !buffer_append(output, witnesses.bytes, witnesses.length)) {
-        goto cleanup;
-    }
+    lc_write_u64_be(output->bytes + equality_count_offset, equality_count);
+    memcpy(output->bytes + accounting_offset, accounting_digest, 32);
+    lc_write_u64_be(output->bytes + witness_count_offset, witness_count);
     status = LC_ARB_EVALUATION_OK;
 
 cleanup:
-    if (status != LC_ARB_EVALUATION_OK
-        && (decisions.limit_exceeded
-            || witnesses.limit_exceeded
-            || output->limit_exceeded)) {
+    if (status != LC_ARB_EVALUATION_OK && output->limit_exceeded) {
         status = LC_ARB_EVALUATION_RESOURCE_LIMIT;
     }
     lc_region_result_clear(&result);
-    buffer_clear(&witnesses);
-    buffer_clear(&decisions);
     return status;
 }
 
@@ -512,12 +527,18 @@ main(int argc, char **argv)
     lc_job job;
     lc_wire_error error;
     uint8_t comparator_identity[32];
-    int status = 1;
+    int status = LC_ARB_EXIT_INTERNAL_V1;
     lc_arb_read_status read_status;
 
     input.maximum = (size_t) LC_ARB_MAX_JOB_BYTES_V1;
     output.maximum = (size_t) LC_ARB_MAX_OUTPUT_BYTES_V1;
 
+    /* The evaluator owns its versioned exit contract.  A closed consumer must
+       surface as EPIPE/IO instead of escaping that contract as SIGPIPE. */
+    if (signal(SIGPIPE, SIG_IGN) == SIG_ERR) {
+        fputs("signal setup failed\n", stderr);
+        return LC_ARB_EXIT_INTERNAL_V1;
+    }
     if (argc != 5
         || strcmp(argv[1], "--manifest-identity") != 0
         || !parse_manifest_identity(argv[2], comparator_identity)
@@ -527,19 +548,38 @@ main(int argc, char **argv)
             "usage: arb-evaluator --manifest-identity HEX64 --job /dev/stdin\n",
             stderr
         );
-        return 64;
+        return LC_ARB_EXIT_USAGE_V1;
     }
     read_status = read_stdin(&input);
     if (read_status != LC_ARB_READ_OK) {
-        const char *reason = read_status == LC_ARB_READ_TOO_LARGE
-            ? "input_limit"
-            : read_status == LC_ARB_READ_EMPTY ? "empty_input" : "io";
+        const char *reason;
+
+        if (read_status == LC_ARB_READ_TOO_LARGE) {
+            reason = "input_limit";
+            status = LC_ARB_EXIT_INPUT_LIMIT_V1;
+        } else if (read_status == LC_ARB_READ_EMPTY) {
+            reason = "empty_input";
+            status = LC_ARB_EXIT_INPUT_REJECTED_V1;
+        } else if (read_status == LC_ARB_READ_ALLOCATION_FAILED) {
+            reason = "internal";
+            status = LC_ARB_EXIT_INTERNAL_V1;
+        } else {
+            reason = "io";
+            status = LC_ARB_EXIT_IO_V1;
+        }
 
         fprintf(stderr, "job read failed: %s\n", reason);
         goto cleanup_input;
     }
     if (!lc_parse_job(&job, input.bytes, input.length, &error)) {
         fprintf(stderr, "job rejected: %s\n", lc_wire_error_name(error));
+        if (error == LC_WIRE_RESOURCE_LIMIT) {
+            status = LC_ARB_EXIT_RESOURCE_LIMIT_V1;
+        } else if (error == LC_WIRE_ALLOCATION_FAILED) {
+            status = LC_ARB_EXIT_INTERNAL_V1;
+        } else {
+            status = LC_ARB_EXIT_INPUT_REJECTED_V1;
+        }
         goto cleanup_input;
     }
     lc_arb_evaluation_status evaluation =
@@ -552,10 +592,14 @@ main(int argc, char **argv)
                 ? "output_limit"
                 : "internal"
         );
+        status = evaluation == LC_ARB_EVALUATION_RESOURCE_LIMIT
+            ? LC_ARB_EXIT_OUTPUT_LIMIT_V1
+            : LC_ARB_EXIT_INTERNAL_V1;
         goto cleanup_job;
     }
     if (!lc_write_all(STDOUT_FILENO, output.bytes, output.length)) {
         fputs("result write failed\n", stderr);
+        status = LC_ARB_EXIT_IO_V1;
         goto cleanup_job;
     }
     status = 0;

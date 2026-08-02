@@ -81,6 +81,8 @@ class MpfiRuntimeProfileV1(tuple):
             max_policy_rungs,
             max_knots,
         )
+        if any(type(value) is not int for value in values):
+            raise TypeError("MPFI runtime profile coordinates must be exact ints")
         if values != _PROFILE_VALUES_V1:
             raise ValueError("unknown or noncanonical MPFI runtime profile")
         return tuple.__new__(cls, values)
@@ -176,4 +178,3 @@ def runtime_binding_identity_v1(
             executor.SANDBOX_POLICY_RELEASE_V1.encode("ascii"),
         ),
     )
-

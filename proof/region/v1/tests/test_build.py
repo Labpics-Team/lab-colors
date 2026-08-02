@@ -25,9 +25,9 @@ PROOF = Path(__file__).resolve().parents[1]
 ARB = PROOF / "arb"
 ARB_TESTS = ARB / "tests"
 REPO = PROOF.parents[2]
-sys.path[:0] = (str(REPO), str(PROOF), str(ARB), str(ARB_TESTS))
+sys.path[:0] = (str(REPO), str(PROOF), str(ARB_TESTS))
 
-import pipeline  # noqa: E402
+from arb import pipeline  # noqa: E402
 from proof.region.v1.arb.tests import gate as arb_gate  # noqa: E402
 from test_pipeline import (  # noqa: E402
     _docker_capability,
@@ -40,12 +40,12 @@ from test_receipt import _execute  # noqa: E402
 # Keep an independent outer oracle: importing the gate's expected hash here
 # would let a coordinated gate edit hide inventory drift.
 ARB_INVENTORY_SHA256_V1 = (
-    "4b2ea28bcc31ff5344ec4dff50e556f0c2b38557fe6cee6e63973a5957500813"
+    "1cdeb3e8d5100948504f981ad0fbff2114a4fad3e5dfce749cd9813d1e9bdfa7"
 )
 ARB_ORDER_SHA256_V1 = (
-    "e1de64ada759d94494cb3575a5e45865ca3bb474e4d05f5a954244bf76ddb3b7"
+    "80796a97b86eff573761ac6a86410d2abafe4937f680ca40a621bae1cf596a87"
 )
-ARB_TEST_COUNT_V1 = 245
+ARB_TEST_COUNT_V1 = 259
 
 MOVED_INPUT_SURFACE_V1 = (
     "CanonicalInputLimitsV1",
@@ -287,7 +287,7 @@ class ExistingArbGateTests(unittest.TestCase):
 
 
 class ArbBuildIdentityCharacterizationTests(unittest.TestCase):
-    def test_arb_v2_binding_propagates_to_downstream_identities(self) -> None:
+    def test_arb_runtime_binding_propagates_to_downstream_identities(self) -> None:
         transport = importlib.import_module("build.transport")
         request = _request()
         result, _backend = _execute()
@@ -299,11 +299,11 @@ class ArbBuildIdentityCharacterizationTests(unittest.TestCase):
         self.assertEqual(observed.input_bundle_length, 174_080)
         self.assertEqual(
             observed.input_bundle_sha256.hex(),
-            "dfd7216be913be601f18e2fd461d9d9c8609355da2f9078dd99328f00ee33f34",
+            "0aacb746c062658b52132895dc0f330facd2bc91451f73c99146d7d05c7ebb60",
         )
         self.assertEqual(
             observed.input_bundle_identity.hex(),
-            "b07530505a10f05757f79c7c63d08eebb220869776f0a44d144d8c6f95fc4cd2",
+            "729230447eb3ae80b07ce94b58cbccd00e28827b61406e30e4af3f9614bf8cbd",
         )
         self.assertEqual(
             pipeline.pipeline_policy_identity_v2(
@@ -315,31 +315,31 @@ class ArbBuildIdentityCharacterizationTests(unittest.TestCase):
         self.assertEqual(len(process_bytes), 196)
         self.assertEqual(
             hashlib.sha256(process_bytes).hexdigest(),
-            "a73323b9cd49dc2c6fb842f2ca0478bdde67f5572431b9c302e9adee0270b351",
+            "aeee548aa4fc1a2363dcc02351bd626cbff5da7406a0f82f614d5176188be745",
         )
         self.assertEqual(
             result.comparator.identity.hex(),
-            "bf897e1980647fc05600563d9a17d03a9689b0434d458315f7f7a424d204d9fb",
+            "f9e578062b8ef63839b92e2e44446c1df1453414aca69a3324485eb2a4277db8",
         )
         self.assertEqual(
             result.evidence.source_identity.hex(),
-            "1324afb28beade4fc804579ef3c4e2eff8437f8b1fa10aa6c2a81067bb634eee",
+            "a5b9954aa25e7e995160eb961a15191f85dfa23ffb9e9ebab69ec45ad8c7e676",
         )
         self.assertEqual(
             result.evidence.build_identity.hex(),
-            "566bc65670e34088cb606c390e541c516ff366b3cf25b60a8f7980f0bf7712b1",
+            "ccccd5a666089e37977e629cc5b29b0f306b08a8fece64a9b715d49c5df49883",
         )
         self.assertEqual(
             result.evidence.run_identity.hex(),
-            "d8184fbea75c55a0f614315e91f979a3c8c7ed01115a060839f38bfbc4e09a68",
+            "2ad9065c6f9d13dcbd19270e127ffdbf6274eccf5daa7e7d474bc68c5d2d0619",
         )
         self.assertEqual(
             result.evidence.identity.hex(),
-            "19042961e27c0c8194a3fe1c4ebadb1d5b630bffed055b1341f265980cd20337",
+            "387a8cc7a1366626517055f447ec74aff75c4fa9b6d70352281dca56727ed12b",
         )
         self.assertEqual(
             result.claim.identity.hex(),
-            "63c33215268d9822a5adf85a573a34030b2f6db5efe4c6e62aa373a24fcff27a",
+            "f4b2f7343ebe512abf73629808d3ce6390594f2223d226497c9d71d90423c66c",
         )
 
 
@@ -421,7 +421,7 @@ class SharedBuildExtractionTests(unittest.TestCase):
         transport = importlib.import_module("build.transport")
         provenance = importlib.import_module("provenance")
         arb_pipeline = pipeline
-        arb_receipt = importlib.import_module("receipt")
+        arb_receipt = importlib.import_module("arb.receipt")
         request = _request()
         bundle = arb_pipeline._seal_build_input_bundle_v1(
             request,
@@ -2401,7 +2401,7 @@ class SharedBuildTransportTargetTests(unittest.TestCase):
         self.assertEqual(len(encoded), 196)
         self.assertEqual(
             hashlib.sha256(encoded).hexdigest(),
-            "a73323b9cd49dc2c6fb842f2ca0478bdde67f5572431b9c302e9adee0270b351",
+            "aeee548aa4fc1a2363dcc02351bd626cbff5da7406a0f82f614d5176188be745",
         )
 
         forged = tuple.__new__(transport.DockerBuildExitedV1, ())

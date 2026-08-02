@@ -159,27 +159,28 @@ definition. Job задаёт единственный канонический i
 inputs за пределами этой границы. Альтернативный JSON/TOML definition запрещён
 протоколом.
 
-### MPFI runtime profile V1
+### Runtime profiles V1
 
-Wire grammar сама не превращается в неограниченный allocator. Прямой M1.5
-executable принимает только профиль `LC-MPFI-RUNTIME-V1`: stdin job не более
-16 MiB, не более 4096 bits на precision rung, не более 32 rung-ов, не более
-1024 contextual knots и не более 16 MiB transcript output. Это operational
-admission profile, а не математический предел definition/domain: лимиты job,
-precision, rung-ов и knots возвращают typed `resource_limit` до MPFI
-allocation, а переполнение transcript — typed `output_limit`. MPFI receipt
-связывает тот же профиль с immutable executor limits и включает его в
-source-bound BUILD/RUN evidence; прямой бинарь не является самостоятельным
-public evaluator API.
+Wire grammar сама не превращается в неограниченный allocator. Прямые Arb и
+MPFI executables принимают разные versioned профили — `LC-ARB-RUNTIME-V1` и
+`LC-MPFI-RUNTIME-V1` — с одинаковыми operational coordinates: stdin job не
+более 16 MiB, не более 4096 bits на precision rung, не более 32 rung-ов, не
+более 1024 contextual knots и не более 16 MiB aggregate transcript output.
+Равенство координат обеспечивает симметричный допуск одного proof job; identity
+профилей остаются разными. Это operational admission, а не математический
+предел definition/domain. Лимиты job, precision, rung-ов и knots отклоняются
+до соответствующей allocation, переполнение transcript имеет отдельный typed
+`output_limit`.
 
-В коде один exact tuple `MpfiRuntimeProfileV1` владеет этими пятью
-координатами. `MpfiRuntimeBindingV1` связывает его с одним immutable
-`ExecutionLimitsV1`: `max_stdin_bytes` обязан равняться `max_job_bytes`, а
-`max_stdout_bytes` — `max_output_bytes`; остальные executor limits входят в
-ту же binding identity явно. Поэтому контроллер не может заменить память,
-время или stderr-лимит и сохранить тот же runtime-профиль. Ни executor, ни
-общий protocol leaf не импортируют MPFI: это lane-specific contract,
-включённый в MPFI source-bound receipt boundary.
+В коде `ArbRuntimeProfileV1` и `MpfiRuntimeProfileV1` владеют своими exact
+tuple. `ArbRuntimeBindingV1` и `MpfiRuntimeBindingV1` связывают профиль с одним
+immutable `ExecutionLimitsV1`: `max_stdin_bytes` обязан равняться
+`max_job_bytes`, а `max_stdout_bytes` — `max_output_bytes`; остальные executor
+limits входят в ту же binding identity явно. Поэтому контроллер не может
+заменить память, время или stderr-лимит и сохранить прежнюю source-bound
+BUILD/RUN identity. Ни executor, ни общий protocol leaf не импортируют
+конкретный evaluator: оба контракта lane-specific, а прямые binaries не
+являются самостоятельным public evaluator API.
 
 ## Фиксация источников и наблюдения целостности
 

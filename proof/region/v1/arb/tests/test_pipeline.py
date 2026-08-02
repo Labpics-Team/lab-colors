@@ -27,17 +27,18 @@ PROOF = Path(__file__).resolve().parents[2]
 ARB = PROOF / "arb"
 REPO = PROOF.parents[2]
 sys.path.insert(0, str(PROOF))
-sys.path.insert(0, str(ARB))
 
 from build import input as build_input  # noqa: E402
 from build import transport as build_transport  # noqa: E402
+from arb import pipeline  # noqa: E402
+from arb import runtime as arb_runtime  # noqa: E402
 import executor  # noqa: E402
-import pipeline  # noqa: E402
 import provenance  # noqa: E402
 from region_proof_protocol import (  # noqa: E402
     ComparatorKindV1,
     ComparatorManifestV2,
     ContentResolvedComparatorManifestV2,
+    ContextualRegionDefinitionV1,
     ProofJobV1,
     ProtocolErrorV1,
 )
@@ -239,6 +240,13 @@ def _limits(**changes: int) -> executor.ExecutionLimitsV1:
     return executor.ExecutionLimitsV1(**values)
 
 
+def _runtime_binding(**limit_changes: int) -> arb_runtime.ArbRuntimeBindingV1:
+    return arb_runtime.ArbRuntimeBindingV1(
+        arb_runtime.arb_runtime_profile_v1(),
+        _limits(**limit_changes),
+    )
+
+
 def _request(**changes: object) -> pipeline.PipelineRequestV1:
     source_lock, admitted = _source_fixture()
     values: dict[str, object] = {
@@ -246,7 +254,7 @@ def _request(**changes: object) -> pipeline.PipelineRequestV1:
         "admitted_sources": admitted,
         "build_sources": _build_sources(),
         "job": _job(),
-        "execution_limits": _limits(),
+        "runtime_binding": _runtime_binding(),
         "host_trust": pipeline.HostTrustBoundaryV1.UNSEALED_LINUX_X64_DOCKER_HOST,
     }
     values.update(changes)
@@ -995,7 +1003,7 @@ class ControlledPipelineTests(unittest.TestCase):
                 request.admitted_sources,
                 request.build_sources,
                 request.job,
-                request.execution_limits,
+                request.runtime_binding,
                 request.host_trust,
             )
 
@@ -1021,7 +1029,7 @@ class ControlledPipelineTests(unittest.TestCase):
                     request.admitted_sources,
                     request.build_sources,
                     request.job,
-                    request.execution_limits,
+                    request.runtime_binding,
                     request.host_trust,
                 )
         finally:
@@ -1051,7 +1059,7 @@ class ControlledPipelineTests(unittest.TestCase):
                     request.admitted_sources,
                     request.build_sources,
                     request.job,
-                    request.execution_limits,
+                    request.runtime_binding,
                     request.host_trust,
                 )
         finally:
@@ -1097,7 +1105,7 @@ class ControlledPipelineTests(unittest.TestCase):
         source_lock, admitted_sources = _source_fixture()
         build_sources = _build_sources()
         job = _job()
-        limits = _limits()
+        runtime_binding = _runtime_binding()
         binary = _static_elf(b"request-then-one-operation")
         backend = _BuildBackend((binary, binary))
         real_admit = provenance._admit_source_archive_once
@@ -1120,7 +1128,7 @@ class ControlledPipelineTests(unittest.TestCase):
                 admitted_sources,
                 build_sources,
                 job,
-                limits,
+                runtime_binding,
                 pipeline.HostTrustBoundaryV1.UNSEALED_LINUX_X64_DOCKER_HOST,
             )
             self.assertEqual(replay.call_count, 3)
@@ -1134,7 +1142,7 @@ class ControlledPipelineTests(unittest.TestCase):
     def test_build_rejects_mutated_request_before_it_can_start_a_build(self) -> None:
         for field_name, replacement in (
             ("host_trust", "foreign"),
-            ("execution_limits", "foreign"),
+            ("runtime_binding", "foreign"),
         ):
             with self.subTest(field=field_name):
                 request = _request()
@@ -1398,21 +1406,146 @@ class ControlledPipelineTests(unittest.TestCase):
         )
         self.assertEqual(backend.requests, [])
 
-    def test_job_that_exceeds_exact_run_limits_is_rejected_before_build(self) -> None:
+    def test_request_rejects_raw_execution_limits_instead_of_a_profile_binding(self) -> None:
         with self.assertRaises(pipeline.PipelineInputErrorV1) as caught:
             _request(
-                execution_limits=_limits(max_stdin_bytes=1)
+                runtime_binding=_limits()
             )
 
         self.assertEqual(
             caught.exception.reason,
-            pipeline.PipelineInputReasonV1.EXECUTION_LIMIT_MISMATCH,
+            pipeline.PipelineInputReasonV1.WRONG_TYPE,
         )
+        self.assertEqual(caught.exception.field, "runtime_binding")
+
+    def test_runtime_profile_rejects_all_allocation_coordinates_before_build(self) -> None:
+        job = _job()
+        arb_budget, mpfi_budget = job.policy.comparators
+        over_precision = replace(
+            job,
+            policy=replace(
+                job.policy,
+                comparators=(
+                    replace(
+                        arb_budget,
+                        precision_ladder=(
+                            arb_runtime.ARB_MAX_PRECISION_BITS_V1 + 1,
+                        ),
+                    ),
+                    mpfi_budget,
+                ),
+            ),
+        )
+        over_rungs = replace(
+            job,
+            policy=replace(
+                job.policy,
+                comparators=(
+                    replace(
+                        arb_budget,
+                        precision_ladder=tuple(
+                            range(2, arb_runtime.ARB_MAX_POLICY_RUNGS_V1 + 3)
+                        ),
+                    ),
+                    mpfi_budget,
+                ),
+            ),
+        )
+        over_mpfi_precision = replace(
+            job,
+            policy=replace(
+                job.policy,
+                comparators=(
+                    arb_budget,
+                    replace(
+                        mpfi_budget,
+                        precision_ladder=(
+                            arb_runtime.ARB_MAX_PRECISION_BITS_V1 + 1,
+                        ),
+                    ),
+                ),
+            ),
+        )
+        over_mpfi_rungs = replace(
+            job,
+            policy=replace(
+                job.policy,
+                comparators=(
+                    arb_budget,
+                    replace(
+                        mpfi_budget,
+                        precision_ladder=tuple(
+                            range(2, arb_runtime.ARB_MAX_POLICY_RUNGS_V1 + 3)
+                        ),
+                    ),
+                ),
+            ),
+        )
+        knot_count = arb_runtime.ARB_MAX_KNOTS_V1 + 1
+        zero = bytes(8)
+        knots = tuple(
+            coordinate
+            for index in range(knot_count)
+            for coordinate in (struct.pack(">d", float(index)), zero, zero, zero)
+        )
+        over_knots = replace(
+            job,
+            definition=ContextualRegionDefinitionV1(
+                job.definition.fields[:21]
+                + (knot_count.to_bytes(8, "big"),)
+                + knots,
+                knot_count,
+            ),
+        )
+
+        for field, candidate in (
+            ("arb-precision", over_precision),
+            ("arb-rungs", over_rungs),
+            ("mpfi-precision", over_mpfi_precision),
+            ("mpfi-rungs", over_mpfi_rungs),
+            ("knots", over_knots),
+        ):
+            with self.subTest(field=field):
+                with self.assertRaises(pipeline.PipelineInputErrorV1) as caught:
+                    _request(job=candidate)
+                self.assertEqual(
+                    caught.exception.reason,
+                    pipeline.PipelineInputReasonV1.EXECUTION_LIMIT_MISMATCH,
+                )
+                self.assertEqual(caught.exception.field, "runtime_binding")
+
+        boundary_ladder = tuple(range(1, arb_runtime.ARB_MAX_POLICY_RUNGS_V1)) + (
+            arb_runtime.ARB_MAX_PRECISION_BITS_V1,
+        )
+        boundary_knot_count = arb_runtime.ARB_MAX_KNOTS_V1
+        boundary_knots = tuple(
+            coordinate
+            for index in range(boundary_knot_count)
+            for coordinate in (struct.pack(">d", float(index)), zero, zero, zero)
+        )
+        boundary_job = replace(
+            job,
+            definition=ContextualRegionDefinitionV1(
+                job.definition.fields[:21]
+                + (boundary_knot_count.to_bytes(8, "big"),)
+                + boundary_knots,
+                boundary_knot_count,
+            ),
+            policy=replace(
+                job.policy,
+                comparators=(
+                    replace(arb_budget, precision_ladder=boundary_ladder),
+                    replace(mpfi_budget, precision_ladder=boundary_ladder),
+                ),
+            ),
+        )
+        admitted = _request(job=boundary_job)
+        self.assertEqual(admitted.job, boundary_job)
 
     def test_build_output_limit_is_rejected_at_pipeline_admission(self) -> None:
         with self.assertRaises(pipeline.PipelineInputErrorV1) as caught:
             _request(
-                execution_limits=_limits(
+                runtime_binding=_runtime_binding(
                     max_executable_bytes=pipeline.BUILD_STDOUT_LIMIT_V1 + 1,
                 )
             )
@@ -1421,7 +1554,7 @@ class ControlledPipelineTests(unittest.TestCase):
             caught.exception.reason,
             pipeline.PipelineInputReasonV1.EXECUTION_LIMIT_MISMATCH,
         )
-        self.assertEqual(caught.exception.field, "execution_limits")
+        self.assertEqual(caught.exception.field, "runtime_binding")
 
     def test_snapshot_modes_are_normalized_independently_of_host_umask(self) -> None:
         binary = _static_elf(b"umask-independent")

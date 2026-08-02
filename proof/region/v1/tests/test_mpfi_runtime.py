@@ -31,6 +31,24 @@ def _limits(**changes: int) -> executor.ExecutionLimitsV1:
 
 
 class MpfiRuntimeProfileTests(unittest.TestCase):
+    def test_profile_rejects_int_subclasses_and_identity_totalizes_forgery(self) -> None:
+        class EqualInt(int):
+            def to_bytes(self, *_args: object, **_kwargs: object) -> bytes:
+                raise RuntimeError("foreign scalar executed")
+
+        values = tuple(runtime.mpfi_runtime_profile_v1())
+        hostile_values = (EqualInt(values[0]), *values[1:])
+        with self.assertRaises(TypeError):
+            runtime.MpfiRuntimeProfileV1(*hostile_values)
+
+        forged = tuple.__new__(runtime.MpfiRuntimeProfileV1, hostile_values)
+        result = runtime.runtime_profile_identity_v1(forged)
+        self.assertIs(type(result), runtime.MpfiRuntimeIdentityRejectedV1)
+        self.assertEqual(
+            result.reason,
+            runtime.MpfiRuntimeProfileReasonV1.NONCANONICAL,
+        )
+
     def test_profile_is_one_exact_wire_v1_value(self) -> None:
         profile = runtime.mpfi_runtime_profile_v1()
         self.assertEqual(

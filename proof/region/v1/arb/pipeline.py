@@ -16,6 +16,7 @@ from enum import StrEnum
 from functools import cached_property
 from typing import NoReturn, TypeAlias
 
+from arb import runtime as arb_runtime
 from build import input as build_input
 from build import transport as build_transport
 
@@ -53,11 +54,11 @@ _PINNED_BUILD_SOURCE_SHA256_V1 = {
     "proof/region/v1/arb/evaluator/hash.h": "a62c07f2eca9294b4c1c802e2a9e6cff6ad9f8fd696a74b54a21489d56fab6c4",
     "proof/region/v1/arb/evaluator/interval.c": "93f206258b83fc0f373ae865787ebf266c9d011f2578567ed913a7cb6c0ed899",
     "proof/region/v1/arb/evaluator/interval.h": "f9d7416059d4b09979c22e6823a747f252c576558c750fe3e2ff92509894c7b3",
-    "proof/region/v1/arb/evaluator/main.c": "0239988ff1c1bb0e1b07ed26caf0483702d2855b0445a77e10c7df137b041e09",
+    "proof/region/v1/arb/evaluator/main.c": "d50767b2a79fe12f21cd5c76a4a6cd29edc0953ea9c2b4862510a2d19db9cc95",
     "proof/region/v1/arb/evaluator/region.c": "0026d501077911eae58933487a4cac0a83003cd70d1dbf0966890c29bfff8f99",
     "proof/region/v1/arb/evaluator/region.h": "95da5117bb162c707b441242637d5e0e1bbeef2532ac1f10248f2b93ab16dcc8",
-    "proof/region/v1/arb/evaluator/wire.c": "4edb1120a8274774b8790eceea877c664f599bb9e039b0aa6e6ba8dafe124d47",
-    "proof/region/v1/arb/evaluator/wire.h": "be9eed3b5b821dc519eb766c9d41fd74fb76da4b143f94fcc7c4b3e72747f83f",
+    "proof/region/v1/arb/evaluator/wire.c": "919270e87116498aaf0d99f767c673f8912313e4e9e04f2ece67cfaa01bd3e0c",
+    "proof/region/v1/arb/evaluator/wire.h": "6899452d11cbc390557233e5fceef62e340050fce80c66a8da84c1d0f42fb456",
 }
 
 REQUIRED_BUILD_SOURCE_MODES_V1 = tuple(
@@ -1041,7 +1042,7 @@ class PipelineRequestV1:
     admitted_sources: provenance.AdmittedArbSourcesV1
     build_sources: AdmittedBuildSourcesV1
     job: protocol.ProofJobV1
-    execution_limits: executor.ExecutionLimitsV1
+    runtime_binding: arb_runtime.ArbRuntimeBindingV1
     host_trust: HostTrustBoundaryV1
 
     def __post_init__(self) -> None:
@@ -1050,7 +1051,7 @@ class PipelineRequestV1:
             ("admitted_sources", self.admitted_sources, provenance.AdmittedArbSourcesV1),
             ("build_sources", self.build_sources, AdmittedBuildSourcesV1),
             ("job", self.job, protocol.ProofJobV1),
-            ("execution_limits", self.execution_limits, executor.ExecutionLimitsV1),
+            ("runtime_binding", self.runtime_binding, arb_runtime.ArbRuntimeBindingV1),
             ("host_trust", self.host_trust, HostTrustBoundaryV1),
         )
         for field_name, value, expected_type in expected_types:
@@ -1123,7 +1124,9 @@ class PipelineRequestV1:
                 "job",
             ) from error
         try:
-            execution_limits = executor.ExecutionLimitsV1(*tuple(self.execution_limits))
+            runtime_binding = arb_runtime.ArbRuntimeBindingV1(
+                *tuple(self.runtime_binding)
+            )
         except (
             executor.ExecutionRequestErrorV1,
             AttributeError,
@@ -1133,7 +1136,7 @@ class PipelineRequestV1:
         ) as error:
             raise PipelineInputErrorV1(
                 PipelineInputReasonV1.INVALID_RETAINED_INPUT,
-                "execution_limits",
+                "runtime_binding",
             ) from error
         try:
             _host_trust_wire_v1(self.host_trust)
@@ -1147,14 +1150,14 @@ class PipelineRequestV1:
             admitted_sources,
             build_sources,
             job,
-            execution_limits,
+            runtime_binding,
             self.host_trust,
         )
         object.__setattr__(self, "source_lock", source_lock)
         object.__setattr__(self, "admitted_sources", admitted_sources)
         object.__setattr__(self, "build_sources", build_sources)
         object.__setattr__(self, "job", job)
-        object.__setattr__(self, "execution_limits", execution_limits)
+        object.__setattr__(self, "runtime_binding", runtime_binding)
 
 
 _PIPELINE_OWNED_REQUEST_TOKEN = object()
@@ -1165,7 +1168,7 @@ def _validate_pipeline_request_coordinates_v1(
     admitted_sources: provenance.AdmittedArbSourcesV1,
     build_sources: AdmittedBuildSourcesV1,
     job: protocol.ProofJobV1,
-    execution_limits: executor.ExecutionLimitsV1,
+    runtime_binding: arb_runtime.ArbRuntimeBindingV1,
     host_trust: HostTrustBoundaryV1,
 ) -> None:
     """Check a detached request without reopening its already-owned archives."""
@@ -1175,7 +1178,7 @@ def _validate_pipeline_request_coordinates_v1(
         ("admitted_sources", admitted_sources, provenance.AdmittedArbSourcesV1),
         ("build_sources", build_sources, AdmittedBuildSourcesV1),
         ("job", job, protocol.ProofJobV1),
-        ("execution_limits", execution_limits, executor.ExecutionLimitsV1),
+        ("runtime_binding", runtime_binding, arb_runtime.ArbRuntimeBindingV1),
         ("host_trust", host_trust, HostTrustBoundaryV1),
     )
     for field_name, value, expected_type in expected_types:
@@ -1207,14 +1210,25 @@ def _validate_pipeline_request_coordinates_v1(
         len(key) + len(value) + 2
         for key, value in ((b"LC_ALL", b"C"), (b"TZ", b"UTC"))
     )
+    execution_limits = runtime_binding.limits
+    runtime_profile = runtime_binding.profile
+    allocation_profile_exceeded = (
+        job.definition.knot_count > runtime_profile.max_knots
+        or any(
+            len(comparator.precision_ladder) > runtime_profile.max_policy_rungs
+            or comparator.precision_ladder[-1] > runtime_profile.max_precision_bits
+            for comparator in job.policy.comparators
+        )
+    )
     if (
         execution_limits.max_executable_bytes > BUILD_STDOUT_LIMIT_V1
-        or len(job_bytes) > execution_limits.max_stdin_bytes
+        or len(job_bytes) > runtime_profile.max_job_bytes
+        or allocation_profile_exceeded
         or invocation_bytes > execution_limits.max_argument_bytes
     ):
         raise PipelineInputErrorV1(
             PipelineInputReasonV1.EXECUTION_LIMIT_MISMATCH,
-            "execution_limits",
+            "runtime_binding",
         )
 
 
@@ -1223,7 +1237,7 @@ def _owned_pipeline_request_v1(
     admitted_sources: provenance.AdmittedArbSourcesV1,
     build_sources: AdmittedBuildSourcesV1,
     job: protocol.ProofJobV1,
-    execution_limits: executor.ExecutionLimitsV1,
+    runtime_binding: arb_runtime.ArbRuntimeBindingV1,
     host_trust: HostTrustBoundaryV1,
     *,
     _token: object,
@@ -1237,7 +1251,7 @@ def _owned_pipeline_request_v1(
         admitted_sources,
         build_sources,
         job,
-        execution_limits,
+        runtime_binding,
         host_trust,
     )
     request = object.__new__(PipelineRequestV1)
@@ -1246,7 +1260,7 @@ def _owned_pipeline_request_v1(
         ("admitted_sources", admitted_sources),
         ("build_sources", build_sources),
         ("job", job),
-        ("execution_limits", execution_limits),
+        ("runtime_binding", runtime_binding),
         ("host_trust", host_trust),
     ):
         object.__setattr__(request, field_name, value)
@@ -1297,14 +1311,14 @@ def _snapshot_pipeline_operation_v1(
         admitted_sources = request.admitted_sources
         build_sources = request.build_sources
         job = request.job
-        execution_limits = request.execution_limits
+        runtime_binding = request.runtime_binding
         host_trust = request.host_trust
         if (
             type(source_lock) is not provenance.ArbSourceLockV1
             or type(admitted_sources) is not provenance.AdmittedArbSourcesV1
             or type(build_sources) is not AdmittedBuildSourcesV1
             or type(job) is not protocol.ProofJobV1
-            or type(execution_limits) is not executor.ExecutionLimitsV1
+            or type(runtime_binding) is not arb_runtime.ArbRuntimeBindingV1
             or type(host_trust) is not HostTrustBoundaryV1
         ):
             raise PipelineInputErrorV1(
@@ -1316,8 +1330,8 @@ def _snapshot_pipeline_operation_v1(
         # raw fields rather than a mutable instance ``encode`` or cached digest.
         canonical_job = protocol.snapshot_proof_job_v1(job)
         canonical_build_sources = admit_build_sources_v1(build_sources.files)
-        canonical_execution_limits = executor.ExecutionLimitsV1(
-            *tuple(execution_limits)
+        canonical_runtime_binding = arb_runtime.ArbRuntimeBindingV1(
+            *tuple(runtime_binding)
         )
         _host_trust_wire_v1(host_trust)
         source_closure = provenance.replay_admitted_source_closure_v1(
@@ -1339,7 +1353,7 @@ def _snapshot_pipeline_operation_v1(
             source_closure.admitted_sources,
             canonical_build_sources,
             canonical_job,
-            canonical_execution_limits,
+            canonical_runtime_binding,
             host_trust,
             _token=_PIPELINE_OWNED_REQUEST_TOKEN,
         )
@@ -1623,6 +1637,12 @@ class PipelineBlockedV1:
 class ExecutionFailureReasonV1(StrEnum):
     UNSUPPORTED = "unsupported"
     PROCESS_FAILED = "process_failed"
+    EVALUATOR_INPUT_REJECTED = "evaluator_input_rejected"
+    EVALUATOR_INPUT_LIMIT = "evaluator_input_limit"
+    EVALUATOR_OUTPUT_LIMIT = "evaluator_output_limit"
+    EVALUATOR_RESOURCE_LIMIT = "evaluator_resource_limit"
+    EVALUATOR_INTERNAL = "evaluator_internal"
+    EVALUATOR_IO = "evaluator_io"
     STDERR_NOT_EMPTY = "stderr_not_empty"
     BINARY_MISMATCH = "binary_mismatch"
     BACKEND_CONTRACT = "backend_contract"
@@ -1945,7 +1965,7 @@ class ControlledPipelineV1:
         built = self._transport.build(
             docker_capability,
             input_bundle,
-            request.execution_limits.max_executable_bytes,
+            request.runtime_binding.limits.max_executable_bytes,
             input_admission=lambda value: _owned_arb_input_is_bound_v1(
                 value,
                 input_bundle,
