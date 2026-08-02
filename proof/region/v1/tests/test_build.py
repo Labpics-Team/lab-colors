@@ -415,6 +415,21 @@ class SharedBuildExtractionTests(unittest.TestCase):
         self.assertIn("same-UID writer", protocol_source)
         self.assertIn("Popen construction", protocol_source)
         self.assertNotIn("cleanup выполняет только по его точному имени", protocol_source)
+        self.assertIn("### Профили исполнения V1", protocol_source)
+        self.assertIn("Грамматика формата передачи", protocol_source)
+        self.assertIn("символическая ссылка", protocol_source)
+        self.assertIn("незапечатанной границей доверия", protocol_source)
+        for english_prose in (
+            "Runtime profiles V1",
+            "Wire grammar",
+            "operational coordinates",
+            "public evaluator API",
+            "filesystem resolution",
+            "symbolic link",
+            "unsealed trust boundary",
+        ):
+            with self.subTest(english_prose=english_prose):
+                self.assertNotIn(english_prose, protocol_source)
 
     def test_arb_consumers_move_atomically_without_compatibility_reexports(self) -> None:
         build_input = importlib.import_module("build.input")

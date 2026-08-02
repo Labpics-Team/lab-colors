@@ -159,18 +159,19 @@ definition. Job задаёт единственный канонический i
 inputs за пределами этой границы. Альтернативный JSON/TOML definition запрещён
 протоколом.
 
-### Runtime profiles V1
+### Профили исполнения V1
 
-Wire grammar сама не превращается в неограниченный allocator. Прямые Arb и
-MPFI executables принимают разные versioned профили — `LC-ARB-RUNTIME-V1` и
-`LC-MPFI-RUNTIME-V1` — с одинаковыми operational coordinates: stdin job не
-более 16 MiB, не более 4096 bits на precision rung, не более 32 rung-ов, не
-более 1024 contextual knots и не более 16 MiB aggregate transcript output.
-Равенство координат обеспечивает симметричный допуск одного proof job; identity
-профилей остаются разными. Это operational admission, а не математический
+Грамматика формата передачи сама не превращается в неограниченный
+распределитель ресурсов. Прямые исполняемые файлы Arb и MPFI принимают разные
+версионированные профили — `LC-ARB-RUNTIME-V1` и `LC-MPFI-RUNTIME-V1` — с
+одинаковыми эксплуатационными параметрами: входной job не более 16 MiB, не
+более 4096 bits на precision rung, не более 32 rung-ов, не более 1024
+contextual knots и не более 16 MiB aggregate transcript output. Равенство
+параметров обеспечивает симметричный допуск одного proof job; identity
+профилей остаются разными. Это эксплуатационный допуск, а не математический
 предел definition/domain. Лимиты job, precision, rung-ов и knots отклоняются
-до соответствующей allocation, переполнение transcript имеет отдельный typed
-`output_limit`.
+до соответствующего выделения ресурсов, переполнение transcript имеет
+отдельный typed `output_limit`.
 
 В коде `ArbRuntimeProfileV1` и `MpfiRuntimeProfileV1` владеют своими exact
 tuple. `ArbRuntimeBindingV1` и `MpfiRuntimeBindingV1` связывают профиль с одним
@@ -179,8 +180,8 @@ immutable `ExecutionLimitsV1`: `max_stdin_bytes` обязан равняться
 limits входят в ту же binding identity явно. Поэтому контроллер не может
 заменить память, время или stderr-лимит и сохранить прежнюю source-bound
 BUILD/RUN identity. Ни executor, ни общий protocol leaf не импортируют
-конкретный evaluator: оба контракта lane-specific, а прямые binaries не
-являются самостоятельным public evaluator API.
+конкретный evaluator: оба контракта принадлежат конкретному lane, а прямые
+binaries не являются самостоятельным публичным API вычислителя.
 
 ## Фиксация источников и наблюдения целостности
 
@@ -247,13 +248,14 @@ exception-channel. `ControlledExecutorV1` отвергает такой request 
 backend run как `ObserverFailureV1(REQUEST_NOT_ADMITTED)`.
 
 `executor.canonical_cgroup_parent_v1` разбирает объявленный parent без
-filesystem resolution. `executor.enter_observer_cgroup_v1` — единственная
-versioned межмодульная операция размещения: engine controller передаёт этот
+разрешения пути через файловую систему.
+`executor.enter_observer_cgroup_v1` — единственная versioned межмодульная
+операция размещения: engine controller передаёт этот
 абсолютный канонический parent, а executor помещает текущий controller в
 `parent/observer` и пробрасывает отказ для typed mapping вызывающего. Engine не
 копирует этот descriptor protocol. Executor открывает каждый сегмент cgroup
 descriptor-relative с `O_PATH|O_NOFOLLOW`: metadata-проверка допускает каталог,
-доступный только для поиска, но symbolic link не может незаметно связать
+доступный только для поиска, но символическая ссылка не может незаметно связать
 controller с другой cgroup.
 
 Linux backend допускается лишь в отдельном helper process. Helper находится в
@@ -286,7 +288,8 @@ recipe или engine semantics. Lane выбирает layout и связывае
 aggregate source capability. `proof/region/v1/build/input.py` принимает уже
 нормализованные lane entries, кодирует один канонический USTAR и владеет точными input bytes.
 `SealedInputV1` структурно неизменяем, связывает целостность байтов с opaque
-caller digest и не утверждает recipe либо engine semantics. Resource bounds
+digest вызывающей стороны и не утверждает recipe либо engine semantics.
+Ограничения ресурсов
 передаёт lane: общий encoder не вводит собственный fixture-specific cap.
 
 `mpfi/input.py` строит `SealedInputV1` только из одного owned replay snapshot
@@ -296,10 +299,10 @@ regular files, aggregate identity и versioned MPFI-only namespace
 exact USTAR bytes. Роль, а не archive root, разделяет три source trees: lock
 не требует уникальности root. Целостность `SealedInputV1` сама по себе не
 доказывает принадлежность MPFI closure; это отдельно перепроверяет MPFI
-source-input binding. Caller передаёт canonical `CanonicalInputLimitsV1`: lane сверяет
-declared exact file count и payload closure до повторной materialization archive
-bytes, а общий encoder сверяет все final USTAR bounds после materialization.
-Limits — operational boundary, не
+source-input binding. Вызывающая сторона передаёт канонический
+`CanonicalInputLimitsV1`: lane сверяет declared exact file count и payload
+closure до повторной materialization archive bytes, а общий encoder сверяет все
+final USTAR bounds после materialization. Limits — operational boundary, не
 координата MPFI source-input binding и не build policy. Для неверного public
 capability boundary возвращается `MpfiSourceInputErrorV1`; failure exact archive
 replay остаётся `ProvenanceErrorV1`, а limits/USTAR rejection — `InputErrorV1`.
@@ -328,14 +331,15 @@ receipt: до source-bound controller и реального disposable BUILD→R
    path, daemon observation и наблюдённые host uid/gid.
 
 `docker_command_coordinate_v1` допускает exact absolute Docker-safe argv path
-без filesystem resolution. Перед native Linux probe adapter descriptor-relative
+без разрешения пути через файловую систему. Перед native Linux probe adapter
+descriptor-relative
 открывает каждый его сегмент с `O_PATH|O_NOFOLLOW`: metadata-проверка не требует
 права чтения от CLI, имеющего только право исполнения, или родительского
-каталога, доступного только для поиска, но symbolic link всё равно не может
+каталога, доступного только для поиска, но символическая ссылка всё равно не может
 изменить фактическую координату. Adapter
 принимает только текущий regular CLI file. Это проверка pathname, а не заявление
 о неизменном file object между probe и BUILD: native host, его Docker CLI и
-daemon остаются явной unsealed trust boundary.
+daemon остаются явной незапечатанной границей доверия.
 
 `BuildSessionV1` и каждый `DockerBuildRequestV1` сохраняют только ту же
 capability, те же input bytes и output cap. Request не содержит host path,

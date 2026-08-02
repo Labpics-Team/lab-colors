@@ -746,7 +746,11 @@ class MpfiSourceInputTests(unittest.TestCase):
 
         self.assertIn("`sources/<role>/<relative>`", reference)
         self.assertIn("не требует уникальности root", reference)
-        self.assertIn("Caller передаёт canonical `CanonicalInputLimitsV1`", reference)
+        self.assertIn(
+            "Вызывающая сторона передаёт канонический "
+            "`CanonicalInputLimitsV1`",
+            reference,
+        )
         self.assertIn("`MpfiSourceInputErrorV1`", reference)
         self.assertIn("`ProvenanceErrorV1`", reference)
         self.assertIn("`InputErrorV1`", reference)
