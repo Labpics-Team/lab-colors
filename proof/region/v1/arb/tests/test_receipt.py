@@ -28,6 +28,7 @@ import executor  # noqa: E402
 import pipeline  # noqa: E402
 import provenance  # noqa: E402
 import receipt  # noqa: E402
+import region_proof_protocol as protocol  # noqa: E402
 from region_proof_protocol import (  # noqa: E402
     BoundaryUnprovenWitnessV1,
     DecisionTranscriptV1,
@@ -590,6 +591,43 @@ class SourceBoundReceiptTests(unittest.TestCase):
         self.assertFalse(
             receipt.replay_evidence_is_well_bound_v1(_tamper(dag, "build", build))
         )
+
+    def test_each_self_consistent_comparator_coordinate_is_rederived(self) -> None:
+        result, _backend = _execute()
+        dag = result.evidence
+        original = dag.build.comparator
+        for field in original.preimages.__dataclass_fields__:
+            with self.subTest(field=field):
+                preimages = _tamper(
+                    original.preimages,
+                    field,
+                    getattr(original.preimages, field) + b"\x00mutation",
+                )
+                names = tuple(original.preimages.__dataclass_fields__)
+                coordinates = tuple(
+                    hashlib.sha256(getattr(preimages, name)).digest()
+                    for name in names
+                )
+                manifest = protocol.ComparatorManifestV2(
+                    original.manifest.manifest.kind,
+                    *coordinates,
+                )
+                by_digest = {
+                    coordinate: getattr(preimages, name)
+                    for name, coordinate in zip(names, coordinates, strict=True)
+                }
+                resolved = protocol.ContentResolvedComparatorManifestV2.admit(
+                    manifest,
+                    by_digest.get,
+                )
+                comparator = _tamper(original, "preimages", preimages)
+                comparator = _tamper(comparator, "manifest", resolved)
+                forged_build = _tamper(dag.build, "comparator", comparator)
+                self.assertFalse(
+                    receipt.replay_evidence_is_well_bound_v1(
+                        _tamper(dag, "build", forged_build)
+                    )
+                )
 
     def test_source_replay_rejects_a_self_consistent_forged_manifest(self) -> None:
         request = _request()

@@ -131,6 +131,17 @@ def _comparator_replays_v1(
             build.rebuild_sha256s,
             len(build.binary),
         )
+        # Re-derive every named comparator coordinate from the retained
+        # request and BUILD/RUN observation. Re-hashing a supplied comparator
+        # only proves internal consistency; it cannot prove that its wrapper,
+        # evaluator, or test-observation coordinates describe this DAG.
+        expected_comparator = pipeline._derive_arb_comparator_for_build_v1(
+            request,
+            build.docker_capability,
+            build.binary,
+            build.rebuild_sha256s,
+            build.build_processes,
+        )
         if (
             type(comparator) is not pipeline.DiagnosticArbComparatorV1
             or comparator.structural_source_identity
@@ -140,6 +151,10 @@ def _comparator_replays_v1(
             or comparator.pipeline_policy_identity != build.pipeline_policy_identity
             or comparator.pipeline_policy_identity != expected_pipeline_policy
             or comparator.preimages.build_identity != expected_build_preimage
+            or comparator.preimages != expected_comparator.preimages
+            or comparator.manifest.manifest != expected_comparator.manifest.manifest
+            or comparator.manifest.identity != expected_comparator.manifest.identity
+            or comparator.identity != expected_comparator.identity
             or comparator.binary_sha256 != build.binary_sha256
             or comparator.rebuild_sha256s != build.rebuild_sha256s
         ):
