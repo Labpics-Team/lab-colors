@@ -220,6 +220,21 @@ class MpfiSourceBoundReceiptTests(unittest.TestCase):
             receipt.MpfiEvaluatorReplayV1(*tuple(result.evidence))
         with self.assertRaises(TypeError):
             receipt.MpfiDiagnosticBuildObservationV1()
+        with self.assertRaises(TypeError):
+            receipt.MpfiSourceBoundRejectedV1(
+                "foreign-reason",
+                "bounded detail",
+            )
+        with self.assertRaises(TypeError):
+            receipt.MpfiSourceBoundRejectedV1(
+                receipt.MpfiSourceBoundFailureReasonV1.REQUEST_REJECTED,
+                "",
+            )
+        with self.assertRaises(TypeError):
+            receipt.MpfiSourceBoundRejectedV1(
+                receipt.MpfiSourceBoundFailureReasonV1.REQUEST_REJECTED,
+                "x" * 4097,
+            )
 
     def test_replay_rejects_a_changed_build_transfer(self) -> None:
         result, _backend = _execute()

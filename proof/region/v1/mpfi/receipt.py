@@ -820,6 +820,12 @@ class MpfiSourceBoundRejectedV1:
     reason: MpfiSourceBoundFailureReasonV1
     detail: str
 
+    def __post_init__(self) -> None:
+        if type(self.reason) is not MpfiSourceBoundFailureReasonV1:
+            raise TypeError("invalid MPFI source-bound failure reason")
+        if type(self.detail) is not str or not self.detail or len(self.detail) > 4096:
+            raise TypeError("invalid MPFI source-bound failure detail")
+
 
 MpfiSourceBoundResultV1: TypeAlias = (
     MpfiSourceBoundEvaluatorReceiptV1
