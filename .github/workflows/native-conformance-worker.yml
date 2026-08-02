@@ -26,7 +26,7 @@ permissions:
 
 env:
   RUST_TOOLCHAIN: 1.96.0
-  SWIFT_CONTAINER: swift:6.1.3@sha256:e1cdaf7ddc9de37d8561da7a260535236694fca8c1b67d3129d47d8b180a9394
+  SWIFT_CONTAINER: swift:6.1.3-noble-slim@sha256:8db18ceac0597e9f9ca1cfb111b9a2613e6a2c0001f5af2c002d149718635c9e
 
 jobs:
   # АКТИВНЫЙ ГЕЙТ: Swift-conformance в gVisor-ячейке через swift-контейнер.
@@ -51,7 +51,9 @@ jobs:
         with:
           persist-credentials: false
 
-      # Официальный Swift 6.1.3 (Ubuntu), pinned по manifest-list digest.
+      # Официальный Swift 6.1.3 (Ubuntu Noble slim), pinned по manifest-list
+      # digest. Slim сохраняет toolchain, но не переполняет эфемерный Docker
+      # ненужными SDK/runtime слоями полного образа.
       # Docker-in-gVisor в ячейке есть, шаг перенесён дословно.
       # Внутри ставится pinned Rust, ядро собирается
       # под Linux, генерятся Swift-биндинги, swift test прогоняет пак. Скрипт —
