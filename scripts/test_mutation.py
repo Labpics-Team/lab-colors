@@ -1819,6 +1819,17 @@ class MutationTruthTest(unittest.TestCase):
         self.assertIn("    env:\n      BINARYEN_CORES: 1\n", wasm)
         self.assertEqual(workers["ci-worker.yml"].count("BINARYEN_CORES"), 1)
 
+        native = workers["native-conformance-worker.yml"]
+        swift_image = (
+            "swift:6.1.3-noble-slim@"
+            "sha256:8db18ceac0597e9f9ca1cfb111b9a2613e6a2c0001f5af2c002d149718635c9e"
+        )
+        self.assertEqual(native.count(f"SWIFT_CONTAINER: {swift_image}"), 1)
+        self.assertNotIn(
+            "swift:6.1.3@sha256:e1cdaf7ddc9de37d8561da7a260535236694fca8c1b67d3129d47d8b180a9394",
+            native,
+        )
+
     def test_publish_worker_secret_boundary_and_registry_are_fail_closed(self) -> None:
         repo = Path(__file__).resolve().parents[1]
         workflow = (
@@ -1943,7 +1954,6 @@ class MutationTruthTest(unittest.TestCase):
                     publish_command,
                     f'npm publish --ignore-scripts {replacement} "$TARBALL_PATH"',
                 )
-
     def test_workflow_and_scope_lock_the_truth_contract(self) -> None:
         def between(source: str, start: str, end: str, label: str) -> str:
             if start not in source:
