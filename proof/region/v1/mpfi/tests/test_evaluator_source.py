@@ -13,6 +13,8 @@ from pathlib import Path
 
 MPFI = Path(__file__).resolve().parents[1]
 EVALUATOR = MPFI / "evaluator"
+ENTRYPOINT = MPFI / "build.sh"
+RECIPE = MPFI / "build-inner.sh"
 REPO = MPFI.parents[3]
 FORMULA = REPO / "crates/labcolors-core/contracts/contextual-region-formula-v1.lcir"
 GENERATOR = EVALUATOR / "formula.py"
@@ -91,6 +93,55 @@ class FormulaSourceTests(unittest.TestCase):
 
 
 class EvaluatorSourceTests(unittest.TestCase):
+    def test_public_build_entrypoint_cannot_be_bypassed_by_an_environment_sentinel(self) -> None:
+        entrypoint = ENTRYPOINT.read_text(encoding="utf-8")
+        recipe = RECIPE.read_text(encoding="utf-8")
+
+        self.assertIn("/usr/bin/env -i", entrypoint)
+        self.assertIn('inner="$script_dir/build-inner.sh"', entrypoint)
+        self.assertIn('/bin/sh "$inner"', entrypoint)
+        self.assertNotIn("LC_MPFI_BUILD_ENV_V1", entrypoint)
+        self.assertNotIn("LC_MPFI_BUILD_ENV_V1", recipe)
+        self.assertNotIn("/usr/bin/env -i", recipe)
+
+    def test_public_build_entrypoint_strips_hostile_environment_before_recipe(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            entrypoint = root / "build.sh"
+            inner = root / "build-inner.sh"
+            observed = root / "environment"
+            entrypoint.write_text(ENTRYPOINT.read_text(encoding="utf-8"), encoding="utf-8")
+            entrypoint.chmod(0o755)
+            inner.write_text(
+                "#!/bin/sh\n"
+                f"/usr/bin/env | /usr/bin/sort > '{observed}'\n",
+                encoding="utf-8",
+            )
+            result = subprocess.run(
+                [str(entrypoint)],
+                check=False,
+                capture_output=True,
+                text=True,
+                env={
+                    "LC_MPFI_BUILD_ENV_V1": "1",
+                    "MAKEFLAGS": "--jobserver-auth=spoof",
+                    "PYTHONPATH": "/host-controlled",
+                    "CONFIG_SITE": "/host-controlled/site",
+                    "PATH": "/host-controlled/bin",
+                },
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            environment = observed.read_text(encoding="utf-8")
+            self.assertIn("PATH=/usr/bin:/bin\n", environment)
+            for forbidden in (
+                "LC_MPFI_BUILD_ENV_V1=1",
+                "MAKEFLAGS=--jobserver-auth=spoof",
+                "PYTHONPATH=/host-controlled",
+                "CONFIG_SITE=/host-controlled/site",
+                "PATH=/host-controlled/bin",
+            ):
+                self.assertNotIn(forbidden, environment)
+
     def test_source_tree_is_complete_and_operation_closed(self) -> None:
         required = (
             "main.c",
@@ -182,7 +233,7 @@ class EvaluatorSourceTests(unittest.TestCase):
         )
 
     def test_elf_absence_checks_are_fail_closed_on_inspection_error(self) -> None:
-        recipe = (MPFI / "build.sh").read_text(encoding="utf-8")
+        recipe = RECIPE.read_text(encoding="utf-8")
         start = recipe.index("require_absent_pattern()")
         end = recipe.index("\nrequire_regular", start)
         checker = recipe[start:end]
@@ -208,7 +259,7 @@ class EvaluatorSourceTests(unittest.TestCase):
             self.assertEqual(passed.returncode, 0, passed.stderr)
 
     def test_build_recipe_is_closed_and_requires_clang_19(self) -> None:
-        recipe = (MPFI / "build.sh").read_text(encoding="utf-8")
+        recipe = RECIPE.read_text(encoding="utf-8")
         self.assertIn("/usr/bin/clang-19", recipe)
         self.assertIn("clang version 19\\.", recipe)
         self.assertIn("-fno-fast-math", recipe)
@@ -226,7 +277,7 @@ class EvaluatorSourceTests(unittest.TestCase):
         self.assertNotIn("gcc", recipe.lower())
 
     def test_upstream_test_inventory_observation_is_fail_closed(self) -> None:
-        recipe = (MPFI / "build.sh").read_text(encoding="utf-8")
+        recipe = RECIPE.read_text(encoding="utf-8")
         self.assertIn(
             'if ! /usr/bin/make -pn > "$make_database"; then',
             recipe,
@@ -241,7 +292,7 @@ class EvaluatorSourceTests(unittest.TestCase):
         )
 
     def test_compiler_admission_allows_a_stable_symlink_to_an_executable(self) -> None:
-        recipe = (MPFI / "build.sh").read_text(encoding="utf-8")
+        recipe = RECIPE.read_text(encoding="utf-8")
         start = recipe.index("require_executable()")
         end = recipe.index("\nrequire_empty_directory", start)
         checker = recipe[start:end]
@@ -267,7 +318,7 @@ class EvaluatorSourceTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_clang_admission_accepts_distribution_version_banner(self) -> None:
-        recipe = (MPFI / "build.sh").read_text(encoding="utf-8")
+        recipe = RECIPE.read_text(encoding="utf-8")
         start = recipe.index("require_clang_19()")
         end = recipe.index("\nrequire_directory", start)
         checker = recipe[start:end]
@@ -294,7 +345,7 @@ class EvaluatorSourceTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_clang_admission_rejects_a_failed_version_probe(self) -> None:
-        recipe = (MPFI / "build.sh").read_text(encoding="utf-8")
+        recipe = RECIPE.read_text(encoding="utf-8")
         start = recipe.index("require_clang_19()")
         end = recipe.index("\nrequire_directory", start)
         checker = recipe[start:end]
