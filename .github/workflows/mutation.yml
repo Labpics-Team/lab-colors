@@ -13,11 +13,12 @@ on:
 permissions:
   contents: read
 
-# Все report-only прогоны делят FIFO-очередь репозитория: queue=max сохраняет до
-# 100 pending runs вместо default single, который отменяет предыдущий pending.
+# Report-only прогоны не отменяют уже выполняющийся запуск. GitHub Actions
+# допускает только один pending run на concurrency group; отдельного `queue`
+# параметра у схемы нет, поэтому расписание остаётся честно bounded.
 concurrency:
   group: mutation
-  queue: max
+  cancel-in-progress: false
 
 jobs:
   worker:
