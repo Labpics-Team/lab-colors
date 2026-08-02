@@ -1,7 +1,6 @@
 #!/bin/sh
-# Internal Arb recipe. The public build.sh entrypoint always starts this file
-# through its sealed environment; no caller-controlled variable selects a
-# pre-sanitized execution path.
+# Internal Arb recipe. The source-bound transport dispatches this file only
+# after establishing its clean child environment; it is not a standalone API.
 set -eu
 
 if [ "$#" -ne 0 ]; then

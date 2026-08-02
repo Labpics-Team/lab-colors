@@ -581,8 +581,7 @@ class ComparatorDerivationTests(unittest.TestCase):
         excluded = wrapper_paths | {
             pipeline.FORMULA_SPEC_PATH_V1,
             pipeline.FORMULA_GENERATOR_PATH_V1,
-            pipeline.BUILD_RECIPE_PATH_V1,
-        }
+        } | pipeline.BUILD_RECIPE_PATH_SET_V1
         wrapper_files = tuple(item for item in files if item.path in wrapper_paths)
         evaluator_files = tuple(item for item in files if item.path not in excluded)
 
@@ -600,6 +599,44 @@ class ComparatorDerivationTests(unittest.TestCase):
                 b"labcolors.proof-region.arb-comparator.evaluator-source.v1\0",
                 evaluator_files,
             ),
+        )
+
+    def test_inner_recipe_mutation_is_not_evaluator_source(self) -> None:
+        original = self._result()
+        files = _build_sources().files
+        inner_index = next(
+            index
+            for index, item in enumerate(files)
+            if item.path == pipeline.INNER_BUILD_RECIPE_PATH_V1
+        )
+        mutated_files = files[:inner_index] + (
+            replace(files[inner_index], contents=files[inner_index].contents + b"\n"),
+        ) + files[inner_index + 1 :]
+        mutated_sources = pipeline.AdmittedBuildSourcesV1(
+            mutated_files,
+            pipeline._build_sources_identity(mutated_files),
+            _token=pipeline._BUILD_SOURCES_TOKEN,
+        )
+        mutated_request = replace(_request(), build_sources=mutated_sources)
+        mutated = pipeline._derive_arb_comparator_for_build_v1(
+            mutated_request,
+            original.docker_capability,
+            original._binary,
+            original.rebuild_sha256s,
+            original.build_processes,
+        )
+
+        self.assertEqual(
+            mutated.preimages.evaluator_source,
+            original.comparator.preimages.evaluator_source,
+        )
+        self.assertNotEqual(
+            mutated.preimages.build_identity,
+            original.comparator.preimages.build_identity,
+        )
+        self.assertNotEqual(
+            mutated.preimages.test_observation,
+            original.comparator.preimages.test_observation,
         )
 
     def test_build_stdout_cannot_supply_a_foreign_manifest_or_coordinate(self) -> None:

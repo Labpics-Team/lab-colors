@@ -207,12 +207,17 @@ class ArbBuildRecipeTests(unittest.TestCase):
         self.assertNotIn("readelf -l \"$build/arb-evaluator-v1\" |", source)
         self.assertNotIn("readelf -d \"$build/arb-evaluator-v1\" 2>&1 |", source)
 
-    def test_public_build_entrypoint_strips_hostile_environment_before_recipe(self) -> None:
+    def test_source_owned_dispatch_cleans_child_environment(self) -> None:
         entrypoint = BUILD.read_text(encoding="utf-8")
         recipe = INNER_BUILD.read_text(encoding="utf-8")
         self.assertIn("/usr/bin/env -i", entrypoint)
+        self.assertIn("/usr/bin/readlink -f", entrypoint)
         self.assertIn('inner="$script_dir/build-inner.sh"', entrypoint)
         self.assertIn('/bin/sh "$inner"', entrypoint)
+        self.assertLess(
+            entrypoint.index("exec /usr/bin/env -i"),
+            entrypoint.index("script_path="),
+        )
         self.assertNotIn("LC_BUILD_ENV_V1", entrypoint)
         self.assertNotIn("LC_BUILD_ENV_V1", recipe)
         self.assertNotIn("/usr/bin/env -i", recipe)

@@ -1248,6 +1248,10 @@ class SealedBuildTransportContractTests(unittest.TestCase):
         self.assertNotIn("/out", source)
         self.assertNotIn(">&3", source)
         self.assertIn("exec 3>&1", pipeline._BUILD_BOOTSTRAP_V1)
+        self.assertIn(
+            '/bin/sh "$snapshot/workspace/proof/region/v1/arb/build.sh"',
+            pipeline._BUILD_BOOTSTRAP_V1,
+        )
         self.assertIn("/build/work/arb-evaluator-v1 >&3", pipeline._BUILD_BOOTSTRAP_V1)
 
     def test_native_gate_executes_the_one_shot_receipt_controller(self) -> None:

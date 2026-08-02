@@ -37,6 +37,11 @@ FORMULA_SPEC_PATH_V1 = "crates/labcolors-core/contracts/contextual-region-formul
 FORMULA_GENERATOR_PATH_V1 = "proof/region/v1/arb/evaluator/formula.py"
 BUILD_RECIPE_PATH_V1 = "proof/region/v1/arb/build.sh"
 INNER_BUILD_RECIPE_PATH_V1 = "proof/region/v1/arb/build-inner.sh"
+# One ordered recipe coordinate is shared by BUILD and test-observation
+# preimages. Keeping the dispatcher and the actual make/check body together
+# prevents a recipe-only mutation from masquerading as evaluator source.
+BUILD_RECIPE_PATHS_V1 = (BUILD_RECIPE_PATH_V1, INNER_BUILD_RECIPE_PATH_V1)
+BUILD_RECIPE_PATH_SET_V1 = frozenset(BUILD_RECIPE_PATHS_V1)
 
 FORMULA_SPEC_SHA256_V1 = "a6f77ac462f226453b1c27bbd8637b62780b9a640c317a6f50028dacd1de8540"
 GENERATED_FORMULA_SHA256_V1 = "9958f20c8ca598625db0593a45f8f8bc79e4b2f22b53263b6c32d78a5e1d2693"
@@ -47,8 +52,8 @@ GENERATED_FORMULA_SHA256_V1 = "9958f20c8ca598625db0593a45f8f8bc79e4b2f22b53263b6
 _PINNED_BUILD_SOURCE_SHA256_V1 = {
     FORMULA_SPEC_PATH_V1: FORMULA_SPEC_SHA256_V1,
     GENERATED_FORMULA_PATH_V1: GENERATED_FORMULA_SHA256_V1,
-    BUILD_RECIPE_PATH_V1: "09addfaa10952d3e71baf8a9709fb6b875745dcacea06ce45fd84e382a78173e",
-    INNER_BUILD_RECIPE_PATH_V1: "0b77e5170f6dab782243aae12ec4ff114a9dfddabe520fdd7ef28e55360f9efc",
+    BUILD_RECIPE_PATH_V1: "067db346c2d13b393104964fdd8298d3204b77e13bae213d9b1f3a0bf820f94f",
+    INNER_BUILD_RECIPE_PATH_V1: "b70ee1a6b0259745d5f9326c14f12f83ab026b5f5bf57a01f794edd1c5aa1d00",
     FORMULA_GENERATOR_PATH_V1: "16629cc3a2ef745ae244ae4762f8946a6546972886f96beeb9ee4920b043040c",
     "proof/region/v1/arb/evaluator/formula.h": "46fd5ad1b68b728efcd990a71d1dcc273b75e3391d8c06ef2fd0ac6a4d7dfdbd",
     "proof/region/v1/arb/evaluator/hash.c": "c28e6281208f09ca15fa74aea0091f27726ed68efc3480c34a7db33b8ca3567e",
@@ -793,7 +798,14 @@ def comparator_build_preimage_v2(
     return _comparator_preimage_v2(
         b"labcolors.proof-region.arb-comparator.build-identity.v2\0",
         (
-            build_sources.contents(BUILD_RECIPE_PATH_V1),
+            _encoded_build_file_set_v1(
+                b"labcolors.proof-region.arb-comparator.build-recipes.v1\0",
+                tuple(
+                    item
+                    for item in build_sources.files
+                    if item.path in BUILD_RECIPE_PATH_SET_V1
+                ),
+            ),
             build_sources.build_input_identity,
             build_sources.formula_support_identity,
             docker_capability_identity,
@@ -1149,14 +1161,16 @@ def _derive_arb_comparator_for_build_v1(
     wrapper_files = tuple(
         item for item in request.build_sources.files if item.path in wrapper_paths
     )
+    recipe_files = tuple(
+        item
+        for item in request.build_sources.files
+        if item.path in BUILD_RECIPE_PATH_SET_V1
+    )
     evaluator_files = tuple(
         item
         for item in request.build_sources.files
-        if item.path not in (
-            FORMULA_SPEC_PATH_V1,
-            FORMULA_GENERATOR_PATH_V1,
-            BUILD_RECIPE_PATH_V1,
-        )
+        if item.path not in (FORMULA_SPEC_PATH_V1, FORMULA_GENERATOR_PATH_V1)
+        and item.path not in BUILD_RECIPE_PATH_SET_V1
         and item.path not in wrapper_paths
     )
     wrapper_source = _encoded_build_file_set_v1(
@@ -1184,7 +1198,10 @@ def _derive_arb_comparator_for_build_v1(
         b"labcolors.proof-region.arb-comparator.test-observation.v1\0",
         (
             b"kind:aggregate-outer-process-observation-no-per-test-records",
-            request.build_sources.contents(BUILD_RECIPE_PATH_V1),
+            _encoded_build_file_set_v1(
+                b"labcolors.proof-region.arb-comparator.build-recipes.v1\0",
+                recipe_files,
+            ),
             len(build_processes).to_bytes(4, "big"),
             *process_bytes,
         ),
