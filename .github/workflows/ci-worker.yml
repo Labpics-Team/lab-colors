@@ -434,13 +434,12 @@ jobs:
     name: wasm build + headless test + size
     runs-on: { group: labpics-ci-sandbox, labels: [labpics-ci-gvisor-v1] }
     timeout-minutes: 25
-    # wasm-pack 0.13.1 закрепляет Binaryen 117: тот считает потоки по host CPU,
-    # не учитывая Linux affinity. Официальный override исключает этот источник
-    # oversubscription, сохраняя тот же детерминированный optimizer и его версию.
-    # Удалять после перехода на Binaryen с affinity-aware getNumCores и
-    # дифференциального подтверждения byte-exact результата.
+    # Binaryen 117 берёт число потоков из BINARYEN_CORES, а не из cgroup quota.
+    # 4 выведено из CPU-контракта runner label labpics-ci-gvisor-v1;
+    # дифференциальная сборка 1↔4 на pinned wasm-pack/Rust дала byte-exact
+    # пакет. Двойная сборка ниже остаётся постоянным drift-гейтом.
     env:
-      BINARYEN_CORES: 1
+      BINARYEN_CORES: 4
     # Защита от fork-PR — см. комментарий в job `lint` выше.
     if: >-
       (github.event_name != 'pull_request' ||

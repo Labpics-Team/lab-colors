@@ -17,7 +17,10 @@ readonly expected_swift="Swift version ${SWIFT_TOOLCHAIN} (swift-${SWIFT_TOOLCHA
   echo "source root does not exist: $source_root" >&2
   exit 64
 }
-install -d -m 0700 "$temp_root"
+[[ -d "$temp_root" && -w "$temp_root" && -x "$temp_root" ]] || {
+  echo "temporary root is not accessible: $temp_root" >&2
+  exit 64
+}
 work_root="$(mktemp -d "${temp_root%/}/labcolors-swift.XXXXXX")"
 readonly work_root
 cleanup() {

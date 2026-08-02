@@ -25,7 +25,8 @@ immutable **gVisor-ячейке на Linux x86_64** (тот же UniFFI-бинд
 ядро под `x86_64-unknown-linux-gnu`). `DRIFT_TOL` задаёт правило сравнения, но
 не заменяет прогоны на других платформах. Единый скрипт —
 `ci/run-conformance.sh` — используют и локальный прогон, и self-hosted CI-джоба
-(`.github/workflows/native-conformance.yml`).
+(`.github/workflows/native-conformance-worker.yml`); workflow
+`.github/workflows/native-conformance.yml` остаётся только event-caller.
 
 Локально на Linux x86_64 нужны точные Swift 6.1.3 и Rust 1.96.0:
 
