@@ -162,6 +162,13 @@ class EvaluatorSourceTests(unittest.TestCase):
             operations.validate_undefined_symbols("                 U __gmpz_not_allowed\n"),
             ("unexpected undefined external symbol mpz_not_allowed",),
         )
+        self.assertEqual(
+            operations.validate_undefined_symbols(
+                "                 U mpfr_cmp3\n"
+                "                 U __gmpz_cmp\n"
+            ),
+            (),
+        )
 
     def test_elf_absence_checks_are_fail_closed_on_inspection_error(self) -> None:
         recipe = (MPFI / "build.sh").read_text(encoding="utf-8")
@@ -192,15 +199,94 @@ class EvaluatorSourceTests(unittest.TestCase):
     def test_build_recipe_is_closed_and_requires_clang_19(self) -> None:
         recipe = (MPFI / "build.sh").read_text(encoding="utf-8")
         self.assertIn("/usr/bin/clang-19", recipe)
-        self.assertIn("^clang version 19\\.", recipe)
+        self.assertIn("clang version 19\\.", recipe)
         self.assertIn("-fno-fast-math", recipe)
         self.assertIn("-ffp-contract=off", recipe)
         self.assertIn("-fno-lto", recipe)
+        self.assertIn(
+            "readonly mpfi_test_exclusions='^(tdiv_ext|texp10|trec_sqrt)$'",
+            recipe,
+        )
+        self.assertIn('/usr/bin/make check -j1 TESTS="$mpfi_tests"', recipe)
         self.assertIn("mpfi-evaluator-v1", recipe)
         self.assertIn("readelf", recipe)
         self.assertIn("--undefined-only", recipe)
         self.assertIn("--undefined-symbols", recipe)
         self.assertNotIn("gcc", recipe.lower())
+
+    def test_compiler_admission_allows_a_stable_symlink_to_an_executable(self) -> None:
+        recipe = (MPFI / "build.sh").read_text(encoding="utf-8")
+        start = recipe.index("require_executable()")
+        end = recipe.index("\nrequire_empty_directory", start)
+        checker = recipe[start:end]
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            target = root / "clang-19"
+            target.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            target.chmod(0o755)
+            link = root / "compiler"
+            link.symlink_to(target)
+            result = subprocess.run(
+                [
+                    "/bin/sh",
+                    "-c",
+                    checker + '\nrequire_executable "$1"\n',
+                    "sh",
+                    str(link),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_clang_admission_accepts_distribution_version_banner(self) -> None:
+        recipe = (MPFI / "build.sh").read_text(encoding="utf-8")
+        start = recipe.index("require_clang_19()")
+        end = recipe.index("\nrequire_directory", start)
+        checker = recipe[start:end]
+        for banner in ("clang version 19.1.1", "Ubuntu clang version 19.1.1"):
+            with self.subTest(banner=banner), tempfile.TemporaryDirectory() as temporary:
+                compiler = Path(temporary) / "clang-19"
+                compiler.write_text(
+                    f'#!/bin/sh\nprintf "%s\\n" "{banner}"\n',
+                    encoding="utf-8",
+                )
+                compiler.chmod(0o755)
+                result = subprocess.run(
+                    [
+                        "/bin/sh",
+                        "-c",
+                        checker + '\nrequire_clang_19 "$1"\n',
+                        "sh",
+                        str(compiler),
+                    ],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+
+        with tempfile.TemporaryDirectory() as temporary:
+            compiler = Path(temporary) / "clang-18"
+            compiler.write_text(
+                '#!/bin/sh\nprintf "%s\\n" "clang version 18.1.8"\n',
+                encoding="utf-8",
+            )
+            compiler.chmod(0o755)
+            result = subprocess.run(
+                [
+                    "/bin/sh",
+                    "-c",
+                    checker + '\nrequire_clang_19 "$1"\n',
+                    "sh",
+                    str(compiler),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(result.returncode, 67)
 
     def test_runtime_profile_is_explicit_and_checked_before_allocation(self) -> None:
         wire = (EVALUATOR / "wire.h").read_text(encoding="utf-8")

@@ -87,6 +87,10 @@ ALLOWED_MPFR_CALLS = frozenset(
         "mpfr_clear",
         "mpfr_clears",
         "mpfr_cmp",
+        # MPFI's interval intersection implementation reaches this MPFR
+        # helper through its public operation; keep the linked ABI closed
+        # without mistaking the helper for a new evaluator operation.
+        "mpfr_cmp3",
         "mpfr_free_str",
         "mpfr_get_str",
         "mpfr_init2",
@@ -110,6 +114,9 @@ ALLOWED_GMP_CALLS = frozenset(
         "mpq_sgn",
         "mpq_sub",
         "mpz_clear",
+        # GMP's rational comparison/canonicalization path may emit this
+        # transitive limb comparison even when source calls stay mpq-only.
+        "mpz_cmp",
         "mpz_init_set_ui",
         "mpz_mul_2exp",
         "mpz_neg",
