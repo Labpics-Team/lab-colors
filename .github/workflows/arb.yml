@@ -98,6 +98,51 @@ jobs:
           done < "$source_dir/lock.tsv"
           test "$count" -eq 3
 
+      - name: acquire and hash-check exact MPFI source closure
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_dir="${LABCOLORS_ARB_SOURCE_DIR:?}"
+          export PYTHONPATH="$GITHUB_WORKSPACE/proof/region/v1"
+          python3 - <<'PY' > "$source_dir/mpfi-lock.tsv"
+          import provenance
+
+          for source in provenance.mpfi_source_lock_v1().sources:
+              print(
+                  source.role.name,
+                  source.archive_url,
+                  source.archive_sha256.hex(),
+                  source.archive_length,
+                  sep="\t",
+              )
+          PY
+          count=0
+          while IFS=$'\t' read -r role url digest length; do
+            case "$role" in
+              GMP)
+                archive="${LABCOLORS_GMP_ARCHIVE:?}"
+                variable=LABCOLORS_MPFI_GMP_ARCHIVE
+                ;;
+              MPFR)
+                archive="${LABCOLORS_MPFR_ARCHIVE:?}"
+                variable=LABCOLORS_MPFI_MPFR_ARCHIVE
+                ;;
+              MPFI)
+                archive="$source_dir/MPFI.archive"
+                variable=LABCOLORS_MPFI_ARCHIVE
+                curl --fail --location --silent --show-error \
+                  --connect-timeout 30 --max-time 600 --retry 3 --retry-all-errors \
+                  "$url" --output "$archive"
+                ;;
+              *) exit 64 ;;
+            esac
+            test "$(stat --format=%s "$archive")" = "$length"
+            echo "$digest  $archive" | sha256sum --check --strict
+            echo "$variable=$archive" >> "$GITHUB_ENV"
+            count=$((count + 1))
+          done < "$source_dir/mpfi-lock.tsv"
+          test "$count" -eq 3
+
       - name: acquire the exact pinned OCI manifest
         shell: bash
         run: |
@@ -115,6 +160,22 @@ jobs:
             /usr/bin/timeout --signal=TERM --kill-after=30s 15m \
               "$docker_path" pull "$image"
           echo "LABCOLORS_ARB_PIPELINE_DOCKER=$docker_path" >> "$GITHUB_ENV"
+
+      - name: acquire the exact pinned MPFI OCI manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          export PYTHONPATH="$GITHUB_WORKSPACE/proof/region/v1"
+          docker_path="${LABCOLORS_ARB_PIPELINE_DOCKER:?}"
+          image="$(python3 - <<'PY'
+          from mpfi import build
+          print(build.MPFI_BUILD_IMAGE_REFERENCE_V1)
+          PY
+          )"
+          "$docker_path" image inspect "$image" >/dev/null 2>&1 ||
+            /usr/bin/timeout --signal=TERM --kill-after=30s 15m \
+              "$docker_path" pull "$image"
+          echo "LABCOLORS_MPFI_DOCKER=$docker_path" >> "$GITHUB_ENV"
 
       - name: require the exact diagnostic Docker boundary
         shell: bash
@@ -171,6 +232,12 @@ jobs:
         run: |
           set -euo pipefail
           exec python3 proof/region/v1/arb/tests/native_gate.py receipt
+
+      - name: one source-bound MPFI BUILD to RUN receipt and evaluator runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          exec python3 proof/region/v1/mpfi/tests/native_gate.py receipt
 
       - name: native containment under an atomic two-task subtree
         shell: bash

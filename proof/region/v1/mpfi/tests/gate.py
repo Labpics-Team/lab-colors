@@ -11,8 +11,8 @@ from pathlib import Path
 
 
 TEST_DIRECTORY = Path(__file__).resolve().parent
-EXPECTED_TEST_COUNT = 20
-EXPECTED_TEST_INVENTORY_SHA256 = "f8151cf70a0e26b6e3df9b6c0e3f73f0ae369013529a7545b109c622ec8533bc"
+EXPECTED_TEST_COUNT = 27
+EXPECTED_TEST_INVENTORY_SHA256 = "d7f421024196c07c5b306e2967c9a173a1dc0e7bd98b4a6008c475c9dea0ba63"
 _RUNTIME_REASON = "set LABCOLORS_MPFI_EVALUATOR to the controlled C17 binary"
 EXPECTED_SKIPS = frozenset(
     {
@@ -27,6 +27,11 @@ EXPECTED_SKIPS = frozenset(
         (
             "test_evaluator_source.RuntimeTests.test_input_limit_is_enforced_before_wire_parse",
             _RUNTIME_REASON,
+        ),
+        (
+            "test_receipt.NativeMpfiSourceBoundReceiptIntegrationTests."
+            "test_real_build_run_and_seal_are_one_source_bound_controller_execution",
+            "requires Linux, Docker, a delegated cgroup, and all three exact MPFI source archives",
         ),
     }
 )

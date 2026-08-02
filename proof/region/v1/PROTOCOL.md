@@ -14,9 +14,9 @@ Arb-enclosures и выпускает связанные transcript bytes;
 только provenance receipt. Ни один из этих путей не выполняет независимый
 semantic replay и не создаёт mathematical proof type. MPFI source lock,
 archive admission и sealed source input (не evaluator replay) уже представлены.
-`mpfi/evaluator` теперь содержит отдельный source-owned M1.5 build/run path;
-MPFI source-bound receipt и semantic verifier в текущем release всё ещё
-отсутствуют.
+`mpfi/evaluator` содержит отдельный source-owned M1.5 build/run path, а
+`mpfi/receipt.py` — controller-only source-bound BUILD→RUN receipt boundary.
+Semantic verifier для MPFI в текущем release всё ещё отсутствует.
 
 Structural protocol/admission сам не является математическим proof.
 `DualComparisonCandidateV1` кодирует только structural agreement и не создаёт
@@ -29,10 +29,11 @@ evidence. В тесте протокола такое значение явно 
 хранится или не публикуется как proof artifact.
 
 Протокол не входит в Cargo workspace, Core, WASM, FFI, bindings или packages.
-Текущий `SourceBoundEvaluatorReceiptV1` подтверждает причинную цепь только Arb.
-MPFI evaluator output ещё не является provenance исполнения: MPFI source-bound
-receipt, cross-path dependency overlap и diversity не представлены admitted
-типом; structural coordinates и локальная сборка этого не восполняют.
+`SourceBoundEvaluatorReceiptV1` и `MpfiSourceBoundEvaluatorReceiptV1`
+подтверждают причинную цепь только в пределах своих controller-owned
+provenance boundaries. MPFI receipt не заявляет cross-path dependency overlap,
+diversity или semantic correctness; structural coordinates и локальная сборка
+этого не восполняют.
 
 ## Бинарный формат и идентичность
 
@@ -165,10 +166,10 @@ executable принимает только профиль `LC-MPFI-RUNTIME-V1`: 
 1024 contextual knots и не более 16 MiB transcript output. Это operational
 admission profile, а не математический предел definition/domain: лимиты job,
 precision, rung-ов и knots возвращают typed `resource_limit` до MPFI
-allocation, а переполнение transcript — typed `output_limit`. M2a обязан
-связать тот же профиль с immutable executor limits и включить его в
-source-bound BUILD/RUN evidence; прямой бинарь до этого не является
-самостоятельным public evaluator API.
+allocation, а переполнение transcript — typed `output_limit`. MPFI receipt
+связывает тот же профиль с immutable executor limits и включает его в
+source-bound BUILD/RUN evidence; прямой бинарь не является самостоятельным
+public evaluator API.
 
 В коде один exact tuple `MpfiRuntimeProfileV1` владеет этими пятью
 координатами. `MpfiRuntimeBindingV1` связывает его с одним immutable
@@ -176,8 +177,8 @@ source-bound BUILD/RUN evidence; прямой бинарь до этого не 
 `max_stdout_bytes` — `max_output_bytes`; остальные executor limits входят в
 ту же binding identity явно. Поэтому контроллер не может заменить память,
 время или stderr-лимит и сохранить тот же runtime-профиль. Ни executor, ни
-общий protocol leaf не импортируют MPFI: это lane-specific contract, который
-будет включён в source-bound receipt M2a.
+общий protocol leaf не импортируют MPFI: это lane-specific contract,
+включённый в MPFI source-bound receipt boundary.
 
 ## Фиксация источников и наблюдения целостности
 
@@ -342,8 +343,9 @@ session или сбой `TemporaryDirectory`), может вернуть `BuildR
 Transport не знает formula, ELF, comparator или
 source provenance: engine lane отдельно перепроверяет свой engine-owned input binding перед
 каждым process и передаёт output admission. MPFI sealed source input сам по себе
-не является MPFI build policy; `mpfi/build.sh` теперь объявляет source-owned
-recipe, но его BUILD/RUN observation и receipt ещё не admitted. Recipe не
+не является MPFI build policy; `mpfi/build.sh` объявляет source-owned recipe,
+а `mpfi/receipt.py` связывает его с BUILD/RUN observation. Production admission
+всё ещё требует exact native BUILD→RUN gate на том же source head. Recipe не
 заимствует Arb semantics.
 
 ## Воспроизведение Arb, связанное с источником
@@ -520,8 +522,8 @@ Witness ordinals строго возрастают, уникальны и при
 `trace_digest` и `enclosure_digest` — только ненулевые content
 coordinates, а не доказательство replay или enclosure. Semantic verification
 требует разрешить и replay эти records, проверить exact equality/enclosure math
-и связать результат с job, comparator, run и transcript; такого admitted
-receipt в текущем release нет. Arb controller этого не делает. Любая
+и связать результат с job, comparator, run и transcript; такого semantic
+receipt в текущем release нет. Ни Arb-, ни MPFI-controller этого не делает. Любая
 недоказанная transcendental equality
 остаётся `BoundaryUnproven`: epsilon или midpoint не превращают её в
 `Inside`.

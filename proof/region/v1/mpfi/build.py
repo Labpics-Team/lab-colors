@@ -325,8 +325,43 @@ def seal_mpfi_build_input_v1(
         source_lock,
         admitted_sources,
     )
-    if type(snapshot.source_lock) is not provenance.MpfiSourceLockV1:
-        raise TypeError("MPFI source replay changed lane")
+    return seal_mpfi_build_input_from_snapshot_v1(
+        snapshot,
+        build_sources,
+        generated_formula,
+        limits,
+        policy,
+    )
+
+
+def seal_mpfi_build_input_from_snapshot_v1(
+    snapshot: provenance.ReplayedSourceClosureV1,
+    build_sources: AdmittedMpfiBuildSourcesV1,
+    generated_formula: bytes,
+    limits: build_input.CanonicalInputLimitsV1,
+    policy: build_transport.DockerBuildPolicyV1 = MPFI_BUILD_TRANSPORT_POLICY_V1,
+) -> build_input.SealedInputV1:
+    """Seal from one already-owned source replay without a second materialization."""
+
+    if type(snapshot) is not provenance.ReplayedSourceClosureV1:
+        raise TypeError("snapshot must be ReplayedSourceClosureV1")
+    if (
+        type(snapshot.source_lock) is not provenance.MpfiSourceLockV1
+        or type(snapshot.admitted_sources)
+        is not provenance.AdmittedMpfiSourcesV1
+        or snapshot.admitted_sources.source_lock_identity
+        != snapshot.source_lock.identity
+    ):
+        raise TypeError("snapshot must retain MPFI source lock")
+    build_sources = _canonical_build_sources_v1(build_sources)
+    if type(generated_formula) is not bytes or not generated_formula:
+        raise TypeError("generated_formula must be nonempty bytes")
+    if hashlib.sha256(generated_formula).hexdigest() != MPFI_GENERATED_FORMULA_SHA256_V1:
+        raise ValueError("generated MPFI formula drift")
+    if not build_transport.docker_policy_is_valid_v1(policy):
+        raise TypeError("policy must be canonical DockerBuildPolicyV1")
+    if type(limits) is not build_input.CanonicalInputLimitsV1:
+        raise TypeError("limits must be CanonicalInputLimitsV1")
     source_entries = _source_entries_v1(snapshot)
     workspace_entries = tuple(
         (f"workspace/{item.path}", item.mode, item.contents)

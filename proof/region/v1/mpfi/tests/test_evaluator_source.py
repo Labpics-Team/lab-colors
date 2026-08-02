@@ -416,8 +416,9 @@ class EvaluatorSourceTests(unittest.TestCase):
         self.assertIn("LC_MPFI_MAX_OUTPUT_BYTES_V1", main)
         self.assertIn("output_limit", main)
 
-    def test_no_pre_run_receipt_or_arb_compatibility_layer_exists(self) -> None:
-        self.assertFalse((MPFI / "receipt.py").exists())
+    def test_source_bound_receipt_is_outside_evaluator_and_no_arb_compatibility_layer_exists(self) -> None:
+        receipt = (MPFI / "receipt.py").read_text(encoding="utf-8")
+        self.assertIn("MpfiSourceBoundControllerV1", receipt)
         joined = "\n".join(
             path.read_text(encoding="utf-8")
             for path in EVALUATOR.glob("*.c")
