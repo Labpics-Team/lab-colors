@@ -163,18 +163,22 @@ CC="$compiler" CFLAGS="$common_cflags" \
 # pointers to the generic harness, while texp10 names a fixture absent from
 # the sealed source archive.  Exclude only those upstream defects; every other
 # shipped test remains part of this source-bound library check.
+make_database="$build/mpfi-check-database"
+if ! /usr/bin/make -pn > "$make_database"; then
+    printf '%s\n' 'cannot inspect MPFI upstream test inventory' >&2
+    exit 70
+fi
 mpfi_tests=$(
-    /usr/bin/make -pn \
-        | /usr/bin/awk -v exclusions="$mpfi_test_exclusions" '
-            /^check_PROGRAMS =/ && !found {
-                found = 1
-                for (i = 3; i <= NF; i++) {
-                    gsub(/\$\(EXEEXT\)/, "", $i)
-                    if ($i !~ exclusions)
-                        printf "%s ", $i
-                }
+    /usr/bin/awk -v exclusions="$mpfi_test_exclusions" '
+        /^check_PROGRAMS =/ && !found {
+            found = 1
+            for (i = 3; i <= NF; i++) {
+                gsub(/\$\(EXEEXT\)/, "", $i)
+                if ($i !~ exclusions)
+                    printf "%s ", $i
             }
-        '
+        }
+    ' "$make_database"
 )
 if [ -z "$mpfi_tests" ]; then
     printf '%s\n' 'MPFI upstream test inventory is empty after exclusions' >&2

@@ -225,6 +225,21 @@ class EvaluatorSourceTests(unittest.TestCase):
         self.assertIn("--undefined-symbols", recipe)
         self.assertNotIn("gcc", recipe.lower())
 
+    def test_upstream_test_inventory_observation_is_fail_closed(self) -> None:
+        recipe = (MPFI / "build.sh").read_text(encoding="utf-8")
+        self.assertIn(
+            'if ! /usr/bin/make -pn > "$make_database"; then',
+            recipe,
+        )
+        self.assertIn(
+            "' \"$make_database\"\n)",
+            recipe,
+        )
+        self.assertNotIn(
+            "/usr/bin/make -pn \\\n        | /usr/bin/awk",
+            recipe,
+        )
+
     def test_compiler_admission_allows_a_stable_symlink_to_an_executable(self) -> None:
         recipe = (MPFI / "build.sh").read_text(encoding="utf-8")
         start = recipe.index("require_executable()")
