@@ -38,6 +38,7 @@ from test_pipeline import (  # noqa: E402
 
 
 BUILD_RECIPE = ARB / "build.sh"
+INNER_BUILD_RECIPE = ARB / "build-inner.sh"
 NATIVE_GATE = ARB / "tests" / "native_gate.py"
 _TEST_CANONICAL_LIMITS = build_input.CanonicalInputLimitsV1(64, 1024, 4096)
 
@@ -1240,7 +1241,7 @@ class SealedBuildTransportContractTests(unittest.TestCase):
         self.assertEqual(released, [None])
 
     def test_recipe_is_transport_agnostic_and_bootstrap_owns_binary_stdout(self) -> None:
-        source = BUILD_RECIPE.read_text(encoding="utf-8")
+        source = INNER_BUILD_RECIPE.read_text(encoding="utf-8")
         self.assertIn("readonly inputs=/build/snapshot/inputs", source)
         self.assertIn("readonly workspace=/build/snapshot/workspace", source)
         self.assertIn("readonly build=/build/work", source)
