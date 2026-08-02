@@ -1816,8 +1816,8 @@ class MutationTruthTest(unittest.TestCase):
                     self.assertLess(int(timeout.group(1)), 360)
 
         wasm = job_blocks(workers["ci-worker.yml"], "ci-worker.yml")["wasm"]
-        self.assertIn("    env:\n      BINARYEN_CORES: 1\n", wasm)
-        self.assertEqual(workers["ci-worker.yml"].count("BINARYEN_CORES"), 1)
+        self.assertIn("    env:\n      BINARYEN_CORES: 4\n", wasm)
+        self.assertEqual(workers["ci-worker.yml"].count("\n      BINARYEN_CORES:"), 1)
 
         native = workers["native-conformance-worker.yml"]
         self.assertEqual(native.count("SWIFT_TOOLCHAIN: 6.1.3"), 1)
