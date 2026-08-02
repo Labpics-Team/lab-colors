@@ -293,6 +293,32 @@ class EvaluatorSourceTests(unittest.TestCase):
                 )
                 self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_clang_admission_rejects_a_failed_version_probe(self) -> None:
+        recipe = (MPFI / "build.sh").read_text(encoding="utf-8")
+        start = recipe.index("require_clang_19()")
+        end = recipe.index("\nrequire_directory", start)
+        checker = recipe[start:end]
+        with tempfile.TemporaryDirectory() as temporary:
+            compiler = Path(temporary) / "clang-19"
+            compiler.write_text(
+                '#!/bin/sh\nprintf "%s\\n" "clang version 19.1.1"\nexit 1\n',
+                encoding="utf-8",
+            )
+            compiler.chmod(0o755)
+            result = subprocess.run(
+                [
+                    "/bin/sh",
+                    "-c",
+                    checker + '\nrequire_clang_19 "$1"\n',
+                    "sh",
+                    str(compiler),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(result.returncode, 67, result.stderr)
+
         with tempfile.TemporaryDirectory() as temporary:
             compiler = Path(temporary) / "clang-18"
             compiler.write_text(

@@ -56,7 +56,11 @@ require_executable() {
 }
 
 require_clang_19() {
-    if ! "$1" --version | /usr/bin/grep -q 'clang version 19\.'; then
+    version=$("$1" --version) || {
+        printf '%s\n' 'cannot inspect the admitted Clang compiler' >&2
+        exit 67
+    }
+    if ! printf '%s\n' "$version" | /usr/bin/grep -q 'clang version 19\.'; then
         printf '%s\n' 'MPFI build requires the admitted Clang 19 compiler family' >&2
         exit 67
     fi
