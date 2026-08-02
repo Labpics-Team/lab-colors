@@ -141,7 +141,7 @@ jobs:
               file: "native-conformance.yml",
               path: ".github/workflows/native-conformance.yml",
               requiredJobs: [
-                "swift conformance (self-hosted Linux, swift container)",
+                "swift conformance (self-hosted Linux, pinned toolchain)",
               ],
             },
           ];
