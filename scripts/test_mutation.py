@@ -1943,6 +1943,7 @@ class MutationTruthTest(unittest.TestCase):
                 check=False,
                 capture_output=True,
                 text=True,
+                timeout=mutation.EXTERNAL_COMMAND_TIMEOUT_SECONDS,
             )
             self.assertEqual(result.returncode, 73, result.stderr)
             self.assertEqual(os.stat(temp_root).st_mode & 0o777, before_mode)
