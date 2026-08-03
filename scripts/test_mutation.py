@@ -127,6 +127,15 @@ def workflow_job_blocks(source: str, label: str) -> dict[str, str]:
     }
 
 
+def load_publish_worker() -> tuple[str, str]:
+    repo = Path(__file__).resolve().parents[1]
+    workflow = (
+        repo / ".github" / "workflows" / "publish-worker.yml"
+    ).read_text(encoding="utf-8")
+    publish_job = workflow_job_blocks(workflow, "publish-worker.yml")["publish"]
+    return workflow, publish_job
+
+
 class MutationTruthTest(unittest.TestCase):
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory()
@@ -1915,12 +1924,8 @@ class MutationTruthTest(unittest.TestCase):
         self.assertIn(".github/workflows/native-conformance-worker.yml", swift_readme)
         self.assertIn(".github/workflows/native-conformance.yml", swift_readme)
 
-    def test_publish_worker_secret_boundary_and_registry_are_fail_closed(self) -> None:
-        repo = Path(__file__).resolve().parents[1]
-        workflow = (
-            repo / ".github" / "workflows" / "publish-worker.yml"
-        ).read_text(encoding="utf-8")
-
+    def test_publish_worker_receipt_identity_is_fail_closed(self) -> None:
+        workflow, _ = load_publish_worker()
         self.assertIn(
             'const workerName = job.name.split(" / ").at(-1);',
             workflow,
@@ -1952,14 +1957,8 @@ class MutationTruthTest(unittest.TestCase):
         self.assertEqual(canonical_worker_name("outer / CI / test"), "test")
         self.assertNotEqual(canonical_worker_name("CI / other"), "test")
 
-        jobs = workflow.split("\njobs:\n", 1)[1]
-        publish_anchor = re.search(r"(?m)^  publish:\n", jobs)
-        self.assertIsNotNone(publish_anchor)
-        assert publish_anchor is not None
-        publish_tail = jobs[publish_anchor.end() :]
-        next_job = re.search(r"(?m)^  [A-Za-z0-9_-]+:\n", publish_tail)
-        publish_job = publish_tail[: next_job.start() if next_job else len(publish_tail)]
-
+    def test_publish_worker_secret_context_is_fail_closed(self) -> None:
+        _, publish_job = load_publish_worker()
         job_if = re.search(
             r"(?m)^    if:\s*>-\n(?P<expression>(?:^      [^\n]*\n)+)",
             publish_job,
@@ -2034,6 +2033,8 @@ class MutationTruthTest(unittest.TestCase):
             with self.subTest(hostile=hostile):
                 self.assertFalse(eligible(hostile))
 
+    def test_publish_worker_registry_is_fail_closed(self) -> None:
+        _, publish_job = load_publish_worker()
         publish_step = re.search(
             r"(?ms)^      - name: npm publish verified CI tarball .*?\n"
             r"(?P<step>.*?)(?=^      - name:|\Z)",
@@ -2070,6 +2071,7 @@ class MutationTruthTest(unittest.TestCase):
                     publish_command,
                     f'npm publish --ignore-scripts {replacement} "$TARBALL_PATH"',
                 )
+
     def test_swift_conformance_does_not_mutate_temp_root(self) -> None:
         repo = Path(__file__).resolve().parents[1]
         script = repo / "bindings" / "swift" / "ci" / "run-conformance.sh"
