@@ -223,7 +223,7 @@ test("consumers resolve the base Core graph without deleted capabilities", () =>
   assert.match(coreManifest, /^default = \[\]$/mu, "Core default capability set must stay empty");
   assert.doesNotMatch(coreManifest, /wcag22-feasibility|wcag22-explicit/u);
 
-  const ci = read(".github", "workflows", "ci.yml");
+  const ci = read(".github", "workflows", "ci-worker.yml");
   const projection = workflowRunScript(
     ci,
     "name: prove core capability projection boundary",
@@ -374,7 +374,7 @@ test("MSRV and packaged Rust crate gates are executable CI contracts", () => {
   assert.match(coreLib, /include_str!\("\.\.\/README\.md"\)/);
   assert.doesNotMatch(coreLib, /include_str!\("\.\.\/\.\.\/\.\.\/README\.md"\)/);
 
-  const ci = read(".github", "workflows", "ci.yml");
+  const ci = read(".github", "workflows", "ci-worker.yml");
   assert.match(ci, /^\s*MSRV_TOOLCHAIN: 1\.85\.0$/m);
   assert.match(ci, /^\s*NODE_TOOLCHAIN: 24\.14\.0$/m);
   assert.match(ci, /^\s*NODE_CONSUMER_FLOOR: 22\.11\.0$/m);
@@ -537,26 +537,77 @@ test("MSRV and packaged Rust crate gates are executable CI contracts", () => {
     assert.match(active, /^case "\$ID:\$VERSION_CODENAME" in$/mu);
     assert.match(
       active,
-      /^\s*debian:bookworm\|ubuntu:jammy\)\n\s+ALSA_PACKAGE=libasound2\n\s+;;$/mu,
+      /^\s*debian:bookworm\|ubuntu:jammy\)\n\s+ALSA_PACKAGE=libasound2\n\s+ATK_PACKAGE=libatk1\.0-0\n\s+ATK_BRIDGE_PACKAGE=libatk-bridge2\.0-0\n\s+ATSPI_PACKAGE=libatspi2\.0-0\n\s+CUPS_PACKAGE=libcups2\n\s+GLIB_PACKAGE=libglib2\.0-0\n\s+;;$/mu,
     );
     assert.match(
       active,
-      /^\s*debian:trixie\|ubuntu:noble\)\n\s+ALSA_PACKAGE=libasound2t64\n\s+;;$/mu,
+      /^\s*debian:trixie\|ubuntu:noble\)\n\s+ALSA_PACKAGE=libasound2t64\n\s+ATK_PACKAGE=libatk1\.0-0t64\n\s+ATK_BRIDGE_PACKAGE=libatk-bridge2\.0-0t64\n\s+ATSPI_PACKAGE=libatspi2\.0-0t64\n\s+CUPS_PACKAGE=libcups2t64\n\s+GLIB_PACKAGE=libglib2\.0-0t64\n\s+;;$/mu,
     );
     assert.match(
       active,
       /^\s*\*\)\n\s+echo "unsupported Chrome dependency release: \$ID:\$VERSION_CODENAME" >&2\n\s+exit 1\n\s+;;$/mu,
     );
+    assert.ok(activeLines.includes(
+      "readonly ALSA_PACKAGE ATK_PACKAGE ATK_BRIDGE_PACKAGE ATSPI_PACKAGE CUPS_PACKAGE GLIB_PACKAGE",
+    ));
     assert.deepEqual(
-      activeLines.filter((line) => /\bALSA_PACKAGE\b/u.test(line)),
+      activeLines.filter((line) => /^(?:ALSA|ATK|ATK_BRIDGE|ATSPI|CUPS|GLIB)_PACKAGE=/u.test(line)),
       [
         "ALSA_PACKAGE=libasound2",
+        "ATK_PACKAGE=libatk1.0-0",
+        "ATK_BRIDGE_PACKAGE=libatk-bridge2.0-0",
+        "ATSPI_PACKAGE=libatspi2.0-0",
+        "CUPS_PACKAGE=libcups2",
+        "GLIB_PACKAGE=libglib2.0-0",
         "ALSA_PACKAGE=libasound2t64",
-        "readonly ALSA_PACKAGE",
-        '(cd "$DEBS_DIR" && apt-get "${APT_OPTIONS[@]}" download libnspr4 libnss3 "$ALSA_PACKAGE" libgbm1 2>&1)',
+        "ATK_PACKAGE=libatk1.0-0t64",
+        "ATK_BRIDGE_PACKAGE=libatk-bridge2.0-0t64",
+        "ATSPI_PACKAGE=libatspi2.0-0t64",
+        "CUPS_PACKAGE=libcups2t64",
+        "GLIB_PACKAGE=libglib2.0-0t64",
       ],
-      "the release matrix must be the sole ALSA package authority",
+      "the supported release matrix must be the sole ABI package authority",
     );
+    assert.doesNotMatch(
+      active,
+      /\b(?:ALSA|ATK|ATK_BRIDGE|ATSPI|CUPS|GLIB)_PACKAGE\s*\+=/u,
+    );
+    const packageArrays = [...active.matchAll(
+      /^[ \t]*CHROME_RUNTIME_PACKAGES=\(\n(?<body>(?:[ \t]+[^\n]*\n)+)^[ \t]*\)$/gmu,
+    )];
+    assert.equal(packageArrays.length, 1, "Chrome must have one direct ELF package-root array");
+    assert.deepEqual(
+      (packageArrays[0].groups?.body ?? "")
+        .split("\n")
+        .map((line) => line.trim())
+        .filter(Boolean),
+      [
+        '"$ALSA_PACKAGE"',
+        '"$ATK_BRIDGE_PACKAGE"',
+        '"$ATK_PACKAGE"',
+        '"$ATSPI_PACKAGE"',
+        '"$CUPS_PACKAGE"',
+        '"$GLIB_PACKAGE"',
+        "libcairo2",
+        "libdbus-1-3",
+        "libexpat1",
+        "libgbm1",
+        "libnspr4",
+        "libnss3",
+        "libpango-1.0-0",
+        "libudev1",
+        "libx11-6",
+        "libxcb1",
+        "libxcomposite1",
+        "libxdamage1",
+        "libxext6",
+        "libxfixes3",
+        "libxkbcommon0",
+        "libxrandr2",
+      ],
+      "package roots must cover every direct DT_NEEDED owner of pinned Chrome and ChromeDriver",
+    );
+    assert.equal(active.match(/^readonly CHROME_RUNTIME_PACKAGES$/gmu)?.length, 1);
     const trustedSourceLines = [
       '"deb [signed-by=$DISTRO_KEYRING] https://deb.debian.org/debian $VERSION_CODENAME main" \\',
       '"deb [signed-by=$DISTRO_KEYRING] https://deb.debian.org/debian $VERSION_CODENAME-updates main" \\',
@@ -600,7 +651,7 @@ test("MSRV and packaged Rust crate gates are executable CI contracts", () => {
     const afterOptions = active.slice(optionsEnd);
     assert.match(afterOptions, /^\nreadonly APT_OPTIONS\napt-get /u);
     const update = active.indexOf('apt-get "${APT_OPTIONS[@]}" update', optionsEnd);
-    const download = active.indexOf('apt-get "${APT_OPTIONS[@]}" download', update);
+    const download = active.indexOf('apt-get "${APT_OPTIONS[@]}" install \\', update);
     assert.ok(optionsEnd < update && update < download);
     assert.deepEqual(
       active
@@ -609,13 +660,29 @@ test("MSRV and packaged Rust crate gates are executable CI contracts", () => {
         .filter((line) => /(?:^|[\s;&(|])apt(?:-get)?(?=\s)/u.test(line)),
       [
         'apt-get "${APT_OPTIONS[@]}" update',
-        '(cd "$DEBS_DIR" && apt-get "${APT_OPTIONS[@]}" download libnspr4 libnss3 "$ALSA_PACKAGE" libgbm1 2>&1)',
+        'apt-get "${APT_OPTIONS[@]}" install \\',
       ],
       "every APT invocation must use the one immutable isolated option set",
     );
+    for (const option of [
+      "--download-only \\",
+      "--reinstall \\",
+      "--no-install-recommends \\",
+      "--yes \\",
+      '"${CHROME_RUNTIME_PACKAGES[@]}"',
+    ]) {
+      assert.ok(activeLines.includes(option), `missing package-closure resolver option: ${option}`);
+    }
+    assert.match(active, /^assert_elf_closure\(\) \{$/mu);
+    assert.match(active, /^\s*LD_LIBRARY_PATH="\$\{DEPS_LIB\}:\$\{LD_LIBRARY_PATH:-\}" ldd "\$executable"/mu);
+    assert.match(active, /^assert_elf_closure "\$CHROME_BIN"$/mu);
+    assert.match(active, /^assert_elf_closure "\$CHROMEDRIVER_BIN"$/mu);
+    assert.match(active, /^LD_LIBRARY_PATH="\$\{DEPS_LIB\}:\$\{LD_LIBRARY_PATH:-\}" "\$CHROME_BIN" --version$/mu);
+    assert.match(active, /^LD_LIBRARY_PATH="\$\{DEPS_LIB\}:\$\{LD_LIBRARY_PATH:-\}" "\$CHROMEDRIVER_BIN" --version$/mu);
+    assert.doesNotMatch(active, /(?:CHROME_BIN|CHROMEDRIVER_BIN).*--version\s*\|\|\s*true/u);
   };
   assertAptSourceIsolation(ci);
-  for (const mutant of [
+  for (const [mutationIndex, mutant] of [
     ci.replace(
       '            -o "Dir::Etc::sourcelist=$APT_SOURCES/sources.list"',
       '            # -o "Dir::Etc::sourcelist=$APT_SOURCES/sources.list"',
@@ -633,8 +700,8 @@ test("MSRV and packaged Rust crate gates are executable CI contracts", () => {
       '          :; APT_OPTIONS=()\n          apt-get "${APT_OPTIONS[@]}" update',
     ),
     ci.replace(
-      '          (cd "$DEBS_DIR" && apt-get',
-      '          unset APT_OPTIONS\n          (cd "$DEBS_DIR" && apt-get',
+      '          apt-get "${APT_OPTIONS[@]}" install \\',
+      '          unset APT_OPTIONS\n          apt-get "${APT_OPTIONS[@]}" install \\',
     ),
     ci.replace(
       '          apt-get "${APT_OPTIONS[@]}" update',
@@ -661,9 +728,9 @@ test("MSRV and packaged Rust crate gates are executable CI contracts", () => {
       "https://security.ubuntu.com/ubuntu stable-security main",
     ),
     ci.replace(
-      '          readonly ALSA_PACKAGE\n          case "$ID" in',
-      '          if [[ "$ID:$VERSION_CODENAME" == ubuntu:jammy ]]; then ALSA_PACKAGE=libasound2t64; fi\n' +
-        '          readonly ALSA_PACKAGE\n          case "$ID" in',
+      '          readonly ALSA_PACKAGE ATK_PACKAGE ATK_BRIDGE_PACKAGE ATSPI_PACKAGE CUPS_PACKAGE GLIB_PACKAGE\n          CHROME_RUNTIME_PACKAGES=(',
+      '          ALSA_PACKAGE=libasound2t64\n' +
+        '          readonly ALSA_PACKAGE ATK_PACKAGE ATK_BRIDGE_PACKAGE ATSPI_PACKAGE CUPS_PACKAGE GLIB_PACKAGE\n          CHROME_RUNTIME_PACKAGES=(',
     ),
     ci.replace(
       "          readonly DISTRO_KEYRING\n",
@@ -675,21 +742,25 @@ test("MSRV and packaged Rust crate gates are executable CI contracts", () => {
       "        run: |\n          set +e\n          # -- CfT chrome + chromedriver --",
     ),
     ci.replace(
-      '          readonly ALSA_PACKAGE\n          case "$ID" in',
-      '          ALSA_PACKAGE+=t64\n          readonly ALSA_PACKAGE\n          case "$ID" in',
+      '          readonly ALSA_PACKAGE ATK_PACKAGE ATK_BRIDGE_PACKAGE ATSPI_PACKAGE CUPS_PACKAGE GLIB_PACKAGE\n          CHROME_RUNTIME_PACKAGES=(',
+      '          ALSA_PACKAGE+=t64\n          readonly ALSA_PACKAGE ATK_PACKAGE ATK_BRIDGE_PACKAGE ATSPI_PACKAGE CUPS_PACKAGE GLIB_PACKAGE\n          CHROME_RUNTIME_PACKAGES=(',
     ),
     ci.replace(
-      "          readonly ALSA_PACKAGE\n",
-      "          readonly ALSA_PACKAGE\n          :; set +e\n",
+      "          readonly ALSA_PACKAGE ATK_PACKAGE ATK_BRIDGE_PACKAGE ATSPI_PACKAGE CUPS_PACKAGE GLIB_PACKAGE\n",
+      "          readonly ALSA_PACKAGE ATK_PACKAGE ATK_BRIDGE_PACKAGE ATSPI_PACKAGE CUPS_PACKAGE GLIB_PACKAGE\n          :; set +e\n",
     ),
     ci.replace(
       "          readonly DISTRO_KEYRING\n",
       "          readonly DISTRO_KEYRING\n" +
         '          echo "deb https://example.invalid/debian sid main" >> $APT_SOURCES/sources.list\n',
     ),
-  ]) {
-    assert.notEqual(mutant, ci, "hostile APT mutation must bite");
-    assert.throws(() => assertAptSourceIsolation(mutant));
+  ].entries()) {
+    assert.notEqual(mutant, ci, `hostile APT mutation ${mutationIndex} must bite`);
+    assert.throws(
+      () => assertAptSourceIsolation(mutant),
+      undefined,
+      `hostile APT mutation ${mutationIndex} must be rejected`,
+    );
   }
   assert.match(ci, /Dir::State::lists=\$APT_LISTS/);
   assert.match(ci, /Dir::State::status=\/var\/lib\/dpkg\/status/);
@@ -698,13 +769,21 @@ test("MSRV and packaged Rust crate gates are executable CI contracts", () => {
   assert.match(ci, /Debug::NoLocking=1/);
   assert.match(ci, /Acquire::Retries=3/);
   const aptUpdate = ci.indexOf('apt-get "${APT_OPTIONS[@]}" update');
-  const aptDownload = ci.indexOf('apt-get "${APT_OPTIONS[@]}" download');
+  const aptDownload = ci.indexOf('apt-get "${APT_OPTIONS[@]}" install \\');
   assert.ok(
     aptUpdate >= 0 && aptDownload >= 0 && aptUpdate < aptDownload,
     "Chrome dependency download must use a fresh isolated APT index",
   );
   assert.match(ci, /CHROME_BIN_DIR="\$RUNNER_TEMP\/chrome-bin-\$GITHUB_JOB"/);
-  assert.doesNotMatch(ci, /\$HOME|~\//, "WASM/Chrome state must not leak into shared HOME");
+  const executableCi = ci
+    .split("\n")
+    .filter((line) => !line.trimStart().startsWith("#"))
+    .join("\n");
+  assert.doesNotMatch(
+    executableCi,
+    /\$HOME|~\//,
+    "WASM/Chrome state must not leak into shared HOME",
+  );
   assert.match(
     ci,
     /printf '%s  %s\\n' "\$CHROME_FOR_TESTING_SHA256"[\s\S]*sha256sum --check --strict/,
@@ -724,27 +803,40 @@ test("MSRV and packaged Rust crate gates are executable CI contracts", () => {
   );
   assertCheckoutCredentialsAreEphemeral(ci, "CI");
   assertCheckoutCredentialsAreEphemeral(
-    read(".github", "workflows", "native-conformance.yml"),
+    read(".github", "workflows", "native-conformance-worker.yml"),
     "native conformance",
   );
   assertCheckoutCredentialsAreEphemeral(
-    read(".github", "workflows", "mutation.yml"),
+    read(".github", "workflows", "mutation-worker.yml"),
     "scheduled mutation",
   );
   assertCheckoutCredentialsAreEphemeral(
-    read(".github", "workflows", "publish.yml"),
+    read(".github", "workflows", "publish-worker.yml"),
     "publish",
   );
 });
 
 test("publish accepts only canonical exact-SHA workflow runs and their immutable CI artifact", () => {
-  const publish = read(".github", "workflows", "publish.yml");
+  const caller = read(".github", "workflows", "publish.yml");
+  const publish = read(".github", "workflows", "publish-worker.yml");
+  assert.match(
+    caller,
+    /^\s*uses: Labpics-Team\/lab-colors\/\.github\/workflows\/publish-worker\.yml@[0-9a-f]{40}$/m,
+  );
+  assert.equal(
+    [...caller.matchAll(/publish-worker\.yml@/gu)].length,
+    1,
+    "publish caller must bind exactly one immutable worker",
+  );
+  assert.doesNotMatch(caller, /^\s+steps:$/m);
+  assert.doesNotMatch(caller, /^\s+secrets:\s*inherit$/m);
   assert.match(publish, /^\s*NODE_TOOLCHAIN: "24\.14\.0"$/m);
   assert.match(publish, /^\s*NPM_TOOLCHAIN: "11\.9\.0"$/m);
   assert.match(
-    publish,
+    caller,
     /^concurrency:\n  group: npm-publish\n  cancel-in-progress: false$/m,
   );
+  assert.match(caller, /permissions:\n  contents: read\n  actions: read\n/);
   assert.match(publish, /permissions:\n  contents: read\n  actions: read\n/);
   assert.doesNotMatch(publish, /^\s*checks:/m);
   assert.doesNotMatch(publish, /id-token:/);
@@ -771,7 +863,7 @@ test("publish accepts only canonical exact-SHA workflow runs and their immutable
     "test",
     "cargo audit (rustsec)",
     "wasm build + headless test + size",
-    "swift conformance (self-hosted Linux, swift container)",
+    "swift conformance (self-hosted Linux, pinned toolchain)",
   ];
   for (const check of requiredChecks) {
     assert.ok(publish.includes(JSON.stringify(check)), `publish gate lost required check ${check}`);
@@ -829,7 +921,7 @@ test("publish accepts only canonical exact-SHA workflow runs and their immutable
 });
 
 test("tag ancestry guard works after credential-free checkout and rejects non-ancestors", () => {
-  const publish = read(".github", "workflows", "publish.yml");
+  const publish = read(".github", "workflows", "publish-worker.yml");
   const fullGuard = workflowRunScript(
     publish,
     "name: guard — exact tag SHA is in origin/main",
@@ -1012,7 +1104,7 @@ test("tag ancestry guard works after credential-free checkout and rejects non-an
 });
 
 test("canonical-run guard executes against workflow-scoped runs and jobs", () => {
-  const publish = read(".github", "workflows", "publish.yml");
+  const publish = read(".github", "workflows", "publish-worker.yml");
   const selector = workflowNodeScript(
     publish,
     "name: guard — canonical exact-SHA workflow runs and their own jobs",
@@ -1074,7 +1166,7 @@ test("canonical-run guard executes against workflow-scoped runs and jobs", () =>
       successfulJob(requiredCiJobs[0], 999),
     ],
     nativeJobs: [
-      successfulJob("swift conformance (self-hosted Linux, swift container)", 202),
+      successfulJob("swift conformance (self-hosted Linux, pinned toolchain)", 202),
     ],
   };
   const fetchHarness = `
@@ -1136,7 +1228,7 @@ test("canonical-run guard executes against workflow-scoped runs and jobs", () =>
 });
 
 test("publish artifact validator executes and rejects identity or byte drift", () => {
-  const publish = read(".github", "workflows", "publish.yml");
+  const publish = read(".github", "workflows", "publish-worker.yml");
   const validator = workflowNodeScript(
     publish,
     "name: validate manifest identity and byte-exact tarball",
@@ -1674,7 +1766,7 @@ test("WASM runtime budget is one canonical self-contained exact contract", async
     "the pinned canonical document must parse",
   );
 
-  const ci = read(".github", "workflows", "ci.yml");
+  const ci = read(".github", "workflows", "ci-worker.yml");
   assert.match(ci, /name: enforce measured WASM runtime budget/u);
   const exactBudgetCommand = "        run: node scripts/check-wasm-size-budget.mjs";
   const assertExactBudgetCommand = (workflow) => {
@@ -1700,10 +1792,18 @@ test("WASM runtime budget is one canonical self-contained exact contract", async
     /\n  wasm:\n(?<body>[\s\S]*?)(?=\n  [a-z][a-z0-9_-]*:\n|\s*$)/u,
   )?.groups?.body;
   assert.ok(wasmJob, "CI must contain a bounded wasm job");
-  assert.match(wasmJob, /runs-on: \[self-hosted, Linux, X64\]/u);
+  assert.match(
+    wasmJob,
+    /runs-on: \{ group: labpics-ci-sandbox, labels: \[labpics-ci-gvisor-v1\] \}/u,
+  );
+  assert.doesNotMatch(wasmJob, /runs-on: \[self-hosted, Linux, X64\]/u);
   assert.ok(
     ci.includes(`  RUST_TOOLCHAIN: ${budget.toolchain.rust}`),
     "the live Rust toolchain must equal the budget declaration",
+  );
+  assert.ok(
+    ci.includes(`  NODE_TOOLCHAIN: ${budget.toolchain.node}`),
+    "the live Node toolchain must equal the budget declaration",
   );
   assert.ok(
     wasmJob.includes(
@@ -1715,12 +1815,21 @@ test("WASM runtime budget is one canonical self-contained exact contract", async
     wasmJob.includes(`targets: ${budget.toolchain.target}`),
     "the live WASM target must equal the budget declaration",
   );
+  assert.ok(
+    wasmJob.includes(`BINARYEN_RELEASE: ${budget.toolchain.binaryenRelease}`),
+    "the live Binaryen release must equal the budget declaration",
+  );
+  assert.ok(
+    wasmJob.includes(
+      `BINARYEN_NODE_SHA256: "${budget.toolchain.binaryenNodeArchiveSha256}"`,
+    ),
+    "the live Binaryen archive must equal the budget declaration",
+  );
 
   const repetition = workflowRunScript(
     ci,
     "name: repeat runtime WASM build in one toolchain-pinned CI job",
   );
-  const recipePrefix = "CARGO_ENCODED_RUSTFLAGS=<rustPathRemap> ";
   const expectedRemapExport = `export CARGO_ENCODED_RUSTFLAGS=${budget.recipe.rustPathRemap
     .map((mapping) => {
       const separator = mapping.indexOf("=");
@@ -1728,8 +1837,23 @@ test("WASM runtime budget is one canonical self-contained exact contract", async
       return `"--remap-path-prefix=\$${mapping.slice(0, separator)}=${mapping.slice(separator + 1)}"`;
     })
     .join("$'\\x1f'")}`;
-  assert.ok(budget.recipe.command.startsWith(recipePrefix));
-  const expectedBuild = budget.recipe.command.slice(recipePrefix.length);
+  const logicalShellCommands = (body) => {
+    const commands = [];
+    let current = "";
+    for (const line of body.split("\n")) {
+      const fragment = line.trim();
+      if (fragment.length === 0) continue;
+      const continued = fragment.endsWith("\\");
+      const withoutContinuation = continued ? fragment.slice(0, -1).trimEnd() : fragment;
+      current += `${current.length === 0 ? "" : " "}${withoutContinuation}`;
+      if (!continued) {
+        commands.push(current);
+        current = "";
+      }
+    }
+    assert.equal(current, "", "recipe must not end with an unterminated shell continuation");
+    return commands;
+  };
   const expectedDiffBlock = [
     'if ! diff --no-dereference --recursive "$first/pkg" packages/colors/pkg; then',
     '  echo "runtime WASM output changed between builds" >&2',
@@ -1756,9 +1880,16 @@ test("WASM runtime budget is one canonical self-contained exact contract", async
     )?.groups?.body;
     assert.ok(functionBody, "build_runtime must be one bounded shell function");
     assert.deepEqual(
-      functionBody.split("\n").map((line) => line.trim()).filter(Boolean),
-      [expectedBuild],
+      logicalShellCommands(functionBody),
+      budget.recipe.commands,
       "the live build must equal the budget recipe",
+    );
+    assert.equal(
+      budget.recipe.commands.filter((command) =>
+        command.includes(budget.toolchain.wasmOptFlags)
+      ).length,
+      1,
+      "the declared Binaryen flags must occur in exactly one recipe command",
     );
     assert.equal(
       script.match(/^build_runtime$/gmu)?.length,
@@ -1786,7 +1917,10 @@ test("WASM runtime budget is one canonical self-contained exact contract", async
   for (const [name, mutated] of [
     [
       "recipe",
-      repetition.replace(expectedBuild, `${expectedBuild} --features unreviewed`),
+      repetition.replace(
+        "    crates/labcolors-wasm --locked",
+        "    crates/labcolors-wasm --locked --features unreviewed",
+      ),
     ],
     [
       "rebuild comparison",
@@ -1847,8 +1981,12 @@ test("WASM runtime budget is one canonical self-contained exact contract", async
         value.recipe.rustPathRemap[1] = value.recipe.rustPathRemap[0];
       }],
       ["path remap empty", (value) => { value.recipe.rustPathRemap = []; }],
-      ["recipe command", (value) => { value.recipe.command = "wasm-pack build"; }],
-      ["recipe command line", (value) => { value.recipe.command += "\nother"; }],
+      ["recipe commands type", (value) => { value.recipe.commands = "wasm-pack build"; }],
+      ["recipe commands empty", (value) => { value.recipe.commands = []; }],
+      ["recipe commands duplicate", (value) => {
+        value.recipe.commands[1] = value.recipe.commands[0];
+      }],
+      ["recipe command line", (value) => { value.recipe.commands[0] += "\nother"; }],
       ["recipe extra", (value) => { value.recipe.digest = "0".repeat(64); }],
       ["measurement source", (value) => { value.measurement.source = "other"; }],
       ["measurement platform", (value) => { value.measurement.platform = "darwin-arm64"; }],
@@ -1872,7 +2010,7 @@ test("WASM runtime budget is one canonical self-contained exact contract", async
         policy: value.policy,
       })],
     ];
-    assert.equal(schemaMutations.length, 30, "schema mutation matrix changed");
+    assert.equal(schemaMutations.length, 34, "schema mutation matrix changed");
     for (const [name, mutate] of schemaMutations) {
       const invalid = structuredClone(fixture);
       const result = mutate(invalid) ?? invalid;
@@ -1891,7 +2029,7 @@ test("WASM runtime budget is one canonical self-contained exact contract", async
     writeFileSync(fixtureBudgetPath, canonicalJson(schemaFirst));
     assert.throws(
       () => runWith(fixtureBudgetPath, join(temporary, "missing-runtime.wasm")),
-      /schemaVersion must be 1/u,
+      /schemaVersion must be 2/u,
       "schema must fail before a missing artifact is read",
     );
 
@@ -1900,8 +2038,8 @@ test("WASM runtime budget is one canonical self-contained exact contract", async
     writeFileSync(
       fixtureBudgetPath,
       canonicalJson(fixture).replace(
-        '  "schemaVersion": 1,\n',
-        '  "schemaVersion": 1,\n  "schemaVersion": 1,\n',
+        '  "schemaVersion": 2,\n',
+        '  "schemaVersion": 2,\n  "schemaVersion": 2,\n',
       ),
     );
     assert.throws(run, /canonical JSON/u, "duplicate JSON fields must fail");
@@ -2044,7 +2182,7 @@ test("npm release carries and re-verifies the exact numerical evidence inventory
     /contrasts, ladders, alpha, solve, wcag22/u,
   );
   assert.doesNotMatch(conformanceReadme, /сейчас `[3-9]\.0\.0`/u);
-  const workflow = read(".github", "workflows", "ci.yml");
+  const workflow = read(".github", "workflows", "ci-worker.yml");
   assert.match(workflow, /python3 scripts\/verify_wcag22_q55\.py/);
   assert.match(workflow, /python3 scripts\/verify_point_support_surplus\.py/);
 });
