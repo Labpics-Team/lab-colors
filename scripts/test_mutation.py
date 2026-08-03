@@ -1931,7 +1931,7 @@ class MutationTruthTest(unittest.TestCase):
         self.assertNotIn("легаси", workflow.casefold())
         self.assertIn(
             'path: "Labpics-Team/lab-colors/.github/workflows/ci-worker.yml@'
-            '490783e8468c73f06d2a81ad10e9d3aab41b6185"',
+            '0ca9d683856e8c92e3192abe9bc054d045d355e2"',
             workflow,
         )
         self.assertIn(
