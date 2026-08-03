@@ -1880,15 +1880,22 @@ class MutationTruthTest(unittest.TestCase):
             repo / ".github" / "workflows" / "publish-worker.yml"
         ).read_text(encoding="utf-8")
 
-        self.assertIn('callerJob: "CI"', workflow)
-        self.assertIn('callerJob: "Native conformance (Swift)"', workflow)
         self.assertIn(
-            "const expectedName = `${spec.callerJob} / ${name}`;",
+            'const workerName = job.name.split(" / ").at(-1);',
             workflow,
         )
-        self.assertIn("job.name === expectedName", workflow)
+        self.assertIn("workerName === name", workflow)
+        self.assertNotIn("callerJob:", workflow)
         self.assertNotIn("job.name === name || job.name.endsWith", workflow)
         self.assertNotIn("легаси", workflow.casefold())
+
+        def canonical_worker_name(display_name: str) -> str:
+            return display_name.rsplit(" / ", 1)[-1]
+
+        self.assertEqual(canonical_worker_name("test"), "test")
+        self.assertEqual(canonical_worker_name("CI / test"), "test")
+        self.assertEqual(canonical_worker_name("outer / CI / test"), "test")
+        self.assertNotEqual(canonical_worker_name("CI / other"), "test")
 
         jobs = workflow.split("\njobs:\n", 1)[1]
         publish_anchor = re.search(r"(?m)^  publish:\n", jobs)

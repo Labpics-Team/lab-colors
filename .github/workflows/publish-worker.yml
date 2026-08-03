@@ -134,7 +134,6 @@ jobs:
               key: "ci",
               file: "ci.yml",
               path: ".github/workflows/ci.yml",
-              callerJob: "CI",
               requiredJobs: [
                 "Node 22 consumer floor",
                 "MSRV workspace check",
@@ -149,7 +148,6 @@ jobs:
               key: "native",
               file: "native-conformance.yml",
               path: ".github/workflows/native-conformance.yml",
-              callerJob: "Native conformance (Swift)",
               requiredJobs: [
                 "swift conformance (self-hosted Linux, pinned toolchain)",
               ],
@@ -216,13 +214,13 @@ jobs:
             );
             const failures = [];
             for (const name of spec.requiredJobs) {
-              // GitHub публикует reusable job как «<caller-job> / <worker-job>».
-              // Полное имя связывает receipt с каноничным caller-контрактом;
-              // требование ровно одного совпадения ловит неоднозначность API.
-              const expectedName = `${spec.callerJob} / ${name}`;
-              const matches = jobs.filter((job) =>
-                job.name === expectedName &&
-                Number(job.run_id) === Number(run.id));
+              // GitHub добавляет слева имена каждого reusable-caller. Последний
+              // сегмент — каноничное имя worker-job независимо от глубины вызова;
+              // run path, run_id и ровно одно совпадение замыкают его identity.
+              const matches = jobs.filter((job) => {
+                const workerName = job.name.split(" / ").at(-1);
+                return workerName === name && Number(job.run_id) === Number(run.id);
+              });
               if (matches.length !== 1) {
                 failures.push(`${name}: expected one job in run ${run.id}, got ${matches.length}`);
                 continue;
