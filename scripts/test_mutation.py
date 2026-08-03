@@ -1888,6 +1888,20 @@ class MutationTruthTest(unittest.TestCase):
         self.assertNotIn("callerJob:", workflow)
         self.assertNotIn("job.name === name || job.name.endsWith", workflow)
         self.assertNotIn("легаси", workflow.casefold())
+        self.assertIn(
+            'path: "Labpics-Team/lab-colors/.github/workflows/ci-worker.yml@'
+            '490783e8468c73f06d2a81ad10e9d3aab41b6185"',
+            workflow,
+        )
+        self.assertIn(
+            'path: "Labpics-Team/lab-colors/.github/workflows/'
+            'native-conformance-worker.yml@7827981724ad75bfcf15bd5b2f74be2d5337d9b5"',
+            workflow,
+        )
+        self.assertIn("const references = run.referenced_workflows;", workflow)
+        self.assertIn("references.length !== 1", workflow)
+        self.assertIn("reference?.path !== spec.worker.path", workflow)
+        self.assertIn("reference?.sha !== spec.worker.sha", workflow)
 
         def canonical_worker_name(display_name: str) -> str:
             return display_name.rsplit(" / ", 1)[-1]
