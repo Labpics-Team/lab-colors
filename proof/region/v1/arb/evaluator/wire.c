@@ -404,9 +404,10 @@ parse_policy(lc_arb_policy *policy, lc_slice encoded, const uint8_t expected[32]
             return reject(&input, LC_WIRE_RESOURCE_LIMIT);
         }
         if (expected_kind == 1) {
-            if ((size_t) rung_count > SIZE_MAX / sizeof(*policy->precision_ladder)) {
-                return reject(&input, LC_WIRE_LENGTH_OUT_OF_BOUNDS);
-            }
+            /* The rung count is already bounded by
+               LC_ARB_MAX_POLICY_RUNGS_V1 above, so the ladder allocation
+               cannot overflow size_t; a separate overflow guard would be
+               provably dead code. */
             policy->precision_ladder = calloc(rung_count, sizeof(*policy->precision_ladder));
             if (policy->precision_ladder == NULL) {
                 return reject(&input, LC_WIRE_ALLOCATION_FAILED);

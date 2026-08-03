@@ -239,6 +239,10 @@ class ArbBuildRecipeTests(unittest.TestCase):
             "-ffp-contract=off",
             "-fno-lto",
             "-std=gnu17",
+            # The evaluator includes FLINT headers whose attribute-guarded
+            # inlines only diagnose cleanly in the GNU dialect; GCC 15 turns
+            # the strict-C dialect's header noise into a -Werror failure.
+            "-std=gnu17 -Wall -Wextra -Werror -pedantic",
             "-march=x86-64",
             "-mtune=generic",
             "-Wl,--build-id=none",
