@@ -33,6 +33,7 @@ pub(crate) enum CompositionProfileV1 {
 pub(crate) struct AdmittedOpacityV1(u64);
 
 impl AdmittedOpacityV1 {
+    pub(crate) const TRANSPARENT: Self = Self(0.0f64.to_bits());
     pub(crate) const OPAQUE: Self = Self(1.0f64.to_bits());
 
     pub(crate) fn new(alpha: f64) -> Result<Self, OpacityAdmissionErrorV1> {

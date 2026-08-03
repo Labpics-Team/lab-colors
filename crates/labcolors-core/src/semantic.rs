@@ -569,7 +569,7 @@ pub enum RoleSpec {
     /// тинт-якорь эмитится напрямую. Даёт `-tinted`-роли labui (fill-*-tinted):
     /// заливка, чей композит на подложке = соответствующий солид.
     ///
-    /// Фактическая α возвращается явно ([`crate::alpha::AlphaAnalog::alpha`]): при
+    /// Фактическая α возвращается явно ([`TranslucentResolved::alpha`]): при
     /// неразрешимой запрошенной α поднимается до `α_min` (композит остаётся точно
     /// равным солиду — двигается прозрачность, не цвет; кламп тинта запрещён).
     AlphaAnalog {
@@ -577,9 +577,9 @@ pub enum RoleSpec {
         of: LadderTint,
         /// Запрошенная альфа: `(0, 1]` — контракт РОЛИ (тот же предел, что у
         /// конфиг-валидатора: α = 0 — невидимая роль, отказ честнее выдумки).
-        /// Уже: библиотечный [`crate::alpha::resolve_alpha_analog`] принимает
-        /// и `0.0` (вырожденный ответ tint=фон) — то его домен, не ролевой.
-        /// Поднимается до `α_min`, если запрошенная ниже разрешимой.
+        /// Generic point-закон допускает `0.0` как физическую opacity, но этот
+        /// временный recipe-frontend исключает невидимую роль. Поднимается до
+        /// первого exact sRGB8-представления, если запрос ниже разрешимого.
         alpha: f64,
     },
     /// Двухслойный материал (стекло/акрил): опаковая тон-база `02` на целевом
@@ -2536,13 +2536,12 @@ fn resolve_solid_with_ui_floor(
     }
 }
 
-/// Альфа-аналог: солид-цель `solid` (кодированный, по теме) на фоне резолва
-/// инвертируется в `(tint, фактическая α)`. Перед инверсией цель квантуется до
-/// эмитируемой sRGB8-сетки; production-композитор обязан побайтно вернуть её.
-fn resolve_rgba_inverted_with_binding(
-    authored: crate::analog::AuthoredAlphaBindingIdV1,
+/// Замороженный recipe-frontend понижает solid-цель и локальный фон в общий
+/// exact point-закон. Client routing заканчивается здесь и структурно не может
+/// попасть в физический coordinator.
+fn resolve_rgba_inverted_admitted(
     solid_encoded: [f64; 3],
-    requested_alpha: f64,
+    minimum_opacity: crate::composition::AdmittedOpacityV1,
     bg: &BgInput,
     vc: &ViewingConditions,
 ) -> PendingResolution {
@@ -2552,11 +2551,6 @@ fn resolve_rgba_inverted_with_binding(
     if !encoded_rgb_valid(solid_encoded) {
         return Err(SolveFailure::InternalInvariant(
             "validated alpha-analog solid left encoded sRGB domain".into(),
-        ));
-    }
-    if !role_alpha_valid(requested_alpha) {
-        return Err(SolveFailure::InvalidInput(
-            "alpha-analog alpha must be finite and inside (0, 1]".into(),
         ));
     }
     let target = match crate::alpha::encoded_to_srgb8(solid_encoded, "solid") {
@@ -2575,23 +2569,26 @@ fn resolve_rgba_inverted_with_binding(
             )));
         }
     };
-    let verified =
-        match crate::analog::resolve_verified(authored, target, requested_alpha, backdrop) {
-            Ok(verified) => verified,
-            Err(_error) => {
-                // Здесь вход уже прошёл admission; typed witness остаётся в
-                // analog boundary, а публичная semantic-ошибка не сериализует
-                // authored routing или внутреннюю структуру evidence.
-                return Err(SolveFailure::InternalInvariant(
-                    "validated alpha-analog resolver violated its total-domain contract".into(),
-                ));
-            }
-        };
-    let actual_alpha = verified.alpha();
+    let verified = match crate::point_representation::resolve_exact_point_representation_v1(
+        target,
+        minimum_opacity,
+        backdrop,
+    ) {
+        Ok(verified) => verified,
+        Err(_error) => {
+            // Typed admission и полный byte-grid proof делают ветку
+            // недостижимой, пока не изменился сам физический закон.
+            return Err(SolveFailure::InternalInvariant(
+                "validated point representation violated its total-domain contract".into(),
+            ));
+        }
+    };
+    let actual_opacity = verified.opacity();
+    let actual_alpha = actual_opacity.value();
     // Резолвер возвращает тот же binary64 либо строго больший точный пол.
-    let alpha_coerced = actual_alpha > requested_alpha;
+    let alpha_coerced = actual_alpha > minimum_opacity.value();
     finish_rgba_from_certificate(
-        verified.tint(),
+        verified.source(),
         actual_alpha,
         verified.certificate(),
         vc,
@@ -2607,13 +2604,13 @@ fn resolve_rgba_inverted(
     bg: &BgInput,
     vc: &ViewingConditions,
 ) -> PendingResolution {
-    resolve_rgba_inverted_with_binding(
-        crate::analog::AuthoredAlphaBindingIdV1::Standalone,
-        solid_encoded,
-        requested_alpha,
-        bg,
-        vc,
-    )
+    let opacity = crate::composition::AdmittedOpacityV1::new(requested_alpha)
+        .ok()
+        .filter(|opacity| opacity.value() > 0.0)
+        .ok_or_else(|| {
+            SolveFailure::InvalidInput("alpha-analog alpha must be finite and inside (0, 1]".into())
+        })?;
+    resolve_rgba_inverted_admitted(solid_encoded, opacity, bg, vc)
 }
 
 /// Собрать [`Resolved::Translucent`] из эмитируемых тинта и альфы: вывести их
@@ -2949,57 +2946,36 @@ pub struct NamedRoleTable {
     entries: Vec<(String, RoleSpec)>,
     aliases: Vec<(String, String)>,
     chroma: RoleChroma,
-    alpha_analog_invocations: Box<[CompiledAlphaAnalogInvocationV1]>,
+    point_representation_invocations: Box<[CompiledPointRepresentationInvocationV1]>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-struct AdmittedRequestedAlphaV1(f64);
-
-impl AdmittedRequestedAlphaV1 {
-    fn parse(value: f64) -> Option<Self> {
-        role_alpha_valid(value).then_some(Self(value))
-    }
-
-    const fn get(self) -> f64 {
-        self.0
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-struct CompiledAlphaAnalogInvocationV1 {
+struct CompiledPointRepresentationInvocationV1 {
     declaration_ordinal: usize,
     target: LadderTint,
-    requested_alpha: AdmittedRequestedAlphaV1,
+    minimum_opacity: crate::composition::AdmittedOpacityV1,
 }
 
 #[cfg(test)]
 thread_local! {
-    static ALPHA_BINDING_PLAN_COMPILATIONS: std::cell::Cell<usize> = const {
+    static POINT_REPRESENTATION_PLAN_COMPILATIONS: std::cell::Cell<usize> = const {
         std::cell::Cell::new(0)
     };
 }
 
 #[cfg(test)]
-fn reset_alpha_binding_plan_compilation_count() {
-    ALPHA_BINDING_PLAN_COMPILATIONS.with(|count| count.set(0));
+fn reset_point_representation_plan_compilation_count() {
+    POINT_REPRESENTATION_PLAN_COMPILATIONS.with(|count| count.set(0));
 }
 
 #[cfg(test)]
-fn alpha_binding_plan_compilation_count() -> usize {
-    ALPHA_BINDING_PLAN_COMPILATIONS.with(std::cell::Cell::get)
+fn point_representation_plan_compilation_count() -> usize {
+    POINT_REPRESENTATION_PLAN_COMPILATIONS.with(std::cell::Cell::get)
 }
 
-impl CompiledAlphaAnalogInvocationV1 {
+impl CompiledPointRepresentationInvocationV1 {
     fn resolve(self, bg: &BgInput, vc: &ViewingConditions) -> PendingResolution {
-        resolve_rgba_inverted_with_binding(
-            crate::analog::AuthoredAlphaBindingIdV1::Named {
-                declaration_ordinal: self.declaration_ordinal,
-            },
-            self.target.for_vc(vc),
-            self.requested_alpha.get(),
-            bg,
-            vc,
-        )
+        resolve_rgba_inverted_admitted(self.target.for_vc(vc), self.minimum_opacity, bg, vc)
     }
 }
 
@@ -3172,8 +3148,8 @@ impl NamedRoleTable {
             spec.validate_with_chroma(chroma)
                 .map_err(|message| SolveFailure::InvalidInput(format!("role {name}: {message}")))?;
         }
-        let alpha_analog_invocations =
-            Self::compile_alpha_analog_invocations(&entries).map_err(|error| {
+        let point_representation_invocations =
+            Self::compile_point_representation_invocations(&entries).map_err(|error| {
                 SolveFailure::InvalidInput(format!(
                     "role {}: alpha-analog alpha must be finite and inside (0, 1], got {}",
                     entries[error.declaration_ordinal].0, error.value
@@ -3183,7 +3159,7 @@ impl NamedRoleTable {
             entries,
             aliases,
             chroma,
-            alpha_analog_invocations,
+            point_representation_invocations,
         ))
     }
 
@@ -3196,12 +3172,13 @@ impl NamedRoleTable {
         aliases: Vec<(String, String)>,
         chroma: RoleChroma,
     ) -> Result<Self, AlphaAnalogCompileErrorV1> {
-        let alpha_analog_invocations = Self::compile_alpha_analog_invocations(&entries)?;
+        let point_representation_invocations =
+            Self::compile_point_representation_invocations(&entries)?;
         Ok(Self::from_compiled_parts(
             entries,
             aliases,
             chroma,
-            alpha_analog_invocations,
+            point_representation_invocations,
         ))
     }
 
@@ -3209,35 +3186,37 @@ impl NamedRoleTable {
         entries: Vec<(String, RoleSpec)>,
         aliases: Vec<(String, String)>,
         chroma: RoleChroma,
-        alpha_analog_invocations: Box<[CompiledAlphaAnalogInvocationV1]>,
+        point_representation_invocations: Box<[CompiledPointRepresentationInvocationV1]>,
     ) -> Self {
         Self {
             entries,
             aliases,
             chroma,
-            alpha_analog_invocations,
+            point_representation_invocations,
         }
     }
 
-    fn compile_alpha_analog_invocations(
+    fn compile_point_representation_invocations(
         entries: &[(String, RoleSpec)],
-    ) -> Result<Box<[CompiledAlphaAnalogInvocationV1]>, AlphaAnalogCompileErrorV1> {
+    ) -> Result<Box<[CompiledPointRepresentationInvocationV1]>, AlphaAnalogCompileErrorV1> {
         #[cfg(test)]
-        ALPHA_BINDING_PLAN_COMPILATIONS.with(|count| count.set(count.get() + 1));
+        POINT_REPRESENTATION_PLAN_COMPILATIONS.with(|count| count.set(count.get() + 1));
         let mut invocations = Vec::new();
         for (declaration_ordinal, (_, spec)) in entries.iter().enumerate() {
             let RoleSpec::AlphaAnalog { of, alpha } = *spec else {
                 continue;
             };
-            let requested_alpha =
-                AdmittedRequestedAlphaV1::parse(alpha).ok_or(AlphaAnalogCompileErrorV1 {
+            let minimum_opacity = crate::composition::AdmittedOpacityV1::new(alpha)
+                .ok()
+                .filter(|opacity| opacity.value() > 0.0)
+                .ok_or(AlphaAnalogCompileErrorV1 {
                     declaration_ordinal,
                     value: alpha,
                 })?;
-            invocations.push(CompiledAlphaAnalogInvocationV1 {
+            invocations.push(CompiledPointRepresentationInvocationV1 {
                 declaration_ordinal,
                 target: of,
-                requested_alpha,
+                minimum_opacity,
             });
         }
         debug_assert!(
@@ -3326,18 +3305,23 @@ pub fn resolve_named_set(
     let _forward_cache = crate::spaces::cam16::ForwardCacheGuard::activate();
     let ctx = ResolveContext::new(bg, vc);
     let mut set = Vec::with_capacity(table.entries.len());
-    let mut alpha_invocations = table.alpha_analog_invocations.iter().copied().peekable();
+    let mut point_invocations = table
+        .point_representation_invocations
+        .iter()
+        .copied()
+        .peekable();
     for (declaration_ordinal, (name, spec)) in table.entries.iter().enumerate() {
-        let pending = match alpha_invocations.peek().copied() {
+        let pending = match point_invocations.peek().copied() {
             Some(invocation) if invocation.declaration_ordinal < declaration_ordinal => {
                 return Err(ResolveSetError {
                     state: ResolveSetErrorState::Internal(SolveFailure::InternalInvariant(
-                        "compiled alpha-analog invocation order drifted behind declarations".into(),
+                        "compiled point-representation invocation order drifted behind declarations"
+                            .into(),
                     )),
                 });
             }
             Some(invocation) if invocation.declaration_ordinal == declaration_ordinal => {
-                alpha_invocations.next();
+                point_invocations.next();
                 invocation.resolve(bg, vc)
             }
             _ => resolve_spec_in(bg, spec, table.chroma, vc, &ctx),
@@ -3345,10 +3329,10 @@ pub fn resolve_named_set(
         let resolved = admit_resolution(pending)?;
         set.push((name.clone(), resolved));
     }
-    if alpha_invocations.next().is_some() {
+    if point_invocations.next().is_some() {
         return Err(ResolveSetError {
             state: ResolveSetErrorState::Internal(SolveFailure::InternalInvariant(
-                "compiled alpha-analog invocation points outside declarations".into(),
+                "compiled point-representation invocation points outside declarations".into(),
             )),
         });
     }
@@ -4037,8 +4021,11 @@ mod tests {
             RoleChroma::Neutral,
         )
         .unwrap();
-        assert_eq!(table.alpha_analog_invocations.len(), 1);
-        assert_eq!(table.alpha_analog_invocations[0].declaration_ordinal, 1);
+        assert_eq!(table.point_representation_invocations.len(), 1);
+        assert_eq!(
+            table.point_representation_invocations[0].declaration_ordinal,
+            1
+        );
 
         crate::composition::reset_source_over_evaluation_count();
         let set = resolve_named_set(
@@ -4051,7 +4038,7 @@ mod tests {
         assert_eq!(crate::composition::source_over_evaluation_count(), 1);
 
         let mut missing = table.clone();
-        missing.alpha_analog_invocations = Box::default();
+        missing.point_representation_invocations = Box::default();
         assert_eq!(
             missing, table,
             "derived execution state is outside public equality"
@@ -4094,10 +4081,10 @@ mod tests {
     }
 
     #[test]
-    fn alpha_binding_plan_is_sparse_compiled_once_and_reused() {
+    fn point_representation_plan_is_sparse_compiled_once_and_reused() {
         let first_target = crate::spaces::srgb::srgb_encoded_from_hex("#787880").unwrap();
         let second_target = crate::spaces::srgb::srgb_encoded_from_hex("#406080").unwrap();
-        reset_alpha_binding_plan_compilation_count();
+        reset_point_representation_plan_compilation_count();
         let table = NamedRoleTable::new(
             vec![
                 (
@@ -4120,10 +4107,10 @@ mod tests {
             RoleChroma::Neutral,
         )
         .unwrap();
-        assert_eq!(alpha_binding_plan_compilation_count(), 1);
+        assert_eq!(point_representation_plan_compilation_count(), 1);
         assert_eq!(
             table
-                .alpha_analog_invocations
+                .point_representation_invocations
                 .iter()
                 .map(|invocation| invocation.declaration_ordinal)
                 .collect::<Vec<_>>(),
@@ -4136,7 +4123,7 @@ mod tests {
             let set = resolve_named_set(&backdrop, current, &ViewingConditions::srgb()).unwrap();
             assert_eq!(set.len(), 3);
         }
-        assert_eq!(alpha_binding_plan_compilation_count(), 1);
+        assert_eq!(point_representation_plan_compilation_count(), 1);
 
         let without_analogs = NamedRoleTable::new(
             vec![("unrelated".into(), RoleSpec::Zero)],
@@ -4144,14 +4131,14 @@ mod tests {
             RoleChroma::Neutral,
         )
         .unwrap();
-        assert!(without_analogs.alpha_analog_invocations.is_empty());
+        assert!(without_analogs.point_representation_invocations.is_empty());
     }
 
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(64))]
 
         #[test]
-        fn public_helper_and_named_compiled_invocation_share_exact_bytes(
+        fn compiled_frontend_and_generic_point_law_share_exact_bytes(
             target_bytes in any::<[u8; 3]>(),
             backdrop_bytes in any::<[u8; 3]>(),
             alpha_step in 1_u16..=1024,
@@ -4178,18 +4165,22 @@ mod tests {
             )
             .unwrap();
             let named = named[0].1.translucent().unwrap();
-            let (public_tint, public_alpha) = crate::alpha::resolve_alpha_analog_hex(
-                &target.to_hex(),
-                requested_alpha,
-                &backdrop.to_hex(),
+            let physical = crate::point_representation::resolve_exact_point_representation_v1(
+                target,
+                crate::composition::AdmittedOpacityV1::new(requested_alpha).unwrap(),
+                backdrop,
             )
             .unwrap();
 
-            prop_assert_eq!(named.tint_hex(), public_tint.as_str());
-            prop_assert_eq!(named.alpha().to_bits(), public_alpha.to_bits());
+            prop_assert_eq!(named.tint_hex(), physical.source().to_hex());
+            prop_assert_eq!(named.alpha().to_bits(), physical.opacity().value().to_bits());
             prop_assert_eq!(named.composite_hex(), target.to_hex());
             prop_assert_eq!(
-                crate::alpha::composite_hex(&public_tint, public_alpha, &backdrop.to_hex()).unwrap(),
+                crate::alpha::composite_hex(
+                    &physical.source().to_hex(),
+                    physical.opacity().value(),
+                    &backdrop.to_hex(),
+                ).unwrap(),
                 target.to_hex()
             );
         }

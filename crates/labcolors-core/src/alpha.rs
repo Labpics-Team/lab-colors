@@ -1,63 +1,21 @@
-//! Альфа-аналог солидного цвета: прямой и обратный ход straight-alpha
-//! композита в ГАММА-КОДИРОВАННОМ sRGB.
+//! Прямой и обратный ход straight-alpha source-over в кодированном sRGB.
 //!
-//! Кодированный домен заземлён измерением: модель `c = α·t + (1−α)·b`
-//! воспроизводит все 12 семантических Figma-якорей движка
-//! (`reference/labui-figma-structure.md` §3–§4, воспроизводимо
-//! `cargo run -p labcolors-core --example figma_anchor_provenance`). Для
-//! эмиссии контракт дополнительно фиксирует **encoded-sRGB8 source-over
-//! reference**: арифметика идёт на байтах `0..255` с одним итоговым round.
-//! Совпадение конкретного renderer зависит от его color-management профиля и
-//! проверяется отдельно; линейный свет здесь только для последующей колориметрии.
+//! Модуль предоставляет только физические операции композиции, непрерывной
+//! инверсии и strict-binary64 границы разрешимости. Он не знает token, recipe,
+//! client ID или назначения результата.
 //!
-//! # Зачем обратный ход
+//! Для непрерывных каналов используется
+//! `c = b + α·(s−b)`, обратный ход — `s = b + (c−b)/α`. Входы должны быть
+//! конечными и лежать в своих закрытых диапазонах; epsilon и silent clamp не
+//! применяются. Ошибка round-trip ограничена тестируемой оценкой `8·ε/α`.
 //!
-//! Движок решает роли СОЛИДАМИ (контраст-корректными на данном фоне). Альфа-
-//! аналог роли — пара `(tint, α)`, чей композит на том же фоне равен солиду:
+//! Это не сертификат эмитируемого sRGB8: финальное округление расширяет
+//! достижимое множество. Exact byte-grid proposal, единичная materialization
+//! occurrence и postcondition принадлежат приватному `point_representation` и
+//! используют тот же `composition` source-over kernel.
 //!
-//! ```text
-//! t = (c − (1−α)·b) / α        (по каналам, кодированные значения)
-//! ```
-//!
-//! В вещественной алгебре continuous encoded-sRGB композит инверсии равен
-//! солиду тождественно. Реализация на `binary64` честно отделена: ошибка
-//! round-trip ограничена выведенной оценкой `8·ε/α` и проверяется тестом
-//! `inversion_identity_respects_derived_binary64_error_bound`. После эмиссии тинт уже
-//! лежит на sRGB8-сетке; побайтовый контракт ниже доказывается и проверяется
-//! отдельно, а не приписывается непрерывной функции.
-//! На ином фоне композит другой — это и есть смысл альфы (адаптация к
-//! подложке), гарантия формулируется для фона, на котором решён солид.
-//!
-//! # Разрешимость и границы квантования
-//!
-//! Тинт обязан лежать в гамуте `[0,1]³`. Поканальная алгебра нижней границы α:
-//!
-//! ```text
-//! t ≥ 0  ⇔  α ≥ (b − c) / b        (канал с c < b; при b = 0 недостижимо, если c > 0 — но тогда c > b)
-//! t ≤ 1  ⇔  α ≥ (c − b) / (1 − b)  (канал с c > b; при b = 1 симметрично)
-//! ```
-//!
-//! [`min_alpha_encoded`] начинает с максимума этих алгебраических границ, затем
-//! возвращает первый `binary64`, на котором строгая binary64-инверсия реально
-//! лежит в `[0,1]³`. [`invert_composite_encoded`] может также принять более
-//! раннюю граничную пару только если повторный binary64-композит побитно равен
-//! входному solid; глобального epsilon и безусловного clamp нет. Это не минимальная α
-//! дискретного sRGB8-композита: `#010000` над чёрным уже округляется из белого
-//! красного канала при `α=0.5/255`, тогда как strict-binary64 пол равен `1/255`.
-//!
-//! Эмиссионный путь НЕ использует continuous-пол как суррогат byte-grid пола.
-//! После квантования solid/background он сначала исчерпывающе решает три
-//! независимых одноканальных диапазона тинта на запрошенной alpha. Если решения
-//! нет, lower-bound по упорядоченным битам `f64` находит первый `binary64`,
-//! проходящий ТОТ ЖЕ [`composite_over_srgb8`]; predecessor обязан не проходить.
-//! Поэтому округлительно разрешимые пары вроде `#FF0000 @ 0.12 → #1F0000`
-//! сохраняют запрошенную прозрачность, а `alphaCoerced` не врёт о деградации.
-//! Весь одноканальный домен из 65 536 `(S, B)` проверяет и точный композит, и
-//! минимальность фактической alpha.
-//!
-//! Это не обещает восстановить исходный тинт: солид из 8-битного hex несёт
-//! ошибку ≤ 0.5/255, которую инверсия масштабирует в `1/α` раз. Граница
-//! `0.5/(255·α)` запинена тестом `quantisation_error_bound_is_honoured`.
+//! Совпадение с конкретным renderer зависит от его color-management и не
+//! следует из reference-арифметики библиотеки.
 
 use crate::spaces::srgb::{hex_from_srgb_encoded, srgb_encoded_from_hex};
 
@@ -372,119 +330,30 @@ pub fn min_alpha_hex(solid_hex: &str, bg_hex: &str) -> Result<f64, String> {
     .expect("hex-вход всегда в домене byte/255 — None недостижим по построению"))
 }
 
-/// Непрерывный альфа-аналог солида: тинт + ФАКТИЧЕСКАЯ α.
-///
-/// Продуктовый слой поверх строгого закона: потребитель всегда получает
-/// пригодный ответ без подмены цели клампом. Вещественная формула сохраняет
-/// заданный цвет, а ошибка её binary64-вычисления ограничена доказанной выше
-/// оценкой. Побайтовая эмиссия в hex/semantic использует отдельный проверяющий
-/// sRGB8-путь с точным постусловием по байтам.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct AlphaAnalog {
-    /// Кодированный тинт `[0,1]³`.
-    pub tint: [f64; 3],
-    /// Фактическая α: запрошенная, если она разрешима, иначе strict-binary64
-    /// пол (не вещественный инфимум и не минимальная byte-grid α).
-    pub alpha: f64,
-}
-
-/// Продуктовый резолвер: ближайший ПРИЕМЛЕМЫЙ альфа-аналог вместо отказа.
-///
-/// «Приблизить» можно двумя способами, и только один честен: кламп тинта при
-/// запрошенной α тихо сдвинул бы композит (система соврала бы о цвете —
-/// запрещённая подмена), а подъём α до strict-binary64 пола
-/// [`min_alpha_encoded`] сохраняет исходную цель вещественной инверсии; в
-/// binary64 остаётся только ограниченная ошибка округления, а не произвольный
-/// цветовой сдвиг. Двигается прозрачность, и
-/// фактическая α возвращается явно ([`AlphaAnalog::alpha`]). Запрошенная α вне
-/// `[0,1]` отвергается: clamp скрыл бы ошибку вызывающего кода. `α=0` входит в
-/// библиотечный домен и поднимается до strict-binary64 пола, если solid
-/// отличается от фона; при `solid == bg` возвращается вырожденная пара
-/// `tint=bg, α=0`.
-///
-/// `None` — только на входе вне домена (цвет не конечен/не в `[0,1]³` либо
-/// запрошенная α не конечна/не в `[0,1]`). Для валидного входа ответ существует
-/// всегда (в худшем случае α=1, тинт=солид).
-pub fn resolve_alpha_analog(
-    solid: [f64; 3],
-    requested_alpha: f64,
-    bg: [f64; 3],
-) -> Option<AlphaAnalog> {
-    if !requested_alpha.is_finite() || !(0.0..=1.0).contains(&requested_alpha) {
-        return None;
-    }
-    let floor = min_alpha_encoded(solid, bg)?; // None только на мусор-входах
-    // Если запрошенная binary64-пара уже является точной обратной к нашему
-    // прямому ходу (включая честную gamut-границу), не поднимаем прозрачность.
-    if requested_alpha > 0.0 {
-        if let Some(tint) = invert_composite_encoded(solid, requested_alpha, bg) {
-            return Some(AlphaAnalog {
-                tint,
-                alpha: requested_alpha,
-            });
-        }
-    }
-    let alpha = requested_alpha.max(floor);
-    // При α == floor == 0 солид равен фону: любой видимый эффект отсутствует,
-    // тинт = фон (инверсия при α=0 вырожденна — отвечаем без неё).
-    if alpha == 0.0 {
-        return Some(AlphaAnalog { tint: bg, alpha });
-    }
-    let tint = invert_composite_encoded(solid, alpha, bg)
-        .expect("α ≥ α_min по построению — инверсия разрешима");
-    Some(AlphaAnalog { tint, alpha })
-}
-
-/// Hex-обёртка эмиссионного sRGB8-резолвера: `(tint_hex, фактическая α)`.
-/// Возвращённая пара побайтно воспроизводит
-/// `solid_hex` через [`composite_over_srgb8`]; постусловие проверено до возврата.
-///
-/// # Errors
-///
-/// `Err` при невалидном hex, неконечной/внедиапазонной запрошенной α либо при
-/// нарушении точного sRGB8-постусловия (защитная ветка против численного дрейфа).
-pub fn resolve_alpha_analog_hex(
-    solid_hex: &str,
-    requested_alpha: f64,
-    bg_hex: &str,
-) -> Result<(String, f64), String> {
-    let target = crate::Srgb8::new(crate::srgb8::hex_bytes(solid_hex)?);
-    let backdrop = crate::Srgb8::new(crate::srgb8::hex_bytes(bg_hex)?);
-    let verified = crate::analog::resolve_verified(
-        crate::analog::AuthoredAlphaBindingIdV1::Standalone,
-        target,
-        requested_alpha,
-        backdrop,
-    )
-    .map_err(resolve_verified_error_message)?;
-    Ok((verified.tint().to_hex(), verified.alpha()))
-}
-
-fn resolve_verified_error_message(error: crate::analog::ResolveVerifiedErrorV1) -> String {
-    match error {
-        crate::analog::ResolveVerifiedErrorV1::Proposal(error) => match error {
-            crate::analog::AlphaAnalogProposalErrorV1::InvalidRequestedAlpha { bits } => {
-                let requested_alpha = f64::from_bits(bits);
-                format!("requested_alpha вне конечного [0,1]: {requested_alpha}")
-            }
-            crate::analog::AlphaAnalogProposalErrorV1::DerivedAlphaOutsideUnitInterval => {
-                "выведенная alpha вышла из конечного [0,1]".to_owned()
-            }
-            crate::analog::AlphaAnalogProposalErrorV1::MissingTintAtFirstAlpha => {
-                "первая sRGB8-alpha не дала допустимый byte-тинт".to_owned()
-            }
-        },
-        crate::analog::ResolveVerifiedErrorV1::ConstraintViolation(witness) => format!(
-            "alpha-analog не воспроизвёл sRGB8-цель: target={:?}, actual={:?}",
-            witness.violation().target().bytes(),
-            witness.violation().actual().bytes()
-        ),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn admitted(alpha: f64) -> crate::composition::AdmittedOpacityV1 {
+        crate::composition::AdmittedOpacityV1::new(alpha)
+            .expect("test opacity must be finite and inside [0,1]")
+    }
+
+    fn resolve_exact_hex(
+        target_hex: &str,
+        minimum_opacity: f64,
+        backdrop_hex: &str,
+    ) -> Result<(String, f64), String> {
+        let target = crate::Srgb8::new(crate::srgb8::hex_bytes(target_hex)?);
+        let backdrop = crate::Srgb8::new(crate::srgb8::hex_bytes(backdrop_hex)?);
+        let opacity = crate::composition::AdmittedOpacityV1::new(minimum_opacity)
+            .map_err(|_| format!("opacity outside finite [0,1]: {minimum_opacity}"))?;
+        let verified = crate::point_representation::resolve_exact_point_representation_v1(
+            target, opacity, backdrop,
+        )
+        .map_err(|error| format!("exact point representation failed: {error:?}"))?;
+        Ok((verified.source().to_hex(), verified.opacity().value()))
+    }
 
     /// Живые Figma-пары нейтральной лестницы (`reference/labui-figma-structure.md`
     /// §2 — альфы и тинт, §4 — композиты; фоны Backgrounds/Neutral/Primary):
@@ -537,7 +406,7 @@ mod tests {
     #[test]
     fn source_over_half_seam_matches_the_official_js_operation_order() {
         assert_eq!(composite_hex("#000505", 0.1, "#050505").unwrap(), "#050505");
-        let (tint, actual) = resolve_alpha_analog_hex("#040505", 0.1, "#050505").unwrap();
+        let (tint, actual) = resolve_exact_hex("#040505", 0.1, "#050505").unwrap();
         assert!(
             actual > 0.1,
             "запрошенная пара не воспроизводит красный байт 4"
@@ -592,22 +461,23 @@ mod tests {
                 for bg in u8::MIN..=u8::MAX {
                     let target = crate::Srgb8::new([solid; 3]);
                     let backdrop = crate::Srgb8::new([bg; 3]);
-                    let requested_is_feasible =
-                        crate::analog::tint_at_alpha(target, requested_alpha, backdrop).is_some();
-                    let verified = crate::analog::resolve_verified(
-                        crate::analog::AuthoredAlphaBindingIdV1::Standalone,
+                    let requested_is_feasible = crate::point_representation::source_at_opacity(
                         target,
-                        requested_alpha,
+                        admitted(requested_alpha),
                         backdrop,
                     )
-                    .unwrap_or_else(|error| {
-                        panic!(
-                            "solid={solid}, bg={bg}, requested={requested_alpha}: {}",
-                            resolve_verified_error_message(error)
+                    .is_some();
+                    let verified =
+                        crate::point_representation::resolve_exact_point_representation_v1(
+                            target,
+                            admitted(requested_alpha),
+                            backdrop,
                         )
-                    });
-                    let tint = verified.tint().bytes();
-                    let actual_alpha = verified.alpha();
+                        .unwrap_or_else(|error| {
+                            panic!("solid={solid}, bg={bg}, requested={requested_alpha}: {error:?}")
+                        });
+                    let tint = verified.source().bytes();
+                    let actual_alpha = verified.opacity().value();
                     let got = composite_over_srgb8(tint, actual_alpha, [bg; 3])
                         .expect("резолвер возвращает α в [0,1]");
                     assert_eq!(
@@ -624,7 +494,12 @@ mod tests {
                         assert!(actual_alpha > requested_alpha);
                         let predecessor = f64::from_bits(actual_alpha.to_bits() - 1);
                         assert!(
-                            crate::analog::tint_at_alpha(target, predecessor, backdrop).is_none(),
+                            crate::point_representation::source_at_opacity(
+                                target,
+                                admitted(predecessor),
+                                backdrop,
+                            )
+                            .is_none(),
                             "actual alpha не минимальна: solid={solid}, bg={bg}, actual={actual_alpha}"
                         );
                     }
@@ -639,7 +514,7 @@ mod tests {
     fn byte_grid_resolver_preserves_every_already_feasible_requested_alpha() {
         let tiny_red_alpha = 0.5 / 255.0;
         let (tiny_tint, tiny_actual) =
-            resolve_alpha_analog_hex("#010000", tiny_red_alpha, "#000000").unwrap();
+            resolve_exact_hex("#010000", tiny_red_alpha, "#000000").unwrap();
         assert_eq!(tiny_tint, "#FF0000");
         assert_eq!(tiny_actual.to_bits(), tiny_red_alpha.to_bits());
         assert_eq!(
@@ -647,7 +522,7 @@ mod tests {
             "#010000"
         );
 
-        let (tint, actual) = resolve_alpha_analog_hex("#1F0000", 0.12, "#000000").unwrap();
+        let (tint, actual) = resolve_exact_hex("#1F0000", 0.12, "#000000").unwrap();
         assert_eq!(tint, "#FF0000");
         assert_eq!(actual.to_bits(), 0.12_f64.to_bits());
         assert_eq!(composite_hex(&tint, actual, "#000000").unwrap(), "#1F0000");
@@ -659,14 +534,14 @@ mod tests {
     #[test]
     fn byte_grid_resolver_handles_tiny_normal_and_subnormal_alpha() {
         for requested in [2_f64.powi(-100), f64::from_bits(1)] {
-            let (tint, actual) = resolve_alpha_analog_hex("#010000", requested, "#000000").unwrap();
+            let (tint, actual) = resolve_exact_hex("#010000", requested, "#000000").unwrap();
             assert!(actual > requested);
             assert_eq!(composite_hex(&tint, actual, "#000000").unwrap(), "#010000");
             let predecessor = f64::from_bits(actual.to_bits() - 1);
             assert!(
-                crate::analog::tint_at_alpha(
+                crate::point_representation::source_at_opacity(
                     crate::Srgb8::new([1, 0, 0]),
-                    predecessor,
+                    admitted(predecessor),
                     crate::Srgb8::new([0; 3]),
                 )
                 .is_none()
@@ -684,17 +559,24 @@ mod tests {
                 let background = [bg; 3];
                 let target = crate::Srgb8::new(target);
                 let background = crate::Srgb8::new(background);
-                let floor = crate::analog::first_alpha(target, background);
+                let floor = crate::point_representation::first_opacity(target, background);
                 assert!(
-                    crate::analog::tint_at_alpha(target, floor, background).is_some(),
-                    "solid={solid}, bg={bg}, floor={floor} не проходит"
+                    crate::point_representation::source_at_opacity(target, floor, background)
+                        .is_some(),
+                    "solid={solid}, bg={bg}, floor={} не проходит",
+                    floor.value()
                 );
                 if solid == bg {
-                    assert_eq!(floor.to_bits(), 0.0_f64.to_bits());
+                    assert_eq!(floor.bits(), 0.0_f64.to_bits());
                 } else {
-                    let predecessor = f64::from_bits(floor.to_bits() - 1);
+                    let predecessor = f64::from_bits(floor.bits() - 1);
                     assert!(
-                        crate::analog::tint_at_alpha(target, predecessor, background).is_none(),
+                        crate::point_representation::source_at_opacity(
+                            target,
+                            admitted(predecessor),
+                            background,
+                        )
+                        .is_none(),
                         "solid={solid}, bg={bg}: predecessor={predecessor} тоже проходит"
                     );
                 }
@@ -711,15 +593,14 @@ mod tests {
         let off_grid_solid = [0.25 / 255.0; 3];
         let target = crate::Srgb8::new(encoded_to_srgb8(off_grid_solid, "solid").unwrap());
         let backdrop = crate::Srgb8::new([0; 3]);
-        let verified = crate::analog::resolve_verified(
-            crate::analog::AuthoredAlphaBindingIdV1::Standalone,
+        let verified = crate::point_representation::resolve_exact_point_representation_v1(
             target,
-            0.5,
+            admitted(0.5),
             backdrop,
         )
         .expect("валидный домен всегда имеет конечный sRGB8-ответ");
-        let tint = verified.tint().bytes();
-        let alpha = verified.alpha();
+        let tint = verified.source().bytes();
+        let alpha = verified.opacity().value();
         assert_eq!(tint, [0; 3]);
         assert_eq!(composite_over_srgb8(tint, alpha, [0; 3]).unwrap(), [0; 3]);
     }
@@ -858,49 +739,38 @@ mod tests {
         assert!(invert_composite_encoded([0.0; 3], alpha, [1.0; 3]).is_none());
     }
 
-    /// Непрерывный резолвер не подменяет целевой цвет: при разрешимой
-    /// запрошенной α возвращает её саму; при неразрешимой — поднимает α ровно
-    /// до α_min. Ошибка binary64-композита остаётся внутри доказанной оценки
-    /// (двигается прозрачность, не целевой цвет). Побайтовый постусловный тест живёт отдельно в
-    /// `srgb8_alpha_analog_is_exact_for_every_channel_pair`.
+    /// Непрерывная инверсия на своём strict-binary64 полу не подменяет целевой
+    /// цвет. Побайтовый postcondition проверяется отдельно общим exact point-
+    /// coordinator-ом.
     #[test]
-    fn resolver_moves_alpha_never_the_colour() {
+    fn strict_floor_and_inversion_preserve_the_continuous_target() {
         let grid: Vec<f64> = (0..=8).map(|i| f64::from(i) / 8.0).collect();
         for &s in &grid {
             for &b in &grid {
                 let solid = [s, 0.4, 0.6];
                 let bg = [b, 0.4, 0.6];
                 let floor = min_alpha_encoded(solid, bg).expect("в домене");
-                for requested in [0.0, 0.05, 0.3, 0.9, 1.0] {
-                    let requested_is_exact =
-                        requested > 0.0 && invert_composite_encoded(solid, requested, bg).is_some();
-                    let a = resolve_alpha_analog(solid, requested, bg).expect("в домене");
-                    // Фактическая α: запрошенная, если строгая или побитно-точная
-                    // граничная инверсия разрешима; иначе ровно conservative floor.
-                    let want = if requested_is_exact {
-                        requested
+                for minimum in [0.0_f64, 0.05, 0.3, 0.9, 1.0] {
+                    let opacity = minimum.max(floor);
+                    let source = if opacity == 0.0 {
+                        bg
                     } else {
-                        requested.max(floor)
+                        invert_composite_encoded(solid, opacity, bg)
+                            .expect("opacity at or above the exact floor must invert")
                     };
-                    assert_eq!(
-                        a.alpha.to_bits(),
-                        want.to_bits(),
-                        "solid={s},bg={b},req={requested}: α={} != {want}",
-                        a.alpha
-                    );
                     // Отклонение — только ограниченная ошибка binary64, а не
                     // результат клампа или смены целевого цвета.
-                    let c = if a.alpha == 0.0 {
-                        bg // вырожденный случай solid==bg
+                    let c = if opacity == 0.0 {
+                        bg
                     } else {
-                        composite_over_encoded_unchecked(a.tint, a.alpha, bg)
+                        composite_over_encoded_unchecked(source, opacity, bg)
                     };
                     for ch in 0..3 {
                         let error = (c[ch] - solid[ch]).abs();
                         let bound = 8.0 * f64::EPSILON;
                         assert!(
                             error <= bound,
-                            "solid={s},bg={b},req={requested}: канал {ch}, error={error} > {bound}"
+                            "solid={s},bg={b},minimum={minimum}: канал {ch}, error={error} > {bound}"
                         );
                     }
                 }
@@ -936,9 +806,8 @@ mod tests {
         }
     }
 
-    /// Все три hex-обёртки публичной поверхности: roundtrip на живой Figma-паре,
-    /// плюс честный Err (не паника) на невалидном hex — .expect в min_alpha_hex
-    /// недостижим, парсинг падает раньше через `?`.
+    /// Публичные физические hex-обёртки: roundtrip на живой Figma-паре и
+    /// честный Err (не паника) на невалидном hex.
     #[test]
     fn hex_wrappers_roundtrip_and_reject_invalid_hex() {
         // Roundtrip: Fills/Neutral/Primary light (композит #E4E4E6 = #787880@0.20 над #FFFFFF).
@@ -949,17 +818,10 @@ mod tests {
         // min_alpha_hex: для равных цветов пол = 0; для контрастной пары > 0.
         assert_eq!(min_alpha_hex("#FFFFFF", "#FFFFFF").unwrap(), 0.0);
         assert!(min_alpha_hex("#101012", "#FFFFFF").unwrap() > 0.9);
-        // Hex-путь: неразрешимая α поднимается, а итоговый sRGB8-композит
-        // побайтно равен солиду.
-        let (tint2, actual) = resolve_alpha_analog_hex("#101012", 0.05, "#FFFFFF")
-            .expect("валидный домен всегда имеет конечный ответ");
-        assert!(actual > 0.05, "α обязана подняться до разрешимой");
-        assert_eq!(composite_hex(&tint2, actual, "#FFFFFF").unwrap(), "#101012");
-        // Невалидный hex — Err на каждой обёртке (никаких паник).
+        // Невалидный hex — Err на каждой публичной обёртке (никаких паник).
         for f in [
             invert_composite_hex("ош", 0.5, "#FFFFFF").err(),
             min_alpha_hex("#12345", "#FFFFFF").err(),
-            resolve_alpha_analog_hex("#GGGGGG", 0.5, "#FFFFFF").err(),
         ] {
             assert!(f.is_some(), "невалидный hex обязан дать Err");
         }
@@ -983,70 +845,6 @@ mod tests {
             None,
             "нулевая alpha валидна, но обратный ход вырожден"
         );
-    }
-
-    /// Резолвер строго отвергает α вне `[0,1]`: ни NaN, ни конечное значение за
-    /// границей не должны превращаться clamp-ом в правдоподобный ответ.
-    #[test]
-    fn resolver_rejects_every_out_of_domain_alpha() {
-        let ok = [0.5, 0.5, 0.5];
-        assert!(resolve_alpha_analog([1.5, 0.0, 0.0], 0.5, ok).is_none());
-        for bad in [
-            f64::NAN,
-            f64::NEG_INFINITY,
-            f64::INFINITY,
-            -f64::EPSILON,
-            1.0 + f64::EPSILON,
-            -1.0,
-            5.0,
-        ] {
-            assert!(
-                resolve_alpha_analog(ok, bad, ok).is_none(),
-                "requested α={bad} обязана быть отвергнута"
-            );
-            assert!(
-                resolve_alpha_analog_hex("#808080", bad, "#808080").is_err(),
-                "hex-граница обязана вернуть Err для α={bad}"
-            );
-        }
-    }
-
-    #[test]
-    fn public_hex_boundary_stringifies_typed_proposal_failure() {
-        let error = resolve_alpha_analog_hex("#000000", -0.25, "#FFFFFF")
-            .expect_err("public hex boundary must preserve proposal rejection");
-        assert!(error.contains("requested_alpha вне конечного [0,1]"));
-    }
-
-    #[test]
-    fn public_string_boundary_omits_authored_routing_identity() {
-        let message_for = |declaration_ordinal| {
-            let error = crate::analog::ExactAlphaProgramV1::evaluate(
-                crate::analog::AuthoredAlphaBindingIdV1::Named {
-                    declaration_ordinal,
-                },
-                crate::Srgb8::new([0; 3]),
-                crate::Srgb8::new([255; 3]),
-                crate::composition::AdmittedOpacityV1::new(0.5).unwrap(),
-                crate::Srgb8::new([0; 3]),
-            )
-            .expect_err("control candidate must violate exact identity");
-            let witness = error;
-            resolve_verified_error_message(
-                crate::analog::ResolveVerifiedErrorV1::ConstraintViolation(witness),
-            )
-        };
-
-        let first = message_for(2);
-        let second = message_for(9);
-        assert_eq!(first, second, "routing identity must remain typed-only");
-        assert_eq!(
-            first,
-            "alpha-analog не воспроизвёл sRGB8-цель: target=[0, 0, 0], actual=[128, 128, 128]"
-        );
-        for forbidden in ["Standalone", "Named", "ordinal", "declaration_ordinal"] {
-            assert!(!first.contains(forbidden));
-        }
     }
 
     /// Домен ядра закреплён: внегамутные и неконечные входы отвергаются
