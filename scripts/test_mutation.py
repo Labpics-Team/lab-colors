@@ -108,6 +108,25 @@ def phase(summary: str) -> list[dict]:
     ]
 
 
+def workflow_job_blocks(source: str, label: str) -> dict[str, str]:
+    if "\njobs:\n" not in source:
+        raise AssertionError(f"{label} has no jobs mapping")
+    jobs = source.split("\njobs:\n", 1)[1]
+    anchors = list(re.finditer(r"(?m)^  ([A-Za-z0-9_-]+):\n", jobs))
+    if not anchors:
+        raise AssertionError(f"{label} has no statically declared jobs")
+    return {
+        anchor.group(1): jobs[
+            anchor.start() : (
+                anchors[index + 1].start()
+                if index + 1 < len(anchors)
+                else len(jobs)
+            )
+        ]
+        for index, anchor in enumerate(anchors)
+    }
+
+
 class MutationTruthTest(unittest.TestCase):
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory()
@@ -1734,8 +1753,27 @@ class MutationTruthTest(unittest.TestCase):
                 f"  cancel-in-progress: {cancel_rule}\n",
                 workflow,
             )
-        self.assertEqual(ci_worker.count(fork_guard), 7)
-        self.assertEqual(native_worker.count(fork_guard), 1)
+        ci_self_hosted = {
+            name: block
+            for name, block in workflow_job_blocks(ci_worker, "ci-worker.yml").items()
+            if "runs-on: { group: labpics-ci-sandbox" in block
+        }
+        self.assertEqual(
+            set(ci_self_hosted),
+            {"node-consumer-floor", "msrv", "lint", "docs", "test", "audit", "wasm"},
+        )
+        for job_name, block in ci_self_hosted.items():
+            with self.subTest(worker="ci-worker.yml", job=job_name):
+                self.assertEqual(block.count(fork_guard), 1)
+        native_blocks = workflow_job_blocks(
+            native_worker, "native-conformance-worker.yml"
+        )
+        self.assertEqual(
+            native_blocks["swift-conformance-linux"].count(fork_guard), 1
+        )
+        self.assertNotIn(
+            fork_guard, native_blocks["swift-conformance-macos-reference"]
+        )
         ci_jobs = ci_worker.split("\njobs:\n", 1)[1]
         native_jobs = native_worker.split("\njobs:\n", 1)[1]
         self.assertNotIn("github.run_attempt == 1", ci_jobs)
@@ -1777,24 +1815,6 @@ class MutationTruthTest(unittest.TestCase):
         repo = Path(__file__).resolve().parents[1]
         workflows = repo / ".github" / "workflows"
 
-        def job_blocks(source: str, label: str) -> dict[str, str]:
-            if "\njobs:\n" not in source:
-                self.fail(f"{label} has no jobs mapping")
-            jobs = source.split("\njobs:\n", 1)[1]
-            anchors = list(re.finditer(r"(?m)^  ([A-Za-z0-9_-]+):\n", jobs))
-            if not anchors:
-                self.fail(f"{label} has no statically declared jobs")
-            return {
-                anchor.group(1): jobs[
-                    anchor.start() : (
-                        anchors[index + 1].start()
-                        if index + 1 < len(anchors)
-                        else len(jobs)
-                    )
-                ]
-                for index, anchor in enumerate(anchors)
-            }
-
         workers = {
             name: (workflows / name).read_text(encoding="utf-8")
             for name in (
@@ -1805,7 +1825,7 @@ class MutationTruthTest(unittest.TestCase):
             )
         }
         for worker_name, source in workers.items():
-            for job_name, block in job_blocks(source, worker_name).items():
+            for job_name, block in workflow_job_blocks(source, worker_name).items():
                 with self.subTest(worker=worker_name, job=job_name):
                     timeout = re.search(
                         r"(?m)^    timeout-minutes: ([1-9][0-9]*)\n",
@@ -1815,17 +1835,23 @@ class MutationTruthTest(unittest.TestCase):
                     assert timeout is not None
                     self.assertLess(int(timeout.group(1)), 360)
 
-        wasm = job_blocks(workers["ci-worker.yml"], "ci-worker.yml")["wasm"]
-        self.assertIn("    env:\n      BINARYEN_CORES: 1\n", wasm)
-        self.assertEqual(workers["ci-worker.yml"].count("BINARYEN_CORES"), 1)
+        wasm = workflow_job_blocks(workers["ci-worker.yml"], "ci-worker.yml")[
+            "wasm"
+        ]
+        self.assertIn("    env:\n      BINARYEN_CORES: 4\n", wasm)
+        self.assertEqual(workers["ci-worker.yml"].count("\n      BINARYEN_CORES:"), 1)
 
         native = workers["native-conformance-worker.yml"]
-        self.assertEqual(native.count("SWIFT_TOOLCHAIN: 6.1.3"), 1)
-        self.assertNotIn("SWIFT_CONTAINER", native)
-        self.assertNotIn("docker run", native)
+        native_env = native.split("\njobs:\n", 1)[0]
+        swift_job = workflow_job_blocks(native, "native-conformance-worker.yml")[
+            "swift-conformance-linux"
+        ]
+        self.assertEqual(native_env.count("SWIFT_TOOLCHAIN: 6.1.3"), 1)
+        self.assertNotIn("SWIFT_CONTAINER", swift_job)
+        self.assertNotIn("docker run", swift_job)
         self.assertIn(
             "run: bash bindings/swift/ci/run-conformance.sh",
-            native,
+            swift_job,
         )
 
         swift_runner = (
@@ -1834,8 +1860,19 @@ class MutationTruthTest(unittest.TestCase):
         self.assertIn('expected_swift="Swift version ${SWIFT_TOOLCHAIN} ', swift_runner)
         self.assertIn('readonly source_root="${GITHUB_WORKSPACE:-/src}"', swift_runner)
         self.assertIn('readonly temp_root="${RUNNER_TEMP:-/work}"', swift_runner)
+        self.assertNotIn('install -d -m 0700 "$temp_root"', swift_runner)
+        self.assertIn(
+            '[[ -d "$temp_root" && -w "$temp_root" && -x "$temp_root" ]]',
+            swift_runner,
+        )
         self.assertNotIn("apt-get", swift_runner)
         self.assertNotIn("https://sh.rustup.rs", swift_runner)
+
+        swift_readme = (repo / "bindings" / "swift" / "README.md").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn(".github/workflows/native-conformance-worker.yml", swift_readme)
+        self.assertIn(".github/workflows/native-conformance.yml", swift_readme)
 
     def test_publish_worker_secret_boundary_and_registry_are_fail_closed(self) -> None:
         repo = Path(__file__).resolve().parents[1]
@@ -1961,6 +1998,38 @@ class MutationTruthTest(unittest.TestCase):
                     publish_command,
                     f'npm publish --ignore-scripts {replacement} "$TARBALL_PATH"',
                 )
+    def test_swift_conformance_does_not_mutate_temp_root(self) -> None:
+        repo = Path(__file__).resolve().parents[1]
+        script = repo / "bindings" / "swift" / "ci" / "run-conformance.sh"
+        with tempfile.TemporaryDirectory() as fixture:
+            fixture_root = Path(fixture)
+            temp_root = fixture_root / "shared-temp"
+            stub_bin = fixture_root / "bin"
+            temp_root.mkdir(mode=0o777)
+            temp_root.chmod(0o777)
+            stub_bin.mkdir()
+            stub_mktemp = stub_bin / "mktemp"
+            stub_mktemp.write_text("#!/bin/sh\nexit 73\n", encoding="utf-8")
+            stub_mktemp.chmod(0o755)
+            before_mode = os.stat(temp_root).st_mode & 0o777
+            env = {
+                **os.environ,
+                "PATH": f"{stub_bin}:{os.environ['PATH']}",
+                "RUST_TOOLCHAIN": "1.96.0",
+                "SWIFT_TOOLCHAIN": "6.1.3",
+                "GITHUB_WORKSPACE": str(repo),
+                "RUNNER_TEMP": str(temp_root),
+            }
+            result = subprocess.run(
+                ["bash", str(script)],
+                env=env,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(result.returncode, 73, result.stderr)
+            self.assertEqual(os.stat(temp_root).st_mode & 0o777, before_mode)
+
     def test_workflow_and_scope_lock_the_truth_contract(self) -> None:
         def between(source: str, start: str, end: str, label: str) -> str:
             if start not in source:
