@@ -1,69 +1,82 @@
 #!/usr/bin/env bash
-# Прогон Swift-conformance в swift-контейнере (Linux x86_64) — ЕДИНЫЙ источник
-# для локального прогона и self-hosted CI-джобы (native-conformance.yml).
-#
-# Заменяет платную macOS-джобу (GitHub-hosted macOS исключён владельцем
-# навсегда). Ядро Rust компилируется под Linux, uniffi-bindgen генерит Swift из
-# .so, swift test прогоняет conformance-пак против выхода FFI.
-#
-# Ожидает исходники репозитория в /src (read-only bind-mount); собирает в /work.
-# Запуск:
-#   docker run --rm -v "<repo>":/src:ro \
-#     swift:6.1.3@sha256:e1cdaf7ddc9de37d8561da7a260535236694fca8c1b67d3129d47d8b180a9394 \
-#     bash /src/bindings/swift/ci/run-conformance.sh
+# Linux Swift-conformance использует уже допущенные toolchain capability и
+# работает только в эфемерной копии checkout. Так один скрипт проверяет FFI,
+# не изменяя исходники и не создавая второй Docker trust boundary внутри gVisor.
 set -euo pipefail
 
-readonly RUST_TOOLCHAIN=1.96.0
+: "${RUST_TOOLCHAIN:?RUST_TOOLCHAIN must declare the exact Rust version}"
+: "${SWIFT_TOOLCHAIN:?SWIFT_TOOLCHAIN must declare the exact Swift version}"
+[[ "$RUST_TOOLCHAIN" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+[[ "$SWIFT_TOOLCHAIN" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
 
-echo "==================== ПЛАТФОРМА / SWIFT ===================="
+readonly source_root="${GITHUB_WORKSPACE:-/src}"
+readonly temp_root="${RUNNER_TEMP:-/work}"
+readonly expected_swift="Swift version ${SWIFT_TOOLCHAIN} (swift-${SWIFT_TOOLCHAIN}-RELEASE)"
+
+[[ -d "$source_root" ]] || {
+  echo "source root does not exist: $source_root" >&2
+  exit 64
+}
+[[ -d "$temp_root" && -w "$temp_root" && -x "$temp_root" ]] || {
+  echo "temporary root is not accessible: $temp_root" >&2
+  exit 64
+}
+work_root="$(mktemp -d "${temp_root%/}/labcolors-swift.XXXXXX")"
+readonly work_root
+cleanup() {
+  rm -rf -- "$work_root"
+}
+trap cleanup EXIT
+
+echo "==================== TOOLCHAINS ===================="
 uname -a
-swift --version
+actual_swift="$(swift --version | sed -n '1p')"
+[[ "$actual_swift" == "$expected_swift" ]] || {
+  echo "Swift toolchain mismatch: expected '$expected_swift', got '${actual_swift:-missing}'" >&2
+  exit 64
+}
+actual_rust="$(rustc +"$RUST_TOOLCHAIN" --version)"
+actual_cargo="$(cargo +"$RUST_TOOLCHAIN" --version)"
+[[ "$actual_rust" == "rustc ${RUST_TOOLCHAIN} "* ]] || {
+  echo "Rust toolchain mismatch: $actual_rust" >&2
+  exit 64
+}
+[[ "$actual_cargo" == "cargo ${RUST_TOOLCHAIN} "* ]] || {
+  echo "Cargo toolchain mismatch: $actual_cargo" >&2
+  exit 64
+}
+printf '%s\n%s\n%s\n' "$actual_swift" "$actual_rust" "$actual_cargo"
 
-echo "==================== УСТАНОВКА RUST ===================="
-export DEBIAN_FRONTEND=noninteractive
-apt-get update -qq
-apt-get install -y -qq curl build-essential pkg-config >/dev/null
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- \
-  -y --default-toolchain "$RUST_TOOLCHAIN" --profile minimal
-# shellcheck disable=SC1091
-source "$HOME/.cargo/env"
-rustc +"$RUST_TOOLCHAIN" --version
-cargo +"$RUST_TOOLCHAIN" --version
-
-echo "==================== КОПИЯ ИСХОДНИКОВ (без target/.git) ===================="
-mkdir -p /work
-tar -C /src \
+echo "==================== EPHEMERAL SOURCE COPY ===================="
+tar -C "$source_root" \
   --exclude=target --exclude=.git --exclude=node_modules \
   --exclude='mutants.out' --exclude='mutants.out.old' \
   --exclude='bindings/swift/.build' --exclude='bindings/swift/generated' \
-  -cf - . | tar -C /work -xf -
-cd /work
+  -cf - . | tar -C "$work_root" -xf -
+cd "$work_root"
 
-echo "==================== СБОРКА labcolors-ffi (Linux) + bindgen ===================="
+echo "==================== BUILD FFI AND BINDGEN ===================="
 cargo +"$RUST_TOOLCHAIN" build -p labcolors-ffi --features cli --locked
-ls -la target/debug/liblabcolors.*
+test -f target/debug/liblabcolors.so
 
-echo "==================== РАННЕР-РЕФЕРЕНС (ядро на Linux воспроизводит пак) ===================="
+echo "==================== RUST REFERENCE ===================="
 cargo +"$RUST_TOOLCHAIN" test -p labcolors-conformance -p labcolors-ffi --locked
 
-echo "==================== ГЕНЕРАЦИЯ SWIFT-БИНДИНГОВ (из .so) ===================="
+echo "==================== GENERATE SWIFT BINDINGS ===================="
 cargo +"$RUST_TOOLCHAIN" run -p labcolors-ffi --features cli --bin uniffi-bindgen --locked -- \
   generate --library target/debug/liblabcolors.so \
   --language swift --out-dir bindings/swift/generated
 
-echo "==================== РАСКЛАДКА В SwiftPM ===================="
-gen=bindings/swift/generated
-mkdir -p bindings/swift/Sources/LabColors bindings/swift/Sources/labcolorsFFI
-cp "$gen/labcolors.swift"        bindings/swift/Sources/LabColors/labcolors.swift
-cp "$gen/labcolorsFFI.h"         bindings/swift/Sources/labcolorsFFI/labcolorsFFI.h
-cp "$gen/labcolorsFFI.modulemap" bindings/swift/Sources/labcolorsFFI/module.modulemap
-echo "--- module.modulemap ---"; cat bindings/swift/Sources/labcolorsFFI/module.modulemap
+echo "==================== ARRANGE SWIFTPM SOURCES ===================="
+readonly generated=bindings/swift/generated
+install -d bindings/swift/Sources/LabColors bindings/swift/Sources/labcolorsFFI
+install -m 0644 "$generated/labcolors.swift" bindings/swift/Sources/LabColors/labcolors.swift
+install -m 0644 "$generated/labcolorsFFI.h" bindings/swift/Sources/labcolorsFFI/labcolorsFFI.h
+install -m 0644 "$generated/labcolorsFFI.modulemap" bindings/swift/Sources/labcolorsFFI/module.modulemap
 
-echo "==================== SWIFT TEST (пак против FFI) ===================="
+echo "==================== SWIFT CONFORMANCE ===================="
 cd bindings/swift
-# .so линкуется динамически (-llabcolors находит liblabcolors.so в -L); .so ищем
-# в рантайме через LD_LIBRARY_PATH.
-export LD_LIBRARY_PATH="/work/target/debug:${LD_LIBRARY_PATH:-}"
-swift test -Xlinker -L/work/target/debug
+export LD_LIBRARY_PATH="$work_root/target/debug:${LD_LIBRARY_PATH:-}"
+swift test -Xlinker -L"$work_root/target/debug"
 
-echo "==================== ГОТОВО: SWIFT CONFORMANCE ЗЕЛЁНЫЙ ===================="
+echo "==================== SWIFT CONFORMANCE: OK ===================="

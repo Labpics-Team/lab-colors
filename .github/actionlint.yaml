@@ -1,10 +1,10 @@
 self-hosted-runner:
   labels:
+    - labpics-ci-gvisor-v1
     - labcolors-ephemeral
-
 paths:
   .github/workflows/mutation.yml:
+    # actionlint 1.7.12 отстаёт от текущей GitHub-схемы concurrency.queue;
+    # узкое исключение удаляется, когда линтер начнёт принимать `queue: max`.
     ignore:
-      # `queue` — валидная семантика GitHub Actions, которой ещё нет в схеме
-      # поддерживаемого actionlint; удалить, когда linter начнёт принимать ключ.
       - 'unexpected key "queue" for "concurrency" section'
