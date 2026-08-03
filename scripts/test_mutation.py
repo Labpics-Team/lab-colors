@@ -108,6 +108,25 @@ def phase(summary: str) -> list[dict]:
     ]
 
 
+def workflow_job_blocks(source: str, label: str) -> dict[str, str]:
+    if "\njobs:\n" not in source:
+        raise AssertionError(f"{label} has no jobs mapping")
+    jobs = source.split("\njobs:\n", 1)[1]
+    anchors = list(re.finditer(r"(?m)^  ([A-Za-z0-9_-]+):\n", jobs))
+    if not anchors:
+        raise AssertionError(f"{label} has no statically declared jobs")
+    return {
+        anchor.group(1): jobs[
+            anchor.start() : (
+                anchors[index + 1].start()
+                if index + 1 < len(anchors)
+                else len(jobs)
+            )
+        ]
+        for index, anchor in enumerate(anchors)
+    }
+
+
 class MutationTruthTest(unittest.TestCase):
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory()
@@ -1680,7 +1699,11 @@ class MutationTruthTest(unittest.TestCase):
         workflows = repo / ".github" / "workflows"
         mutation_workflow = (workflows / "mutation.yml").read_text(encoding="utf-8")
         ci_workflow = (workflows / "ci.yml").read_text(encoding="utf-8")
+        ci_worker = (workflows / "ci-worker.yml").read_text(encoding="utf-8")
         native_workflow = (workflows / "native-conformance.yml").read_text(
+            encoding="utf-8"
+        )
+        native_worker = (workflows / "native-conformance-worker.yml").read_text(
             encoding="utf-8"
         )
 
@@ -1730,10 +1753,29 @@ class MutationTruthTest(unittest.TestCase):
                 f"  cancel-in-progress: {cancel_rule}\n",
                 workflow,
             )
-        self.assertEqual(ci_workflow.count(fork_guard), 7)
-        self.assertEqual(native_workflow.count(fork_guard), 1)
-        ci_jobs = ci_workflow.split("\njobs:\n", 1)[1]
-        native_jobs = native_workflow.split("\njobs:\n", 1)[1]
+        ci_self_hosted = {
+            name: block
+            for name, block in workflow_job_blocks(ci_worker, "ci-worker.yml").items()
+            if "runs-on: { group: labpics-ci-sandbox" in block
+        }
+        self.assertEqual(
+            set(ci_self_hosted),
+            {"node-consumer-floor", "msrv", "lint", "docs", "test", "audit", "wasm"},
+        )
+        for job_name, block in ci_self_hosted.items():
+            with self.subTest(worker="ci-worker.yml", job=job_name):
+                self.assertEqual(block.count(fork_guard), 1)
+        native_blocks = workflow_job_blocks(
+            native_worker, "native-conformance-worker.yml"
+        )
+        self.assertEqual(
+            native_blocks["swift-conformance-linux"].count(fork_guard), 1
+        )
+        self.assertNotIn(
+            fork_guard, native_blocks["swift-conformance-macos-reference"]
+        )
+        ci_jobs = ci_worker.split("\njobs:\n", 1)[1]
+        native_jobs = native_worker.split("\njobs:\n", 1)[1]
         self.assertNotIn("github.run_attempt == 1", ci_jobs)
         self.assertNotIn("github.run_attempt == 1", native_jobs)
 
@@ -1769,6 +1811,143 @@ class MutationTruthTest(unittest.TestCase):
             run_policy("pull_request", 2, 42, 42)[0],
         )
 
+    def test_reusable_workers_bound_jobs_and_binaryen_transport(self) -> None:
+        repo = Path(__file__).resolve().parents[1]
+        workflows = repo / ".github" / "workflows"
+
+        workers = {
+            name: (workflows / name).read_text(encoding="utf-8")
+            for name in (
+                "ci-worker.yml",
+                "mutation-worker.yml",
+                "native-conformance-worker.yml",
+                "publish-worker.yml",
+            )
+        }
+        ci_caller = (workflows / "ci.yml").read_text(encoding="utf-8")
+        admitted_ci_worker = (
+            "uses: Labpics-Team/lab-colors/.github/workflows/ci-worker.yml@"
+            "0ca9d683856e8c92e3192abe9bc054d045d355e2"
+        )
+        self.assertEqual(ci_caller.count("ci-worker.yml@"), 1)
+        self.assertIn(admitted_ci_worker, ci_caller)
+        for worker_name, source in workers.items():
+            for job_name, block in workflow_job_blocks(source, worker_name).items():
+                with self.subTest(worker=worker_name, job=job_name):
+                    timeout = re.search(
+                        r"(?m)^    timeout-minutes: ([1-9][0-9]*)\n",
+                        block,
+                    )
+                    self.assertIsNotNone(timeout)
+                    assert timeout is not None
+                    self.assertLess(int(timeout.group(1)), 360)
+
+        wasm = workflow_job_blocks(workers["ci-worker.yml"], "ci-worker.yml")[
+            "wasm"
+        ]
+        self.assertNotIn("BINARYEN_CORES", workers["ci-worker.yml"])
+        self.assertIn("      BINARYEN_RELEASE: version_117\n", wasm)
+        self.assertIn(
+            '      BINARYEN_NODE_SHA256: "'
+            '2d5a42f2d167a7cc2b4b6664c44c5ace1690d13db4f527324f052afbad461a07"\n',
+            wasm,
+        )
+        self.assertIn("binaryen-${BINARYEN_RELEASE}-node.tar.gz", wasm)
+        self.assertIn('printf \'%s  %s\\n\' "$BINARYEN_NODE_SHA256"', wasm)
+        self.assertIn("sha256sum --check -", wasm)
+        self.assertIn("wasm-pack build --no-opt --release", wasm)
+        self.assertEqual(wasm.count("wasm-pack build "), 1)
+        self.assertIn(
+            'node "$BINARYEN_ROOT/wasm-opt.js" "$wasm" -o "$optimized" \\\n'
+            "              -Oz --enable-bulk-memory "
+            "--enable-nontrapping-float-to-int",
+            wasm,
+        )
+        self.assertEqual(
+            wasm.count(
+                "-Oz --enable-bulk-memory --enable-nontrapping-float-to-int"
+            ),
+            1,
+        )
+        self.assertNotIn(
+            "wasm-pack build crates/labcolors-wasm --release",
+            wasm,
+        )
+        self.assertLess(
+            wasm.index("uses: actions/setup-node@"),
+            wasm.index("name: install byte-bound Binaryen Node transport"),
+        )
+        self.assertLess(
+            wasm.index("name: install byte-bound Binaryen Node transport"),
+            wasm.index("name: repeat runtime WASM build"),
+        )
+
+        native = workers["native-conformance-worker.yml"]
+        native_env = native.split("\njobs:\n", 1)[0]
+        swift_job = workflow_job_blocks(native, "native-conformance-worker.yml")[
+            "swift-conformance-linux"
+        ]
+        self.assertEqual(native_env.count("SWIFT_TOOLCHAIN: 6.1.3"), 1)
+        self.assertNotIn("SWIFT_CONTAINER", swift_job)
+        self.assertNotIn("docker run", swift_job)
+        self.assertIn(
+            "run: bash bindings/swift/ci/run-conformance.sh",
+            swift_job,
+        )
+
+        swift_runner = (
+            repo / "bindings" / "swift" / "ci" / "run-conformance.sh"
+        ).read_text(encoding="utf-8")
+        self.assertIn('expected_swift="Swift version ${SWIFT_TOOLCHAIN} ', swift_runner)
+        self.assertIn('readonly source_root="${GITHUB_WORKSPACE:-/src}"', swift_runner)
+        self.assertIn('readonly temp_root="${RUNNER_TEMP:-/work}"', swift_runner)
+        self.assertNotIn('install -d -m 0700 "$temp_root"', swift_runner)
+        self.assertIn(
+            '[[ -d "$temp_root" && -w "$temp_root" && -x "$temp_root" ]]',
+            swift_runner,
+        )
+        self.assertNotIn("apt-get", swift_runner)
+        self.assertNotIn("https://sh.rustup.rs", swift_runner)
+
+        swift_readme = (repo / "bindings" / "swift" / "README.md").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn(".github/workflows/native-conformance-worker.yml", swift_readme)
+        self.assertIn(".github/workflows/native-conformance.yml", swift_readme)
+
+    def test_swift_conformance_does_not_mutate_temp_root(self) -> None:
+        repo = Path(__file__).resolve().parents[1]
+        script = repo / "bindings" / "swift" / "ci" / "run-conformance.sh"
+        with tempfile.TemporaryDirectory() as fixture:
+            fixture_root = Path(fixture)
+            temp_root = fixture_root / "shared-temp"
+            stub_bin = fixture_root / "bin"
+            temp_root.mkdir(mode=0o777)
+            temp_root.chmod(0o777)
+            stub_bin.mkdir()
+            stub_mktemp = stub_bin / "mktemp"
+            stub_mktemp.write_text("#!/bin/sh\nexit 73\n", encoding="utf-8")
+            stub_mktemp.chmod(0o755)
+            before_mode = os.stat(temp_root).st_mode & 0o777
+            env = {
+                **os.environ,
+                "PATH": f"{stub_bin}:{os.environ['PATH']}",
+                "RUST_TOOLCHAIN": "1.96.0",
+                "SWIFT_TOOLCHAIN": "6.1.3",
+                "GITHUB_WORKSPACE": str(repo),
+                "RUNNER_TEMP": str(temp_root),
+            }
+            result = subprocess.run(
+                ["bash", str(script)],
+                env=env,
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=mutation.EXTERNAL_COMMAND_TIMEOUT_SECONDS,
+            )
+            self.assertEqual(result.returncode, 73, result.stderr)
+            self.assertEqual(os.stat(temp_root).st_mode & 0o777, before_mode)
+
     def test_workflow_and_scope_lock_the_truth_contract(self) -> None:
         def between(source: str, start: str, end: str, label: str) -> str:
             if start not in source:
@@ -1779,11 +1958,13 @@ class MutationTruthTest(unittest.TestCase):
             return tail.split(end, 1)[0]
 
         repo = Path(__file__).resolve().parents[1]
-        workflow = (repo / ".github" / "workflows" / "mutation.yml").read_text(
+        workflow = (
+            repo / ".github" / "workflows" / "mutation-worker.yml"
+        ).read_text(encoding="utf-8")
+        config = (repo / ".cargo" / "mutants.toml").read_text(encoding="utf-8")
+        ci = (repo / ".github" / "workflows" / "ci-worker.yml").read_text(
             encoding="utf-8"
         )
-        config = (repo / ".cargo" / "mutants.toml").read_text(encoding="utf-8")
-        ci = (repo / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
         self.assertLess(
             ci.index("      - name: mutation evidence verifier hostile tests\n"),
             ci.index("      - name: cargo test\n"),
