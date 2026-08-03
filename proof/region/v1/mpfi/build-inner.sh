@@ -142,10 +142,11 @@ CC="$compiler" CFLAGS="$common_cflags" \
     --disable-shared \
     --enable-static
 /usr/bin/make -j1
-# MPFI 1.5.4 ships three non-runnable tests: two pass incompatible function
-# pointers to the generic harness, while texp10 names a fixture absent from
-# the sealed source archive.  Exclude only those upstream defects; every other
-# shipped test remains part of this source-bound library check.
+# MPFI 1.5.4 ships three defective tests: two pass incompatible function
+# pointers to the generic harness, which Clang 19 rejects at compile time,
+# while texp10 names a fixture absent from the sealed source archive.
+# Exclude those upstream defects from compilation and from the run alike;
+# every other shipped test remains part of this source-bound library check.
 make_database="$build/mpfi-check-database"
 if ! /usr/bin/make -pn > "$make_database"; then
     printf '%s\n' 'cannot inspect MPFI upstream test inventory' >&2
@@ -167,7 +168,7 @@ if [ -z "$mpfi_tests" ]; then
     printf '%s\n' 'MPFI upstream test inventory is empty after exclusions' >&2
     exit 70
 fi
-/usr/bin/make check -j1 TESTS="$mpfi_tests" CFLAGS="$common_cflags"
+/usr/bin/make check -j1 TESTS="$mpfi_tests" check_PROGRAMS="$mpfi_tests" CFLAGS="$common_cflags"
 /usr/bin/make install
 
 cd "$workspace/proof/region/v1/mpfi/evaluator"

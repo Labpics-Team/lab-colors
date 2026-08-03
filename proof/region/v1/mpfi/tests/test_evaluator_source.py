@@ -275,7 +275,11 @@ class EvaluatorSourceTests(unittest.TestCase):
             "readonly mpfi_test_exclusions='^(tdiv_ext|texp10|trec_sqrt)$'",
             recipe,
         )
-        self.assertIn('/usr/bin/make check -j1 TESTS="$mpfi_tests"', recipe)
+        self.assertIn(
+            '/usr/bin/make check -j1 TESTS="$mpfi_tests" '
+            'check_PROGRAMS="$mpfi_tests"',
+            recipe,
+        )
         self.assertIn("mpfi-evaluator-v1", recipe)
         self.assertIn("readelf", recipe)
         self.assertIn("--undefined-only", recipe)
