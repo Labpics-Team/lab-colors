@@ -180,12 +180,14 @@ jobs:
           from pathlib import Path
 
           from arb import pipeline
+          from build import transport as build_transport
 
-          docker = pipeline.NativeDockerBuildBackendV1(
-              Path(os.environ["LABCOLORS_ARB_PIPELINE_DOCKER"])
+          docker = build_transport.NativeDockerBuildBackendV1(
+              Path(os.environ["LABCOLORS_ARB_PIPELINE_DOCKER"]),
+              pipeline.ARB_BUILD_TRANSPORT_POLICY_V1,
           ).probe()
           print(repr(docker))
-          if type(docker) is not pipeline.DockerSupportedV1:
+          if type(docker) is not build_transport.DockerSupportedV1:
               sys.exit(78)
           PY
 

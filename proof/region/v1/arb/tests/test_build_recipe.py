@@ -93,6 +93,18 @@ class ArbBuildRecipeTests(unittest.TestCase):
             'echo "LABCOLORS_MPFI_ARCHIVE=$archive" >> "$GITHUB_ENV"',
             source,
         )
+        # The Docker boundary probe must consume the canonical transport
+        # backend and the retained pipeline policy; a bare pipeline-attribute
+        # probe drifted once already and failed closed only on a real worker.
+        for probe_contract in (
+            "from build import transport as build_transport",
+            "build_transport.NativeDockerBuildBackendV1(",
+            "pipeline.ARB_BUILD_TRANSPORT_POLICY_V1,",
+            "build_transport.DockerSupportedV1:",
+        ):
+            with self.subTest(probe_contract=probe_contract):
+                self.assertIn(probe_contract, source)
+        self.assertNotIn("pipeline.NativeDockerBuildBackendV1", source)
         for required in (
             'apparmor_userns=/proc/sys/kernel/apparmor_restrict_unprivileged_userns',
             'if [[ -f "$apparmor_userns" ]]; then',
