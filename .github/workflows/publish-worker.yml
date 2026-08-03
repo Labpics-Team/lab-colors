@@ -134,6 +134,10 @@ jobs:
               key: "ci",
               file: "ci.yml",
               path: ".github/workflows/ci.yml",
+              worker: {
+                path: "Labpics-Team/lab-colors/.github/workflows/ci-worker.yml@490783e8468c73f06d2a81ad10e9d3aab41b6185",
+                sha: "490783e8468c73f06d2a81ad10e9d3aab41b6185",
+              },
               requiredJobs: [
                 "Node 22 consumer floor",
                 "MSRV workspace check",
@@ -148,6 +152,10 @@ jobs:
               key: "native",
               file: "native-conformance.yml",
               path: ".github/workflows/native-conformance.yml",
+              worker: {
+                path: "Labpics-Team/lab-colors/.github/workflows/native-conformance-worker.yml@7827981724ad75bfcf15bd5b2f74be2d5337d9b5",
+                sha: "7827981724ad75bfcf15bd5b2f74be2d5337d9b5",
+              },
               requiredJobs: [
                 "swift conformance (self-hosted Linux, pinned toolchain)",
               ],
@@ -203,6 +211,18 @@ jobs:
             if (!run) throw new Error(`${spec.path}: no canonical push run for ${expectedSha}`);
             if (!(run.status === "completed" && run.conclusion === "success")) {
               throw new Error(`${spec.path} run ${run.id}: ${run.status}/${run.conclusion ?? "none"}`);
+            }
+            const references = run.referenced_workflows;
+            if (!Array.isArray(references) || references.length !== 1) {
+              throw new Error(
+                `${spec.path} run ${run.id}: expected exactly one immutable worker reference`,
+              );
+            }
+            const [reference] = references;
+            if (reference?.path !== spec.worker.path || reference?.sha !== spec.worker.sha) {
+              throw new Error(
+                `${spec.path} run ${run.id}: worker reference does not match the admitted worker`,
+              );
             }
             return run;
           }
