@@ -256,7 +256,11 @@ backend run как `ObserverFailureV1(REQUEST_NOT_ADMITTED)`.
 копирует этот descriptor protocol. Executor открывает каждый сегмент cgroup
 descriptor-relative с `O_PATH|O_NOFOLLOW`: metadata-проверка допускает каталог,
 доступный только для поиска, но символическая ссылка не может незаметно связать
-controller с другой cgroup.
+controller с другой cgroup. Размещение остаётся self-migration: kernel
+допускает перенос задачи только при праве записи в `cgroup.procs` общего
+предка исходной и целевой cgroup, поэтому caller обязан уже находиться внутри
+делегированного job-owned subtree; вход в этот subtree — отдельная root
+admission операция workflow, а не часть этого placement protocol.
 
 Linux backend допускается лишь в отдельном helper process. Helper находится в
 прямом дочернем cgroup объявленного parent, а весь parent subtree имеет

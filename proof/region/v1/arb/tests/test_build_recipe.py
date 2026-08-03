@@ -123,6 +123,7 @@ class ArbBuildRecipeTests(unittest.TestCase):
             'echo "LABCOLORS_CGROUP_SCOPE_V1=$scope"',
             'echo "LABCOLORS_EXECUTOR_CGROUP_V1=$scope/proof"',
             '"$LABCOLORS_EXECUTOR_CGROUP_V1/observer/cgroup.procs"',
+            '"$LABCOLORS_CGROUP_SCOPE_V1/tasks/cgroup.procs"',
             "native_gate.py receipt",
             "native_gate.py executor",
             "exec python3",
@@ -148,6 +149,23 @@ class ArbBuildRecipeTests(unittest.TestCase):
             source.index("proof/region/v1/arb/tests/gate.py"),
             source.index("LABCOLORS_EXECUTOR_CGROUP_V1=$scope/proof"),
         )
+        # Root admits each receipt lane into the delegated subtree before the
+        # controller's observer self-placement: the kernel rejects a migration
+        # whose common ancestor with the root-owned runner cgroup is not
+        # writable by the job, so omitting either admission leaves that lane
+        # fail-closed on a real runner.
+        admission = '"$LABCOLORS_CGROUP_SCOPE_V1/tasks/cgroup.procs"'
+        receipt_gate = "native_gate.py receipt"
+        self.assertEqual(source.count(admission), 2)
+        self.assertEqual(source.count(receipt_gate), 2)
+        first_admission = source.index(admission)
+        first_gate = source.index(receipt_gate)
+        second_admission = source.index(
+            admission, first_admission + len(admission)
+        )
+        second_gate = source.index(receipt_gate, first_gate + len(receipt_gate))
+        self.assertLess(first_admission, first_gate)
+        self.assertLess(second_admission, second_gate)
 
     def test_pr_gate_cannot_green_skip_a_fork_without_execution(self) -> None:
         source = WORKFLOW.read_text(encoding="utf-8")

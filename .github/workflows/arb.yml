@@ -231,12 +231,22 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # The kernel admits a cgroup migration only with write access to the
+          # common ancestor of the source and destination groups; the runner
+          # cgroup is root-owned, so root admits this step into the owned
+          # subtree first and the controller's observer placement then stays a
+          # proven self-migration between delegated groups.
+          echo "$$" | sudo tee \
+            "$LABCOLORS_CGROUP_SCOPE_V1/tasks/cgroup.procs" >/dev/null
           exec python3 proof/region/v1/arb/tests/native_gate.py receipt
 
       - name: one source-bound MPFI BUILD to RUN receipt and evaluator runtime
         shell: bash
         run: |
           set -euo pipefail
+          # Identical admission contract as the Arb receipt lane above.
+          echo "$$" | sudo tee \
+            "$LABCOLORS_CGROUP_SCOPE_V1/tasks/cgroup.procs" >/dev/null
           exec python3 proof/region/v1/mpfi/tests/native_gate.py receipt
 
       - name: native containment under an atomic two-task subtree
