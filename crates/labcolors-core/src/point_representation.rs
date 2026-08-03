@@ -246,7 +246,7 @@ impl PointRepresentationViolationV1 {
 }
 
 /// Code-owned compiled invocation: одна физическая topology и один exact
-/// evaluator. Runtime bindings — только admitted bytes и alpha.
+/// evaluator. Runtime bindings — только admitted bytes и opacity.
 pub(crate) struct ExactPointRepresentationV1;
 
 impl ExactPointRepresentationV1 {

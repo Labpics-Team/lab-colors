@@ -76,6 +76,7 @@ fn point_representation_execution_is_generic_and_the_helper_facade_is_gone() {
     let semantic = compact_production_syntax(SEMANTIC_SOURCE).to_ascii_lowercase();
     for removed in [
         "compiledalphaanaloginvocation",
+        "compiledalpha-analoginvocation",
         "alpha_analog_invocations",
         "compile_alpha_analog_invocations",
     ] {

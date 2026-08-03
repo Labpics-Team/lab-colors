@@ -3315,7 +3315,8 @@ pub fn resolve_named_set(
             Some(invocation) if invocation.declaration_ordinal < declaration_ordinal => {
                 return Err(ResolveSetError {
                     state: ResolveSetErrorState::Internal(SolveFailure::InternalInvariant(
-                        "compiled alpha-analog invocation order drifted behind declarations".into(),
+                        "compiled point-representation invocation order drifted behind declarations"
+                            .into(),
                     )),
                 });
             }
@@ -3331,7 +3332,7 @@ pub fn resolve_named_set(
     if point_invocations.next().is_some() {
         return Err(ResolveSetError {
             state: ResolveSetErrorState::Internal(SolveFailure::InternalInvariant(
-                "compiled alpha-analog invocation points outside declarations".into(),
+                "compiled point-representation invocation points outside declarations".into(),
             )),
         });
     }
