@@ -55,10 +55,75 @@ impl AdmittedOpacityV1 {
         f64::from_bits(self.0)
     }
 
+    /// Непосредственный binary64 predecessor внутри канонического `[0,1]`.
+    pub(crate) const fn predecessor(self) -> Option<Self> {
+        if self.0 == Self::TRANSPARENT.0 {
+            None
+        } else {
+            Some(Self(self.0 - 1))
+        }
+    }
+
     /// Композиция opacity-конструкторов замкнута в admitted `[0,1]`: два
     /// конечных неотрицательных множителя не могут создать новый invalid state.
     pub(crate) fn multiply(self, rhs: Self) -> Self {
         Self((self.value() * rhs.value()).to_bits())
+    }
+}
+
+/// Typed отказ admission замкнутого opacity-domain.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum OpacityDomainAdmissionErrorV1 {
+    /// Нижняя граница сама не является допустимой opacity.
+    InvalidLower(OpacityAdmissionErrorV1),
+    /// Верхняя граница сама не является допустимой opacity.
+    InvalidUpper(OpacityAdmissionErrorV1),
+    /// Замкнутый интервал был объявлен в обратном порядке.
+    Reversed,
+}
+
+/// Непустой замкнутый interval допустимых straight-alpha значений.
+///
+/// Fixed opacity представляется тем же типом с равными границами: физический
+/// слой не получает второй variant и не может случайно применить recourse к
+/// числу, которое клиент объявил фиксированным.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct OpacityDomainV1 {
+    lower: AdmittedOpacityV1,
+    upper: AdmittedOpacityV1,
+}
+
+impl OpacityDomainV1 {
+    pub(crate) fn try_new(lower: f64, upper: f64) -> Result<Self, OpacityDomainAdmissionErrorV1> {
+        let lower =
+            AdmittedOpacityV1::new(lower).map_err(OpacityDomainAdmissionErrorV1::InvalidLower)?;
+        let upper =
+            AdmittedOpacityV1::new(upper).map_err(OpacityDomainAdmissionErrorV1::InvalidUpper)?;
+        Self::try_from_admitted(lower, upper)
+    }
+
+    fn try_from_admitted(
+        lower: AdmittedOpacityV1,
+        upper: AdmittedOpacityV1,
+    ) -> Result<Self, OpacityDomainAdmissionErrorV1> {
+        // Для канонических неотрицательных finite binary64 в `[0,1]` unsigned
+        // bit order совпадает с числовым; сравнение не создаёт float-policy.
+        if lower.bits() > upper.bits() {
+            return Err(OpacityDomainAdmissionErrorV1::Reversed);
+        }
+        Ok(Self { lower, upper })
+    }
+
+    pub(crate) const fn lower(self) -> AdmittedOpacityV1 {
+        self.lower
+    }
+
+    pub(crate) const fn upper(self) -> AdmittedOpacityV1 {
+        self.upper
+    }
+
+    pub(crate) const fn contains(self, opacity: AdmittedOpacityV1) -> bool {
+        self.lower.bits() <= opacity.bits() && opacity.bits() <= self.upper.bits()
     }
 }
 
@@ -131,7 +196,45 @@ pub(crate) fn source_over_evaluation_count() -> usize {
 
 #[cfg(test)]
 mod tests {
-    use super::AdmittedOpacityV1;
+    use super::{
+        AdmittedOpacityV1, OpacityAdmissionErrorV1, OpacityDomainAdmissionErrorV1, OpacityDomainV1,
+    };
+
+    #[test]
+    fn opacity_domain_rejects_invalid_or_reversed_boundaries_before_execution() {
+        assert_eq!(
+            OpacityDomainV1::try_new(f64::NAN, 1.0),
+            Err(OpacityDomainAdmissionErrorV1::InvalidLower(
+                OpacityAdmissionErrorV1::NonFinite,
+            )),
+        );
+        assert_eq!(
+            OpacityDomainV1::try_new(0.0, 1.0 + f64::EPSILON),
+            Err(OpacityDomainAdmissionErrorV1::InvalidUpper(
+                OpacityAdmissionErrorV1::OutsideUnitInterval,
+            )),
+        );
+        assert_eq!(
+            OpacityDomainV1::try_new(0.75, 0.25),
+            Err(OpacityDomainAdmissionErrorV1::Reversed),
+        );
+    }
+
+    #[test]
+    fn opacity_domain_canonicalises_zero_and_represents_fixed_without_a_second_type() {
+        let domain = OpacityDomainV1::try_new(-0.0, 1.0).unwrap();
+        assert_eq!(domain.lower().bits(), 0.0_f64.to_bits());
+        assert_eq!(domain.upper(), AdmittedOpacityV1::OPAQUE);
+
+        let fixed = OpacityDomainV1::try_new(0.375, 0.375).unwrap();
+        assert_eq!(fixed.lower(), fixed.upper());
+        assert_eq!(fixed.lower().value().to_bits(), 0.375_f64.to_bits());
+
+        let bounded = OpacityDomainV1::try_new(0.25, 0.75).unwrap();
+        assert!(bounded.contains(AdmittedOpacityV1::new(0.5).unwrap()));
+        assert!(!bounded.contains(AdmittedOpacityV1::TRANSPARENT));
+        assert!(!bounded.contains(AdmittedOpacityV1::OPAQUE));
+    }
 
     #[test]
     fn admitted_opacity_multiplication_is_closed_at_boundaries_and_underflow() {
@@ -145,5 +248,13 @@ mod tests {
         let underflow = smallest_subnormal.multiply(half);
         assert_eq!(underflow.value(), 0.0);
         assert_eq!(underflow.bits(), 0.0_f64.to_bits());
+    }
+
+    #[test]
+    fn admitted_opacity_predecessor_is_exact_and_stays_inside_the_domain() {
+        assert_eq!(AdmittedOpacityV1::TRANSPARENT.predecessor(), None);
+        let predecessor = AdmittedOpacityV1::OPAQUE.predecessor().unwrap();
+        assert_eq!(predecessor.bits(), 1.0_f64.to_bits() - 1);
+        assert!(predecessor.value() < 1.0);
     }
 }

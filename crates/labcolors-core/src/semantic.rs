@@ -2541,7 +2541,7 @@ fn resolve_solid_with_ui_floor(
 /// попасть в физический coordinator.
 fn resolve_rgba_inverted_admitted(
     solid_encoded: [f64; 3],
-    minimum_opacity: crate::composition::AdmittedOpacityV1,
+    opacity_domain: crate::composition::OpacityDomainV1,
     bg: &BgInput,
     vc: &ViewingConditions,
 ) -> PendingResolution {
@@ -2571,7 +2571,7 @@ fn resolve_rgba_inverted_admitted(
     };
     let verified = match crate::point_representation::resolve_exact_point_representation_v1(
         target,
-        minimum_opacity,
+        opacity_domain,
         backdrop,
     ) {
         Ok(verified) => verified,
@@ -2586,7 +2586,7 @@ fn resolve_rgba_inverted_admitted(
     let actual_opacity = verified.opacity();
     let actual_alpha = actual_opacity.value();
     // Резолвер возвращает тот же binary64 либо строго больший точный пол.
-    let alpha_coerced = actual_alpha > minimum_opacity.value();
+    let alpha_coerced = actual_alpha > opacity_domain.lower().value();
     finish_rgba_from_certificate(
         verified.source(),
         actual_alpha,
@@ -2610,7 +2610,9 @@ fn resolve_rgba_inverted(
         .ok_or_else(|| {
             SolveFailure::InvalidInput("alpha-analog alpha must be finite and inside (0, 1]".into())
         })?;
-    resolve_rgba_inverted_admitted(solid_encoded, opacity, bg, vc)
+    let domain = crate::composition::OpacityDomainV1::try_new(opacity.value(), 1.0)
+        .map_err(|_| SolveFailure::InternalInvariant("invalid test opacity domain".into()))?;
+    resolve_rgba_inverted_admitted(solid_encoded, domain, bg, vc)
 }
 
 /// Собрать [`Resolved::Translucent`] из эмитируемых тинта и альфы: вывести их
@@ -2953,7 +2955,7 @@ pub struct NamedRoleTable {
 struct CompiledPointRepresentationInvocationV1 {
     declaration_ordinal: usize,
     target: LadderTint,
-    minimum_opacity: crate::composition::AdmittedOpacityV1,
+    opacity_domain: crate::composition::OpacityDomainV1,
 }
 
 #[cfg(test)]
@@ -2975,7 +2977,7 @@ fn point_representation_plan_compilation_count() -> usize {
 
 impl CompiledPointRepresentationInvocationV1 {
     fn resolve(self, bg: &BgInput, vc: &ViewingConditions) -> PendingResolution {
-        resolve_rgba_inverted_admitted(self.target.for_vc(vc), self.minimum_opacity, bg, vc)
+        resolve_rgba_inverted_admitted(self.target.for_vc(vc), self.opacity_domain, bg, vc)
     }
 }
 
@@ -3206,9 +3208,9 @@ impl NamedRoleTable {
             let RoleSpec::AlphaAnalog { of, alpha } = *spec else {
                 continue;
             };
-            let minimum_opacity = crate::composition::AdmittedOpacityV1::new(alpha)
+            let opacity_domain = crate::composition::OpacityDomainV1::try_new(alpha, 1.0)
                 .ok()
-                .filter(|opacity| opacity.value() > 0.0)
+                .filter(|domain| domain.lower().value() > 0.0)
                 .ok_or(AlphaAnalogCompileErrorV1 {
                     declaration_ordinal,
                     value: alpha,
@@ -3216,7 +3218,7 @@ impl NamedRoleTable {
             invocations.push(CompiledPointRepresentationInvocationV1 {
                 declaration_ordinal,
                 target: of,
-                minimum_opacity,
+                opacity_domain,
             });
         }
         debug_assert!(
@@ -4026,6 +4028,19 @@ mod tests {
             table.point_representation_invocations[0].declaration_ordinal,
             1
         );
+        assert_eq!(
+            table.point_representation_invocations[0]
+                .opacity_domain
+                .lower()
+                .bits(),
+            0.5_f64.to_bits(),
+        );
+        assert_eq!(
+            table.point_representation_invocations[0]
+                .opacity_domain
+                .upper(),
+            crate::composition::AdmittedOpacityV1::OPAQUE,
+        );
 
         crate::composition::reset_source_over_evaluation_count();
         let set = resolve_named_set(
@@ -4167,7 +4182,7 @@ mod tests {
             let named = named[0].1.translucent().unwrap();
             let physical = crate::point_representation::resolve_exact_point_representation_v1(
                 target,
-                crate::composition::AdmittedOpacityV1::new(requested_alpha).unwrap(),
+                crate::composition::OpacityDomainV1::try_new(requested_alpha, 1.0).unwrap(),
                 backdrop,
             )
             .unwrap();
