@@ -871,6 +871,10 @@ test("publish accepts only canonical exact-SHA workflow runs and their immutable
   assert.match(publish, /file: "ci\.yml"[\s\S]*path: "\.github\/workflows\/ci\.yml"/);
   assert.match(
     publish,
+    /ci-worker\.yml@0ca9d683856e8c92e3192abe9bc054d045d355e2"[\s\S]*sha: "0ca9d683856e8c92e3192abe9bc054d045d355e2"/,
+  );
+  assert.match(
+    publish,
     /file: "native-conformance\.yml"[\s\S]*path: "\.github\/workflows\/native-conformance\.yml"/,
   );
   assert.match(publish, /head_sha: expectedSha/);
@@ -901,7 +905,7 @@ test("publish accepts only canonical exact-SHA workflow runs and their immutable
   assert.match(publish, /packedPackage\.name !== "@labpics\/colors"/);
   assert.match(
     publish,
-    /TARBALL_PATH: \$\{\{ steps\.verified-artifact\.outputs\.tarball \}\}[\s\S]*run: npm publish --ignore-scripts "\$TARBALL_PATH"/,
+    /TARBALL_PATH: \$\{\{ steps\.verified-artifact\.outputs\.tarball \}\}[\s\S]*run: npm publish --ignore-scripts --@labpics:registry=https:\/\/registry\.npmjs\.org "\$TARBALL_PATH"/,
   );
   assert.doesNotMatch(publish, /wasm-pack|npm ci|release:verify|actions\/upload-artifact|npm pack/);
 
@@ -1147,6 +1151,12 @@ test("canonical-run guard executes against workflow-scoped runs and jobs", () =>
         event: "push",
         status: "completed",
         conclusion: "success",
+        referenced_workflows: [
+          {
+            path: "Labpics-Team/lab-colors/.github/workflows/ci-worker.yml@0ca9d683856e8c92e3192abe9bc054d045d355e2",
+            sha: "0ca9d683856e8c92e3192abe9bc054d045d355e2",
+          },
+        ],
       },
     ],
     nativeRuns: [
@@ -1159,6 +1169,12 @@ test("canonical-run guard executes against workflow-scoped runs and jobs", () =>
         event: "push",
         status: "completed",
         conclusion: "success",
+        referenced_workflows: [
+          {
+            path: "Labpics-Team/lab-colors/.github/workflows/native-conformance-worker.yml@7827981724ad75bfcf15bd5b2f74be2d5337d9b5",
+            sha: "7827981724ad75bfcf15bd5b2f74be2d5337d9b5",
+          },
+        ],
       },
     ],
     ciJobs: [
@@ -1217,6 +1233,14 @@ test("canonical-run guard executes against workflow-scoped runs and jobs", () =>
       readFileSync(output, "utf8"),
       "ci_run_id=101\nci_run_attempt=3\nnative_run_id=202\n",
     );
+
+    const missingWorkerIdentity = structuredClone(fixtures);
+    delete missingWorkerIdentity.ciRuns[1].referenced_workflows;
+    assert.throws(() => execute(missingWorkerIdentity), /Command failed/u);
+
+    const wrongWorkerIdentity = structuredClone(fixtures);
+    wrongWorkerIdentity.ciRuns[1].referenced_workflows[0].sha = "b".repeat(40);
+    assert.throws(() => execute(wrongWorkerIdentity), /Command failed/u);
 
     const wrongRunJobs = structuredClone(fixtures);
     wrongRunJobs.ciJobs = wrongRunJobs.ciJobs.filter((job) =>

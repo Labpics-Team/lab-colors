@@ -39,6 +39,14 @@ permissions:
 jobs:
   publish:
     runs-on: { group: labpics-ci-sandbox, labels: [labpics-ci-gvisor-v1] }
+    # Environment secrets are resolved for this job. Keep the trust boundary
+    # intrinsic to the immutable worker so PR/workflow_call/wrong-repository
+    # invocations are skipped before `npm-publish` can expose NPM_TOKEN.
+    if: >-
+      github.repository == 'Labpics-Team/lab-colors' &&
+      github.event_name == 'push' &&
+      github.ref_type == 'tag' &&
+      startsWith(github.ref_name, 'colors-v')
     # 10 = двойной worst successful publish receipt перед cutover, округлённый
     # вверх до пяти минут; менять только после history-replay.
     timeout-minutes: 10
@@ -126,6 +134,10 @@ jobs:
               key: "ci",
               file: "ci.yml",
               path: ".github/workflows/ci.yml",
+              worker: {
+                path: "Labpics-Team/lab-colors/.github/workflows/ci-worker.yml@0ca9d683856e8c92e3192abe9bc054d045d355e2",
+                sha: "0ca9d683856e8c92e3192abe9bc054d045d355e2",
+              },
               requiredJobs: [
                 "Node 22 consumer floor",
                 "MSRV workspace check",
@@ -140,6 +152,10 @@ jobs:
               key: "native",
               file: "native-conformance.yml",
               path: ".github/workflows/native-conformance.yml",
+              worker: {
+                path: "Labpics-Team/lab-colors/.github/workflows/native-conformance-worker.yml@7827981724ad75bfcf15bd5b2f74be2d5337d9b5",
+                sha: "7827981724ad75bfcf15bd5b2f74be2d5337d9b5",
+              },
               requiredJobs: [
                 "swift conformance (self-hosted Linux, pinned toolchain)",
               ],
@@ -196,6 +212,18 @@ jobs:
             if (!(run.status === "completed" && run.conclusion === "success")) {
               throw new Error(`${spec.path} run ${run.id}: ${run.status}/${run.conclusion ?? "none"}`);
             }
+            const references = run.referenced_workflows;
+            if (!Array.isArray(references) || references.length !== 1) {
+              throw new Error(
+                `${spec.path} run ${run.id}: expected exactly one immutable worker reference`,
+              );
+            }
+            const [reference] = references;
+            if (reference?.path !== spec.worker.path || reference?.sha !== spec.worker.sha) {
+              throw new Error(
+                `${spec.path} run ${run.id}: worker reference does not match the admitted worker`,
+              );
+            }
             return run;
           }
 
@@ -206,12 +234,13 @@ jobs:
             );
             const failures = [];
             for (const name of spec.requiredJobs) {
-              // Caller/worker-схема публикует имя как «<caller-job> / <job>»;
-              // суффиксная форма покрывает её и легаси-прогоны разом, а
-              // требование ровно одного совпадения ниже ловит неоднозначность.
-              const matches = jobs.filter((job) =>
-                (job.name === name || job.name.endsWith(` / ${name}`)) &&
-                Number(job.run_id) === Number(run.id));
+              // GitHub добавляет слева имена каждого reusable-caller. Последний
+              // сегмент — каноничное имя worker-job независимо от глубины вызова;
+              // run path, run_id и ровно одно совпадение замыкают его identity.
+              const matches = jobs.filter((job) => {
+                const workerName = job.name.split(" / ").at(-1);
+                return workerName === name && Number(job.run_id) === Number(run.id);
+              });
               if (matches.length !== 1) {
                 failures.push(`${name}: expected one job in run ${run.id}, got ${matches.length}`);
                 continue;
@@ -900,4 +929,4 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           TARBALL_PATH: ${{ steps.verified-artifact.outputs.tarball }}
-        run: npm publish --ignore-scripts "$TARBALL_PATH"
+        run: npm publish --ignore-scripts --@labpics:registry=https://registry.npmjs.org "$TARBALL_PATH"
