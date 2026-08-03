@@ -113,16 +113,17 @@ CC=/usr/local/bin/gcc CFLAGS="$common_cflags" LDFLAGS="$common_ldflags" \
 /usr/bin/make install
 
 cd "$workspace/proof/region/v1/arb/evaluator"
-# The evaluator includes FLINT headers, whose attribute-guarded inlines
-# require the GNU dialect; the dependency chain is built with -std=gnu17
-# above, so the final link uses the same dialect while -Wall -Wextra
-# -Werror -pedantic keep the evaluator's own C diagnostics strict.
+# The pinned GMP/MPFR/FLINT headers enter as one system include directory:
+# assert-enabled FLINT 3.6.0 degrades FLINT_UNUSED(x) to a bare parameter,
+# which -Wextra diagnoses inside flint_rand_clear no matter which C dialect
+# is selected.  System-header status scopes diagnostics to the evaluator's
+# own sources, where -Wall -Wextra -Werror -pedantic stay fully strict.
 /usr/local/bin/gcc \
     -O2 -g0 -fno-ident -fno-fast-math -ffp-contract=off -fno-lto \
     -march=x86-64 -mtune=generic \
     -ffile-prefix-map=/build=. -fdebug-prefix-map=/build=. \
     -std=gnu17 -Wall -Wextra -Werror -pedantic \
-    -I. -I"$prefix/include" \
+    -I. -isystem "$prefix/include" \
     main.c wire.c hash.c interval.c region.c "$inputs/formula.generated.c" \
     -static -Wl,--build-id=none -fno-lto \
     "$prefix/lib/libflint.a" "$prefix/lib/libmpfr.a" "$prefix/lib/libgmp.a" \

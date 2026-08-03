@@ -239,10 +239,16 @@ class ArbBuildRecipeTests(unittest.TestCase):
             "-ffp-contract=off",
             "-fno-lto",
             "-std=gnu17",
-            # The evaluator includes FLINT headers whose attribute-guarded
-            # inlines only diagnose cleanly in the GNU dialect; GCC 15 turns
-            # the strict-C dialect's header noise into a -Werror failure.
+            # One strict dialect for the whole chain: the dependency libraries
+            # are built with gnu17 above, and the evaluator keeps -Wall
+            # -Wextra -Werror -pedantic fully strict on its own sources.
             "-std=gnu17 -Wall -Wextra -Werror -pedantic",
+            # Assert-enabled FLINT 3.6.0 degrades FLINT_UNUSED(x) to a bare
+            # parameter, which -Wextra diagnoses inside flint_rand_clear in
+            # any dialect; the pinned dependency headers therefore enter as
+            # one system include directory while the evaluator's own headers
+            # stay under -I. with full diagnostics.
+            '-I. -isystem "$prefix/include"',
             "-march=x86-64",
             "-mtune=generic",
             "-Wl,--build-id=none",
@@ -265,6 +271,9 @@ class ArbBuildRecipeTests(unittest.TestCase):
         ):
             with self.subTest(forbidden=forbidden):
                 self.assertNotIn(forbidden, source)
+        # Reverting the dependency headers to a regular include would turn
+        # FLINT's assert-mode header diagnostics back into -Werror failures.
+        self.assertNotIn('-I"$prefix/include"', source)
 
         self.assertIn(
             'if ! /usr/bin/readelf -l "$build/arb-evaluator-v1" '
