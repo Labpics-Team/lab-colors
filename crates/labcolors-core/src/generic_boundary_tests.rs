@@ -542,7 +542,7 @@ fn finite_target_intent_has_no_dead_source_axis() {
     let target_impl = source_scope(
         PROGRAM_SESSION_SOURCE,
         "impl Target {",
-        "/// One typed target/candidate assignment",
+        "/// Ошибка admission явной последовательности кандидатов одной цели.",
     );
     assert!(
         target_impl
@@ -558,7 +558,7 @@ fn finite_target_intent_has_no_dead_source_axis() {
 }
 
 #[test]
-fn joint_module_contains_only_the_canonical_finite_order_admission() {
+fn joint_module_contains_only_compiler_owned_selection_materialization() {
     for retired in [
         "CandidateOrdinalV1",
         "JointPointEvaluatorV1",
@@ -582,14 +582,15 @@ fn joint_module_contains_only_the_canonical_finite_order_admission() {
     for canonical in [
         "FiniteDomainOrdinalV1",
         "NonEmptyFiniteDomainCardinalitiesV1",
+        "BoundFiniteTargetPreferenceV1",
+        "BoundFiniteSelectionReleaseV1",
         "AdmittedFiniteJointOrderV1",
-        "FiniteJointOrderAdmissionErrorV1",
-        "FiniteJointOrderErrorV1",
-        "admit_finite_joint_order_v1",
+        "FiniteJointCompilationErrorV1",
+        "compile_finite_joint_order_v1",
     ] {
         assert!(
             contains_rust_identifier(JOINT_SOURCE, canonical),
-            "joint.rs must retain the sole Program order-admission primitive `{canonical}`",
+            "joint.rs must retain the sole compiler materialisation primitive `{canonical}`",
         );
     }
     assert!(
@@ -605,11 +606,11 @@ fn joint_module_contains_only_the_canonical_finite_order_admission() {
     assert!(
         !contains_rust_identifier(JOINT_SOURCE, "EmptyDomain")
             && !contains_rust_identifier(PROGRAM_SOURCE, "EmptyDomain"),
-        "a finite domain is admitted as non-empty before joint-order admission",
+        "a finite domain is admitted as non-empty before selection materialisation",
     );
     assert!(
         !JOINT_SOURCE.contains("unreachable!") && !JOINT_SOURCE.contains("panic!"),
-        "order admission must type internal drift instead of exposing a panic route",
+        "selection materialisation must type internal drift instead of exposing a panic route",
     );
     for required in [
         "AdmittedCompiledJointSpaceV1",
@@ -640,6 +641,33 @@ fn joint_module_contains_only_the_canonical_finite_order_admission() {
     assert!(
         !contains_rust_identifier(PROGRAM_SESSION_SOURCE, "CompiledJointSelectionV1"),
         "runtime must receive only a sealed joint space derived from its compiled targets",
+    );
+}
+
+#[test]
+fn selection_authority_is_one_release_not_authored_joint_tuples() {
+    for retired in [
+        "DeclaredJointSelectionV1",
+        "JointCandidateStateV1",
+        "TargetCandidateChoiceV1",
+        "set_joint_selection",
+        "with_joint_selection",
+    ] {
+        assert!(
+            !contains_rust_identifier(PROGRAM_SESSION_SOURCE, retired)
+                && !contains_rust_identifier(PROGRAM_SOURCE, retired),
+            "direct-authored joint tuple authority must not survive through `{retired}`",
+        );
+    }
+    for required in ["SelectionReleaseV1", "TargetPreferenceV1"] {
+        assert!(
+            contains_rust_identifier(PROGRAM_SESSION_SOURCE, required),
+            "the Program compiler must receive the sole selection authority `{required}`",
+        );
+    }
+    assert!(
+        JOINT_SOURCE.contains("compile_finite_joint_order_v1"),
+        "the complete joint order must be compiler materialisation, not authored data",
     );
 }
 
@@ -1690,11 +1718,16 @@ fn program_identity_binds_lcs_releases_only_through_lcs_constraint_content() {
         "DOMAIN_V6",
         "PROGRAM_SCHEMA_V6",
         "compile_program_content_identity_v6",
+        "ProgramContentIdentityV7",
+        "ContentIdentityV7",
+        "DOMAIN_V7",
+        "PROGRAM_SCHEMA_V7",
+        "compile_program_content_identity_v7",
     ] {
         for (path, source) in identity_sources {
             assert!(
                 !contains_rust_identifier(source, retired),
-                "the V7 content-address cut must not retain legacy identity symbol `{retired}` in {path}",
+                "the V8 content-address cut must not retain legacy identity symbol `{retired}` in {path}",
             );
         }
     }
@@ -1704,13 +1737,14 @@ fn program_identity_binds_lcs_releases_only_through_lcs_constraint_content() {
     assert!(!PROGRAM_IDENTITY_SOURCE.contains("labcolors.program-content-identity.v4"));
     assert!(!PROGRAM_IDENTITY_SOURCE.contains("labcolors.program-content-identity.v5"));
     assert!(!PROGRAM_IDENTITY_SOURCE.contains("labcolors.program-content-identity.v6"));
+    assert!(!PROGRAM_IDENTITY_SOURCE.contains("labcolors.program-content-identity.v7"));
     for required in [
-        "const DOMAIN_V7: &[u8] = b\"labcolors.program-content-identity.v7\\0\";",
-        "pub(super) const PROGRAM_SCHEMA_V7: u8 = 7;",
+        "const DOMAIN_V8: &[u8] = b\"labcolors.program-content-identity.v8\\0\";",
+        "pub(super) const PROGRAM_SCHEMA_V8: u8 = 8;",
     ] {
         assert!(
             PROGRAM_IDENTITY_SOURCE.contains(required),
-            "the V7 content-address type must bind its exact domain and schema tag; missing `{required}`",
+            "the V8 content-address type must bind its exact domain and schema tag; missing `{required}`",
         );
     }
 
@@ -1836,10 +1870,10 @@ fn cold_program_normalization_reuses_owned_unordered_buffers() {
         .join(" ");
     for required in [
         "authored_targets: &mut [Target]",
-        "authored_selection: Option<&mut DeclaredJointSelectionV1>",
+        "selection_release: Option<&SelectionReleaseV1>",
         "let TargetIntentV1::Finite(domain) = &mut target.intent",
         "let candidates = domain.candidates_mut()",
-        "authored_state .choices .sort_unstable_by_key",
+        "binary_search_by_key(&objective.target(), |target| target.id)",
         "authored: &mut [OutputBinding]",
     ] {
         assert!(
@@ -1849,7 +1883,6 @@ fn cold_program_normalization_reuses_owned_unordered_buffers() {
     }
     for forbidden in [
         "candidates.extend_from_slice(authored_candidates)",
-        "choices.extend_from_slice(&authored_state.choices)",
         "authored.extend_from_slice(authored_outputs)",
     ] {
         assert!(

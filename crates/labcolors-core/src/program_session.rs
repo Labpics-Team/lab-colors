@@ -58,8 +58,9 @@ use crate::family_artifact::{
     FamilyArtifactContractErrorV2, FamilyExecutionBindingsV2,
 };
 use crate::joint::{
-    AdmittedFiniteJointOrderV1, FiniteDomainOrdinalV1, FiniteJointOrderAdmissionErrorV1,
-    FiniteJointOrderErrorV1, NonEmptyFiniteDomainCardinalitiesV1, admit_finite_joint_order_v1,
+    AdmittedFiniteJointOrderV1, BoundFiniteSelectionReleaseV1, BoundFiniteTargetPreferenceV1,
+    FiniteDomainOrdinalV1, FiniteJointCompilationErrorV1, NonEmptyFiniteDomainCardinalitiesV1,
+    compile_finite_joint_order_v1,
 };
 use crate::lcs_occurrence::{AppearanceContextId, ColorSignal};
 use crate::observation::{
@@ -76,7 +77,7 @@ use crate::wcag22::Wcag22CriterionV1;
 
 #[path = "program_identity.rs"]
 mod identity;
-pub(crate) use identity::ProgramContentIdentityV7;
+pub(crate) use identity::ProgramContentIdentityV8;
 #[cfg(test)]
 pub(crate) use identity::edge_role_count_for_test as program_identity_edge_role_count_for_test;
 #[cfg(test)]
@@ -175,8 +176,8 @@ pub enum FinitePaintDomainAdmissionErrorV1 {
 
 /// A non-empty closed set of atomic Paint candidates.
 ///
-/// Candidate order is authored data only until the declared joint order binds
-/// it; an empty set is structurally impossible after admission.
+/// Declaration order has no selection meaning; SelectionRelease references
+/// every opaque candidate explicitly. An empty set is impossible after admission.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FinitePaintDomainV1(Vec<TargetCandidateV1>);
 
@@ -237,57 +238,111 @@ impl Target {
     }
 }
 
-/// One typed target/candidate assignment inside a declared joint state.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct TargetCandidateChoiceV1 {
-    target: TargetId,
-    candidate: TargetCandidateId,
+/// Ошибка admission явной последовательности кандидатов одной цели.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TargetPreferenceAdmissionErrorV1 {
+    EmptyCandidates {
+        target: TargetId,
+    },
+    DuplicateCandidate {
+        target: TargetId,
+        first: usize,
+        duplicate: usize,
+        candidate: TargetCandidateId,
+    },
 }
 
-impl TargetCandidateChoiceV1 {
-    pub const fn new(target: TargetId, candidate: TargetCandidateId) -> Self {
-        Self { target, candidate }
+/// Одна лексикографическая objective общего SelectionRelease.
+///
+/// Target и candidates являются opaque ключами. Смысл имеет только явно
+/// объявленный порядок candidates; числовые значения ID и порядок деклараций
+/// Program в selection не участвуют.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TargetPreferenceV1 {
+    target: TargetId,
+    candidates: Vec<TargetCandidateId>,
+}
+
+impl TargetPreferenceV1 {
+    pub fn try_new(
+        target: TargetId,
+        candidates: Vec<TargetCandidateId>,
+    ) -> Result<Self, TargetPreferenceAdmissionErrorV1> {
+        if candidates.is_empty() {
+            return Err(TargetPreferenceAdmissionErrorV1::EmptyCandidates { target });
+        }
+        for duplicate in 1..candidates.len() {
+            let candidate = candidates[duplicate];
+            let first_index = candidates[..duplicate]
+                .iter()
+                .position(|seen| *seen == candidate);
+            if let Some(first_index) = first_index {
+                return Err(TargetPreferenceAdmissionErrorV1::DuplicateCandidate {
+                    target,
+                    first: first_index,
+                    duplicate,
+                    candidate,
+                });
+            }
+        }
+        Ok(Self { target, candidates })
     }
 
-    pub const fn target(self) -> TargetId {
+    pub const fn target(&self) -> TargetId {
         self.target
     }
 
-    pub const fn candidate(self) -> TargetCandidateId {
-        self.candidate
+    pub fn candidates(&self) -> &[TargetCandidateId] {
+        &self.candidates
     }
 }
 
-/// One complete joint candidate state. Choices are keyed, so authored choice
-/// order has no physical meaning.
+/// Ошибка admission единственной selection authority Program.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SelectionReleaseAdmissionErrorV1 {
+    EmptyObjectives,
+    DuplicateTarget {
+        first: usize,
+        duplicate: usize,
+        target: TargetId,
+    },
+}
+
+/// Одна versioned selection authority над полным hard-feasible множеством.
+///
+/// Objectives образуют точный лексикографический ключ. В V1 каждая objective
+/// задаёт порядок кандидатов одной finite Target; компилятор, а не клиент,
+/// материализует из них полный порядок декартовых joint states.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct JointCandidateStateV1 {
-    choices: Vec<TargetCandidateChoiceV1>,
+pub struct SelectionReleaseV1 {
+    objectives: Vec<TargetPreferenceV1>,
 }
 
-impl JointCandidateStateV1 {
-    pub const fn new(choices: Vec<TargetCandidateChoiceV1>) -> Self {
-        Self { choices }
+impl SelectionReleaseV1 {
+    pub fn try_new(
+        objectives: Vec<TargetPreferenceV1>,
+    ) -> Result<Self, SelectionReleaseAdmissionErrorV1> {
+        if objectives.is_empty() {
+            return Err(SelectionReleaseAdmissionErrorV1::EmptyObjectives);
+        }
+        for duplicate in 1..objectives.len() {
+            let target = objectives[duplicate].target();
+            let first_index = objectives[..duplicate]
+                .iter()
+                .position(|seen| seen.target() == target);
+            if let Some(first_index) = first_index {
+                return Err(SelectionReleaseAdmissionErrorV1::DuplicateTarget {
+                    first: first_index,
+                    duplicate,
+                    target,
+                });
+            }
+        }
+        Ok(Self { objectives })
     }
 
-    pub fn choices(&self) -> &[TargetCandidateChoiceV1] {
-        &self.choices
-    }
-}
-
-/// Explicit total order over every state in the finite product domain.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DeclaredJointSelectionV1 {
-    states: Vec<JointCandidateStateV1>,
-}
-
-impl DeclaredJointSelectionV1 {
-    pub const fn new(states: Vec<JointCandidateStateV1>) -> Self {
-        Self { states }
-    }
-
-    pub fn states(&self) -> &[JointCandidateStateV1] {
-        &self.states
+    pub fn objectives(&self) -> &[TargetPreferenceV1] {
+        &self.objectives
     }
 }
 
@@ -959,7 +1014,7 @@ where
     sources: Vec<Source>,
     targets: Vec<Target>,
     families: Vec<FamilyDeclarationV2>,
-    joint_selection: Option<DeclaredJointSelectionV1>,
+    selection_release: Option<SelectionReleaseV1>,
     observation_group: ObservationGroup,
     opacities: Vec<OpacityInput>,
     paints: Vec<Paint>,
@@ -994,7 +1049,7 @@ where
             sources,
             targets,
             families: Vec::new(),
-            joint_selection: None,
+            selection_release: None,
             observation_group,
             opacities,
             paints,
@@ -1008,11 +1063,9 @@ where
         }
     }
 
-    /// Attach the complete explicit order for all finite Target domains.
-    /// No order is synthesized from target IDs, candidate bytes, or
-    /// declaration position.
-    pub fn with_joint_selection(mut self, selection: DeclaredJointSelectionV1) -> Self {
-        self.joint_selection = Some(selection);
+    /// Связывает единственную selection authority с finite Target-доменами.
+    pub fn with_selection_release(mut self, release: SelectionReleaseV1) -> Self {
+        self.selection_release = Some(release);
         self
     }
 
@@ -1055,7 +1108,7 @@ pub(crate) struct CoreProgramDraftV1 {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CoreProgramDraftErrorV1 {
-    JointSelectionAlreadyDeclared,
+    SelectionReleaseAlreadyDeclared,
 }
 
 impl CoreProgramDraftV1 {
@@ -1088,14 +1141,14 @@ impl CoreProgramDraftV1 {
         self.program.families.push(family);
     }
 
-    pub(crate) fn set_joint_selection(
+    pub(crate) fn set_selection_release(
         &mut self,
-        selection: DeclaredJointSelectionV1,
+        release: SelectionReleaseV1,
     ) -> Result<(), CoreProgramDraftErrorV1> {
-        if self.program.joint_selection.is_some() {
-            return Err(CoreProgramDraftErrorV1::JointSelectionAlreadyDeclared);
+        if self.program.selection_release.is_some() {
+            return Err(CoreProgramDraftErrorV1::SelectionReleaseAlreadyDeclared);
         }
-        self.program.joint_selection = Some(selection);
+        self.program.selection_release = Some(release);
         Ok(())
     }
 
@@ -1381,26 +1434,26 @@ pub enum ProgramCompileError {
         output: OutputSlotId,
         paint: PaintId,
     },
-    MissingJointSelection,
-    JointSelectionWithoutTargets,
-    JointStateDuplicateTarget {
-        state: usize,
+    MissingSelectionRelease,
+    SelectionReleaseWithoutTargets,
+    SelectionObjectiveUnknownTarget {
+        objective: usize,
         target: TargetId,
     },
-    JointStateMissingTarget {
-        state: usize,
+    SelectionObjectiveMissingTarget {
         target: TargetId,
     },
-    JointStateUnknownTarget {
-        state: usize,
-        target: TargetId,
-    },
-    JointStateUnknownCandidate {
-        state: usize,
+    SelectionObjectiveUnknownCandidate {
+        objective: usize,
         target: TargetId,
         candidate: TargetCandidateId,
     },
-    InvalidJointOrder(FiniteJointOrderErrorV1),
+    SelectionObjectiveMissingCandidate {
+        objective: usize,
+        target: TargetId,
+        candidate: TargetCandidateId,
+    },
+    SelectionCardinalityOverflow,
     EmptyObservationGroup {
         group: ObservationGroupId,
     },
@@ -1785,7 +1838,7 @@ mod admitted_compiled_joint_space {
     use super::*;
 
     pub(super) enum AdmissionErrorV1 {
-        Authored(FiniteJointOrderErrorV1),
+        CardinalityOverflow,
         ResourceExhausted,
         InternalInvariant,
     }
@@ -1804,7 +1857,7 @@ mod admitted_compiled_joint_space {
     impl AdmittedCompiledJointSpaceV1 {
         pub(super) fn admit(
             targets: CompiledFiniteTargetsV1,
-            authored: Vec<Vec<FiniteDomainOrdinalV1>>,
+            release: BoundFiniteSelectionReleaseV1,
         ) -> Result<Self, AdmissionErrorV1> {
             let remaining_target_count = targets.len() - 1;
             let mut target_dimensions = targets.iter();
@@ -1823,15 +1876,15 @@ mod admitted_compiled_joint_space {
             }
             let cardinalities =
                 NonEmptyFiniteDomainCardinalitiesV1::new(first, rest.into_boxed_slice());
-            let order = match admit_finite_joint_order_v1(&cardinalities, authored) {
+            let order = match compile_finite_joint_order_v1(&cardinalities, &release) {
                 Ok(order) => order,
-                Err(FiniteJointOrderAdmissionErrorV1::Authored(error)) => {
-                    return Err(AdmissionErrorV1::Authored(error));
+                Err(FiniteJointCompilationErrorV1::CardinalityOverflow) => {
+                    return Err(AdmissionErrorV1::CardinalityOverflow);
                 }
-                Err(FiniteJointOrderAdmissionErrorV1::ResourceExhausted) => {
+                Err(FiniteJointCompilationErrorV1::ResourceExhausted) => {
                     return Err(AdmissionErrorV1::ResourceExhausted);
                 }
-                Err(FiniteJointOrderAdmissionErrorV1::InternalInvariant) => {
+                Err(FiniteJointCompilationErrorV1::InternalInvariant) => {
                     return Err(AdmissionErrorV1::InternalInvariant);
                 }
             };
@@ -1897,7 +1950,7 @@ where
     Evaluation: ProgramConstraintEvaluatorSetV1,
     ProgramConstraintInvocationOf<Evaluation>: Copy,
 {
-    content_identity: ProgramContentIdentityV7,
+    content_identity: ProgramContentIdentityV8,
     evaluator: Evaluation,
     families: Box<[FamilyDeclarationV2]>,
     required_family_releases: Box<[crate::family::SemanticFamilyReleaseIdV2]>,
@@ -1943,10 +1996,10 @@ where
 
     /// Контентный адрес Program в границах текущей схемы identity.
     ///
-    /// Opaque ID и порядок неупорядоченных объявлений исключены; явный joint
-    /// order входит в адрес. Адрес не подтверждает поколение владельца и не
-    /// заменяет revision-bound evidence.
-    pub fn content_identity(&self) -> ProgramContentIdentityV7 {
+    /// Opaque ID и порядок неупорядоченных объявлений исключены; semantic
+    /// sequence единственного SelectionRelease входит в адрес. Адрес не
+    /// подтверждает поколение владельца и не заменяет revision-bound evidence.
+    pub fn content_identity(&self) -> ProgramContentIdentityV8 {
         self.owner_generation.content_identity
     }
 
@@ -2686,7 +2739,7 @@ pub(crate) enum ProgramPointCausalConsideredStateV1 {
 /// одного моделируемого terminal root. Оно ничего не утверждает о пикселе
 /// браузера, восприятии или качестве цвета.
 pub(crate) struct ProgramPointCausalEvidenceV1<'report, State> {
-    content_identity: ProgramContentIdentityV7,
+    content_identity: ProgramContentIdentityV8,
     observation: &'report RevisionBoundObservationV1,
     record: &'report ProgramPointCausalRecordV1,
     steps: &'report [PointOccurrenceAbsenceStepV1],
@@ -2707,7 +2760,7 @@ where
             .unwrap_or_else(|| unreachable!("тип replay span запрещает пустой пересчёт"))
     }
 
-    pub(crate) const fn content_identity(&self) -> ProgramContentIdentityV7 {
+    pub(crate) const fn content_identity(&self) -> ProgramContentIdentityV8 {
         self.content_identity
     }
 
@@ -2765,7 +2818,7 @@ pub struct ProgramReportV1<Evaluation>
 where
     Evaluation: ProgramConstraintEvaluatorSetV1,
 {
-    content_identity: ProgramContentIdentityV7,
+    content_identity: ProgramContentIdentityV8,
     observation: RevisionBoundObservationV1,
     arena: ProgramEvaluationArenaLeaseV1<Evaluation>,
 }
@@ -2776,7 +2829,7 @@ where
 {
     /// Адрес содержимого Program, по которому построен report; это не
     /// идентификатор поколения и не runtime-authority.
-    pub const fn content_identity(&self) -> ProgramContentIdentityV7 {
+    pub const fn content_identity(&self) -> ProgramContentIdentityV8 {
         self.content_identity
     }
 
@@ -2878,8 +2931,8 @@ where
         &self.report.arena.storage.outputs
     }
 
-    /// Index inside the authored total order. `None` means this Program has no
-    /// finite targets and therefore performed validation only.
+    /// Индекс внутри compiler-ranked joint space. `None` означает, что Program
+    /// не содержит finite Targets и выполнял только проверку fixed graph.
     pub const fn selected_state_index(&self) -> Option<usize> {
         self.selected_state_index
     }
@@ -4792,7 +4845,7 @@ where
     let target_selection = compile_targets(
         &graph,
         &mut program.targets,
-        program.joint_selection.as_mut(),
+        program.selection_release.as_ref(),
     )?;
     let all_occurrence_contexts = compile_occurrence_contexts(&graph, &program.occurrences)?;
     let point_presentations = compile_point_presentations(
@@ -4822,7 +4875,7 @@ where
     let occurrence_contexts =
         compact_constraint_contexts(&all_occurrence_contexts, &mut constraints)?;
     let outputs = compile_outputs(&graph, &mut program.outputs)?;
-    let content_identity = identity::compile_program_content_identity_v7(&program)?;
+    let content_identity = identity::compile_program_content_identity_v8(&program)?;
     let families = program.families.into_boxed_slice();
     Ok(ProgramEpochV1 {
         content_identity,
@@ -5413,7 +5466,7 @@ struct LoweredConstraint<'a, Invocation> {
 fn compile_targets(
     graph: &CompiledAppearanceGraph,
     authored_targets: &mut [Target],
-    authored_selection: Option<&mut DeclaredJointSelectionV1>,
+    selection_release: Option<&SelectionReleaseV1>,
 ) -> Result<CompiledTargetSelectionV1, ProgramCompileError> {
     struct CanonicalFiniteTargetV1<'a> {
         id: TargetId,
@@ -5477,71 +5530,86 @@ fn compile_targets(
     }
 
     if compiled.is_empty() {
-        return match authored_selection {
+        return match selection_release {
             None => Ok(CompiledTargetSelectionV1::FixedOnly),
-            Some(_) => Err(ProgramCompileError::JointSelectionWithoutTargets),
+            Some(_) => Err(ProgramCompileError::SelectionReleaseWithoutTargets),
         };
     }
-    let Some(authored_selection) = authored_selection else {
-        return Err(ProgramCompileError::MissingJointSelection);
+    let Some(selection_release) = selection_release else {
+        return Err(ProgramCompileError::MissingSelectionRelease);
     };
 
-    let mut authored_tuples = Vec::new();
-    authored_tuples
-        .try_reserve_exact(authored_selection.states.len())
+    let mut bound_objectives = Vec::new();
+    bound_objectives
+        .try_reserve_exact(selection_release.objectives().len())
         .map_err(|_| ProgramCompileError::ResourceExhausted)?;
-    for (state_index, authored_state) in authored_selection.states.iter_mut().enumerate() {
-        authored_state
-            .choices
-            .sort_unstable_by_key(|choice| choice.target);
-        if let Some(target) = authored_state
-            .choices
-            .windows(2)
-            .find(|pair| pair[0].target == pair[1].target)
-            .map(|pair| pair[0].target)
-        {
-            return Err(ProgramCompileError::JointStateDuplicateTarget {
-                state: state_index,
-                target,
-            });
-        }
-        if let Some(choice) = authored_state.choices.iter().find(|choice| {
-            compiled
-                .binary_search_by_key(&choice.target, |target| target.id)
-                .is_err()
-        }) {
-            return Err(ProgramCompileError::JointStateUnknownTarget {
-                state: state_index,
-                target: choice.target,
-            });
-        }
-
-        let mut tuple = Vec::new();
-        tuple
-            .try_reserve_exact(compiled.len())
+    for (objective_index, objective) in selection_release.objectives().iter().enumerate() {
+        let dimension = compiled
+            .binary_search_by_key(&objective.target(), |target| target.id)
+            .map_err(|_| ProgramCompileError::SelectionObjectiveUnknownTarget {
+                objective: objective_index,
+                target: objective.target(),
+            })?;
+        let target = &compiled[dimension];
+        let mut ordinals = Vec::new();
+        ordinals
+            .try_reserve_exact(objective.candidates().len())
             .map_err(|_| ProgramCompileError::ResourceExhausted)?;
-        for target in &compiled {
-            let choice_index = authored_state
-                .choices
-                .binary_search_by_key(&target.id, |choice| choice.target)
-                .map_err(|_| ProgramCompileError::JointStateMissingTarget {
-                    state: state_index,
-                    target: target.id,
-                })?;
-            let choice = authored_state.choices[choice_index];
+        for candidate in objective.candidates().iter().copied() {
             let candidate_index = target
                 .domain
                 .candidates()
-                .binary_search_by_key(&choice.candidate, |candidate| candidate.id)
-                .map_err(|_| ProgramCompileError::JointStateUnknownCandidate {
-                    state: state_index,
-                    target: target.id,
-                    candidate: choice.candidate,
-                })?;
-            tuple.push(FiniteDomainOrdinalV1::new(candidate_index));
+                .binary_search_by_key(&candidate, |candidate| candidate.id)
+                .map_err(
+                    |_| ProgramCompileError::SelectionObjectiveUnknownCandidate {
+                        objective: objective_index,
+                        target: target.id,
+                        candidate,
+                    },
+                )?;
+            ordinals.push(FiniteDomainOrdinalV1::new(candidate_index));
         }
-        authored_tuples.push(tuple);
+        if ordinals.len() != target.domain.candidates().len() {
+            let candidate = target
+                .domain
+                .candidates()
+                .iter()
+                .map(|candidate| candidate.id())
+                .find(|candidate| !objective.candidates().contains(candidate))
+                .ok_or(ProgramCompileError::InternalInvariant)?;
+            return Err(ProgramCompileError::SelectionObjectiveMissingCandidate {
+                objective: objective_index,
+                target: target.id,
+                candidate,
+            });
+        }
+        bound_objectives.push(BoundFiniteTargetPreferenceV1::new(
+            dimension,
+            ordinals.into_boxed_slice(),
+        ));
     }
+    if bound_objectives.len() != compiled.len() {
+        let target = compiled
+            .iter()
+            .map(|target| target.id)
+            .find(|target| {
+                !selection_release
+                    .objectives()
+                    .iter()
+                    .any(|objective| objective.target() == *target)
+            })
+            .ok_or(ProgramCompileError::InternalInvariant)?;
+        return Err(ProgramCompileError::SelectionObjectiveMissingTarget { target });
+    }
+
+    let mut bound_objectives = bound_objectives.into_iter();
+    let first_objective = bound_objectives
+        .next()
+        .ok_or(ProgramCompileError::InternalInvariant)?;
+    let bound_release = BoundFiniteSelectionReleaseV1::new(
+        first_objective,
+        bound_objectives.collect::<Vec<_>>().into_boxed_slice(),
+    );
 
     let lower_target = |target: CanonicalFiniteTargetV1<'_>| {
         let mut candidates = Vec::new();
@@ -5577,10 +5645,10 @@ fn compile_targets(
         rest: rest.into_boxed_slice(),
     };
     let space =
-        AdmittedCompiledJointSpaceV1::admit(targets, authored_tuples).map_err(
+        AdmittedCompiledJointSpaceV1::admit(targets, bound_release).map_err(
             |error| match error {
-                CompiledJointSpaceAdmissionErrorV1::Authored(error) => {
-                    ProgramCompileError::InvalidJointOrder(error)
+                CompiledJointSpaceAdmissionErrorV1::CardinalityOverflow => {
+                    ProgramCompileError::SelectionCardinalityOverflow
                 }
                 CompiledJointSpaceAdmissionErrorV1::ResourceExhausted => {
                     ProgramCompileError::ResourceExhausted

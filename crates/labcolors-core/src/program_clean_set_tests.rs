@@ -158,10 +158,10 @@ fn finite_search_skips_dirty_and_freshly_rechecks_the_first_clean_state() {
         ]),
     );
     draft
-        .set_joint_selection(vec![
-            program::JointStateV1::new(vec![program::JointChoiceV1::new(TARGET, dirty_id)]),
-            program::JointStateV1::new(vec![program::JointChoiceV1::new(TARGET, clean_id)]),
-        ])
+        .set_selection_release(program::selection_release_for_test(vec![(
+            TARGET,
+            vec![dirty_id, clean_id],
+        )]))
         .unwrap();
     draft.push_surface_input_port(PORT);
     draft.push_solid_paint(PAINT, TARGET);
@@ -392,9 +392,10 @@ fn clean_family_fresh_recheck_failure_retains_the_presentation_subject() {
         )]),
     );
     draft
-        .set_joint_selection(vec![program::JointStateV1::new(vec![
-            program::JointChoiceV1::new(TARGET, candidate),
-        ])])
+        .set_selection_release(program::selection_release_for_test(vec![(
+            TARGET,
+            vec![candidate],
+        )]))
         .unwrap();
     draft.push_surface_input_port(PORT);
     draft.push_solid_paint(PAINT, TARGET);
@@ -444,7 +445,7 @@ fn clean_family_fresh_recheck_failure_retains_the_presentation_subject() {
     );
 }
 
-fn opaque_named_clean_identity(name: u32) -> program::ContentIdentityV7 {
+fn opaque_named_clean_identity(name: u32) -> program::ContentIdentityV8 {
     let source = program::SourceIdV1::new(name);
     let target = program::TargetIdV1::new(name);
     let port = program::SurfaceInputPortIdV1::new(name);
@@ -512,18 +513,17 @@ fn finite_clean_owner(colors: &[Srgb8]) -> program::OwnerV1 {
             )
         })
         .collect::<Vec<_>>();
-    let states = (0..colors.len())
-        .map(|index| {
-            program::JointStateV1::new(vec![program::JointChoiceV1::new(
-                TARGET,
-                program::TargetCandidateIdV1::new(index as u32 + 20),
-            )])
-        })
+    let preference = (0..colors.len())
+        .map(|index| program::TargetCandidateIdV1::new(index as u32 + 20))
         .collect::<Vec<_>>();
     let mut draft = program::DraftV1::new();
     draft.push_source(SOURCE, colors[0]);
     draft.push_finite_target(TARGET, finite_domain(candidates));
-    draft.set_joint_selection(states).unwrap();
+    draft
+        .set_selection_release(program::selection_release_for_test(vec![(
+            TARGET, preference,
+        )]))
+        .unwrap();
     draft.push_surface_input_port(PORT);
     draft.push_solid_paint(PAINT, TARGET);
     draft.push_input_surface(SURFACE, PORT);

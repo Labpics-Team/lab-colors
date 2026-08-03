@@ -102,16 +102,13 @@ fn finite_base_draft(
     let mut draft = program::DraftV1::new();
     draft.push_finite_target(TARGET, domain);
     draft
-        .set_joint_selection(
+        .set_selection_release(program::selection_release_for_test(vec![(
+            TARGET,
             candidates
                 .iter()
-                .map(|(candidate, _, _)| {
-                    program::JointStateV1::new(vec![program::JointChoiceV1::new(
-                        TARGET, *candidate,
-                    )])
-                })
+                .map(|(candidate, _, _)| *candidate)
                 .collect(),
-        )
+        )]))
         .unwrap();
     draft.push_solid_paint(PAINT, TARGET);
     draft.push_surface_input_port(PORT);

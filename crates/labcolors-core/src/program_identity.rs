@@ -7,16 +7,16 @@
 
 use super::*;
 
-const DOMAIN_V7: &[u8] = b"labcolors.program-content-identity.v7\0";
-// V7 резервирует фиксированную protocol boundary под type/family tag и полный
+const DOMAIN_V8: &[u8] = b"labcolors.program-content-identity.v8\0";
+// V8 резервирует фиксированную protocol boundary под type/family tag и полный
 // content digest. Каждый writer использует проверяемый push и отвергает
 // расширение схемы вместо усечения данных или аллокации на вершину.
-const HASH_BOUND_COLOR_BYTES_V7: usize = 1 + 1 + 32;
-const COLOR_CAPACITY: usize = HASH_BOUND_COLOR_BYTES_V7;
+const HASH_BOUND_COLOR_BYTES_V8: usize = 1 + 1 + 32;
+const COLOR_CAPACITY: usize = HASH_BOUND_COLOR_BYTES_V8;
 
 mod release_tag {
-    pub(super) const PROGRAM_SCHEMA_V7: u8 = 7;
-    pub(super) const DECLARED_TOTAL_ORDER_V1: u8 = 1;
+    pub(super) const PROGRAM_SCHEMA_V8: u8 = 8;
+    pub(super) const SELECTION_RELEASE_V1: u8 = 1;
     pub(super) const FRESH_FULL_RECHECK_V1: u8 = 1;
     pub(super) const ATOMIC_OBSERVATION_GROUP_V1: u8 = 1;
     pub(super) const ENCODED_PAINT_OUTPUT_ROUTING_V1: u8 = 1;
@@ -83,14 +83,14 @@ mod release_tag {
     pub(super) const MODELED_LCS_PROBE_FAMILY_V1: u8 = 7;
 }
 
-/// Устойчивый к коллизиям адрес канонизированного содержимого Program V7.
+/// Устойчивый к коллизиям адрес канонизированного содержимого Program V8.
 ///
 /// SHA-256 не делает адрес инъективным. Адрес не связывает пространства opaque
 /// ID и не подтверждает владельца, поколение либо revision.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(crate) struct ProgramContentIdentityV7([u8; 32]);
+pub(crate) struct ProgramContentIdentityV8([u8; 32]);
 
-impl ProgramContentIdentityV7 {
+impl ProgramContentIdentityV8 {
     pub(crate) const fn as_bytes(&self) -> &[u8; 32] {
         &self.0
     }
@@ -168,9 +168,9 @@ mod vertex_tag {
     pub(super) const CONSTRAINT_HARD: u8 = 14;
     pub(super) const CONSTRAINT_REPORT_ONLY: u8 = 15;
     pub(super) const OUTPUT: u8 = 16;
-    pub(super) const JOINT_SELECTION: u8 = 17;
-    pub(super) const JOINT_STATE: u8 = 18;
-    pub(super) const JOINT_CHOICE: u8 = 19;
+    pub(super) const SELECTION_RELEASE: u8 = 17;
+    pub(super) const SELECTION_OBJECTIVE: u8 = 18;
+    pub(super) const SELECTION_CANDIDATE: u8 = 19;
     pub(super) const PRESENTATION_ROOT: u8 = 20;
     pub(super) const PRESENTATION_TARGET: u8 = 21;
     pub(super) const FAMILY: u8 = 22;
@@ -203,10 +203,10 @@ declare_edge_roles_v1! {
     OccurrenceBackdropSurface = 11,
     VisibleUnary = 12,
     OutputPaint = 13,
-    SelectionState = 14,
-    StateChoice = 15,
-    ChoiceTarget = 16,
-    ChoiceCandidate = 17,
+    SelectionObjective = 14,
+    ObjectiveTarget = 15,
+    ObjectiveCandidate = 16,
+    PreferenceCandidate = 17,
     PresentationRootTerminal = 18,
     PresentationTargetRoot = 19,
     PresentationTargetOccurrence = 20,
@@ -374,14 +374,14 @@ where
 fn program_root_color() -> Result<VertexColorV1, ProgramCompileError> {
     let mut color = VertexColorV1::new(vertex_tag::PROGRAM);
     // Эти теги связывают адрес с версиями исполняемых законов: схемой Program,
-    // выбором по полному порядку, финальной перепроверкой, атомарным наблюдением,
+    // единственным SelectionRelease, финальной перепроверкой, атомарным наблюдением,
     // маршрутизацией кодированного `Paint` в output slot и моделируемым
     // представлением точки. Версии
     // производных возможностей связываются только с теми ограничениями,
     // которые их исполняют.
     for release in [
-        release_tag::PROGRAM_SCHEMA_V7,
-        release_tag::DECLARED_TOTAL_ORDER_V1,
+        release_tag::PROGRAM_SCHEMA_V8,
+        release_tag::SELECTION_RELEASE_V1,
         release_tag::FRESH_FULL_RECHECK_V1,
         release_tag::ATOMIC_OBSERVATION_GROUP_V1,
         release_tag::ENCODED_PAINT_OUTPUT_ROUTING_V1,
@@ -1054,28 +1054,41 @@ where
         graph.add_edge(vertex, paints.get(output.paint())?, EdgeRoleV1::OutputPaint)?;
     }
 
-    if let Some(selection) = &program.joint_selection {
-        let selection_vertex = graph.add_member(VertexColorV1::new(vertex_tag::JOINT_SELECTION))?;
-        for (state_index, state) in selection.states().iter().enumerate() {
-            let state_index =
-                u64::try_from(state_index).map_err(|_| ProgramCompileError::ResourceExhausted)?;
-            let mut state_color = VertexColorV1::new(vertex_tag::JOINT_STATE);
-            state_color.push_u64(state_index)?;
-            let state_vertex = graph.add_member(state_color)?;
-            graph.add_edge(selection_vertex, state_vertex, EdgeRoleV1::SelectionState)?;
-            for choice in state.choices() {
-                let choice_vertex =
-                    graph.add_member(VertexColorV1::new(vertex_tag::JOINT_CHOICE))?;
-                graph.add_edge(state_vertex, choice_vertex, EdgeRoleV1::StateChoice)?;
+    if let Some(release) = &program.selection_release {
+        let mut release_color = VertexColorV1::new(vertex_tag::SELECTION_RELEASE);
+        release_color.push_u8(release_tag::SELECTION_RELEASE_V1)?;
+        let release_vertex = graph.add_member(release_color)?;
+        for (objective_index, objective) in release.objectives().iter().enumerate() {
+            let objective_index = u64::try_from(objective_index)
+                .map_err(|_| ProgramCompileError::ResourceExhausted)?;
+            let mut objective_color = VertexColorV1::new(vertex_tag::SELECTION_OBJECTIVE);
+            objective_color.push_u64(objective_index)?;
+            let objective_vertex = graph.add_member(objective_color)?;
+            graph.add_edge(
+                release_vertex,
+                objective_vertex,
+                EdgeRoleV1::SelectionObjective,
+            )?;
+            graph.add_edge(
+                objective_vertex,
+                targets.get(objective.target())?,
+                EdgeRoleV1::ObjectiveTarget,
+            )?;
+            for (rank, candidate) in objective.candidates().iter().copied().enumerate() {
+                let rank =
+                    u64::try_from(rank).map_err(|_| ProgramCompileError::ResourceExhausted)?;
+                let mut preference_color = VertexColorV1::new(vertex_tag::SELECTION_CANDIDATE);
+                preference_color.push_u64(rank)?;
+                let preference_vertex = graph.add_member(preference_color)?;
                 graph.add_edge(
-                    choice_vertex,
-                    targets.get(choice.target())?,
-                    EdgeRoleV1::ChoiceTarget,
+                    objective_vertex,
+                    preference_vertex,
+                    EdgeRoleV1::ObjectiveCandidate,
                 )?;
                 graph.add_edge(
-                    choice_vertex,
-                    candidates.get((choice.target(), choice.candidate()))?,
-                    EdgeRoleV1::ChoiceCandidate,
+                    preference_vertex,
+                    candidates.get((objective.target(), candidate))?,
+                    EdgeRoleV1::PreferenceCandidate,
                 )?;
             }
         }
@@ -1388,7 +1401,7 @@ fn serialize_leaf(
             .and_then(|value| value.checked_add(color.as_slice().len()))
             .ok_or(ProgramCompileError::ResourceExhausted)
     })?;
-    let capacity = DOMAIN_V7
+    let capacity = DOMAIN_V8
         .len()
         .checked_add(16)
         .and_then(|value| value.checked_add(color_bytes))
@@ -1398,7 +1411,7 @@ fn serialize_leaf(
     output
         .try_reserve_exact(capacity)
         .map_err(|_| ProgramCompileError::ResourceExhausted)?;
-    output.extend_from_slice(DOMAIN_V7);
+    output.extend_from_slice(DOMAIN_V8);
     push_u64_bytes(&mut output, usize_as_u64(graph.colors.len())?);
     push_u64_bytes(&mut output, usize_as_u64(graph.edge_count)?);
 
@@ -1732,9 +1745,9 @@ fn canonical_preimage(graph: &CanonicalGraphV1) -> Result<Vec<u8>, ProgramCompil
     canonical_search(graph).map(|(preimage, _)| preimage)
 }
 
-pub(super) fn compile_program_content_identity_v7<Evaluation>(
+pub(super) fn compile_program_content_identity_v8<Evaluation>(
     program: &Program<Evaluation>,
-) -> Result<ProgramContentIdentityV7, ProgramCompileError>
+) -> Result<ProgramContentIdentityV8, ProgramCompileError>
 where
     Evaluation: ProgramConstraintEvaluatorSetV1,
     ProgramConstraintInvocationOf<Evaluation>: Copy,
@@ -1742,7 +1755,7 @@ where
     let graph = build_graph(program)?;
     let preimage = canonical_preimage(&graph)?;
     let digest = crate::sha256::digest(&preimage);
-    Ok(ProgramContentIdentityV7(*digest.as_bytes()))
+    Ok(ProgramContentIdentityV8(*digest.as_bytes()))
 }
 
 #[cfg(test)]

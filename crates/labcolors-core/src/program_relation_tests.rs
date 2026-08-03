@@ -77,9 +77,10 @@ fn finite_intrinsic_unary_draft(include_visible_assessment: bool) -> program::Dr
     let mut draft = program::DraftV1::new();
     draft.push_finite_target(target, domain);
     draft
-        .set_joint_selection(vec![program::JointStateV1::new(vec![
-            program::JointChoiceV1::new(target, candidate),
-        ])])
+        .set_selection_release(program::selection_release_for_test(vec![(
+            target,
+            vec![candidate],
+        )]))
         .unwrap();
     draft.push_solid_paint(paint, target);
     draft.push_surface_input_port(port);
@@ -177,9 +178,10 @@ fn intrinsic_relation_compares_source_but_retains_each_endpoints_full_alpha() {
         .unwrap(),
     );
     draft
-        .set_joint_selection(vec![program::JointStateV1::new(vec![
-            program::JointChoiceV1::new(candidate_target, candidate),
-        ])])
+        .set_selection_release(program::selection_release_for_test(vec![(
+            candidate_target,
+            vec![candidate],
+        )]))
         .unwrap();
     draft.push_solid_paint(reference_paint, reference_target);
     draft.push_solid_paint(candidate_paint, candidate_target);
@@ -389,16 +391,10 @@ fn both_relation_levels_select_the_matching_finite_candidate_before_fresh_captur
             .unwrap(),
         );
         draft
-            .set_joint_selection(vec![
-                program::JointStateV1::new(vec![program::JointChoiceV1::new(
-                    finite_target,
-                    mismatch,
-                )]),
-                program::JointStateV1::new(vec![program::JointChoiceV1::new(
-                    finite_target,
-                    matching,
-                )]),
-            ])
+            .set_selection_release(program::selection_release_for_test(vec![(
+                finite_target,
+                vec![mismatch, matching],
+            )]))
             .unwrap();
         draft.push_solid_paint(reference_paint, reference_target);
         draft.push_solid_paint(finite_paint, finite_target);
@@ -490,9 +486,10 @@ fn solver_dependent_reference_draft(visible: bool) -> program::DraftV1 {
     );
     draft.push_fixed_target(fixed_target, fixed_source);
     draft
-        .set_joint_selection(vec![program::JointStateV1::new(vec![
-            program::JointChoiceV1::new(finite_target, finite_candidate),
-        ])])
+        .set_selection_release(program::selection_release_for_test(vec![(
+            finite_target,
+            vec![finite_candidate],
+        )]))
         .unwrap();
     draft.push_solid_paint(finite_paint, finite_target);
     draft.push_solid_paint(fixed_paint, fixed_target);
@@ -533,7 +530,7 @@ fn directional_reference_cannot_move_with_solver_state() {
     );
 }
 
-fn relation_identity(offset: u32, reverse_candidates: bool) -> program::ContentIdentityV7 {
+fn relation_identity(offset: u32, reverse_candidates: bool) -> program::ContentIdentityV8 {
     let sources = [0, 1, 2].map(|index| program::SourceIdV1::new(offset + index));
     let targets = [0, 1, 2].map(|index| program::TargetIdV1::new(offset + 10 + index));
     let paints = [0, 1, 2].map(|index| program::PaintIdV1::new(offset + 20 + index));

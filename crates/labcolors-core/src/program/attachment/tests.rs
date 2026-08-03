@@ -12,9 +12,9 @@ use crate::family_artifact::{
 use crate::lcs_occurrence::ColorSignal;
 use crate::program::{
     AppearanceContextV1, ConstraintIdV1, DraftV1, FamilyIdV1, FamilySemanticReleaseV2,
-    FinitePaintDomainV1, JointChoiceV1, JointStateV1, PaintIdV1, PaintValueV1, ScenarioV1,
-    SourceIdV1, StateKindV1, SurfaceIdV1, SurfaceInputPortIdV1, SurroundV1, TargetCandidateIdV1,
-    TargetCandidateV1, TargetIdV1,
+    FinitePaintDomainV1, PaintIdV1, PaintValueV1, ScenarioV1, SourceIdV1, StateKindV1, SurfaceIdV1,
+    SurfaceInputPortIdV1, SurroundV1, TargetCandidateIdV1, TargetCandidateV1, TargetIdV1,
+    selection_release_for_test,
 };
 use crate::wcag22::Wcag22CriterionV1;
 use proptest::prelude::*;
@@ -1322,10 +1322,10 @@ fn allocator_owner() -> OwnerV1 {
         ]),
     );
     draft
-        .set_joint_selection(vec![
-            JointStateV1::new(vec![JointChoiceV1::new(TARGET, BLACK)]),
-            JointStateV1::new(vec![JointChoiceV1::new(TARGET, GRAY)]),
-        ])
+        .set_selection_release(selection_release_for_test(vec![(
+            TARGET,
+            vec![BLACK, GRAY],
+        )]))
         .unwrap();
     draft.push_surface_input_port(INPUT);
     draft.push_solid_paint(PAINT, TARGET);
@@ -1778,9 +1778,7 @@ fn selected_nonopaque_finite_paint_reaches_sink_and_render_authority_atomically(
         )]),
     );
     draft
-        .set_joint_selection(vec![JointStateV1::new(vec![JointChoiceV1::new(
-            TARGET, HALF_WHITE,
-        )])])
+        .set_selection_release(selection_release_for_test(vec![(TARGET, vec![HALF_WHITE])]))
         .unwrap();
     draft.push_surface_input_port(INPUT);
     draft.push_solid_paint(PAINT, TARGET);

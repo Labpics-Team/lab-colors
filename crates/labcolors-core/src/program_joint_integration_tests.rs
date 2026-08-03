@@ -1,5 +1,3 @@
-use core::num::NonZeroUsize;
-
 use crate::Srgb8;
 use crate::appearance::{
     EncodedPointPaintValueV1, OccurrenceId, OpacityInputId, PaintId, SurfaceId, SurfaceInputPortId,
@@ -12,10 +10,6 @@ use crate::constraints::{
     ProgramVisiblePointBindingV1, ProgramVisiblePointPassEvidence,
     ProgramVisiblePointViolationEvidence, Wcag22Srgb8V1, assess_program_point_hard,
 };
-use crate::joint::{
-    FiniteDomainOrdinalV1, FiniteJointOrderAdmissionErrorV1, FiniteJointOrderErrorV1,
-    NonEmptyFiniteDomainCardinalitiesV1, admit_finite_joint_order_v1,
-};
 use crate::lcs_occurrence::{
     AdaptingLuminanceCdM2, AppearanceContextId, AppearanceContextSchemaReleaseId,
     BackgroundLuminanceRatio, ColorSignal, IEC_SRGB_D65_XYZ_FRAME_V1, SurroundProfileId,
@@ -26,12 +20,12 @@ use crate::observation::{
     SurfaceInputBinding,
 };
 use crate::program_session::{
-    CompositionProfile, ConstraintId, ConstraintInvocation, ConstraintSet,
-    DeclaredJointSelectionV1, FinitePaintDomainV1, HardModeV1, JointCandidateStateV1,
-    ObservationGroup, Occurrence, OpacityInput, OutputBinding, OutputSlotId, Paint, Program,
-    ProgramCompileError, ProgramConstraintEvaluatorSetV1, ProgramConstraintSubjectV1,
-    ProgramSessionEvaluationError, ReportModeV1, Source, SourceId, Surface, Target,
-    TargetCandidateChoiceV1, TargetCandidateId, TargetCandidateV1, TargetId, TargetIntentV1,
+    CompositionProfile, ConstraintId, ConstraintInvocation, ConstraintSet, FinitePaintDomainV1,
+    HardModeV1, ObservationGroup, Occurrence, OpacityInput, OutputBinding, OutputSlotId, Paint,
+    Program, ProgramCompileError, ProgramConstraintEvaluatorSetV1, ProgramConstraintSubjectV1,
+    ProgramSessionEvaluationError, ReportModeV1, SelectionReleaseAdmissionErrorV1,
+    SelectionReleaseV1, Source, SourceId, Surface, Target, TargetCandidateId, TargetCandidateV1,
+    TargetId, TargetIntentV1, TargetPreferenceAdmissionErrorV1, TargetPreferenceV1,
     checked_program_evaluation_cell_counts_for_test, fail_program_preflight_reservation_for_test,
     program_preflight_failure_remaining_for_test,
 };
@@ -512,8 +506,18 @@ fn candidate_with_opacity(id: TargetCandidateId, value: u8, opacity: f64) -> Tar
     )
 }
 
-fn state(candidate: TargetCandidateId) -> JointCandidateStateV1 {
-    JointCandidateStateV1::new(vec![TargetCandidateChoiceV1::new(TARGET, candidate)])
+fn selection_release(objectives: Vec<(TargetId, Vec<TargetCandidateId>)>) -> SelectionReleaseV1 {
+    SelectionReleaseV1::try_new(
+        objectives
+            .into_iter()
+            .map(|(target, candidates)| TargetPreferenceV1::try_new(target, candidates).unwrap())
+            .collect(),
+    )
+    .unwrap()
+}
+
+fn target_selection(candidates: Vec<TargetCandidateId>) -> SelectionReleaseV1 {
+    selection_release(vec![(TARGET, candidates)])
 }
 
 fn finite_domain(candidates: Vec<TargetCandidateV1>) -> FinitePaintDomainV1 {
@@ -575,7 +579,7 @@ fn program(
     hard: Vec<ConstraintInvocation<Wcag22CriterionV1, HardModeV1>>,
     report_only: Vec<ConstraintInvocation<Wcag22CriterionV1, ReportModeV1>>,
     candidates: Vec<TargetCandidateV1>,
-    order: Vec<JointCandidateStateV1>,
+    preference: Vec<TargetCandidateId>,
 ) -> Program<Wcag22Srgb8V1> {
     point_program(
         signal(0),
@@ -584,7 +588,7 @@ fn program(
         report_only,
         Wcag22Srgb8V1,
     )
-    .with_joint_selection(DeclaredJointSelectionV1::new(order))
+    .with_selection_release(target_selection(preference))
 }
 
 fn update(revision: u64, backdrop: u8) -> ObservationUpdateInput {
@@ -609,36 +613,19 @@ fn update_cases(revision: u64, backdrops: &[u8]) -> ObservationUpdateInput {
     }
 }
 
-fn paired_state(
-    lower: TargetCandidateId,
-    upper: TargetCandidateId,
-    reverse_choices: bool,
-) -> JointCandidateStateV1 {
-    let mut choices = vec![
-        TargetCandidateChoiceV1::new(TARGET, lower),
-        TargetCandidateChoiceV1::new(UPPER_TARGET, upper),
-    ];
-    if reverse_choices {
-        choices.reverse();
-    }
-    JointCandidateStateV1::new(choices)
-}
-
-fn nested_two_target_program(
+fn nested_two_target_program_with_release(
     reverse_targets: bool,
-    reverse_choices: bool,
+    reverse_candidate_declarations: bool,
+    release: SelectionReleaseV1,
 ) -> Program<Wcag22Srgb8V1> {
-    let lower = Target::finite(
-        TARGET,
-        finite_domain(vec![candidate(FIRST, 0x00), candidate(SECOND, 0xFF)]),
-    );
-    let upper = Target::finite(
-        UPPER_TARGET,
-        finite_domain(vec![
-            candidate(UPPER_FIRST, 0x55),
-            candidate(UPPER_SECOND, 0xFF),
-        ]),
-    );
+    let mut lower_candidates = vec![candidate(FIRST, 0x00), candidate(SECOND, 0xFF)];
+    let mut upper_candidates = vec![candidate(UPPER_FIRST, 0x55), candidate(UPPER_SECOND, 0xFF)];
+    if reverse_candidate_declarations {
+        lower_candidates.reverse();
+        upper_candidates.reverse();
+    }
+    let lower = Target::finite(TARGET, finite_domain(lower_candidates));
+    let upper = Target::finite(UPPER_TARGET, finite_domain(upper_candidates));
     let mut targets = vec![lower, upper];
     if reverse_targets {
         targets.reverse();
@@ -702,12 +689,21 @@ fn nested_two_target_program(
         ],
         Wcag22Srgb8V1,
     )
-    .with_joint_selection(DeclaredJointSelectionV1::new(vec![
-        paired_state(FIRST, UPPER_FIRST, reverse_choices),
-        paired_state(SECOND, UPPER_FIRST, reverse_choices),
-        paired_state(FIRST, UPPER_SECOND, reverse_choices),
-        paired_state(SECOND, UPPER_SECOND, reverse_choices),
-    ]))
+    .with_selection_release(release)
+}
+
+fn nested_two_target_program(
+    reverse_targets: bool,
+    reverse_candidate_declarations: bool,
+) -> Program<Wcag22Srgb8V1> {
+    nested_two_target_program_with_release(
+        reverse_targets,
+        reverse_candidate_declarations,
+        selection_release(vec![
+            (UPPER_TARGET, vec![UPPER_FIRST, UPPER_SECOND]),
+            (TARGET, vec![FIRST, SECOND]),
+        ]),
+    )
 }
 
 fn nested_alpha_exact_program() -> Program<ExactSrgb8IdentityV1> {
@@ -784,11 +780,9 @@ fn nested_alpha_exact_program() -> Program<ExactSrgb8IdentityV1> {
         ],
         ExactSrgb8IdentityV1,
     )
-    .with_joint_selection(DeclaredJointSelectionV1::new(vec![
-        paired_state(FIRST, UPPER_FIRST, false),
-        paired_state(SECOND, UPPER_FIRST, false),
-        paired_state(FIRST, UPPER_SECOND, false),
-        paired_state(SECOND, UPPER_SECOND, false),
+    .with_selection_release(selection_release(vec![
+        (UPPER_TARGET, vec![UPPER_FIRST, UPPER_SECOND]),
+        (TARGET, vec![FIRST, SECOND]),
     ]))
 }
 
@@ -832,17 +826,6 @@ fn alpha_renamed_nested_program(
     if permute_declarations {
         targets.reverse();
     }
-
-    let state = |lower, upper| {
-        let mut choices = vec![
-            TargetCandidateChoiceV1::new(ids.lower_target, lower),
-            TargetCandidateChoiceV1::new(ids.upper_target, upper),
-        ];
-        if permute_declarations {
-            choices.reverse();
-        }
-        JointCandidateStateV1::new(choices)
-    };
 
     Program::new(
         sources,
@@ -899,11 +882,9 @@ fn alpha_renamed_nested_program(
         ],
         Wcag22Srgb8V1,
     )
-    .with_joint_selection(DeclaredJointSelectionV1::new(vec![
-        state(ids.lower_first, ids.upper_first),
-        state(ids.lower_second, ids.upper_first),
-        state(ids.lower_first, ids.upper_second),
-        state(ids.lower_second, ids.upper_second),
+    .with_selection_release(selection_release(vec![
+        (ids.upper_target, vec![ids.upper_first, ids.upper_second]),
+        (ids.lower_target, vec![ids.lower_first, ids.lower_second]),
     ]))
 }
 
@@ -922,13 +903,11 @@ fn authored_finite_target_values_keep_only_opaque_identity_and_explicit_policy()
     };
     assert_eq!(domain.candidates(), &[first]);
 
-    let choice = TargetCandidateChoiceV1::new(TARGET, FIRST);
-    assert_eq!(choice.target(), TARGET);
-    assert_eq!(choice.candidate(), FIRST);
-    let state = JointCandidateStateV1::new(vec![choice]);
-    assert_eq!(state.choices(), &[choice]);
-    let order = DeclaredJointSelectionV1::new(vec![state.clone()]);
-    assert_eq!(order.states(), &[state]);
+    let objective = TargetPreferenceV1::try_new(TARGET, vec![FIRST]).unwrap();
+    assert_eq!(objective.target(), TARGET);
+    assert_eq!(objective.candidates(), &[FIRST]);
+    let release = SelectionReleaseV1::try_new(vec![objective]).unwrap();
+    assert_eq!(release.objectives().len(), 1);
 }
 
 #[test]
@@ -1105,10 +1084,7 @@ fn terminal_safety_rejects_an_unconstrained_finite_target() {
         vec![OutputBinding::new(UPPER_OUTPUT, UPPER_PAINT)],
         Wcag22Srgb8V1,
     )
-    .with_joint_selection(DeclaredJointSelectionV1::new(vec![
-        state(FIRST),
-        state(SECOND),
-    ]))
+    .with_selection_release(target_selection(vec![FIRST, SECOND]))
     .compile()
     {
         Ok(_) => panic!("unconstrained finite target must not compile"),
@@ -1190,11 +1166,9 @@ fn independent_finite_target_components_are_rejected_before_global_product_searc
         ],
         Wcag22Srgb8V1,
     )
-    .with_joint_selection(DeclaredJointSelectionV1::new(vec![
-        paired_state(FIRST, UPPER_FIRST, false),
-        paired_state(SECOND, UPPER_FIRST, false),
-        paired_state(FIRST, UPPER_SECOND, false),
-        paired_state(SECOND, UPPER_SECOND, false),
+    .with_selection_release(selection_release(vec![
+        (UPPER_TARGET, vec![UPPER_FIRST, UPPER_SECOND]),
+        (TARGET, vec![FIRST, SECOND]),
     ]))
     .compile()
     {
@@ -1221,7 +1195,7 @@ fn candidate_passing_one_hard_cell_and_failing_another_is_never_certified() {
         ],
         vec![],
         vec![candidate(FIRST, 0x66), candidate(SECOND, 0xFF)],
-        vec![state(FIRST), state(SECOND)],
+        vec![FIRST, SECOND],
     )
     .compile()
     .unwrap();
@@ -1257,7 +1231,7 @@ fn report_only_violation_is_retained_but_does_not_select() {
             Wcag22CriterionV1::Sc143TextDefault,
         )],
         vec![candidate(FIRST, 0x66), candidate(SECOND, 0xFF)],
-        vec![state(FIRST), state(SECOND)],
+        vec![FIRST, SECOND],
     )
     .compile()
     .unwrap();
@@ -1286,7 +1260,7 @@ fn report_only_assessment_admits_output_but_cannot_override_explicit_selection_o
             Wcag22CriterionV1::Sc143TextDefault,
         )],
         vec![candidate(FIRST, 0x66), candidate(SECOND, 0xFF)],
-        vec![state(FIRST), state(SECOND)],
+        vec![FIRST, SECOND],
     )
     .compile()
     .unwrap();
@@ -1311,7 +1285,7 @@ fn no_feasible_joint_state_commits_no_output_and_retains_previous_certificate() 
         )],
         vec![],
         vec![candidate(FIRST, 0xAA), candidate(SECOND, 0xFF)],
-        vec![state(FIRST), state(SECOND)],
+        vec![FIRST, SECOND],
     )
     .compile()
     .unwrap();
@@ -1341,7 +1315,7 @@ fn no_feasible_joint_state_commits_no_output_and_retains_previous_certificate() 
 }
 
 #[test]
-fn candidate_declaration_permutation_preserves_explicit_physical_order() {
+fn candidate_declaration_permutation_preserves_selection_release_rank() {
     let make = |candidates| {
         program(
             vec![ConstraintInvocation::visible_unary_hard(
@@ -1351,7 +1325,7 @@ fn candidate_declaration_permutation_preserves_explicit_physical_order() {
             )],
             vec![],
             candidates,
-            vec![state(FIRST), state(SECOND)],
+            vec![FIRST, SECOND],
         )
         .compile()
         .unwrap()
@@ -1378,14 +1352,14 @@ fn candidate_declaration_permutation_preserves_explicit_physical_order() {
 }
 
 #[test]
-fn nested_two_target_selection_ignores_target_and_choice_declaration_order() {
-    let run = |reverse_targets, reverse_choices| {
-        let compiled = nested_two_target_program(reverse_targets, reverse_choices)
+fn nested_two_target_selection_ignores_target_and_candidate_declaration_order() {
+    let run = |reverse_targets, reverse_candidates| {
+        let compiled = nested_two_target_program(reverse_targets, reverse_candidates)
             .compile()
             .unwrap();
         let mut session = compiled.instantiate(STREAM).unwrap();
         let SessionState::Ready { current } = session.commit(update(1, 0x00)).unwrap() else {
-            panic!("the second explicitly ordered joint tuple must certify");
+            panic!("the second compiler-ranked joint state must certify");
         };
         (
             current.selected_state_index(),
@@ -1409,7 +1383,7 @@ fn nested_two_target_selection_ignores_target_and_choice_declaration_order() {
 
 #[test]
 fn exact_joint_oracle_covers_nested_alpha_and_every_observed_backdrop() {
-    // Independent source-over arithmetic for the first two authored states:
+    // Independent source-over arithmetic for the first two compiled states:
     // half-white over (half-black over black) is 128, while the same stack over
     // white is 192. Making the lower black opaque produces 128 over both
     // backdrops, so the second state is the first globally feasible state.
@@ -1422,7 +1396,7 @@ fn exact_joint_oracle_covers_nested_alpha_and_every_observed_backdrop() {
     let mut session = compiled.instantiate(STREAM).unwrap();
     let SessionState::Ready { current } = session.commit(update_cases(1, &[0x00, 0xFF])).unwrap()
     else {
-        panic!("the second declared state must be the first exact match over the full ScenarioSet");
+        panic!("the second ranked state must be the first exact match over the full ScenarioSet");
     };
 
     assert_eq!(current.selected_state_index(), Some(1));
@@ -1455,8 +1429,8 @@ fn bijective_source_target_and_candidate_renaming_preserves_joint_evidence() {
     };
     // Every authored namespace is alpha-renamed. Source and Target order is
     // reversed across logical dimensions, while both candidate domains also
-    // reverse numeric order. Declaration and per-state choice order are then
-    // independently permuted; only the explicit logical state order remains.
+    // reverse numeric order. Declaration order is then
+    // independently permuted; only the explicit SelectionRelease remains.
     let renamed_ids = AlphaRenamedJointIds {
         lower_source: SourceId::new(920),
         upper_source: SourceId::new(110),
@@ -1566,10 +1540,7 @@ fn rejected_state_runs_once_and_selected_state_runs_fresh_recheck_twice() {
         vec![OutputBinding::new(OUTPUT, PAINT)],
         evaluator,
     )
-    .with_joint_selection(DeclaredJointSelectionV1::new(vec![
-        state(FIRST),
-        state(SECOND),
-    ]))
+    .with_selection_release(target_selection(vec![FIRST, SECOND]))
     .compile()
     .unwrap();
     let mut session = compiled.instantiate(STREAM).unwrap();
@@ -1608,7 +1579,7 @@ fn evaluator_error_aborts_both_candidate_search_and_fresh_recheck() {
             vec![],
             evaluator,
         )
-        .with_joint_selection(DeclaredJointSelectionV1::new(vec![state(FIRST)]))
+        .with_selection_release(target_selection(vec![FIRST]))
         .compile()
         .unwrap();
         let mut session = compiled.instantiate(STREAM).unwrap();
@@ -1660,10 +1631,7 @@ fn report_evaluator_error_cannot_poison_candidate_search_or_change_selection() {
         )],
         evaluator,
     )
-    .with_joint_selection(DeclaredJointSelectionV1::new(vec![
-        state(FIRST),
-        state(SECOND),
-    ]))
+    .with_selection_release(target_selection(vec![FIRST, SECOND]))
     .compile()
     .unwrap();
     let mut session = compiled.instantiate(STREAM).unwrap();
@@ -1708,10 +1676,7 @@ fn hard_conflict_runs_report_only_once_in_the_exhaustive_full_pass() {
         )],
         evaluator,
     )
-    .with_joint_selection(DeclaredJointSelectionV1::new(vec![
-        state(FIRST),
-        state(SECOND),
-    ]))
+    .with_selection_release(target_selection(vec![FIRST, SECOND]))
     .compile()
     .unwrap();
     let mut session = compiled.instantiate(STREAM).unwrap();
@@ -1836,10 +1801,7 @@ fn exhaustive_conflict_freezes_every_state_case_hard_cell_before_any_diagnostic(
         )],
         evaluator,
     )
-    .with_joint_selection(DeclaredJointSelectionV1::new(vec![
-        state(FIRST),
-        state(SECOND),
-    ]))
+    .with_selection_release(target_selection(vec![FIRST, SECOND]))
     .compile()
     .unwrap();
     let mut session = compiled.instantiate(STREAM).unwrap();
@@ -1895,10 +1857,10 @@ fn successful_search_allocations_do_not_scale_with_rejected_states() {
         .compile()
         .unwrap()
     };
-    let direct = compile(vec![candidate(SECOND, 0xFF)], vec![state(SECOND)]);
+    let direct = compile(vec![candidate(SECOND, 0xFF)], vec![SECOND]);
     let after_rejection = compile(
         vec![candidate(FIRST, 0x55), candidate(SECOND, 0xFF)],
-        vec![state(FIRST), state(SECOND)],
+        vec![FIRST, SECOND],
     );
     let mut direct_session = direct.instantiate(STREAM).unwrap();
     let mut rejected_session = after_rejection.instantiate(STREAM).unwrap();
@@ -1977,10 +1939,7 @@ fn every_required_joint_arena_reservation_is_fail_before_work_and_retryable() {
             vec![OutputBinding::new(OUTPUT, PAINT)],
             evaluator,
         )
-        .with_joint_selection(DeclaredJointSelectionV1::new(vec![
-            state(FIRST),
-            state(SECOND),
-        ]))
+        .with_selection_release(target_selection(vec![FIRST, SECOND]))
         .compile()
         .unwrap();
         let mut session = compiled.instantiate(STREAM).unwrap();
@@ -2239,7 +2198,7 @@ fn lower_id_diagnostic_cannot_consume_the_selected_state_final_recheck() {
         )],
         evaluator,
     )
-    .with_joint_selection(DeclaredJointSelectionV1::new(vec![state(FIRST)]))
+    .with_selection_release(target_selection(vec![FIRST]))
     .compile()
     .unwrap();
     let mut session = compiled.instantiate(STREAM).unwrap();
@@ -2288,7 +2247,7 @@ fn diagnostic_error_cannot_mask_a_selected_state_final_recheck_violation() {
         )],
         evaluator,
     )
-    .with_joint_selection(DeclaredJointSelectionV1::new(vec![state(FIRST)]))
+    .with_selection_release(target_selection(vec![FIRST]))
     .compile()
     .unwrap();
     let mut session = compiled.instantiate(STREAM).unwrap();
@@ -2350,7 +2309,7 @@ fn final_recheck_reports_only_hard_violations_and_their_exact_count() {
         )],
         evaluator,
     )
-    .with_joint_selection(DeclaredJointSelectionV1::new(vec![state(FIRST)]))
+    .with_selection_release(target_selection(vec![FIRST]))
     .compile()
     .unwrap();
     let mut session = compiled.instantiate(STREAM).unwrap();
@@ -2414,7 +2373,7 @@ fn final_recheck_violation_is_typed_and_retains_the_previous_certificate() {
         vec![OutputBinding::new(OUTPUT, PAINT)],
         evaluator,
     )
-    .with_joint_selection(DeclaredJointSelectionV1::new(vec![state(FIRST)]))
+    .with_selection_release(target_selection(vec![FIRST]))
     .compile()
     .unwrap();
     let mut session = compiled.instantiate(STREAM).unwrap();
@@ -2458,7 +2417,7 @@ fn duplicate_physical_candidate_value_is_typed_and_declaration_order_invariant()
         )],
         vec![],
         candidates,
-        vec![state(FIRST), state(SECOND)],
+        vec![FIRST, SECOND],
     )
     .compile()
     {
@@ -2496,7 +2455,7 @@ fn equal_sources_with_distinct_opacity_are_distinct_admitted_candidates() {
                 candidate_with_opacity(FIRST, 0x66, 0.25),
                 candidate_with_opacity(SECOND, 0x66, 0.75),
             ],
-            vec![state(selected), state(alternate)],
+            vec![selected, alternate],
         )
         .compile()
         .unwrap();
@@ -2521,7 +2480,7 @@ fn selected_atomic_candidate_preserves_opacity_through_fresh_recheck_and_output(
         )],
         vec![],
         vec![candidate_with_opacity(FIRST, 0xFF, 0.5)],
-        vec![state(FIRST)],
+        vec![FIRST],
     )
     .compile()
     .unwrap();
@@ -2545,7 +2504,7 @@ fn atomic_candidate_matches_fixed_opacity_topology_physics_but_not_identity() {
         )],
         vec![],
         vec![candidate_with_opacity(FIRST, 0xFF, 0.5)],
-        vec![state(FIRST)],
+        vec![FIRST],
     )
     .compile()
     .unwrap();
@@ -2617,7 +2576,143 @@ fn atomic_candidate_matches_fixed_opacity_topology_physics_but_not_identity() {
 }
 
 #[test]
-fn duplicate_joint_tuple_is_rejected_before_runtime() {
+fn duplicate_candidate_preference_is_rejected_before_program_construction() {
+    assert_eq!(
+        TargetPreferenceV1::try_new(TARGET, vec![FIRST, FIRST]),
+        Err(TargetPreferenceAdmissionErrorV1::DuplicateCandidate {
+            target: TARGET,
+            first: 0,
+            duplicate: 1,
+            candidate: FIRST,
+        })
+    );
+}
+
+#[test]
+fn empty_candidate_preference_is_rejected_before_program_construction() {
+    assert_eq!(
+        TargetPreferenceV1::try_new(TARGET, vec![]),
+        Err(TargetPreferenceAdmissionErrorV1::EmptyCandidates { target: TARGET })
+    );
+}
+
+#[test]
+fn duplicate_target_objective_is_rejected_before_program_construction() {
+    let first = TargetPreferenceV1::try_new(TARGET, vec![FIRST]).unwrap();
+    let duplicate = TargetPreferenceV1::try_new(TARGET, vec![SECOND]).unwrap();
+    assert_eq!(
+        SelectionReleaseV1::try_new(vec![first, duplicate]),
+        Err(SelectionReleaseAdmissionErrorV1::DuplicateTarget {
+            first: 0,
+            duplicate: 1,
+            target: TARGET,
+        })
+    );
+}
+
+#[test]
+fn empty_selection_release_is_rejected_before_program_construction() {
+    assert_eq!(
+        SelectionReleaseV1::try_new(vec![]),
+        Err(SelectionReleaseAdmissionErrorV1::EmptyObjectives)
+    );
+}
+
+#[test]
+fn finite_target_requires_one_selection_release() {
+    let error = match point_program(
+        signal(0),
+        target(vec![candidate(FIRST, 0x66)]),
+        vec![ConstraintInvocation::visible_unary_hard(
+            ConstraintId::new(1),
+            OCCURRENCE,
+            Wcag22CriterionV1::Sc143TextLargeScale,
+        )],
+        vec![],
+        Wcag22Srgb8V1,
+    )
+    .compile()
+    {
+        Ok(_) => panic!("a finite target without SelectionRelease must not compile"),
+        Err(error) => error,
+    };
+    assert_eq!(error, ProgramCompileError::MissingSelectionRelease);
+}
+
+#[test]
+fn fixed_program_rejects_a_selection_release_without_finite_targets() {
+    let error = match point_program(
+        signal(0),
+        Target::fixed(TARGET, SOURCE),
+        vec![ConstraintInvocation::visible_unary_hard(
+            ConstraintId::new(1),
+            OCCURRENCE,
+            Wcag22CriterionV1::Sc143TextLargeScale,
+        )],
+        vec![],
+        Wcag22Srgb8V1,
+    )
+    .with_selection_release(target_selection(vec![FIRST]))
+    .compile()
+    {
+        Ok(_) => panic!("SelectionRelease without finite targets must not compile"),
+        Err(error) => error,
+    };
+    assert_eq!(error, ProgramCompileError::SelectionReleaseWithoutTargets);
+}
+
+#[test]
+fn selection_objective_rejects_an_unknown_target_before_runtime() {
+    let unknown = TargetId::new(999);
+    let error = match point_program(
+        signal(0),
+        target(vec![candidate(FIRST, 0x66)]),
+        vec![ConstraintInvocation::visible_unary_hard(
+            ConstraintId::new(1),
+            OCCURRENCE,
+            Wcag22CriterionV1::Sc143TextLargeScale,
+        )],
+        vec![],
+        Wcag22Srgb8V1,
+    )
+    .with_selection_release(selection_release(vec![(unknown, vec![FIRST])]))
+    .compile()
+    {
+        Ok(_) => panic!("an objective for an unknown target must not compile"),
+        Err(error) => error,
+    };
+    assert_eq!(
+        error,
+        ProgramCompileError::SelectionObjectiveUnknownTarget {
+            objective: 0,
+            target: unknown,
+        }
+    );
+}
+
+#[test]
+fn selection_release_rejects_a_missing_target_before_runtime() {
+    let error = match nested_two_target_program_with_release(
+        false,
+        false,
+        selection_release(vec![(TARGET, vec![FIRST, SECOND])]),
+    )
+    .compile()
+    {
+        Ok(_) => panic!("a release missing one finite target must not compile"),
+        Err(error) => error,
+    };
+    assert_eq!(
+        error,
+        ProgramCompileError::SelectionObjectiveMissingTarget {
+            target: UPPER_TARGET,
+        }
+    );
+}
+
+#[test]
+fn selection_objective_rejects_an_unknown_candidate_before_runtime() {
+    let unknown = TargetCandidateId::new(999);
     let error = match program(
         vec![ConstraintInvocation::visible_unary_hard(
             ConstraintId::new(1),
@@ -2626,112 +2721,46 @@ fn duplicate_joint_tuple_is_rejected_before_runtime() {
         )],
         vec![],
         vec![candidate(FIRST, 0x66), candidate(SECOND, 0xFF)],
-        vec![state(FIRST), state(FIRST)],
+        vec![FIRST, unknown],
     )
     .compile()
     {
-        Ok(_) => panic!("duplicate tuple must not compile"),
+        Ok(_) => panic!("an objective with an unknown candidate must not compile"),
         Err(error) => error,
     };
     assert_eq!(
         error,
-        ProgramCompileError::InvalidJointOrder(FiniteJointOrderErrorV1::DuplicateTuple {
-            first: 0,
-            duplicate: 1,
-        })
+        ProgramCompileError::SelectionObjectiveUnknownCandidate {
+            objective: 0,
+            target: TARGET,
+            candidate: unknown,
+        }
     );
 }
 
 #[test]
-fn finite_joint_order_admission_is_total_over_typed_nonempty_domains() {
-    let ordinal = |index| FiniteDomainOrdinalV1::new(index);
-    let nonzero = |value| NonZeroUsize::new(value).unwrap();
-    let domains = |first, rest: Vec<NonZeroUsize>| {
-        NonEmptyFiniteDomainCardinalitiesV1::new(nonzero(first), rest.into_boxed_slice())
+fn incomplete_target_preference_is_rejected_before_runtime() {
+    let error = match program(
+        vec![ConstraintInvocation::visible_unary_hard(
+            ConstraintId::new(1),
+            OCCURRENCE,
+            Wcag22CriterionV1::Sc143TextLargeScale,
+        )],
+        vec![],
+        vec![candidate(FIRST, 0x66), candidate(SECOND, 0xFF)],
+        vec![FIRST],
+    )
+    .compile()
+    {
+        Ok(_) => panic!("an incomplete preference must not compile"),
+        Err(error) => error,
     };
-
-    let admitted = admit_finite_joint_order_v1(
-        &domains(2, vec![]),
-        vec![vec![ordinal(1)], vec![ordinal(0)]],
-    )
-    .unwrap();
     assert_eq!(
-        admitted
-            .tuples()
-            .map(|tuple| tuple.iter().map(|item| item.index()).collect::<Vec<_>>())
-            .collect::<Vec<_>>(),
-        vec![vec![1], vec![0]],
+        error,
+        ProgramCompileError::SelectionObjectiveMissingCandidate {
+            objective: 0,
+            target: TARGET,
+            candidate: SECOND,
+        }
     );
-
-    let admitted = admit_finite_joint_order_v1(
-        &domains(2, vec![nonzero(2)]),
-        vec![
-            vec![ordinal(1), ordinal(0)],
-            vec![ordinal(0), ordinal(1)],
-            vec![ordinal(1), ordinal(1)],
-            vec![ordinal(0), ordinal(0)],
-        ],
-    )
-    .unwrap();
-    assert_eq!(admitted.state_count(), 4);
-    assert_eq!(
-        admitted
-            .tuples()
-            .map(|tuple| tuple.iter().map(|item| item.index()).collect::<Vec<_>>())
-            .collect::<Vec<_>>(),
-        vec![vec![1, 0], vec![0, 1], vec![1, 1], vec![0, 0]],
-    );
-
-    for (domain_lengths, authored, expected) in [
-        (
-            domains(1, vec![]),
-            vec![],
-            FiniteJointOrderErrorV1::EmptyOrder,
-        ),
-        (
-            domains(2, vec![]),
-            vec![vec![ordinal(0)]],
-            FiniteJointOrderErrorV1::IncompleteOrder {
-                expected: 2,
-                actual: 1,
-            },
-        ),
-        (
-            domains(1, vec![]),
-            vec![vec![]],
-            FiniteJointOrderErrorV1::TupleArity {
-                tuple: 0,
-                expected: 1,
-                actual: 0,
-            },
-        ),
-        (
-            domains(1, vec![]),
-            vec![vec![ordinal(1)]],
-            FiniteJointOrderErrorV1::OrdinalOutOfDomain {
-                tuple: 0,
-                dimension: 0,
-                ordinal: 1,
-                domain_len: 1,
-            },
-        ),
-        (
-            domains(2, vec![]),
-            vec![vec![ordinal(0)], vec![ordinal(0)]],
-            FiniteJointOrderErrorV1::DuplicateTuple {
-                first: 0,
-                duplicate: 1,
-            },
-        ),
-        (
-            domains(usize::MAX, vec![nonzero(2)]),
-            vec![vec![ordinal(0), ordinal(0)]],
-            FiniteJointOrderErrorV1::CardinalityOverflow,
-        ),
-    ] {
-        assert_eq!(
-            admit_finite_joint_order_v1(&domain_lengths, authored),
-            Err(FiniteJointOrderAdmissionErrorV1::Authored(expected)),
-        );
-    }
 }

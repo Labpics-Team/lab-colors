@@ -1,16 +1,17 @@
-//! Допуск полного порядка над конечным произведением target-доменов.
+//! Материализация полного порядка конечного совместного пространства.
 //!
-//! Модуль не исполняет solver и не знает evaluator families. Он лишь проверяет
-//! объявленную клиентом политику порядка один раз до runtime и запечатывает
-//! канонические ординалы для единственного исполнителя [`crate::program_session`].
+//! Клиент не перечисляет декартовы кортежи. Компилятор сначала связывает одну
+//! [`SelectionRelease`](crate::program_session::SelectionReleaseV1) с
+//! каноническими target-доменами, а затем этот модуль материализует её точный
+//! лексикографический порядок. Значения opaque ID, байты цвета и порядок
+//! деклараций не становятся неявными критериями выбора.
 
 use core::num::NonZeroUsize;
 
-/// One canonical candidate ordinal inside a finite target domain.
+/// Канонический ординал кандидата внутри одного конечного target-домена.
 ///
-/// The ordinal is assigned only after the owning Program has sorted the
-/// target's opaque candidate IDs. It is therefore an internal compiled index,
-/// never client identity or declaration-order policy.
+/// Ординал назначается только после сортировки opaque candidate ID владельцем
+/// Program. Он является compiled index, но никогда не selection policy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) struct FiniteDomainOrdinalV1(usize);
 
@@ -24,9 +25,7 @@ impl FiniteDomainOrdinalV1 {
     }
 }
 
-/// Non-empty cardinality vector of the finite targets that own one joint
-/// product. Requiring the first dimension here prevents a mathematically valid
-/// zero-dimensional product from impersonating a Program joint selection.
+/// Непустой вектор мощностей канонических target-доменов.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct NonEmptyFiniteDomainCardinalitiesV1 {
     first: NonZeroUsize,
@@ -38,8 +37,57 @@ impl NonEmptyFiniteDomainCardinalitiesV1 {
         Self { first, rest }
     }
 
-    fn iter(&self) -> impl Iterator<Item = NonZeroUsize> + '_ {
+    fn iter(&self) -> impl DoubleEndedIterator<Item = NonZeroUsize> + '_ {
         std::iter::once(self.first).chain(self.rest.iter().copied())
+    }
+
+    fn len(&self) -> usize {
+        self.rest.len() + 1
+    }
+
+    fn get(&self, dimension: usize) -> Option<NonZeroUsize> {
+        if dimension == 0 {
+            Some(self.first)
+        } else {
+            self.rest.get(dimension - 1).copied()
+        }
+    }
+}
+
+/// Одна уже связанная objective: какой canonical target сравнивается и в
+/// каком явном семантическом порядке идут его candidate ordinals.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct BoundFiniteTargetPreferenceV1 {
+    dimension: usize,
+    candidates: Box<[FiniteDomainOrdinalV1]>,
+}
+
+impl BoundFiniteTargetPreferenceV1 {
+    pub(crate) fn new(dimension: usize, candidates: Box<[FiniteDomainOrdinalV1]>) -> Self {
+        Self {
+            dimension,
+            candidates,
+        }
+    }
+}
+
+/// Непустая последовательность связанных objectives одного SelectionRelease.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct BoundFiniteSelectionReleaseV1 {
+    first: BoundFiniteTargetPreferenceV1,
+    rest: Box<[BoundFiniteTargetPreferenceV1]>,
+}
+
+impl BoundFiniteSelectionReleaseV1 {
+    pub(crate) fn new(
+        first: BoundFiniteTargetPreferenceV1,
+        rest: Box<[BoundFiniteTargetPreferenceV1]>,
+    ) -> Self {
+        Self { first, rest }
+    }
+
+    fn iter(&self) -> impl DoubleEndedIterator<Item = &BoundFiniteTargetPreferenceV1> {
+        std::iter::once(&self.first).chain(self.rest.iter())
     }
 
     fn len(&self) -> usize {
@@ -47,10 +95,10 @@ impl NonEmptyFiniteDomainCardinalitiesV1 {
     }
 }
 
-/// A fully admitted total order over the product of finite target domains.
-/// Each tuple is stored in canonical target order. The tuple order is authored
-/// policy; no target ID, candidate value, or declaration position becomes an
-/// implicit tie-break.
+/// Полный compiler-owned порядок конечного декартова пространства.
+///
+/// Каждый tuple хранится в canonical target order. Порядок tuples получен
+/// только из связанного SelectionRelease.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct AdmittedFiniteJointOrderV1 {
     first: Box<[FiniteDomainOrdinalV1]>,
@@ -63,149 +111,248 @@ impl AdmittedFiniteJointOrderV1 {
     }
 
     pub(crate) fn state_count(&self) -> usize {
-        // `first` makes the admitted order structurally non-empty; the
-        // remaining slice length is bounded by Rust's allocation limit.
         self.rest.len() + 1
     }
 }
 
-/// Failure to admit a declared finite joint selection order.
+/// Неуспех материализации после program-level binding.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum FiniteJointOrderErrorV1 {
+pub(crate) enum FiniteJointCompilationErrorV1 {
     CardinalityOverflow,
-    EmptyOrder,
-    TupleArity {
-        tuple: usize,
-        expected: usize,
-        actual: usize,
-    },
-    OrdinalOutOfDomain {
-        tuple: usize,
-        dimension: usize,
-        ordinal: usize,
-        domain_len: usize,
-    },
-    DuplicateTuple {
-        first: usize,
-        duplicate: usize,
-    },
-    IncompleteOrder {
-        expected: usize,
-        actual: usize,
-    },
-}
-
-/// Admission separates invalid authored policy from an inability to allocate
-/// the proof table. Resource pressure is not evidence that client data is
-/// malformed.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum FiniteJointOrderAdmissionErrorV1 {
-    Authored(FiniteJointOrderErrorV1),
     ResourceExhausted,
     InternalInvariant,
 }
 
-/// Check and seal an explicit total order over a finite product domain.
+/// Материализует полный лексикографический порядок joint states.
 ///
-/// This function deliberately does not synthesize lexicographic policy. A
-/// caller must enumerate every tuple exactly once. Non-empty dimensions are
-/// admitted by type; checked multiplication and fallible allocation happen
-/// before the result can reach runtime.
-pub(crate) fn admit_finite_joint_order_v1(
+/// Первый objective является наиболее значимым, последний меняется быстрее
+/// всех. Вход должен быть полностью связан Program-компилятором: каждая
+/// dimension и каждый её ordinal встречаются ровно один раз. Функция повторно
+/// проверяет эти инварианты, чтобы compiler drift не стал executable state.
+pub(crate) fn compile_finite_joint_order_v1(
     domain_lengths: &NonEmptyFiniteDomainCardinalitiesV1,
-    authored: Vec<Vec<FiniteDomainOrdinalV1>>,
-) -> Result<AdmittedFiniteJointOrderV1, FiniteJointOrderAdmissionErrorV1> {
-    use FiniteJointOrderAdmissionErrorV1 as AdmissionError;
+    release: &BoundFiniteSelectionReleaseV1,
+) -> Result<AdmittedFiniteJointOrderV1, FiniteJointCompilationErrorV1> {
+    use FiniteJointCompilationErrorV1 as Error;
 
-    let mut expected = 1usize;
-    for domain_len in domain_lengths.iter() {
-        expected = expected
-            .checked_mul(domain_len.get())
-            .ok_or(AdmissionError::Authored(
-                FiniteJointOrderErrorV1::CardinalityOverflow,
-            ))?;
-    }
-    if authored.is_empty() {
-        return Err(AdmissionError::Authored(
-            FiniteJointOrderErrorV1::EmptyOrder,
-        ));
-    }
-    if authored.len() != expected {
-        return Err(AdmissionError::Authored(
-            FiniteJointOrderErrorV1::IncompleteOrder {
-                expected,
-                actual: authored.len(),
-            },
-        ));
+    if release.len() != domain_lengths.len() {
+        return Err(Error::InternalInvariant);
     }
 
-    // The mixed-radix ordinal is a bijection over the admitted product. A
-    // fallibly allocated first-seen table makes duplicate admission O(states ×
-    // dimensions), rather than comparing every tuple with every earlier tuple.
-    let mut first_seen = Vec::new();
-    first_seen
-        .try_reserve_exact(expected)
-        .map_err(|_| AdmissionError::ResourceExhausted)?;
-    first_seen.resize(expected, usize::MAX);
+    let dimension_count = domain_lengths.len();
+    let mut seen_dimensions = Vec::new();
+    seen_dimensions
+        .try_reserve_exact(dimension_count)
+        .map_err(|_| Error::ResourceExhausted)?;
+    seen_dimensions.resize(dimension_count, false);
 
-    let mut rest = Vec::new();
-    rest.try_reserve_exact(authored.len() - 1)
-        .map_err(|_| AdmissionError::ResourceExhausted)?;
-    let mut first_tuple = None;
-    for (tuple_index, tuple) in authored.into_iter().enumerate() {
-        if tuple.len() != domain_lengths.len() {
-            return Err(AdmissionError::Authored(
-                FiniteJointOrderErrorV1::TupleArity {
-                    tuple: tuple_index,
-                    expected: domain_lengths.len(),
-                    actual: tuple.len(),
-                },
-            ));
+    for objective in release.iter() {
+        let Some(domain_len) = domain_lengths.get(objective.dimension) else {
+            return Err(Error::InternalInvariant);
+        };
+        if seen_dimensions[objective.dimension] {
+            return Err(Error::InternalInvariant);
         }
-        let mut mixed_radix_index = 0usize;
-        for (dimension, (ordinal, domain_len)) in
-            tuple.iter().zip(domain_lengths.iter()).enumerate()
-        {
-            let domain_len = domain_len.get();
-            if ordinal.index() >= domain_len {
-                return Err(AdmissionError::Authored(
-                    FiniteJointOrderErrorV1::OrdinalOutOfDomain {
-                        tuple: tuple_index,
-                        dimension,
-                        ordinal: ordinal.index(),
-                        domain_len,
-                    },
-                ));
+        seen_dimensions[objective.dimension] = true;
+        if objective.candidates.len() != domain_len.get() {
+            return Err(Error::InternalInvariant);
+        }
+
+        let mut seen_ordinals = Vec::new();
+        seen_ordinals
+            .try_reserve_exact(domain_len.get())
+            .map_err(|_| Error::ResourceExhausted)?;
+        seen_ordinals.resize(domain_len.get(), false);
+        for ordinal in &objective.candidates {
+            let Some(seen) = seen_ordinals.get_mut(ordinal.index()) else {
+                return Err(Error::InternalInvariant);
+            };
+            if *seen {
+                return Err(Error::InternalInvariant);
             }
-            let next_index = mixed_radix_index
-                .checked_mul(domain_len)
-                .and_then(|index| index.checked_add(ordinal.index()))
-                .ok_or(AdmissionError::InternalInvariant)?;
-            mixed_radix_index = next_index;
-        }
-        debug_assert!(mixed_radix_index < expected);
-        let first = &mut first_seen[mixed_radix_index];
-        if *first != usize::MAX {
-            return Err(AdmissionError::Authored(
-                FiniteJointOrderErrorV1::DuplicateTuple {
-                    first: *first,
-                    duplicate: tuple_index,
-                },
-            ));
-        }
-        *first = tuple_index;
-        let tuple = tuple.into_boxed_slice();
-        if first_tuple.is_none() {
-            first_tuple = Some(tuple);
-        } else {
-            rest.push(tuple);
+            *seen = true;
         }
     }
+    if seen_dimensions.iter().any(|seen| !seen) {
+        return Err(Error::InternalInvariant);
+    }
 
-    Ok(AdmittedFiniteJointOrderV1 {
-        // Empty input returned above, so failure here reports compiler drift,
-        // never malformed authored policy.
-        first: first_tuple.ok_or(AdmissionError::InternalInvariant)?,
-        rest: rest.into_boxed_slice(),
-    })
+    let state_count = domain_lengths.iter().try_fold(1usize, |count, domain_len| {
+        count.checked_mul(domain_len.get())
+    });
+    let state_count = state_count.ok_or(Error::CardinalityOverflow)?;
+
+    let mut tuples = Vec::new();
+    tuples
+        .try_reserve_exact(state_count)
+        .map_err(|_| Error::ResourceExhausted)?;
+    for state_index in 0..state_count {
+        let mut tuple = Vec::new();
+        tuple
+            .try_reserve_exact(dimension_count)
+            .map_err(|_| Error::ResourceExhausted)?;
+        tuple.resize(dimension_count, FiniteDomainOrdinalV1::new(0));
+
+        let mut remainder = state_index;
+        for objective in release.iter().rev() {
+            let radix = objective.candidates.len();
+            let rank = remainder % radix;
+            remainder /= radix;
+            tuple[objective.dimension] = objective.candidates[rank];
+        }
+        if remainder != 0 {
+            return Err(Error::InternalInvariant);
+        }
+        tuples.push(tuple.into_boxed_slice());
+    }
+
+    let mut tuples = tuples.into_iter();
+    let first = tuples.next().ok_or(Error::InternalInvariant)?;
+    let rest = tuples.collect::<Vec<_>>().into_boxed_slice();
+    Ok(AdmittedFiniteJointOrderV1 { first, rest })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use proptest::prelude::*;
+
+    fn non_zero(value: usize) -> NonZeroUsize {
+        NonZeroUsize::new(value).unwrap()
+    }
+
+    #[test]
+    fn compiler_materializes_objective_order_not_dimension_order() {
+        let domains = NonEmptyFiniteDomainCardinalitiesV1::new(
+            non_zero(2),
+            vec![non_zero(2)].into_boxed_slice(),
+        );
+        let release = BoundFiniteSelectionReleaseV1::new(
+            BoundFiniteTargetPreferenceV1::new(
+                1,
+                vec![FiniteDomainOrdinalV1::new(1), FiniteDomainOrdinalV1::new(0)]
+                    .into_boxed_slice(),
+            ),
+            vec![BoundFiniteTargetPreferenceV1::new(
+                0,
+                vec![FiniteDomainOrdinalV1::new(0), FiniteDomainOrdinalV1::new(1)]
+                    .into_boxed_slice(),
+            )]
+            .into_boxed_slice(),
+        );
+
+        let tuples = compile_finite_joint_order_v1(&domains, &release)
+            .unwrap()
+            .tuples()
+            .map(|tuple| {
+                tuple
+                    .iter()
+                    .map(|ordinal| ordinal.index())
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(tuples, [[0, 1], [1, 1], [0, 0], [1, 0]]);
+    }
+
+    #[test]
+    fn cardinality_overflow_is_typed_before_joint_state_allocation() {
+        let dimension_count = usize::BITS as usize;
+        let domains = NonEmptyFiniteDomainCardinalitiesV1::new(
+            non_zero(2),
+            vec![non_zero(2); dimension_count - 1].into_boxed_slice(),
+        );
+        let objectives = (0..dimension_count)
+            .map(|dimension| {
+                BoundFiniteTargetPreferenceV1::new(
+                    dimension,
+                    vec![FiniteDomainOrdinalV1::new(0), FiniteDomainOrdinalV1::new(1)]
+                        .into_boxed_slice(),
+                )
+            })
+            .collect::<Vec<_>>();
+        let release = BoundFiniteSelectionReleaseV1::new(
+            objectives[0].clone(),
+            objectives[1..].to_vec().into_boxed_slice(),
+        );
+
+        assert_eq!(
+            compile_finite_joint_order_v1(&domains, &release),
+            Err(FiniteJointCompilationErrorV1::CardinalityOverflow)
+        );
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(256))]
+
+        #[test]
+        fn every_small_release_compiles_to_the_exact_mixed_radix_total_order(
+            lengths in prop::collection::vec(1usize..=4, 1..=4),
+            seed in any::<u64>(),
+        ) {
+            let domains = NonEmptyFiniteDomainCardinalitiesV1::new(
+                non_zero(lengths[0]),
+                lengths[1..]
+                    .iter()
+                    .copied()
+                    .map(non_zero)
+                    .collect::<Vec<_>>()
+                    .into_boxed_slice(),
+            );
+
+            let mut dimensions = (0..lengths.len()).collect::<Vec<_>>();
+            let dimension_rotation = (seed as usize) % dimensions.len();
+            dimensions.rotate_left(dimension_rotation);
+            if seed & 1 != 0 {
+                dimensions.reverse();
+            }
+
+            let objectives = dimensions
+                .iter()
+                .copied()
+                .map(|dimension| {
+                    let mut candidates = (0..lengths[dimension])
+                        .map(FiniteDomainOrdinalV1::new)
+                        .collect::<Vec<_>>();
+                    let rotation = ((seed >> (dimension % 32)) as usize) % candidates.len();
+                    candidates.rotate_left(rotation);
+                    if (seed >> ((dimension + 1) % 32)) & 1 != 0 {
+                        candidates.reverse();
+                    }
+                    BoundFiniteTargetPreferenceV1::new(
+                        dimension,
+                        candidates.into_boxed_slice(),
+                    )
+                })
+                .collect::<Vec<_>>();
+            let release = BoundFiniteSelectionReleaseV1::new(
+                objectives[0].clone(),
+                objectives[1..].to_vec().into_boxed_slice(),
+            );
+
+            let order = compile_finite_joint_order_v1(&domains, &release).unwrap();
+            let expected_count = lengths.iter().product::<usize>();
+            prop_assert_eq!(order.state_count(), expected_count);
+
+            let tuples = order.tuples().collect::<Vec<_>>();
+            for (state_index, tuple) in tuples.iter().enumerate() {
+                let mut reconstructed = 0usize;
+                for objective in release.iter() {
+                    let rank = objective
+                        .candidates
+                        .iter()
+                        .position(|candidate| candidate == &tuple[objective.dimension])
+                        .unwrap();
+                    reconstructed = reconstructed
+                        .checked_mul(objective.candidates.len())
+                        .and_then(|value| value.checked_add(rank))
+                        .unwrap();
+                }
+                prop_assert_eq!(reconstructed, state_index);
+            }
+            for pair in tuples.windows(2) {
+                prop_assert_ne!(pair[0], pair[1]);
+            }
+        }
+    }
 }

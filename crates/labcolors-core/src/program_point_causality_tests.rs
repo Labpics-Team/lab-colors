@@ -14,12 +14,12 @@ use crate::observation::{
     SurfaceInputBinding, UnknownReasonId,
 };
 use crate::program_session::{
-    CompositionProfile, ConstraintId, ConstraintInvocation, ConstraintSet,
-    DeclaredJointSelectionV1, FinitePaintDomainV1, JointCandidateStateV1, ObservationGroup,
-    Occurrence, OpacityInput, OutputBinding, OutputSlotId, Paint, PointPresentationRootV1,
-    PointPresentationTargetV1, PresentationRootId, Program, ProgramPointCausalConsideredStateV1,
-    ProgramPointCausalSelectedStateV1, ProgramSessionEvaluationError, Source, SourceId, Surface,
-    Target, TargetCandidateChoiceV1, TargetCandidateId, TargetCandidateV1, TargetId,
+    CompositionProfile, ConstraintId, ConstraintInvocation, ConstraintSet, FinitePaintDomainV1,
+    ObservationGroup, Occurrence, OpacityInput, OutputBinding, OutputSlotId, Paint,
+    PointPresentationRootV1, PointPresentationTargetV1, PresentationRootId, Program,
+    ProgramPointCausalConsideredStateV1, ProgramPointCausalSelectedStateV1,
+    ProgramSessionEvaluationError, SelectionReleaseV1, Source, SourceId, Surface, Target,
+    TargetCandidateId, TargetCandidateV1, TargetId, TargetPreferenceV1,
     checked_program_point_causal_cardinality_for_test, fail_program_preflight_reservation_for_test,
     program_report_cardinality_is_exact_for_test, selected_program_storage_is_prepared_for_test,
     storage_has_spare_capacity_for_test,
@@ -56,6 +56,13 @@ fn context() -> AppearanceContextId {
 
 fn finite_domain(candidates: Vec<TargetCandidateV1>) -> FinitePaintDomainV1 {
     FinitePaintDomainV1::try_new(candidates).unwrap()
+}
+
+fn selection(candidates: Vec<TargetCandidateId>) -> SelectionReleaseV1 {
+    SelectionReleaseV1::try_new(vec![
+        TargetPreferenceV1::try_new(TARGET, candidates).unwrap(),
+    ])
+    .unwrap()
 }
 
 fn preflight_program(
@@ -178,10 +185,7 @@ fn joint_preflight_program(
         vec![OutputBinding::new(OUTPUT, PAINT)],
         evaluator,
     )
-    .with_joint_selection(DeclaredJointSelectionV1::new(vec![
-        JointCandidateStateV1::new(vec![TargetCandidateChoiceV1::new(TARGET, lower)]),
-        JointCandidateStateV1::new(vec![TargetCandidateChoiceV1::new(TARGET, higher)]),
-    ]))
+    .with_selection_release(selection(vec![lower, higher]))
     .with_point_presentations(
         vec![PointPresentationRootV1::new(ROOT, OCCURRENCE)],
         vec![PointPresentationTargetV1::new(ROOT, OCCURRENCE)],
@@ -447,10 +451,7 @@ fn finite_fanout_program() -> crate::program_session::CompiledProgram<ExactSrgb8
         vec![OutputBinding::new(OUTPUT, target_paint)],
         ExactSrgb8IdentityV1,
     )
-    .with_joint_selection(DeclaredJointSelectionV1::new(vec![
-        JointCandidateStateV1::new(vec![TargetCandidateChoiceV1::new(TARGET, dark)]),
-        JointCandidateStateV1::new(vec![TargetCandidateChoiceV1::new(TARGET, light)]),
-    ]))
+    .with_selection_release(selection(vec![dark, light]))
     .with_point_presentations(
         vec![
             // Обратный declaration order намеренно доказывает, что compilation
@@ -640,13 +641,6 @@ fn finite_program_with_candidates(
             TargetCandidateV1::new(id, EncodedPointPaintValueV1::opaque(Srgb8::new(codes)))
         })
         .collect();
-    let states = candidate_ids
-        .iter()
-        .copied()
-        .map(|candidate| {
-            JointCandidateStateV1::new(vec![TargetCandidateChoiceV1::new(TARGET, candidate)])
-        })
-        .collect();
     Program::new(
         vec![Source::new(SOURCE, signal([0; 3]))],
         vec![Target::finite(TARGET, finite_domain(candidates))],
@@ -676,7 +670,7 @@ fn finite_program_with_candidates(
         vec![OutputBinding::new(OUTPUT, PAINT)],
         ExactSrgb8IdentityV1,
     )
-    .with_joint_selection(DeclaredJointSelectionV1::new(states))
+    .with_selection_release(selection(candidate_ids))
     .with_point_presentations(
         vec![PointPresentationRootV1::new(ROOT, OCCURRENCE)],
         vec![PointPresentationTargetV1::new(ROOT, OCCURRENCE)],
@@ -693,7 +687,7 @@ fn verified_report_keeps_one_exhaustive_high_water_arena_but_only_selected_evide
     let mut session = compiled.instantiate(STREAM).unwrap();
     let SessionState::Ready { current } = session.commit(observed_backdrop(1, [0; 3])).unwrap()
     else {
-        panic!("the first authored state must verify");
+        panic!("the first ranked state must verify");
     };
     let selected_capacities = current.report().storage_capacities_for_test();
     assert_eq!(current.report().cells().len(), 1);
@@ -711,7 +705,7 @@ fn verified_report_keeps_one_exhaustive_high_water_arena_but_only_selected_evide
     let mut session = compiled.instantiate(STREAM).unwrap();
     let SessionState::Failed { cause, .. } = session.commit(observed_backdrop(1, [0; 3])).unwrap()
     else {
-        panic!("none of the authored states may satisfy the exact target");
+        panic!("none of the ranked states may satisfy the exact target");
     };
     let conflict_capacities = cause.report().storage_capacities_for_test();
     assert_eq!(
@@ -739,7 +733,7 @@ fn exhaustive_conflict_retains_each_considered_state_without_minting_selection()
         previous: None,
     } = session.commit(observed_backdrop(1, [0; 3])).unwrap()
     else {
-        panic!("both authored states must remain hard-infeasible");
+        panic!("both ranked states must remain hard-infeasible");
     };
 
     assert_eq!(cause.considered_state_count(), 2);
@@ -781,7 +775,7 @@ fn exhaustive_causal_projection_is_state_case_presentation_lexicographic() {
         .commit(observed_backdrops(1, &[(2, [255; 3]), (1, [0; 3])]))
         .unwrap()
     else {
-        panic!("neither authored state may equal the exact target");
+        panic!("neither ranked state may equal the exact target");
     };
 
     let actual = cause

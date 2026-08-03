@@ -33,12 +33,12 @@ use crate::program_session::{
     CORE_PROGRAM_ASSESSMENT_CALLS, CompiledCoreProgramV1, CompositionProfile, ConstraintId,
     ConstraintInvocation, ConstraintSet, CoreProgramConstraintInvocationV1,
     CoreProgramEvaluatorsV1, CoreProgramPassEvidenceV1, CoreProgramV1,
-    CoreProgramViolationEvidenceV1, DeclaredJointSelectionV1, FinitePaintDomainV1,
-    JointCandidateStateV1, ObservationGroup, Occurrence, OpacityInput, OutputBinding, OutputSlotId,
-    Paint, PointPresentationRootV1, PointPresentationTargetV1, PresentationRootId, Program,
-    ProgramConstraintCellV1, ProgramConstraintPassEvidenceV1, ProgramConstraintResultV1,
-    ProgramConstraintSubjectV1, ProgramConstraintViolationEvidenceV1, Source, SourceId, Surface,
-    Target, TargetCandidateChoiceV1, TargetCandidateId, TargetCandidateV1, TargetId,
+    CoreProgramViolationEvidenceV1, FinitePaintDomainV1, ObservationGroup, Occurrence,
+    OpacityInput, OutputBinding, OutputSlotId, Paint, PointPresentationRootV1,
+    PointPresentationTargetV1, PresentationRootId, Program, ProgramConstraintCellV1,
+    ProgramConstraintPassEvidenceV1, ProgramConstraintResultV1, ProgramConstraintSubjectV1,
+    ProgramConstraintViolationEvidenceV1, SelectionReleaseV1, Source, SourceId, Surface, Target,
+    TargetCandidateId, TargetCandidateV1, TargetId, TargetPreferenceV1,
 };
 use crate::session::{PreparedSessionDispositionV1, SessionState};
 use crate::session_tests::CommitSessionUpdateForTest as _;
@@ -165,10 +165,12 @@ fn finite_program_with_outputs(
         CoreProgramEvaluatorsV1,
     );
     program
-        .with_joint_selection(DeclaredJointSelectionV1::new(vec![
-            JointCandidateStateV1::new(vec![TargetCandidateChoiceV1::new(TARGET, FIRST)]),
-            JointCandidateStateV1::new(vec![TargetCandidateChoiceV1::new(TARGET, SECOND)]),
-        ]))
+        .with_selection_release(
+            SelectionReleaseV1::try_new(vec![
+                TargetPreferenceV1::try_new(TARGET, vec![FIRST, SECOND]).unwrap(),
+            ])
+            .unwrap(),
+        )
         .compile()
         .unwrap()
 }

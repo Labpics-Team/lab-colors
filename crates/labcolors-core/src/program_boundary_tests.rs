@@ -9,13 +9,14 @@ use crate::Srgb8;
 use crate::program::{
     AppearanceContextErrorKindV1, AppearanceContextFieldV1, AppearanceContextV1, AssessmentV1,
     CertificateV1, CompileErrorHandleV1, CompileErrorKindV1, CompileErrorV1, ConstraintIdV1,
-    ConstraintSubjectV1, ContentIdentityV7, DraftErrorV1, DraftV1, EvidenceBoundsErrorV1,
-    EvidenceViewV1, FinitePaintDomainV1, InstantiateErrorV1, JointChoiceV1, JointOrderErrorV1,
-    JointStateV1, NumericDomainErrorV1, ObservationHeadV1, OccurrenceIdV1, OpacityInputIdV1,
-    OutputSlotIdV1, OwnerV1, PaintIdV1, PaintValueV1, PhysicalPointV1, PresentationRootIdV1,
-    ScenarioV1, SessionV1, SignalV1, SourceIdV1, StateKindV1, SurfaceIdV1, SurfaceInputPortIdV1,
-    SurroundV1, TargetCandidateIdV1, TargetCandidateV1, TargetIdV1, UpdateErrorKindV1,
-    UpdateErrorV1, UpdateV1, VerdictV1,
+    ConstraintSubjectV1, ContentIdentityV8, DraftErrorV1, DraftV1, EvidenceBoundsErrorV1,
+    EvidenceViewV1, FinitePaintDomainV1, InstantiateErrorV1, NumericDomainErrorV1,
+    ObservationHeadV1, OccurrenceIdV1, OpacityInputIdV1, OutputSlotIdV1, OwnerV1, PaintIdV1,
+    PaintValueV1, PhysicalPointV1, PresentationRootIdV1, ScenarioV1, SelectionReleaseErrorV1,
+    SelectionReleaseV1, SessionV1, SignalV1, SourceIdV1, StateKindV1, SurfaceIdV1,
+    SurfaceInputPortIdV1, SurroundV1, TargetCandidateIdV1, TargetCandidateV1, TargetIdV1,
+    TargetPreferenceV1, UpdateErrorKindV1, UpdateErrorV1, UpdateV1, VerdictV1,
+    selection_release_for_test,
 };
 use crate::wcag22::Wcag22CriterionV1;
 
@@ -464,10 +465,10 @@ fn joint_draft(hard: bool) -> DraftV1 {
         ]),
     );
     draft
-        .set_joint_selection(vec![
-            JointStateV1::new(vec![JointChoiceV1::new(target, black)]),
-            JointStateV1::new(vec![JointChoiceV1::new(target, white)]),
-        ])
+        .set_selection_release(selection_release_for_test(vec![(
+            target,
+            vec![black, white],
+        )]))
         .unwrap();
     draft.push_surface_input_port(input);
     draft.push_solid_paint(paint, target);
@@ -510,10 +511,10 @@ fn finite_paint_candidates_are_not_a_cartesian_source_opacity_domain() {
         ]),
     );
     draft
-        .set_joint_selection(vec![
-            JointStateV1::new(vec![JointChoiceV1::new(target, translucent_white)]),
-            JointStateV1::new(vec![JointChoiceV1::new(target, opaque_gray)]),
-        ])
+        .set_selection_release(selection_release_for_test(vec![(
+            target,
+            vec![translucent_white, opaque_gray],
+        )]))
         .unwrap();
     draft.push_surface_input_port(input);
     draft.push_solid_paint(paint, target);
@@ -581,7 +582,7 @@ fn evidence_cell_bounds_report_both_checked_multiplication_overflows() {
     ));
 
     // One constraint keeps the first product representable; the two-state
-    // joint order forces the independent exhaustive-conflict product to fail.
+    // SelectionRelease forces the independent exhaustive-conflict product to fail.
     let two_states = joint_draft(true).compile().unwrap();
     assert!(matches!(
         two_states.evidence_cell_bounds(usize::MAX),
@@ -645,7 +646,7 @@ fn evidence_cell_bounds_cover_actual_joint_conflict_and_duplicate_case_reduction
         )
         .unwrap();
     let Some(CertificateV1::Conflict(certificate)) = projection.certificates().next() else {
-        panic!("both authored joint states must violate the hard exact constraint");
+        panic!("both compiler-ranked joint states must violate the hard exact constraint");
     };
     assert_eq!(certificate.cells().len(), joint_bounds.conflict_cells());
 
@@ -757,10 +758,10 @@ fn staged_authoring_lowers_the_actual_closed_program_and_returns_canonical_input
         ]),
     );
     draft
-        .set_joint_selection(vec![
-            JointStateV1::new(vec![JointChoiceV1::new(target, gray)]),
-            JointStateV1::new(vec![JointChoiceV1::new(target, black)]),
-        ])
+        .set_selection_release(selection_release_for_test(vec![(
+            target,
+            vec![gray, black],
+        )]))
         .unwrap();
     // Deliberately reverse numeric order. Core, not the caller, owns the hot
     // scenario schema order returned below.
@@ -1009,7 +1010,7 @@ fn owner_and_update_errors_preserve_content_and_input_identity() {
     let owner = fixed_nested_draft(1.0, SourceIdV1::new(1), input, input)
         .compile()
         .unwrap();
-    let owner_identity: ContentIdentityV7 = owner.content_identity();
+    let owner_identity: ContentIdentityV8 = owner.content_identity();
     let mut session = owner.instantiate(13).unwrap();
 
     let no_scenarios = [];
@@ -1333,7 +1334,7 @@ fn duplicate_candidate_value_preserves_both_candidates_and_exact_stimulus() {
 }
 
 #[test]
-fn joint_diagnostics_preserve_state_and_total_order_details() {
+fn selection_diagnostics_preserve_objective_and_candidate_details() {
     let input = SurfaceInputPortIdV1::new(50);
     let target = TargetIdV1::new(70);
     let first = TargetCandidateIdV1::new(701);
@@ -1343,34 +1344,31 @@ fn joint_diagnostics_preserve_state_and_total_order_details() {
         TargetCandidateV1::new(second, PaintValueV1::opaque(Srgb8::new([255; 3]))),
     ];
 
-    let mut duplicate_target = fixed_nested_draft(1.0, SourceIdV1::new(1), input, input);
-    duplicate_target.push_finite_target(target, finite_domain(candidates.clone()));
-    attach_target_assessment(&mut duplicate_target, target);
-    duplicate_target
-        .set_joint_selection(vec![JointStateV1::new(vec![
-            JointChoiceV1::new(target, first),
-            JointChoiceV1::new(target, second),
-        ])])
-        .unwrap();
     assert_eq!(
-        compile_error(duplicate_target),
-        CompileErrorV1::JointStateDuplicateTarget { state: 0, target }
+        SelectionReleaseV1::try_new(vec![
+            TargetPreferenceV1::try_new(target, vec![first]).unwrap(),
+            TargetPreferenceV1::try_new(target, vec![second]).unwrap(),
+        ]),
+        Err(SelectionReleaseErrorV1::DuplicateTarget {
+            first: 0,
+            duplicate: 1,
+            target,
+        })
     );
 
     let mut incomplete = fixed_nested_draft(1.0, SourceIdV1::new(1), input, input);
     incomplete.push_finite_target(target, finite_domain(candidates));
     attach_target_assessment(&mut incomplete, target);
     incomplete
-        .set_joint_selection(vec![JointStateV1::new(vec![JointChoiceV1::new(
-            target, first,
-        )])])
+        .set_selection_release(selection_release_for_test(vec![(target, vec![first])]))
         .unwrap();
     assert_eq!(
         compile_error(incomplete),
-        CompileErrorV1::InvalidJointOrder(JointOrderErrorV1::IncompleteOrder {
-            expected: 2,
-            actual: 1,
-        })
+        CompileErrorV1::SelectionObjectiveMissingCandidate {
+            objective: 0,
+            target,
+            candidate: second,
+        }
     );
 }
 
@@ -1419,12 +1417,18 @@ fn the_code_owned_observation_group_reports_authored_port_semantics() {
 }
 
 #[test]
-fn singleton_joint_order_cannot_be_silently_replaced() {
+fn selection_release_cannot_be_silently_replaced() {
     let mut draft = DraftV1::new();
-    draft.set_joint_selection(vec![]).unwrap();
-    let error = match draft.set_joint_selection(vec![]) {
-        Ok(_) => panic!("a singleton declaration must not be replaced"),
+    let release = || {
+        selection_release_for_test(vec![(
+            TargetIdV1::new(1),
+            vec![TargetCandidateIdV1::new(2)],
+        )])
+    };
+    draft.set_selection_release(release()).unwrap();
+    let error = match draft.set_selection_release(release()) {
+        Ok(_) => panic!("a selection release must not be replaced"),
         Err(error) => error,
     };
-    assert_eq!(error, DraftErrorV1::JointSelectionAlreadyDeclared);
+    assert_eq!(error, DraftErrorV1::SelectionReleaseAlreadyDeclared);
 }

@@ -14,12 +14,11 @@ use crate::lcs_occurrence::{
 use crate::observation::ObservationGroupId;
 use crate::program_session::{
     CompositionProfile, ConstraintId, ConstraintInvocation, ConstraintSet,
-    CoreProgramConstraintInvocationV1, CoreProgramEvaluatorsV1, CoreProgramV1,
-    DeclaredJointSelectionV1, FinitePaintDomainV1, JointCandidateStateV1, ObservationGroup,
-    Occurrence, OpacityInput, OutputBinding, OutputSlotId, Paint, PointPresentationRootV1,
-    PointPresentationTargetV1, PresentationRootId, Program, ProgramContentIdentityV7, Source,
-    SourceId, Surface, Target, TargetCandidateChoiceV1, TargetCandidateId, TargetCandidateV1,
-    TargetId,
+    CoreProgramConstraintInvocationV1, CoreProgramEvaluatorsV1, CoreProgramV1, FinitePaintDomainV1,
+    ObservationGroup, Occurrence, OpacityInput, OutputBinding, OutputSlotId, Paint,
+    PointPresentationRootV1, PointPresentationTargetV1, PresentationRootId, Program,
+    ProgramContentIdentityV8, SelectionReleaseV1, Source, SourceId, Surface, Target,
+    TargetCandidateId, TargetCandidateV1, TargetId, TargetPreferenceV1,
 };
 use crate::relation::DirectedRelationV1;
 use crate::wcag22::Wcag22CriterionV1;
@@ -41,6 +40,16 @@ fn paint_value(signal: ColorSignal, opacity: f64) -> EncodedPointPaintValueV1 {
 
 fn finite_domain(candidates: Vec<TargetCandidateV1>) -> FinitePaintDomainV1 {
     FinitePaintDomainV1::try_new(candidates).unwrap()
+}
+
+fn selection_release(objectives: Vec<(TargetId, Vec<TargetCandidateId>)>) -> SelectionReleaseV1 {
+    SelectionReleaseV1::try_new(
+        objectives
+            .into_iter()
+            .map(|(target, candidates)| TargetPreferenceV1::try_new(target, candidates).unwrap())
+            .collect(),
+    )
+    .unwrap()
 }
 
 fn context(surround: SurroundProfileId) -> AppearanceContextId {
@@ -160,7 +169,7 @@ fn family_identity_program(
 }
 
 #[test]
-fn family_ids_and_declaration_order_are_alpha_invariant_in_v7() {
+fn family_ids_and_declaration_order_are_alpha_invariant_in_v8() {
     let first = FamilyId::new(100);
     let second = FamilyId::new(200);
     let renamed_first = FamilyId::new(900);
@@ -191,7 +200,7 @@ fn family_ids_and_declaration_order_are_alpha_invariant_in_v7() {
 }
 
 #[test]
-fn family_content_is_bound_into_v7_identity() {
+fn family_content_is_bound_into_v8_identity() {
     let first = FamilyId::new(100);
     let second = FamilyId::new(200);
     let baseline = family_identity_program(
@@ -229,7 +238,7 @@ fn family_content_is_bound_into_v7_identity() {
 }
 
 #[test]
-fn constraint_family_binding_topology_is_bound_into_v7_identity() {
+fn constraint_family_binding_topology_is_bound_into_v8_identity() {
     let first = FamilyId::new(100);
     let second = FamilyId::new(200);
     let declarations = vec![
@@ -253,7 +262,7 @@ fn constraint_family_binding_topology_is_bound_into_v7_identity() {
 }
 
 #[test]
-fn shared_and_duplicated_equal_families_have_distinct_v7_identity() {
+fn shared_and_duplicated_equal_families_have_distinct_v8_identity() {
     let first = FamilyId::new(100);
     let second = FamilyId::new(200);
     let members = vec![[0x20, 0x40, 0x60], [0x80, 0x60, 0x40]];
@@ -495,7 +504,7 @@ fn presentation_topology_ignores_root_names_and_declaration_order() {
 }
 
 #[test]
-fn presentation_root_terminal_relation_changes_v7_identity() {
+fn presentation_root_terminal_relation_changes_v8_identity() {
     let ids = canonical_full_ids();
     let root = PresentationRootId::new(1);
     let first = full_program(ids, false, FullMutation::None)
@@ -516,7 +525,7 @@ fn presentation_root_terminal_relation_changes_v7_identity() {
 }
 
 #[test]
-fn presentation_target_relation_and_multiplicity_change_v7_identity() {
+fn presentation_target_relation_and_multiplicity_change_v8_identity() {
     let ids = canonical_full_ids();
     let root = PresentationRootId::new(1);
     let nested_target = full_program(ids, false, FullMutation::None)
@@ -558,7 +567,7 @@ fn presentation_target_relation_and_multiplicity_change_v7_identity() {
 }
 
 #[test]
-fn canonical_v7_digest_is_cross_platform_golden() {
+fn canonical_v8_digest_is_cross_platform_golden() {
     let ids = FixedIds {
         sources: [SourceId::new(10), SourceId::new(20)],
         targets: [TargetId::new(30), TargetId::new(40)],
@@ -579,12 +588,12 @@ fn canonical_v7_digest_is_cross_platform_golden() {
     .compile()
     .unwrap();
 
-    let identity: ProgramContentIdentityV7 = compiled.content_identity();
+    let identity: ProgramContentIdentityV8 = compiled.content_identity();
     assert_eq!(
         identity.as_bytes(),
         &[
-            154, 204, 81, 85, 156, 9, 26, 195, 87, 171, 96, 24, 34, 25, 217, 167, 60, 142, 99, 146,
-            3, 34, 238, 113, 105, 97, 144, 203, 111, 224, 244, 136,
+            94, 214, 174, 159, 139, 60, 138, 90, 242, 92, 158, 76, 153, 97, 208, 124, 207, 174, 28,
+            202, 158, 215, 146, 193, 71, 101, 104, 48, 179, 241, 170, 156,
         ]
     );
 }
@@ -914,20 +923,6 @@ fn full_program(ids: FullIds, reverse_unordered: bool, mutation: FullMutation) -
         outputs.reverse();
     }
 
-    let mut states = Vec::new();
-    for first in 0..2 {
-        for second in 0..2 {
-            let mut choices = vec![
-                TargetCandidateChoiceV1::new(ids.targets[0], ids.candidates[0][first]),
-                TargetCandidateChoiceV1::new(ids.targets[1], ids.candidates[1][second]),
-            ];
-            if reverse_unordered {
-                choices.reverse();
-            }
-            states.push(JointCandidateStateV1::new(choices));
-        }
-    }
-
     let program = Program::new(
         sources,
         targets,
@@ -940,7 +935,10 @@ fn full_program(ids: FullIds, reverse_unordered: bool, mutation: FullMutation) -
         outputs,
         CoreProgramEvaluatorsV1,
     )
-    .with_joint_selection(DeclaredJointSelectionV1::new(states));
+    .with_selection_release(selection_release(vec![
+        (ids.targets[0], ids.candidates[0].to_vec()),
+        (ids.targets[1], ids.candidates[1].to_vec()),
+    ]));
 
     if matches!(mutation, FullMutation::CompleteSchemaGolden) {
         program
@@ -996,8 +994,8 @@ fn canonical_full_ids() -> FullIds {
 }
 
 #[test]
-fn complete_program_schema_v7_digest_is_cross_platform_golden() {
-    // Вместе с fixed golden этот Program содержит каждый V7 vertex/edge tag,
+fn complete_program_schema_v8_digest_is_cross_platform_golden() {
+    // Вместе с fixed golden этот Program содержит каждый V8 vertex/edge tag,
     // все constraint topology и оба режима. Случайная смена кодировки требует
     // явной смены версии, а не тихого перевыпуска прежнего content address.
     let compiled = full_program(
@@ -1026,8 +1024,8 @@ fn complete_program_schema_v7_digest_is_cross_platform_golden() {
     assert_eq!(
         compiled.content_identity().as_bytes(),
         &[
-            7, 48, 234, 107, 255, 142, 19, 44, 100, 188, 151, 23, 132, 32, 125, 8, 223, 146, 164,
-            87, 8, 134, 38, 127, 130, 32, 197, 17, 118, 227, 166, 95,
+            82, 76, 92, 183, 76, 67, 110, 218, 180, 243, 74, 83, 74, 12, 197, 130, 205, 81, 156,
+            226, 235, 232, 91, 172, 43, 79, 136, 163, 155, 16, 63, 16,
         ]
     );
 }
@@ -1431,13 +1429,10 @@ fn finite_program_with_opacity(reverse_order: bool, first_opacity: f64) -> CoreP
     let port = SurfaceInputPortId::new(6);
     let surface = SurfaceId::new(7);
     let occurrence = OccurrenceId::new(8);
-    let states = [first, second].map(|candidate| {
-        JointCandidateStateV1::new(vec![TargetCandidateChoiceV1::new(target, candidate)])
-    });
-    let states = if reverse_order {
-        vec![states[1].clone(), states[0].clone()]
+    let candidates = if reverse_order {
+        vec![second, first]
     } else {
-        states.to_vec()
+        vec![first, second]
     };
 
     Program::new(
@@ -1474,7 +1469,7 @@ fn finite_program_with_opacity(reverse_order: bool, first_opacity: f64) -> CoreP
         vec![OutputBinding::new(OutputSlotId::new(11), paint)],
         CoreProgramEvaluatorsV1,
     )
-    .with_joint_selection(DeclaredJointSelectionV1::new(states))
+    .with_selection_release(selection_release(vec![(target, candidates)]))
 }
 
 fn finite_program(reverse_order: bool) -> CoreProgramV1 {
@@ -1533,10 +1528,7 @@ fn finite_program_with_permuted_source_colors(swap_source_signals: bool) -> Core
         vec![OutputBinding::new(OutputSlotId::new(12), paint)],
         CoreProgramEvaluatorsV1,
     )
-    .with_joint_selection(DeclaredJointSelectionV1::new(vec![
-        JointCandidateStateV1::new(vec![TargetCandidateChoiceV1::new(target, first)]),
-        JointCandidateStateV1::new(vec![TargetCandidateChoiceV1::new(target, second)]),
-    ]))
+    .with_selection_release(selection_release(vec![(target, vec![first, second])]))
 }
 
 #[test]
@@ -1602,7 +1594,7 @@ fn fixed_and_finite_target_domains_have_distinct_identity() {
 }
 
 #[test]
-fn content_identity_retains_the_explicit_joint_state_order() {
+fn content_identity_retains_the_selection_release_sequence() {
     let forward = finite_program(false).compile().unwrap();
     let reversed = finite_program(true).compile().unwrap();
 
@@ -1610,7 +1602,7 @@ fn content_identity_retains_the_explicit_joint_state_order() {
 }
 
 #[test]
-fn finite_candidate_opacity_is_part_of_v7_content_identity() {
+fn finite_candidate_opacity_is_part_of_v8_content_identity() {
     let quarter = finite_program_with_opacity(false, 0.25).compile().unwrap();
     let half = finite_program_with_opacity(false, 0.5).compile().unwrap();
 

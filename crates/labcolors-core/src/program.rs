@@ -24,7 +24,7 @@
 //! [`CertificateV1::Verified`] хранит выбранное состояние, все клетки
 //! доказательства и сертифицированные Paint outputs. [`CertificateV1::Conflict`]
 //! хранит исчерпывающий конфликт по всем рассмотренным состояниям.
-//! [`ContentIdentityV7`] идентифицирует каноническое содержание, но не даёт
+//! [`ContentIdentityV8`] идентифицирует каноническое содержание, но не даёт
 //! полномочий живого [`OwnerV1`].
 
 #![forbid(unreachable_pub)]
@@ -51,7 +51,6 @@ use crate::family::{
     SemanticFamilyReleaseIdV2 as CoreSemanticFamilyReleaseIdV2,
 };
 use crate::family_artifact::{FamilyArtifactBundleV2, FamilyArtifactContractErrorV2};
-use crate::joint::FiniteJointOrderErrorV1;
 use crate::lcs_occurrence::{
     AdaptingLuminanceCdM2, AppearanceContextDomainErrorV1,
     AppearanceContextFieldV1 as CoreAppearanceContextFieldV1, AppearanceContextId,
@@ -67,21 +66,23 @@ use crate::program_session::{
     CompiledCoreProgramV1, CompositionProfile, ConstraintId, ConstraintInvocation,
     CoreProgramConstraintInvocationV1, CoreProgramDraftErrorV1, CoreProgramDraftV1,
     CoreProgramEvaluatorErrorV1, CoreProgramEvaluatorsV1, CoreProgramPassEvidenceV1,
-    CoreProgramViolationEvidenceV1, DeclaredJointSelectionV1,
-    DeclaredSrgb8CleanSetPassV1 as CoreDeclaredSrgb8CleanSetPassV1,
+    CoreProgramViolationEvidenceV1, DeclaredSrgb8CleanSetPassV1 as CoreDeclaredSrgb8CleanSetPassV1,
     DeclaredSrgb8CleanSetViolationV1 as CoreDeclaredSrgb8CleanSetViolationV1,
-    FinitePaintDomainAdmissionErrorV1, FinitePaintDomainV1 as CoreFinitePaintDomainV1,
-    JointCandidateStateV1, Occurrence, OpacityInput, OutputBinding, OutputSlotId, Paint,
-    PointPresentationRootV1, PointPresentationTargetV1, PresentationRootId, ProgramCompileError,
-    ProgramConflictV1, ProgramConstraintCellV1, ProgramConstraintPassEvidenceV1,
-    ProgramConstraintResultV1, ProgramConstraintSubjectV1, ProgramConstraintViolationEvidenceV1,
-    ProgramContentIdentityV7, ProgramIntrinsicPaintBindingV1, ProgramIntrinsicUnaryPassEvidenceV1,
+    FinitePaintDomainAdmissionErrorV1, FinitePaintDomainV1 as CoreFinitePaintDomainV1, Occurrence,
+    OpacityInput, OutputBinding, OutputSlotId, Paint, PointPresentationRootV1,
+    PointPresentationTargetV1, PresentationRootId, ProgramCompileError, ProgramConflictV1,
+    ProgramConstraintCellV1, ProgramConstraintPassEvidenceV1, ProgramConstraintResultV1,
+    ProgramConstraintSubjectV1, ProgramConstraintViolationEvidenceV1, ProgramContentIdentityV8,
+    ProgramIntrinsicPaintBindingV1, ProgramIntrinsicUnaryPassEvidenceV1,
     ProgramIntrinsicUnaryViolationEvidenceV1, ProgramPaintOutputV1,
     ProgramRelationMemberDecisionV1, ProgramRelationMemberEvidenceV1, ProgramReportV1,
     ProgramSessionEvaluationError, ProgramSessionInstantiateError, ProgramSessionPlan,
-    ProgramVerifiedV1, ProgramVisibleRelationBindingV1, Source, SourceId, Surface, Target,
-    TargetCandidateChoiceV1, TargetCandidateId, TargetCandidateV1 as CoreTargetCandidateV1,
-    TargetId,
+    ProgramVerifiedV1, ProgramVisibleRelationBindingV1,
+    SelectionReleaseAdmissionErrorV1 as CoreSelectionReleaseAdmissionErrorV1,
+    SelectionReleaseV1 as CoreSelectionReleaseV1, Source, SourceId, Surface, Target,
+    TargetCandidateId, TargetCandidateV1 as CoreTargetCandidateV1, TargetId,
+    TargetPreferenceAdmissionErrorV1 as CoreTargetPreferenceAdmissionErrorV1,
+    TargetPreferenceV1 as CoreTargetPreferenceV1,
 };
 #[cfg(test)]
 pub(crate) use crate::relation::DirectedRelationErrorV1;
@@ -337,31 +338,116 @@ impl PaintValueV1 {
     }
 }
 
-/// Выбор одного кандидата для одной цели в совместном состоянии.
+/// Ошибка admission одной явной последовательности предпочтений.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct JointChoiceV1(TargetCandidateChoiceV1);
+pub(crate) enum TargetPreferenceErrorV1 {
+    /// Objective не содержит ни одного кандидата.
+    EmptyCandidates { target: TargetIdV1 },
+    /// Один opaque candidate повторён в semantic sequence.
+    DuplicateCandidate {
+        target: TargetIdV1,
+        first: usize,
+        duplicate: usize,
+        candidate: TargetCandidateIdV1,
+    },
+}
 
-impl JointChoiceV1 {
-    /// Создаёт типизированную пару `цель → кандидат`.
-    pub(crate) const fn new(target: TargetIdV1, candidate: TargetCandidateIdV1) -> Self {
-        Self(TargetCandidateChoiceV1::new(
+/// Лексикографическая objective для одной finite Target.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct TargetPreferenceV1(CoreTargetPreferenceV1);
+
+impl TargetPreferenceV1 {
+    /// Парсит непустой ordered candidate sequence без интерпретации opaque ID.
+    pub(crate) fn try_new(
+        target: TargetIdV1,
+        candidates: Vec<TargetCandidateIdV1>,
+    ) -> Result<Self, TargetPreferenceErrorV1> {
+        CoreTargetPreferenceV1::try_new(
             target.into_core(),
-            candidate.into_core(),
-        ))
+            candidates
+                .into_iter()
+                .map(TargetCandidateIdV1::into_core)
+                .collect(),
+        )
+        .map(Self)
+        .map_err(|error| match error {
+            CoreTargetPreferenceAdmissionErrorV1::EmptyCandidates { target } => {
+                TargetPreferenceErrorV1::EmptyCandidates {
+                    target: TargetIdV1::from_core(target),
+                }
+            }
+            CoreTargetPreferenceAdmissionErrorV1::DuplicateCandidate {
+                target,
+                first,
+                duplicate,
+                candidate,
+            } => TargetPreferenceErrorV1::DuplicateCandidate {
+                target: TargetIdV1::from_core(target),
+                first,
+                duplicate,
+                candidate: TargetCandidateIdV1::from_core(candidate),
+            },
+        })
     }
 }
 
-/// Полное явно объявленное состояние всех конечных целей.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct JointStateV1(JointCandidateStateV1);
+/// Ошибка admission единственного SelectionRelease.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SelectionReleaseErrorV1 {
+    /// Release не содержит objectives.
+    EmptyObjectives,
+    /// Одна Target получила две независимые selection-authorities.
+    DuplicateTarget {
+        first: usize,
+        duplicate: usize,
+        target: TargetIdV1,
+    },
+}
 
-impl JointStateV1 {
-    /// Создаёт состояние из одного выбора для каждой конечной цели.
-    pub(crate) fn new(choices: Vec<JointChoiceV1>) -> Self {
-        Self(JointCandidateStateV1::new(
-            choices.into_iter().map(|choice| choice.0).collect(),
-        ))
+/// Единственный versioned lexicographic selection contract Program.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SelectionReleaseV1(CoreSelectionReleaseV1);
+
+impl SelectionReleaseV1 {
+    /// Парсит непустую semantic sequence objectives.
+    pub(crate) fn try_new(
+        objectives: Vec<TargetPreferenceV1>,
+    ) -> Result<Self, SelectionReleaseErrorV1> {
+        CoreSelectionReleaseV1::try_new(
+            objectives
+                .into_iter()
+                .map(|objective| objective.0)
+                .collect(),
+        )
+        .map(Self)
+        .map_err(|error| match error {
+            CoreSelectionReleaseAdmissionErrorV1::EmptyObjectives => {
+                SelectionReleaseErrorV1::EmptyObjectives
+            }
+            CoreSelectionReleaseAdmissionErrorV1::DuplicateTarget {
+                first,
+                duplicate,
+                target,
+            } => SelectionReleaseErrorV1::DuplicateTarget {
+                first,
+                duplicate,
+                target: TargetIdV1::from_core(target),
+            },
+        })
     }
+}
+
+#[cfg(test)]
+pub(crate) fn selection_release_for_test(
+    objectives: Vec<(TargetIdV1, Vec<TargetCandidateIdV1>)>,
+) -> SelectionReleaseV1 {
+    SelectionReleaseV1::try_new(
+        objectives
+            .into_iter()
+            .map(|(target, candidates)| TargetPreferenceV1::try_new(target, candidates).unwrap())
+            .collect(),
+    )
+    .unwrap()
 }
 
 /// Зарегистрированный режим окружения CIECAM16.
@@ -624,20 +710,20 @@ pub(crate) enum CompileErrorKindV1 {
     DisconnectedFiniteTargets,
     /// Выходной Paint не покрыт ни одним ограничением.
     UnassessedOutput,
-    /// Для конечных целей не объявлен совместный порядок.
-    MissingJointSelection,
-    /// Совместный порядок объявлен без конечных целей.
-    JointSelectionWithoutTargets,
-    /// Состояние повторяет одну цель.
-    JointStateDuplicateTarget,
-    /// В состоянии отсутствует конечная цель.
-    JointStateMissingTarget,
-    /// Состояние ссылается на неизвестную цель.
-    JointStateUnknownTarget,
-    /// Состояние ссылается на неизвестного кандидата.
-    JointStateUnknownCandidate,
-    /// Совместный порядок не является полным конечным порядком.
-    InvalidJointOrder,
+    /// Для конечных целей не объявлен SelectionRelease.
+    MissingSelectionRelease,
+    /// SelectionRelease объявлен без конечных целей.
+    SelectionReleaseWithoutTargets,
+    /// Objective ссылается на неизвестную цель.
+    SelectionObjectiveUnknownTarget,
+    /// Для finite Target отсутствует objective.
+    SelectionObjectiveMissingTarget,
+    /// Objective ссылается на неизвестного кандидата.
+    SelectionObjectiveUnknownCandidate,
+    /// Objective не покрывает кандидата своей цели.
+    SelectionObjectiveMissingCandidate,
+    /// Мощность joint-пространства не представима в `usize`.
+    SelectionCardinalityOverflow,
     /// Не объявлено ни одного динамического входа поверхности.
     EmptySurfaceInputPortSet,
     /// Не объявлено ни одного физического Occurrence.
@@ -734,49 +820,6 @@ impl RenderCycleV1 {
             .copied()
             .map(OccurrenceIdV1::from_core)
     }
-}
-
-/// Точная причина отказа явно объявленного конечного совместного порядка.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum JointOrderErrorV1 {
-    /// Декартова мощность измерений не представима в `usize`.
-    CardinalityOverflow,
-    /// Явный порядок не содержит состояний.
-    EmptyOrder,
-    /// Состояние содержит неверное число измерений.
-    TupleArity {
-        /// Индекс состояния.
-        state: usize,
-        /// Требуемое число измерений.
-        expected: usize,
-        /// Фактическое число измерений.
-        actual: usize,
-    },
-    /// Ординал кандидата выходит за домен измерения.
-    OrdinalOutOfDomain {
-        /// Индекс состояния.
-        state: usize,
-        /// Индекс измерения.
-        dimension: usize,
-        /// Некорректный ординал.
-        ordinal: usize,
-        /// Мощность домена измерения.
-        domain_len: usize,
-    },
-    /// Два состояния задают один и тот же кортеж.
-    DuplicateTuple {
-        /// Индекс первого состояния.
-        first_state: usize,
-        /// Индекс повторного состояния.
-        duplicate_state: usize,
-    },
-    /// Порядок не покрывает полный декартов домен.
-    IncompleteOrder {
-        /// Требуемое число состояний.
-        expected: usize,
-        /// Фактическое число состояний.
-        actual: usize,
-    },
 }
 
 /// Атомарная и полная ошибка компиляции объявленной программы.
@@ -993,42 +1036,42 @@ pub(crate) enum CompileErrorV1 {
         /// Его Paint.
         paint: PaintIdV1,
     },
-    /// Для конечных целей не объявлен совместный порядок.
-    MissingJointSelection,
-    /// Совместный порядок объявлен без конечных целей.
-    JointSelectionWithoutTargets,
-    /// Состояние повторяет одну цель.
-    JointStateDuplicateTarget {
-        /// Индекс состояния.
-        state: usize,
-        /// Повторная цель.
-        target: TargetIdV1,
-    },
-    /// В состоянии отсутствует конечная цель.
-    JointStateMissingTarget {
-        /// Индекс состояния.
-        state: usize,
-        /// Отсутствующая цель.
-        target: TargetIdV1,
-    },
-    /// Состояние ссылается на неизвестную цель.
-    JointStateUnknownTarget {
-        /// Индекс состояния.
-        state: usize,
+    /// Для finite Targets не объявлен SelectionRelease.
+    MissingSelectionRelease,
+    /// SelectionRelease объявлен без finite Targets.
+    SelectionReleaseWithoutTargets,
+    /// Objective ссылается на неизвестную Target.
+    SelectionObjectiveUnknownTarget {
+        /// Индекс objective в semantic sequence.
+        objective: usize,
         /// Неизвестная цель.
         target: TargetIdV1,
     },
-    /// Состояние ссылается на неизвестного кандидата.
-    JointStateUnknownCandidate {
-        /// Индекс состояния.
-        state: usize,
+    /// Для finite Target отсутствует objective.
+    SelectionObjectiveMissingTarget {
+        /// Неохваченная цель.
+        target: TargetIdV1,
+    },
+    /// Objective ссылается на неизвестного кандидата.
+    SelectionObjectiveUnknownCandidate {
+        /// Индекс objective.
+        objective: usize,
         /// Цель кандидата.
         target: TargetIdV1,
         /// Неизвестный кандидат.
         candidate: TargetCandidateIdV1,
     },
-    /// Явный совместный порядок не является полным конечным порядком.
-    InvalidJointOrder(JointOrderErrorV1),
+    /// Objective не покрывает кандидата своей finite Target.
+    SelectionObjectiveMissingCandidate {
+        /// Индекс objective.
+        objective: usize,
+        /// Цель кандидата.
+        target: TargetIdV1,
+        /// Неохваченный кандидат.
+        candidate: TargetCandidateIdV1,
+    },
+    /// Полная joint-мощность не представима в `usize`.
+    SelectionCardinalityOverflow,
     /// Не объявлено ни одного динамического входа поверхности.
     EmptySurfaceInputPortSet,
     /// Не объявлено ни одного физического Occurrence.
@@ -1183,13 +1226,17 @@ impl CompileErrorV1 {
             Self::UnconstrainedFiniteTarget { .. } => Kind::UnconstrainedFiniteTarget,
             Self::DisconnectedFiniteTargets => Kind::DisconnectedFiniteTargets,
             Self::UnassessedOutput { .. } => Kind::UnassessedOutput,
-            Self::MissingJointSelection => Kind::MissingJointSelection,
-            Self::JointSelectionWithoutTargets => Kind::JointSelectionWithoutTargets,
-            Self::JointStateDuplicateTarget { .. } => Kind::JointStateDuplicateTarget,
-            Self::JointStateMissingTarget { .. } => Kind::JointStateMissingTarget,
-            Self::JointStateUnknownTarget { .. } => Kind::JointStateUnknownTarget,
-            Self::JointStateUnknownCandidate { .. } => Kind::JointStateUnknownCandidate,
-            Self::InvalidJointOrder(_) => Kind::InvalidJointOrder,
+            Self::MissingSelectionRelease => Kind::MissingSelectionRelease,
+            Self::SelectionReleaseWithoutTargets => Kind::SelectionReleaseWithoutTargets,
+            Self::SelectionObjectiveUnknownTarget { .. } => Kind::SelectionObjectiveUnknownTarget,
+            Self::SelectionObjectiveMissingTarget { .. } => Kind::SelectionObjectiveMissingTarget,
+            Self::SelectionObjectiveUnknownCandidate { .. } => {
+                Kind::SelectionObjectiveUnknownCandidate
+            }
+            Self::SelectionObjectiveMissingCandidate { .. } => {
+                Kind::SelectionObjectiveMissingCandidate
+            }
+            Self::SelectionCardinalityOverflow => Kind::SelectionCardinalityOverflow,
             Self::EmptySurfaceInputPortSet => Kind::EmptySurfaceInputPortSet,
             Self::EmptyOccurrenceSet => Kind::EmptyOccurrenceSet,
             Self::EmptyConstraintSet => Kind::EmptyConstraintSet,
@@ -1230,10 +1277,10 @@ impl CompileErrorV1 {
             Self::DuplicateSource { source } => Some(Handle::Source(*source)),
             Self::DuplicateTarget { target }
             | Self::UnconstrainedFiniteTarget { target }
-            | Self::JointStateDuplicateTarget { target, .. }
-            | Self::JointStateMissingTarget { target, .. }
-            | Self::JointStateUnknownTarget { target, .. }
-            | Self::JointStateUnknownCandidate { target, .. }
+            | Self::SelectionObjectiveUnknownTarget { target, .. }
+            | Self::SelectionObjectiveMissingTarget { target }
+            | Self::SelectionObjectiveUnknownCandidate { target, .. }
+            | Self::SelectionObjectiveMissingCandidate { target, .. }
             | Self::MissingFixedSource { target, .. }
             | Self::DuplicateTargetCandidate { target, .. }
             | Self::DuplicateTargetCandidateValue { target, .. } => Some(Handle::Target(*target)),
@@ -1289,9 +1336,9 @@ impl CompileErrorV1 {
             Self::PaintCycle(_)
             | Self::RenderCycle(_)
             | Self::DisconnectedFiniteTargets
-            | Self::MissingJointSelection
-            | Self::JointSelectionWithoutTargets
-            | Self::InvalidJointOrder(_)
+            | Self::MissingSelectionRelease
+            | Self::SelectionReleaseWithoutTargets
+            | Self::SelectionCardinalityOverflow
             | Self::EmptySurfaceInputPortSet
             | Self::EmptyOccurrenceSet
             | Self::EmptyConstraintSet
@@ -1355,7 +1402,8 @@ impl CompileErrorV1 {
                 duplicate: candidate,
                 ..
             }
-            | Self::JointStateUnknownCandidate { candidate, .. } => {
+            | Self::SelectionObjectiveUnknownCandidate { candidate, .. }
+            | Self::SelectionObjectiveMissingCandidate { candidate, .. } => {
                 Some(Handle::TargetCandidate(*candidate))
             }
             Self::DuplicateSource { .. }
@@ -1376,12 +1424,11 @@ impl CompileErrorV1 {
             | Self::OpacityOutOfDomain { .. }
             | Self::UnconstrainedFiniteTarget { .. }
             | Self::DisconnectedFiniteTargets
-            | Self::MissingJointSelection
-            | Self::JointSelectionWithoutTargets
-            | Self::JointStateDuplicateTarget { .. }
-            | Self::JointStateMissingTarget { .. }
-            | Self::JointStateUnknownTarget { .. }
-            | Self::InvalidJointOrder(_)
+            | Self::MissingSelectionRelease
+            | Self::SelectionReleaseWithoutTargets
+            | Self::SelectionObjectiveUnknownTarget { .. }
+            | Self::SelectionObjectiveMissingTarget { .. }
+            | Self::SelectionCardinalityOverflow
             | Self::EmptySurfaceInputPortSet
             | Self::EmptyOccurrenceSet
             | Self::EmptyConstraintSet
@@ -1403,8 +1450,8 @@ pub(crate) struct DraftV1 {
 /// Ошибка изменения Draft до компиляции.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum DraftErrorV1 {
-    /// Совместный порядок уже объявлен и не может быть молча заменён.
-    JointSelectionAlreadyDeclared,
+    /// SelectionRelease уже объявлен и не может быть молча заменён.
+    SelectionReleaseAlreadyDeclared,
 }
 
 impl DraftV1 {
@@ -1453,18 +1500,16 @@ impl DraftV1 {
         self
     }
 
-    /// Один раз задаёт полный порядок совместных состояний конечных целей.
-    pub(crate) fn set_joint_selection(
+    /// Один раз связывает единственный SelectionRelease Program.
+    pub(crate) fn set_selection_release(
         &mut self,
-        states: Vec<JointStateV1>,
+        release: SelectionReleaseV1,
     ) -> Result<&mut Self, DraftErrorV1> {
         self.inner
-            .set_joint_selection(DeclaredJointSelectionV1::new(
-                states.into_iter().map(|state| state.0).collect(),
-            ))
+            .set_selection_release(release.0)
             .map_err(|error| match error {
-                CoreProgramDraftErrorV1::JointSelectionAlreadyDeclared => {
-                    DraftErrorV1::JointSelectionAlreadyDeclared
+                CoreProgramDraftErrorV1::SelectionReleaseAlreadyDeclared => {
+                    DraftErrorV1::SelectionReleaseAlreadyDeclared
                 }
             })?;
         Ok(self)
@@ -1832,8 +1877,8 @@ impl OwnerV1 {
     ///
     /// Identity доступна до первого update, но не заменяет полномочия этой
     /// конкретной owner-эпохи.
-    pub(crate) fn content_identity(&self) -> ContentIdentityV7 {
-        ContentIdentityV7::from_core(self.compiled.content_identity())
+    pub(crate) fn content_identity(&self) -> ContentIdentityV8 {
+        ContentIdentityV8::from_core(self.compiled.content_identity())
     }
 
     /// Вычисляет верхние границы клеток для prospective Observed-update.
@@ -2214,10 +2259,10 @@ impl<'session> PreparedSessionTransitionV1<'session> {
 /// Identity не идентифицирует owner-эпоху и не даёт runtime-полномочий.
 #[repr(transparent)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(crate) struct ContentIdentityV7([u8; 32]);
+pub(crate) struct ContentIdentityV8([u8; 32]);
 
-impl ContentIdentityV7 {
-    const fn from_core(value: ProgramContentIdentityV7) -> Self {
+impl ContentIdentityV8 {
+    const fn from_core(value: ProgramContentIdentityV8) -> Self {
         Self(*value.as_bytes())
     }
 
@@ -2235,8 +2280,8 @@ pub(crate) struct VerifiedCertificateV1<'a> {
 
 impl<'a> VerifiedCertificateV1<'a> {
     /// Возвращает identity скомпилированного содержания.
-    pub(crate) const fn content_identity(self) -> ContentIdentityV7 {
-        ContentIdentityV7::from_core(self.inner.report().content_identity())
+    pub(crate) const fn content_identity(self) -> ContentIdentityV8 {
+        ContentIdentityV8::from_core(self.inner.report().content_identity())
     }
 
     /// Возвращает точное наблюдение, на котором выдан сертификат.
@@ -2281,8 +2326,8 @@ pub(crate) struct ConflictCertificateV1<'a> {
 
 impl<'a> ConflictCertificateV1<'a> {
     /// Возвращает identity скомпилированного содержания.
-    pub(crate) const fn content_identity(self) -> ContentIdentityV7 {
-        ContentIdentityV7::from_core(self.inner.report().content_identity())
+    pub(crate) const fn content_identity(self) -> ContentIdentityV8 {
+        ContentIdentityV8::from_core(self.inner.report().content_identity())
     }
 
     /// Возвращает точное наблюдение, вызвавшее конфликт.
@@ -2331,7 +2376,7 @@ impl<'a> CertificateV1<'a> {
     }
 
     /// Возвращает identity скомпилированного содержания.
-    pub(crate) const fn content_identity(self) -> ContentIdentityV7 {
+    pub(crate) const fn content_identity(self) -> ContentIdentityV8 {
         match self {
             Self::Verified(value) => value.content_identity(),
             Self::Conflict(value) => value.content_identity(),
@@ -3719,42 +3764,6 @@ impl UpdateErrorV1 {
     }
 }
 
-fn map_joint_order_error(error: FiniteJointOrderErrorV1) -> JointOrderErrorV1 {
-    match error {
-        FiniteJointOrderErrorV1::CardinalityOverflow => JointOrderErrorV1::CardinalityOverflow,
-        FiniteJointOrderErrorV1::EmptyOrder => JointOrderErrorV1::EmptyOrder,
-        FiniteJointOrderErrorV1::TupleArity {
-            tuple,
-            expected,
-            actual,
-        } => JointOrderErrorV1::TupleArity {
-            state: tuple,
-            expected,
-            actual,
-        },
-        FiniteJointOrderErrorV1::OrdinalOutOfDomain {
-            tuple,
-            dimension,
-            ordinal,
-            domain_len,
-        } => JointOrderErrorV1::OrdinalOutOfDomain {
-            state: tuple,
-            dimension,
-            ordinal,
-            domain_len,
-        },
-        FiniteJointOrderErrorV1::DuplicateTuple { first, duplicate } => {
-            JointOrderErrorV1::DuplicateTuple {
-                first_state: first,
-                duplicate_state: duplicate,
-            }
-        }
-        FiniteJointOrderErrorV1::IncompleteOrder { expected, actual } => {
-            JointOrderErrorV1::IncompleteOrder { expected, actual }
-        }
-    }
-}
-
 fn map_program_compile_error(error: ProgramCompileError) -> CompileErrorV1 {
     match error {
         ProgramCompileError::DuplicateSource { source } => CompileErrorV1::DuplicateSource {
@@ -3944,39 +3953,41 @@ fn map_program_compile_error(error: ProgramCompileError) -> CompileErrorV1 {
                 paint: PaintIdV1::from_core(paint),
             }
         }
-        ProgramCompileError::MissingJointSelection => CompileErrorV1::MissingJointSelection,
-        ProgramCompileError::JointSelectionWithoutTargets => {
-            CompileErrorV1::JointSelectionWithoutTargets
+        ProgramCompileError::MissingSelectionRelease => CompileErrorV1::MissingSelectionRelease,
+        ProgramCompileError::SelectionReleaseWithoutTargets => {
+            CompileErrorV1::SelectionReleaseWithoutTargets
         }
-        ProgramCompileError::JointStateDuplicateTarget { state, target } => {
-            CompileErrorV1::JointStateDuplicateTarget {
-                state,
+        ProgramCompileError::SelectionObjectiveUnknownTarget { objective, target } => {
+            CompileErrorV1::SelectionObjectiveUnknownTarget {
+                objective,
                 target: TargetIdV1::from_core(target),
             }
         }
-        ProgramCompileError::JointStateMissingTarget { state, target } => {
-            CompileErrorV1::JointStateMissingTarget {
-                state,
+        ProgramCompileError::SelectionObjectiveMissingTarget { target } => {
+            CompileErrorV1::SelectionObjectiveMissingTarget {
                 target: TargetIdV1::from_core(target),
             }
         }
-        ProgramCompileError::JointStateUnknownTarget { state, target } => {
-            CompileErrorV1::JointStateUnknownTarget {
-                state,
-                target: TargetIdV1::from_core(target),
-            }
-        }
-        ProgramCompileError::JointStateUnknownCandidate {
-            state,
+        ProgramCompileError::SelectionObjectiveUnknownCandidate {
+            objective,
             target,
             candidate,
-        } => CompileErrorV1::JointStateUnknownCandidate {
-            state,
+        } => CompileErrorV1::SelectionObjectiveUnknownCandidate {
+            objective,
             target: TargetIdV1::from_core(target),
             candidate: TargetCandidateIdV1::from_core(candidate),
         },
-        ProgramCompileError::InvalidJointOrder(error) => {
-            CompileErrorV1::InvalidJointOrder(map_joint_order_error(error))
+        ProgramCompileError::SelectionObjectiveMissingCandidate {
+            objective,
+            target,
+            candidate,
+        } => CompileErrorV1::SelectionObjectiveMissingCandidate {
+            objective,
+            target: TargetIdV1::from_core(target),
+            candidate: TargetCandidateIdV1::from_core(candidate),
+        },
+        ProgramCompileError::SelectionCardinalityOverflow => {
+            CompileErrorV1::SelectionCardinalityOverflow
         }
         ProgramCompileError::EmptyObservationGroup { .. } => {
             CompileErrorV1::EmptySurfaceInputPortSet
