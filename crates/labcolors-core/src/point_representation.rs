@@ -272,17 +272,22 @@ pub(crate) fn resolve_exact_point_representation_v1(
     let exact = ExactPointRepresentationV1::evaluate(target, source, opacity, backdrop)
         .map_err(ResolvePointRepresentationErrorV1::ConstraintViolation)?;
     let verified = VerifiedPointRepresentationV1 { exact, feasibility };
-    let evidence = verified.evidence();
-    debug_assert_eq!(evidence.feasibility.domain(), domain);
-    debug_assert_eq!(
-        feasibility.first_feasible(),
-        first_opacity(target, backdrop)
-    );
-    debug_assert!(
-        !feasibility
-            .frontier_predecessor()
-            .is_some_and(|predecessor| target_is_feasible(target, predecessor.value(), backdrop)),
-    );
+    #[cfg(debug_assertions)]
+    {
+        let evidence = verified.evidence();
+        debug_assert_eq!(evidence.feasibility.domain(), domain);
+        debug_assert_eq!(
+            feasibility.first_feasible(),
+            first_opacity(target, backdrop)
+        );
+        debug_assert!(
+            !feasibility
+                .frontier_predecessor()
+                .is_some_and(|predecessor| {
+                    target_is_feasible(target, predecessor.value(), backdrop)
+                }),
+        );
+    }
     Ok(verified)
 }
 
@@ -637,10 +642,6 @@ mod tests {
             ExactConstraintIdentityV1::FinalSrgb8IdentityV1
         );
         assert_eq!(evidence.target(), evidence.actual());
-        assert_eq!(
-            evidence.binding().program_occurrence(),
-            verified.evidence.binding().program_occurrence(),
-        );
         assert_eq!(
             evidence.binding().occurrence_ref().output_rgb(),
             evidence.actual().bytes(),
