@@ -594,11 +594,11 @@ jobs:
         #  2. Extract required shared libs (.so) from the runner's configured
         #     Debian/Ubuntu repository without sudo. Refresh package metadata in
         #     runner.temp first: образ ячейки может нести устаревшие списки,
-        #     чьи package URL уже отдают 404. `apt-get download` fetches
-        #     .deb and `dpkg --extract` unpacks it without root.
-        #     Chrome/chromedriver need libnspr4, libnss3, distro-versioned ALSA,
-        #     and libgbm1
-        #     which are absent on the slim WSL runner image.
+        #     чьи package URL уже отдают 404. The root set below owns every
+        #     direct DT_NEEDED name of the pinned Chrome and ChromeDriver ELF
+        #     files; APT resolves its transitive closure and `dpkg --extract`
+        #     unpacks it without root. `ldd` then rejects an incomplete closure
+        #     before wasm-pack can misreport it as a driver timeout.
         run: |
           set -euo pipefail
           # -- CfT chrome + chromedriver --
@@ -624,12 +624,10 @@ jobs:
 
           # -- Extract Chrome shared-lib dependencies from distro .deb (no sudo needed) --
           DEPS_DIR="$RUNNER_TEMP/chrome-deps-$GITHUB_JOB"
-          DEBS_DIR="$DEPS_DIR/debs"
           APT_LISTS="$DEPS_DIR/apt-lists"
           APT_CACHE="$DEPS_DIR/apt-cache"
           readonly APT_SOURCES="$DEPS_DIR/apt-sources"
           mkdir -p \
-            "$DEBS_DIR" \
             "$APT_LISTS/partial" \
             "$APT_CACHE/archives/partial" \
             "$APT_SOURCES/sources.list.d"
@@ -645,16 +643,51 @@ jobs:
           case "$ID:$VERSION_CODENAME" in
             debian:bookworm|ubuntu:jammy)
               ALSA_PACKAGE=libasound2
+              ATK_PACKAGE=libatk1.0-0
+              ATK_BRIDGE_PACKAGE=libatk-bridge2.0-0
+              ATSPI_PACKAGE=libatspi2.0-0
+              CUPS_PACKAGE=libcups2
+              GLIB_PACKAGE=libglib2.0-0
               ;;
             debian:trixie|ubuntu:noble)
               ALSA_PACKAGE=libasound2t64
+              ATK_PACKAGE=libatk1.0-0t64
+              ATK_BRIDGE_PACKAGE=libatk-bridge2.0-0t64
+              ATSPI_PACKAGE=libatspi2.0-0t64
+              CUPS_PACKAGE=libcups2t64
+              GLIB_PACKAGE=libglib2.0-0t64
               ;;
             *)
               echo "unsupported Chrome dependency release: $ID:$VERSION_CODENAME" >&2
               exit 1
               ;;
           esac
-          readonly ALSA_PACKAGE
+          readonly ALSA_PACKAGE ATK_PACKAGE ATK_BRIDGE_PACKAGE ATSPI_PACKAGE CUPS_PACKAGE GLIB_PACKAGE
+          CHROME_RUNTIME_PACKAGES=(
+            "$ALSA_PACKAGE"
+            "$ATK_BRIDGE_PACKAGE"
+            "$ATK_PACKAGE"
+            "$ATSPI_PACKAGE"
+            "$CUPS_PACKAGE"
+            "$GLIB_PACKAGE"
+            libcairo2
+            libdbus-1-3
+            libexpat1
+            libgbm1
+            libnspr4
+            libnss3
+            libpango-1.0-0
+            libudev1
+            libx11-6
+            libxcb1
+            libxcomposite1
+            libxdamage1
+            libxext6
+            libxfixes3
+            libxkbcommon0
+            libxrandr2
+          )
+          readonly CHROME_RUNTIME_PACKAGES
           case "$ID" in
             debian)
               DISTRO_KEYRING=/usr/share/keyrings/debian-archive-keyring.gpg
@@ -694,17 +727,44 @@ jobs:
           )
           readonly APT_OPTIONS
           apt-get "${APT_OPTIONS[@]}" update
-          # libnspr4/libnss3: NSS/NSPR crypto deps for Chrome and chromedriver.
-          # ALSA package: selected above from the explicit supported distro matrix.
-          # libgbm1: GPU buffer manager (needed by Chrome headless for DRM/render node).
-          (cd "$DEBS_DIR" && apt-get "${APT_OPTIONS[@]}" download libnspr4 libnss3 "$ALSA_PACKAGE" libgbm1 2>&1)
-          for deb in "$DEBS_DIR"/*.deb; do
+          # --reinstall materialises every direct root even when the immutable
+          # image already owns it; APT adds only transitive roots absent from
+          # that image. --download-only keeps system package state read-only.
+          apt-get "${APT_OPTIONS[@]}" install \
+            --download-only \
+            --reinstall \
+            --no-install-recommends \
+            --yes \
+            "${CHROME_RUNTIME_PACKAGES[@]}"
+          shopt -s nullglob
+          deb_packages=("$APT_CACHE/archives"/*.deb)
+          ((${#deb_packages[@]} > 0)) || {
+            echo "Chrome dependency resolver produced no package closure" >&2
+            exit 1
+          }
+          readonly deb_packages
+          for deb in "${deb_packages[@]}"; do
             dpkg --extract "$deb" "$DEPS_DIR"
           done
           DEPS_LIB="$(find "$DEPS_DIR/usr/lib" -maxdepth 2 -type d | tr '\n' ':' | sed 's/:$//')"
           echo "LD_LIBRARY_PATH=${DEPS_LIB}:${LD_LIBRARY_PATH:-}" >> "$GITHUB_ENV"
           echo "Chrome deps: $DEPS_LIB"
-          LD_LIBRARY_PATH="${DEPS_LIB}:${LD_LIBRARY_PATH:-}" "$CHROME_BIN" --version || true
+          assert_elf_closure() {
+            local executable="$1"
+            local missing
+            missing="$(
+              LD_LIBRARY_PATH="${DEPS_LIB}:${LD_LIBRARY_PATH:-}" ldd "$executable" \
+                | awk '/=> not found$/ { print $1 }'
+            )"
+            [[ -z "$missing" ]] || {
+              printf 'unresolved Chrome runtime closure for %s:\n%s\n' "$executable" "$missing" >&2
+              exit 1
+            }
+          }
+          assert_elf_closure "$CHROME_BIN"
+          assert_elf_closure "$CHROMEDRIVER_BIN"
+          LD_LIBRARY_PATH="${DEPS_LIB}:${LD_LIBRARY_PATH:-}" "$CHROME_BIN" --version
+          LD_LIBRARY_PATH="${DEPS_LIB}:${LD_LIBRARY_PATH:-}" "$CHROMEDRIVER_BIN" --version
 
           # -- Make Chrome discoverable by chromedriver without explicit binary path --
           # chromedriver searches PATH for: google-chrome, google-chrome-stable, chromium

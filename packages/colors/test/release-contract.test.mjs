@@ -537,26 +537,77 @@ test("MSRV and packaged Rust crate gates are executable CI contracts", () => {
     assert.match(active, /^case "\$ID:\$VERSION_CODENAME" in$/mu);
     assert.match(
       active,
-      /^\s*debian:bookworm\|ubuntu:jammy\)\n\s+ALSA_PACKAGE=libasound2\n\s+;;$/mu,
+      /^\s*debian:bookworm\|ubuntu:jammy\)\n\s+ALSA_PACKAGE=libasound2\n\s+ATK_PACKAGE=libatk1\.0-0\n\s+ATK_BRIDGE_PACKAGE=libatk-bridge2\.0-0\n\s+ATSPI_PACKAGE=libatspi2\.0-0\n\s+CUPS_PACKAGE=libcups2\n\s+GLIB_PACKAGE=libglib2\.0-0\n\s+;;$/mu,
     );
     assert.match(
       active,
-      /^\s*debian:trixie\|ubuntu:noble\)\n\s+ALSA_PACKAGE=libasound2t64\n\s+;;$/mu,
+      /^\s*debian:trixie\|ubuntu:noble\)\n\s+ALSA_PACKAGE=libasound2t64\n\s+ATK_PACKAGE=libatk1\.0-0t64\n\s+ATK_BRIDGE_PACKAGE=libatk-bridge2\.0-0t64\n\s+ATSPI_PACKAGE=libatspi2\.0-0t64\n\s+CUPS_PACKAGE=libcups2t64\n\s+GLIB_PACKAGE=libglib2\.0-0t64\n\s+;;$/mu,
     );
     assert.match(
       active,
       /^\s*\*\)\n\s+echo "unsupported Chrome dependency release: \$ID:\$VERSION_CODENAME" >&2\n\s+exit 1\n\s+;;$/mu,
     );
+    assert.ok(activeLines.includes(
+      "readonly ALSA_PACKAGE ATK_PACKAGE ATK_BRIDGE_PACKAGE ATSPI_PACKAGE CUPS_PACKAGE GLIB_PACKAGE",
+    ));
     assert.deepEqual(
-      activeLines.filter((line) => /\bALSA_PACKAGE\b/u.test(line)),
+      activeLines.filter((line) => /^(?:ALSA|ATK|ATK_BRIDGE|ATSPI|CUPS|GLIB)_PACKAGE=/u.test(line)),
       [
         "ALSA_PACKAGE=libasound2",
+        "ATK_PACKAGE=libatk1.0-0",
+        "ATK_BRIDGE_PACKAGE=libatk-bridge2.0-0",
+        "ATSPI_PACKAGE=libatspi2.0-0",
+        "CUPS_PACKAGE=libcups2",
+        "GLIB_PACKAGE=libglib2.0-0",
         "ALSA_PACKAGE=libasound2t64",
-        "readonly ALSA_PACKAGE",
-        '(cd "$DEBS_DIR" && apt-get "${APT_OPTIONS[@]}" download libnspr4 libnss3 "$ALSA_PACKAGE" libgbm1 2>&1)',
+        "ATK_PACKAGE=libatk1.0-0t64",
+        "ATK_BRIDGE_PACKAGE=libatk-bridge2.0-0t64",
+        "ATSPI_PACKAGE=libatspi2.0-0t64",
+        "CUPS_PACKAGE=libcups2t64",
+        "GLIB_PACKAGE=libglib2.0-0t64",
       ],
-      "the release matrix must be the sole ALSA package authority",
+      "the supported release matrix must be the sole ABI package authority",
     );
+    assert.doesNotMatch(
+      active,
+      /\b(?:ALSA|ATK|ATK_BRIDGE|ATSPI|CUPS|GLIB)_PACKAGE\s*\+=/u,
+    );
+    const packageArrays = [...active.matchAll(
+      /^[ \t]*CHROME_RUNTIME_PACKAGES=\(\n(?<body>(?:[ \t]+[^\n]*\n)+)^[ \t]*\)$/gmu,
+    )];
+    assert.equal(packageArrays.length, 1, "Chrome must have one direct ELF package-root array");
+    assert.deepEqual(
+      (packageArrays[0].groups?.body ?? "")
+        .split("\n")
+        .map((line) => line.trim())
+        .filter(Boolean),
+      [
+        '"$ALSA_PACKAGE"',
+        '"$ATK_BRIDGE_PACKAGE"',
+        '"$ATK_PACKAGE"',
+        '"$ATSPI_PACKAGE"',
+        '"$CUPS_PACKAGE"',
+        '"$GLIB_PACKAGE"',
+        "libcairo2",
+        "libdbus-1-3",
+        "libexpat1",
+        "libgbm1",
+        "libnspr4",
+        "libnss3",
+        "libpango-1.0-0",
+        "libudev1",
+        "libx11-6",
+        "libxcb1",
+        "libxcomposite1",
+        "libxdamage1",
+        "libxext6",
+        "libxfixes3",
+        "libxkbcommon0",
+        "libxrandr2",
+      ],
+      "package roots must cover every direct DT_NEEDED owner of pinned Chrome and ChromeDriver",
+    );
+    assert.equal(active.match(/^readonly CHROME_RUNTIME_PACKAGES$/gmu)?.length, 1);
     const trustedSourceLines = [
       '"deb [signed-by=$DISTRO_KEYRING] https://deb.debian.org/debian $VERSION_CODENAME main" \\',
       '"deb [signed-by=$DISTRO_KEYRING] https://deb.debian.org/debian $VERSION_CODENAME-updates main" \\',
@@ -600,7 +651,7 @@ test("MSRV and packaged Rust crate gates are executable CI contracts", () => {
     const afterOptions = active.slice(optionsEnd);
     assert.match(afterOptions, /^\nreadonly APT_OPTIONS\napt-get /u);
     const update = active.indexOf('apt-get "${APT_OPTIONS[@]}" update', optionsEnd);
-    const download = active.indexOf('apt-get "${APT_OPTIONS[@]}" download', update);
+    const download = active.indexOf('apt-get "${APT_OPTIONS[@]}" install \\', update);
     assert.ok(optionsEnd < update && update < download);
     assert.deepEqual(
       active
@@ -609,13 +660,29 @@ test("MSRV and packaged Rust crate gates are executable CI contracts", () => {
         .filter((line) => /(?:^|[\s;&(|])apt(?:-get)?(?=\s)/u.test(line)),
       [
         'apt-get "${APT_OPTIONS[@]}" update',
-        '(cd "$DEBS_DIR" && apt-get "${APT_OPTIONS[@]}" download libnspr4 libnss3 "$ALSA_PACKAGE" libgbm1 2>&1)',
+        'apt-get "${APT_OPTIONS[@]}" install \\',
       ],
       "every APT invocation must use the one immutable isolated option set",
     );
+    for (const option of [
+      "--download-only \\",
+      "--reinstall \\",
+      "--no-install-recommends \\",
+      "--yes \\",
+      '"${CHROME_RUNTIME_PACKAGES[@]}"',
+    ]) {
+      assert.ok(activeLines.includes(option), `missing package-closure resolver option: ${option}`);
+    }
+    assert.match(active, /^assert_elf_closure\(\) \{$/mu);
+    assert.match(active, /^\s*LD_LIBRARY_PATH="\$\{DEPS_LIB\}:\$\{LD_LIBRARY_PATH:-\}" ldd "\$executable"/mu);
+    assert.match(active, /^assert_elf_closure "\$CHROME_BIN"$/mu);
+    assert.match(active, /^assert_elf_closure "\$CHROMEDRIVER_BIN"$/mu);
+    assert.match(active, /^LD_LIBRARY_PATH="\$\{DEPS_LIB\}:\$\{LD_LIBRARY_PATH:-\}" "\$CHROME_BIN" --version$/mu);
+    assert.match(active, /^LD_LIBRARY_PATH="\$\{DEPS_LIB\}:\$\{LD_LIBRARY_PATH:-\}" "\$CHROMEDRIVER_BIN" --version$/mu);
+    assert.doesNotMatch(active, /(?:CHROME_BIN|CHROMEDRIVER_BIN).*--version\s*\|\|\s*true/u);
   };
   assertAptSourceIsolation(ci);
-  for (const mutant of [
+  for (const [mutationIndex, mutant] of [
     ci.replace(
       '            -o "Dir::Etc::sourcelist=$APT_SOURCES/sources.list"',
       '            # -o "Dir::Etc::sourcelist=$APT_SOURCES/sources.list"',
@@ -633,8 +700,8 @@ test("MSRV and packaged Rust crate gates are executable CI contracts", () => {
       '          :; APT_OPTIONS=()\n          apt-get "${APT_OPTIONS[@]}" update',
     ),
     ci.replace(
-      '          (cd "$DEBS_DIR" && apt-get',
-      '          unset APT_OPTIONS\n          (cd "$DEBS_DIR" && apt-get',
+      '          apt-get "${APT_OPTIONS[@]}" install \\',
+      '          unset APT_OPTIONS\n          apt-get "${APT_OPTIONS[@]}" install \\',
     ),
     ci.replace(
       '          apt-get "${APT_OPTIONS[@]}" update',
@@ -661,9 +728,9 @@ test("MSRV and packaged Rust crate gates are executable CI contracts", () => {
       "https://security.ubuntu.com/ubuntu stable-security main",
     ),
     ci.replace(
-      '          readonly ALSA_PACKAGE\n          case "$ID" in',
-      '          if [[ "$ID:$VERSION_CODENAME" == ubuntu:jammy ]]; then ALSA_PACKAGE=libasound2t64; fi\n' +
-        '          readonly ALSA_PACKAGE\n          case "$ID" in',
+      '          readonly ALSA_PACKAGE ATK_PACKAGE ATK_BRIDGE_PACKAGE ATSPI_PACKAGE CUPS_PACKAGE GLIB_PACKAGE\n          CHROME_RUNTIME_PACKAGES=(',
+      '          ALSA_PACKAGE=libasound2t64\n' +
+        '          readonly ALSA_PACKAGE ATK_PACKAGE ATK_BRIDGE_PACKAGE ATSPI_PACKAGE CUPS_PACKAGE GLIB_PACKAGE\n          CHROME_RUNTIME_PACKAGES=(',
     ),
     ci.replace(
       "          readonly DISTRO_KEYRING\n",
@@ -675,21 +742,25 @@ test("MSRV and packaged Rust crate gates are executable CI contracts", () => {
       "        run: |\n          set +e\n          # -- CfT chrome + chromedriver --",
     ),
     ci.replace(
-      '          readonly ALSA_PACKAGE\n          case "$ID" in',
-      '          ALSA_PACKAGE+=t64\n          readonly ALSA_PACKAGE\n          case "$ID" in',
+      '          readonly ALSA_PACKAGE ATK_PACKAGE ATK_BRIDGE_PACKAGE ATSPI_PACKAGE CUPS_PACKAGE GLIB_PACKAGE\n          CHROME_RUNTIME_PACKAGES=(',
+      '          ALSA_PACKAGE+=t64\n          readonly ALSA_PACKAGE ATK_PACKAGE ATK_BRIDGE_PACKAGE ATSPI_PACKAGE CUPS_PACKAGE GLIB_PACKAGE\n          CHROME_RUNTIME_PACKAGES=(',
     ),
     ci.replace(
-      "          readonly ALSA_PACKAGE\n",
-      "          readonly ALSA_PACKAGE\n          :; set +e\n",
+      "          readonly ALSA_PACKAGE ATK_PACKAGE ATK_BRIDGE_PACKAGE ATSPI_PACKAGE CUPS_PACKAGE GLIB_PACKAGE\n",
+      "          readonly ALSA_PACKAGE ATK_PACKAGE ATK_BRIDGE_PACKAGE ATSPI_PACKAGE CUPS_PACKAGE GLIB_PACKAGE\n          :; set +e\n",
     ),
     ci.replace(
       "          readonly DISTRO_KEYRING\n",
       "          readonly DISTRO_KEYRING\n" +
         '          echo "deb https://example.invalid/debian sid main" >> $APT_SOURCES/sources.list\n',
     ),
-  ]) {
-    assert.notEqual(mutant, ci, "hostile APT mutation must bite");
-    assert.throws(() => assertAptSourceIsolation(mutant));
+  ].entries()) {
+    assert.notEqual(mutant, ci, `hostile APT mutation ${mutationIndex} must bite`);
+    assert.throws(
+      () => assertAptSourceIsolation(mutant),
+      undefined,
+      `hostile APT mutation ${mutationIndex} must be rejected`,
+    );
   }
   assert.match(ci, /Dir::State::lists=\$APT_LISTS/);
   assert.match(ci, /Dir::State::status=\/var\/lib\/dpkg\/status/);
@@ -698,7 +769,7 @@ test("MSRV and packaged Rust crate gates are executable CI contracts", () => {
   assert.match(ci, /Debug::NoLocking=1/);
   assert.match(ci, /Acquire::Retries=3/);
   const aptUpdate = ci.indexOf('apt-get "${APT_OPTIONS[@]}" update');
-  const aptDownload = ci.indexOf('apt-get "${APT_OPTIONS[@]}" download');
+  const aptDownload = ci.indexOf('apt-get "${APT_OPTIONS[@]}" install \\');
   assert.ok(
     aptUpdate >= 0 && aptDownload >= 0 && aptUpdate < aptDownload,
     "Chrome dependency download must use a fresh isolated APT index",
