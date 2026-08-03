@@ -23,7 +23,7 @@ from proof.region.v1.arb.tests.test_receipt import (  # noqa: E402
 _MODES = {
     "executor": (
         (NativeLinuxIntegrationTests,),
-        "df08a48aafe395458593899c9321d306bc91143236bc9e511d0b6c39952e9369",
+        "276f45bd831c26288eaa34f1846821a6b8cec3b6d58b9f2c8a6f3136f8ad7869",
     ),
     "receipt": (
         (NativeSourceBoundReceiptIntegrationTests,),
