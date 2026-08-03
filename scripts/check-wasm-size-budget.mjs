@@ -14,9 +14,9 @@ export const DEFAULT_BUDGET = resolve(
   "packages/colors/bench/wasm.json",
 );
 export const WASM_BUDGET_FILE_SHA256 =
-  "3d548ed9c77adb1a99eaa37c8a3f9ff06526adaa18cee4085023d13e6f6731b7";
+  "e9a9bd75a30bb3becbd3d5e0bc2900b5e88a1221aaf8bbc54abcb1c18df1323b";
 
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 2;
 const CANONICAL_ARTIFACT = "packages/colors/pkg/labcolors_bg.wasm";
 const CANONICAL_PLATFORM = "linux-x64";
 const TOOLCHAIN_KEYS = [
@@ -26,8 +26,10 @@ const TOOLCHAIN_KEYS = [
   "wasmBindgen",
   "target",
   "cargoProfile",
-  "wasmOpt",
-  "wasmOptVersion",
+  "node",
+  "binaryenRelease",
+  "binaryenNodeArchiveSha256",
+  "wasmOptFlags",
 ];
 const NUMBERED_BUDGET = /^wasm-size-budget-v\d+\.json$/u;
 const PATH_REMAP = /^[A-Z][A-Z0-9_]*=\/[^\r\n]+$/u;
@@ -89,7 +91,7 @@ function validateBudgetValue(budget) {
     nonEmptyLine(budget.toolchain[key], `toolchain.${key}`);
   }
 
-  exactKeys(budget.recipe, ["rustPathRemap", "command"], "recipe");
+  exactKeys(budget.recipe, ["rustPathRemap", "commands"], "recipe");
   if (
     !Array.isArray(budget.recipe.rustPathRemap) ||
     budget.recipe.rustPathRemap.length === 0 ||
@@ -98,12 +100,17 @@ function validateBudgetValue(budget) {
   ) {
     fail("recipe.rustPathRemap must contain unique canonical environment mappings");
   }
-  nonEmptyLine(budget.recipe.command, "recipe.command");
   if (
-    budget.recipe.command.match(/<rustPathRemap>/gu)?.length !== 1 ||
-    !budget.recipe.command.startsWith("CARGO_ENCODED_RUSTFLAGS=<rustPathRemap> ")
+    !Array.isArray(budget.recipe.commands) ||
+    budget.recipe.commands.length === 0
   ) {
-    fail("recipe.command must consume rustPathRemap exactly once in one command");
+    fail("recipe.commands must contain at least one logical shell command");
+  }
+  for (const [index, command] of budget.recipe.commands.entries()) {
+    nonEmptyLine(command, `recipe.commands[${index}]`);
+  }
+  if (new Set(budget.recipe.commands).size !== budget.recipe.commands.length) {
+    fail("recipe.commands must not contain duplicates");
   }
 
   exactKeys(

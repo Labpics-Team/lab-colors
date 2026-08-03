@@ -127,6 +127,15 @@ def workflow_job_blocks(source: str, label: str) -> dict[str, str]:
     }
 
 
+def load_publish_worker() -> tuple[str, str]:
+    repo = Path(__file__).resolve().parents[1]
+    workflow = (
+        repo / ".github" / "workflows" / "publish-worker.yml"
+    ).read_text(encoding="utf-8")
+    publish_job = workflow_job_blocks(workflow, "publish-worker.yml")["publish"]
+    return workflow, publish_job
+
+
 class MutationTruthTest(unittest.TestCase):
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory()
@@ -1811,7 +1820,7 @@ class MutationTruthTest(unittest.TestCase):
             run_policy("pull_request", 2, 42, 42)[0],
         )
 
-    def test_reusable_workers_bound_jobs_and_binaryen_parallelism(self) -> None:
+    def test_reusable_workers_bound_jobs_and_binaryen_transport(self) -> None:
         repo = Path(__file__).resolve().parents[1]
         workflows = repo / ".github" / "workflows"
 
@@ -1824,6 +1833,13 @@ class MutationTruthTest(unittest.TestCase):
                 "publish-worker.yml",
             )
         }
+        ci_caller = (workflows / "ci.yml").read_text(encoding="utf-8")
+        admitted_ci_worker = (
+            "uses: Labpics-Team/lab-colors/.github/workflows/ci-worker.yml@"
+            "0ca9d683856e8c92e3192abe9bc054d045d355e2"
+        )
+        self.assertEqual(ci_caller.count("ci-worker.yml@"), 1)
+        self.assertIn(admitted_ci_worker, ci_caller)
         for worker_name, source in workers.items():
             for job_name, block in workflow_job_blocks(source, worker_name).items():
                 with self.subTest(worker=worker_name, job=job_name):
@@ -1838,8 +1854,42 @@ class MutationTruthTest(unittest.TestCase):
         wasm = workflow_job_blocks(workers["ci-worker.yml"], "ci-worker.yml")[
             "wasm"
         ]
-        self.assertIn("    env:\n      BINARYEN_CORES: 4\n", wasm)
-        self.assertEqual(workers["ci-worker.yml"].count("\n      BINARYEN_CORES:"), 1)
+        self.assertNotIn("BINARYEN_CORES", workers["ci-worker.yml"])
+        self.assertIn("      BINARYEN_RELEASE: version_117\n", wasm)
+        self.assertIn(
+            '      BINARYEN_NODE_SHA256: "'
+            '2d5a42f2d167a7cc2b4b6664c44c5ace1690d13db4f527324f052afbad461a07"\n',
+            wasm,
+        )
+        self.assertIn("binaryen-${BINARYEN_RELEASE}-node.tar.gz", wasm)
+        self.assertIn('printf \'%s  %s\\n\' "$BINARYEN_NODE_SHA256"', wasm)
+        self.assertIn("sha256sum --check -", wasm)
+        self.assertIn("wasm-pack build --no-opt --release", wasm)
+        self.assertEqual(wasm.count("wasm-pack build "), 1)
+        self.assertIn(
+            'node "$BINARYEN_ROOT/wasm-opt.js" "$wasm" -o "$optimized" \\\n'
+            "              -Oz --enable-bulk-memory "
+            "--enable-nontrapping-float-to-int",
+            wasm,
+        )
+        self.assertEqual(
+            wasm.count(
+                "-Oz --enable-bulk-memory --enable-nontrapping-float-to-int"
+            ),
+            1,
+        )
+        self.assertNotIn(
+            "wasm-pack build crates/labcolors-wasm --release",
+            wasm,
+        )
+        self.assertLess(
+            wasm.index("uses: actions/setup-node@"),
+            wasm.index("name: install byte-bound Binaryen Node transport"),
+        )
+        self.assertLess(
+            wasm.index("name: install byte-bound Binaryen Node transport"),
+            wasm.index("name: repeat runtime WASM build"),
+        )
 
         native = workers["native-conformance-worker.yml"]
         native_env = native.split("\njobs:\n", 1)[0]
@@ -1874,12 +1924,8 @@ class MutationTruthTest(unittest.TestCase):
         self.assertIn(".github/workflows/native-conformance-worker.yml", swift_readme)
         self.assertIn(".github/workflows/native-conformance.yml", swift_readme)
 
-    def test_publish_worker_secret_boundary_and_registry_are_fail_closed(self) -> None:
-        repo = Path(__file__).resolve().parents[1]
-        workflow = (
-            repo / ".github" / "workflows" / "publish-worker.yml"
-        ).read_text(encoding="utf-8")
-
+    def test_publish_worker_receipt_identity_is_fail_closed(self) -> None:
+        workflow, _ = load_publish_worker()
         self.assertIn(
             'const workerName = job.name.split(" / ").at(-1);',
             workflow,
@@ -1890,7 +1936,7 @@ class MutationTruthTest(unittest.TestCase):
         self.assertNotIn("легаси", workflow.casefold())
         self.assertIn(
             'path: "Labpics-Team/lab-colors/.github/workflows/ci-worker.yml@'
-            '490783e8468c73f06d2a81ad10e9d3aab41b6185"',
+            '0ca9d683856e8c92e3192abe9bc054d045d355e2"',
             workflow,
         )
         self.assertIn(
@@ -1911,14 +1957,8 @@ class MutationTruthTest(unittest.TestCase):
         self.assertEqual(canonical_worker_name("outer / CI / test"), "test")
         self.assertNotEqual(canonical_worker_name("CI / other"), "test")
 
-        jobs = workflow.split("\njobs:\n", 1)[1]
-        publish_anchor = re.search(r"(?m)^  publish:\n", jobs)
-        self.assertIsNotNone(publish_anchor)
-        assert publish_anchor is not None
-        publish_tail = jobs[publish_anchor.end() :]
-        next_job = re.search(r"(?m)^  [A-Za-z0-9_-]+:\n", publish_tail)
-        publish_job = publish_tail[: next_job.start() if next_job else len(publish_tail)]
-
+    def test_publish_worker_secret_context_is_fail_closed(self) -> None:
+        _, publish_job = load_publish_worker()
         job_if = re.search(
             r"(?m)^    if:\s*>-\n(?P<expression>(?:^      [^\n]*\n)+)",
             publish_job,
@@ -1993,6 +2033,8 @@ class MutationTruthTest(unittest.TestCase):
             with self.subTest(hostile=hostile):
                 self.assertFalse(eligible(hostile))
 
+    def test_publish_worker_registry_is_fail_closed(self) -> None:
+        _, publish_job = load_publish_worker()
         publish_step = re.search(
             r"(?ms)^      - name: npm publish verified CI tarball .*?\n"
             r"(?P<step>.*?)(?=^      - name:|\Z)",
@@ -2037,7 +2079,7 @@ class MutationTruthTest(unittest.TestCase):
         )
         expected = (
             "uses: Labpics-Team/lab-colors/.github/workflows/publish-worker.yml@"
-            "a2e34395506d9120ceab10013fac88d37f58270b"
+            "7a592a9dcd5cb33896f423042addba425b4ade3c"
         )
         self.assertEqual(caller.count("publish-worker.yml@"), 1)
         self.assertIn(expected, caller)
@@ -2070,6 +2112,7 @@ class MutationTruthTest(unittest.TestCase):
                 check=False,
                 capture_output=True,
                 text=True,
+                timeout=mutation.EXTERNAL_COMMAND_TIMEOUT_SECONDS,
             )
             self.assertEqual(result.returncode, 73, result.stderr)
             self.assertEqual(os.stat(temp_root).st_mode & 0o777, before_mode)
