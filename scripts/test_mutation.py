@@ -1880,6 +1880,16 @@ class MutationTruthTest(unittest.TestCase):
             repo / ".github" / "workflows" / "publish-worker.yml"
         ).read_text(encoding="utf-8")
 
+        self.assertIn('callerJob: "CI"', workflow)
+        self.assertIn('callerJob: "Native conformance (Swift)"', workflow)
+        self.assertIn(
+            "const expectedName = `${spec.callerJob} / ${name}`;",
+            workflow,
+        )
+        self.assertIn("job.name === expectedName", workflow)
+        self.assertNotIn("job.name === name || job.name.endsWith", workflow)
+        self.assertNotIn("легаси", workflow.casefold())
+
         jobs = workflow.split("\njobs:\n", 1)[1]
         publish_anchor = re.search(r"(?m)^  publish:\n", jobs)
         self.assertIsNotNone(publish_anchor)
