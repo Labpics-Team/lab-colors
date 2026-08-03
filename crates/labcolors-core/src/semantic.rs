@@ -2946,11 +2946,11 @@ pub struct NamedRoleTable {
     entries: Vec<(String, RoleSpec)>,
     aliases: Vec<(String, String)>,
     chroma: RoleChroma,
-    alpha_analog_invocations: Box<[CompiledAlphaAnalogInvocationV1]>,
+    point_representation_invocations: Box<[CompiledPointRepresentationInvocationV1]>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-struct CompiledAlphaAnalogInvocationV1 {
+struct CompiledPointRepresentationInvocationV1 {
     declaration_ordinal: usize,
     target: LadderTint,
     minimum_opacity: crate::composition::AdmittedOpacityV1,
@@ -2958,22 +2958,22 @@ struct CompiledAlphaAnalogInvocationV1 {
 
 #[cfg(test)]
 thread_local! {
-    static ALPHA_BINDING_PLAN_COMPILATIONS: std::cell::Cell<usize> = const {
+    static POINT_REPRESENTATION_PLAN_COMPILATIONS: std::cell::Cell<usize> = const {
         std::cell::Cell::new(0)
     };
 }
 
 #[cfg(test)]
-fn reset_alpha_binding_plan_compilation_count() {
-    ALPHA_BINDING_PLAN_COMPILATIONS.with(|count| count.set(0));
+fn reset_point_representation_plan_compilation_count() {
+    POINT_REPRESENTATION_PLAN_COMPILATIONS.with(|count| count.set(0));
 }
 
 #[cfg(test)]
-fn alpha_binding_plan_compilation_count() -> usize {
-    ALPHA_BINDING_PLAN_COMPILATIONS.with(std::cell::Cell::get)
+fn point_representation_plan_compilation_count() -> usize {
+    POINT_REPRESENTATION_PLAN_COMPILATIONS.with(std::cell::Cell::get)
 }
 
-impl CompiledAlphaAnalogInvocationV1 {
+impl CompiledPointRepresentationInvocationV1 {
     fn resolve(self, bg: &BgInput, vc: &ViewingConditions) -> PendingResolution {
         resolve_rgba_inverted_admitted(self.target.for_vc(vc), self.minimum_opacity, bg, vc)
     }
@@ -3148,8 +3148,8 @@ impl NamedRoleTable {
             spec.validate_with_chroma(chroma)
                 .map_err(|message| SolveFailure::InvalidInput(format!("role {name}: {message}")))?;
         }
-        let alpha_analog_invocations =
-            Self::compile_alpha_analog_invocations(&entries).map_err(|error| {
+        let point_representation_invocations =
+            Self::compile_point_representation_invocations(&entries).map_err(|error| {
                 SolveFailure::InvalidInput(format!(
                     "role {}: alpha-analog alpha must be finite and inside (0, 1], got {}",
                     entries[error.declaration_ordinal].0, error.value
@@ -3159,7 +3159,7 @@ impl NamedRoleTable {
             entries,
             aliases,
             chroma,
-            alpha_analog_invocations,
+            point_representation_invocations,
         ))
     }
 
@@ -3172,12 +3172,13 @@ impl NamedRoleTable {
         aliases: Vec<(String, String)>,
         chroma: RoleChroma,
     ) -> Result<Self, AlphaAnalogCompileErrorV1> {
-        let alpha_analog_invocations = Self::compile_alpha_analog_invocations(&entries)?;
+        let point_representation_invocations =
+            Self::compile_point_representation_invocations(&entries)?;
         Ok(Self::from_compiled_parts(
             entries,
             aliases,
             chroma,
-            alpha_analog_invocations,
+            point_representation_invocations,
         ))
     }
 
@@ -3185,21 +3186,21 @@ impl NamedRoleTable {
         entries: Vec<(String, RoleSpec)>,
         aliases: Vec<(String, String)>,
         chroma: RoleChroma,
-        alpha_analog_invocations: Box<[CompiledAlphaAnalogInvocationV1]>,
+        point_representation_invocations: Box<[CompiledPointRepresentationInvocationV1]>,
     ) -> Self {
         Self {
             entries,
             aliases,
             chroma,
-            alpha_analog_invocations,
+            point_representation_invocations,
         }
     }
 
-    fn compile_alpha_analog_invocations(
+    fn compile_point_representation_invocations(
         entries: &[(String, RoleSpec)],
-    ) -> Result<Box<[CompiledAlphaAnalogInvocationV1]>, AlphaAnalogCompileErrorV1> {
+    ) -> Result<Box<[CompiledPointRepresentationInvocationV1]>, AlphaAnalogCompileErrorV1> {
         #[cfg(test)]
-        ALPHA_BINDING_PLAN_COMPILATIONS.with(|count| count.set(count.get() + 1));
+        POINT_REPRESENTATION_PLAN_COMPILATIONS.with(|count| count.set(count.get() + 1));
         let mut invocations = Vec::new();
         for (declaration_ordinal, (_, spec)) in entries.iter().enumerate() {
             let RoleSpec::AlphaAnalog { of, alpha } = *spec else {
@@ -3212,7 +3213,7 @@ impl NamedRoleTable {
                     declaration_ordinal,
                     value: alpha,
                 })?;
-            invocations.push(CompiledAlphaAnalogInvocationV1 {
+            invocations.push(CompiledPointRepresentationInvocationV1 {
                 declaration_ordinal,
                 target: of,
                 minimum_opacity,
@@ -3304,9 +3305,13 @@ pub fn resolve_named_set(
     let _forward_cache = crate::spaces::cam16::ForwardCacheGuard::activate();
     let ctx = ResolveContext::new(bg, vc);
     let mut set = Vec::with_capacity(table.entries.len());
-    let mut alpha_invocations = table.alpha_analog_invocations.iter().copied().peekable();
+    let mut point_invocations = table
+        .point_representation_invocations
+        .iter()
+        .copied()
+        .peekable();
     for (declaration_ordinal, (name, spec)) in table.entries.iter().enumerate() {
-        let pending = match alpha_invocations.peek().copied() {
+        let pending = match point_invocations.peek().copied() {
             Some(invocation) if invocation.declaration_ordinal < declaration_ordinal => {
                 return Err(ResolveSetError {
                     state: ResolveSetErrorState::Internal(SolveFailure::InternalInvariant(
@@ -3315,7 +3320,7 @@ pub fn resolve_named_set(
                 });
             }
             Some(invocation) if invocation.declaration_ordinal == declaration_ordinal => {
-                alpha_invocations.next();
+                point_invocations.next();
                 invocation.resolve(bg, vc)
             }
             _ => resolve_spec_in(bg, spec, table.chroma, vc, &ctx),
@@ -3323,7 +3328,7 @@ pub fn resolve_named_set(
         let resolved = admit_resolution(pending)?;
         set.push((name.clone(), resolved));
     }
-    if alpha_invocations.next().is_some() {
+    if point_invocations.next().is_some() {
         return Err(ResolveSetError {
             state: ResolveSetErrorState::Internal(SolveFailure::InternalInvariant(
                 "compiled alpha-analog invocation points outside declarations".into(),
@@ -4015,8 +4020,11 @@ mod tests {
             RoleChroma::Neutral,
         )
         .unwrap();
-        assert_eq!(table.alpha_analog_invocations.len(), 1);
-        assert_eq!(table.alpha_analog_invocations[0].declaration_ordinal, 1);
+        assert_eq!(table.point_representation_invocations.len(), 1);
+        assert_eq!(
+            table.point_representation_invocations[0].declaration_ordinal,
+            1
+        );
 
         crate::composition::reset_source_over_evaluation_count();
         let set = resolve_named_set(
@@ -4029,7 +4037,7 @@ mod tests {
         assert_eq!(crate::composition::source_over_evaluation_count(), 1);
 
         let mut missing = table.clone();
-        missing.alpha_analog_invocations = Box::default();
+        missing.point_representation_invocations = Box::default();
         assert_eq!(
             missing, table,
             "derived execution state is outside public equality"
@@ -4072,10 +4080,10 @@ mod tests {
     }
 
     #[test]
-    fn alpha_binding_plan_is_sparse_compiled_once_and_reused() {
+    fn point_representation_plan_is_sparse_compiled_once_and_reused() {
         let first_target = crate::spaces::srgb::srgb_encoded_from_hex("#787880").unwrap();
         let second_target = crate::spaces::srgb::srgb_encoded_from_hex("#406080").unwrap();
-        reset_alpha_binding_plan_compilation_count();
+        reset_point_representation_plan_compilation_count();
         let table = NamedRoleTable::new(
             vec![
                 (
@@ -4098,10 +4106,10 @@ mod tests {
             RoleChroma::Neutral,
         )
         .unwrap();
-        assert_eq!(alpha_binding_plan_compilation_count(), 1);
+        assert_eq!(point_representation_plan_compilation_count(), 1);
         assert_eq!(
             table
-                .alpha_analog_invocations
+                .point_representation_invocations
                 .iter()
                 .map(|invocation| invocation.declaration_ordinal)
                 .collect::<Vec<_>>(),
@@ -4114,7 +4122,7 @@ mod tests {
             let set = resolve_named_set(&backdrop, current, &ViewingConditions::srgb()).unwrap();
             assert_eq!(set.len(), 3);
         }
-        assert_eq!(alpha_binding_plan_compilation_count(), 1);
+        assert_eq!(point_representation_plan_compilation_count(), 1);
 
         let without_analogs = NamedRoleTable::new(
             vec![("unrelated".into(), RoleSpec::Zero)],
@@ -4122,7 +4130,7 @@ mod tests {
             RoleChroma::Neutral,
         )
         .unwrap();
-        assert!(without_analogs.alpha_analog_invocations.is_empty());
+        assert!(without_analogs.point_representation_invocations.is_empty());
     }
 
     proptest! {

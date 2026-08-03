@@ -25,6 +25,7 @@ const POINT_REPRESENTATION_SOURCE: &str = include_str!("point_representation.rs"
 const PROGRAM_IDENTITY_SOURCE: &str = include_str!("program_identity.rs");
 const PROGRAM_SESSION_SOURCE: &str = include_str!("program_session.rs");
 const RELATION_SOURCE: &str = include_str!("relation.rs");
+const SEMANTIC_SOURCE: &str = include_str!("semantic.rs");
 const SESSION_SOURCE: &str = include_str!("session.rs");
 const WCAG22_CONSTRAINT_SOURCE: &str = include_str!("constraints/wcag22.rs");
 
@@ -71,6 +72,27 @@ fn point_representation_execution_is_generic_and_the_helper_facade_is_gone() {
         !LIB_SOURCE.contains("mod analog;"),
         "the recipe-shaped execution module must be deleted",
     );
+
+    let semantic = compact_production_syntax(SEMANTIC_SOURCE).to_ascii_lowercase();
+    for removed in [
+        "compiledalphaanaloginvocation",
+        "alpha_analog_invocations",
+        "compile_alpha_analog_invocations",
+    ] {
+        assert!(
+            !semantic.contains(removed),
+            "compiled execution still owns recipe-shaped IR `{removed}`",
+        );
+    }
+    for required in [
+        "compiledpointrepresentationinvocationv1",
+        "resolve_exact_point_representation_v1",
+    ] {
+        assert!(
+            semantic.contains(required),
+            "frozen frontend no longer lowers through generic point IR `{required}`",
+        );
+    }
 }
 
 const GENERIC_SOURCES: [(&str, &str); 11] = [
