@@ -5,6 +5,7 @@ use std::path::PathBuf;
 mod source_scanner;
 
 const APPEARANCE_SOURCE: &str = include_str!("appearance.rs");
+const ALPHA_SOURCE: &str = include_str!("alpha.rs");
 const CLEAN_SET_SOURCE: &str = include_str!("clean_set.rs");
 const CONSTRAINTS_SOURCE: &str = include_str!("constraints/mod.rs");
 const CONTEXTUAL_REGION_SOURCE: &str = include_str!("contextual_region.rs");
@@ -20,13 +21,59 @@ const OUTPUT_PROJECTION_SOURCE: &str = include_str!("output_projection.rs");
 const PROGRAM_ATTACHMENT_SOURCE: &str = include_str!("program/attachment.rs");
 const PROGRAM_SOURCE: &str = include_str!("program.rs");
 const POINT_SUPPORT_SOURCE: &str = include_str!("point_support.rs");
+const POINT_REPRESENTATION_SOURCE: &str = include_str!("point_representation.rs");
 const PROGRAM_IDENTITY_SOURCE: &str = include_str!("program_identity.rs");
 const PROGRAM_SESSION_SOURCE: &str = include_str!("program_session.rs");
 const RELATION_SOURCE: &str = include_str!("relation.rs");
 const SESSION_SOURCE: &str = include_str!("session.rs");
 const WCAG22_CONSTRAINT_SOURCE: &str = include_str!("constraints/wcag22.rs");
 
-const GENERIC_SOURCES: [(&str, &str); 10] = [
+#[test]
+fn point_representation_execution_is_generic_and_the_helper_facade_is_gone() {
+    let representation = normalized_production_code(POINT_REPRESENTATION_SOURCE);
+    for forbidden in [
+        "alphaanalog",
+        "authoredalphabinding",
+        "exactalphaprogram",
+        "crate::analog",
+        "rolerecipe",
+        "rolespec",
+    ] {
+        assert!(
+            !representation.contains(forbidden),
+            "generic point representation still owns recipe vocabulary `{forbidden}`",
+        );
+    }
+    for required in [
+        "pointopacityoversurfacev1",
+        "assess_visible_point_hard",
+        "exactidentityreleasev1",
+    ] {
+        assert!(
+            representation.contains(required),
+            "generic point representation lost physical gate `{required}`",
+        );
+    }
+
+    let alpha = compact_production_syntax(ALPHA_SOURCE).to_ascii_lowercase();
+    for removed in [
+        "structalphaanalog",
+        "fnresolve_alpha_analog(",
+        "fnresolve_alpha_analog_hex(",
+        "crate::analog",
+    ] {
+        assert!(
+            !alpha.contains(removed),
+            "public alpha helper facade still exposes removed recipe path `{removed}`",
+        );
+    }
+    assert!(
+        !LIB_SOURCE.contains("mod analog;"),
+        "the recipe-shaped execution module must be deleted",
+    );
+}
+
+const GENERIC_SOURCES: [(&str, &str); 11] = [
     ("appearance.rs", APPEARANCE_SOURCE),
     ("constraints/family.rs", FAMILY_CONSTRAINT_SOURCE),
     ("constraints/relation.rs", RELATION_CONSTRAINT_SOURCE),
@@ -36,6 +83,7 @@ const GENERIC_SOURCES: [(&str, &str); 10] = [
     ("program/attachment.rs", PROGRAM_ATTACHMENT_SOURCE),
     ("program_identity.rs", PROGRAM_IDENTITY_SOURCE),
     ("program_session.rs", PROGRAM_SESSION_SOURCE),
+    ("point_representation.rs", POINT_REPRESENTATION_SOURCE),
     ("relation.rs", RELATION_SOURCE),
 ];
 

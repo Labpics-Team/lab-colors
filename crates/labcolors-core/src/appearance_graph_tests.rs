@@ -265,7 +265,7 @@ fn static_exact_program_is_declarative_topology_plus_typed_constraint() {
         .unwrap();
     assert!(crate::appearance::point_program_matches(&compiled));
     assert_eq!(
-        crate::analog::ExactAlphaProgramV1::physical_identity(),
+        crate::point_representation::ExactPointRepresentationV1::physical_identity(),
         crate::appearance::PhysicalProgramIdentityV1::InputOpacityOverSurfaceEncodedSrgb8V1
     );
     assert_eq!(
