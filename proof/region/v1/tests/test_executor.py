@@ -1360,6 +1360,17 @@ class SameObjectAndObserverProtocolTests(unittest.TestCase):
         for syscall_number in (2, 41, 56, 257, 319):
             with self.subTest(syscall_number=syscall_number):
                 self.assertEqual(self._seccomp_verdict(program, syscall_number), killed)
+        # Static glibc issues exactly these two extra syscalls before main:
+        # it resolves /proc/self/exe once and seeds the stack protector canary
+        # from the kernel RNG.  Denying either kills the sealed evaluator with
+        # signal 31 before its first output byte (readlink resolves a link
+        # target and opens nothing; getrandom only reads kernel entropy).
+        for startup_syscall in (89, 318):
+            with self.subTest(startup_syscall=startup_syscall):
+                self.assertEqual(
+                    self._seccomp_verdict(program, startup_syscall),
+                    allowed,
+                )
         self.assertEqual(
             self._seccomp_verdict(program, 302, arguments=(0, 0, 0, 0, 0, 0)),
             allowed,

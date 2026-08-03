@@ -1083,12 +1083,14 @@ class _NativeLinuxOperationsV1:
         25,   # mremap
         28,   # madvise
         60,   # exit
+        89,   # readlink: static glibc resolves /proc/self/exe once before main
         131,  # sigaltstack
         158,  # arch_prctl
         202,  # futex
         218,  # set_tid_address
         231,  # exit_group
         273,  # set_robust_list
+        318,  # getrandom: static glibc seeds its stack protector canary
         334,  # rseq
     )
 
