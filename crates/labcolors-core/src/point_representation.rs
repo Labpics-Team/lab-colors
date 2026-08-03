@@ -1,9 +1,9 @@
 //! Exact point representation over one declared backdrop.
 //!
 //! Proposal выбирает least feasible `(source, opacity)` внутри объявленного
-//! замкнутого opacity-domain, но не сертифицирует себя. Это отдельный explicit
-//! `MostTransparent` release замороженного frontend-а, а не скрытый universal
-//! `auto`. Модуль материализует ровно один финальный occurrence общей
+//! замкнутого opacity-domain, но не сертифицирует себя. Это frozen lowering
+//! существующего frontend-а, а не отдельная selection-authority или скрытый
+//! universal `auto`. Модуль материализует ровно один финальный occurrence общей
 //! point-программой, применяет exact identity constraint и только после `Pass`
 //! создаёт verified value. Никакого результата с частичным evidence при
 //! mismatch не существует.
@@ -30,13 +30,13 @@ pub(crate) struct PointRepresentationEvidenceV1 {
     occurrence: SourceOverCertificateV1,
     target: Srgb8,
     actual: Srgb8,
-    selection: PointRepresentationSelectionEvidenceV1,
+    feasibility: OpacityFeasibilityEvidenceV1,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct VerifiedPointRepresentationV1 {
     exact: VerifiedExactPointV1,
-    selection: PointRepresentationSelectionEvidenceV1,
+    feasibility: OpacityFeasibilityEvidenceV1,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -57,10 +57,6 @@ impl VerifiedPointRepresentationV1 {
         self.exact.evidence.binding().occurrence_ref()
     }
 
-    pub(crate) const fn selection(&self) -> PointRepresentationSelectionEvidenceV1 {
-        self.selection
-    }
-
     pub(crate) fn evidence(&self) -> PointRepresentationEvidenceV1 {
         let binding = *self.exact.evidence.binding();
         let occurrence = binding.occurrence();
@@ -73,34 +69,23 @@ impl VerifiedPointRepresentationV1 {
             occurrence,
             target: self.exact.evidence.target(),
             actual: self.exact.evidence.actual(),
-            selection: self.selection,
+            feasibility: self.feasibility,
         }
     }
 }
 
-/// Identity of the exact selection law used by this point coordinator.
+/// Exact frontier of representability inside one declared opacity-domain.
+///
+/// Это geometric evidence, не selection policy: package-level objective и
+/// total order принадлежат единственному общему `SelectionRelease`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum PointRepresentationSelectionReleaseV1 {
-    /// Full sRGB8 source domain and the least feasible opacity inside a
-    /// declared closed interval. Это explicit policy fragment, не package auto.
-    ExactSrgb8MostTransparentV1,
-}
-
-/// Evidence that selection happened inside one declared opacity-domain.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct PointRepresentationSelectionEvidenceV1 {
-    release: PointRepresentationSelectionReleaseV1,
+pub(crate) struct OpacityFeasibilityEvidenceV1 {
     domain: OpacityDomainV1,
     first_feasible: AdmittedOpacityV1,
     frontier_predecessor: Option<AdmittedOpacityV1>,
-    selected: AdmittedOpacityV1,
 }
 
-impl PointRepresentationSelectionEvidenceV1 {
-    pub(crate) const fn release(self) -> PointRepresentationSelectionReleaseV1 {
-        self.release
-    }
-
+impl OpacityFeasibilityEvidenceV1 {
     pub(crate) const fn domain(self) -> OpacityDomainV1 {
         self.domain
     }
@@ -111,10 +96,6 @@ impl PointRepresentationSelectionEvidenceV1 {
 
     pub(crate) const fn frontier_predecessor(self) -> Option<AdmittedOpacityV1> {
         self.frontier_predecessor
-    }
-
-    pub(crate) const fn selected(self) -> AdmittedOpacityV1 {
-        self.selected
     }
 }
 
@@ -251,11 +232,7 @@ fn propose(
     domain: OpacityDomainV1,
     backdrop: Srgb8,
 ) -> Result<
-    (
-        Srgb8,
-        AdmittedOpacityV1,
-        PointRepresentationSelectionEvidenceV1,
-    ),
+    (Srgb8, AdmittedOpacityV1, OpacityFeasibilityEvidenceV1),
     PointRepresentationProposalErrorV1,
 > {
     let first_feasible = first_opacity(target, backdrop);
@@ -276,34 +253,33 @@ fn propose(
     let source = source_at_opacity(target, selected, backdrop)
         .ok_or(PointRepresentationProposalErrorV1::MissingSourceAtSelectedOpacity { selected })?;
     let frontier_predecessor = first_feasible.predecessor();
-    let selection = PointRepresentationSelectionEvidenceV1 {
-        release: PointRepresentationSelectionReleaseV1::ExactSrgb8MostTransparentV1,
+    let feasibility = OpacityFeasibilityEvidenceV1 {
         domain,
         first_feasible,
         frontier_predecessor,
-        selected,
     };
-    Ok((source, selected, selection))
+    Ok((source, selected, feasibility))
 }
 
-/// Coordinator explicit MostTransparent release, point occurrence и exact gate.
+/// Frozen frontend lowering, point occurrence и exact gate.
 pub(crate) fn resolve_exact_point_representation_v1(
     target: Srgb8,
     domain: OpacityDomainV1,
     backdrop: Srgb8,
 ) -> Result<VerifiedPointRepresentationV1, ResolvePointRepresentationErrorV1> {
-    let (source, opacity, selection) =
+    let (source, opacity, feasibility) =
         propose(target, domain, backdrop).map_err(ResolvePointRepresentationErrorV1::Proposal)?;
     let exact = ExactPointRepresentationV1::evaluate(target, source, opacity, backdrop)
         .map_err(ResolvePointRepresentationErrorV1::ConstraintViolation)?;
-    let verified = VerifiedPointRepresentationV1 { exact, selection };
+    let verified = VerifiedPointRepresentationV1 { exact, feasibility };
     let evidence = verified.evidence();
-    debug_assert_eq!(evidence.selection.release(), selection.release());
-    debug_assert_eq!(evidence.selection.domain(), domain);
-    debug_assert_eq!(verified.selection().selected(), verified.opacity());
-    debug_assert_eq!(selection.first_feasible(), first_opacity(target, backdrop));
+    debug_assert_eq!(evidence.feasibility.domain(), domain);
+    debug_assert_eq!(
+        feasibility.first_feasible(),
+        first_opacity(target, backdrop)
+    );
     debug_assert!(
-        !selection
+        !feasibility
             .frontier_predecessor()
             .is_some_and(|predecessor| target_is_feasible(target, predecessor.value(), backdrop)),
     );
@@ -435,12 +411,12 @@ mod tests {
         let backdrop = Srgb8::new([0; 3]);
         let verified =
             resolve_exact_point_representation_v1(target, domain(0.0, 1.0), backdrop).unwrap();
-        let selection = verified.selection();
-        let predecessor = selection
+        let feasibility = verified.evidence().feasibility;
+        let predecessor = feasibility
             .frontier_predecessor()
             .expect("a positive frontier must have a binary64 predecessor");
 
-        assert_eq!(verified.opacity(), selection.first_feasible());
+        assert_eq!(verified.opacity(), feasibility.first_feasible());
         assert!(exact_source_exists(target, verified.opacity(), backdrop));
         assert!(!exact_source_exists(target, predecessor, backdrop));
     }
@@ -490,10 +466,10 @@ mod tests {
         assert_eq!(verified.source(), target);
         assert_eq!(verified.opacity(), AdmittedOpacityV1::TRANSPARENT);
         assert_eq!(
-            verified.selection().first_feasible(),
+            verified.evidence().feasibility.first_feasible(),
             AdmittedOpacityV1::TRANSPARENT
         );
-        assert_eq!(verified.selection().frontier_predecessor(), None);
+        assert_eq!(verified.evidence().feasibility.frontier_predecessor(), None);
     }
 
     proptest! {

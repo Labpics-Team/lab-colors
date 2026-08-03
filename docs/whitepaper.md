@@ -169,12 +169,12 @@ APCA-shaped компонент и H-K brightness correction не реклами�
 проверки; отдельный recipe-specific execution запрещён.
 
 - `AlphaAnalog` — замороженный frontend: объявленная solid-цель и минимум
-  opacity компилируются в замкнутый domain `[minimum, 1]`. Exact
-  `MostTransparent` release выбирает первый достижимый binary64 внутри domain,
+  opacity компилируются в замкнутый domain `[minimum, 1]`. Frozen exact
+  lowering выбирает первый достижимый binary64 внутри domain,
   сохраняет границу глобальной достижимости с её непосредственным predecessor
   и повторно проверяет итоговый sRGB8.
   Это не общий `alpha:auto`: другие design objectives принадлежат единственному
-  versioned selection contract и не угадываются этим frontend-ом.
+  versioned `SelectionRelease` и не угадываются этим frontend-ом.
 - `Material` возвращает точечные слои материала; он не сертифицирует blur,
   преломление или пространственное стекло.
 - `Glow` возвращает точечные screen-слои и numerical outcome; он не
