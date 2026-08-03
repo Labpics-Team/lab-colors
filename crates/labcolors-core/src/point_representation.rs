@@ -85,9 +85,9 @@ fn target_is_feasible(target: Srgb8, opacity: f64, backdrop: Srgb8) -> bool {
 
 /// Первый `binary64` в `[0,1]`, на котором byte-grid допускает target.
 /// Неотрицательные `f64` упорядочены битами, поэтому поиск точен и конечен.
-pub(crate) fn first_opacity(target: Srgb8, backdrop: Srgb8) -> f64 {
+pub(crate) fn first_opacity(target: Srgb8, backdrop: Srgb8) -> AdmittedOpacityV1 {
     if target == backdrop {
-        return 0.0;
+        return AdmittedOpacityV1::TRANSPARENT;
     }
     let mut failing = 0.0_f64.to_bits();
     let mut passing = 1.0_f64.to_bits();
@@ -102,13 +102,22 @@ pub(crate) fn first_opacity(target: Srgb8, backdrop: Srgb8) -> f64 {
             failing = middle;
         }
     }
-    f64::from_bits(passing)
+    AdmittedOpacityV1::new(f64::from_bits(passing))
+        .expect("binary search is bounded by admitted transparent and opaque endpoints")
 }
 
 /// Канонический byte-источник при фиксированной opacity. Для каждого канала
 /// берётся ближайший к непрерывной инверсии байт из полного проходящего
 /// интервала.
-pub(crate) fn source_at_opacity(target: Srgb8, opacity: f64, backdrop: Srgb8) -> Option<Srgb8> {
+pub(crate) fn source_at_opacity(
+    target: Srgb8,
+    opacity: AdmittedOpacityV1,
+    backdrop: Srgb8,
+) -> Option<Srgb8> {
+    source_at_opacity_value(target, opacity.value(), backdrop)
+}
+
+fn source_at_opacity_value(target: Srgb8, opacity: f64, backdrop: Srgb8) -> Option<Srgb8> {
     if !target_is_feasible(target, opacity, backdrop) {
         return None;
     }
@@ -187,14 +196,13 @@ fn propose(
     minimum_opacity: AdmittedOpacityV1,
     backdrop: Srgb8,
 ) -> Result<(Srgb8, AdmittedOpacityV1), PointRepresentationProposalErrorV1> {
-    if let Some(source) = source_at_opacity(target, minimum_opacity.value(), backdrop) {
+    if let Some(source) = source_at_opacity(target, minimum_opacity, backdrop) {
         return Ok((source, minimum_opacity));
     }
 
-    let opacity = AdmittedOpacityV1::new(first_opacity(target, backdrop))
-        .map_err(|_| PointRepresentationProposalErrorV1::DerivedOpacityOutsideUnitInterval)?;
+    let opacity = first_opacity(target, backdrop);
     debug_assert!(opacity.value() > minimum_opacity.value());
-    let source = source_at_opacity(target, opacity.value(), backdrop)
+    let source = source_at_opacity(target, opacity, backdrop)
         .ok_or(PointRepresentationProposalErrorV1::MissingSourceAtFirstOpacity)?;
     Ok((source, opacity))
 }
@@ -222,7 +230,6 @@ pub(crate) enum ResolvePointRepresentationErrorV1 {
 /// Typed отказ proposal до materialization occurrence.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PointRepresentationProposalErrorV1 {
-    DerivedOpacityOutsideUnitInterval,
     MissingSourceAtFirstOpacity,
 }
 
@@ -327,7 +334,7 @@ mod tests {
                         });
                     let actual = source_at_opacity(
                         Srgb8::new([target, backdrop, backdrop]),
-                        alpha,
+                        admitted(alpha),
                         Srgb8::new([backdrop; 3]),
                     )
                     .map(|tint| tint.bytes()[0]);

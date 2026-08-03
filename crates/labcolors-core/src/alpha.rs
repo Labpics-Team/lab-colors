@@ -463,7 +463,7 @@ mod tests {
                     let backdrop = crate::Srgb8::new([bg; 3]);
                     let requested_is_feasible = crate::point_representation::source_at_opacity(
                         target,
-                        requested_alpha,
+                        admitted(requested_alpha),
                         backdrop,
                     )
                     .is_some();
@@ -496,7 +496,7 @@ mod tests {
                         assert!(
                             crate::point_representation::source_at_opacity(
                                 target,
-                                predecessor,
+                                admitted(predecessor),
                                 backdrop,
                             )
                             .is_none(),
@@ -541,7 +541,7 @@ mod tests {
             assert!(
                 crate::point_representation::source_at_opacity(
                     crate::Srgb8::new([1, 0, 0]),
-                    predecessor,
+                    admitted(predecessor),
                     crate::Srgb8::new([0; 3]),
                 )
                 .is_none()
@@ -563,16 +563,17 @@ mod tests {
                 assert!(
                     crate::point_representation::source_at_opacity(target, floor, background)
                         .is_some(),
-                    "solid={solid}, bg={bg}, floor={floor} не проходит"
+                    "solid={solid}, bg={bg}, floor={} не проходит",
+                    floor.value()
                 );
                 if solid == bg {
-                    assert_eq!(floor.to_bits(), 0.0_f64.to_bits());
+                    assert_eq!(floor.bits(), 0.0_f64.to_bits());
                 } else {
-                    let predecessor = f64::from_bits(floor.to_bits() - 1);
+                    let predecessor = f64::from_bits(floor.bits() - 1);
                     assert!(
                         crate::point_representation::source_at_opacity(
                             target,
-                            predecessor,
+                            admitted(predecessor),
                             background,
                         )
                         .is_none(),
