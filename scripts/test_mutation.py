@@ -1824,6 +1824,13 @@ class MutationTruthTest(unittest.TestCase):
                 "publish-worker.yml",
             )
         }
+        ci_caller = (workflows / "ci.yml").read_text(encoding="utf-8")
+        admitted_ci_worker = (
+            "uses: Labpics-Team/lab-colors/.github/workflows/ci-worker.yml@"
+            "713284cec438abdd06272c1451fcb79eb6d3a38c"
+        )
+        self.assertEqual(ci_caller.count("ci-worker.yml@"), 1)
+        self.assertIn(admitted_ci_worker, ci_caller)
         for worker_name, source in workers.items():
             for job_name, block in workflow_job_blocks(source, worker_name).items():
                 with self.subTest(worker=worker_name, job=job_name):
