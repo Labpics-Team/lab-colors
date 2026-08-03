@@ -94,9 +94,12 @@ class ArbBuildRecipeTests(unittest.TestCase):
             source,
         )
         for required in (
+            'apparmor_userns=/proc/sys/kernel/apparmor_restrict_unprivileged_userns',
+            'if [[ -f "$apparmor_userns" ]]; then',
             'original_userns="$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns)"',
             'echo "LABCOLORS_APPARMOR_USERNS_V1=$original_userns"',
             "sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0",
+            'echo "LABCOLORS_APPARMOR_USERNS_V1="',
             'kernel.apparmor_restrict_unprivileged_userns=$LABCOLORS_APPARMOR_USERNS_V1',
             'mkdir "$scope/tasks" "$scope/proof"',
             "printf '+memory +pids' > \"$scope/cgroup.subtree_control\"",
@@ -121,6 +124,14 @@ class ArbBuildRecipeTests(unittest.TestCase):
                 self.assertIn(required, source)
         self.assertNotIn("grep --ignore-case --quiet skipped", source)
         self.assertNotIn("python3 -m unittest", source)
+        # The kernel precondition is fail-closed and host-explicit: either the
+        # restriction sysctl is read, validated, and lifted, or its absence is
+        # the proof; an unconditional presence test would fail closed on
+        # kernels without AppArmor userns mediation.
+        self.assertNotIn(
+            "test -f /proc/sys/kernel/apparmor_restrict_unprivileged_userns",
+            source,
+        )
         self.assertLess(
             source.index("proof/region/v1/arb/tests/gate.py"),
             source.index("LABCOLORS_EXECUTOR_CGROUP_V1=$scope/proof"),

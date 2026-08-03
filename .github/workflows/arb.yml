@@ -193,15 +193,22 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test -f /proc/sys/kernel/apparmor_restrict_unprivileged_userns
-          original_userns="$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns)"
-          case "$original_userns" in
-            0|1) ;;
-            *) exit 78 ;;
-          esac
-          echo "LABCOLORS_APPARMOR_USERNS_V1=$original_userns" >> "$GITHUB_ENV"
-          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-          test "$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns)" = 0
+          apparmor_userns=/proc/sys/kernel/apparmor_restrict_unprivileged_userns
+          if [[ -f "$apparmor_userns" ]]; then
+            original_userns="$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns)"
+            case "$original_userns" in
+              0|1) ;;
+              *) exit 78 ;;
+            esac
+            echo "LABCOLORS_APPARMOR_USERNS_V1=$original_userns" >> "$GITHUB_ENV"
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+            test "$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns)" = 0
+          else
+            # The restriction sysctl exists only on kernels carrying the
+            # AppArmor userns mediation; its absence is proof that there is
+            # nothing to lift, and the cleanup restore stays a no-op.
+            echo "LABCOLORS_APPARMOR_USERNS_V1=" >> "$GITHUB_ENV"
+          fi
           scope="$LABCOLORS_CGROUP_SCOPE_V1"
           sudo mkdir "$scope"
           sudo chown "$(id -u):$(id -g)" \
