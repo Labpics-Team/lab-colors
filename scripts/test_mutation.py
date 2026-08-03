@@ -2008,6 +2008,19 @@ class MutationTruthTest(unittest.TestCase):
                     publish_command,
                     f'npm publish --ignore-scripts {replacement} "$TARBALL_PATH"',
                 )
+
+    def test_publish_caller_pins_admitted_worker(self) -> None:
+        repo = Path(__file__).resolve().parents[1]
+        caller = (repo / ".github" / "workflows" / "publish.yml").read_text(
+            encoding="utf-8"
+        )
+        expected = (
+            "uses: Labpics-Team/lab-colors/.github/workflows/publish-worker.yml@"
+            "d521722e3a476829cc129a2d0e6df2069c5302a8"
+        )
+        self.assertEqual(caller.count("publish-worker.yml@"), 1)
+        self.assertIn(expected, caller)
+
     def test_swift_conformance_does_not_mutate_temp_root(self) -> None:
         repo = Path(__file__).resolve().parents[1]
         script = repo / "bindings" / "swift" / "ci" / "run-conformance.sh"
