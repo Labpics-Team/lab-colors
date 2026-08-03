@@ -27,11 +27,11 @@
       "sha256": "30c7b3c5ce7b7f876c2cf475a2815b6ac8e53b9986e471864b03de1558978d99"
     },
     {
-      "bytes": 6046,
+      "bytes": 10672,
       "license": "MIT",
       "path": "crates/labcolors-core/src/composition.rs",
       "role": "composition_executor_source",
-      "sha256": "0497b90b5e4bf8771604758034bee81655bcd5aedd934e9fef9dfc66429b07b7"
+      "sha256": "0afc3232dd0c3b5b94596813d0a5e8aef4a2dea74b09dbae05f41e64d4c8ca1b"
     },
     {
       "bytes": 7419,

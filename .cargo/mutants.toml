@@ -10,7 +10,7 @@
 # это не отдельный запуск и не обещание покрытия всего workspace.
 examine_globs = [
     "crates/labcolors-core/src/alpha.rs",
-    "crates/labcolors-core/src/analog.rs",
+    "crates/labcolors-core/src/point_representation.rs",
     "crates/labcolors-core/src/appearance.rs",
     "crates/labcolors-core/src/composition.rs",
     "crates/labcolors-core/src/constraints/mod.rs",

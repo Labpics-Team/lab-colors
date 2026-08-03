@@ -348,8 +348,10 @@ mod tests {
         let backdrop = crate::Srgb8::new(crate::srgb8::hex_bytes(backdrop_hex)?);
         let opacity = crate::composition::AdmittedOpacityV1::new(minimum_opacity)
             .map_err(|_| format!("opacity outside finite [0,1]: {minimum_opacity}"))?;
+        let domain = crate::composition::OpacityDomainV1::try_new(opacity.value(), 1.0)
+            .map_err(|_| "admitted minimum opacity did not form a valid domain".to_owned())?;
         let verified = crate::point_representation::resolve_exact_point_representation_v1(
-            target, opacity, backdrop,
+            target, domain, backdrop,
         )
         .map_err(|error| format!("exact point representation failed: {error:?}"))?;
         Ok((verified.source().to_hex(), verified.opacity().value()))
@@ -470,7 +472,8 @@ mod tests {
                     let verified =
                         crate::point_representation::resolve_exact_point_representation_v1(
                             target,
-                            admitted(requested_alpha),
+                            crate::composition::OpacityDomainV1::try_new(requested_alpha, 1.0)
+                                .unwrap(),
                             backdrop,
                         )
                         .unwrap_or_else(|error| {
@@ -595,7 +598,7 @@ mod tests {
         let backdrop = crate::Srgb8::new([0; 3]);
         let verified = crate::point_representation::resolve_exact_point_representation_v1(
             target,
-            admitted(0.5),
+            crate::composition::OpacityDomainV1::try_new(0.5, 1.0).unwrap(),
             backdrop,
         )
         .expect("валидный домен всегда имеет конечный sRGB8-ответ");
