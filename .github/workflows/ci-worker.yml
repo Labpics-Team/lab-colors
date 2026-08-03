@@ -434,12 +434,13 @@ jobs:
     name: wasm build + headless test + size
     runs-on: { group: labpics-ci-sandbox, labels: [labpics-ci-gvisor-v1] }
     timeout-minutes: 25
-    # Binaryen 117 берёт число потоков из BINARYEN_CORES, а не из cgroup quota.
-    # 4 выведено из CPU-контракта runner label labpics-ci-gvisor-v1;
-    # дифференциальная сборка 1↔4 на pinned wasm-pack/Rust дала byte-exact
-    # пакет. Двойная сборка ниже остаётся постоянным drift-гейтом.
+    # Native Binaryen 117 не завершил wasm-opt внутри systrap до bounded timeout
+    # (run 30773180841). Официальный Node transport того же release дал byte-exact
+    # результат native oracle на post-bindgen input в exact production cell.
+    # Менять release/transport только новым differential receipt.
     env:
-      BINARYEN_CORES: 4
+      BINARYEN_RELEASE: version_117
+      BINARYEN_NODE_SHA256: "2d5a42f2d167a7cc2b4b6664c44c5ace1690d13db4f527324f052afbad461a07"
     # Защита от fork-PR — см. комментарий в job `lint` выше.
     if: >-
       (github.event_name != 'pull_request' ||
@@ -470,16 +471,41 @@ jobs:
           # The WASM compile target; the bindings are built and tested against it.
           targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          # Одноразовый слот: GitHub-кэш не нужен. У setup-node вход `cache` — это
+          # перечисление пакетных менеджеров, поэтому кэш выключается ОТСУТСТВИЕМ
+          # `cache` плюс явным гашением автокэша npm (`cache: false` там падает).
+          package-manager-cache: false
+          node-version: ${{ env.NODE_TOOLCHAIN }}
       - name: install wasm-pack
         # Pinned for reproducibility; --locked respects the tool's own lockfile.
-        # wasm-pack vendors a matching wasm-opt and downloads a matching
-        # chromedriver for the headless run below.
+        # Build uses --no-opt below: Binaryen is installed and verified separately,
+        # while wasm-pack still owns cargo/wasm-bindgen and the browser harness.
         # $CARGO_HOME/bin → PATH explicitly: with a custom CARGO_HOME the
         # toolchain action does not add it, so the installed `wasm-pack` binary
         # was unreachable (exit 127 "command not found" на прежнем пуле de-02).
         run: |
           cargo install wasm-pack --version 0.13.1 --locked
           echo "$CARGO_HOME/bin" >> "$GITHUB_PATH"
+      - name: install byte-bound Binaryen Node transport
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/binaryen-$GITHUB_JOB.tar.gz"
+          root="$RUNNER_TEMP/binaryen-$GITHUB_JOB"
+          curl --fail-with-body --silent --show-error --location \
+            --retry 3 --retry-all-errors \
+            "https://github.com/WebAssembly/binaryen/releases/download/${BINARYEN_RELEASE}/binaryen-${BINARYEN_RELEASE}-node.tar.gz" \
+            -o "$archive"
+          printf '%s  %s\n' "$BINARYEN_NODE_SHA256" "$archive" \
+            | sha256sum --check --strict
+          mkdir -p "$root"
+          tar --extract --gzip --file "$archive" --directory "$root"
+          binaryen="$root/binaryen-${BINARYEN_RELEASE}"
+          test -f "$binaryen/wasm-opt.js"
+          test -f "$binaryen/wasm-opt.wasm"
+          test -f "$binaryen/wasm-opt.worker.js"
+          echo "BINARYEN_ROOT=$binaryen" >> "$GITHUB_ENV"
       - name: repeat runtime WASM build in one toolchain-pinned CI job
         # Rust error locations otherwise embed the slot's mutable
         # workspace/CARGO_HOME roots and make identical source hash differently.
@@ -490,7 +516,14 @@ jobs:
           set -euo pipefail
           export CARGO_ENCODED_RUSTFLAGS="--remap-path-prefix=$GITHUB_WORKSPACE=/workspace/lab-colors"$'\x1f'"--remap-path-prefix=$CARGO_HOME=/cargo-home"
           build_runtime() {
-            wasm-pack build crates/labcolors-wasm --release --target web --out-dir ../../packages/colors/pkg --out-name labcolors --locked
+            wasm-pack build --no-opt --release --target web \
+              --out-dir ../../packages/colors/pkg --out-name labcolors \
+              crates/labcolors-wasm --locked
+            local wasm=packages/colors/pkg/labcolors_bg.wasm
+            local optimized=packages/colors/pkg/labcolors_bg.wasm-opt.wasm
+            node "$BINARYEN_ROOT/wasm-opt.js" "$wasm" -o "$optimized" \
+              -Oz --enable-bulk-memory --enable-nontrapping-float-to-int
+            mv -- "$optimized" "$wasm"
           }
 
           rm -rf packages/colors/pkg
@@ -518,13 +551,6 @@ jobs:
             fi
           done
           sha256sum packages/colors/pkg/labcolors_bg.wasm
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          # Одноразовый слот: GitHub-кэш не нужен. У setup-node вход `cache` — это
-          # перечисление пакетных менеджеров, поэтому кэш выключается ОТСУТСТВИЕМ
-          # `cache` плюс явным гашением автокэша npm (`cache: false` там падает).
-          package-manager-cache: false
-          node-version: ${{ env.NODE_TOOLCHAIN }}
       - name: enforce measured WASM runtime budget
         # Exact Linux x64 zero-headroom ratchet. gzip remains transport
         # diagnostics only.

@@ -1811,7 +1811,7 @@ class MutationTruthTest(unittest.TestCase):
             run_policy("pull_request", 2, 42, 42)[0],
         )
 
-    def test_reusable_workers_bound_jobs_and_binaryen_parallelism(self) -> None:
+    def test_reusable_workers_bound_jobs_and_binaryen_transport(self) -> None:
         repo = Path(__file__).resolve().parents[1]
         workflows = repo / ".github" / "workflows"
 
@@ -1838,8 +1838,42 @@ class MutationTruthTest(unittest.TestCase):
         wasm = workflow_job_blocks(workers["ci-worker.yml"], "ci-worker.yml")[
             "wasm"
         ]
-        self.assertIn("    env:\n      BINARYEN_CORES: 4\n", wasm)
-        self.assertEqual(workers["ci-worker.yml"].count("\n      BINARYEN_CORES:"), 1)
+        self.assertNotIn("BINARYEN_CORES", workers["ci-worker.yml"])
+        self.assertIn("      BINARYEN_RELEASE: version_117\n", wasm)
+        self.assertIn(
+            '      BINARYEN_NODE_SHA256: "'
+            '2d5a42f2d167a7cc2b4b6664c44c5ace1690d13db4f527324f052afbad461a07"\n',
+            wasm,
+        )
+        self.assertIn("binaryen-${BINARYEN_RELEASE}-node.tar.gz", wasm)
+        self.assertIn('printf \'%s  %s\\n\' "$BINARYEN_NODE_SHA256"', wasm)
+        self.assertIn("sha256sum --check -", wasm)
+        self.assertIn("wasm-pack build --no-opt --release", wasm)
+        self.assertEqual(wasm.count("wasm-pack build "), 1)
+        self.assertIn(
+            'node "$BINARYEN_ROOT/wasm-opt.js" "$wasm" -o "$optimized" \\\n'
+            "              -Oz --enable-bulk-memory "
+            "--enable-nontrapping-float-to-int",
+            wasm,
+        )
+        self.assertEqual(
+            wasm.count(
+                "-Oz --enable-bulk-memory --enable-nontrapping-float-to-int"
+            ),
+            1,
+        )
+        self.assertNotIn(
+            "wasm-pack build crates/labcolors-wasm --release",
+            wasm,
+        )
+        self.assertLess(
+            wasm.index("uses: actions/setup-node@"),
+            wasm.index("name: install byte-bound Binaryen Node transport"),
+        )
+        self.assertLess(
+            wasm.index("name: install byte-bound Binaryen Node transport"),
+            wasm.index("name: repeat runtime WASM build"),
+        )
 
         native = workers["native-conformance-worker.yml"]
         native_env = native.split("\njobs:\n", 1)[0]
