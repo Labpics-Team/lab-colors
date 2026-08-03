@@ -1383,7 +1383,7 @@ impl SourceOverCertificateV1 {
         self.subject_opacity.bits()
     }
 
-    const fn subject_opacity(&self) -> crate::composition::AdmittedOpacityV1 {
+    pub(crate) const fn subject_opacity(&self) -> crate::composition::AdmittedOpacityV1 {
         self.subject_opacity
     }
 

@@ -25,7 +25,6 @@ pub use srgb8::Srgb8;
 
 pub(crate) mod accent_balance;
 pub mod alpha;
-pub(crate) mod analog;
 pub(crate) mod appearance;
 pub mod config;
 pub(crate) mod constraints;
@@ -47,6 +46,7 @@ pub mod numerical_plan;
     reason = "the output-profile firewall is intentionally internal to registered profiles"
 )]
 pub(crate) mod output_projection;
+pub(crate) mod point_representation;
 #[cfg_attr(
     not(test),
     expect(
