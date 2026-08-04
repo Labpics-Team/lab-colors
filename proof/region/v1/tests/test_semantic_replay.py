@@ -12,6 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from region_proof_protocol import (  # noqa: E402
+    BoundaryUnprovenWitnessV1,
     ComparatorKindV1,
     ComparatorManifestV2,
     ContentResolvedComparatorManifestV2,
@@ -20,9 +21,11 @@ from region_proof_protocol import (  # noqa: E402
     ExactZeroSignalTraceV1,
     ProofJobV1,
     ReducedDomainManifestV1,
+    ResourceLimitWitnessV1,
     RunClaimV1,
 )
 
+from semantic import replay as semantic_replay  # noqa: E402
 from semantic.receipt import (  # noqa: E402
     SemanticVerificationReceiptV1,
     SemanticVerificationReasonV1,
@@ -156,13 +159,17 @@ class HostileReplayTests(unittest.TestCase):
         comparator = admit_manifest(ComparatorKindV1.ARB, 760)
         transcript = all_outside_transcript(job, comparator)
         run = run_claim(job, comparator, transcript)
+        # The verifier can only attest the run that binds the transcript it
+        # replays.  Binary, invocation and platform causality belongs to the
+        # source-bound controller, so a run becomes foreign to this
+        # verification exactly when it points at a different transcript.
         foreign_run = RunClaimV1(
             job.identity,
             comparator.identity,
             digest(821),
             digest(822),
             digest(823),
-            transcript.identity,
+            digest(829),
         )
         self.assertNotEqual(foreign_run.identity, run.identity)
 
@@ -187,6 +194,72 @@ class HostileReplayTests(unittest.TestCase):
         result = verify_transcript(foreign_job, comparator, transcript, run)
         self.assertIsInstance(result, SemanticVerificationRejectedV1)
         self.assertEqual(result.reason, SemanticVerificationReasonV1.FOREIGN_BINDING)
+
+    def test_replayed_transcript_seals_a_receipt(self) -> None:
+        # Anti-vacuum: the verifier must mint a receipt for a transcript that
+        # exactly matches its own independent replay, not only reject.
+        job = fixture_job()
+        comparator = admit_manifest(ComparatorKindV1.ARB, 900)
+        driver = semantic_replay.SemanticReplay(job, comparator)
+        decisions: list[DecisionV1] = []
+        witnesses: list = []
+        accounting = semantic_replay.accounting_prefix_v1(
+            comparator.manifest.kind,
+            job,
+            comparator.identity,
+        )
+        for _ in range(job.domain.point_count):
+            point = driver.next_point()
+            decisions.append(DecisionV1(point.outcome))
+            if point.outcome == DecisionV1.INSIDE and point.exact_boundary:
+                witnesses.append(
+                    ExactZeroSignalTraceV1(
+                        point.ordinal,
+                        semantic_replay.exact_trace_digest_v1(
+                            job.identity,
+                            point.ordinal,
+                            point.exact_branch,
+                        ),
+                    )
+                )
+            elif point.outcome == DecisionV1.BOUNDARY_UNPROVEN:
+                witnesses.append(
+                    BoundaryUnprovenWitnessV1(
+                        point.ordinal,
+                        digest(100_000 + point.ordinal),
+                    )
+                )
+            elif point.outcome == DecisionV1.RESOURCE_LIMIT_REACHED:
+                witnesses.append(
+                    ResourceLimitWitnessV1(
+                        point.ordinal,
+                        point.resource_scope,
+                        point.point_grant,
+                        point.consumed,
+                    )
+                )
+            accounting.update(
+                semantic_replay.account_record(
+                    point.ordinal,
+                    point.final_precision,
+                    point.consumed,
+                    point.outcome,
+                )
+            )
+        transcript = DecisionTranscriptV1.from_decisions(
+            job,
+            comparator,
+            decisions,
+            witnesses,
+            accounting.digest(),
+        )
+        run = run_claim(job, comparator, transcript)
+
+        result = verify_transcript(job, comparator, transcript, run)
+        self.assertIsInstance(result, SemanticVerificationReceiptV1)
+        self.assertEqual(result.run_claim_identity, run.identity)
+        self.assertEqual(result.transcript_identity, transcript.identity)
+        self.assertTrue(result.binds(job, comparator, run, transcript))
 
 
 if __name__ == "__main__":

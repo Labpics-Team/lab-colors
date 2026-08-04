@@ -665,7 +665,10 @@ SSA spec, версия протокола и объявленные wire-гра�
 Никакой hash-compare между engine transcripts, no-op допуск и saturate-all не
 являются semantic replay и не могут создать receipt.
 
-Engine-specific witness digest грамматики воспроизводятся верификатором:
+Engine-specific witness digest грамматики. Третий верификатор независимо
+воспроизводит exact-zero и accounting грамматики; boundary-грамматики
+описывают wire-форму engine-артефакта и не переизобретаются в semantic
+replay:
 
 - exact zero signal trace (общая для обоих двигателей):
   `SHA256("labcolors.proof-region.exact-zero-signal-trace.v1\0" ||
@@ -693,9 +696,11 @@ Engine-specific witness digest грамматики воспроизводятс
   точной;
 - `Outside` — верификатор доказывает строго положительное заключение на всех
   пересекающих сегментах либо тон точки строго вне диапазона крайних knots;
-- `BoundaryUnproven` — заявленный enclosure digest воспроизводится грамматикой
-  связанного двигателя, верификатор не доказывает определённого противоречащего
-  исхода;
+- `BoundaryUnproven` — точка несёт ровно один boundary witness, выровненный по
+  ordinal; содержимое enclosure остаётся engine-private координатой, и
+  верификатор не переизобретает её replay (вышеобъявленные boundary-грамматики
+  описывают wire-форму engine-артефакта, а не вход третьего верификатора);
+  верификатор не доказывает определённого противоречащего исхода;
 - `ResourceLimitReached` — независимая симуляция grant-правила
   `min(per_point_work, remaining_global)` с ordinal-prefix порядком совпадает
   со свидетелем, и верификатор не доказывает определённого исхода.
@@ -714,6 +719,15 @@ canonical decision digest. Неудача возвращает typed
 создаётся. Receipt является source-bound semantic evidence для одного engine
 transcript и не заменяет `DualProofReceiptV1`, который требует receipts для
 обоих evaluator paths.
+
+Binding run claim: верификатор допускает run только когда его job, comparator
+и transcript coordinates совпадают с объектами верификации, а связанный
+transcript сам привязан к тем же job, domain и comparator. `binary_identity`,
+`invocation_identity` и `platform_identity` остаются заявленными execution
+coordinates: их причинность source → build → executable доказывает только
+source-bound controller соответствующего двигателя, и semantic verifier не
+дублирует этот anchor и не объявляет собственный. Run, указывающий на чужой
+transcript, отклоняется как `foreign_binding` до replay.
 
 ## Ошибки допуска
 

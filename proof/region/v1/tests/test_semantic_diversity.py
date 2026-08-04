@@ -58,8 +58,9 @@ class DiversityBoundaryTests(unittest.TestCase):
                     f"{path.name} imports forbidden module root {root}",
                 )
             self.assertNotIn("__import__", source, f"{path.name} hides dynamic imports")
-            if path.name == "__init__.py":
-                # The facade only re-exports the verifier boundary.
+            if path.name in ("__init__.py", "intervalmath.py"):
+                # The facade only re-exports the verifier boundary; the
+                # interval kernel is pure mathematics with no wire surface.
                 continue
             self.assertIn("region_proof_protocol", roots, f"{path.name} lost the protocol binding")
 

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from fractions import Fraction
+from functools import lru_cache
 from math import ceil, floor, isqrt
 
 
@@ -193,82 +194,170 @@ def root3(value: Interval, *, guard_bits: int, cap_bits: int) -> Interval:
     return outward(Interval(lo_lo, hi_hi), cap_bits)
 
 
-def atanh_enclosure(z: Fraction, terms: int) -> Interval:
-    """Enclose atanh(z) for |z| < 1 with a rigorously bounded tail."""
+def _series_coefficients(
+    magnitude: Fraction,
+    terms: int,
+) -> tuple[int, int, tuple[int, ...]]:
+    """Integer Horner data for an odd-power series with (2k+1) divisors.
+
+    For |z| = p/q the partial sum over the first `terms` odd powers equals
+    sign * p * P(p^2) / (q^(2 terms - 1) * product of odd divisors), where
+    the integer polynomial P absorbs every denominator factor.
+    """
+
+    numerator = magnitude.numerator
+    denominator = magnitude.denominator
+    odd_factors = tuple(2 * index + 1 for index in range(terms))
+    product = 1
+    for factor in odd_factors:
+        product *= factor
+    coefficients = tuple(
+        product // odd_factors[index]
+        * denominator ** (2 * (terms - 1 - index))
+        for index in range(terms)
+    )
+    return numerator, denominator ** (2 * terms - 1) * product, coefficients
+
+
+def _series_partial_sum(z: Fraction, terms: int, odd_signs: bool) -> Fraction:
+    """Exact partial sum of an odd-power series via one integer Horner pass.
+
+    `odd_signs` selects the alternating series (atan) over the all-positive
+    one (atanh).  Fractions never grow beyond the final common denominator,
+    so no intermediate value explodes.
+    """
+
+    if z == 0 or terms < 1:
+        return Fraction(0)
+    sign = -1 if z < 0 else 1
+    numerator, total_denominator, coefficients = _series_coefficients(abs(z), terms)
+    if odd_signs:
+        coefficients = tuple(
+            coefficient if index % 2 == 0 else -coefficient
+            for index, coefficient in enumerate(coefficients)
+        )
+    base = numerator * numerator
+    total = 0
+    for coefficient in reversed(coefficients):
+        total = total * base + coefficient
+    return Fraction(sign * numerator * total, total_denominator)
+
+
+def _atanh_sum(z: Fraction, terms: int) -> Fraction:
+    return _series_partial_sum(z, terms, odd_signs=False)
+
+
+def _atanh_tail(z: Fraction, terms: int) -> Fraction:
+    magnitude = abs(z)
+    if magnitude == 0:
+        return Fraction(0)
+    square = magnitude * magnitude
+    return magnitude ** (2 * terms + 1) / ((2 * terms + 1) * (1 - square))
+
+
+def atanh_enclosure(z: Fraction, guard_bits: int) -> Interval:
+    """Enclose atanh(z) for |z| < 1 with an adaptively bounded tail."""
 
     if not -1 < z < 1:
         raise UnresolvedError("atanh argument outside the open unit interval")
-    if terms < 1:
-        raise ValueError("atanh needs at least one term")
-    total = Fraction(0)
-    power = z
-    square = z * z
-    for index in range(terms):
-        total += power / (2 * index + 1)
-        power *= square
-    magnitude = abs(z)
-    tail = magnitude ** (2 * terms + 1) / ((2 * terms + 1) * (1 - square))
+    target = Fraction(1, 1 << guard_bits)
+    terms = 1
+    while _atanh_tail(z, terms) > target:
+        terms += 1
+        if terms > 4 * guard_bits + 64:
+            raise UnresolvedError("atanh series converges too slowly")
+    total = _atanh_sum(z, terms)
+    tail = _atanh_tail(z, terms)
     return Interval(total - tail, total + tail)
 
 
-def atan_enclosure(z: Fraction, terms: int) -> Interval:
+def _atan_sum(z: Fraction, terms: int) -> Fraction:
+    return _series_partial_sum(z, terms, odd_signs=True)
+
+
+def atan_enclosure(z: Fraction, guard_bits: int) -> Interval:
     """Enclose atan(z) for |z| <= 1 via its alternating series."""
 
     if not -1 <= z <= 1:
         raise UnresolvedError("atan argument outside the closed unit interval")
-    if terms < 1:
-        raise ValueError("atan needs at least one term")
-    total = Fraction(0)
-    power = z
-    square = z * z
-    for index in range(terms):
-        term = power / (2 * index + 1)
-        total += term if index % 2 == 0 else -term
-        power *= square
-    tail = abs(z) ** (2 * terms + 1) / (2 * terms + 1)
+    target = Fraction(1, 1 << guard_bits)
+    terms = 1
+    magnitude = abs(z)
+    while magnitude ** (2 * terms + 1) / (2 * terms + 1) > target:
+        terms += 1
+        if terms > 4 * guard_bits + 64:
+            raise UnresolvedError("atan series converges too slowly")
+    total = _atan_sum(z, terms)
+    tail = magnitude ** (2 * terms + 1) / (2 * terms + 1)
     return Interval(total - tail, total + tail)
 
 
-def ln2_enclosure(terms: int) -> Interval:
+@lru_cache(maxsize=8)
+def ln2_enclosure(guard_bits: int) -> Interval:
     """ln(2) = 2 atanh(1/3), enclosed with a rational tail bound."""
 
-    base = atanh_enclosure(Fraction(1, 3), terms)
+    base = atanh_enclosure(Fraction(1, 3), guard_bits)
     return Interval(2 * base.lo, 2 * base.hi)
 
 
-def pi_enclosure(terms: int) -> Interval:
+@lru_cache(maxsize=8)
+def pi_enclosure(guard_bits: int) -> Interval:
     """Machin formula pi = 16 atan(1/5) - 4 atan(1/239)."""
 
-    first = atan_enclosure(Fraction(1, 5), terms)
-    second = atan_enclosure(Fraction(1, 239), terms)
+    first = atan_enclosure(Fraction(1, 5), guard_bits)
+    second = atan_enclosure(Fraction(1, 239), guard_bits)
     lo = 16 * first.lo - 4 * second.hi
     hi = 16 * first.hi - 4 * second.lo
     return Interval(lo, hi)
 
 
-def _exp_small(value: Interval, terms: int) -> Interval:
+def _exp_small(value: Interval, guard_bits: int) -> Interval:
     """Taylor enclosure of exp on an interval inside [-1, 1].
 
-    The Lagrange remainder is bounded by 3 * M^terms / terms! because
-    exp(t) < 3 for |t| <= 1 (the factorial tail after the second term is
-    dominated by a geometric series of ratio 1/2).
+    The partial sum runs through the degree-`terms` monomial, so the
+    Lagrange remainder is bounded by 3 * M^(terms + 1) / (terms + 1)!
+    because exp(t) < 3 for |t| <= 1.  Interval terms accumulate with
+    denominators capped by the reduced argument, and the adaptive term
+    count stops as soon as the remainder bound clears the guard target
+    instead of always iterating 64 terms.
     """
 
     if value.lo < -1 or value.hi > 1:
         raise UnresolvedError("exp reduction interval outside [-1, 1]")
-    total = exact(1)
-    term = exact(1)
-    factorial = 1
-    for index in range(1, terms):
-        factorial *= index
-        term = mul(term, value)
-        scaled = Interval(term.lo / factorial, term.hi / factorial)
-        total = add(total, scaled)
     magnitude = max(abs(value.lo), abs(value.hi))
-    radius = Fraction(3) * magnitude**terms
+    target = Fraction(1, 1 << guard_bits)
+
+    @lru_cache(maxsize=None)
+    def radius(terms: int) -> Fraction:
+        return (
+            Fraction(
+                3 * magnitude.numerator ** (terms + 1),
+                magnitude.denominator ** (terms + 1),
+            )
+            / _factorial(terms + 1)
+        )
+
+    terms = 2
+    while radius(terms) > target:
+        terms += 1
+        if terms > 4 * guard_bits + 64:
+            raise UnresolvedError("exp series converges too slowly")
+    total = exact(1)
+    power = value
+    factorial = 1
     for index in range(1, terms + 1):
-        radius /= index
-    return Interval(total.lo - radius, total.hi + radius)
+        factorial *= index
+        total = add(total, Interval(power.lo / factorial, power.hi / factorial))
+        power = mul(power, value)
+    remainder = radius(terms)
+    return Interval(total.lo - remainder, total.hi + remainder)
+
+
+def _factorial(terms: int) -> int:
+    result = 1
+    for factor in range(2, terms + 1):
+        result *= factor
+    return result
 
 
 def exp(value: Interval, *, guard_bits: int, cap_bits: int) -> Interval:
@@ -295,7 +384,7 @@ def exp(value: Interval, *, guard_bits: int, cap_bits: int) -> Interval:
     while remainder.lo < -1 or remainder.hi > 1:
         branch += 1 if remainder.hi > 1 else -1
         remainder = reduced(branch)
-    core = _exp_small(remainder, max(guard_bits, 16))
+    core = _exp_small(remainder, guard_bits)
     scale = Fraction(2) ** branch
     return outward(Interval(scale * core.lo, scale * core.hi), cap_bits)
 
@@ -317,22 +406,44 @@ def log(value: Interval, *, guard_bits: int, cap_bits: int) -> Interval:
     # log(m) = 2 atanh((m - 1)/(m + 1)); the substitution is monotone.
     u_lo = (probe.lo - 1) / (probe.lo + 1)
     u_hi = (probe.hi - 1) / (probe.hi + 1)
-    atanh_terms = max(guard_bits, 16)
     core = Interval(
-        atanh_enclosure(u_lo, atanh_terms).lo,
-        atanh_enclosure(u_hi, atanh_terms).hi,
+        atanh_enclosure(u_lo, guard_bits).lo,
+        atanh_enclosure(u_hi, guard_bits).hi,
     )
     ln2 = ln2_enclosure(guard_bits)
-    shift = Interval(Fraction(branch) * ln2.lo, Fraction(branch) * ln2.hi)
-    if branch < 0:
+    if branch >= 0:
+        shift = Interval(Fraction(branch) * ln2.lo, Fraction(branch) * ln2.hi)
+    else:
         shift = Interval(Fraction(branch) * ln2.hi, Fraction(branch) * ln2.lo)
     result = add(shift, Interval(2 * core.lo, 2 * core.hi))
     return outward(result, cap_bits)
 
 
-def _sin_small(value: Interval, terms: int) -> Interval:
+def _sin_small(value: Interval, guard_bits: int) -> Interval:
+    """Taylor enclosure of sin on an interval inside [-1, 1].
+
+    The alternating series tail is bounded by the first dropped term,
+    M^(2 terms + 1) / (2 terms + 1)!, and the term count adapts to the
+    guard target instead of a fixed 64-term sweep.
+    """
+
     if value.lo < -1 or value.hi > 1:
         raise UnresolvedError("sin reduction interval outside [-1, 1]")
+    magnitude = max(abs(value.lo), abs(value.hi))
+    target = Fraction(1, 1 << guard_bits)
+
+    @lru_cache(maxsize=None)
+    def radius(terms: int) -> Fraction:
+        return Fraction(
+            magnitude.numerator ** (2 * terms + 1),
+            magnitude.denominator ** (2 * terms + 1),
+        ) / _factorial(2 * terms + 1)
+
+    terms = 1
+    while radius(terms) > target:
+        terms += 1
+        if terms > 4 * guard_bits + 64:
+            raise UnresolvedError("sin series converges too slowly")
     total = exact(0)
     square = mul(value, value)
     power = value
@@ -343,16 +454,30 @@ def _sin_small(value: Interval, terms: int) -> Interval:
         term = Interval(power.lo / factorial, power.hi / factorial)
         total = sub(total, term) if index % 2 else add(total, term)
         power = mul(power, square)
-    magnitude = max(abs(value.lo), abs(value.hi))
-    radius = magnitude ** (2 * terms + 1)
-    for factor in range(1, 2 * terms + 2):
-        radius /= factor
-    return Interval(total.lo - radius, total.hi + radius)
+    remainder = radius(terms)
+    return Interval(total.lo - remainder, total.hi + remainder)
 
 
-def _cos_small(value: Interval, terms: int) -> Interval:
+def _cos_small(value: Interval, guard_bits: int) -> Interval:
+    """Taylor enclosure of cos on an interval inside [-1, 1]."""
+
     if value.lo < -1 or value.hi > 1:
         raise UnresolvedError("cos reduction interval outside [-1, 1]")
+    magnitude = max(abs(value.lo), abs(value.hi))
+    target = Fraction(1, 1 << guard_bits)
+
+    @lru_cache(maxsize=None)
+    def radius(terms: int) -> Fraction:
+        return Fraction(
+            magnitude.numerator ** (2 * terms),
+            magnitude.denominator ** (2 * terms),
+        ) / _factorial(2 * terms)
+
+    terms = 1
+    while radius(terms) > target:
+        terms += 1
+        if terms > 4 * guard_bits + 64:
+            raise UnresolvedError("cos series converges too slowly")
     total = exact(0)
     square = mul(value, value)
     power = exact(1)
@@ -363,11 +488,8 @@ def _cos_small(value: Interval, terms: int) -> Interval:
         term = Interval(power.lo / factorial, power.hi / factorial)
         total = add(total, term) if index % 2 == 0 else sub(total, term)
         power = mul(power, square)
-    magnitude = max(abs(value.lo), abs(value.hi))
-    radius = magnitude ** (2 * terms)
-    for factor in range(1, 2 * terms + 1):
-        radius /= factor
-    return Interval(total.lo - radius, total.hi + radius)
+    remainder = radius(terms)
+    return Interval(total.lo - remainder, total.hi + remainder)
 
 
 def _reduce_quadrant(
@@ -396,7 +518,6 @@ def _reduce_quadrant(
 def sin(value: Interval, *, guard_bits: int, cap_bits: int) -> Interval:
     pi = pi_enclosure(guard_bits)
     candidates = _reduce_quadrant(value, pi)
-    terms = max(guard_bits, 16)
     lo = Fraction(1)
     hi = Fraction(-1)
     for branch, remainder in candidates:
@@ -404,13 +525,13 @@ def sin(value: Interval, *, guard_bits: int, cap_bits: int) -> Interval:
             return outward(Interval(-1, 1), cap_bits)
         match branch % 4:
             case 0:
-                part = _sin_small(remainder, terms)
+                part = _sin_small(remainder, guard_bits)
             case 1:
-                part = _cos_small(remainder, terms)
+                part = _cos_small(remainder, guard_bits)
             case 2:
-                part = neg(_sin_small(remainder, terms))
+                part = neg(_sin_small(remainder, guard_bits))
             case _:
-                part = neg(_cos_small(remainder, terms))
+                part = neg(_cos_small(remainder, guard_bits))
         lo = min(lo, part.lo)
         hi = max(hi, part.hi)
     if lo > hi:
@@ -421,7 +542,6 @@ def sin(value: Interval, *, guard_bits: int, cap_bits: int) -> Interval:
 def cos(value: Interval, *, guard_bits: int, cap_bits: int) -> Interval:
     pi = pi_enclosure(guard_bits)
     candidates = _reduce_quadrant(value, pi)
-    terms = max(guard_bits, 16)
     lo = Fraction(1)
     hi = Fraction(-1)
     for branch, remainder in candidates:
@@ -429,13 +549,13 @@ def cos(value: Interval, *, guard_bits: int, cap_bits: int) -> Interval:
             return outward(Interval(-1, 1), cap_bits)
         match branch % 4:
             case 0:
-                part = _cos_small(remainder, terms)
+                part = _cos_small(remainder, guard_bits)
             case 1:
-                part = neg(_sin_small(remainder, terms))
+                part = neg(_sin_small(remainder, guard_bits))
             case 2:
-                part = neg(_cos_small(remainder, terms))
+                part = neg(_cos_small(remainder, guard_bits))
             case _:
-                part = _sin_small(remainder, terms)
+                part = _sin_small(remainder, guard_bits)
         lo = min(lo, part.lo)
         hi = max(hi, part.hi)
     if lo > hi:
