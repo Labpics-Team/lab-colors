@@ -47,7 +47,7 @@ DEFINITION_PREFIX_LENGTHS_V1 = (
 DOMAIN_MAGIC_V1 = b"LCDOM1\0\0"
 POLICY_MAGIC_V1 = b"LCPOL1\0\0"
 JOB_MAGIC_V1 = b"LCJOB1\0\0"
-MANIFEST_MAGIC_V1 = b"LCMAN1\0\0"
+MANIFEST_MAGIC_V2 = b"LCMAN2\0\0"
 TRANSCRIPT_MAGIC_V1 = b"LCTRN1\0\0"
 RUN_CLAIM_MAGIC_V1 = b"LCRUN1\0\0"
 PROVENANCE_CLAIM_MAGIC_V1 = b"LCPRV1\0\0"
@@ -56,7 +56,7 @@ COMPARISON_MAGIC_V1 = b"LCCMP1\0\0"
 DOMAIN_ID_LABEL_V1 = b"labcolors.proof-region.domain.v1\0"
 POLICY_ID_LABEL_V1 = b"labcolors.proof-region.policy.v1\0"
 JOB_ID_LABEL_V1 = b"labcolors.proof-region.job.v1\0"
-MANIFEST_ID_LABEL_V1 = b"labcolors.proof-region.comparator-manifest.v1\0"
+MANIFEST_ID_LABEL_V2 = b"labcolors.proof-region.comparator-manifest.v2\0"
 TRANSCRIPT_ID_LABEL_V1 = b"labcolors.proof-region.transcript.v1\0"
 RUN_CLAIM_ID_LABEL_V1 = b"labcolors.proof-region.run-claim.v1\0"
 PROVENANCE_CLAIM_ID_LABEL_V1 = b"labcolors.proof-region.evaluator-provenance-claim.v1\0"
@@ -713,31 +713,100 @@ class ProofJobV1:
         return _identity(JOB_ID_LABEL_V1, self.encode())
 
 
+def _snapshot_contextual_region_definition_v1(
+    value: object,
+) -> ContextualRegionDefinitionV1:
+    if type(value) is not ContextualRegionDefinitionV1:
+        raise TypeError("definition must be ContextualRegionDefinitionV1")
+    fields_value = value.fields
+    if type(fields_value) is not tuple:
+        raise TypeError("definition fields must be an exact tuple")
+    return ContextualRegionDefinitionV1(tuple(fields_value), value.knot_count)
+
+
+def _snapshot_reduced_domain_manifest_v1(
+    value: object,
+) -> ReducedDomainManifestV1:
+    if type(value) is not ReducedDomainManifestV1:
+        raise TypeError("domain must be ReducedDomainManifestV1")
+    ranges = value.ranges
+    if type(ranges) is not tuple:
+        raise TypeError("domain ranges must be an exact tuple")
+    return ReducedDomainManifestV1(tuple(ranges), value.point_count)
+
+
+def _snapshot_comparator_budget_v1(value: object) -> ComparatorBudgetV1:
+    if type(value) is not ComparatorBudgetV1:
+        raise TypeError("comparator budget must be ComparatorBudgetV1")
+    ladder = value.precision_ladder
+    if type(ladder) is not tuple:
+        raise TypeError("precision ladder must be an exact tuple")
+    return ComparatorBudgetV1(
+        value.kind,
+        tuple(ladder),
+        value.per_point_work,
+        value.global_pregrant,
+    )
+
+
+def _snapshot_proof_policy_v1(value: object) -> ProofPolicyV1:
+    if type(value) is not ProofPolicyV1:
+        raise TypeError("policy must be ProofPolicyV1")
+    comparators = value.comparators
+    if type(comparators) is not tuple or len(comparators) != 2:
+        raise TypeError("policy comparators must be an exact pair")
+    arb, mpfi = comparators
+    return ProofPolicyV1(
+        value.equality_release,
+        (
+            _snapshot_comparator_budget_v1(arb),
+            _snapshot_comparator_budget_v1(mpfi),
+        ),
+    )
+
+
+def snapshot_proof_job_v1(value: object) -> ProofJobV1:
+    """Return a detached job from raw coordinates, never caller-dispatched wire methods."""
+
+    if type(value) is not ProofJobV1:
+        raise TypeError("job must be ProofJobV1")
+    return ProofJobV1(
+        _snapshot_contextual_region_definition_v1(value.definition),
+        value.formula_spec,
+        _snapshot_reduced_domain_manifest_v1(value.domain),
+        _snapshot_proof_policy_v1(value.policy),
+    )
+
+
 @dataclass(frozen=True)
-class ComparatorManifestV1:
+class ComparatorManifestV2:
     kind: ComparatorKindV1
     engine_release: bytes
     upstream_source: bytes
-    arithmetic_closure: bytes
+    arithmetic_input_set: bytes
     wrapper_source: bytes
     evaluator_source: bytes
     build_identity: bytes
     operation_allowlist: bytes
-    test_receipt: bytes
-    license_closure: bytes
+    test_observation: bytes
+    legal_file_set: bytes
     exclusions: bytes
 
     def __post_init__(self) -> None:
         if type(self.kind) is not ComparatorKindV1:
-            _fail("comparator-manifest-v1", 0, ProtocolReasonV1.UNKNOWN_RELEASE, "unknown comparator kind")
-        for field in fields(self):
-            if field.name != "kind":
-                _require_digest(getattr(self, field.name), "comparator-manifest-v1", field.name)
+            _fail("comparator-manifest-v2", 0, ProtocolReasonV1.UNKNOWN_RELEASE, "unknown comparator kind")
+        for manifest_field in fields(self):
+            if manifest_field.name != "kind":
+                _require_digest(
+                    getattr(self, manifest_field.name),
+                    "comparator-manifest-v2",
+                    manifest_field.name,
+                )
 
     @classmethod
-    def parse(cls, data: bytes) -> "ComparatorManifestV1":
-        reader = _Reader(data, "comparator-manifest-v1")
-        reader.magic(MANIFEST_MAGIC_V1)
+    def parse(cls, data: bytes) -> "ComparatorManifestV2":
+        reader = _Reader(data, "comparator-manifest-v2")
+        reader.magic(MANIFEST_MAGIC_V2)
         kind_offset = reader.offset
         try:
             kind = ComparatorKindV1(reader.u8())
@@ -751,33 +820,35 @@ class ComparatorManifestV1:
         return result
 
     def encode(self) -> bytes:
-        return MANIFEST_MAGIC_V1 + bytes((int(self.kind),)) + b"".join(
-            getattr(self, field.name) for field in fields(self) if field.name != "kind"
+        return MANIFEST_MAGIC_V2 + bytes((int(self.kind),)) + b"".join(
+            getattr(self, manifest_field.name)
+            for manifest_field in fields(self)
+            if manifest_field.name != "kind"
         )
 
     @cached_property
     def identity(self) -> bytes:
-        return _identity(MANIFEST_ID_LABEL_V1, self.encode())
+        return _identity(MANIFEST_ID_LABEL_V2, self.encode())
 
 @dataclass(frozen=True, init=False)
-class ContentResolvedComparatorManifestV1:
-    manifest: ComparatorManifestV1
+class ContentResolvedComparatorManifestV2:
+    manifest: ComparatorManifestV2
 
     def __new__(cls):
-        raise TypeError("use ContentResolvedComparatorManifestV1.admit")
+        raise TypeError("use ContentResolvedComparatorManifestV2.admit")
 
     @classmethod
     def admit(
         cls,
-        manifest: ComparatorManifestV1,
+        manifest: ComparatorManifestV2,
         resolve_content_address: Callable[[bytes], bytes | Iterable[bytes] | None],
-    ) -> "ContentResolvedComparatorManifestV1":
+    ) -> "ContentResolvedComparatorManifestV2":
         # A digest declaration alone is not source binding. This structural
         # transition only re-hashes caller-provided bytes; a future controlled
         # replay must establish where those bytes came from.
-        if type(manifest) is not ComparatorManifestV1:
+        if type(manifest) is not ComparatorManifestV2:
             _fail(
-                "comparator-manifest-v1",
+                "comparator-manifest-v2",
                 0,
                 ProtocolReasonV1.INVALID_MANIFEST,
                 "content resolution requires a canonical manifest",
@@ -789,7 +860,7 @@ class ContentResolvedComparatorManifestV1:
             content = resolve_content_address(coordinate)
             if content is None:
                 _fail(
-                    "comparator-manifest-v1",
+                    "comparator-manifest-v2",
                     0,
                     ProtocolReasonV1.INVALID_MANIFEST,
                     f"unresolved content address: {field.name}",
@@ -801,7 +872,7 @@ class ContentResolvedComparatorManifestV1:
                     chunks = iter(content)
                 except TypeError:
                     _fail(
-                        "comparator-manifest-v1",
+                        "comparator-manifest-v2",
                         0,
                         ProtocolReasonV1.INVALID_MANIFEST,
                         f"content resolver did not return bytes: {field.name}",
@@ -810,7 +881,7 @@ class ContentResolvedComparatorManifestV1:
             for chunk in chunks:
                 if type(chunk) is not bytes:
                     _fail(
-                        "comparator-manifest-v1",
+                        "comparator-manifest-v2",
                         0,
                         ProtocolReasonV1.INVALID_MANIFEST,
                         f"non-byte content chunk: {field.name}",
@@ -818,7 +889,7 @@ class ContentResolvedComparatorManifestV1:
                 replay.update(chunk)
             if replay.digest() != coordinate:
                 _fail(
-                    "comparator-manifest-v1",
+                    "comparator-manifest-v2",
                     0,
                     ProtocolReasonV1.DIGEST_MISMATCH,
                     f"content digest mismatch: {field.name}",
@@ -1249,7 +1320,7 @@ class WitnessStoreV1:
             cursor = end
 
 
-def _validate_witness_alignment(
+def validate_witness_alignment_v1(
     domain: ReducedDomainManifestV1,
     decision_bits: bytes,
     point_count: int,
@@ -1333,7 +1404,7 @@ class DecisionTranscriptV1:
     def from_decisions(
         cls,
         job: ProofJobV1,
-        comparator: ContentResolvedComparatorManifestV1,
+        comparator: ContentResolvedComparatorManifestV2,
         decisions: Iterable[DecisionV1],
         witnesses: Iterable[WitnessV1],
         accounting_digest: bytes,
@@ -1357,7 +1428,7 @@ class DecisionTranscriptV1:
             accounting_digest,
             witness_store,
         )
-        _validate_witness_alignment(
+        validate_witness_alignment_v1(
             job.domain,
             result.decision_bits,
             result.point_count,
@@ -1496,7 +1567,7 @@ class RunClaimV1:
     def for_transcript(
         cls,
         job: ProofJobV1,
-        comparator: ContentResolvedComparatorManifestV1,
+        comparator: ContentResolvedComparatorManifestV2,
         transcript: DecisionTranscriptV1,
         binary_identity: bytes,
         invocation_identity: bytes,
@@ -1667,7 +1738,7 @@ class DualComparisonCandidateV1:
 
 def _admit_transcript(
     job: ProofJobV1,
-    comparator: ContentResolvedComparatorManifestV1,
+    comparator: ContentResolvedComparatorManifestV2,
     transcript: DecisionTranscriptV1,
     run: RunClaimV1,
     *,
@@ -1686,7 +1757,7 @@ def _admit_transcript(
         or run.transcript_identity != transcript_identity
     ):
         _fail("dual-admission-v1", 0, ProtocolReasonV1.FOREIGN_BINDING, "foreign transcript/run coordinate")
-    _validate_witness_alignment(
+    validate_witness_alignment_v1(
         job.domain,
         transcript.decision_bits,
         transcript.point_count,
@@ -1697,10 +1768,10 @@ def _admit_transcript(
 
 def compare_dual_transcripts(
     job: ProofJobV1,
-    first_manifest: ContentResolvedComparatorManifestV1,
+    first_manifest: ContentResolvedComparatorManifestV2,
     first_transcript: DecisionTranscriptV1,
     first_run: RunClaimV1,
-    second_manifest: ContentResolvedComparatorManifestV1,
+    second_manifest: ContentResolvedComparatorManifestV2,
     second_transcript: DecisionTranscriptV1,
     second_run: RunClaimV1,
 ) -> DualComparisonCandidateV1:
@@ -1718,10 +1789,10 @@ def compare_dual_transcripts(
             "dual admission requires canonical job, transcripts and runs",
         )
     if (
-        type(first_manifest) is not ContentResolvedComparatorManifestV1
-        or type(second_manifest) is not ContentResolvedComparatorManifestV1
-        or type(first_manifest.manifest) is not ComparatorManifestV1
-        or type(second_manifest.manifest) is not ComparatorManifestV1
+        type(first_manifest) is not ContentResolvedComparatorManifestV2
+        or type(second_manifest) is not ContentResolvedComparatorManifestV2
+        or type(first_manifest.manifest) is not ComparatorManifestV2
+        or type(second_manifest.manifest) is not ComparatorManifestV2
     ):
         _fail(
             "dual-admission-v1",

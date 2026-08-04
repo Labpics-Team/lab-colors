@@ -1,0 +1,2029 @@
+#!/usr/bin/env python3
+"""Causal, hostile tests for the controlled Arb BUILD/RUN pipeline."""
+
+from __future__ import annotations
+
+import gzip
+import hashlib
+import io
+import inspect
+import json
+import os
+import stat
+import struct
+import subprocess
+import sys
+import tarfile
+import tempfile
+import unittest
+from dataclasses import fields as dataclass_fields, replace
+from functools import cache
+from pathlib import Path
+from types import MethodType
+from unittest import mock
+
+
+PROOF = Path(__file__).resolve().parents[2]
+ARB = PROOF / "arb"
+REPO = PROOF.parents[2]
+sys.path.insert(0, str(PROOF))
+
+from build import input as build_input  # noqa: E402
+from build import transport as build_transport  # noqa: E402
+from arb import pipeline  # noqa: E402
+from arb import runtime as arb_runtime  # noqa: E402
+import executor  # noqa: E402
+import provenance  # noqa: E402
+from region_proof_protocol import (  # noqa: E402
+    ComparatorKindV1,
+    ComparatorManifestV2,
+    ContentResolvedComparatorManifestV2,
+    ContextualRegionDefinitionV1,
+    ProofJobV1,
+    ProtocolErrorV1,
+)
+
+
+def _digest(label: str) -> bytes:
+    return hashlib.sha256(label.encode("ascii")).digest()
+
+
+def _static_elf(payload: bytes = b"fixture") -> bytes:
+    """Return a parseable static ELF64/x86-64 object for executor admission."""
+
+    code_offset = 64 + 56
+    body = payload or b"x"
+    file_size = code_offset + len(body)
+    ident = b"\x7fELF\x02\x01\x01" + bytes(9)
+    header = ident + struct.pack(
+        "<HHIQQQIHHHHHH",
+        2,
+        62,
+        1,
+        0x400000 + code_offset,
+        64,
+        0,
+        0,
+        64,
+        56,
+        1,
+        0,
+        0,
+        0,
+    )
+    program = struct.pack(
+        "<IIQQQQQQ",
+        1,
+        5,
+        0,
+        0x400000,
+        0x400000,
+        file_size,
+        file_size,
+        0x1000,
+    )
+    return header + program + body
+
+
+def _tar(root: str, files: tuple[tuple[str, bytes, int], ...]) -> tuple[bytes, int]:
+    raw = io.BytesIO()
+    with tarfile.open(fileobj=raw, mode="w", format=tarfile.USTAR_FORMAT) as archive:
+        directories = {root}
+        for relative, _body, _mode in files:
+            parent = Path(relative).parent
+            while str(parent) not in ("", "."):
+                directories.add(f"{root}/{parent.as_posix()}")
+                parent = parent.parent
+        for name in sorted(directories, key=lambda item: (item.count("/"), item)):
+            member = tarfile.TarInfo(f"{name}/")
+            member.type = tarfile.DIRTYPE
+            member.mode = 0o755
+            member.mtime = 0
+            archive.addfile(member)
+        for relative, body, mode in files:
+            member = tarfile.TarInfo(f"{root}/{relative}")
+            member.mode = mode
+            member.size = len(body)
+            member.mtime = 0
+            archive.addfile(member, io.BytesIO(body))
+    encoded = gzip.compress(raw.getvalue(), compresslevel=9, mtime=0)
+    return encoded, len(raw.getvalue())
+
+
+@cache
+def _source_fixture() -> tuple[
+    provenance.ArbSourceLockV1,
+    provenance.AdmittedArbSourcesV1,
+]:
+    locks: list[provenance.SourceReleaseLockV1] = []
+    safe: list[provenance.SafeSourceArchiveV1] = []
+    coordinates = (
+        (provenance.SourceRoleV1.GMP, "gmp-6.3.0", False),
+        (provenance.SourceRoleV1.MPFR, "mpfr-4.2.2", False),
+        (provenance.SourceRoleV1.FLINT_ARB, "flint-3.6.0", True),
+    )
+    for index, (role, root, git) in enumerate(coordinates, start=1):
+        files = (("LICENSE", f"license-{index}".encode(), 0o644),)
+        if git:
+            files += (("configure", b"generated", 0o755),)
+        archive, raw_length = _tar(root, files)
+        if git:
+            integrity: provenance.SourceIntegrityPolicyV1 = provenance.GitContentRelationPolicyV1(
+                "https://example.invalid/flint.git",
+                "v1",
+                bytes.fromhex("11" * 20),
+                bytes.fromhex("22" * 20),
+                1,
+                ("ci/omitted",),
+                (
+                    provenance.ProjectPinnedReleaseOnlyFileV1(
+                        "configure",
+                        0o755,
+                        len(b"generated"),
+                        hashlib.sha256(b"generated").digest(),
+                    ),
+                ),
+            )
+        else:
+            integrity = provenance.DetachedSignaturePolicyV1(
+                f"https://example.invalid/{root}.tar.gz.sig",
+                3,
+                _digest(f"signature-{index}"),
+                _digest(f"public-key-{index}"),
+                bytes((index,)) * 20,
+            )
+        lock = provenance.SourceReleaseLockV1(
+            role,
+            "1",
+            f"https://example.invalid/{root}.tar.gz",
+            provenance.ArchiveFormatV1.TAR_GZIP,
+            len(archive),
+            hashlib.sha256(archive).digest(),
+            raw_length,
+            f"{root}/",
+            len(files),
+            sum(len(body) for _name, body, _mode in files),
+            (
+                provenance.LegalFileV1(
+                    "LICENSE",
+                    len(files[0][1]),
+                    hashlib.sha256(files[0][1]).digest(),
+                ),
+            ),
+            integrity,
+        )
+        locks.append(lock)
+        safe.append(provenance.admit_source_archive(lock, archive))
+    source_lock = provenance.ArbSourceLockV1(tuple(locks))
+    admitted = provenance.admit_arb_sources(source_lock, tuple(safe))
+    return source_lock, admitted
+
+
+@cache
+def _generated_formula() -> bytes:
+    result = subprocess.run(
+        (
+            sys.executable,
+            str(ARB / "evaluator/formula.py"),
+            str(REPO / "crates/labcolors-core/contracts/contextual-region-formula-v1.lcir"),
+        ),
+        check=False,
+        capture_output=True,
+        env={"PYTHONDONTWRITEBYTECODE": "1", "PYTHONHASHSEED": "0"},
+        timeout=30,
+    )
+    if result.returncode != 0:
+        raise AssertionError(result.stderr.decode("utf-8", "replace"))
+    return result.stdout
+
+
+@cache
+def _build_sources() -> pipeline.AdmittedBuildSourcesV1:
+    files = []
+    for logical_path, mode in pipeline.REQUIRED_BUILD_SOURCE_MODES_V1:
+        if logical_path == pipeline.GENERATED_FORMULA_PATH_V1:
+            body = _generated_formula()
+        else:
+            body = (REPO / logical_path).read_bytes()
+        files.append(pipeline.BuildSourceFileV1(logical_path, mode, body))
+    return pipeline.admit_build_sources_v1(tuple(files))
+
+
+@cache
+def _job() -> ProofJobV1:
+    return ProofJobV1.parse((PROOF / "fixtures/proof-job-v1.bin").read_bytes())
+
+
+@cache
+def _foreign_comparator() -> ContentResolvedComparatorManifestV2:
+    content = tuple(f"manifest-coordinate-{index}".encode() for index in range(10))
+    manifest = ComparatorManifestV2(
+        ComparatorKindV1.ARB,
+        *(hashlib.sha256(item).digest() for item in content),
+    )
+    by_digest = {hashlib.sha256(item).digest(): item for item in content}
+    return ContentResolvedComparatorManifestV2.admit(manifest, by_digest.get)
+
+
+def _limits(**changes: int) -> executor.ExecutionLimitsV1:
+    values = {
+        "max_executable_bytes": 16 * 1024 * 1024,
+        "max_stdin_bytes": 16 * 1024 * 1024,
+        "max_argument_bytes": 4096,
+        "max_stdout_bytes": 16 * 1024 * 1024,
+        "max_stderr_bytes": 64 * 1024,
+        "wall_timeout_ns": 60_000_000_000,
+        "memory_max_bytes": 1024 * 1024 * 1024,
+        "pids_max": 1,
+    }
+    values.update(changes)
+    return executor.ExecutionLimitsV1(**values)
+
+
+def _runtime_binding(**limit_changes: int) -> arb_runtime.ArbRuntimeBindingV1:
+    return arb_runtime.ArbRuntimeBindingV1(
+        arb_runtime.arb_runtime_profile_v1(),
+        _limits(**limit_changes),
+    )
+
+
+def _request(**changes: object) -> pipeline.PipelineRequestV1:
+    source_lock, admitted = _source_fixture()
+    values: dict[str, object] = {
+        "source_lock": source_lock,
+        "admitted_sources": admitted,
+        "build_sources": _build_sources(),
+        "job": _job(),
+        "runtime_binding": _runtime_binding(),
+        "host_trust": pipeline.HostTrustBoundaryV1.UNSEALED_LINUX_X64_DOCKER_HOST,
+    }
+    values.update(changes)
+    return pipeline.PipelineRequestV1(**values)
+
+
+def _docker_capability(
+    policy: build_transport.DockerBuildPolicyV1 | None = None,
+    *,
+    docker_path: Path = Path("/usr/bin/docker"),
+    host_user: tuple[int, int] = (501, 20),
+    daemon_marker: bytes = b"docker-daemon-fixture",
+) -> build_transport.DockerSupportedV1:
+    owned_policy = pipeline.ARB_BUILD_TRANSPORT_POLICY_V1 if policy is None else policy
+    return build_transport.DockerSupportedV1(
+        owned_policy,
+        build_transport.DockerDaemonObservationV1(
+            daemon_marker,
+            b"docker-image-inspection-fixture",
+        ),
+        build_transport.native_command_coordinate_v1(docker_path),
+        host_user,
+    )
+
+
+def _probe_native_backend(
+    backend: build_transport.NativeDockerBuildBackendV1,
+    policy: build_transport.DockerBuildPolicyV1,
+) -> build_transport.DockerSupportedV1:
+    image_observation = json.dumps(
+        [
+            {
+                "Os": "linux",
+                "Architecture": "amd64",
+                "RepoDigests": [policy.image_reference],
+            }
+        ],
+        separators=(",", ":"),
+    ).encode("ascii")
+    with mock.patch.object(
+        backend,
+        "_observe_command",
+        side_effect=(
+            build_transport._docker_command_exited_v1(
+                0,
+                b'{"Version":"fixture"}',
+                b"",
+            ),
+            build_transport._docker_command_exited_v1(
+                0,
+                image_observation,
+                b"",
+            ),
+        ),
+    ):
+        capability = backend.probe()
+    if type(capability) is not build_transport.DockerSupportedV1:
+        raise AssertionError(capability)
+    return capability
+
+
+class _BuildBackend:
+    def __init__(
+        self,
+        outputs: tuple[bytes, ...],
+        *,
+        probe: build_transport.DockerCapabilityReportV1 | None = None,
+        reject_input: bool = False,
+        omit_transfer: bool = False,
+        foreign_transfer: bool = False,
+        reported_stderr: bytes = b"",
+    ) -> None:
+        self.outputs = list(outputs)
+        self.probe_result = probe or _docker_capability()
+        self.reject_input = reject_input
+        self.omit_transfer = omit_transfer
+        self.foreign_transfer = foreign_transfer
+        self.reported_stderr = reported_stderr
+        self.requests: list[build_transport.DockerBuildRequestV1] = []
+
+    def probe(self) -> build_transport.DockerCapabilityReportV1:
+        return self.probe_result
+
+    def run_build(
+        self,
+        request: build_transport.DockerBuildRequestV1,
+    ) -> build_transport.DockerBuildProcessObservationV1:
+        self.requests.append(request)
+        output = self.outputs.pop(0)
+        if self.reject_input:
+            return build_transport.DockerBuildInputRejectedV1(
+                build_transport._build_input_progress_v1(
+                    request.input_bundle,
+                    1,
+                    hashlib.sha256(request.input_bundle.contents[:1]).digest(),
+                ),
+                b"",
+                b"",
+            )
+        if self.omit_transfer:
+            return build_transport._docker_command_exited_v1(0, output, self.reported_stderr)
+        transfer = build_transport._completed_build_input_transfer_v1(
+            request.input_bundle,
+            request.input_bundle.length,
+            request.input_bundle.sha256,
+        )
+        if self.foreign_transfer:
+            foreign_input = build_input.seal_input_v1(
+                _digest("foreign-bundle"),
+                request.input_bundle.contents,
+            )
+            transfer = build_transport._completed_build_input_transfer_v1(
+                foreign_input,
+                foreign_input.length,
+                foreign_input.sha256,
+            )
+        return build_transport._docker_build_exited_v1(
+            0,
+            output,
+            self.reported_stderr,
+            transfer,
+        )
+
+
+class BuildSourceAdmissionTests(unittest.TestCase):
+    def test_exact_formula_generator_recipe_and_evaluator_bytes_are_admitted(self) -> None:
+        admitted = _build_sources()
+
+        self.assertEqual(admitted.formula_spec, _job().formula_spec)
+        self.assertEqual(
+            hashlib.sha256(admitted.generated_formula).hexdigest(),
+            pipeline.GENERATED_FORMULA_SHA256_V1,
+        )
+        self.assertEqual(
+            tuple(item.path for item in admitted.files),
+            tuple(path for path, _mode in pipeline.REQUIRED_BUILD_SOURCE_MODES_V1),
+        )
+        self.assertNotEqual(admitted.build_input_identity, admitted.formula_support_identity)
+        self.assertFalse(hasattr(admitted, "source_path"))
+
+    def test_missing_extra_reordered_or_mutated_source_bytes_are_rejected(self) -> None:
+        files = _build_sources().files
+        mutants = (
+            files[:-1],
+            files + (pipeline.BuildSourceFileV1("extra.c", 0o644, b"x"),),
+            tuple(reversed(files)),
+            (replace(files[0], contents=files[0].contents + b"x"),) + files[1:],
+        )
+        for mutant in mutants:
+            with self.subTest(length=len(mutant)):
+                with self.assertRaises(pipeline.BuildSourceAdmissionErrorV1):
+                    pipeline.admit_build_sources_v1(mutant)
+
+    def test_capabilities_cannot_be_directly_forged(self) -> None:
+        with self.assertRaises(TypeError):
+            pipeline.AdmittedBuildSourcesV1(
+                _build_sources().files,
+                _digest("forged"),
+                _token=object(),
+            )
+
+    def test_admission_owns_a_fresh_build_file_snapshot(self) -> None:
+        source_files = tuple(
+            pipeline.BuildSourceFileV1(item.path, item.mode, item.contents)
+            for item in _build_sources().files
+        )
+        admitted = pipeline.admit_build_sources_v1(source_files)
+        original = source_files[0].contents
+        object.__setattr__(source_files[0], "contents", b"forged")
+        try:
+            self.assertEqual(admitted.contents(source_files[0].path), original)
+            self.assertEqual(
+                admitted.identity,
+                pipeline.admit_build_sources_v1(admitted.files).identity,
+            )
+        finally:
+            object.__setattr__(source_files[0], "contents", original)
+
+    def test_manifest_replay_rejects_forged_retained_identities(self) -> None:
+        sources = _build_sources()
+        sentinel = object()
+        originals = {
+            name: sources.__dict__.get(name, sentinel)
+            for name in (
+                "identity",
+                "build_input_identity",
+                "formula_support_identity",
+            )
+        }
+
+        for name, original in originals.items():
+            with self.subTest(retained_coordinate=name):
+                object.__setattr__(sources, name, _digest(f"forged-{name}"))
+                try:
+                    with self.assertRaises(TypeError):
+                        pipeline.build_source_manifest_bytes_v1(sources)
+                finally:
+                    if original is sentinel:
+                        del sources.__dict__[name]
+                    else:
+                        sources.__dict__[name] = original
+
+
+class FlintSourcePartitionTests(unittest.TestCase):
+    def test_partition_is_nonempty_and_separately_binds_both_content_sets(self) -> None:
+        source_lock, admitted = _source_fixture()
+        flint = source_lock.sources[2]
+
+        partition = pipeline.flint_source_content_partition_v1(
+            source_lock,
+            admitted,
+        )
+
+        self.assertGreater(partition.commit_content_file_count, 0)
+        self.assertGreater(partition.project_pinned_release_only_file_count, 0)
+        self.assertEqual(
+            partition.commit_content_file_count,
+            flint.integrity.common_file_count,
+        )
+        self.assertEqual(
+            partition.project_pinned_release_only_file_count,
+            len(flint.integrity.project_pinned_release_only_files),
+        )
+        self.assertEqual(
+            partition.commit_content_file_count
+            + partition.project_pinned_release_only_file_count,
+            admitted.sources[2].regular_file_count,
+        )
+        self.assertNotEqual(
+            partition.commit_content_identity,
+            partition.project_pinned_release_only_identity,
+        )
+        self.assertFalse(hasattr(partition, "commit_derived_identity"))
+
+    def test_partition_rejects_a_foreign_lock_replay(self) -> None:
+        source_lock, admitted = _source_fixture()
+        foreign_flint = replace(
+            source_lock.sources[2],
+            version="foreign-release",
+        )
+        foreign_lock = provenance.ArbSourceLockV1(
+            source_lock.sources[:2] + (foreign_flint,)
+        )
+
+        with self.assertRaises(pipeline.PipelineInputErrorV1) as caught:
+            pipeline.flint_source_content_partition_v1(foreign_lock, admitted)
+
+        self.assertEqual(
+            caught.exception.reason,
+            pipeline.PipelineInputReasonV1.FOREIGN_SOURCE_CAPABILITY,
+        )
+
+
+class ComparatorDerivationTests(unittest.TestCase):
+    def _result(self) -> pipeline.DiagnosticBuildObservationV1:
+        binary = _static_elf(b"derived-comparator")
+        result = pipeline.ControlledPipelineV1(
+            build_backend=_BuildBackend((binary, binary)),
+        ).build(_request())
+        self.assertIs(type(result), pipeline.DiagnosticBuildObservationV1)
+        return result
+
+    def test_request_cannot_supply_an_arbitrary_comparator(self) -> None:
+        with self.assertRaises(TypeError):
+            _request(comparator=_foreign_comparator())
+
+    def test_all_ten_coordinates_replay_exact_named_preimages(self) -> None:
+        result = self._result()
+        admitted = result.comparator
+        manifest = admitted.manifest.manifest
+
+        names = tuple(field.name for field in dataclass_fields(admitted.preimages))
+        self.assertEqual(
+            names,
+            (
+                "engine_release",
+                "upstream_source",
+                "arithmetic_input_set",
+                "wrapper_source",
+                "evaluator_source",
+                "build_identity",
+                "operation_allowlist",
+                "test_observation",
+                "legal_file_set",
+                "exclusions",
+            ),
+        )
+        for name in names:
+            with self.subTest(name=name):
+                preimage = getattr(admitted.preimages, name)
+                self.assertGreater(len(preimage), len(name))
+                self.assertNotEqual(preimage, name.encode("ascii"))
+                self.assertEqual(
+                    getattr(manifest, name),
+                    hashlib.sha256(preimage).digest(),
+                )
+        self.assertEqual(admitted.identity, admitted.manifest.identity)
+        self.assertEqual(
+            admitted.structural_source_identity,
+            result.structural_source_identity,
+        )
+        self.assertEqual(admitted.build_input_identity, result.build_input_identity)
+        self.assertEqual(admitted.pipeline_policy_identity, result.pipeline_policy_identity)
+        self.assertEqual(admitted.binary_sha256, result.binary_sha256)
+        self.assertEqual(admitted.rebuild_sha256s, result.rebuild_sha256s)
+        self.assertIn(
+            b"gap:host-and-docker-daemon-not-source-bound",
+            admitted.preimages.exclusions,
+        )
+        self.assertNotIn(b"persistent", admitted.preimages.exclusions)
+        self.assertNotIn(b"github-hosted", admitted.preimages.exclusions)
+
+    def test_mutated_or_reordered_preimages_cannot_replay_the_manifest(self) -> None:
+        admitted = self._result().comparator
+        manifest = admitted.manifest.manifest
+        original = {
+            getattr(manifest, field.name): getattr(admitted.preimages, field.name)
+            for field in dataclass_fields(admitted.preimages)
+        }
+        variants = []
+        mutated = dict(original)
+        mutated[manifest.evaluator_source] += b"x"
+        variants.append(mutated)
+        reordered = dict(original)
+        reordered[manifest.wrapper_source], reordered[manifest.evaluator_source] = (
+            reordered[manifest.evaluator_source],
+            reordered[manifest.wrapper_source],
+        )
+        variants.append(reordered)
+
+        for resolver in variants:
+            with self.subTest(variant=variants.index(resolver)):
+                with self.assertRaises(ProtocolErrorV1):
+                    ContentResolvedComparatorManifestV2.admit(
+                        manifest,
+                        resolver.get,
+                    )
+
+    def test_operator_coordinate_is_the_exact_ordered_formula_contract(self) -> None:
+        original = _build_sources().formula_spec
+        lines = original.splitlines()
+        self.assertIn(
+            b"operators 20",
+            lines,
+            "registered formula must retain the exact 20-operator contract",
+        )
+        count_index = lines.index(b"operators 20")
+        lines[count_index + 1], lines[count_index + 2] = (
+            lines[count_index + 2],
+            lines[count_index + 1],
+        )
+        reordered = b"\n".join(lines) + b"\n"
+
+        original_preimage = pipeline._operation_allowlist_preimage_v1(original)
+        reordered_preimage = pipeline._operation_allowlist_preimage_v1(reordered)
+
+        self.assertNotEqual(original_preimage, reordered_preimage)
+        self.assertNotEqual(
+            hashlib.sha256(original_preimage).digest(),
+            hashlib.sha256(reordered_preimage).digest(),
+        )
+
+    def test_wrapper_and_evaluator_file_sets_are_exact_and_disjoint(self) -> None:
+        result = self._result()
+        files = _build_sources().files
+        wrapper_paths = frozenset(
+            (
+                "proof/region/v1/arb/evaluator/formula.h",
+                "proof/region/v1/arb/evaluator/interval.c",
+                "proof/region/v1/arb/evaluator/interval.h",
+            )
+        )
+        excluded = wrapper_paths | {
+            pipeline.FORMULA_SPEC_PATH_V1,
+            pipeline.FORMULA_GENERATOR_PATH_V1,
+            pipeline.BUILD_RECIPE_PATH_V1,
+            pipeline.INNER_BUILD_RECIPE_PATH_V1,
+        }
+        wrapper_files = tuple(item for item in files if item.path in wrapper_paths)
+        evaluator_files = tuple(item for item in files if item.path not in excluded)
+
+        self.assertFalse({item.path for item in wrapper_files} & {item.path for item in evaluator_files})
+        self.assertEqual(
+            result.comparator.preimages.wrapper_source,
+            pipeline._encoded_build_file_set_v1(
+                b"labcolors.proof-region.arb-comparator.wrapper-source.v1\0",
+                wrapper_files,
+            ),
+        )
+        self.assertEqual(
+            result.comparator.preimages.evaluator_source,
+            pipeline._encoded_build_file_set_v1(
+                b"labcolors.proof-region.arb-comparator.evaluator-source.v1\0",
+                evaluator_files,
+            ),
+        )
+        self.assertNotIn(
+            _build_sources().contents(pipeline.INNER_BUILD_RECIPE_PATH_V1),
+            result.comparator.preimages.evaluator_source,
+        )
+
+    def test_build_stdout_cannot_supply_a_foreign_manifest_or_coordinate(self) -> None:
+        foreign = _foreign_comparator()
+        report = b"manifest=" + foreign.identity.hex().encode("ascii")
+        binary = _static_elf(b"ignore-build-self-report")
+
+        result = pipeline.ControlledPipelineV1(
+            build_backend=_BuildBackend(
+                (binary, binary),
+                reported_stderr=report,
+            ),
+        ).build(_request())
+
+        self.assertIs(type(result), pipeline.DiagnosticBuildObservationV1)
+        self.assertNotEqual(result.comparator.identity, foreign.identity)
+        coordinates = tuple(
+            getattr(result.comparator.manifest.manifest, field.name)
+            for field in dataclass_fields(result.comparator.manifest.manifest)
+            if field.name != "kind"
+        )
+        self.assertNotIn(foreign.identity, coordinates)
+        self.assertEqual(result.build_processes[0].stdout, binary)
+        self.assertEqual(result.build_processes[0].stderr, report)
+
+    def test_diagnostic_comparator_has_no_public_constructor(self) -> None:
+        with self.assertRaises(TypeError):
+            pipeline.DiagnosticArbComparatorV1()
+
+
+class ControlledPipelineTests(unittest.TestCase):
+    def test_admission_uses_only_explicit_cross_module_verification_api(self) -> None:
+        source = (ARB / "pipeline.py").read_text(encoding="utf-8")
+
+        for forbidden in (
+            "executor._result_matches_request",
+            "executor._require_static_x86_64_elf",
+            "protocol._validate_witness_alignment",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, source)
+        self.assertTrue(callable(executor.invocation_identity_v1))
+        self.assertTrue(callable(executor.platform_identity_v1))
+        self.assertFalse(hasattr(pipeline, "invocation_identity_v1"))
+        self.assertFalse(hasattr(pipeline, "platform_identity_v1"))
+        self.assertFalse(hasattr(pipeline, "comparator_build_preimage_v2"))
+
+    def test_arb_input_keeps_one_source_snapshot_across_reentrant_mutation(
+        self,
+    ) -> None:
+        request = _request()
+        source = request.admitted_sources.sources[0]
+        original_tree_identity = source.tree_identity
+        real_encoder = pipeline.build_input.canonical_ustar_v1
+
+        def encode_then_mutate(
+            entries: tuple[tuple[str, int, bytes], ...],
+            limits: build_input.CanonicalInputLimitsV1,
+        ) -> bytes:
+            encoded = real_encoder(entries, limits)
+            object.__setattr__(source, "tree_identity", _digest("reentrant-tree"))
+            return encoded
+
+        try:
+            with mock.patch.object(
+                pipeline.build_input,
+                "canonical_ustar_v1",
+                side_effect=encode_then_mutate,
+            ):
+                sealed = pipeline._seal_build_input_bundle_v1(
+                    request,
+                    pipeline.ARB_BUILD_TRANSPORT_POLICY_V1,
+                )
+            self.assertFalse(
+                pipeline.arb_input_is_bound_v1(
+                    request,
+                    pipeline.ARB_BUILD_TRANSPORT_POLICY_V1,
+                    sealed,
+                )
+            )
+        finally:
+            object.__setattr__(source, "tree_identity", original_tree_identity)
+        self.assertTrue(
+            pipeline.arb_input_is_bound_v1(
+                request,
+                pipeline.ARB_BUILD_TRANSPORT_POLICY_V1,
+                sealed,
+            )
+        )
+
+    def test_arb_input_rejects_reentrant_unadmitted_build_source(self) -> None:
+        request = _request()
+        build_file = next(
+            item
+            for item in request.build_sources.files
+            if item.path == pipeline.BUILD_RECIPE_PATH_V1
+        )
+        original_contents = build_file.contents
+        real_encoder = pipeline.build_input.canonical_ustar_v1
+
+        def encode_then_mutate(
+            entries: tuple[tuple[str, int, bytes], ...],
+            limits: build_input.CanonicalInputLimitsV1,
+        ) -> bytes:
+            encoded = real_encoder(entries, limits)
+            object.__setattr__(
+                build_file,
+                "contents",
+                b"#!/bin/sh\nprintf '%s\\n' forged-build-source\n",
+            )
+            return encoded
+
+        try:
+            with mock.patch.object(
+                pipeline.build_input,
+                "canonical_ustar_v1",
+                side_effect=encode_then_mutate,
+            ):
+                sealed = pipeline._seal_build_input_bundle_v1(
+                    request,
+                    pipeline.ARB_BUILD_TRANSPORT_POLICY_V1,
+                )
+            self.assertFalse(
+                pipeline.arb_input_is_bound_v1(
+                    request,
+                    pipeline.ARB_BUILD_TRANSPORT_POLICY_V1,
+                    sealed,
+                )
+            )
+        finally:
+            object.__setattr__(build_file, "contents", original_contents)
+        self.assertTrue(
+            pipeline.arb_input_is_bound_v1(
+                request,
+                pipeline.ARB_BUILD_TRANSPORT_POLICY_V1,
+                sealed,
+            )
+        )
+
+    def test_pipeline_rederives_both_cached_build_coordinates(self) -> None:
+        for field_name in ("build_input_identity", "formula_support_identity"):
+            with self.subTest(cached_coordinate=field_name):
+                request = _request()
+                fresh = pipeline.admit_build_sources_v1(request.build_sources.files)
+                original = request.build_sources.__dict__.get(field_name)
+                forged = _digest(f"forged-{field_name}")
+                request.build_sources.__dict__[field_name] = forged
+                binary = _static_elf(b"cached-coordinate")
+                backend = _BuildBackend((binary, binary))
+                try:
+                    result = pipeline.ControlledPipelineV1(
+                        build_backend=backend,
+                    ).build(request)
+                finally:
+                    if original is None:
+                        request.build_sources.__dict__.pop(field_name, None)
+                    else:
+                        request.build_sources.__dict__[field_name] = original
+                self.assertIs(type(result), pipeline.DiagnosticBuildObservationV1)
+                self.assertEqual(len(backend.requests), 2)
+                self.assertEqual(
+                    getattr(result, field_name),
+                    getattr(fresh, field_name),
+                )
+                self.assertNotEqual(getattr(result, field_name), forged)
+
+    def test_constructor_rejects_a_nominal_forged_build_capability(
+        self,
+    ) -> None:
+        normal = _request()
+        forged_files = tuple(
+            replace(
+                item,
+                contents=b"#!/bin/sh\nprintf '%s\\n' forged-build-source\n",
+            )
+            if item.path == pipeline.BUILD_RECIPE_PATH_V1
+            else item
+            for item in normal.build_sources.files
+        )
+        forged = object.__new__(pipeline.AdmittedBuildSourcesV1)
+        object.__setattr__(forged, "files", forged_files)
+        object.__setattr__(forged, "identity", _digest("forged-build-closure"))
+        with self.assertRaises(pipeline.PipelineInputErrorV1) as caught:
+            _request(build_sources=forged)
+
+        self.assertEqual(
+            caught.exception.reason,
+            pipeline.PipelineInputReasonV1.INVALID_RETAINED_INPUT,
+        )
+        self.assertEqual(caught.exception.field, "build_sources")
+
+    def test_private_build_recheck_keeps_the_entry_snapshot_across_attempts(
+        self,
+    ) -> None:
+        request = _request()
+        source = request.admitted_sources.sources[0]
+        original_tree_identity = source.tree_identity
+        binary = _static_elf(b"snapshot-attempt")
+        backend = _BuildBackend((binary, binary))
+        real_run_build = backend.run_build
+        mutated = False
+
+        def run_then_mutate(
+            value: build_transport.DockerBuildRequestV1,
+        ) -> build_transport.DockerBuildProcessObservationV1:
+            nonlocal mutated
+            if not mutated:
+                object.__setattr__(source, "tree_identity", _digest("late-tree"))
+                mutated = True
+            return real_run_build(value)
+
+        backend.run_build = run_then_mutate  # type: ignore[method-assign]
+        try:
+            result = pipeline.ControlledPipelineV1(build_backend=backend).build(request)
+            self.assertFalse(
+                pipeline.arb_input_is_bound_v1(
+                    request,
+                    pipeline.ARB_BUILD_TRANSPORT_POLICY_V1,
+                    result.input_bundle,
+                )
+            )
+        finally:
+            object.__setattr__(source, "tree_identity", original_tree_identity)
+        self.assertTrue(mutated)
+        self.assertIs(type(result), pipeline.DiagnosticBuildObservationV1)
+        self.assertEqual(len(backend.requests), 2)
+        self.assertTrue(
+            pipeline.arb_input_is_bound_v1(
+                request,
+                pipeline.ARB_BUILD_TRANSPORT_POLICY_V1,
+                result.input_bundle,
+            )
+        )
+
+    def test_snapshot_captures_job_before_source_replay(self) -> None:
+        request = _request()
+        original_domain = request.job.domain
+        foreign_job = replace(
+            request.job,
+            domain=type(original_domain).from_ordinals((0,)),
+        )
+        real_replay = provenance.replay_admitted_source_closure_v1
+
+        def replay_then_mutate(
+            source_lock: provenance.ArbSourceLockV1,
+            admitted_sources: provenance.AdmittedArbSourcesV1,
+        ) -> provenance.ReplayedSourceClosureV1:
+            snapshot = real_replay(source_lock, admitted_sources)
+            object.__setattr__(request.job, "domain", foreign_job.domain)
+            return snapshot
+
+        try:
+            with mock.patch.object(
+                provenance,
+                "replay_admitted_source_closure_v1",
+                side_effect=replay_then_mutate,
+            ):
+                snapshot = pipeline._snapshot_pipeline_operation_v1(request)
+        finally:
+            object.__setattr__(request.job, "domain", original_domain)
+
+        self.assertEqual(
+            snapshot.request.job.domain.point_count,
+            original_domain.point_count,
+        )
+
+    def test_snapshot_ignores_a_proof_job_encoder_shadow(self) -> None:
+        request = _request()
+        job = request.job
+        original_identity = job.identity
+        foreign_budget = replace(
+            job.policy.comparators[0],
+            global_pregrant=job.policy.comparators[0].global_pregrant + 1,
+        )
+        foreign_policy = replace(
+            job.policy,
+            comparators=(foreign_budget, job.policy.comparators[1]),
+        )
+        foreign_job = replace(job, policy=foreign_policy)
+        job.__dict__["encode"] = lambda: ProofJobV1.encode(foreign_job)
+        try:
+            snapshot = pipeline._snapshot_pipeline_operation_v1(request)
+        finally:
+            del job.__dict__["encode"]
+
+        self.assertEqual(snapshot.request.job.identity, original_identity)
+
+    def test_snapshot_uses_raw_nested_job_coordinates_not_caches_or_encoders(
+        self,
+    ) -> None:
+        request = _request()
+        job = request.job
+        original_identity = job.identity
+        sentinel = object()
+        shadows = (
+            (job.definition, "encode"),
+            (job.definition, "definition_digest"),
+            (job.domain, "encode"),
+            (job.domain, "identity"),
+            (job.policy, "encode"),
+            (job.policy, "identity"),
+        )
+        originals = [
+            (value, name, value.__dict__.get(name, sentinel))
+            for value, name in shadows
+        ]
+
+        def explode() -> bytes:
+            raise AssertionError("snapshot dispatched caller-owned job state")
+
+        for value, name in shadows:
+            value.__dict__[name] = explode if name == "encode" else _digest(name)
+        try:
+            snapshot = pipeline._snapshot_pipeline_operation_v1(request)
+        finally:
+            for value, name, original in originals:
+                if original is sentinel:
+                    del value.__dict__[name]
+                else:
+                    value.__dict__[name] = original
+
+        self.assertEqual(snapshot.request.job.identity, original_identity)
+
+    def test_private_operation_snapshot_cannot_be_constructed_by_a_caller(self) -> None:
+        snapshot = pipeline._snapshot_pipeline_operation_v1(_request())
+
+        with self.assertRaises(TypeError):
+            pipeline._PipelineOperationSnapshotV1(
+                snapshot.request,
+                snapshot.source_closure,
+                _token=object(),
+            )
+
+    def test_constructor_rejects_a_foreign_admitted_source_closure(self) -> None:
+        request = _request()
+        foreign_flint = replace(
+            request.source_lock.sources[2],
+            version="foreign-release",
+        )
+        foreign_lock = provenance.ArbSourceLockV1(
+            request.source_lock.sources[:2] + (foreign_flint,)
+        )
+
+        with self.assertRaises(pipeline.PipelineInputErrorV1) as caught:
+            pipeline.PipelineRequestV1(
+                foreign_lock,
+                request.admitted_sources,
+                request.build_sources,
+                request.job,
+                request.runtime_binding,
+                request.host_trust,
+            )
+
+        self.assertEqual(
+            caught.exception.reason,
+            pipeline.PipelineInputReasonV1.FOREIGN_SOURCE_CAPABILITY,
+        )
+        self.assertEqual(caught.exception.field, "admitted_sources")
+
+    def test_constructor_rejects_a_noncanonical_retained_source_manifest(
+        self,
+    ) -> None:
+        """A nominal capability cannot retain a mutable manifest container."""
+
+        request = _request()
+        source = request.admitted_sources.sources[2]
+        original_files = source.files
+        object.__setattr__(source, "files", list(original_files))
+        try:
+            with self.assertRaises(pipeline.PipelineInputErrorV1) as caught:
+                pipeline.PipelineRequestV1(
+                    request.source_lock,
+                    request.admitted_sources,
+                    request.build_sources,
+                    request.job,
+                    request.runtime_binding,
+                    request.host_trust,
+                )
+        finally:
+            object.__setattr__(source, "files", original_files)
+
+        self.assertEqual(
+            caught.exception.reason,
+            pipeline.PipelineInputReasonV1.FOREIGN_SOURCE_CAPABILITY,
+        )
+        self.assertEqual(caught.exception.field, "admitted_sources")
+
+    def test_constructor_totalizes_a_hostile_retained_source_path(self) -> None:
+        request = _request()
+        source = request.admitted_sources.sources[2]
+        archive_file = source.files[0]
+        original_path = archive_file.path
+
+        class HashBomb:
+            def __hash__(self) -> int:
+                raise RuntimeError("unexpected hash dispatch")
+
+        object.__setattr__(archive_file, "path", HashBomb())
+        try:
+            with self.assertRaises(pipeline.PipelineInputErrorV1) as caught:
+                pipeline.PipelineRequestV1(
+                    request.source_lock,
+                    request.admitted_sources,
+                    request.build_sources,
+                    request.job,
+                    request.runtime_binding,
+                    request.host_trust,
+                )
+        finally:
+            object.__setattr__(archive_file, "path", original_path)
+
+        self.assertEqual(
+            caught.exception.reason,
+            pipeline.PipelineInputReasonV1.FOREIGN_SOURCE_CAPABILITY,
+        )
+        self.assertEqual(caught.exception.field, "admitted_sources")
+
+    def test_build_uses_one_source_operation_snapshot(self) -> None:
+        request = _request()
+        binary = _static_elf(b"one-source-operation")
+        backend = _BuildBackend((binary, binary))
+        real_admit = provenance._admit_source_archive_once
+        real_materialize = provenance._materialize_replayed_source_files_v1
+
+        with (
+            mock.patch.object(
+                provenance,
+                "_admit_source_archive_once",
+                wraps=real_admit,
+            ) as replay,
+            mock.patch.object(
+                provenance,
+                "_materialize_replayed_source_files_v1",
+                wraps=real_materialize,
+            ) as materialize,
+        ):
+            result = pipeline.ControlledPipelineV1(build_backend=backend).build(request)
+
+        self.assertIs(type(result), pipeline.DiagnosticBuildObservationV1)
+        self.assertEqual(len(backend.requests), 2)
+        self.assertEqual(replay.call_count, 3)
+        self.assertEqual(materialize.call_count, 3)
+
+    def test_request_admission_rechecks_separately_from_its_operation(
+        self,
+    ) -> None:
+        """Request admission and a later operation must not share mutable evidence."""
+
+        source_lock, admitted_sources = _source_fixture()
+        build_sources = _build_sources()
+        job = _job()
+        runtime_binding = _runtime_binding()
+        binary = _static_elf(b"request-then-one-operation")
+        backend = _BuildBackend((binary, binary))
+        real_admit = provenance._admit_source_archive_once
+        real_materialize = provenance._materialize_replayed_source_files_v1
+
+        with (
+            mock.patch.object(
+                provenance,
+                "_admit_source_archive_once",
+                wraps=real_admit,
+            ) as replay,
+            mock.patch.object(
+                provenance,
+                "_materialize_replayed_source_files_v1",
+                wraps=real_materialize,
+            ) as materialize,
+        ):
+            request = pipeline.PipelineRequestV1(
+                source_lock,
+                admitted_sources,
+                build_sources,
+                job,
+                runtime_binding,
+                pipeline.HostTrustBoundaryV1.UNSEALED_LINUX_X64_DOCKER_HOST,
+            )
+            self.assertEqual(replay.call_count, 3)
+            self.assertEqual(materialize.call_count, 0)
+            result = pipeline.ControlledPipelineV1(build_backend=backend).build(request)
+
+        self.assertIs(type(result), pipeline.DiagnosticBuildObservationV1)
+        self.assertEqual(replay.call_count, 6)
+        self.assertEqual(materialize.call_count, 3)
+
+    def test_build_rejects_mutated_request_before_it_can_start_a_build(self) -> None:
+        for field_name, replacement in (
+            ("host_trust", "foreign"),
+            ("runtime_binding", "foreign"),
+        ):
+            with self.subTest(field=field_name):
+                request = _request()
+                original = getattr(request, field_name)
+                backend = _BuildBackend((_static_elf(b"first"), _static_elf(b"second")))
+                object.__setattr__(request, field_name, replacement)
+                try:
+                    result = pipeline.ControlledPipelineV1(
+                        build_backend=backend,
+                    ).build(request)
+                finally:
+                    object.__setattr__(request, field_name, original)
+                self.assertEqual(len(backend.requests), 0)
+                self.assertEqual(
+                    result,
+                    build_transport.BuildRejectedV1(
+                        1,
+                        build_transport.BuildFailureReasonV1.CONTRACT_VIOLATION,
+                    ),
+                )
+
+    def test_host_trust_claims_only_backend_observable_facts(self) -> None:
+        trust = pipeline.HostTrustBoundaryV1.UNSEALED_LINUX_X64_DOCKER_HOST
+
+        self.assertEqual(tuple(pipeline.HostTrustBoundaryV1), (trust,))
+        self.assertEqual(trust.value, "unsealed-linux-x64-docker-host")
+        self.assertFalse(
+            hasattr(
+                pipeline.HostTrustBoundaryV1,
+                "PERSISTENT_SELF_HOSTED_DOCKER",
+            )
+        )
+
+    def test_host_trust_wire_is_private_and_does_not_read_mutable_enum_storage(
+        self,
+    ) -> None:
+        trust = pipeline.HostTrustBoundaryV1.UNSEALED_LINUX_X64_DOCKER_HOST
+        policy = pipeline.ARB_BUILD_TRANSPORT_POLICY_V1
+        baseline = pipeline.pipeline_policy_identity_v2(trust, policy)
+        self.assertFalse(hasattr(pipeline, "host_trust_wire_v1"))
+        original_value = trust._value_
+        object.__setattr__(trust, "_value_", "forged-host-boundary")
+        try:
+            self.assertEqual(pipeline.pipeline_policy_identity_v2(trust, policy), baseline)
+        finally:
+            object.__setattr__(trust, "_value_", original_value)
+
+    def test_pipeline_policy_identity_binds_the_stream_bootstrap(self) -> None:
+        trust = pipeline.HostTrustBoundaryV1.UNSEALED_LINUX_X64_DOCKER_HOST
+        policy = pipeline.ARB_BUILD_TRANSPORT_POLICY_V1
+        coordinates = list(policy)
+        coordinates[3] = policy.bootstrap + "\nexit 1"
+        changed_policy = build_transport.DockerBuildPolicyV1(*coordinates)
+        original = pipeline.pipeline_policy_identity_v2(trust, policy)
+        changed = pipeline.pipeline_policy_identity_v2(trust, changed_policy)
+
+        self.assertNotEqual(original, changed)
+
+    def test_pipeline_policy_identity_binds_the_private_tmpfs_policy(self) -> None:
+        trust = pipeline.HostTrustBoundaryV1.UNSEALED_LINUX_X64_DOCKER_HOST
+        policy = pipeline.ARB_BUILD_TRANSPORT_POLICY_V1
+        coordinates = list(policy)
+        coordinates[5] = (
+            "/tmp:rw,exec,suid,dev,size=536870912,mode=1777",
+            policy.tmpfs_specs[1],
+        )
+        changed_policy = build_transport.DockerBuildPolicyV1(*coordinates)
+        original = pipeline.pipeline_policy_identity_v2(trust, policy)
+        changed = pipeline.pipeline_policy_identity_v2(trust, changed_policy)
+
+        self.assertNotEqual(original, changed)
+
+    def test_build_only_does_not_probe_or_execute_run_backend(self) -> None:
+        binary = _static_elf(b"build-only")
+        controller = pipeline.ControlledPipelineV1(
+            build_backend=_BuildBackend((binary, binary)),
+        )
+
+        result = controller.build(_request())
+
+        self.assertIs(type(result), pipeline.DiagnosticBuildObservationV1)
+        self.assertEqual(result.binary, binary)
+        self.assertEqual(result.rebuild_sha256s, (result.binary_sha256,) * 2)
+        self.assertIs(type(result.comparator), pipeline.DiagnosticArbComparatorV1)
+
+    def test_two_fresh_equal_builds_retain_one_input_and_exact_outputs(self) -> None:
+        binary = _static_elf(b"observed-output")
+        build = _BuildBackend((binary, binary))
+        controller = pipeline.ControlledPipelineV1(build_backend=build)
+
+        result = controller.build(_request())
+
+        self.assertIs(type(result), pipeline.DiagnosticBuildObservationV1)
+        self.assertEqual(len(build.requests), 2)
+        self.assertEqual(tuple(item.attempt for item in build.requests), (1, 2))
+        self.assertTrue(
+            all(
+                item.capability is result.docker_capability
+                for item in build.requests
+            )
+        )
+        self.assertIs(build.requests[0].input_bundle, build.requests[1].input_bundle)
+        self.assertEqual(result.binary, binary)
+        self.assertEqual(result.binary_sha256, hashlib.sha256(binary).digest())
+        self.assertEqual(
+            result.rebuild_sha256s,
+            (result.binary_sha256, result.binary_sha256),
+        )
+        self.assertIs(result.rebuild_binaries[0], result.binary)
+        self.assertEqual(result.rebuild_binaries, (binary, binary))
+        self.assertEqual(
+            result.input_transfers[0].bundle_identity,
+            result.input_bundle_identity,
+        )
+        self.assertEqual(
+            result.input_transfers,
+            tuple(item.input_transfer for item in result.build_processes),
+        )
+        self.assertEqual(
+            result.structural_source_identity,
+            _request().admitted_sources.identity,
+        )
+        partition = pipeline.flint_source_content_partition_v1(
+            _request().source_lock,
+            _request().admitted_sources,
+        )
+        self.assertEqual(
+            result.flint_commit_content_identity,
+            partition.commit_content_identity,
+        )
+        self.assertEqual(
+            result.flint_project_pinned_release_only_identity,
+            partition.project_pinned_release_only_identity,
+        )
+        self.assertEqual(
+            result.flint_commit_content_file_count,
+            partition.commit_content_file_count,
+        )
+        self.assertEqual(
+            result.flint_project_pinned_release_only_file_count,
+            partition.project_pinned_release_only_file_count,
+        )
+        self.assertEqual(result.build_input_identity, _build_sources().build_input_identity)
+        self.assertEqual(
+            result.formula_support_identity,
+            _build_sources().formula_support_identity,
+        )
+        self.assertEqual(
+            result.pipeline_policy_identity,
+            pipeline.pipeline_policy_identity_v2(
+                result.host_trust,
+                result.docker_capability.policy,
+            ),
+        )
+        self.assertFalse(hasattr(result, "build_observer_kind"))
+        self.assertFalse(hasattr(result, "build_source_identity"))
+        self.assertFalse(hasattr(result, "build_policy_identity"))
+        self.assertFalse(hasattr(result, "commit_derived_source_identity"))
+        self.assertEqual(
+            result.host_trust,
+            pipeline.HostTrustBoundaryV1.UNSEALED_LINUX_X64_DOCKER_HOST,
+        )
+        self.assertEqual(
+            result.docker_capability.policy.image_reference,
+            pipeline.OCI_IMAGE_REFERENCE_V1,
+        )
+        self.assertEqual(
+            result.docker_capability.policy.platform,
+            pipeline.OCI_PLATFORM_V1,
+        )
+        self.assertFalse(hasattr(result, "oci_image_reference"))
+        self.assertFalse(hasattr(result, "oci_platform"))
+        self.assertFalse(hasattr(result, "slsa_level"))
+        self.assertFalse(hasattr(result, "fresh_vm"))
+
+    def test_builds_must_be_byte_identical(self) -> None:
+        first = _static_elf(b"first")
+        second = _static_elf(b"second")
+
+        result = pipeline.ControlledPipelineV1(
+            build_backend=_BuildBackend((first, second)),
+        ).build(_request())
+
+        self.assertIs(type(result), build_transport.TwoBuildObservationV1)
+        self.assertIs(
+            result.relation,
+            build_transport.BuildByteRelationV1.DIFFERENT,
+        )
+        self.assertEqual(result.first_sha256, hashlib.sha256(first).digest())
+        self.assertEqual(result.second_sha256, hashlib.sha256(second).digest())
+
+    def test_input_transport_or_invalid_binary_is_typed_failure(self) -> None:
+        binary = _static_elf()
+        cases = (
+            (
+                _BuildBackend((binary,), reject_input=True),
+                build_transport.BuildFailureReasonV1.INPUT_TRANSFER_FAILED,
+            ),
+            (
+                _BuildBackend((binary,), omit_transfer=True),
+                build_transport.BuildFailureReasonV1.CONTRACT_VIOLATION,
+            ),
+            (
+                _BuildBackend((binary,), foreign_transfer=True),
+                build_transport.BuildFailureReasonV1.CONTRACT_VIOLATION,
+            ),
+            (
+                _BuildBackend((b"not-an-elf",)),
+                build_transport.BuildFailureReasonV1.INVALID_OUTPUT,
+            ),
+        )
+        for backend, reason in cases:
+            with self.subTest(reason=reason):
+                result = pipeline.ControlledPipelineV1(
+                    build_backend=backend,
+                ).build(_request())
+                self.assertIs(type(result), build_transport.BuildRejectedV1)
+                self.assertEqual(result.attempt, 1)
+                self.assertEqual(result.reason, reason)
+
+    def test_forged_source_coordinate_is_rejected_before_build_without_escape(self) -> None:
+        request = _request()
+        source = request.admitted_sources.sources[0]
+        original_tree_identity = source.tree_identity
+        object.__setattr__(source, "tree_identity", _digest("foreign-tree"))
+        backend = _BuildBackend((_static_elf(), _static_elf()))
+        try:
+            result = pipeline.ControlledPipelineV1(build_backend=backend).build(request)
+        finally:
+            object.__setattr__(source, "tree_identity", original_tree_identity)
+
+        self.assertIs(type(result), build_transport.BuildRejectedV1)
+        self.assertEqual(result.attempt, 1)
+        self.assertIs(
+            result.reason,
+            build_transport.BuildFailureReasonV1.CONTRACT_VIOLATION,
+        )
+        self.assertEqual(backend.requests, [])
+
+    def test_hostile_nominal_source_coordinate_is_typed_before_build(self) -> None:
+        request = _request()
+        source = request.source_lock.sources[0]
+        original_length = source.archive_length
+
+        class ExplodingCoordinate:
+            def __ne__(self, _other: object) -> bool:
+                raise RuntimeError("hostile coordinate comparison")
+
+        object.__setattr__(source, "archive_length", ExplodingCoordinate())
+        backend = _BuildBackend((_static_elf(), _static_elf()))
+        try:
+            result = pipeline.ControlledPipelineV1(build_backend=backend).build(request)
+        finally:
+            object.__setattr__(source, "archive_length", original_length)
+
+        self.assertIs(type(result), build_transport.BuildRejectedV1)
+        self.assertEqual(result.attempt, 1)
+        self.assertIs(
+            result.reason,
+            build_transport.BuildFailureReasonV1.CONTRACT_VIOLATION,
+        )
+        self.assertEqual(backend.requests, [])
+
+    def test_request_rejects_raw_execution_limits_instead_of_a_profile_binding(self) -> None:
+        with self.assertRaises(pipeline.PipelineInputErrorV1) as caught:
+            _request(
+                runtime_binding=_limits()
+            )
+
+        self.assertEqual(
+            caught.exception.reason,
+            pipeline.PipelineInputReasonV1.WRONG_TYPE,
+        )
+        self.assertEqual(caught.exception.field, "runtime_binding")
+
+    def test_runtime_profile_rejects_all_allocation_coordinates_before_build(self) -> None:
+        job = _job()
+        arb_budget, mpfi_budget = job.policy.comparators
+        over_precision = replace(
+            job,
+            policy=replace(
+                job.policy,
+                comparators=(
+                    replace(
+                        arb_budget,
+                        precision_ladder=(
+                            arb_runtime.ARB_MAX_PRECISION_BITS_V1 + 1,
+                        ),
+                    ),
+                    mpfi_budget,
+                ),
+            ),
+        )
+        over_rungs = replace(
+            job,
+            policy=replace(
+                job.policy,
+                comparators=(
+                    replace(
+                        arb_budget,
+                        precision_ladder=tuple(
+                            range(2, arb_runtime.ARB_MAX_POLICY_RUNGS_V1 + 3)
+                        ),
+                    ),
+                    mpfi_budget,
+                ),
+            ),
+        )
+        over_mpfi_precision = replace(
+            job,
+            policy=replace(
+                job.policy,
+                comparators=(
+                    arb_budget,
+                    replace(
+                        mpfi_budget,
+                        precision_ladder=(
+                            arb_runtime.ARB_MAX_PRECISION_BITS_V1 + 1,
+                        ),
+                    ),
+                ),
+            ),
+        )
+        over_mpfi_rungs = replace(
+            job,
+            policy=replace(
+                job.policy,
+                comparators=(
+                    arb_budget,
+                    replace(
+                        mpfi_budget,
+                        precision_ladder=tuple(
+                            range(2, arb_runtime.ARB_MAX_POLICY_RUNGS_V1 + 3)
+                        ),
+                    ),
+                ),
+            ),
+        )
+        knot_count = arb_runtime.ARB_MAX_KNOTS_V1 + 1
+        zero = bytes(8)
+        knots = tuple(
+            coordinate
+            for index in range(knot_count)
+            for coordinate in (struct.pack(">d", float(index)), zero, zero, zero)
+        )
+        over_knots = replace(
+            job,
+            definition=ContextualRegionDefinitionV1(
+                job.definition.fields[:21]
+                + (knot_count.to_bytes(8, "big"),)
+                + knots,
+                knot_count,
+            ),
+        )
+
+        for field, candidate in (
+            ("arb-precision", over_precision),
+            ("arb-rungs", over_rungs),
+            ("mpfi-precision", over_mpfi_precision),
+            ("mpfi-rungs", over_mpfi_rungs),
+            ("knots", over_knots),
+        ):
+            with self.subTest(field=field):
+                with self.assertRaises(pipeline.PipelineInputErrorV1) as caught:
+                    _request(job=candidate)
+                self.assertEqual(
+                    caught.exception.reason,
+                    pipeline.PipelineInputReasonV1.EXECUTION_LIMIT_MISMATCH,
+                )
+                self.assertEqual(caught.exception.field, "runtime_binding")
+
+        boundary_ladder = tuple(range(1, arb_runtime.ARB_MAX_POLICY_RUNGS_V1)) + (
+            arb_runtime.ARB_MAX_PRECISION_BITS_V1,
+        )
+        boundary_knot_count = arb_runtime.ARB_MAX_KNOTS_V1
+        boundary_knots = tuple(
+            coordinate
+            for index in range(boundary_knot_count)
+            for coordinate in (struct.pack(">d", float(index)), zero, zero, zero)
+        )
+        boundary_job = replace(
+            job,
+            definition=ContextualRegionDefinitionV1(
+                job.definition.fields[:21]
+                + (boundary_knot_count.to_bytes(8, "big"),)
+                + boundary_knots,
+                boundary_knot_count,
+            ),
+            policy=replace(
+                job.policy,
+                comparators=(
+                    replace(arb_budget, precision_ladder=boundary_ladder),
+                    replace(mpfi_budget, precision_ladder=boundary_ladder),
+                ),
+            ),
+        )
+        admitted = _request(job=boundary_job)
+        self.assertEqual(admitted.job, boundary_job)
+
+    def test_build_output_limit_is_rejected_at_pipeline_admission(self) -> None:
+        with self.assertRaises(pipeline.PipelineInputErrorV1) as caught:
+            _request(
+                runtime_binding=_runtime_binding(
+                    max_executable_bytes=pipeline.BUILD_STDOUT_LIMIT_V1 + 1,
+                )
+            )
+
+        self.assertEqual(
+            caught.exception.reason,
+            pipeline.PipelineInputReasonV1.EXECUTION_LIMIT_MISMATCH,
+        )
+        self.assertEqual(caught.exception.field, "runtime_binding")
+
+    def test_snapshot_modes_are_normalized_independently_of_host_umask(self) -> None:
+        binary = _static_elf(b"umask-independent")
+        identities: list[tuple[bytes, bytes]] = []
+        for mask in (0o077, 0o022):
+            previous = os.umask(mask)
+            try:
+                result = pipeline.ControlledPipelineV1(
+                    build_backend=_BuildBackend((binary, binary)),
+                ).build(_request())
+            finally:
+                os.umask(previous)
+            self.assertIs(type(result), pipeline.DiagnosticBuildObservationV1)
+            identities.append(
+                (result.input_bundle_identity, result.input_bundle_sha256)
+            )
+
+        self.assertEqual(identities[0], identities[1])
+
+    def test_pipeline_exports_no_receipt_or_self_report_admission_api(self) -> None:
+        names = dir(pipeline)
+        source = (ARB / "pipeline.py").read_text(encoding="utf-8")
+        self.assertFalse(any("Receipt" in name for name in names))
+        self.assertFalse(hasattr(pipeline, "DiagnosticPipelineObservationV1"))
+        self.assertFalse(hasattr(pipeline, "PipelineResultV1"))
+        self.assertFalse(hasattr(pipeline, "ExecutionControllerV1"))
+        self.assertFalse(hasattr(pipeline.ControlledPipelineV1, "execute"))
+        self.assertEqual(
+            tuple(inspect.signature(pipeline.ControlledPipelineV1).parameters),
+            ("build_backend",),
+        )
+        self.assertFalse(hasattr(pipeline.ControlledPipelineV1, "admit_report"))
+        self.assertFalse(hasattr(pipeline.ControlledPipelineV1, "mint"))
+        self.assertNotIn("run-observation=diagnostic", source)
+
+    def test_native_observer_promotion_is_not_representable_in_v1(self) -> None:
+        for name in (
+            "BuildObserverKindV1",
+            "RunObserverKindV1",
+            "build_observer_kind_v1",
+            "run_observer_kind_v1",
+            "NativePipelineObservationV1",
+        ):
+            with self.subTest(name=name):
+                self.assertFalse(hasattr(pipeline, name))
+
+    def test_mutable_exact_native_build_backend_cannot_upgrade_fabricated_build(self) -> None:
+        binary = _static_elf(b"self-mutating-build")
+        backend = build_transport.NativeDockerBuildBackendV1(
+            Path("/bin/true"),
+            pipeline.ARB_BUILD_TRANSPORT_POLICY_V1,
+            platform_name="linux",
+            machine_name="x86_64",
+        )
+
+        def probe(_self: object) -> build_transport.DockerCapabilityReportV1:
+            return _docker_capability(
+                docker_path=Path("/bin/true"),
+                daemon_marker=b"fabricated-daemon",
+            )
+
+        def run_build(
+            _self: object,
+            request: build_transport.DockerBuildRequestV1,
+        ) -> build_transport.DockerBuildProcessObservationV1:
+            transfer = build_transport._completed_build_input_transfer_v1(
+                request.input_bundle,
+                request.input_bundle.length,
+                request.input_bundle.sha256,
+            )
+            return build_transport._docker_build_exited_v1(0, binary, b"", transfer)
+
+        backend.probe = MethodType(probe, backend)
+        backend.run_build = MethodType(run_build, backend)
+
+        result = pipeline.ControlledPipelineV1(
+            build_backend=backend,
+        ).build(_request())
+
+        self.assertIs(type(result), pipeline.DiagnosticBuildObservationV1)
+        self.assertFalse(hasattr(result, "build_observer_kind"))
+
+
+class DockerCommandContractTests(unittest.TestCase):
+    def test_command_is_exact_digest_offline_read_only_and_capability_bound(self) -> None:
+        backend = build_transport.NativeDockerBuildBackendV1(
+            Path("/usr/bin/true"),
+            pipeline.ARB_BUILD_TRANSPORT_POLICY_V1,
+            platform_name="linux",
+            machine_name="x86_64",
+            host_user=(501, 20),
+        )
+        capability = _probe_native_backend(
+            backend,
+            pipeline.ARB_BUILD_TRANSPORT_POLICY_V1,
+        )
+        request = build_transport.DockerBuildRequestV1(
+            1,
+            capability,
+            pipeline._seal_build_input_bundle_v1(
+                _request(),
+                pipeline.ARB_BUILD_TRANSPORT_POLICY_V1,
+            ),
+            _limits().max_executable_bytes,
+        )
+        lease = backend._next_run_lease_v1(capability)
+        try:
+            command = backend._command_for_v1(request, lease)
+
+            joined = " ".join(command)
+            self.assertEqual(command[0], "/usr/bin/true")
+            self.assertIn(pipeline.OCI_IMAGE_REFERENCE_V1, command)
+            self.assertNotIn("gcc:latest", joined)
+            for fragment in (
+                "--pull never",
+                "--platform linux/amd64",
+                "--network none",
+                "--read-only",
+                "--interactive",
+                "--cap-drop ALL",
+                "--security-opt no-new-privileges:true",
+                f"--cidfile {lease.cid_file}",
+                "--rm",
+            ):
+                with self.subTest(fragment=fragment):
+                    self.assertIn(fragment, joined)
+            for forbidden in (
+                "--name",
+                "--privileged",
+                "--network host",
+                ":latest",
+            ):
+                self.assertNotIn(forbidden, joined)
+        finally:
+            backend._release_run_lease_v1(lease)
+
+    def test_command_exposes_only_a_private_non_executable_standard_tmp(self) -> None:
+        backend = build_transport.NativeDockerBuildBackendV1(
+            Path("/usr/bin/true"),
+            pipeline.ARB_BUILD_TRANSPORT_POLICY_V1,
+            platform_name="linux",
+            machine_name="x86_64",
+            host_user=(501, 20),
+        )
+        capability = _probe_native_backend(
+            backend,
+            pipeline.ARB_BUILD_TRANSPORT_POLICY_V1,
+        )
+        request = build_transport.DockerBuildRequestV1(
+            1,
+            capability,
+            pipeline._seal_build_input_bundle_v1(
+                _request(),
+                pipeline.ARB_BUILD_TRANSPORT_POLICY_V1,
+            ),
+            _limits().max_executable_bytes,
+        )
+        lease = backend._next_run_lease_v1(capability)
+        self.addCleanup(backend._release_run_lease_v1, lease)
+        command = backend._command_for_v1(request, lease)
+
+        tmpfs_indexes = tuple(
+            index for index, item in enumerate(command) if item == "--tmpfs"
+        )
+        self.assertEqual(len(tmpfs_indexes), 2)
+        self.assertEqual(
+            tuple(command[index + 1] for index in tmpfs_indexes),
+            (pipeline._BUILD_TMPFS_SPEC_V1, pipeline._BUILD_STATE_TMPFS_SPEC_V1),
+        )
+        self.assertTrue(
+            all("src=" not in command[index + 1] for index in tmpfs_indexes)
+        )
+        mount_indexes = tuple(
+            index for index, item in enumerate(command) if item == "--mount"
+        )
+        self.assertEqual(mount_indexes, ())
+        self.assertNotIn("-v", command)
+        self.assertNotIn("--volume", command)
+
+    def test_native_probe_fails_closed_without_linux_or_exact_docker(self) -> None:
+        non_linux = build_transport.NativeDockerBuildBackendV1(
+            Path("/usr/bin/docker"),
+            pipeline.ARB_BUILD_TRANSPORT_POLICY_V1,
+            platform_name="darwin",
+            machine_name="arm64",
+        ).probe()
+        missing = build_transport.NativeDockerBuildBackendV1(
+            Path("/definitely/missing/docker"),
+            pipeline.ARB_BUILD_TRANSPORT_POLICY_V1,
+            platform_name="linux",
+            machine_name="x86_64",
+        ).probe()
+
+        self.assertEqual(non_linux.reason, build_transport.DockerBlockerReasonV1.HOST_NOT_LINUX_AMD64)
+        self.assertEqual(missing.reason, build_transport.DockerBlockerReasonV1.DOCKER_UNAVAILABLE)
+
+    def test_native_command_observer_caps_probe_output_before_allocation(self) -> None:
+        backend = build_transport.NativeDockerBuildBackendV1(
+            Path("/bin/sh"),
+            pipeline.ARB_BUILD_TRANSPORT_POLICY_V1,
+            platform_name="linux",
+            machine_name="x86_64",
+        )
+
+        result = backend._observe_command(
+            (
+                sys.executable,
+                "-c",
+                "import os; os.write(1, b'x' * 65536)",
+            ),
+            stdout_limit=8,
+            stderr_limit=8,
+            timeout_ns=5_000_000_000,
+        )
+
+        self.assertEqual(
+            result,
+            build_transport.DockerBuildOutputLimitV1(
+                build_transport.DockerOutputStreamV1.STDOUT,
+                b"x" * 8,
+                b"",
+            ),
+        )
+
+    def test_cleanup_uses_only_a_docker_issued_id_from_its_private_lease(self) -> None:
+        backend = build_transport.NativeDockerBuildBackendV1(
+            Path("/usr/bin/true"),
+            pipeline.ARB_BUILD_TRANSPORT_POLICY_V1,
+            platform_name="linux",
+            machine_name="x86_64",
+            host_user=(501, 20),
+        )
+        capability = _probe_native_backend(
+            backend,
+            pipeline.ARB_BUILD_TRANSPORT_POLICY_V1,
+        )
+        lease = backend._next_run_lease_v1(capability)
+        lease.cid_file.write_text("b" * 64 + "\n", encoding="ascii")
+        backend._mark_run_lease_launched_v1(lease)
+        foreign_id = "a" * 64
+        observations = (
+            build_transport._docker_command_exited_v1(0, b"b" * 64 + b"\n", b""),
+            build_transport._docker_command_exited_v1(0, b"b" * 64 + b"\n", b""),
+            build_transport._docker_command_exited_v1(0, b"", b""),
+        )
+        try:
+            with mock.patch.object(
+                backend,
+                "_observe_cleanup_command",
+                side_effect=observations,
+            ) as observe:
+                detail = backend._cleanup_container(lease)
+
+            self.assertIsNone(detail)
+            commands = tuple(call.args[1] for call in observe.call_args_list)
+            self.assertEqual(len(commands), 3)
+            self.assertEqual(commands[0][-1], "b" * 64)
+            self.assertEqual(commands[1][-1], "b" * 64)
+            self.assertIn("id=" + "b" * 64, commands[2])
+            self.assertNotIn(
+                foreign_id,
+                " ".join(" ".join(command) for command in commands),
+            )
+            self.assertNotIn("name=", " ".join(" ".join(command) for command in commands))
+        finally:
+            backend._release_run_lease_v1(lease)
+
+    def test_absent_cidfile_never_falls_back_to_a_name_or_docker_io(self) -> None:
+        backend = build_transport.NativeDockerBuildBackendV1(
+            Path("/usr/bin/true"),
+            pipeline.ARB_BUILD_TRANSPORT_POLICY_V1,
+            platform_name="linux",
+            machine_name="x86_64",
+            host_user=(501, 20),
+        )
+        capability = _probe_native_backend(
+            backend,
+            pipeline.ARB_BUILD_TRANSPORT_POLICY_V1,
+        )
+        lease = backend._next_run_lease_v1(capability)
+        try:
+            with mock.patch.object(backend, "_observe_cleanup_command") as observe:
+                self.assertIsNone(backend._cleanup_container(lease))
+            observe.assert_not_called()
+            backend._mark_run_lease_launched_v1(lease)
+            with mock.patch.object(backend, "_observe_cleanup_command") as observe:
+                self.assertEqual(
+                    backend._cleanup_container(lease),
+                    "Docker-issued cleanup ID is unavailable",
+                )
+            observe.assert_not_called()
+        finally:
+            backend._release_run_lease_v1(lease)
+
+    def test_malformed_or_aliased_cid_never_reaches_destructive_cleanup(self) -> None:
+        backend = build_transport.NativeDockerBuildBackendV1(
+            Path("/usr/bin/true"),
+            pipeline.ARB_BUILD_TRANSPORT_POLICY_V1,
+            platform_name="linux",
+            machine_name="x86_64",
+            host_user=(501, 20),
+        )
+        capability = _probe_native_backend(
+            backend,
+            pipeline.ARB_BUILD_TRANSPORT_POLICY_V1,
+        )
+        for raw, alias in ((b"B" * 64, False), (b"c" * 64, True)):
+            with self.subTest(alias=alias, raw=raw[:1]):
+                lease = backend._next_run_lease_v1(capability)
+                try:
+                    lease.cid_file.write_bytes(raw)
+                    if alias:
+                        os.link(lease.cid_file, lease.cid_file.parent / "cid-alias")
+                    backend._mark_run_lease_launched_v1(lease)
+                    with mock.patch.object(
+                        backend,
+                        "_observe_cleanup_command",
+                    ) as observe:
+                        self.assertEqual(
+                            backend._cleanup_container(lease),
+                            "Docker-issued cleanup ID is unavailable",
+                        )
+                    observe.assert_not_called()
+                finally:
+                    backend._release_run_lease_v1(lease)
+
+    def test_foreign_name_matching_a_stale_id_never_reaches_rm(self) -> None:
+        backend = build_transport.NativeDockerBuildBackendV1(
+            Path("/usr/bin/true"),
+            pipeline.ARB_BUILD_TRANSPORT_POLICY_V1,
+            platform_name="linux",
+            machine_name="x86_64",
+            host_user=(501, 20),
+        )
+        capability = _probe_native_backend(
+            backend,
+            pipeline.ARB_BUILD_TRANSPORT_POLICY_V1,
+        )
+        lease = backend._next_run_lease_v1(capability)
+        container_id = "d" * 64
+        foreign_id = "e" * 64
+        try:
+            lease.cid_file.write_text(container_id + "\n", encoding="ascii")
+            backend._mark_run_lease_launched_v1(lease)
+            with mock.patch.object(
+                backend,
+                "_observe_cleanup_command",
+                return_value=build_transport._docker_command_exited_v1(
+                    0,
+                    foreign_id.encode("ascii") + b"\n",
+                    b"",
+                ),
+            ) as observe:
+                self.assertEqual(
+                    backend._cleanup_container(lease),
+                    "Docker-issued cleanup ID did not resolve exactly",
+                )
+            commands = tuple(call.args[1] for call in observe.call_args_list)
+            self.assertEqual(len(commands), 1)
+            self.assertIn("inspect", commands[0])
+            self.assertNotIn("rm", commands[0])
+        finally:
+            backend._release_run_lease_v1(lease)
+
+    def test_cleanup_uses_capability_captured_by_the_run_lease(self) -> None:
+        backend = build_transport.NativeDockerBuildBackendV1(
+            Path("/usr/bin/true"),
+            pipeline.ARB_BUILD_TRANSPORT_POLICY_V1,
+            platform_name="linux",
+            machine_name="x86_64",
+            host_user=(501, 20),
+        )
+        capability = _probe_native_backend(
+            backend,
+            pipeline.ARB_BUILD_TRANSPORT_POLICY_V1,
+        )
+        lease = backend._next_run_lease_v1(capability)
+        try:
+            lease.cid_file.write_text("f" * 64 + "\n", encoding="ascii")
+            backend._mark_run_lease_launched_v1(lease)
+            backend._probed_capability = None
+            observations = (
+                build_transport._docker_command_exited_v1(
+                    0,
+                    b"f" * 64 + b"\n",
+                    b"",
+                ),
+                build_transport._docker_command_exited_v1(
+                    0,
+                    b"f" * 64 + b"\n",
+                    b"",
+                ),
+                build_transport._docker_command_exited_v1(0, b"", b""),
+            )
+            with mock.patch.object(
+                backend,
+                "_observe_cleanup_command",
+                side_effect=observations,
+            ) as observe:
+                self.assertIsNone(backend._cleanup_container(lease))
+            self.assertEqual(
+                tuple(call.args[0] for call in observe.call_args_list),
+                (capability, capability, capability),
+            )
+        finally:
+            backend._release_run_lease_v1(lease)
+
+    def test_cleanup_rejects_another_adapter_lease_before_docker_io(self) -> None:
+        backend = build_transport.NativeDockerBuildBackendV1(
+            Path("/usr/bin/true"),
+            pipeline.ARB_BUILD_TRANSPORT_POLICY_V1,
+            platform_name="linux",
+            machine_name="x86_64",
+            host_user=(501, 20),
+        )
+        _probe_native_backend(backend, pipeline.ARB_BUILD_TRANSPORT_POLICY_V1)
+        foreign_backend = build_transport.NativeDockerBuildBackendV1(
+            Path("/usr/bin/true"),
+            pipeline.ARB_BUILD_TRANSPORT_POLICY_V1,
+            platform_name="linux",
+            machine_name="x86_64",
+            host_user=(501, 20),
+        )
+        foreign_capability = _probe_native_backend(
+            foreign_backend,
+            pipeline.ARB_BUILD_TRANSPORT_POLICY_V1,
+        )
+        foreign_lease = foreign_backend._next_run_lease_v1(foreign_capability)
+        try:
+            with mock.patch.object(backend, "_observe_cleanup_command") as observe:
+                with self.assertRaises(TypeError):
+                    backend._cleanup_container(foreign_lease)
+
+            observe.assert_not_called()
+        finally:
+            foreign_backend._release_run_lease_v1(foreign_lease)
+
+    def test_unverified_container_removal_is_typed_cleanup_failure(self) -> None:
+        backend = build_transport.NativeDockerBuildBackendV1(
+            Path("/bin/sh"),
+            pipeline.ARB_BUILD_TRANSPORT_POLICY_V1,
+            platform_name="linux",
+            machine_name="x86_64",
+        )
+        capability = _docker_capability(
+            pipeline.ARB_BUILD_TRANSPORT_POLICY_V1,
+            docker_path=Path("/bin/sh"),
+        )
+        lease = backend._next_run_lease_v1(capability)
+        self.addCleanup(backend._release_run_lease_v1, lease)
+        with mock.patch.object(
+            backend,
+            "_cleanup_container",
+            return_value="container absence could not be verified",
+        ):
+            result = backend._observe_command(
+                (sys.executable, "-c", "pass"),
+                stdout_limit=8,
+                stderr_limit=8,
+                timeout_ns=5_000_000_000,
+                lease=lease,
+            )
+
+        self.assertIs(type(result), build_transport.DockerBuildCleanupFailureV1)
+        self.assertEqual(
+            result.trigger,
+            build_transport.DockerCleanupTriggerV1.PROCESS_EXIT,
+        )
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)

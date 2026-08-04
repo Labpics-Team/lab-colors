@@ -3,8 +3,6 @@ import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { test } from "node:test";
 
-import * as publicRoot from "../index.js";
-
 const ROOT = resolve(import.meta.dirname, "../../..");
 const read = (...parts) => readFileSync(join(ROOT, ...parts), "utf8");
 
@@ -54,7 +52,8 @@ test("effective-background math stays internal to the browser shell", () => {
   );
 });
 
-test("public initialisation cannot leak raw WASM exports", () => {
+test("public initialisation cannot leak raw WASM exports", async () => {
+  const publicRoot = await import("../index.js");
   const result = publicRoot.initSync({
     module: new WebAssembly.Module(
       readFileSync(new URL("../pkg/labcolors_bg.wasm", import.meta.url)),
@@ -95,6 +94,31 @@ test("runtime documentation names the declared canvas instead of the removed fal
 
   assert.doesNotMatch(docs, /^\s*fallback\??\s*:/mu);
   assert.match(docs, /^\s*canvas\??\s*:/mu);
+});
+
+test("repository docs preserve the Point-or-Unknown observation contract", () => {
+  const rootReadme = read("README.md");
+  const whitepaper = read("docs", "whitepaper.md");
+
+  assert.doesNotMatch(rootReadme, /\beffectiveBackground\b/u);
+  assert.doesNotMatch(
+    whitepaper,
+    /legacy helper.*(?:белую базу|white base)/isu,
+  );
+  for (const documentation of [rootReadme, whitepaper]) {
+    assert.doesNotMatch(
+      documentation,
+      /package-private helpers|observation boundary/u,
+    );
+  }
+  assert.doesNotMatch(
+    whitepaper,
+    /reference estimate|occurrence-\s*контракт|\bcaller\b/u,
+  );
+  assert.match(rootReadme, /границы наблюдения/u);
+  assert.match(whitepaper, /граница наблюдения/u);
+  assert.match(rootReadme, /типизированным `Unknown`/u);
+  assert.match(whitepaper, /типизированный исход `Unknown`/u);
 });
 
 test("the unshipped JavaScript FNV mirror stays deleted", () => {
