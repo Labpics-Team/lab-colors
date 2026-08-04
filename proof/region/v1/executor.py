@@ -1121,7 +1121,12 @@ class _NativeLinuxOperationsV1:
             offset += written
 
     def make_executable(self, fd: int) -> None:
-        os.fchmod(fd, 0o500)
+        # Execute-only: exec resets dumpability from the file, and an
+        # unreadable image leaves the kernel child non-dumpable on every
+        # host — including pipe core_pattern (systemd-coredump, WSL) where
+        # RLIMIT_CORE alone does not suppress the WCOREDUMP bit — and keeps
+        # sealed bytes out of host crash handlers.
+        os.fchmod(fd, 0o100)
 
     def add_seals(self, fd: int, seals: int) -> None:
         fcntl.fcntl(fd, _F_ADD_SEALS, seals)
