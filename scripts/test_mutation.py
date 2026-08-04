@@ -1748,10 +1748,6 @@ class MutationTruthTest(unittest.TestCase):
         cancel_rule = (
             "${{ github.event_name == 'pull_request' && github.run_attempt == 1 }}"
         )
-        fork_guard = (
-            "(github.event_name != 'pull_request' ||\n"
-            "      github.event.pull_request.head.repo.full_name == github.repository)"
-        )
         for workflow_name, workflow in (
             ("ci", ci_workflow),
             ("native-conformance", native_workflow),
@@ -1762,59 +1758,54 @@ class MutationTruthTest(unittest.TestCase):
                 f"  cancel-in-progress: {cancel_rule}\n",
                 workflow,
             )
-        ci_self_hosted = {
+        # Эфемерные GitHub-hosted VM не несут ни секретов, ни состояния,
+        # поэтому fork-PR — штатный режим опенсорс-гейта: workers не держат
+        # fork-гейтов, а каждая job закреплена на одной одноразовой метке.
+        ci_ephemeral = {
             name: block
             for name, block in workflow_job_blocks(ci_worker, "ci-worker.yml").items()
-            if "runs-on: { group: labpics-ci-sandbox" in block
+            if "runs-on: ubuntu-latest" in block
         }
         self.assertEqual(
-            set(ci_self_hosted),
+            set(ci_ephemeral),
             {"node-consumer-floor", "msrv", "lint", "docs", "test", "audit", "wasm"},
         )
-        for job_name, block in ci_self_hosted.items():
-            with self.subTest(worker="ci-worker.yml", job=job_name):
-                self.assertEqual(block.count(fork_guard), 1)
         native_blocks = workflow_job_blocks(
             native_worker, "native-conformance-worker.yml"
         )
-        self.assertEqual(
-            native_blocks["swift-conformance-linux"].count(fork_guard), 1
+        self.assertIn(
+            "runs-on: ubuntu-latest", native_blocks["swift-conformance-linux"]
         )
-        self.assertNotIn(
-            fork_guard, native_blocks["swift-conformance-macos-reference"]
+        self.assertIn(
+            "runs-on: macos-15", native_blocks["swift-conformance-macos-reference"]
         )
+        for worker_name, source in (
+            ("ci-worker.yml", ci_worker),
+            ("native-conformance-worker.yml", native_worker),
+        ):
+            with self.subTest(worker=worker_name):
+                self.assertNotIn("head.repo.full_name", source)
         ci_jobs = ci_worker.split("\njobs:\n", 1)[1]
         native_jobs = native_worker.split("\njobs:\n", 1)[1]
         self.assertNotIn("github.run_attempt == 1", ci_jobs)
         self.assertNotIn("github.run_attempt == 1", native_jobs)
 
+        # Модель выбора concurrency-группы caller'ов: допуск больше не
+        # ветвится по происхождению PR — эфемерные раннеры исполняют любой.
         def run_policy(
             event: str,
             attempt: int,
             pr_number: int,
             run_id: int,
-            *,
-            same_repo: bool = True,
-        ) -> tuple[str, bool, bool]:
+        ) -> tuple[str, bool]:
             initial_pr = event == "pull_request" and attempt == 1
             group_value = f"pr-{pr_number}" if initial_pr else f"run-{run_id}"
-            eligible = event != "pull_request" or same_repo
-            return group_value, initial_pr, eligible
+            return group_value, initial_pr
 
-        self.assertEqual(
-            run_policy("pull_request", 1, 42, 100), ("pr-42", True, True)
-        )
-        self.assertEqual(
-            run_policy("pull_request", 1, 42, 101), ("pr-42", True, True)
-        )
-        self.assertEqual(
-            run_policy("pull_request", 2, 42, 42), ("run-42", False, True)
-        )
-        self.assertEqual(
-            run_policy("pull_request", 2, 42, 42, same_repo=False),
-            ("run-42", False, False),
-        )
-        self.assertEqual(run_policy("push", 2, 0, 100), ("run-100", False, True))
+        self.assertEqual(run_policy("pull_request", 1, 42, 100), ("pr-42", True))
+        self.assertEqual(run_policy("pull_request", 1, 42, 101), ("pr-42", True))
+        self.assertEqual(run_policy("pull_request", 2, 42, 42), ("run-42", False))
+        self.assertEqual(run_policy("push", 2, 0, 100), ("run-100", False))
         self.assertNotEqual(
             run_policy("pull_request", 1, 42, 42)[0],
             run_policy("pull_request", 2, 42, 42)[0],
@@ -1897,10 +1888,48 @@ class MutationTruthTest(unittest.TestCase):
             "swift-conformance-linux"
         ]
         self.assertEqual(native_env.count("SWIFT_TOOLCHAIN: 6.1.3"), 1)
-        self.assertNotIn("SWIFT_CONTAINER", swift_job)
-        self.assertNotIn("docker run", swift_job)
+        # Swift больше не capability образа раннера: он закреплён content-
+        # addressed digest'ом официального OCI-образа (мутабельные теги в
+        # позиции образа запрещены), TMPDIR создаётся до первого вызова
+        # драйвера, а fail-closed проверка версии остаётся в скрипте.
+        self.assertRegex(
+            native_env,
+            r"(?m)^\s+SWIFT_IMAGE_V1: swift@sha256:"
+            r"fddaf02db3d41844916167ef4d199d5ca14c6003d052a0b9ab579646a9c720ec$",
+        )
+        self.assertIn('mkdir -p "$RUNNER_TEMP/tmp-$job"', swift_job)
+        # В pinned swift-образе нет cc/gcc (только clang 17), поэтому
+        # линкер cargo пробрасывается явно — иначе rustc падает
+        # `linker `cc` not found` (доказано live-прогоном Stage A).
         self.assertIn(
-            "run: bash bindings/swift/ci/run-conformance.sh",
+            '--env "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=clang"',
+            swift_job,
+        )
+        # rustup ставится workflow'ом НАПРЯМУЮ в изолированные homes job'а
+        # (dtolnay/rust-toolchain ставит в дефолтный HOME раннера, который
+        # контейнер не видит); бинарник закреплён sha256 официального
+        # дистрибутива, установка без модификации PATH раннера.
+        self.assertIn("name: install rustup into the isolated homes", swift_job)
+        self.assertIn(
+            "rustup/dist/x86_64-unknown-linux-gnu/rustup-init",
+            swift_job,
+        )
+        self.assertIn(
+            "4acc9acc76d5079515b46346a485974457b5a79893cfb01112423c89aeb5aa10"
+            "  /tmp/rustup-init",
+            swift_job,
+        )
+        self.assertIn("| sha256sum -c -", swift_job)
+        self.assertIn("--no-modify-path", swift_job)
+        self.assertIn("name: verify the pinned toolchain is live", swift_job)
+        self.assertNotIn("dtolnay/rust-toolchain", swift_job)
+        self.assertNotIn("sh.rustup.rs", swift_job)
+        self.assertIn(
+            '--mount "type=bind,src=$GITHUB_WORKSPACE,dst=/workspace,readonly"',
+            swift_job,
+        )
+        self.assertIn(
+            "bash bindings/swift/ci/run-conformance.sh",
             swift_job,
         )
 
@@ -2203,7 +2232,7 @@ class MutationTruthTest(unittest.TestCase):
                 '"$RUNNER_TEMP/mutants-bin/cargo-mutants" --version',
                 job,
             )
-        self.assertRegex(shard_job, r"(?m)^\s+max-parallel:\s*3\s*$")
+        self.assertRegex(shard_job, r"(?m)^\s+max-parallel:\s*8\s*$")
         self.assertIn("--baseline=run", shard_step)
         self.assertIn('--shard "$SHARD_INDEX/32"', shard_step)
         self.assertLess(

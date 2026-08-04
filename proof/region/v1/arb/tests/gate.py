@@ -87,11 +87,16 @@ def test_inventory_sha256_v1(suite: unittest.TestSuite) -> str:
 def full_suite_v1() -> unittest.TestSuite:
     """Собирает обязательные общие proof-контракты и Arb-only contract."""
 
+    # Явный top_level_dir фиксирует загрузку модулей по простому имени и
+    # делает discovery независимой от версии python: на 3.12 неявный обход
+    # пространства имён упирается в регулярный пакет arb/ и падает с
+    # ImportError "Start directory is not importable".
     return unittest.TestSuite(
         tuple(
             unittest.defaultTestLoader.discover(
                 str(SHARED_TEST_DIRECTORY),
                 pattern=pattern,
+                top_level_dir=str(SHARED_TEST_DIRECTORY),
             )
             for pattern in SHARED_FAST_TEST_PATTERNS_V1
         )
@@ -99,6 +104,7 @@ def full_suite_v1() -> unittest.TestSuite:
             unittest.defaultTestLoader.discover(
                 str(TEST_DIRECTORY),
                 pattern="test_*.py",
+                top_level_dir=str(TEST_DIRECTORY),
             ),
         )
     )

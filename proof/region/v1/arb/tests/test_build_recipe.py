@@ -40,6 +40,7 @@ class ArbBuildRecipeTests(unittest.TestCase):
                         unittest.defaultTestLoader.discover(
                             str(arb_gate.SHARED_TEST_DIRECTORY),
                             pattern=pattern,
+                            top_level_dir=str(arb_gate.SHARED_TEST_DIRECTORY),
                         )
                     )
                 )
@@ -52,6 +53,7 @@ class ArbBuildRecipeTests(unittest.TestCase):
         suite = unittest.defaultTestLoader.discover(
             str(arb_gate.SHARED_TEST_DIRECTORY),
             pattern="test_mpfi_input.py",
+            top_level_dir=str(arb_gate.SHARED_TEST_DIRECTORY),
         )
         test_ids = tuple(test.id() for test in arb_gate.iter_tests_v1(suite))
         result = unittest.TestResult()
@@ -81,9 +83,11 @@ class ArbBuildRecipeTests(unittest.TestCase):
             if line.lstrip().startswith("runs-on:")
         ]
 
+        # GitHub-hosted раннер одноразовый по построению: каждый прогон
+        # получает свежую эфемерную VM без секретов и без общего состояния.
         self.assertEqual(
             runner_contracts,
-            ["runs-on: [self-hosted, Linux, X64, labcolors-ephemeral]"],
+            ["runs-on: ubuntu-latest"],
         )
         self.assertIn("proof/region/v1/arb/tests/gate.py", source)
         self.assertIn("proof/region/v1/arb/tests/native_gate.py", source)

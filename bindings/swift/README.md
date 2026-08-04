@@ -7,7 +7,9 @@ Swift-поверхность динамического Rust-ядра через
 
 
 Текущее исполняемое доказательство этой поверхности — pinned Swift 6.1.3 в
-одноразовой Linux x86_64 gVisor-ячейке. Оно не является аттестацией Apple ABI,
+одноразовой эфемерной GitHub-hosted VM (Linux x86_64): тулчейн приходит из
+закреплённого content-addressed digest официального OCI-образа
+`swift:6.1.3-noble`. Оно не является аттестацией Apple ABI,
 macOS/arm64 или iOS.
 
 ## Что здесь
@@ -20,11 +22,13 @@ macOS/arm64 или iOS.
 
 ## Сборка и тест
 
-Платные GitHub-hosted macOS-раннеры исключены владельцем — Swift валидируется в
-immutable **gVisor-ячейке на Linux x86_64** (тот же UniFFI-биндинг, тот же пак,
-ядро под `x86_64-unknown-linux-gnu`). `DRIFT_TOL` задаёт правило сравнения, но
+Swift валидируется в **digest-закреплённом OCI-образе swift:6.1.3-noble на
+эфемерной GitHub-hosted VM (Linux x86_64)** (тот же UniFFI-биндинг, тот же пак,
+ядро под `x86_64-unknown-linux-gnu`); публичный репозиторий получает
+GitHub-hosted минуты бесплатно, macOS-референс остаётся ручным и не входит в
+PR-гейт. `DRIFT_TOL` задаёт правило сравнения, но
 не заменяет прогоны на других платформах. Единый скрипт —
-`ci/run-conformance.sh` — используют и локальный прогон, и self-hosted CI-джоба
+`ci/run-conformance.sh` — используют и локальный прогон, и CI-джоба
 (`.github/workflows/native-conformance-worker.yml`); workflow
 `.github/workflows/native-conformance.yml` остаётся только event-caller.
 

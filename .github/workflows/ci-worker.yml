@@ -1,13 +1,18 @@
 name: CI worker
 
-# Неизменяемый worker для одноразовой gVisor-ячейки DE-02. Runner-group ACL
-# допускает в ячейку только jobs, определённые здесь и закреплённые в caller'е
-# (ci.yml) полным commit SHA: caller выбирает revision для checkout, но не может
-# изменить ни job graph, ни пины экшенов. Своих inputs у worker нет by design —
-# input стал бы каналом от недоверенного caller к закреплённому определению.
+# Неизменяемый worker для эфемерных GitHub-hosted раннеров (репо публичное).
+# Caller (ci.yml) закрепляет этот файл полным commit SHA: caller выбирает
+# revision для checkout, но не может изменить ни job graph, ни пины экшенов.
+# Своих inputs у worker нет by design — input стал бы каналом от недоверенного
+# caller к закреплённому определению.
 
 on:
   workflow_call:
+  # ВРЕМЕННЫЙ триггер Stage A миграции на GitHub-hosted раннеры: прямой прогон
+  # worker'а на миграционной ветке, пока caller в main закреплён на прежнем SHA.
+  # Снимается в Stage B вместе с обновлением пинов caller'ов.
+  push:
+    branches: [ci-github-hosted-runners]
 
 # Least privilege: CI only reads the repo. Override per-job if a job needs more.
 permissions:
@@ -40,17 +45,16 @@ env:
   CHROMEDRIVER_FOR_TESTING_SHA256: 6ac3919edd107ca13d08cccc118dc83821877e504014233f171bbd94cb01a80e
 
 jobs:
-  # Единый 25-минутный envelope = двойной худший successful job из последних
-  # 20 main-прогонов перед cutover, округлённый вверх до пяти минут. Менять
-  # только после повторного history-replay, а не под один медленный прогон.
+  # Единый envelope: при переходе с DE-02 на GitHub-hosted раннеры старый
+  # 25-минутный конверт (двойной худший successful job из 20 main-прогонов)
+  # поднят до 40 минут — history-replay на новом железе ещё невозможен, запас
+  # берётся сверху. Перекалибровать по фактическим main-прогонам, а не под один
+  # медленный прогон.
   node-consumer-floor:
     name: Node 22 consumer floor
-    runs-on: { group: labpics-ci-sandbox, labels: [labpics-ci-gvisor-v1] }
-    timeout-minutes: 25
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
     needs: wasm
-    if: >-
-      (github.event_name != 'pull_request' ||
-      github.event.pull_request.head.repo.full_name == github.repository)
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -77,11 +81,8 @@ jobs:
 
   msrv:
     name: MSRV workspace check
-    runs-on: { group: labpics-ci-sandbox, labels: [labpics-ci-gvisor-v1] }
-    timeout-minutes: 25
-    if: >-
-      (github.event_name != 'pull_request' ||
-      github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -107,20 +108,13 @@ jobs:
 
   lint:
     name: clippy + rustfmt
-    runs-on: { group: labpics-ci-sandbox, labels: [labpics-ci-gvisor-v1] }
-    timeout-minutes: 25
-    # Защита от fork-PR: НЕ гоняем недоверенный код форков на своей инфре.
-    # Форк-PR пропускается (job skipped, раннер не выделяется); push в main
-    # и same-repo PR (коллаборатор) — гоняются. Тот же паттерн, что уже принят
-    # в native-conformance.yml (PR #194, ветка feat/native-conformance-swift).
-    if: >-
-      (github.event_name != 'pull_request' ||
-      github.event.pull_request.head.repo.full_name == github.repository)
-    # Isolate RUSTUP_HOME/CARGO_HOME per job under runner.temp. Слот ячейки
-    # одноразовый, поэтому прежний класс гонок за общий $HOME закрыт по
-    # построению; изоляция оставлена инвариантом и стоит ноль. /tmp по-прежнему
-    # запрещён: он tmpfs, а per-run toolchain'ы (~600 МБ каждый) выедали его
-    # за ~12 job'ов (ENOSPC-каскад, 2026-07-03) — rustup/cargo идут в runner.temp.
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    # Isolate RUSTUP_HOME/CARGO_HOME per job under runner.temp. Эфемерная VM
+    # одноразовая, поэтому прежний класс гонок за общий $HOME закрыт по
+    # построению; изоляция оставлена инвариантом и стоит ноль. На DE-02 /tmp
+    # был 8ГБ tmpfs и per-run toolchain'ы (~600 МБ каждый) выедали его за ~12
+    # job'ов (ENOSPC-каскад, 2026-07-03) — rustup/cargo остаются в runner.temp.
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -155,12 +149,8 @@ jobs:
 
   docs:
     name: cargo doc (intra-doc links)
-    runs-on: { group: labpics-ci-sandbox, labels: [labpics-ci-gvisor-v1] }
-    timeout-minutes: 25
-    # Защита от fork-PR — см. комментарий в job `lint` выше.
-    if: >-
-      (github.event_name != 'pull_request' ||
-      github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -217,12 +207,8 @@ jobs:
 
   test:
     name: test
-    runs-on: { group: labpics-ci-sandbox, labels: [labpics-ci-gvisor-v1] }
-    timeout-minutes: 25
-    # Защита от fork-PR — см. комментарий в job `lint` выше.
-    if: >-
-      (github.event_name != 'pull_request' ||
-      github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -382,12 +368,8 @@ jobs:
 
   audit:
     name: cargo audit (rustsec)
-    runs-on: { group: labpics-ci-sandbox, labels: [labpics-ci-gvisor-v1] }
-    timeout-minutes: 25
-    # Защита от fork-PR — см. комментарий в job `lint` выше.
-    if: >-
-      (github.event_name != 'pull_request' ||
-      github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -435,8 +417,8 @@ jobs:
 
   wasm:
     name: wasm build + headless test + size
-    runs-on: { group: labpics-ci-sandbox, labels: [labpics-ci-gvisor-v1] }
-    timeout-minutes: 25
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
     # Native Binaryen 117 не завершил wasm-opt внутри systrap до bounded timeout
     # (run 30773180841). Официальный Node transport того же release дал byte-exact
     # результат native oracle на post-bindgen input в exact production cell.
@@ -444,10 +426,6 @@ jobs:
     env:
       BINARYEN_RELEASE: version_117
       BINARYEN_NODE_SHA256: "2d5a42f2d167a7cc2b4b6664c44c5ace1690d13db4f527324f052afbad461a07"
-    # Защита от fork-PR — см. комментарий в job `lint` выше.
-    if: >-
-      (github.event_name != 'pull_request' ||
-      github.event.pull_request.head.repo.full_name == github.repository)
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -589,7 +567,9 @@ jobs:
           include-hidden-files: true
           retention-days: 90
       - name: install Chrome + dependencies (Chrome for Testing + apt-get download)
-        # Образ ячейки не содержит Chrome, а passwordless sudo в слоте нет.
+        # GitHub-hosted образ не содержит нужный CfT-браузер; установка целиком
+        # userspace (sudo на раннере доступен, но не используется — гейт остаётся
+        # герметичным и не трогает системное состояние образа).
         # Strategy:
         #  1. Download exact CfT chrome + chromedriver archives and verify SHA-256.
         #     wasm-pack reads CHROME_PATH for the browser but ignores a CHROMEDRIVER

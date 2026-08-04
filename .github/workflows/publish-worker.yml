@@ -38,7 +38,7 @@ permissions:
 
 jobs:
   publish:
-    runs-on: { group: labpics-ci-sandbox, labels: [labpics-ci-gvisor-v1] }
+    runs-on: ubuntu-latest
     # Environment secrets are resolved for this job. Keep the trust boundary
     # intrinsic to the immutable worker so PR/workflow_call/wrong-repository
     # invocations are skipped before `npm-publish` can expose NPM_TOKEN.
@@ -47,9 +47,10 @@ jobs:
       github.event_name == 'push' &&
       github.ref_type == 'tag' &&
       startsWith(github.ref_name, 'colors-v')
-    # 10 = двойной worst successful publish receipt перед cutover, округлённый
-    # вверх до пяти минут; менять только после history-replay.
-    timeout-minutes: 10
+    # 15 = запас сверху при переходе с DE-02 на GitHub-hosted раннеры (старый
+    # 10-минутный конверт поднят: history-replay на новом железе ещё невозможен);
+    # перекалибровать по фактическим publish-прогонам.
+    timeout-minutes: 15
     environment: npm-publish
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
