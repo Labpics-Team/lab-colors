@@ -641,12 +641,34 @@ failure и не создают candidate. Успешный candidate фикси�
 структурное согласие над exact bound domain manifest; он не является proof
 receipt и не доказывает correctness ни одного evaluator.
 
-`DualProofReceiptV1` требует semantic verification receipts для обоих evaluator
-paths и независимой проверки их bindings/replay; этих admitted типов текущий
-release не содержит. Family mint
-дополнительно разрешает `domain_identity` и допускает отдельно exact full
-manifest: единственный range `[0, 2^24)` и point count `2^24`. Совпадение
-только point count или reduced-domain candidate этот gate не проходят.
+`DualProofReceiptV1` — sealed join пяти evidence chains: structural candidate,
+source-bound Arb receipt, source-bound MPFI receipt и два semantic
+verification receipts (по одному на каждый evaluator path). Единственный
+minter — `join_dual_proof_v1` в модуле `dual_proof.py`; прямой конструктор без
+module-owned token поднимает `TypeError`, наследование и мутация receipt
+запрещены. Join допускает ровно пять входов в canonical порядке (candidate,
+Arb lane, MPFI lane, первый semantic receipt, второй semantic receipt) и
+проверяет каждое cross-chain coordinate: comparator, run claim и transcript
+identities обоих lanes обязаны совпасть с заявленными в claim парами; каждый
+semantic receipt обязан связывать job, comparator, run claim и transcript
+своего lane и нести decision digest claim; lane receipts и semantic receipts
+обязаны быть попарно различными. Нарушение арности или неканонический тип
+входа возвращает typed `DualProofRejectedV1` с причиной `foreign_input`;
+несогласованные bindings или порядок lanes MPFI → Arb возвращают
+`foreign_binding`. Receipt не создаётся ни при одном отказе.
+
+Identity receipt вычисляется как
+`SHA256("labcolors.proof-region.dual-proof-receipt.v1\0" ||
+u64be(encoded_length) || claim identity || Arb receipt identity ||
+MPFI receipt identity || первый semantic identity || второй semantic identity)`.
+
+Full-domain gate: `claim_spans_full_domain_v1` возвращает истину только когда
+`domain_point_count` claim равен `2^24` (OUTPUT_CARDINALITY_V1). Reduced-domain
+proof несёт `full_domain=False` и никогда не авторизует family mint;
+family mint дополнительно разрешает `domain_identity` и допускает отдельно
+exact full manifest: единственный range `[0, 2^24)` и point count `2^24`.
+Совпадение только point count или reduced-domain candidate этот gate не
+проходят.
 
 ## Semantic verification и `SemanticVerificationReceiptV1`
 
@@ -719,8 +741,8 @@ canonical decision digest. Неудача возвращает typed
 `SemanticVerificationRejectedV1` с закрытой суммой причин; receipt при отказе не
 создаётся. Неканонические входные объекты отклоняются как `invalid_input` до
 replay без поднятия исключений. Receipt является source-bound semantic evidence для одного engine
-transcript и не заменяет `DualProofReceiptV1`, который требует receipts для
-обоих evaluator paths.
+transcript и не заменяет `DualProofReceiptV1`: join выше связывает оба таких
+receipt с их source-bound lanes в один sealed dual proof.
 
 Binding run claim: верификатор допускает run только когда его job, comparator
 и transcript coordinates совпадают с объектами верификации, а связанный
