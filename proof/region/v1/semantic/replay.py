@@ -13,8 +13,8 @@ from dataclasses import dataclass
 
 import region_proof_protocol as protocol
 
-from . import region
-from .ssa import EvaluationContext, parse_formula
+from . import intervalmath, region
+from .ssa import EvaluationContext, FoldedPointProgramV1, SemanticFormulaError, parse_formula
 
 EXACT_TRACE_DOMAIN_V1 = b"labcolors.proof-region.exact-zero-signal-trace.v1\0"
 
@@ -105,10 +105,31 @@ class SemanticReplay:
         # memory without changing the replay semantics.
         self._ordinals = iter(job.domain.iter_ordinals())
         self._global_remaining = budget.global_pregrant
+        # One folded point program per rung: the shared context and its static
+        # constants are built once, so each point only replays the dynamic
+        # suffix of the lift.  A failed fold is cached as None: it poisons
+        # every point lift at that rung and must not be recomputed 2^24 times.
+        self._folded_rungs: dict[
+            int, tuple[EvaluationContext, FoldedPointProgramV1 | None]
+        ] = {}
 
     @property
     def budget(self) -> protocol.ComparatorBudgetV1:
         return self._budget
+
+    def _folded_rung(
+        self, rung: int
+    ) -> tuple[EvaluationContext, FoldedPointProgramV1 | None]:
+        cached = self._folded_rungs.get(rung)
+        if cached is None:
+            context = EvaluationContext(self._formula, rung, rung)
+            try:
+                folded = context.fold_point_program(self._shared_inputs)
+            except (intervalmath.UnresolvedError, SemanticFormulaError, KeyError):
+                folded = None
+            cached = (context, folded)
+            self._folded_rungs[rung] = cached
+        return cached
 
     def next_point(self) -> PointReplay:
         """Replay one domain point exactly like the engine loop does."""
@@ -127,17 +148,35 @@ class SemanticReplay:
         ladder = budget.precision_ladder
         final_precision = ladder[0]
         final = region.DecisionResult(region.BOUNDARY_UNPROVEN, 0, False, 0)
+        red, green, blue = region.ordinal_to_rgb(ordinal)
         for rung in ladder:
             final_precision = rung
-            ssa = EvaluationContext(self._formula, rung, rung)
-            final = region.evaluate_rgb(
-                ssa,
-                ordinal,
-                self._region,
-                self._shared_inputs,
-                rung,
-                point_remaining,
-            )
+            try:
+                ssa, folded = self._folded_rung(rung)
+                outputs = (
+                    None
+                    if folded is None
+                    else ssa.evaluate_folded_point(
+                        folded, self._shared_inputs, red, green, blue
+                    )
+                )
+            except (intervalmath.UnresolvedError, SemanticFormulaError, KeyError):
+                outputs = None
+            if outputs is None:
+                # Same admission as the unfolded lift path in
+                # region.evaluate_rgb: an unresolvable lift — including one
+                # poisoned by an unresolvable static fold — escalates the rung.
+                final = region.DecisionResult(region.BOUNDARY_UNPROVEN, 0, False, 0)
+            else:
+                final = region.evaluate_rgb(
+                    ssa,
+                    ordinal,
+                    self._region,
+                    self._shared_inputs,
+                    rung,
+                    point_remaining,
+                    lift=(outputs["jp"], outputs["ap"], outputs["bp"]),
+                )
             if final.consumed_branches > point_remaining:
                 raise ReplayIntegrityError(ordinal, "predicate consumed more than granted")
             point_remaining -= final.consumed_branches
