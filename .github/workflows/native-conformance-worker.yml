@@ -111,6 +111,9 @@ jobs:
           # Swift fail-closed требует существования TMPDIR ещё до первого
           # вызова драйвера: каталог создаётся на хосте, контейнер видит его
           # через bind-проброс runner.temp.
+          # В pinned swift-образе нет cc/gcc — только clang 17; без явного
+          # линкера rustc падает linker-cc-not-found (доказано live-прогоном
+          # Stage A и инспекцией образа).
           mkdir -p "$RUNNER_TEMP/tmp-$job"
           "${LABCOLORS_SWIFT_DOCKER:?}" run --rm \
             --user "$(id -u):$(id -g)" \
@@ -123,9 +126,6 @@ jobs:
             --env "RUSTUP_HOME=/runner-temp/rustup-$job" \
             --env "CARGO_HOME=/runner-temp/cargo-$job" \
             --env "TMPDIR=/runner-temp/tmp-$job" \
-            # В pinned swift-образе нет cc/gcc — только clang 17; без явного
-            # линкера rustc падает `linker `cc` not found` (доказано
-            # live-прогоном Stage A и инспекцией образа).
             --env "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=clang" \
             --env "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/runner-temp/cargo-$job/bin" \
             --mount "type=bind,src=$GITHUB_WORKSPACE,dst=/workspace,readonly" \
