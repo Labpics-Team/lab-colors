@@ -31,7 +31,8 @@ def _imported_roots(tree: ast.AST) -> set[str]:
     roots: set[str] = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
-            roots.update(alias.name.split(".")[0] for alias in node.names)
+            for alias in node.names:
+                roots.update(alias.name.split("."))
         elif isinstance(node, ast.ImportFrom):
             # Every component of a dotted module path can hide a forbidden
             # root, and `from ... import executor` binds the module through
@@ -94,6 +95,7 @@ class SyntheticBoundaryTests(unittest.TestCase):
         "from .. import executor",
         "from proof.region.v1 import executor",
         "import provenance as alias",
+        "import proof.region.v1.executor",
         "import importlib",
         "module = __import__('build')",
         "module = importlib.import_module('arb')",

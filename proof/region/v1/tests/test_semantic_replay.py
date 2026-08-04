@@ -363,6 +363,32 @@ class HostileReplayTests(unittest.TestCase):
             accounting.update(semantic_replay.account_record(*record))
         self.assertEqual(accounting.digest(), expected)
 
+    def test_mpfi_accounting_digest_matches_independent_packing(self) -> None:
+        # The MPFI lane carries its own domain prefix; the expected digest is
+        # packed from scratch again so neither lane reuses the other's truth.
+        job = fixture_job()
+        comparator = admit_manifest(ComparatorKindV1.MPFI, 911)
+        records = ((3, 8, 1, 1), (12, 32, 0, 2), (400_000, 16, 7, 0))
+        hasher = hashlib.sha256()
+        hasher.update(b"labcolors.mpfi-evaluation-accounting.v1\0")
+        hasher.update(job.identity)
+        hasher.update(job.domain.identity)
+        hasher.update(job.policy.identity)
+        hasher.update(comparator.identity)
+        for ordinal, precision, consumed, outcome in records:
+            hasher.update(ordinal.to_bytes(4, "big"))
+            hasher.update(precision.to_bytes(4, "big"))
+            hasher.update(consumed.to_bytes(8, "big"))
+            hasher.update(bytes((outcome,)))
+        expected = hasher.digest()
+
+        accounting = semantic_replay.accounting_prefix_v1(
+            comparator.manifest.kind, job, comparator.identity
+        )
+        for record in records:
+            accounting.update(semantic_replay.account_record(*record))
+        self.assertEqual(accounting.digest(), expected)
+
 
 if __name__ == "__main__":
     unittest.main()

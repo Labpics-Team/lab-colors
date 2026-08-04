@@ -265,6 +265,8 @@ def _dyadic(bits: bytes, artifact: str, field: str) -> Fraction:
 def dyadic_field_v1(bits: bytes, artifact: str, field: str) -> Fraction:
     """Public binary64 decode for committed definition fields."""
 
+    if type(bits) is not bytes:
+        _fail(artifact, 0, ProtocolReasonV1.INVALID_DEFINITION, f"{field} is not owned bytes")
     return _dyadic(bits, artifact, field)
 
 
