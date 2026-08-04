@@ -123,6 +123,10 @@ jobs:
             --env "RUSTUP_HOME=/runner-temp/rustup-$job" \
             --env "CARGO_HOME=/runner-temp/cargo-$job" \
             --env "TMPDIR=/runner-temp/tmp-$job" \
+            # В pinned swift-образе нет cc/gcc — только clang 17; без явного
+            # линкера rustc падает `linker `cc` not found` (доказано
+            # live-прогоном Stage A и инспекцией образа).
+            --env "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=clang" \
             --env "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/runner-temp/cargo-$job/bin" \
             --mount "type=bind,src=$GITHUB_WORKSPACE,dst=/workspace,readonly" \
             --mount "type=bind,src=$RUNNER_TEMP,dst=/runner-temp" \

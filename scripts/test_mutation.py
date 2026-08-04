@@ -1898,6 +1898,13 @@ class MutationTruthTest(unittest.TestCase):
             r"fddaf02db3d41844916167ef4d199d5ca14c6003d052a0b9ab579646a9c720ec$",
         )
         self.assertIn('mkdir -p "$RUNNER_TEMP/tmp-$job"', swift_job)
+        # В pinned swift-образе нет cc/gcc (только clang 17), поэтому
+        # линкер cargo пробрасывается явно — иначе rustc падает
+        # `linker `cc` not found` (доказано live-прогоном Stage A).
+        self.assertIn(
+            '--env "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=clang"',
+            swift_job,
+        )
         # rustup ставится workflow'ом НАПРЯМУЮ в изолированные homes job'а
         # (dtolnay/rust-toolchain ставит в дефолтный HOME раннера, который
         # контейнер не видит); бинарник закреплён sha256 официального
