@@ -229,6 +229,14 @@ jobs:
           grep --fixed-strings --quiet 'memory' "$scope/proof/cgroup.subtree_control"
           grep --fixed-strings --quiet 'pids' "$scope/proof/cgroup.subtree_control"
           test "$(cat "$scope/proof/pids.max")" = 2
+          # Pipe-pattern crash collectors (systemd-coredump on the ephemeral
+          # image) run outside the delegated containment and ignore
+          # RLIMIT_CORE, so the WCOREDUMP bit would report the host crash
+          # handler instead of the sandbox. Plain file mode honors the
+          # executor's pinned RLIMIT_CORE=0 on every kernel, keeping
+          # SignaledV1.core_dumped deterministic; the VM is disposable.
+          echo core | sudo tee /proc/sys/kernel/core_pattern >/dev/null
+          test "$(cat /proc/sys/kernel/core_pattern)" = core
 
       - name: one source-bound BUILD to RUN receipt and evaluator runtime
         shell: bash
