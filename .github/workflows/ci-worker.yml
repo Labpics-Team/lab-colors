@@ -8,11 +8,6 @@ name: CI worker
 
 on:
   workflow_call:
-  # ВРЕМЕННЫЙ триггер Stage A миграции на GitHub-hosted раннеры: прямой прогон
-  # worker'а на миграционной ветке, пока caller в main закреплён на прежнем SHA.
-  # Снимается в Stage B вместе с обновлением пинов caller'ов.
-  push:
-    branches: [ci-github-hosted-runners]
 
 # Least privilege: CI only reads the repo. Override per-job if a job needs more.
 permissions:

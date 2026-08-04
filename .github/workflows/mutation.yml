@@ -24,4 +24,4 @@ jobs:
     name: mutation
     permissions:
       contents: read
-    uses: Labpics-Team/lab-colors/.github/workflows/mutation-worker.yml@7827981724ad75bfcf15bd5b2f74be2d5337d9b5
+    uses: Labpics-Team/lab-colors/.github/workflows/mutation-worker.yml@1a2b77081f374e917df6c4d59fd583451ee8811c
