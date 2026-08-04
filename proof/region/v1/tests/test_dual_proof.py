@@ -483,7 +483,22 @@ class DualProofJoinTests(unittest.TestCase):
         self.assertFalse(dual_proof.claim_spans_full_domain_v1(candidate.claim))
 
         claim = candidate.claim
+        full_identity = protocol.exact_full_domain_manifest_v1().identity
         full_claim = protocol.DualComparisonClaimV1(
+            claim.job_identity,
+            claim.definition_digest,
+            full_identity,
+            claim.policy_identity,
+            protocol.OUTPUT_CARDINALITY_V1,
+            claim.comparator_identities,
+            claim.run_claim_identities,
+            claim.transcript_identities,
+            claim.decision_digest,
+        )
+        self.assertTrue(dual_proof.claim_spans_full_domain_v1(full_claim))
+        # A bare point count never authorizes the mint: the reduced-domain
+        # identity proves the domain is not the exact full manifest.
+        foreign_identity = protocol.DualComparisonClaimV1(
             claim.job_identity,
             claim.definition_digest,
             claim.domain_identity,
@@ -494,11 +509,11 @@ class DualProofJoinTests(unittest.TestCase):
             claim.transcript_identities,
             claim.decision_digest,
         )
-        self.assertTrue(dual_proof.claim_spans_full_domain_v1(full_claim))
+        self.assertFalse(dual_proof.claim_spans_full_domain_v1(foreign_identity))
         one_short = protocol.DualComparisonClaimV1(
             claim.job_identity,
             claim.definition_digest,
-            claim.domain_identity,
+            full_identity,
             claim.policy_identity,
             protocol.OUTPUT_CARDINALITY_V1 - 1,
             claim.comparator_identities,
