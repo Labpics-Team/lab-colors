@@ -2,8 +2,8 @@ name: CI
 
 # Тонкий caller: только триггеры, concurrency и права. Job graph, пины экшенов,
 # env-пины тулчейнов и раскладка по раннерам закреплены в immutable ci-worker.yml
-# на полном commit SHA — runner-group ACL допускает в одноразовую gVisor-ячейку
-# DE-02 только jobs из закреплённых worker'ов. Своих inputs у worker нет by design.
+# на полном commit SHA — каждый job исполняется на одноразовой эфемерной
+# GitHub-hosted VM без секретов и общего состояния. Своих inputs у worker нет by design.
 
 on:
   push:

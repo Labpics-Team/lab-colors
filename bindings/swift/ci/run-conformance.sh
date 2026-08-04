@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Linux Swift-conformance использует уже допущенные toolchain capability и
 # работает только в эфемерной копии checkout. Так один скрипт проверяет FFI,
-# не изменяя исходники и не создавая второй Docker trust boundary внутри gVisor.
+# не изменяя исходники и не создавая второй Docker trust boundary внутри
+# контейнера тулчейна.
 set -euo pipefail
 
 : "${RUST_TOOLCHAIN:?RUST_TOOLCHAIN must declare the exact Rust version}"

@@ -2,8 +2,8 @@ name: Native conformance (Swift)
 
 # Тонкий caller: только триггеры, concurrency и права. Job graph, пины и env-пины
 # (Rust 1.96.0, swift-контейнер по digest) закреплены в immutable
-# native-conformance-worker.yml на полном commit SHA — runner-group ACL допускает
-# в одноразовую gVisor-ячейку DE-02 только jobs из закреплённых worker'ов.
+# native-conformance-worker.yml на полном commit SHA — каждый job исполняется на
+# одноразовой эфемерной GitHub-hosted VM без секретов и общего состояния.
 # Своих inputs у worker нет by design.
 
 on:
