@@ -97,6 +97,28 @@ PROGRAM_INTERFACES = {
 }
 
 
+POINT_DYNAMIC_INPUTS_V1 = ("r8", "g8", "b8")
+
+
+@dataclass(frozen=True)
+class FoldedPointProgramV1:
+    """The point program partially evaluated over job-shared inputs.
+
+    Every node whose operands are fixed by the literal, enum and shared
+    environment is evaluated exactly once under the folding context's
+    precision discipline; only the point-dependent suffix is retained, in
+    program order, so each point replays bit-identical interval semantics.
+    A fold never leaves the evaluation context that computed it: its guard
+    and cap bits are part of the replayed decision semantics.
+    """
+
+    guard_bits: int
+    cap_bits: int
+    static_names: tuple[str, ...]
+    static_environment: tuple[tuple[str, object], ...]
+    dynamic_nodes: tuple[SemanticNode, ...]
+
+
 @dataclass(frozen=True)
 class SemanticNode:
     name: str
@@ -390,6 +412,98 @@ class EvaluationContext:
             environment[node.name] = self._evaluate_node(node, environment)
         outputs: dict[str, object] = {}
         for name in program.outputs:
+            value = environment[name]
+            if type(value) is not intervalmath.Interval:
+                raise SemanticFormulaError(f"output {name} is not a real value")
+            outputs[name] = value
+        return outputs
+
+    def fold_point_program(self, shared_inputs: dict[str, object]) -> FoldedPointProgramV1:
+        """Partially evaluate the point program over the job-shared inputs.
+
+        A full-domain replay lifts 2^24 points under one shared context; the
+        nodes already fixed by the literal, enum and shared environment are
+        evaluated exactly once per rung here, leaving only the point-dependent
+        suffix for the per-point replay.  The fold inherits this context's
+        precision discipline and never outlives it.
+        """
+
+        program = self.formula.program("point")
+        shared_names = tuple(
+            (name, kind)
+            for name, kind in program.inputs
+            if name not in POINT_DYNAMIC_INPUTS_V1
+        )
+        if set(shared_inputs) != {name for name, _ in shared_names}:
+            raise SemanticFormulaError(
+                "fold requires exactly the job-shared point inputs"
+            )
+        environment: dict[str, object] = dict(self._literal_environment)
+        for name, kind in shared_names:
+            value = shared_inputs[name]
+            if kind == "real":
+                if type(value) is not intervalmath.Interval:
+                    raise SemanticFormulaError(f"shared input {name} must be an interval")
+            elif type(value) is not int:
+                raise SemanticFormulaError(f"shared input {name} must be an integer")
+            environment[name] = value
+
+        static_names: list[str] = []
+        static_environment: list[tuple[str, object]] = []
+        dynamic_nodes: list[SemanticNode] = []
+        dynamic_names: set[str] = set(POINT_DYNAMIC_INPUTS_V1)
+        for node in program.nodes:
+            # The lookup table name is release-pinned, not an environment
+            # binding; only the index operand participates in the closure.
+            bound = node.arguments[1:] if node.operator == "lookup" else node.arguments
+            missing = tuple(name for name in bound if name not in environment)
+            if not missing:
+                value = self._evaluate_node(node, environment)
+                environment[node.name] = value
+                static_names.append(node.name)
+                static_environment.append((node.name, value))
+                continue
+            if any(name not in dynamic_names for name in missing):
+                raise SemanticFormulaError(
+                    f"fold met an undeclared binding in {node.name}"
+                )
+            dynamic_nodes.append(node)
+            dynamic_names.add(node.name)
+        return FoldedPointProgramV1(
+            guard_bits=self.guard_bits,
+            cap_bits=self.cap_bits,
+            static_names=tuple(static_names),
+            static_environment=tuple(static_environment),
+            dynamic_nodes=tuple(dynamic_nodes),
+        )
+
+    def evaluate_folded_point(
+        self,
+        folded: FoldedPointProgramV1,
+        r8: int,
+        g8: int,
+        b8: int,
+    ) -> dict[str, object]:
+        """Replay the folded dynamic suffix for one sRGB8 point."""
+
+        if folded.guard_bits != self.guard_bits or folded.cap_bits != self.cap_bits:
+            raise SemanticFormulaError(
+                "fold was computed under a different precision discipline"
+            )
+        for name, value in (("r8", r8), ("g8", g8), ("b8", b8)):
+            if type(value) is not int or value < 0 or value > 255:
+                raise SemanticFormulaError(f"point input {name} must be an sRGB8 sample")
+        # Release-pinned literals and enum tags stay implicit: they belong to
+        # this context's formula, not to the fold's shared-input constants.
+        environment: dict[str, object] = dict(self._literal_environment)
+        environment.update(folded.static_environment)
+        environment["r8"] = r8
+        environment["g8"] = g8
+        environment["b8"] = b8
+        for node in folded.dynamic_nodes:
+            environment[node.name] = self._evaluate_node(node, environment)
+        outputs: dict[str, object] = {}
+        for name in self.formula.program("point").outputs:
             value = environment[name]
             if type(value) is not intervalmath.Interval:
                 raise SemanticFormulaError(f"output {name} is not a real value")

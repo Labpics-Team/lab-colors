@@ -26,6 +26,7 @@ from region_proof_protocol import ProofJobV1  # noqa: E402
 from semantic import intervalmath, region  # noqa: E402
 from semantic.replay import SemanticReplay  # noqa: E402
 from semantic.ssa import (  # noqa: E402
+    POINT_DYNAMIC_INPUTS_V1,
     EvaluationContext,
     FoldedPointProgramV1,
     SemanticFormulaError,
@@ -137,7 +138,7 @@ class FoldStructureTests(unittest.TestCase):
         # transitively reads r8, g8 or b8.  The fold must retain that suffix
         # and nothing else, in program order.
         program = self.context.formula.program("point")
-        dynamic = {"r8", "g8", "b8"}
+        dynamic = set(POINT_DYNAMIC_INPUTS_V1)
         for node in program.nodes:
             if any(argument in dynamic for argument in node.arguments):
                 dynamic.add(node.name)
@@ -268,29 +269,28 @@ class ReplayDriverIntegrationTests(unittest.TestCase):
         from region_proof_protocol import ComparatorKindV1, ComparatorManifestV2, ContentResolvedComparatorManifestV2
         import hashlib
 
-        def content(key: bytes) -> bytes:
-            return b"semantic-folding-test-" + key
-
+        fields = (
+            "engine_release",
+            "upstream_source",
+            "arithmetic_input_set",
+            "wrapper_source",
+            "evaluator_source",
+            "build_identity",
+            "operation_allowlist",
+            "test_observation",
+            "legal_file_set",
+            "exclusions",
+        )
+        digests = {
+            field: hashlib.sha256(f"folding-{field}".encode()).digest()
+            for field in fields
+        }
+        # Admission re-hashes the resolved content against the declared
+        # digest, so each content value must be the digest's own preimage.
+        content_map = {digests[field]: f"folding-{field}".encode() for field in fields}
         comparator = ContentResolvedComparatorManifestV2.admit(
-            ComparatorManifestV2(
-                kind=ComparatorKindV1.ARB,
-                **{
-                    field: hashlib.sha256(f"folding-{field}".encode()).digest()
-                    for field in (
-                        "engine_release",
-                        "upstream_source",
-                        "arithmetic_input_set",
-                        "wrapper_source",
-                        "evaluator_source",
-                        "build_identity",
-                        "operation_allowlist",
-                        "test_observation",
-                        "legal_file_set",
-                        "exclusions",
-                    )
-                },
-            ),
-            content,
+            ComparatorManifestV2(kind=ComparatorKindV1.ARB, **digests),
+            content_map.get,
         )
 
         driver = SemanticReplay(job, comparator)
