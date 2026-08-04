@@ -30,6 +30,9 @@ env:
   # Offline proof codecs are executable release tooling too. The image is pinned
   # to the linux/amd64 manifest because setup-python does not publish Debian 13
   # builds and образ ячейки не должен задавать семантику интерпретатора.
+  # Декларированный минимум интерпретатора для proof-кода — Python 3.11:
+  # stdlib-only пакеты используют StrEnum и datetime.UTC; пин образа ниже
+  # обязан оставаться не ниже этого флора.
   PYTHON_PROOF_IMAGE: python:3.14.6-slim@sha256:d4fea6e20c09820028eea3f5c17f5b8ebd2ecb9c2bf28e561681a74a96090e4f
   # Browser parity is release evidence too: pin both CfT archives byte-for-byte.
   CHROME_FOR_TESTING_VERSION: 150.0.7871.115
