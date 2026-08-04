@@ -251,16 +251,18 @@ def evaluate_rgb(
 
     ``lift`` lets the replay driver supply the point lift it already computed
     from the folded point program; the decision rules below stay the single
-    decision source of truth for both lift paths.
+    decision source of truth for both lift paths.  On the folded path the
+    ordinal is not consulted for the decision, so the caller must pass a lift
+    that belongs to exactly that ordinal.
     """
 
-    red, green, blue = ordinal_to_rgb(ordinal)
     if lift is not None:
         if len(lift) != 3 or any(
             type(value) is not intervalmath.Interval for value in lift
         ):
             raise SemanticFormulaError("a folded lift must be exactly three intervals")
         return decide(ssa, lift, region, precision, grant)
+    red, green, blue = ordinal_to_rgb(ordinal)
     inputs = dict(shared_inputs)
     inputs["r8"] = red
     inputs["g8"] = green

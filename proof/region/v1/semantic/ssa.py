@@ -99,6 +99,38 @@ PROGRAM_INTERFACES = {
 
 POINT_DYNAMIC_INPUTS_V1 = ("r8", "g8", "b8")
 
+FOLD_SHARED_DOMAIN_V1 = b"labcolors.proof-region.folded-point-shared.v1\0"
+
+
+def shared_inputs_fingerprint_v1(
+    program_inputs: tuple[tuple[str, str], ...],
+    shared_inputs: dict[str, object],
+) -> bytes:
+    """Canonical identity of the job-shared fold configuration.
+
+    A fold's static constants are derived from exactly these bindings; the
+    fingerprint makes a fold computed for a foreign configuration detectable
+    instead of silently replaying stale constants against another job.
+    """
+
+    hasher = hashlib.sha256()
+    hasher.update(FOLD_SHARED_DOMAIN_V1)
+    for name, kind in program_inputs:
+        if name in POINT_DYNAMIC_INPUTS_V1:
+            continue
+        value = shared_inputs[name]
+        if kind == "real":
+            lo = value.lo
+            hi = value.hi
+            payload = (
+                f"{name}:real:{lo.numerator}:{lo.denominator}"
+                f":{hi.numerator}:{hi.denominator}"
+            )
+        else:
+            payload = f"{name}:int:{value}"
+        hasher.update(payload.encode("ascii"))
+    return hasher.digest()
+
 
 @dataclass(frozen=True)
 class FoldedPointProgramV1:
@@ -114,6 +146,7 @@ class FoldedPointProgramV1:
 
     guard_bits: int
     cap_bits: int
+    shared_fingerprint: bytes
     static_names: tuple[str, ...]
     static_environment: tuple[tuple[str, object], ...]
     dynamic_nodes: tuple[SemanticNode, ...]
@@ -429,24 +462,10 @@ class EvaluationContext:
         """
 
         program = self.formula.program("point")
-        shared_names = tuple(
-            (name, kind)
-            for name, kind in program.inputs
-            if name not in POINT_DYNAMIC_INPUTS_V1
-        )
-        if set(shared_inputs) != {name for name, _ in shared_names}:
-            raise SemanticFormulaError(
-                "fold requires exactly the job-shared point inputs"
-            )
+        shared_names = self._validate_shared_inputs(program, shared_inputs)
         environment: dict[str, object] = dict(self._literal_environment)
-        for name, kind in shared_names:
-            value = shared_inputs[name]
-            if kind == "real":
-                if type(value) is not intervalmath.Interval:
-                    raise SemanticFormulaError(f"shared input {name} must be an interval")
-            elif type(value) is not int:
-                raise SemanticFormulaError(f"shared input {name} must be an integer")
-            environment[name] = value
+        for name, _ in shared_names:
+            environment[name] = shared_inputs[name]
 
         static_names: list[str] = []
         static_environment: list[tuple[str, object]] = []
@@ -472,23 +491,63 @@ class EvaluationContext:
         return FoldedPointProgramV1(
             guard_bits=self.guard_bits,
             cap_bits=self.cap_bits,
+            shared_fingerprint=shared_inputs_fingerprint_v1(
+                program.inputs, shared_inputs
+            ),
             static_names=tuple(static_names),
             static_environment=tuple(static_environment),
             dynamic_nodes=tuple(dynamic_nodes),
         )
 
+    def _validate_shared_inputs(
+        self,
+        program: SemanticProgram,
+        shared_inputs: dict[str, object],
+    ) -> tuple[tuple[str, str], ...]:
+        shared_names = tuple(
+            (name, kind)
+            for name, kind in program.inputs
+            if name not in POINT_DYNAMIC_INPUTS_V1
+        )
+        if set(shared_inputs) != {name for name, _ in shared_names}:
+            raise SemanticFormulaError(
+                "fold requires exactly the job-shared point inputs"
+            )
+        for name, kind in shared_names:
+            value = shared_inputs[name]
+            if kind == "real":
+                if type(value) is not intervalmath.Interval:
+                    raise SemanticFormulaError(f"shared input {name} must be an interval")
+            elif type(value) is not int:
+                raise SemanticFormulaError(f"shared input {name} must be an integer")
+        return shared_names
+
     def evaluate_folded_point(
         self,
         folded: FoldedPointProgramV1,
+        shared_inputs: dict[str, object],
         r8: int,
         g8: int,
         b8: int,
     ) -> dict[str, object]:
-        """Replay the folded dynamic suffix for one sRGB8 point."""
+        """Replay the folded dynamic suffix for one sRGB8 point.
+
+        The caller redeclares the shared configuration at evaluation time and
+        the fold must carry the matching fingerprint: a fold computed for a
+        foreign job context is rejected instead of replaying stale constants.
+        """
 
         if folded.guard_bits != self.guard_bits or folded.cap_bits != self.cap_bits:
             raise SemanticFormulaError(
                 "fold was computed under a different precision discipline"
+            )
+        program = self.formula.program("point")
+        self._validate_shared_inputs(program, shared_inputs)
+        if folded.shared_fingerprint != shared_inputs_fingerprint_v1(
+            program.inputs, shared_inputs
+        ):
+            raise SemanticFormulaError(
+                "fold was computed for a foreign shared configuration"
             )
         for name, value in (("r8", r8), ("g8", g8), ("b8", b8)):
             if type(value) is not int or value < 0 or value > 255:
@@ -503,8 +562,8 @@ class EvaluationContext:
         for node in folded.dynamic_nodes:
             environment[node.name] = self._evaluate_node(node, environment)
         outputs: dict[str, object] = {}
-        for name in self.formula.program("point").outputs:
-            value = environment[name]
+        for name in program.outputs:
+            value = environment.get(name)
             if type(value) is not intervalmath.Interval:
                 raise SemanticFormulaError(f"output {name} is not a real value")
             outputs[name] = value

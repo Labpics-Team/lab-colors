@@ -107,18 +107,27 @@ class SemanticReplay:
         self._global_remaining = budget.global_pregrant
         # One folded point program per rung: the shared context and its static
         # constants are built once, so each point only replays the dynamic
-        # suffix of the lift.
-        self._folded_rungs: dict[int, tuple[EvaluationContext, FoldedPointProgramV1]] = {}
+        # suffix of the lift.  A failed fold is cached as None: it poisons
+        # every point lift at that rung and must not be recomputed 2^24 times.
+        self._folded_rungs: dict[
+            int, tuple[EvaluationContext, FoldedPointProgramV1 | None]
+        ] = {}
 
     @property
     def budget(self) -> protocol.ComparatorBudgetV1:
         return self._budget
 
-    def _folded_rung(self, rung: int) -> tuple[EvaluationContext, FoldedPointProgramV1]:
+    def _folded_rung(
+        self, rung: int
+    ) -> tuple[EvaluationContext, FoldedPointProgramV1 | None]:
         cached = self._folded_rungs.get(rung)
         if cached is None:
             context = EvaluationContext(self._formula, rung, rung)
-            cached = (context, context.fold_point_program(self._shared_inputs))
+            try:
+                folded = context.fold_point_program(self._shared_inputs)
+            except (intervalmath.UnresolvedError, SemanticFormulaError, KeyError):
+                folded = None
+            cached = (context, folded)
             self._folded_rungs[rung] = cached
         return cached
 
@@ -142,12 +151,21 @@ class SemanticReplay:
         red, green, blue = region.ordinal_to_rgb(ordinal)
         for rung in ladder:
             final_precision = rung
-            ssa, folded = self._folded_rung(rung)
             try:
-                outputs = ssa.evaluate_folded_point(folded, red, green, blue)
+                ssa, folded = self._folded_rung(rung)
+                outputs = (
+                    None
+                    if folded is None
+                    else ssa.evaluate_folded_point(
+                        folded, self._shared_inputs, red, green, blue
+                    )
+                )
             except (intervalmath.UnresolvedError, SemanticFormulaError, KeyError):
+                outputs = None
+            if outputs is None:
                 # Same admission as the unfolded lift path in
-                # region.evaluate_rgb: an unresolvable lift escalates the rung.
+                # region.evaluate_rgb: an unresolvable lift — including one
+                # poisoned by an unresolvable static fold — escalates the rung.
                 final = region.DecisionResult(region.BOUNDARY_UNPROVEN, 0, False, 0)
             else:
                 final = region.evaluate_rgb(

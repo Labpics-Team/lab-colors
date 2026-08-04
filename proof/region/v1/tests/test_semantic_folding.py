@@ -12,16 +12,24 @@ with the unfolded reference path.
 
 from __future__ import annotations
 
+import dataclasses
+import hashlib
 import itertools
 import sys
 import unittest
 from functools import lru_cache
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from region_proof_protocol import ProofJobV1  # noqa: E402
+from region_proof_protocol import (  # noqa: E402
+    ComparatorKindV1,
+    ComparatorManifestV2,
+    ContentResolvedComparatorManifestV2,
+    ProofJobV1,
+)
 
 from semantic import intervalmath, region  # noqa: E402
 from semantic.replay import SemanticReplay  # noqa: E402
@@ -31,10 +39,37 @@ from semantic.ssa import (  # noqa: E402
     FoldedPointProgramV1,
     SemanticFormulaError,
     parse_formula,
+    shared_inputs_fingerprint_v1,
 )
 
 
 FIXTURES = ROOT / "fixtures"
+
+
+def make_comparator() -> ContentResolvedComparatorManifestV2:
+    fields = (
+        "engine_release",
+        "upstream_source",
+        "arithmetic_input_set",
+        "wrapper_source",
+        "evaluator_source",
+        "build_identity",
+        "operation_allowlist",
+        "test_observation",
+        "legal_file_set",
+        "exclusions",
+    )
+    digests = {
+        field: hashlib.sha256(f"folding-{field}".encode()).digest()
+        for field in fields
+    }
+    # Admission re-hashes the resolved content against the declared
+    # digest, so each content value must be the digest's own preimage.
+    content_map = {digests[field]: f"folding-{field}".encode() for field in fields}
+    return ContentResolvedComparatorManifestV2.admit(
+        ComparatorManifestV2(kind=ComparatorKindV1.ARB, **digests),
+        content_map.get,
+    )
 
 
 @lru_cache(maxsize=2)
@@ -111,7 +146,7 @@ class FoldAdmissionTests(unittest.TestCase):
         folded = self.context.fold_point_program(self.shared)
         for bad in ((-1, 0, 0), (256, 0, 0), (0, "0", 0), (0, 0, intervalmath.exact(0))):
             with self.assertRaises(SemanticFormulaError):
-                self.context.evaluate_folded_point(folded, *bad)
+                self.context.evaluate_folded_point(folded, self.shared, *bad)
 
     def test_folded_evaluation_requires_the_folding_precision_discipline(self) -> None:
         # A fold computed under one rung must never evaluate under another:
@@ -119,7 +154,7 @@ class FoldAdmissionTests(unittest.TestCase):
         folded = self.context.fold_point_program(self.shared)
         foreign = EvaluationContext(self.context.formula, 128, 128)
         with self.assertRaises(SemanticFormulaError):
-            foreign.evaluate_folded_point(folded, 0, 0, 0)
+            foreign.evaluate_folded_point(folded, self.shared, 0, 0, 0)
 
 
 class FoldStructureTests(unittest.TestCase):
@@ -169,7 +204,7 @@ class FoldDifferentialTests(unittest.TestCase):
         context = EvaluationContext(parsed_formula(self.job.formula_spec), rung, rung)
         folded = context.fold_point_program(self.shared)
         red, green, blue = region.ordinal_to_rgb(ordinal)
-        outputs = context.evaluate_folded_point(folded, red, green, blue)
+        outputs = context.evaluate_folded_point(folded, self.shared, red, green, blue)
         return (outputs["jp"], outputs["ap"], outputs["bp"])
 
     def test_folded_lift_is_bit_identical_to_the_full_program(self) -> None:
@@ -196,7 +231,7 @@ class FoldDifferentialTests(unittest.TestCase):
             context = EvaluationContext(parsed_formula(self.job.formula_spec), 64, 64)
             folded = context.fold_point_program(self.shared)
             red, green, blue = region.ordinal_to_rgb(ordinal)
-            outputs = context.evaluate_folded_point(folded, red, green, blue)
+            outputs = context.evaluate_folded_point(folded, self.shared, red, green, blue)
             lift = (outputs["jp"], outputs["ap"], outputs["bp"])
             actual = region.evaluate_rgb(
                 context, ordinal, self.reg, self.shared, 64, grant, lift=lift
@@ -219,7 +254,7 @@ class FoldDifferentialTests(unittest.TestCase):
             context = EvaluationContext(parsed_formula(self.job.formula_spec), 128, 128)
             folded = context.fold_point_program(self.shared)
             red, green, blue = region.ordinal_to_rgb(ordinal)
-            outputs = context.evaluate_folded_point(folded, red, green, blue)
+            outputs = context.evaluate_folded_point(folded, self.shared, red, green, blue)
             lift = (outputs["jp"], outputs["ap"], outputs["bp"])
             actual = region.evaluate_rgb(
                 context, ordinal, self.reg, self.shared, 128, grant, lift=lift
@@ -240,8 +275,8 @@ class FoldDifferentialTests(unittest.TestCase):
         second_fold = first.fold_point_program(mutated)
         ordinal = seam_ordinals()[64]
         red, green, blue = region.ordinal_to_rgb(ordinal)
-        first_lift = first.evaluate_folded_point(first_fold, red, green, blue)
-        second_lift = first.evaluate_folded_point(second_fold, red, green, blue)
+        first_lift = first.evaluate_folded_point(first_fold, self.shared, red, green, blue)
+        second_lift = first.evaluate_folded_point(second_fold, mutated, red, green, blue)
         self.assertNotEqual(first_lift["jp"], second_lift["jp"])
 
     def test_folded_evaluation_is_deterministic(self) -> None:
@@ -249,9 +284,66 @@ class FoldDifferentialTests(unittest.TestCase):
         folded = context.fold_point_program(self.shared)
         ordinal = seam_ordinals()[100]
         red, green, blue = region.ordinal_to_rgb(ordinal)
-        first = context.evaluate_folded_point(folded, red, green, blue)
-        second = context.evaluate_folded_point(folded, red, green, blue)
+        first = context.evaluate_folded_point(folded, self.shared, red, green, blue)
+        second = context.evaluate_folded_point(folded, self.shared, red, green, blue)
         self.assertEqual(first, second)
+
+
+class FoldFailureAdmissionTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.job = fixture_job()
+        self.context = EvaluationContext(parsed_formula(self.job.formula_spec), 64, 64)
+        self.shared = region.context_inputs(self.job.definition)
+
+    def test_shared_fingerprint_tracks_the_job_configuration(self) -> None:
+        folded = self.context.fold_point_program(self.shared)
+        expected = shared_inputs_fingerprint_v1(
+            self.context.formula.program("point").inputs, self.shared
+        )
+        self.assertEqual(folded.shared_fingerprint, expected)
+        mutated = dict(self.shared)
+        mutated["background_ratio"] = intervalmath.exact(3)
+        foreign = self.context.fold_point_program(mutated)
+        self.assertNotEqual(folded.shared_fingerprint, foreign.shared_fingerprint)
+
+    def test_forged_shared_fingerprint_is_rejected(self) -> None:
+        folded = self.context.fold_point_program(self.shared)
+        forged = dataclasses.replace(folded, shared_fingerprint=b"\x00" * 32)
+        with self.assertRaises(SemanticFormulaError):
+            self.context.evaluate_folded_point(forged, self.shared, 0, 0, 0)
+
+    def test_foreign_shared_configuration_is_rejected_at_evaluation(self) -> None:
+        # A fold bound to one configuration must not evaluate under another,
+        # even when both share the same precision discipline.
+        folded = self.context.fold_point_program(self.shared)
+        mutated = dict(self.shared)
+        mutated["surround"] = 2
+        with self.assertRaises(SemanticFormulaError):
+            self.context.evaluate_folded_point(folded, mutated, 0, 0, 0)
+
+    def test_unresolvable_fold_admits_boundary_unproven_on_every_rung(self) -> None:
+        # A static node that cannot be resolved at fold time poisons every
+        # point lift of that rung: the driver must admit BOUNDARY_UNPROVEN
+        # and escalate the ladder, never crash or silently skip the fold.
+        comparator = make_comparator()
+        budget = next(
+            item
+            for item in self.job.policy.comparators
+            if item.kind == comparator.manifest.kind
+        )
+        poisoned = mock.patch.object(
+            EvaluationContext,
+            "fold_point_program",
+            side_effect=intervalmath.UnresolvedError("static fold unresolvable"),
+        )
+        with poisoned:
+            driver = SemanticReplay(self.job, comparator)
+            for ordinal in self.job.domain.iter_ordinals():
+                point = driver.next_point()
+                self.assertEqual(point.ordinal, ordinal)
+                self.assertEqual(point.outcome, region.BOUNDARY_UNPROVEN)
+                self.assertEqual(point.final_precision, budget.precision_ladder[-1])
+                self.assertEqual(point.consumed, 0)
 
 
 class ReplayDriverIntegrationTests(unittest.TestCase):
@@ -260,47 +352,24 @@ class ReplayDriverIntegrationTests(unittest.TestCase):
         formula = parsed_formula(job.formula_spec)
         reg = region.Region.from_definition(job.definition)
         shared = region.context_inputs(job.definition)
+        comparator = make_comparator()
         budget = next(
             item
             for item in job.policy.comparators
-            if item.kind == job.policy.comparators[0].kind
-        )
-
-        from region_proof_protocol import ComparatorKindV1, ComparatorManifestV2, ContentResolvedComparatorManifestV2
-        import hashlib
-
-        fields = (
-            "engine_release",
-            "upstream_source",
-            "arithmetic_input_set",
-            "wrapper_source",
-            "evaluator_source",
-            "build_identity",
-            "operation_allowlist",
-            "test_observation",
-            "legal_file_set",
-            "exclusions",
-        )
-        digests = {
-            field: hashlib.sha256(f"folding-{field}".encode()).digest()
-            for field in fields
-        }
-        # Admission re-hashes the resolved content against the declared
-        # digest, so each content value must be the digest's own preimage.
-        content_map = {digests[field]: f"folding-{field}".encode() for field in fields}
-        comparator = ContentResolvedComparatorManifestV2.admit(
-            ComparatorManifestV2(kind=ComparatorKindV1.ARB, **digests),
-            content_map.get,
+            if item.kind == comparator.manifest.kind
         )
 
         driver = SemanticReplay(job, comparator)
         reference_contexts = {}
+        # The reference loop mirrors the driver's grant accounting exactly:
+        # each point owns the ordinal-prefix slice of the global pregrant.
+        global_remaining = budget.global_pregrant
         for ordinal in job.domain.iter_ordinals():
             point = driver.next_point()
             self.assertEqual(point.ordinal, ordinal)
 
-            # Independent reference: the unfolded ladder loop.
-            grant = min(budget.per_point_work, 10**18)
+            grant = min(budget.per_point_work, global_remaining)
+            global_remaining -= grant
             remaining = grant
             consumed = 0
             final = None
@@ -317,6 +386,7 @@ class ReplayDriverIntegrationTests(unittest.TestCase):
             self.assertEqual(point.outcome, final.outcome, f"outcome at {ordinal}")
             self.assertEqual(point.final_precision, rung, f"precision at {ordinal}")
             self.assertEqual(point.consumed, consumed, f"consumption at {ordinal}")
+            self.assertEqual(point.point_grant, grant, f"grant at {ordinal}")
             self.assertEqual(point.exact_boundary, final.exact_boundary)
             self.assertEqual(point.exact_branch, final.exact_branch)
 
