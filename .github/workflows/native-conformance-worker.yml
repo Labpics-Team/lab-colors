@@ -93,6 +93,10 @@ jobs:
         run: |
           set -euo pipefail
           job="$GITHUB_JOB"
+          # Swift fail-closed требует существования TMPDIR ещё до первого
+          # вызова драйвера: каталог создаётся на хосте, контейнер видит его
+          # через bind-проброс runner.temp.
+          mkdir -p "$RUNNER_TEMP/tmp-$job"
           "${LABCOLORS_SWIFT_DOCKER:?}" run --rm \
             --user "$(id -u):$(id -g)" \
             --workdir /workspace \

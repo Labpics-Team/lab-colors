@@ -1818,9 +1818,11 @@ test("WASM runtime budget is one canonical self-contained exact contract", async
   assert.ok(wasmJob, "CI must contain a bounded wasm job");
   assert.match(
     wasmJob,
-    /runs-on: \{ group: labpics-ci-sandbox, labels: \[labpics-ci-gvisor-v1\] \}/u,
+    /runs-on: ubuntu-latest/u,
+    "the wasm job must run on an ephemeral GitHub-hosted runner",
   );
   assert.doesNotMatch(wasmJob, /runs-on: \[self-hosted, Linux, X64\]/u);
+  assert.doesNotMatch(wasmJob, /labpics-ci-sandbox/u);
   assert.ok(
     ci.includes(`  RUST_TOOLCHAIN: ${budget.toolchain.rust}`),
     "the live Rust toolchain must equal the budget declaration",
