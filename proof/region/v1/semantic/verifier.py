@@ -59,6 +59,8 @@ def verify_transcript(
         return _foreign_binding("run claim binds a foreign comparator")
     if run.transcript_identity != transcript.identity:
         return _foreign_binding("run claim binds a foreign transcript")
+    if transcript.point_count != job.domain.point_count:
+        return _foreign_binding("transcript point count drifts from the bound domain")
     # Binary, invocation and platform are declared execution coordinates.
     # Their causality belongs to the source-bound controller's receipt; the
     # semantic verifier binds the run through job, comparator and transcript

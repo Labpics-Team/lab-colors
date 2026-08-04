@@ -206,7 +206,6 @@ class RejectionShapeTests(unittest.TestCase):
             [
                 "accounting_replay_mismatch",
                 "decision_mismatch",
-                "diversity_violation",
                 "foreign_binding",
                 "replay_unresolved",
                 "resource_replay_mismatch",

@@ -25,7 +25,6 @@ DECISION_DIGEST_DOMAIN_V1 = b"labcolors.proof-region.resolved-decisions.v1\0"
 
 class SemanticVerificationReasonV1(StrEnum):
     FOREIGN_BINDING = "foreign_binding"
-    DIVERSITY_VIOLATION = "diversity_violation"
     DECISION_MISMATCH = "decision_mismatch"
     WITNESS_REPLAY_MISMATCH = "witness_replay_mismatch"
     WITNESS_CONTRADICTION = "witness_contradiction"

@@ -187,6 +187,8 @@ def _root3_bounds(value: Fraction, guard_bits: int) -> tuple[Fraction, Fraction]
 
 
 def root3(value: Interval, *, guard_bits: int, cap_bits: int) -> Interval:
+    if value.lo < 0:
+        raise UnresolvedError("root3 domain requires a nonnegative argument")
     if value.lo == value.hi == 0:
         return exact(0)
     lo_lo, _ = _root3_bounds(value.lo, guard_bits)
@@ -361,6 +363,11 @@ def _factorial(terms: int) -> int:
 
 
 def exp(value: Interval, *, guard_bits: int, cap_bits: int) -> Interval:
+    # V1 reduction keeps the branch count dyadic-bounded; a hostile binary64
+    # argument beyond this range is unresolved instead of exploding the
+    # 2^branch scale or the float branch estimate.
+    if absolute(value).hi > Fraction(1 << 12):
+        raise UnresolvedError("exp argument beyond the V1 reduction range")
     ln2 = ln2_enclosure(guard_bits)
     midpoint = (value.lo + value.hi) / 2
     # Integer reduction against the rational ln2 enclosure; the loop below
@@ -381,9 +388,13 @@ def exp(value: Interval, *, guard_bits: int, cap_bits: int) -> Interval:
     if value.hi - value.lo > 1:
         raise UnresolvedError("exp input too wide for one reduction branch")
     remainder = reduced(branch)
-    while remainder.lo < -1 or remainder.hi > 1:
+    for _ in range(8):
+        if remainder.lo >= -1 and remainder.hi <= 1:
+            break
         branch += 1 if remainder.hi > 1 else -1
         remainder = reduced(branch)
+    else:
+        raise UnresolvedError("exp reduction failed to converge")
     core = _exp_small(remainder, guard_bits)
     scale = Fraction(2) ** branch
     return outward(Interval(scale * core.lo, scale * core.hi), cap_bits)
@@ -589,7 +600,7 @@ def pow_nn(
     """V1 pow_nn: zero base with strictly positive exponent is exact zero."""
 
     if base.is_exact and base.lo == 0:
-        if power_value.hi <= 0:
+        if power_value.lo <= 0:
             raise UnresolvedError("pow_nn exponent must be strictly positive")
         return exact(0)
     if base.contains_zero():

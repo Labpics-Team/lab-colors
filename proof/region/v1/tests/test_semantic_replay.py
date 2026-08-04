@@ -23,6 +23,7 @@ from region_proof_protocol import (  # noqa: E402
     ReducedDomainManifestV1,
     ResourceLimitWitnessV1,
     RunClaimV1,
+    WitnessStoreV1,
 )
 
 from semantic import replay as semantic_replay  # noqa: E402
@@ -192,6 +193,30 @@ class HostileReplayTests(unittest.TestCase):
         self.assertNotEqual(foreign_job.identity, job.identity)
 
         result = verify_transcript(foreign_job, comparator, transcript, run)
+        self.assertIsInstance(result, SemanticVerificationRejectedV1)
+        self.assertEqual(result.reason, SemanticVerificationReasonV1.FOREIGN_BINDING)
+
+    def test_point_count_drift_is_rejected_before_replay(self) -> None:
+        job = fixture_job()
+        comparator = admit_manifest(ComparatorKindV1.ARB, 780)
+        # A transcript may be internally consistent yet claim more points
+        # than the bound domain; the verifier must reject it as a foreign
+        # binding instead of walking past the end of the domain ordinals.
+        drifted_count = job.domain.point_count + 4
+        transcript = DecisionTranscriptV1(
+            job.identity,
+            job.domain.identity,
+            comparator.identity,
+            drifted_count,
+            bytes([0x55] * (drifted_count // 4)),
+            (0, drifted_count, 0, 0),
+            0,
+            digest(812),
+            WitnessStoreV1.from_witnesses(()),
+        )
+        run = run_claim(job, comparator, transcript)
+
+        result = verify_transcript(job, comparator, transcript, run)
         self.assertIsInstance(result, SemanticVerificationRejectedV1)
         self.assertEqual(result.reason, SemanticVerificationReasonV1.FOREIGN_BINDING)
 
