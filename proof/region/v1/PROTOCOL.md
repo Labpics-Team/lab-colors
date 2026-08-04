@@ -663,13 +663,16 @@ u64be(encoded_length) || claim identity || Arb receipt identity ||
 MPFI receipt identity || первый semantic identity || второй semantic identity)`.
 
 Full-domain gate: `claim_spans_full_domain_v1` возвращает истину только когда
-`domain_point_count` claim равен `2^24` (OUTPUT_CARDINALITY_V1); неканонический
-claim возвращает typed rejection `foreign_input` вместо panic. Reduced-domain
-proof несёт `full_domain=False` и никогда не авторизует family mint;
-family mint дополнительно разрешает `domain_identity` и допускает отдельно
-exact full manifest: единственный range `[0, 2^24)` и point count `2^24`.
-Совпадение только point count или reduced-domain candidate этот gate не
-проходят.
+`domain_point_count` claim равен `2^24` (OUTPUT_CARDINALITY_V1) И его
+`domain_identity` совпадает с content identity exact full manifest —
+единственного range `[0, 2^24)` с point count `2^24`.
+`exact_full_domain_manifest_v1` выводится из канонической кодировки протокола
+и никогда не пинится отдельным hash; каноническая range-грамматика отвергает
+overlap и adjacency, поэтому полного покрытия достигает ровно один manifest.
+Неканонический claim возвращает typed rejection `foreign_input` вместо panic.
+Reduced-domain proof несёт `full_domain=False` и никогда не авторизует family
+mint. Совпадение только point count, только identity, чужая или мутированная
+identity или reduced-domain candidate этот gate не проходят.
 
 ## Semantic verification и `SemanticVerificationReceiptV1`
 

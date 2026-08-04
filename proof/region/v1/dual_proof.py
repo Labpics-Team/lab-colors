@@ -230,9 +230,18 @@ class DualProofReceiptV1:
 
 
 def _claim_spans_full_domain_v1(claim: protocol.DualComparisonClaimV1) -> bool:
-    """Total predicate for an already canonical claim."""
+    """Total predicate for an already canonical claim.
 
-    return claim.domain_point_count == protocol.OUTPUT_CARDINALITY_V1
+    The mint gate binds the exact full manifest's content identity: a raw
+    claim keeps its domain identity as an unverified coordinate, so a bare
+    `2^24` point count never authorizes a family mint on its own.
+    """
+
+    return (
+        claim.domain_point_count == protocol.OUTPUT_CARDINALITY_V1
+        and claim.domain_identity
+        == protocol.exact_full_domain_manifest_v1().identity
+    )
 
 
 def claim_spans_full_domain_v1(claim: object) -> bool | DualProofRejectedV1:

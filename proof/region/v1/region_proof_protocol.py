@@ -7,7 +7,7 @@ import hashlib
 from dataclasses import dataclass, field, fields
 from enum import IntEnum, StrEnum
 from fractions import Fraction
-from functools import cached_property
+from functools import cache, cached_property
 from itertools import pairwise
 from typing import Callable, Iterable, Iterator, NoReturn, TypeAlias
 
@@ -541,6 +541,22 @@ class ReducedDomainManifestV1:
                 return index + ordinal - start
             index += end - start
         return None
+
+
+@cache
+def exact_full_domain_manifest_v1() -> ReducedDomainManifestV1:
+    """The exact full manifest of the whole sRGB8 point space.
+
+    The canonical range grammar rejects overlap and adjacency, so exactly one
+    manifest covers all `2^24` points: the single range `[0, 2^24)`.  Its
+    content identity is the only domain identity the full-domain mint gate
+    admits; the value is derived from the canonical encoding, never pinned
+    as a standalone hash.
+    """
+
+    return ReducedDomainManifestV1(
+        ((0, OUTPUT_CARDINALITY_V1),), OUTPUT_CARDINALITY_V1
+    )
 
 
 class ComparatorKindV1(IntEnum):
