@@ -4,9 +4,10 @@ name: mutation worker
 # unviable и unattributed failure остаются видимыми данными, пока полный
 # baseline не обоснует отдельный явный ratchet.
 #
-# Неизменяемый worker для одноразовой gVisor-ячейки DE-02: расписание живёт в
-# тонком caller'е (mutation.yml), который закрепляет этот файл полным commit SHA
-# и не может изменить ни job graph, ни пины. Своих inputs у worker нет by design.
+# Неизменяемый worker для эфемерных GitHub-hosted раннеров (репо публичное):
+# расписание живёт в тонком caller'е (mutation.yml), который закрепляет этот
+# файл полным commit SHA и не может изменить ни job graph, ни пины. Своих
+# inputs у worker нет by design.
 
 on:
   workflow_call:
@@ -25,8 +26,8 @@ env:
 jobs:
   manifest:
     name: discover exact mutation population
-    runs-on: { group: labpics-ci-sandbox, labels: [labpics-ci-gvisor-v1] }
-    timeout-minutes: 30
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -95,14 +96,14 @@ jobs:
   shard:
     name: mutation shard ${{ matrix.shard }}/32
     needs: manifest
-    runs-on: { group: labpics-ci-sandbox, labels: [labpics-ci-gvisor-v1] }
-    timeout-minutes: 180
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
     strategy:
       fail-fast: false
-      # Fair-share: report-only работа берёт не более трёх слотов ячейки
-      # одновременно, оставляя ёмкость release- и infra-CI. Значение сохранено
-      # дословно — ячейка сериализует остаток в очередь, а не роняет его.
-      max-parallel: 3
+      # Fair-share: report-only работа берёт не более восьми слотов из двадцати
+      # одновременных jobs публичного репозитория, оставляя ёмкость release- и
+      # infra-CI. Остаток GitHub ставит в очередь, а не роняет.
+      max-parallel: 8
       matrix:
         shard:
           - 0
@@ -218,8 +219,8 @@ jobs:
     name: prove complete mutation population
     if: always()
     needs: [manifest, shard]
-    runs-on: { group: labpics-ci-sandbox, labels: [labpics-ci-gvisor-v1] }
-    timeout-minutes: 30
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

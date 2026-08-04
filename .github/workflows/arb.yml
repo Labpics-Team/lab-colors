@@ -18,10 +18,13 @@ concurrency:
 jobs:
   diagnostic-build-runtime:
     name: two offline builds and runtime tests (no artifact)
-    # Docker is root-equivalent, so this label is provisioned only on a fresh
-    # one-job VM whose runner group is bound to this exact workflow revision.
-    runs-on: [self-hosted, Linux, X64, labcolors-ephemeral]
-    timeout-minutes: 360
+    # Docker is root-equivalent, so the job runs on a fresh ephemeral
+    # GitHub-hosted VM that is discarded after this single run.
+    runs-on: ubuntu-latest
+    # 480 = запас сверху при переходе с DE-02 на GitHub-hosted раннеры (старый
+    # 360-минутный конверт поднят: history-replay на новом железе ещё невозможен);
+    # перекалибровать по фактическим прогонам.
+    timeout-minutes: 480
     env:
       PYTHONDONTWRITEBYTECODE: "1"
       PYTHONHASHSEED: "0"
