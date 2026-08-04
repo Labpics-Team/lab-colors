@@ -14,6 +14,7 @@ from __future__ import annotations
 import hashlib
 from dataclasses import dataclass
 from enum import StrEnum
+from typing import final
 
 import region_proof_protocol as protocol  # noqa: E402  (repo-local module)
 
@@ -125,6 +126,7 @@ def _canonical_lane_order_v1(first_receipt: object, second_receipt: object) -> b
     ) is mpfi_receipt.MpfiSourceBoundEvaluatorReceiptV1
 
 
+@final
 class DualProofReceiptV1:
     """The sealed join; minting belongs to `join_dual_proof_v1` alone."""
 
@@ -140,6 +142,11 @@ class DualProofReceiptV1:
         if kwargs.get("_token") is not _SEAL_TOKEN:
             raise TypeError("DualProofReceiptV1 is sealed by the dual proof join")
         return object.__new__(cls)
+
+    def __init_subclass__(cls, **kwargs: object) -> None:
+        # The seal belongs to exactly one type: a subclass would let foreign
+        # code mint receipts through an inherited constructor.
+        raise TypeError("DualProofReceiptV1 is final")
 
     def __init__(
         self,
@@ -179,7 +186,7 @@ class DualProofReceiptV1:
             ("mpfi_receipt", mpfi_receipt),
             ("first_semantic_receipt", first_semantic_receipt),
             ("second_semantic_receipt", second_semantic_receipt),
-            ("full_domain", claim_spans_full_domain_v1(claim)),
+            ("full_domain", _claim_spans_full_domain_v1(claim)),
             ("identity", hasher.digest()),
         ):
             object.__setattr__(self, name, value)
@@ -222,16 +229,26 @@ class DualProofReceiptV1:
         )
 
 
-def claim_spans_full_domain_v1(claim: object) -> bool:
+def _claim_spans_full_domain_v1(claim: protocol.DualComparisonClaimV1) -> bool:
+    """Total predicate for an already canonical claim."""
+
+    return claim.domain_point_count == protocol.OUTPUT_CARDINALITY_V1
+
+
+def claim_spans_full_domain_v1(claim: object) -> bool | DualProofRejectedV1:
     """Only an exact full-domain claim spans the complete V1 point space.
 
     A reduced-domain claim never authorizes a family mint: the join records
-    the shortfall instead of hiding it.
+    the shortfall instead of hiding it. A noncanonical claim returns the
+    typed rejection instead of panicking the public path.
     """
 
     if type(claim) is not protocol.DualComparisonClaimV1:
-        raise TypeError("full-domain span requires a dual comparison claim")
-    return claim.domain_point_count == protocol.OUTPUT_CARDINALITY_V1
+        return _reject(
+            DualProofRejectionReasonV1.FOREIGN_INPUT,
+            "full-domain span requires a dual comparison claim",
+        )
+    return _claim_spans_full_domain_v1(claim)
 
 
 def join_dual_proof_v1(*inputs: object) -> DualProofReceiptV1 | DualProofRejectedV1:

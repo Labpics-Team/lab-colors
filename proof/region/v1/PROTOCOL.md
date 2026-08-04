@@ -663,7 +663,8 @@ u64be(encoded_length) || claim identity || Arb receipt identity ||
 MPFI receipt identity || первый semantic identity || второй semantic identity)`.
 
 Full-domain gate: `claim_spans_full_domain_v1` возвращает истину только когда
-`domain_point_count` claim равен `2^24` (OUTPUT_CARDINALITY_V1). Reduced-domain
+`domain_point_count` claim равен `2^24` (OUTPUT_CARDINALITY_V1); неканонический
+claim возвращает typed rejection `foreign_input` вместо panic. Reduced-domain
 proof несёт `full_domain=False` и никогда не авторизует family mint;
 family mint дополнительно разрешает `domain_identity` и допускает отдельно
 exact full manifest: единственный range `[0, 2^24)` и point count `2^24`.

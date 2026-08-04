@@ -43,8 +43,8 @@ def _load_harness(name: str, path: Path) -> object:
     return module
 
 
+ARB_PIPELINE_HARNESS = _load_harness("test_pipeline", ARB_TESTS / "test_pipeline.py")
 ARB_HARNESS = _load_harness("dual_proof_arb_harness", ARB_TESTS / "test_receipt.py")
-ARB_PIPELINE_HARNESS = sys.modules["test_pipeline"]
 MPFI_HARNESS = _load_harness("dual_proof_mpfi_harness", MPFI_TESTS / "test_receipt.py")
 
 
@@ -384,12 +384,11 @@ class DualProofSealTests(unittest.TestCase):
         with self.assertRaises(TypeError):
             dual_proof.DualProofReceiptV1(digest(1), digest(2), _token=object())
 
-        class Forgery(dual_proof.DualProofReceiptV1):
-            def __new__(cls, *args: object, **kwargs: object) -> "Forgery":
-                return object.__new__(cls)
-
         with self.assertRaises(TypeError):
-            Forgery()
+
+            class Forgery(dual_proof.DualProofReceiptV1):
+                def __new__(cls, *args: object, **kwargs: object) -> "Forgery":
+                    return object.__new__(cls)
 
     def test_rejection_coordinates_are_validated(self) -> None:
         with self.assertRaises(TypeError):
@@ -418,6 +417,9 @@ class DualProofJoinTests(unittest.TestCase):
         self.assertEqual(proof.first_semantic_receipt, first)
         self.assertEqual(proof.second_semantic_receipt, second)
         self.assertTrue(proof.binds(candidate, arb, mpfi, first, second))
+        self.assertFalse(proof.binds(candidate, mpfi, arb, first, second))
+        self.assertFalse(proof.binds(candidate, arb, mpfi, second, first))
+        self.assertFalse(proof.binds(candidate.claim, arb, mpfi, first, second))
         self.assertEqual(len(proof.identity), 32)
 
         repeat = dual_proof.join_dual_proof_v1(candidate, arb, mpfi, first, second)
@@ -505,6 +507,12 @@ class DualProofJoinTests(unittest.TestCase):
             claim.decision_digest,
         )
         self.assertFalse(dual_proof.claim_spans_full_domain_v1(one_short))
+
+        foreign = dual_proof.claim_spans_full_domain_v1(candidate)
+        self.assertIs(type(foreign), dual_proof.DualProofRejectedV1)
+        self.assertEqual(
+            foreign.reason, dual_proof.DualProofRejectionReasonV1.FOREIGN_INPUT
+        )
 
 
 if __name__ == "__main__":
