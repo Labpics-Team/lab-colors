@@ -648,6 +648,73 @@ release не содержит. Family mint
 manifest: единственный range `[0, 2^24)` и point count `2^24`. Совпадение
 только point count или reduced-domain candidate этот gate не проходят.
 
+## Semantic verification и `SemanticVerificationReceiptV1`
+
+Structural dual comparison доказывает только побайтное согласие двух engine
+transcripts. Семантическую правильность каждого решения доказывает третий
+независимый semantic verifier — stdlib-only Python-пакет `semantic/` внутри
+`proof/region/v1`. Он импортирует только `region_proof_protocol` и стандартную
+библиотеку; любой импорт кода из `arb/` или `mpfi/`, включая evaluator paths,
+запрещён и блокируется контрактным тестом. Совместное наследование между
+верификатором и двигателями ограничено неизменяемыми координатами: committed
+SSA spec, версия протокола и объявленные wire-грамматики witness digest.
+
+Верификатор самостоятельно разбирает committed ASCII SSA spec и заново вычисляет
+решения региона: строгая интервальная арифметика на dyadic `Fraction` для
+знаковых заключений и точный `Fraction` replay для exact zero signal traces.
+Никакой hash-compare между engine transcripts, no-op допуск и saturate-all не
+являются semantic replay и не могут создать receipt.
+
+Engine-specific witness digest грамматики воспроизводятся верификатором:
+
+- exact zero signal trace (общая для обоих двигателей):
+  `SHA256("labcolors.proof-region.exact-zero-signal-trace.v1\0" ||
+  job_identity || u32be(ordinal) || u64be(exact_branch))`;
+- Arb boundary enclosure:
+  `SHA256("labcolors.arb-boundary-enclosure.v1\0" || job_identity ||
+  u32be(ordinal) || u32be(precision) || u8(formula_status) ||
+  u8(has_enclosure) || для каждого из lower, upper, exponent в fmpz hex:
+  u64be(len) || text)`;
+- MPFI boundary enclosure: тот же каркас с доменом
+  `"labcolors.mpfi-boundary-enclosure.v1\0"`, где каждое mpfr-значение
+  кодируется как `u64be(exponent) || u64be(len) || digits`, а `digits` —
+  вывод `mpfr_get_str(NULL, &exponent, 16, 0, value, MPFR_RNDN)`;
+- accounting digest: домен `labcolors.arb-evaluation-accounting.v1\0` или
+  `labcolors.mpfi-evaluation-accounting.v1\0`, затем job/domain/policy/comparator
+  identities и на точку `u32be(ordinal) || u32be(precision) ||
+  u64be(consumed) || u8(outcome)`.
+
+Правила допуска по решению:
+
+- `Inside` — верификатор доказывает строго отрицательное заключение на всех
+  пересекающих сегментах (или singleton-предикате); заявленный equality witness
+  обязан воспроизводиться digest-грамматикой, а точный `Fraction` replay
+  доказывает ноль предиката на заявленной ветке, которая обязана быть первой
+  точной;
+- `Outside` — верификатор доказывает строго положительное заключение на всех
+  пересекающих сегментах либо тон точки строго вне диапазона крайних knots;
+- `BoundaryUnproven` — заявленный enclosure digest воспроизводится грамматикой
+  связанного двигателя, верификатор не доказывает определённого противоречащего
+  исхода;
+- `ResourceLimitReached` — независимая симуляция grant-правила
+  `min(per_point_work, remaining_global)` с ordinal-prefix порядком совпадает
+  со свидетелем, и верификатор не доказывает определённого исхода.
+
+Два одинаковых неверных transcript не проходят независимый replay: верификатор
+вычисляет собственные заключения и никогда не сравнивает transcripts между
+собой. Каждая мутация любой транзитивной координаты (decision bits, witness
+store, accounting digest, bindings) запрещает допуск.
+
+`SemanticVerificationReceiptV1` — sealed тип: прямой конструктор без
+module-owned token поднимает `TypeError`. Receipt создаёт только
+`verify_transcript` после полного успешного semantic replay всех точек;
+receipt фиксирует coordinates job, comparator, run claim, transcript и
+canonical decision digest. Неудача возвращает typed
+`SemanticVerificationRejectedV1` с закрытой суммой причин; receipt при отказе не
+создаётся. Receipt является source-bound semantic evidence для одного engine
+transcript и не заменяет `DualProofReceiptV1`, который требует receipts для
+обоих evaluator paths.
+
 ## Ошибки допуска
 
 `ProtocolReasonV1` — закрытая сумма:
