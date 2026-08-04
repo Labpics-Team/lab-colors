@@ -1898,6 +1898,25 @@ class MutationTruthTest(unittest.TestCase):
             r"fddaf02db3d41844916167ef4d199d5ca14c6003d052a0b9ab579646a9c720ec$",
         )
         self.assertIn('mkdir -p "$RUNNER_TEMP/tmp-$job"', swift_job)
+        # rustup ставится workflow'ом НАПРЯМУЮ в изолированные homes job'а
+        # (dtolnay/rust-toolchain ставит в дефолтный HOME раннера, который
+        # контейнер не видит); бинарник закреплён sha256 официального
+        # дистрибутива, установка без модификации PATH раннера.
+        self.assertIn("name: install rustup into the isolated homes", swift_job)
+        self.assertIn(
+            "rustup/dist/x86_64-unknown-linux-gnu/rustup-init",
+            swift_job,
+        )
+        self.assertIn(
+            "4acc9acc76d5079515b46346a485974457b5a79893cfb01112423c89aeb5aa10"
+            "  /tmp/rustup-init",
+            swift_job,
+        )
+        self.assertIn("| sha256sum -c -", swift_job)
+        self.assertIn("--no-modify-path", swift_job)
+        self.assertIn("name: verify the pinned toolchain is live", swift_job)
+        self.assertNotIn("dtolnay/rust-toolchain", swift_job)
+        self.assertNotIn("sh.rustup.rs", swift_job)
         self.assertIn(
             '--mount "type=bind,src=$GITHUB_WORKSPACE,dst=/workspace,readonly"',
             swift_job,

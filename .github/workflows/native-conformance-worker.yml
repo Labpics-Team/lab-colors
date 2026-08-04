@@ -60,25 +60,40 @@ jobs:
 
       # Rust остаётся workflow-owned версией; mutable каталоги живут только под
       # runner.temp конкретной job. Swift приходит из закреплённого OCI-образа.
+      #
+      # rustup ставится НАПРЯМУЮ в изолированные RUSTUP_HOME/CARGO_HOME этой
+      # job: стандартный rust-toolchain action ставит в дефолтный HOME раннера,
+      # который контейнер не видит — там мультиколл-прокси не находили тулчейн.
+      # Версия rustup закреплена хешем скрипта, точный тулчейн fail-closed
+      # доказывает run-conformance.sh.
       - name: prepare isolated Rust toolchain
         run: |
           {
             echo "RUSTUP_HOME=$RUNNER_TEMP/rustup-$GITHUB_JOB"
             echo "CARGO_HOME=$RUNNER_TEMP/cargo-$GITHUB_JOB"
           } >> "$GITHUB_ENV"
-      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master @ 2026-03-27
-        with:
-          toolchain: ${{ env.RUST_TOOLCHAIN }}
-      - name: bind rustup proxies into the isolated CARGO_HOME
-        # rustup-прокси — мультиколл-бинарник: симлинки на него дают контейнеру
-        # rustc/cargo/rustdoc без зависимости от раскладки образа раннера.
+      - name: install rustup into the isolated homes
         run: |
           set -euo pipefail
-          mkdir -p "$CARGO_HOME/bin"
-          proxy_src="$(realpath "$(command -v rustup)")"
-          for tool in rustc cargo rustdoc rustup; do
-            ln -sf "$proxy_src" "$CARGO_HOME/bin/$tool"
-          done
+          # rustup-init закреплён sha256 официального дистрибутива (см.
+          # rustup-init.sha256 рядом с бинарником на static.rust-lang.org);
+          # точный тулчейн независимо fail-closed проверяет run-conformance.sh.
+          curl --proto '=https' --tlsv1.2 -fsSL \
+            https://static.rust-lang.org/rustup/dist/x86_64-unknown-linux-gnu/rustup-init \
+            -o /tmp/rustup-init
+          echo "4acc9acc76d5079515b46346a485974457b5a79893cfb01112423c89aeb5aa10  /tmp/rustup-init" \
+            | sha256sum -c -
+          chmod +x /tmp/rustup-init
+          /tmp/rustup-init -y --no-modify-path \
+            --default-toolchain "$RUST_TOOLCHAIN" --profile minimal
+        env:
+          RUSTUP_HOME: ${{ runner.temp }}/rustup-${{ github.job }}
+          CARGO_HOME: ${{ runner.temp }}/cargo-${{ github.job }}
+      - name: verify the pinned toolchain is live
+        run: |
+          set -euo pipefail
+          "$CARGO_HOME/bin/rustc" +"$RUST_TOOLCHAIN" --version
+          "$CARGO_HOME/bin/cargo" +"$RUST_TOOLCHAIN" --version
       - name: acquire the exact pinned Swift toolchain image
         run: |
           set -euo pipefail
