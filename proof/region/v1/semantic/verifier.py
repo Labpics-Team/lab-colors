@@ -45,7 +45,11 @@ def verify_transcript(
         or type(transcript) is not protocol.DecisionTranscriptV1
         or type(run) is not protocol.RunClaimV1
     ):
-        raise TypeError("semantic verification requires canonical V1 objects")
+        return _reject(
+            SemanticVerificationReasonV1.INVALID_INPUT,
+            0,
+            "semantic verification requires canonical V1 objects",
+        )
 
     if transcript.job_identity != job.identity:
         return _foreign_binding("transcript binds a foreign job")
@@ -68,18 +72,25 @@ def verify_transcript(
 
     try:
         driver = replay.SemanticReplay(job, comparator)
-    except (SemanticFormulaError, KeyError, StopIteration) as error:
+        accounting = replay.accounting_prefix_v1(
+            comparator.manifest.kind,
+            job,
+            comparator.identity,
+        )
+    except (
+        SemanticFormulaError,
+        KeyError,
+        StopIteration,
+        IndexError,
+        protocol.ProtocolErrorV1,
+        replay.ReplayIntegrityError,
+    ) as error:
         return _reject(
             SemanticVerificationReasonV1.REPLAY_UNRESOLVED,
             0,
             f"replay cannot be initialised: {error}",
         )
 
-    accounting = replay.accounting_prefix_v1(
-        comparator.manifest.kind,
-        job,
-        comparator.identity,
-    )
     decisions = transcript.iter_decisions()
     witnesses = transcript.iter_witnesses()
     next_witness = next(witnesses, None)
@@ -182,6 +193,12 @@ def verify_transcript(
             SemanticVerificationReasonV1.REPLAY_UNRESOLVED,
             0,
             f"semantic replay needs more guard precision: {error}",
+        )
+    except protocol.ProtocolErrorV1 as error:
+        return _reject(
+            SemanticVerificationReasonV1.REPLAY_UNRESOLVED,
+            0,
+            f"semantic replay met an invalid definition: {error}",
         )
     except replay.ReplayIntegrityError as error:
         return _reject(

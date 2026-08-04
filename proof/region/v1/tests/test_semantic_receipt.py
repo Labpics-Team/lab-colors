@@ -207,12 +207,31 @@ class RejectionShapeTests(unittest.TestCase):
                 "accounting_replay_mismatch",
                 "decision_mismatch",
                 "foreign_binding",
+                "invalid_input",
                 "replay_unresolved",
                 "resource_replay_mismatch",
                 "witness_contradiction",
                 "witness_replay_mismatch",
             ],
         )
+
+    def test_noncanonical_inputs_are_typed_invalid_input(self) -> None:
+        from semantic.verifier import verify_transcript
+
+        # The verifier rejects foreign object types through the same typed
+        # surface as every other failure; it never raises into the caller.
+        result = verify_transcript(None, None, None, None)
+        self.assertIsInstance(result, SemanticVerificationRejectedV1)
+        self.assertEqual(result.reason, SemanticVerificationReasonV1.INVALID_INPUT)
+        self.assertEqual(result.ordinal, 0)
+
+    def test_receipt_type_is_final(self) -> None:
+        # A subclass would inherit the sealed constructor; the type refuses
+        # derivation so no foreign code can mint receipts through a subtype.
+        with self.assertRaises(TypeError):
+
+            class Forgery(SemanticVerificationReceiptV1):
+                pass
 
 
 if __name__ == "__main__":

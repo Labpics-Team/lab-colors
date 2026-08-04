@@ -31,6 +31,7 @@ class SemanticVerificationReasonV1(StrEnum):
     RESOURCE_REPLAY_MISMATCH = "resource_replay_mismatch"
     ACCOUNTING_REPLAY_MISMATCH = "accounting_replay_mismatch"
     REPLAY_UNRESOLVED = "replay_unresolved"
+    INVALID_INPUT = "invalid_input"
 
 
 @dataclass(frozen=True)
@@ -79,6 +80,11 @@ class SemanticVerificationReceiptV1:
         if kwargs.pop("_token", None) is not _RECEIPT_TOKEN:
             raise TypeError("SemanticVerificationReceiptV1 is verifier-sealed")
         return object.__new__(cls)
+
+    def __init_subclass__(cls, **kwargs) -> None:
+        # The seal belongs to exactly one type: a subclass would let foreign
+        # code mint receipts through an inherited constructor.
+        raise TypeError("SemanticVerificationReceiptV1 is final")
 
     def __init__(
         self,

@@ -24,6 +24,8 @@ from region_proof_protocol import (  # noqa: E402
     ResourceLimitWitnessV1,
     RunClaimV1,
     WitnessStoreV1,
+    WitnessV1,
+    compare_dual_transcripts,
 )
 
 from semantic import replay as semantic_replay  # noqa: E402
@@ -31,6 +33,7 @@ from semantic.receipt import (  # noqa: E402
     SemanticVerificationReceiptV1,
     SemanticVerificationReasonV1,
     SemanticVerificationRejectedV1,
+    resolved_decision_digest_v1,
 )
 from semantic.verifier import verify_transcript  # noqa: E402
 
@@ -133,6 +136,9 @@ class HostileReplayTests(unittest.TestCase):
         self.assertIsInstance(second, SemanticVerificationRejectedV1)
         self.assertEqual(first.reason, second.reason)
         self.assertEqual(first.ordinal, second.ordinal)
+        # A wrong transcript must fail on replayed semantics, never
+        # masquerade as a binding failure.
+        self.assertNotEqual(first.reason, SemanticVerificationReasonV1.FOREIGN_BINDING)
         self.assertNotIsInstance(first, SemanticVerificationReceiptV1)
 
     def test_saturate_all_inside_transcript_fails_replay(self) -> None:
@@ -143,6 +149,10 @@ class HostileReplayTests(unittest.TestCase):
 
         result = verify_transcript(job, comparator, transcript, run)
         self.assertIsInstance(result, SemanticVerificationRejectedV1)
+        # Saturating every point to INSIDE fails at the first domain point,
+        # and it must fail as a decision mismatch, not a vacuous rejection.
+        self.assertEqual(result.reason, SemanticVerificationReasonV1.DECISION_MISMATCH)
+        self.assertEqual(result.ordinal, tuple(job.domain.iter_ordinals())[0])
 
     def test_foreign_comparator_binding_is_rejected_before_replay(self) -> None:
         job = fixture_job()
@@ -208,7 +218,7 @@ class HostileReplayTests(unittest.TestCase):
             job.domain.identity,
             comparator.identity,
             drifted_count,
-            bytes([0x55] * (drifted_count // 4)),
+            bytes([0x55] * ((drifted_count + 3) // 4)),
             (0, drifted_count, 0, 0),
             0,
             digest(812),
@@ -227,7 +237,7 @@ class HostileReplayTests(unittest.TestCase):
         comparator = admit_manifest(ComparatorKindV1.ARB, 900)
         driver = semantic_replay.SemanticReplay(job, comparator)
         decisions: list[DecisionV1] = []
-        witnesses: list = []
+        witnesses: list[WitnessV1] = []
         accounting = semantic_replay.accounting_prefix_v1(
             comparator.manifest.kind,
             job,
@@ -285,6 +295,73 @@ class HostileReplayTests(unittest.TestCase):
         self.assertEqual(result.run_claim_identity, run.identity)
         self.assertEqual(result.transcript_identity, transcript.identity)
         self.assertTrue(result.binds(job, comparator, run, transcript))
+
+        # Visible coverage: the transcript carries exactly the outcomes the
+        # replay produced, with one aligned witness per witness-requiring
+        # outcome and none for decisive ones.
+        self.assertEqual(len(decisions), job.domain.point_count)
+        occurred = {decision.value for decision in decisions}
+        self.assertTrue(occurred <= {member.value for member in DecisionV1})
+        boundary_count = decisions.count(DecisionV1.BOUNDARY_UNPROVEN)
+        boundary_witnesses = tuple(
+            witness for witness in witnesses if type(witness) is BoundaryUnprovenWitnessV1
+        )
+        self.assertEqual(len(boundary_witnesses), boundary_count)
+        self.assertEqual(
+            len({witness.ordinal for witness in witnesses}),
+            len(witnesses),
+            "witness ordinals must stay unique and point-aligned",
+        )
+
+    def test_decision_digest_matches_dual_admission_grammar(self) -> None:
+        # The semantic receipt's resolved-decision digest must agree with the
+        # digest that dual comparison computes for identical decision bits;
+        # any grammar drift would fork the two proof surfaces.
+        job = fixture_job()
+        arb = admit_manifest(ComparatorKindV1.ARB, 920)
+        mpfi = admit_manifest(ComparatorKindV1.MPFI, 940)
+        first = all_outside_transcript(job, arb)
+        second = all_outside_transcript(job, mpfi)
+        first_run = RunClaimV1.for_transcript(
+            job, arb, first, digest(831), digest(832), digest(833)
+        )
+        second_run = RunClaimV1.for_transcript(
+            job, mpfi, second, digest(834), digest(835), digest(836)
+        )
+
+        candidate = compare_dual_transcripts(
+            job, arb, first, first_run, mpfi, second, second_run
+        )
+        self.assertEqual(
+            candidate.claim.decision_digest,
+            resolved_decision_digest_v1(first.domain_identity, first.decision_bits),
+        )
+
+    def test_accounting_digest_grammar_matches_independent_packing(self) -> None:
+        # The accounting grammar is re-packed by hand from the declared wire
+        # layout; the replay helpers must reproduce exactly that digest.
+        job = fixture_job()
+        comparator = admit_manifest(ComparatorKindV1.ARB, 910)
+        records = ((5, 8, 3, 2), (9, 16, 0, 0), (70_000, 8, 12, 1))
+        hasher = hashlib.sha256()
+        hasher.update(b"labcolors.arb-evaluation-accounting.v1\0")
+        hasher.update(job.identity)
+        hasher.update(job.domain.identity)
+        hasher.update(job.policy.identity)
+        hasher.update(comparator.identity)
+        for ordinal, precision, consumed, outcome in records:
+            hasher.update(ordinal.to_bytes(4, "big"))
+            hasher.update(precision.to_bytes(4, "big"))
+            hasher.update(consumed.to_bytes(8, "big"))
+            hasher.update(bytes((outcome,)))
+        expected = hasher.digest()
+
+        accounting = semantic_replay.accounting_prefix_v1(
+            comparator.manifest.kind, job, comparator.identity
+        )
+        for record in records:
+            accounting.update(semantic_replay.account_record(*record))
+        self.assertEqual(accounting.digest(), expected)
 
 
 if __name__ == "__main__":

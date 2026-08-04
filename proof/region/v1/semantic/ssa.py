@@ -12,6 +12,7 @@ from __future__ import annotations
 import hashlib
 from dataclasses import dataclass
 from fractions import Fraction
+from functools import cached_property
 
 import region_proof_protocol as protocol
 
@@ -199,7 +200,15 @@ def _validate_node(node: SemanticNode, symbols: dict[str, str]) -> None:
     if node.operator == "lookup":
         valid = node.result == "real" and types == ("decode_table", "u8")
     elif node.operator == "eq":
-        valid = node.result == "bool" and len(types) == 2 and types[0] == types[1] != "decode_table"
+        # Equality over real values is undecidable on intervals; the parser
+        # admits discrete operands only, which matches the registered V1
+        # formula (it compares the surround enum exclusively).
+        valid = (
+            node.result == "bool"
+            and len(types) == 2
+            and types[0] == types[1]
+            and types[0] in ("u8", "surround_profile", "bool")
+        )
     elif node.operator == "select":
         valid = len(types) == 3 and types[0] == "bool" and types[1] == types[2] == node.result
     elif node.operator in unary:
@@ -364,11 +373,7 @@ class EvaluationContext:
     ) -> dict[str, object]:
         """Run one program; real values are intervals, u8/enum/bool are ints."""
 
-        environment: dict[str, object] = {}
-        for name, bits in self.formula.literals:
-            environment[name] = intervalmath.exact(binary64_to_fraction(bits))
-        for name, tag in self.formula.enums:
-            environment[name] = tag
+        environment: dict[str, object] = dict(self._literal_environment)
         for name, kind in program.inputs:
             if name not in inputs:
                 raise SemanticFormulaError(f"missing input {name}")
@@ -390,6 +395,18 @@ class EvaluationContext:
                 raise SemanticFormulaError(f"output {name} is not a real value")
             outputs[name] = value
         return outputs
+
+    @cached_property
+    def _literal_environment(self) -> dict[str, object]:
+        # Literal and enum bindings are pinned by the release digest; decoding
+        # them once instead of once per point (2^24+ evaluations per full
+        # domain) removes a quadratic-fraction hot path from the replay.
+        environment: dict[str, object] = {}
+        for name, bits in self.formula.literals:
+            environment[name] = intervalmath.exact(binary64_to_fraction(bits))
+        for name, tag in self.formula.enums:
+            environment[name] = tag
+        return environment
 
     def _evaluate_node(
         self,

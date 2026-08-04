@@ -262,6 +262,12 @@ def _dyadic(bits: bytes, artifact: str, field: str) -> Fraction:
     return Fraction(numerator << power, 1) if power >= 0 else Fraction(numerator, 1 << -power)
 
 
+def dyadic_field_v1(bits: bytes, artifact: str, field: str) -> Fraction:
+    """Public binary64 decode for committed definition fields."""
+
+    return _dyadic(bits, artifact, field)
+
+
 def encode_contextual_definition_fields_v1(fields_: tuple[bytes, ...]) -> bytes:
     return b"".join(_blob(value) for value in fields_)
 

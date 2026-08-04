@@ -24,6 +24,15 @@ ACCOUNTING_DOMAINS_V1 = {
 }
 
 
+class ReplayIntegrityError(RuntimeError):
+    """The independent replay contradicted its own accounting invariants."""
+
+    def __init__(self, ordinal: int, detail: str) -> None:
+        super().__init__(f"ordinal {ordinal}: {detail}")
+        self.ordinal = ordinal
+        self.detail = detail
+
+
 @dataclass(frozen=True)
 class PointReplay:
     ordinal: int
@@ -52,8 +61,11 @@ def accounting_prefix_v1(
     job: protocol.ProofJobV1,
     comparator_identity: bytes,
 ) -> hashlib.sha256:
+    domain = ACCOUNTING_DOMAINS_V1.get(kind)
+    if domain is None:
+        raise ReplayIntegrityError(0, f"no accounting domain for comparator kind {kind!r}")
     hasher = hashlib.sha256()
-    hasher.update(ACCOUNTING_DOMAINS_V1[kind])
+    hasher.update(domain)
     hasher.update(job.identity)
     hasher.update(job.domain.identity)
     hasher.update(job.policy.identity)
@@ -81,14 +93,18 @@ class SemanticReplay:
         budget = next(
             item for item in job.policy.comparators if item.kind == comparator.manifest.kind
         )
+        if not budget.precision_ladder:
+            raise ReplayIntegrityError(0, "comparator budget carries an empty precision ladder")
         self._job = job
         self._budget = budget
         self._formula = parse_formula(job.formula_spec)
         self._region = region.Region.from_definition(job.definition)
         self._shared_inputs = region.context_inputs(job.definition)
-        self._ordinals = tuple(job.domain.iter_ordinals())
+        # The domain ordinals are consumed sequentially, exactly like the
+        # engine loop; materialising up to 2^24 integers would only waste
+        # memory without changing the replay semantics.
+        self._ordinals = iter(job.domain.iter_ordinals())
         self._global_remaining = budget.global_pregrant
-        self._cursor = 0
 
     @property
     def budget(self) -> protocol.ComparatorBudgetV1:
@@ -97,8 +113,10 @@ class SemanticReplay:
     def next_point(self) -> PointReplay:
         """Replay one domain point exactly like the engine loop does."""
 
-        ordinal = self._ordinals[self._cursor]
-        self._cursor += 1
+        try:
+            ordinal = next(self._ordinals)
+        except StopIteration:
+            raise ReplayIntegrityError(0, "domain ordinal stream exhausted early") from None
         budget = self._budget
         point_grant = min(budget.per_point_work, self._global_remaining)
         point_remaining = point_grant
@@ -127,21 +145,12 @@ class SemanticReplay:
             if final.outcome != region.BOUNDARY_UNPROVEN:
                 break
         return PointReplay(
-            ordinal,
-            final.outcome,
-            final_precision,
-            point_consumed,
-            point_grant,
-            resource_scope,
-            final.exact_boundary,
-            final.exact_branch,
+            ordinal=ordinal,
+            outcome=final.outcome,
+            final_precision=final_precision,
+            consumed=point_consumed,
+            point_grant=point_grant,
+            resource_scope=resource_scope,
+            exact_boundary=final.exact_boundary,
+            exact_branch=final.exact_branch,
         )
-
-
-class ReplayIntegrityError(RuntimeError):
-    """The independent replay contradicted its own accounting invariants."""
-
-    def __init__(self, ordinal: int, detail: str):
-        super().__init__(f"ordinal {ordinal}: {detail}")
-        self.ordinal = ordinal
-        self.detail = detail

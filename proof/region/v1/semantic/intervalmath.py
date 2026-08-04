@@ -527,13 +527,16 @@ def _reduce_quadrant(
 
 
 def sin(value: Interval, *, guard_bits: int, cap_bits: int) -> Interval:
+    # V1 reduction keeps the quadrant sweep dyadic-bounded; a hostile binary64
+    # argument beyond this range is unresolved instead of exploding the sweep
+    # count in proportion to the argument magnitude.
+    if absolute(value).hi > Fraction(1 << 12):
+        raise UnresolvedError("sin argument beyond the V1 reduction range")
     pi = pi_enclosure(guard_bits)
     candidates = _reduce_quadrant(value, pi)
     lo = Fraction(1)
     hi = Fraction(-1)
     for branch, remainder in candidates:
-        if remainder.lo < -1 or remainder.hi > 1:
-            return outward(Interval(-1, 1), cap_bits)
         match branch % 4:
             case 0:
                 part = _sin_small(remainder, guard_bits)
@@ -551,13 +554,15 @@ def sin(value: Interval, *, guard_bits: int, cap_bits: int) -> Interval:
 
 
 def cos(value: Interval, *, guard_bits: int, cap_bits: int) -> Interval:
+    # Same dyadic sweep bound as sin: huge arguments stay unresolved instead
+    # of scaling the quadrant enumeration with the argument magnitude.
+    if absolute(value).hi > Fraction(1 << 12):
+        raise UnresolvedError("cos argument beyond the V1 reduction range")
     pi = pi_enclosure(guard_bits)
     candidates = _reduce_quadrant(value, pi)
     lo = Fraction(1)
     hi = Fraction(-1)
     for branch, remainder in candidates:
-        if remainder.lo < -1 or remainder.hi > 1:
-            return outward(Interval(-1, 1), cap_bits)
         match branch % 4:
             case 0:
                 part = _cos_small(remainder, guard_bits)

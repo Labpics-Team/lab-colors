@@ -18,7 +18,7 @@ from semantic.receipt import (  # noqa: E402
 )
 
 
-SEMANTIC_SOURCES = tuple(sorted((ROOT / "semantic").glob("*.py")))
+SEMANTIC_SOURCES = tuple(sorted((ROOT / "semantic").rglob("*.py")))
 FORBIDDEN_MODULE_ROOTS = ("arb", "mpfi", "build", "executor", "provenance")
 FORBIDDEN_PATH_HINTS = (
     re.compile(r"\barb[/\\]\w"),
@@ -32,9 +32,27 @@ def _imported_roots(tree: ast.AST) -> set[str]:
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             roots.update(alias.name.split(".")[0] for alias in node.names)
-        elif isinstance(node, ast.ImportFrom) and node.module:
-            roots.add(node.module.split(".")[0])
+        elif isinstance(node, ast.ImportFrom):
+            # Every component of a dotted module path can hide a forbidden
+            # root, and `from ... import executor` binds the module through
+            # its alias name — including bare relative imports with no module.
+            if node.module:
+                roots.update(node.module.split("."))
+            roots.update(alias.name.split(".")[0] for alias in node.names)
     return roots
+
+
+def _boundary_violations(source: str, name: str) -> list[str]:
+    violations: list[str] = []
+    roots = _imported_roots(ast.parse(source))
+    for root in FORBIDDEN_MODULE_ROOTS:
+        if root in roots:
+            violations.append(f"{name} imports forbidden module root {root}")
+    if "__import__" in source:
+        violations.append(f"{name} hides dynamic imports")
+    if "importlib" in roots or "import_module" in source:
+        violations.append(f"{name} reaches for dynamic import machinery")
+    return violations
 
 
 class DiversityBoundaryTests(unittest.TestCase):
@@ -49,19 +67,12 @@ class DiversityBoundaryTests(unittest.TestCase):
         # standard library; any Arb/MPFI/pipeline import destroys diversity.
         for path in SEMANTIC_SOURCES:
             source = path.read_text(encoding="utf-8")
-            tree = ast.parse(source)
-            roots = _imported_roots(tree)
-            for root in FORBIDDEN_MODULE_ROOTS:
-                self.assertNotIn(
-                    root,
-                    roots,
-                    f"{path.name} imports forbidden module root {root}",
-                )
-            self.assertNotIn("__import__", source, f"{path.name} hides dynamic imports")
+            self.assertEqual(_boundary_violations(source, path.name), [])
             if path.name in ("__init__.py", "intervalmath.py"):
                 # The facade only re-exports the verifier boundary; the
                 # interval kernel is pure mathematics with no wire surface.
                 continue
+            roots = _imported_roots(ast.parse(source))
             self.assertIn("region_proof_protocol", roots, f"{path.name} lost the protocol binding")
 
     def test_semantic_package_never_reads_evaluator_artifacts(self) -> None:
@@ -72,6 +83,32 @@ class DiversityBoundaryTests(unittest.TestCase):
                     pattern.search(source),
                     f"{path.name} references evaluator artifacts",
                 )
+
+
+class SyntheticBoundaryTests(unittest.TestCase):
+    """The checker must bite on hidden evaluator imports, not only obvious ones."""
+
+    HOSTILE_SOURCES = (
+        "import arb.evaluator",
+        "from mpfi import receipt",
+        "from .. import executor",
+        "from proof.region.v1 import executor",
+        "import provenance as alias",
+        "import importlib",
+        "module = __import__('build')",
+        "module = importlib.import_module('arb')",
+    )
+
+    def test_hidden_evaluator_imports_are_detected(self) -> None:
+        for source in self.HOSTILE_SOURCES:
+            self.assertTrue(
+                _boundary_violations(source, "synthetic.py"),
+                f"boundary checker missed {source!r}",
+            )
+
+    def test_canonical_imports_pass_the_checker(self) -> None:
+        source = "import region_proof_protocol\nfrom . import intervalmath\n"
+        self.assertEqual(_boundary_violations(source, "synthetic.py"), [])
 
 
 def digest(label: int) -> bytes:

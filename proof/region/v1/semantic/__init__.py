@@ -5,16 +5,16 @@ only the canonical protocol module and the standard library.  It never imports
 Arb or MPFI code and never compares engine transcripts against each other.
 """
 
-from semantic.receipt import (
-    SemanticVerificationReceiptV1,
+from .receipt import (
     SemanticVerificationReasonV1,
+    SemanticVerificationReceiptV1,
     SemanticVerificationRejectedV1,
 )
-from semantic.verifier import verify_transcript
+from .verifier import verify_transcript
 
 __all__ = [
-    "SemanticVerificationReceiptV1",
     "SemanticVerificationReasonV1",
+    "SemanticVerificationReceiptV1",
     "SemanticVerificationRejectedV1",
     "verify_transcript",
 ]

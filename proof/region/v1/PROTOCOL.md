@@ -711,12 +711,14 @@ replay:
 store, accounting digest, bindings) запрещает допуск.
 
 `SemanticVerificationReceiptV1` — sealed тип: прямой конструктор без
-module-owned token поднимает `TypeError`. Receipt создаёт только
+module-owned token поднимает `TypeError`, наследование типа запрещено
+(`final`). Receipt создаёт только
 `verify_transcript` после полного успешного semantic replay всех точек;
 receipt фиксирует coordinates job, comparator, run claim, transcript и
 canonical decision digest. Неудача возвращает typed
 `SemanticVerificationRejectedV1` с закрытой суммой причин; receipt при отказе не
-создаётся. Receipt является source-bound semantic evidence для одного engine
+создаётся. Неканонические входные объекты отклоняются как `invalid_input` до
+replay без поднятия исключений. Receipt является source-bound semantic evidence для одного engine
 transcript и не заменяет `DualProofReceiptV1`, который требует receipts для
 обоих evaluator paths.
 
@@ -732,8 +734,10 @@ point count дрейфует от bound domain, отклоняется там ж
 
 Доменные guard'ы операторов следуют объявленным грамматикам: `root3` и `log`
 неразрешимы на отрицательных и пересекающих ноль интервалах, `pow_nn` доказывает
-tочный ноль только при строго положительной экспоненте, а `exp` неразрешим за
-пределами V1 reduction range; каждый такой случай оставляет точку
+точный ноль только при строго положительной экспоненте, а `exp`, `sin` и `cos`
+неразрешимы за пределами V1 reduction range (модуль аргумента не выше `2^12`:
+quadrant-развёртка `sin`/`cos` ограничена dyadic числом ветвей); каждый такой
+случай оставляет точку
 `BoundaryUnproven` и никогда не выносит определённого заключения. `sign`
 разрешает только строго знаковые интервалы: пересекающий ноль аргумент уводит
 точку в `BoundaryUnproven`. Это сознательное ужесточение относительно

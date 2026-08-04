@@ -16,10 +16,12 @@ import region_proof_protocol as protocol
 from . import intervalmath
 from .ssa import EvaluationContext, SemanticFormulaError
 
-INSIDE = 0
-OUTSIDE = 1
-BOUNDARY_UNPROVEN = 2
-RESOURCE_LIMIT_REACHED = 3
+# Local outcome codes are the canonical protocol decision tags; binding them
+# to the enum makes any drift fail at module load instead of at replay time.
+INSIDE = int(protocol.DecisionV1.INSIDE)
+OUTSIDE = int(protocol.DecisionV1.OUTSIDE)
+BOUNDARY_UNPROVEN = int(protocol.DecisionV1.BOUNDARY_UNPROVEN)
+RESOURCE_LIMIT_REACHED = int(protocol.DecisionV1.RESOURCE_LIMIT_REACHED)
 
 
 @dataclass(frozen=True)
@@ -38,9 +40,9 @@ class Region:
     metric_bb: Fraction
 
     @classmethod
-    def from_definition(cls, definition: protocol.ContextualRegionDefinitionV1) -> "Region":
+    def from_definition(cls, definition: protocol.ContextualRegionDefinitionV1) -> Region:
         def dyadic(index: int) -> Fraction:
-            return protocol._dyadic(definition.fields[index], "semantic-region", "coordinate")
+            return protocol.dyadic_field_v1(definition.fields[index], "semantic-region", "coordinate")
 
         knots = tuple(
             Knot(
@@ -57,8 +59,8 @@ class Region:
 def context_inputs(definition: protocol.ContextualRegionDefinitionV1) -> dict[str, object]:
     """Exact real inputs shared by every point lift."""
 
-    adapting = protocol._dyadic(definition.fields[11], "semantic-region", "adapting_luminance")
-    ratio = protocol._dyadic(definition.fields[12], "semantic-region", "background_ratio")
+    adapting = protocol.dyadic_field_v1(definition.fields[11], "semantic-region", "adapting_luminance")
+    ratio = protocol.dyadic_field_v1(definition.fields[12], "semantic-region", "background_ratio")
     surround = definition.fields[13][0]
     return {
         "adapting_luminance": intervalmath.exact(adapting),
@@ -108,7 +110,7 @@ def _predicate_decision(
     output = {"singleton": "singleton_f", "segment": "segment_f"}[program_name]
     try:
         predicate = ssa.evaluate(ssa.formula.program(program_name), inputs)[output]
-    except intervalmath.UnresolvedError:
+    except (intervalmath.UnresolvedError, SemanticFormulaError):
         return False, False, False, False
     return (
         True,
@@ -161,6 +163,13 @@ def decide(
 ) -> DecisionResult:
     """Replay the public region decision entry point on rigorous intervals."""
 
+    if not region.knots:
+        raise protocol.ProtocolErrorV1(
+            "semantic-region",
+            0,
+            protocol.ProtocolReasonV1.INVALID_DEFINITION,
+            "region definition carries no knots",
+        )
     if precision < 2:
         return DecisionResult(BOUNDARY_UNPROVEN, 0, False, 0)
     if len(region.knots) == 1:
@@ -190,7 +199,7 @@ def decide(
         if intersection is None:
             continue
         any_segment = True
-        if consumed == grant:
+        if consumed >= grant:
             return DecisionResult(RESOURCE_LIMIT_REACHED, consumed, False, 0)
         inputs = {
             "segment_t": intersection,
@@ -246,7 +255,7 @@ def evaluate_rgb(
     inputs["b8"] = blue
     try:
         outputs = ssa.evaluate(ssa.formula.program("point"), inputs)
-    except (intervalmath.UnresolvedError, SemanticFormulaError):
+        point = (outputs["jp"], outputs["ap"], outputs["bp"])
+    except (intervalmath.UnresolvedError, SemanticFormulaError, KeyError):
         return DecisionResult(BOUNDARY_UNPROVEN, 0, False, 0)
-    point = (outputs["jp"], outputs["ap"], outputs["bp"])
     return decide(ssa, point, region, precision, grant)

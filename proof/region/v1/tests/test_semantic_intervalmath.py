@@ -152,6 +152,18 @@ class OperatorDomainContractTests(unittest.TestCase):
         with self.assertRaises(intervalmath.UnresolvedError):
             call("exp", huge)
 
+    def test_sin_cos_reject_arguments_beyond_reduction_range(self) -> None:
+        # A hostile binary64 argument must stay unresolved instead of blowing
+        # up the quadrant sweep in proportion to its magnitude.
+        huge = intervalmath.exact(Fraction(10) ** 400)
+        with self.assertRaises(intervalmath.UnresolvedError):
+            call("sin", huge)
+        with self.assertRaises(intervalmath.UnresolvedError):
+            call("cos", huge)
+        negative_huge = intervalmath.exact(Fraction(-(10) ** 400))
+        with self.assertRaises(intervalmath.UnresolvedError):
+            call("sin", negative_huge)
+
     def test_div_rejects_zero_divisor(self) -> None:
         with self.assertRaises(intervalmath.UnresolvedError):
             intervalmath.div(
@@ -166,6 +178,31 @@ class OperatorDomainContractTests(unittest.TestCase):
         positive = intervalmath.sign(intervalmath.exact(Fraction(3)))
         self.assertTrue(positive.is_exact)
         self.assertEqual(positive.lo, 1)
+
+    def test_ratio0_zero_over_zero_is_exact_zero(self) -> None:
+        result = intervalmath.ratio0(
+            intervalmath.exact(0), intervalmath.exact(0), cap_bits=CAP
+        )
+        self.assertTrue(result.is_exact)
+        self.assertEqual(result.lo, 0)
+
+    def test_ratio0_needs_a_strictly_positive_divisor(self) -> None:
+        with self.assertRaises(intervalmath.UnresolvedError):
+            intervalmath.ratio0(
+                intervalmath.exact(1), intervalmath.exact(0), cap_bits=CAP
+            )
+        with self.assertRaises(intervalmath.UnresolvedError):
+            intervalmath.ratio0(
+                intervalmath.exact(1),
+                intervalmath.Interval(Fraction(-1), Fraction(1)),
+                cap_bits=CAP,
+            )
+        half = intervalmath.ratio0(
+            intervalmath.exact(1), intervalmath.exact(2), cap_bits=CAP
+        )
+        # The dyadic grid keeps the exact quotient unrounded.
+        self.assertEqual(half.lo, Fraction(1, 2))
+        self.assertEqual(half.hi, Fraction(1, 2))
 
 
 if __name__ == "__main__":
