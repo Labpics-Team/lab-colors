@@ -32,6 +32,9 @@ pub(crate) enum SelectionReleaseErrorV1 {
     DuplicateCandidateBinding,
     /// Selection was asked to order an empty candidate set.
     EmptyCandidateSet,
+    /// A release length field cannot be encoded, so the identity grammar is
+    /// unrepresentable.
+    ReleaseShapeOverflow,
 }
 
 /// One opaque canonical candidate key.
@@ -77,6 +80,16 @@ pub(crate) struct AdmittedSelectionReleaseV1 {
     ranks: BTreeMap<Vec<u8>, usize>,
 }
 
+/// One u32 length field of the identity grammar.
+///
+/// The encoding is fail-closed: a length that does not fit u32 is a typed
+/// rejection, never a panic.
+fn length_field_v1(value: usize) -> Result<[u8; 4], SelectionReleaseErrorV1> {
+    Ok(u32::try_from(value)
+        .map_err(|_| SelectionReleaseErrorV1::ReleaseShapeOverflow)?
+        .to_be_bytes())
+}
+
 /// Admit the exact authored release into its sealed canonical form.
 ///
 /// Key order inside one tie group is not policy: groups are canonicalised by
@@ -93,11 +106,7 @@ pub(crate) fn admit_selection_release_v1(
     let mut hasher = sha256::Hasher::new();
     hasher.update(IDENTITY_DOMAIN_V1);
     hasher.update(&release.revision.to_be_bytes());
-    hasher.update(
-        &u32::try_from(release.rank_groups.len())
-            .unwrap()
-            .to_be_bytes(),
-    );
+    hasher.update(&length_field_v1(release.rank_groups.len())?);
     for (rank, group) in release.rank_groups.iter().enumerate() {
         if group.is_empty() {
             return Err(SelectionReleaseErrorV1::EmptyRankGroup);
@@ -107,7 +116,7 @@ pub(crate) fn admit_selection_release_v1(
             .map(|key| key.as_bytes().to_vec())
             .collect::<Vec<_>>();
         keys.sort();
-        hasher.update(&u32::try_from(keys.len()).unwrap().to_be_bytes());
+        hasher.update(&length_field_v1(keys.len())?);
         for key in keys {
             if key.is_empty() {
                 return Err(SelectionReleaseErrorV1::EmptyCandidateKey);
@@ -115,7 +124,7 @@ pub(crate) fn admit_selection_release_v1(
             if ranks.insert(key.clone(), rank).is_some() {
                 return Err(SelectionReleaseErrorV1::DuplicateCandidateKey);
             }
-            hasher.update(&u32::try_from(key.len()).unwrap().to_be_bytes());
+            hasher.update(&length_field_v1(key.len())?);
             hasher.update(&key);
         }
     }

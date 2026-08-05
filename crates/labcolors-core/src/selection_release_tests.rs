@@ -83,6 +83,20 @@ fn identity_is_content_addressed_and_revision_bound() {
 }
 
 #[test]
+fn identity_length_fields_separate_key_and_group_boundaries() {
+    let joined =
+        admit_selection_release_v1(release(1, &[&[b"ab"]])).expect("single joined key must admit");
+    let split = admit_selection_release_v1(release(1, &[&[b"a", b"b"]]))
+        .expect("split keys with the same joined bytes must admit");
+    assert_ne!(joined.identity(), split.identity());
+    let left_split = admit_selection_release_v1(release(1, &[&[b"ab", b"c"]]))
+        .expect("left key split must admit");
+    let right_split = admit_selection_release_v1(release(1, &[&[b"a", b"bc"]]))
+        .expect("right key split with the same joined bytes must admit");
+    assert_ne!(left_split.identity(), right_split.identity());
+}
+
+#[test]
 fn key_permutation_inside_a_tie_group_is_not_policy() {
     let canonical = admit_selection_release_v1(release(1, &[&[b"zeta", b"alpha"], &[b"beta"]]))
         .expect("authored release must admit");
