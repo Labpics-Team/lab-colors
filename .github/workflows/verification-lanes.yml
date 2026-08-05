@@ -6,6 +6,9 @@ on:
       evidence_run_id:
         description: run carrying the engine verification evidence (job bytes + comparator bundle)
         required: true
+      evidence_artifact:
+        description: exact engine artifact name inside the evidence run (verification-evidence-arb | verification-evidence-mpfi)
+        required: true
       window_start:
         description: verification lane window start ordinal
         required: true
@@ -41,6 +44,7 @@ jobs:
       PYTHONDONTWRITEBYTECODE: "1"
       PYTHONHASHSEED: "0"
       EVIDENCE_RUN_ID: ${{ inputs.evidence_run_id }}
+      EVIDENCE_ARTIFACT: ${{ inputs.evidence_artifact }}
       WINDOW_START: ${{ inputs.window_start }}
       WINDOW_POINTS: ${{ inputs.window_points }}
       SHARD_POINTS: ${{ inputs.shard_points }}
@@ -58,11 +62,18 @@ jobs:
           case "${EVIDENCE_RUN_ID}" in
             ''|*[!0-9]*) echo "evidence_run_id must be a positive integer" >&2; exit 64;;
           esac
-          mkdir -p evidence-in
+          # One evidence run carries one artifact per engine; a glob download
+          # plus a directory-order pick could silently bind the foreign
+          # engine's bundle, so the lane downloads exactly the bound artifact.
+          case "${EVIDENCE_ARTIFACT}" in
+            verification-evidence-arb|verification-evidence-mpfi) ;;
+            *) echo "evidence_artifact must be an allowlisted engine artifact" >&2; exit 64;;
+          esac
+          mkdir -p "evidence-in/${EVIDENCE_ARTIFACT}"
           gh run download "${EVIDENCE_RUN_ID}" \
             --repo '${{ github.repository }}' \
-            --pattern 'verification-evidence-*' \
-            --dir evidence-in
+            --name "${EVIDENCE_ARTIFACT}" \
+            --dir "evidence-in/${EVIDENCE_ARTIFACT}"
 
       - name: replay the verification window lane
         shell: bash
@@ -74,7 +85,7 @@ jobs:
               ''|*[!0-9]*) echo "${coordinate} must be a non-negative integer" >&2; exit 64;;
             esac
           done
-          evidence="$(find evidence-in -mindepth 1 -maxdepth 1 -type d | sort | head -n 1)"
+          evidence="evidence-in/${EVIDENCE_ARTIFACT}"
           test -f "${evidence}/job.bin"
           test -f "${evidence}/comparator-bundle/comparator-manifest-v2.bin"
           python3 proof/region/v1/corpus_lane.py \

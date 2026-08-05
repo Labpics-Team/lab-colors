@@ -29,6 +29,13 @@ import region_proof_protocol as protocol  # noqa: E402
 PLAN_SCHEMA_V1 = "corpus-dispatch-plan-v1"
 WORKFLOW_V1 = "full-domain-corpus.yml"
 VERIFICATION_WORKFLOW_V1 = "verification-lanes.yml"
+# One evidence run carries one artifact per engine; a lane that picked an
+# artifact by directory order would silently replay the foreign engine's
+# bundle, so dispatch binds the exact artifact name from this allowlist.
+EVIDENCE_ARTIFACTS_V1 = (
+    "verification-evidence-arb",
+    "verification-evidence-mpfi",
+)
 DEFAULT_LANE_WIDTH = 1 << 16
 DEFAULT_SHARD_WIDTH = corpus_lane.DEFAULT_SHARD_POINTS
 FULL_DOMAIN = protocol.OUTPUT_CARDINALITY_V1
@@ -132,6 +139,7 @@ def verification_dispatch_commands_v1(
     plan: tuple[tuple[int, int], ...] | corpus.ShardCorpusRejectedV1,
     shard_width: int,
     evidence_run_id: object,
+    evidence_artifact: object,
 ) -> tuple[tuple[str, ...], ...] | corpus.ShardCorpusRejectedV1:
     """One verification lane dispatch per plan window, bound to the evidence run.
 
@@ -139,6 +147,9 @@ def verification_dispatch_commands_v1(
     engine's own comparator, so every lane names the run that carries the
     engine verification evidence (job bytes and comparator bundle) as a
     dispatch coordinate; the evidence run id must be a positive integer.
+    One run carries one artifact per engine, so every lane must also name
+    the exact engine artifact it replays; foreign artifact names are typed
+    rejections before any dispatch exists.
     """
 
     if type(plan) is not tuple:
@@ -148,6 +159,14 @@ def verification_dispatch_commands_v1(
             corpus.ShardCorpusReasonV1.FOREIGN_INPUT,
             "verification dispatch must bind a positive evidence run id",
         )
+    if (
+        type(evidence_artifact) is not str
+        or evidence_artifact not in EVIDENCE_ARTIFACTS_V1
+    ):
+        return corpus._reject(
+            corpus.ShardCorpusReasonV1.FOREIGN_INPUT,
+            "verification dispatch must bind an allowlisted engine artifact",
+        )
     return tuple(
         (
             "gh",
@@ -156,6 +175,8 @@ def verification_dispatch_commands_v1(
             VERIFICATION_WORKFLOW_V1,
             "-f",
             f"evidence_run_id={evidence_run_id}",
+            "-f",
+            f"evidence_artifact={evidence_artifact}",
             "-f",
             f"window_start={start}",
             "-f",
@@ -177,6 +198,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--lane-width", type=int, default=DEFAULT_LANE_WIDTH)
     parser.add_argument("--shard-width", type=int, default=DEFAULT_SHARD_WIDTH)
     parser.add_argument("--evidence-run-id", type=int, default=None)
+    parser.add_argument("--evidence-artifact", type=str, default=None)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--out", type=Path, required=True)
     args = parser.parse_args(argv)
@@ -208,8 +230,17 @@ def main(argv: list[str] | None = None) -> int:
                 file=sys.stderr,
             )
             return 64
+        if args.evidence_artifact is None:
+            print(
+                "verification dispatch requires --evidence-artifact",
+                file=sys.stderr,
+            )
+            return 64
         commands = verification_dispatch_commands_v1(
-            plan, args.shard_width, args.evidence_run_id
+            plan,
+            args.shard_width,
+            args.evidence_run_id,
+            args.evidence_artifact,
         )
     else:
         commands = dispatch_commands_v1(plan, args.shard_width)
