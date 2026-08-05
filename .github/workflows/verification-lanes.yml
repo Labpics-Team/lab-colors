@@ -1,0 +1,93 @@
+name: Verification lane replay
+
+on:
+  workflow_dispatch:
+    inputs:
+      evidence_run_id:
+        description: run carrying the engine verification evidence (job bytes + comparator bundle)
+        required: true
+      window_start:
+        description: verification lane window start ordinal
+        required: true
+      window_points:
+        description: verification lane window width (packing-aligned multiple of shard_points)
+        required: true
+      shard_points:
+        description: shard window width (multiple of the packing alignment)
+        required: false
+        default: "16384"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: verification-lane-${{ github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  verification-lane:
+    name: replay one verification window under the engine comparator
+    # Dispatch-only: each lane replays one packing-aligned window of the
+    # verified transcript's domain through the sharded corpus runner under
+    # the engine's own comparator bundle, downloaded from the evidence run.
+    runs-on: ubuntu-latest
+    timeout-minutes: 480
+    permissions:
+      contents: read
+      # Required by `gh run download` when fetching the engine evidence from
+      # another run.
+      actions: read
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONHASHSEED: "0"
+      EVIDENCE_RUN_ID: ${{ inputs.evidence_run_id }}
+      WINDOW_START: ${{ inputs.window_start }}
+      WINDOW_POINTS: ${{ inputs.window_points }}
+      SHARD_POINTS: ${{ inputs.shard_points }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: download the engine verification evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "${EVIDENCE_RUN_ID}" in
+            ''|*[!0-9]*) echo "evidence_run_id must be a positive integer" >&2; exit 64;;
+          esac
+          mkdir -p evidence-in
+          gh run download "${EVIDENCE_RUN_ID}" \
+            --repo '${{ github.repository }}' \
+            --pattern 'verification-evidence-*' \
+            --dir evidence-in
+
+      - name: replay the verification window lane
+        shell: bash
+        run: |
+          set -euo pipefail
+          for coordinate in WINDOW_START WINDOW_POINTS SHARD_POINTS; do
+            value="${!coordinate}"
+            case "${value}" in
+              ''|*[!0-9]*) echo "${coordinate} must be a non-negative integer" >&2; exit 64;;
+            esac
+          done
+          evidence="$(find evidence-in -mindepth 1 -maxdepth 1 -type d | sort | head -n 1)"
+          test -f "${evidence}/job.bin"
+          test -f "${evidence}/comparator-bundle/comparator-manifest-v2.bin"
+          python3 proof/region/v1/corpus_lane.py \
+            --job "${evidence}/job.bin" \
+            --comparator-bundle "${evidence}/comparator-bundle" \
+            --window-start "${WINDOW_START}" \
+            --window-points "${WINDOW_POINTS}" \
+            --shard-points "${SHARD_POINTS}" \
+            --out lane-out
+
+      - name: upload the verification lane wire evidence
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
+        with:
+          name: verification-lane-${{ inputs.window_start }}-${{ inputs.window_points }}
+          path: lane-out/
+          if-no-files-found: error
