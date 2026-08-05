@@ -33,12 +33,18 @@ def _foreign_binding(detail: str) -> SemanticVerificationRejectedV1:
     return _reject(SemanticVerificationReasonV1.FOREIGN_BINDING, 0, detail)
 
 
-def verify_transcript(
+def bind_transcript_v1(
     job: protocol.ProofJobV1,
     comparator: protocol.ContentResolvedComparatorManifestV2,
     transcript: protocol.DecisionTranscriptV1,
     run: protocol.RunClaimV1,
-) -> VerificationResultV1:
+) -> SemanticVerificationRejectedV1 | None:
+    """The single binding surface between one replay and one transcript.
+
+    Returns the typed rejection when any input is foreign or any coordinate
+    drifts, and `None` once the four canonical objects bind one verification.
+    """
+
     if (
         type(job) is not protocol.ProofJobV1
         or type(comparator) is not protocol.ContentResolvedComparatorManifestV2
@@ -65,6 +71,19 @@ def verify_transcript(
         return _foreign_binding("run claim binds a foreign transcript")
     if transcript.point_count != job.domain.point_count:
         return _foreign_binding("transcript point count drifts from the bound domain")
+    return None
+
+
+def verify_transcript(
+    job: protocol.ProofJobV1,
+    comparator: protocol.ContentResolvedComparatorManifestV2,
+    transcript: protocol.DecisionTranscriptV1,
+    run: protocol.RunClaimV1,
+) -> VerificationResultV1:
+    binding = bind_transcript_v1(job, comparator, transcript, run)
+    if binding is not None:
+        return binding
+
     # Binary, invocation and platform are declared execution coordinates.
     # Their causality belongs to the source-bound controller's receipt; the
     # semantic verifier binds the run through job, comparator and transcript
