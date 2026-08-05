@@ -48,9 +48,9 @@ def lane_comparator_v1() -> protocol.ContentResolvedComparatorManifestV2:
 
 
 def write_lane_artifacts_v1(
-    lane: "corpus.WindowLaneArtifactV1",
-    job: "protocol.ProofJobV1",
-    comparator: "protocol.ContentResolvedComparatorManifestV2",
+    lane: corpus.WindowLaneArtifactV1,
+    job: protocol.ProofJobV1,
+    comparator: protocol.ContentResolvedComparatorManifestV2,
     shard_points: int,
     out: Path,
 ) -> dict:

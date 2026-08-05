@@ -152,7 +152,7 @@ class AssemblyApiTests(unittest.TestCase):
         self.assertIs(type(result), corpus.ShardCorpusRejectedV1)
         self.assertEqual(result.reason, corpus.ShardCorpusReasonV1.SHARD_ORDER)
 
-    def test_assembly_rejects_out_of_order_lanes(self) -> None:
+    def test_assembly_rejects_a_lane_set_that_skips_the_domain_prefix(self) -> None:
         job = _job_with_pregrant(tuple(range(128)), 0)
         comparator = _comparator()
         lanes = (
@@ -162,6 +162,16 @@ class AssemblyApiTests(unittest.TestCase):
         result = corpus_assembly.assemble_lanes_v1(job, comparator, lanes)
         self.assertIs(type(result), corpus.ShardCorpusRejectedV1)
         self.assertEqual(result.reason, corpus.ShardCorpusReasonV1.INCOMPLETE_COVER)
+
+    def test_assembly_rejects_a_lane_overrunning_its_domain_range(self) -> None:
+        ordinals = tuple(range(64)) + tuple(range(128, 192))
+        job = _job_with_pregrant(ordinals, 0)
+        comparator = _comparator()
+        self.assertEqual(job.domain.ranges, ((0, 64), (128, 192)))
+        lanes = (_admitted(_lane(job, comparator, 0, 128, 8)),)
+        result = corpus_assembly.assemble_lanes_v1(job, comparator, lanes)
+        self.assertIs(type(result), corpus.ShardCorpusRejectedV1)
+        self.assertEqual(result.reason, corpus.ShardCorpusReasonV1.SHARD_ORDER)
 
     def test_assembly_rejects_lanes_overrunning_the_domain(self) -> None:
         job = _job_with_pregrant(tuple(range(128)), 0)
@@ -204,7 +214,10 @@ class WireLoadTests(unittest.TestCase):
             self.assertIs(type(loaded), corpus_assembly.AdmittedLaneV1)
             self.assertEqual(loaded.window_start, 0)
             self.assertEqual(loaded.window_points, 64)
-            self.assertEqual(len(loaded.accounting_records), 64 * 17)
+            self.assertEqual(
+                len(loaded.accounting_records),
+                64 * corpus_assembly.RECORD_BYTES_V1,
+            )
             self.assertEqual(loaded.shards, _lane(job, comparator, 0, 64, 8).shards)
 
     def test_load_lane_rejects_a_foreign_job_identity(self) -> None:
@@ -260,11 +273,14 @@ class WireLoadTests(unittest.TestCase):
             out = _write_lane_dir(Path(tmp), "lane-a", job, comparator, 0, 64, 32)
             first = (out / "shard-00000.decision.bin").read_bytes()
             second = (out / "shard-00001.decision.bin").read_bytes()
-            if first != second:
-                (out / "shard-00000.decision.bin").write_bytes(second)
-                (out / "shard-00001.decision.bin").write_bytes(first)
-                result = corpus_assembly.load_lane_v1(out, job, comparator)
-                self.assertIs(type(result), corpus.ShardCorpusRejectedV1)
+            self.assertNotEqual(first, second)
+            (out / "shard-00000.decision.bin").write_bytes(second)
+            (out / "shard-00001.decision.bin").write_bytes(first)
+            result = corpus_assembly.load_lane_v1(out, job, comparator)
+            self.assertIs(type(result), corpus.ShardCorpusRejectedV1)
+            self.assertEqual(
+                result.reason, corpus.ShardCorpusReasonV1.FOREIGN_INPUT
+            )
 
 
 class AssemblyCliTests(unittest.TestCase):
@@ -281,24 +297,35 @@ class AssemblyCliTests(unittest.TestCase):
                 )
                 self.assertEqual(status, 64)
 
-    def test_assembly_cli_rejects_a_tampered_lane_with_exit_64(self) -> None:
+    def test_load_lane_rejects_a_foreign_comparator_binding(self) -> None:
         full_job = corpus.full_domain_job_v1(_base_job())
         comparator = corpus_lane.lane_comparator_v1()
         with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp) / "lanes"
             out_dir = _write_lane_dir(
-                root, "lane-a", full_job, comparator, 0, 64, 32
+                Path(tmp), "lane-a", full_job, comparator, 0, 64, 32
             )
             manifest = json.loads((out_dir / "lane-manifest.json").read_text())
             manifest["comparator_identity"] = "11" * 32
             (out_dir / "lane-manifest.json").write_bytes(
                 json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode()
             )
-            with tempfile.TemporaryDirectory() as out:
-                status = corpus_assembly.main(
-                    ["--lanes-root", str(root), "--out", out]
-                )
-                self.assertEqual(status, 64)
+            result = corpus_assembly.load_lane_v1(out_dir, full_job, comparator)
+            self.assertIs(type(result), corpus.ShardCorpusRejectedV1)
+            self.assertEqual(
+                result.reason, corpus.ShardCorpusReasonV1.FOREIGN_INPUT
+            )
+
+    def test_assembly_cli_rejects_a_missing_lanes_root_with_exit_64(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            status = corpus_assembly.main(
+                [
+                    "--lanes-root",
+                    str(Path(tmp) / "missing"),
+                    "--out",
+                    str(Path(tmp) / "out"),
+                ]
+            )
+            self.assertEqual(status, 64)
 
 
 if __name__ == "__main__":

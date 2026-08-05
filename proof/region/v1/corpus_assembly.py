@@ -31,7 +31,7 @@ import region_proof_protocol as protocol  # noqa: E402
 from semantic import replay as semantic_replay  # noqa: E402
 
 ASSEMBLY_SCHEMA_V1 = "corpus-assembly-v1"
-RECORD_BYTES_V1 = 17
+RECORD_BYTES_V1 = corpus_lane.RECORD_BYTES_V1
 
 
 @dataclass(frozen=True)
@@ -118,6 +118,19 @@ def load_lane_v1(
         return _reject(
             corpus.ShardCorpusReasonV1.FOREIGN_INPUT,
             f"lane manifest is missing or corrupt in {directory}",
+        )
+    if type(manifest) is not dict:
+        return _reject(
+            corpus.ShardCorpusReasonV1.FOREIGN_INPUT,
+            "lane manifest must be a JSON object",
+        )
+    manifest_counters = manifest.get("counters")
+    if type(manifest_counters) is not list or any(
+        type(value) is not int for value in manifest_counters
+    ):
+        return _reject(
+            corpus.ShardCorpusReasonV1.FOREIGN_INPUT,
+            "lane manifest counters must be a list of integers",
         )
     if manifest.get("schema") != corpus_lane.LANE_SCHEMA_V1:
         return _reject(
@@ -268,14 +281,17 @@ def load_lane_v1(
             corpus.ShardCorpusReasonV1.INCOMPLETE_COVER,
             "lane shards stop before the window end",
         )
-    if counters != list(manifest.get("counters")) or witness_count != manifest.get(
+    if counters != list(manifest_counters) or witness_count != manifest.get(
         "witness_count"
     ):
         return _reject(
             corpus.ShardCorpusReasonV1.FOREIGN_INPUT,
             "lane totals disagree with the shard fragments",
         )
-    return AdmittedLaneV1(window_start, window_points, tuple(shards), records)
+    try:
+        return AdmittedLaneV1(window_start, window_points, tuple(shards), records)
+    except TypeError as error:
+        return _reject(corpus.ShardCorpusReasonV1.FOREIGN_INPUT, str(error))
 
 
 def assemble_lanes_v1(
@@ -367,6 +383,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     comparator = corpus_lane.lane_comparator_v1()
 
+    if not args.lanes_root.is_dir():
+        print(
+            f"lanes root is not a directory: {args.lanes_root}", file=sys.stderr
+        )
+        return 64
+
     lane_dirs = sorted(
         path
         for path in args.lanes_root.iterdir()
@@ -400,7 +422,7 @@ def main(argv: list[str] | None = None) -> int:
         "accounting_digest": transcript.accounting_digest.hex(),
         "point_count": transcript.point_count,
         "counters": list(transcript.counters),
-        "witness_count": transcript.witness_store.equality_count,
+        "witness_count": transcript.witness_store.count,
         "lane_count": len(lanes),
         "lanes": [
             {"window_start": lane.window_start, "window_points": lane.window_points}

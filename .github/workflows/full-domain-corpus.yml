@@ -84,6 +84,7 @@ jobs:
     timeout-minutes: 120
     permissions:
       contents: read
+      # Required by `gh run download` when fetching lane artifacts from other runs.
       actions: read
     env:
       PYTHONDONTWRITEBYTECODE: "1"
