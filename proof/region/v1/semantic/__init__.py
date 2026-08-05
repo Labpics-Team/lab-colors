@@ -10,11 +10,12 @@ from .receipt import (
     SemanticVerificationReceiptV1,
     SemanticVerificationRejectedV1,
 )
-from .verifier import verify_transcript
+from .verifier import bind_transcript_v1, verify_transcript
 
 __all__ = [
     "SemanticVerificationReasonV1",
     "SemanticVerificationReceiptV1",
     "SemanticVerificationRejectedV1",
+    "bind_transcript_v1",
     "verify_transcript",
 ]
