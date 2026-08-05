@@ -114,6 +114,14 @@ class NativeSourceBoundFullDomainReceiptIntegrationTests(unittest.TestCase):
         self.assertEqual((out / "job.bin").read_bytes(), full_job.encode())
         loaded = corpus_lane.load_comparator_bundle_v1(out / "comparator-bundle")
         self.assertEqual(loaded.identity, result.comparator.manifest.identity)
+        self.assertEqual(
+            (out / "transcript.bin").read_bytes(), result.transcript.encode()
+        )
+        self.assertEqual(
+            (out / "run-claim.bin").read_bytes(), result.run_claim.encode()
+        )
+        claim = protocol.RunClaimV1.parse((out / "run-claim.bin").read_bytes())
+        self.assertEqual(claim.transcript_identity, result.transcript.identity)
 
 
 if __name__ == "__main__":
