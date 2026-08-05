@@ -11,6 +11,7 @@
 
 use std::collections::BTreeMap;
 
+use crate::program_session::{DeclaredJointSelectionV1, JointCandidateStateV1};
 use crate::sha256;
 
 const IDENTITY_DOMAIN_V1: &[u8] = b"labcolors.selection-release.v1\0";
@@ -183,4 +184,18 @@ impl AdmittedSelectionReleaseV1 {
             .map(|(_, _, payload)| payload.clone())
             .collect())
     }
+}
+
+/// Materialise the compiler-owned joint order from the sealed release (V5c-2).
+///
+/// The admitted release is the only authored selection authority: this
+/// function derives the complete declared joint order from the release ranks
+/// and the canonical key bytes alone, so binding order and declaration index
+/// never participate and no evaluator ranks or selects.
+pub(crate) fn materialise_joint_selection_v1(
+    release: &AdmittedSelectionReleaseV1,
+    bindings: &[(JointCandidateStateV1, SelectionCandidateKeyV1)],
+) -> Result<DeclaredJointSelectionV1, SelectionReleaseErrorV1> {
+    let states = release.select_order_v1(bindings)?;
+    Ok(DeclaredJointSelectionV1::new(states.into_vec()))
 }

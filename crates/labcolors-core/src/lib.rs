@@ -189,6 +189,9 @@ pub(crate) mod selection_release;
 mod selection_release_tests;
 
 #[cfg(test)]
+mod selection_release_materialisation_tests;
+
+#[cfg(test)]
 mod constraint_tests;
 
 #[cfg(test)]
