@@ -146,6 +146,14 @@ class LanedSemanticVerificationTests(unittest.TestCase):
         )
 
         good_lanes = lanes(self.job, self.comparator)
+
+        def hostile_cover(error_type: type[Exception]) -> object:
+            def _cover():
+                yield good_lanes[0]
+                raise error_type("hostile lane iterator")
+
+            return _cover()
+
         cases = (
             (object(), self.comparator, self.transcript, self.run_claim, good_lanes),
             (self.job, object(), self.transcript, self.run_claim, good_lanes),
@@ -153,6 +161,20 @@ class LanedSemanticVerificationTests(unittest.TestCase):
             (self.job, self.comparator, self.transcript, object(), good_lanes),
             (self.job, self.comparator, self.transcript, self.run_claim, ()),
             (self.job, self.comparator, self.transcript, self.run_claim, (object(),)),
+            (
+                self.job,
+                self.comparator,
+                self.transcript,
+                self.run_claim,
+                hostile_cover(ValueError),
+            ),
+            (
+                self.job,
+                self.comparator,
+                self.transcript,
+                self.run_claim,
+                hostile_cover(RuntimeError),
+            ),
         )
         for case in cases:
             result = verification_assembly.assemble_semantic_verification_v1(*case)

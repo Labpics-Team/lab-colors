@@ -57,7 +57,9 @@ def assemble_semantic_verification_v1(
         return binding
     try:
         lane_tuple = tuple(lanes)  # type: ignore[arg-type]
-    except TypeError:
+    except Exception:
+        # The lane cover is a hostile boundary: any iterator failure —
+        # not just a non-iterable — must land as the typed rejection.
         return _reject(
             SemanticVerificationReasonV1.INVALID_INPUT,
             "laned verification requires an iterable lane cover",
