@@ -161,7 +161,7 @@ class AssemblyApiTests(unittest.TestCase):
         )
         result = corpus_assembly.assemble_lanes_v1(job, comparator, lanes)
         self.assertIs(type(result), corpus.ShardCorpusRejectedV1)
-        self.assertEqual(result.reason, corpus.ShardCorpusReasonV1.SHARD_ORDER)
+        self.assertEqual(result.reason, corpus.ShardCorpusReasonV1.INCOMPLETE_COVER)
 
     def test_assembly_rejects_lanes_overrunning_the_domain(self) -> None:
         job = _job_with_pregrant(tuple(range(128)), 0)
