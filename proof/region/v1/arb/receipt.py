@@ -1024,6 +1024,10 @@ class SourceBoundEvaluatorReceiptV1:
         return self.evidence.build.comparator
 
     @property
+    def job(self) -> protocol.ProofJobV1:
+        return self.evidence.request.job
+
+    @property
     def transcript(self) -> protocol.DecisionTranscriptV1:
         return self.evidence.transcript
 
