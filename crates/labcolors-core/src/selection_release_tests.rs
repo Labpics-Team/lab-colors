@@ -193,3 +193,64 @@ fn bijective_payload_relabeling_preserves_the_order_structure() {
         .collect::<Vec<_>>();
     assert_eq!(relabeled.as_ref(), expected.as_slice());
 }
+
+fn exhaustive_select<C: Copy>(
+    _groups: &[&[&[u8]]],
+    _candidates: &[(C, SelectionCandidateKeyV1)],
+) -> Box<[C]> {
+    unimplemented!("the exhaustive selection oracle arrives with the GREEN commit")
+}
+
+#[test]
+fn exhaustive_oracle_agrees_with_production_materialisation() {
+    let groups: &[&[&[u8]]] = &[&[b"zz", b"aa"], &[b"mm"], &[b"bb", b"cc"]];
+    let admitted = admit_selection_release_v1(release(1, groups)).expect("authored release must admit");
+    let candidates = [
+        (5u32, key(b"cc")),
+        (4, key(b"mm")),
+        (3, key(b"aa")),
+        (2, key(b"bb")),
+        (1, key(b"zz")),
+    ];
+    let production = admitted.select_order_v1(&candidates).unwrap();
+    assert_eq!(production.as_ref(), exhaustive_select(groups, &candidates).as_ref());
+}
+
+#[test]
+fn exhaustive_oracle_matches_production_over_every_binding_permutation() {
+    let groups: &[&[&[u8]]] = &[&[b"alpha", b"zeta"], &[b"beta"]];
+    let admitted = admit_selection_release_v1(release(1, groups)).expect("authored release must admit");
+    let base = [(0u32, key(b"alpha")), (1, key(b"zeta")), (2, key(b"beta"))];
+    let permutation_table: &[&[usize]] = &[
+        &[0, 1, 2],
+        &[0, 2, 1],
+        &[1, 0, 2],
+        &[1, 2, 0],
+        &[2, 0, 1],
+        &[2, 1, 0],
+    ];
+    for permutation in permutation_table {
+        let permuted = permutation.iter().map(|index| base[*index].clone()).collect::<Vec<_>>();
+        let production = admitted.select_order_v1(&permuted).unwrap();
+        assert_eq!(
+            production.as_ref(),
+            exhaustive_select(groups, &permuted).as_ref(),
+            "oracle and production must agree under binding permutation {permutation:?}"
+        );
+        assert_eq!(production.as_ref(), &[0u32, 1, 2]);
+    }
+}
+
+#[test]
+fn exhaustive_oracle_is_not_vacuous() {
+    let groups: &[&[&[u8]]] = &[&[b"aa", b"zz"], &[b"mm"]];
+    let candidates = [(1u32, key(b"zz")), (2, key(b"aa")), (3, key(b"mm"))];
+    // the declaration order of the candidates is not the authored order
+    assert_ne!(exhaustive_select(groups, &candidates).as_ref(), [1u32, 2, 3]);
+    // the tie inside the authored group breaks on key bytes, never on payload
+    // or declaration position
+    assert_eq!(exhaustive_select(groups, &candidates).as_ref(), [2u32, 1, 3]);
+    // a release with a different policy produces a different exhaustive order
+    let reversed: &[&[&[u8]]] = &[&[b"mm"], &[b"aa", b"zz"]];
+    assert_eq!(exhaustive_select(reversed, &candidates).as_ref(), [3u32, 2, 1]);
+}
