@@ -1,0 +1,299 @@
+#!/usr/bin/env python3
+"""Hostile contract for the sharded corpus runner (V5b2d-1b).
+
+The shard stream must reassemble into the exact transcript a monolithic
+replay packs, byte for byte, and nothing but a contiguous, packing-aligned,
+in-order cover of the declared domain may assemble.  The full-domain job
+derivation and its mint-gate coordinates are pinned here without running the
+2^24 replay, which stays a long-running corpus lane.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import importlib.util
+import sys
+import unittest
+from functools import cache
+from pathlib import Path
+
+PROOF = Path(__file__).resolve().parents[1]
+ARB_TESTS = PROOF / "arb" / "tests"
+MPFI_TESTS = PROOF / "mpfi" / "tests"
+sys.path[:0] = [str(PROOF), str(ARB_TESTS), str(MPFI_TESTS)]
+
+import corpus  # noqa: E402
+import region_proof_protocol as protocol  # noqa: E402
+
+from semantic import replay as semantic_replay  # noqa: E402
+
+
+def _load_harness(name: str, path: Path) -> object:
+    spec = importlib.util.spec_from_file_location(name, path)
+    if spec is None or spec.loader is None:
+        raise AssertionError(f"unreachable harness {path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+ARB_PIPELINE_HARNESS = _load_harness(
+    "corpus_arb_pipeline_harness", ARB_TESTS / "test_pipeline.py"
+)
+
+
+def digest(label: int) -> bytes:
+    return hashlib.sha256(f"corpus-shard-test-{label}".encode("ascii")).digest()
+
+
+@cache
+def _base_job() -> protocol.ProofJobV1:
+    return ARB_PIPELINE_HARNESS._job()
+
+
+@cache
+def _comparator() -> protocol.ContentResolvedComparatorManifestV2:
+    contents = tuple(
+        f"corpus-shard-manifest-{index}".encode("ascii") for index in range(10)
+    )
+    return protocol.ContentResolvedComparatorManifestV2.admit(
+        protocol.ComparatorManifestV2(
+            protocol.ComparatorKindV1.ARB,
+            *(hashlib.sha256(content).digest() for content in contents),
+        ),
+        {
+            hashlib.sha256(content).digest(): content for content in contents
+        }.get,
+    )
+
+
+def _job_over_ordinals(ordinals: tuple[int, ...]) -> protocol.ProofJobV1:
+    base = _base_job()
+    return protocol.ProofJobV1(
+        base.definition,
+        base.formula_spec,
+        protocol.ReducedDomainManifestV1.from_ordinals(ordinals),
+        base.policy,
+    )
+
+
+def monolithic_transcript(
+    job: protocol.ProofJobV1,
+    comparator: protocol.ContentResolvedComparatorManifestV2,
+) -> protocol.DecisionTranscriptV1:
+    """Honest monolithic pass using the corpus witness grammar."""
+
+    driver = semantic_replay.SemanticReplay(job, comparator)
+    accounting = semantic_replay.accounting_prefix_v1(
+        comparator.manifest.kind, job, comparator.identity
+    )
+    decisions: list[protocol.DecisionV1] = []
+    witnesses: list[protocol.WitnessV1] = []
+    for _ in range(job.domain.point_count):
+        point = driver.next_point()
+        decision = protocol.DecisionV1(point.outcome)
+        decisions.append(decision)
+        if decision == protocol.DecisionV1.INSIDE and point.exact_boundary:
+            witnesses.append(
+                protocol.ExactZeroSignalTraceV1(
+                    point.ordinal,
+                    semantic_replay.exact_trace_digest_v1(
+                        job.identity, point.ordinal, point.exact_branch
+                    ),
+                )
+            )
+        elif decision == protocol.DecisionV1.BOUNDARY_UNPROVEN:
+            witnesses.append(
+                protocol.BoundaryUnprovenWitnessV1(
+                    point.ordinal,
+                    corpus.boundary_enclosure_digest_v1(
+                        job.identity, point.ordinal, point.exact_branch
+                    ),
+                )
+            )
+        elif decision == protocol.DecisionV1.RESOURCE_LIMIT_REACHED:
+            witnesses.append(
+                protocol.ResourceLimitWitnessV1(
+                    point.ordinal,
+                    point.resource_scope,
+                    point.point_grant,
+                    point.consumed,
+                )
+            )
+        accounting.update(
+            semantic_replay.account_record(
+                point.ordinal,
+                point.final_precision,
+                point.consumed,
+                point.outcome,
+            )
+        )
+    return protocol.DecisionTranscriptV1.from_decisions(
+        job, comparator, decisions, witnesses, accounting.digest()
+    )
+
+
+def sharded_transcript(
+    job: protocol.ProofJobV1,
+    comparator: protocol.ContentResolvedComparatorManifestV2,
+    shard_points: int,
+) -> object:
+    plan = corpus.shard_plan_v1(job.domain, shard_points)
+    if type(plan) is not tuple:
+        raise AssertionError(f"shard plan rejected: {plan!r}")
+    runner = corpus.ShardCorpusRunnerV1(job, comparator)
+    shards = tuple(runner.run_shard(start, end) for start, end in plan)
+    return corpus.assemble_transcript_from_shards_v1(
+        job, comparator, shards, runner.accounting_digest
+    )
+
+
+class ShardPlanTests(unittest.TestCase):
+    def test_plan_covers_the_domain_with_aligned_windows(self) -> None:
+        domain = _job_over_ordinals(tuple(range(32))).domain
+        plan = corpus.shard_plan_v1(domain, 8)
+        self.assertIs(type(plan), tuple)
+        self.assertEqual(plan, ((0, 8), (8, 16), (16, 24), (24, 32)))
+        full = corpus.shard_plan_v1(
+            protocol.exact_full_domain_manifest_v1(), 1 << 16
+        )
+        self.assertIs(type(full), tuple)
+        self.assertEqual(len(full), 1 << 8)
+        self.assertEqual(full[0], (0, 1 << 16))
+        self.assertEqual(full[-1], (protocol.OUTPUT_CARDINALITY_V1 - (1 << 16), protocol.OUTPUT_CARDINALITY_V1))
+
+    def test_unaligned_shard_width_is_rejected(self) -> None:
+        domain = _base_job().domain
+        for width in (0, 3, 5, -8):
+            result = corpus.shard_plan_v1(domain, width)
+            self.assertIs(type(result), corpus.ShardCorpusRejectedV1, width)
+            self.assertEqual(result.reason, corpus.ShardCorpusReasonV1.FOREIGN_INPUT)
+
+    def test_foreign_domain_is_rejected(self) -> None:
+        result = corpus.shard_plan_v1(_base_job(), 8)
+        self.assertIs(type(result), corpus.ShardCorpusRejectedV1)
+        self.assertEqual(result.reason, corpus.ShardCorpusReasonV1.FOREIGN_INPUT)
+
+
+class ShardAssemblyByteIdentityTests(unittest.TestCase):
+    def test_sharded_transcript_is_byte_identical_to_monolithic(self) -> None:
+        ordinals = tuple(range(512))
+        job = _job_over_ordinals(ordinals)
+        comparator = _comparator()
+        monolithic = monolithic_transcript(job, comparator)
+        for shard_points in (4, 8, 64, len(ordinals)):
+            assembled = sharded_transcript(job, comparator, shard_points)
+            self.assertIs(
+                type(assembled), protocol.DecisionTranscriptV1, shard_points
+            )
+            self.assertEqual(assembled.encode(), monolithic.encode(), shard_points)
+            self.assertEqual(assembled.identity, monolithic.identity, shard_points)
+
+    def test_shard_window_breaking_replay_order_is_refused(self) -> None:
+        job = _job_over_ordinals(tuple(range(128)))
+        runner = corpus.ShardCorpusRunnerV1(job, _comparator())
+        runner.run_shard(0, 8)
+        with self.assertRaises(ValueError):
+            runner.run_shard(12, 16)
+
+    def test_assembly_rejects_out_of_order_shards(self) -> None:
+        job = _job_over_ordinals(tuple(range(256)))
+        comparator = _comparator()
+        runner = corpus.ShardCorpusRunnerV1(job, comparator)
+        first = runner.run_shard(0, 8)
+        second = runner.run_shard(8, 16)
+        result = corpus.assemble_transcript_from_shards_v1(
+            job, comparator, (second, first), runner.accounting_digest
+        )
+        self.assertIs(type(result), corpus.ShardCorpusRejectedV1)
+        self.assertIn(
+            result.reason,
+            (
+                corpus.ShardCorpusReasonV1.SHARD_ORDER,
+                corpus.ShardCorpusReasonV1.INCOMPLETE_COVER,
+            ),
+        )
+
+    def test_assembly_rejects_a_gap_in_the_cover(self) -> None:
+        job = _job_over_ordinals(tuple(range(256)))
+        comparator = _comparator()
+        runner = corpus.ShardCorpusRunnerV1(job, comparator)
+        first = runner.run_shard(0, 8)
+        runner.run_shard(8, 12)
+        third = runner.run_shard(12, 16)
+        result = corpus.assemble_transcript_from_shards_v1(
+            job, comparator, (first, third), runner.accounting_digest
+        )
+        self.assertIs(type(result), corpus.ShardCorpusRejectedV1)
+        self.assertEqual(result.reason, corpus.ShardCorpusReasonV1.INCOMPLETE_COVER)
+
+    def test_assembly_rejects_a_truncated_cover(self) -> None:
+        job = _job_over_ordinals(tuple(range(256)))
+        comparator = _comparator()
+        runner = corpus.ShardCorpusRunnerV1(job, comparator)
+        first = runner.run_shard(0, 8)
+        result = corpus.assemble_transcript_from_shards_v1(
+            job, comparator, (first,), runner.accounting_digest
+        )
+        self.assertIs(type(result), corpus.ShardCorpusRejectedV1)
+        self.assertEqual(result.reason, corpus.ShardCorpusReasonV1.INCOMPLETE_COVER)
+
+    def test_assembly_rejects_foreign_shards(self) -> None:
+        job = _job_over_ordinals(tuple(range(64)))
+        comparator = _comparator()
+        runner = corpus.ShardCorpusRunnerV1(job, comparator)
+        result = corpus.assemble_transcript_from_shards_v1(
+            job, comparator, (digest(1),), runner.accounting_digest
+        )
+        self.assertIs(type(result), corpus.ShardCorpusRejectedV1)
+        self.assertEqual(result.reason, corpus.ShardCorpusReasonV1.FOREIGN_INPUT)
+
+
+class FullDomainJobTests(unittest.TestCase):
+    def test_full_domain_job_binds_the_exact_full_manifest(self) -> None:
+        job = corpus.full_domain_job_v1(_base_job())
+        manifest = job.domain
+        self.assertEqual(manifest.ranges, ((0, protocol.OUTPUT_CARDINALITY_V1),))
+        self.assertEqual(manifest.point_count, protocol.OUTPUT_CARDINALITY_V1)
+        self.assertEqual(
+            manifest.identity, protocol.exact_full_domain_manifest_v1().identity
+        )
+        self.assertEqual(
+            job.definition.definition_digest,
+            _base_job().definition.definition_digest,
+        )
+        self.assertEqual(job.policy.identity, _base_job().policy.identity)
+
+    def test_full_domain_job_rejects_foreign_input(self) -> None:
+        with self.assertRaises(TypeError):
+            corpus.full_domain_job_v1(_base_job().domain)
+
+    def test_full_domain_claim_coordinates_admit_the_mint_gate(self) -> None:
+        import dual_proof
+
+        job = corpus.full_domain_job_v1(_base_job())
+        claim = protocol.DualComparisonClaimV1(
+            job.identity,
+            job.definition.definition_digest,
+            job.domain.identity,
+            job.policy.identity,
+            job.domain.point_count,
+            (digest(1), digest(2)),
+            (digest(3), digest(4)),
+            (digest(5), digest(6)),
+            digest(7),
+        )
+        self.assertTrue(dual_proof.claim_spans_full_domain_v1(claim))
+
+    def test_boundary_enclosure_digest_is_deterministic(self) -> None:
+        first = corpus.boundary_enclosure_digest_v1(digest(9), 42, 1)
+        second = corpus.boundary_enclosure_digest_v1(digest(9), 42, 1)
+        third = corpus.boundary_enclosure_digest_v1(digest(9), 43, 1)
+        self.assertEqual(first, second)
+        self.assertNotEqual(first, third)
+        self.assertEqual(len(first), 32)
+
+
+if __name__ == "__main__":
+    unittest.main()
