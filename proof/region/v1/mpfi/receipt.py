@@ -787,6 +787,10 @@ class MpfiSourceBoundEvaluatorReceiptV1:
         return self.evidence.build.comparator
 
     @property
+    def job(self) -> protocol.ProofJobV1:
+        return self.evidence.request.job
+
+    @property
     def executable(self) -> bytes:
         return self.evidence.build.binaries[0]
 

@@ -1,4 +1,4 @@
-name: Full-domain Arb source-bound RUN
+name: Full-domain source-bound RUN
 
 on:
   workflow_dispatch:
@@ -7,12 +7,12 @@ permissions:
   contents: read
 
 concurrency:
-  group: full-domain-arb-run-${{ github.run_id }}
+  group: full-domain-run-${{ github.run_id }}
   cancel-in-progress: false
 
 jobs:
   full-domain-receipt:
-    name: one source-bound full-domain BUILD to RUN receipt
+    name: one source-bound full-domain Arb BUILD to RUN receipt
     # Docker is root-equivalent, so the job runs on a fresh ephemeral
     # GitHub-hosted VM that is discarded after this single run.  The full
     # 2^24 RUN is one continuous native execution; the 480-minute envelope
@@ -214,5 +214,168 @@ jobs:
             sudo sysctl -w \
               "kernel.apparmor_restrict_unprivileged_userns=$LABCOLORS_APPARMOR_USERNS_V1" \
               >/dev/null || record_failure
+          fi
+          exit "$status"
+
+  full-domain-mpfi-receipt:
+    name: one source-bound full-domain MPFI BUILD to RUN receipt
+    # Symmetric MPFI lane: same envelope and containment contract as the Arb
+    # job above, under the MPFI engine's own source closure and comparator.
+    runs-on: ubuntu-latest
+    timeout-minutes: 480
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONHASHSEED: "0"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: bind run-local native paths
+        shell: bash
+        run: |
+          set -euo pipefail
+          scope="/sys/fs/cgroup/labcolors-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          {
+            echo "LABCOLORS_CGROUP_SCOPE_V1=$scope"
+            echo "LABCOLORS_EXECUTOR_CGROUP_V1=$scope/proof"
+          } >> "$GITHUB_ENV"
+
+      - name: acquire and hash-check exact MPFI source closure
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_dir="$RUNNER_TEMP/mpfi-source-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          install -d -m 0700 "$source_dir"
+          echo "LABCOLORS_MPFI_SOURCE_DIR=$source_dir" >> "$GITHUB_ENV"
+          export PYTHONPATH="$GITHUB_WORKSPACE/proof/region/v1"
+          python3 - <<'PYLOCK' > "$source_dir/mpfi-lock.tsv"
+          import provenance
+
+          for source in provenance.mpfi_source_lock_v1().sources:
+              print(
+                  source.role.name,
+                  source.archive_url,
+                  source.archive_sha256.hex(),
+                  source.archive_length,
+                  sep="	",
+              )
+          PYLOCK
+          count=0
+          while IFS=$'	' read -r role url digest length; do
+            archive="$source_dir/${role}.archive"
+            curl --fail --location --silent --show-error               --connect-timeout 30 --max-time 600 --retry 3 --retry-all-errors               "$url" --output "$archive"
+            test "$(stat --format=%s "$archive")" = "$length"
+            echo "$digest  $archive" | sha256sum --check --strict
+            case "$role" in
+              GMP) echo "LABCOLORS_GMP_ARCHIVE=$archive" >> "$GITHUB_ENV" ;;
+              MPFR) echo "LABCOLORS_MPFR_ARCHIVE=$archive" >> "$GITHUB_ENV" ;;
+              MPFI) echo "LABCOLORS_MPFI_ARCHIVE=$archive" >> "$GITHUB_ENV" ;;
+              *) exit 64 ;;
+            esac
+            count=$((count + 1))
+          done < "$source_dir/mpfi-lock.tsv"
+          test "$count" -eq 3
+
+      - name: acquire the exact pinned MPFI OCI manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          export PYTHONPATH="$GITHUB_WORKSPACE/proof/region/v1"
+          docker_path="$(realpath "$(command -v docker)")"
+          test -f "$docker_path"
+          test ! -L "$docker_path"
+          image="$(python3 - <<'PYLOCK'
+          from mpfi import build
+          print(build.MPFI_BUILD_IMAGE_REFERENCE_V1)
+          PYLOCK
+          )"
+          "$docker_path" image inspect "$image" >/dev/null 2>&1 ||
+            /usr/bin/timeout --signal=TERM --kill-after=30s 15m               "$docker_path" pull "$image"
+          echo "LABCOLORS_MPFI_DOCKER=$docker_path" >> "$GITHUB_ENV"
+
+      - name: delegate one disposable cgroup subtree
+        shell: bash
+        run: |
+          set -euo pipefail
+          apparmor_userns=/proc/sys/kernel/apparmor_restrict_unprivileged_userns
+          if [[ -f "$apparmor_userns" ]]; then
+            original_userns="$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns)"
+            case "$original_userns" in
+              0|1) ;;
+              *) exit 78 ;;
+            esac
+            echo "LABCOLORS_APPARMOR_USERNS_V1=$original_userns" >> "$GITHUB_ENV"
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+            test "$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns)" = 0
+          else
+            echo "LABCOLORS_APPARMOR_USERNS_V1=" >> "$GITHUB_ENV"
+          fi
+          scope="$LABCOLORS_CGROUP_SCOPE_V1"
+          sudo mkdir "$scope"
+          sudo chown "$(id -u):$(id -g)"             "$scope"             "$scope/cgroup.procs"             "$scope/cgroup.threads"             "$scope/cgroup.subtree_control"
+          printf '+memory +pids' > "$scope/cgroup.subtree_control"
+          mkdir "$scope/tasks" "$scope/proof"
+          printf '+memory +pids' > "$scope/proof/cgroup.subtree_control"
+          printf '2' > "$scope/proof/pids.max"
+          mkdir "$scope/proof/observer"
+          grep --fixed-strings --quiet 'memory' "$scope/proof/cgroup.subtree_control"
+          grep --fixed-strings --quiet 'pids' "$scope/proof/cgroup.subtree_control"
+          test "$(cat "$scope/proof/pids.max")" = 2
+          echo core | sudo tee /proc/sys/kernel/core_pattern >/dev/null
+          test "$(cat /proc/sys/kernel/core_pattern)" = core
+
+      - name: one source-bound full-domain MPFI BUILD to RUN receipt
+        shell: bash
+        env:
+          LABCOLORS_FULL_DOMAIN_EVIDENCE_OUT: evidence-out
+        run: |
+          set -euo pipefail
+          # Identical cgroup admission contract as the Arb lane above.
+          echo "$$" | sudo tee             "$LABCOLORS_CGROUP_SCOPE_V1/tasks/cgroup.procs" >/dev/null
+          exec python3 proof/region/v1/mpfi/tests/native_gate.py full-domain-receipt
+
+      - name: upload the verification lanes' wire evidence
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
+        with:
+          name: verification-evidence-mpfi
+          path: evidence-out/
+          if-no-files-found: error
+
+      - name: remove disposable inputs and cgroup
+        if: always()
+        shell: bash
+        run: |
+          set -uo pipefail
+          status=0
+          record_failure() {
+            local code="$?"
+            if (( status == 0 )); then
+              status="$code"
+            fi
+          }
+          if [[ -n "${LABCOLORS_MPFI_SOURCE_DIR:-}" ]]; then
+            rm -rf -- "$LABCOLORS_MPFI_SOURCE_DIR" || record_failure
+          fi
+          if [[ -n "${LABCOLORS_CGROUP_SCOPE_V1:-}" &&                 -d "$LABCOLORS_CGROUP_SCOPE_V1" ]]; then
+            if [[ -f "$LABCOLORS_CGROUP_SCOPE_V1/cgroup.kill" ]]; then
+              echo 1 | sudo tee "$LABCOLORS_CGROUP_SCOPE_V1/cgroup.kill"                 >/dev/null || record_failure
+            fi
+            if [[ -f "$LABCOLORS_CGROUP_SCOPE_V1/cgroup.events" ]]; then
+              for _ in {1..100}; do
+                grep --fixed-strings --quiet 'populated 0'                   "$LABCOLORS_CGROUP_SCOPE_V1/cgroup.events" && break
+                sleep 0.01
+              done
+              grep --fixed-strings --quiet 'populated 0'                 "$LABCOLORS_CGROUP_SCOPE_V1/cgroup.events" || record_failure
+            fi
+            for child in proof/observer proof tasks; do
+              if [[ -d "$LABCOLORS_CGROUP_SCOPE_V1/$child" ]]; then
+                sudo rmdir "$LABCOLORS_CGROUP_SCOPE_V1/$child" || record_failure
+              fi
+            done
+            sudo rmdir "$LABCOLORS_CGROUP_SCOPE_V1" || record_failure
+          fi
+          if [[ -n "${LABCOLORS_APPARMOR_USERNS_V1:-}" ]]; then
+            sudo sysctl -w               "kernel.apparmor_restrict_unprivileged_userns=$LABCOLORS_APPARMOR_USERNS_V1"               >/dev/null || record_failure
           fi
           exit "$status"
