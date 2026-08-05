@@ -1,0 +1,374 @@
+#!/usr/bin/env python3
+"""Sharded corpus runner for the V5b2d full-domain RUN (V5b2d-1b).
+
+The full sRGB8 domain carries 2^24 points; a monolithic replay would
+materialise 2^24 decisions and witnesses before the transcript exists.  The
+corpus runner instead replays the domain in contiguous ordinal shards, each
+shard emitting wire bytes only: one decision-bit fragment per shard, the
+witness wire records in strict ordinal order, and one streaming accounting
+update per point.  Assembly concatenates the shard fragments in shard order,
+so the assembled transcript is byte-identical to the monolithic one by
+construction and never holds 2^24 Python objects at once.
+
+The shard plan covers exactly one canonical domain range grammar: contiguous,
+4-aligned windows (the decision packing is two bits per point, so every shard
+boundary must land on a whole packing byte).  Any other partition is a typed
+rejection, never a panic.
+"""
+
+from __future__ import annotations
+
+import hashlib
+from dataclasses import dataclass
+from enum import StrEnum
+from typing import Iterable, final
+
+import region_proof_protocol as protocol
+
+from semantic import replay as semantic_replay
+
+CORPUS_SHARD_ALIGNMENT_V1 = 4
+
+BOUNDARY_ENCLOSURE_DOMAIN_V1 = (
+    b"labcolors.proof-region.boundary-enclosure.v1\0"
+)
+
+
+def boundary_enclosure_digest_v1(
+    job_identity: bytes, ordinal: int, exact_branch: int
+) -> bytes:
+    """Corpus-shared grammar for one boundary-unproven enclosure witness."""
+
+    hasher = hashlib.sha256()
+    hasher.update(BOUNDARY_ENCLOSURE_DOMAIN_V1)
+    hasher.update(job_identity)
+    hasher.update(ordinal.to_bytes(4, "big"))
+    hasher.update(exact_branch.to_bytes(8, "big"))
+    return hasher.digest()
+
+
+class ShardCorpusReasonV1(StrEnum):
+    FOREIGN_INPUT = "foreign_input"
+    SHARD_ORDER = "shard_order"
+    INCOMPLETE_COVER = "incomplete_cover"
+
+
+@dataclass(frozen=True)
+class ShardCorpusRejectedV1:
+    reason: ShardCorpusReasonV1
+    detail: str
+
+    def __post_init__(self) -> None:
+        if type(self.reason) is not ShardCorpusReasonV1:
+            raise TypeError("invalid shard corpus rejection reason")
+        if type(self.detail) is not str or not self.detail:
+            raise TypeError("invalid shard corpus rejection detail")
+
+
+def _reject(reason: ShardCorpusReasonV1, detail: str) -> ShardCorpusRejectedV1:
+    return ShardCorpusRejectedV1(reason, detail)
+
+
+def shard_plan_v1(
+    domain: protocol.ReducedDomainManifestV1,
+    shard_points: int,
+) -> tuple[tuple[int, int], ...] | ShardCorpusRejectedV1:
+    """Contiguous 4-aligned windows covering the whole declared domain.
+
+    The windows follow the domain's range grammar in order; every window is
+    exactly `shard_points` wide except the final window of each range, which
+    may be shorter but stays 4-aligned because the plan rejects any range or
+    shard width that would leave a packing byte straddling a shard boundary.
+    """
+
+    if type(domain) is not protocol.ReducedDomainManifestV1:
+        return _reject(
+            ShardCorpusReasonV1.FOREIGN_INPUT,
+            "the shard plan requires a canonical reduced-domain manifest",
+        )
+    if (
+        type(shard_points) is not int
+        or shard_points < CORPUS_SHARD_ALIGNMENT_V1
+        or shard_points % CORPUS_SHARD_ALIGNMENT_V1 != 0
+    ):
+        return _reject(
+            ShardCorpusReasonV1.FOREIGN_INPUT,
+            "shard width must be a positive multiple of the packing alignment",
+        )
+    windows: list[tuple[int, int]] = []
+    for start, end in domain.ranges:
+        length = end - start
+        if length % CORPUS_SHARD_ALIGNMENT_V1 != 0:
+            return _reject(
+                ShardCorpusReasonV1.FOREIGN_INPUT,
+                f"range [{start}, {end}) is not packing-aligned",
+            )
+        cursor = start
+        while cursor < end:
+            window_end = min(cursor + shard_points, end)
+            windows.append((cursor, window_end))
+            cursor = window_end
+    return tuple(windows)
+
+
+@dataclass(frozen=True)
+class ShardArtifactV1:
+    """Wire-only evidence of one replayed shard."""
+
+    start_ordinal: int
+    end_ordinal: int
+    decision_bits: bytes
+    witness_wire: bytes
+    counters: tuple[int, int, int, int]
+    witness_count: int
+
+    def __post_init__(self) -> None:
+        if (
+            type(self.start_ordinal) is not int
+            or type(self.end_ordinal) is not int
+            or self.end_ordinal <= self.start_ordinal
+            or self.start_ordinal < 0
+            or self.end_ordinal > protocol.OUTPUT_CARDINALITY_V1
+        ):
+            raise TypeError("shard window is outside the sRGB8 ordinal space")
+        point_count = self.end_ordinal - self.start_ordinal
+        if (
+            type(self.decision_bits) is not bytes
+            or len(self.decision_bits) != (point_count + 3) // 4
+        ):
+            raise TypeError("shard decision fragment length disagrees with the window")
+        if type(self.witness_wire) is not bytes:
+            raise TypeError("shard witness wire must be immutable bytes")
+        if (
+            type(self.counters) is not tuple
+            or len(self.counters) != 4
+            or any(type(count) is not int or count < 0 for count in self.counters)
+            or sum(self.counters) != point_count
+        ):
+            raise TypeError("shard counters disagree with the window")
+        if type(self.witness_count) is not int or self.witness_count < 0:
+            raise TypeError("shard witness count is invalid")
+
+
+class ShardCorpusRunnerV1:
+    """Streams one semantic replay through contiguous ordinal shards.
+
+    The runner owns nothing but the replay cursor, the accounting hasher and
+    the last consumed ordinal; every shard is consumed immediately into wire
+    bytes, so memory stays bounded by the shard width regardless of the total
+    point count.
+    """
+
+    def __init__(
+        self,
+        job: protocol.ProofJobV1,
+        comparator: protocol.ContentResolvedComparatorManifestV2,
+    ) -> None:
+        self._replay = semantic_replay.SemanticReplay(job, comparator)
+        self._accounting = semantic_replay.accounting_prefix_v1(
+            comparator.manifest.kind, job, comparator.identity
+        )
+        self._job_identity = job.identity
+        self._next_ordinal: int | None = None
+
+    @property
+    def accounting_digest(self) -> bytes:
+        return self._accounting.digest()
+
+    def run_shard(self, start_ordinal: int, end_ordinal: int) -> ShardArtifactV1:
+        """Replay the exact window into wire fragments, in engine order."""
+
+        if (
+            type(start_ordinal) is not int
+            or type(end_ordinal) is not int
+            or end_ordinal <= start_ordinal
+        ):
+            raise TypeError("shard window is invalid")
+        if self._next_ordinal is not None and start_ordinal != self._next_ordinal:
+            raise ValueError(
+                f"shard window [{start_ordinal}, {end_ordinal}) breaks replay order:"
+                f" next ordinal is {self._next_ordinal}"
+            )
+        point_count = end_ordinal - start_ordinal
+        decision_bits = bytearray((point_count + 3) // 4)
+        witness_wire = bytearray()
+        counters = [0, 0, 0, 0]
+        witness_count = 0
+        for index in range(point_count):
+            point = self._replay.next_point()
+            if point.ordinal != start_ordinal + index:
+                raise ValueError(
+                    f"replay ordinal {point.ordinal} drifted from window position"
+                    f" {start_ordinal + index}"
+                )
+            decision = protocol.DecisionV1(point.outcome)
+            decision_bits[index // 4] |= int(decision) << (6 - 2 * (index % 4))
+            counters[int(decision)] += 1
+            if (
+                decision == protocol.DecisionV1.INSIDE
+                and point.exact_boundary
+            ):
+                witness_wire.append(1)
+                witness_wire.extend(point.ordinal.to_bytes(4, "big"))
+                witness_wire.extend(
+                    semantic_replay.exact_trace_digest_v1(
+                        self._job_identity, point.ordinal, point.exact_branch
+                    )
+                )
+                witness_count += 1
+            elif decision == protocol.DecisionV1.BOUNDARY_UNPROVEN:
+                witness_wire.append(2)
+                witness_wire.extend(point.ordinal.to_bytes(4, "big"))
+                witness_wire.extend(
+                    boundary_enclosure_digest_v1(
+                        self._job_identity, point.ordinal, point.exact_branch
+                    )
+                )
+                witness_count += 1
+            elif decision == protocol.DecisionV1.RESOURCE_LIMIT_REACHED:
+                witness_wire.append(3)
+                witness_wire.extend(point.ordinal.to_bytes(4, "big"))
+                witness_wire.append(point.resource_scope)
+                witness_wire.extend(point.point_grant.to_bytes(8, "big"))
+                witness_wire.extend(point.consumed.to_bytes(8, "big"))
+                witness_count += 1
+            self._accounting.update(
+                semantic_replay.account_record(
+                    point.ordinal,
+                    point.final_precision,
+                    point.consumed,
+                    point.outcome,
+                )
+            )
+        self._next_ordinal = end_ordinal
+        return ShardArtifactV1(
+            start_ordinal,
+            end_ordinal,
+            bytes(decision_bits),
+            bytes(witness_wire),
+            tuple(counters),
+            witness_count,
+        )
+
+
+def assemble_transcript_from_shards_v1(
+    job: protocol.ProofJobV1,
+    comparator: protocol.ContentResolvedComparatorManifestV2,
+    shards: Iterable[ShardArtifactV1],
+    accounting_digest: bytes,
+) -> protocol.DecisionTranscriptV1 | ShardCorpusRejectedV1:
+    """Seal the transcript of one domain from its shard wire fragments.
+
+    The fragments must cover the domain's ordinals exactly, in order, with no
+    gap and no overlap; the assembled decision bits and witness body are the
+    plain concatenations of the shard fragments, which is byte-identical to
+    the monolithic packing because every shard boundary is packing-aligned.
+    """
+
+    if type(job) is not protocol.ProofJobV1:
+        return _reject(
+            ShardCorpusReasonV1.FOREIGN_INPUT,
+            "transcript assembly requires a canonical proof job",
+        )
+    domain = job.domain
+    ranges = iter(domain.ranges)
+    expected_start = next(ranges, None)
+    decision_parts: list[bytes] = []
+    witness_parts: list[bytes] = []
+    counters = [0, 0, 0, 0]
+    witness_count = 0
+    previous_end: int | None = None
+    current_range: tuple[int, int] | None = expected_start
+    for shard in shards:
+        if type(shard) is not ShardArtifactV1:
+            return _reject(
+                ShardCorpusReasonV1.FOREIGN_INPUT,
+                "transcript assembly requires canonical shard artifacts",
+            )
+        if current_range is None or shard.start_ordinal < current_range[0]:
+            return _reject(
+                ShardCorpusReasonV1.SHARD_ORDER,
+                "shard escapes the domain range grammar",
+            )
+        if previous_end is not None and shard.start_ordinal != previous_end:
+            if (
+                current_range is None
+                or previous_end != current_range[1]
+                or shard.start_ordinal < previous_end
+            ):
+                return _reject(
+                    ShardCorpusReasonV1.SHARD_ORDER
+                    if previous_end is not None
+                    and shard.start_ordinal < previous_end
+                    else ShardCorpusReasonV1.INCOMPLETE_COVER,
+                    "shards must cover the domain contiguously and in order",
+                )
+            current_range = next(ranges, None)
+            if (
+                current_range is None
+                or shard.start_ordinal != current_range[0]
+            ):
+                return _reject(
+                    ShardCorpusReasonV1.INCOMPLETE_COVER,
+                    "shard does not start at the next domain range",
+                )
+        if current_range is not None and shard.end_ordinal > current_range[1]:
+            return _reject(
+                ShardCorpusReasonV1.SHARD_ORDER,
+                "shard overruns its domain range",
+            )
+        decision_parts.append(shard.decision_bits)
+        witness_parts.append(shard.witness_wire)
+        for index in range(4):
+            counters[index] += shard.counters[index]
+        witness_count += shard.witness_count
+        previous_end = shard.end_ordinal
+    if previous_end is None:
+        return _reject(
+            ShardCorpusReasonV1.INCOMPLETE_COVER,
+            "no shards were admitted for the domain",
+        )
+    if current_range is None or previous_end != current_range[1]:
+        return _reject(
+            ShardCorpusReasonV1.INCOMPLETE_COVER,
+            "shards stop before the domain end",
+        )
+    if next(ranges, None) is not None:
+        return _reject(
+            ShardCorpusReasonV1.INCOMPLETE_COVER,
+            "shards leave trailing domain ranges uncovered",
+        )
+    witness_store = protocol.WitnessStoreV1(b"".join(witness_parts), witness_count)
+    decision_bits = b"".join(decision_parts)
+    transcript = protocol.DecisionTranscriptV1(
+        job.identity,
+        domain.identity,
+        comparator.identity,
+        domain.point_count,
+        decision_bits,
+        tuple(counters),
+        witness_store.equality_count,
+        accounting_digest,
+        witness_store,
+    )
+    protocol.validate_witness_alignment_v1(
+        domain,
+        decision_bits,
+        domain.point_count,
+        tuple(counters),
+        witness_store,
+    )
+    return transcript
+
+
+def full_domain_job_v1(base: protocol.ProofJobV1) -> protocol.ProofJobV1:
+    """The same definition, formula and policy over the exact full manifest."""
+
+    if type(base) is not protocol.ProofJobV1:
+        raise TypeError("full-domain job derivation requires a canonical proof job")
+    return protocol.ProofJobV1(
+        base.definition,
+        base.formula_spec,
+        protocol.exact_full_domain_manifest_v1(),
+        base.policy,
+    )

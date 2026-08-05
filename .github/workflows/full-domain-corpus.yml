@@ -1,0 +1,44 @@
+name: Full-domain corpus probe
+
+on:
+  workflow_dispatch:
+    inputs:
+      points:
+        description: bounded ordinal prefix of the full domain to replay
+        required: false
+        default: "65536"
+      shard_points:
+        description: shard window width (multiple of the packing alignment)
+        required: false
+        default: "16384"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: full-domain-corpus-probe-${{ github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  shard-probe:
+    name: bounded full-domain shard probe
+    # Dispatch-only: the full 2^24 replay is a long-running lane; this job
+    # proves the sharded streaming mechanism on a bounded prefix of the exact
+    # full manifest on an ephemeral GitHub-hosted VM.
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONHASHSEED: "0"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: replay the bounded full-domain prefix through the shard runner
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 proof/region/v1/corpus_probe.py \
+            --points '${{ github.event.inputs.points }}' \
+            --shard-points '${{ github.event.inputs.shard_points }}'
