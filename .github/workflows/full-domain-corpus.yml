@@ -11,6 +11,14 @@ on:
         description: shard window width (multiple of the packing alignment)
         required: false
         default: "16384"
+      window_start:
+        description: lane window start ordinal (empty keeps the bounded probe)
+        required: false
+        default: ""
+      window_points:
+        description: lane window width (packing-aligned multiple of shard_points)
+        required: false
+        default: ""
 
 permissions:
   contents: read
@@ -36,9 +44,29 @@ jobs:
           persist-credentials: false
 
       - name: replay the bounded full-domain prefix through the shard runner
+        if: inputs.window_points == ''
         shell: bash
         run: |
           set -euo pipefail
           python3 proof/region/v1/corpus_probe.py \
             --points '${{ github.event.inputs.points }}' \
             --shard-points '${{ github.event.inputs.shard_points }}'
+
+      - name: replay one full-domain window lane
+        if: inputs.window_points != ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 proof/region/v1/corpus_lane.py \
+            --window-start '${{ github.event.inputs.window_start }}' \
+            --window-points '${{ github.event.inputs.window_points }}' \
+            --shard-points '${{ github.event.inputs.shard_points }}' \
+            --out lane-out
+
+      - name: upload the lane wire evidence
+        if: inputs.window_points != ''
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
+        with:
+          name: corpus-lane-${{ inputs.window_start }}-${{ inputs.window_points }}
+          path: lane-out/
+          if-no-files-found: error
