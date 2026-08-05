@@ -20,9 +20,10 @@ from pathlib import Path
 
 PROOF = Path(__file__).resolve().parents[2]
 TESTS = PROOF / "tests"
-ARB_TESTS = PROOF / "arb/tests"
 MPFI_TESTS = Path(__file__).resolve().parent
-sys.path[:0] = [str(PROOF), str(TESTS), str(ARB_TESTS), str(MPFI_TESTS)]
+# MPFI_TESTS leads so `test_receipt` resolves to the MPFI receipt fixture;
+# the Arb test directory carries a same-named module and must not shadow it.
+sys.path[:0] = [str(MPFI_TESTS), str(PROOF), str(TESTS)]
 
 import corpus  # noqa: E402
 import corpus_lane  # noqa: E402
@@ -134,6 +135,14 @@ class NativeMpfiSourceBoundFullDomainReceiptIntegrationTests(unittest.TestCase):
         self.assertEqual((out / "job.bin").read_bytes(), full_job.encode())
         loaded = corpus_lane.load_comparator_bundle_v1(out / "comparator-bundle")
         self.assertEqual(loaded.identity, result.comparator.manifest.identity)
+        self.assertEqual(
+            (out / "transcript.bin").read_bytes(), result.transcript.encode()
+        )
+        self.assertEqual(
+            (out / "run-claim.bin").read_bytes(), result.run_claim.encode()
+        )
+        claim = protocol.RunClaimV1.parse((out / "run-claim.bin").read_bytes())
+        self.assertEqual(claim.transcript_identity, result.transcript.identity)
 
 
 if __name__ == "__main__":

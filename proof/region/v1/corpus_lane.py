@@ -136,11 +136,13 @@ def load_comparator_bundle_v1(
 def write_verification_evidence_v1(receipt: object, out: Path) -> None:
     """Write the verification lanes' wire evidence from a source-bound receipt.
 
-    The evidence is exactly what the lane runner consumes: the canonical job
-    encoding the evaluator ran under, and the comparator bundle rebuilt from
-    the controller-derived comparator's retained preimage bytes.  Nothing is
-    re-derived and no second source of truth is created — the receipt already
-    carries every coordinate.
+    The evidence is exactly what the lane runner and the semantic assembly
+    consume: the canonical job encoding the evaluator ran under, the
+    comparator bundle rebuilt from the controller-derived comparator's
+    retained preimage bytes, and the engine's sealed run coordinates — the
+    decision transcript and the run claim that binds it.  Nothing is
+    re-derived and no second source of truth is created — the receipt
+    already carries every coordinate.
     """
 
     def fail(detail: str) -> NoReturn:
@@ -154,16 +156,37 @@ def write_verification_evidence_v1(receipt: object, out: Path) -> None:
     try:
         job = receipt.job  # type: ignore[union-attr]
         comparator = receipt.comparator  # type: ignore[union-attr]
+        transcript = receipt.transcript  # type: ignore[union-attr]
+        run_claim = receipt.run_claim  # type: ignore[union-attr]
         resolved = comparator.manifest
         preimages = comparator.preimages
     except AttributeError:
         fail("verification evidence requires a source-bound receipt carrying"
-             " its job and controller-derived comparator")
+             " its job, controller-derived comparator, decision transcript,"
+             " and run claim")
     if type(job) is not protocol.ProofJobV1:
         fail("verification evidence requires the canonical proof job the"
              " evaluator ran under")
     if type(resolved) is not protocol.ContentResolvedComparatorManifestV2:
         fail("verification evidence requires an admitted comparator manifest")
+    if type(transcript) is not protocol.DecisionTranscriptV1:
+        fail("verification evidence requires the engine's sealed decision"
+             " transcript")
+    if type(run_claim) is not protocol.RunClaimV1:
+        fail("verification evidence requires the engine's sealed run claim")
+    if (
+        transcript.job_identity != job.identity
+        or transcript.comparator_identity != resolved.identity
+    ):
+        fail("verification evidence transcript does not bind the receipt's"
+             " job and comparator")
+    if (
+        run_claim.job_identity != job.identity
+        or run_claim.comparator_identity != resolved.identity
+        or run_claim.transcript_identity != transcript.identity
+    ):
+        fail("verification evidence run claim does not bind the receipt's"
+             " job, comparator, and transcript")
     try:
         contents = {
             hashlib.sha256(getattr(preimages, field.name)).digest():
@@ -175,6 +198,8 @@ def write_verification_evidence_v1(receipt: object, out: Path) -> None:
              " preimage coordinates")
     write_comparator_bundle_v1(resolved.manifest, contents, out / "comparator-bundle")
     (out / "job.bin").write_bytes(job.encode())
+    (out / "transcript.bin").write_bytes(transcript.encode())
+    (out / "run-claim.bin").write_bytes(run_claim.encode())
 
 
 def write_lane_artifacts_v1(

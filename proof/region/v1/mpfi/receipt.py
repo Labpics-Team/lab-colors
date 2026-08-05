@@ -783,6 +783,10 @@ class MpfiSourceBoundEvaluatorReceiptV1:
         return self.evidence.transcript
 
     @property
+    def run_claim(self) -> protocol.RunClaimV1:
+        return self.evidence.run_claim
+
+    @property
     def comparator(self) -> MpfiDiagnosticComparatorV1:
         return self.evidence.build.comparator
 
