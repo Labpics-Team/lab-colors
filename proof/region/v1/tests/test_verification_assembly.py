@@ -357,5 +357,116 @@ class LanedSemanticVerificationTests(unittest.TestCase):
             self.assertIsNot(type(loaded), corpus_assembly.AdmittedLaneV1)
 
 
+class VerificationEvidenceCoordinatorTests(unittest.TestCase):
+    """The coordinator seals the receipt from disk evidence and a lane cover.
+
+    The verification lanes upload their wire artifacts and the engine RUN
+    uploads its evidence; the coordinator is the one surface that consumes
+    both from disk and seals exactly the receipt the monolithic verifier
+    seals.  Nothing else may produce the sealed receipt, and any missing,
+    corrupt, or unbound coordinate is a fail-closed exit before any receipt
+    exists.
+    """
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.job = test_job()
+        cls.comparator = comparator()
+        cls.transcript = honest_transcript(cls.job, cls.comparator)
+        cls.run_claim = run_claim(cls.transcript)
+        cls.monolithic = verify_transcript(
+            cls.job, cls.comparator, cls.transcript, cls.run_claim
+        )
+
+    def _write_evidence(self, out: Path) -> None:
+        contents = {
+            hashlib.sha256(f"corpus-lane-coordinate-{index}".encode("ascii")).digest():
+            f"corpus-lane-coordinate-{index}".encode("ascii")
+            for index in range(10)
+        }
+        corpus_lane.write_comparator_bundle_v1(
+            self.comparator.manifest, contents, out / "comparator-bundle"
+        )
+        (out / "job.bin").write_bytes(self.job.encode())
+        (out / "transcript.bin").write_bytes(self.transcript.encode())
+        (out / "run-claim.bin").write_bytes(self.run_claim.encode())
+
+    def _write_lanes(self, root: Path, count: int | None = None) -> None:
+        artifacts = window_lanes(self.job, self.comparator)
+        if count is not None:
+            artifacts = artifacts[:count]
+        for index, lane in enumerate(artifacts):
+            corpus_lane.write_lane_artifacts_v1(
+                lane, self.job, self.comparator, SHARD_POINTS, root / f"lane-{index:05d}"
+            )
+
+    def _coordinates(self, tmp: str, lanes_count: int | None = None):
+        evidence = Path(tmp) / "evidence"
+        lanes_root = Path(tmp) / "lanes"
+        out = Path(tmp) / "out"
+        self._write_evidence(evidence)
+        self._write_lanes(lanes_root, lanes_count)
+        return [
+            "--evidence", str(evidence),
+            "--lanes-root", str(lanes_root),
+            "--out", str(out),
+        ], out
+
+    def test_coordinator_seals_the_monolithic_receipt_from_disk(self) -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            argv, out = self._coordinates(tmp)
+            self.assertEqual(verification_assembly.main(argv), 0)
+            receipt_path = out / "semantic-verification-receipt.bin"
+            self.assertTrue(receipt_path.is_file())
+            self.assertEqual(
+                receipt_path.read_bytes(), self.monolithic.encode()
+            )
+
+    def test_missing_or_corrupt_evidence_is_a_fail_closed_exit(self) -> None:
+        import tempfile
+
+        for missing in ("job.bin", "transcript.bin", "run-claim.bin"):
+            with tempfile.TemporaryDirectory() as tmp:
+                argv, _ = self._coordinates(tmp)
+                (Path(argv[1]) / missing).unlink()
+                self.assertEqual(
+                    verification_assembly.main(argv),
+                    64,
+                    f"missing {missing} was not fail-closed",
+                )
+        with tempfile.TemporaryDirectory() as tmp:
+            argv, _ = self._coordinates(tmp)
+            transcript_path = Path(argv[1]) / "transcript.bin"
+            corrupted = bytearray(transcript_path.read_bytes())
+            corrupted[-1] ^= 0xFF
+            transcript_path.write_bytes(bytes(corrupted))
+            self.assertEqual(verification_assembly.main(argv), 64)
+
+    def test_an_incomplete_lane_cover_is_a_fail_closed_exit(self) -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            argv, _ = self._coordinates(tmp, lanes_count=1)
+            self.assertEqual(verification_assembly.main(argv), 64)
+
+    def test_lanes_replayed_under_a_foreign_job_are_fail_closed(self) -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            argv, _ = self._coordinates(tmp)
+            foreign_job = protocol.ProofJobV1(
+                self.job.definition,
+                self.job.formula_spec,
+                protocol.ReducedDomainManifestV1.from_ordinals(
+                    DOMAIN_ORDINALS[:-1]
+                ),
+                self.job.policy,
+            )
+            (Path(argv[1]) / "job.bin").write_bytes(foreign_job.encode())
+            self.assertEqual(verification_assembly.main(argv), 64)
+
+
 if __name__ == "__main__":
     unittest.main()
