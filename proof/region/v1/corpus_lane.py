@@ -19,7 +19,9 @@ import argparse
 import hashlib
 import json
 import sys
+from dataclasses import fields
 from pathlib import Path
+from typing import NoReturn
 
 PROOF = Path(__file__).resolve().parent
 sys.path.insert(0, str(PROOF))
@@ -45,6 +47,90 @@ def lane_comparator_v1() -> protocol.ContentResolvedComparatorManifestV2:
         manifest,
         {hashlib.sha256(content).digest(): content for content in contents}.get,
     )
+
+
+BUNDLE_MANIFEST_NAME_V1 = "comparator-manifest-v2.bin"
+BUNDLE_CONTENT_DIR_V1 = "content"
+
+
+def _bundle_fail(detail: str) -> NoReturn:
+    raise protocol.ProtocolErrorV1(
+        "comparator-bundle-v1",
+        0,
+        protocol.ProtocolReasonV1.INVALID_MANIFEST,
+        detail,
+    )
+
+
+def _manifest_coordinates(manifest: protocol.ComparatorManifestV2) -> dict[str, bytes]:
+    return {
+        field.name: getattr(manifest, field.name)
+        for field in fields(manifest)
+        if field.name != "kind"
+    }
+
+
+def write_comparator_bundle_v1(
+    manifest: protocol.ComparatorManifestV2,
+    contents: dict[bytes, bytes],
+    out: Path,
+) -> None:
+    """Write the closed wire surface of one admitted comparator.
+
+    The bundle is the canonical manifest encoding plus exactly one content
+    file per manifest address, named by the address hex.  Nothing else may
+    ship: a lane runner reconstructs the content-resolved comparator from
+    these bytes alone.
+    """
+
+    if type(manifest) is not protocol.ComparatorManifestV2:
+        _bundle_fail("a comparator bundle requires a canonical manifest")
+    if type(contents) is not dict:
+        _bundle_fail("a comparator bundle requires a digest-to-bytes content map")
+    coordinates = _manifest_coordinates(manifest)
+    if set(contents) != set(coordinates.values()):
+        _bundle_fail("the content map must cover exactly the manifest addresses")
+    for name, address in coordinates.items():
+        content = contents.get(address)
+        if type(content) is not bytes or hashlib.sha256(content).digest() != address:
+            _bundle_fail(f"content for {name} does not resolve to its address")
+    out.mkdir(parents=True, exist_ok=True)
+    content_dir = out / BUNDLE_CONTENT_DIR_V1
+    content_dir.mkdir(exist_ok=True)
+    (out / BUNDLE_MANIFEST_NAME_V1).write_bytes(manifest.encode())
+    for address in sorted(contents):
+        (content_dir / address.hex()).write_bytes(contents[address])
+
+
+def load_comparator_bundle_v1(
+    directory: Path,
+) -> protocol.ContentResolvedComparatorManifestV2:
+    """Admit a comparator from its wire bundle, re-hashing every coordinate."""
+
+    if not isinstance(directory, Path):
+        _bundle_fail("a comparator bundle directory must be a Path")
+    manifest_path = directory / BUNDLE_MANIFEST_NAME_V1
+    if not manifest_path.is_file():
+        _bundle_fail("the bundle carries no comparator manifest")
+    manifest = protocol.ComparatorManifestV2.parse(manifest_path.read_bytes())
+    content_dir = directory / BUNDLE_CONTENT_DIR_V1
+    if not content_dir.is_dir():
+        _bundle_fail("the bundle carries no content directory")
+    contents: dict[bytes, bytes] = {}
+    for path in sorted(content_dir.iterdir()):
+        if not path.is_file():
+            _bundle_fail(f"foreign content entry: {path.name}")
+        try:
+            address = bytes.fromhex(path.name)
+        except ValueError:
+            address = b""
+        if len(address) != 32:
+            _bundle_fail(f"content file is not named by a sha256 address: {path.name}")
+        content = path.read_bytes()
+        if hashlib.sha256(content).digest() != address:
+            _bundle_fail(f"content does not hash to its address: {path.name}")
+        contents[address] = content
+    return protocol.ContentResolvedComparatorManifestV2.admit(manifest, contents.get)
 
 
 def write_lane_artifacts_v1(
@@ -104,13 +190,24 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--window-start", type=int, required=True)
     parser.add_argument("--window-points", type=int, required=True)
     parser.add_argument("--shard-points", type=int, default=DEFAULT_SHARD_POINTS)
+    parser.add_argument("--job", type=Path, default=None)
+    parser.add_argument("--comparator-bundle", type=Path, default=None)
     parser.add_argument("--out", type=Path, required=True)
     args = parser.parse_args(argv)
 
-    job = corpus.full_domain_job_v1(
-        protocol.ProofJobV1.parse(FIXTURE_JOB_V1.read_bytes())
-    )
-    comparator = lane_comparator_v1()
+    try:
+        base_job = protocol.ProofJobV1.parse(
+            (args.job or FIXTURE_JOB_V1).read_bytes()
+        )
+        job = corpus.full_domain_job_v1(base_job)
+        comparator = (
+            load_comparator_bundle_v1(args.comparator_bundle)
+            if args.comparator_bundle is not None
+            else lane_comparator_v1()
+        )
+    except protocol.ProtocolErrorV1 as error:
+        print(f"lane wire input rejected: {error}", file=sys.stderr)
+        return 64
     lane = corpus.run_window_lane_v1(
         job, comparator, args.window_start, args.window_points, args.shard_points
     )
