@@ -11,18 +11,15 @@
 //! rank and the canonical key.
 
 use crate::selection_release::{
-    admit_selection_release_v1, SelectionCandidateKeyV1, SelectionReleaseErrorV1,
-    SelectionReleaseV1,
+    SelectionCandidateKeyV1, SelectionReleaseErrorV1, SelectionReleaseV1,
+    admit_selection_release_v1,
 };
 
 fn key(bytes: &[u8]) -> SelectionCandidateKeyV1 {
     SelectionCandidateKeyV1::new(bytes.to_vec().into_boxed_slice())
 }
 
-fn release(
-    revision: u64,
-    groups: &[&[&[u8]]],
-) -> SelectionReleaseV1 {
+fn release(revision: u64, groups: &[&[&[u8]]]) -> SelectionReleaseV1 {
     SelectionReleaseV1::new(
         revision,
         groups
@@ -54,7 +51,7 @@ fn admission_rejects_every_foreign_release_shape() {
         Err(SelectionReleaseErrorV1::EmptyRankGroup)
     ));
     // an empty canonical key
-    let rejected = admit_selection_release_v1(release(1, &[&[b""] ]));
+    let rejected = admit_selection_release_v1(release(1, &[&[b""]]));
     assert!(matches!(
         rejected,
         Err(SelectionReleaseErrorV1::EmptyCandidateKey)
@@ -87,18 +84,12 @@ fn identity_is_content_addressed_and_revision_bound() {
 
 #[test]
 fn key_permutation_inside_a_tie_group_is_not_policy() {
-    let canonical =
-        admit_selection_release_v1(release(1, &[&[b"zeta", b"alpha"], &[b"beta"]]))
-            .expect("authored release must admit");
-    let permuted =
-        admit_selection_release_v1(release(1, &[&[b"alpha", b"zeta"], &[b"beta"]]))
-            .expect("permuted tie group must admit");
+    let canonical = admit_selection_release_v1(release(1, &[&[b"zeta", b"alpha"], &[b"beta"]]))
+        .expect("authored release must admit");
+    let permuted = admit_selection_release_v1(release(1, &[&[b"alpha", b"zeta"], &[b"beta"]]))
+        .expect("permuted tie group must admit");
     assert_eq!(canonical.identity(), permuted.identity());
-    let candidates = [
-        (1u32, key(b"zeta")),
-        (2, key(b"alpha")),
-        (3, key(b"beta")),
-    ];
+    let candidates = [(1u32, key(b"zeta")), (2, key(b"alpha")), (3, key(b"beta"))];
     assert_eq!(
         canonical.select_order_v1(&candidates).unwrap(),
         permuted.select_order_v1(&candidates).unwrap()
@@ -117,9 +108,8 @@ fn total_preorder_ranks_follow_the_authored_groups() {
 
 #[test]
 fn selection_orders_by_rank_then_canonical_key_bytes_only() {
-    let admitted =
-        admit_selection_release_v1(release(1, &[&[b"zz", b"aa"], &[b"mm"], &[b"bb"]]))
-            .expect("authored release must admit");
+    let admitted = admit_selection_release_v1(release(1, &[&[b"zz", b"aa"], &[b"mm"], &[b"bb"]]))
+        .expect("authored release must admit");
     let candidates = [
         ("last-declared", key(b"mm")),
         ("first-declared", key(b"zz")),
@@ -131,7 +121,12 @@ fn selection_orders_by_rank_then_canonical_key_bytes_only() {
     // declaration position
     assert_eq!(
         selected.as_ref(),
-        ["middle-declared", "first-declared", "last-declared", "tail-declared"]
+        [
+            "middle-declared",
+            "first-declared",
+            "last-declared",
+            "tail-declared"
+        ]
     );
     // permuting the candidate input order never changes the selection order
     let shuffled = [
@@ -169,9 +164,8 @@ fn selection_rejects_every_foreign_binding() {
 
 #[test]
 fn bijective_payload_relabeling_preserves_the_order_structure() {
-    let admitted =
-        admit_selection_release_v1(release(1, &[&[b"k1", b"k2"], &[b"k3"]]))
-            .expect("authored release must admit");
+    let admitted = admit_selection_release_v1(release(1, &[&[b"k1", b"k2"], &[b"k3"]]))
+        .expect("authored release must admit");
     let candidates = [(10u32, key(b"k2")), (20, key(b"k3")), (30, key(b"k1"))];
     let original = admitted.select_order_v1(&candidates).unwrap();
     let relabeled_candidates = candidates
