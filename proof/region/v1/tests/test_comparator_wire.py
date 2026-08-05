@@ -86,7 +86,7 @@ class ComparatorBundleWireTests(unittest.TestCase):
                 comparator.manifest, contents, out
             )
             written = sorted(
-                str(path.relative_to(out)) for path in out.rglob("*") if path.is_file()
+                path.relative_to(out).as_posix() for path in out.rglob("*") if path.is_file()
             )
             expected = sorted(
                 ["comparator-manifest-v2.bin"]
