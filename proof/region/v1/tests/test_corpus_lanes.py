@@ -14,7 +14,6 @@ streaming accounting digest rebuilt from the lane record fragments.
 from __future__ import annotations
 
 import hashlib
-import importlib.util
 import json
 import sys
 import tempfile
@@ -23,9 +22,7 @@ from functools import cache
 from pathlib import Path
 
 PROOF = Path(__file__).resolve().parents[1]
-ARB_TESTS = PROOF / "arb" / "tests"
-MPFI_TESTS = PROOF / "mpfi" / "tests"
-sys.path[:0] = [str(PROOF), str(ARB_TESTS), str(MPFI_TESTS)]
+sys.path.insert(0, str(PROOF))
 
 import corpus  # noqa: E402
 import corpus_lane  # noqa: E402
@@ -33,27 +30,14 @@ import region_proof_protocol as protocol  # noqa: E402
 
 from semantic import replay as semantic_replay  # noqa: E402
 
-
-def _load_harness(name: str, path: Path) -> object:
-    spec = importlib.util.spec_from_file_location(name, path)
-    if spec is None or spec.loader is None:
-        raise AssertionError(f"unreachable harness {path}")
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[name] = module
-    spec.loader.exec_module(module)
-    return module
-
-
-ARB_PIPELINE_HARNESS = _load_harness(
-    "lane_arb_pipeline_harness", ARB_TESTS / "test_pipeline.py"
-)
+FIXTURE_JOB_V1 = PROOF / "fixtures" / "proof-job-v1.bin"
 
 ARB_KIND = protocol.ComparatorKindV1.ARB
 
 
 @cache
 def _base_job() -> protocol.ProofJobV1:
-    return ARB_PIPELINE_HARNESS._job()
+    return protocol.ProofJobV1.parse(FIXTURE_JOB_V1.read_bytes())
 
 
 @cache

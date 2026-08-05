@@ -163,17 +163,31 @@ class ShardCorpusRunnerV1:
         self,
         job: protocol.ProofJobV1,
         comparator: protocol.ContentResolvedComparatorManifestV2,
+        evidence_job_identity: bytes | None = None,
+        retain_records: bool = False,
     ) -> None:
         self._replay = semantic_replay.SemanticReplay(job, comparator)
         self._accounting = semantic_replay.accounting_prefix_v1(
             comparator.manifest.kind, job, comparator.identity
         )
-        self._job_identity = job.identity
+        if evidence_job_identity is None:
+            evidence_job_identity = job.identity
+        if type(evidence_job_identity) is not bytes or len(evidence_job_identity) != 32:
+            raise TypeError("evidence job identity must be 32 bytes")
+        self._job_identity = evidence_job_identity
+        self._retain_records = retain_records
+        self._records = bytearray()
         self._next_ordinal: int | None = None
 
     @property
     def accounting_digest(self) -> bytes:
         return self._accounting.digest()
+
+    @property
+    def accounting_records(self) -> bytes:
+        """Raw account_record bytes in replay order, when retention is on."""
+
+        return bytes(self._records)
 
     def run_shard(self, start_ordinal: int, end_ordinal: int) -> ShardArtifactV1:
         """Replay the exact window into wire fragments, in engine order."""
@@ -232,14 +246,15 @@ class ShardCorpusRunnerV1:
                 witness_wire.extend(point.point_grant.to_bytes(8, "big"))
                 witness_wire.extend(point.consumed.to_bytes(8, "big"))
                 witness_count += 1
-            self._accounting.update(
-                semantic_replay.account_record(
-                    point.ordinal,
-                    point.final_precision,
-                    point.consumed,
-                    point.outcome,
-                )
+            record = semantic_replay.account_record(
+                point.ordinal,
+                point.final_precision,
+                point.consumed,
+                point.outcome,
             )
+            if self._retain_records:
+                self._records.extend(record)
+            self._accounting.update(record)
         self._next_ordinal = end_ordinal
         return ShardArtifactV1(
             start_ordinal,
@@ -371,4 +386,191 @@ def full_domain_job_v1(base: protocol.ProofJobV1) -> protocol.ProofJobV1:
         base.formula_spec,
         protocol.exact_full_domain_manifest_v1(),
         base.policy,
+    )
+
+
+def _validate_lane_window(
+    window_start: int, window_points: int
+) -> ShardCorpusRejectedV1 | None:
+    if (
+        type(window_start) is not int
+        or type(window_points) is not int
+        or window_start < 0
+        or window_points <= 0
+        or window_start % CORPUS_SHARD_ALIGNMENT_V1 != 0
+        or window_points % CORPUS_SHARD_ALIGNMENT_V1 != 0
+        or window_start + window_points > protocol.OUTPUT_CARDINALITY_V1
+    ):
+        return _reject(
+            ShardCorpusReasonV1.FOREIGN_INPUT,
+            f"lane window [{window_start!r}, +{window_points!r}) must be a"
+            f" positive packing-aligned window inside the sRGB8 ordinal space",
+        )
+    return None
+
+
+def lane_window_job_v1(
+    full_job: protocol.ProofJobV1,
+    window_start: int,
+    window_points: int,
+    kind: protocol.ComparatorKindV1,
+) -> protocol.ProofJobV1 | ShardCorpusRejectedV1:
+    """The lane execution job for one window of a full-domain job.
+
+    The window job replays the same definition and formula over the single
+    window range while its comparator budget starts with an exhausted
+    ordinal-prefix pregrant.  That regime is exactly the state a sequential
+    full-domain replay reaches once the pregrant is spent, which happens at a
+    negligible ordinal for the production policy; a lane is only admissible
+    for windows at or beyond that exhaustion point, and its fragments stay
+    bound to the full-domain job identity through the runner's evidence
+    identity.
+    """
+
+    if type(full_job) is not protocol.ProofJobV1:
+        return _reject(
+            ShardCorpusReasonV1.FOREIGN_INPUT,
+            "a lane window job requires a canonical proof job",
+        )
+    if type(kind) is not protocol.ComparatorKindV1:
+        return _reject(
+            ShardCorpusReasonV1.FOREIGN_INPUT,
+            "a lane window job requires a typed comparator kind",
+        )
+    rejection = _validate_lane_window(window_start, window_points)
+    if rejection is not None:
+        return rejection
+    budgets = []
+    matched = False
+    for budget in full_job.policy.comparators:
+        if budget.kind == kind:
+            budgets.append(
+                protocol.ComparatorBudgetV1(
+                    budget.kind,
+                    budget.precision_ladder,
+                    budget.per_point_work,
+                    0,
+                )
+            )
+            matched = True
+        else:
+            budgets.append(budget)
+    if not matched:
+        return _reject(
+            ShardCorpusReasonV1.FOREIGN_INPUT,
+            f"the job policy carries no budget for comparator kind {kind!r}",
+        )
+    window_manifest = protocol.ReducedDomainManifestV1(
+        ((window_start, window_start + window_points),), window_points
+    )
+    return protocol.ProofJobV1(
+        full_job.definition,
+        full_job.formula_spec,
+        window_manifest,
+        protocol.ProofPolicyV1(full_job.policy.equality_release, tuple(budgets)),
+    )
+
+
+@dataclass(frozen=True)
+class WindowLaneArtifactV1:
+    """Wire evidence of one independently replayed full-domain window."""
+
+    window_start: int
+    window_points: int
+    shards: tuple[ShardArtifactV1, ...]
+    counters: tuple[int, int, int, int]
+    witness_count: int
+    window_accounting_digest: bytes
+    accounting_records: bytes
+
+    def __post_init__(self) -> None:
+        if _validate_lane_window(self.window_start, self.window_points) is not None:
+            raise TypeError("lane window is invalid")
+        if type(self.shards) is not tuple or not self.shards or any(
+            type(shard) is not ShardArtifactV1 for shard in self.shards
+        ):
+            raise TypeError("lane must carry at least one canonical shard")
+        if (
+            type(self.counters) is not tuple
+            or len(self.counters) != 4
+            or sum(self.counters) != self.window_points
+        ):
+            raise TypeError("lane counters disagree with the window")
+        if type(self.witness_count) is not int or self.witness_count < 0:
+            raise TypeError("lane witness count is invalid")
+        if type(self.window_accounting_digest) is not bytes or len(
+            self.window_accounting_digest
+        ) != 32:
+            raise TypeError("lane accounting digest must be a sha256 digest")
+        if type(self.accounting_records) is not bytes or len(
+            self.accounting_records
+        ) != 17 * self.window_points:
+            raise TypeError("lane accounting records disagree with the window")
+
+
+def run_window_lane_v1(
+    full_job: protocol.ProofJobV1,
+    comparator: protocol.ContentResolvedComparatorManifestV2,
+    window_start: int,
+    window_points: int,
+    shard_points: int,
+) -> WindowLaneArtifactV1 | ShardCorpusRejectedV1:
+    """Replay one packing-aligned window of the full domain as a lane.
+
+    The lane is prefix-independent by construction: it executes the window
+    job in the exhausted ordinal-prefix grant regime and binds every witness
+    digest to the full-domain job identity, so contiguous lanes concatenate
+    into the exact monolithic shard stream.
+    """
+
+    if type(full_job) is not protocol.ProofJobV1:
+        return _reject(
+            ShardCorpusReasonV1.FOREIGN_INPUT,
+            "a lane requires a canonical full-domain proof job",
+        )
+    if type(comparator) is not protocol.ContentResolvedComparatorManifestV2:
+        return _reject(
+            ShardCorpusReasonV1.FOREIGN_INPUT,
+            "a lane requires an admitted comparator manifest",
+        )
+    if (
+        type(shard_points) is not int
+        or shard_points < CORPUS_SHARD_ALIGNMENT_V1
+        or shard_points % CORPUS_SHARD_ALIGNMENT_V1 != 0
+        or type(window_points) is int
+        and window_points % shard_points != 0
+    ):
+        return _reject(
+            ShardCorpusReasonV1.FOREIGN_INPUT,
+            "lane shard width must divide the window and stay packing-aligned",
+        )
+    window_job = lane_window_job_v1(
+        full_job, window_start, window_points, comparator.manifest.kind
+    )
+    if type(window_job) is not protocol.ProofJobV1:
+        return window_job
+    plan = shard_plan_v1(window_job.domain, shard_points)
+    if type(plan) is not tuple:
+        return plan
+    runner = ShardCorpusRunnerV1(
+        window_job,
+        comparator,
+        evidence_job_identity=full_job.identity,
+        retain_records=True,
+    )
+    shards = tuple(runner.run_shard(start, end) for start, end in plan)
+    counters = [0, 0, 0, 0]
+    witness_count = 0
+    for shard in shards:
+        for index in range(4):
+            counters[index] += shard.counters[index]
+        witness_count += shard.witness_count
+    return WindowLaneArtifactV1(
+        window_start,
+        window_points,
+        shards,
+        tuple(counters),
+        witness_count,
+        runner.accounting_digest,
+        runner.accounting_records,
     )
