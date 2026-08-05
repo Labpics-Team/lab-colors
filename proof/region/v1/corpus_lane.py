@@ -33,7 +33,7 @@ LANE_SCHEMA_V1 = "corpus-lane-v1"
 RECORD_BYTES_V1 = 17
 
 
-def _lane_comparator() -> protocol.ContentResolvedComparatorManifestV2:
+def lane_comparator_v1() -> protocol.ContentResolvedComparatorManifestV2:
     contents = tuple(
         f"corpus-lane-coordinate-{index}".encode("ascii") for index in range(10)
     )
@@ -47,31 +47,15 @@ def _lane_comparator() -> protocol.ContentResolvedComparatorManifestV2:
     )
 
 
-def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--window-start", type=int, required=True)
-    parser.add_argument("--window-points", type=int, required=True)
-    parser.add_argument("--shard-points", type=int, default=DEFAULT_SHARD_POINTS)
-    parser.add_argument("--out", type=Path, required=True)
-    args = parser.parse_args(argv)
+def write_lane_artifacts_v1(
+    lane: corpus.WindowLaneArtifactV1,
+    job: protocol.ProofJobV1,
+    comparator: protocol.ContentResolvedComparatorManifestV2,
+    shard_points: int,
+    out: Path,
+) -> dict:
+    """Write the lane wire layout and return its manifest dict."""
 
-    job = corpus.full_domain_job_v1(
-        protocol.ProofJobV1.parse(FIXTURE_JOB_V1.read_bytes())
-    )
-    comparator = _lane_comparator()
-    lane = corpus.run_window_lane_v1(
-        job, comparator, args.window_start, args.window_points, args.shard_points
-    )
-    if type(lane) is not corpus.WindowLaneArtifactV1:
-        print(
-            f"lane window rejected: start={args.window_start} "
-            f"points={args.window_points} shard_points={args.shard_points} "
-            f"({lane!r})",
-            file=sys.stderr,
-        )
-        return 64
-
-    out = args.out
     out.mkdir(parents=True, exist_ok=True)
     shard_entries = []
     for index, shard in enumerate(lane.shards):
@@ -96,7 +80,7 @@ def main(argv: list[str] | None = None) -> int:
         "schema": LANE_SCHEMA_V1,
         "window_start": lane.window_start,
         "window_points": lane.window_points,
-        "shard_points": args.shard_points,
+        "shard_points": shard_points,
         "job_identity": job.identity.hex(),
         "domain_identity": job.domain.identity.hex(),
         "policy_identity": job.policy.identity.hex(),
@@ -112,6 +96,34 @@ def main(argv: list[str] | None = None) -> int:
     (out / "lane-manifest.json").write_bytes(
         json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode("ascii")
     )
+    return manifest
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--window-start", type=int, required=True)
+    parser.add_argument("--window-points", type=int, required=True)
+    parser.add_argument("--shard-points", type=int, default=DEFAULT_SHARD_POINTS)
+    parser.add_argument("--out", type=Path, required=True)
+    args = parser.parse_args(argv)
+
+    job = corpus.full_domain_job_v1(
+        protocol.ProofJobV1.parse(FIXTURE_JOB_V1.read_bytes())
+    )
+    comparator = lane_comparator_v1()
+    lane = corpus.run_window_lane_v1(
+        job, comparator, args.window_start, args.window_points, args.shard_points
+    )
+    if type(lane) is not corpus.WindowLaneArtifactV1:
+        print(
+            f"lane window rejected: start={args.window_start} "
+            f"points={args.window_points} shard_points={args.shard_points} "
+            f"({lane!r})",
+            file=sys.stderr,
+        )
+        return 64
+
+    write_lane_artifacts_v1(lane, job, comparator, args.shard_points, args.out)
     print(
         f"lane [{lane.window_start}, {lane.window_start + lane.window_points}) "
         f"shards={len(lane.shards)} counters={lane.counters} "

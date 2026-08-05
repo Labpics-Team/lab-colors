@@ -19,6 +19,10 @@ on:
         description: lane window width (packing-aligned multiple of shard_points)
         required: false
         default: ""
+      lane_run_ids:
+        description: comma-separated lane run ids to assemble (empty skips assembly)
+        required: false
+        default: ""
 
 permissions:
   contents: read
@@ -69,4 +73,55 @@ jobs:
         with:
           name: corpus-lane-${{ inputs.window_start }}-${{ inputs.window_points }}
           path: lane-out/
+          if-no-files-found: error
+
+  assemble-lanes:
+    name: assemble the full-domain transcript from lane evidence
+    # Dispatch-only: downloads the lane wire evidence of the listed lane runs
+    # and refuses anything that does not cover the exact full domain.
+    if: inputs.lane_run_ids != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    permissions:
+      contents: read
+      # Required by `gh run download` when fetching lane artifacts from other runs.
+      actions: read
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONHASHSEED: "0"
+      LANE_RUN_IDS: ${{ inputs.lane_run_ids }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: download the lane wire evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p lanes
+          IFS=',' read -r -a RUNS <<< "${LANE_RUN_IDS}"
+          for run in "${RUNS[@]}"; do
+            run="$(echo "${run}" | tr -d '[:space:]')"
+            gh run download "${run}" \
+              --repo '${{ github.repository }}' \
+              --pattern 'corpus-lane-*' \
+              --dir lanes
+          done
+
+      - name: assemble the full-domain transcript
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 proof/region/v1/corpus_assembly.py \
+            --lanes-root lanes \
+            --out assembly-out
+
+      - name: upload the assembly receipt
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
+        with:
+          name: corpus-assembly-receipt
+          path: assembly-out/
           if-no-files-found: error
