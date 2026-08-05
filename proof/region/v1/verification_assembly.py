@@ -16,8 +16,13 @@ nothing ever seals.
 
 from __future__ import annotations
 
+import argparse
+import sys
+from pathlib import Path
+
 import corpus
 import corpus_assembly
+import corpus_lane
 import region_proof_protocol as protocol
 from semantic import verifier as semantic_verifier
 from semantic.receipt import (
@@ -29,6 +34,8 @@ from semantic.receipt import (
 VerificationAssemblyResultV1 = (
     SemanticVerificationReceiptV1 | SemanticVerificationRejectedV1
 )
+
+SEALED_RECEIPT_NAME_V1 = "semantic-verification-receipt.bin"
 
 
 def _reject(
@@ -85,3 +92,68 @@ def assemble_semantic_verification_v1(
             "the independent lane replay does not bind the verified transcript",
         )
     return SemanticVerificationReceiptV1._seal(job, comparator, run, transcript)
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Seal the semantic verification receipt from disk evidence and lanes.
+
+    Consumes exactly the wire surfaces the engine RUN and the verification
+    lanes upload: the engine evidence directory (job, comparator bundle,
+    transcript, run claim) and a root of lane artifact directories.  Any
+    missing, corrupt, or unbound coordinate is a fail-closed exit before any
+    receipt exists.
+    """
+
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--evidence", type=Path, required=True)
+    parser.add_argument("--lanes-root", type=Path, required=True)
+    parser.add_argument("--out", type=Path, required=True)
+    args = parser.parse_args(argv)
+
+    try:
+        job = protocol.ProofJobV1.parse((args.evidence / "job.bin").read_bytes())
+        comparator = corpus_lane.load_comparator_bundle_v1(
+            args.evidence / "comparator-bundle"
+        )
+        transcript = protocol.DecisionTranscriptV1.parse(
+            (args.evidence / "transcript.bin").read_bytes()
+        )
+        run = protocol.RunClaimV1.parse(
+            (args.evidence / "run-claim.bin").read_bytes()
+        )
+    except (OSError, protocol.ProtocolErrorV1) as exc:
+        print(f"engine evidence rejected: {exc}", file=sys.stderr)
+        return 64
+
+    if not args.lanes_root.is_dir():
+        print(f"lanes root is not a directory: {args.lanes_root}", file=sys.stderr)
+        return 64
+    lane_dirs = sorted(
+        path
+        for path in args.lanes_root.iterdir()
+        if path.is_dir() and (path / "lane-manifest.json").exists()
+    )
+    lanes = []
+    for lane_dir in lane_dirs:
+        lane = corpus_assembly.load_lane_v1(lane_dir, job, comparator)
+        if type(lane) is not corpus_assembly.AdmittedLaneV1:
+            print(f"lane rejected: {lane_dir.name} ({lane!r})", file=sys.stderr)
+            return 64
+        lanes.append(lane)
+    lanes.sort(key=lambda lane: lane.window_start)
+
+    result = assemble_semantic_verification_v1(job, comparator, transcript, run, lanes)
+    if type(result) is not SemanticVerificationReceiptV1:
+        print(f"semantic verification rejected: {result!r}", file=sys.stderr)
+        return 64
+    args.out.mkdir(parents=True, exist_ok=True)
+    (args.out / SEALED_RECEIPT_NAME_V1).write_bytes(result.encode())
+    print(
+        f"sealed lanes={len(lanes)} points={transcript.point_count} "
+        f"receipt={result.identity.hex()}"
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
