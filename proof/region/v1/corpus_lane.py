@@ -133,6 +133,50 @@ def load_comparator_bundle_v1(
     return protocol.ContentResolvedComparatorManifestV2.admit(manifest, contents.get)
 
 
+def write_verification_evidence_v1(receipt: object, out: Path) -> None:
+    """Write the verification lanes' wire evidence from a source-bound receipt.
+
+    The evidence is exactly what the lane runner consumes: the canonical job
+    encoding the evaluator ran under, and the comparator bundle rebuilt from
+    the controller-derived comparator's retained preimage bytes.  Nothing is
+    re-derived and no second source of truth is created — the receipt already
+    carries every coordinate.
+    """
+
+    def fail(detail: str) -> NoReturn:
+        raise protocol.ProtocolErrorV1(
+            "verification-evidence-v1",
+            0,
+            protocol.ProtocolReasonV1.INVALID_MANIFEST,
+            detail,
+        )
+
+    try:
+        job = receipt.job  # type: ignore[union-attr]
+        comparator = receipt.comparator  # type: ignore[union-attr]
+        resolved = comparator.manifest
+        preimages = comparator.preimages
+    except AttributeError:
+        fail("verification evidence requires a source-bound receipt carrying"
+             " its job and controller-derived comparator")
+    if type(job) is not protocol.ProofJobV1:
+        fail("verification evidence requires the canonical proof job the"
+             " evaluator ran under")
+    if type(resolved) is not protocol.ContentResolvedComparatorManifestV2:
+        fail("verification evidence requires an admitted comparator manifest")
+    try:
+        contents = {
+            hashlib.sha256(getattr(preimages, field.name)).digest():
+            getattr(preimages, field.name)
+            for field in fields(preimages)
+        }
+    except (AttributeError, TypeError):
+        fail("verification evidence requires the comparator's retained"
+             " preimage coordinates")
+    write_comparator_bundle_v1(resolved.manifest, contents, out / "comparator-bundle")
+    (out / "job.bin").write_bytes(job.encode())
+
+
 def write_lane_artifacts_v1(
     lane: corpus.WindowLaneArtifactV1,
     job: protocol.ProofJobV1,
