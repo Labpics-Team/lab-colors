@@ -46,9 +46,10 @@ def assemble_semantic_verification_v1(
 ) -> VerificationAssemblyResultV1:
     """Seal the semantic verification receipt from a complete lane cover.
 
-    The lanes are independently replayed windows of the job's domain; the
-    receipt seals exactly when their cover is exact and their reassembled
-    replay binds the verified transcript byte for byte.
+    The lanes are the same admitted wire lanes the corpus RUN assembly uses:
+    independently replayed windows of the job's domain.  The receipt seals
+    exactly when their cover is exact and their reassembled replay binds the
+    verified transcript byte for byte.
     """
 
     binding = semantic_verifier.bind_transcript_v1(job, comparator, transcript, run)
@@ -62,29 +63,13 @@ def assemble_semantic_verification_v1(
             "laned verification requires an iterable lane cover",
         )
     if not lane_tuple or any(
-        type(lane) is not corpus.WindowLaneArtifactV1 for lane in lane_tuple
+        type(lane) is not corpus_assembly.AdmittedLaneV1 for lane in lane_tuple
     ):
         return _reject(
             SemanticVerificationReasonV1.INVALID_INPUT,
-            "laned verification requires canonical window lane evidence",
+            "laned verification requires canonical admitted lane evidence",
         )
-    admitted = []
-    try:
-        for lane in lane_tuple:
-            admitted.append(
-                corpus_assembly.AdmittedLaneV1(
-                    lane.window_start,
-                    lane.window_points,
-                    lane.shards,
-                    lane.accounting_records,
-                )
-            )
-    except TypeError as error:
-        return _reject(
-            SemanticVerificationReasonV1.FOREIGN_BINDING,
-            f"lane evidence does not admit: {error}",
-        )
-    assembled = corpus_assembly.assemble_lanes_v1(job, comparator, admitted)
+    assembled = corpus_assembly.assemble_lanes_v1(job, comparator, lane_tuple)
     if type(assembled) is not protocol.DecisionTranscriptV1:
         reason = (
             SemanticVerificationReasonV1.INVALID_INPUT

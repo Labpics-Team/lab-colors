@@ -21,6 +21,7 @@ PROOF = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROOF))
 
 import corpus  # noqa: E402
+import corpus_assembly  # noqa: E402
 import corpus_lane  # noqa: E402
 import region_proof_protocol as protocol  # noqa: E402
 import verification_assembly  # noqa: E402
@@ -83,7 +84,7 @@ def comparator() -> protocol.ContentResolvedComparatorManifestV2:
     return corpus_lane.lane_comparator_v1()
 
 
-def lanes(
+def window_lanes(
     job: protocol.ProofJobV1,
     comparator_manifest: protocol.ContentResolvedComparatorManifestV2,
 ) -> tuple:
@@ -92,6 +93,21 @@ def lanes(
             job, comparator_manifest, start, WINDOW_POINTS, SHARD_POINTS
         )
         for start in range(0, job.domain.point_count, WINDOW_POINTS)
+    )
+
+
+def lanes(
+    job: protocol.ProofJobV1,
+    comparator_manifest: protocol.ContentResolvedComparatorManifestV2,
+) -> tuple:
+    return tuple(
+        corpus_assembly.AdmittedLaneV1(
+            lane.window_start,
+            lane.window_points,
+            lane.shards,
+            lane.accounting_records,
+        )
+        for lane in window_lanes(job, comparator_manifest)
     )
 
 
@@ -262,6 +278,61 @@ class LanedSemanticVerificationTests(unittest.TestCase):
             self.job, self.comparator, self.transcript, self.run_claim, shifted
         )
         self.assertIs(type(result), SemanticVerificationRejectedV1)
+
+
+    def test_wire_lane_round_trip_seals_the_same_receipt(self) -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as root:
+            from pathlib import Path
+
+            directories = []
+            for index, lane in enumerate(window_lanes(self.job, self.comparator)):
+                out = Path(root) / f"lane-{index:05d}"
+                corpus_lane.write_lane_artifacts_v1(
+                    lane, self.job, self.comparator, SHARD_POINTS, out
+                )
+                directories.append(out)
+            loaded = [
+                corpus_assembly.load_lane_v1(directory, self.job, self.comparator)
+                for directory in directories
+            ]
+            for lane in loaded:
+                self.assertIs(type(lane), corpus_assembly.AdmittedLaneV1)
+            result = verification_assembly.assemble_semantic_verification_v1(
+                self.job, self.comparator, self.transcript, self.run_claim, tuple(loaded)
+            )
+            self.assertIs(type(result), type(self.monolithic))
+            self.assertEqual(result.identity, self.monolithic.identity)
+
+    def test_wire_lanes_bound_to_a_foreign_comparator_never_admit(self) -> None:
+        import hashlib as _hashlib
+        import tempfile
+
+        foreign = protocol.ContentResolvedComparatorManifestV2.admit(
+            protocol.ComparatorManifestV2(
+                protocol.ComparatorKindV1.ARB,
+                *(
+                    _hashlib.sha256(f"foreign-verification-{i}".encode()).digest()
+                    for i in range(10)
+                ),
+            ),
+            {
+                _hashlib.sha256(f"foreign-verification-{i}".encode()).digest():
+                f"foreign-verification-{i}".encode()
+                for i in range(10)
+            }.get,
+        )
+        with tempfile.TemporaryDirectory() as root:
+            from pathlib import Path
+
+            lane = window_lanes(self.job, self.comparator)[0]
+            out = Path(root) / "lane-00000"
+            corpus_lane.write_lane_artifacts_v1(
+                lane, self.job, self.comparator, SHARD_POINTS, out
+            )
+            loaded = corpus_assembly.load_lane_v1(out, self.job, foreign)
+            self.assertIsNot(type(loaded), corpus_assembly.AdmittedLaneV1)
 
 
 if __name__ == "__main__":
