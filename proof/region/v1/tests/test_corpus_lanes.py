@@ -180,6 +180,31 @@ class LaneWindowJobTests(unittest.TestCase):
         )
         self.assertNotEqual(window_job.identity, job.identity)
 
+    def test_lane_window_job_rejects_a_window_outside_its_domain(self) -> None:
+        # A lane claims byte-identity with the same window of the monolithic
+        # run, so a window the run never visits has no counterpart to be
+        # identical to.  Rejecting it up front also stops a full replay of
+        # ordinals that assembly would discard afterwards.
+        ordinals = tuple(range(0, 128)) + tuple(range(65_792, 65_920))
+        job = _job_with_pregrant(ordinals, 256, per_point_work=1)
+        for window_start, window_points in ((128, 64), (64, 128), (65_888, 64)):
+            result = corpus.lane_window_job_v1(
+                job, window_start, window_points, ARB_KIND
+            )
+            self.assertIs(
+                type(result),
+                corpus.ShardCorpusRejectedV1,
+                (window_start, window_points),
+            )
+            self.assertEqual(result.reason, corpus.ShardCorpusReasonV1.FOREIGN_INPUT)
+        # The windows that do lie inside one range stay admissible.
+        for window_start in (0, 64, 65_792, 65_856):
+            self.assertIs(
+                type(corpus.lane_window_job_v1(job, window_start, 64, ARB_KIND)),
+                protocol.ProofJobV1,
+                window_start,
+            )
+
     def test_lane_window_job_rejects_foreign_coordinates(self) -> None:
         job = _job_with_pregrant(tuple(range(256)), 0)
         result = corpus.lane_window_job_v1(job.domain, 0, 64, ARB_KIND)

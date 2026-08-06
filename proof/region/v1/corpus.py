@@ -551,6 +551,20 @@ def lane_window_job_v1(
     rejection = _validate_lane_window(window_start, window_points)
     if rejection is not None:
         return rejection
+    # A lane claims byte-identity with the same window of the monolithic run,
+    # so that window must exist in the run: one crossing a domain gap has no
+    # monolithic counterpart at all and would replay ordinals the run never
+    # visits.  Ranges are sorted and never adjacent, so containment means
+    # containment in one range.
+    if not any(
+        start <= window_start and window_start + window_points <= end
+        for start, end in full_job.domain.ranges
+    ):
+        return _reject(
+            ShardCorpusReasonV1.FOREIGN_INPUT,
+            f"lane window [{window_start}, +{window_points}) is not contained"
+            f" in one range of the job's domain",
+        )
     budgets = []
     matched = False
     for budget in full_job.policy.comparators:

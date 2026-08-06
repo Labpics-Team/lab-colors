@@ -310,7 +310,8 @@ class FullDomainJobTests(unittest.TestCase):
     def test_work_bound_covers_every_rung_not_only_the_first(self) -> None:
         # A point's grant is shared across the ladder: one that pays a branch
         # at a low rung and stays BOUNDARY_UNPROVEN escalates and pays again.
-        # Budgeting a single rung starves exactly those points.
+        # Budgeting a single rung starves points that escalate past that
+        # share — the very points the ladder exists for.
         definition = _base_job().definition
         segments = max(1, definition.knot_count - 1)
         for ladder in ((64,), (16, 64), (64, 128), (32, 64, 128, 256)):
