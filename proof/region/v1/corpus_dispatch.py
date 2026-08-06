@@ -17,6 +17,8 @@ import argparse
 import json
 import subprocess
 import sys
+import tempfile
+from collections.abc import Iterable
 from pathlib import Path
 
 PROOF = Path(__file__).resolve().parent
@@ -35,6 +37,14 @@ VERIFICATION_WORKFLOW_V1 = "verification-lanes.yml"
 EVIDENCE_ARTIFACTS_V1 = (
     "verification-evidence-arb",
     "verification-evidence-mpfi",
+)
+# What every lane reads out of the artifact it downloads, relative to the
+# artifact root.  This is a contract with `verification-lanes.yml`, which
+# guards exactly these paths before it replays anything; a test binds the
+# two together in both directions so they cannot drift apart.
+EVIDENCE_LANE_INPUTS_V1 = (
+    "job.bin",
+    "comparator-bundle/comparator-manifest-v2.bin",
 )
 DEFAULT_LANE_WIDTH = 1 << 16
 DEFAULT_SHARD_WIDTH = corpus_lane.DEFAULT_SHARD_POINTS
@@ -188,6 +198,111 @@ def verification_dispatch_commands_v1(
     )
 
 
+def missing_lane_inputs_v1(observed_paths: Iterable[str]) -> tuple[str, ...]:
+    """Which lane inputs a downloaded evidence artifact does not carry.
+
+    The rule of this admission, kept pure and off the network so a test can
+    reach it.  Paths match exactly, in the declared order: the lane runs
+    `test -f` on the exact path, so a suffixed sibling, the directory above
+    it, a backslash-joined spelling or a different case is absent to the
+    lane and must read absent here.  Entries that are not strings cannot be
+    a path the lane found, so they never satisfy a requirement.
+    """
+
+    present = frozenset(path for path in observed_paths if type(path) is str)
+    return tuple(
+        required
+        for required in EVIDENCE_LANE_INPUTS_V1
+        if required not in present
+    )
+
+
+def gh_evidence_artifact_paths_v1(run_id: int, artifact: str) -> tuple[str, ...]:
+    """Every file the named artifact of that run carries, relative to its root.
+
+    The one impure boundary of this admission: it downloads exactly what the
+    lanes will download, into a temporary directory it owns and always
+    removes, and reports what arrived without deciding anything.  Which of
+    those paths count is a rule, so it lives in `missing_lane_inputs_v1` —
+    filtering here would put the rule behind the network.  The evidence is
+    two files well under a megabyte, so this one download costs less than a
+    single doomed lane, let alone 256 of them.
+    """
+
+    with tempfile.TemporaryDirectory(prefix="verification-evidence-") as tmp:
+        root = Path(tmp)
+        subprocess.run(
+            (
+                "gh",
+                "run",
+                "download",
+                str(run_id),
+                "--name",
+                artifact,
+                "--dir",
+                str(root),
+            ),
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        return tuple(
+            sorted(
+                path.relative_to(root).as_posix()
+                for path in root.rglob("*")
+                if path.is_file()
+            )
+        )
+
+
+def admit_evidence_artifact_content_v1(
+    evidence_run_id: int,
+    evidence_artifact: str,
+    observer: object | None = None,
+) -> corpus.ShardCorpusRejectedV1 | None:
+    """Refuse a dispatch whose evidence artifact lacks what the lanes read.
+
+    A name is not a layout.  An evidence run produced before the exporter
+    settled on today's `evidence-out/` carries the right artifact name and
+    the wrong contents: it passes every name check and then dies in all 256
+    lanes, seconds apart, on the first `test -f`.  So the coordinator reads
+    the artifact once before it dispatches, and admits it only when every
+    lane input is there.  Any failure to observe is itself a refusal —
+    never a crash, never a silent proceed.  The run id and the artifact
+    name are admitted upstream; this admission speaks about content only.
+    """
+
+    # Resolved here, not captured as a default: a default binds the module
+    # attribute at definition time, which makes the injection point real for
+    # a caller but invisible to anything that replaces the observer — the
+    # seam would look injectable and not be.
+    if observer is None:
+        observer = gh_evidence_artifact_paths_v1
+    try:
+        observed = tuple(observer(evidence_run_id, evidence_artifact))  # type: ignore[operator]
+    except Exception as error:
+        # The download is a hostile boundary: a deleted run, an expired
+        # artifact, a missing token and a broken network must all land as
+        # one refusal.  The cause travels with it — an operator has to tell
+        # "no such run" from "no token", and a bare refusal makes those look
+        # identical.  CalledProcessError.__repr__ drops stderr, and stderr
+        # is where the only distinguishing text lives.
+        cause = getattr(error, "stderr", None) or repr(error)
+        return corpus._reject(
+            corpus.ShardCorpusReasonV1.FOREIGN_INPUT,
+            f"verification dispatch cannot read artifact {evidence_artifact!r}"
+            f" of run {evidence_run_id}: {str(cause).strip()}",
+        )
+    missing = missing_lane_inputs_v1(observed)
+    if missing:
+        return corpus._reject(
+            corpus.ShardCorpusReasonV1.FOREIGN_INPUT,
+            f"artifact {evidence_artifact!r} of run {evidence_run_id} carries"
+            f" no {', '.join(missing)}",
+        )
+    return None
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -242,6 +357,18 @@ def main(argv: list[str] | None = None) -> int:
             args.evidence_run_id,
             args.evidence_artifact,
         )
+        if type(commands) is tuple and not args.dry_run:
+            # Fail closed before the first dispatch: a dry run stays offline
+            # by contract, so the download belongs to the live path only.
+            refusal = admit_evidence_artifact_content_v1(
+                args.evidence_run_id, args.evidence_artifact
+            )
+            if refusal is not None:
+                print(
+                    f"verification dispatch refused: {refusal.detail}",
+                    file=sys.stderr,
+                )
+                return 64
     else:
         commands = dispatch_commands_v1(plan, args.shard_width)
     for command in commands:

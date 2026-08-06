@@ -15,16 +15,27 @@ downloads exactly that artifact, and foreign artifact names are typed
 rejections before any dispatch exists.  Plans that cannot cover the domain
 exactly and evidence run ids that are not positive integers are likewise
 typed rejections.
+
+A name is not a layout.  An evidence run built by an older producer carries
+the right artifact name and the wrong `evidence-out/` contents, passes every
+check above, and then dies in all 256 lanes on the first `test -f`.  So the
+admission also reads the artifact: one download of two small files decides
+what 256 lanes would otherwise discover one at a time.  The list of paths a
+lane needs is a contract with `verification-lanes.yml`, so it is bound to the
+workflow text here rather than restated by hand.
 """
 
 from __future__ import annotations
 
 import io
+import re
+import subprocess
 import sys
 import tempfile
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
+from unittest import mock
 
 PROOF = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROOF))
@@ -35,6 +46,13 @@ import corpus_dispatch  # noqa: E402
 REPO = PROOF.parents[2]
 ARB_ARTIFACT = "verification-evidence-arb"
 MPFI_ARTIFACT = "verification-evidence-mpfi"
+VERIFICATION_WORKFLOW = (
+    REPO / ".github" / "workflows" / "verification-lanes.yml"
+)
+# `test -f "${evidence}/<path>"` — the lane's own statement of what it needs.
+LANE_INPUT_GUARD_V1 = re.compile(r'test -f "\$\{evidence\}/([^"]+)"')
+# Every use of the downloaded artifact root, guard or runner argument alike.
+LANE_EVIDENCE_USE_V1 = re.compile(r'\$\{evidence\}/([^"\s]+)')
 
 
 class EvidenceArtifactAllowlistTests(unittest.TestCase):
@@ -245,6 +263,371 @@ class VerificationWorkflowContractTests(unittest.TestCase):
         text = producer.read_text(encoding="utf-8")
         for artifact in corpus_dispatch.EVIDENCE_ARTIFACTS_V1:
             self.assertIn(artifact, text)
+
+
+class LaneInputContractTests(unittest.TestCase):
+    """The admitted paths are the lane's requirements, not a private guess.
+
+    The coordinator refuses an evidence artifact that lacks what the lane
+    reads.  If that list and the workflow drift apart, the admission either
+    passes runs the lane cannot use — the incident it exists to prevent — or
+    refuses runs the lane could.  So the list is read back out of the
+    workflow text, in both directions.
+    """
+
+    def test_the_declared_lane_inputs_are_exactly_the_workflow_guards(self) -> None:
+        text = VERIFICATION_WORKFLOW.read_text(encoding="utf-8")
+        guarded = tuple(LANE_INPUT_GUARD_V1.findall(text))
+        self.assertTrue(
+            guarded, "the lane guards no evidence file: the contract is unreadable"
+        )
+        self.assertEqual(
+            len(set(guarded)), len(guarded), "the lane guards a path twice"
+        )
+        self.assertEqual(
+            sorted(guarded), sorted(corpus_dispatch.EVIDENCE_LANE_INPUTS_V1)
+        )
+
+    def test_every_evidence_path_the_lane_uses_is_admitted(self) -> None:
+        # A guard can be forgotten; a runner argument cannot.  Every path the
+        # lane reads out of the artifact must be a declared lane input or a
+        # directory on the way to one, or the admission has a blind spot.
+        text = VERIFICATION_WORKFLOW.read_text(encoding="utf-8")
+        used = tuple(LANE_EVIDENCE_USE_V1.findall(text))
+        self.assertTrue(used, "the lane reads nothing out of the artifact")
+        for path in used:
+            covered = path in corpus_dispatch.EVIDENCE_LANE_INPUTS_V1 or any(
+                required.startswith(f"{path}/")
+                for required in corpus_dispatch.EVIDENCE_LANE_INPUTS_V1
+            )
+            self.assertTrue(
+                covered,
+                f"the lane reads {path!r} but the dispatch does not admit it",
+            )
+
+
+class LaneInputRuleTests(unittest.TestCase):
+    """The rule: which lane inputs a downloaded artifact does not carry."""
+
+    def _complete(self) -> tuple[str, ...]:
+        # The rest of the exported evidence: bundle contents addressed by
+        # hex, and the engine's sealed run coordinates.  The lane does not
+        # read them, so they neither satisfy nor block an admission.
+        return corpus_dispatch.EVIDENCE_LANE_INPUTS_V1 + (
+            "comparator-bundle/content/9f86d081884c7d65",
+            "transcript.bin",
+            "run-claim.bin",
+        )
+
+    def test_a_complete_artifact_is_missing_nothing(self) -> None:
+        self.assertEqual(
+            corpus_dispatch.missing_lane_inputs_v1(self._complete()), ()
+        )
+
+    def test_each_lane_input_is_reported_when_it_is_the_one_absent(self) -> None:
+        for required in corpus_dispatch.EVIDENCE_LANE_INPUTS_V1:
+            observed = tuple(
+                path for path in self._complete() if path != required
+            )
+            self.assertEqual(
+                corpus_dispatch.missing_lane_inputs_v1(observed),
+                (required,),
+                f"{required!r} was not reported as absent",
+            )
+
+    def test_an_empty_artifact_misses_every_lane_input_in_declared_order(self) -> None:
+        self.assertEqual(
+            corpus_dispatch.missing_lane_inputs_v1(()),
+            corpus_dispatch.EVIDENCE_LANE_INPUTS_V1,
+        )
+
+    def test_a_near_miss_does_not_satisfy_a_lane_input(self) -> None:
+        # The lane runs `test -f` on the exact path.  Anything that is not
+        # that path — a suffixed sibling, the directory above it, a
+        # backslash-joined or trailing-slash spelling, a different case — is
+        # absent as far as the lane is concerned, and must read absent here.
+        for near in (
+            "job.bin.txt",
+            "evidence-out/job.bin",
+            "comparator-bundle",
+            "comparator-bundle/",
+            "comparator-bundle\\comparator-manifest-v2.bin",
+            "comparator-bundle/comparator-manifest-v2.BIN",
+            "comparator-bundle/comparator-manifest-v1.bin",
+        ):
+            self.assertEqual(
+                corpus_dispatch.missing_lane_inputs_v1((near,)),
+                corpus_dispatch.EVIDENCE_LANE_INPUTS_V1,
+                f"{near!r} was accepted for a lane input it is not",
+            )
+
+    def test_foreign_observed_entries_are_ignored_not_matched(self) -> None:
+        observed = (
+            b"job.bin",
+            None,
+            17,
+            Path("comparator-bundle/comparator-manifest-v2.bin"),
+        )
+        self.assertEqual(
+            corpus_dispatch.missing_lane_inputs_v1(observed),
+            corpus_dispatch.EVIDENCE_LANE_INPUTS_V1,
+        )
+
+
+class EvidenceDownloadObserverTests(unittest.TestCase):
+    """The impure boundary: download the artifact, report it, leave no trace."""
+
+    def test_the_download_reports_its_files_and_removes_its_directory(self) -> None:
+        seen: dict[str, object] = {}
+
+        def fake_run(argv, **kwargs):
+            argv = tuple(argv)
+            seen["argv"] = argv
+            directory = Path(argv[argv.index("--dir") + 1])
+            seen["dir"] = directory
+            (directory / "job.bin").write_bytes(b"\x00")
+            bundle = directory / "comparator-bundle"
+            (bundle / "content").mkdir(parents=True)
+            (bundle / "comparator-manifest-v2.bin").write_bytes(b"\x01")
+            (bundle / "content" / "9f86d081884c7d65").write_bytes(b"\x02")
+            return subprocess.CompletedProcess(argv, 0, "", "")
+
+        with mock.patch.object(corpus_dispatch.subprocess, "run", fake_run):
+            observed = corpus_dispatch.gh_evidence_artifact_paths_v1(
+                31000000001, ARB_ARTIFACT
+            )
+
+        # Nested files are reported by their path under the artifact root,
+        # which is the shape the rule matches against.
+        self.assertEqual(
+            observed,
+            (
+                "comparator-bundle/comparator-manifest-v2.bin",
+                "comparator-bundle/content/9f86d081884c7d65",
+                "job.bin",
+            ),
+        )
+        argv = seen["argv"]
+        self.assertEqual(argv[:4], ("gh", "run", "download", "31000000001"))
+        self.assertEqual(argv[argv.index("--name") + 1], ARB_ARTIFACT)
+        self.assertFalse(
+            Path(seen["dir"]).exists(),
+            "the download directory outlived the observation",
+        )
+
+    def test_a_failed_download_still_removes_its_directory(self) -> None:
+        seen: dict[str, object] = {}
+
+        def fake_run(argv, **kwargs):
+            argv = tuple(argv)
+            directory = Path(argv[argv.index("--dir") + 1])
+            seen["dir"] = directory
+            (directory / "partial.bin").write_bytes(b"\x00")
+            raise subprocess.CalledProcessError(1, argv, "", "no artifact matches")
+
+        with mock.patch.object(corpus_dispatch.subprocess, "run", fake_run):
+            with self.assertRaises(subprocess.CalledProcessError):
+                corpus_dispatch.gh_evidence_artifact_paths_v1(1, MPFI_ARTIFACT)
+
+        self.assertFalse(
+            Path(seen["dir"]).exists(),
+            "a failed download left its directory behind",
+        )
+
+
+class EvidenceContentAdmissionTests(unittest.TestCase):
+    """The admission: refuse an artifact the lanes could not use."""
+
+    def _complete(self) -> tuple[str, ...]:
+        return corpus_dispatch.EVIDENCE_LANE_INPUTS_V1 + ("run-claim.bin",)
+
+    def test_a_complete_artifact_is_admitted_after_one_observation(self) -> None:
+        calls: list[tuple[object, ...]] = []
+
+        def observer(run_id, artifact):
+            calls.append((run_id, artifact))
+            return self._complete()
+
+        self.assertIsNone(
+            corpus_dispatch.admit_evidence_artifact_content_v1(
+                31000000001, ARB_ARTIFACT, observer
+            )
+        )
+        self.assertEqual(calls, [(31000000001, ARB_ARTIFACT)])
+
+    def test_a_missing_lane_input_is_a_typed_refusal_that_names_it(self) -> None:
+        for required in corpus_dispatch.EVIDENCE_LANE_INPUTS_V1:
+            observed = tuple(
+                path for path in self._complete() if path != required
+            )
+            refusal = corpus_dispatch.admit_evidence_artifact_content_v1(
+                31000000001, MPFI_ARTIFACT, lambda *_: observed
+            )
+            self.assertIs(type(refusal), corpus.ShardCorpusRejectedV1)
+            self.assertEqual(
+                refusal.reason, corpus.ShardCorpusReasonV1.FOREIGN_INPUT
+            )
+            self.assertIn(required, refusal.detail)
+            self.assertIn("31000000001", refusal.detail)
+            self.assertIn(MPFI_ARTIFACT, refusal.detail)
+
+    def test_an_unobservable_run_is_a_refusal_carrying_the_cause(self) -> None:
+        def observer(run_id, artifact):
+            raise subprocess.CalledProcessError(
+                1, ("gh",), "", "HTTP 404: Not Found (run 31000000001)"
+            )
+
+        refusal = corpus_dispatch.admit_evidence_artifact_content_v1(
+            31000000001, ARB_ARTIFACT, observer
+        )
+        self.assertIs(type(refusal), corpus.ShardCorpusRejectedV1)
+        self.assertEqual(
+            refusal.reason, corpus.ShardCorpusReasonV1.FOREIGN_INPUT
+        )
+        # An operator must be able to tell "no such run" from "no token";
+        # a bare refusal makes those look identical.
+        self.assertIn("HTTP 404: Not Found", refusal.detail)
+
+    def test_any_failure_to_observe_is_a_refusal_not_a_crash(self) -> None:
+        def raiser(error):
+            def observer(run_id, artifact):
+                raise error
+
+            return observer
+
+        for observer in (
+            raiser(RuntimeError("gh: command not found")),
+            raiser(OSError(13, "Permission denied")),
+            raiser(TimeoutError("download timed out")),
+            lambda run_id, artifact: 17,
+            lambda run_id, artifact: None,
+        ):
+            refusal = corpus_dispatch.admit_evidence_artifact_content_v1(
+                31000000001, ARB_ARTIFACT, observer
+            )
+            self.assertIs(
+                type(refusal),
+                corpus.ShardCorpusRejectedV1,
+                f"{observer!r} did not land as a refusal",
+            )
+            self.assertEqual(
+                refusal.reason, corpus.ShardCorpusReasonV1.FOREIGN_INPUT
+            )
+
+    def test_the_default_observer_is_resolved_at_call_time(self) -> None:
+        # A default argument would bind the module attribute at definition
+        # time: the seam would look injectable and not be.
+        calls: list[tuple[object, ...]] = []
+
+        def observer(run_id, artifact):
+            calls.append((run_id, artifact))
+            return corpus_dispatch.EVIDENCE_LANE_INPUTS_V1
+
+        with mock.patch.object(
+            corpus_dispatch, "gh_evidence_artifact_paths_v1", observer
+        ):
+            self.assertIsNone(
+                corpus_dispatch.admit_evidence_artifact_content_v1(
+                    31000000001, ARB_ARTIFACT
+                )
+            )
+        self.assertEqual(calls, [(31000000001, ARB_ARTIFACT)])
+
+
+class VerificationDispatchContentAdmissionCliTests(unittest.TestCase):
+    """One download decides; 256 lanes never start on evidence they cannot read."""
+
+    def _dispatch(self, argv: list[str]) -> tuple[int, list[tuple[str, ...]]]:
+        dispatched: list[tuple[str, ...]] = []
+
+        def fake_run(command, **kwargs):
+            dispatched.append(tuple(command))
+            return subprocess.CompletedProcess(tuple(command), 0)
+
+        with mock.patch.object(corpus_dispatch.subprocess, "run", fake_run):
+            with redirect_stdout(io.StringIO()):
+                exit_code = corpus_dispatch.main(argv)
+        return exit_code, dispatched
+
+    def test_the_live_path_refuses_before_the_first_dispatch(self) -> None:
+        observed = tuple(
+            path
+            for path in corpus_dispatch.EVIDENCE_LANE_INPUTS_V1
+            if path != "job.bin"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.object(
+                corpus_dispatch,
+                "gh_evidence_artifact_paths_v1",
+                lambda *_: observed,
+            ):
+                exit_code, dispatched = self._dispatch(
+                    [
+                        "--mode",
+                        "verification-dispatch",
+                        "--evidence-run-id",
+                        "31000000001",
+                        "--evidence-artifact",
+                        ARB_ARTIFACT,
+                        "--out",
+                        str(Path(tmp) / "out"),
+                    ]
+                )
+        self.assertEqual(exit_code, 64)
+        self.assertEqual(dispatched, [])
+
+    def test_all_256_lanes_dispatch_after_one_admitted_download(self) -> None:
+        calls: list[tuple[object, ...]] = []
+
+        def observer(run_id, artifact):
+            calls.append((run_id, artifact))
+            return corpus_dispatch.EVIDENCE_LANE_INPUTS_V1
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.object(
+                corpus_dispatch, "gh_evidence_artifact_paths_v1", observer
+            ):
+                exit_code, dispatched = self._dispatch(
+                    [
+                        "--mode",
+                        "verification-dispatch",
+                        "--evidence-run-id",
+                        "31000000001",
+                        "--evidence-artifact",
+                        MPFI_ARTIFACT,
+                        "--out",
+                        str(Path(tmp) / "out"),
+                    ]
+                )
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(len(dispatched), 256)
+        self.assertEqual(calls, [(31000000001, MPFI_ARTIFACT)])
+
+    def test_a_dry_run_stays_offline(self) -> None:
+        def observer(run_id, artifact):
+            raise AssertionError("a dry run downloaded the evidence")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.object(
+                corpus_dispatch, "gh_evidence_artifact_paths_v1", observer
+            ):
+                exit_code, dispatched = self._dispatch(
+                    [
+                        "--mode",
+                        "verification-dispatch",
+                        "--lane-width",
+                        str(1 << 23),
+                        "--evidence-run-id",
+                        "31000000001",
+                        "--evidence-artifact",
+                        ARB_ARTIFACT,
+                        "--dry-run",
+                        "--out",
+                        str(Path(tmp) / "out"),
+                    ]
+                )
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(dispatched, [])
 
 
 if __name__ == "__main__":
