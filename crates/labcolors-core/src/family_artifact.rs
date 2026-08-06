@@ -52,6 +52,11 @@ const HEADER_LEN_V2: usize = 254;
 /// приходит по доверенному каналу, а payload — по любому. Отдельный формат для
 /// неё не нужен и был бы вторым источником истины.
 pub(crate) const FAMILY_CERTIFICATE_RECORD_LEN_V2: usize = HEADER_LEN_V2;
+/// Тело сертификата — запись без магии.
+///
+/// Размер выражен типом, а не `debug_assert`: в release-сборке утверждение
+/// вырезается, и третий вызывающий получил бы панику вместо отказа.
+const CERTIFICATE_BODY_LEN_V2: usize = HEADER_LEN_V2 - 8;
 const PAYLOAD_DIGEST_DOMAIN_V2: &[u8] = b"labcolors.family-artifact-payload.v2\0";
 const RECEIPT_DOMAIN_V2: &[u8] = b"labcolors.family-artifact-receipt.v2\0";
 const FIXTURE_PROOF_ARTIFACT_DOMAIN_V2: &[u8] = b"labcolors.family-artifact-fixture-proof.v2\0";
@@ -136,8 +141,14 @@ impl FamilyImageCertificateV2 {
     /// приходит от потребителя. Встроенный реестр семейств здесь означал бы
     /// возврат к именованным ролям внутри ядра.
     pub(crate) fn parse_trusted(bytes: &[u8]) -> Result<Self, FamilyArtifactLoadErrorV1> {
+        // Same order the envelope refuses in: too short, then foreign magic,
+        // then the exact length.  A record and an artifact that disagree
+        // about which refusal comes first would make one of the two lie.
         if bytes.len() < FAMILY_CERTIFICATE_RECORD_LEN_V2 {
             return Err(FamilyArtifactLoadErrorV1::HeaderTooShort);
+        }
+        if bytes.get(..MAGIC_V2.len()) != Some(MAGIC_V2) {
+            return Err(FamilyArtifactLoadErrorV1::InvalidMagic);
         }
         if bytes.len() != FAMILY_CERTIFICATE_RECORD_LEN_V2 {
             return Err(FamilyArtifactLoadErrorV1::ExactLengthMismatch {
@@ -145,12 +156,30 @@ impl FamilyImageCertificateV2 {
                 actual: bytes.len(),
             });
         }
-        if bytes.get(..MAGIC_V2.len()) != Some(MAGIC_V2) {
-            return Err(FamilyArtifactLoadErrorV1::InvalidMagic);
-        }
-        admit_certificate_discriminants_v2(decode_certificate(
+        let Ok(body) = <&[u8; CERTIFICATE_BODY_LEN_V2]>::try_from(
             &bytes[MAGIC_V2.len()..FAMILY_CERTIFICATE_RECORD_LEN_V2],
-        ))
+        ) else {
+            return Err(FamilyArtifactLoadErrorV1::HeaderTooShort);
+        };
+        let certificate = admit_certificate_discriminants_v2(decode_certificate(body))?;
+        if usize::try_from(certificate.payload_len).is_err() {
+            return Err(FamilyArtifactLoadErrorV1::ResourceExhausted);
+        }
+        // The envelope proves these two before it admits anything; a record
+        // that skipped them would pass here and then be reported as a foreign
+        // artifact — blaming the payload for a broken record.
+        if artifact_receipt(certificate) != certificate.artifact_receipt {
+            return Err(FamilyArtifactLoadErrorV1::ArtifactReceiptMismatch);
+        }
+        if semantic_family_release_id_v2(
+            certificate.definition_digest,
+            certificate.image_digest,
+            certificate.member_count,
+        ) != certificate.semantic_release
+        {
+            return Err(FamilyArtifactLoadErrorV1::SemanticReleaseMismatch);
+        }
+        Ok(certificate)
     }
 
     /// Адрес определения, которому обязан отвечать образ.
@@ -713,8 +742,10 @@ impl ParsedFamilyArtifactEnvelopeV2 {
         if bytes.get(..8) != Some(MAGIC_V2) {
             return Err(FamilyArtifactLoadErrorV1::InvalidMagic);
         }
-        let certificate =
-            admit_certificate_discriminants_v2(decode_certificate(&bytes[8..HEADER_LEN_V2]))?;
+        let certificate = admit_certificate_discriminants_v2(decode_certificate(
+            <&[u8; CERTIFICATE_BODY_LEN_V2]>::try_from(&bytes[8..HEADER_LEN_V2])
+                .map_err(|_| FamilyArtifactLoadErrorV1::HeaderTooShort)?,
+        ))?;
         let payload_len = usize::try_from(certificate.payload_len)
             .map_err(|_| FamilyArtifactLoadErrorV1::ResourceExhausted)?;
         let expected_len = HEADER_LEN_V2
@@ -1053,8 +1084,7 @@ fn admit_certificate_discriminants_v2(
     Ok(certificate)
 }
 
-fn decode_certificate(bytes: &[u8]) -> FamilyImageCertificateV2 {
-    debug_assert_eq!(bytes.len(), HEADER_LEN_V2 - MAGIC_V2.len());
+fn decode_certificate(bytes: &[u8; CERTIFICATE_BODY_LEN_V2]) -> FamilyImageCertificateV2 {
     fn take_32(bytes: &[u8], cursor: &mut usize) -> [u8; 32] {
         let start = *cursor;
         *cursor += 32;

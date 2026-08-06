@@ -1066,9 +1066,56 @@ fn a_trusted_certificate_record_is_validated_exactly_as_the_envelope_is() {
 }
 
 #[test]
-fn a_trusted_record_of_one_artifact_never_admits_another() {
-    let (first_certificate, _) =
+fn a_record_broken_in_its_own_channel_is_refused_at_the_door() {
+    // Раньше такая запись проходила разбор и падала позже как «чужой
+    // артефакт» — обвиняя payload в том, что сломана запись.
+    let (_, encoded) =
         encode_raw_bitmap24_family_artifact_v2_for_test(definition(), &signals(&[[0, 0, 1]]))
+            .unwrap();
+    let bytes = encoded.into_bytes();
+    let record = &bytes[..FAMILY_CERTIFICATE_RECORD_LEN_V2];
+
+    // artifact_receipt — последние 32 байта записи; он покрывает все
+    // остальные поля, поэтому любая одиночная порча ловится именно им.
+    let mut corrupt = record.to_vec();
+    let last = corrupt.len() - 1;
+    corrupt[last] ^= 1;
+    assert_eq!(
+        FamilyImageCertificateV2::parse_trusted(&corrupt).unwrap_err(),
+        FamilyArtifactLoadErrorV1::ArtifactReceiptMismatch,
+    );
+
+    // Anti-vacuity: нетронутая запись проходит.
+    assert!(FamilyImageCertificateV2::parse_trusted(record).is_ok());
+}
+
+#[test]
+fn a_record_refuses_in_the_same_order_the_envelope_does() {
+    // Слишком длинная запись с чужой магией обязана называть магию, как это
+    // делает конверт: иначе два пути объясняют одну и ту же порчу по-разному.
+    let (_, encoded) =
+        encode_raw_bitmap24_family_artifact_v2_for_test(definition(), &signals(&[[0, 0, 1]]))
+            .unwrap();
+    let bytes = encoded.into_bytes();
+    let mut hostile = bytes[..FAMILY_CERTIFICATE_RECORD_LEN_V2].to_vec();
+    hostile[0] ^= 1;
+    hostile.push(0);
+    assert_eq!(
+        FamilyImageCertificateV2::parse_trusted(&hostile).unwrap_err(),
+        FamilyArtifactLoadErrorV1::InvalidMagic,
+    );
+}
+
+#[test]
+fn a_trusted_record_of_one_artifact_never_admits_another() {
+    // Через доверенную запись, а не через тестовый конструктор: иначе тест
+    // проверял бы старый загрузчик и прошёл бы без этого среза целиком.
+    let (_, first) =
+        encode_raw_bitmap24_family_artifact_v2_for_test(definition(), &signals(&[[0, 0, 1]]))
+            .unwrap();
+    let first_bytes = first.into_bytes();
+    let first_certificate =
+        FamilyImageCertificateV2::parse_trusted(&first_bytes[..FAMILY_CERTIFICATE_RECORD_LEN_V2])
             .unwrap();
     let (_, second) =
         encode_raw_bitmap24_family_artifact_v2_for_test(definition(), &signals(&[[0, 0, 2]]))
