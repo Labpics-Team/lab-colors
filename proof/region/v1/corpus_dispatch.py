@@ -7,8 +7,10 @@ the canonical lane plan — contiguous windows of a fixed lane width that
 cover [0, 2^24) exactly, with every seam landing on the packing alignment
 and on a shard boundary — and turns it into one `gh workflow run` invocation
 per lane of `full-domain-corpus.yml`.  Widths that cannot produce an exact
-aligned cover are typed rejections before any dispatch exists; `--dry-run`
-prints every dispatch command without touching the network.
+aligned cover are typed rejections before any dispatch exists.  Printing the
+commands is the default and dispatching is the opt-in `--execute`, which has
+to name the campaign's size: the incident this coordinator exists to prevent
+was a forgotten flag turning one mistake into 133 runs.
 """
 
 from __future__ import annotations
@@ -210,12 +212,36 @@ def gh_run_artifacts_v1(run_id: int) -> tuple[tuple[str, bool], ...]:
         text=True,
         check=True,
     )
+    return parse_artifact_listing_v1(completed.stdout)
+
+
+def parse_artifact_listing_v1(stdout: str) -> tuple[tuple[str, bool], ...]:
+    """Decode the artifact listing wire form into names and expiry.
+
+    Reading `expired` is a rule like any other, so it lives here rather than
+    behind the network where nothing can reach it.  A listing that does not
+    look like the two-column form it is asked for raises: an unrecognised
+    line silently read as "live" would admit exactly the stale evidence run
+    the admission exists to refuse.
+    """
+
     observed: list[tuple[str, bool]] = []
-    for line in completed.stdout.splitlines():
+    for number, line in enumerate(stdout.splitlines(), 1):
         if not line.strip():
+            # Blank separators carry no record; anything with content has to
+            # be exactly the requested shape.
             continue
-        name, _, expired = line.partition("	")
-        observed.append((name.strip(), expired.strip().lower() == "true"))
+        fields = line.split("\t")
+        if len(fields) != 2:
+            raise ValueError(f"artifact listing line {number} is not two columns")
+        name, expired = fields[0].strip(), fields[1].strip().lower()
+        if not name:
+            raise ValueError(f"artifact listing line {number} has no name")
+        if expired not in ("true", "false"):
+            raise ValueError(
+                f"artifact listing line {number} has no boolean expiry: {expired!r}"
+            )
+        observed.append((name, expired == "true"))
     return tuple(observed)
 
 
@@ -280,9 +306,18 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--shard-width", type=int, default=DEFAULT_SHARD_WIDTH)
     parser.add_argument("--evidence-run-id", type=int, default=None)
     parser.add_argument("--evidence-artifact", type=str, default=None)
-    parser.add_argument("--dry-run", action="store_true")
+    # Printing is the default and dispatching is the opt-in.  The incident
+    # that made this coordinator dangerous was a forgotten `--dry-run`: a
+    # polarity where the safe run is the one you have to remember turns one
+    # missing flag into hundreds of runs.  `--expect-lanes` makes the operator
+    # state the scale before it happens, so a mistyped width is refused
+    # instead of dispatched — swapping the two widths is a realistic slip and
+    # silently means tens of thousands of jobs.
+    parser.add_argument("--execute", action="store_true")
+    parser.add_argument("--expect-lanes", type=int, default=None)
     parser.add_argument("--out", type=Path, required=True)
     args = parser.parse_args(argv)
+    dispatching = args.execute and args.mode != "plan"
 
     plan = lane_plan_v1(args.lane_width, args.shard_width)
     if type(plan) is not tuple:
@@ -323,7 +358,7 @@ def main(argv: list[str] | None = None) -> int:
             args.evidence_run_id,
             args.evidence_artifact,
         )
-        if type(commands) is tuple and not args.dry_run:
+        if type(commands) is tuple and dispatching:
             # Fail closed before the first dispatch: a dry run stays offline
             # by contract, so the observation belongs to the live path only.
             refusal = admit_evidence_artifact_v1(
@@ -340,13 +375,37 @@ def main(argv: list[str] | None = None) -> int:
         # TypeError at the boundary it is supposed to guard.
         print(f"lane dispatch rejected: {commands!r}", file=sys.stderr)
         return 64
+    if not dispatching:
+        for command in commands:
+            print(" ".join(command))
+        return 0
+    if args.expect_lanes != len(commands):
+        # The operator has to name the scale, and reality has to agree.  A
+        # width typed one token wrong produces a different campaign, and the
+        # only cheap moment to notice is before the first invocation.
+        print(
+            f"dispatch refused: --expect-lanes={args.expect_lanes} but the plan"
+            f" has {len(commands)} lanes",
+            file=sys.stderr,
+        )
+        return 64
+    print(f"dispatching {len(commands)} lanes", file=sys.stderr)
+    launched = 0
     for command in commands:
-        rendered = " ".join(command)
-        if args.dry_run:
-            print(rendered)
-            continue
-        subprocess.run(command, check=True)
-        print(rendered)
+        try:
+            subprocess.run(command, check=True)
+        except subprocess.CalledProcessError as error:
+            # A campaign that dies mid-flight leaves runs already created.
+            # Reporting where it stopped is what makes the retry resumable
+            # instead of a duplicate of everything already dispatched.
+            print(
+                f"dispatch stopped after {launched} of {len(commands)} lanes:"
+                f" {str(getattr(error, 'stderr', None) or error).strip()}",
+                file=sys.stderr,
+            )
+            return 64
+        launched += 1
+        print(" ".join(command))
     return 0
 
 

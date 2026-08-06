@@ -6,12 +6,14 @@ the exact full manifest.  The coordinator must derive a deterministic lane
 plan whose windows cover [0, 2^24) exactly — contiguous, packing-aligned,
 no gaps, no overlaps — and must turn that plan into one `gh workflow run`
 invocation per lane.  Any width that cannot produce an exact aligned cover
-is a typed rejection before any dispatch exists, and a dry run must emit
-the dispatch commands without touching the network.
+is a typed rejection before any dispatch exists.  Printing the commands is
+the default and dispatching is the opt-in: the incident this coordinator
+exists to prevent was a forgotten flag.
 """
 
 from __future__ import annotations
 
+import inspect
 import json
 import subprocess
 import sys
@@ -141,7 +143,6 @@ class DryRunTests(unittest.TestCase):
                         "1024",
                         "--shard-width",
                         "256",
-                        "--dry-run",
                         "--out",
                         out,
                     ]
@@ -188,7 +189,7 @@ class DispatchCliTests(unittest.TestCase):
                 ["--mode", "plan", "--lane-width", "65536", "--shard-width",
                  "12288", "--out", out],
                 ["--mode", "dispatch", "--lane-width", "0", "--shard-width",
-                 "256", "--dry-run", "--out", out],
+                 "256", "--out", out],
             )
             for argv in invalid:
                 self.assertEqual(corpus_dispatch.main(argv), 64, argv)
@@ -279,6 +280,80 @@ class EvidenceAdmissionTests(unittest.TestCase):
         self.assertEqual(seen, [99])
 
 
+class ArtifactListingWireTests(unittest.TestCase):
+    """Reading `expired` off the wire is a rule, and rules get tests.
+
+    Moving the expiry filter out of the query put the decision where a test
+    can reach it, but the decoding that produces `expired` stayed behind the
+    network — so a listing whose shape drifted read as "live" and admitted a
+    stale run.  The captured form below is what `gh` actually emits for the
+    query this module sends.
+    """
+
+    CAPTURED_V1 = (
+        "verification-evidence-arb\tfalse\n"
+        "verification-evidence-mpfi\tfalse\n"
+        "corpus-lane-0-65536\ttrue\n"
+    )
+
+    def test_the_captured_wire_form_decodes_to_names_and_expiry(self) -> None:
+        self.assertEqual(
+            corpus_dispatch.parse_artifact_listing_v1(self.CAPTURED_V1),
+            (
+                ("verification-evidence-arb", False),
+                ("verification-evidence-mpfi", False),
+                ("corpus-lane-0-65536", True),
+            ),
+        )
+
+    def test_an_unrecognised_line_refuses_instead_of_reading_as_live(self) -> None:
+        for hostile in (
+            "verification-evidence-arb\n",
+            "verification-evidence-arb\tfalse\textra\n",
+            "\tfalse\n",
+            "verification-evidence-arb\tno\n",
+            "verification-evidence-arb\t\n",
+            "verification-evidence-arb\t1\n",
+        ):
+            with self.subTest(hostile=hostile):
+                with self.assertRaises(ValueError):
+                    corpus_dispatch.parse_artifact_listing_v1(hostile)
+
+    def test_an_unreadable_listing_becomes_a_typed_refusal(self) -> None:
+        # The decode raises; the admission is what turns that into a refusal,
+        # so the two are proven together rather than separately assumed.
+        def observer(_run_id: int) -> tuple[tuple[str, bool], ...]:
+            return corpus_dispatch.parse_artifact_listing_v1("garbage\n")
+
+        result = corpus_dispatch.admit_evidence_artifact_v1(
+            1, "verification-evidence-arb", observer
+        )
+        self.assertIs(type(result), corpus.ShardCorpusRejectedV1)
+
+    def test_the_refusal_carries_the_text_that_tells_causes_apart(self) -> None:
+        # `repr` of a CalledProcessError drops stderr, and stderr is the only
+        # place "no such run" reads differently from "no token". Without it
+        # the operator debugs the wrong axis — which is what the refusal is
+        # supposed to prevent.
+        def observer(_run_id: int) -> tuple[tuple[str, bool], ...]:
+            raise subprocess.CalledProcessError(
+                1, "gh", stderr="gh: Not Found (HTTP 404)"
+            )
+
+        result = corpus_dispatch.admit_evidence_artifact_v1(
+            99999999, "verification-evidence-arb", observer
+        )
+        self.assertIs(type(result), corpus.ShardCorpusRejectedV1)
+        self.assertIn("Not Found", result.detail)
+
+    def test_the_query_stays_paginated(self) -> None:
+        # A run carrying more than one page of artifacts would otherwise lose
+        # the evidence name and refuse a healthy campaign.
+        source = inspect.getsource(corpus_dispatch.gh_run_artifacts_v1)
+        self.assertIn("--paginate", source)
+        self.assertIn("(.expired // false)", source)
+
+
 class DispatchSeamTests(unittest.TestCase):
     """The gate has to be wired in, not merely defined.
 
@@ -289,8 +364,8 @@ class DispatchSeamTests(unittest.TestCase):
     admission must let it through.
     """
 
-    def _argv(self, out: Path) -> list[str]:
-        return [
+    def _argv(self, out: Path, *, live: bool = True) -> list[str]:
+        argv = [
             "--mode",
             "verification-dispatch",
             "--evidence-run-id",
@@ -300,6 +375,9 @@ class DispatchSeamTests(unittest.TestCase):
             "--out",
             str(out),
         ]
+        # Dispatching is the opt-in, and the scale is declared with it: the
+        # seam only exists on the live path.
+        return [*argv, "--execute", "--expect-lanes", "256"] if live else argv
 
     def test_a_refused_evidence_run_dispatches_nothing(self) -> None:
         launched: list[tuple[str, ...]] = []
@@ -350,6 +428,84 @@ class DispatchSeamTests(unittest.TestCase):
             all(command[:3] == ("gh", "workflow", "run") for command in launched)
         )
 
+    def test_the_admission_asks_about_the_artifact_the_operator_named(self) -> None:
+        # Mirror of the run-id pin: an observer blind to the artifact lets a
+        # mutant hardcode one engine's name at the call site and stay green.
+        # The producer runs the two engines as independent jobs, so a run
+        # really can carry one artifact and not the other — and admitting the
+        # wrong one buys 256 doomed lanes, which is the incident again.
+        launched: list[tuple[str, ...]] = []
+        argv = [
+            "--mode",
+            "verification-dispatch",
+            "--evidence-run-id",
+            "424242",
+            "--evidence-artifact",
+            "verification-evidence-mpfi",
+            "--out",
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            with unittest.mock.patch.object(
+                corpus_dispatch,
+                "gh_run_artifacts_v1",
+                lambda run_id: (("verification-evidence-arb", False),),
+            ), unittest.mock.patch.object(
+                corpus_dispatch.subprocess,
+                "run",
+                lambda command, **kwargs: launched.append(tuple(command)),
+            ):
+                code = corpus_dispatch.main(
+                    [
+                        *argv,
+                        str(Path(tmp) / "out.txt"),
+                        "--execute",
+                        "--expect-lanes",
+                        "256",
+                    ]
+                )
+        self.assertEqual(code, 64)
+        self.assertEqual(launched, [])
+
+    def test_a_campaign_of_an_unexpected_size_is_refused_before_it_starts(
+        self,
+    ) -> None:
+        # Swapping the two widths is a realistic slip and silently means a
+        # different campaign; the operator declares the scale so reality can
+        # disagree out loud.
+        launched: list[tuple[str, ...]] = []
+        with tempfile.TemporaryDirectory() as tmp:
+            with unittest.mock.patch.object(
+                corpus_dispatch,
+                "gh_run_artifacts_v1",
+                lambda run_id: (("verification-evidence-arb", False),),
+            ), unittest.mock.patch.object(
+                corpus_dispatch.subprocess,
+                "run",
+                lambda command, **kwargs: launched.append(tuple(command)),
+            ):
+                argv = self._argv(Path(tmp) / "out.txt", live=False)
+                code = corpus_dispatch.main(
+                    [*argv, "--execute", "--expect-lanes", "16"]
+                )
+        self.assertEqual(code, 64)
+        self.assertEqual(launched, [])
+
+    def test_without_execute_the_campaign_only_prints(self) -> None:
+        # The polarity is the guard: the incident was a forgotten flag, so
+        # forgetting one now costs nothing.
+        launched: list[tuple[str, ...]] = []
+        with tempfile.TemporaryDirectory() as tmp:
+            with unittest.mock.patch.object(
+                corpus_dispatch.subprocess,
+                "run",
+                lambda command, **kwargs: launched.append(tuple(command)),
+            ):
+                code = corpus_dispatch.main(
+                    self._argv(Path(tmp) / "out.txt", live=False)
+                )
+        self.assertEqual(code, 0)
+        self.assertEqual(launched, [])
+
     def test_a_dry_run_stays_offline_and_asks_nobody(self) -> None:
         # The dry run is documented as offline: it must not even observe.
         observed: list[int] = []
@@ -365,7 +521,7 @@ class DispatchSeamTests(unittest.TestCase):
                 lambda command, **kwargs: launched.append(tuple(command)),
             ):
                 code = corpus_dispatch.main(
-                    self._argv(Path(tmp) / "out.txt") + ["--dry-run"]
+                    self._argv(Path(tmp) / "out.txt", live=False)
                 )
         self.assertEqual(code, 0)
         self.assertEqual(observed, [])
@@ -376,9 +532,9 @@ class DispatchSeamTests(unittest.TestCase):
         # refusal must leave through the typed exit, never as a TypeError
         # raised by iterating a rejection.
         with tempfile.TemporaryDirectory() as tmp:
-            argv = self._argv(Path(tmp) / "out.txt")
+            argv = self._argv(Path(tmp) / "out.txt", live=False)
             argv[argv.index("verification-evidence-arb")] = "verification-evidence-foreign"
-            code = corpus_dispatch.main(argv + ["--dry-run"])
+            code = corpus_dispatch.main(argv)
         self.assertEqual(code, 64)
 
 

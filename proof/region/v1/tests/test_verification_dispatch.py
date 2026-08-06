@@ -161,7 +161,6 @@ class VerificationDispatchCliTests(unittest.TestCase):
                         "31000000001",
                         "--evidence-artifact",
                         ARB_ARTIFACT,
-                        "--dry-run",
                         "--out",
                         str(Path(tmp) / "out"),
                     ]
@@ -182,7 +181,6 @@ class VerificationDispatchCliTests(unittest.TestCase):
                     "verification-dispatch",
                     "--evidence-artifact",
                     ARB_ARTIFACT,
-                    "--dry-run",
                     "--out",
                     str(Path(tmp) / "out"),
                 ]
@@ -197,7 +195,6 @@ class VerificationDispatchCliTests(unittest.TestCase):
                     "verification-dispatch",
                     "--evidence-run-id",
                     "31000000001",
-                    "--dry-run",
                     "--out",
                     str(Path(tmp) / "out"),
                 ]
