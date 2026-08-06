@@ -2247,5 +2247,43 @@ class StaticSourceIdentityTests(unittest.TestCase):
                 self.assertNotIn(name, protocol.BUILD_OBSERVATION_COORDINATES_V2)
 
 
+class SourceBoundPreimageGuardTests(unittest.TestCase):
+    """The guard runs on every construction, and nothing proved it refuses.
+
+    Its neighbour test compares the field order against the protocol directly,
+    which proves the invariant and not the guard: deleting the guard's body
+    left the whole suite green.
+    """
+
+    def _values(self) -> dict:
+        names = protocol.source_bound_coordinates_v2()
+        return {
+            name: bytes([index + 1]) * 32 for index, name in enumerate(names)
+        }
+
+    def test_the_exact_shape_constructs(self) -> None:
+        # Anti-vacuity: a guard that refused everything would satisfy the two
+        # refusal tests below.
+        built = pipeline.ArbSourceBoundPreimagesV1(**self._values())
+        self.assertIs(type(built), pipeline.ArbSourceBoundPreimagesV1)
+
+    def test_an_empty_or_foreign_preimage_is_refused(self) -> None:
+        for name, bad in (("engine_release", b""), ("exclusions", "x" * 32)):
+            with self.subTest(name=name):
+                values = self._values()
+                values[name] = bad
+                with self.assertRaises(TypeError):
+                    pipeline.ArbSourceBoundPreimagesV1(**values)
+
+    def test_two_coordinates_sharing_bytes_are_refused(self) -> None:
+        # Independent domain separation is the point: two coordinates that
+        # fold to the same bytes would make the identity blind to whichever
+        # of them changed.
+        values = self._values()
+        values["evaluator_source"] = values["wrapper_source"]
+        with self.assertRaises(TypeError):
+            pipeline.ArbSourceBoundPreimagesV1(**values)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
