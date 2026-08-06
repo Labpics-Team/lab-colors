@@ -388,7 +388,8 @@ def decision_procedure_work_bound_v1(
     knot.  That cap is per rung, but the point's grant is *shared across the
     ladder*: a point that pays a branch at a low rung and stays
     `BOUNDARY_UNPROVEN` escalates and pays again at the next rung.  Budgeting
-    only one rung therefore starves exactly the points the ladder exists for.
+    only one rung therefore starves points that escalate past that share —
+    the very points the ladder exists for.
 
     Sufficiency is structural, not measured: the rung loop runs at most
     `len(ladder)` times and each call consumes at most the segment count, so
@@ -443,10 +444,13 @@ def certified_work_policy_v1(
     """The base policy's ladder under the work a certification actually needs.
 
     The work grant is not a free knob for a certified materialisation: a dual
-    comparison refuses any transcript carrying an unresolved outcome, so a
-    budget below `decision_procedure_work_bound_v1` leaves every boundary
-    point on `RESOURCE_LIMIT_REACHED` and no proof can exist.  The bound is
-    proven tight, so granting exactly it is both necessary and sufficient.
+    comparison refuses any transcript carrying an unresolved outcome, so one
+    starved point is enough to make the proof unreachable.  A budget below
+    `decision_procedure_work_bound_v1` is not proven to decide the domain —
+    a zero grant decides no boundary point at all, and a partial one leaves
+    whichever points escalate past their share on `RESOURCE_LIMIT_REACHED`.
+    The derived bound is proven sufficient, not proven minimal; see
+    `decision_procedure_work_bound_v1` for both halves of that claim.
 
     The pregrant is an absolute total over the domain's ordinal prefix rather
     than a rate, so it is re-derived for the domain being certified: every

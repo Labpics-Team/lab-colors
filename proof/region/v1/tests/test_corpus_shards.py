@@ -278,15 +278,21 @@ class FullDomainJobTests(unittest.TestCase):
         self.assertTrue(
             all(budget.per_point_work == 0 for budget in base.policy.comparators)
         )
-        bound = corpus.decision_procedure_work_bound_v1(base.definition)
-        self.assertGreater(bound, 0)
         job = corpus.full_domain_job_v1(base)
-        for budget in job.policy.comparators:
-            self.assertEqual(budget.per_point_work, bound)
+        for derived, declared in zip(
+            job.policy.comparators, base.policy.comparators, strict=True
+        ):
+            # The bound follows each comparator's own ladder, so it is read
+            # per budget rather than once for the whole policy.
+            bound = corpus.decision_procedure_work_bound_v1(
+                base.definition, declared.precision_ladder
+            )
+            self.assertGreater(bound, 0)
+            self.assertEqual(derived.per_point_work, bound)
             # The pregrant is an absolute total over the domain's ordinal
             # prefix, not a rate, so it follows the domain being certified.
             self.assertEqual(
-                budget.global_pregrant, bound * protocol.OUTPUT_CARDINALITY_V1
+                derived.global_pregrant, bound * protocol.OUTPUT_CARDINALITY_V1
             )
 
     def test_full_domain_job_keeps_the_declared_ladder_and_release(self) -> None:
