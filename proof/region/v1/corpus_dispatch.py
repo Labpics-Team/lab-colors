@@ -317,7 +317,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--expect-lanes", type=int, default=None)
     parser.add_argument("--out", type=Path, required=True)
     args = parser.parse_args(argv)
-    dispatching = args.execute and args.mode != "plan"
+    if args.execute and args.mode == "plan":
+        # A flag with live semantics must never be silently ignored: an
+        # operator who believes a campaign started is worse off than one who
+        # is told it did not.
+        print("plan mode cannot dispatch: drop --execute", file=sys.stderr)
+        return 64
+    dispatching = args.execute
 
     plan = lane_plan_v1(args.lane_width, args.shard_width)
     if type(plan) is not tuple:
@@ -358,15 +364,6 @@ def main(argv: list[str] | None = None) -> int:
             args.evidence_run_id,
             args.evidence_artifact,
         )
-        if type(commands) is tuple and dispatching:
-            # Fail closed before the first dispatch: a dry run stays offline
-            # by contract, so the observation belongs to the live path only.
-            refusal = admit_evidence_artifact_v1(
-                args.evidence_run_id, args.evidence_artifact
-            )
-            if refusal is not None:
-                print(f"verification dispatch refused: {refusal.detail}", file=sys.stderr)
-                return 64
     else:
         commands = dispatch_commands_v1(plan, args.shard_width)
     if type(commands) is not tuple:
@@ -379,28 +376,58 @@ def main(argv: list[str] | None = None) -> int:
         for command in commands:
             print(" ".join(command))
         return 0
+    if args.expect_lanes is None:
+        # Its own refusal, not a comparison against `None`: the operator who
+        # forgot the flag has to read what is missing, not a mismatch.
+        print(
+            "dispatch refused: --execute requires --expect-lanes",
+            file=sys.stderr,
+        )
+        return 64
     if args.expect_lanes != len(commands):
-        # The operator has to name the scale, and reality has to agree.  A
-        # width typed one token wrong produces a different campaign, and the
-        # only cheap moment to notice is before the first invocation.
+        # The operator names the scale and reality has to agree.  A width
+        # typed one token wrong produces a different campaign, and this is
+        # the cheap moment to notice — before anything is observed or run.
         print(
             f"dispatch refused: --expect-lanes={args.expect_lanes} but the plan"
             f" has {len(commands)} lanes",
             file=sys.stderr,
         )
         return 64
+    if args.mode == "verification-dispatch":
+        # Fail closed before the first dispatch, and only here: the printing
+        # path stays offline by contract, and this observation costs an
+        # authenticated call that a mistyped width should never spend.
+        refusal = admit_evidence_artifact_v1(
+            args.evidence_run_id, args.evidence_artifact
+        )
+        if refusal is not None:
+            print(f"verification dispatch refused: {refusal.detail}", file=sys.stderr)
+            return 64
     print(f"dispatching {len(commands)} lanes", file=sys.stderr)
     launched = 0
     for command in commands:
         try:
             subprocess.run(command, check=True)
+        except OSError as error:
+            # Not only CalledProcessError: a missing `gh`, an exhausted file
+            # descriptor or a killed child all abandon a campaign mid-flight,
+            # and all of them must leave the same resumable report.
+            print(
+                f"dispatch stopped after {launched} of {len(commands)} lanes:"
+                f" {str(error).strip()}",
+                file=sys.stderr,
+            )
+            return 64
         except subprocess.CalledProcessError as error:
             # A campaign that dies mid-flight leaves runs already created.
             # Reporting where it stopped is what makes the retry resumable
-            # instead of a duplicate of everything already dispatched.
+            # instead of a duplicate of everything already dispatched.  The
+            # child's stderr is not captured here on purpose — it belongs on
+            # the operator's terminal — so only the exit status is quotable.
             print(
                 f"dispatch stopped after {launched} of {len(commands)} lanes:"
-                f" {str(getattr(error, 'stderr', None) or error).strip()}",
+                f" {str(error).strip()}",
                 file=sys.stderr,
             )
             return 64

@@ -13,7 +13,8 @@ exists to prevent was a forgotten flag.
 
 from __future__ import annotations
 
-import inspect
+import contextlib
+import io
 import json
 import subprocess
 import sys
@@ -123,13 +124,13 @@ class DispatchCommandTests(unittest.TestCase):
         self.assertIs(type(result), corpus.ShardCorpusRejectedV1)
 
 
-class DryRunTests(unittest.TestCase):
-    def test_dry_run_never_touches_the_network(self) -> None:
+class DefaultIsPrintingTests(unittest.TestCase):
+    def test_the_default_run_never_touches_the_network(self) -> None:
         calls: list[list[str]] = []
 
         def boom(*args: object, **kwargs: object) -> None:
             calls.append([args, kwargs])
-            raise AssertionError("dry run must not invoke subprocess")
+            raise AssertionError("printing must not invoke subprocess")
 
         original = subprocess.run
         subprocess.run = boom  # type: ignore[assignment]
@@ -346,12 +347,36 @@ class ArtifactListingWireTests(unittest.TestCase):
         self.assertIs(type(result), corpus.ShardCorpusRejectedV1)
         self.assertIn("Not Found", result.detail)
 
-    def test_the_query_stays_paginated(self) -> None:
+    def test_the_query_asks_for_every_page_and_for_expiry(self) -> None:
+        # Behavioural, not a look at the source: a mutant that drops the flag
+        # from argv while leaving the words in a comment reads identically.
         # A run carrying more than one page of artifacts would otherwise lose
         # the evidence name and refuse a healthy campaign.
-        source = inspect.getsource(corpus_dispatch.gh_run_artifacts_v1)
-        self.assertIn("--paginate", source)
-        self.assertIn("(.expired // false)", source)
+        seen: list[tuple[str, ...]] = []
+
+        class _Completed:
+            stdout = "verification-evidence-arb\tfalse\n"
+            returncode = 0
+
+        def record(command: tuple[str, ...], **kwargs: object) -> object:
+            seen.append(tuple(command))
+            assert kwargs.get("check") is True
+            assert kwargs.get("capture_output") is True
+            return _Completed()
+
+        with unittest.mock.patch.object(corpus_dispatch.subprocess, "run", record):
+            observed = corpus_dispatch.gh_run_artifacts_v1(31116022208)
+
+        self.assertEqual(observed, (("verification-evidence-arb", False),))
+        self.assertEqual(len(seen), 1)
+        argv = seen[0]
+        self.assertEqual(argv[:3], ("gh", "api", "--paginate"))
+        self.assertIn("repos/{owner}/{repo}/actions/runs/31116022208/artifacts", argv)
+        self.assertIn("--jq", argv)
+        self.assertIn(
+            ".artifacts[] | [.name, (.expired // false)] | @tsv",
+            argv[argv.index("--jq") + 1],
+        )
 
 
 class DispatchSeamTests(unittest.TestCase):
@@ -506,8 +531,139 @@ class DispatchSeamTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(launched, [])
 
-    def test_a_dry_run_stays_offline_and_asks_nobody(self) -> None:
-        # The dry run is documented as offline: it must not even observe.
+    def test_the_admission_asks_about_the_run_the_operator_named(self) -> None:
+        # The other seam tests all pass 424242, so a call site that hardcoded
+        # that very number would be indistinguishable from one that reads the
+        # argument.  This one names a different run and records what the
+        # observer was actually asked.
+        observed: list[int] = []
+        launched: list[tuple[str, ...]] = []
+
+        class _Completed:
+            returncode = 0
+
+        with tempfile.TemporaryDirectory() as tmp:
+            argv = self._argv(Path(tmp) / "out.txt")
+            argv[argv.index("424242")] = "31116022208"
+            with unittest.mock.patch.object(
+                corpus_dispatch,
+                "gh_run_artifacts_v1",
+                lambda run_id: (
+                    observed.append(run_id)
+                    or (("verification-evidence-arb", False),)
+                ),
+            ), unittest.mock.patch.object(
+                corpus_dispatch.subprocess,
+                "run",
+                lambda command, **kwargs: (
+                    launched.append(tuple(command)) or _Completed()
+                ),
+            ):
+                code = corpus_dispatch.main(argv)
+        self.assertEqual(code, 0)
+        self.assertEqual(observed, [31116022208])
+        self.assertEqual(len(launched), 256)
+
+    def test_execute_without_a_declared_scale_dispatches_nothing(self) -> None:
+        # The scale declaration is the guard, so it has to be required — an
+        # optional one restores the forgotten-flag class it replaced.
+        launched: list[tuple[str, ...]] = []
+        with tempfile.TemporaryDirectory() as tmp:
+            with unittest.mock.patch.object(
+                corpus_dispatch,
+                "gh_run_artifacts_v1",
+                lambda run_id: (("verification-evidence-arb", False),),
+            ), unittest.mock.patch.object(
+                corpus_dispatch.subprocess,
+                "run",
+                lambda command, **kwargs: launched.append(tuple(command)),
+            ):
+                argv = self._argv(Path(tmp) / "out.txt", live=False)
+                errors = io.StringIO()
+                with contextlib.redirect_stderr(errors):
+                    code = corpus_dispatch.main([*argv, "--execute"])
+        self.assertEqual(code, 64)
+        self.assertEqual(launched, [])
+        # The refusal has to name what is missing: falling through to the
+        # mismatch comparison refuses too, and tells the operator nothing.
+        self.assertIn("--expect-lanes", errors.getvalue())
+        self.assertNotIn("but the plan has", errors.getvalue())
+
+    def test_a_wrong_scale_is_refused_before_the_network_is_asked(self) -> None:
+        # The cheap local check must precede the authenticated call: a
+        # mistyped width should not spend one, and the operator should read
+        # "wrong scale" rather than a diagnosis about the evidence run.
+        observed: list[int] = []
+        with tempfile.TemporaryDirectory() as tmp:
+            with unittest.mock.patch.object(
+                corpus_dispatch,
+                "gh_run_artifacts_v1",
+                lambda run_id: observed.append(run_id) or (),
+            ):
+                argv = self._argv(Path(tmp) / "out.txt", live=False)
+                code = corpus_dispatch.main(
+                    [*argv, "--execute", "--expect-lanes", "16"]
+                )
+        self.assertEqual(code, 64)
+        self.assertEqual(observed, [])
+
+    def test_plan_mode_refuses_execute_instead_of_ignoring_it(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            code = corpus_dispatch.main(
+                ["--mode", "plan", "--out", tmp, "--execute", "--expect-lanes", "256"]
+            )
+        self.assertEqual(code, 64)
+
+    def test_a_campaign_that_dies_reports_how_far_it_got(self) -> None:
+        # Without this the failure is a traceback: the operator cannot tell a
+        # retry from a duplicate of everything already dispatched.
+        launched: list[tuple[str, ...]] = []
+
+        class _Completed:
+            returncode = 0
+
+        def flaky(command: tuple[str, ...], **_kwargs: object) -> object:
+            if len(launched) == 3:
+                raise subprocess.CalledProcessError(1, list(command))
+            launched.append(tuple(command))
+            return _Completed()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with unittest.mock.patch.object(
+                corpus_dispatch,
+                "gh_run_artifacts_v1",
+                lambda run_id: (("verification-evidence-arb", False),),
+            ), unittest.mock.patch.object(
+                corpus_dispatch.subprocess, "run", flaky
+            ):
+                errors = io.StringIO()
+                with contextlib.redirect_stderr(errors):
+                    code = corpus_dispatch.main(self._argv(Path(tmp) / "out.txt"))
+        self.assertEqual(code, 64)
+        # Exactly the ones that succeeded, and no further attempt after.
+        self.assertEqual(len(launched), 3)
+        # The count is the whole point: a retry that cannot tell 3 from 0
+        # duplicates everything already dispatched.
+        self.assertIn("after 3 of 256", errors.getvalue())
+
+    def test_a_missing_gh_is_a_typed_stop_not_a_traceback(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            with unittest.mock.patch.object(
+                corpus_dispatch,
+                "gh_run_artifacts_v1",
+                lambda run_id: (("verification-evidence-arb", False),),
+            ), unittest.mock.patch.object(
+                corpus_dispatch.subprocess,
+                "run",
+                lambda command, **kwargs: (_ for _ in ()).throw(
+                    FileNotFoundError("gh")
+                ),
+            ):
+                code = corpus_dispatch.main(self._argv(Path(tmp) / "out.txt"))
+        self.assertEqual(code, 64)
+
+    def test_printing_stays_offline_and_asks_nobody(self) -> None:
+        # Printing is documented as offline: it must not even observe.
         observed: list[int] = []
         launched: list[tuple[str, ...]] = []
         with tempfile.TemporaryDirectory() as tmp:

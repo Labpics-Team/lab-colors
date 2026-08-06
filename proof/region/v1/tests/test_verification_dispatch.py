@@ -147,7 +147,7 @@ class VerificationDispatchCommandTests(unittest.TestCase):
 
 
 class VerificationDispatchCliTests(unittest.TestCase):
-    def test_dry_run_prints_one_command_per_lane(self) -> None:
+    def test_the_default_prints_one_command_per_lane(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             stdout = io.StringIO()
             with redirect_stdout(stdout):
