@@ -19,7 +19,7 @@ SHARED_FAST_TEST_PATTERNS_V1 = (
     "test_mpfi_input.py",
 )
 EXPECTED_TEST_INVENTORY_SHA256 = (
-    "030cd7d43490c3aea5e10ba7d29baa2ab7de61639f05b9e9a98d0007cd990c05"
+    "a961fe425874e8f492a561abd96fb1febe72e2dea1bda1ac5468c1d5bc7eefb7"
 )
 _EVALUATOR_REASON = "set LABCOLORS_ARB_EVALUATOR to the controlled C17 binary"
 EXPECTED_SKIPS = frozenset(

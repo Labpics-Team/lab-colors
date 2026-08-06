@@ -34,6 +34,7 @@ from arb import pipeline  # noqa: E402
 from arb import runtime as arb_runtime  # noqa: E402
 import executor  # noqa: E402
 import provenance  # noqa: E402
+import region_proof_protocol as protocol  # noqa: E402
 from region_proof_protocol import (  # noqa: E402
     ComparatorKindV1,
     ComparatorManifestV2,
@@ -41,6 +42,7 @@ from region_proof_protocol import (  # noqa: E402
     ContextualRegionDefinitionV1,
     ProofJobV1,
     ProtocolErrorV1,
+    source_bound_coordinates_v2,
 )
 
 
@@ -111,10 +113,12 @@ def _tar(root: str, files: tuple[tuple[str, bytes, int], ...]) -> tuple[bytes, i
 
 
 @cache
-def _source_fixture() -> tuple[
+def _source_fixture(salt: str = "") -> tuple[
     provenance.ArbSourceLockV1,
     provenance.AdmittedArbSourcesV1,
 ]:
+    """Build one synthetic Arb closure; a salt yields a different upstream tree."""
+
     locks: list[provenance.SourceReleaseLockV1] = []
     safe: list[provenance.SafeSourceArchiveV1] = []
     coordinates = (
@@ -123,7 +127,7 @@ def _source_fixture() -> tuple[
         (provenance.SourceRoleV1.FLINT_ARB, "flint-3.6.0", True),
     )
     for index, (role, root, git) in enumerate(coordinates, start=1):
-        files = (("LICENSE", f"license-{index}".encode(), 0o644),)
+        files = (("LICENSE", f"license-{salt}{index}".encode(), 0o644),)
         if git:
             files += (("configure", b"generated", 0o755),)
         archive, raw_length = _tar(root, files)
@@ -2023,6 +2027,224 @@ class DockerCommandContractTests(unittest.TestCase):
             result.trigger,
             build_transport.DockerCleanupTriggerV1.PROCESS_EXIT,
         )
+
+
+class _SharedDerivationProbe(Exception):
+    """Distinct failure signal; the pipeline never catches this type."""
+
+
+class StaticSourceIdentityTests(unittest.TestCase):
+    """The engine's source identity must be answerable before a build exists.
+
+    A cheap coverage pre-check can prove that two lanes carry exactly two
+    distinct comparator source identities, but not that those identities
+    belong to the engines the job is about to build.  Deriving the expected
+    identity from admitted inputs alone closes that gap before the two native
+    runs are paid for, so these tests bind the derived value to the identity
+    the real post-build manifest yields.
+    """
+
+    def _built(
+        self,
+        request: pipeline.PipelineRequestV1,
+        backend: _BuildBackend,
+    ) -> pipeline.DiagnosticBuildObservationV1:
+        result = pipeline.ControlledPipelineV1(build_backend=backend).build(request)
+        self.assertIs(type(result), pipeline.DiagnosticBuildObservationV1)
+        return result
+
+    def test_expected_source_identity_equals_the_post_build_manifest(self) -> None:
+        request = _request()
+        binary = _static_elf(b"expected-source-identity")
+
+        expected = pipeline.expected_comparator_source_identity_v1(request)
+
+        built = self._built(request, _BuildBackend((binary, binary)))
+        manifest = built.comparator.manifest
+        self.assertEqual(expected, manifest.source_identity)
+        # Anti-vacuity: the source identity is a strict projection, so a
+        # derivation that accidentally returned the full identity, the
+        # structural source identity or a constant would still be wrong.
+        self.assertNotEqual(expected, manifest.identity)
+        self.assertNotEqual(expected, request.admitted_sources.identity)
+        self.assertNotEqual(expected, request.build_sources.build_input_identity)
+        self.assertTrue(pipeline._valid_digest(expected))
+
+    def test_expected_source_identity_folds_exactly_the_named_coordinates(self) -> None:
+        request = _request()
+        binary = _static_elf(b"named-coordinates")
+        built = self._built(request, _BuildBackend((binary, binary)))
+        manifest = built.comparator.manifest.manifest
+
+        coordinates = tuple(
+            getattr(manifest, name) for name in source_bound_coordinates_v2()
+        )
+
+        self.assertEqual(len(coordinates), 8)
+        self.assertEqual(
+            pipeline.expected_comparator_source_identity_v1(request),
+            protocol.source_bound_identity_v2(ComparatorKindV1.ARB, coordinates),
+        )
+
+    def test_expected_source_identity_is_blind_to_every_build_observation(self) -> None:
+        # This is the load-bearing step: the pre-check runs before Docker, so
+        # the derived value has to match a manifest built by any conforming
+        # backend, not just the one this test happens to drive.
+        request = _request()
+        expected = pipeline.expected_comparator_source_identity_v1(request)
+        observations = (
+            _BuildBackend((_static_elf(b"first-binary"),) * 2),
+            _BuildBackend(
+                (_static_elf(b"second-binary"),) * 2,
+                reported_stderr=b"a different build console\n",
+            ),
+            _BuildBackend(
+                (_static_elf(b"third-binary"),) * 2,
+                probe=_docker_capability(daemon_marker=b"a-different-daemon"),
+            ),
+        )
+
+        identities = []
+        source_identities = []
+        for backend in observations:
+            with self.subTest(backend=observations.index(backend)):
+                manifest = self._built(request, backend).comparator.manifest
+                identities.append(manifest.identity)
+                source_identities.append(manifest.source_identity)
+                self.assertEqual(expected, manifest.source_identity)
+
+        self.assertEqual(len(set(identities)), len(observations))
+        self.assertEqual(set(source_identities), {expected})
+
+    def test_expected_source_identity_moves_with_the_admitted_upstream_closure(self) -> None:
+        drifted_lock, drifted_sources = _source_fixture("drifted-")
+        drifted = _request(
+            source_lock=drifted_lock,
+            admitted_sources=drifted_sources,
+        )
+
+        baseline = pipeline.expected_comparator_source_identity_v1(_request())
+        moved = pipeline.expected_comparator_source_identity_v1(drifted)
+
+        self.assertNotEqual(baseline, moved)
+        binary = _static_elf(b"drifted-closure")
+        self.assertEqual(
+            moved,
+            self._built(drifted, _BuildBackend((binary, binary))).comparator.manifest.source_identity,
+        )
+
+    def test_expected_source_identity_ignores_coordinates_outside_the_comparator(self) -> None:
+        # The comparator manifest binds neither the job nor the runtime
+        # binding, so a pre-check that keyed on them would reject engines that
+        # are in fact identical.
+        baseline = pipeline.expected_comparator_source_identity_v1(_request())
+
+        self.assertEqual(
+            baseline,
+            pipeline.expected_comparator_source_identity_v1(
+                _request(runtime_binding=_runtime_binding(max_stderr_bytes=32 * 1024)),
+            ),
+        )
+
+    def test_expected_source_identity_refuses_a_foreign_or_unbound_request(self) -> None:
+        # A pre-check that answered for an unbound closure would certify an
+        # identity no build could ever reproduce, which is worse than no
+        # pre-check at all.
+        foreign_lock, _foreign_sources = _source_fixture("foreign-")
+        mutated = _request()
+        object.__setattr__(mutated, "source_lock", foreign_lock)
+
+        with self.assertRaises(pipeline.PipelineInputErrorV1) as wrong_type:
+            pipeline.expected_comparator_source_identity_v1(object())
+        self.assertEqual(
+            wrong_type.exception.reason,
+            pipeline.PipelineInputReasonV1.WRONG_TYPE,
+        )
+
+        with self.assertRaises(pipeline.PipelineInputErrorV1) as foreign:
+            pipeline.expected_comparator_source_identity_v1(mutated)
+        self.assertEqual(
+            foreign.exception.reason,
+            pipeline.PipelineInputReasonV1.FOREIGN_SOURCE_CAPABILITY,
+        )
+
+    def test_the_build_and_the_pre_check_share_one_source_bound_derivation(self) -> None:
+        # Two independent derivations of the same eight coordinates would drift
+        # apart silently, and the pre-check would then approve an engine the
+        # build does not produce.  Disabling the shared derivation must take
+        # both paths down, which no coincidental copy could survive.
+        request = _request()
+        binary = _static_elf(b"shared-derivation")
+        marker = "single source-bound derivation"
+
+        def _refuse(*_args: object, **_kwargs: object) -> object:
+            raise _SharedDerivationProbe(marker)
+
+        with mock.patch.object(pipeline, "_source_bound_preimages_v1", _refuse):
+            with self.assertRaisesRegex(_SharedDerivationProbe, marker):
+                pipeline.expected_comparator_source_identity_v1(request)
+            with self.assertRaisesRegex(_SharedDerivationProbe, marker):
+                pipeline.ControlledPipelineV1(
+                    build_backend=_BuildBackend((binary, binary)),
+                ).build(request)
+
+        fresh = ComparatorManifestV2(
+            ComparatorKindV1.ARB,
+            *(_digest(f"probe-coordinate-{index}") for index in range(10)),
+        )
+        with mock.patch.object(protocol, "source_bound_identity_v2", _refuse):
+            with self.assertRaisesRegex(_SharedDerivationProbe, marker):
+                pipeline.expected_comparator_source_identity_v1(request)
+            with self.assertRaisesRegex(_SharedDerivationProbe, marker):
+                fresh.source_identity
+
+    def test_the_pre_check_needs_the_admitted_archives_not_only_the_lock(self) -> None:
+        """Name the boundary: the lock commits to the upstream trees, it never carries them.
+
+        `upstream_source`, `arithmetic_input_set` and `legal_file_set` read
+        per-file coordinates — the tree identity, the archive file manifest
+        and each legal file's mode — that the release lock only commits to
+        through `archive_sha256`.  A caller that owns the checkout alone
+        therefore cannot derive them without inverting a digest, and a
+        pre-check has to admit the locked archives first.  If a lock revision
+        ever carries these coordinates itself, this test must fail so the
+        cheaper lock-only derivation is considered deliberately.
+        """
+
+        lock_names = tuple(
+            item.name for item in dataclass_fields(provenance.SourceReleaseLockV1)
+        )
+        archive_names = tuple(
+            item.name for item in dataclass_fields(provenance.SafeSourceArchiveV1)
+        )
+        legal_names = tuple(
+            item.name for item in dataclass_fields(provenance.LegalFileV1)
+        )
+        archive_file_names = tuple(
+            item.name for item in dataclass_fields(provenance.ArchiveFileV1)
+        )
+
+        for name in ("tree_identity", "files"):
+            with self.subTest(coordinate=name):
+                self.assertIn(name, archive_names)
+                self.assertNotIn(name, lock_names)
+        self.assertIn("mode", archive_file_names)
+        self.assertNotIn("mode", legal_names)
+        self.assertIn("archive_sha256", lock_names)
+
+    def test_the_source_bound_preimage_set_cannot_drift_from_the_manifest(self) -> None:
+        # A coordinate added to the manifest joins the fold automatically; the
+        # pre-check must then fail loudly instead of folding a stale eight.
+        self.assertEqual(
+            tuple(
+                item.name
+                for item in dataclass_fields(pipeline.ArbSourceBoundPreimagesV1)
+            ),
+            source_bound_coordinates_v2(),
+        )
+        for name in source_bound_coordinates_v2():
+            with self.subTest(coordinate=name):
+                self.assertNotIn(name, protocol.BUILD_OBSERVATION_COORDINATES_V2)
 
 
 if __name__ == "__main__":
