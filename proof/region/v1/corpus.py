@@ -376,16 +376,126 @@ def assemble_transcript_from_shards_v1(
     return transcript
 
 
+def decision_procedure_work_bound_v1(
+    definition: protocol.ContextualRegionDefinitionV1,
+    precision_ladder: tuple[int, ...],
+) -> int:
+    """Branch evaluations one point can need across the whole ladder.
+
+    One `decide` call spends at most one predicate branch per region segment:
+    a knot ladder of `n` knots has `n - 1` segments, and the degenerate
+    single-knot region still needs one branch for the tone that equals its
+    knot.  That cap is per rung, but the point's grant is *shared across the
+    ladder*: a point that pays a branch at a low rung and stays
+    `BOUNDARY_UNPROVEN` escalates and pays again at the next rung.  Budgeting
+    only one rung therefore starves points that escalate past that share —
+    the very points the ladder exists for.
+
+    Sufficiency is structural, not measured: the rung loop runs at most
+    `len(ladder)` times and each call consumes at most the segment count, so
+    entering rung `i` with `(len(ladder) - i) * segments` left is enough for
+    every remaining rung.  The bound is not claimed minimal for a given
+    definition — a smaller grant may happen to suffice, but only under a
+    numerical property of that definition, which is not proven here.
+    """
+
+    if type(definition) is not protocol.ContextualRegionDefinitionV1:
+        raise TypeError("a work bound requires a canonical region definition")
+    if (
+        type(precision_ladder) is not tuple
+        or not precision_ladder
+        or any(type(rung) is not int for rung in precision_ladder)
+    ):
+        raise TypeError("a work bound requires a canonical precision ladder")
+    return len(precision_ladder) * max(1, definition.knot_count - 1)
+
+
+def domain_points_before_v1(
+    domain: protocol.ReducedDomainManifestV1, window_start: int
+) -> int:
+    """Domain points the monolithic run consumes before reaching an ordinal.
+
+    The ordinal-prefix grant is charged once per *domain point* in iteration
+    order, so a lane's prefix is the number of domain points below its
+    window — not the window's ordinal.  The two coincide only when the domain
+    covers every ordinal below the window, which is exactly the exact full
+    manifest; on any reduced domain the ordinal would overcount the prefix
+    and starve the lane.
+    """
+
+    if type(domain) is not protocol.ReducedDomainManifestV1:
+        raise TypeError("a domain prefix requires a canonical domain manifest")
+    if type(window_start) is not int or window_start < 0:
+        raise TypeError("a domain prefix requires a non-negative window start")
+    points = 0
+    for start, end in domain.ranges:
+        if end <= window_start:
+            points += end - start
+        elif start < window_start:
+            points += window_start - start
+    return points
+
+
+def certified_work_policy_v1(
+    definition: protocol.ContextualRegionDefinitionV1,
+    base: protocol.ProofPolicyV1,
+    point_count: int,
+) -> protocol.ProofPolicyV1:
+    """The base policy's ladder under the work a certification actually needs.
+
+    The work grant is not a free knob for a certified materialisation: a dual
+    comparison refuses any transcript carrying an unresolved outcome, so one
+    starved point is enough to make the proof unreachable.  A budget below
+    `decision_procedure_work_bound_v1` is not proven to decide the domain —
+    a zero grant decides no boundary point at all, and a partial one leaves
+    whichever points escalate past their share on `RESOURCE_LIMIT_REACHED`.
+    The derived bound is proven sufficient, not proven minimal; see
+    `decision_procedure_work_bound_v1` for both halves of that claim.
+
+    The pregrant is an absolute total over the domain's ordinal prefix rather
+    than a rate, so it is re-derived for the domain being certified: every
+    point owns its per-point grant whether or not it spends it.
+    """
+
+    if type(base) is not protocol.ProofPolicyV1:
+        raise TypeError("a certified policy requires a canonical base policy")
+    if type(point_count) is not int or point_count <= 0:
+        raise TypeError("a certified policy requires a positive point count")
+    budgets = []
+    for budget in base.comparators:
+        # Each comparator declares its own ladder, and the bound follows that
+        # ladder: a shared constant would starve whichever engine escalates
+        # further.
+        work = decision_procedure_work_bound_v1(definition, budget.precision_ladder)
+        budgets.append(
+            protocol.ComparatorBudgetV1(
+                budget.kind, budget.precision_ladder, work, work * point_count
+            )
+        )
+    return protocol.ProofPolicyV1(base.equality_release, tuple(budgets))
+
+
 def full_domain_job_v1(base: protocol.ProofJobV1) -> protocol.ProofJobV1:
-    """The same definition, formula and policy over the exact full manifest."""
+    """The declared definition and formula certified over the exact manifest.
+
+    The base job's work grant is deliberately not carried over.  The frozen
+    protocol fixture declares a hostile zero-grant policy, and borrowing it
+    for a certified run is what leaves the region's boundary points
+    unresolved: the grant is checked before the predicate branch runs, so a
+    starved point never decides at any precision.  A certified full-domain
+    materialisation must prove every point inside or outside, so it declares
+    the work its own decision procedure needs; only the precision ladder and
+    the equality release stay the base job's declaration.
+    """
 
     if type(base) is not protocol.ProofJobV1:
         raise TypeError("full-domain job derivation requires a canonical proof job")
+    manifest = protocol.exact_full_domain_manifest_v1()
     return protocol.ProofJobV1(
         base.definition,
         base.formula_spec,
-        protocol.exact_full_domain_manifest_v1(),
-        base.policy,
+        manifest,
+        certified_work_policy_v1(base.definition, base.policy, manifest.point_count),
     )
 
 
@@ -418,13 +528,14 @@ def lane_window_job_v1(
     """The lane execution job for one window of a full-domain job.
 
     The window job replays the same definition and formula over the single
-    window range while its comparator budget starts with an exhausted
-    ordinal-prefix pregrant.  That regime is exactly the state a sequential
-    full-domain replay reaches once the pregrant is spent, which happens at a
-    negligible ordinal for the production policy; a lane is only admissible
-    for windows at or beyond that exhaustion point, and its fragments stay
-    bound to the full-domain job identity through the runner's evidence
-    identity.
+    window range, starting from the grant state the ordinal prefix left
+    behind: every point before the window owns its per-point pregrant whether
+    or not it spends it, so the window's remaining pregrant is the declared
+    total minus that prefix, never a negative debt.  Reconstructing the
+    prefix state — instead of assuming it is already exhausted — is what
+    makes a lane byte-identical to the same window of the monolithic run in
+    every grant regime, and its fragments stay bound to the full-domain job
+    identity through the runner's evidence identity.
     """
 
     if type(full_job) is not protocol.ProofJobV1:
@@ -440,16 +551,44 @@ def lane_window_job_v1(
     rejection = _validate_lane_window(window_start, window_points)
     if rejection is not None:
         return rejection
+    # A lane claims byte-identity with the same window of the monolithic run,
+    # so that window must exist in the run: one crossing a domain gap has no
+    # monolithic counterpart at all and would replay ordinals the run never
+    # visits.  Ranges are sorted and never adjacent, so containment means
+    # containment in one range.
+    if not any(
+        start <= window_start and window_start + window_points <= end
+        for start, end in full_job.domain.ranges
+    ):
+        return _reject(
+            ShardCorpusReasonV1.FOREIGN_INPUT,
+            f"lane window [{window_start}, +{window_points}) is not contained"
+            f" in one range of the job's domain",
+        )
     budgets = []
     matched = False
     for budget in full_job.policy.comparators:
         if budget.kind == kind:
+            # A lane replays a window of the same run, so it must start from
+            # the grant state the ordinal prefix left behind: every preceding
+            # point owns its pregrant whether or not it spends it.  Assuming
+            # an exhausted prefix is only correct when the whole pregrant is
+            # zero, and it silently starves every lane of a granted run.
+            # The monolithic run charges one grant per *domain point*, so the
+            # prefix is counted over the domain, not over the ordinal space —
+            # the two coincide only when the domain covers every ordinal
+            # below the window.
             budgets.append(
                 protocol.ComparatorBudgetV1(
                     budget.kind,
                     budget.precision_ladder,
                     budget.per_point_work,
-                    0,
+                    max(
+                        0,
+                        budget.global_pregrant
+                        - budget.per_point_work
+                        * domain_points_before_v1(full_job.domain, window_start),
+                    ),
                 )
             )
             matched = True
@@ -518,9 +657,10 @@ def run_window_lane_v1(
     """Replay one packing-aligned window of the full domain as a lane.
 
     The lane is prefix-independent by construction: it executes the window
-    job in the exhausted ordinal-prefix grant regime and binds every witness
-    digest to the full-domain job identity, so contiguous lanes concatenate
-    into the exact monolithic shard stream.
+    job from the grant state the ordinal prefix leaves behind and binds every
+    witness digest to the full-domain job identity, so contiguous lanes
+    concatenate into the exact monolithic shard stream under any declared
+    budget.
     """
 
     if type(full_job) is not protocol.ProofJobV1:

@@ -72,8 +72,18 @@ def _job_with_pregrant(
     )
 
 
-def _lane(job, comparator, start: int, points: int, shard_points: int):
-    lane = corpus.run_window_lane_v1(job, comparator, start, points, shard_points)
+def _lane(job, comparator, start: int, points: int, shard_points: int, producer=None):
+    """One lane artifact, optionally produced against a different job.
+
+    Assembly admits lanes as files, so a hostile lane never has to come from
+    the job it is presented against: `producer` builds it against a domain
+    that does contain the window, exactly as a foreign or stale artifact
+    would arrive from another run.
+    """
+
+    lane = corpus.run_window_lane_v1(
+        producer if producer is not None else job, comparator, start, points, shard_points
+    )
     if type(lane) is not corpus.WindowLaneArtifactV1:
         raise AssertionError(f"lane rejected: {lane!r}")
     return lane
@@ -168,7 +178,8 @@ class AssemblyApiTests(unittest.TestCase):
         job = _job_with_pregrant(ordinals, 0)
         comparator = _comparator()
         self.assertEqual(job.domain.ranges, ((0, 64), (128, 192)))
-        lanes = (_admitted(_lane(job, comparator, 0, 128, 8)),)
+        wide = _job_with_pregrant(tuple(range(192)), 0)
+        lanes = (_admitted(_lane(job, comparator, 0, 128, 8, producer=wide)),)
         result = corpus_assembly.assemble_lanes_v1(job, comparator, lanes)
         self.assertIs(type(result), corpus.ShardCorpusRejectedV1)
         self.assertEqual(result.reason, corpus.ShardCorpusReasonV1.SHARD_ORDER)
@@ -178,7 +189,12 @@ class AssemblyApiTests(unittest.TestCase):
         comparator = _comparator()
         lanes = (
             _admitted(_lane(job, comparator, 0, 128, 8)),
-            _admitted(_lane(job, comparator, 128, 64, 8)),
+            _admitted(
+                _lane(
+                    job, comparator, 128, 64, 8,
+                    producer=_job_with_pregrant(tuple(range(192)), 0),
+                )
+            ),
         )
         result = corpus_assembly.assemble_lanes_v1(job, comparator, lanes)
         self.assertIs(type(result), corpus.ShardCorpusRejectedV1)

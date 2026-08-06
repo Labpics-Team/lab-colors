@@ -4,8 +4,8 @@
 One sequential semantic replay of the exact full 2^24 point domain never
 fits a single verification process, so the replay runs as packing-aligned
 window lanes: each lane independently replays its window of the job's domain
-in the exhausted ordinal-prefix grant regime (the exact lane machinery the
-full-domain RUN uses).  Assembly admits the lanes through the same lane
+from the grant state its ordinal prefix leaves behind (the exact lane
+machinery the full-domain RUN uses).  Assembly admits the lanes through the same lane
 admission as the corpus RUN, reassembles the monolithic transcript from the
 lane fragments, and seals the one `SemanticVerificationReceiptV1` — the same
 receipt the monolithic verifier seals — only when the reassembled
