@@ -57,8 +57,11 @@ def lane_comparator_contents_v1() -> dict[bytes, bytes]:
 
 def lane_comparator_v1() -> protocol.ContentResolvedComparatorManifestV2:
     contents = lane_comparator_contents_v1()
+    # The manifest takes content addresses, not content: unpacking the dict
+    # reads as if the bytes went in, so the keys are named at the call site.
+    addresses = tuple(contents)
     manifest = protocol.ComparatorManifestV2(
-        protocol.ComparatorKindV1.ARB, *contents
+        protocol.ComparatorKindV1.ARB, *addresses
     )
     return protocol.ContentResolvedComparatorManifestV2.admit(manifest, contents.get)
 

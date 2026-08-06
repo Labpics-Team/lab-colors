@@ -113,6 +113,11 @@ class ComparatorSourceIdentityTests(unittest.TestCase):
         self.assertEqual(source | observation, coordinates)
         self.assertEqual(source & observation, set())
         self.assertTrue(observation.issubset(coordinates))
+        # Anti-vacuity: an empty observation set would satisfy the partition
+        # above while turning the loop over observation coordinates into zero
+        # subTests, so the split would look proven and test nothing.
+        self.assertTrue(observation)
+        self.assertTrue(source)
 
     def test_every_source_coordinate_moves_the_source_identity(self) -> None:
         # Without this, a coordinate dropped from the fold would silently stop
