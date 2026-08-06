@@ -362,6 +362,9 @@ class ArtifactListingWireTests(unittest.TestCase):
             seen.append(tuple(command))
             assert kwargs.get("check") is True
             assert kwargs.get("capture_output") is True
+            # Without this the reply arrives as bytes, the decode raises, and
+            # every run is refused — a gate that looks alive and admits nobody.
+            assert kwargs.get("text") is True
             return _Completed()
 
         with unittest.mock.patch.object(corpus_dispatch.subprocess, "run", record):
@@ -450,6 +453,9 @@ class RunProvenanceWireTests(unittest.TestCase):
             seen.append(tuple(command))
             assert kwargs.get("check") is True
             assert kwargs.get("capture_output") is True
+            # Without this the reply arrives as bytes, the decode raises, and
+            # every run is refused — a gate that looks alive and admits nobody.
+            assert kwargs.get("text") is True
             return _Completed()
 
         with unittest.mock.patch.object(corpus_dispatch.subprocess, "run", record):
@@ -931,6 +937,39 @@ class DispatchSeamTests(unittest.TestCase):
             ):
                 code = corpus_dispatch.main(self._argv(Path(tmp) / "out.txt"))
         self.assertEqual(code, 64)
+
+    def test_the_origin_is_asked_before_the_artifact(self) -> None:
+        # A run of the wrong workflow lists an artifact of exactly the right
+        # name, so asking about the artifact first clears a run that should
+        # never have been considered — and spends a call to do it.  The order
+        # is the claim, so the order is what this pins.
+        asked: list[str] = []
+        with tempfile.TemporaryDirectory() as tmp:
+            with unittest.mock.patch.object(
+                corpus_dispatch,
+                "gh_run_provenance_v1",
+                lambda run_id: asked.append("origin")
+                or corpus_dispatch.RunProvenanceV1(
+                    corpus_dispatch.EVIDENCE_WORKFLOW_PATH_V1,
+                    "pull_request",
+                    "completed",
+                    "success",
+                    "0" * 40,
+                ),
+            ), unittest.mock.patch.object(
+                corpus_dispatch,
+                "gh_run_artifacts_v1",
+                lambda run_id: asked.append("artifact")
+                or (("verification-evidence-arb", False),),
+            ), unittest.mock.patch.object(
+                corpus_dispatch.subprocess,
+                "run",
+                lambda command, **kwargs: None,
+            ):
+                code = corpus_dispatch.main(self._argv(Path(tmp) / "out.txt"))
+        # The wrong trigger is refused, and the artifact was never asked about.
+        self.assertEqual(code, 64)
+        self.assertEqual(asked, ["origin"])
 
     def test_printing_stays_offline_and_asks_nobody(self) -> None:
         # Printing is documented as offline: it must not even observe.

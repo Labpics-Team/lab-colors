@@ -282,17 +282,6 @@ class RunProvenanceV1:
     conclusion: str
     head_sha: str
 
-    def __post_init__(self) -> None:
-        for field in (
-            self.path,
-            self.event,
-            self.status,
-            self.conclusion,
-            self.head_sha,
-        ):
-            if type(field) is not str:
-                raise TypeError("invalid run provenance field")
-
 
 def gh_run_provenance_v1(run_id: int) -> RunProvenanceV1:
     """The run's origin as GitHub reports it, projected to the named fields.
