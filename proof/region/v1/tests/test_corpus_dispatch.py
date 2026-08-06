@@ -213,7 +213,7 @@ class EvidenceAdmissionTests(unittest.TestCase):
         result = corpus_dispatch.admit_evidence_artifact_v1(
             424242,
             "verification-evidence-arb",
-            lambda run_id: ("verification-evidence-mpfi",),
+            lambda run_id: (("verification-evidence-mpfi", False),),
         )
         self.assertIs(type(result), corpus.ShardCorpusRejectedV1)
         self.assertEqual(result.reason, corpus.ShardCorpusReasonV1.FOREIGN_INPUT)
@@ -232,7 +232,35 @@ class EvidenceAdmissionTests(unittest.TestCase):
         result = corpus_dispatch.admit_evidence_artifact_v1(
             424242,
             "verification-evidence-arb",
-            lambda run_id: ("verification-evidence-arb", "verification-evidence-mpfi"),
+            lambda run_id: (
+                ("verification-evidence-arb", False),
+                ("verification-evidence-mpfi", False),
+            ),
+        )
+        self.assertIsNone(result)
+
+    def test_an_expired_artifact_is_not_evidence(self) -> None:
+        # An expired artifact is still listed by GitHub but can no longer be
+        # downloaded, so admitting it would send every lane to a download
+        # that cannot succeed — the incident class, through the stale-run
+        # path instead of the missing-run one.
+        result = corpus_dispatch.admit_evidence_artifact_v1(
+            424242,
+            "verification-evidence-arb",
+            lambda run_id: (("verification-evidence-arb", True),),
+        )
+        self.assertIs(type(result), corpus.ShardCorpusRejectedV1)
+        self.assertEqual(result.reason, corpus.ShardCorpusReasonV1.FOREIGN_INPUT)
+
+    def test_a_live_artifact_beside_an_expired_one_is_admitted(self) -> None:
+        # Anti-vacuity for the rule above: expiry must filter, not blanket-refuse.
+        result = corpus_dispatch.admit_evidence_artifact_v1(
+            424242,
+            "verification-evidence-arb",
+            lambda run_id: (
+                ("verification-evidence-mpfi", True),
+                ("verification-evidence-arb", False),
+            ),
         )
         self.assertIsNone(result)
 
@@ -243,7 +271,7 @@ class EvidenceAdmissionTests(unittest.TestCase):
 
         def observer(run_id: int):
             seen.append(run_id)
-            return ("verification-evidence-arb",)
+            return (("verification-evidence-arb", False),)
 
         corpus_dispatch.admit_evidence_artifact_v1(
             99, "verification-evidence-arb", observer
@@ -277,7 +305,11 @@ class DispatchSeamTests(unittest.TestCase):
         launched: list[tuple[str, ...]] = []
         with tempfile.TemporaryDirectory() as tmp:
             with unittest.mock.patch.object(
-                corpus_dispatch, "gh_run_artifact_names_v1", lambda run_id: ()
+                corpus_dispatch,
+                "gh_run_artifacts_v1",
+                lambda run_id: (("verification-evidence-arb", False),)
+                if run_id == 999
+                else (),
             ), unittest.mock.patch.object(
                 corpus_dispatch.subprocess,
                 "run",
@@ -296,8 +328,14 @@ class DispatchSeamTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             with unittest.mock.patch.object(
                 corpus_dispatch,
-                "gh_run_artifact_names_v1",
-                lambda run_id: ("verification-evidence-arb",),
+                "gh_run_artifacts_v1",
+                # Sensitive to the run id on purpose: an observer that ignores
+                # it lets a mutant hardcode the id at the admission call site
+                # and still pass — and the run id is the exact coordinate the
+                # 99999999 incident turned on.
+                lambda run_id: (("verification-evidence-arb", False),)
+                if run_id == 424242
+                else (),
             ), unittest.mock.patch.object(
                 corpus_dispatch.subprocess,
                 "run",
@@ -319,7 +357,7 @@ class DispatchSeamTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             with unittest.mock.patch.object(
                 corpus_dispatch,
-                "gh_run_artifact_names_v1",
+                "gh_run_artifacts_v1",
                 lambda run_id: observed.append(run_id) or (),
             ), unittest.mock.patch.object(
                 corpus_dispatch.subprocess,

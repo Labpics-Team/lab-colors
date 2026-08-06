@@ -188,12 +188,13 @@ def verification_dispatch_commands_v1(
     )
 
 
-def gh_run_artifact_names_v1(run_id: int) -> tuple[str, ...]:
-    """Artifact names the given workflow run carries, read through `gh`.
+def gh_run_artifacts_v1(run_id: int) -> tuple[tuple[str, bool], ...]:
+    """Every artifact the run lists, as `(name, expired)` pairs.
 
-    The one impure boundary of this admission: it observes GitHub.  It is
-    injected into `admit_evidence_artifact_v1` so the decision itself stays
-    testable without a network.
+    The one impure boundary of this admission: it observes GitHub and reports
+    what it saw, without deciding anything.  Which of those artifacts count is
+    a rule, so it lives in `admit_evidence_artifact_v1` where a test can reach
+    it — filtering here would put the rule behind the network.
     """
 
     completed = subprocess.run(
@@ -203,20 +204,19 @@ def gh_run_artifact_names_v1(run_id: int) -> tuple[str, ...]:
             "--paginate",
             f"repos/{{owner}}/{{repo}}/actions/runs/{run_id}/artifacts",
             "--jq",
-            # An expired artifact is still listed but can no longer be
-            # downloaded, so naming it would let a stale evidence run through
-            # the gate and reproduce the very failure this admission exists to
-            # prevent.  Pagination matters for the same reason: a name on the
-            # second page must not read as absent.
-            ".artifacts[] | select(.expired | not) | .name",
+            ".artifacts[] | [.name, (.expired // false)] | @tsv",
         ),
         capture_output=True,
         text=True,
         check=True,
     )
-    return tuple(
-        line.strip() for line in completed.stdout.splitlines() if line.strip()
-    )
+    observed: list[tuple[str, bool]] = []
+    for line in completed.stdout.splitlines():
+        if not line.strip():
+            continue
+        name, _, expired = line.partition("	")
+        observed.append((name.strip(), expired.strip().lower() == "true"))
+    return tuple(observed)
 
 
 def admit_evidence_artifact_v1(
@@ -238,18 +238,28 @@ def admit_evidence_artifact_v1(
     # a caller but invisible to anything that replaces the observer — the
     # seam would look injectable and not be.
     if observer is None:
-        observer = gh_run_artifact_names_v1
+        observer = gh_run_artifacts_v1
     try:
-        names = tuple(observer(evidence_run_id))  # type: ignore[operator]
+        observed = tuple(observer(evidence_run_id))  # type: ignore[operator]
+        # An expired artifact is still listed but can no longer be
+        # downloaded, so naming it would admit a stale evidence run and
+        # reproduce the very failure this admission exists to prevent.  The
+        # rule is applied here, not in the query, so a test can prove it.
+        names = tuple(name for name, expired in observed if not expired)
     except Exception as error:
         # The observation is a hostile boundary: an unreachable run, a
         # missing token or a malformed reply must all land as one refusal.
         # The cause travels with it — an operator has to tell "no such run"
         # from "no token", and a bare refusal makes those look identical.
+        # CalledProcessError.__repr__ drops stderr, and stderr is where the
+        # only distinguishing text lives: "Not Found" against "no token"
+        # against a network failure. Without it the operator debugs the wrong
+        # axis, which is exactly what the refusal is supposed to prevent.
+        cause = getattr(error, "stderr", None) or repr(error)
         return corpus._reject(
             corpus.ShardCorpusReasonV1.FOREIGN_INPUT,
             f"verification dispatch cannot observe run {evidence_run_id}:"
-            f" {error!r}",
+            f" {str(cause).strip()}",
         )
     if evidence_artifact not in names:
         return corpus._reject(
