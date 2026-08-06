@@ -165,19 +165,40 @@ jobs:
         # lane artifact names carry the engine only to keep the files apart,
         # while which engine a lane serves is decided by the comparator
         # source identity inside its manifest.
+        #
+        # Each run lands in its own directory first.  Downloading straight
+        # into one would let a re-run of the same window overwrite the
+        # evidence already there — the cover would still look exact while
+        # quietly having used one of two answers.
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           LANE_RUN_IDS: ${{ inputs.lane_run_ids }}
         run: |
           set -euo pipefail
-          mkdir -p lanes-in
+          mkdir -p lanes-in staged
           IFS=',' read -r -a RUNS <<< "${LANE_RUN_IDS}"
           for run in "${RUNS[@]}"; do
             run="$(echo "${run}" | tr -d '[:space:]')"
-            test -n "${run}"
-            gh run download "${run}"               --repo '${{ github.repository }}'               --pattern 'verification-lane-*'               --dir lanes-in
+            case "${run}" in
+              ''|*[!0-9]*)
+                echo "lane run id is not a number: ${run}" >&2
+                exit 64
+                ;;
+            esac
+            rm -rf "staged/${run}"
+            mkdir -p "staged/${run}"
+            gh run download "${run}"               --repo '${{ github.repository }}'               --pattern 'verification-lane-*'               --dir "staged/${run}"
+            for lane in "staged/${run}"/*/; do
+              name="$(basename "${lane}")"
+              if [[ -e "lanes-in/${name}" ]]; then
+                echo "two runs claim lane ${name}; one would silently win" >&2
+                exit 64
+              fi
+              mv "${lane}" "lanes-in/${name}"
+            done
           done
+          rm -rf staged
           echo "LABCOLORS_DUAL_PROOF_LANES=$GITHUB_WORKSPACE/lanes-in"             >> "$GITHUB_ENV"
 
       - name: refuse an incomplete cover before anything expensive is built

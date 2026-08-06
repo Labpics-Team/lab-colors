@@ -119,6 +119,17 @@ class DualProofContainmentContractTests(unittest.TestCase):
         self.assertIn("verification-lane-*", self.text)
         self.assertNotIn("run-id:", self.text)
 
+    def test_two_runs_cannot_quietly_claim_one_lane(self) -> None:
+        # Downloading straight into one directory lets a re-run of the same
+        # window overwrite the evidence already there: the cover still looks
+        # exact while one of two answers silently won.
+        self.assertIn("staged/", self.text)
+        self.assertIn("one would silently win", self.text)
+
+    def test_a_lane_run_id_that_is_not_a_number_is_refused(self) -> None:
+        # An element starting with `-` would be read by `gh` as a flag.
+        self.assertIn("''|*[!0-9]*)", self.text)
+
     def test_the_cover_is_checked_before_anything_is_built(self) -> None:
         cover_check = self.text.index("refuse an incomplete cover")
         first_build = self.text.index("seal the full-domain dual proof")
