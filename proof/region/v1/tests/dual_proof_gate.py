@@ -45,16 +45,36 @@ sys.path.insert(0, str(PROOF))
 
 import corpus_assembly  # noqa: E402
 import dual_proof  # noqa: E402
+import executor  # noqa: E402
 import region_proof_protocol as protocol  # noqa: E402
 import verification_assembly  # noqa: E402
+from arb import receipt as arb_receipt  # noqa: E402
+from mpfi import receipt as mpfi_receipt  # noqa: E402
 from semantic.receipt import SemanticVerificationReceiptV1  # noqa: E402
 
 LANES_ENV_V1 = "LABCOLORS_DUAL_PROOF_LANES"
 RECEIPT_OUT_ENV_V1 = "LABCOLORS_DUAL_PROOF_OUT"
+# One observer subtree per engine, plus the unconstrained group this process
+# returns to between them.  A shared subtree cannot work: its budget is two
+# tasks, and the second engine's BUILD forks into it.
+ARB_CGROUP_ENV_V1 = "LABCOLORS_DUAL_PROOF_CGROUP_ARB"
+MPFI_CGROUP_ENV_V1 = "LABCOLORS_DUAL_PROOF_CGROUP_MPFI"
+TASK_CGROUP_ENV_V1 = "LABCOLORS_DUAL_PROOF_CGROUP_TASKS"
+EXECUTOR_CGROUP_ENV_V1 = "LABCOLORS_EXECUTOR_CGROUP_V1"
+# Every variable the two lane modules read.  Calling their seal functions
+# directly bypasses the `skipUnless` that used to enumerate these, so an
+# incomplete environment would otherwise surface as a bare KeyError from deep
+# inside a pipeline instead of the refusal this gate promises.
 REQUIRED_ENVIRONMENT_V1 = (
     "LABCOLORS_ARB_PIPELINE_DOCKER",
     "LABCOLORS_MPFI_DOCKER",
-    "LABCOLORS_EXECUTOR_CGROUP_V1",
+    "LABCOLORS_GMP_ARCHIVE",
+    "LABCOLORS_MPFR_ARCHIVE",
+    "LABCOLORS_FLINT_ARCHIVE",
+    "LABCOLORS_MPFI_ARCHIVE",
+    ARB_CGROUP_ENV_V1,
+    MPFI_CGROUP_ENV_V1,
+    TASK_CGROUP_ENV_V1,
     LANES_ENV_V1,
 )
 
@@ -73,11 +93,52 @@ def _load_lane_module_v1(name: str, path: Path) -> ModuleType:
     return module
 
 
+def _assert_engine_modules_are_unmixed_v1() -> None:
+    """No engine's sibling module may be answering for the other's.
+
+    The lane modules are loaded by path under distinct names, but what they
+    import by bare name is resolved through `sys.path`, and the two test
+    directories carry same-named modules.  Today that resolves correctly only
+    because of the order the two loads happen in — an invariant nothing
+    enforces, so it is asserted rather than assumed.
+    """
+
+    expected = {
+        "test_receipt": MPFI_LANE_MODULE.parent,
+        "test_pipeline": ARB_LANE_MODULE.parent,
+    }
+    for name, directory in expected.items():
+        module = sys.modules.get(name)
+        if module is None:
+            continue
+        resolved = Path(module.__file__ or "").resolve().parent
+        if resolved != directory:
+            raise AssertionError(f"{name} resolved to {resolved}, not {directory}")
+
+
+def _sealed_engine_receipt_v1(module: ModuleType, cgroup_env: str, expected: type):
+    """Seal one engine's receipt in its own observer subtree.
+
+    The process returns to the unconstrained task group first: it may still be
+    inside the previous engine's observer, whose subtree admits two tasks and
+    would refuse this engine's BUILD.
+    """
+
+    executor.enter_task_cgroup_v1(Path(os.environ[TASK_CGROUP_ENV_V1]))
+    os.environ[EXECUTOR_CGROUP_ENV_V1] = os.environ[cgroup_env]
+    sealed = module.seal_full_domain_receipt_v1()
+    if type(sealed) is not expected:
+        # The seal returns a union: every rejection carries the reason this
+        # run failed, and losing it costs another two hours to learn again.
+        raise AssertionError(f"{expected.__name__} not sealed: {sealed!r}")
+    return sealed
+
+
 def _lane_cover_v1(
     root: Path,
     job: protocol.ProofJobV1,
     comparator: protocol.ContentResolvedComparatorManifestV2,
-) -> tuple[object, ...]:
+) -> tuple[tuple[object, ...], frozenset[str]]:
     """Admit every lane under `root` that this comparator's sources produced.
 
     The cover is selected by the comparator's source identity rather than by
@@ -87,6 +148,7 @@ def _lane_cover_v1(
 
     wanted = comparator.source_identity.hex()
     lanes = []
+    names = []
     foreign = 0
     for directory in sorted(path for path in root.iterdir() if path.is_dir()):
         manifest_path = directory / "lane-manifest.json"
@@ -100,10 +162,11 @@ def _lane_cover_v1(
         if type(lane) is not corpus_assembly.AdmittedLaneV1:
             raise AssertionError(f"lane rejected: {directory.name} ({lane!r})")
         lanes.append(lane)
+        names.append(directory.name)
     if not lanes:
         raise AssertionError(f"no lane of this engine under {root} ({foreign} foreign)")
     lanes.sort(key=lambda lane: lane.window_start)
-    return tuple(lanes)
+    return tuple(lanes), frozenset(names)
 
 
 def _sealed_semantic_receipt_v1(
@@ -112,19 +175,23 @@ def _sealed_semantic_receipt_v1(
     transcript: protocol.DecisionTranscriptV1,
     run: protocol.RunClaimV1,
     root: Path,
-) -> SemanticVerificationReceiptV1:
+) -> tuple[SemanticVerificationReceiptV1, frozenset[str]]:
     """Re-seal one engine's semantic receipt from its own live coordinates.
 
     The lanes replayed an earlier run of the same sources; they admit here
     because they bind the comparator's source identity, which reproduces.
+    Returns the cover's directory names as well: the receipt cannot report
+    which lanes fed it, so proving the two engines used different lanes has
+    to happen out here.
     """
 
+    lanes, names = _lane_cover_v1(root, job, comparator)
     sealed = verification_assembly.assemble_semantic_verification_v1(
-        job, comparator, transcript, run, _lane_cover_v1(root, job, comparator)
+        job, comparator, transcript, run, lanes
     )
     if type(sealed) is not SemanticVerificationReceiptV1:
         raise AssertionError(f"semantic verification rejected: {sealed!r}")
-    return sealed
+    return sealed, names
 
 
 class NativeFullDomainDualProofIntegrationTests(unittest.TestCase):
@@ -138,28 +205,60 @@ class NativeFullDomainDualProofIntegrationTests(unittest.TestCase):
 
         arb_lane = _load_lane_module_v1("labcolors_arb_full_domain", ARB_LANE_MODULE)
         mpfi_lane = _load_lane_module_v1("labcolors_mpfi_full_domain", MPFI_LANE_MODULE)
+        _assert_engine_modules_are_unmixed_v1()
 
-        arb = arb_lane.seal_full_domain_receipt_v1()
-        mpfi = mpfi_lane.seal_full_domain_receipt_v1()
+        arb = _sealed_engine_receipt_v1(
+            arb_lane, ARB_CGROUP_ENV_V1, arb_receipt.SourceBoundEvaluatorReceiptV1
+        )
+        mpfi = _sealed_engine_receipt_v1(
+            mpfi_lane,
+            MPFI_CGROUP_ENV_V1,
+            mpfi_receipt.MpfiSourceBoundEvaluatorReceiptV1,
+        )
 
         # One job, two engines: a mismatch here means the lanes drifted apart
         # before any proof could exist.
         self.assertEqual(arb.job.identity, mpfi.job.identity)
 
+        # The hostile check the single-engine lanes run on their receipts.
+        # Nothing downstream repeats it, and this is the only place a
+        # full-domain receipt is ever sealed.
+        self.assertTrue(arb_receipt.replay_evidence_is_well_bound_v1(arb.evidence))
+        self.assertTrue(mpfi_receipt.replay_mpfi_evidence_is_well_bound_v1(mpfi.evidence))
+        full_domain = protocol.exact_full_domain_manifest_v1().identity
+        for engine in (arb, mpfi):
+            transcript = engine.transcript
+            self.assertEqual(transcript.point_count, protocol.OUTPUT_CARDINALITY_V1)
+            self.assertEqual(transcript.domain_identity, full_domain)
+            # The engine echoes the coordinate it was told, and it is told the
+            # comparator's source identity: without that the lanes of an
+            # earlier run could never admit against this one.
+            self.assertEqual(
+                transcript.comparator_identity,
+                engine.comparator.manifest.source_identity,
+            )
+            self.assertNotEqual(
+                engine.comparator.manifest.source_identity,
+                engine.comparator.manifest.identity,
+            )
+
         lanes_root = Path(os.environ[LANES_ENV_V1])
-        arb_semantic = _sealed_semantic_receipt_v1(
+        arb_semantic, arb_lanes = _sealed_semantic_receipt_v1(
             arb.job, arb.comparator.manifest, arb.transcript, arb.run_claim, lanes_root
         )
-        mpfi_semantic = _sealed_semantic_receipt_v1(
+        mpfi_semantic, mpfi_lanes = _sealed_semantic_receipt_v1(
             mpfi.job,
             mpfi.comparator.manifest,
             mpfi.transcript,
             mpfi.evidence.run_claim,
             lanes_root,
         )
-        # Distinct engines cannot seal the same semantic receipt; equality
-        # here would mean one engine's cover answered for both.
-        self.assertNotEqual(arb_semantic.identity, mpfi_semantic.identity)
+        # The covers must be disjoint sets of directories.  Receipt identity
+        # cannot say this — it seals job, comparator, run and transcript, and
+        # never the cover — so one engine's lanes answering for both would
+        # leave both identities looking perfectly distinct.
+        self.assertEqual(arb_lanes & mpfi_lanes, frozenset())
+        self.assertTrue(arb_lanes and mpfi_lanes)
 
         candidate = protocol.compare_dual_transcripts(
             arb.job,

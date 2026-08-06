@@ -3,8 +3,8 @@ name: Full-domain dual proof
 on:
   workflow_dispatch:
     inputs:
-      lane_run_id:
-        description: run carrying the admitted verification lane artifacts of BOTH engines
+      lane_run_ids:
+        description: comma-separated runs carrying the verification lane artifacts of BOTH engines
         required: true
 
 permissions:
@@ -43,9 +43,16 @@ jobs:
         run: |
           set -euo pipefail
           scope="/sys/fs/cgroup/labcolors-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          # One observer subtree per engine.  A shared one cannot work here:
+          # its budget is two tasks, the controller stays in the observer it
+          # entered, and the second engine's BUILD would fork into a full
+          # subtree.  The gate returns to `tasks` between engines and points
+          # LABCOLORS_EXECUTOR_CGROUP_V1 at the next subtree itself.
           {
             echo "LABCOLORS_CGROUP_SCOPE_V1=$scope"
-            echo "LABCOLORS_EXECUTOR_CGROUP_V1=$scope/proof"
+            echo "LABCOLORS_DUAL_PROOF_CGROUP_TASKS=$scope/tasks"
+            echo "LABCOLORS_DUAL_PROOF_CGROUP_ARB=$scope/proof-arb"
+            echo "LABCOLORS_DUAL_PROOF_CGROUP_MPFI=$scope/proof-mpfi"
           } >> "$GITHUB_ENV"
 
       - name: acquire and hash-check the union of both source closures
@@ -152,25 +159,68 @@ jobs:
           PY
 
       - name: download both engines' verification lane covers
-        # One flat cover for both engines: the gate sorts lanes by the
-        # comparator source identity each manifest carries, so no step here
-        # has to guess which engine produced which directory.
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          run-id: ${{ inputs.lane_run_id }}
-          github-token: ${{ github.token }}
-          pattern: verification-lane-*
-          merge-multiple: false
-          path: lanes-in
+        # Every lane is dispatched as its own run, so the cover spans many
+        # run ids — the same shape `full-domain-corpus.yml` already uses to
+        # assemble lane evidence.  Both engines land in one flat directory:
+        # lane artifact names carry the engine only to keep the files apart,
+        # while which engine a lane serves is decided by the comparator
+        # source identity inside its manifest.
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          LANE_RUN_IDS: ${{ inputs.lane_run_ids }}
+        run: |
+          set -euo pipefail
+          mkdir -p lanes-in
+          IFS=',' read -r -a RUNS <<< "${LANE_RUN_IDS}"
+          for run in "${RUNS[@]}"; do
+            run="$(echo "${run}" | tr -d '[:space:]')"
+            test -n "${run}"
+            gh run download "${run}"               --repo '${{ github.repository }}'               --pattern 'verification-lane-*'               --dir lanes-in
+          done
+          echo "LABCOLORS_DUAL_PROOF_LANES=$GITHUB_WORKSPACE/lanes-in"             >> "$GITHUB_ENV"
 
-      - name: bind the lane cover
+      - name: refuse an incomplete cover before anything expensive is built
         shell: bash
         run: |
           set -euo pipefail
-          test -d lanes-in
-          test "$(find lanes-in -mindepth 1 -maxdepth 1 -type d | wc -l)" -gt 0
-          echo "LABCOLORS_DUAL_PROOF_LANES=$GITHUB_WORKSPACE/lanes-in" \
-            >> "$GITHUB_ENV"
+          # Cover arithmetic costs seconds; discovering a missing lane after
+          # both native runs costs the whole job.
+          export PYTHONPATH="$GITHUB_WORKSPACE/proof/region/v1"
+          python3 - <<'PY'
+          import json
+          import sys
+          from collections import defaultdict
+          from pathlib import Path
+
+          import region_proof_protocol as protocol
+
+          domain_points = protocol.OUTPUT_CARDINALITY_V1
+          windows = defaultdict(list)
+          for lane in sorted(Path("lanes-in").iterdir()):
+              manifest_path = lane / "lane-manifest.json"
+              if not manifest_path.is_file():
+                  print(f"not a lane directory: {lane}", file=sys.stderr)
+                  raise SystemExit(64)
+              manifest = json.loads(manifest_path.read_text("ascii"))
+              windows[manifest["comparator_source_identity"]].append(
+                  (manifest["window_start"], manifest["window_points"])
+              )
+          if len(windows) != 2:
+              print(f"expected two engines, found {len(windows)}", file=sys.stderr)
+              raise SystemExit(64)
+          for identity, cover in sorted(windows.items()):
+              cursor = 0
+              for start, points in sorted(cover):
+                  if start != cursor:
+                      print(f"{identity[:16]}: gap or overlap at {cursor}", file=sys.stderr)
+                      raise SystemExit(64)
+                  cursor += points
+              if cursor != domain_points:
+                  print(f"{identity[:16]}: cover ends at {cursor}", file=sys.stderr)
+                  raise SystemExit(64)
+              print(f"{identity[:16]}: {len(cover)} lanes cover the exact domain")
+          PY
 
       - name: delegate one disposable cgroup subtree
         shell: bash
@@ -197,13 +247,16 @@ jobs:
             "$scope/cgroup.threads" \
             "$scope/cgroup.subtree_control"
           printf '+memory +pids' > "$scope/cgroup.subtree_control"
-          mkdir "$scope/tasks" "$scope/proof"
-          printf '+memory +pids' > "$scope/proof/cgroup.subtree_control"
-          printf '2' > "$scope/proof/pids.max"
-          mkdir "$scope/proof/observer"
-          grep --fixed-strings --quiet 'memory' "$scope/proof/cgroup.subtree_control"
-          grep --fixed-strings --quiet 'pids' "$scope/proof/cgroup.subtree_control"
-          test "$(cat "$scope/proof/pids.max")" = 2
+          mkdir "$scope/tasks"
+          for engine in proof-arb proof-mpfi; do
+            mkdir "$scope/$engine"
+            printf '+memory +pids' > "$scope/$engine/cgroup.subtree_control"
+            printf '2' > "$scope/$engine/pids.max"
+            mkdir "$scope/$engine/observer"
+            grep --fixed-strings --quiet 'memory' "$scope/$engine/cgroup.subtree_control"
+            grep --fixed-strings --quiet 'pids' "$scope/$engine/cgroup.subtree_control"
+            test "$(cat "$scope/$engine/pids.max")" = 2
+          done
           echo core | sudo tee /proc/sys/kernel/core_pattern >/dev/null
           test "$(cat /proc/sys/kernel/core_pattern)" = core
 
@@ -257,7 +310,7 @@ jobs:
               grep --fixed-strings --quiet 'populated 0' \
                 "$LABCOLORS_CGROUP_SCOPE_V1/cgroup.events" || record_failure
             fi
-            for child in proof/observer proof tasks; do
+            for child in proof-arb/observer proof-arb proof-mpfi/observer proof-mpfi tasks; do
               if [[ -d "$LABCOLORS_CGROUP_SCOPE_V1/$child" ]]; then
                 sudo rmdir "$LABCOLORS_CGROUP_SCOPE_V1/$child" || record_failure
               fi

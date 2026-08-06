@@ -1514,6 +1514,47 @@ def _open_cgroup_directory_v1(parent: object) -> int:
             os.close(descriptor)
 
 
+def enter_task_cgroup_v1(group: Path) -> None:
+    """Return this controller to a delegated group that constrains nothing.
+
+    A controller that observed one BUILD to RUN stays in the observer group it
+    entered, and that group's subtree admits exactly two tasks — the observer
+    and the one child it watched.  A process that must observe a *second*
+    execution therefore has to start where a fresh process would: outside any
+    observer, before it builds anything.  Without this the second BUILD forks
+    into a saturated subtree and dies, an hour into a native run.
+
+    This never widens a run's containment: the observer budget still applies
+    to each execution, and the group entered here is the same unconstrained
+    one root admitted this process into at the start.
+    """
+
+    if not isinstance(group, Path):
+        raise TypeError("cgroup group must be an absolute canonical Path")
+    # Descriptors pin every path component, for the same reason the observer
+    # placement does: resolving a pathname would follow a symlink before this
+    # controller can prove which cgroup it entered.
+    directory_fd = _open_cgroup_directory_v1(group)
+    try:
+        _write_own_pid_v1(directory_fd)
+    finally:
+        os.close(directory_fd)
+
+
+def _write_own_pid_v1(directory_fd: int) -> None:
+    procs_fd = os.open(
+        b"cgroup.procs",
+        os.O_WRONLY | os.O_CLOEXEC | os.O_NOFOLLOW,
+        dir_fd=directory_fd,
+    )
+    try:
+        payload = str(os.getpid()).encode("ascii")
+        if os.write(procs_fd, payload) != len(payload):
+            raise OSError(errno_module.EIO, "short cgroup placement write")
+    finally:
+        os.close(procs_fd)
+
+
 def enter_observer_cgroup_v1(parent: Path) -> None:
     """Move the dedicated controller into the declared observer group."""
 
@@ -1525,17 +1566,7 @@ def enter_observer_cgroup_v1(parent: Path) -> None:
     try:
         directory_fd = _open_cgroup_child_directory_v1(parent_fd, b"observer")
         try:
-            procs_fd = os.open(
-                b"cgroup.procs",
-                os.O_WRONLY | os.O_CLOEXEC | os.O_NOFOLLOW,
-                dir_fd=directory_fd,
-            )
-            try:
-                payload = str(os.getpid()).encode("ascii")
-                if os.write(procs_fd, payload) != len(payload):
-                    raise OSError(errno_module.EIO, "short cgroup placement write")
-            finally:
-                os.close(procs_fd)
+            _write_own_pid_v1(directory_fd)
         finally:
             os.close(directory_fd)
     finally:
