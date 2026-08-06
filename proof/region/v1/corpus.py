@@ -378,20 +378,61 @@ def assemble_transcript_from_shards_v1(
 
 def decision_procedure_work_bound_v1(
     definition: protocol.ContextualRegionDefinitionV1,
+    precision_ladder: tuple[int, ...],
 ) -> int:
-    """Branch evaluations one point can need before it must decide.
+    """Branch evaluations one point can need across the whole ladder.
 
-    The decision procedure spends at most one predicate branch per region
-    segment: a knot ladder of `n` knots has `n - 1` segments, and the
-    degenerate single-knot region still needs one branch for the tone that
-    equals its knot.  A per-point budget below this bound cannot decide a
-    boundary point at any precision, because the grant is checked before the
-    branch runs — the point lands on `RESOURCE_LIMIT_REACHED` instead.
+    One `decide` call spends at most one predicate branch per region segment:
+    a knot ladder of `n` knots has `n - 1` segments, and the degenerate
+    single-knot region still needs one branch for the tone that equals its
+    knot.  That cap is per rung, but the point's grant is *shared across the
+    ladder*: a point that pays a branch at a low rung and stays
+    `BOUNDARY_UNPROVEN` escalates and pays again at the next rung.  Budgeting
+    only one rung therefore starves exactly the points the ladder exists for.
+
+    Sufficiency is structural, not measured: the rung loop runs at most
+    `len(ladder)` times and each call consumes at most the segment count, so
+    entering rung `i` with `(len(ladder) - i) * segments` left is enough for
+    every remaining rung.  The bound is not claimed minimal for a given
+    definition — a smaller grant may happen to suffice, but only under a
+    numerical property of that definition, which is not proven here.
     """
 
     if type(definition) is not protocol.ContextualRegionDefinitionV1:
         raise TypeError("a work bound requires a canonical region definition")
-    return max(1, definition.knot_count - 1)
+    if (
+        type(precision_ladder) is not tuple
+        or not precision_ladder
+        or any(type(rung) is not int for rung in precision_ladder)
+    ):
+        raise TypeError("a work bound requires a canonical precision ladder")
+    return len(precision_ladder) * max(1, definition.knot_count - 1)
+
+
+def domain_points_before_v1(
+    domain: protocol.ReducedDomainManifestV1, window_start: int
+) -> int:
+    """Domain points the monolithic run consumes before reaching an ordinal.
+
+    The ordinal-prefix grant is charged once per *domain point* in iteration
+    order, so a lane's prefix is the number of domain points below its
+    window — not the window's ordinal.  The two coincide only when the domain
+    covers every ordinal below the window, which is exactly the exact full
+    manifest; on any reduced domain the ordinal would overcount the prefix
+    and starve the lane.
+    """
+
+    if type(domain) is not protocol.ReducedDomainManifestV1:
+        raise TypeError("a domain prefix requires a canonical domain manifest")
+    if type(window_start) is not int or window_start < 0:
+        raise TypeError("a domain prefix requires a non-negative window start")
+    points = 0
+    for start, end in domain.ranges:
+        if end <= window_start:
+            points += end - start
+        elif start < window_start:
+            points += window_start - start
+    return points
 
 
 def certified_work_policy_v1(
@@ -416,16 +457,18 @@ def certified_work_policy_v1(
         raise TypeError("a certified policy requires a canonical base policy")
     if type(point_count) is not int or point_count <= 0:
         raise TypeError("a certified policy requires a positive point count")
-    work = decision_procedure_work_bound_v1(definition)
-    return protocol.ProofPolicyV1(
-        base.equality_release,
-        tuple(
+    budgets = []
+    for budget in base.comparators:
+        # Each comparator declares its own ladder, and the bound follows that
+        # ladder: a shared constant would starve whichever engine escalates
+        # further.
+        work = decision_procedure_work_bound_v1(definition, budget.precision_ladder)
+        budgets.append(
             protocol.ComparatorBudgetV1(
                 budget.kind, budget.precision_ladder, work, work * point_count
             )
-            for budget in base.comparators
-        ),
-    )
+        )
+    return protocol.ProofPolicyV1(base.equality_release, tuple(budgets))
 
 
 def full_domain_job_v1(base: protocol.ProofJobV1) -> protocol.ProofJobV1:
@@ -513,6 +556,10 @@ def lane_window_job_v1(
             # point owns its pregrant whether or not it spends it.  Assuming
             # an exhausted prefix is only correct when the whole pregrant is
             # zero, and it silently starves every lane of a granted run.
+            # The monolithic run charges one grant per *domain point*, so the
+            # prefix is counted over the domain, not over the ordinal space —
+            # the two coincide only when the domain covers every ordinal
+            # below the window.
             budgets.append(
                 protocol.ComparatorBudgetV1(
                     budget.kind,
@@ -521,7 +568,8 @@ def lane_window_job_v1(
                     max(
                         0,
                         budget.global_pregrant
-                        - budget.per_point_work * window_start,
+                        - budget.per_point_work
+                        * domain_points_before_v1(full_job.domain, window_start),
                     ),
                 )
             )

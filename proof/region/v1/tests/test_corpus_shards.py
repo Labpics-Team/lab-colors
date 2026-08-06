@@ -301,14 +301,74 @@ class FullDomainJobTests(unittest.TestCase):
             self.assertEqual(derived.kind, declared.kind)
             self.assertEqual(derived.precision_ladder, declared.precision_ladder)
 
-    def test_work_bound_is_one_branch_per_region_segment(self) -> None:
+    def test_work_bound_covers_every_rung_not_only_the_first(self) -> None:
+        # A point's grant is shared across the ladder: one that pays a branch
+        # at a low rung and stays BOUNDARY_UNPROVEN escalates and pays again.
+        # Budgeting a single rung starves exactly those points.
         definition = _base_job().definition
-        self.assertEqual(
-            corpus.decision_procedure_work_bound_v1(definition),
-            max(1, definition.knot_count - 1),
-        )
+        segments = max(1, definition.knot_count - 1)
+        for ladder in ((64,), (16, 64), (64, 128), (32, 64, 128, 256)):
+            self.assertEqual(
+                corpus.decision_procedure_work_bound_v1(definition, ladder),
+                len(ladder) * segments,
+                ladder,
+            )
         with self.assertRaises(TypeError):
-            corpus.decision_procedure_work_bound_v1(definition.fields)
+            corpus.decision_procedure_work_bound_v1(definition.fields, (64, 128))
+        for ladder in (None, (), (64, "128")):
+            with self.assertRaises(TypeError):
+                corpus.decision_procedure_work_bound_v1(definition, ladder)
+
+    def test_certified_budget_follows_each_comparators_own_ladder(self) -> None:
+        base = _base_job()
+        arb, mpfi = base.policy.comparators
+        mixed = protocol.ProofPolicyV1(
+            base.policy.equality_release,
+            (
+                protocol.ComparatorBudgetV1(arb.kind, (64,), 0, 0),
+                protocol.ComparatorBudgetV1(mpfi.kind, (16, 64, 128), 0, 0),
+            ),
+        )
+        policy = corpus.certified_work_policy_v1(base.definition, mixed, 512)
+        segments = max(1, base.definition.knot_count - 1)
+        self.assertEqual(policy.comparators[0].per_point_work, 1 * segments)
+        self.assertEqual(policy.comparators[1].per_point_work, 3 * segments)
+        for budget in policy.comparators:
+            self.assertEqual(budget.global_pregrant, budget.per_point_work * 512)
+
+
+class DomainPrefixTests(unittest.TestCase):
+    def test_prefix_counts_domain_points_not_ordinals(self) -> None:
+        # The monolithic run charges one grant per domain point in iteration
+        # order, so a lane's prefix is the number of domain points below its
+        # window.  Using the ordinal overcounts on any reduced domain and
+        # starves the lane against the run it replays.
+        domain = protocol.ReducedDomainManifestV1(
+            ((0, 128), (65792, 65920)), 256
+        )
+        self.assertEqual(corpus.domain_points_before_v1(domain, 0), 0)
+        self.assertEqual(corpus.domain_points_before_v1(domain, 64), 64)
+        self.assertEqual(corpus.domain_points_before_v1(domain, 128), 128)
+        self.assertEqual(corpus.domain_points_before_v1(domain, 65792), 128)
+        self.assertEqual(corpus.domain_points_before_v1(domain, 65856), 192)
+        self.assertEqual(
+            corpus.domain_points_before_v1(domain, protocol.OUTPUT_CARDINALITY_V1),
+            256,
+        )
+
+    def test_prefix_is_the_ordinal_only_on_the_exact_full_manifest(self) -> None:
+        full = protocol.exact_full_domain_manifest_v1()
+        for window_start in (0, 65536, 16_711_680):
+            self.assertEqual(
+                corpus.domain_points_before_v1(full, window_start), window_start
+            )
+
+    def test_prefix_rejects_foreign_coordinates(self) -> None:
+        full = protocol.exact_full_domain_manifest_v1()
+        with self.assertRaises(TypeError):
+            corpus.domain_points_before_v1(full.ranges, 0)
+        with self.assertRaises(TypeError):
+            corpus.domain_points_before_v1(full, -1)
 
     def test_full_domain_claim_coordinates_admit_the_mint_gate(self) -> None:
         import dual_proof

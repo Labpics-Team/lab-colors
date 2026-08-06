@@ -21,6 +21,8 @@ from region_proof_protocol import (  # noqa: E402
     ExactZeroSignalTraceV1,
     ProofJobV1,
     ReducedDomainManifestV1,
+    ComparatorBudgetV1,
+    ProofPolicyV1,
     ResourceLimitWitnessV1,
     RunClaimV1,
     WitnessStoreV1,
@@ -74,6 +76,18 @@ def admit_manifest(kind: ComparatorKindV1, seed: int) -> ContentResolvedComparat
 
 def fixture_job() -> ProofJobV1:
     return ProofJobV1.parse((FIXTURES / "proof-job-v1.bin").read_bytes())
+
+
+def protocol_policy(
+    base: ProofJobV1, ladder: tuple[int, ...], work: int, pregrant: int
+) -> ProofPolicyV1:
+    return ProofPolicyV1(
+        base.policy.equality_release,
+        tuple(
+            ComparatorBudgetV1(budget.kind, ladder, work, pregrant)
+            for budget in base.policy.comparators
+        ),
+    )
 
 
 def run_claim(
@@ -453,6 +467,47 @@ class CertifiedPolicyDecidesEveryPointTests(unittest.TestCase):
         outcomes = self._outcomes(self._certified_over_seams(), ComparatorKindV1.ARB)
         self.assertIn(int(DecisionV1.INSIDE), outcomes.values())
         self.assertIn(int(DecisionV1.OUTSIDE), outcomes.values())
+
+    def _job_over(
+        self, ordinals: tuple[int, ...], ladder: tuple[int, ...], work: int
+    ) -> ProofJobV1:
+        base = fixture_job()
+        domain = ReducedDomainManifestV1.from_ordinals(ordinals)
+        return ProofJobV1(
+            base.definition,
+            base.formula_spec,
+            domain,
+            protocol_policy(base, ladder, work, work * domain.point_count),
+        )
+
+    def test_a_single_rung_budget_starves_points_that_escalate(self) -> None:
+        # Falsifying case for "one branch per segment is enough per point":
+        # the grant is shared across the ladder, so a point that pays at the
+        # low rung reaches the next rung with nothing left.  On ladder
+        # (16, 64) the fixture's own definition leaves ordinals 65792 and
+        # 65794 unresolved at one branch and decides both at two.
+        window = tuple(range(65_780, 65_800))
+        starved = self._outcomes(
+            self._job_over(window, (16, 64), 1), ComparatorKindV1.ARB
+        )
+        self.assertEqual(
+            sorted(self._unresolved(starved)), [65_792, 65_794]
+        )
+        covered = self._outcomes(
+            self._job_over(window, (16, 64), 2), ComparatorKindV1.ARB
+        )
+        self.assertEqual(self._unresolved(covered), {})
+
+    def test_the_certified_bound_covers_that_ladder(self) -> None:
+        # The derived bound is what closes the class, not a hand-picked 2.
+        base = fixture_job()
+        ladder = (16, 64)
+        work = corpus.decision_procedure_work_bound_v1(base.definition, ladder)
+        outcomes = self._outcomes(
+            self._job_over(tuple(range(65_780, 65_800)), ladder, work),
+            ComparatorKindV1.ARB,
+        )
+        self.assertEqual(self._unresolved(outcomes), {})
 
 
 if __name__ == "__main__":

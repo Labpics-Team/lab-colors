@@ -144,6 +144,18 @@ class LaneWindowJobTests(unittest.TestCase):
         arb, _ = window_job.policy.comparators
         self.assertEqual(arb.global_pregrant, 12345 - 3 * 64)
 
+    def test_lane_prefix_counts_domain_points_not_ordinals(self) -> None:
+        # The monolithic run charges one grant per domain point in iteration
+        # order.  Counting the window's ordinal instead overcounts the prefix
+        # on any domain with a gap and starves the lane against the very run
+        # it replays: here the ordinal would consume the whole pregrant.
+        ordinals = tuple(range(0, 128)) + tuple(range(65_792, 65_920))
+        job = _job_with_pregrant(ordinals, 256, per_point_work=1)
+        window_job = corpus.lane_window_job_v1(job, 65_792, 128, ARB_KIND)
+        self.assertIs(type(window_job), protocol.ProofJobV1)
+        arb, _ = window_job.policy.comparators
+        self.assertEqual(arb.global_pregrant, 256 - 128)
+
     def test_lane_window_job_clamps_an_exhausted_prefix_to_zero(self) -> None:
         # A prefix longer than the pregrant leaves nothing behind, and the
         # remaining grant is a count, never a negative debt.
