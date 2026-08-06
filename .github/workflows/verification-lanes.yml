@@ -1,5 +1,13 @@
 name: Verification lane replay
 
+# One lane is one run, so a full-domain cover is 512 of them and the dual
+# proof needs their ids.  Naming the run after its coordinates makes that list
+# a query instead of a guess about creation times.
+run-name: >-
+  lane ${{ inputs.evidence_artifact }}
+  ${{ inputs.window_start }}+${{ inputs.window_points }}
+  of ${{ inputs.evidence_run_id }}
+
 on:
   workflow_dispatch:
     inputs:
