@@ -707,7 +707,8 @@ def replay_mpfi_evidence_is_well_bound_v1(value: object) -> bool:
             return False
         if (
             value.transcript.job_identity != snapshot.request.job.identity
-            or value.transcript.comparator_identity != value.build.comparator.identity
+            or value.transcript.comparator_identity
+            != value.build.comparator.manifest.source_identity
             or value.process.stderr
             or not executor.result_matches_request_v1(value.process, value.invocation)
         ):
@@ -991,7 +992,7 @@ class MpfiSourceBoundControllerV1:
                 argv=(
                     b"mpfi-evaluator",
                     b"--manifest-identity",
-                    build.comparator.identity.hex().encode("ascii"),
+                    build.comparator.manifest.source_identity.hex().encode("ascii"),
                     b"--job",
                     b"/dev/stdin",
                 ),

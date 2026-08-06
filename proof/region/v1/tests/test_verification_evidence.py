@@ -95,7 +95,7 @@ def _transcript(
     return protocol.DecisionTranscriptV1(
         job.identity,
         job.domain.identity,
-        comparator_manifest.identity,
+        comparator_manifest.source_identity,
         point_count,
         b"\x00" * ((point_count * 2 + 7) // 8),
         (point_count, 0, 0, 0),
@@ -165,14 +165,24 @@ class VerificationEvidenceExportTests(unittest.TestCase):
                 (out / "transcript.bin").read_bytes()
             )
             self.assertEqual(transcript.job_identity, receipt.job.identity)
+            # The engine records the comparator's source identity; the
+            # bundle beside it still carries the full manifest, so the
+            # environment record travels with the evidence.
             self.assertEqual(
                 transcript.comparator_identity,
+                receipt.comparator.manifest.source_identity,
+            )
+            # Anti-vacuity: the two identities really differ, so the
+            # assertion above is not comparing a value with itself.
+            self.assertNotEqual(
+                receipt.comparator.manifest.source_identity,
                 receipt.comparator.manifest.identity,
             )
             claim = protocol.RunClaimV1.parse((out / "run-claim.bin").read_bytes())
             self.assertEqual(claim.job_identity, receipt.job.identity)
             self.assertEqual(
-                claim.comparator_identity, receipt.comparator.manifest.identity
+                claim.comparator_identity,
+                receipt.comparator.manifest.source_identity,
             )
             self.assertEqual(claim.transcript_identity, transcript.identity)
 
@@ -247,7 +257,7 @@ class VerificationEvidenceExportTests(unittest.TestCase):
             protocol.DecisionTranscriptV1(
                 _digest("foreign-job"),
                 job.domain.identity,
-                receipt.comparator.manifest.identity,
+                receipt.comparator.manifest.source_identity,
                 point_count,
                 b"\x00" * ((point_count * 2 + 7) // 8),
                 (point_count, 0, 0, 0),
@@ -272,7 +282,7 @@ class VerificationEvidenceExportTests(unittest.TestCase):
             receipt.transcript = transcript
             receipt.run_claim = protocol.RunClaimV1(
                 job.identity,
-                receipt.comparator.manifest.identity,
+                receipt.comparator.manifest.source_identity,
                 _digest("binary"),
                 _digest("invocation"),
                 _digest("platform"),
@@ -288,7 +298,7 @@ class VerificationEvidenceExportTests(unittest.TestCase):
         receipt = _receipt("evidence-unbound-claim")
         receipt.run_claim = protocol.RunClaimV1(
             receipt.job.identity,
-            receipt.comparator.manifest.identity,
+            receipt.comparator.manifest.source_identity,
             _digest("binary"),
             _digest("invocation"),
             _digest("platform"),

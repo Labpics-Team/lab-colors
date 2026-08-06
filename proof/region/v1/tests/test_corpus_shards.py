@@ -86,7 +86,7 @@ def monolithic_transcript(
 
     driver = semantic_replay.SemanticReplay(job, comparator)
     accounting = semantic_replay.accounting_prefix_v1(
-        comparator.manifest.kind, job, comparator.identity
+        comparator.manifest.kind, job, comparator.source_identity
     )
     decisions: list[protocol.DecisionV1] = []
     witnesses: list[protocol.WitnessV1] = []

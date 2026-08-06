@@ -61,11 +61,14 @@ def bind_transcript_v1(
         return _foreign_binding("transcript binds a foreign job")
     if transcript.domain_identity != job.domain.identity:
         return _foreign_binding("transcript binds a foreign domain")
-    if transcript.comparator_identity != comparator.identity:
+    # Engine output binds the comparator's source identity: the verifier
+    # replays decisions, and a decision cannot depend on the observation of
+    # the build.  The sealed receipt below still binds the full identity.
+    if transcript.comparator_identity != comparator.source_identity:
         return _foreign_binding("transcript binds a foreign comparator")
     if run.job_identity != job.identity:
         return _foreign_binding("run claim binds a foreign job")
-    if run.comparator_identity != comparator.identity:
+    if run.comparator_identity != comparator.source_identity:
         return _foreign_binding("run claim binds a foreign comparator")
     if run.transcript_identity != transcript.identity:
         return _foreign_binding("run claim binds a foreign transcript")
@@ -94,7 +97,7 @@ def verify_transcript(
         accounting = replay.accounting_prefix_v1(
             comparator.manifest.kind,
             job,
-            comparator.identity,
+            comparator.source_identity,
         )
     except (
         SemanticFormulaError,
@@ -115,7 +118,7 @@ def verify_transcript(
     next_witness = next(witnesses, None)
 
     try:
-        for expected_index in range(transcript.point_count):
+        for _expected_index in range(transcript.point_count):
             point = driver.next_point()
             ordinal = point.ordinal
             decision = next(decisions)

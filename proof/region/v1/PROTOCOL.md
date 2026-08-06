@@ -478,13 +478,74 @@ V1 не доказывает independence. Как anti-vacuum declared-diversity
 dependency graph; cross-path GMP/MPFR overlap и обязательные distinct edges не
 считаются установленными без отдельного MPFI receipt.
 
+### Две идентичности компаратора
+
+`identity` связывает все десять координат, включая `build_identity` и
+`test_observation`. Эти две сворачивают И воспроизводимые входы сборки (байты
+build recipe, `build_input_identity`, `formula_support_identity`,
+`pipeline_policy_identity`, sha и длину бинаря), И наблюдение сборки — docker
+capability и digest-ы консольного вывода процессов. Исключены они потому, что
+СОДЕРЖАТ наблюдение, а не потому, что состоят только из него: одна
+невоспроизводимая координата делает невоспроизводимым весь фолд.
+
+Отсюда честная цена разделения: решающая цепь перестаёт различать компараторы,
+отличающиеся ТОЛЬКО воспроизводимыми входами сборки — тот же исходник, собранный
+другим рецептом или давший другой бинарь. Математику это не задевает:
+`engine_release`, `upstream_source`, `arithmetic_input_set`, `wrapper_source` и
+`evaluator_source` остаются в source-наборе, а полная `identity` с бинарём и
+рецептом по-прежнему связывается квитанцией и дуальным клеймом.
+
+Правило, а не измерение: `binary_identity` воспроизводится между прогонами
+одинакового дерева исходников, а `build_identity` — нет, потому что сворачивает
+наблюдение сборки. У Arb невоспроизводимость затрагивает и `test_observation`,
+который сворачивает те же наблюдения процессов; у MPFI координата несёт вложенный
+digest, поэтому состав дельты иной. Конкретные прогоны и величины дельты —
+история измерения, а не контракт: она живёт в PR и журнале, не здесь.
+
+`source_identity` связывает kind и восемь координат, выводимых из источников:
+`engine_release`, `upstream_source`, `arithmetic_input_set`, `wrapper_source`,
+`evaluator_source`, `operation_allowlist`, `legal_file_set`, `exclusions`.
+Это производное свойство, а не поле wire: грамматика манифеста не меняется.
+Преимидж не является top-level artifact, поэтому общая формула identity выше к
+нему неприменима; координата вычисляется как
+
+`SHA256("labcolors.proof-region.comparator-source-identity.v2 " ||
+u64be(payload_length) || u8(kind) || восемь digest-ов подряд)`,
+
+где digest-ы идут в порядке объявления полей манифеста, без magic и без длин:
+каждая координата — ровно 32 байта, поэтому склейка однозначна. Состав и
+порядок выводятся из схемы (`source_bound_coordinates_v2()`), а не
+перечисляются отдельно, поэтому новая координата манифеста попадает в фолд
+автоматически.
+
+Разделение проходит по вопросу «может ли решение от этого зависеть»:
+
+- **решающая цепь** связывает `source_identity` — движку передаётся именно она
+  в `--manifest-identity`, поэтому её несут `DecisionTranscriptV1`,
+  `RunClaimV1`, accounting-префикс и lane-манифест (ключ
+  `comparator_source_identity`). Решение точки не зависит от того, какой демон
+  наблюдал сборку, поэтому полоса, посчитанная под одним прогоном, допускается
+  под другим прогоном тех же источников. Без этого каждая verification lane
+  умирала бы вместе с прогоном, выпустившим её evidence, и дуальное
+  доказательство было бы недостижимо: source-bound квитанции не имеют
+  wire-формы намеренно, а посчитать 512 полос внутри процесса RUN нельзя;
+- **цепь провенанса** связывает полную `identity` — её несут
+  `DualComparisonClaimV1.comparator_identities`, `SemanticVerificationReceiptV1`
+  и обе source-bound квитанции. Какая именно сборка произвела каждый движок —
+  ровно то, что дуальное доказательство и удостоверяет, и эта запись не
+  ослабляется.
+
+Изменение любой из восьми source-координат меняет `source_identity` и
+закрыто отвергает чужую полосу; изменение наблюдения сборки — нет.
+
 ## `DecisionTranscriptV1`
 
 Wire после `LCTRN1\0\0`, по порядку:
 
 1. job identity;
 2. domain identity;
-3. comparator manifest identity;
+3. comparator **source** identity — движку передаётся именно она, и он
+   echo-ит её в header; см. «Две идентичности компаратора»;
 4. point count `u64be`;
 5. decision payload `blob`;
 6. counters `inside`, `outside`, `boundary_unproven`,
@@ -566,7 +627,7 @@ counters не превращают его в semantic resolved/proven type.
 Wire после `LCRUN1\0\0` содержит шесть digest coordinates:
 
 1. job identity;
-2. comparator manifest identity;
+2. comparator **source** identity — та же координата, что несёт транскрипт;
 3. exact binary identity;
 4. exact invocation identity;
 5. platform identity;
@@ -739,8 +800,9 @@ replay:
   кодируется как `u64be(exponent) || u64be(len) || digits`, а `digits` —
   вывод `mpfr_get_str(NULL, &exponent, 16, 0, value, MPFR_RNDN)`;
 - accounting digest: домен `labcolors.arb-evaluation-accounting.v1\0` или
-  `labcolors.mpfi-evaluation-accounting.v1\0`, затем job/domain/policy/comparator
-  identities и на точку `u32be(ordinal) || u32be(precision) ||
+  `labcolors.mpfi-evaluation-accounting.v1\0`, затем job identity, domain
+  identity, policy identity и comparator **source** identity — accounting
+  принадлежит решающей цепи, — и на точку `u32be(ordinal) || u32be(precision) ||
   u64be(consumed) || u8(outcome)`.
 
 Правила допуска по решению:

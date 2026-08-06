@@ -133,7 +133,7 @@ def replay_transcript(
     decisions: list[protocol.DecisionV1] = []
     witnesses: list[protocol.WitnessV1] = []
     accounting = semantic_replay.accounting_prefix_v1(
-        comparator.manifest.kind, job, comparator.identity
+        comparator.manifest.kind, job, comparator.source_identity
     )
     for _ in range(job.domain.point_count):
         point = driver.next_point()
@@ -212,7 +212,7 @@ class _ReplayedRunBackend:
         if marker_index + 1 >= len(request.argv):
             raise AssertionError("manifest identity value is missing")
         argv_identity = bytes.fromhex(request.argv[marker_index + 1].decode("ascii"))
-        if argv_identity != self.comparator.identity:
+        if argv_identity != self.comparator.source_identity:
             raise AssertionError(
                 "discovery manifest drifted from the controller-derived one"
             )

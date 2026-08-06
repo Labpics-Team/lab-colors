@@ -331,30 +331,43 @@ class ArbBuildIdentityCharacterizationTests(unittest.TestCase):
             hashlib.sha256(process_bytes).hexdigest(),
             "d33e0ed28f88e957fbec83679732d325db5f6a893e7ee6058f2d5376a94466cb",
         )
-        self.assertEqual(
-            result.comparator.identity.hex(),
-            "1a17002c015a938f7464d23e4cdc6f567c9aa93ee83201fe2bd33bb8fb3c7a4f",
-        )
-        self.assertEqual(
-            result.evidence.source_identity.hex(),
-            "c34c7c787f23e2f35edc6bdc31b936eb73ffa7a4d5a7ef9c86e9735b7a442cb1",
-        )
-        self.assertEqual(
-            result.evidence.build_identity.hex(),
-            "b58d3d95bd73f511a45b23cb3567b4a8fce67f90f929ba2d0ca4359d132b524e",
-        )
-        self.assertEqual(
-            result.evidence.run_identity.hex(),
-            "11258597b3ada79f48faf484340c9726699fb02006083a114b25a760ceffa308",
-        )
-        self.assertEqual(
-            result.evidence.identity.hex(),
-            "ac1e6c7b99a21b8b419dcdee21b3e24a8580bcf7e5b0793804e0e0d48b6e6e48",
-        )
-        self.assertEqual(
-            result.claim.identity.hex(),
-            "546fe704c3e5ad04a23f5d5fe9815ff3560c1cde020f352bd786543fd1ebeb68",
-        )
+        # One subTest per coordinate: a characterization pin that stops at the
+        # first mismatch hides which part of the chain actually moved, and the
+        # chain is exactly what this test exists to characterize.
+        for name, actual, expected in (
+            (
+                "comparator.identity",
+                result.comparator.identity.hex(),
+                "1a17002c015a938f7464d23e4cdc6f567c9aa93ee83201fe2bd33bb8fb3c7a4f",
+            ),
+            (
+                "evidence.source_identity",
+                result.evidence.source_identity.hex(),
+                "c34c7c787f23e2f35edc6bdc31b936eb73ffa7a4d5a7ef9c86e9735b7a442cb1",
+            ),
+            (
+                "evidence.build_identity",
+                result.evidence.build_identity.hex(),
+                "b58d3d95bd73f511a45b23cb3567b4a8fce67f90f929ba2d0ca4359d132b524e",
+            ),
+            (
+                "evidence.run_identity",
+                result.evidence.run_identity.hex(),
+                "897560465e8497a1db6061c30dba73d4e604a25b2e810eecd708bea41e9a10e7",
+            ),
+            (
+                "evidence.identity",
+                result.evidence.identity.hex(),
+                "f4a4431f2f9a92070e1ad2ada94bf7f9fc83a4b8c7c0d7c26a2e30e80567e2f9",
+            ),
+            (
+                "claim.identity",
+                result.claim.identity.hex(),
+                "05471ad13b98fe588e56d6feadaa21e6ce8c0020ba7428f933974126dcbb365e",
+            ),
+        ):
+            with self.subTest(coordinate=name):
+                self.assertEqual(actual, expected)
 
 
 class SharedBuildExtractionTests(unittest.TestCase):

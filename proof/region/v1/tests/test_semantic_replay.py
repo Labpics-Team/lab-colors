@@ -192,7 +192,7 @@ class HostileReplayTests(unittest.TestCase):
         # verification exactly when it points at a different transcript.
         foreign_run = RunClaimV1(
             job.identity,
-            comparator.identity,
+            comparator.source_identity,
             digest(821),
             digest(822),
             digest(823),
@@ -232,7 +232,7 @@ class HostileReplayTests(unittest.TestCase):
         transcript = DecisionTranscriptV1(
             job.identity,
             job.domain.identity,
-            comparator.identity,
+            comparator.source_identity,
             drifted_count,
             bytes([0x55] * ((drifted_count + 3) // 4)),
             (0, drifted_count, 0, 0),
@@ -257,7 +257,7 @@ class HostileReplayTests(unittest.TestCase):
         accounting = semantic_replay.accounting_prefix_v1(
             comparator.manifest.kind,
             job,
-            comparator.identity,
+            comparator.source_identity,
         )
         for _ in range(job.domain.point_count):
             point = driver.next_point()
@@ -364,7 +364,7 @@ class HostileReplayTests(unittest.TestCase):
         hasher.update(job.identity)
         hasher.update(job.domain.identity)
         hasher.update(job.policy.identity)
-        hasher.update(comparator.identity)
+        hasher.update(comparator.source_identity)
         for ordinal, precision, consumed, outcome in records:
             hasher.update(ordinal.to_bytes(4, "big"))
             hasher.update(precision.to_bytes(4, "big"))
@@ -373,7 +373,7 @@ class HostileReplayTests(unittest.TestCase):
         expected = hasher.digest()
 
         accounting = semantic_replay.accounting_prefix_v1(
-            comparator.manifest.kind, job, comparator.identity
+            comparator.manifest.kind, job, comparator.source_identity
         )
         for record in records:
             accounting.update(semantic_replay.account_record(*record))
@@ -390,7 +390,7 @@ class HostileReplayTests(unittest.TestCase):
         hasher.update(job.identity)
         hasher.update(job.domain.identity)
         hasher.update(job.policy.identity)
-        hasher.update(comparator.identity)
+        hasher.update(comparator.source_identity)
         for ordinal, precision, consumed, outcome in records:
             hasher.update(ordinal.to_bytes(4, "big"))
             hasher.update(precision.to_bytes(4, "big"))
@@ -399,7 +399,7 @@ class HostileReplayTests(unittest.TestCase):
         expected = hasher.digest()
 
         accounting = semantic_replay.accounting_prefix_v1(
-            comparator.manifest.kind, job, comparator.identity
+            comparator.manifest.kind, job, comparator.source_identity
         )
         for record in records:
             accounting.update(semantic_replay.account_record(*record))

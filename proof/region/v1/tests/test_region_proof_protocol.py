@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import io
 import itertools
@@ -33,6 +34,7 @@ from region_proof_protocol import (  # noqa: E402
     FORMULA_RELEASE_DOMAIN_V1,
     ComparatorBudgetV1,
     ComparatorKindV1,
+    BUILD_OBSERVATION_COORDINATES_V2,
     ComparatorManifestV2,
     BoundaryUnprovenWitnessV1,
     ContextualRegionDefinitionV1,
@@ -51,6 +53,7 @@ from region_proof_protocol import (  # noqa: E402
     WitnessStoreV1,
     ContentResolvedComparatorManifestV2,
     compare_dual_transcripts,
+    source_bound_coordinates_v2,
     encode_contextual_definition_fields_v1,
 )
 
@@ -77,14 +80,80 @@ MANIFEST_IDENTITY = bytes.fromhex(
     "805c3710b9b38189f4b9c0bb69aaf429c944637a4ee38d1ffa56ee2d72ec09d9"
 )
 TRANSCRIPT_IDENTITY = bytes.fromhex(
-    "8de25059cf372364da4d6cea05f9a45def3a3a9edfd385443cc31e7d82b59136"
+    "0eabb02a15ca0b0773d3391b31ec2760c453d1c2d9d8351781927c0507632a09"
 )
 RUN_CLAIM_IDENTITY = bytes.fromhex(
-    "2c2e2ea8f0737e77a456306ad15332ab1dda609b872260c6bf76229c04b1ad9b"
+    "fa5acb5c57da5e6d8c2321e5c0b9ee0c0646e916bdcd264e12fa457d4be3798f"
 )
 COMPARISON_IDENTITY = bytes.fromhex(
-    "45ee817424540eaed060fcbfc7a43aebb1e0d484759f8a88803c2ed1a2648b9f"
+    "f3a3245c4ed5f00b0f83cfb516ec3d59df7fb4df6a6adb2aefd523860c93b278"
 )
+
+
+class ComparatorSourceIdentityTests(unittest.TestCase):
+    """Every manifest coordinate lands on exactly one side of the split."""
+
+    def _manifest(self, **changes: bytes) -> ComparatorManifestV2:
+        base = manifest(ComparatorKindV1.ARB, 300).manifest
+        values = {
+            item.name: changes.get(item.name, getattr(base, item.name))
+            for item in dataclasses.fields(base)
+            if item.name != "kind"
+        }
+        return ComparatorManifestV2(base.kind, **values)
+
+    def test_the_split_covers_the_manifest_exactly(self) -> None:
+        coordinates = {
+            item.name
+            for item in dataclasses.fields(ComparatorManifestV2)
+            if item.name != "kind"
+        }
+        source = set(source_bound_coordinates_v2())
+        observation = set(BUILD_OBSERVATION_COORDINATES_V2)
+        self.assertEqual(source | observation, coordinates)
+        self.assertEqual(source & observation, set())
+        self.assertTrue(observation.issubset(coordinates))
+        # Anti-vacuity: an empty observation set would satisfy the partition
+        # above while turning the loop over observation coordinates into zero
+        # subTests, so the split would look proven and test nothing.
+        self.assertTrue(observation)
+        self.assertTrue(source)
+
+    def test_every_source_coordinate_moves_the_source_identity(self) -> None:
+        # Without this, a coordinate dropped from the fold would silently stop
+        # distinguishing comparators and no test would notice.
+        base = self._manifest()
+        for name in source_bound_coordinates_v2():
+            with self.subTest(coordinate=name):
+                drifted = self._manifest(
+                    **{name: hashlib.sha256(name.encode()).digest()}
+                )
+                self.assertNotEqual(base.source_identity, drifted.source_identity)
+                self.assertNotEqual(base.identity, drifted.identity)
+
+    def test_the_observation_coordinates_move_only_the_full_identity(self) -> None:
+        base = self._manifest()
+        for name in BUILD_OBSERVATION_COORDINATES_V2:
+            with self.subTest(coordinate=name):
+                drifted = self._manifest(
+                    **{name: hashlib.sha256(b"observed-" + name.encode()).digest()}
+                )
+                self.assertEqual(base.source_identity, drifted.source_identity)
+                self.assertNotEqual(base.identity, drifted.identity)
+
+    def test_the_engine_kind_is_bound(self) -> None:
+        # A lane admitted under the other engine's budget would replay the
+        # wrong ladder, so the fold must separate the engines.
+        arb = manifest(ComparatorKindV1.ARB, 300).manifest
+        mpfi = ComparatorManifestV2(
+            ComparatorKindV1.MPFI,
+            *(
+                getattr(arb, item.name)
+                for item in dataclasses.fields(arb)
+                if item.name != "kind"
+            ),
+        )
+        self.assertNotEqual(arb.source_identity, mpfi.source_identity)
 
 
 class ForeignTuple(tuple):
@@ -1296,19 +1365,19 @@ class ManifestTranscriptComparisonTests(unittest.TestCase):
             (
                 ta,
                 328,
-                "b1bc17383b99683302d9156ef1b784a0f094e6eba4e99a346a0a3331c47db3cb",
+                "18cf0246ff4d655e7cc3bd2bbab51eaf1bc7a5fde192d58556c90aa3404edf3d",
                 TRANSCRIPT_IDENTITY,
             ),
             (
                 ra,
                 200,
-                "4a23db54ac34d2117326d645b17fae098a49a8ec54ea1cc3955d5a1328c7053c",
+                "ff2b8be1848e61dbfbcd552881824b5eaec0c06c0b65111350fef8d7da549fee",
                 RUN_CLAIM_IDENTITY,
             ),
             (
                 candidate,
                 368,
-                "017dd72a3dcf001acdd267f91a79a32926da8351874a534ce968c0cf016c0026",
+                "4834b22578490ec6005ddd4b30ba2b008adb3a44a928a175a92dcabed3af24b2",
                 COMPARISON_IDENTITY,
             ),
         ):

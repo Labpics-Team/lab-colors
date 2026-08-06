@@ -167,8 +167,11 @@ class ShardCorpusRunnerV1:
         retain_records: bool = False,
     ) -> None:
         self._replay = semantic_replay.SemanticReplay(job, comparator)
+        # The accounting stream belongs to the decision chain, so it binds
+        # the reproducible source identity: a lane replayed against another
+        # run of the same sources must produce the same digest.
         self._accounting = semantic_replay.accounting_prefix_v1(
-            comparator.manifest.kind, job, comparator.identity
+            comparator.manifest.kind, job, comparator.source_identity
         )
         if evidence_job_identity is None:
             evidence_job_identity = job.identity
@@ -358,7 +361,9 @@ def assemble_transcript_from_shards_v1(
     transcript = protocol.DecisionTranscriptV1(
         job.identity,
         domain.identity,
-        comparator.identity,
+        # Byte-identical to the engine's own transcript, so it records the
+        # same comparator coordinate the engine was told.
+        comparator.source_identity,
         domain.point_count,
         decision_bits,
         tuple(counters),

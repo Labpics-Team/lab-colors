@@ -295,8 +295,10 @@ def _run_identity_v1(
         executable=build.binary,
         argv=(
             b"arb-evaluator",
+            # The engine binds what it is told, and a decision cannot depend
+            # on the observation of the build: it is told the source identity.
             b"--manifest-identity",
-            build.comparator.identity.hex().encode("ascii"),
+            build.comparator.manifest.source_identity.hex().encode("ascii"),
             b"--job",
             b"/dev/stdin",
         ),
@@ -323,7 +325,7 @@ def _run_identity_v1(
         or transcript.encode() != process.stdout
         or transcript.job_identity != request.job.identity
         or transcript.domain_identity != request.job.domain.identity
-        or transcript.comparator_identity != build.comparator.identity
+        or transcript.comparator_identity != build.comparator.manifest.source_identity
         or transcript.point_count != request.job.domain.point_count
     ):
         raise TypeError("controller-observed RUN did not replay")
@@ -1237,7 +1239,7 @@ class SourceBoundArbControllerV1:
                 argv=(
                     b"arb-evaluator",
                     b"--manifest-identity",
-                    built.comparator.identity.hex().encode("ascii"),
+                    built.comparator.manifest.source_identity.hex().encode("ascii"),
                     b"--job",
                     b"/dev/stdin",
                 ),

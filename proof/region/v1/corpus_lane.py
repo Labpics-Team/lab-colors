@@ -32,22 +32,38 @@ import region_proof_protocol as protocol  # noqa: E402
 
 FIXTURE_JOB_V1 = PROOF / "fixtures" / "proof-job-v1.bin"
 DEFAULT_SHARD_POINTS = 1 << 14
-LANE_SCHEMA_V1 = "corpus-lane-v1"
+# v2 renamed the comparator coordinate and changed what it means: a lane now
+# binds the comparator source identity. An unchanged version string would let
+# a v1 lane be rejected as a foreign comparator instead of an older grammar,
+# which is a misleading diagnosis for an artifact that was never wrong.
+LANE_SCHEMA_V2 = "corpus-lane-v2"
 RECORD_BYTES_V1 = 17
 
 
-def lane_comparator_v1() -> protocol.ContentResolvedComparatorManifestV2:
+def lane_comparator_contents_v1() -> dict[bytes, bytes]:
+    """Content map of the lane comparator, keyed by its manifest addresses.
+
+    One source of truth for the coordinates: anything that needs to rebuild
+    the bundle reads it here instead of restating the generator, where a
+    second copy would drift and surface as an unresolved content address
+    rather than as the mismatch it really is.
+    """
+
     contents = tuple(
         f"corpus-lane-coordinate-{index}".encode("ascii") for index in range(10)
     )
+    return {hashlib.sha256(content).digest(): content for content in contents}
+
+
+def lane_comparator_v1() -> protocol.ContentResolvedComparatorManifestV2:
+    contents = lane_comparator_contents_v1()
+    # The manifest takes content addresses, not content: unpacking the dict
+    # reads as if the bytes went in, so the keys are named at the call site.
+    addresses = tuple(contents)
     manifest = protocol.ComparatorManifestV2(
-        protocol.ComparatorKindV1.ARB,
-        *(hashlib.sha256(content).digest() for content in contents),
+        protocol.ComparatorKindV1.ARB, *addresses
     )
-    return protocol.ContentResolvedComparatorManifestV2.admit(
-        manifest,
-        {hashlib.sha256(content).digest(): content for content in contents}.get,
-    )
+    return protocol.ContentResolvedComparatorManifestV2.admit(manifest, contents.get)
 
 
 BUNDLE_MANIFEST_NAME_V1 = "comparator-manifest-v2.bin"
@@ -175,15 +191,18 @@ def write_verification_evidence_v1(receipt: object, out: Path) -> None:
              " transcript")
     if type(run_claim) is not protocol.RunClaimV1:
         fail("verification evidence requires the engine's sealed run claim")
+    # The engine is told the comparator's source identity, so that is what its
+    # transcript and run claim carry; the bundle below still ships the full
+    # manifest, so the environment record travels with the evidence.
     if (
         transcript.job_identity != job.identity
-        or transcript.comparator_identity != resolved.identity
+        or transcript.comparator_identity != resolved.source_identity
     ):
         fail("verification evidence transcript does not bind the receipt's"
              " job and comparator")
     if (
         run_claim.job_identity != job.identity
-        or run_claim.comparator_identity != resolved.identity
+        or run_claim.comparator_identity != resolved.source_identity
         or run_claim.transcript_identity != transcript.identity
     ):
         fail("verification evidence run claim does not bind the receipt's"
@@ -233,14 +252,14 @@ def write_lane_artifacts_v1(
         )
     (out / "lane-records.bin").write_bytes(lane.accounting_records)
     manifest = {
-        "schema": LANE_SCHEMA_V1,
+        "schema": LANE_SCHEMA_V2,
         "window_start": lane.window_start,
         "window_points": lane.window_points,
         "shard_points": shard_points,
         "job_identity": job.identity.hex(),
         "domain_identity": job.domain.identity.hex(),
         "policy_identity": job.policy.identity.hex(),
-        "comparator_identity": comparator.identity.hex(),
+        "comparator_source_identity": comparator.source_identity.hex(),
         "counters": list(lane.counters),
         "witness_count": lane.witness_count,
         "record_count": lane.window_points,

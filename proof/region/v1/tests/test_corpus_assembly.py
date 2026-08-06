@@ -13,6 +13,7 @@ rejected; a correct cover is byte-identical to the monolithic replay.
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import json
 import sys
@@ -108,6 +109,9 @@ def _write_lane_dir(
     out = root / name
     corpus_lane.write_lane_artifacts_v1(lane, job, comparator, shard_points, out)
     return out
+
+
+
 
 
 class AssemblyApiTests(unittest.TestCase):
@@ -321,11 +325,82 @@ class AssemblyCliTests(unittest.TestCase):
                 Path(tmp), "lane-a", full_job, comparator, 0, 64, 32
             )
             manifest = json.loads((out_dir / "lane-manifest.json").read_text())
-            manifest["comparator_identity"] = "11" * 32
+            manifest["comparator_source_identity"] = "11" * 32
             (out_dir / "lane-manifest.json").write_bytes(
                 json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode()
             )
             result = corpus_assembly.load_lane_v1(out_dir, full_job, comparator)
+            self.assertIs(type(result), corpus.ShardCorpusRejectedV1)
+            self.assertEqual(
+                result.reason, corpus.ShardCorpusReasonV1.FOREIGN_INPUT
+            )
+
+    def test_a_lane_survives_another_run_of_the_same_sources(self) -> None:
+        # Two runs of the identical source tree observe different build
+        # environments, so their comparators differ.  A lane replays
+        # decisions, which cannot depend on that observation, so a lane from
+        # one run must be admissible against the other — otherwise every
+        # verification lane dies with the run that produced its evidence.
+        first = corpus_lane.lane_comparator_v1()
+        second_manifest = protocol.ComparatorManifestV2(
+            first.manifest.kind,
+            **{
+                field.name: (
+                    hashlib.sha256(b"another-run-" + field.name.encode()).digest()
+                    if field.name in ("build_identity", "test_observation")
+                    else getattr(first.manifest, field.name)
+                )
+                for field in dataclasses.fields(first.manifest)
+                if field.name != "kind"
+            },
+        )
+        contents = dict(corpus_lane.lane_comparator_contents_v1())
+        for name in ("build_identity", "test_observation"):
+            value = getattr(second_manifest, name)
+            contents[value] = b"another-run-" + name.encode()
+        second = protocol.ContentResolvedComparatorManifestV2.admit(
+            second_manifest, contents.get
+        )
+
+        self.assertNotEqual(first.identity, second.identity)
+        self.assertEqual(first.source_identity, second.source_identity)
+
+        full_job = corpus.full_domain_job_v1(_base_job())
+        with tempfile.TemporaryDirectory() as tmp:
+            out_dir = _write_lane_dir(
+                Path(tmp), "lane-a", full_job, first, 0, 64, 32
+            )
+            admitted = corpus_assembly.load_lane_v1(out_dir, full_job, second)
+            self.assertIs(type(admitted), corpus_assembly.AdmittedLaneV1)
+
+    def test_a_lane_still_dies_on_a_different_source_closure(self) -> None:
+        # Anti-vacuity: portability must not swallow a real source change.
+        first = corpus_lane.lane_comparator_v1()
+        drifted_manifest = protocol.ComparatorManifestV2(
+            first.manifest.kind,
+            **{
+                field.name: (
+                    hashlib.sha256(b"other-evaluator").digest()
+                    if field.name == "evaluator_source"
+                    else getattr(first.manifest, field.name)
+                )
+                for field in dataclasses.fields(first.manifest)
+                if field.name != "kind"
+            },
+        )
+        contents = dict(corpus_lane.lane_comparator_contents_v1())
+        contents[drifted_manifest.evaluator_source] = b"other-evaluator"
+        drifted = protocol.ContentResolvedComparatorManifestV2.admit(
+            drifted_manifest, contents.get
+        )
+        self.assertNotEqual(first.source_identity, drifted.source_identity)
+
+        full_job = corpus.full_domain_job_v1(_base_job())
+        with tempfile.TemporaryDirectory() as tmp:
+            out_dir = _write_lane_dir(
+                Path(tmp), "lane-a", full_job, first, 0, 64, 32
+            )
+            result = corpus_assembly.load_lane_v1(out_dir, full_job, drifted)
             self.assertIs(type(result), corpus.ShardCorpusRejectedV1)
             self.assertEqual(
                 result.reason, corpus.ShardCorpusReasonV1.FOREIGN_INPUT

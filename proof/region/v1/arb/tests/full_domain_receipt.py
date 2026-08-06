@@ -90,8 +90,15 @@ class NativeSourceBoundFullDomainReceiptIntegrationTests(unittest.TestCase):
             transcript.domain_identity,
             protocol.exact_full_domain_manifest_v1().identity,
         )
+        # The engine echoes the coordinate it was told, and it is told the
+        # comparator's source identity: the decision chain must stay portable
+        # across runs whose build observations differ.
         self.assertEqual(
             transcript.comparator_identity,
+            result.comparator.manifest.source_identity,
+        )
+        self.assertNotEqual(
+            result.comparator.manifest.source_identity,
             result.comparator.manifest.identity,
         )
 
