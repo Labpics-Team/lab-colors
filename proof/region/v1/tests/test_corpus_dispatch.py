@@ -17,6 +17,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import unittest.mock
 from pathlib import Path
 
 PROOF = Path(__file__).resolve().parents[1]
@@ -248,6 +249,99 @@ class EvidenceAdmissionTests(unittest.TestCase):
             99, "verification-evidence-arb", observer
         )
         self.assertEqual(seen, [99])
+
+
+class DispatchSeamTests(unittest.TestCase):
+    """The gate has to be wired in, not merely defined.
+
+    Four unit tests over the admission prove the decision; none of them
+    prove that `main` asks.  Deleting the call would leave those green while
+    the live path dispatched blind again, so the seam gets its own contract:
+    a refusal must stop the campaign before the first invocation, and an
+    admission must let it through.
+    """
+
+    def _argv(self, out: Path) -> list[str]:
+        return [
+            "--mode",
+            "verification-dispatch",
+            "--evidence-run-id",
+            "424242",
+            "--evidence-artifact",
+            "verification-evidence-arb",
+            "--out",
+            str(out),
+        ]
+
+    def test_a_refused_evidence_run_dispatches_nothing(self) -> None:
+        launched: list[tuple[str, ...]] = []
+        with tempfile.TemporaryDirectory() as tmp:
+            with unittest.mock.patch.object(
+                corpus_dispatch, "gh_run_artifact_names_v1", lambda run_id: ()
+            ), unittest.mock.patch.object(
+                corpus_dispatch.subprocess,
+                "run",
+                lambda command, **kwargs: launched.append(tuple(command)),
+            ):
+                code = corpus_dispatch.main(self._argv(Path(tmp) / "out.txt"))
+        self.assertEqual(code, 64)
+        self.assertEqual(launched, [])
+
+    def test_an_admitted_evidence_run_dispatches_every_lane(self) -> None:
+        launched: list[tuple[str, ...]] = []
+
+        class _Completed:
+            returncode = 0
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with unittest.mock.patch.object(
+                corpus_dispatch,
+                "gh_run_artifact_names_v1",
+                lambda run_id: ("verification-evidence-arb",),
+            ), unittest.mock.patch.object(
+                corpus_dispatch.subprocess,
+                "run",
+                lambda command, **kwargs: (
+                    launched.append(tuple(command)) or _Completed()
+                ),
+            ):
+                code = corpus_dispatch.main(self._argv(Path(tmp) / "out.txt"))
+        self.assertEqual(code, 0)
+        self.assertEqual(len(launched), 256)
+        self.assertTrue(
+            all(command[:3] == ("gh", "workflow", "run") for command in launched)
+        )
+
+    def test_a_dry_run_stays_offline_and_asks_nobody(self) -> None:
+        # The dry run is documented as offline: it must not even observe.
+        observed: list[int] = []
+        launched: list[tuple[str, ...]] = []
+        with tempfile.TemporaryDirectory() as tmp:
+            with unittest.mock.patch.object(
+                corpus_dispatch,
+                "gh_run_artifact_names_v1",
+                lambda run_id: observed.append(run_id) or (),
+            ), unittest.mock.patch.object(
+                corpus_dispatch.subprocess,
+                "run",
+                lambda command, **kwargs: launched.append(tuple(command)),
+            ):
+                code = corpus_dispatch.main(
+                    self._argv(Path(tmp) / "out.txt") + ["--dry-run"]
+                )
+        self.assertEqual(code, 0)
+        self.assertEqual(observed, [])
+        self.assertEqual(launched, [])
+
+    def test_a_rejected_command_set_is_exit_64_not_a_type_error(self) -> None:
+        # A foreign artifact name is refused by the pure builder; that
+        # refusal must leave through the typed exit, never as a TypeError
+        # raised by iterating a rejection.
+        with tempfile.TemporaryDirectory() as tmp:
+            argv = self._argv(Path(tmp) / "out.txt")
+            argv[argv.index("verification-evidence-arb")] = "verification-evidence-foreign"
+            code = corpus_dispatch.main(argv + ["--dry-run"])
+        self.assertEqual(code, 64)
 
 
 if __name__ == "__main__":

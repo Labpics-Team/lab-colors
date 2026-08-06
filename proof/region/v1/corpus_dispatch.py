@@ -200,9 +200,15 @@ def gh_run_artifact_names_v1(run_id: int) -> tuple[str, ...]:
         (
             "gh",
             "api",
+            "--paginate",
             f"repos/{{owner}}/{{repo}}/actions/runs/{run_id}/artifacts",
             "--jq",
-            ".artifacts[].name",
+            # An expired artifact is still listed but can no longer be
+            # downloaded, so naming it would let a stale evidence run through
+            # the gate and reproduce the very failure this admission exists to
+            # prevent.  Pagination matters for the same reason: a name on the
+            # second page must not read as absent.
+            ".artifacts[] | select(.expired | not) | .name",
         ),
         capture_output=True,
         text=True,
@@ -216,7 +222,7 @@ def gh_run_artifact_names_v1(run_id: int) -> tuple[str, ...]:
 def admit_evidence_artifact_v1(
     evidence_run_id: int,
     evidence_artifact: str,
-    observer: object = gh_run_artifact_names_v1,
+    observer: object | None = None,
 ) -> corpus.ShardCorpusRejectedV1 | None:
     """Refuse a dispatch whose evidence run cannot carry what it names.
 
@@ -227,14 +233,23 @@ def admit_evidence_artifact_v1(
     is itself a refusal — never a crash and never a silent proceed.
     """
 
+    # Resolved here, not captured as a default: a default binds the module
+    # attribute at definition time, which makes the injection point real for
+    # a caller but invisible to anything that replaces the observer — the
+    # seam would look injectable and not be.
+    if observer is None:
+        observer = gh_run_artifact_names_v1
     try:
         names = tuple(observer(evidence_run_id))  # type: ignore[operator]
-    except Exception:
+    except Exception as error:
         # The observation is a hostile boundary: an unreachable run, a
         # missing token or a malformed reply must all land as one refusal.
+        # The cause travels with it — an operator has to tell "no such run"
+        # from "no token", and a bare refusal makes those look identical.
         return corpus._reject(
             corpus.ShardCorpusReasonV1.FOREIGN_INPUT,
-            f"verification dispatch cannot observe run {evidence_run_id}",
+            f"verification dispatch cannot observe run {evidence_run_id}:"
+            f" {error!r}",
         )
     if evidence_artifact not in names:
         return corpus._reject(
@@ -309,6 +324,12 @@ def main(argv: list[str] | None = None) -> int:
                 return 64
     else:
         commands = dispatch_commands_v1(plan, args.shard_width)
+    if type(commands) is not tuple:
+        # A rejected command set is a typed refusal, not an iterable: letting
+        # it reach the loop below turns the module's own contract into a
+        # TypeError at the boundary it is supposed to guard.
+        print(f"lane dispatch rejected: {commands!r}", file=sys.stderr)
+        return 64
     for command in commands:
         rendered = " ".join(command)
         if args.dry_run:
