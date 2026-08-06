@@ -17,6 +17,12 @@ a real `import` of a tree module, or `function(...)` bound by a real
 `from <tree module> import function`.  Anything else — a method, a local, a
 callable attribute — is skipped rather than guessed at, so the gate never
 reports a call it cannot resolve.  It proves arity only, not types.
+
+Modules are keyed by their dotted path, not by file name: the tree holds ten
+colliding stems (`receipt.py`, `formula.py`, `gate.py` and friends live under
+both `arb/` and `mpfi/`), and keying by stem would silently match a call
+against the other engine's signatures — a gate that answers plausibly and
+wrongly. A bare stem resolves only while it is unique across the tree.
 """
 
 from __future__ import annotations
@@ -38,8 +44,13 @@ def _sources() -> list[Path]:
     )
 
 
-def _module_name(path: Path) -> str:
-    return path.stem
+def _module_key(path: Path) -> str:
+    """Dotted module path relative to the proof tree root."""
+
+    parts = path.relative_to(PROOF).with_suffix("").parts
+    if parts[-1] == "__init__":
+        parts = parts[:-1]
+    return ".".join(parts)
 
 
 def _signature(node: ast.FunctionDef | ast.AsyncFunctionDef) -> Signature:
@@ -60,8 +71,24 @@ def _module_level_functions(tree: ast.Module) -> dict[str, Signature]:
     }
 
 
+def _lookup(
+    name: str,
+    defined: dict[str, dict[str, Signature]],
+    by_stem: dict[str, str],
+) -> str | None:
+    """Resolve a written module name to one tree module, or nothing."""
+
+    if name in defined:
+        return name
+    # A bare name is only resolvable while its stem is unique: these modules
+    # reach each other through sys.path entries, not through the package.
+    return by_stem.get(name)
+
+
 def _bindings(
-    tree: ast.Module, defined: dict[str, dict[str, Signature]]
+    tree: ast.Module,
+    defined: dict[str, dict[str, Signature]],
+    by_stem: dict[str, str],
 ) -> tuple[dict[str, str], dict[str, Signature]]:
     """Aliases of tree modules, and names imported directly from them."""
 
@@ -70,18 +97,58 @@ def _bindings(
     for node in ast.walk(tree):
         if type(node) is ast.Import:
             for item in node.names:
-                target = item.name.split(".")[-1]
-                if target in defined:
-                    aliases[item.asname or item.name] = target
-        elif type(node) is ast.ImportFrom and node.module:
-            target = node.module.split(".")[-1]
-            if target not in defined:
-                continue
+                module = _lookup(item.name, defined, by_stem)
+                if module is None:
+                    continue
+                if item.asname is not None:
+                    aliases[item.asname] = module
+                elif "." not in item.name:
+                    # `import a.b` binds only `a`; only a dotless import
+                    # binds a name this resolver can match.
+                    aliases[item.name] = module
+        elif type(node) is ast.ImportFrom and node.module and not node.level:
+            package = _lookup(node.module, defined, by_stem)
             for item in node.names:
-                signature = defined[target].get(item.name)
-                if signature is not None and item.asname is None:
+                submodule = _lookup(f"{node.module}.{item.name}", defined, by_stem)
+                if submodule is not None:
+                    aliases[item.asname or item.name] = submodule
+                    continue
+                if package is None or item.asname is not None:
+                    continue
+                signature = defined[package].get(item.name)
+                if signature is not None:
                     direct[item.name] = signature
     return aliases, direct
+
+
+def _deliberate(tree: ast.Module) -> set[int]:
+    """Calls that are written wrong on purpose, so they must not be reported.
+
+    Hostile-input tests invoke a constructor with the wrong shape to prove it
+    refuses.  Two idioms carry that intent here: a `lambda:` wrapping the call
+    for deferred invocation, and the body of an `assertRaises` block.  Skipping
+    them costs coverage, which the anti-vacuity floor keeps visible; reporting
+    them would make the gate fire on correct code, which is how gates get
+    switched off.
+    """
+
+    excluded: set[int] = set()
+
+    def bury(node: ast.AST) -> None:
+        for inner in ast.walk(node):
+            if type(inner) is ast.Call:
+                excluded.add(id(inner))
+
+    for node in ast.walk(tree):
+        if type(node) is ast.Lambda:
+            bury(node.body)
+        elif type(node) is ast.With:
+            for item in node.items:
+                call = item.context_expr
+                if type(call) is ast.Call and "assertRaises" in ast.dump(call.func):
+                    for statement in node.body:
+                        bury(statement)
+    return excluded
 
 
 def _supplied(node: ast.Call) -> int | None:
@@ -102,8 +169,14 @@ class CallArityGateTests(unittest.TestCase):
             for path in _sources()
         }
         cls.defined = {
-            _module_name(path): _module_level_functions(tree)
+            _module_key(path): _module_level_functions(tree)
             for path, tree in cls.trees.items()
+        }
+        stems: dict[str, list[str]] = {}
+        for key in cls.defined:
+            stems.setdefault(key.rsplit(".", 1)[-1], []).append(key)
+        cls.by_stem = {
+            stem: keys[0] for stem, keys in stems.items() if len(keys) == 1
         }
 
     def _resolve(self, node: ast.Call, aliases, direct) -> Signature | None:
@@ -120,11 +193,12 @@ class CallArityGateTests(unittest.TestCase):
     def _drift(self) -> list[str]:
         drift: list[str] = []
         for path, tree in self.trees.items():
-            aliases, direct = _bindings(tree, self.defined)
+            aliases, direct = _bindings(tree, self.defined, self.by_stem)
             if not aliases and not direct:
                 continue
+            deliberate = _deliberate(tree)
             for node in ast.walk(tree):
-                if type(node) is not ast.Call:
+                if type(node) is not ast.Call or id(node) in deliberate:
                     continue
                 signature = self._resolve(node, aliases, direct)
                 if signature is None:
@@ -146,8 +220,8 @@ class CallArityGateTests(unittest.TestCase):
         # would make the drift assertion trivially true.
         self.assertGreater(len(self.trees), 30)
         resolved = 0
-        for path, tree in self.trees.items():
-            aliases, direct = _bindings(tree, self.defined)
+        for tree in self.trees.values():
+            aliases, direct = _bindings(tree, self.defined, self.by_stem)
             for node in ast.walk(tree):
                 if type(node) is ast.Call and self._resolve(node, aliases, direct):
                     resolved += 1
@@ -162,7 +236,7 @@ class CallArityGateTests(unittest.TestCase):
         planted = ast.parse(
             "import corpus\ncorpus.decision_procedure_work_bound_v1(definition)"
         )
-        aliases, direct = _bindings(planted, self.defined)
+        aliases, direct = _bindings(planted, self.defined, self.by_stem)
         call = planted.body[1].value
         signature = self._resolve(call, aliases, direct)
         self.assertIsNotNone(signature)
