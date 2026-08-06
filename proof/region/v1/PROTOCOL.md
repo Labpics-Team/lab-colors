@@ -481,20 +481,42 @@ dependency graph; cross-path GMP/MPFR overlap и обязательные distin
 ### Две идентичности компаратора
 
 `identity` связывает все десять координат, включая `build_identity` и
-`test_observation`. Эти две сворачивают наблюдение сборки — docker capability и
-digest-ы консольного вывода процессов, — и потому **не воспроизводятся**: два
-прогона идентичного дерева исходников на двух раннерах дают одинаковый бинарь и
-одинаковые решения, а наблюдения различаются. Замерено на прогонах
-`31089986150`/`31090010890`: `binary_identity` равны; внутри `build_identity`
-различаются ровно 96 байт (32 docker capability + 2×32 наблюдения процессов), и
-отдельно различается `test_observation` у Arb, который сворачивает те же
-наблюдения процессов.
+`test_observation`. Эти две сворачивают И воспроизводимые входы сборки (байты
+build recipe, `build_input_identity`, `formula_support_identity`,
+`pipeline_policy_identity`, sha и длину бинаря), И наблюдение сборки — docker
+capability и digest-ы консольного вывода процессов. Исключены они потому, что
+СОДЕРЖАТ наблюдение, а не потому, что состоят только из него: одна
+невоспроизводимая координата делает невоспроизводимым весь фолд.
+
+Отсюда честная цена разделения: решающая цепь перестаёт различать компараторы,
+отличающиеся ТОЛЬКО воспроизводимыми входами сборки — тот же исходник, собранный
+другим рецептом или давший другой бинарь. Математику это не задевает:
+`engine_release`, `upstream_source`, `arithmetic_input_set`, `wrapper_source` и
+`evaluator_source` остаются в source-наборе, а полная `identity` с бинарём и
+рецептом по-прежнему связывается квитанцией и дуальным клеймом.
+
+Замерено на прогонах `31089986150`/`31090010890`: `binary_identity` равны;
+у **Arb** внутри `build_identity` (преимидж 1586 байт) различаются ровно 96
+байт — 32 docker capability и 2×32 наблюдения процессов, — и отдельно
+различается `test_observation`. У **MPFI** координата несёт вложенный digest,
+поэтому состав дельты там иной, а `test_observation` между прогонами совпал.
+Общее для обоих движков: `build_identity` не воспроизводится.
 
 `source_identity` связывает kind и восемь координат, выводимых из источников:
 `engine_release`, `upstream_source`, `arithmetic_input_set`, `wrapper_source`,
 `evaluator_source`, `operation_allowlist`, `legal_file_set`, `exclusions`.
-Лейбл — `labcolors.proof-region.comparator-source-identity.v2`. Это производное
-свойство, а не поле wire: грамматика манифеста не меняется.
+Это производное свойство, а не поле wire: грамматика манифеста не меняется.
+Преимидж не является top-level artifact, поэтому общая формула identity выше к
+нему неприменима; координата вычисляется как
+
+`SHA256("labcolors.proof-region.comparator-source-identity.v2 " ||
+u64be(payload_length) || u8(kind) || восемь digest-ов подряд)`,
+
+где digest-ы идут в порядке объявления полей манифеста, без magic и без длин:
+каждая координата — ровно 32 байта, поэтому склейка однозначна. Состав и
+порядок выводятся из схемы (`source_bound_coordinates_v2()`), а не
+перечисляются отдельно, поэтому новая координата манифеста попадает в фолд
+автоматически.
 
 Разделение проходит по вопросу «может ли решение от этого зависеть»:
 
@@ -778,8 +800,9 @@ replay:
   кодируется как `u64be(exponent) || u64be(len) || digits`, а `digits` —
   вывод `mpfr_get_str(NULL, &exponent, 16, 0, value, MPFR_RNDN)`;
 - accounting digest: домен `labcolors.arb-evaluation-accounting.v1\0` или
-  `labcolors.mpfi-evaluation-accounting.v1\0`, затем job/domain/policy/comparator
-  identities и на точку `u32be(ordinal) || u32be(precision) ||
+  `labcolors.mpfi-evaluation-accounting.v1\0`, затем job identity, domain
+  identity, policy identity и comparator **source** identity — accounting
+  принадлежит решающей цепи, — и на точку `u32be(ordinal) || u32be(precision) ||
   u64be(consumed) || u8(outcome)`.
 
 Правила допуска по решению:

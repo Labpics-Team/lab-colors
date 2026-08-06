@@ -132,7 +132,7 @@ def load_lane_v1(
             corpus.ShardCorpusReasonV1.FOREIGN_INPUT,
             "lane manifest counters must be a list of integers",
         )
-    if manifest.get("schema") != corpus_lane.LANE_SCHEMA_V1:
+    if manifest.get("schema") != corpus_lane.LANE_SCHEMA_V2:
         return _reject(
             corpus.ShardCorpusReasonV1.FOREIGN_INPUT, "foreign lane schema"
         )

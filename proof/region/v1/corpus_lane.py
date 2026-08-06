@@ -36,7 +36,7 @@ DEFAULT_SHARD_POINTS = 1 << 14
 # binds the comparator source identity. An unchanged version string would let
 # a v1 lane be rejected as a foreign comparator instead of an older grammar,
 # which is a misleading diagnosis for an artifact that was never wrong.
-LANE_SCHEMA_V1 = "corpus-lane-v2"
+LANE_SCHEMA_V2 = "corpus-lane-v2"
 RECORD_BYTES_V1 = 17
 
 
@@ -249,7 +249,7 @@ def write_lane_artifacts_v1(
         )
     (out / "lane-records.bin").write_bytes(lane.accounting_records)
     manifest = {
-        "schema": LANE_SCHEMA_V1,
+        "schema": LANE_SCHEMA_V2,
         "window_start": lane.window_start,
         "window_points": lane.window_points,
         "shard_points": shard_points,
