@@ -111,13 +111,7 @@ def _write_lane_dir(
     return out
 
 
-def _lane_bundle_contents() -> dict[bytes, bytes]:
-    """Content map of the lane comparator, keyed by its manifest addresses."""
 
-    contents = tuple(
-        f"corpus-lane-coordinate-{index}".encode("ascii") for index in range(10)
-    )
-    return {hashlib.sha256(content).digest(): content for content in contents}
 
 
 class AssemblyApiTests(unittest.TestCase):
@@ -360,7 +354,7 @@ class AssemblyCliTests(unittest.TestCase):
                 if field.name != "kind"
             },
         )
-        contents = dict(_lane_bundle_contents())
+        contents = dict(corpus_lane.lane_comparator_contents_v1())
         for name in ("build_identity", "test_observation"):
             value = getattr(second_manifest, name)
             contents[value] = b"another-run-" + name.encode()
@@ -394,7 +388,7 @@ class AssemblyCliTests(unittest.TestCase):
                 if field.name != "kind"
             },
         )
-        contents = dict(_lane_bundle_contents())
+        contents = dict(corpus_lane.lane_comparator_contents_v1())
         contents[drifted_manifest.evaluator_source] = b"other-evaluator"
         drifted = protocol.ContentResolvedComparatorManifestV2.admit(
             drifted_manifest, contents.get

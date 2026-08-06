@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import io
 import itertools
@@ -33,6 +34,7 @@ from region_proof_protocol import (  # noqa: E402
     FORMULA_RELEASE_DOMAIN_V1,
     ComparatorBudgetV1,
     ComparatorKindV1,
+    BUILD_OBSERVATION_COORDINATES_V2,
     ComparatorManifestV2,
     BoundaryUnprovenWitnessV1,
     ContextualRegionDefinitionV1,
@@ -51,6 +53,7 @@ from region_proof_protocol import (  # noqa: E402
     WitnessStoreV1,
     ContentResolvedComparatorManifestV2,
     compare_dual_transcripts,
+    source_bound_coordinates_v2,
     encode_contextual_definition_fields_v1,
 )
 
@@ -85,6 +88,67 @@ RUN_CLAIM_IDENTITY = bytes.fromhex(
 COMPARISON_IDENTITY = bytes.fromhex(
     "f3a3245c4ed5f00b0f83cfb516ec3d59df7fb4df6a6adb2aefd523860c93b278"
 )
+
+
+class ComparatorSourceIdentityTests(unittest.TestCase):
+    """Every manifest coordinate lands on exactly one side of the split."""
+
+    def _manifest(self, **changes: bytes) -> ComparatorManifestV2:
+        base = manifest(ComparatorKindV1.ARB, 300).manifest
+        values = {
+            item.name: changes.get(item.name, getattr(base, item.name))
+            for item in dataclasses.fields(base)
+            if item.name != "kind"
+        }
+        return ComparatorManifestV2(base.kind, **values)
+
+    def test_the_split_covers_the_manifest_exactly(self) -> None:
+        coordinates = {
+            item.name
+            for item in dataclasses.fields(ComparatorManifestV2)
+            if item.name != "kind"
+        }
+        source = set(source_bound_coordinates_v2())
+        observation = set(BUILD_OBSERVATION_COORDINATES_V2)
+        self.assertEqual(source | observation, coordinates)
+        self.assertEqual(source & observation, set())
+        self.assertTrue(observation.issubset(coordinates))
+
+    def test_every_source_coordinate_moves_the_source_identity(self) -> None:
+        # Without this, a coordinate dropped from the fold would silently stop
+        # distinguishing comparators and no test would notice.
+        base = self._manifest()
+        for name in source_bound_coordinates_v2():
+            with self.subTest(coordinate=name):
+                drifted = self._manifest(
+                    **{name: hashlib.sha256(name.encode()).digest()}
+                )
+                self.assertNotEqual(base.source_identity, drifted.source_identity)
+                self.assertNotEqual(base.identity, drifted.identity)
+
+    def test_the_observation_coordinates_move_only_the_full_identity(self) -> None:
+        base = self._manifest()
+        for name in BUILD_OBSERVATION_COORDINATES_V2:
+            with self.subTest(coordinate=name):
+                drifted = self._manifest(
+                    **{name: hashlib.sha256(b"observed-" + name.encode()).digest()}
+                )
+                self.assertEqual(base.source_identity, drifted.source_identity)
+                self.assertNotEqual(base.identity, drifted.identity)
+
+    def test_the_engine_kind_is_bound(self) -> None:
+        # A lane admitted under the other engine's budget would replay the
+        # wrong ladder, so the fold must separate the engines.
+        arb = manifest(ComparatorKindV1.ARB, 300).manifest
+        mpfi = ComparatorManifestV2(
+            ComparatorKindV1.MPFI,
+            *(
+                getattr(arb, item.name)
+                for item in dataclasses.fields(arb)
+                if item.name != "kind"
+            ),
+        )
+        self.assertNotEqual(arb.source_identity, mpfi.source_identity)
 
 
 class ForeignTuple(tuple):

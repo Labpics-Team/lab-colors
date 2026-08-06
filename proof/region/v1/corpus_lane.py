@@ -40,18 +40,27 @@ LANE_SCHEMA_V1 = "corpus-lane-v2"
 RECORD_BYTES_V1 = 17
 
 
-def lane_comparator_v1() -> protocol.ContentResolvedComparatorManifestV2:
+def lane_comparator_contents_v1() -> dict[bytes, bytes]:
+    """Content map of the lane comparator, keyed by its manifest addresses.
+
+    One source of truth for the coordinates: anything that needs to rebuild
+    the bundle reads it here instead of restating the generator, where a
+    second copy would drift and surface as an unresolved content address
+    rather than as the mismatch it really is.
+    """
+
     contents = tuple(
         f"corpus-lane-coordinate-{index}".encode("ascii") for index in range(10)
     )
+    return {hashlib.sha256(content).digest(): content for content in contents}
+
+
+def lane_comparator_v1() -> protocol.ContentResolvedComparatorManifestV2:
+    contents = lane_comparator_contents_v1()
     manifest = protocol.ComparatorManifestV2(
-        protocol.ComparatorKindV1.ARB,
-        *(hashlib.sha256(content).digest() for content in contents),
+        protocol.ComparatorKindV1.ARB, *contents
     )
-    return protocol.ContentResolvedComparatorManifestV2.admit(
-        manifest,
-        {hashlib.sha256(content).digest(): content for content in contents}.get,
-    )
+    return protocol.ContentResolvedComparatorManifestV2.admit(manifest, contents.get)
 
 
 BUNDLE_MANIFEST_NAME_V1 = "comparator-manifest-v2.bin"

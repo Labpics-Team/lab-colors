@@ -60,18 +60,14 @@ MANIFEST_ID_LABEL_V2 = b"labcolors.proof-region.comparator-manifest.v2\0"
 COMPARATOR_SOURCE_ID_LABEL_V2 = (
     b"labcolors.proof-region.comparator-source-identity.v2\0"
 )
-# The two manifest coordinates left out of the source identity fold in the
-# build observation, which records the environment rather than the sources:
-# see `ComparatorManifestV2.source_identity`.
-SOURCE_BOUND_COORDINATES_V2 = (
-    "engine_release",
-    "upstream_source",
-    "arithmetic_input_set",
-    "wrapper_source",
-    "evaluator_source",
-    "operation_allowlist",
-    "legal_file_set",
-    "exclusions",
+# These two coordinates fold in the build observation, which records the
+# environment rather than the sources: see `ComparatorManifestV2.source_identity`.
+# The source-bound set is DERIVED as everything else, never listed by hand — a
+# hand-kept list lets a renamed or added coordinate silently escape the fold,
+# and the decision chain would stop distinguishing comparators that differ in it.
+BUILD_OBSERVATION_COORDINATES_V2 = (
+    "build_identity",
+    "test_observation",
 )
 TRANSCRIPT_ID_LABEL_V1 = b"labcolors.proof-region.transcript.v1\0"
 RUN_CLAIM_ID_LABEL_V1 = b"labcolors.proof-region.run-claim.v1\0"
@@ -818,6 +814,22 @@ def snapshot_proof_job_v1(value: object) -> ProofJobV1:
     )
 
 
+def source_bound_coordinates_v2() -> tuple[str, ...]:
+    """Manifest coordinates the source identity binds, in declaration order.
+
+    Derived rather than declared: every coordinate is source-bound unless it
+    is one of `BUILD_OBSERVATION_COORDINATES_V2`.  A coordinate added to the
+    manifest therefore joins the fold automatically instead of silently
+    escaping it.
+    """
+
+    return tuple(
+        item.name
+        for item in fields(ComparatorManifestV2)
+        if item.name != "kind" and item.name not in BUILD_OBSERVATION_COORDINATES_V2
+    )
+
+
 @dataclass(frozen=True)
 class ComparatorManifestV2:
     kind: ComparatorKindV1
@@ -892,7 +904,7 @@ class ComparatorManifestV2:
             COMPARATOR_SOURCE_ID_LABEL_V2,
             bytes((int(self.kind),))
             + b"".join(
-                getattr(self, name) for name in SOURCE_BOUND_COORDINATES_V2
+                getattr(self, name) for name in source_bound_coordinates_v2()
             ),
         )
 

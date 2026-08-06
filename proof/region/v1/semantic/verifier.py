@@ -118,7 +118,7 @@ def verify_transcript(
     next_witness = next(witnesses, None)
 
     try:
-        for expected_index in range(transcript.point_count):
+        for _expected_index in range(transcript.point_count):
             point = driver.next_point()
             ordinal = point.ordinal
             decision = next(decisions)
