@@ -198,5 +198,57 @@ class DispatchCliTests(unittest.TestCase):
             corpus_dispatch.main(["--mode", "launch"])
 
 
+class EvidenceAdmissionTests(unittest.TestCase):
+    """A dispatch names a run that must actually carry the artifact.
+
+    The lane workflow downloads the named artifact from the named run, so a
+    run that does not exist, or exists without that artifact, produces one
+    doomed job per lane — 256 of them, each failing seconds in.  The
+    coordinator refuses before any dispatch exists instead of discovering it
+    256 times over.
+    """
+
+    def test_a_run_without_the_artifact_is_a_typed_rejection(self) -> None:
+        result = corpus_dispatch.admit_evidence_artifact_v1(
+            424242,
+            "verification-evidence-arb",
+            lambda run_id: ("verification-evidence-mpfi",),
+        )
+        self.assertIs(type(result), corpus.ShardCorpusRejectedV1)
+        self.assertEqual(result.reason, corpus.ShardCorpusReasonV1.FOREIGN_INPUT)
+
+    def test_an_unreachable_run_is_a_typed_rejection_not_a_crash(self) -> None:
+        def unreachable(run_id: int):
+            raise OSError("no such run")
+
+        result = corpus_dispatch.admit_evidence_artifact_v1(
+            424242, "verification-evidence-arb", unreachable
+        )
+        self.assertIs(type(result), corpus.ShardCorpusRejectedV1)
+        self.assertEqual(result.reason, corpus.ShardCorpusReasonV1.FOREIGN_INPUT)
+
+    def test_a_run_carrying_the_artifact_is_admitted(self) -> None:
+        result = corpus_dispatch.admit_evidence_artifact_v1(
+            424242,
+            "verification-evidence-arb",
+            lambda run_id: ("verification-evidence-arb", "verification-evidence-mpfi"),
+        )
+        self.assertIsNone(result)
+
+    def test_the_observer_is_asked_about_the_named_run(self) -> None:
+        # Anti-vacuity: an observer that ignores its argument would let a
+        # dispatch bind one run while its artifacts were read from another.
+        seen: list[int] = []
+
+        def observer(run_id: int):
+            seen.append(run_id)
+            return ("verification-evidence-arb",)
+
+        corpus_dispatch.admit_evidence_artifact_v1(
+            99, "verification-evidence-arb", observer
+        )
+        self.assertEqual(seen, [99])
+
+
 if __name__ == "__main__":
     unittest.main()

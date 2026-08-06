@@ -188,6 +188,62 @@ def verification_dispatch_commands_v1(
     )
 
 
+def gh_run_artifact_names_v1(run_id: int) -> tuple[str, ...]:
+    """Artifact names the given workflow run carries, read through `gh`.
+
+    The one impure boundary of this admission: it observes GitHub.  It is
+    injected into `admit_evidence_artifact_v1` so the decision itself stays
+    testable without a network.
+    """
+
+    completed = subprocess.run(
+        (
+            "gh",
+            "api",
+            f"repos/{{owner}}/{{repo}}/actions/runs/{run_id}/artifacts",
+            "--jq",
+            ".artifacts[].name",
+        ),
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return tuple(
+        line.strip() for line in completed.stdout.splitlines() if line.strip()
+    )
+
+
+def admit_evidence_artifact_v1(
+    evidence_run_id: int,
+    evidence_artifact: str,
+    observer: object = gh_run_artifact_names_v1,
+) -> corpus.ShardCorpusRejectedV1 | None:
+    """Refuse a dispatch whose evidence run cannot carry what it names.
+
+    Every lane downloads `evidence_artifact` from `evidence_run_id`; a run
+    that does not exist, or carries no such artifact, turns one mistake into
+    256 doomed jobs.  A positive integer is not evidence that a run exists,
+    so the coordinator asks before it dispatches, and any failure to observe
+    is itself a refusal — never a crash and never a silent proceed.
+    """
+
+    try:
+        names = tuple(observer(evidence_run_id))  # type: ignore[operator]
+    except Exception:
+        # The observation is a hostile boundary: an unreachable run, a
+        # missing token or a malformed reply must all land as one refusal.
+        return corpus._reject(
+            corpus.ShardCorpusReasonV1.FOREIGN_INPUT,
+            f"verification dispatch cannot observe run {evidence_run_id}",
+        )
+    if evidence_artifact not in names:
+        return corpus._reject(
+            corpus.ShardCorpusReasonV1.FOREIGN_INPUT,
+            f"run {evidence_run_id} carries no artifact {evidence_artifact!r}",
+        )
+    return None
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -242,6 +298,15 @@ def main(argv: list[str] | None = None) -> int:
             args.evidence_run_id,
             args.evidence_artifact,
         )
+        if type(commands) is tuple and not args.dry_run:
+            # Fail closed before the first dispatch: a dry run stays offline
+            # by contract, so the observation belongs to the live path only.
+            refusal = admit_evidence_artifact_v1(
+                args.evidence_run_id, args.evidence_artifact
+            )
+            if refusal is not None:
+                print(f"verification dispatch refused: {refusal.detail}", file=sys.stderr)
+                return 64
     else:
         commands = dispatch_commands_v1(plan, args.shard_width)
     for command in commands:
