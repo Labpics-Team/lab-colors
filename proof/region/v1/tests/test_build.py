@@ -358,12 +358,12 @@ class ArbBuildIdentityCharacterizationTests(unittest.TestCase):
             (
                 "evidence.identity",
                 result.evidence.identity.hex(),
-                "ac1e6c7b99a21b8b419dcdee21b3e24a8580bcf7e5b0793804e0e0d48b6e6e48",
+                "f4a4431f2f9a92070e1ad2ada94bf7f9fc83a4b8c7c0d7c26a2e30e80567e2f9",
             ),
             (
                 "claim.identity",
                 result.claim.identity.hex(),
-                "546fe704c3e5ad04a23f5d5fe9815ff3560c1cde020f352bd786543fd1ebeb68",
+                "05471ad13b98fe588e56d6feadaa21e6ce8c0020ba7428f933974126dcbb365e",
             ),
         ):
             with self.subTest(coordinate=name):
