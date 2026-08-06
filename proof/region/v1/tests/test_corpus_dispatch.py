@@ -462,6 +462,9 @@ class LaneRunMatchTests(unittest.TestCase):
                 corpus.ShardCorpusReasonV1.FOREIGN_INPUT, "foreign"
             ), EVIDENCE_RUN, ARB_ARTIFACT, cover(plan)),
             (((0, 65536), (65536,)), EVIDENCE_RUN, ARB_ARTIFACT, cover(plan)),
+            # Overlap is what the guard exists for, and a plan short of one
+            # window kills only the tuple-shape branch beside it.
+            (((0, 65536), (32768, 65536)), EVIDENCE_RUN, ARB_ARTIFACT, cover(plan)),
             ((), EVIDENCE_RUN, ARB_ARTIFACT, ()),
             (plan, 0, ARB_ARTIFACT, cover(plan)),
             (plan, -1, ARB_ARTIFACT, cover(plan)),
@@ -629,6 +632,68 @@ class CollectCliTests(unittest.TestCase):
             self.assertEqual(
                 [lane["run_id"] for lane in decoded["lanes"]],
                 [900000 + index for index in range(256)],
+            )
+
+    def test_one_run_listed_twice_is_still_one_run(self) -> None:
+        # A repetitive listing must not manufacture a duplicate-cover refusal:
+        # the same run id twice is the same run, and the collection has to say
+        # so rather than report the campaign broken.
+        plan = corpus_dispatch.lane_plan_v1()
+        listing = cover(plan)
+        doubled = listing + listing
+        with tempfile.TemporaryDirectory() as out:
+            status = self._with_observer(
+                lambda limit: tuple(doubled),
+                [
+                    "--mode",
+                    "collect",
+                    "--evidence-run-id",
+                    str(EVIDENCE_RUN),
+                    "--evidence-artifact",
+                    ARB_ARTIFACT,
+                    "--out",
+                    out,
+                ],
+            )
+            self.assertEqual(status, 0)
+            decoded = json.loads((Path(out) / "lane-runs.json").read_text())
+            self.assertEqual(len(decoded["lanes"]), 256)
+            self.assertEqual(
+                [lane["run_id"] for lane in decoded["lanes"]],
+                [900000 + index for index in range(256)],
+            )
+
+    def test_the_second_engine_is_collected_when_both_campaigns_are_listed(
+        self,
+    ) -> None:
+        # Both engines replay the same evidence build, so a listing carries
+        # both campaigns.  A collector that hardcoded the first artifact would
+        # answer the MPFI request with Arb's run ids and exit 0 — half the
+        # dual proof, silently wrong.
+        plan = corpus_dispatch.lane_plan_v1()
+        listing = cover(plan, artifact=ARB_ARTIFACT, first_run_id=900000) + cover(
+            plan, artifact=MPFI_ARTIFACT, first_run_id=700000
+        )
+        with tempfile.TemporaryDirectory() as out:
+            status = self._with_observer(
+                lambda limit: tuple(listing),
+                [
+                    "--mode",
+                    "collect",
+                    "--evidence-run-id",
+                    str(EVIDENCE_RUN),
+                    "--evidence-artifact",
+                    MPFI_ARTIFACT,
+                    "--out",
+                    out,
+                ],
+            )
+            self.assertEqual(status, 0)
+            decoded = json.loads((Path(out) / "lane-runs.json").read_text())
+            self.assertEqual(decoded["evidence_artifact"], MPFI_ARTIFACT)
+            self.assertEqual(
+                [lane["run_id"] for lane in decoded["lanes"]],
+                [700000 + index for index in range(256)],
             )
 
     def test_an_incomplete_collection_writes_nothing_and_exits_64(self) -> None:
