@@ -1543,7 +1543,24 @@ def enter_task_cgroup_v1(group: Path) -> None:
     # would otherwise take the caller's word for where it landed.  The path
     # arrives from configuration, and a wrong one silently moves where the
     # next BUILD runs — which no later check looks at.
-    if _current_unified_cgroup_v1() != group:
+    #
+    # Compared by inode like the observer's own probe, not by spelling: two
+    # names for one group would fail a string comparison and cost the run,
+    # and a false refusal here is as expensive as no check at all.
+    current_fd = _open_cgroup_directory_v1(_current_unified_cgroup_v1())
+    try:
+        named_fd = _open_cgroup_directory_v1(group)
+        try:
+            current_stat = os.fstat(current_fd)
+            named_stat = os.fstat(named_fd)
+        finally:
+            os.close(named_fd)
+    finally:
+        os.close(current_fd)
+    if (
+        current_stat.st_dev != named_stat.st_dev
+        or current_stat.st_ino != named_stat.st_ino
+    ):
         raise OSError(errno_module.EBUSY, "controller did not enter the named group")
 
 
