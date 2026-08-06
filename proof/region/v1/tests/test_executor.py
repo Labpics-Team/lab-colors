@@ -1840,8 +1840,30 @@ class SameObjectAndObserverProtocolTests(unittest.TestCase):
             group.mkdir(parents=True)
             procs = group / "cgroup.procs"
             procs.write_bytes(b"")
-            executor.enter_task_cgroup_v1(group)
+            # The placement's own post-condition reads the real cgroup of this
+            # process, which no fixture can move it into.
+            with mock.patch.object(
+                executor, "_current_unified_cgroup_v1", return_value=group
+            ):
+                executor.enter_task_cgroup_v1(group)
             self.assertEqual(procs.read_bytes(), str(os.getpid()).encode("ascii"))
+
+    def test_task_cgroup_placement_refuses_when_it_did_not_land(self) -> None:
+        # The write can succeed while the process ends up elsewhere; without
+        # this check a misconfigured path silently moves where the next BUILD
+        # runs, and nothing downstream looks at that.
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            group = root / "tasks"
+            group.mkdir(parents=True)
+            (group / "cgroup.procs").write_bytes(b"")
+            elsewhere = root / "elsewhere"
+            elsewhere.mkdir()
+            with mock.patch.object(
+                executor, "_current_unified_cgroup_v1", return_value=elsewhere
+            ):
+                with self.assertRaises(OSError):
+                    executor.enter_task_cgroup_v1(group)
 
     def test_task_cgroup_placement_rejects_invalid_group_values(self) -> None:
         for invalid in (
