@@ -95,7 +95,7 @@ def _transcript(
     return protocol.DecisionTranscriptV1(
         job.identity,
         job.domain.identity,
-        comparator_manifest.identity,
+        comparator_manifest.source_identity,
         point_count,
         b"\x00" * ((point_count * 2 + 7) // 8),
         (point_count, 0, 0, 0),
@@ -165,14 +165,22 @@ class VerificationEvidenceExportTests(unittest.TestCase):
                 (out / "transcript.bin").read_bytes()
             )
             self.assertEqual(transcript.job_identity, receipt.job.identity)
+            # The engine records the comparator's source identity; the
+            # bundle beside it still carries the full manifest, so the
+            # environment record travels with the evidence.
             self.assertEqual(
                 transcript.comparator_identity,
+                receipt.comparator.manifest.source_identity,
+            )
+            self.assertNotEqual(
+                receipt.comparator.manifest.source_identity,
                 receipt.comparator.manifest.identity,
             )
             claim = protocol.RunClaimV1.parse((out / "run-claim.bin").read_bytes())
             self.assertEqual(claim.job_identity, receipt.job.identity)
             self.assertEqual(
-                claim.comparator_identity, receipt.comparator.manifest.identity
+                claim.comparator_identity,
+                receipt.comparator.manifest.source_identity,
             )
             self.assertEqual(claim.transcript_identity, transcript.identity)
 

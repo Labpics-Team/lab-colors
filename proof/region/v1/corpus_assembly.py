@@ -140,7 +140,7 @@ def load_lane_v1(
         "job_identity": job.identity,
         "domain_identity": job.domain.identity,
         "policy_identity": job.policy.identity,
-        "comparator_identity": comparator.identity,
+        "comparator_source_identity": comparator.source_identity,
     }
     for key, expected in identities.items():
         value = _parse_hex_identity(manifest.get(key))
@@ -197,7 +197,7 @@ def load_lane_v1(
     if type(window_job) is not protocol.ProofJobV1:
         return window_job
     window_accounting = semantic_replay.accounting_prefix_v1(
-        comparator.manifest.kind, window_job, comparator.identity
+        comparator.manifest.kind, window_job, comparator.source_identity
     )
     window_accounting.update(records)
     if window_accounting.digest().hex() != manifest.get(
@@ -327,7 +327,7 @@ def assemble_lanes_v1(
     cursor = current_range[0]
     shards: list[corpus.ShardArtifactV1] = []
     accounting = semantic_replay.accounting_prefix_v1(
-        comparator.manifest.kind, job, comparator.identity
+        comparator.manifest.kind, job, comparator.source_identity
     )
     for lane in lanes:
         if type(lane) is not AdmittedLaneV1:
@@ -417,7 +417,7 @@ def main(argv: list[str] | None = None) -> int:
         "job_identity": job.identity.hex(),
         "domain_identity": job.domain.identity.hex(),
         "policy_identity": job.policy.identity.hex(),
-        "comparator_identity": comparator.identity.hex(),
+        "comparator_source_identity": comparator.source_identity.hex(),
         "transcript_identity": transcript.identity.hex(),
         "accounting_digest": transcript.accounting_digest.hex(),
         "point_count": transcript.point_count,

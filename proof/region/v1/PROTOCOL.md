@@ -478,6 +478,42 @@ V1 не доказывает independence. Как anti-vacuum declared-diversity
 dependency graph; cross-path GMP/MPFR overlap и обязательные distinct edges не
 считаются установленными без отдельного MPFI receipt.
 
+### Две идентичности компаратора
+
+`identity` связывает все десять координат, включая `build_identity` и
+`test_observation`. Эти две сворачивают наблюдение сборки — docker capability и
+digest-ы консольного вывода процессов, — и потому **не воспроизводятся**: два
+прогона идентичного дерева исходников на двух раннерах дают одинаковый бинарь и
+одинаковые решения, а наблюдения различаются. Замерено на прогонах
+`31089986150`/`31090010890`: `binary_identity` равны, различаются ровно 96 байт
+внутри `build_identity` (32 docker capability + 2×32 наблюдения процессов).
+
+`source_identity` связывает kind и восемь координат, выводимых из источников:
+`engine_release`, `upstream_source`, `arithmetic_input_set`, `wrapper_source`,
+`evaluator_source`, `operation_allowlist`, `legal_file_set`, `exclusions`.
+Лейбл — `labcolors.proof-region.comparator-source-identity.v2`. Это производное
+свойство, а не поле wire: грамматика манифеста не меняется.
+
+Разделение проходит по вопросу «может ли решение от этого зависеть»:
+
+- **решающая цепь** связывает `source_identity` — движку передаётся именно она
+  в `--manifest-identity`, поэтому её несут `DecisionTranscriptV1`,
+  `RunClaimV1`, accounting-префикс и lane-манифест (ключ
+  `comparator_source_identity`). Решение точки не зависит от того, какой демон
+  наблюдал сборку, поэтому полоса, посчитанная под одним прогоном, допускается
+  под другим прогоном тех же источников. Без этого каждая verification lane
+  умирала бы вместе с прогоном, выпустившим её evidence, и дуальное
+  доказательство было бы недостижимо: source-bound квитанции не имеют
+  wire-формы намеренно, а посчитать 512 полос внутри процесса RUN нельзя;
+- **цепь провенанса** связывает полную `identity` — её несут
+  `DualComparisonClaimV1.comparator_identities`, `SemanticVerificationReceiptV1`
+  и обе source-bound квитанции. Какая именно сборка произвела каждый движок —
+  ровно то, что дуальное доказательство и удостоверяет, и эта запись не
+  ослабляется.
+
+Изменение любой из восьми source-координат меняет `source_identity` и
+закрыто отвергает чужую полосу; изменение наблюдения сборки — нет.
+
 ## `DecisionTranscriptV1`
 
 Wire после `LCTRN1\0\0`, по порядку:

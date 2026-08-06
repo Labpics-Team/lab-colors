@@ -240,7 +240,7 @@ class LaneByteIdentityTests(unittest.TestCase):
         self.assertIs(type(lane), corpus.WindowLaneArtifactV1)
         window_job = corpus.lane_window_job_v1(job, 32, 96, ARB_KIND)
         accounting = semantic_replay.accounting_prefix_v1(
-            ARB_KIND, window_job, comparator.identity
+            ARB_KIND, window_job, comparator.source_identity
         )
         accounting.update(lane.accounting_records)
         self.assertEqual(lane.window_accounting_digest, accounting.digest())
@@ -296,7 +296,7 @@ class LaneCoverReassemblyTests(unittest.TestCase):
         self.assertIs(type(second), corpus.WindowLaneArtifactV1)
 
         accounting = semantic_replay.accounting_prefix_v1(
-            ARB_KIND, job, comparator.identity
+            ARB_KIND, job, comparator.source_identity
         )
         accounting.update(first.accounting_records)
         accounting.update(second.accounting_records)

@@ -57,6 +57,22 @@ DOMAIN_ID_LABEL_V1 = b"labcolors.proof-region.domain.v1\0"
 POLICY_ID_LABEL_V1 = b"labcolors.proof-region.policy.v1\0"
 JOB_ID_LABEL_V1 = b"labcolors.proof-region.job.v1\0"
 MANIFEST_ID_LABEL_V2 = b"labcolors.proof-region.comparator-manifest.v2\0"
+COMPARATOR_SOURCE_ID_LABEL_V2 = (
+    b"labcolors.proof-region.comparator-source-identity.v2\0"
+)
+# The two manifest coordinates left out of the source identity fold in the
+# build observation, which records the environment rather than the sources:
+# see `ComparatorManifestV2.source_identity`.
+SOURCE_BOUND_COORDINATES_V2 = (
+    "engine_release",
+    "upstream_source",
+    "arithmetic_input_set",
+    "wrapper_source",
+    "evaluator_source",
+    "operation_allowlist",
+    "legal_file_set",
+    "exclusions",
+)
 TRANSCRIPT_ID_LABEL_V1 = b"labcolors.proof-region.transcript.v1\0"
 RUN_CLAIM_ID_LABEL_V1 = b"labcolors.proof-region.run-claim.v1\0"
 PROVENANCE_CLAIM_ID_LABEL_V1 = b"labcolors.proof-region.evaluator-provenance-claim.v1\0"
@@ -854,6 +870,33 @@ class ComparatorManifestV2:
     def identity(self) -> bytes:
         return _identity(MANIFEST_ID_LABEL_V2, self.encode())
 
+    @cached_property
+    def source_identity(self) -> bytes:
+        """Identity of everything the comparator derives from its sources.
+
+        The full identity also binds `build_identity` and `test_observation`,
+        and those two coordinates fold in the build observation — the docker
+        capability and the build processes' console digests.  That is a
+        deliberate provenance record, but it is not reproducible: two runs of
+        the identical source tree on two runners produce identical binaries
+        and identical decisions while their observations differ.
+
+        A decision the engine reaches does not depend on which daemon watched
+        the build, so the decision chain binds this coordinate instead: the
+        engine's transcript, its accounting and the replay lanes stay portable
+        across runs, while the receipt keeps the full identity and loses
+        nothing about the environment it was built in.
+        """
+
+        return _identity(
+            COMPARATOR_SOURCE_ID_LABEL_V2,
+            bytes((int(self.kind),))
+            + b"".join(
+                getattr(self, name) for name in SOURCE_BOUND_COORDINATES_V2
+            ),
+        )
+
+
 @dataclass(frozen=True, init=False)
 class ContentResolvedComparatorManifestV2:
     manifest: ComparatorManifestV2
@@ -925,6 +968,10 @@ class ContentResolvedComparatorManifestV2:
     @cached_property
     def identity(self) -> bytes:
         return self.manifest.identity
+
+    @cached_property
+    def source_identity(self) -> bytes:
+        return self.manifest.source_identity
 
 
 class DecisionV1(IntEnum):
@@ -1440,7 +1487,9 @@ class DecisionTranscriptV1:
         result = cls(
             job.identity,
             job.domain.identity,
-            comparator.identity,
+            # A transcript records what the engine was told the comparator is,
+            # and the engine is told the source identity.
+            comparator.source_identity,
             job.domain.point_count,
             decision_bits,
             counters,
@@ -1597,9 +1646,22 @@ class RunClaimV1:
         invocation_identity: bytes,
         platform_identity: bytes,
     ) -> "RunClaimV1":
-        if transcript.job_identity != job.identity or transcript.comparator_identity != comparator.identity:
+        # The transcript carries what the engine was told the comparator is,
+        # and the engine is told the source identity: a decision cannot depend
+        # on the observation of the build that produced the evaluator.
+        if (
+            transcript.job_identity != job.identity
+            or transcript.comparator_identity != comparator.source_identity
+        ):
             _fail("run-claim-v1", 0, ProtocolReasonV1.FOREIGN_BINDING, "transcript binding mismatch")
-        return cls(job.identity, comparator.identity, binary_identity, invocation_identity, platform_identity, transcript.identity)
+        return cls(
+            job.identity,
+            comparator.source_identity,
+            binary_identity,
+            invocation_identity,
+            platform_identity,
+            transcript.identity,
+        )
 
     @classmethod
     def parse(cls, data: bytes) -> "RunClaimV1":
@@ -1851,8 +1913,15 @@ def compare_dual_transcripts(
     job_identity = job.identity
     domain_identity = job.domain.identity
     policy_identity = job.policy.identity
+    # Two different coordinates, on purpose.  The transcript and run claim
+    # bind the reproducible source identity, because a decision cannot depend
+    # on the observation of the build.  The dual claim keeps the full
+    # identity, because which build produced each engine is exactly what the
+    # dual proof attests.
     first_comparator_identity = first_manifest.identity
     second_comparator_identity = second_manifest.identity
+    first_source_identity = first_manifest.source_identity
+    second_source_identity = second_manifest.source_identity
     first_transcript_identity = first_transcript.identity
     second_transcript_identity = second_transcript.identity
     _admit_transcript(
@@ -1862,7 +1931,7 @@ def compare_dual_transcripts(
         first_run,
         job_identity=job_identity,
         domain_identity=domain_identity,
-        comparator_identity=first_comparator_identity,
+        comparator_identity=first_source_identity,
         transcript_identity=first_transcript_identity,
     )
     _admit_transcript(
@@ -1872,7 +1941,7 @@ def compare_dual_transcripts(
         second_run,
         job_identity=job_identity,
         domain_identity=domain_identity,
-        comparator_identity=second_comparator_identity,
+        comparator_identity=second_source_identity,
         transcript_identity=second_transcript_identity,
     )
     if first_transcript.counters[2] or first_transcript.counters[3] or second_transcript.counters[2] or second_transcript.counters[3]:

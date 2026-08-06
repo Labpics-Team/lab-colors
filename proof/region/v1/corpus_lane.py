@@ -175,15 +175,18 @@ def write_verification_evidence_v1(receipt: object, out: Path) -> None:
              " transcript")
     if type(run_claim) is not protocol.RunClaimV1:
         fail("verification evidence requires the engine's sealed run claim")
+    # The engine is told the comparator's source identity, so that is what its
+    # transcript and run claim carry; the bundle below still ships the full
+    # manifest, so the environment record travels with the evidence.
     if (
         transcript.job_identity != job.identity
-        or transcript.comparator_identity != resolved.identity
+        or transcript.comparator_identity != resolved.source_identity
     ):
         fail("verification evidence transcript does not bind the receipt's"
              " job and comparator")
     if (
         run_claim.job_identity != job.identity
-        or run_claim.comparator_identity != resolved.identity
+        or run_claim.comparator_identity != resolved.source_identity
         or run_claim.transcript_identity != transcript.identity
     ):
         fail("verification evidence run claim does not bind the receipt's"
@@ -240,7 +243,7 @@ def write_lane_artifacts_v1(
         "job_identity": job.identity.hex(),
         "domain_identity": job.domain.identity.hex(),
         "policy_identity": job.policy.identity.hex(),
-        "comparator_identity": comparator.identity.hex(),
+        "comparator_source_identity": comparator.source_identity.hex(),
         "counters": list(lane.counters),
         "witness_count": lane.witness_count,
         "record_count": lane.window_points,

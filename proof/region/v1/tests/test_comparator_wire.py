@@ -214,7 +214,10 @@ class LaneRunnerComparatorFlagsTests(unittest.TestCase):
             )
             self.assertEqual(result.returncode, 0, result.stderr)
             manifest = json.loads((lane_out / "lane-manifest.json").read_bytes())
-            self.assertEqual(manifest["comparator_identity"], comparator.identity.hex())
+            self.assertEqual(
+                manifest["comparator_source_identity"],
+                comparator.source_identity.hex(),
+            )
             job = corpus.full_domain_job_v1(
                 protocol.ProofJobV1.parse(FIXTURE_JOB_V1.read_bytes())
             )
