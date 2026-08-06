@@ -376,16 +376,79 @@ def assemble_transcript_from_shards_v1(
     return transcript
 
 
+def decision_procedure_work_bound_v1(
+    definition: protocol.ContextualRegionDefinitionV1,
+) -> int:
+    """Branch evaluations one point can need before it must decide.
+
+    The decision procedure spends at most one predicate branch per region
+    segment: a knot ladder of `n` knots has `n - 1` segments, and the
+    degenerate single-knot region still needs one branch for the tone that
+    equals its knot.  A per-point budget below this bound cannot decide a
+    boundary point at any precision, because the grant is checked before the
+    branch runs — the point lands on `RESOURCE_LIMIT_REACHED` instead.
+    """
+
+    if type(definition) is not protocol.ContextualRegionDefinitionV1:
+        raise TypeError("a work bound requires a canonical region definition")
+    return max(1, definition.knot_count - 1)
+
+
+def certified_work_policy_v1(
+    definition: protocol.ContextualRegionDefinitionV1,
+    base: protocol.ProofPolicyV1,
+    point_count: int,
+) -> protocol.ProofPolicyV1:
+    """The base policy's ladder under the work a certification actually needs.
+
+    The work grant is not a free knob for a certified materialisation: a dual
+    comparison refuses any transcript carrying an unresolved outcome, so a
+    budget below `decision_procedure_work_bound_v1` leaves every boundary
+    point on `RESOURCE_LIMIT_REACHED` and no proof can exist.  The bound is
+    proven tight, so granting exactly it is both necessary and sufficient.
+
+    The pregrant is an absolute total over the domain's ordinal prefix rather
+    than a rate, so it is re-derived for the domain being certified: every
+    point owns its per-point grant whether or not it spends it.
+    """
+
+    if type(base) is not protocol.ProofPolicyV1:
+        raise TypeError("a certified policy requires a canonical base policy")
+    if type(point_count) is not int or point_count <= 0:
+        raise TypeError("a certified policy requires a positive point count")
+    work = decision_procedure_work_bound_v1(definition)
+    return protocol.ProofPolicyV1(
+        base.equality_release,
+        tuple(
+            protocol.ComparatorBudgetV1(
+                budget.kind, budget.precision_ladder, work, work * point_count
+            )
+            for budget in base.comparators
+        ),
+    )
+
+
 def full_domain_job_v1(base: protocol.ProofJobV1) -> protocol.ProofJobV1:
-    """The same definition, formula and policy over the exact full manifest."""
+    """The declared definition and formula certified over the exact manifest.
+
+    The base job's work grant is deliberately not carried over.  The frozen
+    protocol fixture declares a hostile zero-grant policy, and borrowing it
+    for a certified run is what leaves the region's boundary points
+    unresolved: the grant is checked before the predicate branch runs, so a
+    starved point never decides at any precision.  A certified full-domain
+    materialisation must prove every point inside or outside, so it declares
+    the work its own decision procedure needs; only the precision ladder and
+    the equality release stay the base job's declaration.
+    """
 
     if type(base) is not protocol.ProofJobV1:
         raise TypeError("full-domain job derivation requires a canonical proof job")
+    manifest = protocol.exact_full_domain_manifest_v1()
     return protocol.ProofJobV1(
         base.definition,
         base.formula_spec,
-        protocol.exact_full_domain_manifest_v1(),
-        base.policy,
+        manifest,
+        certified_work_policy_v1(base.definition, base.policy, manifest.point_count),
     )
 
 
@@ -418,13 +481,14 @@ def lane_window_job_v1(
     """The lane execution job for one window of a full-domain job.
 
     The window job replays the same definition and formula over the single
-    window range while its comparator budget starts with an exhausted
-    ordinal-prefix pregrant.  That regime is exactly the state a sequential
-    full-domain replay reaches once the pregrant is spent, which happens at a
-    negligible ordinal for the production policy; a lane is only admissible
-    for windows at or beyond that exhaustion point, and its fragments stay
-    bound to the full-domain job identity through the runner's evidence
-    identity.
+    window range, starting from the grant state the ordinal prefix left
+    behind: every point before the window owns its per-point pregrant whether
+    or not it spends it, so the window's remaining pregrant is the declared
+    total minus that prefix, never a negative debt.  Reconstructing the
+    prefix state — instead of assuming it is already exhausted — is what
+    makes a lane byte-identical to the same window of the monolithic run in
+    every grant regime, and its fragments stay bound to the full-domain job
+    identity through the runner's evidence identity.
     """
 
     if type(full_job) is not protocol.ProofJobV1:
@@ -444,12 +508,21 @@ def lane_window_job_v1(
     matched = False
     for budget in full_job.policy.comparators:
         if budget.kind == kind:
+            # A lane replays a window of the same run, so it must start from
+            # the grant state the ordinal prefix left behind: every preceding
+            # point owns its pregrant whether or not it spends it.  Assuming
+            # an exhausted prefix is only correct when the whole pregrant is
+            # zero, and it silently starves every lane of a granted run.
             budgets.append(
                 protocol.ComparatorBudgetV1(
                     budget.kind,
                     budget.precision_ladder,
                     budget.per_point_work,
-                    0,
+                    max(
+                        0,
+                        budget.global_pregrant
+                        - budget.per_point_work * window_start,
+                    ),
                 )
             )
             matched = True
@@ -518,9 +591,10 @@ def run_window_lane_v1(
     """Replay one packing-aligned window of the full domain as a lane.
 
     The lane is prefix-independent by construction: it executes the window
-    job in the exhausted ordinal-prefix grant regime and binds every witness
-    digest to the full-domain job identity, so contiguous lanes concatenate
-    into the exact monolithic shard stream.
+    job from the grant state the ordinal prefix leaves behind and binds every
+    witness digest to the full-domain job identity, so contiguous lanes
+    concatenate into the exact monolithic shard stream under any declared
+    budget.
     """
 
     if type(full_job) is not protocol.ProofJobV1:

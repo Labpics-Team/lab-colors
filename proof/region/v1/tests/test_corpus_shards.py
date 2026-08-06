@@ -263,11 +263,52 @@ class FullDomainJobTests(unittest.TestCase):
             job.definition.definition_digest,
             _base_job().definition.definition_digest,
         )
-        self.assertEqual(job.policy.identity, _base_job().policy.identity)
+        self.assertNotEqual(job.policy.identity, _base_job().policy.identity)
 
     def test_full_domain_job_rejects_foreign_input(self) -> None:
         with self.assertRaises(TypeError):
             corpus.full_domain_job_v1(_base_job().domain)
+
+    def test_full_domain_job_declares_the_work_a_certification_needs(self) -> None:
+        # The frozen fixture policy is a hostile zero-grant declaration, and
+        # borrowing it for a certified run leaves every boundary point on
+        # RESOURCE_LIMIT_REACHED — a failure the dual admission only reports
+        # after the whole domain has been materialised.
+        base = _base_job()
+        self.assertTrue(
+            all(budget.per_point_work == 0 for budget in base.policy.comparators)
+        )
+        bound = corpus.decision_procedure_work_bound_v1(base.definition)
+        self.assertGreater(bound, 0)
+        job = corpus.full_domain_job_v1(base)
+        for budget in job.policy.comparators:
+            self.assertEqual(budget.per_point_work, bound)
+            # The pregrant is an absolute total over the domain's ordinal
+            # prefix, not a rate, so it follows the domain being certified.
+            self.assertEqual(
+                budget.global_pregrant, bound * protocol.OUTPUT_CARDINALITY_V1
+            )
+
+    def test_full_domain_job_keeps_the_declared_ladder_and_release(self) -> None:
+        base = _base_job()
+        job = corpus.full_domain_job_v1(base)
+        self.assertEqual(
+            job.policy.equality_release, base.policy.equality_release
+        )
+        for derived, declared in zip(
+            job.policy.comparators, base.policy.comparators, strict=True
+        ):
+            self.assertEqual(derived.kind, declared.kind)
+            self.assertEqual(derived.precision_ladder, declared.precision_ladder)
+
+    def test_work_bound_is_one_branch_per_region_segment(self) -> None:
+        definition = _base_job().definition
+        self.assertEqual(
+            corpus.decision_procedure_work_bound_v1(definition),
+            max(1, definition.knot_count - 1),
+        )
+        with self.assertRaises(TypeError):
+            corpus.decision_procedure_work_bound_v1(definition.fields)
 
     def test_full_domain_claim_coordinates_admit_the_mint_gate(self) -> None:
         import dual_proof

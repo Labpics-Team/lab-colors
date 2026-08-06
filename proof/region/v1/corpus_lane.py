@@ -2,8 +2,9 @@
 """One independent lane of the V5b2d full-domain RUN (V5b2d-1c).
 
 A lane replays exactly one packing-aligned ordinal window of the full 2^24
-domain through the sharded corpus runner in the exhausted ordinal-prefix
-grant regime and writes wire-only evidence to the output directory: one
+domain through the sharded corpus runner, starting from the grant state its
+ordinal prefix leaves behind, and writes wire-only evidence to the output
+directory: one
 decision-bit fragment and one witness fragment per shard, the raw accounting
 record bytes, and one deterministic lane manifest.  Independent lanes over
 contiguous windows concatenate into the exact monolithic shard stream, so

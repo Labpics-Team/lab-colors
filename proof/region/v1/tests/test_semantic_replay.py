@@ -28,6 +28,8 @@ from region_proof_protocol import (  # noqa: E402
     compare_dual_transcripts,
 )
 
+import corpus  # noqa: E402
+
 from semantic import replay as semantic_replay  # noqa: E402
 from semantic.receipt import (  # noqa: E402
     SemanticVerificationReceiptV1,
@@ -388,6 +390,69 @@ class HostileReplayTests(unittest.TestCase):
         for record in records:
             accounting.update(semantic_replay.account_record(*record))
         self.assertEqual(accounting.digest(), expected)
+
+
+class CertifiedPolicyDecidesEveryPointTests(unittest.TestCase):
+    """A certified policy must decide every point it is certified over.
+
+    A dual comparison refuses any transcript carrying an unresolved outcome,
+    so a budget that starves the decision procedure cannot produce a proof at
+    all — and the run only reports that failure after materialising the whole
+    domain.  The frozen fixture declares a hostile zero-grant policy on
+    purpose; the certified derivation is what makes the same points decide.
+    """
+
+    def _outcomes(self, job: ProofJobV1, kind: ComparatorKindV1) -> dict[int, int]:
+        replay = semantic_replay.SemanticReplay(job, admit_manifest(kind, 700))
+        outcomes: dict[int, int] = {}
+        for _ in range(job.domain.point_count):
+            point = replay.next_point()
+            outcomes[point.ordinal] = point.outcome
+        return outcomes
+
+    def _certified_over_seams(self) -> ProofJobV1:
+        base = fixture_job()
+        return ProofJobV1(
+            base.definition,
+            base.formula_spec,
+            base.domain,
+            corpus.certified_work_policy_v1(
+                base.definition, base.policy, base.domain.point_count
+            ),
+        )
+
+    def _unresolved(self, outcomes: dict[int, int]) -> dict[int, int]:
+        return {
+            ordinal: outcome
+            for ordinal, outcome in outcomes.items()
+            if outcome
+            in (
+                int(DecisionV1.BOUNDARY_UNPROVEN),
+                int(DecisionV1.RESOURCE_LIMIT_REACHED),
+            )
+        }
+
+    def test_certified_policy_leaves_no_unresolved_point(self) -> None:
+        outcomes = self._outcomes(self._certified_over_seams(), ComparatorKindV1.ARB)
+        self.assertEqual(self._unresolved(outcomes), {})
+
+    def test_the_starved_fixture_policy_cannot_decide_the_same_points(self) -> None:
+        # Anti-vacuity: the seam domain really exercises the branch a grant
+        # pays for, so the test above is not passing on an all-outside domain.
+        outcomes = self._outcomes(fixture_job(), ComparatorKindV1.ARB)
+        starved = self._unresolved(outcomes)
+        self.assertTrue(starved)
+        self.assertTrue(
+            all(
+                outcome == int(DecisionV1.RESOURCE_LIMIT_REACHED)
+                for outcome in starved.values()
+            )
+        )
+
+    def test_certified_domain_carries_the_region_and_its_complement(self) -> None:
+        outcomes = self._outcomes(self._certified_over_seams(), ComparatorKindV1.ARB)
+        self.assertIn(int(DecisionV1.INSIDE), outcomes.values())
+        self.assertIn(int(DecisionV1.OUTSIDE), outcomes.values())
 
 
 if __name__ == "__main__":

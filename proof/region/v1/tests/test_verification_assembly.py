@@ -4,8 +4,8 @@
 A full-domain transcript can only be verified by independent replay, and one
 sequential replay of 2^24 points never fits a single verification process.
 The laned path therefore splits the domain into packing-aligned windows,
-replays each window independently in the exhausted ordinal-prefix grant
-regime, and seals exactly one `SemanticVerificationReceiptV1` — the same
+replays each window independently from the grant state its ordinal prefix
+leaves behind, and seals exactly one `SemanticVerificationReceiptV1` — the same
 receipt the monolithic verifier seals — only when the lane-assembled replay
 is byte-identical to the verified transcript.  No lane cover, no receipt.
 """

@@ -2,13 +2,14 @@
 """Hostile contract for the windowed corpus lane runner (V5b2d-1c).
 
 The full 2^24 RUN executes as independent lanes, each replaying one
-4-aligned ordinal window of the exact full manifest.  A lane starts from the
-exhausted ordinal-prefix grant state, so its fragments are prefix-independent
-and must reassemble byte-identically with the monolithic shard stream once
-the budget regime matches; windows that violate the packing alignment, the
-ordinal bounds, or the shard grammar never execute, and contiguous lane
-windows must reassemble the exact monolithic transcript, including its
-streaming accounting digest rebuilt from the lane record fragments.
+4-aligned ordinal window of the exact full manifest.  A lane reconstructs the
+grant state its ordinal prefix leaves behind, so its fragments reassemble
+byte-identically with the monolithic shard stream under any declared
+budget, not only when the pregrant is spent; windows that violate the
+packing alignment, the ordinal bounds, or the shard grammar never execute,
+and contiguous lane windows must reassemble the exact monolithic
+transcript, including its streaming accounting digest rebuilt from the lane
+record fragments.
 """
 
 from __future__ import annotations
@@ -57,15 +58,20 @@ def _comparator() -> protocol.ContentResolvedComparatorManifestV2:
 
 
 def _job_with_pregrant(
-    ordinals: tuple[int, ...], pregrant: int
+    ordinals: tuple[int, ...],
+    pregrant: int,
+    per_point_work: int | None = None,
 ) -> protocol.ProofJobV1:
     base = _base_job()
     arb, mpfi = base.policy.comparators
-    exhausted_arb = protocol.ComparatorBudgetV1(
-        arb.kind, arb.precision_ladder, arb.per_point_work, pregrant
+    arb_budget = protocol.ComparatorBudgetV1(
+        arb.kind,
+        arb.precision_ladder,
+        arb.per_point_work if per_point_work is None else per_point_work,
+        pregrant,
     )
     policy = protocol.ProofPolicyV1(
-        base.policy.equality_release, (exhausted_arb, mpfi)
+        base.policy.equality_release, (arb_budget, mpfi)
     )
     return protocol.ProofJobV1(
         base.definition,
@@ -128,14 +134,32 @@ class LaneValidationTests(unittest.TestCase):
 
 
 class LaneWindowJobTests(unittest.TestCase):
-    def test_lane_window_job_binds_the_exhausted_grant_regime(self) -> None:
+    def test_lane_window_job_reconstructs_the_ordinal_prefix_grant(self) -> None:
+        # A lane replays a window of the same run, so it must start from the
+        # grant state the ordinal prefix left behind: every preceding point
+        # owns its pregrant whether or not it spends it.
+        job = _job_with_pregrant(tuple(range(256)), 12345, per_point_work=3)
+        window_job = corpus.lane_window_job_v1(job, 64, 128, ARB_KIND)
+        self.assertIs(type(window_job), protocol.ProofJobV1)
+        arb, _ = window_job.policy.comparators
+        self.assertEqual(arb.global_pregrant, 12345 - 3 * 64)
+
+    def test_lane_window_job_clamps_an_exhausted_prefix_to_zero(self) -> None:
+        # A prefix longer than the pregrant leaves nothing behind, and the
+        # remaining grant is a count, never a negative debt.
+        job = _job_with_pregrant(tuple(range(256)), 32, per_point_work=1)
+        window_job = corpus.lane_window_job_v1(job, 64, 128, ARB_KIND)
+        self.assertIs(type(window_job), protocol.ProofJobV1)
+        arb, _ = window_job.policy.comparators
+        self.assertEqual(arb.global_pregrant, 0)
+
+    def test_lane_window_job_binds_only_its_own_window_and_lane(self) -> None:
         job = _job_with_pregrant(tuple(range(256)), 12345)
         window_job = corpus.lane_window_job_v1(job, 64, 128, ARB_KIND)
         self.assertIs(type(window_job), protocol.ProofJobV1)
         self.assertEqual(window_job.domain.ranges, ((64, 192),))
         self.assertEqual(window_job.domain.point_count, 128)
         arb, mpfi = window_job.policy.comparators
-        self.assertEqual(arb.global_pregrant, 0)
         self.assertEqual(arb.per_point_work, job.policy.comparators[0].per_point_work)
         self.assertEqual(mpfi, job.policy.comparators[1])
         self.assertEqual(
@@ -152,7 +176,7 @@ class LaneWindowJobTests(unittest.TestCase):
         self.assertIs(type(result), corpus.ShardCorpusRejectedV1)
 
 
-class ExhaustedLaneByteIdentityTests(unittest.TestCase):
+class LaneByteIdentityTests(unittest.TestCase):
     def test_lane_fragments_match_the_monolithic_stream_after_exhaustion(self) -> None:
         job = _job_with_pregrant(tuple(range(128)), 0)
         comparator = _comparator()
@@ -184,31 +208,39 @@ class ExhaustedLaneByteIdentityTests(unittest.TestCase):
         accounting.update(lane.accounting_records)
         self.assertEqual(lane.window_accounting_digest, accounting.digest())
 
-    def test_lane_regime_follows_the_grant_exhaustion_boundary(self) -> None:
-        generous = _job_with_pregrant(tuple(range(128)), 1 << 40)
+    def test_lane_fragments_match_the_monolithic_stream_under_a_spent_grant(
+        self,
+    ) -> None:
+        # The full-domain proof requires shard/order independence, so a lane
+        # must reassemble byte-identically in every grant regime — not only
+        # when the pregrant is exhausted and no point can decide a boundary.
+        # This job grants one branch per point, which is what the decision
+        # procedure needs to resolve the near-black boundary points.
+        granted = _job_with_pregrant(tuple(range(128)), 128, per_point_work=1)
         comparator = _comparator()
-        plan = corpus.shard_plan_v1(generous.domain, 8)
-        self.assertIs(type(plan), tuple)
-        runner = corpus.ShardCorpusRunnerV1(generous, comparator, retain_records=True)
-        monolithic = tuple(runner.run_shard(start, end) for start, end in plan)
-        records = runner.accounting_records
-        any_consumed = any(
-            int.from_bytes(records[offset + 8 : offset + 16], "big") > 0
-            for offset in range(0, len(records), 17)
+        _, monolithic = _monolithic_shards(granted, 8)
+        # Anti-vacuity: the same window without a grant leaves points at
+        # RESOURCE_LIMIT_REACHED, so this window really exercises the branch
+        # an exhausted lane regime would starve.
+        _, starved = _monolithic_shards(
+            _job_with_pregrant(tuple(range(128)), 0, per_point_work=0), 8
         )
-        lane = corpus.run_window_lane_v1(generous, comparator, 0, 128, 8)
-        self.assertIs(type(lane), corpus.WindowLaneArtifactV1)
-        lane_bits = tuple(shard.decision_bits for shard in lane.shards)
-        monolithic_bits = tuple(shard.decision_bits for shard in monolithic)
-        if any_consumed:
-            self.assertNotEqual(
-                lane_bits,
-                monolithic_bits,
-                "an unexhausted prefix that consumes grant must not equal the"
-                " exhausted lane",
-            )
-        else:
-            self.assertEqual(lane.shards, monolithic)
+        self.assertGreater(sum(shard.counters[3] for shard in starved[:8]), 0)
+        self.assertEqual(sum(shard.counters[3] for shard in monolithic), 0)
+        # The window that actually spends grant is the one holding the
+        # near-black boundary ordinals; an untouched window would pass even
+        # under an exhausted lane regime.
+        spending = corpus.run_window_lane_v1(granted, comparator, 0, 64, 8)
+        self.assertIs(type(spending), corpus.WindowLaneArtifactV1)
+        self.assertEqual(spending.shards, monolithic[:8])
+        self.assertEqual(
+            sum(spending.counters[kind] for kind in (2, 3)),
+            0,
+            "a granted budget must leave no unresolved point behind",
+        )
+        trailing = corpus.run_window_lane_v1(granted, comparator, 64, 64, 8)
+        self.assertIs(type(trailing), corpus.WindowLaneArtifactV1)
+        self.assertEqual(trailing.shards, monolithic[8:])
 
 
 class LaneCoverReassemblyTests(unittest.TestCase):

@@ -674,6 +674,22 @@ Reduced-domain proof несёт `full_domain=False` и никогда не ав�
 mint. Совпадение только point count, только identity, чужая или мутированная
 identity или reduced-domain candidate этот gate не проходят.
 
+Work budget сертифицированной материализации. Dual admission отвергает любой
+transcript с нерешённым исходом, поэтому объявленный бюджет — часть
+доказательного обязательства, а не свободная ручка. Решающая процедура тратит
+не более одной ветви предиката на сегмент региона, то есть
+`max(1, knot_count - 1)` ветвей на точку; grant проверяется ДО запуска ветви,
+поэтому меньший per-point бюджет оставляет каждую граничную точку на
+`ResourceLimitReached` при любой точности. `full_domain_job_v1` отказывает
+закрыто (`invalid_policy`), если объявленная ставка ниже этой границы.
+
+`global_pregrant` — абсолютный total по ordinal-префиксу домена, а не ставка,
+поэтому при смене домена он выводится заново: `per_point_work × point_count`.
+По той же причине lane-окно стартует не с нуля, а с остатка префикса
+`max(0, global_pregrant - per_point_work × window_start)` — реконструкция этого
+состояния и делает полосу побайтно равной тому же окну монолитного прогона при
+любом бюджете, а не только при исчерпанном.
+
 ## Semantic verification и `SemanticVerificationReceiptV1`
 
 Structural dual comparison доказывает только побайтное согласие двух engine
