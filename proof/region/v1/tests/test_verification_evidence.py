@@ -172,6 +172,8 @@ class VerificationEvidenceExportTests(unittest.TestCase):
                 transcript.comparator_identity,
                 receipt.comparator.manifest.source_identity,
             )
+            # Anti-vacuity: the two identities really differ, so the
+            # assertion above is not comparing a value with itself.
             self.assertNotEqual(
                 receipt.comparator.manifest.source_identity,
                 receipt.comparator.manifest.identity,
@@ -255,7 +257,7 @@ class VerificationEvidenceExportTests(unittest.TestCase):
             protocol.DecisionTranscriptV1(
                 _digest("foreign-job"),
                 job.domain.identity,
-                receipt.comparator.manifest.identity,
+                receipt.comparator.manifest.source_identity,
                 point_count,
                 b"\x00" * ((point_count * 2 + 7) // 8),
                 (point_count, 0, 0, 0),
@@ -280,7 +282,7 @@ class VerificationEvidenceExportTests(unittest.TestCase):
             receipt.transcript = transcript
             receipt.run_claim = protocol.RunClaimV1(
                 job.identity,
-                receipt.comparator.manifest.identity,
+                receipt.comparator.manifest.source_identity,
                 _digest("binary"),
                 _digest("invocation"),
                 _digest("platform"),
@@ -296,7 +298,7 @@ class VerificationEvidenceExportTests(unittest.TestCase):
         receipt = _receipt("evidence-unbound-claim")
         receipt.run_claim = protocol.RunClaimV1(
             receipt.job.identity,
-            receipt.comparator.manifest.identity,
+            receipt.comparator.manifest.source_identity,
             _digest("binary"),
             _digest("invocation"),
             _digest("platform"),

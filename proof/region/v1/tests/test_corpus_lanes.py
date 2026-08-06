@@ -329,7 +329,7 @@ class LaneCliTests(unittest.TestCase):
             self.assertEqual(status, 0)
             out_path = Path(out)
             manifest = json.loads((out_path / "lane-manifest.json").read_text())
-            self.assertEqual(manifest["schema"], "corpus-lane-v1")
+            self.assertEqual(manifest["schema"], "corpus-lane-v2")
             self.assertEqual(manifest["window_start"], 0)
             self.assertEqual(manifest["window_points"], 64)
             self.assertEqual(manifest["shard_points"], 32)

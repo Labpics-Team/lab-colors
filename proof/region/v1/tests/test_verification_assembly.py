@@ -210,7 +210,7 @@ class LanedSemanticVerificationTests(unittest.TestCase):
         # run claim forged against a foreign transcript identity
         foreign_run = protocol.RunClaimV1(
             self.job.identity,
-            self.comparator.identity,
+            self.comparator.source_identity,
             digest(1),
             digest(2),
             digest(3),

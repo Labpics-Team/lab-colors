@@ -485,8 +485,10 @@ dependency graph; cross-path GMP/MPFR overlap и обязательные distin
 digest-ы консольного вывода процессов, — и потому **не воспроизводятся**: два
 прогона идентичного дерева исходников на двух раннерах дают одинаковый бинарь и
 одинаковые решения, а наблюдения различаются. Замерено на прогонах
-`31089986150`/`31090010890`: `binary_identity` равны, различаются ровно 96 байт
-внутри `build_identity` (32 docker capability + 2×32 наблюдения процессов).
+`31089986150`/`31090010890`: `binary_identity` равны; внутри `build_identity`
+различаются ровно 96 байт (32 docker capability + 2×32 наблюдения процессов), и
+отдельно различается `test_observation` у Arb, который сворачивает те же
+наблюдения процессов.
 
 `source_identity` связывает kind и восемь координат, выводимых из источников:
 `engine_release`, `upstream_source`, `arithmetic_input_set`, `wrapper_source`,
@@ -520,7 +522,8 @@ Wire после `LCTRN1\0\0`, по порядку:
 
 1. job identity;
 2. domain identity;
-3. comparator manifest identity;
+3. comparator **source** identity — движку передаётся именно она, и он
+   echo-ит её в header; см. «Две идентичности компаратора»;
 4. point count `u64be`;
 5. decision payload `blob`;
 6. counters `inside`, `outside`, `boundary_unproven`,
@@ -602,7 +605,7 @@ counters не превращают его в semantic resolved/proven type.
 Wire после `LCRUN1\0\0` содержит шесть digest coordinates:
 
 1. job identity;
-2. comparator manifest identity;
+2. comparator **source** identity — та же координата, что несёт транскрипт;
 3. exact binary identity;
 4. exact invocation identity;
 5. platform identity;

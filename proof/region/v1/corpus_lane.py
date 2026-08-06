@@ -32,7 +32,11 @@ import region_proof_protocol as protocol  # noqa: E402
 
 FIXTURE_JOB_V1 = PROOF / "fixtures" / "proof-job-v1.bin"
 DEFAULT_SHARD_POINTS = 1 << 14
-LANE_SCHEMA_V1 = "corpus-lane-v1"
+# v2 renamed the comparator coordinate and changed what it means: a lane now
+# binds the comparator source identity. An unchanged version string would let
+# a v1 lane be rejected as a foreign comparator instead of an older grammar,
+# which is a misleading diagnosis for an artifact that was never wrong.
+LANE_SCHEMA_V1 = "corpus-lane-v2"
 RECORD_BYTES_V1 = 17
 
 
