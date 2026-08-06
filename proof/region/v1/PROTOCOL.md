@@ -249,10 +249,18 @@ backend run как `ObserverFailureV1(REQUEST_NOT_ADMITTED)`.
 
 `executor.canonical_cgroup_parent_v1` разбирает объявленный parent без
 разрешения пути через файловую систему.
-`executor.enter_observer_cgroup_v1` — единственная versioned межмодульная
-операция размещения: engine controller передаёт этот
+Размещением контроллера ведают ровно две versioned межмодульные операции.
+`executor.enter_observer_cgroup_v1`: engine controller передаёт этот
 абсолютный канонический parent, а executor помещает текущий controller в
-`parent/observer` и пробрасывает отказ для typed mapping вызывающего. Engine не
+`parent/observer` и пробрасывает отказ для typed mapping вызывающего. `executor.enter_task_cgroup_v1` — вторая: она возвращает контроллер в
+делегированную группу, которая ничего не ограничивает. Это нужно ровно там,
+где один процесс наблюдает две сборки подряд: контроллер остаётся в том
+observer'е, куда вошёл, а его поддерево допускает две задачи, поэтому второй
+BUILD форкал бы в исчерпанный бюджет. Containment прогона не расширяется —
+бюджет наблюдателя действует для каждого исполнения, — а операция проверяет
+пост-условие: процесс обязан оказаться именно в названной группе.
+
+Engine не
 копирует этот descriptor protocol. Executor открывает каждый сегмент cgroup
 descriptor-relative с `O_PATH|O_NOFOLLOW`: metadata-проверка допускает каталог,
 доступный только для поиска, но символическая ссылка не может незаметно связать

@@ -110,7 +110,10 @@ def _assert_engine_modules_are_unmixed_v1() -> None:
     for name, directory in expected.items():
         module = sys.modules.get(name)
         if module is None:
-            continue
+            # Absence is not safety: the pin exists because these names are
+            # reached by bare import, and one that stopped being imported
+            # would quietly retire the check instead of failing it.
+            raise AssertionError(f"{name} was not imported by either lane module")
         resolved = Path(module.__file__ or "").resolve().parent
         if resolved != directory:
             raise AssertionError(f"{name} resolved to {resolved}, not {directory}")
@@ -223,8 +226,11 @@ class NativeFullDomainDualProofIntegrationTests(unittest.TestCase):
         # The hostile check the single-engine lanes run on their receipts.
         # Nothing downstream repeats it, and this is the only place a
         # full-domain receipt is ever sealed.
+        # Only Arb's: its constructor binds a narrower identity relation than
+        # this, so the check can still fail.  MPFI's constructor already
+        # requires the same predicate, so asserting it there would be a line
+        # that cannot fail — the kind of assurance this gate exists to avoid.
         self.assertTrue(arb_receipt.replay_evidence_is_well_bound_v1(arb.evidence))
-        self.assertTrue(mpfi_receipt.replay_mpfi_evidence_is_well_bound_v1(mpfi.evidence))
         full_domain = protocol.exact_full_domain_manifest_v1().identity
         for engine in (arb, mpfi):
             transcript = engine.transcript
@@ -253,12 +259,15 @@ class NativeFullDomainDualProofIntegrationTests(unittest.TestCase):
             mpfi.evidence.run_claim,
             lanes_root,
         )
-        # The covers must be disjoint sets of directories.  Receipt identity
-        # cannot say this — it seals job, comparator, run and transcript, and
-        # never the cover — so one engine's lanes answering for both would
-        # leave both identities looking perfectly distinct.
-        self.assertEqual(arb_lanes & mpfi_lanes, frozenset())
-        self.assertTrue(arb_lanes and mpfi_lanes)
+        # Disjointness would be tautological: the covers are partitioned by
+        # source identity, and the two engines cannot share one.  What is not
+        # guaranteed is that the partition consumed everything — a lane of a
+        # third identity is silently foreign to both engines, and this is the
+        # only place a full-domain proof is ever sealed.
+        present = frozenset(
+            path.name for path in lanes_root.iterdir() if path.is_dir()
+        )
+        self.assertEqual(arb_lanes | mpfi_lanes, present)
 
         candidate = protocol.compare_dual_transcripts(
             arb.job,

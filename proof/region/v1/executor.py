@@ -1539,6 +1539,12 @@ def enter_task_cgroup_v1(group: Path) -> None:
         _write_own_pid_v1(directory_fd)
     finally:
         os.close(directory_fd)
+    # The observer placement is always followed by a budget probe; this one
+    # would otherwise take the caller's word for where it landed.  The path
+    # arrives from configuration, and a wrong one silently moves where the
+    # next BUILD runs — which no later check looks at.
+    if _current_unified_cgroup_v1() != group:
+        raise OSError(errno_module.EBUSY, "controller did not enter the named group")
 
 
 def _write_own_pid_v1(directory_fd: int) -> None:
