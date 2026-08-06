@@ -130,6 +130,13 @@ impl FamilyImageCertificateV2 {
         self.image_digest
     }
 
+    /// Адрес определения, образом которого объявлен этот artifact. Loader его
+    /// не интерпретирует: сверка с адресом спрошенного региона принадлежит
+    /// `family_definition_binding`.
+    pub(crate) const fn definition_digest(self) -> FamilyDefinitionDigestV2 {
+        self.definition_digest
+    }
+
     pub(crate) const fn artifact_receipt(self) -> FamilyArtifactReceiptIdV2 {
         self.artifact_receipt
     }

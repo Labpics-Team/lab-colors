@@ -19,6 +19,7 @@ pub(crate) mod composition;
 pub(crate) mod contextual_region;
 mod family;
 mod family_artifact;
+mod family_definition_binding;
 pub(crate) mod spaces;
 
 pub use srgb8::Srgb8;
@@ -196,6 +197,9 @@ mod constraint_tests;
 
 #[cfg(test)]
 mod family_artifact_tests;
+
+#[cfg(test)]
+mod family_definition_binding_tests;
 
 #[cfg(test)]
 mod clean_set_tests;
