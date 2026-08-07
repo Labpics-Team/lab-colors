@@ -349,18 +349,21 @@ class MpfiStaticSourceIdentityTests(unittest.TestCase):
 
 
 class MpfiSourceBoundPreimageGuardTests(unittest.TestCase):
-    """The guard runs on every construction, and nothing else proves it refuses.
+    """Every refusal branch of the construction guard, proven reachable.
 
     Its neighbour above compares the field order against the protocol directly,
     which proves the invariant and not the guard: deleting the guard's body
-    leaves that assertion green.
+    leaves that assertion green.  These prove the guard itself — including the
+    schema-drift branch, whose loss no other suite can see because both sides
+    read one declaration.
     """
 
     def _values(self) -> dict[str, bytes]:
-        return {
-            name: bytes([index + 1]) * 32
-            for index, name in enumerate(protocol.source_bound_coordinates_v2())
-        }
+        return self._values_for(protocol.source_bound_coordinates_v2())
+
+    @staticmethod
+    def _values_for(names: tuple[str, ...]) -> dict[str, bytes]:
+        return {name: bytes([index + 1]) * 32 for index, name in enumerate(names)}
 
     def test_the_exact_shape_constructs(self) -> None:
         # Anti-vacuity: a guard that refused everything would satisfy both
@@ -384,6 +387,25 @@ class MpfiSourceBoundPreimageGuardTests(unittest.TestCase):
         values["evaluator_source"] = values["wrapper_source"]
         with self.assertRaises(TypeError):
             receipt.MpfiSourceBoundPreimagesV1(**values)
+
+    def test_a_drifted_protocol_schema_is_refused_at_construction(self) -> None:
+        # The third branch of the guard, and the one its docstring is about:
+        # the field order is checked against the protocol rather than trusted.
+        # Deleting that check leaves every suite green, because both sides read
+        # the same declaration — so the drift is injected at the protocol seam.
+        names = protocol.source_bound_coordinates_v2()
+        for drifted in (
+            tuple(reversed(names)),
+            names + ("engine_release_v2",),
+        ):
+            with self.subTest(count=len(drifted)):
+                with mock.patch.object(
+                    receipt.protocol,
+                    "source_bound_coordinates_v2",
+                    lambda drifted=drifted: drifted,
+                ):
+                    with self.assertRaises(TypeError):
+                        receipt.MpfiSourceBoundPreimagesV1(**self._values_for(names))
 
 
 class SharedComparatorCoordinateSchemaTests(unittest.TestCase):
