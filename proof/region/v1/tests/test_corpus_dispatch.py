@@ -12,6 +12,7 @@ the dispatch commands without touching the network.
 
 from __future__ import annotations
 
+import contextlib
 import io
 import json
 import subprocess
@@ -635,6 +636,63 @@ class CollectCliTests(unittest.TestCase):
                 [lane["run_id"] for lane in decoded["lanes"]],
                 [900000 + index for index in range(256)],
             )
+
+    def test_a_saturated_listing_blames_the_limit_not_the_campaign(self) -> None:
+        # `gh run list --limit N` truncates the oldest runs.  A positive but
+        # short limit used to spend the query and then report the campaign
+        # incomplete — sending the operator to re-dispatch 256 lanes when the
+        # fix is one flag.
+        plan = corpus_dispatch.lane_plan_v1()
+        listing = cover(plan)
+        errors = io.StringIO()
+        with tempfile.TemporaryDirectory() as out:
+            with contextlib.redirect_stderr(errors):
+                status = self._with_observer(
+                    lambda limit: tuple(listing[:limit]),
+                    [
+                        "--mode",
+                        "collect",
+                        "--evidence-run-id",
+                        str(EVIDENCE_RUN),
+                        "--evidence-artifact",
+                        ARB_ARTIFACT,
+                        "--run-limit",
+                        "255",
+                        "--out",
+                        out,
+                    ],
+                )
+        self.assertEqual(status, 64)
+        self.assertIn("--run-limit 255", errors.getvalue())
+        self.assertIn("saturated", errors.getvalue())
+
+    def test_an_unsaturated_incomplete_cover_still_blames_the_campaign(self) -> None:
+        # Anti-vacuity for the saturation rule: a genuine hole with room to
+        # spare in the listing is the campaign's fault, and saying otherwise
+        # would hide real damage behind the flag.
+        plan = corpus_dispatch.lane_plan_v1()
+        holed = [
+            seen for seen in cover(plan) if " 65536+65536 " not in seen.display_title
+        ]
+        errors = io.StringIO()
+        with tempfile.TemporaryDirectory() as out:
+            with contextlib.redirect_stderr(errors):
+                status = self._with_observer(
+                    lambda limit: tuple(holed),
+                    [
+                        "--mode",
+                        "collect",
+                        "--evidence-run-id",
+                        str(EVIDENCE_RUN),
+                        "--evidence-artifact",
+                        ARB_ARTIFACT,
+                        "--out",
+                        out,
+                    ],
+                )
+        self.assertEqual(status, 64)
+        self.assertNotIn("saturated", errors.getvalue())
+        self.assertIn("incomplete", errors.getvalue())
 
     def test_one_run_listed_twice_is_still_one_run(self) -> None:
         # A repetitive listing must not manufacture a duplicate-cover refusal:

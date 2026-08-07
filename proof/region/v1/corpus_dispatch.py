@@ -598,16 +598,34 @@ def collect_lane_runs_v1(
         observed = tuple(observer(limit))  # type: ignore[operator]
     except Exception as error:
         # The cause travels with the refusal: an operator has to tell "no such
-        # workflow" from "no token" from a network failure, and
-        # CalledProcessError.__repr__ drops stderr — the only place that text
-        # lives.
+        # workflow" from "no token" from a network failure.  `stderr` is
+        # preferred over `repr` for legibility — the text itself rather than
+        # the text wrapped in a constructor call.
         cause = getattr(error, "stderr", None) or repr(error)
         return _collection_reject(
             corpus.ShardCorpusReasonV1.FOREIGN_INPUT,
             f"lane run collection cannot observe {VERIFICATION_WORKFLOW_V1}:"
             f" {str(cause).strip()}",
         )
-    return match_lane_runs_v1(plan, evidence_run_id, evidence_artifact, observed)
+    matched = match_lane_runs_v1(plan, evidence_run_id, evidence_artifact, observed)
+    if (
+        type(matched) is LaneRunCollectionRejectedV1
+        and matched.reason is corpus.ShardCorpusReasonV1.INCOMPLETE_COVER
+        and len(observed) == limit
+    ):
+        # A listing saturated at the limit truncates the oldest runs, so the
+        # gap may be the query's, not the campaign's.  Blaming the campaign
+        # sends the operator to re-dispatch 256 lanes when the fix is one
+        # flag — the exact misdirection this admission exists to prevent.
+        return _collection_reject(
+            corpus.ShardCorpusReasonV1.FOREIGN_INPUT,
+            f"the listing is saturated at --run-limit {limit}, so older lane"
+            f" runs may lie beyond it; raise the limit before blaming the"
+            f" campaign ({matched.detail})",
+            matched.missing,
+            matched.duplicated,
+        )
+    return matched
 
 
 def main(argv: list[str] | None = None) -> int:
