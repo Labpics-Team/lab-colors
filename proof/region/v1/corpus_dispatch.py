@@ -248,6 +248,13 @@ def verification_dispatch_commands_v1(
             f"window_points={points}",
             "-f",
             f"shard_points={shard_width}",
+            "-f",
+            # The campaign's size travels with every lane so the workflow can
+            # check it against arithmetic on its own side.  `--expect-lanes`
+            # guards the operator's intent here, where a stale checkout makes
+            # the guard stale too; this coordinate guards the same invariant
+            # in the one place that is always current.
+            f"expect_lanes={len(plan)}",
         )
         for start, points in plan
     )
