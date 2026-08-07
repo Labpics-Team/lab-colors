@@ -300,6 +300,7 @@ anchors
 
 - [Browser/WASM API](packages/colors/README.md)
 - [ADR: конфиг-граница](docs/decisions/0001-config-boundary.md)
+- [How-to: полнодоменное дуальное доказательство](docs/how-to/full-domain-dual-proof.md)
 - [Научный whitepaper](docs/whitepaper.md)
 - [Реестр коэффициентов и policies](docs/empirical-inventory.md)
 - [Conformance и numerical registry](conformance/README.md)
@@ -322,6 +323,7 @@ packages/
 
 docs/
 ├── decisions/
+├── how-to/
 ├── empirical-inventory.md
 └── whitepaper.md
 ```
