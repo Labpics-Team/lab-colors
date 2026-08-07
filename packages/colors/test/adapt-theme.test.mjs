@@ -4491,3 +4491,162 @@ test("non-finite clock is rejected before it can poison breach timing", () => {
   h.ctrl.tick();
   h.ctrl.stop();
 });
+
+test("S1: init() on exhausted worst-chase conflict does not commit lastCandidate", () => {
+  const el = fakeElement();
+  const sampleA = "#FFFFFF";
+  const sampleB = "#000000";
+  const samples = [sampleA, sampleB];
+
+  const candidateA = oneRole("#111111", 100);
+  const candidateB = oneRole("#EEEEEE", 100);
+
+  let currentCandidateHex = null;
+  const colors = {
+    resolveTheme(bgHex) {
+      currentCandidateHex = bgHex === sampleA ? "#111111" : "#EEEEEE";
+      return bgHex === sampleA ? candidateA : candidateB;
+    },
+    recheckContrast(bgWord) {
+      const bgHex = unpk(bgWord);
+      if (currentCandidateHex === "#111111") {
+        return [bgHex === sampleA ? 100 : 0, 10];
+      } else {
+        return [bgHex === sampleB ? 100 : 0, 10];
+      }
+    },
+  };
+
+  let error = null;
+  try {
+    adaptTheme(el, {
+      colors,
+      theme: "light",
+      background: () => samples,
+      target: el,
+      now: () => 1000,
+      win: {},
+    });
+  } catch (caught) {
+    error = caught;
+  }
+
+  assert.ok(error, "exhausted worst-chase must throw a typed conflict error on init()");
+  assert.equal(error.name, "OutputConflictError");
+  assert.equal(error.code, "output_conflict");
+  assert.equal(el.mutations.length, 0, "init() on conflict must perform zero DOM mutations");
+  assert.equal(el.props.size, 0, "init() on conflict must write zero CSS variables");
+});
+
+test("S2: setTheme() on exhausted worst-chase conflict leaves previous verified snapshot physically and logically unchanged", () => {
+  const el = fakeElement();
+  const sampleA = "#FFFFFF";
+  const sampleB = "#000000";
+
+  let samples = [sampleA];
+  let conflictMode = false;
+  let currentCandidateHex = "#111111";
+
+  const candidateLight = oneRole("#111111", 100);
+  const candidateDarkA = oneRole("#222222", 100);
+  const candidateDarkB = oneRole("#DDDDDD", 100);
+
+  const colors = {
+    resolveTheme(bgHex, theme) {
+      if (!conflictMode) {
+        currentCandidateHex = "#111111";
+        return candidateLight;
+      }
+      currentCandidateHex = bgHex === sampleA ? "#222222" : "#DDDDDD";
+      return bgHex === sampleA ? candidateDarkA : candidateDarkB;
+    },
+    recheckContrast(bgWord) {
+      if (!conflictMode) return [100, 10];
+      const bgHex = unpk(bgWord);
+      if (currentCandidateHex === "#222222") {
+        return [bgHex === sampleA ? 100 : 0, 10];
+      } else {
+        return [bgHex === sampleB ? 100 : 0, 10];
+      }
+    },
+  };
+
+  const ctrl = adaptTheme(el, {
+    colors,
+    theme: "light",
+    background: () => samples,
+    target: el,
+    now: () => 1000,
+    win: {},
+  });
+
+  const beforeDom = new Map(el.props);
+  const beforeCurrent = ctrl.current();
+  assert.equal(beforeDom.get("--lab-label-primary"), "#111111");
+
+  // Activate conflict mode across two samples
+  samples = [sampleA, sampleB];
+  conflictMode = true;
+  el.mutations.length = 0;
+
+  let error = null;
+  try {
+    ctrl.setTheme("dark");
+  } catch (caught) {
+    error = caught;
+  }
+
+  assert.ok(error, "setTheme() on conflict must throw a typed conflict error");
+  assert.equal(error.name, "OutputConflictError");
+  assert.equal(error.code, "output_conflict");
+  assert.equal(el.mutations.length, 0, "failed setTheme() must perform zero DOM mutations");
+  assert.deepEqual(el.props, beforeDom, "failed setTheme() must leave physical DOM bytes unchanged");
+  assert.deepEqual(ctrl.current(), beforeCurrent, "failed setTheme() must leave controller current state unchanged");
+  ctrl.stop();
+});
+
+test("S3: init() with no previous state and conflict opens no ambient CSS fallback", () => {
+  const el = fakeElement();
+  const sampleA = "#FFFFFF";
+  const sampleB = "#000000";
+  const samples = [sampleA, sampleB];
+
+  const candidateA = oneRole("#111111", 100);
+  const candidateB = oneRole("#EEEEEE", 100);
+
+  let currentCandidateHex = null;
+  const colors = {
+    resolveTheme(bgHex) {
+      currentCandidateHex = bgHex === sampleA ? "#111111" : "#EEEEEE";
+      return bgHex === sampleA ? candidateA : candidateB;
+    },
+    recheckContrast(bgWord) {
+      const bgHex = unpk(bgWord);
+      if (currentCandidateHex === "#111111") {
+        return [bgHex === sampleA ? 100 : 0, 10];
+      } else {
+        return [bgHex === sampleB ? 100 : 0, 10];
+      }
+    },
+  };
+
+  let error = null;
+  try {
+    adaptTheme(el, {
+      colors,
+      theme: "light",
+      background: () => samples,
+      target: el,
+      now: () => 1000,
+      win: {},
+    });
+  } catch (caught) {
+    error = caught;
+  }
+
+  assert.ok(error, "init() with conflict must throw OutputConflictError");
+  assert.equal(error.name, "OutputConflictError");
+  assert.equal(error.code, "output_conflict");
+  assert.equal(el.mutations.length, 0, "init() with conflict must perform zero DOM mutations");
+  assert.equal(el.props.size, 0, "init() with conflict must not write any CSS variables (no ambient fallback)");
+});
