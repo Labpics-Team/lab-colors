@@ -236,6 +236,19 @@ jobs:
               python -c '\''import unittest; suite = unittest.defaultTestLoader.discover("proof/region/v1/tests", pattern="test_*.py"); count = suite.countTestCases(); minimum = 25; assert count >= minimum, f"region-proof anti-vacuum floor failed: {count} < {minimum}"; print(f"region-proof discovered tests: {count}")'\''
               python -m unittest discover -s proof/region/v1/tests -p "test_*.py" -v
               PYTHONOPTIMIZE=2 python -m unittest discover -s proof/region/v1/tests -p "test_*.py" -v
+              # Both fast gates carry their own expected inventory, and until
+              # now nothing ran them before a merge: `arb.yml` is privileged —
+              # sudo, Docker, a delegated cgroup — so it refuses a
+              # `pull_request` trigger by contract, and a wrong
+              # EXPECTED_TEST_INVENTORY_SHA256 went green on the pull request
+              # and broke `main` on push.  The discovery above cannot stand in
+              # for them: `tests/test_build.py` deliberately does not read the
+              # gate constants, and that independence is the point.  They need
+              # no build — the exact skip manifest is what makes them fast.
+              python proof/region/v1/arb/tests/gate.py
+              PYTHONOPTIMIZE=2 python proof/region/v1/arb/tests/gate.py
+              python proof/region/v1/mpfi/tests/gate.py
+              PYTHONOPTIMIZE=2 python proof/region/v1/mpfi/tests/gate.py
               python proof/region/v1/controller.py verify-fixtures --repo-root /workspace
             '
       - name: toolchain env (runner.temp)
