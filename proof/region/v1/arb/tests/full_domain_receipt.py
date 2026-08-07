@@ -43,6 +43,41 @@ FULL_DOMAIN_MEMORY_MAX_BYTES_V1 = 4 * 1024 * 1024 * 1024
 EVIDENCE_OUT_ENV_V1 = "LABCOLORS_FULL_DOMAIN_EVIDENCE_OUT"
 
 
+def seal_full_domain_receipt_v1() -> receipt.SourceBoundEvaluatorReceiptV1:
+    """One controller-observed BUILD to RUN over the exact full manifest.
+
+    Extracted so the dual-proof gate mints the same receipt this lane does
+    instead of restating the request: two copies of the build coordinates
+    would drift, and the drift would surface as an unrelated admission
+    failure hours into a native run.
+    """
+
+    source_lock = provenance.arb_source_lock_v1()
+    archive_names = (
+        "LABCOLORS_GMP_ARCHIVE",
+        "LABCOLORS_MPFR_ARCHIVE",
+        "LABCOLORS_FLINT_ARCHIVE",
+    )
+    safe = tuple(
+        provenance.admit_source_archive(lock, Path(os.environ[name]).read_bytes())
+        for lock, name in zip(source_lock.sources, archive_names, strict=True)
+    )
+    admitted = provenance.admit_arb_sources(source_lock, safe)
+    request = _request(
+        source_lock=source_lock,
+        admitted_sources=admitted,
+        job=corpus.full_domain_job_v1(_job()),
+        runtime_binding=_runtime_binding(
+            wall_timeout_ns=FULL_DOMAIN_WALL_TIMEOUT_NS_V1,
+            memory_max_bytes=FULL_DOMAIN_MEMORY_MAX_BYTES_V1,
+        ),
+    )
+    return receipt.SourceBoundArbControllerV1(
+        Path(os.environ["LABCOLORS_ARB_PIPELINE_DOCKER"]),
+        Path(os.environ["LABCOLORS_EXECUTOR_CGROUP_V1"]),
+    ).execute(request)
+
+
 @unittest.skipUnless(
     sys.platform == "linux"
     and os.environ.get("LABCOLORS_ARB_PIPELINE_DOCKER")
@@ -54,31 +89,8 @@ EVIDENCE_OUT_ENV_V1 = "LABCOLORS_FULL_DOMAIN_EVIDENCE_OUT"
 )
 class NativeSourceBoundFullDomainReceiptIntegrationTests(unittest.TestCase):
     def test_full_domain_build_run_seal_and_verification_evidence(self) -> None:
-        source_lock = provenance.arb_source_lock_v1()
-        archive_names = (
-            "LABCOLORS_GMP_ARCHIVE",
-            "LABCOLORS_MPFR_ARCHIVE",
-            "LABCOLORS_FLINT_ARCHIVE",
-        )
-        safe = tuple(
-            provenance.admit_source_archive(lock, Path(os.environ[name]).read_bytes())
-            for lock, name in zip(source_lock.sources, archive_names, strict=True)
-        )
-        admitted = provenance.admit_arb_sources(source_lock, safe)
         full_job = corpus.full_domain_job_v1(_job())
-        request = _request(
-            source_lock=source_lock,
-            admitted_sources=admitted,
-            job=full_job,
-            runtime_binding=_runtime_binding(
-                wall_timeout_ns=FULL_DOMAIN_WALL_TIMEOUT_NS_V1,
-                memory_max_bytes=FULL_DOMAIN_MEMORY_MAX_BYTES_V1,
-            ),
-        )
-        result = receipt.SourceBoundArbControllerV1(
-            Path(os.environ["LABCOLORS_ARB_PIPELINE_DOCKER"]),
-            Path(os.environ["LABCOLORS_EXECUTOR_CGROUP_V1"]),
-        ).execute(request)
+        result = seal_full_domain_receipt_v1()
 
         self.assertIs(type(result), receipt.SourceBoundEvaluatorReceiptV1, result)
         self.assertTrue(receipt.replay_evidence_is_well_bound_v1(result.evidence))
