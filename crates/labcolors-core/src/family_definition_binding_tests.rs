@@ -218,6 +218,7 @@ fn the_asked_definition_does_not_weaken_the_transport_contract() {
     let region = asked_region();
     let (certificate, mut encoded) = artifact_of(&region);
     encoded.flip_first_payload_bit_for_test();
+    let allocation = encoded.allocation_ptr_for_test();
 
     let failure =
         DefinitionBoundFamilyLoaderV1::load(asked_pipeline(), &region, certificate, encoded)
@@ -229,4 +230,10 @@ fn the_asked_definition_does_not_weaken_the_transport_contract() {
             FamilyArtifactLoadErrorV1::PayloadDigestMismatch,
         ),
     );
+    // The type's contract — a failure hands the same owned bytes back, so a
+    // caller never refetches or clones — was asserted only on the foreign
+    // definition branch.  This branch could have reallocated and nothing
+    // would have turned red.
+    let (_, returned) = failure.into_parts();
+    assert_eq!(returned.allocation_ptr_for_test(), allocation);
 }
