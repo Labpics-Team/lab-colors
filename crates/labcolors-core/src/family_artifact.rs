@@ -214,6 +214,18 @@ impl FamilyImageCertificateV2 {
         self
     }
 
+    /// Подменяет только адрес определения, оставляя остальной certificate как
+    /// был. Для guard-а определения этого достаточно: он обязан отказать до
+    /// любой проверки transport, поэтому когерентность receipt здесь не нужна.
+    #[cfg(test)]
+    pub(crate) const fn with_definition_digest_for_test(
+        mut self,
+        definition_digest: FamilyDefinitionDigestV2,
+    ) -> Self {
+        self.definition_digest = definition_digest;
+        self
+    }
+
     #[cfg(test)]
     pub(crate) fn semantic_mismatch_with_valid_receipt_for_test(mut self) -> Self {
         let mut bytes = *self.semantic_release.as_bytes();

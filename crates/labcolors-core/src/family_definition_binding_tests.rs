@@ -9,6 +9,7 @@ use crate::contextual_region::{
 use crate::contextual_region_tests::{
     ONE, POSITIVE_ZERO, TWO, context, pipeline, region_with_centers,
 };
+use crate::family::FamilyDefinitionDigestV2;
 use crate::family_artifact::{
     EncodedFamilyArtifactV2, FAMILY_ARTIFACT_PAYLOAD_DIGEST_CALLS, FamilyArtifactLoadErrorV1,
     FamilyArtifactLoaderV1, FamilyImageCertificateV2,
@@ -126,6 +127,60 @@ fn a_foreign_definition_is_refused_before_any_payload_work() {
     DefinitionBoundFamilyLoaderV1::load(asked_pipeline(), &asked, asked_certificate, asked_encoded)
         .unwrap();
     assert_eq!(FAMILY_ARTIFACT_PAYLOAD_DIGEST_CALLS.with(Cell::get), 1);
+}
+
+/// Адрес определения сравнивается целиком. Сравнение любой собственной части
+/// адреса допустило бы чужой образ, совпавший ровно на сравниваемой части, —
+/// поэтому расхождение в КАЖДОЙ из 32 позиций обязано отказывать по отдельности.
+///
+/// Transport здесь пустой: guard обязан отказать до parse envelope, поэтому
+/// байтов, которые можно было бы разобрать, для этого отказа не требуется.
+#[test]
+fn every_byte_of_the_definition_address_is_compared() {
+    let region = asked_region();
+    let (certificate, _) = artifact_of(&region);
+    let asked = ContextualRegionFamilyProviderV1::definition_digest(asked_pipeline(), &region);
+
+    for index in 0..32 {
+        let mut bytes = *asked.as_bytes();
+        bytes[index] ^= 1;
+        let certified = FamilyDefinitionDigestV2::from_digest(bytes);
+
+        let failure = DefinitionBoundFamilyLoaderV1::load(
+            asked_pipeline(),
+            &region,
+            certificate.with_definition_digest_for_test(certified),
+            EncodedFamilyArtifactV2::from_raw_bytes_for_test(Vec::new()),
+        )
+        .unwrap_err();
+
+        assert_eq!(
+            failure.cause(),
+            DefinitionBoundFamilyLoadErrorV1::ForeignDefinition { asked, certified },
+            "byte {index} of the definition address is not part of the comparison",
+        );
+    }
+}
+
+/// Отказ печатает только типизированную причину: owned transport не попадает
+/// в логи и отчёты вслед за неудачным admission.
+#[test]
+fn a_refused_binding_reports_only_its_typed_cause() {
+    let asked = asked_region();
+    let (certificate, encoded) = artifact_of(&other_region());
+
+    let failure =
+        DefinitionBoundFamilyLoaderV1::load(asked_pipeline(), &asked, certificate, encoded)
+            .unwrap_err();
+
+    assert_eq!(
+        format!("{failure:?}"),
+        format!(
+            "DefinitionBoundFamilyLoadFailureV1 {{ cause: {:?}, .. }}",
+            failure.cause(),
+        ),
+        "owning failures must not dump transport bytes",
+    );
 }
 
 #[test]

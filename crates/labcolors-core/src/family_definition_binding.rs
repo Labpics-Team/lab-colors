@@ -39,7 +39,6 @@ pub(crate) enum DefinitionBoundFamilyLoadErrorV1 {
 
 /// Неуспех возвращает те же owned bytes: диагностика, исправление или повтор
 /// не требуют refetch и clone.
-#[derive(PartialEq, Eq)]
 pub(crate) struct DefinitionBoundFamilyLoadFailureV1 {
     cause: DefinitionBoundFamilyLoadErrorV1,
     encoded: EncodedFamilyArtifactV2,
