@@ -933,6 +933,38 @@ def _operation_allowlist_preimage_v1(formula_spec: bytes) -> bytes:
 
 
 @dataclass(frozen=True)
+class ArbSourceBoundPreimagesV1:
+    """The comparator coordinates an admitted request already determines.
+
+    Every field here is a function of the source lock, the admitted upstream
+    closure and the pinned build sources, so this set is derivable before a
+    build exists.  Its field order is checked against the protocol rather than
+    trusted: a coordinate added to the manifest must either join this set or
+    be declared a build observation, never quietly leave the fold.
+    """
+
+    engine_release: bytes
+    upstream_source: bytes
+    arithmetic_input_set: bytes
+    wrapper_source: bytes
+    evaluator_source: bytes
+    operation_allowlist: bytes
+    legal_file_set: bytes
+    exclusions: bytes
+
+    def __post_init__(self) -> None:
+        if tuple(item.name for item in fields(self)) != (
+            protocol.source_bound_coordinates_v2()
+        ):
+            raise TypeError("source-bound comparator preimage schema drift")
+        values = tuple(getattr(self, item.name) for item in fields(self))
+        if any(type(value) is not bytes or not value for value in values):
+            raise TypeError("comparator preimages must be nonempty exact bytes")
+        if len(set(values)) != len(values):
+            raise TypeError("comparator preimages must be independently domain-separated")
+
+
+@dataclass(frozen=True)
 class ArbComparatorPreimagesV1:
     engine_release: bytes
     upstream_source: bytes
@@ -1371,44 +1403,19 @@ def _snapshot_pipeline_operation_v1(
     )
 
 
-def _derive_arb_comparator_for_build_v1(
+def _source_bound_preimages_v1(
     snapshot: _PipelineOperationSnapshotV1,
-    docker_capability: build_transport.DockerSupportedV1,
-    binary: bytes,
-    rebuild_sha256s: tuple[bytes, bytes],
-    build_processes: tuple[
-        build_transport.DockerBuildExitedV1,
-        build_transport.DockerBuildExitedV1,
-    ],
-) -> DiagnosticArbComparatorV1:
-    """Derive all ten coordinates without accepting a caller digest/resolver."""
+) -> ArbSourceBoundPreimagesV1:
+    """Derive the eight coordinates an admitted request already determines.
+
+    The build path and the pre-build check both consume this, so a comparator
+    identity predicted before Docker runs and the identity the manifest later
+    declares cannot disagree unless an input disagrees.
+    """
 
     if type(snapshot) is not _PipelineOperationSnapshotV1:
         raise TypeError("snapshot must be _PipelineOperationSnapshotV1")
     request = snapshot.request
-    if type(docker_capability) is not build_transport.DockerSupportedV1:
-        raise TypeError("docker_capability must be DockerSupportedV1")
-    if type(binary) is not bytes or not binary:
-        raise TypeError("binary must be exact nonempty bytes")
-    binary_sha256 = hashlib.sha256(binary).digest()
-    if (
-        type(build_processes) is not tuple
-        or len(build_processes) != 2
-        or any(
-            type(item) is not build_transport.DockerBuildExitedV1
-            for item in build_processes
-        )
-        or any(item.returncode != 0 for item in build_processes)
-        or rebuild_sha256s != (binary_sha256, binary_sha256)
-    ):
-        raise TypeError("comparator derivation requires two equal successful builds")
-    docker_capability_identity = build_transport.docker_capability_identity_v1(
-        docker_capability
-    )
-    pipeline_policy_identity = pipeline_policy_identity_v2(
-        request.host_trust,
-        docker_capability.policy,
-    )
     flint_lock = request.source_lock.sources[2]
     flint_source = request.admitted_sources.sources[2]
     if type(flint_lock.integrity) is not provenance.GitContentRelationPolicyV1:
@@ -1517,28 +1524,6 @@ def _derive_arb_comparator_for_build_v1(
         evaluator_files,
     )
 
-    process_bytes = tuple(
-        build_transport.build_process_bytes_v1(item) for item in build_processes
-    )
-    build_identity = _comparator_build_preimage_v2(
-        request.build_sources,
-        docker_capability_identity,
-        pipeline_policy_identity,
-        build_processes,
-        binary_sha256,
-        rebuild_sha256s,
-        len(binary),
-    )
-    test_observation = _comparator_preimage_v1(
-        b"labcolors.proof-region.arb-comparator.test-observation.v1\0",
-        (
-            b"kind:aggregate-outer-process-observation-no-per-test-records",
-            request.build_sources.contents(BUILD_RECIPE_PATH_V1),
-            len(build_processes).to_bytes(4, "big"),
-            *process_bytes,
-        ),
-    )
-
     legal_chunks: list[bytes] = [
         b"ordered admitted legal-file set; no legal-compliance claim",
         len(request.source_lock.sources).to_bytes(4, "big"),
@@ -1588,17 +1573,112 @@ def _derive_arb_comparator_for_build_v1(
             flint_source.source_lock_identity,
         ),
     )
-    preimages = ArbComparatorPreimagesV1(
+    return ArbSourceBoundPreimagesV1(
         engine_release,
         upstream_source,
         arithmetic_input_set,
         wrapper_source,
         evaluator_source,
-        build_identity,
         operation_allowlist,
-        test_observation,
         legal_file_set,
         exclusions,
+    )
+
+
+def expected_comparator_source_identity_v1(request: object) -> bytes:
+    """Answer the comparator's source identity from admitted inputs alone.
+
+    A coverage check can prove cheaply that a set of lanes carries exactly the
+    two distinct comparator source identities a dual proof requires, but not
+    that those identities belong to the engines this job will build.  Without
+    an answer available before the build, that binding costs both native runs
+    to discover.  This derivation reuses the build's own snapshot and its own
+    source-bound coordinates, so it decides the same question the manifest
+    decides later, with no build, Docker daemon or binary in reach.
+    """
+
+    snapshot = _snapshot_pipeline_operation_v1(request)
+    preimages = _source_bound_preimages_v1(snapshot)
+    return protocol.source_bound_identity_v2(
+        protocol.ComparatorKindV1.ARB,
+        tuple(
+            hashlib.sha256(getattr(preimages, item.name)).digest()
+            for item in fields(preimages)
+        ),
+    )
+
+
+def _derive_arb_comparator_for_build_v1(
+    snapshot: _PipelineOperationSnapshotV1,
+    docker_capability: build_transport.DockerSupportedV1,
+    binary: bytes,
+    rebuild_sha256s: tuple[bytes, bytes],
+    build_processes: tuple[
+        build_transport.DockerBuildExitedV1,
+        build_transport.DockerBuildExitedV1,
+    ],
+) -> DiagnosticArbComparatorV1:
+    """Derive all ten coordinates without accepting a caller digest/resolver."""
+
+    if type(snapshot) is not _PipelineOperationSnapshotV1:
+        raise TypeError("snapshot must be _PipelineOperationSnapshotV1")
+    request = snapshot.request
+    if type(docker_capability) is not build_transport.DockerSupportedV1:
+        raise TypeError("docker_capability must be DockerSupportedV1")
+    if type(binary) is not bytes or not binary:
+        raise TypeError("binary must be exact nonempty bytes")
+    binary_sha256 = hashlib.sha256(binary).digest()
+    if (
+        type(build_processes) is not tuple
+        or len(build_processes) != 2
+        or any(
+            type(item) is not build_transport.DockerBuildExitedV1
+            for item in build_processes
+        )
+        or any(item.returncode != 0 for item in build_processes)
+        or rebuild_sha256s != (binary_sha256, binary_sha256)
+    ):
+        raise TypeError("comparator derivation requires two equal successful builds")
+    docker_capability_identity = build_transport.docker_capability_identity_v1(
+        docker_capability
+    )
+    pipeline_policy_identity = pipeline_policy_identity_v2(
+        request.host_trust,
+        docker_capability.policy,
+    )
+    source_bound = _source_bound_preimages_v1(snapshot)
+    process_bytes = tuple(
+        build_transport.build_process_bytes_v1(item) for item in build_processes
+    )
+    build_identity = _comparator_build_preimage_v2(
+        request.build_sources,
+        docker_capability_identity,
+        pipeline_policy_identity,
+        build_processes,
+        binary_sha256,
+        rebuild_sha256s,
+        len(binary),
+    )
+    test_observation = _comparator_preimage_v1(
+        b"labcolors.proof-region.arb-comparator.test-observation.v1\0",
+        (
+            b"kind:aggregate-outer-process-observation-no-per-test-records",
+            request.build_sources.contents(BUILD_RECIPE_PATH_V1),
+            len(build_processes).to_bytes(4, "big"),
+            *process_bytes,
+        ),
+    )
+    observed = {
+        "build_identity": build_identity,
+        "test_observation": test_observation,
+    }
+    preimages = ArbComparatorPreimagesV1(
+        *(
+            observed[item.name]
+            if item.name in protocol.BUILD_OBSERVATION_COORDINATES_V2
+            else getattr(source_bound, item.name)
+            for item in fields(ArbComparatorPreimagesV1)
+        )
     )
     coordinates = tuple(
         hashlib.sha256(getattr(preimages, item.name)).digest()

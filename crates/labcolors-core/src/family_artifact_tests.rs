@@ -9,11 +9,11 @@ use crate::family::{
 };
 use crate::family_artifact::{
     AdmittedFamilyArtifactV2, EncodedFamilyArtifactV2, FAMILY_ARTIFACT_DECODER_CALLS,
-    FAMILY_ARTIFACT_PAYLOAD_DIGEST_CALLS, FamilyArtifactBindErrorV2, FamilyArtifactBundleV2,
-    FamilyArtifactContractErrorV2, FamilyArtifactLoadErrorV1, FamilyArtifactLoaderV1,
-    FamilyImageCertificateV2, FixtureEnvelopeFieldV1, FixtureFamilyArtifactCodecV1,
-    RAW_BITMAP24_PAYLOAD_LEN_V1, encode_fixture_family_artifact_v2,
-    encode_raw_bitmap24_family_artifact_v2_for_test,
+    FAMILY_ARTIFACT_PAYLOAD_DIGEST_CALLS, FAMILY_CERTIFICATE_RECORD_LEN_V2,
+    FamilyArtifactBindErrorV2, FamilyArtifactBundleV2, FamilyArtifactContractErrorV2,
+    FamilyArtifactLoadErrorV1, FamilyArtifactLoaderV1, FamilyImageCertificateV2,
+    FixtureEnvelopeFieldV1, FixtureFamilyArtifactCodecV1, RAW_BITMAP24_PAYLOAD_LEN_V1,
+    encode_fixture_family_artifact_v2, encode_raw_bitmap24_family_artifact_v2_for_test,
 };
 use crate::lcs_occurrence::ColorSignal;
 use crate::lcs_occurrence::OutputProfileId;
@@ -989,6 +989,163 @@ fn production_loader_rejects_unreleased_codec_and_returns_exact_transport() {
         FAMILY_ARTIFACT_PAYLOAD_DIGEST_CALLS.with(core::cell::Cell::get),
         0,
         "unsupported codecs must fail before O(payload) hashing",
+    );
+}
+
+// Слой lookup-only: потребитель держит доверенную запись сертификата из
+// одного канала и недоверенные байты артефакта из другого. Без публичного
+// разбора записи предъявить `expected` невозможно, и загрузчик недостижим.
+#[test]
+fn a_trusted_certificate_record_round_trips_and_admits_its_artifact() {
+    let members = signals(&[[0, 0, 0], [1, 0, 0], [255, 255, 255]]);
+    let (certificate, encoded) =
+        encode_raw_bitmap24_family_artifact_v2_for_test(definition(), &members).unwrap();
+
+    let bytes = encoded.clone().into_bytes();
+    let record = &bytes[..FAMILY_CERTIFICATE_RECORD_LEN_V2];
+
+    let trusted = FamilyImageCertificateV2::parse_trusted(record).unwrap();
+    assert_eq!(trusted, certificate);
+    // Запись несёт адрес определения: без него она говорит «артефакт цел»,
+    // но не «это образ того региона, который я спрашивал».
+    assert_eq!(trusted.definition_digest(), definition());
+    assert_eq!(trusted.member_count(), members.len() as u64);
+
+    // Запись доверенная, артефакт — нет: связывает их именно сравнение.
+    let admitted = FamilyArtifactLoaderV1::load(trusted, encoded).unwrap();
+    assert!(admitted.contains(ColorSignal::from_srgb8(Srgb8::new([1, 0, 0]))));
+    assert!(!admitted.contains(ColorSignal::from_srgb8(Srgb8::new([2, 0, 0]))));
+}
+
+#[test]
+fn a_trusted_certificate_record_is_validated_exactly_as_the_envelope_is() {
+    let members = signals(&[[0, 0, 1]]);
+    let (_, encoded) =
+        encode_raw_bitmap24_family_artifact_v2_for_test(definition(), &members).unwrap();
+    let bytes = encoded.into_bytes();
+    let record = &bytes[..FAMILY_CERTIFICATE_RECORD_LEN_V2];
+
+    assert_eq!(
+        FamilyImageCertificateV2::parse_trusted(&record[..record.len() - 1]).unwrap_err(),
+        FamilyArtifactLoadErrorV1::HeaderTooShort,
+    );
+    let mut extended = record.to_vec();
+    extended.push(0);
+    assert_eq!(
+        FamilyImageCertificateV2::parse_trusted(&extended).unwrap_err(),
+        FamilyArtifactLoadErrorV1::ExactLengthMismatch {
+            expected: FAMILY_CERTIFICATE_RECORD_LEN_V2,
+            actual: FAMILY_CERTIFICATE_RECORD_LEN_V2 + 1,
+        },
+    );
+
+    let mut foreign_magic = record.to_vec();
+    foreign_magic[0] ^= 1;
+    assert_eq!(
+        FamilyImageCertificateV2::parse_trusted(&foreign_magic).unwrap_err(),
+        FamilyArtifactLoadErrorV1::InvalidMagic,
+    );
+
+    // Каждый дискриминант обязан отвергаться тем же типизированным отказом,
+    // что и при разборе конверта: два валидатора разошлись бы.
+    for (offset, expected) in [
+        (8_usize, FamilyArtifactLoadErrorV1::UnsupportedEnvelope),
+        (10, FamilyArtifactLoadErrorV1::UnsupportedSignalDomain),
+        (11, FamilyArtifactLoadErrorV1::UnsupportedSignalOrdinal),
+        (12, FamilyArtifactLoadErrorV1::UnsupportedProofRelease),
+        (13, FamilyArtifactLoadErrorV1::UnsupportedVerifierRelease),
+    ] {
+        let mut drifted = record.to_vec();
+        drifted[offset] ^= 0x40;
+        assert_eq!(
+            FamilyImageCertificateV2::parse_trusted(&drifted).unwrap_err(),
+            expected,
+            "offset {offset}",
+        );
+    }
+}
+
+#[test]
+fn a_record_broken_in_its_own_channel_is_refused_at_the_door() {
+    // Раньше такая запись проходила разбор и падала позже как «чужой
+    // артефакт» — обвиняя payload в том, что сломана запись.
+    let (_, encoded) =
+        encode_raw_bitmap24_family_artifact_v2_for_test(definition(), &signals(&[[0, 0, 1]]))
+            .unwrap();
+    let bytes = encoded.into_bytes();
+    let record = &bytes[..FAMILY_CERTIFICATE_RECORD_LEN_V2];
+
+    // artifact_receipt — последние 32 байта записи; он покрывает все
+    // остальные поля, поэтому любая одиночная порча ловится именно им.
+    let mut corrupt = record.to_vec();
+    let last = corrupt.len() - 1;
+    corrupt[last] ^= 1;
+    assert_eq!(
+        FamilyImageCertificateV2::parse_trusted(&corrupt).unwrap_err(),
+        FamilyArtifactLoadErrorV1::ArtifactReceiptMismatch,
+    );
+
+    // Anti-vacuity: нетронутая запись проходит.
+    assert!(FamilyImageCertificateV2::parse_trusted(record).is_ok());
+}
+
+#[test]
+fn a_record_with_a_forged_semantic_release_is_refused_at_the_door() {
+    // Порча semantic_release с ПЕРЕСЧИТАННЫМ поверх неё receipt проходит
+    // receipt-чек и обязана упасть именно на пересчёте semantic release —
+    // без него подделка доехала бы до артефакта и назвалась бы чужим.
+    let members = signals(&[[0, 0, 1]]);
+    let (certificate, encoded) =
+        encode_raw_bitmap24_family_artifact_v2_for_test(definition(), &members).unwrap();
+
+    let forged = certificate.semantic_mismatch_with_valid_receipt_for_test();
+    let bytes = encoded.with_certificate_for_test(forged).into_bytes();
+    assert_eq!(
+        FamilyImageCertificateV2::parse_trusted(&bytes[..FAMILY_CERTIFICATE_RECORD_LEN_V2])
+            .unwrap_err(),
+        FamilyArtifactLoadErrorV1::SemanticReleaseMismatch,
+    );
+}
+
+#[test]
+fn a_record_refuses_in_the_same_order_the_envelope_does() {
+    // Слишком длинная запись с чужой магией обязана называть магию, как это
+    // делает конверт: иначе два пути объясняют одну и ту же порчу по-разному.
+    let (_, encoded) =
+        encode_raw_bitmap24_family_artifact_v2_for_test(definition(), &signals(&[[0, 0, 1]]))
+            .unwrap();
+    let bytes = encoded.into_bytes();
+    let mut hostile = bytes[..FAMILY_CERTIFICATE_RECORD_LEN_V2].to_vec();
+    hostile[0] ^= 1;
+    hostile.push(0);
+    assert_eq!(
+        FamilyImageCertificateV2::parse_trusted(&hostile).unwrap_err(),
+        FamilyArtifactLoadErrorV1::InvalidMagic,
+    );
+}
+
+#[test]
+fn a_trusted_record_of_one_artifact_never_admits_another() {
+    // Через доверенную запись, а не через тестовый конструктор: иначе тест
+    // проверял бы старый загрузчик и прошёл бы без этого среза целиком.
+    let (_, first) =
+        encode_raw_bitmap24_family_artifact_v2_for_test(definition(), &signals(&[[0, 0, 1]]))
+            .unwrap();
+    let first_bytes = first.into_bytes();
+    let first_certificate =
+        FamilyImageCertificateV2::parse_trusted(&first_bytes[..FAMILY_CERTIFICATE_RECORD_LEN_V2])
+            .unwrap();
+    let (_, second) =
+        encode_raw_bitmap24_family_artifact_v2_for_test(definition(), &signals(&[[0, 0, 2]]))
+            .unwrap();
+
+    // Anti-vacuity: обе стороны валидны по отдельности, связь ломает именно
+    // несовпадение записи с артефактом.
+    assert_eq!(
+        FamilyArtifactLoaderV1::load(first_certificate, second)
+            .unwrap_err()
+            .cause(),
+        FamilyArtifactLoadErrorV1::ForeignCertificate,
     );
 }
 

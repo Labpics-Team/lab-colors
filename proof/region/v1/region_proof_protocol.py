@@ -830,6 +830,42 @@ def source_bound_coordinates_v2() -> tuple[str, ...]:
     )
 
 
+def source_bound_identity_v2(
+    kind: ComparatorKindV1,
+    coordinates: tuple[bytes, ...],
+) -> bytes:
+    """Fold the source-bound half of one comparator manifest.
+
+    A built manifest folds coordinates it has just observed; a check that runs
+    before the build folds the same coordinates derived from admitted inputs.
+    Both answers have to be comparable, so the fold itself lives here once
+    instead of being restated at either end, where the two statements could
+    drift apart without a single test turning red.
+    """
+
+    if type(kind) is not ComparatorKindV1:
+        _fail(
+            "comparator-manifest-v2",
+            0,
+            ProtocolReasonV1.UNKNOWN_RELEASE,
+            "unknown comparator kind",
+        )
+    names = source_bound_coordinates_v2()
+    if type(coordinates) is not tuple or len(coordinates) != len(names):
+        _fail(
+            "comparator-manifest-v2",
+            0,
+            ProtocolReasonV1.INVALID_MANIFEST,
+            "source-bound coordinate arity",
+        )
+    for name, coordinate in zip(names, coordinates, strict=True):
+        _require_digest(coordinate, "comparator-manifest-v2", name)
+    return _identity(
+        COMPARATOR_SOURCE_ID_LABEL_V2,
+        bytes((int(kind),)) + b"".join(coordinates),
+    )
+
+
 @dataclass(frozen=True)
 class ComparatorManifestV2:
     kind: ComparatorKindV1
@@ -900,12 +936,9 @@ class ComparatorManifestV2:
         nothing about the environment it was built in.
         """
 
-        return _identity(
-            COMPARATOR_SOURCE_ID_LABEL_V2,
-            bytes((int(self.kind),))
-            + b"".join(
-                getattr(self, name) for name in source_bound_coordinates_v2()
-            ),
+        return source_bound_identity_v2(
+            self.kind,
+            tuple(getattr(self, name) for name in source_bound_coordinates_v2()),
         )
 
 
