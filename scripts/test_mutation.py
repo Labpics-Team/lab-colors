@@ -1827,7 +1827,7 @@ class MutationTruthTest(unittest.TestCase):
         ci_caller = (workflows / "ci.yml").read_text(encoding="utf-8")
         admitted_ci_worker = (
             "uses: Labpics-Team/lab-colors/.github/workflows/ci-worker.yml@"
-            "1a2b77081f374e917df6c4d59fd583451ee8811c"
+            "1461bc2ed60142aed3a8723e618b883be6418156"
         )
         self.assertEqual(ci_caller.count("ci-worker.yml@"), 1)
         self.assertIn(admitted_ci_worker, ci_caller)
@@ -1965,12 +1965,12 @@ class MutationTruthTest(unittest.TestCase):
         self.assertNotIn("легаси", workflow.casefold())
         self.assertIn(
             'path: "Labpics-Team/lab-colors/.github/workflows/ci-worker.yml@'
-            '1a2b77081f374e917df6c4d59fd583451ee8811c"',
+            '1461bc2ed60142aed3a8723e618b883be6418156"',
             workflow,
         )
         self.assertIn(
             'path: "Labpics-Team/lab-colors/.github/workflows/'
-            'native-conformance-worker.yml@1a2b77081f374e917df6c4d59fd583451ee8811c"',
+            'native-conformance-worker.yml@1461bc2ed60142aed3a8723e618b883be6418156"',
             workflow,
         )
         self.assertIn("const references = run.referenced_workflows;", workflow)
@@ -2108,7 +2108,7 @@ class MutationTruthTest(unittest.TestCase):
         )
         expected = (
             "uses: Labpics-Team/lab-colors/.github/workflows/publish-worker.yml@"
-            "1a2b77081f374e917df6c4d59fd583451ee8811c"
+            "1461bc2ed60142aed3a8723e618b883be6418156"
         )
         self.assertEqual(caller.count("publish-worker.yml@"), 1)
         self.assertIn(expected, caller)
