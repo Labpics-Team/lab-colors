@@ -159,7 +159,14 @@ def _mpfi_backend(
 
 
 class _SharedDerivationProbe(Exception):
-    """Distinct failure signal; the MPFI receipt never catches this type."""
+    """Distinct failure signal, recognised by its marker.
+
+    The pre-check path lets it propagate.  The build path does not: the MPFI
+    receipt's broad ``except Exception`` blocks convert it into a
+    ``REPLAY_BINDING_FAILED`` rejection, so the shared-derivation test tells
+    the probe apart by its marker landing verbatim in the rejection detail,
+    not by the exception escaping the controller.
+    """
 
 
 class MpfiStaticSourceIdentityTests(unittest.TestCase):
