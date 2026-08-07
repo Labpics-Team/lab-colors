@@ -7,8 +7,10 @@ the canonical lane plan — contiguous windows of a fixed lane width that
 cover [0, 2^24) exactly, with every seam landing on the packing alignment
 and on a shard boundary — and turns it into one `gh workflow run` invocation
 per lane of `full-domain-corpus.yml`.  Widths that cannot produce an exact
-aligned cover are typed rejections before any dispatch exists; `--dry-run`
-prints every dispatch command without touching the network.
+aligned cover are typed rejections before any dispatch exists.  Printing the
+commands is the default and dispatching is the opt-in `--execute`, which has
+to name the campaign's size: the incident this coordinator exists to prevent
+was a forgotten flag turning one mistake into 133 runs.
 """
 
 from __future__ import annotations
@@ -40,6 +42,9 @@ DEFAULT_LANE_WIDTH = 1 << 16
 DEFAULT_SHARD_WIDTH = corpus_lane.DEFAULT_SHARD_POINTS
 FULL_DOMAIN = protocol.OUTPUT_CARDINALITY_V1
 ALIGNMENT = corpus.CORPUS_SHARD_ALIGNMENT_V1
+# One listing of one run: generous for a slow network, far short of a wait an
+# operator would mistake for work in progress.
+OBSERVATION_TIMEOUT_SECONDS_V1 = 60
 
 
 def lane_plan_v1(
@@ -188,6 +193,116 @@ def verification_dispatch_commands_v1(
     )
 
 
+def gh_run_artifacts_v1(run_id: int) -> tuple[tuple[str, bool], ...]:
+    """Every artifact the run lists, as `(name, expired)` pairs.
+
+    The one impure boundary of this admission: it observes GitHub and reports
+    what it saw, without deciding anything.  Which of those artifacts count is
+    a rule, so it lives in `admit_evidence_artifact_v1` where a test can reach
+    it — filtering here would put the rule behind the network.
+    """
+
+    completed = subprocess.run(
+        (
+            "gh",
+            "api",
+            "--paginate",
+            f"repos/{{owner}}/{{repo}}/actions/runs/{run_id}/artifacts",
+            "--jq",
+            ".artifacts[] | [.name, (.expired // false)] | @tsv",
+        ),
+        capture_output=True,
+        text=True,
+        check=True,
+        # A hung observation is worse than a refused one: without a deadline
+        # the coordinator waits forever on the one call standing between an
+        # operator and 256 dispatches.  The timeout raises, and the admission
+        # turns every observation failure into a typed refusal.
+        timeout=OBSERVATION_TIMEOUT_SECONDS_V1,
+    )
+    return parse_artifact_listing_v1(completed.stdout)
+
+
+def parse_artifact_listing_v1(stdout: str) -> tuple[tuple[str, bool], ...]:
+    """Decode the artifact listing wire form into names and expiry.
+
+    Reading `expired` is a rule like any other, so it lives here rather than
+    behind the network where nothing can reach it.  A listing that does not
+    look like the two-column form it is asked for raises: an unrecognised
+    line silently read as "live" would admit exactly the stale evidence run
+    the admission exists to refuse.
+    """
+
+    observed: list[tuple[str, bool]] = []
+    for number, line in enumerate(stdout.splitlines(), 1):
+        if not line.strip():
+            # Blank separators carry no record; anything with content has to
+            # be exactly the requested shape.
+            continue
+        fields = line.split("\t")
+        if len(fields) != 2:
+            raise ValueError(f"artifact listing line {number} is not two columns")
+        name, expired = fields[0].strip(), fields[1].strip().lower()
+        if not name:
+            raise ValueError(f"artifact listing line {number} has no name")
+        if expired not in ("true", "false"):
+            raise ValueError(
+                f"artifact listing line {number} has no boolean expiry: {expired!r}"
+            )
+        observed.append((name, expired == "true"))
+    return tuple(observed)
+
+
+def admit_evidence_artifact_v1(
+    evidence_run_id: int,
+    evidence_artifact: str,
+    observer: object | None = None,
+) -> corpus.ShardCorpusRejectedV1 | None:
+    """Refuse a dispatch whose evidence run cannot carry what it names.
+
+    Every lane downloads `evidence_artifact` from `evidence_run_id`; a run
+    that does not exist, or carries no such artifact, turns one mistake into
+    256 doomed jobs.  A positive integer is not evidence that a run exists,
+    so the coordinator asks before it dispatches, and any failure to observe
+    is itself a refusal — never a crash and never a silent proceed.
+    """
+
+    # Resolved here, not captured as a default: a default binds the module
+    # attribute at definition time, which makes the injection point real for
+    # a caller but invisible to anything that replaces the observer — the
+    # seam would look injectable and not be.
+    if observer is None:
+        observer = gh_run_artifacts_v1
+    try:
+        observed = tuple(observer(evidence_run_id))  # type: ignore[operator]
+        # An expired artifact is still listed but can no longer be
+        # downloaded, so naming it would admit a stale evidence run and
+        # reproduce the very failure this admission exists to prevent.  The
+        # rule is applied here, not in the query, so a test can prove it.
+        names = tuple(name for name, expired in observed if not expired)
+    except Exception as error:
+        # The observation is a hostile boundary: an unreachable run, a
+        # missing token or a malformed reply must all land as one refusal.
+        # The cause travels with it — an operator has to tell "no such run"
+        # from "no token", and a bare refusal makes those look identical.
+        # CalledProcessError.__repr__ drops stderr, and stderr is where the
+        # only distinguishing text lives: "Not Found" against "no token"
+        # against a network failure. Without it the operator debugs the wrong
+        # axis, which is exactly what the refusal is supposed to prevent.
+        cause = getattr(error, "stderr", None) or repr(error)
+        return corpus._reject(
+            corpus.ShardCorpusReasonV1.FOREIGN_INPUT,
+            f"verification dispatch cannot observe run {evidence_run_id}:"
+            f" {str(cause).strip()}",
+        )
+    if evidence_artifact not in names:
+        return corpus._reject(
+            corpus.ShardCorpusReasonV1.FOREIGN_INPUT,
+            f"run {evidence_run_id} carries no artifact {evidence_artifact!r}",
+        )
+    return None
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -199,9 +314,24 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--shard-width", type=int, default=DEFAULT_SHARD_WIDTH)
     parser.add_argument("--evidence-run-id", type=int, default=None)
     parser.add_argument("--evidence-artifact", type=str, default=None)
-    parser.add_argument("--dry-run", action="store_true")
+    # Printing is the default and dispatching is the opt-in.  The incident
+    # that made this coordinator dangerous was a forgotten `--dry-run`: a
+    # polarity where the safe run is the one you have to remember turns one
+    # missing flag into hundreds of runs.  `--expect-lanes` makes the operator
+    # state the scale before it happens, so a mistyped width is refused
+    # instead of dispatched — swapping the two widths is a realistic slip and
+    # silently means tens of thousands of jobs.
+    parser.add_argument("--execute", action="store_true")
+    parser.add_argument("--expect-lanes", type=int, default=None)
     parser.add_argument("--out", type=Path, required=True)
     args = parser.parse_args(argv)
+    if args.execute and args.mode == "plan":
+        # A flag with live semantics must never be silently ignored: an
+        # operator who believes a campaign started is worse off than one who
+        # is told it did not.
+        print("plan mode cannot dispatch: drop --execute", file=sys.stderr)
+        return 64
+    dispatching = args.execute
 
     plan = lane_plan_v1(args.lane_width, args.shard_width)
     if type(plan) is not tuple:
@@ -244,13 +374,65 @@ def main(argv: list[str] | None = None) -> int:
         )
     else:
         commands = dispatch_commands_v1(plan, args.shard_width)
+    if type(commands) is not tuple:
+        # A rejected command set is a typed refusal, not an iterable: letting
+        # it reach the loop below turns the module's own contract into a
+        # TypeError at the boundary it is supposed to guard.
+        print(f"lane dispatch rejected: {commands!r}", file=sys.stderr)
+        return 64
+    if not dispatching:
+        for command in commands:
+            print(" ".join(command))
+        return 0
+    if args.expect_lanes is None:
+        # Its own refusal, not a comparison against `None`: the operator who
+        # forgot the flag has to read what is missing, not a mismatch.
+        print(
+            "dispatch refused: --execute requires --expect-lanes",
+            file=sys.stderr,
+        )
+        return 64
+    if args.expect_lanes != len(commands):
+        # The operator names the scale and reality has to agree.  A width
+        # typed one token wrong produces a different campaign, and this is
+        # the cheap moment to notice — before anything is observed or run.
+        print(
+            f"dispatch refused: --expect-lanes={args.expect_lanes} but the plan"
+            f" has {len(commands)} lanes",
+            file=sys.stderr,
+        )
+        return 64
+    if args.mode == "verification-dispatch":
+        # Fail closed before the first dispatch, and only here: the printing
+        # path stays offline by contract, and this observation costs an
+        # authenticated call that a mistyped width should never spend.
+        refusal = admit_evidence_artifact_v1(
+            args.evidence_run_id, args.evidence_artifact
+        )
+        if refusal is not None:
+            print(f"verification dispatch refused: {refusal.detail}", file=sys.stderr)
+            return 64
+    print(f"dispatching {len(commands)} lanes", file=sys.stderr)
+    launched = 0
     for command in commands:
-        rendered = " ".join(command)
-        if args.dry_run:
-            print(rendered)
-            continue
-        subprocess.run(command, check=True)
-        print(rendered)
+        try:
+            subprocess.run(command, check=True)
+        except (OSError, subprocess.CalledProcessError) as error:
+            # A campaign that dies mid-flight leaves runs already created, and
+            # every way it can die — a nonzero `gh`, a missing binary, an
+            # exhausted descriptor, a killed child — must leave the same
+            # resumable report: without the count a retry duplicates
+            # everything already dispatched.  The child's stderr is not
+            # captured on purpose — it belongs on the operator's terminal —
+            # so only the exit status is quotable.
+            print(
+                f"dispatch stopped after {launched} of {len(commands)} lanes:"
+                f" {str(error).strip()}",
+                file=sys.stderr,
+            )
+            return 64
+        launched += 1
+        print(" ".join(command))
     return 0
 
 
