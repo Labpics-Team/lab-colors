@@ -94,6 +94,27 @@ jobs:
                  "${WINDOW_POINTS}-point window covers the domain in ${lanes} lanes" >&2
             exit 64
           fi
+          # The run-name renders these coordinates, and the collector binds a
+          # run to its plan window by reading that name back.  So a start the
+          # name cannot render canonically is a lane whose hour of replay can
+          # never be claimed: 254 lanes were dispatched with a carriage return
+          # inside this value and were only discovered by counting the cover.
+          # `case` compares the raw bytes, where `[ -eq ]` and `int()` would
+          # both quietly accept the surrounding whitespace.
+          case "${WINDOW_START}" in
+            ''|*[!0-9]*) echo "window_start must be a canonical decimal" >&2; exit 64;;
+            0) ;;
+            0*) echo "window_start must not carry leading zeros" >&2; exit 64;;
+          esac
+          if [ "${WINDOW_START}" -ge "${domain}" ]; then
+            echo "window_start ${WINDOW_START} is outside the sRGB8 domain" >&2
+            exit 64
+          fi
+          if [ $(( WINDOW_START % WINDOW_POINTS )) -ne 0 ]; then
+            echo "window_start ${WINDOW_START} is not a seam of a" \
+                 "${WINDOW_POINTS}-point cover" >&2
+            exit 64
+          fi
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

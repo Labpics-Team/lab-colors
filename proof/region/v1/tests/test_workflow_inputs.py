@@ -282,7 +282,12 @@ class LaneCampaignContractTests(unittest.TestCase):
             for line in self.text[body:end].splitlines()
         )
 
-    def _run_guard_v1(self, window_points: str, expect_lanes: str) -> int:
+    def _run_guard_v1(
+        self,
+        window_points: str,
+        expect_lanes: str,
+        window_start: str = "0",
+    ) -> int:
         bash = shutil.which("bash")
         if bash is None:
             self.skipTest("the lane guard is shell and needs a shell to run")
@@ -294,9 +299,64 @@ class LaneCampaignContractTests(unittest.TestCase):
                 **os.environ,
                 "WINDOW_POINTS": window_points,
                 "EXPECT_LANES": expect_lanes,
+                "WINDOW_START": window_start,
             },
         )
         return completed.returncode
+
+    def test_the_guard_admits_every_seam_of_the_cover(self) -> None:
+        # The whole plan has to survive its own guard, seam by seam.
+        for width in (1 << 16, 1 << 23):
+            lanes = corpus_dispatch.FULL_DOMAIN // width
+            for start in range(0, corpus_dispatch.FULL_DOMAIN, width):
+                self.assertEqual(
+                    self._run_guard_v1(str(width), str(lanes), str(start)),
+                    0,
+                    (width, start),
+                )
+
+    def test_the_guard_refuses_a_start_that_is_not_a_canonical_decimal(
+        self,
+    ) -> None:
+        # The defect that actually happened: a coordinate generated on
+        # Windows carried a carriage return, GitHub accepted the string, and
+        # the run-name rendered a title the collector cannot bind — 254 lanes
+        # whose replay could never be claimed.  Neither `[ -eq ]` nor
+        # `int()` would have objected: both accept surrounding whitespace.
+        for start in (
+            "65536\r",
+            "65536\n",
+            " 65536",
+            "65536 ",
+            "+65536",
+            "-65536",
+            "0x10000",
+            "065536",
+            "6553 6",
+            "",
+        ):
+            self.assertEqual(
+                self._run_guard_v1("65536", "256", start), 64, repr(start)
+            )
+
+        # A leading zero is not cosmetic here: `$(( ))` reads it as octal, so
+        # `0200000` becomes 65536 and sails through both the seam and the
+        # domain check as a perfectly ordinary window — while the run-name
+        # renders a title no plan window claims.  Every other rejected
+        # spelling above is also caught downstream, so deleting the
+        # leading-zero rule left this test green until this case existed.
+        self.assertEqual(self._run_guard_v1("65536", "256", "0200000"), 64)
+
+    def test_the_guard_refuses_a_start_off_the_seam_or_off_the_domain(
+        self,
+    ) -> None:
+        # A start inside a window belongs to no plan, and one past the end
+        # belongs to no domain; both would replay something the cover never
+        # asked for.
+        for start in ("1", "65535", "65537", "16777216", "16842752"):
+            self.assertEqual(
+                self._run_guard_v1("65536", "256", start), 64, start
+            )
 
     def test_the_guard_admits_exactly_the_coherent_campaigns(self) -> None:
         # Every width the plan admits, paired with the count that width
