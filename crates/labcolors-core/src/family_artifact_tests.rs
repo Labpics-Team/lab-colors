@@ -1090,6 +1090,24 @@ fn a_record_broken_in_its_own_channel_is_refused_at_the_door() {
 }
 
 #[test]
+fn a_record_with_a_forged_semantic_release_is_refused_at_the_door() {
+    // Порча semantic_release с ПЕРЕСЧИТАННЫМ поверх неё receipt проходит
+    // receipt-чек и обязана упасть именно на пересчёте semantic release —
+    // без него подделка доехала бы до артефакта и назвалась бы чужим.
+    let members = signals(&[[0, 0, 1]]);
+    let (certificate, encoded) =
+        encode_raw_bitmap24_family_artifact_v2_for_test(definition(), &members).unwrap();
+
+    let forged = certificate.semantic_mismatch_with_valid_receipt_for_test();
+    let bytes = encoded.with_certificate_for_test(forged).into_bytes();
+    assert_eq!(
+        FamilyImageCertificateV2::parse_trusted(&bytes[..FAMILY_CERTIFICATE_RECORD_LEN_V2])
+            .unwrap_err(),
+        FamilyArtifactLoadErrorV1::SemanticReleaseMismatch,
+    );
+}
+
+#[test]
 fn a_record_refuses_in_the_same_order_the_envelope_does() {
     // Слишком длинная запись с чужой магией обязана называть магию, как это
     // делает конверт: иначе два пути объясняют одну и ту же порчу по-разному.
