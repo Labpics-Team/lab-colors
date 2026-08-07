@@ -165,7 +165,7 @@ class VerificationDispatchCommandTests(unittest.TestCase):
 
 
 class VerificationDispatchCliTests(unittest.TestCase):
-    def test_dry_run_prints_one_command_per_lane(self) -> None:
+    def test_the_default_prints_one_command_per_lane(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             stdout = io.StringIO()
             with redirect_stdout(stdout):
@@ -179,7 +179,6 @@ class VerificationDispatchCliTests(unittest.TestCase):
                         "31000000001",
                         "--evidence-artifact",
                         ARB_ARTIFACT,
-                        "--dry-run",
                         "--out",
                         str(Path(tmp) / "out"),
                     ]
@@ -200,7 +199,6 @@ class VerificationDispatchCliTests(unittest.TestCase):
                     "verification-dispatch",
                     "--evidence-artifact",
                     ARB_ARTIFACT,
-                    "--dry-run",
                     "--out",
                     str(Path(tmp) / "out"),
                 ]
@@ -215,7 +213,6 @@ class VerificationDispatchCliTests(unittest.TestCase):
                     "verification-dispatch",
                     "--evidence-run-id",
                     "31000000001",
-                    "--dry-run",
                     "--out",
                     str(Path(tmp) / "out"),
                 ]
@@ -562,7 +559,7 @@ class VerificationDispatchContentAdmissionCliTests(unittest.TestCase):
             if path != "job.bin"
         )
         with tempfile.TemporaryDirectory() as tmp:
-            with mock.patch.object(
+            with self._admitted_run_patches(), mock.patch.object(
                 corpus_dispatch,
                 "gh_evidence_artifact_paths_v1",
                 lambda *_: observed,
@@ -575,6 +572,9 @@ class VerificationDispatchContentAdmissionCliTests(unittest.TestCase):
                         "31000000001",
                         "--evidence-artifact",
                         ARB_ARTIFACT,
+                        "--execute",
+                        "--expect-lanes",
+                        "256",
                         "--out",
                         str(Path(tmp) / "out"),
                     ]
@@ -618,6 +618,39 @@ class VerificationDispatchContentAdmissionCliTests(unittest.TestCase):
         # already refused must not cost a download.
         self.assertEqual(asked, [])
 
+    def _admitted_run_patches(self) -> object:
+        """The two cheaper observations, already admitted.
+
+        These tests are about the content admission, so the origin and the
+        listing answer yes and the download stays the variable under test.
+        """
+
+        import contextlib as _ctx
+
+        @_ctx.contextmanager
+        def both():
+            with mock.patch.object(
+                corpus_dispatch,
+                "gh_run_provenance_v1",
+                lambda run_id: corpus_dispatch.RunProvenanceV1(
+                    corpus_dispatch.EVIDENCE_WORKFLOW_PATH_V1,
+                    corpus_dispatch.EVIDENCE_RUN_EVENT_V1,
+                    corpus_dispatch.EVIDENCE_RUN_STATUS_V1,
+                    corpus_dispatch.EVIDENCE_RUN_CONCLUSION_V1,
+                    "a" * corpus_dispatch.COMMIT_SHA_LENGTH_V1,
+                ),
+            ), mock.patch.object(
+                corpus_dispatch,
+                "gh_run_artifacts_v1",
+                lambda run_id: (
+                    (corpus_dispatch.EVIDENCE_ARTIFACTS_V1[0], False),
+                    (corpus_dispatch.EVIDENCE_ARTIFACTS_V1[1], False),
+                ),
+            ):
+                yield
+
+        return both()
+
     def test_all_256_lanes_dispatch_after_one_admitted_download(self) -> None:
         calls: list[tuple[object, ...]] = []
 
@@ -626,7 +659,7 @@ class VerificationDispatchContentAdmissionCliTests(unittest.TestCase):
             return corpus_dispatch.EVIDENCE_LANE_INPUTS_V1
 
         with tempfile.TemporaryDirectory() as tmp:
-            with mock.patch.object(
+            with self._admitted_run_patches(), mock.patch.object(
                 corpus_dispatch, "gh_evidence_artifact_paths_v1", observer
             ):
                 exit_code, dispatched = self._dispatch(
@@ -637,6 +670,9 @@ class VerificationDispatchContentAdmissionCliTests(unittest.TestCase):
                         "31000000001",
                         "--evidence-artifact",
                         MPFI_ARTIFACT,
+                        "--execute",
+                        "--expect-lanes",
+                        "256",
                         "--out",
                         str(Path(tmp) / "out"),
                     ]
@@ -645,9 +681,11 @@ class VerificationDispatchContentAdmissionCliTests(unittest.TestCase):
         self.assertEqual(len(dispatched), 256)
         self.assertEqual(calls, [(31000000001, MPFI_ARTIFACT)])
 
-    def test_a_dry_run_stays_offline(self) -> None:
+    def test_printing_stays_offline(self) -> None:
+        # Printing is the default, and it must not even download: the
+        # observation belongs to the live path only.
         def observer(run_id, artifact):
-            raise AssertionError("a dry run downloaded the evidence")
+            raise AssertionError("the printing path downloaded the evidence")
 
         with tempfile.TemporaryDirectory() as tmp:
             with mock.patch.object(
@@ -663,7 +701,6 @@ class VerificationDispatchContentAdmissionCliTests(unittest.TestCase):
                         "31000000001",
                         "--evidence-artifact",
                         ARB_ARTIFACT,
-                        "--dry-run",
                         "--out",
                         str(Path(tmp) / "out"),
                     ]

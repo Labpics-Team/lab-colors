@@ -1830,6 +1830,67 @@ class SameObjectAndObserverProtocolTests(unittest.TestCase):
                 parent.chmod(0o755)
             self.assertEqual(procs.read_bytes(), str(os.getpid()).encode("ascii"))
 
+    def test_task_cgroup_placement_writes_this_pid_into_the_named_group(self) -> None:
+        # A controller that observed one execution stays in that observer,
+        # whose subtree admits two tasks.  Returning to the unconstrained
+        # group is what lets the same process observe a second engine: without
+        # it the next BUILD forks into a full subtree.
+        with tempfile.TemporaryDirectory() as temporary:
+            group = Path(temporary).resolve() / "tasks"
+            group.mkdir(parents=True)
+            procs = group / "cgroup.procs"
+            procs.write_bytes(b"")
+            # The placement's own post-condition reads the real cgroup of this
+            # process, which no fixture can move it into.
+            with mock.patch.object(
+                executor, "_current_unified_cgroup_v1", return_value=group
+            ):
+                executor.enter_task_cgroup_v1(group)
+            self.assertEqual(procs.read_bytes(), str(os.getpid()).encode("ascii"))
+
+    def test_task_cgroup_placement_refuses_when_it_did_not_land(self) -> None:
+        # The write can succeed while the process ends up elsewhere; without
+        # this check a misconfigured path silently moves where the next BUILD
+        # runs, and nothing downstream looks at that.
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            group = root / "tasks"
+            group.mkdir(parents=True)
+            (group / "cgroup.procs").write_bytes(b"")
+            elsewhere = root / "elsewhere"
+            elsewhere.mkdir()
+            with mock.patch.object(
+                executor, "_current_unified_cgroup_v1", return_value=elsewhere
+            ):
+                with self.assertRaises(OSError):
+                    executor.enter_task_cgroup_v1(group)
+
+    def test_task_cgroup_placement_rejects_invalid_group_values(self) -> None:
+        for invalid in (
+            object(),
+            Path("relative"),
+            Path("/absolute\0"),
+            Path("/absolute\ud800"),
+            "/absolute",
+        ):
+            with self.subTest(invalid=invalid):
+                with self.assertRaises(TypeError):
+                    executor.enter_task_cgroup_v1(invalid)  # type: ignore[arg-type]
+
+    def test_task_cgroup_placement_refuses_a_symlinked_procs_file(self) -> None:
+        # Same law as the observer placement: a pathname would follow the
+        # link before this controller could prove which group it entered.
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            group = root / "tasks"
+            group.mkdir(parents=True)
+            elsewhere = root / "elsewhere"
+            elsewhere.write_bytes(b"")
+            (group / "cgroup.procs").symlink_to(elsewhere)
+            with self.assertRaises(OSError):
+                executor.enter_task_cgroup_v1(group)
+            self.assertEqual(elsewhere.read_bytes(), b"")
+
     def test_observer_cgroup_placement_rejects_invalid_parent_values(self) -> None:
         for invalid in (
             object(),
