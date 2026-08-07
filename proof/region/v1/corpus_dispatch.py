@@ -647,11 +647,31 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.mode == "collect":
-        if args.evidence_run_id is None:
-            print("lane run collection requires --evidence-run-id", file=sys.stderr)
+        # Every one of these coordinates is spent on a network query, so all
+        # three are judged before it is made.  A query fired with a foreign
+        # coordinate comes back as a refusal about `verification-lanes.yml` or
+        # as an empty listing — the first blames the workflow for the
+        # operator's typo, the second reports a 256-window hole in a campaign
+        # that may be intact.  Each refusal names the argument at fault,
+        # because the exit code cannot: it is 64 for all of them.
+        if args.evidence_run_id is None or args.evidence_run_id <= 0:
+            print(
+                "lane run collection requires a positive --evidence-run-id",
+                file=sys.stderr,
+            )
             return 64
-        if args.evidence_artifact is None:
-            print("lane run collection requires --evidence-artifact", file=sys.stderr)
+        if args.evidence_artifact not in EVIDENCE_ARTIFACTS_V1:
+            print(
+                "lane run collection requires --evidence-artifact from "
+                + ", ".join(EVIDENCE_ARTIFACTS_V1),
+                file=sys.stderr,
+            )
+            return 64
+        if args.run_limit <= 0:
+            print(
+                "lane run collection requires a positive --run-limit",
+                file=sys.stderr,
+            )
             return 64
         collection = collect_lane_runs_v1(
             plan,
@@ -706,6 +726,11 @@ def main(argv: list[str] | None = None) -> int:
         )
     else:
         commands = dispatch_commands_v1(plan, args.shard_width)
+    if type(commands) is not tuple:
+        # The builder already decided; walking its rejection as if it were the
+        # command list turned that decision into a TypeError traceback.
+        print(f"dispatch rejected: {commands.detail}", file=sys.stderr)
+        return 64
     for command in commands:
         rendered = " ".join(command)
         if args.dry_run:

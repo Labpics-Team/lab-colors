@@ -12,11 +12,13 @@ the dispatch commands without touching the network.
 
 from __future__ import annotations
 
+import io
 import json
 import subprocess
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stderr
 from pathlib import Path
 
 PROOF = Path(__file__).resolve().parents[1]
@@ -718,23 +720,130 @@ class CollectCliTests(unittest.TestCase):
             self.assertEqual(status, 64)
             self.assertEqual(list(Path(out).iterdir()), [])
 
-    def test_collect_requires_both_evidence_coordinates(self) -> None:
-        with tempfile.TemporaryDirectory() as out:
-            incomplete = (
-                ["--mode", "collect", "--evidence-artifact", ARB_ARTIFACT,
-                 "--out", out],
-                ["--mode", "collect", "--evidence-run-id", str(EVIDENCE_RUN),
-                 "--out", out],
-            )
-            for argv in incomplete:
-                self.assertEqual(
-                    self._with_observer(
-                        lambda limit: self.fail("collect must not observe"), argv
-                    ),
-                    64,
-                    argv,
+    def _refuse(self, argv: list[str]) -> tuple[int, str, list[int]]:
+        """Run the CLI, recording every query the arguments would have fired.
+
+        The observer answers with an empty listing rather than raising: a
+        raising observer is swallowed into a typed refusal that also exits 64,
+        so it would make "the query never happened" untestable.  Here an
+        argument that reaches the query produces the *cover* refusal — same
+        exit code, different text — which is exactly why these tests read the
+        text and the recorded queries, never the exit code alone.
+        """
+
+        observed: list[int] = []
+
+        def observer(limit: int) -> tuple[object, ...]:
+            observed.append(limit)
+            return ()
+
+        stderr = io.StringIO()
+        with redirect_stderr(stderr):
+            status = self._with_observer(observer, argv)
+        return status, stderr.getvalue(), observed
+
+    def _assert_names_only(self, stderr: str, argument: str, context: object) -> None:
+        """The refusal names the argument at fault and no other."""
+
+        self.assertIn(argument, stderr, context)
+        for other in ("--evidence-run-id", "--evidence-artifact", "--run-limit"):
+            if other != argument:
+                self.assertNotIn(other, stderr, context)
+
+    def test_a_foreign_evidence_run_id_is_named_and_never_queried(self) -> None:
+        # Every neighbouring refusal also exits 64, so the exit code cannot
+        # tell an operator which argument to fix; the text has to.  And the
+        # query must not happen at all: fired with a foreign coordinate it can
+        # only come back as a refusal that blames `verification-lanes.yml`.
+        for value in (None, "0", "-1"):
+            argv = ["--mode", "collect", "--evidence-artifact", ARB_ARTIFACT]
+            if value is not None:
+                argv += ["--evidence-run-id", value]
+            with tempfile.TemporaryDirectory() as out:
+                status, stderr, observed = self._refuse(argv + ["--out", out])
+                self.assertEqual(status, 64, value)
+                self._assert_names_only(stderr, "--evidence-run-id", value)
+                self.assertEqual(observed, [], value)
+                self.assertEqual(list(Path(out).iterdir()), [], value)
+
+    def test_a_foreign_evidence_artifact_is_named_and_never_queried(self) -> None:
+        for value in (
+            None,
+            "",
+            "verification-evidence",
+            "verification-evidence-flint",
+            "verification-evidence-arb/",
+        ):
+            argv = ["--mode", "collect", "--evidence-run-id", str(EVIDENCE_RUN)]
+            if value is not None:
+                argv += ["--evidence-artifact", value]
+            with tempfile.TemporaryDirectory() as out:
+                status, stderr, observed = self._refuse(argv + ["--out", out])
+                self.assertEqual(status, 64, value)
+                self._assert_names_only(stderr, "--evidence-artifact", value)
+                # The operator learns the admissible set from the refusal, and
+                # it is the module's allowlist rather than a second copy.
+                for artifact in corpus_dispatch.EVIDENCE_ARTIFACTS_V1:
+                    self.assertIn(artifact, stderr, value)
+                self.assertEqual(observed, [], value)
+                self.assertEqual(list(Path(out).iterdir()), [], value)
+
+    def test_a_nonpositive_run_limit_is_named_and_never_queried(self) -> None:
+        # `gh run list --limit 0` is not a query anyone can act on, and a
+        # negative limit reaches the network verbatim.
+        for value in ("0", "-5"):
+            with tempfile.TemporaryDirectory() as out:
+                status, stderr, observed = self._refuse(
+                    [
+                        "--mode",
+                        "collect",
+                        "--evidence-run-id",
+                        str(EVIDENCE_RUN),
+                        "--evidence-artifact",
+                        ARB_ARTIFACT,
+                        "--run-limit",
+                        value,
+                        "--out",
+                        out,
+                    ]
                 )
-            self.assertEqual(list(Path(out).iterdir()), [])
+                self.assertEqual(status, 64, value)
+                self._assert_names_only(stderr, "--run-limit", value)
+                self.assertEqual(observed, [], value)
+                self.assertEqual(list(Path(out).iterdir()), [], value)
+
+    def test_the_admissible_arguments_reach_the_query_unchanged(self) -> None:
+        # The guard above must refuse foreign arguments, not narrow the
+        # admissible ones: every allowlisted artifact and a positive limit
+        # still reach the observer exactly as given.
+        plan = corpus_dispatch.lane_plan_v1()
+        for artifact in corpus_dispatch.EVIDENCE_ARTIFACTS_V1:
+            observed: list[int] = []
+
+            def observer(limit: int) -> tuple[object, ...]:
+                observed.append(limit)
+                return tuple(cover(plan, artifact=artifact))
+
+            with tempfile.TemporaryDirectory() as out:
+                status = self._with_observer(
+                    observer,
+                    [
+                        "--mode",
+                        "collect",
+                        "--evidence-run-id",
+                        str(EVIDENCE_RUN),
+                        "--evidence-artifact",
+                        artifact,
+                        "--run-limit",
+                        "1",
+                        "--out",
+                        out,
+                    ],
+                )
+                self.assertEqual(status, 0, artifact)
+                self.assertEqual(observed, [1], artifact)
+                decoded = json.loads((Path(out) / "lane-runs.json").read_text())
+                self.assertEqual(decoded["evidence_artifact"], artifact)
 
 
 if __name__ == "__main__":
