@@ -871,7 +871,7 @@ test("publish accepts only canonical exact-SHA workflow runs and their immutable
   assert.match(publish, /file: "ci\.yml"[\s\S]*path: "\.github\/workflows\/ci\.yml"/);
   assert.match(
     publish,
-    /ci-worker\.yml@1a2b77081f374e917df6c4d59fd583451ee8811c"[\s\S]*sha: "1a2b77081f374e917df6c4d59fd583451ee8811c"/,
+    /ci-worker\.yml@1461bc2ed60142aed3a8723e618b883be6418156"[\s\S]*sha: "1461bc2ed60142aed3a8723e618b883be6418156"/,
   );
   assert.match(
     publish,
@@ -1153,8 +1153,8 @@ test("canonical-run guard executes against workflow-scoped runs and jobs", () =>
         conclusion: "success",
         referenced_workflows: [
           {
-            path: "Labpics-Team/lab-colors/.github/workflows/ci-worker.yml@1a2b77081f374e917df6c4d59fd583451ee8811c",
-            sha: "1a2b77081f374e917df6c4d59fd583451ee8811c",
+            path: "Labpics-Team/lab-colors/.github/workflows/ci-worker.yml@1461bc2ed60142aed3a8723e618b883be6418156",
+            sha: "1461bc2ed60142aed3a8723e618b883be6418156",
           },
         ],
       },
@@ -1171,8 +1171,8 @@ test("canonical-run guard executes against workflow-scoped runs and jobs", () =>
         conclusion: "success",
         referenced_workflows: [
           {
-            path: "Labpics-Team/lab-colors/.github/workflows/native-conformance-worker.yml@1a2b77081f374e917df6c4d59fd583451ee8811c",
-            sha: "1a2b77081f374e917df6c4d59fd583451ee8811c",
+            path: "Labpics-Team/lab-colors/.github/workflows/native-conformance-worker.yml@1461bc2ed60142aed3a8723e618b883be6418156",
+            sha: "1461bc2ed60142aed3a8723e618b883be6418156",
           },
         ],
       },

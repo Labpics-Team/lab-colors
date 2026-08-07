@@ -30,4 +30,4 @@ jobs:
     name: Native conformance (Swift)
     permissions:
       contents: read
-    uses: Labpics-Team/lab-colors/.github/workflows/native-conformance-worker.yml@1a2b77081f374e917df6c4d59fd583451ee8811c
+    uses: Labpics-Team/lab-colors/.github/workflows/native-conformance-worker.yml@1461bc2ed60142aed3a8723e618b883be6418156
