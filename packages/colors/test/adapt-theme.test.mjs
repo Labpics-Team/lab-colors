@@ -4534,6 +4534,10 @@ test("S1: init() on exhausted worst-chase conflict does not commit lastCandidate
   assert.ok(error, "exhausted worst-chase must throw a typed conflict error on init()");
   assert.equal(error.name, "OutputConflictError");
   assert.equal(error.code, "output_conflict");
+  assert.ok(
+    error.conflicts.some((conflict) => conflict.role === "label-primary"),
+    "conflict diagnostics must name the breached role",
+  );
   assert.equal(el.mutations.length, 0, "init() on conflict must perform zero DOM mutations");
   assert.equal(el.props.size, 0, "init() on conflict must write zero CSS variables");
 });
@@ -4584,7 +4588,8 @@ test("S2: setTheme() on exhausted worst-chase conflict leaves previous verified 
   const beforeCurrent = ctrl.current();
   assert.equal(beforeDom.get("--lab-label-primary"), "#111111");
 
-  // Activate conflict mode across two samples
+  // Two incompatible samples force the bounded worst-chase to exhaust its cap;
+  // the previously verified snapshot must remain the committed state.
   samples = [sampleA, sampleB];
   conflictMode = true;
   el.mutations.length = 0;
@@ -4607,6 +4612,8 @@ test("S2: setTheme() on exhausted worst-chase conflict leaves previous verified 
 
 test("S3: init() with no previous state and conflict opens no ambient CSS fallback", () => {
   const el = fakeElement();
+  el.props.set("--lab-user-owned", "#ABCDEF");
+  const beforeProps = new Map(el.props);
   const sampleA = "#FFFFFF";
   const sampleB = "#000000";
   const samples = [sampleA, sampleB];
@@ -4648,5 +4655,9 @@ test("S3: init() with no previous state and conflict opens no ambient CSS fallba
   assert.equal(error.name, "OutputConflictError");
   assert.equal(error.code, "output_conflict");
   assert.equal(el.mutations.length, 0, "init() with conflict must perform zero DOM mutations");
-  assert.equal(el.props.size, 0, "init() with conflict must not write any CSS variables (no ambient fallback)");
+  assert.deepEqual(
+    el.props,
+    beforeProps,
+    "conflict must leave the pre-existing ambient CSS untouched and publish nothing of its own",
+  );
 });
