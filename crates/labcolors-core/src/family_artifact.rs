@@ -288,12 +288,15 @@ impl FamilyImageCertificateV2 {
     /// Когерентность здесь обязательна, а не удобна: guard определения обязан
     /// отказывать входу, который `parse_trusted` принимает. Некогерентный
     /// certificate доказывал бы отказ на недостижимом значении.
+    /// Восстанавливает когерентность после правки поля преимиджа.
+    ///
+    /// Порядок обязателен: receipt покрывает `semantic_release`, поэтому
+    /// пересчёт release должен предшествовать. Мутатор, повторивший блок с
+    /// переставленным порядком, дал бы запись, которую `parse_trusted`
+    /// отвергает, — и тест доказывал бы отказ на недостижимом входе. Один
+    /// helper делает эту ошибку непредставимой.
     #[cfg(test)]
-    pub(crate) fn definition_with_coherent_certificate_for_test(
-        mut self,
-        definition_digest: FamilyDefinitionDigestV2,
-    ) -> Self {
-        self.definition_digest = definition_digest;
+    fn recohere_for_test(mut self) -> Self {
         self.semantic_release = semantic_family_release_id_v2(
             self.definition_digest,
             self.image_digest,
@@ -301,6 +304,15 @@ impl FamilyImageCertificateV2 {
         );
         self.artifact_receipt = artifact_receipt(self);
         self
+    }
+
+    #[cfg(test)]
+    pub(crate) fn definition_with_coherent_certificate_for_test(
+        mut self,
+        definition_digest: FamilyDefinitionDigestV2,
+    ) -> Self {
+        self.definition_digest = definition_digest;
+        self.recohere_for_test()
     }
 
     #[cfg(test)]
@@ -317,13 +329,7 @@ impl FamilyImageCertificateV2 {
         let mut bytes = *self.image_digest.as_bytes();
         bytes[0] ^= 1;
         self.image_digest = CanonicalFamilyImageDigestV2::from_digest(bytes);
-        self.semantic_release = semantic_family_release_id_v2(
-            self.definition_digest,
-            self.image_digest,
-            self.member_count,
-        );
-        self.artifact_receipt = artifact_receipt(self);
-        self
+        self.recohere_for_test()
     }
 
     #[cfg(test)]
@@ -339,13 +345,7 @@ impl FamilyImageCertificateV2 {
         member_count: u64,
     ) -> Self {
         self.member_count = member_count;
-        self.semantic_release = semantic_family_release_id_v2(
-            self.definition_digest,
-            self.image_digest,
-            self.member_count,
-        );
-        self.artifact_receipt = artifact_receipt(self);
-        self
+        self.recohere_for_test()
     }
 }
 

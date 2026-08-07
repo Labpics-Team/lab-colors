@@ -159,7 +159,10 @@ fn every_byte_of_the_definition_address_is_compared() {
     let (certificate, encoded) = artifact_of(&region);
     let asked = ContextualRegionFamilyProviderV1::definition_digest(asked_pipeline(), &region);
 
-    for index in 0..32 {
+    // Ширина берётся у самого значения: литерал молча перестал бы покрывать
+    // все позиции, если бы digest сменил ширину, и тест остался бы зелёным
+    // при неполном сравнении.
+    for index in 0..asked.as_bytes().len() {
         let mut bytes = *asked.as_bytes();
         bytes[index] ^= 1;
         let certified = FamilyDefinitionDigestV2::from_digest(bytes);
