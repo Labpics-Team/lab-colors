@@ -362,10 +362,16 @@ class LaneInputRuleTests(unittest.TestCase):
             )
 
     def test_foreign_observed_entries_are_ignored_not_matched(self) -> None:
+        # The unhashable entry is the one that matters.  A non-string simply
+        # never equals a string, so dropping the type guard would change
+        # nothing for `bytes` or `int` — the test would assert an invariant
+        # that holds without the code it points at.  A list makes the guard
+        # load-bearing: without it the observation raises instead of refusing.
         observed = (
             b"job.bin",
             None,
             17,
+            ["job.bin"],
             Path("comparator-bundle/comparator-manifest-v2.bin"),
         )
         self.assertEqual(
@@ -575,6 +581,42 @@ class VerificationDispatchContentAdmissionCliTests(unittest.TestCase):
                 )
         self.assertEqual(exit_code, 64)
         self.assertEqual(dispatched, [])
+
+    def test_a_foreign_coordinate_exits_typed_instead_of_crashing(self) -> None:
+        # `verification_dispatch_commands_v1` returns a refusal, and a refusal
+        # is not iterable.  A mistyped artifact name is the likeliest way an
+        # operator reaches this, and the docstring of the admission promises
+        # never a crash — so the promise has to be true here.
+        asked: list[object] = []
+        for artifact, run_id in (
+            ("verification-evidence-abr", "31000000001"),
+            (ARB_ARTIFACT, "0"),
+            (ARB_ARTIFACT, "-5"),
+        ):
+            with self.subTest(artifact=artifact, run_id=run_id):
+                with tempfile.TemporaryDirectory() as tmp:
+                    with mock.patch.object(
+                        corpus_dispatch,
+                        "gh_evidence_artifact_paths_v1",
+                        lambda *args: asked.append(args) or (),
+                    ):
+                        exit_code, dispatched = self._dispatch(
+                            [
+                                "--mode",
+                                "verification-dispatch",
+                                "--evidence-run-id",
+                                run_id,
+                                "--evidence-artifact",
+                                artifact,
+                                "--out",
+                                str(Path(tmp) / "out"),
+                            ]
+                        )
+                self.assertEqual(exit_code, 64)
+                self.assertEqual(dispatched, [])
+        # And the expensive check never ran: a coordinate the pure builder
+        # already refused must not cost a download.
+        self.assertEqual(asked, [])
 
     def test_all_256_lanes_dispatch_after_one_admitted_download(self) -> None:
         calls: list[tuple[object, ...]] = []

@@ -46,6 +46,9 @@ EVIDENCE_LANE_INPUTS_V1 = (
     "job.bin",
     "comparator-bundle/comparator-manifest-v2.bin",
 )
+# One download of one artifact: generous for a slow network, far short of a
+# wait an operator would mistake for work in progress.
+OBSERVATION_TIMEOUT_SECONDS_V1 = 120
 DEFAULT_LANE_WIDTH = 1 << 16
 DEFAULT_SHARD_WIDTH = corpus_lane.DEFAULT_SHARD_POINTS
 FULL_DOMAIN = protocol.OUTPUT_CARDINALITY_V1
@@ -245,6 +248,10 @@ def gh_evidence_artifact_paths_v1(run_id: int, artifact: str) -> tuple[str, ...]
             capture_output=True,
             text=True,
             check=True,
+            # A hung download is worse than a refused one: without a deadline
+            # the coordinator waits forever on the last check standing between
+            # an operator and 256 dispatches.
+            timeout=OBSERVATION_TIMEOUT_SECONDS_V1,
         )
         return tuple(
             sorted(
@@ -285,8 +292,9 @@ def admit_evidence_artifact_content_v1(
         # artifact, a missing token and a broken network must all land as
         # one refusal.  The cause travels with it — an operator has to tell
         # "no such run" from "no token", and a bare refusal makes those look
-        # identical.  CalledProcessError.__repr__ drops stderr, and stderr
-        # is where the only distinguishing text lives.
+        # identical.  `stderr` is preferred over `repr` because it is the text
+        # itself rather than the text wrapped in a constructor call; `repr`
+        # does carry it, so this is legibility, not recovery.
         cause = getattr(error, "stderr", None) or repr(error)
         return corpus._reject(
             corpus.ShardCorpusReasonV1.FOREIGN_INPUT,
@@ -371,6 +379,13 @@ def main(argv: list[str] | None = None) -> int:
                 return 64
     else:
         commands = dispatch_commands_v1(plan, args.shard_width)
+    if type(commands) is not tuple:
+        # A rejected command set is a typed refusal, not an iterable.  Letting
+        # it reach the loop turns this module's own contract into a TypeError
+        # at the boundary it exists to guard — and a mistyped artifact name is
+        # the likeliest way an operator gets here.
+        print(f"lane dispatch rejected: {commands.detail}", file=sys.stderr)
+        return 64
     for command in commands:
         rendered = " ".join(command)
         if args.dry_run:
