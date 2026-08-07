@@ -443,6 +443,9 @@ class ArtifactListingWireTests(unittest.TestCase):
         self.assertEqual(len(seen), 1)
         self.assertIs(kwargs_seen[0].get("check"), True)
         self.assertIs(kwargs_seen[0].get("capture_output"), True)
+        # Without text=True the reply arrives as bytes, the decode raises,
+        # and every run is refused — a gate that looks alive, admits nobody.
+        self.assertIs(kwargs_seen[0].get("text"), True)
         # A hung `gh` would otherwise stall the one call standing between an
         # operator and 256 dispatches, indistinguishable from work in
         # progress.
@@ -460,15 +463,287 @@ class ArtifactListingWireTests(unittest.TestCase):
         )
 
 
-class DispatchSeamTests(unittest.TestCase):
-    """The gate has to be wired in, not merely defined.
+ADMITTED_SHA_V1 = "3f0f0a1b2c3d4e5f60718293a4b5c6d7e8f90a1b"
 
-    Four unit tests over the admission prove the decision; none of them
-    prove that `main` asks.  Deleting the call would leave those green while
-    the live path dispatched blind again, so the seam gets its own contract:
-    a refusal must stop the campaign before the first invocation, and an
-    admission must let it through.
+
+def _admitted_provenance(**overrides: str) -> object:
+    """The run an operator is allowed to replay, with one field disturbed."""
+
+    fields = dict(
+        path=".github/workflows/full-domain-run.yml",
+        event="workflow_dispatch",
+        status="completed",
+        conclusion="success",
+        head_sha=ADMITTED_SHA_V1,
+    )
+    fields.update(overrides)
+    return corpus_dispatch.RunProvenanceV1(**fields)
+
+
+class RunProvenanceWireTests(unittest.TestCase):
+    """Observing a run means reading named fields, never a raw reply.
+
+    The artifact listing proves a name exists inside some run; it says
+    nothing about which workflow produced that run, what triggered it,
+    whether it finished, or which commit it stands on.  Asking GitHub for the
+    whole run object would drag a large reply of unknown shape through this
+    process — the project's standing hazard — so the query projects exactly
+    the fields the rule reads, and the decode refuses anything that is not
+    that shape rather than inventing a field.
     """
+
+    CAPTURED_V1 = (
+        ".github/workflows/full-domain-run.yml\tworkflow_dispatch\tcompleted\t"
+        f"success\t{ADMITTED_SHA_V1}\n"
+    )
+
+    def test_the_captured_wire_form_decodes_to_the_named_fields(self) -> None:
+        self.assertEqual(
+            corpus_dispatch.parse_run_provenance_v1(self.CAPTURED_V1),
+            _admitted_provenance(),
+        )
+
+    def test_a_reply_that_is_not_one_five_column_record_refuses(self) -> None:
+        # An empty or drifted reply read as a default record would admit the
+        # exact runs this observation exists to refuse, so shape drift is a
+        # decode failure — which the admission turns into a typed refusal.
+        for hostile in (
+            "",
+            "\n",
+            ".github/workflows/full-domain-run.yml\tworkflow_dispatch\tcompleted"
+            f"\t{ADMITTED_SHA_V1}\n",
+            self.CAPTURED_V1.replace("\n", "\textra\n"),
+            self.CAPTURED_V1 + self.CAPTURED_V1,
+            f"{{\"path\": \".github/workflows/full-domain-run.yml\"}}\n",
+        ):
+            with self.subTest(hostile=hostile):
+                with self.assertRaises(ValueError):
+                    corpus_dispatch.parse_run_provenance_v1(hostile)
+
+    def test_the_query_projects_the_fields_and_not_the_whole_reply(self) -> None:
+        # Behavioural, not a look at the source, and load-bearing twice: the
+        # run object carries far more than this module reads, and printing an
+        # unknown reply is the known way this project leaks.
+        seen: list[tuple[str, ...]] = []
+
+        class _Completed:
+            stdout = RunProvenanceWireTests.CAPTURED_V1
+            returncode = 0
+
+        def record(command: tuple[str, ...], **kwargs: object) -> object:
+            seen.append(tuple(command))
+            assert kwargs.get("check") is True
+            assert kwargs.get("capture_output") is True
+            # Without this the reply arrives as bytes, the decode raises, and
+            # every run is refused — a gate that looks alive and admits nobody.
+            assert kwargs.get("text") is True
+            return _Completed()
+
+        with unittest.mock.patch.object(corpus_dispatch.subprocess, "run", record):
+            observed = corpus_dispatch.gh_run_provenance_v1(31116022208)
+
+        self.assertEqual(observed, _admitted_provenance())
+        self.assertEqual(len(seen), 1)
+        argv = seen[0]
+        self.assertEqual(argv[:2], ("gh", "api"))
+        self.assertIn("repos/{owner}/{repo}/actions/runs/31116022208", argv)
+        self.assertIn("--jq", argv)
+        query = argv[argv.index("--jq") + 1]
+        for field in (".path", ".event", ".status", ".conclusion", ".head_sha"):
+            self.assertIn(field, query)
+        self.assertIn("@tsv", query)
+        # Exactly five selectors: a bare `.` or a dropped projection would
+        # pull the whole run object through this process.
+        self.assertEqual(query.count("."), 5)
+
+
+class RunProvenanceRuleTests(unittest.TestCase):
+    """Which observed run may be replayed is a rule, so it gets tests.
+
+    A run id plus an artifact name is not provenance.  A stale run of an old
+    commit, a run of a different workflow, and a run a fork's pull request
+    produced all list an artifact of exactly the right name, and all three
+    send 256 lanes to replay under something the operator did not intend.
+    """
+
+    def test_the_producer_run_an_operator_dispatched_is_admitted(self) -> None:
+        self.assertIsNone(
+            corpus_dispatch.admit_run_provenance_v1(_admitted_provenance())
+        )
+
+    def test_a_run_of_another_workflow_is_refused(self) -> None:
+        # The path, not the file name: a workflow of the same basename in a
+        # foreign directory is a different producer.
+        for path in (
+            ".github/workflows/verification-lanes.yml",
+            ".github/workflows/ci.yml",
+            "full-domain-run.yml",
+            "vendor/.github/workflows/full-domain-run.yml",
+            "",
+        ):
+            with self.subTest(path=path):
+                result = corpus_dispatch.admit_run_provenance_v1(
+                    _admitted_provenance(path=path)
+                )
+                self.assertIs(type(result), corpus.ShardCorpusRejectedV1)
+                self.assertEqual(
+                    result.reason, corpus.ShardCorpusReasonV1.FOREIGN_INPUT
+                )
+
+    def test_a_run_a_pull_request_produced_is_refused(self) -> None:
+        # A fork's pull request can run the producer workflow and upload an
+        # artifact of exactly the allowlisted name carrying a comparator
+        # bundle nobody reviewed.  Only an operator's own dispatch counts.
+        for event in ("pull_request", "pull_request_target", "push", "schedule", ""):
+            with self.subTest(event=event):
+                result = corpus_dispatch.admit_run_provenance_v1(
+                    _admitted_provenance(event=event)
+                )
+                self.assertIs(type(result), corpus.ShardCorpusRejectedV1)
+
+    def test_a_run_that_did_not_finish_successfully_is_refused(self) -> None:
+        for status, conclusion in (
+            ("completed", "failure"),
+            ("completed", "cancelled"),
+            ("completed", "timed_out"),
+            # A run still in flight reports a null conclusion, which the wire
+            # form renders as an empty column.
+            ("in_progress", ""),
+            ("queued", ""),
+            # Hostile rather than observed: a finished-looking conclusion
+            # under an unfinished status must not pass on the conclusion
+            # alone.
+            ("in_progress", "success"),
+        ):
+            with self.subTest(status=status, conclusion=conclusion):
+                result = corpus_dispatch.admit_run_provenance_v1(
+                    _admitted_provenance(status=status, conclusion=conclusion)
+                )
+                self.assertIs(type(result), corpus.ShardCorpusRejectedV1)
+
+    def test_a_run_without_a_commit_sha_is_refused(self) -> None:
+        # The sha is what the operator checks the campaign against, so a run
+        # that does not carry one cannot be admitted merely for being green.
+        for head_sha in (
+            "",
+            "3f0f0a1b",
+            ADMITTED_SHA_V1[:-1],
+            ADMITTED_SHA_V1 + "0",
+            ADMITTED_SHA_V1[:-1] + "g",
+            ADMITTED_SHA_V1.upper(),
+        ):
+            with self.subTest(head_sha=head_sha):
+                result = corpus_dispatch.admit_run_provenance_v1(
+                    _admitted_provenance(head_sha=head_sha)
+                )
+                self.assertIs(type(result), corpus.ShardCorpusRejectedV1)
+
+    def test_a_record_that_was_never_observed_is_refused_not_crashed(self) -> None:
+        for foreign in (
+            None,
+            (
+                ".github/workflows/full-domain-run.yml",
+                "workflow_dispatch",
+                "completed",
+                "success",
+                ADMITTED_SHA_V1,
+            ),
+            {"path": ".github/workflows/full-domain-run.yml"},
+            "completed",
+            object(),
+        ):
+            with self.subTest(foreign=foreign):
+                result = corpus_dispatch.admit_run_provenance_v1(foreign)
+                self.assertIs(type(result), corpus.ShardCorpusRejectedV1)
+
+
+class EvidenceRunAdmissionTests(unittest.TestCase):
+    """The impure half: observe, refuse on any failure, report the sha.
+
+    Nothing here decides which run is acceptable — that is the pure rule
+    above.  What is proven here is that observation failures land as typed
+    refusals carrying their cause, that the named run is the one observed,
+    and that an admitted run's commit reaches the operator.
+    """
+
+    def test_an_unreachable_run_is_a_typed_refusal_carrying_the_cause(self) -> None:
+        def observer(_run_id: int) -> object:
+            raise subprocess.CalledProcessError(
+                1, "gh", stderr="gh: Not Found (HTTP 404)"
+            )
+
+        result = corpus_dispatch.admit_evidence_run_v1(99999999, observer)
+        self.assertIs(type(result), corpus.ShardCorpusRejectedV1)
+        self.assertIn("Not Found", result.detail)
+
+    def test_an_undecodable_reply_becomes_a_refusal_not_a_traceback(self) -> None:
+        def observer(_run_id: int) -> object:
+            return corpus_dispatch.parse_run_provenance_v1("garbage\n")
+
+        result = corpus_dispatch.admit_evidence_run_v1(1, observer)
+        self.assertIs(type(result), corpus.ShardCorpusRejectedV1)
+
+    def test_the_observer_is_asked_about_the_named_run(self) -> None:
+        # Anti-vacuity: an observer blind to its argument would let one run be
+        # bound while another was vouched for.
+        seen: list[int] = []
+
+        def observer(run_id: int) -> object:
+            seen.append(run_id)
+            return _admitted_provenance()
+
+        errors = io.StringIO()
+        with contextlib.redirect_stderr(errors):
+            self.assertIsNone(corpus_dispatch.admit_evidence_run_v1(77, observer))
+        self.assertEqual(seen, [77])
+
+    def test_the_admitted_commit_reaches_the_operator(self) -> None:
+        # A green producer run of last week's comparator is admissible by
+        # every rule here and still wrong.  Nothing in this process can tell
+        # which commit the operator meant, so the one coordinate that decides
+        # it is put in front of them at the moment of admission.
+        errors = io.StringIO()
+        with contextlib.redirect_stderr(errors):
+            result = corpus_dispatch.admit_evidence_run_v1(
+                424242, lambda run_id: _admitted_provenance()
+            )
+        self.assertIsNone(result)
+        self.assertIn(ADMITTED_SHA_V1, errors.getvalue())
+
+    def test_a_refused_run_reports_no_commit(self) -> None:
+        # The report belongs to admission: a sha printed beside a refusal
+        # reads as a cleared campaign.
+        errors = io.StringIO()
+        with contextlib.redirect_stderr(errors):
+            result = corpus_dispatch.admit_evidence_run_v1(
+                424242, lambda run_id: _admitted_provenance(event="pull_request")
+            )
+        self.assertIs(type(result), corpus.ShardCorpusRejectedV1)
+        self.assertNotIn(ADMITTED_SHA_V1, errors.getvalue())
+
+
+class DispatchSeamTests(unittest.TestCase):
+    """The gates have to be wired in, not merely defined.
+
+    The unit tests above prove what each admission decides; none of them
+    prove that `main` asks.  Deleting either call would leave them green
+    while the live path dispatched blind again, so both seams get their own
+    contract: a refusal must stop the campaign before the first invocation,
+    an admission must let it through, and the admitted commit must reach the
+    operator before the lanes do.
+    """
+
+    def _provenance_patch(self, observer: object = None) -> object:
+        """Patch the run observation the live path performs before anything else."""
+
+        return unittest.mock.patch.object(
+            corpus_dispatch,
+            "gh_run_provenance_v1",
+            observer
+            if observer is not None
+            else (lambda run_id: _admitted_provenance()),
+        )
+
 
     def _argv(self, out: Path, *, live: bool = True) -> list[str]:
         argv = [
@@ -488,7 +763,7 @@ class DispatchSeamTests(unittest.TestCase):
     def test_a_refused_evidence_run_dispatches_nothing(self) -> None:
         launched: list[tuple[str, ...]] = []
         with tempfile.TemporaryDirectory() as tmp:
-            with unittest.mock.patch.object(
+            with self._provenance_patch(), unittest.mock.patch.object(
                 corpus_dispatch,
                 "gh_run_artifacts_v1",
                 lambda run_id: (("verification-evidence-arb", False),)
@@ -510,7 +785,7 @@ class DispatchSeamTests(unittest.TestCase):
             returncode = 0
 
         with tempfile.TemporaryDirectory() as tmp:
-            with unittest.mock.patch.object(
+            with self._provenance_patch(), unittest.mock.patch.object(
                 corpus_dispatch,
                 "gh_run_artifacts_v1",
                 # Sensitive to the run id on purpose: an observer that ignores
@@ -551,7 +826,7 @@ class DispatchSeamTests(unittest.TestCase):
             "--out",
         ]
         with tempfile.TemporaryDirectory() as tmp:
-            with unittest.mock.patch.object(
+            with self._provenance_patch(), unittest.mock.patch.object(
                 corpus_dispatch,
                 "gh_run_artifacts_v1",
                 lambda run_id: (("verification-evidence-arb", False),),
@@ -649,7 +924,7 @@ class DispatchSeamTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             argv = self._argv(Path(tmp) / "out.txt")
             argv[argv.index("424242")] = "31116022208"
-            with unittest.mock.patch.object(
+            with self._provenance_patch(), unittest.mock.patch.object(
                 corpus_dispatch,
                 "gh_run_artifacts_v1",
                 lambda run_id: (
@@ -699,7 +974,9 @@ class DispatchSeamTests(unittest.TestCase):
         # "wrong scale" rather than a diagnosis about the evidence run.
         observed: list[int] = []
         with tempfile.TemporaryDirectory() as tmp:
-            with unittest.mock.patch.object(
+            with self._provenance_patch(
+                lambda run_id: observed.append(run_id) or _admitted_provenance()
+            ), unittest.mock.patch.object(
                 corpus_dispatch,
                 "gh_run_artifacts_v1",
                 lambda run_id: observed.append(run_id) or (),
@@ -733,7 +1010,7 @@ class DispatchSeamTests(unittest.TestCase):
             return _Completed()
 
         with tempfile.TemporaryDirectory() as tmp:
-            with unittest.mock.patch.object(
+            with self._provenance_patch(), unittest.mock.patch.object(
                 corpus_dispatch,
                 "gh_run_artifacts_v1",
                 lambda run_id: (("verification-evidence-arb", False),),
@@ -752,7 +1029,7 @@ class DispatchSeamTests(unittest.TestCase):
 
     def test_a_missing_gh_is_a_typed_stop_not_a_traceback(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            with unittest.mock.patch.object(
+            with self._provenance_patch(), unittest.mock.patch.object(
                 corpus_dispatch,
                 "gh_run_artifacts_v1",
                 lambda run_id: (("verification-evidence-arb", False),),
@@ -766,12 +1043,47 @@ class DispatchSeamTests(unittest.TestCase):
                 code = corpus_dispatch.main(self._argv(Path(tmp) / "out.txt"))
         self.assertEqual(code, 64)
 
+    def test_the_origin_is_asked_before_the_artifact(self) -> None:
+        # A run of the wrong workflow lists an artifact of exactly the right
+        # name, so asking about the artifact first clears a run that should
+        # never have been considered — and spends a call to do it.  The order
+        # is the claim, so the order is what this pins.
+        asked: list[str] = []
+        with tempfile.TemporaryDirectory() as tmp:
+            with unittest.mock.patch.object(
+                corpus_dispatch,
+                "gh_run_provenance_v1",
+                lambda run_id: asked.append("origin")
+                or corpus_dispatch.RunProvenanceV1(
+                    corpus_dispatch.EVIDENCE_WORKFLOW_PATH_V1,
+                    "pull_request",
+                    "completed",
+                    "success",
+                    "0" * 40,
+                ),
+            ), unittest.mock.patch.object(
+                corpus_dispatch,
+                "gh_run_artifacts_v1",
+                lambda run_id: asked.append("artifact")
+                or (("verification-evidence-arb", False),),
+            ), unittest.mock.patch.object(
+                corpus_dispatch.subprocess,
+                "run",
+                lambda command, **kwargs: None,
+            ):
+                code = corpus_dispatch.main(self._argv(Path(tmp) / "out.txt"))
+        # The wrong trigger is refused, and the artifact was never asked about.
+        self.assertEqual(code, 64)
+        self.assertEqual(asked, ["origin"])
+
     def test_printing_stays_offline_and_asks_nobody(self) -> None:
         # Printing is documented as offline: it must not even observe.
         observed: list[int] = []
         launched: list[tuple[str, ...]] = []
         with tempfile.TemporaryDirectory() as tmp:
-            with unittest.mock.patch.object(
+            with self._provenance_patch(
+                lambda run_id: observed.append(run_id) or _admitted_provenance()
+            ), unittest.mock.patch.object(
                 corpus_dispatch,
                 "gh_run_artifacts_v1",
                 lambda run_id: observed.append(run_id) or (),
@@ -786,6 +1098,146 @@ class DispatchSeamTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(observed, [])
         self.assertEqual(launched, [])
+
+    def test_a_run_of_a_foreign_workflow_dispatches_nothing(self) -> None:
+        # The artifact name is right, the artifact is live, and the run is
+        # still not the producer's.  Without the provenance seam this is 256
+        # lanes replaying whatever a foreign workflow happened to upload.
+        launched: list[tuple[str, ...]] = []
+        with tempfile.TemporaryDirectory() as tmp:
+            with self._provenance_patch(
+                lambda run_id: _admitted_provenance(
+                    path=".github/workflows/ci.yml"
+                )
+            ), unittest.mock.patch.object(
+                corpus_dispatch,
+                "gh_run_artifacts_v1",
+                lambda run_id: (("verification-evidence-arb", False),),
+            ), unittest.mock.patch.object(
+                corpus_dispatch.subprocess,
+                "run",
+                lambda command, **kwargs: launched.append(tuple(command)),
+            ):
+                errors = io.StringIO()
+                with contextlib.redirect_stderr(errors):
+                    code = corpus_dispatch.main(self._argv(Path(tmp) / "out.txt"))
+        self.assertEqual(code, 64)
+        self.assertEqual(launched, [])
+
+    def test_a_run_a_pull_request_produced_dispatches_nothing(self) -> None:
+        # A fork's pull request can run the producer workflow and publish an
+        # artifact of exactly the allowlisted name; every earlier rule admits
+        # it, and the lanes then replay a comparator bundle nobody reviewed.
+        launched: list[tuple[str, ...]] = []
+        with tempfile.TemporaryDirectory() as tmp:
+            with self._provenance_patch(
+                lambda run_id: _admitted_provenance(event="pull_request")
+            ), unittest.mock.patch.object(
+                corpus_dispatch,
+                "gh_run_artifacts_v1",
+                lambda run_id: (("verification-evidence-arb", False),),
+            ), unittest.mock.patch.object(
+                corpus_dispatch.subprocess,
+                "run",
+                lambda command, **kwargs: launched.append(tuple(command)),
+            ):
+                errors = io.StringIO()
+                with contextlib.redirect_stderr(errors):
+                    code = corpus_dispatch.main(self._argv(Path(tmp) / "out.txt"))
+        self.assertEqual(code, 64)
+        self.assertEqual(launched, [])
+
+    def test_a_run_that_failed_dispatches_nothing(self) -> None:
+        # A failed producer run can still have uploaded one engine's artifact
+        # before the other job died; the artifact listing cannot tell.
+        launched: list[tuple[str, ...]] = []
+        with tempfile.TemporaryDirectory() as tmp:
+            with self._provenance_patch(
+                lambda run_id: _admitted_provenance(conclusion="failure")
+            ), unittest.mock.patch.object(
+                corpus_dispatch,
+                "gh_run_artifacts_v1",
+                lambda run_id: (("verification-evidence-arb", False),),
+            ), unittest.mock.patch.object(
+                corpus_dispatch.subprocess,
+                "run",
+                lambda command, **kwargs: launched.append(tuple(command)),
+            ):
+                errors = io.StringIO()
+                with contextlib.redirect_stderr(errors):
+                    code = corpus_dispatch.main(self._argv(Path(tmp) / "out.txt"))
+        self.assertEqual(code, 64)
+        self.assertEqual(launched, [])
+
+    def test_the_admitted_commit_reaches_the_operator_before_the_campaign(
+        self,
+    ) -> None:
+        # Which commit the evidence stands on is the one thing this process
+        # cannot decide and the operator can.  It has to be on their terminal
+        # before 256 lanes start, not discoverable afterwards in the run log.
+        launched: list[tuple[str, ...]] = []
+
+        class _Completed:
+            returncode = 0
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with self._provenance_patch(), unittest.mock.patch.object(
+                corpus_dispatch,
+                "gh_run_artifacts_v1",
+                lambda run_id: (("verification-evidence-arb", False),),
+            ), unittest.mock.patch.object(
+                corpus_dispatch.subprocess,
+                "run",
+                lambda command, **kwargs: (
+                    launched.append(tuple(command)) or _Completed()
+                ),
+            ):
+                errors = io.StringIO()
+                with contextlib.redirect_stderr(errors):
+                    code = corpus_dispatch.main(self._argv(Path(tmp) / "out.txt"))
+        self.assertEqual(code, 0)
+        self.assertEqual(len(launched), 256)
+        reported = errors.getvalue()
+        self.assertIn(ADMITTED_SHA_V1, reported)
+        # Before, not after: an operator reading it below "dispatching 256
+        # lanes" learns the commit once the campaign is already gone.
+        self.assertLess(
+            reported.index(ADMITTED_SHA_V1), reported.index("dispatching 256")
+        )
+
+    def test_the_provenance_admission_asks_about_the_run_the_operator_named(
+        self,
+    ) -> None:
+        # Mirror of the artifact pin: a call site that hardcoded a run id
+        # would vouch for one run while the lanes replayed another.
+        observed: list[int] = []
+        launched: list[tuple[str, ...]] = []
+
+        class _Completed:
+            returncode = 0
+
+        with tempfile.TemporaryDirectory() as tmp:
+            argv = self._argv(Path(tmp) / "out.txt")
+            argv[argv.index("424242")] = "31116022208"
+            with self._provenance_patch(
+                lambda run_id: observed.append(run_id) or _admitted_provenance()
+            ), unittest.mock.patch.object(
+                corpus_dispatch,
+                "gh_run_artifacts_v1",
+                lambda run_id: (("verification-evidence-arb", False),),
+            ), unittest.mock.patch.object(
+                corpus_dispatch.subprocess,
+                "run",
+                lambda command, **kwargs: (
+                    launched.append(tuple(command)) or _Completed()
+                ),
+            ):
+                errors = io.StringIO()
+                with contextlib.redirect_stderr(errors):
+                    code = corpus_dispatch.main(argv)
+        self.assertEqual(code, 0)
+        self.assertEqual(observed, [31116022208])
+        self.assertEqual(len(launched), 256)
 
     def test_a_rejected_command_set_is_exit_64_not_a_type_error(self) -> None:
         # A foreign artifact name is refused by the pure builder; that
