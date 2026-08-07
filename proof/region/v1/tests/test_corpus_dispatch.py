@@ -362,6 +362,10 @@ class ArtifactListingWireTests(unittest.TestCase):
             seen.append(tuple(command))
             assert kwargs.get("check") is True
             assert kwargs.get("capture_output") is True
+            # A hung `gh` would otherwise stall the one call standing between
+            # an operator and 256 dispatches, with nothing to distinguish it
+            # from work in progress.
+            assert kwargs.get("timeout") == corpus_dispatch.OBSERVATION_TIMEOUT_SECONDS_V1
             return _Completed()
 
         with unittest.mock.patch.object(corpus_dispatch.subprocess, "run", record):

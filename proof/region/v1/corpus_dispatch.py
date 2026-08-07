@@ -42,6 +42,9 @@ DEFAULT_LANE_WIDTH = 1 << 16
 DEFAULT_SHARD_WIDTH = corpus_lane.DEFAULT_SHARD_POINTS
 FULL_DOMAIN = protocol.OUTPUT_CARDINALITY_V1
 ALIGNMENT = corpus.CORPUS_SHARD_ALIGNMENT_V1
+# One listing of one run: generous for a slow network, far short of a wait an
+# operator would mistake for work in progress.
+OBSERVATION_TIMEOUT_SECONDS_V1 = 60
 
 
 def lane_plan_v1(
@@ -211,6 +214,11 @@ def gh_run_artifacts_v1(run_id: int) -> tuple[tuple[str, bool], ...]:
         capture_output=True,
         text=True,
         check=True,
+        # A hung observation is worse than a refused one: without a deadline
+        # the coordinator waits forever on the one call standing between an
+        # operator and 256 dispatches.  The timeout raises, and the admission
+        # turns every observation failure into a typed refusal.
+        timeout=OBSERVATION_TIMEOUT_SECONDS_V1,
     )
     return parse_artifact_listing_v1(completed.stdout)
 
