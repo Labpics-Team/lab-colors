@@ -1,5 +1,7 @@
 //! Hostile-контракт transport artifact и exact RawBitmap24 codec.
 
+mod first_family_image_v1;
+
 use proptest::prelude::*;
 
 use crate::Srgb8;
