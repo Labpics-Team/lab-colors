@@ -46,6 +46,17 @@ const VERIFIER_RELEASE_EXPECTED_REPLAY_V1: u8 = 1;
 // magic + 6 release/domain tags + 6 SHA-256 identities + 2 u64 lengths + receipt.
 // Любое изменение certificate layout обязано синхронно менять этот размер.
 const HEADER_LEN_V2: usize = 254;
+/// Доверенная запись сертификата — это ровно заголовок артефакта.
+///
+/// Загрузчик сверяет её байт в байт с тем, что несёт артефакт, поэтому запись
+/// приходит по доверенному каналу, а payload — по любому. Отдельный формат для
+/// неё не нужен и был бы вторым источником истины.
+pub(crate) const FAMILY_CERTIFICATE_RECORD_LEN_V2: usize = HEADER_LEN_V2;
+/// Тело сертификата — запись без магии.
+///
+/// Размер выражен типом, а не `debug_assert`: в release-сборке утверждение
+/// вырезается, и третий вызывающий получил бы панику вместо отказа.
+const CERTIFICATE_BODY_LEN_V2: usize = HEADER_LEN_V2 - 8;
 const PAYLOAD_DIGEST_DOMAIN_V2: &[u8] = b"labcolors.family-artifact-payload.v2\0";
 const RECEIPT_DOMAIN_V2: &[u8] = b"labcolors.family-artifact-receipt.v2\0";
 const FIXTURE_PROOF_ARTIFACT_DOMAIN_V2: &[u8] = b"labcolors.family-artifact-fixture-proof.v2\0";
@@ -122,19 +133,76 @@ pub(crate) struct FamilyImageCertificateV2 {
 }
 
 impl FamilyImageCertificateV2 {
+    /// Разбирает доверенную запись сертификата, полученную извне.
+    ///
+    /// Это единственный способ предъявить загрузчику `expected`, не имея на
+    /// руках самого артефакта, — и потому единственное место, где ядро может
+    /// узнать, что считать доверенным. Само оно этого не решает: запись
+    /// приходит от потребителя. Встроенный реестр семейств здесь означал бы
+    /// возврат к именованным ролям внутри ядра.
+    pub(crate) fn parse_trusted(bytes: &[u8]) -> Result<Self, FamilyArtifactLoadErrorV1> {
+        // Same order the envelope refuses in: too short, then foreign magic,
+        // then the exact length.  A record and an artifact that disagree
+        // about which refusal comes first would make one of the two lie.
+        if bytes.len() < FAMILY_CERTIFICATE_RECORD_LEN_V2 {
+            return Err(FamilyArtifactLoadErrorV1::HeaderTooShort);
+        }
+        if bytes.get(..MAGIC_V2.len()) != Some(MAGIC_V2) {
+            return Err(FamilyArtifactLoadErrorV1::InvalidMagic);
+        }
+        if bytes.len() != FAMILY_CERTIFICATE_RECORD_LEN_V2 {
+            return Err(FamilyArtifactLoadErrorV1::ExactLengthMismatch {
+                expected: FAMILY_CERTIFICATE_RECORD_LEN_V2,
+                actual: bytes.len(),
+            });
+        }
+        let Ok(body) = <&[u8; CERTIFICATE_BODY_LEN_V2]>::try_from(
+            &bytes[MAGIC_V2.len()..FAMILY_CERTIFICATE_RECORD_LEN_V2],
+        ) else {
+            return Err(FamilyArtifactLoadErrorV1::HeaderTooShort);
+        };
+        let certificate = admit_certificate_discriminants_v2(decode_certificate(body))?;
+        if usize::try_from(certificate.payload_len).is_err() {
+            return Err(FamilyArtifactLoadErrorV1::ResourceExhausted);
+        }
+        // The envelope proves these two before it admits anything; a record
+        // that skipped them would pass here and then be reported as a foreign
+        // artifact — blaming the payload for a broken record.
+        if artifact_receipt(certificate) != certificate.artifact_receipt {
+            return Err(FamilyArtifactLoadErrorV1::ArtifactReceiptMismatch);
+        }
+        if semantic_family_release_id_v2(
+            certificate.definition_digest,
+            certificate.image_digest,
+            certificate.member_count,
+        ) != certificate.semantic_release
+        {
+            return Err(FamilyArtifactLoadErrorV1::SemanticReleaseMismatch);
+        }
+        Ok(certificate)
+    }
+
+    /// Адрес определения, которому обязан отвечать образ.
+    ///
+    /// Потребитель сверяет его с `ContextualRegionFamilyProviderV1`, иначе
+    /// доверенная запись говорит лишь «этот артефакт цел», но не «этот
+    /// артефакт — образ того региона, который я спрашивал». Сам loader этот
+    /// адрес не интерпретирует: сверка принадлежит `family_definition_binding`
+    /// и является единственным её местом.
+    pub(crate) const fn definition_digest(self) -> FamilyDefinitionDigestV2 {
+        self.definition_digest
+    }
+
+    pub(crate) const fn member_count(self) -> u64 {
+        self.member_count
+    }
+
     pub(crate) const fn semantic_release(self) -> SemanticFamilyReleaseIdV2 {
         self.semantic_release
     }
 
     pub(crate) const fn image_digest(self) -> CanonicalFamilyImageDigestV2 {
         self.image_digest
-    }
-
-    /// Адрес определения, образом которого объявлен этот artifact. Loader его
-    /// не интерпретирует: сверка с адресом спрошенного региона принадлежит
-    /// `family_definition_binding`.
-    pub(crate) const fn definition_digest(self) -> FamilyDefinitionDigestV2 {
-        self.definition_digest
     }
 
     pub(crate) const fn artifact_receipt(self) -> FamilyArtifactReceiptIdV2 {
@@ -214,15 +282,24 @@ impl FamilyImageCertificateV2 {
         self
     }
 
-    /// Подменяет только адрес определения, оставляя остальной certificate как
-    /// был. Для guard-а определения этого достаточно: он обязан отказать до
-    /// любой проверки transport, поэтому когерентность receipt здесь не нужна.
+    /// Переадресует certificate на другое определение, пересчитывая semantic
+    /// release и receipt.
+    ///
+    /// Когерентность здесь обязательна, а не удобна: guard определения обязан
+    /// отказывать входу, который `parse_trusted` принимает. Некогерентный
+    /// certificate доказывал бы отказ на недостижимом значении.
     #[cfg(test)]
-    pub(crate) const fn with_definition_digest_for_test(
+    pub(crate) fn definition_with_coherent_certificate_for_test(
         mut self,
         definition_digest: FamilyDefinitionDigestV2,
     ) -> Self {
         self.definition_digest = definition_digest;
+        self.semantic_release = semantic_family_release_id_v2(
+            self.definition_digest,
+            self.image_digest,
+            self.member_count,
+        );
+        self.artifact_receipt = artifact_receipt(self);
         self
     }
 
@@ -688,25 +765,10 @@ impl ParsedFamilyArtifactEnvelopeV2 {
         if bytes.get(..8) != Some(MAGIC_V2) {
             return Err(FamilyArtifactLoadErrorV1::InvalidMagic);
         }
-        let certificate = decode_certificate(&bytes[8..HEADER_LEN_V2]);
-        if certificate.envelope_release != ENVELOPE_RELEASE_V2 {
-            return Err(FamilyArtifactLoadErrorV1::UnsupportedEnvelope);
-        }
-        if certificate.signal_domain != SIGNAL_DOMAIN_SRGB8_D65_V1 {
-            return Err(FamilyArtifactLoadErrorV1::UnsupportedSignalDomain);
-        }
-        if certificate.signal_ordinal != SIGNAL_ORDINAL_RGB_BIG_ENDIAN_V1 {
-            return Err(FamilyArtifactLoadErrorV1::UnsupportedSignalOrdinal);
-        }
-        if certificate.proof_release != PROOF_RELEASE_EXPECTED_EXACT_IMAGE_V1 {
-            return Err(FamilyArtifactLoadErrorV1::UnsupportedProofRelease);
-        }
-        if certificate.verifier_release != VERIFIER_RELEASE_EXPECTED_REPLAY_V1 {
-            return Err(FamilyArtifactLoadErrorV1::UnsupportedVerifierRelease);
-        }
-        if certificate.member_count > MAX_SRGB8_MEMBER_COUNT_V1 {
-            return Err(FamilyArtifactLoadErrorV1::InvalidMemberCount);
-        }
+        let certificate = admit_certificate_discriminants_v2(decode_certificate(
+            <&[u8; CERTIFICATE_BODY_LEN_V2]>::try_from(&bytes[8..HEADER_LEN_V2])
+                .map_err(|_| FamilyArtifactLoadErrorV1::HeaderTooShort)?,
+        ))?;
         let payload_len = usize::try_from(certificate.payload_len)
             .map_err(|_| FamilyArtifactLoadErrorV1::ResourceExhausted)?;
         let expected_len = HEADER_LEN_V2
@@ -1017,8 +1079,35 @@ fn encode_certificate(output: &mut Vec<u8>, certificate: FamilyImageCertificateV
     output.extend_from_slice(certificate.artifact_receipt.as_bytes());
 }
 
-fn decode_certificate(bytes: &[u8]) -> FamilyImageCertificateV2 {
-    debug_assert_eq!(bytes.len(), HEADER_LEN_V2 - MAGIC_V2.len());
+/// Единственный допуск дискриминантов сертификата.
+///
+/// Конверт и доверенная запись обязаны судить по одному закону: два валидатора
+/// разошлись бы, и запись стала бы принимать то, что конверт отвергает.
+fn admit_certificate_discriminants_v2(
+    certificate: FamilyImageCertificateV2,
+) -> Result<FamilyImageCertificateV2, FamilyArtifactLoadErrorV1> {
+    if certificate.envelope_release != ENVELOPE_RELEASE_V2 {
+        return Err(FamilyArtifactLoadErrorV1::UnsupportedEnvelope);
+    }
+    if certificate.signal_domain != SIGNAL_DOMAIN_SRGB8_D65_V1 {
+        return Err(FamilyArtifactLoadErrorV1::UnsupportedSignalDomain);
+    }
+    if certificate.signal_ordinal != SIGNAL_ORDINAL_RGB_BIG_ENDIAN_V1 {
+        return Err(FamilyArtifactLoadErrorV1::UnsupportedSignalOrdinal);
+    }
+    if certificate.proof_release != PROOF_RELEASE_EXPECTED_EXACT_IMAGE_V1 {
+        return Err(FamilyArtifactLoadErrorV1::UnsupportedProofRelease);
+    }
+    if certificate.verifier_release != VERIFIER_RELEASE_EXPECTED_REPLAY_V1 {
+        return Err(FamilyArtifactLoadErrorV1::UnsupportedVerifierRelease);
+    }
+    if certificate.member_count > MAX_SRGB8_MEMBER_COUNT_V1 {
+        return Err(FamilyArtifactLoadErrorV1::InvalidMemberCount);
+    }
+    Ok(certificate)
+}
+
+fn decode_certificate(bytes: &[u8; CERTIFICATE_BODY_LEN_V2]) -> FamilyImageCertificateV2 {
     fn take_32(bytes: &[u8], cursor: &mut usize) -> [u8; 32] {
         let start = *cursor;
         *cursor += 32;

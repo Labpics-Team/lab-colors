@@ -11,9 +11,9 @@ use crate::contextual_region_tests::{
 };
 use crate::family::FamilyDefinitionDigestV2;
 use crate::family_artifact::{
-    EncodedFamilyArtifactV2, FAMILY_ARTIFACT_PAYLOAD_DIGEST_CALLS, FamilyArtifactLoadErrorV1,
-    FamilyArtifactLoaderV1, FamilyImageCertificateV2,
-    encode_raw_bitmap24_family_artifact_v2_for_test,
+    EncodedFamilyArtifactV2, FAMILY_ARTIFACT_PAYLOAD_DIGEST_CALLS,
+    FAMILY_CERTIFICATE_RECORD_LEN_V2, FamilyArtifactLoadErrorV1, FamilyArtifactLoaderV1,
+    FamilyImageCertificateV2, encode_raw_bitmap24_family_artifact_v2_for_test,
 };
 use crate::family_definition_binding::{
     DefinitionBoundFamilyLoadErrorV1, DefinitionBoundFamilyLoaderV1,
@@ -42,13 +42,27 @@ fn members() -> Vec<ColorSignal> {
         .collect()
 }
 
-/// Внешний registry поставляет доверенный certificate образа именно этого
-/// региона вместе с его bytes.
+/// Внешний registry поставляет доверенную запись сертификата образа именно
+/// этого региона и — отдельным каналом — недоверенные bytes артефакта.
+///
+/// Запись разбирается тем же и единственным входом, что и у потребителя:
+/// `FamilyImageCertificateV2::parse_trusted`. Своего способа получить
+/// certificate у guard-а нет, и здесь он тоже не заводится.
 fn artifact_of(
     region: &PiecewiseLinearCartesianTubeV1,
 ) -> (FamilyImageCertificateV2, EncodedFamilyArtifactV2) {
     let definition = ContextualRegionFamilyProviderV1::definition_digest(asked_pipeline(), region);
-    encode_raw_bitmap24_family_artifact_v2_for_test(definition, &members()).unwrap()
+    let (minted, encoded) =
+        encode_raw_bitmap24_family_artifact_v2_for_test(definition, &members()).unwrap();
+    let bytes = encoded.clone().into_bytes();
+    let trusted =
+        FamilyImageCertificateV2::parse_trusted(&bytes[..FAMILY_CERTIFICATE_RECORD_LEN_V2])
+            .unwrap();
+    // Запись артефакта и minted certificate — одно значение, а не два
+    // согласуемых источника: расхождение здесь означало бы, что guard проверяет
+    // не то, что предъявит потребитель.
+    assert_eq!(trusted, minted);
+    (trusted, encoded)
 }
 
 #[test]
@@ -133,23 +147,39 @@ fn a_foreign_definition_is_refused_before_any_payload_work() {
 /// адреса допустило бы чужой образ, совпавший ровно на сравниваемой части, —
 /// поэтому расхождение в КАЖДОЙ из 32 позиций обязано отказывать по отдельности.
 ///
-/// Transport здесь пустой: guard обязан отказать до parse envelope, поэтому
-/// байтов, которые можно было бы разобрать, для этого отказа не требуется.
+/// Каждый отвергаемый certificate здесь когерентен и предъявляется как запись,
+/// которую `parse_trusted` принимает: отказ доказывается на достижимом входе, а
+/// не на значении, которое потребитель не смог бы предъявить.
+///
+/// Transport при самом отказе пустой: guard обязан отказать до parse envelope,
+/// поэтому байтов, которые можно было бы разобрать, для отказа не требуется.
 #[test]
 fn every_byte_of_the_definition_address_is_compared() {
     let region = asked_region();
-    let (certificate, _) = artifact_of(&region);
+    let (certificate, encoded) = artifact_of(&region);
     let asked = ContextualRegionFamilyProviderV1::definition_digest(asked_pipeline(), &region);
 
     for index in 0..32 {
         let mut bytes = *asked.as_bytes();
         bytes[index] ^= 1;
         let certified = FamilyDefinitionDigestV2::from_digest(bytes);
+        let foreign = certificate.definition_with_coherent_certificate_for_test(certified);
+
+        let record = encoded
+            .clone()
+            .with_certificate_for_test(foreign)
+            .into_bytes();
+        assert_eq!(
+            FamilyImageCertificateV2::parse_trusted(&record[..FAMILY_CERTIFICATE_RECORD_LEN_V2])
+                .unwrap(),
+            foreign,
+            "byte {index}: the refused certificate is not a record the consumer could present",
+        );
 
         let failure = DefinitionBoundFamilyLoaderV1::load(
             asked_pipeline(),
             &region,
-            certificate.with_definition_digest_for_test(certified),
+            foreign,
             EncodedFamilyArtifactV2::from_raw_bytes_for_test(Vec::new()),
         )
         .unwrap_err();

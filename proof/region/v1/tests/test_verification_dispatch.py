@@ -23,7 +23,7 @@ import io
 import sys
 import tempfile
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 
 PROOF = Path(__file__).resolve().parents[1]
@@ -147,7 +147,7 @@ class VerificationDispatchCommandTests(unittest.TestCase):
 
 
 class VerificationDispatchCliTests(unittest.TestCase):
-    def test_dry_run_prints_one_command_per_lane(self) -> None:
+    def test_the_default_prints_one_command_per_lane(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             stdout = io.StringIO()
             with redirect_stdout(stdout):
@@ -161,7 +161,6 @@ class VerificationDispatchCliTests(unittest.TestCase):
                         "31000000001",
                         "--evidence-artifact",
                         ARB_ARTIFACT,
-                        "--dry-run",
                         "--out",
                         str(Path(tmp) / "out"),
                     ]
@@ -182,12 +181,49 @@ class VerificationDispatchCliTests(unittest.TestCase):
                     "verification-dispatch",
                     "--evidence-artifact",
                     ARB_ARTIFACT,
-                    "--dry-run",
                     "--out",
                     str(Path(tmp) / "out"),
                 ]
             )
             self.assertEqual(exit_code, 64)
+
+    def test_a_rejected_dispatch_is_reported_by_cause_not_raised(self) -> None:
+        # The command builder answers a foreign coordinate with a typed
+        # rejection, and `main` used to walk that rejection as if it were the
+        # command list — an operator got a TypeError traceback instead of the
+        # reason.  The cause the builder named must reach stderr, and the
+        # process must leave by the same door as every other refusal.
+        for coordinates, cause in (
+            (
+                ["--evidence-run-id", "0", "--evidence-artifact", ARB_ARTIFACT],
+                "positive evidence run id",
+            ),
+            (
+                [
+                    "--evidence-run-id",
+                    "31000000001",
+                    "--evidence-artifact",
+                    "verification-evidence-flint",
+                ],
+                "allowlisted engine artifact",
+            ),
+        ):
+            with tempfile.TemporaryDirectory() as tmp:
+                stderr = io.StringIO()
+                with redirect_stderr(stderr):
+                    exit_code = corpus_dispatch.main(
+                        [
+                            "--mode",
+                            "verification-dispatch",
+                            "--lane-width",
+                            str(1 << 23),
+                            *coordinates,
+                            "--out",
+                            str(Path(tmp) / "out"),
+                        ]
+                    )
+                self.assertEqual(exit_code, 64, coordinates)
+                self.assertIn(cause, stderr.getvalue(), coordinates)
 
     def test_missing_evidence_artifact_exits_64(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -197,7 +233,6 @@ class VerificationDispatchCliTests(unittest.TestCase):
                     "verification-dispatch",
                     "--evidence-run-id",
                     "31000000001",
-                    "--dry-run",
                     "--out",
                     str(Path(tmp) / "out"),
                 ]
