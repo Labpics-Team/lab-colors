@@ -118,7 +118,7 @@ function materialize(value, context, path, active, checkpoint, token) {
   return Object.freeze(copy);
 }
 
-function conflictError(conflicts) {
+export function conflictError(conflicts) {
   const payload = Object.freeze(conflicts.map((conflict) => Object.freeze(conflict)));
   const error = new Error(
     `output_conflict: ${payload.map(({ role, code }) => `${role} (${code})`).join(", ")}`,

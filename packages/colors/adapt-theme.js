@@ -15,7 +15,7 @@
 import { oklabLerp, compileLerpPair, lerpPairHex } from "./effective-bg.js";
 import { observePointBackground } from "./background-observation.js";
 import { __over } from "./pkg/labcolors.js";
-import { admitSnapshot, writeVars } from "./snapshot.js";
+import { admitSnapshot, writeVars, conflictError } from "./snapshot.js";
 
 const CANCELLED = Symbol("adaptTheme.cancelled");
 const NO_FRAME = Symbol("adaptTheme.noFrame");
@@ -373,6 +373,7 @@ export function adaptTheme(element, options) {
     let breachCount = 0;
     let worstIdx = 0;
     let worstMargin = Infinity;
+    const breachedRoles = new Set();
     const stride = occurrenceSet.length;
     // The theme key is lowered to its numeric handle once. Source words were
     // already parsed at solve admission; one row is reused across samples.
@@ -469,6 +470,7 @@ export function adaptTheme(element, options) {
         if (lcNow < want) {
           breached = true;
           sampleBreached = true;
+          breachedRoles.add(occurrenceSet[i].key);
         }
         const margin = want > 0 ? lcNow / want : Infinity;
         if (margin < sampleMargin) sampleMargin = margin;
@@ -479,7 +481,7 @@ export function adaptTheme(element, options) {
         worstIdx = s;
       }
     }
-    return { breached, worstIdx, breachCount };
+    return { breached, worstIdx, breachCount, breachedRoles };
   };
 
   const stableVarKeys = (role) => [
@@ -684,6 +686,7 @@ export function adaptTheme(element, options) {
   const chaseFeasible = (samples, startIdx, now, themeName, owner) => {
     let worstIdx = startIdx;
     let lastCandidate = null;
+    let lastBreachedRoles = new Set();
     // The samples[0] resolve, reused by stable-Glow reconciliation when the
     // committed candidate was solved against samples[0].
     let sample0Result = null;
@@ -692,14 +695,15 @@ export function adaptTheme(element, options) {
       if (worstIdx === 0) sample0Result = candidate.result;
       lastCandidate = candidate;
       if (samples.length === 1) {
-        return { feasible: candidate, sample0Result, lastCandidate };
+        return { feasible: candidate, sample0Result, lastCandidate, breachedRoles: new Set() };
       }
-      const { breached, worstIdx: nextWorst, breachCount } = recheckSamples(
+      const { breached, worstIdx: nextWorst, breachCount, breachedRoles } = recheckSamples(
         samples,
         candidate.recheckOccurrences,
         themeName,
         owner,
       );
+      lastBreachedRoles = breachedRoles;
       // Commit only when jointly feasible (no breach) OR the just-solved worst
       // sample is the SOLE breacher — an unreachable floor is its own
       // certificate, nothing better to try for it. `worstIdx` is the argmin
@@ -709,22 +713,42 @@ export function adaptTheme(element, options) {
       // burns the bounded cap and returns { feasible: null } → the drift caller
       // publishes nothing.
       if (!breached || (nextWorst === worstIdx && breachCount === 1)) {
-        return { feasible: candidate, sample0Result, lastCandidate };
+        return { feasible: candidate, sample0Result, lastCandidate, breachedRoles };
       }
       worstIdx = nextWorst;
     }
-    return { feasible: null, sample0Result, lastCandidate };
+    return { feasible: null, sample0Result, lastCandidate, breachedRoles: lastBreachedRoles };
   };
 
-  // Intent path (init/setTheme): a bootstrap or a deliberate theme switch must
-  // always produce committed state, so the worst-chase falls back to its
-  // best-effort last candidate when no jointly-feasible target exists. Prefer a
-  // jointly-feasible target when one is found. (The drift/tick path instead
-  // publishes nothing on infeasibility — see the sustained-breach branch.)
+  // Intent path (init/setTheme): when bounded worst-chase finds no jointly feasible candidate,
+  // fail-closed with OutputConflictError instead of committing an infeasible last candidate.
   const solveWorstCandidate = (samples, now, themeName, owner) => {
     const chased = chaseFeasible(samples, 0, now, themeName, owner);
+    if (chased.feasible === null) {
+      const conflicts = [];
+      const rolesToReport = chased.breachedRoles && chased.breachedRoles.size > 0
+        ? Array.from(chased.breachedRoles)
+        : (chased.lastCandidate?.roles ? Object.keys(chased.lastCandidate.roles) : []);
+
+      for (const roleKey of rolesToReport) {
+        const roleObj = chased.lastCandidate?.result?.roles?.[roleKey];
+        conflicts.push({
+          role: roleKey,
+          code: roleObj?.code ?? "floor_unreachable",
+          message: roleObj?.message ?? "contract has no solution",
+        });
+      }
+      if (conflicts.length === 0) {
+        conflicts.push({
+          role: "unknown",
+          code: "floor_unreachable",
+          message: "contract has no solution",
+        });
+      }
+      throw conflictError(conflicts);
+    }
     return {
-      candidate: chased.feasible ?? chased.lastCandidate,
+      candidate: chased.feasible,
       sample0Result: chased.sample0Result,
     };
   };
