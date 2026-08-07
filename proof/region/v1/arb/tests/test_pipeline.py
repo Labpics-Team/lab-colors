@@ -2248,11 +2248,12 @@ class StaticSourceIdentityTests(unittest.TestCase):
 
 
 class SourceBoundPreimageGuardTests(unittest.TestCase):
-    """The guard runs on every construction, and nothing proved it refuses.
+    """Every refusal branch of the construction guard, proven reachable.
 
-    Its neighbour test compares the field order against the protocol directly,
-    which proves the invariant and not the guard: deleting the guard's body
-    left the whole suite green.
+    The neighbour test compares the field order against the protocol directly,
+    which proves the invariant; these prove the guard itself — including the
+    schema-drift branch, whose loss no other suite can see because both sides
+    read one declaration.
     """
 
     def _values(self) -> dict:
@@ -2283,6 +2284,28 @@ class SourceBoundPreimageGuardTests(unittest.TestCase):
         values["evaluator_source"] = values["wrapper_source"]
         with self.assertRaises(TypeError):
             pipeline.ArbSourceBoundPreimagesV1(**values)
+
+    def test_a_drifted_protocol_schema_is_refused_at_construction(self) -> None:
+        # The third branch of the guard, and the one its docstring is about:
+        # the field order is checked against the protocol rather than trusted.
+        # Deleting that check left every suite green, because both sides read
+        # the same declaration — so the drift is injected at the protocol seam.
+        names = protocol.source_bound_coordinates_v2()
+        for drifted in (
+            tuple(reversed(names)),
+            names + ("engine_release_v2",),
+        ):
+            with self.subTest(count=len(drifted)):
+                with mock.patch.object(
+                    pipeline.protocol,
+                    "source_bound_coordinates_v2",
+                    lambda drifted=drifted: drifted,
+                ):
+                    with self.assertRaises(TypeError):
+                        pipeline.ArbSourceBoundPreimagesV1(**self._values2(names))
+
+    def _values2(self, names: tuple) -> dict:
+        return {name: bytes([i + 1]) * 32 for i, name in enumerate(names)}
 
 
 if __name__ == "__main__":
