@@ -417,22 +417,14 @@ def main(argv: list[str] | None = None) -> int:
     for command in commands:
         try:
             subprocess.run(command, check=True)
-        except OSError as error:
-            # Not only CalledProcessError: a missing `gh`, an exhausted file
-            # descriptor or a killed child all abandon a campaign mid-flight,
-            # and all of them must leave the same resumable report.
-            print(
-                f"dispatch stopped after {launched} of {len(commands)} lanes:"
-                f" {str(error).strip()}",
-                file=sys.stderr,
-            )
-            return 64
-        except subprocess.CalledProcessError as error:
-            # A campaign that dies mid-flight leaves runs already created.
-            # Reporting where it stopped is what makes the retry resumable
-            # instead of a duplicate of everything already dispatched.  The
-            # child's stderr is not captured here on purpose — it belongs on
-            # the operator's terminal — so only the exit status is quotable.
+        except (OSError, subprocess.CalledProcessError) as error:
+            # A campaign that dies mid-flight leaves runs already created, and
+            # every way it can die — a nonzero `gh`, a missing binary, an
+            # exhausted descriptor, a killed child — must leave the same
+            # resumable report: without the count a retry duplicates
+            # everything already dispatched.  The child's stderr is not
+            # captured on purpose — it belongs on the operator's terminal —
+            # so only the exit status is quotable.
             print(
                 f"dispatch stopped after {launched} of {len(commands)} lanes:"
                 f" {str(error).strip()}",
