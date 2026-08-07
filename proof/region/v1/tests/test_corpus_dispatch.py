@@ -353,18 +353,18 @@ class ArtifactListingWireTests(unittest.TestCase):
         # A run carrying more than one page of artifacts would otherwise lose
         # the evidence name and refuse a healthy campaign.
         seen: list[tuple[str, ...]] = []
+        kwargs_seen: list[dict] = []
 
         class _Completed:
             stdout = "verification-evidence-arb\tfalse\n"
             returncode = 0
 
+        # Recorded and asserted outside the stub: `assert` inside it would
+        # vanish under PYTHONOPTIMIZE=2, and the CI worker runs the suite
+        # under exactly that.
         def record(command: tuple[str, ...], **kwargs: object) -> object:
             seen.append(tuple(command))
-            assert kwargs.get("check") is True
-            assert kwargs.get("capture_output") is True
-            # Without this the reply arrives as bytes, the decode raises, and
-            # every run is refused — a gate that looks alive and admits nobody.
-            assert kwargs.get("text") is True
+            kwargs_seen.append(dict(kwargs))
             return _Completed()
 
         with unittest.mock.patch.object(corpus_dispatch.subprocess, "run", record):
@@ -372,6 +372,18 @@ class ArtifactListingWireTests(unittest.TestCase):
 
         self.assertEqual(observed, (("verification-evidence-arb", False),))
         self.assertEqual(len(seen), 1)
+        self.assertIs(kwargs_seen[0].get("check"), True)
+        self.assertIs(kwargs_seen[0].get("capture_output"), True)
+        # Without text=True the reply arrives as bytes, the decode raises,
+        # and every run is refused — a gate that looks alive, admits nobody.
+        self.assertIs(kwargs_seen[0].get("text"), True)
+        # A hung `gh` would otherwise stall the one call standing between an
+        # operator and 256 dispatches, indistinguishable from work in
+        # progress.
+        self.assertEqual(
+            kwargs_seen[0].get("timeout"),
+            corpus_dispatch.OBSERVATION_TIMEOUT_SECONDS_V1,
+        )
         argv = seen[0]
         self.assertEqual(argv[:3], ("gh", "api", "--paginate"))
         self.assertIn("repos/{owner}/{repo}/actions/runs/31116022208/artifacts", argv)
@@ -663,6 +675,7 @@ class DispatchSeamTests(unittest.TestCase):
             else (lambda run_id: _admitted_provenance()),
         )
 
+
     def _argv(self, out: Path, *, live: bool = True) -> list[str]:
         argv = [
             "--mode",
@@ -785,6 +798,29 @@ class DispatchSeamTests(unittest.TestCase):
                 argv = self._argv(Path(tmp) / "out.txt", live=False)
                 code = corpus_dispatch.main(
                     [*argv, "--execute", "--expect-lanes", "16"]
+                )
+        self.assertEqual(code, 64)
+        self.assertEqual(launched, [])
+
+    def test_an_overdeclared_scale_is_refused_too(self) -> None:
+        # The declaration must equal reality in both directions.  Weakening
+        # `!=` to `<` survived every test: an operator declaring 512 where the
+        # plan holds 256 would dispatch silently, and a declaration that does
+        # not match is a wrong mental model regardless of its sign.
+        launched: list[tuple[str, ...]] = []
+        with tempfile.TemporaryDirectory() as tmp:
+            with unittest.mock.patch.object(
+                corpus_dispatch,
+                "gh_run_artifacts_v1",
+                lambda run_id: (("verification-evidence-arb", False),),
+            ), unittest.mock.patch.object(
+                corpus_dispatch.subprocess,
+                "run",
+                lambda command, **kwargs: launched.append(tuple(command)),
+            ):
+                argv = self._argv(Path(tmp) / "out.txt", live=False)
+                code = corpus_dispatch.main(
+                    [*argv, "--execute", "--expect-lanes", "512"]
                 )
         self.assertEqual(code, 64)
         self.assertEqual(launched, [])
