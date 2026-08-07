@@ -1,5 +1,13 @@
 name: Verification lane replay
 
+# One lane is one run, so a full-domain cover is 512 of them and the dual
+# proof needs their ids.  Naming the run after its coordinates makes that list
+# a query instead of a guess about creation times.
+run-name: >-
+  lane ${{ inputs.evidence_artifact }}
+  ${{ inputs.window_start }}+${{ inputs.window_points }}
+  of ${{ inputs.evidence_run_id }}
+
 on:
   workflow_dispatch:
     inputs:
@@ -97,8 +105,14 @@ jobs:
             --out lane-out
 
       - name: upload the verification lane wire evidence
+        # The engine belongs in the name because both engines replay the same
+        # window plan: without it every Arb lane and its MPFI twin claim one
+        # artifact name, and a cover gathered from many runs would overwrite
+        # itself down to one engine.  The name is only for keeping the files
+        # apart — which engine a lane actually serves is decided by the
+        # comparator source identity inside its manifest.
         uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
         with:
-          name: verification-lane-${{ inputs.window_start }}-${{ inputs.window_points }}
+          name: verification-lane-${{ inputs.evidence_artifact }}-${{ inputs.window_start }}-${{ inputs.window_points }}
           path: lane-out/
           if-no-files-found: error
