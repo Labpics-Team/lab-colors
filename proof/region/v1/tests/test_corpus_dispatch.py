@@ -734,15 +734,34 @@ class DispatchSeamTests(unittest.TestCase):
     """
 
     def _provenance_patch(self, observer: object = None) -> object:
-        """Patch the run observation the live path performs before anything else."""
+        """Patch the two observations the live path performs before anything else.
 
-        return unittest.mock.patch.object(
-            corpus_dispatch,
-            "gh_run_provenance_v1",
-            observer
-            if observer is not None
-            else (lambda run_id: _admitted_provenance()),
-        )
+        The seam under test is the coordinator's, not the network's: an
+        admitted run also answers the content admission with exactly the
+        inputs a lane reads, so a seam test fails on its own claim rather
+        than on an unmocked download.
+        """
+
+        import contextlib as _ctx
+
+        @_ctx.contextmanager
+        def both():
+            with unittest.mock.patch.object(
+                corpus_dispatch,
+                "gh_run_provenance_v1",
+                observer
+                if observer is not None
+                else (lambda run_id: _admitted_provenance()),
+            ), unittest.mock.patch.object(
+                corpus_dispatch,
+                "gh_evidence_artifact_paths_v1",
+                lambda run_id, artifact: tuple(
+                    corpus_dispatch.EVIDENCE_LANE_INPUTS_V1
+                ),
+            ):
+                yield
+
+        return both()
 
 
     def _argv(self, out: Path, *, live: bool = True) -> list[str]:
