@@ -1,13 +1,12 @@
 # How-to: полнодоменное дуальное доказательство
 
-Маршрут: один полнодоменный прогон обоих движков → 512 полос верификации →
-одна печать дуального доказательства.
+Маршрут: один полнодоменный прогон обоих движков → 512 полос верификации
+(256 на движок) → одна печать дуального доказательства.
 
-В `main` исполнимы шаги 1–4. Печати нет: `.github/workflows/dual-proof.yml` и
-`proof/region/v1/tests/dual_proof_gate.py` приходят с PR 549 (шаг 5).
+Маршрут целиком в `main`. Проверено на `3ad5091e`.
 
-Нужен `gh`, авторизованный в репозитории: все шаги — ручной `workflow_dispatch`.
-Код проверяйте только в WSL или Linux (см. «Грабли»).
+Нужен `gh`, авторизованный в репозитории: все шаги — ручной
+`workflow_dispatch`. Код проверяйте только в WSL или Linux (см. «Грабли»).
 
 ## 1. Прогон обоих движков на полном домене
 
@@ -17,23 +16,14 @@ gh run list --workflow full-domain-run.yml --limit 1 \
   --json databaseId --jq '.[0].databaseId'
 ```
 
-Один прогон — две задачи, конверт каждой 480 мин. Замер прогона `31116022208`:
-Arb 63 мин, MPFI 43 мин.
+Один прогон — две задачи, конверт каждой 480 мин. Замер прогона
+`31116022208`: Arb 63 мин, MPFI 43 мин.
 
-Прогон выгружает по артефакту на движок: `verification-evidence-arb` и
-`verification-evidence-mpfi`. Идентификатор прогона (дальше `EVIDENCE_RUN_ID`) —
-вход всех следующих шагов.
+Выгружает по артефакту на движок из `evidence-out/`:
+`verification-evidence-arb` и `verification-evidence-mpfi`. Идентификатор
+прогона (дальше `EVIDENCE_RUN_ID`) — вход всех следующих шагов.
 
-Перед диспатчем убедитесь, что артефакты живы:
-
-```sh
-gh api repos/{owner}/{repo}/actions/runs/EVIDENCE_RUN_ID/artifacts \
-  --jq '.artifacts[] | [.name, (.expired|tostring)] | @tsv'
-# verification-evidence-arb   false
-# verification-evidence-mpfi  false
-```
-
-`true` — полоса такой артефакт уже не скачает, нужен новый прогон.
+Проверять артефакты руками не нужно: допуск встроен в координатор (шаг 3).
 
 ## 2. План полос
 
@@ -44,128 +34,188 @@ python3 proof/region/v1/corpus_dispatch.py --mode plan --out plan-out
 # plan lanes=256 lane_width=65536 shard_width=16384 domain_points=16777216
 ```
 
-Пишет `plan-out/dispatch-plan.json`.
+Пишет `plan-out/dispatch-plan.json`. `--out` обязателен во всех режимах.
 
 ## 3. Диспатч полос — отдельно для каждого движка
 
-Сначала печать:
+Печать — поведение по умолчанию, сеть не трогается:
 
 ```sh
 python3 proof/region/v1/corpus_dispatch.py --mode verification-dispatch \
   --evidence-run-id EVIDENCE_RUN_ID \
   --evidence-artifact verification-evidence-arb \
-  --dry-run --out plan-out
+  --out plan-out
 ```
 
-Ровно 256 строк, окна от 0 до 16711680 шагом 65536. Пересчитайте строки. Живой
-запуск — та же команда без `--dry-run`. Повторите обе с
-`verification-evidence-mpfi`: всего 512 прогонов.
+Ровно 256 строк, окна от 0 до 16711680 шагом 65536. Пересчитайте строки.
 
-`--out` обязателен во всех режимах, хотя в режимах диспатча ничего не пишет.
-`--evidence-artifact` принимает только два имени выше; на чужом имени `main`
-падает с `TypeError: 'ShardCorpusRejectedV1' object is not iterable`, кампания
-не стартует.
-
-Полоса (`verification-lanes.yml`, конверт 480 мин) скачивает названный артефакт
-из `EVIDENCE_RUN_ID`, требует в нём `job.bin` и
-`comparator-bundle/comparator-manifest-v2.bin`, проигрывает своё окно через
-`corpus_lane.py` под компаратором движка и выгружает
-`verification-lane-<window_start>-<window_points>`.
-
-## 4. Сбор идентификаторов 512 прогонов
-
-`gh workflow run` не возвращает id, а в `main` у полос нет `run-name`, поэтому
-единственный различитель кампаний — дата:
+Живой запуск — явный `--execute` с обязательным `--expect-lanes`:
 
 ```sh
-gh run list --workflow verification-lanes.yml --status success \
-  --created ГГГГ-ММ-ДД --limit 512 \
-  --json databaseId --jq '[.[].databaseId] | join(",")'
+python3 proof/region/v1/corpus_dispatch.py --mode verification-dispatch \
+  --evidence-run-id EVIDENCE_RUN_ID \
+  --evidence-artifact verification-evidence-arb \
+  --execute --expect-lanes 256 \
+  --out plan-out
 ```
 
-Прогоны прошлых кампаний в этом списке ничем не отличаются от текущих. Сверьте
-число: 512.
+Повторите обе команды с `verification-evidence-mpfi`: всего 512 прогонов.
 
-## 5. Печать дуального доказательства — только с PR 549
+Отказы до первого прогона (все `exit 64`):
 
-В `main` печати нет. По диффу 549:
+| Ситуация | Сообщение |
+| --- | --- |
+| `--execute` без `--expect-lanes` | `dispatch refused: --execute requires --expect-lanes` |
+| `--expect-lanes 512` при плане на 256 | `dispatch refused: --expect-lanes=512 but the plan has 256 lanes` |
+| `--mode plan --execute` | `plan mode cannot dispatch: drop --execute` |
+| чужое `--evidence-artifact` | `lane dispatch rejected: ShardCorpusRejectedV1(...)` |
 
-- workflow `dual-proof.yml`, вход `lane_run_ids` — список из шага 4 через запятую;
-- одна задача, конверт 330 мин, пересобирает оба движка заново: расписки
-  source-bound не имеют wire-формы, держать обе может только выпустивший их процесс;
-- покрытие проверяется до сборки: ровно две `comparator_source_identity`, каждая
-  покрывает `[0, 16777216)` без дыр и нахлёстов;
-- печатает `proof/region/v1/tests/dual_proof_gate.py`, результат — артефакт
-  `dual-proof-identity`.
+`--dry-run` удалён: argparse отвергает его с `exit 2`
+(`unrecognized arguments: --dry-run`).
 
-Полосы должны быть выпущены версией `verification-lanes.yml` из 549: там имя
-артефакта содержит движок. У полос из `main` оба движка дают одинаковые имена, и
-сбор отказывает по коллизии.
+### Цепь допусков перед диспатчем
 
-## Что меняется в незавершённых PR
+Только на живом пути, по возрастанию цены. Порядок — часть контракта.
 
-Все пять ветвятся от `main` независимо, поэтому порядок мержа значим: 552 уже
-несёт полярность из 548, а 553 и 555 всё ещё написаны под `--dry-run`.
+1. **Происхождение прогона.** Путь `.github/workflows/full-domain-run.yml`,
+   событие `workflow_dispatch`, статус `completed`, вывод `success`,
+   читаемый 40-символьный `head_sha`. `head_sha` печатается оператору, а не
+   решается здесь.
+2. **Имя артефакта.** Прогон действительно несёт артефакт с этим именем, и тот
+   не `expired`: истёкший всё ещё числится в листинге, но уже не скачивается.
+   Принадлежность имени списку двух — отказ раньше и без сети (см. таблицу).
+3. **Содержимое.** Скачивает артефакт целиком и требует внутри `job.bin` и
+   `comparator-bundle/comparator-manifest-v2.bin`.
 
-**PR 548 — полярность флага.** `--dry-run` исчезает. Печать становится
-поведением по умолчанию, живой запуск — явный `--execute`, обязательно с
-`--expect-lanes 256`; при несовпадении с планом — отказ до первого прогона.
-`--execute` вместе с `--mode plan` отвергается. Типизированный отказ больше не
-роняет цикл `TypeError`, а перед первым диспатчем координатор спрашивает GitHub,
-несёт ли прогон названный артефакт и не истёк ли он; неудача наблюдения — тоже
-отказ. После 548 команда шага 3 без `--dry-run` ничего не запустит, а с
-`--dry-run` упадёт на разборе аргументов.
+Происхождение раньше имени: имя ничего не говорит о том, откуда артефакт —
+тот же workflow из форка публикует артефакт ровно допустимого имени.
+Содержимое последним: это единственный шаг со скачиванием, и дешёвые отказы
+не должны стоить сетевого вызова. Прогон, сделанный до нынешнего
+`evidence-out/`, проходит проверки имени и умирал бы во всех 256 полосах на
+первом `test -f`.
 
-**PR 549 — печать и имена.** Появляются `.github/workflows/dual-proof.yml` и
-`proof/region/v1/tests/dual_proof_gate.py`. У полосы появляется `run-name` с
-координатами, а имя её артефакта становится
+Полоса (`verification-lanes.yml`, конверт 480 мин) скачивает названный
+артефакт из `EVIDENCE_RUN_ID`, проигрывает своё окно через `corpus_lane.py`
+под компаратором движка и выгружает
 `verification-lane-<evidence_artifact>-<window_start>-<window_points>`.
 
-**PR 552 — происхождение прогона.** Допуск проверяет прогон до артефакта:
-workflow `.github/workflows/full-domain-run.yml`, событие `workflow_dispatch`,
-статус `completed`, вывод `success`; `head_sha` сообщается оператору, а не
-решается здесь. Имя артефакта ничего не говорит о том, откуда он: тот же
-workflow из форка публикует артефакт ровно допустимого имени.
+## 4. Сбор идентификаторов полос
 
-**PR 553 — сбор идентификаторов.** Режим `--mode collect` (плюс `--run-limit`,
-по умолчанию 2000) читает заголовки прогонов из `run-name` PR 549 и пишет
-`<--out>/lane-runs.json` схемы `corpus-lane-runs-v1`: `run_id` на окно. Имя
-файла одно, поэтому для двух движков нужны разные `--out` — иначе второй
-перезапишет первый. Отказ несёт списки `missing` и `duplicated` окон. Шаг 4
-перестаёт быть догадкой по времени; зависит от 549.
+Полосы носят `run-name` с координатами:
 
-**PR 555 — содержимое артефакта.** Живой путь скачивает названный артефакт
-целиком и требует внутри `job.bin` и
-`comparator-bundle/comparator-manifest-v2.bin`. Прогон, сделанный до нынешнего
-`evidence-out/`, проходит проверку имени и умирает во всех 256 полосах на первом
-`test -f`.
+```
+lane <evidence_artifact> <window_start>+<window_points> of <evidence_run_id>
+```
+
+Поэтому сбор — запрос, а не догадка по времени:
+
+```sh
+python3 proof/region/v1/corpus_dispatch.py --mode collect \
+  --evidence-run-id EVIDENCE_RUN_ID \
+  --evidence-artifact verification-evidence-arb \
+  --out collect-arb
+# collected lanes=256 artifact=verification-evidence-arb evidence_run=...
+```
+
+Пишет `collect-arb/lane-runs.json` схемы `corpus-lane-runs-v1`: `run_id` на
+каждое окно. Имя файла одно, поэтому для второго движка нужен **другой**
+`--out` — иначе он перезапишет первый.
+
+Учитываются только прогоны с `conclusion=success`, чей титул называет тот же
+артефакт и тот же `EVIDENCE_RUN_ID`. Две кампании пересекаются во времени по
+построению, так что время не различитель.
+
+Отказ несёт списки `missing` и `duplicated` окон; ничего не пишется —
+частичный список неотличим от полного для того, кто его читает.
+
+`--run-limit` (по умолчанию 2000) — глубина листинга. Правило насыщения:
+если вернулось ровно `--run-limit` записей и покрытие неполно, отказ говорит,
+что виноват может быть лимит, а не кампания — поднимите лимит прежде, чем
+передиспатчить 256 полос.
+
+Отказы аргументов (`exit 64`): непозитивный `--evidence-run-id`,
+`--evidence-artifact` вне списка двух, непозитивный `--run-limit`.
+
+## 5. Печать дуального доказательства
+
+```sh
+gh workflow run dual-proof.yml -f lane_run_ids=<id,id,...>
+```
+
+Вход `lane_run_ids` — идентификаторы полос **обоих** движков через запятую,
+то есть объединение `run_id` из обоих `lane-runs.json` шага 4.
+
+Одна задача, конверт 330 мин, пересобирает оба движка заново.
+
+**Закон размещения.** `join_dual_proof_v1` требует две source-bound расписки,
+а у них нет проводной формы by design: расписка, разбираемая из байтов,
+позволила бы чужому коду чеканить происхождение. Значит держать обе может
+только процесс, сам сминтивший обе, — одна задача, строящая и прогоняющая
+оба движка подряд.
+
+Полосы при этом приходят из прошлого прогона и всё равно принимаются: полоса
+связывает *source*-идентичность компаратора, а она воспроизводится между
+раннерами. Полная идентичность сворачивает наблюдение сборки и не
+воспроизводится.
+
+Покрытие проверяется до сборки: ровно две `comparator_source_identity`,
+каждая покрывает `[0, 16777216)` без дыр и нахлёстов. Какому движку служит
+полоса, решает source-идентичность внутри её манифеста, а не имя артефакта —
+имя только держит файлы врозь.
+
+Каждый прогон скачивается в свой каталог: две полосы, претендующие на одно
+имя, — отказ, а не тихая победа одной.
+
+Печатает `proof/region/v1/tests/dual_proof_gate.py`, результат — артефакт
+`dual-proof-identity`.
+
+## Открытые PR
+
+Нет. `gh pr list --state open` пуст: маршрут целиком влит в `main`.
 
 ## Грабли
 
-**Диспатч без флага печати.** Забытый `--dry-run` рассылает весь план боевыми
-прогонами: так одна ошибка превратилась в 133 мусорных запуска. Порядок —
-печать, счёт строк (256), живой запуск. PR 548 переворачивает полярность именно
-поэтому.
+**Проверять на Windows нельзя.** Замер на `3ad5091e`: Windows — 361 тест и
+7 ошибок загрузки, WSL — 515 тестов и 3 предсуществующих падения в
+`test_build`. Причин у семи ошибок две, а не одна:
 
-**Проверять на Windows нельзя.** `proof/region/v1/executor.py:13` импортирует
-`fcntl`, которого на Windows нет, поэтому слой `arb`/`mpfi` не грузится, а
-discovery молча отдаёт меньший набор. Замер на нетронутом дереве `e420e21`:
-Windows — 258 тестов и 7 ошибок импорта, WSL — 408 тестов и 3 предсуществующих
-падения в `test_build`. Проверяйте в WSL:
+- 4 × `ModuleNotFoundError: No module named 'fcntl'` — `test_build`,
+  `test_dual_proof`, `test_executor`, `test_mpfi_runtime`; корень —
+  `proof/region/v1/executor.py:13`;
+- 3 × `TypeError: invalid native process cwd` — `test_build_identity`,
+  `test_corpus_shards`, `test_mpfi_build`; корень —
+  `proof/region/v1/build/transport.py:715` строит модульную константу с
+  `cwd="/"`, а на Windows `os.path.isabs("/")` — `False`, и проверка в
+  `transport.py:588` отвергает её на импорте.
+
+Discovery при этом молча отдаёт меньший набор. Проверяйте в WSL:
 
 ```sh
-python3 -m unittest discover -s proof/region/v1/tests -p "test_*.py"
-export PATH="$HOME/.cargo/bin:$PATH" && cargo +stable test -p labcolors-core
+PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover \
+  -s proof/region/v1/tests -p "test_*.py"
+python3 proof/region/v1/arb/tests/gate.py
+python3 proof/region/v1/mpfi/tests/gate.py
 ```
 
+CI гоняет второй режим, где `assert` исчезает: `ci-worker.yml:238` — discovery
+под `PYTHONOPTIMIZE=2`, `arb.yml:41,48` — оба гейта под ним же. Прогоняйте оба
+режима локально.
+
 **Инвентарь тестов пинится в двух местах.**
-`proof/region/v1/arb/tests/gate.py` держит `EXPECTED_TEST_INVENTORY_SHA256`, а
-`proof/region/v1/tests/test_build.py` — собственные `ARB_INVENTORY_SHA256_V1`,
-`ARB_ORDER_SHA256_V1` и `ARB_TEST_COUNT_V1`. Второй набор — независимый внешний
-оракул: он ничего не импортирует из гейта, поэтому правка одного гейта проходит
-его собственную проверку и падает потом в задаче `test` (`ci-worker.yml`). Так
-уже было: CI-прогон `31125436887` ветки PR 549, задача `CI / test`,
-`AssertionError: 270 != 267` в `test_build.py:291`.
+`proof/region/v1/arb/tests/gate.py` держит `EXPECTED_TEST_INVENTORY_SHA256`,
+а `proof/region/v1/tests/test_build.py` — собственные
+`ARB_INVENTORY_SHA256_V1`, `ARB_ORDER_SHA256_V1` и `ARB_TEST_COUNT_V1`.
+Второй набор — намеренно независимый внешний оракул: `test_build` импортирует
+сам гейт (чтобы перечислить набор), но не его ожидаемый хеш. Поэтому
+согласованная правка гейта проходит его собственную проверку и падает потом в
+задаче `CI / test`.
+
+Проверено: добавление одного теста и обновление **только** пина гейта даёт
+гейт `OK (skipped=15)`, `exit 0` — и тут же
+`AssertionError: 285 != 284` в `test_build.ExistingArbGateTests`, `exit 1`.
+Так уже было в CI: прогон `31125436887` ветки PR 549, задача `CI / test`,
+`AssertionError: 270 != 267` в `test_build.py:291`. На `3ad5091e` — 284 теста,
+инвентарь `3284dccf286e90dcd07513c013b6994d619f0bb02232efee514fa08032301dbe`.
 
 Обновляйте оба набора значениями из исполнения гейта в WSL:
 
@@ -186,8 +236,15 @@ PY
 `ARB_INVENTORY_SHA256_V1` обязан совпасть с `EXPECTED_TEST_INVENTORY_SHA256`.
 
 **Правка `crates/labcolors-core/src/lib.rs` ломает две аттестации.** Любая,
-вплоть до комментария: обе считают точные байты файла. Перегенерируйте четыре
-артефакта по цепочке, каждый следующий из предыдущего:
+вплоть до комментария: обе считают точные байты файла. Проверено — один
+дописанный комментарий даёт
+
+```
+clean-set verification: FAIL: receipt artifact[6] bytes do not match receipt metadata
+point-support retained-surplus independent verification: FAIL: point-support semantic source drifted
+```
+
+Перегенерируйте четыре артефакта по цепочке, каждый следующий из предыдущего:
 
 1. запись `crates/labcolors-core/src/lib.rs` (поля `bytes` и `sha256`) в
    `crates/labcolors-core/contracts/clean-set-srgb8-v1/receipt-v1.json`;
@@ -203,5 +260,5 @@ python3 scripts/verify_clean_set_receipt.py product --product-root "$PWD"
 python3 scripts/verify_point_support_surplus.py
 ```
 
-Сверьте результат с `origin/main` поле за полем: меняться должны только digest-ы
-над исходником. Ни одно число сертификата меняться не имеет права.
+Сверьте результат с `origin/main` поле за полем: меняться должны только
+digest-ы над исходником. Ни одно число сертификата меняться не имеет права.
