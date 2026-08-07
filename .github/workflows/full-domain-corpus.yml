@@ -19,6 +19,20 @@ on:
         description: lane window width (packing-aligned multiple of shard_points)
         required: false
         default: ""
+      expect_lanes:
+        description: >-
+          lanes in the full-domain campaign this dispatch belongs to
+          (2^24 / window_points, or 0 for a dispatch that is not a lane)
+        # The coordinator's `--expect-lanes` lives in the coordinator, so a
+        # checkout older than that flag carries the older contract whole:
+        # this project has twice turned one mistake into a campaign — 133
+        # runs, then 69 — while reading rules the running copy did not have.
+        # No guard added to the client protects a stale client.  Declared
+        # required and without a default, this coordinate is refused by
+        # GitHub before a run exists, so a coordinator that does not know it
+        # cannot dispatch at all, and one that does has to state the scale
+        # of what it is about to start.
+        required: true
       lane_run_ids:
         description: comma-separated lane run ids to assemble (empty skips assembly)
         required: false
@@ -43,6 +57,94 @@ jobs:
       PYTHONDONTWRITEBYTECODE: "1"
       PYTHONHASHSEED: "0"
     steps:
+      # First, and before the checkout on purpose: a dispatch whose
+      # coordinates cannot describe a lane of the cover must cost nothing,
+      # and this guard must not be a copy of the repository whose age is
+      # exactly what is in doubt.  Everything it reads is declared on the
+      # step itself, so the guard is one self-contained object to review.
+      - name: refuse a dispatch that does not belong to a coherent campaign
+        shell: bash
+        env:
+          WINDOW_START: ${{ inputs.window_start }}
+          WINDOW_POINTS: ${{ inputs.window_points }}
+          EXPECT_LANES: ${{ inputs.expect_lanes }}
+        run: |
+          set -euo pipefail
+          # Arithmetic, not a token: a lane is admissible only if its own
+          # width tiles the full sRGB8 domain exactly into the campaign the
+          # dispatcher claims.  An older coordinator cannot satisfy this by
+          # accident, and nothing here needs the repository to be read.
+          domain=16777216
+          # `case` compares raw bytes.  `[ -eq ]` and Python's `int()` both
+          # accept surrounding whitespace, so either would admit a
+          # coordinate carrying the carriage return a Windows shell leaves
+          # behind; and `$(( ))` reads a leading zero as octal, so `0200000`
+          # would be 65536 here and 200000 in the lane runner — one dispatch
+          # describing two different windows, the guard's arithmetic then
+          # saying nothing about the window that actually replays.
+          case "${EXPECT_LANES}" in
+            ''|*[!0-9]*) echo "expect_lanes must be a canonical decimal" >&2; exit 64;;
+          esac
+          if [ -z "${WINDOW_POINTS}" ]; then
+            # No window is the bounded prefix probe, which is not a lane of
+            # any cover: the only campaign size true of it is none.  A
+            # dispatch that claims a campaign and carries no window would
+            # run that same bounded probe once per lane and report every one
+            # of them green.
+            if [ "${EXPECT_LANES}" != "0" ]; then
+              echo "a dispatch without window_points is the bounded probe and" \
+                   "belongs to no campaign: expect_lanes must be 0" >&2
+              exit 64
+            fi
+            if [ -n "${WINDOW_START}" ]; then
+              echo "window_start ${WINDOW_START} names a lane, and a lane needs" \
+                   "window_points: this dispatch would replay the bounded probe" >&2
+              exit 64
+            fi
+            exit 0
+          fi
+          case "${WINDOW_POINTS}" in
+            ''|*[!0-9]*|0) echo "window_points must be a positive integer" >&2; exit 64;;
+            0*) echo "window_points must not carry leading zeros" >&2; exit 64;;
+          esac
+          case "${WINDOW_START}" in
+            ''|*[!0-9]*) echo "window_start must be a canonical decimal" >&2; exit 64;;
+            0) ;;
+            0*) echo "window_start must not carry leading zeros" >&2; exit 64;;
+          esac
+          # Both coordinates are bounded by the domain and the domain is
+          # eight digits, so anything longer is out of range by
+          # construction — and it has to be refused before the arithmetic
+          # rather than by it: `$(( ))` wraps silently at 2^64, where
+          # `18446744073709551616` reads as a perfectly aligned zero, and
+          # `[ -ge ]` answers "not greater" for a value it cannot parse.
+          if [ "${#WINDOW_POINTS}" -gt 8 ] || [ "${#WINDOW_START}" -gt 8 ]; then
+            echo "window ${WINDOW_START}+${WINDOW_POINTS} is outside the sRGB8 domain" >&2
+            exit 64
+          fi
+          if [ $(( domain % WINDOW_POINTS )) -ne 0 ]; then
+            echo "window_points ${WINDOW_POINTS} does not tile the full domain" >&2
+            exit 64
+          fi
+          lanes=$(( domain / WINDOW_POINTS ))
+          # Compared as bytes, because both sides are canonical decimals by
+          # now and a numeric comparison is the one that can answer "equal"
+          # about something it failed to read.
+          if [ "${lanes}" != "${EXPECT_LANES}" ]; then
+            echo "campaign size ${EXPECT_LANES} contradicts the plan: a" \
+                 "${WINDOW_POINTS}-point window covers the domain in ${lanes} lanes" >&2
+            exit 64
+          fi
+          if [ "${WINDOW_START}" -ge "${domain}" ]; then
+            echo "window_start ${WINDOW_START} is outside the sRGB8 domain" >&2
+            exit 64
+          fi
+          if [ $(( WINDOW_START % WINDOW_POINTS )) -ne 0 ]; then
+            echo "window_start ${WINDOW_START} is not a seam of a" \
+                 "${WINDOW_POINTS}-point cover" >&2
+            exit 64
+          fi
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
