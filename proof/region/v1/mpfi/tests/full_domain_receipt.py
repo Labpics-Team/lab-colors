@@ -58,6 +58,46 @@ def _full_domain_binding() -> mpfi_runtime.MpfiRuntimeBindingV1:
     )
 
 
+def seal_full_domain_receipt_v1() -> receipt.MpfiSourceBoundEvaluatorReceiptV1:
+    """One controller-observed MPFI BUILD to RUN over the exact full manifest.
+
+    Extracted for the same reason as the Arb lane: the dual-proof gate mints
+    the receipt through this function instead of restating the request, so
+    the two cannot drift apart.
+    """
+
+    source_lock = provenance.mpfi_source_lock_v1()
+    archive_names = (
+        "LABCOLORS_GMP_ARCHIVE",
+        "LABCOLORS_MPFR_ARCHIVE",
+        "LABCOLORS_MPFI_ARCHIVE",
+    )
+    safe = tuple(
+        provenance.admit_source_archive(lock, Path(os.environ[name]).read_bytes())
+        for lock, name in zip(source_lock.sources, archive_names, strict=True)
+    )
+    admitted = provenance.admit_mpfi_sources(source_lock, safe)
+    base = _request()
+    request = receipt.MpfiPipelineRequestV1(
+        source_lock,
+        admitted,
+        base.build_sources,
+        base.generated_formula,
+        _limits_for_bundle(
+            source_lock,
+            admitted,
+            base.build_sources,
+            base.generated_formula,
+        ),
+        corpus.full_domain_job_v1(base.job),
+        _full_domain_binding(),
+    )
+    return receipt.MpfiSourceBoundControllerV1(
+        Path(os.environ["LABCOLORS_MPFI_DOCKER"]),
+        Path(os.environ["LABCOLORS_EXECUTOR_CGROUP_V1"]),
+    ).execute(request)
+
+
 @unittest.skipUnless(
     sys.platform == "linux"
     and os.environ.get("LABCOLORS_MPFI_DOCKER")
@@ -69,37 +109,8 @@ def _full_domain_binding() -> mpfi_runtime.MpfiRuntimeBindingV1:
 )
 class NativeMpfiSourceBoundFullDomainReceiptIntegrationTests(unittest.TestCase):
     def test_full_domain_build_run_seal_and_verification_evidence(self) -> None:
-        source_lock = provenance.mpfi_source_lock_v1()
-        archive_names = (
-            "LABCOLORS_GMP_ARCHIVE",
-            "LABCOLORS_MPFR_ARCHIVE",
-            "LABCOLORS_MPFI_ARCHIVE",
-        )
-        safe = tuple(
-            provenance.admit_source_archive(lock, Path(os.environ[name]).read_bytes())
-            for lock, name in zip(source_lock.sources, archive_names, strict=True)
-        )
-        admitted = provenance.admit_mpfi_sources(source_lock, safe)
-        base = _request()
-        full_job = corpus.full_domain_job_v1(base.job)
-        request = receipt.MpfiPipelineRequestV1(
-            source_lock,
-            admitted,
-            base.build_sources,
-            base.generated_formula,
-            _limits_for_bundle(
-                source_lock,
-                admitted,
-                base.build_sources,
-                base.generated_formula,
-            ),
-            full_job,
-            _full_domain_binding(),
-        )
-        result = receipt.MpfiSourceBoundControllerV1(
-            Path(os.environ["LABCOLORS_MPFI_DOCKER"]),
-            Path(os.environ["LABCOLORS_EXECUTOR_CGROUP_V1"]),
-        ).execute(request)
+        full_job = corpus.full_domain_job_v1(_request().job)
+        result = seal_full_domain_receipt_v1()
 
         self.assertIs(type(result), receipt.MpfiSourceBoundEvaluatorReceiptV1, result)
         self.assertTrue(receipt.replay_mpfi_evidence_is_well_bound_v1(result.evidence))
