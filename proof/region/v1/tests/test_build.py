@@ -54,12 +54,12 @@ def _temporary_mode(path: Path, mode: int) -> Iterator[None]:
 # Keep an independent outer oracle: importing the gate's expected hash here
 # would let a coordinated gate edit hide inventory drift.
 ARB_INVENTORY_SHA256_V1 = (
-    "cc497572c7613c7fad2c765ba0e9901795c54900d30bd202fe06cbff13f8415d"
+    "3284dccf286e90dcd07513c013b6994d619f0bb02232efee514fa08032301dbe"
 )
 ARB_ORDER_SHA256_V1 = (
-    "3a6c317003c11d69e91e38e55a829984357ff20b43d634c6afdda6b1884af35e"
+    "3625426ef4be2cd76144119481779ffad1be7ba4a4a18ed450c53934fc921848"
 )
-ARB_TEST_COUNT_V1 = 280
+ARB_TEST_COUNT_V1 = 284
 
 MOVED_INPUT_SURFACE_V1 = (
     "CanonicalInputLimitsV1",
