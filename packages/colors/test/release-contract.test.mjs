@@ -38,6 +38,9 @@ import {
 const here = dirname(fileURLToPath(import.meta.url));
 const root = resolve(here, "../../..");
 const read = (...parts) => readFileSync(join(root, ...parts), "utf8");
+// This subprocess performs one local ESM import; ten seconds bounds a deadlock
+// while leaving two orders of magnitude over the measured sub-second path.
+const DOM_FREE_PROBE_TIMEOUT_MS = 10_000;
 
 test("npm invocation is argv-safe and directly executable on every supported host", () => {
   assert.deepEqual(
@@ -998,13 +1001,27 @@ test("the atomic output sink has one bounded pinned-Chrome browser gate", () => 
     assert.match(source, /server\.listen\(\{ port: 0, host: LOOPBACK_HOST, signal: listenSignal \}\);/u);
     assert.match(source, /listen\(server, commandTimeoutMilliseconds, overall\)/u);
     assert.match(source, /closeServer\(server, PROCESS_STOP_TIMEOUT_MS\)/u);
+    assert.match(
+      source,
+      /if \(driverPort && sessionId\) \{\s*const teardown = timeoutSignal\(PROCESS_STOP_TIMEOUT_MS, "WebDriver session teardown"\);/u,
+    );
+    assert.match(
+      source,
+      /await driverRequest\(\s*driverPort,\s*`\/session\/\$\{sessionId\}`,\s*\{ method: "DELETE" \},\s*PROCESS_STOP_TIMEOUT_MS,\s*teardown,\s*\)/u,
+    );
+    assert.match(
+      source,
+      /try \{\s*await driverRequest\([\s\S]*?`\/session\/\$\{sessionId\}`[\s\S]*?\)\.catch\(\(error\) => cleanupErrors\.push\(error\)\);\s*\} finally \{\s*teardown\.clear\(\);\s*\}/u,
+    );
     assert.match(source, /"packages\/colors\/output-sink\.js"/u);
+    assert.match(source, /"packages\/colors\/output-bindings\.js"/u);
     assert.match(source, /"packages\/colors\/sequence-identity-matches\.js"/u);
     assert.match(
       source,
-      /const \[moduleSource, alignmentModuleSource\] = await Promise\.all\(\[/u,
+      /const \[moduleSource, bindingModuleSource, alignmentModuleSource\] = await Promise\.all\(\[/u,
     );
     assert.match(source, /response\.end\(moduleSource\);/u);
+    assert.match(source, /response\.end\(bindingModuleSource\);/u);
     assert.match(source, /response\.end\(alignmentModuleSource\);/u);
     assert.match(source, /args: \[`\$\{origin\}\/output-sink\.js\?proof=v2`\]/u);
     assert.match(source, /\/session\/\$\{sessionId\}\/execute\/async/u);
@@ -1156,6 +1173,22 @@ test("the atomic output sink has one bounded pinned-Chrome browser gate", () => 
     ["lost post-replace byte rollback oracle", proof.replace(
       '"post-replace drift restores prior live bytes exactly"',
       '"post-replace drift was observed"',
+    )],
+    ["skipped expired-session teardown", proof.replace(
+      "if (driverPort && sessionId) {",
+      "if (driverPort && sessionId && !overall.controller.signal.aborted) {",
+    )],
+    ["session teardown coupled to overall deadline", proof.replace(
+      "          teardown,\n        ).catch((error) => cleanupErrors.push(error));",
+      "          overall,\n        ).catch((error) => cleanupErrors.push(error));",
+    )],
+    ["uncleared session teardown timer", proof.replace(
+      "        teardown.clear();",
+      "",
+    )],
+    ["unserved output-binding authority", proof.replace(
+      "      response.end(bindingModuleSource);",
+      "      response.writeHead(404).end();",
     )],
   ]) {
     assert.notEqual(mutant, proof, `${name} mutation must alter the proof script`);
@@ -2695,7 +2728,7 @@ test("clean consumer smoke executes root and public-subpath output lifecycles", 
     assert.match(
       source,
       /const colorsApi = await import\("@labpics\/colors"\);[\s\S]*?default: init,[\s\S]*?\bapplyTheme,/u,
-      "runtime smoke must install its test brand before importing the package root",
+      "runtime smoke must destructure the root API from one package-root import",
     );
     assert.match(
       source,
@@ -2728,6 +2761,7 @@ test("clean consumer smoke executes root and public-subpath output lifecycles", 
     );
     assert.match(source, /"createOutputSink"/u);
     assert.match(source, /import\("@labpics\/colors\/output-sink"\)/u);
+    assert.match(source, /import\("@labpics\/colors\/output-bindings"\)/u);
     assert.match(source, /import\("@labpics\/colors\/sequence-identity-matches"\)/u);
     assert.match(source, /const runtimeDocument = \(\) =>/u);
     assert.match(source, /class FakeCSSStyleSheet/u);
@@ -2868,7 +2902,12 @@ test("the shipped output sink exposes no injectable target-brand authority", () 
   const sink = read("packages", "colors", "output-sink.js");
 
   assert.equal(manifest.exports["./output-sink"], undefined);
+  assert.equal(manifest.exports["./output-bindings"], undefined);
   assert.equal(manifest.exports["./sequence-identity-matches"], undefined);
+  assert.ok(
+    manifest.files.includes("output-bindings.js"),
+    "the private binding authority must ship for internal runtime imports",
+  );
   assert.doesNotMatch(rootEntry, /createOutputSink/u);
   assert.doesNotMatch(sink, /export\s+(?:function|const|let|var|class)\s+createOutputSink/u);
   assert.match(sink, /function captureDomOracle\(globalObject\)/u);
@@ -2910,6 +2949,7 @@ test("DOM-free acquisition preserves the original oracle-capture failure", () =>
   execFileSync(process.execPath, ["--input-type=module", "-e", probe], {
     cwd: root,
     stdio: ["ignore", "pipe", "pipe"],
+    timeout: DOM_FREE_PROBE_TIMEOUT_MS,
   });
 });
 

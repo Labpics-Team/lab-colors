@@ -6,13 +6,12 @@
 // through the same owned atomic sink used by the reactive adapters.
 
 import { acquireOutputLease } from "./output-sink.js";
+import { outputBindingsEqual } from "./output-bindings.js";
 import { admitSnapshot } from "./snapshot.js";
 
 const CANCELLED = Symbol("applyTheme.cancelled");
 const applied = new WeakMap();
 const operationOwners = new WeakMap();
-const sameBindings = (left, right) =>
-  left.length === right.length && left.every((name, index) => name === right[index]);
 
 const beginOperation = (target) => {
   const owner = { error: null };
@@ -125,7 +124,7 @@ function applyOwned(element, result, owner) {
   let entry = applied.get(element);
   let acquiredHere = false;
   if (entry) {
-    if (!sameBindings(entry.lease.outputBindings, snapshot.outputBindings)) {
+    if (!outputBindingsEqual(entry.lease.outputBindings, snapshot.outputBindings)) {
       throw new TypeError("applyTheme: outputBindings changed; dispose the prior attachment first");
     }
   } else {

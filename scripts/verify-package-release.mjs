@@ -1174,6 +1174,10 @@ await assert.rejects(
   (error) => error?.code === "ERR_PACKAGE_PATH_NOT_EXPORTED",
 );
 await assert.rejects(
+  import("@labpics/colors/output-bindings"),
+  (error) => error?.code === "ERR_PACKAGE_PATH_NOT_EXPORTED",
+);
+await assert.rejects(
   import("@labpics/colors/sequence-identity-matches"),
   (error) => error?.code === "ERR_PACKAGE_PATH_NOT_EXPORTED",
 );

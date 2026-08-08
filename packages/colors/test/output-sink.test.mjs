@@ -7,6 +7,12 @@ import {
   brandFakeShadowRoot,
 } from "./fake-node-brand.mjs";
 import {
+  FakeRule,
+  FakeStyleDeclaration,
+  outputElement,
+  parseSheet,
+} from "./output-host.mjs";
+import {
   OutputAtomicityViolationError,
   OutputBindingConflictError,
   OutputBindingError,
@@ -17,74 +23,29 @@ import {
   acquireOutputLease,
 } from "../output-sink.js";
 
-class FakeStyleDeclaration {
-  #values = new Map();
+test("shared fake CSSOM rejects unsupported input and duplicate hooks", () => {
+  assert.throws(() => parseSheet("not a stylesheet"), SyntaxError);
+  assert.throws(() => parseSheet(":root { malformed; }"), SyntaxError);
 
-  get length() {
-    return this.#values.size;
-  }
+  const declarations = new FakeStyleDeclaration();
+  assert.throws(() => declarations.setProperty("--Lab-A", "value"), TypeError);
+  assert.throws(() => declarations.setProperty("--lab-a", ""), TypeError);
+  assert.equal(new FakeRule(":root", [["--lab-a", "value"]]).style.length, 1);
 
-  item(index) {
-    return [...this.#values.keys()][index] ?? "";
-  }
-
-  getPropertyValue(name) {
-    return this.#values.get(name) ?? "";
-  }
-
-  setProperty(name, value) {
-    if (!/^--[a-z0-9-]+$/u.test(name) || typeof value !== "string" || value.length === 0) {
-      return;
-    }
-    this.#values.set(name, value.trim());
-  }
-
-  removeProperty(name) {
-    const previous = this.getPropertyValue(name);
-    this.#values.delete(name);
-    return previous;
-  }
-
-  get cssText() {
-    return [...this.#values].map(([name, value]) => `${name}: ${value};`).join(" ");
-  }
-
-  entries() {
-    return [...this.#values];
-  }
-}
-
-class FakeRule {
-  constructor(selectorText, declarations = []) {
-    this.selectorText = selectorText;
-    this.style = new FakeStyleDeclaration();
-    for (const [name, value] of declarations) this.style.setProperty(name, value);
-  }
-
-  get cssText() {
-    const declarations = this.style.cssText;
-    return declarations === ""
-      ? `${this.selectorText} {}`
-      : `${this.selectorText} { ${declarations} }`;
-  }
-}
-
-function parseSheet(text) {
-  if (text === "") return [];
-  const match = /^(:root|:host) \{(?: (.*))?\}$/u.exec(text);
-  if (!match) return [];
-  const declarations = [];
-  if (match[2]) {
-    for (const part of match[2].split("; ")) {
-      const declaration = part.endsWith(";") ? part.slice(0, -1) : part;
-      if (declaration === "") continue;
-      const separator = declaration.indexOf(": ");
-      if (separator < 0) continue;
-      declarations.push([declaration.slice(0, separator), declaration.slice(separator + 2)]);
-    }
-  }
-  return [new FakeRule(match[1], declarations)];
-}
+  const element = outputElement();
+  element.outputHost.setBeforeLiveReplace(() => {});
+  assert.throws(
+    () => element.outputHost.setBeforePublication(() => {}),
+    /publication hook is already installed/u,
+  );
+  element.outputHost.setBeforeLiveReplace(null);
+  element.outputHost.setBeforePublication(() => {});
+  assert.throws(
+    () => element.outputHost.setBeforeLiveReplace(() => {}),
+    /publication hook is already installed/u,
+  );
+  element.outputHost.setBeforeLiveReplace(null);
+});
 
 function makeRealm() {
   const sheets = [];

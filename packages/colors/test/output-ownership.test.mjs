@@ -88,6 +88,7 @@ function outputHost({ inline = [], consumerSheetText = null } = {}) {
   }
 
   const attributes = new Map();
+  const markerAttempts = [];
   const inlineProps = new Map(inline);
   const inlineMutations = [];
   const win = { CSSStyleSheet };
@@ -119,14 +120,20 @@ function outputHost({ inline = [], consumerSheetText = null } = {}) {
     isConnected: true,
     ownerDocument: root,
     getRootNode: () => root,
-    hasAttribute() {
+    hasAttribute(name) {
+      markerAttempts.push(["has", name]);
       throw new Error("identity-native sink must not read marker attributes");
     },
-    getAttribute: (name) => attributes.get(name) ?? null,
-    setAttribute() {
+    getAttribute(name) {
+      markerAttempts.push(["get", name]);
+      return attributes.get(name) ?? null;
+    },
+    setAttribute(name, value) {
+      markerAttempts.push(["set", name, value]);
       throw new Error("identity-native sink must not write marker attributes");
     },
-    removeAttribute() {
+    removeAttribute(name) {
+      markerAttempts.push(["remove", name]);
       throw new Error("identity-native sink must not remove marker attributes");
     },
     style: {
@@ -158,6 +165,7 @@ function outputHost({ inline = [], consumerSheetText = null } = {}) {
   return {
     element,
     attributes,
+    markerAttempts,
     inlineProps,
     inlineMutations,
     sheetEvents,
@@ -238,7 +246,7 @@ test("F-02: snapshots carry an exact outputBindings manifest before a sink is ac
       /outputBindings|undeclared|subset/u,
     );
     assert.deepEqual(host.root().adoptedStyleSheets, []);
-    assert.equal(host.attributes.size, 0);
+    assert.deepEqual(host.markerAttempts, []);
     assert.deepEqual(host.inlineMutations, []);
   }
 });
@@ -294,7 +302,7 @@ test("F-02: an overlapping lease fails before target or live stylesheet mutation
     stamp: first.stamp,
     replaceCount: host.liveReplaceCount(),
     adopted: [...host.root().adoptedStyleSheets],
-    attributes: [...host.attributes],
+    markerAttempts: [...host.markerAttempts],
   };
 
   assert.throws(
@@ -312,7 +320,7 @@ test("F-02: an overlapping lease fails before target or live stylesheet mutation
       stamp: first.stamp,
       replaceCount: host.liveReplaceCount(),
       adopted: [...host.root().adoptedStyleSheets],
-      attributes: [...host.attributes],
+      markerAttempts: [...host.markerAttempts],
     },
     before,
   );
@@ -337,7 +345,7 @@ test("F-02: an owned inline declaration is a typed conflict before sink acquisit
     },
   );
   assert.deepEqual(host.root().adoptedStyleSheets, []);
-  assert.equal(host.attributes.size, 0);
+  assert.deepEqual(host.markerAttempts, []);
   assert.deepEqual(host.inlineMutations, []);
   assert.deepEqual(Object.fromEntries(host.inlineProps), {
     "--lab-owned": "#111111",
@@ -465,7 +473,7 @@ test("F-02: a cancelled first adaptive manifest neither pins bindings nor retain
   });
   assert.deepEqual(controller.current(), {});
   assert.deepEqual(host.root().adoptedStyleSheets, []);
-  assert.equal(host.attributes.size, 0);
+  assert.deepEqual(host.markerAttempts, []);
 
   pointAvailable = true;
   controller.tick(1);
@@ -479,5 +487,5 @@ test("F-02: a cancelled first adaptive manifest neither pins bindings nor retain
 
   controller.dispose();
   assert.deepEqual(host.root().adoptedStyleSheets, []);
-  assert.equal(host.attributes.size, 0);
+  assert.deepEqual(host.markerAttempts, []);
 });

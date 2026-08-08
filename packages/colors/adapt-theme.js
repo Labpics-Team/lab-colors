@@ -15,8 +15,9 @@
 import { oklabLerp, compileLerpPair, lerpPairHex } from "./effective-bg.js";
 import { observePointBackground } from "./background-observation.js";
 import { __over } from "./pkg/labcolors.js";
-import { admitSnapshot, conflictError } from "./snapshot.js";
 import { acquireOutputLease } from "./output-sink.js";
+import { outputBindingsEqual } from "./output-bindings.js";
+import { admitSnapshot, conflictError } from "./snapshot.js";
 
 const CANCELLED = Symbol("adaptTheme.cancelled");
 const NO_FRAME = Symbol("adaptTheme.noFrame");
@@ -672,10 +673,7 @@ export function adaptTheme(element, options) {
       pendingOutputBindings = next;
       return;
     }
-    if (
-      next.length !== expected.length ||
-      next.some((name, index) => name !== expected[index])
-    ) {
+    if (!outputBindingsEqual(next, expected)) {
       throw new TypeError("adaptTheme: outputBindings changed after the first admitted snapshot");
     }
   };
@@ -1671,6 +1669,9 @@ export function adaptTheme(element, options) {
   const dispose = () => {
     if (disposed || disposeActive || disposeQueued) return;
     if (commitDepth > 0) {
+      // A begun sink replacement is the linearisation point. Keep
+      // `disposeRequested` unset and `operationGeneration` unchanged so its
+      // ownership predicate cannot revoke the atomic publication midway.
       pendingOperations.length = 0;
       pendingOperations.push({ kind: "dispose" });
       disposeQueued = true;

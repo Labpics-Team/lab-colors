@@ -9,8 +9,71 @@
 mod sha256;
 
 use sha256::{Digest, Hasher, digest as sha256_digest};
+use std::ffi::OsString;
 use std::io::Write;
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
+
+#[derive(Debug, Eq, PartialEq)]
+struct PythonCandidate {
+    executable: OsString,
+    launcher_args: &'static [&'static str],
+}
+
+fn python_candidates(
+    override_interpreter: Option<OsString>,
+    windows: bool,
+) -> Vec<PythonCandidate> {
+    if let Some(executable) = override_interpreter.filter(|value| !value.is_empty()) {
+        return vec![PythonCandidate {
+            executable,
+            launcher_args: &[],
+        }];
+    }
+    if windows {
+        vec![
+            PythonCandidate {
+                executable: OsString::from("py"),
+                launcher_args: &["-3"],
+            },
+            PythonCandidate {
+                executable: OsString::from("python"),
+                launcher_args: &[],
+            },
+        ]
+    } else {
+        vec![PythonCandidate {
+            executable: OsString::from("python3"),
+            launcher_args: &[],
+        }]
+    }
+}
+
+fn spawn_hashlib_oracle(script: &str) -> Child {
+    let candidates = python_candidates(std::env::var_os("LAB_COLORS_PYTHON"), cfg!(windows));
+    let mut unavailable = Vec::new();
+    for candidate in candidates {
+        let mut command = Command::new(&candidate.executable);
+        command
+            .args(candidate.launcher_args)
+            .args(["-c", script])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        match command.spawn() {
+            Ok(child) => return child,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                unavailable.push(candidate.executable);
+            }
+            Err(error) => panic!(
+                "failed to start Python 3 with {:?}: {error}; set LAB_COLORS_PYTHON to an explicit interpreter path",
+                candidate.executable
+            ),
+        }
+    }
+    panic!(
+        "Python 3 is part of the repository CI toolchain, but none of {unavailable:?} could be started; set LAB_COLORS_PYTHON to an explicit interpreter path"
+    );
+}
 
 fn assert_hex(input: &[u8], expected: &str) {
     let actual = sha256_digest(input).to_hex();
@@ -137,6 +200,40 @@ fn digest_is_exactly_typed_and_hex_is_canonical() {
 }
 
 #[test]
+fn python_candidate_selection_is_explicit_and_platform_complete() {
+    assert_eq!(
+        python_candidates(Some(OsString::from("/custom/python")), true),
+        vec![PythonCandidate {
+            executable: OsString::from("/custom/python"),
+            launcher_args: &[],
+        }],
+        "an explicit interpreter must not silently fall back"
+    );
+    assert_eq!(
+        python_candidates(Some(OsString::new()), true),
+        vec![
+            PythonCandidate {
+                executable: OsString::from("py"),
+                launcher_args: &["-3"],
+            },
+            PythonCandidate {
+                executable: OsString::from("python"),
+                launcher_args: &[],
+            },
+        ],
+        "an empty override is unset and Windows tries both supported launch forms"
+    );
+    assert_eq!(
+        python_candidates(None, false),
+        vec![PythonCandidate {
+            executable: OsString::from("python3"),
+            launcher_args: &[],
+        }],
+        "non-Windows keeps the canonical python3 command"
+    );
+}
+
+#[test]
 fn deterministic_corpus_matches_python_hashlib() {
     // Python is already an explicit CI toolchain dependency for the independent
     // WCAG verifier.  `hashlib` is Python stdlib, so this adds neither a Rust
@@ -161,29 +258,11 @@ fn deterministic_corpus_matches_python_hashlib() {
     let pipe_stress_payload: Vec<u8> = (0..=u8::MAX).collect();
     corpus.extend((0..32 * 1_024).map(|_| pipe_stress_payload.clone()));
 
-    let mut oracle = if let Some(interpreter) = std::env::var_os("LAB_COLORS_PYTHON") {
-        Command::new(interpreter)
-    } else if cfg!(windows) {
-        let mut command = Command::new("py");
-        command.arg("-3");
-        command
-    } else {
-        Command::new("python3")
-    };
-    let mut child = oracle
-        .args([
-            "-c",
-            concat!(
-                "import hashlib, sys\n",
-                "for line in sys.stdin:\n",
-                " print(hashlib.sha256(bytes.fromhex(line.strip())).hexdigest())\n",
-            ),
-        ])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("Python 3 is part of the repository CI toolchain");
+    let mut child = spawn_hashlib_oracle(concat!(
+        "import hashlib, sys\n",
+        "for line in sys.stdin:\n",
+        " print(hashlib.sha256(bytes.fromhex(line.strip())).hexdigest())\n",
+    ));
 
     let mut stdin = child.stdin.take().expect("piped Python stdin");
     let output = std::thread::scope(|scope| {

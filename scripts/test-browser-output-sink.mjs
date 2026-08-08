@@ -1235,12 +1235,17 @@ async function main() {
     fileURLToPath(new URL("..", import.meta.url)),
     "packages/colors/output-sink.js",
   );
+  const bindingModulePath = resolve(
+    fileURLToPath(new URL("..", import.meta.url)),
+    "packages/colors/output-bindings.js",
+  );
   const alignmentModulePath = resolve(
     fileURLToPath(new URL("..", import.meta.url)),
     "packages/colors/sequence-identity-matches.js",
   );
-  const [moduleSource, alignmentModuleSource] = await Promise.all([
+  const [moduleSource, bindingModuleSource, alignmentModuleSource] = await Promise.all([
     readFile(modulePath),
+    readFile(bindingModulePath),
     readFile(alignmentModulePath),
   ]);
   const server = createServer((request, response) => {
@@ -1266,6 +1271,15 @@ async function main() {
         "x-content-type-options": "nosniff",
       });
       response.end(moduleSource);
+      return;
+    }
+    if (pathname === "/output-bindings.js") {
+      response.writeHead(200, {
+        "cache-control": "no-store",
+        "content-type": "text/javascript; charset=utf-8",
+        "x-content-type-options": "nosniff",
+      });
+      response.end(bindingModuleSource);
       return;
     }
     if (pathname === "/sequence-identity-matches.js") {
@@ -1404,14 +1418,19 @@ async function main() {
     } catch (error) {
       if (failure === undefined) failure = error;
     }
-    if (driverPort && sessionId && !overall.controller.signal.aborted) {
-      await driverRequest(
-        driverPort,
-        `/session/${sessionId}`,
-        { method: "DELETE" },
-        commandTimeoutMilliseconds,
-        overall,
-      ).catch((error) => cleanupErrors.push(error));
+    if (driverPort && sessionId) {
+      const teardown = timeoutSignal(PROCESS_STOP_TIMEOUT_MS, "WebDriver session teardown");
+      try {
+        await driverRequest(
+          driverPort,
+          `/session/${sessionId}`,
+          { method: "DELETE" },
+          PROCESS_STOP_TIMEOUT_MS,
+          teardown,
+        ).catch((error) => cleanupErrors.push(error));
+      } finally {
+        teardown.clear();
+      }
     }
     if (driver) {
       await stopProcess(driver).catch((error) => cleanupErrors.push(error));

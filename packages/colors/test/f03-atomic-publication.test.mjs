@@ -70,6 +70,7 @@ function parseSheet(text) {
 function outputHost({ forbidInlineWrites = false } = {}) {
   const sheetEvents = [];
   const attributes = new Map();
+  const markerAttempts = [];
   const inlineMutations = [];
   let beforeLiveReplace = null;
   let liveFailure = null;
@@ -126,14 +127,20 @@ function outputHost({ forbidInlineWrites = false } = {}) {
     isConnected: true,
     ownerDocument: root,
     getRootNode: () => root,
-    hasAttribute() {
+    hasAttribute(name) {
+      markerAttempts.push(["has", name]);
       throw new Error("identity-native sink must not read marker attributes");
     },
-    getAttribute: (name) => attributes.get(name) ?? null,
-    setAttribute() {
+    getAttribute(name) {
+      markerAttempts.push(["get", name]);
+      return attributes.get(name) ?? null;
+    },
+    setAttribute(name, value) {
+      markerAttempts.push(["set", name, value]);
       throw new Error("identity-native sink must not write marker attributes");
     },
-    removeAttribute() {
+    removeAttribute(name) {
+      markerAttempts.push(["remove", name]);
       throw new Error("identity-native sink must not remove marker attributes");
     },
     style: {
@@ -157,6 +164,7 @@ function outputHost({ forbidInlineWrites = false } = {}) {
   return {
     element,
     attributes,
+    markerAttempts,
     inlineMutations,
     sheetEvents,
     root: () => root,
@@ -537,13 +545,13 @@ test("F-03: dispose from queued-stop cleanup revokes the lease exactly once", ()
   assert.equal(live.text, "", "dispose revokes the complete owned snapshot");
   assert.deepEqual(live.cssRules, []);
   assert.deepEqual(host.root().adoptedStyleSheets, []);
-  assert.equal(host.attributes.size, 0);
+  assert.deepEqual(host.markerAttempts, []);
 
   const terminal = {
     bytes: live.text,
     effects: host.liveReplaceCount(live),
     adopted: [...host.root().adoptedStyleSheets],
-    attributes: [...host.attributes],
+    markerAttempts: [...host.markerAttempts],
   };
   controller.dispose();
   controller.refresh(true);
@@ -553,7 +561,7 @@ test("F-03: dispose from queued-stop cleanup revokes the lease exactly once", ()
       bytes: live.text,
       effects: host.liveReplaceCount(live),
       adopted: [...host.root().adoptedStyleSheets],
-      attributes: [...host.attributes],
+      markerAttempts: [...host.markerAttempts],
     },
     terminal,
     "terminal controller operations are idempotent and cannot recreate output",
@@ -612,7 +620,7 @@ test("F-03: direct stop keeps reentrant dispose cleanup retryable after disconne
       assert.equal(disconnected, false);
       assert.equal(live.text, "", "reentrant dispose must still revoke the output lease");
       assert.deepEqual(host.root().adoptedStyleSheets, []);
-      assert.equal(host.attributes.size, 0);
+      assert.deepEqual(host.markerAttempts, []);
       const revokeEffects = host.liveReplaceCount(live);
 
       assert.doesNotThrow(() => controller[retryWith]());
@@ -632,8 +640,8 @@ test("F-03: direct stop keeps reentrant dispose cleanup retryable after disconne
   }
 });
 
-test("F-03: detach or cross-root move is typed stale before live mutation", () => {
-  for (const mutation of ["detach", "move"]) {
+test("F-03: detach or cross-root move is typed stale before live mutation", async (t) => {
+  const proveStaleMutation = (mutation) => {
     const host = outputHost();
     const lease = acquireOutputLease(host.element, ["--lab-a"], mutation);
     lease.publish({ "--lab-a": "#111111" });
@@ -664,7 +672,10 @@ test("F-03: detach or cross-root move is typed stale before live mutation", () =
       assert.deepEqual(host.root().adoptedStyleSheets, []);
       assert.ok(originalRoot.adoptedStyleSheets.includes(live));
     }
-  }
+  };
+
+  await t.test("detached target", () => proveStaleMutation("detach"));
+  await t.test("target moved to a fresh document", () => proveStaleMutation("move"));
 });
 
 test("F-03: adaptive ease frames use one atomic sink publication and no inline writer", () => {

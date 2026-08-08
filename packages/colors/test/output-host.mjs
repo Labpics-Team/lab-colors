@@ -1,6 +1,6 @@
 import { brandFakeDocument, brandFakeElement } from "./fake-node-brand.mjs";
 
-class FakeStyleDeclaration {
+export class FakeStyleDeclaration {
   #values = new Map();
 
   constructor(entries = []) {
@@ -20,8 +20,11 @@ class FakeStyleDeclaration {
   }
 
   setProperty(name, value) {
-    if (!/^--[a-z0-9-]+$/u.test(name) || typeof value !== "string" || value.length === 0) {
-      return;
+    if (!/^--[a-z0-9-]+$/u.test(name)) {
+      throw new TypeError(`output-host: unsupported property name '${name}'`);
+    }
+    if (typeof value !== "string" || value.length === 0) {
+      throw new TypeError(`output-host: unsupported value for '${name}'`);
     }
     this.#values.set(name, value.trim());
   }
@@ -41,7 +44,7 @@ class FakeStyleDeclaration {
   }
 }
 
-class FakeRule {
+export class FakeRule {
   constructor(selectorText, declarations = []) {
     this.selectorText = selectorText;
     this.style = new FakeStyleDeclaration(declarations);
@@ -55,17 +58,24 @@ class FakeRule {
   }
 }
 
-function parseSheet(text) {
+export function parseSheet(text) {
+  if (typeof text !== "string") {
+    throw new TypeError("output-host: stylesheet text must be a string");
+  }
   if (text === "") return [];
   const match = /^(:root|:host) \{(?: (.*))?\}$/u.exec(text);
-  if (!match) return [];
+  if (!match) throw new SyntaxError(`output-host: unsupported stylesheet text '${text}'`);
   const declarations = [];
   if (match[2]) {
-    for (const part of match[2].split("; ")) {
+    const parts = match[2].split("; ");
+    for (let index = 0; index < parts.length; index++) {
+      const part = parts[index];
       const declaration = part.endsWith(";") ? part.slice(0, -1) : part;
-      if (declaration === "") continue;
+      if (declaration === "" && index === parts.length - 1) continue;
       const separator = declaration.indexOf(": ");
-      if (separator < 0) continue;
+      if (declaration === "" || separator <= 0 || separator === declaration.length - 2) {
+        throw new SyntaxError(`output-host: malformed declaration '${part}'`);
+      }
       declarations.push([declaration.slice(0, separator), declaration.slice(separator + 2)]);
     }
   }
@@ -142,9 +152,21 @@ export function outputElement(initialInline = []) {
       root,
       realm,
       setBeforeLiveReplace(callback) {
+        if (callback !== null && typeof callback !== "function") {
+          throw new TypeError("output-host: publication hook must be a function or null");
+        }
+        if (control.beforeLiveReplace !== null && callback !== null) {
+          throw new Error("output-host: publication hook is already installed");
+        }
         control.beforeLiveReplace = callback;
       },
       setBeforePublication(callback) {
+        if (typeof callback !== "function") {
+          throw new TypeError("output-host: publication hook must be a function");
+        }
+        if (control.beforeLiveReplace !== null) {
+          throw new Error("output-host: publication hook is already installed");
+        }
         control.beforeLiveReplace = (text) => {
           const rule = parseSheet(text)[0];
           const values = new Map(rule?.style.entries() ?? []);

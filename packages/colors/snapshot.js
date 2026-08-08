@@ -5,6 +5,8 @@
 // output-контракт невыполним: применение остальных vars превратило бы ambient
 // CSS в неявный fallback.
 
+import { isCanonicalOutputBindingName } from "./output-bindings.js";
+
 const admittedSnapshots = new WeakSet();
 const NO_CHECKPOINT = () => {};
 
@@ -155,8 +157,11 @@ export function admitSnapshot(result, context, checkpoint = NO_CHECKPOINT, token
 
   const outputBindings = new Set();
   for (const name of snapshot.outputBindings) {
-    if (typeof name !== "string" || !name.startsWith("--")) {
-      throw malformed(context, "outputBindings must contain CSS custom-property names");
+    if (!isCanonicalOutputBindingName(name)) {
+      throw malformed(
+        context,
+        "outputBindings must contain canonical lower-case ASCII CSS custom-property names",
+      );
     }
     if (outputBindings.has(name)) {
       throw malformed(context, `outputBindings contains duplicate '${name}'`);

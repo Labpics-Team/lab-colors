@@ -19,6 +19,7 @@
 
 import { observePointBackground } from "./background-observation.js";
 import { acquireOutputLease } from "./output-sink.js";
+import { outputBindingsEqual } from "./output-bindings.js";
 import { admitSnapshot } from "./snapshot.js";
 
 const CANCELLED = Symbol("watchTheme.cancelled");
@@ -175,9 +176,6 @@ export function watchTheme(element, options) {
   let outputLease = null;
   let outputBindings = null;
 
-  const sameBindings = (left, right) =>
-    left.length === right.length && left.every((name, index) => name === right[index]);
-
   const checkpoint = (owner) => {
     if (owner !== generation) throw CANCELLED;
   };
@@ -237,7 +235,7 @@ export function watchTheme(element, options) {
         outputLease = acquireOutputLease(target, result.outputBindings, "watchTheme");
         outputBindings = result.outputBindings;
         acquiredHere = true;
-      } else if (!sameBindings(outputBindings, result.outputBindings)) {
+      } else if (!outputBindingsEqual(outputBindings, result.outputBindings)) {
         throw new TypeError("watchTheme: outputBindings changed; dispose and reattach");
       }
       const complete = outputLease.publish(result.vars, () => owner === generation);

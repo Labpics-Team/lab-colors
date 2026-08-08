@@ -2,10 +2,10 @@
 // one live constructed stylesheet; mutable transaction state stays in closure.
 
 import { sequenceIdentityMatches } from "./sequence-identity-matches.js";
+import { isCanonicalOutputBindingName } from "./output-bindings.js";
 
 const TARGET_STATE = Symbol.for("@labpics/colors/output-sink/target-state/v2");
 const PROTOCOL = "@labpics/colors/output-sink/v2";
-const VALID_BINDING = /^--[a-z0-9-]+$/u;
 const VALIDATION_VALUE = "__labcolors_validation__";
 const ALWAYS_OWNS = () => true;
 const APPLY = Reflect.apply;
@@ -399,7 +399,7 @@ function materializeBindings(bindings, context) {
       );
     }
     const binding = descriptor.value;
-    if (!VALID_BINDING.test(binding)) {
+    if (!isCanonicalOutputBindingName(binding)) {
       throw new OutputBindingError(
         "OUTPUT_BINDING_INVALID",
         context,
