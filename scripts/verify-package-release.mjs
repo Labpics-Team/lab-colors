@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
+import { existsSync } from "node:fs";
 import {
   appendFile,
   mkdtemp,
@@ -9,7 +10,15 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { basename, join, relative, resolve, sep } from "node:path";
+import {
+  basename,
+  isAbsolute,
+  join,
+  relative,
+  resolve,
+  sep,
+  win32 as windowsPath,
+} from "node:path";
 import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 
@@ -94,14 +103,49 @@ export function command(
   }
 }
 
-function npm(args, cwd = REPO_ROOT) {
-  // npm exposes the exact CLI entrypoint to lifecycle scripts. Falling back to
-  // PATH keeps direct `node scripts/verify-package-release.mjs` usable after a
-  // normal Node installation, while a missing npm remains a hard failure.
-  if (process.env.npm_execpath) {
-    return command(process.execPath, [process.env.npm_execpath, ...args], cwd);
+export function npmInvocation(options = {}) {
+  const {
+    platform = process.platform,
+    node = process.execPath,
+    pathExists = existsSync,
+  } = options;
+  const lifecycleEntrypoint = Object.hasOwn(options, "lifecycleEntrypoint")
+    ? options.lifecycleEntrypoint
+    : process.env.npm_execpath;
+  const entrypoint = lifecycleEntrypoint?.trim();
+  if (
+    entrypoint &&
+    (platform === "win32" ? windowsPath.isAbsolute(entrypoint) : isAbsolute(entrypoint)) &&
+    /(?:^|[\\/])npm-cli\.(?:c?js|mjs)$/u.test(entrypoint) &&
+    pathExists(entrypoint)
+  ) {
+    return { commandName: node, argsPrefix: [entrypoint] };
   }
-  return command(process.platform === "win32" ? "npm.cmd" : "npm", args, cwd);
+  if (platform === "win32") {
+    const siblingEntrypoint = windowsPath.resolve(
+      windowsPath.dirname(node),
+      "node_modules",
+      "npm",
+      "bin",
+      "npm-cli.js",
+    );
+    if (!pathExists(siblingEntrypoint)) {
+      throw new Error(`npm CLI entrypoint is unavailable: ${siblingEntrypoint}`);
+    }
+    return {
+      commandName: node,
+      argsPrefix: [siblingEntrypoint],
+    };
+  }
+  return { commandName: "npm", argsPrefix: [] };
+}
+
+function npm(args, cwd = REPO_ROOT) {
+  // Windows cannot execute a .cmd shim through execFileSync without a shell.
+  // Invoke npm's sibling JavaScript entrypoint instead, preserving an argv-only
+  // boundary and avoiding shell quoting or injection.
+  const invocation = npmInvocation();
+  return command(invocation.commandName, [...invocation.argsPrefix, ...args], cwd);
 }
 
 async function readJson(path) {
@@ -915,15 +959,191 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 
-import init, {
+const runtimeElements = new WeakSet();
+const runtimeDocuments = new WeakSet();
+const runtimeShadowRoots = new WeakSet();
+const runtimeStates = new WeakMap();
+
+const runtimeDescriptor = (receiver, property) => {
+  let owner = receiver;
+  while (owner !== null) {
+    const descriptor = Object.getOwnPropertyDescriptor(owner, property);
+    if (descriptor !== undefined) return descriptor;
+    owner = Object.getPrototypeOf(owner);
+  }
+  return undefined;
+};
+const runtimeRead = (receiver, property) => {
+  const descriptor = runtimeDescriptor(receiver, property);
+  if (descriptor === undefined) throw new TypeError("missing runtime " + property);
+  if ("value" in descriptor) return descriptor.value;
+  if (typeof descriptor.get !== "function") throw new TypeError("unreadable runtime " + property);
+  return Reflect.apply(descriptor.get, receiver, []);
+};
+const runtimeWrite = (receiver, property, value) => {
+  const descriptor = runtimeDescriptor(receiver, property);
+  if (descriptor === undefined) throw new TypeError("missing runtime " + property);
+  if (typeof descriptor.set === "function") Reflect.apply(descriptor.set, receiver, [value]);
+  else if ("value" in descriptor && descriptor.writable) receiver[property] = value;
+  else throw new TypeError("readonly runtime " + property);
+};
+
+class RuntimeNode {
+  get nodeType() {
+    if (runtimeDocuments.has(this)) return 9;
+    if (runtimeShadowRoots.has(this)) return 11;
+    if (runtimeElements.has(this)) return 1;
+    throw new TypeError("invalid RuntimeNode receiver");
+  }
+  get ownerDocument() {
+    const state = runtimeStates.get(this);
+    if (state) return state.document ?? null;
+    if (runtimeDocuments.has(this)) return null;
+    return runtimeRead(this, "ownerDocument");
+  }
+  get isConnected() {
+    const state = runtimeStates.get(this);
+    return state ? state.connected === true : runtimeRead(this, "isConnected");
+  }
+  getRootNode() {
+    const state = runtimeStates.get(this);
+    if (state) return state.root ?? this;
+    const callable = runtimeRead(this, "getRootNode");
+    return Reflect.apply(callable, this, []);
+  }
+}
+class RuntimeStyleDeclaration {
+  get length() {
+    const state = runtimeStates.get(this);
+    return state ? state.names.length : runtimeRead(this, "length");
+  }
+  item(index) {
+    const state = runtimeStates.get(this);
+    if (state) return state.names[index] ?? "";
+    return Reflect.apply(runtimeRead(this, "item"), this, [index]);
+  }
+}
+class RuntimeElement extends RuntimeNode {
+  get shadowRoot() {
+    const state = runtimeStates.get(this);
+    if (state) return state.shadowRoot ?? null;
+    return runtimeDescriptor(this, "shadowRoot") === undefined
+      ? null
+      : runtimeRead(this, "shadowRoot");
+  }
+  get style() {
+    const state = runtimeStates.get(this);
+    return state ? state.style : runtimeRead(this, "style");
+  }
+  attachShadow(init) {
+    const state = runtimeStates.get(this);
+    if (!state || init?.mode !== "open" || state.shadowRoot) throw new TypeError("invalid attachShadow");
+    const root = new RuntimeShadowRoot();
+    runtimeShadowRoots.add(root);
+    runtimeStates.set(root, { adopted: [], document: state.document, host: this, mode: "open" });
+    state.shadowRoot = root;
+    return root;
+  }
+}
+class RuntimeDocument extends RuntimeNode {
+  get documentElement() {
+    const state = runtimeStates.get(this);
+    return state ? state.documentElement : runtimeRead(this, "documentElement");
+  }
+  get defaultView() {
+    const state = runtimeStates.get(this);
+    return state ? state.realm : runtimeRead(this, "defaultView");
+  }
+  createElement() {
+    const state = runtimeStates.get(this);
+    if (!state) throw new TypeError("invalid RuntimeDocument receiver");
+    const element = new RuntimeElement();
+    const style = new RuntimeStyleDeclaration();
+    runtimeElements.add(element);
+    runtimeStates.set(style, { names: [] });
+    runtimeStates.set(element, {
+      connected: false,
+      document: this,
+      root: this,
+      shadowRoot: null,
+      style,
+    });
+    return element;
+  }
+  get adoptedStyleSheets() {
+    const state = runtimeStates.get(this);
+    return state ? state.adopted : runtimeRead(this, "adoptedStyleSheets");
+  }
+  set adoptedStyleSheets(value) {
+    const state = runtimeStates.get(this);
+    if (state) state.adopted = Array.from(value);
+    else runtimeWrite(this, "adoptedStyleSheets", value);
+  }
+}
+class RuntimeShadowRoot extends RuntimeNode {
+  get host() {
+    const state = runtimeStates.get(this);
+    return state ? state.host : runtimeRead(this, "host");
+  }
+  get mode() {
+    const state = runtimeStates.get(this);
+    return state ? state.mode : runtimeRead(this, "mode");
+  }
+  get adoptedStyleSheets() {
+    const state = runtimeStates.get(this);
+    return state ? state.adopted : runtimeRead(this, "adoptedStyleSheets");
+  }
+  set adoptedStyleSheets(value) {
+    const state = runtimeStates.get(this);
+    if (state) state.adopted = Array.from(value);
+    else runtimeWrite(this, "adoptedStyleSheets", value);
+  }
+}
+
+const ambientDocument = new RuntimeDocument();
+const ambientElement = new RuntimeElement();
+const ambientStyle = new RuntimeStyleDeclaration();
+const ambientRealm = { CSSStyleSheet: class RuntimeCSSStyleSheet {} };
+runtimeDocuments.add(ambientDocument);
+runtimeElements.add(ambientElement);
+runtimeStates.set(ambientStyle, { names: [] });
+runtimeStates.set(ambientElement, {
+  connected: true,
+  document: ambientDocument,
+  root: ambientDocument,
+  shadowRoot: null,
+  style: ambientStyle,
+});
+runtimeStates.set(ambientDocument, {
+  adopted: [],
+  documentElement: ambientElement,
+  realm: ambientRealm,
+});
+Object.defineProperty(globalThis, "document", {
+  configurable: true,
+  value: ambientDocument,
+  writable: false,
+});
+
+const colorsApi = await import("@labpics/colors");
+const {
+  default: init,
   LabColors,
   adaptTheme,
   applyTheme,
   evaluateWcag22,
   numericalCapabilityManifest,
   watchTheme,
-} from "@labpics/colors";
-import * as colorsApi from "@labpics/colors";
+} = colorsApi;
+const applyThemeApi = await import("@labpics/colors/apply-theme");
+const watchThemeApi = await import("@labpics/colors/watch-theme");
+const adaptThemeApi = await import("@labpics/colors/adapt-theme");
+const { applyTheme: applyThemeFromSubpath } = applyThemeApi;
+const { watchTheme: watchThemeFromSubpath } = watchThemeApi;
+const { adaptTheme: adaptThemeFromSubpath } = adaptThemeApi;
+assert.equal(applyThemeFromSubpath, applyTheme, "root and apply-theme share one function");
+assert.equal(watchThemeFromSubpath, watchTheme, "root and watch-theme share one function");
+assert.equal(adaptThemeFromSubpath, adaptTheme, "root and adapt-theme share one function");
 
 const require = createRequire(import.meta.url);
 for (const name of [
@@ -933,11 +1153,28 @@ for (const name of [
   "compositeStackToHex",
   "toHex",
   "oklabLerp",
+  "createOutputSink",
+  "sequenceIdentityMatches",
 ]) {
   assert.equal(name in colorsApi, false, name + " must not be a root export");
 }
+for (const [subpath, namespace] of [
+  ["apply-theme", applyThemeApi],
+  ["watch-theme", watchThemeApi],
+  ["adapt-theme", adaptThemeApi],
+]) {
+  assert.equal("createOutputSink" in namespace, false, subpath + " must not export a sink factory");
+}
 await assert.rejects(
   import("@labpics/colors/effective-bg"),
+  (error) => error?.code === "ERR_PACKAGE_PATH_NOT_EXPORTED",
+);
+await assert.rejects(
+  import("@labpics/colors/output-sink"),
+  (error) => error?.code === "ERR_PACKAGE_PATH_NOT_EXPORTED",
+);
+await assert.rejects(
+  import("@labpics/colors/sequence-identity-matches"),
   (error) => error?.code === "ERR_PACKAGE_PATH_NOT_EXPORTED",
 );
 const wasmPath = require.resolve("@labpics/colors/pkg/labcolors_bg.wasm");
@@ -1100,7 +1337,7 @@ const runtimeDocument = () => {
 
   const parseSheet = (text) => {
     if (text === "") return [];
-    const match = /^(:root|\[[a-z0-9-]+\]) \{(?: (.*))?\}$/u.exec(text);
+    const match = /^(:root|:host) \{(?: (.*))?\}$/u.exec(text);
     if (!match) return [];
     const declarations = [];
     for (const part of (match[2] ?? "").split("; ")) {
@@ -1116,7 +1353,6 @@ const runtimeDocument = () => {
     return [new FakeRule(match[1], declarations)];
   };
 
-  const attributes = new Map();
   const inlineStyle = new FakeStyleDeclaration();
   const values = new Map();
   let adoptedStyleSheets = [];
@@ -1129,18 +1365,9 @@ const runtimeDocument = () => {
     nodeType: 9,
     defaultView: null,
     documentElement: null,
-    querySelectorAll(selector) {
-      if (selector === ":root") return documentElement === null ? [] : [documentElement];
-      const match = /^\[([a-z0-9-]+)\]$/u.exec(selector);
-      return match && documentElement?.hasAttribute(match[1]) ? [documentElement] : [];
-    },
   };
 
-  const selectorMatches = (selector) => {
-    if (selector === ":root") return true;
-    const match = /^\[([a-z0-9-]+)\]$/u.exec(selector);
-    return match !== null && attributes.has(match[1]);
-  };
+  const selectorMatches = (selector) => selector === ":root";
   const syncEffectiveValues = () => {
     values.clear();
     for (const sheet of adoptedStyleSheets) {
@@ -1176,11 +1403,10 @@ const runtimeDocument = () => {
     isConnected: true,
     ownerDocument: document,
     getRootNode: () => document,
-    hasAttribute: (name) => attributes.has(name),
-    setAttribute: (name, value) => attributes.set(name, String(value)),
-    removeAttribute: (name) => attributes.delete(name),
     style: inlineStyle,
   };
+  runtimeDocuments.add(document);
+  runtimeElements.add(documentElement);
   document.documentElement = documentElement;
   Object.defineProperty(document, "adoptedStyleSheets", {
     get() { return adoptedStyleSheets; },
@@ -1202,7 +1428,7 @@ const runtimeDocument = () => {
 
 const ownedVar = "--lab-token-7f3a";
 const assertPublished = (host, label) => {
-  assert.equal(host.document.querySelectorAll(":root")[0], host.target, label + " root identity");
+  assert.equal(host.document.documentElement, host.target, label + " root identity");
   assert.equal(typeof host.values.get(ownedVar), "string", label + " effective value");
   assert.equal(host.document.adoptedStyleSheets.length, 1, label + " live sheet");
   assert.equal(host.liveReplaceCount, 1, label + " one live publication");
@@ -1225,6 +1451,17 @@ assertDisposed(appliedHost, "applyTheme dispose");
 applied.dispose();
 assertDisposed(appliedHost, "applyTheme repeated dispose");
 
+const subpathAppliedHost = runtimeDocument();
+const subpathAppliedTarget = subpathAppliedHost.document.documentElement;
+const subpathApplied = applyThemeFromSubpath(subpathAppliedTarget, resolved);
+assertPublished(subpathAppliedHost, "applyTheme subpath");
+assert.equal(applyThemeFromSubpath(subpathAppliedTarget, resolved), subpathApplied);
+assertPublished(subpathAppliedHost, "identical applyTheme subpath");
+subpathApplied.dispose();
+assertDisposed(subpathAppliedHost, "applyTheme subpath dispose");
+subpathApplied.dispose();
+assertDisposed(subpathAppliedHost, "applyTheme subpath repeated dispose");
+
 const watchedHost = runtimeDocument();
 const watchedTarget = watchedHost.document.documentElement;
 const watcher = watchTheme(watchedTarget, {
@@ -1242,6 +1479,24 @@ watcher.dispose();
 assertDisposed(watchedHost, "watchTheme dispose");
 watcher.dispose();
 assertDisposed(watchedHost, "watchTheme repeated dispose");
+
+const subpathWatchedHost = runtimeDocument();
+const subpathWatchedTarget = subpathWatchedHost.document.documentElement;
+const subpathWatcher = watchThemeFromSubpath(subpathWatchedTarget, {
+  colors: engine,
+  theme: "light",
+  background,
+  observe: false,
+  win: {},
+});
+assert.equal(subpathWatcher.background(), background);
+assertPublished(subpathWatchedHost, "watchTheme subpath");
+subpathWatcher.refresh();
+assertPublished(subpathWatchedHost, "watchTheme subpath refresh");
+subpathWatcher.dispose();
+assertDisposed(subpathWatchedHost, "watchTheme subpath dispose");
+subpathWatcher.dispose();
+assertDisposed(subpathWatchedHost, "watchTheme subpath repeated dispose");
 
 const adaptedHost = runtimeDocument();
 const adaptedTarget = adaptedHost.document.documentElement;
@@ -1261,6 +1516,25 @@ adaptive.dispose();
 assertDisposed(adaptedHost, "adaptTheme dispose");
 adaptive.dispose();
 assertDisposed(adaptedHost, "adaptTheme repeated dispose");
+
+const subpathAdaptedHost = runtimeDocument();
+const subpathAdaptedTarget = subpathAdaptedHost.document.documentElement;
+const subpathAdaptive = adaptThemeFromSubpath(subpathAdaptedTarget, {
+  colors: engine,
+  theme: "light",
+  background,
+  target: subpathAdaptedTarget,
+  now: () => 0,
+  win: {},
+});
+assertPublished(subpathAdaptedHost, "adaptTheme subpath");
+subpathAdaptive.tick(0);
+assertPublished(subpathAdaptedHost, "adaptTheme subpath tick");
+assert.equal(typeof subpathAdaptive.current()[ownedVar], "string");
+subpathAdaptive.dispose();
+assertDisposed(subpathAdaptedHost, "adaptTheme subpath dispose");
+subpathAdaptive.dispose();
+assertDisposed(subpathAdaptedHost, "adaptTheme subpath repeated dispose");
 
 const alpha = resolved.roles["token-7f3a"];
 assert.equal(alpha.kind, "translucent");

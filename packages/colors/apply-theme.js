@@ -80,9 +80,9 @@ const attachmentFor = (target, lease) => {
  * Полный результат допускается до первого обращения к CSSOM. Обычный
  * Unreachable атомарно отклоняется как `OutputConflictError`; явные None,
  * Unresolved и численная неопределённость остаются метаданными без значения.
- * Core-authored `outputBindings` связываются с одним target-owned lease. Sink
- * публикует полный dedicated stylesheet одной атомарной заменой; чужие output
- * sets и inline declarations не сканируются и не изменяются.
+ * Core-authored `outputBindings` связываются с одним target-owned lease. Точные
+ * inline-декларации из owned `outputBindings` проверяются на конфликт до
+ * публикации; несвязанные inline-декларации остаются нетронутыми.
  *
  * @param {HTMLElement} element - Output target: either its document's
  *   `documentElement` (`:root`) or the host of its own open `ShadowRoot` (`:host`).

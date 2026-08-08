@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
+import "./fake-node-brand.mjs";
 import { initSync } from "../pkg/labcolors.js";
 import { observePointBackground } from "../background-observation.js";
 import { watchTheme } from "../watch-theme.js";

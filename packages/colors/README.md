@@ -521,9 +521,35 @@ Glow-свидетельств и подготовка перехода обра�
 Это обещание относится к ошибкам resolve, recheck и проверки свидетельств до
 публикации. CSS output проходит scratch-проверку; успешный commit выполняет одну
 live-замену stylesheet. Если host нарушил postcondition после этой границы, sink
-восстанавливает и проверяет предыдущие bytes до сообщения об отказе. Inline
-writer отсутствует. `stop()` сохраняет output, а `dispose()` атомарно отзывает
-только attachment контроллера.
+пытается восстановить и проверить предыдущие bytes до сообщения об отказе.
+Отказ самого rollback может сохранить кандидатные bytes в live-sheet.
+Recovery journal удерживает ожидаемые предыдущие bytes, а следующая операция
+сначала согласует журнал либо снова типизированно откажет. Inline writer
+отсутствует. `stop()` сохраняет output, а `dispose()` атомарно отзывает только
+attachment контроллера.
+
+Восстановление `adoptedStyleSheets` сопоставляет baseline и наблюдаемую
+последовательность точным maximum-cardinality LCS по identity (`===`) с
+`O(N + M)` дополнительной памятью. Неоднозначные повторы имеют единый
+suffix-canonical закон: максимальные общий prefix и непересекающийся suffix
+резервируются первыми, затем Myers-bisect выбирает первый shortest-path overlap
+на возрастающих диагоналях со строгим сравнением frontier. Cutoff и
+приближённого fallback нет: они могли бы изменить порядок или потерять чужой
+stylesheet под видом успешного rollback.
+
+Проверка native identity захватывает Web-IDL accessors из текущего ambient
+`document` при первом выполнении модуля и затем не доверяет shadowable-свойствам
+экземпляров. Нормативное предусловие: к этому моменту ambient `document`, его
+prototype graph и ECMAScript primordials подлинны. Если hostile same-realm код
+подменил сам DOM или `Reflect.apply` до импорта, обычный JavaScript-модуль не
+имеет внешнего корня доверия для аутентификации host intrinsics; такой pre-import
+compromise находится вне модели угроз. Глобального executable acquisition gate
+нет: каждая копия до delegation самостоятельно проверяет native identity цели,
+точный `OutputBindingSet` и inline-конфликты. Target authority в `Symbol.for`
+координирует только совместимые копии пакета и не является границей авторизации
+против hostile same-realm кода. Произвольный код того же realm способен до или
+после импорта подменять CSSOM, напрямую изменять DOM и лгать при readback; для
+изоляции от него нужен внешний trust root/отдельный realm, а не JavaScript-токен.
 
 ---
 

@@ -1322,8 +1322,14 @@ export function adaptTheme(element, options) {
             throw new Error("adaptTheme: failed to release its initial output lease");
           }
         } catch (cleanupError) {
+          const failures = [error, cleanupError];
+          try {
+            if (outputLease.state === "active") outputLease.abandon();
+          } catch (handoffError) {
+            failures.push(handoffError);
+          }
           throw new AggregateError(
-            [error, cleanupError],
+            failures,
             "adaptTheme: initial publication and lease cleanup failed",
           );
         }

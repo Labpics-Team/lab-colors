@@ -903,7 +903,7 @@ mod tests {
 
     fn output_bindings(
         entries: &[(&str, BindingShape)],
-    ) -> std::rc::Rc<labcolors_core::config::OutputBindingSet> {
+    ) -> labcolors_core::config::OutputBindingSet {
         let tint =
             labcolors_core::LadderTint::new([[74.0 / 255.0, 143.0 / 255.0, 1.0]; 4]).unwrap();
         let entries = entries
@@ -931,7 +931,7 @@ mod tests {
             labcolors_core::RoleChroma::Neutral,
         )
         .expect("test output binding table is valid");
-        std::rc::Rc::new(table.output_bindings().clone())
+        table.output_bindings().clone()
     }
 
     fn color_entry(key: &str) -> RoleEntry {

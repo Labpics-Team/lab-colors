@@ -48,8 +48,8 @@ pub struct Engine {
 struct NamedState {
     table: NamedRoleTable,
     /// Общая иммутабельная проекция скомпилированного output-контракта таблицы.
-    /// Каждый кэшированный snapshot клонирует только `Rc`, а не все строки.
-    output_bindings: Rc<labcolors_core::config::OutputBindingSet>,
+    /// `OutputBindingSet::clone` разделяет immutable key storage.
+    output_bindings: labcolors_core::config::OutputBindingSet,
     fingerprint: u64,
     floors: HashMap<String, Option<f64>>,
     /// Иммутабельный словарь тем конфига: (клиентский ключ, VC-пресет) в
@@ -110,7 +110,7 @@ impl Engine {
             .map_err(|e| BindingError::InvalidConfig {
                 reason: e.to_string(),
             })?;
-        let output_bindings = Rc::new(table.output_bindings().clone());
+        let output_bindings = table.output_bindings().clone();
         let mut floors: HashMap<String, Option<f64>> = table
             .entries()
             .iter()
@@ -197,7 +197,7 @@ impl Engine {
                     // Результат несёт ИСХОДНЫЙ клиентский ключ, не пресет.
                     theme: theme_key.to_string(),
                     background: normalised.clone(),
-                    output_bindings: Rc::clone(&named.output_bindings),
+                    output_bindings: named.output_bindings.clone(),
                     roles,
                 }))
             });
@@ -1635,7 +1635,7 @@ mod tests {
             .expect("same contract resolves on another background/theme");
 
         assert!(
-            Rc::ptr_eq(&dark.output_bindings, &light.output_bindings),
+            std::ptr::eq(dark.output_bindings.keys(), light.output_bindings.keys()),
             "snapshots share one immutable compiler artifact instead of cloning all keys"
         );
         assert_eq!(

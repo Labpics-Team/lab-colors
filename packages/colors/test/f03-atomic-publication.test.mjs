@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
+import { brandFakeDocument, brandFakeElement } from "./fake-node-brand.mjs";
 import { adaptTheme } from "../adapt-theme.js";
 import {
   acquireOutputLease,
@@ -101,7 +102,7 @@ function outputHost({ forbidInlineWrites = false } = {}) {
   let element;
   const makeRoot = () => {
     let adopted = [];
-    const root = {
+    const root = brandFakeDocument({
       nodeType: 9,
       defaultView: win,
       querySelectorAll() {
@@ -114,13 +115,13 @@ function outputHost({ forbidInlineWrites = false } = {}) {
         adopted = [...next];
         for (const sheet of adopted) sheet.isAdopted = true;
       },
-    };
+    });
     root.ownerDocument = root;
     return root;
   };
 
   let root = makeRoot();
-  element = {
+  element = brandFakeElement({
     nodeType: 1,
     isConnected: true,
     ownerDocument: root,
@@ -150,7 +151,7 @@ function outputHost({ forbidInlineWrites = false } = {}) {
         if (forbidInlineWrites) throw new Error("sabotage: direct inline removeProperty");
       },
     },
-  };
+  });
   root.documentElement = element;
 
   return {

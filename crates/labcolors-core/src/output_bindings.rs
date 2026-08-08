@@ -5,7 +5,11 @@
 //! configuration syntax nor semantic recipes; those layers map declarations
 //! to the closed [`OutputBindingShape`] vocabulary.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
+
+/// Namespace prefix for every CSS custom property compiled by this module.
+const OUTPUT_KEY_PREFIX: &str = "--lab-";
 
 /// Immutable, fully compiled set of CSS output bindings.
 ///
@@ -13,13 +17,13 @@ use std::collections::{BTreeMap, BTreeSet};
 /// primary/satellites. The set has no mutable API after construction.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OutputBindingSet {
-    keys: Box<[String]>,
+    keys: Arc<Vec<String>>,
 }
 
 impl OutputBindingSet {
     /// Exact CSS custom-property keys in canonical compilation order.
     pub fn keys(&self) -> &[String] {
-        &self.keys
+        self.keys.as_slice()
     }
 
     /// Return whether this static output contract owns `key`.
@@ -33,8 +37,8 @@ impl OutputBindingSet {
         aliases: impl IntoIterator<Item = (&'a str, &'a str)>,
     ) -> Result<Self, OutputBindingCompileError> {
         let mut keys = Vec::new();
-        let mut seen = BTreeSet::new();
-        let mut shapes = BTreeMap::new();
+        let mut seen = HashSet::new();
+        let mut shapes = HashMap::new();
 
         for (name, shape) in declarations {
             if !is_valid_contract_name(name) {
@@ -64,7 +68,7 @@ impl OutputBindingSet {
         }
 
         Ok(Self {
-            keys: keys.into_boxed_slice(),
+            keys: Arc::new(keys),
         })
     }
 }
@@ -158,12 +162,15 @@ pub(crate) fn is_valid_contract_name(name: &str) -> bool {
 /// Append one shape while proving exact namespace uniqueness.
 fn append_output_binding_shape(
     keys: &mut Vec<String>,
-    seen: &mut BTreeSet<String>,
+    seen: &mut HashSet<String>,
     name: &str,
     suffixes: &[&str],
 ) -> Result<(), OutputBindingCompileError> {
     for suffix in suffixes {
-        let key = format!("--lab-{name}{suffix}");
+        let mut key = String::with_capacity(OUTPUT_KEY_PREFIX.len() + name.len() + suffix.len());
+        key.push_str(OUTPUT_KEY_PREFIX);
+        key.push_str(name);
+        key.push_str(suffix);
         if !seen.insert(key.clone()) {
             return Err(OutputBindingCompileError::DuplicateBinding { key });
         }
@@ -176,10 +183,18 @@ fn append_output_binding_shape(
 mod tests {
     use super::*;
 
+    fn assert_send_sync<T: Send + Sync>() {}
+
+    #[test]
+    fn compiled_output_contracts_remain_send_sync() {
+        assert_send_sync::<OutputBindingSet>();
+        assert_send_sync::<crate::semantic::NamedRoleTable>();
+    }
+
     #[test]
     fn primitive_rejects_derived_to_derived_collision() {
         let mut keys = Vec::new();
-        let mut seen = BTreeSet::new();
+        let mut seen = HashSet::new();
         append_output_binding_shape(&mut keys, &mut seen, "probe", &["-outer-inner"])
             .expect("first satellite is free");
         let error = append_output_binding_shape(&mut keys, &mut seen, "probe-outer", &["-inner"])

@@ -21,6 +21,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import "./fake-node-brand.mjs";
 import { adaptTheme } from "../adapt-theme.js";
 import * as ebg from "../effective-bg.js";
 import { buildMissRing, rustCacheCapacity } from "../bench/misses.mjs";

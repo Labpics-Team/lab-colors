@@ -195,8 +195,20 @@ Core; `vars` содержит только значения из этого на
 к целевому элементу. Перед публикацией sink собирает и проверяет полный stylesheet
 на scratch-sheet, затем выполняет один `replaceSync` live-sheet; prefix scan,
 inline writer и cloneable selector-marker не являются частями протокола. Если
-postcondition нарушен после host-вызова, sink восстанавливает и проверяет
-предыдущие bytes до сообщения об отказе.
+postcondition нарушен после host-вызова, sink пытается восстановить и проверить
+предыдущие bytes до сообщения об отказе. Отказ самого rollback может сохранить
+кандидатные bytes в live-sheet. Recovery journal удерживает ожидаемые предыдущие
+bytes, а следующая операция сначала согласует журнал либо снова типизированно
+откажет.
+
+Rollback `adoptedStyleSheets` использует точное maximum-cardinality LCS по
+identity (`===`) с линейной дополнительной памятью. Для повторяющихся identity
+неопределённости нет: максимальные общий prefix и непересекающийся suffix
+резервируются, после чего Myers-bisect обходит диагонали по возрастанию, применяет
+строгое сравнение frontier и принимает первый shortest-path overlap. Этот
+suffix-canonical закон одинаков для attachment и revoke recovery; cutoff или
+приближённый fallback запрещён, поскольку он мог бы изменить каскадный порядок
+чужих stylesheet при сообщении об успешном восстановлении.
 
 Целью служит только `document.documentElement` (`:root`) либо host собственного
 открытого ShadowRoot (`:host`), поддерживающего constructed sheets. Это
@@ -206,6 +218,21 @@ identity-native граница: обычный `cloneNode(true)` не может
 до изменения live-sheet, а несвязанные inline-значения сохраняются. `stop()` у
 контроллеров прекращает наблюдение или цикл и оставляет output; только `dispose()`
 отзывает attachment, которому он принадлежит.
+
+Native identity проверяется захваченными Web-IDL accessors, а не shadowable-
+свойствами экземпляра. Корнем доверия служат ambient `document`, его prototype
+graph и ECMAScript primordials в момент первого выполнения модуля. Их подлинность
+является явным предусловием: после hostile same-realm подмены самого DOM или
+`Reflect.apply` до импорта обычный JavaScript-модуль не может аутентифицировать
+host intrinsics без внешнего корня доверия. Такой pre-import compromise находится
+вне модели угроз. Глобального executable acquisition gate нет: каждая копия до
+delegation самостоятельно проверяет native identity цели, точный
+`OutputBindingSet` и inline-конфликты. Target authority в `Symbol.for`
+обеспечивает только кооперативную координацию совместимых копий пакета и не
+является механизмом авторизации против hostile same-realm кода. Произвольный код
+того же realm способен до или после импорта подменять CSSOM, напрямую изменять
+DOM и лгать при readback; для изоляции от него нужен внешний trust root/отдельный
+realm, а не JavaScript-токен.
 
 `watchTheme` выполняет полный resolve при изменении поддерживаемого reference-фона
 или имени темы (либо при явном forced refresh). `adaptTheme` отдельно повторно

@@ -1,3 +1,5 @@
+import { brandFakeDocument, brandFakeElement } from "./fake-node-brand.mjs";
+
 class FakeStyleDeclaration {
   #values = new Map();
 
@@ -87,11 +89,11 @@ export function outputElement(initialInline = []) {
   };
   let target;
 
-  const root = {
+  const root = brandFakeDocument({
     nodeType: 9,
     defaultView: null,
     adoptedStyleSheets: [],
-  };
+  });
 
   function syncEffective(sheet) {
     props.clear();
@@ -128,7 +130,7 @@ export function outputElement(initialInline = []) {
 
   const realm = { CSSStyleSheet: FakeCSSStyleSheet };
   root.defaultView = realm;
-  target = {
+  target = brandFakeElement({
     nodeType: 1,
     isConnected: true,
     ownerDocument: root,
@@ -156,7 +158,7 @@ export function outputElement(initialInline = []) {
         return root.adoptedStyleSheets[0] ?? null;
       },
     },
-  };
+  });
   root.documentElement = target;
   return target;
 }

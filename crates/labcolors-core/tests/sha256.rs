@@ -161,7 +161,16 @@ fn deterministic_corpus_matches_python_hashlib() {
     let pipe_stress_payload: Vec<u8> = (0..=u8::MAX).collect();
     corpus.extend((0..32 * 1_024).map(|_| pipe_stress_payload.clone()));
 
-    let mut child = Command::new("python3")
+    let mut oracle = if let Some(interpreter) = std::env::var_os("LAB_COLORS_PYTHON") {
+        Command::new(interpreter)
+    } else if cfg!(windows) {
+        let mut command = Command::new("py");
+        command.arg("-3");
+        command
+    } else {
+        Command::new("python3")
+    };
+    let mut child = oracle
         .args([
             "-c",
             concat!(
@@ -174,7 +183,7 @@ fn deterministic_corpus_matches_python_hashlib() {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .expect("python3 is part of the repository CI toolchain");
+        .expect("Python 3 is part of the repository CI toolchain");
 
     let mut stdin = child.stdin.take().expect("piped Python stdin");
     let output = std::thread::scope(|scope| {

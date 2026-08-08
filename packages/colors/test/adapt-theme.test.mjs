@@ -6,6 +6,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
+import "./fake-node-brand.mjs";
 import { initSync } from "../pkg/labcolors.js";
 import { adaptTheme } from "../adapt-theme.js";
 import { outputElement } from "./output-host.mjs";
@@ -2434,6 +2435,76 @@ test("a repeated initial live failure releases ownership before adaptTheme throw
   });
   assert.equal(el.props.get("--lab-label-primary"), "#111111");
   retry.dispose();
+});
+
+test("constructor cleanup exhaustion leaves its provisional lease recoverable", () => {
+  const el = fakeElement();
+  const root = el.outputHost.root;
+  let adopted = root.adoptedStyleSheets;
+  let cleanupReadFailures = 0;
+  let failedCleanupReads = 0;
+  Object.defineProperty(root, "adoptedStyleSheets", {
+    configurable: true,
+    get() {
+      if (cleanupReadFailures > 0) {
+        cleanupReadFailures--;
+        failedCleanupReads++;
+        throw new Error(`cleanup read ${failedCleanupReads} rejected`);
+      }
+      return adopted;
+    },
+    set(next) {
+      adopted = Array.from(next);
+    },
+  });
+
+  const colors = fakeColors(oneRole("#111111", 100));
+  const publicationFailure = new Error("initial live replacement rejected");
+  el.outputHost.failNextLiveReplace(publicationFailure);
+  el.outputHost.setBeforeLiveReplace(() => {
+    cleanupReadFailures = 2;
+  });
+
+  let constructorError = null;
+  assert.throws(
+    () =>
+      adaptTheme(el, {
+        colors,
+        theme: "light",
+        background: "#FFFFFF",
+        target: el,
+        now: () => 1,
+        win: {},
+      }),
+    (error) => {
+      constructorError = error;
+      return (
+        error instanceof AggregateError &&
+        error.message === "adaptTheme: initial publication and lease cleanup failed"
+      );
+    },
+  );
+  assert.equal(constructorError.errors[0].errors[0], publicationFailure);
+  assert.equal(failedCleanupReads, 2, "both internal cleanup attempts must be exhausted");
+  assert.equal(adopted.length, 1, "the failed constructor leaves one reachable provisional sheet");
+  assert.deepEqual(el.props, new Map(), "the failed initial publication must expose no CSS output");
+
+  el.outputHost.setBeforeLiveReplace(null);
+  const recovered = adaptTheme(el, {
+    colors,
+    theme: "light",
+    background: "#FFFFFF",
+    target: el,
+    now: () => 2,
+    win: {},
+  });
+  assert.equal(el.props.get("--lab-label-primary"), "#111111");
+  assert.equal(adopted.length, 1, "recovery must reuse authority state instead of adding a sheet");
+  assert.equal(new Set(adopted).size, 1, "recovery must not duplicate the live sheet");
+
+  recovered.dispose();
+  assert.deepEqual(adopted, [], "final disposal must leave no residual output sheet");
+  assert.deepEqual(el.props, new Map(), "final disposal must leave no owned CSS output");
 });
 
 test("stable Glow class changes re-resolve and clear/restore satellites synchronously", () => {

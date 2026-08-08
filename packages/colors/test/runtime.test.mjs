@@ -9,6 +9,7 @@ import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
 
+import "./fake-node-brand.mjs";
 import { initSync } from "../pkg/labcolors.js";
 import { parseCssColor, toHex, oklabLerp } from "../effective-bg.js";
 import { applyTheme } from "../apply-theme.js";

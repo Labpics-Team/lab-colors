@@ -4,10 +4,11 @@ import { createServer } from "node:http";
 import { isAbsolute, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const PASS_RECEIPT = "LAB_COLORS_BROWSER_OUTPUT_SINK_PASS v1 checks=10";
+const PASS_RECEIPT = "LAB_COLORS_BROWSER_OUTPUT_SINK_PASS v2 checks=11";
 const EXPECTED_CHECKS = Object.freeze([
   "constructed-stylesheet-computed-values",
   "single-live-replacement",
+  "native-target-brand-matrix",
   "exact-target-identity",
   "inline-preservation",
   "scratch-and-hostile-safety",
@@ -328,6 +329,87 @@ async function runInBrowser(moduleUrl) {
     return error;
   }
 
+  function expectTargetCapabilityBeforeEffects(
+    action,
+    target,
+    root,
+    realm,
+    message,
+  ) {
+    const targetKeysBefore = Reflect.ownKeys(target);
+    const sheetsBefore = Array.from(root.adoptedStyleSheets);
+    const definePropertyDescriptor = Object.getOwnPropertyDescriptor(Object, "defineProperty");
+    assert(definePropertyDescriptor?.value,
+      `${message}: Object.defineProperty has an own callable descriptor`);
+    const sheetConstructorDescriptor = Object.getOwnPropertyDescriptor(realm, "CSSStyleSheet");
+    assert(sheetConstructorDescriptor?.value,
+      `${message}: target realm CSSStyleSheet has an own callable descriptor`);
+    let sheetConstructions = 0;
+    const countedSheetConstructor = new Proxy(sheetConstructorDescriptor.value, {
+      construct(candidate, argumentsList, newTarget) {
+        sheetConstructions += 1;
+        return Reflect.construct(candidate, argumentsList, newTarget);
+      },
+    });
+    let authorityInstallations = 0;
+    let actionInvocations = 0;
+    const markActionInvoked = () => {
+      actionInvocations++;
+    };
+    let error;
+    try {
+      definePropertyDescriptor.value.call(Object, realm, "CSSStyleSheet", {
+        ...sheetConstructorDescriptor,
+        value: countedSheetConstructor,
+      });
+      Object.defineProperty(Object, "defineProperty", {
+        ...definePropertyDescriptor,
+        value(candidate, ...args) {
+          if (candidate === target) authorityInstallations += 1;
+          return definePropertyDescriptor.value.call(Object, candidate, ...args);
+        },
+      });
+      try {
+        action(markActionInvoked);
+      } catch (caught) {
+        error = caught;
+      } finally {
+        definePropertyDescriptor.value.call(
+          Object,
+          Object,
+          "defineProperty",
+          definePropertyDescriptor,
+        );
+      }
+    } finally {
+      definePropertyDescriptor.value.call(
+        Object,
+        realm,
+        "CSSStyleSheet",
+        sheetConstructorDescriptor,
+      );
+    }
+    equal(authorityInstallations, 0,
+      `${message}: rejection attempts no target authority installation`);
+    equal(actionInvocations, 1, `${message}: hostile admission action executes exactly once`);
+    equal(sheetConstructions, 0,
+      `${message}: rejection constructs no CSSStyleSheet`);
+    const targetKeysAfter = Reflect.ownKeys(target);
+    assert(
+      targetKeysAfter.length === targetKeysBefore.length &&
+        targetKeysAfter.every((key, index) => key === targetKeysBefore[index]),
+      `${message}: rejection installs no target authority`,
+    );
+    const sheetsAfter = Array.from(root.adoptedStyleSheets);
+    assert(
+      sheetsAfter.length === sheetsBefore.length &&
+        sheetsAfter.every((sheet, index) => sheet === sheetsBefore[index]),
+      `${message}: rejection adopts no CSSStyleSheet`,
+    );
+    assert(error, `${message}: operation did not fail`);
+    equal(error.code, "OUTPUT_TARGET_CAPABILITY", `${message}: typed error code`);
+  }
+
   function sheetText(sheet) {
     return Array.from(sheet.cssRules, (rule) => rule.cssText).join("\n");
   }
@@ -338,7 +420,10 @@ async function runInBrowser(moduleUrl) {
 
   function computed(target, name) {
     target.getBoundingClientRect();
-    return getComputedStyle(target).getPropertyValue(name).trim();
+    return target.ownerDocument.defaultView
+      .getComputedStyle(target)
+      .getPropertyValue(name)
+      .trim();
   }
 
   function appendTarget(id) {
@@ -645,6 +730,146 @@ async function runInBrowser(moduleUrl) {
       "document root acquisition does not mutate target identity attributes");
     equal(JSON.stringify(targetB.getAttributeNames().sort()), targetBAttributes,
       "shadow host acquisition does not mutate target identity attributes");
+
+    const realmFrame = document.createElement("iframe");
+    const realmFrameLoaded = new Promise((resolveLoad, rejectLoad) => {
+      realmFrame.addEventListener("load", resolveLoad, { once: true });
+      realmFrame.addEventListener(
+        "error",
+        () => rejectLoad(new Error("same-origin target realm failed to load")),
+        { once: true },
+      );
+    });
+    realmFrame.src = "/target-realm";
+    document.body.append(realmFrame);
+    await realmFrameLoaded;
+    const realmWindow = realmFrame.contentWindow;
+    const realmDocument = realmFrame.contentDocument;
+    assert(realmWindow && realmDocument, "same-origin iframe exposes its live DOM realm");
+    assert(realmWindow !== window && realmWindow.Element !== Element,
+      "same-origin iframe uses distinct native DOM brands");
+    assert(typeof realmWindow.CSSStyleSheet === "function",
+      "same-origin iframe exposes constructed CSSStyleSheet");
+    assert(Array.isArray(realmDocument.adoptedStyleSheets),
+      "same-origin iframe Document exposes adoptedStyleSheets");
+
+    const realmShadowHost = realmDocument.createElement("div");
+    realmDocument.body.append(realmShadowHost);
+    const realmShadowRoot = realmShadowHost.attachShadow({ mode: "open" });
+    for (const { binding, context, root, target, value } of [
+      {
+        binding: "--lab-realm-root",
+        context: "browser/cross-realm-document-root",
+        root: realmDocument,
+        target: realmDocument.documentElement,
+        value: "document-realm",
+      },
+      {
+        binding: "--lab-realm-shadow",
+        context: "browser/cross-realm-shadow-host",
+        root: realmShadowRoot,
+        target: realmShadowHost,
+        value: "shadow-realm",
+      },
+    ]) {
+      const output = acquireWithSheet(acquireOutputLease, target, [binding], context, root);
+      assert(output.sheet instanceof realmWindow.CSSStyleSheet,
+        `${context}: uses its owning realm stylesheet brand`);
+      equal(output.lease.publish({ [binding]: value }), true,
+        `${context}: publication commits`);
+      equal(computed(target, binding), value,
+        `${context}: publication reaches computed style`);
+      equal(output.lease.dispose(), true, `${context}: lease disposes cleanly`);
+      assert(!root.adoptedStyleSheets.includes(output.sheet),
+        `${context}: disposal detaches its stylesheet`);
+    }
+    proofRoots.delete(realmShadowRoot);
+    proofRoots.delete(realmDocument);
+    realmFrame.remove();
+
+    const proxiedBackingTarget = appendShadowHost("proxied-real-target");
+    const proxiedTarget = new Proxy(proxiedBackingTarget, {});
+    expectTargetCapabilityBeforeEffects(
+      (markInvoked) => {
+        markInvoked();
+        return acquireOutputLease(
+          proxiedTarget,
+          ["--lab-proxied-target"],
+          "browser/proxied-real-target",
+        );
+      },
+      proxiedTarget,
+      proxiedBackingTarget.shadowRoot,
+      window,
+      "Proxy around a real open-shadow host fails native target admission",
+    );
+    proxiedBackingTarget.remove();
+
+    const structuralFakeRealm = {
+      CSSStyleSheet,
+      getComputedStyle,
+    };
+    const structuralFakeDocument = {
+      adoptedStyleSheets: [],
+      defaultView: structuralFakeRealm,
+      documentElement: null,
+      nodeType: 9,
+    };
+    const structuralFake = {
+      getRootNode: () => structuralFakeDocument,
+      isConnected: true,
+      nodeType: 1,
+      ownerDocument: structuralFakeDocument,
+      shadowRoot: null,
+      style: document.createElement("div").style,
+    };
+    structuralFakeDocument.documentElement = structuralFake;
+    structuralFakeRealm.document = structuralFakeDocument;
+    expectTargetCapabilityBeforeEffects(
+      (markInvoked) => {
+        markInvoked();
+        return acquireOutputLease(
+          structuralFake,
+          ["--lab-structural-fake"],
+          "browser/structural-fake-target",
+        );
+      },
+      structuralFake,
+      structuralFakeDocument,
+      structuralFakeRealm,
+      "plain structural fake fails native target admission",
+    );
+
+    const shadowedNativeTarget = document.createElement("div");
+    const shadowedRealm = { CSSStyleSheet };
+    const shadowedDocument = {
+      adoptedStyleSheets: [],
+      defaultView: shadowedRealm,
+      documentElement: shadowedNativeTarget,
+      nodeType: 9,
+    };
+    Object.defineProperties(shadowedNativeTarget, {
+      getRootNode: { configurable: true, value: () => shadowedDocument },
+      isConnected: { configurable: true, value: true },
+      ownerDocument: { configurable: true, value: shadowedDocument },
+      shadowRoot: { configurable: true, value: null },
+      style: { configurable: true, value: document.createElement("div").style },
+    });
+    expectTargetCapabilityBeforeEffects(
+      (markInvoked) => {
+        markInvoked();
+        return acquireOutputLease(
+          shadowedNativeTarget,
+          ["--lab-shadowed-native-target"],
+          "browser/shadowed-native-target",
+        );
+      },
+      shadowedNativeTarget,
+      shadowedDocument,
+      shadowedRealm,
+      "genuine Element with shadowed identity fields fails native target admission",
+    );
+    mark("native-target-brand-matrix");
 
     const arbitraryChild = appendTarget("arbitrary-light-dom-child");
     const documentSheetsBeforeChild = document.adoptedStyleSheets.length;
@@ -1010,18 +1235,25 @@ async function main() {
     fileURLToPath(new URL("..", import.meta.url)),
     "packages/colors/output-sink.js",
   );
-  const moduleSource = await readFile(modulePath);
+  const alignmentModulePath = resolve(
+    fileURLToPath(new URL("..", import.meta.url)),
+    "packages/colors/sequence-identity-matches.js",
+  );
+  const [moduleSource, alignmentModuleSource] = await Promise.all([
+    readFile(modulePath),
+    readFile(alignmentModulePath),
+  ]);
   const server = createServer((request, response) => {
     const pathname = new URL(request.url ?? "/", `http://${LOOPBACK_HOST}`).pathname;
     if (request.method !== "GET") {
       response.writeHead(405).end();
       return;
     }
-    if (pathname === "/") {
+    if (pathname === "/" || pathname === "/target-realm") {
       response.writeHead(200, {
         "cache-control": "no-store",
         "content-security-policy":
-          "default-src 'none'; script-src 'self'; style-src 'unsafe-inline'",
+          "default-src 'none'; frame-src 'self'; script-src 'self'; style-src 'unsafe-inline'",
         "content-type": "text/html; charset=utf-8",
       });
       response.end("<!doctype html><meta charset=utf-8><title>Lab Colors output sink proof</title>");
@@ -1034,6 +1266,15 @@ async function main() {
         "x-content-type-options": "nosniff",
       });
       response.end(moduleSource);
+      return;
+    }
+    if (pathname === "/sequence-identity-matches.js") {
+      response.writeHead(200, {
+        "cache-control": "no-store",
+        "content-type": "text/javascript; charset=utf-8",
+        "x-content-type-options": "nosniff",
+      });
+      response.end(alignmentModuleSource);
       return;
     }
     response.writeHead(404).end();
@@ -1138,7 +1379,7 @@ async function main() {
         method: "POST",
         body: JSON.stringify({
           script: browserScript,
-          args: [`${origin}/output-sink.js?proof=v1`],
+          args: [`${origin}/output-sink.js?proof=v2`],
         }),
       },
       commandTimeoutMilliseconds,
