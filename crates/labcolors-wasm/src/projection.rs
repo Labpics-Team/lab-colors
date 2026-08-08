@@ -138,7 +138,7 @@ pub fn output_conflict_json(conflicts: &OutputConflicts) -> String {
 }
 
 /// Сериализовать [`ResolvedTheme`] в JSON, литерально повторяющий форму
-/// `.d.ts`-контракта: `{ theme, background, vars, roles }`. Построено
+/// `.d.ts`-контракта: `{ theme, background, outputBindings, vars, roles }`. Построено
 /// генерически из вектора ролей — ни одна роль здесь не поименована, набор
 /// растёт без правок этой функции (как и старая проекция).
 pub fn resolved_json(resolved: &ResolvedTheme) -> Result<String, BindingError> {
@@ -147,6 +147,13 @@ pub fn resolved_json(resolved: &ResolvedTheme) -> Result<String, BindingError> {
 
     for entry in &resolved.roles {
         let css_var = format!("--lab-{}", entry.role_key);
+        if !resolved.output_bindings.contains(&css_var) {
+            return Err(BindingError::Internal {
+                reason: format!(
+                    "resolved role primary binding {css_var:?} отсутствует в Core OutputBindingSet"
+                ),
+            });
+        }
         if !roles.is_empty() {
             roles.push(',');
         }
@@ -167,7 +174,7 @@ pub fn resolved_json(resolved: &ResolvedTheme) -> Result<String, BindingError> {
                 // данными роли; синтаксис переменной один на все исходы).
                 let css = oklch_css(&c.hex, None)?;
                 field_str(&mut roles, "css", &css);
-                push_var(&mut vars, &css_var, &css);
+                push_bound_var(resolved, &mut vars, &css_var, &css)?;
             }
             RoleOutcome::Translucent(r) => {
                 field_str(&mut roles, "kind", "translucent");
@@ -182,7 +189,7 @@ pub fn resolved_json(resolved: &ResolvedTheme) -> Result<String, BindingError> {
                 // композитит на живой подложке; форма едина с солидами.
                 let css = oklch_css(&r.tint_hex, Some(r.alpha))?;
                 field_str(&mut roles, "css", &css);
-                push_var(&mut vars, &css_var, &css);
+                push_bound_var(resolved, &mut vars, &css_var, &css)?;
             }
             RoleOutcome::Glow(g) => {
                 validate_glow_provenance(g)?;
@@ -262,9 +269,14 @@ pub fn resolved_json(resolved: &ResolvedTheme) -> Result<String, BindingError> {
                 let halo_css = oklch_css(&g.halo_hex, None)?;
                 let core_css = oklch_css(&g.core_hex, None)?;
                 field_str(&mut roles, "css", &halo_css);
-                push_var(&mut vars, &css_var, &halo_css);
-                push_var(&mut vars, &format!("{css_var}-core"), &core_css);
-                push_var(&mut vars, &format!("{css_var}-alpha"), &g.alpha_css);
+                push_bound_var(resolved, &mut vars, &css_var, &halo_css)?;
+                push_bound_var(resolved, &mut vars, &format!("{css_var}-core"), &core_css)?;
+                push_bound_var(
+                    resolved,
+                    &mut vars,
+                    &format!("{css_var}-alpha"),
+                    &g.alpha_css,
+                )?;
             }
             RoleOutcome::GlowIndeterminate(g) => {
                 validate_glow_indeterminate_provenance(g)?;
@@ -316,9 +328,9 @@ pub fn resolved_json(resolved: &ResolvedTheme) -> Result<String, BindingError> {
                 let tint_css = oklch_css(&m.tone_hex, Some(m.alpha))?;
                 field_str(&mut roles, "css", &solid_css);
                 // --lab-<role> = солид-канон; -01 = тинт (α); -02 = опаковая база.
-                push_var(&mut vars, &css_var, &solid_css);
-                push_var(&mut vars, &format!("{css_var}-01"), &tint_css);
-                push_var(&mut vars, &format!("{css_var}-02"), &solid_css);
+                push_bound_var(resolved, &mut vars, &css_var, &solid_css)?;
+                push_bound_var(resolved, &mut vars, &format!("{css_var}-01"), &tint_css)?;
+                push_bound_var(resolved, &mut vars, &format!("{css_var}-02"), &solid_css)?;
             }
             RoleOutcome::None => {
                 field_str(&mut roles, "kind", "none");
@@ -344,6 +356,14 @@ pub fn resolved_json(resolved: &ResolvedTheme) -> Result<String, BindingError> {
     push_str_lit(&mut out, &resolved.theme);
     out.push_str(",\"background\":");
     push_str_lit(&mut out, &resolved.background);
+    out.push_str(",\"outputBindings\":[");
+    for (index, binding) in resolved.output_bindings.keys().iter().enumerate() {
+        if index > 0 {
+            out.push(',');
+        }
+        push_str_lit(&mut out, binding);
+    }
+    out.push(']');
     out.push_str(",\"vars\":{");
     out.push_str(&vars);
     out.push_str("},\"roles\":{");
@@ -723,14 +743,27 @@ fn oklch_css(hex: &str, alpha: Option<f64>) -> Result<String, BindingError> {
     })
 }
 
-/// Запись в словарь `vars`: `"--lab-<key>":"<css>"` (с запятой-разделителем).
-fn push_var(vars: &mut String, key: &str, value: &str) {
+/// Запись в `vars` разрешена только для ключа, который Core включил в статический
+/// [`OutputBindingSet`](labcolors_core::config::OutputBindingSet). Нарушение —
+/// internal drift, а не повод расширить ownership по имени на adapter boundary.
+fn push_bound_var(
+    resolved: &ResolvedTheme,
+    vars: &mut String,
+    key: &str,
+    value: &str,
+) -> Result<(), BindingError> {
+    if !resolved.output_bindings.contains(key) {
+        return Err(BindingError::Internal {
+            reason: format!("emitted var {key:?} отсутствует в Core OutputBindingSet"),
+        });
+    }
     if !vars.is_empty() {
         vars.push(',');
     }
     push_str_lit(vars, key);
     vars.push(':');
     push_str_lit(vars, value);
+    Ok(())
 }
 
 /// Поле-строка: `,"name":"<escaped>"`. Имена полей — статические ASCII
@@ -861,6 +894,46 @@ mod tests {
         core_glow_outcome("#FFFFFF", labcolors_core::GlowDecisionProfileV1::StableV1)
     }
 
+    #[derive(Clone, Copy)]
+    enum BindingShape {
+        Primary,
+        Glow,
+        Material,
+    }
+
+    fn output_bindings(
+        entries: &[(&str, BindingShape)],
+    ) -> labcolors_core::config::OutputBindingSet {
+        let tint =
+            labcolors_core::LadderTint::new([[74.0 / 255.0, 143.0 / 255.0, 1.0]; 4]).unwrap();
+        let entries = entries
+            .iter()
+            .map(|(name, shape)| {
+                let spec = match shape {
+                    BindingShape::Primary => labcolors_core::RoleSpec::Zero,
+                    BindingShape::Glow => labcolors_core::RoleSpec::Glow {
+                        tint,
+                        step: labcolors_core::glow::GlowStep::Base,
+                        mode: labcolors_core::GlowDecisionProfileV1::StableV1.execution_mode(),
+                    },
+                    BindingShape::Material => labcolors_core::RoleSpec::Material {
+                        hue: None,
+                        tone: labcolors_core::semantic::DjMagnitude::new(10.0, 10.0),
+                        floor: labcolors_core::Floor::AaText,
+                    },
+                };
+                ((*name).to_string(), spec)
+            })
+            .collect();
+        let table = labcolors_core::NamedRoleTable::new(
+            entries,
+            Vec::new(),
+            labcolors_core::RoleChroma::Neutral,
+        )
+        .expect("test output binding table is valid");
+        table.output_bindings().clone()
+    }
+
     fn color_entry(key: &str) -> RoleEntry {
         RoleEntry {
             role_key: key.to_string(),
@@ -880,6 +953,13 @@ mod tests {
         ResolvedTheme {
             theme: "dark".to_string(),
             background: "#3A3A3C".to_string(),
+            output_bindings: output_bindings(&[
+                ("label-primary", BindingShape::Primary),
+                ("spacer", BindingShape::Primary),
+                ("veil", BindingShape::Primary),
+                ("pulse", BindingShape::Glow),
+                ("unresolved", BindingShape::Primary),
+            ]),
             roles: vec![
                 color_entry("label-primary"),
                 RoleEntry {
@@ -951,7 +1031,10 @@ mod tests {
         let css_core = labcolors_core::oklch_css_from_hex("#A0C5FF", None).unwrap();
         let expected = format!(
             concat!(
-                "{{\"theme\":\"dark\",\"background\":\"#3A3A3C\",\"vars\":{{",
+                "{{\"theme\":\"dark\",\"background\":\"#3A3A3C\",\"outputBindings\":[",
+                "\"--lab-label-primary\",\"--lab-spacer\",\"--lab-veil\",",
+                "\"--lab-pulse\",\"--lab-pulse-core\",\"--lab-pulse-alpha\",",
+                "\"--lab-unresolved\"],\"vars\":{{",
                 "\"--lab-label-primary\":\"{lab}\",",
                 "\"--lab-veil\":\"{veil}\",",
                 "\"--lab-pulse\":\"{halo}\",",
@@ -1002,6 +1085,14 @@ mod tests {
         let none = &projected["roles"]["spacer"];
         assert_eq!(none["kind"], "none");
         assert_eq!(none["cssVar"], "--lab-spacer");
+        assert!(
+            projected["outputBindings"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|key| key == "--lab-spacer"),
+            "none remains statically owned even without a value"
+        );
         assert!(projected["vars"].get("--lab-spacer").is_none());
 
         // Failure is one terminal wire shape. It preserves the core-owned
@@ -1010,6 +1101,14 @@ mod tests {
         assert_eq!(failure["kind"], "failure");
         assert_eq!(failure["category"], "unresolved");
         assert_eq!(failure["code"], "bounded_search_exhausted");
+        assert!(
+            projected["outputBindings"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|key| key == "--lab-unresolved"),
+            "unresolved remains statically owned even without a value"
+        );
         assert!(projected["vars"].get("--lab-unresolved").is_none());
         let mut failure_fields = failure
             .as_object()
@@ -1022,6 +1121,26 @@ mod tests {
             failure_fields,
             ["category", "code", "cssVar", "kind", "message"]
         );
+    }
+
+    #[test]
+    fn projection_rejects_any_var_outside_the_core_binding_manifest() {
+        let mut theme = fixture();
+        theme.output_bindings = output_bindings(&[
+            ("label-primary", BindingShape::Primary),
+            ("spacer", BindingShape::Primary),
+            ("veil", BindingShape::Primary),
+            // Deliberate mutant: the Glow role is misdeclared as primary-only.
+            ("pulse", BindingShape::Primary),
+            ("unresolved", BindingShape::Primary),
+        ]);
+
+        assert!(matches!(
+            resolved_json(&theme),
+            Err(BindingError::Internal { reason })
+                if reason.contains("--lab-pulse-core")
+                    && reason.contains("Core OutputBindingSet")
+        ));
     }
 
     #[test]
@@ -1039,6 +1158,14 @@ mod tests {
                 constraint_layer: labcolors_core::GlowConstraintLayer::Halo,
             }),
         });
+        theme.output_bindings = output_bindings(&[
+            ("label-primary", BindingShape::Primary),
+            ("spacer", BindingShape::Primary),
+            ("veil", BindingShape::Primary),
+            ("pulse", BindingShape::Glow),
+            ("unresolved", BindingShape::Primary),
+            ("uncertain-pulse", BindingShape::Glow),
+        ]);
 
         let value: serde_json::Value =
             serde_json::from_str(&resolved_json(&theme).unwrap()).unwrap();
@@ -1273,6 +1400,7 @@ mod tests {
         let theme = ResolvedTheme {
             theme: "light".to_string(),
             background: "#FFFFFF".to_string(),
+            output_bindings: output_bindings(&[("bg-material-base", BindingShape::Material)]),
             roles: vec![RoleEntry {
                 role_key: "bg-material-base".to_string(),
                 outcome: RoleOutcome::Material(MaterialColor {
@@ -1370,6 +1498,10 @@ mod tests {
         let theme = ResolvedTheme {
             theme: "light".to_string(),
             background: "#FFFFFF".to_string(),
+            output_bindings: output_bindings(&[
+                ("transparent", BindingShape::Material),
+                ("opaque", BindingShape::Material),
+            ]),
             roles: vec![
                 RoleEntry {
                     role_key: "transparent".to_string(),
@@ -1434,6 +1566,7 @@ mod tests {
         let indeterminate_theme = ResolvedTheme {
             theme: "light".to_string(),
             background: "#FFFFFF".to_string(),
+            output_bindings: output_bindings(&[("indeterminate", BindingShape::Glow)]),
             roles: vec![RoleEntry {
                 role_key: "indeterminate".to_string(),
                 outcome: RoleOutcome::GlowIndeterminate(GlowIndeterminateColor {
@@ -1458,6 +1591,7 @@ mod tests {
         let material_theme = ResolvedTheme {
             theme: "light".to_string(),
             background: "#FFFFFF".to_string(),
+            output_bindings: output_bindings(&[("material", BindingShape::Material)]),
             roles: vec![RoleEntry {
                 role_key: "material".to_string(),
                 outcome: RoleOutcome::Material(MaterialColor {
@@ -1516,28 +1650,27 @@ mod tests {
         );
     }
 
-    /// Враждебный ключ роли (конфиг — пользовательский ввод) экранируется
-    /// обратимо: serde возвращает ключ байт-в-байт.
+    /// Role keys are output-contract identifiers, not arbitrary JSON strings.
+    /// Even an internally forged DTO must not project a key that Core did not
+    /// admit into the immutable output manifest.
     #[test]
-    fn hostile_role_keys_escape_reversibly() {
+    fn hostile_role_key_cannot_escape_the_core_output_manifest() {
         let theme = ResolvedTheme {
             theme: "light".to_string(),
             background: "#FFFFFF".to_string(),
+            output_bindings: output_bindings(&[("lawful-role", BindingShape::Primary)]),
             roles: vec![RoleEntry {
                 role_key: "we\"ird\\key\n\t\u{0001}".to_string(),
                 outcome: RoleOutcome::None,
             }],
         };
-        let json = resolved_json(&theme).unwrap();
-        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
-        let roles = v["roles"].as_object().unwrap();
-        assert!(roles.contains_key("we\"ird\\key\n\t\u{0001}"));
-        assert_eq!(
-            roles["we\"ird\\key\n\t\u{0001}"]["cssVar"]
-                .as_str()
-                .unwrap(),
-            "--lab-we\"ird\\key\n\t\u{0001}"
-        );
+
+        assert!(matches!(
+            resolved_json(&theme),
+            Err(BindingError::Internal { reason })
+                if reason.contains("--lab-we\\\"ird\\\\key")
+                    && reason.contains("Core OutputBindingSet")
+        ));
     }
 
     #[test]

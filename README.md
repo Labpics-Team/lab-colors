@@ -46,9 +46,13 @@ ThemeConfig клиента
   сертификат; Glow требует явный decision profile и может завершиться
   типизированным `Indeterminate` без CSS fallback.
 - **Непрерывные семейства.** `ColorCurve` и реализации `NeutralCurve`/`AccentCurve` доступны как низкоуровневые вычислительные примитивы.
-- **Браузерное применение.** Публичные `applyTheme`, `watchTheme` и `adaptTheme`
-  связывают результат WASM с локальной областью DOM; обход подложки остаётся
-  внутренней частью runtime и не является отдельным API.
+- **Браузерное применение.** `applyTheme`, `watchTheme` и `adaptTheme` публикуют
+  Core-authored `outputBindings` в один целевой constructed `CSSStyleSheet`.
+  Публикация сначала проверяется на scratch-sheet, затем выполняется одним
+  `replaceSync`; inline-style и поиск имён по префиксу не используются. Точной
+  целью служит только `document.documentElement` (`:root`) либо host собственного
+  открытого ShadowRoot (`:host`); произвольный light-DOM selector не выдаётся за
+  identity.
 
 ## Что не следует приписывать текущей реализации
 
@@ -86,7 +90,8 @@ const colors = new LabColors();
 colors.loadConfig(await response.text());
 
 const result = colors.resolveTheme("#FFFFFF", "light");
-applyTheme(document.documentElement, result);
+const attachment = applyTheme(document.documentElement, result);
+// attachment.dispose(); // отозвать только это применение
 ```
 
 Имена тем должны поддерживаться загруженным конфигом и текущей платформенной границей. Имена CSS-переменных определяются клиентской схемой.
@@ -114,11 +119,13 @@ if (!(panel instanceof HTMLElement)) {
 const watcher = watchTheme(panel, {
   colors,
   theme: "light",
+  target: document.documentElement,
 });
 
 watcher.setTheme("dark");
 watcher.refresh();
-watcher.stop();
+watcher.stop();    // прекращает наблюдение, но сохраняет опубликованный output
+watcher.dispose(); // явно отзывает output этого контроллера
 ```
 
 TypeScript-путь `loadConfig → resolveTheme → applyTheme/watchTheme` проверяется consumer-smoke тестом пакета. Подробный API: [`packages/colors/README.md`](packages/colors/README.md).

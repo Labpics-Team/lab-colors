@@ -21,6 +21,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import "./fake-node-brand.mjs";
 import { adaptTheme } from "../adapt-theme.js";
 import * as ebg from "../effective-bg.js";
 import { buildMissRing, rustCacheCapacity } from "../bench/misses.mjs";
@@ -29,6 +30,8 @@ import {
   materializeOccurrences,
 } from "../bench/occurrences.mjs";
 import { __over, initSync, LabColors } from "../pkg/labcolors.js";
+import { acquireOutputLease } from "../output-sink.js";
+import { outputElement } from "./output-host.mjs";
 
 const { oklabLerp } = ebg;
 
@@ -57,30 +60,17 @@ const fnv1a = (h, str) => {
   return h >>> 0;
 };
 
+const fingerprintValues = (hash, values) => {
+  const entries = [...values].sort(([left], [right]) =>
+    left < right ? -1 : left > right ? 1 : 0);
+  for (const [key, value] of entries) hash = fnv1a(fnv1a(hash, key), value);
+  return hash >>> 0;
+};
+
 function makeElement() {
-  const names = [];
-  const values = new Map();
-  return {
-    values,
-    style: {
-      setProperty(name, value) {
-        if (!values.has(name)) names.push(name);
-        values.set(name, value);
-      },
-      removeProperty(name) {
-        if (values.delete(name)) {
-          const i = names.indexOf(name);
-          if (i >= 0) names.splice(i, 1);
-        }
-      },
-      item(i) {
-        return names[i] ?? "";
-      },
-      get length() {
-        return names.length;
-      },
-    },
-  };
+  const element = outputElement();
+  element.values = element.props;
+  return element;
 }
 
 function makeStubEngine() {
@@ -91,8 +81,10 @@ function makeStubEngine() {
       stub.lastSolvedTone = tone;
       const vars = {};
       const roles = {};
+      const outputBindings = [];
       for (let i = 0; i < ROLE_COUNT; i++) {
         const cssVar = `--lab-role-${i}`;
+        outputBindings.push(cssVar);
         vars[cssVar] = `oklch(${(40 + ((tone + i) % 50)).toFixed(1)}% 0.1200 ${(i * 13) % 360})`;
         roles[`role${i}`] = {
           kind: "color",
@@ -104,6 +96,7 @@ function makeStubEngine() {
       }
       for (let i = 0; i < TL_COUNT; i++) {
         const cssVar = `--lab-tl-${i}`;
+        outputBindings.push(cssVar);
         const css = `oklch(80.0% 0.0200 ${(i * 31) % 360} / 0.6)`;
         const tintHex = ebg.toHex(ebg.parseCssColor(css));
         const alpha = 0.6;
@@ -117,7 +110,7 @@ function makeStubEngine() {
           compositeLc: 60,
         };
       }
-      return { vars, roles };
+      return { outputBindings, vars, roles };
     },
     recheckContrast(bg, fgs) {
       // Packed boundary (C8d): `bg` is a `0x00RRGGBB` word. Its R byte is the
@@ -149,7 +142,7 @@ function runFingerprint(bgAt) {
   for (frame = 1; frame <= FRAMES; frame++) {
     now = frame * FRAME_MS;
     ctrl.tick(now);
-    for (const [k, v] of el.values) fp = fnv1a(fnv1a(fp, k), v);
+    fp = fingerprintValues(fp, el.values);
   }
   ctrl.stop();
   return fp.toString(16).padStart(8, "0");
@@ -159,13 +152,14 @@ const SOLVED0 = 0x80;
 const steadyBg = () => toneHex(SOLVED0);
 const driftBg = (f) => toneHex(SOLVED0 + Math.round(32 * Math.sin((2 * Math.PI * f) / 240)));
 const breachBg = (f) => toneHex(SOLVED0 + (Math.floor(f / 90) % 2 === 1 ? 96 : 0) + (f % 3));
-// Captured on the pre-optimisation implementation — see header for the rules.
-// (steady === drift is expected: while rechecks pass, the applied state never
-// changes, so both hash the same repeated post-solve snapshot.)
+// Re-derived with lexicographic state iteration on both the sequential writer
+// at 0ff950db and the atomic sink. Their fingerprints are byte-identical; only
+// the old Map-insertion-order oracle changed. (steady === drift is expected:
+// while rechecks pass, the applied state never changes.)
 const GOLDEN = {
-  steady: "99d7af7d",
-  drift: "99d7af7d",
-  ease: "c996bd0b",
+  steady: "e3cfef6d",
+  drift: "e3cfef6d",
+  ease: "a385f743",
 };
 
 const CASES = [
@@ -173,6 +167,25 @@ const CASES = [
   ["drift", driftBg],
   ["ease", breachBg],
 ];
+
+test("hotpath state fingerprint is independent of output lease acquisition order", () => {
+  const first = outputElement();
+  const firstA = acquireOutputLease(first, ["--lab-a"], "hotpath/order/a");
+  const firstB = acquireOutputLease(first, ["--lab-b"], "hotpath/order/b");
+  firstA.publish({ "--lab-a": "#111111" });
+  firstB.publish({ "--lab-b": "#222222" });
+
+  const second = outputElement();
+  const secondB = acquireOutputLease(second, ["--lab-b"], "hotpath/order/b");
+  const secondA = acquireOutputLease(second, ["--lab-a"], "hotpath/order/a");
+  secondB.publish({ "--lab-b": "#222222" });
+  secondA.publish({ "--lab-a": "#111111" });
+
+  assert.equal(
+    fingerprintValues(0x811c9dc5, first.props),
+    fingerprintValues(0x811c9dc5, second.props),
+  );
+});
 
 if (process.env.PRINT_FP) {
   test("print golden fingerprints (capture mode)", () => {

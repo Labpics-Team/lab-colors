@@ -1,3 +1,5 @@
+/// <reference lib="esnext.disposable" />
+
 // Public types for the adaptive hysteresis controller.
 
 import type { LabColors, ThemeName } from "./index.js";
@@ -20,7 +22,10 @@ export interface AdaptThemeOptions {
    * checks every supplied point and does not infer a Raster or Field between samples.
    */
   background?: string | string[] | (() => string | string[]);
-  /** Element to write the `--lab-*` variables onto. Defaults to the watched element. */
+  /**
+   * Exact output target for the dedicated stylesheet. It must be its document's
+   * `documentElement`, or own the open `shadowRoot` used as the output scope.
+   */
   target?: HTMLElement;
   /**
    * Caller-declared opaque page canvas for a fully translucent supported ancestor
@@ -62,6 +67,10 @@ export interface AdaptController {
   start(): void;
   /** Stop the internal loop without discarding an unfinished transition. */
   stop(): void;
+  /** Stop observation and atomically revoke only this controller's output lease. */
+  dispose(): void;
+  /** Explicit-resource-management alias when the host defines `Symbol.dispose`. */
+  [Symbol.dispose]?(): void;
   /** Канонические логические цели committed state; empty before the first supported Point commit. */
   current(): Record<string, string>;
 }
@@ -70,5 +79,7 @@ export interface AdaptController {
  * Adapts an element to explicit finite point evidence or the strict package-
  * private `Point | Unknown` computed-CSS gate. Unsupported effects, transparent
  * root without `canvas`, cycles and depth exhaustion never become a fallback hex.
+ * The observed element may be arbitrary, but the selected output target must be
+ * its document's `documentElement` or the host of its own open `shadowRoot`.
  */
 export declare function adaptTheme(element: HTMLElement, options: AdaptThemeOptions): AdaptController;

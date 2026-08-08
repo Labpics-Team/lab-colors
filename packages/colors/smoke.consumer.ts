@@ -262,6 +262,7 @@ async function consume(clientConfigJson: string): Promise<void> {
     colors: engine,
     theme,
     background: "#101012",
+    target: document.documentElement,
     onError(error: unknown) {
       void error;
     },
@@ -286,6 +287,7 @@ async function consume(clientConfigJson: string): Promise<void> {
   watchTheme(surface, {
     colors: engine,
     theme,
+    target: document.documentElement,
     // @ts-expect-error asynchronous observer errors require a callback.
     onError: "invalid",
   });
@@ -296,6 +298,7 @@ async function consume(clientConfigJson: string): Promise<void> {
     colors: engine,
     theme,
     background: "#101012",
+    target: document.documentElement,
     easeMs: 280,
     dropFraction: 0.2,
   });
@@ -311,6 +314,7 @@ async function consume(clientConfigJson: string): Promise<void> {
     colors: engine,
     theme,
     background: (): string[] => ["#101012", "#202024"],
+    target: document.documentElement,
   });
   adaptiveBackdrop.stop();
 }

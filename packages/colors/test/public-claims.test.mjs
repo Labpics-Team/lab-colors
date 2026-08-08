@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
-import { join, relative, resolve } from "node:path";
+import { join, relative, resolve, sep } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
@@ -360,6 +360,10 @@ function productionRustFiles() {
   return claimFiles(join(ROOT, "crates"), [], /\.rs$/u).filter(isProductionRustPath);
 }
 
+function canonicalInventoryPath(path) {
+  return path.split(sep).join("/");
+}
+
 function productionPackageFiles() {
   return PACKAGE_MANIFEST.files
     .filter((path) => /\.(?:js|mjs|ts)$/u.test(path) && !path.startsWith("pkg/"))
@@ -462,6 +466,21 @@ test("production Rust path filter is separator-agnostic", () => {
   assert.equal(isProductionRustPath("/repo/crates/core/src/lib.rs"), true);
   assert.equal(isProductionRustPath(String.raw`C:\repo\crates\core\src\lib.rs`), true);
   assert.equal(isProductionRustPath("/repo/crates/core/tests/src_like.rs"), false);
+});
+
+test("shipped-source inventory canonicalizes only native path separators", () => {
+  const canonical = "crates/labcolors-core/src/semantic.rs";
+  assert.equal(
+    canonicalInventoryPath(["crates", "labcolors-core", "src", "semantic.rs"].join(sep)),
+    canonical,
+  );
+  if (sep === "/") {
+    assert.notEqual(
+      canonicalInventoryPath(String.raw`crates\labcolors-core\src\semantic.rs`),
+      canonical,
+      "a POSIX filename containing backslashes must not alias the required path",
+    );
+  }
 });
 
 test("false-claim detector bites without treating hex colours as Issue links", () => {
@@ -753,11 +772,25 @@ test("runtime docs do not promote estimates, samples, or coordinates", () => {
 });
 
 const RESOLVED_THEME_FIELDS = new Map([
-  ["theme", "ThemeName"],
-  ["background", "string"],
-  ["vars", "Readonly<Record<string, string>>"],
-  ["roles", "Readonly<Record<string, RoleResult>>"],
+  ["theme", { declaration: "ThemeName", readme: "ThemeName" }],
+  ["background", { declaration: "string", readme: "string" }],
+  ["outputBindings", { declaration: "OutputBindingSet", readme: "readonly string[]" }],
+  [
+    "vars",
+    {
+      declaration: "Readonly<Record<string, string>>",
+      readme: "Readonly<Record<string, string>>",
+    },
+  ],
+  [
+    "roles",
+    {
+      declaration: "Readonly<Record<string, RoleResult>>",
+      readme: "Readonly<Record<string, RoleResult>>",
+    },
+  ],
 ]);
+const OUTPUT_BINDING_SET_DECLARATION = "export type OutputBindingSet = readonly string[];";
 
 function parseTypes(source, fileName) {
   return ts.createSourceFile(
@@ -799,7 +832,45 @@ function namedResolvedThemeDeclarations(sourceFile) {
   return namedTopLevelDeclarations(sourceFile, "ResolvedTheme");
 }
 
-function resolvedThemeShapeFailures(source, fileName, label, requireExport) {
+function outputBindingSetDeclarationFailures(source) {
+  const sourceFile = parseTypes(source, "labcolors.d.ts");
+  const declarations = sourceFile.statements.filter(
+    (node) => ts.isTypeAliasDeclaration(node) && node.name.text === "OutputBindingSet",
+  );
+  if (declarations.length !== 1) return ["declaration OutputBindingSet"];
+  const declaration = declarations[0];
+  const modifiers = declaration.modifiers ?? [];
+  if (
+    namedTopLevelDeclarations(sourceFile, "OutputBindingSet").length !== 1 ||
+    modifiers.length !== 1 ||
+    modifiers[0].kind !== ts.SyntaxKind.ExportKeyword ||
+    (declaration.typeParameters?.length ?? 0) !== 0 ||
+    declaration.type.getText(sourceFile) !== "readonly string[]"
+  ) {
+    return ["declaration OutputBindingSet"];
+  }
+  return [];
+}
+
+function exactPackageReexportCount(sourceFile, expectedName) {
+  return sourceFile.statements.flatMap((node) => {
+    if (
+      !ts.isExportDeclaration(node) ||
+      !ts.isStringLiteral(node.moduleSpecifier) ||
+      node.moduleSpecifier.text !== "./pkg/labcolors.js" ||
+      !node.exportClause ||
+      !ts.isNamedExports(node.exportClause)
+    ) {
+      return [];
+    }
+    return node.exportClause.elements.filter((element) => {
+      const sourceName = element.propertyName?.text ?? element.name.text;
+      return sourceName === expectedName && element.name.text === expectedName;
+    });
+  }).length;
+}
+
+function resolvedThemeShapeFailures(source, fileName, label, requireExport, boundary) {
   const failures = [];
   const sourceFile = parseTypes(source, fileName);
   if (sourceFile.parseDiagnostics.length > 0) failures.push(`${label} syntax`);
@@ -843,7 +914,7 @@ function resolvedThemeShapeFailures(source, fileName, label, requireExport) {
     }
     members.set(name, member);
   }
-  for (const [name, expectedType] of RESOLVED_THEME_FIELDS) {
+  for (const [name, expectedTypes] of RESOLVED_THEME_FIELDS) {
     const member = members.get(name);
     const readonly = member?.modifiers?.some(
       (modifier) => modifier.kind === ts.SyntaxKind.ReadonlyKeyword,
@@ -852,7 +923,7 @@ function resolvedThemeShapeFailures(source, fileName, label, requireExport) {
       member === undefined ||
       !readonly ||
       member.questionToken !== undefined ||
-      member.type?.getText(sourceFile) !== expectedType
+      member.type?.getText(sourceFile) !== expectedTypes[boundary]
     ) {
       failures.push(`${label} ${name}`);
     }
@@ -867,31 +938,19 @@ function resolvedThemeShapeFailures(source, fileName, label, requireExport) {
 function resolvedThemeContractFailures(indexTypes, declarationTypes, readme) {
   const failures = [];
   const index = parseTypes(indexTypes, "index.d.ts");
-  const exported = index.statements.flatMap((node) => {
-    if (
-      !ts.isExportDeclaration(node) ||
-      !ts.isStringLiteral(node.moduleSpecifier) ||
-      node.moduleSpecifier.text !== "./pkg/labcolors.js" ||
-      !node.exportClause ||
-      !ts.isNamedExports(node.exportClause)
-    ) {
-      return [];
-    }
-    return node.exportClause.elements.flatMap((element) => {
-      const sourceName = element.propertyName?.text ?? element.name.text;
-      return sourceName === "ResolvedTheme" && element.name.text === "ResolvedTheme"
-        ? ["ResolvedTheme"]
-        : [];
-    });
-  });
-  if (exported.length !== 1) failures.push("index export");
+  if (exactPackageReexportCount(index, "ResolvedTheme") !== 1) failures.push("index export");
+  if (exactPackageReexportCount(index, "OutputBindingSet") !== 1) {
+    failures.push("index OutputBindingSet export");
+  }
 
+  failures.push(...outputBindingSetDeclarationFailures(declarationTypes));
   failures.push(
     ...resolvedThemeShapeFailures(
       declarationTypes,
       "labcolors.d.ts",
       "declaration",
       true,
+      "declaration",
     ),
   );
   const readmeBlocks = [...readme.matchAll(/```ts\n([\s\S]*?)\n```/gu)]
@@ -910,6 +969,7 @@ function resolvedThemeContractFailures(indexTypes, declarationTypes, readme) {
         readmeBlocks[0].fileName,
         "README",
         false,
+        "readme",
       ),
     );
   }
@@ -962,12 +1022,45 @@ test("ResolvedTheme contract guard bites at every public SSOT boundary", () => {
     ),
     ["index export"],
   );
-  for (const [name, type] of RESOLVED_THEME_FIELDS) {
-    const field = `readonly ${name}: ${type};`;
+  assert.deepEqual(
+    resolvedThemeContractFailures(
+      indexTypes.replace("  OutputBindingSet,", "  // OutputBindingSet,"),
+      declarationTypes,
+      readme,
+    ),
+    ["index OutputBindingSet export"],
+  );
+  assert.ok(
+    declarationTypes.includes(OUTPUT_BINDING_SET_DECLARATION),
+    "fixture must contain the exact generated OutputBindingSet alias",
+  );
+  for (const replacement of [
+    `// ${OUTPUT_BINDING_SET_DECLARATION}`,
+    "type OutputBindingSet = readonly string[];",
+    "export type OutputBindingSet = string[];",
+    "export type OutputBindingSet = unknown;",
+  ]) {
+    assert.deepEqual(
+      resolvedThemeContractFailures(
+        indexTypes,
+        declarationTypes.replace(OUTPUT_BINDING_SET_DECLARATION, replacement),
+        readme,
+      ),
+      ["declaration OutputBindingSet"],
+      `OutputBindingSet mutation must bite: ${replacement}`,
+    );
+  }
+  for (const [name, types] of RESOLVED_THEME_FIELDS) {
+    const declarationField = `readonly ${name}: ${types.declaration};`;
+    const readmeField = `readonly ${name}: ${types.readme};`;
     assert.ok(
       resolvedThemeContractFailures(
         indexTypes,
-        replaceResolvedThemeDeclarationField(declarationTypes, field, `// ${field}`),
+        replaceResolvedThemeDeclarationField(
+          declarationTypes,
+          declarationField,
+          `// ${declarationField}`,
+        ),
         readme,
       ).includes(`declaration ${name}`),
       `generated declaration mutation must bite: ${name}`,
@@ -976,7 +1069,7 @@ test("ResolvedTheme contract guard bites at every public SSOT boundary", () => {
       resolvedThemeContractFailures(
         indexTypes,
         declarationTypes,
-        replaceResolvedThemeReadmeField(readme, field, `// ${field}`),
+        replaceResolvedThemeReadmeField(readme, readmeField, `// ${readmeField}`),
       ).includes(`README ${name}`),
       `README mutation must bite: ${name}`,
     );
@@ -1359,7 +1452,9 @@ test("legacy sentiment curve is excised instead of preserved as schema", () => {
   }
 
   const shippedSourceFiles = [...productionRustFiles(), ...productionPackageFiles()];
-  const shippedSourcePaths = shippedSourceFiles.map((path) => relative(ROOT, path));
+  const shippedSourcePaths = shippedSourceFiles.map((path) =>
+    canonicalInventoryPath(relative(ROOT, path))
+  );
   for (const required of [
     "crates/labcolors-core/src/semantic.rs",
     "crates/labcolors-wasm/src/projection.rs",

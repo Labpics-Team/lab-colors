@@ -1504,26 +1504,6 @@ fn validator_reserves_zero_role_and_alias_primary_names() {
     }
 }
 
-/// Сегодняшние суффиксы не пересекаются друг с другом, но сам примитив
-/// namespace не должен полагаться на это случайное свойство. Синтетические
-/// shapes доказывают derived↔derived ветвь: два разных владельца строят один
-/// итоговый ключ, и второй резерв немедленно падает.
-#[test]
-fn emitted_namespace_primitive_rejects_satellite_to_satellite_collision() {
-    let mut reserved = std::collections::BTreeSet::new();
-    reserve_css_names(&mut reserved, "probe", &["-outer-inner"]).expect("первый сателлит свободен");
-    let error = reserve_css_names(&mut reserved, "probe-outer", &["-inner"])
-        .expect_err("derived↔derived коллизия обязана быть отвергнута");
-
-    assert!(matches!(
-        error,
-        ConfigError::DuplicateKey {
-            dictionary: "reserved CSS namespace",
-            key,
-        } if key == "--lab-probe-outer-inner"
-    ));
-}
-
 /// Гард не должен превращаться в запрет похожих префиксов: резервируются ровно
 /// фактически эмитируемые имена, а не все строки, начинающиеся с имени роли.
 #[test]
@@ -1541,6 +1521,105 @@ fn emitted_namespace_allows_non_colliding_near_misses() {
         .push(("probe-material-03".to_string(), "label-primary".to_string()));
 
     assert_eq!(cfg.validate(), Ok(()));
+}
+
+#[test]
+fn compiled_output_binding_set_is_exact_ordered_and_alias_aware() {
+    let source = labui_reference();
+    let ordinary = source
+        .roles
+        .iter()
+        .find(|(name, _)| name == "label-primary")
+        .expect("fixture carries an ordinary role")
+        .1
+        .clone();
+    let glow = source
+        .roles
+        .iter()
+        .find(|(name, _)| name == "fx-glow-brand")
+        .expect("fixture carries a Glow role")
+        .1
+        .clone();
+
+    let mut cfg = source;
+    cfg.roles = vec![
+        ("plain".to_string(), ordinary),
+        ("pulse".to_string(), glow),
+        ("glass".to_string(), neutral_material(10.0, Floor::AaText)),
+        ("empty".to_string(), RoleRecipe::Zero),
+    ];
+    cfg.aliases = vec![
+        ("pulse-alias".to_string(), "pulse".to_string()),
+        ("glass-alias".to_string(), "glass".to_string()),
+        ("empty-alias".to_string(), "empty".to_string()),
+    ];
+
+    let table = cfg
+        .compile_named_role_table()
+        .expect("fixture is a valid executable contract");
+    assert_eq!(
+        table.output_bindings().keys(),
+        [
+            "--lab-plain",
+            "--lab-pulse",
+            "--lab-pulse-core",
+            "--lab-pulse-alpha",
+            "--lab-glass",
+            "--lab-glass-01",
+            "--lab-glass-02",
+            "--lab-empty",
+            "--lab-pulse-alias",
+            "--lab-pulse-alias-core",
+            "--lab-pulse-alias-alpha",
+            "--lab-glass-alias",
+            "--lab-glass-alias-01",
+            "--lab-glass-alias-02",
+            "--lab-empty-alias",
+        ]
+    );
+}
+
+#[test]
+fn output_binding_compile_errors_preserve_the_config_error_contract() {
+    assert_eq!(
+        map_output_binding_error(OutputBindingCompileError::InvalidName {
+            kind: OutputBindingNameKind::Role,
+            value: "bad key".to_string(),
+        }),
+        ConfigError::InvalidName {
+            field: "roles.bad key".to_string(),
+            value: "bad key".to_string(),
+        }
+    );
+    assert_eq!(
+        map_output_binding_error(OutputBindingCompileError::InvalidName {
+            kind: OutputBindingNameKind::Alias,
+            value: "bad alias".to_string(),
+        }),
+        ConfigError::InvalidName {
+            field: "aliases.bad alias".to_string(),
+            value: "bad alias".to_string(),
+        }
+    );
+    assert_eq!(
+        map_output_binding_error(OutputBindingCompileError::UnknownAliasTarget {
+            alias: "shortcut".to_string(),
+            target: "missing".to_string(),
+        }),
+        ConfigError::UnknownRole {
+            referenced_by: "aliases.shortcut".to_string(),
+            role: "missing".to_string(),
+        }
+    );
+    assert_eq!(
+        map_output_binding_error(OutputBindingCompileError::DuplicateBinding {
+            key: "--lab-pulse-core".to_string(),
+        }),
+        ConfigError::DuplicateKey {
+            dictionary: "reserved CSS namespace",
+            key: "--lab-pulse-core".to_string(),
+        }
+    );
 }
 
 /// Неконечные значения ручек (∞/NaN) отвергаются и open-сверху пределами.
@@ -1650,6 +1729,103 @@ fn translucent_resolve_rejects_out_of_domain_spec() {
         crate::ladder::LadderTint::new([[2.0, 0.5, 0.5]; 4]).unwrap_err(),
         "light"
     );
+}
+
+/// The public semantic constructor is an executable boundary of its own: it
+/// must reject a role name before it can become an invalid CSS custom property.
+#[test]
+fn named_role_table_rejects_invalid_role_name_before_materialisation() {
+    use crate::semantic::{NamedRoleTable, RoleChroma, RoleSpec};
+
+    for invalid in ["", "bad key", "Upper", "under_score", "роль"] {
+        let result = NamedRoleTable::new(
+            vec![(invalid.to_string(), RoleSpec::Zero)],
+            Vec::new(),
+            RoleChroma::Neutral,
+        );
+
+        assert!(
+            matches!(result, Err(crate::solve::SolveFailure::InvalidInput(_))),
+            "invalid role name {invalid:?} must fail before an output manifest exists: {result:?}"
+        );
+    }
+}
+
+/// Aliases reserve public output names too, so the direct constructor applies
+/// the same name law to them instead of delegating it to `ThemeConfig`.
+#[test]
+fn named_role_table_rejects_invalid_alias_name_before_materialisation() {
+    use crate::semantic::{NamedRoleTable, RoleChroma, RoleSpec};
+
+    let result = NamedRoleTable::new(
+        vec![("valid".to_string(), RoleSpec::Zero)],
+        vec![("bad alias".to_string(), "valid".to_string())],
+        RoleChroma::Neutral,
+    );
+
+    assert!(
+        matches!(result, Err(crate::solve::SolveFailure::InvalidInput(_))),
+        "invalid alias name must fail before an output manifest exists: {result:?}"
+    );
+}
+
+#[test]
+fn named_role_table_rejects_unknown_alias_target_at_its_own_boundary() {
+    use crate::semantic::{NamedRoleTable, RoleChroma, RoleSpec};
+
+    let error = NamedRoleTable::new(
+        vec![("valid".to_string(), RoleSpec::Zero)],
+        vec![("shortcut".to_string(), "missing".to_string())],
+        RoleChroma::Neutral,
+    )
+    .expect_err("unknown alias target must fail before a table exists");
+
+    assert_eq!(
+        error,
+        crate::solve::SolveFailure::InvalidInput(
+            "alias \"shortcut\" targets unknown executable role \"missing\"".to_string()
+        )
+    );
+}
+
+/// Direct semantic construction must run the same exact namespace collision
+/// gate as configuration compilation, including recipe satellites and aliases.
+#[test]
+fn named_role_table_rejects_role_and_alias_satellite_collisions() {
+    use crate::semantic::{NamedRoleTable, RoleChroma, RoleSpec};
+
+    let compiled = labui_reference()
+        .compile_named_role_table()
+        .expect("reference contract compiles");
+    let glow = compiled
+        .entries()
+        .iter()
+        .find_map(|(_, spec)| matches!(spec, RoleSpec::Glow { .. }).then_some(*spec))
+        .expect("reference contract carries a Glow recipe");
+
+    for result in [
+        NamedRoleTable::new(
+            vec![
+                ("pulse".to_string(), glow),
+                ("pulse-core".to_string(), RoleSpec::Zero),
+            ],
+            Vec::new(),
+            RoleChroma::Neutral,
+        ),
+        NamedRoleTable::new(
+            vec![
+                ("pulse".to_string(), glow),
+                ("plain".to_string(), RoleSpec::Zero),
+            ],
+            vec![("pulse-alpha".to_string(), "plain".to_string())],
+            RoleChroma::Neutral,
+        ),
+    ] {
+        assert!(
+            matches!(result, Err(crate::solve::SolveFailure::InvalidInput(_))),
+            "colliding output shapes must fail before a table exists: {result:?}"
+        );
+    }
 }
 
 /// Границы α AlphaAnalog: ровно 1.0 валидна, 1.0+ε — нет (RED-proof грани).
