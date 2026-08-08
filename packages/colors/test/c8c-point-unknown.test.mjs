@@ -6,6 +6,7 @@ import { initSync } from "../pkg/labcolors.js";
 import { observePointBackground } from "../background-observation.js";
 import { watchTheme } from "../watch-theme.js";
 import { adaptTheme } from "../adapt-theme.js";
+import { outputElement } from "./output-host.mjs";
 
 initSync({
   module: new WebAssembly.Module(readFileSync(new URL("../pkg/labcolors_bg.wasm", import.meta.url))),
@@ -49,28 +50,7 @@ function tree(entries) {
 }
 
 function target() {
-  const props = new Map();
-  const mutations = [];
-  return {
-    props,
-    mutations,
-    style: {
-      get length() {
-        return props.size;
-      },
-      item(index) {
-        return [...props.keys()][index] ?? null;
-      },
-      setProperty(name, value) {
-        mutations.push(["set", name, value]);
-        props.set(name, value);
-      },
-      removeProperty(name) {
-        mutations.push(["remove", name]);
-        props.delete(name);
-      },
-    },
-  };
+  return outputElement();
 }
 
 function watchEngine() {
@@ -82,6 +62,7 @@ function watchEngine() {
       return {
         theme,
         background,
+        outputBindings: ["--lab-x"],
         vars: { "--lab-x": background },
         roles: {},
       };
@@ -98,6 +79,7 @@ function adaptiveEngine() {
     resolveTheme(background, theme) {
       calls.push({ background, theme });
       return {
+        outputBindings: ["--lab-label-primary"],
         vars: { "--lab-label-primary": "#123456" },
         roles: {
           "label-primary": {

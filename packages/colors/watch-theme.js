@@ -18,7 +18,8 @@
 // a fallback hex and never invoke the resolver.
 
 import { observePointBackground } from "./background-observation.js";
-import { admitSnapshot, writeVars } from "./snapshot.js";
+import { acquireOutputLease } from "./output-sink.js";
+import { admitSnapshot } from "./snapshot.js";
 
 const CANCELLED = Symbol("watchTheme.cancelled");
 const BUILTIN_QUEUE_MICROTASK =
@@ -56,6 +57,7 @@ const deferOutsideInjectedHost = (callback) => {
  * @property {(theme: string) => void} setTheme  Switch theme and re-apply.
  * @property {() => (string | null)} background  The background/reference hex last committed.
  * @property {() => void} stop  Disconnect observers and stop watching.
+ * @property {() => void} dispose  Stop and revoke only this attachment's outputs.
  */
 
 /**
@@ -159,11 +161,21 @@ export function watchTheme(element, options) {
   let dirty = false;
   let commitDepth = 0;
   let stopped = false;
+  let disposed = false;
+  let disposeRequested = false;
+  let disposeActive = false;
+  let observerDisconnecting = false;
   const pendingOperations = [];
   let drainingOperations = false;
   let executingOperation = false;
   let queuedStopActive = false;
+  let queuedDisposeActive = false;
   let observer = null;
+  let outputLease = null;
+  let outputBindings = null;
+
+  const sameBindings = (left, right) =>
+    left.length === right.length && left.every((name, index) => name === right[index]);
 
   const checkpoint = (owner) => {
     if (owner !== generation) throw CANCELLED;
@@ -203,9 +215,8 @@ export function watchTheme(element, options) {
     }
     const bg = observation.hex;
     if (!force && bg === lastBg && candidateTheme === lastTheme) {
-      // Прошлое CSSOM-исключение могло оставить inline-стиль записанным
-      // частично. Переиспользуем закоммиченный физический снимок: чинить
-      // императивную оболочку резолвером не нужно.
+      // A failed atomic publication leaves the prior live bytes intact. Retry
+      // the already admitted snapshot without re-running the resolver.
       return dirty ? { kind: "point", bg, candidateTheme, result: lastResult } : null;
     }
     // Допуск принадлежит prepare-фазе: конфликт ещё не затронул DOM или
@@ -219,18 +230,52 @@ export function watchTheme(element, options) {
 
   const commitPrepared = ({ bg, candidateTheme, result }, owner) => {
     commitDepth++;
+    let acquiredHere = false;
     try {
-      // `prepareFor` уже допустил полный снимок; повторно выдавать адаптивную
-      // внутреннюю запись за новый resolver-result не нужно.
-      const complete = writeVars(
-        target,
-        result.vars,
-        "watchTheme",
-        () => owner === generation,
-      );
-      if (!complete) return lastResult;
+      if (outputLease === null) {
+        outputLease = acquireOutputLease(target, result.outputBindings, "watchTheme");
+        outputBindings = result.outputBindings;
+        acquiredHere = true;
+      } else if (!sameBindings(outputBindings, result.outputBindings)) {
+        throw new TypeError("watchTheme: outputBindings changed; dispose and reattach");
+      }
+      const complete = outputLease.publish(result.vars, () => owner === generation);
+      if (!complete) {
+        if (acquiredHere) {
+          const released = outputLease.dispose();
+          if (!released && outputLease.state !== "disposed") {
+            throw new Error("watchTheme: failed to release an uncommitted output lease");
+          }
+          if (outputLease.state === "disposed") {
+            outputLease = null;
+            outputBindings = null;
+          }
+        }
+        return lastResult;
+      }
     } catch (error) {
+      let cleanupError = null;
+      if (acquiredHere && outputLease !== null) {
+        try {
+          const released = outputLease.dispose();
+          if (!released && outputLease.state !== "disposed") {
+            throw new Error("watchTheme: failed to release an uncommitted output lease");
+          }
+        } catch (failure) {
+          cleanupError = failure;
+        }
+        if (outputLease.state === "disposed") {
+          outputLease = null;
+          outputBindings = null;
+        }
+      }
       if (!stopped && owner === generation) dirty = true;
+      if (cleanupError !== null) {
+        throw new AggregateError(
+          [error, cleanupError],
+          "watchTheme: publication and uncommitted lease cleanup failed",
+        );
+      }
       throw error;
     } finally {
       commitDepth--;
@@ -272,12 +317,12 @@ export function watchTheme(element, options) {
     return commitPrepared(prepared, gen);
   };
 
-  const runStop = () => {
-    stopped = true;
-    pendingOperations.length = 0;
+  const disconnectObserver = () => {
+    if (observerDisconnecting) return;
     const acquired = observer;
     observer = null;
     if (acquired) {
+      observerDisconnecting = true;
       try {
         acquired.disconnect();
       } catch (error) {
@@ -285,12 +330,21 @@ export function watchTheme(element, options) {
         // retain ownership after a transient failure so a later stop can retry.
         if (observer === null) observer = acquired;
         throw error;
+      } finally {
+        observerDisconnecting = false;
       }
     }
-    // `stop` is terminal. A hostile disconnect callback may enqueue a newer
-    // operation while the drain is active; it must not retain client data in an
-    // unreachable suffix after the watcher has stopped.
+  };
+
+  const runStop = () => {
+    stopped = true;
     pendingOperations.length = 0;
+    disconnectObserver();
+    pendingOperations.length = 0;
+    // A dispose requested from inside disconnect is stronger than stop. Its
+    // explicit intent survives queue clearing and runs only after this observer
+    // attempt has released the handle.
+    if (disposeRequested && !disposeActive) runDispose();
   };
 
   const runQueuedStop = () => {
@@ -299,6 +353,62 @@ export function watchTheme(element, options) {
       runStop();
     } finally {
       queuedStopActive = false;
+    }
+  };
+
+  const runDispose = () => {
+    if (disposed || disposeActive) return;
+    disposeActive = true;
+    const failures = [];
+    try {
+      stopped = true;
+      pendingOperations.length = 0;
+      if (outputLease !== null) {
+        const acquired = outputLease;
+        commitDepth++;
+        try {
+          const released = acquired.dispose();
+          if (!released && acquired.state !== "disposed") {
+            throw new Error("watchTheme: output lease revocation did not complete");
+          }
+        } catch (error) {
+          failures.push(error);
+        } finally {
+          commitDepth--;
+          if (acquired.state === "disposed" && outputLease === acquired) {
+            outputLease = null;
+            outputBindings = null;
+          }
+        }
+      }
+      try {
+        disconnectObserver();
+      } catch (error) {
+        failures.push(error);
+      }
+      pendingOperations.length = 0;
+    } finally {
+      disposeActive = false;
+      disposed =
+        disposeRequested &&
+        outputLease === null &&
+        observer === null &&
+        !observerDisconnecting;
+    }
+    if (failures.length === 1) throw failures[0];
+    if (failures.length > 1) {
+      throw new AggregateError(failures, "watchTheme: output and observer cleanup both failed");
+    }
+  };
+
+  const runQueuedDispose = () => {
+    queuedDisposeActive = true;
+    queuedStopActive = true;
+    try {
+      runDispose();
+    } finally {
+      queuedStopActive = false;
+      queuedDisposeActive = false;
     }
   };
 
@@ -312,7 +422,9 @@ export function watchTheme(element, options) {
     try {
       while (pendingOperations.length > 0 && !stopped) {
         const operation = pendingOperations.shift();
-        if (operation.kind === "stop") {
+        if (operation.kind === "dispose") {
+          runQueuedDispose();
+        } else if (operation.kind === "stop") {
           runQueuedStop();
         } else if (operation.kind === "theme") {
           refreshFor(operation.theme);
@@ -331,7 +443,8 @@ export function watchTheme(element, options) {
   };
 
   const drainControlsAfterFailure = () => {
-    const mustStop = pendingOperations.some((operation) => operation.kind === "stop");
+    const mustDispose = pendingOperations.some((operation) => operation.kind === "dispose");
+    const mustStop = mustDispose || pendingOperations.some((operation) => operation.kind === "stop");
     pendingOperations.length = 0;
     if (!mustStop) return [];
 
@@ -340,7 +453,8 @@ export function watchTheme(element, options) {
     drainingOperations = true;
     try {
       try {
-        runQueuedStop();
+        if (mustDispose) runQueuedDispose();
+        else runQueuedStop();
       } catch (error) {
         failures.push(error);
       }
@@ -436,6 +550,24 @@ export function watchTheme(element, options) {
     });
   };
 
+  const dispose = () => {
+    if (disposed) return;
+    disposeRequested = true;
+    if (commitDepth > 0) {
+      pendingOperations.length = 0;
+      pendingOperations.push({ kind: "dispose" });
+      return;
+    }
+    if (executingOperation || drainingOperations) {
+      pendingOperations.length = 0;
+      if (!queuedDisposeActive) pendingOperations.push({ kind: "dispose" });
+      generation++;
+      return;
+    }
+    generation++;
+    runDispose();
+  };
+
   const controller = {
     refresh,
     setTheme,
@@ -444,8 +576,8 @@ export function watchTheme(element, options) {
     },
     stop() {
       if (commitDepth > 0) {
-        // CSSOM has no rollback: finish the admitted snapshot, then run terminal
-        // cleanup in FIFO order so a host cleanup error cannot leave hybrid vars.
+        // The live replacement is the linearization point. Finish it, then run
+        // the stronger terminal intent in FIFO order.
         pendingOperations.length = 0;
         pendingOperations.push({ kind: "stop" });
         return;
@@ -459,7 +591,9 @@ export function watchTheme(element, options) {
       generation++;
       runStop();
     },
+    dispose,
   };
+  if (typeof Symbol.dispose === "symbol") controller[Symbol.dispose] = dispose;
 
   let observerAcquired = false;
   try {
@@ -486,7 +620,7 @@ export function watchTheme(element, options) {
     // До acquisition исключение безопасно синхронно: долгоживущего ownership
     // ещё нет. После acquisition controller обязан стать достижимым даже при
     // отказе cleanup; `runStop` сохраняет неосвобождённый handle для retry.
-    if (!observerAcquired) throw error;
+    if (!observerAcquired && outputLease === null) throw error;
     let reported = error;
     try {
       runStop();

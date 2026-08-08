@@ -42,6 +42,7 @@ pub(crate) mod lpc;
 pub mod material;
 pub mod neutral;
 pub mod numerical_plan;
+mod output_bindings;
 #[expect(
     dead_code,
     reason = "the output-profile firewall is intentionally internal to registered profiles"

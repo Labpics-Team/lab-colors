@@ -8,6 +8,7 @@ import { readFileSync } from "node:fs";
 
 import { initSync } from "../pkg/labcolors.js";
 import { adaptTheme } from "../adapt-theme.js";
+import { outputElement } from "./output-host.mjs";
 
 initSync({
   module: new WebAssembly.Module(readFileSync(new URL("../pkg/labcolors_bg.wasm", import.meta.url))),
@@ -65,42 +66,28 @@ function fakeColors(initial) {
 }
 
 function fakeElement() {
-  const props = new Map();
-  const mutations = [];
-  return {
-    props,
-    mutations,
-    style: {
-      get length() {
-        return props.size;
-      },
-      item: (i) => [...props.keys()][i] ?? null,
-      setProperty(k, v) {
-        mutations.push(["set", k, v]);
-        props.set(k, v);
-      },
-      removeProperty(k) {
-        mutations.push(["remove", k]);
-        props.delete(k);
-      },
-    },
-  };
+  return outputElement();
 }
 
-const oneRole = (hex, lc) => ({
+const oneRole = (hex, lc, outputBindings = ["--lab-label-primary"]) => ({
+  outputBindings,
   vars: { "--lab-label-primary": hex },
   roles: { "label-primary": { kind: "color", cssVar: "--lab-label-primary", hex, lc } },
 });
 
 function withUnreachable(result, role = "impossible") {
+  const binding = `--lab-${role}`;
   return {
     ...result,
+    outputBindings: result.outputBindings.includes(binding)
+      ? [...result.outputBindings]
+      : [...result.outputBindings, binding],
     vars: { ...result.vars },
     roles: {
       ...result.roles,
       [role]: {
         kind: "failure",
-        cssVar: `--lab-${role}`,
+        cssVar: binding,
         category: "unreachable",
         code: "floor_unreachable",
         message: "contract has no solution",
@@ -132,6 +119,7 @@ function captureOutputConflict(fn, expectedRoles = ["impossible"]) {
 
 // A role set that carries the resolver's endpoint `legalFloor` evidence.
 const floorRole = (hex, lc, legalFloor) => ({
+  outputBindings: ["--lab-label-primary"],
   vars: { "--lab-label-primary": hex },
   roles: {
     "label-primary": { kind: "color", cssVar: "--lab-label-primary", hex, lc, legalFloor },
@@ -321,15 +309,16 @@ test("adaptTheme never invokes an accessor installed after admission", () => {
 
 test("a second-sample output conflict leaves DOM/state unchanged and remains retryable", () => {
   const el = fakeElement();
+  const outputBindings = ["--lab-label-primary", "--lab-impossible"];
   let samples = ["#FFFFFF", "#000000"];
   let conflict = true;
   const recheckThemes = [];
   const colors = {
     resolveTheme(bg, theme) {
       if (theme === "dark" && bg === "#000000" && conflict) {
-        return withUnreachable(oneRole("#FFFFFF", 100));
+        return withUnreachable(oneRole("#FFFFFF", 100, outputBindings));
       }
-      return oneRole(theme === "dark" ? "#FFFFFF" : "#111111", 100);
+      return oneRole(theme === "dark" ? "#FFFFFF" : "#111111", 100, outputBindings);
     },
     recheckContrast(bg, _foregrounds, theme) {
       recheckThemes.push(theme);
@@ -370,6 +359,12 @@ test("a failed stable-Glow reconciliation does not publish its candidate", () =>
   const el = fakeElement();
   const cssVar = "--lab-fx";
   const stable = {
+    outputBindings: [
+      "--lab-label-primary",
+      cssVar,
+      `${cssVar}-core`,
+      `${cssVar}-alpha`,
+    ],
     vars: {
       [cssVar]: "oklch(70% 0.1 280)",
       [`${cssVar}-core`]: "oklch(80% 0.1 280)",
@@ -395,7 +390,7 @@ test("a failed stable-Glow reconciliation does not publish its candidate", () =>
   };
   const colors = {
     resolveTheme(_bg, theme) {
-      if (theme !== "dark") return oneRole("#111111", 100);
+      if (theme !== "dark") return oneRole("#111111", 100, stable.outputBindings);
       return stable;
     },
     recheckContrast() {
@@ -437,6 +432,13 @@ test("a stable-Glow reconciliation conflict cannot commit its class transition",
     lc: 100,
   };
   const determinate = {
+    outputBindings: [
+      "--lab-label",
+      cssVar,
+      `${cssVar}-core`,
+      `${cssVar}-alpha`,
+      "--lab-impossible",
+    ],
     vars: {
       "--lab-label": "#111111",
       [cssVar]: "oklch(70% 0.1 280)",
@@ -546,6 +548,7 @@ test("an in-flight ease does not advance before the tick's fallible checks succe
 test("an output conflict mid-ease is inert and its retry matches a control run", () => {
   const makeCase = (conflictOnce) => {
     const el = fakeElement();
+    const outputBindings = ["--lab-label-primary", "--lab-impossible"];
     let bg = "#FFFFFF";
     let now = 0;
     let resolves = 0;
@@ -553,9 +556,9 @@ test("an output conflict mid-ease is inert and its retry matches a control run",
     const colors = {
       resolveTheme() {
         resolves++;
-        if (resolves === 1) return oneRole("#000000", 100);
-        if (resolves === 2) return oneRole("#FFFFFF", 100);
-        const next = oneRole("#202020", 100);
+        if (resolves === 1) return oneRole("#000000", 100, outputBindings);
+        if (resolves === 2) return oneRole("#FFFFFF", 100, outputBindings);
+        const next = oneRole("#202020", 100, outputBindings);
         if (conflictOnce && resolves === 3) return withUnreachable(next);
         return next;
       },
@@ -732,19 +735,18 @@ test("a failing frame acquisition cannot synchronously retry its reentrant start
   let ctrl = null;
   let armed = false;
   let requests = 0;
-  const write = el.style.setProperty.bind(el.style);
-  el.style.setProperty = (key, value) => {
-    write(key, value);
-    if (armed && key === "--lab-a" && value === "outer") {
+  el.outputHost.setBeforePublication((values) => {
+    if (armed && values.get("--lab-a") === "outer") {
       armed = false;
       ctrl.start();
       throw primaryFailure;
     }
-  };
+  });
   ctrl = adaptTheme(el, {
     colors: {
       resolveTheme(_background, theme) {
         return {
+          outputBindings: ["--lab-a"],
           vars: { "--lab-a": theme },
           roles: {
             a: { kind: "color", cssVar: "--lab-a", hex: "#111111", lc: 100 },
@@ -1046,6 +1048,7 @@ test("a nested setTheme during a full CSS write owns the whole adaptive snapshot
     return {
       theme,
       background: "#FFFFFF",
+      outputBindings: ["--lab-a", "--lab-b"],
       vars: { "--lab-a": a, "--lab-b": b },
       roles: {
         a: { kind: "color", cssVar: "--lab-a", hex: a, lc: 100 },
@@ -1061,14 +1064,12 @@ test("a nested setTheme during a full CSS write owns the whole adaptive snapshot
       return [100, 1, 100, 1];
     },
   };
-  const write = el.style.setProperty.bind(el.style);
-  el.style.setProperty = (key, value) => {
-    write(key, value);
-    if (armed && key === "--lab-a" && value === values.outer[0]) {
+  el.outputHost.setBeforePublication((published) => {
+    if (armed && published.get("--lab-a") === values.outer[0]) {
       armed = false;
       ctrl.setTheme("inner");
     }
-  };
+  });
   ctrl = adaptTheme(el, {
     colors,
     theme: "light",
@@ -1104,14 +1105,12 @@ test("a before-forward CSS wrapper cannot let the stale adaptive writer follow a
     outer: "#EEEEEE",
     inner: "#222222",
   };
-  const write = el.style.setProperty.bind(el.style);
-  el.style.setProperty = (key, value) => {
-    if (armed && key === "--lab-label-primary" && value === values.outer) {
+  el.outputHost.setBeforePublication((published) => {
+    if (armed && published.get("--lab-label-primary") === values.outer) {
       armed = false;
       ctrl.setTheme("inner");
     }
-    write(key, value);
-  };
+  });
   ctrl = adaptTheme(el, {
     colors: {
       resolveTheme(_background, theme) {
@@ -1146,20 +1145,19 @@ test("stop during a full CSS write cannot split the already-started adaptive com
   const resultFor = (theme) => ({
     theme,
     background: "#FFFFFF",
+    outputBindings: ["--lab-a", "--lab-b"],
     vars: { "--lab-a": `${theme}-a`, "--lab-b": `${theme}-b` },
     roles: {
       a: { kind: "color", cssVar: "--lab-a", hex: "#111111", lc: 100 },
       b: { kind: "color", cssVar: "--lab-b", hex: "#222222", lc: 100 },
     },
   });
-  const write = el.style.setProperty.bind(el.style);
-  el.style.setProperty = (key, value) => {
-    write(key, value);
-    if (armed && key === "--lab-a" && value === "outer-a") {
+  el.outputHost.setBeforePublication((values) => {
+    if (armed && values.get("--lab-a") === "outer-a") {
       armed = false;
       ctrl.stop();
     }
-  };
+  });
   ctrl = adaptTheme(el, {
     colors: {
       resolveTheme(_background, theme) {
@@ -1198,20 +1196,19 @@ test("a failing stop cleanup is reported only after the adaptive CSS snapshot co
   let ctrl = null;
   let armed = false;
   const resultFor = (theme) => ({
+    outputBindings: ["--lab-a", "--lab-b"],
     vars: { "--lab-a": `${theme}-a`, "--lab-b": `${theme}-b` },
     roles: {
       a: { kind: "color", cssVar: "--lab-a", hex: "#111111", lc: 100 },
       b: { kind: "color", cssVar: "--lab-b", hex: "#222222", lc: 100 },
     },
   });
-  const write = el.style.setProperty.bind(el.style);
-  el.style.setProperty = (key, value) => {
-    write(key, value);
-    if (armed && key === "--lab-a" && value === "outer-a") {
+  el.outputHost.setBeforePublication((values) => {
+    if (armed && values.get("--lab-a") === "outer-a") {
       armed = false;
       ctrl.stop();
     }
-  };
+  });
   ctrl = adaptTheme(el, {
     colors: {
       resolveTheme(_background, theme) {
@@ -1250,22 +1247,21 @@ test("a CSS failure cannot discard stop cleanup accepted during the commit", () 
   let requests = 0;
   let cancellations = 0;
   const resultFor = (theme) => ({
+    outputBindings: ["--lab-a", "--lab-b"],
     vars: { "--lab-a": `${theme}-a`, "--lab-b": `${theme}-b` },
     roles: {
       a: { kind: "color", cssVar: "--lab-a", hex: "#111111", lc: 100 },
       b: { kind: "color", cssVar: "--lab-b", hex: "#222222", lc: 100 },
     },
   });
-  const write = el.style.setProperty.bind(el.style);
-  el.style.setProperty = (key, value) => {
-    write(key, value);
+  el.outputHost.setBeforePublication((values) => {
     if (!armed) return;
-    if (key === "--lab-a" && value === "outer-a") ctrl.stop();
-    if (key === "--lab-b" && value === "outer-b") {
+    if (values.get("--lab-a") === "outer-a") ctrl.stop();
+    if (values.get("--lab-b") === "outer-b") {
       armed = false;
       throw primaryFailure;
     }
-  };
+  });
   ctrl = adaptTheme(el, {
     colors: {
       resolveTheme(_background, theme) {
@@ -1306,23 +1302,22 @@ test("a queued CSS failure cannot discard stop cleanup accepted during that comm
   let requests = 0;
   let cancellations = 0;
   const resultFor = (theme) => ({
+    outputBindings: ["--lab-a", "--lab-b"],
     vars: { "--lab-a": `${theme}-a`, "--lab-b": `${theme}-b` },
     roles: {
       a: { kind: "color", cssVar: "--lab-a", hex: "#111111", lc: 100 },
       b: { kind: "color", cssVar: "--lab-b", hex: "#222222", lc: 100 },
     },
   });
-  const write = el.style.setProperty.bind(el.style);
-  el.style.setProperty = (key, value) => {
-    write(key, value);
+  el.outputHost.setBeforePublication((values) => {
     if (!armed) return;
-    if (key === "--lab-a" && value === "outer-a") ctrl.setTheme("bad");
-    if (key === "--lab-a" && value === "bad-a") ctrl.stop();
-    if (key === "--lab-b" && value === "bad-b") {
+    if (values.get("--lab-a") === "outer-a") ctrl.setTheme("bad");
+    if (values.get("--lab-a") === "bad-a") ctrl.stop();
+    if (values.get("--lab-b") === "bad-b") {
       armed = false;
       throw primaryFailure;
     }
-  };
+  });
   ctrl = adaptTheme(el, {
     colors: {
       resolveTheme(_background, theme) {
@@ -1362,20 +1357,19 @@ test("a newer stop supersedes an older queued restart without recursive cleanup"
   const requests = [];
   const cancellations = [];
   const resultFor = (theme) => ({
+    outputBindings: ["--lab-a"],
     vars: { "--lab-a": theme },
     roles: {
       a: { kind: "color", cssVar: "--lab-a", hex: "#111111", lc: 100 },
     },
   });
-  const write = el.style.setProperty.bind(el.style);
-  el.style.setProperty = (key, value) => {
-    write(key, value);
-    if (!armed || key !== "--lab-a" || value !== "outer") return;
+  el.outputHost.setBeforePublication((values) => {
+    if (!armed || values.get("--lab-a") !== "outer") return;
     armed = false;
     ctrl.stop();
     ctrl.start();
     throw primaryFailure;
-  };
+  });
   ctrl = adaptTheme(el, {
     colors: {
       resolveTheme(_background, theme) {
@@ -1431,20 +1425,19 @@ test("a failed queued adaptive operation cannot leave an older tail to overwrite
   let ctrl = null;
   let armed = false;
   const resultFor = (theme) => ({
+    outputBindings: ["--lab-a"],
     vars: { "--lab-a": theme },
     roles: {
       a: { kind: "color", cssVar: "--lab-a", hex: "#111111", lc: 100 },
     },
   });
-  const write = el.style.setProperty.bind(el.style);
-  el.style.setProperty = (key, value) => {
-    write(key, value);
-    if (armed && key === "--lab-a" && value === "outer") {
+  el.outputHost.setBeforePublication((values) => {
+    if (armed && values.get("--lab-a") === "outer") {
       armed = false;
       ctrl.setTheme("bad");
       ctrl.setTheme("stale");
     }
-  };
+  });
   ctrl = adaptTheme(el, {
     colors: {
       resolveTheme(_background, theme) {
@@ -1476,20 +1469,19 @@ test("the newest adaptive intent raised during queued prepare follows the older 
   let armed = false;
   let reenter = true;
   const resultFor = (theme) => ({
+    outputBindings: ["--lab-a"],
     vars: { "--lab-a": theme },
     roles: {
       a: { kind: "color", cssVar: "--lab-a", hex: "#111111", lc: 100 },
     },
   });
-  const write = el.style.setProperty.bind(el.style);
-  el.style.setProperty = (key, value) => {
-    write(key, value);
-    if (armed && key === "--lab-a" && value === "outer") {
+  el.outputHost.setBeforePublication((values) => {
+    if (armed && values.get("--lab-a") === "outer") {
       armed = false;
       ctrl.setTheme("A");
       ctrl.setTheme("C");
     }
-  };
+  });
   ctrl = adaptTheme(el, {
     colors: {
       resolveTheme(_background, theme) {
@@ -1523,19 +1515,18 @@ test("a malformed revoked adaptive candidate cannot erase the newer queued inten
   let armed = false;
   let reenter = true;
   const resultFor = (theme) => ({
+    outputBindings: ["--lab-a"],
     vars: { "--lab-a": theme },
     roles: {
       a: { kind: "color", cssVar: "--lab-a", hex: "#111111", lc: 100 },
     },
   });
-  const write = el.style.setProperty.bind(el.style);
-  el.style.setProperty = (key, value) => {
-    write(key, value);
-    if (armed && key === "--lab-a" && value === "outer") {
+  el.outputHost.setBeforePublication((values) => {
+    if (armed && values.get("--lab-a") === "outer") {
       armed = false;
       ctrl.setTheme("A");
     }
-  };
+  });
   ctrl = adaptTheme(el, {
     colors: {
       resolveTheme(_background, theme) {
@@ -1569,6 +1560,7 @@ test("a revoked adaptive candidate invokes no later prepare callback", () => {
   let reenter = true;
   const calls = [];
   const resultFor = (theme) => ({
+    outputBindings: ["--lab-a"],
     vars: { "--lab-a": theme },
     roles: {
       a: { kind: "color", cssVar: "--lab-a", hex: "#111111", lc: 100 },
@@ -1614,6 +1606,7 @@ test("owner loss in one adaptive recheck cancels the remaining samples", () => {
   let armed = false;
   const calls = [];
   const resultFor = (theme) => ({
+    outputBindings: ["--lab-a"],
     vars: { "--lab-a": theme },
     roles: {
       a: { kind: "color", cssVar: "--lab-a", hex: "#111111", lc: 100 },
@@ -1659,6 +1652,7 @@ test("an invalid batch result never falls through to per-sample callbacks", () =
   let invalidBatch = false;
   let fallbackCalls = 0;
   const resultFor = (theme) => ({
+    outputBindings: ["--lab-a"],
     vars: { "--lab-a": theme },
     roles: {
       a: { kind: "color", cssVar: "--lab-a", hex: "#111111", lc: 100 },
@@ -1705,6 +1699,7 @@ test("invalid adaptive samples are rejected without client coercion", () => {
     },
   };
   const resultFor = (theme) => ({
+    outputBindings: ["--lab-a"],
     vars: { "--lab-a": theme },
     roles: {
       a: { kind: "color", cssVar: "--lab-a", hex: "#111111", lc: 100 },
@@ -1792,6 +1787,7 @@ test("owner loss inside the implicit backdrop walk cancels its later seams", () 
   let staleWalk = false;
   const calls = [];
   const resultFor = (theme) => ({
+    outputBindings: ["--lab-a"],
     vars: { "--lab-a": theme },
     roles: {
       a: { kind: "color", cssVar: "--lab-a", hex: "#111111", lc: 100 },
@@ -1855,6 +1851,7 @@ test("owner loss in snapshot reflection cancels the remaining Proxy traps", () =
   let ctrl = null;
   const calls = [];
   const resultFor = (theme) => ({
+    outputBindings: ["--lab-a"],
     vars: { "--lab-a": theme },
     roles: {
       a: { kind: "color", cssVar: "--lab-a", hex: "#111111", lc: 100 },
@@ -1906,6 +1903,7 @@ test("owner loss in one stable-appearance predicate cancels the remaining sample
     C: "#C00000",
   };
   const resultFor = (theme) => ({
+    outputBindings: ["--lab-fx", "--lab-fx-core", "--lab-fx-alpha"],
     vars: {
       "--lab-fx": theme,
       "--lab-fx-core": "core",
@@ -1969,6 +1967,7 @@ test("a newer adaptive failure stays visible after revoking a malformed candidat
   const el = fakeElement();
   let ctrl = null;
   const resultFor = (theme) => ({
+    outputBindings: ["--lab-a"],
     vars: { "--lab-a": theme },
     roles: {
       a: { kind: "color", cssVar: "--lab-a", hex: "#111111", lc: 100 },
@@ -2123,16 +2122,15 @@ test("a revoked queued operation cannot reject or erase the newer intent with it
   let ctrl = null;
   let enqueueA = false;
   let reenterClock = false;
-  const write = el.style.setProperty.bind(el.style);
-  el.style.setProperty = (key, value) => {
-    write(key, value);
-    if (enqueueA && value === "outer") {
+  el.outputHost.setBeforePublication((values) => {
+    if (enqueueA && values.get("--lab-a") === "outer") {
       enqueueA = false;
       reenterClock = true;
       ctrl.setTheme("A");
     }
-  };
+  });
   const resultFor = (theme) => ({
+    outputBindings: ["--lab-a"],
     vars: { "--lab-a": theme },
     roles: {
       a: { kind: "color", cssVar: "--lab-a", hex: "#111111", lc: 100 },
@@ -2187,6 +2185,7 @@ test("a clock-revoked tick ignores its stale non-finite time", () => {
   let ctrl = null;
   let reenter = false;
   const resultFor = (theme) => ({
+    outputBindings: ["--lab-a"],
     vars: { "--lab-a": theme },
     roles: {
       a: { kind: "color", cssVar: "--lab-a", hex: "#111111", lc: 100 },
@@ -2338,26 +2337,8 @@ test("stop and restart preserve an in-flight ease until its canonical target", (
   h.ctrl.stop();
 });
 
-test("a later tick repairs the canonical DOM after a CSSOM write failure", () => {
-  const props = new Map();
-  let rejectNextWrite = false;
-  const el = {
-    props,
-    style: {
-      get length() {
-        return props.size;
-      },
-      item: (index) => [...props.keys()][index] ?? null,
-      setProperty(key, value) {
-        if (rejectNextWrite) {
-          rejectNextWrite = false;
-          throw new Error("host CSSOM write failed");
-        }
-        props.set(key, value);
-      },
-      removeProperty: (key) => props.delete(key),
-    },
-  };
+test("a failed atomic publication preserves the canonical DOM and committed target", () => {
+  const el = fakeElement();
   const colors = {
     resolveTheme(_background, theme) {
       return oneRole(theme === "dark" ? "#FFFFFF" : "#111111", 100);
@@ -2375,13 +2356,45 @@ test("a later tick repairs the canonical DOM after a CSSOM write failure", () =>
     win: {},
   });
 
-  rejectNextWrite = true;
+  el.outputHost.failNextLiveReplace(new Error("host CSSOM write failed"));
   assert.throws(() => ctrl.setTheme("dark"), /host CSSOM write failed/);
-  assert.equal(el.props.has("--lab-label-primary"), false, "the host failed after clear");
-  assert.equal(ctrl.current()["--lab-label-primary"], "#FFFFFF");
+  assert.equal(el.props.get("--lab-label-primary"), "#111111");
+  assert.equal(ctrl.current()["--lab-label-primary"], "#111111");
 
   ctrl.tick();
-  assert.equal(el.props.get("--lab-label-primary"), "#FFFFFF");
+  assert.equal(el.props.get("--lab-label-primary"), "#111111");
+});
+
+test("a repeated initial live failure releases ownership before adaptTheme throws", () => {
+  const el = fakeElement();
+  const failure = new Error("initial live replacement rejected");
+  const colors = fakeColors(oneRole("#111111", 100));
+  el.outputHost.setBeforeLiveReplace(() => el.outputHost.failNextLiveReplace(failure));
+
+  assert.throws(
+    () =>
+      adaptTheme(el, {
+        colors,
+        theme: "light",
+        background: "#FFFFFF",
+        target: el,
+        now: () => 1,
+        win: {},
+      }),
+    (error) => error === failure,
+  );
+
+  el.outputHost.setBeforeLiveReplace(null);
+  const retry = adaptTheme(el, {
+    colors,
+    theme: "light",
+    background: "#FFFFFF",
+    target: el,
+    now: () => 2,
+    win: {},
+  });
+  assert.equal(el.props.get("--lab-label-primary"), "#111111");
+  retry.dispose();
 });
 
 test("stable Glow class changes re-resolve and clear/restore satellites synchronously", () => {
@@ -2390,6 +2403,7 @@ test("stable Glow class changes re-resolve and clear/restore satellites synchron
   let resolveCount = 0;
   const cssVar = "--lab-fx";
   const determinate = {
+    outputBindings: [cssVar, `${cssVar}-core`, `${cssVar}-alpha`],
     vars: {
       [cssVar]: "oklch(70% 0.1 280)",
       [`${cssVar}-core`]: "oklch(80% 0.1 280)",
@@ -2414,6 +2428,8 @@ test("stable Glow class changes re-resolve and clear/restore satellites synchron
     },
   };
   const indeterminate = {
+    // Glow satellites stay reserved even when numerical admission emits no value.
+    outputBindings: [cssVar, `${cssVar}-core`, `${cssVar}-alpha`],
     vars: {},
     roles: {
       fx: {
@@ -2476,6 +2492,7 @@ test("stable Glow class changes re-resolve and clear/restore satellites synchron
 
 test("stable Glow rejects a missing exact recheck capability or malformed evidence", () => {
   const stable = {
+    outputBindings: ["--lab-fx", "--lab-fx-core", "--lab-fx-alpha"],
     vars: {
       "--lab-fx": "oklch(70% 0.1 280)",
       "--lab-fx-core": "oklch(80% 0.1 280)",
@@ -2610,6 +2627,7 @@ test("stable Glow rejects a missing exact recheck capability or malformed eviden
   );
 
   const wrongSite = {
+    outputBindings: ["--lab-fx", "--lab-fx-core", "--lab-fx-alpha"],
     vars: {},
     roles: {
       fx: {
@@ -2640,6 +2658,7 @@ test("stable Glow rejects a missing exact recheck capability or malformed eviden
   const mismatchedCssVar = structuredClone(wrongSite);
   mismatchedCssVar.roles.fx.numericalSiteId = "glow-target-or-maximum-v1";
   mismatchedCssVar.roles.fx.cssVar = "--lab-other";
+  mismatchedCssVar.outputBindings.push("--lab-other");
   mismatchedCssVar.vars = { "--lab-fx": "forbidden-fallback" };
   const mismatchTarget = fakeElement();
   assert.throws(
@@ -2698,6 +2717,7 @@ test("stable Glow rejects a missing exact recheck capability or malformed eviden
 test("legacy Glow validates correlated provenance before adopting external results", () => {
   const cssVar = "--lab-fx";
   const legacyReached = {
+    outputBindings: [cssVar, `${cssVar}-core`, `${cssVar}-alpha`],
     vars: {
       [cssVar]: "oklch(70% 0.1 280)",
       [`${cssVar}-core`]: "oklch(80% 0.1 280)",
@@ -2794,6 +2814,7 @@ test("stable Glow invalidation does not snap an in-flight color ease", () => {
     resolveTheme(background) {
       const noop = isWhite(background);
       return {
+        outputBindings: ["--lab-label", cssVar, `${cssVar}-core`, `${cssVar}-alpha`],
         vars: {
           "--lab-label": labelHex,
           ...(noop
@@ -2888,6 +2909,7 @@ test("a color re-solve cannot reintroduce stable Glow vars unsafe for another sa
     resolveTheme(background) {
       const noop = background === "#FFFFFF";
       return {
+        outputBindings: ["--lab-label", cssVar, `${cssVar}-core`, `${cssVar}-alpha`],
         vars: {
           "--lab-label": "#000000",
           ...(noop
@@ -3176,7 +3198,11 @@ test("second solve must not violate the first sample: infeasible set commits not
   const colors = {
     resolveTheme(bg) {
       const hex = bg === "#000000" ? "#AAAAAA" : "#555555";
-      return { vars: { [cssVar]: hex }, roles: { p: { kind: "color", cssVar, hex, lc: 100 } } };
+      return {
+        outputBindings: [cssVar],
+        vars: { [cssVar]: hex },
+        roles: { p: { kind: "color", cssVar, hex, lc: 100 } },
+      };
     },
     recheckContrast(bg, fgs) {
       // Candidate-dependent: a #AAAAAA target (solved for #000000) breaks
@@ -3233,7 +3259,11 @@ test("second solve must not commit when the worst sample stays unreachable and a
   const colors = {
     resolveTheme(bg) {
       const hex = bg === "#111111" ? "#AAAAAA" : "#BBBBBB";
-      return { vars: { [cssVar]: hex }, roles: { p: { kind: "color", cssVar, hex, lc: 100 } } };
+      return {
+        outputBindings: [cssVar],
+        vars: { [cssVar]: hex },
+        roles: { p: { kind: "color", cssVar, hex, lc: 100 } },
+      };
     },
     // Candidate-dependent (bg is a packed word, fgs a Uint32Array of them):
     //   committed #BBBBBB → s0(#111111) Lc40 breach(worst), s1(#222222) Lc100 ok
@@ -3739,6 +3769,7 @@ test("adaptTheme rejects a non-function themeHandle capability", () => {
 // recheck/ease, ни воскрешения после re-solve; выжившие роли живут как обычно.
 function mixedWithUnresolved(hex, lc) {
   return {
+    outputBindings: ["--lab-label-primary", "--lab-impossible", "--lab-veil"],
     vars: {
       "--lab-label-primary": hex,
       "--lab-veil": "oklch(50% 0 0 / 0.5)",
@@ -3779,6 +3810,7 @@ const translucentOnly = ({
   compositeHex = "#F7F6FE",
   compositeLc = -40,
 } = {}) => ({
+  outputBindings: ["--lab-veil"],
   vars: { "--lab-veil": `rgba(192 178 250 / ${alpha})` },
   roles: {
     veil: {
@@ -3874,6 +3906,7 @@ test("translucent multi-sample recheck builds one foreground row per backdrop", 
 });
 
 const mixedOccurrenceSet = () => ({
+  outputBindings: ["--lab-label", "--lab-veil"],
   vars: {
     "--lab-label": "#010203",
     "--lab-veil": "rgba(192 178 250 / 0.122)",
@@ -4324,6 +4357,7 @@ test("translucent_lanes_participate: translucent rides a recheck lane 1:1 but is
   let bg2 = "#FFFFFF";
   let now2 = 1000;
   const translucentOnly = () => ({
+    outputBindings: ["--lab-veil"],
     vars: { "--lab-veil": "oklch(50% 0 0 / 0.5)" },
     roles: {
       veil: {

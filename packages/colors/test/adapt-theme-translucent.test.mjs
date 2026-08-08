@@ -17,24 +17,14 @@ import { readFileSync } from "node:fs";
 
 import { adaptTheme } from "../adapt-theme.js";
 import { initSync } from "../pkg/labcolors.js";
+import { outputElement } from "./output-host.mjs";
 
 initSync({
   module: new WebAssembly.Module(readFileSync(new URL("../pkg/labcolors_bg.wasm", import.meta.url))),
 });
 
 function fakeElement() {
-  const props = new Map();
-  return {
-    props,
-    style: {
-      get length() {
-        return props.size;
-      },
-      item: (i) => [...props.keys()][i] ?? null,
-      setProperty: (k, v) => props.set(k, v),
-      removeProperty: (k) => props.delete(k),
-    },
-  };
+  return outputElement();
 }
 
 // A resolve result carrying BOTH a color role and a translucent role. `labelVar`
@@ -42,6 +32,7 @@ function fakeElement() {
 // hex (what the ease interpolates over). `panelVar` is the translucent role's
 // canonical string — present only in `vars`, never a "color" role.
 const makeResult = (hex, labelVar, panelVar, legalFloor = null) => ({
+  outputBindings: ["--lab-label", "--lab-panel"],
   vars: { "--lab-label": labelVar, "--lab-panel": panelVar },
   roles: {
     label: { kind: "color", cssVar: "--lab-label", hex, lc: 100, legalFloor },
@@ -178,6 +169,7 @@ test("current() reports the full applied picture, including translucent roles", 
 // stale var on the element AND in current() — invisible to every test that keeps
 // the role set constant, so it is pinned explicitly here.
 const THREE = {
+  outputBindings: ["--lab-label", "--lab-panel", "--lab-extra"],
   vars: {
     "--lab-label": "oklch(20.000% 0 0)",
     "--lab-panel": "oklch(96.000% 0.01 260 / 0.6)",
@@ -204,6 +196,8 @@ const THREE = {
   },
 };
 const TWO = {
+  // The engine contract is static: the absent `extra` value remains reserved.
+  outputBindings: ["--lab-label", "--lab-panel", "--lab-extra"],
   vars: { "--lab-label": "oklch(90.000% 0 0)", "--lab-panel": "oklch(30.000% 0.02 260 / 0.6)" },
   roles: {
     label: { kind: "color", cssVar: "--lab-label", hex: "#E5E5E5", lc: 100, legalFloor: null },
@@ -218,6 +212,8 @@ const TWO = {
   },
 };
 const ONE = {
+  // These absent values are tombstones in the same static output contract.
+  outputBindings: ["--lab-label", "--lab-panel", "--lab-extra"],
   vars: { "--lab-label": "oklch(20.000% 0 0)" },
   roles: { label: { kind: "color", cssVar: "--lab-label", hex: "#1A1A1A", lc: 100, legalFloor: null } },
 };

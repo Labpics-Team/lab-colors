@@ -34,6 +34,7 @@
 use crate::Srgb8;
 use crate::appearance::PointOpacityOverSurfaceV1;
 use crate::ladder::LadderTint;
+use crate::output_bindings::{OutputBindingCompileError, OutputBindingSet, OutputBindingShape};
 use crate::scale;
 use crate::solve::{
     self, BgInput, ChromaPolicy, Contract, Floor, Hue, SolveFailure, SolveFailureBoundary,
@@ -2930,8 +2931,9 @@ pub(crate) fn resolve_set_live(
     Ok(set)
 }
 
-/// A recipe table keyed by **arbitrary string names**, the config-layer analogue
-/// of `RoleTable`.
+/// A recipe table keyed by client-authored string names, the config-layer
+/// analogue of `RoleTable`. Names are opaque to colour semantics but must obey
+/// the stable output identifier grammar.
 ///
 /// Where `RoleTable` carries the fixed v1 `Role` enum, `NamedRoleTable` carries
 /// whatever role *names* a consumer's [`ThemeConfig`](crate::config::ThemeConfig)
@@ -2948,6 +2950,7 @@ pub struct NamedRoleTable {
     entries: Vec<(String, RoleSpec)>,
     aliases: Vec<(String, String)>,
     chroma: RoleChroma,
+    output_bindings: OutputBindingSet,
     point_representation_invocations: Box<[CompiledPointRepresentationInvocationV1]>,
 }
 
@@ -2997,6 +3000,15 @@ impl AlphaAnalogCompileErrorV1 {
     }
 }
 
+/// Structural failure while materialising a validated named table.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum NamedRoleTableCompileError {
+    /// Static namespace is structurally invalid.
+    OutputBindings(OutputBindingCompileError),
+    /// A compiled alpha-analog invocation is outside its numeric domain.
+    AlphaAnalog(AlphaAnalogCompileErrorV1),
+}
+
 impl core::fmt::Debug for NamedRoleTable {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
@@ -3004,6 +3016,7 @@ impl core::fmt::Debug for NamedRoleTable {
             .field("entries", &self.entries)
             .field("aliases", &self.aliases)
             .field("chroma", &self.chroma)
+            .field("output_bindings", &self.output_bindings)
             .finish()
     }
 }
@@ -3013,10 +3026,25 @@ impl PartialEq for NamedRoleTable {
         self.entries == other.entries
             && self.aliases == other.aliases
             && self.chroma == other.chroma
+            && self.output_bindings == other.output_bindings
     }
 }
 
 impl RoleSpec {
+    /// Static output shape reserved by this executable recipe.
+    pub(crate) const fn output_binding_shape(&self) -> OutputBindingShape {
+        match self {
+            Self::Glow { .. } => OutputBindingShape::Glow,
+            Self::Material { .. } => OutputBindingShape::Material,
+            Self::Anchor(_)
+            | Self::DecorativeDj { .. }
+            | Self::Decorative { .. }
+            | Self::Ladder { .. }
+            | Self::AlphaAnalog { .. }
+            | Self::Zero => OutputBindingShape::Primary,
+        }
+    }
+
     /// Validate every raw numeric field before a spec can enter an executable
     /// named table. Typed payloads (`TextAnchor`, `LadderTint`, closed enums)
     /// already enforce their own domains; this guard owns the remaining public
@@ -3127,9 +3155,9 @@ impl RoleSpec {
 
 impl NamedRoleTable {
     /// Build a named table from its `(name, recipe)` entries and an undertone
-    /// policy. Names are the CSS contract downstream (`--lab-{name}`); this
-    /// constructor does not validate names — the config validator
-    /// ([`ThemeConfig::validate`](crate::config::ThemeConfig::validate)) owns that.
+    /// policy. Names are the CSS contract downstream (`--lab-{name}`), so this
+    /// boundary validates the same non-empty `[a-z0-9-]+` grammar as config and
+    /// rejects the complete role/alias satellite namespace on any collision.
     /// Все численные домены `RoleSpec` и `chroma` проверяются здесь, потому что
     /// таблицу можно собрать без конфига. Поэтому executable-таблица не может
     /// содержать отложенное невалидное состояние, зависящее от темы или ветки.
@@ -3139,7 +3167,8 @@ impl NamedRoleTable {
     /// [`SolveFailure::InvalidInput`], если любой численный параметр роли или
     /// `chroma` не конечен либо выходит из своего физического домена, а также
     /// при структурной несовместимости спеки с политикой хромы (например,
-    /// `Material { hue: Some(_) }` при `RoleChroma::Neutral`).
+    /// `Material { hue: Some(_) }` при `RoleChroma::Neutral`), невалидном имени,
+    /// неизвестной alias-цели или коллизии exact output binding.
     pub fn new(
         entries: Vec<(String, RoleSpec)>,
         aliases: Vec<(String, String)>,
@@ -3157,43 +3186,65 @@ impl NamedRoleTable {
                     entries[error.declaration_ordinal].0, error.value
                 ))
             })?;
+        let output_bindings = Self::compile_output_bindings(&entries, &aliases)
+            .map_err(|error| SolveFailure::InvalidInput(error.to_string()))?;
         Ok(Self::from_compiled_parts(
             entries,
             aliases,
             chroma,
+            output_bindings,
             point_representation_invocations,
         ))
     }
 
-    /// Собирает таблицу из частей, уже проверенных [`ThemeConfig::validate`].
-    /// Отдельный crate-private путь не заставляет конфиг переводить одну и ту же
-    /// ошибку между двумя error-типами, но не позволяет внешнему коду представить
-    /// невалидную глобальную policy.
+    /// Собирает таблицу из частей, уже проверенных конфигом. Output manifest
+    /// всегда компилируется здесь из тех же owned entries/aliases, поэтому даже
+    /// crate-private caller не может передать несогласованный manifest отдельно.
     pub(crate) fn from_validated_parts(
         entries: Vec<(String, RoleSpec)>,
         aliases: Vec<(String, String)>,
         chroma: RoleChroma,
-    ) -> Result<Self, AlphaAnalogCompileErrorV1> {
+    ) -> Result<Self, NamedRoleTableCompileError> {
+        let output_bindings = Self::compile_output_bindings(&entries, &aliases)
+            .map_err(NamedRoleTableCompileError::OutputBindings)?;
         let point_representation_invocations =
-            Self::compile_point_representation_invocations(&entries)?;
+            Self::compile_point_representation_invocations(&entries)
+                .map_err(NamedRoleTableCompileError::AlphaAnalog)?;
         Ok(Self::from_compiled_parts(
             entries,
             aliases,
             chroma,
+            output_bindings,
             point_representation_invocations,
         ))
+    }
+
+    fn compile_output_bindings(
+        entries: &[(String, RoleSpec)],
+        aliases: &[(String, String)],
+    ) -> Result<OutputBindingSet, OutputBindingCompileError> {
+        OutputBindingSet::compile(
+            entries
+                .iter()
+                .map(|(name, spec)| (name.as_str(), spec.output_binding_shape())),
+            aliases
+                .iter()
+                .map(|(alias, target)| (alias.as_str(), target.as_str())),
+        )
     }
 
     fn from_compiled_parts(
         entries: Vec<(String, RoleSpec)>,
         aliases: Vec<(String, String)>,
         chroma: RoleChroma,
+        output_bindings: OutputBindingSet,
         point_representation_invocations: Box<[CompiledPointRepresentationInvocationV1]>,
     ) -> Self {
         Self {
             entries,
             aliases,
             chroma,
+            output_bindings,
             point_representation_invocations,
         }
     }
@@ -3240,6 +3291,15 @@ impl NamedRoleTable {
     /// значение; без переноса сюда алиасные роли терялись бы при компиляции.
     pub fn aliases(&self) -> &[(String, String)] {
         &self.aliases
+    }
+
+    /// Статический exact output contract всей таблицы.
+    ///
+    /// Содержит primary keys, recipe satellites и полный shape aliases в
+    /// declaration order. Он скомпилирован и проверен на коллизии до появления
+    /// executable table; resolve не выводит ownership из динамического outcome.
+    pub fn output_bindings(&self) -> &OutputBindingSet {
+        &self.output_bindings
     }
 
     /// The `(name, recipe)` entries, in declaration order.
@@ -3986,21 +4046,21 @@ mod tests {
     #[test]
     fn invalid_alpha_cannot_enter_a_compiled_named_table() {
         let source = crate::spaces::srgb::srgb_encoded_from_hex("#3478F6").unwrap();
-        let error = NamedRoleTable::from_validated_parts(
-            vec![
-                ("first".into(), RoleSpec::Zero),
-                (
-                    "fatal-last".into(),
-                    RoleSpec::AlphaAnalog {
-                        of: LadderTint::new([source; 4]).unwrap(),
-                        alpha: f64::NAN,
-                    },
-                ),
-            ],
-            Vec::new(),
-            RoleChroma::Neutral,
-        )
-        .expect_err("invalid requested alpha must fail before a table exists");
+        let entries = vec![
+            ("first".into(), RoleSpec::Zero),
+            (
+                "fatal-last".into(),
+                RoleSpec::AlphaAnalog {
+                    of: LadderTint::new([source; 4]).unwrap(),
+                    alpha: f64::NAN,
+                },
+            ),
+        ];
+        let error = NamedRoleTable::from_validated_parts(entries, Vec::new(), RoleChroma::Neutral)
+            .expect_err("invalid requested alpha must fail before a table exists");
+        let NamedRoleTableCompileError::AlphaAnalog(error) = error else {
+            panic!("valid names must reach the alpha-domain gate");
+        };
         assert_eq!(error.declaration_ordinal(), 1);
         assert!(error.value().is_nan());
     }

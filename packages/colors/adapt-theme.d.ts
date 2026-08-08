@@ -1,3 +1,5 @@
+/// <reference lib="esnext.disposable" />
+
 // Public types for the adaptive hysteresis controller.
 
 import type { LabColors, ThemeName } from "./index.js";
@@ -20,7 +22,7 @@ export interface AdaptThemeOptions {
    * checks every supplied point and does not infer a Raster or Field between samples.
    */
   background?: string | string[] | (() => string | string[]);
-  /** Element to write the `--lab-*` variables onto. Defaults to the watched element. */
+  /** Element whose owned bindings are published through a dedicated atomic stylesheet sink. */
   target?: HTMLElement;
   /**
    * Caller-declared opaque page canvas for a fully translucent supported ancestor
@@ -62,6 +64,10 @@ export interface AdaptController {
   start(): void;
   /** Stop the internal loop without discarding an unfinished transition. */
   stop(): void;
+  /** Stop observation and atomically revoke only this controller's output lease. */
+  dispose(): void;
+  /** Explicit-resource-management alias for `dispose()`. */
+  [Symbol.dispose](): void;
   /** Канонические логические цели committed state; empty before the first supported Point commit. */
   current(): Record<string, string>;
 }

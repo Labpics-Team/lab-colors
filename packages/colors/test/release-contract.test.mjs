@@ -816,6 +816,192 @@ test("MSRV and packaged Rust crate gates are executable CI contracts", () => {
   );
 });
 
+test("the atomic output sink has one bounded pinned-Chrome browser gate", () => {
+  const ci = read(".github", "workflows", "ci-worker.yml");
+  const proof = read("scripts", "test-browser-output-sink.mjs");
+  const stepName = 'name: "@labpics/colors: real-browser atomic output-sink proof"';
+
+  const assertGate = (workflow) => {
+    const step = workflowStepLines(workflow, stepName);
+    const activeStep = step
+      .filter((line) => !line.trimStart().startsWith("#"))
+      .join("\n");
+    assert.doesNotMatch(activeStep, /^\s*(?:if:|continue-on-error:)/mu);
+    assert.equal(
+      step.filter((line) =>
+        line.trim() === 'LAB_COLORS_BROWSER_PROOF_TIMEOUT_MS: "60000"'
+      ).length,
+      1,
+      "browser proof must have one explicit whole-run deadline",
+    );
+    assert.equal(
+      workflowRunScript(workflow, stepName),
+      "set -euo pipefail\nnode scripts/test-browser-output-sink.mjs",
+      "browser proof must be one fail-closed dependency-free command",
+    );
+    assert.equal(
+      [...workflow.matchAll(/node scripts\/test-browser-output-sink\.mjs/gmu)].length,
+      1,
+      "workflow must have one browser output-sink authority",
+    );
+    const install = workflow.indexOf("name: install Chrome + dependencies");
+    const gate = workflow.indexOf(stepName);
+    const wasm = workflow.indexOf("name: wasm-pack test (headless chrome)");
+    assert.ok(
+      install >= 0 && install < gate && gate < wasm,
+      "real-DOM output proof must reuse pinned Chrome before the WASM browser parity gate",
+    );
+  };
+
+  const assertProofContract = (source) => {
+    const staticImports = source
+      .split(/\r?\n/u)
+      .filter((line) => line.trimStart().startsWith("import "));
+    assert.deepEqual(
+      staticImports,
+      [
+        'import { spawn } from "node:child_process";',
+        'import { access, readFile, stat } from "node:fs/promises";',
+        'import { createServer } from "node:http";',
+        'import { isAbsolute, resolve } from "node:path";',
+        'import { fileURLToPath } from "node:url";',
+      ],
+      "browser proof runtime imports must be the reviewed Node builtin set",
+    );
+    assert.equal(
+      [...source.matchAll(/\bimport\s*\(/gmu)].length,
+      1,
+      "the served output sink must be the only dynamic import",
+    );
+    assert.match(source, /^  const module = await import\(moduleUrl\);$/mu);
+    assert.equal(
+      [...source.matchAll(/LAB_COLORS_BROWSER_OUTPUT_SINK_PASS v1 checks=10/gmu)].length,
+      1,
+      "browser proof must expose one exact success receipt",
+    );
+    assert.match(source, /const chromePath = await executableFromEnv\("CHROME_PATH"\);/u);
+    assert.match(source, /const chromeDriverPath = await executableFromEnv\("CHROMEDRIVER_PATH"\);/u);
+    assert.match(source, /startChromeDriver\(\s*chromeDriverPath,/u);
+    assert.match(source, /binary: chromePath,/u);
+    assert.match(source, /spawn\(executable, \["--port=0"\]/u);
+    assert.match(
+      source,
+      /if \(overall\.controller\.signal\.aborted\) \{\s*onOverallAbort\(\);\s*\} else if \(startup\.controller\.signal\.aborted\)/u,
+    );
+    assert.match(source, /LAB_COLORS_BROWSER_PROOF_TIMEOUT_MS must be a positive integer/u);
+    assert.match(
+      source,
+      /const overall = timeoutSignal\(proofTimeoutMilliseconds, "browser output-sink proof"\);/u,
+    );
+    assert.match(source, /overall\.throwIfExpired\(\);/u);
+    assert.match(source, /AbortSignal\.any\(\[\s*deadline\.controller\.signal,\s*overall\.controller\.signal,/u);
+    assert.match(source, /server\.listen\(\{ port: 0, host: LOOPBACK_HOST, signal: listenSignal \}\);/u);
+    assert.match(source, /listen\(server, commandTimeoutMilliseconds, overall\)/u);
+    assert.match(source, /closeServer\(server, PROCESS_STOP_TIMEOUT_MS\)/u);
+    assert.match(source, /"packages\/colors\/output-sink\.js"/u);
+    assert.match(source, /const moduleSource = await readFile\(modulePath\);/u);
+    assert.match(source, /response\.end\(moduleSource\);/u);
+    assert.match(source, /args: \[`\$\{origin\}\/output-sink\.js\?proof=v1`\]/u);
+    assert.match(source, /\/session\/\$\{sessionId\}\/execute\/async/u);
+    assert.match(source, /\["replace", "insertRule", "deleteRule", "addRule", "removeRule"\]/u);
+    assert.match(source, /\["set", "append", "delete", "clear"\]/u);
+    assert.match(source, /const inlineMutationObserver = new MutationObserver\(recordInlineMutations\);/u);
+    assert.match(source, /attributeFilter: \["style"\],/u);
+    assert.match(source, /"style MutationObserver is sensitive to namespace writes"/u);
+    assert.match(source, /"legacy live CSSOM instrumentation is mutation-sensitive"/u);
+    assert.match(source, /"live Typed OM instrumentation is mutation-sensitive"/u);
+    assert.match(source, /"binding admission performs no live replacement before commit"/u);
+    assert.match(source, /"post-replace-drift-recovery"/u);
+    assert.match(source, /let afterLiveReplace = null;/u);
+    assert.match(source, /"OUTPUT_ATOMICITY_VIOLATION"/u);
+    assert.match(source, /"inline replacement race preserves its typed host-drift cause"/u);
+    assert.match(source, /"marker replacement race preserves its typed host-drift cause"/u);
+    assert.match(source, /"cross-root race target can be reacquired in its new ShadowRoot"/u);
+    assert.doesNotMatch(source, /(?:playwright|puppeteer|selenium|npm install|npx )/iu);
+  };
+
+  assertGate(ci);
+  assertGate(ci.replaceAll("\n", "\r\n"));
+  assertProofContract(proof);
+
+  const stepLine = `      - ${stepName}`;
+  for (const [name, mutant] of [
+    ["conditional bypass", ci.replace(stepLine, `${stepLine}\n        if: false`)],
+    ["nonblocking bypass", ci.replace(stepLine, `${stepLine}\n        continue-on-error: true`)],
+    ["unbounded declaration", ci.replace('LAB_COLORS_BROWSER_PROOF_TIMEOUT_MS: "60000"',
+      'LAB_COLORS_BROWSER_PROOF_TIMEOUT_MS: "0"')],
+    ["fail-open shell", ci.replace(
+      "          set -euo pipefail\n          node scripts/test-browser-output-sink.mjs",
+      "          set +e\n          node scripts/test-browser-output-sink.mjs",
+    )],
+    ["commented proof", ci.replace(
+      "          node scripts/test-browser-output-sink.mjs",
+      "          # node scripts/test-browser-output-sink.mjs",
+    )],
+  ]) {
+    assert.notEqual(mutant, ci, `${name} mutation must alter the workflow`);
+    assert.throws(() => assertGate(mutant), undefined, `${name} mutation must be rejected`);
+  }
+
+  const receiptMutant = proof.replace(
+    "LAB_COLORS_BROWSER_OUTPUT_SINK_PASS v1 checks=10",
+    "LAB_COLORS_BROWSER_OUTPUT_SINK_PASS v1 checks=9",
+  );
+  assert.notEqual(receiptMutant, proof, "receipt mutation must alter the proof script");
+  assert.throws(
+    () => assertProofContract(receiptMutant),
+    undefined,
+    "incomplete proof receipt must be rejected",
+  );
+
+  for (const [name, mutant] of [
+    ["unbound Chrome binary", proof.replace("binary: chromePath,", "binary: chromeDriverPath,")],
+    ["unbound ChromeDriver", proof.replace(
+      "startChromeDriver(\n      chromeDriverPath,",
+      "startChromeDriver(\n      chromePath,",
+    )],
+    ["substituted browser module", proof.replace(
+      "const module = await import(moduleUrl);",
+      'const module = await import("./substitute.js");',
+    )],
+    ["unbounded proof server", proof.replace(
+      "listen(server, commandTimeoutMilliseconds, overall)",
+      "listen(server)",
+    )],
+    ["nonabortable proof server", proof.replace(
+      "server.listen({ port: 0, host: LOOPBACK_HOST, signal: listenSignal });",
+      "server.listen(0, LOOPBACK_HOST);",
+    )],
+    ["lost startup abort", proof.replace(
+      "if (overall.controller.signal.aborted) {\n        onOverallAbort();\n      } else if (startup.controller.signal.aborted) {\n        onStartupAbort();\n      }",
+      "",
+    )],
+    ["unobserved inline namespace writer", proof.replace(
+      'attributeFilter: ["style"],',
+      'attributeFilter: ["class"],',
+    )],
+    ["unobserved legacy CSSOM writer", proof.replace(
+      '["replace", "insertRule", "deleteRule", "addRule", "removeRule"]',
+      '["replace", "insertRule", "deleteRule"]',
+    )],
+    ["unobserved Typed OM writer", proof.replace(
+      '["set", "append", "delete", "clear"]',
+      '["set"]',
+    )],
+    ["unobserved binding precommit", proof.replace(
+      '"binding admission performs no live replacement before commit"',
+      '"binding admission checked only final state"',
+    )],
+  ]) {
+    assert.notEqual(mutant, proof, `${name} mutation must alter the proof script`);
+    assert.throws(
+      () => assertProofContract(mutant),
+      undefined,
+      `${name} mutation must be rejected`,
+    );
+  }
+});
+
 test("publish accepts only canonical exact-SHA workflow runs and their immutable CI artifact", () => {
   const caller = read(".github", "workflows", "publish.yml");
   const publish = read(".github", "workflows", "publish-worker.yml");

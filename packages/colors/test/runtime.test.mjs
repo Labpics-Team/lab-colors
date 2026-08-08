@@ -13,6 +13,7 @@ import { initSync } from "../pkg/labcolors.js";
 import { parseCssColor, toHex, oklabLerp } from "../effective-bg.js";
 import { applyTheme } from "../apply-theme.js";
 import { watchTheme } from "../watch-theme.js";
+import { outputElement } from "./output-host.mjs";
 
 initSync({
   module: new WebAssembly.Module(readFileSync(new URL("../pkg/labcolors_bg.wasm", import.meta.url))),
@@ -51,6 +52,7 @@ function captureOutputConflict(fn, expectedConflicts) {
 
 function forgedOutputConflict(value = "#123456") {
   return {
+    outputBindings: ["--lab-safe", "--lab-first", "--lab-unresolved", "--lab-second"],
     vars: { "--lab-safe": value },
     roles: {
       safe: {
@@ -85,26 +87,7 @@ function forgedOutputConflict(value = "#123456") {
 }
 
 function observedElement(initial = []) {
-  const props = new Map(initial);
-  const mutations = [];
-  return {
-    props,
-    mutations,
-    style: {
-      get length() {
-        return props.size;
-      },
-      item: (index) => [...props.keys()][index] ?? null,
-      setProperty(key, value) {
-        mutations.push(["set", key, value]);
-        props.set(key, value);
-      },
-      removeProperty(key) {
-        mutations.push(["remove", key]);
-        props.delete(key);
-      },
-    },
-  };
+  return outputElement(initial);
 }
 
 test("applyTheme rejects a forged partial Unreachable snapshot before any DOM mutation", () => {
@@ -145,7 +128,7 @@ test("applyTheme rejects accessor-backed snapshots before their getters can crea
   });
 
   assert.throws(
-    () => applyTheme(element, { vars, roles }),
+    () => applyTheme(element, { outputBindings: ["--lab-safe"], vars, roles }),
     /data|accessor|property/u,
   );
   assert.deepEqual(element.mutations, []);
@@ -155,6 +138,7 @@ test("applyTheme rejects accessor-backed snapshots before their getters can crea
 test("applyTheme admits data-only snapshots from another JavaScript realm", () => {
   const element = observedElement();
   const snapshot = runInNewContext(`({
+    outputBindings: ["--lab-safe"],
     vars: { "--lab-safe": "#123456" },
     roles: {
       safe: {
@@ -176,6 +160,7 @@ test("applyTheme rejects sparse arrays before any DOM mutation", () => {
   const evidence = ["first", , "third"];
   evidence.extra = "does not fill the missing index";
   const snapshot = {
+    outputBindings: ["--lab-safe"],
     vars: { "--lab-safe": "#123456" },
     roles: {
       safe: {
@@ -205,8 +190,8 @@ test("applyTheme never manufactures required fields from Object.prototype", () =
   });
   try {
     assert.throws(
-      () => applyTheme(element, { roles: {} }),
-      /resolveTheme must return \{vars, roles\}/u,
+      () => applyTheme(element, { outputBindings: [], roles: {} }),
+      /resolveTheme must return \{outputBindings, vars, roles\}/u,
     );
   } finally {
     delete Object.prototype.vars;
@@ -214,6 +199,46 @@ test("applyTheme never manufactures required fields from Object.prototype", () =
 
   assert.equal(inheritedReads, 0);
   assert.deepEqual(element.mutations, []);
+});
+
+test("applyTheme releases an uncommitted lease after initial publication fails", () => {
+  const element = observedElement();
+  const publishFailure = new Error("initial atomic publication failed");
+  const snapshot = {
+    outputBindings: ["--lab-safe"],
+    vars: { "--lab-safe": "#123456" },
+    roles: {
+      safe: {
+        kind: "color",
+        cssVar: "--lab-safe",
+        hex: "#123456",
+        lc: 100,
+      },
+    },
+  };
+  let liveReplacements = 0;
+  element.outputHost.setBeforeLiveReplace(() => {
+    liveReplacements++;
+    element.outputHost.failNextLiveReplace(publishFailure);
+  });
+
+  assert.throws(() => applyTheme(element, snapshot), (error) => error === publishFailure);
+  assert.equal(
+    liveReplacements,
+    1,
+    "releasing an empty uncommitted lease must not perform another live replacement",
+  );
+  assert.deepEqual(element.mutations, [], "the rejected replacement must not become observable");
+  assert.deepEqual([...element.props], []);
+  assert.equal(element.outputHost.liveSheet(), null, "failed publication must not hide a live lease");
+
+  element.outputHost.setBeforeLiveReplace(null);
+  const attachment = applyTheme(element, snapshot);
+  assert.deepEqual([...element.props], [["--lab-safe", "#123456"]]);
+
+  attachment.dispose();
+  assert.deepEqual([...element.props], []);
+  assert.equal(element.outputHost.liveSheet(), null, "the recovered attachment must remain disposable");
 });
 
 test("parseCssColor handles the forms computed style yields", () => {
@@ -375,23 +400,19 @@ function fakeEngine() {
     calls,
     resolveTheme(bg, theme) {
       calls.push({ bg, theme });
-      return { theme, background: bg, vars: { "--lab-x": bg }, roles: {} };
+      return {
+        theme,
+        background: bg,
+        outputBindings: ["--lab-x"],
+        vars: { "--lab-x": bg },
+        roles: {},
+      };
     },
   };
 }
 
 function fakeElement(bg) {
-  const props = new Map();
-  return {
-    bg,
-    style: {
-      length: 0,
-      item: () => null,
-      setProperty: (k, v) => props.set(k, v),
-      removeProperty: (k) => props.delete(k),
-    },
-    props,
-  };
+  return Object.assign(outputElement(), { bg });
 }
 
 test("watchTheme applies on creation and re-resolves only when the bg changes", () => {
@@ -459,6 +480,7 @@ test("watchTheme failed setTheme preserves the committed theme for a later refre
       return {
         theme,
         background: bg,
+        outputBindings: ["--lab-x"],
         vars: { "--lab-x": `${theme}:${bg}` },
         roles: {},
       };
@@ -494,6 +516,7 @@ test("watchTheme retries the same changed background after a transient resolve f
       return {
         theme,
         background: bg,
+        outputBindings: ["--lab-x"],
         vars: { "--lab-x": `${theme}:${bg}` },
         roles: {},
       };
@@ -532,6 +555,7 @@ test("watchTheme quarantines a forged partial conflict and retries the same obse
       }
       if (bg === "#000000") conflictedAttempts++;
       return {
+        outputBindings: ["--lab-safe"],
         vars: { "--lab-safe": bg },
         roles: {
           safe: { kind: "color", cssVar: "--lab-safe", hex: bg, lc: 100 },
@@ -573,18 +597,10 @@ test("watchTheme quarantines a forged partial conflict and retries the same obse
 
 test("watchTheme keeps an immutable admitted snapshot for dirty repair", () => {
   const element = observedElement();
-  let failWrite = false;
-  const originalSet = element.style.setProperty;
-  element.style.setProperty = (key, value) => {
-    if (failWrite) {
-      failWrite = false;
-      throw new Error("cssom write failed");
-    }
-    originalSet(key, value);
-  };
   const colors = {
     resolveTheme() {
       return {
+        outputBindings: ["--lab-safe"],
         vars: { "--lab-safe": "#123456" },
         roles: {
           safe: { kind: "color", cssVar: "--lab-safe", hex: "#123456", lc: 100 },
@@ -608,7 +624,7 @@ test("watchTheme keeps an immutable admitted snapshot for dirty repair", () => {
     };
   }, TypeError);
 
-  failWrite = true;
+  element.outputHost.failNextLiveReplace(new Error("cssom write failed"));
   assert.throws(() => ctrl.refresh(true), /cssom write failed/u);
   assert.doesNotThrow(() => ctrl.refresh());
   assert.equal(element.props.get("--lab-safe"), "#123456");
@@ -627,7 +643,7 @@ test("watchTheme rejects an invalid explicit background instead of using the fal
       colors: {
         resolveTheme() {
           resolves++;
-          return { vars: {}, roles: {} };
+          return { outputBindings: [], vars: {}, roles: {} };
         },
       },
       theme: "light",
@@ -682,21 +698,13 @@ test("watchTheme observes its own initial CSS mutation and catches up once", asy
   let callback = null;
   let active = false;
   let background = "#FFFFFF";
-  const props = new Map();
-  const element = {
-    style: {
-      length: 0,
-      item: () => null,
-      removeProperty: (key) => props.delete(key),
-      setProperty(key, value) {
-        props.set(key, value);
-        if (key === "--lab-x" && background === "#FFFFFF") {
-          background = "#000000";
-          if (active) queueMicrotask(callback);
-        }
-      },
-    },
-  };
+  const element = outputElement();
+  element.outputHost.setBeforeLiveReplace((text) => {
+    if (text.includes("--lab-x: #FFFFFF;") && background === "#FFFFFF") {
+      background = "#000000";
+      if (active) queueMicrotask(callback);
+    }
+  });
   const colors = fakeEngine();
   const MutationObserver = function (fn) {
     callback = fn;
@@ -721,7 +729,7 @@ test("watchTheme observes its own initial CSS mutation and catches up once", asy
 
   assert.equal(colors.calls.length, 2, "the initial write-induced background must be re-resolved");
   assert.equal(ctrl.background(), "#000000");
-  assert.equal(props.get("--lab-x"), "#000000");
+  assert.equal(element.props.get("--lab-x"), "#000000");
   ctrl.stop();
 });
 
@@ -741,9 +749,6 @@ test("watchTheme returns the observer owner before reporting an observe failure"
     };
   };
   const element = fakeElement("rgb(255,255,255)");
-  element.style.setProperty = () => {
-    writes++;
-  };
   const win = {
     MutationObserver,
     document: { documentElement: {} },
@@ -760,6 +765,7 @@ test("watchTheme returns the observer owner before reporting an observe failure"
   });
   assert.deepEqual(reported, [], "reporting must happen after the controller is returned");
   assert.equal(disconnects, 1, "a partially-acquired observer must be released");
+  writes = element.mutations.length;
   assert.equal(writes, 0, "observe failure must precede the initial DOM commit");
   assert.equal(controller.background(), null, "no background was committed");
   assert.equal(controller.refresh(), null, "a stopped pre-commit controller has no result");
@@ -788,10 +794,11 @@ test("watchTheme returns the observer owner and cancels queued work when initial
     };
   };
   const element = fakeElement("rgb(255,255,255)");
-  element.style.setProperty = () => {
+  element.outputHost.setBeforeLiveReplace(() => {
     if (active) queueMicrotask(callback);
+    element.outputHost.setBeforeLiveReplace(null);
     throw applyFailure;
-  };
+  });
   const win = { MutationObserver, document: { documentElement: {} } };
 
   const controller = watchTheme(element, {
@@ -831,9 +838,7 @@ test("watchTheme retains an acquired observer when apply, disconnect and reporti
     }
   }
   const element = fakeElement("rgb(255,255,255)");
-  element.style.setProperty = () => {
-    throw applyFailure;
-  };
+  element.outputHost.failNextLiveReplace(applyFailure);
 
   const controller = watchTheme(element, {
     colors: fakeEngine(),
@@ -889,9 +894,7 @@ test("watchTheme never entrusts startup error reporting to the injected schedule
     }
   }
   const element = fakeElement("rgb(255,255,255)");
-  element.style.setProperty = () => {
-    throw applyFailure;
-  };
+  element.outputHost.failNextLiveReplace(applyFailure);
 
   assert.doesNotThrow(() => {
     controller = watchTheme(element, {
@@ -928,6 +931,7 @@ test("watchTheme never entrusts startup error reporting to the injected schedule
 
 test("watchTheme fallback reports a throwing startup handler as a host exception", () => {
   const watchThemeUrl = new URL("../watch-theme.js", import.meta.url).href;
+  const outputHostUrl = new URL("./output-host.mjs", import.meta.url).href;
   const script = `
     globalThis.queueMicrotask = () => {
       throw new Error("captured queueMicrotask failed before scheduling");
@@ -939,6 +943,7 @@ test("watchTheme fallback reports a throwing startup handler as a host exception
     process.on("unhandledRejection", (error) => unhandled.push(error));
 
     const { watchTheme } = await import(${JSON.stringify(watchThemeUrl)});
+    const { outputElement } = await import(${JSON.stringify(outputHostUrl)});
     const startupFailure = new Error("observe failed after acquisition");
     const reportingFailure = new Error("onError failed");
     let controller;
@@ -952,19 +957,12 @@ test("watchTheme fallback reports a throwing startup handler as a host exception
       }
       disconnect() {}
     }
-    const element = {
-      style: {
-        length: 0,
-        item: () => null,
-        setProperty() {},
-        removeProperty() {},
-      },
-    };
+    const element = outputElement();
 
     controller = watchTheme(element, {
       colors: {
         resolveTheme() {
-          return { vars: {}, roles: {} };
+          return { outputBindings: [], vars: {}, roles: {} };
         },
       },
       theme: "light",
@@ -1035,7 +1033,7 @@ test("watchTheme reports one coalesced observer failure without publishing it", 
     resolveTheme(bg, theme) {
       calls.push({ bg, theme });
       if (bg === "#000000") throw failure;
-      return { theme, background: bg, vars: { "--lab-x": bg }, roles: {} };
+      return { theme, background: bg, outputBindings: ["--lab-x"], vars: { "--lab-x": bg }, roles: {} };
     },
   };
   const MutationObserver = function (fn) {
@@ -1074,7 +1072,7 @@ test("watchTheme stays active and retries after a transient observer failure", a
       if (bg === "#000000" && failedAttempts++ === 0) {
         throw new Error("transient observer failure");
       }
-      return { theme, background: bg, vars: { "--lab-x": bg }, roles: {} };
+      return { theme, background: bg, outputBindings: ["--lab-x"], vars: { "--lab-x": bg }, roles: {} };
     },
   };
   const MutationObserver = function (fn) {
@@ -1113,7 +1111,7 @@ test("watchTheme reports observer failure through the host when onError is absen
   const colors = {
     resolveTheme(bg, theme) {
       if (bg === "#000000") throw failure;
-      return { theme, background: bg, vars: { "--lab-x": bg }, roles: {} };
+      return { theme, background: bg, outputBindings: ["--lab-x"], vars: { "--lab-x": bg }, roles: {} };
     },
   };
   const MutationObserver = function (fn) {
@@ -1147,7 +1145,7 @@ test("watchTheme explicit refresh throws synchronously and bypasses onError", ()
   const colors = {
     resolveTheme(bg, theme) {
       if (bg === "#000000" && fail) throw new Error("explicit refresh failed");
-      return { theme, background: bg, vars: { "--lab-x": bg }, roles: {} };
+      return { theme, background: bg, outputBindings: ["--lab-x"], vars: { "--lab-x": bg }, roles: {} };
     },
   };
   const element = fakeElement("rgb(255,255,255)");
@@ -1172,15 +1170,6 @@ test("watchTheme explicit refresh throws synchronously and bypasses onError", ()
 test("watchTheme retries a dirty canonical write even when its inputs are unchanged", () => {
   const colors = fakeEngine();
   const element = fakeElement("rgb(255,255,255)");
-  const write = element.style.setProperty;
-  let failWrite = false;
-  element.style.setProperty = (key, value) => {
-    if (failWrite) {
-      element.props.delete(key);
-      throw new Error("cssom write failed");
-    }
-    write(key, value);
-  };
   const ctrl = watchTheme(element, {
     colors,
     theme: "light",
@@ -1188,12 +1177,15 @@ test("watchTheme retries a dirty canonical write even when its inputs are unchan
     observe: false,
   });
 
-  failWrite = true;
+  element.outputHost.failNextLiveReplace(new Error("cssom write failed"));
   assert.throws(() => ctrl.refresh(true), /cssom write failed/u);
   assert.equal(ctrl.background(), "#FFFFFF", "a failed write must not publish a new snapshot");
-  assert.equal(element.props.get("--lab-x"), undefined, "CSSOM cannot roll back the partial write");
+  assert.equal(
+    element.props.get("--lab-x"),
+    "#FFFFFF",
+    "an atomic host failure must preserve the prior live snapshot",
+  );
 
-  failWrite = false;
   ctrl.refresh();
   assert.equal(colors.calls.length, 2, "repair should reuse the committed resolved snapshot");
   assert.equal(element.props.get("--lab-x"), "#FFFFFF");
@@ -1238,7 +1230,11 @@ test("watchTheme: reentrant stop() inside background() cancels the outer commit"
   let w = null;
   let calls = 0;
   const colors = {
-    resolveTheme: () => ({ vars: { "--lab-a": "#111111" }, roles: {} }),
+    resolveTheme: () => ({
+      outputBindings: ["--lab-a"],
+      vars: { "--lab-a": "#111111" },
+      roles: {},
+    }),
   };
   const watcher = watchTheme(el, {
     colors,
@@ -1267,6 +1263,7 @@ test("watchTheme: reentrant setTheme() wins over the stale outer transaction", (
   let reentered = false;
   const colors = {
     resolveTheme: (bg, theme) => ({
+      outputBindings: ["--lab-a"],
       vars: { "--lab-a": theme === "dark" ? "#000000" : "#FFFFFF" },
       roles: {},
     }),
@@ -1307,21 +1304,20 @@ test("watchTheme: nested setTheme() during CSS write owns DOM and committed cach
   const resultFor = (theme) => ({
     theme,
     background: "#FFFFFF",
+    outputBindings: ["--lab-a", "--lab-b"],
     vars: { "--lab-a": `${theme}-a`, "--lab-b": `${theme}-b` },
     roles: {
       a: { kind: "color", cssVar: "--lab-a", hex: "#111111", lc: 100 },
       b: { kind: "color", cssVar: "--lab-b", hex: "#222222", lc: 100 },
     },
   });
-  const write = element.style.setProperty.bind(element.style);
-  element.style.setProperty = (key, value) => {
-    write(key, value);
-    if (armed && key === "--lab-a" && value === "outer-a") {
+  element.outputHost.setBeforePublication((values) => {
+    if (armed && values.get("--lab-a") === "outer-a") {
       armed = false;
       watcher.setTheme("inner");
       watcher.refresh(true);
     }
-  };
+  });
   watcher = watchTheme(element, {
     colors: {
       resolveTheme(_background, theme) {
@@ -1359,19 +1355,18 @@ test("watchTheme: a before-forward CSS wrapper cannot let the stale writer follo
   const resultFor = (theme) => ({
     theme,
     background: "#FFFFFF",
+    outputBindings: ["--lab-a"],
     vars: { "--lab-a": `${theme}-a` },
     roles: {
       a: { kind: "color", cssVar: "--lab-a", hex: "#111111", lc: 100 },
     },
   });
-  const write = element.style.setProperty.bind(element.style);
-  element.style.setProperty = (key, value) => {
-    if (armed && key === "--lab-a" && value === "outer-a") {
+  element.outputHost.setBeforePublication((values) => {
+    if (armed && values.get("--lab-a") === "outer-a") {
       armed = false;
       watcher.setTheme("inner");
     }
-    write(key, value);
-  };
+  });
   watcher = watchTheme(element, {
     colors: {
       resolveTheme(_background, theme) {
@@ -1403,20 +1398,19 @@ test("watchTheme: stop() during CSS write cannot split the already-started commi
   const resultFor = (theme) => ({
     theme,
     background: "#FFFFFF",
+    outputBindings: ["--lab-a", "--lab-b"],
     vars: { "--lab-a": `${theme}-a`, "--lab-b": `${theme}-b` },
     roles: {
       a: { kind: "color", cssVar: "--lab-a", hex: "#111111", lc: 100 },
       b: { kind: "color", cssVar: "--lab-b", hex: "#222222", lc: 100 },
     },
   });
-  const write = element.style.setProperty.bind(element.style);
-  element.style.setProperty = (key, value) => {
-    write(key, value);
-    if (armed && key === "--lab-a" && value === "outer-a") {
+  element.outputHost.setBeforePublication((values) => {
+    if (armed && values.get("--lab-a") === "outer-a") {
       armed = false;
       watcher.stop();
     }
-  };
+  });
   watcher = watchTheme(element, {
     colors: {
       resolveTheme(_background, theme) {
@@ -1453,6 +1447,7 @@ test("watchTheme reports failing stop cleanup only after the CSS snapshot comple
   let armed = false;
   const resultFor = (theme) => ({
     theme,
+    outputBindings: ["--lab-a", "--lab-b"],
     vars: { "--lab-a": `${theme}-a`, "--lab-b": `${theme}-b` },
     roles: {},
   });
@@ -1462,14 +1457,12 @@ test("watchTheme reports failing stop cleanup only after the CSS snapshot comple
       throw cleanupFailure;
     }
   }
-  const write = element.style.setProperty.bind(element.style);
-  element.style.setProperty = (key, value) => {
-    write(key, value);
-    if (armed && key === "--lab-a" && value === "outer-a") {
+  element.outputHost.setBeforePublication((values) => {
+    if (armed && values.get("--lab-a") === "outer-a") {
       armed = false;
       watcher.stop();
     }
-  };
+  });
   watcher = watchTheme(element, {
     colors: {
       resolveTheme(_background, theme) {
@@ -1499,6 +1492,7 @@ test("watchTheme cannot discard stop cleanup after a later CSS failure", () => {
   let disconnects = 0;
   const resultFor = (theme) => ({
     theme,
+    outputBindings: ["--lab-a", "--lab-b"],
     vars: { "--lab-a": `${theme}-a`, "--lab-b": `${theme}-b` },
     roles: {},
   });
@@ -1508,16 +1502,14 @@ test("watchTheme cannot discard stop cleanup after a later CSS failure", () => {
       disconnects++;
     }
   }
-  const write = element.style.setProperty.bind(element.style);
-  element.style.setProperty = (key, value) => {
-    write(key, value);
+  element.outputHost.setBeforePublication((values) => {
     if (!armed) return;
-    if (key === "--lab-a" && value === "outer-a") watcher.stop();
-    if (key === "--lab-b" && value === "outer-b") {
+    if (values.get("--lab-a") === "outer-a") watcher.stop();
+    if (values.get("--lab-b") === "outer-b") {
       armed = false;
       throw primaryFailure;
     }
-  };
+  });
   watcher = watchTheme(element, {
     colors: {
       resolveTheme(_background, theme) {
@@ -1548,6 +1540,7 @@ test("watchTheme cannot discard stop cleanup from a failed queued commit", () =>
   let disconnects = 0;
   const resultFor = (theme) => ({
     theme,
+    outputBindings: ["--lab-a", "--lab-b"],
     vars: { "--lab-a": `${theme}-a`, "--lab-b": `${theme}-b` },
     roles: {},
   });
@@ -1561,17 +1554,15 @@ test("watchTheme cannot discard stop cleanup from a failed queued commit", () =>
       }
     }
   }
-  const write = element.style.setProperty.bind(element.style);
-  element.style.setProperty = (key, value) => {
-    write(key, value);
+  element.outputHost.setBeforePublication((values) => {
     if (!armed) return;
-    if (key === "--lab-a" && value === "outer-a") watcher.setTheme("bad");
-    if (key === "--lab-a" && value === "bad-a") watcher.stop();
-    if (key === "--lab-b" && value === "bad-b") {
+    if (values.get("--lab-a") === "outer-a") watcher.setTheme("bad");
+    if (values.get("--lab-a") === "bad-a") watcher.stop();
+    if (values.get("--lab-b") === "bad-b") {
       armed = false;
       throw primaryFailure;
     }
-  };
+  });
   watcher = watchTheme(element, {
     colors: {
       resolveTheme(_background, theme) {
@@ -1606,20 +1597,19 @@ test("watchTheme: a failed queued operation cannot leave an older tail to overwr
   let armed = false;
   const resultFor = (theme) => ({
     theme,
+    outputBindings: ["--lab-a"],
     vars: { "--lab-a": theme },
     roles: {
       a: { kind: "color", cssVar: "--lab-a", hex: "#111111", lc: 100 },
     },
   });
-  const write = element.style.setProperty.bind(element.style);
-  element.style.setProperty = (key, value) => {
-    write(key, value);
-    if (armed && key === "--lab-a" && value === "outer") {
+  element.outputHost.setBeforePublication((values) => {
+    if (armed && values.get("--lab-a") === "outer") {
       armed = false;
       watcher.setTheme("bad");
       watcher.setTheme("stale");
     }
-  };
+  });
   watcher = watchTheme(element, {
     colors: {
       resolveTheme(_background, theme) {
@@ -1649,20 +1639,19 @@ test("watchTheme: the newest intent raised during queued prepare follows the old
   let reenter = true;
   const resultFor = (theme) => ({
     theme,
+    outputBindings: ["--lab-a"],
     vars: { "--lab-a": theme },
     roles: {
       a: { kind: "color", cssVar: "--lab-a", hex: "#111111", lc: 100 },
     },
   });
-  const write = element.style.setProperty.bind(element.style);
-  element.style.setProperty = (key, value) => {
-    write(key, value);
-    if (armed && key === "--lab-a" && value === "outer") {
+  element.outputHost.setBeforePublication((values) => {
+    if (armed && values.get("--lab-a") === "outer") {
       armed = false;
       watcher.setTheme("A");
       watcher.setTheme("C");
     }
-  };
+  });
   watcher = watchTheme(element, {
     colors: {
       resolveTheme(_background, theme) {
@@ -1694,19 +1683,18 @@ test("watchTheme: a malformed revoked candidate cannot erase the newer queued in
   let reenter = true;
   const resultFor = (theme) => ({
     theme,
+    outputBindings: ["--lab-a"],
     vars: { "--lab-a": theme },
     roles: {
       a: { kind: "color", cssVar: "--lab-a", hex: "#111111", lc: 100 },
     },
   });
-  const write = element.style.setProperty.bind(element.style);
-  element.style.setProperty = (key, value) => {
-    write(key, value);
-    if (armed && key === "--lab-a" && value === "outer") {
+  element.outputHost.setBeforePublication((values) => {
+    if (armed && values.get("--lab-a") === "outer") {
       armed = false;
       watcher.setTheme("A");
     }
-  };
+  });
   watcher = watchTheme(element, {
     colors: {
       resolveTheme(_background, theme) {
@@ -1738,6 +1726,7 @@ test("watchTheme: a revoked background read invokes no stale resolver", () => {
   const calls = [];
   const resultFor = (theme) => ({
     theme,
+    outputBindings: ["--lab-a"],
     vars: { "--lab-a": theme },
     roles: {},
   });
@@ -1778,6 +1767,7 @@ test("watchTheme: owner loss inside the implicit backdrop walk cancels later sea
   const calls = [];
   const resultFor = (theme) => ({
     theme,
+    outputBindings: ["--lab-a"],
     vars: { "--lab-a": theme },
     roles: {},
   });
@@ -1836,6 +1826,7 @@ test("watchTheme: a newer failure stays visible after revoking a malformed candi
   let watcher = null;
   const resultFor = (theme) => ({
     theme,
+    outputBindings: ["--lab-a"],
     vars: { "--lab-a": theme },
     roles: {
       a: { kind: "color", cssVar: "--lab-a", hex: "#111111", lc: 100 },
@@ -1880,6 +1871,7 @@ test("watchTheme: a reentrant stop cleanup failure is never mistaken for stale p
       resolveTheme(_background, theme) {
         return {
           theme,
+          outputBindings: ["--lab-a"],
           vars: { "--lab-a": theme },
           roles: {},
         };
@@ -1919,7 +1911,7 @@ test("watchTheme: stop retries observer cleanup after a transient disconnect fai
   const watcher = watchTheme(element, {
     colors: {
       resolveTheme() {
-        return { vars: { "--lab-a": "initial" }, roles: {} };
+        return { outputBindings: ["--lab-a"], vars: { "--lab-a": "initial" }, roles: {} };
       },
     },
     theme: "initial",
@@ -1948,6 +1940,7 @@ test("watchTheme: a successful reentrant stop keeps its revoked malformed candid
         }
         return {
           theme,
+          outputBindings: ["--lab-a"],
           vars: { "--lab-a": theme },
           roles: {},
         };
@@ -1971,19 +1964,18 @@ test("watchTheme: refresh returns the result committed after nested serialized w
   let background = "initial";
   const resultFor = (theme) => ({
     theme,
+    outputBindings: ["--lab-a"],
     vars: { "--lab-a": theme },
     roles: {
       a: { kind: "color", cssVar: "--lab-a", hex: "#111111", lc: 100 },
     },
   });
-  const write = element.style.setProperty.bind(element.style);
-  element.style.setProperty = (key, value) => {
-    write(key, value);
-    if (armed && key === "--lab-a" && value === "outer") {
+  element.outputHost.setBeforePublication((values) => {
+    if (armed && values.get("--lab-a") === "outer") {
       armed = false;
       watcher.setTheme("inner");
     }
-  };
+  });
   watcher = watchTheme(element, {
     colors: { resolveTheme: (_background, theme) => resultFor(theme) },
     theme: "outer",
@@ -2005,20 +1997,19 @@ test("watchTheme: a queued failure cannot mask the primary CSSOM failure", () =>
   const element = observedElement();
   let watcher = null;
   let armed = false;
-  const write = element.style.setProperty.bind(element.style);
-  element.style.setProperty = (key, value) => {
-    write(key, value);
-    if (armed && key === "--lab-a" && value === "outer") {
+  element.outputHost.setBeforePublication((values) => {
+    if (armed && values.get("--lab-a") === "outer") {
       armed = false;
       watcher.setTheme("bad");
       throw new Error("primary CSSOM failure");
     }
-  };
+  });
   watcher = watchTheme(element, {
     colors: {
       resolveTheme(_background, theme) {
         if (theme === "bad") throw new Error("queued secondary failure");
         return {
+          outputBindings: ["--lab-a"],
           vars: { "--lab-a": theme },
           roles: {
             a: { kind: "color", cssVar: "--lab-a", hex: "#111111", lc: 100 },

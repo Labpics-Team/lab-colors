@@ -15,7 +15,8 @@
 import { oklabLerp, compileLerpPair, lerpPairHex } from "./effective-bg.js";
 import { observePointBackground } from "./background-observation.js";
 import { __over } from "./pkg/labcolors.js";
-import { admitSnapshot, writeVars, conflictError } from "./snapshot.js";
+import { admitSnapshot, conflictError } from "./snapshot.js";
+import { acquireOutputLease } from "./output-sink.js";
 
 const CANCELLED = Symbol("adaptTheme.cancelled");
 const NO_FRAME = Symbol("adaptTheme.noFrame");
@@ -96,6 +97,8 @@ function segHex(seg, t) {
  * @property {() => void} start  Begin an internal requestAnimationFrame loop.
  * @property {() => void} stop   Stop the internal loop without discarding an
  *   незавершённый ease; последующий `start()`/`tick()` продолжит его по своим часам.
+ * @property {() => void} dispose Stop observation and atomically revoke only
+ *   this controller's output lease. Idempotent.
  * @property {() => Record<string,string>} current  Canonical resolved targets;
  *   during an ease these differ from the values painted into the DOM.
  */
@@ -261,7 +264,23 @@ export function adaptTheme(element, options) {
   // у CSSOM нет rollback, а остановка посередине оставила бы hybrid snapshot.
   let operationGeneration = 0;
   let commitDepth = 0;
-  const beginOperation = () => ++operationGeneration;
+  // A first manifest belongs to the operation that admitted it until the same
+  // operation publishes successfully. A cancelled/failed candidate cannot pin
+  // the controller's future authority set.
+  let outputBindings = null;
+  let pendingOutputBindings = null;
+  let pendingOutputBindingsOwner = 0;
+  let outputLease = null;
+  let hasPublished = false;
+  let disposeRequested = false;
+  let disposeQueued = false;
+  let disposed = false;
+  const beginOperation = () => {
+    const owner = ++operationGeneration;
+    pendingOutputBindings = null;
+    pendingOutputBindingsOwner = owner;
+    return owner;
+  };
   const ownsOperation = (owner) => owner === operationGeneration;
   const checkpoint = (owner) => {
     if (!ownsOperation(owner)) throw CANCELLED;
@@ -640,18 +659,21 @@ export function adaptTheme(element, options) {
     };
   };
 
-  const commitResolved = (candidate, owner) => {
-    if (!ownsOperation(owner)) return false;
-    baseVars = candidate.baseVars;
-    roles = candidate.roles;
-    stableGlows = candidate.stableGlows;
-    recheckOccurrences = candidate.recheckOccurrences;
-    lastSolveAt = candidate.lastSolveAt;
-    breachSince = candidate.breachSince;
-    // Пере-решённый кандидат может сменить набор ключей: следующая запись
-    // обязана идти полным clear-then-write, но лишь после коммита транзакции.
-    written = null;
-    return true;
+  const admitOutputBindings = (snapshot, owner) => {
+    const next = snapshot.outputBindings;
+    const expected = outputBindings ??
+      (pendingOutputBindingsOwner === owner ? pendingOutputBindings : null);
+    if (expected === null) {
+      pendingOutputBindingsOwner = owner;
+      pendingOutputBindings = next;
+      return;
+    }
+    if (
+      next.length !== expected.length ||
+      next.some((name, index) => name !== expected[index])
+    ) {
+      throw new TypeError("adaptTheme: outputBindings changed after the first admitted snapshot");
+    }
   };
 
   const resolveSnapshot = (bg, themeName, owner) => {
@@ -659,6 +681,7 @@ export function adaptTheme(element, options) {
     checkpoint(owner);
     const snapshot = admitSnapshot(raw, "adaptTheme", checkpoint, owner);
     checkpoint(owner);
+    admitOutputBindings(snapshot, owner);
     return snapshot;
   };
 
@@ -753,67 +776,107 @@ export function adaptTheme(element, options) {
     };
   };
 
-  // Every write goes through the full canonical set with the (optional) eased
-  // color overlay on top — so translucent roles in `baseVars` persist through
-  // the apply, and non-eased color roles keep their canonical oklch form.
-  // `overlay` carries only in-flight color roles as hex.
-  //
-  // WRITE STRATEGY — full vs diff. `written` holds the vars of the last write;
-  // `null` принуждает следующую запись пройти полный clear-then-write.
-  // Between two adopts the composed key set is invariant (always `baseVars`'
-  // keys), so mid-ease frames DIFF against `written`: only values that changed
-  // this frame hit `setProperty` (≈ the roles actually easing), instead of
-  // remove+set of EVERY `--lab-*` var on every frame — the dominant DOM cost
-  // of an ease and pure churn for the style engine. The final style state is
-  // byte-identical to a full rewrite (locked by the golden fingerprints in
-  // test/hotpath-parity.test.mjs). Every adopt nulls `written`, so key-set
-  // changes and any external clobbering self-heal at the next solve — the same
-  // guarantee the always-full-rewrite gave, which also wrote nothing between
-  // eases while steady.
-  let written = null;
-  const loseWriteOwnership = (basis) => {
-    // Если более новая операция не успела опубликовать собственный полный
-    // снимок, частично записанная физическая база неизвестна и требует repair.
-    if (written === basis) written = null;
-    return false;
-  };
-  const applyHexes = (overlay, owner) => {
-    if (!ownsOperation(owner)) return false;
-    const vars = { ...baseVars, ...overlay };
-    const basis = written;
+  const captureState = () => ({
+    theme,
+    roles,
+    stableGlows,
+    baseVars,
+    easing,
+    easeStart,
+    breachSince,
+    lastSolveAt,
+    lastKey,
+    recheckOccurrences,
+  });
+
+  const stateFromCandidate = (candidate, overrides = {}) => ({
+    ...captureState(),
+    baseVars: candidate.baseVars,
+    roles: candidate.roles,
+    stableGlows: candidate.stableGlows,
+    recheckOccurrences: candidate.recheckOccurrences,
+    lastSolveAt: candidate.lastSolveAt,
+    breachSince: candidate.breachSince,
+    ...overrides,
+  });
+
+  const publishState = (state, vars, owner) => {
+    if (!ownsOperation(owner) || disposed || disposeRequested) return false;
+    const bindings = outputBindings ??
+      (pendingOutputBindingsOwner === owner ? pendingOutputBindings : null);
+    if (bindings === null) {
+      throw new Error("adaptTheme: cannot publish before admitting outputBindings");
+    }
     commitDepth++;
+    let acquired = false;
     try {
-      try {
-        if (written === null) {
-          if (!writeVars(target, vars, "adaptTheme", () => ownsOperation(owner))) {
-            return loseWriteOwnership(basis);
-          }
-        } else {
-          for (const k in vars) {
-            if (!ownsOperation(owner)) return loseWriteOwnership(basis);
-            const v = vars[k];
-            if (basis[k] !== v) target.style.setProperty(k, v);
-            if (!ownsOperation(owner)) return loseWriteOwnership(basis);
-          }
-        }
-      } catch (error) {
-        // У CSSOM нет транзакций/отката. Забываем diff-базу, чтобы следующий
-        // явный tick переписал весь канонический снимок, а не считал частично
-        // записанный DOM закоммиченным.
-        if (ownsOperation(owner)) written = null;
-        throw error;
+      if (outputLease === null) {
+        outputLease = acquireOutputLease(target, bindings, "adaptTheme");
+        acquired = true;
       }
-      if (!ownsOperation(owner)) return loseWriteOwnership(basis);
-      written = vars;
+      if (!outputLease.publish(vars, () => ownsOperation(owner) && !disposeRequested)) {
+        if (acquired) {
+          if (!outputLease.dispose() && outputLease.state !== "disposed") {
+            throw new Error("adaptTheme: failed to release an uncommitted output lease");
+          }
+          outputLease = null;
+        }
+        return false;
+      }
+      // A true return is the linearisation point: the complete live snapshot is
+      // already committed. Mirror it into controller state before draining any
+      // reentrant intent that the sink serialized behind this publication.
+      if (outputBindings === null) outputBindings = bindings;
+      pendingOutputBindings = null;
+      theme = state.theme;
+      roles = state.roles;
+      stableGlows = state.stableGlows;
+      baseVars = state.baseVars;
+      easing = state.easing;
+      easeStart = state.easeStart;
+      breachSince = state.breachSince;
+      lastSolveAt = state.lastSolveAt;
+      lastKey = state.lastKey;
+      recheckOccurrences = state.recheckOccurrences;
+      hasPublished = true;
       return true;
+    } catch (error) {
+      if (acquired && outputLease?.state === "active") {
+        try {
+          if (!outputLease.dispose() && outputLease.state !== "disposed") {
+            throw new Error("adaptTheme: failed to release an uncommitted output lease");
+          }
+        } catch (cleanupError) {
+          throw new AggregateError(
+            [error, cleanupError],
+            "adaptTheme: publication and uncommitted lease cleanup failed",
+          );
+        }
+      }
+      if (acquired && outputLease?.state === "disposed") outputLease = null;
+      throw error;
     } finally {
       commitDepth--;
     }
   };
 
-  // Apply the canonical set as-is (no ease in flight): color roles show their
-  // oklch form, translucent roles their tint+alpha.
-  const applyRolesDirect = (owner) => applyHexes({}, owner);
+  // Materialise the complete presentation for one state. Every frame is a
+  // whole-snapshot sink transaction; there is no per-property diff writer.
+  const frameForState = (state, now) => {
+    if (state.easing.size === 0) return { state, vars: state.baseVars };
+    const t = easeMs <= 0 ? 1 : (now - state.easeStart) / easeMs;
+    if (t >= 1 || !Number.isFinite(t)) {
+      const settled = { ...state, easing: new Map() };
+      return { state: settled, vars: settled.baseVars };
+    }
+    const e = easeOut(t);
+    const overlay = {};
+    for (const role of state.roles) {
+      const segment = state.easing.get(role.cssVar);
+      if (segment) overlay[role.cssVar] = segHex(segment, e);
+    }
+    return { state, vars: { ...state.baseVars, ...overlay } };
+  };
 
   /**
    * Recheck the background-dependent stable Glow decision class. This is not a
@@ -908,50 +971,10 @@ export function adaptTheme(element, options) {
     return prepared === null ? candidate : { ...candidate, ...prepared };
   };
 
-  const commitStableGlowReconciliation = (prepared, owner) => {
-    if (!ownsOperation(owner)) return false;
-    if (prepared === null) return true;
-    const previousVars = baseVars;
-    baseVars = prepared.baseVars;
-    stableGlows = prepared.stableGlows;
-    if (written !== null) {
-      // A stable certificate transition may coincide with an in-flight color
-      // ease. Patch only Glow satellites so the already-painted color overlay
-      // remains continuous; resetting `written`/`easing` here would snap every
-      // color role to its canonical destination.
-      const nextWritten = { ...written };
-      const stableKeys = new Set(
-        stableGlows.flatMap((role) => stableVarKeys(role)),
-      );
-      commitDepth++;
-      try {
-        for (const key of stableKeys) {
-          if (!ownsOperation(owner)) return false;
-          if (typeof prepared.baseVars[key] === "string") {
-            if (
-              previousVars[key] !== prepared.baseVars[key] ||
-              written[key] !== prepared.baseVars[key]
-            ) {
-              target.style.setProperty(key, prepared.baseVars[key]);
-            }
-            nextWritten[key] = prepared.baseVars[key];
-          } else {
-            target.style.removeProperty(key);
-            delete nextWritten[key];
-          }
-          if (!ownsOperation(owner)) return false;
-        }
-      } catch (error) {
-        if (ownsOperation(owner)) written = null;
-        throw error;
-      } finally {
-        commitDepth--;
-      }
-      if (!ownsOperation(owner)) return false;
-      written = nextWritten;
-    }
-    return true;
-  };
+  const stateWithStableGlowReconciliation = (state, prepared) =>
+    prepared === null
+      ? state
+      : { ...state, baseVars: prepared.baseVars, stableGlows: prepared.stableGlows };
 
   // Begin an ease from the currently-applied colours toward the role colours.
   const prepareEase = (roleSet, fromByVar, now) => {
@@ -967,42 +990,6 @@ export function adaptTheme(element, options) {
       }
     }
     return { easing: nextEasing, easeStart: now };
-  };
-
-  const commitEase = (prepared, owner) => {
-    if (!ownsOperation(owner)) return false;
-    easing = prepared.easing;
-    easeStart = prepared.easeStart;
-    return easing.size === 0 ? applyRolesDirect(owner) : true;
-  };
-
-  const stepEase = (now, owner) => {
-    if (!ownsOperation(owner)) return false;
-    const t = easeMs <= 0 ? 1 : (now - easeStart) / easeMs;
-    // Terminate the ease when it is done (`t >= 1`) OR when the clock went
-    // non-finite (a NaN/±∞ `now` making `t` non-finite): drop the segments and
-    // re-apply the canonical set, so the just-eased color roles snap back from
-    // their interpolated hex to their oklch form (translucent roles stay put).
-    // The non-finite guard is load-bearing for STATE, not just paint: without it
-    // a persistently bad clock would leave `easing` in flight forever, freezing
-    // color roles at their hex destination and never reverting to canonical
-    // oklch. (`easeOut` separately guards the interpolation math from
-    // `#NANNANNAN`; this guards the controller's easing state.)
-    if (t >= 1 || !Number.isFinite(t)) {
-      easing = new Map();
-      return applyRolesDirect(owner);
-    }
-    const e = easeOut(t);
-    // Overlay carries ONLY in-flight color roles (as interpolated hex); every
-    // other role — non-eased color and all translucent — keeps its canonical
-    // `baseVars` value under the merge in `applyHexes`.
-    const overlay = {};
-    for (const r of roles) {
-      const seg = easing.get(r.cssVar);
-      if (!seg) continue;
-      overlay[r.cssVar] = segHex(seg, e);
-    }
-    return applyHexes(overlay, owner);
   };
 
   const easeCompletesAt = (now) => {
@@ -1021,8 +1008,8 @@ export function adaptTheme(element, options) {
     return vars;
   };
 
-  // The colour each role is PAINTED right now — exactly what `stepEase` writes
-  // this frame: an in-flight segment sampled at `now`, else the static hex.
+  // The colour each role is PAINTED right now — exactly what `frameForState`
+  // materialises: an in-flight segment sampled at `now`, else the static hex.
   // Matching the same blend keeps an overlapping re-solve continuous.
   const paintedNow = (now) => {
     const t = easeMs <= 0 ? 1 : (now - easeStart) / easeMs;
@@ -1059,10 +1046,11 @@ export function adaptTheme(element, options) {
         prepared.sample0Result,
         owner,
       );
-      if (!commitResolved(candidate, owner)) return;
-      lastKey = key;
-      easing = new Map();
-      applyRolesDirect(owner);
+      const nextState = stateFromCandidate(candidate, {
+        lastKey: key,
+        easing: new Map(),
+      });
+      publishState(nextState, nextState.baseVars, owner);
       return;
     }
 
@@ -1075,8 +1063,13 @@ export function adaptTheme(element, options) {
       breachSince === null &&
       (!hasEase || easeCompletesAt(now))
     ) {
-      if (hasEase) stepEase(now, owner);
-      else if (written === null) applyRolesDirect(owner);
+      if (hasEase) {
+        const frame = frameForState(captureState(), now);
+        publishState(frame.state, frame.vars, owner);
+      } else if (!hasPublished) {
+        const state = captureState();
+        publishState(state, state.baseVars, owner);
+      }
       return;
     }
 
@@ -1097,10 +1090,16 @@ export function adaptTheme(element, options) {
               owner,
             );
       if (!ownsOperation(owner)) return;
-      if (!commitStableGlowReconciliation(preparedGlow, owner)) return;
-      lastKey = key;
-      if (hasEase) stepEase(now, owner);
-      else if (written === null) applyRolesDirect(owner);
+      let nextState = stateWithStableGlowReconciliation(captureState(), preparedGlow);
+      nextState = { ...nextState, lastKey: key };
+      if (hasEase) {
+        const frame = frameForState(nextState, now);
+        publishState(frame.state, frame.vars, owner);
+      } else if (preparedGlow !== null) {
+        publishState(nextState, nextState.baseVars, owner);
+      } else {
+        lastKey = key;
+      }
       return;
     }
 
@@ -1141,11 +1140,17 @@ export function adaptTheme(element, options) {
       // Вся работа resolver/recheck/Glow-валидации успешна. Только теперь
       // публикуем сертификатный переход и учёт контроллера, затем двигаем
       // текущий ease по тому же снимку образцов.
-      if (!commitStableGlowReconciliation(preparedGlow, owner)) return;
-      lastKey = key;
-      breachSince = nextBreachSince;
-      if (hasEase) stepEase(now, owner);
-      else if (written === null) applyRolesDirect(owner);
+      let nextState = stateWithStableGlowReconciliation(captureState(), preparedGlow);
+      nextState = { ...nextState, lastKey: key, breachSince: nextBreachSince };
+      if (hasEase) {
+        const frame = frameForState(nextState, now);
+        publishState(frame.state, frame.vars, owner);
+      } else if (preparedGlow !== null) {
+        publishState(nextState, nextState.baseVars, owner);
+      } else {
+        lastKey = key;
+        breachSince = nextBreachSince;
+      }
       return;
     }
 
@@ -1165,13 +1170,17 @@ export function adaptTheme(element, options) {
       // ship a target that breaches another sample — the second-solve-breaks-
       // first defect. Keep committed colours; an in-flight ease still advances so
       // presentation does not stall, and the acknowledged breach re-arms.
-      lastKey = key;
-      breachSince = null;
-      if (hasEase) stepEase(now, owner);
-      else if (written === null) applyRolesDirect(owner);
+      if (hasEase) {
+        const nextState = { ...captureState(), lastKey: key, breachSince: null };
+        const frame = frameForState(nextState, now);
+        publishState(frame.state, frame.vars, owner);
+      } else {
+        lastKey = key;
+        breachSince = null;
+      }
       return;
     }
-    let candidate = withStableGlowReconciliation(
+    const candidate = withStableGlowReconciliation(
       chased.feasible,
       samples,
       theme,
@@ -1182,10 +1191,13 @@ export function adaptTheme(element, options) {
     const preparedEase = prepareEase(candidate.roles, fromByVar, now);
     // До этой точки ни состояние контроллера, ни DOM не менялись. Публикуем
     // решённого кандидата, ease и ключ образцов одной commit-фазой.
-    if (!commitResolved(candidate, owner)) return;
-    if (!commitEase(preparedEase, owner)) return;
-    lastKey = key;
-    stepEase(now, owner);
+    const nextState = stateFromCandidate(candidate, {
+      easing: preparedEase.easing,
+      easeStart: preparedEase.easeStart,
+      lastKey: key,
+    });
+    const frame = frameForState(nextState, now);
+    publishState(frame.state, frame.vars, owner);
   };
 
   const runTick = (nowArg) => {
@@ -1275,26 +1287,44 @@ export function adaptTheme(element, options) {
   // Apply immediately only when the strict observation gate yields Point.
   {
     const owner = beginOperation();
-    const samples = readSamples(owner);
-    if (samples !== null) {
-      const nextKey = samples.join("|");
-      checkpoint(owner);
-      const rawNow = clock();
-      checkpoint(owner);
-      const now = finiteTime(rawNow);
-      const prepared = solveWorstCandidate(samples, now, theme, owner);
-      const candidate = withStableGlowReconciliation(
-        prepared.candidate,
-        samples,
-        theme,
-        prepared.sample0Result,
-        owner,
-      );
-      if (!commitResolved(candidate, owner)) {
-        throw new Error("adaptTheme: initial operation lost ownership");
+    try {
+      const samples = readSamples(owner);
+      if (samples !== null) {
+        const nextKey = samples.join("|");
+        checkpoint(owner);
+        const rawNow = clock();
+        checkpoint(owner);
+        const now = finiteTime(rawNow);
+        const prepared = solveWorstCandidate(samples, now, theme, owner);
+        const candidate = withStableGlowReconciliation(
+          prepared.candidate,
+          samples,
+          theme,
+          prepared.sample0Result,
+          owner,
+        );
+        const nextState = stateFromCandidate(candidate, {
+          lastKey: nextKey,
+          easing: new Map(),
+        });
+        if (!publishState(nextState, nextState.baseVars, owner)) {
+          throw new Error("adaptTheme: initial operation lost ownership");
+        }
       }
-      lastKey = nextKey;
-      applyRolesDirect(owner);
+    } catch (error) {
+      if (outputLease !== null) {
+        try {
+          if (!outputLease.dispose() && outputLease.state !== "disposed") {
+            throw new Error("adaptTheme: failed to release its initial output lease");
+          }
+        } catch (cleanupError) {
+          throw new AggregateError(
+            [error, cleanupError],
+            "adaptTheme: initial publication and lease cleanup failed",
+          );
+        }
+      }
+      throw error;
     }
   }
 
@@ -1337,7 +1367,7 @@ export function adaptTheme(element, options) {
   };
 
   const runStart = () => {
-    if (!running && requestFrame) {
+    if (!disposeRequested && !disposeQueued && !disposed && !running && requestFrame) {
       running = true;
       const record = {
         epoch: ++frameEpoch,
@@ -1381,6 +1411,51 @@ export function adaptTheme(element, options) {
     }
   };
 
+  const runDispose = () => {
+    if (disposed) return;
+    disposeQueued = false;
+    disposeRequested = true;
+    const failures = [];
+    try {
+      runStop(false);
+    } catch (error) {
+      failures.push(error);
+    }
+
+    let revoked = outputLease === null;
+    if (outputLease !== null) {
+      commitDepth++;
+      try {
+        revoked = outputLease.dispose();
+        if (!revoked && outputLease.state !== "disposed") {
+          failures.push(new Error("adaptTheme: output lease disposal lost ownership"));
+        }
+      } catch (error) {
+        failures.push(error);
+      } finally {
+        commitDepth--;
+      }
+    }
+
+    if (revoked || outputLease?.state === "disposed") {
+      disposed = true;
+      hasPublished = false;
+      roles = [];
+      stableGlows = [];
+      baseVars = {};
+      easing = new Map();
+      recheckOccurrences = [];
+      breachSince = null;
+      lastKey = null;
+      pendingOperations.length = 0;
+    }
+    if (!disposed) disposeRequested = false;
+    if (failures.length === 1) throw failures[0];
+    if (failures.length > 1) {
+      throw new AggregateError(failures, "adaptTheme: disposal failed");
+    }
+  };
+
   const runSetThemeOwned = (next, owner) => {
     const samples = readSamples(owner);
     if (!ownsOperation(owner)) return;
@@ -1406,13 +1481,14 @@ export function adaptTheme(element, options) {
       owner,
     );
     if (!ownsOperation(owner)) return;
-    // Вся до-записьная работа resolver/recheck/evidence завершена.
-    // Публикуем новую тему и решённое состояние, затем — фаза CSSOM-записи.
-    theme = next;
-    lastKey = nextKey;
-    easing = new Map();
-    if (!commitResolved(candidate, owner)) return;
-    applyRolesDirect(owner); // instant — a theme switch is intent, not drift
+    // Theme intent, solved state and canonical output become committed together,
+    // after the sink has replaced the complete snapshot.
+    const nextState = stateFromCandidate(candidate, {
+      theme: next,
+      lastKey: nextKey,
+      easing: new Map(),
+    });
+    publishState(nextState, nextState.baseVars, owner);
   };
 
   const runSetTheme = (next) => {
@@ -1434,6 +1510,7 @@ export function adaptTheme(element, options) {
         if (operation.kind === "tick") runTick(operation.now);
         else if (operation.kind === "theme") runSetTheme(operation.theme);
         else if (operation.kind === "start") runQueuedStart();
+        else if (operation.kind === "dispose") runDispose();
         else runQueuedStop();
       }
     } catch (error) {
@@ -1453,9 +1530,14 @@ export function adaptTheme(element, options) {
         // A failed colour transaction cannot publish more colour work. Control
         // intents still drain from the live queue: a newer stop issued by host
         // cleanup must be able to erase an older, not-yet-run restart.
-        if (operation.kind !== "start" && operation.kind !== "stop") continue;
+        if (
+          operation.kind !== "start" &&
+          operation.kind !== "stop" &&
+          operation.kind !== "dispose"
+        ) continue;
         try {
           if (operation.kind === "start") runQueuedStart();
+          else if (operation.kind === "dispose") runDispose();
           else runQueuedStop();
         } catch (error) {
           failures.push(error);
@@ -1507,6 +1589,7 @@ export function adaptTheme(element, options) {
     try {
       if (kind === "start") runQueuedStart();
       else if (kind === "stop") runQueuedStop();
+      else if (kind === "dispose") runDispose();
       else queueNextFrame(record);
     } catch (error) {
       failed = true;
@@ -1519,6 +1602,7 @@ export function adaptTheme(element, options) {
   };
 
   const enqueueStart = () => {
+    if (disposeRequested || disposeQueued || disposed) return;
     let hasQueuedStop = false;
     for (let i = pendingOperations.length - 1; i >= 0; i--) {
       const kind = pendingOperations[i].kind;
@@ -1535,6 +1619,7 @@ export function adaptTheme(element, options) {
   };
 
   const tick = (nowArg) => {
+    if (disposeRequested || disposeQueued || disposed) return;
     if (commitDepth > 0) {
       pendingOperations.push({ kind: "tick", now: nowArg });
       return;
@@ -1550,6 +1635,7 @@ export function adaptTheme(element, options) {
   };
 
   const setTheme = (next) => {
+    if (disposeRequested || disposeQueued || disposed) return;
     if (commitDepth > 0) {
       pendingOperations.push({ kind: "theme", theme: next });
       return;
@@ -1562,10 +1648,30 @@ export function adaptTheme(element, options) {
     runPublicOperation("theme", next);
   };
 
-  return {
+  const dispose = () => {
+    if (disposed || disposeRequested || disposeQueued) return;
+    if (commitDepth > 0) {
+      pendingOperations.length = 0;
+      pendingOperations.push({ kind: "dispose" });
+      disposeQueued = true;
+      return;
+    }
+    disposeRequested = true;
+    operationGeneration++;
+    if (executingOperation || drainingOperations) {
+      pendingOperations.length = 0;
+      pendingOperations.push({ kind: "dispose" });
+      disposeQueued = true;
+      return;
+    }
+    runPublicControl("dispose");
+  };
+
+  const controller = {
     tick,
     setTheme,
     start() {
+      if (disposeRequested || disposeQueued || disposed) return;
       if (commitDepth > 0 || executingOperation || drainingOperations) {
         enqueueStart();
         return;
@@ -1573,10 +1679,10 @@ export function adaptTheme(element, options) {
       runPublicControl("start");
     },
     stop() {
+      if (disposeRequested || disposeQueued || disposed) return;
       if (commitDepth > 0) {
-        // A begun CSS snapshot is synchronous and has no rollback. Serialize
-        // host cleanup after it; unlike prepare cancellation this does not revoke
-        // the writer midway through its already-published commit.
+        // A begun sink replacement is synchronous. Serialize host cleanup after
+        // it rather than revoking the atomic publication midway.
         pendingOperations.length = 0;
         pendingOperations.push({ kind: "stop" });
         return;
@@ -1593,6 +1699,9 @@ export function adaptTheme(element, options) {
       operationGeneration++;
       runPublicControl("stop");
     },
+    dispose,
     current: currentApplied,
   };
+  if (typeof Symbol.dispose === "symbol") controller[Symbol.dispose] = dispose;
+  return controller;
 }

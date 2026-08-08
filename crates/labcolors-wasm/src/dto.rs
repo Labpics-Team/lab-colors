@@ -7,6 +7,8 @@
 //! `cargo test` и держит стрелку зависимостей внутрь. Имена ролей здесь не
 //! перечисляются: каждый ключ принадлежит клиенту.
 
+use std::rc::Rc;
+
 /// Полный результат резолва одного фона под одной темой. Существует только
 /// после того, как ВЕСЬ именованный набор атомарно прошёл допуск.
 #[derive(Debug, Clone, PartialEq)]
@@ -16,8 +18,13 @@ pub struct ResolvedTheme {
     pub theme: String,
     /// The normalised background hex the set was resolved against.
     pub background: String,
+    /// Точный статический CSS-контракт владения, скомпилированный Core вместе с
+    /// конфигом. Он содержит основные ключи, сателлиты и алиасы, даже когда этот
+    /// конкретный resolve не эмитит значение для зарезервированного ключа.
+    pub output_bindings: Rc<labcolors_core::config::OutputBindingSet>,
     /// One entry per role the core returned, in the core's deterministic order.
-    /// The CSS variable name is `--lab-{key}`; the key is `entry.role_key`.
+    /// Основную CSS-переменную задаёт скомпилированный output binding; этот ключ
+    /// остаётся непрозрачным клиентским идентификатором роли.
     pub roles: Vec<RoleEntry>,
 }
 

@@ -44,6 +44,7 @@
     "apply-theme.js",
     "apply-theme.d.ts",
     "snapshot.js",
+    "output-sink.js",
     "watch-theme.js",
     "watch-theme.d.ts",
     "adapt-theme.js",

@@ -1,4 +1,11 @@
+/// <reference lib="esnext.disposable" />
+
 import type { ResolvedTheme } from "./index.js";
+
+export interface ApplyThemeAttachment extends Disposable {
+  /** Atomically revoke only the output bindings owned by this application. */
+  dispose(): void;
+}
 
 /**
  * Применяет CSS-переменные решённой темы к элементу.
@@ -13,4 +20,4 @@ import type { ResolvedTheme } from "./index.js";
 export declare function applyTheme(
   element: HTMLElement,
   result: ResolvedTheme,
-): void;
+): ApplyThemeAttachment;

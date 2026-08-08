@@ -1,3 +1,5 @@
+/// <reference lib="esnext.disposable" />
+
 // Public types for the reactive theme runtime.
 
 import type { LabColors, ResolvedTheme, ThemeName } from "./index.js";
@@ -53,6 +55,9 @@ export interface WatchController {
   background(): string | null;
   /** Disconnect observers and stop watching. */
   stop(): void;
+  /** Stop and atomically revoke only this attachment's output bindings. */
+  dispose(): void;
+  [Symbol.dispose](): void;
 }
 
 /**

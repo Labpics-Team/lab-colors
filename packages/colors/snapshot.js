@@ -1,11 +1,10 @@
-// Внутренняя граница допуска и DOM writer для снимков решённой темы.
+// Внутренняя pure-data граница допуска снимков решённой темы.
 //
 // Успешный снимок может содержать явный None, незавершённый bounded search или
 // численную неопределённость. Ordinary Unreachable означает, что объявленный
 // output-контракт невыполним: применение остальных vars превратило бы ambient
 // CSS в неявный fallback.
 
-const LAB_VAR_PREFIX = "--lab-";
 const admittedSnapshots = new WeakSet();
 const NO_CHECKPOINT = () => {};
 
@@ -18,7 +17,7 @@ function malformed(context, detail) {
 
 /** Копирует только JSON-подобные data properties и замораживает результат.
  * Getter/setter не вызываются: иначе проверенный `roles` мог измениться между
- * допуском и чтением `vars` в DOM writer. */
+ * допуском и чтением `vars` в output sink. */
 function materialize(value, context, path, active, checkpoint, token) {
   if (value === null || typeof value === "string" || typeof value === "boolean") {
     return value;
@@ -145,8 +144,24 @@ export function conflictError(conflicts) {
 export function admitSnapshot(result, context, checkpoint = NO_CHECKPOINT, token) {
   if (isRecord(result) && admittedSnapshots.has(result)) return result;
   const snapshot = materialize(result, context, "result", new Set(), checkpoint, token);
-  if (!isRecord(snapshot) || !isRecord(snapshot.vars) || !isRecord(snapshot.roles)) {
-    throw malformed(context, "resolveTheme must return {vars, roles}");
+  if (
+    !isRecord(snapshot) ||
+    !Array.isArray(snapshot.outputBindings) ||
+    !isRecord(snapshot.vars) ||
+    !isRecord(snapshot.roles)
+  ) {
+    throw malformed(context, "resolveTheme must return {outputBindings, vars, roles}");
+  }
+
+  const outputBindings = new Set();
+  for (const name of snapshot.outputBindings) {
+    if (typeof name !== "string" || !name.startsWith("--")) {
+      throw malformed(context, "outputBindings must contain CSS custom-property names");
+    }
+    if (outputBindings.has(name)) {
+      throw malformed(context, `outputBindings contains duplicate '${name}'`);
+    }
+    outputBindings.add(name);
   }
 
   const conflicts = [];
@@ -156,6 +171,12 @@ export function admitSnapshot(result, context, checkpoint = NO_CHECKPOINT, token
     }
     if (typeof role.kind !== "string") {
       throw malformed(context, `role '${roleKey}' lacks kind`);
+    }
+    if (
+      role.cssVar !== undefined &&
+      (typeof role.cssVar !== "string" || !outputBindings.has(role.cssVar))
+    ) {
+      throw malformed(context, `role '${roleKey}' references an undeclared output binding`);
     }
     if (role.kind !== "failure") continue;
     if (typeof role.code !== "string" || typeof role.message !== "string") {
@@ -170,55 +191,10 @@ export function admitSnapshot(result, context, checkpoint = NO_CHECKPOINT, token
   if (conflicts.length > 0) throw conflictError(conflicts);
 
   for (const [name, value] of Object.entries(snapshot.vars)) {
-    if (!name.startsWith(LAB_VAR_PREFIX) || typeof value !== "string") {
-      throw malformed(context, "vars must contain only string --lab-* entries");
+    if (!outputBindings.has(name) || typeof value !== "string") {
+      throw malformed(context, "vars must be a string-valued subset of outputBindings");
     }
   }
   admittedSnapshots.add(snapshot);
   return snapshot;
-}
-
-/**
- * Записать уже допущенный словарь vars. Adaptive-кадры используют этот
- * приватный примитив, потому что интерполированный overlay не является новым
- * resolver snapshot; публичный путь проходит через `admitSnapshot`.
- *
- * @param {*} element
- * @param {Record<string, string>} vars
- * @param {string} context
- * @param {() => boolean} [owns] Проверка владения для reentrant controller write.
- * @returns {boolean} `false`, если более новая операция отозвала владение.
- */
-export function writeVars(element, vars, context, owns = () => true) {
-  if (!element || typeof element.style?.setProperty !== "function") {
-    throw malformed(context, "first argument must be an element with a style");
-  }
-  if (!isRecord(vars)) {
-    throw malformed(context, "vars must be an object");
-  }
-  const entries = Object.entries(vars);
-  for (const [name, value] of entries) {
-    if (!name.startsWith(LAB_VAR_PREFIX) || typeof value !== "string") {
-      throw malformed(context, "vars must contain only string --lab-* entries");
-    }
-  }
-  if (!owns()) return false;
-
-  // Inline style — live-список: фиксируем удаляемые имена до мутации.
-  const stale = [];
-  for (let i = 0; i < element.style.length; i++) {
-    const name = element.style.item(i);
-    if (typeof name === "string" && name.startsWith(LAB_VAR_PREFIX)) stale.push(name);
-  }
-  for (const name of stale) {
-    if (!owns()) return false;
-    element.style.removeProperty(name);
-    if (!owns()) return false;
-  }
-  for (const [name, value] of entries) {
-    if (!owns()) return false;
-    element.style.setProperty(name, value);
-    if (!owns()) return false;
-  }
-  return true;
 }

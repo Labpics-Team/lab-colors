@@ -493,10 +493,20 @@ export interface Wcag22AssessmentV1 {
   };
 }
 
+/** Точный статический CSS-манифест владения из Core; элементы — полные custom-property keys. */
+export type OutputBindingSet = readonly string[];
+
 /** Полный результат резолва одного фона под одной темой. */
 export interface ResolvedTheme {
   readonly theme: ThemeName;
   readonly background: string;
+  /**
+   * Полный статический ownership contract: primary keys, satellites и aliases в
+   * детерминированном порядке деклараций. Adapter не выводит ключи из suffixes.
+   * `vars` всегда является подмножеством этого набора; none/unresolved/
+   * indeterminate bindings остаются зарезервированными без значения.
+   */
+  readonly outputBindings: OutputBindingSet;
   /**
    * Только роли с выбранным CSS-значением. Значения готовы к применению и имеют
    * одну форму: "oklch(L% C H)" для солидов и "oklch(L% C H / A)" для
@@ -889,6 +899,14 @@ mod native_contract_tests {
         assert!(types.contains("floor: \"aa-text\" | \"aa-ui\" | \"none\""));
         assert!(!types.contains("ratio: number"));
         assert!(types.contains("readonly roles: ReadonlyArray"));
+    }
+
+    #[test]
+    fn resolved_theme_exposes_the_exact_readonly_output_binding_manifest() {
+        let types = custom_types();
+        assert!(types.contains("export type OutputBindingSet = readonly string[];"));
+        assert!(types.contains("readonly outputBindings: OutputBindingSet;"));
+        assert!(types.contains("`vars` всегда является подмножеством этого набора"));
     }
 
     #[test]

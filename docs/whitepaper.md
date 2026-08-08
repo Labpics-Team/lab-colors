@@ -187,6 +187,22 @@ display-measured evidence без соответствующего измерен
 
 ## Runtime
 
+### Граница публикации output
+
+`ResolvedTheme.outputBindings` — точный набор CSS custom properties, написанный
+Core; `vars` содержит только значения из этого набора. `applyTheme`, `watchTheme`
+и `adaptTheme` публикуют набор через один constructed `CSSStyleSheet`, привязанный
+к целевому элементу. Перед публикацией sink собирает и проверяет полный stylesheet
+на scratch-sheet, затем выполняет один `replaceSync` live-sheet; prefix scan,
+inline writer и rollback не являются частями протокола.
+
+Цель должна быть подключена к своему `Document` либо `ShadowRoot`, поддерживающему
+constructed sheets. Перемещение, отсоединение или внешнее изменение sink приводит к
+типизированной stale-ошибке. Inline-значение для owned binding отклоняет публикацию
+до изменения live-sheet, а несвязанные inline-значения сохраняются. `stop()` у
+контроллеров прекращает наблюдение или цикл и оставляет output; только `dispose()`
+отзывает attachment, которому он принадлежит.
+
 `watchTheme` выполняет полный resolve при изменении поддерживаемого reference-фона
 или имени темы (либо при явном forced refresh). `adaptTheme` отдельно повторно
 проверяет метрики текущего снимка на конечном объявленном наборе образцов и только

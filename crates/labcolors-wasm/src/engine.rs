@@ -47,6 +47,9 @@ pub struct Engine {
 /// пол своей цели).
 struct NamedState {
     table: NamedRoleTable,
+    /// Общая иммутабельная проекция скомпилированного output-контракта таблицы.
+    /// Каждый кэшированный snapshot клонирует только `Rc`, а не все строки.
+    output_bindings: Rc<labcolors_core::config::OutputBindingSet>,
     fingerprint: u64,
     floors: HashMap<String, Option<f64>>,
     /// Иммутабельный словарь тем конфига: (клиентский ключ, VC-пресет) в
@@ -107,6 +110,7 @@ impl Engine {
             .map_err(|e| BindingError::InvalidConfig {
                 reason: e.to_string(),
             })?;
+        let output_bindings = Rc::new(table.output_bindings().clone());
         let mut floors: HashMap<String, Option<f64>> = table
             .entries()
             .iter()
@@ -123,6 +127,7 @@ impl Engine {
         self.cache.clear();
         self.named = Some(NamedState {
             table,
+            output_bindings,
             fingerprint: fp,
             floors,
             themes,
@@ -192,6 +197,7 @@ impl Engine {
                     // Результат несёт ИСХОДНЫЙ клиентский ключ, не пресет.
                     theme: theme_key.to_string(),
                     background: normalised.clone(),
+                    output_bindings: Rc::clone(&named.output_bindings),
                     roles,
                 }))
             });
@@ -1584,6 +1590,129 @@ mod tests {
             assert!(
                 projected["vars"].get(&css_var).is_none(),
                 "{name}: none-токен не имеет права получить CSS-значение"
+            );
+        }
+    }
+
+    #[test]
+    fn resolved_theme_carries_static_core_output_bindings_and_vars_are_a_subset() {
+        let mut config: serde_json::Value =
+            serde_json::from_str(&labui_json()).expect("labui passport is valid JSON");
+        let roles = config["roles"].as_array_mut().expect("roles is an array");
+        let glow = roles
+            .iter_mut()
+            .find(|entry| entry["name"] == "fx-glow-brand")
+            .expect("fixture carries the Glow role");
+        glow["recipe"]["decision_profile"] = serde_json::json!("stable-v1");
+        roles.push(serde_json::json!({
+            "name": "probe-material",
+            "recipe": {
+                "kind": "material",
+                "source": {"kind": "neutral", "pick": "mid"},
+                "tone_light": 10.0,
+                "tone_dark": 10.0,
+                "floor": "aa-text"
+            }
+        }));
+        let aliases = config["aliases"]
+            .as_array_mut()
+            .expect("aliases is an array");
+        aliases.extend([
+            serde_json::json!({"alias": "probe-glow-alias", "target": "fx-glow-brand"}),
+            serde_json::json!({"alias": "probe-material-alias", "target": "probe-material"}),
+            serde_json::json!({"alias": "probe-none-alias", "target": "none"}),
+        ]);
+
+        let mut engine = Engine::new();
+        engine
+            .load_config(&config.to_string())
+            .expect("mixed output contract compiles");
+        let dark = engine
+            .resolve_theme("#101012", "dark")
+            .expect("mixed output contract resolves");
+        let light = engine
+            .resolve_theme("#FFFFFF", "light")
+            .expect("same contract resolves on another background/theme");
+
+        assert!(
+            Rc::ptr_eq(&dark.output_bindings, &light.output_bindings),
+            "snapshots share one immutable compiler artifact instead of cloning all keys"
+        );
+        assert_eq!(
+            dark.output_bindings, light.output_bindings,
+            "output ownership is a static compiler artifact, not a solve outcome"
+        );
+        let bindings = dark.output_bindings.keys();
+        let unique: std::collections::BTreeSet<_> = bindings.iter().collect();
+        assert_eq!(unique.len(), bindings.len(), "compiled bindings are unique");
+        for expected_shape in [
+            [
+                "--lab-fx-glow-brand",
+                "--lab-fx-glow-brand-core",
+                "--lab-fx-glow-brand-alpha",
+            ],
+            [
+                "--lab-probe-glow-alias",
+                "--lab-probe-glow-alias-core",
+                "--lab-probe-glow-alias-alpha",
+            ],
+            [
+                "--lab-probe-material",
+                "--lab-probe-material-01",
+                "--lab-probe-material-02",
+            ],
+            [
+                "--lab-probe-material-alias",
+                "--lab-probe-material-alias-01",
+                "--lab-probe-material-alias-02",
+            ],
+        ] {
+            assert!(
+                bindings
+                    .windows(expected_shape.len())
+                    .any(|window| window.iter().map(String::as_str).eq(expected_shape)),
+                "missing exact contiguous output shape {expected_shape:?}"
+            );
+        }
+        for key in ["--lab-none", "--lab-probe-none-alias"] {
+            assert!(dark.output_bindings.contains(key), "missing reserved {key}");
+        }
+
+        let projected: serde_json::Value =
+            serde_json::from_str(&crate::projection::resolved_json(&dark).unwrap()).unwrap();
+        let projected_bindings = projected["outputBindings"]
+            .as_array()
+            .expect("outputBindings is an array")
+            .iter()
+            .map(|value| value.as_str().expect("binding is a string"))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            projected_bindings,
+            bindings.iter().map(String::as_str).collect::<Vec<_>>()
+        );
+        for key in projected["vars"]
+            .as_object()
+            .expect("vars is an object")
+            .keys()
+        {
+            assert!(
+                dark.output_bindings.contains(key),
+                "unbound emitted var {key}"
+            );
+        }
+        for absent in [
+            "--lab-fx-glow-brand",
+            "--lab-fx-glow-brand-core",
+            "--lab-fx-glow-brand-alpha",
+            "--lab-probe-glow-alias",
+            "--lab-probe-glow-alias-core",
+            "--lab-probe-glow-alias-alpha",
+            "--lab-none",
+            "--lab-probe-none-alias",
+        ] {
+            assert!(
+                projected["vars"].get(absent).is_none(),
+                "reserved non-emitting binding {absent} must not gain a value"
             );
         }
     }
