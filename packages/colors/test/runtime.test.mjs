@@ -241,6 +241,268 @@ test("applyTheme releases an uncommitted lease after initial publication fails",
   assert.equal(element.outputHost.liveSheet(), null, "the recovered attachment must remain disposable");
 });
 
+test("a reentrant newer apply owns the target before outer snapshot reflection", () => {
+  const element = observedElement();
+  const inner = {
+    outputBindings: ["--lab-safe"],
+    vars: { "--lab-safe": "#222222" },
+    roles: {
+      safe: { kind: "color", cssVar: "--lab-safe", hex: "#222222", lc: 100 },
+    },
+  };
+  const outerSource = {
+    outputBindings: ["--lab-safe"],
+    vars: { "--lab-safe": "#EEEEEE" },
+    roles: {
+      safe: { kind: "color", cssVar: "--lab-safe", hex: "#EEEEEE", lc: 100 },
+    },
+  };
+  let innerAttachment = null;
+  let reentered = false;
+  const outer = new Proxy(outerSource, {
+    getPrototypeOf(target) {
+      if (!reentered) {
+        reentered = true;
+        innerAttachment = applyTheme(element, inner);
+      }
+      return Reflect.getPrototypeOf(target);
+    },
+  });
+
+  const outerAttachment = applyTheme(element, outer);
+
+  assert.equal(outerAttachment, innerAttachment, "the stale caller observes the current owner");
+  assert.deepEqual([...element.props], [["--lab-safe", "#222222"]]);
+  assert.equal(
+    element.mutations.length,
+    1,
+    "the stale outer snapshot must not perform a second live replacement",
+  );
+  innerAttachment.dispose();
+});
+
+test("a newer nested validation failure crosses the stale outer admission boundary", () => {
+  const element = observedElement();
+  const initial = {
+    outputBindings: ["--lab-safe"],
+    vars: { "--lab-safe": "#111111" },
+    roles: {
+      safe: { kind: "color", cssVar: "--lab-safe", hex: "#111111", lc: 100 },
+    },
+  };
+  const current = applyTheme(element, initial);
+  const outerSource = {
+    outputBindings: ["--lab-safe"],
+    vars: { "--lab-safe": "#EEEEEE" },
+    roles: {
+      safe: { kind: "color", cssVar: "--lab-safe", hex: "#EEEEEE", lc: 100 },
+    },
+  };
+  let nestedError = null;
+  let reentered = false;
+  const outer = new Proxy(outerSource, {
+    getPrototypeOf(target) {
+      if (!reentered) {
+        reentered = true;
+        try {
+          applyTheme(element, null);
+        } catch (error) {
+          nestedError = error;
+          throw error;
+        }
+      }
+      return Reflect.getPrototypeOf(target);
+    },
+  });
+
+  assert.throws(
+    () => applyTheme(element, outer),
+    (error) => error === nestedError && error instanceof TypeError,
+    "the stale outer call must not convert a newer operation's failure into success",
+  );
+  assert.deepEqual([...element.props], [["--lab-safe", "#111111"]]);
+  assert.equal(element.mutations.length, 1);
+  current.dispose();
+});
+
+test("a stale outer admission error collapses only after a newer apply succeeds", () => {
+  const element = observedElement();
+  const inner = {
+    outputBindings: ["--lab-safe"],
+    vars: { "--lab-safe": "#222222" },
+    roles: {
+      safe: { kind: "color", cssVar: "--lab-safe", hex: "#222222", lc: 100 },
+    },
+  };
+  const outerFailure = new Error("obsolete outer reflection failed");
+  const outerSource = {
+    outputBindings: ["--lab-safe"],
+    vars: { "--lab-safe": "#EEEEEE" },
+    roles: {
+      safe: { kind: "color", cssVar: "--lab-safe", hex: "#EEEEEE", lc: 100 },
+    },
+  };
+  let innerAttachment = null;
+  let reentered = false;
+  const outer = new Proxy(outerSource, {
+    getPrototypeOf() {
+      if (!reentered) {
+        reentered = true;
+        innerAttachment = applyTheme(element, inner);
+        throw outerFailure;
+      }
+      throw new Error("unexpected second reflection");
+    },
+  });
+
+  assert.equal(applyTheme(element, outer), innerAttachment);
+  assert.deepEqual([...element.props], [["--lab-safe", "#222222"]]);
+  assert.equal(element.mutations.length, 1);
+  innerAttachment.dispose();
+});
+
+test("first-publication reentry cannot report a disposed attachment as success", () => {
+  const element = observedElement();
+  const outer = {
+    outputBindings: ["--lab-safe"],
+    vars: { "--lab-safe": "#EEEEEE" },
+    roles: {
+      safe: { kind: "color", cssVar: "--lab-safe", hex: "#EEEEEE", lc: 100 },
+    },
+  };
+  const newer = {
+    outputBindings: ["--lab-safe"],
+    vars: { "--lab-safe": "#222222" },
+    roles: {
+      safe: { kind: "color", cssVar: "--lab-safe", hex: "#222222", lc: 100 },
+    },
+  };
+  const Sheet = element.outputHost.realm.CSSStyleSheet;
+  const originalReplace = Sheet.prototype.replaceSync;
+  let armed = true;
+  let nestedError = null;
+  Sheet.prototype.replaceSync = function replaceWithFirstPublicationReentry(text) {
+    const isLive = element.outputHost.root.adoptedStyleSheets.includes(this);
+    if (armed && !isLive) {
+      armed = false;
+      try {
+        applyTheme(element, newer);
+      } catch (error) {
+        nestedError = error;
+      }
+    }
+    return originalReplace.call(this, text);
+  };
+
+  try {
+    assert.throws(
+      () => applyTheme(element, outer),
+      /lost ownership before an attachment was established/u,
+    );
+    assert.equal(nestedError?.code, "OUTPUT_SINK_BUSY");
+    assert.deepEqual([...element.props], []);
+    assert.deepEqual(element.mutations, []);
+    assert.equal(element.outputHost.liveSheet(), null);
+  } finally {
+    Sheet.prototype.replaceSync = originalReplace;
+  }
+
+  const recovered = applyTheme(element, newer);
+  assert.deepEqual([...element.props], [["--lab-safe", "#222222"]]);
+  recovered.dispose();
+});
+
+test("a newer apply during sink preparation cancels the stale prepared publication", () => {
+  const element = observedElement();
+  const initial = {
+    outputBindings: ["--lab-safe"],
+    vars: { "--lab-safe": "#111111" },
+    roles: {
+      safe: { kind: "color", cssVar: "--lab-safe", hex: "#111111", lc: 100 },
+    },
+  };
+  const outer = {
+    outputBindings: ["--lab-safe"],
+    vars: { "--lab-safe": "#EEEEEE" },
+    roles: {
+      safe: { kind: "color", cssVar: "--lab-safe", hex: "#EEEEEE", lc: 100 },
+    },
+  };
+  const newer = {
+    outputBindings: ["--lab-safe"],
+    vars: { "--lab-safe": "#222222" },
+    roles: {
+      safe: { kind: "color", cssVar: "--lab-safe", hex: "#222222", lc: 100 },
+    },
+  };
+  const attachment = applyTheme(element, initial);
+  const Sheet = element.outputHost.realm.CSSStyleSheet;
+  const originalReplace = Sheet.prototype.replaceSync;
+  let armed = true;
+  let nestedError = null;
+  Sheet.prototype.replaceSync = function replaceWithReentry(text) {
+    const isLive = element.outputHost.root.adoptedStyleSheets.includes(this);
+    if (armed && !isLive) {
+      armed = false;
+      try {
+        applyTheme(element, newer);
+      } catch (error) {
+        nestedError = error;
+      }
+    }
+    return originalReplace.call(this, text);
+  };
+
+  try {
+    assert.equal(applyTheme(element, outer), attachment);
+    assert.equal(nestedError?.code, "OUTPUT_SINK_BUSY");
+    assert.deepEqual([...element.props], [["--lab-safe", "#111111"]]);
+    assert.equal(
+      element.mutations.length,
+      1,
+      "a revoked prepared candidate must never reach the live replacement",
+    );
+  } finally {
+    Sheet.prototype.replaceSync = originalReplace;
+    attachment.dispose();
+  }
+});
+
+test("disposing the current attachment invalidates an older in-flight apply", () => {
+  const element = observedElement();
+  const initial = {
+    outputBindings: ["--lab-safe"],
+    vars: { "--lab-safe": "#111111" },
+    roles: {
+      safe: { kind: "color", cssVar: "--lab-safe", hex: "#111111", lc: 100 },
+    },
+  };
+  const current = applyTheme(element, initial);
+  const outerSource = {
+    outputBindings: ["--lab-safe"],
+    vars: { "--lab-safe": "#EEEEEE" },
+    roles: {
+      safe: { kind: "color", cssVar: "--lab-safe", hex: "#EEEEEE", lc: 100 },
+    },
+  };
+  let reentered = false;
+  const outer = new Proxy(outerSource, {
+    getPrototypeOf(target) {
+      if (!reentered) {
+        reentered = true;
+        current.dispose();
+      }
+      return Reflect.getPrototypeOf(target);
+    },
+  });
+
+  const outerAttachment = applyTheme(element, outer);
+
+  assert.equal(outerAttachment, current, "a cancelled call keeps a disposable return handle");
+  assert.deepEqual([...element.props], [], "the disposed owner must not be resurrected");
+  assert.equal(element.outputHost.liveSheet(), null);
+});
+
 test("parseCssColor handles the forms computed style yields", () => {
   assert.deepEqual(parseCssColor("rgb(255, 0, 0)"), [255, 0, 0, 1]);
   assert.deepEqual(parseCssColor("rgba(0, 128, 255, 0.5)"), [0, 128, 255, 0.5]);
@@ -597,13 +859,14 @@ test("watchTheme quarantines a forged partial conflict and retries the same obse
 
 test("watchTheme keeps an immutable admitted snapshot for dirty repair", () => {
   const element = observedElement();
+  let nextValue = "#123456";
   const colors = {
     resolveTheme() {
       return {
         outputBindings: ["--lab-safe"],
-        vars: { "--lab-safe": "#123456" },
+        vars: { "--lab-safe": nextValue },
         roles: {
-          safe: { kind: "color", cssVar: "--lab-safe", hex: "#123456", lc: 100 },
+          safe: { kind: "color", cssVar: "--lab-safe", hex: nextValue, lc: 100 },
         },
       };
     },
@@ -624,6 +887,7 @@ test("watchTheme keeps an immutable admitted snapshot for dirty repair", () => {
     };
   }, TypeError);
 
+  nextValue = "#654321";
   element.outputHost.failNextLiveReplace(new Error("cssom write failed"));
   assert.throws(() => ctrl.refresh(true), /cssom write failed/u);
   assert.doesNotThrow(() => ctrl.refresh());
@@ -1168,7 +1432,21 @@ test("watchTheme explicit refresh throws synchronously and bypasses onError", ()
 });
 
 test("watchTheme retries a dirty canonical write even when its inputs are unchanged", () => {
-  const colors = fakeEngine();
+  let nextValue = "#FFFFFF";
+  const calls = [];
+  const colors = {
+    calls,
+    resolveTheme(bg, theme) {
+      calls.push({ bg, theme });
+      return {
+        theme,
+        background: bg,
+        outputBindings: ["--lab-x"],
+        vars: { "--lab-x": nextValue },
+        roles: {},
+      };
+    },
+  };
   const element = fakeElement("rgb(255,255,255)");
   const ctrl = watchTheme(element, {
     colors,
@@ -1177,6 +1455,7 @@ test("watchTheme retries a dirty canonical write even when its inputs are unchan
     observe: false,
   });
 
+  nextValue = "#000000";
   element.outputHost.failNextLiveReplace(new Error("cssom write failed"));
   assert.throws(() => ctrl.refresh(true), /cssom write failed/u);
   assert.equal(ctrl.background(), "#FFFFFF", "a failed write must not publish a new snapshot");
@@ -1962,10 +2241,10 @@ test("watchTheme: refresh returns the result committed after nested serialized w
   let watcher = null;
   let armed = false;
   let background = "initial";
-  const resultFor = (theme) => ({
+  const resultFor = (theme, value = theme) => ({
     theme,
     outputBindings: ["--lab-a"],
-    vars: { "--lab-a": theme },
+    vars: { "--lab-a": value },
     roles: {
       a: { kind: "color", cssVar: "--lab-a", hex: "#111111", lc: 100 },
     },
@@ -1977,7 +2256,12 @@ test("watchTheme: refresh returns the result committed after nested serialized w
     }
   });
   watcher = watchTheme(element, {
-    colors: { resolveTheme: (_background, theme) => resultFor(theme) },
+    colors: {
+      resolveTheme(currentBackground, theme) {
+        const value = currentBackground === "changed" ? theme : `${theme}-${currentBackground}`;
+        return resultFor(theme, value);
+      },
+    },
     theme: "outer",
     background: () => background,
     target: element,

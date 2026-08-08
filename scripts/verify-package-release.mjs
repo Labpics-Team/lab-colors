@@ -909,7 +909,7 @@ function lockedNpmVersion(packageJson) {
   return declared;
 }
 
-function runtimeSmokeSource() {
+export function runtimeSmokeSource() {
   return String.raw`
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
@@ -918,6 +918,7 @@ import { createRequire } from "node:module";
 import init, {
   LabColors,
   adaptTheme,
+  applyTheme,
   evaluateWcag22,
   numericalCapabilityManifest,
   watchTheme,
@@ -1058,27 +1059,174 @@ const background = "#000000";
 const resolved = engine.resolveTheme(background, "light");
 assert.deepEqual(Object.keys(resolved.roles).sort(), ["token-7f3a", "token-92be", "token-a11c"]);
 
-const runtimeTarget = () => {
-  const names = [];
+const runtimeDocument = () => {
+  class FakeStyleDeclaration {
+    constructor(entries = []) {
+      this.values = new Map(entries);
+    }
+
+    get length() { return this.values.size; }
+    item(index) { return [...this.values.keys()][index] ?? ""; }
+    getPropertyValue(name) { return this.values.get(name) ?? ""; }
+    setProperty(name, value) {
+      if (/^--[a-z0-9-]+$/u.test(name) && typeof value === "string" && value.length > 0) {
+        this.values.set(name, value);
+      }
+    }
+    removeProperty(name) {
+      const previous = this.getPropertyValue(name);
+      this.values.delete(name);
+      return previous;
+    }
+    get cssText() {
+      return [...this.values]
+        .map(([name, value]) => name + ": " + value + ";")
+        .join(" ");
+    }
+    entries() { return [...this.values]; }
+  }
+
+  class FakeRule {
+    constructor(selectorText, declarations = []) {
+      this.selectorText = selectorText;
+      this.style = new FakeStyleDeclaration(declarations);
+    }
+    get cssText() {
+      return this.style.cssText === ""
+        ? this.selectorText + " {}"
+        : this.selectorText + " { " + this.style.cssText + " }";
+    }
+  }
+
+  const parseSheet = (text) => {
+    if (text === "") return [];
+    const match = /^(:root|\[[a-z0-9-]+\]) \{(?: (.*))?\}$/u.exec(text);
+    if (!match) return [];
+    const declarations = [];
+    for (const part of (match[2] ?? "").split("; ")) {
+      const declaration = part.endsWith(";") ? part.slice(0, -1) : part;
+      if (declaration === "") continue;
+      const separator = declaration.indexOf(": ");
+      if (separator < 0) continue;
+      declarations.push([
+        declaration.slice(0, separator),
+        declaration.slice(separator + 2),
+      ]);
+    }
+    return [new FakeRule(match[1], declarations)];
+  };
+
+  const attributes = new Map();
+  const inlineStyle = new FakeStyleDeclaration();
   const values = new Map();
-  return {
-    values,
-    style: {
-      setProperty(name, value) {
-        if (!values.has(name)) names.push(name);
-        values.set(name, value);
-      },
-      removeProperty(name) {
-        values.delete(name);
-        const index = names.indexOf(name);
-        if (index >= 0) names.splice(index, 1);
-      },
-      item(index) { return names[index] ?? ""; },
-      get length() { return names.length; },
+  let adoptedStyleSheets = [];
+  let documentElement = null;
+  let constructedSheetCount = 0;
+  let scratchReplaceCount = 0;
+  let liveReplaceCount = 0;
+
+  const document = {
+    nodeType: 9,
+    defaultView: null,
+    documentElement: null,
+    querySelectorAll(selector) {
+      if (selector === ":root") return documentElement === null ? [] : [documentElement];
+      const match = /^\[([a-z0-9-]+)\]$/u.exec(selector);
+      return match && documentElement?.hasAttribute(match[1]) ? [documentElement] : [];
     },
   };
+
+  const selectorMatches = (selector) => {
+    if (selector === ":root") return true;
+    const match = /^\[([a-z0-9-]+)\]$/u.exec(selector);
+    return match !== null && attributes.has(match[1]);
+  };
+  const syncEffectiveValues = () => {
+    values.clear();
+    for (const sheet of adoptedStyleSheets) {
+      for (const rule of sheet.cssRules) {
+        if (!selectorMatches(rule.selectorText)) continue;
+        for (const [name, value] of rule.style.entries()) values.set(name, value);
+      }
+    }
+    for (const [name, value] of inlineStyle.entries()) values.set(name, value);
+  };
+
+  class FakeCSSStyleSheet {
+    constructor() {
+      constructedSheetCount++;
+      this.cssRules = [];
+    }
+    replaceSync(text) {
+      const live = adoptedStyleSheets.includes(this);
+      this.cssRules = parseSheet(text);
+      if (live) {
+        liveReplaceCount++;
+        syncEffectiveValues();
+      } else {
+        scratchReplaceCount++;
+      }
+    }
+  }
+
+  const realm = { CSSStyleSheet: FakeCSSStyleSheet, document };
+  document.defaultView = realm;
+  documentElement = {
+    nodeType: 1,
+    isConnected: true,
+    ownerDocument: document,
+    getRootNode: () => document,
+    hasAttribute: (name) => attributes.has(name),
+    setAttribute: (name, value) => attributes.set(name, String(value)),
+    removeAttribute: (name) => attributes.delete(name),
+    style: inlineStyle,
+  };
+  document.documentElement = documentElement;
+  Object.defineProperty(document, "adoptedStyleSheets", {
+    get() { return adoptedStyleSheets; },
+    set(next) {
+      adoptedStyleSheets = Array.from(next);
+      syncEffectiveValues();
+    },
+  });
+
+  return {
+    document,
+    target: documentElement,
+    values,
+    get constructedSheetCount() { return constructedSheetCount; },
+    get scratchReplaceCount() { return scratchReplaceCount; },
+    get liveReplaceCount() { return liveReplaceCount; },
+  };
 };
-const watchedTarget = runtimeTarget();
+
+const ownedVar = "--lab-token-7f3a";
+const assertPublished = (host, label) => {
+  assert.equal(host.document.querySelectorAll(":root")[0], host.target, label + " root identity");
+  assert.equal(typeof host.values.get(ownedVar), "string", label + " effective value");
+  assert.equal(host.document.adoptedStyleSheets.length, 1, label + " live sheet");
+  assert.equal(host.liveReplaceCount, 1, label + " one live publication");
+  assert.ok(host.scratchReplaceCount > 0, label + " detached scratch validation");
+  assert.ok(host.constructedSheetCount > 1, label + " scratch stays distinct from live sheet");
+};
+const assertDisposed = (host, label) => {
+  assert.equal(host.values.has(ownedVar), false, label + " effective value revoked");
+  assert.equal(host.document.adoptedStyleSheets.length, 0, label + " no residual sheet");
+};
+
+const appliedHost = runtimeDocument();
+const appliedTarget = appliedHost.document.documentElement;
+const applied = applyTheme(appliedTarget, resolved);
+assertPublished(appliedHost, "applyTheme");
+assert.equal(applyTheme(appliedTarget, resolved), applied);
+assertPublished(appliedHost, "identical applyTheme");
+applied.dispose();
+assertDisposed(appliedHost, "applyTheme dispose");
+applied.dispose();
+assertDisposed(appliedHost, "applyTheme repeated dispose");
+
+const watchedHost = runtimeDocument();
+const watchedTarget = watchedHost.document.documentElement;
 const watcher = watchTheme(watchedTarget, {
   colors: engine,
   theme: "light",
@@ -1087,11 +1235,16 @@ const watcher = watchTheme(watchedTarget, {
   win: {},
 });
 assert.equal(watcher.background(), background);
-assert.equal(typeof watchedTarget.values.get("--lab-token-7f3a"), "string");
+assertPublished(watchedHost, "watchTheme");
 watcher.refresh();
-watcher.stop();
+assertPublished(watchedHost, "identical watchTheme refresh");
+watcher.dispose();
+assertDisposed(watchedHost, "watchTheme dispose");
+watcher.dispose();
+assertDisposed(watchedHost, "watchTheme repeated dispose");
 
-const adaptedTarget = runtimeTarget();
+const adaptedHost = runtimeDocument();
+const adaptedTarget = adaptedHost.document.documentElement;
 const adaptive = adaptTheme(adaptedTarget, {
   colors: engine,
   theme: "light",
@@ -1100,9 +1253,14 @@ const adaptive = adaptTheme(adaptedTarget, {
   now: () => 0,
   win: {},
 });
+assertPublished(adaptedHost, "adaptTheme");
 adaptive.tick(0);
+assertPublished(adaptedHost, "identical adaptTheme tick");
 assert.equal(typeof adaptive.current()["--lab-token-7f3a"], "string");
-adaptive.stop();
+adaptive.dispose();
+assertDisposed(adaptedHost, "adaptTheme dispose");
+adaptive.dispose();
+assertDisposed(adaptedHost, "adaptTheme repeated dispose");
 
 const alpha = resolved.roles["token-7f3a"];
 assert.equal(alpha.kind, "translucent");
@@ -1195,7 +1353,7 @@ for (const key of [
 `;
 }
 
-function typeSmokeSource() {
+export function typeSmokeSource() {
   return String.raw`
 import init, {
   LabColors,
@@ -1210,21 +1368,28 @@ import init, {
   type MaterialRole,
   type NumericalCapabilityManifestV2,
   type NumericalIndeterminacyV1,
+  type AdaptController as RootAdaptController,
+  type ApplyThemeAttachment as RootApplyThemeAttachment,
+  type OutputBindingSet,
   type ResolvedTheme,
   type ThemeConfig,
   type TranslucentRole,
+  type WatchController as RootWatchController,
   type Wcag22AssessmentV1,
   type Wcag22CriterionV1,
 } from "@labpics/colors";
-import { applyTheme } from "@labpics/colors/apply-theme";
+import {
+  applyTheme,
+  type ApplyThemeAttachment as SubpathApplyThemeAttachment,
+} from "@labpics/colors/apply-theme";
 import {
   watchTheme,
-  type WatchController,
+  type WatchController as SubpathWatchController,
   type WatchThemeOptions,
 } from "@labpics/colors/watch-theme";
 import {
   adaptTheme,
-  type AdaptController,
+  type AdaptController as SubpathAdaptController,
   type AdaptThemeOptions,
 } from "@labpics/colors/adapt-theme";
 
@@ -1233,12 +1398,36 @@ const apply: typeof applyTheme = applyTheme;
 const watch: typeof watchTheme = watchTheme;
 const adapt: typeof adaptTheme = adaptTheme;
 type PublicSubpathTypes =
-  | WatchController
+  | SubpathApplyThemeAttachment
+  | SubpathWatchController
   | WatchThemeOptions
-  | AdaptController
+  | SubpathAdaptController
   | AdaptThemeOptions;
 declare const publicSubpathType: PublicSubpathTypes;
 void [apply, watch, adapt, publicSubpathType];
+declare const rootAttachment: RootApplyThemeAttachment;
+declare const subpathAttachment: SubpathApplyThemeAttachment;
+const attachmentFromRoot: SubpathApplyThemeAttachment = rootAttachment;
+const attachmentFromSubpath: RootApplyThemeAttachment = subpathAttachment;
+declare const rootWatchController: RootWatchController;
+declare const subpathWatchController: SubpathWatchController;
+const watchControllerFromRoot: SubpathWatchController = rootWatchController;
+const watchControllerFromSubpath: RootWatchController = subpathWatchController;
+declare const rootAdaptController: RootAdaptController;
+declare const subpathAdaptController: SubpathAdaptController;
+const adaptControllerFromRoot: SubpathAdaptController = rootAdaptController;
+const adaptControllerFromSubpath: RootAdaptController = subpathAdaptController;
+for (const disposable of [
+  attachmentFromRoot,
+  attachmentFromSubpath,
+  watchControllerFromRoot,
+  watchControllerFromSubpath,
+  adaptControllerFromRoot,
+  adaptControllerFromSubpath,
+]) {
+  disposable.dispose();
+  disposable[Symbol.dispose]?.();
+}
 declare const rootApi: typeof import("@labpics/colors");
 // @ts-expect-error low-level browser-shell colour math is not public API.
 rootApi.parseCssColor;
@@ -1254,6 +1443,14 @@ const removedStrict: AdaptThemeOptions = {
 void removedStrict;
 const fingerprint: string = engine.loadConfig("{}");
 const resolved: ResolvedTheme = engine.resolveTheme("#000000", "light");
+const outputBindings: OutputBindingSet = resolved.outputBindings;
+const firstOutputBinding: string | undefined = outputBindings[0];
+// @ts-expect-error OutputBindingSet is immutable at the consumer boundary.
+outputBindings.push("--lab-illegal");
+declare const documentElement: HTMLElement;
+const appliedAttachment: SubpathApplyThemeAttachment = applyTheme(documentElement, resolved);
+appliedAttachment.dispose();
+appliedAttachment[Symbol.dispose]?.();
 const capability: NumericalCapabilityManifestV2 = numericalCapabilityManifest();
 const wcagCriterion: Wcag22CriterionV1 = "sc-1.4.3-text-default";
 const wcagAssessment: Wcag22AssessmentV1 = evaluateWcag22(
@@ -1402,6 +1599,8 @@ void [
   initialise,
   fingerprint,
   resolved,
+  firstOutputBinding,
+  appliedAttachment,
   wcagAssessment,
   capability,
   config,

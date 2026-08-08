@@ -80,8 +80,12 @@ const colors = new LabColors();
 colors.loadConfig(JSON.stringify(dsConfig));   // конфиг дизайн-системы (см. квик-старт)
 
 const panel = document.querySelector(".panel") as HTMLElement;
-const watcher = watchTheme(panel, { colors, theme: "light" });
-// panel теперь несёт --lab-* для текущей опорной оценки фона
+const watcher = watchTheme(panel, {
+  colors,
+  theme: "light",
+  target: document.documentElement,
+});
+// panel наблюдается, а точный :root-target несёт --lab-*.
 
 watcher.setTheme("dark");   // переключить тему
 watcher.refresh();          // принудительная пересинхронизация
@@ -118,6 +122,7 @@ const adaptive = adaptTheme(surface, {
   colors,
   theme: "light",
   background: () => samples,
+  target: document.documentElement,
 });
 
 adaptive.start();           // запустить внутренний requestAnimationFrame-цикл
@@ -403,8 +408,11 @@ transitional solver-а.
 один constructed `CSSStyleSheet`; полный CSS сначала проходит scratch-проверку, затем
 live-sheet меняется одним `replaceSync`.
 
-Цель должна быть подключённым элементом в `Document` либо `ShadowRoot` с поддержкой
-constructed sheets. Перемещение в другой root или realm, отсоединение и внешняя
+Точная цель не выводится из cloneable-атрибута: это либо
+`document.documentElement` (`:root`), либо host собственного открытого
+`shadowRoot` (`:host`). Произвольный light-DOM элемент отклоняется до эффекта,
+поскольку CSS-селектор не способен доказуемо выразить его identity после
+`cloneNode(true)`. Перемещение в другой root или realm, отсоединение и внешняя
 подмена sink становятся типизированной stale-ошибкой. Inline-декларация для одного
 из `outputBindings` отклоняет публикацию до неё; несвязанные inline-переменные не
 изменяются. `dispose()` возвращённого вложения атомарно отзывает только его набор.
@@ -422,7 +430,7 @@ interface WatchThemeOptions {
   colors: LabColors;
   theme: ThemeName;
   background?: string | (() => string);  // явный фон (если автоматический невозможен)
-  target?: HTMLElement;                  // куда писать переменные (по умолчанию: element)
+  target?: HTMLElement;                  // точный :root/:host target (по умолчанию: element)
   canvas?: string;                       // явный непрозрачный canvas для прозрачного корня
   observe?: boolean;                     // авто-обновление при style/class в поддереве (по умолчанию true)
   onError?: (error: unknown) => void;     // ошибки автоматического observer-refresh
@@ -445,6 +453,9 @@ interface WatchController {
 трактуется как отсутствие `background`. Если поддерживаемая цепочка полностью
 прозрачна и `canvas` не объявлен, наблюдение имеет тип `Unknown`; белый цвет не
 подставляется.
+Наблюдаемый `element` может быть произвольным. Если он не является `:root` либо
+host собственного открытого ShadowRoot, `target` указывается явно; скрытого
+переноса output на document root нет.
 До захвата `MutationObserver` невалидный вход или initial resolve бросает
 синхронно и не создаёт долгоживущий ресурс. После захвата observer функция
 сначала возвращает контроллер-владелец. Если затем упал `observe`, первый CSS
@@ -475,7 +486,7 @@ interface AdaptThemeOptions {
   theme: ThemeName;
   background?: string | string[] | (() => string | string[]);
                                      // один hex или несколько образцов фона (наихудший учитывается)
-  target?: HTMLElement;              // куда писать переменные (по умолчанию: element)
+  target?: HTMLElement;              // точный :root/:host target (по умолчанию: element)
   canvas?: string;                   // явный непрозрачный canvas для прозрачного корня
   dropFraction?: number;             // запас контраста до пересчёта (по умолчанию 0.2)
   sustainMs?: number;                // минимальное время удержания нарушения (по умолчанию 120)
@@ -508,9 +519,11 @@ Glow-свидетельств и подготовка перехода обра�
 фазы записи в DOM сохраняет
 предыдущие CSS-переменные и `current()` без промежуточного кандидата.
 Это обещание относится к ошибкам resolve, recheck и проверки свидетельств до
-публикации. CSS output проходит scratch-проверку и публикуется одной заменой
-stylesheet; inline writer и rollback-путь отсутствуют. `stop()` сохраняет output,
-а `dispose()` атомарно отзывает только attachment контроллера.
+публикации. CSS output проходит scratch-проверку; успешный commit выполняет одну
+live-замену stylesheet. Если host нарушил postcondition после этой границы, sink
+восстанавливает и проверяет предыдущие bytes до сообщения об отказе. Inline
+writer отсутствует. `stop()` сохраняет output, а `dispose()` атомарно отзывает
+только attachment контроллера.
 
 ---
 

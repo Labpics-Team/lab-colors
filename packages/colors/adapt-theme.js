@@ -98,7 +98,9 @@ function segHex(seg, t) {
  * @property {() => void} stop   Stop the internal loop without discarding an
  *   незавершённый ease; последующий `start()`/`tick()` продолжит его по своим часам.
  * @property {() => void} dispose Stop observation and atomically revoke only
- *   this controller's output lease. Idempotent.
+ *   this controller's output lease. Idempotent and universally available; the
+ *   controller also exposes the same function as `Symbol.dispose` when the host
+ *   supports Explicit Resource Management.
  * @property {() => Record<string,string>} current  Canonical resolved targets;
  *   during an ease these differ from the values painted into the DOM.
  */
@@ -109,7 +111,7 @@ function segHex(seg, t) {
  * only for changed samples or pending controller state, and a sustained relative
  * drop starts a new resolve plus coordinate interpolation.
  *
- * @param {*} element
+ * @param {*} element Observation element; it may be any supported surface node.
  * @param {object} options
  * @param {{ resolveTheme: (bg:string,theme:string)=>any, recheckContrast:(bg:number,fgs:Uint32Array,theme:number)=>ArrayLike<number>, recheckContrastMulti?:(bgs:Uint32Array,fgs:Uint32Array,theme:number)=>ArrayLike<number>, themeHandle?:(theme:string)=>number, isStableGlowPointNoop?:(tint:string,bg:string)=>boolean }} options.colors
  * @param {string} options.theme
@@ -120,7 +122,8 @@ function segHex(seg, t) {
  *   returned metric, without inferring the field between them. Every declared
  *   sample must be a non-empty string; invalid explicit evidence is rejected
  *   without coercion or fallback.
- * @param {*} [options.target=element]  element to write vars onto
+ * @param {*} [options.target=element] Output target: either its document's
+ *   `documentElement` (`:root`) or the host of its own open `ShadowRoot` (`:host`).
  * @param {string} [options.canvas] Caller-declared opaque page canvas.
  * @param {number} [options.dropFraction=0.2]  surplus fraction lost before re-solve
  * @param {number} [options.sustainMs=120]  breach must persist this long
@@ -274,6 +277,7 @@ export function adaptTheme(element, options) {
   let hasPublished = false;
   let disposeRequested = false;
   let disposeQueued = false;
+  let disposeActive = false;
   let disposed = false;
   const beginOperation = () => {
     const owner = ++operationGeneration;
@@ -1412,44 +1416,54 @@ export function adaptTheme(element, options) {
   };
 
   const runDispose = () => {
-    if (disposed) return;
+    if (disposed || disposeActive) return;
+    disposeActive = true;
     disposeQueued = false;
     disposeRequested = true;
     const failures = [];
     try {
-      runStop(false);
-    } catch (error) {
-      failures.push(error);
-    }
-
-    let revoked = outputLease === null;
-    if (outputLease !== null) {
-      commitDepth++;
       try {
-        revoked = outputLease.dispose();
-        if (!revoked && outputLease.state !== "disposed") {
-          failures.push(new Error("adaptTheme: output lease disposal lost ownership"));
-        }
+        runStop(false);
       } catch (error) {
         failures.push(error);
-      } finally {
-        commitDepth--;
       }
-    }
 
-    if (revoked || outputLease?.state === "disposed") {
-      disposed = true;
-      hasPublished = false;
-      roles = [];
-      stableGlows = [];
-      baseVars = {};
-      easing = new Map();
-      recheckOccurrences = [];
-      breachSince = null;
-      lastKey = null;
-      pendingOperations.length = 0;
+      let outputRevoked = outputLease === null || outputLease.state === "disposed";
+      if (!outputRevoked) {
+        commitDepth++;
+        try {
+          const revoked = outputLease.dispose();
+          outputRevoked = revoked || outputLease.state === "disposed";
+          if (!outputRevoked) {
+            failures.push(new Error("adaptTheme: output lease disposal lost ownership"));
+          }
+        } catch (error) {
+          failures.push(error);
+          outputRevoked = outputLease.state === "disposed";
+        } finally {
+          commitDepth--;
+        }
+      }
+
+      // Revoking CSS and cancelling a scheduled callback are independent host
+      // resources. A transient cancellation failure retains its record and the
+      // terminal dispose intent; a later dispose retries that exact handle even
+      // though the output lease is already gone.
+      if (outputRevoked && pendingFrameCancellations.size === 0) {
+        disposed = true;
+        hasPublished = false;
+        roles = [];
+        stableGlows = [];
+        baseVars = {};
+        easing = new Map();
+        recheckOccurrences = [];
+        breachSince = null;
+        lastKey = null;
+        pendingOperations.length = 0;
+      }
+    } finally {
+      disposeActive = false;
     }
-    if (!disposed) disposeRequested = false;
     if (failures.length === 1) throw failures[0];
     if (failures.length > 1) {
       throw new AggregateError(failures, "adaptTheme: disposal failed");
@@ -1649,7 +1663,7 @@ export function adaptTheme(element, options) {
   };
 
   const dispose = () => {
-    if (disposed || disposeRequested || disposeQueued) return;
+    if (disposed || disposeActive || disposeQueued) return;
     if (commitDepth > 0) {
       pendingOperations.length = 0;
       pendingOperations.push({ kind: "dispose" });

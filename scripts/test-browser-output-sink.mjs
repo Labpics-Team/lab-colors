@@ -8,12 +8,12 @@ const PASS_RECEIPT = "LAB_COLORS_BROWSER_OUTPUT_SINK_PASS v1 checks=10";
 const EXPECTED_CHECKS = Object.freeze([
   "constructed-stylesheet-computed-values",
   "single-live-replacement",
-  "target-scope",
+  "exact-target-identity",
   "inline-preservation",
   "scratch-and-hostile-safety",
   "post-replace-drift-recovery",
   "detached-sheet-stale",
-  "moved-target-stale",
+  "disconnected-target-stale",
   "dispose",
   "no-inline-writer",
 ]);
@@ -302,6 +302,8 @@ async function stopProcess(child) {
 }
 
 async function runInBrowser(moduleUrl) {
+  const proofRoots = new Set([document]);
+
   function assert(condition, message) {
     if (!condition) throw new Error(`assertion failed: ${message}`);
   }
@@ -326,14 +328,6 @@ async function runInBrowser(moduleUrl) {
     return error;
   }
 
-  function markerName(target) {
-    const names = target.getAttributeNames().filter((name) =>
-      name.startsWith("data-lab-colors-output-sink-")
-    );
-    equal(names.length, 1, "target has one sink marker");
-    return names[0];
-  }
-
   function sheetText(sheet) {
     return Array.from(sheet.cssRules, (rule) => rule.cssText).join("\n");
   }
@@ -354,13 +348,29 @@ async function runInBrowser(moduleUrl) {
     return target;
   }
 
+  function appendShadowHost(id) {
+    const target = appendTarget(id);
+    const root = target.attachShadow({ mode: "open" });
+    proofRoots.add(root);
+    return target;
+  }
+
+  function outputRoot(target) {
+    if (target === document.documentElement) return document;
+    const root = target.shadowRoot;
+    assert(root instanceof ShadowRoot && root.mode === "open",
+      "non-document output target has its own open ShadowRoot");
+    return root;
+  }
+
   function acquireWithSheet(
     acquireOutputLease,
     target,
     bindings,
     context,
-    root = target.getRootNode(),
+    root = outputRoot(target),
   ) {
+    proofRoots.add(root);
     const before = new Set(root.adoptedStyleSheets);
     const lease = acquireOutputLease(target, bindings, context);
     const added = root.adoptedStyleSheets.filter((sheet) => !before.has(sheet));
@@ -437,7 +447,6 @@ async function runInBrowser(moduleUrl) {
   const monitoredTargets = new WeakSet();
   let inlineWrites = 0;
   let liveSequentialWrites = 0;
-  let afterLiveReplace = null;
   const recordInlineMutations = (records) => {
     for (const record of records) {
       if (monitoredTargets.has(record.target)) inlineWrites += 1;
@@ -457,14 +466,15 @@ async function runInBrowser(moduleUrl) {
   const flushInlineMutations = () => {
     recordInlineMutations(inlineMutationObserver.takeRecords());
   };
-  const isLiveSheet = (sheet) => document.adoptedStyleSheets.includes(sheet);
-  const isLiveRule = (candidate) => document.adoptedStyleSheets.some((sheet) =>
+  const adoptedSheets = () => [...proofRoots].flatMap((root) => root.adoptedStyleSheets);
+  const isLiveSheet = (sheet) => adoptedSheets().includes(sheet);
+  const isLiveRule = (candidate) => adoptedSheets().some((sheet) =>
     Array.from(sheet.cssRules).includes(candidate)
   );
-  const isLiveDeclaration = (candidate) => document.adoptedStyleSheets.some((sheet) =>
+  const isLiveDeclaration = (candidate) => adoptedSheets().some((sheet) =>
     Array.from(sheet.cssRules).some((rule) => rule.style === candidate)
   );
-  const isLiveStyleMap = (candidate) => document.adoptedStyleSheets.some((sheet) =>
+  const isLiveStyleMap = (candidate) => adoptedSheets().some((sheet) =>
     Array.from(sheet.cssRules).some((rule) => rule.styleMap === candidate)
   );
   Object.defineProperty(CSSStyleSheet.prototype, "replaceSync", {
@@ -473,11 +483,6 @@ async function runInBrowser(moduleUrl) {
       const live = isLiveSheet(this);
       const result = replaceDescriptor.value.call(this, text);
       replaceEvents.push({ live, text, rules: this.cssRules.length });
-      if (live && afterLiveReplace !== null) {
-        const callback = afterLiveReplace;
-        afterLiveReplace = null;
-        callback(this, text);
-      }
       return result;
     },
   });
@@ -574,11 +579,13 @@ async function runInBrowser(moduleUrl) {
     );
     liveSequentialWrites = 0;
 
-    const targetA = appendTarget("target-a");
-    const targetB = appendTarget("target-b");
+    const targetA = document.documentElement;
+    const targetB = appendShadowHost("target-b");
     setDescriptor.value.call(targetA.style, "--lab-consumer", "consumer-owned");
     monitorTarget(targetA);
     monitorTarget(targetB);
+    const targetAAttributes = JSON.stringify(targetA.getAttributeNames().sort());
+    const targetBAttributes = JSON.stringify(targetB.getAttributeNames().sort());
 
     const first = acquireWithSheet(
       acquireOutputLease,
@@ -588,7 +595,7 @@ async function runInBrowser(moduleUrl) {
     );
     const disjoint = acquireOutputLease(targetA, ["--lab-c"], "browser/target-a-disjoint");
     equal(document.adoptedStyleSheets.filter((sheet) => sheet === first.sheet).length, 1,
-      "disjoint leases share one target sheet");
+      "disjoint document-root leases share one target sheet");
 
     let liveBefore = replaceEvents.filter((event) => event.live).length;
     equal(first.lease.publish({ "--lab-a": "#111111" }), true, "first publication commits");
@@ -610,8 +617,7 @@ async function runInBrowser(moduleUrl) {
     );
     equal(first.sheet.cssRules.length, 1, "live sink contains one complete target rule");
     const targetARule = first.sheet.cssRules[0];
-    const targetAMarker = markerName(targetA);
-    equal(targetARule.selectorText, `[${targetAMarker}]`, "live rule is target-scoped");
+    equal(targetARule.selectorText, ":root", "document root uses the exact :root selector");
     assert(
       JSON.stringify(styleNames(targetARule.style)) ===
         JSON.stringify(["--lab-a", "--lab-c"]),
@@ -624,13 +630,80 @@ async function runInBrowser(moduleUrl) {
     const second = acquireWithSheet(
       acquireOutputLease,
       targetB,
-      ["--lab-a"],
+      ["--lab-shadow-owned"],
       "browser/target-b",
     );
-    equal(second.lease.publish({ "--lab-a": "#222222" }), true, "second target publication commits");
+    equal(second.lease.publish({ "--lab-shadow-owned": "#222222" }), true,
+      "open ShadowRoot publication commits");
+    equal(second.sheet.cssRules.length, 1, "open ShadowRoot sink contains one complete rule");
+    equal(second.sheet.cssRules[0].selectorText, ":host",
+      "open ShadowRoot uses the exact :host selector");
     equal(computed(targetA, "--lab-a"), "#111111", "target A keeps its scoped value");
-    equal(computed(targetB, "--lab-a"), "#222222", "target B gets its scoped value");
-    mark("target-scope");
+    equal(computed(targetB, "--lab-shadow-owned"), "#222222",
+      "shadow host gets its own scoped value");
+    equal(JSON.stringify(targetA.getAttributeNames().sort()), targetAAttributes,
+      "document root acquisition does not mutate target identity attributes");
+    equal(JSON.stringify(targetB.getAttributeNames().sort()), targetBAttributes,
+      "shadow host acquisition does not mutate target identity attributes");
+
+    const arbitraryChild = appendTarget("arbitrary-light-dom-child");
+    const documentSheetsBeforeChild = document.adoptedStyleSheets.length;
+    expectCode(
+      () => acquireOutputLease(
+        arbitraryChild,
+        ["--lab-arbitrary-child"],
+        "browser/arbitrary-light-dom-child",
+      ),
+      "OUTPUT_TARGET_CAPABILITY",
+      "arbitrary connected light-DOM child is outside the output identity boundary",
+    );
+    equal(document.adoptedStyleSheets.length, documentSheetsBeforeChild,
+      "rejected light-DOM child cannot adopt a stylesheet");
+
+    const shadowDescendant = document.createElement("span");
+    targetB.shadowRoot.append(shadowDescendant);
+    expectCode(
+      () => acquireOutputLease(
+        shadowDescendant,
+        ["--lab-shadow-descendant"],
+        "browser/arbitrary-shadow-descendant",
+      ),
+      "OUTPUT_TARGET_CAPABILITY",
+      "arbitrary ShadowRoot descendant cannot impersonate its host identity",
+    );
+    equal(targetB.shadowRoot.adoptedStyleSheets.filter((sheet) => sheet === second.sheet).length, 1,
+      "rejected ShadowRoot descendant cannot adopt another stylesheet");
+
+    const closedHost = appendTarget("closed-shadow-host");
+    const closedRoot = closedHost.attachShadow({ mode: "closed" });
+    expectCode(
+      () => acquireOutputLease(
+        closedHost,
+        ["--lab-closed-shadow"],
+        "browser/closed-shadow-host",
+      ),
+      "OUTPUT_TARGET_CAPABILITY",
+      "closed ShadowRoot is outside the explicit output identity boundary",
+    );
+    equal(closedRoot.adoptedStyleSheets.length, 0,
+      "rejected closed ShadowRoot cannot adopt an output stylesheet");
+
+    const targetBClone = targetB.cloneNode(true);
+    targetBClone.id = "target-b-clone";
+    document.body.append(targetBClone);
+    equal(targetBClone.shadowRoot, null, "cloneNode(true) does not clone the owned ShadowRoot");
+    equal(computed(targetBClone, "--lab-shadow-owned"), "",
+      "cloneNode(true) cannot receive the shadow host owned property");
+    expectCode(
+      () => acquireOutputLease(
+        targetBClone,
+        ["--lab-shadow-owned"],
+        "browser/target-b-clone",
+      ),
+      "OUTPUT_TARGET_CAPABILITY",
+      "clone without its own open ShadowRoot is outside the output identity boundary",
+    );
+    mark("exact-target-identity");
 
     equal(
       targetA.style.getPropertyValue("--lab-consumer").trim(),
@@ -644,87 +717,44 @@ async function runInBrowser(moduleUrl) {
     );
     mark("inline-preservation");
 
-    const invalidTarget = appendTarget("invalid-binding");
+    const invalidTarget = appendShadowHost("invalid-binding");
     invalidTarget.style.color = "rgb(4, 5, 6)";
     monitorTarget(invalidTarget);
-    const invalidSheets = document.adoptedStyleSheets.length;
+    const invalidRoot = invalidTarget.shadowRoot;
+    const invalidSheets = invalidRoot.adoptedStyleSheets.length;
     const invalidLiveBefore = replaceEvents.filter((event) => event.live).length;
     const suspiciousBinding = "--lab-injected; color: red";
-    let suspiciousError;
-    let suspiciousLease;
-    let suspiciousSheet;
-    try {
-      const acquired = acquireWithSheet(
-        acquireOutputLease,
+    expectCode(
+      () => acquireOutputLease(
         invalidTarget,
         [suspiciousBinding],
         "browser/invalid-binding",
-      );
-      suspiciousLease = acquired.lease;
-      suspiciousSheet = acquired.sheet;
-    } catch (error) {
-      suspiciousError = error;
-    }
+      ),
+      "OUTPUT_BINDING_INVALID",
+      "noncanonical binding grammar fails closed",
+    );
     equal(replaceEvents.filter((event) => event.live).length - invalidLiveBefore, 0,
       "binding admission performs no live replacement before commit");
-    if (suspiciousError) {
-      equal(suspiciousError.code, "OUTPUT_BINDING_INVALID",
-        "scratch binding rejection is typed");
-      equal(document.adoptedStyleSheets.length, invalidSheets,
-        "rejected binding cannot attach a live sheet");
-      equal(
-        invalidTarget.getAttributeNames().filter((name) =>
-          name.startsWith("data-lab-colors-output-sink-")
-        ).length,
-        0,
-        "rejected binding cannot install a target marker",
-      );
-    } else {
-      const suspiciousMarker = markerName(invalidTarget);
-      liveBefore = replaceEvents.filter((event) => event.live).length;
-      equal(
-        suspiciousLease.publish({ [suspiciousBinding]: "safe-binding-value" }),
-        true,
-        "CSSOM-admitted suspicious binding publishes explicitly",
-      );
-      equal(replaceEvents.filter((event) => event.live).length - liveBefore, 1,
-        "CSSOM-admitted suspicious binding performs one live replacement");
-      equal(suspiciousSheet.cssRules.length, 1,
-        "CSSOM-admitted suspicious binding cannot create another rule");
-      const suspiciousRule = suspiciousSheet.cssRules[0];
-      equal(suspiciousRule.style.length, 1,
-        "CSSOM-admitted suspicious binding cannot create another declaration");
-      equal(suspiciousRule.style.item(0), suspiciousBinding,
-        "CSSOM-admitted suspicious binding name round-trips exactly");
-      equal(suspiciousRule.style.getPropertyValue(suspiciousBinding), "safe-binding-value",
-        "CSSOM-admitted suspicious binding value round-trips exactly");
-      equal(suspiciousRule.style.getPropertyValue("color"), "",
-        "CSSOM-admitted suspicious binding cannot inject color");
-      equal(getComputedStyle(invalidTarget).color, "rgb(4, 5, 6)",
-        "CSSOM-admitted suspicious binding leaves element color untouched");
-      equal(suspiciousLease.dispose(), true,
-        "CSSOM-admitted suspicious binding lease disposes cleanly");
-      assert(!document.adoptedStyleSheets.includes(suspiciousSheet),
-        "suspicious binding disposal detaches its sheet");
-      assert(!invalidTarget.hasAttribute(suspiciousMarker),
-        "suspicious binding disposal removes its marker");
-    }
+    equal(invalidRoot.adoptedStyleSheets.length, invalidSheets,
+      "rejected binding cannot attach a live sheet");
+    equal(getComputedStyle(invalidTarget).color, "rgb(4, 5, 6)",
+      "rejected binding leaves the host presentation untouched");
 
-    const inlineConflict = appendTarget("inline-conflict");
+    const inlineConflict = appendShadowHost("inline-conflict");
     setDescriptor.value.call(inlineConflict.style, "--lab-owned", "inline-owner");
     monitorTarget(inlineConflict);
-    const conflictSheets = document.adoptedStyleSheets.length;
+    const conflictSheets = inlineConflict.shadowRoot.adoptedStyleSheets.length;
     expectCode(
       () => acquireOutputLease(inlineConflict, ["--lab-owned"], "browser/inline-conflict"),
       "OUTPUT_INLINE_BINDING_CONFLICT",
       "owned inline declaration fails closed",
     );
-    equal(document.adoptedStyleSheets.length, conflictSheets,
+    equal(inlineConflict.shadowRoot.adoptedStyleSheets.length, conflictSheets,
       "inline conflict cannot attach a live sheet");
     equal(inlineConflict.style.getPropertyValue("--lab-owned").trim(), "inline-owner",
       "inline conflict leaves its declaration untouched");
 
-    const hostileTarget = appendTarget("hostile-value");
+    const hostileTarget = appendShadowHost("hostile-value");
     hostileTarget.style.color = "rgb(1, 2, 3)";
     monitorTarget(hostileTarget);
     const hostile = acquireWithSheet(
@@ -773,138 +803,69 @@ async function runInBrowser(moduleUrl) {
     }
     mark("scratch-and-hostile-safety");
 
-    const inlineRaceTarget = appendTarget("post-replace-inline-race");
-    const inlineRace = acquireWithSheet(
+    const driftTarget = appendShadowHost("post-replace-drift");
+    monitorTarget(driftTarget);
+    const drift = acquireWithSheet(
       acquireOutputLease,
-      inlineRaceTarget,
-      ["--lab-inline-race"],
-      "browser/post-replace-inline-race",
+      driftTarget,
+      ["--lab-post-replace-drift"],
+      "browser/post-replace-drift",
     );
-    const inlineRaceStamp = inlineRace.lease.stamp;
-    afterLiveReplace = (sheet) => {
-      equal(sheet, inlineRace.sheet, "inline race mutates the intended live sheet boundary");
-      setDescriptor.value.call(inlineRaceTarget.style, "--lab-inline-race", "foreign-inline");
-    };
-    const inlineRaceError = expectCode(
-      () => inlineRace.lease.publish({ "--lab-inline-race": "owned-sheet" }),
-      "OUTPUT_ATOMICITY_VIOLATION",
-      "owned inline mutation during live replacement fails closed",
+    equal(drift.lease.publish({ "--lab-post-replace-drift": "prior-live-value" }), true,
+      "post-replace drift baseline commits");
+    const driftBefore = sheetText(drift.sheet);
+    const driftStamp = drift.lease.stamp;
+    const instrumentedReplaceDescriptor = Object.getOwnPropertyDescriptor(
+      CSSStyleSheet.prototype,
+      "replaceSync",
     );
-    equal(inlineRaceError.cause?.code, "OUTPUT_INLINE_BINDING_CONFLICT",
-      "inline replacement race preserves its typed host-drift cause");
-    equal(inlineRace.lease.stamp, inlineRaceStamp,
-      "inline replacement race cannot advance the logical stamp");
-    equal(inlineRace.lease.state, "active",
-      "inline replacement race keeps a caller-reachable cleanup lease");
-    equal(inlineRace.lease.dispose(), true,
-      "poisoned inline replacement race remains disposable");
-    equal(inlineRace.lease.state, "disposed", "inline race lease is released");
-    assert(!document.adoptedStyleSheets.includes(inlineRace.sheet),
-      "inline race cleanup detaches the poisoned live sheet");
-    equal(inlineRaceTarget.style.getPropertyValue("--lab-inline-race").trim(), "foreign-inline",
-      "inline race cleanup preserves the foreign inline declaration");
-    removeDescriptor.value.call(inlineRaceTarget.style, "--lab-inline-race");
-    const inlineRaceRetry = acquireWithSheet(
-      acquireOutputLease,
-      inlineRaceTarget,
-      ["--lab-inline-race"],
-      "browser/post-replace-inline-race-retry",
+    assert(instrumentedReplaceDescriptor?.value,
+      "instrumented replaceSync remains callable before fault injection");
+    let injectPostReplaceDrift = true;
+    Object.defineProperty(CSSStyleSheet.prototype, "replaceSync", {
+      ...instrumentedReplaceDescriptor,
+      value(text) {
+        const result = instrumentedReplaceDescriptor.value.call(this, text);
+        if (this === drift.sheet && injectPostReplaceDrift) {
+          injectPostReplaceDrift = false;
+          replaceDescriptor.value.call(
+            this,
+            ":host { --lab-post-replace-drift: injected-host-drift; }",
+          );
+          throw new Error("injected post-replace native stylesheet drift");
+        }
+        return result;
+      },
+    });
+    try {
+      expectCode(
+        () => drift.lease.publish({ "--lab-post-replace-drift": "candidate-value" }),
+        "OUTPUT_ATOMICITY_VIOLATION",
+        "post-replace native drift fails closed after rollback",
+      );
+    } finally {
+      Object.defineProperty(
+        CSSStyleSheet.prototype,
+        "replaceSync",
+        instrumentedReplaceDescriptor,
+      );
+    }
+    equal(
+      Object.getOwnPropertyDescriptor(CSSStyleSheet.prototype, "replaceSync")?.value,
+      instrumentedReplaceDescriptor.value,
+      "temporary replaceSync fault wrapper is restored exactly",
     );
-    equal(inlineRaceRetry.lease.publish({ "--lab-inline-race": "recovered" }), true,
-      "inline race target can be reacquired after cleanup");
-    equal(inlineRaceRetry.lease.dispose(), true, "inline race retry disposes");
-
-    const markerRaceTarget = appendTarget("post-replace-marker-race");
-    const markerRace = acquireWithSheet(
-      acquireOutputLease,
-      markerRaceTarget,
-      ["--lab-marker-race"],
-      "browser/post-replace-marker-race",
-    );
-    const markerRaceName = markerName(markerRaceTarget);
-    const markerClone = appendTarget("post-replace-marker-clone");
-    const markerRaceStamp = markerRace.lease.stamp;
-    afterLiveReplace = (sheet) => {
-      equal(sheet, markerRace.sheet, "marker race mutates the intended live sheet boundary");
-      elementSetAttributeDescriptor.value.call(markerClone, markerRaceName, "");
-    };
-    const markerRaceError = expectCode(
-      () => markerRace.lease.publish({ "--lab-marker-race": "owned-sheet" }),
-      "OUTPUT_ATOMICITY_VIOLATION",
-      "marker duplication during live replacement fails closed",
-    );
-    equal(markerRaceError.cause?.code, "OUTPUT_TARGET_STALE",
-      "marker replacement race preserves its typed host-drift cause");
-    equal(markerRace.lease.stamp, markerRaceStamp,
-      "marker replacement race cannot advance the logical stamp");
-    equal(markerRace.lease.state, "active",
-      "marker replacement race keeps a caller-reachable cleanup lease");
-    equal(markerRace.lease.dispose(), true,
-      "poisoned marker replacement race remains disposable");
-    assert(!document.adoptedStyleSheets.includes(markerRace.sheet),
-      "marker race cleanup detaches the poisoned live sheet");
-    assert(!markerRaceTarget.hasAttribute(markerRaceName),
-      "marker race cleanup removes only the owned target marker");
-    assert(markerClone.hasAttribute(markerRaceName),
-      "marker race cleanup does not mutate the foreign clone");
-    elementRemoveAttributeDescriptor.value.call(markerClone, markerRaceName);
-    markerClone.remove();
-    const markerRaceRetry = acquireWithSheet(
-      acquireOutputLease,
-      markerRaceTarget,
-      ["--lab-marker-race"],
-      "browser/post-replace-marker-race-retry",
-    );
-    equal(markerRaceRetry.lease.publish({ "--lab-marker-race": "recovered" }), true,
-      "marker race target can be reacquired after hostile marker cleanup");
-    equal(markerRaceRetry.lease.dispose(), true, "marker race retry disposes");
-
-    const rootRaceTarget = appendTarget("post-replace-root-race");
-    const rootRace = acquireWithSheet(
-      acquireOutputLease,
-      rootRaceTarget,
-      ["--lab-root-race"],
-      "browser/post-replace-root-race",
-    );
-    const rootRaceStamp = rootRace.lease.stamp;
-    const rootRaceHost = appendTarget("post-replace-root-host");
-    const rootRaceShadow = rootRaceHost.attachShadow({ mode: "open" });
-    afterLiveReplace = (sheet) => {
-      equal(sheet, rootRace.sheet, "root race mutates the intended live sheet boundary");
-      rootRaceShadow.append(rootRaceTarget);
-    };
-    const rootRaceError = expectCode(
-      () => rootRace.lease.publish({ "--lab-root-race": "owned-sheet" }),
-      "OUTPUT_ATOMICITY_VIOLATION",
-      "root move during live replacement fails closed",
-    );
-    equal(rootRaceError.cause?.code, "OUTPUT_TARGET_STALE",
-      "root replacement race preserves its typed host-drift cause");
-    equal(rootRace.lease.stamp, rootRaceStamp,
-      "root replacement race cannot advance the logical stamp");
-    equal(rootRace.lease.state, "active",
-      "root replacement race keeps a caller-reachable cleanup lease");
-    equal(rootRace.lease.dispose(), true,
-      "poisoned cross-root replacement race remains disposable");
-    assert(!document.adoptedStyleSheets.includes(rootRace.sheet),
-      "cross-root race cleanup detaches the old-root sheet");
-    const rootRaceRetry = acquireWithSheet(
-      acquireOutputLease,
-      rootRaceTarget,
-      ["--lab-root-race"],
-      "browser/post-replace-root-race-retry",
-      rootRaceShadow,
-    );
-    equal(rootRaceRetry.lease.publish({ "--lab-root-race": "recovered" }), true,
-      "cross-root race target can be reacquired in its new ShadowRoot");
-    equal(computed(rootRaceTarget, "--lab-root-race"), "recovered",
-      "reacquired ShadowRoot sheet reaches computed style");
-    equal(rootRaceRetry.lease.dispose(), true, "cross-root race retry disposes");
-    assert(!rootRaceShadow.adoptedStyleSheets.includes(rootRaceRetry.sheet),
-      "cross-root retry cleanup detaches the ShadowRoot sheet");
+    equal(sheetText(drift.sheet), driftBefore,
+      "post-replace drift restores prior live bytes exactly");
+    equal(drift.lease.stamp, driftStamp,
+      "post-replace drift leaves the logical stamp unchanged");
+    equal(drift.lease.state, "active",
+      "post-replace drift keeps the cleanup lease reachable");
+    equal(computed(driftTarget, "--lab-post-replace-drift"), "prior-live-value",
+      "post-replace drift leaves the prior computed value effective");
     mark("post-replace-drift-recovery");
 
-    const detachedTarget = appendTarget("detached-sheet");
+    const detachedTarget = appendShadowHost("detached-sheet");
     monitorTarget(detachedTarget);
     const detached = acquireWithSheet(
       acquireOutputLease,
@@ -915,7 +876,8 @@ async function runInBrowser(moduleUrl) {
     detached.lease.publish({ "--lab-detached": "before-detach" });
     const detachedText = sheetText(detached.sheet);
     const detachedStamp = detached.lease.stamp;
-    document.adoptedStyleSheets = document.adoptedStyleSheets.filter(
+    const detachedRoot = detachedTarget.shadowRoot;
+    detachedRoot.adoptedStyleSheets = detachedRoot.adoptedStyleSheets.filter(
       (sheet) => sheet !== detached.sheet,
     );
     liveBefore = replaceEvents.filter((event) => event.live).length;
@@ -933,33 +895,35 @@ async function runInBrowser(moduleUrl) {
     equal(detached.lease.state, "disposed", "detached stale lease is released");
     mark("detached-sheet-stale");
 
-    const movedTarget = appendTarget("moved-target");
-    monitorTarget(movedTarget);
-    const moved = acquireWithSheet(
+    const disconnectedTarget = appendShadowHost("disconnected-target");
+    monitorTarget(disconnectedTarget);
+    const disconnected = acquireWithSheet(
       acquireOutputLease,
-      movedTarget,
-      ["--lab-moved"],
-      "browser/moved-target",
+      disconnectedTarget,
+      ["--lab-disconnected"],
+      "browser/disconnected-target",
     );
-    moved.lease.publish({ "--lab-moved": "before-move" });
-    const movedText = sheetText(moved.sheet);
-    const movedStamp = moved.lease.stamp;
-    const shadowHost = appendTarget("shadow-host");
-    shadowHost.attachShadow({ mode: "open" }).append(movedTarget);
+    disconnected.lease.publish({ "--lab-disconnected": "before-disconnect" });
+    const disconnectedText = sheetText(disconnected.sheet);
+    const disconnectedStamp = disconnected.lease.stamp;
+    disconnectedTarget.remove();
     liveBefore = replaceEvents.filter((event) => event.live).length;
     expectCode(
-      () => moved.lease.publish({ "--lab-moved": "after-move" }),
+      () => disconnected.lease.publish({ "--lab-disconnected": "after-disconnect" }),
       "OUTPUT_TARGET_STALE",
-      "root move fails closed",
+      "disconnected exact output target fails closed",
     );
-    equal(moved.lease.stamp, movedStamp, "move failure leaves stamp unchanged");
-    equal(sheetText(moved.sheet), movedText, "move failure leaves sheet bytes unchanged");
+    equal(disconnected.lease.stamp, disconnectedStamp,
+      "disconnect failure leaves stamp unchanged");
+    equal(sheetText(disconnected.sheet), disconnectedText,
+      "disconnect failure leaves sheet bytes unchanged");
     equal(replaceEvents.filter((event) => event.live).length - liveBefore, 0,
-      "move failure performs no live replacement");
-    equal(moved.lease.dispose(), true, "moved stale lease remains explicitly revocable");
-    assert(!document.adoptedStyleSheets.includes(moved.sheet),
-      "moved stale cleanup detaches the old-root sheet");
-    mark("moved-target-stale");
+      "disconnect failure performs no live replacement");
+    equal(disconnected.lease.dispose(), true,
+      "disconnected stale lease remains explicitly revocable");
+    assert(!disconnectedTarget.shadowRoot.adoptedStyleSheets.includes(disconnected.sheet),
+      "disconnected stale cleanup detaches its own ShadowRoot sheet");
+    mark("disconnected-target-stale");
 
     liveBefore = replaceEvents.filter((event) => event.live).length;
     equal(first.lease.dispose(), true, "dispose commits");
@@ -979,8 +943,8 @@ async function runInBrowser(moduleUrl) {
       "last lease disposal performs one empty live replacement");
     assert(!document.adoptedStyleSheets.includes(first.sheet),
       "last lease disposal detaches the dormant constructed sheet");
-    assert(!targetA.hasAttribute(targetAMarker),
-      "last lease disposal removes the target marker");
+    equal(JSON.stringify(targetA.getAttributeNames().sort()), targetAAttributes,
+      "last lease disposal preserves document-root identity attributes");
     equal(first.sheet.cssRules.length, 0,
       "last lease disposal leaves the detached sheet empty");
     equal(sheetText(first.sheet), "",
@@ -989,7 +953,14 @@ async function runInBrowser(moduleUrl) {
     equal(computed(targetA, "--lab-consumer"), "consumer-owned",
       "last lease disposal preserves nonbinding inline state");
     equal(second.lease.dispose(), true, "second target lease disposes cleanly");
+    assert(!targetB.shadowRoot.adoptedStyleSheets.includes(second.sheet),
+      "shadow host disposal detaches only its own root sheet");
+    equal(computed(targetBClone, "--lab-shadow-owned"), "",
+      "shadow host disposal cannot expose owned state to its clone");
     equal(hostile.lease.dispose(), true, "hostile-value lease disposes cleanly");
+    equal(drift.lease.dispose(), true, "post-replace drift lease disposes cleanly");
+    equal(computed(driftTarget, "--lab-post-replace-drift"), "",
+      "post-replace drift disposal removes the restored prior value");
     mark("dispose");
 
     equal(liveSequentialWrites, 0,

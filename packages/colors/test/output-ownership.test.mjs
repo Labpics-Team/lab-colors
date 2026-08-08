@@ -97,9 +97,8 @@ function outputHost({ inline = [], consumerSheetText = null } = {}) {
     const root = {
       nodeType: 9,
       defaultView: win,
-      querySelectorAll(selector) {
-        const match = /^\[([^\]]+)\]$/u.exec(selector);
-        return match && element?.hasAttribute(match[1]) ? [element] : [];
+      querySelectorAll() {
+        throw new Error("identity-native sink must not scan the root");
       },
       get adoptedStyleSheets() {
         return adopted;
@@ -119,13 +118,15 @@ function outputHost({ inline = [], consumerSheetText = null } = {}) {
     isConnected: true,
     ownerDocument: root,
     getRootNode: () => root,
-    hasAttribute: (name) => attributes.has(name),
-    getAttribute: (name) => attributes.get(name) ?? null,
-    setAttribute(name, value) {
-      attributes.set(name, String(value));
+    hasAttribute() {
+      throw new Error("identity-native sink must not read marker attributes");
     },
-    removeAttribute(name) {
-      attributes.delete(name);
+    getAttribute: (name) => attributes.get(name) ?? null,
+    setAttribute() {
+      throw new Error("identity-native sink must not write marker attributes");
+    },
+    removeAttribute() {
+      throw new Error("identity-native sink must not remove marker attributes");
     },
     style: {
       get length() {
@@ -143,6 +144,7 @@ function outputHost({ inline = [], consumerSheetText = null } = {}) {
       },
     },
   };
+  root.documentElement = element;
 
   let consumerSheet = null;
   if (consumerSheetText !== null) {
@@ -184,6 +186,7 @@ function outputHost({ inline = [], consumerSheetText = null } = {}) {
     },
     moveToFreshDocument() {
       root = makeRoot();
+      root.documentElement = element;
       element.ownerDocument = root;
       element.isConnected = true;
       return root;

@@ -16,7 +16,10 @@ export interface WatchThemeOptions {
    * invalid explicit evidence is rejected instead of being reinterpreted.
    */
   background?: string | (() => string);
-  /** Element to write the `--lab-*` variables onto. Defaults to the watched element. */
+  /**
+   * Exact output target. It must be its document's `documentElement`, or own an
+   * open `shadowRoot`; defaults to the watched element without implicit rehoming.
+   */
   target?: HTMLElement;
   /**
    * Caller-declared opaque page canvas used only when the supported ancestor
@@ -57,7 +60,8 @@ export interface WatchController {
   stop(): void;
   /** Stop and atomically revoke only this attachment's output bindings. */
   dispose(): void;
-  [Symbol.dispose](): void;
+  /** Explicit-resource-management alias when the host defines `Symbol.dispose`. */
+  [Symbol.dispose]?(): void;
 }
 
 /**
@@ -65,6 +69,8 @@ export interface WatchController {
  * package-private strict computed-CSS `Point | Unknown` observation gate.
  * Unsupported colours/effects, a translucent root without `canvas`, cycles and
  * depth exhaustion never become an invented hex and never call the resolver.
+ * The watched element may be arbitrary, but the selected output target must be
+ * its document's `documentElement` or the host of its own open `shadowRoot`.
  */
 export declare function watchTheme(
   element: HTMLElement,

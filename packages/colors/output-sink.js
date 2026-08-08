@@ -1,13 +1,10 @@
-// Internal atomic output boundary. A lease owns an explicit, immutable set of
-// custom properties; the live CSSStyleSheet is shared only by leases attached
-// to the same element.
+// Internal atomic output boundary. A target owns one immutable authority and
+// one live constructed stylesheet; mutable transaction state stays in closure.
 
-const TARGET_STATE = Symbol.for("@labpics/colors/output-sink/target-state/v1");
-const ROOT_STATE = Symbol.for("@labpics/colors/output-sink/root-state/v1");
-const ACQUISITION_STATE = Symbol.for("@labpics/colors/output-sink/acquisition-state/v1");
-const PROTOCOL = "@labpics/colors/output-sink/v1";
-const MARKER_PREFIX = "data-lab-colors-output-sink-";
-const VALIDATION_SELECTOR = `[${MARKER_PREFIX}validation]`;
+const TARGET_STATE = Symbol.for("@labpics/colors/output-sink/target-state/v2");
+const ACQUISITION_STATE = Symbol.for("@labpics/colors/output-sink/acquisition-state/v2");
+const PROTOCOL = "@labpics/colors/output-sink/v2";
+const VALID_BINDING = /^--[a-z0-9-]+$/u;
 const VALIDATION_VALUE = "__labcolors_validation__";
 const ALWAYS_OWNS = () => true;
 
@@ -106,53 +103,58 @@ function compareStrings(left, right) {
   return left < right ? -1 : left > right ? 1 : 0;
 }
 
-function acquisitionTargets(target, context) {
-  const descriptor = Object.getOwnPropertyDescriptor(target, ACQUISITION_STATE);
-  if (descriptor) {
-    const value = descriptor.value;
-    let compatible = "value" in descriptor && value?.protocol === PROTOCOL;
-    if (compatible) {
-      try {
-        WeakSet.prototype.has.call(value.targets, target);
-      } catch {
-        compatible = false;
-      }
-    }
-    if (!compatible) {
-      throw new OutputTargetCapabilityError(
-        context,
-        "target has an incompatible output-sink acquisition registry",
-      );
-    }
-    return value.targets;
-  }
-
-  const targets = new WeakSet();
-  const value = Object.freeze({ protocol: PROTOCOL, targets });
-  try {
-    Object.defineProperty(target, ACQUISITION_STATE, {
-      value,
-      configurable: false,
-      enumerable: false,
-      writable: false,
-    });
-  } catch (cause) {
-    throw new OutputTargetCapabilityError(
-      context,
-      "target cannot host the shared output-sink acquisition registry",
-      { cause },
-    );
-  }
-  return targets;
+function aggregate(label, causes) {
+  const present = causes.filter((cause) => cause !== null && cause !== undefined);
+  return present.length === 1 ? present[0] : new AggregateError(present, label);
 }
 
-function asArray(value, context, detail, stale = false) {
+function arraysIdentical(left, right) {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
+function asArray(value, context, detail, ErrorType = OutputTargetCapabilityError) {
   try {
     return Array.from(value);
   } catch (cause) {
-    const ErrorType = stale ? OutputTargetStaleError : OutputTargetCapabilityError;
     throw new ErrorType(context, detail, { cause });
   }
+}
+
+function readAdopted(root, context, ErrorType, detail) {
+  let value;
+  try {
+    value = root.adoptedStyleSheets;
+  } catch (cause) {
+    throw new ErrorType(context, detail, { cause });
+  }
+  return asArray(value, context, detail, ErrorType);
+}
+
+function observeAdoptedWrite(root, candidate, context) {
+  let writeCause = null;
+  try {
+    root.adoptedStyleSheets = candidate;
+  } catch (cause) {
+    writeCause = cause;
+  }
+
+  let actual = null;
+  let readCause = null;
+  try {
+    actual = readAdopted(
+      root,
+      context,
+      OutputTargetCapabilityError,
+      "target root rejected adoptedStyleSheets readback",
+    );
+  } catch (cause) {
+    readCause = cause;
+  }
+  return {
+    exact: actual !== null && arraysIdentical(actual, candidate),
+    writeCause,
+    readCause,
+  };
 }
 
 function describeTarget(target, context, stale = false) {
@@ -164,120 +166,56 @@ function describeTarget(target, context, stale = false) {
   if (target === null || typeof target !== "object" || target.nodeType !== 1) {
     fail("target must be an element-like node");
   }
-  if (
-    typeof target.getRootNode !== "function" ||
-    typeof target.hasAttribute !== "function" ||
-    typeof target.setAttribute !== "function" ||
-    typeof target.removeAttribute !== "function"
-  ) {
-    fail("target lacks structural root or attribute capabilities");
+  if (typeof target.getRootNode !== "function") {
+    fail("target lacks structural root inspection");
   }
 
   let connected;
-  try {
-    connected = target.isConnected;
-  } catch (cause) {
-    throw new OutputTargetStaleError(context, "target connectivity readback failed", { cause });
-  }
-  if (connected !== true) {
-    throw new OutputTargetStaleError(context, "target is detached from its root");
-  }
-
   let document;
-  let root;
+  let treeRoot;
+  let shadowRoot;
   let realm;
   try {
+    connected = target.isConnected;
     document = target.ownerDocument;
-    root = target.getRootNode();
+    treeRoot = target.getRootNode();
+    shadowRoot = target.shadowRoot;
     realm = document?.defaultView;
   } catch (cause) {
-    fail("target realm inspection failed", { cause });
+    fail("target identity inspection failed", { cause });
   }
+  if (connected !== true) fail("target is detached from its document");
   if (!document || document.nodeType !== 9 || !realm) {
     fail("target must belong to a live Document realm");
-  }
-  const documentRoot = root === document && root?.nodeType === 9;
-  const shadowRoot =
-    root?.nodeType === 11 && root?.host != null && root?.ownerDocument === document;
-  if (!documentRoot && !shadowRoot) {
-    fail("target root must be its Document or a ShadowRoot from the same Document");
   }
   if (typeof realm.CSSStyleSheet !== "function") {
     fail("target realm lacks constructed CSSStyleSheet support");
   }
-  if (typeof root.querySelectorAll !== "function") {
-    fail("target root lacks querySelectorAll");
+
+  let root;
+  let selector;
+  if (document.documentElement === target && treeRoot === document) {
+    root = document;
+    selector = ":root";
+  } else if (
+    shadowRoot?.nodeType === 11 &&
+    shadowRoot.mode === "open" &&
+    shadowRoot.host === target &&
+    shadowRoot.ownerDocument === document
+  ) {
+    root = shadowRoot;
+    selector = ":host";
+  } else {
+    fail("target must be Document.documentElement or the host of its own open ShadowRoot");
   }
 
-  let adopted;
-  try {
-    adopted = asArray(
-      root.adoptedStyleSheets,
-      context,
-      "target root lacks readable adoptedStyleSheets",
-      stale,
-    );
-  } catch (cause) {
-    if (cause instanceof OutputSinkError) throw cause;
-    fail("target root lacks readable adoptedStyleSheets", { cause });
-  }
-  return { target, document, root, realm, Sheet: realm.CSSStyleSheet, adopted };
-}
-
-function newSheet(Sheet, context) {
-  let sheet;
-  try {
-    sheet = new Sheet();
-  } catch (cause) {
-    throw new OutputTargetCapabilityError(
-      context,
-      "target realm could not construct a CSSStyleSheet",
-      { cause },
-    );
-  }
-  if (typeof sheet?.replaceSync !== "function") {
-    throw new OutputTargetCapabilityError(
-      context,
-      "constructed CSSStyleSheet lacks replaceSync",
-    );
-  }
-  return sheet;
-}
-
-function oneRule(sheet, selector, context) {
-  let rules;
-  try {
-    rules = asArray(
-      sheet.cssRules,
-      context,
-      "scratch CSSStyleSheet does not expose readable cssRules",
-    );
-  } catch (cause) {
-    if (cause instanceof OutputSinkError) throw cause;
-    throw new OutputStylesheetValidationError(context, "scratch CSSOM readback failed", {
-      cause,
-    });
-  }
-  if (rules.length !== 1 || rules[0]?.selectorText !== selector || !rules[0]?.style) {
-    throw new OutputStylesheetValidationError(
-      context,
-      "scratch CSSOM did not preserve the exact target rule",
-    );
-  }
-  return rules[0];
-}
-
-function replaceScratch(sheet, selector, context) {
-  try {
-    sheet.replaceSync(`${selector} {}`);
-  } catch (cause) {
-    throw new OutputStylesheetValidationError(
-      context,
-      "scratch CSSOM rejected the target rule",
-      { cause },
-    );
-  }
-  return oneRule(sheet, selector, context);
+  readAdopted(
+    root,
+    context,
+    ErrorType,
+    "target output root lacks readable adoptedStyleSheets",
+  );
+  return { target, document, root, realm, Sheet: realm.CSSStyleSheet, selector };
 }
 
 function materializeBindings(bindings, context) {
@@ -299,15 +237,23 @@ function materializeBindings(bindings, context) {
         `outputBindings[${index}] must be a string data property`,
       );
     }
-    if (seen.has(descriptor.value)) {
+    const binding = descriptor.value;
+    if (!VALID_BINDING.test(binding)) {
+      throw new OutputBindingError(
+        "OUTPUT_BINDING_INVALID",
+        context,
+        `output binding '${binding}' is not a canonical CSS custom property name`,
+      );
+    }
+    if (seen.has(binding)) {
       throw new OutputBindingError(
         "OUTPUT_BINDINGS_INVALID",
         context,
-        `outputBindings contains duplicate '${descriptor.value}'`,
+        `outputBindings contains duplicate '${binding}'`,
       );
     }
-    seen.add(descriptor.value);
-    result.push(descriptor.value);
+    seen.add(binding);
+    result.push(binding);
   }
   return Object.freeze(result);
 }
@@ -340,129 +286,37 @@ function inlineBindingConflicts(target, bindings, context, stale = false) {
   return bindings.filter((binding) => declared.has(binding));
 }
 
-function validateBindingNames(Sheet, bindings, context) {
-  const scratch = newSheet(Sheet, context);
-  const rule = replaceScratch(scratch, VALIDATION_SELECTOR, context);
-  for (const name of bindings) {
-    if (!name.startsWith("--")) {
-      throw new OutputBindingError(
-        "OUTPUT_BINDING_INVALID",
-        context,
-        `output binding '${name}' is not a CSS custom property name`,
-      );
-    }
-    const before = rule.style.length;
-    try {
-      rule.style.setProperty(name, VALIDATION_VALUE);
-    } catch (cause) {
-      throw new OutputBindingError(
-        "OUTPUT_BINDING_INVALID",
-        context,
-        `output binding '${name}' is not a CSS custom property name`,
-        { cause },
-      );
-    }
-    if (
-      rule.style.length !== before + 1 ||
-      rule.style.getPropertyValue(name).trim() !== VALIDATION_VALUE
-    ) {
-      throw new OutputBindingError(
-        "OUTPUT_BINDING_INVALID",
-        context,
-        `output binding '${name}' is not a CSS custom property name`,
-      );
-    }
+function preflightAcquisition(target, outputBindings, context) {
+  const descriptor = describeTarget(target, context);
+  const bindings = materializeBindings(outputBindings, context);
+  const inlineConflicts = inlineBindingConflicts(target, bindings, context);
+  if (inlineConflicts.length > 0) {
+    throw new OutputInlineBindingConflictError(context, inlineConflicts);
   }
+  return { descriptor, bindings };
 }
 
-function rootState(root, context) {
-  const descriptor = Object.getOwnPropertyDescriptor(root, ROOT_STATE);
-  if (descriptor) {
-    const value = descriptor.value;
-    if (
-      !("value" in descriptor) ||
-      value?.protocol !== PROTOCOL ||
-      !Number.isSafeInteger(value.nextMarkerId) ||
-      value.nextMarkerId < 1
-    ) {
-      throw new OutputTargetCapabilityError(
-        context,
-        "target root has an incompatible output-sink registry",
-      );
-    }
-    return value;
-  }
-  const value = { protocol: PROTOCOL, nextMarkerId: 1 };
+function newSheet(Sheet, context) {
+  let sheet;
   try {
-    Object.defineProperty(root, ROOT_STATE, {
-      value,
-      configurable: false,
-      enumerable: false,
-      writable: false,
-    });
+    sheet = new Sheet();
   } catch (cause) {
     throw new OutputTargetCapabilityError(
       context,
-      "target root cannot host the shared output-sink registry",
+      "target realm could not construct a CSSStyleSheet",
       { cause },
     );
   }
-  return value;
-}
-
-function matchesFor(root, selector, context, stale = false) {
-  const ErrorType = stale ? OutputTargetStaleError : OutputTargetCapabilityError;
-  try {
-    return Array.from(root.querySelectorAll(selector));
-  } catch (cause) {
-    throw new ErrorType(context, "target marker query failed", { cause });
+  if (typeof sheet?.replaceSync !== "function") {
+    throw new OutputTargetCapabilityError(
+      context,
+      "constructed CSSStyleSheet lacks replaceSync",
+    );
   }
+  return sheet;
 }
 
-function allocateMarker(descriptor, context) {
-  const registry = rootState(descriptor.root, context);
-  while (Number.isSafeInteger(registry.nextMarkerId)) {
-    const name = `${MARKER_PREFIX}${registry.nextMarkerId}`;
-    registry.nextMarkerId++;
-    const selector = `[${name}]`;
-    if (matchesFor(descriptor.root, selector, context).length !== 0) continue;
-
-    try {
-      descriptor.target.setAttribute(name, "");
-    } catch (cause) {
-      try {
-        descriptor.target.removeAttribute(name);
-      } catch {}
-      throw new OutputTargetCapabilityError(context, "target marker installation failed", {
-        cause,
-      });
-    }
-    try {
-      const matches = matchesFor(descriptor.root, selector, context);
-      if (
-        !descriptor.target.hasAttribute(name) ||
-        matches.length !== 1 ||
-        matches[0] !== descriptor.target
-      ) {
-        throw new Error("target marker did not round-trip uniquely");
-      }
-    } catch (cause) {
-      try {
-        descriptor.target.removeAttribute(name);
-      } catch {}
-      throw new OutputTargetCapabilityError(
-        context,
-        "target marker could not be bound uniquely",
-        { cause },
-      );
-    }
-    return { name, selector };
-  }
-  throw new OutputTargetCapabilityError(context, "target marker identity space is exhausted");
-}
-
-function sheetText(sheet, context, stale = false) {
-  const ErrorType = stale ? OutputTargetStaleError : OutputTargetCapabilityError;
+function sheetText(sheet, context, ErrorType = OutputTargetCapabilityError) {
   try {
     return Array.from(sheet.cssRules, (rule) => rule.cssText).join("\n");
   } catch (cause) {
@@ -470,179 +324,81 @@ function sheetText(sheet, context, stale = false) {
   }
 }
 
-function attachRecord(descriptor, context) {
-  const liveSheet = newSheet(descriptor.Sheet, context);
-  const scratchSheet = newSheet(descriptor.Sheet, context);
-  const marker = allocateMarker(descriptor, context);
-  const record = {
-    protocol: PROTOCOL,
-    target: descriptor.target,
-    document: descriptor.document,
-    root: descriptor.root,
-    realm: descriptor.realm,
-    Sheet: descriptor.Sheet,
-    markerName: marker.name,
-    selector: marker.selector,
-    liveSheet,
-    scratchSheet,
-    liveText: "",
-    leases: new Set(),
-    owners: new Map(),
-    stamp: 0,
-    epoch: 0,
-    preparing: false,
-    committing: false,
-    poisoned: false,
-    attached: true,
-  };
-
+function oneRule(sheet, selector, context) {
+  let rules;
   try {
-    descriptor.root.adoptedStyleSheets = [...descriptor.adopted, liveSheet];
-    const current = Array.from(descriptor.root.adoptedStyleSheets);
-    if (current.filter((sheet) => sheet === liveSheet).length !== 1) {
-      throw new Error("adoptedStyleSheets did not retain the constructed sheet");
-    }
-    Object.defineProperty(descriptor.target, TARGET_STATE, {
-      value: record,
-      configurable: false,
-      enumerable: false,
-      writable: false,
-    });
+    rules = Array.from(sheet.cssRules);
   } catch (cause) {
-    try {
-      descriptor.root.adoptedStyleSheets = Array.from(
-        descriptor.root.adoptedStyleSheets,
-      ).filter((sheet) => sheet !== liveSheet);
-    } catch {}
-    try {
-      descriptor.target.removeAttribute(marker.name);
-    } catch {}
-    throw new OutputTargetCapabilityError(context, "atomic sink attachment failed", { cause });
+    throw new OutputStylesheetValidationError(context, "scratch CSSOM readback failed", {
+      cause,
+    });
   }
-  return record;
-}
-
-function recordFor(target, descriptor, context) {
-  const stateDescriptor = Object.getOwnPropertyDescriptor(target, TARGET_STATE);
-  if (!stateDescriptor) return attachRecord(descriptor, context);
-  const record = stateDescriptor.value;
-  if (!("value" in stateDescriptor) || record?.protocol !== PROTOCOL) {
-    throw new OutputTargetCapabilityError(
+  if (rules.length !== 1 || rules[0]?.selectorText !== selector || !rules[0]?.style) {
+    throw new OutputStylesheetValidationError(
       context,
-      "target has an incompatible output-sink registry",
+      "scratch CSSOM did not preserve the exact target rule",
     );
   }
-  if (record.attached) {
-    assertFresh(record, context);
-  } else {
-    resumeRecord(record, descriptor, context);
-  }
-  return record;
+  return rules[0];
 }
 
-function resumeRecord(record, descriptor, context) {
-  if (record.poisoned || record.leases.size !== 0 || record.owners.size !== 0) {
-    throw new OutputTargetStaleError(context, "dormant target sink has inconsistent state");
-  }
-  if (sheetText(record.liveSheet, context, true) !== "") {
-    throw new OutputTargetStaleError(context, "dormant output stylesheet is not empty");
-  }
-  const oldAdopted = asArray(
-    record.root.adoptedStyleSheets,
-    context,
-    "dormant root lacks readable adoptedStyleSheets",
-    true,
-  );
-  if (oldAdopted.includes(record.liveSheet)) {
-    throw new OutputTargetStaleError(context, "dormant output stylesheet was externally adopted");
-  }
-
-  const sameHost =
-    descriptor.document === record.document &&
-    descriptor.root === record.root &&
-    descriptor.realm === record.realm &&
-    descriptor.Sheet === record.Sheet;
-  const liveSheet = sameHost ? record.liveSheet : newSheet(descriptor.Sheet, context);
-  const scratchSheet = sameHost ? record.scratchSheet : newSheet(descriptor.Sheet, context);
-  const marker = allocateMarker(descriptor, context);
+function prepareText(record, values, context) {
+  if (values.size === 0) return "";
   try {
-    descriptor.root.adoptedStyleSheets = [...descriptor.adopted, liveSheet];
-    const current = Array.from(descriptor.root.adoptedStyleSheets);
-    if (current.filter((sheet) => sheet === liveSheet).length !== 1) {
-      throw new Error("adoptedStyleSheets did not retain the dormant sheet");
+    record.scratchSheet.replaceSync(`${record.selector} {}`);
+  } catch (cause) {
+    throw new OutputStylesheetValidationError(
+      context,
+      "scratch CSSOM rejected the target rule",
+      { cause },
+    );
+  }
+  const rule = oneRule(record.scratchSheet, record.selector, context);
+  for (const [name, value] of values) {
+    try {
+      rule.style.setProperty(name, value);
+    } catch (cause) {
+      throw new OutputStylesheetValidationError(
+        context,
+        `scratch CSSOM rejected value for '${name}'`,
+        { cause },
+      );
     }
-    record.document = descriptor.document;
-    record.root = descriptor.root;
-    record.realm = descriptor.realm;
-    record.Sheet = descriptor.Sheet;
-    record.liveSheet = liveSheet;
-    record.scratchSheet = scratchSheet;
-    record.markerName = marker.name;
-    record.selector = marker.selector;
-    record.liveText = "";
-    record.attached = true;
-  } catch (cause) {
-    try {
-      descriptor.root.adoptedStyleSheets = Array.from(
-        descriptor.root.adoptedStyleSheets,
-      ).filter((sheet) => sheet !== liveSheet);
-    } catch {}
-    try {
-      descriptor.target.removeAttribute(marker.name);
-    } catch {}
-    throw new OutputTargetCapabilityError(context, "dormant sink reattachment failed", { cause });
   }
-}
 
-function assertOperational(record, context) {
-  if (record.poisoned) {
-    throw new OutputTargetStaleError(context, "target sink was invalidated by host drift");
-  }
-  if (!record.attached) {
-    throw new OutputTargetStaleError(context, "target sink is dormant");
-  }
-}
-
-function assertFresh(record, context, expectedText = record.liveText) {
-  assertOperational(record, context);
-  const current = describeTarget(record.target, context, true);
+  const readNames = [];
+  for (let index = 0; index < rule.style.length; index++) readNames.push(rule.style.item(index));
+  const expectedNames = [...values.keys()];
   if (
-    current.document !== record.document ||
-    current.root !== record.root ||
-    current.realm !== record.realm ||
-    current.Sheet !== record.Sheet
+    readNames.length !== expectedNames.length ||
+    readNames.some((name, index) => name !== expectedNames[index])
   ) {
-    throw new OutputTargetStaleError(context, "target moved to another root or realm");
+    throw new OutputStylesheetValidationError(
+      context,
+      "scratch CSSOM declaration order differs from the canonical output order",
+    );
   }
-  const stateDescriptor = Object.getOwnPropertyDescriptor(record.target, TARGET_STATE);
-  if (stateDescriptor?.value !== record) {
-    throw new OutputTargetStaleError(context, "target sink ownership marker changed");
+  for (const [name, expected] of values) {
+    if (rule.style.getPropertyValue(name) !== expected) {
+      throw new OutputStylesheetValidationError(
+        context,
+        `scratch CSSOM did not preserve the exact value for '${name}'`,
+      );
+    }
   }
-  let ownsMarker;
-  try {
-    ownsMarker = record.target.hasAttribute(record.markerName);
-  } catch (cause) {
-    throw new OutputTargetStaleError(context, "target marker readback failed", { cause });
+
+  const text = rule.cssText;
+  if (
+    typeof text !== "string" ||
+    text.length === 0 ||
+    sheetText(record.scratchSheet, context) !== text
+  ) {
+    throw new OutputStylesheetValidationError(
+      context,
+      "scratch CSSOM did not provide an exact complete stylesheet readback",
+    );
   }
-  const matches = matchesFor(record.root, record.selector, context, true);
-  if (!ownsMarker || matches.length !== 1 || matches[0] !== record.target) {
-    throw new OutputTargetStaleError(context, "target marker is absent or no longer unique");
-  }
-  if (current.adopted.filter((sheet) => sheet === record.liveSheet).length !== 1) {
-    throw new OutputTargetStaleError(context, "live output stylesheet was detached or duplicated");
-  }
-  if (sheetText(record.liveSheet, context, true) !== expectedText) {
-    throw new OutputTargetStaleError(context, "live output stylesheet changed outside its sink");
-  }
-  const inlineConflicts = inlineBindingConflicts(
-    record.target,
-    [...record.owners.keys()],
-    context,
-    true,
-  );
-  if (inlineConflicts.length > 0) {
-    throw new OutputInlineBindingConflictError(context, inlineConflicts);
-  }
+  return text;
 }
 
 function materializeVars(vars, bindingSet, context) {
@@ -673,20 +429,19 @@ function materializeVars(vars, bindingSet, context) {
         `vars contains unowned output '${key}'`,
       );
     }
-    const value = descriptor.value;
-    if (value.length === 0) {
+    if (descriptor.value.length === 0) {
       throw new OutputBindingError(
         "OUTPUT_VALUES_INVALID",
         context,
         `vars['${key}'] must not be empty`,
       );
     }
-    values.set(key, value);
+    values.set(key, descriptor.value);
   }
   return values;
 }
 
-function mergedValues(record, changedLease, changedValues, disposedLease) {
+function mergedValues(record, changedLease, changedValues, disposedLease = null) {
   const merged = new Map();
   for (const lease of record.leases) {
     if (!lease.active || lease === disposedLease) continue;
@@ -695,55 +450,17 @@ function mergedValues(record, changedLease, changedValues, disposedLease) {
       if (values.has(binding)) merged.set(binding, values.get(binding));
     }
   }
-  return new Map([...merged].sort(([left], [right]) => compareStrings(left, right)));
+  return merged;
 }
 
-function prepareText(record, values, context) {
-  if (values.size === 0) return "";
-  const rule = replaceScratch(record.scratchSheet, record.selector, context);
-  for (const [name, value] of values) {
-    try {
-      rule.style.setProperty(name, value);
-    } catch (cause) {
-      throw new OutputStylesheetValidationError(
-        context,
-        `scratch CSSOM rejected value for '${name}'`,
-        { cause },
-      );
-    }
-  }
-
-  const readNames = [];
-  for (let index = 0; index < rule.style.length; index++) {
-    readNames.push(rule.style.item(index));
-  }
-  const expectedNames = [...values.keys()];
-  if (
-    readNames.length !== expectedNames.length ||
-    readNames.some((name, index) => name !== expectedNames[index])
-  ) {
-    throw new OutputStylesheetValidationError(
-      context,
-      "scratch CSSOM declaration set differs from the owned binding set",
-    );
-  }
-  for (const [name, expected] of values) {
-    if (rule.style.getPropertyValue(name) !== expected) {
-      throw new OutputStylesheetValidationError(
-        context,
-        `scratch CSSOM did not preserve the exact value for '${name}'`,
-      );
-    }
-  }
-
-  const text = rule.cssText;
-  if (typeof text !== "string" || text.length === 0 || sheetText(record.scratchSheet, context) !== text) {
-    throw new OutputStylesheetValidationError(
-      context,
-      "scratch CSSOM did not provide an exact complete stylesheet readback",
-    );
-  }
-  return text;
+function mapsIdentical(left, right) {
+  if (left.size !== right.size) return false;
+  const leftEntries = [...left];
+  const rightEntries = [...right];
+  return leftEntries.every(
+    ([name, value], index) =>
+      name === rightEntries[index][0] && value === rightEntries[index][1],
+  );
 }
 
 function ownsNow(owns, context) {
@@ -753,207 +470,675 @@ function ownsNow(owns, context) {
   return owns() === true;
 }
 
-function detachDormant(record, context, recovered) {
-  const failures = [];
+function authorityDescriptor(target, context) {
+  let descriptor;
   try {
-    const current = Array.from(record.root.adoptedStyleSheets);
-    record.root.adoptedStyleSheets = current.filter((sheet) => sheet !== record.liveSheet);
-    if (Array.from(record.root.adoptedStyleSheets).includes(record.liveSheet)) {
-      throw new Error("adoptedStyleSheets retained the dormant sheet");
-    }
+    descriptor = Object.getOwnPropertyDescriptor(target, TARGET_STATE);
   } catch (cause) {
-    failures.push(cause);
+    throw new OutputTargetCapabilityError(context, "target authority inspection failed", { cause });
   }
+  return descriptor;
+}
+
+function authorityCompatible(descriptor) {
+  if (!descriptor || !("value" in descriptor)) return false;
+  const authority = descriptor.value;
+  if (
+    descriptor.configurable !== false ||
+    descriptor.writable !== false ||
+    authority === null ||
+    typeof authority !== "object" ||
+    Object.getPrototypeOf(authority) !== null ||
+    !Object.isFrozen(authority)
+  ) {
+    return false;
+  }
+  const keys = Reflect.ownKeys(authority);
+  if (keys.length !== 2 || !keys.includes("protocol") || !keys.includes("acquire")) return false;
+  const protocol = Object.getOwnPropertyDescriptor(authority, "protocol");
+  const acquire = Object.getOwnPropertyDescriptor(authority, "acquire");
+  return (
+    protocol?.value === PROTOCOL &&
+    protocol.writable === false &&
+    protocol.configurable === false &&
+    typeof acquire?.value === "function" &&
+    acquire.writable === false &&
+    acquire.configurable === false
+  );
+}
+
+function admissionCompatible(descriptor) {
+  if (!descriptor || !("value" in descriptor)) return false;
+  const authority = descriptor.value;
+  if (
+    descriptor.configurable !== false ||
+    descriptor.writable !== false ||
+    authority === null ||
+    typeof authority !== "object" ||
+    Object.getPrototypeOf(authority) !== null ||
+    !Object.isFrozen(authority)
+  ) {
+    return false;
+  }
+  const keys = Reflect.ownKeys(authority);
+  if (keys.length !== 2 || !keys.includes("protocol") || !keys.includes("run")) return false;
+  const protocol = Object.getOwnPropertyDescriptor(authority, "protocol");
+  const run = Object.getOwnPropertyDescriptor(authority, "run");
+  return (
+    protocol?.value === PROTOCOL &&
+    protocol.writable === false &&
+    protocol.configurable === false &&
+    typeof run?.value === "function" &&
+    run.writable === false &&
+    run.configurable === false
+  );
+}
+
+function admissionAuthority(context) {
+  let descriptor;
   try {
-    record.target.removeAttribute(record.markerName);
-    if (record.target.hasAttribute(record.markerName)) {
-      throw new Error("target retained the dormant sink marker");
-    }
+    descriptor = Object.getOwnPropertyDescriptor(globalThis, ACQUISITION_STATE);
   } catch (cause) {
-    failures.push(cause);
+    throw new OutputTargetCapabilityError(context, "shared acquisition gate inspection failed", {
+      cause,
+    });
   }
-  record.attached = false;
-  if (failures.length > 0) {
-    record.poisoned = true;
+  if (descriptor) {
+    if (!admissionCompatible(descriptor)) {
+      throw new OutputTargetCapabilityError(
+        context,
+        "shared acquisition gate has an incompatible authority",
+      );
+    }
+    return descriptor.value;
+  }
+
+  const active = new WeakSet();
+  const authority = Object.create(null);
+  Object.defineProperties(authority, {
+    protocol: {
+      value: PROTOCOL,
+      configurable: false,
+      enumerable: false,
+      writable: false,
+    },
+    run: {
+      value(target, acquireContext, operation) {
+        if (active.has(target)) throw new OutputSinkBusyError(acquireContext);
+        active.add(target);
+        try {
+          return operation();
+        } finally {
+          active.delete(target);
+        }
+      },
+      configurable: false,
+      enumerable: false,
+      writable: false,
+    },
+  });
+  Object.freeze(authority);
+  try {
+    Object.defineProperty(globalThis, ACQUISITION_STATE, {
+      value: authority,
+      configurable: false,
+      enumerable: false,
+      writable: false,
+    });
+  } catch (cause) {
+    const raced = Object.getOwnPropertyDescriptor(globalThis, ACQUISITION_STATE);
+    if (admissionCompatible(raced)) return raced.value;
+    throw new OutputTargetCapabilityError(context, "shared acquisition gate installation failed", {
+      cause,
+    });
+  }
+  return authority;
+}
+
+function assertAuthority(record, context) {
+  const descriptor = authorityDescriptor(record.target, context);
+  if (!authorityCompatible(descriptor) || descriptor.value !== record.authority) {
+    throw new OutputTargetStaleError(context, "target output authority changed");
+  }
+}
+
+function assertStoredFresh(record, context, expectedText = record.liveText) {
+  if (record.phase !== "attached") {
+    throw new OutputTargetStaleError(context, "target sink is not attached");
+  }
+  assertAuthority(record, context);
+  const adopted = readAdopted(
+    record.root,
+    context,
+    OutputTargetStaleError,
+    "stored output root lacks readable adoptedStyleSheets",
+  );
+  if (adopted.filter((sheet) => sheet === record.liveSheet).length !== 1) {
+    throw new OutputTargetStaleError(context, "live output stylesheet was detached or duplicated");
+  }
+  if (sheetText(record.liveSheet, context, OutputTargetStaleError) !== expectedText) {
+    throw new OutputTargetStaleError(context, "live output stylesheet changed outside its sink");
+  }
+}
+
+function revocableSnapshot(record, context, expectedText = null) {
+  if (record.phase !== "attached") {
+    throw new OutputTargetStaleError(context, "target sink is not attached");
+  }
+  assertAuthority(record, context);
+  const adopted = readAdopted(
+    record.root,
+    context,
+    OutputTargetStaleError,
+    "stored output root lacks readable adoptedStyleSheets",
+  );
+  const copies = adopted.filter((sheet) => sheet === record.liveSheet).length;
+  if (copies > 1) {
+    throw new OutputTargetStaleError(context, "live output stylesheet was duplicated");
+  }
+  const actualText = sheetText(record.liveSheet, context, OutputTargetStaleError);
+  if (expectedText !== null && actualText !== expectedText) {
+    throw new OutputTargetStaleError(context, "live output stylesheet bytes are not exact");
+  }
+  return { actualText, adopted: copies === 1 };
+}
+
+function assertFresh(record, context, expectedText = record.liveText) {
+  const current = describeTarget(record.target, context, true);
+  if (
+    current.document !== record.document ||
+    current.root !== record.root ||
+    current.realm !== record.realm ||
+    current.Sheet !== record.Sheet ||
+    current.selector !== record.selector
+  ) {
+    throw new OutputTargetStaleError(context, "target moved to another output identity or realm");
+  }
+  assertStoredFresh(record, context, expectedText);
+  const inlineConflicts = inlineBindingConflicts(
+    record.target,
+    [...record.owners.keys()],
+    context,
+    true,
+  );
+  if (inlineConflicts.length > 0) {
+    throw new OutputInlineBindingConflictError(context, inlineConflicts);
+  }
+}
+
+function adoptionWithoutSheet(current, sheet, baseline) {
+  const remaining = current.filter((entry) => entry !== sheet);
+  if (baseline === null) return remaining;
+
+  const unmatchedBaseline = [...baseline];
+  const additions = [];
+  for (const entry of remaining) {
+    const index = unmatchedBaseline.indexOf(entry);
+    if (index === -1) additions.push(entry);
+    else unmatchedBaseline.splice(index, 1);
+  }
+  return [...baseline, ...additions];
+}
+
+function cleanupAdoption(root, sheet, context, baseline = null) {
+  let current;
+  try {
+    current = readAdopted(
+      root,
+      context,
+      OutputTargetCapabilityError,
+      "recovery root lacks readable adoptedStyleSheets",
+    );
+  } catch (cause) {
+    return { exact: false, cause };
+  }
+  const candidate = adoptionWithoutSheet(current, sheet, baseline);
+  if (arraysIdentical(current, candidate)) return { exact: true, cause: null };
+  const observation = observeAdoptedWrite(root, candidate, context);
+  return {
+    exact: observation.exact,
+    cause: observation.exact
+      ? null
+      : aggregate("adopted stylesheet cleanup failure", [
+        observation.writeCause,
+        observation.readCause,
+      ]),
+  };
+}
+
+function reconcileRestore(record, journal, context) {
+  let actual = null;
+  let firstReadCause = null;
+  try {
+    actual = sheetText(journal.sheet, context, OutputTargetStaleError);
+  } catch (cause) {
+    firstReadCause = cause;
+  }
+  if (actual === journal.expectedText) {
+    record.journal = null;
+    return;
+  }
+
+  let replaceCause = null;
+  try {
+    journal.sheet.replaceSync(journal.expectedText);
+  } catch (cause) {
+    replaceCause = cause;
+  }
+  let verified = false;
+  let verifyCause = null;
+  try {
+    verified =
+      sheetText(journal.sheet, context, OutputTargetStaleError) === journal.expectedText;
+  } catch (cause) {
+    verifyCause = cause;
+  }
+  if (verified) {
+    record.journal = null;
+    return;
+  }
+  throw new OutputAtomicityViolationError(
+    context,
+    "prior live stylesheet bytes remain unresolved",
+    {
+      cause: aggregate("stylesheet recovery failure", [
+        journal.cause,
+        firstReadCause,
+        replaceCause,
+        verifyCause,
+      ]),
+    },
+  );
+}
+
+function reconcile(record, context) {
+  const journal = record.journal;
+  if (journal === null) return;
+  if (journal.kind === "restore") {
+    reconcileRestore(record, journal, context);
+    return;
+  }
+  const cleanup = cleanupAdoption(
+    journal.root,
+    journal.sheet,
+    context,
+    journal.baseline,
+  );
+  if (!cleanup.exact) {
     throw new OutputAtomicityViolationError(
       context,
-      "last-lease cleanup could not detach the dormant output sink",
-      { cause: new AggregateError(failures, "output sink cleanup failures") },
+      "residual output stylesheet adoption remains unresolved",
+      { cause: aggregate("adoption recovery failure", [journal.cause, cleanup.cause]) },
     );
   }
-  record.poisoned = !recovered;
+  record.journal = null;
+  if (journal.after === "dormant") record.phase = "dormant";
+}
+
+function installAttachment(record, descriptor, context) {
+  if (record.leases.length !== 0 || record.owners.size !== 0) {
+    throw new OutputTargetStaleError(context, "unattached target sink retains active owners");
+  }
+  if (record.phase === "dormant") {
+    if (record.liveText !== "") {
+      throw new OutputTargetStaleError(context, "dormant output stylesheet is not empty");
+    }
+    const oldAdopted = readAdopted(
+      record.root,
+      context,
+      OutputTargetStaleError,
+      "dormant output root lacks readable adoptedStyleSheets",
+    );
+    if (oldAdopted.includes(record.liveSheet)) {
+      throw new OutputTargetStaleError(
+        context,
+        "dormant output stylesheet was externally re-adopted",
+      );
+    }
+  }
+
+  const sameHost =
+    record.phase === "dormant" &&
+    descriptor.document === record.document &&
+    descriptor.root === record.root &&
+    descriptor.realm === record.realm &&
+    descriptor.Sheet === record.Sheet &&
+    descriptor.selector === record.selector;
+  const pendingMatches =
+    record.pending !== null &&
+    record.pending.document === descriptor.document &&
+    record.pending.root === descriptor.root &&
+    record.pending.realm === descriptor.realm &&
+    record.pending.Sheet === descriptor.Sheet &&
+    record.pending.selector === descriptor.selector;
+  const pending = pendingMatches
+    ? record.pending
+    : {
+      ...descriptor,
+      liveSheet: sameHost ? record.liveSheet : newSheet(descriptor.Sheet, context),
+      scratchSheet: sameHost ? record.scratchSheet : newSheet(descriptor.Sheet, context),
+    };
+  record.pending = pending;
+
+  const current = readAdopted(
+    descriptor.root,
+    context,
+    OutputTargetCapabilityError,
+    "target output root lacks readable adoptedStyleSheets",
+  );
+  if (current.includes(pending.liveSheet)) {
+    throw new OutputTargetStaleError(context, "attachment candidate is already adopted");
+  }
+  const candidate = [...current, pending.liveSheet];
+  record.journal = {
+    kind: "adoption",
+    root: descriptor.root,
+    sheet: pending.liveSheet,
+    baseline: current,
+    after: null,
+    cause: null,
+  };
+  const observation = observeAdoptedWrite(descriptor.root, candidate, context);
+  if (observation.exact && observation.writeCause === null && observation.readCause === null) {
+    record.journal = null;
+    record.pending = null;
+    record.document = descriptor.document;
+    record.root = descriptor.root;
+    record.realm = descriptor.realm;
+    record.Sheet = descriptor.Sheet;
+    record.selector = descriptor.selector;
+    record.liveSheet = pending.liveSheet;
+    record.scratchSheet = pending.scratchSheet;
+    record.liveText = "";
+    record.phase = "attached";
+    return;
+  }
+
+  const attachmentCause = aggregate("output stylesheet attachment failure", [
+    observation.writeCause,
+    observation.readCause,
+    observation.exact ? null : new Error("adoptedStyleSheets did not match the exact candidate"),
+  ]);
+  record.journal.cause = attachmentCause;
+  const cleanup = cleanupAdoption(
+    descriptor.root,
+    pending.liveSheet,
+    context,
+    current,
+  );
+  if (cleanup.exact) {
+    record.journal = null;
+    throw new OutputTargetCapabilityError(context, "atomic sink attachment failed", {
+      cause: attachmentCause,
+    });
+  }
+  throw new OutputAtomicityViolationError(
+    context,
+    "sink attachment failed and its residual adoption could not be removed",
+    { cause: aggregate("attachment and rollback failure", [attachmentCause, cleanup.cause]) },
+  );
+}
+
+function detachRecord(record, context) {
+  let current;
+  try {
+    current = readAdopted(
+      record.root,
+      context,
+      OutputTargetStaleError,
+      "dormant output root lacks readable adoptedStyleSheets",
+    );
+  } catch (cause) {
+    record.journal = {
+      kind: "adoption",
+      root: record.root,
+      sheet: record.liveSheet,
+      baseline: null,
+      after: "dormant",
+      cause,
+    };
+    throw new OutputAtomicityViolationError(
+      context,
+      "last-lease cleanup could not inspect the dormant output root",
+      { cause },
+    );
+  }
+  const baseline = current.filter((sheet) => sheet !== record.liveSheet);
+  record.journal = {
+    kind: "adoption",
+    root: record.root,
+    sheet: record.liveSheet,
+    baseline,
+    after: "dormant",
+    cause: null,
+  };
+  const cleanup = cleanupAdoption(record.root, record.liveSheet, context, baseline);
+  if (cleanup.exact) {
+    record.journal = null;
+    record.phase = "dormant";
+    return;
+  }
+  record.journal.cause = cleanup.cause;
+  throw new OutputAtomicityViolationError(
+    context,
+    "last-lease cleanup could not detach the dormant output stylesheet",
+    { cause: cleanup.cause },
+  );
+}
+
+function restorePriorBytes(record, priorText, context, cause) {
+  record.journal = {
+    kind: "restore",
+    sheet: record.liveSheet,
+    expectedText: priorText,
+    cause,
+  };
+  reconcileRestore(record, record.journal, context);
+}
+
+function replaceCandidate(
+  record,
+  text,
+  owns,
+  context,
+  postcondition,
+  priorText = record.liveText,
+) {
+  record.journal = {
+    kind: "restore",
+    sheet: record.liveSheet,
+    expectedText: priorText,
+    cause: null,
+  };
+
+  let replaceCause = null;
+  try {
+    record.liveSheet.replaceSync(text);
+  } catch (cause) {
+    replaceCause = cause;
+  }
+  let actual = null;
+  let readCause = null;
+  try {
+    actual = sheetText(record.liveSheet, context, OutputTargetStaleError);
+  } catch (cause) {
+    readCause = cause;
+  }
+
+  if (replaceCause !== null && readCause === null && actual === priorText) {
+    record.journal = null;
+    throw replaceCause;
+  }
+  if (replaceCause !== null || readCause !== null || actual !== text) {
+    const failure = aggregate("live stylesheet replacement failure", [
+      replaceCause,
+      readCause,
+      actual === text ? null : new Error("live stylesheet bytes did not match the candidate"),
+    ]);
+    restorePriorBytes(record, priorText, context, failure);
+    throw new OutputAtomicityViolationError(
+      context,
+      "live stylesheet replacement required rollback",
+      { cause: failure },
+    );
+  }
+
+  try {
+    postcondition(text);
+  } catch (cause) {
+    restorePriorBytes(record, priorText, context, cause);
+    throw new OutputAtomicityViolationError(
+      context,
+      "target host state changed during live stylesheet replacement",
+      { cause },
+    );
+  }
+
+  let retained;
+  try {
+    retained = ownsNow(owns, context);
+  } catch (cause) {
+    restorePriorBytes(record, priorText, context, cause);
+    throw cause;
+  }
+  if (!retained) {
+    restorePriorBytes(record, priorText, context, new Error("output ownership was cancelled"));
+    return false;
+  }
+  try {
+    postcondition(text);
+  } catch (cause) {
+    restorePriorBytes(record, priorText, context, cause);
+    throw new OutputAtomicityViolationError(
+      context,
+      "target host state changed during the final ownership checkpoint",
+      { cause },
+    );
+  }
+
+  record.journal = null;
+  return true;
 }
 
 function publish(record, lease, rawVars, owns, context) {
   if (!lease.active) return false;
-  if (record.preparing || record.committing) throw new OutputSinkBusyError(context);
   if (typeof owns !== "function") {
     throw new TypeError(`${contextLabel(context)}: owns must be a function`);
   }
+  if (!ownsNow(owns, context)) return false;
+  if (record.phase !== "attached") {
+    throw new OutputTargetStaleError(context, "target sink is dormant");
+  }
   const epoch = record.epoch;
-  record.preparing = true;
-  let text;
-  let nextValues = null;
-  try {
-    if (!ownsNow(owns, context)) return false;
-    assertOperational(record, context);
-    if (!lease.active || record.epoch !== epoch) return false;
-    nextValues = materializeVars(rawVars, lease.bindingSet, context);
-    const merged = mergedValues(record, lease, nextValues, null);
-    text = prepareText(record, merged, context);
+  const nextValues = materializeVars(rawVars, lease.bindingSet, context);
+  const merged = mergedValues(record, lease, nextValues);
+  const current = mergedValues(record, null, null);
+
+  if (mapsIdentical(merged, current)) {
+    assertFresh(record, context);
     if (!ownsNow(owns, context) || !lease.active || record.epoch !== epoch) return false;
     assertFresh(record, context);
-    if (record.stamp === Number.MAX_SAFE_INTEGER || record.epoch === Number.MAX_SAFE_INTEGER) {
-      throw new OutputTargetStaleError(context, "target sink generation space is exhausted");
-    }
-    record.committing = true;
-  } finally {
-    record.preparing = false;
-  }
-  if (!record.committing) return false;
-  let replaced = false;
-  try {
-    record.liveSheet.replaceSync(text);
-    replaced = true;
-    try {
-      assertFresh(record, context, text);
-    } catch (cause) {
-      record.poisoned = true;
-      throw new OutputAtomicityViolationError(
-        context,
-        "target host state changed during live stylesheet replacement",
-        { cause },
-      );
-    }
-
-    lease.values = nextValues;
-    record.liveText = text;
-    record.stamp++;
-    record.epoch++;
     return true;
-  } catch (cause) {
-    if (replaced) throw cause;
-    let actual;
-    try {
-      actual = sheetText(record.liveSheet, context, true);
-    } catch (readCause) {
-      record.poisoned = true;
-      throw new OutputAtomicityViolationError(
-        context,
-        "host replacement failed and prior live bytes cannot be verified",
-        { cause: readCause },
-      );
-    }
-    if (actual !== record.liveText) {
-      record.poisoned = true;
-      throw new OutputAtomicityViolationError(
-        context,
-        "host replacement failure changed the prior live stylesheet",
-        { cause },
-      );
-    }
-    throw cause;
-  } finally {
-    record.committing = false;
   }
+
+  const text = prepareText(record, merged, context);
+  assertFresh(record, context);
+  if (!ownsNow(owns, context) || !lease.active || record.epoch !== epoch) return false;
+  assertFresh(record, context);
+  if (record.stamp === Number.MAX_SAFE_INTEGER || record.epoch === Number.MAX_SAFE_INTEGER) {
+    throw new OutputTargetStaleError(context, "target sink generation space is exhausted");
+  }
+
+  const committed = replaceCandidate(
+    record,
+    text,
+    owns,
+    context,
+    (expected) => assertFresh(record, context, expected),
+  );
+  if (!committed) return false;
+  if (!lease.active || record.epoch !== epoch) {
+    restorePriorBytes(
+      record,
+      record.liveText,
+      context,
+      new Error("lease generation changed during publication"),
+    );
+    return false;
+  }
+  lease.values = nextValues;
+  record.liveText = text;
+  record.stamp++;
+  record.epoch++;
+  return true;
+}
+
+function removeLease(record, lease) {
+  for (const binding of lease.bindings) record.owners.delete(binding);
+  const index = record.leases.indexOf(lease);
+  if (index !== -1) record.leases.splice(index, 1);
+  lease.values = new Map();
+  lease.active = false;
 }
 
 function revoke(record, lease, owns, context) {
   if (!lease.active) return false;
-  if (record.preparing || record.committing) throw new OutputSinkBusyError(context);
   if (typeof owns !== "function") {
     throw new TypeError(`${contextLabel(context)}: owns must be a function`);
   }
-
-  const epoch = record.epoch;
-  record.preparing = true;
-  let text;
-  let preparationFailure = null;
-  try {
-    if (!ownsNow(owns, context)) return false;
-    const merged = mergedValues(record, null, null, lease);
-    try {
-      text = prepareText(record, merged, context);
-    } catch (cause) {
-      preparationFailure = cause;
-    }
-    if (!ownsNow(owns, context) || !lease.active || record.epoch !== epoch) return false;
-    record.committing = true;
-  } finally {
-    record.preparing = false;
+  if (!ownsNow(owns, context)) return false;
+  if (record.phase !== "attached") {
+    throw new OutputTargetStaleError(context, "target sink is dormant");
   }
-  if (!record.committing) return false;
+  const epoch = record.epoch;
+  const merged = mergedValues(record, null, null, lease);
+  const current = mergedValues(record, null, null);
+  const text = mapsIdentical(merged, current)
+    ? record.liveText
+    : prepareText(record, merged, context);
+  revocableSnapshot(record, context);
+  if (!ownsNow(owns, context) || !lease.active || record.epoch !== epoch) return false;
+  const before = revocableSnapshot(record, context);
+  if (before.actualText !== text) {
+    const committed = replaceCandidate(
+      record,
+      text,
+      owns,
+      context,
+      (expected) => revocableSnapshot(record, context, expected),
+      before.actualText,
+    );
+    if (!committed) return false;
+  }
 
-  const failures = preparationFailure === null ? [] : [preparationFailure];
-  let exact = false;
-  try {
-    if (preparationFailure !== null) {
-      record.poisoned = true;
-    } else {
-      let before;
-      let readable = false;
-      try {
-        before = sheetText(record.liveSheet, context, true);
-        readable = true;
-      } catch (cause) {
-        failures.push(cause);
-      }
-
-      if (readable && before === text) {
-        exact = true;
-      } else {
-        try {
-          record.liveSheet.replaceSync(text);
-        } catch (cause) {
-          failures.push(cause);
-        }
-        try {
-          exact = sheetText(record.liveSheet, context, true) === text;
-        } catch (cause) {
-          failures.push(cause);
-        }
-      }
-      if (!exact) {
-        failures.push(new Error("revoked output stylesheet did not match its remaining owners"));
-        record.poisoned = true;
-      }
-    }
-
-    const lastLease = record.leases.size === 1;
-    for (const binding of lease.bindings) record.owners.delete(binding);
-    record.leases.delete(lease);
-    lease.values = new Map();
-    lease.active = false;
-    if (exact) record.liveText = text;
-    if (record.stamp < Number.MAX_SAFE_INTEGER) record.stamp++;
-    if (record.epoch < Number.MAX_SAFE_INTEGER) record.epoch++;
-
-    if (lastLease) {
-      try {
-        detachDormant(record, context, exact);
-      } catch (cause) {
-        failures.push(cause);
-      }
-    }
-
-    if (failures.length > 0) {
-      record.poisoned = true;
-      throw new OutputAtomicityViolationError(
+  if (!lease.active || record.epoch !== epoch) {
+    if (text !== record.liveText) {
+      restorePriorBytes(
+        record,
+        record.liveText,
         context,
-        "output ownership was revoked but host cleanup could not be proved exact",
-        { cause: new AggregateError(failures, "output revocation failures") },
+        new Error("lease generation changed during revocation"),
       );
     }
-    return true;
-  } finally {
-    record.committing = false;
+    return false;
   }
+  removeLease(record, lease);
+  record.liveText = text;
+  if (record.stamp < Number.MAX_SAFE_INTEGER) record.stamp++;
+  if (record.epoch < Number.MAX_SAFE_INTEGER) record.epoch++;
+  if (record.leases.length === 0) detachRecord(record, context);
+  return true;
 }
 
-function commit(record, lease, rawVars, disposing, owns, context) {
-  return disposing
-    ? revoke(record, lease, owns, context)
-    : publish(record, lease, rawVars, owns, context);
+function runExclusive(record, context, operation) {
+  if (record.busy) throw new OutputSinkBusyError(context);
+  record.busy = true;
+  try {
+    reconcile(record, context);
+    return operation();
+  } finally {
+    record.busy = false;
+  }
 }
 
 function leaseHandle(record, state, context) {
@@ -961,13 +1146,11 @@ function leaseHandle(record, state, context) {
     outputBindings: state.bindings,
     publish(vars, owns = ALWAYS_OWNS) {
       if (!state.active) return false;
-      if (record.preparing || record.committing) throw new OutputSinkBusyError(context);
-      return commit(record, state, vars, false, owns, context);
+      return runExclusive(record, context, () => publish(record, state, vars, owns, context));
     },
     dispose(owns = ALWAYS_OWNS) {
       if (!state.active) return false;
-      if (record.preparing || record.committing) throw new OutputSinkBusyError(context);
-      return commit(record, state, null, true, owns, context);
+      return runExclusive(record, context, () => revoke(record, state, owns, context));
     },
     get stamp() {
       return record.stamp;
@@ -978,59 +1161,141 @@ function leaseHandle(record, state, context) {
   });
 }
 
-function acquireOutputLeaseUnchecked(target, outputBindings, context) {
-  const descriptor = describeTarget(target, context);
-  const bindings = materializeBindings(outputBindings, context);
-  validateBindingNames(descriptor.Sheet, bindings, context);
-  const inlineConflicts = inlineBindingConflicts(target, bindings, context);
-  if (inlineConflicts.length > 0) {
-    throw new OutputInlineBindingConflictError(context, inlineConflicts);
-  }
-
-  const existingDescriptor = Object.getOwnPropertyDescriptor(target, TARGET_STATE);
-  if (existingDescriptor?.value?.protocol === PROTOCOL) {
-    const existing = existingDescriptor.value;
-    if (existing.preparing || existing.committing) throw new OutputSinkBusyError(context);
-  }
-  const record = recordFor(target, descriptor, context);
-  if (record.preparing || record.committing) throw new OutputSinkBusyError(context);
-
-  const conflicts = bindings.filter((binding) => record.owners.has(binding));
-  if (conflicts.length > 0) throw new OutputBindingConflictError(context, conflicts);
+function acquirePrepared(record, descriptor, bindings, context) {
   if (record.epoch === Number.MAX_SAFE_INTEGER) {
     throw new OutputTargetStaleError(context, "target sink generation space is exhausted");
   }
+  if (record.phase === "attached") {
+    assertFresh(record, context);
+  } else {
+    installAttachment(record, descriptor, context);
+  }
 
+  const conflicts = bindings.filter((binding) => record.owners.has(binding));
+  if (conflicts.length > 0) throw new OutputBindingConflictError(context, conflicts);
   const state = {
     bindings,
     bindingSet: new Set(bindings),
     values: new Map(),
     active: true,
   };
-  record.leases.add(state);
+  record.leases.push(state);
   for (const binding of bindings) record.owners.set(binding, state);
   record.epoch++;
   return leaseHandle(record, state, context);
 }
 
+function acquireFromAuthority(record, outputBindings, context) {
+  return runExclusive(record, context, () => {
+    const { descriptor, bindings } = preflightAcquisition(
+      record.target,
+      outputBindings,
+      context,
+    );
+    return acquirePrepared(record, descriptor, bindings, context);
+  });
+}
+
+function installAuthority(target, context) {
+  const record = {
+    target,
+    authority: null,
+    phase: "new",
+    document: null,
+    root: null,
+    realm: null,
+    Sheet: null,
+    selector: null,
+    liveSheet: null,
+    scratchSheet: null,
+    liveText: "",
+    leases: [],
+    owners: new Map(),
+    stamp: 0,
+    epoch: 0,
+    busy: false,
+    journal: null,
+    pending: null,
+  };
+  const authority = Object.create(null);
+  Object.defineProperties(authority, {
+    protocol: {
+      value: PROTOCOL,
+      configurable: false,
+      enumerable: false,
+      writable: false,
+    },
+    acquire: {
+      value: (outputBindings, acquireContext) =>
+        acquireFromAuthority(record, outputBindings, acquireContext),
+      configurable: false,
+      enumerable: false,
+      writable: false,
+    },
+  });
+  Object.freeze(authority);
+  record.authority = authority;
+  try {
+    Object.defineProperty(target, TARGET_STATE, {
+      value: authority,
+      configurable: false,
+      enumerable: false,
+      writable: false,
+    });
+  } catch (cause) {
+    throw new OutputTargetCapabilityError(
+      context,
+      "target cannot host the immutable output-sink authority",
+      { cause },
+    );
+  }
+  return record;
+}
+
 /**
  * Acquire a linear owner for an exact custom-property output set.
  *
- * This is an internal imperative-shell API. The target remains the caller's
- * element; a constructed stylesheet is adopted into its current Document or
- * ShadowRoot and is bound back to that element by a private marker selector.
+ * The only target identities are Document.documentElement (`:root`) and the
+ * host of its own open ShadowRoot (`:host`). The target retains an immutable
+ * authority so failed host effects remain recoverable across module copies.
  */
+function acquireOutputLeaseUnchecked(target, outputBindings, context) {
+  if (target !== null && (typeof target === "object" || typeof target === "function")) {
+    const existing = authorityDescriptor(target, context);
+    if (existing) {
+      if (!authorityCompatible(existing)) {
+        throw new OutputTargetCapabilityError(
+          context,
+          "target has an incompatible output-sink authority",
+        );
+      }
+      return existing.value.acquire(outputBindings, context);
+    }
+  }
+
+  const prepared = preflightAcquisition(target, outputBindings, context);
+  const raced = authorityDescriptor(target, context);
+  if (raced) {
+    if (!authorityCompatible(raced)) {
+      throw new OutputTargetCapabilityError(
+        context,
+        "target has an incompatible output-sink authority",
+      );
+    }
+    return raced.value.acquire(outputBindings, context);
+  }
+  const record = installAuthority(target, context);
+  return runExclusive(record, context, () =>
+    acquirePrepared(record, prepared.descriptor, prepared.bindings, context),
+  );
+}
+
 export function acquireOutputLease(target, outputBindings, context = "output sink") {
   if (target === null || (typeof target !== "object" && typeof target !== "function")) {
     return acquireOutputLeaseUnchecked(target, outputBindings, context);
   }
-
-  const targets = acquisitionTargets(target, context);
-  if (targets.has(target)) throw new OutputSinkBusyError(context);
-  targets.add(target);
-  try {
-    return acquireOutputLeaseUnchecked(target, outputBindings, context);
-  } finally {
-    targets.delete(target);
-  }
+  const admission = admissionAuthority(context);
+  return admission.run(target, context, () =>
+    acquireOutputLeaseUnchecked(target, outputBindings, context),
+  );
 }

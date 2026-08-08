@@ -11,6 +11,7 @@ import {
   readdirSync,
   readlinkSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -19,6 +20,8 @@ import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 
 import {
+  runtimeSmokeSource,
+  typeSmokeSource,
   validateNumericalEvidenceArtifacts,
   validateSolveFailurePair,
   validateSolveFamily,
@@ -911,12 +914,27 @@ test("the atomic output sink has one bounded pinned-Chrome browser gate", () => 
     assert.match(source, /"legacy live CSSOM instrumentation is mutation-sensitive"/u);
     assert.match(source, /"live Typed OM instrumentation is mutation-sensitive"/u);
     assert.match(source, /"binding admission performs no live replacement before commit"/u);
+    assert.match(source, /"exact-target-identity"/u);
+    assert.match(source, /"document root uses the exact :root selector"/u);
+    assert.match(source, /"open ShadowRoot uses the exact :host selector"/u);
+    assert.match(
+      source,
+      /"arbitrary connected light-DOM child is outside the output identity boundary"/u,
+    );
+    assert.match(
+      source,
+      /"arbitrary ShadowRoot descendant cannot impersonate its host identity"/u,
+    );
+    assert.match(source, /"closed ShadowRoot is outside the explicit output identity boundary"/u);
+    assert.match(source, /"cloneNode\(true\) cannot receive the shadow host owned property"/u);
+    assert.doesNotMatch(source, /markerName|data-lab-colors-output-sink/u);
     assert.match(source, /"post-replace-drift-recovery"/u);
-    assert.match(source, /let afterLiveReplace = null;/u);
+    assert.match(source, /let injectPostReplaceDrift = true;/u);
     assert.match(source, /"OUTPUT_ATOMICITY_VIOLATION"/u);
-    assert.match(source, /"inline replacement race preserves its typed host-drift cause"/u);
-    assert.match(source, /"marker replacement race preserves its typed host-drift cause"/u);
-    assert.match(source, /"cross-root race target can be reacquired in its new ShadowRoot"/u);
+    assert.match(source, /"post-replace drift restores prior live bytes exactly"/u);
+    assert.match(source, /"post-replace drift leaves the logical stamp unchanged"/u);
+    assert.match(source, /"post-replace drift leaves the prior computed value effective"/u);
+    assert.match(source, /"temporary replaceSync fault wrapper is restored exactly"/u);
     assert.doesNotMatch(source, /(?:playwright|puppeteer|selenium|npm install|npx )/iu);
   };
 
@@ -991,6 +1009,18 @@ test("the atomic output sink has one bounded pinned-Chrome browser gate", () => 
     ["unobserved binding precommit", proof.replace(
       '"binding admission performs no live replacement before commit"',
       '"binding admission checked only final state"',
+    )],
+    ["lost exact root selector oracle", proof.replace(
+      '"document root uses the exact :root selector"',
+      '"document root has a selector"',
+    )],
+    ["lost clone identity counterexample", proof.replace(
+      '"cloneNode(true) cannot receive the shadow host owned property"',
+      '"clone was appended"',
+    )],
+    ["lost post-replace byte rollback oracle", proof.replace(
+      '"post-replace drift restores prior live bytes exactly"',
+      '"post-replace drift was observed"',
     )],
   ]) {
     assert.notEqual(mutant, proof, `${name} mutation must alter the proof script`);
@@ -2520,6 +2550,110 @@ test("published build metadata binds source, conformance, and WASM inputs", () =
   assert.match(verifier, /role: "runtime", \.\.\.wasm\.runtime/u);
   assert.doesNotMatch(verifier, /role: "compiler"/u);
   assert.match(verifier, /buildMetadata,/u);
+});
+
+test("clean consumer smoke proves the structural output lifecycle and readonly type surface", () => {
+  const runtime = runtimeSmokeSource();
+  const types = typeSmokeSource();
+
+  const assertStructuralRuntime = (source) => {
+    assert.match(source, /\bapplyTheme,/u, "runtime smoke must consume applyTheme from package root");
+    assert.match(source, /const runtimeDocument = \(\) =>/u);
+    assert.match(source, /class FakeCSSStyleSheet/u);
+    assert.match(source, /selector === ":root"/u);
+    assert.match(source, /documentElement/u);
+    assert.match(source, /const assertPublished =/u);
+    assert.match(source, /const assertDisposed =/u);
+    assert.equal(
+      [...source.matchAll(/applyTheme\(appliedTarget, resolved\)/gu)].length,
+      2,
+      "identical apply must exercise the sink no-op path",
+    );
+    assert.match(source, /host\.liveReplaceCount, 1/u);
+    assert.match(source, /host\.scratchReplaceCount > 0/u);
+    assert.match(source, /host\.document\.adoptedStyleSheets\.length, 0/u);
+    assert.match(source, /watcher\.refresh\(\)/u);
+    assert.match(source, /assertPublished\(watchedHost, "identical watchTheme refresh"\)/u);
+    assert.match(source, /watcher\.dispose\(\)/u);
+    assert.match(source, /adaptive\.tick\(0\)/u);
+    assert.match(source, /adaptive\.dispose\(\)/u);
+    assert.doesNotMatch(source, /runtimeTarget|output-host|output-sink/u);
+  };
+  assertStructuralRuntime(runtime);
+
+  for (const [name, mutation] of [
+    ["style-only target", (source) => source.replace("const runtimeDocument = () =>", "const runtimeTarget = () =>")],
+    ["missing constructed sheet", (source) => source.replace("class FakeCSSStyleSheet", "class RemovedCSSStyleSheet")],
+    [
+      "missing identical apply no-op",
+      (source) => source.replace(
+        "assert.equal(applyTheme(appliedTarget, resolved), applied);",
+        "assert.equal(applied, applied);",
+      ),
+    ],
+    ["missing universal watch disposal", (source) => source.replaceAll("watcher.dispose()", "watcher.stop()")],
+    ["missing universal adapt disposal", (source) => source.replaceAll("adaptive.dispose()", "adaptive.stop()")],
+  ]) {
+    assert.throws(
+      () => assertStructuralRuntime(mutation(runtime)),
+      undefined,
+      `contract mutation must bite: ${name}`,
+    );
+  }
+
+  assert.match(types, /type OutputBindingSet/u);
+  assert.match(types, /type ApplyThemeAttachment as RootApplyThemeAttachment/u);
+  assert.match(types, /type ApplyThemeAttachment as SubpathApplyThemeAttachment/u);
+  assert.match(types, /type WatchController as RootWatchController/u);
+  assert.match(types, /type AdaptController as RootAdaptController/u);
+  assert.match(types, /const outputBindings: OutputBindingSet = resolved\.outputBindings/u);
+  assert.match(types, /@ts-expect-error OutputBindingSet is immutable/u);
+  assert.match(types, /outputBindings\.push\(/u);
+  assert.match(types, /\.dispose\(\)/u);
+  assert.match(types, /\[Symbol\.dispose\]\?\.\(\)/u);
+});
+
+test("generated clean-consumer type smoke compiles at both supported TypeScript gates", () => {
+  const packageDirectory = join(root, "packages", "colors");
+  const temporary = mkdtempSync(join(tmpdir(), "labcolors-consumer-type-smoke-"));
+  const smoke = join(temporary, "smoke.ts");
+  try {
+    writeFileSync(
+      join(temporary, "package.json"),
+      `${JSON.stringify({ private: true, type: "module" }, null, 2)}\n`,
+    );
+    const packageScope = join(temporary, "node_modules", "@labpics");
+    mkdirSync(packageScope, { recursive: true });
+    symlinkSync(
+      packageDirectory,
+      join(packageScope, "colors"),
+      process.platform === "win32" ? "junction" : "dir",
+    );
+    writeFileSync(smoke, typeSmokeSource());
+    for (const compiler of ["typescript-floor", "typescript"]) {
+      execFileSync(process.execPath, [
+        join(packageDirectory, "node_modules", compiler, "lib", "tsc.js"),
+        "--noEmit",
+        "--strict",
+        "--skipLibCheck",
+        "false",
+        "--target",
+        "ES2022",
+        "--lib",
+        "ES2022,DOM",
+        "--module",
+        "NodeNext",
+        "--moduleResolution",
+        "NodeNext",
+        smoke,
+      ], {
+        cwd: temporary,
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+    }
+  } finally {
+    rmSync(temporary, { recursive: true, force: true });
+  }
 });
 
 test("runtime declarations expose one curated type surface", () => {

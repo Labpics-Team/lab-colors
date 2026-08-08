@@ -55,7 +55,7 @@ class FakeRule {
 
 function parseSheet(text) {
   if (text === "") return [];
-  const match = /^(\[[a-z0-9-]+\]) \{(?: (.*))?\}$/u.exec(text);
+  const match = /^(:root|:host) \{(?: (.*))?\}$/u.exec(text);
   if (!match) return [];
   const declarations = [];
   if (match[2]) {
@@ -78,8 +78,6 @@ function parseSheet(text) {
  * replacements never become observable.
  */
 export function outputElement(initialInline = []) {
-  const attributes = new Map();
-  const elements = [];
   const inlineStyle = new FakeStyleDeclaration(initialInline);
   const props = new Map(initialInline);
   const mutations = [];
@@ -93,11 +91,6 @@ export function outputElement(initialInline = []) {
     nodeType: 9,
     defaultView: null,
     adoptedStyleSheets: [],
-    querySelectorAll(selector) {
-      const match = /^\[([a-z0-9-]+)\]$/u.exec(selector);
-      if (!match) return [];
-      return elements.filter((element) => element.hasAttribute(match[1]));
-    },
   };
 
   function syncEffective(sheet) {
@@ -140,9 +133,6 @@ export function outputElement(initialInline = []) {
     isConnected: true,
     ownerDocument: root,
     getRootNode: () => root,
-    hasAttribute: (name) => attributes.has(name),
-    setAttribute: (name, value) => attributes.set(name, String(value)),
-    removeAttribute: (name) => attributes.delete(name),
     style: inlineStyle,
     props,
     mutations,
@@ -167,6 +157,6 @@ export function outputElement(initialInline = []) {
       },
     },
   };
-  elements.push(target);
+  root.documentElement = target;
   return target;
 }

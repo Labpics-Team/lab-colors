@@ -61,11 +61,12 @@ const deferOutsideInjectedHost = (callback) => {
  */
 
 /**
- * Keep `element`'s `--lab-*` variables aligned with a supplied background or
- * the supported ancestor-chain reference estimate.
+ * Keep an exact output target aligned with a supplied background or the
+ * supported ancestor-chain reference estimate observed from `element`.
  *
- * @param {*} element  The surface to read the background from and (by default)
- *   write the variables onto.
+ * @param {*} element  The surface to read the background from. When it is also
+ *   the default output target, it must be its document's `documentElement` or
+ *   the host of its own open `shadowRoot`.
  * @param {object} options
  * @param {{ resolveTheme: (bgHex: string, theme: string) => object }} options.colors
  *   An initialised `LabColors` engine (already `await init()`-ed).
@@ -75,7 +76,7 @@ const deferOutsideInjectedHost = (callback) => {
  *   image/gradient/blur remains one declared point, not whole-field evidence.
  *   When supplied, it must be a non-empty string; invalid explicit evidence is
  *   rejected instead of being reinterpreted as the omitted-input fallback.
- * @param {*} [options.target=element]  Element to write the variables onto.
+ * @param {*} [options.target=element]  Exact `:root`/`:host` output target.
  * @param {string} [options.canvas]  Caller-declared opaque page canvas.
  * @param {boolean} [options.observe=true]  Auto-refresh on `style`/`class`
  *   attribute changes in the observed subtree.

@@ -2059,6 +2059,45 @@ test("stop retries the same animation-frame cleanup after a transient failure", 
   assert.equal(attempts, 2);
 });
 
+test("dispose retries frame cleanup after its output lease was already revoked", () => {
+  const el = fakeElement();
+  const cleanupFailure = new Error("transient dispose cancellation failure");
+  const frames = [];
+  let attempts = 0;
+  const ctrl = adaptTheme(el, {
+    colors: fakeColors(oneRole("#111111", 100)),
+    theme: "initial",
+    background: "#FFFFFF",
+    target: el,
+    now: () => 1,
+    win: {
+      requestAnimationFrame(callback) {
+        frames.push(callback);
+        return 17;
+      },
+      cancelAnimationFrame(id) {
+        assert.equal(id, 17);
+        attempts++;
+        if (attempts === 1) throw cleanupFailure;
+      },
+    },
+  });
+  ctrl.start();
+
+  assert.throws(() => ctrl.dispose(), (error) => error === cleanupFailure);
+  assert.deepEqual([...el.props], [], "the first pass still revokes the complete output set");
+  assert.equal(el.outputHost.liveSheet(), null);
+
+  ctrl.start();
+  ctrl.tick();
+  assert.equal(frames.length, 1, "pending disposal remains terminal to new colour/frame work");
+  assert.doesNotThrow(() => ctrl.dispose());
+  assert.equal(attempts, 2, "the second dispose retries the retained frame handle");
+
+  frames[0]();
+  assert.equal(frames.length, 1, "the stale callback stays inert after terminal cleanup");
+});
+
 test("restart cannot orphan a frame whose first cancellation failed", () => {
   let nextId = 1;
   let firstFailure = true;

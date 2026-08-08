@@ -49,7 +49,10 @@ ThemeConfig клиента
 - **Браузерное применение.** `applyTheme`, `watchTheme` и `adaptTheme` публикуют
   Core-authored `outputBindings` в один целевой constructed `CSSStyleSheet`.
   Публикация сначала проверяется на scratch-sheet, затем выполняется одним
-  `replaceSync`; inline-style и поиск имён по префиксу не используются.
+  `replaceSync`; inline-style и поиск имён по префиксу не используются. Точной
+  целью служит только `document.documentElement` (`:root`) либо host собственного
+  открытого ShadowRoot (`:host`); произвольный light-DOM selector не выдаётся за
+  identity.
 
 ## Что не следует приписывать текущей реализации
 
@@ -116,6 +119,7 @@ if (!(panel instanceof HTMLElement)) {
 const watcher = watchTheme(panel, {
   colors,
   theme: "light",
+  target: document.documentElement,
 });
 
 watcher.setTheme("dark");

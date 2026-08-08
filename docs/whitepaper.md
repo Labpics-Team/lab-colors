@@ -194,10 +194,14 @@ Core; `vars` содержит только значения из этого на
 и `adaptTheme` публикуют набор через один constructed `CSSStyleSheet`, привязанный
 к целевому элементу. Перед публикацией sink собирает и проверяет полный stylesheet
 на scratch-sheet, затем выполняет один `replaceSync` live-sheet; prefix scan,
-inline writer и rollback не являются частями протокола.
+inline writer и cloneable selector-marker не являются частями протокола. Если
+postcondition нарушен после host-вызова, sink восстанавливает и проверяет
+предыдущие bytes до сообщения об отказе.
 
-Цель должна быть подключена к своему `Document` либо `ShadowRoot`, поддерживающему
-constructed sheets. Перемещение, отсоединение или внешнее изменение sink приводит к
+Целью служит только `document.documentElement` (`:root`) либо host собственного
+открытого ShadowRoot (`:host`), поддерживающего constructed sheets. Это
+identity-native граница: обычный `cloneNode(true)` не может скопировать владение.
+Перемещение, отсоединение или внешнее изменение sink приводит к
 типизированной stale-ошибке. Inline-значение для owned binding отклоняет публикацию
 до изменения live-sheet, а несвязанные inline-значения сохраняются. `stop()` у
 контроллеров прекращает наблюдение или цикл и оставляет output; только `dispose()`

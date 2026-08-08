@@ -2,9 +2,11 @@
 
 import type { ResolvedTheme } from "./index.js";
 
-export interface ApplyThemeAttachment extends Disposable {
+export interface ApplyThemeAttachment {
   /** Atomically revoke only the output bindings owned by this application. */
   dispose(): void;
+  /** Explicit-resource-management alias when the host defines `Symbol.dispose`. */
+  [Symbol.dispose]?(): void;
 }
 
 /**
@@ -14,7 +16,8 @@ export interface ApplyThemeAttachment extends Disposable {
  * структурный `OutputConflictError`; явные None, Unresolved и численная
  * неопределённость остаются метаданными без значения.
  *
- * @param element Целевой элемент, например `document.documentElement`.
+ * @param element Exact output target: its document's `documentElement`, or an
+ *   element whose own open `shadowRoot` is the output scope.
  * @param result Результат `LabColors.resolveTheme(...)`.
  */
 export declare function applyTheme(
