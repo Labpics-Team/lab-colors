@@ -114,7 +114,10 @@ test("the required worker runs the packed-browser mutations after the baseline p
   for (const binding of [
     'LAB_COLORS_BROWSER_PROOF_TIMEOUT_MS: "60000"',
     'LAB_COLORS_PRIVATE_MUTATION_CHILD_TIMEOUT_MS: "180000"',
-    'LAB_COLORS_PRIVATE_MUTATION_TIMEOUT_MS: "1200000"',
+    // The overall mutation deadline derives from the single wasm-job budget
+    // source: 20 minutes * 60000 ms. A literal change without touching the
+    // budget must fail this contract.
+    'export LAB_COLORS_PRIVATE_MUTATION_TIMEOUT_MS="$((WASM_PRIVATE_MUTATION_BUDGET_MINUTES * 60000))"',
     "VERIFIED_TARBALL: ${{ steps.verified-release.outputs.tarball }}",
     "VERIFIED_TARBALL_SHA256: ${{ steps.verified-release-identity.outputs.sha256 }}",
   ]) {

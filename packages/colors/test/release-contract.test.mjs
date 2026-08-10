@@ -217,6 +217,44 @@ function bashExecutable() {
   return candidate;
 }
 
+// Windows keeps the original case of inherited environment keys (usually
+// `Path`); Node passes every key through, so a second `PATH` key would not
+// reliably shadow the inherited one. Delete the path key case-insensitively
+// before setting the controlled PATH so a fakeBin substitution is guaranteed.
+function withControlledPath(environment, pathValue) {
+  const controlled = { ...environment };
+  for (const key of Object.keys(controlled)) {
+    if (key.toLowerCase() === "path") delete controlled[key];
+  }
+  controlled.PATH = pathValue;
+  return controlled;
+}
+
+// Windows without Developer Mode or SeCreateSymbolicLinkPrivilege rejects
+// symlink creation with EPERM before any inspected behavior runs. Probe real
+// symlink support once; symlink-specific scenarios skip only when the platform
+// cannot create symlinks — the symlink is never replaced by a regular file.
+let symlinkSupport = null;
+function symlinksSupported() {
+  if (symlinkSupport !== null) return symlinkSupport;
+  const probe = mkdtempSync(join(tmpdir(), "labcolors-symlink-probe-"));
+  try {
+    const target = join(probe, "target");
+    writeFileSync(target, "probe");
+    symlinkSync(target, join(probe, "link"), "file");
+    symlinkSupport = true;
+  } catch (error) {
+    if (error?.code === "EPERM" || error?.code === "EACCES" || error?.code === "ENOSYS") {
+      symlinkSupport = false;
+    } else {
+      throw error;
+    }
+  } finally {
+    rmSync(probe, { recursive: true, force: true });
+  }
+  return symlinkSupport;
+}
+
 function testPythonInvocation() {
   return process.platform === "win32"
     ? { commandName: "py", argsPrefix: ["-3"] }
@@ -731,11 +769,13 @@ else:
     assert.equal(admittedDeviceBoundaries.status, 0, admittedDeviceBoundaries.stderr);
     assert.deepEqual(JSON.parse(admittedDeviceBoundaries.stdout).inventory.files, nonDevices);
 
-    const linkedTarball = join(temporary, "linked-valid.tgz");
-    symlinkSync(valid.tarball, linkedTarball, "file");
-    const linkedResult = inspect({ tarball: linkedTarball, inventory: valid.inventory });
-    assert.notEqual(linkedResult.status, 0, "tarball path symlink unexpectedly passed");
-    assert.match(linkedResult.stderr, /symbolic link or reparse point/u);
+    if (symlinksSupported()) {
+      const linkedTarball = join(temporary, "linked-valid.tgz");
+      symlinkSync(valid.tarball, linkedTarball, "file");
+      const linkedResult = inspect({ tarball: linkedTarball, inventory: valid.inventory });
+      assert.notEqual(linkedResult.status, 0, "tarball path symlink unexpectedly passed");
+      assert.match(linkedResult.stderr, /symbolic link or reparse point/u);
+    }
 
     const rejected = [
       {
@@ -940,18 +980,20 @@ else:
       `${JSON.stringify({ schemaVersion: 1, files: ["a.txt"] })}\n`,
     );
 
-    const linkedInventory = join(temporary, "inventory-linked.json");
-    symlinkSync(inventoryBase, linkedInventory, "file");
-    const linkedInventoryResult = inspect({
-      tarball: inventoryValidTarball.tarball,
-      inventory: linkedInventory,
-    });
-    assert.notEqual(
-      linkedInventoryResult.status,
-      0,
-      "declared inventory symlink unexpectedly passed",
-    );
-    assert.match(linkedInventoryResult.stderr, /symbolic link or reparse point/u);
+    if (symlinksSupported()) {
+      const linkedInventory = join(temporary, "inventory-linked.json");
+      symlinkSync(inventoryBase, linkedInventory, "file");
+      const linkedInventoryResult = inspect({
+        tarball: inventoryValidTarball.tarball,
+        inventory: linkedInventory,
+      });
+      assert.notEqual(
+        linkedInventoryResult.status,
+        0,
+        "declared inventory symlink unexpectedly passed",
+      );
+      assert.match(linkedInventoryResult.stderr, /symbolic link or reparse point/u);
+    }
 
     const directoryInventory = join(temporary, "inventory-directory");
     mkdirSync(directoryInventory);
@@ -1140,6 +1182,11 @@ test("generated release writes cannot follow pre-planted temporary or destinatio
     assert.match(source, /atomicWriteGeneratedFile/u);
     assert.doesNotMatch(source, /\.tmp-\$\{process\.pid\}/u);
   }
+
+  // The whole fixture is a symlink scenario: on platforms that cannot create
+  // symlinks (Windows without Developer Mode) skip it instead of failing with
+  // EPERM before the inspected atomic-write behavior runs.
+  if (!symlinksSupported()) return;
 
   const temporary = mkdtempSync(join(tmpdir(), "labcolors-atomic-write-test-"));
   try {
@@ -1348,22 +1395,49 @@ test("the private Program WASM has one exact package-private import/export surfa
   );
 });
 
+// WASM sections are located by parsing the header and each section's LEB128
+// size, never by scanning for the memory-section byte pattern: the bytes
+// `05 03 01 00` can legitimately occur inside data, code, or custom section
+// payloads, and a raw scan would then mutate invalid WASM and fail for an
+// unrelated reason.
+function findMemorySectionOffset(wasm) {
+  let offset = 8;
+  while (offset < wasm.length) {
+    const sectionStart = offset;
+    const sectionId = wasm[offset++];
+    let size = 0;
+    let shift = 0;
+    let byte;
+    do {
+      if (offset >= wasm.length) return -1;
+      byte = wasm[offset++];
+      size |= (byte & 0x7f) << shift;
+      shift += 7;
+    } while (byte & 0x80);
+    if (sectionId === 5) return sectionStart;
+    offset += size;
+  }
+  return -1;
+}
+
+test("the private Program WASM memory section is found by parsing, not by byte pattern", () => {
+  // A custom section payload containing the decoy sequence `05 03 01 00`
+  // precedes the real memory section; the raw byte scan would stop at the
+  // decoy and mutate invalid WASM, while section parsing lands on id 5.
+  const wasm = Buffer.from([
+    0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, // header
+    0x00, 0x08, 0x03, 0x64, 0x65, 0x63, 0x05, 0x03, 0x01, 0x00, // custom "dec" + decoy
+    0x05, 0x03, 0x01, 0x00, 0x01, // real memory section (count 1, flags 0, min 1)
+  ]);
+  assert.equal(findMemorySectionOffset(wasm), 18);
+  assert.equal(findMemorySectionOffset(wasm.subarray(0, 18)), -1);
+});
+
 test("the private Program WASM rejects a shared-memory section mutant", () => {
   const wasm = readFileSync(
     join(root, "packages", "colors", "private-program", "labcolors_private_program.wasm"),
   );
-  let sectionOffset = -1;
-  for (let offset = 8; offset + 4 < wasm.length; offset += 1) {
-    if (
-      wasm[offset] === 5 &&
-      wasm[offset + 1] === 3 &&
-      wasm[offset + 2] === 1 &&
-      wasm[offset + 3] === 0
-    ) {
-      sectionOffset = offset;
-      break;
-    }
-  }
+  const sectionOffset = findMemorySectionOffset(wasm);
   assert.notEqual(sectionOffset, -1, "canonical private WASM must expose a compact memory section");
   const mutant = Buffer.concat([
     wasm.subarray(0, sectionOffset + 1),
@@ -2524,17 +2598,19 @@ test("tag ancestry guard works after credential-free checkout and rejects non-an
     const fakeNode = join(fakeBin, "node");
     writeFileSync(fakeNode, "#!/bin/sh\nexit 0\n");
     chmodSync(fakeNode, 0o755);
-    const runShellGuard = (sha) =>
-      execFileSync(bashExecutable(), ["-euo", "pipefail", "-c", fullGuard], {
+    const runShellGuard = (sha) => {
+      const env = withControlledPath(
+        process.env,
+        `${fakeBin}${delimiter}${process.env.PATH ?? ""}`,
+      );
+      env.GITHUB_SHA = sha;
+      return execFileSync(bashExecutable(), ["-euo", "pipefail", "-c", fullGuard], {
         cwd: shellFixture,
-        env: {
-          ...process.env,
-          GITHUB_SHA: sha,
-          PATH: `${fakeBin}${delimiter}${process.env.PATH ?? ""}`,
-        },
+        env,
         encoding: "utf8",
         stdio: "pipe",
       });
+    };
     assert.doesNotThrow(() => runShellGuard(checkedOutSha));
     assert.throws(() => runShellGuard("b".repeat(40)), /Command failed/u);
   } finally {
@@ -3085,15 +3161,21 @@ test("publish artifact validator executes and rejects identity or byte drift", a
         { encoding: "utf8", stdio: "pipe" },
       ).trim();
       pythonBin = dirname(pythonExecutable);
-      assert.ok(existsSync(join(pythonBin, "python3.exe")));
+      // The validator resolves `python3` through PATH; a python.org Windows
+      // install ships python.exe without python3.exe, so provide the alias in
+      // fakeBin (first on PATH) instead of asserting a system python3.exe.
+      linkOrCopy(pythonExecutable, join(fakeBin, "python3.exe"));
     } else {
       writeFileSync(join(fakeBin, "npm"), "#!/bin/sh\nprintf '11.9.0\\n'\n");
       chmodSync(join(fakeBin, "npm"), 0o755);
     }
 
-    const execute = () => execFileSync(process.execPath, [validatorPath], {
-      env: {
-        ...process.env,
+    const execute = () => {
+      const env = withControlledPath(
+        process.env,
+        [fakeBin, pythonBin, process.env.PATH ?? ""].filter(Boolean).join(delimiter),
+      );
+      Object.assign(env, {
         ARTIFACT_DIR: artifact,
         EXPECTED_SHA: expectedSha,
         EXPECTED_TAG: `colors-v${packageVersion}`,
@@ -3102,20 +3184,28 @@ test("publish artifact validator executes and rejects identity or byte drift", a
         GITHUB_WORKSPACE: root,
         GITHUB_OUTPUT: output,
         RUNNER_TEMP: temporary,
-        PATH: [fakeBin, pythonBin, process.env.PATH ?? ""].filter(Boolean).join(delimiter),
-      },
-      encoding: "utf8",
-      stdio: "pipe",
-      cwd: root,
-    });
+      });
+      return execFileSync(process.execPath, [validatorPath], {
+        env,
+        encoding: "utf8",
+        stdio: "pipe",
+        cwd: root,
+      });
+    };
 
     writeFileSync(manifestPath, `${JSON.stringify(manifest)}\n`);
     execute();
     const verifiedOutputs = new Map(
       readFileSync(output, "utf8")
         .trim()
-        .split("\n")
-        .map((line) => line.split("=", 2)),
+        .split(/\r?\n/u)
+        .map((line) => {
+          // GITHUB_OUTPUT allows `=` inside values (e.g. Windows paths), so
+          // split only at the first separator and keep the whole remainder.
+          const separator = line.indexOf("=");
+          assert.ok(separator > 0, `malformed GITHUB_OUTPUT line: ${line}`);
+          return [line.slice(0, separator), line.slice(separator + 1)];
+        }),
     );
     const verifiedTarball = verifiedOutputs.get("tarball");
     assert.ok(verifiedTarball && verifiedTarball !== tarball);
@@ -3957,12 +4047,12 @@ test("published build metadata binds source, conformance, and WASM inputs", () =
   assert.match(prepare, /sha256: sha256\(runtimeWasm\)/u);
   assert.match(
     prepare,
-    /assertWebAssemblyBinary\(runtimeWasm, "pkg\/labcolors_bg\.wasm"\)/u,
+    /assertWasm\(runtimeWasm, "pkg\/labcolors_bg\.wasm"\)/u,
     "prepack must reject a malformed public runtime WASM before writing metadata",
   );
   assert.match(
     prepare,
-    /assertWebAssemblyBinary\(privateProgramWasm, PRIVATE_PROGRAM_WASM_PATH\)/u,
+    /assertWasm\(privateProgramWasm, PRIVATE_PROGRAM_WASM_PATH\)/u,
   );
 
   const verifier = read("scripts", "verify-package-release.mjs");

@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { mkdir, readFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
@@ -11,6 +10,8 @@ import {
   PRIVATE_PROGRAM_METADATA_PATH,
   PRIVATE_PROGRAM_ROLE,
   PRIVATE_PROGRAM_WASM_PATH,
+  artifactMetadata,
+  assertWasm,
   readPrivateProgramBuildReceipt,
 } from "./build-private-program.mjs";
 import {
@@ -41,20 +42,6 @@ const CONFORMANCE_FILES = [
   "solve.json",
   "wcag22.json",
 ];
-
-const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
-const WASM_MAGIC = Buffer.from([0, 97, 115, 109]);
-
-function assertWebAssemblyBinary(bytes, path) {
-  if (bytes.length < 8 || !bytes.subarray(0, WASM_MAGIC.length).equals(WASM_MAGIC)) {
-    throw new Error(`${path} is not a WebAssembly binary`);
-  }
-}
-
-function artifactMetadata(path, bytes) {
-  if (bytes.length === 0) throw new Error(`packed artifact is empty: ${path}`);
-  return { path, bytes: bytes.length, sha256: sha256(bytes) };
-}
 
 function git(args) {
   return execFileSync("git", args, {
@@ -146,8 +133,8 @@ export async function prepareNpmPackage() {
       readFile(PRIVATE_PROGRAM_WASM),
       ...CONFORMANCE_FILES.map((file) => readFile(resolve(CONFORMANCE_DIR, file))),
     ]);
-  assertWebAssemblyBinary(runtimeWasm, "pkg/labcolors_bg.wasm");
-  assertWebAssemblyBinary(privateProgramWasm, PRIVATE_PROGRAM_WASM_PATH);
+  assertWasm(runtimeWasm, "pkg/labcolors_bg.wasm");
+  assertWasm(privateProgramWasm, PRIVATE_PROGRAM_WASM_PATH);
   const privateProgramWasmArtifact = artifactMetadata(
     PRIVATE_PROGRAM_WASM_PATH,
     privateProgramWasm,

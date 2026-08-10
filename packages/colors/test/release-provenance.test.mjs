@@ -33,9 +33,42 @@ const PREPACK_FIXTURE_SCRIPT_FILES = Object.freeze([
   "release-evidence.mjs",
 ]);
 
+test("the prepack fixture closure check distinguishes incompleteness from the guard regression", () => {
+  // A positive fixture test would otherwise fail with the same
+  // ERR_MODULE_NOT_FOUND as the negative guard test, masking an incomplete
+  // fixture list under a regression.
+  assert.throws(
+    () => assertPrepackFixtureScriptClosure(["prepare-npm-package.mjs"]),
+    /prepack fixture is missing scripts\/atomic-write\.mjs/u,
+  );
+  assert.throws(
+    () => assertPrepackFixtureScriptClosure(PREPACK_FIXTURE_SCRIPT_FILES.slice(0, 2)),
+    /prepack fixture is missing scripts\/cargo-workspace\.mjs/u,
+  );
+  assert.doesNotThrow(() =>
+    assertPrepackFixtureScriptClosure(PREPACK_FIXTURE_SCRIPT_FILES),
+  );
+});
+
+function assertPrepackFixtureScriptClosure(scriptFiles) {
+  for (const dependency of scriptFiles) {
+    const source = readFileSync(join(root, "scripts", dependency), "utf8");
+    for (const [, specifier] of source.matchAll(/from\s+"\.\/([\w.-]+\.mjs)"/gu)) {
+      assert.ok(
+        scriptFiles.includes(specifier),
+        `prepack fixture is missing scripts/${specifier}`,
+      );
+    }
+  }
+}
+
 function copyPrepackFixture(fixture, { includeAtomicWriter = true } = {}) {
   const scripts = join(fixture, "scripts");
   mkdirSync(scripts, { recursive: true });
+  // Инвариант: фикстура содержит весь граф относительных импортов prepack.
+  // Иначе положительный тест падал бы с ERR_MODULE_NOT_FOUND и маскировал
+  // отсутствие фикстуры под регрессию source guard.
+  assertPrepackFixtureScriptClosure(PREPACK_FIXTURE_SCRIPT_FILES);
   for (const dependency of PREPACK_FIXTURE_SCRIPT_FILES) {
     if (!includeAtomicWriter && dependency === "atomic-write.mjs") continue;
     copyFileSync(join(root, "scripts", dependency), join(scripts, dependency));

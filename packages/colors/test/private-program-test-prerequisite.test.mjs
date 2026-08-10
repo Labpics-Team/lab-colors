@@ -107,11 +107,21 @@ test("the hermetic child environment drops every forbidden override and keeps re
 });
 
 test("the hermetic child environment satisfies the strict canonical validator", () => {
+  // The parent spells out every required canonical pin explicitly instead of
+  // inheriting them from the ambient process.env: the strict validator must
+  // pass deterministically outside CI, regardless of which CARGO_HOME,
+  // RUSTUP_HOME, RUST_TOOLCHAIN, PATH, TMPDIR, or LANG the caller machine
+  // happens to export.
   const parent = {
-    ...process.env,
     CARGO_INCREMENTAL: "0",
     RUSTFLAGS: "-C debug-assertions",
     NODE_OPTIONS: "--max-old-space-size=128",
+    PATH: "/opt/node/bin:/usr/bin:/bin",
+    CARGO_HOME: "/opt/cargo",
+    RUSTUP_HOME: "/opt/rustup",
+    RUST_TOOLCHAIN: "1.96.0",
+    TMPDIR: "/tmp/sandbox",
+    LANG: "C",
     BINARYEN_ROOT: "/opt/binaryen-version_117",
     BINARYEN_RELEASE: "version_117",
     BINARYEN_NODE_SHA256: "2d5a42f2d167a7cc2b4b6664c44c5ace1690d13db4f527324f052afbad461a07",

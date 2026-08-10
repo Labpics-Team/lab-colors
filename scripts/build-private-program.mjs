@@ -62,7 +62,17 @@ const CANONICAL_RUST_EXECUTOR = deepFreeze({
   identity: "self-reported-version-and-commit",
 });
 
-const sharedWasmToolchain = JSON.parse(readFileSync(RUNTIME_WASM_BUDGET, "utf8")).toolchain;
+// Пин делит toolchain с runtime-бюджетом: отсутствие или повреждение файла —
+// это отказ сборки, а не невыразимая ошибка загрузки модуля.
+const sharedWasmToolchain = (() => {
+  try {
+    return JSON.parse(readFileSync(RUNTIME_WASM_BUDGET, "utf8")).toolchain;
+  } catch (error) {
+    fail(
+      `cannot read the runtime WASM toolchain pin ${RUNTIME_WASM_BUDGET}: ${error.message}`,
+    );
+  }
+})();
 const CANONICAL_RUSTC_COMMIT =
   "ac68faa20c58cbccd01ee7208bf3b6e93a7d7f96";
 const CANONICAL_CARGO_COMMIT =
@@ -359,12 +369,12 @@ export const PRIVATE_PROGRAM_CANONICAL_BUILD = deepFreeze(
 
 const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
 
-function artifactMetadata(path, bytes) {
+export function artifactMetadata(path, bytes) {
   if (bytes.length === 0) fail(`artifact is empty: ${path}`);
   return { path, bytes: bytes.length, sha256: sha256(bytes) };
 }
 
-function assertWasm(bytes, label) {
+export function assertWasm(bytes, label) {
   if (bytes.length < 8 || !bytes.subarray(0, WASM_MAGIC.length).equals(WASM_MAGIC)) {
     fail(`${label} is not a WebAssembly binary`);
   }
@@ -777,6 +787,18 @@ function controlledOptimizerEnvironment(temporaryDirectory = tmpdir()) {
   };
 }
 
+// Единственный источник правила «Binaryen переменные задаются вместе»; его же
+// использует direct-вызов сборки, чтобы конфигурацию нельзя было изменить
+// только в одном месте.
+function assertOptimizerConfigurationComplete(count) {
+  if (count !== 0 && count !== 3) {
+    fail(
+      "BINARYEN_ROOT, BINARYEN_RELEASE, and BINARYEN_NODE_SHA256 must be set together",
+    );
+  }
+  return count;
+}
+
 async function configuredOptimizer(environment = process.env) {
   const root = environmentValue(environment, "BINARYEN_ROOT")?.trim() || "";
   const release = environmentValue(environment, "BINARYEN_RELEASE")?.trim() || "";
@@ -784,11 +806,7 @@ async function configuredOptimizer(environment = process.env) {
     environmentValue(environment, "BINARYEN_NODE_SHA256")?.trim().toLowerCase() || "";
   const configured = [root, release, archiveSha256].filter(Boolean).length;
   if (configured === 0) return null;
-  if (configured !== 3) {
-    fail(
-      "BINARYEN_ROOT, BINARYEN_RELEASE, and BINARYEN_NODE_SHA256 must be set together",
-    );
-  }
+  assertOptimizerConfigurationComplete(configured);
   if (
     release !== CANONICAL_OPTIMIZER.binaryenRelease ||
     archiveSha256 !== CANONICAL_OPTIMIZER.binaryenNodeArchiveSha256
@@ -1095,7 +1113,9 @@ export function validatePrivateProgramBuildReceipt(
 ) {
   assertWasm(wasm, PRIVATE_PROGRAM_WASM_PATH);
   const toolchain = requireOptimizer ? CANONICAL_TOOLCHAIN : receipt?.build?.toolchain;
-  if (!toolchain || (requireOptimizer && toolchain.optimizer === null)) {
+  // При requireOptimizer источник toolchain — канонический пин, поэтому
+  // raw-contact receipt отклоняет именно сравнение дескриптора ниже.
+  if (!toolchain) {
     fail("canonical release requires the optimized private Program artifact");
   }
   const expected = receiptFor({
@@ -1139,11 +1159,7 @@ export async function buildPrivateProgram({ requireOptimizer = false } = {}) {
   const optimizerConfiguration = optimizerConfigurationCount();
   const canonicalRequested = requireOptimizer || optimizerConfiguration !== 0;
   if (canonicalRequested) validateCanonicalBuildEnvironment();
-  if (optimizerConfiguration !== 0 && optimizerConfiguration !== 3) {
-    fail(
-      "BINARYEN_ROOT, BINARYEN_RELEASE, and BINARYEN_NODE_SHA256 must be set together",
-    );
-  }
+  assertOptimizerConfigurationComplete(optimizerConfiguration);
   if (requireOptimizer && optimizerConfiguration === 0) {
     fail("canonical release requires the configured Binaryen optimizer");
   }

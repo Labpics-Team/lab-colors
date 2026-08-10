@@ -434,9 +434,8 @@ jobs:
   wasm:
     name: wasm build + headless test + size
     runs-on: ubuntu-latest
-    # 40 minutes is the declared pre-mutation budget; the private mutation
-    # proof owns 20 minutes, teardown owns 5 minutes, and the outer job keeps
-    # 5 additional minutes of scheduler headroom.
+    # Единственный источник истины для бюджетов ниже — job-level env
+    # WASM_JOB_TIMEOUT_MINUTES; литерал в timeout-minutes обязан совпадать с ним.
     timeout-minutes: 70
     # Native Binaryen 117 не завершил wasm-opt внутри systrap до bounded timeout
     # (run 30773180841). Официальный Node transport того же release дал byte-exact
@@ -445,6 +444,13 @@ jobs:
     env:
       BINARYEN_RELEASE: version_117
       BINARYEN_NODE_SHA256: "2d5a42f2d167a7cc2b4b6664c44c5ace1690d13db4f527324f052afbad461a07"
+      # Единственный источник истины для бюджетов wasm job. 40 minutes — это
+      # объявленный pre-mutation budget; private mutation proof владеет
+      # 20 минутами, teardown — 5, и job держит ещё 5 минут scheduler headroom
+      # (40 + 20 + 5 + 5 = 70 = timeout-minutes выше). Литерал timeout-minutes
+      # обязан совпадать с WASM_JOB_TIMEOUT_MINUTES, а deadline-ledger ниже
+      # выводится из него.
+      WASM_JOB_TIMEOUT_MINUTES: "70"
       WASM_PRE_MUTATION_BUDGET_MINUTES: "40"
       WASM_PRIVATE_MUTATION_BUDGET_MINUTES: "20"
       WASM_JOB_HEADROOM_MINUTES: "5"
@@ -837,7 +843,7 @@ jobs:
             echo "pre-mutation wasm budget exceeded: elapsed=${elapsed}s budget=${WASM_PRE_MUTATION_BUDGET_MINUTES}m" >&2
             exit 1
           fi
-          remaining="$((70 * 60 - elapsed))"
+          remaining="$((WASM_JOB_TIMEOUT_MINUTES * 60 - elapsed))"
           required="$(((WASM_PRIVATE_MUTATION_BUDGET_MINUTES + WASM_JOB_HEADROOM_MINUTES) * 60))"
           if (( remaining < required )); then
             echo "private mutation lacks declared headroom: remaining=${remaining}s required=${required}s" >&2
@@ -847,9 +853,11 @@ jobs:
         env:
           LAB_COLORS_BROWSER_PROOF_TIMEOUT_MS: "60000"
           LAB_COLORS_PRIVATE_MUTATION_CHILD_TIMEOUT_MS: "180000"
-          LAB_COLORS_PRIVATE_MUTATION_TIMEOUT_MS: "1200000"
           VERIFIED_TARBALL: ${{ steps.verified-release.outputs.tarball }}
           VERIFIED_TARBALL_SHA256: ${{ steps.verified-release-identity.outputs.sha256 }}
         run: |
           set -euo pipefail
+          # Overall mutation deadline derives from the single wasm-job budget
+          # source above, never from a duplicated literal.
+          export LAB_COLORS_PRIVATE_MUTATION_TIMEOUT_MS="$((WASM_PRIVATE_MUTATION_BUDGET_MINUTES * 60000))"
           node scripts/test-private-program-mutations.mjs "$VERIFIED_TARBALL" "$VERIFIED_TARBALL_SHA256"

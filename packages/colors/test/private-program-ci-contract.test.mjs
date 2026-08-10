@@ -149,6 +149,7 @@ function assertPrivateMutationDeadline(workflow) {
   const wasm = normalized.slice(wasmStart, nextJob === -1 ? normalized.length : nextJob);
   assert.match(wasm, /timeout-minutes: 70\n/u, "wasm job must include mutation headroom");
   for (const declaration of [
+    'WASM_JOB_TIMEOUT_MINUTES: "70"',
     'WASM_PRE_MUTATION_BUDGET_MINUTES: "40"',
     'WASM_PRIVATE_MUTATION_BUDGET_MINUTES: "20"',
     'WASM_JOB_HEADROOM_MINUTES: "5"',
@@ -172,7 +173,7 @@ function assertPrivateMutationDeadline(workflow) {
   assert.match(guardText, /WASM_PRIVATE_MUTATION_BUDGET_MINUTES/u);
   assert.match(guardText, /WASM_JOB_HEADROOM_MINUTES/u);
   assert.match(guardText, /remaining/u);
-  assert.match(guardText, /remaining="\$\(\(70 \* 60 - elapsed\)\)"/u);
+  assert.match(guardText, /remaining="\$\(\(WASM_JOB_TIMEOUT_MINUTES \* 60 - elapsed\)\)"/u);
   assert.match(
     guardText,
     /required="\$\(\(\(WASM_PRIVATE_MUTATION_BUDGET_MINUTES \+ WASM_JOB_HEADROOM_MINUTES\) \* 60\)\)"/u,
@@ -265,6 +266,7 @@ test("private mutation keeps its own deadline reachable inside the wasm job", ()
   assertPrivateMutationDeadline(worker);
   for (const mutation of [
     worker.replace("timeout-minutes: 70", "timeout-minutes: 40"),
+    worker.replace('WASM_JOB_TIMEOUT_MINUTES: "70"', 'WASM_JOB_TIMEOUT_MINUTES: "40"'),
     worker.replace("name: assert private mutation deadline headroom", "name: mutation deadline diagnostic only"),
     worker.replace("WASM_JOB_HEADROOM_MINUTES: \"5\"", "WASM_JOB_HEADROOM_MINUTES: \"0\""),
   ]) {
