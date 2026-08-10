@@ -42,6 +42,7 @@ reference-вектор сворачивает содержимое допуще�
 
 from __future__ import annotations
 
+import functools
 import hashlib
 import sys
 import unittest
@@ -358,6 +359,7 @@ def render_coordinate_structure_v1(
     return "\n".join(lines)
 
 
+@functools.cache
 def _derived_comparator_v1() -> pipeline.DiagnosticArbComparatorV1:
     binary = test_pipeline._static_elf(b"derived-comparator")
     result = pipeline.ControlledPipelineV1(

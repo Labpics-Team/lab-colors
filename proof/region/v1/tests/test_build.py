@@ -311,6 +311,14 @@ class ArbBuildIdentityCharacterizationTests(unittest.TestCase):
         )
 
         self.assertEqual(observed.input_bundle_length, 174_080)
+        # The sealed bundle carries an opaque binding that folds the source
+        # closure: `_arb_input_binding_identity_v2` starts from
+        # `request.admitted_sources.identity`, which commits to each archive's
+        # `archive_sha256`.  The fixture archives were re-encoded as canonical
+        # RFC 1951 stored-deflate gzip members (zlib-independent), so
+        # `archive_sha256` moved and this identity had to be re-derived.  The
+        # bundle *contents* did not change — `input_bundle_sha256` below is
+        # stable — only the source-lock binding moved.
         self.assertEqual(
             observed.input_bundle_sha256.hex(),
             "19b32598d41b021a792e54b807f0143940108055591ca5ef6ecb6a826dec576d",
