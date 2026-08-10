@@ -16,16 +16,24 @@ YAML parser the proof tree does not have.
 
 from __future__ import annotations
 
+import os
 import re
+import shutil
+import subprocess
+import sys
 import unittest
 from pathlib import Path
 
 PROOF = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(PROOF))
 REPO = PROOF.parents[2]
+
+import corpus_dispatch  # noqa: E402
 WORKFLOWS = REPO / ".github" / "workflows"
 
 _INPUT_REFERENCE_V1 = re.compile(r"\$\{\{\s*(?:github\.event\.)?inputs\.([A-Za-z0-9_-]+)")
 _DECLARED_INPUT_V1 = re.compile(r"^      ([A-Za-z0-9_-]+):\s*$")
+_INPUT_KEY_V1 = re.compile(r"^      [A-Za-z0-9_-]+:\s*$", re.MULTILINE)
 _INPUTS_BLOCK_V1 = re.compile(r"^    inputs:\s*$")
 
 
@@ -47,9 +55,56 @@ def _declared_inputs_v1(text: str) -> frozenset[str]:
             if match:
                 names.append(match.group(1))
                 continue
+            # A comment is prose, not structure.  Treating one as a
+            # dedent ended the block early and dropped every input declared
+            # below it — silently, because a shorter set still satisfies
+            # every assertion that only reads the names it did find.
+            if line.lstrip().startswith("#"):
+                continue
             if line.strip() and not line.startswith("        "):
                 inside = False
     return frozenset(names)
+
+
+class DeclaredInputReaderTests(unittest.TestCase):
+    """The reader itself, on text whose shape it must survive."""
+
+    def test_a_comment_does_not_end_the_input_block(self) -> None:
+        # The reader used to treat any line short of eight spaces as a
+        # dedent, so one comment hid every input below it.  Nothing failed:
+        # a truncated set of names still satisfies assertions about the
+        # names it kept.
+        text = "\n".join(
+            (
+                "on:",
+                "  workflow_dispatch:",
+                "    inputs:",
+                "      before:",
+                "        required: true",
+                "      # a note about the next one",
+                "      after:",
+                "        required: true",
+                "jobs:",
+            )
+        )
+        self.assertEqual(_declared_inputs_v1(text), frozenset({"before", "after"}))
+
+    def test_a_real_dedent_still_ends_the_input_block(self) -> None:
+        # The fix must not turn the reader into one that never stops: a key
+        # outside the block is not an input.
+        text = "\n".join(
+            (
+                "on:",
+                "  workflow_dispatch:",
+                "    inputs:",
+                "      inside:",
+                "        required: true",
+                "permissions:",
+                "      outside:",
+                "jobs:",
+            )
+        )
+        self.assertEqual(_declared_inputs_v1(text), frozenset({"inside"}))
 
 
 class WorkflowInputReferenceTests(unittest.TestCase):
@@ -134,6 +189,278 @@ class DualProofContainmentContractTests(unittest.TestCase):
         cover_check = self.text.index("refuse an incomplete cover")
         first_build = self.text.index("seal the full-domain dual proof")
         self.assertLess(cover_check, first_build)
+
+
+class LaneCampaignContractTests(unittest.TestCase):
+    """The lane's campaign guard and the coordinator's command must agree.
+
+    A guard that lives only in the coordinator cannot protect a checkout
+    older than the guard — that is how this project dispatched 133 runs and
+    then 69.  The lane therefore asserts the campaign invariant itself, and
+    these tests bind the two sides so they cannot drift into a state where
+    the coordinator dispatches something the lane refuses, or the lane admits
+    something no coordinator would send.
+    """
+
+    def setUp(self) -> None:
+        self.text = (WORKFLOWS / "verification-lanes.yml").read_text("utf-8")
+
+    def test_the_campaign_size_is_a_required_input(self) -> None:
+        # Required and without a default: GitHub refuses the dispatch before
+        # a runner exists, which is the whole point — an older coordinator
+        # cannot send this coordinate at all.
+        declared = _declared_inputs_v1(self.text)
+        self.assertIn("expect_lanes", declared)
+        block = self.text[self.text.index("      expect_lanes:") :]
+        # The declaration ends where the next one begins, not where a line
+        # that merely contains `jobs:` happens to sit: an input description
+        # mentioning the word would otherwise drag foreign text into the
+        # block and make this assertion answer about the wrong input.
+        following = _INPUT_KEY_V1.search(block, 1)
+        if following is not None:
+            block = block[: following.start()]
+        self.assertIn("required: true", block)
+        self.assertNotIn("default:", block)
+
+    def test_every_dispatched_command_carries_the_campaign_size(self) -> None:
+        plan = corpus_dispatch.lane_plan_v1()
+        commands = corpus_dispatch.verification_dispatch_commands_v1(
+            plan,
+            corpus_dispatch.DEFAULT_SHARD_WIDTH,
+            31000000001,
+            corpus_dispatch.EVIDENCE_ARTIFACTS_V1[0],
+        )
+        self.assertIs(type(commands), tuple)
+        self.assertEqual(len(commands), 256)
+        for command in commands:
+            coordinate = f"expect_lanes={len(commands)}"
+            self.assertIn(coordinate, command)
+            # Membership is not a dispatch: `gh` reads a coordinate only when
+            # `-f` introduces it, and a bare element would be an unrecognised
+            # positional argument the campaign discovers 256 times.
+            self.assertEqual(command[command.index(coordinate) - 1], "-f")
+
+    def test_the_size_the_coordinator_sends_satisfies_the_lane_arithmetic(
+        self,
+    ) -> None:
+        # The lane divides the domain by its own window width and compares.
+        # Whatever widths the plan admits, the pair must survive that check,
+        # or a correct campaign would refuse itself.
+        for lane_width in (1 << 16, 1 << 20, 1 << 23):
+            plan = corpus_dispatch.lane_plan_v1(lane_width=lane_width)
+            self.assertIs(type(plan), tuple, lane_width)
+            commands = corpus_dispatch.verification_dispatch_commands_v1(
+                plan,
+                corpus_dispatch.DEFAULT_SHARD_WIDTH,
+                1,
+                corpus_dispatch.EVIDENCE_ARTIFACTS_V1[0],
+            )
+            for command in commands:
+                points = int(
+                    next(
+                        item for item in command if item.startswith("window_points=")
+                    ).split("=")[1]
+                )
+                lanes = int(
+                    next(
+                        item for item in command if item.startswith("expect_lanes=")
+                    ).split("=")[1]
+                )
+                self.assertEqual(
+                    corpus_dispatch.FULL_DOMAIN % points, 0, lane_width
+                )
+                self.assertEqual(
+                    corpus_dispatch.FULL_DOMAIN // points, lanes, lane_width
+                )
+
+    def _guard_script_v1(self) -> str:
+        """The guard's own shell, lifted out of the step that carries it.
+
+        Asserting the text says `-ne` proves nothing about what the shell
+        does with it: the comparison was neutered in a mutation and every
+        text assertion here stayed green.  So the test runs the script.
+        """
+
+        start = self.text.index("      - name: refuse a lane that does not belong")
+        body = self.text.index("        run: |", start) + len("        run: |\n")
+        end = self.text.index("\n      - uses:", body)
+        return "\n".join(
+            line[10:] if line.startswith(" " * 10) else line
+            for line in self.text[body:end].splitlines()
+        )
+
+    def _run_guard_v1(
+        self,
+        window_points: str,
+        expect_lanes: str,
+        window_start: str = "0",
+    ) -> int:
+        bash = shutil.which("bash")
+        if bash is None:
+            self.skipTest("the lane guard is shell and needs a shell to run")
+        completed = subprocess.run(
+            (bash, "-c", self._guard_script_v1()),
+            capture_output=True,
+            text=True,
+            # The guard's exit status is the contract under test: a refusal
+            # is exit 64 by design, so a nonzero status must not raise here —
+            # it is the answer.
+            check=False,
+            env={
+                **os.environ,
+                "WINDOW_POINTS": window_points,
+                "EXPECT_LANES": expect_lanes,
+                "WINDOW_START": window_start,
+            },
+        )
+        return completed.returncode
+
+    def test_the_guard_admits_every_seam_of_the_cover(self) -> None:
+        # The whole plan has to survive its own guard, seam by seam.
+        for width in (1 << 16, 1 << 23):
+            lanes = corpus_dispatch.FULL_DOMAIN // width
+            for start in range(0, corpus_dispatch.FULL_DOMAIN, width):
+                self.assertEqual(
+                    self._run_guard_v1(str(width), str(lanes), str(start)),
+                    0,
+                    (width, start),
+                )
+
+    def test_the_guard_refuses_a_start_that_is_not_a_canonical_decimal(
+        self,
+    ) -> None:
+        # The defect that actually happened: a coordinate generated on
+        # Windows carried a carriage return, GitHub accepted the string, and
+        # the run-name rendered a title the collector cannot bind — 254 lanes
+        # whose replay could never be claimed.  Neither `[ -eq ]` nor
+        # `int()` would have objected: both accept surrounding whitespace.
+        for start in (
+            "65536\r",
+            "65536\n",
+            " 65536",
+            "65536 ",
+            "+65536",
+            "-65536",
+            "0x10000",
+            "065536",
+            "6553 6",
+            "",
+        ):
+            self.assertEqual(
+                self._run_guard_v1("65536", "256", start), 64, repr(start)
+            )
+
+        # A leading zero is not cosmetic here: `$(( ))` reads it as octal, so
+        # `0200000` becomes 65536 and sails through both the seam and the
+        # domain check as a perfectly ordinary window — while the run-name
+        # renders a title no plan window claims.  Every other rejected
+        # spelling above is also caught downstream, so deleting the
+        # leading-zero rule left this test green until this case existed.
+        self.assertEqual(self._run_guard_v1("65536", "256", "0200000"), 64)
+
+        # Same class on the width: octal `0100000` is 32768, which tiles the
+        # domain into 512 lanes, while the lane runner's `int()` replays
+        # 100000 points — one dispatch describing two different windows.
+        self.assertEqual(int("0100000"), 100000)
+        self.assertEqual(self._run_guard_v1("0100000", "512", "0"), 64)
+
+    def test_the_guard_refuses_a_start_off_the_seam_or_off_the_domain(
+        self,
+    ) -> None:
+        # A start inside a window belongs to no plan, and one past the end
+        # belongs to no domain; both would replay something the cover never
+        # asked for.
+        for start in ("1", "65535", "65537", "16777216", "16842752"):
+            self.assertEqual(
+                self._run_guard_v1("65536", "256", start), 64, start
+            )
+
+        # Past the shell's own integer the comparisons stop answering:
+        # `[ -ge ]` reports "not greater" for what it cannot parse and
+        # `$(( ))` wraps, so 2^64 is a perfectly aligned zero.  Deleting
+        # the coordinate bound leaves this test green without these cases.
+        self.assertEqual(18446744073709551616 % 65536, 0)
+        self.assertEqual(
+            self._run_guard_v1("65536", "256", "18446744073709551616"), 64
+        )
+        self.assertEqual(
+            self._run_guard_v1("18446744073709617152", "256", "0"), 64
+        )
+        self.assertEqual(self._run_guard_v1("18446744073709551616", "256", "0"), 64)
+
+    def test_the_guard_admits_exactly_the_coherent_campaigns(self) -> None:
+        # Every width the plan admits, paired with the count that width
+        # implies: a guard that refused these would refuse a correct run.
+        for width in (1 << 16, 1 << 20, 1 << 23, 1 << 24):
+            lanes = corpus_dispatch.FULL_DOMAIN // width
+            self.assertEqual(self._run_guard_v1(str(width), str(lanes)), 0, width)
+
+    def test_the_guard_refuses_a_campaign_that_contradicts_its_width(self) -> None:
+        # The defect this exists to stop is a dispatch whose claimed scale
+        # and whose window disagree — including off-by-one, which is what a
+        # half-updated coordinator would produce.
+        for width, lanes in (
+            (1 << 16, 255),
+            (1 << 16, 257),
+            (1 << 16, 1),
+            (1 << 20, 256),
+            (1 << 23, 256),
+        ):
+            self.assertEqual(
+                self._run_guard_v1(str(width), str(lanes)), 64, (width, lanes)
+            )
+
+        # A campaign size past the shell's own integer cannot be compared
+        # numerically: `[ -ne ]` errors out on what it cannot parse and the
+        # guard would read that error as "equal".  The two sides are
+        # canonical decimals by now, so the comparison is one of bytes.
+        for lanes in ("99999999999999999999", "18446744073709551616"):
+            self.assertEqual(self._run_guard_v1("65536", lanes), 64, lanes)
+
+    def test_the_guard_refuses_what_is_not_a_positive_integer(self) -> None:
+        # An empty value is what an older coordinator's dispatch would leave
+        # behind if the input ever gained a default, and a negative or
+        # non-numeric one is what a hand-typed dispatch produces.
+        for width, lanes in (
+            ("", "256"),
+            ("65536", ""),
+            ("0", "256"),
+            ("65536", "0"),
+            ("-65536", "256"),
+            ("65536", "-256"),
+            ("65536", "256x"),
+            ("65 536", "256"),
+        ):
+            self.assertEqual(
+                self._run_guard_v1(width, lanes), 64, (width, lanes)
+            )
+
+    def test_the_guard_refuses_a_width_that_cannot_tile_the_domain(self) -> None:
+        # A width that does not divide the domain has no lane count at all,
+        # so it must stop before the division rather than round into one.
+        for width in (1000, 65537, (1 << 24) + 1):
+            self.assertEqual(self._run_guard_v1(str(width), "256"), 64, width)
+
+        # These two refuse for the divisibility rule alone.  Every other
+        # width above is also caught by the size comparison downstream, so
+        # deleting the divisibility check left this test green: 65535 windows
+        # of 256 lanes leave 256 points of the domain uncovered while
+        # integer division still answers exactly 256.
+        for width, lanes in ((65535, 256), (65534, 256)):
+            self.assertEqual(corpus_dispatch.FULL_DOMAIN // width, lanes, width)
+            self.assertNotEqual(corpus_dispatch.FULL_DOMAIN % width, 0, width)
+            self.assertEqual(
+                self._run_guard_v1(str(width), str(lanes)), 64, (width, lanes)
+            )
+
+    def test_the_guard_runs_before_anything_is_downloaded(self) -> None:
+        # A refusal that costs a checkout and an artifact download is not the
+        # refusal this guard exists to be.
+        guard = self.text.index("refuse a lane that does not belong")
+        checkout = self.text.index("actions/checkout@")
+        download = self.text.index("download the engine verification evidence")
+        self.assertLess(guard, checkout)
+        self.assertLess(guard, download)
 
 
 if __name__ == "__main__":
