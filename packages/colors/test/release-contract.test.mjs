@@ -441,8 +441,23 @@ test("the private Program artifact is packed without becoming a public subpath",
   );
   assert.match(
     ensure,
-    /buildPrivateProgram\(\{ requireOptimizer: true \}\)/u,
-    "the test prerequisite must build the same canonical artifact the release gate produces",
+    /spawnSync\(/u,
+    "the test prerequisite must build in a hermetic child process",
+  );
+  assert.match(
+    ensure,
+    /--require-optimizer/u,
+    "the child must request the same canonical optimized build the release gate produces",
+  );
+  assert.match(
+    ensure,
+    /isCanonicalBuildEnvOverride/u,
+    "the child environment must drop exactly the canonical forbidden ambient overrides",
+  );
+  assert.doesNotMatch(
+    ensure,
+    /CARGO_INCREMENTAL/u,
+    "the hermetic boundary must not hardcode one ambient override variable",
   );
   assert.match(
     ensure,

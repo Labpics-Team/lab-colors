@@ -50,7 +50,7 @@ const PRIVATE_PROGRAM_TARGET = "wasm32-unknown-unknown";
 const PRIVATE_PROGRAM_PROFILE = "release";
 const PRIVATE_PROGRAM_BUILD_ROOT_PREFIX = "labcolors-private-program-build-";
 const PRIVATE_PROGRAM_CANONICAL_BUILD_PASSES = 2;
-const PRIVATE_PROGRAM_BUILD_TIMEOUT_MS = 10 * 60 * 1_000;
+export const PRIVATE_PROGRAM_BUILD_TIMEOUT_MS = 10 * 60 * 1_000;
 const PRIVATE_PROGRAM_TOOL_PROBE_TIMEOUT_MS = 30_000;
 const CARGO_ARTIFACT_PATH = "wasm32-unknown-unknown/release/labcolors_core.wasm";
 const WASM_MAGIC = Buffer.from([0x00, 0x61, 0x73, 0x6d]);
@@ -569,21 +569,31 @@ const CANONICAL_AMBIENT_RUST_ENV_ALLOWLIST = new Set([
   "RUST_TOOLCHAIN",
 ]);
 
+/**
+ * The canonical override law, in one place: true for every ambient variable
+ * that could alter the executor or the build itself. The canonical builder
+ * rejects these variables when they are present in its ambient environment;
+ * a hermetic caller (the package test prerequisite) drops exactly these
+ * variables from the child build environment instead of weakening the
+ * rejection.
+ */
+export function isCanonicalBuildEnvOverride(name) {
+  const normalized = String(name).toUpperCase();
+  if (CANONICAL_AMBIENT_RUST_ENV_ALLOWLIST.has(normalized)) return false;
+  return (
+    normalized === "CARGO" ||
+    normalized.startsWith("CARGO_") ||
+    normalized === "RUSTC" ||
+    normalized.startsWith("RUST") ||
+    normalized === "NODE_OPTIONS" ||
+    normalized === "NODE_PATH"
+  );
+}
+
 export function validateCanonicalBuildEnvironment(environment = process.env) {
   const forbidden = [];
   for (const key of Object.keys(environment)) {
-    const normalized = key.toUpperCase();
-    if (CANONICAL_AMBIENT_RUST_ENV_ALLOWLIST.has(normalized)) continue;
-    if (
-      normalized === "CARGO" ||
-      normalized.startsWith("CARGO_") ||
-      normalized === "RUSTC" ||
-      normalized.startsWith("RUST") ||
-      normalized === "NODE_OPTIONS" ||
-      normalized === "NODE_PATH"
-    ) {
-      forbidden.push(key);
-    }
+    if (isCanonicalBuildEnvOverride(key)) forbidden.push(key);
   }
   if (forbidden.length !== 0) {
     fail(
@@ -1185,7 +1195,12 @@ const invokedDirectly =
   process.argv[1] !== undefined && resolve(process.argv[1]) === SCRIPT_PATH;
 
 if (invokedDirectly) {
-  buildPrivateProgram().catch((error) => {
+  // `--require-optimizer` is the hermetic entrypoint used by the package test
+  // prerequisite child: it requests exactly the canonical optimized build the
+  // release gate produces. Without the flag the script keeps its ambient
+  // contact-build behavior for the package `build` lifecycle.
+  const requireOptimizer = process.argv.includes("--require-optimizer");
+  buildPrivateProgram({ requireOptimizer }).catch((error) => {
     process.stderr.write(`${error instanceof Error ? error.stack : String(error)}\n`);
     process.exitCode = 1;
   });
