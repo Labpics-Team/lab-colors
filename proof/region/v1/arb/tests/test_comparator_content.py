@@ -45,6 +45,7 @@ from __future__ import annotations
 import hashlib
 import sys
 import unittest
+import zlib
 from dataclasses import fields as dataclass_fields
 from pathlib import Path
 
@@ -67,13 +68,13 @@ COMPARATOR_LABEL_PREFIX_V1 = "labcolors.proof-region.arb-comparator."
 # исходники). Ключ — ИМЯ координаты: перестановка двух координат местами
 # меняет содержимое поля и краснит вектор.
 SOURCE_BOUND_PREIMAGE_SHA256_V1 = {
-    "engine_release": "0b9557439aac7b93eceec78a93d44c00c77a565110fcfe8f90c139bed03b46f1",
-    "upstream_source": "7d0970948bbc52f91b1211ca985773eabb86007be0ce0d5cb02060e1979af29c",
-    "arithmetic_input_set": "006a093a27215c5fec14454ac6ec82f008519a437b98001d95d47689d703694d",
+    "engine_release": "0d85e4a9bd897a9883807c132fc71eebc498a5628b30947e19c6c11383cd7121",
+    "upstream_source": "1fdceb621a6012a87d427240033264f84916fca01b176ff6587ac1f3e13f5d6b",
+    "arithmetic_input_set": "7f515cc73adef1d8deb781f2b3dde67fc2c8536f8d1ebe2b18cabf92b0f6b64c",
     "wrapper_source": "957eb113f89a191ad0eade3cd2f9f3a9a1da021694921a670efa86949e680dc2",
     "evaluator_source": "9e4f470d56a954a270f636c6c7befca26a77549f345cdaaa83cf35e097952db2",
     "operation_allowlist": "bae12a908ba87c59c8126811739e85a472218f75c9325d47c2f72f2b7ddf2b79",
-    "legal_file_set": "5d9b4658d60406d014ddcc7f6ce47966fb795826ce0440d6d0186e283bcc43e1",
+    "legal_file_set": "69f3375e6918de345c8bc20c484aca831b3eb1d0a85c8c08e30f70520725e7ba",
     "exclusions": "3c9c249541dced3d1a35159244b4b6feebfa0d290587fdf0cd3c2c98f5941b41",
 }
 
@@ -464,6 +465,56 @@ class CoordinateNamingLawTests(unittest.TestCase):
 
         self.assertEqual(len(set(labels)), len(labels))
         self.assertEqual(len(labels), 10)
+
+
+class FixtureArchiveDeterminismTests(unittest.TestCase):
+    """Reference-вектор обязан стоять на каноническом входе.
+
+    Преимиджи компаратора сворачивают ``archive_sha256`` и замок, а байты
+    фикстурных архивов синтезирует ``test_pipeline._tar()``. Вывод её
+    ``gzip.compress(compresslevel=9)`` зависит от версии zlib: Python 3.12.3
+    (zlib 1.2.13) и Python 3.14.6 (zlib 1.3.1) выдают разные deflate-байты
+    для одного входа, а вместе с ними — другие ``archive_sha256`` и другие
+    преимиджи четырёх координат. Сырой ustar-поток при этом одинаков
+    (доказано независимым измерением), значит дрейфует только контейнер.
+
+    Закон: фикстурный архив кодируется каноническим RFC 1951 stored-deflate
+    gzip-членом, чьи байты являются чистой функцией raw tar и не могут
+    зависеть от zlib интерпретатора. Этот тест — независимый оракул: он
+    декодирует фактический архив и пересобирает канонический контейнер
+    самостоятельно, поэтому возврат к ``gzip.compress`` снова краснит его.
+    """
+
+    def _canonical_stored_gzip_v1(self, raw: bytes) -> bytes:
+        header = b"\x1f\x8b\x08\x00" + (0).to_bytes(4, "little") + b"\x00\xff"
+        body = bytearray()
+        offset = 0
+        while offset < len(raw):
+            chunk = raw[offset : offset + 65535]
+            final = 1 if offset + len(chunk) == len(raw) else 0
+            body.append(final)
+            body += len(chunk).to_bytes(2, "little")
+            body += ((~len(chunk)) & 0xFFFF).to_bytes(2, "little")
+            body += chunk
+            offset += len(chunk)
+        trailer = zlib.crc32(raw).to_bytes(4, "little") + (
+            len(raw) & 0xFFFFFFFF
+        ).to_bytes(4, "little")
+        return header + bytes(body) + trailer
+
+    def test_fixture_archives_are_canonical_stored_gzip_members(self) -> None:
+        for salt in ("", "drifted-", "foreign-"):
+            _lock, admitted = test_pipeline._source_fixture(salt)
+            for source in admitted.sources:
+                with self.subTest(salt=salt, archive_sha256=source.archive_sha256.hex()):
+                    raw = zlib.decompress(
+                        source.archive_bytes,
+                        16 + zlib.MAX_WBITS,
+                    )
+                    self.assertEqual(
+                        source.archive_bytes,
+                        self._canonical_stored_gzip_v1(raw),
+                    )
 
 
 class SourceBoundReferenceVectorTests(unittest.TestCase):

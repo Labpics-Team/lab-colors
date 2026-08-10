@@ -54,12 +54,12 @@ def _temporary_mode(path: Path, mode: int) -> Iterator[None]:
 # Keep an independent outer oracle: importing the gate's expected hash here
 # would let a coordinated gate edit hide inventory drift.
 ARB_INVENTORY_SHA256_V1 = (
-    "3976521dfa61bb3be30afdaab0ed3066a81ea8c633ba7de413ef07962ed2ab0b"
+    "e61831a344284a253aa5e292eee97ba9ef0f17f512edd4d868a496c0562818d8"
 )
 ARB_ORDER_SHA256_V1 = (
-    "6a86ca077d5ad564c9d253a0e9ac4c59b0165e658a2f8d68e4ee8f63b0fedf60"
+    "6f6b9bc97311e4ca2c4cbcc312e939cc0ec6ecafca16754d6ea810336530f626"
 )
-ARB_TEST_COUNT_V1 = 292
+ARB_TEST_COUNT_V1 = 293
 
 MOVED_INPUT_SURFACE_V1 = (
     "CanonicalInputLimitsV1",
@@ -317,7 +317,7 @@ class ArbBuildIdentityCharacterizationTests(unittest.TestCase):
         )
         self.assertEqual(
             observed.input_bundle_identity.hex(),
-            "a6580242b448c88a8f24e61819de47d512ab8fe78cbfe850e7447540e83360e6",
+            "29abe900a0cf6a989761b4fdca8ebb5181fa6740508318f32a0b1a2aa04296a0",
         )
         self.assertEqual(
             pipeline.pipeline_policy_identity_v2(
@@ -329,7 +329,7 @@ class ArbBuildIdentityCharacterizationTests(unittest.TestCase):
         self.assertEqual(len(process_bytes), 196)
         self.assertEqual(
             hashlib.sha256(process_bytes).hexdigest(),
-            "d33e0ed28f88e957fbec83679732d325db5f6a893e7ee6058f2d5376a94466cb",
+            "5922427e8cf732225c21a5e8c19caba945beb3e2bbc05a54fc19155d7e9684e9",
         )
         # One subTest per coordinate: a characterization pin that stops at the
         # first mismatch hides which part of the chain actually moved, and the
@@ -338,32 +338,32 @@ class ArbBuildIdentityCharacterizationTests(unittest.TestCase):
             (
                 "comparator.identity",
                 result.comparator.identity.hex(),
-                "1a17002c015a938f7464d23e4cdc6f567c9aa93ee83201fe2bd33bb8fb3c7a4f",
+                "8657dd5be2361162b3d4a78044e505c71d52b8234f3be6d569da61b0822408d4",
             ),
             (
                 "evidence.source_identity",
                 result.evidence.source_identity.hex(),
-                "c34c7c787f23e2f35edc6bdc31b936eb73ffa7a4d5a7ef9c86e9735b7a442cb1",
+                "1579ae384bc2fb2f7c3bff456ded137f9d20f89f4b46355169bacb992c01393d",
             ),
             (
                 "evidence.build_identity",
                 result.evidence.build_identity.hex(),
-                "b58d3d95bd73f511a45b23cb3567b4a8fce67f90f929ba2d0ca4359d132b524e",
+                "f85f5e178ac24bb8a9aa919149c5469656e4e731160ac26692e869629fcd3522",
             ),
             (
                 "evidence.run_identity",
                 result.evidence.run_identity.hex(),
-                "897560465e8497a1db6061c30dba73d4e604a25b2e810eecd708bea41e9a10e7",
+                "f820e93e58e8a455759d5f33f5a78d1ae8cd260cb97a44ed52b48bf16d5c5485",
             ),
             (
                 "evidence.identity",
                 result.evidence.identity.hex(),
-                "f4a4431f2f9a92070e1ad2ada94bf7f9fc83a4b8c7c0d7c26a2e30e80567e2f9",
+                "b57aaff850ee5a14ad76485b53d7df2c3914a785994d9e5b75ae8f11970a4b76",
             ),
             (
                 "claim.identity",
                 result.claim.identity.hex(),
-                "05471ad13b98fe588e56d6feadaa21e6ce8c0020ba7428f933974126dcbb365e",
+                "6eae145733dc5088aa954fc8278d114850464d0941a4a5b9a8a3455f300fd2c9",
             ),
         ):
             with self.subTest(coordinate=name):
@@ -2451,7 +2451,7 @@ class SharedBuildTransportTargetTests(unittest.TestCase):
         self.assertEqual(len(encoded), 196)
         self.assertEqual(
             hashlib.sha256(encoded).hexdigest(),
-            "d33e0ed28f88e957fbec83679732d325db5f6a893e7ee6058f2d5376a94466cb",
+            "5922427e8cf732225c21a5e8c19caba945beb3e2bbc05a54fc19155d7e9684e9",
         )
 
         forged = tuple.__new__(transport.DockerBuildExitedV1, ())
