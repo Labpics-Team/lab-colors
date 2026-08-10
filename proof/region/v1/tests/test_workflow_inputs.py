@@ -347,6 +347,12 @@ class LaneCampaignContractTests(unittest.TestCase):
         # leading-zero rule left this test green until this case existed.
         self.assertEqual(self._run_guard_v1("65536", "256", "0200000"), 64)
 
+        # Same class on the width: octal `0100000` is 32768, which tiles the
+        # domain into 512 lanes, while the lane runner's `int()` replays
+        # 100000 points — one dispatch describing two different windows.
+        self.assertEqual(int("0100000"), 100000)
+        self.assertEqual(self._run_guard_v1("0100000", "512", "0"), 64)
+
     def test_the_guard_refuses_a_start_off_the_seam_or_off_the_domain(
         self,
     ) -> None:
@@ -357,6 +363,19 @@ class LaneCampaignContractTests(unittest.TestCase):
             self.assertEqual(
                 self._run_guard_v1("65536", "256", start), 64, start
             )
+
+        # Past the shell's own integer the comparisons stop answering:
+        # `[ -ge ]` reports "not greater" for what it cannot parse and
+        # `$(( ))` wraps, so 2^64 is a perfectly aligned zero.  Deleting
+        # the coordinate bound leaves this test green without these cases.
+        self.assertEqual(18446744073709551616 % 65536, 0)
+        self.assertEqual(
+            self._run_guard_v1("65536", "256", "18446744073709551616"), 64
+        )
+        self.assertEqual(
+            self._run_guard_v1("18446744073709617152", "256", "0"), 64
+        )
+        self.assertEqual(self._run_guard_v1("18446744073709551616", "256", "0"), 64)
 
     def test_the_guard_admits_exactly_the_coherent_campaigns(self) -> None:
         # Every width the plan admits, paired with the count that width
@@ -379,6 +398,13 @@ class LaneCampaignContractTests(unittest.TestCase):
             self.assertEqual(
                 self._run_guard_v1(str(width), str(lanes)), 64, (width, lanes)
             )
+
+        # A campaign size past the shell's own integer cannot be compared
+        # numerically: `[ -ne ]` errors out on what it cannot parse and the
+        # guard would read that error as "equal".  The two sides are
+        # canonical decimals by now, so the comparison is one of bytes.
+        for lanes in ("99999999999999999999", "18446744073709551616"):
+            self.assertEqual(self._run_guard_v1("65536", lanes), 64, lanes)
 
     def test_the_guard_refuses_what_is_not_a_positive_integer(self) -> None:
         # An empty value is what an older coordinator's dispatch would leave

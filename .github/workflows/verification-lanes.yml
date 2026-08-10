@@ -77,19 +77,41 @@ jobs:
           # width tiles the full sRGB8 domain exactly into the campaign the
           # dispatcher claims.  Nothing here can be satisfied by an older
           # coordinator, and nothing here needs the repository to be read.
+          # `case` compares raw bytes.  `[ -eq ]` and Python's `int()` both
+          # accept surrounding whitespace, so either would admit a
+          # coordinate carrying the carriage return a Windows shell leaves
+          # behind; and `$(( ))` reads a leading zero as octal, so `0100000`
+          # would be 32768 here and 100000 in the lane runner — one dispatch
+          # describing two different windows.
           case "${WINDOW_POINTS}" in
             ''|*[!0-9]*|0) echo "window_points must be a positive integer" >&2; exit 64;;
+            0*) echo "window_points must not carry leading zeros" >&2; exit 64;;
           esac
           case "${EXPECT_LANES}" in
             ''|*[!0-9]*|0) echo "expect_lanes must be a positive integer" >&2; exit 64;;
           esac
+          # Both coordinates are bounded by the domain and the domain is
+          # eight digits, so anything longer is out of range by
+          # construction — and it has to be refused before the arithmetic
+          # rather than by it: `$(( ))` wraps silently at 2^64, where
+          # `18446744073709551616` reads as a perfectly aligned zero, and
+          # `[ -ge ]` answers "not greater" for a value it cannot parse.
+          if [ "${#WINDOW_POINTS}" -gt 8 ] || [ "${#WINDOW_START}" -gt 8 ]; then
+            echo "window ${WINDOW_START}+${WINDOW_POINTS} is outside the sRGB8 domain" >&2
+            exit 64
+          fi
           domain=16777216
           if [ $(( domain % WINDOW_POINTS )) -ne 0 ]; then
             echo "window_points ${WINDOW_POINTS} does not tile the full domain" >&2
             exit 64
           fi
           lanes=$(( domain / WINDOW_POINTS ))
-          if [ "${lanes}" -ne "${EXPECT_LANES}" ]; then
+          # Compared as bytes, because both sides are canonical decimals by
+          # now and a numeric comparison is the one that can answer "equal"
+          # about something it failed to read: `[ -ne ]` errors out on a
+          # size past the shell's own integer, and the guard would then
+          # read that error as a match.
+          if [ "${lanes}" != "${EXPECT_LANES}" ]; then
             echo "campaign size ${EXPECT_LANES} contradicts the plan: a" \
                  "${WINDOW_POINTS}-point window covers the domain in ${lanes} lanes" >&2
             exit 64
