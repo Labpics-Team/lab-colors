@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import { test } from "node:test";
+import { fileURLToPath } from "node:url";
 
 import {
   isCanonicalBuildEnvOverride,
@@ -9,6 +12,10 @@ import {
   hermeticBuildEnvironment,
   runCanonicalPrivateProgramBuild,
 } from "../../../scripts/run-canonical-private-program-build.mjs";
+
+const here = dirname(fileURLToPath(import.meta.url));
+const root = resolve(here, "../../..");
+const readScript = (name) => readFileSync(join(root, "scripts", name), "utf8");
 
 // The package `test` command builds the ignored private Program artifact in a
 // hermetic child process so ambient executor/build overrides exported by the
@@ -172,4 +179,50 @@ test("the test prerequisite and the release gate share one hermetic child primit
   assert.equal(typeof ensure.ensurePrivateProgramArtifact, "function");
   assert.equal(typeof ensure.verifiedArtifactExists, "function");
   assert.equal(typeof verify.verifyPackageRelease, "function");
+});
+
+function assertDelegatesToSharedPrimitive(source, label) {
+  assert.match(
+    source,
+    /import \{ runCanonicalPrivateProgramBuild \} from "\.\/run-canonical-private-program-build\.mjs"/u,
+    `${label} must import the shared hermetic build primitive`,
+  );
+  assert.match(
+    source,
+    /runCanonicalPrivateProgramBuild\(\)/u,
+    `${label} must call the shared primitive`,
+  );
+  assert.doesNotMatch(
+    source,
+    /spawnSync|hermeticBuildEnvironment|isCanonicalBuildEnvOverride|CHILD_BUILD_TIMEOUT_MS|--require-optimizer/u,
+    `${label} must not embed its own build boundary`,
+  );
+}
+
+test("both consumers call the shared primitive, not a local copy of the build boundary", () => {
+  const ensure = readScript("ensure-private-program-artifact.mjs");
+  const verify = readScript("verify-package-release.mjs");
+  assertDelegatesToSharedPrimitive(ensure, "test prerequisite");
+  assertDelegatesToSharedPrimitive(verify, "release gate");
+  // Mutation sensitivity: a consumer that embeds its own copy of the build
+  // logic (spawn + filtered env + timeout) instead of calling the shared
+  // primitive must fail the consumer-module contract.
+  const sharedImport =
+    'import { runCanonicalPrivateProgramBuild } from "./run-canonical-private-program-build.mjs";';
+  for (const [name, mutant] of [
+    [
+      "test prerequisite with local build copy",
+      ensure.replace(sharedImport, 'import { spawnSync } from "node:child_process";'),
+    ],
+    [
+      "release gate with local build copy",
+      verify.replace(sharedImport, 'import { spawnSync } from "node:child_process";'),
+    ],
+  ]) {
+    assert.throws(
+      () => assertDelegatesToSharedPrimitive(mutant, name),
+      undefined,
+      `${name} must not satisfy the consumer-module contract`,
+    );
+  }
 });

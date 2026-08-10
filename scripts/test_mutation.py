@@ -2113,6 +2113,11 @@ class MutationTruthTest(unittest.TestCase):
                 "--@labpics:registry=https://registry.npmjs.org \"$FOREIGN_PATH\"",
                 1,
             ),
+            "foreign sha256sum path": script.replace(
+                'actual_sha256="$(sha256sum --binary -- "$TARBALL_PATH")"',
+                'actual_sha256="$(sha256sum --binary -- "$FOREIGN_PATH")"',
+                1,
+            ),
             "missing hash recheck": self._drop_sha256_recheck(script),
             "injected NPM_REGISTRY": script.replace(
                 expected_publish,
@@ -2183,24 +2188,22 @@ class MutationTruthTest(unittest.TestCase):
         self.assertNotIn("npm pack", script, f"{label}: no repack")
         # The pre-publish sha256 recheck must be adjacent: the same step body,
         # immediately before the publish, so no command can run between the
-        # recheck and the publish.
+        # recheck and the publish. The exact commands are bound, not
+        # independent fragments: a script may hash a foreign path while a
+        # spurious mention of the tarball satisfies a loose fragment search.
         publish_index = script.index(publish_lines[0])
         pre_publish = script[:publish_index]
         self.assertIn("set -euo pipefail", pre_publish, f"{label}: fail-fast shell")
         self.assertIn(
-            "sha256sum --binary",
+            'actual_sha256="$(sha256sum --binary -- "$TARBALL_PATH")"',
             pre_publish,
-            f"{label}: pre-publish tarball sha256 recheck",
+            f"{label}: exact pre-publish sha256 command binds the quoted verified tarball",
         )
         self.assertIn(
-            '"$TARBALL_PATH"',
+            'if [[ ! "$TARBALL_SHA256" =~ ^[0-9a-f]{64}$ '
+            '|| "$actual_sha256" != "$TARBALL_SHA256" ]]; then',
             pre_publish,
-            f"{label}: recheck binds the quoted verified tarball",
-        )
-        self.assertIn(
-            "TARBALL_SHA256",
-            pre_publish,
-            f"{label}: recheck binds the verified digest",
+            f"{label}: recheck compares the bound digest",
         )
         self.assertIn(
             "verified tarball changed before npm publish",
