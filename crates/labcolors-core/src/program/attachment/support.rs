@@ -472,19 +472,19 @@ pub(crate) fn allocator_point_sink(
 impl sink_private::Sealed for AllocatorPointSinkLeaseV1 {}
 impl sink_private::Sealed for ClosedAllocatorPointSinkLeaseV1 {}
 
-impl UnboundPointSinkLeaseV1 for AllocatorPointSinkLeaseV1 {
+impl UnboundPointSinkWriterV1 for AllocatorPointSinkLeaseV1 {
     type OutputId = TestSinkOutputIdV1;
-    type Closed = ClosedAllocatorPointSinkLeaseV1;
+    type Writer = ClosedAllocatorPointSinkLeaseV1;
     type AdmissionError = InMemoryPointSinkAdmissionErrorV1;
 
     fn owned_output_scope(&self) -> &[Self::OutputId] {
         &self.owned_scope
     }
 
-    fn try_admit_closed(
+    fn try_admit_writer(
         self,
         scope: BoundPointSinkScopePermitV1<'_, Self::OutputId>,
-    ) -> Result<ClosedPointSinkAdmissionV1<Self::Closed>, PointSinkAdmissionFailureV1<Self>> {
+    ) -> Result<PointSinkWriterAdmissionV1<Self::Writer>, PointSinkAdmissionFailureV1<Self>> {
         let mut actual = scope.output_scope();
         if actual.next() != self.owned_scope.first().copied() || actual.next().is_some() {
             return Err(PointSinkAdmissionFailureV1::new(
@@ -499,7 +499,7 @@ impl UnboundPointSinkLeaseV1 for AllocatorPointSinkLeaseV1 {
             ));
         };
         let shared = Rc::clone(&self.shared);
-        let admission = ClosedPointSinkAdmissionV1::new(ClosedAllocatorPointSinkLeaseV1 {
+        let admission = PointSinkWriterAdmissionV1::new(ClosedAllocatorPointSinkLeaseV1 {
             owned_scope: self.owned_scope,
             binding_epoch,
             shared: self.shared,
@@ -508,6 +508,8 @@ impl UnboundPointSinkLeaseV1 for AllocatorPointSinkLeaseV1 {
         Ok(admission)
     }
 }
+
+impl UnboundPointSinkLeaseV1 for AllocatorPointSinkLeaseV1 {}
 
 #[derive(Clone, Copy)]
 enum AllocatorPointSinkStagingV1 {
@@ -531,7 +533,7 @@ pub(crate) struct AllocatorPreparedPointSinkWriteV1<'lease> {
     finished: bool,
 }
 
-impl ClosedPointSinkLeaseV1 for ClosedAllocatorPointSinkLeaseV1 {
+impl PointSinkWriterV1 for ClosedAllocatorPointSinkLeaseV1 {
     type OutputId = TestSinkOutputIdV1;
     type Error = InMemoryPointSinkErrorV1;
     type Prepared<'lease> = AllocatorPreparedPointSinkWriteV1<'lease>;
@@ -618,7 +620,9 @@ impl ClosedPointSinkLeaseV1 for ClosedAllocatorPointSinkLeaseV1 {
             finished: false,
         })
     }
+}
 
+impl ClosedPointSinkLeaseV1 for ClosedAllocatorPointSinkLeaseV1 {
     fn close_before_release(&mut self) {
         self.shared.entry.set(None);
         self.shared.revision.set(None);
@@ -707,19 +711,19 @@ pub(crate) const fn authored_presentation(
 impl sink_private::Sealed for InMemoryPointSinkLeaseV1 {}
 impl sink_private::Sealed for ClosedInMemoryPointSinkLeaseV1 {}
 
-impl UnboundPointSinkLeaseV1 for InMemoryPointSinkLeaseV1 {
+impl UnboundPointSinkWriterV1 for InMemoryPointSinkLeaseV1 {
     type OutputId = TestSinkOutputIdV1;
-    type Closed = ClosedInMemoryPointSinkLeaseV1;
+    type Writer = ClosedInMemoryPointSinkLeaseV1;
     type AdmissionError = InMemoryPointSinkAdmissionErrorV1;
 
     fn owned_output_scope(&self) -> &[Self::OutputId] {
         &self.owned_scope
     }
 
-    fn try_admit_closed(
+    fn try_admit_writer(
         self,
         scope: BoundPointSinkScopePermitV1<'_, Self::OutputId>,
-    ) -> Result<ClosedPointSinkAdmissionV1<Self::Closed>, PointSinkAdmissionFailureV1<Self>> {
+    ) -> Result<PointSinkWriterAdmissionV1<Self::Writer>, PointSinkAdmissionFailureV1<Self>> {
         let mut output_scope = scope.output_scope();
         if output_scope.len() != self.owned_scope.len()
             || output_scope.any(|output| !self.owned_scope.contains(&output))
@@ -781,13 +785,15 @@ impl UnboundPointSinkLeaseV1 for InMemoryPointSinkLeaseV1 {
             shared: self.shared,
             retired: None,
         };
-        let admission = ClosedPointSinkAdmissionV1::new(closed);
+        let admission = PointSinkWriterAdmissionV1::new(closed);
         shared.state.borrow_mut().stamp = Some(admission.initial_stamp());
         Ok(admission)
     }
 }
 
-impl ClosedPointSinkLeaseV1 for ClosedInMemoryPointSinkLeaseV1 {
+impl UnboundPointSinkLeaseV1 for InMemoryPointSinkLeaseV1 {}
+
+impl PointSinkWriterV1 for ClosedInMemoryPointSinkLeaseV1 {
     type OutputId = TestSinkOutputIdV1;
     type Error = InMemoryPointSinkErrorV1;
     type Prepared<'lease> = InMemoryPreparedPointSinkWriteV1<'lease>;
@@ -905,7 +911,9 @@ impl ClosedPointSinkLeaseV1 for ClosedInMemoryPointSinkLeaseV1 {
             finished: false,
         })
     }
+}
 
+impl ClosedPointSinkLeaseV1 for ClosedInMemoryPointSinkLeaseV1 {
     fn close_before_release(&mut self) {
         let mut state = self.shared.state.borrow_mut();
         state.layer = TestHostLayerV1::Closed;

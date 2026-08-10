@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import {
   chmodSync,
+  copyFileSync,
   existsSync,
+  linkSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
@@ -15,18 +17,34 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, relative, resolve } from "node:path";
+import { basename, delimiter, dirname, join, relative, resolve } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import {
+  materializeVerifiedTarballSnapshot,
   npmInvocation,
+  packInto,
   runtimeSmokeSource,
+  smokePackedPackage,
   typeSmokeSource,
   validateNumericalEvidenceArtifacts,
+  validatePrivateProgramMetadata,
+  validateRuntimeWasmIsolation,
   validateSolveFailurePair,
   validateSolveFamily,
 } from "../../../scripts/verify-package-release.mjs";
+import {
+  PRIVATE_PROGRAM_CANONICAL_BUILD,
+  PRIVATE_PROGRAM_WASM_SURFACE,
+  assertCanonicalCargoConfigurationAbsent,
+  canonicalCargoConfigurationPaths,
+  privateProgramCoreSourceDigest,
+  validateCanonicalBuildEnvironment,
+  validatePrivateProgramBuildReceipt,
+  validatePrivateProgramWasmSurface,
+} from "../../../scripts/build-private-program.mjs";
+import { atomicWriteGeneratedFile } from "../../../scripts/atomic-write.mjs";
 import { workspacePackageTable } from "../../../scripts/cargo-workspace.mjs";
 import {
   NUMERICAL_EVIDENCE_FILES,
@@ -41,6 +59,9 @@ const read = (...parts) => readFileSync(join(root, ...parts), "utf8");
 // This subprocess performs one local ESM import; ten seconds bounds a deadlock
 // while leaving two orders of magnitude over the measured sub-second path.
 const DOM_FREE_PROBE_TIMEOUT_MS = 10_000;
+// Each fixture is a sub-megabyte local archive; ten seconds distinguishes a
+// parser deadlock from normal startup even on the supported Windows launcher.
+const TAR_INSPECTOR_TEST_TIMEOUT_MS = 10_000;
 
 test("npm invocation is argv-safe and directly executable on every supported host", () => {
   assert.deepEqual(
@@ -186,6 +207,22 @@ function workflowRunScript(workflow, stepName) {
   return body.join("\n");
 }
 
+function bashExecutable() {
+  if (process.platform !== "win32") return "/bin/bash";
+  const gitExecPath = execFileSync("git", ["--exec-path"], {
+    encoding: "utf8",
+  }).trim();
+  const candidate = resolve(gitExecPath, "../../..", "bin", "bash.exe");
+  assert.ok(existsSync(candidate), `Git Bash is unavailable: ${candidate}`);
+  return candidate;
+}
+
+function testPythonInvocation() {
+  return process.platform === "win32"
+    ? { commandName: "py", argsPrefix: ["-3"] }
+    : { commandName: "python3", argsPrefix: [] };
+}
+
 function assertCheckoutCredentialsAreEphemeral(workflow, name) {
   const lines = workflow.split("\n");
   const checkouts = lines
@@ -260,7 +297,1028 @@ test("breaking release metadata is one explicit 0.3.0/0.11.0 contract", () => {
     packageJson.scripts.prepack,
     "npm run build && node ../../scripts/prepare-npm-package.mjs",
   );
-  assert.match(packageJson.scripts.build, /wasm-pack build .* --locked$/);
+  assert.match(
+    packageJson.scripts.build,
+    /^wasm-pack build .* --locked && node \.\.\/\.\.\/scripts\/build-private-program\.mjs$/u,
+  );
+});
+
+test("the private Program artifact is packed without becoming a public subpath", () => {
+  const packageJson = JSON.parse(read("packages", "colors", "package.json"));
+  assert.deepEqual(
+    packageJson.files.filter((path) => path.startsWith("private-program/")),
+    [
+      "private-program/consumer.js",
+      "private-program/labcolors_private_program.wasm",
+      "private-program/build-metadata.json",
+    ],
+  );
+  assert.deepEqual(packageJson.exports, {
+    ".": { types: "./index.d.ts", default: "./index.js" },
+    "./apply-theme": { types: "./apply-theme.d.ts", default: "./apply-theme.js" },
+    "./watch-theme": { types: "./watch-theme.d.ts", default: "./watch-theme.js" },
+    "./adapt-theme": { types: "./adapt-theme.d.ts", default: "./adapt-theme.js" },
+    "./pkg/labcolors_bg.wasm": "./pkg/labcolors_bg.wasm",
+    "./build-metadata.json": "./build-metadata.json",
+    "./package.json": "./package.json",
+  });
+
+  const build = read("scripts", "build-private-program.mjs");
+  assert.match(
+    packageJson.scripts.build,
+    /wasm-pack build .* --locked\s*&&\s*node \.\.\/\.\.\/scripts\/build-private-program\.mjs$/u,
+  );
+  assert.deepEqual(PRIVATE_PROGRAM_CANONICAL_BUILD.recipe.cargo.args, [
+    "rustc",
+    "-p",
+    "labcolors-core",
+    "--lib",
+    "--release",
+    "--target",
+    "wasm32-unknown-unknown",
+    "--target-dir",
+    "$ISOLATED_CARGO_TARGET_DIR",
+    "--no-default-features",
+    "--features",
+    "private-fixture",
+    "--crate-type=cdylib",
+    "--locked",
+    "--frozen",
+    "--offline",
+  ]);
+  assert.equal(PRIVATE_PROGRAM_CANONICAL_BUILD.feature, "private-fixture");
+  assert.equal(PRIVATE_PROGRAM_CANONICAL_BUILD.target, "wasm32-unknown-unknown");
+  assert.equal(Object.hasOwn(PRIVATE_PROGRAM_CANONICAL_BUILD, "abi"), false);
+  assert.deepEqual(
+    PRIVATE_PROGRAM_CANONICAL_BUILD.wasmSurface,
+    PRIVATE_PROGRAM_WASM_SURFACE,
+  );
+  assert.match(build, /mkdtemp/u, "each private build must own an isolated target directory");
+  assert.equal(
+    PRIVATE_PROGRAM_CANONICAL_BUILD.recipe.cargo.command,
+    "$RUSTUP_TOOLCHAIN_CARGO",
+  );
+  assert.equal(
+    PRIVATE_PROGRAM_CANONICAL_BUILD.recipe.cargo.rustc,
+    "$RUSTUP_TOOLCHAIN_RUSTC",
+  );
+  assert.deepEqual(PRIVATE_PROGRAM_CANONICAL_BUILD.toolchain.executor, {
+    resolution: "declared-rustup-home-exact-toolchain-directory",
+    identity: "self-reported-version-and-commit",
+  });
+  assert.deepEqual(PRIVATE_PROGRAM_CANONICAL_BUILD.recipe.cargo.environment, {
+    policy: "allowlist",
+    cargoHome: "$ISOLATED_CARGO_HOME",
+    registry: "isolated-index-copy-from-declared-cargo-home",
+    temp: "$ISOLATED_TEMP_DIR",
+    network: "offline",
+  });
+  assert.deepEqual(PRIVATE_PROGRAM_CANONICAL_BUILD.recipe.cargo.encodedRustflags, [
+    "--cfg=labcolors_private_fixture_unshared_v1",
+    "--check-cfg=cfg(labcolors_private_fixture_unshared_v1)",
+    "--remap-path-prefix=$REPO_ROOT=/workspace/lab-colors",
+    "--remap-path-prefix=$CARGO_HOME=/cargo-home",
+    "--remap-path-prefix=$RUSTUP_HOME=/rustup-home",
+    "--remap-path-prefix=$ISOLATED_CARGO_TARGET_DIR=/cargo-target",
+    "--remap-path-prefix=$ISOLATED_TEMP_DIR=/build-temp",
+  ]);
+  assert.deepEqual(PRIVATE_PROGRAM_CANONICAL_BUILD.recipe.repeatability, {
+    passes: 2,
+    isolation: ["cargo-target", "cargo-home", "temp"],
+    comparison: ["raw-wasm-byte-identical", "optimized-wasm-byte-identical"],
+    executor: "same-resolved-toolchain-and-node-process",
+  });
+  assert.doesNotMatch(
+    JSON.stringify(PRIVATE_PROGRAM_CANONICAL_BUILD.recipe.repeatability),
+    /independent/iu,
+  );
+  assert.match(build, /BINARYEN_ROOT[\s\S]*BINARYEN_RELEASE[\s\S]*BINARYEN_NODE_SHA256/u);
+  assert.equal(
+    PRIVATE_PROGRAM_CANONICAL_BUILD.recipe.optimizer.command,
+    "$NODE_EXECUTABLE",
+  );
+  assert.equal(
+    PRIVATE_PROGRAM_CANONICAL_BUILD.recipe.optimizer.script,
+    "$BINARYEN_ROOT/wasm-opt.js",
+  );
+  assert.equal(
+    PRIVATE_PROGRAM_CANONICAL_BUILD.recipe.optimizer.execution,
+    "$ISOLATED_OPTIMIZER_ROOT/wasm-opt.js",
+  );
+  assert.deepEqual(PRIVATE_PROGRAM_CANONICAL_BUILD.recipe.optimizer.args, [
+    "$RAW_WASM",
+    "-o",
+    "$OPTIMIZED_WASM",
+    "-Oz",
+    "--enable-bulk-memory",
+    "--enable-nontrapping-float-to-int",
+  ]);
+  assert.match(build, /private-program\/\.build-receipt\.json/u);
+  assert.match(build, /assertRepeatedBuildsEqual\(first, second\)/u);
+  assert.match(
+    build,
+    /materializeOptimizer\([\s\S]*atomicWriteGeneratedFile\(destination, bytes\)/u,
+    "Binaryen must execute only from a byte snapshot materialized in the build sandbox",
+  );
+  assert.match(
+    build,
+    /const version = commandText\(process\.execPath, \[script, "--version"\]/u,
+    "the optimizer version must be probed from the materialized snapshot",
+  );
+
+  const prepare = read("scripts", "prepare-npm-package.mjs");
+  const verifier = read("scripts", "verify-package-release.mjs");
+  assert.match(
+    prepare,
+    /PRIVATE_PROGRAM_METADATA_PATH[\s\S]*readPrivateProgramBuildReceipt/u,
+  );
+  assert.match(prepare, /requireOptimizer: true/u);
+  assert.match(
+    verifier,
+    /const expectedSource = verifiedSourceSha\(\);[\s\S]*await buildPrivateProgram\(\{ requireOptimizer: true \}\);[\s\S]*await prepareNpmPackage\(\)[\s\S]*source !== expectedSource/u,
+    "the release gate must bind one clean HEAD across the private build and receipt",
+  );
+  assert.match(verifier, /ERR_PACKAGE_PATH_NOT_EXPORTED/u);
+  const packageSmoke = smokePackedPackage.toString();
+  assert.match(packageSmoke, /"--offline"[\s\S]*"--ignore-scripts"/u);
+  assert.doesNotMatch(
+    packageSmoke,
+    /buildPrivateProgram|prepareNpmPackage|BINARYEN|cargo|rustc/u,
+    "consumer-floor smoke must not rebuild or acquire a private build toolchain",
+  );
+  assert.match(
+    verifier,
+    /packageSmokeIndex\s*>=\s*0[\s\S]*smokePackedPackage\(tarball\)[\s\S]*:\s*verifyPackageRelease\(\)/u,
+  );
+  for (const path of [
+    "private-program/consumer.js",
+    "private-program/labcolors_private_program.wasm",
+    "private-program/build-metadata.json",
+  ]) {
+    assert.match(verifier, new RegExp(path.replaceAll(".", "\\."), "u"));
+  }
+  assert.match(verifier, /schemaVersion: 5/u);
+  assert.match(
+    verifier,
+    /wasm:\s*\[[\s\S]*role: "runtime"[\s\S]*role: PRIVATE_PROGRAM_ROLE[\s\S]*privateProgramArtifacts\.wasm/u,
+  );
+  assert.match(
+    verifier,
+    /privateProgramConsumer:\s*\{[\s\S]*role: PRIVATE_PROGRAM_ROLE[\s\S]*buildMetadata: privateProgramBuildMetadata[\s\S]*consumer: privateProgramArtifacts\.consumer/u,
+  );
+});
+
+test("npm tarball inspection is independent of npm JSON and rejects ambiguous archives", async () => {
+  const temporary = mkdtempSync(join(tmpdir(), "labcolors-tar-inspector-"));
+  const inspector = join(root, "scripts", "inspect-npm-tarball.py");
+  const { commandName, argsPrefix } = testPythonInvocation();
+  const fixtureSource = String.raw`
+import gzip
+import io
+import json
+import sys
+import tarfile
+
+destination = sys.argv[1]
+spec = json.loads(sys.argv[2])
+if "rawOversizedSize" in spec:
+    member = tarfile.TarInfo("package/oversized.bin")
+    member.size = spec["rawOversizedSize"]
+    payload = member.tobuf(format=tarfile.USTAR_FORMAT) + bytes(1024)
+    with open(destination, "wb") as output:
+        with gzip.GzipFile(fileobj=output, mode="wb", mtime=0) as archive:
+            archive.write(payload)
+else:
+    archive_format = getattr(tarfile, spec.get("format", "USTAR_FORMAT"))
+    with tarfile.open(destination, "w:gz", format=archive_format) as archive:
+        for record in spec["members"]:
+            member = tarfile.TarInfo(record["path"])
+            kind = record.get("kind", "file")
+            if kind == "file":
+                content = record.get("content", "").encode("utf-8")
+                member.size = len(content)
+                archive.addfile(member, io.BytesIO(content))
+            elif kind == "symlink":
+                member.type = tarfile.SYMTYPE
+                member.linkname = record.get("target", "target")
+                archive.addfile(member)
+            elif kind == "fifo":
+                member.type = tarfile.FIFOTYPE
+                archive.addfile(member)
+            elif kind == "directory":
+                member.type = tarfile.DIRTYPE
+                archive.addfile(member)
+            else:
+                raise ValueError(f"unknown fixture kind: {kind}")
+    with gzip.open(destination, "rb") as source:
+        payload = source.read()
+    while payload.endswith(bytes(512)):
+        payload = payload[:-512]
+    payload += bytes(1024)
+    with open(destination, "wb") as output:
+        with gzip.GzipFile(fileobj=output, mode="wb", mtime=0) as archive:
+            archive.write(payload)
+`;
+
+  const writeFixture = (name, files, spec) => {
+    const tarball = join(temporary, `${name}.tgz`);
+    const inventory = join(temporary, `${name}.json`);
+    writeFileSync(inventory, `${JSON.stringify({ schemaVersion: 1, files })}\n`);
+    execFileSync(commandName, [...argsPrefix, "-c", fixtureSource, tarball, JSON.stringify(spec)], {
+      encoding: "utf8",
+      stdio: "pipe",
+      timeout: TAR_INSPECTOR_TEST_TIMEOUT_MS,
+    });
+    return { tarball, inventory };
+  };
+  const inspect = ({ tarball, inventory }, inspectorPath = inspector) =>
+    spawnSync(
+      commandName,
+      [
+        ...argsPrefix,
+        inspectorPath,
+        "--tarball",
+        tarball,
+        "--declared-inventory-json",
+        inventory,
+      ],
+      {
+        encoding: "utf8",
+        stdio: "pipe",
+        timeout: TAR_INSPECTOR_TEST_TIMEOUT_MS,
+      },
+    );
+
+  try {
+    const valid = writeFixture("valid", ["a.txt", "nested/b.txt"], {
+      members: [
+        { path: "package/nested/b.txt", content: "beta" },
+        { path: "package/a.txt", content: "alpha" },
+      ],
+    });
+    const accepted = inspect(valid);
+    assert.equal(accepted.status, 0, accepted.stderr);
+    const receipt = JSON.parse(accepted.stdout);
+    assert.deepEqual(Object.keys(receipt), [
+      "schemaVersion",
+      "verdict",
+      "tarball",
+      "limits",
+      "members",
+      "inventory",
+    ]);
+    assert.equal(receipt.schemaVersion, 1);
+    assert.equal(receipt.verdict, "canonical");
+    assert.deepEqual(
+      receipt.members.map(({ index, rawPath, normalizedPath, type, size }) => ({
+        index,
+        rawPath,
+        normalizedPath,
+        type,
+        size,
+      })),
+      [
+        {
+          index: 0,
+          rawPath: "package/nested/b.txt",
+          normalizedPath: "nested/b.txt",
+          type: "file",
+          size: 4,
+        },
+        {
+          index: 1,
+          rawPath: "package/a.txt",
+          normalizedPath: "a.txt",
+          type: "file",
+          size: 5,
+        },
+      ],
+    );
+    assert.deepEqual(receipt.inventory, {
+      files: ["a.txt", "nested/b.txt"],
+      totalFileBytes: 9,
+    });
+    assert.equal(receipt.limits.maxMembers, 2);
+    assert.equal(receipt.tarball.bytes, readFileSync(valid.tarball).length);
+    assert.equal(
+      receipt.tarball.sha256,
+      createHash("sha256").update(readFileSync(valid.tarball)).digest("hex"),
+    );
+    assert.ok(receipt.members.every((member) => /^[0-9a-f]{64}$/u.test(member.sha256)));
+
+    for (const [index, character] of [...`<>"|?*`].entries()) {
+      const path = `forbidden${character}name.txt`;
+      const result = inspect(
+        writeFixture(`windows-forbidden-${index}`, [path], {
+          members: [{ path: `package/${path}`, content: "forbidden" }],
+        }),
+      );
+      assert.notEqual(result.status, 0, `Windows-forbidden ${JSON.stringify(character)} passed`);
+      assert.match(result.stderr, /forbidden Windows filename character/u);
+    }
+
+    for (const [index, path] of [
+      "CON",
+      "PRN",
+      "AUX",
+      "NUL",
+      "CONIN$",
+      "conout$.json",
+      "COM1.txt",
+      "lPt9.bin",
+      "COM¹",
+      "com².txt",
+      "CoM³.json",
+      "LPT¹",
+      "lpt².txt",
+      "LpT³.json",
+    ].entries()) {
+      const result = inspect(
+        writeFixture(`windows-device-${index}`, [path], {
+          members: [{ path: `package/${path}`, content: "device" }],
+        }),
+      );
+      assert.notEqual(result.status, 0, `reserved Windows device ${path} passed`);
+      assert.match(result.stderr, /reserved Windows device name/u);
+    }
+
+    const alternateStreamFixture = writeFixture(
+      "windows-alternate-stream",
+      ["file:stream"],
+      { members: [{ path: "package/file:stream", content: "stream" }] },
+    );
+    const alternateStream = inspect(alternateStreamFixture);
+    assert.notEqual(alternateStream.status, 0, "Windows alternate-stream path passed");
+    assert.match(alternateStream.stderr, /forbidden Windows filename character/u);
+
+    const inspectorSource = readFileSync(inspector, "utf8");
+    const colonMutant = inspectorSource.replace(
+      /(_WINDOWS_FORBIDDEN_FILENAME_CHARACTERS = frozenset\('[^']*):([^']*'\))/u,
+      "$1$2",
+    );
+    assert.notEqual(colonMutant, inspectorSource, "colon-removal mutation did not bite");
+    const colonMutantPath = join(temporary, "inspect-npm-tarball-no-colon.py");
+    writeFileSync(colonMutantPath, colonMutant);
+    const colonMutantResult = inspect(alternateStreamFixture, colonMutantPath);
+    assert.equal(
+      colonMutantResult.status,
+      0,
+      `colon-removal mutant did not expose the ADS defect: ${colonMutantResult.stderr}`,
+    );
+
+    const nonDevices = ["COM0", "COM10", "LPT0", "LPT10"];
+    const admittedDeviceBoundaries = inspect(
+      writeFixture("windows-device-boundaries", nonDevices, {
+        members: nonDevices.map((path) => ({ path: `package/${path}`, content: path })),
+      }),
+    );
+    assert.equal(admittedDeviceBoundaries.status, 0, admittedDeviceBoundaries.stderr);
+    assert.deepEqual(JSON.parse(admittedDeviceBoundaries.stdout).inventory.files, nonDevices);
+
+    const linkedTarball = join(temporary, "linked-valid.tgz");
+    symlinkSync(valid.tarball, linkedTarball, "file");
+    const linkedResult = inspect({ tarball: linkedTarball, inventory: valid.inventory });
+    assert.notEqual(linkedResult.status, 0, "tarball path symlink unexpectedly passed");
+    assert.match(linkedResult.stderr, /symbolic link or reparse point/u);
+
+    const rejected = [
+      {
+        name: "duplicate",
+        files: ["a.txt", "b.txt"],
+        spec: {
+          members: [
+            { path: "package/a.txt", content: "first" },
+            { path: "package/a.txt", content: "second" },
+          ],
+        },
+        message: /duplicate raw member path/u,
+      },
+      {
+        name: "traversal",
+        files: ["escape.txt"],
+        spec: { members: [{ path: "package/../escape.txt", content: "escape" }] },
+        message: /traversal segment/u,
+      },
+      {
+        name: "backslash",
+        files: ["escape.txt"],
+        spec: { members: [{ path: "package\\escape.txt", content: "escape" }] },
+        message: /single package\/ namespace/u,
+      },
+      {
+        name: "symlink",
+        files: ["link"],
+        spec: { members: [{ path: "package/link", kind: "symlink" }] },
+        message: /only regular files are allowed/u,
+      },
+      {
+        name: "fifo",
+        files: ["pipe"],
+        spec: { members: [{ path: "package/pipe", kind: "fifo" }] },
+        message: /only regular files are allowed/u,
+      },
+      {
+        name: "directory",
+        files: ["directory"],
+        spec: { members: [{ path: "package/directory", kind: "directory" }] },
+        message: /only regular files are allowed/u,
+      },
+      {
+        name: "case-folding",
+        files: ["A.txt", "a.txt"],
+        spec: {
+          members: [
+            { path: "package/A.txt", content: "upper" },
+            { path: "package/a.txt", content: "lower" },
+          ],
+        },
+        message: /portable case-folding path collisions/u,
+      },
+      {
+        name: "pax",
+        files: [`${"a".repeat(101)}.txt`],
+        spec: {
+          format: "PAX_FORMAT",
+          members: [{ path: `package/${"a".repeat(101)}.txt`, content: "pax" }],
+        },
+        message: /only regular files are allowed/u,
+      },
+      {
+        name: "oversized",
+        files: ["oversized.bin"],
+        spec: { rawOversizedSize: 64 * 1024 * 1024 + 1 },
+        message: /regular-file bytes exceed/u,
+      },
+      {
+        name: "undeclared",
+        files: ["a.txt"],
+        spec: { members: [{ path: "package/b.txt", content: "other" }] },
+        message: /inventory differs from declaration/u,
+      },
+    ];
+    assert.equal(rejected.length, 10, "anti-vacuum: hostile tar matrix shrank");
+    for (const fixture of rejected) {
+      const result = inspect(writeFixture(fixture.name, fixture.files, fixture.spec));
+      assert.notEqual(result.status, 0, `${fixture.name} unexpectedly passed`);
+      assert.match(result.stderr, fixture.message, fixture.name);
+    }
+
+    const trailing = writeFixture("trailing", ["a.txt"], {
+      members: [{ path: "package/a.txt", content: "valid" }],
+    });
+    writeFileSync(
+      trailing.tarball,
+      Buffer.concat([readFileSync(trailing.tarball), Buffer.from("trailing")]),
+    );
+    const trailingResult = inspect(trailing);
+    assert.notEqual(trailingResult.status, 0);
+    assert.match(trailingResult.stderr, /concatenated member or trailing bytes/u);
+
+    const packSource = packInto.toString();
+    const liveInspectorCall =
+      /const inspected = await inspectNpmTarball\(path, expected, packResult\);/u;
+    assert.match(
+      packSource,
+      /validatePackedFiles\(packageJson, packResult\)[\s\S]*const inspected = await inspectNpmTarball\(path, expected, packResult\);/u,
+      "npm JSON and the live raw-tar call must both gate packInto",
+    );
+    assert.match(packSource, liveInspectorCall);
+    const inspectionBypass = packSource.replace(
+      liveInspectorCall,
+      "const inspected = { bytes: Buffer.alloc(0) };",
+    );
+    assert.notEqual(inspectionBypass, packSource, "inspector-call mutation did not bite");
+    assert.doesNotMatch(
+      inspectionBypass,
+      liveInspectorCall,
+      "removing the actual packInto inspection call must fail this contract",
+    );
+
+    const originalBytes = readFileSync(valid.tarball);
+    const packResult = {
+      size: originalBytes.length,
+      unpackedSize: 9,
+      shasum: createHash("sha1").update(originalBytes).digest("hex"),
+      integrity: `sha512-${createHash("sha512").update(originalBytes).digest("base64")}`,
+      files: [
+        { path: "a.txt", size: 5 },
+        { path: "nested/b.txt", size: 4 },
+      ],
+    };
+    const snapshot = await materializeVerifiedTarballSnapshot({
+      tarballName: basename(valid.tarball),
+      expected: ["a.txt", "nested/b.txt"],
+      packResult,
+      bytes: originalBytes,
+      sha256: createHash("sha256").update(originalBytes).digest("hex"),
+    });
+    try {
+      assert.notEqual(resolve(snapshot.path), resolve(valid.tarball));
+      assert.equal(basename(snapshot.path), `${snapshot.sha256}.tgz`);
+      assert.equal(lstatSync(snapshot.path).isFile(), true);
+      assert.equal(lstatSync(snapshot.path).isSymbolicLink(), false);
+      assert.equal(lstatSync(snapshot.path).nlink, 1);
+      if (process.platform !== "win32") {
+        assert.equal(lstatSync(snapshot.path).mode & 0o777, 0o600);
+      }
+      writeFileSync(valid.tarball, "original path changed after validation");
+      assert.ok(readFileSync(snapshot.path).equals(originalBytes));
+      assert.equal(
+        snapshot.sha256,
+        createHash("sha256").update(readFileSync(snapshot.path)).digest("hex"),
+      );
+    } finally {
+      rmSync(dirname(snapshot.path), { recursive: true, force: true });
+    }
+
+    const swappedPath = join(temporary, "path-swap.tgz");
+    const replacementPath = join(temporary, "path-swap-replacement.tgz");
+    writeFileSync(swappedPath, originalBytes);
+    writeFileSync(replacementPath, originalBytes);
+    const pathSwapProbe = String.raw`
+import importlib.util
+import os
+import pathlib
+import sys
+
+module_path, original, replacement = sys.argv[1:]
+spec = importlib.util.spec_from_file_location("labcolors_tar_inspector", module_path)
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+real_open = module.os.open
+
+def swap_before_open(candidate, flags, *args, **kwargs):
+    if os.path.abspath(os.fspath(candidate)) == os.path.abspath(original):
+        os.replace(replacement, original)
+    return real_open(candidate, flags, *args, **kwargs)
+
+module.os.open = swap_before_open
+try:
+    module._read_snapshot(pathlib.Path(original))
+except module.InspectionError as error:
+    if "changed between lstat and open" not in str(error):
+        raise
+else:
+    raise AssertionError("tarball path swap unexpectedly passed")
+`;
+    execFileSync(
+      commandName,
+      [...argsPrefix, "-c", pathSwapProbe, inspector, swappedPath, replacementPath],
+      {
+        encoding: "utf8",
+        stdio: "pipe",
+        timeout: TAR_INSPECTOR_TEST_TIMEOUT_MS,
+      },
+    );
+
+    // Declared-inventory snapshot symmetry: the JSON declaration must be read
+    // with the same O_NOFOLLOW/lstat/fstat/samestat discipline as the tarball,
+    // so a hostile inventory path cannot be swapped or redirected between
+    // validation and use, and cannot exhaust memory before parsing.
+    const inventoryValidTarball = writeFixture("inventory-valid", ["a.txt"], {
+      members: [{ path: "package/a.txt", content: "alpha" }],
+    });
+    const inventoryBase = join(temporary, "inventory-hostile.json");
+    writeFileSync(
+      inventoryBase,
+      `${JSON.stringify({ schemaVersion: 1, files: ["a.txt"] })}\n`,
+    );
+
+    const linkedInventory = join(temporary, "inventory-linked.json");
+    symlinkSync(inventoryBase, linkedInventory, "file");
+    const linkedInventoryResult = inspect({
+      tarball: inventoryValidTarball.tarball,
+      inventory: linkedInventory,
+    });
+    assert.notEqual(
+      linkedInventoryResult.status,
+      0,
+      "declared inventory symlink unexpectedly passed",
+    );
+    assert.match(linkedInventoryResult.stderr, /symbolic link or reparse point/u);
+
+    const directoryInventory = join(temporary, "inventory-directory");
+    mkdirSync(directoryInventory);
+    const directoryResult = inspect({
+      tarball: inventoryValidTarball.tarball,
+      inventory: directoryInventory,
+    });
+    assert.notEqual(
+      directoryResult.status,
+      0,
+      "directory declared inventory unexpectedly passed",
+    );
+    assert.match(directoryResult.stderr, /not a regular file/u);
+
+    const inventorySwapReplacement = join(temporary, "inventory-swap-replacement.json");
+    writeFileSync(
+      inventorySwapReplacement,
+      `${JSON.stringify({ schemaVersion: 1, files: ["a.txt"] })}\n`,
+    );
+    const inventorySwapProbe = String.raw`
+import importlib.util
+import os
+import pathlib
+import sys
+
+module_path, original, replacement = sys.argv[1:]
+spec = importlib.util.spec_from_file_location("labcolors_tar_inspector", module_path)
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+real_open = module.os.open
+
+def swap_before_open(candidate, flags, *args, **kwargs):
+    if os.path.abspath(os.fspath(candidate)) == os.path.abspath(original):
+        os.replace(replacement, original)
+    return real_open(candidate, flags, *args, **kwargs)
+
+module.os.open = swap_before_open
+try:
+    module._load_declared_inventory(pathlib.Path(original))
+except module.InspectionError as error:
+    if "changed between lstat and open" not in str(error):
+        raise
+else:
+    raise AssertionError("declared inventory path swap unexpectedly passed")
+`;
+    execFileSync(
+      commandName,
+      [
+        ...argsPrefix,
+        "-c",
+        inventorySwapProbe,
+        inspector,
+        inventoryBase,
+        inventorySwapReplacement,
+      ],
+      {
+        encoding: "utf8",
+        stdio: "pipe",
+        timeout: TAR_INSPECTOR_TEST_TIMEOUT_MS,
+      },
+    );
+
+    const inventoryLimitProbe = String.raw`
+import importlib.util
+import sys
+
+module_path = sys.argv[1]
+spec = importlib.util.spec_from_file_location("labcolors_tar_inspector", module_path)
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+print(module.MAX_DECLARED_INVENTORY_BYTES)
+`;
+    const inventoryLimit = Number(
+      execFileSync(
+        commandName,
+        [...argsPrefix, "-c", inventoryLimitProbe, inspector],
+        { encoding: "utf8", stdio: "pipe", timeout: TAR_INSPECTOR_TEST_TIMEOUT_MS },
+      ).trim(),
+    );
+    assert.ok(
+      Number.isSafeInteger(inventoryLimit) && inventoryLimit > 0,
+      "the inspector must expose a positive declared-inventory byte ceiling",
+    );
+
+    const oversizeInventory = join(temporary, "inventory-oversize.json");
+    writeFileSync(oversizeInventory, Buffer.alloc(inventoryLimit + 1, 0x61));
+    const oversizeResult = inspect({
+      tarball: inventoryValidTarball.tarball,
+      inventory: oversizeInventory,
+    });
+    assert.notEqual(
+      oversizeResult.status,
+      0,
+      "oversized declared inventory unexpectedly passed",
+    );
+    assert.match(oversizeResult.stderr, /declared inventory has .* bytes; limit is/u);
+
+    const verifier = read("scripts", "verify-package-release.mjs");
+    assert.match(
+      verifier,
+      /const verifiedTarball = await materializeVerifiedTarballSnapshot\(canonicalPack\)[\s\S]*path: `\.release\/\$\{basename\(verifiedTarball\.path\)\}`[\s\S]*return \{ manifest: RELEASE_MANIFEST, tarball: verifiedTarball\.path \};/u,
+    );
+    assert.doesNotMatch(
+      verifier,
+      /return \{ manifest: RELEASE_MANIFEST, tarball: canonicalPack\.path \};/u,
+    );
+  } finally {
+    rmSync(temporary, { recursive: true, force: true });
+  }
+});
+
+test("the canonical private Program build rejects ambient executor and Cargo config input", async () => {
+  const allowed = {
+    CARGO_HOME: "/declared/cargo-home",
+    CARGO_TERM_COLOR: "always",
+    RUSTUP_HOME: "/declared/rustup-home",
+    RUST_TOOLCHAIN: "1.96.0",
+  };
+  assert.doesNotThrow(() => validateCanonicalBuildEnvironment(allowed));
+  for (const name of [
+    "CARGO",
+    "CARGO_BUILD_RUSTC_WRAPPER",
+    "CARGO_PROFILE_RELEASE_LTO",
+    "CARGO_SOURCE_CRATES_IO_REPLACE_WITH",
+    "CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_LINKER",
+    "NODE_OPTIONS",
+    "NODE_PATH",
+    "RUSTC",
+    "RUSTC_BOOTSTRAP",
+    "RUSTC_WORKSPACE_WRAPPER",
+    "RUSTC_WRAPPER",
+    "RUSTFLAGS",
+    "RUSTUP_TOOLCHAIN",
+  ]) {
+    assert.throws(
+      () => validateCanonicalBuildEnvironment({ ...allowed, [name]: "hostile" }),
+      /forbidden executor or build overrides/u,
+      `${name} must not influence a canonical receipt`,
+    );
+  }
+  assert.throws(
+    () => validateCanonicalBuildEnvironment({ ...allowed, RUST_TOOLCHAIN: "stable" }),
+    /RUST_TOOLCHAIN differs from the canonical pin/u,
+  );
+
+  const temporary = mkdtempSync(join(tmpdir(), "labcolors-cargo-config-test-"));
+  try {
+    const repoRoot = join(temporary, "workspace", "repo");
+    const cargoHome = join(temporary, "cargo-home");
+    mkdirSync(repoRoot, { recursive: true });
+    mkdirSync(cargoHome, { recursive: true });
+    assert.ok(
+      canonicalCargoConfigurationPaths({ repoRoot, cargoHome }).includes(
+        join(temporary, "workspace", ".cargo", "config.toml"),
+      ),
+    );
+    const ancestorCargo = join(temporary, "workspace", ".cargo");
+    mkdirSync(ancestorCargo, { recursive: true });
+    writeFileSync(join(ancestorCargo, "config.toml"), "[build]\nrustc-wrapper='hostile'\n");
+    await assert.rejects(
+      assertCanonicalCargoConfigurationAbsent({ repoRoot, cargoHome }),
+      /canonical build rejects Cargo config files/u,
+    );
+    rmSync(ancestorCargo, { recursive: true, force: true });
+    writeFileSync(join(cargoHome, "config"), "[build]\nrustflags=['hostile']\n");
+    await assert.rejects(
+      assertCanonicalCargoConfigurationAbsent({ repoRoot, cargoHome }),
+      /canonical build rejects Cargo config files/u,
+    );
+  } finally {
+    rmSync(temporary, { recursive: true, force: true });
+  }
+});
+
+test("generated release writes cannot follow pre-planted temporary or destination symlinks", async () => {
+  const atomicWriteSource = read("scripts", "atomic-write.mjs");
+  const privateBuildSource = read("scripts", "build-private-program.mjs");
+  const prepareSource = read("scripts", "prepare-npm-package.mjs");
+  const verifySource = read("scripts", "verify-package-release.mjs");
+  assert.match(
+    atomicWriteSource,
+    /mkdtemp\([\s\S]*open\(temporary, "wx"[\s\S]*handle\.sync\(\)[\s\S]*rename\(temporary, path\)/u,
+  );
+  assert.doesNotMatch(atomicWriteSource, /process\.pid/u);
+  for (const source of [privateBuildSource, prepareSource, verifySource]) {
+    assert.match(source, /atomicWriteGeneratedFile/u);
+    assert.doesNotMatch(source, /\.tmp-\$\{process\.pid\}/u);
+  }
+
+  const temporary = mkdtempSync(join(tmpdir(), "labcolors-atomic-write-test-"));
+  try {
+    const destination = join(temporary, "artifact.json");
+    const victim = join(temporary, "victim.txt");
+    const predictableTemporary = `${destination}.tmp-${process.pid}`;
+    writeFileSync(victim, "victim");
+    symlinkSync(victim, destination, "file");
+    symlinkSync(victim, predictableTemporary, "file");
+
+    await atomicWriteGeneratedFile(destination, "replacement");
+
+    assert.equal(readFileSync(destination, "utf8"), "replacement");
+    assert.equal(readFileSync(victim, "utf8"), "victim");
+    assert.equal(lstatSync(destination).isSymbolicLink(), false);
+    assert.equal(lstatSync(predictableTemporary).isSymbolicLink(), true);
+    assert.deepEqual(
+      readdirSync(temporary).filter((name) =>
+        name.startsWith(`.${basename(destination)}.tmp-`),
+      ),
+      [],
+      "exclusive temporary directories must be removed after the rename",
+    );
+  } finally {
+    rmSync(temporary, { recursive: true, force: true });
+  }
+});
+
+test("private Program metadata binds the exact source, recipe, and packed bytes", () => {
+  const context = {
+    packageJson: { name: "@labpics/colors", version: "0.11.0" },
+    source: "1".repeat(40),
+    coreVersion: "0.3.0",
+    privateProgramBuild: {
+      source: {
+        algorithm: "sha256",
+        framing: "test-framing-v1",
+        scope: ["crates/labcolors-core/src/**"],
+        files: 1,
+        sha256: "5".repeat(64),
+      },
+      build: PRIVATE_PROGRAM_CANONICAL_BUILD,
+    },
+    artifacts: {
+      consumer: {
+        path: "private-program/consumer.js",
+        bytes: 13,
+        sha256: "2".repeat(64),
+      },
+      wasm: {
+        path: "private-program/labcolors_private_program.wasm",
+        bytes: 17,
+        sha256: "3".repeat(64),
+      },
+    },
+  };
+  const metadata = {
+    schemaVersion: 1,
+    role: "private-program-consumer",
+    package: { ...context.packageJson },
+    source: {
+      gitSha: context.source,
+      core: {
+        crate: "labcolors-core",
+        version: context.coreVersion,
+        digest: structuredClone(context.privateProgramBuild.source),
+      },
+    },
+    build: PRIVATE_PROGRAM_CANONICAL_BUILD,
+    artifacts: structuredClone(context.artifacts),
+  };
+
+  assert.doesNotThrow(() => validatePrivateProgramMetadata(metadata, context));
+  for (const [label, mutate] of [
+    [
+      "Core source",
+      (value) => {
+        value.source.core.digest.sha256 = "4".repeat(64);
+      },
+    ],
+    [
+      "build recipe",
+      (value) => {
+        value.build.feature = "stale-feature";
+      },
+    ],
+    [
+      "consumer",
+      (value) => {
+        value.artifacts.consumer.sha256 = "4".repeat(64);
+      },
+    ],
+    [
+      "WASM",
+      (value) => {
+        value.artifacts.wasm.sha256 = "4".repeat(64);
+      },
+    ],
+    [
+      "shape",
+      (value) => {
+        value.unbound = true;
+      },
+    ],
+  ]) {
+    const stale = structuredClone(metadata);
+    mutate(stale);
+    assert.throws(
+      () => validatePrivateProgramMetadata(stale, context),
+      /private Program metadata does not exactly bind its release inputs/u,
+      `${label} drift must be rejected`,
+    );
+  }
+});
+
+test("the canonical private Program receipt rejects an unoptimized or stale artifact", () => {
+  const wasm = Buffer.from([0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00]);
+  const source = {
+    algorithm: "sha256",
+    framing: "test-framing-v1",
+    scope: ["crates/labcolors-core/src/**"],
+    files: 1,
+    sha256: "6".repeat(64),
+  };
+  const receipt = {
+    schemaVersion: 1,
+    source,
+    build: PRIVATE_PROGRAM_CANONICAL_BUILD,
+    artifact: {
+      path: "private-program/labcolors_private_program.wasm",
+      bytes: wasm.length,
+      sha256: createHash("sha256").update(wasm).digest("hex"),
+    },
+  };
+
+  const rawReceipt = structuredClone(receipt);
+  rawReceipt.build.toolchain.optimizer = null;
+  rawReceipt.build.recipe.optimizer = null;
+  assert.throws(
+    () =>
+      validatePrivateProgramBuildReceipt(rawReceipt, {
+        source,
+        wasm,
+        requireOptimizer: true,
+      }),
+    /build receipt differs from its exact source, toolchain, recipe, or artifact/u,
+  );
+
+  assert.throws(
+    () =>
+      validatePrivateProgramBuildReceipt(receipt, {
+        source: { ...source, sha256: "7".repeat(64) },
+        wasm,
+        requireOptimizer: true,
+      }),
+    /build receipt differs from its exact source, toolchain, recipe, or artifact/u,
+  );
+});
+
+test("the public runtime WASM rejects every private Program symbol prefix", () => {
+  assert.doesNotThrow(() => validateRuntimeWasmIsolation(Buffer.from("labcolors_runtime_v1")));
+  assert.throws(
+    () =>
+      validateRuntimeWasmIsolation(
+        Buffer.from("prefix:labcolors_private_fixture_run_v1:suffix"),
+      ),
+    /public runtime WASM contains private Program symbol prefix/u,
+  );
+});
+
+test("the private Program WASM has one exact package-private import/export surface", () => {
+  assert.deepEqual(PRIVATE_PROGRAM_WASM_SURFACE.imports, [
+    {
+      module: "labcolors_private_fixture_host_v1",
+      name: "labcolors_private_fixture_host_confirm_disposed_v1",
+      kind: "function",
+    },
+    {
+      module: "labcolors_private_fixture_host_v1",
+      name: "labcolors_private_fixture_host_install_v1",
+      kind: "function",
+    },
+  ]);
+  assert.deepEqual(
+    PRIVATE_PROGRAM_WASM_SURFACE.exports.map(({ name, kind }) => `${name}:${kind}`),
+    [
+      "__data_end:global",
+      "__heap_base:global",
+      "labcolors_private_fixture_abort_dispose_v1:function",
+      "labcolors_private_fixture_begin_dispose_v1:function",
+      "labcolors_private_fixture_commit_dispose_v1:function",
+      "labcolors_private_fixture_request_v1_len:function",
+      "labcolors_private_fixture_request_v1_ptr:function",
+      "labcolors_private_fixture_result_v1_len:function",
+      "labcolors_private_fixture_result_v1_ptr:function",
+      "labcolors_private_fixture_run_v1:function",
+      "memory:memory",
+    ],
+  );
+  assert.throws(
+    () =>
+      validatePrivateProgramWasmSurface(
+        Buffer.from([0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00]),
+      ),
+    /WASM import\/export surface differs from its exact private allowlist|must contain one defined memory/u,
+  );
+});
+
+test("the private Program WASM rejects a shared-memory section mutant", () => {
+  const wasm = readFileSync(
+    join(root, "packages", "colors", "private-program", "labcolors_private_program.wasm"),
+  );
+  let sectionOffset = -1;
+  for (let offset = 8; offset + 4 < wasm.length; offset += 1) {
+    if (
+      wasm[offset] === 5 &&
+      wasm[offset + 1] === 3 &&
+      wasm[offset + 2] === 1 &&
+      wasm[offset + 3] === 0
+    ) {
+      sectionOffset = offset;
+      break;
+    }
+  }
+  assert.notEqual(sectionOffset, -1, "canonical private WASM must expose a compact memory section");
+  const mutant = Buffer.concat([
+    wasm.subarray(0, sectionOffset + 1),
+    Buffer.from([4, 1, 3, wasm[sectionOffset + 4], wasm[sectionOffset + 4]]),
+    wasm.subarray(sectionOffset + 5),
+  ]);
+  assert.throws(
+    () => validatePrivateProgramWasmSurface(mutant),
+    /memory must be non-shared/u,
+    "shared memory must be rejected by the binary admission contract",
+  );
 });
 
 test("workspace release metadata cannot be rescued by a later TOML table", () => {
@@ -449,7 +1507,7 @@ test("MSRV and packaged Rust crate gates are executable CI contracts", () => {
     const license = join(crateRoot, "LICENSE");
     assert.ok(lstatSync(license).isSymbolicLink(), `${license} must preserve the root SSOT`);
     const canonicalTarget = relative(crateRoot, join(root, "LICENSE")).replaceAll("\\", "/");
-    assert.equal(readlinkSync(license), canonicalTarget);
+    assert.equal(readlinkSync(license).replaceAll("\\", "/"), canonicalTarget);
     assert.equal(readFileSync(license, "utf8"), read("LICENSE"));
     const manifest = readFileSync(join(crateRoot, "Cargo.toml"), "utf8");
     const licenseDeclarations = packageTable(manifest)
@@ -1232,7 +2290,7 @@ test("publish accepts only canonical exact-SHA workflow runs and their immutable
   );
   assert.match(
     publish,
-    /- name: npm publish verified CI tarball \(granular token, no rebuild\/repack\)[\s\S]*?env:\s*\n\s*NODE_AUTH_TOKEN: \$\{\{ secrets\.NPM_TOKEN \}\}[\s\S]*?run: npm publish --ignore-scripts/,
+    /- name: npm publish verified CI tarball \(granular token, no rebuild\/repack\)[\s\S]*?env:\s*\n\s*NODE_AUTH_TOKEN: \$\{\{ secrets\.NPM_TOKEN \}\}[\s\S]*?run:\s*\|[\s\S]*?npm publish --ignore-scripts/,
   );
   assert.match(publish, /TMPDIR=\$RUNNER_TEMP\/tmp-\$GITHUB_JOB/);
   assert.doesNotMatch(publish, /RUSTUP_HOME|CARGO_HOME|RUST_TOOLCHAIN/);
@@ -1289,7 +2347,7 @@ test("publish accepts only canonical exact-SHA workflow runs and their immutable
   assert.match(publish, /packedPackage\.name !== "@labpics\/colors"/);
   assert.match(
     publish,
-    /TARBALL_PATH: \$\{\{ steps\.verified-artifact\.outputs\.tarball \}\}[\s\S]*run: npm publish --ignore-scripts --@labpics:registry=https:\/\/registry\.npmjs\.org "\$TARBALL_PATH"/,
+    /TARBALL_PATH: \$\{\{ steps\.verified-artifact\.outputs\.tarball \}\}[\s\S]*TARBALL_SHA256: \$\{\{ steps\.verified-artifact\.outputs\.sha256 \}\}[\s\S]*run:\s*\|[\s\S]*npm publish --ignore-scripts --@labpics:registry=https:\/\/registry\.npmjs\.org "\$TARBALL_PATH"/,
   );
   assert.doesNotMatch(publish, /wasm-pack|npm ci|release:verify|actions\/upload-artifact|npm pack/);
 
@@ -1411,12 +2469,12 @@ test("tag ancestry guard works after credential-free checkout and rejects non-an
     writeFileSync(fakeNode, "#!/bin/sh\nexit 0\n");
     chmodSync(fakeNode, 0o755);
     const runShellGuard = (sha) =>
-      execFileSync("/bin/bash", ["-euo", "pipefail", "-c", fullGuard], {
+      execFileSync(bashExecutable(), ["-euo", "pipefail", "-c", fullGuard], {
         cwd: shellFixture,
         env: {
           ...process.env,
           GITHUB_SHA: sha,
-          PATH: `${fakeBin}:${process.env.PATH}`,
+          PATH: `${fakeBin}${delimiter}${process.env.PATH ?? ""}`,
         },
         encoding: "utf8",
         stdio: "pipe",
@@ -1635,7 +2693,7 @@ test("canonical-run guard executes against workflow-scoped runs and jobs", () =>
   }
 });
 
-test("publish artifact validator executes and rejects identity or byte drift", () => {
+test("publish artifact validator executes and rejects identity or byte drift", async () => {
   const publish = read(".github", "workflows", "publish-worker.yml");
   const validator = workflowNodeScript(
     publish,
@@ -1645,19 +2703,60 @@ test("publish artifact validator executes and rejects identity or byte drift", (
 
   const temporary = mkdtempSync(join(tmpdir(), "labcolors-publish-contract-"));
   try {
+    const validatorPath = join(temporary, "publish-validator.cjs");
+    writeFileSync(validatorPath, `${validator}\n`);
     const artifact = join(temporary, "artifact");
     const payload = join(temporary, "payload", "package");
     mkdirSync(artifact, { recursive: true });
     mkdirSync(payload, { recursive: true });
     const packageVersion = "0.11.0";
     const coreVersion = "0.3.0";
+    const packageManifest = JSON.parse(read("packages", "colors", "package.json"));
+    assert.equal(packageManifest.version, packageVersion);
     writeFileSync(
       join(payload, "package.json"),
-      `${JSON.stringify({ name: "@labpics/colors", version: packageVersion })}\n`,
+      `${JSON.stringify(packageManifest, null, 2)}\n`,
     );
+    copyFileSync(join(root, "packages", "colors", "README.md"), join(payload, "README.md"));
+    copyFileSync(join(root, "LICENSE"), join(payload, "LICENSE"));
+
+    const generatedPaths = new Set([
+      "LICENSE",
+      "build-metadata.json",
+      "pkg/labcolors_bg.wasm",
+      ...NUMERICAL_EVIDENCE_FILES.map((name) => `evidence/${name}`),
+      "private-program/consumer.js",
+      "private-program/labcolors_private_program.wasm",
+      "private-program/build-metadata.json",
+    ]);
+    for (const path of packageManifest.files) {
+      if (generatedPaths.has(path)) continue;
+      const source = join(root, "packages", "colors", ...path.split("/"));
+      const destination = join(payload, ...path.split("/"));
+      assert.ok(existsSync(source), `fixture source is unavailable: ${path}`);
+      mkdirSync(dirname(destination), { recursive: true });
+      copyFileSync(source, destination);
+    }
     const runtimeWasm = Buffer.from([0, 97, 115, 109, 1, 0, 0, 0]);
-    mkdirSync(join(payload, "pkg"));
+    mkdirSync(join(payload, "pkg"), { recursive: true });
     writeFileSync(join(payload, "pkg", "labcolors_bg.wasm"), runtimeWasm);
+
+    const privateDirectory = join(payload, "private-program");
+    mkdirSync(privateDirectory, { recursive: true });
+    const privateConsumer = readFileSync(
+      join(root, "packages", "colors", "private-program", "consumer.js"),
+    );
+    const privateWasm = readFileSync(
+      join(
+        root,
+        "packages",
+        "colors",
+        "private-program",
+        "labcolors_private_program.wasm",
+      ),
+    );
+    writeFileSync(join(privateDirectory, "consumer.js"), privateConsumer);
+    writeFileSync(join(privateDirectory, "labcolors_private_program.wasm"), privateWasm);
 
     const evidenceDir = join(payload, "evidence");
     mkdirSync(evidenceDir);
@@ -1738,12 +2837,72 @@ test("publish artifact validator executes and rejects identity or byte drift", (
     const metadataBytes = Buffer.from(`${JSON.stringify(buildMetadata)}\n`);
     writeFileSync(metadataPath, metadataBytes);
 
-    const tarball = join(artifact, `labpics-colors-${packageVersion}.tgz`);
-    execFileSync("tar", ["-czf", tarball, "-C", join(temporary, "payload"), "package"]);
-    const bytes = readFileSync(tarball);
+    const privateWasmEvidence = {
+      role: "private-program-consumer",
+      path: "private-program/labcolors_private_program.wasm",
+      bytes: privateWasm.length,
+      sha256: createHash("sha256").update(privateWasm).digest("hex"),
+    };
+    const privateConsumerEvidence = {
+      path: "private-program/consumer.js",
+      bytes: privateConsumer.length,
+      sha256: createHash("sha256").update(privateConsumer).digest("hex"),
+    };
+    const privateMetadata = {
+      schemaVersion: 1,
+      role: "private-program-consumer",
+      package: { name: "@labpics/colors", version: packageVersion },
+      source: {
+        gitSha: expectedSha,
+        core: {
+          crate: "labcolors-core",
+          version: coreVersion,
+          digest: await privateProgramCoreSourceDigest(),
+        },
+      },
+      build: PRIVATE_PROGRAM_CANONICAL_BUILD,
+      artifacts: {
+        consumer: privateConsumerEvidence,
+        wasm: {
+          path: privateWasmEvidence.path,
+          bytes: privateWasmEvidence.bytes,
+          sha256: privateWasmEvidence.sha256,
+        },
+      },
+    };
+    const privateMetadataBytes = Buffer.from(`${JSON.stringify(privateMetadata)}\n`);
+    const privateMetadataPath = join(privateDirectory, "build-metadata.json");
+    writeFileSync(privateMetadataPath, privateMetadataBytes);
+    const privateMetadataEvidence = {
+      path: "private-program/build-metadata.json",
+      bytes: privateMetadataBytes.length,
+      sha256: createHash("sha256").update(privateMetadataBytes).digest("hex"),
+    };
+
+    const packFixture = () => {
+      const invocation = npmInvocation();
+      const output = execFileSync(
+        invocation.commandName,
+        [
+          ...invocation.argsPrefix,
+          "pack",
+          "--ignore-scripts",
+          "--json",
+          `--pack-destination=${artifact}`,
+          payload,
+        ],
+        { cwd: temporary, encoding: "utf8", stdio: "pipe" },
+      );
+      const packed = JSON.parse(output);
+      assert.equal(packed.length, 1);
+      const tarball = join(artifact, packed[0].filename);
+      return { tarball, bytes: readFileSync(tarball) };
+    };
+    const packedFixture = packFixture();
+    const { tarball, bytes } = packedFixture;
 
     const manifest = {
-      schemaVersion: 4,
+      schemaVersion: 5,
       npm: packageVersion,
       core: coreVersion,
       wire: {
@@ -1797,7 +2956,7 @@ test("publish artifact validator executes and rejects identity or byte drift", (
       },
       sourceSha: expectedSha,
       reproducibility: {
-        method: "two-independent-npm-pack-passes",
+        method: "same-executor-two-pass-npm-pack",
         passes: 2,
         byteIdentical: true,
       },
@@ -1835,11 +2994,16 @@ test("publish artifact validator executes and rejects identity or byte drift", (
           bytes: bytes.length,
           sha256: createHash("sha256").update(bytes).digest("hex"),
         },
-        wasm: structuredClone(wasmEvidence),
+        wasm: [...structuredClone(wasmEvidence), structuredClone(privateWasmEvidence)],
         buildMetadata: {
           path: "build-metadata.json",
           bytes: metadataBytes.length,
           sha256: createHash("sha256").update(metadataBytes).digest("hex"),
+        },
+        privateProgramConsumer: {
+          role: "private-program-consumer",
+          buildMetadata: privateMetadataEvidence,
+          consumer: privateConsumerEvidence,
         },
       },
     };
@@ -1847,20 +3011,42 @@ test("publish artifact validator executes and rejects identity or byte drift", (
     const output = join(temporary, "github-output");
     const fakeBin = join(temporary, "bin");
     mkdirSync(fakeBin);
-    writeFileSync(join(fakeBin, "npm"), "#!/bin/sh\nprintf '11.9.0\\n'\n");
-    chmodSync(join(fakeBin, "npm"), 0o755);
+    let expectedNpm = "11.9.0";
+    let pythonBin = "";
+    if (process.platform === "win32") {
+      const linkOrCopy = (source, destination) => {
+        try {
+          linkSync(source, destination);
+        } catch {
+          copyFileSync(source, destination);
+        }
+      };
+      linkOrCopy(process.execPath, join(fakeBin, "npm.exe"));
+      expectedNpm = `v${process.versions.node}`;
+      const pythonExecutable = execFileSync(
+        "py",
+        ["-3", "-c", "import sys; print(sys.executable)"],
+        { encoding: "utf8", stdio: "pipe" },
+      ).trim();
+      pythonBin = dirname(pythonExecutable);
+      assert.ok(existsSync(join(pythonBin, "python3.exe")));
+    } else {
+      writeFileSync(join(fakeBin, "npm"), "#!/bin/sh\nprintf '11.9.0\\n'\n");
+      chmodSync(join(fakeBin, "npm"), 0o755);
+    }
 
-    const execute = () => execFileSync(process.execPath, ["-e", validator], {
+    const execute = () => execFileSync(process.execPath, [validatorPath], {
       env: {
         ...process.env,
         ARTIFACT_DIR: artifact,
         EXPECTED_SHA: expectedSha,
         EXPECTED_TAG: `colors-v${packageVersion}`,
         EXPECTED_NODE: process.versions.node,
-        EXPECTED_NPM: "11.9.0",
+        EXPECTED_NPM: expectedNpm,
         GITHUB_WORKSPACE: root,
         GITHUB_OUTPUT: output,
-        PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
+        RUNNER_TEMP: temporary,
+        PATH: [fakeBin, pythonBin, process.env.PATH ?? ""].filter(Boolean).join(delimiter),
       },
       encoding: "utf8",
       stdio: "pipe",
@@ -1869,7 +3055,19 @@ test("publish artifact validator executes and rejects identity or byte drift", (
 
     writeFileSync(manifestPath, `${JSON.stringify(manifest)}\n`);
     execute();
-    assert.equal(readFileSync(output, "utf8"), `tarball=${tarball}\n`);
+    const verifiedOutputs = new Map(
+      readFileSync(output, "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => line.split("=", 2)),
+    );
+    const verifiedTarball = verifiedOutputs.get("tarball");
+    assert.ok(verifiedTarball && verifiedTarball !== tarball);
+    assert.ok(readFileSync(verifiedTarball).equals(bytes));
+    assert.equal(
+      verifiedOutputs.get("sha256"),
+      createHash("sha256").update(bytes).digest("hex"),
+    );
 
     manifest.sourceSha = "b".repeat(40);
     writeFileSync(manifestPath, `${JSON.stringify(manifest)}\n`);
@@ -1899,8 +3097,9 @@ test("publish artifact validator executes and rejects identity or byte drift", (
       `${JSON.stringify({ ...buildMetadata, sourceSha: "b".repeat(40) })}\n`,
     );
     writeFileSync(metadataPath, tamperedMetadataBytes);
-    execFileSync("tar", ["-czf", tarball, "-C", join(temporary, "payload"), "package"]);
-    const tamperedTarball = readFileSync(tarball);
+    const tamperedPack = packFixture();
+    assert.equal(tamperedPack.tarball, tarball);
+    const tamperedTarball = tamperedPack.bytes;
     manifest.artifacts.tarball.bytes = tamperedTarball.length;
     manifest.artifacts.tarball.sha256 = createHash("sha256")
       .update(tamperedTarball)
@@ -1916,9 +3115,11 @@ test("publish artifact validator executes and rejects identity or byte drift", (
   }
 });
 
-test("release verifier performs an independent byte-for-byte reproduction pass", () => {
+test("release verifier performs a same-executor byte-for-byte reproduction pass", () => {
   const verifier = read("scripts", "verify-package-release.mjs");
   assert.match(verifier, /reproducibility/);
+  assert.match(verifier, /method: "same-executor-two-pass-npm-pack"/u);
+  assert.doesNotMatch(verifier, /two-independent-npm-pack-passes/u);
   assert.match(verifier, /byteIdentical: true/);
   assert.match(verifier, /const npmVersion = lockedNpmVersion\(packageJson\)/);
   assert.match(verifier, /consumerRuntime: \{/);
@@ -2644,11 +3845,11 @@ test("packed and clean-installed numerical evidence stays byte-exact", async () 
   const verifier = read("scripts", "verify-package-release.mjs");
   assert.match(
     verifier,
-    /validatePackedNumericalEvidence\(canonicalPack\.path, numericalEvidenceArtifacts\)/u,
+    /validatePackedNumericalEvidence\(canonicalPack\.bytes, numericalEvidenceArtifacts\)/u,
   );
   assert.match(
     verifier,
-    /verifyCleanConsumer\([\s\S]*?numericalEvidenceArtifacts[\s\S]*?\);/u,
+    /verifyCleanConsumer\(\s*canonicalPack\.bytes,[\s\S]*?numericalEvidenceArtifacts[\s\S]*?\);/u,
   );
 });
 
@@ -2682,7 +3883,7 @@ test("published build metadata binds source, conformance, and WASM inputs", () =
   assert.match(prepare, /sourceSha/);
   assert.ok(
     prepare.indexOf("const sourceSha = verifiedSourceSha()") <
-      prepare.indexOf("atomicWrite(PACKED_LICENSE"),
+      prepare.indexOf("atomicWriteGeneratedFile(PACKED_LICENSE"),
     "source guard must run before generated packing inputs are written",
   );
   assert.match(prepare, /--porcelain=v1/);
@@ -2698,6 +3899,15 @@ test("published build metadata binds source, conformance, and WASM inputs", () =
   assert.doesNotMatch(prepare, /role: "compiler"|compilerWasm/u);
   assert.match(prepare, /bytes: runtimeWasm\.length/u);
   assert.match(prepare, /sha256: sha256\(runtimeWasm\)/u);
+  assert.match(
+    prepare,
+    /assertWebAssemblyBinary\(runtimeWasm, "pkg\/labcolors_bg\.wasm"\)/u,
+    "prepack must reject a malformed public runtime WASM before writing metadata",
+  );
+  assert.match(
+    prepare,
+    /assertWebAssemblyBinary\(privateProgramWasm, PRIVATE_PROGRAM_WASM_PATH\)/u,
+  );
 
   const verifier = read("scripts", "verify-package-release.mjs");
   assert.match(verifier, /import \{ workspaceVersion \} from "\.\/cargo-workspace\.mjs";/);

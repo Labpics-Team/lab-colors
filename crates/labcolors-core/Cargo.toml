@@ -15,6 +15,12 @@ rust-version.workspace = true
 # Direct core consumers receive the stable default capability set. A transport
 # adapter may disable defaults and then enable only capabilities it projects.
 default = []
+# Один закрытый package-private consumer исполняет staged Program, не превращая
+# Program во второй публичный authoring root. Публичный runtime feature не включает.
+private-fixture = []
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(labcolors_private_fixture_unshared_v1)'] }
 
 [dev-dependencies]
 pretty_assertions = "1.4"

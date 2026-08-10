@@ -305,11 +305,17 @@ jobs:
           const { execFileSync } = require("node:child_process");
           const {
             appendFileSync,
+            chmodSync,
+            closeSync,
+            fsyncSync,
             lstatSync,
+            mkdtempSync,
+            openSync,
             readFileSync,
             readdirSync,
+            writeSync,
           } = require("node:fs");
-          const { basename, join } = require("node:path");
+          const { basename, dirname, join } = require("node:path");
           const {
             POINT_SUPPORT_CERTIFIED_CLAIM,
             POINT_SUPPORT_EXCLUDED_CLAIM,
@@ -321,8 +327,81 @@ jobs:
             `${process.env.GITHUB_WORKSPACE}/scripts/point-support-release-contract.cjs`,
           );
 
+          const PRIVATE_PROGRAM_ROLE = "private-program-consumer";
+          const PRIVATE_PROGRAM_METADATA_PATH = "private-program/build-metadata.json";
+          const PRIVATE_PROGRAM_CONSUMER_PATH = "private-program/consumer.js";
+          const PRIVATE_PROGRAM_WASM_PATH =
+            "private-program/labcolors_private_program.wasm";
+          const TAR_INSPECTOR_SHA256 =
+            "c838aac0b1f918113d55839a77b913d1d4225dda39063c57f80efeb9fc153022";
+          const EXPECTED_PACKAGE_FILES = [
+            "LICENSE",
+            "build-metadata.json",
+            "index.js",
+            "index.d.ts",
+            "wcag22.d.ts",
+            "apply-theme.js",
+            "apply-theme.d.ts",
+            "snapshot.js",
+            "output-sink.js",
+            "output-bindings.js",
+            "sequence-identity-matches.js",
+            "watch-theme.js",
+            "watch-theme.d.ts",
+            "adapt-theme.js",
+            "adapt-theme.d.ts",
+            "background-observation.js",
+            "effective-bg.js",
+            "evidence/wcag22-srgb8-v1.json",
+            "evidence/wcag22-srgb8-q55-v1.bin",
+            "evidence/wcag22-srgb8-q55-proof-v1.json",
+            "evidence/point-support-reference-surplus-q55-bps-proof-v1.json",
+            PRIVATE_PROGRAM_CONSUMER_PATH,
+            PRIVATE_PROGRAM_WASM_PATH,
+            PRIVATE_PROGRAM_METADATA_PATH,
+            "pkg/labcolors.js",
+            "pkg/labcolors.d.ts",
+            "pkg/labcolors_bg.wasm",
+            "pkg/labcolors_bg.wasm.d.ts",
+          ];
+          const EXPECTED_PACKAGE_EXPORTS = {
+            ".": { types: "./index.d.ts", default: "./index.js" },
+            "./apply-theme": {
+              types: "./apply-theme.d.ts",
+              default: "./apply-theme.js",
+            },
+            "./watch-theme": {
+              types: "./watch-theme.d.ts",
+              default: "./watch-theme.js",
+            },
+            "./adapt-theme": {
+              types: "./adapt-theme.d.ts",
+              default: "./adapt-theme.js",
+            },
+            "./pkg/labcolors_bg.wasm": "./pkg/labcolors_bg.wasm",
+            "./build-metadata.json": "./build-metadata.json",
+            "./package.json": "./package.json",
+          };
+          const EXPECTED_TAR_INVENTORY = [
+            ...EXPECTED_PACKAGE_FILES,
+            "README.md",
+            "package.json",
+          ].sort((left, right) =>
+            Buffer.compare(Buffer.from(left, "utf8"), Buffer.from(right, "utf8")),
+          );
+
           function fail(message) {
             throw new Error(`release artifact rejected: ${message}`);
+          }
+
+          if (
+            EXPECTED_PACKAGE_FILES.length !== 28 ||
+            new Set(EXPECTED_PACKAGE_FILES).size !== 28 ||
+            EXPECTED_PACKAGE_FILES.some((path) => path.includes("*")) ||
+            EXPECTED_TAR_INVENTORY.length !== 30 ||
+            new Set(EXPECTED_TAR_INVENTORY).size !== 30
+          ) {
+            fail("worker package inventory allowlist is not canonical");
           }
 
           function sha256(bytes) {
@@ -338,6 +417,15 @@ jobs:
             }
           }
 
+          function exactOrderedKeys(value, expected, label) {
+            const actual = value && typeof value === "object" && !Array.isArray(value)
+              ? Object.keys(value)
+              : [];
+            if (actual.join(",") !== expected.join(",")) {
+              fail(`${label} has a non-canonical key order or shape`);
+            }
+          }
+
           function walk(directory, files = []) {
             for (const entry of readdirSync(directory, { withFileTypes: true })) {
               const path = join(directory, entry.name);
@@ -350,7 +438,31 @@ jobs:
             return files;
           }
 
-          function packedEvidence(tarball, records, path, label) {
+          function packedMember(tarball, members, path, label) {
+            const matches = members.filter((member) => member.normalizedPath === path);
+            if (matches.length !== 1) {
+              fail(`${label} must have exactly one inspected packed member ${path}`);
+            }
+            const member = matches[0];
+            if (
+              member.rawPath !== `package/${path}` ||
+              member.type !== "file" ||
+              !Number.isSafeInteger(member.size) ||
+              member.size < 0 ||
+              !/^[0-9a-f]{64}$/u.test(member.sha256 ?? "")
+            ) {
+              fail(`${label} inspected member is not canonical`);
+            }
+            const packed = execFileSync("tar", ["-xOzf", tarball, member.rawPath], {
+              maxBuffer: 64 * 1024 * 1024,
+            });
+            if (packed.length !== member.size || sha256(packed) !== member.sha256) {
+              fail(`${label} extracted bytes differ from the inspected member`);
+            }
+            return packed;
+          }
+
+          function packedEvidence(tarball, members, records, path, label) {
             if (!Array.isArray(records)) fail(`${label} artifacts are not an array`);
             const matches = records.filter((record) => record?.path === path);
             if (matches.length !== 1) {
@@ -358,7 +470,7 @@ jobs:
             }
             const record = matches[0];
             exactKeys(record, ["path", "bytes", "sha256"], `${label} artifact`);
-            const packed = execFileSync("tar", ["-xOzf", tarball, `package/${path}`]);
+            const packed = packedMember(tarball, members, path, label);
             const digest = sha256(packed);
             if (
               !Number.isSafeInteger(record.bytes) ||
@@ -369,6 +481,186 @@ jobs:
               fail(`${label} does not bind the exact packed ${path} bytes`);
             }
             return packed;
+          }
+
+          function packedArtifact(
+            tarball,
+            members,
+            record,
+            expectedPath,
+            label,
+            expectedKeys = ["path", "bytes", "sha256"],
+          ) {
+            exactOrderedKeys(record, expectedKeys, `${label} record`);
+            if (record.path !== expectedPath) {
+              fail(`${label} path ${record.path} != ${expectedPath}`);
+            }
+            const packed = packedMember(tarball, members, expectedPath, label);
+            const actualSha256 = sha256(packed);
+            if (
+              !Number.isSafeInteger(record.bytes) ||
+              record.bytes <= 0 ||
+              record.bytes !== packed.length ||
+              !/^[0-9a-f]{64}$/u.test(record.sha256 ?? "") ||
+              record.sha256 !== actualSha256
+            ) {
+              fail(`${label} does not bind the exact packed ${expectedPath} bytes`);
+            }
+            return packed;
+          }
+
+          function writeExclusiveFsyncedFile(path, bytes, label) {
+            const handle = openSync(path, "wx", 0o600);
+            try {
+              let offset = 0;
+              while (offset < bytes.length) {
+                const written = writeSync(
+                  handle,
+                  bytes,
+                  offset,
+                  bytes.length - offset,
+                  offset,
+                );
+                if (written <= 0) fail(`${label} write made no progress`);
+                offset += written;
+              }
+              fsyncSync(handle);
+            } finally {
+              closeSync(handle);
+            }
+          }
+
+          function fsyncDirectory(directory) {
+            // The publish job is Linux-only. Win32 lacks a Node directory-handle
+            // flush primitive, so local contract execution relies on file fsync + readback.
+            if (process.platform === "win32") return;
+            const directoryHandle = openSync(directory, "r");
+            try {
+              fsyncSync(directoryHandle);
+            } finally {
+              closeSync(directoryHandle);
+            }
+          }
+
+          function materializeVerifiedTarball(bytes, digest, runnerTemp) {
+            const directory = mkdtempSync(join(runnerTemp, "colors-publish-verified-"));
+            chmodSync(directory, 0o700);
+            const path = join(directory, `${digest}.tgz`);
+            writeExclusiveFsyncedFile(path, bytes, "verified tarball snapshot");
+            fsyncDirectory(directory);
+            const snapshot = readFileSync(path);
+            if (!snapshot.equals(bytes) || sha256(snapshot) !== digest) {
+              fail("verified tarball snapshot differs from the validated bytes");
+            }
+            return path;
+          }
+
+          function inspectCanonicalTarball(tarball, bytes, digest, workspace) {
+            const inspectorPath = join(workspace, "scripts/inspect-npm-tarball.py");
+            const inspectorBytes = readFileSync(inspectorPath);
+            if (sha256(inspectorBytes) !== TAR_INSPECTOR_SHA256) {
+              fail("tar inspector bytes differ from the worker-pinned helper");
+            }
+
+            const inventoryPath = join(dirname(tarball), "declared-inventory.json");
+            const inventoryBytes = Buffer.from(
+              `${JSON.stringify({ schemaVersion: 1, files: EXPECTED_TAR_INVENTORY })}\n`,
+              "utf8",
+            );
+            writeExclusiveFsyncedFile(
+              inventoryPath,
+              inventoryBytes,
+              "declared tar inventory",
+            );
+            fsyncDirectory(dirname(tarball));
+
+            const output = execFileSync(
+              "python3",
+              [
+                inspectorPath,
+                "--tarball",
+                tarball,
+                "--declared-inventory-json",
+                inventoryPath,
+              ],
+              { encoding: "utf8", maxBuffer: 1024 * 1024 },
+            );
+            let inspection;
+            try {
+              inspection = JSON.parse(output);
+            } catch {
+              fail("tar inspector output is not JSON");
+            }
+            exactOrderedKeys(
+              inspection,
+              ["schemaVersion", "verdict", "tarball", "limits", "members", "inventory"],
+              "tar inspection",
+            );
+            exactOrderedKeys(inspection.tarball, ["bytes", "sha256"], "tar inspection identity");
+            exactOrderedKeys(
+              inspection.limits,
+              ["maxMembers", "maxTarballBytes", "maxTotalFileBytes"],
+              "tar inspection limits",
+            );
+            exactOrderedKeys(
+              inspection.inventory,
+              ["files", "totalFileBytes"],
+              "tar inspection inventory",
+            );
+            if (
+              inspection.schemaVersion !== 1 ||
+              inspection.verdict !== "canonical" ||
+              inspection.tarball.bytes !== bytes.length ||
+              inspection.tarball.sha256 !== digest ||
+              inspection.limits.maxMembers !== EXPECTED_TAR_INVENTORY.length ||
+              inspection.limits.maxTarballBytes !== 16 * 1024 * 1024 ||
+              inspection.limits.maxTotalFileBytes !== 64 * 1024 * 1024 ||
+              !Array.isArray(inspection.inventory.files) ||
+              JSON.stringify(inspection.inventory.files) !==
+                JSON.stringify(EXPECTED_TAR_INVENTORY) ||
+              !Number.isSafeInteger(inspection.inventory.totalFileBytes) ||
+              inspection.inventory.totalFileBytes < 0 ||
+              inspection.inventory.totalFileBytes > inspection.limits.maxTotalFileBytes ||
+              !Array.isArray(inspection.members) ||
+              inspection.members.length !== EXPECTED_TAR_INVENTORY.length
+            ) {
+              fail("tar inspection does not bind the admitted archive and inventory");
+            }
+
+            let totalFileBytes = 0;
+            const memberPaths = [];
+            for (let index = 0; index < inspection.members.length; index += 1) {
+              const member = inspection.members[index];
+              exactOrderedKeys(
+                member,
+                ["index", "rawPath", "normalizedPath", "type", "size", "sha256"],
+                `tar inspection member ${index}`,
+              );
+              if (
+                member.index !== index ||
+                typeof member.normalizedPath !== "string" ||
+                member.rawPath !== `package/${member.normalizedPath}` ||
+                member.type !== "file" ||
+                !Number.isSafeInteger(member.size) ||
+                member.size < 0 ||
+                !/^[0-9a-f]{64}$/u.test(member.sha256 ?? "")
+              ) {
+                fail(`tar inspection member ${index} is not canonical`);
+              }
+              memberPaths.push(member.normalizedPath);
+              totalFileBytes += member.size;
+            }
+            memberPaths.sort((left, right) =>
+              Buffer.compare(Buffer.from(left, "utf8"), Buffer.from(right, "utf8")),
+            );
+            if (
+              new Set(memberPaths).size !== EXPECTED_TAR_INVENTORY.length ||
+              JSON.stringify(memberPaths) !== JSON.stringify(EXPECTED_TAR_INVENTORY) ||
+              totalFileBytes !== inspection.inventory.totalFileBytes
+            ) {
+              fail("tar inspection member records differ from the admitted inventory");
+            }
+            return inspection;
           }
 
           const CAPABILITY_SITE_LIST_FIELDS = [
@@ -425,13 +717,25 @@ jobs:
             return hash.toString(16).padStart(8, "0");
           }
 
+          (async () => {
           const artifactDir = process.env.ARTIFACT_DIR;
           const expectedSha = process.env.EXPECTED_SHA;
           const expectedTag = process.env.EXPECTED_TAG;
           const expectedNode = process.env.EXPECTED_NODE;
           const expectedNpm = process.env.EXPECTED_NPM;
           const output = process.env.GITHUB_OUTPUT;
-          if (!artifactDir || !expectedSha || !expectedTag || !expectedNode || !expectedNpm || !output) {
+          const runnerTemp = process.env.RUNNER_TEMP;
+          const workspace = process.env.GITHUB_WORKSPACE;
+          if (
+            !artifactDir ||
+            !expectedSha ||
+            !expectedTag ||
+            !expectedNode ||
+            !expectedNpm ||
+            !output ||
+            !runnerTemp ||
+            !workspace
+          ) {
             fail("validator is missing required environment");
           }
           if (process.versions.node !== expectedNode) {
@@ -442,6 +746,10 @@ jobs:
           if (!/^colors-v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/u.test(expectedTag)) {
             fail(`invalid release tag ${expectedTag}`);
           }
+          const {
+            PRIVATE_PROGRAM_CANONICAL_BUILD,
+            privateProgramCoreSourceDigest,
+          } = require(join(workspace, "scripts/build-private-program.mjs"));
 
           const files = walk(artifactDir);
           const manifests = files.filter((path) => basename(path) === "release-manifest.json");
@@ -452,7 +760,7 @@ jobs:
 
           const manifest = JSON.parse(readFileSync(manifests[0], "utf8"));
           const expectedVersion = expectedTag.slice("colors-v".length);
-          if (manifest.schemaVersion !== 4) fail(`manifest schema ${manifest.schemaVersion}`);
+          if (manifest.schemaVersion !== 5) fail(`manifest schema ${manifest.schemaVersion}`);
           exactKeys(
             manifest,
             [
@@ -479,12 +787,29 @@ jobs:
           if (manifest.npm !== expectedVersion) {
             fail(`manifest npm ${manifest.npm} != tag version ${expectedVersion}`);
           }
-          exactKeys(manifest.artifacts, ["tarball", "wasm", "buildMetadata"], "manifest artifacts");
+          exactOrderedKeys(
+            manifest.artifacts,
+            ["tarball", "wasm", "buildMetadata", "privateProgramConsumer"],
+            "manifest artifacts",
+          );
+          exactOrderedKeys(
+            manifest.reproducibility,
+            ["method", "passes", "byteIdentical"],
+            "manifest reproducibility",
+          );
+          if (
+            manifest.reproducibility.method !== "same-executor-two-pass-npm-pack" ||
+            manifest.reproducibility.passes !== 2 ||
+            manifest.reproducibility.byteIdentical !== true
+          ) {
+            fail("manifest reproducibility contract is not canonical");
+          }
 
-          const tarball = tarballs[0];
-          const bytes = readFileSync(tarball);
+          const downloadedTarball = tarballs[0];
+          const bytes = readFileSync(downloadedTarball);
           const evidence = manifest.artifacts?.tarball;
-          if (!evidence || evidence.path !== `.release/${basename(tarball)}`) {
+          exactOrderedKeys(evidence, ["path", "bytes", "sha256"], "tarball record");
+          if (!evidence || evidence.path !== `.release/${basename(downloadedTarball)}`) {
             fail("manifest tarball path does not identify the downloaded tarball");
           }
           if (!Number.isSafeInteger(evidence.bytes) || evidence.bytes !== bytes.length) {
@@ -494,6 +819,14 @@ jobs:
           if (!/^[0-9a-f]{64}$/u.test(evidence.sha256) || evidence.sha256 !== digest) {
             fail(`tarball sha256 ${digest} != manifest ${evidence.sha256}`);
           }
+          const tarball = materializeVerifiedTarball(bytes, digest, runnerTemp);
+          const tarInspection = inspectCanonicalTarball(
+            tarball,
+            bytes,
+            digest,
+            workspace,
+          );
+          const tarMembers = tarInspection.members;
 
           exactKeys(manifest.normativeEvidence, ["wcag22"], "normative evidence");
           exactKeys(
@@ -523,18 +856,21 @@ jobs:
           }
           const wcagProfileBytes = packedEvidence(
             tarball,
+            tarMembers,
             wcag.artifacts,
             "evidence/wcag22-srgb8-v1.json",
             "WCAG22",
           );
           const wcagQ55Bytes = packedEvidence(
             tarball,
+            tarMembers,
             wcag.artifacts,
             "evidence/wcag22-srgb8-q55-v1.bin",
             "WCAG22",
           );
           const wcagProofBytes = packedEvidence(
             tarball,
+            tarMembers,
             wcag.artifacts,
             "evidence/wcag22-srgb8-q55-proof-v1.json",
             "WCAG22",
@@ -608,6 +944,7 @@ jobs:
           }
           const pointProofBytes = packedEvidence(
             tarball,
+            tarMembers,
             point.artifacts,
             "evidence/point-support-reference-surplus-q55-bps-proof-v1.json",
             "point-support",
@@ -840,44 +1177,78 @@ jobs:
             fail("supported and unsupported claims are not the exact canonical disjoint sets");
           }
 
-          const expectedWasm = [["runtime", "pkg/labcolors_bg.wasm"]];
+          const expectedWasm = [
+            ["runtime", "pkg/labcolors_bg.wasm"],
+            [PRIVATE_PROGRAM_ROLE, PRIVATE_PROGRAM_WASM_PATH],
+          ];
           const wasmEvidence = manifest.artifacts?.wasm;
           if (!Array.isArray(wasmEvidence) || wasmEvidence.length !== expectedWasm.length) {
-            fail("manifest must bind exactly the runtime WASM role");
+            fail("manifest must bind exactly the runtime and private Program WASM roles");
           }
+          const packedWasmByRole = new Map();
           for (let index = 0; index < expectedWasm.length; index += 1) {
             const [role, path] = expectedWasm[index];
             const record = wasmEvidence[index];
-            const keys = record && typeof record === "object" ? Object.keys(record) : [];
-            if (keys.join(",") !== "role,path,bytes,sha256") {
-              fail(`${role} WASM record has a non-canonical shape`);
-            }
             if (record.role !== role || record.path !== path) {
               fail(`WASM role ${index} must be ${role} at ${path}`);
             }
-            const packedWasm = execFileSync("tar", ["-xOzf", tarball, `package/${path}`]);
-            const packedDigest = createHash("sha256").update(packedWasm).digest("hex");
-            if (record.bytes !== packedWasm.length || record.sha256 !== packedDigest) {
-              fail(`${role} WASM record does not match the exact tarball bytes`);
-            }
+            packedWasmByRole.set(
+              role,
+              packedArtifact(
+                tarball,
+                tarMembers,
+                record,
+                path,
+                `${role} WASM`,
+                ["role", "path", "bytes", "sha256"],
+              ),
+            );
+          }
+
+          const privateProgram = manifest.artifacts.privateProgramConsumer;
+          exactOrderedKeys(privateProgram, ["role", "buildMetadata", "consumer"], "private Program");
+          if (privateProgram.role !== PRIVATE_PROGRAM_ROLE) {
+            fail(`private Program role ${privateProgram.role}`);
+          }
+          const privateWasmMatches = wasmEvidence.filter(
+            (record) => record?.role === privateProgram.role,
+          );
+          if (privateWasmMatches.length !== 1) {
+            fail("private Program role must join exactly one manifest WASM record");
+          }
+          const privateWasmEvidence = privateWasmMatches[0];
+          const privateWasmArtifact = {
+            path: privateWasmEvidence.path,
+            bytes: privateWasmEvidence.bytes,
+            sha256: privateWasmEvidence.sha256,
+          };
+          const privateMetadataBytes = packedArtifact(
+            tarball,
+            tarMembers,
+            privateProgram.buildMetadata,
+            PRIVATE_PROGRAM_METADATA_PATH,
+            "private Program build metadata",
+          );
+          const privateConsumerBytes = packedArtifact(
+            tarball,
+            tarMembers,
+            privateProgram.consumer,
+            PRIVATE_PROGRAM_CONSUMER_PATH,
+            "private Program consumer",
+          );
+          const privateWasmBytes = packedWasmByRole.get(PRIVATE_PROGRAM_ROLE);
+          if (!Buffer.isBuffer(privateConsumerBytes) || !Buffer.isBuffer(privateWasmBytes)) {
+            fail("private Program packed byte extraction is incomplete");
           }
 
           const metadataEvidence = manifest.artifacts.buildMetadata;
-          exactKeys(metadataEvidence, ["path", "bytes", "sha256"], "build metadata record");
-          if (metadataEvidence.path !== "build-metadata.json") {
-            fail(`build metadata path ${metadataEvidence.path}`);
-          }
-          const packedMetadata = execFileSync(
-            "tar",
-            ["-xOzf", tarball, "package/build-metadata.json"],
+          const packedMetadata = packedArtifact(
+            tarball,
+            tarMembers,
+            metadataEvidence,
+            "build-metadata.json",
+            "public build metadata",
           );
-          const packedMetadataDigest = createHash("sha256").update(packedMetadata).digest("hex");
-          if (
-            metadataEvidence.bytes !== packedMetadata.length ||
-            metadataEvidence.sha256 !== packedMetadataDigest
-          ) {
-            fail("build metadata record does not match the exact tarball bytes");
-          }
           const metadata = JSON.parse(packedMetadata.toString("utf8"));
           exactKeys(
             metadata,
@@ -901,33 +1272,142 @@ jobs:
             metadata.conformance.manifestSha256 !== manifest.conformance?.manifestSha256 ||
             metadata.conformance.familySetSha256 !== manifest.conformance?.familySetSha256 ||
             !Array.isArray(metadata.wasm) ||
-            metadata.wasm.length !== wasmEvidence.length
+            metadata.wasm.length !== 1
           ) {
             fail("packed build metadata does not bind the release identity and conformance");
           }
-          for (let index = 0; index < wasmEvidence.length; index += 1) {
-            const metadataWasm = metadata.wasm[index];
-            exactKeys(metadataWasm, ["role", "path", "bytes", "sha256"], "metadata WASM record");
-            if (JSON.stringify(metadataWasm) !== JSON.stringify(wasmEvidence[index])) {
-              fail(`metadata WASM role ${index} differs from the release manifest`);
-            }
+          const [metadataWasm] = metadata.wasm;
+          exactOrderedKeys(
+            metadataWasm,
+            ["role", "path", "bytes", "sha256"],
+            "metadata WASM record",
+          );
+          if (JSON.stringify(metadataWasm) !== JSON.stringify(wasmEvidence[0])) {
+            fail("public metadata runtime WASM differs from the release manifest");
+          }
+
+          const privateMetadata = JSON.parse(privateMetadataBytes.toString("utf8"));
+          exactOrderedKeys(
+            privateMetadata,
+            ["schemaVersion", "role", "package", "source", "build", "artifacts"],
+            "packed private Program metadata",
+          );
+          exactOrderedKeys(
+            privateMetadata.package,
+            ["name", "version"],
+            "packed private Program package",
+          );
+          exactOrderedKeys(
+            privateMetadata.source,
+            ["gitSha", "core"],
+            "packed private Program source",
+          );
+          exactOrderedKeys(
+            privateMetadata.source?.core,
+            ["crate", "version", "digest"],
+            "packed private Program Core source",
+          );
+          exactOrderedKeys(
+            privateMetadata.source?.core?.digest,
+            ["algorithm", "framing", "symlinks", "scope", "files", "sha256"],
+            "packed private Program Core digest",
+          );
+          exactOrderedKeys(
+            privateMetadata.artifacts,
+            ["consumer", "wasm"],
+            "packed private Program nested artifacts",
+          );
+          exactOrderedKeys(
+            privateMetadata.artifacts?.consumer,
+            ["path", "bytes", "sha256"],
+            "packed private Program nested consumer",
+          );
+          exactOrderedKeys(
+            privateMetadata.artifacts?.wasm,
+            ["path", "bytes", "sha256"],
+            "packed private Program nested WASM",
+          );
+          if (
+            privateMetadata.schemaVersion !== 1 ||
+            privateMetadata.role !== privateProgram.role ||
+            privateMetadata.package.name !== "@labpics/colors" ||
+            privateMetadata.package.version !== expectedVersion ||
+            privateMetadata.source.gitSha !== expectedSha ||
+            privateMetadata.source.core.crate !== "labcolors-core" ||
+            privateMetadata.source.core.version !== manifest.core
+          ) {
+            fail("packed private Program metadata identity is not canonical");
+          }
+          if (
+            JSON.stringify(privateMetadata.artifacts.consumer) !==
+              JSON.stringify(privateProgram.consumer) ||
+            JSON.stringify(privateMetadata.artifacts.wasm) !==
+              JSON.stringify(privateWasmArtifact)
+          ) {
+            fail("packed private Program metadata artifacts differ from manifest V5");
+          }
+          const expectedCoreDigest = await privateProgramCoreSourceDigest();
+          if (
+            JSON.stringify(privateMetadata.source.core.digest) !== JSON.stringify(expectedCoreDigest)
+          ) {
+            fail("packed private Program metadata Core digest differs from the exact tag source");
+          }
+          if (
+            JSON.stringify(privateMetadata.build) !== JSON.stringify(PRIVATE_PROGRAM_CANONICAL_BUILD)
+          ) {
+            fail("packed private Program metadata build descriptor is not canonical");
           }
 
           const packedPackage = JSON.parse(
-            execFileSync("tar", ["-xOzf", tarball, "package/package.json"], {
-              encoding: "utf8",
-            }),
+            packedMember(tarball, tarMembers, "package.json", "packed package").toString(
+              "utf8",
+            ),
           );
           if (packedPackage.name !== "@labpics/colors" || packedPackage.version !== expectedVersion) {
             fail(`packed identity ${packedPackage.name}@${packedPackage.version}`);
           }
+          if (
+            !Array.isArray(packedPackage.files) ||
+            JSON.stringify(packedPackage.files) !== JSON.stringify(EXPECTED_PACKAGE_FILES)
+          ) {
+            fail("packed package files declaration differs from the admitted inventory");
+          }
+          if (JSON.stringify(packedPackage.exports) !== JSON.stringify(EXPECTED_PACKAGE_EXPORTS)) {
+            fail("packed package exports differ from the admitted public surface");
+          }
+          const exportKeys = packedPackage.exports &&
+              typeof packedPackage.exports === "object" &&
+              !Array.isArray(packedPackage.exports)
+            ? Object.keys(packedPackage.exports)
+            : [];
+          const privateExport = exportKeys.find(
+            (key) =>
+              key.includes("*") ||
+              key === "./private-program" || key.startsWith("./private-program/"),
+          );
+          if (privateExport) fail(`private Program path is exported: ${privateExport}`);
 
           if (tarball.includes("\n") || tarball.includes("\r")) fail("unsafe tarball path");
-          appendFileSync(output, `tarball=${tarball}\n`, "utf8");
+          appendFileSync(output, `tarball=${tarball}\nsha256=${digest}\n`, "utf8");
           console.log(`verified ${basename(tarball)}: ${bytes.length} bytes, sha256 ${digest}`);
+          })().catch((error) => {
+            console.error(error instanceof Error ? error.stack : String(error));
+            process.exitCode = 1;
+          });
           NODE
+      # The snapshot is tamper-evident, not immutable against same-UID code. Keep this
+      # token-bearing step adjacent; never insert checked-out or artifact code between them.
       - name: npm publish verified CI tarball (granular token, no rebuild/repack)
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           TARBALL_PATH: ${{ steps.verified-artifact.outputs.tarball }}
-        run: npm publish --ignore-scripts --@labpics:registry=https://registry.npmjs.org "$TARBALL_PATH"
+          TARBALL_SHA256: ${{ steps.verified-artifact.outputs.sha256 }}
+        run: |
+          set -euo pipefail
+          actual_sha256="$(sha256sum --binary -- "$TARBALL_PATH")"
+          actual_sha256="${actual_sha256%% *}"
+          if [[ ! "$TARBALL_SHA256" =~ ^[0-9a-f]{64}$ || "$actual_sha256" != "$TARBALL_SHA256" ]]; then
+            echo "verified tarball changed before npm publish" >&2
+            exit 1
+          fi
+          npm publish --ignore-scripts --@labpics:registry=https://registry.npmjs.org "$TARBALL_PATH"

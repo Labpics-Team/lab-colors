@@ -57,13 +57,16 @@
     "evidence/wcag22-srgb8-q55-v1.bin",
     "evidence/wcag22-srgb8-q55-proof-v1.json",
     "evidence/point-support-reference-surplus-q55-bps-proof-v1.json",
+    "private-program/consumer.js",
+    "private-program/labcolors_private_program.wasm",
+    "private-program/build-metadata.json",
     "pkg/labcolors.js",
     "pkg/labcolors.d.ts",
     "pkg/labcolors_bg.wasm",
     "pkg/labcolors_bg.wasm.d.ts"
   ],
   "scripts": {
-    "build": "wasm-pack build ../../crates/labcolors-wasm --release --target web --out-dir ../../packages/colors/pkg --out-name labcolors --locked",
+    "build": "wasm-pack build ../../crates/labcolors-wasm --release --target web --out-dir ../../packages/colors/pkg --out-name labcolors --locked && node ../../scripts/build-private-program.mjs",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "node --test",
     "prepack": "npm run build && node ../../scripts/prepare-npm-package.mjs",

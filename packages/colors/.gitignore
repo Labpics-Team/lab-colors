@@ -1,6 +1,9 @@
-# Generated wasm-pack artifact. Rebuilt by `npm run build` (and in CI) from
-# crates/labcolors-wasm; never hand-edited, never committed.
+# Generated WASM and private build receipts. Rebuilt by `npm run build`
+# (and in CI) from their Rust sources; never hand-edited, never committed.
 pkg/
+private-program/labcolors_private_program.wasm
+private-program/build-metadata.json
+private-program/.build-receipt.json
 
 # Local tooling
 node_modules/

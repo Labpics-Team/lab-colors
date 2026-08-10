@@ -7,15 +7,16 @@
 
 use super::*;
 
-const DOMAIN_V7: &[u8] = b"labcolors.program-content-identity.v7\0";
-// V7 резервирует фиксированную protocol boundary под type/family tag и полный
+const DOMAIN_V8: &[u8] = b"labcolors.program-content-identity.v8\0";
+// V8 резервирует фиксированную protocol boundary под type/family tag и полный
 // content digest. Каждый writer использует проверяемый push и отвергает
 // расширение схемы вместо усечения данных или аллокации на вершину.
-const HASH_BOUND_COLOR_BYTES_V7: usize = 1 + 1 + 32;
-const COLOR_CAPACITY: usize = HASH_BOUND_COLOR_BYTES_V7;
+const HASH_BOUND_COLOR_BYTES_V8: usize = 1 + 1 + 32;
+const COLOR_CAPACITY: usize = HASH_BOUND_COLOR_BYTES_V8;
 
 mod release_tag {
-    pub(super) const PROGRAM_SCHEMA_V7: u8 = 7;
+    pub(super) const PROGRAM_SCHEMA_V8: u8 = 8;
+    pub(super) const SELECTION_RELEASE_IDENTITY_V1: u8 = 1;
     pub(super) const DECLARED_TOTAL_ORDER_V1: u8 = 1;
     pub(super) const FRESH_FULL_RECHECK_V1: u8 = 1;
     pub(super) const ATOMIC_OBSERVATION_GROUP_V1: u8 = 1;
@@ -83,14 +84,14 @@ mod release_tag {
     pub(super) const MODELED_LCS_PROBE_FAMILY_V1: u8 = 7;
 }
 
-/// Устойчивый к коллизиям адрес канонизированного содержимого Program V7.
+/// Устойчивый к коллизиям адрес канонизированного содержимого Program V8.
 ///
 /// SHA-256 не делает адрес инъективным. Адрес не связывает пространства opaque
 /// ID и не подтверждает владельца, поколение либо revision.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(crate) struct ProgramContentIdentityV7([u8; 32]);
+pub(crate) struct ProgramContentIdentityV8([u8; 32]);
 
-impl ProgramContentIdentityV7 {
+impl ProgramContentIdentityV8 {
     pub(crate) const fn as_bytes(&self) -> &[u8; 32] {
         &self.0
     }
@@ -380,7 +381,7 @@ fn program_root_color() -> Result<VertexColorV1, ProgramCompileError> {
     // производных возможностей связываются только с теми ограничениями,
     // которые их исполняют.
     for release in [
-        release_tag::PROGRAM_SCHEMA_V7,
+        release_tag::PROGRAM_SCHEMA_V8,
         release_tag::DECLARED_TOTAL_ORDER_V1,
         release_tag::FRESH_FULL_RECHECK_V1,
         release_tag::ATOMIC_OBSERVATION_GROUP_V1,
@@ -389,6 +390,17 @@ fn program_root_color() -> Result<VertexColorV1, ProgramCompileError> {
         release_tag::MODELED_POINT_PRESENTATION_V1,
     ] {
         color.push_u8(release)?;
+    }
+    Ok(color)
+}
+
+fn joint_selection_color(
+    selection: &MaterialisedSelectionV1,
+) -> Result<VertexColorV1, ProgramCompileError> {
+    let mut color = VertexColorV1::new(vertex_tag::JOINT_SELECTION);
+    color.push_u8(release_tag::SELECTION_RELEASE_IDENTITY_V1)?;
+    for byte in selection.release_identity().as_bytes() {
+        color.push_u8(*byte)?;
     }
     Ok(color)
 }
@@ -1055,8 +1067,8 @@ where
     }
 
     if let Some(selection) = &program.joint_selection {
-        let selection_vertex = graph.add_member(VertexColorV1::new(vertex_tag::JOINT_SELECTION))?;
-        for (state_index, state) in selection.states().iter().enumerate() {
+        let selection_vertex = graph.add_member(joint_selection_color(selection)?)?;
+        for (state_index, state) in selection.order().states().iter().enumerate() {
             let state_index =
                 u64::try_from(state_index).map_err(|_| ProgramCompileError::ResourceExhausted)?;
             let mut state_color = VertexColorV1::new(vertex_tag::JOINT_STATE);
@@ -1388,7 +1400,7 @@ fn serialize_leaf(
             .and_then(|value| value.checked_add(color.as_slice().len()))
             .ok_or(ProgramCompileError::ResourceExhausted)
     })?;
-    let capacity = DOMAIN_V7
+    let capacity = DOMAIN_V8
         .len()
         .checked_add(16)
         .and_then(|value| value.checked_add(color_bytes))
@@ -1398,7 +1410,7 @@ fn serialize_leaf(
     output
         .try_reserve_exact(capacity)
         .map_err(|_| ProgramCompileError::ResourceExhausted)?;
-    output.extend_from_slice(DOMAIN_V7);
+    output.extend_from_slice(DOMAIN_V8);
     push_u64_bytes(&mut output, usize_as_u64(graph.colors.len())?);
     push_u64_bytes(&mut output, usize_as_u64(graph.edge_count)?);
 
@@ -1732,9 +1744,9 @@ fn canonical_preimage(graph: &CanonicalGraphV1) -> Result<Vec<u8>, ProgramCompil
     canonical_search(graph).map(|(preimage, _)| preimage)
 }
 
-pub(super) fn compile_program_content_identity_v7<Evaluation>(
+pub(super) fn compile_program_content_identity_v8<Evaluation>(
     program: &Program<Evaluation>,
-) -> Result<ProgramContentIdentityV7, ProgramCompileError>
+) -> Result<ProgramContentIdentityV8, ProgramCompileError>
 where
     Evaluation: ProgramConstraintEvaluatorSetV1,
     ProgramConstraintInvocationOf<Evaluation>: Copy,
@@ -1742,12 +1754,49 @@ where
     let graph = build_graph(program)?;
     let preimage = canonical_preimage(&graph)?;
     let digest = crate::sha256::digest(&preimage);
-    Ok(ProgramContentIdentityV7(*digest.as_bytes()))
+    Ok(ProgramContentIdentityV8(*digest.as_bytes()))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn joint_selection_vertex_binds_tag_and_exact_release_identity_bytes() {
+        let key = crate::selection_release::SelectionCandidateKeyV1::new(
+            b"only".to_vec().into_boxed_slice(),
+        );
+        let release = crate::selection_release::SelectionReleaseV1::new(
+            9,
+            vec![vec![key.clone()].into_boxed_slice()].into_boxed_slice(),
+        );
+        let admitted = crate::selection_release::admit_selection_release_v1(release)
+            .expect("single-key release must admit");
+        let materialised = crate::selection_release::materialise_joint_selection_v1(
+            &admitted,
+            &[(
+                JointCandidateStateV1::new(vec![TargetCandidateChoiceV1::new(
+                    TargetId::new(1),
+                    TargetCandidateId::new(2),
+                )]),
+                key,
+            )],
+        )
+        .expect("single binding must materialise");
+
+        let color = joint_selection_color(&materialised).expect("identity color must fit");
+
+        assert_eq!(color.as_slice().len(), 1 + 1 + 32);
+        assert_eq!(color.as_slice()[0], vertex_tag::JOINT_SELECTION);
+        assert_eq!(
+            color.as_slice()[1],
+            release_tag::SELECTION_RELEASE_IDENTITY_V1,
+        );
+        assert_eq!(
+            &color.as_slice()[2..],
+            materialised.release_identity().as_bytes(),
+        );
+    }
 
     #[test]
     fn family_vertex_codec_binds_semantic_release_without_opaque_id_or_artifact_receipt() {

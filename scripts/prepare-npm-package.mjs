@@ -1,10 +1,18 @@
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { chmod, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { atomicWriteGeneratedFile } from "./atomic-write.mjs";
 import { workspaceVersion } from "./cargo-workspace.mjs";
+import {
+  PRIVATE_PROGRAM_CONSUMER_PATH,
+  PRIVATE_PROGRAM_METADATA_PATH,
+  PRIVATE_PROGRAM_ROLE,
+  PRIVATE_PROGRAM_WASM_PATH,
+  readPrivateProgramBuildReceipt,
+} from "./build-private-program.mjs";
 import {
   NUMERICAL_EVIDENCE_FILES,
   assertPackageEvidenceInventory,
@@ -17,6 +25,9 @@ export const PACKAGE_DIR = resolve(REPO_ROOT, "packages/colors");
 const SOURCE_LICENSE = resolve(REPO_ROOT, "LICENSE");
 const PACKED_LICENSE = resolve(PACKAGE_DIR, "LICENSE");
 const BUILD_METADATA = resolve(PACKAGE_DIR, "build-metadata.json");
+const PRIVATE_PROGRAM_METADATA = resolve(PACKAGE_DIR, PRIVATE_PROGRAM_METADATA_PATH);
+const PRIVATE_PROGRAM_CONSUMER = resolve(PACKAGE_DIR, PRIVATE_PROGRAM_CONSUMER_PATH);
+const PRIVATE_PROGRAM_WASM = resolve(PACKAGE_DIR, PRIVATE_PROGRAM_WASM_PATH);
 const NUMERICAL_CONTRACT_DIR = resolve(REPO_ROOT, "crates/labcolors-core/contracts");
 const PACKED_NUMERICAL_EVIDENCE_DIR = resolve(PACKAGE_DIR, "evidence");
 const CONFORMANCE_DIR = resolve(REPO_ROOT, "conformance/vectors");
@@ -32,6 +43,18 @@ const CONFORMANCE_FILES = [
 ];
 
 const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
+const WASM_MAGIC = Buffer.from([0, 97, 115, 109]);
+
+function assertWebAssemblyBinary(bytes, path) {
+  if (bytes.length < 8 || !bytes.subarray(0, WASM_MAGIC.length).equals(WASM_MAGIC)) {
+    throw new Error(`${path} is not a WebAssembly binary`);
+  }
+}
+
+function artifactMetadata(path, bytes) {
+  if (bytes.length === 0) throw new Error(`packed artifact is empty: ${path}`);
+  return { path, bytes: bytes.length, sha256: sha256(bytes) };
+}
 
 function git(args) {
   return execFileSync("git", args, {
@@ -64,17 +87,6 @@ export function verifiedSourceSha() {
   return head;
 }
 
-async function atomicWrite(path, bytes) {
-  const temporary = `${path}.tmp-${process.pid}`;
-  try {
-    await writeFile(temporary, bytes, { mode: 0o644 });
-    await chmod(temporary, 0o644);
-    await rename(temporary, path);
-  } finally {
-    await rm(temporary, { force: true });
-  }
-}
-
 /**
  * Copy the repository's canonical licence into the npm package atomically.
  *
@@ -92,12 +104,15 @@ export async function prepareNpmPackage() {
   ]);
   const packageJson = JSON.parse(packageJsonSource);
   assertPackageEvidenceInventory(packageJson.files);
+  const privateProgramBuild = await readPrivateProgramBuildReceipt({
+    requireOptimizer: true,
+  });
   if (canonical.length === 0) {
     throw new Error(`canonical licence is empty: ${SOURCE_LICENSE}`);
   }
 
   await mkdir(PACKAGE_DIR, { recursive: true });
-  await atomicWrite(PACKED_LICENSE, canonical);
+  await atomicWriteGeneratedFile(PACKED_LICENSE, canonical);
 
   const copied = await readFile(PACKED_LICENSE);
   if (!copied.equals(canonical)) {
@@ -109,19 +124,40 @@ export async function prepareNpmPackage() {
     const source = await readFile(resolve(NUMERICAL_CONTRACT_DIR, file));
     if (source.length === 0) throw new Error(`canonical numerical evidence is empty: ${file}`);
     const destination = resolve(PACKED_NUMERICAL_EVIDENCE_DIR, file);
-    await atomicWrite(destination, source);
+    await atomicWriteGeneratedFile(destination, source);
     if (!(await readFile(destination)).equals(source)) {
       throw new Error(`packed numerical evidence differs from canonical source: ${file}`);
     }
   }
 
-  const [cargoSource, conformanceSource, runtimeWasm, ...familyBytes] =
+  const [
+    cargoSource,
+    conformanceSource,
+    runtimeWasm,
+    privateProgramConsumer,
+    privateProgramWasm,
+    ...familyBytes
+  ] =
     await Promise.all([
       readFile(resolve(REPO_ROOT, "Cargo.toml"), "utf8"),
       readFile(resolve(CONFORMANCE_DIR, "manifest.json"), "utf8"),
       readFile(resolve(PACKAGE_DIR, "pkg/labcolors_bg.wasm")),
+      readFile(PRIVATE_PROGRAM_CONSUMER),
+      readFile(PRIVATE_PROGRAM_WASM),
       ...CONFORMANCE_FILES.map((file) => readFile(resolve(CONFORMANCE_DIR, file))),
     ]);
+  assertWebAssemblyBinary(runtimeWasm, "pkg/labcolors_bg.wasm");
+  assertWebAssemblyBinary(privateProgramWasm, PRIVATE_PROGRAM_WASM_PATH);
+  const privateProgramWasmArtifact = artifactMetadata(
+    PRIVATE_PROGRAM_WASM_PATH,
+    privateProgramWasm,
+  );
+  if (
+    privateProgramWasmArtifact.bytes !== privateProgramBuild.artifact.bytes ||
+    privateProgramWasmArtifact.sha256 !== privateProgramBuild.artifact.sha256
+  ) {
+    throw new Error("private Program WASM changed after its canonical build receipt");
+  }
   const conformance = JSON.parse(conformanceSource);
   const coreVersion = workspaceVersion(cargoSource);
   const metadata = {
@@ -144,9 +180,42 @@ export async function prepareNpmPackage() {
       },
     ],
   };
-  await atomicWrite(BUILD_METADATA, `${JSON.stringify(metadata, null, 2)}\n`);
+  await atomicWriteGeneratedFile(BUILD_METADATA, `${JSON.stringify(metadata, null, 2)}\n`);
 
-  return { license: PACKED_LICENSE, buildMetadata: BUILD_METADATA, sourceSha };
+  const privateProgramMetadata = {
+    schemaVersion: 1,
+    role: PRIVATE_PROGRAM_ROLE,
+    package: { name: packageJson.name, version: packageJson.version },
+    source: {
+      gitSha: sourceSha,
+      core: {
+        crate: privateProgramBuild.build.crate,
+        version: coreVersion,
+        digest: privateProgramBuild.source,
+      },
+    },
+    build: privateProgramBuild.build,
+    artifacts: {
+      consumer: artifactMetadata(PRIVATE_PROGRAM_CONSUMER_PATH, privateProgramConsumer),
+      wasm: privateProgramWasmArtifact,
+    },
+  };
+  await mkdir(dirname(PRIVATE_PROGRAM_METADATA), { recursive: true });
+  await atomicWriteGeneratedFile(
+    PRIVATE_PROGRAM_METADATA,
+    `${JSON.stringify(privateProgramMetadata, null, 2)}\n`,
+  );
+  if (verifiedSourceSha() !== sourceSha) {
+    throw new Error("release source changed while npm packing inputs were prepared");
+  }
+
+  return {
+    license: PACKED_LICENSE,
+    buildMetadata: BUILD_METADATA,
+    privateProgramMetadata: PRIVATE_PROGRAM_METADATA,
+    privateProgramBuild,
+    sourceSha,
+  };
 }
 
 const invokedDirectly =

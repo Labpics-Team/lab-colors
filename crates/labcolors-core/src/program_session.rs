@@ -68,6 +68,7 @@ use crate::observation::{
     ObservationStreamId, RevisionBoundObservationV1, canonicalize_observation_schema,
 };
 use crate::relation::DirectedRelationV1;
+use crate::selection_release::{MaterialisedSelectionV1, SelectionReleaseIdentityV1};
 use crate::session::{
     Session, SessionDecision, SessionEvidenceV1, SessionObservationBindingPermitV1, SessionPlanV1,
     private as session_private,
@@ -76,7 +77,7 @@ use crate::wcag22::Wcag22CriterionV1;
 
 #[path = "program_identity.rs"]
 mod identity;
-pub(crate) use identity::ProgramContentIdentityV7;
+pub(crate) use identity::ProgramContentIdentityV8;
 #[cfg(test)]
 pub(crate) use identity::edge_role_count_for_test as program_identity_edge_role_count_for_test;
 #[cfg(test)]
@@ -272,6 +273,11 @@ impl JointCandidateStateV1 {
 
     pub fn choices(&self) -> &[TargetCandidateChoiceV1] {
         &self.choices
+    }
+
+    pub(crate) fn canonicalise_keyed_choices(mut self) -> Self {
+        self.choices.sort_unstable_by_key(|choice| choice.target);
+        self
     }
 }
 
@@ -959,7 +965,7 @@ where
     sources: Vec<Source>,
     targets: Vec<Target>,
     families: Vec<FamilyDeclarationV2>,
-    joint_selection: Option<DeclaredJointSelectionV1>,
+    joint_selection: Option<MaterialisedSelectionV1>,
     observation_group: ObservationGroup,
     opacities: Vec<OpacityInput>,
     paints: Vec<Paint>,
@@ -1008,10 +1014,32 @@ where
         }
     }
 
-    /// Attach the complete explicit order for all finite Target domains.
-    /// No order is synthesized from target IDs, candidate bytes, or
-    /// declaration position.
-    pub fn with_joint_selection(mut self, selection: DeclaredJointSelectionV1) -> Self {
+    /// Присоединяет полный порядок всех конечных Target, связанный с выпуском.
+    pub(crate) fn with_materialised_joint_selection(
+        mut self,
+        selection: MaterialisedSelectionV1,
+    ) -> Result<Self, CoreProgramDraftErrorV1> {
+        if self.joint_selection.is_some() {
+            return Err(CoreProgramDraftErrorV1::JointSelectionAlreadyDeclared);
+        }
+        self.joint_selection = Some(selection);
+        Ok(self)
+    }
+
+    /// Шов совместимости для тестовых фикстур, созданных до `SelectionRelease`.
+    #[cfg(test)]
+    pub fn with_joint_selection(self, selection: DeclaredJointSelectionV1) -> Self {
+        self.with_materialised_joint_selection(
+            crate::selection_release::materialise_declared_joint_selection_for_test(selection),
+        )
+        .expect("test fixture must admit its joint selection exactly once")
+    }
+
+    #[cfg(test)]
+    pub(crate) fn replace_materialised_joint_selection_for_test(
+        mut self,
+        selection: MaterialisedSelectionV1,
+    ) -> Self {
         self.joint_selection = Some(selection);
         self
     }
@@ -1088,9 +1116,9 @@ impl CoreProgramDraftV1 {
         self.program.families.push(family);
     }
 
-    pub(crate) fn set_joint_selection(
+    pub(crate) fn set_materialised_joint_selection(
         &mut self,
-        selection: DeclaredJointSelectionV1,
+        selection: MaterialisedSelectionV1,
     ) -> Result<(), CoreProgramDraftErrorV1> {
         if self.program.joint_selection.is_some() {
             return Err(CoreProgramDraftErrorV1::JointSelectionAlreadyDeclared);
@@ -1880,14 +1908,26 @@ use admitted_compiled_joint_space::{
 
 enum CompiledTargetSelectionV1 {
     FixedOnly,
-    Finite(AdmittedCompiledJointSpaceV1),
+    Finite {
+        release_identity: SelectionReleaseIdentityV1,
+        space: AdmittedCompiledJointSpaceV1,
+    },
 }
 
 impl CompiledTargetSelectionV1 {
     fn state_count(&self) -> usize {
         match self {
             Self::FixedOnly => 1,
-            Self::Finite(space) => space.state_count(),
+            Self::Finite { space, .. } => space.state_count(),
+        }
+    }
+
+    const fn release_identity(&self) -> Option<SelectionReleaseIdentityV1> {
+        match self {
+            Self::FixedOnly => None,
+            Self::Finite {
+                release_identity, ..
+            } => Some(*release_identity),
         }
     }
 }
@@ -1897,7 +1937,7 @@ where
     Evaluation: ProgramConstraintEvaluatorSetV1,
     ProgramConstraintInvocationOf<Evaluation>: Copy,
 {
-    content_identity: ProgramContentIdentityV7,
+    content_identity: ProgramContentIdentityV8,
     evaluator: Evaluation,
     families: Box<[FamilyDeclarationV2]>,
     required_family_releases: Box<[crate::family::SemanticFamilyReleaseIdV2]>,
@@ -1946,8 +1986,12 @@ where
     /// Opaque ID и порядок неупорядоченных объявлений исключены; явный joint
     /// order входит в адрес. Адрес не подтверждает поколение владельца и не
     /// заменяет revision-bound evidence.
-    pub fn content_identity(&self) -> ProgramContentIdentityV7 {
+    pub fn content_identity(&self) -> ProgramContentIdentityV8 {
         self.owner_generation.content_identity
+    }
+
+    pub(crate) fn selection_release_identity(&self) -> Option<SelectionReleaseIdentityV1> {
+        self.owner_generation.target_selection.release_identity()
     }
 
     pub fn surface_input_ports(&self) -> &[SurfaceInputPortId] {
@@ -2686,7 +2730,7 @@ pub(crate) enum ProgramPointCausalConsideredStateV1 {
 /// одного моделируемого terminal root. Оно ничего не утверждает о пикселе
 /// браузера, восприятии или качестве цвета.
 pub(crate) struct ProgramPointCausalEvidenceV1<'report, State> {
-    content_identity: ProgramContentIdentityV7,
+    content_identity: ProgramContentIdentityV8,
     observation: &'report RevisionBoundObservationV1,
     record: &'report ProgramPointCausalRecordV1,
     steps: &'report [PointOccurrenceAbsenceStepV1],
@@ -2707,7 +2751,7 @@ where
             .unwrap_or_else(|| unreachable!("тип replay span запрещает пустой пересчёт"))
     }
 
-    pub(crate) const fn content_identity(&self) -> ProgramContentIdentityV7 {
+    pub(crate) const fn content_identity(&self) -> ProgramContentIdentityV8 {
         self.content_identity
     }
 
@@ -2765,7 +2809,8 @@ pub struct ProgramReportV1<Evaluation>
 where
     Evaluation: ProgramConstraintEvaluatorSetV1,
 {
-    content_identity: ProgramContentIdentityV7,
+    content_identity: ProgramContentIdentityV8,
+    selection_release_identity: Option<SelectionReleaseIdentityV1>,
     observation: RevisionBoundObservationV1,
     arena: ProgramEvaluationArenaLeaseV1<Evaluation>,
 }
@@ -2776,8 +2821,12 @@ where
 {
     /// Адрес содержимого Program, по которому построен report; это не
     /// идентификатор поколения и не runtime-authority.
-    pub const fn content_identity(&self) -> ProgramContentIdentityV7 {
+    pub const fn content_identity(&self) -> ProgramContentIdentityV8 {
         self.content_identity
+    }
+
+    pub(crate) const fn selection_release_identity(&self) -> Option<SelectionReleaseIdentityV1> {
+        self.selection_release_identity
     }
 
     pub const fn observation(&self) -> &RevisionBoundObservationV1 {
@@ -2807,6 +2856,7 @@ where
     fn into_arena(self) -> ProgramEvaluationArenaReturnV1<Evaluation> {
         let Self {
             content_identity: _,
+            selection_release_identity: _,
             observation,
             arena,
         } = self;
@@ -3828,6 +3878,7 @@ where
     }
     let report = ProgramReportV1 {
         content_identity: epoch.content_identity,
+        selection_release_identity: epoch.target_selection.release_identity(),
         observation,
         arena: arena.into_lease(),
     };
@@ -3873,7 +3924,7 @@ where
                 counts,
             );
         }
-        CompiledTargetSelectionV1::Finite(space) => space,
+        CompiledTargetSelectionV1::Finite { space, .. } => space,
     };
 
     let state_count = space.state_count();
@@ -4792,7 +4843,7 @@ where
     let target_selection = compile_targets(
         &graph,
         &mut program.targets,
-        program.joint_selection.as_mut(),
+        program.joint_selection.as_ref(),
     )?;
     let all_occurrence_contexts = compile_occurrence_contexts(&graph, &program.occurrences)?;
     let point_presentations = compile_point_presentations(
@@ -4822,7 +4873,7 @@ where
     let occurrence_contexts =
         compact_constraint_contexts(&all_occurrence_contexts, &mut constraints)?;
     let outputs = compile_outputs(&graph, &mut program.outputs)?;
-    let content_identity = identity::compile_program_content_identity_v7(&program)?;
+    let content_identity = identity::compile_program_content_identity_v8(&program)?;
     let families = program.families.into_boxed_slice();
     Ok(ProgramEpochV1 {
         content_identity,
@@ -5413,7 +5464,7 @@ struct LoweredConstraint<'a, Invocation> {
 fn compile_targets(
     graph: &CompiledAppearanceGraph,
     authored_targets: &mut [Target],
-    authored_selection: Option<&mut DeclaredJointSelectionV1>,
+    authored_selection: Option<&MaterialisedSelectionV1>,
 ) -> Result<CompiledTargetSelectionV1, ProgramCompileError> {
     struct CanonicalFiniteTargetV1<'a> {
         id: TargetId,
@@ -5486,14 +5537,19 @@ fn compile_targets(
         return Err(ProgramCompileError::MissingJointSelection);
     };
 
+    let authored_order = authored_selection.order();
     let mut authored_tuples = Vec::new();
     authored_tuples
-        .try_reserve_exact(authored_selection.states.len())
+        .try_reserve_exact(authored_order.states.len())
         .map_err(|_| ProgramCompileError::ResourceExhausted)?;
-    for (state_index, authored_state) in authored_selection.states.iter_mut().enumerate() {
-        authored_state
+    for (state_index, authored_state) in authored_order.states.iter().enumerate() {
+        if authored_state
             .choices
-            .sort_unstable_by_key(|choice| choice.target);
+            .windows(2)
+            .any(|pair| pair[0].target > pair[1].target)
+        {
+            return Err(ProgramCompileError::InternalInvariant);
+        }
         if let Some(target) = authored_state
             .choices
             .windows(2)
@@ -5590,7 +5646,10 @@ fn compile_targets(
                 }
             },
         )?;
-    Ok(CompiledTargetSelectionV1::Finite(space))
+    Ok(CompiledTargetSelectionV1::Finite {
+        release_identity: authored_selection.release_identity(),
+        space,
+    })
 }
 
 fn compile_occurrence_contexts(

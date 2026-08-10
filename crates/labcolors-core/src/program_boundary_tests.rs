@@ -9,13 +9,22 @@ use crate::Srgb8;
 use crate::program::{
     AppearanceContextErrorKindV1, AppearanceContextFieldV1, AppearanceContextV1, AssessmentV1,
     CertificateV1, CompileErrorHandleV1, CompileErrorKindV1, CompileErrorV1, ConstraintIdV1,
-    ConstraintSubjectV1, ContentIdentityV7, DraftErrorV1, DraftV1, EvidenceBoundsErrorV1,
+    ConstraintSubjectV1, ContentIdentityV8, DraftErrorV1, DraftV1, EvidenceBoundsErrorV1,
     EvidenceViewV1, FinitePaintDomainV1, InstantiateErrorV1, JointChoiceV1, JointOrderErrorV1,
     JointStateV1, NumericDomainErrorV1, ObservationHeadV1, OccurrenceIdV1, OpacityInputIdV1,
     OutputSlotIdV1, OwnerV1, PaintIdV1, PaintValueV1, PhysicalPointV1, PresentationRootIdV1,
     ScenarioV1, SessionV1, SignalV1, SourceIdV1, StateKindV1, SurfaceIdV1, SurfaceInputPortIdV1,
     SurroundV1, TargetCandidateIdV1, TargetCandidateV1, TargetIdV1, UpdateErrorKindV1,
     UpdateErrorV1, UpdateV1, VerdictV1,
+};
+use crate::program_session::{
+    JointCandidateStateV1 as CoreJointCandidateStateV1,
+    TargetCandidateChoiceV1 as CoreTargetCandidateChoiceV1,
+    TargetCandidateId as CoreTargetCandidateId, TargetId as CoreTargetId,
+};
+use crate::selection_release::{
+    MaterialisedSelectionV1, SelectionCandidateKeyV1, SelectionReleaseIdentityV1,
+    SelectionReleaseV1, admit_selection_release_v1, materialise_joint_selection_v1,
 };
 use crate::wcag22::Wcag22CriterionV1;
 
@@ -443,7 +452,47 @@ fn attach_target_assessment(draft: &mut DraftV1, target: TargetIdV1) {
     draft.push_exact_visible_unary_report_only(constraint, occurrence, Srgb8::new([0; 3]));
 }
 
-fn joint_draft(hard: bool) -> DraftV1 {
+fn materialised_joint_selection(
+    revision: u64,
+    target: u32,
+    first: u32,
+    second: u32,
+) -> (MaterialisedSelectionV1, SelectionReleaseIdentityV1) {
+    let key = |bytes: &[u8]| SelectionCandidateKeyV1::new(bytes.to_vec().into_boxed_slice());
+    let release = SelectionReleaseV1::new(
+        revision,
+        vec![
+            vec![key(b"first")].into_boxed_slice(),
+            vec![key(b"second")].into_boxed_slice(),
+        ]
+        .into_boxed_slice(),
+    );
+    let admitted = admit_selection_release_v1(release).expect("joint test release must admit");
+    let materialised = materialise_joint_selection_v1(
+        &admitted,
+        &[
+            (
+                CoreJointCandidateStateV1::new(vec![CoreTargetCandidateChoiceV1::new(
+                    CoreTargetId::new(target),
+                    CoreTargetCandidateId::new(second),
+                )]),
+                key(b"second"),
+            ),
+            (
+                CoreJointCandidateStateV1::new(vec![CoreTargetCandidateChoiceV1::new(
+                    CoreTargetId::new(target),
+                    CoreTargetCandidateId::new(first),
+                )]),
+                key(b"first"),
+            ),
+        ],
+    )
+    .expect("complete joint test bindings must materialise");
+    let identity = materialised.release_identity();
+    (materialised, identity)
+}
+
+fn joint_draft_with_release(revision: u64, hard: bool) -> (DraftV1, SelectionReleaseIdentityV1) {
     let target = TargetIdV1::new(2);
     let black = TargetCandidateIdV1::new(3);
     let white = TargetCandidateIdV1::new(4);
@@ -463,12 +512,9 @@ fn joint_draft(hard: bool) -> DraftV1 {
             TargetCandidateV1::new(white, PaintValueV1::opaque(Srgb8::new([255; 3]))),
         ]),
     );
-    draft
-        .set_joint_selection(vec![
-            JointStateV1::new(vec![JointChoiceV1::new(target, black)]),
-            JointStateV1::new(vec![JointChoiceV1::new(target, white)]),
-        ])
-        .unwrap();
+    let (selection, release_identity) =
+        materialised_joint_selection(revision, target.value(), black.value(), white.value());
+    draft.set_materialised_joint_selection(selection).unwrap();
     draft.push_surface_input_port(input);
     draft.push_solid_paint(paint, target);
     draft.push_input_surface(surface, input);
@@ -479,7 +525,11 @@ fn joint_draft(hard: bool) -> DraftV1 {
         draft.push_exact_visible_unary_report_only(constraint, occurrence, Srgb8::new([0; 3]));
     }
     draft.push_output(output, paint);
-    draft
+    (draft, release_identity)
+}
+
+fn joint_draft(hard: bool) -> DraftV1 {
+    joint_draft_with_release(1, hard).0
 }
 
 #[test]
@@ -837,6 +887,7 @@ fn every_physical_constructor_and_both_remaining_constraint_modes_execute() {
     let input = SurfaceInputPortIdV1::new(50);
     let draft = fixed_nested_draft(1.0, SourceIdV1::new(1), input, input);
     let owner = draft.compile().unwrap();
+    assert_eq!(owner.selection_release_identity(), None);
     assert_eq!(owner.surface_input_ports().collect::<Vec<_>>(), [input]);
 
     let mut session = owner.instantiate(13).unwrap();
@@ -855,6 +906,7 @@ fn every_physical_constructor_and_both_remaining_constraint_modes_execute() {
     let Some(CertificateV1::Verified(certificate)) = state.certificates().next() else {
         panic!("a fixed target must produce one Verified certificate");
     };
+    assert_eq!(certificate.selection_release_identity(), None);
     assert_eq!(certificate.selected_state_index(), None);
     let outputs = certificate.outputs().collect::<Vec<_>>();
     assert_eq!(outputs.len(), 1);
@@ -862,6 +914,103 @@ fn every_physical_constructor_and_both_remaining_constraint_modes_execute() {
     assert_eq!(outputs[0].source(), Srgb8::new([0; 3]));
     assert_eq!(outputs[0].opacity(), 1.0);
     assert_eq!(certificate.observation().revision(), 1);
+}
+
+#[test]
+fn exact_selection_release_identity_reaches_owner_verified_conflict_and_stale_evidence() {
+    let (first_draft, first_release) = joint_draft_with_release(7, false);
+    let (second_draft, second_release) = joint_draft_with_release(8, false);
+    let first_owner = first_draft.compile().unwrap();
+    let second_owner = second_draft.compile().unwrap();
+    assert_ne!(first_release, second_release);
+    assert_eq!(
+        first_owner.selection_release_identity(),
+        Some(first_release)
+    );
+    assert_eq!(
+        second_owner.selection_release_identity(),
+        Some(second_release)
+    );
+    assert_ne!(
+        first_owner.content_identity(),
+        second_owner.content_identity()
+    );
+
+    let black = [Srgb8::new([0; 3])];
+    let scenarios = [ScenarioV1::new(1, &black)];
+    let mut first_session = first_owner.instantiate(70).unwrap();
+    let mut second_session = second_owner.instantiate(80).unwrap();
+    let first_ready = first_owner
+        .commit(
+            &mut first_session,
+            UpdateV1::Observed {
+                revision: 1,
+                scenarios: &scenarios,
+            },
+        )
+        .unwrap();
+    let second_ready = second_owner
+        .commit(
+            &mut second_session,
+            UpdateV1::Observed {
+                revision: 1,
+                scenarios: &scenarios,
+            },
+        )
+        .unwrap();
+    let first_certificate = first_ready.certificates().next().unwrap();
+    let second_certificate = second_ready.certificates().next().unwrap();
+    assert_eq!(
+        first_certificate.selection_release_identity(),
+        Some(first_release),
+    );
+    assert_eq!(
+        second_certificate.selection_release_identity(),
+        Some(second_release),
+    );
+    assert_ne!(
+        first_certificate.content_identity(),
+        second_certificate.content_identity(),
+    );
+
+    let stale = first_owner
+        .commit(
+            &mut first_session,
+            UpdateV1::Unknown {
+                revision: 2,
+                reason_id: 9,
+            },
+        )
+        .unwrap();
+    assert_eq!(stale.kind(), StateKindV1::Stale);
+    assert_eq!(
+        stale
+            .certificates()
+            .next()
+            .unwrap()
+            .selection_release_identity(),
+        Some(first_release),
+    );
+
+    let (conflict_draft, conflict_release) = joint_draft_with_release(9, true);
+    let conflict_owner = conflict_draft.compile().unwrap();
+    let mut conflict_session = conflict_owner.instantiate(90).unwrap();
+    let conflict = conflict_owner
+        .commit(
+            &mut conflict_session,
+            UpdateV1::Observed {
+                revision: 1,
+                scenarios: &scenarios,
+            },
+        )
+        .unwrap();
+    let Some(CertificateV1::Conflict(conflict_certificate)) = conflict.certificates().next() else {
+        panic!("hard finite test must retain exhaustive conflict evidence");
+    };
+    assert_eq!(
+        conflict_certificate.selection_release_identity(),
+        Some(conflict_release),
+    );
 }
 
 #[test]
@@ -1009,7 +1158,7 @@ fn owner_and_update_errors_preserve_content_and_input_identity() {
     let owner = fixed_nested_draft(1.0, SourceIdV1::new(1), input, input)
         .compile()
         .unwrap();
-    let owner_identity: ContentIdentityV7 = owner.content_identity();
+    let owner_identity: ContentIdentityV8 = owner.content_identity();
     let mut session = owner.instantiate(13).unwrap();
 
     let no_scenarios = [];
@@ -1421,8 +1570,10 @@ fn the_code_owned_observation_group_reports_authored_port_semantics() {
 #[test]
 fn singleton_joint_order_cannot_be_silently_replaced() {
     let mut draft = DraftV1::new();
-    draft.set_joint_selection(vec![]).unwrap();
-    let error = match draft.set_joint_selection(vec![]) {
+    draft
+        .set_joint_selection(vec![JointStateV1::new(Vec::new())])
+        .unwrap();
+    let error = match draft.set_joint_selection(vec![JointStateV1::new(Vec::new())]) {
         Ok(_) => panic!("a singleton declaration must not be replaced"),
         Err(error) => error,
     };

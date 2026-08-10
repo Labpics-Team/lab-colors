@@ -7,6 +7,7 @@
 //! positions never participate, and every foreign binding shape is a typed
 //! rejection.
 
+use crate::program::{DraftErrorV1, DraftV1};
 use crate::program_session::{
     JointCandidateStateV1, TargetCandidateChoiceV1, TargetCandidateId, TargetId,
 };
@@ -54,7 +55,7 @@ fn materialised_joint_order_follows_the_release_not_the_binding_order() {
         &[(loser.clone(), key(b"lose")), (winner.clone(), key(b"win"))],
     )
     .expect("complete binding must materialise");
-    assert_eq!(selection.states(), &[winner, loser]);
+    assert_eq!(selection.order().states(), &[winner, loser]);
 }
 
 #[test]
@@ -83,7 +84,34 @@ fn binding_permutation_is_not_policy() {
     )
     .expect("permuted binding must materialise identically");
     assert_eq!(canonical, permuted);
-    assert_eq!(canonical.states(), &[first, second, third]);
+    assert_eq!(canonical.release_identity(), permuted.release_identity());
+    assert_eq!(canonical.order().states(), &[first, second, third]);
+}
+
+#[test]
+fn equal_orders_from_distinct_releases_retain_distinct_typed_identities() {
+    let first_release = admit_selection_release_v1(release(7, &[&[b"first"], &[b"second"]]))
+        .expect("first authored release must admit");
+    let second_release = admit_selection_release_v1(release(8, &[&[b"first"], &[b"second"]]))
+        .expect("second authored release must admit");
+    let first = state(1, 1);
+    let second = state(1, 2);
+    let bindings = [
+        (second.clone(), key(b"second")),
+        (first.clone(), key(b"first")),
+    ];
+
+    let first_materialised = materialise_joint_selection_v1(&first_release, &bindings)
+        .expect("first release must materialise");
+    let second_materialised = materialise_joint_selection_v1(&second_release, &bindings)
+        .expect("second release must materialise");
+
+    assert_eq!(first_materialised.order(), second_materialised.order());
+    assert_eq!(first_materialised.order().states(), &[first, second]);
+    assert_ne!(
+        first_materialised.release_identity(),
+        second_materialised.release_identity(),
+    );
 }
 
 #[test]
@@ -102,7 +130,7 @@ fn tie_group_materialises_by_canonical_key_bytes_only() {
         ],
     )
     .expect("complete binding must materialise");
-    assert_eq!(selection.states(), &[aa, bb, cc]);
+    assert_eq!(selection.order().states(), &[aa, bb, cc]);
 }
 
 #[test]
@@ -125,4 +153,34 @@ fn materialisation_rejects_every_foreign_binding_shape() {
         ),
         Err(SelectionReleaseErrorV1::DuplicateCandidateBinding)
     );
+
+    let two_key_release = admit_selection_release_v1(release(1, &[&[b"known"], &[b"unbound"]]))
+        .expect("authored release must admit");
+    assert_eq!(
+        materialise_joint_selection_v1(&two_key_release, &[(known, key(b"known"))]),
+        Err(SelectionReleaseErrorV1::MissingCandidateBinding)
+    );
+}
+
+#[test]
+fn draft_accepts_the_materialised_release_exactly_once() {
+    let admitted = admit_selection_release_v1(release(7, &[&[b"primary"], &[b"fallback"]]))
+        .expect("authored release must admit");
+    let primary = state(1, 11);
+    let fallback = state(1, 10);
+    let selection = materialise_joint_selection_v1(
+        &admitted,
+        &[(fallback, key(b"fallback")), (primary, key(b"primary"))],
+    )
+    .expect("complete bindings must materialise");
+    let duplicate = selection.clone();
+    let mut draft = DraftV1::new();
+
+    draft
+        .set_materialised_joint_selection(selection)
+        .expect("the release-owned selection must enter the draft");
+    assert!(matches!(
+        draft.set_materialised_joint_selection(duplicate),
+        Err(DraftErrorV1::JointSelectionAlreadyDeclared)
+    ));
 }

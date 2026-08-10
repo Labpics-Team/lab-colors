@@ -25,17 +25,51 @@ function command(name, args, cwd) {
   }).trim();
 }
 
-test("prepack source guard is clean-tree and exact-SHA executable evidence", async () => {
-  const fixture = mkdtempSync(join(tmpdir(), "labcolors-prepack-source-"));
+const PREPACK_FIXTURE_SCRIPT_FILES = Object.freeze([
+  "prepare-npm-package.mjs",
+  "atomic-write.mjs",
+  "build-private-program.mjs",
+  "cargo-workspace.mjs",
+  "release-evidence.mjs",
+]);
+
+function copyPrepackFixture(fixture, { includeAtomicWriter = true } = {}) {
   const scripts = join(fixture, "scripts");
-  mkdirSync(scripts);
-  for (const dependency of [
-    "prepare-npm-package.mjs",
-    "cargo-workspace.mjs",
-    "release-evidence.mjs",
-  ]) {
+  mkdirSync(scripts, { recursive: true });
+  for (const dependency of PREPACK_FIXTURE_SCRIPT_FILES) {
+    if (!includeAtomicWriter && dependency === "atomic-write.mjs") continue;
     copyFileSync(join(root, "scripts", dependency), join(scripts, dependency));
   }
+
+  const bench = join(fixture, "packages", "colors", "bench");
+  mkdirSync(bench, { recursive: true });
+  copyFileSync(
+    join(root, "packages", "colors", "bench", "wasm.json"),
+    join(bench, "wasm.json"),
+  );
+  return scripts;
+}
+
+test("prepack source graph fails closed without its atomic writer", async () => {
+  const fixture = mkdtempSync(join(tmpdir(), "labcolors-prepack-missing-atomic-"));
+  try {
+    const scripts = copyPrepackFixture(fixture, { includeAtomicWriter: false });
+    await assert.rejects(
+      import(pathToFileURL(join(scripts, "prepare-npm-package.mjs"))),
+      (error) => {
+        assert.equal(error?.code, "ERR_MODULE_NOT_FOUND");
+        assert.match(String(error?.message), /atomic-write\.mjs/u);
+        return true;
+      },
+    );
+  } finally {
+    rmSync(fixture, { recursive: true, force: true });
+  }
+});
+
+test("prepack source guard is clean-tree and exact-SHA executable evidence", async () => {
+  const fixture = mkdtempSync(join(tmpdir(), "labcolors-prepack-source-"));
+  const scripts = copyPrepackFixture(fixture);
   try {
     command("git", ["init", "--quiet"], fixture);
     command("git", ["config", "user.name", "Lab Colors release test"], fixture);
