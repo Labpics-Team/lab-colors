@@ -80,6 +80,7 @@ export type {
   LadderPositionV1,
   RoleRecipe,
   ThemeConfig,
+  OutputBindingSet,
   ResolvedTheme,
   NumericalCapabilitySiteV2,
   NumericalCapabilityManifestV2,
@@ -90,6 +91,7 @@ export type {
 export type { Wcag22CriterionV1 } from "./wcag22.js";
 
 export { applyTheme } from "./apply-theme.js";
+export type { ApplyThemeAttachment } from "./apply-theme.js";
 export { watchTheme } from "./watch-theme.js";
 export type { WatchThemeOptions, WatchController } from "./watch-theme.js";
 export { adaptTheme } from "./adapt-theme.js";

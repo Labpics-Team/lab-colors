@@ -19,6 +19,7 @@ pub(crate) mod composition;
 pub(crate) mod contextual_region;
 mod family;
 mod family_artifact;
+mod family_definition_binding;
 pub(crate) mod spaces;
 
 pub use srgb8::Srgb8;
@@ -41,6 +42,7 @@ pub(crate) mod lpc;
 pub mod material;
 pub mod neutral;
 pub mod numerical_plan;
+mod output_bindings;
 #[expect(
     dead_code,
     reason = "the output-profile firewall is intentionally internal to registered profiles"
@@ -196,6 +198,9 @@ mod constraint_tests;
 
 #[cfg(test)]
 mod family_artifact_tests;
+
+#[cfg(test)]
+mod family_definition_binding_tests;
 
 #[cfg(test)]
 mod clean_set_tests;
@@ -474,6 +479,14 @@ pub struct NoPrematurePointSupportApi;
 /// система ушла осознанно. Сегодня такого перечня нет: семейство — данные,
 /// приходящие извне.
 ///
+/// `family_definition_binding` — часть именно этого механизма, а не исключение
+/// из него: он сравнивает адрес спрошенного региона с адресом в доверенной
+/// записи и не хранит ни одного имени семейства. Поэтому он закрыт тем же
+/// гейтом и по той же причине. Гейт от него не сужается: слой закрыт целиком,
+/// а второе условие сдвигает не публикацию, а полноту механизма — первое
+/// условие (ядро не аутентифицирует запись) им не затрагивается и остаётся
+/// невыполненным.
+///
 /// ```compile_fail
 /// use labcolors_core::family_artifact;
 /// ```
@@ -496,6 +509,14 @@ pub struct NoPrematurePointSupportApi;
 ///
 /// ```compile_fail
 /// use labcolors_core::contextual_region::ContextualRegionFamilyProviderV1;
+/// ```
+///
+/// ```compile_fail
+/// use labcolors_core::family_definition_binding;
+/// ```
+///
+/// ```compile_fail
+/// use labcolors_core::family_definition_binding::DefinitionBoundFamilyLoaderV1;
 /// ```
 #[cfg(doctest)]
 pub struct NoPrematureFamilyArtifactApi;

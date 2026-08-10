@@ -1,0 +1,242 @@
+//! Certificate допускается только к тому определению, которое спрошено.
+
+use core::cell::Cell;
+
+use crate::Srgb8;
+use crate::contextual_region::{
+    ContextualRegionFamilyProviderV1, ContextualRegionPipelineV1, PiecewiseLinearCartesianTubeV1,
+};
+use crate::contextual_region_tests::{
+    ONE, POSITIVE_ZERO, TWO, context, pipeline, region_with_centers,
+};
+use crate::family::FamilyDefinitionDigestV2;
+use crate::family_artifact::{
+    EncodedFamilyArtifactV2, FAMILY_ARTIFACT_PAYLOAD_DIGEST_CALLS,
+    FAMILY_CERTIFICATE_RECORD_LEN_V2, FamilyArtifactLoadErrorV1, FamilyArtifactLoaderV1,
+    FamilyImageCertificateV2, encode_raw_bitmap24_family_artifact_v2_for_test,
+};
+use crate::family_definition_binding::{
+    DefinitionBoundFamilyLoadErrorV1, DefinitionBoundFamilyLoaderV1,
+};
+use crate::lcs_occurrence::{ColorSignal, IEC_SRGB_D65_XYZ_FRAME_V1};
+
+fn asked_pipeline() -> ContextualRegionPipelineV1 {
+    pipeline(context(IEC_SRGB_D65_XYZ_FRAME_V1))
+}
+
+/// Регионы отличаются только центрами узлов: геометрия семейства другая, а
+/// весь остальной pipeline тот же.
+fn asked_region() -> PiecewiseLinearCartesianTubeV1 {
+    region_with_centers([[POSITIVE_ZERO; 2]; 2])
+}
+
+fn other_region() -> PiecewiseLinearCartesianTubeV1 {
+    region_with_centers([[ONE, TWO], [TWO, ONE]])
+}
+
+fn members() -> Vec<ColorSignal> {
+    [[0, 0, 1], [0, 0, 2], [0, 0, 255]]
+        .into_iter()
+        .map(Srgb8::new)
+        .map(ColorSignal::from_srgb8)
+        .collect()
+}
+
+/// Внешний registry поставляет доверенную запись сертификата образа именно
+/// этого региона и — отдельным каналом — недоверенные bytes артефакта.
+///
+/// Запись разбирается тем же и единственным входом, что и у потребителя:
+/// `FamilyImageCertificateV2::parse_trusted`. Своего способа получить
+/// certificate у guard-а нет, и здесь он тоже не заводится.
+fn artifact_of(
+    region: &PiecewiseLinearCartesianTubeV1,
+) -> (FamilyImageCertificateV2, EncodedFamilyArtifactV2) {
+    let definition = ContextualRegionFamilyProviderV1::definition_digest(asked_pipeline(), region);
+    let (minted, encoded) =
+        encode_raw_bitmap24_family_artifact_v2_for_test(definition, &members()).unwrap();
+    let bytes = encoded.clone().into_bytes();
+    let trusted =
+        FamilyImageCertificateV2::parse_trusted(&bytes[..FAMILY_CERTIFICATE_RECORD_LEN_V2])
+            .unwrap();
+    // Запись артефакта и minted certificate — одно значение, а не два
+    // согласуемых источника: расхождение здесь означало бы, что guard проверяет
+    // не то, что предъявит потребитель.
+    assert_eq!(trusted, minted);
+    (trusted, encoded)
+}
+
+#[test]
+fn the_artifact_of_the_asked_region_is_admitted() {
+    let region = asked_region();
+    let (certificate, encoded) = artifact_of(&region);
+
+    let admitted =
+        DefinitionBoundFamilyLoaderV1::load(asked_pipeline(), &region, certificate, encoded)
+            .unwrap();
+
+    assert_eq!(admitted.semantic_release(), certificate.semantic_release());
+    assert_eq!(admitted.artifact_receipt(), certificate.artifact_receipt());
+    for member in members() {
+        assert!(admitted.contains(member), "missing member {member:?}");
+    }
+}
+
+#[test]
+fn an_intact_artifact_of_another_region_is_refused_by_type() {
+    let asked = asked_region();
+    let other = other_region();
+    let (certificate, encoded) = artifact_of(&other);
+    let allocation = encoded.allocation_ptr_for_test();
+
+    let failure =
+        DefinitionBoundFamilyLoaderV1::load(asked_pipeline(), &asked, certificate, encoded)
+            .unwrap_err();
+
+    assert_eq!(
+        failure.cause(),
+        DefinitionBoundFamilyLoadErrorV1::ForeignDefinition {
+            asked: ContextualRegionFamilyProviderV1::definition_digest(asked_pipeline(), &asked),
+            certified: ContextualRegionFamilyProviderV1::definition_digest(
+                asked_pipeline(),
+                &other,
+            ),
+        },
+    );
+    let (_, returned) = failure.into_parts();
+    assert_eq!(returned.allocation_ptr_for_test(), allocation);
+    // Отвергнут не повреждённый artifact: те же bytes и тот же certificate
+    // безупречны для transport-границы, они лишь про другое определение.
+    FamilyArtifactLoaderV1::load(certificate, returned).unwrap();
+}
+
+#[test]
+fn a_foreign_definition_is_refused_before_any_payload_work() {
+    let asked = asked_region();
+    let (foreign_certificate, foreign_encoded) = artifact_of(&other_region());
+    let (asked_certificate, asked_encoded) = artifact_of(&asked);
+
+    FAMILY_ARTIFACT_PAYLOAD_DIGEST_CALLS.with(|calls| calls.set(0));
+    let failure = DefinitionBoundFamilyLoaderV1::load(
+        asked_pipeline(),
+        &asked,
+        foreign_certificate,
+        foreign_encoded,
+    )
+    .unwrap_err();
+    let refused_cost = FAMILY_ARTIFACT_PAYLOAD_DIGEST_CALLS.with(Cell::get);
+
+    assert!(matches!(
+        failure.cause(),
+        DefinitionBoundFamilyLoadErrorV1::ForeignDefinition { .. },
+    ));
+    // Payload digest — первая дорогая работа над 2 MiB; decode образа идёт
+    // строго после него, поэтому ноль здесь закрывает обе стадии.
+    assert_eq!(
+        refused_cost, 0,
+        "foreign definition must be refused on the record, before payload work",
+    );
+
+    // Anti-vacuity: счётчик действительно наблюдает дорогую работу, когда
+    // адрес совпал.
+    DefinitionBoundFamilyLoaderV1::load(asked_pipeline(), &asked, asked_certificate, asked_encoded)
+        .unwrap();
+    assert_eq!(FAMILY_ARTIFACT_PAYLOAD_DIGEST_CALLS.with(Cell::get), 1);
+}
+
+/// Адрес определения сравнивается целиком. Сравнение любой собственной части
+/// адреса допустило бы чужой образ, совпавший ровно на сравниваемой части, —
+/// поэтому расхождение в КАЖДОЙ из 32 позиций обязано отказывать по отдельности.
+///
+/// Каждый отвергаемый certificate здесь когерентен и предъявляется как запись,
+/// которую `parse_trusted` принимает: отказ доказывается на достижимом входе, а
+/// не на значении, которое потребитель не смог бы предъявить.
+///
+/// Transport при самом отказе пустой: guard обязан отказать до parse envelope,
+/// поэтому байтов, которые можно было бы разобрать, для отказа не требуется.
+#[test]
+fn every_byte_of_the_definition_address_is_compared() {
+    let region = asked_region();
+    let (certificate, encoded) = artifact_of(&region);
+    let asked = ContextualRegionFamilyProviderV1::definition_digest(asked_pipeline(), &region);
+
+    // Ширина берётся у самого значения: литерал молча перестал бы покрывать
+    // все позиции, если бы digest сменил ширину, и тест остался бы зелёным
+    // при неполном сравнении.
+    for index in 0..asked.as_bytes().len() {
+        let mut bytes = *asked.as_bytes();
+        bytes[index] ^= 1;
+        let certified = FamilyDefinitionDigestV2::from_digest(bytes);
+        let foreign = certificate.definition_with_coherent_certificate_for_test(certified);
+
+        let record = encoded
+            .clone()
+            .with_certificate_for_test(foreign)
+            .into_bytes();
+        assert_eq!(
+            FamilyImageCertificateV2::parse_trusted(&record[..FAMILY_CERTIFICATE_RECORD_LEN_V2])
+                .unwrap(),
+            foreign,
+            "byte {index}: the refused certificate is not a record the consumer could present",
+        );
+
+        let failure = DefinitionBoundFamilyLoaderV1::load(
+            asked_pipeline(),
+            &region,
+            foreign,
+            EncodedFamilyArtifactV2::from_raw_bytes_for_test(Vec::new()),
+        )
+        .unwrap_err();
+
+        assert_eq!(
+            failure.cause(),
+            DefinitionBoundFamilyLoadErrorV1::ForeignDefinition { asked, certified },
+            "byte {index} of the definition address is not part of the comparison",
+        );
+    }
+}
+
+/// Отказ печатает только типизированную причину: owned transport не попадает
+/// в логи и отчёты вслед за неудачным admission.
+#[test]
+fn a_refused_binding_reports_only_its_typed_cause() {
+    let asked = asked_region();
+    let (certificate, encoded) = artifact_of(&other_region());
+
+    let failure =
+        DefinitionBoundFamilyLoaderV1::load(asked_pipeline(), &asked, certificate, encoded)
+            .unwrap_err();
+
+    assert_eq!(
+        format!("{failure:?}"),
+        format!(
+            "DefinitionBoundFamilyLoadFailureV1 {{ cause: {:?}, .. }}",
+            failure.cause(),
+        ),
+        "owning failures must not dump transport bytes",
+    );
+}
+
+#[test]
+fn the_asked_definition_does_not_weaken_the_transport_contract() {
+    let region = asked_region();
+    let (certificate, mut encoded) = artifact_of(&region);
+    encoded.flip_first_payload_bit_for_test();
+    let allocation = encoded.allocation_ptr_for_test();
+
+    let failure =
+        DefinitionBoundFamilyLoaderV1::load(asked_pipeline(), &region, certificate, encoded)
+            .unwrap_err();
+
+    assert_eq!(
+        failure.cause(),
+        DefinitionBoundFamilyLoadErrorV1::Artifact(
+            FamilyArtifactLoadErrorV1::PayloadDigestMismatch,
+        ),
+    );
+    // The type's contract — a failure hands the same owned bytes back, so a
+    // caller never refetches or clones — was asserted only on the foreign
+    // definition branch.  This branch could have reallocated and nothing
+    // would have turned red.
+    let (_, returned) = failure.into_parts();
+    assert_eq!(returned.allocation_ptr_for_test(), allocation);
+}

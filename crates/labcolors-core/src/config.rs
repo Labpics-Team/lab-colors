@@ -42,9 +42,12 @@
 
 use crate::Srgb8;
 use crate::ladder::{LadderPosition, LadderTint, ThemeAnchors};
+use crate::output_bindings::{
+    OutputBindingCompileError, OutputBindingNameKind, is_valid_contract_name,
+};
 use crate::semantic::{
-    DECORATIVE_FLOOR_MIN, DjMagnitude, NamedRoleTable, RoleChroma, RoleSpec, TextAnchor,
-    validate_ladder_floor,
+    DECORATIVE_FLOOR_MIN, DjMagnitude, NamedRoleTable, NamedRoleTableCompileError, RoleChroma,
+    RoleSpec, TextAnchor, validate_ladder_floor,
 };
 use crate::solve::Floor;
 
@@ -467,53 +470,9 @@ pub enum RoleRecipe {
     Zero,
 }
 
-/// Суффиксы CSS-переменных, которые один объявленный рецепт резервирует.
-///
-/// Основное имя принадлежит клиентскому токену даже тогда, когда `Zero` не
-/// эмитит значения: projection всё равно публикует его `cssVar`, и сателлит
-/// другой роли не вправе занять это имя. Остальной shape выводится из рецепта
-/// до резолва, иначе коллизия могла бы зависеть от фона (на одном роль
-/// unreachable и «всё работает», на другом два писателя молча делят один
-/// `--lab-*`). Исчерпывающий match заставляет каждый новый рецепт явно выбрать
-/// свой namespace shape.
-fn reserved_css_suffixes(recipe: &RoleRecipe) -> &'static [&'static str] {
-    const PRIMARY: &[&str] = &[""];
-    const GLOW: &[&str] = &["", "-core", "-alpha"];
-    const MATERIAL: &[&str] = &["", "-01", "-02"];
-
-    match recipe {
-        RoleRecipe::Glow { .. } => GLOW,
-        RoleRecipe::Material { .. } => MATERIAL,
-        RoleRecipe::TextAnchor { .. }
-        | RoleRecipe::DjAnchor { .. }
-        | RoleRecipe::DecorativeLc { .. }
-        | RoleRecipe::Ladder { .. }
-        | RoleRecipe::AlphaAnalog { .. }
-        | RoleRecipe::Zero => PRIMARY,
-    }
-}
-
-/// Зарезервировать один shape эмиссии в общем namespace.
-///
-/// Отдельный примитив не знает сегодняшних суффиксов и потому не опирается на
-/// случайное свойство, что `-core/-alpha/-01/-02` пока не пересекаются друг с
-/// другом: будущая derived↔derived коллизия попадёт в тот же гард.
-fn reserve_css_names(
-    reserved: &mut std::collections::BTreeSet<String>,
-    name: &str,
-    suffixes: &[&str],
-) -> Result<(), ConfigError> {
-    for suffix in suffixes {
-        let key = format!("--lab-{name}{suffix}");
-        if !reserved.insert(key.clone()) {
-            return Err(ConfigError::DuplicateKey {
-                dictionary: "reserved CSS namespace",
-                key,
-            });
-        }
-    }
-    Ok(())
-}
+/// Compatibility path for existing Core and binding consumers. The manifest
+/// itself is owned by the independent output-domain module.
+pub use crate::output_bindings::OutputBindingSet;
 
 /// Источник тинта лестницы/альфа-аналога: откуда берётся якорный цвет.
 ///
@@ -585,14 +544,6 @@ pub struct ThemeConfig {
 // Валидация.
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Проверить, что строка — валидный `[a-z0-9-]+` и не пуста.
-fn is_valid_name(name: &str) -> bool {
-    !name.is_empty()
-        && name
-            .chars()
-            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
-}
-
 /// Проверить, что hex парсится ядром (только `#RRGGBB`).
 fn check_hex(field: &str, value: &str) -> Result<(), ConfigError> {
     crate::spaces::srgb::srgb_from_hex(value)
@@ -613,13 +564,37 @@ fn check_theme_anchors(field: &str, a: &ThemeAnchors) -> Result<(), ConfigError>
 
 /// Проверить, что имя валидно, иначе [`ConfigError::InvalidName`].
 fn check_name(field: &str, value: &str) -> Result<(), ConfigError> {
-    if is_valid_name(value) {
+    if is_valid_contract_name(value) {
         Ok(())
     } else {
         Err(ConfigError::InvalidName {
             field: field.to_string(),
             value: value.to_string(),
         })
+    }
+}
+
+/// Translate output-domain failures without weakening the established config
+/// error contract used by loaders and bindings.
+fn map_output_binding_error(error: OutputBindingCompileError) -> ConfigError {
+    match error {
+        OutputBindingCompileError::InvalidName { kind, value } => {
+            let field = match kind {
+                OutputBindingNameKind::Role => format!("roles.{value}"),
+                OutputBindingNameKind::Alias => format!("aliases.{value}"),
+            };
+            ConfigError::InvalidName { field, value }
+        }
+        OutputBindingCompileError::UnknownAliasTarget { alias, target } => {
+            ConfigError::UnknownRole {
+                referenced_by: format!("aliases.{alias}"),
+                role: target,
+            }
+        }
+        OutputBindingCompileError::DuplicateBinding { key } => ConfigError::DuplicateKey {
+            dictionary: "reserved CSS namespace",
+            key,
+        },
     }
 }
 
@@ -835,30 +810,6 @@ impl ThemeConfig {
             }
         }
 
-        // Роль резервирует не только собственный `--lab-{name}`: Glow и Material
-        // создают сателлиты. Алиас клонирует outcome цели и потому создаёт тот же
-        // набор уже под СВОИМ именем. Проверяем итоговый namespace целиком до
-        // резолва/JSON, чтобы порядок писателей никогда не решал, чьё значение
-        // молча победит. Один общий set ловит role↔satellite, alias↔satellite и
-        // любые будущие satellite↔satellite пересечения без списка частных пар.
-        let mut reserved = std::collections::BTreeSet::new();
-
-        for (name, recipe) in &self.roles {
-            reserve_css_names(&mut reserved, name, reserved_css_suffixes(recipe))?;
-        }
-        for (alias, target) in &self.aliases {
-            let target_recipe = self
-                .roles
-                .iter()
-                .find(|(name, _)| name == target)
-                .map(|(_, recipe)| recipe)
-                .ok_or_else(|| ConfigError::UnknownRole {
-                    referenced_by: format!("aliases.{alias}"),
-                    role: target.clone(),
-                })?;
-            reserve_css_names(&mut reserved, alias, reserved_css_suffixes(target_recipe))?;
-        }
-
         Ok(())
     }
 
@@ -1017,7 +968,6 @@ impl ThemeConfig {
             let spec = self.compile_recipe(name, recipe)?;
             entries.push((name.clone(), spec));
         }
-
         // Neutral policy comes only from client data. An override explicitly
         // supplies hue; otherwise exact emitted bytes decide whether a direction
         // exists. Equal channels stay neutral instead of receiving matrix-noise
@@ -1054,10 +1004,15 @@ impl ThemeConfig {
         }
 
         NamedRoleTable::from_validated_parts(entries, self.aliases.clone(), chroma).map_err(
-            |error| ConfigError::OutOfBounds {
-                handle: format!("roles.{}.alpha", self.roles[error.declaration_ordinal()].0),
-                value: error.value(),
-                bound: "0 < alpha ≤ 1 (запрошенная непрозрачность альфа-аналога)",
+            |error| match error {
+                NamedRoleTableCompileError::OutputBindings(error) => {
+                    map_output_binding_error(error)
+                }
+                NamedRoleTableCompileError::AlphaAnalog(error) => ConfigError::OutOfBounds {
+                    handle: format!("roles.{}.alpha", self.roles[error.declaration_ordinal()].0),
+                    value: error.value(),
+                    bound: "0 < alpha ≤ 1 (запрошенная непрозрачность альфа-аналога)",
+                },
             },
         )
     }

@@ -770,6 +770,15 @@ jobs:
           # (which leaks the full expanded PATH across jobs on shared self-hosted runners).
           echo "$CHROME_BIN_DIR" >> "$GITHUB_PATH"
           echo "Linked CfT Chrome under runner.temp"
+      - name: "@labpics/colors: real-browser atomic output-sink proof"
+        env:
+          # One end-to-end deadline owns driver startup, browser session,
+          # CSSOM assertions, and cleanup. The script derives smaller command
+          # budgets from this declared bound and has no unbounded wait path.
+          LAB_COLORS_BROWSER_PROOF_TIMEOUT_MS: "60000"
+        run: |
+          set -euo pipefail
+          node scripts/test-browser-output-sink.mjs
       - name: wasm-pack test (headless chrome)
         # Chrome is provisioned above; the parity smoke runs against native
         # resolve_set inside the same wasm runtime. D1 default from the chapter.
