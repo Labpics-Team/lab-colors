@@ -5,7 +5,10 @@ import {
   isCanonicalBuildEnvOverride,
   validateCanonicalBuildEnvironment,
 } from "../../../scripts/build-private-program.mjs";
-import { hermeticBuildEnvironment } from "../../../scripts/ensure-private-program-artifact.mjs";
+import {
+  hermeticBuildEnvironment,
+  runCanonicalPrivateProgramBuild,
+} from "../../../scripts/run-canonical-private-program-build.mjs";
 
 // The package `test` command builds the ignored private Program artifact in a
 // hermetic child process so ambient executor/build overrides exported by the
@@ -146,4 +149,17 @@ test("the canonical builder still rejects forbidden overrides when called direct
     }),
     true,
   );
+});
+
+test("the test prerequisite and the release gate share one hermetic child primitive", async () => {
+  // Importing the full graph proves it is acyclic: the shared primitive,
+  // the package test prerequisite, and the release gate must load together
+  // without circular-import failures.
+  const ensure = await import("../../../scripts/ensure-private-program-artifact.mjs");
+  const verify = await import("../../../scripts/verify-package-release.mjs");
+  assert.equal(typeof runCanonicalPrivateProgramBuild, "function");
+  assert.equal(typeof hermeticBuildEnvironment, "function");
+  assert.equal(typeof ensure.ensurePrivateProgramArtifact, "function");
+  assert.equal(typeof ensure.verifiedArtifactExists, "function");
+  assert.equal(typeof verify.verifyPackageRelease, "function");
 });

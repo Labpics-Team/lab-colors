@@ -2071,35 +2071,146 @@ class MutationTruthTest(unittest.TestCase):
         )
         self.assertIsNotNone(publish_step)
         assert publish_step is not None
-        command = re.search(
-            r"(?m)^        run: (?P<command>npm publish .*)$",
-            publish_step.group("step"),
-        )
-        self.assertIsNotNone(command)
-        assert command is not None
-        publish_command = command.group("command")
-        expected_registry = "--@labpics:registry=https://registry.npmjs.org"
-        self.assertEqual(
-            publish_command,
-            f'npm publish --ignore-scripts {expected_registry} "$TARBALL_PATH"',
-        )
-        self.assertEqual(publish_command.count("npm publish"), 1)
-        self.assertIn('"$TARBALL_PATH"', publish_command)
-        self.assertNotIn("npm pack", publish_command)
-        self.assertNotIn("NPM_REGISTRY", publish_command)
+        script = self._extract_publish_step_script(publish_step.group("step"))
+        self._assert_publish_script_fail_closed(script)
 
-        # The command must not be able to drift to another registry or to a
-        # caller-controlled override while retaining the same tarball.
-        for replacement in (
-            "--@labpics:registry=https://registry.npmjs.com",
-            "--registry=https://registry.npmjs.org",
-            "--@labpics:registry=$NPM_REGISTRY",
-        ):
-            with self.subTest(replacement=replacement):
-                self.assertNotEqual(
-                    publish_command,
-                    f'npm publish --ignore-scripts {replacement} "$TARBALL_PATH"',
-                )
+        # Mutation sensitivity: every hostile drift below must trip at least
+        # one of the fail-closed checks above.
+        expected_publish = (
+            'npm publish --ignore-scripts '
+            '--@labpics:registry=https://registry.npmjs.org "$TARBALL_PATH"'
+        )
+        mutants = {
+            "second npm publish": script.replace(
+                expected_publish,
+                expected_publish + '\nnpm publish "$TARBALL_PATH"',
+                1,
+            ),
+            "missing --ignore-scripts": script.replace(
+                "npm publish --ignore-scripts",
+                "npm publish",
+                1,
+            ),
+            "wrong registry": script.replace(
+                "--@labpics:registry=https://registry.npmjs.org",
+                "--@labpics:registry=https://registry.npmjs.com",
+                1,
+            ),
+            "alternate registry flag": script.replace(
+                "--@labpics:registry=https://registry.npmjs.org",
+                "--registry=https://registry.npmjs.org",
+                1,
+            ),
+            "unquoted tarball": script.replace(
+                expected_publish,
+                "npm publish --ignore-scripts "
+                "--@labpics:registry=https://registry.npmjs.org $TARBALL_PATH",
+                1,
+            ),
+            "foreign tarball": script.replace(
+                expected_publish,
+                "npm publish --ignore-scripts "
+                "--@labpics:registry=https://registry.npmjs.org \"$FOREIGN_PATH\"",
+                1,
+            ),
+            "missing hash recheck": self._drop_sha256_recheck(script),
+            "injected NPM_REGISTRY": script.replace(
+                expected_publish,
+                "NPM_REGISTRY=https://registry.npmjs.com\n"
+                + expected_publish.replace(
+                    "--@labpics:registry=https://registry.npmjs.org",
+                    "--@labpics:registry=$NPM_REGISTRY",
+                ),
+                1,
+            ),
+        }
+        for name, mutant in mutants.items():
+            with self.subTest(mutant=name):
+                with self.assertRaises(AssertionError):
+                    self._assert_publish_script_fail_closed(mutant, label=name)
+
+    @staticmethod
+    def _extract_publish_step_script(step: str) -> str:
+        run_block = re.search(
+            r"(?m)^        run: \|\n(?P<script>(?:^          [^\n]*\n)+)",
+            step,
+        )
+        if run_block is None:
+            raise AssertionError("publish step has no `run: |` block scalar")
+        lines = [line[10:] for line in run_block.group("script").splitlines()]
+        return "\n".join(lines) + "\n"
+
+    @staticmethod
+    def _drop_sha256_recheck(script: str) -> str:
+        kept: list[str] = []
+        skipping = False
+        for line in script.splitlines():
+            if "sha256sum --binary" in line:
+                skipping = True
+                continue
+            if skipping:
+                if line == "fi":
+                    skipping = False
+                continue
+            kept.append(line)
+        return "\n".join(kept) + "\n"
+
+    def _assert_publish_script_fail_closed(
+        self, script: str, label: str = "publish step"
+    ) -> None:
+        # Count npm publish COMMANDS, not prose mentioning the command: the
+        # fail-closed echo message itself names the command.
+        publish_lines = [
+            line
+            for line in script.splitlines()
+            if re.match(r"^npm publish(?: |$)", line)
+        ]
+        self.assertEqual(
+            len(publish_lines),
+            1,
+            f"{label}: exactly one npm publish command",
+        )
+        self.assertEqual(
+            publish_lines,
+            [
+                'npm publish --ignore-scripts '
+                '--@labpics:registry=https://registry.npmjs.org "$TARBALL_PATH"'
+            ],
+            f"{label}: exact quoted publish invocation",
+        )
+        self.assertNotIn("NPM_REGISTRY", script, f"{label}: no registry env injection")
+        self.assertNotIn("--registry=", script, f"{label}: no alternate registry flag")
+        self.assertNotIn("npm pack", script, f"{label}: no repack")
+        # The pre-publish sha256 recheck must be adjacent: the same step body,
+        # immediately before the publish, so no command can run between the
+        # recheck and the publish.
+        publish_index = script.index(publish_lines[0])
+        pre_publish = script[:publish_index]
+        self.assertIn("set -euo pipefail", pre_publish, f"{label}: fail-fast shell")
+        self.assertIn(
+            "sha256sum --binary",
+            pre_publish,
+            f"{label}: pre-publish tarball sha256 recheck",
+        )
+        self.assertIn(
+            '"$TARBALL_PATH"',
+            pre_publish,
+            f"{label}: recheck binds the quoted verified tarball",
+        )
+        self.assertIn(
+            "TARBALL_SHA256",
+            pre_publish,
+            f"{label}: recheck binds the verified digest",
+        )
+        self.assertIn(
+            "verified tarball changed before npm publish",
+            pre_publish,
+            f"{label}: recheck fails closed on drift",
+        )
+        self.assertTrue(
+            pre_publish.rstrip().endswith("fi"),
+            f"{label}: publish immediately follows the recheck block",
+        )
 
     def test_publish_caller_pins_admitted_worker(self) -> None:
         repo = Path(__file__).resolve().parents[1]

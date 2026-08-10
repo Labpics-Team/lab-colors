@@ -33,8 +33,8 @@ import {
   PRIVATE_PROGRAM_ROLE,
   PRIVATE_PROGRAM_SYMBOL_PREFIX,
   PRIVATE_PROGRAM_WASM_PATH,
-  buildPrivateProgram,
 } from "./build-private-program.mjs";
+import { runCanonicalPrivateProgramBuild } from "./run-canonical-private-program-build.mjs";
 import {
   PACKAGE_DIR,
   REPO_ROOT,
@@ -610,7 +610,11 @@ function expectedPackedFiles(packageJson) {
     ...(packageJson.files ?? []).map(normalisePackPath),
   ]);
   for (const target of exportTargets(packageJson.exports)) expected.add(normalisePackPath(target));
-  if (typeof packageJson.types === "string") expected.add(normalisePackPath(packageJson.types));
+  if (typeof packageJson.types === "string") {
+    // npm declares the top-level types field with an explicit "./" spelling;
+    // normalise it exactly like an export target before the canonical check.
+    expected.add(normalisePackPath(packageJson.types.replace(/^\.\//u, "")));
+  }
   return [...expected].sort((left, right) =>
     Buffer.compare(Buffer.from(left, "utf8"), Buffer.from(right, "utf8")),
   );
@@ -2304,7 +2308,10 @@ export async function smokePackedPackage(tarballPath) {
 
 export async function verifyPackageRelease() {
   const expectedSource = verifiedSourceSha();
-  await buildPrivateProgram({ requireOptimizer: true });
+  // The canonical build runs in the shared hermetic child boundary so ambient
+  // caller-workflow executor overrides cannot influence it; the strict direct
+  // validator is unchanged and the child's failure propagates loudly.
+  runCanonicalPrivateProgramBuild();
   const { sourceSha: source, privateProgramBuild } = await prepareNpmPackage();
   if (source !== expectedSource) {
     fail("release source HEAD changed while the private Program was built");

@@ -434,6 +434,7 @@ test("the private Program artifact is packed without becoming a public subpath",
   const prepare = read("scripts", "prepare-npm-package.mjs");
   const verifier = read("scripts", "verify-package-release.mjs");
   const ensure = read("scripts", "ensure-private-program-artifact.mjs");
+  const canonicalBuild = read("scripts", "run-canonical-private-program-build.mjs");
   assert.match(
     ensure,
     /validatePrivateProgramBuildReceipt\(receipt, \{[^}]*source[^}]*wasm[^}]*requireOptimizer: true/u,
@@ -441,23 +442,38 @@ test("the private Program artifact is packed without becoming a public subpath",
   );
   assert.match(
     ensure,
-    /spawnSync\(/u,
-    "the test prerequisite must build in a hermetic child process",
+    /runCanonicalPrivateProgramBuild\(\)/u,
+    "the test prerequisite must delegate to the shared hermetic build primitive",
   );
   assert.match(
-    ensure,
+    canonicalBuild,
+    /spawnSync\(/u,
+    "the shared primitive must build in a hermetic child process",
+  );
+  assert.match(
+    canonicalBuild,
     /--require-optimizer/u,
     "the child must request the same canonical optimized build the release gate produces",
   );
   assert.match(
-    ensure,
+    canonicalBuild,
     /isCanonicalBuildEnvOverride/u,
     "the child environment must drop exactly the canonical forbidden ambient overrides",
   );
+  assert.match(
+    canonicalBuild,
+    /PRIVATE_PROGRAM_BUILD_TIMEOUT_MS/u,
+    "the shared primitive must reuse the declared per-pass build budget",
+  );
   assert.doesNotMatch(
-    ensure,
+    canonicalBuild,
     /CARGO_INCREMENTAL/u,
     "the hermetic boundary must not hardcode one ambient override variable",
+  );
+  assert.doesNotMatch(
+    ensure,
+    /spawnSync|hermeticBuildEnvironment|isCanonicalBuildEnvOverride/u,
+    "the test prerequisite must not duplicate the child boundary implementation",
   );
   assert.match(
     ensure,
@@ -471,8 +487,12 @@ test("the private Program artifact is packed without becoming a public subpath",
   assert.match(prepare, /requireOptimizer: true/u);
   assert.match(
     verifier,
-    /const expectedSource = verifiedSourceSha\(\);[\s\S]*await buildPrivateProgram\(\{ requireOptimizer: true \}\);[\s\S]*await prepareNpmPackage\(\)[\s\S]*source !== expectedSource/u,
-    "the release gate must bind one clean HEAD across the private build and receipt",
+    /const expectedSource = verifiedSourceSha\(\);[\s\S]*runCanonicalPrivateProgramBuild\(\);[\s\S]*await prepareNpmPackage\(\)[\s\S]*source !== expectedSource/u,
+    "the release gate must bind one clean HEAD across the hermetic build and receipt",
+  );
+  assert.ok(
+    verifier.includes('packageJson.types.replace(/^\\.\\//u, "")'),
+    "the declared npm types spelling must be normalised like an export target",
   );
   assert.match(verifier, /ERR_PACKAGE_PATH_NOT_EXPORTED/u);
   const packageSmoke = smokePackedPackage.toString();
