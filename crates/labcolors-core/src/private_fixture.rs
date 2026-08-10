@@ -673,14 +673,48 @@ fn project_certified_render_v1(
     })
 }
 
+/// Живые dispose-token'и кодируются в зарезервированный диапазон
+/// [DISPOSE_TOKEN_BASE_V1, 2 * DISPOSE_TOKEN_BASE_V1 - 1], который не
+/// пересекается ни с одним `PrivateFixtureErrorV1` status-кодом (1..=18), ни
+/// со sentinel'ами Vacant `0` и Busy `u32::MAX`. Поэтому consumer однозначно
+/// классифицирует u32 из `begin_dispose_v1`: значение вне живого диапазона —
+/// это Vacant, Busy или типизированный status, но никогда живой token.
+/// Generation начинается с 1 и растёт на каждый run; generation >= BASE
+/// закодировать непересекающимся образом нельзя, поэтому такая проекция
+/// fail-closed в типизированный status.
+const DISPOSE_TOKEN_BASE_V1: u32 = 0x1000_0000;
+const DISPOSE_TOKEN_ENCODED_END_V1: u32 = 2 * DISPOSE_TOKEN_BASE_V1 - 1;
+
+const fn encode_dispose_token_v1(token: u32) -> u32 {
+    if token >= DISPOSE_TOKEN_BASE_V1 {
+        // Generation, которую нельзя закодировать непересекающимся образом, —
+        // это нарушение инварианта; такой token не должен быть принят за
+        // живой, поэтому проекция fail-closed в типизированный status.
+        return PrivateFixtureErrorV1::InternalInvariant.status();
+    }
+    DISPOSE_TOKEN_BASE_V1 + token
+}
+
+/// Декодирует wire-token; `None` — для значения вне живого диапазона
+/// (сырой generation, status-код или sentinel), чтобы abort/commit завершались
+/// fail-closed `InvalidDisposeToken`, а не принимали поддельный или устаревший
+/// token.
+const fn decode_dispose_token_v1(token: u32) -> Option<u32> {
+    match token {
+        DISPOSE_TOKEN_BASE_V1..=DISPOSE_TOKEN_ENCODED_END_V1 => Some(token - DISPOSE_TOKEN_BASE_V1),
+        _ => None,
+    }
+}
+
 /// Проецирует исход `begin_dispose` в фиксированный wire-контракт v1: живой
-/// token возвращается как есть, Vacant (`InvalidLifecycle`) — как зарезервированный
-/// sentinel `0` (generation никогда не равен нулю), а любое инвариантное
-/// нарушение — как его типизированный status, чтобы consumer не принял
-/// незаконный lifecycle за отсутствие attachment.
+/// token кодируется смещением в зарезервированный диапазон, Vacant
+/// (`InvalidLifecycle`) — как зарезервированный sentinel `0` (generation
+/// никогда не равен нулю), а любое инвариантное нарушение — как его
+/// типизированный status, чтобы consumer не принял незаконный lifecycle за
+/// отсутствие attachment и не спутал живой token со status-кодом.
 const fn begin_dispose_status_v1(result: Result<u32, PrivateFixtureErrorV1>) -> u32 {
     match result {
-        Ok(token) => token,
+        Ok(token) => encode_dispose_token_v1(token),
         Err(PrivateFixtureErrorV1::InvalidLifecycle) => 0,
         Err(error) => error.status(),
     }
@@ -1193,6 +1227,9 @@ mod wasm_abi {
             return PrivateFixtureErrorV1::Busy.status();
         };
         // SAFETY: the guard is held and this transition makes no host call.
+        let Some(token) = decode_dispose_token_v1(token) else {
+            return PrivateFixtureErrorV1::InvalidDisposeToken.status();
+        };
         match unsafe { &mut *INSTANCE_V1.0.get() }.abort_dispose(token) {
             Ok(()) => 0,
             Err(error) => error.status(),
@@ -1207,6 +1244,9 @@ mod wasm_abi {
         };
         // SAFETY: the guard is held. Confirmation may re-enter, but nested ABI
         // calls fail the guard before borrowing instance state or buffers.
+        let Some(token) = decode_dispose_token_v1(token) else {
+            return PrivateFixtureErrorV1::InvalidDisposeToken.status();
+        };
         let confirm = |generation, dispose_token| {
             // SAFETY: the loader catches exceptions and returns the exact magic
             // only for an already-inactive lease tombstoned at this generation.
@@ -1954,9 +1994,59 @@ mod tests {
     }
 
     #[test]
+    fn begin_dispose_status_v1_keeps_live_tokens_disjoint_from_error_statuses() {
+        // Every error status code is a small integer; a generation equal to one
+        // of them must never be returned in the same range, otherwise a
+        // consumer that classifies by range would misread the token as a
+        // typed failure (e.g. InternalInvariant == 12 after twelve run/dispose
+        // cycles) and leave the attachment Disposing forever.
+        for status in 1..=PrivateFixtureErrorV1::MissingSelectedState.status() {
+            assert_ne!(
+                begin_dispose_status_v1(Ok(status)),
+                status,
+                "live token {status} collides with an error status code"
+            );
+        }
+        assert_eq!(begin_dispose_status_v1(Ok(12)), DISPOSE_TOKEN_BASE_V1 + 12);
+        assert_ne!(
+            begin_dispose_status_v1(Ok(12)),
+            PrivateFixtureErrorV1::InternalInvariant.status()
+        );
+        // The reserved sentinels stay untouched: Vacant maps to 0, Busy and
+        // typed errors stay outside the live-token range.
+        assert_eq!(
+            begin_dispose_status_v1(Err(PrivateFixtureErrorV1::InvalidLifecycle)),
+            0
+        );
+        assert_eq!(
+            begin_dispose_status_v1(Err(PrivateFixtureErrorV1::Busy)),
+            PrivateFixtureErrorV1::Busy.status()
+        );
+    }
+
+    #[test]
+    fn dispose_token_wire_decoding_fails_closed_outside_the_live_range() {
+        assert_eq!(
+            decode_dispose_token_v1(DISPOSE_TOKEN_BASE_V1 + 12),
+            Some(12)
+        );
+        assert_eq!(decode_dispose_token_v1(DISPOSE_TOKEN_BASE_V1), Some(0));
+        // A raw generation, a status code, the Vacant sentinel, and the Busy
+        // sentinel are never valid wire tokens: abort/commit must reject them
+        // instead of comparing them against the internal token.
+        assert_eq!(decode_dispose_token_v1(12), None);
+        assert_eq!(decode_dispose_token_v1(0), None);
+        assert_eq!(decode_dispose_token_v1(u32::MAX), None);
+        assert_eq!(
+            decode_dispose_token_v1(PrivateFixtureErrorV1::Busy.status()),
+            None
+        );
+    }
+
+    #[test]
     fn begin_dispose_status_v1_preserves_the_documented_wire_sentinels() {
-        // A live generation token is returned verbatim.
-        assert_eq!(begin_dispose_status_v1(Ok(7)), 7);
+        // A live generation token is encoded above the error status range.
+        assert_eq!(begin_dispose_status_v1(Ok(7)), DISPOSE_TOKEN_BASE_V1 + 7);
         // Vacant keeps the reserved 0 sentinel: generations start at 1, so 0
         // can never be confused with a successful token.
         assert_eq!(

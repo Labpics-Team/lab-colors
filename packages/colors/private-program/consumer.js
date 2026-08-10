@@ -24,6 +24,11 @@ const HOST_DISPOSE_CONFIRMED_V1 = 0x4c43_0002;
 
 const OPERATION_SET_ALL_V1 = 1;
 const DISPOSE_BEGIN_BUSY_V1 = 0xffff_ffff;
+// Live dispose tokens live in [DISPOSE_TOKEN_BASE_V1, 2 * DISPOSE_TOKEN_BASE_V1 - 1],
+// disjoint from every Core status code (1..=18), the Vacant sentinel 0, and the
+// Busy sentinel, so a begin-dispose result can be classified without ambiguity.
+const DISPOSE_TOKEN_BASE_V1 = 0x1000_0000;
+const DISPOSE_TOKEN_ENCODED_END_V1 = 2 * DISPOSE_TOKEN_BASE_V1 - 1;
 const I32_MIN = -0x8000_0000;
 const I32_MAX = 0x7fff_ffff;
 const MAX_CANONICAL_RGBA_V1_LENGTH =
@@ -503,7 +508,7 @@ export async function createPrivateProgramConsumer(options) {
     let abortFailure = null;
     try {
       const status = exactStatus(
-        exports[EXPORTS_V1.abortDispose](disposeToken),
+        exports[EXPORTS_V1.abortDispose](disposeToken + DISPOSE_TOKEN_BASE_V1),
         "abort dispose",
       );
       if (status !== 0) abortFailure = wasmStatusError("abort dispose", status);
@@ -526,7 +531,7 @@ export async function createPrivateProgramConsumer(options) {
     let failure = null;
     try {
       const status = exactStatus(
-        exports[EXPORTS_V1.commitDispose](disposeToken),
+        exports[EXPORTS_V1.commitDispose](disposeToken + DISPOSE_TOKEN_BASE_V1),
         "commit dispose",
       );
       if (status !== 0) failure = wasmStatusError("commit dispose", status);
@@ -592,15 +597,26 @@ export async function createPrivateProgramConsumer(options) {
         hostLeaseAlreadyDisposed,
       );
     }
-    if (generation === null) generation = token;
-    if (token !== generation) {
-      disposeToken = token;
+    // Core encodes every live dispose token above every error status: a value
+    // outside the live range is a typed Core failure and must never be read
+    // as a lease token.
+    if (token < DISPOSE_TOKEN_BASE_V1 || token > DISPOSE_TOKEN_ENCODED_END_V1) {
+      return poisonUnknownCore(
+        wasmStatusError("begin dispose", token),
+        lifecycleError("Core lifecycle is unknown after begin dispose"),
+        hostLeaseAlreadyDisposed,
+      );
+    }
+    const rawToken = token - DISPOSE_TOKEN_BASE_V1;
+    if (generation === null) generation = rawToken;
+    if (rawToken !== generation) {
+      disposeToken = rawToken;
       return abortCoreDispose(
         protocolError("begin dispose returned a stale generation"),
         tombstoneGeneration !== null,
       );
     }
-    disposeToken = token;
+    disposeToken = rawToken;
     return closeBeganDispose();
   }
 
@@ -633,15 +649,24 @@ export async function createPrivateProgramConsumer(options) {
       }
       throw failure;
     }
+    // A value outside the encoded live-token range is a typed Core failure
+    // and must never be read as a lease token.
+    if (token < DISPOSE_TOKEN_BASE_V1 || token > DISPOSE_TOKEN_ENCODED_END_V1) {
+      return poisonUnknownCore(
+        failure,
+        wasmStatusError("active attachment probe", token),
+      );
+    }
+    const rawToken = token - DISPOSE_TOKEN_BASE_V1;
 
     let generationFailure = null;
-    if (generation === null) generation = token;
-    else if (generation !== token) {
+    if (generation === null) generation = rawToken;
+    else if (generation !== rawToken) {
       generationFailure = protocolError("host callback generation disagrees with Core lifecycle");
-      generation = token;
+      generation = rawToken;
     }
     phase = "disposing";
-    disposeToken = token;
+    disposeToken = rawToken;
     try {
       closeBeganDispose();
     } catch (cleanupCause) {

@@ -18,6 +18,10 @@ const HOST_CONFIRM = "labcolors_private_fixture_host_confirm_disposed_v1";
 const HOST_INSTALL_SUCCESS = 0x4c43_0001;
 const HOST_DISPOSE_CONFIRMED = 0x4c43_0002;
 const DISPOSE_BEGIN_BUSY = -1;
+// The fake mirrors the Core wire contract: live dispose tokens are encoded in
+// [DISPOSE_TOKEN_BASE, 2 * DISPOSE_TOKEN_BASE - 1], disjoint from error statuses.
+const DISPOSE_TOKEN_BASE = 0x1000_0000;
+const DISPOSE_TOKEN_ENCODED_END = 2 * DISPOSE_TOKEN_BASE - 1;
 const OPERATION_SET_ALL = 1;
 const OPERATION_REVOKE_ALL = 2;
 const OPERATION_CONFIRM_EXACT = 3;
@@ -288,32 +292,32 @@ class FakePrivateProgramWasm {
     if (this.activeGeneration === null || this.disposing) return 0;
     this.disposing = true;
     this.beginTokens.push(this.activeGeneration);
-    return this.activeGeneration;
+    return DISPOSE_TOKEN_BASE + this.activeGeneration;
   }
 
   abortDispose(token) {
-    this.abortTokens.push(token);
+    this.abortTokens.push(token - DISPOSE_TOKEN_BASE);
     if (this.nextAbortOutcome !== null) {
       const outcome = this.nextAbortOutcome;
       this.nextAbortOutcome = null;
       if (outcome instanceof Error) throw outcome;
       return outcome;
     }
-    if (!this.disposing || token !== this.activeGeneration) return 16;
+    if (!this.disposing || token - DISPOSE_TOKEN_BASE !== this.activeGeneration) return 16;
     this.disposing = false;
     return 0;
   }
 
   commitDispose(token) {
-    this.commitTokens.push(token);
+    this.commitTokens.push(token - DISPOSE_TOKEN_BASE);
     if (this.nextCommitOutcome !== null) {
       const outcome = this.nextCommitOutcome;
       this.nextCommitOutcome = null;
       if (outcome instanceof Error) throw outcome;
       return outcome;
     }
-    if (!this.disposing || token !== this.activeGeneration) return 16;
-    if (this.confirmDisposed(this.activeGeneration, token) !== HOST_DISPOSE_CONFIRMED) return 17;
+    if (!this.disposing || token - DISPOSE_TOKEN_BASE !== this.activeGeneration) return 16;
+    if (this.confirmDisposed(this.activeGeneration, token - DISPOSE_TOKEN_BASE) !== HOST_DISPOSE_CONFIRMED) return 17;
     if (this.failNextCommit) {
       this.failNextCommit = false;
       return 17;
@@ -1068,6 +1072,7 @@ test("divergent or unknown active begin-dispose outcomes clean the host and pois
   const cases = [
     ["zero", 0, /returned zero/u],
     ["Busy", DISPOSE_BEGIN_BUSY, /returned Busy/u],
+    ["typed status", 12, /failed with status 12/u],
     ["positive u32 max", 0xffff_ffff, /signed i32 carrier/u],
     ["above u32", 0x1_0000_0001, /signed i32 carrier/u],
     ["throw", new WebAssembly.RuntimeError("begin dispose trap"), /begin dispose trap/u],
