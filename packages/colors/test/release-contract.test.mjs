@@ -11,14 +11,18 @@ import {
   readdirSync,
   readlinkSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { test } from "node:test";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import {
+  npmInvocation,
+  runtimeSmokeSource,
+  typeSmokeSource,
   validateNumericalEvidenceArtifacts,
   validateSolveFailurePair,
   validateSolveFamily,
@@ -34,6 +38,105 @@ import {
 const here = dirname(fileURLToPath(import.meta.url));
 const root = resolve(here, "../../..");
 const read = (...parts) => readFileSync(join(root, ...parts), "utf8");
+// This subprocess performs one local ESM import; ten seconds bounds a deadlock
+// while leaving two orders of magnitude over the measured sub-second path.
+const DOM_FREE_PROBE_TIMEOUT_MS = 10_000;
+
+test("npm invocation is argv-safe and directly executable on every supported host", () => {
+  assert.deepEqual(
+    npmInvocation({
+      platform: "win32",
+      node: "C:\\runtime\\node.exe",
+      lifecycleEntrypoint: undefined,
+      pathExists: () => true,
+    }),
+    {
+      commandName: "C:\\runtime\\node.exe",
+      argsPrefix: ["C:\\runtime\\node_modules\\npm\\bin\\npm-cli.js"],
+    },
+  );
+  assert.deepEqual(
+    npmInvocation({
+      platform: "linux",
+      node: "/opt/node/bin/node",
+      lifecycleEntrypoint: undefined,
+      pathExists: () => false,
+    }),
+    { commandName: "npm", argsPrefix: [] },
+  );
+  assert.deepEqual(
+    npmInvocation({
+      platform: "linux",
+      node: "/opt/node/bin/node",
+      lifecycleEntrypoint: "/opt/npm/lib/npm-cli.js",
+      pathExists: () => true,
+    }),
+    {
+      commandName: "/opt/node/bin/node",
+      argsPrefix: ["/opt/npm/lib/npm-cli.js"],
+    },
+  );
+  assert.deepEqual(
+    npmInvocation({
+      platform: "linux",
+      node: "/opt/node/bin/node",
+      lifecycleEntrypoint: "/missing/npm/lib/npm-cli.js",
+      pathExists: () => false,
+    }),
+    { commandName: "npm", argsPrefix: [] },
+  );
+  assert.deepEqual(
+    npmInvocation({
+      platform: "win32",
+      node: "C:\\runtime\\node.exe",
+      lifecycleEntrypoint: "C:\\toolchain\\npm-cli.js",
+      pathExists: () => true,
+    }),
+    {
+      commandName: "C:\\runtime\\node.exe",
+      argsPrefix: ["C:\\toolchain\\npm-cli.js"],
+    },
+  );
+  assert.deepEqual(
+    npmInvocation({
+      platform: "win32",
+      node: "C:\\runtime\\node.exe",
+      lifecycleEntrypoint: "C:\\missing\\npm-cli.js",
+      pathExists: (path) => path === "C:\\runtime\\node_modules\\npm\\bin\\npm-cli.js",
+    }),
+    {
+      commandName: "C:\\runtime\\node.exe",
+      argsPrefix: ["C:\\runtime\\node_modules\\npm\\bin\\npm-cli.js"],
+    },
+  );
+  assert.deepEqual(
+    npmInvocation({
+      platform: "linux",
+      node: "/opt/node/bin/node",
+      lifecycleEntrypoint: "/opt/pnpm/bin/pnpm.cjs",
+      pathExists: () => true,
+    }),
+    { commandName: "npm", argsPrefix: [] },
+  );
+  assert.deepEqual(
+    npmInvocation({
+      platform: "darwin",
+      node: "/opt/node/bin/node",
+      lifecycleEntrypoint: "/opt/pnpm/bin/pnpm.cjs",
+      pathExists: () => false,
+    }),
+    { commandName: "npm", argsPrefix: [] },
+  );
+  assert.throws(
+    () => npmInvocation({
+      platform: "win32",
+      node: "C:\\runtime\\node.exe",
+      lifecycleEntrypoint: "C:\\toolchain\\yarn.js",
+      pathExists: () => false,
+    }),
+    /npm CLI entrypoint is unavailable/u,
+  );
+});
 
 function workflowNodeScript(workflow, stepName) {
   const runScript = workflowRunScript(workflow, stepName);
@@ -816,6 +919,287 @@ test("MSRV and packaged Rust crate gates are executable CI contracts", () => {
   );
 });
 
+test("the atomic output sink has one bounded pinned-Chrome browser gate", () => {
+  const ci = read(".github", "workflows", "ci-worker.yml");
+  const proof = read("scripts", "test-browser-output-sink.mjs");
+  const stepName = 'name: "@labpics/colors: real-browser atomic output-sink proof"';
+
+  const assertGate = (workflow) => {
+    const step = workflowStepLines(workflow, stepName);
+    const activeStep = step
+      .filter((line) => !line.trimStart().startsWith("#"))
+      .join("\n");
+    assert.doesNotMatch(activeStep, /^\s*(?:if:|continue-on-error:)/mu);
+    assert.equal(
+      step.filter((line) =>
+        line.trim() === 'LAB_COLORS_BROWSER_PROOF_TIMEOUT_MS: "60000"'
+      ).length,
+      1,
+      "browser proof must have one explicit whole-run deadline",
+    );
+    assert.equal(
+      workflowRunScript(workflow, stepName),
+      "set -euo pipefail\nnode scripts/test-browser-output-sink.mjs",
+      "browser proof must be one fail-closed dependency-free command",
+    );
+    assert.equal(
+      [...workflow.matchAll(/node scripts\/test-browser-output-sink\.mjs/gmu)].length,
+      1,
+      "workflow must have one browser output-sink authority",
+    );
+    const install = workflow.indexOf("name: install Chrome + dependencies");
+    const gate = workflow.indexOf(stepName);
+    const wasm = workflow.indexOf("name: wasm-pack test (headless chrome)");
+    assert.ok(
+      install >= 0 && install < gate && gate < wasm,
+      "real-DOM output proof must reuse pinned Chrome before the WASM browser parity gate",
+    );
+  };
+
+  const assertProofContract = (source) => {
+    const staticImports = source
+      .split(/\r?\n/u)
+      .filter((line) => line.trimStart().startsWith("import "));
+    assert.deepEqual(
+      staticImports,
+      [
+        'import { spawn } from "node:child_process";',
+        'import { access, readFile, stat } from "node:fs/promises";',
+        'import { createServer } from "node:http";',
+        'import { isAbsolute, resolve } from "node:path";',
+        'import { fileURLToPath } from "node:url";',
+      ],
+      "browser proof runtime imports must be the reviewed Node builtin set",
+    );
+    assert.equal(
+      [...source.matchAll(/\bimport\s*\(/gmu)].length,
+      1,
+      "the served output sink must be the only dynamic import",
+    );
+    assert.match(source, /^  const module = await import\(moduleUrl\);$/mu);
+    assert.equal(
+      [...source.matchAll(/LAB_COLORS_BROWSER_OUTPUT_SINK_PASS v2 checks=11/gmu)].length,
+      1,
+      "browser proof must expose one exact success receipt",
+    );
+    assert.match(source, /const chromePath = await executableFromEnv\("CHROME_PATH"\);/u);
+    assert.match(source, /const chromeDriverPath = await executableFromEnv\("CHROMEDRIVER_PATH"\);/u);
+    assert.match(source, /startChromeDriver\(\s*chromeDriverPath,/u);
+    assert.match(source, /binary: chromePath,/u);
+    assert.match(source, /spawn\(executable, \["--port=0"\]/u);
+    assert.match(
+      source,
+      /if \(overall\.controller\.signal\.aborted\) \{\s*onOverallAbort\(\);\s*\} else if \(startup\.controller\.signal\.aborted\)/u,
+    );
+    assert.match(source, /LAB_COLORS_BROWSER_PROOF_TIMEOUT_MS must be a positive integer/u);
+    assert.match(
+      source,
+      /const overall = timeoutSignal\(proofTimeoutMilliseconds, "browser output-sink proof"\);/u,
+    );
+    assert.match(source, /overall\.throwIfExpired\(\);/u);
+    assert.match(source, /AbortSignal\.any\(\[\s*deadline\.controller\.signal,\s*overall\.controller\.signal,/u);
+    assert.match(source, /server\.listen\(\{ port: 0, host: LOOPBACK_HOST, signal: listenSignal \}\);/u);
+    assert.match(source, /listen\(server, commandTimeoutMilliseconds, overall\)/u);
+    assert.match(source, /closeServer\(server, PROCESS_STOP_TIMEOUT_MS\)/u);
+    assert.match(
+      source,
+      /if \(driverPort && sessionId\) \{\s*const teardown = timeoutSignal\(PROCESS_STOP_TIMEOUT_MS, "WebDriver session teardown"\);/u,
+    );
+    assert.match(
+      source,
+      /await driverRequest\(\s*driverPort,\s*`\/session\/\$\{sessionId\}`,\s*\{ method: "DELETE" \},\s*PROCESS_STOP_TIMEOUT_MS,\s*teardown,\s*\)/u,
+    );
+    assert.match(
+      source,
+      /try \{\s*await driverRequest\([\s\S]*?`\/session\/\$\{sessionId\}`[\s\S]*?\)\.catch\(\(error\) => cleanupErrors\.push\(error\)\);\s*\} finally \{\s*teardown\.clear\(\);\s*\}/u,
+    );
+    assert.match(source, /"packages\/colors\/output-sink\.js"/u);
+    assert.match(source, /"packages\/colors\/output-bindings\.js"/u);
+    assert.match(source, /"packages\/colors\/sequence-identity-matches\.js"/u);
+    assert.match(
+      source,
+      /const \[moduleSource, bindingModuleSource, alignmentModuleSource\] = await Promise\.all\(\[/u,
+    );
+    assert.match(source, /response\.end\(moduleSource\);/u);
+    assert.match(source, /response\.end\(bindingModuleSource\);/u);
+    assert.match(source, /response\.end\(alignmentModuleSource\);/u);
+    assert.match(source, /args: \[`\$\{origin\}\/output-sink\.js\?proof=v2`\]/u);
+    assert.match(source, /\/session\/\$\{sessionId\}\/execute\/async/u);
+    assert.match(source, /\["replace", "insertRule", "deleteRule", "addRule", "removeRule"\]/u);
+    assert.match(source, /\["set", "append", "delete", "clear"\]/u);
+    assert.match(source, /const inlineMutationObserver = new MutationObserver\(recordInlineMutations\);/u);
+    assert.match(source, /attributeFilter: \["style"\],/u);
+    assert.match(source, /"style MutationObserver is sensitive to namespace writes"/u);
+    assert.match(source, /"legacy live CSSOM instrumentation is mutation-sensitive"/u);
+    assert.match(source, /"live Typed OM instrumentation is mutation-sensitive"/u);
+    assert.match(source, /"binding admission performs no live replacement before commit"/u);
+    assert.equal(
+      [...source.matchAll(/^\s*action\(markActionInvoked\);$/gmu)].length,
+      1,
+      "native admission helper must execute its supplied action exactly once",
+    );
+    assert.equal(
+      [...source.matchAll(/^\s*markInvoked\(\);$/gmu)].length,
+      3,
+      "each native-brand counterexample must witness entry into its own action",
+    );
+    assert.match(
+      source,
+      /equal\(actionInvocations, 1, `\$\{message\}: hostile admission action executes exactly once`\)/u,
+    );
+    assert.match(source, /mark\("native-target-brand-matrix"\)/u);
+    assert.match(source, /"Proxy around a real open-shadow host fails native target admission"/u);
+    assert.match(source, /"plain structural fake fails native target admission"/u);
+    assert.match(
+      source,
+      /"genuine Element with shadowed identity fields fails native target admission"/u,
+    );
+    assert.match(source, /"exact-target-identity"/u);
+    assert.match(source, /"document root uses the exact :root selector"/u);
+    assert.match(source, /"open ShadowRoot uses the exact :host selector"/u);
+    assert.match(
+      source,
+      /"arbitrary connected light-DOM child is outside the output identity boundary"/u,
+    );
+    assert.match(
+      source,
+      /"arbitrary ShadowRoot descendant cannot impersonate its host identity"/u,
+    );
+    assert.match(source, /"closed ShadowRoot is outside the explicit output identity boundary"/u);
+    assert.match(source, /"cloneNode\(true\) cannot receive the shadow host owned property"/u);
+    assert.doesNotMatch(source, /markerName|data-lab-colors-output-sink/u);
+    assert.match(source, /"post-replace-drift-recovery"/u);
+    assert.match(source, /let injectPostReplaceDrift = true;/u);
+    assert.match(source, /"OUTPUT_ATOMICITY_VIOLATION"/u);
+    assert.match(source, /"post-replace drift restores prior live bytes exactly"/u);
+    assert.match(source, /"post-replace drift leaves the logical stamp unchanged"/u);
+    assert.match(source, /"post-replace drift leaves the prior computed value effective"/u);
+    assert.match(source, /"temporary replaceSync fault wrapper is restored exactly"/u);
+    assert.doesNotMatch(source, /(?:playwright|puppeteer|selenium|npm install|npx )/iu);
+  };
+
+  assertGate(ci);
+  assertGate(ci.replaceAll("\n", "\r\n"));
+  assertProofContract(proof);
+
+  const stepLine = `      - ${stepName}`;
+  for (const [name, mutant] of [
+    ["conditional bypass", ci.replace(stepLine, `${stepLine}\n        if: false`)],
+    ["nonblocking bypass", ci.replace(stepLine, `${stepLine}\n        continue-on-error: true`)],
+    ["unbounded declaration", ci.replace('LAB_COLORS_BROWSER_PROOF_TIMEOUT_MS: "60000"',
+      'LAB_COLORS_BROWSER_PROOF_TIMEOUT_MS: "0"')],
+    ["fail-open shell", ci.replace(
+      "          set -euo pipefail\n          node scripts/test-browser-output-sink.mjs",
+      "          set +e\n          node scripts/test-browser-output-sink.mjs",
+    )],
+    ["commented proof", ci.replace(
+      "          node scripts/test-browser-output-sink.mjs",
+      "          # node scripts/test-browser-output-sink.mjs",
+    )],
+  ]) {
+    assert.notEqual(mutant, ci, `${name} mutation must alter the workflow`);
+    assert.throws(() => assertGate(mutant), undefined, `${name} mutation must be rejected`);
+  }
+
+  const receiptMutant = proof.replace(
+    "LAB_COLORS_BROWSER_OUTPUT_SINK_PASS v2 checks=11",
+    "LAB_COLORS_BROWSER_OUTPUT_SINK_PASS v2 checks=10",
+  );
+  assert.notEqual(receiptMutant, proof, "receipt mutation must alter the proof script");
+  assert.throws(
+    () => assertProofContract(receiptMutant),
+    undefined,
+    "incomplete proof receipt must be rejected",
+  );
+
+  for (const [name, mutant] of [
+    ["unbound Chrome binary", proof.replace("binary: chromePath,", "binary: chromeDriverPath,")],
+    ["unbound ChromeDriver", proof.replace(
+      "startChromeDriver(\n      chromeDriverPath,",
+      "startChromeDriver(\n      chromePath,",
+    )],
+    ["substituted browser module", proof.replace(
+      "const module = await import(moduleUrl);",
+      'const module = await import("./substitute.js");',
+    )],
+    ["unbounded proof server", proof.replace(
+      "listen(server, commandTimeoutMilliseconds, overall)",
+      "listen(server)",
+    )],
+    ["nonabortable proof server", proof.replace(
+      "server.listen({ port: 0, host: LOOPBACK_HOST, signal: listenSignal });",
+      "server.listen(0, LOOPBACK_HOST);",
+    )],
+    ["lost startup abort", proof.replace(
+      "if (overall.controller.signal.aborted) {\n        onOverallAbort();\n      } else if (startup.controller.signal.aborted) {\n        onStartupAbort();\n      }",
+      "",
+    )],
+    ["unobserved inline namespace writer", proof.replace(
+      'attributeFilter: ["style"],',
+      'attributeFilter: ["class"],',
+    )],
+    ["unobserved legacy CSSOM writer", proof.replace(
+      '["replace", "insertRule", "deleteRule", "addRule", "removeRule"]',
+      '["replace", "insertRule", "deleteRule"]',
+    )],
+    ["unobserved Typed OM writer", proof.replace(
+      '["set", "append", "delete", "clear"]',
+      '["set"]',
+    )],
+    ["unobserved binding precommit", proof.replace(
+      '"binding admission performs no live replacement before commit"',
+      '"binding admission checked only final state"',
+    )],
+    ["synthetic native target rejection", proof.replace(
+      "action(markActionInvoked);",
+      'throw Object.assign(new Error("synthetic capability"), { code: "OUTPUT_TARGET_CAPABILITY" });',
+    )],
+    ["lost exact root selector oracle", proof.replace(
+      '"document root uses the exact :root selector"',
+      '"document root has a selector"',
+    )],
+    ["lost clone identity counterexample", proof.replace(
+      '"cloneNode(true) cannot receive the shadow host owned property"',
+      '"clone was appended"',
+    )],
+    ["lost native target brand receipt", proof.replace(
+      'mark("native-target-brand-matrix");',
+      'mark("exact-target-identity");',
+    )],
+    ["lost shadowed native identity counterexample", proof.replace(
+      '"genuine Element with shadowed identity fields fails native target admission"',
+      '"structural target was checked"',
+    )],
+    ["lost post-replace byte rollback oracle", proof.replace(
+      '"post-replace drift restores prior live bytes exactly"',
+      '"post-replace drift was observed"',
+    )],
+    ["skipped expired-session teardown", proof.replace(
+      "if (driverPort && sessionId) {",
+      "if (driverPort && sessionId && !overall.controller.signal.aborted) {",
+    )],
+    ["session teardown coupled to overall deadline", proof.replace(
+      "          teardown,\n        ).catch((error) => cleanupErrors.push(error));",
+      "          overall,\n        ).catch((error) => cleanupErrors.push(error));",
+    )],
+    ["uncleared session teardown timer", proof.replace(
+      "        teardown.clear();",
+      "",
+    )],
+    ["unserved output-binding authority", proof.replace(
+      "      response.end(bindingModuleSource);",
+      "      response.writeHead(404).end();",
+    )],
+  ]) {
+    assert.notEqual(mutant, proof, `${name} mutation must alter the proof script`);
+    assert.throws(
+      () => assertProofContract(mutant),
+      undefined,
+      `${name} mutation must be rejected`,
+    );
+  }
+});
+
 test("publish accepts only canonical exact-SHA workflow runs and their immutable CI artifact", () => {
   const caller = read(".github", "workflows", "publish.yml");
   const publish = read(".github", "workflows", "publish-worker.yml");
@@ -871,7 +1255,7 @@ test("publish accepts only canonical exact-SHA workflow runs and their immutable
   assert.match(publish, /file: "ci\.yml"[\s\S]*path: "\.github\/workflows\/ci\.yml"/);
   assert.match(
     publish,
-    /ci-worker\.yml@1a2b77081f374e917df6c4d59fd583451ee8811c"[\s\S]*sha: "1a2b77081f374e917df6c4d59fd583451ee8811c"/,
+    /ci-worker\.yml@1461bc2ed60142aed3a8723e618b883be6418156"[\s\S]*sha: "1461bc2ed60142aed3a8723e618b883be6418156"/,
   );
   assert.match(
     publish,
@@ -1153,8 +1537,8 @@ test("canonical-run guard executes against workflow-scoped runs and jobs", () =>
         conclusion: "success",
         referenced_workflows: [
           {
-            path: "Labpics-Team/lab-colors/.github/workflows/ci-worker.yml@1a2b77081f374e917df6c4d59fd583451ee8811c",
-            sha: "1a2b77081f374e917df6c4d59fd583451ee8811c",
+            path: "Labpics-Team/lab-colors/.github/workflows/ci-worker.yml@1461bc2ed60142aed3a8723e618b883be6418156",
+            sha: "1461bc2ed60142aed3a8723e618b883be6418156",
           },
         ],
       },
@@ -1171,8 +1555,8 @@ test("canonical-run guard executes against workflow-scoped runs and jobs", () =>
         conclusion: "success",
         referenced_workflows: [
           {
-            path: "Labpics-Team/lab-colors/.github/workflows/native-conformance-worker.yml@1a2b77081f374e917df6c4d59fd583451ee8811c",
-            sha: "1a2b77081f374e917df6c4d59fd583451ee8811c",
+            path: "Labpics-Team/lab-colors/.github/workflows/native-conformance-worker.yml@1461bc2ed60142aed3a8723e618b883be6418156",
+            sha: "1461bc2ed60142aed3a8723e618b883be6418156",
           },
         ],
       },
@@ -2334,6 +2718,282 @@ test("published build metadata binds source, conformance, and WASM inputs", () =
   assert.match(verifier, /role: "runtime", \.\.\.wasm\.runtime/u);
   assert.doesNotMatch(verifier, /role: "compiler"/u);
   assert.match(verifier, /buildMetadata,/u);
+});
+
+test("clean consumer smoke executes root and public-subpath output lifecycles", () => {
+  const runtime = runtimeSmokeSource();
+  const types = typeSmokeSource();
+
+  const assertStructuralRuntime = (source) => {
+    assert.match(
+      source,
+      /const colorsApi = await import\("@labpics\/colors"\);[\s\S]*?default: init,[\s\S]*?\bapplyTheme,/u,
+      "runtime smoke must destructure the root API from one package-root import",
+    );
+    assert.match(
+      source,
+      /const applyThemeApi = await import\("@labpics\/colors\/apply-theme"\);/u,
+    );
+    assert.match(
+      source,
+      /const watchThemeApi = await import\("@labpics\/colors\/watch-theme"\);/u,
+    );
+    assert.match(
+      source,
+      /const adaptThemeApi = await import\("@labpics\/colors\/adapt-theme"\);/u,
+    );
+    assert.match(source, /assert\.equal\(applyThemeFromSubpath, applyTheme,/u);
+    assert.match(source, /assert\.equal\(watchThemeFromSubpath, watchTheme,/u);
+    assert.match(source, /assert\.equal\(adaptThemeFromSubpath, adaptTheme,/u);
+    assert.match(source, /"createOutputSink" in namespace, false/u);
+    assert.match(source, /const runtimeElements = new WeakSet\(\);/u);
+    assert.match(source, /const runtimeDocuments = new WeakSet\(\);/u);
+    assert.match(source, /const runtimeStates = new WeakMap\(\);/u);
+    assert.match(source, /class RuntimeNode/u);
+    assert.match(source, /class RuntimeDocument extends RuntimeNode/u);
+    assert.match(source, /class RuntimeElement extends RuntimeNode/u);
+    assert.match(source, /runtimeDocuments\.add\(document\);/u);
+    assert.match(source, /runtimeElements\.add\(documentElement\);/u);
+    assert.ok(
+      source.indexOf('Object.defineProperty(globalThis, "document"') <
+        source.indexOf('const colorsApi = await import("@labpics/colors");'),
+      "the ambient DOM oracle must exist before the package is evaluated",
+    );
+    assert.match(source, /"createOutputSink"/u);
+    assert.match(source, /import\("@labpics\/colors\/output-sink"\)/u);
+    assert.match(source, /import\("@labpics\/colors\/output-bindings"\)/u);
+    assert.match(source, /import\("@labpics\/colors\/sequence-identity-matches"\)/u);
+    assert.match(source, /const runtimeDocument = \(\) =>/u);
+    assert.match(source, /class FakeCSSStyleSheet/u);
+    assert.ok(
+      source.includes('const match = /^(:root|:host) \\{(?: (.*))?\\}$/u.exec(text);'),
+      "the clean fake must parse only the two identity-native selectors",
+    );
+    assert.match(source, /selectorMatches = \(selector\) => selector === ":root"/u);
+    assert.doesNotMatch(
+      source,
+      /\b(?:querySelectorAll|getAttribute|hasAttribute|setAttribute|removeAttribute|attributes)\b/u,
+      "the clean fake must not preserve a selector-marker seam",
+    );
+    assert.match(source, /documentElement/u);
+    assert.match(source, /const assertPublished =/u);
+    assert.match(source, /const assertDisposed =/u);
+    assert.equal(
+      [...source.matchAll(/applyTheme\(appliedTarget, resolved\)/gu)].length,
+      2,
+      "identical apply must exercise the sink no-op path",
+    );
+    assert.equal(
+      [...source.matchAll(/applyThemeFromSubpath\(subpathAppliedTarget, resolved\)/gu)].length,
+      2,
+      "the public apply subpath must exercise the same idempotent sink",
+    );
+    assert.match(source, /watchTheme subpath repeated dispose/u);
+    assert.match(source, /adaptTheme subpath repeated dispose/u);
+    assert.match(source, /host\.liveReplaceCount, 1/u);
+    assert.match(source, /host\.scratchReplaceCount > 0/u);
+    assert.match(source, /host\.document\.adoptedStyleSheets\.length, 0/u);
+    assert.match(source, /watcher\.refresh\(\)/u);
+    assert.match(source, /assertPublished\(watchedHost, "identical watchTheme refresh"\)/u);
+    assert.match(source, /watcher\.dispose\(\)/u);
+    assert.match(source, /adaptive\.tick\(0\)/u);
+    assert.match(source, /adaptive\.dispose\(\)/u);
+    assert.match(source, /applyThemeFromSubpath\(subpathAppliedTarget, resolved\)/u);
+    assert.match(source, /watchThemeFromSubpath\(subpathWatchedTarget, \{/u);
+    assert.match(source, /adaptThemeFromSubpath\(subpathAdaptedTarget, \{/u);
+    assert.doesNotMatch(source, /runtimeTarget|output-host|\.\.?\/[^"']*output-sink/u);
+  };
+  assertStructuralRuntime(runtime);
+
+  for (const [name, mutation] of [
+    ["style-only target", (source) => source.replace("const runtimeDocument = () =>", "const runtimeTarget = () =>")],
+    ["missing constructed sheet", (source) => source.replace("class FakeCSSStyleSheet", "class RemovedCSSStyleSheet")],
+    [
+      "missing identical apply no-op",
+      (source) => source.replace(
+        "assert.equal(applyTheme(appliedTarget, resolved), applied);",
+        "assert.equal(applied, applied);",
+      ),
+    ],
+    ["missing universal watch disposal", (source) => source.replaceAll("watcher.dispose()", "watcher.stop()")],
+    ["missing universal adapt disposal", (source) => source.replaceAll("adaptive.dispose()", "adaptive.stop()")],
+    ["missing applyTheme runtime subpath", (source) => source.replace(
+      "applyThemeFromSubpath(subpathAppliedTarget, resolved)",
+      "applyTheme(subpathAppliedTarget, resolved)",
+    )],
+    ["missing watchTheme runtime subpath", (source) => source.replace(
+      "watchThemeFromSubpath(subpathWatchedTarget, {",
+      "watchTheme(subpathWatchedTarget, {",
+    )],
+    ["missing adaptTheme runtime subpath", (source) => source.replace(
+      "adaptThemeFromSubpath(subpathAdaptedTarget, {",
+      "adaptTheme(subpathAdaptedTarget, {",
+    )],
+    ["unbranded clean target", (source) => source.replace(
+      "  runtimeElements.add(documentElement);\n",
+      "",
+    )],
+    ["stale attribute-selector parser", (source) => source.replace(
+      'const match = /^(:root|:host) \\{(?: (.*))?\\}$/u.exec(text);',
+      'const match = /^(:root|\\[[a-z0-9-]+\\]) \\{(?: (.*))?\\}$/u.exec(text);',
+    )],
+    ["stale root query seam", (source) => source.replace(
+      "    documentElement: null,\n  };",
+      "    documentElement: null,\n    querySelectorAll() { return []; },\n  };",
+    )],
+    ["stale marker attribute seam", (source) => source.replace(
+      "    getRootNode: () => document,\n    style: inlineStyle,",
+      "    getRootNode: () => document,\n    setAttribute() {},\n    style: inlineStyle,",
+    )],
+  ]) {
+    assert.throws(
+      () => assertStructuralRuntime(mutation(runtime)),
+      undefined,
+      `contract mutation must bite: ${name}`,
+    );
+  }
+
+  assert.match(types, /type OutputBindingSet/u);
+  assert.match(types, /type ApplyThemeAttachment as RootApplyThemeAttachment/u);
+  assert.match(types, /type ApplyThemeAttachment as SubpathApplyThemeAttachment/u);
+  assert.match(types, /type WatchController as RootWatchController/u);
+  assert.match(types, /type AdaptController as RootAdaptController/u);
+  assert.match(types, /const outputBindings: OutputBindingSet = resolved\.outputBindings/u);
+  assert.match(types, /@ts-expect-error OutputBindingSet is immutable/u);
+  assert.match(types, /outputBindings\.push\(/u);
+  assert.match(types, /\.dispose\(\)/u);
+  assert.match(types, /\[Symbol\.dispose\]\?\.\(\)/u);
+});
+
+test("runtime docs disclose output rollback and same-realm trust boundaries", () => {
+  const applyThemeSource = read("packages", "colors", "apply-theme.js");
+  assert.match(
+    applyThemeSource,
+    /outputBindings[\s\S]{0,160}проверяются на конфликт[\s\S]{0,100}несвязанные inline-декларации остаются нетронутыми/u,
+  );
+  assert.doesNotMatch(
+    applyThemeSource,
+    /inline declarations не сканируются и не изменяются/u,
+  );
+
+  for (const document of [
+    read("packages", "colors", "README.md"),
+    read("docs", "whitepaper.md"),
+  ]) {
+    assert.match(document, /rollback[\s\S]{0,80}может сохранить[\s\S]{0,40}кандидатные bytes/u);
+    assert.match(document, /Recovery journal[\s\S]{0,80}ожидаемые предыдущие[\s\S]{0,20}bytes/u);
+    assert.match(document, /следующая операция[\s\S]{0,80}соглас/u);
+    assert.match(document, /Web-IDL accessors[\s\S]{0,160}shadowable/u);
+    assert.match(document, /ambient `document`[\s\S]{0,160}ECMAScript primordials/u);
+    assert.match(document, /pre-import[\s\S]{0,40}(?:compromise|подмен)/u);
+    assert.match(document, /Target authority в `Symbol\.for`/u);
+    assert.match(document, /не\s+является\s+(?:границей|механизмом)\s+авторизац/u);
+    assert.match(document, /hostile same-realm/u);
+    assert.doesNotMatch(
+      document,
+      /sink восстанавливает и проверяет предыдущие bytes до сообщения об отказе/u,
+    );
+  }
+});
+
+test("the shipped output sink exposes no injectable target-brand authority", () => {
+  const manifest = JSON.parse(read("packages", "colors", "package.json"));
+  const rootEntry = read("packages", "colors", "index.js");
+  const sink = read("packages", "colors", "output-sink.js");
+
+  assert.equal(manifest.exports["./output-sink"], undefined);
+  assert.equal(manifest.exports["./output-bindings"], undefined);
+  assert.equal(manifest.exports["./sequence-identity-matches"], undefined);
+  assert.ok(
+    manifest.files.includes("output-bindings.js"),
+    "the private binding authority must ship for internal runtime imports",
+  );
+  assert.doesNotMatch(rootEntry, /createOutputSink/u);
+  assert.doesNotMatch(sink, /export\s+(?:function|const|let|var|class)\s+createOutputSink/u);
+  assert.match(sink, /function captureDomOracle\(globalObject\)/u);
+  assert.match(sink, /const document = globalObject\.document;/u);
+  assert.match(sink, /const nodeType = accessor\(document, "nodeType"\);/u);
+  assert.match(sink, /const documentAdopted = accessorPair\(document, "adoptedStyleSheets"\);/u);
+  assert.match(sink, /const shadowAdopted = accessorPair\(sentinelRoot, "adoptedStyleSheets"\);/u);
+  assert.match(sink, /APPLY\(DOM_ORACLE\.ownerDocument, target, \[\]\)/u);
+  assert.match(sink, /APPLY\(DOM_ORACLE\.elementStyle, target, \[\]\)/u);
+  assert.match(
+    sink,
+    /function acquireOutputLeaseUnchecked[\s\S]{0,220}preflightAcquisition[\s\S]{0,120}authorityDescriptor/u,
+  );
+  assert.doesNotMatch(sink, /ACQUISITION_STATE|admissionAuthority|admission\.run/u);
+  assert.doesNotMatch(sink, /globalObject\.Node|globalThis\.Node|\.ownerDocument;|\.getRootNode\(\)/u);
+  assert.doesNotMatch(
+    sink,
+    /allowStructuralTarget|process\.env|globalThis\[[^\]]*brand|Symbol\.for\([^)]*brand/iu,
+  );
+});
+
+test("DOM-free acquisition preserves the original oracle-capture failure", () => {
+  const sinkUrl = pathToFileURL(join(root, "packages", "colors", "output-sink.js")).href;
+  const probe = `
+    const { acquireOutputLease } = await import(${JSON.stringify(sinkUrl)});
+    try {
+      acquireOutputLease({}, ["--lab-probe"], "release/dom-free");
+      throw new Error("DOM-free acquisition unexpectedly succeeded");
+    } catch (error) {
+      if (error?.code !== "OUTPUT_TARGET_CAPABILITY") throw error;
+      if (!(error.cause instanceof TypeError)) {
+        throw new Error("DOM oracle failure did not retain its TypeError cause");
+      }
+      if (!error.cause.message.includes("globalThis.document")) {
+        throw new Error(\`unexpected DOM oracle cause: \${error.cause.message}\`);
+      }
+    }
+  `;
+  execFileSync(process.execPath, ["--input-type=module", "-e", probe], {
+    cwd: root,
+    stdio: ["ignore", "pipe", "pipe"],
+    timeout: DOM_FREE_PROBE_TIMEOUT_MS,
+  });
+});
+
+test("generated clean-consumer type smoke compiles at both supported TypeScript gates", () => {
+  const packageDirectory = join(root, "packages", "colors");
+  const temporary = mkdtempSync(join(tmpdir(), "labcolors-consumer-type-smoke-"));
+  const smoke = join(temporary, "smoke.ts");
+  try {
+    writeFileSync(
+      join(temporary, "package.json"),
+      `${JSON.stringify({ private: true, type: "module" }, null, 2)}\n`,
+    );
+    const packageScope = join(temporary, "node_modules", "@labpics");
+    mkdirSync(packageScope, { recursive: true });
+    symlinkSync(
+      packageDirectory,
+      join(packageScope, "colors"),
+      process.platform === "win32" ? "junction" : "dir",
+    );
+    writeFileSync(smoke, typeSmokeSource());
+    for (const compiler of ["typescript-floor", "typescript"]) {
+      execFileSync(process.execPath, [
+        join(packageDirectory, "node_modules", compiler, "lib", "tsc.js"),
+        "--noEmit",
+        "--strict",
+        "--skipLibCheck",
+        "false",
+        "--target",
+        "ES2022",
+        "--lib",
+        "ES2022,DOM",
+        "--module",
+        "NodeNext",
+        "--moduleResolution",
+        "NodeNext",
+        smoke,
+      ], {
+        cwd: temporary,
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+    }
+  } finally {
+    rmSync(temporary, { recursive: true, force: true });
+  }
 });
 
 test("runtime declarations expose one curated type surface", () => {

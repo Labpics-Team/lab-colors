@@ -21,14 +21,14 @@ use crate::lcs_occurrence::{
 const FORMULA_SPEC_BYTES: &[u8] = include_bytes!("../contracts/contextual-region-formula-v1.lcir");
 const FORMULA_SPEC_DOMAIN: &[u8] = b"labcolors.nominal-exact-real-lift.ascii-ssa.v1\0";
 
-const POSITIVE_ZERO: u64 = 0x0000_0000_0000_0000;
+pub(crate) const POSITIVE_ZERO: u64 = 0x0000_0000_0000_0000;
 const NEGATIVE_ZERO: u64 = 0x8000_0000_0000_0000;
 const MIN_SUBNORMAL: u64 = 0x0000_0000_0000_0001;
 const MIN_NORMAL: u64 = 0x0010_0000_0000_0000;
 const NEGATIVE_MIN_SUBNORMAL: u64 = 0x8000_0000_0000_0001;
-const ONE: u64 = 0x3ff0_0000_0000_0000;
+pub(crate) const ONE: u64 = 0x3ff0_0000_0000_0000;
 const ONE_AND_HALF: u64 = 0x3ff8_0000_0000_0000;
-const TWO: u64 = 0x4000_0000_0000_0000;
+pub(crate) const TWO: u64 = 0x4000_0000_0000_0000;
 const TWO_AND_HALF: u64 = 0x4004_0000_0000_0000;
 const THREE: u64 = 0x4008_0000_0000_0000;
 const FOUR: u64 = 0x4010_0000_0000_0000;
@@ -37,7 +37,7 @@ const NEGATIVE_ONE: u64 = 0xbff0_0000_0000_0000;
 const MAX_FINITE: u64 = 0x7fef_ffff_ffff_ffff;
 const NEGATIVE_MAX_FINITE: u64 = 0xffef_ffff_ffff_ffff;
 
-fn context(frame: crate::lcs_occurrence::ColorimetricFrameId) -> AppearanceContextId {
+pub(crate) fn context(frame: crate::lcs_occurrence::ColorimetricFrameId) -> AppearanceContextId {
     context_with(frame, 64.0, 0.2, SurroundProfileId::AverageV1)
 }
 
@@ -60,7 +60,7 @@ fn knot(tone: u64, center_a: u64, center_b: u64, radius_squared: u64) -> TubeKno
     TubeKnotBitsV1::new(tone, center_a, center_b, radius_squared)
 }
 
-fn region_with_centers(centers: [[u64; 2]; 2]) -> PiecewiseLinearCartesianTubeV1 {
+pub(crate) fn region_with_centers(centers: [[u64; 2]; 2]) -> PiecewiseLinearCartesianTubeV1 {
     PiecewiseLinearCartesianTubeV1::try_from_bits(
         Shape2BitsV1::new(ONE, POSITIVE_ZERO, ONE),
         &[
@@ -71,7 +71,7 @@ fn region_with_centers(centers: [[u64; 2]; 2]) -> PiecewiseLinearCartesianTubeV1
     .unwrap()
 }
 
-fn pipeline(context: AppearanceContextId) -> ContextualRegionPipelineV1 {
+pub(crate) fn pipeline(context: AppearanceContextId) -> ContextualRegionPipelineV1 {
     pipeline_with_release(context, MODELED_LCS_OCCURRENCE_RELEASE_V1)
 }
 

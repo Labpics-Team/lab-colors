@@ -25,6 +25,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
+import "./fake-node-brand.mjs";
 import {
   initSync,
   LabColors,
@@ -32,6 +33,7 @@ import {
 } from "../pkg/labcolors.js";
 import { applyTheme } from "../apply-theme.js";
 import { parseCssColor, toHex } from "../effective-bg.js";
+import { outputElement } from "./output-host.mjs";
 
 // Инициализация wasm в node: pkg собран под `--target web` (fetch по URL), а в
 // node грузим байты напрямую. Оборачиваем в WebAssembly.Module и передаём
@@ -312,21 +314,17 @@ test("stable glow indeterminate emits no fallback vars and clears previous legac
     assert.equal(stable.vars[key], undefined, `${key}: no implicit legacy fallback`);
   }
 
-  const props = new Map();
-  const element = {
-    style: {
-      get length() { return props.size; },
-      item(index) { return [...props.keys()][index] ?? ""; },
-      setProperty(key, value) { props.set(key, value); },
-      removeProperty(key) { props.delete(key); },
-    },
-  };
-  applyTheme(element, legacy);
-  assert.ok(props.has("--lab-fx-glow-brand-alpha"));
-  applyTheme(element, stable);
-  assert.ok(!props.has("--lab-fx-glow-brand"));
-  assert.ok(!props.has("--lab-fx-glow-brand-core"));
-  assert.ok(!props.has("--lab-fx-glow-brand-alpha"));
+  const element = outputElement();
+  const attachment = applyTheme(element, legacy);
+  assert.ok(element.props.has("--lab-fx-glow-brand-alpha"));
+  assert.equal(applyTheme(element, stable), attachment, "the static manifest must reuse one lease");
+
+  const declarations = element.outputHost.liveSheet().cssRules[0].style;
+  for (const key of [role.cssVar, `${role.cssVar}-core`, `${role.cssVar}-alpha`]) {
+    assert.equal(declarations.getPropertyValue(key), "", `${key}: live sheet must clear fallback`);
+    assert.equal(element.props.has(key), false, `${key}: cleared sheet value must not remain effective`);
+  }
+  attachment.dispose();
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -246,6 +246,39 @@ def _snapshot_request_v1(
 
 
 @dataclass(frozen=True)
+class MpfiSourceBoundPreimagesV1:
+    """The comparator coordinates an admitted MPFI request already determines.
+
+    Every field here is a function of the source lock, the admitted upstream
+    closure, the pinned build sources and the runtime binding, so this set is
+    derivable before a build exists.  Its field order is checked against the
+    protocol rather than trusted: a coordinate added to the manifest must
+    either join this set or be declared a build observation, never quietly
+    leave the fold.
+    """
+
+    engine_release: bytes
+    upstream_source: bytes
+    arithmetic_input_set: bytes
+    wrapper_source: bytes
+    evaluator_source: bytes
+    operation_allowlist: bytes
+    legal_file_set: bytes
+    exclusions: bytes
+
+    def __post_init__(self) -> None:
+        if tuple(item.name for item in fields(self)) != (
+            protocol.source_bound_coordinates_v2()
+        ):
+            raise TypeError("source-bound comparator preimage schema drift")
+        values = tuple(getattr(self, item.name) for item in fields(self))
+        if any(type(value) is not bytes or not value for value in values):
+            raise TypeError("MPFI comparator preimages must be nonempty exact bytes")
+        if len(set(values)) != len(values):
+            raise TypeError("MPFI comparator preimages must be distinct")
+
+
+@dataclass(frozen=True)
 class MpfiComparatorPreimagesV1:
     engine_release: bytes
     upstream_source: bytes
@@ -461,11 +494,18 @@ def _build_identity_v1(
     )
 
 
-def _derive_comparator_v1(
+def _source_bound_preimages_v1(
     snapshot: _MpfiOperationSnapshotV1,
-    build: _MpfiBuildCoordinatesV1 | MpfiDiagnosticBuildObservationV1,
-    build_identity: bytes,
-) -> MpfiDiagnosticComparatorV1:
+) -> MpfiSourceBoundPreimagesV1:
+    """Derive the eight coordinates an admitted MPFI request already determines.
+
+    The build path and the pre-build check both consume this, so a comparator
+    identity predicted before Docker runs and the identity the manifest later
+    declares cannot disagree unless an input disagrees.
+    """
+
+    if type(snapshot) is not _MpfiOperationSnapshotV1:
+        raise TypeError("snapshot must be _MpfiOperationSnapshotV1")
     files = snapshot.request.build_sources.files
     wrapper_paths = frozenset(
         f"proof/region/v1/mpfi/evaluator/{name}"
@@ -485,15 +525,14 @@ def _derive_comparator_v1(
     operation = snapshot.request.build_sources.contents(
         "proof/region/v1/mpfi/operations.py"
     )
-    source_identity = _source_identity_v1(snapshot)
     runtime_identity = mpfi_runtime.runtime_binding_identity_v1(
         snapshot.request.runtime_binding
     )
     if type(runtime_identity) is not bytes:
         raise TypeError("runtime binding identity did not replay")
-    preimages = MpfiComparatorPreimagesV1(
+    return MpfiSourceBoundPreimagesV1(
         _preimage("engine-release", (snapshot.request.source_lock.encode(),)),
-        _preimage("upstream-source", (source_identity,)),
+        _preimage("upstream-source", (_source_identity_v1(snapshot),)),
         _preimage(
             "arithmetic-input-set",
             (
@@ -510,16 +549,7 @@ def _derive_comparator_v1(
             "evaluator-source",
             tuple(item.contents for item in evaluator),
         ),
-        _preimage("build-identity", (build_identity,)),
         _preimage("operation-allowlist", (operation,)),
-        _preimage(
-            "test-observation",
-            (
-                snapshot.request.build_sources.contents(mpfi_build.MPFI_BUILD_RECIPE_PATH_V1),
-                snapshot.request.build_sources.contents(mpfi_build.MPFI_BUILD_INNER_RECIPE_PATH_V1),
-                *(build_transport.build_process_bytes_v1(item) for item in build.processes),
-            ),
-        ),
         _preimage(
             "legal-file-set",
             tuple(lock.encode() for lock in snapshot.request.source_lock.sources),
@@ -532,6 +562,67 @@ def _derive_comparator_v1(
                 b"no-publisher-origin-claim",
             ),
         ),
+    )
+
+
+def expected_comparator_source_identity_v1(request: object) -> bytes:
+    """Answer the MPFI comparator's source identity from admitted inputs alone.
+
+    A coverage check can prove cheaply that a set of lanes carries exactly the
+    two distinct comparator source identities a dual proof requires, but not
+    that those identities belong to the engines this job will build.  The Arb
+    half of that binding is already answerable without a build; without this
+    half the pre-check still has to pay for a native MPFI build to learn the
+    second identity, which leaves the cheap check bound to one engine of a
+    pair.  This derivation reuses the build's own snapshot and its own
+    source-bound coordinates, so it decides the same question the manifest
+    decides later, with no build, Docker daemon or binary in reach.
+
+    It does not establish that the coordinates themselves are correct: no
+    independent anchor for the expected value exists in this repository.
+    """
+
+    snapshot = _snapshot_request_v1(request)
+    preimages = _source_bound_preimages_v1(snapshot)
+    return protocol.source_bound_identity_v2(
+        protocol.ComparatorKindV1.MPFI,
+        tuple(
+            hashlib.sha256(getattr(preimages, item.name)).digest()
+            for item in fields(preimages)
+        ),
+    )
+
+
+def _derive_comparator_v1(
+    snapshot: _MpfiOperationSnapshotV1,
+    build: _MpfiBuildCoordinatesV1 | MpfiDiagnosticBuildObservationV1,
+    build_identity: bytes,
+) -> MpfiDiagnosticComparatorV1:
+    source_identity = _source_identity_v1(snapshot)
+    runtime_identity = mpfi_runtime.runtime_binding_identity_v1(
+        snapshot.request.runtime_binding
+    )
+    if type(runtime_identity) is not bytes:
+        raise TypeError("runtime binding identity did not replay")
+    source_bound = _source_bound_preimages_v1(snapshot)
+    observed = {
+        "build_identity": _preimage("build-identity", (build_identity,)),
+        "test_observation": _preimage(
+            "test-observation",
+            (
+                snapshot.request.build_sources.contents(mpfi_build.MPFI_BUILD_RECIPE_PATH_V1),
+                snapshot.request.build_sources.contents(mpfi_build.MPFI_BUILD_INNER_RECIPE_PATH_V1),
+                *(build_transport.build_process_bytes_v1(item) for item in build.processes),
+            ),
+        ),
+    }
+    preimages = MpfiComparatorPreimagesV1(
+        *(
+            observed[item.name]
+            if item.name in protocol.BUILD_OBSERVATION_COORDINATES_V2
+            else getattr(source_bound, item.name)
+            for item in fields(MpfiComparatorPreimagesV1)
+        )
     )
     coordinates = tuple(
         hashlib.sha256(getattr(preimages, field.name)).digest()

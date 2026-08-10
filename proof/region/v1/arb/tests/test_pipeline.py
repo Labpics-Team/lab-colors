@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import gzip
 import hashlib
 import io
 import inspect
@@ -16,6 +15,7 @@ import sys
 import tarfile
 import tempfile
 import unittest
+import zlib
 from dataclasses import fields as dataclass_fields, replace
 from functools import cache
 from pathlib import Path
@@ -87,6 +87,34 @@ def _static_elf(payload: bytes = b"fixture") -> bytes:
     return header + program + body
 
 
+def _canonical_gzip_v1(raw: bytes) -> bytes:
+    """Канонический RFC 1951 stored-deflate gzip-член.
+
+    ``gzip.compress(compresslevel=9)`` полагается на deflate-эвристику zlib,
+    чей вывод менялся между 1.2.13 (Python 3.12) и 1.3.1 (Python 3.14):
+    одни и те же входные байты давали разные архивы, а с ними другие
+    ``archive_sha256`` и другие преимиджи source-bound координат. Stored-блоки
+    копируют вход без сжатия, поэтому байты члена зависят только от самого
+    tar-потока и не могут разойтись между интерпретаторами.
+    """
+
+    header = b"\x1f\x8b\x08\x00" + (0).to_bytes(4, "little") + b"\x00\xff"
+    blocks = bytearray()
+    offset = 0
+    while offset < len(raw):
+        chunk = raw[offset : offset + 65535]
+        final = 1 if offset + len(chunk) == len(raw) else 0
+        blocks.append(final)
+        blocks += len(chunk).to_bytes(2, "little")
+        blocks += ((~len(chunk)) & 0xFFFF).to_bytes(2, "little")
+        blocks += chunk
+        offset += len(chunk)
+    trailer = zlib.crc32(raw).to_bytes(4, "little") + (
+        len(raw) & 0xFFFFFFFF
+    ).to_bytes(4, "little")
+    return header + bytes(blocks) + trailer
+
+
 def _tar(root: str, files: tuple[tuple[str, bytes, int], ...]) -> tuple[bytes, int]:
     raw = io.BytesIO()
     with tarfile.open(fileobj=raw, mode="w", format=tarfile.USTAR_FORMAT) as archive:
@@ -108,7 +136,7 @@ def _tar(root: str, files: tuple[tuple[str, bytes, int], ...]) -> tuple[bytes, i
             member.size = len(body)
             member.mtime = 0
             archive.addfile(member, io.BytesIO(body))
-    encoded = gzip.compress(raw.getvalue(), compresslevel=9, mtime=0)
+    encoded = _canonical_gzip_v1(raw.getvalue())
     return encoded, len(raw.getvalue())
 
 

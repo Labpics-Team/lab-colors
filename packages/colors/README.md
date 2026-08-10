@@ -2,7 +2,7 @@
 
 Агностичный контраст-движок для дизайн-систем. Получает фоновый цвет и тему — возвращает полный набор цветовых ролей **вашей** системы. Словарь ролей не встроен в пакет: его задаёт конфиг дизайн-системы (`ThemeConfig`), загружаемый через `loadConfig`; имена вида `--lab-label-primary`, `--lab-border-base` в примерах ниже — из конфига дизайн-системы labui. CSS-переменные несут готовое значение `oklch(L% C H)` (для полупрозрачных ролей — `oklch(L% C H / A)`); сырой `#RRGGBB` остаётся данными роли (`roles.<ключ>.hex`). Пакет не имеет runtime-зависимостей; runtime resolver — единственная WASM-роль.
 
-Ядро возвращает **данные**, не затрагивает DOM. Три вспомогательные функции переводят эти данные в живые CSS-переменные: `applyTheme` (разовое применение), `watchTheme` (реактивное — обновляется при изменении фона) и `adaptTheme` (плавная адаптация для фона, меняющегося каждый кадр).
+Ядро возвращает **данные**, не затрагивает DOM. `ResolvedTheme.outputBindings` — точный, написанный Core набор имён, которыми владеет результат; `vars` — его подмножество со значениями. `applyTheme` (разовое применение), `watchTheme` (реактивное) и `adaptTheme` (плавная адаптация) публикуют этот набор через один stylesheet, привязанный к цели.
 
 ---
 
@@ -55,7 +55,8 @@ const result = engine.resolveTheme("#FFFFFF", "light");
 //                { "--lab-label-primary": "oklch(<L>% <C> <H>)", … }
 // result.roles → детали каждой роли (css, hex, контраст, флаги)
 
-applyTheme(document.documentElement, result);   // записать все --lab-* в элемент
+const attachment = applyTheme(document.documentElement, result);
+// attachment.dispose(); // отозвать только это применение
 ```
 
 Параллельные `init()` разделяют одну загрузку; повторный вызов после успеха —
@@ -79,12 +80,17 @@ const colors = new LabColors();
 colors.loadConfig(JSON.stringify(dsConfig));   // конфиг дизайн-системы (см. квик-старт)
 
 const panel = document.querySelector(".panel") as HTMLElement;
-const watcher = watchTheme(panel, { colors, theme: "light" });
-// panel теперь несёт --lab-* для текущей опорной оценки фона
+const watcher = watchTheme(panel, {
+  colors,
+  theme: "light",
+  target: document.documentElement,
+});
+// panel наблюдается, а точный :root-target несёт --lab-*.
 
 watcher.setTheme("dark");   // переключить тему
 watcher.refresh();          // принудительная пересинхронизация
-watcher.stop();             // отключить наблюдателя
+watcher.stop();             // отключить наблюдателя; output остаётся опубликованным
+watcher.dispose();          // отозвать output этого контроллера
 ```
 
 Поддерживает два режима изменений:
@@ -116,13 +122,15 @@ const adaptive = adaptTheme(surface, {
   colors,
   theme: "light",
   background: () => samples,
+  target: document.documentElement,
 });
 
 adaptive.start();           // запустить внутренний requestAnimationFrame-цикл
 samples = ["#101012", "#202024"]; // интеграция обновила конечные образцы подложки
 adaptive.tick();            // явно обработать новое наблюдение
 adaptive.setTheme("dark");  // смена темы применяется мгновенно
-adaptive.stop();            // остановить цикл
+adaptive.stop();            // остановить цикл; output остаётся опубликованным
+adaptive.dispose();         // отозвать output этого контроллера
 ```
 
 Для градиента, изображения или видео интеграция может передать конечный набор образцов,
@@ -189,6 +197,7 @@ await initRuntime({ module_or_path: runtimeWasm });
 interface ResolvedTheme {
   readonly theme: ThemeName;
   readonly background: string;                                  // нормализованный #RRGGBB
+  readonly outputBindings: readonly string[];                   // точный набор имён из Core
   readonly vars: Readonly<Record<string, string>>;               // "--lab-<ключ>" → oklch
   readonly roles: Readonly<Record<string, RoleResult>>;          // все роли с деталями
 }
@@ -391,17 +400,22 @@ transitional solver-а.
 ---
 
 
-### `applyTheme(element, result): void`
+### `applyTheme(element, result): ApplyThemeAttachment`
 
-Принимает полный снимок `ResolvedTheme` и до первой CSSOM-операции проверяет его
-структуру и отсутствие ordinary `Unreachable`. Затем удаляет прежние inline
-`--lab-*` и записывает выбранные значения из `result.vars` через `setProperty`.
-В штатном результате `resolveTheme` исходы `none`, `glow-indeterminate` и
-`Unresolved` не имеют CSS-значения, поэтому устаревший var не сохраняется.
-Ordinary-конфликт либо невалидный контейнер отклоняется до изменения DOM;
-передача одного вручную собранного `vars` не поддерживается. Проверка provenance
-и соответствия каждого var сертификату принадлежит полному output-контракту,
-а не этому DOM helper.
+Принимает полный снимок `ResolvedTheme` и до CSSOM проверяет его структуру и
+обычный `Unreachable`. `outputBindings` задаёт точный набор владения: helper не
+сканирует префиксы и не меняет inline-style. Для цели создаётся или переиспользуется
+один constructed `CSSStyleSheet`; полный CSS сначала проходит scratch-проверку, затем
+live-sheet меняется одним `replaceSync`.
+
+Точная цель не выводится из cloneable-атрибута: это либо
+`document.documentElement` (`:root`), либо host собственного открытого
+`shadowRoot` (`:host`). Произвольный light-DOM элемент отклоняется до эффекта,
+поскольку CSS-селектор не способен доказуемо выразить его identity после
+`cloneNode(true)`. Перемещение в другой root или realm, отсоединение и внешняя
+подмена sink становятся типизированной stale-ошибкой. Inline-декларация для одного
+из `outputBindings` отклоняет публикацию до неё; несвязанные inline-переменные не
+изменяются. `dispose()` возвращённого вложения атомарно отзывает только его набор.
 
 ---
 
@@ -416,7 +430,7 @@ interface WatchThemeOptions {
   colors: LabColors;
   theme: ThemeName;
   background?: string | (() => string);  // явный фон (если автоматический невозможен)
-  target?: HTMLElement;                  // куда писать переменные (по умолчанию: element)
+  target?: HTMLElement;                  // точный :root/:host target (по умолчанию: element)
   canvas?: string;                       // явный непрозрачный canvas для прозрачного корня
   observe?: boolean;                     // авто-обновление при style/class в поддереве (по умолчанию true)
   onError?: (error: unknown) => void;     // ошибки автоматического observer-refresh
@@ -427,7 +441,8 @@ interface WatchController {
   refresh(force?: boolean): ResolvedTheme | null;  // null, если первый commit не состоялся
   setTheme(theme: ThemeName): void;                // переключить тему и применить
   background(): string | null;                     // последний закоммиченный reference hex
-  stop(): void;                                    // отключить наблюдателей
+  stop(): void;                                    // отключить наблюдателей, сохранив output
+  dispose(): void;                                 // отозвать output этого контроллера
 }
 ```
 
@@ -438,6 +453,9 @@ interface WatchController {
 трактуется как отсутствие `background`. Если поддерживаемая цепочка полностью
 прозрачна и `canvas` не объявлен, наблюдение имеет тип `Unknown`; белый цвет не
 подставляется.
+Наблюдаемый `element` может быть произвольным. Если он не является `:root` либо
+host собственного открытого ShadowRoot, `target` указывается явно; скрытого
+переноса output на document root нет.
 До захвата `MutationObserver` невалидный вход или initial resolve бросает
 синхронно и не создаёт долгоживущий ресурс. После захвата observer функция
 сначала возвращает контроллер-владелец. Если затем упал `observe`, первый CSS
@@ -447,11 +465,8 @@ commit или его cleanup, отказ асинхронно передаётс
 одного успешного commit, а повторный `stop()` освобождает retained handle после
 временного отказа `disconnect()`.
 Явные `refresh()` и `setTheme()` после успешного старта бросают синхронно.
-При ошибке resolve последний успешный снимок остаётся применённым. Сам CSSOM не
-поддерживает атомарный откат: исключение во время записи может оставить inline-style
-частичным. Контроллер помечает его незавершённым, а следующий `refresh()` или
-наблюдаемая мутация повторно применяет полный канонический снимок, не вызывая
-resolver при неизменных входах.
+При ошибке resolve последний успешный снимок остаётся опубликованным. `stop()`
+отключает только наблюдение; `dispose()` явно отзывает attachment этого контроллера.
 
 ---
 
@@ -471,7 +486,7 @@ interface AdaptThemeOptions {
   theme: ThemeName;
   background?: string | string[] | (() => string | string[]);
                                      // один hex или несколько образцов фона (наихудший учитывается)
-  target?: HTMLElement;              // куда писать переменные (по умолчанию: element)
+  target?: HTMLElement;              // точный :root/:host target (по умолчанию: element)
   canvas?: string;                   // явный непрозрачный canvas для прозрачного корня
   dropFraction?: number;             // запас контраста до пересчёта (по умолчанию 0.2)
   sustainMs?: number;                // минимальное время удержания нарушения (по умолчанию 120)
@@ -484,7 +499,8 @@ interface AdaptController {
   tick(now?: number): void;          // один шаг (или использовать start())
   setTheme(theme: ThemeName): void;  // переключить тему мгновенно
   start(): void;                     // запустить внутренний requestAnimationFrame-цикл
-  stop(): void;                      // остановить цикл
+  stop(): void;                      // остановить цикл, сохранив output
+  dispose(): void;                   // отозвать output этого контроллера
   current(): Record<string, string>; // logical targets; во время ease не painted DOM
 }
 ```
@@ -503,10 +519,37 @@ Glow-свидетельств и подготовка перехода обра�
 фазы записи в DOM сохраняет
 предыдущие CSS-переменные и `current()` без промежуточного кандидата.
 Это обещание относится к ошибкам resolve, recheck и проверки свидетельств до
-фазы записи. Исключение самой CSSOM-среды во время последовательных `setProperty`
-нельзя откатить атомарно через inline-style API. В таком случае контроллер
-забывает базу дифференциальной записи, а следующий явный `tick()` повторяет полный
-канонический снимок. Это восстановление, а не атомарный откат уже записанных свойств.
+публикации. CSS output проходит scratch-проверку; успешный commit выполняет одну
+live-замену stylesheet. Если host нарушил postcondition после этой границы, sink
+пытается восстановить и проверить предыдущие bytes до сообщения об отказе.
+Отказ самого rollback может сохранить кандидатные bytes в live-sheet.
+Recovery journal удерживает ожидаемые предыдущие bytes, а следующая операция
+сначала согласует журнал либо снова типизированно откажет. Inline writer
+отсутствует. `stop()` сохраняет output, а `dispose()` атомарно отзывает только
+attachment контроллера.
+
+Восстановление `adoptedStyleSheets` сопоставляет baseline и наблюдаемую
+последовательность точным maximum-cardinality LCS по identity (`===`) с
+`O(N + M)` дополнительной памятью. Неоднозначные повторы имеют единый
+suffix-canonical закон: максимальные общий prefix и непересекающийся suffix
+резервируются первыми, затем Myers-bisect выбирает первый shortest-path overlap
+на возрастающих диагоналях со строгим сравнением frontier. Cutoff и
+приближённого fallback нет: они могли бы изменить порядок или потерять чужой
+stylesheet под видом успешного rollback.
+
+Проверка native identity захватывает Web-IDL accessors из текущего ambient
+`document` при первом выполнении модуля и затем не доверяет shadowable-свойствам
+экземпляров. Нормативное предусловие: к этому моменту ambient `document`, его
+prototype graph и ECMAScript primordials подлинны. Если hostile same-realm код
+подменил сам DOM или `Reflect.apply` до импорта, обычный JavaScript-модуль не
+имеет внешнего корня доверия для аутентификации host intrinsics; такой pre-import
+compromise находится вне модели угроз. Глобального executable acquisition gate
+нет: каждая копия до delegation самостоятельно проверяет native identity цели,
+точный `OutputBindingSet` и inline-конфликты. Target authority в `Symbol.for`
+координирует только совместимые копии пакета и не является границей авторизации
+против hostile same-realm кода. Произвольный код того же realm способен до или
+после импорта подменять CSSOM, напрямую изменять DOM и лгать при readback; для
+изоляции от него нужен внешний trust root/отдельный realm, а не JavaScript-токен.
 
 ---
 
