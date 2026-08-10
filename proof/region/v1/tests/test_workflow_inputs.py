@@ -33,6 +33,7 @@ WORKFLOWS = REPO / ".github" / "workflows"
 
 _INPUT_REFERENCE_V1 = re.compile(r"\$\{\{\s*(?:github\.event\.)?inputs\.([A-Za-z0-9_-]+)")
 _DECLARED_INPUT_V1 = re.compile(r"^      ([A-Za-z0-9_-]+):\s*$")
+_INPUT_KEY_V1 = re.compile(r"^      [A-Za-z0-9_-]+:\s*$", re.MULTILINE)
 _INPUTS_BLOCK_V1 = re.compile(r"^    inputs:\s*$")
 
 
@@ -211,7 +212,13 @@ class LaneCampaignContractTests(unittest.TestCase):
         declared = _declared_inputs_v1(self.text)
         self.assertIn("expect_lanes", declared)
         block = self.text[self.text.index("      expect_lanes:") :]
-        block = block[: block.index("\njobs:")]
+        # The declaration ends where the next one begins, not where a line
+        # that merely contains `jobs:` happens to sit: an input description
+        # mentioning the word would otherwise drag foreign text into the
+        # block and make this assertion answer about the wrong input.
+        following = _INPUT_KEY_V1.search(block, 1)
+        if following is not None:
+            block = block[: following.start()]
         self.assertIn("required: true", block)
         self.assertNotIn("default:", block)
 
@@ -295,6 +302,10 @@ class LaneCampaignContractTests(unittest.TestCase):
             (bash, "-c", self._guard_script_v1()),
             capture_output=True,
             text=True,
+            # The guard's exit status is the contract under test: a refusal
+            # is exit 64 by design, so a nonzero status must not raise here —
+            # it is the answer.
+            check=False,
             env={
                 **os.environ,
                 "WINDOW_POINTS": window_points,
