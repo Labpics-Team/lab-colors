@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { mkdir, readFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
@@ -42,6 +43,8 @@ const CONFORMANCE_FILES = [
   "solve.json",
   "wcag22.json",
 ];
+
+const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
 
 function git(args) {
   return execFileSync("git", args, {

@@ -4025,6 +4025,14 @@ test("published build metadata binds source, conformance, and WASM inputs", () =
 
   const prepare = read("scripts", "prepare-npm-package.mjs");
   assert.match(prepare, /import \{ workspaceVersion \} from "\.\/cargo-workspace\.mjs";/);
+  // The metadata builder needs the local sha256 digest helper at runtime; its
+  // removal must fail here, not later as a ReferenceError inside the release
+  // gate.
+  assert.match(
+    prepare,
+    /const sha256 = \(bytes\) => createHash\("sha256"\)\.update\(bytes\)\.digest\("hex"\);/u,
+  );
+  assert.match(prepare, /import \{ createHash \} from "node:crypto";/u);
   assert.match(prepare, /const BUILD_METADATA = resolve\(PACKAGE_DIR, "build-metadata\.json"\)/);
   assert.match(prepare, /sourceSha/);
   assert.ok(
