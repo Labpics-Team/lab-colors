@@ -301,6 +301,11 @@ test("breaking release metadata is one explicit 0.3.0/0.11.0 contract", () => {
     packageJson.scripts.build,
     /^wasm-pack build .* --locked && node \.\.\/\.\.\/scripts\/build-private-program\.mjs$/u,
   );
+  assert.equal(
+    packageJson.scripts.test,
+    "node ../../scripts/ensure-private-program-artifact.mjs && node --test",
+    "package tests must establish their ignored private Program artifact prerequisite explicitly",
+  );
 });
 
 test("the private Program artifact is packed without becoming a public subpath", () => {
@@ -428,6 +433,22 @@ test("the private Program artifact is packed without becoming a public subpath",
 
   const prepare = read("scripts", "prepare-npm-package.mjs");
   const verifier = read("scripts", "verify-package-release.mjs");
+  const ensure = read("scripts", "ensure-private-program-artifact.mjs");
+  assert.match(
+    ensure,
+    /validatePrivateProgramBuildReceipt\(receipt, \{[^}]*source[^}]*wasm[^}]*requireOptimizer: true/u,
+    "the test prerequisite must reuse only a canonically verified artifact",
+  );
+  assert.match(
+    ensure,
+    /buildPrivateProgram\(\{ requireOptimizer: true \}\)/u,
+    "the test prerequisite must build the same canonical artifact the release gate produces",
+  );
+  assert.match(
+    ensure,
+    /process\.exitCode = 1/u,
+    "a failed prerequisite build must fail the test command, not skip the fixture",
+  );
   assert.match(
     prepare,
     /PRIVATE_PROGRAM_METADATA_PATH[\s\S]*readPrivateProgramBuildReceipt/u,

@@ -68,7 +68,7 @@
   "scripts": {
     "build": "wasm-pack build ../../crates/labcolors-wasm --release --target web --out-dir ../../packages/colors/pkg --out-name labcolors --locked && node ../../scripts/build-private-program.mjs",
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "test": "node --test",
+    "test": "node ../../scripts/ensure-private-program-artifact.mjs && node --test",
     "prepack": "npm run build && node ../../scripts/prepare-npm-package.mjs",
     "release:verify": "node ../../scripts/verify-package-release.mjs"
   },

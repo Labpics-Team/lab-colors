@@ -114,6 +114,31 @@ test("replacing the admitted target before the read fails closed", async () => {
   }
 });
 
+test("replacing the admitted target with same-size bytes still fails closed", async () => {
+  // A same-size replacement defeats any size-based binding and, on Linux ext4,
+  // the freed inode is handed straight back, so even (dev, ino, size, mtime)
+  // can match a swapped generation within one timestamp tick. Only byte
+  // equality between admission and read can bind the admitted generation.
+  const rootDir = await mkdtemp(join(tmpdir(), "labcolors-source-snapshot-"));
+  try {
+    const targetPath = join(rootDir, "a.txt");
+    const first = "same-length\n";
+    const second = "other-bytes\n";
+    assert.equal(first.length, second.length, "regression fixture must be same-size");
+    await writeFile(targetPath, first, "utf8");
+    const admitted = await admitSourceEntry(targetPath, { repoRoot: rootDir });
+    await rm(targetPath);
+    await writeFile(targetPath, second, "utf8");
+    await assert.rejects(
+      readAdmittedSource(admitted),
+      /source changed between admission and read/u,
+      "a same-size replacement must be rejected, not silently hashed",
+    );
+  } finally {
+    await rm(rootDir, { recursive: true, force: true });
+  }
+});
+
 test("admission rejects a target reached through a swapped directory symlink", async () => {
   const rootDir = await mkdtemp(join(tmpdir(), "labcolors-source-snapshot-"));
   try {

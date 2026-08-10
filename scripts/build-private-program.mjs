@@ -399,11 +399,14 @@ async function sourceFiles(directory) {
 }
 
 /**
- * Admit one digest input by capturing the exact inode its path resolves to at
- * this moment, together with the canonical (symlink-free) target. Both are
- * re-verified against the opened handle by readAdmittedSource, so a same-UID
- * swap between this admission and the read either changes the opened inode
- * (rejected) or leaves the digested bytes identical to the admitted ones.
+ * Admit one digest input by capturing, from one open file description, both
+ * the exact inode its resolved target currently has and the exact bytes that
+ * inode currently contains. readAdmittedSource re-verifies both against a
+ * fresh handle, so a same-UID swap between this admission and the read either
+ * changes the opened inode (rejected) or changes the bytes (rejected).
+ * Metadata alone cannot bind a generation: on Linux a replacement can reuse
+ * the freed inode and collide on size and timestamp granularity, so byte
+ * equality is the authoritative admission/read binding.
  */
 export async function admitSourceEntry(path, { repoRoot = REPO_ROOT } = {}) {
   let target;
@@ -415,25 +418,31 @@ export async function admitSourceEntry(path, { repoRoot = REPO_ROOT } = {}) {
   if (!pathIsWithin(repoRoot, target)) {
     fail(`source path does not resolve to a repository file: ${path}`);
   }
-  let admitted;
+  let handle;
   try {
-    admitted = await stat(path);
+    handle = await open(target, "r");
   } catch (error) {
-    fail(`cannot stat source file: ${path}: ${error.message}`);
+    fail(`cannot open source file: ${path}: ${error.message}`);
   }
-  if (!admitted.isFile()) {
-    fail(`source scope contains a non-file entry: ${path}`);
+  try {
+    const admitted = await handle.stat();
+    if (!admitted.isFile()) {
+      fail(`source scope contains a non-file entry: ${path}`);
+    }
+    return { path, target, admitted, content: await handle.readFile() };
+  } finally {
+    await handle.close();
   }
-  return { path, target, admitted };
 }
 
 /**
- * Read an admitted snapshot through a handle opened on the resolved target and
- * fail closed unless the opened inode is exactly the admitted one. The bytes
- * are taken from the pinned handle, so a later path swap cannot retarget what
- * the digest hashes.
+ * Read an admitted snapshot through a fresh handle on the resolved target and
+ * fail closed unless the opened inode is exactly the admitted one AND the
+ * bytes are exactly the admitted bytes. Identity and content are both taken
+ * from pinned handles, so a later path swap or inode-reusing replacement
+ * cannot retarget what the digest hashes.
  */
-export async function readAdmittedSource({ path, target, admitted }) {
+export async function readAdmittedSource({ path, target, admitted, content }) {
   let handle;
   try {
     handle = await open(target, "r");
@@ -453,7 +462,15 @@ export async function readAdmittedSource({ path, target, admitted }) {
           `opened dev=${opened.dev} ino=${opened.ino})`,
       );
     }
-    return await handle.readFile();
+    const bytes = await handle.readFile();
+    if (!bytes.equals(content)) {
+      fail(
+        `source changed between admission and read: ${path} ` +
+          `(admitted ${content.length} bytes, ` +
+          `opened ${bytes.length} bytes)`,
+      );
+    }
+    return bytes;
   } finally {
     await handle.close();
   }
