@@ -17,7 +17,7 @@ const root = resolve(here, "../../..");
 const read = (...parts) => readFileSync(join(root, ...parts), "utf8");
 const normalizeNewlines = (value) => value.replaceAll("\r\n", "\n");
 
-const CALLER_WORKER_SHA = "1461bc2ed60142aed3a8723e618b883be6418156";
+const CALLER_WORKER_SHA = "beecd257371a7a6421079b0d8207a109969aa332";
 const CALLER_WORKER_REFERENCE =
   `    uses: Labpics-Team/lab-colors/.github/workflows/ci-worker.yml@${CALLER_WORKER_SHA}`;
 const RUNTIME_BUDGET_COMMAND = "        run: node scripts/check-wasm-size-budget.mjs";
@@ -182,12 +182,15 @@ function assertPrivateMutationDeadline(workflow) {
   assert.ok(70 > 40 + 20 + 5, "outer timeout must exceed declared budgets and teardown headroom");
 }
 
-test("Stage A keeps the public caller pinned to the pre-Stage-B immutable worker", () => {
+test("Stage B activates the public caller at the merged Stage A worker commit", () => {
   const caller = read(".github", "workflows", "ci.yml");
   assertImmutableCaller(caller);
 
   for (const mutation of [
     caller.replace(CALLER_WORKER_SHA, "0".repeat(40)),
+    caller.replace(CALLER_WORKER_SHA, "main"),
+    caller.replace(CALLER_WORKER_SHA, CALLER_WORKER_SHA.slice(0, 12)),
+    caller.replace(CALLER_WORKER_REFERENCE, ""),
     caller.replace(CALLER_WORKER_REFERENCE, `${CALLER_WORKER_REFERENCE}\n${CALLER_WORKER_REFERENCE}`),
     caller.replace(
       CALLER_WORKER_REFERENCE,
