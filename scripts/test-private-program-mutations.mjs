@@ -35,6 +35,7 @@ import {
   PRIVATE_PROGRAM_CONSUMER_PATH,
   PRIVATE_PROGRAM_WASM_PATH,
   PRIVATE_PROGRAM_WASM_SURFACE,
+  copyDeclaredCargoRegistryIndex,
   validatePrivateProgramWasmSurface,
 } from "./build-private-program.mjs";
 import { PRIVATE_PROGRAM_BROWSER_PASS_RECEIPT } from "./test-private-program-browser.mjs";
@@ -316,7 +317,11 @@ export function assertMutationSpecificBrowserFailure(definition, result) {
     .slice(assertionLine.indexOf(BROWSER_ASSERTION_PREFIX) + BROWSER_ASSERTION_PREFIX.length)
     .trim();
   if (actualAssertion !== definition.expectedBrowserAssertion) {
-    fail(`${definition.id} did not emit its mutation-specific failure evidence`);
+    fail(
+      `${definition.id} did not emit its mutation-specific failure evidence: ` +
+        `expected=${JSON.stringify(definition.expectedBrowserAssertion)} ` +
+        `actual=${JSON.stringify(actualAssertion)}`,
+    );
   }
   return true;
 }
@@ -731,23 +736,6 @@ async function copySourceWorkspace(root) {
     label: "temporary Rust source tree",
   });
   return workspace;
-}
-
-export async function copyDeclaredCargoRegistryIndex(cargoHome) {
-  const declaredCargoHome = resolve(
-    process.env.CARGO_HOME?.trim() || join(homedir(), ".cargo"),
-  );
-  const sourceIndex = resolve(declaredCargoHome, "registry", "index");
-  await assertAdmittedTree(sourceIndex, declaredCargoHome, {
-    allowContainedFileSymlinks: true,
-    label: "declared Cargo registry index",
-  });
-  await cp(sourceIndex, resolve(cargoHome, "registry", "index"), {
-    recursive: true,
-    dereference: false,
-    preserveTimestamps: true,
-    verbatimSymlinks: true,
-  });
 }
 
 async function resolveCanonicalRustExecutors(runner) {

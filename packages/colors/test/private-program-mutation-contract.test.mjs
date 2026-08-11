@@ -13,10 +13,10 @@ import {
   assertAdmittedTree,
   assertMutationSpecificBrowserFailure,
   assertPrivateProgramMutationAnchors,
-  copyDeclaredCargoRegistryIndex,
   parseMutationTimeoutPolicy,
   validateMutationWasm,
 } from "../../../scripts/test-private-program-mutations.mjs";
+import { copyDeclaredCargoRegistryIndex } from "../../../scripts/build-private-program.mjs";
 
 const EXPECTED_MUTATIONS = Object.freeze([
   [
@@ -159,7 +159,6 @@ test("isolated offline mutation builds copy the declared Cargo registry index", 
   const temporary = await mkdtemp(join(tmpdir(), "labcolors-mutation-cargo-index-"));
   const declaredCargoHome = join(temporary, "declared-cargo");
   const isolatedCargoHome = join(temporary, "isolated-cargo");
-  const previousCargoHome = process.env.CARGO_HOME;
   try {
     await mkdir(join(declaredCargoHome, "registry", "index", "registry.example"), {
       recursive: true,
@@ -168,8 +167,7 @@ test("isolated offline mutation builds copy the declared Cargo registry index", 
       join(declaredCargoHome, "registry", "index", "registry.example", "config.json"),
       "{}\n",
     );
-    process.env.CARGO_HOME = declaredCargoHome;
-    await copyDeclaredCargoRegistryIndex(isolatedCargoHome);
+    await copyDeclaredCargoRegistryIndex(isolatedCargoHome, { declaredCargoHome });
     assert.equal(
       readFileSync(
         join(isolatedCargoHome, "registry", "index", "registry.example", "config.json"),
@@ -178,8 +176,6 @@ test("isolated offline mutation builds copy the declared Cargo registry index", 
       "{}\n",
     );
   } finally {
-    if (previousCargoHome === undefined) delete process.env.CARGO_HOME;
-    else process.env.CARGO_HOME = previousCargoHome;
     await rm(temporary, { recursive: true, force: true });
   }
 });
@@ -219,7 +215,7 @@ test("a mutation kill requires its real-browser assertion and semantic marker", 
         ...killed,
         stderr: "private Program browser proof: browser assertion failed: wrong failure",
       }),
-    /mutation-specific failure evidence/u,
+    /mutation-specific failure evidence: expected=.*actual=/u,
   );
   assert.throws(
     () =>
