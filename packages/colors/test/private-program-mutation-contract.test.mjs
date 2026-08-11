@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -73,6 +73,20 @@ const CI_WORKER = readFileSync(
   new URL("../../../.github/workflows/ci-worker.yml", import.meta.url),
   "utf8",
 );
+
+const directoryLinkType = process.platform === "win32" ? "junction" : "dir";
+
+async function assertTreeContainsNoLinks(root) {
+  const pending = [root];
+  while (pending.length > 0) {
+    const directory = pending.pop();
+    for (const entry of await readdir(directory, { withFileTypes: true })) {
+      const path = join(directory, entry.name);
+      assert.equal(entry.isSymbolicLink(), false, `copied registry index contains a link: ${path}`);
+      if (entry.isDirectory()) pending.push(path);
+    }
+  }
+}
 
 test("private Program mutation IDs bind six exact source transformations", () => {
   assert.deepEqual(
@@ -174,6 +188,122 @@ test("isolated offline mutation builds copy the declared Cargo registry index", 
         "utf8",
       ),
       "{}\n",
+    );
+  } finally {
+    await rm(temporary, { recursive: true, force: true });
+  }
+});
+
+test("isolated Cargo index materializes a symlinked index root", async () => {
+  const temporary = await mkdtemp(join(tmpdir(), "labcolors-mutation-cargo-index-root-link-"));
+  const declaredCargoHome = join(temporary, "declared-cargo");
+  const physicalIndex = join(temporary, "physical-index");
+  const isolatedCargoHome = join(temporary, "isolated-cargo");
+  try {
+    await mkdir(join(declaredCargoHome, "registry"), { recursive: true });
+    await mkdir(join(physicalIndex, "registry.example"), { recursive: true });
+    await writeFile(join(physicalIndex, "registry.example", "config.json"), "{}\n");
+    await symlink(physicalIndex, join(declaredCargoHome, "registry", "index"), directoryLinkType);
+
+    await copyDeclaredCargoRegistryIndex(isolatedCargoHome, { declaredCargoHome });
+
+    const copiedIndex = join(isolatedCargoHome, "registry", "index");
+    assert.equal((await lstat(copiedIndex)).isSymbolicLink(), false);
+    await assertTreeContainsNoLinks(copiedIndex);
+  } finally {
+    await rm(temporary, { recursive: true, force: true });
+  }
+});
+
+test("isolated Cargo index accepts a symlinked declared-home ancestor", async () => {
+  const temporary = await mkdtemp(join(tmpdir(), "labcolors-mutation-cargo-index-ancestor-link-"));
+  const physicalCargoHome = join(temporary, "physical-cargo");
+  const declaredCargoHome = join(temporary, "declared-cargo-link");
+  const sourceIndex = join(physicalCargoHome, "registry", "index");
+  const isolatedCargoHome = join(temporary, "isolated-cargo");
+  try {
+    await mkdir(join(sourceIndex, "registry.example", "snapshot"), { recursive: true });
+    await writeFile(join(sourceIndex, "registry.example", "snapshot", "config.json"), "{}\n");
+    await symlink(
+      join(sourceIndex, "registry.example", "snapshot"),
+      join(sourceIndex, "registry.example", "current"),
+      directoryLinkType,
+    );
+    await symlink(physicalCargoHome, declaredCargoHome, directoryLinkType);
+
+    await copyDeclaredCargoRegistryIndex(isolatedCargoHome, { declaredCargoHome });
+
+    assert.equal(
+      readFileSync(
+        join(isolatedCargoHome, "registry", "index", "registry.example", "current", "config.json"),
+        "utf8",
+      ),
+      "{}\n",
+    );
+  } finally {
+    await rm(temporary, { recursive: true, force: true });
+  }
+});
+
+test("isolated Cargo index materializes contained source links", async () => {
+  const temporary = await mkdtemp(join(tmpdir(), "labcolors-mutation-cargo-index-target-links-"));
+  const declaredCargoHome = join(temporary, "declared-cargo");
+  const sourceIndex = join(declaredCargoHome, "registry", "index");
+  const isolatedCargoHome = join(temporary, "isolated-cargo");
+  try {
+    await mkdir(join(sourceIndex, "registry.example", "snapshot"), { recursive: true });
+    await writeFile(join(sourceIndex, "registry.example", "snapshot", "config.json"), "{}\n");
+    await symlink(
+      join(sourceIndex, "registry.example", "snapshot"),
+      join(sourceIndex, "registry.example", "current"),
+      directoryLinkType,
+    );
+
+    await copyDeclaredCargoRegistryIndex(isolatedCargoHome, { declaredCargoHome });
+
+    await assertTreeContainsNoLinks(join(isolatedCargoHome, "registry", "index"));
+  } finally {
+    await rm(temporary, { recursive: true, force: true });
+  }
+});
+
+test("isolated Cargo index rejects a source link escaping the declared index", async () => {
+  const temporary = await mkdtemp(join(tmpdir(), "labcolors-mutation-cargo-index-escape-"));
+  const declaredCargoHome = join(temporary, "declared-cargo");
+  const sourceIndex = join(declaredCargoHome, "registry", "index");
+  const outside = join(temporary, "outside-index");
+  const isolatedCargoHome = join(temporary, "isolated-cargo");
+  try {
+    await mkdir(join(sourceIndex, "registry.example"), { recursive: true });
+    await mkdir(outside, { recursive: true });
+    await writeFile(join(outside, "config.json"), "{}\n");
+    await symlink(outside, join(sourceIndex, "registry.example", "escape"), directoryLinkType);
+
+    await assert.rejects(
+      copyDeclaredCargoRegistryIndex(isolatedCargoHome, { declaredCargoHome }),
+      /symlink resolves outside the declared Cargo index/u,
+    );
+  } finally {
+    await rm(temporary, { recursive: true, force: true });
+  }
+});
+
+test("isolated Cargo index rejects a dangling source link", async () => {
+  const temporary = await mkdtemp(join(tmpdir(), "labcolors-mutation-cargo-index-dangling-"));
+  const declaredCargoHome = join(temporary, "declared-cargo");
+  const sourceIndex = join(declaredCargoHome, "registry", "index");
+  const isolatedCargoHome = join(temporary, "isolated-cargo");
+  try {
+    await mkdir(join(sourceIndex, "registry.example"), { recursive: true });
+    await symlink(
+      join(sourceIndex, "missing"),
+      join(sourceIndex, "registry.example", "dangling"),
+      directoryLinkType,
+    );
+
+    await assert.rejects(
+      copyDeclaredCargoRegistryIndex(isolatedCargoHome, { declaredCargoHome }),
+      /registry index symlink is dangling/u,
     );
   } finally {
     await rm(temporary, { recursive: true, force: true });

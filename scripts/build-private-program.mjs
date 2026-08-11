@@ -950,8 +950,14 @@ export async function copyDeclaredCargoRegistryIndex(
 ) {
   const sourceIndex = resolve(declaredCargoHome, "registry", "index");
   const targetIndex = resolve(cargoHome, "registry", "index");
-  await assertRegistryIndexLinksContained(sourceIndex);
-  await cp(sourceIndex, targetIndex, { recursive: true });
+  let canonicalSourceIndex;
+  try {
+    canonicalSourceIndex = await realpath(sourceIndex);
+  } catch (error) {
+    fail(`cannot resolve declared Cargo registry index ${sourceIndex}: ${error.message}`);
+  }
+  await assertRegistryIndexLinksContained(canonicalSourceIndex);
+  await cp(canonicalSourceIndex, targetIndex, { recursive: true, dereference: true });
 }
 
 async function assertRegistryIndexLinksContained(root) {
