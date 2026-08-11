@@ -12,6 +12,8 @@ import { dirname, join, resolve } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 
+import { chromeArguments } from "./javascript-source-contract.mjs";
+
 const here = dirname(fileURLToPath(import.meta.url));
 const root = resolve(here, "../../..");
 const read = (...parts) => readFileSync(join(root, ...parts), "utf8");
@@ -266,11 +268,16 @@ test("worker binds the browser proof to the exact verified tarball bytes", () =>
 
 test("private Program browser proof owns the CI Chrome launch invariant", () => {
   const browserProof = read("scripts", "test-private-program-browser.mjs");
-  assert.match(
-    browserProof,
-    /"--no-sandbox",/u,
+  assert.ok(
+    chromeArguments(browserProof).includes("--no-sandbox"),
     "the userspace CfT proof must opt out of an unavailable host sandbox",
   );
+  const flagInCommentOnly = browserProof.replace(
+    '                  "--no-sandbox",',
+    '                  // "--no-sandbox",',
+  );
+  assert.notEqual(flagInCommentOnly, browserProof);
+  assert.equal(chromeArguments(flagInCommentOnly).includes("--no-sandbox"), false);
 });
 
 test("private mutation keeps its own deadline reachable inside the wasm job", () => {
