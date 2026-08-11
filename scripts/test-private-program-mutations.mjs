@@ -733,6 +733,23 @@ async function copySourceWorkspace(root) {
   return workspace;
 }
 
+export async function copyDeclaredCargoRegistryIndex(cargoHome) {
+  const declaredCargoHome = resolve(
+    process.env.CARGO_HOME?.trim() || join(homedir(), ".cargo"),
+  );
+  const sourceIndex = resolve(declaredCargoHome, "registry", "index");
+  await assertAdmittedTree(sourceIndex, declaredCargoHome, {
+    allowContainedFileSymlinks: true,
+    label: "declared Cargo registry index",
+  });
+  await cp(sourceIndex, resolve(cargoHome, "registry", "index"), {
+    recursive: true,
+    dereference: false,
+    preserveTimestamps: true,
+    verbatimSymlinks: true,
+  });
+}
+
 async function resolveCanonicalRustExecutors(runner) {
   const rustupHome = await realpath(
     resolve(process.env.RUSTUP_HOME?.trim() || join(homedir(), ".rustup")),
@@ -1090,6 +1107,7 @@ async function executeMutationProof({ tarball, expectedSha256 }, policy) {
       mkdir(resolve(root, "cargo-home"), { recursive: true }),
       mkdir(resolve(root, "cargo-temp"), { recursive: true }),
     ]);
+    await copyDeclaredCargoRegistryIndex(resolve(root, "cargo-home"));
     const executors = await resolveCanonicalRustExecutors(runner);
     const optimizer = await resolveCanonicalOptimizer(root, runner);
     const cargo = cargoEnvironment({ workspace, root, target, executors });

@@ -13,6 +13,7 @@ import {
   assertAdmittedTree,
   assertMutationSpecificBrowserFailure,
   assertPrivateProgramMutationAnchors,
+  copyDeclaredCargoRegistryIndex,
   parseMutationTimeoutPolicy,
   validateMutationWasm,
 } from "../../../scripts/test-private-program-mutations.mjs";
@@ -152,6 +153,35 @@ test("exact source mutation rejects missing, repeated, and no-op anchors", () =>
     () => applyExactMutation("edge", { ...definition, replacement: "edge" }),
     /no-op/u,
   );
+});
+
+test("isolated offline mutation builds copy the declared Cargo registry index", async () => {
+  const temporary = await mkdtemp(join(tmpdir(), "labcolors-mutation-cargo-index-"));
+  const declaredCargoHome = join(temporary, "declared-cargo");
+  const isolatedCargoHome = join(temporary, "isolated-cargo");
+  const previousCargoHome = process.env.CARGO_HOME;
+  try {
+    await mkdir(join(declaredCargoHome, "registry", "index", "registry.example"), {
+      recursive: true,
+    });
+    await writeFile(
+      join(declaredCargoHome, "registry", "index", "registry.example", "config.json"),
+      "{}\n",
+    );
+    process.env.CARGO_HOME = declaredCargoHome;
+    await copyDeclaredCargoRegistryIndex(isolatedCargoHome);
+    assert.equal(
+      readFileSync(
+        join(isolatedCargoHome, "registry", "index", "registry.example", "config.json"),
+        "utf8",
+      ),
+      "{}\n",
+    );
+  } finally {
+    if (previousCargoHome === undefined) delete process.env.CARGO_HOME;
+    else process.env.CARGO_HOME = previousCargoHome;
+    await rm(temporary, { recursive: true, force: true });
+  }
 });
 
 test("a mutation kill requires its real-browser assertion and semantic marker", () => {
