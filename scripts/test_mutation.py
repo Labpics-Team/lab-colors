@@ -136,6 +136,28 @@ def load_publish_worker() -> tuple[str, str]:
     return workflow, publish_job
 
 
+# The publish step's `run: |` block, dedented, byte-for-byte. The step is a
+# token-bearing, security-critical contract, so the validator requires the
+# script to be EXACTLY this reviewed canonical form. No blacklist of shell
+# write mechanisms can close the rebinding class (printf -v, read, eval,
+# indirect expansion, positional indirection all evade assignment patterns);
+# exact equality rejects every deviation — a rebind, a reorder, an added
+# indirection, even a comment. Changing the step means reviewing and updating
+# this golden, never silently mutating the script.
+CANONICAL_PUBLISH_SCRIPT = (
+    "set -euo pipefail\n"
+    'actual_sha256="$(sha256sum --binary -- "$TARBALL_PATH")"\n'
+    'actual_sha256="${actual_sha256%% *}"\n'
+    'if [[ ! "$TARBALL_SHA256" =~ ^[0-9a-f]{64}$ '
+    '|| "$actual_sha256" != "$TARBALL_SHA256" ]]; then\n'
+    '  echo "verified tarball changed before npm publish" >&2\n'
+    "  exit 1\n"
+    "fi\n"
+    'npm publish --ignore-scripts --@labpics:registry=https://registry.npmjs.org '
+    '"$TARBALL_PATH"\n'
+)
+
+
 class MutationTruthTest(unittest.TestCase):
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory()
@@ -2136,6 +2158,36 @@ class MutationTruthTest(unittest.TestCase):
                 'if [[ ! "$TARBALL_SHA256" =~ ^[0-9a-f]{64}$ ',
                 1,
             ),
+            "printf -v TARBALL_PATH": script.replace(
+                'actual_sha256="$(sha256sum --binary -- "$TARBALL_PATH")"',
+                'printf -v TARBALL_PATH "/tmp/foreign.tgz"\n'
+                'actual_sha256="$(sha256sum --binary -- "$TARBALL_PATH")"',
+                1,
+            ),
+            "read -r TARBALL_PATH": script.replace(
+                'actual_sha256="$(sha256sum --binary -- "$TARBALL_PATH")"',
+                'read -r TARBALL_PATH <<< "/tmp/foreign.tgz"\n'
+                'actual_sha256="$(sha256sum --binary -- "$TARBALL_PATH")"',
+                1,
+            ),
+            "eval TARBALL_PATH rebind": script.replace(
+                'actual_sha256="$(sha256sum --binary -- "$TARBALL_PATH")"',
+                "eval 'TARBALL_PATH=/tmp/foreign.tgz'\n"
+                'actual_sha256="$(sha256sum --binary -- "$TARBALL_PATH")"',
+                1,
+            ),
+            "indirect printf -v via name": script.replace(
+                'actual_sha256="$(sha256sum --binary -- "$TARBALL_PATH")"',
+                'name=TARBALL_PATH\nprintf -v "$name" "/tmp/foreign.tgz"\n'
+                'actual_sha256="$(sha256sum --binary -- "$TARBALL_PATH")"',
+                1,
+            ),
+            "positional indirection": script.replace(
+                'actual_sha256="$(sha256sum --binary -- "$TARBALL_PATH")"',
+                'set -- TARBALL_PATH\nprintf -v "$1" "/tmp/foreign.tgz"\n'
+                'actual_sha256="$(sha256sum --binary -- "$TARBALL_PATH")"',
+                1,
+            ),
             "missing hash recheck": self._drop_sha256_recheck(script),
             "injected NPM_REGISTRY": script.replace(
                 expected_publish,
@@ -2181,6 +2233,15 @@ class MutationTruthTest(unittest.TestCase):
     def _assert_publish_script_fail_closed(
         self, script: str, label: str = "publish step"
     ) -> None:
+        # The canonical golden is the complete class closer: the token-bearing
+        # script must be exactly the reviewed form, so no shell write
+        # mechanism (assignment, printf -v, read, eval, indirect or positional
+        # indirection) can rebind the verified tarball identity.
+        self.assertEqual(
+            script,
+            CANONICAL_PUBLISH_SCRIPT,
+            f"{label}: script must be exactly the canonical reviewed publish form",
+        )
         # Count npm publish COMMANDS, not prose mentioning the command: the
         # fail-closed echo message itself names the command.
         publish_lines = [
@@ -2235,11 +2296,10 @@ class MutationTruthTest(unittest.TestCase):
         )
 
     def _assert_no_tarball_rebind(self, script: str, label: str) -> None:
-        # TARBALL_PATH and TARBALL_SHA256 are bound exactly once by the step's
-        # workflow `env:` block. ANY assignment inside the publish script
-        # (bare, export/readonly/local, env-prefixed, or +=) rebinds the
-        # verified identity and makes the recheck/publish operate on a foreign
-        # path while every exact-command binding stays vacuously satisfied.
+        # Defense-in-depth diagnostics for plain assignment forms; the
+        # canonical golden above is the complete class closer (shell write
+        # mechanisms beyond plain assignments — printf -v, read, eval,
+        # indirection — can never be exhaustively blacklisted).
         rebind = re.search(
             r"(?m)(?:^|[;&|() \t])(?:export[ \t]+|readonly[ \t]+|local[ \t]+)?"
             r"TARBALL_(?:PATH|SHA256)[ \t]*\+?=",
