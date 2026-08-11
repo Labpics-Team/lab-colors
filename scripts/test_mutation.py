@@ -2118,6 +2118,24 @@ class MutationTruthTest(unittest.TestCase):
                 'actual_sha256="$(sha256sum --binary -- "$FOREIGN_PATH")"',
                 1,
             ),
+            "rebound TARBALL_PATH before recheck": script.replace(
+                'actual_sha256="$(sha256sum --binary -- "$TARBALL_PATH")"',
+                'TARBALL_PATH="/tmp/foreign.tgz"\n'
+                'actual_sha256="$(sha256sum --binary -- "$TARBALL_PATH")"',
+                1,
+            ),
+            "export-rebound TARBALL_PATH before recheck": script.replace(
+                'actual_sha256="$(sha256sum --binary -- "$TARBALL_PATH")"',
+                'export TARBALL_PATH="/tmp/foreign.tgz"\n'
+                'actual_sha256="$(sha256sum --binary -- "$TARBALL_PATH")"',
+                1,
+            ),
+            "rebound TARBALL_SHA256 before recheck": script.replace(
+                'if [[ ! "$TARBALL_SHA256" =~ ^[0-9a-f]{64}$ ',
+                'TARBALL_SHA256="deadbeef"\n'
+                'if [[ ! "$TARBALL_SHA256" =~ ^[0-9a-f]{64}$ ',
+                1,
+            ),
             "missing hash recheck": self._drop_sha256_recheck(script),
             "injected NPM_REGISTRY": script.replace(
                 expected_publish,
@@ -2186,6 +2204,7 @@ class MutationTruthTest(unittest.TestCase):
         self.assertNotIn("NPM_REGISTRY", script, f"{label}: no registry env injection")
         self.assertNotIn("--registry=", script, f"{label}: no alternate registry flag")
         self.assertNotIn("npm pack", script, f"{label}: no repack")
+        self._assert_no_tarball_rebind(script, label)
         # The pre-publish sha256 recheck must be adjacent: the same step body,
         # immediately before the publish, so no command can run between the
         # recheck and the publish. The exact commands are bound, not
@@ -2213,6 +2232,23 @@ class MutationTruthTest(unittest.TestCase):
         self.assertTrue(
             pre_publish.rstrip().endswith("fi"),
             f"{label}: publish immediately follows the recheck block",
+        )
+
+    def _assert_no_tarball_rebind(self, script: str, label: str) -> None:
+        # TARBALL_PATH and TARBALL_SHA256 are bound exactly once by the step's
+        # workflow `env:` block. ANY assignment inside the publish script
+        # (bare, export/readonly/local, env-prefixed, or +=) rebinds the
+        # verified identity and makes the recheck/publish operate on a foreign
+        # path while every exact-command binding stays vacuously satisfied.
+        rebind = re.search(
+            r"(?m)(?:^|[;&|() \t])(?:export[ \t]+|readonly[ \t]+|local[ \t]+)?"
+            r"TARBALL_(?:PATH|SHA256)[ \t]*\+?=",
+            script,
+        )
+        self.assertIsNone(
+            rebind,
+            f"{label}: TARBALL_PATH/TARBALL_SHA256 must never be rebound inside "
+            "the publish script (they are bound once by the workflow env block)",
         )
 
     def test_publish_caller_pins_admitted_worker(self) -> None:
