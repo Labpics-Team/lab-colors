@@ -52,6 +52,7 @@ import {
   POINT_SUPPORT_EVIDENCE_FILES,
   WCAG22_EVIDENCE_FILES,
 } from "../../../scripts/release-evidence.mjs";
+import { chromeArguments } from "./javascript-source-contract.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = resolve(here, "../../..");
@@ -2174,6 +2175,16 @@ test("the atomic output sink has one bounded pinned-Chrome browser gate", () => 
     assert.match(source, /const chromeDriverPath = await executableFromEnv\("CHROMEDRIVER_PATH"\);/u);
     assert.match(source, /startChromeDriver\(\s*chromeDriverPath,/u);
     assert.match(source, /binary: chromePath,/u);
+    assert.ok(
+      chromeArguments(source).includes("--no-sandbox"),
+      "the userspace CfT proof must opt out of an unavailable host sandbox",
+    );
+    const flagOutsideChromeArguments = source.replace(
+      '                  "--no-sandbox",',
+      '                  "--window-size=800,600",\n                  // "--no-sandbox"',
+    );
+    assert.notEqual(flagOutsideChromeArguments, source);
+    assert.equal(chromeArguments(flagOutsideChromeArguments).includes("--no-sandbox"), false);
     assert.match(source, /spawn\(executable, \["--port=0"\]/u);
     assert.match(
       source,

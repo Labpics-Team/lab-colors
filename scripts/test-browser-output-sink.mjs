@@ -1335,6 +1335,7 @@ async function main() {
                   "--disable-sync",
                   "--metrics-recording-only",
                   "--no-first-run",
+                  "--no-sandbox",
                   "--window-size=800,600",
                 ],
               },

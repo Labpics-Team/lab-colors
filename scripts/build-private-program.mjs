@@ -944,6 +944,22 @@ export async function assertCanonicalCargoConfigurationAbsent(options = {}) {
   return true;
 }
 
+export async function copyDeclaredCargoRegistryIndex(
+  cargoHome,
+  { declaredCargoHome = resolve(environmentValue(process.env, "CARGO_HOME")?.trim() || join(homedir(), ".cargo")) } = {},
+) {
+  const sourceIndex = resolve(declaredCargoHome, "registry", "index");
+  const targetIndex = resolve(cargoHome, "registry", "index");
+  let canonicalSourceIndex;
+  try {
+    canonicalSourceIndex = await realpath(sourceIndex);
+  } catch (error) {
+    fail(`cannot resolve declared Cargo registry index ${sourceIndex}: ${error.message}`);
+  }
+  await assertRegistryIndexLinksContained(canonicalSourceIndex);
+  await cp(canonicalSourceIndex, targetIndex, { recursive: true, dereference: true });
+}
+
 async function assertRegistryIndexLinksContained(root) {
   const pending = [root];
   while (pending.length > 0) {
@@ -984,14 +1000,8 @@ async function createBuildSandbox({ canonical }) {
   await mkdir(temporaryDirectory, { recursive: true, mode: 0o700 });
   if (canonical) {
     await mkdir(cargoHome, { recursive: true, mode: 0o700 });
-    const declaredCargoHome = resolve(
-      environmentValue(process.env, "CARGO_HOME")?.trim() || join(homedir(), ".cargo"),
-    );
-    const sourceIndex = resolve(declaredCargoHome, "registry", "index");
-    const targetIndex = resolve(cargoHome, "registry", "index");
     try {
-      await assertRegistryIndexLinksContained(sourceIndex);
-      await cp(sourceIndex, targetIndex, { recursive: true });
+      await copyDeclaredCargoRegistryIndex(cargoHome);
     } catch (error) {
       fail(`canonical build requires the declared Cargo registry index: ${error.message}`);
     }

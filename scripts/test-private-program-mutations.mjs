@@ -35,6 +35,7 @@ import {
   PRIVATE_PROGRAM_CONSUMER_PATH,
   PRIVATE_PROGRAM_WASM_PATH,
   PRIVATE_PROGRAM_WASM_SURFACE,
+  copyDeclaredCargoRegistryIndex,
   validatePrivateProgramWasmSurface,
 } from "./build-private-program.mjs";
 import { PRIVATE_PROGRAM_BROWSER_PASS_RECEIPT } from "./test-private-program-browser.mjs";
@@ -91,7 +92,7 @@ export const PRIVATE_PROGRAM_MUTATION_CASES = Object.freeze([
     ),
     replacement: "",
     expectedBrowserAssertion:
-      "PrivateProgramConsumerError: private Program run failed with status 6",
+      "PrivateProgramConsumerError: private Program consumer: run failed with status 6",
   }),
   mutation({
     id: "hard-constraint-deletion",
@@ -107,7 +108,7 @@ export const PRIVATE_PROGRAM_MUTATION_CASES = Object.freeze([
     ),
     replacement: "",
     expectedBrowserAssertion:
-      "PrivateProgramConsumerError: private Program run failed with status 6",
+      "PrivateProgramConsumerError: private Program consumer: run failed with status 6",
   }),
   mutation({
     id: "final-recheck-call-edge-deletion",
@@ -141,7 +142,7 @@ export const PRIVATE_PROGRAM_MUTATION_CASES = Object.freeze([
     ),
     replacement: lines("    let has_hard_violation = false;"),
     expectedBrowserAssertion:
-      "PrivateProgramConsumerError: private Program run failed with status 8",
+      "PrivateProgramConsumerError: private Program consumer: run failed with status 8",
   }),
   mutation({
     id: "session-observed-update-bypass",
@@ -161,7 +162,7 @@ export const PRIVATE_PROGRAM_MUTATION_CASES = Object.freeze([
       "    })",
     ).slice(0, -1),
     expectedBrowserAssertion:
-      "PrivateProgramConsumerError: shipping trace permits exactly one SetAll callback",
+      "PrivateProgramConsumerError: private Program consumer: shipping trace permits exactly one SetAll callback",
   }),
   mutation({
     id: "external-attachment-handoff-binding-bypass",
@@ -178,7 +179,7 @@ export const PRIVATE_PROGRAM_MUTATION_CASES = Object.freeze([
       "            ),",
     ),
     expectedBrowserAssertion:
-      "PrivateProgramConsumerError: private Program run failed with status 7",
+      "PrivateProgramConsumerError: private Program consumer: run failed with status 7",
   }),
   mutation({
     id: "javascript-publish-deletion",
@@ -193,7 +194,7 @@ export const PRIVATE_PROGRAM_MUTATION_CASES = Object.freeze([
     ),
     replacement: lines("    frozenPublication(outputBinding, css);"),
     expectedBrowserAssertion:
-      "Error: private Program browser fixture: computed background is the exact expected CSS literal",
+      "Error: private Program browser fixture: computed background is the exact expected CSS literal; expected \"rgba(64, 64, 64, 0.5)\", got \"rgba(0, 0, 0, 0)\"",
   }),
 ]);
 
@@ -316,7 +317,11 @@ export function assertMutationSpecificBrowserFailure(definition, result) {
     .slice(assertionLine.indexOf(BROWSER_ASSERTION_PREFIX) + BROWSER_ASSERTION_PREFIX.length)
     .trim();
   if (actualAssertion !== definition.expectedBrowserAssertion) {
-    fail(`${definition.id} did not emit its mutation-specific failure evidence`);
+    fail(
+      `${definition.id} did not emit its mutation-specific failure evidence: ` +
+        `expected=${JSON.stringify(definition.expectedBrowserAssertion)} ` +
+        `actual=${JSON.stringify(actualAssertion)}`,
+    );
   }
   return true;
 }
@@ -1090,6 +1095,7 @@ async function executeMutationProof({ tarball, expectedSha256 }, policy) {
       mkdir(resolve(root, "cargo-home"), { recursive: true }),
       mkdir(resolve(root, "cargo-temp"), { recursive: true }),
     ]);
+    await copyDeclaredCargoRegistryIndex(resolve(root, "cargo-home"));
     const executors = await resolveCanonicalRustExecutors(runner);
     const optimizer = await resolveCanonicalOptimizer(root, runner);
     const cargo = cargoEnvironment({ workspace, root, target, executors });

@@ -12,12 +12,14 @@ import { dirname, join, resolve } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 
+import { chromeArguments } from "./javascript-source-contract.mjs";
+
 const here = dirname(fileURLToPath(import.meta.url));
 const root = resolve(here, "../../..");
 const read = (...parts) => readFileSync(join(root, ...parts), "utf8");
 const normalizeNewlines = (value) => value.replaceAll("\r\n", "\n");
 
-const CALLER_WORKER_SHA = "1461bc2ed60142aed3a8723e618b883be6418156";
+const CALLER_WORKER_SHA = "beecd257371a7a6421079b0d8207a109969aa332";
 const CALLER_WORKER_REFERENCE =
   `    uses: Labpics-Team/lab-colors/.github/workflows/ci-worker.yml@${CALLER_WORKER_SHA}`;
 const RUNTIME_BUDGET_COMMAND = "        run: node scripts/check-wasm-size-budget.mjs";
@@ -182,12 +184,15 @@ function assertPrivateMutationDeadline(workflow) {
   assert.ok(70 > 40 + 20 + 5, "outer timeout must exceed declared budgets and teardown headroom");
 }
 
-test("Stage A keeps the public caller pinned to the pre-Stage-B immutable worker", () => {
+test("Stage B activates the public caller at the merged Stage A worker commit", () => {
   const caller = read(".github", "workflows", "ci.yml");
   assertImmutableCaller(caller);
 
   for (const mutation of [
     caller.replace(CALLER_WORKER_SHA, "0".repeat(40)),
+    caller.replace(CALLER_WORKER_SHA, "main"),
+    caller.replace(CALLER_WORKER_SHA, CALLER_WORKER_SHA.slice(0, 12)),
+    caller.replace(CALLER_WORKER_REFERENCE, ""),
     caller.replace(CALLER_WORKER_REFERENCE, `${CALLER_WORKER_REFERENCE}\n${CALLER_WORKER_REFERENCE}`),
     caller.replace(
       CALLER_WORKER_REFERENCE,
@@ -259,6 +264,20 @@ test("worker binds the browser proof to the exact verified tarball bytes", () =>
   const reordered = withoutBrowser.replace(chrome, `${browser}\n${chrome}`);
   assert.notEqual(reordered, worker, "browser-order mutation must alter the live workflow");
   assert.throws(() => assertWorkerOrderAndRoles(reordered));
+});
+
+test("private Program browser proof owns the CI Chrome launch invariant", () => {
+  const browserProof = read("scripts", "test-private-program-browser.mjs");
+  assert.ok(
+    chromeArguments(browserProof).includes("--no-sandbox"),
+    "the userspace CfT proof must opt out of an unavailable host sandbox",
+  );
+  const flagInCommentOnly = browserProof.replace(
+    '                  "--no-sandbox",',
+    '                  // "--no-sandbox",',
+  );
+  assert.notEqual(flagInCommentOnly, browserProof);
+  assert.equal(chromeArguments(flagInCommentOnly).includes("--no-sandbox"), false);
 });
 
 test("private mutation keeps its own deadline reachable inside the wasm job", () => {

@@ -614,6 +614,7 @@ async function main() {
                   "--disable-sync",
                   "--metrics-recording-only",
                   "--no-first-run",
+                  "--no-sandbox",
                   "--no-proxy-server",
                   "--password-store=basic",
                   "--safebrowsing-disable-auto-update",
