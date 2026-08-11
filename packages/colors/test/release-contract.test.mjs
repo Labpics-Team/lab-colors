@@ -2174,6 +2174,11 @@ test("the atomic output sink has one bounded pinned-Chrome browser gate", () => 
     assert.match(source, /const chromeDriverPath = await executableFromEnv\("CHROMEDRIVER_PATH"\);/u);
     assert.match(source, /startChromeDriver\(\s*chromeDriverPath,/u);
     assert.match(source, /binary: chromePath,/u);
+    assert.match(
+      source,
+      /"--no-sandbox",/u,
+      "the userspace CfT proof must opt out of an unavailable host sandbox",
+    );
     assert.match(source, /spawn\(executable, \["--port=0"\]/u);
     assert.match(
       source,

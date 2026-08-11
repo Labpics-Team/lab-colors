@@ -264,6 +264,15 @@ test("worker binds the browser proof to the exact verified tarball bytes", () =>
   assert.throws(() => assertWorkerOrderAndRoles(reordered));
 });
 
+test("private Program browser proof owns the CI Chrome launch invariant", () => {
+  const browserProof = read("scripts", "test-private-program-browser.mjs");
+  assert.match(
+    browserProof,
+    /"--no-sandbox",/u,
+    "the userspace CfT proof must opt out of an unavailable host sandbox",
+  );
+});
+
 test("private mutation keeps its own deadline reachable inside the wasm job", () => {
   const worker = read(".github", "workflows", "ci-worker.yml");
   assertPrivateMutationDeadline(worker);
