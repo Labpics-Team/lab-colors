@@ -274,6 +274,14 @@ jobs:
         run: python3 scripts/test_mutation.py
       - name: cargo test
         run: cargo test --workspace --locked
+      # The private-fixture lifecycle/dispose tests in private_fixture.rs are
+      # feature-gated (`#[cfg(feature = "private-fixture")]`), so the default
+      # `cargo test --workspace` step above never compiles them. They must run
+      # on their own required step or CI silently drops the resource-ownership
+      # and two-phase-dispose proofs. `--locked` keeps the same lockfile
+      # contract as every other cargo command in this workflow.
+      - name: cargo test private-fixture feature
+        run: cargo test -p labcolors-core --lib --features private-fixture --locked
       - name: exhaustive 24-bit family membership oracle
         shell: bash
         run: |
@@ -426,7 +434,9 @@ jobs:
   wasm:
     name: wasm build + headless test + size
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    # Единственный источник истины для бюджетов ниже — job-level env
+    # WASM_JOB_TIMEOUT_MINUTES; литерал в timeout-minutes обязан совпадать с ним.
+    timeout-minutes: 70
     # Native Binaryen 117 не завершил wasm-opt внутри systrap до bounded timeout
     # (run 30773180841). Официальный Node transport того же release дал byte-exact
     # результат native oracle на post-bindgen input в exact production cell.
@@ -434,10 +444,24 @@ jobs:
     env:
       BINARYEN_RELEASE: version_117
       BINARYEN_NODE_SHA256: "2d5a42f2d167a7cc2b4b6664c44c5ace1690d13db4f527324f052afbad461a07"
+      # Единственный источник истины для бюджетов wasm job. 40 minutes — это
+      # объявленный pre-mutation budget; private mutation proof владеет
+      # 20 минутами, teardown — 5, и job держит ещё 5 минут scheduler headroom
+      # (40 + 20 + 5 + 5 = 70 = timeout-minutes выше). Литерал timeout-minutes
+      # обязан совпадать с WASM_JOB_TIMEOUT_MINUTES, а deadline-ledger ниже
+      # выводится из него.
+      WASM_JOB_TIMEOUT_MINUTES: "70"
+      WASM_PRE_MUTATION_BUDGET_MINUTES: "40"
+      WASM_PRIVATE_MUTATION_BUDGET_MINUTES: "20"
+      WASM_JOB_HEADROOM_MINUTES: "5"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: start wasm job deadline ledger
+        run: |
+          set -euo pipefail
+          printf 'WASM_JOB_STARTED_EPOCH=%s\n' "$(date +%s)" >> "$GITHUB_ENV"
       - name: toolchain env (runner.temp)
         # runner-контекст недоступен в job-level env — только в шагах; поэтому
         # RUSTUP_HOME/CARGO_HOME назначаются здесь через GITHUB_ENV. Смысл тот
@@ -560,6 +584,24 @@ jobs:
         id: verified-release
         working-directory: packages/colors
         run: npm run release:verify
+      - name: enforce measured private Program optimized WASM budget
+        # release:verify is the canonical producer of this optimized private
+        # artifact. The separate budget cannot accidentally measure the public
+        # runtime build above, and a missing first Linux measurement fails closed.
+        run: node scripts/check-private-program-wasm-size-budget.mjs
+      - name: bind verified npm tarball SHA-256
+        id: verified-release-identity
+        env:
+          VERIFIED_TARBALL: ${{ steps.verified-release.outputs.tarball }}
+        run: |
+          set -euo pipefail
+          test -f "$VERIFIED_TARBALL"
+          tarball_sha256="$(sha256sum --binary -- "$VERIFIED_TARBALL" | cut --delimiter=' ' --fields=1)"
+          if [[ ! "$tarball_sha256" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "verified tarball digest is not lowercase SHA-256" >&2
+            exit 1
+          fi
+          printf 'sha256=%s\n' "$tarball_sha256" >> "$GITHUB_OUTPUT"
       # Upload the already verified release input before the pinned browser
       # dependency is fetched. A Chrome outage therefore cannot destroy the
       # evidence, while this `wasm` job still has to finish successfully before
@@ -779,8 +821,43 @@ jobs:
         run: |
           set -euo pipefail
           node scripts/test-browser-output-sink.mjs
+      - name: "@labpics/colors: private Program proof from verified tarball in real browser"
+        env:
+          LAB_COLORS_BROWSER_PROOF_TIMEOUT_MS: "60000"
+          VERIFIED_TARBALL: ${{ steps.verified-release.outputs.tarball }}
+          VERIFIED_TARBALL_SHA256: ${{ steps.verified-release-identity.outputs.sha256 }}
+        run: |
+          set -euo pipefail
+          node scripts/test-private-program-browser.mjs "$VERIFIED_TARBALL" "$VERIFIED_TARBALL_SHA256"
       - name: wasm-pack test (headless chrome)
         # Chrome is provisioned above; the parity smoke runs against native
         # resolve_set inside the same wasm runtime. D1 default from the chapter.
         run: |
           wasm-pack test --headless --chrome --chromedriver "$CHROMEDRIVER_PATH" crates/labcolors-wasm --locked
+      - name: assert private mutation deadline headroom
+        run: |
+          set -euo pipefail
+          now="$(date +%s)"
+          elapsed="$((now - WASM_JOB_STARTED_EPOCH))"
+          if (( elapsed < 0 || elapsed > WASM_PRE_MUTATION_BUDGET_MINUTES * 60 )); then
+            echo "pre-mutation wasm budget exceeded: elapsed=${elapsed}s budget=${WASM_PRE_MUTATION_BUDGET_MINUTES}m" >&2
+            exit 1
+          fi
+          remaining="$((WASM_JOB_TIMEOUT_MINUTES * 60 - elapsed))"
+          required="$(((WASM_PRIVATE_MUTATION_BUDGET_MINUTES + WASM_JOB_HEADROOM_MINUTES) * 60))"
+          if (( remaining < required )); then
+            echo "private mutation lacks declared headroom: remaining=${remaining}s required=${required}s" >&2
+            exit 1
+          fi
+      - name: "@labpics/colors: private Program packed-browser mutation proof"
+        env:
+          LAB_COLORS_BROWSER_PROOF_TIMEOUT_MS: "60000"
+          LAB_COLORS_PRIVATE_MUTATION_CHILD_TIMEOUT_MS: "180000"
+          VERIFIED_TARBALL: ${{ steps.verified-release.outputs.tarball }}
+          VERIFIED_TARBALL_SHA256: ${{ steps.verified-release-identity.outputs.sha256 }}
+        run: |
+          set -euo pipefail
+          # Overall mutation deadline derives from the single wasm-job budget
+          # source above, never from a duplicated literal.
+          export LAB_COLORS_PRIVATE_MUTATION_TIMEOUT_MS="$((WASM_PRIVATE_MUTATION_BUDGET_MINUTES * 60000))"
+          node scripts/test-private-program-mutations.mjs "$VERIFIED_TARBALL" "$VERIFIED_TARBALL_SHA256"

@@ -17,11 +17,15 @@ use crate::program_session::{
     CoreProgramConstraintInvocationV1, CoreProgramEvaluatorsV1, CoreProgramV1,
     DeclaredJointSelectionV1, FinitePaintDomainV1, JointCandidateStateV1, ObservationGroup,
     Occurrence, OpacityInput, OutputBinding, OutputSlotId, Paint, PointPresentationRootV1,
-    PointPresentationTargetV1, PresentationRootId, Program, ProgramContentIdentityV7, Source,
+    PointPresentationTargetV1, PresentationRootId, Program, ProgramContentIdentityV8, Source,
     SourceId, Surface, Target, TargetCandidateChoiceV1, TargetCandidateId, TargetCandidateV1,
     TargetId,
 };
 use crate::relation::DirectedRelationV1;
+use crate::selection_release::{
+    MaterialisedSelectionV1, SelectionCandidateKeyV1, SelectionReleaseV1,
+    admit_selection_release_v1, materialise_joint_selection_v1,
+};
 use crate::wcag22::Wcag22CriterionV1;
 
 fn signal(value: [u8; 3]) -> ColorSignal {
@@ -160,7 +164,7 @@ fn family_identity_program(
 }
 
 #[test]
-fn family_ids_and_declaration_order_are_alpha_invariant_in_v7() {
+fn family_ids_and_declaration_order_are_alpha_invariant_in_v8() {
     let first = FamilyId::new(100);
     let second = FamilyId::new(200);
     let renamed_first = FamilyId::new(900);
@@ -191,7 +195,7 @@ fn family_ids_and_declaration_order_are_alpha_invariant_in_v7() {
 }
 
 #[test]
-fn family_content_is_bound_into_v7_identity() {
+fn family_content_is_bound_into_v8_identity() {
     let first = FamilyId::new(100);
     let second = FamilyId::new(200);
     let baseline = family_identity_program(
@@ -229,7 +233,7 @@ fn family_content_is_bound_into_v7_identity() {
 }
 
 #[test]
-fn constraint_family_binding_topology_is_bound_into_v7_identity() {
+fn constraint_family_binding_topology_is_bound_into_v8_identity() {
     let first = FamilyId::new(100);
     let second = FamilyId::new(200);
     let declarations = vec![
@@ -253,7 +257,7 @@ fn constraint_family_binding_topology_is_bound_into_v7_identity() {
 }
 
 #[test]
-fn shared_and_duplicated_equal_families_have_distinct_v7_identity() {
+fn shared_and_duplicated_equal_families_have_distinct_v8_identity() {
     let first = FamilyId::new(100);
     let second = FamilyId::new(200);
     let members = vec![[0x20, 0x40, 0x60], [0x80, 0x60, 0x40]];
@@ -495,7 +499,7 @@ fn presentation_topology_ignores_root_names_and_declaration_order() {
 }
 
 #[test]
-fn presentation_root_terminal_relation_changes_v7_identity() {
+fn presentation_root_terminal_relation_changes_v8_identity() {
     let ids = canonical_full_ids();
     let root = PresentationRootId::new(1);
     let first = full_program(ids, false, FullMutation::None)
@@ -516,7 +520,7 @@ fn presentation_root_terminal_relation_changes_v7_identity() {
 }
 
 #[test]
-fn presentation_target_relation_and_multiplicity_change_v7_identity() {
+fn presentation_target_relation_and_multiplicity_change_v8_identity() {
     let ids = canonical_full_ids();
     let root = PresentationRootId::new(1);
     let nested_target = full_program(ids, false, FullMutation::None)
@@ -558,7 +562,7 @@ fn presentation_target_relation_and_multiplicity_change_v7_identity() {
 }
 
 #[test]
-fn canonical_v7_digest_is_cross_platform_golden() {
+fn canonical_v8_digest_is_cross_platform_golden() {
     let ids = FixedIds {
         sources: [SourceId::new(10), SourceId::new(20)],
         targets: [TargetId::new(30), TargetId::new(40)],
@@ -579,12 +583,12 @@ fn canonical_v7_digest_is_cross_platform_golden() {
     .compile()
     .unwrap();
 
-    let identity: ProgramContentIdentityV7 = compiled.content_identity();
+    let identity: ProgramContentIdentityV8 = compiled.content_identity();
     assert_eq!(
         identity.as_bytes(),
         &[
-            154, 204, 81, 85, 156, 9, 26, 195, 87, 171, 96, 24, 34, 25, 217, 167, 60, 142, 99, 146,
-            3, 34, 238, 113, 105, 97, 144, 203, 111, 224, 244, 136,
+            94, 214, 174, 159, 139, 60, 138, 90, 242, 92, 158, 76, 153, 97, 208, 124, 207, 174, 28,
+            202, 158, 215, 146, 193, 71, 101, 104, 48, 179, 241, 170, 156,
         ]
     );
 }
@@ -996,8 +1000,8 @@ fn canonical_full_ids() -> FullIds {
 }
 
 #[test]
-fn complete_program_schema_v7_digest_is_cross_platform_golden() {
-    // Вместе с fixed golden этот Program содержит каждый V7 vertex/edge tag,
+fn complete_program_schema_v8_digest_is_cross_platform_golden() {
+    // Вместе с fixed golden этот Program содержит каждый V8 vertex/edge tag,
     // все constraint topology и оба режима. Случайная смена кодировки требует
     // явной смены версии, а не тихого перевыпуска прежнего content address.
     let compiled = full_program(
@@ -1026,8 +1030,8 @@ fn complete_program_schema_v7_digest_is_cross_platform_golden() {
     assert_eq!(
         compiled.content_identity().as_bytes(),
         &[
-            7, 48, 234, 107, 255, 142, 19, 44, 100, 188, 151, 23, 132, 32, 125, 8, 223, 146, 164,
-            87, 8, 134, 38, 127, 130, 32, 197, 17, 118, 227, 166, 95,
+            146, 121, 82, 10, 253, 244, 184, 221, 77, 198, 219, 37, 215, 66, 5, 155, 57, 56, 28,
+            28, 86, 12, 217, 252, 66, 255, 127, 109, 112, 87, 28, 26,
         ]
     );
 }
@@ -1481,6 +1485,36 @@ fn finite_program(reverse_order: bool) -> CoreProgramV1 {
     finite_program_with_opacity(reverse_order, 1.0)
 }
 
+fn finite_materialised_selection(revision: u64) -> MaterialisedSelectionV1 {
+    let target = TargetId::new(2);
+    let first = TargetCandidateId::new(3);
+    let second = TargetCandidateId::new(4);
+    let key = |bytes: &[u8]| SelectionCandidateKeyV1::new(bytes.to_vec().into_boxed_slice());
+    let release = SelectionReleaseV1::new(
+        revision,
+        vec![
+            vec![key(b"first")].into_boxed_slice(),
+            vec![key(b"second")].into_boxed_slice(),
+        ]
+        .into_boxed_slice(),
+    );
+    let admitted = admit_selection_release_v1(release).expect("finite test release must admit");
+    materialise_joint_selection_v1(
+        &admitted,
+        &[
+            (
+                JointCandidateStateV1::new(vec![TargetCandidateChoiceV1::new(target, second)]),
+                key(b"second"),
+            ),
+            (
+                JointCandidateStateV1::new(vec![TargetCandidateChoiceV1::new(target, first)]),
+                key(b"first"),
+            ),
+        ],
+    )
+    .expect("complete finite test bindings must materialise")
+}
+
 fn finite_program_with_permuted_source_colors(swap_source_signals: bool) -> CoreProgramV1 {
     let sources = [SourceId::new(1), SourceId::new(2)];
     let target = TargetId::new(3);
@@ -1610,7 +1644,21 @@ fn content_identity_retains_the_explicit_joint_state_order() {
 }
 
 #[test]
-fn finite_candidate_opacity_is_part_of_v7_content_identity() {
+fn content_identity_binds_the_exact_selection_release_even_when_order_is_equal() {
+    let first = finite_program(false)
+        .replace_materialised_joint_selection_for_test(finite_materialised_selection(7))
+        .compile()
+        .unwrap();
+    let second = finite_program(false)
+        .replace_materialised_joint_selection_for_test(finite_materialised_selection(8))
+        .compile()
+        .unwrap();
+
+    assert_ne!(first.content_identity(), second.content_identity());
+}
+
+#[test]
+fn finite_candidate_opacity_is_part_of_v8_content_identity() {
     let quarter = finite_program_with_opacity(false, 0.25).compile().unwrap();
     let half = finite_program_with_opacity(false, 0.5).compile().unwrap();
 

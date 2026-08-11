@@ -1464,10 +1464,11 @@ fn observed<'a>(revision: u64, scenarios: &'a [ScenarioV1<'a>]) -> UpdateV1<'a> 
 }
 
 fn contract_error<L>(
-    result: Result<Attachment<L::Closed>, AttachmentCreateFailureV2<L>>,
+    result: Result<Attachment<L::Writer>, AttachmentCreateFailureV2<L>>,
 ) -> AttachmentCreateErrorV1<L::OutputId>
 where
     L: UnboundPointSinkLeaseV1,
+    L::Writer: ClosedPointSinkLeaseV1<OutputId = L::OutputId>,
 {
     let failure = match result {
         Ok(_) => panic!("cold contract error was expected"),
@@ -2150,11 +2151,11 @@ fn source_guards_keep_the_post_install_tail_destructor_free() {
         .find("PreparedAttachmentBindingsV1::try_new(")
         .expect("all fallible Core preparation must precede host admission");
     let admission = attachment_source
-        .find("sink.try_admit_closed(permit)")
+        .find("sink.try_admit_writer(permit)")
         .expect("Attachment must cross one closed admission seam");
     assert!(cold_prepare < admission);
     let post_admission_function = attachment_source
-        .split("fn from_closed_admission(")
+        .split("fn from_admission(")
         .nth(1)
         .expect("post-admission построение должно иметь отдельную типизированную функцию");
     let post_admission_signature = post_admission_function
@@ -2186,7 +2187,7 @@ fn source_guards_keep_the_post_install_tail_destructor_free() {
     assert!(post_admission.contains("admission.into_parts()"));
     assert!(!post_admission.contains(".current_stamp("));
     assert!(attachment_source.contains("fn close_before_release(&mut self);"));
-    assert!(attachment_source.contains("self.sink.close_before_release();"));
+    assert!(attachment_source.contains("self.state.sink.close_before_release();"));
 
     assert!(
         attachment_source.contains("transition.commit_deferred()"),
@@ -2243,19 +2244,16 @@ fn source_guards_keep_the_post_install_tail_destructor_free() {
     );
 
     let in_memory_sink = support_source
-        .split("impl ClosedPointSinkLeaseV1 for ClosedInMemoryPointSinkLeaseV1 {")
+        .split("impl PointSinkWriterV1 for ClosedInMemoryPointSinkLeaseV1 {")
         .nth(1)
-        .expect("in-memory test sink must implement the closed lease")
-        .split("impl PreparedPointSinkWriteV1 for InMemoryPreparedPointSinkWriteV1")
+        .expect("in-memory test sink must implement the common writer")
+        .split("impl ClosedPointSinkLeaseV1 for ClosedInMemoryPointSinkLeaseV1")
         .next()
-        .expect("closed-lease implementation must precede prepared-write implementation");
+        .expect("writer implementation must precede closed-lease release");
     let sink_prepare = in_memory_sink
         .split("fn prepare<'lease>(")
         .nth(1)
-        .expect("in-memory test sink must implement prepare")
-        .split("fn close_before_release")
-        .next()
-        .expect("prepare body must precede close implementation");
+        .expect("in-memory test sink must implement prepare");
     assert!(
         sink_prepare
             .find("drop(self.retired.take())")

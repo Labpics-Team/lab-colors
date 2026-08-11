@@ -27,6 +27,22 @@ npm install @labpics/colors
 npm run build   # → pkg/ (runtime WASM)
 ```
 
+`npm test` и `npm run prepack` требуют приватный canonical-артефакт private
+Program; при его отсутствии `npm test` собирает его в hermetic-ребёнке, а
+`prepack` всегда собирает. Для этого нужны точные пины окружения (CI экспортирует
+их в `.github/workflows/ci-worker.yml`):
+
+- `RUSTUP_HOME` и `CARGO_HOME` с установленным pinned toolchain
+  `RUST_TOOLCHAIN=1.96.0` и target `wasm32-unknown-unknown`;
+- `BINARYEN_ROOT`, `BINARYEN_RELEASE=version_117`,
+  `BINARYEN_NODE_SHA256` (пин из `packages/colors/bench/wasm.json`);
+- `LANG=C`, `TMPDIR` и `PATH` без executor-оверрайдов (`RUSTFLAGS`,
+  `CARGO_INCREMENTAL`, `NODE_OPTIONS`, `RUSTC` и т.п. запрещены
+  `isCanonicalBuildEnvOverride`).
+
+Без этих пинов `npm run prepack` падает fail-closed, а `npm test` не молча
+пропускает фикстуру.
+
 Пакет экспортирует `@labpics/colors/build-metadata.json` — self-declared
 machine-readable metadata конкретной сборки: npm/core versions, exact source
 SHA, digest и SHA-256 conformance manifest/family set, а также размер и SHA-256

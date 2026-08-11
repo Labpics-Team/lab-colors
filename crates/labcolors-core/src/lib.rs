@@ -57,6 +57,9 @@ pub(crate) mod point_representation;
     )
 )]
 pub(crate) mod point_support;
+#[cfg(feature = "private-fixture")]
+#[doc(hidden)]
+mod private_fixture;
 #[expect(
     dead_code,
     reason = "the complete Program candidate remains private until terminal C7c"

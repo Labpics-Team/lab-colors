@@ -24,7 +24,7 @@
 //! [`CertificateV1::Verified`] хранит выбранное состояние, все клетки
 //! доказательства и сертифицированные Paint outputs. [`CertificateV1::Conflict`]
 //! хранит исчерпывающий конфликт по всем рассмотренным состояниям.
-//! [`ContentIdentityV7`] идентифицирует каноническое содержание, но не даёт
+//! [`ContentIdentityV8`] идентифицирует каноническое содержание, но не даёт
 //! полномочий живого [`OwnerV1`].
 
 #![forbid(unreachable_pub)]
@@ -63,19 +63,20 @@ use crate::observation::{
     ObservationError, ObservationHeadViewV1, ObservationSchemaMismatchV1, ObservationStreamId,
     Revision, ScenarioId, SchemaOrderedScenarioSourceV1, UnknownReasonId,
 };
+#[cfg(test)]
+use crate::program_session::DeclaredJointSelectionV1;
 use crate::program_session::{
     CompiledCoreProgramV1, CompositionProfile, ConstraintId, ConstraintInvocation,
     CoreProgramConstraintInvocationV1, CoreProgramDraftErrorV1, CoreProgramDraftV1,
     CoreProgramEvaluatorErrorV1, CoreProgramEvaluatorsV1, CoreProgramPassEvidenceV1,
-    CoreProgramViolationEvidenceV1, DeclaredJointSelectionV1,
-    DeclaredSrgb8CleanSetPassV1 as CoreDeclaredSrgb8CleanSetPassV1,
+    CoreProgramViolationEvidenceV1, DeclaredSrgb8CleanSetPassV1 as CoreDeclaredSrgb8CleanSetPassV1,
     DeclaredSrgb8CleanSetViolationV1 as CoreDeclaredSrgb8CleanSetViolationV1,
     FinitePaintDomainAdmissionErrorV1, FinitePaintDomainV1 as CoreFinitePaintDomainV1,
     JointCandidateStateV1, Occurrence, OpacityInput, OutputBinding, OutputSlotId, Paint,
     PointPresentationRootV1, PointPresentationTargetV1, PresentationRootId, ProgramCompileError,
     ProgramConflictV1, ProgramConstraintCellV1, ProgramConstraintPassEvidenceV1,
     ProgramConstraintResultV1, ProgramConstraintSubjectV1, ProgramConstraintViolationEvidenceV1,
-    ProgramContentIdentityV7, ProgramIntrinsicPaintBindingV1, ProgramIntrinsicUnaryPassEvidenceV1,
+    ProgramContentIdentityV8, ProgramIntrinsicPaintBindingV1, ProgramIntrinsicUnaryPassEvidenceV1,
     ProgramIntrinsicUnaryViolationEvidenceV1, ProgramPaintOutputV1,
     ProgramRelationMemberDecisionV1, ProgramRelationMemberEvidenceV1, ProgramReportV1,
     ProgramSessionEvaluationError, ProgramSessionInstantiateError, ProgramSessionPlan,
@@ -86,6 +87,7 @@ use crate::program_session::{
 #[cfg(test)]
 pub(crate) use crate::relation::DirectedRelationErrorV1;
 pub(crate) use crate::relation::DirectedRelationV1;
+use crate::selection_release::{MaterialisedSelectionV1, SelectionReleaseIdentityV1};
 use crate::session::{
     PreparedSessionTransition, Session, SessionState, SessionUpdateError, SessionView,
 };
@@ -1453,15 +1455,26 @@ impl DraftV1 {
         self
     }
 
-    /// Один раз задаёт полный порядок совместных состояний конечных целей.
+    /// Только тестовый шов совместимости для фикстур, созданных до `SelectionRelease`.
+    #[cfg(test)]
     pub(crate) fn set_joint_selection(
         &mut self,
         states: Vec<JointStateV1>,
     ) -> Result<&mut Self, DraftErrorV1> {
+        let order =
+            DeclaredJointSelectionV1::new(states.into_iter().map(|state| state.0).collect());
+        self.set_materialised_joint_selection(
+            crate::selection_release::materialise_declared_joint_selection_for_test(order),
+        )
+    }
+
+    /// Принимает полный порядок, материализованный допущенным `SelectionRelease`.
+    pub(crate) fn set_materialised_joint_selection(
+        &mut self,
+        selection: MaterialisedSelectionV1,
+    ) -> Result<&mut Self, DraftErrorV1> {
         self.inner
-            .set_joint_selection(DeclaredJointSelectionV1::new(
-                states.into_iter().map(|state| state.0).collect(),
-            ))
+            .set_materialised_joint_selection(selection)
             .map_err(|error| match error {
                 CoreProgramDraftErrorV1::JointSelectionAlreadyDeclared => {
                     DraftErrorV1::JointSelectionAlreadyDeclared
@@ -1832,8 +1845,14 @@ impl OwnerV1 {
     ///
     /// Identity доступна до первого update, но не заменяет полномочия этой
     /// конкретной owner-эпохи.
-    pub(crate) fn content_identity(&self) -> ContentIdentityV7 {
-        ContentIdentityV7::from_core(self.compiled.content_identity())
+    pub(crate) fn content_identity(&self) -> ContentIdentityV8 {
+        ContentIdentityV8::from_core(self.compiled.content_identity())
+    }
+
+    /// Точный авторский `SelectionRelease` конечного Program; у fixed-only
+    /// Program нет полномочий выбора.
+    pub(crate) fn selection_release_identity(&self) -> Option<SelectionReleaseIdentityV1> {
+        self.compiled.selection_release_identity()
     }
 
     /// Вычисляет верхние границы клеток для prospective Observed-update.
@@ -2214,10 +2233,10 @@ impl<'session> PreparedSessionTransitionV1<'session> {
 /// Identity не идентифицирует owner-эпоху и не даёт runtime-полномочий.
 #[repr(transparent)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(crate) struct ContentIdentityV7([u8; 32]);
+pub(crate) struct ContentIdentityV8([u8; 32]);
 
-impl ContentIdentityV7 {
-    const fn from_core(value: ProgramContentIdentityV7) -> Self {
+impl ContentIdentityV8 {
+    const fn from_core(value: ProgramContentIdentityV8) -> Self {
         Self(*value.as_bytes())
     }
 
@@ -2235,8 +2254,12 @@ pub(crate) struct VerifiedCertificateV1<'a> {
 
 impl<'a> VerifiedCertificateV1<'a> {
     /// Возвращает identity скомпилированного содержания.
-    pub(crate) const fn content_identity(self) -> ContentIdentityV7 {
-        ContentIdentityV7::from_core(self.inner.report().content_identity())
+    pub(crate) const fn content_identity(self) -> ContentIdentityV8 {
+        ContentIdentityV8::from_core(self.inner.report().content_identity())
+    }
+
+    pub(crate) const fn selection_release_identity(self) -> Option<SelectionReleaseIdentityV1> {
+        self.inner.report().selection_release_identity()
     }
 
     /// Возвращает точное наблюдение, на котором выдан сертификат.
@@ -2281,8 +2304,12 @@ pub(crate) struct ConflictCertificateV1<'a> {
 
 impl<'a> ConflictCertificateV1<'a> {
     /// Возвращает identity скомпилированного содержания.
-    pub(crate) const fn content_identity(self) -> ContentIdentityV7 {
-        ContentIdentityV7::from_core(self.inner.report().content_identity())
+    pub(crate) const fn content_identity(self) -> ContentIdentityV8 {
+        ContentIdentityV8::from_core(self.inner.report().content_identity())
+    }
+
+    pub(crate) const fn selection_release_identity(self) -> Option<SelectionReleaseIdentityV1> {
+        self.inner.report().selection_release_identity()
     }
 
     /// Возвращает точное наблюдение, вызвавшее конфликт.
@@ -2331,10 +2358,17 @@ impl<'a> CertificateV1<'a> {
     }
 
     /// Возвращает identity скомпилированного содержания.
-    pub(crate) const fn content_identity(self) -> ContentIdentityV7 {
+    pub(crate) const fn content_identity(self) -> ContentIdentityV8 {
         match self {
             Self::Verified(value) => value.content_identity(),
             Self::Conflict(value) => value.content_identity(),
+        }
+    }
+
+    pub(crate) const fn selection_release_identity(self) -> Option<SelectionReleaseIdentityV1> {
+        match self {
+            Self::Verified(value) => value.selection_release_identity(),
+            Self::Conflict(value) => value.selection_release_identity(),
         }
     }
 

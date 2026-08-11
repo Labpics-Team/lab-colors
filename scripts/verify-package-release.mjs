@@ -3,6 +3,8 @@ import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import {
   appendFile,
+  chmod,
+  lstat,
   mkdtemp,
   mkdir,
   readFile,
@@ -12,6 +14,7 @@ import {
 import { tmpdir } from "node:os";
 import {
   basename,
+  dirname,
   isAbsolute,
   join,
   relative,
@@ -22,8 +25,22 @@ import {
 import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 
+import { atomicWriteGeneratedFile } from "./atomic-write.mjs";
 import { workspaceVersion } from "./cargo-workspace.mjs";
-import { PACKAGE_DIR, REPO_ROOT, prepareNpmPackage } from "./prepare-npm-package.mjs";
+import {
+  PRIVATE_PROGRAM_CONSUMER_PATH,
+  PRIVATE_PROGRAM_METADATA_PATH,
+  PRIVATE_PROGRAM_ROLE,
+  PRIVATE_PROGRAM_SYMBOL_PREFIX,
+  PRIVATE_PROGRAM_WASM_PATH,
+} from "./build-private-program.mjs";
+import { runCanonicalPrivateProgramBuild } from "./run-canonical-private-program-build.mjs";
+import {
+  PACKAGE_DIR,
+  REPO_ROOT,
+  prepareNpmPackage,
+  verifiedSourceSha,
+} from "./prepare-npm-package.mjs";
 import {
   NUMERICAL_EVIDENCE_FILES,
   PACKED_NUMERICAL_EVIDENCE_PATHS,
@@ -47,6 +64,11 @@ const RELEASE_MANIFEST = resolve(RELEASE_DIR, "release-manifest.json");
 const PACKAGE_JSON = resolve(PACKAGE_DIR, "package.json");
 const PACKAGE_LOCK = resolve(PACKAGE_DIR, "package-lock.json");
 const BUILD_METADATA = resolve(PACKAGE_DIR, "build-metadata.json");
+const PRIVATE_PROGRAM_METADATA = resolve(PACKAGE_DIR, PRIVATE_PROGRAM_METADATA_PATH);
+const PRIVATE_PROGRAM_CONSUMER = resolve(PACKAGE_DIR, PRIVATE_PROGRAM_CONSUMER_PATH);
+const PRIVATE_PROGRAM_WASM = resolve(PACKAGE_DIR, PRIVATE_PROGRAM_WASM_PATH);
+const NPM_TARBALL_INSPECTOR = resolve(REPO_ROOT, "scripts/inspect-npm-tarball.py");
+const VERIFIED_TARBALL_DIRECTORY_PREFIX = "labcolors-release-verified-";
 const ROOT_CARGO = resolve(REPO_ROOT, "Cargo.toml");
 const CONFORMANCE_DIR = resolve(REPO_ROOT, "conformance/vectors");
 const CONFORMANCE_MANIFEST = resolve(CONFORMANCE_DIR, "manifest.json");
@@ -145,6 +167,17 @@ function npm(args, cwd = REPO_ROOT) {
   // Invoke npm's sibling JavaScript entrypoint instead, preserving an argv-only
   // boundary and avoiding shell quoting or injection.
   const invocation = npmInvocation();
+  return command(invocation.commandName, [...invocation.argsPrefix, ...args], cwd);
+}
+
+export function pythonInvocation({ platform = process.platform } = {}) {
+  return platform === "win32"
+    ? { commandName: "py", argsPrefix: ["-3"] }
+    : { commandName: "python3", argsPrefix: [] };
+}
+
+function python(args, cwd = REPO_ROOT) {
+  const invocation = pythonInvocation();
   return command(invocation.commandName, [...invocation.argsPrefix, ...args], cwd);
 }
 
@@ -504,12 +537,60 @@ export function validateBuildMetadata(
   }
 }
 
-function normalisePackPath(path) {
-  const normal = path.replaceAll("\\", "/").replace(/^\.\//u, "");
-  if (!normal || normal.startsWith("../") || normal.includes("/../")) {
-    fail(`unsafe path reported by npm pack: ${path}`);
+export function validatePrivateProgramMetadata(
+  metadata,
+  { packageJson, source, coreVersion, privateProgramBuild, artifacts },
+) {
+  const expected = {
+    schemaVersion: 1,
+    role: PRIVATE_PROGRAM_ROLE,
+    package: { name: packageJson.name, version: packageJson.version },
+    source: {
+      gitSha: source,
+      core: {
+        crate: privateProgramBuild.build.crate,
+        version: coreVersion,
+        digest: privateProgramBuild.source,
+      },
+    },
+    build: privateProgramBuild.build,
+    artifacts,
+  };
+  if (!isDeepStrictEqual(metadata, expected)) {
+    fail(
+      "private Program metadata does not exactly bind its release inputs:\n" +
+        `expected ${JSON.stringify(expected)}\n` +
+        `actual   ${JSON.stringify(metadata)}`,
+    );
   }
-  return normal;
+}
+
+export function validateRuntimeWasmIsolation(bytes) {
+  if (bytes.includes(Buffer.from(PRIVATE_PROGRAM_SYMBOL_PREFIX, "utf8"))) {
+    fail(
+      `public runtime WASM contains private Program symbol prefix ` +
+        PRIVATE_PROGRAM_SYMBOL_PREFIX,
+    );
+  }
+}
+
+function normalisePackPath(path) {
+  if (
+    typeof path !== "string" ||
+    !path ||
+    path !== path.normalize("NFC") ||
+    path.includes("\\") ||
+    path.startsWith("/") ||
+    /^[A-Za-z]:/u.test(path) ||
+    /[\u0000-\u001f\u007f]/u.test(path)
+  ) {
+    fail(`unsafe or ambiguous package path: ${path}`);
+  }
+  const segments = path.split("/");
+  if (segments.some((segment) => !segment || segment === "." || segment === "..")) {
+    fail(`non-canonical package path: ${path}`);
+  }
+  return path;
 }
 
 function exportTargets(value, into = []) {
@@ -523,27 +604,44 @@ function exportTargets(value, into = []) {
   return into;
 }
 
-function validatePackedFiles(packageJson, packResult) {
-  if (!Array.isArray(packResult.files) || packResult.files.length === 0) {
-    fail("npm pack did not report a non-empty files inventory");
-  }
-
-  const actual = packResult.files.map((entry) => normalisePackPath(entry.path));
-  const duplicates = actual.filter((path, index) => actual.indexOf(path) !== index);
-  if (duplicates.length > 0) fail(`npm pack reported duplicate paths: ${duplicates.join(", ")}`);
-
+function expectedPackedFiles(packageJson) {
   const expected = new Set([
     ...REQUIRED_PACK_FILES,
     ...(packageJson.files ?? []).map(normalisePackPath),
   ]);
   for (const target of exportTargets(packageJson.exports)) expected.add(normalisePackPath(target));
-  if (typeof packageJson.types === "string") expected.add(normalisePackPath(packageJson.types));
+  if (typeof packageJson.types === "string") {
+    // npm declares the top-level types field with an explicit "./" spelling;
+    // normalise it exactly like an export target before the canonical check.
+    expected.add(normalisePackPath(packageJson.types.replace(/^\.\//u, "")));
+  }
+  return [...expected].sort((left, right) =>
+    Buffer.compare(Buffer.from(left, "utf8"), Buffer.from(right, "utf8")),
+  );
+}
+
+function validatePackedFiles(packageJson, packResult) {
+  if (!Array.isArray(packResult.files) || packResult.files.length === 0) {
+    fail("npm pack did not report a non-empty files inventory");
+  }
+
+  const actual = packResult.files.map((entry, index) => {
+    if (!Number.isSafeInteger(entry?.size) || entry.size < 0) {
+      fail(`npm pack reported an invalid byte size for files[${index}]`);
+    }
+    return normalisePackPath(entry.path);
+  });
+  const duplicates = actual.filter((path, index) => actual.indexOf(path) !== index);
+  if (duplicates.length > 0) fail(`npm pack reported duplicate paths: ${duplicates.join(", ")}`);
+
+  const expected = expectedPackedFiles(packageJson);
+  const expectedSet = new Set(expected);
 
   const actualSet = new Set(actual);
-  const missing = [...expected].filter((path) => !actualSet.has(path)).sort();
+  const missing = expected.filter((path) => !actualSet.has(path));
   if (missing.length > 0) fail(`npm tarball is missing required files: ${missing.join(", ")}`);
 
-  const undeclared = actual.filter((path) => !expected.has(path)).sort();
+  const undeclared = actual.filter((path) => !expectedSet.has(path)).sort();
   if (undeclared.length > 0) {
     fail(`npm tarball contains undeclared files: ${undeclared.join(", ")}`);
   }
@@ -553,9 +651,110 @@ function validatePackedFiles(packageJson, packResult) {
     const forbidden = segments.find((segment) => FORBIDDEN_PACK_SEGMENTS.has(segment));
     if (forbidden) fail(`npm tarball contains forbidden ${forbidden} path: ${path}`);
   }
+
+  const totalFileBytes = packResult.files.reduce((total, entry) => total + entry.size, 0);
+  if (packResult.entryCount !== actual.length || packResult.unpackedSize !== totalFileBytes) {
+    fail("npm pack summary does not exactly match its reported files inventory");
+  }
+  return { actual, expected, totalFileBytes };
 }
 
-async function packInto(destination, packageJson) {
+async function inspectNpmTarball(tarballPath, expected, packResult) {
+  const temporary = await mkdtemp(join(tmpdir(), "labcolors-npm-inventory-"));
+  const declaration = resolve(temporary, "declared-inventory.json");
+  let inspection;
+  try {
+    await writeFile(
+      declaration,
+      `${JSON.stringify({ schemaVersion: 1, files: expected })}\n`,
+      { encoding: "utf8", flag: "wx", mode: 0o600 },
+    );
+    const output = python([
+      NPM_TARBALL_INSPECTOR,
+      "--tarball",
+      tarballPath,
+      "--declared-inventory-json",
+      declaration,
+    ]);
+    try {
+      inspection = JSON.parse(output);
+    } catch (error) {
+      fail(`npm tarball inspector returned invalid JSON: ${error.message}`);
+    }
+  } finally {
+    await rm(temporary, { recursive: true, force: true });
+  }
+
+  exactKeys(
+    inspection,
+    ["schemaVersion", "verdict", "tarball", "limits", "members", "inventory"],
+    "npm tarball inspection",
+  );
+  if (inspection.schemaVersion !== 1 || inspection.verdict !== "canonical") {
+    fail("npm tarball inspector did not return its canonical schema-1 verdict");
+  }
+  exactKeys(inspection.tarball, ["bytes", "sha256"], "npm tarball inspection artifact");
+  exactKeys(
+    inspection.limits,
+    ["maxMembers", "maxTarballBytes", "maxTotalFileBytes"],
+    "npm tarball inspection limits",
+  );
+  exactKeys(
+    inspection.inventory,
+    ["files", "totalFileBytes"],
+    "npm tarball inspection inventory",
+  );
+  if (
+    !Array.isArray(inspection.members) ||
+    inspection.members.length !== expected.length ||
+    !isDeepStrictEqual(inspection.inventory.files, expected) ||
+    inspection.inventory.totalFileBytes !== packResult.unpackedSize ||
+    inspection.limits.maxMembers !== expected.length ||
+    !Number.isSafeInteger(inspection.tarball.bytes) ||
+    inspection.tarball.bytes <= 0 ||
+    !/^[0-9a-f]{64}$/u.test(inspection.tarball.sha256 ?? "")
+  ) {
+    fail("npm tarball inspection receipt differs from the declared package inventory");
+  }
+
+  const reportedByPath = new Map(
+    packResult.files.map((entry) => [normalisePackPath(entry.path), entry]),
+  );
+  for (const [index, member] of inspection.members.entries()) {
+    exactKeys(
+      member,
+      ["index", "rawPath", "normalizedPath", "type", "size", "sha256"],
+      `npm tarball member ${index}`,
+    );
+    const reported = reportedByPath.get(member.normalizedPath);
+    if (
+      member.index !== index ||
+      member.rawPath !== `package/${member.normalizedPath}` ||
+      member.type !== "file" ||
+      !Number.isSafeInteger(member.size) ||
+      member.size < 0 ||
+      !/^[0-9a-f]{64}$/u.test(member.sha256 ?? "") ||
+      reported?.size !== member.size
+    ) {
+      fail(`npm tarball member ${index} differs from npm's reported regular file`);
+    }
+  }
+
+  const bytes = await readFile(tarballPath);
+  const digest = sha256(bytes);
+  if (
+    inspection.tarball.bytes !== bytes.length ||
+    inspection.tarball.sha256 !== digest ||
+    packResult.size !== bytes.length ||
+    packResult.shasum !== createHash("sha1").update(bytes).digest("hex") ||
+    packResult.integrity !== `sha512-${createHash("sha512").update(bytes).digest("base64")}`
+  ) {
+    fail("npm tarball bytes changed or differ from npm's cryptographic pack receipt");
+  }
+  return { bytes, sha256: digest, inspection };
+}
+
+export async function packInto(destination, packageJson) {
   await mkdir(destination, { recursive: true });
   const packedJson = npm(
     ["pack", "--ignore-scripts", "--json", `--pack-destination=${destination}`, PACKAGE_DIR],
@@ -582,17 +781,49 @@ async function packInto(destination, packageJson) {
   if (!tarballName.endsWith(".tgz") || tarballName !== packResult.filename) {
     fail(`npm pack returned an unsafe tarball filename: ${packResult.filename}`);
   }
-  validatePackedFiles(packageJson, packResult);
+  const { expected } = validatePackedFiles(packageJson, packResult);
+  const path = resolve(destination, tarballName);
+  const inspected = await inspectNpmTarball(path, expected, packResult);
 
-  return { path: resolve(destination, tarballName), tarballName };
+  return { path, tarballName, expected, packResult, ...inspected };
 }
 
-async function validatePackedNumericalEvidence(tarballPath, expectedArtifacts) {
+export async function materializeVerifiedTarballSnapshot(pack) {
+  const directory = await mkdtemp(join(tmpdir(), VERIFIED_TARBALL_DIRECTORY_PREFIX));
+  let retain = false;
+  try {
+    await chmod(directory, 0o700);
+    if (!/^[0-9a-f]{64}$/u.test(pack.sha256 ?? "")) {
+      fail("verified tarball snapshot requires a lowercase SHA-256 identity");
+    }
+    const path = resolve(directory, `${pack.sha256}.tgz`);
+    await atomicWriteGeneratedFile(path, pack.bytes);
+    await chmod(path, 0o600);
+    const metadata = await lstat(path);
+    if (!metadata.isFile() || metadata.isSymbolicLink() || metadata.nlink !== 1) {
+      fail("verified tarball snapshot is not one single-link regular file");
+    }
+    const verified = await inspectNpmTarball(path, pack.expected, pack.packResult);
+    if (!verified.bytes.equals(pack.bytes) || verified.sha256 !== pack.sha256) {
+      fail("verified tarball snapshot differs from the inspected npm pack bytes");
+    }
+    retain = true;
+    return { path, bytes: verified.bytes, sha256: verified.sha256 };
+  } finally {
+    if (!retain) await rm(directory, { recursive: true, force: true });
+  }
+}
+
+async function validatePackedNumericalEvidence(tarballBytes, expectedArtifacts) {
   const extracted = await mkdtemp(join(tmpdir(), "labcolors-packed-evidence-"));
   try {
-    command("tar", ["-xzf", tarballPath, "-C", extracted]);
+    const tarballPath = resolve(extracted, "verified-package.tgz");
+    const contents = resolve(extracted, "contents");
+    await writeFile(tarballPath, tarballBytes, { flag: "wx", mode: 0o600 });
+    await mkdir(contents);
+    command("tar", ["-xzf", tarballPath, "-C", contents]);
     await validateNumericalEvidenceArtifacts(
-      resolve(extracted, "package"),
+      resolve(contents, "package"),
       expectedArtifacts,
       "npm tarball",
     );
@@ -1181,6 +1412,16 @@ await assert.rejects(
   import("@labpics/colors/sequence-identity-matches"),
   (error) => error?.code === "ERR_PACKAGE_PATH_NOT_EXPORTED",
 );
+for (const privateSubpath of [
+  "@labpics/colors/private-program/consumer.js",
+  "@labpics/colors/private-program/labcolors_private_program.wasm",
+  "@labpics/colors/private-program/build-metadata.json",
+]) {
+  await assert.rejects(
+    import(privateSubpath),
+    (error) => error?.code === "ERR_PACKAGE_PATH_NOT_EXPORTED",
+  );
+}
 const wasmPath = require.resolve("@labpics/colors/pkg/labcolors_bg.wasm");
 const metadataPath = require.resolve("@labpics/colors/build-metadata.json");
 const packagePath = require.resolve("@labpics/colors/package.json");
@@ -1896,14 +2137,18 @@ void [
 }
 
 async function verifyCleanConsumer(
-  tarballPath,
+  tarballBytes,
   packageJson,
   typescriptCompilers,
   expectedBuildMetadata,
+  expectedPrivateProgramMetadata,
+  expectedPrivateProgramArtifacts,
   expectedNumericalArtifacts,
 ) {
   const consumer = await mkdtemp(join(tmpdir(), "labcolors-release-consumer-"));
   try {
+    const tarballPath = resolve(consumer, "verified-package.tgz");
+    await writeFile(tarballPath, tarballBytes, { flag: "wx", mode: 0o600 });
     await writeFile(
       join(consumer, "package.json"),
       `${JSON.stringify({ private: true, type: "module" }, null, 2)}\n`,
@@ -1972,6 +2217,21 @@ async function verifyCleanConsumer(
     const installedBuildMetadata = await readJson(resolve(installed, "build-metadata.json"));
     if (!isDeepStrictEqual(installedBuildMetadata, expectedBuildMetadata)) {
       fail("clean-installed build metadata differs from the verified release inputs");
+    }
+    const installedPrivateProgramMetadata = await readJson(
+      resolve(installed, PRIVATE_PROGRAM_METADATA_PATH),
+    );
+    if (!isDeepStrictEqual(installedPrivateProgramMetadata, expectedPrivateProgramMetadata)) {
+      fail("clean-installed private Program metadata differs from the verified release inputs");
+    }
+    for (const [name, expected] of Object.entries(expectedPrivateProgramArtifacts)) {
+      const installedBytes = await readFile(resolve(installed, expected.path));
+      if (
+        expected.bytes !== installedBytes.length ||
+        expected.sha256 !== sha256(installedBytes)
+      ) {
+        fail(`clean-installed private Program ${name} differs from the packed release input`);
+      }
     }
 
     const runtimePath = resolve(consumer, "runtime-smoke.mjs");
@@ -2047,9 +2307,17 @@ export async function smokePackedPackage(tarballPath) {
 }
 
 export async function verifyPackageRelease() {
-  const { sourceSha: source } = await prepareNpmPackage();
-  command("python3", ["scripts/verify_wcag22_q55.py"], REPO_ROOT);
-  command("python3", ["scripts/verify_point_support_surplus.py"], REPO_ROOT);
+  const expectedSource = verifiedSourceSha();
+  // The canonical build runs in the shared hermetic child boundary so ambient
+  // caller-workflow executor overrides cannot influence it; the strict direct
+  // validator is unchanged and the child's failure propagates loudly.
+  runCanonicalPrivateProgramBuild();
+  const { sourceSha: source, privateProgramBuild } = await prepareNpmPackage();
+  if (source !== expectedSource) {
+    fail("release source HEAD changed while the private Program was built");
+  }
+  python(["scripts/verify_wcag22_q55.py"], REPO_ROOT);
+  python(["scripts/verify_point_support_surplus.py"], REPO_ROOT);
   const numericalEvidenceArtifacts = await validateNumericalEvidence();
   const wcag22Evidence = await validateWcag22Evidence(numericalEvidenceArtifacts);
 
@@ -2096,6 +2364,7 @@ export async function verifyPackageRelease() {
     if (bytes.length < 8 || !bytes.subarray(0, 4).equals(Buffer.from([0, 97, 115, 109]))) {
       fail(`${displayPath} is absent or has no WebAssembly magic header`);
     }
+    validateRuntimeWasmIsolation(bytes);
     wasm[role] = await hashedArtifact(path, displayPath);
   }
   const buildMetadataValue = await readJson(BUILD_METADATA);
@@ -2107,6 +2376,32 @@ export async function verifyPackageRelease() {
     wasm,
   });
   const buildMetadata = await hashedArtifact(BUILD_METADATA, "build-metadata.json");
+  const privateProgramWasmBytes = await readFile(PRIVATE_PROGRAM_WASM);
+  if (
+    privateProgramWasmBytes.length < 8 ||
+    !privateProgramWasmBytes.subarray(0, 4).equals(Buffer.from([0, 97, 115, 109]))
+  ) {
+    fail(`${PRIVATE_PROGRAM_WASM_PATH} is absent or has no WebAssembly magic header`);
+  }
+  const privateProgramArtifacts = {
+    consumer: await hashedArtifact(
+      PRIVATE_PROGRAM_CONSUMER,
+      PRIVATE_PROGRAM_CONSUMER_PATH,
+    ),
+    wasm: await hashedArtifact(PRIVATE_PROGRAM_WASM, PRIVATE_PROGRAM_WASM_PATH),
+  };
+  const privateProgramMetadataValue = await readJson(PRIVATE_PROGRAM_METADATA);
+  validatePrivateProgramMetadata(privateProgramMetadataValue, {
+    packageJson,
+    source,
+    coreVersion,
+    privateProgramBuild,
+    artifacts: privateProgramArtifacts,
+  });
+  const privateProgramBuildMetadata = await hashedArtifact(
+    PRIVATE_PROGRAM_METADATA,
+    PRIVATE_PROGRAM_METADATA_PATH,
+  );
 
   await rm(RELEASE_DIR, { recursive: true, force: true });
   await mkdir(RELEASE_DIR, { recursive: true });
@@ -2117,39 +2412,39 @@ export async function verifyPackageRelease() {
     const reproducedPack = await packInto(reproductionDir, packageJson);
     if (canonicalPack.tarballName !== reproducedPack.tarballName) {
       fail(
-        `independent npm pack passes produced different filenames: ` +
+        `same-executor npm pack passes produced different filenames: ` +
           `${canonicalPack.tarballName} != ${reproducedPack.tarballName}`,
       );
     }
-    const [canonicalBytes, reproducedBytes] = await Promise.all([
-      readFile(canonicalPack.path),
-      readFile(reproducedPack.path),
-    ]);
-    if (!canonicalBytes.equals(reproducedBytes)) {
-      fail("independent npm pack passes produced different tarball bytes");
+    if (!canonicalPack.bytes.equals(reproducedPack.bytes)) {
+      fail("same-executor npm pack passes produced different tarball bytes");
     }
   } finally {
     await rm(reproductionDir, { recursive: true, force: true });
   }
 
-  await validatePackedNumericalEvidence(canonicalPack.path, numericalEvidenceArtifacts);
+  await validatePackedNumericalEvidence(canonicalPack.bytes, numericalEvidenceArtifacts);
 
-  const tarball = await hashedArtifact(
-    canonicalPack.path,
-    `.release/${canonicalPack.tarballName}`,
-  );
   await verifyCleanConsumer(
-    canonicalPack.path,
+    canonicalPack.bytes,
     packageJson,
     typescriptCompilers,
     buildMetadataValue,
+    privateProgramMetadataValue,
+    privateProgramArtifacts,
     numericalEvidenceArtifacts,
   );
 
+  const verifiedTarball = await materializeVerifiedTarballSnapshot(canonicalPack);
+  const tarball = {
+    path: `.release/${basename(verifiedTarball.path)}`,
+    bytes: verifiedTarball.bytes.length,
+    sha256: verifiedTarball.sha256,
+  };
   const manifest = {
-    // V4 replaces the old point-support capsule projection with the exact
-    // whole-file semantic-cone projection and its explicit claim boundary.
-    schemaVersion: 4,
+    // V5 joins every packed private Program byte to publish provenance without
+    // changing the public runtime build-metadata contract.
+    schemaVersion: 5,
     npm: packageJson.version,
     core: coreVersion,
     wire: {
@@ -2164,7 +2459,7 @@ export async function verifyPackageRelease() {
     },
     sourceSha: source,
     reproducibility: {
-      method: "two-independent-npm-pack-passes",
+      method: "same-executor-two-pass-npm-pack",
       passes: 2,
       byteIdentical: true,
     },
@@ -2201,13 +2496,33 @@ export async function verifyPackageRelease() {
     ],
     artifacts: {
       tarball,
-      wasm: [{ role: "runtime", ...wasm.runtime }],
+      wasm: [
+        { role: "runtime", ...wasm.runtime },
+        { role: PRIVATE_PROGRAM_ROLE, ...privateProgramArtifacts.wasm },
+      ],
       buildMetadata,
+      privateProgramConsumer: {
+        role: PRIVATE_PROGRAM_ROLE,
+        buildMetadata: privateProgramBuildMetadata,
+        consumer: privateProgramArtifacts.consumer,
+      },
     },
   };
-  await writeFile(RELEASE_MANIFEST, `${JSON.stringify(manifest, null, 2)}\n`);
+  try {
+    if (
+      manifest.artifacts.tarball.path !== `.release/${verifiedTarball.sha256}.tgz` ||
+      manifest.artifacts.tarball.bytes !== verifiedTarball.bytes.length ||
+      manifest.artifacts.tarball.sha256 !== verifiedTarball.sha256
+    ) {
+      fail("release manifest does not exactly bind the verified tarball snapshot");
+    }
+    await atomicWriteGeneratedFile(RELEASE_MANIFEST, `${JSON.stringify(manifest, null, 2)}\n`);
+  } catch (error) {
+    await rm(dirname(verifiedTarball.path), { recursive: true, force: true });
+    throw error;
+  }
 
-  return { manifest: RELEASE_MANIFEST, tarball: canonicalPack.path };
+  return { manifest: RELEASE_MANIFEST, tarball: verifiedTarball.path };
 }
 
 async function writeGithubOutputs({ manifest, tarball }) {

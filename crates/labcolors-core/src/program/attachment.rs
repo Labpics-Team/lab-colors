@@ -4,6 +4,8 @@
 //! compiled owner. Поэтому runtime-update не принимает независимые owner,
 //! Session, stamp или sink handle, которые клиент мог бы перепутать.
 
+#[cfg(test)]
+use core::ops::{Deref, DerefMut};
 use core::{fmt, iter::FusedIterator, mem, num::NonZeroU64};
 
 use crate::appearance::EncodedPointPaintV1;
@@ -260,46 +262,66 @@ pub(crate) trait PreparedPointSinkWriteV1 {
     fn finish_after_session(self);
 }
 
+/// Admission-bound writer полного point-sink scope без RAII-обещания revoke.
+///
+/// Успешный [`PreparedPointSinkWriteV1::try_install`] остаётся единственным
+/// fallible effect update-транзакции. Этот порт намеренно ничего не утверждает
+/// о том, как внешний владелец освобождает scope после локального Drop.
+pub(crate) trait PointSinkWriterV1: sink_private::Sealed {
+    type OutputId: Copy + Eq;
+    type Error;
+    type Prepared<'writer>: PreparedPointSinkWriteV1<Error = Self::Error>
+    where
+        Self: 'writer;
+
+    fn binding_epoch(&self) -> PointSinkBindingEpochV1;
+
+    fn prepare<'writer>(
+        &'writer mut self,
+        intent: PointSinkIntentV1<'_, Self::OutputId>,
+    ) -> Result<Self::Prepared<'writer>, Self::Error>;
+}
+
+/// Сырой writer, который ещё не создавал Lab-output в host scope.
+pub(crate) trait UnboundPointSinkWriterV1: sink_private::Sealed + Sized {
+    type OutputId: Copy + Eq;
+    type Writer: PointSinkWriterV1<OutputId = Self::OutputId>;
+    type AdmissionError;
+
+    fn owned_output_scope(&self) -> &[Self::OutputId];
+
+    fn try_admit_writer(
+        self,
+        scope: BoundPointSinkScopePermitV1<'_, Self::OutputId>,
+    ) -> Result<PointSinkWriterAdmissionV1<Self::Writer>, PointSinkAdmissionFailureV1<Self>>;
+}
+
 /// Сырой linear lease, который ещё не создавал Lab-output в host scope.
 ///
 /// Только успешный admission атомарно устанавливает persistent closed state и
 /// превращает lease в [`ClosedPointSinkLeaseV1`]. Ошибка сохраняет прежний host
 /// state и возвращает тот же lease: fallible cleanup никогда не пересекает
 /// границу [`Attachment`].
-pub(crate) trait UnboundPointSinkLeaseV1: sink_private::Sealed + Sized {
-    type OutputId: Copy + Eq;
-    type Closed: ClosedPointSinkLeaseV1<OutputId = Self::OutputId>;
-    type AdmissionError;
-
-    /// Scope зарезервирован lease, но ещё не является Lab-output authority.
-    fn owned_output_scope(&self) -> &[Self::OutputId];
-
-    /// Последняя fallible-операция создания Attachment.
-    ///
-    /// Permit минтится только после полной compiler-backed bijection и всех
-    /// allocations. Успех обязан атомарно установить closed state, связать
-    /// новый process-local epoch со всем immutable host binding и вернуть
-    /// lease, чей Drop можно закрыть без ошибки. Ошибка не меняет host state.
-    fn try_admit_closed(
-        self,
-        scope: BoundPointSinkScopePermitV1<'_, Self::OutputId>,
-    ) -> Result<ClosedPointSinkAdmissionV1<Self::Closed>, PointSinkAdmissionFailureV1<Self>>;
+pub(crate) trait UnboundPointSinkLeaseV1: UnboundPointSinkWriterV1
+where
+    Self::Writer: ClosedPointSinkLeaseV1<OutputId = Self::OutputId>,
+{
 }
 
-/// Атомарный результат допуска: закрытый lease и первый CAS-token одной эпохи.
-pub(crate) struct ClosedPointSinkAdmissionV1<L>
+/// Атомарный результат допуска: writer и первый CAS-token одной эпохи.
+pub(crate) struct PointSinkWriterAdmissionV1<W>
 where
-    L: ClosedPointSinkLeaseV1,
+    W: PointSinkWriterV1,
 {
-    sink: L,
+    sink: W,
     initial_stamp: PointSinkStampV1,
 }
 
-impl<L> ClosedPointSinkAdmissionV1<L>
+impl<W> PointSinkWriterAdmissionV1<W>
 where
-    L: ClosedPointSinkLeaseV1,
+    W: PointSinkWriterV1,
 {
-    fn new(sink: L) -> Self {
+    fn new(sink: W) -> Self {
         let initial_stamp = PointSinkStampV1::new(0, sink.binding_epoch());
         Self {
             sink,
@@ -311,7 +333,7 @@ where
         self.initial_stamp
     }
 
-    fn into_parts(self) -> (L, PointSinkStampV1) {
+    fn into_parts(self) -> (W, PointSinkStampV1) {
         (self.sink, self.initial_stamp)
     }
 }
@@ -319,7 +341,7 @@ where
 /// Owning-отказ host admission; исходный unbound lease остаётся retryable.
 pub(crate) struct PointSinkAdmissionFailureV1<L>
 where
-    L: UnboundPointSinkLeaseV1,
+    L: UnboundPointSinkWriterV1,
 {
     cause: L::AdmissionError,
     sink: L,
@@ -327,7 +349,7 @@ where
 
 impl<L> PointSinkAdmissionFailureV1<L>
 where
-    L: UnboundPointSinkLeaseV1,
+    L: UnboundPointSinkWriterV1,
 {
     pub(crate) const fn new(cause: L::AdmissionError, sink: L) -> Self {
         Self { cause, sink }
@@ -344,26 +366,7 @@ where
 /// capability. Его Stamp обязан включать process-local binding epoch, который
 /// меняется при любом изменении realm, host root, owned scope, codec release,
 /// capability set или atomic primitive. Эти host-факты не становятся Core DTO.
-pub(crate) trait ClosedPointSinkLeaseV1: sink_private::Sealed {
-    type OutputId: Copy + Eq;
-    type Error;
-    type Prepared<'lease>: PreparedPointSinkWriteV1<Error = Self::Error>
-    where
-        Self: 'lease;
-
-    /// Неизменяемая эпоха полномочия tombstone, захваченная атомарным допуском.
-    fn binding_epoch(&self) -> PointSinkBindingEpochV1;
-
-    /// Готовит полный снимок, не сохраняя borrowed-данные patch.
-    ///
-    /// `Err` сохраняет прежние наблюдаемые snapshot, revision и Stamp и
-    /// возвращает lease с уже свободным Busy. Подготовка не публикует даже
-    /// допустимую часть нового снимка.
-    fn prepare<'lease>(
-        &'lease mut self,
-        intent: PointSinkIntentV1<'_, Self::OutputId>,
-    ) -> Result<Self::Prepared<'lease>, Self::Error>;
-
+pub(crate) trait ClosedPointSinkLeaseV1: PointSinkWriterV1 {
     /// Атомарно отзывает полный scope lease перед его освобождением.
     ///
     /// Реализация обязана быть infallible и allocation-free, даже если ни один
@@ -431,7 +434,7 @@ pub(crate) enum AttachmentCreateErrorV1<SinkOutputId> {
 /// Contract failure ещё не построил Session и возвращает оба linear input-а.
 pub(crate) struct UnpreparedAttachmentRetryV2<L>
 where
-    L: UnboundPointSinkLeaseV1,
+    L: UnboundPointSinkWriterV1,
 {
     sink: L,
     family_artifacts: FamilyArtifactBundleV2,
@@ -439,7 +442,7 @@ where
 
 impl<L> UnpreparedAttachmentRetryV2<L>
 where
-    L: UnboundPointSinkLeaseV1,
+    L: UnboundPointSinkWriterV1,
 {
     pub(crate) fn into_parts(self) -> (L, FamilyArtifactBundleV2) {
         (self.sink, self.family_artifacts)
@@ -452,7 +455,7 @@ where
 /// все cold allocation уже завершены и не запускаются снова.
 pub(crate) struct PreparedAttachmentRetryV2<L>
 where
-    L: UnboundPointSinkLeaseV1,
+    L: UnboundPointSinkWriterV1,
 {
     sink: L,
     prepared: PreparedAttachmentColdV1<L::OutputId>,
@@ -461,6 +464,7 @@ where
 impl<L> PreparedAttachmentRetryV2<L>
 where
     L: UnboundPointSinkLeaseV1,
+    L::Writer: ClosedPointSinkLeaseV1<OutputId = L::OutputId>,
     L::OutputId: Copy + Eq,
 {
     #[expect(
@@ -469,15 +473,33 @@ where
     )]
     pub(crate) fn retry(
         self,
-    ) -> Result<Attachment<L::Closed>, PreparedAttachmentAdmissionFailureV2<L>> {
-        admit_prepared_attachment(self.prepared, self.sink)
+    ) -> Result<Attachment<L::Writer>, PreparedAttachmentAdmissionFailureV2<L>> {
+        admit_prepared_state(self.prepared, self.sink).map(Attachment::from_state)
+    }
+}
+
+impl<L> PreparedAttachmentRetryV2<L>
+where
+    L: UnboundPointSinkWriterV1,
+    L::OutputId: Copy + Eq,
+{
+    #[expect(
+        clippy::result_large_err,
+        reason = "the cold retry must return the exact prepared Session without a compensating heap allocation"
+    )]
+    pub(crate) fn retry_external(
+        self,
+    ) -> Result<ExternallyManagedAttachmentV1<L::Writer>, PreparedAttachmentAdmissionFailureV2<L>>
+    {
+        admit_prepared_state(self.prepared, self.sink)
+            .map(ExternallyManagedAttachmentV1::from_state)
     }
 }
 
 /// Повторный отказ уже подготовленного объекта остаётся только sink-отказом.
 pub(crate) struct PreparedAttachmentAdmissionFailureV2<L>
 where
-    L: UnboundPointSinkLeaseV1,
+    L: UnboundPointSinkWriterV1,
 {
     cause: L::AdmissionError,
     retry: PreparedAttachmentRetryV2<L>,
@@ -485,7 +507,7 @@ where
 
 impl<L> PreparedAttachmentAdmissionFailureV2<L>
 where
-    L: UnboundPointSinkLeaseV1,
+    L: UnboundPointSinkWriterV1,
 {
     pub(crate) const fn cause(&self) -> &L::AdmissionError {
         &self.cause
@@ -498,7 +520,7 @@ where
 
 impl<L> fmt::Debug for PreparedAttachmentAdmissionFailureV2<L>
 where
-    L: UnboundPointSinkLeaseV1,
+    L: UnboundPointSinkWriterV1,
     L::AdmissionError: fmt::Debug,
 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -516,7 +538,7 @@ where
 )]
 pub(crate) enum AttachmentCreateFailureV2<L>
 where
-    L: UnboundPointSinkLeaseV1,
+    L: UnboundPointSinkWriterV1,
 {
     Contract {
         cause: AttachmentCreateErrorV1<L::OutputId>,
@@ -530,7 +552,7 @@ where
 
 impl<L> fmt::Debug for AttachmentCreateFailureV2<L>
 where
-    L: UnboundPointSinkLeaseV1,
+    L: UnboundPointSinkWriterV1,
     L::OutputId: fmt::Debug,
     L::AdmissionError: fmt::Debug,
 {
@@ -570,8 +592,8 @@ pub(crate) enum AttachmentUpdateErrorV1<SinkError> {
 }
 
 type AttachmentUpdateResultV1<'a, L> = Result<
-    AttachmentCommitV1<'a, <L as ClosedPointSinkLeaseV1>::OutputId>,
-    AttachmentUpdateErrorV1<<L as ClosedPointSinkLeaseV1>::Error>,
+    AttachmentCommitV1<'a, <L as PointSinkWriterV1>::OutputId>,
+    AttachmentUpdateErrorV1<<L as PointSinkWriterV1>::Error>,
 >;
 
 /// Prospective sink-смысл одного полностью вычисленного перехода Session.
@@ -773,26 +795,49 @@ impl<'a, SinkOutputId: Copy> Iterator for AttachedRenderOutputsV1<'a, SinkOutput
 impl<SinkOutputId: Copy> ExactSizeIterator for AttachedRenderOutputsV1<'_, SinkOutputId> {}
 impl<SinkOutputId: Copy> FusedIterator for AttachedRenderOutputsV1<'_, SinkOutputId> {}
 
-/// Владеет одной Session, одним exact Program pin и одним linear writer.
+/// Единый transaction core одной Session, exact Program pin и linear writer.
+///
+/// Wrapper выбирает только lifecycle-закон: [`Attachment`] добавляет infallible
+/// RAII revoke, а [`ExternallyManagedAttachmentV1`] оставляет cleanup внешнему
+/// владельцу. Подготовка, host install и deferred Session commit здесь общие.
+pub(crate) struct AttachedProgramStateV1<W>
+where
+    W: PointSinkWriterV1,
+{
+    sink: W,
+    session: SessionV1,
+    emissions: Vec<AttachedPointEmissionV1<W::OutputId>>,
+    presentations: Vec<AttachedPointPresentationV1<W::OutputId>>,
+    // Published patch остаётся reusable backing: swap/clear меняют длину,
+    // но сохраняют заранее зарезервированную capacity для следующей ревизии.
+    committed_sink_patch: Vec<PointSinkPatchEntryV1<W::OutputId>>,
+    scratch_sink_patch: Vec<PointSinkPatchEntryV1<W::OutputId>>,
+    committed_render_patch: Vec<AttachedRenderPatchEntryV1<W::OutputId>>,
+    scratch_render_patch: Vec<AttachedRenderPatchEntryV1<W::OutputId>>,
+    expected_sink_stamp: PointSinkStampV1,
+    committed_revision: Option<u64>,
+    _owner_pin: ProgramOwnerLeaseV1<CoreProgramEvaluatorsV1>,
+}
+
+/// RAII attachment для sink, который способен infallibly revoke весь scope.
 pub(crate) struct Attachment<L>
 where
     L: ClosedPointSinkLeaseV1,
 {
-    // Порядок полей задаёт освобождение после `Drop::drop`: writer, Session,
-    // инертные снимки и последней — точная Program generation.
-    sink: L,
-    session: SessionV1,
-    emissions: Vec<AttachedPointEmissionV1<L::OutputId>>,
-    presentations: Vec<AttachedPointPresentationV1<L::OutputId>>,
-    // Published patch остаётся reusable backing: swap/clear меняют длину,
-    // но сохраняют заранее зарезервированную capacity для следующей ревизии.
-    committed_sink_patch: Vec<PointSinkPatchEntryV1<L::OutputId>>,
-    scratch_sink_patch: Vec<PointSinkPatchEntryV1<L::OutputId>>,
-    committed_render_patch: Vec<AttachedRenderPatchEntryV1<L::OutputId>>,
-    scratch_render_patch: Vec<AttachedRenderPatchEntryV1<L::OutputId>>,
-    expected_sink_stamp: PointSinkStampV1,
-    committed_revision: Option<u64>,
-    _owner_pin: ProgramOwnerLeaseV1<CoreProgramEvaluatorsV1>,
+    state: AttachedProgramStateV1<L>,
+}
+
+/// Attachment browser-owned lease; local Drop не заявляет внешний revoke.
+pub(crate) struct ExternallyManagedAttachmentV1<W>
+where
+    W: PointSinkWriterV1,
+{
+    state: AttachedProgramStateV1<W>,
+}
+
+pub(crate) enum ExternalDisposeErrorV1<E> {
+    MissingAttachment,
+    Confirmation(E),
 }
 
 /// Все fallible Core-части cold attach, завершённые до host admission.
@@ -834,18 +879,20 @@ impl OwnerV1 {
         authored_presentations: &[AuthoredPointPresentationBindingV1],
         family_artifacts: FamilyArtifactBundleV2,
         sink: L,
-    ) -> Result<Attachment<L::Closed>, AttachmentCreateFailureV2<L>>
+    ) -> Result<Attachment<L::Writer>, AttachmentCreateFailureV2<L>>
     where
         L: UnboundPointSinkLeaseV1,
+        L::Writer: ClosedPointSinkLeaseV1<OutputId = L::OutputId>,
     {
-        let bindings = match PreparedAttachmentBindingsV1::try_new(
-            self,
+        let prepared = match self.prepare_attachment_cold(
+            stream_id,
             authored_emissions,
             authored_presentations,
-            &sink,
+            family_artifacts,
+            sink.owned_output_scope(),
         ) {
-            Ok(bindings) => bindings,
-            Err(cause) => {
+            Ok(prepared) => prepared,
+            Err((cause, family_artifacts)) => {
                 return Err(AttachmentCreateFailureV2::Contract {
                     cause,
                     retry: UnpreparedAttachmentRetryV2 {
@@ -855,12 +902,40 @@ impl OwnerV1 {
                 });
             }
         };
-        let session = match self.instantiate_with_family_artifacts(stream_id, family_artifacts) {
-            Ok(session) => session,
-            Err(failure) => {
-                let (cause, family_artifacts) = failure.into_parts();
+        admit_prepared_state(prepared, sink)
+            .map(Attachment::from_state)
+            .map_err(|PreparedAttachmentAdmissionFailureV2 { cause, retry }| {
+                AttachmentCreateFailureV2::SinkAdmission { cause, retry }
+            })
+    }
+
+    /// Создаёт attachment для externally managed writer без ложного RAII revoke.
+    #[expect(
+        clippy::result_large_err,
+        reason = "the cold failure owns retryable linear resources instead of allocating an error box"
+    )]
+    pub(crate) fn attach_external<L>(
+        &self,
+        stream_id: u32,
+        authored_emissions: &[AuthoredPointEmissionBindingV1<L::OutputId>],
+        authored_presentations: &[AuthoredPointPresentationBindingV1],
+        family_artifacts: FamilyArtifactBundleV2,
+        sink: L,
+    ) -> Result<ExternallyManagedAttachmentV1<L::Writer>, AttachmentCreateFailureV2<L>>
+    where
+        L: UnboundPointSinkWriterV1,
+    {
+        let prepared = match self.prepare_attachment_cold(
+            stream_id,
+            authored_emissions,
+            authored_presentations,
+            family_artifacts,
+            sink.owned_output_scope(),
+        ) {
+            Ok(prepared) => prepared,
+            Err((cause, family_artifacts)) => {
                 return Err(AttachmentCreateFailureV2::Contract {
-                    cause: AttachmentCreateErrorV1::Instantiate(cause),
+                    cause,
                     retry: UnpreparedAttachmentRetryV2 {
                         sink,
                         family_artifacts,
@@ -868,12 +943,50 @@ impl OwnerV1 {
                 });
             }
         };
-        let prepared = bindings.finish(session, self.compiled.pin_owner());
-        admit_prepared_attachment(prepared, sink).map_err(
-            |PreparedAttachmentAdmissionFailureV2 { cause, retry }| {
+        admit_prepared_state(prepared, sink)
+            .map(ExternallyManagedAttachmentV1::from_state)
+            .map_err(|PreparedAttachmentAdmissionFailureV2 { cause, retry }| {
                 AttachmentCreateFailureV2::SinkAdmission { cause, retry }
-            },
-        )
+            })
+    }
+
+    fn prepare_attachment_cold<SinkOutputId>(
+        &self,
+        stream_id: u32,
+        authored_emissions: &[AuthoredPointEmissionBindingV1<SinkOutputId>],
+        authored_presentations: &[AuthoredPointPresentationBindingV1],
+        family_artifacts: FamilyArtifactBundleV2,
+        owned_output_scope: &[SinkOutputId],
+    ) -> Result<
+        PreparedAttachmentColdV1<SinkOutputId>,
+        (
+            AttachmentCreateErrorV1<SinkOutputId>,
+            FamilyArtifactBundleV2,
+        ),
+    >
+    where
+        SinkOutputId: Copy + Eq,
+    {
+        let bindings = match PreparedAttachmentBindingsV1::try_new(
+            self,
+            authored_emissions,
+            authored_presentations,
+            owned_output_scope,
+        ) {
+            Ok(bindings) => bindings,
+            Err(cause) => return Err((cause, family_artifacts)),
+        };
+        let session = match self.instantiate_with_family_artifacts(stream_id, family_artifacts) {
+            Ok(session) => session,
+            Err(failure) => {
+                let (cause, family_artifacts) = failure.into_parts();
+                return Err((
+                    AttachmentCreateErrorV1::Instantiate(cause),
+                    family_artifacts,
+                ));
+            }
+        };
+        Ok(bindings.finish(session, self.compiled.pin_owner()))
     }
 }
 
@@ -881,20 +994,20 @@ impl OwnerV1 {
     clippy::result_large_err,
     reason = "host rejection returns the exact prepared Session without another cold-path allocation"
 )]
-fn admit_prepared_attachment<L>(
+fn admit_prepared_state<L>(
     prepared: PreparedAttachmentColdV1<L::OutputId>,
     sink: L,
-) -> Result<Attachment<L::Closed>, PreparedAttachmentAdmissionFailureV2<L>>
+) -> Result<AttachedProgramStateV1<L::Writer>, PreparedAttachmentAdmissionFailureV2<L>>
 where
-    L: UnboundPointSinkLeaseV1,
+    L: UnboundPointSinkWriterV1,
 {
     let permit = BoundPointSinkScopePermitV1 {
         _owner: &prepared.owner_pin,
         emissions: &prepared.emissions,
         _presentations: &prepared.presentations,
     };
-    match sink.try_admit_closed(permit) {
-        Ok(admission) => Ok(Attachment::from_closed_admission(prepared, admission)),
+    match sink.try_admit_writer(permit) {
+        Ok(admission) => Ok(AttachedProgramStateV1::from_admission(prepared, admission)),
         Err(failure) => {
             let (cause, sink) = failure.into_parts();
             Err(PreparedAttachmentAdmissionFailureV2 {
@@ -905,13 +1018,13 @@ where
     }
 }
 
-impl<L> Attachment<L>
+impl<W> AttachedProgramStateV1<W>
 where
-    L: ClosedPointSinkLeaseV1,
+    W: PointSinkWriterV1,
 {
-    fn from_closed_admission(
-        prepared: PreparedAttachmentColdV1<L::OutputId>,
-        admission: ClosedPointSinkAdmissionV1<L>,
+    fn from_admission(
+        prepared: PreparedAttachmentColdV1<W::OutputId>,
+        admission: PointSinkWriterAdmissionV1<W>,
     ) -> Self {
         // POST_ADMISSION_TAIL_START_V1
         let (sink, initial_sink_stamp) = admission.into_parts();
@@ -937,15 +1050,12 @@ where
     SinkOutputId: Copy + Eq,
 {
     /// Проверяет authored terminal bindings и завершает все их allocation.
-    fn try_new<L>(
+    fn try_new(
         owner: &OwnerV1,
         authored_emissions: &[AuthoredPointEmissionBindingV1<SinkOutputId>],
         authored_presentations: &[AuthoredPointPresentationBindingV1],
-        sink: &L,
-    ) -> Result<Self, AttachmentCreateErrorV1<SinkOutputId>>
-    where
-        L: UnboundPointSinkLeaseV1<OutputId = SinkOutputId>,
-    {
+        owned_scope: &[SinkOutputId],
+    ) -> Result<Self, AttachmentCreateErrorV1<SinkOutputId>> {
         let expected_outputs = owner.compiled.output_count();
         if authored_emissions.len() != expected_outputs {
             return Err(AttachmentCreateErrorV1::EmissionBindingCount {
@@ -999,7 +1109,6 @@ where
             }
         }
 
-        let owned_scope = sink.owned_output_scope();
         if owned_scope.len() != emissions.len() {
             return Err(AttachmentCreateErrorV1::SinkScopeCount {
                 expected: emissions.len(),
@@ -1159,12 +1268,12 @@ where
     }
 }
 
-impl<L> Attachment<L>
+impl<W> AttachedProgramStateV1<W>
 where
-    L: ClosedPointSinkLeaseV1,
+    W: PointSinkWriterV1,
 {
     /// Готовит, атомарно устанавливает и infallibly публикует целый update.
-    pub(crate) fn update(&mut self, update: UpdateV1<'_>) -> AttachmentUpdateResultV1<'_, L> {
+    fn update(&mut self, update: UpdateV1<'_>) -> AttachmentUpdateResultV1<'_, W> {
         let transition = self
             .session
             .prepare_update(update)
@@ -1249,7 +1358,7 @@ where
             .sink
             .prepare(intent)
             .map_err(AttachmentUpdateErrorV1::SinkPrepare)?;
-        let mut prepared: PreparedAttachmentUpdateV1<'_, '_, L> =
+        let mut prepared: PreparedAttachmentUpdateV1<'_, '_, W> =
             PreparedAttachmentUpdateV1::new(transition, sink_prepared);
 
         prepared
@@ -1280,10 +1389,100 @@ where
             committed_sink_stamp: &self.expected_sink_stamp,
         })
     }
+}
+
+impl<L> Attachment<L>
+where
+    L: ClosedPointSinkLeaseV1,
+{
+    fn from_state(state: AttachedProgramStateV1<L>) -> Self {
+        Self { state }
+    }
+
+    pub(crate) fn update(&mut self, update: UpdateV1<'_>) -> AttachmentUpdateResultV1<'_, L> {
+        self.state.update(update)
+    }
 
     /// Детерминированное consuming-освобождение; revoke выполняет `Drop`.
     pub(crate) fn dispose(self) {
         drop(self);
+    }
+}
+
+#[cfg(test)]
+impl<L> Deref for Attachment<L>
+where
+    L: ClosedPointSinkLeaseV1,
+{
+    type Target = AttachedProgramStateV1<L>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.state
+    }
+}
+
+#[cfg(test)]
+impl<L> DerefMut for Attachment<L>
+where
+    L: ClosedPointSinkLeaseV1,
+{
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.state
+    }
+}
+
+impl<W> ExternallyManagedAttachmentV1<W>
+where
+    W: PointSinkWriterV1,
+{
+    fn from_state(state: AttachedProgramStateV1<W>) -> Self {
+        Self { state }
+    }
+
+    pub(crate) fn update(&mut self, update: UpdateV1<'_>) -> AttachmentUpdateResultV1<'_, W> {
+        self.state.update(update)
+    }
+
+    /// Confirms and consumes one externally managed attachment as one
+    /// transition. The slot is untouched when confirmation returns `Err` or
+    /// unwinds, so retry retains the exact Session and writer; success takes
+    /// the attachment before returning, making a post-tombstone update
+    /// unrepresentable through this API.
+    pub(crate) fn confirm_and_consume_external_dispose<E>(
+        slot: &mut Option<Self>,
+        confirm: impl FnOnce() -> Result<(), E>,
+    ) -> Result<(), ExternalDisposeErrorV1<E>> {
+        if slot.is_none() {
+            return Err(ExternalDisposeErrorV1::MissingAttachment);
+        }
+        confirm().map_err(ExternalDisposeErrorV1::Confirmation)?;
+        let Some(attachment) = slot.take() else {
+            return Err(ExternalDisposeErrorV1::MissingAttachment);
+        };
+        drop(attachment);
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+impl<W> Deref for ExternallyManagedAttachmentV1<W>
+where
+    W: PointSinkWriterV1,
+{
+    type Target = AttachedProgramStateV1<W>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.state
+    }
+}
+
+#[cfg(test)]
+impl<W> DerefMut for ExternallyManagedAttachmentV1<W>
+where
+    W: PointSinkWriterV1,
+{
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.state
     }
 }
 
@@ -1292,10 +1491,10 @@ where
     L: ClosedPointSinkLeaseV1,
 {
     fn drop(&mut self) {
-        self.sink.close_before_release();
-        self.committed_revision = None;
-        self.committed_sink_patch.clear();
-        self.committed_render_patch.clear();
+        self.state.sink.close_before_release();
+        self.state.committed_revision = None;
+        self.state.committed_sink_patch.clear();
+        self.state.committed_render_patch.clear();
     }
 }
 
@@ -1354,7 +1553,7 @@ fn stage_complete_patches<SinkOutputId: Copy + Eq>(
 /// Общий token: abort всегда уничтожает evidence до освобождения Busy.
 struct PreparedAttachmentUpdateV1<'session, 'sink, L>
 where
-    L: ClosedPointSinkLeaseV1 + 'sink,
+    L: PointSinkWriterV1 + 'sink,
 {
     // Порядок объявления и есть abort-протокол: prospective evidence
     // уничтожается, пока sink ещё удерживает Busy.
@@ -1364,7 +1563,7 @@ where
 
 impl<'session, 'sink, L> PreparedAttachmentUpdateV1<'session, 'sink, L>
 where
-    L: ClosedPointSinkLeaseV1 + 'sink,
+    L: PointSinkWriterV1 + 'sink,
 {
     fn new(
         transition: CorePreparedSessionTransitionV1<'session>,
@@ -1384,6 +1583,8 @@ where
     }
 }
 
+#[cfg(feature = "private-fixture")]
+pub(crate) mod handoff;
 #[cfg(test)]
 pub(crate) mod support;
 #[cfg(test)]

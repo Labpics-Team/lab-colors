@@ -31,6 +31,8 @@ pub(crate) enum SelectionReleaseErrorV1 {
     UnknownCandidateKey,
     /// Two candidates bind the same canonical key.
     DuplicateCandidateBinding,
+    /// Хотя бы один ключ выпуска не связан ни с одним кандидатом.
+    MissingCandidateBinding,
     /// Selection was asked to order an empty candidate set.
     EmptyCandidateSet,
     /// A release length field cannot be encoded, so the identity grammar is
@@ -56,6 +58,21 @@ impl SelectionCandidateKeyV1 {
     }
 }
 
+/// Идентификатор содержимого одного допущенного авторского выпуска выбора.
+///
+/// У байтов нет публичного конструктора: production-код получает значение
+/// только при допуске выпуска и передаёт его в Program лишь вместе с
+/// материализованным порядком ниже.
+#[repr(transparent)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub(crate) struct SelectionReleaseIdentityV1([u8; 32]);
+
+impl SelectionReleaseIdentityV1 {
+    pub(crate) const fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
+}
+
 /// The authored release shape before admission.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SelectionReleaseV1 {
@@ -77,8 +94,28 @@ impl SelectionReleaseV1 {
 #[derive(Debug, Clone)]
 pub(crate) struct AdmittedSelectionReleaseV1 {
     revision: u64,
-    identity: [u8; 32],
+    identity: SelectionReleaseIdentityV1,
     ranks: BTreeMap<Vec<u8>, usize>,
+}
+
+/// Единственный production-вход конечного выбора в Program.
+///
+/// Оба поля неизменяемы и закрыты. До компиляции проверенный порядок нельзя
+/// отделить от точного выпуска, который его задал.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct MaterialisedSelectionV1 {
+    release_identity: SelectionReleaseIdentityV1,
+    order: DeclaredJointSelectionV1,
+}
+
+impl MaterialisedSelectionV1 {
+    pub(crate) const fn release_identity(&self) -> SelectionReleaseIdentityV1 {
+        self.release_identity
+    }
+
+    pub(crate) const fn order(&self) -> &DeclaredJointSelectionV1 {
+        &self.order
+    }
 }
 
 /// One u32 length field of the identity grammar.
@@ -131,14 +168,14 @@ pub(crate) fn admit_selection_release_v1(
     }
     Ok(AdmittedSelectionReleaseV1 {
         revision: release.revision,
-        identity: hasher.finalize().as_bytes().to_owned(),
+        identity: SelectionReleaseIdentityV1(*hasher.finalize().as_bytes()),
         ranks,
     })
 }
 
 impl AdmittedSelectionReleaseV1 {
     /// The content-addressed identity of the sealed release.
-    pub(crate) fn identity(&self) -> [u8; 32] {
+    pub(crate) const fn identity(&self) -> SelectionReleaseIdentityV1 {
         self.identity
     }
 
@@ -178,6 +215,9 @@ impl AdmittedSelectionReleaseV1 {
             }
             ranked.push((rank, key.as_bytes(), payload));
         }
+        if bound.len() != self.ranks.len() {
+            return Err(SelectionReleaseErrorV1::MissingCandidateBinding);
+        }
         ranked.sort_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(right.1)));
         Ok(ranked
             .into_iter()
@@ -195,7 +235,48 @@ impl AdmittedSelectionReleaseV1 {
 pub(crate) fn materialise_joint_selection_v1(
     release: &AdmittedSelectionReleaseV1,
     bindings: &[(JointCandidateStateV1, SelectionCandidateKeyV1)],
-) -> Result<DeclaredJointSelectionV1, SelectionReleaseErrorV1> {
+) -> Result<MaterialisedSelectionV1, SelectionReleaseErrorV1> {
     let states = release.select_order_v1(bindings)?;
-    Ok(DeclaredJointSelectionV1::new(states.into_vec()))
+    let order = states
+        .into_vec()
+        .into_iter()
+        .map(JointCandidateStateV1::canonicalise_keyed_choices)
+        .collect();
+    Ok(MaterialisedSelectionV1 {
+        release_identity: release.identity(),
+        order: DeclaredJointSelectionV1::new(order),
+    })
+}
+
+/// Шов совместимости для тестовых фикстур, созданных до `SelectionRelease`.
+///
+/// Он не подделывает запечатанную пару: каждый переданный порядок связывается
+/// с допущенным синтетическим выпуском и проходит production-материализацию.
+#[cfg(test)]
+pub(crate) fn materialise_declared_joint_selection_for_test(
+    order: DeclaredJointSelectionV1,
+) -> MaterialisedSelectionV1 {
+    let rank_groups = (0_u64..)
+        .zip(order.states())
+        .map(|(index, _)| {
+            vec![SelectionCandidateKeyV1::new(
+                index.to_be_bytes().to_vec().into_boxed_slice(),
+            )]
+            .into_boxed_slice()
+        })
+        .collect::<Vec<_>>()
+        .into_boxed_slice();
+    let release = admit_selection_release_v1(SelectionReleaseV1::new(0, rank_groups))
+        .expect("a non-empty generated test release must admit");
+    let bindings = (0_u64..)
+        .zip(order.states())
+        .map(|(index, state)| {
+            (
+                state.clone(),
+                SelectionCandidateKeyV1::new(index.to_be_bytes().to_vec().into_boxed_slice()),
+            )
+        })
+        .collect::<Vec<_>>();
+    materialise_joint_selection_v1(&release, &bindings)
+        .expect("an admitted generated test release must materialise its complete bindings")
 }

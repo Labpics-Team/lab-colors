@@ -19,11 +19,14 @@ const LCS_OCCURRENCE_SOURCE: &str = include_str!("lcs_occurrence.rs");
 const OBSERVATION_SOURCE: &str = include_str!("observation.rs");
 const OUTPUT_PROJECTION_SOURCE: &str = include_str!("output_projection.rs");
 const PROGRAM_ATTACHMENT_SOURCE: &str = include_str!("program/attachment.rs");
+const PROGRAM_ATTACHMENT_HANDOFF_SOURCE: &str = include_str!("program/attachment/handoff.rs");
 const PROGRAM_SOURCE: &str = include_str!("program.rs");
 const POINT_SUPPORT_SOURCE: &str = include_str!("point_support.rs");
 const POINT_REPRESENTATION_SOURCE: &str = include_str!("point_representation.rs");
 const PROGRAM_IDENTITY_SOURCE: &str = include_str!("program_identity.rs");
 const PROGRAM_SESSION_SOURCE: &str = include_str!("program_session.rs");
+const PRIVATE_FIXTURE_SOURCE: &str = include_str!("private_fixture.rs");
+const SELECTION_RELEASE_SOURCE: &str = include_str!("selection_release.rs");
 const RELATION_SOURCE: &str = include_str!("relation.rs");
 const SEMANTIC_SOURCE: &str = include_str!("semantic.rs");
 const SESSION_SOURCE: &str = include_str!("session.rs");
@@ -162,6 +165,21 @@ fn contains_rust_identifier(source: &str, identifier: &str) -> bool {
         let after = source[start + identifier.len()..].chars().next();
         !before.is_some_and(is_continue) && !after.is_some_and(is_continue)
     })
+}
+
+fn contains_forbidden_material_identifier(source: &str) -> bool {
+    let mut identifier = String::new();
+    for character in source.chars().chain(std::iter::once(' ')) {
+        if character == '_' || character.is_ascii_alphanumeric() {
+            identifier.push(character);
+            continue;
+        }
+        if identifier.contains("Material") && identifier != "MaterialisedSelectionV1" {
+            return true;
+        }
+        identifier.clear();
+    }
+    false
 }
 
 fn normalized_production_code(source: &str) -> String {
@@ -404,8 +422,13 @@ fn contextual_region_is_definition_only_and_semantically_agnostic() {
 fn generic_physical_and_transport_modules_contain_no_client_or_legacy_vocabulary() {
     for (path, source) in GENERIC_SOURCES {
         for forbidden in CLIENT_OR_LEGACY_VOCABULARY {
+            let present = if forbidden == "Material" {
+                contains_forbidden_material_identifier(source)
+            } else {
+                source.contains(forbidden)
+            };
             assert!(
-                !source.contains(forbidden),
+                !present,
                 "{path} must remain client-semantic agnostic; found `{forbidden}`"
             );
         }
@@ -471,6 +494,164 @@ fn staged_program_module_is_private_module_qualified_and_transport_neutral() {
 }
 
 #[test]
+fn private_fixture_is_one_feature_gated_production_caller_of_the_certified_handoff_path() {
+    let normalized_lib = LIB_SOURCE.split_whitespace().collect::<Vec<_>>().join(" ");
+    assert!(
+        normalized_lib
+            .contains("#[cfg(feature = \"private-fixture\")] #[doc(hidden)] mod private_fixture;",),
+        "the external fixture must be one doc-hidden feature-gated private production module",
+    );
+    assert!(
+        !normalized_lib.contains("pub mod private_fixture;"),
+        "the fixture ABI must not create a downstream-enableable Rust authoring root",
+    );
+
+    let production = normalized_production_code(PRIVATE_FIXTURE_SOURCE);
+
+    for symbol in [
+        "labcolors_private_fixture_request_v1_ptr",
+        "labcolors_private_fixture_request_v1_len",
+        "labcolors_private_fixture_result_v1_ptr",
+        "labcolors_private_fixture_result_v1_len",
+        "labcolors_private_fixture_run_v1",
+        "labcolors_private_fixture_begin_dispose_v1",
+        "labcolors_private_fixture_abort_dispose_v1",
+        "labcolors_private_fixture_commit_dispose_v1",
+    ] {
+        assert_eq!(
+            production.matches(symbol).count(),
+            1,
+            "the fixed-buffer ABI must export exactly one `{symbol}` symbol",
+        );
+    }
+    for import in [
+        "labcolors_private_fixture_host_install_v1",
+        "labcolors_private_fixture_host_confirm_disposed_v1",
+    ] {
+        assert_eq!(
+            production.matches(import).count(),
+            1,
+            "the closed fixture must import exactly one `{import}` host capability",
+        );
+    }
+    for required in [
+        "admit_selection_release_v1(",
+        "materialise_joint_selection_v1(",
+        ".set_materialised_joint_selection(",
+        ".compile()",
+        ".attach_external(",
+        "handoff_point_sink(",
+        ".update(updatev1::observed",
+        ".render_outputs()",
+        ".certificate()",
+        ".selected_state_index()",
+        ".content_identity()",
+        ".selection_release_identity()",
+        "run_request_v1(",
+        "struct wasmhostpointsinkv1",
+        "css: string",
+    ] {
+        assert!(
+            production.contains(required),
+            "the production fixture lost required certified call-graph edge `{required}`",
+        );
+    }
+    for forbidden in [
+        "pub mod program",
+        "pub use crate::program",
+        "pub mod private_fixture",
+        "declaredjointselectionv1::new(",
+        "alloc_v1",
+        "execute_private_fixture_config_v1",
+        "include_intrinsic_relation",
+        "observed_scenario_count",
+        "host_dispose_v1",
+        "serde",
+        "wasm_bindgen",
+    ] {
+        assert!(
+            !production.contains(forbidden),
+            "the closed fixture must not expose/bypass its compiler boundary via `{forbidden}`",
+        );
+    }
+    assert_eq!(
+        production
+            .matches(".push_exact_intrinsic_relation_hard(")
+            .count(),
+        1,
+        "the production graph must unconditionally contain its one intrinsic relation",
+    );
+
+    let handoff = normalized_production_code(PROGRAM_ATTACHMENT_HANDOFF_SOURCE);
+    for required in [
+        "impl<h> unboundpointsinkwriterv1 for handoffpointsinkwriterv1<h>",
+        "impl<h> pointsinkwriterv1 for admittedhandoffpointsinkwriterv1<h>",
+    ] {
+        assert!(
+            handoff.contains(required),
+            "the externally managed handoff lost its writer-only boundary `{required}`",
+        );
+    }
+    for forbidden in [
+        "closedhandoffpointsinkleasev1",
+        "impl<h> closedpointsinkleasev1",
+        "type handoffattachmentv1<h> = attachment<",
+    ] {
+        assert!(
+            !handoff.contains(forbidden),
+            "the fallible browser lease must not claim the infallible RAII contract `{forbidden}`",
+        );
+    }
+}
+
+#[test]
+fn external_dispose_cannot_export_a_reusable_proof_or_update_capability() {
+    let attachment = normalized_production_code(PROGRAM_ATTACHMENT_SOURCE);
+    for forbidden in [
+        "externalpointsinkdisposedv1",
+        "try_confirm_external_dispose",
+        "release_after_external_dispose",
+    ] {
+        assert!(
+            !attachment.contains(forbidden),
+            "external disposal must not expose a reusable proof `{forbidden}`",
+        );
+    }
+    assert!(
+        attachment.contains("confirm_and_consume_external_dispose"),
+        "external disposal must be one consuming transition",
+    );
+    assert!(
+        attachment.contains("slot: &mut option<self>"),
+        "the consuming transition must own the attachment slot while confirming",
+    );
+}
+
+#[test]
+fn private_fixture_wasm_buffers_require_explicit_unshared_admission() {
+    let source = PRIVATE_FIXTURE_SOURCE
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    let compact = source.replace(' ', "");
+    assert!(
+        compact.contains(
+            "#[cfg(all(target_arch=\"wasm32\",not(labcolors_private_fixture_unshared_v1)))]"
+        ),
+        "private WASM must reject builds without the explicit unshared admission cfg",
+    );
+    assert!(
+        source.contains("compile_error!("),
+        "private WASM must fail closed instead of relying on an implicit target feature",
+    );
+    assert!(
+        compact
+            .contains("#[cfg(all(target_arch=\"wasm32\",labcolors_private_fixture_unshared_v1))]"),
+        "the raw fixed-buffer ABI must compile only under the admitted unshared cfg",
+    );
+}
+
+#[test]
 fn staged_program_draft_wraps_the_single_canonical_core_graph() {
     assert_eq!(
         normalized_source_scope(
@@ -512,11 +693,30 @@ fn staged_program_draft_wraps_the_single_canonical_core_graph() {
         "push_surface_input(",
         "surface_input_slots(",
     ] {
+        let present = if forbidden == "Material" {
+            contains_forbidden_material_identifier(PROGRAM_SOURCE)
+        } else {
+            PROGRAM_SOURCE.contains(forbidden)
+        };
         assert!(
-            !PROGRAM_SOURCE.contains(forbidden),
+            !present,
             "the staged concrete lowerer must not acquire `{forbidden}`",
         );
     }
+}
+
+#[test]
+fn material_vocabulary_guard_rejects_substring_identifiers_but_allows_the_sealed_pair() {
+    assert!(contains_forbidden_material_identifier("struct MaterialV1;"));
+    assert!(contains_forbidden_material_identifier(
+        "struct PairMaterial;"
+    ));
+    assert!(contains_forbidden_material_identifier(
+        "struct MaterialLadder;"
+    ));
+    assert!(!contains_forbidden_material_identifier(
+        "struct MaterialisedSelectionV1;"
+    ));
 }
 
 #[test]
@@ -624,8 +824,10 @@ fn joint_module_contains_only_the_canonical_finite_order_admission() {
     // Exact snippets intentionally make representation drift loud; a rustfmt
     // rewrite must update this anti-regrowth gate in the same reviewed change.
     assert!(
-        PROGRAM_SESSION_SOURCE.contains("Finite(AdmittedCompiledJointSpaceV1)"),
-        "target selection must carry the admitted space itself",
+        PROGRAM_SESSION_SOURCE.contains(
+            "Finite {\n        release_identity: SelectionReleaseIdentityV1,\n        space: AdmittedCompiledJointSpaceV1,\n    }",
+        ),
+        "finite target selection must atomically couple release identity and admitted space",
     );
     for retired in [
         "joint_selection: Option<CompiledJointSelectionV1>",
@@ -640,6 +842,44 @@ fn joint_module_contains_only_the_canonical_finite_order_admission() {
     assert!(
         !contains_rust_identifier(PROGRAM_SESSION_SOURCE, "CompiledJointSelectionV1"),
         "runtime must receive only a sealed joint space derived from its compiled targets",
+    );
+}
+
+#[test]
+fn production_joint_ingress_requires_the_sealed_materialised_release_pair() {
+    let program = normalized_production_code(PROGRAM_SOURCE);
+    let session = normalized_production_code(PROGRAM_SESSION_SOURCE);
+    let release = normalized_production_code(SELECTION_RELEASE_SOURCE);
+
+    for (path, source) in [("program.rs", &program), ("program_session.rs", &session)] {
+        assert!(
+            !source.contains("selection: declaredjointselectionv1"),
+            "{path} must not accept a forgeable bare joint order in production",
+        );
+        assert!(
+            source.contains("selection: materialisedselectionv1"),
+            "{path} must accept only the release-bound materialised pair",
+        );
+    }
+    assert!(
+        release.contains("struct selectionreleaseidentityv1"),
+        "selection_release.rs must keep the typed release identity",
+    );
+    assert!(
+        release.contains("struct materialisedselectionv1"),
+        "selection_release.rs must keep the sealed materialised pair",
+    );
+    assert!(
+        !release.contains("fn order_mut"),
+        "the materialised pair must not expose a mutator for its order",
+    );
+    assert!(
+        !session.contains("declaredjointselectionv1::new("),
+        "program_session.rs must not forge a bare joint order",
+    );
+    assert!(
+        !program.contains("declaredjointselectionv1::new("),
+        "program.rs must not forge a bare joint order",
     );
 }
 
@@ -1405,7 +1645,6 @@ fn clean_set_program_path_cannot_smuggle_auto_or_writer_contracts() {
             "quality-auto",
             "shortquality",
             "short_quality",
-            "writer",
             "checkpoint",
         ] {
             assert!(
@@ -1413,6 +1652,28 @@ fn clean_set_program_path_cannot_smuggle_auto_or_writer_contracts() {
                 "{path} must not couple encoded clean-set admission to `{forbidden}`",
             );
         }
+    }
+
+    for (path, source) in [
+        ("clean_set.rs", CLEAN_SET_SOURCE),
+        ("program_session.rs", PROGRAM_SESSION_SOURCE),
+        ("program_identity.rs", PROGRAM_IDENTITY_SOURCE),
+    ] {
+        let source = normalized_production_code(source);
+        for forbidden in ["writer", "sink", "attachment"] {
+            assert!(
+                !source.contains(forbidden),
+                "{path} classifier/admission layer must not depend on terminal `{forbidden}` contracts",
+            );
+        }
+    }
+
+    let attachment = normalized_production_code(PROGRAM_ATTACHMENT_SOURCE);
+    for forbidden in ["clean_set", "cleanset"] {
+        assert!(
+            !attachment.contains(forbidden),
+            "the terminal writer layer must not depend on clean-set classifier types via `{forbidden}`",
+        );
     }
 }
 
@@ -1690,11 +1951,16 @@ fn program_identity_binds_lcs_releases_only_through_lcs_constraint_content() {
         "DOMAIN_V6",
         "PROGRAM_SCHEMA_V6",
         "compile_program_content_identity_v6",
+        "ProgramContentIdentityV7",
+        "ContentIdentityV7",
+        "DOMAIN_V7",
+        "PROGRAM_SCHEMA_V7",
+        "compile_program_content_identity_v7",
     ] {
         for (path, source) in identity_sources {
             assert!(
                 !contains_rust_identifier(source, retired),
-                "the V7 content-address cut must not retain legacy identity symbol `{retired}` in {path}",
+                "the V8 content-address cut must not retain legacy identity symbol `{retired}` in {path}",
             );
         }
     }
@@ -1704,13 +1970,17 @@ fn program_identity_binds_lcs_releases_only_through_lcs_constraint_content() {
     assert!(!PROGRAM_IDENTITY_SOURCE.contains("labcolors.program-content-identity.v4"));
     assert!(!PROGRAM_IDENTITY_SOURCE.contains("labcolors.program-content-identity.v5"));
     assert!(!PROGRAM_IDENTITY_SOURCE.contains("labcolors.program-content-identity.v6"));
+    assert!(!PROGRAM_IDENTITY_SOURCE.contains("labcolors.program-content-identity.v7"));
     for required in [
-        "const DOMAIN_V7: &[u8] = b\"labcolors.program-content-identity.v7\\0\";",
-        "pub(super) const PROGRAM_SCHEMA_V7: u8 = 7;",
+        "const DOMAIN_V8: &[u8] = b\"labcolors.program-content-identity.v8\\0\";",
+        "pub(super) const PROGRAM_SCHEMA_V8: u8 = 8;",
+        "pub(super) const SELECTION_RELEASE_IDENTITY_V1: u8 = 1;",
+        "color.push_u8(release_tag::SELECTION_RELEASE_IDENTITY_V1)?;",
+        "for byte in selection.release_identity().as_bytes()",
     ] {
         assert!(
             PROGRAM_IDENTITY_SOURCE.contains(required),
-            "the V7 content-address type must bind its exact domain and schema tag; missing `{required}`",
+            "the V8 content-address type must bind its exact domain and schema tag; missing `{required}`",
         );
     }
 
@@ -1836,10 +2106,10 @@ fn cold_program_normalization_reuses_owned_unordered_buffers() {
         .join(" ");
     for required in [
         "authored_targets: &mut [Target]",
-        "authored_selection: Option<&mut DeclaredJointSelectionV1>",
+        "authored_selection: Option<&MaterialisedSelectionV1>",
         "let TargetIntentV1::Finite(domain) = &mut target.intent",
         "let candidates = domain.candidates_mut()",
-        "authored_state .choices .sort_unstable_by_key",
+        "fn canonicalise_keyed_choices(mut self) -> Self",
         "authored: &mut [OutputBinding]",
     ] {
         assert!(
@@ -1847,9 +2117,18 @@ fn cold_program_normalization_reuses_owned_unordered_buffers() {
             "cold Program compilation must normalize owned buffers in place; missing `{required}`",
         );
     }
+    let materialisation = SELECTION_RELEASE_SOURCE
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    assert!(
+        materialisation.contains(".map(JointCandidateStateV1::canonicalise_keyed_choices)"),
+        "keyed choices must canonicalise while materialisation still owns each state",
+    );
     for forbidden in [
         "candidates.extend_from_slice(authored_candidates)",
         "choices.extend_from_slice(&authored_state.choices)",
+        "state.choices().to_vec()",
         "authored.extend_from_slice(authored_outputs)",
     ] {
         assert!(
