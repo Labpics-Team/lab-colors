@@ -92,7 +92,7 @@ export const PRIVATE_PROGRAM_MUTATION_CASES = Object.freeze([
     ),
     replacement: "",
     expectedBrowserAssertion:
-      "PrivateProgramConsumerError: private Program run failed with status 6",
+      "PrivateProgramConsumerError: private Program consumer: run failed with status 6",
   }),
   mutation({
     id: "hard-constraint-deletion",
@@ -108,7 +108,7 @@ export const PRIVATE_PROGRAM_MUTATION_CASES = Object.freeze([
     ),
     replacement: "",
     expectedBrowserAssertion:
-      "PrivateProgramConsumerError: private Program run failed with status 6",
+      "PrivateProgramConsumerError: private Program consumer: run failed with status 6",
   }),
   mutation({
     id: "final-recheck-call-edge-deletion",
@@ -142,7 +142,7 @@ export const PRIVATE_PROGRAM_MUTATION_CASES = Object.freeze([
     ),
     replacement: lines("    let has_hard_violation = false;"),
     expectedBrowserAssertion:
-      "PrivateProgramConsumerError: private Program run failed with status 8",
+      "PrivateProgramConsumerError: private Program consumer: run failed with status 8",
   }),
   mutation({
     id: "session-observed-update-bypass",
@@ -162,7 +162,7 @@ export const PRIVATE_PROGRAM_MUTATION_CASES = Object.freeze([
       "    })",
     ).slice(0, -1),
     expectedBrowserAssertion:
-      "PrivateProgramConsumerError: shipping trace permits exactly one SetAll callback",
+      "PrivateProgramConsumerError: private Program consumer: shipping trace permits exactly one SetAll callback",
   }),
   mutation({
     id: "external-attachment-handoff-binding-bypass",
@@ -179,7 +179,7 @@ export const PRIVATE_PROGRAM_MUTATION_CASES = Object.freeze([
       "            ),",
     ),
     expectedBrowserAssertion:
-      "PrivateProgramConsumerError: private Program run failed with status 7",
+      "PrivateProgramConsumerError: private Program consumer: run failed with status 7",
   }),
   mutation({
     id: "javascript-publish-deletion",

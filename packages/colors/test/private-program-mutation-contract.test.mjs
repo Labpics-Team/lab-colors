@@ -25,7 +25,7 @@ const EXPECTED_MUTATIONS = Object.freeze([
     "rust-wasm",
     "crates/labcolors-core/src/private_fixture.rs",
     "6d43e030e5d6f4df67b319276d3d9ea1ab33d5b91a2094019ce278476cecd412",
-    "PrivateProgramConsumerError: private Program run failed with status 6",
+    "PrivateProgramConsumerError: private Program consumer: run failed with status 6",
   ],
   [
     "hard-constraint-deletion",
@@ -33,7 +33,7 @@ const EXPECTED_MUTATIONS = Object.freeze([
     "rust-wasm",
     "crates/labcolors-core/src/private_fixture.rs",
     "0e43717331468ae6fb6c65bb6ba441cd5260b49b37ad3c6927a9bbf02494638b",
-    "PrivateProgramConsumerError: private Program run failed with status 6",
+    "PrivateProgramConsumerError: private Program consumer: run failed with status 6",
   ],
   [
     "final-recheck-call-edge-deletion",
@@ -41,7 +41,7 @@ const EXPECTED_MUTATIONS = Object.freeze([
     "rust-wasm",
     "crates/labcolors-core/src/program_session.rs",
     "8e218fddef0b8a13f044b91b7927faeb50e501a54ecb205c05696d6510fe615e",
-    "PrivateProgramConsumerError: private Program run failed with status 8",
+    "PrivateProgramConsumerError: private Program consumer: run failed with status 8",
   ],
   [
     "session-observed-update-bypass",
@@ -49,7 +49,7 @@ const EXPECTED_MUTATIONS = Object.freeze([
     "rust-wasm",
     "crates/labcolors-core/src/private_fixture.rs",
     "8770e1a30407e9cd9ec3ee32feed44cd2b58a0d39be3c636cb428be8b1c472fe",
-    "PrivateProgramConsumerError: shipping trace permits exactly one SetAll callback",
+    "PrivateProgramConsumerError: private Program consumer: shipping trace permits exactly one SetAll callback",
   ],
   [
     "external-attachment-handoff-binding-bypass",
@@ -57,7 +57,7 @@ const EXPECTED_MUTATIONS = Object.freeze([
     "rust-wasm",
     "crates/labcolors-core/src/private_fixture.rs",
     "59f5bc640fbc270db4dbbda5572e339c90aa839d61cab0ac155ef8db5e1e5d59",
-    "PrivateProgramConsumerError: private Program run failed with status 7",
+    "PrivateProgramConsumerError: private Program consumer: run failed with status 7",
   ],
   [
     "javascript-publish-deletion",
@@ -188,7 +188,7 @@ test("a mutation kill requires its real-browser assertion and semantic marker", 
     stdout: "",
     stderr:
       "Error: private Program browser proof: browser assertion failed: " +
-      "PrivateProgramConsumerError: private Program run failed with status 6",
+      "PrivateProgramConsumerError: private Program consumer: run failed with status 6",
   });
   assert.equal(assertMutationSpecificBrowserFailure(definition, killed), true);
   assert.throws(
