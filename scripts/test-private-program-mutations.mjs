@@ -194,7 +194,7 @@ export const PRIVATE_PROGRAM_MUTATION_CASES = Object.freeze([
     ),
     replacement: lines("    frozenPublication(outputBinding, css);"),
     expectedBrowserAssertion:
-      "Error: private Program browser fixture: computed background is the exact expected CSS literal",
+      "Error: private Program browser fixture: computed background is the exact expected CSS literal; expected \"rgba(64, 64, 64, 0.5)\", got \"rgba(0, 0, 0, 0)\"",
   }),
 ]);
 
