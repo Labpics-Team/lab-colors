@@ -137,6 +137,9 @@ export const PRIVATE_PROGRAM_WASM_SURFACE = deepFreeze({
     { name: "labcolors_private_fixture_result_v1_len", kind: "function" },
     { name: "labcolors_private_fixture_result_v1_ptr", kind: "function" },
     { name: "labcolors_private_fixture_run_v1", kind: "function" },
+    { name: "labcolors_private_fixture_update_v2", kind: "function" },
+    { name: "labcolors_private_fixture_update_v2_len", kind: "function" },
+    { name: "labcolors_private_fixture_update_v2_ptr", kind: "function" },
     { name: "memory", kind: "memory" },
   ],
 });

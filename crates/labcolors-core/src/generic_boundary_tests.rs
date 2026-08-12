@@ -514,12 +514,17 @@ fn private_fixture_is_one_feature_gated_production_caller_of_the_certified_hando
         "labcolors_private_fixture_result_v1_ptr",
         "labcolors_private_fixture_result_v1_len",
         "labcolors_private_fixture_run_v1",
+        "labcolors_private_fixture_update_v2_ptr",
+        "labcolors_private_fixture_update_v2_len",
+        "labcolors_private_fixture_update_v2",
         "labcolors_private_fixture_begin_dispose_v1",
         "labcolors_private_fixture_abort_dispose_v1",
         "labcolors_private_fixture_commit_dispose_v1",
     ] {
         assert_eq!(
-            production.matches(symbol).count(),
+            production
+                .matches(&format!("export_name = \"{symbol}\""))
+                .count(),
             1,
             "the fixed-buffer ABI must export exactly one `{symbol}` symbol",
         );
@@ -543,6 +548,8 @@ fn private_fixture_is_one_feature_gated_production_caller_of_the_certified_hando
         ".certificate()",
         ".content_identity()",
         "run_request_v1(",
+        "update_request_v2(",
+        "observationupdatewirev2",
         "struct wasmhostpointsinkv1",
         "css: string",
     ] {
@@ -563,6 +570,7 @@ fn private_fixture_is_one_feature_gated_production_caller_of_the_certified_hando
         "execute_private_fixture_config_v1",
         "include_intrinsic_relation",
         "observed_scenario_count",
+        "jointcandidatestate",
         "host_dispose_v1",
         "serde",
         "wasm_bindgen",

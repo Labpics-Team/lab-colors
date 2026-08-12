@@ -3,9 +3,9 @@
 //! Закрытый production consumer минимального declarative Program.
 //!
 //! Rust-модуль намеренно приватен. Единственная внешняя поверхность существует
-//! только в отдельном single-threaded `wasm32` artifact как фиксированные ABI-v1
-//! request/result buffers и синхронный `run`; общий Program authoring API наружу
-//! не проецируется.
+//! только в отдельном single-threaded `wasm32` artifact: legacy-named exported
+//! request/result buffers carry ABI-v2 framing, dedicated v2 update exports own
+//! runtime observations, and the Program authoring API is never projected out.
 
 use crate::Srgb8;
 use crate::family_artifact::FamilyArtifactBundleV2;
@@ -17,9 +17,9 @@ use crate::program::attachment::{
     AuthoredPointEmissionBindingV1, AuthoredPointPresentationBindingV1, ExternalDisposeErrorV1,
 };
 use crate::program::{
-    AppearanceContextV1, ConstraintIdV1, DraftV1, OccurrenceIdV1, OpacityInputIdV1, OutputSlotIdV1,
-    PaintIdV1, PaintValueV1, PresentationRootIdV1, ScenarioV1, SourceIdV1, SurfaceIdV1,
-    SurfaceInputPortIdV1, SurroundV1, TargetIdV1, UpdateV1,
+    AppearanceContextV1, ConstraintIdV1, DraftV1, ObservationHeadV1, OccurrenceIdV1,
+    OpacityInputIdV1, OutputSlotIdV1, PaintIdV1, PaintValueV1, PresentationRootIdV1, ScenarioV1,
+    SourceIdV1, StateKindV1, SurfaceIdV1, SurfaceInputPortIdV1, SurroundV1, TargetIdV1, UpdateV1,
 };
 
 const BYTE_WIDTH: usize = 1;
@@ -32,17 +32,47 @@ const IDENTITY_WIDTH: usize = 32;
 const MAGIC_WIDTH: usize = 4;
 const HEADER_WIDTH: usize = MAGIC_WIDTH + U16_WIDTH + U16_WIDTH;
 const APPEARANCE_WIDTH: usize = F64_WIDTH + F64_WIDTH + BYTE_WIDTH;
+// The private fixture proves correlation with at most two simultaneous cases.
+// Raising this bound requires changing the fixed wire grammar and the explicit
+// stack-backed branches in `apply_observed_update_v2` in the same reviewed slice.
+const MAX_SCENARIOS_V2: usize = 2;
+const SCENARIO_WIRE_WIDTH_V2: usize = U32_WIDTH + RGB_WIDTH;
 
-const PRIVATE_FIXTURE_REQUEST_V1_LEN: usize =
-    HEADER_WIDTH + RGB_WIDTH + F64_WIDTH + RGB_WIDTH + APPEARANCE_WIDTH + RGB_WIDTH + U32_WIDTH;
-const PRIVATE_FIXTURE_RESULT_V1_LEN: usize =
-    HEADER_WIDTH + U32_WIDTH + U32_WIDTH + RGB_WIDTH + U64_WIDTH + IDENTITY_WIDTH;
-const _: () = assert!(PRIVATE_FIXTURE_REQUEST_V1_LEN <= u16::MAX as usize);
-const _: () = assert!(PRIVATE_FIXTURE_RESULT_V1_LEN <= u16::MAX as usize);
+const PRIVATE_FIXTURE_REQUEST_V2_LEN: usize = HEADER_WIDTH
+    + RGB_WIDTH
+    + F64_WIDTH
+    + APPEARANCE_WIDTH
+    + RGB_WIDTH
+    + U32_WIDTH
+    + U32_WIDTH
+    + U64_WIDTH
+    + BYTE_WIDTH
+    + MAX_SCENARIOS_V2 * SCENARIO_WIRE_WIDTH_V2;
+const PRIVATE_FIXTURE_UPDATE_V2_LEN: usize = HEADER_WIDTH
+    + U32_WIDTH
+    + U64_WIDTH
+    + BYTE_WIDTH
+    + BYTE_WIDTH
+    + MAX_SCENARIOS_V2 * SCENARIO_WIRE_WIDTH_V2
+    + U32_WIDTH;
+const PRIVATE_FIXTURE_RESULT_V2_LEN: usize = HEADER_WIDTH
+    + BYTE_WIDTH
+    + U32_WIDTH
+    + U64_WIDTH
+    + U32_WIDTH
+    + U32_WIDTH
+    + RGB_WIDTH
+    + U64_WIDTH
+    + IDENTITY_WIDTH;
+const _: () = assert!(PRIVATE_FIXTURE_REQUEST_V2_LEN <= u16::MAX as usize);
+const _: () = assert!(PRIVATE_FIXTURE_UPDATE_V2_LEN <= u16::MAX as usize);
+const _: () = assert!(PRIVATE_FIXTURE_RESULT_V2_LEN <= u16::MAX as usize);
 
 const PRIVATE_FIXTURE_REQUEST_V1_MAGIC: [u8; MAGIC_WIDTH] = *b"LCFQ";
+#[cfg(target_arch = "wasm32")]
+const PRIVATE_FIXTURE_UPDATE_V2_MAGIC: [u8; MAGIC_WIDTH] = *b"LCFU";
 const PRIVATE_FIXTURE_RESULT_V1_MAGIC: [u8; MAGIC_WIDTH] = *b"LCFR";
-const PRIVATE_FIXTURE_ABI_VERSION_V1: u16 = 1;
+const PRIVATE_FIXTURE_ABI_VERSION_V2: u16 = 2;
 
 const AUTHORED_SOURCE: SourceIdV1 = SourceIdV1::new(1);
 const FIXED_TARGET: TargetIdV1 = TargetIdV1::new(2);
@@ -55,13 +85,6 @@ const OUTPUT_OCCURRENCE: OccurrenceIdV1 = OccurrenceIdV1::new(8);
 const PRESENTATION_ROOT: PresentationRootIdV1 = PresentationRootIdV1::new(9);
 const FINAL_VISIBLE_IDENTITY: ConstraintIdV1 = ConstraintIdV1::new(10);
 const OUTPUT: OutputSlotIdV1 = OutputSlotIdV1::new(17);
-// Static resolution still needs attachment-local provenance, but neither value
-// is authored or observable through this artifact. PR E will introduce the
-// runtime stream/revision contract instead of retrofitting semantics onto these
-// private one-shot identities.
-const STATIC_RESOLUTION_SCOPE: u32 = 1;
-const STATIC_RESOLVE_REVISION: u64 = 1;
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PrivateFixtureErrorV1 {
     InvalidMagic,
@@ -131,14 +154,53 @@ struct AuthoredAppearanceV1 {
 struct AuthoredPrivateFixtureV1 {
     source: Srgb8,
     opacity: f64,
-    frozen_backdrop: Srgb8,
     appearance: AuthoredAppearanceV1,
     expected_final_visible: Srgb8,
     sink_output: u32,
+    stream: u32,
+    revision: u64,
+    scenarios: ScenarioWireSetV2,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ScenarioWireV2 {
+    id: u32,
+    backdrop: Srgb8,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ScenarioWireSetV2 {
+    len: u8,
+    values: [ScenarioWireV2; MAX_SCENARIOS_V2],
+}
+
+#[derive(Debug, Clone, Copy)]
+enum ObservationUpdateWireV2 {
+    Observed {
+        stream: u32,
+        revision: u64,
+        scenarios: ScenarioWireSetV2,
+    },
+    Unknown {
+        stream: u32,
+        revision: u64,
+        reason: u32,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PrivateFixtureStateV2 {
+    Waiting = 1,
+    Ready = 2,
+    Stale = 3,
+    Failed = 4,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct CertifiedPrivateFixtureResultV1 {
+    state: PrivateFixtureStateV2,
+    stream: u32,
+    revision: u64,
     output: u32,
     sink_output: u32,
     paint_source: Srgb8,
@@ -194,6 +256,28 @@ impl<'a> WireReaderV1<'a> {
 
     fn read_rgb(&mut self) -> Result<Srgb8, PrivateFixtureErrorV1> {
         Ok(Srgb8::new(self.read_bytes::<RGB_WIDTH>()?))
+    }
+
+    fn read_scenarios_v2(&mut self) -> Result<ScenarioWireSetV2, PrivateFixtureErrorV1> {
+        let len = self.read_u8()?;
+        if usize::from(len) > MAX_SCENARIOS_V2 {
+            return Err(PrivateFixtureErrorV1::InvalidAuthoredData);
+        }
+        let mut values = [ScenarioWireV2 {
+            id: 0,
+            backdrop: Srgb8::new([0; 3]),
+        }; MAX_SCENARIOS_V2];
+        for value in &mut values {
+            value.id = self.read_u32()?;
+            value.backdrop = self.read_rgb()?;
+        }
+        if values[usize::from(len)..]
+            .iter()
+            .any(|value| value.id != 0 || value.backdrop != Srgb8::new([0; 3]))
+        {
+            return Err(PrivateFixtureErrorV1::InvalidAuthoredData);
+        }
+        Ok(ScenarioWireSetV2 { len, values })
     }
 
     fn finish(self) -> Result<(), PrivateFixtureErrorV1> {
@@ -270,23 +354,22 @@ fn wire_len_u16(value: usize) -> Result<u16, PrivateFixtureErrorV1> {
     u16::try_from(value).map_err(|_| PrivateFixtureErrorV1::InternalInvariant)
 }
 
-fn decode_request_v1(
-    bytes: &[u8; PRIVATE_FIXTURE_REQUEST_V1_LEN],
+fn decode_request_v2(
+    bytes: &[u8; PRIVATE_FIXTURE_REQUEST_V2_LEN],
 ) -> Result<AuthoredPrivateFixtureV1, PrivateFixtureErrorV1> {
     let mut reader = WireReaderV1::new(bytes);
     if reader.read_bytes::<MAGIC_WIDTH>()? != PRIVATE_FIXTURE_REQUEST_V1_MAGIC {
         return Err(PrivateFixtureErrorV1::InvalidMagic);
     }
-    if reader.read_u16()? != PRIVATE_FIXTURE_ABI_VERSION_V1 {
+    if reader.read_u16()? != PRIVATE_FIXTURE_ABI_VERSION_V2 {
         return Err(PrivateFixtureErrorV1::UnsupportedVersion);
     }
-    if reader.read_u16()? != wire_len_u16(PRIVATE_FIXTURE_REQUEST_V1_LEN)? {
+    if reader.read_u16()? != wire_len_u16(PRIVATE_FIXTURE_REQUEST_V2_LEN)? {
         return Err(PrivateFixtureErrorV1::InvalidLength);
     }
 
     let source = reader.read_rgb()?;
     let opacity = reader.read_f64()?;
-    let frozen_backdrop = reader.read_rgb()?;
     let appearance = AuthoredAppearanceV1 {
         adapting_luminance_cd_m2: reader.read_f64()?,
         background_luminance_ratio_yb_yw: reader.read_f64()?,
@@ -299,22 +382,73 @@ fn decode_request_v1(
     };
     let expected_final_visible = reader.read_rgb()?;
     let sink_output = reader.read_u32()?;
+    let stream = reader.read_u32()?;
+    let revision = reader.read_u64()?;
+    let scenarios = reader.read_scenarios_v2()?;
     reader.finish()?;
+    if scenarios.len == 0 {
+        return Err(PrivateFixtureErrorV1::InvalidAuthoredData);
+    }
 
     Ok(AuthoredPrivateFixtureV1 {
         source,
         opacity,
-        frozen_backdrop,
         appearance,
         expected_final_visible,
         sink_output,
+        stream,
+        revision,
+        scenarios,
     })
+}
+
+#[cfg(target_arch = "wasm32")]
+fn decode_update_v2(
+    bytes: &[u8; PRIVATE_FIXTURE_UPDATE_V2_LEN],
+) -> Result<ObservationUpdateWireV2, PrivateFixtureErrorV1> {
+    let mut reader = WireReaderV1::new(bytes);
+    if reader.read_bytes::<MAGIC_WIDTH>()? != PRIVATE_FIXTURE_UPDATE_V2_MAGIC {
+        return Err(PrivateFixtureErrorV1::InvalidMagic);
+    }
+    if reader.read_u16()? != PRIVATE_FIXTURE_ABI_VERSION_V2 {
+        return Err(PrivateFixtureErrorV1::UnsupportedVersion);
+    }
+    if reader.read_u16()? != wire_len_u16(PRIVATE_FIXTURE_UPDATE_V2_LEN)? {
+        return Err(PrivateFixtureErrorV1::InvalidLength);
+    }
+    let stream = reader.read_u32()?;
+    let revision = reader.read_u64()?;
+    let kind = reader.read_u8()?;
+    let scenarios = reader.read_scenarios_v2()?;
+    let reason = reader.read_u32()?;
+    reader.finish()?;
+    match kind {
+        1 if reason == 0 && scenarios.len != 0 => Ok(ObservationUpdateWireV2::Observed {
+            stream,
+            revision,
+            scenarios,
+        }),
+        2 if scenarios.len == 0
+            && scenarios
+                .values
+                .iter()
+                .all(|value| value.id == 0 && value.backdrop == Srgb8::new([0; 3])) =>
+        {
+            Ok(ObservationUpdateWireV2::Unknown {
+                stream,
+                revision,
+                reason,
+            })
+        }
+        _ => Err(PrivateFixtureErrorV1::InvalidAuthoredData),
+    }
 }
 
 struct ExecutedPrivateFixtureV1<H>
 where
     H: HandoffPointSinkHostV1,
 {
+    stream: u32,
     attachment: HandoffAttachmentV1<H>,
     projection: Result<CertifiedPrivateFixtureResultV1, PrivateFixtureErrorV1>,
 }
@@ -364,7 +498,7 @@ where
     )];
     let mut attachment = owner
         .attach_external(
-            STATIC_RESOLUTION_SCOPE,
+            authored.stream,
             &emissions,
             &presentations,
             FamilyArtifactBundleV2::empty(),
@@ -372,43 +506,152 @@ where
         )
         .map_err(|_| PrivateFixtureErrorV1::AttachmentRejected)?;
 
-    let frozen_surface = [authored.frozen_backdrop];
-    let scenarios = [ScenarioV1::new(1, &frozen_surface)];
-    let commit = match attachment.update(UpdateV1::Observed {
-        revision: STATIC_RESOLVE_REVISION,
-        scenarios: &scenarios,
-    }) {
-        Ok(commit) => commit,
-        Err(_) => {
-            return Ok(ExecutedPrivateFixtureV1 {
-                attachment,
-                projection: Err(PrivateFixtureErrorV1::UpdateRejected),
-            });
-        }
-    };
+    let commit =
+        match apply_observed_update_v2(&mut attachment, authored.revision, authored.scenarios) {
+            Ok(commit) => commit,
+            Err(_) => {
+                return Ok(ExecutedPrivateFixtureV1 {
+                    stream: authored.stream,
+                    attachment,
+                    projection: Err(PrivateFixtureErrorV1::UpdateRejected),
+                });
+            }
+        };
     let projection = project_attachment_commit_v1(commit);
 
     Ok(ExecutedPrivateFixtureV1 {
+        stream: authored.stream,
         attachment,
         projection,
     })
 }
 
+fn apply_observed_update_v2<'a, H>(
+    attachment: &'a mut HandoffAttachmentV1<H>,
+    revision: u64,
+    scenarios: ScenarioWireSetV2,
+) -> Result<
+    crate::program::attachment::AttachmentCommitV1<'a, HandoffPointSinkOutputIdV1>,
+    PrivateFixtureErrorV1,
+>
+where
+    H: HandoffPointSinkHostV1,
+{
+    let values = scenarios.values.map(|scenario| [scenario.backdrop]);
+    match scenarios.len {
+        1 => {
+            let admitted = [ScenarioV1::new(scenarios.values[0].id, &values[0])];
+            attachment
+                .update(UpdateV1::Observed {
+                    revision,
+                    scenarios: &admitted,
+                })
+                .map_err(|_| PrivateFixtureErrorV1::UpdateRejected)
+        }
+        2 => {
+            let admitted = [
+                ScenarioV1::new(scenarios.values[0].id, &values[0]),
+                ScenarioV1::new(scenarios.values[1].id, &values[1]),
+            ];
+            attachment
+                .update(UpdateV1::Observed {
+                    revision,
+                    scenarios: &admitted,
+                })
+                .map_err(|_| PrivateFixtureErrorV1::UpdateRejected)
+        }
+        _ => Err(PrivateFixtureErrorV1::InvalidAuthoredData),
+    }
+}
+
+fn apply_update_v2<'a, H>(
+    attachment: &'a mut HandoffAttachmentV1<H>,
+    update: ObservationUpdateWireV2,
+) -> Result<
+    crate::program::attachment::AttachmentCommitV1<'a, HandoffPointSinkOutputIdV1>,
+    PrivateFixtureErrorV1,
+>
+where
+    H: HandoffPointSinkHostV1,
+{
+    match update {
+        ObservationUpdateWireV2::Observed {
+            revision,
+            scenarios,
+            ..
+        } => apply_observed_update_v2(attachment, revision, scenarios),
+        ObservationUpdateWireV2::Unknown {
+            revision, reason, ..
+        } => attachment
+            .update(UpdateV1::Unknown {
+                revision,
+                reason_id: reason,
+            })
+            .map_err(|_| PrivateFixtureErrorV1::UpdateRejected),
+    }
+}
+
 fn project_attachment_commit_v1(
     commit: crate::program::attachment::AttachmentCommitV1<'_, HandoffPointSinkOutputIdV1>,
 ) -> Result<CertifiedPrivateFixtureResultV1, PrivateFixtureErrorV1> {
+    let result = project_attachment_commit_v2(commit)?;
+    if matches!(result.state, PrivateFixtureStateV2::Failed) {
+        Err(PrivateFixtureErrorV1::MissingCertifiedOutput)
+    } else {
+        Ok(result)
+    }
+}
+
+fn project_update_commit_v2(
+    commit: crate::program::attachment::AttachmentCommitV1<'_, HandoffPointSinkOutputIdV1>,
+) -> Result<CertifiedPrivateFixtureResultV1, PrivateFixtureErrorV1> {
+    project_attachment_commit_v2(commit)
+}
+
+fn project_attachment_commit_v2(
+    commit: crate::program::attachment::AttachmentCommitV1<'_, HandoffPointSinkOutputIdV1>,
+) -> Result<CertifiedPrivateFixtureResultV1, PrivateFixtureErrorV1> {
+    let evidence = commit.evidence();
+    let (stream, revision) = match evidence.observation_head() {
+        ObservationHeadV1::Empty => return Err(PrivateFixtureErrorV1::InternalInvariant),
+        ObservationHeadV1::Unknown {
+            stream, revision, ..
+        }
+        | ObservationHeadV1::Observed { stream, revision } => (stream.value(), revision),
+    };
+    let state = match evidence.kind() {
+        StateKindV1::Waiting => PrivateFixtureStateV2::Waiting,
+        StateKindV1::Ready => PrivateFixtureStateV2::Ready,
+        StateKindV1::Stale => PrivateFixtureStateV2::Stale,
+        StateKindV1::Failed => PrivateFixtureStateV2::Failed,
+    };
     let mut renders = commit.render_outputs();
-    let render = renders
-        .next()
-        .ok_or(PrivateFixtureErrorV1::MissingCertifiedOutput)?;
+    let Some(render) = renders.next() else {
+        if matches!(state, PrivateFixtureStateV2::Ready) {
+            return Err(PrivateFixtureErrorV1::MissingCertifiedOutput);
+        }
+        return Ok(CertifiedPrivateFixtureResultV1 {
+            state,
+            stream,
+            revision,
+            output: 0,
+            sink_output: 0,
+            paint_source: Srgb8::new([0; 3]),
+            paint_opacity_bits: 0,
+            content_identity: [0; IDENTITY_WIDTH],
+        });
+    };
     if renders.next().is_some() {
         return Err(PrivateFixtureErrorV1::MultipleCertifiedOutputs);
     }
-    project_certified_render_v1(render)
+    project_certified_render_v1(render, state, stream, revision)
 }
 
 fn project_certified_render_v1(
     render: crate::program::attachment::AttachedRenderOutputV1<'_, HandoffPointSinkOutputIdV1>,
+    state: PrivateFixtureStateV2,
+    stream: u32,
+    revision: u64,
 ) -> Result<CertifiedPrivateFixtureResultV1, PrivateFixtureErrorV1> {
     let certificate = render.certificate();
     if certificate.selection_release_identity().is_some()
@@ -418,6 +661,9 @@ fn project_certified_render_v1(
     }
     let paint = render.paint();
     Ok(CertifiedPrivateFixtureResultV1 {
+        state,
+        stream,
+        revision,
         output: render.output().value(),
         sink_output: render.sink_output().value(),
         paint_source: paint.source(),
@@ -476,24 +722,32 @@ const fn begin_dispose_status_v1(result: Result<u32, PrivateFixtureErrorV1>) -> 
 const RESULT_MAGIC_OFFSET: usize = 0;
 const RESULT_VERSION_OFFSET: usize = RESULT_MAGIC_OFFSET + MAGIC_WIDTH;
 const RESULT_LENGTH_OFFSET: usize = RESULT_VERSION_OFFSET + U16_WIDTH;
-const RESULT_OUTPUT_OFFSET: usize = RESULT_LENGTH_OFFSET + U16_WIDTH;
+const RESULT_STATE_OFFSET: usize = RESULT_LENGTH_OFFSET + U16_WIDTH;
+const RESULT_STREAM_OFFSET: usize = RESULT_STATE_OFFSET + BYTE_WIDTH;
+const RESULT_REVISION_OFFSET: usize = RESULT_STREAM_OFFSET + U32_WIDTH;
+const RESULT_OUTPUT_OFFSET: usize = RESULT_REVISION_OFFSET + U64_WIDTH;
 const RESULT_SINK_OUTPUT_OFFSET: usize = RESULT_OUTPUT_OFFSET + U32_WIDTH;
 const RESULT_RGB_OFFSET: usize = RESULT_SINK_OUTPUT_OFFSET + U32_WIDTH;
 const RESULT_OPACITY_OFFSET: usize = RESULT_RGB_OFFSET + RGB_WIDTH;
 const RESULT_CONTENT_IDENTITY_OFFSET: usize = RESULT_OPACITY_OFFSET + U64_WIDTH;
 const RESULT_END_OFFSET: usize = RESULT_CONTENT_IDENTITY_OFFSET + IDENTITY_WIDTH;
-const _: () = assert!(RESULT_END_OFFSET == PRIVATE_FIXTURE_RESULT_V1_LEN);
+const _: () = assert!(RESULT_END_OFFSET == PRIVATE_FIXTURE_RESULT_V2_LEN);
 
 fn encode_result_v1(
     result: CertifiedPrivateFixtureResultV1,
-) -> [u8; PRIVATE_FIXTURE_RESULT_V1_LEN] {
-    let mut bytes = [0; PRIVATE_FIXTURE_RESULT_V1_LEN];
+) -> [u8; PRIVATE_FIXTURE_RESULT_V2_LEN] {
+    let mut bytes = [0; PRIVATE_FIXTURE_RESULT_V2_LEN];
     bytes[RESULT_MAGIC_OFFSET..RESULT_VERSION_OFFSET]
         .copy_from_slice(&PRIVATE_FIXTURE_RESULT_V1_MAGIC);
     bytes[RESULT_VERSION_OFFSET..RESULT_LENGTH_OFFSET]
-        .copy_from_slice(&PRIVATE_FIXTURE_ABI_VERSION_V1.to_le_bytes());
-    bytes[RESULT_LENGTH_OFFSET..RESULT_OUTPUT_OFFSET]
-        .copy_from_slice(&(PRIVATE_FIXTURE_RESULT_V1_LEN as u16).to_le_bytes());
+        .copy_from_slice(&PRIVATE_FIXTURE_ABI_VERSION_V2.to_le_bytes());
+    bytes[RESULT_LENGTH_OFFSET..RESULT_STATE_OFFSET]
+        .copy_from_slice(&(PRIVATE_FIXTURE_RESULT_V2_LEN as u16).to_le_bytes());
+    bytes[RESULT_STATE_OFFSET] = result.state as u8;
+    bytes[RESULT_STREAM_OFFSET..RESULT_REVISION_OFFSET]
+        .copy_from_slice(&result.stream.to_le_bytes());
+    bytes[RESULT_REVISION_OFFSET..RESULT_OUTPUT_OFFSET]
+        .copy_from_slice(&result.revision.to_le_bytes());
     bytes[RESULT_OUTPUT_OFFSET..RESULT_SINK_OUTPUT_OFFSET]
         .copy_from_slice(&result.output.to_le_bytes());
     bytes[RESULT_SINK_OUTPUT_OFFSET..RESULT_RGB_OFFSET]
@@ -514,10 +768,12 @@ where
     Running,
     Active {
         generation: u32,
+        stream: u32,
         attachment: HandoffAttachmentV1<H>,
     },
     Disposing {
         generation: u32,
+        stream: u32,
         token: u32,
         attachment: Option<HandoffAttachmentV1<H>>,
     },
@@ -573,9 +829,31 @@ where
         }
         self.lifecycle = PrivateFixtureLifecycleV1::Active {
             generation,
+            stream: executed.stream,
             attachment: executed.attachment,
         };
         Ok(executed.projection)
+    }
+
+    fn update(
+        &mut self,
+        update: ObservationUpdateWireV2,
+    ) -> Result<CertifiedPrivateFixtureResultV1, PrivateFixtureErrorV1> {
+        let incoming_stream = match update {
+            ObservationUpdateWireV2::Observed { stream, .. }
+            | ObservationUpdateWireV2::Unknown { stream, .. } => stream,
+        };
+        let PrivateFixtureLifecycleV1::Active {
+            stream, attachment, ..
+        } = &mut self.lifecycle
+        else {
+            return Err(PrivateFixtureErrorV1::InvalidLifecycle);
+        };
+        if *stream != incoming_stream {
+            return Err(PrivateFixtureErrorV1::UpdateRejected);
+        }
+        let commit = apply_update_v2(attachment, update)?;
+        project_update_commit_v2(commit)
     }
 
     fn begin_dispose(&mut self) -> Result<u32, PrivateFixtureErrorV1> {
@@ -583,11 +861,13 @@ where
         match previous {
             PrivateFixtureLifecycleV1::Active {
                 generation,
+                stream,
                 attachment,
             } => {
                 let token = generation;
                 self.lifecycle = PrivateFixtureLifecycleV1::Disposing {
                     generation,
+                    stream,
                     token,
                     attachment: Some(attachment),
                 };
@@ -613,12 +893,14 @@ where
         match previous {
             PrivateFixtureLifecycleV1::Disposing {
                 generation,
+                stream,
                 token: expected,
                 attachment,
             } if token == expected => match attachment {
                 Some(attachment) => {
                     self.lifecycle = PrivateFixtureLifecycleV1::Active {
                         generation,
+                        stream,
                         attachment,
                     };
                     Ok(())
@@ -626,6 +908,7 @@ where
                 None => {
                     self.lifecycle = PrivateFixtureLifecycleV1::Disposing {
                         generation,
+                        stream,
                         token: expected,
                         attachment: None,
                     };
@@ -647,6 +930,7 @@ where
         let result = match &mut self.lifecycle {
             PrivateFixtureLifecycleV1::Disposing {
                 generation,
+                stream: _,
                 token: expected,
                 attachment,
             } if token == *expected => {
@@ -672,9 +956,32 @@ where
     }
 }
 
+#[cfg(target_arch = "wasm32")]
+fn update_request_v2<H>(
+    update: &[u8; PRIVATE_FIXTURE_UPDATE_V2_LEN],
+    result: &mut [u8; PRIVATE_FIXTURE_RESULT_V2_LEN],
+    instance: &mut PrivateFixtureInstanceV1<H>,
+) -> u32
+where
+    H: HandoffPointSinkHostV1,
+{
+    result.fill(0);
+    let update = match decode_update_v2(update) {
+        Ok(update) => update,
+        Err(error) => return error.status(),
+    };
+    match instance.update(update) {
+        Ok(certified) => {
+            *result = encode_result_v1(certified);
+            0
+        }
+        Err(error) => error.status(),
+    }
+}
+
 fn run_request_v1<H>(
-    request: &[u8; PRIVATE_FIXTURE_REQUEST_V1_LEN],
-    result: &mut [u8; PRIVATE_FIXTURE_RESULT_V1_LEN],
+    request: &[u8; PRIVATE_FIXTURE_REQUEST_V2_LEN],
+    result: &mut [u8; PRIVATE_FIXTURE_RESULT_V2_LEN],
     instance: &mut PrivateFixtureInstanceV1<H>,
     make_host: impl FnOnce(u32) -> H,
 ) -> u32
@@ -682,7 +989,7 @@ where
     H: HandoffPointSinkHostV1,
 {
     result.fill(0);
-    let authored = match decode_request_v1(request) {
+    let authored = match decode_request_v2(request) {
         Ok(authored) => authored,
         Err(error) => return error.status(),
     };
@@ -756,8 +1063,8 @@ impl Drop for PrivateFixtureAbiGuardV1<'_> {
 /// The host may read or overwrite `request` and `result` synchronously.
 unsafe fn run_fixed_buffer_entry_v1<H>(
     gate: &PrivateFixtureAbiGateV1,
-    request: *mut [u8; PRIVATE_FIXTURE_REQUEST_V1_LEN],
-    result: *mut [u8; PRIVATE_FIXTURE_RESULT_V1_LEN],
+    request: *mut [u8; PRIVATE_FIXTURE_REQUEST_V2_LEN],
+    result: *mut [u8; PRIVATE_FIXTURE_RESULT_V2_LEN],
     instance: *mut PrivateFixtureInstanceV1<H>,
     make_host: impl FnOnce(u32) -> H,
 ) -> u32
@@ -772,8 +1079,8 @@ where
     // clearing happen before any host call, and no reference to either backing
     // cell exists while `run_request_v1` may synchronously enter the host.
     let request_snapshot = unsafe { request.read() };
-    unsafe { result.write([0; PRIVATE_FIXTURE_RESULT_V1_LEN]) };
-    let mut staged_result = [0; PRIVATE_FIXTURE_RESULT_V1_LEN];
+    unsafe { result.write([0; PRIVATE_FIXTURE_RESULT_V2_LEN]) };
+    let mut staged_result = [0; PRIVATE_FIXTURE_RESULT_V2_LEN];
     // SAFETY: INSTANCE is not exported and the gate was acquired before this
     // dereference. A nested call returns Busy before reaching this line.
     let status = unsafe {
@@ -902,39 +1209,71 @@ mod wasm_abi {
     unsafe impl<T> Sync for SingleThreadWasmCellV1<T> {}
 
     static ABI_GATE_V1: PrivateFixtureAbiGateV1 = PrivateFixtureAbiGateV1::new();
-    static REQUEST_V1: SingleThreadWasmCellV1<[u8; PRIVATE_FIXTURE_REQUEST_V1_LEN]> =
-        SingleThreadWasmCellV1::new([0; PRIVATE_FIXTURE_REQUEST_V1_LEN]);
-    static RESULT_V1: SingleThreadWasmCellV1<[u8; PRIVATE_FIXTURE_RESULT_V1_LEN]> =
-        SingleThreadWasmCellV1::new([0; PRIVATE_FIXTURE_RESULT_V1_LEN]);
+    static REQUEST_V1: SingleThreadWasmCellV1<[u8; PRIVATE_FIXTURE_REQUEST_V2_LEN]> =
+        SingleThreadWasmCellV1::new([0; PRIVATE_FIXTURE_REQUEST_V2_LEN]);
+    static UPDATE_V2: SingleThreadWasmCellV1<[u8; PRIVATE_FIXTURE_UPDATE_V2_LEN]> =
+        SingleThreadWasmCellV1::new([0; PRIVATE_FIXTURE_UPDATE_V2_LEN]);
+    static RESULT_V1: SingleThreadWasmCellV1<[u8; PRIVATE_FIXTURE_RESULT_V2_LEN]> =
+        SingleThreadWasmCellV1::new([0; PRIVATE_FIXTURE_RESULT_V2_LEN]);
     static INSTANCE_V1: SingleThreadWasmCellV1<PrivateFixtureInstanceV1<WasmHostPointSinkV1>> =
         SingleThreadWasmCellV1::new(PrivateFixtureInstanceV1::new());
 
-    /// Возвращает адрес принадлежащего instance request-buffer ABI v1.
+    /// Возвращает legacy-named request-buffer с ABI-v2 framing.
     #[doc(hidden)]
     #[unsafe(export_name = "labcolors_private_fixture_request_v1_ptr")]
     pub extern "C" fn request_v1_ptr() -> *mut u8 {
         REQUEST_V1.0.get().cast::<u8>()
     }
 
-    /// Возвращает точный размер request-buffer ABI v1.
+    /// Возвращает точный размер legacy-named request-buffer ABI v2.
     #[doc(hidden)]
     #[unsafe(export_name = "labcolors_private_fixture_request_v1_len")]
     pub extern "C" fn request_v1_len() -> u32 {
-        PRIVATE_FIXTURE_REQUEST_V1_LEN as u32
+        PRIVATE_FIXTURE_REQUEST_V2_LEN as u32
     }
 
-    /// Возвращает read-only адрес принадлежащего instance result-buffer ABI v1.
+    /// Возвращает read-only legacy-named result-buffer с ABI-v2 framing.
     #[doc(hidden)]
     #[unsafe(export_name = "labcolors_private_fixture_result_v1_ptr")]
     pub extern "C" fn result_v1_ptr() -> *const u8 {
         RESULT_V1.0.get().cast::<u8>().cast_const()
     }
 
-    /// Возвращает точный размер result-buffer ABI v1.
+    /// Возвращает точный размер legacy-named result-buffer ABI v2.
     #[doc(hidden)]
     #[unsafe(export_name = "labcolors_private_fixture_result_v1_len")]
     pub extern "C" fn result_v1_len() -> u32 {
-        PRIVATE_FIXTURE_RESULT_V1_LEN as u32
+        PRIVATE_FIXTURE_RESULT_V2_LEN as u32
+    }
+
+    #[doc(hidden)]
+    #[unsafe(export_name = "labcolors_private_fixture_update_v2_ptr")]
+    pub extern "C" fn update_v2_ptr() -> *mut u8 {
+        UPDATE_V2.0.get().cast::<u8>()
+    }
+
+    #[doc(hidden)]
+    #[unsafe(export_name = "labcolors_private_fixture_update_v2_len")]
+    pub extern "C" fn update_v2_len() -> u32 {
+        PRIVATE_FIXTURE_UPDATE_V2_LEN as u32
+    }
+
+    #[doc(hidden)]
+    #[unsafe(export_name = "labcolors_private_fixture_update_v2")]
+    pub extern "C" fn update_v2() -> u32 {
+        let Some(_guard) = ABI_GATE_V1.try_enter() else {
+            return PrivateFixtureErrorV1::Busy.status();
+        };
+        // SAFETY: the unshared single-thread artifact owns disjoint static cells;
+        // the gate excludes run, update, and dispose reentry before borrowing them.
+        unsafe {
+            let update = UPDATE_V2.0.get().read();
+            RESULT_V1.0.get().write([0; PRIVATE_FIXTURE_RESULT_V2_LEN]);
+            let mut staged_result = [0; PRIVATE_FIXTURE_RESULT_V2_LEN];
+            let status = update_request_v2(&update, &mut staged_result, &mut *INSTANCE_V1.0.get());
+            RESULT_V1.0.get().write(staged_result);
+            status
+        }
     }
 
     /// Обнуляет stale result и синхронно исполняет весь certified route.
@@ -1112,7 +1451,6 @@ mod tests {
         AuthoredPrivateFixtureV1 {
             source: Srgb8::new([64, 64, 64]),
             opacity: 0.5,
-            frozen_backdrop: Srgb8::new([128, 128, 128]),
             appearance: AuthoredAppearanceV1 {
                 adapting_luminance_cd_m2: 64.0,
                 background_luminance_ratio_yb_yw: 0.2,
@@ -1120,24 +1458,38 @@ mod tests {
             },
             expected_final_visible: Srgb8::new([96, 96, 96]),
             sink_output: 501,
+            stream: 31,
+            revision: 1,
+            scenarios: ScenarioWireSetV2 {
+                len: 1,
+                values: [
+                    ScenarioWireV2 {
+                        id: 1,
+                        backdrop: Srgb8::new([128, 128, 128]),
+                    },
+                    ScenarioWireV2 {
+                        id: 0,
+                        backdrop: Srgb8::new([0; 3]),
+                    },
+                ],
+            },
         }
     }
 
     fn encode_request_for_test(
         authored: AuthoredPrivateFixtureV1,
-    ) -> [u8; PRIVATE_FIXTURE_REQUEST_V1_LEN] {
-        let mut bytes = [0; PRIVATE_FIXTURE_REQUEST_V1_LEN];
+    ) -> [u8; PRIVATE_FIXTURE_REQUEST_V2_LEN] {
+        let mut bytes = [0; PRIVATE_FIXTURE_REQUEST_V2_LEN];
         let mut writer = WireWriterV1::new(&mut bytes);
         writer
             .write_bytes(PRIVATE_FIXTURE_REQUEST_V1_MAGIC)
             .unwrap();
-        writer.write_u16(PRIVATE_FIXTURE_ABI_VERSION_V1).unwrap();
+        writer.write_u16(PRIVATE_FIXTURE_ABI_VERSION_V2).unwrap();
         writer
-            .write_u16(wire_len_u16(PRIVATE_FIXTURE_REQUEST_V1_LEN).unwrap())
+            .write_u16(wire_len_u16(PRIVATE_FIXTURE_REQUEST_V2_LEN).unwrap())
             .unwrap();
         writer.write_rgb(authored.source).unwrap();
         writer.write_f64(authored.opacity).unwrap();
-        writer.write_rgb(authored.frozen_backdrop).unwrap();
         writer
             .write_f64(authored.appearance.adapting_luminance_cd_m2)
             .unwrap();
@@ -1153,24 +1505,40 @@ mod tests {
             .unwrap();
         writer.write_rgb(authored.expected_final_visible).unwrap();
         writer.write_u32(authored.sink_output).unwrap();
+        writer.write_u32(authored.stream).unwrap();
+        writer.write_u64(authored.revision).unwrap();
+        writer.write_u8(authored.scenarios.len).unwrap();
+        for scenario in authored.scenarios.values {
+            writer.write_u32(scenario.id).unwrap();
+            writer.write_rgb(scenario.backdrop).unwrap();
+        }
         writer.finish().unwrap();
         bytes
     }
 
     fn decode_result_for_test(
-        bytes: &[u8; PRIVATE_FIXTURE_RESULT_V1_LEN],
+        bytes: &[u8; PRIVATE_FIXTURE_RESULT_V2_LEN],
     ) -> CertifiedPrivateFixtureResultV1 {
         let mut reader = WireReaderV1::new(bytes);
         assert_eq!(
             reader.read_bytes::<MAGIC_WIDTH>().unwrap(),
             PRIVATE_FIXTURE_RESULT_V1_MAGIC
         );
-        assert_eq!(reader.read_u16().unwrap(), PRIVATE_FIXTURE_ABI_VERSION_V1);
+        assert_eq!(reader.read_u16().unwrap(), PRIVATE_FIXTURE_ABI_VERSION_V2);
         assert_eq!(
             reader.read_u16().unwrap(),
-            wire_len_u16(PRIVATE_FIXTURE_RESULT_V1_LEN).unwrap()
+            wire_len_u16(PRIVATE_FIXTURE_RESULT_V2_LEN).unwrap()
         );
         let result = CertifiedPrivateFixtureResultV1 {
+            state: match reader.read_u8().unwrap() {
+                1 => PrivateFixtureStateV2::Waiting,
+                2 => PrivateFixtureStateV2::Ready,
+                3 => PrivateFixtureStateV2::Stale,
+                4 => PrivateFixtureStateV2::Failed,
+                _ => panic!("invalid state"),
+            },
+            stream: reader.read_u32().unwrap(),
+            revision: reader.read_u64().unwrap(),
             output: reader.read_u32().unwrap(),
             sink_output: reader.read_u32().unwrap(),
             paint_source: reader.read_rgb().unwrap(),
@@ -1183,7 +1551,7 @@ mod tests {
 
     struct RunDetailsV1 {
         status: u32,
-        result: [u8; PRIVATE_FIXTURE_RESULT_V1_LEN],
+        result: [u8; PRIVATE_FIXTURE_RESULT_V2_LEN],
     }
 
     fn run_details(authored: AuthoredPrivateFixtureV1) -> RunDetailsV1 {
@@ -1194,17 +1562,18 @@ mod tests {
             Err(error) => {
                 return RunDetailsV1 {
                     status: error.status(),
-                    result: [0; PRIVATE_FIXTURE_RESULT_V1_LEN],
+                    result: [0; PRIVATE_FIXTURE_RESULT_V2_LEN],
                 };
             }
         };
         let ExecutedPrivateFixtureV1 {
             attachment,
             projection,
+            ..
         } = executed;
         let (status, result) = match projection {
             Ok(certified) => (0, encode_result_v1(certified)),
-            Err(error) => (error.status(), [0; PRIVATE_FIXTURE_RESULT_V1_LEN]),
+            Err(error) => (error.status(), [0; PRIVATE_FIXTURE_RESULT_V2_LEN]),
         };
         mark_js_disposed(&oracle, generation);
         let mut attachment = Some(attachment);
@@ -1218,7 +1587,7 @@ mod tests {
         RunDetailsV1 { status, result }
     }
 
-    fn run(authored: AuthoredPrivateFixtureV1) -> (u32, [u8; PRIVATE_FIXTURE_RESULT_V1_LEN]) {
+    fn run(authored: AuthoredPrivateFixtureV1) -> (u32, [u8; PRIVATE_FIXTURE_RESULT_V2_LEN]) {
         let details = run_details(authored);
         (details.status, details.result)
     }
@@ -1236,6 +1605,99 @@ mod tests {
         assert_ne!(result.content_identity, [0; IDENTITY_WIDTH]);
     }
 
+    fn observed_update(
+        stream: u32,
+        revision: u64,
+        id: u32,
+        backdrop: Srgb8,
+    ) -> ObservationUpdateWireV2 {
+        ObservationUpdateWireV2::Observed {
+            stream,
+            revision,
+            scenarios: ScenarioWireSetV2 {
+                len: 1,
+                values: [
+                    ScenarioWireV2 { id, backdrop },
+                    ScenarioWireV2 {
+                        id: 0,
+                        backdrop: Srgb8::new([0; 3]),
+                    },
+                ],
+            },
+        }
+    }
+
+    #[test]
+    fn explicit_observation_update_re_resolves_the_active_attachment() {
+        let mut instance = PrivateFixtureInstanceV1::new();
+        let generation = instance.begin_run().unwrap();
+        let (host, _oracle) = native_host(generation);
+        let executed = execute_private_fixture_v1(valid_authored(), host).unwrap();
+        let initial = instance
+            .complete_run(generation, executed)
+            .unwrap()
+            .unwrap();
+
+        let updated = instance
+            .update(observed_update(31, 2, 2, Srgb8::new([128, 128, 128])))
+            .unwrap();
+
+        assert_eq!(initial.revision, 1);
+        assert_eq!(updated.state, PrivateFixtureStateV2::Ready);
+        assert_eq!(updated.stream, 31);
+        assert_eq!(updated.revision, 2);
+        assert_eq!(updated.content_identity, initial.content_identity);
+    }
+
+    #[test]
+    fn rejected_update_preserves_the_committed_revision_and_publication() {
+        let mut instance = PrivateFixtureInstanceV1::new();
+        let generation = instance.begin_run().unwrap();
+        let (host, oracle) = native_host(generation);
+        let executed = execute_private_fixture_v1(valid_authored(), host).unwrap();
+        instance
+            .complete_run(generation, executed)
+            .unwrap()
+            .unwrap();
+        let before = oracle.borrow().published;
+
+        assert_eq!(
+            instance.update(observed_update(31, 0, 2, Srgb8::new([128, 128, 128]))),
+            Err(PrivateFixtureErrorV1::UpdateRejected)
+        );
+        assert_eq!(oracle.borrow().published, before);
+
+        let replay = instance
+            .update(observed_update(31, 1, 1, Srgb8::new([128, 128, 128])))
+            .unwrap();
+        assert_eq!(replay.revision, 1);
+    }
+
+    #[test]
+    fn unknown_is_explicit_and_never_mints_a_certified_render() {
+        let mut instance = PrivateFixtureInstanceV1::new();
+        let generation = instance.begin_run().unwrap();
+        let (host, _oracle) = native_host(generation);
+        let executed = execute_private_fixture_v1(valid_authored(), host).unwrap();
+        instance
+            .complete_run(generation, executed)
+            .unwrap()
+            .unwrap();
+
+        let unknown = instance
+            .update(ObservationUpdateWireV2::Unknown {
+                stream: 31,
+                revision: 2,
+                reason: 7,
+            })
+            .unwrap();
+
+        assert_eq!(unknown.state, PrivateFixtureStateV2::Stale);
+        assert_eq!(unknown.revision, 2);
+        assert_eq!(unknown.output, 0);
+        assert_eq!(unknown.content_identity, [0; IDENTITY_WIDTH]);
+    }
+
     #[test]
     fn static_fixture_fails_closed_when_final_materialized_render_violates_constraint() {
         let mut authored = valid_authored();
@@ -1247,15 +1709,18 @@ mod tests {
             details.status,
             PrivateFixtureErrorV1::MissingCertifiedOutput.status()
         );
-        assert_eq!(details.result, [0; PRIVATE_FIXTURE_RESULT_V1_LEN]);
+        assert_eq!(details.result, [0; PRIVATE_FIXTURE_RESULT_V2_LEN]);
     }
 
     #[test]
     fn fixed_wire_offsets_end_exactly_at_the_grammar_derived_lengths() {
         let request = encode_request_for_test(valid_authored());
-        assert!(decode_request_v1(&request).is_ok());
+        assert!(decode_request_v2(&request).is_ok());
 
         let certified = CertifiedPrivateFixtureResultV1 {
+            state: PrivateFixtureStateV2::Ready,
+            stream: 31,
+            revision: 1,
             output: 1,
             sink_output: 2,
             paint_source: Srgb8::new([3, 4, 5]),
@@ -1298,7 +1763,7 @@ mod tests {
     fn bad_header_zeroes_the_whole_stale_result_before_returning() {
         let mut request = encode_request_for_test(valid_authored());
         request[MAGIC_WIDTH] ^= 1;
-        let mut result = [0xA5; PRIVATE_FIXTURE_RESULT_V1_LEN];
+        let mut result = [0xA5; PRIVATE_FIXTURE_RESULT_V2_LEN];
         let mut instance = PrivateFixtureInstanceV1::new();
         let (host, oracle) = native_host(1);
         let mut host = Some(host);
@@ -1310,7 +1775,7 @@ mod tests {
         });
 
         assert_eq!(status, PrivateFixtureErrorV1::UnsupportedVersion.status());
-        assert_eq!(result, [0; PRIVATE_FIXTURE_RESULT_V1_LEN]);
+        assert_eq!(result, [0; PRIVATE_FIXTURE_RESULT_V2_LEN]);
         assert_eq!(factory_calls, 0);
         assert!(matches!(
             instance.lifecycle,
@@ -1329,7 +1794,7 @@ mod tests {
             host.take().unwrap()
         });
         assert_eq!(status, PrivateFixtureErrorV1::InvalidLength.status());
-        assert_eq!(result, [0; PRIVATE_FIXTURE_RESULT_V1_LEN]);
+        assert_eq!(result, [0; PRIVATE_FIXTURE_RESULT_V2_LEN]);
         assert_eq!(factory_calls, 0);
         assert!(matches!(
             instance.lifecycle,
@@ -1349,7 +1814,7 @@ mod tests {
             status,
             PrivateFixtureErrorV1::MissingCertifiedOutput.status()
         );
-        assert_eq!(result, [0; PRIVATE_FIXTURE_RESULT_V1_LEN]);
+        assert_eq!(result, [0; PRIVATE_FIXTURE_RESULT_V2_LEN]);
     }
 
     #[test]
@@ -1362,7 +1827,7 @@ mod tests {
             result.status,
             PrivateFixtureErrorV1::MissingCertifiedOutput.status()
         );
-        assert_eq!(result.result, [0; PRIVATE_FIXTURE_RESULT_V1_LEN]);
+        assert_eq!(result.result, [0; PRIVATE_FIXTURE_RESULT_V2_LEN]);
     }
 
     #[test]
@@ -1452,6 +1917,7 @@ mod tests {
                     generation: retained_generation,
                     token: retained_token,
                     attachment,
+                    ..
                 } => {
                     assert_eq!(*retained_generation, generation);
                     assert_eq!(*retained_token, token);
@@ -1569,6 +2035,7 @@ mod tests {
                 generation: retained_generation,
                 token: retained_token,
                 attachment,
+                ..
             } => {
                 assert_eq!(*retained_generation, generation);
                 assert_eq!(*retained_token, token);
@@ -1658,8 +2125,8 @@ mod tests {
 
     struct HostileFixedBufferHostV1 {
         gate: *const PrivateFixtureAbiGateV1,
-        request: *mut [u8; PRIVATE_FIXTURE_REQUEST_V1_LEN],
-        result: *mut [u8; PRIVATE_FIXTURE_RESULT_V1_LEN],
+        request: *mut [u8; PRIVATE_FIXTURE_REQUEST_V2_LEN],
+        result: *mut [u8; PRIVATE_FIXTURE_RESULT_V2_LEN],
         instance: *mut PrivateFixtureInstanceV1<Self>,
         nested_status: Rc<Cell<Option<u32>>>,
     }
@@ -1672,8 +2139,8 @@ mod tests {
             // SAFETY: the outer entry deliberately holds no references to its
             // exported-equivalent buffer cells while this callback runs.
             unsafe {
-                self.request.write([0xCC; PRIVATE_FIXTURE_REQUEST_V1_LEN]);
-                self.result.write([0xDD; PRIVATE_FIXTURE_RESULT_V1_LEN]);
+                self.request.write([0xCC; PRIVATE_FIXTURE_REQUEST_V2_LEN]);
+                self.result.write([0xDD; PRIVATE_FIXTURE_RESULT_V2_LEN]);
             }
             // SAFETY: this uses the identical entry wrapper and gate. Busy is
             // returned before the aliased INSTANCE raw pointer is dereferenced.
@@ -1695,7 +2162,7 @@ mod tests {
     fn fixed_buffer_entry_isolates_host_mutation_and_nested_reentry() {
         let gate = PrivateFixtureAbiGateV1::new();
         let request = UnsafeCell::new(encode_request_for_test(valid_authored()));
-        let result = UnsafeCell::new([0xA5; PRIVATE_FIXTURE_RESULT_V1_LEN]);
+        let result = UnsafeCell::new([0xA5; PRIVATE_FIXTURE_RESULT_V2_LEN]);
         let mut instance = PrivateFixtureInstanceV1::<HostileFixedBufferHostV1>::new();
         let instance_ptr = &raw mut instance;
         let nested_status = Rc::new(Cell::new(None));
@@ -1723,11 +2190,11 @@ mod tests {
         let hostile_request = unsafe { request.get().read() };
         let certified_result = unsafe { result.get().read() };
         assert_eq!(
-            hostile_request, [0xCC; PRIVATE_FIXTURE_REQUEST_V1_LEN],
+            hostile_request, [0xCC; PRIVATE_FIXTURE_REQUEST_V2_LEN],
             "the host mutation must hit only backing memory, not the snapshot",
         );
         assert_ne!(
-            certified_result, [0xDD; PRIVATE_FIXTURE_RESULT_V1_LEN],
+            certified_result, [0xDD; PRIVATE_FIXTURE_RESULT_V2_LEN],
             "the staged result must overwrite the hostile backing write",
         );
         assert_eq!(

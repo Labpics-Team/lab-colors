@@ -1,12 +1,14 @@
 const OUTPUT_BINDING = "--lab-private-program-output";
-const EXPECTED_REQUEST_LENGTH = 46;
+const EXPECTED_REQUEST_LENGTH = 70;
+const EXPECTED_UPDATE_LENGTH = 40;
 const EXPECTED_OUTPUT = 17;
 const EXPECTED_SINK_OUTPUT = 501;
 const EXPECTED_PAINT_SOURCE = Object.freeze([64, 64, 64]);
 const EXPECTED_PAINT_OPACITY_BITS_HEX = "3fe0000000000000";
 const EXPECTED_COMPUTED_CSS = "rgba(64, 64, 64, 0.5)";
 
-const REQUEST_HEX = "4c43465101002e00404040000000000000e03f80808000000000000050409a9999999999c93f01606060f5010000";
+const REQUEST_HEX = "4c43465102004600404040000000000000e03f00000000000050409a9999999999c93f01606060f50100001f0000000100000000000000010100000080808000000000000000";
+const UPDATE_HEX = "4c434655020028001f00000002000000000000000101020000008080800000000000000000000000";
 const EXPECTED_CONTENT_IDENTITY =
   "4daf4731d823ba228f4189d08c76183dd8a81e8b593ff709828b7329e075a914";
 
@@ -16,6 +18,7 @@ const EXPECTED_CHECKS = Object.freeze([
   "pre-run-dispose-idempotence",
   "exact-computed-css",
   "exact-certified-receipt",
+  "explicit-observation-update",
   "dispose",
   "post-run-dispose-idempotence",
 ]);
@@ -45,10 +48,10 @@ function assertStableLiterals() {
   );
 }
 
-function exactRequestBytes() {
-  const bytes = new Uint8Array(REQUEST_HEX.length / 2);
+function exactWireBytes(hex) {
+  const bytes = new Uint8Array(hex.length / 2);
   for (let index = 0; index < bytes.length; index += 1) {
-    bytes[index] = Number.parseInt(REQUEST_HEX.slice(index * 2, index * 2 + 2), 16);
+    bytes[index] = Number.parseInt(hex.slice(index * 2, index * 2 + 2), 16);
   }
   return bytes;
 }
@@ -63,7 +66,7 @@ async function runProof() {
   );
   checks.push("installed-physical-private-program");
 
-  const requestBytes = exactRequestBytes();
+  const requestBytes = exactWireBytes(REQUEST_HEX);
   equal(
     requestBytes.length,
     EXPECTED_REQUEST_LENGTH,
@@ -81,6 +84,7 @@ async function runProof() {
     outputBinding: OUTPUT_BINDING,
   });
   assert(consumer && typeof consumer.run === "function", "consumer exposes run");
+  assert(typeof consumer.update === "function", "consumer exposes update");
   assert(typeof consumer.dispose === "function", "consumer exposes dispose");
 
   equal(await consumer.dispose(), true, "pre-run dispose returns the exact success literal");
@@ -123,6 +127,15 @@ async function runProof() {
     );
     equal(receipt.contentIdentity, EXPECTED_CONTENT_IDENTITY, "certified content identity");
     checks.push("exact-certified-receipt");
+
+    const updateBytes = exactWireBytes(UPDATE_HEX);
+    equal(updateBytes.length, EXPECTED_UPDATE_LENGTH, "update has the exact ABI length");
+    const updated = await consumer.update(updateBytes);
+    equal(updated.state, 2, "updated state is Ready");
+    equal(updated.stream, 31, "updated state retains stream identity");
+    equal(updated.revision, 2n, "updated state advances revision");
+    equal(updated.contentIdentity, EXPECTED_CONTENT_IDENTITY, "update reuses compiled identity");
+    checks.push("explicit-observation-update");
   } finally {
     disposeResult = await consumer.dispose();
   }

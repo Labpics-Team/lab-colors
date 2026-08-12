@@ -48,8 +48,8 @@ const EXPECTED_MUTATIONS = Object.freeze([
     "semantic",
     "rust-wasm",
     "crates/labcolors-core/src/private_fixture.rs",
-    "4eaaa43cdc5ebe598f6c6216db1e50cd826c3230603ecf48e6b9ceb498ffcf8c",
-    "PrivateProgramConsumerError: private Program consumer: shipping trace permits exactly one SetAll callback",
+    "82242d45a0a98d8912bb70424a6661c8090f1233ac7f7693ccca40a79a3e53e2",
+    "Error: private Program browser fixture: updated state is Ready; expected 2, got 3",
   ],
   [
     "external-attachment-handoff-binding-bypass",
@@ -64,7 +64,7 @@ const EXPECTED_MUTATIONS = Object.freeze([
     "semantic",
     "javascript",
     "packages/colors/private-program/consumer.js",
-    "354125be94020475d0e34beb0f4498474cf243adb89d3bb591589ff5d485af0b",
+    "2bde4eb3906f4d293a313e3037afc5e40841cda76603175397c19061cb43ea1a",
     "Error: private Program browser fixture: computed background is the exact expected CSS literal; expected \"rgba(64, 64, 64, 0.5)\", got \"rgba(0, 0, 0, 0)\"",
   ],
 ]);
@@ -369,7 +369,7 @@ test("a mutation kill requires its real-browser assertion and semantic marker", 
     () =>
       assertMutationSpecificBrowserFailure(definition, {
         ...killed,
-        stdout: "LAB_COLORS_PRIVATE_PROGRAM_BROWSER_PASS v1 checks=7",
+        stdout: "LAB_COLORS_PRIVATE_PROGRAM_BROWSER_PASS v1 checks=8",
       }),
     /emitted the browser PASS receipt/u,
   );
