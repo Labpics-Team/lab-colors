@@ -68,7 +68,7 @@ const BROWSER_ASSERTION_PREFIX =
   "private Program browser proof: browser assertion failed:";
 const BROWSER_CLEANUP_FAILURE = "private Program browser proof or cleanup failed";
 const MUTATION_RECEIPT = "LAB_COLORS_PRIVATE_PROGRAM_MUTATIONS_PASS v1";
-const EXPECTED_SEMANTIC_MUTATION_COUNT = 6;
+const EXPECTED_SEMANTIC_MUTATION_COUNT = 7;
 const EXPECTED_BINARY_DIFFERENTIAL_COUNT = 1;
 const MUTATION_TIMEOUT_ENV = "LAB_COLORS_PRIVATE_MUTATION_TIMEOUT_MS";
 const CHILD_TIMEOUT_ENV = "LAB_COLORS_PRIVATE_MUTATION_CHILD_TIMEOUT_MS";
@@ -136,6 +136,16 @@ export const PRIVATE_PROGRAM_MUTATION_CASES = Object.freeze([
     ).slice(0, -1),
     expectedBrowserAssertion:
       "Error: private Program browser fixture: updated state is Ready; expected 2, got 3",
+  }),
+  mutation({
+    id: "incremental-invalidation-skip",
+    proof: "semantic-source-bypass",
+    artifact: "rust-wasm",
+    sourcePath: "crates/labcolors-core/src/program_session.rs",
+    search: "if previous_values == values {",
+    replacement: "if true {",
+    expectedBrowserAssertion:
+      "Error: private Program browser fixture: changed observation state is Failed; expected 4, got 2",
   }),
   mutation({
     id: "external-attachment-handoff-binding-bypass",

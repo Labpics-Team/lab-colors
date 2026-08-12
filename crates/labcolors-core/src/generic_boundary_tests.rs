@@ -1323,9 +1323,11 @@ fn shared_observation_ssot_has_one_backing_without_lifecycle_or_adapter_facades(
         "compiled schema and observations must share the same Rc-backed schema",
     );
     assert!(
-        OBSERVATION_SOURCE.contains(
-            "#[derive(Debug, PartialEq, Eq)]\n#[cfg_attr(test, derive(Clone))]\npub(crate) struct CanonicalObservationSchemaV1",
-        ),
+        OBSERVATION_SOURCE.contains(concat!(
+            "#[derive(Debug, PartialEq, Eq)]\n",
+            "#[cfg_attr(test, derive(Clone))]\n",
+            "pub(crate) struct CanonicalObservationSchemaV1(Rc<[SurfaceInputPortId]>);",
+        )),
         "production schema ownership must not expose a general Clone capability",
     );
     assert_eq!(
@@ -1891,7 +1893,7 @@ fn program_session_keeps_physical_evidence_separate_from_lazy_lcs_capability() {
     let lcs_adapter = source_scope(
         CONSTRAINTS_SOURCE,
         "pub(crate) struct ProgramLcsPointAdapterV1 {",
-        "#[cfg(test)]\nimpl Evaluator<ProgramLcsPointTargetV1>",
+        "impl Evaluator<ProgramLcsPointTargetV1>",
     );
     assert!(
         !lcs_adapter.contains("Option<ModeledLcsOccurrenceV1>"),

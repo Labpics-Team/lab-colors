@@ -139,6 +139,7 @@ impl SessionPlanV1 for SentinelPlan {
         &mut self,
         _owner: &Self::OwnerLease,
         observation: RevisionBoundObservationV1,
+        _previous: Option<&Self::Verified>,
         _permit: SessionObservationBindingPermitV1,
     ) -> Result<SessionDecision<Self::Verified, Self::Violation>, Self::Error> {
         self.control
@@ -207,6 +208,7 @@ impl SessionPlanV1 for ReplacingOwnerPlan {
         &mut self,
         owner: &Self::OwnerLease,
         observation: RevisionBoundObservationV1,
+        _previous: Option<&Self::Verified>,
         _permit: SessionObservationBindingPermitV1,
     ) -> Result<SessionDecision<Self::Verified, Self::Violation>, Self::Error> {
         self.evaluations.set(self.evaluations.get() + 1);
@@ -324,6 +326,7 @@ impl SessionPlanV1 for RetirementPlan {
         &mut self,
         _owner: &Self::OwnerLease,
         observation: RevisionBoundObservationV1,
+        _previous: Option<&Self::Verified>,
         _permit: SessionObservationBindingPermitV1,
     ) -> Result<SessionDecision<Self::Verified, Self::Violation>, Self::Error> {
         if !observation.shares_schema_backing_with(&self.schema) {
@@ -377,6 +380,7 @@ impl SessionPlanV1 for DropOrderPlan {
         &mut self,
         owner: &Self::OwnerLease,
         observation: RevisionBoundObservationV1,
+        _previous: Option<&Self::Verified>,
         _permit: SessionObservationBindingPermitV1,
     ) -> Result<SessionDecision<Self::Verified, Self::Violation>, Self::Error> {
         let installed = self
