@@ -535,18 +535,13 @@ fn private_fixture_is_one_feature_gated_production_caller_of_the_certified_hando
         );
     }
     for required in [
-        "admit_selection_release_v1(",
-        "materialise_joint_selection_v1(",
-        ".set_materialised_joint_selection(",
         ".compile()",
         ".attach_external(",
         "handoff_point_sink(",
         ".update(updatev1::observed",
         ".render_outputs()",
         ".certificate()",
-        ".selected_state_index()",
         ".content_identity()",
-        ".selection_release_identity()",
         "run_request_v1(",
         "struct wasmhostpointsinkv1",
         "css: string",
@@ -561,6 +556,9 @@ fn private_fixture_is_one_feature_gated_production_caller_of_the_certified_hando
         "pub use crate::program",
         "pub mod private_fixture",
         "declaredjointselectionv1::new(",
+        "admit_selection_release_v1(",
+        "materialise_joint_selection_v1(",
+        ".set_materialised_joint_selection(",
         "alloc_v1",
         "execute_private_fixture_config_v1",
         "include_intrinsic_relation",
@@ -575,11 +573,14 @@ fn private_fixture_is_one_feature_gated_production_caller_of_the_certified_hando
         );
     }
     assert_eq!(
-        production
-            .matches(".push_exact_intrinsic_relation_hard(")
-            .count(),
+        production.matches(".push_fixed_target(").count(),
         1,
-        "the production graph must unconditionally contain its one intrinsic relation",
+        "the static artifact must have one fixed target and no selection authority",
+    );
+    assert!(
+        production.contains("certificate.selection_release_identity().is_some()")
+            && production.contains("certificate.selected_state_index().is_some()"),
+        "the fixed-only artifact must reject any accidentally minted selection authority",
     );
 
     let handoff = normalized_production_code(PROGRAM_ATTACHMENT_HANDOFF_SOURCE);
