@@ -2205,6 +2205,8 @@ mod tests {
         );
     }
 
+    // Opaque Paint makes distinct backdrops distinct physical cases without
+    // changing the certified visible render, isolating reuse from semantics.
     fn two_case_opaque_authored() -> AuthoredPrivateFixtureV1 {
         AuthoredPrivateFixtureV1 {
             source: Srgb8::new([64, 64, 64]),
@@ -2420,6 +2422,7 @@ mod tests {
         assert_eq!(unknown.revision, 2);
         assert_eq!(unknown.output, 0);
 
+        CORE_PROGRAM_ASSESSMENT_CALLS.with(|calls| calls.set(0));
         let recovered = instance
             .update(two_case_observed_update(
                 3,
@@ -2430,5 +2433,6 @@ mod tests {
         assert_eq!(recovered.state, PrivateFixtureStateV2::Ready);
         assert_eq!(recovered.revision, 3);
         assert_eq!(recovered.content_identity, initial.content_identity);
+        assert_eq!(CORE_PROGRAM_ASSESSMENT_CALLS.with(Cell::get), 0);
     }
 }

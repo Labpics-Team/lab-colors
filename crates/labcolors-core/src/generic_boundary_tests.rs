@@ -1323,9 +1323,11 @@ fn shared_observation_ssot_has_one_backing_without_lifecycle_or_adapter_facades(
         "compiled schema and observations must share the same Rc-backed schema",
     );
     assert!(
-        OBSERVATION_SOURCE.contains("#[derive(Debug, PartialEq, Eq)]")
-            && OBSERVATION_SOURCE.contains("#[cfg_attr(test, derive(Clone))]")
-            && OBSERVATION_SOURCE.contains("pub(crate) struct CanonicalObservationSchemaV1"),
+        OBSERVATION_SOURCE.contains(concat!(
+            "#[derive(Debug, PartialEq, Eq)]\n",
+            "#[cfg_attr(test, derive(Clone))]\n",
+            "pub(crate) struct CanonicalObservationSchemaV1(Rc<[SurfaceInputPortId]>);",
+        )),
         "production schema ownership must not expose a general Clone capability",
     );
     assert_eq!(

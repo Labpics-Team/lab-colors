@@ -2543,20 +2543,19 @@ where
     DeclaredSrgb8CleanSet(DeclaredSrgb8CleanSetPassV1),
 }
 
-impl<Evaluation> Clone for ProgramConstraintPassEvidenceV1<Evaluation>
+impl<Evaluation> ProgramConstraintPassEvidenceV1<Evaluation>
 where
     Evaluation: ProgramConstraintEvaluatorSetV1,
 {
-    fn clone(&self) -> Self {
-        match self {
-            Self::VisibleUnary(evidence) => Self::VisibleUnary(
-                Evaluation::copy_pass_evidence(evidence)
-                    .unwrap_or_else(|| unreachable!("the production evaluator set is replayable")),
-            ),
+    fn try_copy(&self) -> Option<Self> {
+        Some(match self {
+            Self::VisibleUnary(evidence) => {
+                Self::VisibleUnary(Evaluation::copy_pass_evidence(evidence)?)
+            }
             Self::IntrinsicUnary(evidence) => Self::IntrinsicUnary(*evidence),
             Self::Relation(span) => Self::Relation(*span),
             Self::DeclaredSrgb8CleanSet(evidence) => Self::DeclaredSrgb8CleanSet(*evidence),
-        }
+        })
     }
 }
 
@@ -2570,20 +2569,19 @@ where
     DeclaredSrgb8CleanSet(DeclaredSrgb8CleanSetViolationV1),
 }
 
-impl<Evaluation> Clone for ProgramConstraintViolationEvidenceV1<Evaluation>
+impl<Evaluation> ProgramConstraintViolationEvidenceV1<Evaluation>
 where
     Evaluation: ProgramConstraintEvaluatorSetV1,
 {
-    fn clone(&self) -> Self {
-        match self {
-            Self::VisibleUnary(evidence) => Self::VisibleUnary(
-                Evaluation::copy_violation_evidence(evidence)
-                    .unwrap_or_else(|| unreachable!("the production evaluator set is replayable")),
-            ),
+    fn try_copy(&self) -> Option<Self> {
+        Some(match self {
+            Self::VisibleUnary(evidence) => {
+                Self::VisibleUnary(Evaluation::copy_violation_evidence(evidence)?)
+            }
             Self::IntrinsicUnary(evidence) => Self::IntrinsicUnary(*evidence),
             Self::Relation(span) => Self::Relation(*span),
             Self::DeclaredSrgb8CleanSet(evidence) => Self::DeclaredSrgb8CleanSet(*evidence),
-        }
+        })
     }
 }
 
@@ -2596,24 +2594,19 @@ where
     Violation(ProgramConstraintViolationEvidenceV1<Evaluation>),
 }
 
-impl<Evaluation> Clone for ProgramConstraintResultV1<Evaluation>
-where
-    Evaluation: ProgramConstraintEvaluatorSetV1,
-{
-    fn clone(&self) -> Self {
-        match self {
-            Self::Pass(evidence) => Self::Pass(evidence.clone()),
-            Self::Violation(evidence) => Self::Violation(evidence.clone()),
-        }
-    }
-}
-
 impl<Evaluation> ProgramConstraintResultV1<Evaluation>
 where
     Evaluation: ProgramConstraintEvaluatorSetV1,
 {
     pub const fn is_violation(&self) -> bool {
         matches!(self, Self::Violation(_))
+    }
+
+    fn try_copy(&self) -> Option<Self> {
+        match self {
+            Self::Pass(evidence) => Some(Self::Pass(evidence.try_copy()?)),
+            Self::Violation(evidence) => Some(Self::Violation(evidence.try_copy()?)),
+        }
     }
 }
 
@@ -2630,26 +2623,20 @@ where
     result: ProgramConstraintResultV1<Evaluation>,
 }
 
-impl<Evaluation> Clone for ProgramConstraintCellV1<Evaluation>
+impl<Evaluation> ProgramConstraintCellV1<Evaluation>
 where
     Evaluation: ProgramConstraintEvaluatorSetV1,
 {
-    fn clone(&self) -> Self {
-        Self {
+    fn try_copy(&self) -> Option<Self> {
+        Some(Self {
             candidate_state_index: self.candidate_state_index,
             case_index: self.case_index,
             constraint: self.constraint,
             subject: self.subject,
             mode: self.mode,
-            result: self.result.clone(),
-        }
+            result: self.result.try_copy()?,
+        })
     }
-}
-
-impl<Evaluation> ProgramConstraintCellV1<Evaluation>
-where
-    Evaluation: ProgramConstraintEvaluatorSetV1,
-{
     pub const fn candidate_state_index(&self) -> usize {
         self.candidate_state_index
     }
@@ -4504,7 +4491,12 @@ where
                     has_hard_violation |= previous_cells
                         .iter()
                         .any(|cell| cell.result().is_violation());
-                    cells.extend_from_slice(previous_cells);
+                    for cell in previous_cells {
+                        cells.push(
+                            cell.try_copy()
+                                .ok_or(ProgramSessionEvaluationError::InternalInvariant)?,
+                        );
+                    }
                     relation_members.extend_from_slice(previous_relations);
                 }
                 if let Some(point_causal) = point_causal.as_mut() {
