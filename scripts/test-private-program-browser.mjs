@@ -41,6 +41,7 @@ const EXPECTED_CHECKS = Object.freeze([
   "pre-run-dispose-idempotence",
   "exact-computed-css",
   "exact-certified-receipt",
+  "explicit-observation-update",
   "dispose",
   "post-run-dispose-idempotence",
 ]);
