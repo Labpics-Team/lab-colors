@@ -377,7 +377,7 @@ test("a mutation kill requires its real-browser assertion and semantic marker", 
     () =>
       assertMutationSpecificBrowserFailure(definition, {
         ...killed,
-        stdout: "LAB_COLORS_PRIVATE_PROGRAM_BROWSER_PASS v1 checks=8",
+        stdout: "LAB_COLORS_PRIVATE_PROGRAM_BROWSER_PASS v1 checks=9",
       }),
     /emitted the browser PASS receipt/u,
   );
