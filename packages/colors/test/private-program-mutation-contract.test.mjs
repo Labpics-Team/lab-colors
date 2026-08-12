@@ -49,7 +49,7 @@ const EXPECTED_MUTATIONS = Object.freeze([
     "rust-wasm",
     "crates/labcolors-core/src/private_fixture.rs",
     "42233a2a23511350dec3a47e0c9e8df44b009f9fbb8396ba2bcaa4ec58336f2b",
-    "PrivateProgramConsumerError: private Program consumer: shipping trace permits exactly one SetAll callback",
+    "Error: private Program browser fixture: updated state is Ready; expected 2, got 3",
   ],
   [
     "external-attachment-handoff-binding-bypass",

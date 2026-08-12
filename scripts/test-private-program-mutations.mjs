@@ -136,7 +136,7 @@ export const PRIVATE_PROGRAM_MUTATION_CASES = Object.freeze([
       "            .map_err(|_| PrivateFixtureErrorV1::UpdateRejected),",
     ).slice(0, -1),
     expectedBrowserAssertion:
-      "PrivateProgramConsumerError: private Program consumer: shipping trace permits exactly one SetAll callback",
+      "Error: private Program browser fixture: updated state is Ready; expected 2, got 3",
   }),
   mutation({
     id: "external-attachment-handoff-binding-bypass",
