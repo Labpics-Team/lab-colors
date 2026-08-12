@@ -1589,8 +1589,8 @@ mod tests {
         // Every error status code is a small integer; a generation equal to one
         // of them must never be returned in the same range, otherwise a
         // consumer that classifies by range would misread the token as a
-        // typed failure (e.g. InternalInvariant == 12 after twelve run/dispose
-        // cycles) and leave the attachment Disposing forever.
+        // typed failure (`PrivateFixtureErrorV1::InternalInvariant`) after enough
+        // run/dispose cycles and leave the attachment Disposing forever.
         for status in 1..=PrivateFixtureErrorV1::DisposeNotConfirmed.status() {
             assert_ne!(
                 begin_dispose_status_v1(Ok(status)),

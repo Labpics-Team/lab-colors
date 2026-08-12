@@ -23,7 +23,7 @@ const HOST_DISPOSE_CONFIRMED_V1 = 0x4c43_0002;
 const OPERATION_SET_ALL_V1 = 1;
 const DISPOSE_BEGIN_BUSY_V1 = 0xffff_ffff;
 // Live dispose tokens live in [DISPOSE_TOKEN_BASE_V1, 2 * DISPOSE_TOKEN_BASE_V1 - 1],
-// disjoint from every Core status code (1..=18), the Vacant sentinel 0, and the
+// disjoint from every Core status code (1..=15), the Vacant sentinel 0, and the
 // Busy sentinel, so a begin-dispose result can be classified without ambiguity.
 const DISPOSE_TOKEN_BASE_V1 = 0x1000_0000;
 const DISPOSE_TOKEN_ENCODED_END_V1 = 2 * DISPOSE_TOKEN_BASE_V1 - 1;
