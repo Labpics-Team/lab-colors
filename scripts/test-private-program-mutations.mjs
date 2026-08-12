@@ -160,8 +160,13 @@ export const PRIVATE_PROGRAM_MUTATION_CASES = Object.freeze([
     proof: "semantic",
     artifact: "javascript",
     sourcePath: "packages/colors/private-program/consumer.js",
-    search: "lease.publish(frozenPublication(outputBinding, css))",
-    replacement: "frozenPublication(outputBinding, css)",
+    search: lines(
+      "    exactLeaseSuccess(",
+      "      lease.publish(frozenPublication(outputBinding, css)),",
+      '      "output lease publish",',
+      "    );",
+    ),
+    replacement: "    frozenPublication(outputBinding, css);\n",
     expectedBrowserAssertion:
       "Error: private Program browser fixture: computed background is the exact expected CSS literal; expected \"rgba(64, 64, 64, 0.5)\", got \"rgba(0, 0, 0, 0)\"",
   }),

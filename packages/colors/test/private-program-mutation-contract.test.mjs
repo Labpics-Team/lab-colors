@@ -64,7 +64,7 @@ const EXPECTED_MUTATIONS = Object.freeze([
     "semantic",
     "javascript",
     "packages/colors/private-program/consumer.js",
-    "abcf356562a9e5661409fe400ced176f8f37785c3dfdd83be8066365d1801afe",
+    "354125be94020475d0e34beb0f4498474cf243adb89d3bb591589ff5d485af0b",
     "Error: private Program browser fixture: computed background is the exact expected CSS literal; expected \"rgba(64, 64, 64, 0.5)\", got \"rgba(0, 0, 0, 0)\"",
   ],
 ]);
