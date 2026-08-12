@@ -242,7 +242,14 @@ function lowercaseHex(bytes) {
   return value;
 }
 
-function decodeReceipt(bytes, expectedSinkOutput, installedOutput, installedSinkOutput) {
+function decodeReceipt(
+  bytes,
+  expectedSinkOutput,
+  installedOutput,
+  installedSinkOutput,
+  expectedStream,
+  minimumRevision,
+) {
   for (let index = 0; index < RESULT_V1_MAGIC.length; index++) {
     if (bytes[index] !== RESULT_V1_MAGIC[index]) {
       throw protocolError("result has invalid magic");
@@ -259,6 +266,9 @@ function decodeReceipt(bytes, expectedSinkOutput, installedOutput, installedSink
   const state = view.getUint8(RESULT_STATE_OFFSET);
   const stream = view.getUint32(RESULT_STREAM_OFFSET, true);
   const revision = view.getBigUint64(RESULT_REVISION_OFFSET, true);
+  if (stream !== expectedStream || revision < minimumRevision) {
+    throw protocolError("result observation provenance does not match the active attachment");
+  }
   const output = view.getUint32(RESULT_OUTPUT_OFFSET, true);
   const sinkOutput = view.getUint32(RESULT_SINK_OUTPUT_OFFSET, true);
   if (
@@ -333,6 +343,7 @@ export async function createPrivateProgramConsumer(options) {
   let lease = null;
   let requestSinkOutput = null;
   let observationStream = null;
+  let observationRevision = null;
   let generation = null;
   let installedOutput = null;
   let installedSinkOutput = null;
@@ -348,6 +359,7 @@ export async function createPrivateProgramConsumer(options) {
     lease = null;
     requestSinkOutput = null;
     observationStream = null;
+    observationRevision = null;
     generation = null;
     installedOutput = null;
     installedSinkOutput = null;
@@ -755,6 +767,7 @@ export async function createPrivateProgramConsumer(options) {
       REQUEST_STREAM_OFFSET,
       true,
     );
+    observationRevision = new DataView(request.buffer, request.byteOffset, request.byteLength).getBigUint64(47, true);
     generation = null;
     installedOutput = null;
     installedSinkOutput = null;
@@ -791,6 +804,8 @@ export async function createPrivateProgramConsumer(options) {
         authoredSinkOutput,
         installedOutput,
         installedSinkOutput,
+        observationStream,
+        observationRevision,
       );
     } catch (cause) {
       return probeAndCleanupFailedRun(asError(cause, "result decoding threw a non-Error value"));
@@ -806,8 +821,12 @@ export async function createPrivateProgramConsumer(options) {
       UPDATE_STREAM_OFFSET,
       true,
     );
+    const incomingRevision = new DataView(update.buffer, update.byteOffset, update.byteLength).getBigUint64(12, true);
     if (incomingStream !== observationStream) {
       throw protocolError("observation update stream does not match the active attachment");
+    }
+    if (observationRevision === null || incomingRevision < observationRevision) {
+      throw protocolError("observation update revision rolled back");
     }
     copyUpdate(update);
     phase = "updating";
@@ -823,7 +842,16 @@ export async function createPrivateProgramConsumer(options) {
     phase = "active";
     if (hostFailure !== null) throw hostFailure;
     if (status !== 0) throw wasmStatusError("update", status);
-    return decodeReceipt(copyResult(), requestSinkOutput, installedOutput, installedSinkOutput);
+    const receipt = decodeReceipt(
+      copyResult(),
+      requestSinkOutput,
+      installedOutput,
+      installedSinkOutput,
+      observationStream,
+      incomingRevision,
+    );
+    observationRevision = receipt.revision;
+    return receipt;
   }
 
   function dispose() {

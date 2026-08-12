@@ -127,8 +127,7 @@ export const PRIVATE_PROGRAM_MUTATION_CASES = Object.freeze([
     artifact: "rust-wasm",
     sourcePath: "crates/labcolors-core/src/private_fixture.rs",
     search: lines(
-      "        } => apply_observed_update_v2(attachment, revision, scenarios)",
-      "            .map_err(|_| PrivateFixtureErrorV1::UpdateRejected),",
+      "        } => apply_observed_update_v2(attachment, revision, scenarios),",
     ).slice(0, -1),
     replacement: lines(
       "        } => attachment",
@@ -226,7 +225,6 @@ function occurrenceCount(source, search) {
 }
 
 export function applyExactMutation(source, definition) {
-  source = source.replaceAll("\r\n", "\n");
   if (
     typeof source !== "string" ||
     typeof definition?.search !== "string" ||
@@ -234,6 +232,7 @@ export function applyExactMutation(source, definition) {
   ) {
     fail("mutation source, search anchor, and replacement must be strings");
   }
+  source = source.replaceAll("\r\n", "\n");
   if (definition.search.length === 0) fail(`${definition.id} has an empty source anchor`);
   const count = occurrenceCount(source, definition.search);
   if (count !== 1) {

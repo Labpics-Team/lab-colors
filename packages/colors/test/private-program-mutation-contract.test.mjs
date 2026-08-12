@@ -48,7 +48,7 @@ const EXPECTED_MUTATIONS = Object.freeze([
     "semantic",
     "rust-wasm",
     "crates/labcolors-core/src/private_fixture.rs",
-    "42233a2a23511350dec3a47e0c9e8df44b009f9fbb8396ba2bcaa4ec58336f2b",
+    "82242d45a0a98d8912bb70424a6661c8090f1233ac7f7693ccca40a79a3e53e2",
     "Error: private Program browser fixture: updated state is Ready; expected 2, got 3",
   ],
   [

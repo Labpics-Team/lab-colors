@@ -10,9 +10,8 @@
 use crate::Srgb8;
 use crate::family_artifact::FamilyArtifactBundleV2;
 use crate::program::attachment::handoff::{
-    HandoffAttachmentV1, HandoffPointSinkErrorV1, HandoffPointSinkHostErrorV1,
-    HandoffPointSinkHostIntentV1, HandoffPointSinkHostV1, HandoffPointSinkOutputIdV1,
-    handoff_point_sink,
+    HandoffAttachmentV1, HandoffPointSinkHostErrorV1, HandoffPointSinkHostIntentV1,
+    HandoffPointSinkHostV1, HandoffPointSinkOutputIdV1, handoff_point_sink,
 };
 use crate::program::attachment::{
     AuthoredPointEmissionBindingV1, AuthoredPointPresentationBindingV1, ExternalDisposeErrorV1,
@@ -33,6 +32,9 @@ const IDENTITY_WIDTH: usize = 32;
 const MAGIC_WIDTH: usize = 4;
 const HEADER_WIDTH: usize = MAGIC_WIDTH + U16_WIDTH + U16_WIDTH;
 const APPEARANCE_WIDTH: usize = F64_WIDTH + F64_WIDTH + BYTE_WIDTH;
+// The private fixture proves correlation with at most two simultaneous cases.
+// Raising this bound requires changing the fixed wire grammar and the explicit
+// stack-backed branches in `apply_observed_update_v2` in the same reviewed slice.
 const MAX_SCENARIOS_V2: usize = 2;
 const SCENARIO_WIRE_WIDTH_V2: usize = U32_WIDTH + RGB_WIDTH;
 
@@ -269,6 +271,12 @@ impl<'a> WireReaderV1<'a> {
             value.id = self.read_u32()?;
             value.backdrop = self.read_rgb()?;
         }
+        if values[usize::from(len)..]
+            .iter()
+            .any(|value| value.id != 0 || value.backdrop != Srgb8::new([0; 3]))
+        {
+            return Err(PrivateFixtureErrorV1::InvalidAuthoredData);
+        }
         Ok(ScenarioWireSetV2 { len, values })
     }
 
@@ -440,6 +448,7 @@ struct ExecutedPrivateFixtureV1<H>
 where
     H: HandoffPointSinkHostV1,
 {
+    stream: u32,
     attachment: HandoffAttachmentV1<H>,
     projection: Result<CertifiedPrivateFixtureResultV1, PrivateFixtureErrorV1>,
 }
@@ -502,6 +511,7 @@ where
             Ok(commit) => commit,
             Err(_) => {
                 return Ok(ExecutedPrivateFixtureV1 {
+                    stream: authored.stream,
                     attachment,
                     projection: Err(PrivateFixtureErrorV1::UpdateRejected),
                 });
@@ -510,6 +520,7 @@ where
     let projection = project_attachment_commit_v1(commit);
 
     Ok(ExecutedPrivateFixtureV1 {
+        stream: authored.stream,
         attachment,
         projection,
     })
@@ -521,7 +532,7 @@ fn apply_observed_update_v2<'a, H>(
     scenarios: ScenarioWireSetV2,
 ) -> Result<
     crate::program::attachment::AttachmentCommitV1<'a, HandoffPointSinkOutputIdV1>,
-    crate::program::attachment::AttachmentUpdateErrorV1<HandoffPointSinkErrorV1>,
+    PrivateFixtureErrorV1,
 >
 where
     H: HandoffPointSinkHostV1,
@@ -530,22 +541,26 @@ where
     match scenarios.len {
         1 => {
             let admitted = [ScenarioV1::new(scenarios.values[0].id, &values[0])];
-            attachment.update(UpdateV1::Observed {
-                revision,
-                scenarios: &admitted,
-            })
+            attachment
+                .update(UpdateV1::Observed {
+                    revision,
+                    scenarios: &admitted,
+                })
+                .map_err(|_| PrivateFixtureErrorV1::UpdateRejected)
         }
         2 => {
             let admitted = [
                 ScenarioV1::new(scenarios.values[0].id, &values[0]),
                 ScenarioV1::new(scenarios.values[1].id, &values[1]),
             ];
-            attachment.update(UpdateV1::Observed {
-                revision,
-                scenarios: &admitted,
-            })
+            attachment
+                .update(UpdateV1::Observed {
+                    revision,
+                    scenarios: &admitted,
+                })
+                .map_err(|_| PrivateFixtureErrorV1::UpdateRejected)
         }
-        _ => unreachable!("wire admission guarantees one or two scenarios"),
+        _ => Err(PrivateFixtureErrorV1::InvalidAuthoredData),
     }
 }
 
@@ -564,8 +579,7 @@ where
             revision,
             scenarios,
             ..
-        } => apply_observed_update_v2(attachment, revision, scenarios)
-            .map_err(|_| PrivateFixtureErrorV1::UpdateRejected),
+        } => apply_observed_update_v2(attachment, revision, scenarios),
         ObservationUpdateWireV2::Unknown {
             revision, reason, ..
         } => attachment
@@ -580,18 +594,22 @@ where
 fn project_attachment_commit_v1(
     commit: crate::program::attachment::AttachmentCommitV1<'_, HandoffPointSinkOutputIdV1>,
 ) -> Result<CertifiedPrivateFixtureResultV1, PrivateFixtureErrorV1> {
-    project_attachment_commit_v2(commit, false)
+    let result = project_attachment_commit_v2(commit)?;
+    if matches!(result.state, PrivateFixtureStateV2::Failed) {
+        Err(PrivateFixtureErrorV1::MissingCertifiedOutput)
+    } else {
+        Ok(result)
+    }
 }
 
 fn project_update_commit_v2(
     commit: crate::program::attachment::AttachmentCommitV1<'_, HandoffPointSinkOutputIdV1>,
 ) -> Result<CertifiedPrivateFixtureResultV1, PrivateFixtureErrorV1> {
-    project_attachment_commit_v2(commit, true)
+    project_attachment_commit_v2(commit)
 }
 
 fn project_attachment_commit_v2(
     commit: crate::program::attachment::AttachmentCommitV1<'_, HandoffPointSinkOutputIdV1>,
-    admit_empty_lifecycle: bool,
 ) -> Result<CertifiedPrivateFixtureResultV1, PrivateFixtureErrorV1> {
     let evidence = commit.evidence();
     let (stream, revision) = match evidence.observation_head() {
@@ -609,7 +627,7 @@ fn project_attachment_commit_v2(
     };
     let mut renders = commit.render_outputs();
     let Some(render) = renders.next() else {
-        if !admit_empty_lifecycle {
+        if matches!(state, PrivateFixtureStateV2::Ready) {
             return Err(PrivateFixtureErrorV1::MissingCertifiedOutput);
         }
         return Ok(CertifiedPrivateFixtureResultV1 {
@@ -626,15 +644,14 @@ fn project_attachment_commit_v2(
     if renders.next().is_some() {
         return Err(PrivateFixtureErrorV1::MultipleCertifiedOutputs);
     }
-    let mut result = project_certified_render_v1(render)?;
-    result.state = state;
-    result.stream = stream;
-    result.revision = revision;
-    Ok(result)
+    project_certified_render_v1(render, state, stream, revision)
 }
 
 fn project_certified_render_v1(
     render: crate::program::attachment::AttachedRenderOutputV1<'_, HandoffPointSinkOutputIdV1>,
+    state: PrivateFixtureStateV2,
+    stream: u32,
+    revision: u64,
 ) -> Result<CertifiedPrivateFixtureResultV1, PrivateFixtureErrorV1> {
     let certificate = render.certificate();
     if certificate.selection_release_identity().is_some()
@@ -644,9 +661,9 @@ fn project_certified_render_v1(
     }
     let paint = render.paint();
     Ok(CertifiedPrivateFixtureResultV1 {
-        state: PrivateFixtureStateV2::Ready,
-        stream: 0,
-        revision: 0,
+        state,
+        stream,
+        revision,
         output: render.output().value(),
         sink_output: render.sink_output().value(),
         paint_source: paint.source(),
@@ -804,7 +821,6 @@ where
     fn complete_run(
         &mut self,
         generation: u32,
-        stream: u32,
         executed: ExecutedPrivateFixtureV1<H>,
     ) -> Result<Result<CertifiedPrivateFixtureResultV1, PrivateFixtureErrorV1>, PrivateFixtureErrorV1>
     {
@@ -813,7 +829,7 @@ where
         }
         self.lifecycle = PrivateFixtureLifecycleV1::Active {
             generation,
-            stream,
+            stream: executed.stream,
             attachment: executed.attachment,
         };
         Ok(executed.projection)
@@ -990,7 +1006,7 @@ where
             };
         }
     };
-    match instance.complete_run(generation, authored.stream, executed) {
+    match instance.complete_run(generation, executed) {
         Ok(Ok(certified)) => {
             *result = encode_result_v1(certified);
             0
@@ -1252,6 +1268,7 @@ mod wasm_abi {
         // the gate excludes run, update, and dispose reentry before borrowing them.
         unsafe {
             let update = UPDATE_V2.0.get().read();
+            RESULT_V1.0.get().write([0; PRIVATE_FIXTURE_RESULT_V2_LEN]);
             let mut staged_result = [0; PRIVATE_FIXTURE_RESULT_V2_LEN];
             let status = update_request_v2(&update, &mut staged_result, &mut *INSTANCE_V1.0.get());
             RESULT_V1.0.get().write(staged_result);
@@ -1552,6 +1569,7 @@ mod tests {
         let ExecutedPrivateFixtureV1 {
             attachment,
             projection,
+            ..
         } = executed;
         let (status, result) = match projection {
             Ok(certified) => (0, encode_result_v1(certified)),
@@ -1616,7 +1634,7 @@ mod tests {
         let (host, _oracle) = native_host(generation);
         let executed = execute_private_fixture_v1(valid_authored(), host).unwrap();
         let initial = instance
-            .complete_run(generation, 31, executed)
+            .complete_run(generation, executed)
             .unwrap()
             .unwrap();
 
@@ -1638,7 +1656,7 @@ mod tests {
         let (host, oracle) = native_host(generation);
         let executed = execute_private_fixture_v1(valid_authored(), host).unwrap();
         instance
-            .complete_run(generation, 31, executed)
+            .complete_run(generation, executed)
             .unwrap()
             .unwrap();
         let before = oracle.borrow().published;
@@ -1662,7 +1680,7 @@ mod tests {
         let (host, _oracle) = native_host(generation);
         let executed = execute_private_fixture_v1(valid_authored(), host).unwrap();
         instance
-            .complete_run(generation, 31, executed)
+            .complete_run(generation, executed)
             .unwrap()
             .unwrap();
 
@@ -1818,12 +1836,7 @@ mod tests {
         let generation = instance.begin_run().unwrap();
         let (host, oracle) = native_host(generation);
         let executed = execute_private_fixture_v1(valid_authored(), host).unwrap();
-        assert!(
-            instance
-                .complete_run(generation, 31, executed)
-                .unwrap()
-                .is_ok()
-        );
+        assert!(instance.complete_run(generation, executed).unwrap().is_ok());
 
         let token = instance.begin_dispose().unwrap();
         let retained_address = match &instance.lifecycle {
@@ -1881,12 +1894,7 @@ mod tests {
         let generation = instance.begin_run().unwrap();
         let (host, oracle) = native_host(generation);
         let executed = execute_private_fixture_v1(valid_authored(), host).unwrap();
-        assert!(
-            instance
-                .complete_run(generation, 31, executed)
-                .unwrap()
-                .is_ok()
-        );
+        assert!(instance.complete_run(generation, executed).unwrap().is_ok());
         let token = instance.begin_dispose().unwrap();
         let retained_address = match &instance.lifecycle {
             PrivateFixtureLifecycleV1::Disposing { attachment, .. } => {
@@ -1938,7 +1946,7 @@ mod tests {
         let first = execute_private_fixture_v1(valid_authored(), first_host).unwrap();
         assert!(
             instance
-                .complete_run(first_generation, 31, first)
+                .complete_run(first_generation, first)
                 .unwrap()
                 .is_ok()
         );
@@ -1956,7 +1964,7 @@ mod tests {
         let second = execute_private_fixture_v1(valid_authored(), second_host).unwrap();
         assert!(
             instance
-                .complete_run(second_generation, 31, second)
+                .complete_run(second_generation, second)
                 .unwrap()
                 .is_ok()
         );
@@ -2009,12 +2017,7 @@ mod tests {
         let generation = instance.begin_run().unwrap();
         let (host, oracle) = native_host(generation);
         let executed = execute_private_fixture_v1(valid_authored(), host).unwrap();
-        assert!(
-            instance
-                .complete_run(generation, 31, executed)
-                .unwrap()
-                .is_ok()
-        );
+        assert!(instance.complete_run(generation, executed).unwrap().is_ok());
         let token = instance.begin_dispose().unwrap();
         let retained_address = match &instance.lifecycle {
             PrivateFixtureLifecycleV1::Disposing { attachment, .. } => {
