@@ -44,8 +44,8 @@ const SCRIPT_PATH = fileURLToPath(import.meta.url);
 export const REPO_ROOT = resolve(dirname(SCRIPT_PATH), "..");
 
 const PROOF_SCRIPT = resolve(REPO_ROOT, "scripts/test-private-program-browser.mjs");
-const PRIVATE_PROGRAM_REQUEST_V1_LENGTH = 296;
-const PRIVATE_PROGRAM_RESULT_V1_LENGTH = 95;
+const PRIVATE_PROGRAM_REQUEST_V1_LENGTH = 46;
+const PRIVATE_PROGRAM_RESULT_V1_LENGTH = 59;
 const PRIVATE_PROGRAM_REQUEST_LENGTH_EXPORT =
   "labcolors_private_fixture_request_v1_len";
 const PRIVATE_PROGRAM_RESULT_LENGTH_EXPORT =
@@ -87,12 +87,10 @@ export const PRIVATE_PROGRAM_MUTATION_CASES = Object.freeze([
     proof: "semantic",
     artifact: "rust-wasm",
     sourcePath: "crates/labcolors-core/src/private_fixture.rs",
-    search: lines(
-      "    draft.push_occurrence_surface(FILL_SURFACE, FILL_ON_PAGE);",
-    ),
+    search: "draft.push_point_presentation_target(PRESENTATION_ROOT, OUTPUT_OCCURRENCE)",
     replacement: "",
     expectedBrowserAssertion:
-      "PrivateProgramConsumerError: private Program consumer: run failed with status 6",
+      "PrivateProgramConsumerError: private Program consumer: run failed with status 5",
   }),
   mutation({
     id: "hard-constraint-deletion",
@@ -102,47 +100,23 @@ export const PRIVATE_PROGRAM_MUTATION_CASES = Object.freeze([
     search: lines(
       "    draft.push_exact_visible_unary_hard(",
       "        FINAL_VISIBLE_IDENTITY,",
-      "        LABEL_ON_FILL,",
+      "        OUTPUT_OCCURRENCE,",
       "        authored.expected_final_visible,",
       "    );",
     ),
     replacement: "",
     expectedBrowserAssertion:
-      "PrivateProgramConsumerError: private Program consumer: run failed with status 6",
+      "PrivateProgramConsumerError: private Program consumer: run failed with status 5",
   }),
   mutation({
     id: "final-recheck-call-edge-deletion",
     proof: "semantic-source-deletion",
     artifact: "rust-wasm",
     sourcePath: "crates/labcolors-core/src/program_session.rs",
-    search: lines(
-      "    let has_hard_violation = if has_hard_constraints {",
-      "        scan_program_candidate(",
-      "            runtime,",
-      "            epoch,",
-      "            scenario_set,",
-      "            candidate_state_index,",
-      "            ProgramEvaluationPhaseV1::Hard,",
-      "            ProgramCandidateCollectionV1 {",
-      "                evidence: ProgramConstraintEvidenceCaptureV1::Report {",
-      "                    cells: &mut arena.cells,",
-      "                    relation_members: &mut arena.relation_members,",
-      "                },",
-      "                outputs: Some(&mut arena.outputs),",
-      "                point_causal: Some(ProgramPointCausalBuffersV1 {",
-      "                    considered_state_index: None,",
-      "                    records: &mut arena.point_causal_records,",
-      "                    steps: &mut arena.point_causal_steps,",
-      "                }),",
-      "            },",
-      "        )?",
-      "    } else {",
-      "        false",
-      "    };",
-    ),
-    replacement: lines("    let has_hard_violation = false;"),
+    search: "outputs: Some(&mut arena.outputs)",
+    replacement: "outputs: None",
     expectedBrowserAssertion:
-      "PrivateProgramConsumerError: private Program consumer: run failed with status 8",
+      "PrivateProgramConsumerError: private Program consumer: run failed with status 7",
   }),
   mutation({
     id: "session-observed-update-bypass",
@@ -151,14 +125,14 @@ export const PRIVATE_PROGRAM_MUTATION_CASES = Object.freeze([
     sourcePath: "crates/labcolors-core/src/private_fixture.rs",
     search: lines(
       "attachment.update(UpdateV1::Observed {",
-      "        revision: authored.observation_revision,",
+      "        revision: STATIC_RESOLVE_REVISION,",
       "        scenarios: &scenarios,",
       "    })",
     ).slice(0, -1),
     replacement: lines(
       "attachment.update(UpdateV1::Unknown {",
-      "        revision: authored.observation_revision,",
-      "        reason_id: first_scenario.id,",
+      "        revision: STATIC_RESOLVE_REVISION,",
+      "        reason_id: 1,",
       "    })",
     ).slice(0, -1),
     expectedBrowserAssertion:
@@ -179,20 +153,15 @@ export const PRIVATE_PROGRAM_MUTATION_CASES = Object.freeze([
       "            ),",
     ),
     expectedBrowserAssertion:
-      "PrivateProgramConsumerError: private Program consumer: run failed with status 7",
+      "PrivateProgramConsumerError: private Program consumer: run failed with status 6",
   }),
   mutation({
     id: "javascript-publish-deletion",
     proof: "semantic",
     artifact: "javascript",
     sourcePath: "packages/colors/private-program/consumer.js",
-    search: lines(
-      "    exactLeaseSuccess(",
-      "      lease.publish(frozenPublication(outputBinding, css)),",
-      '      "output lease publish",',
-      "    );",
-    ),
-    replacement: lines("    frozenPublication(outputBinding, css);"),
+    search: "lease.publish(frozenPublication(outputBinding, css))",
+    replacement: "frozenPublication(outputBinding, css)",
     expectedBrowserAssertion:
       "Error: private Program browser fixture: computed background is the exact expected CSS literal; expected \"rgba(64, 64, 64, 0.5)\", got \"rgba(0, 0, 0, 0)\"",
   }),

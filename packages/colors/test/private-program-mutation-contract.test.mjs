@@ -24,31 +24,31 @@ const EXPECTED_MUTATIONS = Object.freeze([
     "semantic",
     "rust-wasm",
     "crates/labcolors-core/src/private_fixture.rs",
-    "6d43e030e5d6f4df67b319276d3d9ea1ab33d5b91a2094019ce278476cecd412",
-    "PrivateProgramConsumerError: private Program consumer: run failed with status 6",
+    "f0637a73e9aa72f25d21657ea8f375492c3684fb8edb5939a89985b79537cb35",
+    "PrivateProgramConsumerError: private Program consumer: run failed with status 5",
   ],
   [
     "hard-constraint-deletion",
     "semantic",
     "rust-wasm",
     "crates/labcolors-core/src/private_fixture.rs",
-    "0e43717331468ae6fb6c65bb6ba441cd5260b49b37ad3c6927a9bbf02494638b",
-    "PrivateProgramConsumerError: private Program consumer: run failed with status 6",
+    "5f14e7b7aec80030678479e16c8fb904edfa5788e6cc0e6b6398040e94a0179b",
+    "PrivateProgramConsumerError: private Program consumer: run failed with status 5",
   ],
   [
     "final-recheck-call-edge-deletion",
     "semantic-source-deletion",
     "rust-wasm",
     "crates/labcolors-core/src/program_session.rs",
-    "8e218fddef0b8a13f044b91b7927faeb50e501a54ecb205c05696d6510fe615e",
-    "PrivateProgramConsumerError: private Program consumer: run failed with status 8",
+    "859ee904eb7787182c019ff298b78a358c3a274a38f57f74d811a540301ad914",
+    "PrivateProgramConsumerError: private Program consumer: run failed with status 7",
   ],
   [
     "session-observed-update-bypass",
     "semantic",
     "rust-wasm",
     "crates/labcolors-core/src/private_fixture.rs",
-    "8770e1a30407e9cd9ec3ee32feed44cd2b58a0d39be3c636cb428be8b1c472fe",
+    "4eaaa43cdc5ebe598f6c6216db1e50cd826c3230603ecf48e6b9ceb498ffcf8c",
     "PrivateProgramConsumerError: private Program consumer: shipping trace permits exactly one SetAll callback",
   ],
   [
@@ -57,14 +57,14 @@ const EXPECTED_MUTATIONS = Object.freeze([
     "rust-wasm",
     "crates/labcolors-core/src/private_fixture.rs",
     "59f5bc640fbc270db4dbbda5572e339c90aa839d61cab0ac155ef8db5e1e5d59",
-    "PrivateProgramConsumerError: private Program consumer: run failed with status 7",
+    "PrivateProgramConsumerError: private Program consumer: run failed with status 6",
   ],
   [
     "javascript-publish-deletion",
     "semantic",
     "javascript",
     "packages/colors/private-program/consumer.js",
-    "354125be94020475d0e34beb0f4498474cf243adb89d3bb591589ff5d485af0b",
+    "abcf356562a9e5661409fe400ced176f8f37785c3dfdd83be8066365d1801afe",
     "Error: private Program browser fixture: computed background is the exact expected CSS literal; expected \"rgba(64, 64, 64, 0.5)\", got \"rgba(0, 0, 0, 0)\"",
   ],
 ]);
@@ -318,7 +318,7 @@ test("a mutation kill requires its real-browser assertion and semantic marker", 
     stdout: "",
     stderr:
       "Error: private Program browser proof: browser assertion failed: " +
-      "PrivateProgramConsumerError: private Program consumer: run failed with status 6",
+      "PrivateProgramConsumerError: private Program consumer: run failed with status 5",
   });
   assert.equal(assertMutationSpecificBrowserFailure(definition, killed), true);
   assert.throws(
