@@ -6,12 +6,15 @@ import { outputElement } from "./output-host.mjs";
 const { createPrivateProgramConsumer } = await import("../private-program/consumer.js");
 
 const OUTPUT_BINDING = "--lab-private-program-output";
-const REQUEST_LENGTH = 46;
-const RESULT_LENGTH = 59;
+const REQUEST_LENGTH = 70;
+const UPDATE_LENGTH = 40;
+const RESULT_LENGTH = 72;
 const REQUEST_POINTER = 0;
 const RESULT_POINTER = 1_024;
 const CSS_POINTER = 2_048;
-const REQUEST_SINK_OUTPUT_OFFSET = 42;
+const UPDATE_POINTER = 3_072;
+const REQUEST_SINK_OUTPUT_OFFSET = 39;
+const REQUEST_STREAM_OFFSET = 43;
 const HOST_MODULE = "labcolors_private_fixture_host_v1";
 const HOST_INSTALL = "labcolors_private_fixture_host_install_v1";
 const HOST_CONFIRM = "labcolors_private_fixture_host_confirm_disposed_v1";
@@ -34,9 +37,48 @@ function requestBytes(sinkOutput = 501) {
   const bytes = new Uint8Array(REQUEST_LENGTH);
   bytes.set([0x4c, 0x43, 0x46, 0x51]);
   const view = new DataView(bytes.buffer);
-  view.setUint16(4, 1, true);
+  view.setUint16(4, 2, true);
   view.setUint16(6, REQUEST_LENGTH, true);
+  bytes.set([64, 64, 64], 8);
+  view.setBigUint64(11, HALF_OPACITY_BITS, true);
+  view.setFloat64(19, 64, true);
+  view.setFloat64(27, 0.2, true);
+  bytes[35] = 1;
+  bytes.set([96, 96, 96], 36);
   view.setUint32(REQUEST_SINK_OUTPUT_OFFSET, sinkOutput, true);
+  view.setUint32(REQUEST_STREAM_OFFSET, 31, true);
+  view.setBigUint64(47, 1n, true);
+  bytes[55] = 1;
+  view.setUint32(56, 1, true);
+  bytes.set([128, 128, 128], 60);
+  return bytes;
+}
+
+function observedUpdateBytes(revision = 2n, backdrop = [128, 128, 128]) {
+  const bytes = new Uint8Array(UPDATE_LENGTH);
+  bytes.set([0x4c, 0x43, 0x46, 0x55]);
+  const view = new DataView(bytes.buffer);
+  view.setUint16(4, 2, true);
+  view.setUint16(6, UPDATE_LENGTH, true);
+  view.setUint32(8, 31, true);
+  view.setBigUint64(12, revision, true);
+  bytes[20] = 1;
+  bytes[21] = 1;
+  view.setUint32(22, Number(revision), true);
+  bytes.set(backdrop, 26);
+  return bytes;
+}
+
+function unknownUpdateBytes(revision = 2n, reason = 7) {
+  const bytes = new Uint8Array(UPDATE_LENGTH);
+  bytes.set([0x4c, 0x43, 0x46, 0x55]);
+  const view = new DataView(bytes.buffer);
+  view.setUint16(4, 2, true);
+  view.setUint16(6, UPDATE_LENGTH, true);
+  view.setUint32(8, 31, true);
+  view.setBigUint64(12, revision, true);
+  bytes[20] = 2;
+  view.setUint32(36, reason, true);
   return bytes;
 }
 
@@ -76,6 +118,9 @@ class FakePrivateProgramWasm {
         this.lengthCalls++;
         return RESULT_LENGTH;
       },
+      labcolors_private_fixture_update_v2_ptr: () => UPDATE_POINTER,
+      labcolors_private_fixture_update_v2_len: () => UPDATE_LENGTH,
+      labcolors_private_fixture_update_v2: () => this.update(),
       labcolors_private_fixture_run_v1: () => this.run(),
       labcolors_private_fixture_begin_dispose_v1: () => this.beginDispose(),
       labcolors_private_fixture_abort_dispose_v1: (token) => this.abortDispose(token),
@@ -139,13 +184,30 @@ class FakePrivateProgramWasm {
     bytes.fill(0);
     bytes.set([0x4c, 0x43, 0x46, 0x52]);
     const view = new DataView(this.memory.buffer, RESULT_POINTER, RESULT_LENGTH);
-    view.setUint16(4, 1, true);
+    view.setUint16(4, 2, true);
     view.setUint16(6, RESULT_LENGTH, true);
-    view.setUint32(8, output, true);
-    view.setUint32(12, sinkOutput, true);
-    bytes.set([64, 64, 64], 16);
-    view.setBigUint64(19, HALF_OPACITY_BITS, true);
-    bytes.set(Array.from({ length: 32 }, (_, index) => index), 27);
+    bytes[8] = 2;
+    view.setUint32(9, 31, true);
+    view.setBigUint64(13, BigInt(this.runCount), true);
+    view.setUint32(21, output, true);
+    view.setUint32(25, sinkOutput, true);
+    bytes.set([64, 64, 64], 29);
+    view.setBigUint64(32, HALF_OPACITY_BITS, true);
+    bytes.set(Array.from({ length: 32 }, (_, index) => index), 40);
+  }
+
+  update() {
+    if (this.activeGeneration === null) return 13;
+    this.runCount++;
+    const status = this.callInstall({
+      generation: this.activeGeneration,
+      revision: BigInt(this.runCount),
+      expected: BigInt(this.runCount - 1),
+      desired: BigInt(this.runCount),
+    });
+    if (status !== HOST_INSTALL_SUCCESS) return 7;
+    this.writeResult();
+    return 0;
   }
 
   run() {
@@ -409,6 +471,9 @@ test("private consumer returns only the frozen certified receipt and remains reu
     assert.deepEqual(Object.keys(receipt), [
       "output",
       "sinkOutput",
+      "state",
+      "stream",
+      "revision",
       "paintSource",
       "paintOpacityBits",
       "contentIdentity",
@@ -417,6 +482,8 @@ test("private consumer returns only the frozen certified receipt and remains reu
     assert.equal(Object.isFrozen(receipt.paintSource), true);
     assert.equal(receipt.output, 17);
     assert.equal(receipt.sinkOutput, 501);
+    assert.equal(receipt.state, 2);
+    assert.equal(receipt.stream, 31);
     assert.deepEqual(receipt.paintSource, [64, 64, 64]);
     assert.equal(receipt.paintOpacityBits, HALF_OPACITY_BITS);
     assert.equal(receipt.contentIdentity, expectedHex(Array.from({ length: 32 }, (_, i) => i)));
@@ -432,6 +499,57 @@ test("private consumer returns only the frozen certified receipt and remains reu
     const nextReceipt = consumer.run(requestBytes());
     assert.equal(target.props.get(OUTPUT_BINDING), CSS);
     assert.deepEqual(wasm.installStatuses.slice(-2), [HOST_INSTALL_SUCCESS, HOST_INSTALL_SUCCESS]);
+    assert.equal(consumer.dispose(), true);
+  });
+});
+
+test("active private consumer exposes an explicit observation update operation", async () => {
+  await withFakeProgram({}, ({ consumer, target }) => {
+    const initial = consumer.run(requestBytes());
+    assert.equal(initial.output, 17);
+
+    assert.equal(typeof consumer.update, "function");
+    const updated = consumer.update(observedUpdateBytes());
+    assert.equal(updated.revision, 2n);
+    assert.equal(target.props.get(OUTPUT_BINDING), CSS);
+    assert.equal(consumer.dispose(), true);
+  });
+});
+
+test("update requires the active stream and exact ABI-v2 carrier", async () => {
+  await withFakeProgram({}, ({ consumer, wasm }) => {
+    consumer.run(requestBytes());
+    assert.throws(() => consumer.update(new Uint8Array(UPDATE_LENGTH - 1)), TypeError);
+    const foreign = observedUpdateBytes();
+    new DataView(foreign.buffer).setUint32(8, 32, true);
+    assert.throws(() => consumer.update(foreign), /stream does not match/u);
+    assert.equal(wasm.runCount, 1);
+    assert.equal(consumer.dispose(), true);
+  });
+});
+
+test("unknown update is carried explicitly without a fabricated certified output", async () => {
+  await withFakeProgram({}, ({ consumer, wasm, target }) => {
+    consumer.run(requestBytes());
+    wasm.update = function updateUnknown() {
+      this.runCount++;
+      const bytes = new Uint8Array(this.memory.buffer, RESULT_POINTER, RESULT_LENGTH);
+      bytes.fill(0);
+      bytes.set([0x4c, 0x43, 0x46, 0x52]);
+      const view = new DataView(this.memory.buffer, RESULT_POINTER, RESULT_LENGTH);
+      view.setUint16(4, 2, true);
+      view.setUint16(6, RESULT_LENGTH, true);
+      bytes[8] = 3;
+      view.setUint32(9, 31, true);
+      view.setBigUint64(13, 2n, true);
+      return 0;
+    };
+
+    const state = consumer.update(unknownUpdateBytes());
+    assert.equal(state.state, 3);
+    assert.equal(state.output, 0);
+    assert.equal(state.contentIdentity, "0".repeat(64));
+    assert.equal(target.props.get(OUTPUT_BINDING), CSS);
     assert.equal(consumer.dispose(), true);
   });
 });

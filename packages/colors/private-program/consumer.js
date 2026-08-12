@@ -1,17 +1,23 @@
 import { acquireOutputLease } from "../output-sink.js";
 
 const PRIVATE_PROGRAM_WASM_URL = new URL("./labcolors_private_program.wasm", import.meta.url);
-const REQUEST_V1_LENGTH = 46;
-const REQUEST_SINK_OUTPUT_OFFSET = REQUEST_V1_LENGTH - 4;
-const RESULT_V1_LENGTH = 59;
+const REQUEST_V2_LENGTH = 70;
+const REQUEST_SINK_OUTPUT_OFFSET = 39;
+const REQUEST_STREAM_OFFSET = 43;
+const UPDATE_V2_LENGTH = 40;
+const UPDATE_STREAM_OFFSET = 8;
+const RESULT_V2_LENGTH = 72;
 const RESULT_V1_MAGIC = Object.freeze([0x4c, 0x43, 0x46, 0x52]);
-const ABI_V1 = 1;
+const ABI_V2 = 2;
 
-const RESULT_OUTPUT_OFFSET = 8;
-const RESULT_SINK_OUTPUT_OFFSET = 12;
-const RESULT_RGB_OFFSET = 16;
-const RESULT_OPACITY_OFFSET = 19;
-const RESULT_CONTENT_IDENTITY_OFFSET = 27;
+const RESULT_STATE_OFFSET = 8;
+const RESULT_STREAM_OFFSET = 9;
+const RESULT_REVISION_OFFSET = 13;
+const RESULT_OUTPUT_OFFSET = 21;
+const RESULT_SINK_OUTPUT_OFFSET = 25;
+const RESULT_RGB_OFFSET = 29;
+const RESULT_OPACITY_OFFSET = 32;
+const RESULT_CONTENT_IDENTITY_OFFSET = 40;
 const IDENTITY_LENGTH = 32;
 
 const HOST_MODULE_V1 = "labcolors_private_fixture_host_v1";
@@ -21,6 +27,8 @@ const HOST_INSTALL_SUCCESS_V1 = 0x4c43_0001;
 const HOST_DISPOSE_CONFIRMED_V1 = 0x4c43_0002;
 
 const OPERATION_SET_ALL_V1 = 1;
+const OPERATION_REVOKE_ALL_V1 = 2;
+const OPERATION_CONFIRM_EXACT_V1 = 3;
 const DISPOSE_BEGIN_BUSY_V1 = 0xffff_ffff;
 // Live dispose tokens live in [DISPOSE_TOKEN_BASE_V1, 2 * DISPOSE_TOKEN_BASE_V1 - 1],
 // disjoint from every Core status code (1..=15), the Vacant sentinel 0, and the
@@ -39,6 +47,9 @@ const EXPORTS_V1 = Object.freeze({
   resultPointer: "labcolors_private_fixture_result_v1_ptr",
   resultLength: "labcolors_private_fixture_result_v1_len",
   run: "labcolors_private_fixture_run_v1",
+  updatePointer: "labcolors_private_fixture_update_v2_ptr",
+  updateLength: "labcolors_private_fixture_update_v2_len",
+  update: "labcolors_private_fixture_update_v2",
   beginDispose: "labcolors_private_fixture_begin_dispose_v1",
   abortDispose: "labcolors_private_fixture_abort_dispose_v1",
   commitDispose: "labcolors_private_fixture_commit_dispose_v1",
@@ -151,11 +162,22 @@ function exactRequestBytes(value) {
   if (
     !(value instanceof Uint8Array) ||
     Object.getPrototypeOf(value) !== Uint8Array.prototype ||
-    value.byteLength !== REQUEST_V1_LENGTH
+    value.byteLength !== REQUEST_V2_LENGTH
   ) {
     throw new TypeError(
-      `private Program request must be an exact Uint8Array of ${REQUEST_V1_LENGTH} bytes`,
+      `private Program request must be an exact Uint8Array of ${REQUEST_V2_LENGTH} bytes`,
     );
+  }
+  return new Uint8Array(value);
+}
+
+function exactUpdateBytes(value) {
+  if (
+    !(value instanceof Uint8Array) ||
+    Object.getPrototypeOf(value) !== Uint8Array.prototype ||
+    value.byteLength !== UPDATE_V2_LENGTH
+  ) {
+    throw new TypeError(`private Program update must be an exact Uint8Array of ${UPDATE_V2_LENGTH} bytes`);
   }
   return new Uint8Array(value);
 }
@@ -193,10 +215,15 @@ function validateExports(instance) {
   for (const name of Object.values(EXPORTS_V1)) exactExport(exports, name);
   const requestLength = exactStatus(exports[EXPORTS_V1.requestLength](), "request length");
   const resultLength = exactStatus(exports[EXPORTS_V1.resultLength](), "result length");
-  if (requestLength !== REQUEST_V1_LENGTH || resultLength !== RESULT_V1_LENGTH) {
+  const updateLength = exactStatus(exports[EXPORTS_V1.updateLength](), "update length");
+  if (
+    requestLength !== REQUEST_V2_LENGTH ||
+    updateLength !== UPDATE_V2_LENGTH ||
+    resultLength !== RESULT_V2_LENGTH
+  ) {
     throw protocolError(
-      `WASM buffer lengths are ${requestLength}/${resultLength}, expected ` +
-        `${REQUEST_V1_LENGTH}/${RESULT_V1_LENGTH}`,
+      `WASM buffer lengths are ${requestLength}/${updateLength}/${resultLength}, expected ` +
+        `${REQUEST_V2_LENGTH}/${UPDATE_V2_LENGTH}/${RESULT_V2_LENGTH}`,
     );
   }
   return exports;
@@ -222,19 +249,23 @@ function decodeReceipt(bytes, expectedSinkOutput, installedOutput, installedSink
     }
   }
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-  if (view.getUint16(4, true) !== ABI_V1) {
+  if (view.getUint16(4, true) !== ABI_V2) {
     throw protocolError("result has an unsupported ABI version");
   }
-  if (view.getUint16(6, true) !== RESULT_V1_LENGTH) {
+  if (view.getUint16(6, true) !== RESULT_V2_LENGTH) {
     throw protocolError("result declares an invalid length");
   }
 
+  const state = view.getUint8(RESULT_STATE_OFFSET);
+  const stream = view.getUint32(RESULT_STREAM_OFFSET, true);
+  const revision = view.getBigUint64(RESULT_REVISION_OFFSET, true);
   const output = view.getUint32(RESULT_OUTPUT_OFFSET, true);
   const sinkOutput = view.getUint32(RESULT_SINK_OUTPUT_OFFSET, true);
   if (
-    sinkOutput !== expectedSinkOutput ||
-    sinkOutput !== installedSinkOutput ||
-    output !== installedOutput
+    (output !== 0 &&
+      (sinkOutput !== expectedSinkOutput ||
+        sinkOutput !== installedSinkOutput ||
+        output !== installedOutput))
   ) {
     throw protocolError("certified result does not match the installed output identity");
   }
@@ -247,6 +278,9 @@ function decodeReceipt(bytes, expectedSinkOutput, installedOutput, installedSink
   return Object.freeze({
     output,
     sinkOutput,
+    state,
+    stream,
+    revision,
     paintSource,
     paintOpacityBits: view.getBigUint64(RESULT_OPACITY_OFFSET, true),
     contentIdentity: lowercaseHex(
@@ -298,6 +332,7 @@ export async function createPrivateProgramConsumer(options) {
   let phase = "vacant";
   let lease = null;
   let requestSinkOutput = null;
+  let observationStream = null;
   let generation = null;
   let installedOutput = null;
   let installedSinkOutput = null;
@@ -312,6 +347,7 @@ export async function createPrivateProgramConsumer(options) {
     phase = "vacant";
     lease = null;
     requestSinkOutput = null;
+    observationStream = null;
     generation = null;
     installedOutput = null;
     installedSinkOutput = null;
@@ -337,11 +373,11 @@ export async function createPrivateProgramConsumer(options) {
     rawCssPointer,
     rawCssLength,
   ) {
-    if (phase !== "running" || lease === null) {
+    if ((phase !== "running" && phase !== "updating") || lease === null) {
       throw lifecycleError("host install arrived outside run");
     }
-    if (hostInstallCommitted) {
-      throw protocolError("shipping trace permits exactly one SetAll callback");
+    if (phase === "running" && hostInstallCommitted) {
+      throw protocolError("shipping run permits exactly one SetAll callback");
     }
     const nextGeneration = exactU32(rawGeneration, "host generation");
     if (nextGeneration === 0) throw protocolError("host generation must be non-zero");
@@ -357,11 +393,28 @@ export async function createPrivateProgramConsumer(options) {
     const sinkOutput = exactU32(rawSinkOutput, "host sink output");
     const cssLength = exactU32(rawCssLength, "host CSS length");
 
-    if (operation !== OPERATION_SET_ALL_V1) {
-      throw protocolError("shipping trace permits exactly one SetAll callback");
+    if (operation === OPERATION_CONFIRM_EXACT_V1) {
+      if (!hostInstallCommitted || expected !== desired || output !== installedOutput || sinkOutput !== installedSinkOutput) {
+        throw protocolError("ConfirmExact does not match the committed snapshot");
+      }
+      return HOST_INSTALL_SUCCESS_V1;
     }
-    if (expected !== 0n || desired !== 1n) {
-      throw protocolError("shipping SetAll sequence must be exactly 0 to 1");
+    const expectedSequence = hostInstallCommitted ? desired - 1n : 0n;
+    if (expected !== expectedSequence || desired !== expected + 1n) {
+      throw protocolError("terminal sequence must advance exactly once");
+    }
+    if (operation === OPERATION_REVOKE_ALL_V1) {
+      if (output !== 0 || sinkOutput !== 0 || cssLength !== 0) {
+        throw protocolError("RevokeAll must carry no output payload");
+      }
+      exactLeaseSuccess(lease.publish(Object.freeze(Object.create(null))), "output lease revoke");
+      installedOutput = 0;
+      installedSinkOutput = 0;
+      hostInstallCommitted = true;
+      return HOST_INSTALL_SUCCESS_V1;
+    }
+    if (operation !== OPERATION_SET_ALL_V1) {
+      throw protocolError("host operation is not part of the terminal algebra");
     }
     if (sinkOutput !== requestSinkOutput || cssLength === 0) {
       throw protocolError("SetAll does not match the authored sink identity");
@@ -374,10 +427,7 @@ export async function createPrivateProgramConsumer(options) {
       throw protocolError("host CSS is not ASCII");
     }
     const css = admitCanonicalRgba(UTF8.decode(cssBytes));
-    exactLeaseSuccess(
-      lease.publish(frozenPublication(outputBinding, css)),
-      "output lease publish",
-    );
+    exactLeaseSuccess(lease.publish(frozenPublication(outputBinding, css)), "output lease publish");
     installedOutput = output;
     installedSinkOutput = sinkOutput;
     hostInstallCommitted = true;
@@ -485,13 +535,18 @@ export async function createPrivateProgramConsumer(options) {
 
   function copyRequest(request) {
     const pointer = exports[EXPORTS_V1.requestPointer]();
-    checkedMemoryView(exports.memory, pointer, REQUEST_V1_LENGTH, "request buffer").set(request);
+    checkedMemoryView(exports.memory, pointer, REQUEST_V2_LENGTH, "request buffer").set(request);
+  }
+
+  function copyUpdate(update) {
+    const pointer = exports[EXPORTS_V1.updatePointer]();
+    checkedMemoryView(exports.memory, pointer, UPDATE_V2_LENGTH, "update buffer").set(update);
   }
 
   function copyResult() {
     const pointer = exports[EXPORTS_V1.resultPointer]();
     return new Uint8Array(
-      checkedMemoryView(exports.memory, pointer, RESULT_V1_LENGTH, "result buffer"),
+      checkedMemoryView(exports.memory, pointer, RESULT_V2_LENGTH, "result buffer"),
     );
   }
 
@@ -696,6 +751,10 @@ export async function createPrivateProgramConsumer(options) {
     lease = acquired;
     phase = "running";
     requestSinkOutput = authoredSinkOutput;
+    observationStream = new DataView(request.buffer, request.byteOffset, request.byteLength).getUint32(
+      REQUEST_STREAM_OFFSET,
+      true,
+    );
     generation = null;
     installedOutput = null;
     installedSinkOutput = null;
@@ -740,6 +799,33 @@ export async function createPrivateProgramConsumer(options) {
     return receipt;
   }
 
+  function update(updateBytes) {
+    if (phase !== "active") throw lifecycleError(`update is unavailable while ${phase}`);
+    const update = exactUpdateBytes(updateBytes);
+    const incomingStream = new DataView(update.buffer, update.byteOffset, update.byteLength).getUint32(
+      UPDATE_STREAM_OFFSET,
+      true,
+    );
+    if (incomingStream !== observationStream) {
+      throw protocolError("observation update stream does not match the active attachment");
+    }
+    copyUpdate(update);
+    phase = "updating";
+    hostFailure = null;
+    hostInstallInFlight = false;
+    let status;
+    try {
+      status = exactStatus(exports[EXPORTS_V1.update](), "update");
+    } catch (cause) {
+      phase = "active";
+      throw asError(cause, "WASM update threw a non-Error value");
+    }
+    phase = "active";
+    if (hostFailure !== null) throw hostFailure;
+    if (status !== 0) throw wasmStatusError("update", status);
+    return decodeReceipt(copyResult(), requestSinkOutput, installedOutput, installedSinkOutput);
+  }
+
   function dispose() {
     if (phase === "vacant") return true;
     if (phase === "poisoned") return true;
@@ -752,5 +838,5 @@ export async function createPrivateProgramConsumer(options) {
     return beginActiveDispose();
   }
 
-  return Object.freeze({ run, dispose });
+  return Object.freeze({ run, update, dispose });
 }
