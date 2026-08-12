@@ -342,6 +342,7 @@ impl SessionPlanV1 for CompiledPointSupportRecheckV1 {
         &mut self,
         _owner: &Self::OwnerLease,
         observation: RevisionBoundObservationV1,
+        _previous: Option<&Self::Verified>,
         _permit: SessionObservationBindingPermitV1,
     ) -> Result<SessionDecision<Self::Verified, Self::Violation>, Self::Error> {
         let assessment = evaluate_bound_point_support(self, &observation)?;

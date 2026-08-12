@@ -1355,6 +1355,8 @@ mod tests {
     use core::cell::{Cell, RefCell, UnsafeCell};
     use std::rc::Rc;
 
+    use crate::program_session::CORE_PROGRAM_ASSESSMENT_CALLS;
+
     use super::*;
 
     #[derive(Debug, Default)]
@@ -2201,5 +2203,232 @@ mod tests {
             decode_result_for_test(&certified_result).paint_source,
             Srgb8::new([64, 64, 64])
         );
+    }
+
+    fn two_case_opaque_authored() -> AuthoredPrivateFixtureV1 {
+        AuthoredPrivateFixtureV1 {
+            source: Srgb8::new([64, 64, 64]),
+            opacity: 1.0,
+            appearance: AuthoredAppearanceV1 {
+                adapting_luminance_cd_m2: 64.0,
+                background_luminance_ratio_yb_yw: 0.2,
+                surround: AuthoredSurroundV1::Dim,
+            },
+            expected_final_visible: Srgb8::new([64, 64, 64]),
+            sink_output: 501,
+            stream: 31,
+            revision: 1,
+            scenarios: ScenarioWireSetV2 {
+                len: 2,
+                values: [
+                    ScenarioWireV2 {
+                        id: 1,
+                        backdrop: Srgb8::new([128, 128, 128]),
+                    },
+                    ScenarioWireV2 {
+                        id: 2,
+                        backdrop: Srgb8::new([192, 192, 192]),
+                    },
+                ],
+            },
+        }
+    }
+
+    fn two_case_observed_update(
+        revision: u64,
+        first: Srgb8,
+        second: Srgb8,
+    ) -> ObservationUpdateWireV2 {
+        ObservationUpdateWireV2::Observed {
+            stream: 31,
+            revision,
+            scenarios: ScenarioWireSetV2 {
+                len: 2,
+                values: [
+                    ScenarioWireV2 {
+                        id: 1,
+                        backdrop: first,
+                    },
+                    ScenarioWireV2 {
+                        id: 2,
+                        backdrop: second,
+                    },
+                ],
+            },
+        }
+    }
+
+    fn two_case_active_instance() -> (
+        PrivateFixtureInstanceV1<NativeFixtureHostV1>,
+        Rc<RefCell<HostOracleV1>>,
+        CertifiedPrivateFixtureResultV1,
+    ) {
+        let mut instance = PrivateFixtureInstanceV1::new();
+        let generation = instance.begin_run().unwrap();
+        let (host, oracle) = native_host(generation);
+        let executed = execute_private_fixture_v1(two_case_opaque_authored(), host).unwrap();
+        let initial = instance
+            .complete_run(generation, executed)
+            .unwrap()
+            .unwrap();
+        (instance, oracle, initial)
+    }
+
+    #[test]
+    fn unchanged_cases_skip_evaluator_work_on_revision_only_update() {
+        let (mut instance, _oracle, initial) = two_case_active_instance();
+        CORE_PROGRAM_ASSESSMENT_CALLS.with(|calls| calls.set(0));
+
+        let updated = instance
+            .update(two_case_observed_update(
+                2,
+                Srgb8::new([128, 128, 128]),
+                Srgb8::new([192, 192, 192]),
+            ))
+            .unwrap();
+
+        assert_eq!(updated.state, PrivateFixtureStateV2::Ready);
+        assert_eq!(updated.revision, 2);
+        assert_eq!(updated.content_identity, initial.content_identity);
+        assert_eq!(updated.paint_source, initial.paint_source);
+        assert_eq!(updated.paint_opacity_bits, initial.paint_opacity_bits);
+        assert_eq!(
+            CORE_PROGRAM_ASSESSMENT_CALLS.with(Cell::get),
+            0,
+            "an unchanged observation must not re-run the evaluator"
+        );
+    }
+
+    #[test]
+    fn single_changed_case_recomputes_only_the_affected_case() {
+        let (mut instance, _oracle, _initial) = two_case_active_instance();
+        CORE_PROGRAM_ASSESSMENT_CALLS.with(|calls| calls.set(0));
+
+        let updated = instance
+            .update(two_case_observed_update(
+                2,
+                Srgb8::new([129, 129, 129]),
+                Srgb8::new([192, 192, 192]),
+            ))
+            .unwrap();
+
+        assert_eq!(updated.state, PrivateFixtureStateV2::Ready);
+        assert_eq!(updated.revision, 2);
+        assert_eq!(
+            CORE_PROGRAM_ASSESSMENT_CALLS.with(Cell::get),
+            1,
+            "a single changed case must recompute exactly that case"
+        );
+    }
+
+    #[test]
+    fn incremental_revision_update_parities_fresh_full_resolve() {
+        let mut authored = two_case_opaque_authored();
+        authored.revision = 2;
+        let fresh = run_details(authored);
+        assert_eq!(fresh.status, 0);
+
+        let (mut instance, _oracle, _initial) = two_case_active_instance();
+        let updated = instance
+            .update(two_case_observed_update(
+                2,
+                Srgb8::new([128, 128, 128]),
+                Srgb8::new([192, 192, 192]),
+            ))
+            .unwrap();
+
+        assert_eq!(encode_result_v1(updated), fresh.result);
+    }
+
+    #[test]
+    fn changed_every_case_full_resolve_parities_and_stays_certified() {
+        let mut authored = two_case_opaque_authored();
+        authored.revision = 2;
+        authored.scenarios.values = [
+            ScenarioWireV2 {
+                id: 1,
+                backdrop: Srgb8::new([1, 2, 3]),
+            },
+            ScenarioWireV2 {
+                id: 2,
+                backdrop: Srgb8::new([250, 251, 252]),
+            },
+        ];
+        let fresh = run_details(authored);
+        assert_eq!(fresh.status, 0);
+
+        let (mut instance, _oracle, _initial) = two_case_active_instance();
+        CORE_PROGRAM_ASSESSMENT_CALLS.with(|calls| calls.set(0));
+        let updated = instance
+            .update(two_case_observed_update(
+                2,
+                Srgb8::new([1, 2, 3]),
+                Srgb8::new([250, 251, 252]),
+            ))
+            .unwrap();
+
+        assert_eq!(updated.state, PrivateFixtureStateV2::Ready);
+        assert_eq!(updated.revision, 2);
+        assert_eq!(encode_result_v1(updated), fresh.result);
+        assert_eq!(CORE_PROGRAM_ASSESSMENT_CALLS.with(Cell::get), 2);
+    }
+
+    #[test]
+    fn conflicting_revisions_are_rejected_and_the_baseline_is_preserved() {
+        let (mut instance, _oracle, initial) = two_case_active_instance();
+
+        assert_eq!(
+            instance.update(two_case_observed_update(
+                0,
+                Srgb8::new([128, 128, 128]),
+                Srgb8::new([192, 192, 192]),
+            )),
+            Err(PrivateFixtureErrorV1::UpdateRejected)
+        );
+        assert_eq!(
+            instance.update(two_case_observed_update(
+                1,
+                Srgb8::new([1, 2, 3]),
+                Srgb8::new([192, 192, 192]),
+            )),
+            Err(PrivateFixtureErrorV1::UpdateRejected)
+        );
+
+        let replay = instance
+            .update(two_case_observed_update(
+                2,
+                Srgb8::new([128, 128, 128]),
+                Srgb8::new([192, 192, 192]),
+            ))
+            .unwrap();
+        assert_eq!(replay.revision, 2);
+        assert_eq!(replay.content_identity, initial.content_identity);
+    }
+
+    #[test]
+    fn unknown_transition_preserves_the_ready_baseline_for_later_reuse() {
+        let (mut instance, _oracle, initial) = two_case_active_instance();
+
+        let unknown = instance
+            .update(ObservationUpdateWireV2::Unknown {
+                stream: 31,
+                revision: 2,
+                reason: 7,
+            })
+            .unwrap();
+        assert_eq!(unknown.state, PrivateFixtureStateV2::Stale);
+        assert_eq!(unknown.revision, 2);
+        assert_eq!(unknown.output, 0);
+
+        let recovered = instance
+            .update(two_case_observed_update(
+                3,
+                Srgb8::new([128, 128, 128]),
+                Srgb8::new([192, 192, 192]),
+            ))
+            .unwrap();
+        assert_eq!(recovered.state, PrivateFixtureStateV2::Ready);
+        assert_eq!(recovered.revision, 3);
+        assert_eq!(recovered.content_identity, initial.content_identity);
     }
 }

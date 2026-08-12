@@ -85,6 +85,7 @@ pub(crate) trait SessionPlanV1: private::PlanSealed {
         &mut self,
         owner: &Self::OwnerLease,
         observation: RevisionBoundObservationV1,
+        previous: Option<&Self::Verified>,
         permit: SessionObservationBindingPermitV1,
     ) -> Result<SessionDecision<Self::Verified, Self::Violation>, Self::Error>;
 
@@ -613,6 +614,7 @@ fn prepare_session_transition<'session, Plan: SessionPlanV1>(
                 .evaluate(
                     &owner,
                     observation,
+                    state.last_verified(),
                     SessionObservationBindingPermitV1::mint(),
                 )
                 .map_err(SessionUpdateError::Plan)?;

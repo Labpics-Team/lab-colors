@@ -751,6 +751,20 @@ pub(crate) trait ProgramConstraintEvaluatorSetV1: Sized {
 
     fn violation_binding(evidence: &Self::ViolationEvidence) -> ProgramVisiblePointBindingV1;
 
+    fn copy_pass_evidence(_evidence: &Self::PassEvidence) -> Option<Self::PassEvidence> {
+        None
+    }
+
+    fn copy_violation_evidence(
+        _evidence: &Self::ViolationEvidence,
+    ) -> Option<Self::ViolationEvidence> {
+        None
+    }
+
+    fn supports_evidence_copy() -> bool {
+        false
+    }
+
     fn constraint_content(&self, invocation: Self::Invocation) -> ProgramConstraintContentV1;
 }
 
@@ -880,6 +894,28 @@ macro_rules! define_core_program_evaluators_v1 {
                 match evidence {
                     $(CoreProgramViolationEvidenceV1::$variant(evidence) => *evidence.binding()),+
                 }
+            }
+
+            fn copy_pass_evidence(evidence: &Self::PassEvidence) -> Option<Self::PassEvidence> {
+                Some(match evidence {
+                    $(CoreProgramPassEvidenceV1::$variant(evidence) => {
+                        CoreProgramPassEvidenceV1::$variant(evidence.clone())
+                    }),+
+                })
+            }
+
+            fn copy_violation_evidence(
+                evidence: &Self::ViolationEvidence,
+            ) -> Option<Self::ViolationEvidence> {
+                Some(match evidence {
+                    $(CoreProgramViolationEvidenceV1::$variant(evidence) => {
+                        CoreProgramViolationEvidenceV1::$variant(evidence.clone())
+                    }),+
+                })
+            }
+
+            fn supports_evidence_copy() -> bool {
+                true
             }
 
             fn constraint_content(&self, invocation: Self::Invocation) -> ProgramConstraintContentV1 {
@@ -2507,6 +2543,23 @@ where
     DeclaredSrgb8CleanSet(DeclaredSrgb8CleanSetPassV1),
 }
 
+impl<Evaluation> Clone for ProgramConstraintPassEvidenceV1<Evaluation>
+where
+    Evaluation: ProgramConstraintEvaluatorSetV1,
+{
+    fn clone(&self) -> Self {
+        match self {
+            Self::VisibleUnary(evidence) => Self::VisibleUnary(
+                Evaluation::copy_pass_evidence(evidence)
+                    .unwrap_or_else(|| unreachable!("the production evaluator set is replayable")),
+            ),
+            Self::IntrinsicUnary(evidence) => Self::IntrinsicUnary(*evidence),
+            Self::Relation(span) => Self::Relation(*span),
+            Self::DeclaredSrgb8CleanSet(evidence) => Self::DeclaredSrgb8CleanSet(*evidence),
+        }
+    }
+}
+
 pub(crate) enum ProgramConstraintViolationEvidenceV1<Evaluation>
 where
     Evaluation: ProgramConstraintEvaluatorSetV1,
@@ -2517,6 +2570,23 @@ where
     DeclaredSrgb8CleanSet(DeclaredSrgb8CleanSetViolationV1),
 }
 
+impl<Evaluation> Clone for ProgramConstraintViolationEvidenceV1<Evaluation>
+where
+    Evaluation: ProgramConstraintEvaluatorSetV1,
+{
+    fn clone(&self) -> Self {
+        match self {
+            Self::VisibleUnary(evidence) => Self::VisibleUnary(
+                Evaluation::copy_violation_evidence(evidence)
+                    .unwrap_or_else(|| unreachable!("the production evaluator set is replayable")),
+            ),
+            Self::IntrinsicUnary(evidence) => Self::IntrinsicUnary(*evidence),
+            Self::Relation(span) => Self::Relation(*span),
+            Self::DeclaredSrgb8CleanSet(evidence) => Self::DeclaredSrgb8CleanSet(*evidence),
+        }
+    }
+}
+
 /// One evaluator classification retained in the complete Program report.
 pub enum ProgramConstraintResultV1<Evaluation>
 where
@@ -2524,6 +2594,18 @@ where
 {
     Pass(ProgramConstraintPassEvidenceV1<Evaluation>),
     Violation(ProgramConstraintViolationEvidenceV1<Evaluation>),
+}
+
+impl<Evaluation> Clone for ProgramConstraintResultV1<Evaluation>
+where
+    Evaluation: ProgramConstraintEvaluatorSetV1,
+{
+    fn clone(&self) -> Self {
+        match self {
+            Self::Pass(evidence) => Self::Pass(evidence.clone()),
+            Self::Violation(evidence) => Self::Violation(evidence.clone()),
+        }
+    }
 }
 
 impl<Evaluation> ProgramConstraintResultV1<Evaluation>
@@ -2546,6 +2628,22 @@ where
     subject: ProgramConstraintSubjectV1,
     mode: CompiledConstraintModeV1,
     result: ProgramConstraintResultV1<Evaluation>,
+}
+
+impl<Evaluation> Clone for ProgramConstraintCellV1<Evaluation>
+where
+    Evaluation: ProgramConstraintEvaluatorSetV1,
+{
+    fn clone(&self) -> Self {
+        Self {
+            candidate_state_index: self.candidate_state_index,
+            case_index: self.case_index,
+            constraint: self.constraint,
+            subject: self.subject,
+            mode: self.mode,
+            result: self.result.clone(),
+        }
+    }
 }
 
 impl<Evaluation> ProgramConstraintCellV1<Evaluation>
@@ -3815,9 +3913,10 @@ where
         &mut self,
         owner: &Self::OwnerLease,
         observation: RevisionBoundObservationV1,
+        previous: Option<&Self::Verified>,
         _permit: SessionObservationBindingPermitV1,
     ) -> Result<SessionDecision<Self::Verified, Self::Violation>, Self::Error> {
-        evaluate_program_session(self, &owner.0, observation)
+        evaluate_program_session(self, &owner.0, observation, previous)
     }
 
     fn retire_verified(&mut self, evidence: Self::Verified) {
@@ -3838,6 +3937,7 @@ fn evaluate_program_session<Evaluation>(
     plan: &mut ProgramSessionPlan<Evaluation>,
     epoch: &ProgramEpochV1<Evaluation>,
     observation: RevisionBoundObservationV1,
+    previous: Option<&ProgramVerifiedV1<Evaluation>>,
 ) -> ProgramSessionEvaluationResult<Evaluation>
 where
     Evaluation: ProgramConstraintEvaluatorSetV1,
@@ -3870,6 +3970,7 @@ where
         scenario_set,
         arena.storage_mut(),
         counts,
+        previous,
     )?;
     if matches!(&outcome, ProgramEvaluationOutcomeV1::Conflict { .. }) {
         // Conflict не имеет output-authority: сохраняется только capacity для
@@ -3904,6 +4005,7 @@ fn evaluate_program_session_into<Evaluation>(
     scenario_set: NonEmptyScenarioSetV1<'_>,
     arena: &mut ProgramEvaluationArenaV1<Evaluation>,
     counts: ProgramEvaluationCardinalityV1,
+    previous: Option<&ProgramVerifiedV1<Evaluation>>,
 ) -> Result<
     ProgramEvaluationOutcomeV1,
     ProgramSessionEvaluationError<ProgramEvaluatorError<Evaluation>>,
@@ -3922,6 +4024,7 @@ where
                 1,
                 arena,
                 counts,
+                previous,
             );
         }
         CompiledTargetSelectionV1::Finite { space, .. } => space,
@@ -3938,6 +4041,7 @@ where
             state_index,
             ProgramEvaluationPhaseV1::Hard,
             ProgramCandidateCollectionV1::none(),
+            None,
         )? {
             // A selected tuple is never certified from its allocation-free
             // search pass. Re-apply and collect fresh terminal evidence.
@@ -3950,6 +4054,7 @@ where
                 state_index + 1,
                 arena,
                 counts,
+                None,
             )? {
                 ProgramEvaluationOutcomeV1::Verified { .. } => {
                     return Ok(ProgramEvaluationOutcomeV1::Verified {
@@ -4013,6 +4118,7 @@ where
                     steps: &mut arena.point_causal_steps,
                 }),
             },
+            None,
         )? {
             return Err(ProgramSessionEvaluationError::InternalInvariant);
         }
@@ -4038,6 +4144,7 @@ where
                     outputs: None,
                     point_causal: None,
                 },
+                None,
             )? {
                 return Err(ProgramSessionEvaluationError::InternalInvariant);
             }
@@ -4083,6 +4190,10 @@ where
     Ok(())
 }
 
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the terminal candidate transaction carries one typed coordinate per bounded arena and baseline"
+)]
 fn collect_program_candidate_into<Evaluation>(
     runtime: &mut ProgramEvaluationRuntimeV1<'_>,
     epoch: &ProgramEpochV1<Evaluation>,
@@ -4091,6 +4202,7 @@ fn collect_program_candidate_into<Evaluation>(
     considered_state_count: usize,
     arena: &mut ProgramEvaluationArenaV1<Evaluation>,
     counts: ProgramEvaluationCardinalityV1,
+    previous: Option<&ProgramVerifiedV1<Evaluation>>,
 ) -> Result<
     ProgramEvaluationOutcomeV1,
     ProgramSessionEvaluationError<ProgramEvaluatorError<Evaluation>>,
@@ -4154,6 +4266,7 @@ where
                     steps: &mut arena.point_causal_steps,
                 }),
             },
+            previous,
         )?
     } else {
         false
@@ -4200,6 +4313,7 @@ where
                 outputs: (!has_hard_constraints).then_some(&mut arena.outputs),
                 point_causal,
             },
+            None,
         )? {
             return Err(ProgramSessionEvaluationError::InternalInvariant);
         }
@@ -4279,6 +4393,7 @@ fn scan_program_candidate<Evaluation>(
     candidate_state_index: usize,
     phase: ProgramEvaluationPhaseV1,
     collection: ProgramCandidateCollectionV1<'_, Evaluation>,
+    previous: Option<&ProgramVerifiedV1<Evaluation>>,
 ) -> Result<bool, ProgramSessionEvaluationError<ProgramEvaluatorError<Evaluation>>>
 where
     Evaluation: ProgramConstraintEvaluatorSetV1,
@@ -4299,6 +4414,47 @@ where
     }
 
     let case_count = scenario_set.len().get();
+    let previous_storage = previous
+        .filter(|verified| {
+            Evaluation::supports_evidence_copy()
+                && verified.selected_state_index().is_none()
+                && !epoch
+                    .constraint_phases
+                    .contains(ProgramEvaluationPhaseV1::ReportOnly)
+                && verified.report().content_identity() == epoch.content_identity
+                && verified.report().selection_release_identity()
+                    == epoch.target_selection.release_identity()
+                && verified
+                    .report()
+                    .observation()
+                    .shares_schema_backing_with(schema)
+                && verified.report().observation().physical_case_count() == case_count
+        })
+        .map(|verified| {
+            (
+                &verified.report().observation,
+                &verified.report().arena.storage,
+            )
+        });
+    let previous_strides = previous_storage
+        .map(|(_, storage)| {
+            let lengths = [
+                storage.cells.len(),
+                storage.relation_members.len(),
+                storage.point_causal_records.len(),
+                storage.point_causal_steps.len(),
+            ];
+            if lengths.into_iter().any(|length| length % case_count != 0) {
+                return Err(ProgramSessionEvaluationError::InternalInvariant);
+            }
+            Ok(lengths.map(|length| length / case_count))
+        })
+        .transpose()?;
+    if let (Some(outputs), Some((_, storage))) = (outputs.as_deref_mut(), previous_storage) {
+        if outputs.is_empty() {
+            outputs.extend_from_slice(&storage.outputs);
+        }
+    }
     let mut has_hard_violation = false;
     let mut output_mismatch = None;
     for case_index in 0..case_count {
@@ -4315,6 +4471,68 @@ where
                     None,
                 ),
             ));
+        }
+        if let (Some((previous_observation, storage)), Some(strides)) =
+            (previous_storage, previous_strides)
+        {
+            let previous_values = previous_observation
+                .physical_values(case_index)
+                .ok_or(ProgramSessionEvaluationError::InternalInvariant)?;
+            if previous_values == values {
+                if let ProgramConstraintEvidenceCaptureV1::Report {
+                    cells,
+                    relation_members,
+                } = &mut evidence
+                {
+                    let cell_start = case_index * strides[0];
+                    let relation_start = case_index * strides[1];
+                    let previous_cells = storage
+                        .cells
+                        .get(cell_start..cell_start + strides[0])
+                        .ok_or(ProgramSessionEvaluationError::InternalInvariant)?;
+                    let previous_relations = storage
+                        .relation_members
+                        .get(relation_start..relation_start + strides[1])
+                        .ok_or(ProgramSessionEvaluationError::InternalInvariant)?;
+                    if !storage_has_spare_capacity(
+                        [cells.len(), relation_members.len()],
+                        [cells.capacity(), relation_members.capacity()],
+                        [previous_cells.len(), previous_relations.len()],
+                    ) {
+                        return Err(ProgramSessionEvaluationError::InternalInvariant);
+                    }
+                    has_hard_violation |= previous_cells
+                        .iter()
+                        .any(|cell| cell.result().is_violation());
+                    cells.extend_from_slice(previous_cells);
+                    relation_members.extend_from_slice(previous_relations);
+                }
+                if let Some(point_causal) = point_causal.as_mut() {
+                    let record_start = case_index * strides[2];
+                    let step_start = case_index * strides[3];
+                    let previous_records = storage
+                        .point_causal_records
+                        .get(record_start..record_start + strides[2])
+                        .ok_or(ProgramSessionEvaluationError::InternalInvariant)?;
+                    let previous_steps = storage
+                        .point_causal_steps
+                        .get(step_start..step_start + strides[3])
+                        .ok_or(ProgramSessionEvaluationError::InternalInvariant)?;
+                    if !storage_has_spare_capacity(
+                        [point_causal.records.len(), point_causal.steps.len()],
+                        [
+                            point_causal.records.capacity(),
+                            point_causal.steps.capacity(),
+                        ],
+                        [previous_records.len(), previous_steps.len()],
+                    ) {
+                        return Err(ProgramSessionEvaluationError::InternalInvariant);
+                    }
+                    point_causal.records.extend_from_slice(previous_records);
+                    point_causal.steps.extend_from_slice(previous_steps);
+                }
+                continue;
+            }
         }
         runtime
             .bindings
@@ -4710,7 +4928,7 @@ where
                     output: output.output,
                     paint,
                 };
-                if case_index == 0 {
+                if outputs.len() == output_index {
                     outputs.push(routed);
                 } else if outputs.get(output_index).copied() != Some(routed)
                     && output_mismatch.is_none()
