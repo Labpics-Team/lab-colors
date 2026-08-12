@@ -301,7 +301,7 @@ function exactExportedLength(instance, name, expected) {
   if (typeof exported !== "function") fail(`validated WASM is missing ${name}`);
   const actual = exported();
   if (!Number.isSafeInteger(actual) || actual !== expected) {
-    fail(`${name} differs from ABI v1: expected=${expected} actual=${String(actual)}`);
+    fail(`${name} differs from the mixed legacy-export/ABI-v2 contract: expected=${expected} actual=${String(actual)}`);
   }
 }
 

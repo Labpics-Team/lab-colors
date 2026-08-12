@@ -3,9 +3,9 @@
 //! Закрытый production consumer минимального declarative Program.
 //!
 //! Rust-модуль намеренно приватен. Единственная внешняя поверхность существует
-//! только в отдельном single-threaded `wasm32` artifact как фиксированные ABI-v1
-//! request/result buffers и синхронный `run`; общий Program authoring API наружу
-//! не проецируется.
+//! только в отдельном single-threaded `wasm32` artifact: legacy-named exported
+//! request/result buffers carry ABI-v2 framing, dedicated v2 update exports own
+//! runtime observations, and the Program authoring API is never projected out.
 
 use crate::Srgb8;
 use crate::family_artifact::FamilyArtifactBundleV2;
@@ -1218,28 +1218,28 @@ mod wasm_abi {
     static INSTANCE_V1: SingleThreadWasmCellV1<PrivateFixtureInstanceV1<WasmHostPointSinkV1>> =
         SingleThreadWasmCellV1::new(PrivateFixtureInstanceV1::new());
 
-    /// Возвращает адрес принадлежащего instance request-buffer ABI v1.
+    /// Возвращает legacy-named request-buffer с ABI-v2 framing.
     #[doc(hidden)]
     #[unsafe(export_name = "labcolors_private_fixture_request_v1_ptr")]
     pub extern "C" fn request_v1_ptr() -> *mut u8 {
         REQUEST_V1.0.get().cast::<u8>()
     }
 
-    /// Возвращает точный размер request-buffer ABI v1.
+    /// Возвращает точный размер legacy-named request-buffer ABI v2.
     #[doc(hidden)]
     #[unsafe(export_name = "labcolors_private_fixture_request_v1_len")]
     pub extern "C" fn request_v1_len() -> u32 {
         PRIVATE_FIXTURE_REQUEST_V2_LEN as u32
     }
 
-    /// Возвращает read-only адрес принадлежащего instance result-buffer ABI v1.
+    /// Возвращает read-only legacy-named result-buffer с ABI-v2 framing.
     #[doc(hidden)]
     #[unsafe(export_name = "labcolors_private_fixture_result_v1_ptr")]
     pub extern "C" fn result_v1_ptr() -> *const u8 {
         RESULT_V1.0.get().cast::<u8>().cast_const()
     }
 
-    /// Возвращает точный размер result-buffer ABI v1.
+    /// Возвращает точный размер legacy-named result-buffer ABI v2.
     #[doc(hidden)]
     #[unsafe(export_name = "labcolors_private_fixture_result_v1_len")]
     pub extern "C" fn result_v1_len() -> u32 {
