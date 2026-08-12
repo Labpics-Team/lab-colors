@@ -44,12 +44,15 @@ const SCRIPT_PATH = fileURLToPath(import.meta.url);
 export const REPO_ROOT = resolve(dirname(SCRIPT_PATH), "..");
 
 const PROOF_SCRIPT = resolve(REPO_ROOT, "scripts/test-private-program-browser.mjs");
-const PRIVATE_PROGRAM_REQUEST_V1_LENGTH = 46;
-const PRIVATE_PROGRAM_RESULT_V1_LENGTH = 59;
+const PRIVATE_PROGRAM_REQUEST_V2_LENGTH = 70;
+const PRIVATE_PROGRAM_UPDATE_V2_LENGTH = 40;
+const PRIVATE_PROGRAM_RESULT_V2_LENGTH = 72;
 const PRIVATE_PROGRAM_REQUEST_LENGTH_EXPORT =
   "labcolors_private_fixture_request_v1_len";
 const PRIVATE_PROGRAM_RESULT_LENGTH_EXPORT =
   "labcolors_private_fixture_result_v1_len";
+const PRIVATE_PROGRAM_UPDATE_LENGTH_EXPORT =
+  "labcolors_private_fixture_update_v2_len";
 const PRIVATE_PROGRAM_HOST_MODULE = "labcolors_private_fixture_host_v1";
 const PRIVATE_PROGRAM_HOST_INSTALL = "labcolors_private_fixture_host_install_v1";
 const PRIVATE_PROGRAM_HOST_CONFIRM =
@@ -124,16 +127,13 @@ export const PRIVATE_PROGRAM_MUTATION_CASES = Object.freeze([
     artifact: "rust-wasm",
     sourcePath: "crates/labcolors-core/src/private_fixture.rs",
     search: lines(
-      "attachment.update(UpdateV1::Observed {",
-      "        revision: STATIC_RESOLVE_REVISION,",
-      "        scenarios: &scenarios,",
-      "    })",
+      "        } => apply_observed_update_v2(attachment, revision, scenarios)",
+      "            .map_err(|_| PrivateFixtureErrorV1::UpdateRejected),",
     ).slice(0, -1),
     replacement: lines(
-      "attachment.update(UpdateV1::Unknown {",
-      "        revision: STATIC_RESOLVE_REVISION,",
-      "        reason_id: 1,",
-      "    })",
+      "        } => attachment",
+      "            .update(UpdateV1::Unknown { revision, reason_id: 1 })",
+      "            .map_err(|_| PrivateFixtureErrorV1::UpdateRejected),",
     ).slice(0, -1),
     expectedBrowserAssertion:
       "PrivateProgramConsumerError: private Program consumer: shipping trace permits exactly one SetAll callback",
@@ -160,12 +160,8 @@ export const PRIVATE_PROGRAM_MUTATION_CASES = Object.freeze([
     proof: "semantic",
     artifact: "javascript",
     sourcePath: "packages/colors/private-program/consumer.js",
-    search: lines(
-      "    exactLeaseSuccess(",
-      "      lease.publish(frozenPublication(outputBinding, css)),",
-      '      "output lease publish",',
-      "    );",
-    ),
+    search:
+      '    exactLeaseSuccess(lease.publish(frozenPublication(outputBinding, css)), "output lease publish");',
     replacement: "    frozenPublication(outputBinding, css);\n",
     expectedBrowserAssertion:
       "Error: private Program browser fixture: computed background is the exact expected CSS literal; expected \"rgba(64, 64, 64, 0.5)\", got \"rgba(0, 0, 0, 0)\"",
@@ -230,6 +226,7 @@ function occurrenceCount(source, search) {
 }
 
 export function applyExactMutation(source, definition) {
+  source = source.replaceAll("\r\n", "\n");
   if (
     typeof source !== "string" ||
     typeof definition?.search !== "string" ||
@@ -322,12 +319,17 @@ export function validateMutationWasm(bytes) {
   exactExportedLength(
     instance,
     PRIVATE_PROGRAM_REQUEST_LENGTH_EXPORT,
-    PRIVATE_PROGRAM_REQUEST_V1_LENGTH,
+    PRIVATE_PROGRAM_REQUEST_V2_LENGTH,
   );
   exactExportedLength(
     instance,
     PRIVATE_PROGRAM_RESULT_LENGTH_EXPORT,
-    PRIVATE_PROGRAM_RESULT_V1_LENGTH,
+    PRIVATE_PROGRAM_RESULT_V2_LENGTH,
+  );
+  exactExportedLength(
+    instance,
+    PRIVATE_PROGRAM_UPDATE_LENGTH_EXPORT,
+    PRIVATE_PROGRAM_UPDATE_V2_LENGTH,
   );
   return PRIVATE_PROGRAM_WASM_SURFACE;
 }
