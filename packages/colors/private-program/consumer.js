@@ -29,6 +29,10 @@ const HOST_DISPOSE_CONFIRMED_V1 = 0x4c43_0002;
 const OPERATION_SET_ALL_V1 = 1;
 const OPERATION_REVOKE_ALL_V1 = 2;
 const OPERATION_CONFIRM_EXACT_V1 = 3;
+const STATE_WAITING_V2 = 1;
+const STATE_READY_V2 = 2;
+const STATE_STALE_V2 = 3;
+const STATE_FAILED_V2 = 4;
 const DISPOSE_BEGIN_BUSY_V1 = 0xffff_ffff;
 // Live dispose tokens live in [DISPOSE_TOKEN_BASE_V1, 2 * DISPOSE_TOKEN_BASE_V1 - 1],
 // disjoint from every Core status code (1..=15), the Vacant sentinel 0, and the
@@ -242,6 +246,10 @@ function lowercaseHex(bytes) {
   return value;
 }
 
+function allZero(bytes) {
+  return bytes.every((byte) => byte === 0);
+}
+
 function decodeReceipt(
   bytes,
   expectedSinkOutput,
@@ -264,6 +272,14 @@ function decodeReceipt(
   }
 
   const state = view.getUint8(RESULT_STATE_OFFSET);
+  if (
+    state !== STATE_WAITING_V2 &&
+    state !== STATE_READY_V2 &&
+    state !== STATE_STALE_V2 &&
+    state !== STATE_FAILED_V2
+  ) {
+    throw protocolError("result has an invalid lifecycle state");
+  }
   const stream = view.getUint32(RESULT_STREAM_OFFSET, true);
   const revision = view.getBigUint64(RESULT_REVISION_OFFSET, true);
   if (stream !== expectedStream || revision < minimumRevision) {
@@ -271,20 +287,35 @@ function decodeReceipt(
   }
   const output = view.getUint32(RESULT_OUTPUT_OFFSET, true);
   const sinkOutput = view.getUint32(RESULT_SINK_OUTPUT_OFFSET, true);
-  if (
-    (output !== 0 &&
-      (sinkOutput !== expectedSinkOutput ||
-        sinkOutput !== installedSinkOutput ||
-        output !== installedOutput))
-  ) {
-    throw protocolError("certified result does not match the installed output identity");
-  }
-
   const paintSource = Object.freeze([
     bytes[RESULT_RGB_OFFSET],
     bytes[RESULT_RGB_OFFSET + 1],
     bytes[RESULT_RGB_OFFSET + 2],
   ]);
+  const paintOpacityBits = view.getBigUint64(RESULT_OPACITY_OFFSET, true);
+  const identityBytes = bytes.subarray(
+    RESULT_CONTENT_IDENTITY_OFFSET,
+    RESULT_CONTENT_IDENTITY_OFFSET + IDENTITY_LENGTH,
+  );
+  if (state === STATE_READY_V2) {
+    if (
+      output === 0 ||
+      sinkOutput !== expectedSinkOutput ||
+      sinkOutput !== installedSinkOutput ||
+      output !== installedOutput ||
+      allZero(identityBytes)
+    ) {
+      throw protocolError("Ready result lacks an identity-matching certified output");
+    }
+  } else if (
+    output !== 0 ||
+    sinkOutput !== 0 ||
+    !allZero(paintSource) ||
+    paintOpacityBits !== 0n ||
+    !allZero(identityBytes)
+  ) {
+    throw protocolError("no-output result carries forbidden certified output data");
+  }
   return Object.freeze({
     output,
     sinkOutput,
@@ -292,13 +323,8 @@ function decodeReceipt(
     stream,
     revision,
     paintSource,
-    paintOpacityBits: view.getBigUint64(RESULT_OPACITY_OFFSET, true),
-    contentIdentity: lowercaseHex(
-      bytes.subarray(
-        RESULT_CONTENT_IDENTITY_OFFSET,
-        RESULT_CONTENT_IDENTITY_OFFSET + IDENTITY_LENGTH,
-      ),
-    ),
+    paintOpacityBits,
+    contentIdentity: lowercaseHex(identityBytes),
   });
 }
 
@@ -836,21 +862,30 @@ export async function createPrivateProgramConsumer(options) {
     try {
       status = exactStatus(exports[EXPORTS_V1.update](), "update");
     } catch (cause) {
-      phase = "active";
-      throw asError(cause, "WASM update threw a non-Error value");
+      return probeAndCleanupFailedRun(asError(cause, "WASM update threw a non-Error value"));
     }
-    phase = "active";
-    if (hostFailure !== null) throw hostFailure;
-    if (status !== 0) throw wasmStatusError("update", status);
-    const receipt = decodeReceipt(
-      copyResult(),
-      requestSinkOutput,
-      installedOutput,
-      installedSinkOutput,
-      observationStream,
-      incomingRevision,
-    );
+    if (hostFailure !== null) return probeAndCleanupFailedRun(hostFailure);
+    if (status !== 0) {
+      phase = "active";
+      throw wasmStatusError("update", status);
+    }
+    let receipt;
+    try {
+      receipt = decodeReceipt(
+        copyResult(),
+        requestSinkOutput,
+        installedOutput,
+        installedSinkOutput,
+        observationStream,
+        incomingRevision,
+      );
+    } catch (cause) {
+      return probeAndCleanupFailedRun(
+        asError(cause, "update result decoding threw a non-Error value"),
+      );
+    }
     observationRevision = receipt.revision;
+    phase = "active";
     return receipt;
   }
 

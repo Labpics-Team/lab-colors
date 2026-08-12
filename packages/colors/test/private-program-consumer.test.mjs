@@ -179,21 +179,30 @@ class FakePrivateProgramWasm {
     return status;
   }
 
-  writeResult({ sinkOutput = this.requestSinkOutput(), output = 17 } = {}) {
+  writeResult({
+    state = 2,
+    stream = 31,
+    revision = BigInt(this.runCount),
+    sinkOutput = this.requestSinkOutput(),
+    output = 17,
+    paintSource = [64, 64, 64],
+    paintOpacityBits = HALF_OPACITY_BITS,
+    contentIdentity = Array.from({ length: 32 }, (_, index) => index),
+  } = {}) {
     const bytes = new Uint8Array(this.memory.buffer, RESULT_POINTER, RESULT_LENGTH);
     bytes.fill(0);
     bytes.set([0x4c, 0x43, 0x46, 0x52]);
     const view = new DataView(this.memory.buffer, RESULT_POINTER, RESULT_LENGTH);
     view.setUint16(4, 2, true);
     view.setUint16(6, RESULT_LENGTH, true);
-    bytes[8] = 2;
-    view.setUint32(9, 31, true);
-    view.setBigUint64(13, BigInt(this.runCount), true);
+    bytes[8] = state;
+    view.setUint32(9, stream, true);
+    view.setBigUint64(13, revision, true);
     view.setUint32(21, output, true);
     view.setUint32(25, sinkOutput, true);
-    bytes.set([64, 64, 64], 29);
-    view.setBigUint64(32, HALF_OPACITY_BITS, true);
-    bytes.set(Array.from({ length: 32 }, (_, index) => index), 40);
+    bytes.set(paintSource, 29);
+    view.setBigUint64(32, paintOpacityBits, true);
+    bytes.set(contentIdentity, 40);
   }
 
   update() {
@@ -550,6 +559,49 @@ test("unknown update is carried explicitly without a fabricated certified output
     assert.equal(state.output, 0);
     assert.equal(state.contentIdentity, "0".repeat(64));
     assert.equal(target.props.get(OUTPUT_BINDING), CSS);
+    assert.equal(consumer.dispose(), true);
+  });
+});
+
+test("receipt admission rejects every invalid lifecycle and output-shape combination", async () => {
+  const nonzeroIdentity = Array.from({ length: 32 }, (_, index) => index + 1);
+  const hostileReceipts = [
+    ["unknown state tag", { state: 255 }],
+    ["Ready without output", { state: 2, output: 0, sinkOutput: 0, paintSource: [0, 0, 0], paintOpacityBits: 0n, contentIdentity: Array(32).fill(0) }],
+    ["Ready without identity", { state: 2, contentIdentity: Array(32).fill(0) }],
+    ...[1, 3, 4].flatMap((state) => [
+      [`state ${state} with output`, { state, output: 17 }],
+      [`state ${state} with sink output`, { state, output: 0, sinkOutput: 501 }],
+      [`state ${state} with paint`, { state, output: 0, sinkOutput: 0, paintSource: [1, 0, 0] }],
+      [`state ${state} with opacity`, { state, output: 0, sinkOutput: 0, paintSource: [0, 0, 0], paintOpacityBits: 1n }],
+      [`state ${state} with identity`, { state, output: 0, sinkOutput: 0, paintSource: [0, 0, 0], paintOpacityBits: 0n, contentIdentity: nonzeroIdentity }],
+    ]),
+  ];
+
+  for (const [label, result] of hostileReceipts) {
+    await withFakeProgram({}, ({ consumer, wasm }) => {
+      wasm.writeResult = function writeHostileResult() {
+        FakePrivateProgramWasm.prototype.writeResult.call(this, result);
+      };
+      assert.throws(() => consumer.run(requestBytes()), /result|state|output|identity/u, label);
+      assert.equal(consumer.dispose(), true);
+    });
+  }
+});
+
+test("post-commit foreign receipt closes Core and cannot retain stale revision state", async () => {
+  await withFakeProgram({}, ({ consumer, wasm, target }) => {
+    consumer.run(requestBytes());
+    const update = wasm.update.bind(wasm);
+    wasm.update = function updateWithForeignReceipt() {
+      const status = update();
+      new DataView(this.memory.buffer, RESULT_POINTER, RESULT_LENGTH).setUint32(9, 32, true);
+      return status;
+    };
+
+    assert.throws(() => consumer.update(observedUpdateBytes()), /provenance/u);
+    assert.equal(target.props.has(OUTPUT_BINDING), false, "uncertain post-commit output must be revoked");
+    assert.throws(() => consumer.update(observedUpdateBytes(3n)), /unavailable/u);
     assert.equal(consumer.dispose(), true);
   });
 });
@@ -1345,7 +1397,7 @@ test("authored, imported, and certified sink identities must agree", async () =>
   await withFakeProgram(
     { plans: ["result-sink-mismatch", "success"] },
     ({ consumer, target, wasm }) => {
-    assert.throws(() => consumer.run(requestBytes()), /installed output identity/u);
+    assert.throws(() => consumer.run(requestBytes()), /identity-matching certified output/u);
       assert.equal(target.props.has(OUTPUT_BINDING), false);
       assert.deepEqual(wasm.beginTokens, [1]);
       assert.deepEqual(wasm.commitTokens, [1]);
