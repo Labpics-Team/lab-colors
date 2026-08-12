@@ -1384,6 +1384,9 @@ test("the private Program WASM has one exact package-private import/export surfa
       "labcolors_private_fixture_result_v1_len:function",
       "labcolors_private_fixture_result_v1_ptr:function",
       "labcolors_private_fixture_run_v1:function",
+      "labcolors_private_fixture_update_v2:function",
+      "labcolors_private_fixture_update_v2_len:function",
+      "labcolors_private_fixture_update_v2_ptr:function",
       "memory:memory",
     ],
   );
