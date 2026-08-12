@@ -1,17 +1,14 @@
 const OUTPUT_BINDING = "--lab-private-program-output";
-const EXPECTED_REQUEST_LENGTH = 296;
+const EXPECTED_REQUEST_LENGTH = 46;
 const EXPECTED_OUTPUT = 17;
 const EXPECTED_SINK_OUTPUT = 501;
-const EXPECTED_SELECTED_STATE_INDEX = 3;
 const EXPECTED_PAINT_SOURCE = Object.freeze([64, 64, 64]);
 const EXPECTED_PAINT_OPACITY_BITS_HEX = "3fe0000000000000";
 const EXPECTED_COMPUTED_CSS = "rgba(64, 64, 64, 0.5)";
 
-const REQUEST_HEX = "4c434651010028014040400a000000000000000000000000e03f0b000000ffffff000000000000e03f0c000000808080000000000000f03f14000000404040000000000000f03f15000000000000000000000000e03fa1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a10c00000015000000a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a20a00000014000000b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b10b00000014000000b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b20c00000014000000c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c10a00000015000000c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c20b000000150000000700000000000000000000000000e03f00000000000050409a9999999999c93f016500000000000066000000ffffff6060602d0100009101000000000000f5010000";
+const REQUEST_HEX = "4c43465101002e00404040000000000000e03f80808000000000000050409a9999999999c93f01606060f5010000";
 const EXPECTED_CONTENT_IDENTITY =
-  "abf405c19e88849e262a48a76c9aaf2a320dca68a88ab099872b36441e762dec";
-const EXPECTED_SELECTION_RELEASE_IDENTITY =
-  "b8346d58bbe276eb00a0e9f3fffc00809993b34f8afe6d5591b871f915be508e";
+  "4daf4731d823ba228f4189d08c76183dd8a81e8b593ff709828b7329e075a914";
 
 const EXPECTED_CHECKS = Object.freeze([
   "installed-physical-private-program",
@@ -45,10 +42,6 @@ function assertStableLiterals() {
   assert(
     /^[0-9a-f]{64}$/u.test(EXPECTED_CONTENT_IDENTITY),
     "content identity is awaiting ABI_STABLE exact bytes",
-  );
-  assert(
-    /^[0-9a-f]{64}$/u.test(EXPECTED_SELECTION_RELEASE_IDENTITY),
-    "selection-release identity is awaiting ABI_STABLE exact bytes",
   );
 }
 
@@ -118,11 +111,6 @@ async function runProof() {
     equal(receipt.output, EXPECTED_OUTPUT, "certified output identity");
     equal(receipt.sinkOutput, EXPECTED_SINK_OUTPUT, "certified sink-output identity");
     equal(
-      receipt.selectedStateIndex,
-      EXPECTED_SELECTED_STATE_INDEX,
-      "certified selected-state index",
-    );
-    equal(
       JSON.stringify(receipt.paintSource),
       JSON.stringify(EXPECTED_PAINT_SOURCE),
       "certified paint source",
@@ -134,11 +122,6 @@ async function runProof() {
       "certified paint opacity bits",
     );
     equal(receipt.contentIdentity, EXPECTED_CONTENT_IDENTITY, "certified content identity");
-    equal(
-      receipt.selectionReleaseIdentity,
-      EXPECTED_SELECTION_RELEASE_IDENTITY,
-      "certified selection-release identity",
-    );
     checks.push("exact-certified-receipt");
   } finally {
     disposeResult = await consumer.dispose();

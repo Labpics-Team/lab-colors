@@ -6,12 +6,12 @@ import { outputElement } from "./output-host.mjs";
 const { createPrivateProgramConsumer } = await import("../private-program/consumer.js");
 
 const OUTPUT_BINDING = "--lab-private-program-output";
-const REQUEST_LENGTH = 296;
-const RESULT_LENGTH = 95;
+const REQUEST_LENGTH = 46;
+const RESULT_LENGTH = 59;
 const REQUEST_POINTER = 0;
 const RESULT_POINTER = 1_024;
 const CSS_POINTER = 2_048;
-const REQUEST_SINK_OUTPUT_OFFSET = 292;
+const REQUEST_SINK_OUTPUT_OFFSET = 42;
 const HOST_MODULE = "labcolors_private_fixture_host_v1";
 const HOST_INSTALL = "labcolors_private_fixture_host_install_v1";
 const HOST_CONFIRM = "labcolors_private_fixture_host_confirm_disposed_v1";
@@ -143,11 +143,9 @@ class FakePrivateProgramWasm {
     view.setUint16(6, RESULT_LENGTH, true);
     view.setUint32(8, output, true);
     view.setUint32(12, sinkOutput, true);
-    view.setUint32(16, 3, true);
-    bytes.set([64, 64, 64], 20);
-    view.setBigUint64(23, HALF_OPACITY_BITS, true);
-    bytes.set(Array.from({ length: 32 }, (_, index) => index), 31);
-    bytes.set(Array.from({ length: 32 }, (_, index) => 255 - index), 63);
+    bytes.set([64, 64, 64], 16);
+    view.setBigUint64(19, HALF_OPACITY_BITS, true);
+    bytes.set(Array.from({ length: 32 }, (_, index) => index), 27);
   }
 
   run() {
@@ -411,24 +409,17 @@ test("private consumer returns only the frozen certified receipt and remains reu
     assert.deepEqual(Object.keys(receipt), [
       "output",
       "sinkOutput",
-      "selectedStateIndex",
       "paintSource",
       "paintOpacityBits",
       "contentIdentity",
-      "selectionReleaseIdentity",
     ]);
     assert.equal(Object.isFrozen(receipt), true);
     assert.equal(Object.isFrozen(receipt.paintSource), true);
     assert.equal(receipt.output, 17);
     assert.equal(receipt.sinkOutput, 501);
-    assert.equal(receipt.selectedStateIndex, 3);
     assert.deepEqual(receipt.paintSource, [64, 64, 64]);
     assert.equal(receipt.paintOpacityBits, HALF_OPACITY_BITS);
     assert.equal(receipt.contentIdentity, expectedHex(Array.from({ length: 32 }, (_, i) => i)));
-    assert.equal(
-      receipt.selectionReleaseIdentity,
-      expectedHex(Array.from({ length: 32 }, (_, i) => 255 - i)),
-    );
     assert.throws(() => receipt.paintSource.push(0), TypeError);
     assert.equal(target.props.get(OUTPUT_BINDING), CSS);
 
@@ -439,7 +430,6 @@ test("private consumer returns only the frozen certified receipt and remains reu
     assert.equal(wasm.commitTokens.length, committed, "repeated dispose must have no host effect");
 
     const nextReceipt = consumer.run(requestBytes());
-    assert.equal(nextReceipt.selectedStateIndex, 3);
     assert.equal(target.props.get(OUTPUT_BINDING), CSS);
     assert.deepEqual(wasm.installStatuses.slice(-2), [HOST_INSTALL_SUCCESS, HOST_INSTALL_SUCCESS]);
     assert.equal(consumer.dispose(), true);

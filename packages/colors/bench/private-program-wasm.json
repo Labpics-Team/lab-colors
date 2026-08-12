@@ -21,12 +21,12 @@
     "wasmOptFlags": "-Oz --enable-bulk-memory --enable-nontrapping-float-to-int"
   },
   "measurement": {
-    "source": "github-actions-run-31473003387",
+    "source": "github-actions-run-31553413043",
     "platform": "linux-x64",
-    "rawBytes": 339336
+    "rawBytes": 314312
   },
   "policy": {
-    "maxRawBytes": 339336,
+    "maxRawBytes": 314312,
     "basis": "exact optimized private Program artifact from GitHub Actions Linux",
     "gzip": "diagnostic-only"
   }

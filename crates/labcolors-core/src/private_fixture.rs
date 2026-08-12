@@ -17,19 +17,9 @@ use crate::program::attachment::{
     AuthoredPointEmissionBindingV1, AuthoredPointPresentationBindingV1, ExternalDisposeErrorV1,
 };
 use crate::program::{
-    AppearanceContextV1, ConstraintIdV1, DraftV1, FinitePaintDomainV1, OccurrenceIdV1,
-    OpacityInputIdV1, OutputSlotIdV1, PaintIdV1, PaintValueV1, PresentationRootIdV1, ScenarioV1,
-    SourceIdV1, SurfaceIdV1, SurfaceInputPortIdV1, SurroundV1, TargetCandidateIdV1,
-    TargetCandidateV1, TargetIdV1, UpdateV1,
-};
-use crate::program_session::{
-    JointCandidateStateV1, TargetCandidateChoiceV1, TargetCandidateId as CoreTargetCandidateId,
-    TargetId as CoreTargetId,
-};
-use crate::relation::DirectedRelationV1;
-use crate::selection_release::{
-    SelectionCandidateKeyV1, SelectionReleaseV1, admit_selection_release_v1,
-    materialise_joint_selection_v1,
+    AppearanceContextV1, ConstraintIdV1, DraftV1, OccurrenceIdV1, OpacityInputIdV1, OutputSlotIdV1,
+    PaintIdV1, PaintValueV1, PresentationRootIdV1, ScenarioV1, SourceIdV1, SurfaceIdV1,
+    SurfaceInputPortIdV1, SurroundV1, TargetIdV1, UpdateV1,
 };
 
 const BYTE_WIDTH: usize = 1;
@@ -41,37 +31,12 @@ const RGB_WIDTH: usize = 3;
 const IDENTITY_WIDTH: usize = 32;
 const MAGIC_WIDTH: usize = 4;
 const HEADER_WIDTH: usize = MAGIC_WIDTH + U16_WIDTH + U16_WIDTH;
-const FILL_CANDIDATE_COUNT: usize = 3;
-const LABEL_CANDIDATE_COUNT: usize = 2;
-const JOINT_STATE_COUNT: usize = FILL_CANDIDATE_COUNT * LABEL_CANDIDATE_COUNT;
-const SCENARIO_COUNT: usize = 2;
-const SELECTION_KEY_WIDTH: usize = 16;
-const TARGET_CANDIDATE_WIDTH: usize = U32_WIDTH + RGB_WIDTH + U64_WIDTH;
-const JOINT_STATE_WIDTH: usize = SELECTION_KEY_WIDTH + U32_WIDTH + U32_WIDTH;
 const APPEARANCE_WIDTH: usize = F64_WIDTH + F64_WIDTH + BYTE_WIDTH;
-const SCENARIO_WIDTH: usize = U32_WIDTH + RGB_WIDTH;
 
-const PRIVATE_FIXTURE_REQUEST_V1_LEN: usize = HEADER_WIDTH
-    + RGB_WIDTH
-    + FILL_CANDIDATE_COUNT * TARGET_CANDIDATE_WIDTH
-    + LABEL_CANDIDATE_COUNT * TARGET_CANDIDATE_WIDTH
-    + JOINT_STATE_COUNT * JOINT_STATE_WIDTH
-    + U64_WIDTH
-    + F64_WIDTH
-    + APPEARANCE_WIDTH
-    + SCENARIO_COUNT * SCENARIO_WIDTH
-    + RGB_WIDTH
-    + U32_WIDTH
-    + U64_WIDTH
-    + U32_WIDTH;
-const PRIVATE_FIXTURE_RESULT_V1_LEN: usize = HEADER_WIDTH
-    + U32_WIDTH
-    + U32_WIDTH
-    + U32_WIDTH
-    + RGB_WIDTH
-    + U64_WIDTH
-    + IDENTITY_WIDTH
-    + IDENTITY_WIDTH;
+const PRIVATE_FIXTURE_REQUEST_V1_LEN: usize =
+    HEADER_WIDTH + RGB_WIDTH + F64_WIDTH + RGB_WIDTH + APPEARANCE_WIDTH + RGB_WIDTH + U32_WIDTH;
+const PRIVATE_FIXTURE_RESULT_V1_LEN: usize =
+    HEADER_WIDTH + U32_WIDTH + U32_WIDTH + RGB_WIDTH + U64_WIDTH + IDENTITY_WIDTH;
 const _: () = assert!(PRIVATE_FIXTURE_REQUEST_V1_LEN <= u16::MAX as usize);
 const _: () = assert!(PRIVATE_FIXTURE_RESULT_V1_LEN <= u16::MAX as usize);
 
@@ -79,23 +44,23 @@ const PRIVATE_FIXTURE_REQUEST_V1_MAGIC: [u8; MAGIC_WIDTH] = *b"LCFQ";
 const PRIVATE_FIXTURE_RESULT_V1_MAGIC: [u8; MAGIC_WIDTH] = *b"LCFR";
 const PRIVATE_FIXTURE_ABI_VERSION_V1: u16 = 1;
 
-const BRAND_SOURCE: SourceIdV1 = SourceIdV1::new(1);
-const BRAND_REFERENCE_TARGET: TargetIdV1 = TargetIdV1::new(2);
-const FILL_TARGET: TargetIdV1 = TargetIdV1::new(3);
-const LABEL_TARGET: TargetIdV1 = TargetIdV1::new(4);
-const FILL_PAINT: PaintIdV1 = PaintIdV1::new(5);
-const LABEL_SOLID_PAINT: PaintIdV1 = PaintIdV1::new(6);
-const LABEL_OPACITY_PAINT: PaintIdV1 = PaintIdV1::new(7);
-const LABEL_OPACITY_INPUT: OpacityInputIdV1 = OpacityInputIdV1::new(8);
-const PAGE_SURFACE_INPUT: SurfaceInputPortIdV1 = SurfaceInputPortIdV1::new(9);
-const PAGE_SURFACE: SurfaceIdV1 = SurfaceIdV1::new(10);
-const FILL_SURFACE: SurfaceIdV1 = SurfaceIdV1::new(11);
-const FILL_ON_PAGE: OccurrenceIdV1 = OccurrenceIdV1::new(12);
-const LABEL_ON_FILL: OccurrenceIdV1 = OccurrenceIdV1::new(13);
-const PRESENTATION_ROOT: PresentationRootIdV1 = PresentationRootIdV1::new(14);
-const INTRINSIC_RELATION: ConstraintIdV1 = ConstraintIdV1::new(15);
-const FINAL_VISIBLE_IDENTITY: ConstraintIdV1 = ConstraintIdV1::new(16);
+const AUTHORED_SOURCE: SourceIdV1 = SourceIdV1::new(1);
+const FIXED_TARGET: TargetIdV1 = TargetIdV1::new(2);
+const SOLID_PAINT: PaintIdV1 = PaintIdV1::new(3);
+const OUTPUT_PAINT: PaintIdV1 = PaintIdV1::new(4);
+const OPACITY_INPUT: OpacityInputIdV1 = OpacityInputIdV1::new(5);
+const FROZEN_SURFACE_INPUT: SurfaceInputPortIdV1 = SurfaceInputPortIdV1::new(6);
+const FROZEN_SURFACE: SurfaceIdV1 = SurfaceIdV1::new(7);
+const OUTPUT_OCCURRENCE: OccurrenceIdV1 = OccurrenceIdV1::new(8);
+const PRESENTATION_ROOT: PresentationRootIdV1 = PresentationRootIdV1::new(9);
+const FINAL_VISIBLE_IDENTITY: ConstraintIdV1 = ConstraintIdV1::new(10);
 const OUTPUT: OutputSlotIdV1 = OutputSlotIdV1::new(17);
+// Static resolution still needs attachment-local provenance, but neither value
+// is authored or observable through this artifact. PR E will introduce the
+// runtime stream/revision contract instead of retrofitting semantics onto these
+// private one-shot identities.
+const STATIC_RESOLUTION_SCOPE: u32 = 1;
+const STATIC_RESOLVE_REVISION: u64 = 1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PrivateFixtureErrorV1 {
@@ -103,20 +68,17 @@ enum PrivateFixtureErrorV1 {
     UnsupportedVersion,
     InvalidLength,
     InvalidAuthoredData,
-    SelectionReleaseRejected,
     ProgramCompileRejected,
     AttachmentRejected,
     UpdateRejected,
     MissingCertifiedOutput,
     MultipleCertifiedOutputs,
-    MissingSelectionReleaseIdentity,
     InternalInvariant,
     Busy,
     AlreadyActive,
     InvalidLifecycle,
     InvalidDisposeToken,
     DisposeNotConfirmed,
-    MissingSelectedState,
 }
 
 impl PrivateFixtureErrorV1 {
@@ -126,36 +88,19 @@ impl PrivateFixtureErrorV1 {
             Self::UnsupportedVersion => 2,
             Self::InvalidLength => 3,
             Self::InvalidAuthoredData => 4,
-            Self::SelectionReleaseRejected => 5,
-            Self::ProgramCompileRejected => 6,
-            Self::AttachmentRejected => 7,
-            Self::UpdateRejected => 8,
-            Self::MissingCertifiedOutput => 9,
-            Self::MultipleCertifiedOutputs => 10,
-            Self::MissingSelectionReleaseIdentity => 11,
-            Self::InternalInvariant => 12,
-            Self::Busy => 13,
-            Self::AlreadyActive => 14,
-            Self::InvalidLifecycle => 15,
-            Self::InvalidDisposeToken => 16,
-            Self::DisposeNotConfirmed => 17,
-            Self::MissingSelectedState => 18,
+            Self::ProgramCompileRejected => 5,
+            Self::AttachmentRejected => 6,
+            Self::UpdateRejected => 7,
+            Self::MissingCertifiedOutput => 8,
+            Self::MultipleCertifiedOutputs => 9,
+            Self::InternalInvariant => 10,
+            Self::Busy => 11,
+            Self::AlreadyActive => 12,
+            Self::InvalidLifecycle => 13,
+            Self::InvalidDisposeToken => 14,
+            Self::DisposeNotConfirmed => 15,
         }
     }
-}
-
-#[derive(Debug, Clone, Copy)]
-struct AuthoredTargetCandidateV1 {
-    id: u32,
-    source: Srgb8,
-    opacity_bits: u64,
-}
-
-#[derive(Debug, Clone, Copy)]
-struct AuthoredJointStateV1 {
-    key: [u8; SELECTION_KEY_WIDTH],
-    fill_candidate: u32,
-    label_candidate: u32,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -183,24 +128,12 @@ struct AuthoredAppearanceV1 {
 }
 
 #[derive(Debug, Clone, Copy)]
-struct AuthoredScenarioV1 {
-    id: u32,
-    page: Srgb8,
-}
-
-#[derive(Debug, Clone, Copy)]
 struct AuthoredPrivateFixtureV1 {
-    brand: Srgb8,
-    fill_candidates: [AuthoredTargetCandidateV1; FILL_CANDIDATE_COUNT],
-    label_candidates: [AuthoredTargetCandidateV1; LABEL_CANDIDATE_COUNT],
-    joint_states: [AuthoredJointStateV1; JOINT_STATE_COUNT],
-    selection_release_revision: u64,
-    label_opacity: f64,
+    source: Srgb8,
+    opacity: f64,
+    frozen_backdrop: Srgb8,
     appearance: AuthoredAppearanceV1,
-    scenarios: [AuthoredScenarioV1; SCENARIO_COUNT],
     expected_final_visible: Srgb8,
-    stream_id: u32,
-    observation_revision: u64,
     sink_output: u32,
 }
 
@@ -208,11 +141,9 @@ struct AuthoredPrivateFixtureV1 {
 struct CertifiedPrivateFixtureResultV1 {
     output: u32,
     sink_output: u32,
-    selected_state_index: u32,
     paint_source: Srgb8,
     paint_opacity_bits: u64,
     content_identity: [u8; IDENTITY_WIDTH],
-    selection_release_identity: [u8; IDENTITY_WIDTH],
 }
 
 struct WireReaderV1<'a> {
@@ -353,12 +284,9 @@ fn decode_request_v1(
         return Err(PrivateFixtureErrorV1::InvalidLength);
     }
 
-    let brand = reader.read_rgb()?;
-    let fill_candidates = read_fill_candidates(&mut reader)?;
-    let label_candidates = read_label_candidates(&mut reader)?;
-    let joint_states = read_joint_states(&mut reader)?;
-    let selection_release_revision = reader.read_u64()?;
-    let label_opacity = reader.read_f64()?;
+    let source = reader.read_rgb()?;
+    let opacity = reader.read_f64()?;
+    let frozen_backdrop = reader.read_rgb()?;
     let appearance = AuthoredAppearanceV1 {
         adapting_luminance_cd_m2: reader.read_f64()?,
         background_luminance_ratio_yb_yw: reader.read_f64()?,
@@ -369,169 +297,18 @@ fn decode_request_v1(
             _ => return Err(PrivateFixtureErrorV1::InvalidAuthoredData),
         },
     };
-    let scenarios = read_scenarios(&mut reader)?;
     let expected_final_visible = reader.read_rgb()?;
-    let stream_id = reader.read_u32()?;
-    let observation_revision = reader.read_u64()?;
     let sink_output = reader.read_u32()?;
     reader.finish()?;
 
     Ok(AuthoredPrivateFixtureV1 {
-        brand,
-        fill_candidates,
-        label_candidates,
-        joint_states,
-        selection_release_revision,
-        label_opacity,
+        source,
+        opacity,
+        frozen_backdrop,
         appearance,
-        scenarios,
         expected_final_visible,
-        stream_id,
-        observation_revision,
         sink_output,
     })
-}
-
-fn read_target_candidate(
-    reader: &mut WireReaderV1<'_>,
-) -> Result<AuthoredTargetCandidateV1, PrivateFixtureErrorV1> {
-    Ok(AuthoredTargetCandidateV1 {
-        id: reader.read_u32()?,
-        source: reader.read_rgb()?,
-        opacity_bits: reader.read_u64()?,
-    })
-}
-
-fn read_fill_candidates(
-    reader: &mut WireReaderV1<'_>,
-) -> Result<[AuthoredTargetCandidateV1; FILL_CANDIDATE_COUNT], PrivateFixtureErrorV1> {
-    Ok([
-        read_target_candidate(reader)?,
-        read_target_candidate(reader)?,
-        read_target_candidate(reader)?,
-    ])
-}
-
-fn read_label_candidates(
-    reader: &mut WireReaderV1<'_>,
-) -> Result<[AuthoredTargetCandidateV1; LABEL_CANDIDATE_COUNT], PrivateFixtureErrorV1> {
-    Ok([
-        read_target_candidate(reader)?,
-        read_target_candidate(reader)?,
-    ])
-}
-
-fn read_joint_states(
-    reader: &mut WireReaderV1<'_>,
-) -> Result<[AuthoredJointStateV1; JOINT_STATE_COUNT], PrivateFixtureErrorV1> {
-    Ok([
-        AuthoredJointStateV1 {
-            key: reader.read_bytes::<SELECTION_KEY_WIDTH>()?,
-            fill_candidate: reader.read_u32()?,
-            label_candidate: reader.read_u32()?,
-        },
-        AuthoredJointStateV1 {
-            key: reader.read_bytes::<SELECTION_KEY_WIDTH>()?,
-            fill_candidate: reader.read_u32()?,
-            label_candidate: reader.read_u32()?,
-        },
-        AuthoredJointStateV1 {
-            key: reader.read_bytes::<SELECTION_KEY_WIDTH>()?,
-            fill_candidate: reader.read_u32()?,
-            label_candidate: reader.read_u32()?,
-        },
-        AuthoredJointStateV1 {
-            key: reader.read_bytes::<SELECTION_KEY_WIDTH>()?,
-            fill_candidate: reader.read_u32()?,
-            label_candidate: reader.read_u32()?,
-        },
-        AuthoredJointStateV1 {
-            key: reader.read_bytes::<SELECTION_KEY_WIDTH>()?,
-            fill_candidate: reader.read_u32()?,
-            label_candidate: reader.read_u32()?,
-        },
-        AuthoredJointStateV1 {
-            key: reader.read_bytes::<SELECTION_KEY_WIDTH>()?,
-            fill_candidate: reader.read_u32()?,
-            label_candidate: reader.read_u32()?,
-        },
-    ])
-}
-
-fn read_scenarios(
-    reader: &mut WireReaderV1<'_>,
-) -> Result<[AuthoredScenarioV1; SCENARIO_COUNT], PrivateFixtureErrorV1> {
-    Ok([
-        AuthoredScenarioV1 {
-            id: reader.read_u32()?,
-            page: reader.read_rgb()?,
-        },
-        AuthoredScenarioV1 {
-            id: reader.read_u32()?,
-            page: reader.read_rgb()?,
-        },
-    ])
-}
-
-fn target_domain_v1(
-    candidates: impl IntoIterator<Item = AuthoredTargetCandidateV1>,
-) -> Result<FinitePaintDomainV1, PrivateFixtureErrorV1> {
-    FinitePaintDomainV1::try_new(
-        candidates
-            .into_iter()
-            .map(|candidate| {
-                Ok(TargetCandidateV1::new(
-                    TargetCandidateIdV1::new(candidate.id),
-                    PaintValueV1::try_new(candidate.source, f64::from_bits(candidate.opacity_bits))
-                        .map_err(|_| PrivateFixtureErrorV1::InvalidAuthoredData)?,
-                ))
-            })
-            .collect::<Result<Vec<_>, PrivateFixtureErrorV1>>()?,
-    )
-    .map_err(|_| PrivateFixtureErrorV1::InvalidAuthoredData)
-}
-
-fn materialise_selection_v1(
-    authored: &AuthoredPrivateFixtureV1,
-) -> Result<crate::selection_release::MaterialisedSelectionV1, PrivateFixtureErrorV1> {
-    let rank_groups = authored
-        .joint_states
-        .iter()
-        .map(|state| {
-            vec![SelectionCandidateKeyV1::new(
-                state.key.to_vec().into_boxed_slice(),
-            )]
-            .into_boxed_slice()
-        })
-        .collect::<Vec<_>>()
-        .into_boxed_slice();
-    let release = admit_selection_release_v1(SelectionReleaseV1::new(
-        authored.selection_release_revision,
-        rank_groups,
-    ))
-    .map_err(|_| PrivateFixtureErrorV1::SelectionReleaseRejected)?;
-
-    let bindings = authored
-        .joint_states
-        .iter()
-        .map(|state| {
-            (
-                JointCandidateStateV1::new(vec![
-                    TargetCandidateChoiceV1::new(
-                        CoreTargetId::new(FILL_TARGET.value()),
-                        CoreTargetCandidateId::new(state.fill_candidate),
-                    ),
-                    TargetCandidateChoiceV1::new(
-                        CoreTargetId::new(LABEL_TARGET.value()),
-                        CoreTargetCandidateId::new(state.label_candidate),
-                    ),
-                ]),
-                SelectionCandidateKeyV1::new(state.key.to_vec().into_boxed_slice()),
-            )
-        })
-        .collect::<Vec<_>>();
-    materialise_joint_selection_v1(&release, &bindings)
-        .map_err(|_| PrivateFixtureErrorV1::SelectionReleaseRejected)
 }
 
 struct ExecutedPrivateFixtureV1<H>
@@ -549,44 +326,31 @@ fn execute_private_fixture_v1<H>(
 where
     H: HandoffPointSinkHostV1,
 {
-    let fill_domain = target_domain_v1(authored.fill_candidates)?;
-    let label_domain = target_domain_v1(authored.label_candidates)?;
-    let selection = materialise_selection_v1(&authored)?;
+    PaintValueV1::try_new(authored.source, authored.opacity)
+        .map_err(|_| PrivateFixtureErrorV1::InvalidAuthoredData)?;
     let context = AppearanceContextV1::try_new(
         authored.appearance.adapting_luminance_cd_m2,
         authored.appearance.background_luminance_ratio_yb_yw,
         authored.appearance.surround.into_program(),
     )
     .map_err(|_| PrivateFixtureErrorV1::InvalidAuthoredData)?;
-    let relation = DirectedRelationV1::try_new(BRAND_REFERENCE_TARGET, vec![LABEL_TARGET])
-        .map_err(|_| PrivateFixtureErrorV1::InternalInvariant)?;
-
     let mut draft = DraftV1::new();
-    draft.push_source(BRAND_SOURCE, authored.brand);
-    draft.push_fixed_target(BRAND_REFERENCE_TARGET, BRAND_SOURCE);
-    draft.push_finite_target(FILL_TARGET, fill_domain);
-    draft.push_finite_target(LABEL_TARGET, label_domain);
-    draft
-        .set_materialised_joint_selection(selection)
-        .map_err(|_| PrivateFixtureErrorV1::InvalidAuthoredData)?;
-    draft.push_solid_paint(FILL_PAINT, FILL_TARGET);
-    draft.push_solid_paint(LABEL_SOLID_PAINT, LABEL_TARGET);
-    draft.push_opacity_input(LABEL_OPACITY_INPUT, authored.label_opacity);
-    draft.push_opacity_paint(LABEL_OPACITY_PAINT, LABEL_SOLID_PAINT, LABEL_OPACITY_INPUT);
-    draft.push_surface_input_port(PAGE_SURFACE_INPUT);
-    draft.push_input_surface(PAGE_SURFACE, PAGE_SURFACE_INPUT);
-    draft.push_source_over_occurrence(FILL_ON_PAGE, FILL_PAINT, PAGE_SURFACE, context);
-    draft.push_occurrence_surface(FILL_SURFACE, FILL_ON_PAGE);
-    draft.push_source_over_occurrence(LABEL_ON_FILL, LABEL_OPACITY_PAINT, FILL_SURFACE, context);
-    draft.push_point_presentation_root(PRESENTATION_ROOT, LABEL_ON_FILL);
-    draft.push_point_presentation_target(PRESENTATION_ROOT, LABEL_ON_FILL);
-    draft.push_exact_intrinsic_relation_hard(INTRINSIC_RELATION, relation);
+    draft.push_source(AUTHORED_SOURCE, authored.source);
+    draft.push_fixed_target(FIXED_TARGET, AUTHORED_SOURCE);
+    draft.push_solid_paint(SOLID_PAINT, FIXED_TARGET);
+    draft.push_opacity_input(OPACITY_INPUT, authored.opacity);
+    draft.push_opacity_paint(OUTPUT_PAINT, SOLID_PAINT, OPACITY_INPUT);
+    draft.push_surface_input_port(FROZEN_SURFACE_INPUT);
+    draft.push_input_surface(FROZEN_SURFACE, FROZEN_SURFACE_INPUT);
+    draft.push_source_over_occurrence(OUTPUT_OCCURRENCE, OUTPUT_PAINT, FROZEN_SURFACE, context);
+    draft.push_point_presentation_root(PRESENTATION_ROOT, OUTPUT_OCCURRENCE);
+    draft.push_point_presentation_target(PRESENTATION_ROOT, OUTPUT_OCCURRENCE);
     draft.push_exact_visible_unary_hard(
         FINAL_VISIBLE_IDENTITY,
-        LABEL_ON_FILL,
+        OUTPUT_OCCURRENCE,
         authored.expected_final_visible,
     );
-    draft.push_output(OUTPUT, LABEL_OPACITY_PAINT);
+    draft.push_output(OUTPUT, OUTPUT_PAINT);
 
     let owner = draft
         .compile()
@@ -596,11 +360,11 @@ where
     let presentations = [AuthoredPointPresentationBindingV1::new(
         OUTPUT,
         PRESENTATION_ROOT,
-        LABEL_ON_FILL,
+        OUTPUT_OCCURRENCE,
     )];
     let mut attachment = owner
         .attach_external(
-            authored.stream_id,
+            STATIC_RESOLUTION_SCOPE,
             &emissions,
             &presentations,
             FamilyArtifactBundleV2::empty(),
@@ -608,15 +372,10 @@ where
         )
         .map_err(|_| PrivateFixtureErrorV1::AttachmentRejected)?;
 
-    let [first_scenario, second_scenario] = authored.scenarios;
-    let first_surface = [first_scenario.page];
-    let second_surface = [second_scenario.page];
-    let scenarios = [
-        ScenarioV1::new(first_scenario.id, &first_surface),
-        ScenarioV1::new(second_scenario.id, &second_surface),
-    ];
+    let frozen_surface = [authored.frozen_backdrop];
+    let scenarios = [ScenarioV1::new(1, &frozen_surface)];
     let commit = match attachment.update(UpdateV1::Observed {
-        revision: authored.observation_revision,
+        revision: STATIC_RESOLVE_REVISION,
         scenarios: &scenarios,
     }) {
         Ok(commit) => commit,
@@ -652,30 +411,24 @@ fn project_certified_render_v1(
     render: crate::program::attachment::AttachedRenderOutputV1<'_, HandoffPointSinkOutputIdV1>,
 ) -> Result<CertifiedPrivateFixtureResultV1, PrivateFixtureErrorV1> {
     let certificate = render.certificate();
-    let selection_release_identity = certificate
-        .selection_release_identity()
-        .ok_or(PrivateFixtureErrorV1::MissingSelectionReleaseIdentity)?;
-    let selected_state_index = certificate
-        .selected_state_index()
-        .ok_or(PrivateFixtureErrorV1::MissingSelectedState)
-        .and_then(|index| {
-            u32::try_from(index).map_err(|_| PrivateFixtureErrorV1::InternalInvariant)
-        })?;
+    if certificate.selection_release_identity().is_some()
+        || certificate.selected_state_index().is_some()
+    {
+        return Err(PrivateFixtureErrorV1::InternalInvariant);
+    }
     let paint = render.paint();
     Ok(CertifiedPrivateFixtureResultV1 {
         output: render.output().value(),
         sink_output: render.sink_output().value(),
-        selected_state_index,
         paint_source: paint.source(),
         paint_opacity_bits: paint.opacity_bits(),
         content_identity: *certificate.content_identity().as_bytes(),
-        selection_release_identity: *selection_release_identity.as_bytes(),
     })
 }
 
 /// Живые dispose-token'и кодируются в зарезервированный диапазон
 /// [DISPOSE_TOKEN_BASE_V1, 2 * DISPOSE_TOKEN_BASE_V1 - 1], который не
-/// пересекается ни с одним `PrivateFixtureErrorV1` status-кодом (1..=18), ни
+/// пересекается ни с одним `PrivateFixtureErrorV1` status-кодом (1..=15), ни
 /// со sentinel'ами Vacant `0` и Busy `u32::MAX`. Поэтому consumer однозначно
 /// классифицирует u32 из `begin_dispose_v1`: значение вне живого диапазона —
 /// это Vacant, Busy или типизированный status, но никогда живой token.
@@ -725,12 +478,10 @@ const RESULT_VERSION_OFFSET: usize = RESULT_MAGIC_OFFSET + MAGIC_WIDTH;
 const RESULT_LENGTH_OFFSET: usize = RESULT_VERSION_OFFSET + U16_WIDTH;
 const RESULT_OUTPUT_OFFSET: usize = RESULT_LENGTH_OFFSET + U16_WIDTH;
 const RESULT_SINK_OUTPUT_OFFSET: usize = RESULT_OUTPUT_OFFSET + U32_WIDTH;
-const RESULT_SELECTED_STATE_OFFSET: usize = RESULT_SINK_OUTPUT_OFFSET + U32_WIDTH;
-const RESULT_RGB_OFFSET: usize = RESULT_SELECTED_STATE_OFFSET + U32_WIDTH;
+const RESULT_RGB_OFFSET: usize = RESULT_SINK_OUTPUT_OFFSET + U32_WIDTH;
 const RESULT_OPACITY_OFFSET: usize = RESULT_RGB_OFFSET + RGB_WIDTH;
 const RESULT_CONTENT_IDENTITY_OFFSET: usize = RESULT_OPACITY_OFFSET + U64_WIDTH;
-const RESULT_RELEASE_IDENTITY_OFFSET: usize = RESULT_CONTENT_IDENTITY_OFFSET + IDENTITY_WIDTH;
-const RESULT_END_OFFSET: usize = RESULT_RELEASE_IDENTITY_OFFSET + IDENTITY_WIDTH;
+const RESULT_END_OFFSET: usize = RESULT_CONTENT_IDENTITY_OFFSET + IDENTITY_WIDTH;
 const _: () = assert!(RESULT_END_OFFSET == PRIVATE_FIXTURE_RESULT_V1_LEN);
 
 fn encode_result_v1(
@@ -745,17 +496,13 @@ fn encode_result_v1(
         .copy_from_slice(&(PRIVATE_FIXTURE_RESULT_V1_LEN as u16).to_le_bytes());
     bytes[RESULT_OUTPUT_OFFSET..RESULT_SINK_OUTPUT_OFFSET]
         .copy_from_slice(&result.output.to_le_bytes());
-    bytes[RESULT_SINK_OUTPUT_OFFSET..RESULT_SELECTED_STATE_OFFSET]
+    bytes[RESULT_SINK_OUTPUT_OFFSET..RESULT_RGB_OFFSET]
         .copy_from_slice(&result.sink_output.to_le_bytes());
-    bytes[RESULT_SELECTED_STATE_OFFSET..RESULT_RGB_OFFSET]
-        .copy_from_slice(&result.selected_state_index.to_le_bytes());
     bytes[RESULT_RGB_OFFSET..RESULT_OPACITY_OFFSET].copy_from_slice(&result.paint_source.bytes());
     bytes[RESULT_OPACITY_OFFSET..RESULT_CONTENT_IDENTITY_OFFSET]
         .copy_from_slice(&result.paint_opacity_bits.to_le_bytes());
-    bytes[RESULT_CONTENT_IDENTITY_OFFSET..RESULT_RELEASE_IDENTITY_OFFSET]
+    bytes[RESULT_CONTENT_IDENTITY_OFFSET..RESULT_END_OFFSET]
         .copy_from_slice(&result.content_identity);
-    bytes[RESULT_RELEASE_IDENTITY_OFFSET..RESULT_END_OFFSET]
-        .copy_from_slice(&result.selection_release_identity);
     bytes
 }
 
@@ -1362,90 +1109,16 @@ mod tests {
     }
 
     fn valid_authored() -> AuthoredPrivateFixtureV1 {
-        let brand = Srgb8::new([64, 64, 64]);
         AuthoredPrivateFixtureV1 {
-            brand,
-            fill_candidates: [
-                AuthoredTargetCandidateV1 {
-                    id: 10,
-                    source: Srgb8::new([0, 0, 0]),
-                    opacity_bits: 0.5_f64.to_bits(),
-                },
-                AuthoredTargetCandidateV1 {
-                    id: 11,
-                    source: Srgb8::new([255, 255, 255]),
-                    opacity_bits: 0.5_f64.to_bits(),
-                },
-                AuthoredTargetCandidateV1 {
-                    id: 12,
-                    source: Srgb8::new([128, 128, 128]),
-                    opacity_bits: 1.0_f64.to_bits(),
-                },
-            ],
-            label_candidates: [
-                AuthoredTargetCandidateV1 {
-                    id: 20,
-                    source: brand,
-                    opacity_bits: 1.0_f64.to_bits(),
-                },
-                AuthoredTargetCandidateV1 {
-                    id: 21,
-                    source: Srgb8::new([0, 0, 0]),
-                    opacity_bits: 0.5_f64.to_bits(),
-                },
-            ],
-            joint_states: [
-                AuthoredJointStateV1 {
-                    key: [0xA1; SELECTION_KEY_WIDTH],
-                    fill_candidate: 12,
-                    label_candidate: 21,
-                },
-                AuthoredJointStateV1 {
-                    key: [0xA2; SELECTION_KEY_WIDTH],
-                    fill_candidate: 10,
-                    label_candidate: 20,
-                },
-                AuthoredJointStateV1 {
-                    key: [0xB1; SELECTION_KEY_WIDTH],
-                    fill_candidate: 11,
-                    label_candidate: 20,
-                },
-                AuthoredJointStateV1 {
-                    key: [0xB2; SELECTION_KEY_WIDTH],
-                    fill_candidate: 12,
-                    label_candidate: 20,
-                },
-                AuthoredJointStateV1 {
-                    key: [0xC1; SELECTION_KEY_WIDTH],
-                    fill_candidate: 10,
-                    label_candidate: 21,
-                },
-                AuthoredJointStateV1 {
-                    key: [0xC2; SELECTION_KEY_WIDTH],
-                    fill_candidate: 11,
-                    label_candidate: 21,
-                },
-            ],
-            selection_release_revision: 7,
-            label_opacity: 0.5,
+            source: Srgb8::new([64, 64, 64]),
+            opacity: 0.5,
+            frozen_backdrop: Srgb8::new([128, 128, 128]),
             appearance: AuthoredAppearanceV1 {
                 adapting_luminance_cd_m2: 64.0,
                 background_luminance_ratio_yb_yw: 0.2,
                 surround: AuthoredSurroundV1::Dim,
             },
-            scenarios: [
-                AuthoredScenarioV1 {
-                    id: 101,
-                    page: Srgb8::new([0, 0, 0]),
-                },
-                AuthoredScenarioV1 {
-                    id: 102,
-                    page: Srgb8::new([255, 255, 255]),
-                },
-            ],
             expected_final_visible: Srgb8::new([96, 96, 96]),
-            stream_id: 301,
-            observation_revision: 401,
             sink_output: 501,
         }
     }
@@ -1462,26 +1135,9 @@ mod tests {
         writer
             .write_u16(wire_len_u16(PRIVATE_FIXTURE_REQUEST_V1_LEN).unwrap())
             .unwrap();
-        writer.write_rgb(authored.brand).unwrap();
-        for candidate in authored.fill_candidates {
-            writer.write_u32(candidate.id).unwrap();
-            writer.write_rgb(candidate.source).unwrap();
-            writer.write_u64(candidate.opacity_bits).unwrap();
-        }
-        for candidate in authored.label_candidates {
-            writer.write_u32(candidate.id).unwrap();
-            writer.write_rgb(candidate.source).unwrap();
-            writer.write_u64(candidate.opacity_bits).unwrap();
-        }
-        for state in authored.joint_states {
-            writer.write_bytes(state.key).unwrap();
-            writer.write_u32(state.fill_candidate).unwrap();
-            writer.write_u32(state.label_candidate).unwrap();
-        }
-        writer
-            .write_u64(authored.selection_release_revision)
-            .unwrap();
-        writer.write_f64(authored.label_opacity).unwrap();
+        writer.write_rgb(authored.source).unwrap();
+        writer.write_f64(authored.opacity).unwrap();
+        writer.write_rgb(authored.frozen_backdrop).unwrap();
         writer
             .write_f64(authored.appearance.adapting_luminance_cd_m2)
             .unwrap();
@@ -1495,13 +1151,7 @@ mod tests {
                 AuthoredSurroundV1::Dark => 2,
             })
             .unwrap();
-        for scenario in authored.scenarios {
-            writer.write_u32(scenario.id).unwrap();
-            writer.write_rgb(scenario.page).unwrap();
-        }
         writer.write_rgb(authored.expected_final_visible).unwrap();
-        writer.write_u32(authored.stream_id).unwrap();
-        writer.write_u64(authored.observation_revision).unwrap();
         writer.write_u32(authored.sink_output).unwrap();
         writer.finish().unwrap();
         bytes
@@ -1523,11 +1173,9 @@ mod tests {
         let result = CertifiedPrivateFixtureResultV1 {
             output: reader.read_u32().unwrap(),
             sink_output: reader.read_u32().unwrap(),
-            selected_state_index: reader.read_u32().unwrap(),
             paint_source: reader.read_rgb().unwrap(),
             paint_opacity_bits: reader.read_u64().unwrap(),
             content_identity: reader.read_bytes::<IDENTITY_WIDTH>().unwrap(),
-            selection_release_identity: reader.read_bytes::<IDENTITY_WIDTH>().unwrap(),
         };
         reader.finish().unwrap();
         result
@@ -1536,7 +1184,6 @@ mod tests {
     struct RunDetailsV1 {
         status: u32,
         result: [u8; PRIVATE_FIXTURE_RESULT_V1_LEN],
-        selected_state_index: Option<usize>,
     }
 
     fn run_details(authored: AuthoredPrivateFixtureV1) -> RunDetailsV1 {
@@ -1548,7 +1195,6 @@ mod tests {
                 return RunDetailsV1 {
                     status: error.status(),
                     result: [0; PRIVATE_FIXTURE_RESULT_V1_LEN],
-                    selected_state_index: None,
                 };
             }
         };
@@ -1556,10 +1202,6 @@ mod tests {
             attachment,
             projection,
         } = executed;
-        let selected_state_index = projection
-            .as_ref()
-            .ok()
-            .map(|certified| certified.selected_state_index as usize);
         let (status, result) = match projection {
             Ok(certified) => (0, encode_result_v1(certified)),
             Err(error) => (error.status(), [0; PRIVATE_FIXTURE_RESULT_V1_LEN]),
@@ -1573,11 +1215,7 @@ mod tests {
         .unwrap_or_else(|_| panic!("the confirmation must bind the same writer epoch"));
         assert!(attachment.is_none());
         assert_eq!(oracle.borrow().invalid_drop_count, 0);
-        RunDetailsV1 {
-            status,
-            result,
-            selected_state_index,
-        }
+        RunDetailsV1 { status, result }
     }
 
     fn run(authored: AuthoredPrivateFixtureV1) -> (u32, [u8; PRIVATE_FIXTURE_RESULT_V1_LEN]) {
@@ -1585,22 +1223,31 @@ mod tests {
         (details.status, details.result)
     }
 
-    fn selected_candidate_ids(
-        authored: AuthoredPrivateFixtureV1,
-        selected_state_index: Option<usize>,
-    ) -> Option<(u32, u32)> {
-        let selection = materialise_selection_v1(&authored).ok()?;
-        let state = selection.order().states().get(selected_state_index?)?;
-        let mut fill = None;
-        let mut label = None;
-        for choice in state.choices() {
-            if choice.target().value() == FILL_TARGET.value() {
-                fill = Some(choice.candidate().value());
-            } else if choice.target().value() == LABEL_TARGET.value() {
-                label = Some(choice.candidate().value());
-            }
-        }
-        Some((fill?, label?))
+    #[test]
+    fn static_fixture_certifies_fixed_paint_without_selection_authority() {
+        let details = run_details(valid_authored());
+
+        assert_eq!(details.status, 0);
+        let result = decode_result_for_test(&details.result);
+        assert_eq!(result.output, OUTPUT.value());
+        assert_eq!(result.sink_output, 501);
+        assert_eq!(result.paint_source, Srgb8::new([64, 64, 64]));
+        assert_eq!(result.paint_opacity_bits, 0.5_f64.to_bits());
+        assert_ne!(result.content_identity, [0; IDENTITY_WIDTH]);
+    }
+
+    #[test]
+    fn static_fixture_fails_closed_when_final_materialized_render_violates_constraint() {
+        let mut authored = valid_authored();
+        authored.expected_final_visible = Srgb8::new([1, 1, 1]);
+
+        let details = run_details(authored);
+
+        assert_eq!(
+            details.status,
+            PrivateFixtureErrorV1::MissingCertifiedOutput.status()
+        );
+        assert_eq!(details.result, [0; PRIVATE_FIXTURE_RESULT_V1_LEN]);
     }
 
     #[test]
@@ -1611,11 +1258,9 @@ mod tests {
         let certified = CertifiedPrivateFixtureResultV1 {
             output: 1,
             sink_output: 2,
-            selected_state_index: 3,
             paint_source: Srgb8::new([3, 4, 5]),
             paint_opacity_bits: 1.0_f64.to_bits(),
             content_identity: [6; IDENTITY_WIDTH],
-            selection_release_identity: [7; IDENTITY_WIDTH],
         };
         assert_eq!(encode_result_v1(certified).len(), RESULT_END_OFFSET);
     }
@@ -1624,27 +1269,22 @@ mod tests {
     fn production_entry_returns_only_the_attachment_certified_projection() {
         let details = run_details(valid_authored());
         assert_eq!(details.status, 0);
-        assert_eq!(details.selected_state_index, Some(3));
         let result = decode_result_for_test(&details.result);
         assert_eq!(result.output, OUTPUT.value());
         assert_eq!(result.sink_output, 501);
-        assert_eq!(result.selected_state_index, 3);
         assert_eq!(result.paint_source, Srgb8::new([64, 64, 64]));
         assert_eq!(result.paint_opacity_bits, 0.5_f64.to_bits());
         assert_ne!(result.content_identity, [0; IDENTITY_WIDTH]);
-        assert_ne!(result.selection_release_identity, [0; IDENTITY_WIDTH]);
     }
 
     #[test]
-    fn caller_authored_values_change_render_and_content_but_not_the_same_release() {
+    fn caller_authored_values_change_render_and_content_identity() {
         let (first_status, first) = run(valid_authored());
         assert_eq!(first_status, 0);
         let first = decode_result_for_test(&first);
 
         let mut changed = valid_authored();
-        changed.brand = Srgb8::new([192, 192, 192]);
-        changed.label_candidates[0].source = changed.brand;
-        changed.label_candidates[1].source = Srgb8::new([255, 255, 255]);
+        changed.source = Srgb8::new([192, 192, 192]);
         changed.expected_final_visible = Srgb8::new([160, 160, 160]);
         let (second_status, second) = run(changed);
         assert_eq!(second_status, 0);
@@ -1652,10 +1292,6 @@ mod tests {
 
         assert_ne!(first.paint_source, second.paint_source);
         assert_ne!(first.content_identity, second.content_identity);
-        assert_eq!(
-            first.selection_release_identity,
-            second.selection_release_identity
-        );
     }
 
     #[test]
@@ -1704,19 +1340,6 @@ mod tests {
     }
 
     #[test]
-    fn duplicate_opaque_candidate_key_is_rejected_by_selection_release_admission() {
-        let mut authored = valid_authored();
-        authored.joint_states[1].key = authored.joint_states[0].key;
-        let (status, result) = run(authored);
-
-        assert_eq!(
-            status,
-            PrivateFixtureErrorV1::SelectionReleaseRejected.status()
-        );
-        assert_eq!(result, [0; PRIVATE_FIXTURE_RESULT_V1_LEN]);
-    }
-
-    #[test]
     fn no_feasible_state_never_returns_or_leaves_a_render_claim() {
         let mut authored = valid_authored();
         authored.expected_final_visible = Srgb8::new([1, 1, 1]);
@@ -1730,40 +1353,9 @@ mod tests {
     }
 
     #[test]
-    fn each_observed_backdrop_is_independently_necessary_for_the_selected_state() {
-        let authored = valid_authored();
-        let both = run_details(authored);
-        let mut black_twice = valid_authored();
-        black_twice.scenarios[1].page = black_twice.scenarios[0].page;
-        let black_only = run_details(black_twice);
-        let mut white_twice = valid_authored();
-        white_twice.scenarios[0].page = white_twice.scenarios[1].page;
-        let white_only = run_details(white_twice);
-
-        assert_eq!(both.status, 0);
-        assert_eq!(both.selected_state_index, Some(3));
-        assert_eq!(black_only.status, 0);
-        assert_eq!(black_only.selected_state_index, Some(2));
-        assert_eq!(white_only.status, 0);
-        assert_eq!(white_only.selected_state_index, Some(1));
-        assert_eq!(
-            selected_candidate_ids(authored, both.selected_state_index),
-            Some((12, 20))
-        );
-        assert_eq!(
-            selected_candidate_ids(black_twice, black_only.selected_state_index),
-            Some((11, 20))
-        );
-        assert_eq!(
-            selected_candidate_ids(white_twice, white_only.selected_state_index),
-            Some((10, 20))
-        );
-    }
-
-    #[test]
     fn authored_opacity_edge_is_necessary_for_any_certified_state() {
         let mut without_attenuation = valid_authored();
-        without_attenuation.label_opacity = 1.0;
+        without_attenuation.opacity = 1.0;
         let result = run_details(without_attenuation);
 
         assert_eq!(
@@ -1771,7 +1363,6 @@ mod tests {
             PrivateFixtureErrorV1::MissingCertifiedOutput.status()
         );
         assert_eq!(result.result, [0; PRIVATE_FIXTURE_RESULT_V1_LEN]);
-        assert_eq!(result.selected_state_index, None);
     }
 
     #[test]
@@ -1998,9 +1589,9 @@ mod tests {
         // Every error status code is a small integer; a generation equal to one
         // of them must never be returned in the same range, otherwise a
         // consumer that classifies by range would misread the token as a
-        // typed failure (e.g. InternalInvariant == 12 after twelve run/dispose
-        // cycles) and leave the attachment Disposing forever.
-        for status in 1..=PrivateFixtureErrorV1::MissingSelectedState.status() {
+        // typed failure (`PrivateFixtureErrorV1::InternalInvariant`) after enough
+        // run/dispose cycles and leave the attachment Disposing forever.
+        for status in 1..=PrivateFixtureErrorV1::DisposeNotConfirmed.status() {
             assert_ne!(
                 begin_dispose_status_v1(Ok(status)),
                 status,
@@ -2140,8 +1731,8 @@ mod tests {
             "the staged result must overwrite the hostile backing write",
         );
         assert_eq!(
-            decode_result_for_test(&certified_result).selected_state_index,
-            3
+            decode_result_for_test(&certified_result).paint_source,
+            Srgb8::new([64, 64, 64])
         );
     }
 }
