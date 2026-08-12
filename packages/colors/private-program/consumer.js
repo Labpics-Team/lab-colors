@@ -1,19 +1,17 @@
 import { acquireOutputLease } from "../output-sink.js";
 
 const PRIVATE_PROGRAM_WASM_URL = new URL("./labcolors_private_program.wasm", import.meta.url);
-const REQUEST_V1_LENGTH = 296;
+const REQUEST_V1_LENGTH = 46;
 const REQUEST_SINK_OUTPUT_OFFSET = REQUEST_V1_LENGTH - 4;
-const RESULT_V1_LENGTH = 95;
+const RESULT_V1_LENGTH = 59;
 const RESULT_V1_MAGIC = Object.freeze([0x4c, 0x43, 0x46, 0x52]);
 const ABI_V1 = 1;
 
 const RESULT_OUTPUT_OFFSET = 8;
 const RESULT_SINK_OUTPUT_OFFSET = 12;
-const RESULT_SELECTED_STATE_OFFSET = 16;
-const RESULT_RGB_OFFSET = 20;
-const RESULT_OPACITY_OFFSET = 23;
-const RESULT_CONTENT_IDENTITY_OFFSET = 31;
-const RESULT_RELEASE_IDENTITY_OFFSET = 63;
+const RESULT_RGB_OFFSET = 16;
+const RESULT_OPACITY_OFFSET = 19;
+const RESULT_CONTENT_IDENTITY_OFFSET = 27;
 const IDENTITY_LENGTH = 32;
 
 const HOST_MODULE_V1 = "labcolors_private_fixture_host_v1";
@@ -249,19 +247,12 @@ function decodeReceipt(bytes, expectedSinkOutput, installedOutput, installedSink
   return Object.freeze({
     output,
     sinkOutput,
-    selectedStateIndex: view.getUint32(RESULT_SELECTED_STATE_OFFSET, true),
     paintSource,
     paintOpacityBits: view.getBigUint64(RESULT_OPACITY_OFFSET, true),
     contentIdentity: lowercaseHex(
       bytes.subarray(
         RESULT_CONTENT_IDENTITY_OFFSET,
         RESULT_CONTENT_IDENTITY_OFFSET + IDENTITY_LENGTH,
-      ),
-    ),
-    selectionReleaseIdentity: lowercaseHex(
-      bytes.subarray(
-        RESULT_RELEASE_IDENTITY_OFFSET,
-        RESULT_RELEASE_IDENTITY_OFFSET + IDENTITY_LENGTH,
       ),
     ),
   });
