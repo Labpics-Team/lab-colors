@@ -501,6 +501,14 @@ jobs:
         run: |
           cargo install wasm-pack --version 0.13.1 --locked
           echo "$CARGO_HOME/bin" >> "$GITHUB_PATH"
+      - name: install locked wasm-bindgen CLI
+        # wasm-pack's fallback install omits --locked. The same exact CLI
+        # version then resolves a time-dependent transitive graph and can emit
+        # different bindings. Seed wasm-pack's own cache from the release lock.
+        run: |
+          set -euo pipefail
+          cargo install wasm-bindgen-cli --version 0.2.126 --locked \
+            --root "$WASM_PACK_CACHE/.wasm-bindgen-cargo-install-0.2.126"
       - name: install byte-bound Binaryen Node transport
         run: |
           set -euo pipefail

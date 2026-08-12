@@ -3582,6 +3582,21 @@ test("WASM runtime budget is one canonical self-contained exact contract", async
     ),
     "the live wasm-pack toolchain must equal the budget declaration",
   );
+  const bindgenInstall = workflowRunScript(ci, "name: install locked wasm-bindgen CLI");
+  assert.match(bindgenInstall, /^set -euo pipefail$/mu);
+  const bindgenCommand =
+    /cargo install wasm-bindgen-cli --version (?<version>\S+) --locked \\\n  --root "\$WASM_PACK_CACHE\/\.wasm-bindgen-cargo-install-(?<rootVersion>[^"/]+)"/u
+      .exec(bindgenInstall)?.groups;
+  assert.ok(
+    bindgenCommand?.version === budget.toolchain.wasmBindgen &&
+      bindgenCommand.rootVersion === budget.toolchain.wasmBindgen,
+    "wasm-pack must consume a lockfile-resolved wasm-bindgen CLI",
+  );
+  assert.ok(
+    ci.indexOf("name: install locked wasm-bindgen CLI") <
+      ci.indexOf("name: repeat runtime WASM build in one toolchain-pinned CI job"),
+    "the locked wasm-bindgen CLI must exist before wasm-pack builds the runtime",
+  );
   assert.ok(
     wasmJob.includes(`targets: ${budget.toolchain.target}`),
     "the live WASM target must equal the budget declaration",
