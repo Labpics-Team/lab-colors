@@ -52,6 +52,14 @@ const EXPECTED_MUTATIONS = Object.freeze([
     "Error: private Program browser fixture: updated state is Ready; expected 2, got 3",
   ],
   [
+    "incremental-invalidation-skip",
+    "semantic-source-bypass",
+    "rust-wasm",
+    "crates/labcolors-core/src/program_session.rs",
+    "92eb588560200891c4655325c3d26e919f9a9c76fa8f4499f235c32f98721454",
+    "Error: private Program browser fixture: changed observation state is Failed; expected 4, got 2",
+  ],
+  [
     "external-attachment-handoff-binding-bypass",
     "semantic-source-bypass",
     "rust-wasm",
@@ -88,7 +96,7 @@ async function assertTreeContainsNoLinks(root) {
   }
 }
 
-test("private Program mutation IDs bind six exact source transformations", () => {
+test("private Program mutation IDs bind seven exact source transformations", () => {
   assert.deepEqual(
     PRIVATE_PROGRAM_MUTATION_CASES.map(
       ({ id, proof, artifact, sourcePath, search, replacement, expectedBrowserAssertion }) => [
