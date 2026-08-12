@@ -9,6 +9,8 @@ const EXPECTED_COMPUTED_CSS = "rgba(64, 64, 64, 0.5)";
 
 const REQUEST_HEX = "4c43465102004600404040000000000000e03f00000000000050409a9999999999c93f01606060f50100001f0000000100000000000000010100000080808000000000000000";
 const UPDATE_HEX = "4c434655020028001f00000002000000000000000101020000008080800000000000000000000000";
+const CHANGED_UPDATE_HEX =
+  "4c434655020028001f0000000300000000000000010103000000ffffff0000000000000000000000";
 const EXPECTED_CONTENT_IDENTITY =
   "4daf4731d823ba228f4189d08c76183dd8a81e8b593ff709828b7329e075a914";
 
@@ -19,6 +21,7 @@ const EXPECTED_CHECKS = Object.freeze([
   "exact-computed-css",
   "exact-certified-receipt",
   "explicit-observation-update",
+  "changed-observation-invalidates-certified-result",
   "dispose",
   "post-run-dispose-idempotence",
 ]);
@@ -136,6 +139,22 @@ async function runProof() {
     equal(updated.revision, 2n, "updated state advances revision");
     equal(updated.contentIdentity, EXPECTED_CONTENT_IDENTITY, "update reuses compiled identity");
     checks.push("explicit-observation-update");
+
+    const changedUpdateBytes = exactWireBytes(CHANGED_UPDATE_HEX);
+    equal(changedUpdateBytes.length, EXPECTED_UPDATE_LENGTH, "changed update has the exact ABI length");
+    const changed = await consumer.update(changedUpdateBytes);
+    equal(changed.state, 4, "changed observation state is Failed");
+    equal(changed.stream, 31, "failed state retains stream identity");
+    equal(changed.revision, 3n, "failed state advances revision");
+    equal(changed.output, 0, "failed state has no certified output");
+    equal(changed.contentIdentity, "0".repeat(64), "failed state has no certified identity");
+    probe.getBoundingClientRect();
+    equal(
+      getComputedStyle(probe).backgroundColor,
+      "rgba(0, 0, 0, 0)",
+      "changed observation revokes the previous certified output",
+    );
+    checks.push("changed-observation-invalidates-certified-result");
   } finally {
     disposeResult = await consumer.dispose();
   }
