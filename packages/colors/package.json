@@ -58,6 +58,7 @@
     "evidence/wcag22-srgb8-q55-proof-v1.json",
     "evidence/point-support-reference-surplus-q55-bps-proof-v1.json",
     "private-program/consumer.js",
+    "private-program/abi-v2.js",
     "private-program/labcolors_private_program.wasm",
     "private-program/build-metadata.json",
     "pkg/labcolors.js",
