@@ -123,8 +123,8 @@ function assertPrivateProgramPublishContract(workflow) {
       `"${TAR_INSPECTOR_SHA256}";`,
       "publish must pin the exact canonical tar inspector bytes",
     ],
-    ["EXPECTED_PACKAGE_FILES.length !== 28", "publish must pin all declared package files"],
-    ["EXPECTED_TAR_INVENTORY.length !== 30", "publish must pin the exact npm tar inventory"],
+    ["EXPECTED_PACKAGE_FILES.length !== 29", "publish must pin all declared package files"],
+    ["EXPECTED_TAR_INVENTORY.length !== 31", "publish must pin the exact npm tar inventory"],
     [
       "if (sha256(inspectorBytes) !== TAR_INSPECTOR_SHA256)",
       "publish must verify the tar inspector before invoking it",
