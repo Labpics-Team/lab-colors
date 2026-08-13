@@ -238,7 +238,9 @@ fn intrinsic_relation_compares_source_but_retains_each_endpoints_full_alpha() {
         0.5_f64.to_bits()
     );
     let projected = program::RelationMemberV1::Intrinsic(member);
-    let program::RelationMeasurementV1::ExactSrgb8(measurement) = projected.measurement();
+    let program::RelationMeasurementV1::ExactSrgb8(measurement) = projected.measurement() else {
+        panic!("the exact relation must retain exact pair measurement");
+    };
     assert_eq!(measurement.reference(), white);
     assert_eq!(measurement.candidate(), white);
     assert_eq!(projected.verdict(), program::VerdictV1::Pass);
@@ -699,7 +701,10 @@ fn visible_relation_checks_every_candidate_in_every_admitted_scenario() {
             assert_eq!(member.candidate().occurrence(), expected_candidate);
 
             let program::RelationMeasurementV1::ExactSrgb8(measurement) =
-                program::RelationMemberV1::Visible(member).measurement();
+                program::RelationMemberV1::Visible(member).measurement()
+            else {
+                panic!("the exact relation must retain exact pair measurement");
+            };
             let program::PhysicalPointV1::EncodedSrgb8SourceOver(reference_physical) =
                 member.reference().binding().physical();
             let program::PhysicalPointV1::EncodedSrgb8SourceOver(candidate_physical) =

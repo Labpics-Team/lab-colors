@@ -42,8 +42,11 @@ use crate::composition::{AdmittedOpacityV1, CompositionProfileV1, OpacityAdmissi
 use crate::constraints::{
     ApplicableWcag22EvaluationErrorV1, CoreIntrinsicUnaryMeasurementV1, CoreIntrinsicUnaryPassV1,
     CoreIntrinsicUnaryViolationV1, CoreRelationMeasurementV1, CoreRelationPassV1,
-    CoreRelationViolationV1, ExactSrgb8IdentityV1, ProgramVisiblePointBindingV1,
-    ProgramVisiblePointPassEvidence, ProgramVisiblePointViolationEvidence, Wcag22Srgb8V1,
+    CoreRelationViolationV1, ExactSrgb8IdentityV1,
+    FamilyCategoryRelationMeasurementV1 as CoreFamilyCategoryRelationMeasurementV1,
+    FamilyCategoryRelationViolationV1 as CoreFamilyCategoryRelationViolationV1,
+    ProgramVisiblePointBindingV1, ProgramVisiblePointPassEvidence,
+    ProgramVisiblePointViolationEvidence, Wcag22Srgb8V1,
 };
 use crate::family::{
     FamilyDeclarationV2, FamilyId,
@@ -1698,6 +1701,58 @@ impl DraftV1 {
         self
     }
 
+    /// Требует точного байтового различия intrinsic source каждого кандидата
+    /// от reference. Закон технический: он не заявляет перцептивную
+    /// различимость и не читает клиентскую семантику ID.
+    pub(crate) fn push_exact_intrinsic_distinction_hard(
+        &mut self,
+        id: ConstraintIdV1,
+        relation: DirectedRelationV1<TargetIdV1>,
+    ) -> &mut Self {
+        self.inner.push_exact_intrinsic_distinction_hard(
+            id.into_core(),
+            relation
+                .try_map(TargetIdV1::into_core)
+                .expect("facade TargetId is a transparent bijection over Core TargetId"),
+        );
+        self
+    }
+
+    /// Требует точного байтового различия final modeled результата каждого
+    /// кандидата от reference в объявленных контекстах.
+    pub(crate) fn push_exact_visible_distinction_hard(
+        &mut self,
+        id: ConstraintIdV1,
+        relation: DirectedRelationV1<OccurrenceIdV1>,
+    ) -> &mut Self {
+        self.inner.push_exact_visible_distinction_hard(
+            id.into_core(),
+            relation
+                .try_map(OccurrenceIdV1::into_core)
+                .expect("facade OccurrenceId is a transparent bijection over Core OccurrenceId"),
+        );
+        self
+    }
+
+    /// Требует положительной принадлежности reference и каждого кандидата
+    /// одному объявленному точному family-образу. Оба endpoint обязаны нести
+    /// собственный inclusion witness; отрицательное дополнение недостаточно.
+    pub(crate) fn push_intrinsic_family_category_relation_hard(
+        &mut self,
+        id: ConstraintIdV1,
+        relation: DirectedRelationV1<TargetIdV1>,
+        family: FamilyIdV1,
+    ) -> &mut Self {
+        self.inner.push_intrinsic_family_category_relation_hard(
+            id.into_core(),
+            relation
+                .try_map(TargetIdV1::into_core)
+                .expect("facade TargetId is a transparent bijection over Core TargetId"),
+            family.into_core(),
+        );
+        self
+    }
+
     /// Добавляет обязательный критерий WCAG 2.2 для видимого результата.
     pub(crate) fn push_wcag22_visible_unary_hard(
         &mut self,
@@ -3048,15 +3103,53 @@ impl ExactSrgb8RelationMeasurementV1 {
     }
 }
 
+/// Положительные категориальные измерения обоих endpoints одного member.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct FamilyCategoryRelationMeasurementV1 {
+    reference: FamilyMembershipMeasurementV2,
+    candidate: FamilyMembershipMeasurementV2,
+}
+
+impl FamilyCategoryRelationMeasurementV1 {
+    const fn from_core(family: FamilyId, value: CoreFamilyCategoryRelationMeasurementV1) -> Self {
+        Self {
+            reference: FamilyMembershipMeasurementV2::from_core(family, value.reference()),
+            candidate: FamilyMembershipMeasurementV2::from_core(family, value.candidate()),
+        }
+    }
+
+    pub(crate) const fn reference(self) -> FamilyMembershipMeasurementV2 {
+        self.reference
+    }
+
+    pub(crate) const fn candidate(self) -> FamilyMembershipMeasurementV2 {
+        self.candidate
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RelationMeasurementV1 {
     ExactSrgb8(ExactSrgb8RelationMeasurementV1),
+    ExactSrgb8Distinction(ExactSrgb8RelationMeasurementV1),
+    FamilyCategory(FamilyCategoryRelationMeasurementV1),
+}
+
+/// Endpoint, оставшийся без положительного категориального свидетельства.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FamilyCategoryViolationKindV1 {
+    ReferenceEndpoint,
+    CandidateEndpoint,
+    BothEndpoints,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RelationMemberProofV1 {
     ExactSrgb8Pass,
     ExactSrgb8Violation,
+    ExactSrgb8DistinctionPass,
+    ExactSrgb8DistinctionViolation,
+    FamilyCategoryPass,
+    FamilyCategoryViolation(FamilyCategoryViolationKindV1),
 }
 
 const fn project_relation_measurement(value: CoreRelationMeasurementV1) -> RelationMeasurementV1 {
@@ -3067,6 +3160,19 @@ const fn project_relation_measurement(value: CoreRelationMeasurementV1) -> Relat
                 candidate: value.candidate(),
             })
         }
+        CoreRelationMeasurementV1::ExactSrgb8Distinction(value) => {
+            RelationMeasurementV1::ExactSrgb8Distinction(ExactSrgb8RelationMeasurementV1 {
+                reference: value.reference(),
+                candidate: value.candidate(),
+            })
+        }
+        CoreRelationMeasurementV1::FamilyCategory {
+            family,
+            measurement,
+        } => RelationMeasurementV1::FamilyCategory(FamilyCategoryRelationMeasurementV1::from_core(
+            family,
+            measurement,
+        )),
     }
 }
 
@@ -3085,6 +3191,28 @@ const fn project_relation_proof(value: ProgramRelationMemberDecisionV1) -> Relat
         ProgramRelationMemberDecisionV1::Violation(CoreRelationViolationV1::ExactSrgb8(_)) => {
             RelationMemberProofV1::ExactSrgb8Violation
         }
+        ProgramRelationMemberDecisionV1::Pass(CoreRelationPassV1::ExactSrgb8Distinction(_)) => {
+            RelationMemberProofV1::ExactSrgb8DistinctionPass
+        }
+        ProgramRelationMemberDecisionV1::Violation(
+            CoreRelationViolationV1::ExactSrgb8Distinction(_),
+        ) => RelationMemberProofV1::ExactSrgb8DistinctionViolation,
+        ProgramRelationMemberDecisionV1::Pass(CoreRelationPassV1::FamilyCategory(_)) => {
+            RelationMemberProofV1::FamilyCategoryPass
+        }
+        ProgramRelationMemberDecisionV1::Violation(CoreRelationViolationV1::FamilyCategory(
+            violation,
+        )) => RelationMemberProofV1::FamilyCategoryViolation(match violation {
+            CoreFamilyCategoryRelationViolationV1::ReferenceEndpoint => {
+                FamilyCategoryViolationKindV1::ReferenceEndpoint
+            }
+            CoreFamilyCategoryRelationViolationV1::CandidateEndpoint => {
+                FamilyCategoryViolationKindV1::CandidateEndpoint
+            }
+            CoreFamilyCategoryRelationViolationV1::BothEndpoints => {
+                FamilyCategoryViolationKindV1::BothEndpoints
+            }
+        }),
     }
 }
 
