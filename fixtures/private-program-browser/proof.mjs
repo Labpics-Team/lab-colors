@@ -15,6 +15,7 @@ const EXPECTED_UPDATE_LENGTH = 40;
 const EXPECTED_PAINT_SOURCE = Object.freeze([64, 64, 64]);
 const EXPECTED_PAINT_OPACITY_BITS_HEX = "3fe0000000000000";
 const EXPECTED_COMPUTED_CSS = "rgba(64, 64, 64, 0.5)";
+const WORKER_RESPONSE_TIMEOUT_MS = 10_000;
 
 
 const EXPECTED_CHECKS = Object.freeze([
@@ -160,18 +161,25 @@ async function runProof() {
 
     const workerResult = await new Promise((resolve, reject) => {
       const worker = new Worker("./worker-client.mjs", { type: "module" });
-      worker.addEventListener("message", (event) => {
+      const finish = (action) => {
+        clearTimeout(timeout);
         worker.terminate();
-        if (event.data?.ok === true) resolve(event.data.value);
-        else reject(new Error(event.data?.error ?? "worker client failed without detail"));
+        action();
+      };
+      const timeout = setTimeout(() => {
+        finish(() => reject(new Error("worker client response timed out")));
+      }, WORKER_RESPONSE_TIMEOUT_MS);
+      worker.addEventListener("message", (event) => {
+        finish(() => {
+          if (event.data?.ok === true) resolve(event.data.value);
+          else reject(new Error(event.data?.error ?? "worker client failed without detail"));
+        });
       }, { once: true });
       worker.addEventListener("error", (event) => {
-        worker.terminate();
-        reject(event.error ?? new Error(event.message));
+        finish(() => reject(event.error ?? new Error(event.message)));
       }, { once: true });
       worker.addEventListener("messageerror", () => {
-        worker.terminate();
-        reject(new Error("worker client returned an uncloneable message"));
+        finish(() => reject(new Error("worker client returned an uncloneable message")));
       }, { once: true });
       worker.postMessage("run");
     });

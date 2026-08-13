@@ -28,6 +28,7 @@ test("differential acceptance cannot pass without executing the independent work
     "utf8",
   );
   assert.match(proof, /const worker = new Worker\("\.\/worker-client\.mjs", \{ type: "module" \}\)/u);
+  assert.match(proof, /worker\.postMessage\("run"\)/u);
   assert.match(proof, /equal\(workerResult\.initial, initialFingerprint/u);
   assert.match(proof, /equal\(workerResult\.updated, updatedFingerprint/u);
   assert.match(proof, /equal\(workerResult\.changed, changedFingerprint/u);

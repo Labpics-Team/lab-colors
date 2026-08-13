@@ -1374,6 +1374,18 @@ jobs:
           ) {
             fail("packed package files declaration differs from the admitted inventory");
           }
+          const packedPrivateAbi = packedMember(
+            tarball,
+            tarMembers,
+            PRIVATE_PROGRAM_ABI_PATH,
+            "packed private Program ABI",
+          );
+          const taggedPrivateAbi = readFileSync(
+            join(workspace, "packages/colors", PRIVATE_PROGRAM_ABI_PATH),
+          );
+          if (!packedPrivateAbi.equals(taggedPrivateAbi)) {
+            fail("packed private Program ABI differs from the exact tag source");
+          }
           if (JSON.stringify(packedPackage.exports) !== JSON.stringify(EXPECTED_PACKAGE_EXPORTS)) {
             fail("packed package exports differ from the admitted public surface");
           }
