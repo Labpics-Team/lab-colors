@@ -94,7 +94,9 @@ async function runLifecycle() {
     return disposeConfirmed ? HOST_DISPOSE_CONFIRMED_V1 : 0;
   }
 
-  const source = await (await fetch(WASM_URL)).arrayBuffer();
+  const response = await fetch(WASM_URL);
+  if (response.ok !== true) throw new Error(`private Program WASM fetch failed: ${response.status}`);
+  const source = await response.arrayBuffer();
   const instance = await WebAssembly.instantiate(source, {
     [HOST_MODULE_V1]: {
       [HOST_INSTALL_V1]: install,

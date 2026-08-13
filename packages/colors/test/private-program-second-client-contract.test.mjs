@@ -15,6 +15,8 @@ test("private Program second client shares the ABI and vectors without importing
   assert.doesNotMatch(workerClient, /consumer\.js/u);
   assert.match(proof, /from "\.\/vectors\.mjs"/u);
   assert.match(workerClient, /from "\.\/vectors\.mjs"/u);
+  assert.match(workerClient, /if \(response\.ok !== true\)/u);
+  assert.match(proof, /worker\.addEventListener\("messageerror"/u);
   const manifest = JSON.parse(packageManifest);
   assert.equal(manifest.files.includes("private-program/abi-v2.js"), true);
   assert.equal(Object.hasOwn(manifest.exports, "./private-program/abi-v2.js"), false);

@@ -169,6 +169,10 @@ async function runProof() {
         worker.terminate();
         reject(event.error ?? new Error(event.message));
       }, { once: true });
+      worker.addEventListener("messageerror", () => {
+        worker.terminate();
+        reject(new Error("worker client returned an uncloneable message"));
+      }, { once: true });
       worker.postMessage("run");
     });
     equal(workerResult.initial, initialFingerprint, "worker initial certified outcome matches");
