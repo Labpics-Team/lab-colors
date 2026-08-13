@@ -59,6 +59,14 @@ mod release_tag {
     pub(super) const EXACT_SRGB8_RELATION_IDENTITY_V1: u8 = 1;
     pub(super) const EXACT_SRGB8_RELATION_RELEASE_V1: u8 = 1;
     pub(super) const EXACT_SRGB8_RELATION_CAPABILITY_V1: u8 = 1;
+    pub(super) const EXACT_SRGB8_DISTINCTION_RELATION_FAMILY_V1: u8 = 8;
+    pub(super) const EXACT_SRGB8_DISTINCTION_RELATION_IDENTITY_V1: u8 = 1;
+    pub(super) const EXACT_SRGB8_DISTINCTION_RELATION_RELEASE_V1: u8 = 1;
+    pub(super) const EXACT_SRGB8_DISTINCTION_RELATION_CAPABILITY_V1: u8 = 1;
+    pub(super) const FAMILY_CATEGORY_RELATION_FAMILY_V1: u8 = 9;
+    pub(super) const FAMILY_CATEGORY_RELATION_IDENTITY_V1: u8 = 1;
+    pub(super) const FAMILY_CATEGORY_RELATION_RELEASE_V1: u8 = 1;
+    pub(super) const FAMILY_CATEGORY_RELATION_CAPABILITY_V1: u8 = 1;
     pub(super) const FAMILY_MEMBERSHIP_FAMILY_V1: u8 = 6;
     pub(super) const FAMILY_MEMBERSHIP_IDENTITY_V1: u8 = 1;
     #[cfg(test)]
@@ -653,6 +661,50 @@ fn constraint_color(
                 }
             })?;
         }
+        ProgramConstraintContentV1::ExactSrgb8DistinctionRelation {
+            identity,
+            release,
+            capability,
+        } => {
+            color.push_u8(release_tag::EXACT_SRGB8_DISTINCTION_RELATION_FAMILY_V1)?;
+            color.push_u8(match identity {
+                crate::constraints::ExactSrgb8DistinctionIdentityV1::HomogeneousEndpointInequalityV1 => {
+                    release_tag::EXACT_SRGB8_DISTINCTION_RELATION_IDENTITY_V1
+                }
+            })?;
+            color.push_u8(match release {
+                crate::constraints::ExactSrgb8DistinctionReleaseV1::V1 => {
+                    release_tag::EXACT_SRGB8_DISTINCTION_RELATION_RELEASE_V1
+                }
+            })?;
+            color.push_u8(match capability {
+                crate::constraints::ExactSrgb8DistinctionCapabilityV1::HomogeneousEncodedSrgb8PairV1 => {
+                    release_tag::EXACT_SRGB8_DISTINCTION_RELATION_CAPABILITY_V1
+                }
+            })?;
+        }
+        ProgramConstraintContentV1::FamilyCategoryRelation {
+            identity,
+            release,
+            capability,
+        } => {
+            color.push_u8(release_tag::FAMILY_CATEGORY_RELATION_FAMILY_V1)?;
+            color.push_u8(match identity {
+                crate::constraints::FamilyCategoryRelationIdentityV1::HomogeneousEndpointCategoryMembershipV1 => {
+                    release_tag::FAMILY_CATEGORY_RELATION_IDENTITY_V1
+                }
+            })?;
+            color.push_u8(match release {
+                crate::constraints::FamilyCategoryRelationReleaseV1::V1 => {
+                    release_tag::FAMILY_CATEGORY_RELATION_RELEASE_V1
+                }
+            })?;
+            color.push_u8(match capability {
+                crate::constraints::FamilyCategoryRelationCapabilityV1::HomogeneousIec61966Srgb8D65PairV1 => {
+                    release_tag::FAMILY_CATEGORY_RELATION_CAPABILITY_V1
+                }
+            })?;
+        }
         #[cfg(test)]
         ProgramConstraintContentV1::ModeledLcsProbe { release } => {
             color.push_u8(release_tag::MODELED_LCS_PROBE_FAMILY_V1)?;
@@ -791,7 +843,10 @@ where
                 )?;
             }
         }
-        ProgramConstraintBodyV1::IntrinsicRelation { relation, .. } => {
+        ProgramConstraintBodyV1::IntrinsicRelation {
+            relation,
+            invocation,
+        } => {
             graph.add_edge(
                 vertex,
                 context.targets.get(relation.reference())?,
@@ -804,8 +859,18 @@ where
                     EdgeRoleV1::IntrinsicCandidate,
                 )?;
             }
+            if let CoreRelationInvocationV1::FamilyCategory { family } = invocation {
+                graph.add_edge(
+                    vertex,
+                    context.families.get(*family)?,
+                    EdgeRoleV1::ConstraintFamily,
+                )?;
+            }
         }
-        ProgramConstraintBodyV1::VisibleRelation { relation, .. } => {
+        ProgramConstraintBodyV1::VisibleRelation {
+            relation,
+            invocation,
+        } => {
             graph.add_edge(
                 vertex,
                 context.occurrences.get(relation.reference())?,
@@ -816,6 +881,13 @@ where
                     vertex,
                     context.occurrences.get(candidate)?,
                     EdgeRoleV1::VisibleCandidate,
+                )?;
+            }
+            if let CoreRelationInvocationV1::FamilyCategory { family } = invocation {
+                graph.add_edge(
+                    vertex,
+                    context.families.get(*family)?,
+                    EdgeRoleV1::ConstraintFamily,
                 )?;
             }
         }

@@ -144,6 +144,12 @@ mod program_clean_set_tests;
 mod program_relation_tests;
 
 #[cfg(test)]
+mod program_category_relation_tests;
+
+#[cfg(test)]
+mod program_v5_exit_gate_tests;
+
+#[cfg(test)]
 mod program_family_tests;
 
 #[cfg(test)]

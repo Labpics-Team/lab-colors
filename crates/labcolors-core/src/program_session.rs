@@ -43,10 +43,10 @@ use crate::clean_set::{
 };
 use crate::composition::CompositionProfileV1;
 use crate::constraints::{
-    CompiledCoreIntrinsicUnaryInvocationV1, CoreIntrinsicUnaryInvocationV1,
-    CoreIntrinsicUnaryMeasurementV1, CoreIntrinsicUnaryPassV1, CoreIntrinsicUnaryViolationV1,
-    CoreRelationInvocationV1, CoreRelationMeasurementV1, CoreRelationPassV1,
-    CoreRelationViolationV1, Evaluator, ExactSrgb8IdentityV1, HardDecision,
+    CompiledCoreIntrinsicUnaryInvocationV1, CompiledCoreRelationInvocationV1,
+    CoreIntrinsicUnaryInvocationV1, CoreIntrinsicUnaryMeasurementV1, CoreIntrinsicUnaryPassV1,
+    CoreIntrinsicUnaryViolationV1, CoreRelationInvocationV1, CoreRelationMeasurementV1,
+    CoreRelationPassV1, CoreRelationViolationV1, Evaluator, ExactSrgb8IdentityV1, HardDecision,
     ProgramConstraintContentV1, ProgramPointAssessmentErrorV1, ProgramPointEvaluatorContentV1,
     ProgramPointEvaluatorV1, ProgramPointInvocation, ProgramPointOccurrenceV1,
     ProgramPointTargetV1, ProgramVisiblePointBindingV1, ProgramVisiblePointPassEvidence,
@@ -609,6 +609,49 @@ impl<Invocation> ConstraintInvocation<Invocation, HardModeV1> {
             body: ProgramConstraintBodyV1::VisibleRelation {
                 relation,
                 invocation: CoreRelationInvocationV1::exact_srgb8(),
+            },
+            mode: PhantomData,
+        }
+    }
+
+    pub(crate) const fn exact_intrinsic_distinction_hard(
+        id: ConstraintId,
+        relation: DirectedRelationV1<TargetId>,
+    ) -> Self {
+        Self {
+            id,
+            body: ProgramConstraintBodyV1::IntrinsicRelation {
+                relation,
+                invocation: CoreRelationInvocationV1::exact_srgb8_distinction(),
+            },
+            mode: PhantomData,
+        }
+    }
+
+    pub(crate) const fn exact_visible_distinction_hard(
+        id: ConstraintId,
+        relation: DirectedRelationV1<OccurrenceId>,
+    ) -> Self {
+        Self {
+            id,
+            body: ProgramConstraintBodyV1::VisibleRelation {
+                relation,
+                invocation: CoreRelationInvocationV1::exact_srgb8_distinction(),
+            },
+            mode: PhantomData,
+        }
+    }
+
+    pub(crate) const fn intrinsic_family_category_relation_hard(
+        id: ConstraintId,
+        relation: DirectedRelationV1<TargetId>,
+        family: FamilyId,
+    ) -> Self {
+        Self {
+            id,
+            body: ProgramConstraintBodyV1::IntrinsicRelation {
+                relation,
+                invocation: CoreRelationInvocationV1::family_category(family),
             },
             mode: PhantomData,
         }
@@ -1266,6 +1309,43 @@ impl CoreProgramDraftV1 {
             ));
     }
 
+    pub(crate) fn push_exact_intrinsic_distinction_hard(
+        &mut self,
+        id: ConstraintId,
+        relation: DirectedRelationV1<TargetId>,
+    ) {
+        self.program
+            .constraints
+            .hard
+            .push(ConstraintInvocation::exact_intrinsic_distinction_hard(
+                id, relation,
+            ));
+    }
+
+    pub(crate) fn push_exact_visible_distinction_hard(
+        &mut self,
+        id: ConstraintId,
+        relation: DirectedRelationV1<OccurrenceId>,
+    ) {
+        self.program
+            .constraints
+            .hard
+            .push(ConstraintInvocation::exact_visible_distinction_hard(
+                id, relation,
+            ));
+    }
+
+    pub(crate) fn push_intrinsic_family_category_relation_hard(
+        &mut self,
+        id: ConstraintId,
+        relation: DirectedRelationV1<TargetId>,
+        family: FamilyId,
+    ) {
+        self.program.constraints.hard.push(
+            ConstraintInvocation::intrinsic_family_category_relation_hard(id, relation, family),
+        );
+    }
+
     pub(crate) fn push_report_constraint(
         &mut self,
         constraint: ConstraintInvocation<CoreProgramConstraintInvocationV1, ReportModeV1>,
@@ -1650,12 +1730,12 @@ enum CompiledProgramConstraintBodyV1<Invocation> {
     IntrinsicRelation {
         reference: CompiledIntrinsicRelationEndpointV1,
         candidates: Box<[CompiledIntrinsicRelationEndpointV1]>,
-        invocation: CoreRelationInvocationV1,
+        invocation: CompiledCoreRelationInvocationV1,
     },
     VisibleRelation {
         reference: CompiledVisibleRelationEndpointV1,
         candidates: Box<[CompiledVisibleRelationEndpointV1]>,
-        invocation: CoreRelationInvocationV1,
+        invocation: CompiledCoreRelationInvocationV1,
     },
     PointPresentation {
         presentation_ordinal: usize,
@@ -4739,8 +4819,13 @@ where
                             target: candidate.target_id,
                             value: candidate_value,
                         };
-                        let (measurement, decision) =
-                            invocation.assess(reference_value.source(), candidate_value.source());
+                        let (measurement, decision) = invocation
+                            .assess(
+                                reference_value.source(),
+                                candidate_value.source(),
+                                runtime.family_artifacts,
+                            )
+                            .ok_or(ProgramSessionEvaluationError::InternalInvariant)?;
                         let decision = match decision {
                             HardDecision::Pass(pass) => ProgramRelationMemberDecisionV1::Pass(pass),
                             HardDecision::Violation(evidence) => {
@@ -4791,8 +4876,13 @@ where
                                 candidate,
                             )
                             .ok_or(ProgramSessionEvaluationError::InternalInvariant)?;
-                        let (measurement, decision) =
-                            invocation.assess(reference_visible, candidate_visible);
+                        let (measurement, decision) = invocation
+                            .assess(
+                                reference_visible,
+                                candidate_visible,
+                                runtime.family_artifacts,
+                            )
+                            .ok_or(ProgramSessionEvaluationError::InternalInvariant)?;
                         let decision = match decision {
                             HardDecision::Pass(pass) => ProgramRelationMemberDecisionV1::Pass(pass),
                             HardDecision::Violation(evidence) => {
@@ -5130,22 +5220,66 @@ fn canonicalize_families(families: &mut [FamilyDeclarationV2]) -> Result<(), Pro
     Ok(())
 }
 
+/// Разрешает семантический family ordinal directional-профиля на компиляции.
+/// Runtime после этого не читает opaque FamilyId.
+fn compile_core_relation_invocation<Evaluation>(
+    program: &Program<Evaluation>,
+    constraint: ConstraintId,
+    invocation: CoreRelationInvocationV1,
+) -> Result<CompiledCoreRelationInvocationV1, ProgramCompileError>
+where
+    Evaluation: ProgramConstraintEvaluatorSetV1,
+{
+    Ok(match invocation {
+        CoreRelationInvocationV1::ExactSrgb8 => CompiledCoreRelationInvocationV1::ExactSrgb8,
+        CoreRelationInvocationV1::ExactSrgb8Distinction => {
+            CompiledCoreRelationInvocationV1::ExactSrgb8Distinction
+        }
+        CoreRelationInvocationV1::FamilyCategory { family } => {
+            let family_index = program
+                .families
+                .binary_search_by_key(&family, |declaration| declaration.id())
+                .map_err(|_| ProgramCompileError::MissingConstraintFamily { constraint, family })?;
+            CompiledCoreRelationInvocationV1::FamilyCategory {
+                family,
+                family_index,
+            }
+        }
+    })
+}
+
 fn validate_compiled_family_usage<Invocation>(
     families: &[FamilyDeclarationV2],
     constraints: &[CompiledPointConstraint<Invocation>],
 ) -> Result<(), ProgramCompileError> {
     let mut used = false_slots(families.len())?;
     for constraint in constraints {
-        let CompiledProgramConstraintBodyV1::IntrinsicUnary {
-            invocation:
-                CompiledCoreIntrinsicUnaryInvocationV1::FamilyMembership {
-                    family,
-                    family_index,
-                },
-            ..
-        } = &constraint.body
-        else {
-            continue;
+        let (family, family_index) = match &constraint.body {
+            CompiledProgramConstraintBodyV1::IntrinsicUnary {
+                invocation:
+                    CompiledCoreIntrinsicUnaryInvocationV1::FamilyMembership {
+                        family,
+                        family_index,
+                    },
+                ..
+            } => (family, family_index),
+            CompiledProgramConstraintBodyV1::IntrinsicRelation {
+                invocation:
+                    CompiledCoreRelationInvocationV1::FamilyCategory {
+                        family,
+                        family_index,
+                    },
+                ..
+            }
+            | CompiledProgramConstraintBodyV1::VisibleRelation {
+                invocation:
+                    CompiledCoreRelationInvocationV1::FamilyCategory {
+                        family,
+                        family_index,
+                    },
+                ..
+            } => (family, family_index),
+            _ => continue,
         };
         let declaration = families
             .get(*family_index)
@@ -6049,6 +6183,8 @@ where
                 relation,
                 invocation,
             } => {
+                let invocation =
+                    compile_core_relation_invocation(program, constraint.id, *invocation)?;
                 let reference_id = relation.reference();
                 let reference_index = program
                     .targets
@@ -6099,13 +6235,15 @@ where
                 CompiledProgramConstraintBodyV1::IntrinsicRelation {
                     reference,
                     candidates: candidates.into_boxed_slice(),
-                    invocation: *invocation,
+                    invocation,
                 }
             }
             ProgramConstraintBodyV1::VisibleRelation {
                 relation,
                 invocation,
             } => {
+                let invocation =
+                    compile_core_relation_invocation(program, constraint.id, *invocation)?;
                 let compile_endpoint = |occurrence: OccurrenceId,
                                         missing: ProgramCompileError|
                  -> Result<
@@ -6169,7 +6307,7 @@ where
                 CompiledProgramConstraintBodyV1::VisibleRelation {
                     reference,
                     candidates: candidates.into_boxed_slice(),
-                    invocation: *invocation,
+                    invocation,
                 }
             }
             ProgramConstraintBodyV1::DeclaredSrgb8CleanSet { target } => {

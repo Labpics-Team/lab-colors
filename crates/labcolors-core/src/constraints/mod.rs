@@ -31,12 +31,16 @@ pub(crate) use exact::ExactIdentityPassV1;
 
 mod relation;
 pub(crate) use relation::{
-    CompiledCoreIntrinsicUnaryInvocationV1, CoreIntrinsicUnaryInvocationV1,
-    CoreIntrinsicUnaryMeasurementV1, CoreIntrinsicUnaryPassV1, CoreIntrinsicUnaryViolationV1,
-    CoreRelationInvocationV1, CoreRelationMeasurementV1, CoreRelationPassV1,
-    CoreRelationViolationV1, ExactSrgb8IntrinsicUnaryCapabilityV1,
-    ExactSrgb8IntrinsicUnaryIdentityV1, ExactSrgb8IntrinsicUnaryReleaseV1,
-    ExactSrgb8RelationCapabilityV1, ExactSrgb8RelationIdentityV1, ExactSrgb8RelationReleaseV1,
+    CompiledCoreIntrinsicUnaryInvocationV1, CompiledCoreRelationInvocationV1,
+    CoreIntrinsicUnaryInvocationV1, CoreIntrinsicUnaryMeasurementV1, CoreIntrinsicUnaryPassV1,
+    CoreIntrinsicUnaryViolationV1, CoreRelationInvocationV1, CoreRelationMeasurementV1,
+    CoreRelationPassV1, CoreRelationViolationV1, ExactSrgb8DistinctionCapabilityV1,
+    ExactSrgb8DistinctionIdentityV1, ExactSrgb8DistinctionReleaseV1,
+    ExactSrgb8IntrinsicUnaryCapabilityV1, ExactSrgb8IntrinsicUnaryIdentityV1,
+    ExactSrgb8IntrinsicUnaryReleaseV1, ExactSrgb8RelationCapabilityV1,
+    ExactSrgb8RelationIdentityV1, ExactSrgb8RelationReleaseV1, FamilyCategoryRelationCapabilityV1,
+    FamilyCategoryRelationIdentityV1, FamilyCategoryRelationMeasurementV1,
+    FamilyCategoryRelationReleaseV1, FamilyCategoryRelationViolationV1,
 };
 
 mod wcag22;
@@ -527,6 +531,16 @@ pub(crate) enum ProgramConstraintContentV1 {
         identity: ExactSrgb8RelationIdentityV1,
         release: ExactSrgb8RelationReleaseV1,
         capability: ExactSrgb8RelationCapabilityV1,
+    },
+    ExactSrgb8DistinctionRelation {
+        identity: ExactSrgb8DistinctionIdentityV1,
+        release: ExactSrgb8DistinctionReleaseV1,
+        capability: ExactSrgb8DistinctionCapabilityV1,
+    },
+    FamilyCategoryRelation {
+        identity: FamilyCategoryRelationIdentityV1,
+        release: FamilyCategoryRelationReleaseV1,
+        capability: FamilyCategoryRelationCapabilityV1,
     },
     #[cfg(test)]
     ModeledLcsProbe {
