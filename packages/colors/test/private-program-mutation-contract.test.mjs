@@ -73,7 +73,15 @@ const EXPECTED_MUTATIONS = Object.freeze([
     "javascript",
     "packages/colors/private-program/consumer.js",
     "2bde4eb3906f4d293a313e3037afc5e40841cda76603175397c19061cb43ea1a",
-    "Error: private Program browser fixture: computed background is the exact expected CSS literal; expected \"rgba(64, 64, 64, 0.5)\", got \"rgba(0, 0, 0, 0)\"",
+      "Error: private Program browser fixture: computed background is the exact expected CSS literal; expected \"rgba(64, 64, 64, 0.5)\", got \"rgba(0, 0, 0, 0)\"",
+  ],
+  [
+    "second-client-result-suppression",
+    "semantic",
+    "fixture-javascript",
+    "fixtures/private-program-browser/worker-client.mjs",
+    "dcd81c18eb206457f4d48b67a2d75cd53222a20f4806989412b5584f74b49317",
+    "Error: second client result suppressed",
   ],
 ]);
 
@@ -96,7 +104,7 @@ async function assertTreeContainsNoLinks(root) {
   }
 }
 
-test("private Program mutation IDs bind seven exact source transformations", () => {
+test("private Program mutation IDs bind eight exact source transformations", () => {
   assert.deepEqual(
     PRIVATE_PROGRAM_MUTATION_CASES.map(
       ({ id, proof, artifact, sourcePath, search, replacement, expectedBrowserAssertion }) => [
@@ -377,7 +385,7 @@ test("a mutation kill requires its real-browser assertion and semantic marker", 
     () =>
       assertMutationSpecificBrowserFailure(definition, {
         ...killed,
-        stdout: "LAB_COLORS_PRIVATE_PROGRAM_BROWSER_PASS v1 checks=9",
+        stdout: "LAB_COLORS_PRIVATE_PROGRAM_BROWSER_PASS v1 checks=10",
       }),
     /emitted the browser PASS receipt/u,
   );

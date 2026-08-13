@@ -353,6 +353,7 @@ test("the private Program artifact is packed without becoming a public subpath",
     packageJson.files.filter((path) => path.startsWith("private-program/")),
     [
       "private-program/consumer.js",
+      "private-program/abi-v2.js",
       "private-program/labcolors_private_program.wasm",
       "private-program/build-metadata.json",
     ],
@@ -546,6 +547,7 @@ test("the private Program artifact is packed without becoming a public subpath",
     /packageSmokeIndex\s*>=\s*0[\s\S]*smokePackedPackage\(tarball\)[\s\S]*:\s*verifyPackageRelease\(\)/u,
   );
   for (const path of [
+    "private-program/abi-v2.js",
     "private-program/consumer.js",
     "private-program/labcolors_private_program.wasm",
     "private-program/build-metadata.json",

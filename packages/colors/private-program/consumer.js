@@ -1,63 +1,37 @@
 import { acquireOutputLease } from "../output-sink.js";
+import {
+  decodeCertifiedReceipt,
+  DISPOSE_BEGIN_BUSY_V1,
+  DISPOSE_TOKEN_BASE_V1,
+  DISPOSE_TOKEN_ENCODED_END_V1,
+  EXPORTS_V1,
+  HOST_CONFIRM_DISPOSED_V1,
+  HOST_DISPOSE_CONFIRMED_V1,
+  HOST_INSTALL_SUCCESS_V1,
+  HOST_INSTALL_V1,
+  HOST_MODULE_V1,
+  OPERATION_CONFIRM_EXACT_V1,
+  OPERATION_REVOKE_ALL_V1,
+  OPERATION_SET_ALL_V1,
+  REQUEST_REVISION_OFFSET,
+  REQUEST_SINK_OUTPUT_OFFSET,
+  REQUEST_STREAM_OFFSET,
+  REQUEST_V2_LENGTH,
+  RESULT_V2_LENGTH,
+  UPDATE_REVISION_OFFSET,
+  UPDATE_STREAM_OFFSET,
+  UPDATE_V2_LENGTH,
+} from "./abi-v2.js";
 
 const PRIVATE_PROGRAM_WASM_URL = new URL("./labcolors_private_program.wasm", import.meta.url);
-const REQUEST_V2_LENGTH = 70;
-const REQUEST_SINK_OUTPUT_OFFSET = 39;
-const REQUEST_STREAM_OFFSET = 43;
-const UPDATE_V2_LENGTH = 40;
-const UPDATE_STREAM_OFFSET = 8;
-const RESULT_V2_LENGTH = 72;
-const RESULT_V1_MAGIC = Object.freeze([0x4c, 0x43, 0x46, 0x52]);
-const ABI_V2 = 2;
-
-const RESULT_STATE_OFFSET = 8;
-const RESULT_STREAM_OFFSET = 9;
-const RESULT_REVISION_OFFSET = 13;
-const RESULT_OUTPUT_OFFSET = 21;
-const RESULT_SINK_OUTPUT_OFFSET = 25;
-const RESULT_RGB_OFFSET = 29;
-const RESULT_OPACITY_OFFSET = 32;
-const RESULT_CONTENT_IDENTITY_OFFSET = 40;
-const IDENTITY_LENGTH = 32;
-
-const HOST_MODULE_V1 = "labcolors_private_fixture_host_v1";
-const HOST_INSTALL_V1 = "labcolors_private_fixture_host_install_v1";
-const HOST_CONFIRM_DISPOSED_V1 = "labcolors_private_fixture_host_confirm_disposed_v1";
-const HOST_INSTALL_SUCCESS_V1 = 0x4c43_0001;
-const HOST_DISPOSE_CONFIRMED_V1 = 0x4c43_0002;
-
-const OPERATION_SET_ALL_V1 = 1;
-const OPERATION_REVOKE_ALL_V1 = 2;
-const OPERATION_CONFIRM_EXACT_V1 = 3;
-const STATE_WAITING_V2 = 1;
-const STATE_READY_V2 = 2;
-const STATE_STALE_V2 = 3;
-const STATE_FAILED_V2 = 4;
-const DISPOSE_BEGIN_BUSY_V1 = 0xffff_ffff;
 // Live dispose tokens live in [DISPOSE_TOKEN_BASE_V1, 2 * DISPOSE_TOKEN_BASE_V1 - 1],
 // disjoint from every Core status code (1..=15), the Vacant sentinel 0, and the
 // Busy sentinel, so a begin-dispose result can be classified without ambiguity.
-const DISPOSE_TOKEN_BASE_V1 = 0x1000_0000;
-const DISPOSE_TOKEN_ENCODED_END_V1 = 2 * DISPOSE_TOKEN_BASE_V1 - 1;
 const I32_MIN = -0x8000_0000;
 const I32_MAX = 0x7fff_ffff;
 const MAX_CANONICAL_RGBA_V1_LENGTH =
   "rgba(255,255,255,)".length + expandShortestDecimal(Number.MIN_VALUE).length;
 const CANONICAL_RGBA_V1 = /^rgba\(([0-9]{1,3}),([0-9]{1,3}),([0-9]{1,3}),(0|1|0\.[0-9]+)\)$/u;
-
-const EXPORTS_V1 = Object.freeze({
-  requestPointer: "labcolors_private_fixture_request_v1_ptr",
-  requestLength: "labcolors_private_fixture_request_v1_len",
-  resultPointer: "labcolors_private_fixture_result_v1_ptr",
-  resultLength: "labcolors_private_fixture_result_v1_len",
-  run: "labcolors_private_fixture_run_v1",
-  updatePointer: "labcolors_private_fixture_update_v2_ptr",
-  updateLength: "labcolors_private_fixture_update_v2_len",
-  update: "labcolors_private_fixture_update_v2",
-  beginDispose: "labcolors_private_fixture_begin_dispose_v1",
-  abortDispose: "labcolors_private_fixture_abort_dispose_v1",
-  commitDispose: "labcolors_private_fixture_commit_dispose_v1",
-});
 
 const UTF8 = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
 
@@ -238,94 +212,6 @@ function readRequestSinkOutput(bytes) {
     REQUEST_SINK_OUTPUT_OFFSET,
     true,
   );
-}
-
-function lowercaseHex(bytes) {
-  let value = "";
-  for (const byte of bytes) value += byte.toString(16).padStart(2, "0");
-  return value;
-}
-
-function allZero(bytes) {
-  return bytes.every((byte) => byte === 0);
-}
-
-function decodeReceipt(
-  bytes,
-  expectedSinkOutput,
-  installedOutput,
-  installedSinkOutput,
-  expectedStream,
-  minimumRevision,
-) {
-  for (let index = 0; index < RESULT_V1_MAGIC.length; index++) {
-    if (bytes[index] !== RESULT_V1_MAGIC[index]) {
-      throw protocolError("result has invalid magic");
-    }
-  }
-  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-  if (view.getUint16(4, true) !== ABI_V2) {
-    throw protocolError("result has an unsupported ABI version");
-  }
-  if (view.getUint16(6, true) !== RESULT_V2_LENGTH) {
-    throw protocolError("result declares an invalid length");
-  }
-
-  const state = view.getUint8(RESULT_STATE_OFFSET);
-  if (
-    state !== STATE_WAITING_V2 &&
-    state !== STATE_READY_V2 &&
-    state !== STATE_STALE_V2 &&
-    state !== STATE_FAILED_V2
-  ) {
-    throw protocolError("result has an invalid lifecycle state");
-  }
-  const stream = view.getUint32(RESULT_STREAM_OFFSET, true);
-  const revision = view.getBigUint64(RESULT_REVISION_OFFSET, true);
-  if (stream !== expectedStream || revision < minimumRevision) {
-    throw protocolError("result observation provenance does not match the active attachment");
-  }
-  const output = view.getUint32(RESULT_OUTPUT_OFFSET, true);
-  const sinkOutput = view.getUint32(RESULT_SINK_OUTPUT_OFFSET, true);
-  const paintSource = Object.freeze([
-    bytes[RESULT_RGB_OFFSET],
-    bytes[RESULT_RGB_OFFSET + 1],
-    bytes[RESULT_RGB_OFFSET + 2],
-  ]);
-  const paintOpacityBits = view.getBigUint64(RESULT_OPACITY_OFFSET, true);
-  const identityBytes = bytes.subarray(
-    RESULT_CONTENT_IDENTITY_OFFSET,
-    RESULT_CONTENT_IDENTITY_OFFSET + IDENTITY_LENGTH,
-  );
-  if (state === STATE_READY_V2) {
-    if (
-      output === 0 ||
-      sinkOutput !== expectedSinkOutput ||
-      sinkOutput !== installedSinkOutput ||
-      output !== installedOutput ||
-      allZero(identityBytes)
-    ) {
-      throw protocolError("Ready result lacks an identity-matching certified output");
-    }
-  } else if (
-    output !== 0 ||
-    sinkOutput !== 0 ||
-    !allZero(paintSource) ||
-    paintOpacityBits !== 0n ||
-    !allZero(identityBytes)
-  ) {
-    throw protocolError("no-output result carries forbidden certified output data");
-  }
-  return Object.freeze({
-    output,
-    sinkOutput,
-    state,
-    stream,
-    revision,
-    paintSource,
-    paintOpacityBits,
-    contentIdentity: lowercaseHex(identityBytes),
-  });
 }
 
 function frozenPublication(outputBinding, css) {
@@ -793,7 +679,10 @@ export async function createPrivateProgramConsumer(options) {
       REQUEST_STREAM_OFFSET,
       true,
     );
-    observationRevision = new DataView(request.buffer, request.byteOffset, request.byteLength).getBigUint64(47, true);
+    observationRevision = new DataView(request.buffer, request.byteOffset, request.byteLength).getBigUint64(
+      REQUEST_REVISION_OFFSET,
+      true,
+    );
     generation = null;
     installedOutput = null;
     installedSinkOutput = null;
@@ -825,14 +714,15 @@ export async function createPrivateProgramConsumer(options) {
     }
     let receipt;
     try {
-      receipt = decodeReceipt(
-        copyResult(),
-        authoredSinkOutput,
+      receipt = decodeCertifiedReceipt({
+        bytes: copyResult(),
+        expectedSinkOutput: authoredSinkOutput,
         installedOutput,
         installedSinkOutput,
-        observationStream,
-        observationRevision,
-      );
+        expectedStream: observationStream,
+        minimumRevision: observationRevision,
+        protocolError,
+      });
     } catch (cause) {
       return probeAndCleanupFailedRun(asError(cause, "result decoding threw a non-Error value"));
     }
@@ -847,7 +737,10 @@ export async function createPrivateProgramConsumer(options) {
       UPDATE_STREAM_OFFSET,
       true,
     );
-    const incomingRevision = new DataView(update.buffer, update.byteOffset, update.byteLength).getBigUint64(12, true);
+    const incomingRevision = new DataView(update.buffer, update.byteOffset, update.byteLength).getBigUint64(
+      UPDATE_REVISION_OFFSET,
+      true,
+    );
     if (incomingStream !== observationStream) {
       throw protocolError("observation update stream does not match the active attachment");
     }
@@ -871,14 +764,15 @@ export async function createPrivateProgramConsumer(options) {
     }
     let receipt;
     try {
-      receipt = decodeReceipt(
-        copyResult(),
-        requestSinkOutput,
+      receipt = decodeCertifiedReceipt({
+        bytes: copyResult(),
+        expectedSinkOutput: requestSinkOutput,
         installedOutput,
         installedSinkOutput,
-        observationStream,
-        incomingRevision,
-      );
+        expectedStream: observationStream,
+        minimumRevision: incomingRevision,
+        protocolError,
+      });
     } catch (cause) {
       return probeAndCleanupFailedRun(
         asError(cause, "update result decoding threw a non-Error value"),

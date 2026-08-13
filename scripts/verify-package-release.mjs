@@ -1413,6 +1413,7 @@ await assert.rejects(
   (error) => error?.code === "ERR_PACKAGE_PATH_NOT_EXPORTED",
 );
 for (const privateSubpath of [
+  "@labpics/colors/private-program/abi-v2.js",
   "@labpics/colors/private-program/consumer.js",
   "@labpics/colors/private-program/labcolors_private_program.wasm",
   "@labpics/colors/private-program/build-metadata.json",

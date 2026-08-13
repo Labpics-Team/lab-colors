@@ -329,6 +329,7 @@ jobs:
 
           const PRIVATE_PROGRAM_ROLE = "private-program-consumer";
           const PRIVATE_PROGRAM_METADATA_PATH = "private-program/build-metadata.json";
+          const PRIVATE_PROGRAM_ABI_PATH = "private-program/abi-v2.js";
           const PRIVATE_PROGRAM_CONSUMER_PATH = "private-program/consumer.js";
           const PRIVATE_PROGRAM_WASM_PATH =
             "private-program/labcolors_private_program.wasm";
@@ -357,6 +358,7 @@ jobs:
             "evidence/wcag22-srgb8-q55-proof-v1.json",
             "evidence/point-support-reference-surplus-q55-bps-proof-v1.json",
             PRIVATE_PROGRAM_CONSUMER_PATH,
+            PRIVATE_PROGRAM_ABI_PATH,
             PRIVATE_PROGRAM_WASM_PATH,
             PRIVATE_PROGRAM_METADATA_PATH,
             "pkg/labcolors.js",
@@ -395,11 +397,11 @@ jobs:
           }
 
           if (
-            EXPECTED_PACKAGE_FILES.length !== 28 ||
-            new Set(EXPECTED_PACKAGE_FILES).size !== 28 ||
+            EXPECTED_PACKAGE_FILES.length !== 29 ||
+            new Set(EXPECTED_PACKAGE_FILES).size !== 29 ||
             EXPECTED_PACKAGE_FILES.some((path) => path.includes("*")) ||
-            EXPECTED_TAR_INVENTORY.length !== 30 ||
-            new Set(EXPECTED_TAR_INVENTORY).size !== 30
+            EXPECTED_TAR_INVENTORY.length !== 31 ||
+            new Set(EXPECTED_TAR_INVENTORY).size !== 31
           ) {
             fail("worker package inventory allowlist is not canonical");
           }
@@ -1371,6 +1373,18 @@ jobs:
             JSON.stringify(packedPackage.files) !== JSON.stringify(EXPECTED_PACKAGE_FILES)
           ) {
             fail("packed package files declaration differs from the admitted inventory");
+          }
+          const packedPrivateAbi = packedMember(
+            tarball,
+            tarMembers,
+            PRIVATE_PROGRAM_ABI_PATH,
+            "packed private Program ABI",
+          );
+          const taggedPrivateAbi = readFileSync(
+            join(workspace, "packages/colors", PRIVATE_PROGRAM_ABI_PATH),
+          );
+          if (!packedPrivateAbi.equals(taggedPrivateAbi)) {
+            fail("packed private Program ABI differs from the exact tag source");
           }
           if (JSON.stringify(packedPackage.exports) !== JSON.stringify(EXPECTED_PACKAGE_EXPORTS)) {
             fail("packed package exports differ from the admitted public surface");
