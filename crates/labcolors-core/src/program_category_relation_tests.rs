@@ -398,7 +398,6 @@ fn category_distinction_and_exact_relations_have_distinct_content_identities() {
     // Три directional-закона над одной topology обязаны давать три разных
     // адреса содержимого: identity различает закон, а не только рёбра.
     let identity_for = |kind: u8| {
-        let category = category_family(b"v5d/distinct-laws", &[[0x20, 0x20, 0x20]]);
         let mut draft = fixed_pair_draft(Srgb8::new([0x20; 3]), Srgb8::new([0x21; 3]));
         match kind {
             0 => {
@@ -408,6 +407,7 @@ fn category_distinction_and_exact_relations_have_distinct_content_identities() {
                 draft.push_exact_intrinsic_distinction_hard(CATEGORY_CONSTRAINT, pair_relation());
             }
             _ => {
+                let category = category_family(b"v5d/distinct-laws", &[[0x20, 0x20, 0x20]]);
                 draft.push_family(CATEGORY_FAMILY, category.semantic);
                 draft.push_intrinsic_family_category_relation_hard(
                     CATEGORY_CONSTRAINT,
@@ -667,20 +667,33 @@ fn category_relation_without_declared_family_is_a_typed_compile_error() {
 fn category_family_declaration_is_used_not_unused() {
     // Категориальное отношение обязано учитывать family как использованный:
     // иначе валидный Program отвергался бы UnusedFamily.
-    let category = category_family(b"v5d/usage", &[[1, 1, 1]]);
-    let mut draft = fixed_pair_draft(Srgb8::new([1; 3]), Srgb8::new([1; 3]));
-    draft.push_family(CATEGORY_FAMILY, category.semantic);
-    draft.push_intrinsic_family_category_relation_hard(
-        CATEGORY_CONSTRAINT,
-        pair_relation(),
-        CATEGORY_FAMILY,
-    );
-    draft.push_exact_visible_unary_report_only(
-        VISIBLE_CONSTRAINT,
-        CANDIDATE_OCCURRENCE,
-        Srgb8::new([1; 3]),
-    );
-    assert!(draft.compile().is_ok());
+    let build = |with_category_relation: bool| {
+        let category = category_family(b"v5d/usage", &[[1, 1, 1]]);
+        let mut draft = fixed_pair_draft(Srgb8::new([1; 3]), Srgb8::new([1; 3]));
+        draft.push_family(CATEGORY_FAMILY, category.semantic);
+        if with_category_relation {
+            draft.push_intrinsic_family_category_relation_hard(
+                CATEGORY_CONSTRAINT,
+                pair_relation(),
+                CATEGORY_FAMILY,
+            );
+        }
+        draft.push_exact_visible_unary_report_only(
+            VISIBLE_CONSTRAINT,
+            CANDIDATE_OCCURRENCE,
+            Srgb8::new([1; 3]),
+        );
+        draft.compile()
+    };
+    assert!(build(true).is_ok());
+    // Анти-вакуум: без категориального отношения та же декларация family
+    // остаётся неиспользованной и отвергается — учёт действительно исполняется.
+    assert!(matches!(
+        build(false),
+        Err(program::CompileErrorV1::UnusedFamily {
+            family: CATEGORY_FAMILY,
+        }),
+    ));
 }
 
 #[test]

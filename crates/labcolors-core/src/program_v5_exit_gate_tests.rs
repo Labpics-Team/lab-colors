@@ -357,12 +357,24 @@ fn v5_exit_gate_fails_when_any_axis_is_omitted() {
         .compile()
         .unwrap()
         .content_identity();
-    for axis in [
-        GateAxisV1::WithoutCategoryRelation,
-        GateAxisV1::WithoutDistinctionRelation,
-        GateAxisV1::WithoutExactRelation,
-        GateAxisV1::WithoutCleanSet,
-        GateAxisV1::WithoutMembership,
+    for (axis, lost_constraint, lost_proof) in [
+        (
+            GateAxisV1::WithoutCategoryRelation,
+            CATEGORY_CONSTRAINT,
+            Some(program::RelationMemberProofV1::FamilyCategoryPass),
+        ),
+        (
+            GateAxisV1::WithoutDistinctionRelation,
+            DISTINCTION_CONSTRAINT,
+            Some(program::RelationMemberProofV1::ExactSrgb8DistinctionPass),
+        ),
+        (
+            GateAxisV1::WithoutExactRelation,
+            EXACT_RELATION_CONSTRAINT,
+            Some(program::RelationMemberProofV1::ExactSrgb8Pass),
+        ),
+        (GateAxisV1::WithoutCleanSet, CLEAN_CONSTRAINT, None),
+        (GateAxisV1::WithoutMembership, MEMBERSHIP_CONSTRAINT, None),
     ] {
         let identity = gate_draft(&gate_family(None), axis)
             .compile()
@@ -372,6 +384,19 @@ fn v5_exit_gate_fails_when_any_axis_is_omitted() {
             identity, complete_identity,
             "omitting {axis:?} must change the executable content identity",
         );
+        // Исполняемое доказательство потери: без оси сертификат теряет её
+        // клетку и её положительный proof — гейт не может пройти «случайно».
+        let run = run_gate(gate_family(None), axis);
+        assert!(
+            !run.constraints.contains(&lost_constraint),
+            "omitting {axis:?} must drop the {lost_constraint:?} cell",
+        );
+        if let Some(proof) = lost_proof {
+            assert!(
+                !run.proofs.contains(&proof),
+                "omitting {axis:?} must drop the {proof:?} certificate",
+            );
+        }
     }
     // Пропуск release-оси — не деградация, а типизированный отказ компиляции:
     // конечная цель без материализованного порядка непредставима.
