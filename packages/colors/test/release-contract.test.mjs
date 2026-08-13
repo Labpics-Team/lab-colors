@@ -3582,6 +3582,61 @@ test("WASM runtime budget is one canonical self-contained exact contract", async
     ),
     "the live wasm-pack toolchain must equal the budget declaration",
   );
+  assert.match(
+    wasmJob,
+    /WASM_BINDGEN_CLI_SHA256: "064948d58e2d6c0a745216477a639ba696216d6309aaa902939d1b865b1d869d"/u,
+    "the canonical wasm-bindgen release archive must be byte-bound",
+  );
+  const expectedBindgenInstall = [
+    "set -euo pipefail",
+    `version=${budget.toolchain.wasmBindgen}`,
+    'archive="$RUNNER_TEMP/wasm-bindgen-$version.tar.gz"',
+    'install_root="$WASM_PACK_CACHE/.unpacked-wasm-bindgen-cli-$version"',
+    'materialized_root="$WASM_PACK_CACHE/.materialized-wasm-bindgen-cargo-install-$version"',
+    'final_root="$WASM_PACK_CACHE/wasm-bindgen-cargo-install-$version"',
+    'rm -rf "$install_root" "$materialized_root" "$final_root"',
+    "curl --fail-with-body --silent --show-error --location \\",
+    "  --retry 3 --retry-all-errors \\",
+    '  "https://github.com/wasm-bindgen/wasm-bindgen/releases/download/$version/' +
+      'wasm-bindgen-$version-x86_64-unknown-linux-musl.tar.gz" \\',
+    '  -o "$archive"',
+    "printf '%s  %s\\n' \"$WASM_BINDGEN_CLI_SHA256\" \"$archive\" \\",
+    "  | sha256sum --check --strict",
+    'mkdir -p "$install_root" "$materialized_root"',
+    'tar --extract --gzip --strip-components=1 --file="$archive" --directory="$install_root"',
+    'mv -- "$install_root/wasm-bindgen" "$materialized_root/wasm-bindgen"',
+    'mv -- "$install_root/wasm-bindgen-test-runner" "$materialized_root/wasm-bindgen-test-runner"',
+    'mv -- "$materialized_root" "$final_root"',
+    'echo "$final_root" >> "$GITHUB_PATH"',
+    'rm -rf "$install_root" "$archive"',
+  ].join("\n");
+  const assertBindgenScript = (script) =>
+    assert.equal(
+      script,
+      expectedBindgenInstall,
+      "wasm-pack must find byte-bound binaries directly in its completed non-dot cache root",
+    );
+  const bindgenInstall = workflowRunScript(ci, "name: install byte-bound wasm-bindgen CLI");
+  assertBindgenScript(bindgenInstall);
+  for (const broken of [
+    expectedBindgenInstall.replace(" | sha256sum --check --strict", ""),
+    expectedBindgenInstall.replace(
+      'final_root="$WASM_PACK_CACHE/wasm-bindgen-cargo-install-$version"',
+      'final_root="$WASM_PACK_CACHE/.wasm-bindgen-cargo-install-$version"',
+    ),
+    expectedBindgenInstall.replace(
+      '"$materialized_root/wasm-bindgen-test-runner"',
+      '"$materialized_root/bin/wasm-bindgen-test-runner"',
+    ),
+  ]) {
+    assert.notEqual(broken, expectedBindgenInstall, "wasm-bindgen cache mutant must bite");
+    assert.throws(() => assertBindgenScript(broken));
+  }
+  assert.ok(
+    ci.indexOf("name: install byte-bound wasm-bindgen CLI") <
+      ci.indexOf("name: repeat runtime WASM build in one toolchain-pinned CI job"),
+    "the byte-bound wasm-bindgen CLI must exist before wasm-pack builds the runtime",
+  );
   assert.ok(
     wasmJob.includes(`targets: ${budget.toolchain.target}`),
     "the live WASM target must equal the budget declaration",
