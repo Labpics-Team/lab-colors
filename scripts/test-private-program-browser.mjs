@@ -31,6 +31,7 @@ import { fileURLToPath } from "node:url";
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
 const REPO_ROOT = resolve(dirname(SCRIPT_PATH), "..");
 const FIXTURE_ROOT = resolve(REPO_ROOT, "fixtures/private-program-browser");
+const FIXTURE_ROOT_ENV = "LAB_COLORS_PRIVATE_PROGRAM_FIXTURE_ROOT";
 const LOOPBACK_HOST = "127.0.0.1";
 const DRIVER_READY_POLL_MS = 50;
 const PROCESS_STOP_TIMEOUT_MS = 1_000;
@@ -43,6 +44,7 @@ const EXPECTED_CHECKS = Object.freeze([
   "exact-certified-receipt",
   "explicit-observation-update",
   "changed-observation-invalidates-certified-result",
+  "independent-worker-client-parity",
   "dispose",
   "post-run-dispose-idempotence",
 ]);
@@ -51,10 +53,16 @@ export const PRIVATE_PROGRAM_BROWSER_PASS_RECEIPT = PASS_RECEIPT;
 const EXTERNAL_FIXTURE_FILES = Object.freeze({
   "/": Object.freeze({ path: "index.html", type: "text/html; charset=utf-8" }),
   "/proof.mjs": Object.freeze({ path: "proof.mjs", type: "text/javascript; charset=utf-8" }),
+  "/vectors.mjs": Object.freeze({ path: "vectors.mjs", type: "text/javascript; charset=utf-8" }),
+  "/worker-client.mjs": Object.freeze({ path: "worker-client.mjs", type: "text/javascript; charset=utf-8" }),
 });
 const INSTALLED_PACKAGE_FILES = Object.freeze({
   "/installed/private-program/consumer.js": Object.freeze({
     path: "private-program/consumer.js",
+    type: "text/javascript; charset=utf-8",
+  }),
+  "/installed/private-program/abi-v2.js": Object.freeze({
+    path: "private-program/abi-v2.js",
     type: "text/javascript; charset=utf-8",
   }),
   "/installed/private-program/labcolors_private_program.wasm": Object.freeze({
@@ -469,12 +477,22 @@ async function closeServer(server, timeoutMilliseconds = PROCESS_STOP_TIMEOUT_MS
   }
 }
 
-async function materializeFixture(externalRoot) {
+async function admittedFixtureRoot() {
+  const configured = process.env[FIXTURE_ROOT_ENV]?.trim();
+  if (!configured) return FIXTURE_ROOT;
+  if (!isAbsolute(configured)) fail(`${FIXTURE_ROOT_ENV} must name an absolute directory`);
+  const physical = await realpath(configured);
+  if (!(await stat(physical)).isDirectory()) fail(`${FIXTURE_ROOT_ENV} is not a directory`);
+  return physical;
+}
+
+async function materializeFixture(externalRoot, sourceRoot) {
   const fixtureRoot = resolve(externalRoot, "fixture");
   await mkdir(fixtureRoot, { recursive: true });
   await Promise.all(
     Object.values(EXTERNAL_FIXTURE_FILES).map(async ({ path }) => {
-      const bytes = await readFile(resolve(FIXTURE_ROOT, path));
+      const source = await assertNoLinkPath(sourceRoot, path, "file", `fixture source ${path}`);
+      const bytes = await readFile(source);
       await writeFile(resolve(fixtureRoot, path), bytes);
     }),
   );
@@ -526,7 +544,7 @@ function proofServer(allowedFiles) {
     };
     if (pathname === "/") {
       headers["content-security-policy"] =
-        "default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; connect-src 'self'; " +
+        "default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self'; connect-src 'self'; " +
         "style-src 'unsafe-inline'; img-src 'none'; font-src 'none'; object-src 'none'; " +
         "base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
     }
@@ -556,7 +574,7 @@ async function main() {
       resolve(externalRoot, "package.json"),
       `${JSON.stringify({ private: true, type: "module" }, null, 2)}\n`,
     );
-    const externalFixtureRoot = await materializeFixture(externalRoot);
+    const externalFixtureRoot = await materializeFixture(externalRoot, await admittedFixtureRoot());
     installExactTarball(verifiedTarball, externalRoot, timeoutMilliseconds);
     const installedPackageRoot = resolve(externalRoot, "node_modules/@labpics/colors");
     const physicalInstalledPackageRoot = await inspectInstalledPackage(
