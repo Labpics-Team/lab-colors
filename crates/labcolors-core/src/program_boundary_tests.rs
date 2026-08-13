@@ -591,6 +591,284 @@ fn finite_paint_candidates_are_not_a_cartesian_source_opacity_domain() {
     assert_eq!(conflict.considered_state_count(), 2);
 }
 
+/// Robust alpha at the closed staged boundary: one revision with two unique
+/// correlated backdrops rejects the translucent candidate that is exact only
+/// over black, while the identical authored order legitimately selects that
+/// same candidate when the hostile backdrop is not observed.
+#[test]
+fn staged_alpha_certification_requires_every_unique_backdrop_scenario() {
+    let target = TargetIdV1::new(2);
+    let translucent_white = TargetCandidateIdV1::new(3);
+    let opaque_mid = TargetCandidateIdV1::new(4);
+    let input = SurfaceInputPortIdV1::new(5);
+    let paint = PaintIdV1::new(6);
+    let surface = SurfaceIdV1::new(7);
+    let occurrence = OccurrenceIdV1::new(8);
+    let constraint = ConstraintIdV1::new(9);
+    let output = OutputSlotIdV1::new(10);
+    let context = AppearanceContextV1::try_new(64.0, 0.2, SurroundV1::Average).unwrap();
+
+    let build = || {
+        let mut draft = DraftV1::new();
+        draft.push_finite_target(
+            target,
+            finite_domain(vec![
+                TargetCandidateV1::new(
+                    translucent_white,
+                    PaintValueV1::try_new(Srgb8::new([0xFF; 3]), 0.5).unwrap(),
+                ),
+                TargetCandidateV1::new(opaque_mid, PaintValueV1::opaque(Srgb8::new([0x80; 3]))),
+            ]),
+        );
+        draft
+            .set_joint_selection(vec![
+                JointStateV1::new(vec![JointChoiceV1::new(target, translucent_white)]),
+                JointStateV1::new(vec![JointChoiceV1::new(target, opaque_mid)]),
+            ])
+            .unwrap();
+        draft.push_surface_input_port(input);
+        draft.push_solid_paint(paint, target);
+        draft.push_input_surface(surface, input);
+        draft.push_source_over_occurrence(occurrence, paint, surface, context);
+        draft.push_exact_visible_unary_hard(constraint, occurrence, Srgb8::new([0x80; 3]));
+        draft.push_output(output, paint);
+        draft.compile().unwrap()
+    };
+
+    let owner = build();
+    let mut session = owner.instantiate(31).unwrap();
+    let black = [Srgb8::new([0x00; 3])];
+    let white = [Srgb8::new([0xFF; 3])];
+    let correlated = [ScenarioV1::new(1, &black), ScenarioV1::new(2, &white)];
+    let projection = owner
+        .commit(
+            &mut session,
+            UpdateV1::Observed {
+                revision: 1,
+                scenarios: &correlated,
+            },
+        )
+        .unwrap();
+    let Some(CertificateV1::Verified(certificate)) = projection.certificates().next() else {
+        panic!("the opaque candidate must certify over the complete backdrop set");
+    };
+    assert_eq!(certificate.selected_state_index(), Some(1));
+    let cells = certificate.cells().collect::<Vec<_>>();
+    assert_eq!(cells.len(), 2);
+    for cell in &cells {
+        assert_eq!(cell.assessment().verdict(), VerdictV1::Pass);
+        let AssessmentV1::ExactSrgb8(evidence) = cell.assessment() else {
+            panic!("the authored exact constraint must retain Exact evidence");
+        };
+        let PhysicalPointV1::EncodedSrgb8SourceOver(physical) = evidence.binding().physical();
+        assert_eq!(physical.opacity().to_bits(), 1.0_f64.to_bits());
+        assert_eq!(physical.visible(), Srgb8::new([0x80; 3]));
+    }
+    let selected = certificate.outputs().next().unwrap();
+    assert_eq!(selected.source(), Srgb8::new([0x80; 3]));
+    assert_eq!(selected.opacity().to_bits(), 1.0_f64.to_bits());
+
+    // The same authored program over black alone selects the translucent
+    // candidate, attributing the rejection above to the correlated scenario.
+    let single_owner = build();
+    let mut single_session = single_owner.instantiate(32).unwrap();
+    let single = [ScenarioV1::new(1, &black)];
+    let projection = single_owner
+        .commit(
+            &mut single_session,
+            UpdateV1::Observed {
+                revision: 1,
+                scenarios: &single,
+            },
+        )
+        .unwrap();
+    let Some(CertificateV1::Verified(certificate)) = projection.certificates().next() else {
+        panic!("the translucent candidate must certify over the black backdrop alone");
+    };
+    assert_eq!(certificate.selected_state_index(), Some(0));
+    let selected = certificate.outputs().next().unwrap();
+    assert_eq!(selected.source(), Srgb8::new([0xFF; 3]));
+    assert_eq!(selected.opacity().to_bits(), 0.5_f64.to_bits());
+}
+
+/// Encoded output-domain boundary `#010000` at the staged seam: `0.5/255` is
+/// below the continuous strict floor `1/255`, yet its final encoded value
+/// rounds exactly to the target byte, while the immediate binary64
+/// predecessor still encodes to `#000000`. The certificate must carry the
+/// exact admitted alpha bits and the exact encoded visible.
+#[test]
+fn staged_boundary_certifies_half_code_alpha_on_the_final_encoded_value() {
+    let half_code = 0.5_f64 / 255.0;
+    let below_half_code = f64::from_bits(half_code.to_bits() - 1);
+    assert!(half_code < 1.0_f64 / 255.0);
+
+    let target = TargetIdV1::new(2);
+    let below = TargetCandidateIdV1::new(3);
+    let half = TargetCandidateIdV1::new(4);
+    let input = SurfaceInputPortIdV1::new(5);
+    let paint = PaintIdV1::new(6);
+    let surface = SurfaceIdV1::new(7);
+    let occurrence = OccurrenceIdV1::new(8);
+    let constraint = ConstraintIdV1::new(9);
+    let output = OutputSlotIdV1::new(10);
+    let context = AppearanceContextV1::try_new(64.0, 0.2, SurroundV1::Average).unwrap();
+    let red = Srgb8::new([0xFF, 0x00, 0x00]);
+
+    let mut draft = DraftV1::new();
+    draft.push_finite_target(
+        target,
+        finite_domain(vec![
+            TargetCandidateV1::new(below, PaintValueV1::try_new(red, below_half_code).unwrap()),
+            TargetCandidateV1::new(half, PaintValueV1::try_new(red, half_code).unwrap()),
+        ]),
+    );
+    draft
+        .set_joint_selection(vec![
+            JointStateV1::new(vec![JointChoiceV1::new(target, below)]),
+            JointStateV1::new(vec![JointChoiceV1::new(target, half)]),
+        ])
+        .unwrap();
+    draft.push_surface_input_port(input);
+    draft.push_solid_paint(paint, target);
+    draft.push_input_surface(surface, input);
+    draft.push_source_over_occurrence(occurrence, paint, surface, context);
+    draft.push_exact_visible_unary_hard(constraint, occurrence, Srgb8::new([0x01, 0x00, 0x00]));
+    draft.push_output(output, paint);
+
+    let owner = draft.compile().unwrap();
+    let mut session = owner.instantiate(33).unwrap();
+    let black = [Srgb8::new([0x00; 3])];
+    let scenarios = [ScenarioV1::new(1, &black)];
+    let projection = owner
+        .commit(
+            &mut session,
+            UpdateV1::Observed {
+                revision: 1,
+                scenarios: &scenarios,
+            },
+        )
+        .unwrap();
+    let Some(CertificateV1::Verified(certificate)) = projection.certificates().next() else {
+        panic!("half-code alpha must reach the exact encoded boundary target");
+    };
+    assert_eq!(certificate.selected_state_index(), Some(1));
+    let AssessmentV1::ExactSrgb8(assessment) = certificate.cells().next().unwrap().assessment()
+    else {
+        panic!("the authored exact constraint must retain Exact evidence");
+    };
+    let PhysicalPointV1::EncodedSrgb8SourceOver(physical) = assessment.binding().physical();
+    assert_eq!(physical.opacity().to_bits(), half_code.to_bits());
+    assert_eq!(physical.visible(), Srgb8::new([0x01, 0x00, 0x00]));
+    let selected = certificate.outputs().next().unwrap();
+    assert_eq!(selected.source(), red);
+    assert_eq!(selected.opacity().to_bits(), half_code.to_bits());
+}
+
+/// The translucent terminal composes over its declared derived surface, not
+/// over the observation root. The inner opaque layer pins the derived surface
+/// to `0x20` for every backdrop, so the exact target `0x90` is reachable only
+/// through the derived value; substituting the root backdrop yields `0x80` or
+/// `0xFF` and must conflict on every state.
+#[test]
+fn staged_translucent_terminal_composes_over_the_derived_surface_not_the_root() {
+    let inner_source = SourceIdV1::new(1);
+    let fixed = TargetIdV1::new(2);
+    let target = TargetIdV1::new(3);
+    let selected = TargetCandidateIdV1::new(4);
+    let decoy = TargetCandidateIdV1::new(5);
+    let input = SurfaceInputPortIdV1::new(6);
+    let inner_paint = PaintIdV1::new(7);
+    let terminal_paint = PaintIdV1::new(8);
+    let input_surface = SurfaceIdV1::new(9);
+    let derived_surface = SurfaceIdV1::new(10);
+    let inner_occurrence = OccurrenceIdV1::new(11);
+    let terminal_occurrence = OccurrenceIdV1::new(12);
+    let inner_constraint = ConstraintIdV1::new(13);
+    let terminal_constraint = ConstraintIdV1::new(14);
+    let output = OutputSlotIdV1::new(15);
+    let context = AppearanceContextV1::try_new(64.0, 0.2, SurroundV1::Average).unwrap();
+
+    let mut draft = DraftV1::new();
+    draft.push_source(inner_source, Srgb8::new([0x20; 3]));
+    draft.push_fixed_target(fixed, inner_source);
+    draft.push_finite_target(
+        target,
+        finite_domain(vec![
+            TargetCandidateV1::new(
+                selected,
+                PaintValueV1::try_new(Srgb8::new([0xFF; 3]), 0.5).unwrap(),
+            ),
+            TargetCandidateV1::new(decoy, PaintValueV1::opaque(Srgb8::new([0x00; 3]))),
+        ]),
+    );
+    draft
+        .set_joint_selection(vec![
+            JointStateV1::new(vec![JointChoiceV1::new(target, selected)]),
+            JointStateV1::new(vec![JointChoiceV1::new(target, decoy)]),
+        ])
+        .unwrap();
+    draft.push_surface_input_port(input);
+    draft.push_solid_paint(inner_paint, fixed);
+    draft.push_solid_paint(terminal_paint, target);
+    draft.push_input_surface(input_surface, input);
+    draft.push_source_over_occurrence(inner_occurrence, inner_paint, input_surface, context);
+    draft.push_occurrence_surface(derived_surface, inner_occurrence);
+    draft.push_source_over_occurrence(
+        terminal_occurrence,
+        terminal_paint,
+        derived_surface,
+        context,
+    );
+    draft.push_exact_visible_unary_hard(inner_constraint, inner_occurrence, Srgb8::new([0x20; 3]));
+    // 0x20 + 0.5 * (0xFF - 0x20) = 143.5 -> 0x90 over the derived surface;
+    // the same paint over the root backdrops yields 0x80 (black) / 0xFF (white).
+    draft.push_exact_visible_unary_hard(
+        terminal_constraint,
+        terminal_occurrence,
+        Srgb8::new([0x90; 3]),
+    );
+    draft.push_output(output, terminal_paint);
+
+    let owner = draft.compile().unwrap();
+    let mut session = owner.instantiate(34).unwrap();
+    let black = [Srgb8::new([0x00; 3])];
+    let white = [Srgb8::new([0xFF; 3])];
+    let scenarios = [ScenarioV1::new(1, &black), ScenarioV1::new(2, &white)];
+    let projection = owner
+        .commit(
+            &mut session,
+            UpdateV1::Observed {
+                revision: 1,
+                scenarios: &scenarios,
+            },
+        )
+        .unwrap();
+    let Some(CertificateV1::Verified(certificate)) = projection.certificates().next() else {
+        panic!("the translucent terminal must certify only through its derived surface");
+    };
+    assert_eq!(certificate.selected_state_index(), Some(0));
+    for cell in certificate.cells() {
+        assert_eq!(cell.assessment().verdict(), VerdictV1::Pass);
+        let AssessmentV1::ExactSrgb8(evidence) = cell.assessment() else {
+            panic!("the authored exact constraints must retain Exact evidence");
+        };
+        let PhysicalPointV1::EncodedSrgb8SourceOver(physical) = evidence.binding().physical();
+        if cell.subject()
+            == (ConstraintSubjectV1::VisibleUnary {
+                occurrence: terminal_occurrence,
+                context,
+            })
+        {
+            assert_eq!(physical.backdrop(), Srgb8::new([0x20; 3]));
+            assert_eq!(physical.visible(), Srgb8::new([0x90; 3]));
+            assert_eq!(physical.opacity().to_bits(), 0.5_f64.to_bits());
+        }
+    }
+    let selected_output = certificate.outputs().next().unwrap();
+    assert_eq!(selected_output.source(), Srgb8::new([0xFF; 3]));
+    assert_eq!(selected_output.opacity().to_bits(), 0.5_f64.to_bits());
+}
+
 #[test]
 fn evidence_cell_bounds_cover_fixed_and_joint_evaluation_laws() {
     let input = SurfaceInputPortIdV1::new(50);
