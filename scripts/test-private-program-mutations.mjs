@@ -68,7 +68,7 @@ const BROWSER_ASSERTION_PREFIX =
   "private Program browser proof: browser assertion failed:";
 const BROWSER_CLEANUP_FAILURE = "private Program browser proof or cleanup failed";
 const MUTATION_RECEIPT = "LAB_COLORS_PRIVATE_PROGRAM_MUTATIONS_PASS v1";
-const EXPECTED_SEMANTIC_MUTATION_COUNT = 7;
+const EXPECTED_SEMANTIC_MUTATION_COUNT = 8;
 const EXPECTED_BINARY_DIFFERENTIAL_COUNT = 1;
 const MUTATION_TIMEOUT_ENV = "LAB_COLORS_PRIVATE_MUTATION_TIMEOUT_MS";
 const CHILD_TIMEOUT_ENV = "LAB_COLORS_PRIVATE_MUTATION_CHILD_TIMEOUT_MS";
@@ -174,6 +174,22 @@ export const PRIVATE_PROGRAM_MUTATION_CASES = Object.freeze([
     replacement: "    frozenPublication(outputBinding, css);\n",
     expectedBrowserAssertion:
       "Error: private Program browser fixture: computed background is the exact expected CSS literal; expected \"rgba(64, 64, 64, 0.5)\", got \"rgba(0, 0, 0, 0)\"",
+  }),
+  mutation({
+    id: "second-client-result-suppression",
+    proof: "semantic",
+    artifact: "fixture-javascript",
+    sourcePath: "fixtures/private-program-browser/worker-client.mjs",
+    search: lines(
+      "  return Object.freeze({",
+      "    initial: receiptFingerprint(initial),",
+      "    updated: receiptFingerprint(updated),",
+      "    changed: receiptFingerprint(changed),",
+      "  });",
+    ).slice(0, -1),
+    replacement: '  throw new Error("second client result suppressed");',
+    expectedBrowserAssertion:
+      "Error: second client result suppressed",
   }),
 ]);
 
@@ -1014,6 +1030,33 @@ async function packMutation(context, definition, wasm) {
 }
 
 async function packageAndKillMutation(context, definition, wasm) {
+  if (definition.artifact === "fixture-javascript") {
+    const fixtureRoot = resolve(context.root, "fixtures", definition.id);
+    await cp(resolve(REPO_ROOT, "fixtures/private-program-browser"), fixtureRoot, {
+      recursive: true,
+      dereference: false,
+      preserveTimestamps: true,
+    });
+    const sourcePath = resolve(fixtureRoot, basename(definition.sourcePath));
+    const source = await readFile(sourcePath, "utf8");
+    await writeFile(sourcePath, applyExactMutation(source, definition), "utf8");
+    const browserResult = await context.runner.run(
+      process.execPath,
+      [PROOF_SCRIPT, context.immutableTarball, context.expectedSha256],
+      {
+        cwd: REPO_ROOT,
+        env: {
+          ...process.env,
+          LAB_COLORS_PRIVATE_PROGRAM_FIXTURE_ROOT: fixtureRoot,
+        },
+        label: `real-browser proof for ${definition.id}`,
+        allowNonzero: true,
+      },
+    );
+    assertMutationSpecificBrowserFailure(definition, browserResult);
+    process.stdout.write(`private Program mutant killed: ${definition.id} fixture-only\n`);
+    return;
+  }
   const packed = await packMutation(context, definition, wasm);
   const browserResult = await context.runner.run(
     process.execPath,
@@ -1106,6 +1149,8 @@ async function executeMutationProof({ tarball, expectedSha256 }, policy) {
       root,
       runner,
       packageShell,
+      immutableTarball,
+      expectedSha256,
       baselineConsumer,
       baselineWasm,
     });
