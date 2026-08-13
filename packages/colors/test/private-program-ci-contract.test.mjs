@@ -19,7 +19,7 @@ const root = resolve(here, "../../..");
 const read = (...parts) => readFileSync(join(root, ...parts), "utf8");
 const normalizeNewlines = (value) => value.replaceAll("\r\n", "\n");
 
-const CALLER_WORKER_SHA = "beecd257371a7a6421079b0d8207a109969aa332";
+const CALLER_WORKER_SHA = "e6793fc369f36a2131a226d4bac10673f810c2c0";
 const CALLER_WORKER_REFERENCE =
   `    uses: Labpics-Team/lab-colors/.github/workflows/ci-worker.yml@${CALLER_WORKER_SHA}`;
 const RUNTIME_BUDGET_COMMAND = "        run: node scripts/check-wasm-size-budget.mjs";
