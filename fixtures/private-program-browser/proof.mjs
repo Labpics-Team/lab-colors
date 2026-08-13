@@ -1,18 +1,21 @@
-const OUTPUT_BINDING = "--lab-private-program-output";
+import {
+  CHANGED_UPDATE_HEX,
+  exactWireBytes,
+  EXPECTED_CONTENT_IDENTITY,
+  EXPECTED_OUTPUT,
+  EXPECTED_SINK_OUTPUT,
+  OUTPUT_BINDING,
+  receiptFingerprint,
+  REQUEST_HEX,
+  UPDATE_HEX,
+} from "./vectors.mjs";
+
 const EXPECTED_REQUEST_LENGTH = 70;
 const EXPECTED_UPDATE_LENGTH = 40;
-const EXPECTED_OUTPUT = 17;
-const EXPECTED_SINK_OUTPUT = 501;
 const EXPECTED_PAINT_SOURCE = Object.freeze([64, 64, 64]);
 const EXPECTED_PAINT_OPACITY_BITS_HEX = "3fe0000000000000";
 const EXPECTED_COMPUTED_CSS = "rgba(64, 64, 64, 0.5)";
 
-const REQUEST_HEX = "4c43465102004600404040000000000000e03f00000000000050409a9999999999c93f01606060f50100001f0000000100000000000000010100000080808000000000000000";
-const UPDATE_HEX = "4c434655020028001f00000002000000000000000101020000008080800000000000000000000000";
-const CHANGED_UPDATE_HEX =
-  "4c434655020028001f0000000300000000000000010103000000ffffff0000000000000000000000";
-const EXPECTED_CONTENT_IDENTITY =
-  "4daf4731d823ba228f4189d08c76183dd8a81e8b593ff709828b7329e075a914";
 
 const EXPECTED_CHECKS = Object.freeze([
   "installed-physical-private-program",
@@ -22,6 +25,7 @@ const EXPECTED_CHECKS = Object.freeze([
   "exact-certified-receipt",
   "explicit-observation-update",
   "changed-observation-invalidates-certified-result",
+  "independent-worker-client-parity",
   "dispose",
   "post-run-dispose-idempotence",
 ]);
@@ -49,14 +53,6 @@ function assertStableLiterals() {
     /^[0-9a-f]{64}$/u.test(EXPECTED_CONTENT_IDENTITY),
     "content identity is awaiting ABI_STABLE exact bytes",
   );
-}
-
-function exactWireBytes(hex) {
-  const bytes = new Uint8Array(hex.length / 2);
-  for (let index = 0; index < bytes.length; index += 1) {
-    bytes[index] = Number.parseInt(hex.slice(index * 2, index * 2 + 2), 16);
-  }
-  return bytes;
 }
 
 async function runProof() {
@@ -100,6 +96,9 @@ async function runProof() {
   checks.push("pre-run-dispose-idempotence");
 
   let disposeResult;
+  let initialFingerprint;
+  let updatedFingerprint;
+  let changedFingerprint;
   try {
     const receipt = await consumer.run(requestBytes);
     assert(receipt && typeof receipt === "object", "run returns a receipt object");
@@ -129,6 +128,7 @@ async function runProof() {
       "certified paint opacity bits",
     );
     equal(receipt.contentIdentity, EXPECTED_CONTENT_IDENTITY, "certified content identity");
+    initialFingerprint = receiptFingerprint(receipt);
     checks.push("exact-certified-receipt");
 
     const updateBytes = exactWireBytes(UPDATE_HEX);
@@ -138,6 +138,7 @@ async function runProof() {
     equal(updated.stream, 31, "updated state retains stream identity");
     equal(updated.revision, 2n, "updated state advances revision");
     equal(updated.contentIdentity, EXPECTED_CONTENT_IDENTITY, "update reuses compiled identity");
+    updatedFingerprint = receiptFingerprint(updated);
     checks.push("explicit-observation-update");
 
     const changedUpdateBytes = exactWireBytes(CHANGED_UPDATE_HEX);
@@ -148,6 +149,7 @@ async function runProof() {
     equal(changed.revision, 3n, "failed state advances revision");
     equal(changed.output, 0, "failed state has no certified output");
     equal(changed.contentIdentity, "0".repeat(64), "failed state has no certified identity");
+    changedFingerprint = receiptFingerprint(changed);
     probe.getBoundingClientRect();
     equal(
       getComputedStyle(probe).backgroundColor,
@@ -155,6 +157,24 @@ async function runProof() {
       "changed observation revokes the previous certified output",
     );
     checks.push("changed-observation-invalidates-certified-result");
+
+    const workerResult = await new Promise((resolve, reject) => {
+      const worker = new Worker("./worker-client.mjs", { type: "module" });
+      worker.addEventListener("message", (event) => {
+        worker.terminate();
+        if (event.data?.ok === true) resolve(event.data.value);
+        else reject(new Error(event.data?.error ?? "worker client failed without detail"));
+      }, { once: true });
+      worker.addEventListener("error", (event) => {
+        worker.terminate();
+        reject(event.error ?? new Error(event.message));
+      }, { once: true });
+      worker.postMessage("run");
+    });
+    equal(workerResult.initial, initialFingerprint, "worker initial certified outcome matches");
+    equal(workerResult.updated, updatedFingerprint, "worker updated certified outcome matches");
+    equal(workerResult.changed, changedFingerprint, "worker failed outcome matches");
+    checks.push("independent-worker-client-parity");
   } finally {
     disposeResult = await consumer.dispose();
   }
