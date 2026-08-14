@@ -10,6 +10,7 @@ const CLEAN_SET_SOURCE: &str = include_str!("clean_set.rs");
 const COMPOSITION_SOURCE: &str = include_str!("composition.rs");
 const CONSTRAINTS_SOURCE: &str = include_str!("constraints/mod.rs");
 const CONTEXTUAL_REGION_SOURCE: &str = include_str!("contextual_region.rs");
+const CORRIDOR_REPRESENTATION_SOURCE: &str = include_str!("corridor_representation.rs");
 const EXACT_CONSTRAINT_SOURCE: &str = include_str!("constraints/exact.rs");
 const FAMILY_CONSTRAINT_SOURCE: &str = include_str!("constraints/family.rs");
 const FAMILY_SOURCE: &str = include_str!("family.rs");
@@ -100,12 +101,67 @@ fn point_representation_execution_is_generic_and_the_helper_facade_is_gone() {
     }
 }
 
-const GENERIC_SOURCES: [(&str, &str); 13] = [
+/// C7d: Material-физика (60-шаговая бисекция над коробом фонов) живёт ровно в
+/// одном generic-модуле — `corridor_representation.rs` — и не остаётся
+/// исполняемой в recipe-слое. Скомпилированный Material-invocation —
+/// единственный маршрут resolver-а; `resolve_material` и raw-исполнение удалены.
+#[test]
+fn material_physics_lives_only_in_the_generic_corridor_module() {
+    let corridor = normalized_production_code(CORRIDOR_REPRESENTATION_SOURCE);
+    for required in [
+        "solve_corridor_alpha_encoded",
+        "solve_corridor_alpha_hex",
+        "committed_pole_encoded",
+        "worst_contrast_encoded",
+        "corridor_channel_over_byte_scale",
+        "band_luminance",
+        "BackdropBox",
+    ] {
+        assert!(
+            corridor.contains(&required.to_ascii_lowercase()),
+            "generic corridor physics lost `{required}`",
+        );
+    }
+    // Коридорный модуль несёт только corridor-словарь: ни одного Material-
+    // идентификатора (сканируется через CLIENT_OR_LEGACY_VOCABULARY выше), ни
+    // recipe-имён.
+    assert!(
+        !contains_forbidden_material_identifier(CORRIDOR_REPRESENTATION_SOURCE),
+        "corridor physics must stay Material-vocabulary-clean",
+    );
+
+    // Semantic больше не исполняет Material recipe-физику: raw-функция удалена,
+    // dispatch идёт через compiled invocation по ordinal.
+    let semantic = compact_production_syntax(SEMANTIC_SOURCE).to_ascii_lowercase();
+    for removed in [
+        "fnresolve_material(",
+        "compiledmaterialinvocationv1::resolve",
+    ] {
+        assert!(
+            !semantic.contains(removed),
+            "recipe-layer still owns executable Material path `{removed}`",
+        );
+    }
+    // Guard-сообщение raw-арма — внутри строкового литерала, поэтому проверяется
+    // по production-code (литералы не маскируются), а не по compact syntax.
+    let semantic_code = normalized_production_code(SEMANTIC_SOURCE);
+    assert!(
+        semantic_code.contains("material recipe bypassed its compiled invocation"),
+        "raw RoleSpec::Material arm must be a typed InternalInvariant guard",
+    );
+    assert!(
+        semantic.contains("compiledmaterialinvocationv1"),
+        "semantic must own the compiled Material invocation type",
+    );
+}
+
+const GENERIC_SOURCES: [(&str, &str); 14] = [
     ("appearance.rs", APPEARANCE_SOURCE),
     ("composition.rs", COMPOSITION_SOURCE),
     ("constraints/family.rs", FAMILY_CONSTRAINT_SOURCE),
     ("constraints/relation.rs", RELATION_CONSTRAINT_SOURCE),
     ("contextual_region.rs", CONTEXTUAL_REGION_SOURCE),
+    ("corridor_representation.rs", CORRIDOR_REPRESENTATION_SOURCE),
     ("family.rs", FAMILY_SOURCE),
     ("joint.rs", JOINT_SOURCE),
     ("lcs_occurrence.rs", LCS_OCCURRENCE_SOURCE),
