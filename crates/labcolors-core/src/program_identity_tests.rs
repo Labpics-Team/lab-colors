@@ -1665,6 +1665,25 @@ fn finite_candidate_opacity_is_part_of_v8_content_identity() {
     assert_ne!(quarter.content_identity(), half.content_identity());
 }
 
+/// Identity binds the exact binary64 alpha bits: even one ULP below the
+/// encoded half-code boundary is a different physical candidate, so no
+/// identity-level quantisation may merge candidates that the encoded output
+/// domain distinguishes.
+#[test]
+fn finite_candidate_opacity_identity_distinguishes_adjacent_binary64_alphas() {
+    let half_code = 0.5_f64 / 255.0;
+    let below_half_code = f64::from_bits(half_code.to_bits() - 1);
+
+    let boundary = finite_program_with_opacity(false, half_code)
+        .compile()
+        .unwrap();
+    let predecessor = finite_program_with_opacity(false, below_half_code)
+        .compile()
+        .unwrap();
+
+    assert_ne!(boundary.content_identity(), predecessor.content_identity());
+}
+
 #[derive(Clone, Copy)]
 enum RegularIncidence {
     OneCycle,

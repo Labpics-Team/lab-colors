@@ -4,7 +4,7 @@ use crate::Srgb8;
 use crate::appearance::{
     EncodedPointPaintValueV1, OccurrenceId, OpacityInputId, PaintId, SurfaceId, SurfaceInputPortId,
 };
-use crate::composition::AdmittedOpacityV1;
+use crate::composition::{AdmittedOpacityV1, source_over_srgb8};
 use crate::constraints::{
     ApplicableWcag22EvaluationErrorV1, CountingProgramWcag22Srgb8V1, ExactSrgb8IdentityV1,
     FinalRecheckMutantProgramEvaluatorV1, HardDecision, ProgramConstraintContentV1,
@@ -2614,6 +2614,153 @@ fn atomic_candidate_matches_fixed_opacity_topology_physics_but_not_identity() {
     assert_eq!(finite_paint.source(), fixed_paint.source());
     assert_eq!(finite_paint.opacity_bits(), fixed_paint.opacity_bits());
     assert_ne!(finite.content_identity(), fixed.content_identity());
+}
+
+/// Robust alpha law: a translucent candidate is certified only when every
+/// unique physical scenario of the same revision passes. A candidate that is
+/// exact on one backdrop and off on a correlated backdrop must lose to a
+/// candidate that is exact on the full ScenarioSet, while the same candidate
+/// legitimately wins when the failing backdrop is not observed.
+#[test]
+fn alpha_candidate_passing_one_backdrop_is_rejected_by_the_full_scenario_set() {
+    // Independent composition oracle for both physical rows.
+    assert_eq!(
+        source_over_srgb8([0xFF; 3], 0.5, [0x00; 3]).unwrap(),
+        [0x80; 3],
+    );
+    assert_eq!(
+        source_over_srgb8([0xFF; 3], 0.5, [0xFF; 3]).unwrap(),
+        [0xFF; 3],
+    );
+    assert_eq!(
+        source_over_srgb8([0x80; 3], 1.0, [0xFF; 3]).unwrap(),
+        [0x80; 3],
+    );
+
+    let compiled = point_program(
+        signal(0),
+        target(vec![
+            candidate_with_opacity(FIRST, 0xFF, 0.5),
+            candidate(SECOND, 0x80),
+        ]),
+        vec![ConstraintInvocation::visible_unary_hard(
+            ConstraintId::new(1),
+            OCCURRENCE,
+            Srgb8::new([0x80; 3]),
+        )],
+        vec![],
+        ExactSrgb8IdentityV1,
+    )
+    .with_joint_selection(DeclaredJointSelectionV1::new(vec![
+        state(FIRST),
+        state(SECOND),
+    ]))
+    .compile()
+    .unwrap();
+
+    let mut correlated = compiled.instantiate(STREAM).unwrap();
+    let SessionState::Ready { current } =
+        correlated.commit(update_cases(1, &[0x00, 0xFF])).unwrap()
+    else {
+        panic!("the opaque candidate must certify over the complete backdrop set");
+    };
+    assert_eq!(current.selected_state_index(), Some(1));
+    assert_eq!(current.outputs()[0].source_signal(), signal(0x80));
+    assert_eq!(
+        current.outputs()[0].paint().opacity_bits(),
+        1.0_f64.to_bits(),
+    );
+    assert_eq!(current.report().cells().len(), 2);
+    assert!(
+        current
+            .report()
+            .cells()
+            .iter()
+            .all(|cell| cell.candidate_state_index() == 1 && !cell.result().is_violation())
+    );
+
+    // The very same authored order selects the translucent candidate when the
+    // hostile backdrop is absent, so the rejection above is attributable to
+    // the correlated scenario and not to the candidate itself.
+    let mut single = compiled.instantiate(STREAM).unwrap();
+    let SessionState::Ready { current } = single.commit(update(1, 0x00)).unwrap() else {
+        panic!("the translucent candidate must certify over the black backdrop alone");
+    };
+    assert_eq!(current.selected_state_index(), Some(0));
+    assert_eq!(
+        current.outputs()[0].paint().opacity_bits(),
+        0.5_f64.to_bits(),
+    );
+}
+
+/// Encoded output-domain boundary `#010000` over black: the continuous strict
+/// floor `1/255` is not the minimum encoded alpha, because final byte rounding
+/// admits `0.5/255` while its immediate binary64 predecessor still encodes to
+/// `#000000`. Certification therefore must decide on the final encoded value,
+/// never on a continuous-alpha admission gate.
+#[test]
+fn encoded_half_code_alpha_certifies_the_below_continuous_floor_target() {
+    let half_code = 0.5_f64 / 255.0;
+    let below_half_code = f64::from_bits(half_code.to_bits() - 1);
+    assert!(half_code < 1.0 / 255.0);
+    // Independent composition oracle across the rounding seam.
+    assert_eq!(
+        source_over_srgb8([0xFF, 0x00, 0x00], half_code, [0x00; 3]).unwrap(),
+        [0x01, 0x00, 0x00],
+    );
+    assert_eq!(
+        source_over_srgb8([0xFF, 0x00, 0x00], below_half_code, [0x00; 3]).unwrap(),
+        [0x00; 3],
+    );
+
+    let red_candidate = |id, opacity| {
+        TargetCandidateV1::new(
+            id,
+            EncodedPointPaintValueV1::from_admitted(
+                Srgb8::new([0xFF, 0x00, 0x00]),
+                AdmittedOpacityV1::new(opacity).unwrap(),
+            ),
+        )
+    };
+    let compiled = point_program(
+        signal(0),
+        target(vec![
+            red_candidate(FIRST, below_half_code),
+            red_candidate(SECOND, half_code),
+        ]),
+        vec![ConstraintInvocation::visible_unary_hard(
+            ConstraintId::new(1),
+            OCCURRENCE,
+            Srgb8::new([0x01, 0x00, 0x00]),
+        )],
+        vec![],
+        ExactSrgb8IdentityV1,
+    )
+    .with_joint_selection(DeclaredJointSelectionV1::new(vec![
+        state(FIRST),
+        state(SECOND),
+    ]))
+    .compile()
+    .unwrap();
+    let mut session = compiled.instantiate(STREAM).unwrap();
+
+    let SessionState::Ready { current } = session.commit(update(1, 0x00)).unwrap() else {
+        panic!("half-code alpha must reach the exact encoded boundary target");
+    };
+    assert_eq!(current.selected_state_index(), Some(1));
+    let output = &current.outputs()[0];
+    assert_eq!(
+        output.source_signal(),
+        ColorSignal::from_srgb8(Srgb8::new([0xFF, 0x00, 0x00])),
+    );
+    assert_eq!(output.paint().opacity_bits(), half_code.to_bits());
+    assert!(
+        current
+            .report()
+            .cells()
+            .iter()
+            .all(|cell| cell.candidate_state_index() == 1 && !cell.result().is_violation())
+    );
 }
 
 #[test]

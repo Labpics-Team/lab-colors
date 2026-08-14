@@ -7,6 +7,7 @@ mod source_scanner;
 const APPEARANCE_SOURCE: &str = include_str!("appearance.rs");
 const ALPHA_SOURCE: &str = include_str!("alpha.rs");
 const CLEAN_SET_SOURCE: &str = include_str!("clean_set.rs");
+const COMPOSITION_SOURCE: &str = include_str!("composition.rs");
 const CONSTRAINTS_SOURCE: &str = include_str!("constraints/mod.rs");
 const CONTEXTUAL_REGION_SOURCE: &str = include_str!("contextual_region.rs");
 const EXACT_CONSTRAINT_SOURCE: &str = include_str!("constraints/exact.rs");
@@ -99,12 +100,14 @@ fn point_representation_execution_is_generic_and_the_helper_facade_is_gone() {
     }
 }
 
-const GENERIC_SOURCES: [(&str, &str); 11] = [
+const GENERIC_SOURCES: [(&str, &str); 13] = [
     ("appearance.rs", APPEARANCE_SOURCE),
+    ("composition.rs", COMPOSITION_SOURCE),
     ("constraints/family.rs", FAMILY_CONSTRAINT_SOURCE),
     ("constraints/relation.rs", RELATION_CONSTRAINT_SOURCE),
     ("contextual_region.rs", CONTEXTUAL_REGION_SOURCE),
     ("family.rs", FAMILY_SOURCE),
+    ("joint.rs", JOINT_SOURCE),
     ("lcs_occurrence.rs", LCS_OCCURRENCE_SOURCE),
     ("program/attachment.rs", PROGRAM_ATTACHMENT_SOURCE),
     ("program_identity.rs", PROGRAM_IDENTITY_SOURCE),
@@ -121,7 +124,7 @@ const CLEAN_SET_PROGRAM_SOURCES: &[(&str, &str)] = &[
     ("program_identity.rs", PROGRAM_IDENTITY_SOURCE),
 ];
 
-const CLIENT_OR_LEGACY_VOCABULARY: [&str; 13] = [
+const CLIENT_OR_LEGACY_VOCABULARY: [&str; 14] = [
     "Lab UI",
     "ThemeConfig",
     "RoleRecipe",
@@ -135,6 +138,7 @@ const CLIENT_OR_LEGACY_VOCABULARY: [&str; 13] = [
     "resolveTheme",
     "Primary",
     "Danger",
+    "Floor",
 ];
 
 fn source_scope<'a>(source: &'a str, start: &str, end: &str) -> &'a str {
