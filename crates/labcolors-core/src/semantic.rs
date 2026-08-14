@@ -2254,44 +2254,13 @@ fn resolve_spec_in(
                 "alpha-analog recipe bypassed its compiled invocation".into(),
             ));
         }
-        RoleSpec::Material { hue, tone, floor } => {
-            // Материал (whitepaper, «Точечные композиции»): тон-база — опаковая
-            // поверхность на целевом |ΔJ'| тира, тинт — тот же тон с выведенной
-            // альфой. `None` берёт policy таблицы; явный source классифицируется
-            // по точным sRGB8-байтам до вывода chroma-плана.
-            let tone_chroma = match hue {
-                None => chroma,
-                Some(hue_tint) => {
-                    match crate::spaces::oklab::hue_of_srgb8(hue_tint.srgb8_for_vc(vc)) {
-                        crate::spaces::oklab::OklabHue::Achromatic => RoleChroma::Neutral,
-                        crate::spaces::oklab::OklabHue::Chromatic { degrees: hue_deg } => {
-                            // Оттенок источника подставляется в несущий оттенок
-                            // подтона таблицы; его colorfulness-policy остаётся
-                            // общей для всех клиентских ID.
-                            match chroma {
-                                RoleChroma::Curve {
-                                    target_mp,
-                                    hue_stiffness,
-                                    ..
-                                } => RoleChroma::Curve {
-                                    canonical_hue_deg: hue_deg,
-                                    target_mp,
-                                    hue_stiffness,
-                                },
-                                RoleChroma::Tinted { ratio, .. } => {
-                                    RoleChroma::Tinted { hue_deg, ratio }
-                                }
-                                RoleChroma::Neutral => {
-                                    return Err(SolveFailure::InvalidInput(
-                                        RoleSpec::INCOMPATIBLE_CHROMA_REASON.to_owned(),
-                                    ));
-                                }
-                            }
-                        }
-                    }
-                }
-            };
-            return resolve_material(bg, tone.for_vc(vc), floor, ctx.polarity, tone_chroma, vc);
+        RoleSpec::Material { .. } => {
+            // Named runtime обязан перехватить этот ordinal скомпилированной
+            // invocation до recipe-dispatch. Исполнение raw variant здесь
+            // создало бы второй источник физики (см. C7d).
+            return Err(SolveFailure::InternalInvariant(
+                "material recipe bypassed its compiled invocation".into(),
+            ));
         }
     };
 
@@ -2705,64 +2674,6 @@ fn finish_rgba_from_certificate(
     }))
 }
 
-/// Резолв двухслойного материала (whitepaper, «Точечные композиции»): тон-база
-/// `02` на целевом |ΔJ'| + тинт `01` (тот же тон) с ВЫВЕДЕННОЙ альфой.
-///
-/// Тон строится тем же dj-anchor-солвером, что декоративные |ΔJ'|-роли
-/// ([`resolve_dj`]), поэтому различимость поверхности от фона наследуется его
-/// физикой. Альфа тинта выбирается [`crate::material::solve_material_alpha_hex`]
-/// как проходящий верхний кандидат, при котором композит тона над худшим фоном
-/// коридора `[чёрный, белый]` держит пол.
-fn resolve_material(
-    bg: &BgInput,
-    tone_dj: f64,
-    floor: Floor,
-    polarity: Polarity,
-    chroma: RoleChroma,
-    vc: &ViewingConditions,
-) -> PendingResolution {
-    use crate::spaces::srgb::hex_from_srgb_encoded;
-    // Пол читаемости обязателен: у материала без пола нет цели для вывода α.
-    let floor_ratio = match floor.min_ratio() {
-        Some(r) => r,
-        None => {
-            return Err(SolveFailure::InvalidInput(
-                "material-роль требует пол читаемости (aa-text/aa-ui), получен zero-floor"
-                    .to_string(),
-            ));
-        }
-    };
-    // Тон-база 02: опаковая поверхность на целевом |ΔJ'|.
-    let dj = resolve_dj(bg, tone_dj, polarity, chroma, vc)?;
-    let tone_hex = dj.solved.hex().to_string();
-    // α: повторно проверенный проходящий верхний кандидат над коридором
-    // [чёрный, белый].
-    let m = match crate::material::solve_material_alpha_hex(&tone_hex, floor_ratio) {
-        Ok(m) => m,
-        Err(e) => {
-            return Err(SolveFailure::InternalInvariant(format!(
-                "generated Material solve request was rejected: {e}"
-            )));
-        }
-    };
-    // Различимость солид-канона (= тона) от фона резолва на 8-битной сетке (тот же
-    // замер, что у полупрозрачных ролей; off-grid фон честно квантуется).
-    let bg_hex = hex_from_srgb_encoded(quantise_encoded(bg.encoded_display()));
-    let distinct = tone_hex != bg_hex;
-    Ok(Resolved::Material(MaterialResolved {
-        tone_hex,
-        alpha: m.alpha(),
-        worst_contrast: m.worst_contrast(),
-        alpha_guarantee: m.guarantee(),
-        alpha_status: m.status(),
-        floor: floor_ratio,
-        pole: m.pole(),
-        achieved_dj: dj.achieved_dj,
-        tone_compressed: dj.degraded,
-        distinct,
-    }))
-}
-
 /// Solve `contract` against `bg` under `chroma`, building the undertone the
 /// policy prescribes.
 ///
@@ -2952,6 +2863,7 @@ pub struct NamedRoleTable {
     chroma: RoleChroma,
     output_bindings: OutputBindingSet,
     point_representation_invocations: Box<[CompiledPointRepresentationInvocationV1]>,
+    material_invocations: Box<[CompiledMaterialInvocationV1]>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -2959,6 +2871,19 @@ struct CompiledPointRepresentationInvocationV1 {
     declaration_ordinal: usize,
     target: LadderTint,
     opacity_domain: crate::composition::OpacityDomainV1,
+}
+
+/// Скомпилированная invocation Material-роли: hue/tone/floor, проверенные при
+/// создании таблицы. Resolver исполняет Material ТОЛЬКО через этот скомпилированный
+/// путь — raw `RoleSpec::Material`-арм является typed guard (`InternalInvariant`),
+/// как у AlphaAnalog (#518). Физика corridor-alpha живёт в общем модуле
+/// [`crate::corridor_representation`], не в recipe-коде.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct CompiledMaterialInvocationV1 {
+    declaration_ordinal: usize,
+    hue: Option<LadderTint>,
+    tone: DjMagnitude,
+    floor: Floor,
 }
 
 #[cfg(test)]
@@ -2984,6 +2909,91 @@ impl CompiledPointRepresentationInvocationV1 {
     }
 }
 
+impl CompiledMaterialInvocationV1 {
+    /// Резолв скомпилированной Material-роли — ЕДИНСТВЕННЫЙ исполняемый путь
+    /// (как у AlphaAnalog). Raw `RoleSpec::Material`-арм возвращает
+    /// [`SolveFailure::InternalInvariant`], поэтому второй источник физики
+    /// отсутствует. Тон строится тем же dj-anchor-солвером ([`resolve_dj`]),
+    /// альфа — corridor-физикой [`crate::corridor_representation`] над полным
+    /// коридором `[чёрный, белый]`.
+    fn resolve(
+        self,
+        bg: &BgInput,
+        vc: &ViewingConditions,
+        chroma: RoleChroma,
+        polarity: Polarity,
+    ) -> PendingResolution {
+        use crate::spaces::srgb::hex_from_srgb_encoded;
+        // Пол читаемости обязателен: у материала без пола нет цели для вывода α.
+        // Гарантируется `validate_domain` при компиляции (floor != None); здесь —
+        // типизированная повторная проверка без паники.
+        let floor_ratio = match self.floor.min_ratio() {
+            Some(ratio) => ratio,
+            None => {
+                return Err(SolveFailure::InternalInvariant(
+                    "compiled Material invocation lost its readability floor".into(),
+                ));
+            }
+        };
+        // Тот же вывод tone_chroma из hue + policy таблицы, что был в raw-арме.
+        let tone_chroma = match self.hue {
+            None => chroma,
+            Some(hue_tint) => match crate::spaces::oklab::hue_of_srgb8(hue_tint.srgb8_for_vc(vc)) {
+                crate::spaces::oklab::OklabHue::Achromatic => RoleChroma::Neutral,
+                crate::spaces::oklab::OklabHue::Chromatic { degrees: hue_deg } => match chroma {
+                    RoleChroma::Curve {
+                        target_mp,
+                        hue_stiffness,
+                        ..
+                    } => RoleChroma::Curve {
+                        canonical_hue_deg: hue_deg,
+                        target_mp,
+                        hue_stiffness,
+                    },
+                    RoleChroma::Tinted { ratio, .. } => RoleChroma::Tinted { hue_deg, ratio },
+                    RoleChroma::Neutral => {
+                        return Err(SolveFailure::InvalidInput(
+                            RoleSpec::INCOMPATIBLE_CHROMA_REASON.to_owned(),
+                        ));
+                    }
+                },
+            },
+        };
+        // Тон-база 02: опаковая поверхность на целевом |ΔJ'|.
+        let dj = resolve_dj(bg, self.tone.for_vc(vc), polarity, tone_chroma, vc)?;
+        let tone_hex = dj.solved.hex().to_string();
+        // α: corridor-физика над полным коридором [чёрный, белый].
+        let corridor = match crate::corridor_representation::solve_corridor_alpha_hex(
+            &tone_hex,
+            floor_ratio,
+        ) {
+            Ok(result) => result,
+            Err(error) => {
+                return Err(SolveFailure::InternalInvariant(format!(
+                    "generated Material solve request was rejected: {error}"
+                )));
+            }
+        };
+        // Различимость солид-канона (= тона) от фона резолва на 8-битной сетке.
+        let bg_hex = hex_from_srgb_encoded(quantise_encoded(bg.encoded_display()));
+        let distinct = tone_hex != bg_hex;
+        Ok(Resolved::Material(MaterialResolved {
+            tone_hex,
+            alpha: corridor.alpha,
+            worst_contrast: corridor.worst_contrast,
+            alpha_guarantee: crate::material::MaterialAlphaGuaranteeV1::from_corridor(
+                corridor.guarantee,
+            ),
+            alpha_status: crate::material::MaterialAlphaStatusV1::from_corridor(corridor.status),
+            floor: floor_ratio,
+            pole: corridor.pole,
+            achieved_dj: dj.achieved_dj,
+            tone_compressed: dj.degraded,
+            distinct,
+        }))
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct AlphaAnalogCompileErrorV1 {
     declaration_ordinal: usize,
@@ -3000,6 +3010,19 @@ impl AlphaAnalogCompileErrorV1 {
     }
 }
 
+/// Структурная ошибка компиляции Material-invocation: роли без читаемостного
+/// пола нельзя превратить в скомпилированный путь (нет цели для вывода α).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct MaterialCompileErrorV1 {
+    declaration_ordinal: usize,
+}
+
+impl MaterialCompileErrorV1 {
+    pub(crate) const fn declaration_ordinal(self) -> usize {
+        self.declaration_ordinal
+    }
+}
+
 /// Structural failure while materialising a validated named table.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum NamedRoleTableCompileError {
@@ -3007,6 +3030,8 @@ pub(crate) enum NamedRoleTableCompileError {
     OutputBindings(OutputBindingCompileError),
     /// A compiled alpha-analog invocation is outside its numeric domain.
     AlphaAnalog(AlphaAnalogCompileErrorV1),
+    /// A compiled Material invocation lost its readability floor.
+    Material(MaterialCompileErrorV1),
 }
 
 impl core::fmt::Debug for NamedRoleTable {
@@ -3186,6 +3211,13 @@ impl NamedRoleTable {
                     entries[error.declaration_ordinal].0, error.value
                 ))
             })?;
+        let material_invocations =
+            Self::compile_material_invocations(&entries).map_err(|error| {
+                SolveFailure::InvalidInput(format!(
+                    "role {}: material requires a readability floor",
+                    entries[error.declaration_ordinal].0
+                ))
+            })?;
         let output_bindings = Self::compile_output_bindings(&entries, &aliases)
             .map_err(|error| SolveFailure::InvalidInput(error.to_string()))?;
         Ok(Self::from_compiled_parts(
@@ -3194,6 +3226,7 @@ impl NamedRoleTable {
             chroma,
             output_bindings,
             point_representation_invocations,
+            material_invocations,
         ))
     }
 
@@ -3210,12 +3243,15 @@ impl NamedRoleTable {
         let point_representation_invocations =
             Self::compile_point_representation_invocations(&entries)
                 .map_err(NamedRoleTableCompileError::AlphaAnalog)?;
+        let material_invocations = Self::compile_material_invocations(&entries)
+            .map_err(NamedRoleTableCompileError::Material)?;
         Ok(Self::from_compiled_parts(
             entries,
             aliases,
             chroma,
             output_bindings,
             point_representation_invocations,
+            material_invocations,
         ))
     }
 
@@ -3239,6 +3275,7 @@ impl NamedRoleTable {
         chroma: RoleChroma,
         output_bindings: OutputBindingSet,
         point_representation_invocations: Box<[CompiledPointRepresentationInvocationV1]>,
+        material_invocations: Box<[CompiledMaterialInvocationV1]>,
     ) -> Self {
         Self {
             entries,
@@ -3246,7 +3283,51 @@ impl NamedRoleTable {
             chroma,
             output_bindings,
             point_representation_invocations,
+            material_invocations,
         }
+    }
+
+    /// Скомпилировать каждую Material-роль в приватный compiled invocation.
+    ///
+    /// Исполнение Material идёт ТОЛЬКО через этот slice (см.
+    /// [`resolve_named_set`]); raw `RoleSpec::Material`-арм возвращает
+    /// [`SolveFailure::InternalInvariant`]. Как и у AlphaAnalog, отсутствие
+    /// invocation не даёт resolver-у права вернуться к recipe-исполнению.
+    fn compile_material_invocations(
+        entries: &[(String, RoleSpec)],
+    ) -> Result<Box<[CompiledMaterialInvocationV1]>, MaterialCompileErrorV1> {
+        let mut invocations = Vec::new();
+        for (declaration_ordinal, (_, spec)) in entries.iter().enumerate() {
+            let RoleSpec::Material { hue, tone, floor } = *spec else {
+                continue;
+            };
+            // Fail-closed: Material без читаемостного пола не имеет цели для
+            // вывода α. `validate_domain` отвергает `Floor::None` на публичной
+            // границе; эта typed-проверка — второй гейт для `from_validated_parts`,
+            // который принимает части без domain-валидации.
+            if floor.min_ratio().is_none() {
+                return Err(MaterialCompileErrorV1 {
+                    declaration_ordinal,
+                });
+            }
+            invocations.push(CompiledMaterialInvocationV1 {
+                declaration_ordinal,
+                hue,
+                tone,
+                floor,
+            });
+        }
+        debug_assert!(
+            invocations
+                .windows(2)
+                .all(|pair| pair[0].declaration_ordinal < pair[1].declaration_ordinal)
+        );
+        debug_assert!(
+            invocations
+                .iter()
+                .all(|invocation| invocation.declaration_ordinal < entries.len())
+        );
+        Ok(invocations.into_boxed_slice())
     }
 
     fn compile_point_representation_invocations(
@@ -3372,29 +3453,47 @@ pub fn resolve_named_set(
         .iter()
         .copied()
         .peekable();
+    let mut material_invocations = table.material_invocations.iter().copied().peekable();
     for (declaration_ordinal, (name, spec)) in table.entries.iter().enumerate() {
-        let pending = match point_invocations.peek().copied() {
+        // Material intercept происходит ДО recipe-dispatch: скомпилированная
+        // invocation исполняется напрямую, raw `RoleSpec::Material`-арм для
+        // этого ordinal недостижим (как у AlphaAnalog). Дрейф порядка в любую
+        // сторону — целостный InternalInvariant, без fallback.
+        let pending = match material_invocations.peek().copied() {
             Some(invocation) if invocation.declaration_ordinal < declaration_ordinal => {
                 return Err(ResolveSetError {
                     state: ResolveSetErrorState::Internal(SolveFailure::InternalInvariant(
-                        "compiled point-representation invocation order drifted behind declarations"
-                            .into(),
+                        "compiled material invocation order drifted behind declarations".into(),
                     )),
                 });
             }
             Some(invocation) if invocation.declaration_ordinal == declaration_ordinal => {
-                point_invocations.next();
-                invocation.resolve(bg, vc)
+                material_invocations.next();
+                invocation.resolve(bg, vc, table.chroma, ctx.polarity)
             }
-            _ => resolve_spec_in(bg, spec, table.chroma, vc, &ctx),
+            _ => match point_invocations.peek().copied() {
+                Some(invocation) if invocation.declaration_ordinal < declaration_ordinal => {
+                    return Err(ResolveSetError {
+                        state: ResolveSetErrorState::Internal(SolveFailure::InternalInvariant(
+                            "compiled point-representation invocation order drifted behind declarations"
+                                .into(),
+                        )),
+                    });
+                }
+                Some(invocation) if invocation.declaration_ordinal == declaration_ordinal => {
+                    point_invocations.next();
+                    invocation.resolve(bg, vc)
+                }
+                _ => resolve_spec_in(bg, spec, table.chroma, vc, &ctx),
+            },
         };
         let resolved = admit_resolution(pending)?;
         set.push((name.clone(), resolved));
     }
-    if point_invocations.next().is_some() {
+    if point_invocations.next().is_some() || material_invocations.next().is_some() {
         return Err(ResolveSetError {
             state: ResolveSetErrorState::Internal(SolveFailure::InternalInvariant(
-                "compiled point-representation invocation points outside declarations".into(),
+                "compiled invocation points outside declarations".into(),
             )),
         });
     }
@@ -4153,6 +4252,135 @@ mod tests {
         )
         .expect("compiled ordinal dispatch must not reopen the authored recipe");
         assert_eq!(set[0].1.translucent().unwrap().composite_hex(), "#787880");
+    }
+
+    #[test]
+    fn named_material_uses_only_its_compiled_invocation_and_guards_plan_drift() {
+        let table = NamedRoleTable::new(
+            vec![
+                ("plain".into(), RoleSpec::Zero),
+                (
+                    "material".into(),
+                    RoleSpec::Material {
+                        hue: None,
+                        tone: DjMagnitude::new(14.0, 14.0),
+                        floor: Floor::AaText,
+                    },
+                ),
+            ],
+            Vec::new(),
+            RoleChroma::Neutral,
+        )
+        .unwrap();
+        assert_eq!(table.material_invocations.len(), 1);
+        assert_eq!(table.material_invocations[0].declaration_ordinal, 1);
+
+        let set = resolve_named_set(
+            &BgInput::solid("#FFFFFF").unwrap(),
+            &table,
+            &ViewingConditions::srgb(),
+        )
+        .expect("compiled invocation must intercept the raw recipe arm");
+        assert!(
+            matches!(&set[1].1, Resolved::Material(_)),
+            "compiled Material invocation must resolve to a Material outcome"
+        );
+
+        let mut missing = table.clone();
+        missing.material_invocations = Box::default();
+        assert_eq!(
+            missing, table,
+            "derived execution state is outside public equality"
+        );
+        assert_eq!(format!("{missing:?}"), format!("{table:?}"));
+        let error = resolve_named_set(
+            &BgInput::solid("#FFFFFF").unwrap(),
+            &missing,
+            &ViewingConditions::srgb(),
+        )
+        .expect_err("missing compiled invocation must not fall back to recipe execution");
+        assert_eq!(error.kind(), ResolveSetErrorKind::Internal);
+        assert!(matches!(error.reason(), SolveFailure::InternalInvariant(_)));
+    }
+
+    #[test]
+    fn named_material_dispatch_does_not_read_recipe_kind_after_lowering() {
+        let mut table = NamedRoleTable::new(
+            vec![(
+                "opaque-client-id".into(),
+                RoleSpec::Material {
+                    hue: None,
+                    tone: DjMagnitude::new(14.0, 14.0),
+                    floor: Floor::AaText,
+                },
+            )],
+            Vec::new(),
+            RoleChroma::Neutral,
+        )
+        .unwrap();
+        table.entries[0].1 = RoleSpec::Zero;
+
+        let set = resolve_named_set(
+            &BgInput::solid("#FFFFFF").unwrap(),
+            &table,
+            &ViewingConditions::srgb(),
+        )
+        .expect("compiled ordinal dispatch must not reopen the authored recipe");
+        assert!(
+            matches!(&set[0].1, Resolved::Material(_)),
+            "dispatch must keep executing the compiled Material invocation"
+        );
+    }
+
+    #[test]
+    fn material_compile_boundary_rejects_zero_floor_even_from_validated_parts() {
+        let entries = vec![(
+            "material-without-floor".into(),
+            RoleSpec::Material {
+                hue: None,
+                tone: DjMagnitude::new(14.0, 14.0),
+                floor: Floor::None,
+            },
+        )];
+        let error = NamedRoleTable::from_validated_parts(entries, Vec::new(), RoleChroma::Neutral)
+            .expect_err("zero-floor Material must fail before a table exists");
+        let NamedRoleTableCompileError::Material(error) = error else {
+            panic!("valid names must reach the material floor gate");
+        };
+        assert_eq!(error.declaration_ordinal(), 0);
+    }
+
+    #[test]
+    fn material_invocations_are_sparse_compiled_once_and_reused() {
+        let table = NamedRoleTable::new(
+            vec![
+                (
+                    "first".into(),
+                    RoleSpec::Material {
+                        hue: None,
+                        tone: DjMagnitude::new(12.0, 12.0),
+                        floor: Floor::AaText,
+                    },
+                ),
+                ("unrelated".into(), RoleSpec::Zero),
+                (
+                    "second".into(),
+                    RoleSpec::Material {
+                        hue: None,
+                        tone: DjMagnitude::new(18.0, 18.0),
+                        floor: Floor::AaUi,
+                    },
+                ),
+            ],
+            Vec::new(),
+            RoleChroma::Neutral,
+        )
+        .unwrap();
+        assert_eq!(table.material_invocations.len(), 2);
+        assert_eq!(table.material_invocations[0].declaration_ordinal, 0);
+        assert_eq!(table.material_invocations[1].declaration_ordinal, 2);
+        assert_eq!(table.material_invocations[0].floor, Floor::AaText);
+        assert_eq!(table.material_invocations[1].floor, Floor::AaUi);
     }
 
     #[test]

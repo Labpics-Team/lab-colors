@@ -29,6 +29,7 @@ pub mod alpha;
 pub(crate) mod appearance;
 pub mod config;
 pub(crate) mod constraints;
+pub(crate) mod corridor_representation;
 pub mod glow;
 pub mod hash;
 pub mod ladder;

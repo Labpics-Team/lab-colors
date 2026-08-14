@@ -2857,3 +2857,262 @@ fn material_unknown_family_rejected() {
         "ссылка на несуществующее семейство обязана быть отвергнута"
     );
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// C7d characterization corpus: каждый публичный construction path материала
+// закреплён БИТ-в-бит на текущей физике ДО lowering. Он обязан пройти без
+// изменений после переноса исполнения в общий Program-путь: пропущенный
+// construction path, смена компоситора/порядка, один backdrop вместо коридора
+// или деградация без свидетельства ломают эти пины.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Один закреплённый вектор корпуса: контекст, вход и точные битовые выходы.
+struct MaterialCorpusVector {
+    label: &'static str,
+    source: fn() -> LadderSource,
+    tone_light: f64,
+    tone_dark: f64,
+    floor: Floor,
+    vc: fn() -> ViewingConditions,
+    bg_hex: &'static str,
+    tone_hex: &'static str,
+    alpha_bits: u64,
+    worst_bits: u64,
+    achieved_dj_bits: u64,
+    pole_white: bool,
+}
+
+/// Полный корпус: все источники (Brand / Family / все пять NeutralPick) во всех
+/// четырёх темах паспорта плюс серый фон. Смешанные tone_light≠tone_dark и оба
+/// пола (AaText/AaUi) входят в выборку.
+fn material_characterization_corpus() -> Vec<MaterialCorpusVector> {
+    fn srgb() -> ViewingConditions {
+        ViewingConditions::srgb()
+    }
+    fn dim() -> ViewingConditions {
+        ViewingConditions::dim_surround()
+    }
+    fn srgb_ic() -> ViewingConditions {
+        ViewingConditions::srgb_high_contrast()
+    }
+    fn dim_ic() -> ViewingConditions {
+        ViewingConditions::dim_surround_high_contrast()
+    }
+    fn mid() -> LadderSource {
+        LadderSource::Neutral(NeutralPick::Mid)
+    }
+    fn light() -> LadderSource {
+        LadderSource::Neutral(NeutralPick::Light)
+    }
+    fn dark() -> LadderSource {
+        LadderSource::Neutral(NeutralPick::Dark)
+    }
+    fn edge() -> LadderSource {
+        LadderSource::Neutral(NeutralPick::Edge)
+    }
+    fn inverted() -> LadderSource {
+        LadderSource::Neutral(NeutralPick::Inverted)
+    }
+    fn brand() -> LadderSource {
+        LadderSource::Brand
+    }
+    fn purple() -> LadderSource {
+        LadderSource::Family("purple".to_string())
+    }
+    #[rustfmt::skip]
+    let corpus = vec![
+        // ── srgb (светлая), #FFFFFF ─────────────────────────────────────────
+        MaterialCorpusVector { label: "neutral-mid/srgb", source: mid, tone_light: 12.0, tone_dark: 14.0, floor: Floor::AaText, vc: srgb, bg_hex: "#FFFFFF", tone_hex: "#D6D6E0", alpha_bits: 0x3fe14d5bdf014d24, worst_bits: 0x4012000000000002, achieved_dj_bits: 0x4028316ec16bfd18, pole_white: false },
+        MaterialCorpusVector { label: "neutral-light/srgb", source: light, tone_light: 9.0, tone_dark: 9.0, floor: Floor::AaUi, vc: srgb, bg_hex: "#FFFFFF", tone_hex: "#E1E1E1", alpha_bits: 0x3fd953f339f0f17d, worst_bits: 0x4008000000000001, achieved_dj_bits: 0x4021d4eb3ff155d0, pole_white: false },
+        MaterialCorpusVector { label: "neutral-dark/srgb", source: dark, tone_light: 11.0, tone_dark: 11.0, floor: Floor::AaUi, vc: srgb, bg_hex: "#FFFFFF", tone_hex: "#D9D9E3", alpha_bits: 0x3fda2c1ec0af1ef2, worst_bits: 0x4008000000000001, achieved_dj_bits: 0x40264854a4095b68, pole_white: false },
+        MaterialCorpusVector { label: "neutral-edge/srgb", source: edge, tone_light: 10.0, tone_dark: 10.0, floor: Floor::AaText, vc: srgb, bg_hex: "#FFFFFF", tone_hex: "#DDDDE6", alpha_bits: 0x3fe0c302b2c13d45, worst_bits: 0x4012000000000002, achieved_dj_bits: 0x4023d1b0d337e540, pole_white: false },
+        MaterialCorpusVector { label: "neutral-inverted/srgb", source: inverted, tone_light: 13.0, tone_dark: 13.0, floor: Floor::AaText, vc: srgb, bg_hex: "#FFFFFF", tone_hex: "#D3D3DD", alpha_bits: 0x3fe18c1bebb958a9, worst_bits: 0x4012000000000002, achieved_dj_bits: 0x402a1ed191c26ab8, pole_white: false },
+        MaterialCorpusVector { label: "brand/srgb", source: brand, tone_light: 22.0, tone_dark: 18.0, floor: Floor::AaText, vc: srgb, bg_hex: "#FFFFFF", tone_hex: "#B5BAC1", alpha_bits: 0x3fe4086250007280, worst_bits: 0x4012000000000002, achieved_dj_bits: 0x4035f37bf4fa5200, pole_white: false },
+        MaterialCorpusVector { label: "family-purple/srgb", source: purple, tone_light: 16.0, tone_dark: 16.0, floor: Floor::AaUi, vc: srgb, bg_hex: "#FFFFFF", tone_hex: "#CEC8D2", alpha_bits: 0x3fdc3523dcf40701, worst_bits: 0x4008000000000001, achieved_dj_bits: 0x403027ede6ed1abc, pole_white: false },
+        // ── dim (тёмная), #101012 ───────────────────────────────────────────
+        MaterialCorpusVector { label: "neutral-mid/dim", source: mid, tone_light: 12.0, tone_dark: 14.0, floor: Floor::AaText, vc: dim, bg_hex: "#101012", tone_hex: "#2D2D33", alpha_bits: 0x3fe4d1e7fe28d58c, worst_bits: 0x4012000000000000, achieved_dj_bits: 0x402c088852a3aeb1, pole_white: true },
+        MaterialCorpusVector { label: "neutral-light/dim", source: light, tone_light: 9.0, tone_dark: 9.0, floor: Floor::AaUi, vc: dim, bg_hex: "#101012", tone_hex: "#232323", alpha_bits: 0x3fdedf445a6c8d35, worst_bits: 0x4008000000000000, achieved_dj_bits: 0x4022148cd5a1d431, pole_white: true },
+        MaterialCorpusVector { label: "neutral-dark/dim", source: dark, tone_light: 11.0, tone_dark: 11.0, floor: Floor::AaUi, vc: dim, bg_hex: "#101012", tone_hex: "#27272D", alpha_bits: 0x3fdf81fdd297a6c1, worst_bits: 0x4008000000000000, achieved_dj_bits: 0x402668319c957807, pole_white: true },
+        MaterialCorpusVector { label: "neutral-edge/dim", source: edge, tone_light: 10.0, tone_dark: 10.0, floor: Floor::AaText, vc: dim, bg_hex: "#101012", tone_hex: "#21262B", alpha_bits: 0x3fe40b0c57df5fa6, worst_bits: 0x4012000000000000, achieved_dj_bits: 0x40243de1f7538c49, pole_white: true },
+        MaterialCorpusVector { label: "neutral-inverted/dim", source: inverted, tone_light: 13.0, tone_dark: 13.0, floor: Floor::AaText, vc: dim, bg_hex: "#101012", tone_hex: "#2B2B31", alpha_bits: 0x3fe49f84665de8cc, worst_bits: 0x4012000000000000, achieved_dj_bits: 0x402a2a534bb93399, pole_white: true },
+        MaterialCorpusVector { label: "brand/dim", source: brand, tone_light: 22.0, tone_dark: 18.0, floor: Floor::AaText, vc: dim, bg_hex: "#101012", tone_hex: "#33363C", alpha_bits: 0x3fe5afa483913ece, worst_bits: 0x4012000000000000, achieved_dj_bits: 0x4031d5399ccd0c3e, pole_white: true },
+        MaterialCorpusVector { label: "family-purple/dim", source: purple, tone_light: 16.0, tone_dark: 16.0, floor: Floor::AaUi, vc: dim, bg_hex: "#101012", tone_hex: "#343037", alpha_bits: 0x3fe083b9c39a26ac, worst_bits: 0x4008000000000001, achieved_dj_bits: 0x402fde43cb629035, pole_white: true },
+        // ── srgb-ic ─────────────────────────────────────────────────────────
+        MaterialCorpusVector { label: "neutral-mid/srgb-ic", source: mid, tone_light: 12.0, tone_dark: 14.0, floor: Floor::AaText, vc: srgb_ic, bg_hex: "#FFFFFF", tone_hex: "#D6D6E0", alpha_bits: 0x3fe14d5bdf014d24, worst_bits: 0x4012000000000002, achieved_dj_bits: 0x4028316ec16bfd18, pole_white: false },
+        MaterialCorpusVector { label: "brand/srgb-ic", source: brand, tone_light: 22.0, tone_dark: 18.0, floor: Floor::AaText, vc: srgb_ic, bg_hex: "#FFFFFF", tone_hex: "#B5BAC2", alpha_bits: 0x3fe40647c3868b55, worst_bits: 0x4012000000000000, achieved_dj_bits: 0x4035eb3157a096e8, pole_white: false },
+        MaterialCorpusVector { label: "family-purple/srgb-ic", source: purple, tone_light: 16.0, tone_dark: 16.0, floor: Floor::AaUi, vc: srgb_ic, bg_hex: "#FFFFFF", tone_hex: "#CEC8D2", alpha_bits: 0x3fdc3523dcf40701, worst_bits: 0x4008000000000001, achieved_dj_bits: 0x403027ede6ed1abc, pole_white: false },
+        // ── dim-ic ──────────────────────────────────────────────────────────
+        MaterialCorpusVector { label: "neutral-mid/dim-ic", source: mid, tone_light: 12.0, tone_dark: 14.0, floor: Floor::AaText, vc: dim_ic, bg_hex: "#101012", tone_hex: "#2D2D33", alpha_bits: 0x3fe4d1e7fe28d58c, worst_bits: 0x4012000000000000, achieved_dj_bits: 0x402c088852a3aeb1, pole_white: true },
+        MaterialCorpusVector { label: "brand/dim-ic", source: brand, tone_light: 22.0, tone_dark: 18.0, floor: Floor::AaText, vc: dim_ic, bg_hex: "#101012", tone_hex: "#33373C", alpha_bits: 0x3fe5c37fb50b1c72, worst_bits: 0x4012000000000000, achieved_dj_bits: 0x403222d5f10b5a2e, pole_white: true },
+        MaterialCorpusVector { label: "family-purple/dim-ic", source: purple, tone_light: 16.0, tone_dark: 16.0, floor: Floor::AaUi, vc: dim_ic, bg_hex: "#101012", tone_hex: "#343037", alpha_bits: 0x3fe083b9c39a26ac, worst_bits: 0x4008000000000001, achieved_dj_bits: 0x402fde43cb629035, pole_white: true },
+        // ── серый фон: полюс переворачивается на светлой теме ────────────────
+        MaterialCorpusVector { label: "neutral-mid/gray-bg", source: mid, tone_light: 12.0, tone_dark: 12.0, floor: Floor::AaText, vc: srgb, bg_hex: "#7F7F7F", tone_hex: "#61616A", alpha_bits: 0x3febbb7a9c1a37aa, worst_bits: 0x4012000000000000, achieved_dj_bits: 0x40283945e563ccc8, pole_white: true },
+    ];
+    corpus
+}
+
+/// Бит-в-бит корпус всех construction paths конфига: tone hex, α, worst,
+/// |ΔJ'|, полюс, статус и согласованный bracket. Любое изменение
+/// компоситора, порядка операций, коридора или выбора кандидата ломает пины.
+#[test]
+fn material_lowering_characterization_corpus_is_bit_stable() {
+    for vector in material_characterization_corpus() {
+        let recipe = RoleRecipe::Material {
+            source: (vector.source)(),
+            tone_light: vector.tone_light,
+            tone_dark: vector.tone_dark,
+            floor: vector.floor,
+        };
+        let resolved = resolve_role_recipe(
+            "fill-brand-secondary",
+            recipe,
+            vector.bg_hex,
+            &(vector.vc)(),
+        );
+        let Resolved::Material(m) = &resolved else {
+            panic!("{}: ожидался Material, получено {resolved:?}", vector.label);
+        };
+        assert_eq!(
+            m.tint_hex(),
+            vector.tone_hex,
+            "{}: tone drift",
+            vector.label
+        );
+        assert_eq!(
+            m.alpha().to_bits(),
+            vector.alpha_bits,
+            "{}: alpha drift (got 0x{:016x})",
+            vector.label,
+            m.alpha().to_bits()
+        );
+        assert_eq!(
+            m.worst_contrast().to_bits(),
+            vector.worst_bits,
+            "{}: worst-contrast drift (got 0x{:016x})",
+            vector.label,
+            m.worst_contrast().to_bits()
+        );
+        assert_eq!(
+            m.achieved_dj().to_bits(),
+            vector.achieved_dj_bits,
+            "{}: achieved-dj drift (got 0x{:016x})",
+            vector.label,
+            m.achieved_dj().to_bits()
+        );
+        assert_eq!(
+            matches!(m.pole(), crate::material::Pole::White),
+            vector.pole_white,
+            "{}: pole drift",
+            vector.label
+        );
+        assert_eq!(
+            m.alpha_status(),
+            crate::material::MaterialAlphaStatusV1::Satisfied,
+            "{}: status drift",
+            vector.label
+        );
+        assert!(
+            !m.tone_compressed(),
+            "{}: unexpected compression",
+            vector.label
+        );
+        assert!(m.distinct(), "{}: tone must stay distinct", vector.label);
+        // Согласованность bracket-свидетельства: выбранная α — верхний
+        // кандидат, нижний лежит ровно на предыдущем бите поиска.
+        match m.alpha_guarantee() {
+            crate::material::MaterialAlphaGuaranteeV1::BisectionBracketCharacterizedV1 {
+                iterations,
+                lower_alpha,
+                upper_alpha,
+                ..
+            } => {
+                assert_eq!(iterations, 60, "{}: bisection depth drift", vector.label);
+                assert_eq!(
+                    upper_alpha.to_bits(),
+                    vector.alpha_bits,
+                    "{}: bracket upper != selected alpha",
+                    vector.label
+                );
+                assert!(
+                    lower_alpha < upper_alpha,
+                    "{}: bracket must stay ordered",
+                    vector.label
+                );
+            }
+            other => panic!("{}: ожидался bracket, получено {other:?}", vector.label),
+        }
+        // Пол корпуса выполнен: worst держит запрошенный floor.
+        let floor_ratio = vector.floor.min_ratio().expect("corpus floors are legal");
+        assert!(
+            m.worst_contrast() >= floor_ratio,
+            "{}: worst {} ниже пола {}",
+            vector.label,
+            m.worst_contrast(),
+            floor_ratio
+        );
+    }
+}
+
+/// Прямая граница `NamedRoleTable::new` (в обход конфига) с `hue: None`
+/// закреплена отдельно: она обязана пережить lowering тем же битовым выходом.
+#[test]
+fn material_direct_boundary_hue_none_is_bit_stable() {
+    use crate::semantic::{DjMagnitude, NamedRoleTable, RoleChroma, RoleSpec};
+    let table = NamedRoleTable::new(
+        vec![(
+            "m".to_string(),
+            RoleSpec::Material {
+                hue: None,
+                tone: DjMagnitude::new(12.0, 12.0),
+                floor: Floor::AaText,
+            },
+        )],
+        Vec::new(),
+        RoleChroma::Neutral,
+    )
+    .unwrap();
+    let set = resolve_named_set(
+        &BgInput::solid("#FFFFFF").unwrap(),
+        &table,
+        &ViewingConditions::srgb(),
+    )
+    .unwrap();
+    let Resolved::Material(m) = &set[0].1 else {
+        panic!("прямая граница обязана резолвить Material");
+    };
+    assert_eq!(m.tint_hex(), "#D7D7D7");
+    assert_eq!(m.alpha().to_bits(), 0x3fe14808ee3564a2);
+    assert_eq!(m.worst_contrast().to_bits(), 0x4012000000000000);
+    assert_eq!(m.achieved_dj().to_bits(), 0x40282274443b7010);
+}
+
+/// Типизированные конфликты корпуса: хроматический источник при neutral-policy
+/// отвергается на обеих границах (конфиг и прямая таблица) с канонической
+/// причиной, а не исполняется деградированно.
+#[test]
+fn material_chromatic_source_conflicts_are_typed_on_both_boundaries() {
+    use crate::semantic::{DjMagnitude, NamedRoleTable, RoleChroma, RoleSpec};
+    // Прямая граница: chromatic hue + Neutral policy → InvalidInput с
+    // канонической причиной.
+    let blue = crate::spaces::srgb::srgb_encoded_from_hex("#3E87FF").unwrap();
+    let error = NamedRoleTable::new(
+        vec![(
+            "m".to_string(),
+            RoleSpec::Material {
+                hue: Some(crate::ladder::LadderTint::new([blue; 4]).unwrap()),
+                tone: DjMagnitude::new(12.0, 12.0),
+                floor: Floor::AaText,
+            },
+        )],
+        Vec::new(),
+        RoleChroma::Neutral,
+    )
+    .expect_err("chromatic material под neutral-policy обязан отвергаться");
+    let crate::SolveFailure::InvalidInput(reason) = &error else {
+        panic!("ожидался typed InvalidInput, получено {error:?}");
+    };
+    assert!(
+        reason.contains(RoleSpec::INCOMPATIBLE_CHROMA_REASON),
+        "конфликт обязан нести каноническую причину: {reason:?}"
+    );
+}

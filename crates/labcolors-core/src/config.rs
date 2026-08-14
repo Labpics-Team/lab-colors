@@ -1013,6 +1013,9 @@ impl ThemeConfig {
                     value: error.value(),
                     bound: "0 < alpha ≤ 1 (запрошенная непрозрачность альфа-аналога)",
                 },
+                NamedRoleTableCompileError::Material(error) => ConfigError::MaterialFloorRequired {
+                    role: self.roles[error.declaration_ordinal()].0.clone(),
+                },
             },
         )
     }
