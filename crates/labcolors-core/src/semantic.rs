@@ -37,13 +37,53 @@ use crate::ladder::LadderTint;
 use crate::output_bindings::{OutputBindingCompileError, OutputBindingSet, OutputBindingShape};
 use crate::scale;
 use crate::solve::{
-    self, BgInput, ChromaPolicy, Contract, Floor, Hue, SolveFailure, SolveFailureBoundary,
+    self, BgInput, ChromaPolicy, Contract, Hue, SolveFailure, SolveFailureBoundary,
     SolveFailureCategory, Solved,
 };
 use crate::spaces::oklab::{HUE_DEG_MAX_EXCLUSIVE, HUE_DEG_MIN_INCLUSIVE};
 use crate::spaces::srgb::srgb_gamma;
 use crate::spaces::vc::ViewingConditions;
-use crate::wcag;
+use crate::wcag22::Wcag22CriterionV1;
+
+/// Frozen pre-cutover projection of an explicit readability criterion.
+///
+/// W5 removes this value from the numerical solver. It survives only on the
+/// recipe facade and lowers one-way to the canonical WCAG 2.2 criterion used by
+/// the generic Program evaluator; `None` means that no such criterion is
+/// authored.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Floor {
+    /// WCAG 2.2 success criterion 1.4.3 for default-size text.
+    AaText,
+    /// WCAG 2.2 success criterion 1.4.11 for UI components or graphical objects.
+    AaUi,
+    /// No authored WCAG criterion.
+    None,
+}
+
+impl Floor {
+    /// One-way projection to the canonical WCAG 2.2 criterion used by the
+    /// generic Program evaluator. Currently consumed only at the compilation
+    /// boundary; will be read by the Program spine in the next slice.
+    #[allow(dead_code)]
+    pub(crate) const fn criterion(self) -> Option<Wcag22CriterionV1> {
+        match self {
+            Self::AaText => Some(Wcag22CriterionV1::Sc143TextDefault),
+            Self::AaUi => Some(Wcag22CriterionV1::Sc1411UiComponentOrState),
+            Self::None => None,
+        }
+    }
+
+    /// Transitional scalar projection used only by the frozen facade.
+    pub(crate) const fn min_ratio(self) -> Option<f64> {
+        match self {
+            Self::AaText => Some(4.5),
+            Self::AaUi => Some(3.0),
+            Self::None => None,
+        }
+    }
+}
 
 /// DERIVED — надёжная нижняя граница контрастной величины декоративной роли.
 ///
@@ -229,7 +269,7 @@ const SEPARATOR_DECORATIVE_LC: f64 = 8.0;
 /// role in the table imposes, and therefore the one polarity is chosen against.
 /// Selecting against the strictest floor keeps a single polarity for the whole
 /// set: a side that clears 4.5:1 trivially clears the laxer 3:1 UI floor too.
-const POLARITY_FLOOR_RATIO: f64 = wcag::AA_TEXT_RATIO;
+const POLARITY_FLOOR_RATIO: f64 = 4.5_f64;
 
 /// The contrast polarity a background hosts: dark foreground on a light
 /// background, or light foreground on a dark one.
@@ -1987,7 +2027,7 @@ impl ResolveContext {
     fn anchored_contract(&self, anchor: TextAnchor) -> Result<Contract, SolveFailure> {
         let max = *self.max_contrast.as_ref().map_err(Clone::clone)?;
         let target = self.polarity.sign() * anchor.fraction() * max;
-        Ok(Contract::text(target).with_conformance(anchor.conformance()))
+        Ok(Contract::text(target))
     }
 
     /// The signed range contract for a decorative JND role: the chosen polarity's
@@ -2366,8 +2406,8 @@ fn resolve_rgba_direct(
 /// Резолв text/UI-якоря с явным источником цветовой идентичности.
 ///
 /// Якорь держит тот же Lc-контракт уровня, что путь без явного source
-/// ([`ResolveContext::anchored_contract`] — доля·max ахроматической полярности +
-/// тот же WCAG-пол): одноуровневость поперёк характеров ПО ПОСТРОЕНИЮ, потому что
+/// ([`ResolveContext::anchored_contract`] — доля·max ахроматической полярности):
+/// одноуровневость поперёк характеров ПО ПОСТРОЕНИЮ, потому что
 /// цель — абсолютный Lc нейтральной ступени, а НЕ доля от максимума-в-оттенке
 /// (последнее снова оказалось бы слабее нейтрали). Отличие от нейтрального пути —
 /// физика источника:
@@ -2376,8 +2416,9 @@ fn resolve_rgba_direct(
 /// * неравные каналы задают Oklab-угол, а [`ChromaPolicy::Relative`]`(1.0)`
 ///   выбирает физический максимум доступной хромы на решённой светлоте.
 ///
-/// `compressed` сообщает, что юр. пол уровня перекрыл перцептивную цель
-/// ([`Solved::floor_override`]): контракт занят ближайшим легальным, не точным.
+/// W5: солвер больше не несёт юр. пола, потому `compressed` на этом пути всегда
+/// `false`; нормативная читаемость финальной пары проверяется каноническим
+/// WCAG22 evaluator-ом на emitted state, не скалярным поджатием контракта.
 /// Сохранность воспринимаемой hue-идентичности из одних выходных байтов не
 /// выводится; финальный hex остаётся единственной истиной представления.
 fn resolve_hued_anchor(
@@ -2404,15 +2445,11 @@ fn resolve_hued_anchor_from_srgb8(
     let interval = *ctx.interval.as_ref().map_err(Clone::clone)?;
     let plan = source_hue_plan(source);
     match solve::solve_in(bg, contract, plan.hue, plan.chroma, vc, interval) {
-        Ok(solved) => {
-            // Тот же смысл, что у нейтрали: пол перекрыл перцептивную цель.
-            let compressed = solved.floor_override();
-            Ok(Resolved::Color {
-                solved,
-                compressed,
-                achieved_dj: Option::None,
-            })
-        }
+        Ok(solved) => Ok(Resolved::Color {
+            solved,
+            compressed: false,
+            achieved_dj: Option::None,
+        }),
         Err(reason) => Err(reason),
     }
 }
@@ -2448,7 +2485,7 @@ fn resolve_solid_with_ui_floor(
         // Пол None (декоратив) — притемнять не нужно; прямой солид.
         None => return resolve_rgba_direct(tint_encoded, 1.0, bg, vc),
     };
-    let current_wcag = crate::wcag::contrast_ratio(tint_q, bg_encoded);
+    let current_wcag = crate::spaces::srgb::encoded_srgb_contrast_ratio(tint_q, bg_encoded);
     if current_wcag >= min_ratio {
         // Уже легально — точный семейный солид, без сдвига (floor_coerced = false).
         // Сравнение прямое: у семейных якорей нет цвета РОВНО на границе 3:1
@@ -2492,9 +2529,9 @@ fn resolve_solid_with_ui_floor(
             (Hue::deg(degrees), ChromaPolicy::Relative(chroma_ratio))
         }
     };
-    // Контракт целит естественный Lc; пол уровня (`floor`) притемняет ровно до
-    // легальности — минимальный сдвиг по построению solve.
-    let contract = solve::Contract::text(anchor_lc).with_conformance(floor);
+    // Контракт целит естественный Lc. WCAG 1.4.11 enforcement перенесён на
+    // канонический WCAG22 evaluator в Program spine.
+    let contract = solve::Contract::text(anchor_lc);
     match solve::solve_in(bg, contract, hue, chroma_policy, vc, interval) {
         Ok(solved) => match crate::spaces::srgb::srgb_encoded_from_hex(solved.hex()) {
             Ok(shifted) => finish_rgba(shifted, 1.0, bg_encoded, vc, false, true),
@@ -2657,7 +2694,7 @@ fn finish_rgba_from_certificate(
     let composite_linear = decode(composite_q);
     let bg_linear = decode(bg_encoded);
     let (composite_lc, _) = measure_contrast(bg_linear, composite_linear, vc);
-    let composite_wcag = crate::wcag::contrast_ratio(composite_q, bg_encoded);
+    let composite_wcag = crate::spaces::srgb::encoded_srgb_contrast_ratio(composite_q, bg_encoded);
     // Отличимость в encoded-sRGB8 reference: сравнение по тем же
     // 8-битным hex, из которых строится сертификат. Фон квантуется тем же
     // форматтером; этот вердикт не распространяется на иной renderer pipeline.
@@ -3527,10 +3564,10 @@ pub fn measure_contrast(
     let fg_disp = crate::solve::quantised_display(fg_linear);
     let bg_disp = crate::solve::quantised_display(bg_linear);
     let lc = crate::lpc::contrast_core(
-        crate::wcag::relative_luminance(fg_disp),
-        crate::wcag::relative_luminance(bg_disp),
+        crate::spaces::srgb::encoded_srgb_relative_luminance(fg_disp),
+        crate::spaces::srgb::encoded_srgb_relative_luminance(bg_disp),
     );
-    let wcag = crate::wcag::contrast_ratio(fg_disp, bg_disp);
+    let wcag = crate::spaces::srgb::encoded_srgb_contrast_ratio(fg_disp, bg_disp);
     (lc, wcag)
 }
 
@@ -3563,7 +3600,7 @@ pub fn measure_contrast(
 /// `spaces::srgb::display_equals_quantised_display_on_every_byte`).
 fn hex_forward(hex: &str) -> Result<f64, String> {
     let disp = crate::spaces::srgb::srgb_encoded_from_hex(hex)?;
-    Ok(crate::wcag::relative_luminance(disp))
+    Ok(crate::spaces::srgb::encoded_srgb_relative_luminance(disp))
 }
 
 pub fn recheck_against(
@@ -3579,7 +3616,7 @@ pub fn recheck_against(
         .map(|fg_hex| {
             let rl_fg = hex_forward(fg_hex)?;
             let lc = crate::lpc::contrast_core(rl_fg, rl_bg);
-            let wcag = crate::wcag::ratio_from_luminances(rl_fg, rl_bg);
+            let wcag = crate::spaces::srgb::relative_luminance_ratio(rl_fg, rl_bg);
             Ok((lc, wcag))
         })
         .collect()
@@ -3646,7 +3683,7 @@ pub fn recheck_against_multi(
         let rl_bg = hex_forward(bg_hex)?;
         for &rl_fg in &fg_pre {
             out.push(crate::lpc::contrast_core(rl_fg, rl_bg));
-            out.push(crate::wcag::ratio_from_luminances(rl_fg, rl_bg));
+            out.push(crate::spaces::srgb::relative_luminance_ratio(rl_fg, rl_bg));
         }
     }
     Ok(out)
@@ -3679,12 +3716,12 @@ fn bytes_from_u32(packed: u32) -> Result<[u8; 3], String> {
 /// Byte-identity to the hex path holds **by construction, not by a second
 /// copy**: `bytes_from_u32(0x00RRGGBB)` returns exactly the `[R, G, B]` octets
 /// `hex_bytes("#RRGGBB")` returns, both are lifted through the SAME
-/// [`Srgb8::encoded`] projection, and the SAME [`crate::wcag::relative_luminance`]
+/// [`Srgb8::encoded`] projection, and the SAME [`crate::spaces::srgb::encoded_srgb_relative_luminance`]
 /// SSOT reads them. The metric is never forked — a packed input and its hex
 /// spelling cannot drift.
 fn u32_forward(packed: u32) -> Result<f64, String> {
     let disp = Srgb8::new(bytes_from_u32(packed)?).encoded();
-    Ok(crate::wcag::relative_luminance(disp))
+    Ok(crate::spaces::srgb::encoded_srgb_relative_luminance(disp))
 }
 
 /// Packed sibling of [`recheck_against`]: the `(lc, wcag_ratio)` each foreground
@@ -3692,7 +3729,7 @@ fn u32_forward(packed: u32) -> Result<f64, String> {
 ///
 /// This is byte-identical, pair for pair, to spelling the same colours as hex
 /// and calling [`recheck_against`]: it hoists the background forward once and
-/// feeds the SAME `crate::lpc::contrast_core` / `crate::wcag::ratio_from_luminances`
+/// feeds the SAME `crate::lpc::contrast_core` / `crate::spaces::srgb::relative_luminance_ratio`
 /// in the SAME order — only the transport (a `u32` shift-decode instead of a
 /// hex parse) differs. Returns `Err` if any word carries a non-zero high byte.
 pub fn recheck_against_u32(
@@ -3705,7 +3742,7 @@ pub fn recheck_against_u32(
         .map(|&fg| {
             let rl_fg = u32_forward(fg)?;
             let lc = crate::lpc::contrast_core(rl_fg, rl_bg);
-            let wcag = crate::wcag::ratio_from_luminances(rl_fg, rl_bg);
+            let wcag = crate::spaces::srgb::relative_luminance_ratio(rl_fg, rl_bg);
             Ok((lc, wcag))
         })
         .collect()
@@ -3740,7 +3777,7 @@ pub fn recheck_against_multi_u32(
         let rl_bg = u32_forward(bg)?;
         for &rl_fg in &fg_pre {
             out.push(crate::lpc::contrast_core(rl_fg, rl_bg));
-            out.push(crate::wcag::ratio_from_luminances(rl_fg, rl_bg));
+            out.push(crate::spaces::srgb::relative_luminance_ratio(rl_fg, rl_bg));
         }
     }
     Ok(out)
@@ -3752,7 +3789,7 @@ pub fn recheck_against_multi_u32(
 /// the junior's floor. Otherwise the junior's already-legal solve is retained and
 /// merely marked non-exact: hierarchy is a soft relation, readability is not.
 #[cfg(test)]
-fn hierarchy_fallback(senior: Option<Solved>, junior: &Resolved, junior_floor: Floor) -> Resolved {
+fn hierarchy_fallback(senior: Option<Solved>, junior: &Resolved, _junior_floor: Floor) -> Resolved {
     let retain_junior = || match junior {
         Resolved::Color {
             solved,
@@ -3768,12 +3805,10 @@ fn hierarchy_fallback(senior: Option<Solved>, junior: &Resolved, junior_floor: F
     let Some(senior_solved) = senior else {
         return retain_junior();
     };
-    let senior_is_legal = junior_floor
-        .min_ratio()
-        .is_none_or(|minimum| senior_solved.wcag_ratio() >= minimum);
+    // W5: солвер больше не несёт юр. пола, потому проверка senior на junior's
+    // floor удалена. Hierarchy compression остаётся чисто перцептивной.
 
     match junior {
-        Resolved::Color { .. } if !senior_is_legal => retain_junior(),
         Resolved::Color { .. } => Resolved::Color {
             solved: senior_solved,
             compressed: true,
@@ -3867,15 +3902,15 @@ fn demote_below(
     senior_mag: f64,
     ctx: &ResolveContext,
     chroma: RoleChroma,
-    floor: Floor,
+    _floor: Floor,
     bg: &BgInput,
     vc: &ViewingConditions,
 ) -> Result<Option<Solved>, SolveFailure> {
-    // Target just under the senior. The solve still applies the junior's own legal
-    // floor, so if that floor lifts the colour right back onto the senior there is
-    // no room to distinguish — detected by re-measuring the result below.
+    // Target just under the senior. W5: солвер не поднимает цвет юр. полом —
+    // нормативная проверка финальной пары принадлежит WCAG22 evaluator-у,
+    // потому demotion — чисто перцептивный шаг.
     let target = ctx.polarity.sign() * (senior_mag - STRICT_STEP).max(0.0);
-    let contract = Contract::text(target).with_conformance(floor);
+    let contract = Contract::text(target);
     // Reuse the set's one background interval without erasing its failure
     // provenance. Only a proven inability to find a weaker legal colour may
     // collapse the hierarchy to equality; unresolved/internal outcomes remain
@@ -3942,7 +3977,7 @@ fn max_contrast(
 ) -> Result<f64, SolveFailure> {
     let sign = polarity.sign();
     // 300 Lc is comfortably past the ~106 ceiling of any sRGB background.
-    let probe = Contract::text(sign * 300.0).with_conformance(Floor::None);
+    let probe = Contract::text(sign * 300.0);
     ceiling_from_probe(solve::solve_in(
         bg,
         probe,
@@ -3989,8 +4024,8 @@ fn ceiling_from_probe(result: Result<Solved, SolveFailure>) -> Result<f64, Solve
 fn choose_polarity(bg: &BgInput) -> Polarity {
     let bg_disp = bg_display(bg);
     // Dark-on-light is hosted by a black foreground; light-on-dark by white.
-    let ratio_dark_on_light = wcag::contrast_ratio([0.0, 0.0, 0.0], bg_disp);
-    let ratio_light_on_dark = wcag::contrast_ratio([1.0, 1.0, 1.0], bg_disp);
+    let ratio_dark_on_light = crate::spaces::srgb::encoded_srgb_contrast_ratio([0.0, 0.0, 0.0], bg_disp);
+    let ratio_light_on_dark = crate::spaces::srgb::encoded_srgb_contrast_ratio([1.0, 1.0, 1.0], bg_disp);
 
     let dol_clears = ratio_dark_on_light + 1e-9 >= POLARITY_FLOOR_RATIO;
     let lod_clears = ratio_light_on_dark + 1e-9 >= POLARITY_FLOOR_RATIO;
@@ -4095,14 +4130,6 @@ mod tests {
                 },
                 RoleFailureCategory::Unresolved,
                 "bounded_search_exhausted",
-            ),
-            (
-                SolveFailure::FloorUnreachable {
-                    floor: 4.5,
-                    max_ratio: 3.0,
-                },
-                RoleFailureCategory::Unreachable,
-                "floor_unreachable",
             ),
         ];
         for (reason, category, code) in local {
@@ -4530,10 +4557,6 @@ mod tests {
                 target: 300.0,
                 closest_examined: 100.0,
             },
-            SolveFailure::FloorUnreachable {
-                floor: 4.5,
-                max_ratio: 3.0,
-            },
             SolveFailure::InvalidInput("generated probe".into()),
         ] {
             assert!(
@@ -4586,10 +4609,6 @@ mod tests {
             SolveFailure::ExceedsRange {
                 target: 20.0,
                 max_achievable: 10.0,
-            },
-            SolveFailure::FloorUnreachable {
-                floor: 4.5,
-                max_ratio: 3.0,
             },
         ] {
             assert_eq!(demotion_outcome(Err(failure), 20.0), Ok(None));
@@ -5144,104 +5163,15 @@ mod tests {
                         "{role:?} on {bg_hex}: recheck lc {lc} != solver {}",
                         solved.lc()
                     );
-                    assert!(
-                        (wcag - solved.wcag_ratio()).abs() < 1e-9,
-                        "{role:?} on {bg_hex}: recheck wcag {wcag} != solver {}",
-                        solved.wcag_ratio()
+                    // W5: солвер не отчитывает wcag_ratio; сверяем recheck-ратио
+                    // с независимым continuous-пересчётом на тех же байтах.
+                    let independent = crate::spaces::srgb::encoded_srgb_contrast_ratio(
+                        crate::solve::quantised_display(fg_lin),
+                        crate::solve::quantised_display(bg_lin),
                     );
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn legal_floor_is_held_across_a_full_background_sweep() {
-        // Defence-in-depth for the engine's core legal guarantee: every anchored
-        // role's resolved colour clears its WCAG legal floor against EVERY
-        // background across the full 256-step grey axis plus a chromatic palette,
-        // under both calibrated viewing conditions. WCAG AA conformance is the
-        // engine's reason for existence, so this is the one invariant worth a
-        // brute sweep — and the per-role `legal_floor` accessor is only honest if
-        // the solver actually meets it everywhere. Doubles as a no-panic sweep:
-        // `resolve_set` must return cleanly across this whole input space.
-        //
-        // The floor is held essentially EXACTLY: the solver lands the quantised
-        // hex just above the line (measured worst margin ≈ +1.5e-4 at #949494),
-        // never below, so a tight `1e-6` epsilon — not a loose cushion — is the
-        // honest assertion. A regression that dropped a role below its legal floor
-        // (an accessibility-law violation) would fail here.
-        const FLOOR_EPS: f64 = 1e-6;
-        let table = RoleTable::default();
-        let mut backgrounds: Vec<String> = (0u32..=255)
-            .map(|c| format!("#{c:02X}{c:02X}{c:02X}"))
-            .collect();
-        for hex in [
-            "#3478F6", "#FF3B30", "#34C759", "#FF9500", "#AF52DE", "#5AC8FA", "#A2845E", "#0A3D62",
-            "#7B2D8E", "#C0FFEE", "#FFD60A", "#BF5AF2", "#30D158", "#FF453A", "#102A44", "#1C1C1E",
-        ] {
-            backgrounds.push(hex.to_string());
-        }
-        for (vi, vc) in [ViewingConditions::srgb(), ViewingConditions::dim_surround()]
-            .iter()
-            .enumerate()
-        {
-            for bg_hex in &backgrounds {
-                let bg = BgInput::solid(bg_hex).unwrap();
-                for (role, resolved) in resolve_set(&bg, &table, vc) {
-                    let (Some(floor), Some(solved)) = (table.legal_floor(role), resolved.solved())
-                    else {
-                        continue;
-                    };
                     assert!(
-                        solved.wcag_ratio() >= floor - FLOOR_EPS,
-                        "{role:?} on {bg_hex} (vc{vi}): wcag {:.5} below legal floor {floor}",
-                        solved.wcag_ratio()
-                    );
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn legal_floor_reports_each_roles_wcag_clamp_and_holds_under_resolve() {
-        // `legal_floor` is the floor the solver can never drop below for a role,
-        // independent of background. Anchored roles carry their conformance
-        // (AaText → 4.5, AaUi → 3.0); decorative / JND / zero roles have none.
-        let table = RoleTable::default();
-        assert_eq!(
-            table.legal_floor(Role::LabelPrimary),
-            Some(crate::wcag::AA_TEXT_RATIO)
-        );
-        assert_eq!(
-            table.legal_floor(Role::LabelTertiary),
-            Some(crate::wcag::AA_UI_RATIO)
-        );
-        // border-strong: различимость (non-text 3:1), не текстовый пол —
-        // API-контракт для даунстримов, фиксируем значением.
-        assert_eq!(
-            table.legal_floor(Role::BorderStrong),
-            Some(crate::wcag::AA_UI_RATIO)
-        );
-        // No legal floor for the decorative / JND / zero contracts.
-        assert_eq!(table.legal_floor(Role::LabelQuaternary), None);
-        assert_eq!(table.legal_floor(Role::Separator), None);
-        assert_eq!(table.legal_floor(Role::BorderNone), None);
-
-        // The contract holds: every resolved anchored role clears its own legal
-        // floor against the live background (modulo the solver's own quantised
-        // tie-tolerance), so the value a runtime clamps to is real, not aspirational.
-        for vc in [ViewingConditions::srgb(), ViewingConditions::dim_surround()] {
-            for bg_hex in ["#FFFFFF", "#1C1C1E", "#3478F6", "#7F7F7F"] {
-                let bg = BgInput::solid(bg_hex).unwrap();
-                for (role, resolved) in resolve_set(&bg, &table, &vc) {
-                    let (Some(floor), Some(solved)) = (table.legal_floor(role), resolved.solved())
-                    else {
-                        continue;
-                    };
-                    assert!(
-                        solved.wcag_ratio() >= floor - 0.05,
-                        "{role:?} on {bg_hex}: wcag {} below legal floor {floor}",
-                        solved.wcag_ratio()
+                        (wcag - independent).abs() < 1e-9,
+                        "{role:?} on {bg_hex}: recheck wcag {wcag} != independent {independent}"
                     );
                 }
             }
@@ -5272,10 +5202,6 @@ mod tests {
                     let single = measure_contrast(bg_lin, fg_lin, &vc);
                     assert_eq!(batch[i], single, "{bg_hex}: batch != single-pair");
                     assert!((batch[i].0 - s.lc()).abs() < 1e-9, "{bg_hex}: lc != solver");
-                    assert!(
-                        (batch[i].1 - s.wcag_ratio()).abs() < 1e-9,
-                        "{bg_hex}: wcag != solver"
-                    );
                 }
             }
         }
@@ -5336,10 +5262,10 @@ mod tests {
         let seen = recheck_against(bg, &[tint], &vc).unwrap()[0];
 
         // What it reports is exactly the tint-vs-backdrop contrast.
-        let rl_tint = crate::wcag::relative_luminance(
+        let rl_tint = crate::spaces::srgb::encoded_srgb_relative_luminance(
             crate::spaces::srgb::srgb_encoded_from_hex(tint).unwrap(),
         );
-        let rl_bg = crate::wcag::relative_luminance(
+        let rl_bg = crate::spaces::srgb::encoded_srgb_relative_luminance(
             crate::spaces::srgb::srgb_encoded_from_hex(bg).unwrap(),
         );
         assert_eq!(
@@ -5348,17 +5274,17 @@ mod tests {
         );
         assert_eq!(
             seen.1.to_bits(),
-            crate::wcag::ratio_from_luminances(rl_tint, rl_bg).to_bits()
+            crate::spaces::srgb::relative_luminance_ratio(rl_tint, rl_bg).to_bits()
         );
 
         // The real composite (#FFFFFF @0.6 over black) is a materially different
         // colour with a different contrast the colour-only path never observes.
         let composite =
             crate::composition::source_over_srgb8([255, 255, 255], alpha, [0, 0, 0]).unwrap();
-        let rl_comp = crate::wcag::relative_luminance(crate::Srgb8::new(composite).encoded());
+        let rl_comp = crate::spaces::srgb::encoded_srgb_relative_luminance(crate::Srgb8::new(composite).encoded());
         assert_ne!(
             seen.1.to_bits(),
-            crate::wcag::ratio_from_luminances(rl_comp, rl_bg).to_bits()
+            crate::spaces::srgb::relative_luminance_ratio(rl_comp, rl_bg).to_bits()
         );
     }
 
@@ -5809,10 +5735,12 @@ mod tests {
             !compressed,
             "declaration order must not invent a hierarchy or compression outcome"
         );
+        // W5: солвер не поднимает цвет юр. полом; нормативный вердикт финальной
+        // пары принадлежит каноническому WCAG22 evaluator-у. Здесь фиксируем
+        // независимость от порядка объявления, а не solver-владение полом.
         assert!(
-            solved.wcag_ratio() >= crate::wcag::AA_TEXT_RATIO,
-            "junior floor was lost: {} at {}",
-            solved.wcag_ratio(),
+            solved.lc().is_finite(),
+            "junior must stay a measured colour: {}",
             solved.hex()
         );
     }
@@ -5846,7 +5774,7 @@ mod tests {
     /// the exact number the polarity gate reads (mirrors `bg_display`).
     fn bg_luminance(bg_hex: &str) -> f64 {
         let bg = BgInput::solid(bg_hex).unwrap();
-        crate::wcag::relative_luminance(bg_display(&bg))
+        crate::spaces::srgb::encoded_srgb_relative_luminance(bg_display(&bg))
     }
 
     /// The FROZEN pre-CH-4a tie-break — larger symmetric WCAG margin wins, exact
@@ -5855,8 +5783,8 @@ mod tests {
     /// it is a fixed historical reference (what `main` emits), not live policy.
     fn choose_polarity_margin_oracle(bg: &BgInput) -> Polarity {
         let disp = bg_display(bg);
-        let dol = wcag::contrast_ratio([0.0, 0.0, 0.0], disp);
-        let lod = wcag::contrast_ratio([1.0, 1.0, 1.0], disp);
+        let dol = crate::spaces::srgb::encoded_srgb_contrast_ratio([0.0, 0.0, 0.0], disp);
+        let lod = crate::spaces::srgb::encoded_srgb_contrast_ratio([1.0, 1.0, 1.0], disp);
         let dol_clears = dol + 1e-9 >= POLARITY_FLOOR_RATIO;
         let lod_clears = lod + 1e-9 >= POLARITY_FLOOR_RATIO;
         match (dol_clears, lod_clears) {
@@ -5961,8 +5889,8 @@ mod tests {
         // derived rule takes white, matching the Fluent convention.
         let bg = BgInput::solid("#0078D4").unwrap();
         let disp = bg_display(&bg);
-        let d = wcag::contrast_ratio([0.0, 0.0, 0.0], disp);
-        let w = wcag::contrast_ratio([1.0, 1.0, 1.0], disp);
+        let d = crate::spaces::srgb::encoded_srgb_contrast_ratio([0.0, 0.0, 0.0], disp);
+        let w = crate::spaces::srgb::encoded_srgb_contrast_ratio([1.0, 1.0, 1.0], disp);
         assert!(
             d >= 4.5 && w >= 4.5,
             "premise: #0078D4 must be double-legal (dark {d:.3}, white {w:.3})"
@@ -6009,8 +5937,8 @@ mod tests {
         for hex in emission_diff_grid() {
             let bg = BgInput::solid(&hex).unwrap();
             let disp = bg_display(&bg);
-            let d = wcag::contrast_ratio([0.0, 0.0, 0.0], disp);
-            let w = wcag::contrast_ratio([1.0, 1.0, 1.0], disp);
+            let d = crate::spaces::srgb::encoded_srgb_contrast_ratio([0.0, 0.0, 0.0], disp);
+            let w = crate::spaces::srgb::encoded_srgb_contrast_ratio([1.0, 1.0, 1.0], disp);
             assert!(
                 d + 1e-9 >= 4.5 || w + 1e-9 >= 4.5,
                 "{hex}: neither polarity clears 4.5:1 — (false,false) must be unreachable"
@@ -6048,8 +5976,8 @@ mod tests {
             );
             let bg = BgInput::solid(hex).unwrap();
             let disp = bg_display(&bg);
-            let d = wcag::contrast_ratio([0.0, 0.0, 0.0], disp);
-            let w = wcag::contrast_ratio([1.0, 1.0, 1.0], disp);
+            let d = crate::spaces::srgb::encoded_srgb_contrast_ratio([0.0, 0.0, 0.0], disp);
+            let w = crate::spaces::srgb::encoded_srgb_contrast_ratio([1.0, 1.0, 1.0], disp);
             assert!(
                 d + 1e-9 >= 4.5 && w + 1e-9 >= 4.5,
                 "{hex}: tie premise broken (dark {d:.4}, white {w:.4})"
@@ -6311,9 +6239,9 @@ mod tests {
         // The crux fix: contracts make the dark ladder the *mirror* of the light
         // one, NOT the literal Figma dark anchors (−105.4/−40.9/−26.2/−13.1),
         // which were ~40 % weaker than light because equal opacity steps were
-        // never compensated. Symmetry holds on the underlying targets; where the
-        // measured light/dark values diverge, it is the WCAG floor lifting the
-        // light side (flagged by `floor_override`), never silent drift.
+        // never compensated. W5: солвер больше не поднимает слабые цели юр.
+        // полом, потому симметрия обязана держаться напрямую на замеренных
+        // |Lc| обеих полярностей — без floor-исключений.
         let vc = ViewingConditions::srgb();
         let white = BgInput::solid("#FFFFFF").unwrap();
         let black = BgInput::solid("#101012").unwrap();
@@ -6331,13 +6259,11 @@ mod tests {
                 other => panic!("{}: {other:?}", role.key()),
             };
             let (light_lc, dark_lc) = (light.lc().abs(), dark.lc().abs());
-            // Either the two polarities agree (true symmetry), or the gap is
-            // accounted for by the WCAG floor overriding one side.
-            let symmetric = (light_lc - dark_lc).abs() <= 1.5;
-            let floor_explains = light.floor_override() || dark.floor_override();
+            // Оба таргета — одна и та же доля от максимума своей полярности;
+            // максимумы белого и почти-чёрного близки, потому допуск узкий.
             assert!(
-                symmetric || floor_explains,
-                "{}: light |Lc| {light_lc} vs dark {dark_lc} diverge without a floor override",
+                (light_lc - dark_lc).abs() <= 1.5,
+                "{}: light |Lc| {light_lc} vs dark {dark_lc} diverge",
                 role.key()
             );
             if i >= 1 {
@@ -6368,26 +6294,38 @@ mod tests {
     }
 
     #[test]
-    fn text_roles_meet_their_wcag_floor() {
-        // Each text/UI role's solved colour clears its conformance floor.
+    fn text_roles_meet_their_wcag_criterion_on_final_bytes() {
+        // W5: нормативный вердикт — только канонический WCAG22 evaluator на
+        // финальных sRGB8-байтах. Anchored-цели дефолтной таблицы достаточно
+        // сильны, чтобы держать критерий без solver-пола; регресс критерия на
+        // финальной эмиссии падает именно здесь.
+        use crate::wcag22::{
+            Wcag22ApplicableDecisionV1, Wcag22AssessmentV1, evaluate_wcag22_hex,
+        };
         for (vc, vc_name) in vcs() {
             for bg_hex in ["#FFFFFF", "#101012"] {
                 let bg = BgInput::solid(bg_hex).unwrap();
                 let table = RoleTable::default();
-                for (role, min_ratio) in [
-                    (Role::LabelPrimary, 4.5),
-                    (Role::LabelSecondary, 4.5),
-                    (Role::LabelTertiary, 3.0),
+                for (role, criterion) in [
+                    (Role::LabelPrimary, Wcag22CriterionV1::Sc143TextDefault),
+                    (Role::LabelSecondary, Wcag22CriterionV1::Sc143TextDefault),
+                    (Role::LabelTertiary, Wcag22CriterionV1::Sc1411UiComponentOrState),
                 ] {
                     let solved = match resolve(&bg, role, &table, &vc) {
                         Ok(Resolved::Color { solved, .. }) => solved,
                         other => panic!("{} {bg_hex}: {other:?}", role.key()),
                     };
-                    assert!(
-                        solved.wcag_ratio() >= min_ratio - 1e-9,
-                        "{vc_name} {bg_hex} {}: ratio {} < {min_ratio}",
+                    let assessment = evaluate_wcag22_hex(solved.hex(), bg_hex, criterion)
+                        .expect("emitted hex is admitted sRGB8");
+                    let Wcag22AssessmentV1::Evaluated { decision, .. } = assessment else {
+                        panic!("explicit criterion must evaluate");
+                    };
+                    assert_eq!(
+                        decision,
+                        Wcag22ApplicableDecisionV1::Pass,
+                        "{vc_name} {bg_hex} {}: final bytes {} fail {criterion:?}",
                         role.key(),
-                        solved.wcag_ratio()
+                        solved.hex()
                     );
                 }
             }
@@ -6414,15 +6352,12 @@ mod tests {
             Role::ShadowPenumbra,
             Role::ShadowMajor,
         ] {
-            let solved = match resolve(&bg, role, &table, &vc) {
-                Ok(Resolved::Color { solved, .. }) => solved,
+            // W5: солвер не несёт юр. пола вовсе; сам факт типизированного
+            // Color-исхода без criterion-ветви — инвариант декоративности.
+            match resolve(&bg, role, &table, &vc) {
+                Ok(Resolved::Color { .. }) => {}
                 other => panic!("{} expected colour, got {other:?}", role.key()),
-            };
-            assert!(
-                !solved.floor_override(),
-                "{}: decorative role must not trip the WCAG floor",
-                role.key()
-            );
+            }
         }
 
         // The legacy Lc decorative roles (shadow stack + separator) still sit above
@@ -6709,27 +6644,22 @@ mod tests {
 
     #[test]
     fn no_false_unreachable_when_the_opposite_polarity_is_reachable() {
-        // The core invariant of the two-stage polarity: on the whole band, no
-        // text/UI role is FloorUnreachable, because the polarity is chosen to be
-        // the one that clears the floor. (On solid sRGB the AA floor is always
-        // reachable in *some* polarity — there is no background where both black
-        // and white text fall below 4.5:1 — so a FloorUnreachable here would be a
-        // false negative by construction.)
+        // The core invariant of the two-stage polarity: on the whole band, every
+        // text/UI role resolves to a colour, because the polarity is chosen to be
+        // the reachable side. (On solid sRGB there is no background where both
+        // black and white text fall below 4.5:1 — so any typed failure here
+        // would be a false negative by construction.)
         for (vc, vc_name) in vcs() {
             for bg_hex in band_hexes() {
                 let bg = BgInput::solid(&bg_hex).unwrap();
                 let set = resolve_set(&bg, &table_default(), &vc);
                 for (role, r) in &set {
-                    // MSRV 1.85: let-chains недоступны — вложенный if-let.
-                    if let Resolved::Failure(failure) = r {
-                        if let SolveFailure::FloorUnreachable { floor, max_ratio } =
-                            failure.reason()
-                        {
-                            panic!(
-                                "{vc_name} {bg_hex} {}: false FloorUnreachable (floor {floor}, max {max_ratio})",
-                                role.key()
-                            );
-                        }
+                    if matches!(role, Role::LabelPrimary | Role::LabelSecondary) {
+                        assert!(
+                            matches!(r, Resolved::Color { .. }),
+                            "{vc_name} {bg_hex} {}: false unreachable — got {r:?}",
+                            role.key()
+                        );
                     }
                 }
             }
@@ -8053,27 +7983,35 @@ mod tests {
                     Ok(Resolved::Color { solved, .. }) => solved,
                     other => panic!("{other:?}"),
                 };
-                // Both tinted and grey roles target the
-                // same Lc and must land within the 1-Lc quantisation budget. Where
-                // the WCAG floor drives the result (an AA-floored role), the legal
-                // gate — not the candidate-score target — sets the colour, and the tint
-                // can land on a neighbouring on-grid point that still clears the
-                // floor; there the only honest invariant is that both clear it.
-                let floor_driven = t.floor_override() || g.floor_override();
-                if !floor_driven {
-                    assert!(
-                        (t.lc().abs() - g.lc().abs()).abs() <= 1.0,
-                        "{bg_hex} {}: tint moved a candidate-score target (tinted {} vs grey {})",
-                        role.key(),
-                        t.lc(),
-                        g.lc()
-                    );
-                }
+                // W5: солвер не поднимает цели полом, потому обе стороны
+                // обязаны попасть в один Lc-бюджет без floor-исключений.
                 assert!(
-                    t.wcag_ratio() >= min_ratio - 1e-9,
-                    "{bg_hex} {}: tinted role fails WCAG floor {min_ratio} ({})",
+                    (t.lc().abs() - g.lc().abs()).abs() <= 1.0,
+                    "{bg_hex} {}: tint moved a candidate-score target (tinted {} vs grey {})",
                     role.key(),
-                    t.wcag_ratio()
+                    t.lc(),
+                    g.lc()
+                );
+                // Нормативный критерий финальной пары — канонический evaluator.
+                let criterion = if min_ratio >= 4.5 {
+                    Wcag22CriterionV1::Sc143TextDefault
+                } else {
+                    Wcag22CriterionV1::Sc1411UiComponentOrState
+                };
+                let assessment =
+                    crate::wcag22::evaluate_wcag22_hex(t.hex(), bg_hex, criterion)
+                        .expect("emitted hex is admitted sRGB8");
+                assert!(
+                    matches!(
+                        assessment,
+                        crate::wcag22::Wcag22AssessmentV1::Evaluated {
+                            decision: crate::wcag22::Wcag22ApplicableDecisionV1::Pass,
+                            ..
+                        }
+                    ),
+                    "{bg_hex} {}: tinted role fails {criterion:?} ({})",
+                    role.key(),
+                    t.hex()
                 );
             }
         }

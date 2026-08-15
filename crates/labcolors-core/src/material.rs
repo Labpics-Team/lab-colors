@@ -518,9 +518,9 @@ mod tests {
                                 background[channel],
                             )
                         });
-                        let measured = crate::wcag::ratio_from_luminances(
+                        let measured = crate::spaces::srgb::relative_luminance_ratio(
                             pole_lum,
-                            crate::wcag::relative_luminance(composite),
+                            crate::spaces::srgb::encoded_srgb_relative_luminance(composite),
                         );
                         measured_min = measured_min.min(measured);
                     }

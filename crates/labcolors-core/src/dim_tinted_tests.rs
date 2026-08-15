@@ -63,26 +63,40 @@ fn hue_distance(a: f64, b: f64) -> f64 {
 }
 
 #[test]
-fn dim_tinted_holds_wcag_floors_on_the_grid() {
+fn dim_tinted_holds_wcag_criteria_on_the_grid() {
     // Invariant 2: under dim surround, with the default tinted table, every
-    // text/UI role clears its conformance floor on the quantised colour.
+    // text/UI role's FINAL emitted bytes pass their canonical WCAG 2.2
+    // criterion. W5: солвер не несёт юр. пола — вердикт выносит только
+    // proof-bound evaluator на финальной паре.
+    use crate::wcag22::{
+        Wcag22ApplicableDecisionV1, Wcag22AssessmentV1, Wcag22CriterionV1, evaluate_wcag22_hex,
+    };
     let vc = ViewingConditions::dim_surround();
     let table = RoleTable::default();
     for bg_hex in GRID {
         let bg = BgInput::solid(bg_hex).unwrap();
         let set = resolve_set(&bg, &table, &vc);
-        for (role, min_ratio) in [
-            (Role::LabelPrimary, 4.5),
-            (Role::LabelSecondary, 4.5),
-            (Role::LabelTertiary, 3.0),
+        for (role, criterion) in [
+            (Role::LabelPrimary, Wcag22CriterionV1::Sc143TextDefault),
+            (Role::LabelSecondary, Wcag22CriterionV1::Sc143TextDefault),
+            (
+                Role::LabelTertiary,
+                Wcag22CriterionV1::Sc1411UiComponentOrState,
+            ),
         ] {
             let (solved, _) = role_solved(&set, role)
                 .unwrap_or_else(|| panic!("{bg_hex} {}: expected a colour", role.key()));
-            assert!(
-                solved.wcag_ratio() + 1e-9 >= min_ratio,
-                "dim {bg_hex} {}: WCAG ratio {} < {min_ratio} under the tinted table",
+            let assessment = evaluate_wcag22_hex(solved.hex(), bg_hex, criterion)
+                .expect("emitted hex is admitted sRGB8");
+            let Wcag22AssessmentV1::Evaluated { decision, .. } = assessment else {
+                panic!("explicit criterion must evaluate");
+            };
+            assert_eq!(
+                decision,
+                Wcag22ApplicableDecisionV1::Pass,
+                "dim {bg_hex} {}: final bytes {} fail {criterion:?} under the tinted table",
                 role.key(),
-                solved.wcag_ratio(),
+                solved.hex(),
             );
         }
     }

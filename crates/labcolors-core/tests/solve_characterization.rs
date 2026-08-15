@@ -14,7 +14,7 @@ use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
 use labcolors_core::{
-    BgInput, ChromaPolicy, Contract, Floor, Gamut, Hue, SolveFailure, SolveJob, Solved,
+    BgInput, ChromaPolicy, Contract, Gamut, Hue, SolveFailure, SolveJob, Solved,
     ViewingConditions, solve, solve_many,
 };
 
@@ -57,31 +57,6 @@ fn bits(value: f64) -> String {
 }
 
 #[derive(Debug, Clone, Copy)]
-enum FloorSpec {
-    Default,
-    None,
-    AaUi,
-}
-
-impl FloorSpec {
-    fn key(self) -> &'static str {
-        match self {
-            Self::Default => "default",
-            Self::None => "none",
-            Self::AaUi => "aa-ui",
-        }
-    }
-
-    fn apply(self, contract: Contract) -> Contract {
-        match self {
-            Self::Default => contract,
-            Self::None => contract.with_conformance(Floor::None),
-            Self::AaUi => contract.with_conformance(Floor::AaUi),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
 enum ContractSpec {
     Text(f64),
     Ui(f64),
@@ -109,7 +84,6 @@ impl ContractSpec {
 struct CaseSpec {
     bg: &'static str,
     contract: ContractSpec,
-    floor: FloorSpec,
     hue: f64,
     chroma: ChromaPolicy,
 }
@@ -126,7 +100,6 @@ fn matrix() -> Vec<CaseSpec> {
             cases.push(CaseSpec {
                 bg,
                 contract: ContractSpec::Text(target),
-                floor: FloorSpec::Default,
                 hue: 264.0,
                 chroma: ChromaPolicy::Neutral,
             });
@@ -138,14 +111,12 @@ fn matrix() -> Vec<CaseSpec> {
         cases.push(CaseSpec {
             bg: "#FFFFFF",
             contract: ContractSpec::Text(t),
-            floor: FloorSpec::None,
             hue: 0.0,
             chroma: ChromaPolicy::Neutral,
         });
         cases.push(CaseSpec {
             bg: "#000000",
             contract: ContractSpec::Text(-t),
-            floor: FloorSpec::None,
             hue: 0.0,
             chroma: ChromaPolicy::Neutral,
         });
@@ -157,7 +128,6 @@ fn matrix() -> Vec<CaseSpec> {
             cases.push(CaseSpec {
                 bg,
                 contract: ContractSpec::Text(target),
-                floor: FloorSpec::Default,
                 hue: 145.0,
                 chroma: ChromaPolicy::Relative(0.35),
             });
@@ -168,14 +138,12 @@ fn matrix() -> Vec<CaseSpec> {
         cases.push(CaseSpec {
             bg,
             contract: ContractSpec::Ui(target),
-            floor: FloorSpec::Default,
             hue: 30.0,
             chroma: ChromaPolicy::Relative(0.6),
         });
         cases.push(CaseSpec {
             bg,
             contract: ContractSpec::Ui(target),
-            floor: FloorSpec::AaUi,
             hue: 30.0,
             chroma: ChromaPolicy::Neutral,
         });
@@ -184,7 +152,6 @@ fn matrix() -> Vec<CaseSpec> {
         cases.push(CaseSpec {
             bg,
             contract: ContractSpec::Range(floor, ceiling),
-            floor: FloorSpec::Default,
             hue: 200.0,
             chroma: ChromaPolicy::Relative(0.2),
         });
@@ -193,14 +160,12 @@ fn matrix() -> Vec<CaseSpec> {
     cases.push(CaseSpec {
         bg: "#FFFFFF",
         contract: ContractSpec::Text(3.0),
-        floor: FloorSpec::None,
         hue: 0.0,
         chroma: ChromaPolicy::Neutral,
     });
     cases.push(CaseSpec {
         bg: "not-a-color",
         contract: ContractSpec::Text(60.0),
-        floor: FloorSpec::Default,
         hue: 0.0,
         chroma: ChromaPolicy::Neutral,
     });
@@ -216,10 +181,9 @@ fn chroma_key(policy: ChromaPolicy) -> String {
 
 fn case_key(case: &CaseSpec) -> String {
     format!(
-        "bg={} contract={} floor={} hue={} chroma={}",
+        "bg={} contract={} hue={} chroma={}",
         case.bg,
         case.contract.key(),
-        case.floor.key(),
         case.hue,
         chroma_key(case.chroma),
     )
@@ -229,11 +193,9 @@ fn case_key(case: &CaseSpec) -> String {
 fn outcome_line(result: &Result<Solved, SolveFailure>) -> String {
     match result {
         Ok(solved) => format!(
-            "ok hex={} lc_bits={} wcag_ratio_bits={} floor_override={} jp_bits={} h_ok_bits={} s_bits={}",
+            "ok hex={} lc_bits={} jp_bits={} h_ok_bits={} s_bits={}",
             solved.hex(),
             bits(solved.lc()),
-            bits(solved.wcag_ratio()),
-            solved.floor_override(),
             bits(solved.color().jp()),
             bits(solved.color().h_ok()),
             bits(solved.color().s()),
@@ -257,11 +219,6 @@ fn outcome_line(result: &Result<Solved, SolveFailure>) -> String {
             bits(*target),
             bits(*closest_examined)
         ),
-        Err(SolveFailure::FloorUnreachable { floor, max_ratio }) => format!(
-            "err floor_unreachable floor_bits={} max_ratio_bits={}",
-            bits(*floor),
-            bits(*max_ratio)
-        ),
         Err(SolveFailure::InvalidInput(message)) => {
             format!("err invalid_input message={message:?}")
         }
@@ -276,7 +233,7 @@ fn run_case(case: &CaseSpec) -> Result<Solved, SolveFailure> {
     let bg = BgInput::solid(case.bg)?;
     solve(
         bg,
-        case.floor.apply(case.contract.build()),
+        case.contract.build(),
         Hue::deg(case.hue),
         case.chroma,
         &ViewingConditions::srgb(),
@@ -358,25 +315,18 @@ fn fixture_replays_bit_for_bit() {
     );
 }
 
-/// Анти-вакуум: матрица обязана населять оба знака, floored/non-floored успехи
-/// и каждый достижимый класс ошибки.
+/// Анти-вакуум: матрица обязана населять оба знака и каждый достижимый класс
+/// ошибки; solver-пол снят в W5, потому криterion-исходы здесь не считаются.
 #[test]
 fn characterization_counters_are_non_vacuous() {
     let observed = observed_map();
     let mut successes = 0_usize;
-    let mut floored = 0_usize;
-    let mut unfloored = 0_usize;
     let mut positive = 0_usize;
     let mut negative = 0_usize;
     let mut class_counts: BTreeMap<&'static str, usize> = BTreeMap::new();
     for (key, line) in &observed {
         if line.starts_with("ok ") {
             successes += 1;
-            if line.contains("floor_override=true") {
-                floored += 1;
-            } else {
-                unfloored += 1;
-            }
             if key.contains("contract=text(-")
                 || key.contains("contract=ui(-")
                 || key.contains("contract=range(-")
@@ -394,7 +344,6 @@ fn characterization_counters_are_non_vacuous() {
                 "below_contrast_floor" => "below_contrast_floor",
                 "exceeds_range" => "exceeds_range",
                 "bounded_search_exhausted" => "bounded_search_exhausted",
-                "floor_unreachable" => "floor_unreachable",
                 "invalid_input" => "invalid_input",
                 "internal_invariant" => "internal_invariant",
                 other => panic!("unknown error class {other}"),
@@ -403,15 +352,8 @@ fn characterization_counters_are_non_vacuous() {
         }
     }
     assert!(successes >= 10, "successes: {successes}");
-    assert!(floored >= 2, "floored successes: {floored}");
-    assert!(unfloored >= 2, "unfloored successes: {unfloored}");
     assert!(positive >= 3 && negative >= 3, "+{positive}/-{negative}");
-    for class in [
-        "below_contrast_floor",
-        "exceeds_range",
-        "floor_unreachable",
-        "invalid_input",
-    ] {
+    for class in ["below_contrast_floor", "exceeds_range", "invalid_input"] {
         assert!(
             class_counts.get(class).copied().unwrap_or(0) >= 1,
             "error class {class} is not populated; counts: {class_counts:?}"
@@ -424,7 +366,7 @@ fn characterization_counters_are_non_vacuous() {
     // квантования; walk в 2 distinct-шага пересекает всё остальное (фикс #44).
     // Эмпирически: сканы публичного API на миллионы вызовов (solid-фоны обеих
     // полярностей, серые и хроматические, hue-сетка, Neutral/Relative вплоть до
-    // 1.0, Floor::None/AaText/AaUi, |Lc| 7.3..112, srgb и dim surround) не
+    // 1.0, |Lc| 7.3..112, srgb и dim surround) не
     // производят ни одного. Правда самого варианта (`closest_examined` локален,
     // не глобален) запинена на его собственном шве:
     // `solve::tests::bounded_search_exhausted_is_local_not_global_counterexample`.
@@ -458,16 +400,8 @@ fn solve_many_is_positionally_identical_to_sequential_solve() {
     let jobs = vec![
         job(Contract::text(60.0), 264.0, ChromaPolicy::Neutral),
         job(Contract::text(150.0), 0.0, ChromaPolicy::Neutral),
-        job(
-            Contract::text(7.45).with_conformance(Floor::None),
-            0.0,
-            ChromaPolicy::Neutral,
-        ),
-        job(
-            Contract::text(3.0).with_conformance(Floor::None),
-            0.0,
-            ChromaPolicy::Neutral,
-        ),
+        job(Contract::text(7.45), 0.0, ChromaPolicy::Neutral),
+        job(Contract::text(3.0), 0.0, ChromaPolicy::Neutral),
         job(Contract::ui(45.0), 30.0, ChromaPolicy::Relative(0.6)),
         // Дубликат первого задания: позиционность, не дедупликация.
         job(Contract::text(60.0), 264.0, ChromaPolicy::Neutral),
@@ -538,17 +472,12 @@ fn solve_many_is_positionally_identical_to_sequential_solve() {
         "the invalid job must not shift or poison its valid neighbour"
     );
 
-    // Отдельная партия на средне-сером #6E6E6E: dark-on-light AA-text там
-    // математически не достигает 4.5:1 (потолок ~4.14), поэтому per-job
-    // FloorUnreachable обязан быть позиционным исходом и совпадать с
-    // последовательным solve.
+    // Отдельная партия на средне-сером #6E6E6E: W5 снял solver-пол, потому
+    // оба задания решаются перцептивно; инвариант партии — позиционная
+    // идентичность последовательному solve, не floor-исход.
     let grey_jobs = vec![
         job(Contract::text(20.0), 145.0, ChromaPolicy::Neutral),
-        job(
-            Contract::text(9.0).with_conformance(Floor::None),
-            0.0,
-            ChromaPolicy::Neutral,
-        ),
+        job(Contract::text(9.0), 0.0, ChromaPolicy::Neutral),
     ];
     let grey_bg = BgInput::solid("#6E6E6E").expect("literal background");
     let grey_batch = solve_many(grey_bg, &grey_jobs, &vc, Gamut::Srgb).expect("batch runs");
@@ -569,11 +498,9 @@ fn solve_many_is_positionally_identical_to_sequential_solve() {
         );
     }
     assert!(
-        outcome_line(&grey_batch[0]).starts_with("err floor_unreachable"),
-        "mid-grey AA-text job must be a positional FloorUnreachable: {}",
-        outcome_line(&grey_batch[0])
+        grey_batch[0].is_ok() && grey_batch[1].is_ok(),
+        "W5: both grey perceptual jobs must resolve without a solver floor"
     );
-    assert!(grey_batch[1].is_ok(), "the floorless grey job must resolve");
 
     // Пустой вход — пустой результат.
     let bg = BgInput::solid("#FFFFFF").expect("literal background");
@@ -618,7 +545,7 @@ fn jnd_band_resolves_within_budget_with_tolerant_acceptance() {
             let bg = BgInput::solid(bg_hex).expect("literal background");
             let result = solve(
                 bg,
-                Contract::text(target).with_conformance(Floor::None),
+                Contract::text(target),
                 Hue::deg(0.0),
                 ChromaPolicy::Neutral,
                 &vc,
@@ -675,7 +602,7 @@ fn jnd_band_resolves_within_budget_with_tolerant_acceptance() {
 /// LegacyPlatformDependent»): между канонической macOS-arm64 и каноническим
 /// Linux-x64 расходится РОВНО хвост ulp одного поля — Oklab-hue коррелята
 /// `h_ok` — в двух хроматических кейсах матрицы. Всё остальное (hex-байты, `lc`,
-/// `wcag_ratio`, `floor_override`, `jp`, `s`, все payload'ы ошибок) —
+/// `jp`, `s`, все payload'ы ошибок) —
 /// бит-идентично на всех 76 кейсах. Оба кейса — libm-разница
 /// (atan2/cbrt, 5 ulp на хроматике). У точного sRGB-серого `h_ok = 0` по
 /// определению, поэтому его прежний atan2-шум больше не является частью

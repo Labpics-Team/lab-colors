@@ -32,7 +32,50 @@ const SELECTION_RELEASE_SOURCE: &str = include_str!("selection_release.rs");
 const RELATION_SOURCE: &str = include_str!("relation.rs");
 const SEMANTIC_SOURCE: &str = include_str!("semantic.rs");
 const SESSION_SOURCE: &str = include_str!("session.rs");
+const SOLVE_SOURCE: &str = include_str!("solve.rs");
 const WCAG22_CONSTRAINT_SOURCE: &str = include_str!("constraints/wcag22.rs");
+
+#[test]
+fn w5_removes_legacy_wcag_authority_from_the_solver() {
+    let solver = normalized_production_code(SOLVE_SOURCE);
+    for forbidden in [
+        "crate::wcag",
+        "pub enum floor",
+        "conformance:",
+        "floor_override",
+        "wcag_ratio",
+        "fn apply_floor(",
+        "floorunreachable",
+        "floor_bisect",
+    ] {
+        assert!(
+            !solver.contains(forbidden),
+            "W5 solver still owns legacy WCAG authority `{forbidden}`",
+        );
+    }
+
+    let legacy_wcag = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/wcag.rs");
+    assert!(
+        !legacy_wcag.exists(),
+        "W5 must delete the legacy continuous WCAG module"
+    );
+    assert!(
+        !normalized_production_code(LIB_SOURCE).contains("mod wcag;"),
+        "the crate root must not retain the legacy WCAG module"
+    );
+
+    let wcag22 = normalized_production_code(WCAG22_CONSTRAINT_SOURCE);
+    for required in [
+        "evaluate_wcag22_srgb8(",
+        "impl evaluator<programpointtargetv1> for wcag22srgb8v1",
+        "impl hardclassifier<wcag22criterionv1",
+    ] {
+        assert!(
+            wcag22.contains(required),
+            "W5 must retain the independent canonical WCAG 2.2 final criterion `{required}`",
+        );
+    }
+}
 
 #[test]
 fn point_representation_execution_is_generic_and_the_helper_facade_is_gone() {

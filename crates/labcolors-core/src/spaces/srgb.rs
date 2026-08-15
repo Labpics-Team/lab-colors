@@ -109,6 +109,106 @@ pub fn srgb_gamma(v: f64) -> f64 {
     }
 }
 
+const RELATIVE_LUMINANCE_RED_WEIGHT: f64 = 0.2126;
+const RELATIVE_LUMINANCE_GREEN_WEIGHT: f64 = 0.7152;
+const RELATIVE_LUMINANCE_BLUE_WEIGHT: f64 = 0.0722;
+const CONTINUOUS_ENCODED_CHANNEL_SPLIT: f64 = 0.039_28;
+const CONTINUOUS_ENCODED_CHANNEL_SPLIT_RIGHT: f64 =
+    f64::from_bits(CONTINUOUS_ENCODED_CHANNEL_SPLIT.to_bits() + 1);
+const RELATIVE_LUMINANCE_RANGE_MARGIN: f64 = 8.0 * f64::EPSILON;
+
+/// Frozen continuous encoded-sRGB channel transfer used by pre-cutover physical
+/// proposal and reporting paths.
+///
+/// The `0.03928` split is preserved byte-for-byte from those paths. It is not
+/// the canonical IEC transfer (`srgb_gamma_inv`) and cannot issue a WCAG verdict;
+/// final sRGB8 conformance belongs to the proof-bound WCAG 2.2 evaluator.
+fn continuous_encoded_channel_to_linear(channel: f64) -> f64 {
+    if channel <= CONTINUOUS_ENCODED_CHANNEL_SPLIT {
+        channel / 12.92
+    } else {
+        ((channel + 0.055) / 1.055).powf(2.4)
+    }
+}
+
+fn continuous_encoded_channel_linear_range(encoded_lo: f64, encoded_hi: f64) -> (f64, f64) {
+    debug_assert!(
+        encoded_lo.is_finite()
+            && encoded_hi.is_finite()
+            && (0.0..=1.0).contains(&encoded_lo)
+            && (0.0..=1.0).contains(&encoded_hi)
+            && encoded_lo <= encoded_hi
+    );
+
+    let mut lo = continuous_encoded_channel_to_linear(encoded_lo)
+        .min(continuous_encoded_channel_to_linear(encoded_hi));
+    let mut hi = continuous_encoded_channel_to_linear(encoded_lo)
+        .max(continuous_encoded_channel_to_linear(encoded_hi));
+    if encoded_lo <= CONTINUOUS_ENCODED_CHANNEL_SPLIT
+        && encoded_hi > CONTINUOUS_ENCODED_CHANNEL_SPLIT
+    {
+        let at_split = continuous_encoded_channel_to_linear(CONTINUOUS_ENCODED_CHANNEL_SPLIT);
+        let right_of_split =
+            continuous_encoded_channel_to_linear(CONTINUOUS_ENCODED_CHANNEL_SPLIT_RIGHT);
+        lo = lo.min(at_split).min(right_of_split);
+        hi = hi.max(at_split).max(right_of_split);
+    }
+    (lo, hi)
+}
+
+/// Continuous relative-luminance coordinate for an encoded-sRGB colour.
+///
+/// This is a non-normative physical primitive for proposal search and frozen
+/// report projections. Canonical WCAG decisions use the independent finite
+/// sRGB8 Q55 evaluator.
+pub(crate) fn encoded_srgb_relative_luminance(encoded: [f64; 3]) -> f64 {
+    RELATIVE_LUMINANCE_RED_WEIGHT * continuous_encoded_channel_to_linear(encoded[0])
+        + RELATIVE_LUMINANCE_GREEN_WEIGHT * continuous_encoded_channel_to_linear(encoded[1])
+        + RELATIVE_LUMINANCE_BLUE_WEIGHT * continuous_encoded_channel_to_linear(encoded[2])
+}
+
+/// Continuous ratio of two already-derived relative-luminance coordinates.
+///
+/// This is not a criterion, applicability decision, or proof.
+pub(crate) fn relative_luminance_ratio(first: f64, second: f64) -> f64 {
+    let (lighter, darker) = if first >= second {
+        (first, second)
+    } else {
+        (second, first)
+    };
+    (lighter + 0.05) / (darker + 0.05)
+}
+
+/// Continuous encoded-sRGB ratio without criterion semantics.
+pub(crate) fn encoded_srgb_contrast_ratio(first: [f64; 3], second: [f64; 3]) -> f64 {
+    relative_luminance_ratio(
+        encoded_srgb_relative_luminance(first),
+        encoded_srgb_relative_luminance(second),
+    )
+}
+
+/// Characterized binary64 enclosure of relative luminance over ordered encoded
+/// channel intervals. Both sides of the frozen transfer seam participate in the
+/// extrema; the final fixed-operation pad covers multiply/add rounding.
+pub(crate) fn encoded_srgb_relative_luminance_range(
+    encoded_lo: [f64; 3],
+    encoded_hi: [f64; 3],
+) -> (f64, f64) {
+    let channels = core::array::from_fn::<_, 3, _>(|channel| {
+        continuous_encoded_channel_linear_range(encoded_lo[channel], encoded_hi[channel])
+    });
+    let lower = RELATIVE_LUMINANCE_RED_WEIGHT * channels[0].0
+        + RELATIVE_LUMINANCE_GREEN_WEIGHT * channels[1].0
+        + RELATIVE_LUMINANCE_BLUE_WEIGHT * channels[2].0;
+    let upper = RELATIVE_LUMINANCE_RED_WEIGHT * channels[0].1
+        + RELATIVE_LUMINANCE_GREEN_WEIGHT * channels[1].1
+        + RELATIVE_LUMINANCE_BLUE_WEIGHT * channels[2].1;
+    (
+        (lower - RELATIVE_LUMINANCE_RANGE_MARGIN).max(0.0),
+        (upper + RELATIVE_LUMINANCE_RANGE_MARGIN).min(1.0),
+    )
+}
+
 // ------------------------------------------------------------------
 //  Exact 8-bit gamma tables (issue: discrete exactness)
 // ------------------------------------------------------------------

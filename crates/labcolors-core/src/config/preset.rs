@@ -12,7 +12,7 @@
 
 use super::*;
 use crate::ladder::LadderPosition;
-use crate::solve::Floor;
+use crate::Floor;
 
 /// Роли эталонного пресета labui в порядке объявления.
 ///

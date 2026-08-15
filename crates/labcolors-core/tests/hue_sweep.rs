@@ -11,27 +11,25 @@
 //! (#FFFFFF) and a dark (#1C1C1E) background, at a moderate chroma
 //! (`Relative(0.3)`), and asserts two contracts on every result:
 //!
-//! 1. **Ys candidate-score target held unless the WCAG floor overrode it.** When the WCAG
-//!    floor did NOT override (`!floor_override`), the measured |Lc − target| ≤ 1
-//!    (the solver's own ±1 quantization budget), independently re-measured
-//!    through the public `recheck_against` on the emitted hex — not trusting
-//!    the reported `lc()`. When the AA-text floor DID override (a +45 target on
-//!    white cannot clear 4.5:1, so the solver legitimately pushes the colour
-//!    darker), the numeric target is intentionally exceeded: there the contract is
-//!    |Lc| ≥ target, not |Lc − target| ≤ 1. Asserting the tight band there would
-//!    be testing a bug into existence — the override is the documented, correct
-//!    behaviour (`Solved::floor_override`).
-//! 2. **WCAG invariant held.** A `Contract::text` carries the AA-text floor
-//!    (4.5:1); a successful solve must clear it on the quantised colour, in
-//!    every case, override or not.
+//! 1. **Ys candidate-score target held.** W5: солвер не несёт юр. пола, потому
+//!    measured |Lc − target| ≤ 1 (его собственный ±1 quantization budget)
+//!    обязан держаться на КАЖДОМ оттенке — независимый перезамер через
+//!    публичный `recheck_against` на эмитированном hex, не доверяя `lc()`.
+//! 2. **Canonical WCAG 2.2 criterion evaluated on final bytes.** Нормативный
+//!    вердикт финальной пары выносит только proof-bound Q55 evaluator; здесь
+//!    он обязан быть детерминированно вычислим (Pass ИЛИ Fail — оба вердикта
+//!    встречаются на свипе, что и делает criterion-гейт не-вакуумным).
 //!
 //! And it pins the error model: an `Err` is acceptable only for *principled*
-//! reasons (out of range, dead zone, bounded search exhausted, floor unreachable), never
-//! a malformed-input panic — and a moderate +45 target on pure white, which the
+//! reasons (out of range, dead zone, bounded search exhausted), never a
+//! malformed-input panic — and a moderate +45 target on pure white, which the
 //! background can clearly host, must NOT come back ExceedsRange.
 
+use labcolors_core::wcag22::{
+    Wcag22ApplicableDecisionV1, Wcag22AssessmentV1, Wcag22CriterionV1, evaluate_wcag22_hex,
+};
 use labcolors_core::{
-    BgInput, ChromaPolicy, Contract, Floor, Gamut, Hue, SolveFailure, ViewingConditions,
+    BgInput, ChromaPolicy, Contract, Gamut, Hue, SolveFailure, ViewingConditions,
     recheck_against, solve,
 };
 
@@ -46,9 +44,6 @@ fn candidate_lc(fg_hex: &str, bg_hex: &str, vc: &ViewingConditions) -> f64 {
 /// `TOL` in its inline tests): a reachable target is hit within 1 Lc.
 const TOL: f64 = 1.0;
 
-/// WCAG 2.1 AA normal-text ratio — the floor `Contract::text` enforces.
-const AA_TEXT_RATIO: f64 = 4.5;
-
 fn vcs() -> [(ViewingConditions, &'static str); 2] {
     [
         (ViewingConditions::srgb(), "srgb"),
@@ -58,9 +53,9 @@ fn vcs() -> [(ViewingConditions, &'static str); 2] {
 
 #[test]
 fn solver_holds_ys_candidate_score_target_across_the_full_hue_circle() {
-    // Инверсия Ys candidate-score без юридического floor обязана попадать в
-    // ±1 Lc на каждом оттенке. Регрессия в hue/gamut search проявится здесь как
-    // промах по численной цели на части окружности.
+    // Инверсия Ys candidate-score обязана попадать в ±1 Lc на каждом оттенке.
+    // Регрессия в hue/gamut search проявится здесь как промах по численной
+    // цели на части окружности.
     //
     // bg, signed target the background can host in its natural polarity:
     // dark-on-light (+) on white, light-on-dark (−) on near-black.
@@ -76,7 +71,7 @@ fn solver_holds_ys_candidate_score_target_across_the_full_hue_circle() {
                 let bg = BgInput::solid(bg_hex).unwrap();
                 let result = solve(
                     bg,
-                    Contract::text(target).with_conformance(Floor::None),
+                    Contract::text(target),
                     Hue::deg(hue_deg),
                     ChromaPolicy::Relative(0.3),
                     &vc,
@@ -95,12 +90,8 @@ fn solver_holds_ys_candidate_score_target_across_the_full_hue_circle() {
                             "{vc_name} {bg_hex} hue {hue_deg}: polarity sign mismatch, \
                              measured {measured} for target {target}",
                         );
-                        // With Floor::None there is no override, so the tight ±1
-                        // candidate-score budget must hold at every hue.
-                        assert!(
-                            !solved.floor_override(),
-                            "{vc_name} {bg_hex} hue {hue_deg}: Floor::None must never override",
-                        );
+                        // W5: без solver-пола жёсткий ±1 candidate-score бюджет
+                        // обязан держаться на каждом оттенке.
                         let err = (measured - target).abs();
                         max_err = max_err.max(err);
                         assert!(
@@ -137,35 +128,45 @@ fn solver_holds_ys_candidate_score_target_across_the_full_hue_circle() {
 }
 
 #[test]
-fn solver_holds_wcag_floor_across_the_full_hue_circle() {
-    // The second half of contract 1's invariant: a default Contract::text carries
-    // the AA-text floor (4.5:1), so EVERY successful solve — at every hue, both
-    // VCs, both backgrounds — must clear it on the quantised colour, whether or
-    // not the floor had to override the candidate-score target. A regression that let the floor
-    // be reported satisfied while the emitted hex falls short would surface here.
-    let cases = [("#FFFFFF", 45.0_f64), ("#1C1C1E", -45.0_f64)];
-
+fn canonical_wcag22_criterion_is_total_and_non_vacuous_across_the_hue_circle() {
+    // W5: солвер не решает читаемость — нормативный вердикт финальной пары
+    // выносит канонический Q55 evaluator. Здесь фиксируем: (a) он ТОТАЛЕН на
+    // каждом эмитированном hex свипа; (b) на свипе встречаются ОБА вердикта —
+    // Pass на сильной цели и Fail на слабой — иначе criterion-гейт вакуумен.
+    let mut pass = 0_usize;
+    let mut fail = 0_usize;
     for (vc, vc_name) in vcs() {
-        for (bg_hex, target) in cases {
+        // +75 на белом держит 4.5:1; +45 на белом (≈#767676-класс на части
+        // оттенков) регулярно НЕ держит — вместе они дают оба вердикта.
+        for (bg_hex, target) in [("#FFFFFF", 75.0_f64), ("#FFFFFF", 45.0), ("#1C1C1E", -45.0)] {
             let mut hue_deg = 0.0_f64;
             while hue_deg < 360.0 {
                 let bg = BgInput::solid(bg_hex).unwrap();
                 let result = solve(
                     bg,
-                    Contract::text(target), // default AA-text floor (4.5:1)
+                    Contract::text(target),
                     Hue::deg(hue_deg),
                     ChromaPolicy::Relative(0.3),
                     &vc,
                     Gamut::Srgb,
                 );
                 if let Ok(solved) = result {
-                    assert!(
-                        solved.wcag_ratio() + 1e-9 >= AA_TEXT_RATIO,
-                        "{vc_name} {bg_hex} hue {hue_deg}: WCAG ratio {} < {AA_TEXT_RATIO} \
-                         despite an AA-text contract (hex {})",
-                        solved.wcag_ratio(),
+                    let assessment = evaluate_wcag22_hex(
                         solved.hex(),
-                    );
+                        bg_hex,
+                        Wcag22CriterionV1::Sc143TextDefault,
+                    )
+                    .unwrap_or_else(|e| {
+                        panic!("{vc_name} {bg_hex} hue {hue_deg}: evaluator rejected emitted hex: {e}")
+                    });
+                    let Wcag22AssessmentV1::Evaluated { decision, .. } = assessment else {
+                        panic!("explicit criterion must evaluate");
+                    };
+                    match decision {
+                        Wcag22ApplicableDecisionV1::Pass => pass += 1,
+                        Wcag22ApplicableDecisionV1::Fail => fail += 1,
+                        _ => panic!("unexpected future WCAG22 decision variant"),
+                    }
                 } else if let Err(SolveFailure::InvalidInput(msg)) = result {
                     panic!(
                         "{vc_name} {bg_hex} hue {hue_deg}: malformed-input error on a \
@@ -176,6 +177,13 @@ fn solver_holds_wcag_floor_across_the_full_hue_circle() {
             }
         }
     }
+    assert!(pass > 0, "criterion gate is vacuous: no Pass on the sweep");
+    assert!(
+        fail > 0,
+        "criterion gate is vacuous: no Fail on the sweep — the evaluator cannot be \
+         shown sensitive to a skipped criterion"
+    );
+    eprintln!("hue criterion sweep: {pass} Pass, {fail} Fail");
 }
 
 #[test]

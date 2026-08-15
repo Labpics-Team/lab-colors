@@ -148,8 +148,8 @@ fn assert_resolved_is_finite_and_emittable(
         Resolved::Color { solved, .. } => {
             emittable(solved.hex(), None);
             assert!(
-                solved.lc().is_finite() && solved.wcag_ratio().is_finite(),
-                "{label}/{name}@{bg}: не-конечная метрика Lc/WCAG"
+                solved.lc().is_finite(),
+                "{label}/{name}@{bg}: не-конечная метрика Lc"
             );
             true
         }

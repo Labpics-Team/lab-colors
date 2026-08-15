@@ -74,12 +74,15 @@ fn role<'a>(set: &'a [(String, Resolved)], name: &str) -> &'a Resolved {
         .1
 }
 
-/// WCAG-отношение контраст-исхода: солид (Color) — против фона; полупрозрачный
-/// (Translucent, напр. ladder-роль в RED-proof) — его КОМПОЗИТ против фона. Так
-/// проверка юр. пола применима к обоим рецептам, а не только к ратифицированному.
-fn role_wcag(res: &Resolved) -> Option<f64> {
+/// WCAG-отношение контраст-исхода: солид (Color) — против фона (независимый
+/// continuous-пересчёт на эмитированных байтах: W5 убрал solver-отчёт);
+/// полупрозрачный (Translucent, напр. ladder-роль в RED-proof) — его КОМПОЗИТ
+/// против фона. Так проверка юр. пола применима к обоим рецептам.
+fn role_wcag(res: &Resolved, bg_hex: &str) -> Option<f64> {
     if let Some(s) = res.solved() {
-        Some(s.wcag_ratio())
+        let fg = crate::spaces::srgb::srgb_encoded_from_hex(s.hex()).expect("emitted hex");
+        let bg = crate::spaces::srgb::srgb_encoded_from_hex(bg_hex).expect("theme bg hex");
+        Some(crate::spaces::srgb::encoded_srgb_contrast_ratio(fg, bg))
     } else {
         res.translucent().map(|t| t.composite_wcag())
     }
@@ -113,7 +116,7 @@ fn one_levelness_violations(table: &NamedRoleTable) -> Vec<String> {
 
                 // 2. Юр. пол уровня НЕТОРГУЕМ: держится у цветного как у нейтрали.
                 if let Some(min_ratio) = floor {
-                    let wcag = role_wcag(fam).unwrap_or_else(|| {
+                    let wcag = role_wcag(fam, theme.bg).unwrap_or_else(|| {
                         panic!("{fam_role_name}: контраст-исход обязан нести WCAG")
                     });
                     if wcag + 1e-9 < *min_ratio {

@@ -49,7 +49,7 @@ use crate::semantic::{
     DECORATIVE_FLOOR_MIN, DjMagnitude, NamedRoleTable, NamedRoleTableCompileError, RoleChroma,
     RoleSpec, TextAnchor, validate_ladder_floor,
 };
-use crate::solve::Floor;
+use crate::semantic::Floor;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Пределы валидатора.

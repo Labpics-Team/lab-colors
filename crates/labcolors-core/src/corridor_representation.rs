@@ -40,8 +40,10 @@
 //! binary64-операций, что официальный потребитель. Применимость к рендереру и
 //! управлению цветом принадлежит отдельному conformance-гейту.
 
-use crate::spaces::srgb::{hex_from_srgb_encoded, srgb_encoded_from_hex};
-use crate::wcag::{ratio_from_luminances, relative_luminance, relative_luminance_range};
+use crate::spaces::srgb::{
+    encoded_srgb_relative_luminance, encoded_srgb_relative_luminance_range, hex_from_srgb_encoded,
+    relative_luminance_ratio, srgb_encoded_from_hex,
+};
 use std::fmt;
 
 pub(crate) const CORRIDOR_ALPHA_BISECTION_ITERATIONS: u32 = 60;
@@ -465,7 +467,7 @@ pub(crate) fn committed_pole_encoded(tone: [f64; 3]) -> Result<Pole, CorridorSol
 }
 
 fn committed_pole_for_valid_tone(tone_q: [f64; 3]) -> Pole {
-    let l = relative_luminance(tone_q);
+    let l = encoded_srgb_relative_luminance(tone_q);
     // contrast(белый, L) > contrast(чёрный, L) ⇔ 1.05/(L+0.05) > (L+0.05)/0.05
     //                                          ⇔ (L+0.05)² < 0.0525.
     let s = l + 0.05;
@@ -522,7 +524,7 @@ fn band_luminance(tint_q: [f64; 3], alpha: f64, backdrop: &BackdropBox) -> (f64,
     // this byte-scale profile. Preserve that proven endpoint instead of adding
     // an uncertainty band that would falsely degrade #000/#FFF at threshold 21.
     if alpha == 1.0 {
-        let luminance = relative_luminance(tint_q);
+        let luminance = encoded_srgb_relative_luminance(tint_q);
         return (luminance, luminance);
     }
     let ranges: [(f64, f64); 3] = core::array::from_fn(|channel| {
@@ -533,7 +535,7 @@ fn band_luminance(tint_q: [f64; 3], alpha: f64, backdrop: &BackdropBox) -> (f64,
             backdrop.max[channel],
         )
     });
-    relative_luminance_range(
+    encoded_srgb_relative_luminance_range(
         core::array::from_fn(|channel| ranges[channel].0),
         core::array::from_fn(|channel| ranges[channel].1),
     )
@@ -543,8 +545,8 @@ fn band_luminance(tint_q: [f64; 3], alpha: f64, backdrop: &BackdropBox) -> (f64,
 /// Для чёрного полюса ближайший endpoint — `lo`, для белого — `hi`.
 pub(crate) fn worst_contrast_of_band(pole: Pole, lo: f64, hi: f64) -> f64 {
     match pole {
-        Pole::Black => ratio_from_luminances(0.0, lo),
-        Pole::White => ratio_from_luminances(1.0, hi),
+        Pole::Black => relative_luminance_ratio(0.0, lo),
+        Pole::White => relative_luminance_ratio(1.0, hi),
     }
 }
 
@@ -730,7 +732,7 @@ pub(crate) fn solve_corridor_alpha_hex(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::wcag::relative_luminance;
+    use crate::spaces::srgb::encoded_srgb_relative_luminance;
 
     /// Frozen legacy EOTF имеет downward seam, поэтому даже направленный
     /// corridor path нельзя объявлять глобально монотонным по alpha.
@@ -743,8 +745,8 @@ mod tests {
         assert_eq!(at.to_bits(), alpha.to_bits());
         assert_eq!(after.to_bits(), next_alpha.to_bits());
 
-        let before_luminance = relative_luminance([at; 3]);
-        let after_luminance = relative_luminance([after; 3]);
+        let before_luminance = encoded_srgb_relative_luminance([at; 3]);
+        let after_luminance = encoded_srgb_relative_luminance([after; 3]);
         assert!(
             after_luminance < before_luminance,
             "legacy seam witness stopped rejecting global monotonicity"
