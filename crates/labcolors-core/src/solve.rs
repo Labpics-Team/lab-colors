@@ -2733,3 +2733,22 @@ mod exposure_locks {
         );
     }
 }
+
+impl Solved {
+    /// Reconstruct a Solved from a hex string with recalculated lc.
+    pub(crate) fn from_hex_and_lc_with_vc(
+        hex: String,
+        bg_encoded: [f64; 3],
+        vc: &crate::spaces::vc::ViewingConditions,
+    ) -> Result<Self, SolveFailure> {
+        let rgb = crate::spaces::srgb::srgb_from_hex(&hex)
+            .map_err(|e| SolveFailure::InternalInvariant(format!("invalid hex: {e}")))?;
+        let srgb8 = crate::spaces::srgb::srgb8_from_linear(rgb);
+        let color = crate::lcs::LcsColor::from_srgb8_with_vc(srgb8, vc);
+        let disp = srgb8.encoded();
+        let y_fg = crate::spaces::srgb::encoded_srgb_relative_luminance(disp);
+        let y_bg = crate::spaces::srgb::encoded_srgb_relative_luminance(bg_encoded);
+        let lc = crate::lpc::contrast_core(y_fg, y_bg);
+        Ok(Self { color, hex, lc })
+    }
+}

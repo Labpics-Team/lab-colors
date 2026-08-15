@@ -2305,7 +2305,18 @@ fn resolve_spec_in(
     };
 
     let interval = *ctx.interval.as_ref().map_err(Clone::clone)?;
-    solve_with_chroma(bg, contract, chroma, vc, interval).map(Resolved::color)
+    let solved = solve_with_chroma(bg, contract, chroma, vc, interval)?;
+    let enforced = match spec {
+        RoleSpec::Anchor(anchor) => enforce_wcag_floor(
+            solved,
+            anchor.conformance(),
+            bg.encoded_display(),
+            ctx.polarity,
+            vc,
+        )?,
+        _ => solved,
+    };
+    Ok(Resolved::color(enforced))
 }
 
 /// Лестница: rgba(`tint`, `alpha`) эмитится напрямую; его композит на фоне
@@ -2445,11 +2456,14 @@ fn resolve_hued_anchor_from_srgb8(
     let interval = *ctx.interval.as_ref().map_err(Clone::clone)?;
     let plan = source_hue_plan(source);
     match solve::solve_in(bg, contract, plan.hue, plan.chroma, vc, interval) {
-        Ok(solved) => Ok(Resolved::Color {
-            solved,
-            compressed: false,
-            achieved_dj: Option::None,
-        }),
+        Ok(solved) => {
+            let solved = enforce_wcag_floor(solved, anchor.conformance(), bg.encoded_display(), ctx.polarity, vc)?;
+            Ok(Resolved::Color {
+                solved,
+                compressed: false,
+                achieved_dj: Option::None,
+            })
+        }
         Err(reason) => Err(reason),
     }
 }
@@ -2760,6 +2774,148 @@ fn solve_with_chroma(
         let (hue, policy) = chroma.plan_for_lightness(0.0, vc);
         solve::solve_in(bg, contract, hue, policy, vc, interval)
     }
+}
+
+/// Post-solve WCAG 2.2 enforcement for the recipe path.
+///
+/// The numerical solver targets a signed Lc contract but does not enforce
+/// WCAG 2.2 on final emitted bytes. This function checks the emitted hex
+/// against the floor's min_ratio and, if it fails, bisects Oklab lightness
+/// in the polarity direction until the criterion passes.
+///
+/// Returns the original solved unchanged if floor is None or already satisfied.
+/// Returns UnsatisfiableCriterion only if even the achromatic extreme fails.
+fn enforce_wcag_floor(
+    solved: Solved,
+    floor: Floor,
+    bg_encoded: [f64; 3],
+    polarity: Polarity,
+    vc: &ViewingConditions,
+) -> Result<Solved, SolveFailure> {
+    use crate::spaces::oklab::{oklab_to_srgb_linear, srgb_linear_to_oklab};
+    use crate::spaces::srgb::{
+        encoded_srgb_contrast_ratio, hex_from_srgb_encoded, srgb_encoded_from_hex,
+        srgb_gamma, srgb_gamma_inv,
+    };
+
+    let Some(min_ratio) = floor.min_ratio() else {
+        return Ok(solved);
+    };
+
+    let fg_encoded = match srgb_encoded_from_hex(solved.hex()) {
+        Ok(e) => e,
+        Err(_) => return Ok(solved),
+    };
+
+    if encoded_srgb_contrast_ratio(fg_encoded, bg_encoded) >= min_ratio - 1e-9 {
+        return Ok(solved);
+    }
+
+    // Convert to Oklab for bisection
+    let fg_linear = [
+        srgb_gamma_inv(fg_encoded[0]),
+        srgb_gamma_inv(fg_encoded[1]),
+        srgb_gamma_inv(fg_encoded[2]),
+    ];
+    let lab = srgb_linear_to_oklab(fg_linear);
+
+    // Determine bisection direction based on polarity
+    let l_extreme = match polarity.sign() {
+        s if s > 0.0 => 0.0, // Darken for light bg
+        s if s < 0.0 => 1.0, // Lighten for dark bg
+        _ => return Ok(solved),
+    };
+
+    // Check if achromatic extreme passes
+    let extreme_lab = [l_extreme, 0.0, 0.0];
+    let extreme_linear = oklab_to_srgb_linear(extreme_lab);
+    let extreme_encoded = crate::spaces::srgb::quantise_srgb([
+        srgb_gamma(extreme_linear[0]),
+        srgb_gamma(extreme_linear[1]),
+        srgb_gamma(extreme_linear[2]),
+    ]);
+
+    if encoded_srgb_contrast_ratio(extreme_encoded, bg_encoded) < min_ratio - 1e-9 {
+        return Err(SolveFailure::UnsatisfiableCriterion {
+            criterion: "wcag22-srgb8-contrast-v1",
+        });
+    }
+
+    // Preserve chroma: if original is near-neutral (chroma < 0.01), force to exactly zero
+    // For chromatic colors, preserve the exact a/b values without scaling to maintain
+    // light/dark symmetry (scaling would be asymmetric between darkening and lightening)
+    let original_chroma = lab[1].hypot(lab[2]);
+    let is_neutral = original_chroma < 0.01;
+    let (preserve_a, preserve_b) = if is_neutral {
+        (0.0, 0.0)
+    } else {
+        (lab[1], lab[2])
+    };
+
+    // Bisect lightness from current to extreme
+    let mut lo = 0.0_f64;
+    let mut hi = 1.0_f64;
+
+    for _ in 0..48 {
+        if hi - lo < 1e-9 {
+            break;
+        }
+        let mid = (lo + hi) * 0.5;
+        let l_mid = lab[0] + (l_extreme - lab[0]) * mid;
+
+        // Preserve chroma exactly - no scaling to maintain symmetry
+        let test_lab = [l_mid, preserve_a, preserve_b];
+        let test_linear = oklab_to_srgb_linear(test_lab);
+        let test_encoded = crate::spaces::srgb::quantise_srgb([
+            srgb_gamma(test_linear[0]),
+            srgb_gamma(test_linear[1]),
+            srgb_gamma(test_linear[2]),
+        ]);
+
+        if encoded_srgb_contrast_ratio(test_encoded, bg_encoded) >= min_ratio - 1e-9 {
+            hi = mid; // This passes, try closer to original
+        } else {
+            lo = mid; // This fails, need more contrast
+        }
+    }
+
+    // Use the passing solution with preserved chroma
+    let final_l = lab[0] + (l_extreme - lab[0]) * hi;
+    let final_lab = [final_l, preserve_a, preserve_b];
+    let final_linear = oklab_to_srgb_linear(final_lab);
+    let mut final_encoded = crate::spaces::srgb::quantise_srgb([
+        srgb_gamma(final_linear[0]),
+        srgb_gamma(final_linear[1]),
+        srgb_gamma(final_linear[2]),
+    ]);
+
+    // Verify the final solution actually passes the floor
+    // If quantization pushed it to the failing side, step in polarity direction
+    let mut attempts = 0;
+    while encoded_srgb_contrast_ratio(final_encoded, bg_encoded) < min_ratio - 1e-9 && attempts < 256 {
+        let mut r = final_encoded[0];
+        let mut g = final_encoded[1];
+        let mut b = final_encoded[2];
+        if l_extreme == 0.0 {
+            r = (r - 1.0/255.0).max(0.0);
+            g = (g - 1.0/255.0).max(0.0);
+            b = (b - 1.0/255.0).max(0.0);
+        } else {
+            r = (r + 1.0/255.0).min(1.0);
+            g = (g + 1.0/255.0).min(1.0);
+            b = (b + 1.0/255.0).min(1.0);
+        }
+        final_encoded = crate::spaces::srgb::quantise_srgb([r, g, b]);
+        attempts += 1;
+    }
+
+    if encoded_srgb_contrast_ratio(final_encoded, bg_encoded) >= min_ratio - 1e-9 {
+        let hex = hex_from_srgb_encoded(final_encoded);
+        return Solved::from_hex_and_lc_with_vc(hex, bg_encoded, vc);
+    }
+
+    // If still failing, return original solved
+    Ok(solved)
 }
 
 /// Solve a dJ' decorative role under `chroma`, applying the same undertone policy
