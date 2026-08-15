@@ -75,9 +75,10 @@ impl Floor {
 
     /// Frozen report projection for pre-cutover DTOs; never solver authority.
     pub(crate) const fn min_ratio(self) -> Option<f64> {
-        match self.criterion() {
-            Some(criterion) => Some(criterion.nominal_ratio()),
-            None => None,
+        match self {
+            Self::AaText => Some(4.5),
+            Self::AaUi => Some(3.0),
+            Self::None => None,
         }
     }
 }
