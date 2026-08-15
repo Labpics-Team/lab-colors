@@ -18,15 +18,11 @@ use labcolors_core::{
     solve, solve_many,
 };
 
-/// Платформенные эталоны. Текущий релиз — `LegacyPlatformDependent` (#297/#292):
-/// f64-корреляты CAM16→Oklab проходят через libm (atan2/cbrt), чьи последние
-/// ulp расходятся между платформами, поэтому bit-for-bit фикстура пинится ПО
-/// ПЛАТФОРМАМ. Обе зафиксированы и обязаны реплеиться бит-в-бит каждая на
-/// своей: macos-aarch64 записана локальной канонической машиной; linux-x64 —
-/// дословный вывод канонического CI-раннера (реплей PR #327), верифицированный
-/// тем же ранером бит-в-бит. Их расхождение задокументировано и запинено тестом
-/// `platform_fixtures_agree_except_documented_hue_ulp_drift` ниже — рост дрифта
-/// за пределы экспоната = алярм, не «новая платформа шумит».
+/// Платформенные эталоны остаются раздельными: текущий solver всё ещё вычисляет
+/// f64-корреляты CAM16→Oklab через platform libm. W5 заново записан на
+/// канонических Linux-x64 и macOS-arm64 runner-ах; текущая 76-case матрица
+/// оказалась bit-for-bit идентичной на обеих платформах. Тест ниже запрещает
+/// молча вернуть даже однополевой platform drift.
 const FIXTURE_MACOS_AARCH64: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/contracts/solve-characterization-v1-macos-aarch64.json"
@@ -599,18 +595,12 @@ fn jnd_band_resolves_within_budget_with_tolerant_acceptance() {
     );
 }
 
-/// Экспонат платформенной зависимости текущего релиза (#297 «current path is
-/// LegacyPlatformDependent»): между канонической macOS-arm64 и каноническим
-/// Linux-x64 расходится РОВНО хвост ulp одного поля — Oklab-hue коррелята
-/// `h_ok` — в двух хроматических кейсах матрицы. Всё остальное (hex-байты, `lc`,
-/// `jp`, `s`, все payload'ы ошибок) —
-/// бит-идентично на всех 76 кейсах. Оба кейса — libm-разница
-/// (atan2/cbrt, 5 ulp на хроматике). У точного sRGB-серого `h_ok = 0` по
-/// определению, поэтому его прежний atan2-шум больше не является частью
-/// платформенного контракта. Рост этого множества — изменение численного
-/// поведения, а не «шум новой платформы».
+/// W5 evidence: exact fixtures recorded independently on canonical Linux-x64
+/// and macOS-arm64 are byte-identical for the complete 76-case matrix. Separate
+/// files remain because platform ownership is still explicit; equality is a
+/// measured contract, not an assumption that libm is universally identical.
 #[test]
-fn platform_fixtures_agree_except_documented_hue_ulp_drift() {
+fn platform_fixtures_are_bit_identical_after_w5() {
     let load = |path: &str| -> BTreeMap<String, String> {
         let text = std::fs::read_to_string(path).expect("committed fixture exists");
         let mut out = BTreeMap::new();
@@ -633,49 +623,7 @@ fn platform_fixtures_agree_except_documented_hue_ulp_drift() {
     let linux = load(FIXTURE_LINUX_X64);
     assert_eq!(mac.len(), 76, "macOS fixture cardinality");
     assert_eq!(
-        mac.keys().collect::<Vec<_>>(),
-        linux.keys().collect::<Vec<_>>(),
-        "the two platform fixtures must pin the same case matrix"
-    );
-
-    let mut drifted: Vec<(String, Vec<String>)> = Vec::new();
-    for (key, mac_line) in &mac {
-        let linux_line = &linux[key];
-        if mac_line == linux_line {
-            continue;
-        }
-        let fields = |line: &str| -> BTreeMap<String, String> {
-            line.strip_prefix("ok ")
-                .unwrap_or(line)
-                .split_whitespace()
-                .filter_map(|pair| pair.split_once('='))
-                .map(|(k, v)| (k.to_string(), v.to_string()))
-                .collect()
-        };
-        let mf = fields(mac_line);
-        let lf = fields(linux_line);
-        let differing: Vec<String> = mf
-            .iter()
-            .filter(|(k, v)| lf.get(*k) != Some(v))
-            .map(|(k, _)| k.clone())
-            .collect();
-        drifted.push((key.clone(), differing));
-    }
-    drifted.sort();
-
-    let expected: Vec<(String, Vec<String>)> = vec![
-        (
-            "bg=#7A7A7A contract=text(20) floor=default hue=145 chroma=relative(0.35)".to_string(),
-            vec!["h_ok_bits".to_string()],
-        ),
-        (
-            "bg=#7A7A7A contract=text(35) floor=default hue=145 chroma=relative(0.35)".to_string(),
-            vec!["h_ok_bits".to_string()],
-        ),
-    ];
-    assert_eq!(
-        drifted, expected,
-        "the cross-platform drift exhibit must stay exactly the documented \
-         two chromatic h_ok ulp-tail cases"
+        mac, linux,
+        "W5 platform fixtures must remain byte-identical over the full matrix"
     );
 }
