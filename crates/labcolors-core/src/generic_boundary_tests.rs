@@ -75,6 +75,52 @@ fn w5_removes_legacy_wcag_authority_from_the_solver() {
             "W5 must retain the independent canonical WCAG 2.2 final criterion `{required}`",
         );
     }
+
+    let final_constraint = normalized_source_scope(
+        SOLVE_SOURCE,
+        "fn enforce_monotone_final_emission_constraint(",
+        "/// The quantisation budget",
+    )
+    .to_ascii_lowercase();
+    for forbidden in [
+        "cam16",
+        "hok",
+        "y_hk",
+        "viewingconditions",
+        "from_xyz",
+        "jp_of_linear",
+    ] {
+        assert!(
+            !final_constraint.contains(forbidden),
+            "hard final-emission admissibility must not use H-K/CAM16 compensation `{forbidden}`",
+        );
+    }
+    for required in [
+        "build_color(",
+        "constraint.accepts(",
+        "solvefailure::unsatisfiablecriterion",
+    ] {
+        assert!(
+            final_constraint.contains(required),
+            "generic final-emission enforcement lost `{required}`",
+        );
+    }
+
+    let semantic = compact_production_syntax(SEMANTIC_SOURCE).to_ascii_lowercase();
+    assert_eq!(
+        semantic
+            .matches("monotonefinalemissionconstraint::toward_contrast_extreme(")
+            .count(),
+        1,
+        "the monotonicity proof obligation must have exactly one production owner",
+    );
+    assert_eq!(
+        semantic
+            .matches("solve_in_with_monotone_final_emission_constraint(")
+            .count(),
+        1,
+        "the monotone final-emission solver path must have one production caller",
+    );
 }
 
 #[test]

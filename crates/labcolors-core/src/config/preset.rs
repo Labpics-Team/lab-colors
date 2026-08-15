@@ -11,8 +11,8 @@
 //! `#[cfg(test)]`; этот модуль несёт только имена/рецепты, без цвета.
 
 use super::*;
-use crate::ladder::LadderPosition;
 use crate::Floor;
+use crate::ladder::LadderPosition;
 
 /// Роли эталонного пресета labui в порядке объявления.
 ///

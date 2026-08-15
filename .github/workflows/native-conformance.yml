@@ -31,3 +31,44 @@ jobs:
     permissions:
       contents: read
     uses: Labpics-Team/lab-colors/.github/workflows/native-conformance-worker.yml@1461bc2ed60142aed3a8723e618b883be6418156
+
+  # Temporary W5 evidence job. It exists only on the feature branch long enough
+  # to record the platform-owned characterization after the solver contract
+  # changed; the final PR head removes this job again.
+  w5-record-solve-characterization-macos:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: macos-15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master @ 2026-03-27
+        with:
+          toolchain: 1.96.0
+      - name: record the macOS arm64 solver characterization once
+        shell: bash
+        run: |
+          set -euo pipefail
+          fixture=crates/labcolors-core/contracts/solve-characterization-v1-macos-aarch64.json
+          log="$RUNNER_TEMP/solve-characterization-record.log"
+          rm "$fixture"
+          set +e
+          LABCOLORS_RECORD_SOLVE_CHARACTERIZATION=1 \
+            cargo +1.96.0 test -p labcolors-core --test solve_characterization \
+              fixture_replays_bit_for_bit --locked -- --exact --nocapture \
+              2>&1 | tee "$log"
+          status=${PIPESTATUS[0]}
+          set -e
+          test "$status" -ne 0
+          grep -Fq 'solve characterization recorded: 76 cases' "$log"
+          test -s "$fixture"
+          shasum -a 256 "$fixture"
+      - name: upload the exact macOS arm64 fixture
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: w5-solve-characterization-macos-${{ github.sha }}
+          path: crates/labcolors-core/contracts/solve-characterization-v1-macos-aarch64.json
+          if-no-files-found: error
+          retention-days: 1

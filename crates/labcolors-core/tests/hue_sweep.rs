@@ -29,8 +29,8 @@ use labcolors_core::wcag22::{
     Wcag22ApplicableDecisionV1, Wcag22AssessmentV1, Wcag22CriterionV1, evaluate_wcag22_hex,
 };
 use labcolors_core::{
-    BgInput, ChromaPolicy, Contract, Gamut, Hue, SolveFailure, ViewingConditions,
-    recheck_against, solve,
+    BgInput, ChromaPolicy, Contract, Gamut, Hue, SolveFailure, ViewingConditions, recheck_against,
+    solve,
 };
 
 /// Независимое повторное измерение знаковой candidate-оценки `Lc` по `Ys` на
@@ -157,7 +157,9 @@ fn canonical_wcag22_criterion_is_total_and_non_vacuous_across_the_hue_circle() {
                         Wcag22CriterionV1::Sc143TextDefault,
                     )
                     .unwrap_or_else(|e| {
-                        panic!("{vc_name} {bg_hex} hue {hue_deg}: evaluator rejected emitted hex: {e}")
+                        panic!(
+                            "{vc_name} {bg_hex} hue {hue_deg}: evaluator rejected emitted hex: {e}"
+                        )
                     });
                     let Wcag22AssessmentV1::Evaluated { decision, .. } = assessment else {
                         panic!("explicit criterion must evaluate");

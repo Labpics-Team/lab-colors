@@ -99,10 +99,6 @@ const NUMERIC_METHOD_ALLOWLIST: &[&str] = &[
     "RATIO_BISECT_EPS",
     "RATIO_EPS",
     "FLOOR_EPS",
-    // Lightness bracket-collapse epsilon in the apply_floor bisection — numeric,
-    // non-perceptual, hex-preserving early exit (solve.rs). Same class as
-    // RATIO_BISECT_EPS.
-    "FLOOR_BISECT_EPS",
     "GAMUT_EPS",
     // Legacy-эпсилон уточнения кривой ограничивает путь совместимости, но не
     // является перцептивным порогом и не сертифицирует неподвижную точку sRGB8.

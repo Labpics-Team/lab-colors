@@ -95,17 +95,20 @@ impl Theme {
 /// Контракт резолва в переходной координате Ys candidate score.
 #[derive(Debug, Clone, Copy, PartialEq, uniffi::Enum)]
 pub enum ContractSpec {
-    /// Текст: цель Ys candidate score `Lc`, юридический пол WCAG AA-text (4.5:1).
+    /// Frozen text transport tag with an explicit Ys candidate-score target.
+    /// W5 no longer infers a WCAG criterion from this tag; call
+    /// [`evaluate_wcag22`] with the required occurrence criterion.
     Text {
         /// Целевая кандидатная оценка `Lc` по `Ys`.
         lc: f64,
     },
-    /// UI-элемент: цель Ys candidate score `Lc`, пол WCAG AA-UI (3:1).
+    /// Frozen UI transport tag with an explicit Ys candidate-score target.
+    /// W5 no longer infers a WCAG criterion from this tag.
     Ui {
         /// Целевая кандидатная оценка `Lc` по `Ys`.
         lc: f64,
     },
-    /// Декоративная полоса `[floor, ceiling]` без юридического пола.
+    /// Candidate-score band `[floor, ceiling]` without an implicit criterion.
     Range {
         /// Нижняя граница `Lc`.
         floor: f64,
@@ -237,7 +240,10 @@ pub struct Solved {
     pub lc: f64,
     /// WCAG-ratio на отданном hex.
     pub wcag_ratio: f64,
-    /// Юридический пол переопределил Ys candidate-score цель.
+    /// Frozen pre-cutover report: a caller-owned hard predicate over final
+    /// emitted bytes moved the analytic candidate. `solve_contrast` declares no
+    /// such predicate, so its value is `false`; recipe boundaries may report
+    /// `true`. It never participates in selection.
     pub floor_override: bool,
 }
 
@@ -626,12 +632,30 @@ pub fn solve_contrast(
         &vc,
         Gamut::Srgb,
     ) {
-        Ok(s) => Ok(Solved {
-            hex: s.hex().to_string(),
-            lc: s.lc(),
-            wcag_ratio: s.wcag_ratio(),
-            floor_override: s.floor_override(),
-        }),
+        Ok(s) => {
+            let report = recheck_against(&bg, &[s.hex()], &vc).map_err(|reason| {
+                ColorError::IncompatibleCoreContract {
+                    reason: format!("generated solved colour failed report projection: {reason}"),
+                }
+            })?;
+            let measured = single_contrast_result(report)?;
+            if measured.lc.to_bits() != s.lc().to_bits() {
+                return Err(ColorError::IncompatibleCoreContract {
+                    reason: format!(
+                        "solved/report Lc mismatch for {}: {} != {}",
+                        s.hex(),
+                        s.lc(),
+                        measured.lc
+                    ),
+                });
+            }
+            Ok(Solved {
+                hex: s.hex().to_string(),
+                lc: s.lc(),
+                wcag_ratio: measured.wcag_ratio,
+                floor_override: s.final_emission_adjusted(),
+            })
+        }
         Err(error) => {
             let (category, code) = public_failure_wire(&error)?;
             Err(ColorError::Failure {
@@ -987,14 +1011,6 @@ mod tests {
                 "bounded_search_exhausted",
             ),
             (
-                U::FloorUnreachable {
-                    floor: 4.5,
-                    max_ratio: 4.0,
-                },
-                FailureCategory::Unreachable,
-                "floor_unreachable",
-            ),
-            (
                 U::InvalidInput("fixture".into()),
                 FailureCategory::Rejected,
                 "invalid_input",
@@ -1108,14 +1124,24 @@ mod tests {
     }
 
     #[test]
-    fn solve_text_on_white_meets_floor() {
+    fn solve_text_transport_does_not_imply_a_wcag_criterion() {
         let s = solve_contrast(
             "#FFFFFF".into(),
             ContractSpec::Text { lc: 60.0 },
             Theme::Light,
         )
         .unwrap();
-        assert!(s.wcag_ratio >= 4.5, "AA-text пол держится");
+        let measured = contrast(s.hex.clone(), "#FFFFFF".into(), Theme::Light).unwrap();
+        assert_eq!(s.lc.to_bits(), measured.lc.to_bits());
+        assert_eq!(s.wcag_ratio.to_bits(), measured.wcag_ratio.to_bits());
+        assert!(
+            s.wcag_ratio < 4.5,
+            "legacy Text tag silently restored an implicit WCAG criterion"
+        );
+        assert!(
+            !s.floor_override,
+            "generic solve declared no final-emission predicate"
+        );
     }
 
     #[test]
@@ -1128,11 +1154,6 @@ mod tests {
                     ceiling: 5.0,
                 },
                 "below_contrast_floor",
-            ),
-            (
-                "#6E6E6E",
-                ContractSpec::Text { lc: 20.0 },
-                "floor_unreachable",
             ),
             ("#FFFFFF", ContractSpec::Text { lc: 150.0 }, "exceeds_range"),
         ] {

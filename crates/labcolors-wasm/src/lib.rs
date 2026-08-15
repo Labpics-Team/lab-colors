@@ -61,7 +61,10 @@ export interface SolvedColor {
   readonly compressed: boolean;
   /** Честный замер |ΔJ'| на отданном hex для dJ'-ролей; null у контраст-ролей (метрика — lc). */
   readonly achievedDj: number | null;
-  /** Пол WCAG переопределил целевую candidate-координату Ys. */
+  /**
+   * Frozen pre-cutover report: a caller-owned hard predicate over final emitted
+   * bytes moved the analytic candidate. Report-only; never solver authority.
+   */
   readonly floorOverride: boolean;
   /**
    * Минимальное отношение WCAG из контракта роли: 4.5 для AA-текста, 3.0 для

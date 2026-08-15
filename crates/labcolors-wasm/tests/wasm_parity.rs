@@ -16,7 +16,7 @@ use labcolors_conformance::{
 };
 use labcolors_core::config::ThemeConfig;
 use labcolors_core::semantic::NamedRoleTable;
-use labcolors_core::{BgInput, Resolved, ViewingConditions, resolve_named_set};
+use labcolors_core::{BgInput, Resolved, ViewingConditions, recheck_against, resolve_named_set};
 use labcolors_wasm::LabColors;
 use labcolors_wasm::config_dto::ConfigDto;
 use wasm_bindgen::{JsCast, JsValue};
@@ -474,7 +474,11 @@ fn recheck_contrast_boundary_matches_resolve_over_packed_words() {
     for (_name, resolved) in &core_resolved {
         if let Resolved::Color { solved, .. } = resolved {
             fgs.push(pack_hex(solved.hex()));
-            want.push((solved.lc(), solved.wcag_ratio()));
+            let report = recheck_against(bg, &[solved.hex()], &ViewingConditions::srgb())
+                .expect("core-emitted hex rechecks");
+            assert_eq!(report.len(), 1);
+            assert_eq!(report[0].0.to_bits(), solved.lc().to_bits());
+            want.push(report[0]);
         }
     }
 

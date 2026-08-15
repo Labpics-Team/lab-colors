@@ -19,8 +19,8 @@
 use crate::spaces::cam16::{adapt, ucs_j, ucs_j_inv, ucs_m, ucs_m_inv, unadapt};
 use crate::spaces::cat16::{cone_to_xyz, xyz_to_cone};
 use crate::spaces::oklab::srgb_linear_to_oklab;
-use crate::spaces::srgb::{D65_WHITE, srgb_gamma, srgb_gamma_inv, srgb_to_xyz, xyz_to_srgb};
 use crate::spaces::srgb::encoded_srgb_relative_luminance;
+use crate::spaces::srgb::{D65_WHITE, srgb_gamma, srgb_gamma_inv, srgb_to_xyz, xyz_to_srgb};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // sRGB EOTF / OETF — IEC 61966-2-1:1999 §6.4 (also W3C CSS Color 4).

@@ -1,7 +1,7 @@
 //! Criterion bench of the solve cache-MISS path,
 //! `labcolors_core::resolve_named_set` on the real labui role table.
 //! Permanent counterpart of labcolors-core's `forward` bench: guards the
-//! realtime resolve budget (`apply_floor` bisection is the dominant term).
+//! realtime resolve budget (caller-owned final-emission bisection is a dominant term).
 //!
 //! The table is compiled through the SAME path `load_config` uses: the frozen
 //! `labui.config.json` passport → `ConfigDto` → `ThemeConfig` → compile. So the

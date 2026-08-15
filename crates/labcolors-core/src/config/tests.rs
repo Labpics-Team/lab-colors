@@ -11,8 +11,8 @@
 use super::fixture::labui_reference;
 use super::test_support::resolved_repr as repr;
 use super::*;
-use crate::ladder::LadderPosition;
 use crate::Floor;
+use crate::ladder::LadderPosition;
 use crate::{
     BgInput, Resolved, Role, RoleTable, ViewingConditions, resolve_named_set, resolve_set,
 };

@@ -16,11 +16,11 @@
 //! идентификатор и дополнительный компонент ключа; корректность reload не
 //! зависит от уникальности, потому что успешная загрузка очищает прежний кэш.
 
+use labcolors_core::Floor;
 use labcolors_core::config::{
     Brand, LadderSource, NeutralAnchors, NeutralConfig, NeutralPick, NeutralTint, PaletteFamily,
     RoleRecipe, ThemeConfig, ThemesConfig, VcPreset,
 };
-use labcolors_core::solve::Floor;
 use labcolors_core::{LadderPosition, ThemeAnchors};
 use serde::{Deserialize, Serialize};
 
@@ -724,7 +724,7 @@ mod tests {
     /// «DTO-ветка компилируется, но круг-трип врёт».
     #[test]
     fn material_recipe_round_trips_through_json() {
-        use labcolors_core::solve::Floor;
+        use labcolors_core::Floor;
         let json = r#"{"kind":"material","source":{"kind":"neutral","pick":"mid"},"tone_light":12.0,"tone_dark":18.0,"floor":"aa-text"}"#;
         let dto: RoleRecipeDto = serde_json::from_str(json).expect("material парсится");
         let core = RoleRecipe::try_from(dto).expect("DTO → RoleRecipe");

@@ -8,10 +8,10 @@
     "theme": "light",
     "outcome": {
       "kind": "solved",
-      "hex": "#767676",
-      "lc": 68.24672742721279,
-      "wcagRatio": 4.542224959605253,
-      "floorOverride": true
+      "hex": "#888888",
+      "lc": 60.020902511155846,
+      "wcagRatio": 3.5448862152994005,
+      "floorOverride": false
     }
   },
   {
@@ -23,10 +23,10 @@
     "theme": "light",
     "outcome": {
       "kind": "solved",
-      "hex": "#949494",
-      "lc": 54.32862031863287,
-      "wcagRatio": 3.0334698257384747,
-      "floorOverride": true
+      "hex": "#A7A7A7",
+      "lc": 44.99674271579012,
+      "wcagRatio": 2.405887226461303,
+      "floorOverride": false
     }
   },
   {
@@ -93,9 +93,11 @@
     },
     "theme": "light",
     "outcome": {
-      "kind": "failure",
-      "category": "unreachable",
-      "code": "floor_unreachable"
+      "kind": "solved",
+      "hex": "#373737",
+      "lc": 19.836113111639015,
+      "wcagRatio": 2.334651446218021,
+      "floorOverride": false
     }
   },
   {

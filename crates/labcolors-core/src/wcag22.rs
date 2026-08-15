@@ -1,7 +1,8 @@
 //! Нормативная оценка WCAG 2.2 для одной финальной пары sRGB8 (#284).
 //!
-//! Это additive-путь: он не меняет legacy `crate::wcag`, solver или adaptive
-//! runtime. Решение принимается только целочисленными сравнениями над
+//! Это единственный WCAG decision path после W5. Numerical solver не знает о
+//! criterion kinds или thresholds; caller применяет этот evaluator к финальным
+//! байтам. Решение принимается только целочисленными сравнениями над
 //! закоммиченными Q55 outward-границами. `f64`, `powf`, epsilon и отображаемое
 //! округление в verdict не участвуют.
 
@@ -151,6 +152,20 @@ impl Wcag22CriterionV1 {
             Self::Sc143TextLargeScale => "sc-1.4.3-text-large-scale",
             Self::Sc1411UiComponentOrState => "sc-1.4.11-ui-component-or-state",
             Self::Sc1411GraphicalObject => "sc-1.4.11-graphical-object",
+        }
+    }
+
+    /// Human-readable nominal ratio for frozen report projections.
+    ///
+    /// This number never decides conformance: the proof-bound Q55 kernel owns
+    /// the exact threshold inequalities. It exists only so pre-cutover DTOs do
+    /// not duplicate standard ratios in recipe/policy modules.
+    pub(crate) const fn nominal_ratio(self) -> f64 {
+        match self {
+            Self::Sc143TextDefault => 4.5,
+            Self::Sc143TextLargeScale
+            | Self::Sc1411UiComponentOrState
+            | Self::Sc1411GraphicalObject => 3.0,
         }
     }
 

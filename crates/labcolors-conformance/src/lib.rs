@@ -292,7 +292,9 @@ pub enum SolveOutcome {
         lc: f64,
         /// WCAG-ratio на отданном hex.
         wcag_ratio: f64,
-        /// Юридический пол переопределил Ys candidate-score цель.
+        /// Frozen pre-cutover report that a caller-owned final-emission hard
+        /// predicate moved the analytic candidate. The generic `solve` vectors
+        /// declare no such predicate, so this remains `false` by construction.
         floor_override: bool,
     },
     /// Resolver не вернул цвет; category отделяет доказанную недостижимость от
@@ -393,8 +395,10 @@ const SOLVE_CASES: [(&str, ContractSpec, &str); 8] = [
         },
         "light",
     ),
-    // Even the dark endpoint cannot meet the text conformance floor on this
-    // mid-grey background, independently exercising FloorUnreachable.
+    // W5 regression: the generic candidate-score solver no longer infers a
+    // WCAG criterion from the legacy `Text` transport tag. This mid-grey case
+    // therefore characterises the explicit Ys target instead of the removed
+    // implicit-floor failure branch.
     ("#6E6E6E", ContractSpec::Text { lc: 20.0 }, "light"),
     // Намеренно недостижимо: цель Lc 150 превышает всё, что белый фон способен
     // дать (макс ≈ 107 у чёрного) → typed ExceedsRange, не клип.
@@ -419,12 +423,39 @@ pub fn generate_solve() -> Result<Vec<SolveVector>, PackGenerationError> {
                     &vc,
                     Gamut::Srgb,
                 ) {
-                    Ok(s) => SolveOutcome::Solved {
-                        hex: s.hex().to_string(),
-                        lc: s.lc(),
-                        wcag_ratio: s.wcag_ratio(),
-                        floor_override: s.floor_override(),
-                    },
+                    Ok(s) => {
+                        let report = recheck_against(bg, &[s.hex()], &vc).map_err(|reason| {
+                            PackGenerationError::InternalCoreInvariant {
+                                reason: format!(
+                                    "generated solved colour failed report projection: {reason}"
+                                ),
+                            }
+                        })?;
+                        let [(measured_lc, wcag_ratio)] = report.as_slice() else {
+                            return Err(PackGenerationError::InternalCoreInvariant {
+                                reason: format!(
+                                    "single solved colour produced {} report entries",
+                                    report.len()
+                                ),
+                            });
+                        };
+                        if measured_lc.to_bits() != s.lc().to_bits() {
+                            return Err(PackGenerationError::InternalCoreInvariant {
+                                reason: format!(
+                                    "solved/report Lc mismatch for {}: {} != {}",
+                                    s.hex(),
+                                    s.lc(),
+                                    measured_lc
+                                ),
+                            });
+                        }
+                        SolveOutcome::Solved {
+                            hex: s.hex().to_string(),
+                            lc: s.lc(),
+                            wcag_ratio: *wcag_ratio,
+                            floor_override: s.final_emission_adjusted(),
+                        }
+                    }
                     Err(error) => {
                         let (category, code) = solve_failure_wire(&error)?;
                         SolveOutcome::Failure {
@@ -876,14 +907,6 @@ mod tests {
                 "bounded_search_exhausted",
             ),
             (
-                F::FloorUnreachable {
-                    floor: 4.5,
-                    max_ratio: 4.0,
-                },
-                "unreachable",
-                "floor_unreachable",
-            ),
-            (
                 F::InvalidInput("fixture".into()),
                 "rejected",
                 "invalid_input",
@@ -1027,7 +1050,10 @@ mod tests {
     #[test]
     fn solve_pack_contains_solved_and_typed_failure() {
         // Anti-vacuum: corpus исполняет обе ветви и закрепляет категорию вместе
-        // с конкретным кодом, а не только новый serde-тег.
+        // с конкретным кодом, а не только новый serde-тег. W5 intentionally
+        // removes the implicit criterion from generic `Contract::text`, so the
+        // former `floor_unreachable` case is now a solved candidate-score vector;
+        // explicit final-criterion unreachability is covered in Core/WCAG tests.
         let solve = generate_solve().expect("canonical solve vectors");
         assert!(
             solve
@@ -1047,7 +1073,6 @@ mod tests {
             std::collections::BTreeSet::from([
                 ("unreachable".into(), "below_contrast_floor".into()),
                 ("unreachable".into(), "exceeds_range".into()),
-                ("unreachable".into(), "floor_unreachable".into()),
             ]),
             "полный набор категорий/кодов failure сменился"
         );

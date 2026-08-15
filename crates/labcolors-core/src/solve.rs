@@ -147,7 +147,6 @@ impl Contract {
     pub fn ceiling(self) -> f64 {
         self.ceiling
     }
-
 }
 
 /// A validated opaque background for a foreground solve.
@@ -236,6 +235,7 @@ pub struct Solved {
     color: LcsColor,
     hex: String,
     lc: f64,
+    final_emission_adjusted: bool,
 }
 
 impl Solved {
@@ -254,6 +254,22 @@ impl Solved {
     /// a readability verdict.
     pub fn lc(&self) -> f64 {
         self.lc
+    }
+
+    /// Whether a caller-owned hard predicate over the final emitted bytes moved
+    /// the analytic candidate before selection.
+    ///
+    /// This is report-only provenance: it carries no criterion kind, threshold,
+    /// or decision rule and is never read by the solver. Pre-cutover bindings
+    /// project it onto their frozen compatibility field; the emitted bytes remain
+    /// the source of truth for every concrete criterion measurement.
+    pub fn final_emission_adjusted(&self) -> bool {
+        self.final_emission_adjusted
+    }
+
+    fn with_final_emission_adjusted(mut self, adjusted: bool) -> Self {
+        self.final_emission_adjusted = adjusted;
+        self
     }
 }
 
@@ -281,11 +297,10 @@ pub enum SolveFailure {
     /// An explicitly declared final-emission criterion cannot be satisfied on
     /// this background even at the achromatic extreme of the polarity.
     ///
-    /// W5: the solver itself never constructs, reads, or branches on this
-    /// variant — it carries no criterion state. It exists on the shared failure
-    /// channel so the recipe layer's canonical post-solve evaluation
-    /// (`crate::wcag22`) can report a typed domain outcome instead of a panic
-    /// or a plausible colour. `criterion` is the stable evaluator wire key.
+    /// W5: the solver carries no criterion kind or threshold. A caller-owned
+    /// final-emission predicate supplies only its stable wire key so an empty
+    /// admissible set is returned as a typed domain outcome instead of a panic
+    /// or plausible colour.
     UnsatisfiableCriterion {
         /// Stable wire key of the canonical criterion that cannot be met.
         criterion: &'static str,
@@ -506,19 +521,90 @@ fn validate_job(
     Ok(())
 }
 
+/// Caller-owned final-byte predicate whose admissible set is monotone from the
+/// analytic candidate toward the target polarity's contrast extreme.
+///
+/// For `lightness(t) = candidate + t * (extreme - candidate)`, callers must
+/// guarantee that `accepts(lightness(t0))` implies
+/// `accepts(lightness(t1))` for every `0 <= t0 <= t1 <= 1`. The solver relies
+/// on that prefix-fail/suffix-pass law to locate the first admissible byte by
+/// bisection; an arbitrary predicate is not a value of this type.
+#[derive(Clone, Copy)]
+pub(crate) struct MonotoneFinalEmissionConstraint<'a> {
+    key: &'static str,
+    accepts: &'a dyn Fn(&str) -> Result<bool, SolveFailure>,
+}
+
+impl<'a> MonotoneFinalEmissionConstraint<'a> {
+    /// Bind a predicate proven monotone toward the target polarity's contrast
+    /// extreme. The caller owns that proof; construction is intentionally named
+    /// so a generic boolean callback cannot hide the required search law.
+    pub(crate) fn toward_contrast_extreme(
+        key: &'static str,
+        accepts: &'a dyn Fn(&str) -> Result<bool, SolveFailure>,
+    ) -> Self {
+        Self { key, accepts }
+    }
+
+    fn accepts(self, hex: &str) -> Result<bool, SolveFailure> {
+        (self.accepts)(hex)
+    }
+}
+
+pub(crate) fn solve_in(
+    bg: &BgInput,
+    contract: Contract,
+    hue: Hue,
+    chroma_policy: ChromaPolicy,
+    vc: &ViewingConditions,
+    interval: LumaInterval,
+) -> Result<Solved, SolveFailure> {
+    solve_in_core(bg, contract, hue, chroma_policy, vc, interval, None)
+}
+
+/// Solve with one caller-owned monotone hard predicate over the final emitted
+/// colour.
+///
+/// The numerical solver remains unaware of criterion kinds and thresholds. The
+/// caller supplies a typed evaluator over [`Solved::hex`] whose admissible set
+/// is monotone toward the target polarity's contrast extreme; this function
+/// only maintains the generic admissible-set invariant: the selected candidate
+/// must satisfy both the candidate-score contract and the final-emission
+/// predicate.
+pub(crate) fn solve_in_with_monotone_final_emission_constraint(
+    bg: &BgInput,
+    contract: Contract,
+    hue: Hue,
+    chroma_policy: ChromaPolicy,
+    vc: &ViewingConditions,
+    interval: LumaInterval,
+    constraint: MonotoneFinalEmissionConstraint<'_>,
+) -> Result<Solved, SolveFailure> {
+    solve_in_core(
+        bg,
+        contract,
+        hue,
+        chroma_policy,
+        vc,
+        interval,
+        Some(constraint),
+    )
+}
+
 /// Solve one foreground against a background whose luminance `interval` is
 /// already computed — the shared core of [`solve`], [`solve_many`], and the
 /// per-role solves in [`resolve_set`](crate::resolve_set). Inputs are assumed
 /// validated (finite target/hue/ratio, sRGB gamut); the public entry points
 /// guard that before calling in. See the [module documentation](self) for the
 /// algorithm.
-pub(crate) fn solve_in(
+fn solve_in_core(
     _bg: &BgInput,
     contract: Contract,
     hue: Hue,
     chroma_policy: ChromaPolicy,
     vc: &ViewingConditions,
     interval: LumaInterval,
+    final_constraint: Option<MonotoneFinalEmissionConstraint<'_>>,
 ) -> Result<Solved, SolveFailure> {
     let target = contract.floor();
     let y_gov = interval.governing(target);
@@ -526,6 +612,16 @@ pub(crate) fn solve_in(
     // Stage 1 — Ys candidate-score target. Invert the frozen curve for the Oklab lightness
     // that reproduces the contract's target against the governing endpoint.
     let l_lpc = solve_lpc_lightness(y_gov, target, hue, chroma_policy)?;
+    let (l_start, constraint_adjusted) = match final_constraint {
+        Some(constraint) => enforce_monotone_final_emission_constraint(
+            l_lpc,
+            target,
+            hue,
+            chroma_policy,
+            constraint,
+        )?,
+        None => (l_lpc, false),
+    };
 
     // Stage 2 — quantise, measure, verify. Build the colour at the resolved
     // lightness, emit its hex, and confirm the dual gate (candidate-score floor at
@@ -551,18 +647,63 @@ pub(crate) fn solve_in(
         });
         #[cfg(test)]
         probe_log::record(solved.hex(), solved.lc());
+        let final_emission_ok = match final_constraint {
+            Some(constraint) => constraint.accepts(solved.hex())?,
+            None => true,
+        };
         Ok(Candidate {
-            passes: perceptual_ok,
+            passes: perceptual_ok && final_emission_ok,
             lc: solved.lc(),
             solved,
         })
     };
 
-    let primary = evaluate(l_lpc)?;
+    let primary = evaluate(l_start)?;
     if primary.passes {
-        return Ok(primary.solved);
+        return Ok(primary
+            .solved
+            .with_final_emission_adjusted(constraint_adjusted));
     }
-    solve_bounded_neighbor_search(l_lpc, target, hue, chroma_policy, primary.lc, evaluate)
+    solve_bounded_neighbor_search(l_start, target, hue, chroma_policy, primary.lc, evaluate)
+        .map(|solved| solved.with_final_emission_adjusted(constraint_adjusted))
+}
+
+fn enforce_monotone_final_emission_constraint(
+    l_candidate: f64,
+    target: f64,
+    hue: Hue,
+    chroma_policy: ChromaPolicy,
+    constraint: MonotoneFinalEmissionConstraint<'_>,
+) -> Result<(f64, bool), SolveFailure> {
+    let accepts_at = |lightness: f64| {
+        let hex = hex_from_srgb(build_color(lightness, hue, chroma_policy));
+        constraint.accepts(&hex)
+    };
+
+    if accepts_at(l_candidate)? {
+        return Ok((l_candidate, false));
+    }
+
+    let l_extreme = if target >= 0.0 { 0.0 } else { 1.0 };
+    if !accepts_at(l_extreme)? {
+        return Err(SolveFailure::UnsatisfiableCriterion {
+            criterion: constraint.key,
+        });
+    }
+
+    let mut lo = 0.0_f64;
+    let mut hi = 1.0_f64;
+    for _ in 0..48 {
+        let mid = (lo + hi) * 0.5;
+        let lightness = l_candidate + (l_extreme - l_candidate) * mid;
+        if accepts_at(lightness)? {
+            hi = mid;
+        } else {
+            lo = mid;
+        }
+    }
+
+    Ok((l_candidate + (l_extreme - l_candidate) * hi, true))
 }
 
 /// The quantisation budget: a solved colour is accepted only when its measured
@@ -582,8 +723,8 @@ const QUANT_BUDGET: f64 = 1.0;
 
 /// One on-grid candidate the bounded neighbour search evaluates: the solved
 /// colour, the perceptual `Lc` it actually achieves on the quantised hex, and
-/// whether it clears the dual gate (perceptual floor at both interval ends +
-/// legal WCAG floor). `passes` is the *lower*-bound floor check the primary
+/// whether it clears the dual gate (perceptual floor at both interval ends plus
+/// any caller-owned final-emission predicate). `passes` is the lower-bound check the primary
 /// solution uses; the neighbour walk additionally enforces the upper bound so a
 /// step can never overshoot the `±1` budget.
 struct Candidate {
@@ -1049,8 +1190,9 @@ fn build_color(l_ok: f64, hue: Hue, chroma_policy: ChromaPolicy) -> [f64; 3] {
         // (прибавляются точные нули), LMS = L³ поканально, а строки матрицы
         // LMS→linear-sRGB суммируются ровно в 1 — линейный серый есть L³ в
         // каждом канале. Прогон через матрицу вносил пер-строчную ошибку ~1 ulp
-        // с РАЗНЫМ знаком по каналам; бисекция `apply_floor`, честно меряющая
-        // квантованный hex, сходится ровно на байтовый обрыв (x.5/255), где эта
+        // с РАЗНЫМ знаком по каналам; бисекция caller-owned final byte-predicate,
+        // честно меряющего квантованный hex, сходится ровно на байтовый обрыв
+        // (x.5/255), где эта
         // асимметрия расщепляет «серый» на целый байт: floored-tertiary на белом
         // эмитил #949595 (148,149,149; ratio 3.0036) вместо документированного
         // #949494. Один общий float на все три канала закрывает класс целиком:
@@ -1075,18 +1217,19 @@ fn build_color(l_ok: f64, hue: Hue, chroma_policy: ChromaPolicy) -> [f64; 3] {
 /// Quantise the ideal colour to hex and report the candidate score it actually
 /// achieves — what the caller gets, not the pre-quantisation ideal. The CAM16
 /// forward remains solely for the returned [`LcsColor`] appearance correlates.
-fn finish(
-    rgb_ideal: [f64; 3],
-    y_bg: f64,
-    vc: &ViewingConditions,
-) -> Result<Solved, SolveFailure> {
+fn finish(rgb_ideal: [f64; 3], y_bg: f64, vc: &ViewingConditions) -> Result<Solved, SolveFailure> {
     let encoded = srgb8_from_linear(rgb_ideal);
     let hex = encoded.to_hex();
     let color = LcsColor::from_srgb8_with_vc(encoded, vc);
     let disp = encoded.encoded();
     let y_fg = encoded_srgb_relative_luminance(disp);
     let lc = lpc::contrast_core(y_fg, y_bg);
-    Ok(Solved { color, hex, lc })
+    Ok(Solved {
+        color,
+        hex,
+        lc,
+        final_emission_adjusted: false,
+    })
 }
 
 /// Whether a measured signed candidate score meets the (signed) floor within
@@ -1269,6 +1412,151 @@ mod tests {
             (ViewingConditions::srgb(), "srgb"),
             (ViewingConditions::dim_surround(), "dim"),
         ]
+    }
+
+    fn wcag22_accepts(
+        foreground: &str,
+        background: &str,
+        criterion: crate::wcag22::Wcag22CriterionV1,
+    ) -> Result<bool, SolveFailure> {
+        use crate::wcag22::{Wcag22ApplicableDecisionV1, Wcag22AssessmentV1, evaluate_wcag22_hex};
+        match evaluate_wcag22_hex(foreground, background, criterion).map_err(|error| {
+            SolveFailure::InternalInvariant(format!(
+                "test WCAG22 evaluator rejected generated bytes: {error:?}"
+            ))
+        })? {
+            Wcag22AssessmentV1::Evaluated {
+                decision: Wcag22ApplicableDecisionV1::Pass,
+                ..
+            } => Ok(true),
+            Wcag22AssessmentV1::Evaluated {
+                decision: Wcag22ApplicableDecisionV1::Fail,
+                ..
+            } => Ok(false),
+            Wcag22AssessmentV1::NotEvaluated { .. } => Err(SolveFailure::InternalInvariant(
+                "explicit test criterion returned NotEvaluated".into(),
+            )),
+        }
+    }
+
+    #[test]
+    fn caller_owned_final_emission_criteria_bind_both_wcag_boundaries() {
+        use crate::wcag22::Wcag22CriterionV1;
+
+        let vc = ViewingConditions::srgb();
+        let bg = BgInput::solid("#FFFFFF").unwrap();
+        let interval = bg.luma_interval(&vc).unwrap();
+        for (target, criterion) in [
+            (60.0, Wcag22CriterionV1::Sc143TextDefault),
+            (45.0, Wcag22CriterionV1::Sc1411UiComponentOrState),
+        ] {
+            let contract = Contract::text(target);
+            let unconstrained = solve_in(
+                &bg,
+                contract,
+                Hue::deg(0.0),
+                ChromaPolicy::Neutral,
+                &vc,
+                interval,
+            )
+            .unwrap();
+            assert!(
+                !wcag22_accepts(unconstrained.hex(), "#FFFFFF", criterion).unwrap(),
+                "fixture must be RED before the final criterion: target {target}, {}",
+                unconstrained.hex()
+            );
+            assert!(!unconstrained.final_emission_adjusted());
+
+            let accepts = |hex: &str| wcag22_accepts(hex, "#FFFFFF", criterion);
+            let constraint =
+                MonotoneFinalEmissionConstraint::toward_contrast_extreme(criterion.key(), &accepts);
+            let constrained = solve_in_with_monotone_final_emission_constraint(
+                &bg,
+                contract,
+                Hue::deg(0.0),
+                ChromaPolicy::Neutral,
+                &vc,
+                interval,
+                constraint,
+            )
+            .unwrap();
+            assert!(
+                wcag22_accepts(constrained.hex(), "#FFFFFF", criterion).unwrap(),
+                "final bytes must pass {criterion:?}: {}",
+                constrained.hex()
+            );
+            assert!(
+                constrained.final_emission_adjusted(),
+                "binding criterion movement must remain observable without becoming solver authority"
+            );
+            assert_ne!(constrained.hex(), unconstrained.hex());
+        }
+    }
+
+    #[test]
+    fn already_admissible_final_emission_is_byte_identical_and_unadjusted() {
+        use crate::wcag22::Wcag22CriterionV1;
+
+        let vc = ViewingConditions::srgb();
+        let bg = BgInput::solid("#FFFFFF").unwrap();
+        let interval = bg.luma_interval(&vc).unwrap();
+        let contract = Contract::text(75.0);
+        let unconstrained = solve_in(
+            &bg,
+            contract,
+            Hue::deg(0.0),
+            ChromaPolicy::Neutral,
+            &vc,
+            interval,
+        )
+        .unwrap();
+        let criterion = Wcag22CriterionV1::Sc143TextDefault;
+        assert!(wcag22_accepts(unconstrained.hex(), "#FFFFFF", criterion).unwrap());
+        let accepts = |hex: &str| wcag22_accepts(hex, "#FFFFFF", criterion);
+        let constraint =
+            MonotoneFinalEmissionConstraint::toward_contrast_extreme(criterion.key(), &accepts);
+        let constrained = solve_in_with_monotone_final_emission_constraint(
+            &bg,
+            contract,
+            Hue::deg(0.0),
+            ChromaPolicy::Neutral,
+            &vc,
+            interval,
+            constraint,
+        )
+        .unwrap();
+        assert_eq!(constrained.hex(), unconstrained.hex());
+        assert_eq!(constrained.lc().to_bits(), unconstrained.lc().to_bits());
+        assert!(!constrained.final_emission_adjusted());
+    }
+
+    #[test]
+    fn impossible_final_emission_criterion_is_typed_not_a_fallback() {
+        use crate::wcag22::Wcag22CriterionV1;
+
+        let vc = ViewingConditions::srgb();
+        let bg = BgInput::solid("#6E6E6E").unwrap();
+        let interval = bg.luma_interval(&vc).unwrap();
+        let criterion = Wcag22CriterionV1::Sc143TextDefault;
+        let accepts = |hex: &str| wcag22_accepts(hex, "#6E6E6E", criterion);
+        let constraint =
+            MonotoneFinalEmissionConstraint::toward_contrast_extreme(criterion.key(), &accepts);
+        let error = solve_in_with_monotone_final_emission_constraint(
+            &bg,
+            Contract::text(20.0),
+            Hue::deg(0.0),
+            ChromaPolicy::Neutral,
+            &vc,
+            interval,
+            constraint,
+        )
+        .unwrap_err();
+        assert_eq!(
+            error,
+            SolveFailure::UnsatisfiableCriterion {
+                criterion: criterion.key(),
+            }
+        );
     }
 
     #[test]
@@ -2333,9 +2621,10 @@ mod tests {
         format!("{vc_name}|{bg_hex}|{pol_name}|{}", cells.join(","))
     }
 
-    /// The pre-optimisation `apply_floor` crossing search: a fixed 48-iteration
-    /// bisection over the whole `[0, 1]` ray, kept as the golden oracle the
-    /// closed-form-seeded search is measured against. Byte-for-byte the loop the
+    /// Frozen full semantic emission grid. It pins both candidate-only roles and
+    /// the recipe boundary's caller-owned final-emission criteria so a future
+    /// change cannot silently restore solver WCAG authority or update bytes by
+    /// snapshot acceptance alone.
     #[test]
     fn resolve_set_hex_matches_golden() {
         use crate::semantic::RoleChroma;
@@ -2731,24 +3020,5 @@ mod exposure_locks {
             (31, 2001),
             "DJ_BUDGET flip-share drifted: {fd}/{td} (pinned 31/2001 = 1.55%)"
         );
-    }
-}
-
-impl Solved {
-    /// Reconstruct a Solved from a hex string with recalculated lc.
-    pub(crate) fn from_hex_and_lc_with_vc(
-        hex: String,
-        bg_encoded: [f64; 3],
-        vc: &crate::spaces::vc::ViewingConditions,
-    ) -> Result<Self, SolveFailure> {
-        let rgb = crate::spaces::srgb::srgb_from_hex(&hex)
-            .map_err(|e| SolveFailure::InternalInvariant(format!("invalid hex: {e}")))?;
-        let srgb8 = crate::spaces::srgb::srgb8_from_linear(rgb);
-        let color = crate::lcs::LcsColor::from_srgb8_with_vc(srgb8, vc);
-        let disp = srgb8.encoded();
-        let y_fg = crate::spaces::srgb::encoded_srgb_relative_luminance(disp);
-        let y_bg = crate::spaces::srgb::encoded_srgb_relative_luminance(bg_encoded);
-        let lc = crate::lpc::contrast_core(y_fg, y_bg);
-        Ok(Self { color, hex, lc })
     }
 }

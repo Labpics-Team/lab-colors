@@ -64,9 +64,7 @@ pub enum Floor {
 
 impl Floor {
     /// One-way projection to the canonical WCAG 2.2 criterion used by the
-    /// generic Program evaluator. Currently consumed only at the compilation
-    /// boundary; will be read by the Program spine in the next slice.
-    #[allow(dead_code)]
+    /// generic Program evaluator.
     pub(crate) const fn criterion(self) -> Option<Wcag22CriterionV1> {
         match self {
             Self::AaText => Some(Wcag22CriterionV1::Sc143TextDefault),
@@ -75,12 +73,11 @@ impl Floor {
         }
     }
 
-    /// Transitional scalar projection used only by the frozen facade.
+    /// Frozen report projection for pre-cutover DTOs; never solver authority.
     pub(crate) const fn min_ratio(self) -> Option<f64> {
-        match self {
-            Self::AaText => Some(4.5),
-            Self::AaUi => Some(3.0),
-            Self::None => None,
+        match self.criterion() {
+            Some(criterion) => Some(criterion.nominal_ratio()),
+            None => None,
         }
     }
 }
@@ -1137,9 +1134,9 @@ impl RoleTable {
     /// The minimum WCAG 2.1 contrast ratio this role is legally clamped to, if
     /// any.
     ///
-    /// This is the *legal floor* the solver can never drop below for `role` —
-    /// independent of the Ys candidate-score target and of the background. Anchored
-    /// (text / UI) roles carry their [`TextAnchor`]'s WCAG conformance
+    /// This is the explicit final-emission criterion for `role`, independent of
+    /// the Ys candidate-score target and of the background. Anchored (text / UI)
+    /// roles carry their [`TextAnchor`]'s WCAG conformance
     /// ([`Floor::AaText`] → 4.5, [`Floor::AaUi`] → 3.0); every decorative /
     /// decorative / zero role has no legal floor and returns `None`.
     ///
@@ -2305,18 +2302,12 @@ fn resolve_spec_in(
     };
 
     let interval = *ctx.interval.as_ref().map_err(Clone::clone)?;
-    let solved = solve_with_chroma(bg, contract, chroma, vc, interval)?;
-    let enforced = match spec {
-        RoleSpec::Anchor(anchor) => enforce_wcag_floor(
-            solved,
-            anchor.conformance(),
-            bg.encoded_display(),
-            ctx.polarity,
-            vc,
-        )?,
-        _ => solved,
+    let criterion = match spec {
+        RoleSpec::Anchor(anchor) => anchor.conformance().criterion(),
+        _ => None,
     };
-    Ok(Resolved::color(enforced))
+    let solved = solve_with_chroma(bg, contract, chroma, vc, interval, criterion)?;
+    Ok(Resolved::color(solved))
 }
 
 /// Лестница: rgba(`tint`, `alpha`) эмитится напрямую; его композит на фоне
@@ -2455,15 +2446,20 @@ fn resolve_hued_anchor_from_srgb8(
     let contract = ctx.anchored_contract(anchor)?;
     let interval = *ctx.interval.as_ref().map_err(Clone::clone)?;
     let plan = source_hue_plan(source);
-    match solve::solve_in(bg, contract, plan.hue, plan.chroma, vc, interval) {
-        Ok(solved) => {
-            let solved = enforce_wcag_floor(solved, anchor.conformance(), bg.encoded_display(), ctx.polarity, vc)?;
-            Ok(Resolved::Color {
-                solved,
-                compressed: false,
-                achieved_dj: Option::None,
-            })
-        }
+    match solve_in_with_criterion(
+        bg,
+        contract,
+        plan.hue,
+        plan.chroma,
+        vc,
+        interval,
+        anchor.conformance().criterion(),
+    ) {
+        Ok(solved) => Ok(Resolved::Color {
+            solved,
+            compressed: false,
+            achieved_dj: Option::None,
+        }),
         Err(reason) => Err(reason),
     }
 }
@@ -2494,18 +2490,45 @@ fn resolve_solid_with_ui_floor(
     }
     let bg_encoded = bg.encoded_display();
     let tint_q = quantise_encoded(tint_encoded);
-    let min_ratio = match floor.min_ratio() {
-        Some(r) => r,
+    let Some(criterion) = floor.criterion() else {
         // Пол None (декоратив) — притемнять не нужно; прямой солид.
-        None => return resolve_rgba_direct(tint_encoded, 1.0, bg, vc),
-    };
-    let current_wcag = crate::spaces::srgb::encoded_srgb_contrast_ratio(tint_q, bg_encoded);
-    if current_wcag >= min_ratio {
-        // Уже легально — точный семейный солид, без сдвига (floor_coerced = false).
-        // Сравнение прямое: у семейных якорей нет цвета РОВНО на границе 3:1
-        // (легальные — с запасом, нелегальные — заметно ниже), поэтому f64-шум
-        // отношения не может переклассифицировать роль; порог-допуск не нужен.
         return resolve_rgba_direct(tint_encoded, 1.0, bg, vc);
+    };
+    let tint_srgb8 = match crate::alpha::encoded_to_srgb8(tint_q, "solid tint") {
+        Ok(s) => s,
+        Err(reason) => {
+            return Err(SolveFailure::InternalInvariant(format!(
+                "validated solid tint could not be quantised: {reason}"
+            )));
+        }
+    };
+    let bg_srgb8 = match crate::alpha::encoded_to_srgb8(bg_encoded, "bg") {
+        Ok(s) => s,
+        Err(reason) => {
+            return Err(SolveFailure::InternalInvariant(format!(
+                "validated bg could not be quantised: {reason}"
+            )));
+        }
+    };
+    match crate::wcag22::evaluate_wcag22_srgb8(tint_srgb8, bg_srgb8, criterion)
+        .map_err(|e| SolveFailure::InternalInvariant(format!("WCAG22 evaluation failed: {e:?}")))?
+    {
+        crate::wcag22::Wcag22AssessmentV1::Evaluated {
+            decision: crate::wcag22::Wcag22ApplicableDecisionV1::Pass,
+            ..
+        } => {
+            // Уже легально — точный семейный солид, без сдвига (floor_coerced = false).
+            return resolve_rgba_direct(tint_encoded, 1.0, bg, vc);
+        }
+        crate::wcag22::Wcag22AssessmentV1::Evaluated {
+            decision: crate::wcag22::Wcag22ApplicableDecisionV1::Fail,
+            ..
+        } => {}
+        crate::wcag22::Wcag22AssessmentV1::NotEvaluated { .. } => {
+            return Err(SolveFailure::InternalInvariant(
+                "explicit solid criterion returned NotEvaluated".into(),
+            ));
+        }
     }
     // Нелегально: минимальный сдвиг по кривой семьи до пола.
     let interval = *ctx.interval.as_ref().map_err(Clone::clone)?;
@@ -2543,10 +2566,18 @@ fn resolve_solid_with_ui_floor(
             (Hue::deg(degrees), ChromaPolicy::Relative(chroma_ratio))
         }
     };
-    // Контракт целит естественный Lc. WCAG 1.4.11 enforcement перенесён на
-    // канонический WCAG22 evaluator в Program spine.
+    // Контракт целит естественный Lc. WCAG 1.4.11 остаётся caller-owned
+    // final-emission predicate канонического WCAG22 evaluator-а.
     let contract = solve::Contract::text(anchor_lc);
-    match solve::solve_in(bg, contract, hue, chroma_policy, vc, interval) {
+    match solve_in_with_criterion(
+        bg,
+        contract,
+        hue,
+        chroma_policy,
+        vc,
+        interval,
+        Some(criterion),
+    ) {
         Ok(solved) => match crate::spaces::srgb::srgb_encoded_from_hex(solved.hex()) {
             Ok(shifted) => finish_rgba(shifted, 1.0, bg_encoded, vc, false, true),
             Err(reason) => Err(SolveFailure::InternalInvariant(format!(
@@ -2725,6 +2756,63 @@ fn finish_rgba_from_certificate(
     }))
 }
 
+fn wcag22_final_emission_passes(
+    foreground_hex: &str,
+    background_hex: &str,
+    criterion: Wcag22CriterionV1,
+) -> Result<bool, SolveFailure> {
+    let assessment = crate::wcag22::evaluate_wcag22_hex(foreground_hex, background_hex, criterion)
+        .map_err(|error| {
+            SolveFailure::InternalInvariant(format!(
+                "canonical WCAG22 evaluator rejected generated sRGB8: {error:?}"
+            ))
+        })?;
+    match assessment {
+        crate::wcag22::Wcag22AssessmentV1::Evaluated {
+            decision: crate::wcag22::Wcag22ApplicableDecisionV1::Pass,
+            ..
+        } => Ok(true),
+        crate::wcag22::Wcag22AssessmentV1::Evaluated {
+            decision: crate::wcag22::Wcag22ApplicableDecisionV1::Fail,
+            ..
+        } => Ok(false),
+        crate::wcag22::Wcag22AssessmentV1::NotEvaluated { .. } => {
+            Err(SolveFailure::InternalInvariant(
+                "explicit WCAG22 evaluation returned NotEvaluated".into(),
+            ))
+        }
+    }
+}
+
+fn solve_in_with_criterion(
+    bg: &BgInput,
+    contract: Contract,
+    hue: Hue,
+    chroma_policy: ChromaPolicy,
+    vc: &ViewingConditions,
+    interval: solve::LumaInterval,
+    criterion: Option<Wcag22CriterionV1>,
+) -> Result<Solved, SolveFailure> {
+    let Some(criterion) = criterion else {
+        return solve::solve_in(bg, contract, hue, chroma_policy, vc, interval);
+    };
+    let background_hex = crate::spaces::srgb::hex_from_srgb_encoded(bg.encoded_display());
+    let accepts = |foreground_hex: &str| {
+        wcag22_final_emission_passes(foreground_hex, &background_hex, criterion)
+    };
+    let constraint =
+        solve::MonotoneFinalEmissionConstraint::toward_contrast_extreme(criterion.key(), &accepts);
+    solve::solve_in_with_monotone_final_emission_constraint(
+        bg,
+        contract,
+        hue,
+        chroma_policy,
+        vc,
+        interval,
+        constraint,
+    )
+}
+
 /// Solve `contract` against `bg` under `chroma`, building the undertone the
 /// policy prescribes.
 ///
@@ -2747,11 +2835,20 @@ fn solve_with_chroma(
     chroma: RoleChroma,
     vc: &ViewingConditions,
     interval: solve::LumaInterval,
+    criterion: Option<Wcag22CriterionV1>,
 ) -> Result<Solved, SolveFailure> {
     if let RoleChroma::Curve { .. } = chroma {
         // Probe — discover the contrast-solved lightness achromatically.
         let (probe_hue, probe_chroma) = RoleChroma::probe_plan();
-        let probe = solve::solve_in(bg, contract, probe_hue, probe_chroma, vc, interval)?;
+        let probe = solve_in_with_criterion(
+            bg,
+            contract,
+            probe_hue,
+            probe_chroma,
+            vc,
+            interval,
+            criterion,
+        )?;
         let mut l_plan = solved_oklab_lightness(&probe)?;
         let mut solved = probe;
         // Legacy-уточнение сохранено побайтно: этот узкий срез исправляет
@@ -2762,7 +2859,7 @@ fn solve_with_chroma(
         // (issues #218 и #253).
         for _ in 0..CURVE_REFINE_STEPS {
             let (hue, policy) = chroma.plan_for_lightness(l_plan, vc);
-            solved = solve::solve_in(bg, contract, hue, policy, vc, interval)?;
+            solved = solve_in_with_criterion(bg, contract, hue, policy, vc, interval, criterion)?;
             let l_new = solved_oklab_lightness(&solved)?;
             if (l_new - l_plan).abs() <= LIGHTNESS_SETTLE {
                 break;
@@ -2772,150 +2869,8 @@ fn solve_with_chroma(
         Ok(solved)
     } else {
         let (hue, policy) = chroma.plan_for_lightness(0.0, vc);
-        solve::solve_in(bg, contract, hue, policy, vc, interval)
+        solve_in_with_criterion(bg, contract, hue, policy, vc, interval, criterion)
     }
-}
-
-/// Post-solve WCAG 2.2 enforcement for the recipe path.
-///
-/// The numerical solver targets a signed Lc contract but does not enforce
-/// WCAG 2.2 on final emitted bytes. This function checks the emitted hex
-/// against the floor's min_ratio and, if it fails, bisects Oklab lightness
-/// in the polarity direction until the criterion passes.
-///
-/// Returns the original solved unchanged if floor is None or already satisfied.
-/// Returns UnsatisfiableCriterion only if even the achromatic extreme fails.
-fn enforce_wcag_floor(
-    solved: Solved,
-    floor: Floor,
-    bg_encoded: [f64; 3],
-    polarity: Polarity,
-    vc: &ViewingConditions,
-) -> Result<Solved, SolveFailure> {
-    use crate::spaces::oklab::{oklab_to_srgb_linear, srgb_linear_to_oklab};
-    use crate::spaces::srgb::{
-        encoded_srgb_contrast_ratio, hex_from_srgb_encoded, srgb_encoded_from_hex,
-        srgb_gamma, srgb_gamma_inv,
-    };
-
-    let Some(min_ratio) = floor.min_ratio() else {
-        return Ok(solved);
-    };
-
-    let fg_encoded = match srgb_encoded_from_hex(solved.hex()) {
-        Ok(e) => e,
-        Err(_) => return Ok(solved),
-    };
-
-    if encoded_srgb_contrast_ratio(fg_encoded, bg_encoded) >= min_ratio - 1e-9 {
-        return Ok(solved);
-    }
-
-    // Convert to Oklab for bisection
-    let fg_linear = [
-        srgb_gamma_inv(fg_encoded[0]),
-        srgb_gamma_inv(fg_encoded[1]),
-        srgb_gamma_inv(fg_encoded[2]),
-    ];
-    let lab = srgb_linear_to_oklab(fg_linear);
-
-    // Determine bisection direction based on polarity
-    let l_extreme = match polarity.sign() {
-        s if s > 0.0 => 0.0, // Darken for light bg
-        s if s < 0.0 => 1.0, // Lighten for dark bg
-        _ => return Ok(solved),
-    };
-
-    // Check if achromatic extreme passes
-    let extreme_lab = [l_extreme, 0.0, 0.0];
-    let extreme_linear = oklab_to_srgb_linear(extreme_lab);
-    let extreme_encoded = crate::spaces::srgb::quantise_srgb([
-        srgb_gamma(extreme_linear[0]),
-        srgb_gamma(extreme_linear[1]),
-        srgb_gamma(extreme_linear[2]),
-    ]);
-
-    if encoded_srgb_contrast_ratio(extreme_encoded, bg_encoded) < min_ratio - 1e-9 {
-        return Err(SolveFailure::UnsatisfiableCriterion {
-            criterion: "wcag22-srgb8-contrast-v1",
-        });
-    }
-
-    // Preserve chroma: if original is near-neutral (chroma < 0.01), force to exactly zero
-    // For chromatic colors, preserve the exact a/b values without scaling to maintain
-    // light/dark symmetry (scaling would be asymmetric between darkening and lightening)
-    let original_chroma = lab[1].hypot(lab[2]);
-    let is_neutral = original_chroma < 0.01;
-    let (preserve_a, preserve_b) = if is_neutral {
-        (0.0, 0.0)
-    } else {
-        (lab[1], lab[2])
-    };
-
-    // Bisect lightness from current to extreme
-    let mut lo = 0.0_f64;
-    let mut hi = 1.0_f64;
-
-    for _ in 0..48 {
-        if hi - lo < 1e-9 {
-            break;
-        }
-        let mid = (lo + hi) * 0.5;
-        let l_mid = lab[0] + (l_extreme - lab[0]) * mid;
-
-        // Preserve chroma exactly - no scaling to maintain symmetry
-        let test_lab = [l_mid, preserve_a, preserve_b];
-        let test_linear = oklab_to_srgb_linear(test_lab);
-        let test_encoded = crate::spaces::srgb::quantise_srgb([
-            srgb_gamma(test_linear[0]),
-            srgb_gamma(test_linear[1]),
-            srgb_gamma(test_linear[2]),
-        ]);
-
-        if encoded_srgb_contrast_ratio(test_encoded, bg_encoded) >= min_ratio - 1e-9 {
-            hi = mid; // This passes, try closer to original
-        } else {
-            lo = mid; // This fails, need more contrast
-        }
-    }
-
-    // Use the passing solution with preserved chroma
-    let final_l = lab[0] + (l_extreme - lab[0]) * hi;
-    let final_lab = [final_l, preserve_a, preserve_b];
-    let final_linear = oklab_to_srgb_linear(final_lab);
-    let mut final_encoded = crate::spaces::srgb::quantise_srgb([
-        srgb_gamma(final_linear[0]),
-        srgb_gamma(final_linear[1]),
-        srgb_gamma(final_linear[2]),
-    ]);
-
-    // Verify the final solution actually passes the floor
-    // If quantization pushed it to the failing side, step in polarity direction
-    let mut attempts = 0;
-    while encoded_srgb_contrast_ratio(final_encoded, bg_encoded) < min_ratio - 1e-9 && attempts < 256 {
-        let mut r = final_encoded[0];
-        let mut g = final_encoded[1];
-        let mut b = final_encoded[2];
-        if l_extreme == 0.0 {
-            r = (r - 1.0/255.0).max(0.0);
-            g = (g - 1.0/255.0).max(0.0);
-            b = (b - 1.0/255.0).max(0.0);
-        } else {
-            r = (r + 1.0/255.0).min(1.0);
-            g = (g + 1.0/255.0).min(1.0);
-            b = (b + 1.0/255.0).min(1.0);
-        }
-        final_encoded = crate::spaces::srgb::quantise_srgb([r, g, b]);
-        attempts += 1;
-    }
-
-    if encoded_srgb_contrast_ratio(final_encoded, bg_encoded) >= min_ratio - 1e-9 {
-        let hex = hex_from_srgb_encoded(final_encoded);
-        return Solved::from_hex_and_lc_with_vc(hex, bg_encoded, vc);
-    }
-
-    // If still failing, return original solved
-    Ok(solved)
 }
 
 /// Solve a dJ' decorative role under `chroma`, applying the same undertone policy
@@ -3705,9 +3660,8 @@ pub fn resolve_named_set(
 ///
 /// The returned `lc` is **signed** (its sign is the achieved polarity, matching
 /// [`Resolved::lc`]), and it is exactly what the solver's `finish` stage measures
-/// for the same pair — so a colour the solver resolved against a background
-/// re-measures here to its own reported `lc`/`wcag_ratio`. That identity is the
-/// guarantee that "still passes" means the same thing as the original solve.
+/// for the same pair. The ratio is the frozen boundary report projection from
+/// the same final bytes; it is not stored in or consumed by [`Solved`].
 pub fn measure_contrast(
     bg_linear: [f64; 3],
     fg_linear: [f64; 3],
@@ -3716,7 +3670,8 @@ pub fn measure_contrast(
     // Candidate `Lc` и легальный WCAG читают ОДНУ люминансу
     // квантованного display-цвета (candidate score в `Ys`, ADR-0003), exactly as
     // the solver measures it (`finish` → `quantised_display`), so the recheck
-    // reproduces the solver's reported `lc`/`wcag_ratio` bit-for-bit.
+    // reproduces the solver's reported `lc` and the boundary ratio projection
+    // bit-for-bit from one emitted state.
     let fg_disp = crate::solve::quantised_display(fg_linear);
     let bg_disp = crate::solve::quantised_display(bg_linear);
     let lc = crate::lpc::contrast_core(
@@ -4073,7 +4028,7 @@ fn demote_below(
     // typed failures.
     let interval = *ctx.interval.as_ref().map_err(Clone::clone)?;
     demotion_outcome(
-        solve_with_chroma(bg, contract, chroma, vc, interval),
+        solve_with_chroma(bg, contract, chroma, vc, interval, None),
         senior_mag,
     )
 }
@@ -4180,8 +4135,10 @@ fn ceiling_from_probe(result: Result<Solved, SolveFailure>) -> Result<f64, Solve
 fn choose_polarity(bg: &BgInput) -> Polarity {
     let bg_disp = bg_display(bg);
     // Dark-on-light is hosted by a black foreground; light-on-dark by white.
-    let ratio_dark_on_light = crate::spaces::srgb::encoded_srgb_contrast_ratio([0.0, 0.0, 0.0], bg_disp);
-    let ratio_light_on_dark = crate::spaces::srgb::encoded_srgb_contrast_ratio([1.0, 1.0, 1.0], bg_disp);
+    let ratio_dark_on_light =
+        crate::spaces::srgb::encoded_srgb_contrast_ratio([0.0, 0.0, 0.0], bg_disp);
+    let ratio_light_on_dark =
+        crate::spaces::srgb::encoded_srgb_contrast_ratio([1.0, 1.0, 1.0], bg_disp);
 
     let dol_clears = ratio_dark_on_light + 1e-9 >= POLARITY_FLOOR_RATIO;
     let lod_clears = ratio_light_on_dark + 1e-9 >= POLARITY_FLOOR_RATIO;
@@ -5294,12 +5251,10 @@ mod tests {
     }
 
     #[test]
-    fn measure_contrast_reproduces_the_solvers_own_lc_and_wcag() {
-        // The recheck primitive must agree with the solver's own `finish`
-        // measurement: a colour the solver resolved against a background
-        // re-measures here to EXACTLY its reported lc/wcag. This identity is what
-        // makes the runtime's "do these colours still pass?" mean the same thing
-        // as the original solve — the foundation of the lazy/hysteresis controller.
+    fn measure_contrast_reproduces_solved_lc_and_boundary_ratio() {
+        // The recheck primitive must agree with the solver's `finish` measurement
+        // for Lc and derive the frozen ratio report from the exact same final
+        // bytes. This identity is the foundation of the lazy/hysteresis controller.
         use crate::spaces::srgb::srgb_from_hex;
         let table = RoleTable::default();
         for vc in [ViewingConditions::srgb(), ViewingConditions::dim_surround()] {
@@ -5337,8 +5292,8 @@ mod tests {
     #[test]
     fn recheck_against_batch_matches_per_pair_and_the_solver() {
         // The batch recheck (shared bg) must give exactly the same (lc, wcag) as
-        // the single-pair `measure_contrast`, and both equal the solver's own
-        // reported values for a freshly-resolved set.
+        // the single-pair `measure_contrast`; Lc also equals the solver report,
+        // while WCAG remains a boundary projection from final bytes.
         use crate::spaces::srgb::srgb_from_hex;
         let table = RoleTable::default();
         for vc in [ViewingConditions::srgb(), ViewingConditions::dim_surround()] {
@@ -5437,7 +5392,9 @@ mod tests {
         // colour with a different contrast the colour-only path never observes.
         let composite =
             crate::composition::source_over_srgb8([255, 255, 255], alpha, [0, 0, 0]).unwrap();
-        let rl_comp = crate::spaces::srgb::encoded_srgb_relative_luminance(crate::Srgb8::new(composite).encoded());
+        let rl_comp = crate::spaces::srgb::encoded_srgb_relative_luminance(
+            crate::Srgb8::new(composite).encoded(),
+        );
         assert_ne!(
             seen.1.to_bits(),
             crate::spaces::srgb::relative_luminance_ratio(rl_comp, rl_bg).to_bits()
@@ -6395,9 +6352,10 @@ mod tests {
         // The crux fix: contracts make the dark ladder the *mirror* of the light
         // one, NOT the literal Figma dark anchors (−105.4/−40.9/−26.2/−13.1),
         // which were ~40 % weaker than light because equal opacity steps were
-        // never compensated. W5: солвер больше не поднимает слабые цели юр.
-        // полом, потому симметрия обязана держаться напрямую на замеренных
-        // |Lc| обеих полярностей — без floor-исключений.
+        // never compensated. W5 keeps the authored targets symmetric, while an
+        // explicit final-emission criterion may move one polarity to the nearest
+        // admissible byte. That movement is generic report provenance, not a
+        // criterion branch inside the numerical solver.
         let vc = ViewingConditions::srgb();
         let white = BgInput::solid("#FFFFFF").unwrap();
         let black = BgInput::solid("#101012").unwrap();
@@ -6417,9 +6375,13 @@ mod tests {
             let (light_lc, dark_lc) = (light.lc().abs(), dark.lc().abs());
             // Оба таргета — одна и та же доля от максимума своей полярности;
             // максимумы белого и почти-чёрного близки, потому допуск узкий.
+            // Если exact final criterion binds only one side, its explicit
+            // adjustment report must account for the measured divergence.
+            let criterion_explains =
+                light.final_emission_adjusted() || dark.final_emission_adjusted();
             assert!(
-                (light_lc - dark_lc).abs() <= 1.5,
-                "{}: light |Lc| {light_lc} vs dark {dark_lc} diverge",
+                (light_lc - dark_lc).abs() <= 1.5 || criterion_explains,
+                "{}: light |Lc| {light_lc} vs dark {dark_lc} diverge without a final-criterion adjustment",
                 role.key()
             );
             if i >= 1 {
@@ -6455,9 +6417,7 @@ mod tests {
         // финальных sRGB8-байтах. Anchored-цели дефолтной таблицы достаточно
         // сильны, чтобы держать критерий без solver-пола; регресс критерия на
         // финальной эмиссии падает именно здесь.
-        use crate::wcag22::{
-            Wcag22ApplicableDecisionV1, Wcag22AssessmentV1, evaluate_wcag22_hex,
-        };
+        use crate::wcag22::{Wcag22ApplicableDecisionV1, Wcag22AssessmentV1, evaluate_wcag22_hex};
         for (vc, vc_name) in vcs() {
             for bg_hex in ["#FFFFFF", "#101012"] {
                 let bg = BgInput::solid(bg_hex).unwrap();
@@ -6465,7 +6425,10 @@ mod tests {
                 for (role, criterion) in [
                     (Role::LabelPrimary, Wcag22CriterionV1::Sc143TextDefault),
                     (Role::LabelSecondary, Wcag22CriterionV1::Sc143TextDefault),
-                    (Role::LabelTertiary, Wcag22CriterionV1::Sc1411UiComponentOrState),
+                    (
+                        Role::LabelTertiary,
+                        Wcag22CriterionV1::Sc1411UiComponentOrState,
+                    ),
                 ] {
                     let solved = match resolve(&bg, role, &table, &vc) {
                         Ok(Resolved::Color { solved, .. }) => solved,
@@ -8154,9 +8117,8 @@ mod tests {
                 } else {
                     Wcag22CriterionV1::Sc1411UiComponentOrState
                 };
-                let assessment =
-                    crate::wcag22::evaluate_wcag22_hex(t.hex(), bg_hex, criterion)
-                        .expect("emitted hex is admitted sRGB8");
+                let assessment = crate::wcag22::evaluate_wcag22_hex(t.hex(), bg_hex, criterion)
+                    .expect("emitted hex is admitted sRGB8");
                 assert!(
                     matches!(
                         assessment,

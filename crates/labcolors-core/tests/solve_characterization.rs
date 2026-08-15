@@ -14,8 +14,8 @@ use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
 use labcolors_core::{
-    BgInput, ChromaPolicy, Contract, Gamut, Hue, SolveFailure, SolveJob, Solved,
-    ViewingConditions, solve, solve_many,
+    BgInput, ChromaPolicy, Contract, Gamut, Hue, SolveFailure, SolveJob, Solved, ViewingConditions,
+    solve, solve_many,
 };
 
 /// Платформенные эталоны. Текущий релиз — `LegacyPlatformDependent` (#297/#292):
@@ -122,7 +122,8 @@ fn matrix() -> Vec<CaseSpec> {
         });
         t += 0.05;
     }
-    // Средне-серые фоны: территория FloorUnreachable для dark-on-light AA.
+    // Средне-серые фоны: W5 regression corpus for explicit candidate-score
+    // targets without an inferred WCAG criterion from the legacy Text tag.
     for bg in ["#6E6E6E", "#7A7A7A", "#828282"] {
         for target in [20.0, 35.0, 45.0] {
             cases.push(CaseSpec {
