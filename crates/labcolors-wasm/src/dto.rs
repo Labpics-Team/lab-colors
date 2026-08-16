@@ -213,7 +213,9 @@ pub struct SolvedColor {
     /// `None` у contrast-score ролей; для них доступна знаковая Ys
     /// candidate-координата `lc`.
     pub achieved_dj: Option<f64>,
-    /// `true` when the WCAG legal floor overrode the Ys candidate-score target.
+    /// Frozen pre-cutover projection: `true` when a caller-owned hard predicate
+    /// over final emitted bytes moved the analytic candidate. It is report-only,
+    /// carries no criterion or threshold, and never participates in selection.
     pub floor_override: bool,
     /// Минимальное отношение WCAG из контракта роли (`AaText` → 4.5,
     /// `AaUi` → 3.0) либо `None`, если пола нет. Solve проверяет финальную

@@ -7,10 +7,10 @@
 //! the DEFAULT tinted table — across a grid of backgrounds, asserting all four
 //! invariants at once:
 //!
-//! 1. **Candidate-score target accuracy.** Each text/UI role lands within ±1 Lc of
-//!    the target its anchor implies (fraction × the background's max Ys score),
-//!    re-measured independently — *except* where the WCAG floor legitimately
-//!    overrode it (`floor_override`), where the contrast is only pushed *up*.
+//! 1. **Candidate-score report honesty.** Each text/UI role's reported `Lc` is
+//!    reproduced from its final emitted bytes. A binding final criterion may
+//!    move the analytic candidate, and that movement is reported separately by
+//!    [`Solved::final_emission_adjusted`].
 //! 2. **WCAG floors.** primary/secondary clear 4.5:1, muted/icon clear 3:1, on
 //!    the quantised colour, under dim surround.
 //! 3. **Strict hierarchy.** primary > secondary > muted > disabled in |Lc| on
@@ -63,26 +63,40 @@ fn hue_distance(a: f64, b: f64) -> f64 {
 }
 
 #[test]
-fn dim_tinted_holds_wcag_floors_on_the_grid() {
+fn dim_tinted_holds_wcag_criteria_on_the_grid() {
     // Invariant 2: under dim surround, with the default tinted table, every
-    // text/UI role clears its conformance floor on the quantised colour.
+    // text/UI role's FINAL emitted bytes pass their canonical WCAG 2.2
+    // criterion. W5: солвер не несёт юр. пола — вердикт выносит только
+    // proof-bound evaluator на финальной паре.
+    use crate::wcag22::{
+        Wcag22ApplicableDecisionV1, Wcag22AssessmentV1, Wcag22CriterionV1, evaluate_wcag22_hex,
+    };
     let vc = ViewingConditions::dim_surround();
     let table = RoleTable::default();
     for bg_hex in GRID {
         let bg = BgInput::solid(bg_hex).unwrap();
         let set = resolve_set(&bg, &table, &vc);
-        for (role, min_ratio) in [
-            (Role::LabelPrimary, 4.5),
-            (Role::LabelSecondary, 4.5),
-            (Role::LabelTertiary, 3.0),
+        for (role, criterion) in [
+            (Role::LabelPrimary, Wcag22CriterionV1::Sc143TextDefault),
+            (Role::LabelSecondary, Wcag22CriterionV1::Sc143TextDefault),
+            (
+                Role::LabelTertiary,
+                Wcag22CriterionV1::Sc1411UiComponentOrState,
+            ),
         ] {
             let (solved, _) = role_solved(&set, role)
                 .unwrap_or_else(|| panic!("{bg_hex} {}: expected a colour", role.key()));
-            assert!(
-                solved.wcag_ratio() + 1e-9 >= min_ratio,
-                "dim {bg_hex} {}: WCAG ratio {} < {min_ratio} under the tinted table",
+            let assessment = evaluate_wcag22_hex(solved.hex(), bg_hex, criterion)
+                .expect("emitted hex is admitted sRGB8");
+            let Wcag22AssessmentV1::Evaluated { decision, .. } = assessment else {
+                panic!("explicit criterion must evaluate");
+            };
+            assert_eq!(
+                decision,
+                Wcag22ApplicableDecisionV1::Pass,
+                "dim {bg_hex} {}: final bytes {} fail {criterion:?} under the tinted table",
                 role.key(),
-                solved.wcag_ratio(),
+                solved.hex(),
             );
         }
     }
@@ -184,13 +198,11 @@ fn dim_tinted_carries_the_cool_neutral_undertone() {
 }
 
 #[test]
-fn dim_tinted_perceptual_target_accuracy_where_floor_does_not_override() {
-    // Invariant 1: where the WCAG floor did NOT override, the role's measured
-    // contrast must sit within ±1 Lc of the anchor target. We do not recompute
-    // the anchor target here (that would duplicate the module's private maths);
-    // instead we assert the solver's OWN reported lc() matches an independent
+fn dim_tinted_reported_lc_matches_final_emitted_bytes() {
+    // Invariant 1: the solver's reported lc() matches an independent
     // re-measurement of the emitted hex — the honest "the number the caller sees
-    // is the number the colour achieves" contract, under dim + tint.
+    // is the number the colour achieves" contract, under dim + tint. This holds
+    // whether or not a caller-owned final criterion moved the analytic candidate.
     let vc = ViewingConditions::dim_surround();
     let table = RoleTable::default();
     let roles = [

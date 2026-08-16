@@ -45,11 +45,11 @@ use crate::ladder::{LadderPosition, LadderTint, ThemeAnchors};
 use crate::output_bindings::{
     OutputBindingCompileError, OutputBindingNameKind, is_valid_contract_name,
 };
+use crate::semantic::Floor;
 use crate::semantic::{
     DECORATIVE_FLOOR_MIN, DjMagnitude, NamedRoleTable, NamedRoleTableCompileError, RoleChroma,
     RoleSpec, TextAnchor, validate_ladder_floor,
 };
-use crate::solve::Floor;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Пределы валидатора.

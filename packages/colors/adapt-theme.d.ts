@@ -61,7 +61,12 @@ export interface AdaptController {
    * `Unknown` performs no resolver/recheck/DOM work and preserves committed state.
    */
   tick(now?: number): void;
-  /** Switch theme intent immediately when Point evidence is available. */
+  /**
+   * Switch theme intent immediately when Point evidence is available.
+   * Throws `OutputConflictError` with `category: "unresolved"` and `code: null`
+   * if a bounded full-support chase does not decide; the prior committed theme
+   * remains unchanged.
+   */
   setTheme(theme: ThemeName): void;
   /** Start the internal `requestAnimationFrame` loop. */
   start(): void;
@@ -81,5 +86,8 @@ export interface AdaptController {
  * root without `canvas`, cycles and depth exhaustion never become a fallback hex.
  * The observed element may be arbitrary, but the selected output target must be
  * its document's `documentElement` or the host of its own open `shadowRoot`.
+ * Initialisation throws `OutputConflictError` when its bounded full-support
+ * chase does not decide. Its conflict arm is `unresolved` with `code: null`,
+ * distinct from Core's proven `unreachable` arm with a Core-owned code.
  */
 export declare function adaptTheme(element: HTMLElement, options: AdaptThemeOptions): AdaptController;

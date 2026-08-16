@@ -15,7 +15,7 @@ mod sha256;
 const CANONICAL_FAMILY_SHA256: [(&str, &str); 5] = [
     (
         "solve.json",
-        "db04e50698cc3b10223f4005f74dd35cc5ae0a29988825e44db5c985aa9207af",
+        "1b34059c1d398e3dca04e13c0333fffe71fbd26061205450d845d95510755d77",
     ),
     (
         "contrasts.json",
@@ -31,7 +31,7 @@ const CANONICAL_FAMILY_SHA256: [(&str, &str); 5] = [
     ),
     (
         "wcag22.json",
-        "8b2e44feba985a6f0017d4192c1c03fcc5c22da1d7d86df91dcb5bb214de7ab1",
+        "836b7f90ab3807072155d8e38633cf6bab7ec6ad7a0ee436831acd8536df6db7",
     ),
 ];
 
@@ -131,7 +131,6 @@ fn solve_failure_wire_is_exact_and_closed() {
         BTreeSet::from([
             ("unreachable", "below_contrast_floor"),
             ("unreachable", "exceeds_range"),
-            ("unreachable", "floor_unreachable"),
         ])
     );
     assert!(vectors.iter().all(|vector| matches!(

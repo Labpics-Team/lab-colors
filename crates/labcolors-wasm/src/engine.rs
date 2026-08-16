@@ -16,7 +16,7 @@ use std::rc::Rc;
 
 use labcolors_core::config::{ThemeConfig, VcPreset};
 use labcolors_core::semantic::NamedRoleTable;
-use labcolors_core::{BgInput, ResolveSetError, Resolved, Solved};
+use labcolors_core::{BgInput, ResolveSetError, Resolved, Solved, recheck_against};
 
 use crate::cache::{CacheKey, ContractCache};
 use crate::config_dto::{ConfigDto, fingerprint};
@@ -171,16 +171,33 @@ impl Engine {
                 let set = labcolors_core::resolve_named_set(&bg, &named.table, &vc)
                     .map_err(resolve_set_error_to_binding)?;
                 admit_complete_output(&set)?;
+                let mut reports = project_solved_reports(&set, &normalised, &vc)?.into_iter();
                 let mut roles: Vec<RoleEntry> = set
                     .into_iter()
                     .map(|(name, resolved)| -> Result<RoleEntry, BindingError> {
                         let floor = named.floors.get(&name).copied().flatten();
+                        let report = if resolved.solved().is_some() {
+                            Some(reports.next().ok_or_else(|| {
+                                BindingError::Internal {
+                                    reason:
+                                        "solved report projection ended before the resolved set"
+                                            .to_string(),
+                                }
+                            })?)
+                        } else {
+                            None
+                        };
                         Ok(RoleEntry {
                             role_key: name,
-                            outcome: map_resolved(resolved, floor)?,
+                            outcome: map_resolved(resolved, floor, report)?,
                         })
                     })
                     .collect::<Result<_, _>>()?;
+                if reports.next().is_some() {
+                    return Err(BindingError::Internal {
+                        reason: "solved report projection outlived the resolved set".to_string(),
+                    });
+                }
                 // Алиасы — часть эмитируемого контракта (--lab-{alias} обязан
                 // существовать у потребителя): ядро их не резолвит (алиас — не
                 // рецепт), граница эмитит исход ЦЕЛИ под именем алиаса.
@@ -307,7 +324,7 @@ fn admit_complete_output(set: &[(String, Resolved)]) -> Result<(), BindingError>
             return None;
         };
         is_output_conflict_category(failure.category())
-            .then(|| OutputConflict::new(role.clone(), failure.code(), failure.to_string()))
+            .then(|| OutputConflict::unreachable(role.clone(), failure.code(), failure.to_string()))
     });
     let Some(first) = conflicts.next() else {
         return Ok(());
@@ -327,13 +344,25 @@ const fn is_output_conflict_category(category: labcolors_core::RoleFailureCatego
 /// the role's WCAG clamp (from the role table), carried onto a solved colour.
 /// Ordinary `Unreachable` должен быть удалён [`admit_complete_output`] раньше;
 /// его появление здесь — внутренний дрейф, не второй одиночный conflict path.
-fn map_resolved(resolved: Resolved, legal_floor: Option<f64>) -> Result<RoleOutcome, BindingError> {
+fn map_resolved(
+    resolved: Resolved,
+    legal_floor: Option<f64>,
+    report: Option<(f64, f64)>,
+) -> Result<RoleOutcome, BindingError> {
     Ok(match resolved {
         Resolved::Color {
             solved,
             compressed,
             achieved_dj,
-        } => RoleOutcome::Color(map_solved(solved, compressed, achieved_dj, legal_floor)),
+        } => RoleOutcome::Color(map_solved(
+            solved,
+            compressed,
+            achieved_dj,
+            legal_floor,
+            report.ok_or_else(|| BindingError::Internal {
+                reason: "solved colour lost its report projection".to_string(),
+            })?,
+        )?),
         Resolved::None => RoleOutcome::None,
         Resolved::Failure(failure) => match failure.category() {
             labcolors_core::RoleFailureCategory::Unreachable => {
@@ -414,21 +443,60 @@ fn unmapped_resolved_variant() -> BindingError {
     }
 }
 
+fn project_solved_reports(
+    set: &[(String, Resolved)],
+    background_hex: &str,
+    vc: &labcolors_core::ViewingConditions,
+) -> Result<Vec<(f64, f64)>, BindingError> {
+    let foregrounds = set
+        .iter()
+        .filter_map(|(_, resolved)| resolved.solved().map(Solved::hex))
+        .collect::<Vec<_>>();
+    let reports = recheck_against(background_hex, &foregrounds, vc).map_err(|reason| {
+        BindingError::Internal {
+            reason: format!("generated solved colours failed report projection: {reason}"),
+        }
+    })?;
+    if reports.len() != foregrounds.len() {
+        return Err(BindingError::Internal {
+            reason: format!(
+                "{} solved colours produced {} report entries",
+                foregrounds.len(),
+                reports.len()
+            ),
+        });
+    }
+    Ok(reports)
+}
+
 fn map_solved(
     solved: Solved,
     compressed: bool,
     achieved_dj: Option<f64>,
     legal_floor: Option<f64>,
-) -> SolvedColor {
-    SolvedColor {
+    report: (f64, f64),
+) -> Result<SolvedColor, BindingError> {
+    let (measured_lc, wcag_ratio) = report;
+    if measured_lc.to_bits() != solved.lc().to_bits() {
+        return Err(BindingError::Internal {
+            reason: format!(
+                "solved/report Lc mismatch for {}: {} != {}",
+                solved.hex(),
+                solved.lc(),
+                measured_lc
+            ),
+        });
+    }
+
+    Ok(SolvedColor {
         hex: solved.hex().to_owned(),
         lc: solved.lc(),
-        wcag_ratio: solved.wcag_ratio(),
+        wcag_ratio,
         compressed,
         achieved_dj,
-        floor_override: solved.floor_override(),
+        floor_override: solved.final_emission_adjusted(),
         legal_floor,
-    }
+    })
 }
 
 fn resolve_set_error_to_binding(error: ResolveSetError) -> BindingError {
@@ -799,7 +867,7 @@ mod tests {
         };
 
         assert!(matches!(
-            map_resolved(Resolved::Failure(failure), None),
+            map_resolved(Resolved::Failure(failure), None, None),
             Err(BindingError::Internal { reason })
                 if reason == "ordinary Unreachable escaped output admission"
         ));
@@ -859,6 +927,47 @@ mod tests {
         // Decorative / JND roles carry no legal floor even when solved.
         if let Some(RoleOutcome::Color(c)) = floor_of("label-quaternary") {
             assert_eq!(c.legal_floor, None);
+        }
+    }
+
+    #[test]
+    fn final_emission_adjustment_report_is_non_vacuous_and_recheck_bound() {
+        let engine = engine_with_labui();
+        let result = engine.resolve_theme("#FFFFFF", "light").unwrap();
+        let color = |key: &str| {
+            let entry = result
+                .roles
+                .iter()
+                .find(|entry| entry.role_key == key)
+                .unwrap_or_else(|| panic!("missing role {key}"));
+            match &entry.outcome {
+                RoleOutcome::Color(color) => color,
+                other => panic!("{key} expected color, got {other:?}"),
+            }
+        };
+
+        let primary = color("label-primary");
+        let tertiary = color("label-tertiary");
+        assert!(
+            !primary.floor_override,
+            "already-admissible primary must not report movement"
+        );
+        assert!(
+            tertiary.floor_override,
+            "3:1 final criterion must report the movement from its RED candidate"
+        );
+
+        let vc = labcolors_core::VcPreset::Srgb.viewing_conditions();
+        for (key, solved) in [("label-primary", primary), ("label-tertiary", tertiary)] {
+            let report = labcolors_core::recheck_against("#FFFFFF", &[&solved.hex], &vc)
+                .expect("emitted boundary hex rechecks");
+            assert_eq!(report.len(), 1);
+            assert_eq!(report[0].0.to_bits(), solved.lc.to_bits(), "{key}: lc");
+            assert_eq!(
+                report[0].1.to_bits(),
+                solved.wcag_ratio.to_bits(),
+                "{key}: wcag ratio"
+            );
         }
     }
 
@@ -1283,12 +1392,9 @@ mod tests {
 
         let table = labui_table();
         let bg = labcolors_core::BgInput::solid("#101012").unwrap();
-        let direct = labcolors_core::resolve_named_set(
-            &bg,
-            &table,
-            &labcolors_core::VcPreset::Dim.viewing_conditions(),
-        )
-        .expect("valid loaded table resolves atomically");
+        let vc = labcolors_core::VcPreset::Dim.viewing_conditions();
+        let direct = labcolors_core::resolve_named_set(&bg, &table, &vc)
+            .expect("valid loaded table resolves atomically");
 
         assert_eq!(
             via_engine.roles.len(),
@@ -1328,13 +1434,21 @@ mod tests {
                 ) => {
                     assert_eq!(solved.hex(), c.hex, "{name}: hex");
                     assert_eq!(solved.lc(), c.lc, "{name}: lc");
-                    assert_eq!(solved.wcag_ratio(), c.wcag_ratio, "{name}: wcag");
+                    let report = labcolors_core::recheck_against("#101012", &[solved.hex()], &vc)
+                        .expect("emitted core hex rechecks");
+                    assert_eq!(report.len(), 1, "{name}: one report row");
+                    assert_eq!(report[0].0.to_bits(), c.lc.to_bits(), "{name}: report lc");
+                    assert_eq!(
+                        report[0].1.to_bits(),
+                        c.wcag_ratio.to_bits(),
+                        "{name}: wcag report projection"
+                    );
                     assert_eq!(*compressed, c.compressed, "{name}: compressed");
                     assert_eq!(*achieved_dj, c.achieved_dj, "{name}: achieved_dj");
                     assert_eq!(
-                        solved.floor_override(),
+                        solved.final_emission_adjusted(),
                         c.floor_override,
-                        "{name}: floor_override"
+                        "{name}: final-emission adjustment report"
                     );
                 }
                 (Resolved::Translucent(r), RoleOutcome::Translucent(o)) => {

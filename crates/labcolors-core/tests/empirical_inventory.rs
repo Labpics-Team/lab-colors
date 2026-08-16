@@ -60,14 +60,11 @@ const PERCEPTUAL_MODULES: [&str; 7] = [
 // modules are STANDARD-MODEL or bounded numeric-search transforms.
 const POLICY_LITERAL_MODULES: &[&str] = &["semantic.rs", "neutral.rs"];
 
-/// Bare float literal VALUES that are NOT tunable perceptual policy — universal
-/// domain/normalisation/degenerate/sentinel/numerical arithmetic, plus cited
-/// derivation-identity inputs (the same class `NUMERIC_METHOD_ALLOWLIST` excludes
-/// for named consts). A bare float in a POLICY module whose normalised value is on
-/// this list is not a hidden policy magnitude; anything else must be a NAMED const
-/// (with a marker + inventory row), so it surfaces through GATE-1/2/3. Each entry
-/// is a reviewable assertion that the value is not a tunable perceptual threshold:
-const BARE_FLOAT_ALLOWLIST: &[&str] = &[
+/// Bare float literal VALUES that are not tunable perceptual policy in the
+/// neutral policy module. The allowlist is deliberately module-scoped: a value
+/// admitted for one policy surface must not become a global escape hatch for a
+/// future numerical/core module.
+const BARE_FLOAT_ALLOWLIST_NEUTRAL: &[&str] = &[
     "0.0",   // additive identity / origin / degenerate lower clamp bound.
     "0.5",   // midpoint / half (curve centre t=0.5, half-cosine ease, rounding).
     "1.0",   // multiplicative identity / unit upper clamp bound / purity ceiling.
@@ -80,6 +77,26 @@ const BARE_FLOAT_ALLOWLIST: &[&str] = &[
     // perceptual threshold (see semantic.rs `max_contrast`).
     "360.0", // full-turn in degrees (hue-circle modulus, rem_euclid(360)).
 ];
+
+/// `semantic.rs` owns the frozen recipe-facing WCAG report projection, so its
+/// two normative ratio literals are admitted there and nowhere else. They are
+/// not shared with the other policy module. Numerical/model modules remain
+/// outside this deliberately policy-only bare-literal gate and are governed by
+/// the named-constant audit; this allowlist grants them no exemption.
+const BARE_FLOAT_ALLOWLIST_SEMANTIC: &[&str] = &[
+    "0.0", "0.5", "1.0", "2.0",
+    "3.0", // WCAG 2.2 SC 1.4.11 / large-text normative contrast ratio.
+    "4.5", // WCAG 2.2 SC 1.4.3 default-text normative contrast ratio.
+    "100.0", "180.0", "255.0", "300.0", "360.0",
+];
+
+fn bare_float_allowlist(module: &str) -> &'static [&'static str] {
+    match module {
+        "semantic.rs" => BARE_FLOAT_ALLOWLIST_SEMANTIC,
+        "neutral.rs" => BARE_FLOAT_ALLOWLIST_NEUTRAL,
+        other => panic!("bare-float policy scanner has no allowlist for {other}"),
+    }
+}
 
 /// STANDARD const names — excluded **by construction** (INV-3). These are pinned
 /// by an upstream standard / derivation-identity / pure numeric EPS, so they get
@@ -99,10 +116,6 @@ const NUMERIC_METHOD_ALLOWLIST: &[&str] = &[
     "RATIO_BISECT_EPS",
     "RATIO_EPS",
     "FLOOR_EPS",
-    // Lightness bracket-collapse epsilon in the apply_floor bisection — numeric,
-    // non-perceptual, hex-preserving early exit (solve.rs). Same class as
-    // RATIO_BISECT_EPS.
-    "FLOOR_BISECT_EPS",
     "GAMUT_EPS",
     // Legacy-эпсилон уточнения кривой ограничивает путь совместимости, но не
     // является перцептивным порогом и не сертифицирует неподвижную точку sRGB8.
@@ -505,7 +518,7 @@ fn scan_tree() -> Vec<DetectedConst> {
 // scan (bare-literal) — GATE-5's detector. Finds inline bare float literals in a
 // POLICY module's PRODUCTION code (outside consts, `fn default()` field literals,
 // `#[cfg(test)]` blocks, and comments) whose value is not on
-// `BARE_FLOAT_ALLOWLIST`. Shared verbatim by the gate and the RED-proof (INV-4).
+// module-scoped allowlist. Shared verbatim by the gate and the RED-proof (INV-4).
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// One detected inline bare float literal that is NOT allowlisted — a candidate
@@ -640,7 +653,7 @@ fn scan_bare_floats_tree() -> Vec<BareFloatSite> {
         all.extend(scan_bare_float_literals(
             module,
             &source,
-            BARE_FLOAT_ALLOWLIST,
+            bare_float_allowlist(module),
         ));
     }
     all
@@ -1223,7 +1236,7 @@ fn gate4_grounded_citations_are_truthful() {
 // ─────────────────────────────────────────────────────────────────────────────
 // GATE 5 — inline-bare-literal (differential). Every production bare float literal
 // in a POLICY module (`POLICY_LITERAL_MODULES`) must be either an allowlisted
-// domain/normalisation value (`BARE_FLOAT_ALLOWLIST`) or extracted into a NAMED
+// domain/normalisation value in that module's allowlist or extracted into a NAMED
 // const (which then flows through GATE-1/2/3). Closes the CLASS "a tunable
 // perceptual-policy magnitude hides as an inline literal instead of a marked
 // const" — the exact blindness that let the label fractions and Separator Lc
@@ -1243,7 +1256,7 @@ fn gate5_no_untracked_bare_float_literals() {
          allowlisted domain/normalisation values nor extracted into a named const (a tunable \
          perceptual magnitude must be a marked const, not a magic number):\n  {}\n\
          Fix: extract to a `// SSOT-TRACKED` const + inventory row, or — if it is genuinely \
-         non-policy domain arithmetic — add its value to `BARE_FLOAT_ALLOWLIST` with a rationale.",
+         non-policy domain arithmetic — add its value to that module's explicit allowlist with a rationale.",
         offenders.len(),
         offenders.join("\n  ")
     );
@@ -1281,16 +1294,34 @@ fn unmarked_after_splice(snippet: &str) -> Vec<String> {
 /// of `semantic.rs` (a POLICY module) and return the values of every un-allowlisted
 /// bare float the *same* GATE-5 scanner flags — so the RED-proof exercises the real
 /// bare-literal detection verbatim (INV-4), not a green-from-birth copy.
-fn bare_floats_after_splice(snippet: &str) -> Vec<String> {
-    let original = read_module("semantic.rs");
+fn bare_floats_after_splice_in(module: &str, snippet: &str) -> Vec<String> {
+    let original = read_module(module);
     let mut spliced = String::with_capacity(original.len() + snippet.len() + 2);
     spliced.push_str(snippet);
     spliced.push('\n');
     spliced.push_str(&original);
-    scan_bare_float_literals("semantic.rs", &spliced, BARE_FLOAT_ALLOWLIST)
+    scan_bare_float_literals(module, &spliced, bare_float_allowlist(module))
         .into_iter()
         .map(|s| s.value)
         .collect()
+}
+
+fn bare_floats_after_splice(snippet: &str) -> Vec<String> {
+    bare_floats_after_splice_in("semantic.rs", snippet)
+}
+
+#[test]
+fn wcag_ratio_literals_are_scoped_to_the_semantic_projection() {
+    let snippet = "fn _audit_wcag_ratios() -> (f64, f64) { (3.0, 4.5) }";
+    assert!(
+        bare_floats_after_splice_in("semantic.rs", snippet).is_empty(),
+        "semantic.rs owns the frozen recipe-facing WCAG report projection"
+    );
+    assert_eq!(
+        bare_floats_after_splice_in("neutral.rs", snippet),
+        ["3.0".to_string(), "4.5".to_string()],
+        "WCAG ratio literals must not become a global policy-module escape hatch"
+    );
 }
 
 #[test]

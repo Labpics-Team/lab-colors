@@ -40,10 +40,10 @@ use crate::lpc::{
 use crate::scale::max_chroma;
 use crate::spaces::oklab::{neutral_srgb_linear, oklab_to_srgb_linear};
 use crate::spaces::srgb::{
-    hex_from_srgb, srgb_from_hex, srgb_gamma, srgb_gamma_inv, srgb_to_xyz, srgb8_from_linear,
+    encoded_srgb_relative_luminance, hex_from_srgb, srgb_from_hex, srgb_gamma, srgb_gamma_inv,
+    srgb_to_xyz, srgb8_from_linear,
 };
 use crate::spaces::vc::ViewingConditions;
-use crate::wcag;
 
 /// Oklab hue angle in degrees, normalised to `[0, 360)`.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -98,37 +98,6 @@ pub enum Gamut {
     Srgb,
 }
 
-/// The WCAG 2.1 AA legal contrast floor a contract must clear.
-///
-/// EAA / EN 301 549 mandate WCAG 2.1 level AA: a relative-luminance contrast
-/// ratio of 4.5:1 for normal text (success criterion 1.4.3) and 3:1 for
-/// user-interface components and graphical objects (1.4.11). The floor is the
-/// legal minimum *beneath* the transitional Ys candidate-score target: if the
-/// candidate does not clear it, [`solve`] pushes the colour until it does and
-/// flags the result via [`Solved::floor_override`]. Decorative contracts carry
-/// [`None`](Floor::None): no normative WCAG floor is requested for them.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum Floor {
-    /// WCAG 2.1 AA normal text — contrast ratio ≥ 4.5:1.
-    AaText,
-    /// WCAG 2.1 AA UI components / graphical objects — contrast ratio ≥ 3:1.
-    AaUi,
-    /// No normative WCAG floor (decorative contracts).
-    None,
-}
-
-impl Floor {
-    /// The minimum WCAG 2.1 contrast ratio this floor enforces, if any.
-    pub(crate) fn min_ratio(self) -> Option<f64> {
-        match self {
-            Floor::AaText => Some(wcag::AA_TEXT_RATIO),
-            Floor::AaUi => Some(wcag::AA_UI_RATIO),
-            Floor::None => Option::None,
-        }
-    }
-}
-
 /// A contrast contract: the band of acceptable contrast against the background.
 ///
 /// Expressed as a signed Ys candidate-score range `Lc = [floor, ceiling]`,
@@ -137,62 +106,36 @@ impl Floor {
 /// contracts use a degenerate range (`floor == ceiling`). `solve` targets
 /// `floor`. This frozen SAPC-shaped coordinate is not an LPC/readability verdict.
 ///
-/// Every contract also carries a WCAG 2.1 [`Floor`]: text and UI contracts get
-/// the AA legal minimum by default (4.5:1 / 3:1); range/decorative
-/// contracts get [`Floor::None`]. Disable or change it explicitly with
-/// [`with_conformance`](Contract::with_conformance).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Contract {
     floor: f64,
     ceiling: f64,
-    conformance: Floor,
 }
 
 impl Contract {
     /// A text contract for an explicit signed target `Lc` (degenerate range).
     ///
-    /// Carries the WCAG 2.1 AA *normal-text* floor ([`Floor::AaText`], 4.5:1) by
-    /// default — disable it explicitly with [`with_conformance`](Self::with_conformance).
     pub fn text(target_lc: f64) -> Self {
         Self {
             floor: target_lc,
             ceiling: target_lc,
-            conformance: Floor::AaText,
         }
     }
 
     /// A UI-component contract for an explicit signed target `Lc` (degenerate
     /// range).
     ///
-    /// Carries the WCAG 2.1 AA *non-text* floor ([`Floor::AaUi`], 3:1) by
-    /// default — for icons, controls, focus rings and graphical objects.
     pub fn ui(target_lc: f64) -> Self {
         Self {
             floor: target_lc,
             ceiling: target_lc,
-            conformance: Floor::AaUi,
         }
     }
 
     /// A range contract `[floor, ceiling]` of signed `Lc`. `solve` targets `floor`.
     ///
-    /// A transitional decorative Ys candidate-score band. It carries
-    /// [`Floor::None`]: no normative WCAG floor is requested.
     pub fn range(floor: f64, ceiling: f64) -> Self {
-        Self {
-            floor,
-            ceiling,
-            conformance: Floor::None,
-        }
-    }
-
-    /// Override the WCAG 2.1 conformance [`Floor`]. The default depends on the
-    /// constructor ([`text`](Self::text) → AA text, [`ui`](Self::ui) → AA UI,
-    /// [`range`](Self::range) → none); pass [`Floor::None`] to disable the legal
-    /// floor explicitly.
-    pub fn with_conformance(mut self, conformance: Floor) -> Self {
-        self.conformance = conformance;
-        self
+        Self { floor, ceiling }
     }
 
     /// The targeted contrast (`floor`).
@@ -203,11 +146,6 @@ impl Contract {
     /// The upper bound of the contract band.
     pub fn ceiling(self) -> f64 {
         self.ceiling
-    }
-
-    /// The WCAG 2.1 conformance floor this contract enforces.
-    pub fn conformance(self) -> Floor {
-        self.conformance
     }
 }
 
@@ -246,16 +184,8 @@ impl BgInput {
         &self,
         _vc: &ViewingConditions,
     ) -> Result<LumaInterval, SolveFailure> {
-        let y = wcag::relative_luminance(quantised_display(self.linear_srgb));
+        let y = encoded_srgb_relative_luminance(quantised_display(self.linear_srgb));
         Ok(LumaInterval { lo: y, hi: y })
-    }
-
-    /// Gamma-encoded (8-bit-quantised) sRGB of the endpoint the WCAG floor is
-    /// checked against — the background colour with the least luminance contrast
-    /// for the target's polarity. For the current opaque background domain this
-    /// is just the validated colour.
-    fn governing_display(&self, _target: f64) -> [f64; 3] {
-        quantised_display(self.linear_srgb)
     }
 
     /// Гамма-кодированный 8-битный sRGB фона (`[0,1]³`, byte/255) — домен
@@ -299,18 +229,13 @@ impl LumaInterval {
     }
 }
 
-/// A solved foreground colour, its Ys candidate score, and legal contrast.
-///
-/// The signed Ys candidate [`lc`](Solved::lc) score from the frozen SAPC-shaped curve and the
-/// legal [`wcag_ratio`](Solved::wcag_ratio) are reported separately. `lc` is a
-/// solver coordinate, not an admitted LPC/readability certificate.
+/// A solved foreground colour and its Ys candidate score.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Solved {
     color: LcsColor,
     hex: String,
     lc: f64,
-    wcag_ratio: f64,
-    floor_override: bool,
+    final_emission_adjusted: bool,
 }
 
 impl Solved {
@@ -326,27 +251,25 @@ impl Solved {
 
     /// The signed Ys candidate score `Lc` the frozen SAPC-shaped curve gives the
     /// quantised foreground/background pair. This is neither complete LPC nor
-    /// a readability verdict; see [`wcag_ratio`](Self::wcag_ratio) for the
-    /// separately reported legal ratio.
+    /// a readability verdict.
     pub fn lc(&self) -> f64 {
         self.lc
     }
 
-    /// The WCAG 2.1 relative-luminance contrast ratio (1–21) of the resolved
-    /// colour against the background, measured on the quantised hex. For a
-    /// text/UI contract this is guaranteed to meet the contract's [`Floor`]
-    /// (≥ 4.5 or ≥ 3.0); for a [`Floor::None`] contract it is reported for
-    /// transparency but not enforced.
-    pub fn wcag_ratio(&self) -> f64 {
-        self.wcag_ratio
+    /// Whether a caller-owned hard predicate over the final emitted bytes moved
+    /// the analytic candidate before selection.
+    ///
+    /// This is report-only provenance: it carries no criterion kind, threshold,
+    /// or decision rule and is never read by the solver. Pre-cutover bindings
+    /// project it onto their frozen compatibility field; the emitted bytes remain
+    /// the source of truth for every concrete criterion measurement.
+    pub fn final_emission_adjusted(&self) -> bool {
+        self.final_emission_adjusted
     }
 
-    /// `true` when the WCAG legal floor overrode the Ys candidate-score target: the
-    /// candidate solution did not clear the floor, so the colour was pushed (darker for
-    /// dark-on-light, lighter for light-on-dark) until it did. Lets the caller
-    /// report that the normative floor changed the transitional target.
-    pub fn floor_override(&self) -> bool {
-        self.floor_override
+    fn with_final_emission_adjusted(mut self, adjusted: bool) -> Self {
+        self.final_emission_adjusted = adjusted;
+        self
     }
 }
 
@@ -371,11 +294,17 @@ pub enum SolveFailure {
     /// `closest_examined` is the smallest-error `|Lc|` among the analytic seed
     /// and the at most `NEIGHBOR_STEPS` distinct neighbours actually measured.
     BoundedSearchExhausted { target: f64, closest_examined: f64 },
-    /// The WCAG legal floor cannot be met on this background even at the
-    /// achromatic extreme (pure black for dark-on-light, pure white for
-    /// light-on-dark). `max_ratio` is the most contrast this background can
-    /// supply in that polarity; `floor` is the ratio the contract required.
-    FloorUnreachable { floor: f64, max_ratio: f64 },
+    /// An explicitly declared final-emission criterion cannot be satisfied on
+    /// this background even at the achromatic extreme of the polarity.
+    ///
+    /// W5: the solver carries no criterion kind or threshold. A caller-owned
+    /// final-emission predicate supplies only its stable wire key so an empty
+    /// admissible set is returned as a typed domain outcome instead of a panic
+    /// or plausible colour.
+    UnsatisfiableCriterion {
+        /// Stable wire key of the canonical criterion that cannot be met.
+        criterion: &'static str,
+    },
     /// Malformed input, such as an invalid hex colour or a non-finite target.
     InvalidInput(String),
     /// A value produced and validated by the core later violated an internal
@@ -444,8 +373,8 @@ impl SolveFailure {
             Self::BoundedSearchExhausted { .. } => {
                 (SolveFailureCategory::Unresolved, "bounded_search_exhausted")
             }
-            Self::FloorUnreachable { .. } => {
-                (SolveFailureCategory::Unreachable, "floor_unreachable")
+            Self::UnsatisfiableCriterion { .. } => {
+                (SolveFailureCategory::Unreachable, "unsatisfiable_criterion")
             }
             Self::InvalidInput(_) => (SolveFailureCategory::Rejected, "invalid_input"),
             Self::InternalInvariant(_) => return None,
@@ -475,9 +404,9 @@ impl core::fmt::Display for SolveFailure {
                 f,
                 "bounded search exhausted for target Lc {target:.2}; closest examined |Lc| was {closest_examined:.2}"
             ),
-            Self::FloorUnreachable { floor, max_ratio } => write!(
+            Self::UnsatisfiableCriterion { criterion } => write!(
                 f,
-                "WCAG floor {floor:.1}:1 is unreachable on this background (max {max_ratio:.2}:1)"
+                "final-emission criterion {criterion} is unsatisfiable on this background"
             ),
             Self::InvalidInput(msg) => write!(f, "invalid input: {msg}"),
             Self::InternalInvariant(msg) => write!(f, "internal invariant failure: {msg}"),
@@ -592,12 +521,36 @@ fn validate_job(
     Ok(())
 }
 
-/// Solve one foreground against a background whose luminance `interval` is
-/// already computed — the shared core of [`solve`], [`solve_many`], and the
-/// per-role solves in [`resolve_set`](crate::resolve_set). Inputs are assumed
-/// validated (finite target/hue/ratio, sRGB gamut); the public entry points
-/// guard that before calling in. See the [module documentation](self) for the
-/// algorithm.
+/// Caller-owned final-byte predicate whose admissible set is monotone from the
+/// analytic candidate toward the target polarity's contrast extreme.
+///
+/// For `lightness(t) = candidate + t * (extreme - candidate)`, callers must
+/// guarantee that `accepts(lightness(t0))` implies
+/// `accepts(lightness(t1))` for every `0 <= t0 <= t1 <= 1`. The solver relies
+/// on that prefix-fail/suffix-pass law to locate the first admissible byte by
+/// bisection; an arbitrary predicate is not a value of this type.
+#[derive(Clone, Copy)]
+pub(crate) struct MonotoneFinalEmissionConstraint<'a> {
+    key: &'static str,
+    accepts: &'a dyn Fn(&str) -> Result<bool, SolveFailure>,
+}
+
+impl<'a> MonotoneFinalEmissionConstraint<'a> {
+    /// Bind a predicate proven monotone toward the target polarity's contrast
+    /// extreme. The caller owns that proof; construction is intentionally named
+    /// so a generic boolean callback cannot hide the required search law.
+    pub(crate) fn toward_contrast_extreme(
+        key: &'static str,
+        accepts: &'a dyn Fn(&str) -> Result<bool, SolveFailure>,
+    ) -> Self {
+        Self { key, accepts }
+    }
+
+    fn accepts(self, hex: &str) -> Result<bool, SolveFailure> {
+        (self.accepts)(hex)
+    }
+}
+
 pub(crate) fn solve_in(
     bg: &BgInput,
     contract: Contract,
@@ -606,35 +559,80 @@ pub(crate) fn solve_in(
     vc: &ViewingConditions,
     interval: LumaInterval,
 ) -> Result<Solved, SolveFailure> {
+    solve_in_core(bg, contract, hue, chroma_policy, vc, interval, None)
+}
+
+/// Solve with one caller-owned monotone hard predicate over the final emitted
+/// colour.
+///
+/// The numerical solver remains unaware of criterion kinds and thresholds. The
+/// caller supplies a typed evaluator over [`Solved::hex`] whose admissible set
+/// is monotone toward the target polarity's contrast extreme; this function
+/// only maintains the generic admissible-set invariant: the selected candidate
+/// must satisfy both the candidate-score contract and the final-emission
+/// predicate.
+pub(crate) fn solve_in_with_monotone_final_emission_constraint(
+    bg: &BgInput,
+    contract: Contract,
+    hue: Hue,
+    chroma_policy: ChromaPolicy,
+    vc: &ViewingConditions,
+    interval: LumaInterval,
+    constraint: MonotoneFinalEmissionConstraint<'_>,
+) -> Result<Solved, SolveFailure> {
+    solve_in_core(
+        bg,
+        contract,
+        hue,
+        chroma_policy,
+        vc,
+        interval,
+        Some(constraint),
+    )
+}
+
+/// Solve one foreground against a background whose luminance `interval` is
+/// already computed — the shared core of [`solve`], [`solve_many`], and the
+/// per-role solves in [`resolve_set`](crate::resolve_set). Inputs are assumed
+/// validated (finite target/hue/ratio, sRGB gamut); the public entry points
+/// guard that before calling in. See the [module documentation](self) for the
+/// algorithm.
+fn solve_in_core(
+    _bg: &BgInput,
+    contract: Contract,
+    hue: Hue,
+    chroma_policy: ChromaPolicy,
+    vc: &ViewingConditions,
+    interval: LumaInterval,
+    final_constraint: Option<MonotoneFinalEmissionConstraint<'_>>,
+) -> Result<Solved, SolveFailure> {
     let target = contract.floor();
     let y_gov = interval.governing(target);
 
     // Stage 1 — Ys candidate-score target. Invert the frozen curve for the Oklab lightness
     // that reproduces the contract's target against the governing endpoint.
     let l_lpc = solve_lpc_lightness(y_gov, target, hue, chroma_policy)?;
-
-    // Stage 2 — legal floor. Text/UI contracts carry a WCAG 2.1 AA floor; if the
-    // candidate solution falls short of it, push the colour until it clears the
-    // floor and flag the override. Decorative ([`Floor::None`]) contracts skip
-    // this entirely and keep their candidate-score target. The resolved Oklab
-    // lightness (not just the colour) is returned so the bounded neighbour search
-    // below can step to neighbouring hex grid points from it.
-    let bg_disp = bg.governing_display(target);
-    let (l_final, floor_override) = match contract.conformance().min_ratio() {
-        Some(floor_ratio) => apply_floor(l_lpc, floor_ratio, target, hue, chroma_policy, bg_disp)?,
-        Option::None => (l_lpc, false),
+    let (l_start, constraint_adjusted) = match final_constraint {
+        Some(constraint) => enforce_monotone_final_emission_constraint(
+            l_lpc,
+            target,
+            hue,
+            chroma_policy,
+            constraint,
+        )?,
+        None => (l_lpc, false),
     };
 
-    // Stage 3 — quantise, measure, verify. Build the colour at the resolved
+    // Stage 2 — quantise, measure, verify. Build the colour at the resolved
     // lightness, emit its hex, and confirm the dual gate (candidate-score floor at
-    // both interval ends, plus the legal WCAG floor for text/UI) still holds on
-    // the *quantised* colour. If it does not, walk a bounded number of neighbouring
+    // both interval ends) still holds on the *quantised* colour. If it does not,
+    // walk a bounded number of neighbouring
     // hex steps toward larger `|Lc|` before returning an explicitly scoped
     // exhausted-search outcome. Every candidate is re-measured: no unexamined
     // colour is described or implied by the result.
     let evaluate = |l_ok: f64| -> Result<Candidate, SolveFailure> {
         let rgb = build_color(l_ok, hue, chroma_policy);
-        let solved = finish(rgb, y_gov, bg_disp, floor_override, vc)?;
+        let solved = finish(rgb, y_gov, vc)?;
         // Candidate-score floor at every interval endpoint. The governing endpoint's
         // contrast is exactly `solved.lc()` (it is the `y_bg` `finish` measured
         // against), so reuse it instead of re-deriving foreground display
@@ -647,28 +645,75 @@ pub(crate) fn solve_in(
                 meets_floor(&solved, y_end, target, vc)
             }
         });
-        // The walk only moves toward the achromatic extreme, which raises (never
-        // lowers) WCAG contrast, but re-verify the legal floor explicitly rather
-        // than lean on an unproven monotonicity assumption.
-        let legal_ok = contract
-            .conformance()
-            .min_ratio()
-            .is_none_or(|floor_ratio| solved.wcag_ratio() + 1e-9 >= floor_ratio);
         #[cfg(test)]
         probe_log::record(solved.hex(), solved.lc());
+        let final_emission_ok = match final_constraint {
+            Some(constraint) => constraint.accepts(solved.hex())?,
+            None => true,
+        };
         Ok(Candidate {
-            passes: perceptual_ok && legal_ok,
+            passes: perceptual_ok && final_emission_ok,
             lc: solved.lc(),
             solved,
         })
     };
 
-    let primary = evaluate(l_final)?;
+    let primary = evaluate(l_start)?;
     if primary.passes {
-        return Ok(primary.solved);
+        return Ok(primary
+            .solved
+            .with_final_emission_adjusted(constraint_adjusted));
     }
-    solve_bounded_neighbor_search(l_final, target, hue, chroma_policy, primary.lc, evaluate)
+    solve_bounded_neighbor_search(l_start, target, hue, chroma_policy, primary.lc, evaluate)
+        .map(|solved| solved.with_final_emission_adjusted(constraint_adjusted))
 }
+
+fn enforce_monotone_final_emission_constraint(
+    l_candidate: f64,
+    target: f64,
+    hue: Hue,
+    chroma_policy: ChromaPolicy,
+    constraint: MonotoneFinalEmissionConstraint<'_>,
+) -> Result<(f64, bool), SolveFailure> {
+    let accepts_at = |lightness: f64| {
+        let hex = hex_from_srgb(build_color(lightness, hue, chroma_policy));
+        constraint.accepts(&hex)
+    };
+
+    if accepts_at(l_candidate)? {
+        return Ok((l_candidate, false));
+    }
+
+    let l_extreme = if target >= 0.0 { 0.0 } else { 1.0 };
+    if !accepts_at(l_extreme)? {
+        return Err(SolveFailure::UnsatisfiableCriterion {
+            criterion: constraint.key,
+        });
+    }
+
+    let mut lo = 0.0_f64;
+    let mut hi = 1.0_f64;
+    for _ in 0..FINAL_EMISSION_BISECTION_STEPS {
+        let mid = (lo + hi) * 0.5;
+        let lightness = l_candidate + (l_extreme - l_candidate) * mid;
+        if accepts_at(lightness)? {
+            hi = mid;
+        } else {
+            lo = mid;
+        }
+    }
+
+    Ok((l_candidate + (l_extreme - l_candidate) * hi, true))
+}
+
+/// Number of binary64 partitions used to locate the first admissible final
+/// emission along the caller-proven monotone path. `2^-48` lightness resolution
+/// is far below the 8-bit output decision scale while retaining five mantissa
+/// guard bits; the emitted hex is still re-evaluated after the search, so this
+/// is a bounded numerical precision budget, not a criterion proof.
+// SSOT-TRACKED — 48 partitions are the final-emission search precision; both
+// WCAG thresholds/polarities are pinned by the emitted-byte oracle test.
+const FINAL_EMISSION_BISECTION_STEPS: u32 = 48;
 
 /// The quantisation budget: a solved colour is accepted only when its measured
 /// `Lc` lands within this *symmetric* distance of the target. The analytic
@@ -687,8 +732,8 @@ const QUANT_BUDGET: f64 = 1.0;
 
 /// One on-grid candidate the bounded neighbour search evaluates: the solved
 /// colour, the perceptual `Lc` it actually achieves on the quantised hex, and
-/// whether it clears the dual gate (perceptual floor at both interval ends +
-/// legal WCAG floor). `passes` is the *lower*-bound floor check the primary
+/// whether it clears the dual gate (perceptual floor at both interval ends plus
+/// any caller-owned final-emission predicate). `passes` is the lower-bound check the primary
 /// solution uses; the neighbour walk additionally enforces the upper bound so a
 /// step can never overshoot the `±1` budget.
 struct Candidate {
@@ -876,8 +921,8 @@ pub(crate) fn solve_dj(
     // The contract is measured against the *displayed* background — the colour on
     // screen, gamma-quantised then decoded back to linear — so the separation is
     // the one the eye sees, in the same space `finish` measures the foreground in.
-    let bg_disp = bg.governing_display(sign);
-    // `governing_display` is gamma-encoded (8-bit display values); decode back to
+    let bg_disp = bg.encoded_display();
+    // The encoded background is gamma-encoded (8-bit display values); decode back to
     // linear so the J' forward sees the same space `finish` measures in.
     let bg_disp_linear = [
         srgb_gamma_inv(bg_disp[0]),
@@ -901,7 +946,7 @@ pub(crate) fn solve_dj(
     let evaluate = |jp_goal: f64| -> Result<DjCandidate, SolveFailure> {
         let l_ok = crate::scale::jp_to_oklab_l(jp_goal, vc);
         let rgb = build_color(l_ok, hue, chroma_policy);
-        let solved = finish(rgb, y_gov, bg_disp, false, vc)?;
+        let solved = finish(rgb, y_gov, vc)?;
         let rgb_quantised = srgb_from_hex(solved.hex()).map_err(|reason| {
             SolveFailure::InternalInvariant(format!(
                 "solver emitted an invalid sRGB hex during dJ refinement: {reason}"
@@ -994,106 +1039,7 @@ pub(crate) struct DjSolved {
     pub(crate) degraded: bool,
 }
 
-/// Stage 2: enforce the WCAG legal floor on the quantised colour.
-///
-/// If the perceptual solution already clears `floor_ratio`, perception governs
-/// and the colour is returned unchanged (no override). Otherwise the lightness
-/// is pushed toward the achromatic extreme in the contract's polarity — darker
-/// for dark-on-light (`target ≥ 0`), lighter for light-on-dark — where WCAG
-/// contrast is greatest, by the smallest amount the lightness bisection finds
-/// that still clears the floor on the quantised hex. (For chromatic policies
-/// the ratio along the path is not formally proven monotonic, so "smallest" is
-/// up to the bisection's resolution; the floor guarantee itself never depends
-/// on monotonicity — the returned colour is always a verified passing point.) If even the extreme cannot reach the floor, the contract
-/// is [`SolveFailure::FloorUnreachable`].
-/// Lightness-bracket width below which the floor bisection has pinned the
-/// lightness finely enough that the emitted 8-bit hex can no longer move. At
-/// ~1e-9 it is far tighter than the lightness step one hex byte spans, so the
-/// early exit is provably hex-preserving while cutting the bisection from a
-/// fixed 48 steps to ~30. Mirrors `semantic::RATIO_BISECT_EPS` (excluded from the
-/// perceptual-const gate by `NUMERIC_METHOD_ALLOWLIST`, same numeric-epsilon class).
-const FLOOR_BISECT_EPS: f64 = 1e-9;
-
-fn apply_floor(
-    l_lpc: f64,
-    floor_ratio: f64,
-    target: f64,
-    hue: Hue,
-    chroma_policy: ChromaPolicy,
-    bg_disp: [f64; 3],
-) -> Result<(f64, bool), SolveFailure> {
-    let rgb_lpc = build_color(l_lpc, hue, chroma_policy);
-    if floor_ratio_of(rgb_lpc, bg_disp) >= floor_ratio {
-        return Ok((l_lpc, false));
-    }
-
-    let l_extreme = if target >= 0.0 { 0.0 } else { 1.0 };
-    let max_ratio = floor_ratio_of(build_color(l_extreme, hue, chroma_policy), bg_disp);
-    if max_ratio < floor_ratio {
-        return Err(SolveFailure::FloorUnreachable {
-            floor: floor_ratio,
-            max_ratio,
-        });
-    }
-
-    // Bisect the lightness path from the perceptual solution (`t = 0`, below the
-    // floor) to the achromatic extreme (`t = 1`, clears it). Invariant: `hi`
-    // always names a colour that clears the floor, `lo` one that does not, so the
-    // returned lightness is guaranteed to meet the floor even after quantisation.
-    //
-    // The background's relative luminance is loop-invariant — computed ONCE here.
-    // `floor_ratio_of` re-linearised `bg_disp` (three `powf(2.4)`) on every
-    // iteration; hoisting it feeds the same `rl_bg` to `ratio_from_luminances`,
-    // which is the exact value `contrast_ratio(fg, bg)` would produce (same
-    // operands, same order) — byte-identical, pinned by
-    // `apply_floor_matches_the_cold_bisection_byte_for_byte`.
-    let rl_bg = wcag::relative_luminance(bg_disp);
-    let mut lo = 0.0_f64;
-    let mut hi = 1.0_f64;
-    for _ in 0..48 {
-        // Early exit — the returned `hi` maps a lightness span `|l_extreme -
-        // l_lpc| ≤ 1`, so once the bracket collapses below `FLOOR_BISECT_EPS`
-        // the fully-converged `hi*` (with `lo ≤ hi* ≤ hi`) differs from the
-        // current `hi` by < 1e-9 in lightness — far below the ~1/255 channel
-        // move one 8-bit byte spans, so `build_color(l_final)` quantises to the
-        // identical hex. Same provably-hex-preserving reasoning as
-        // `ratio_for_target_mp`'s `RATIO_BISECT_EPS`; pinned byte-for-byte
-        // against the full-48 bisection by
-        // `apply_floor_matches_the_cold_bisection_byte_for_byte`.
-        if hi - lo < FLOOR_BISECT_EPS {
-            break;
-        }
-        let mid = (lo + hi) * 0.5;
-        let l_mid = l_lpc + (l_extreme - l_lpc) * mid;
-        if floor_ratio_of_with_bg_rl(build_color(l_mid, hue, chroma_policy), rl_bg) >= floor_ratio {
-            hi = mid;
-        } else {
-            lo = mid;
-        }
-    }
-    let l_final = l_lpc + (l_extreme - l_lpc) * hi;
-    Ok((l_final, true))
-}
-
-/// WCAG 2.1 contrast ratio of a linear-sRGB foreground (quantised to the hex it
-/// will be emitted as) against the gamma-encoded background.
-fn floor_ratio_of(rgb_linear: [f64; 3], bg_disp: [f64; 3]) -> f64 {
-    wcag::contrast_ratio(quantised_display(rgb_linear), bg_disp)
-}
-
-/// [`floor_ratio_of`] with the background's relative luminance precomputed, for a
-/// loop over many foregrounds against ONE fixed background (the `apply_floor`
-/// bisection). Byte-identical to `floor_ratio_of(rgb_linear, bg_disp)` when
-/// `rl_bg == relative_luminance(bg_disp)`: `contrast_ratio` is exactly
-/// `ratio_from_luminances(relative_luminance(fg), relative_luminance(bg))`, so
-/// substituting the cached `rl_bg` changes nothing but the redundant re-linearise.
-fn floor_ratio_of_with_bg_rl(rgb_linear: [f64; 3], rl_bg: f64) -> f64 {
-    let rl_fg = wcag::relative_luminance(quantised_display(rgb_linear));
-    wcag::ratio_from_luminances(rl_fg, rl_bg)
-}
-
-/// Gamma-encoded sRGB of a linear stimulus, quantised to 8-bit — the display
-/// values WCAG 2.1 measures, matching the emitted `#RRGGBB` hex exactly.
+/// Gamma-encoded sRGB of a linear stimulus, quantised to the emitted 8-bit grid.
 pub(crate) fn quantised_display(rgb_linear: [f64; 3]) -> [f64; 3] {
     let q = |c: f64| (srgb_gamma(c).clamp(0.0, 1.0) * 255.0).round() / 255.0;
     [q(rgb_linear[0]), q(rgb_linear[1]), q(rgb_linear[2])]
@@ -1211,7 +1157,11 @@ fn physical_endpoint_or_range_failure(
 fn match_lightness_ys(target_ys: f64, hue: Hue, chroma_policy: ChromaPolicy) -> f64 {
     let ys_of = |l_ok: f64| {
         let rgb = build_color(l_ok, hue, chroma_policy);
-        wcag::relative_luminance([srgb_gamma(rgb[0]), srgb_gamma(rgb[1]), srgb_gamma(rgb[2])])
+        encoded_srgb_relative_luminance([
+            srgb_gamma(rgb[0]),
+            srgb_gamma(rgb[1]),
+            srgb_gamma(rgb[2]),
+        ])
     };
     cold_bisect(target_ys, ys_of)
 }
@@ -1249,8 +1199,9 @@ fn build_color(l_ok: f64, hue: Hue, chroma_policy: ChromaPolicy) -> [f64; 3] {
         // (прибавляются точные нули), LMS = L³ поканально, а строки матрицы
         // LMS→linear-sRGB суммируются ровно в 1 — линейный серый есть L³ в
         // каждом канале. Прогон через матрицу вносил пер-строчную ошибку ~1 ulp
-        // с РАЗНЫМ знаком по каналам; бисекция `apply_floor`, честно меряющая
-        // квантованный hex, сходится ровно на байтовый обрыв (x.5/255), где эта
+        // с РАЗНЫМ знаком по каналам; бисекция caller-owned final byte-predicate,
+        // честно меряющего квантованный hex, сходится ровно на байтовый обрыв
+        // (x.5/255), где эта
         // асимметрия расщепляет «серый» на целый байт: floored-tertiary на белом
         // эмитил #949595 (148,149,149; ratio 3.0036) вместо документированного
         // #949494. Один общий float на все три канала закрывает класс целиком:
@@ -1272,33 +1223,21 @@ fn build_color(l_ok: f64, hue: Hue, chroma_policy: ChromaPolicy) -> [f64; 3] {
     ]
 }
 
-/// Quantise the ideal colour to hex and report both contrasts it actually
-/// achieves — what the caller gets, not the pre-quantisation ideal. The
-/// perceptual `lc` is measured in `Ys` space (WCAG relative luminance of the
-/// quantised display colour — ADR-0003) against `y_bg`; the legal `wcag_ratio`
-/// on the same display colour against `bg_disp`. Обе метрики читают ОДНУ
-/// люминансу — домен-мисматч оси читаемости закрыт конструкцией. The CAM16
+/// Quantise the ideal colour to hex and report the candidate score it actually
+/// achieves — what the caller gets, not the pre-quantisation ideal. The CAM16
 /// forward remains solely for the returned [`LcsColor`] appearance correlates.
-fn finish(
-    rgb_ideal: [f64; 3],
-    y_bg: f64,
-    bg_disp: [f64; 3],
-    floor_override: bool,
-    vc: &ViewingConditions,
-) -> Result<Solved, SolveFailure> {
+fn finish(rgb_ideal: [f64; 3], y_bg: f64, vc: &ViewingConditions) -> Result<Solved, SolveFailure> {
     let encoded = srgb8_from_linear(rgb_ideal);
     let hex = encoded.to_hex();
     let color = LcsColor::from_srgb8_with_vc(encoded, vc);
     let disp = encoded.encoded();
-    let y_fg = wcag::relative_luminance(disp);
+    let y_fg = encoded_srgb_relative_luminance(disp);
     let lc = lpc::contrast_core(y_fg, y_bg);
-    let wcag_ratio = wcag::contrast_ratio(disp, bg_disp);
     Ok(Solved {
         color,
         hex,
         lc,
-        wcag_ratio,
-        floor_override,
+        final_emission_adjusted: false,
     })
 }
 
@@ -1330,7 +1269,7 @@ fn meets_floor(solved: &Solved, y_bg: f64, target: f64, _vc: &ViewingConditions)
     // `byte/255 == quantised_display(decode(byte))` точно (пин
     // `display_equals_quantised_display_on_every_byte`) — читаем ту же `Ys`,
     // которую замерил `finish`.
-    let y_fg = wcag::relative_luminance(disp);
+    let y_fg = encoded_srgb_relative_luminance(disp);
     let lc = lpc::contrast_core(y_fg, y_bg);
     meets_floor_lc(lc, target)
 }
@@ -1411,12 +1350,11 @@ mod tests {
                 "bounded_search_exhausted",
             ),
             (
-                SolveFailure::FloorUnreachable {
-                    floor: 4.5,
-                    max_ratio: 3.0,
+                SolveFailure::UnsatisfiableCriterion {
+                    criterion: "sc-1.4.3-text-default",
                 },
                 SolveFailureCategory::Unreachable,
-                "floor_unreachable",
+                "unsatisfiable_criterion",
             ),
             (
                 SolveFailure::InvalidInput("x".into()),
@@ -1454,9 +1392,8 @@ mod tests {
                 target: 1.0,
                 closest_examined: 0.9,
             },
-            SolveFailure::FloorUnreachable {
-                floor: 4.5,
-                max_ratio: 2.0,
+            SolveFailure::UnsatisfiableCriterion {
+                criterion: "sc-1.4.3-text-default",
             },
             SolveFailure::InvalidInput("x".to_string()),
             SolveFailure::InternalInvariant("x".to_string()),
@@ -1469,7 +1406,7 @@ mod tests {
                 SolveFailure::BelowContrastFloor { .. }
                 | SolveFailure::ExceedsRange { .. }
                 | SolveFailure::BoundedSearchExhausted { .. }
-                | SolveFailure::FloorUnreachable { .. }
+                | SolveFailure::UnsatisfiableCriterion { .. }
                 | SolveFailure::InvalidInput(_)
                 | SolveFailure::InternalInvariant(_) => {}
             }
@@ -1484,6 +1421,197 @@ mod tests {
             (ViewingConditions::srgb(), "srgb"),
             (ViewingConditions::dim_surround(), "dim"),
         ]
+    }
+
+    fn wcag22_accepts(
+        foreground: &str,
+        background: &str,
+        criterion: crate::wcag22::Wcag22CriterionV1,
+    ) -> Result<bool, SolveFailure> {
+        use crate::wcag22::{Wcag22ApplicableDecisionV1, Wcag22AssessmentV1, evaluate_wcag22_hex};
+        match evaluate_wcag22_hex(foreground, background, criterion).map_err(|error| {
+            SolveFailure::InternalInvariant(format!(
+                "test WCAG22 evaluator rejected generated bytes: {error:?}"
+            ))
+        })? {
+            Wcag22AssessmentV1::Evaluated {
+                decision: Wcag22ApplicableDecisionV1::Pass,
+                ..
+            } => Ok(true),
+            Wcag22AssessmentV1::Evaluated {
+                decision: Wcag22ApplicableDecisionV1::Fail,
+                ..
+            } => Ok(false),
+            Wcag22AssessmentV1::NotEvaluated { .. } => Err(SolveFailure::InternalInvariant(
+                "explicit test criterion returned NotEvaluated".into(),
+            )),
+        }
+    }
+
+    fn nearest_passing_neutral_byte(
+        background: &str,
+        criterion: crate::wcag22::Wcag22CriterionV1,
+        target: f64,
+    ) -> u8 {
+        let mut bytes: Box<dyn Iterator<Item = u8>> = if target >= 0.0 {
+            Box::new((0_u8..=u8::MAX).rev())
+        } else {
+            Box::new(0_u8..=u8::MAX)
+        };
+        bytes
+            .find(|byte| {
+                let hex = format!("#{byte:02X}{byte:02X}{byte:02X}");
+                wcag22_accepts(&hex, background, criterion)
+                    .expect("finite sRGB8 oracle input must evaluate")
+            })
+            .expect("black or white must satisfy every supported WCAG criterion")
+    }
+
+    #[test]
+    fn caller_owned_final_emission_criteria_bind_both_wcag_boundaries() {
+        use crate::wcag22::Wcag22CriterionV1;
+
+        let vc = ViewingConditions::srgb();
+        for (background, target, criterion) in [
+            ("#FFFFFF", 60.0, Wcag22CriterionV1::Sc143TextDefault),
+            ("#FFFFFF", 45.0, Wcag22CriterionV1::Sc1411UiComponentOrState),
+            ("#101012", -30.0, Wcag22CriterionV1::Sc143TextDefault),
+            (
+                "#101012",
+                -20.0,
+                Wcag22CriterionV1::Sc1411UiComponentOrState,
+            ),
+        ] {
+            let bg = BgInput::solid(background).unwrap();
+            let interval = bg.luma_interval(&vc).unwrap();
+            let contract = Contract::text(target);
+            let unconstrained = solve_in(
+                &bg,
+                contract,
+                Hue::deg(0.0),
+                ChromaPolicy::Neutral,
+                &vc,
+                interval,
+            )
+            .unwrap();
+            assert!(
+                !wcag22_accepts(unconstrained.hex(), background, criterion).unwrap(),
+                "fixture must be RED before the final criterion: {background} target {target}, {}",
+                unconstrained.hex()
+            );
+            assert!(!unconstrained.final_emission_adjusted());
+
+            let accepts = |hex: &str| wcag22_accepts(hex, background, criterion);
+            let constraint =
+                MonotoneFinalEmissionConstraint::toward_contrast_extreme(criterion.key(), &accepts);
+            let constrained = solve_in_with_monotone_final_emission_constraint(
+                &bg,
+                contract,
+                Hue::deg(0.0),
+                ChromaPolicy::Neutral,
+                &vc,
+                interval,
+                constraint,
+            )
+            .unwrap();
+            assert!(
+                wcag22_accepts(constrained.hex(), background, criterion).unwrap(),
+                "final bytes must pass {criterion:?} on {background}: {}",
+                constrained.hex()
+            );
+            assert!(
+                constrained.final_emission_adjusted(),
+                "binding criterion movement must remain observable without becoming solver authority"
+            );
+            assert_ne!(constrained.hex(), unconstrained.hex());
+
+            let [red, green, blue] =
+                crate::srgb8::hex_bytes(constrained.hex()).expect("solver emits canonical sRGB8");
+            assert_eq!([red, green], [green, blue]);
+            let oracle = nearest_passing_neutral_byte(background, criterion, target);
+            assert_eq!(
+                red, oracle,
+                "search must land on the nearest passing byte for {criterion:?} on {background}"
+            );
+            let adjacent_failing = if target >= 0.0 {
+                oracle.checked_add(1)
+            } else {
+                oracle.checked_sub(1)
+            }
+            .expect("WCAG boundary fixture must have an adjacent byte");
+            let adjacent_hex =
+                format!("#{adjacent_failing:02X}{adjacent_failing:02X}{adjacent_failing:02X}");
+            assert!(
+                !wcag22_accepts(&adjacent_hex, background, criterion).unwrap(),
+                "adjacent byte {adjacent_hex} must remain the failing side of {criterion:?} on {background}"
+            );
+        }
+    }
+
+    #[test]
+    fn already_admissible_final_emission_is_byte_identical_and_unadjusted() {
+        use crate::wcag22::Wcag22CriterionV1;
+
+        let vc = ViewingConditions::srgb();
+        let bg = BgInput::solid("#FFFFFF").unwrap();
+        let interval = bg.luma_interval(&vc).unwrap();
+        let contract = Contract::text(75.0);
+        let unconstrained = solve_in(
+            &bg,
+            contract,
+            Hue::deg(0.0),
+            ChromaPolicy::Neutral,
+            &vc,
+            interval,
+        )
+        .unwrap();
+        let criterion = Wcag22CriterionV1::Sc143TextDefault;
+        assert!(wcag22_accepts(unconstrained.hex(), "#FFFFFF", criterion).unwrap());
+        let accepts = |hex: &str| wcag22_accepts(hex, "#FFFFFF", criterion);
+        let constraint =
+            MonotoneFinalEmissionConstraint::toward_contrast_extreme(criterion.key(), &accepts);
+        let constrained = solve_in_with_monotone_final_emission_constraint(
+            &bg,
+            contract,
+            Hue::deg(0.0),
+            ChromaPolicy::Neutral,
+            &vc,
+            interval,
+            constraint,
+        )
+        .unwrap();
+        assert_eq!(constrained.hex(), unconstrained.hex());
+        assert_eq!(constrained.lc().to_bits(), unconstrained.lc().to_bits());
+        assert!(!constrained.final_emission_adjusted());
+    }
+
+    #[test]
+    fn impossible_final_emission_criterion_is_typed_not_a_fallback() {
+        use crate::wcag22::Wcag22CriterionV1;
+
+        let vc = ViewingConditions::srgb();
+        let bg = BgInput::solid("#6E6E6E").unwrap();
+        let interval = bg.luma_interval(&vc).unwrap();
+        let criterion = Wcag22CriterionV1::Sc143TextDefault;
+        let accepts = |hex: &str| wcag22_accepts(hex, "#6E6E6E", criterion);
+        let constraint =
+            MonotoneFinalEmissionConstraint::toward_contrast_extreme(criterion.key(), &accepts);
+        let error = solve_in_with_monotone_final_emission_constraint(
+            &bg,
+            Contract::text(20.0),
+            Hue::deg(0.0),
+            ChromaPolicy::Neutral,
+            &vc,
+            interval,
+            constraint,
+        )
+        .unwrap_err();
+        assert_eq!(
+            error,
+            SolveFailure::UnsatisfiableCriterion {
+                criterion: criterion.key(),
+            }
+        );
     }
 
     #[test]
@@ -1600,11 +1728,11 @@ mod tests {
         vc: &ViewingConditions,
     ) -> Result<(Solved, f64), SolveFailure> {
         let bg = BgInput::solid(bg_hex)?;
-        // Floor::None: these helpers exercise the frozen candidate-curve inversion;
-        // the WCAG floor (on by default for text) is tested separately.
+        // W5: солвер больше не несёт юр. пола — эти хелперы упражняют только
+        // инверсию замороженной candidate-кривой.
         let solved = solve(
             bg,
-            Contract::text(target).with_conformance(Floor::None),
+            Contract::text(target),
             Hue::deg(0.0),
             ChromaPolicy::Neutral,
             vc,
@@ -1702,27 +1830,20 @@ mod tests {
     fn solved_metrics_are_reproducible_from_the_emitted_bytes() {
         let vc = ViewingConditions::srgb();
         let background = [1.0, 1.0, 1.0];
-        let y_bg = wcag::relative_luminance(background);
+        let y_bg = encoded_srgb_relative_luminance(background);
         for ideal in [
             [0.0, 0.5, 1.0],
             [0.003_130_8, 0.214_041_140_482_232_55, 0.999_999_999],
             [0.010_329, 0.215_861, 0.503_111],
         ] {
-            let solved = finish(ideal, y_bg, background, false, &vc)
-                .expect("finite generated colour must finish");
+            let solved = finish(ideal, y_bg, &vc).expect("finite generated colour must finish");
             let emitted = crate::spaces::srgb::srgb_encoded_from_hex(solved.hex())
                 .expect("finish emits canonical sRGB8");
-            let emitted_y = wcag::relative_luminance(emitted);
+            let emitted_y = encoded_srgb_relative_luminance(emitted);
             assert_eq!(
                 solved.lc().to_bits(),
                 lpc::contrast_core(emitted_y, y_bg).to_bits(),
                 "lc was not measured from emitted {}",
-                solved.hex()
-            );
-            assert_eq!(
-                solved.wcag_ratio().to_bits(),
-                wcag::contrast_ratio(emitted, background).to_bits(),
-                "WCAG ratio was not measured from emitted {}",
                 solved.hex()
             );
         }
@@ -1775,93 +1896,6 @@ mod tests {
         assert!(
             ok_count >= 60,
             "grid exercised too few reachable combos: {ok_count}"
-        );
-    }
-
-    #[test]
-    fn default_wcag_floor_preserves_polarity_sign() {
-        // The property grid above proves sign preservation under `Floor::None`
-        // (pure perceptual inversion). The PRODUCTION default for text is the AA
-        // WCAG floor, which may RAISE a too-weak |Lc| to the legal minimum — a
-        // separate code path (`apply_floor`). This pins the safety invariant on
-        // THAT path: the floor override may strengthen contrast but must never
-        // flip the foreground to the wrong side of the background. Weak targets
-        // (15/30/45 Lc, below the AA floor) force the override branch so the test
-        // is not a vacuous re-run of the no-floor grid.
-        let backgrounds = [
-            "#FFFFFF", "#E8E8E8", "#5A5A5A", "#101012", // neutrals
-            "#3478F6", "#0A3D62", // chromatic light + dark
-        ];
-        let mut reachable = 0_usize;
-        // Count override exercise per polarity: a single global counter could be
-        // satisfied by one side alone, leaving the other polarity's override path
-        // unguarded. We require BOTH below.
-        let mut overridden_pos = 0_usize;
-        let mut overridden_neg = 0_usize;
-        for (vc, vc_name) in vcs() {
-            for bg_hex in backgrounds {
-                for magnitude in MAGNITUDES {
-                    for target in [magnitude, -magnitude] {
-                        // Fresh per solve: `solve` consumes the `BgInput`.
-                        let bg = BgInput::solid(bg_hex).unwrap();
-                        // Default constructor → Floor::AaText (no with_conformance).
-                        let solved = match solve(
-                            bg,
-                            Contract::text(target),
-                            Hue::deg(0.0),
-                            ChromaPolicy::Neutral,
-                            &vc,
-                            Gamut::Srgb,
-                        ) {
-                            Ok(s) => s,
-                            // Wrong-polarity / out-of-range for this bg are
-                            // legitimately unreachable — skip, never a clip.
-                            Err(_) => continue,
-                        };
-                        reachable += 1;
-                        // Independently re-measure the emitted hex's signed Lc.
-                        let measured = candidate_lc(solved.hex(), bg_hex);
-                        // Compare signum, not `> 0.0`. Under the AA text floor every
-                        // reachable result clears 4.5:1, so `measured` is never the
-                        // dead-zone zero here — this is belt-and-suspenders. f64
-                        // signum is ±1.0 by sign bit (not 0.0 for a zero), so it
-                        // still tightens the one seam a bare `measured > 0.0` missed:
-                        // a negative target whose measurement collapsed to +0.0 now
-                        // mismatches (-1.0 vs +1.0) instead of passing as
-                        // `false == false`. target.signum() is always ±1.0 (target
-                        // is ±magnitude, never 0).
-                        assert_eq!(
-                            target.signum(),
-                            measured.signum(),
-                            "{vc_name} {bg_hex}: default WCAG floor broke polarity — \
-                             target {target}, measured {measured}, hex {}",
-                            solved.hex()
-                        );
-                        // Override detection: a weak target (well under the AA text
-                        // floor — 15/30/45 Lc all sit below the ~4.5:1 legal minimum,
-                        // wcag::AA_TEXT_RATIO) that the floor lifted past its request,
-                        // same sign. The `magnitude < 60` gate excludes already-strong
-                        // targets (which the floor leaves alone), so a large-but-not-
-                        // overridden result cannot be miscounted; the `5.0 * TOL`
-                        // margin clears the ±TOL (1 Lc) quantisation tolerance fivefold.
-                        if magnitude < 60.0 && measured.abs() > magnitude + 5.0 * TOL {
-                            if target > 0.0 {
-                                overridden_pos += 1;
-                            } else {
-                                overridden_neg += 1;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        assert!(reachable >= 20, "too few reachable combos: {reachable}");
-        // Both polarity override paths must be exercised, or the test is not
-        // guarding the invariant it claims on one side.
-        assert!(
-            overridden_pos > 0 && overridden_neg > 0,
-            "floor override not exercised on both polarities (pos {overridden_pos}, neg {overridden_neg}) — \
-             test would be vacuous on one side"
         );
     }
 
@@ -2003,7 +2037,7 @@ mod tests {
         );
         // Независимый перезамер на отданном hex.
         let fg = srgb_from_hex(d.solved.hex()).unwrap();
-        let bg_disp = bg.governing_display(-1.0);
+        let bg_disp = bg.encoded_display();
         let bg_lin = [
             srgb_gamma_inv(bg_disp[0]),
             srgb_gamma_inv(bg_disp[1]),
@@ -2035,7 +2069,7 @@ mod tests {
         let bg = BgInput::solid("#FFFFFF").unwrap();
         let from_text = solve(
             bg.clone(),
-            Contract::text(60.0).with_conformance(Floor::None),
+            Contract::text(60.0),
             Hue::deg(0.0),
             ChromaPolicy::Neutral,
             &vc,
@@ -2064,7 +2098,7 @@ mod tests {
         let target = 45.0;
         let solved = solve(
             bg,
-            Contract::text(target).with_conformance(Floor::None),
+            Contract::text(target),
             Hue::deg(264.0), // Oklab blue
             ChromaPolicy::Relative(0.8),
             &vc,
@@ -2109,86 +2143,17 @@ mod tests {
     }
 
     #[test]
-    fn aa_text_floor_holds_across_grid() {
-        // Dual gate: every solvable text contract with the default AA floor
-        // emits a colour whose WCAG 2.1 ratio — recomputed from the hex via the
-        // spec formula — clears 4.5:1, and the reported ratio matches it.
-        for (vc, vc_name) in vcs() {
-            for bg_hex in ["#FFFFFF", "#E8E8E8", "#101012", "#0A3D62"] {
-                for target in [15.0, 30.0, 45.0, 60.0, 75.0, 90.0, -15.0, -45.0, -75.0] {
-                    for (contract, min_ratio) in [
-                        (Contract::text(target), crate::wcag::AA_TEXT_RATIO),
-                        (Contract::ui(target), crate::wcag::AA_UI_RATIO),
-                    ] {
-                        let bg = BgInput::solid(bg_hex).unwrap();
-                        let res = solve(
-                            bg,
-                            contract,
-                            Hue::deg(0.0),
-                            ChromaPolicy::Neutral,
-                            &vc,
-                            Gamut::Srgb,
-                        );
-                        if let Ok(solved) = res {
-                            let fg = srgb_from_hex(solved.hex()).unwrap();
-                            let bgc = srgb_from_hex(bg_hex).unwrap();
-                            let ratio = crate::wcag::contrast_ratio(
-                                quantised_display(fg),
-                                quantised_display(bgc),
-                            );
-                            assert!(
-                                ratio >= min_ratio - 1e-9,
-                                "{vc_name} {bg_hex} t={target} floor {min_ratio}: ratio {ratio}, hex {}",
-                                solved.hex()
-                            );
-                            assert!(
-                                (solved.wcag_ratio() - ratio).abs() < 1e-9,
-                                "reported ratio {} vs recomputed {ratio}",
-                                solved.wcag_ratio()
-                            );
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn floor_overrides_a_weak_perceptual_target() {
-        // Conflict case: Lc 15 text on white is far below 4.5:1 — the law wins,
-        // the colour is pushed darker and the override is flagged.
-        let vc = ViewingConditions::srgb();
-        let bg = BgInput::solid("#FFFFFF").unwrap();
-        let solved = solve(
-            bg,
-            Contract::text(15.0),
-            Hue::deg(0.0),
-            ChromaPolicy::Neutral,
-            &vc,
-            Gamut::Srgb,
-        )
-        .unwrap();
-        assert!(solved.floor_override(), "floor must override Lc 15");
-        assert!(solved.wcag_ratio() >= 4.5 - 1e-9);
-        let measured = candidate_lc(solved.hex(), "#FFFFFF");
-        assert!(
-            measured > 15.0,
-            "pushed darker means more contrast, got {measured}"
-        );
-    }
-
-    #[test]
     fn neutral_policy_emits_byte_exact_grey_everywhere() {
         // Класс-инвариант ахроматики: ChromaPolicy::Neutral обязан эмитить
         // байт-точный серый (R==G==B) на ЛЮБОМ достижимом контракте — включая
-        // подъём законным полом и цели на границе округления байта. Регресс
-        // главы #64 (снос grey-LUT): ахроматика пошла через матричный
-        // roundtrip Oklab→sRGB, чья микро-асимметрия каналов у целей на
-        // ~x.5/255 расщепляет серый (#949595 у floored-tertiary на белом,
-        // Y=0.30 → 148.5/255). Инвариант держится конструкцией, не допуском.
+        // цели на границе округления байта. Регресс главы #64 (снос grey-LUT):
+        // ахроматика пошла через матричный roundtrip Oklab→sRGB, чья
+        // микро-асимметрия каналов у целей на ~x.5/255 расщепляет серый
+        // (#949595 у tertiary на белом, Y=0.30 → 148.5/255). Инвариант
+        // держится конструкцией, не допуском. W5: юр. пол снят с солвера, но
+        // байтовые обрывы остались свойством сетки — прицельная цель ниже.
         let vc = ViewingConditions::srgb();
         let mut reachable = 0;
-        let mut floored = 0;
         for bg_hex in ["#FFFFFF", "#F4F4F4", "#767676", "#101012", "#000000"] {
             for sign in [1.0_f64, -1.0] {
                 let mut m = 5.0_f64;
@@ -2209,7 +2174,6 @@ mod tests {
                             Gamut::Srgb,
                         ) {
                             reachable += 1;
-                            floored += solved.floor_override() as u32;
                             let hex = solved.hex();
                             assert!(
                                 hex[1..3] == hex[3..5] && hex[3..5] == hex[5..7],
@@ -2222,16 +2186,12 @@ mod tests {
                 }
             }
         }
-        // Свип обязан реально проходить и обычный, и floored-режим — иначе
-        // тест не сторожит заявленный инвариант.
+        // Свип обязан реально решать сетку, иначе тест не сторожит инвариант.
         assert!(reachable >= 100, "too few reachable combos: {reachable}");
-        assert!(floored > 0, "floor-lift режим не задет свипом");
 
-        // Прицельный обрыв: якорный таргет tertiary (0.47572199·max ≈ Lc 50.45,
-        // пол 3:1 на белом) кладёт бисекцию `apply_floor` ровно на байтовую
-        // границу 148.5/255, где 149-серый ещё падает (2.996 < 3), а флип ОДНОГО
-        // канала уже проходит (148,149,149 → 3.0036). Свип шагом 2.5 эту цель
-        // минует — регресс #949595 ловится только точным таргетом.
+        // Прицельный обрыв: цель у байтовой границы 148.5/255, где
+        // микро-асимметрия каналов расщепляла серый (#949595). Свип шагом 2.5
+        // эту цель минует — регресс ловится только точным таргетом.
         let bg = BgInput::solid("#FFFFFF").unwrap();
         let cliff = solve(
             bg,
@@ -2242,108 +2202,11 @@ mod tests {
             Gamut::Srgb,
         )
         .unwrap();
-        assert!(
-            cliff.floor_override(),
-            "пол 3:1 обязан включиться на Lc 50.45 (белый фон)"
-        );
         let hex = cliff.hex();
         assert!(
             hex[1..3] == hex[3..5] && hex[3..5] == hex[5..7],
-            "floored-tertiary на белом: Neutral эмитит не-серый {hex}"
+            "tertiary-цель на белом: Neutral эмитит не-серый {hex}"
         );
-    }
-
-    #[test]
-    fn ui_floor_is_three_to_one() {
-        // The UI floor (3:1) is laxer than the text floor (4.5:1): both push a
-        // weak target, but the UI colour keeps a lower ratio.
-        let vc = ViewingConditions::srgb();
-        let ui = solve(
-            BgInput::solid("#FFFFFF").unwrap(),
-            Contract::ui(15.0),
-            Hue::deg(0.0),
-            ChromaPolicy::Neutral,
-            &vc,
-            Gamut::Srgb,
-        )
-        .unwrap();
-        assert!(ui.floor_override());
-        assert!(ui.wcag_ratio() >= 3.0 - 1e-9);
-        let text = solve(
-            BgInput::solid("#FFFFFF").unwrap(),
-            Contract::text(15.0),
-            Hue::deg(0.0),
-            ChromaPolicy::Neutral,
-            &vc,
-            Gamut::Srgb,
-        )
-        .unwrap();
-        assert!(ui.wcag_ratio() < text.wcag_ratio());
-    }
-
-    #[test]
-    fn decorative_contracts_skip_the_floor() {
-        // Decorative: range carries Floor::None — the candidate-score target governs, no
-        // flag, and the (sub-AA) ratio is still reported for transparency.
-        let vc = ViewingConditions::srgb();
-        let bg = BgInput::solid("#FFFFFF").unwrap();
-        let solved = solve(
-            bg,
-            Contract::range(15.0, 15.0),
-            Hue::deg(0.0),
-            ChromaPolicy::Neutral,
-            &vc,
-            Gamut::Srgb,
-        )
-        .unwrap();
-        assert!(!solved.floor_override());
-        let measured = candidate_lc(solved.hex(), "#FFFFFF");
-        assert!((measured - 15.0).abs() <= TOL);
-        assert!(solved.wcag_ratio() < 4.5);
-    }
-
-    #[test]
-    fn satisfied_floor_leaves_perception_in_charge() {
-        // Lc 90 on white clears 4.5:1 on its own — no override flag, target met.
-        let vc = ViewingConditions::srgb();
-        let bg = BgInput::solid("#FFFFFF").unwrap();
-        let solved = solve(
-            bg,
-            Contract::text(90.0),
-            Hue::deg(0.0),
-            ChromaPolicy::Neutral,
-            &vc,
-            Gamut::Srgb,
-        )
-        .unwrap();
-        assert!(!solved.floor_override());
-        assert!(solved.wcag_ratio() >= 4.5);
-        let measured = candidate_lc(solved.hex(), "#FFFFFF");
-        assert!((measured - 90.0).abs() <= TOL);
-    }
-
-    #[test]
-    fn unreachable_floor_is_a_principled_error() {
-        // On a mid-dark background even pure black cannot reach 4.5:1, so a
-        // dark-on-light text contract fails loudly rather than under-delivering.
-        let vc = ViewingConditions::srgb();
-        let bg = BgInput::solid("#6E6E6E").unwrap();
-        let err = solve(
-            bg,
-            Contract::text(30.0),
-            Hue::deg(0.0),
-            ChromaPolicy::Neutral,
-            &vc,
-            Gamut::Srgb,
-        )
-        .unwrap_err();
-        match err {
-            SolveFailure::FloorUnreachable { floor, max_ratio } => {
-                assert!((floor - 4.5).abs() < 1e-9, "floor {floor}");
-                assert!(max_ratio < 4.5, "max_ratio {max_ratio}");
-            }
-            other => panic!("expected FloorUnreachable, got {other:?}"),
-        }
     }
 
     #[test]
@@ -2703,7 +2566,7 @@ mod tests {
             for i in 0..=n {
                 let l = i as f64 / n as f64;
                 let rgb = build_color(l, hue, policy);
-                let target_ys = wcag::relative_luminance([
+                let target_ys = encoded_srgb_relative_luminance([
                     srgb_gamma(rgb[0]),
                     srgb_gamma(rgb[1]),
                     srgb_gamma(rgb[2]),
@@ -2813,114 +2676,10 @@ mod tests {
         format!("{vc_name}|{bg_hex}|{pol_name}|{}", cells.join(","))
     }
 
-    /// The pre-optimisation `apply_floor` crossing search: a fixed 48-iteration
-    /// bisection over the whole `[0, 1]` ray, kept as the golden oracle the
-    /// closed-form-seeded search is measured against. Byte-for-byte the loop the
-    /// shipped `apply_floor` replaced.
-    fn reference_apply_floor_l(
-        l_lpc: f64,
-        floor_ratio: f64,
-        target: f64,
-        hue: Hue,
-        chroma_policy: ChromaPolicy,
-        bg_disp: [f64; 3],
-    ) -> Option<(f64, bool)> {
-        let rgb_lpc = build_color(l_lpc, hue, chroma_policy);
-        if floor_ratio_of(rgb_lpc, bg_disp) >= floor_ratio {
-            return Some((l_lpc, false));
-        }
-        let l_extreme = if target >= 0.0 { 0.0 } else { 1.0 };
-        let max_ratio = floor_ratio_of(build_color(l_extreme, hue, chroma_policy), bg_disp);
-        if max_ratio < floor_ratio {
-            return None; // FloorUnreachable in the real path
-        }
-        let mut lo = 0.0_f64;
-        let mut hi = 1.0_f64;
-        for _ in 0..48 {
-            let mid = (lo + hi) * 0.5;
-            let l_mid = l_lpc + (l_extreme - l_lpc) * mid;
-            if floor_ratio_of(build_color(l_mid, hue, chroma_policy), bg_disp) >= floor_ratio {
-                hi = mid;
-            } else {
-                lo = mid;
-            }
-        }
-        Some((l_lpc + (l_extreme - l_lpc) * hi, true))
-    }
-
-    #[test]
-    fn apply_floor_matches_the_cold_bisection_byte_for_byte() {
-        // The closed-form-seeded floor search must emit the *same hex* as the old
-        // fixed-48 [0, 1] bisection everywhere — densely, not just on the 24
-        // golden rows. Sweep starting lightness, both polarities, both floors,
-        // neutral and the production tint, against backgrounds spanning the grey
-        // axis plus a chromatic one, under both viewing conditions. A single hex
-        // disagreement (a seed that narrowed past the crossing, an early exit that
-        // stopped short) fails here.
-        let bgs = [
-            "#FFFFFF", "#F2F2F7", "#9C9C9C", "#5A5A5A", "#1C1C1E", "#3478F6",
-        ];
-        let floors = [crate::wcag::AA_TEXT_RATIO, crate::wcag::AA_UI_RATIO];
-        let policies = [
-            (Hue::deg(0.0), ChromaPolicy::Neutral),
-            (Hue::deg(286.0), ChromaPolicy::Relative(0.10)),
-        ];
-        let mut compared = 0usize;
-        let mut floored = 0usize;
-        for bg_hex in bgs {
-            let bg_disp = {
-                let lin = srgb_from_hex(bg_hex).unwrap();
-                quantised_display(lin)
-            };
-            for floor_ratio in floors {
-                for (hue, chroma) in policies {
-                    for sign in [1.0_f64, -1.0_f64] {
-                        // Sweep the perceptual lightness the floor might lift.
-                        for i in 0..=200 {
-                            let l_lpc = i as f64 / 200.0;
-                            let target = sign; // only the sign (polarity) matters here
-                            let got = apply_floor(l_lpc, floor_ratio, target, hue, chroma, bg_disp);
-                            let want = reference_apply_floor_l(
-                                l_lpc,
-                                floor_ratio,
-                                target,
-                                hue,
-                                chroma,
-                                bg_disp,
-                            );
-                            match (got, want) {
-                                (Ok((l_new, ov_new)), Some((l_ref, ov_ref))) => {
-                                    compared += 1;
-                                    assert_eq!(
-                                        ov_new, ov_ref,
-                                        "{bg_hex} floor={floor_ratio} sign={sign} l={l_lpc}: override flag differs"
-                                    );
-                                    if ov_new {
-                                        floored += 1;
-                                    }
-                                    let hex_new = hex_from_srgb(build_color(l_new, hue, chroma));
-                                    let hex_ref = hex_from_srgb(build_color(l_ref, hue, chroma));
-                                    assert_eq!(
-                                        hex_new, hex_ref,
-                                        "{bg_hex} floor={floor_ratio} sign={sign} l={l_lpc}: hex drift (new {hex_new} vs cold {hex_ref})"
-                                    );
-                                }
-                                (Err(_), None) => {
-                                    compared += 1; // both FloorUnreachable — agree
-                                }
-                                (g, w) => panic!(
-                                    "{bg_hex} floor={floor_ratio} sign={sign} l={l_lpc}: reachability disagreement {g:?} vs {w:?}"
-                                ),
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        eprintln!("apply_floor oracle: {compared} cases compared, {floored} actually floored");
-        assert!(floored >= 100, "too few floored cases exercised: {floored}");
-    }
-
+    /// Frozen full semantic emission grid. It pins both candidate-only roles and
+    /// the recipe boundary's caller-owned final-emission criteria so a future
+    /// change cannot silently restore solver WCAG authority or update bytes by
+    /// snapshot acceptance alone.
     #[test]
     fn resolve_set_hex_matches_golden() {
         use crate::semantic::RoleChroma;
@@ -3037,7 +2796,6 @@ mod tests {
         let target = 10.0;
         let interval = bg.luma_interval(&vc).unwrap();
         let y_gov = interval.governing(target);
-        let bg_disp = bg.governing_display(target);
         let hue = Hue::deg(0.0);
         let cp = ChromaPolicy::Neutral;
 
@@ -3071,7 +2829,7 @@ mod tests {
             }
         };
         let evaluate = |l_ok: f64| -> Result<Candidate, SolveFailure> {
-            let solved = finish(build_color(l_ok, hue, cp), y_gov, bg_disp, false, &vc)?;
+            let solved = finish(build_color(l_ok, hue, cp), y_gov, &vc)?;
             let lc = law(solved.hex());
             Ok(Candidate {
                 passes: lc >= target,
@@ -3151,7 +2909,7 @@ mod tests {
         );
 
         // Глобальная правда: #010101 строго ближе к запрошенной величине.
-        let bg_disp = bg.governing_display(1.0);
+        let bg_disp = bg.encoded_display();
         let jp_bg = jp_of_linear(
             [
                 srgb_gamma_inv(bg_disp[0]),

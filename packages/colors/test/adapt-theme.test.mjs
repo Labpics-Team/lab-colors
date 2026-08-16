@@ -90,7 +90,7 @@ function withUnreachable(result, role = "impossible") {
         kind: "failure",
         cssVar: binding,
         category: "unreachable",
-        code: "floor_unreachable",
+        code: "unsatisfiable_criterion",
         message: "contract has no solution",
       },
     },
@@ -111,7 +111,8 @@ function captureOutputConflict(fn, expectedRoles = ["impossible"]) {
     error.conflicts,
     expectedRoles.map((role) => ({
       role,
-      code: "floor_unreachable",
+      category: "unreachable",
+      code: "unsatisfiable_criterion",
       message: "contract has no solution",
     })),
   );
@@ -272,7 +273,7 @@ test("adaptTheme owns its admitted snapshot instead of resolver aliases", () => 
   source.roles.late = {
     kind: "failure",
     category: "unreachable",
-    code: "floor_unreachable",
+    code: "unsatisfiable_criterion",
     message: "injected after admission",
   };
 
@@ -4636,7 +4637,7 @@ test("non-finite clock is rejected before it can poison breach timing", () => {
   h.ctrl.stop();
 });
 
-test("S1: init() on exhausted worst-chase conflict does not commit lastCandidate", () => {
+test("S1: init() exposes controller chase exhaustion without fabricating a Core conflict", () => {
   const el = fakeElement();
   const sampleA = "#FFFFFF";
   const sampleB = "#000000";
@@ -4675,18 +4676,23 @@ test("S1: init() on exhausted worst-chase conflict does not commit lastCandidate
     error = caught;
   }
 
-  assert.ok(error, "exhausted worst-chase must throw a typed conflict error on init()");
+  assert.ok(error, "exhausted worst-chase must reject the whole adaptive operation");
   assert.equal(error.name, "OutputConflictError");
   assert.equal(error.code, "output_conflict");
-  assert.ok(
-    error.conflicts.some((conflict) => conflict.role === "label-primary"),
-    "conflict diagnostics must name the breached role",
-  );
-  assert.equal(el.mutations.length, 0, "init() on conflict must perform zero DOM mutations");
-  assert.equal(el.props.size, 0, "init() on conflict must write zero CSS variables");
+  assert.deepEqual(error.conflicts, [{
+    role: "label-primary",
+    category: "unresolved",
+    code: null,
+    message: "bounded full-support chase did not find a jointly feasible candidate",
+  }]);
+  assert.equal(Object.hasOwn(error, "vars"), false, "unresolved outcome must not expose partial CSS");
+  assert.equal(Object.hasOwn(error, "candidate"), false, "unresolved outcome must not expose a candidate");
+  assert.equal(Object.hasOwn(error, "certificate"), false, "unresolved outcome must not expose a certificate");
+  assert.equal(el.mutations.length, 0, "init() on unresolved outcome must perform zero DOM mutations");
+  assert.equal(el.props.size, 0, "init() on unresolved outcome must write zero CSS variables");
 });
 
-test("S2: setTheme() on exhausted worst-chase conflict leaves previous verified snapshot physically and logically unchanged", () => {
+test("S2: setTheme() on exhausted worst-chase leaves the prior verified state unchanged", () => {
   const el = fakeElement();
   const sampleA = "#FFFFFF";
   const sampleB = "#000000";
@@ -4745,16 +4751,25 @@ test("S2: setTheme() on exhausted worst-chase conflict leaves previous verified 
     error = caught;
   }
 
-  assert.ok(error, "setTheme() on conflict must throw a typed conflict error");
+  assert.ok(error, "setTheme() must reject unresolved controller chase exhaustion");
   assert.equal(error.name, "OutputConflictError");
   assert.equal(error.code, "output_conflict");
+  assert.deepEqual(error.conflicts, [{
+    role: "label-primary",
+    category: "unresolved",
+    code: null,
+    message: "bounded full-support chase did not find a jointly feasible candidate",
+  }]);
+  assert.equal(Object.hasOwn(error, "vars"), false, "unresolved outcome must not expose partial CSS");
+  assert.equal(Object.hasOwn(error, "candidate"), false, "unresolved outcome must not expose a candidate");
+  assert.equal(Object.hasOwn(error, "certificate"), false, "unresolved outcome must not expose a certificate");
   assert.equal(el.mutations.length, 0, "failed setTheme() must perform zero DOM mutations");
   assert.deepEqual(el.props, beforeDom, "failed setTheme() must leave physical DOM bytes unchanged");
   assert.deepEqual(ctrl.current(), beforeCurrent, "failed setTheme() must leave controller current state unchanged");
   ctrl.stop();
 });
 
-test("S3: init() with no previous state and conflict opens no ambient CSS fallback", () => {
+test("S3: init() with no previous state and controller exhaustion opens no ambient CSS fallback", () => {
   const el = fakeElement();
   el.props.set("--lab-user-owned", "#ABCDEF");
   const beforeProps = new Map(el.props);
@@ -4795,13 +4810,22 @@ test("S3: init() with no previous state and conflict opens no ambient CSS fallba
     error = caught;
   }
 
-  assert.ok(error, "init() with conflict must throw OutputConflictError");
+  assert.ok(error, "init() with controller exhaustion must reject the whole operation");
   assert.equal(error.name, "OutputConflictError");
   assert.equal(error.code, "output_conflict");
-  assert.equal(el.mutations.length, 0, "init() with conflict must perform zero DOM mutations");
+  assert.deepEqual(error.conflicts, [{
+    role: "label-primary",
+    category: "unresolved",
+    code: null,
+    message: "bounded full-support chase did not find a jointly feasible candidate",
+  }]);
+  assert.equal(Object.hasOwn(error, "vars"), false, "unresolved outcome must not expose partial CSS");
+  assert.equal(Object.hasOwn(error, "candidate"), false, "unresolved outcome must not expose a candidate");
+  assert.equal(Object.hasOwn(error, "certificate"), false, "unresolved outcome must not expose a certificate");
+  assert.equal(el.mutations.length, 0, "init() on unresolved outcome must perform zero DOM mutations");
   assert.deepEqual(
     el.props,
     beforeProps,
-    "conflict must leave the pre-existing ambient CSS untouched and publish nothing of its own",
+    "unresolved outcome must leave the pre-existing ambient CSS untouched and publish nothing of its own",
   );
 });

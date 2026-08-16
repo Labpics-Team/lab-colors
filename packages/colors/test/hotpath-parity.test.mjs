@@ -339,8 +339,8 @@ test("the cache-miss benchmark corpus is admissible and never masks conflict", (
   assert.deepEqual(
     conflict.conflicts.map(({ role, code }) => ({ role, code })),
     [
-      { role: "border-warning-strong", code: "floor_unreachable" },
-      { role: "border-success-strong", code: "floor_unreachable" },
+      { role: "border-warning-strong", code: "unsatisfiable_criterion" },
+      { role: "border-success-strong", code: "unsatisfiable_criterion" },
     ],
   );
 });

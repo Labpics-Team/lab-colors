@@ -16,7 +16,7 @@ use labcolors_conformance::{
 };
 use labcolors_core::config::ThemeConfig;
 use labcolors_core::semantic::NamedRoleTable;
-use labcolors_core::{BgInput, Resolved, ViewingConditions, resolve_named_set};
+use labcolors_core::{BgInput, Resolved, ViewingConditions, recheck_against, resolve_named_set};
 use labcolors_wasm::LabColors;
 use labcolors_wasm::config_dto::ConfigDto;
 use wasm_bindgen::{JsCast, JsValue};
@@ -474,7 +474,11 @@ fn recheck_contrast_boundary_matches_resolve_over_packed_words() {
     for (_name, resolved) in &core_resolved {
         if let Resolved::Color { solved, .. } = resolved {
             fgs.push(pack_hex(solved.hex()));
-            want.push((solved.lc(), solved.wcag_ratio()));
+            let report = recheck_against(bg, &[solved.hex()], &ViewingConditions::srgb())
+                .expect("core-emitted hex rechecks");
+            assert_eq!(report.len(), 1);
+            assert_eq!(report[0].0.to_bits(), solved.lc().to_bits());
+            want.push(report[0]);
         }
     }
 
@@ -835,6 +839,10 @@ fn ordinary_unreachable_is_structured_output_conflict() {
     {
         let conflict = conflicts.get(index as u32);
         assert_eq!(get_str(&conflict, "role").as_deref(), Some(role));
+        assert_eq!(
+            get_str(&conflict, "category").as_deref(),
+            Some("unreachable")
+        );
         assert_eq!(get_str(&conflict, "code").as_deref(), Some("exceeds_range"));
         assert!(
             get_str(&conflict, "message")
@@ -845,7 +853,7 @@ fn ordinary_unreachable_is_structured_output_conflict() {
             .map(|value| value.as_string().expect("conflict key is a string"))
             .collect::<Vec<_>>();
         fields.sort_unstable();
-        assert_eq!(fields, ["code", "message", "role"]);
+        assert_eq!(fields, ["category", "code", "message", "role"]);
         for forbidden in ["vars", "roles", "css", "candidate", "certificate"] {
             assert!(
                 !js_sys::Reflect::has(&conflict, &JsValue::from_str(forbidden)).unwrap(),

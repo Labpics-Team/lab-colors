@@ -11,8 +11,8 @@
 use super::fixture::labui_reference;
 use super::test_support::resolved_repr as repr;
 use super::*;
+use crate::Floor;
 use crate::ladder::LadderPosition;
-use crate::solve::Floor;
 use crate::{
     BgInput, Resolved, Role, RoleTable, ViewingConditions, resolve_named_set, resolve_set,
 };
@@ -934,7 +934,7 @@ fn ladder_emits_translucent_with_composite_over_bg() {
     // белым композит почти белый — WCAG близок к 1 и заведомо МЕНЬШЕ контраста
     // солидного тинта (#007AFF на белом ≈ 4.0) — нетавтологичная проверка того,
     // что замер идёт по правильному цвету.
-    let solid_wcag = crate::wcag::contrast_ratio(
+    let solid_wcag = crate::spaces::srgb::encoded_srgb_contrast_ratio(
         crate::spaces::srgb::srgb_encoded_from_hex("#007AFF").expect("валидный hex"),
         crate::spaces::srgb::srgb_encoded_from_hex("#FFFFFF").expect("валидный hex"),
     );
@@ -2663,9 +2663,9 @@ fn material_guarantee_recomputable_over_worst_backdrop() {
                     (background_byte_scale + m.alpha() * (tint_byte - background_byte_scale))
                         / 255.0
                 });
-                measured_min = measured_min.min(crate::wcag::ratio_from_luminances(
+                measured_min = measured_min.min(crate::spaces::srgb::relative_luminance_ratio(
                     pole_lum,
-                    crate::wcag::relative_luminance(composite),
+                    crate::spaces::srgb::encoded_srgb_relative_luminance(composite),
                 ));
             }
         }

@@ -17,12 +17,13 @@ fn expected_wcag22_criterion_keys() -> &'static str {
     labcolors_core::wcag22::Wcag22CriterionV1::WIRE_KEY_MENU
 }
 
-/// Один ordinary-Unreachable контракт роли в whole-resolve aggregate.
+/// Core-owned arm одного whole-output конфликта.
 ///
-/// Категория отсутствует намеренно: сам enclosing [`BindingError::OutputConflict`]
-/// означает ровно `Unreachable`, поэтому незаконный `Unresolved` в payload
-/// непредставим. Кандидаты и CSS здесь также отсутствуют: ошибка не является
-/// частичным снимком.
+/// Rust создаёт только доказанный `Unreachable`: обязательный Core code хранится
+/// вместе с ним, а category проецируется константой. Controller-owned
+/// `Unresolved` возникает выше, в JS shell, и имеет `code: null`. Поэтому ни один
+/// Rust constructor не может смешать `unresolved` с выдуманным Core code.
+/// Кандидаты и CSS здесь также отсутствуют: ошибка не является частичным снимком.
 #[derive(Debug, Clone, PartialEq)]
 pub struct OutputConflict {
     role: String,
@@ -31,7 +32,7 @@ pub struct OutputConflict {
 }
 
 impl OutputConflict {
-    pub(crate) fn new(role: String, code: &'static str, message: String) -> Self {
+    pub(crate) fn unreachable(role: String, code: &'static str, message: String) -> Self {
         Self {
             role,
             code,
@@ -41,6 +42,10 @@ impl OutputConflict {
 
     pub(crate) fn role(&self) -> &str {
         &self.role
+    }
+
+    pub(crate) const fn category(&self) -> &'static str {
+        "unreachable"
     }
 
     pub(crate) const fn code(&self) -> &'static str {
@@ -192,11 +197,11 @@ mod tests {
             BindingError::ConfigRequired,
             BindingError::OutputConflict {
                 conflicts: OutputConflicts::new(
-                    OutputConflict {
-                        role: "opaque-client-id".into(),
-                        code: "exceeds_range",
-                        message: "physical limit".into(),
-                    },
+                    OutputConflict::unreachable(
+                        "opaque-client-id".into(),
+                        "exceeds_range",
+                        "physical limit".into(),
+                    ),
                     Vec::new(),
                 ),
             },
@@ -230,10 +235,12 @@ mod tests {
 
     #[test]
     fn output_conflicts_are_non_empty_by_construction_and_preserve_order() {
-        let conflict = |role: &str, target: f64| OutputConflict {
-            role: role.into(),
-            code: "exceeds_range",
-            message: format!("target Lc {target:.2} exceeds the physical range"),
+        let conflict = |role: &str, target: f64| {
+            OutputConflict::unreachable(
+                role.into(),
+                "exceeds_range",
+                format!("target Lc {target:.2} exceeds the physical range"),
+            )
         };
         let conflicts = OutputConflicts::new(
             conflict("conflict-z", 50.0),
@@ -249,7 +256,7 @@ mod tests {
     fn output_conflict_display_escapes_client_role_without_changing_payload() {
         let raw = "роль\n\r\t\u{0001}\u{007f}\u{0085}'\"\\";
         let conflicts = OutputConflicts::new(
-            OutputConflict::new(
+            OutputConflict::unreachable(
                 raw.to_string(),
                 "exceeds_range",
                 "physical limit".to_string(),
@@ -269,7 +276,9 @@ mod tests {
         assert!(rendered.contains("\\\""));
         assert!(rendered.contains("\\\\"));
         assert!(rendered.contains("роль"));
-        assert_eq!(conflicts.iter().next().unwrap().role(), raw);
+        let conflict = conflicts.iter().next().unwrap();
+        assert_eq!(conflict.role(), raw);
+        assert_eq!(conflict.category(), "unreachable");
     }
 
     #[test]

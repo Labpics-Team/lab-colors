@@ -74,7 +74,7 @@ adjacent bytes или нормативного отношения пересчи
 - `outcome` (в `solve`): успех `{kind:"solved", hex, lc, wcagRatio, floorOverride}`
   или типизированный терминальный исход `{kind:"failure", category, code}`.
 - `(category, code)` — атомарная core-owned классификация, общая для всех
-  биндингов: `unreachable/exceeds_range`, `unreachable/floor_unreachable`,
+  биндингов: `unreachable/exceeds_range`, `unreachable/unsatisfiable_criterion`,
   `unresolved/bounded_search_exhausted`, `rejected/invalid_input`,
   `unreachable/below_contrast_floor`. Только
   `unreachable` доказывает отсутствие

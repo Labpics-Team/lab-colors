@@ -974,7 +974,7 @@ const SOLVE_FAILURE_CATEGORY_BY_CODE = new Map([
   ["below_contrast_floor", "unreachable"],
   ["exceeds_range", "unreachable"],
   ["bounded_search_exhausted", "unresolved"],
-  ["floor_unreachable", "unreachable"],
+  ["unsatisfiable_criterion", "unreachable"],
   ["invalid_input", "rejected"],
 ]);
 
