@@ -512,13 +512,14 @@ pub(crate) fn corridor_channel_range(
     )
 }
 
-/// Conservative characterized luminance enclosure `[effLow, effHigh]` for the
-/// tint over every background in the axis-aligned box.
+/// Legacy-platform-dependent luminance range `[effLow, effHigh]` for the tint
+/// over every background in the axis-aligned box.
 ///
-/// Each actual byte-scale channel is enclosed independently; the legacy WCAG
-/// profile then includes both sides of a crossed EOTF seam before combining the
-/// positive luminance weights. No RGB-corner or global monotonicity theorem is
-/// claimed.
+/// Each actual byte-scale channel is range-evaluated independently; the legacy
+/// transfer then includes both sides of a crossed EOTF seam before combining the
+/// positive luminance weights. No cross-runtime sound enclosure, RGB-corner
+/// theorem, or global monotonicity theorem is claimed. Hard criterion decisions
+/// remain owned by the finite WCAG 2.2 evaluator.
 fn band_luminance(tint_q: [f64; 3], alpha: f64, backdrop: &BackdropBox) -> (f64, f64) {
     // Source-over at alpha=1 is exactly the emitted tint for every backdrop in
     // this byte-scale profile. Preserve that proven endpoint instead of adding

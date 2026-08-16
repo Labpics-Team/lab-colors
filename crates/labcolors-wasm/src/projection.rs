@@ -129,6 +129,7 @@ pub fn output_conflict_json(conflicts: &OutputConflicts) -> String {
         }
         out.push_str("{\"role\":");
         push_str_lit(&mut out, conflict.role());
+        field_str(&mut out, "category", conflict.category());
         field_str(&mut out, "code", conflict.code());
         field_str(&mut out, "message", conflict.message());
         out.push('}');
@@ -1675,12 +1676,12 @@ mod tests {
 
     #[test]
     fn output_conflict_strings_escape_reversibly_and_keep_order() {
-        let first = crate::error::OutputConflict::new(
+        let first = crate::error::OutputConflict::unreachable(
             "role-\"\\\n\t\u{0001}\u{2028}".to_string(),
             "code-\"\\\n\u{0002}",
             "сообщение \"\\\n\r\t\u{0003}\u{2029}".to_string(),
         );
-        let second = crate::error::OutputConflict::new(
+        let second = crate::error::OutputConflict::unreachable(
             "second".to_string(),
             "exceeds_range",
             "second message".to_string(),
@@ -1694,6 +1695,7 @@ mod tests {
         let items = value["conflicts"].as_array().unwrap();
         assert_eq!(items.len(), 2);
         assert_eq!(items[0]["role"], "role-\"\\\n\t\u{0001}\u{2028}");
+        assert_eq!(items[0]["category"], "unreachable");
         assert_eq!(items[0]["code"], "code-\"\\\n\u{0002}");
         assert_eq!(items[0]["message"], "сообщение \"\\\n\r\t\u{0003}\u{2029}");
         assert_eq!(items[1]["role"], "second");

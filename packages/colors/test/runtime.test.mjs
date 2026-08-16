@@ -46,7 +46,7 @@ function captureOutputConflict(fn, expectedConflicts) {
   assert.deepEqual(error.conflicts, expectedConflicts);
   assert.equal(Object.hasOwn(error, "vars"), false, "the error must not expose partial CSS");
   for (const conflict of error.conflicts) {
-    assert.deepEqual(Object.keys(conflict).sort(), ["code", "message", "role"]);
+    assert.deepEqual(Object.keys(conflict).sort(), ["category", "code", "message", "role"]);
   }
   return error;
 }
@@ -96,11 +96,13 @@ test("applyTheme rejects a forged partial Unreachable snapshot before any DOM mu
   captureOutputConflict(() => applyTheme(element, forgedOutputConflict()), [
     {
       role: "first",
+      category: "unreachable",
       code: "unsatisfiable_criterion",
       message: "first contract has no solution",
     },
     {
       role: "second",
+      category: "unreachable",
       code: "exceeds_range",
       message: "second contract has no solution",
     },
@@ -839,11 +841,13 @@ test("watchTheme quarantines a forged partial conflict and retries the same obse
   captureOutputConflict(() => ctrl.refresh(), [
     {
       role: "first",
+      category: "unreachable",
       code: "unsatisfiable_criterion",
       message: "first contract has no solution",
     },
     {
       role: "second",
+      category: "unreachable",
       code: "exceeds_range",
       message: "second contract has no solution",
     },

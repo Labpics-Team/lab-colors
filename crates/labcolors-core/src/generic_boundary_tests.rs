@@ -105,6 +105,14 @@ fn w5_removes_legacy_wcag_authority_from_the_solver() {
             "generic final-emission enforcement lost `{required}`",
         );
     }
+    assert!(
+        !final_constraint.contains("0..48"),
+        "final-emission precision must be a named numerical budget",
+    );
+    assert!(
+        final_constraint.contains("0..final_emission_bisection_steps"),
+        "final-emission loop must consume the named numerical budget",
+    );
 
     let semantic = compact_production_syntax(SEMANTIC_SOURCE).to_ascii_lowercase();
     assert_eq!(

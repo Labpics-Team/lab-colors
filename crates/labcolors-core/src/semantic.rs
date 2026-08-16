@@ -2546,13 +2546,7 @@ fn resolve_solid_with_ui_floor(
         crate::spaces::srgb::srgb_gamma_inv(bg_encoded[2]),
     ];
     let (anchor_lc, _) = measure_contrast(bg_linear, tint_linear, vc);
-    let source = crate::alpha::encoded_to_srgb8(tint_q, "solid tint")
-        .map(Srgb8::new)
-        .map_err(|reason| {
-            SolveFailure::InternalInvariant(format!(
-                "validated solid hue source could not be quantised: {reason}"
-            ))
-        })?;
+    let source = Srgb8::new(tint_srgb8);
     let (hue, chroma_policy) = match crate::spaces::oklab::hue_of_srgb8(source) {
         crate::spaces::oklab::OklabHue::Achromatic => (Hue::deg(0.0), ChromaPolicy::Neutral),
         crate::spaces::oklab::OklabHue::Chromatic { degrees } => {

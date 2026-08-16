@@ -693,7 +693,7 @@ fn enforce_monotone_final_emission_constraint(
 
     let mut lo = 0.0_f64;
     let mut hi = 1.0_f64;
-    for _ in 0..48 {
+    for _ in 0..FINAL_EMISSION_BISECTION_STEPS {
         let mid = (lo + hi) * 0.5;
         let lightness = l_candidate + (l_extreme - l_candidate) * mid;
         if accepts_at(lightness)? {
@@ -705,6 +705,15 @@ fn enforce_monotone_final_emission_constraint(
 
     Ok((l_candidate + (l_extreme - l_candidate) * hi, true))
 }
+
+/// Number of binary64 partitions used to locate the first admissible final
+/// emission along the caller-proven monotone path. `2^-48` lightness resolution
+/// is far below the 8-bit output decision scale while retaining five mantissa
+/// guard bits; the emitted hex is still re-evaluated after the search, so this
+/// is a bounded numerical precision budget, not a criterion proof.
+// SSOT-TRACKED — 48 partitions are the final-emission search precision; both
+// WCAG thresholds/polarities are pinned by the emitted-byte oracle test.
+const FINAL_EMISSION_BISECTION_STEPS: u32 = 48;
 
 /// The quantisation budget: a solved colour is accepted only when its measured
 /// `Lc` lands within this *symmetric* distance of the target. The analytic
@@ -1439,17 +1448,42 @@ mod tests {
         }
     }
 
+    fn nearest_passing_neutral_byte(
+        background: &str,
+        criterion: crate::wcag22::Wcag22CriterionV1,
+        target: f64,
+    ) -> u8 {
+        let mut bytes: Box<dyn Iterator<Item = u8>> = if target >= 0.0 {
+            Box::new((0_u8..=u8::MAX).rev())
+        } else {
+            Box::new(0_u8..=u8::MAX)
+        };
+        bytes
+            .find(|byte| {
+                let hex = format!("#{byte:02X}{byte:02X}{byte:02X}");
+                wcag22_accepts(&hex, background, criterion)
+                    .expect("finite sRGB8 oracle input must evaluate")
+            })
+            .expect("black or white must satisfy every supported WCAG criterion")
+    }
+
     #[test]
     fn caller_owned_final_emission_criteria_bind_both_wcag_boundaries() {
         use crate::wcag22::Wcag22CriterionV1;
 
         let vc = ViewingConditions::srgb();
-        let bg = BgInput::solid("#FFFFFF").unwrap();
-        let interval = bg.luma_interval(&vc).unwrap();
-        for (target, criterion) in [
-            (60.0, Wcag22CriterionV1::Sc143TextDefault),
-            (45.0, Wcag22CriterionV1::Sc1411UiComponentOrState),
+        for (background, target, criterion) in [
+            ("#FFFFFF", 60.0, Wcag22CriterionV1::Sc143TextDefault),
+            ("#FFFFFF", 45.0, Wcag22CriterionV1::Sc1411UiComponentOrState),
+            ("#101012", -30.0, Wcag22CriterionV1::Sc143TextDefault),
+            (
+                "#101012",
+                -20.0,
+                Wcag22CriterionV1::Sc1411UiComponentOrState,
+            ),
         ] {
+            let bg = BgInput::solid(background).unwrap();
+            let interval = bg.luma_interval(&vc).unwrap();
             let contract = Contract::text(target);
             let unconstrained = solve_in(
                 &bg,
@@ -1461,13 +1495,13 @@ mod tests {
             )
             .unwrap();
             assert!(
-                !wcag22_accepts(unconstrained.hex(), "#FFFFFF", criterion).unwrap(),
-                "fixture must be RED before the final criterion: target {target}, {}",
+                !wcag22_accepts(unconstrained.hex(), background, criterion).unwrap(),
+                "fixture must be RED before the final criterion: {background} target {target}, {}",
                 unconstrained.hex()
             );
             assert!(!unconstrained.final_emission_adjusted());
 
-            let accepts = |hex: &str| wcag22_accepts(hex, "#FFFFFF", criterion);
+            let accepts = |hex: &str| wcag22_accepts(hex, background, criterion);
             let constraint =
                 MonotoneFinalEmissionConstraint::toward_contrast_extreme(criterion.key(), &accepts);
             let constrained = solve_in_with_monotone_final_emission_constraint(
@@ -1481,8 +1515,8 @@ mod tests {
             )
             .unwrap();
             assert!(
-                wcag22_accepts(constrained.hex(), "#FFFFFF", criterion).unwrap(),
-                "final bytes must pass {criterion:?}: {}",
+                wcag22_accepts(constrained.hex(), background, criterion).unwrap(),
+                "final bytes must pass {criterion:?} on {background}: {}",
                 constrained.hex()
             );
             assert!(
@@ -1490,6 +1524,27 @@ mod tests {
                 "binding criterion movement must remain observable without becoming solver authority"
             );
             assert_ne!(constrained.hex(), unconstrained.hex());
+
+            let [red, green, blue] =
+                crate::srgb8::hex_bytes(constrained.hex()).expect("solver emits canonical sRGB8");
+            assert_eq!([red, green], [green, blue]);
+            let oracle = nearest_passing_neutral_byte(background, criterion, target);
+            assert_eq!(
+                red, oracle,
+                "search must land on the nearest passing byte for {criterion:?} on {background}"
+            );
+            let adjacent_failing = if target >= 0.0 {
+                oracle.checked_add(1)
+            } else {
+                oracle.checked_sub(1)
+            }
+            .expect("WCAG boundary fixture must have an adjacent byte");
+            let adjacent_hex =
+                format!("#{adjacent_failing:02X}{adjacent_failing:02X}{adjacent_failing:02X}");
+            assert!(
+                !wcag22_accepts(&adjacent_hex, background, criterion).unwrap(),
+                "adjacent byte {adjacent_hex} must remain the failing side of {criterion:?} on {background}"
+            );
         }
     }
 

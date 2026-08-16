@@ -97,17 +97,30 @@ export interface FailureRole {
   readonly message: string;
 }
 
-/** Одна обычная роль, физически недостижимая в объявленном домене. */
-export interface OutputConflict {
-  /** Непрозрачный client-owned ID роли. */
-  readonly role: string;
-  /** Стабильный машинный код Core, например "exceeds_range". */
-  readonly code: string;
-  /** Человекочитаемая исходная диагностика Core. */
-  readonly message: string;
-}
+/** Один whole-output diagnostic без частичного результата. */
+export type OutputConflict =
+  | {
+      /** Непрозрачный client-owned ID роли. */
+      readonly role: string;
+      /** Core доказал недостижимость в объявленном domain. */
+      readonly category: "unreachable";
+      /** Стабильный машинный код Core, например "exceeds_range". */
+      readonly code: string;
+      /** Человекочитаемая исходная диагностика Core. */
+      readonly message: string;
+    }
+  | {
+      /** Непрозрачный client-owned ID роли. */
+      readonly role: string;
+      /** Ограниченный controller search не доказал ни решение, ни недостижимость. */
+      readonly category: "unresolved";
+      /** Controller не изобретает Core-owned machine code. */
+      readonly code: null;
+      /** Человекочитаемая controller-owned диагностика. */
+      readonly message: string;
+    };
 
-/** Whole-call ошибка: полный output snapshot не существует. */
+/** Whole-call no-commit: полный output snapshot не опубликован. */
 export interface OutputConflictError extends Error {
   readonly name: "OutputConflictError";
   readonly code: "output_conflict";
@@ -930,6 +943,9 @@ mod native_contract_tests {
         let types = custom_types();
         assert!(types.contains("readonly name: \"OutputConflictError\";"));
         assert!(types.contains("readonly code: \"output_conflict\";"));
+        assert!(types.contains("readonly category: \"unreachable\";"));
+        assert!(types.contains("readonly category: \"unresolved\";"));
+        assert!(types.contains("readonly code: null;"));
         assert!(
             types.contains("readonly conflicts: readonly [OutputConflict, ...OutputConflict[]];")
         );

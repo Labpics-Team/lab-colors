@@ -702,11 +702,12 @@ export function adaptTheme(element, options) {
   //   • a DIFFERENT sample breaches → chase it (the second-solve-breaks-first
   //     defect: solving for the worst sample must not silently ship a target
   //     that breaches another sample).
-  // When the set stays jointly infeasible across the whole bounded chase, return
+  // When the bounded chase does not yield a jointly feasible target, return
   // `{ feasible: null }` — the drift caller then publishes nothing rather than
-  // commit a set-breaching target. This is the controller-side STOPGAP the
-  // roadmap admits precisely because this full-support re-verify guards commit.
-  // The cap bounds an oscillating infeasible set; real sample sets are tiny.
+  // commit a set-breaching target. This controller-local limit proves neither
+  // that the Core criterion is unsatisfiable nor that the full support has no
+  // solution; it only records an unresolved bounded chase. The cap bounds an
+  // oscillating candidate sequence; real sample sets are tiny.
   const RESOLVE_CHASE_CAP = 8;
   const chaseFeasible = (samples, startIdx, now, themeName, owner) => {
     let worstIdx = startIdx;
@@ -745,32 +746,36 @@ export function adaptTheme(element, options) {
     return { feasible: null, sample0Result, lastCandidate, breachedRoles: lastBreachedRoles };
   };
 
-  // Intent path (init/setTheme): when bounded worst-chase finds no jointly feasible candidate,
-  // fail-closed with OutputConflictError instead of committing an infeasible last candidate.
+  // A controller chase is not a Core solve: exhausting it must not fabricate a
+  // Core-owned `unreachable/unsatisfiable_criterion` result. Reuse the existing
+  // whole-output error only at its commit meaning and mark every item explicitly
+  // `unresolved`, with no Core code. Snapshot role order is the declaration order
+  // used by the public Core aggregate, so preserve it here as well rather than
+  // Set insertion order.
+  const fullSupportChaseUnresolvedError = (chased) => {
+    const breachedRoles = chased.breachedRoles;
+    const snapshotRoles = chased.lastCandidate?.result?.roles;
+    const orderedRoles = snapshotRoles
+      ? Object.keys(snapshotRoles).filter((role) => breachedRoles.has(role))
+      : [];
+    if (orderedRoles.length === 0) {
+      throw new Error("adaptTheme: exhausted full-support chase retained no breached role");
+    }
+    return conflictError(orderedRoles.map((role) => ({
+      role,
+      category: "unresolved",
+      code: null,
+      message: "bounded full-support chase did not find a jointly feasible candidate",
+    })));
+  };
+
+  // Intent path (init/setTheme): a bounded chase that remains unresolved fails
+  // closed without publishing its last candidate. Drift keeps its existing
+  // no-commit path below because there is no synchronous intent caller there.
   const solveWorstCandidate = (samples, now, themeName, owner) => {
     const chased = chaseFeasible(samples, 0, now, themeName, owner);
     if (chased.feasible === null) {
-      const conflicts = [];
-      const rolesToReport = chased.breachedRoles && chased.breachedRoles.size > 0
-        ? Array.from(chased.breachedRoles)
-        : (chased.lastCandidate?.roles ? Object.keys(chased.lastCandidate.roles) : []);
-
-      for (const roleKey of rolesToReport) {
-        const roleObj = chased.lastCandidate?.result?.roles?.[roleKey];
-        conflicts.push({
-          role: roleKey,
-          code: roleObj?.code ?? "unsatisfiable_criterion",
-          message: roleObj?.message ?? "contract has no solution",
-        });
-      }
-      if (conflicts.length === 0) {
-        conflicts.push({
-          role: "unknown",
-          code: "unsatisfiable_criterion",
-          message: "contract has no solution",
-        });
-      }
-      throw conflictError(conflicts);
+      throw fullSupportChaseUnresolvedError(chased);
     }
     return {
       candidate: chased.feasible,

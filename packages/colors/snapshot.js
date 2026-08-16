@@ -122,7 +122,9 @@ function materialize(value, context, path, active, checkpoint, token) {
 export function conflictError(conflicts) {
   const payload = Object.freeze(conflicts.map((conflict) => Object.freeze(conflict)));
   const error = new Error(
-    `output_conflict: ${payload.map(({ role, code }) => `${role} (${code})`).join(", ")}`,
+    `output_conflict: ${payload.map(({ role, category, code }) => (
+      `${role} (${code === null ? category : code})`
+    )).join(", ")}`,
   );
   error.name = "OutputConflictError";
   error.code = "output_conflict";
@@ -191,7 +193,12 @@ export function admitSnapshot(result, context, checkpoint = NO_CHECKPOINT, token
     if (role.category !== "unreachable") {
       throw malformed(context, `failure '${roleKey}' has an unknown category`);
     }
-    conflicts.push({ role: roleKey, code: role.code, message: role.message });
+    conflicts.push({
+      role: roleKey,
+      category: "unreachable",
+      code: role.code,
+      message: role.message,
+    });
   }
   if (conflicts.length > 0) throw conflictError(conflicts);
 

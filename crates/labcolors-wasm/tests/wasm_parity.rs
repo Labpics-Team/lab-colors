@@ -839,6 +839,10 @@ fn ordinary_unreachable_is_structured_output_conflict() {
     {
         let conflict = conflicts.get(index as u32);
         assert_eq!(get_str(&conflict, "role").as_deref(), Some(role));
+        assert_eq!(
+            get_str(&conflict, "category").as_deref(),
+            Some("unreachable")
+        );
         assert_eq!(get_str(&conflict, "code").as_deref(), Some("exceeds_range"));
         assert!(
             get_str(&conflict, "message")
@@ -849,7 +853,7 @@ fn ordinary_unreachable_is_structured_output_conflict() {
             .map(|value| value.as_string().expect("conflict key is a string"))
             .collect::<Vec<_>>();
         fields.sort_unstable();
-        assert_eq!(fields, ["code", "message", "role"]);
+        assert_eq!(fields, ["category", "code", "message", "role"]);
         for forbidden in ["vars", "roles", "css", "candidate", "certificate"] {
             assert!(
                 !js_sys::Reflect::has(&conflict, &JsValue::from_str(forbidden)).unwrap(),

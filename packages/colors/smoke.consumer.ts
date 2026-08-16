@@ -78,6 +78,34 @@ void outputConflictName;
 void outputConflictCode;
 void opaqueRole;
 
+const requireOutputConflict = (_conflict: OutputConflict): void => {};
+requireOutputConflict({
+  role: "opaque-core-role",
+  category: "unreachable",
+  code: "unsatisfiable_criterion",
+  message: "contract has no solution",
+});
+requireOutputConflict({
+  role: "opaque-controller-role",
+  category: "unresolved",
+  code: null,
+  message: "bounded full-support chase did not decide",
+});
+// @ts-expect-error controller exhaustion cannot invent a Core-owned code.
+requireOutputConflict({
+  role: "opaque-controller-role",
+  category: "unresolved",
+  code: "bounded_search_exhausted",
+  message: "bounded full-support chase did not decide",
+});
+// @ts-expect-error proven Core Unreachable always carries its machine code.
+requireOutputConflict({
+  role: "opaque-core-role",
+  category: "unreachable",
+  code: null,
+  message: "contract has no solution",
+});
+
 declare const glowDeterminateCommon: GlowDeterminateRoleBase;
 const requireGlowDeterminate = (_role: GlowDeterminateRole): void => {};
 

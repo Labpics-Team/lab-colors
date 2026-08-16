@@ -324,7 +324,7 @@ fn admit_complete_output(set: &[(String, Resolved)]) -> Result<(), BindingError>
             return None;
         };
         is_output_conflict_category(failure.category())
-            .then(|| OutputConflict::new(role.clone(), failure.code(), failure.to_string()))
+            .then(|| OutputConflict::unreachable(role.clone(), failure.code(), failure.to_string()))
     });
     let Some(first) = conflicts.next() else {
         return Ok(());

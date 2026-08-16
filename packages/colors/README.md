@@ -275,7 +275,8 @@ type RoleResult =
 Доказанный ordinary `Unreachable` означает, что полный снимок не существует:
 `resolveTheme` отклоняется структурным `OutputConflictError` до aliases,
 проекции и кэша. Его `conflicts` — непустой список
-`{ role, code, message }` в порядке объявления ролей; client-owned ID остаются
+`{ role, category: "unreachable", code, message }` в порядке объявления ролей;
+client-owned ID остаются
 непрозрачными. Проверяйте `error.name === "OutputConflictError"` и
 `error.code === "output_conflict"`: отдельный runtime-конструктор для
 `instanceof` не экспортируется. `rejected`, `unsupported` и `internal` также не
@@ -487,6 +488,14 @@ commit или его cleanup, отказ асинхронно передаётс
 ---
 
 ### `adaptTheme(element, options): AdaptController`
+
+Если initial resolve или явный `setTheme()` исчерпал bounded full-support chase,
+контроллер отклоняет операцию тем же whole-output `OutputConflictError`, но его
+ordered `conflicts` содержит controller-owned arm
+`{ role, category: "unresolved", code: null, message }`. Это no-commit, а не
+доказательство Core `Unreachable`: Core-код не изобретается, предыдущий verified
+output сохраняется, а при первом запуске DOM не получает частичный CSS или
+ambient fallback.
 
 Режим с dwell-фильтром: каждый `tick` читает конечный объявленный набор образцов,
 но пропускает metric recheck, когда набор и pending state не изменились. Новый
