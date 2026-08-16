@@ -212,7 +212,10 @@ const YS_SCORE_OVERCLAIMS = [
 const YS_SCORE_CANONICAL_SURFACES = [
   {
     path: "crates/labcolors-core/src/solve.rs",
-    patterns: [/signed Ys candidate score `Lc`/u, /not an admitted LPC\/readability certificate/iu],
+    patterns: [
+      /signed Ys candidate score `Lc`/u,
+      /not an(?:\s*\/\/!\s*)?LPC\/readability verdict or certificate/iu,
+    ],
   },
   {
     path: "crates/labcolors-core/src/semantic.rs",

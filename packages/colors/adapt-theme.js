@@ -759,14 +759,14 @@ export function adaptTheme(element, options) {
         const roleObj = chased.lastCandidate?.result?.roles?.[roleKey];
         conflicts.push({
           role: roleKey,
-          code: roleObj?.code ?? "floor_unreachable",
+          code: roleObj?.code ?? "unsatisfiable_criterion",
           message: roleObj?.message ?? "contract has no solution",
         });
       }
       if (conflicts.length === 0) {
         conflicts.push({
           role: "unknown",
-          code: "floor_unreachable",
+          code: "unsatisfiable_criterion",
           message: "contract has no solution",
         });
       }

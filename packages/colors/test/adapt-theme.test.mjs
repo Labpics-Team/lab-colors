@@ -90,7 +90,7 @@ function withUnreachable(result, role = "impossible") {
         kind: "failure",
         cssVar: binding,
         category: "unreachable",
-        code: "floor_unreachable",
+        code: "unsatisfiable_criterion",
         message: "contract has no solution",
       },
     },
@@ -111,7 +111,7 @@ function captureOutputConflict(fn, expectedRoles = ["impossible"]) {
     error.conflicts,
     expectedRoles.map((role) => ({
       role,
-      code: "floor_unreachable",
+      code: "unsatisfiable_criterion",
       message: "contract has no solution",
     })),
   );
@@ -272,7 +272,7 @@ test("adaptTheme owns its admitted snapshot instead of resolver aliases", () => 
   source.roles.late = {
     kind: "failure",
     category: "unreachable",
-    code: "floor_unreachable",
+    code: "unsatisfiable_criterion",
     message: "injected after admission",
   };
 

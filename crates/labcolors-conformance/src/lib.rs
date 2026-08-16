@@ -1052,7 +1052,7 @@ mod tests {
         // Anti-vacuum: corpus исполняет обе ветви и закрепляет категорию вместе
         // с конкретным кодом, а не только новый serde-тег. W5 intentionally
         // removes the implicit criterion from generic `Contract::text`, so the
-        // former `floor_unreachable` case is now a solved candidate-score vector;
+        // former implicit-floor failure case is now a solved candidate-score vector;
         // explicit final-criterion unreachability is covered in Core/WCAG tests.
         let solve = generate_solve().expect("canonical solve vectors");
         assert!(

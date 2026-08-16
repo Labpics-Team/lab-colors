@@ -3356,7 +3356,6 @@ test("conformance pack 10 has the exact canonical family inventory", () => {
     [
       "unreachable/below_contrast_floor",
       "unreachable/exceeds_range",
-      "unreachable/floor_unreachable",
     ],
   );
   assert.equal(
@@ -3405,7 +3404,7 @@ test("release checker rejects solve failure wire drift", () => {
     ["unreachable", "below_contrast_floor"],
     ["unreachable", "exceeds_range"],
     ["unresolved", "bounded_search_exhausted"],
-    ["unreachable", "floor_unreachable"],
+    ["unreachable", "unsatisfiable_criterion"],
     ["rejected", "invalid_input"],
   ];
   assert.equal(boundaryRows.length, 5, "public core failure dictionary changed");

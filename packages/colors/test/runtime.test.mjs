@@ -66,7 +66,7 @@ function forgedOutputConflict(value = "#123456") {
         kind: "failure",
         cssVar: "--lab-first",
         category: "unreachable",
-        code: "floor_unreachable",
+        code: "unsatisfiable_criterion",
         message: "first contract has no solution",
       },
       unresolved: {
@@ -96,7 +96,7 @@ test("applyTheme rejects a forged partial Unreachable snapshot before any DOM mu
   captureOutputConflict(() => applyTheme(element, forgedOutputConflict()), [
     {
       role: "first",
-      code: "floor_unreachable",
+      code: "unsatisfiable_criterion",
       message: "first contract has no solution",
     },
     {
@@ -121,7 +121,7 @@ test("applyTheme rejects accessor-backed snapshots before their getters can crea
       roles.late = {
         kind: "failure",
         category: "unreachable",
-        code: "floor_unreachable",
+        code: "unsatisfiable_criterion",
         message: "late conflict",
       };
       return "#123456";
@@ -839,7 +839,7 @@ test("watchTheme quarantines a forged partial conflict and retries the same obse
   captureOutputConflict(() => ctrl.refresh(), [
     {
       role: "first",
-      code: "floor_unreachable",
+      code: "unsatisfiable_criterion",
       message: "first contract has no solution",
     },
     {
@@ -883,7 +883,7 @@ test("watchTheme keeps an immutable admitted snapshot for dirty repair", () => {
     exposed.roles.late = {
       kind: "failure",
       category: "unreachable",
-      code: "floor_unreachable",
+      code: "unsatisfiable_criterion",
       message: "injected",
     };
   }, TypeError);
