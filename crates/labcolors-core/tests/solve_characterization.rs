@@ -601,6 +601,13 @@ fn jnd_band_resolves_within_budget_with_tolerant_acceptance() {
 /// measured contract, not an assumption that libm is universally identical.
 #[test]
 fn platform_fixtures_are_bit_identical_after_w5() {
+    let mac_bytes = std::fs::read(FIXTURE_MACOS_AARCH64).expect("committed macOS fixture exists");
+    let linux_bytes = std::fs::read(FIXTURE_LINUX_X64).expect("committed Linux fixture exists");
+    assert_eq!(
+        mac_bytes, linux_bytes,
+        "W5 platform fixture files must remain raw-byte identical"
+    );
+
     let load = |path: &str| -> BTreeMap<String, String> {
         let text = std::fs::read_to_string(path).expect("committed fixture exists");
         let mut out = BTreeMap::new();
@@ -624,6 +631,6 @@ fn platform_fixtures_are_bit_identical_after_w5() {
     assert_eq!(mac.len(), 76, "macOS fixture cardinality");
     assert_eq!(
         mac, linux,
-        "W5 platform fixtures must remain byte-identical over the full matrix"
+        "W5 platform fixtures must decode to the same complete case matrix"
     );
 }

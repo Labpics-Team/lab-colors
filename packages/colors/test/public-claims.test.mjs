@@ -214,7 +214,7 @@ const YS_SCORE_CANONICAL_SURFACES = [
     path: "crates/labcolors-core/src/solve.rs",
     patterns: [
       /signed Ys candidate score `Lc`/u,
-      /not an(?:\s*\/\/!\s*)?LPC\/readability verdict or certificate/iu,
+      /neither complete LPC nor\s*(?:\/\/\/\s*)?a readability verdict/iu,
     ],
   },
   {
