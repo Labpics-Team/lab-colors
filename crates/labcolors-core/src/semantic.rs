@@ -3895,7 +3895,12 @@ pub fn recheck_against_multi_u32(
 /// the junior's floor. Otherwise the junior's already-legal solve is retained and
 /// merely marked non-exact: hierarchy is a soft relation, readability is not.
 #[cfg(test)]
-fn hierarchy_fallback(senior: Option<Solved>, junior: &Resolved, _junior_floor: Floor) -> Resolved {
+fn hierarchy_fallback(
+    senior: Option<Solved>,
+    junior: &Resolved,
+    bg: &BgInput,
+    junior_floor: Floor,
+) -> Result<Resolved, SolveFailure> {
     let retain_junior = || match junior {
         Resolved::Color {
             solved,
@@ -3909,19 +3914,28 @@ fn hierarchy_fallback(senior: Option<Solved>, junior: &Resolved, _junior_floor: 
         other => other.clone(),
     };
     let Some(senior_solved) = senior else {
-        return retain_junior();
+        return Ok(retain_junior());
     };
-    // W5: солвер больше не несёт юр. пола, потому проверка senior на junior's
-    // floor удалена. Hierarchy compression остаётся чисто перцептивной.
 
-    match junior {
+    let senior_clears_junior_floor = match junior_floor.criterion() {
+        Some(criterion) => {
+            let background_hex = crate::spaces::srgb::hex_from_srgb_encoded(bg.encoded_display());
+            wcag22_final_emission_passes(senior_solved.hex(), &background_hex, criterion)?
+        }
+        None => true,
+    };
+    if !senior_clears_junior_floor {
+        return Ok(retain_junior());
+    }
+
+    Ok(match junior {
         Resolved::Color { .. } => Resolved::Color {
             solved: senior_solved,
             compressed: true,
             achieved_dj: Option::None,
         },
         other => other.clone(),
-    }
+    })
 }
 
 /// Walk the text roles strongest-first and keep the order non-strict but honest.
@@ -3966,8 +3980,8 @@ fn enforce_text_hierarchy(
         };
         let demoted = demote_below(senior_mag, ctx, chroma, floor, bg, vc);
         // Copying the senior can restore `senior ≥ junior`, but only if that
-        // exact colour also clears the junior's floor. The shared fallback owns
-        // that precedence law for both built-in and named paths.
+        // exact colour also clears the junior's floor. This test-only built-in
+        // oracle owns that precedence law; named roles infer no hierarchy.
         let senior_solved = set.iter().find_map(|(r, res)| match res {
             Resolved::Color { solved, .. } if *r == senior_role => Some(solved.clone()),
             _ => None,
@@ -3985,7 +3999,10 @@ fn enforce_text_hierarchy(
                 achieved_dj: Option::None,
             },
             // No ordered step: copy a legal senior or preserve the legal junior.
-            (Ok(None), senior, junior) => hierarchy_fallback(senior, junior, floor),
+            (Ok(None), senior, junior) => match hierarchy_fallback(senior, junior, bg, floor) {
+                Ok(resolved) => resolved,
+                Err(reason) => admit_resolution(Err(reason))?,
+            },
             (Err(reason), _, _) => admit_resolution(Err(reason))?,
         };
     }
@@ -4008,13 +4025,13 @@ fn demote_below(
     senior_mag: f64,
     ctx: &ResolveContext,
     chroma: RoleChroma,
-    _floor: Floor,
+    floor: Floor,
     bg: &BgInput,
     vc: &ViewingConditions,
 ) -> Result<Option<Solved>, SolveFailure> {
-    // Target just under the senior. W5: солвер не поднимает цвет юр. полом —
-    // нормативная проверка финальной пары принадлежит WCAG22 evaluator-у,
-    // потому demotion — чисто перцептивный шаг.
+    // Target just under the senior. W5: numerical solver не владеет юр. полом;
+    // semantic boundary передаёт caller-owned final-emission criterion, который
+    // проверяется каноническим WCAG22 evaluator-ом на фактических байтах.
     let target = ctx.polarity.sign() * (senior_mag - STRICT_STEP).max(0.0);
     let contract = Contract::text(target);
     // Reuse the set's one background interval without erasing its failure
@@ -4023,7 +4040,7 @@ fn demote_below(
     // typed failures.
     let interval = *ctx.interval.as_ref().map_err(Clone::clone)?;
     demotion_outcome(
-        solve_with_chroma(bg, contract, chroma, vc, interval, None),
+        solve_with_chroma(bg, contract, chroma, vc, interval, floor.criterion()),
         senior_mag,
     )
 }
@@ -4726,6 +4743,92 @@ mod tests {
             demotion_outcome(Err(failure), 20.0),
             Err(SolveFailure::InternalInvariant(_))
         ));
+    }
+
+    #[test]
+    fn hierarchy_demotion_preserves_the_junior_final_emission_criterion() {
+        let vc = ViewingConditions::srgb();
+        let bg = BgInput::solid("#FFFFFF").unwrap();
+        let ctx = ResolveContext::new(&bg, &vc);
+        let interval = *ctx.interval.as_ref().unwrap();
+        let criterion = Wcag22CriterionV1::Sc143TextDefault;
+        let senior_mag = 1.0;
+        let target = ctx.polarity.sign() * (senior_mag - STRICT_STEP).max(0.0);
+        let unconstrained = solve_with_chroma(
+            &bg,
+            Contract::text(target),
+            RoleChroma::Neutral,
+            &vc,
+            interval,
+            None,
+        )
+        .expect("the unconstrained hierarchy probe must be solvable");
+        assert!(
+            !wcag22_final_emission_passes(unconstrained.hex(), "#FFFFFF", criterion).unwrap(),
+            "fixture must be RED before the semantic criterion is carried into demotion"
+        );
+
+        let constrained = demote_below(
+            senior_mag,
+            &ctx,
+            RoleChroma::Neutral,
+            Floor::AaText,
+            &bg,
+            &vc,
+        )
+        .expect("criterion enforcement must not produce an internal failure");
+        assert_eq!(
+            constrained, None,
+            "no legal distinguishable demotion exists at this boundary; the semantic floor must not be dropped"
+        );
+    }
+
+    #[test]
+    fn hierarchy_fallback_never_replaces_a_legal_junior_with_an_illegal_senior() {
+        let vc = ViewingConditions::srgb();
+        let bg = BgInput::solid("#FFFFFF").unwrap();
+        let interval = bg.luma_interval(&vc).unwrap();
+        let criterion = Wcag22CriterionV1::Sc143TextDefault;
+        let senior = solve::solve_in(
+            &bg,
+            Contract::text(20.0),
+            Hue::deg(0.0),
+            ChromaPolicy::Neutral,
+            &vc,
+            interval,
+        )
+        .unwrap();
+        assert!(!wcag22_final_emission_passes(senior.hex(), "#FFFFFF", criterion).unwrap());
+        let junior = solve_in_with_criterion(
+            &bg,
+            Contract::text(60.0),
+            Hue::deg(0.0),
+            ChromaPolicy::Neutral,
+            &vc,
+            interval,
+            Some(criterion),
+        )
+        .unwrap();
+        assert!(wcag22_final_emission_passes(junior.hex(), "#FFFFFF", criterion).unwrap());
+        let junior_outcome = Resolved::Color {
+            solved: junior.clone(),
+            compressed: false,
+            achieved_dj: None,
+        };
+
+        let fallback = hierarchy_fallback(Some(senior), &junior_outcome, &bg, Floor::AaText)
+            .expect("canonical final-byte evaluation must be total for generated sRGB8");
+        let Resolved::Color {
+            solved,
+            compressed,
+            achieved_dj,
+        } = fallback
+        else {
+            panic!("legal junior must remain a colour outcome");
+        };
+        assert_eq!(solved.hex(), junior.hex());
+        assert!(compressed);
+        assert_eq!(achieved_dj, None);
     }
 
     #[test]
