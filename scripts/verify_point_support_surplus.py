@@ -58,13 +58,13 @@ SITE_ID = "point-support-retained-reference-surplus-v1"
 SOURCE_BINDING_LAW = "point-support-rust-whole-file-semantic-cone-v2"
 SOURCE_BINDING_DOMAIN = b"labcolors.point-support.rust-whole-file-semantic-cone.v2"
 EXPECTED_SOURCE_CAPSULE_SHA256 = (
-    "8f7fc7fa82e4ad77fcededb1f5c74c64b818887760ddc6fdd8e2c26f8af7cd46"
+    "b2fa73b5845fdd177d12237ae67082b0654b7690a9ded249aa7a387c29200426"
 )
 EXPECTED_Q55_PROOF_SHA256 = (
-    "ac59cf89503170c789223b91d775213a19d4e571ef930f2ea609fcd51b14defd"
+    "e0f8a01ae106b9147606ac15094968fef1ce6575a568046fa0247d1eb8845e8b"
 )
 EXPECTED_Q55_PAYLOAD_SHA256 = (
-    "3c639a7c875046c46b56b51ecdd67d5ecaf14a1134490c88a222e7037b63c0f2"
+    "a4864f59b98251c69dfd06cd5c57516f86989f22ad79223404b705497628e502"
 )
 
 DROP_SCALE = 10_000
@@ -229,7 +229,7 @@ def verify_source_binding() -> tuple[str, int]:
         (HASH_SOURCE, b"const FNV1A_32_PRIME: u32 = 16777619;", b"const FNV1A_32_PRIME: u32 = 16777621;"),
         (LIB_SOURCE, b"pub(crate) mod point_support;", b"#[path = \"alternate_point_support.rs\"]\npub(crate) mod point_support;"),
         (WCAG22_PROFILE_SOURCE, b'"normalTextRatio":"4.5"', b'"normalTextRatio":"4.4"'),
-        (Q55_PROOF, b'"proof_payload_sha256":"3c639a7c875046c46b56b51ecdd67d5ecaf14a1134490c88a222e7037b63c0f2"', b'"proof_payload_sha256":"0000000000000000000000000000000000000000000000000000000000000000"'),
+        (Q55_PROOF, b'"proof_payload_sha256":"a4864f59b98251c69dfd06cd5c57516f86989f22ad79223404b705497628e502"', b'"proof_payload_sha256":"0000000000000000000000000000000000000000000000000000000000000000"'),
     )
     for path, old, new in mutations:
         mutated = mutate_source(sources, path, old, new)

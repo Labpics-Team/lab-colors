@@ -1,7 +1,8 @@
 //! Нормативная оценка WCAG 2.2 для одной финальной пары sRGB8 (#284).
 //!
-//! Это additive-путь: он не меняет legacy `crate::wcag`, solver или adaptive
-//! runtime. Решение принимается только целочисленными сравнениями над
+//! Это единственный WCAG decision path после W5. Numerical solver не знает о
+//! criterion kinds или thresholds; caller применяет этот evaluator к финальным
+//! байтам. Решение принимается только целочисленными сравнениями над
 //! закоммиченными Q55 outward-границами. `f64`, `powf`, epsilon и отображаемое
 //! округление в verdict не участвуют.
 
@@ -21,10 +22,10 @@ pub use kernel::{evaluate_wcag22_hex, evaluate_wcag22_srgb8};
 const PROFILE_SOURCE_JSON: &str = include_str!("../contracts/wcag22-srgb8-v1.json");
 const PROOF_SOURCE_JSON: &str = include_str!("../contracts/wcag22-srgb8-q55-proof-v1.json");
 const PROOF_SOURCE_SHA256: &str =
-    "ac59cf89503170c789223b91d775213a19d4e571ef930f2ea609fcd51b14defd";
+    "e0f8a01ae106b9147606ac15094968fef1ce6575a568046fa0247d1eb8845e8b";
 const PROOF_PAYLOAD_SHA256: &str =
-    "3c639a7c875046c46b56b51ecdd67d5ecaf14a1134490c88a222e7037b63c0f2";
-const VERIFIER_SHA256: &str = "3ae679c9a10342836afe0b59170f3530e757dad7b164dbcffa9b93d813c9e8fe";
+    "a4864f59b98251c69dfd06cd5c57516f86989f22ad79223404b705497628e502";
+const VERIFIER_SHA256: &str = "5211396d3ebd928618afd54d80bf0970229e6e82f1ee9747f899b9e46e6e4167";
 
 /// Идентификатор immutable normative profile.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

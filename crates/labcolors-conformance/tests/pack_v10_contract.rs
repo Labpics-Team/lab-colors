@@ -31,7 +31,7 @@ const CANONICAL_FAMILY_SHA256: [(&str, &str); 5] = [
     ),
     (
         "wcag22.json",
-        "8b2e44feba985a6f0017d4192c1c03fcc5c22da1d7d86df91dcb5bb214de7ab1",
+        "836b7f90ab3807072155d8e38633cf6bab7ec6ad7a0ee436831acd8536df6db7",
     ),
 ];
 

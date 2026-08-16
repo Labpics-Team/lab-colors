@@ -72,6 +72,8 @@ const BARE_FLOAT_ALLOWLIST: &[&str] = &[
     "0.5",   // midpoint / half (curve centre t=0.5, half-cosine ease, rounding).
     "1.0",   // multiplicative identity / unit upper clamp bound / purity ceiling.
     "2.0",   // doubling / diameter (chord = 2·C·sin(Δh/2), halving denominators).
+    "3.0",   // WCAG 2.2 SC 1.4.11 / large-text normative contrast ratio.
+    "4.5",   // WCAG 2.2 SC 1.4.3 default-text normative contrast ratio.
     "100.0", // CAM16 J lightness scale (0..100) / percent normalisation.
     "180.0", // half-turn in degrees (shortest-arc hue wrap: (Δ+180)%360−180).
     "255.0", // 8-bit sRGB channel quantisation (round·255 / 255).
