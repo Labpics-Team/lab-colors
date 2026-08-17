@@ -6,7 +6,7 @@
 //! prospective host observation bound to the same request and scene revision.
 
 use crate::Srgb8;
-use crate::observation::{ObservationStreamId, Revision};
+use crate::observation::{ObservationStreamId, Revision, RevisionBoundObservationV1};
 use crate::session::SessionObservationBindingPermitV1;
 use crate::sha256::Hasher;
 
@@ -134,6 +134,10 @@ pub(crate) enum FieldEvaluationErrorV1 {
     EvidenceSceneRevisionMismatch {
         expected: FieldSceneRevisionV1,
         actual: FieldSceneRevisionV1,
+    },
+    SceneObservationPermitMismatch {
+        observation: FieldSceneRevisionV1,
+        permitted: FieldSceneRevisionV1,
     },
     EvidenceRenderCapabilityMismatch,
     ObservedRasterMismatch {
@@ -896,13 +900,27 @@ pub(crate) struct FieldSceneRevisionV1 {
 }
 
 impl FieldSceneRevisionV1 {
-    /// Derives the field scene only from the exact observation authority minted
-    /// by Session for the currently admitted head.
-    pub(crate) const fn from_session_permit(permit: &SessionObservationBindingPermitV1) -> Self {
-        Self {
+    /// Derives a scene only when the supplied observation is the exact
+    /// stream/revision authorized by the linear Session permit.
+    pub(crate) fn from_admitted_observation(
+        observation: &RevisionBoundObservationV1,
+        permit: &SessionObservationBindingPermitV1,
+    ) -> Result<Self, FieldEvaluationErrorV1> {
+        let observation = Self {
+            stream: observation.stream(),
+            revision: observation.revision(),
+        };
+        let permitted = Self {
             stream: permit.stream(),
             revision: permit.revision(),
+        };
+        if observation != permitted {
+            return Err(FieldEvaluationErrorV1::SceneObservationPermitMismatch {
+                observation,
+                permitted,
+            });
         }
+        Ok(observation)
     }
 
     #[cfg(test)]

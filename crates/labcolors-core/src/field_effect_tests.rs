@@ -1,4 +1,5 @@
 use crate::Srgb8;
+use crate::appearance::SurfaceInputPortId;
 use crate::field_effect::{
     CarrierIntentV1, DevicePixelRatioV1, EncodedSrgb8AlphaRasterViewV1, EncodedSrgb8AlphaV1,
     FieldCertificateReplayErrorV1, FieldEvaluationErrorV1, FieldEvaluationRequestV1,
@@ -13,7 +14,16 @@ use crate::field_effect::{
     evaluate_reference_full, evaluate_reference_incremental, evaluate_whole_field,
     footprint_for_output, influence_for_input, request_digest, verify_certificate_replay,
 };
-use crate::observation::{ObservationStreamId, Revision};
+use crate::lcs_occurrence::ColorSignal;
+use crate::observation::{
+    CanonicalObservationSchemaV1, ObservationPayloadInput, ObservationStreamId,
+    ObservationUpdateInput, ObservedScenarioSetInput, Revision, RevisionBoundObservationV1,
+    ScenarioId, ScenarioInput, SurfaceInputBinding, canonicalize_observation_schema,
+};
+use crate::session::{
+    Session, SessionDecision, SessionEvidenceV1, SessionObservationBindingPermitV1, SessionPlanV1,
+    SessionUpdateError, private as session_private,
+};
 
 fn extent(width: u32, height: u32) -> FieldExtentV1 {
     FieldExtentV1::try_new(width, height).unwrap()
@@ -145,6 +155,112 @@ fn exact_evidence(identity: u64) -> FieldEvidenceV1<'static> {
     FieldEvidenceV1::ExactReferenceWholeRaster {
         identity: FieldEvidenceIdentityV1::new(identity),
     }
+}
+
+const SCENE_BINDING_STREAM: ObservationStreamId = ObservationStreamId::new(140);
+const SCENE_BINDING_SURFACE: SurfaceInputPortId = SurfaceInputPortId::new(141);
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SceneBindingEvidence {
+    observation: RevisionBoundObservationV1,
+    scene: FieldSceneRevisionV1,
+}
+
+impl session_private::EvidenceSealed for SceneBindingEvidence {}
+
+impl SessionEvidenceV1 for SceneBindingEvidence {
+    fn observation(&self) -> &RevisionBoundObservationV1 {
+        &self.observation
+    }
+}
+
+struct SceneBindingPlan {
+    schema: CanonicalObservationSchemaV1,
+}
+
+impl session_private::PlanSealed for SceneBindingPlan {}
+
+impl SessionPlanV1 for SceneBindingPlan {
+    type OwnerLease = ();
+    type Verified = SceneBindingEvidence;
+    type Violation = SceneBindingEvidence;
+    type Error = FieldEvaluationErrorV1;
+
+    fn try_acquire_owner(&self) -> Option<Self::OwnerLease> {
+        Some(())
+    }
+
+    fn observation_schema<'a>(
+        &'a self,
+        _owner: &'a Self::OwnerLease,
+    ) -> &'a CanonicalObservationSchemaV1 {
+        &self.schema
+    }
+
+    fn evaluate(
+        &mut self,
+        _owner: &Self::OwnerLease,
+        observation: RevisionBoundObservationV1,
+        previous: Option<&Self::Verified>,
+        permit: SessionObservationBindingPermitV1,
+    ) -> Result<SessionDecision<Self::Verified, Self::Violation>, Self::Error> {
+        let admitted = previous.map_or(&observation, SessionEvidenceV1::observation);
+        let scene = FieldSceneRevisionV1::from_admitted_observation(admitted, &permit)?;
+        Ok(SessionDecision::Verified(SceneBindingEvidence {
+            observation,
+            scene,
+        }))
+    }
+}
+
+fn scene_binding_update(revision: u64) -> ObservationUpdateInput {
+    ObservationUpdateInput {
+        stream: SCENE_BINDING_STREAM,
+        revision: Revision::new(revision),
+        payload: ObservationPayloadInput::Scenarios(ObservedScenarioSetInput {
+            scenarios: vec![ScenarioInput {
+                id: ScenarioId::new(1),
+                bindings: vec![SurfaceInputBinding::new(
+                    SCENE_BINDING_SURFACE,
+                    ColorSignal::from_srgb8(Srgb8::new([revision as u8; 3])),
+                )],
+            }],
+        }),
+    }
+}
+
+#[test]
+fn session_scene_binding_rejects_a_retained_observation_under_the_current_permit() {
+    let mut session = Session::new(
+        SCENE_BINDING_STREAM,
+        SceneBindingPlan {
+            schema: canonicalize_observation_schema(vec![SCENE_BINDING_SURFACE]).unwrap(),
+        },
+    );
+    session
+        .prepare_update(scene_binding_update(1))
+        .unwrap()
+        .commit();
+    assert_eq!(
+        session.state().last_verified().unwrap().scene,
+        scene_on(SCENE_BINDING_STREAM.value(), 1)
+    );
+
+    let error = match session.prepare_update(scene_binding_update(2)) {
+        Ok(_) => panic!("stale observation must not bind to the current Session permit"),
+        Err(error) => error,
+    };
+    assert_eq!(
+        error,
+        SessionUpdateError::Plan(FieldEvaluationErrorV1::SceneObservationPermitMismatch {
+            observation: scene_on(SCENE_BINDING_STREAM.value(), 1),
+            permitted: scene_on(SCENE_BINDING_STREAM.value(), 2),
+        })
+    );
+    assert_eq!(
+        session.state().last_verified().unwrap().scene,
+        scene_on(SCENE_BINDING_STREAM.value(), 1)
+    );
 }
 
 #[test]
