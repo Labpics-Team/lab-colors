@@ -6,10 +6,14 @@
 //! prospective host observation bound to the same request and scene revision.
 
 use crate::Srgb8;
-use crate::observation::{ObservationStreamId, Revision};
+use crate::observation::{ObservationStreamId, Revision, RevisionBoundObservationV1};
+use crate::session::SessionObservationBindingPermitV1;
 use crate::sha256::Hasher;
 
 const Q32_NORMALIZATION: u64 = 1_u64 << 32;
+// A radius r uses row 2r. Exact integer Q32 probabilities require 2r <= 32;
+// wider rows need a separately versioned quantisation law rather than rounding.
+const MAX_EXACT_BINOMIAL_DEVICE_RADIUS_PX: u32 = 16;
 
 macro_rules! opaque_u64_id {
     ($name:ident) => {
@@ -100,6 +104,11 @@ pub(crate) enum FieldEvaluationErrorV1 {
     InvalidKernelShape,
     KernelWeightsNotNormalized,
     KernelWeightsNotSymmetric,
+    KernelWeightsDoNotMatchProfile,
+    UnsupportedBinomialDeviceRadius {
+        actual: u32,
+        maximum: u32,
+    },
     ZeroKernelWeight,
     KernelDevicePixelRatioMismatch,
     UnsupportedWorkingSpace,
@@ -247,8 +256,8 @@ impl FieldRectV1 {
         let expanded_bottom = bottom
             .checked_add(radius)
             .ok_or(FieldEvaluationErrorV1::GeometryOverflow)?;
-        let left = if radius > self.x { 0 } else { self.x - radius };
-        let top = if radius > self.y { 0 } else { self.y - radius };
+        let left = self.x.saturating_sub(radius);
+        let top = self.y.saturating_sub(radius);
         let clipped_right = expanded_right.min(extent.width);
         let clipped_bottom = expanded_bottom.min(extent.height);
         Self::try_new(
@@ -574,6 +583,8 @@ pub(crate) enum GaussianEdgeModeV1 {
 }
 
 /// Validated finite separable Gaussian kernel owned by the compiled plan.
+/// `css_radius_px` is the finite support radius, not a Gaussian sigma. The
+/// versioned binomial law uses Pascal row `2 * css_radius_px * DPR` exactly.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct GaussianKernelV1 {
     profile: GaussianKernelProfileV1,
@@ -596,6 +607,14 @@ impl GaussianKernelV1 {
         let device_radius_px = css_radius_px
             .checked_mul(u32::from(device_pixel_ratio.value()))
             .ok_or(FieldEvaluationErrorV1::GeometryOverflow)?;
+        if profile == GaussianKernelProfileV1::BinomialGaussianQ32V1
+            && device_radius_px > MAX_EXACT_BINOMIAL_DEVICE_RADIUS_PX
+        {
+            return Err(FieldEvaluationErrorV1::UnsupportedBinomialDeviceRadius {
+                actual: device_radius_px,
+                maximum: MAX_EXACT_BINOMIAL_DEVICE_RADIUS_PX,
+            });
+        }
         let expected_u32 = device_radius_px
             .checked_mul(2)
             .and_then(|diameter| diameter.checked_add(1))
@@ -605,7 +624,7 @@ impl GaussianKernelV1 {
         if weights_q32.len() != expected {
             return Err(FieldEvaluationErrorV1::InvalidKernelShape);
         }
-        if weights_q32.iter().any(|weight| *weight == 0) {
+        if weights_q32.contains(&0) {
             return Err(FieldEvaluationErrorV1::ZeroKernelWeight);
         }
         if !weights_q32
@@ -621,6 +640,11 @@ impl GaussianKernelV1 {
         })?;
         if sum != Q32_NORMALIZATION {
             return Err(FieldEvaluationErrorV1::KernelWeightsNotNormalized);
+        }
+        match profile {
+            GaussianKernelProfileV1::BinomialGaussianQ32V1 => {
+                validate_exact_binomial_q32(device_radius_px, &weights_q32)?;
+            }
         }
         Ok(Self {
             profile,
@@ -694,6 +718,35 @@ impl GaussianKernelV1 {
     }
 }
 
+fn validate_exact_binomial_q32(
+    device_radius_px: u32,
+    weights_q32: &[u32],
+) -> Result<(), FieldEvaluationErrorV1> {
+    let order = device_radius_px
+        .checked_mul(2)
+        .ok_or(FieldEvaluationErrorV1::ArithmeticOverflow)?;
+    let scale = 1_u64
+        .checked_shl(32 - order)
+        .ok_or(FieldEvaluationErrorV1::ArithmeticOverflow)?;
+    let mut coefficient = 1_u64;
+    for (index, actual) in weights_q32.iter().copied().enumerate() {
+        let expected = coefficient
+            .checked_mul(scale)
+            .ok_or(FieldEvaluationErrorV1::ArithmeticOverflow)?;
+        if u64::from(actual) != expected {
+            return Err(FieldEvaluationErrorV1::KernelWeightsDoNotMatchProfile);
+        }
+        let index = u32::try_from(index).map_err(|_| FieldEvaluationErrorV1::ArithmeticOverflow)?;
+        if index < order {
+            coefficient = coefficient
+                .checked_mul(u64::from(order - index))
+                .ok_or(FieldEvaluationErrorV1::ArithmeticOverflow)?
+                / u64::from(index + 1);
+        }
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum FieldWorkingSpaceV1 {
     EncodedSrgb8PremultipliedV1,
@@ -718,8 +771,30 @@ pub(crate) enum FieldOutputCapabilityV1 {
     OpaqueSrgb8V1,
 }
 
+/// Opaque proof that a renderer/conformance pair crossed host admission.
+/// Production minting is intentionally absent until the attachment-owned
+/// admission token is wired into this module.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) enum FieldRendererCapabilityV1 {
+pub(crate) struct FieldHostConformancePermitV1 {
+    renderer: FieldRendererIdV1,
+    conformance: FieldHostConformanceIdV1,
+}
+
+impl FieldHostConformancePermitV1 {
+    #[cfg(test)]
+    pub(crate) const fn mint_for_test(
+        renderer: FieldRendererIdV1,
+        conformance: FieldHostConformanceIdV1,
+    ) -> Self {
+        Self {
+            renderer,
+            conformance,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum FieldRendererCapabilityKindV1 {
     ExactReference {
         renderer: FieldRendererIdV1,
     },
@@ -736,30 +811,58 @@ pub(crate) enum FieldRendererCapabilityV1 {
     },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) struct FieldRendererCapabilityV1 {
+    kind: FieldRendererCapabilityKindV1,
+}
+
 impl FieldRendererCapabilityV1 {
     pub(crate) const fn exact_reference(renderer: FieldRendererIdV1) -> Self {
-        Self::ExactReference { renderer }
+        Self {
+            kind: FieldRendererCapabilityKindV1::ExactReference { renderer },
+        }
     }
 
-    pub(crate) const fn host_conformant(
-        renderer: FieldRendererIdV1,
-        conformance: FieldHostConformanceIdV1,
-    ) -> Self {
-        Self::HostConformant {
-            renderer,
-            conformance,
+    pub(crate) const fn host_conformant(permit: FieldHostConformancePermitV1) -> Self {
+        Self {
+            kind: FieldRendererCapabilityKindV1::HostConformant {
+                renderer: permit.renderer,
+                conformance: permit.conformance,
+            },
         }
     }
 
     pub(crate) const fn unknown(renderer: FieldRendererIdV1) -> Self {
-        Self::Unknown { renderer }
+        Self {
+            kind: FieldRendererCapabilityKindV1::Unknown { renderer },
+        }
     }
 
     pub(crate) const fn unsupported(
         renderer: FieldRendererIdV1,
         reason: FieldUnsupportedReasonIdV1,
     ) -> Self {
-        Self::Unsupported { renderer, reason }
+        Self {
+            kind: FieldRendererCapabilityKindV1::Unsupported { renderer, reason },
+        }
+    }
+
+    const fn kind(self) -> FieldRendererCapabilityKindV1 {
+        self.kind
+    }
+
+    const fn is_exact_reference(self) -> bool {
+        matches!(
+            self.kind,
+            FieldRendererCapabilityKindV1::ExactReference { .. }
+        )
+    }
+
+    const fn is_host_conformant(self) -> bool {
+        matches!(
+            self.kind,
+            FieldRendererCapabilityKindV1::HostConformant { .. }
+        )
     }
 }
 
@@ -793,9 +896,19 @@ pub(crate) struct FieldSceneRevisionV1 {
 }
 
 impl FieldSceneRevisionV1 {
-    /// Binds field evidence to the same admitted Session observation head.
-    /// The field layer does not mint an independent scene/revision namespace.
-    pub(crate) const fn from_session_head(stream: ObservationStreamId, revision: Revision) -> Self {
+    /// Derives the field scene from the exact observation admitted by Session.
+    pub(crate) const fn from_admitted_observation(
+        observation: &RevisionBoundObservationV1,
+        _permit: &SessionObservationBindingPermitV1,
+    ) -> Self {
+        Self {
+            stream: observation.stream(),
+            revision: observation.revision(),
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) const fn mint_for_test(stream: ObservationStreamId, revision: Revision) -> Self {
         Self { stream, revision }
     }
 
@@ -1019,18 +1132,22 @@ pub(crate) struct ProspectiveObservedRasterV1<'a> {
 }
 
 impl<'a> ProspectiveObservedRasterV1<'a> {
-    pub(crate) const fn new(
+    pub(crate) const fn from_host_observation(
         identity: FieldEvidenceIdentityV1,
         request_digest: FieldRequestDigestV1,
         scene_revision: FieldSceneRevisionV1,
-        render_capability: FieldRenderCapabilityV1,
+        output: FieldOutputCapabilityV1,
+        permit: FieldHostConformancePermitV1,
         raster: FieldRasterViewV1<'a>,
     ) -> Self {
         Self {
             identity,
             request_digest,
             scene_revision,
-            render_capability,
+            render_capability: FieldRenderCapabilityV1::new(
+                FieldRendererCapabilityV1::host_conformant(permit),
+                output,
+            ),
             raster,
         }
     }
@@ -1180,12 +1297,12 @@ impl FieldWholeRasterCertificateV1 {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum FieldCertificateReplayErrorV1 {
-    SceneRevisionMismatch {
+    SceneRevision {
         expected: FieldSceneRevisionV1,
         actual: FieldSceneRevisionV1,
     },
-    RenderCapabilityMismatch,
-    RequestMismatch,
+    RenderCapability,
+    Request,
 }
 
 pub(crate) fn footprint_for_output(
@@ -1404,16 +1521,16 @@ pub(crate) fn verify_certificate_replay(
     request: &FieldEvaluationRequestV1<'_>,
 ) -> Result<(), FieldCertificateReplayErrorV1> {
     if certificate.scene_revision != request.scene_revision {
-        return Err(FieldCertificateReplayErrorV1::SceneRevisionMismatch {
+        return Err(FieldCertificateReplayErrorV1::SceneRevision {
             expected: certificate.scene_revision,
             actual: request.scene_revision,
         });
     }
     if certificate.render_capability != request.render_capability {
-        return Err(FieldCertificateReplayErrorV1::RenderCapabilityMismatch);
+        return Err(FieldCertificateReplayErrorV1::RenderCapability);
     }
     if certificate.request_digest != request_digest(request) {
-        return Err(FieldCertificateReplayErrorV1::RequestMismatch);
+        return Err(FieldCertificateReplayErrorV1::Request);
     }
     Ok(())
 }
@@ -1451,19 +1568,13 @@ fn admit_proof_evidence(
         }
         FieldEvidenceV1::ExactReferenceWholeRaster { .. } => {
             admit_renderer(request.render_capability.renderer())?;
-            if !matches!(
-                request.render_capability.renderer(),
-                FieldRendererCapabilityV1::ExactReference { .. }
-            ) {
+            if !request.render_capability.renderer().is_exact_reference() {
                 return Err(FieldEvaluationErrorV1::ExactReferenceCannotProveHostRenderer);
             }
         }
         FieldEvidenceV1::ProspectiveObservedWholeRaster(observed) => {
             admit_renderer(request.render_capability.renderer())?;
-            if !matches!(
-                request.render_capability.renderer(),
-                FieldRendererCapabilityV1::HostConformant { .. }
-            ) {
+            if !request.render_capability.renderer().is_host_conformant() {
                 return Err(
                     FieldEvaluationErrorV1::ProspectiveObservationRequiresHostConformantRenderer,
                 );
@@ -1489,13 +1600,13 @@ fn admit_proof_evidence(
 }
 
 fn admit_renderer(renderer: FieldRendererCapabilityV1) -> Result<(), FieldEvaluationErrorV1> {
-    match renderer {
-        FieldRendererCapabilityV1::ExactReference { .. }
-        | FieldRendererCapabilityV1::HostConformant { .. } => Ok(()),
-        FieldRendererCapabilityV1::Unknown { renderer } => {
+    match renderer.kind() {
+        FieldRendererCapabilityKindV1::ExactReference { .. }
+        | FieldRendererCapabilityKindV1::HostConformant { .. } => Ok(()),
+        FieldRendererCapabilityKindV1::Unknown { renderer } => {
             Err(FieldEvaluationErrorV1::UnknownRenderer { renderer })
         }
-        FieldRendererCapabilityV1::Unsupported { renderer, reason } => {
+        FieldRendererCapabilityKindV1::Unsupported { renderer, reason } => {
             Err(FieldEvaluationErrorV1::UnsupportedRenderer { renderer, reason })
         }
     }
@@ -2077,12 +2188,12 @@ fn hash_quantization(hasher: &mut Hasher, quantization: FieldQuantizationV1) {
 }
 
 fn hash_render_capability(hasher: &mut Hasher, capability: FieldRenderCapabilityV1) {
-    match capability.renderer() {
-        FieldRendererCapabilityV1::ExactReference { renderer } => {
+    match capability.renderer().kind() {
+        FieldRendererCapabilityKindV1::ExactReference { renderer } => {
             hash_u8(hasher, 1);
             hash_u64(hasher, renderer.value());
         }
-        FieldRendererCapabilityV1::HostConformant {
+        FieldRendererCapabilityKindV1::HostConformant {
             renderer,
             conformance,
         } => {
@@ -2090,11 +2201,11 @@ fn hash_render_capability(hasher: &mut Hasher, capability: FieldRenderCapability
             hash_u64(hasher, renderer.value());
             hash_u64(hasher, conformance.value());
         }
-        FieldRendererCapabilityV1::Unknown { renderer } => {
+        FieldRendererCapabilityKindV1::Unknown { renderer } => {
             hash_u8(hasher, 3);
             hash_u64(hasher, renderer.value());
         }
-        FieldRendererCapabilityV1::Unsupported { renderer, reason } => {
+        FieldRendererCapabilityKindV1::Unsupported { renderer, reason } => {
             hash_u8(hasher, 4);
             hash_u64(hasher, renderer.value());
             hash_u64(hasher, reason.value());
