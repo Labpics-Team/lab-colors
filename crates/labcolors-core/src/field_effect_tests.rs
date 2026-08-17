@@ -523,6 +523,18 @@ fn gaussian_footprint_and_influence_are_dpr_aware_and_overflow_is_typed() {
             maximum: 16,
         })
     );
+    assert_eq!(
+        GaussianKernelV1::try_new(
+            GaussianKernelProfileV1::BinomialGaussianQ32V1,
+            5,
+            dpr(4),
+            Vec::new(),
+        ),
+        Err(FieldEvaluationErrorV1::UnsupportedBinomialDeviceRadius {
+            actual: 20,
+            maximum: 16,
+        })
+    );
 }
 
 #[test]
@@ -549,7 +561,6 @@ fn binomial_profile_rejects_symmetric_normalized_non_binomial_weights() {
         .unwrap();
         assert_eq!(admitted, canonical);
     }
-
     for device_radius in 1..=16_u32 {
         let expected = pascal_q32_row(device_radius);
         for raw_dpr in 1..=4_u8 {

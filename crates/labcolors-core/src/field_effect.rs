@@ -6,7 +6,7 @@
 //! prospective host observation bound to the same request and scene revision.
 
 use crate::Srgb8;
-use crate::observation::{ObservationStreamId, Revision, RevisionBoundObservationV1};
+use crate::observation::{ObservationStreamId, Revision};
 use crate::session::SessionObservationBindingPermitV1;
 use crate::sha256::Hasher;
 
@@ -896,16 +896,13 @@ pub(crate) struct FieldSceneRevisionV1 {
 }
 
 impl FieldSceneRevisionV1 {
-    /// Derives the field scene from the exact observation admitted by Session.
-    pub(crate) const fn from_admitted_observation(
-        observation: &RevisionBoundObservationV1,
-        permit: &SessionObservationBindingPermitV1,
-    ) -> Self {
-        let stream = observation.stream();
-        let revision = observation.revision();
-        assert!(stream.value() == permit.stream().value());
-        assert!(revision.value() == permit.revision().value());
-        Self { stream, revision }
+    /// Derives the field scene only from the exact observation authority minted
+    /// by Session for the currently admitted head.
+    pub(crate) const fn from_session_permit(permit: &SessionObservationBindingPermitV1) -> Self {
+        Self {
+            stream: permit.stream(),
+            revision: permit.revision(),
+        }
     }
 
     #[cfg(test)]
