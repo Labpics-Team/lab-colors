@@ -27,12 +27,24 @@ pub(crate) mod private {
 /// Linear authority to revision-bind one admitted observation to evaluator
 /// evidence. Safe construction remains exclusive to this module.
 pub(crate) struct SessionObservationBindingPermitV1 {
-    _private: (),
+    stream: ObservationStreamId,
+    revision: Revision,
 }
 
 impl SessionObservationBindingPermitV1 {
-    const fn mint() -> Self {
-        Self { _private: () }
+    const fn mint(observation: &RevisionBoundObservationV1) -> Self {
+        Self {
+            stream: observation.stream(),
+            revision: observation.revision(),
+        }
+    }
+
+    pub(crate) const fn stream(&self) -> ObservationStreamId {
+        self.stream
+    }
+
+    pub(crate) const fn revision(&self) -> Revision {
+        self.revision
     }
 }
 
@@ -610,13 +622,9 @@ fn prepare_session_transition<'session, Plan: SessionPlanV1>(
             // immutable observation backing.
             let (raw_head, observation) = prepared.into_parts();
             let raw_observation = observation.clone();
+            let permit = SessionObservationBindingPermitV1::mint(&observation);
             let decision = plan
-                .evaluate(
-                    &owner,
-                    observation,
-                    state.last_verified(),
-                    SessionObservationBindingPermitV1::mint(),
-                )
+                .evaluate(&owner, observation, state.last_verified(), permit)
                 .map_err(SessionUpdateError::Plan)?;
             if !decision.observation().is_same_binding_as(&raw_observation) {
                 retire_session_decision(plan, decision);

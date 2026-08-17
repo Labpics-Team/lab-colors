@@ -899,12 +899,13 @@ impl FieldSceneRevisionV1 {
     /// Derives the field scene from the exact observation admitted by Session.
     pub(crate) const fn from_admitted_observation(
         observation: &RevisionBoundObservationV1,
-        _permit: &SessionObservationBindingPermitV1,
+        permit: &SessionObservationBindingPermitV1,
     ) -> Self {
-        Self {
-            stream: observation.stream(),
-            revision: observation.revision(),
-        }
+        let stream = observation.stream();
+        let revision = observation.revision();
+        assert!(stream.value() == permit.stream().value());
+        assert!(revision.value() == permit.revision().value());
+        Self { stream, revision }
     }
 
     #[cfg(test)]
