@@ -3,15 +3,15 @@ use crate::field_effect::{
     CarrierIntentV1, DevicePixelRatioV1, EncodedSrgb8AlphaRasterViewV1, EncodedSrgb8AlphaV1,
     FieldCertificateReplayErrorV1, FieldEvaluationErrorV1, FieldEvaluationRequestV1,
     FieldEvaluationScratchV1, FieldEvidenceClassV1, FieldEvidenceIdentityV1, FieldEvidenceV1,
-    FieldExtentV1, FieldGeometryV1, FieldHostConformanceIdV1, FieldInfluenceV1, FieldOpacityV1,
-    FieldOperationV1, FieldOperatorInstanceIdV1, FieldOperatorKindV1, FieldOutputCapabilityV1,
-    FieldPrecisionV1, FieldQuantizationV1, FieldRasterIdentityV1, FieldRasterViewV1, FieldRectV1,
-    FieldRenderCapabilityV1, FieldRendererCapabilityV1, FieldRendererIdV1, FieldRequestIdV1,
-    FieldSceneRevisionV1, FieldUnsupportedReasonIdV1, FieldWorkingSpaceV1, GaussianEdgeModeV1,
-    GaussianKernelProfileV1, GaussianKernelV1, OpaqueSrgb8RasterViewV1, PremultipliedRgba8V1,
-    ProspectiveObservedRasterV1, evaluate_reference_full, evaluate_reference_incremental,
-    evaluate_whole_field, footprint_for_output, influence_for_input, request_digest,
-    verify_certificate_replay,
+    FieldExtentV1, FieldGeometryV1, FieldHostConformanceIdV1, FieldHostConformancePermitV1,
+    FieldInfluenceV1, FieldOpacityV1, FieldOperationV1, FieldOperatorInstanceIdV1,
+    FieldOperatorKindV1, FieldOutputCapabilityV1, FieldPrecisionV1, FieldQuantizationV1,
+    FieldRasterIdentityV1, FieldRasterViewV1, FieldRectV1, FieldRenderCapabilityV1,
+    FieldRendererCapabilityV1, FieldRendererIdV1, FieldRequestIdV1, FieldSceneRevisionV1,
+    FieldUnsupportedReasonIdV1, FieldWorkingSpaceV1, GaussianEdgeModeV1, GaussianKernelProfileV1,
+    GaussianKernelV1, OpaqueSrgb8RasterViewV1, PremultipliedRgba8V1, ProspectiveObservedRasterV1,
+    evaluate_reference_full, evaluate_reference_incremental, evaluate_whole_field,
+    footprint_for_output, influence_for_input, request_digest, verify_certificate_replay,
 };
 use crate::observation::{ObservationStreamId, Revision};
 
@@ -69,11 +69,22 @@ fn reference_capability(output: FieldOutputCapabilityV1) -> FieldRenderCapabilit
 
 fn host_capability(output: FieldOutputCapabilityV1) -> FieldRenderCapabilityV1 {
     FieldRenderCapabilityV1::new(
-        FieldRendererCapabilityV1::host_conformant(
-            FieldRendererIdV1::new(20),
-            FieldHostConformanceIdV1::new(30),
-        ),
+        FieldRendererCapabilityV1::host_conformant(host_permit()),
         output,
+    )
+}
+
+fn host_permit() -> FieldHostConformancePermitV1 {
+    FieldHostConformancePermitV1::mint_for_test(
+        FieldRendererIdV1::new(20),
+        FieldHostConformanceIdV1::new(30),
+    )
+}
+
+fn other_host_permit() -> FieldHostConformancePermitV1 {
+    FieldHostConformancePermitV1::mint_for_test(
+        FieldRendererIdV1::new(21),
+        FieldHostConformanceIdV1::new(31),
     )
 }
 
@@ -82,10 +93,7 @@ fn scene(revision: u64) -> FieldSceneRevisionV1 {
 }
 
 fn scene_on(stream: u32, revision: u64) -> FieldSceneRevisionV1 {
-    FieldSceneRevisionV1::from_session_head(
-        ObservationStreamId::new(stream),
-        Revision::new(revision),
-    )
+    FieldSceneRevisionV1::mint_for_test(ObservationStreamId::new(stream), Revision::new(revision))
 }
 
 fn request<'a>(
@@ -269,14 +277,16 @@ fn host_conformant_prospective_observation_binds_request_scene_and_capability() 
         .unwrap()
         .to_vec();
     let observed = premultiplied_raster(90, geometry, &reference);
-    let evidence =
-        FieldEvidenceV1::ProspectiveObservedWholeRaster(ProspectiveObservedRasterV1::new(
+    let evidence = FieldEvidenceV1::ProspectiveObservedWholeRaster(
+        ProspectiveObservedRasterV1::from_host_observation(
             FieldEvidenceIdentityV1::new(91),
             request_digest(&request),
             scene(9),
-            capability,
+            FieldOutputCapabilityV1::OpaqueSrgb8V1,
+            host_permit(),
             observed,
-        ));
+        ),
+    );
 
     let certificate =
         evaluate_whole_field(&request, evidence, &mut FieldEvaluationScratchV1::new()).unwrap();
@@ -325,11 +335,12 @@ fn prospective_observation_rejects_revision_capability_request_and_raster_drift(
 
     let cases = [
         (
-            ProspectiveObservedRasterV1::new(
+            ProspectiveObservedRasterV1::from_host_observation(
                 FieldEvidenceIdentityV1::new(1),
                 request_digest(&request),
                 scene(5),
-                capability,
+                FieldOutputCapabilityV1::OpaqueSrgb8V1,
+                host_permit(),
                 expected,
             ),
             FieldEvaluationErrorV1::EvidenceSceneRevisionMismatch {
@@ -338,21 +349,23 @@ fn prospective_observation_rejects_revision_capability_request_and_raster_drift(
             },
         ),
         (
-            ProspectiveObservedRasterV1::new(
+            ProspectiveObservedRasterV1::from_host_observation(
                 FieldEvidenceIdentityV1::new(2),
                 request_digest(&request),
                 scene(4),
-                reference_capability(FieldOutputCapabilityV1::OpaqueSrgb8V1),
+                FieldOutputCapabilityV1::OpaqueSrgb8V1,
+                other_host_permit(),
                 expected,
             ),
             FieldEvaluationErrorV1::EvidenceRenderCapabilityMismatch,
         ),
         (
-            ProspectiveObservedRasterV1::new(
+            ProspectiveObservedRasterV1::from_host_observation(
                 FieldEvidenceIdentityV1::new(3),
                 crate::field_effect::FieldRequestDigestV1::from_bytes([0xA5; 32]),
                 scene(4),
-                capability,
+                FieldOutputCapabilityV1::OpaqueSrgb8V1,
+                host_permit(),
                 expected,
             ),
             FieldEvaluationErrorV1::EvidenceRequestDigestMismatch,
@@ -375,13 +388,16 @@ fn prospective_observation_rejects_revision_capability_request_and_raster_drift(
     assert_eq!(
         evaluate_whole_field(
             &request,
-            FieldEvidenceV1::ProspectiveObservedWholeRaster(ProspectiveObservedRasterV1::new(
-                FieldEvidenceIdentityV1::new(4),
-                request_digest(&request),
-                scene(4),
-                capability,
-                mismatched,
-            ),),
+            FieldEvidenceV1::ProspectiveObservedWholeRaster(
+                ProspectiveObservedRasterV1::from_host_observation(
+                    FieldEvidenceIdentityV1::new(4),
+                    request_digest(&request),
+                    scene(4),
+                    FieldOutputCapabilityV1::OpaqueSrgb8V1,
+                    host_permit(),
+                    mismatched,
+                ),
+            ),
             &mut FieldEvaluationScratchV1::new(),
         ),
         Err(FieldEvaluationErrorV1::ObservedRasterMismatch { pixel_index: 0 })
@@ -436,6 +452,44 @@ fn gaussian_footprint_and_influence_are_dpr_aware_and_overflow_is_typed() {
         ),
         Err(FieldEvaluationErrorV1::GeometryOverflow)
     );
+    assert_eq!(
+        GaussianKernelV1::try_new(
+            GaussianKernelProfileV1::BinomialGaussianQ32V1,
+            17,
+            dpr(1),
+            Vec::new(),
+        ),
+        Err(FieldEvaluationErrorV1::UnsupportedBinomialDeviceRadius {
+            actual: 17,
+            maximum: 16,
+        })
+    );
+}
+
+#[test]
+fn binomial_profile_rejects_symmetric_normalized_non_binomial_weights() {
+    assert_eq!(
+        GaussianKernelV1::try_new(
+            GaussianKernelProfileV1::BinomialGaussianQ32V1,
+            1,
+            dpr(1),
+            vec![1 << 29, 3 << 30, 1 << 29],
+        ),
+        Err(FieldEvaluationErrorV1::KernelWeightsDoNotMatchProfile)
+    );
+
+    for raw_dpr in 1..=4 {
+        let ratio = dpr(raw_dpr);
+        let canonical = GaussianKernelV1::canonical_one_css_pixel(ratio);
+        let admitted = GaussianKernelV1::try_new(
+            canonical.profile(),
+            canonical.css_radius_px(),
+            ratio,
+            canonical.weights_q32().to_vec(),
+        )
+        .unwrap();
+        assert_eq!(admitted, canonical);
+    }
 }
 
 #[test]
@@ -508,32 +562,28 @@ fn unsupported_numeric_profiles_are_rejected_before_evaluation() {
 }
 
 #[test]
-fn kernel_digest_binds_actual_device_radius_and_every_weight() {
+fn kernel_digest_binds_css_radius_dpr_and_canonical_weights() {
     let geometry = extent(3, 1);
     let source_pixels = [
         PremultipliedRgba8V1::TRANSPARENT,
         pixel(255, 0, 0, 255),
         PremultipliedRgba8V1::TRANSPARENT,
     ];
-    let first = GaussianKernelV1::try_new(
-        GaussianKernelProfileV1::BinomialGaussianQ32V1,
-        1,
-        dpr(1),
-        vec![1 << 30, 1 << 31, 1 << 30],
-    )
-    .unwrap();
+    let first = GaussianKernelV1::canonical_one_css_pixel(dpr(2));
     let second = GaussianKernelV1::try_new(
         GaussianKernelProfileV1::BinomialGaussianQ32V1,
-        1,
+        2,
         dpr(1),
-        vec![1 << 29, 3 << 30, 1 << 29],
+        vec![1 << 28, 1 << 30, 3 << 29, 1 << 30, 1 << 28],
     )
     .unwrap();
-    let make_request = |request_id, kernel| {
+    assert_eq!(first.device_radius_px(), second.device_radius_px());
+    assert_eq!(first.weights_q32(), second.weights_q32());
+    let make_request = |request_id, ratio, kernel| {
         request(
             request_id,
             geometry,
-            dpr(1),
+            ratio,
             reference_capability(FieldOutputCapabilityV1::PremultipliedRgba8V1),
             1,
             CarrierIntentV1::Contributes,
@@ -544,8 +594,8 @@ fn kernel_digest_binds_actual_device_radius_and_every_weight() {
             },
         )
     };
-    let first_request = make_request(6, first);
-    let second_request = make_request(6, second);
+    let first_request = make_request(6, dpr(2), first);
+    let second_request = make_request(6, dpr(1), second);
     assert_ne!(
         request_digest(&first_request),
         request_digest(&second_request)
@@ -945,7 +995,7 @@ fn request_and_replay_bind_the_session_stream_as_well_as_revision() {
     .unwrap();
     assert_eq!(
         verify_certificate_replay(&certificate, &stream_drift),
-        Err(FieldCertificateReplayErrorV1::SceneRevisionMismatch {
+        Err(FieldCertificateReplayErrorV1::SceneRevision {
             expected: scene_on(40, 1),
             actual: scene_on(41, 1),
         })
@@ -991,7 +1041,7 @@ fn certificate_replay_reports_scene_capability_and_request_mismatch_separately()
     );
     assert_eq!(
         verify_certificate_replay(&certificate, &revision_drift),
-        Err(FieldCertificateReplayErrorV1::SceneRevisionMismatch {
+        Err(FieldCertificateReplayErrorV1::SceneRevision {
             expected: scene(1),
             actual: scene(2),
         })
@@ -1004,7 +1054,7 @@ fn certificate_replay_reports_scene_capability_and_request_mismatch_separately()
     );
     assert_eq!(
         verify_certificate_replay(&certificate, &capability_drift),
-        Err(FieldCertificateReplayErrorV1::RenderCapabilityMismatch)
+        Err(FieldCertificateReplayErrorV1::RenderCapability)
     );
 
     let request_drift = make_request(
@@ -1014,7 +1064,7 @@ fn certificate_replay_reports_scene_capability_and_request_mismatch_separately()
     );
     assert_eq!(
         verify_certificate_replay(&certificate, &request_drift),
-        Err(FieldCertificateReplayErrorV1::RequestMismatch)
+        Err(FieldCertificateReplayErrorV1::Request)
     );
 }
 
