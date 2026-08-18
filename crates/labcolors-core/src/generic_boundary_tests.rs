@@ -776,23 +776,26 @@ fn generic_physical_and_transport_modules_contain_no_client_or_legacy_vocabulary
 #[test]
 fn staged_program_module_is_private_module_qualified_and_transport_neutral() {
     let normalized_lib = LIB_SOURCE.split_whitespace().collect::<Vec<_>>().join(" ");
+    // C7c: authoring-модуль опубликован; гейт требует РОВНО ОДНУ публичную
+    // декларацию с обязательной документацией — второй root или откат к
+    // crate-private остаются нарушением.
     assert_eq!(
         LIB_SOURCE
             .lines()
-            .filter(|line| line.trim() == "pub(crate) mod program;")
+            .filter(|line| line.trim() == "pub mod program;")
             .count(),
         1,
-        "the crate root must retain exactly one crate-private file-backed Program module",
+        "the crate root must publish exactly one documented Program module",
     );
     assert!(
-        normalized_lib.contains("#[deny(missing_docs)] pub(crate) mod program;"),
-        "the staged Program candidate must stay documented but crate-private",
+        normalized_lib.contains("#[deny(missing_docs)] pub mod program;"),
+        "the published Program module must keep mandatory documentation",
     );
     assert!(
         !LIB_SOURCE
             .lines()
-            .any(|line| line.trim() == "pub mod program;"),
-        "the incomplete Program candidate must not become externally reachable",
+            .any(|line| line.trim() == "pub(crate) mod program;"),
+        "the Program module must not silently regress to crate-private after C7c",
     );
     assert!(
         PROGRAM_SOURCE
@@ -828,7 +831,7 @@ fn staged_program_module_is_private_module_qualified_and_transport_neutral() {
     }
     assert_only_in_compile_fail(LIB_SOURCE, "PackageProgram");
     assert_only_in_compile_fail(LIB_SOURCE, "package_bridge");
-    assert_only_in_compile_fail(LIB_SOURCE, "use labcolors_core::program;");
+    // C7c: `use labcolors_core::program;` легален — модуль опубликован.
 }
 
 #[test]
@@ -2627,7 +2630,6 @@ fn staged_program_and_lcs_occurrence_modules_remain_private() {
     for required in [
         "pub(crate) mod contextual_region;",
         "pub(crate) mod lcs_occurrence;",
-        "pub(crate) mod program;",
         "pub(crate) mod program_session;",
     ] {
         assert!(
@@ -2638,7 +2640,6 @@ fn staged_program_and_lcs_occurrence_modules_remain_private() {
     for forbidden in [
         "pub mod contextual_region;",
         "pub mod lcs_occurrence;",
-        "pub mod program;",
         "pub mod program_session;",
     ] {
         assert!(
