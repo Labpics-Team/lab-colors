@@ -307,129 +307,40 @@ fn glow_screen_physics_lives_only_in_field_effect() {
     );
 }
 
-/// ch12 t01: закрытый machine-checked lowering inventory recipe-дистпетчера.
-///
-/// Инвариант pre-cutover гейта: множество исполняемых recipe-армов в
-/// `resolve_spec_in` закрыто и перечислено ЗДЕСЬ. Каждый вариант RoleSpec
-/// принадлежит ровно одному классу:
-/// * compiled-invocation intercept (raw-арм — typed guard): Material (C7d),
-///   AlphaAnalog (#518), Glow (C7e);
-/// * surviving recipe-executed арм (осознанно доживает до C7c): Zero, Anchor,
-///   DecorativeDj, Decorative, Ladder.
-///
-/// Новый исполняемый арм или возврат guard-арма к исполнению меняет одно из
-/// пересчитываемых ниже множеств и валит гейт: bypass инвентаря невозможен
-/// без явной правки этого теста в том же ревью.
+/// C7c terminal: recipe-фасад не является публичным root. Реализации могут
+/// временно жить только как crate-private characterization oracle; ни модуль,
+/// ни типы/функции не должны быть достижимы из внешнего Rust API.
 #[test]
-fn recipe_dispatch_lowering_inventory_is_closed() {
-    // Инвентарь читает ИМЕННО тело resolve_spec_in, а не весь файл: guard в
-    // чужой функции или загороженный intercept не должны проходить за диспетчер.
-    let dispatch = source_scope(SEMANTIC_SOURCE, "fn resolve_spec_in(", "\n}\n");
-
-    // Ровно восемь армов матча — по одному на каждый вариант RoleSpec.
-    for arm in [
-        "RoleSpec::Zero =>",
-        "RoleSpec::Anchor(anchor) =>",
-        "RoleSpec::DecorativeDj { magnitude_dj } =>",
-        "RoleSpec::Decorative { magnitude } =>",
-        "RoleSpec::Ladder {",
-        "RoleSpec::Glow { tint, step, mode } =>",
-        "RoleSpec::AlphaAnalog { of, alpha } =>",
-        "RoleSpec::Material { .. } =>",
-    ] {
+fn c7c_public_surface_has_no_recipe_root() {
+    let public_surface = compact_production_syntax(LIB_SOURCE);
+    for forbidden_module in ["config", "glow", "ladder", "material", "semantic"] {
+        let declaration = format!("pubmod{forbidden_module};");
         assert!(
-            dispatch.contains(arm),
-            "resolve_spec_in inventory drifted: missing arm `{arm}`",
+            !public_surface.contains(&declaration),
+            "retired recipe module is still public: `{forbidden_module}`",
         );
     }
-    // Дистпетчерский match заканчивается на Material-guard (последний арм);
-    // второй match ниже проецирует criterion и не является execution-армом.
-    let dispatch_match = source_scope(dispatch, "let contract = match *spec {", "let interval = ");
-    let arm_count = dispatch_match.matches("RoleSpec::").count();
-    assert_eq!(
-        arm_count, 8,
-        "the dispatch match must hold exactly the eight classified RoleSpec arms, got {arm_count}",
-    );
-
-    // Guard-армы: каждый lowered вариант обязан возвращать typed-bypass литерал
-    // ВНУТРИ диспетчера, не где-то ещё в файле.
-    for guarded in [
-        "material recipe bypassed its compiled invocation",
-        "alpha-analog recipe bypassed its compiled invocation",
-        "glow recipe bypassed its compiled invocation",
+    for forbidden_root in [
+        "pubuseconfig::",
+        "pubuseglow::",
+        "pubuseladder::",
+        "pubusematerial::",
+        "pubusesemantic::",
+        "RoleRecipe",
+        "NamedRoleTable",
+        "resolve_named_set",
+        "GlowResolved",
+        "MaterialResolved",
+        "TranslucentResolved",
     ] {
         assert!(
-            dispatch.contains(guarded),
-            "lowered recipe arm lost its typed guard inside resolve_spec_in: `{guarded}`",
+            !public_surface.contains(forbidden_root),
+            "retired recipe root leaked from executable lib.rs syntax: `{forbidden_root}`",
         );
     }
-
-    // Compiled invocations: каждый тип реально участвует в named dispatch —
-    // якорим на фактические resolve-вызовы внутри resolve_named_set.
-    let named_dispatch = source_scope(SEMANTIC_SOURCE, "pub fn resolve_named_set(", "\n}\n");
-    for (invocation_iter, drift_message) in [
-        (
-            "material_invocations",
-            "compiled material invocation order drifted",
-        ),
-        (
-            "point_invocations",
-            "compiled point-representation invocation order drifted",
-        ),
-        ("glow_invocations", "compiled glow invocation order drifted"),
-    ] {
-        assert!(
-            named_dispatch.contains(invocation_iter),
-            "resolve_named_set lost its `{invocation_iter}` intercept stream",
-        );
-        assert!(
-            named_dispatch.contains(drift_message),
-            "resolve_named_set lost the order-drift guard `{drift_message}`",
-        );
-    }
-
-    // Закрытое множество вариантов RoleSpec: появление нового варианта обязано
-    // пройти через этот инвентарь (иначе он молча получит recipe-исполнение).
-    // Первая строка `}` в нулевой колонке после старта закрывает сам enum —
-    // до любого impl-блока и соседних типов.
-    let spec_scope = source_scope(SEMANTIC_SOURCE, "pub enum RoleSpec {", "\n}\n");
-    let variants: Vec<&str> = [
-        "Zero",
-        "Anchor(",
-        "DecorativeDj {",
-        "Decorative {",
-        "Ladder {",
-        "Glow {",
-        "AlphaAnalog {",
-        "Material {",
-    ]
-    .into_iter()
-    .filter(|needle| !spec_scope.contains(needle))
-    .collect();
     assert!(
-        variants.is_empty(),
-        "RoleSpec inventory drifted: missing declarations {variants:?}",
-    );
-    // Количество вариантов enum фиксировано: новый вариант меняет счётчик и
-    // требует явной классификации в этом гейте. Вариант распознаётся как строка
-    // объявления верхнего уровня: 4 пробела + заглавная буква идентификатора.
-    let declared = spec_scope
-        .lines()
-        .filter(|line| {
-            let Some(stripped) = line.strip_prefix("    ") else {
-                return false;
-            };
-            // Вложенные поля со своим отступом (8+) и doc-строки отсеяны.
-            !stripped.starts_with(' ')
-                && stripped
-                    .chars()
-                    .next()
-                    .is_some_and(|first| first.is_ascii_uppercase())
-        })
-        .count();
-    assert_eq!(
-        declared, 8,
-        "RoleSpec variant census changed — classify the new variant in this inventory gate",
+        public_surface.contains("pubmodprogram_wire;"),
+        "terminal Program wire/runtime root must remain public",
     );
 }
 
