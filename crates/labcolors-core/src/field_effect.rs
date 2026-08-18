@@ -2308,9 +2308,13 @@ fn premultiplied_source_over(
 /// JS-проверкой официального пакета; изменение порядка сдвинуло бы граничные
 /// half-round значения на соседний LSB. Единственная реализация screen-физики
 /// в репозитории: glow-слой делегирует сюда, не дублируя формулу.
-pub(crate) fn encoded_srgb8_screen_channel(tint: u8, alpha: f64, backdrop: u8) -> f64 {
+///
+/// α принимается только как [`FieldOpacityV1`]: невалидные (NaN/∞/вне [0,1])
+/// значения непредставимы на этой границе по построению, поэтому helper не
+/// может вернуть правдоподобный байтовый результат для мусорного входа.
+pub(crate) fn encoded_srgb8_screen_channel(tint: u8, alpha: FieldOpacityV1, backdrop: u8) -> f64 {
     f64::from(backdrop)
-        + alpha * f64::from(tint) * f64::from(u8::MAX - backdrop) / f64::from(u8::MAX)
+        + alpha.value() * f64::from(tint) * f64::from(u8::MAX - backdrop) / f64::from(u8::MAX)
 }
 
 fn screen_opaque_backdrop(
@@ -2318,7 +2322,7 @@ fn screen_opaque_backdrop(
     backdrop: Srgb8,
 ) -> Result<PremultipliedRgba8V1, FieldEvaluationErrorV1> {
     let tint = source.tint().bytes();
-    let alpha = source.alpha().value();
+    let alpha = source.alpha();
     let backdrop = backdrop.bytes();
     let mut output = [0_u8; 4];
     for channel in 0..3 {
