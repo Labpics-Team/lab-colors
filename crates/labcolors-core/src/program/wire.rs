@@ -635,6 +635,19 @@ mod tests {
         draft
     }
 
+    /// Печатает канонический reference hex для кросс-язычного JS-parity
+    /// теста (packages/colors/test/program-wire.test.mjs). ignored по
+    /// умолчанию: это генератор фикстуры, не проверка.
+    #[test]
+    #[ignore = "fixture emitter: cargo test -p labcolors-core --lib wire::tests::_emit_reference_wire_hex -- --ignored --nocapture"]
+    fn _emit_reference_wire_hex() {
+        let hex: String = reference_wire()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        println!("REFERENCE_WIRE_HEX={hex}");
+    }
+
     /// Builder эмитирует байт-в-байт те же канонические байты, что и ручная
     /// сборка reference wire, — канон существует в одном экземпляре.
     #[test]
