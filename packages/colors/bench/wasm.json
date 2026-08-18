@@ -27,13 +27,13 @@
     ]
   },
   "measurement": {
-    "source": "github-actions-run-31948320220",
+    "source": "github-actions-run-32128569401",
     "platform": "linux-x64",
-    "rawBytes": 385703
+    "rawBytes": 386480
   },
   "policy": {
-    "maxRawBytes": 385703,
-    "basis": "w5-final-emission-boundary-closure",
+    "maxRawBytes": 386480,
+    "basis": "c7e-compiled-glow-invocation",
     "gzip": "diagnostic-only"
   }
 }
