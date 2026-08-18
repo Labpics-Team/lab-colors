@@ -684,7 +684,7 @@ fn binomial_profile_rejects_symmetric_normalized_non_binomial_weights() {
         let expected = pascal_q32_row(device_radius);
         for raw_dpr in 1..=4_u8 {
             let divisor = u32::from(raw_dpr);
-            if !device_radius.is_multiple_of(divisor) {
+            if device_radius % divisor != 0 {
                 continue;
             }
             let admitted = GaussianKernelV1::try_new(
