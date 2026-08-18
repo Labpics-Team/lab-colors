@@ -66,10 +66,10 @@ pub(crate) mod point_support;
 mod private_fixture;
 #[expect(
     dead_code,
-    reason = "the Program surface becomes fully live when the wasm engine lowers onto it later in this C7c slice"
+    reason = "the complete Program candidate remains private until terminal C7c"
 )]
 #[deny(missing_docs)]
-pub mod program;
+pub(crate) mod program;
 #[cfg_attr(
     not(test),
     expect(
@@ -426,9 +426,12 @@ pub struct NoHybridLpcSurfaceMetric;
 #[cfg(doctest)]
 pub struct NoPrematureScalarLpcApi;
 
-/// Терминальный C7c публикует authoring-модуль `program`; закрытыми остаются
-/// retired мостики, crate-private draft-типы вне модуля и wire-механика
-/// (публичен только `program_wire`-seam).
+/// Кандидат Program остаётся внутренним до завершения terminal C7c: неполную
+/// emission/attachment/transaction поверхность нельзя случайно опубликовать.
+///
+/// ```compile_fail
+/// use labcolors_core::program;
+/// ```
 ///
 /// ```compile_fail
 /// use labcolors_core::package_bridge;
