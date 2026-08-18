@@ -5,6 +5,13 @@
 //! mints a whole-field certificate from a complete reference raster or a
 //! prospective host observation bound to the same request and scene revision.
 
+// V7 field capability staged infrastructure; consumed by C7e Glow lowering in
+// the next slice. The expectation self-expires once a runtime consumer lands.
+#![expect(
+    dead_code,
+    reason = "V7 field capability staged infrastructure; consumed by C7e Glow lowering in the next slice"
+)]
+
 use crate::Srgb8;
 use crate::observation::{ObservationStreamId, Revision, RevisionBoundObservationV1};
 use crate::session::SessionObservationBindingPermitV1;
@@ -34,6 +41,7 @@ macro_rules! opaque_u64_id {
 
 opaque_u64_id!(FieldRequestIdV1);
 opaque_u64_id!(FieldOperatorInstanceIdV1);
+opaque_u64_id!(FieldInputPortIdV1);
 opaque_u64_id!(FieldRasterIdentityV1);
 opaque_u64_id!(FieldEvidenceIdentityV1);
 opaque_u64_id!(FieldRendererIdV1);
@@ -152,6 +160,45 @@ pub(crate) enum FieldEvaluationErrorV1 {
         pixel_index: usize,
     },
     IncrementalLayoutMismatch,
+}
+
+/// Typed compile failures for the lifetime-free field graph owned by Program.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FieldProgramCompileErrorV1 {
+    DuplicateInput {
+        input: FieldInputPortIdV1,
+    },
+    UnusedInput {
+        input: FieldInputPortIdV1,
+    },
+    DuplicateOperator {
+        operator: FieldOperatorInstanceIdV1,
+    },
+    MissingInput {
+        operator: FieldOperatorInstanceIdV1,
+        input: FieldInputPortIdV1,
+    },
+    MissingOperator {
+        operator: FieldOperatorInstanceIdV1,
+        dependency: FieldOperatorInstanceIdV1,
+    },
+    InputKindMismatch {
+        operator: FieldOperatorInstanceIdV1,
+        expected: FieldInputKindV1,
+        actual: FieldInputKindV1,
+    },
+    InvalidGaussianRadius {
+        operator: FieldOperatorInstanceIdV1,
+    },
+    Cycle,
+    MissingTerminalOperator {
+        operator: FieldOperatorInstanceIdV1,
+    },
+    UnroutedOperator {
+        operator: FieldOperatorInstanceIdV1,
+    },
+    ResourceExhausted,
+    InternalInvariant,
 }
 
 /// Finite device-pixel extent of one raster field.
@@ -957,6 +1004,428 @@ pub(crate) enum CarrierIntentV1 {
     Present,
     Contributes,
     SpatialVariation,
+}
+
+/// Physical encoding of one immutable Program-owned field input port.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub(crate) enum FieldInputKindV1 {
+    PremultipliedRgba8V1,
+    EncodedSrgb8AlphaV1,
+    OpaqueSrgb8V1,
+}
+
+/// One external raster dependency. Runtime bytes and geometry are supplied by
+/// the exact Attachment/Session revision, never stored in Program.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) struct FieldInputDeclarationV1 {
+    id: FieldInputPortIdV1,
+    kind: FieldInputKindV1,
+}
+
+impl FieldInputDeclarationV1 {
+    pub(crate) const fn new(id: FieldInputPortIdV1, kind: FieldInputKindV1) -> Self {
+        Self { id, kind }
+    }
+
+    pub(crate) const fn id(self) -> FieldInputPortIdV1 {
+        self.id
+    }
+
+    pub(crate) const fn kind(self) -> FieldInputKindV1 {
+        self.kind
+    }
+}
+
+/// A field value is either one admitted runtime input or the output of an
+/// earlier operator in the same immutable DAG.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub(crate) enum FieldValueRefV1 {
+    Input(FieldInputPortIdV1),
+    Operator(FieldOperatorInstanceIdV1),
+}
+
+/// Immutable operator-specific semantics. Geometry, DPR, scene and renderer
+/// are revision-bound runtime facts and intentionally do not appear here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum FieldExecutionProfileV1 {
+    GaussianBlur {
+        source: FieldValueRefV1,
+        kernel: GaussianKernelProfileV1,
+        css_radius_px: u32,
+        edge_mode: GaussianEdgeModeV1,
+    },
+    PremultipliedSourceOver {
+        source: FieldValueRefV1,
+        destination: FieldValueRefV1,
+    },
+    EncodedSrgb8ScreenOpaqueBackdrop {
+        source: FieldValueRefV1,
+        backdrop: FieldValueRefV1,
+    },
+    PorterDuffLighter {
+        source: FieldValueRefV1,
+        destination: FieldValueRefV1,
+    },
+}
+
+impl FieldExecutionProfileV1 {
+    pub(crate) const fn kind(self) -> FieldOperatorKindV1 {
+        match self {
+            Self::GaussianBlur { .. } => FieldOperatorKindV1::GaussianBlurSeparableQ32V1,
+            Self::PremultipliedSourceOver { .. } => FieldOperatorKindV1::PremultipliedSourceOverV1,
+            Self::EncodedSrgb8ScreenOpaqueBackdrop { .. } => {
+                FieldOperatorKindV1::EncodedSrgb8ScreenOpaqueBackdropV1
+            }
+            Self::PorterDuffLighter { .. } => FieldOperatorKindV1::PorterDuffLighterV1,
+        }
+    }
+
+    pub(crate) const fn output_kind(self) -> FieldInputKindV1 {
+        match self {
+            Self::EncodedSrgb8ScreenOpaqueBackdrop { .. } => FieldInputKindV1::OpaqueSrgb8V1,
+            Self::GaussianBlur { .. }
+            | Self::PremultipliedSourceOver { .. }
+            | Self::PorterDuffLighter { .. } => FieldInputKindV1::PremultipliedRgba8V1,
+        }
+    }
+
+    const fn dependencies(self) -> [Option<(FieldValueRefV1, FieldInputKindV1)>; 2] {
+        match self {
+            Self::GaussianBlur { source, .. } => {
+                [Some((source, FieldInputKindV1::PremultipliedRgba8V1)), None]
+            }
+            Self::PremultipliedSourceOver {
+                source,
+                destination,
+            }
+            | Self::PorterDuffLighter {
+                source,
+                destination,
+            } => [
+                Some((source, FieldInputKindV1::PremultipliedRgba8V1)),
+                Some((destination, FieldInputKindV1::PremultipliedRgba8V1)),
+            ],
+            Self::EncodedSrgb8ScreenOpaqueBackdrop { source, backdrop } => [
+                Some((source, FieldInputKindV1::EncodedSrgb8AlphaV1)),
+                Some((backdrop, FieldInputKindV1::OpaqueSrgb8V1)),
+            ],
+        }
+    }
+}
+
+/// One lifetime-free Program declaration. Runtime request construction must
+/// match this exact profile before any raster evaluation can occur.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) struct FieldOperatorDeclarationV1 {
+    id: FieldOperatorInstanceIdV1,
+    execution: FieldExecutionProfileV1,
+    working_space: FieldWorkingSpaceV1,
+    precision: FieldPrecisionV1,
+    quantization: FieldQuantizationV1,
+    carrier_intent: CarrierIntentV1,
+}
+
+impl FieldOperatorDeclarationV1 {
+    pub(crate) const fn new(
+        id: FieldOperatorInstanceIdV1,
+        execution: FieldExecutionProfileV1,
+        working_space: FieldWorkingSpaceV1,
+        precision: FieldPrecisionV1,
+        quantization: FieldQuantizationV1,
+        carrier_intent: CarrierIntentV1,
+    ) -> Self {
+        Self {
+            id,
+            execution,
+            working_space,
+            precision,
+            quantization,
+            carrier_intent,
+        }
+    }
+
+    pub(crate) const fn id(self) -> FieldOperatorInstanceIdV1 {
+        self.id
+    }
+
+    pub(crate) const fn execution(self) -> FieldExecutionProfileV1 {
+        self.execution
+    }
+
+    pub(crate) const fn working_space(self) -> FieldWorkingSpaceV1 {
+        self.working_space
+    }
+
+    pub(crate) const fn precision(self) -> FieldPrecisionV1 {
+        self.precision
+    }
+
+    pub(crate) const fn quantization(self) -> FieldQuantizationV1 {
+        self.quantization
+    }
+
+    pub(crate) const fn carrier_intent(self) -> CarrierIntentV1 {
+        self.carrier_intent
+    }
+}
+
+/// The single authored field aggregate stored inside Program.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub(crate) struct FieldDeclarationsV1 {
+    inputs: Vec<FieldInputDeclarationV1>,
+    operators: Vec<FieldOperatorDeclarationV1>,
+}
+
+impl FieldDeclarationsV1 {
+    pub(crate) const fn new() -> Self {
+        Self {
+            inputs: Vec::new(),
+            operators: Vec::new(),
+        }
+    }
+
+    pub(crate) fn push_input(&mut self, input: FieldInputDeclarationV1) {
+        self.inputs.push(input);
+    }
+
+    pub(crate) fn push_operator(&mut self, operator: FieldOperatorDeclarationV1) {
+        self.operators.push(operator);
+    }
+
+    pub(crate) fn inputs(&self) -> &[FieldInputDeclarationV1] {
+        &self.inputs
+    }
+
+    pub(crate) fn operators(&self) -> &[FieldOperatorDeclarationV1] {
+        &self.operators
+    }
+}
+
+/// Canonical, topologically ordered field program stored in ProgramEpochV1.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CompiledFieldProgramV1 {
+    inputs: Box<[FieldInputDeclarationV1]>,
+    operators: Box<[FieldOperatorDeclarationV1]>,
+}
+
+impl CompiledFieldProgramV1 {
+    pub(crate) fn inputs(&self) -> &[FieldInputDeclarationV1] {
+        &self.inputs
+    }
+
+    pub(crate) fn operators(&self) -> &[FieldOperatorDeclarationV1] {
+        &self.operators
+    }
+
+    pub(crate) const fn is_empty(&self) -> bool {
+        self.operators.is_empty()
+    }
+}
+
+fn field_input_kind(
+    inputs: &[FieldInputDeclarationV1],
+    id: FieldInputPortIdV1,
+) -> Option<FieldInputKindV1> {
+    inputs
+        .binary_search_by_key(&id, |input| input.id())
+        .ok()
+        .map(|index| inputs[index].kind())
+}
+
+fn field_operator_index(
+    operators: &[FieldOperatorDeclarationV1],
+    id: FieldOperatorInstanceIdV1,
+) -> Option<usize> {
+    operators
+        .binary_search_by_key(&id, |operator| operator.id())
+        .ok()
+}
+
+fn field_value_kind(
+    inputs: &[FieldInputDeclarationV1],
+    operators: &[FieldOperatorDeclarationV1],
+    owner: FieldOperatorInstanceIdV1,
+    value: FieldValueRefV1,
+) -> Result<FieldInputKindV1, FieldProgramCompileErrorV1> {
+    match value {
+        FieldValueRefV1::Input(input) => {
+            field_input_kind(inputs, input).ok_or(FieldProgramCompileErrorV1::MissingInput {
+                operator: owner,
+                input,
+            })
+        }
+        FieldValueRefV1::Operator(dependency) => field_operator_index(operators, dependency)
+            .map(|index| operators[index].execution().output_kind())
+            .ok_or(FieldProgramCompileErrorV1::MissingOperator {
+                operator: owner,
+                dependency,
+            }),
+    }
+}
+
+/// Canonicalizes and compiles one field graph. `terminal_operators` comes from
+/// Program output bindings, so an executable-but-unpublished branch is rejected.
+pub(crate) fn compile_field_program_v1(
+    declarations: &mut FieldDeclarationsV1,
+    terminal_operators: &[FieldOperatorInstanceIdV1],
+) -> Result<CompiledFieldProgramV1, FieldProgramCompileErrorV1> {
+    declarations.inputs.sort_unstable_by_key(|input| input.id());
+    if let Some(pair) = declarations
+        .inputs
+        .windows(2)
+        .find(|pair| pair[0].id() == pair[1].id())
+    {
+        return Err(FieldProgramCompileErrorV1::DuplicateInput {
+            input: pair[0].id(),
+        });
+    }
+    declarations
+        .operators
+        .sort_unstable_by_key(|operator| operator.id());
+    if let Some(pair) = declarations
+        .operators
+        .windows(2)
+        .find(|pair| pair[0].id() == pair[1].id())
+    {
+        return Err(FieldProgramCompileErrorV1::DuplicateOperator {
+            operator: pair[0].id(),
+        });
+    }
+
+    for operator in &declarations.operators {
+        if matches!(
+            operator.execution(),
+            FieldExecutionProfileV1::GaussianBlur {
+                css_radius_px: 0,
+                ..
+            }
+        ) {
+            return Err(FieldProgramCompileErrorV1::InvalidGaussianRadius {
+                operator: operator.id(),
+            });
+        }
+        for (value, expected) in operator.execution().dependencies().into_iter().flatten() {
+            let actual = field_value_kind(
+                &declarations.inputs,
+                &declarations.operators,
+                operator.id(),
+                value,
+            )?;
+            if actual != expected {
+                return Err(FieldProgramCompileErrorV1::InputKindMismatch {
+                    operator: operator.id(),
+                    expected,
+                    actual,
+                });
+            }
+        }
+    }
+    for input in &declarations.inputs {
+        let used = declarations.operators.iter().any(|operator| {
+            operator
+                .execution()
+                .dependencies()
+                .into_iter()
+                .flatten()
+                .any(|(value, _)| value == FieldValueRefV1::Input(input.id()))
+        });
+        if !used {
+            return Err(FieldProgramCompileErrorV1::UnusedInput { input: input.id() });
+        }
+    }
+
+    let operator_count = declarations.operators.len();
+    let mut indegree = Vec::new();
+    indegree
+        .try_reserve_exact(operator_count)
+        .map_err(|_| FieldProgramCompileErrorV1::ResourceExhausted)?;
+    indegree.resize(operator_count, 0_usize);
+    for (index, operator) in declarations.operators.iter().enumerate() {
+        for (value, _) in operator.execution().dependencies().into_iter().flatten() {
+            if matches!(value, FieldValueRefV1::Operator(_)) {
+                indegree[index] = indegree[index]
+                    .checked_add(1)
+                    .ok_or(FieldProgramCompileErrorV1::ResourceExhausted)?;
+            }
+        }
+    }
+
+    let mut emitted = vec![false; operator_count];
+    let mut ordered = Vec::new();
+    ordered
+        .try_reserve_exact(operator_count)
+        .map_err(|_| FieldProgramCompileErrorV1::ResourceExhausted)?;
+    while ordered.len() < operator_count {
+        let Some(index) = indegree
+            .iter()
+            .enumerate()
+            .find_map(|(index, degree)| (!emitted[index] && *degree == 0).then_some(index))
+        else {
+            return Err(FieldProgramCompileErrorV1::Cycle);
+        };
+        emitted[index] = true;
+        let completed = declarations.operators[index];
+        ordered.push(completed);
+        for (candidate_index, candidate) in declarations.operators.iter().enumerate() {
+            if emitted[candidate_index] {
+                continue;
+            }
+            let references_completed = candidate
+                .execution()
+                .dependencies()
+                .into_iter()
+                .flatten()
+                .any(|(value, _)| value == FieldValueRefV1::Operator(completed.id()));
+            if references_completed {
+                indegree[candidate_index] = indegree[candidate_index]
+                    .checked_sub(1)
+                    .ok_or(FieldProgramCompileErrorV1::InternalInvariant)?;
+            }
+        }
+    }
+
+    let mut reachable = vec![false; operator_count];
+    let mut pending = Vec::new();
+    pending
+        .try_reserve_exact(terminal_operators.len())
+        .map_err(|_| FieldProgramCompileErrorV1::ResourceExhausted)?;
+    for terminal in terminal_operators {
+        let index = field_operator_index(&declarations.operators, *terminal).ok_or(
+            FieldProgramCompileErrorV1::MissingTerminalOperator {
+                operator: *terminal,
+            },
+        )?;
+        pending.push(index);
+    }
+    while let Some(index) = pending.pop() {
+        if reachable[index] {
+            continue;
+        }
+        reachable[index] = true;
+        for (value, _) in declarations.operators[index]
+            .execution()
+            .dependencies()
+            .into_iter()
+            .flatten()
+        {
+            if let FieldValueRefV1::Operator(dependency) = value {
+                pending.push(
+                    field_operator_index(&declarations.operators, dependency)
+                        .ok_or(FieldProgramCompileErrorV1::InternalInvariant)?,
+                );
+            }
+        }
+    }
+    if let Some((index, _)) = reachable.iter().enumerate().find(|(_, reached)| !**reached) {
+        return Err(FieldProgramCompileErrorV1::UnroutedOperator {
+            operator: declarations.operators[index].id(),
+        });
+    }
+
+    Ok(CompiledFieldProgramV1 {
+        inputs: declarations.inputs.clone().into_boxed_slice(),
+        operators: ordered.into_boxed_slice(),
+    })
 }
 
 /// Separate stable identities for the four V7 field laws.

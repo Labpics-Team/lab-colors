@@ -535,7 +535,7 @@ fn directional_reference_cannot_move_with_solver_state() {
     );
 }
 
-fn relation_identity(offset: u32, reverse_candidates: bool) -> program::ContentIdentityV8 {
+fn relation_identity(offset: u32, reverse_candidates: bool) -> program::ContentIdentityV9 {
     let sources = [0, 1, 2].map(|index| program::SourceIdV1::new(offset + index));
     let targets = [0, 1, 2].map(|index| program::TargetIdV1::new(offset + 10 + index));
     let paints = [0, 1, 2].map(|index| program::PaintIdV1::new(offset + 20 + index));

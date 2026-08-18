@@ -2,17 +2,20 @@ use crate::Srgb8;
 use crate::appearance::SurfaceInputPortId;
 use crate::field_effect::{
     CarrierIntentV1, DevicePixelRatioV1, EncodedSrgb8AlphaRasterViewV1, EncodedSrgb8AlphaV1,
-    FieldCertificateReplayErrorV1, FieldEvaluationErrorV1, FieldEvaluationRequestV1,
-    FieldEvaluationScratchV1, FieldEvidenceClassV1, FieldEvidenceIdentityV1, FieldEvidenceV1,
-    FieldExtentV1, FieldGeometryV1, FieldHostConformanceIdV1, FieldHostConformancePermitV1,
-    FieldInfluenceV1, FieldOpacityV1, FieldOperationV1, FieldOperatorInstanceIdV1,
-    FieldOperatorKindV1, FieldOutputCapabilityV1, FieldPrecisionV1, FieldQuantizationV1,
+    FieldCertificateReplayErrorV1, FieldDeclarationsV1, FieldEvaluationErrorV1,
+    FieldEvaluationRequestV1, FieldEvaluationScratchV1, FieldEvidenceClassV1,
+    FieldEvidenceIdentityV1, FieldEvidenceV1, FieldExecutionProfileV1, FieldExtentV1,
+    FieldGeometryV1, FieldHostConformanceIdV1, FieldHostConformancePermitV1, FieldInfluenceV1,
+    FieldInputDeclarationV1, FieldInputKindV1, FieldInputPortIdV1, FieldOpacityV1,
+    FieldOperationV1, FieldOperatorDeclarationV1, FieldOperatorInstanceIdV1, FieldOperatorKindV1,
+    FieldOutputCapabilityV1, FieldPrecisionV1, FieldProgramCompileErrorV1, FieldQuantizationV1,
     FieldRasterIdentityV1, FieldRasterViewV1, FieldRectV1, FieldRenderCapabilityV1,
     FieldRendererCapabilityV1, FieldRendererIdV1, FieldRequestIdV1, FieldSceneRevisionV1,
-    FieldUnsupportedReasonIdV1, FieldWorkingSpaceV1, GaussianEdgeModeV1, GaussianKernelProfileV1,
-    GaussianKernelV1, OpaqueSrgb8RasterViewV1, PremultipliedRgba8V1, ProspectiveObservedRasterV1,
-    evaluate_reference_full, evaluate_reference_incremental, evaluate_whole_field,
-    footprint_for_output, influence_for_input, request_digest, verify_certificate_replay,
+    FieldUnsupportedReasonIdV1, FieldValueRefV1, FieldWorkingSpaceV1, GaussianEdgeModeV1,
+    GaussianKernelProfileV1, GaussianKernelV1, OpaqueSrgb8RasterViewV1, PremultipliedRgba8V1,
+    ProspectiveObservedRasterV1, compile_field_program_v1, evaluate_reference_full,
+    evaluate_reference_incremental, evaluate_whole_field, footprint_for_output,
+    influence_for_input, request_digest, verify_certificate_replay,
 };
 use crate::lcs_occurrence::ColorSignal;
 use crate::observation::{
@@ -1325,4 +1328,160 @@ fn output_footprint_is_exact_for_finite_kernel_and_pointwise_operators() {
     assert_eq!(footprint.output(), output);
     assert_eq!(footprint.exact_input(), rect(geometry, 1, 1, 5, 5));
     assert_eq!(footprint.exact_input(), footprint.conservative_input());
+}
+
+fn declared_gaussian(
+    id: u64,
+    source: FieldValueRefV1,
+    css_radius_px: u32,
+) -> FieldOperatorDeclarationV1 {
+    FieldOperatorDeclarationV1::new(
+        FieldOperatorInstanceIdV1::new(id),
+        FieldExecutionProfileV1::GaussianBlur {
+            source,
+            kernel: GaussianKernelProfileV1::BinomialGaussianQ32V1,
+            css_radius_px,
+            edge_mode: GaussianEdgeModeV1::ClampToEdgeV1,
+        },
+        FieldWorkingSpaceV1::EncodedSrgb8PremultipliedV1,
+        FieldPrecisionV1::FixedQ32V1,
+        FieldQuantizationV1::RoundHalfUpSrgb8V1,
+        CarrierIntentV1::SpatialVariation,
+    )
+}
+
+#[test]
+fn field_program_compile_canonicalizes_dependency_order_and_rejects_duplicate_namespaces() {
+    let input = FieldInputPortIdV1::new(1);
+    let first = FieldOperatorInstanceIdV1::new(2);
+    let second = FieldOperatorInstanceIdV1::new(3);
+    let mut declarations = FieldDeclarationsV1::new();
+    declarations.push_input(FieldInputDeclarationV1::new(
+        input,
+        FieldInputKindV1::PremultipliedRgba8V1,
+    ));
+    declarations.push_operator(declared_gaussian(3, FieldValueRefV1::Operator(first), 1));
+    declarations.push_operator(declared_gaussian(2, FieldValueRefV1::Input(input), 1));
+
+    let compiled = compile_field_program_v1(&mut declarations, &[second]).unwrap();
+    assert_eq!(
+        compiled
+            .operators()
+            .iter()
+            .map(|operator| operator.id())
+            .collect::<Vec<_>>(),
+        vec![first, second]
+    );
+
+    let mut duplicate_input = FieldDeclarationsV1::new();
+    duplicate_input.push_input(FieldInputDeclarationV1::new(
+        input,
+        FieldInputKindV1::PremultipliedRgba8V1,
+    ));
+    duplicate_input.push_input(FieldInputDeclarationV1::new(
+        input,
+        FieldInputKindV1::PremultipliedRgba8V1,
+    ));
+    duplicate_input.push_operator(declared_gaussian(2, FieldValueRefV1::Input(input), 1));
+    assert_eq!(
+        compile_field_program_v1(&mut duplicate_input, &[first]),
+        Err(FieldProgramCompileErrorV1::DuplicateInput { input })
+    );
+
+    let mut duplicate_operator = FieldDeclarationsV1::new();
+    duplicate_operator.push_input(FieldInputDeclarationV1::new(
+        input,
+        FieldInputKindV1::PremultipliedRgba8V1,
+    ));
+    duplicate_operator.push_operator(declared_gaussian(2, FieldValueRefV1::Input(input), 1));
+    duplicate_operator.push_operator(declared_gaussian(2, FieldValueRefV1::Input(input), 1));
+    assert_eq!(
+        compile_field_program_v1(&mut duplicate_operator, &[first]),
+        Err(FieldProgramCompileErrorV1::DuplicateOperator { operator: first })
+    );
+}
+
+#[test]
+fn field_program_compile_rejects_every_invalid_reference_and_reachability_class() {
+    let input = FieldInputPortIdV1::new(1);
+    let other_input = FieldInputPortIdV1::new(2);
+    let first = FieldOperatorInstanceIdV1::new(10);
+    let second = FieldOperatorInstanceIdV1::new(11);
+
+    let mut missing_input = FieldDeclarationsV1::new();
+    missing_input.push_operator(declared_gaussian(10, FieldValueRefV1::Input(input), 1));
+    assert_eq!(
+        compile_field_program_v1(&mut missing_input, &[first]),
+        Err(FieldProgramCompileErrorV1::MissingInput {
+            operator: first,
+            input,
+        })
+    );
+
+    let mut wrong_kind = FieldDeclarationsV1::new();
+    wrong_kind.push_input(FieldInputDeclarationV1::new(
+        input,
+        FieldInputKindV1::OpaqueSrgb8V1,
+    ));
+    wrong_kind.push_operator(declared_gaussian(10, FieldValueRefV1::Input(input), 1));
+    assert_eq!(
+        compile_field_program_v1(&mut wrong_kind, &[first]),
+        Err(FieldProgramCompileErrorV1::InputKindMismatch {
+            operator: first,
+            expected: FieldInputKindV1::PremultipliedRgba8V1,
+            actual: FieldInputKindV1::OpaqueSrgb8V1,
+        })
+    );
+
+    let mut cycle = FieldDeclarationsV1::new();
+    cycle.push_operator(declared_gaussian(10, FieldValueRefV1::Operator(second), 1));
+    cycle.push_operator(declared_gaussian(11, FieldValueRefV1::Operator(first), 1));
+    assert_eq!(
+        compile_field_program_v1(&mut cycle, &[second]),
+        Err(FieldProgramCompileErrorV1::Cycle)
+    );
+
+    let mut unrouted = FieldDeclarationsV1::new();
+    unrouted.push_input(FieldInputDeclarationV1::new(
+        input,
+        FieldInputKindV1::PremultipliedRgba8V1,
+    ));
+    unrouted.push_operator(declared_gaussian(10, FieldValueRefV1::Input(input), 1));
+    unrouted.push_operator(declared_gaussian(11, FieldValueRefV1::Input(input), 1));
+    assert_eq!(
+        compile_field_program_v1(&mut unrouted, &[second]),
+        Err(FieldProgramCompileErrorV1::UnroutedOperator { operator: first })
+    );
+
+    let mut unused_input = FieldDeclarationsV1::new();
+    unused_input.push_input(FieldInputDeclarationV1::new(
+        input,
+        FieldInputKindV1::PremultipliedRgba8V1,
+    ));
+    unused_input.push_input(FieldInputDeclarationV1::new(
+        other_input,
+        FieldInputKindV1::PremultipliedRgba8V1,
+    ));
+    unused_input.push_operator(declared_gaussian(10, FieldValueRefV1::Input(input), 1));
+    assert_eq!(
+        compile_field_program_v1(&mut unused_input, &[first]),
+        Err(FieldProgramCompileErrorV1::UnusedInput { input: other_input })
+    );
+
+    let mut invalid_radius = FieldDeclarationsV1::new();
+    invalid_radius.push_input(FieldInputDeclarationV1::new(
+        input,
+        FieldInputKindV1::PremultipliedRgba8V1,
+    ));
+    invalid_radius.push_operator(declared_gaussian(10, FieldValueRefV1::Input(input), 0));
+    assert_eq!(
+        compile_field_program_v1(&mut invalid_radius, &[first]),
+        Err(FieldProgramCompileErrorV1::InvalidGaussianRadius { operator: first })
+    );
+
+    let mut missing_terminal = FieldDeclarationsV1::new();
+    assert_eq!(
+        compile_field_program_v1(&mut missing_terminal, &[first]),
+        Err(FieldProgramCompileErrorV1::MissingTerminalOperator { operator: first })
+    );
 }

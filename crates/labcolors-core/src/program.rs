@@ -24,7 +24,7 @@
 //! [`CertificateV1::Verified`] хранит выбранное состояние, все клетки
 //! доказательства и сертифицированные Paint outputs. [`CertificateV1::Conflict`]
 //! хранит исчерпывающий конфликт по всем рассмотренным состояниям.
-//! [`ContentIdentityV8`] идентифицирует каноническое содержание, но не даёт
+//! [`ContentIdentityV9`] идентифицирует каноническое содержание, но не даёт
 //! полномочий живого [`OwnerV1`].
 
 #![forbid(unreachable_pub)]
@@ -79,7 +79,7 @@ use crate::program_session::{
     PointPresentationRootV1, PointPresentationTargetV1, PresentationRootId, ProgramCompileError,
     ProgramConflictV1, ProgramConstraintCellV1, ProgramConstraintPassEvidenceV1,
     ProgramConstraintResultV1, ProgramConstraintSubjectV1, ProgramConstraintViolationEvidenceV1,
-    ProgramContentIdentityV8, ProgramIntrinsicPaintBindingV1, ProgramIntrinsicUnaryPassEvidenceV1,
+    ProgramContentIdentityV9, ProgramIntrinsicPaintBindingV1, ProgramIntrinsicUnaryPassEvidenceV1,
     ProgramIntrinsicUnaryViolationEvidenceV1, ProgramPaintOutputV1,
     ProgramRelationMemberDecisionV1, ProgramRelationMemberEvidenceV1, ProgramReportV1,
     ProgramSessionEvaluationError, ProgramSessionInstantiateError, ProgramSessionPlan,
@@ -617,6 +617,8 @@ pub(crate) enum CompileErrorKindV1 {
     MissingConstraintPresentationTarget,
     /// Выход ссылается на отсутствующий Paint.
     MissingOutputPaint,
+    /// Lifetime-free field DAG отклонён типизированным компилятором.
+    Field,
     /// Граф Paint содержит цикл.
     PaintCycle,
     /// Граф рендера содержит цикл Surface/Occurrence.
@@ -1133,6 +1135,8 @@ pub(crate) enum CompileErrorV1 {
         /// Отсутствующий Paint.
         paint: PaintIdV1,
     },
+    /// Ошибка канонической field/effect декларации.
+    Field(crate::field_effect::FieldProgramCompileErrorV1),
     /// Для компиляции недостаточно ресурсов.
     ResourceExhausted,
     /// Нарушен внутренний инвариант закрытого компилятора.
@@ -1222,6 +1226,7 @@ impl CompileErrorV1 {
             }
             Self::DuplicateOutputSlot { .. } => Kind::DuplicateOutputSlot,
             Self::MissingOutputPaint { .. } => Kind::MissingOutputPaint,
+            Self::Field(_) => Kind::Field,
             Self::ResourceExhausted => Kind::ResourceExhausted,
             Self::InternalInvariant => Kind::InternalInvariant,
         }
@@ -1301,6 +1306,7 @@ impl CompileErrorV1 {
             | Self::EmptyOccurrenceSet
             | Self::EmptyConstraintSet
             | Self::EmptyOutputSet
+            | Self::Field(_)
             | Self::ResourceExhausted
             | Self::InternalInvariant => None,
         }
@@ -1393,6 +1399,7 @@ impl CompileErrorV1 {
             | Self::EmptyOutputSet
             | Self::DuplicateConstraint { .. }
             | Self::DuplicateOutputSlot { .. }
+            | Self::Field(_)
             | Self::ResourceExhausted
             | Self::InternalInvariant => None,
         }
@@ -1900,8 +1907,8 @@ impl OwnerV1 {
     ///
     /// Identity доступна до первого update, но не заменяет полномочия этой
     /// конкретной owner-эпохи.
-    pub(crate) fn content_identity(&self) -> ContentIdentityV8 {
-        ContentIdentityV8::from_core(self.compiled.content_identity())
+    pub(crate) fn content_identity(&self) -> ContentIdentityV9 {
+        ContentIdentityV9::from_core(self.compiled.content_identity())
     }
 
     /// Точный авторский `SelectionRelease` конечного Program; у fixed-only
@@ -2288,10 +2295,10 @@ impl<'session> PreparedSessionTransitionV1<'session> {
 /// Identity не идентифицирует owner-эпоху и не даёт runtime-полномочий.
 #[repr(transparent)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(crate) struct ContentIdentityV8([u8; 32]);
+pub(crate) struct ContentIdentityV9([u8; 32]);
 
-impl ContentIdentityV8 {
-    const fn from_core(value: ProgramContentIdentityV8) -> Self {
+impl ContentIdentityV9 {
+    const fn from_core(value: ProgramContentIdentityV9) -> Self {
         Self(*value.as_bytes())
     }
 
@@ -2309,8 +2316,8 @@ pub(crate) struct VerifiedCertificateV1<'a> {
 
 impl<'a> VerifiedCertificateV1<'a> {
     /// Возвращает identity скомпилированного содержания.
-    pub(crate) const fn content_identity(self) -> ContentIdentityV8 {
-        ContentIdentityV8::from_core(self.inner.report().content_identity())
+    pub(crate) const fn content_identity(self) -> ContentIdentityV9 {
+        ContentIdentityV9::from_core(self.inner.report().content_identity())
     }
 
     pub(crate) const fn selection_release_identity(self) -> Option<SelectionReleaseIdentityV1> {
@@ -2359,8 +2366,8 @@ pub(crate) struct ConflictCertificateV1<'a> {
 
 impl<'a> ConflictCertificateV1<'a> {
     /// Возвращает identity скомпилированного содержания.
-    pub(crate) const fn content_identity(self) -> ContentIdentityV8 {
-        ContentIdentityV8::from_core(self.inner.report().content_identity())
+    pub(crate) const fn content_identity(self) -> ContentIdentityV9 {
+        ContentIdentityV9::from_core(self.inner.report().content_identity())
     }
 
     pub(crate) const fn selection_release_identity(self) -> Option<SelectionReleaseIdentityV1> {
@@ -2413,7 +2420,7 @@ impl<'a> CertificateV1<'a> {
     }
 
     /// Возвращает identity скомпилированного содержания.
-    pub(crate) const fn content_identity(self) -> ContentIdentityV8 {
+    pub(crate) const fn content_identity(self) -> ContentIdentityV9 {
         match self {
             Self::Verified(value) => value.content_identity(),
             Self::Conflict(value) => value.content_identity(),
@@ -4234,6 +4241,7 @@ fn map_program_compile_error(error: ProgramCompileError) -> CompileErrorV1 {
                 paint: PaintIdV1::from_core(paint),
             }
         }
+        ProgramCompileError::Field(error) => CompileErrorV1::Field(error),
         ProgramCompileError::ResourceExhausted => CompileErrorV1::ResourceExhausted,
         ProgramCompileError::InternalInvariant => CompileErrorV1::InternalInvariant,
     }

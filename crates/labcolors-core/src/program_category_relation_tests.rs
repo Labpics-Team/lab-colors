@@ -333,7 +333,7 @@ fn distinction_requires_positive_byte_inequality_not_a_complement() {
     }
 }
 
-fn category_relation_identity(offset: u32, reverse_candidates: bool) -> program::ContentIdentityV8 {
+fn category_relation_identity(offset: u32, reverse_candidates: bool) -> program::ContentIdentityV9 {
     let sources = [0, 1, 2].map(|index| program::SourceIdV1::new(offset + index));
     let targets = [0, 1, 2].map(|index| program::TargetIdV1::new(offset + 10 + index));
     let paints = [0, 1, 2].map(|index| program::PaintIdV1::new(offset + 20 + index));

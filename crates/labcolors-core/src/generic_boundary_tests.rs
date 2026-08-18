@@ -2124,11 +2124,16 @@ fn program_identity_binds_lcs_releases_only_through_lcs_constraint_content() {
         "DOMAIN_V7",
         "PROGRAM_SCHEMA_V7",
         "compile_program_content_identity_v7",
+        "ProgramContentIdentityV8",
+        "ContentIdentityV8",
+        "DOMAIN_V8",
+        "PROGRAM_SCHEMA_V8",
+        "compile_program_content_identity_v8",
     ] {
         for (path, source) in identity_sources {
             assert!(
                 !contains_rust_identifier(source, retired),
-                "the V8 content-address cut must not retain legacy identity symbol `{retired}` in {path}",
+                "the V9 content-address cut must not retain legacy identity symbol `{retired}` in {path}",
             );
         }
     }
@@ -2139,16 +2144,17 @@ fn program_identity_binds_lcs_releases_only_through_lcs_constraint_content() {
     assert!(!PROGRAM_IDENTITY_SOURCE.contains("labcolors.program-content-identity.v5"));
     assert!(!PROGRAM_IDENTITY_SOURCE.contains("labcolors.program-content-identity.v6"));
     assert!(!PROGRAM_IDENTITY_SOURCE.contains("labcolors.program-content-identity.v7"));
+    assert!(!PROGRAM_IDENTITY_SOURCE.contains("labcolors.program-content-identity.v8"));
     for required in [
-        "const DOMAIN_V8: &[u8] = b\"labcolors.program-content-identity.v8\\0\";",
-        "pub(super) const PROGRAM_SCHEMA_V8: u8 = 8;",
+        "const DOMAIN_V9: &[u8] = b\"labcolors.program-content-identity.v9\\0\";",
+        "pub(super) const PROGRAM_SCHEMA_V9: u8 = 9;",
         "pub(super) const SELECTION_RELEASE_IDENTITY_V1: u8 = 1;",
         "color.push_u8(release_tag::SELECTION_RELEASE_IDENTITY_V1)?;",
         "for byte in selection.release_identity().as_bytes()",
     ] {
         assert!(
             PROGRAM_IDENTITY_SOURCE.contains(required),
-            "the V8 content-address type must bind its exact domain and schema tag; missing `{required}`",
+            "the V9 content-address type must bind its exact domain and schema tag; missing `{required}`",
         );
     }
 

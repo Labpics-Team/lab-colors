@@ -444,7 +444,7 @@ fn clean_family_fresh_recheck_failure_retains_the_presentation_subject() {
     );
 }
 
-fn opaque_named_clean_identity(name: u32) -> program::ContentIdentityV8 {
+fn opaque_named_clean_identity(name: u32) -> program::ContentIdentityV9 {
     let source = program::SourceIdV1::new(name);
     let target = program::TargetIdV1::new(name);
     let port = program::SurfaceInputPortIdV1::new(name);
