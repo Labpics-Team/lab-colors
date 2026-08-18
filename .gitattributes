@@ -47,3 +47,6 @@ scripts/verify_point_support_surplus.py text eol=lf
 scripts/test_point_support_surplus_source_binding.py text eol=lf
 crates/labcolors-core/contracts/*.json text eol=lf
 crates/labcolors-core/Cargo.toml text eol=lf
+# Корневой LICENSE входит в legal-закрытие clean-set receipt по точным байтам:
+# CRLF-чекаут на Windows ломает byte-exact сверку на свежем клоне.
+LICENSE text eol=lf
