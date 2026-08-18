@@ -322,30 +322,69 @@ fn glow_screen_physics_lives_only_in_field_effect() {
 /// без явной правки этого теста в том же ревью.
 #[test]
 fn recipe_dispatch_lowering_inventory_is_closed() {
-    let semantic = compact_production_syntax(SEMANTIC_SOURCE);
+    // Инвентарь читает ИМЕННО тело resolve_spec_in, а не весь файл: guard в
+    // чужой функции или загороженный intercept не должны проходить за диспетчер.
+    let dispatch = source_scope(SEMANTIC_SOURCE, "fn resolve_spec_in(", "\n}\n");
 
-    // Guard-армы: каждый lowered вариант обязан хранить typed-bypass литерал.
-    let semantic_code = normalized_production_code(SEMANTIC_SOURCE);
+    // Ровно восемь армов матча — по одному на каждый вариант RoleSpec.
+    for arm in [
+        "RoleSpec::Zero =>",
+        "RoleSpec::Anchor(anchor) =>",
+        "RoleSpec::DecorativeDj { magnitude_dj } =>",
+        "RoleSpec::Decorative { magnitude } =>",
+        "RoleSpec::Ladder {",
+        "RoleSpec::Glow { tint, step, mode } =>",
+        "RoleSpec::AlphaAnalog { of, alpha } =>",
+        "RoleSpec::Material { .. } =>",
+    ] {
+        assert!(
+            dispatch.contains(arm),
+            "resolve_spec_in inventory drifted: missing arm `{arm}`",
+        );
+    }
+    // Дистпетчерский match заканчивается на Material-guard (последний арм);
+    // второй match ниже проецирует criterion и не является execution-армом.
+    let dispatch_match = source_scope(dispatch, "let contract = match *spec {", "let interval = ");
+    let arm_count = dispatch_match.matches("RoleSpec::").count();
+    assert_eq!(
+        arm_count, 8,
+        "the dispatch match must hold exactly the eight classified RoleSpec arms, got {arm_count}",
+    );
+
+    // Guard-армы: каждый lowered вариант обязан возвращать typed-bypass литерал
+    // ВНУТРИ диспетчера, не где-то ещё в файле.
     for guarded in [
         "material recipe bypassed its compiled invocation",
         "alpha-analog recipe bypassed its compiled invocation",
         "glow recipe bypassed its compiled invocation",
     ] {
         assert!(
-            semantic_code.contains(guarded),
-            "lowered recipe arm lost its typed guard: `{guarded}`",
+            dispatch.contains(guarded),
+            "lowered recipe arm lost its typed guard inside resolve_spec_in: `{guarded}`",
         );
     }
 
-    // Compiled invocations: ровно три типа, и все три участвуют в dispatch.
-    for invocation in [
-        "compiledmaterialinvocationv1",
-        "compiledpointrepresentationinvocationv1",
-        "compiledglowinvocationv1",
+    // Compiled invocations: каждый тип реально участвует в named dispatch —
+    // якорим на фактические resolve-вызовы внутри resolve_named_set.
+    let named_dispatch = source_scope(SEMANTIC_SOURCE, "pub fn resolve_named_set(", "\n}\n");
+    for (invocation_iter, drift_message) in [
+        (
+            "material_invocations",
+            "compiled material invocation order drifted",
+        ),
+        (
+            "point_invocations",
+            "compiled point-representation invocation order drifted",
+        ),
+        ("glow_invocations", "compiled glow invocation order drifted"),
     ] {
         assert!(
-            semantic.to_ascii_lowercase().contains(invocation),
-            "compiled invocation type disappeared: `{invocation}`",
+            named_dispatch.contains(invocation_iter),
+            "resolve_named_set lost its `{invocation_iter}` intercept stream",
+        );
+        assert!(
+            named_dispatch.contains(drift_message),
+            "resolve_named_set lost the order-drift guard `{drift_message}`",
         );
     }
 
