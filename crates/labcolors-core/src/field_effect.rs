@@ -2302,21 +2302,33 @@ fn premultiplied_source_over(
     PremultipliedRgba8V1::try_new(output).map_err(|_| FieldEvaluationErrorV1::InternalInvariant)
 }
 
+/// Один канал encoded-sRGB8 screen-закона над непрозрачным backdrop — ДО
+/// финального округления. Указанный слева направо порядок binary64-операций
+/// (`bg + α·tint·(255−bg)/255`) является reference-профилем и совпадает с
+/// JS-проверкой официального пакета; изменение порядка сдвинуло бы граничные
+/// half-round значения на соседний LSB. Единственная реализация screen-физики
+/// в репозитории: glow-слой делегирует сюда, не дублируя формулу.
+///
+/// α принимается только как [`FieldOpacityV1`]: невалидные (NaN/∞/вне [0,1])
+/// значения непредставимы на этой границе по построению, поэтому helper не
+/// может вернуть правдоподобный байтовый результат для мусорного входа.
+pub(crate) fn encoded_srgb8_screen_channel(tint: u8, alpha: FieldOpacityV1, backdrop: u8) -> f64 {
+    f64::from(backdrop)
+        + alpha.value() * f64::from(tint) * f64::from(u8::MAX - backdrop) / f64::from(u8::MAX)
+}
+
 fn screen_opaque_backdrop(
     source: EncodedSrgb8AlphaV1,
     backdrop: Srgb8,
 ) -> Result<PremultipliedRgba8V1, FieldEvaluationErrorV1> {
     let tint = source.tint().bytes();
-    let alpha = source.alpha().value();
+    let alpha = source.alpha();
     let backdrop = backdrop.bytes();
     let mut output = [0_u8; 4];
     for channel in 0..3 {
-        // This order is the legacy-compatible encoded-sRGB8 reference law:
-        // one binary64 alpha, straight tint, and one final byte rounding.
-        let value = (f64::from(backdrop[channel])
-            + alpha * f64::from(tint[channel]) * f64::from(u8::MAX - backdrop[channel])
-                / f64::from(u8::MAX))
-        .round();
+        // Reference law lives in `encoded_srgb8_screen_channel`; here only the
+        // single final byte rounding and the domain guard.
+        let value = encoded_srgb8_screen_channel(tint[channel], alpha, backdrop[channel]).round();
         if !(0.0..=f64::from(u8::MAX)).contains(&value) {
             return Err(FieldEvaluationErrorV1::InternalInvariant);
         }

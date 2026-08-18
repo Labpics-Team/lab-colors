@@ -487,9 +487,14 @@ pub fn screen_layer_over_encoded(
 }
 
 /// Один канал конечного encoded-sRGB8 screen reference-профиля.
-fn screen_channel_over_srgb8(glow: u8, alpha: f64, bg: u8) -> u8 {
-    (f64::from(bg) + alpha * f64::from(glow) * f64::from(u8::MAX - bg) / f64::from(u8::MAX)).round()
-        as u8
+///
+/// C7e: физика screen-закона живёт ТОЛЬКО в
+/// [`crate::field_effect::encoded_srgb8_screen_channel`]; здесь остаётся лишь
+/// финальное округление reference-домена. Дублирование формулы вернуло бы
+/// второй SSOT, который hard cut закрыл. α уже typed: вызывающие обязаны
+/// провести её через [`crate::field_effect::FieldOpacityV1`] до канала.
+fn screen_channel_over_srgb8(glow: u8, alpha: crate::field_effect::FieldOpacityV1, bg: u8) -> u8 {
+    crate::field_effect::encoded_srgb8_screen_channel(glow, alpha, bg).round() as u8
 }
 
 /// Screen-слой в конечном reference-домене encoded-sRGB8.
@@ -505,9 +510,8 @@ fn screen_channel_over_srgb8(glow: u8, alpha: f64, bg: u8) -> u8 {
 ///
 /// `Err`, если `alpha` не конечна или лежит вне `[0,1]`.
 pub fn screen_layer_over_srgb8(glow: [u8; 3], alpha: f64, bg: [u8; 3]) -> Result<[u8; 3], String> {
-    if !alpha.is_finite() || !(0.0..=1.0).contains(&alpha) {
-        return Err(format!("alpha вне конечного [0,1]: {alpha}"));
-    }
+    let alpha = crate::field_effect::FieldOpacityV1::try_new(alpha)
+        .map_err(|_| format!("alpha вне конечного [0,1]: {alpha}"))?;
     Ok(core::array::from_fn(|channel| {
         screen_channel_over_srgb8(glow[channel], alpha, bg[channel])
     }))
@@ -674,6 +678,16 @@ struct QuantisedComposites {
     finished: bool,
 }
 
+/// Typed-α из битов потока квантованных композитов.
+///
+/// Инвариант потока: каждое значение bits получено из `clamp(0.0, 1.0)` или
+/// midpoint-арифметики над уже валидными α, поэтому вне [0,1]/NaN здесь
+/// непредставимы; нарушение — сломанный внутренний инвариант потока, не вход.
+fn opacity_from_alpha_bits(bits: u64) -> crate::field_effect::FieldOpacityV1 {
+    crate::field_effect::FieldOpacityV1::try_new(f64::from_bits(bits))
+        .expect("quantised composite stream holds only valid alpha bits")
+}
+
 /// Binary64-округление рациональной half-wall, используемое только как seed
 /// экспоненциального поиска. Фактическую границу всегда определяет compositor.
 fn boundary_seed_bits(glow: u8, background: u8, next_value: u8) -> u64 {
@@ -686,8 +700,9 @@ fn boundary_seed_bits(glow: u8, background: u8, next_value: u8) -> u64 {
 
 impl QuantisedComposites {
     fn new(glow: [u8; 3], background: [u8; 3]) -> Self {
+        let alpha_one = opacity_from_alpha_bits(ALPHA_ONE_BITS);
         let final_bytes = core::array::from_fn(|channel| {
-            screen_channel_over_srgb8(glow[channel], 1.0, background[channel])
+            screen_channel_over_srgb8(glow[channel], alpha_one, background[channel])
         });
         let mut stream = Self {
             glow,
@@ -714,7 +729,7 @@ impl QuantisedComposites {
         debug_assert!(
             screen_channel_over_srgb8(
                 self.glow[channel],
-                f64::from_bits(self.lower_bits),
+                opacity_from_alpha_bits(self.lower_bits),
                 self.background[channel],
             ) < next_value,
             "текущий state уже пересёк искомую channel boundary"
@@ -722,7 +737,7 @@ impl QuantisedComposites {
         let passes = |bits| {
             screen_channel_over_srgb8(
                 self.glow[channel],
-                f64::from_bits(bits),
+                opacity_from_alpha_bits(bits),
                 self.background[channel],
             ) >= next_value
         };
@@ -1686,6 +1701,33 @@ mod tests {
             measure_screen_layer_at_alpha("#C0B2FA", "#000000", 0.122, &ViewingConditions::srgb())
                 .unwrap();
         assert_eq!(measurement.composite_hex, "#17161F");
+    }
+
+    /// C7e differential: glow reference-канал байт-в-байт совпадает с
+    /// field_effect-носителем закона на репрезентативных векторах (светлый и
+    /// тёмный фон, малая и большая α, канальные экстремумы). Разойтись они
+    /// могут только при возврате второй локальной формулы — что и ловит тест.
+    #[test]
+    fn screen_layer_matches_field_effect_reference() {
+        for (tint, alpha, bg) in [
+            ([192_u8, 178, 250], 0.122_f64, [0_u8, 0, 0]),
+            ([255, 255, 255], 0.5, [255, 255, 255]),
+            ([1, 0, 0], 0.501_968_503_937_007_9, [1, 0, 0]),
+            ([13, 200, 77], 0.999, [240, 5, 128]),
+            ([0, 0, 0], 0.0, [17, 34, 51]),
+        ] {
+            let composite = screen_layer_over_srgb8(tint, alpha, bg).unwrap();
+            let typed_alpha = crate::field_effect::FieldOpacityV1::try_new(alpha).unwrap();
+            let expected: [u8; 3] = core::array::from_fn(|channel| {
+                crate::field_effect::encoded_srgb8_screen_channel(
+                    tint[channel],
+                    typed_alpha,
+                    bg[channel],
+                )
+                .round() as u8
+            });
+            assert_eq!(composite, expected, "tint={tint:?} alpha={alpha} bg={bg:?}");
+        }
     }
 
     /// На этой границе точное вещественное сравнение binary64 и фиксированный
