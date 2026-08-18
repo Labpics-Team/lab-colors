@@ -58,7 +58,7 @@ SITE_ID = "point-support-retained-reference-surplus-v1"
 SOURCE_BINDING_LAW = "point-support-rust-whole-file-semantic-cone-v2"
 SOURCE_BINDING_DOMAIN = b"labcolors.point-support.rust-whole-file-semantic-cone.v2"
 EXPECTED_SOURCE_CAPSULE_SHA256 = (
-    "b2fa73b5845fdd177d12237ae67082b0654b7690a9ded249aa7a387c29200426"
+    "f479538c6417faf890d4d32a2713316d10b6208739836e8c46d096b8ed52cfc8"
 )
 EXPECTED_Q55_PROOF_SHA256 = (
     "e0f8a01ae106b9147606ac15094968fef1ce6575a568046fa0247d1eb8845e8b"
@@ -211,7 +211,7 @@ def verify_source_binding() -> tuple[str, int]:
         (SESSION_SOURCE, b"            let (raw_head, observation) = prepared.into_parts();\n            let raw_observation = observation.clone();\n", b"            let (raw_head, observation) = prepared.into_parts();\n            *raw_head = SessionObservationHeadV1::Observed(observation.clone());\n            let raw_observation = observation.clone();\n"),
         (SESSION_SOURCE, b"                let retired_raw_head = mem::replace(\n                    raw_head,\n                    SessionObservationHeadV1::Observed(raw_observation),\n                );\n", b"                let retired_raw_head = mem::replace(\n                    raw_head,\n                    SessionObservationHeadV1::Empty,\n                );\n"),
         (SESSION_SOURCE, b"                Some(previous) => SessionState::Stale { previous },", b"                Some(_) => SessionState::Waiting,"),
-        (SESSION_SOURCE, b"                    SessionObservationBindingPermitV1::mint(),", b"                    SessionObservationBindingPermitV1::for_test(),"),
+        (SESSION_SOURCE, b"            let permit = SessionObservationBindingPermitV1::mint(&observation);", b"            let permit = SessionObservationBindingPermitV1::for_test();"),
         (SESSION_SOURCE, b"                    SessionDecision::Verified(current) => {\n                        (SessionState::Ready { current }, last_verified)\n                    }\n", b"                    SessionDecision::Verified(current) => {\n                        (SessionState::Stale { previous: current }, last_verified)\n                    }\n"),
         (SESSION_SOURCE, b"                    SessionDecision::Violation(cause) => (\n                        SessionState::Failed {\n                            cause,\n                            previous: last_verified,\n                        },\n                        None,\n                    ),\n", b"                    SessionDecision::Violation(_) => (\n                        SessionState::Waiting,\n                        last_verified,\n                    ),\n"),
         (SESSION_SOURCE, b"                return Err(SessionUpdateError::EvidenceBindingInvariant);\n", b"                unreachable!();\n"),
