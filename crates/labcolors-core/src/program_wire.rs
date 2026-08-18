@@ -24,7 +24,6 @@ pub enum ProgramWireCheckErrorV1 {
     /// Байты нарушают канон формата: невалидный заголовок, длина, запись или
     /// wire-limit. `section`/`offset` указывают на начало нарушившей записи;
     /// для заголовочных отказов секция — `"header"`.
-    #[non_exhaustive]
     Wire {
         /// Секция формата, в которой зафиксирован отказ.
         section: ProgramWireSectionNameV1,
@@ -36,7 +35,6 @@ pub enum ProgramWireCheckErrorV1 {
     /// Детализация класса намеренно не публикуется в v1: полный typed
     /// compile-контракт публикует атомарный C7c; преждевременная строковая
     /// проекция 62 внутренних классов стала бы Hyrum-контрактом до него.
-    #[non_exhaustive]
     Compile,
 }
 
@@ -180,5 +178,51 @@ mod tests {
     fn format_pins_are_part_of_the_contract() {
         assert_eq!(PROGRAM_WIRE_MAGIC_V1, *b"LCPW");
         assert_eq!(PROGRAM_WIRE_VERSION_V1, 1);
+    }
+}
+
+#[cfg(test)]
+mod fixture_migration_tests {
+    use super::*;
+    use crate::program::wire::ProgramWireBuilderV1;
+
+    /// Миграционное доказательство (срез 6 wire-узла): 11-узловый граф
+    /// приватного fixture ABI v2 полностью выражается ПУБЛИЧНОЙ wire-грамматикой
+    /// и даёт живую content identity через единственный публичный seam.
+    ///
+    /// Это условие входа в C7c: после публикации полного контракта fixture ABI
+    /// остаётся compat-слоем, а публичная грамматика уже сегодня покрывает его
+    /// топологию (source -> fixed target -> solid paint -> opacity paint ->
+    /// input surface -> source-over occurrence -> presentation root/target ->
+    /// exact visible hard -> output). Идентификаторы — те же ordinals, что и в
+    /// private_fixture.rs (AUTHORED_SOURCE=1 .. OUTPUT=17).
+    #[test]
+    fn the_private_fixture_graph_is_expressible_in_the_public_grammar() {
+        let mut builder = ProgramWireBuilderV1::new();
+        builder
+            .source(1, crate::Srgb8::new([0x40, 0x40, 0x40]))
+            .fixed_target(2, 1)
+            .surface_input_port(6)
+            .opacity_input(5, 0.5)
+            .solid_paint(3, 2)
+            .opacity_paint(4, 3, 5)
+            .input_surface(7, 6)
+            .source_over_occurrence(8, 4, 7, 64.0, 0.2, 2)
+            .presentation_root(9, 8)
+            .presentation_target(9, 8)
+            .exact_visible_unary(true, 10, 8, crate::Srgb8::new([0x60, 0x60, 0x60]))
+            .output(17, 4);
+        let bytes = builder.finish().unwrap();
+
+        // Публичный seam: байты канонны... но exact-constraint с произвольным
+        // expected до attachment невыполним — компиляция графа тем не менее
+        // обязана пройти (constraint исполняется в runtime, не при compile).
+        let identity = check_program_wire_v1(&bytes).expect(
+            "the fixture topology must be canonical and compilable through the public seam",
+        );
+        assert_ne!(identity, [0; 32]);
+
+        // Determinism поверх полного fixture-графа.
+        assert_eq!(identity, check_program_wire_v1(&bytes).unwrap());
     }
 }
