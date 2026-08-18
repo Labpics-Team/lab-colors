@@ -34,6 +34,8 @@ const SEMANTIC_SOURCE: &str = include_str!("semantic.rs");
 const SESSION_SOURCE: &str = include_str!("session.rs");
 const SOLVE_SOURCE: &str = include_str!("solve.rs");
 const WCAG22_CONSTRAINT_SOURCE: &str = include_str!("constraints/wcag22.rs");
+const GLOW_SOURCE: &str = include_str!("glow.rs");
+const FIELD_EFFECT_SOURCE: &str = include_str!("field_effect.rs");
 
 #[test]
 fn w5_removes_legacy_wcag_authority_from_the_solver() {
@@ -249,6 +251,31 @@ fn material_physics_lives_only_in_the_generic_corridor_module() {
     assert!(
         semantic.contains("compiledmaterialinvocationv1"),
         "semantic must own the compiled Material invocation type",
+    );
+}
+
+/// C7e: screen-физика encoded-sRGB8 (закон `bg + α·tint·(255−bg)/255`) живёт
+/// ТОЛЬКО в field_effect. Glow-слой обязан делегировать канал туда — вторая
+/// локальная реализация формулы была вторым SSOT физики, который hard cut
+/// закрыл; её возврат молча развёл бы reference-профили glow и field.
+#[test]
+fn glow_screen_physics_lives_only_in_field_effect() {
+    let field = compact_production_syntax(FIELD_EFFECT_SOURCE);
+    assert!(
+        field.contains("pub(crate)fnencoded_srgb8_screen_channel"),
+        "field_effect must own the single encoded-sRGB8 screen channel law",
+    );
+
+    let glow = compact_production_syntax(GLOW_SOURCE);
+    assert!(
+        glow.contains("crate::field_effect::encoded_srgb8_screen_channel"),
+        "glow reference layer must delegate its screen channel to field_effect",
+    );
+    // Локальная реализация формулы: узнаваема по мультипликативному ядру
+    // `α·tint·(255−bg)` в любой записи. field_effect — единственный носитель.
+    assert!(
+        !glow.contains("f64::from(u8::MAX-"),
+        "glow.rs must not re-implement the screen channel law locally",
     );
 }
 
