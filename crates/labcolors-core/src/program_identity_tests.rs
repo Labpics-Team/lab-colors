@@ -7,6 +7,12 @@ use crate::family::{
     FamilyDeclarationV2, FamilyDefinitionDigestV2, FamilyId, canonical_family_image_digest_v2,
     semantic_family_release_id_v2,
 };
+use crate::field_effect::{
+    CarrierIntentV1, FieldDeclarationsV1, FieldExecutionProfileV1, FieldInputDeclarationV1,
+    FieldInputKindV1, FieldInputPortIdV1, FieldOperatorDeclarationV1, FieldOperatorInstanceIdV1,
+    FieldPrecisionV1, FieldQuantizationV1, FieldValueRefV1, FieldWorkingSpaceV1,
+    GaussianEdgeModeV1, GaussianKernelProfileV1,
+};
 use crate::lcs_occurrence::{
     AdaptingLuminanceCdM2, AppearanceContextId, AppearanceContextSchemaReleaseId,
     BackgroundLuminanceRatio, ColorSignal, IEC_SRGB_D65_XYZ_FRAME_V1, SurroundProfileId,
@@ -17,9 +23,9 @@ use crate::program_session::{
     CoreProgramConstraintInvocationV1, CoreProgramEvaluatorsV1, CoreProgramV1,
     DeclaredJointSelectionV1, FinitePaintDomainV1, JointCandidateStateV1, ObservationGroup,
     Occurrence, OpacityInput, OutputBinding, OutputSlotId, Paint, PointPresentationRootV1,
-    PointPresentationTargetV1, PresentationRootId, Program, ProgramContentIdentityV8, Source,
-    SourceId, Surface, Target, TargetCandidateChoiceV1, TargetCandidateId, TargetCandidateV1,
-    TargetId,
+    PointPresentationTargetV1, PresentationRootId, Program, ProgramContentIdentityV9,
+    ProgramFieldOutputBindingV1, Source, SourceId, Surface, Target, TargetCandidateChoiceV1,
+    TargetCandidateId, TargetCandidateV1, TargetId,
 };
 use crate::relation::DirectedRelationV1;
 use crate::selection_release::{
@@ -164,7 +170,7 @@ fn family_identity_program(
 }
 
 #[test]
-fn family_ids_and_declaration_order_are_alpha_invariant_in_v8() {
+fn family_ids_and_declaration_order_are_alpha_invariant_in_v9() {
     let first = FamilyId::new(100);
     let second = FamilyId::new(200);
     let renamed_first = FamilyId::new(900);
@@ -195,7 +201,7 @@ fn family_ids_and_declaration_order_are_alpha_invariant_in_v8() {
 }
 
 #[test]
-fn family_content_is_bound_into_v8_identity() {
+fn family_content_is_bound_into_v9_identity() {
     let first = FamilyId::new(100);
     let second = FamilyId::new(200);
     let baseline = family_identity_program(
@@ -233,7 +239,7 @@ fn family_content_is_bound_into_v8_identity() {
 }
 
 #[test]
-fn constraint_family_binding_topology_is_bound_into_v8_identity() {
+fn constraint_family_binding_topology_is_bound_into_v9_identity() {
     let first = FamilyId::new(100);
     let second = FamilyId::new(200);
     let declarations = vec![
@@ -257,7 +263,7 @@ fn constraint_family_binding_topology_is_bound_into_v8_identity() {
 }
 
 #[test]
-fn shared_and_duplicated_equal_families_have_distinct_v8_identity() {
+fn shared_and_duplicated_equal_families_have_distinct_v9_identity() {
     let first = FamilyId::new(100);
     let second = FamilyId::new(200);
     let members = vec![[0x20, 0x40, 0x60], [0x80, 0x60, 0x40]];
@@ -499,7 +505,7 @@ fn presentation_topology_ignores_root_names_and_declaration_order() {
 }
 
 #[test]
-fn presentation_root_terminal_relation_changes_v8_identity() {
+fn presentation_root_terminal_relation_changes_v9_identity() {
     let ids = canonical_full_ids();
     let root = PresentationRootId::new(1);
     let first = full_program(ids, false, FullMutation::None)
@@ -520,7 +526,7 @@ fn presentation_root_terminal_relation_changes_v8_identity() {
 }
 
 #[test]
-fn presentation_target_relation_and_multiplicity_change_v8_identity() {
+fn presentation_target_relation_and_multiplicity_change_v9_identity() {
     let ids = canonical_full_ids();
     let root = PresentationRootId::new(1);
     let nested_target = full_program(ids, false, FullMutation::None)
@@ -562,7 +568,7 @@ fn presentation_target_relation_and_multiplicity_change_v8_identity() {
 }
 
 #[test]
-fn canonical_v8_digest_is_cross_platform_golden() {
+fn canonical_v9_digest_is_cross_platform_golden() {
     let ids = FixedIds {
         sources: [SourceId::new(10), SourceId::new(20)],
         targets: [TargetId::new(30), TargetId::new(40)],
@@ -583,12 +589,12 @@ fn canonical_v8_digest_is_cross_platform_golden() {
     .compile()
     .unwrap();
 
-    let identity: ProgramContentIdentityV8 = compiled.content_identity();
+    let identity: ProgramContentIdentityV9 = compiled.content_identity();
     assert_eq!(
         identity.as_bytes(),
         &[
-            94, 214, 174, 159, 139, 60, 138, 90, 242, 92, 158, 76, 153, 97, 208, 124, 207, 174, 28,
-            202, 158, 215, 146, 193, 71, 101, 104, 48, 179, 241, 170, 156,
+            27, 177, 60, 65, 109, 138, 207, 11, 175, 222, 91, 166, 244, 158, 115, 251, 74, 24, 199,
+            71, 8, 128, 90, 208, 254, 121, 189, 211, 222, 31, 170, 126,
         ]
     );
 }
@@ -999,28 +1005,114 @@ fn canonical_full_ids() -> FullIds {
     }
 }
 
+fn complete_field_schema() -> (FieldDeclarationsV1, Vec<ProgramFieldOutputBindingV1>) {
+    let premultiplied_a = FieldInputPortIdV1::new(1);
+    let premultiplied_b = FieldInputPortIdV1::new(2);
+    let encoded_alpha = FieldInputPortIdV1::new(3);
+    let opaque = FieldInputPortIdV1::new(4);
+    let gaussian = FieldOperatorInstanceIdV1::new(5);
+    let source_over = FieldOperatorInstanceIdV1::new(6);
+    let screen = FieldOperatorInstanceIdV1::new(7);
+    let lighter = FieldOperatorInstanceIdV1::new(8);
+
+    let mut field = FieldDeclarationsV1::new();
+    for input in [
+        FieldInputDeclarationV1::new(premultiplied_a, FieldInputKindV1::PremultipliedRgba8V1),
+        FieldInputDeclarationV1::new(premultiplied_b, FieldInputKindV1::PremultipliedRgba8V1),
+        FieldInputDeclarationV1::new(encoded_alpha, FieldInputKindV1::EncodedSrgb8AlphaV1),
+        FieldInputDeclarationV1::new(opaque, FieldInputKindV1::OpaqueSrgb8V1),
+    ] {
+        field.push_input(input);
+    }
+    for operator in [
+        FieldOperatorDeclarationV1::new(
+            gaussian,
+            FieldExecutionProfileV1::GaussianBlur {
+                source: FieldValueRefV1::Input(premultiplied_a),
+                kernel: GaussianKernelProfileV1::BinomialGaussianQ32V1,
+                css_radius_px: 1,
+                edge_mode: GaussianEdgeModeV1::ClampToEdgeV1,
+            },
+            FieldWorkingSpaceV1::EncodedSrgb8PremultipliedV1,
+            FieldPrecisionV1::FixedQ32V1,
+            FieldQuantizationV1::RoundHalfUpSrgb8V1,
+            CarrierIntentV1::SpatialVariation,
+        ),
+        FieldOperatorDeclarationV1::new(
+            source_over,
+            FieldExecutionProfileV1::PremultipliedSourceOver {
+                source: FieldValueRefV1::Operator(gaussian),
+                destination: FieldValueRefV1::Input(premultiplied_b),
+            },
+            FieldWorkingSpaceV1::EncodedSrgb8PremultipliedV1,
+            FieldPrecisionV1::FixedQ32V1,
+            FieldQuantizationV1::RoundHalfUpSrgb8V1,
+            CarrierIntentV1::Contributes,
+        ),
+        FieldOperatorDeclarationV1::new(
+            screen,
+            FieldExecutionProfileV1::EncodedSrgb8ScreenOpaqueBackdrop {
+                source: FieldValueRefV1::Input(encoded_alpha),
+                backdrop: FieldValueRefV1::Input(opaque),
+            },
+            FieldWorkingSpaceV1::EncodedSrgb8PremultipliedV1,
+            FieldPrecisionV1::FixedQ32V1,
+            FieldQuantizationV1::RoundHalfUpSrgb8V1,
+            CarrierIntentV1::Present,
+        ),
+        FieldOperatorDeclarationV1::new(
+            lighter,
+            FieldExecutionProfileV1::PorterDuffLighter {
+                source: FieldValueRefV1::Operator(source_over),
+                destination: FieldValueRefV1::Operator(gaussian),
+            },
+            FieldWorkingSpaceV1::EncodedSrgb8PremultipliedV1,
+            FieldPrecisionV1::FixedQ32V1,
+            FieldQuantizationV1::RoundHalfUpSrgb8V1,
+            CarrierIntentV1::Contributes,
+        ),
+    ] {
+        field.push_operator(operator);
+    }
+    (
+        field,
+        vec![
+            ProgramFieldOutputBindingV1::new(OutputSlotId::new(30), gaussian),
+            ProgramFieldOutputBindingV1::new(OutputSlotId::new(31), source_over),
+            ProgramFieldOutputBindingV1::new(OutputSlotId::new(32), screen),
+            ProgramFieldOutputBindingV1::new(OutputSlotId::new(33), lighter),
+        ],
+    )
+}
+
 #[test]
-fn complete_program_schema_v8_digest_is_cross_platform_golden() {
-    // Вместе с fixed golden этот Program содержит каждый V8 vertex/edge tag,
+fn complete_program_schema_v9_digest_is_cross_platform_golden() {
+    // Вместе с fixed golden этот Program содержит каждый V9 vertex/edge tag,
     // все constraint topology и оба режима. Случайная смена кодировки требует
     // явной смены версии, а не тихого перевыпуска прежнего content address.
+    let (field, field_outputs) = complete_field_schema();
     let compiled = full_program(
         canonical_full_ids(),
         false,
         FullMutation::CompleteSchemaGolden,
     )
+    .with_field_declarations(field, field_outputs)
     .compile()
     .unwrap();
 
-    let schema = crate::program_session::program_identity_graph_schema_for_test(&full_program(
-        canonical_full_ids(),
-        false,
-        FullMutation::CompleteSchemaGolden,
-    ))
+    let (field, field_outputs) = complete_field_schema();
+    let schema = crate::program_session::program_identity_graph_schema_for_test(
+        &full_program(
+            canonical_full_ids(),
+            false,
+            FullMutation::CompleteSchemaGolden,
+        )
+        .with_field_declarations(field, field_outputs),
+    )
     .unwrap();
-    assert_eq!(schema.0, (1_u8..=22).collect::<Vec<_>>());
+    assert_eq!(schema.0, (1_u8..=29).collect::<Vec<_>>());
     let edge_role_count = crate::program_session::program_identity_edge_role_count_for_test();
-    assert_eq!(edge_role_count, 28);
+    assert_eq!(edge_role_count, 37);
     assert_eq!(schema.1.len(), edge_role_count);
     assert_eq!(
         schema.1,
@@ -1030,8 +1122,8 @@ fn complete_program_schema_v8_digest_is_cross_platform_golden() {
     assert_eq!(
         compiled.content_identity().as_bytes(),
         &[
-            146, 121, 82, 10, 253, 244, 184, 221, 77, 198, 219, 37, 215, 66, 5, 155, 57, 56, 28,
-            28, 86, 12, 217, 252, 66, 255, 127, 109, 112, 87, 28, 26,
+            18, 121, 226, 19, 228, 94, 97, 162, 49, 50, 79, 248, 170, 114, 212, 216, 202, 60, 248,
+            218, 150, 31, 183, 76, 231, 8, 220, 213, 93, 23, 72, 174,
         ]
     );
 }
@@ -1658,7 +1750,7 @@ fn content_identity_binds_the_exact_selection_release_even_when_order_is_equal()
 }
 
 #[test]
-fn finite_candidate_opacity_is_part_of_v8_content_identity() {
+fn finite_candidate_opacity_is_part_of_v9_content_identity() {
     let quarter = finite_program_with_opacity(false, 0.25).compile().unwrap();
     let half = finite_program_with_opacity(false, 0.5).compile().unwrap();
 
@@ -1781,4 +1873,137 @@ fn exact_canon_distinguishes_regular_non_isomorphic_programs() {
         .unwrap();
 
     assert_ne!(one_cycle.content_identity(), two_cycles.content_identity());
+}
+
+fn field_identity_program(
+    renamed: bool,
+    reverse_declarations: bool,
+    bypass_intermediate_operator: bool,
+    css_radius_px: u32,
+) -> CoreProgramV1 {
+    let ids = FixedIds {
+        sources: [SourceId::new(10), SourceId::new(20)],
+        targets: [TargetId::new(30), TargetId::new(40)],
+        paints: [PaintId::new(50), PaintId::new(60)],
+        ports: [SurfaceInputPortId::new(70), SurfaceInputPortId::new(80)],
+        surfaces: [SurfaceId::new(90), SurfaceId::new(100)],
+        occurrences: [OccurrenceId::new(110), OccurrenceId::new(120)],
+        constraints: [ConstraintId::new(130), ConstraintId::new(140)],
+        outputs: [OutputSlotId::new(150), OutputSlotId::new(160)],
+        group: ObservationGroupId::new(170),
+    };
+    let inputs = if renamed {
+        [FieldInputPortIdV1::new(901), FieldInputPortIdV1::new(707)]
+    } else {
+        [FieldInputPortIdV1::new(1), FieldInputPortIdV1::new(2)]
+    };
+    let operators = if renamed {
+        [
+            FieldOperatorInstanceIdV1::new(808),
+            FieldOperatorInstanceIdV1::new(606),
+        ]
+    } else {
+        [
+            FieldOperatorInstanceIdV1::new(3),
+            FieldOperatorInstanceIdV1::new(4),
+        ]
+    };
+    let input_declarations = [
+        FieldInputDeclarationV1::new(inputs[0], FieldInputKindV1::PremultipliedRgba8V1),
+        FieldInputDeclarationV1::new(inputs[1], FieldInputKindV1::PremultipliedRgba8V1),
+    ];
+    let operator_declarations = [
+        FieldOperatorDeclarationV1::new(
+            operators[0],
+            FieldExecutionProfileV1::PremultipliedSourceOver {
+                source: FieldValueRefV1::Input(inputs[0]),
+                destination: FieldValueRefV1::Input(inputs[1]),
+            },
+            FieldWorkingSpaceV1::EncodedSrgb8PremultipliedV1,
+            FieldPrecisionV1::FixedQ32V1,
+            FieldQuantizationV1::RoundHalfUpSrgb8V1,
+            CarrierIntentV1::Contributes,
+        ),
+        FieldOperatorDeclarationV1::new(
+            operators[1],
+            FieldExecutionProfileV1::GaussianBlur {
+                source: if bypass_intermediate_operator {
+                    FieldValueRefV1::Input(inputs[0])
+                } else {
+                    FieldValueRefV1::Operator(operators[0])
+                },
+                kernel: GaussianKernelProfileV1::BinomialGaussianQ32V1,
+                css_radius_px,
+                edge_mode: GaussianEdgeModeV1::ClampToEdgeV1,
+            },
+            FieldWorkingSpaceV1::EncodedSrgb8PremultipliedV1,
+            FieldPrecisionV1::FixedQ32V1,
+            FieldQuantizationV1::RoundHalfUpSrgb8V1,
+            CarrierIntentV1::SpatialVariation,
+        ),
+    ];
+    let mut field = FieldDeclarationsV1::new();
+    if reverse_declarations {
+        for input in input_declarations.into_iter().rev() {
+            field.push_input(input);
+        }
+        for operator in operator_declarations.into_iter().rev() {
+            field.push_operator(operator);
+        }
+    } else {
+        for input in input_declarations {
+            field.push_input(input);
+        }
+        for operator in operator_declarations {
+            field.push_operator(operator);
+        }
+    }
+
+    fixed_program(
+        ids,
+        false,
+        Srgb8::new([0x40, 0x50, 0x60]),
+        FixedMutation::None,
+    )
+    .with_field_declarations(
+        field,
+        vec![
+            ProgramFieldOutputBindingV1::new(OutputSlotId::new(180), operators[1]),
+            ProgramFieldOutputBindingV1::new(OutputSlotId::new(181), operators[0]),
+        ],
+    )
+}
+
+#[test]
+fn field_opaque_ids_and_declaration_order_are_alpha_invariant_in_v9() {
+    let canonical = field_identity_program(false, false, false, 1)
+        .compile()
+        .unwrap();
+    let renamed_reordered = field_identity_program(true, true, false, 1)
+        .compile()
+        .unwrap();
+
+    assert_eq!(
+        canonical.content_identity(),
+        renamed_reordered.content_identity()
+    );
+}
+
+#[test]
+fn field_profile_and_topology_are_independently_content_bound_in_v9() {
+    let baseline = field_identity_program(false, false, false, 1)
+        .compile()
+        .unwrap()
+        .content_identity();
+    let changed_radius = field_identity_program(false, false, false, 2)
+        .compile()
+        .unwrap()
+        .content_identity();
+    let changed_topology = field_identity_program(false, false, true, 1)
+        .compile()
+        .unwrap()
+        .content_identity();
+
+    assert_ne!(baseline, changed_radius);
+    assert_ne!(baseline, changed_topology);
 }

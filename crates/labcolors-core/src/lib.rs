@@ -20,6 +20,9 @@ pub(crate) mod contextual_region;
 mod family;
 mod family_artifact;
 mod family_definition_binding;
+pub(crate) mod field_effect;
+#[cfg(test)]
+mod field_effect_tests;
 pub(crate) mod spaces;
 
 pub use srgb8::Srgb8;

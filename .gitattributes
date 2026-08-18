@@ -35,3 +35,8 @@ scripts/test_verify_clean_set_receipt.py text eol=lf
 # human-readable, but Git must never rewrite line endings before admission.
 crates/labcolors-core/contracts/*.lcir -text
 proof/region/v1/fixtures/*.bin binary
+
+# Rust source files are scanned byte-for-byte by architecture guards using
+# include_str! with exact LF needles. Pin all .rs files to LF to prevent
+# core.autocrlf from introducing CRLF on Windows checkouts.
+*.rs text eol=lf

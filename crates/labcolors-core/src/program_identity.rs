@@ -7,15 +7,15 @@
 
 use super::*;
 
-const DOMAIN_V8: &[u8] = b"labcolors.program-content-identity.v8\0";
-// V8 резервирует фиксированную protocol boundary под type/family tag и полный
+const DOMAIN_V9: &[u8] = b"labcolors.program-content-identity.v9\0";
+// V9 резервирует фиксированную protocol boundary под type/family tag и полный
 // content digest. Каждый writer использует проверяемый push и отвергает
 // расширение схемы вместо усечения данных или аллокации на вершину.
-const HASH_BOUND_COLOR_BYTES_V8: usize = 1 + 1 + 32;
-const COLOR_CAPACITY: usize = HASH_BOUND_COLOR_BYTES_V8;
+const HASH_BOUND_COLOR_BYTES_V9: usize = 1 + 1 + 32;
+const COLOR_CAPACITY: usize = HASH_BOUND_COLOR_BYTES_V9;
 
 mod release_tag {
-    pub(super) const PROGRAM_SCHEMA_V8: u8 = 8;
+    pub(super) const PROGRAM_SCHEMA_V9: u8 = 9;
     pub(super) const SELECTION_RELEASE_IDENTITY_V1: u8 = 1;
     pub(super) const DECLARED_TOTAL_ORDER_V1: u8 = 1;
     pub(super) const FRESH_FULL_RECHECK_V1: u8 = 1;
@@ -23,6 +23,7 @@ mod release_tag {
     pub(super) const ENCODED_PAINT_OUTPUT_ROUTING_V1: u8 = 1;
     pub(super) const FINITE_ATOMIC_PAINT_CANDIDATE_V1: u8 = 1;
     pub(super) const MODELED_POINT_PRESENTATION_V1: u8 = 1;
+    pub(super) const FIELD_EFFECT_GRAPH_V1: u8 = 1;
     pub(super) const POINT_ABSENCE_BYPASS_OWN_BACKDROP_V1: u8 = 1;
     #[cfg(test)]
     pub(super) const FAMILY_CERTIFICATE_VERTEX_V1: u8 = 1;
@@ -46,6 +47,18 @@ mod release_tag {
     pub(super) const SURROUND_AVERAGE_V1: u8 = 1;
     pub(super) const SURROUND_DIM_V1: u8 = 2;
     pub(super) const SURROUND_DARK_V1: u8 = 3;
+
+    pub(super) const FIELD_WORKING_ENCODED_SRGB8_PREMULTIPLIED_V1: u8 = 1;
+    pub(super) const FIELD_WORKING_LINEAR_SRGB_Q31_PREMULTIPLIED_V1: u8 = 2;
+    pub(super) const FIELD_PRECISION_FIXED_Q32_V1: u8 = 1;
+    pub(super) const FIELD_PRECISION_BINARY32_V1: u8 = 2;
+    pub(super) const FIELD_QUANTIZATION_HALF_UP_SRGB8_V1: u8 = 1;
+    pub(super) const FIELD_QUANTIZATION_TIES_EVEN_SRGB8_V1: u8 = 2;
+    pub(super) const FIELD_CARRIER_PRESENT_V1: u8 = 1;
+    pub(super) const FIELD_CARRIER_CONTRIBUTES_V1: u8 = 2;
+    pub(super) const FIELD_CARRIER_SPATIAL_VARIATION_V1: u8 = 3;
+    pub(super) const FIELD_GAUSSIAN_BINOMIAL_Q32_V1: u8 = 1;
+    pub(super) const FIELD_GAUSSIAN_CLAMP_TO_EDGE_V1: u8 = 1;
 
     pub(super) const EXACT_SRGB8_FAMILY_V1: u8 = 1;
     pub(super) const EXACT_SRGB8_IDENTITY_V1: u8 = 1;
@@ -92,14 +105,14 @@ mod release_tag {
     pub(super) const MODELED_LCS_PROBE_FAMILY_V1: u8 = 7;
 }
 
-/// Устойчивый к коллизиям адрес канонизированного содержимого Program V8.
+/// Устойчивый к коллизиям адрес канонизированного содержимого Program V9.
 ///
 /// SHA-256 не делает адрес инъективным. Адрес не связывает пространства opaque
 /// ID и не подтверждает владельца, поколение либо revision.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(crate) struct ProgramContentIdentityV8([u8; 32]);
+pub(crate) struct ProgramContentIdentityV9([u8; 32]);
 
-impl ProgramContentIdentityV8 {
+impl ProgramContentIdentityV9 {
     pub(crate) const fn as_bytes(&self) -> &[u8; 32] {
         &self.0
     }
@@ -183,6 +196,13 @@ mod vertex_tag {
     pub(super) const PRESENTATION_ROOT: u8 = 20;
     pub(super) const PRESENTATION_TARGET: u8 = 21;
     pub(super) const FAMILY: u8 = 22;
+    pub(super) const FIELD_INPUT_PREMULTIPLIED_RGBA8: u8 = 23;
+    pub(super) const FIELD_INPUT_ENCODED_SRGB8_ALPHA: u8 = 24;
+    pub(super) const FIELD_INPUT_OPAQUE_SRGB8: u8 = 25;
+    pub(super) const FIELD_OPERATOR_GAUSSIAN_Q32: u8 = 26;
+    pub(super) const FIELD_OPERATOR_SOURCE_OVER: u8 = 27;
+    pub(super) const FIELD_OPERATOR_SCREEN: u8 = 28;
+    pub(super) const FIELD_OPERATOR_LIGHTER: u8 = 29;
 }
 
 macro_rules! declare_edge_roles_v1 {
@@ -227,6 +247,15 @@ declare_edge_roles_v1! {
     VisibleCandidate = 26,
     ObservationGroup = 27,
     ConstraintFamily = 28,
+    FieldInputObservationGroup = 29,
+    FieldGaussianSource = 30,
+    FieldSourceOverSource = 31,
+    FieldSourceOverDestination = 32,
+    FieldScreenSource = 33,
+    FieldScreenBackdrop = 34,
+    FieldLighterSource = 35,
+    FieldLighterDestination = 36,
+    FieldOutputOperator = 37,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -389,13 +418,14 @@ fn program_root_color() -> Result<VertexColorV1, ProgramCompileError> {
     // производных возможностей связываются только с теми ограничениями,
     // которые их исполняют.
     for release in [
-        release_tag::PROGRAM_SCHEMA_V8,
+        release_tag::PROGRAM_SCHEMA_V9,
         release_tag::DECLARED_TOTAL_ORDER_V1,
         release_tag::FRESH_FULL_RECHECK_V1,
         release_tag::ATOMIC_OBSERVATION_GROUP_V1,
         release_tag::ENCODED_PAINT_OUTPUT_ROUTING_V1,
         release_tag::FINITE_ATOMIC_PAINT_CANDIDATE_V1,
         release_tag::MODELED_POINT_PRESENTATION_V1,
+        release_tag::FIELD_EFFECT_GRAPH_V1,
     ] {
         color.push_u8(release)?;
     }
@@ -513,6 +543,81 @@ fn occurrence_color(occurrence: Occurrence) -> Result<VertexColorV1, ProgramComp
         CompositionProfile::EncodedSrgb8SourceOverV1 => release_tag::ENCODED_SRGB8_SOURCE_OVER_V1,
     })?;
     write_context(&mut color, occurrence.context())?;
+    Ok(color)
+}
+
+fn field_input_color(input: FieldInputDeclarationV1) -> VertexColorV1 {
+    VertexColorV1::new(match input.kind() {
+        crate::field_effect::FieldInputKindV1::PremultipliedRgba8V1 => {
+            vertex_tag::FIELD_INPUT_PREMULTIPLIED_RGBA8
+        }
+        crate::field_effect::FieldInputKindV1::EncodedSrgb8AlphaV1 => {
+            vertex_tag::FIELD_INPUT_ENCODED_SRGB8_ALPHA
+        }
+        crate::field_effect::FieldInputKindV1::OpaqueSrgb8V1 => {
+            vertex_tag::FIELD_INPUT_OPAQUE_SRGB8
+        }
+    })
+}
+
+fn field_operator_color(
+    operator: FieldOperatorDeclarationV1,
+) -> Result<VertexColorV1, ProgramCompileError> {
+    use crate::field_effect::{
+        CarrierIntentV1, FieldExecutionProfileV1, FieldPrecisionV1, FieldQuantizationV1,
+        FieldWorkingSpaceV1, GaussianEdgeModeV1, GaussianKernelProfileV1,
+    };
+
+    let mut color = VertexColorV1::new(match operator.execution() {
+        FieldExecutionProfileV1::GaussianBlur { .. } => vertex_tag::FIELD_OPERATOR_GAUSSIAN_Q32,
+        FieldExecutionProfileV1::PremultipliedSourceOver { .. } => {
+            vertex_tag::FIELD_OPERATOR_SOURCE_OVER
+        }
+        FieldExecutionProfileV1::EncodedSrgb8ScreenOpaqueBackdrop { .. } => {
+            vertex_tag::FIELD_OPERATOR_SCREEN
+        }
+        FieldExecutionProfileV1::PorterDuffLighter { .. } => vertex_tag::FIELD_OPERATOR_LIGHTER,
+    });
+    color.push_u8(match operator.working_space() {
+        FieldWorkingSpaceV1::EncodedSrgb8PremultipliedV1 => {
+            release_tag::FIELD_WORKING_ENCODED_SRGB8_PREMULTIPLIED_V1
+        }
+        FieldWorkingSpaceV1::LinearSrgbQ31PremultipliedV1 => {
+            release_tag::FIELD_WORKING_LINEAR_SRGB_Q31_PREMULTIPLIED_V1
+        }
+    })?;
+    color.push_u8(match operator.precision() {
+        FieldPrecisionV1::FixedQ32V1 => release_tag::FIELD_PRECISION_FIXED_Q32_V1,
+        FieldPrecisionV1::Binary32V1 => release_tag::FIELD_PRECISION_BINARY32_V1,
+    })?;
+    color.push_u8(match operator.quantization() {
+        FieldQuantizationV1::RoundHalfUpSrgb8V1 => release_tag::FIELD_QUANTIZATION_HALF_UP_SRGB8_V1,
+        FieldQuantizationV1::RoundTiesToEvenSrgb8V1 => {
+            release_tag::FIELD_QUANTIZATION_TIES_EVEN_SRGB8_V1
+        }
+    })?;
+    color.push_u8(match operator.carrier_intent() {
+        CarrierIntentV1::Present => release_tag::FIELD_CARRIER_PRESENT_V1,
+        CarrierIntentV1::Contributes => release_tag::FIELD_CARRIER_CONTRIBUTES_V1,
+        CarrierIntentV1::SpatialVariation => release_tag::FIELD_CARRIER_SPATIAL_VARIATION_V1,
+    })?;
+    if let FieldExecutionProfileV1::GaussianBlur {
+        kernel,
+        css_radius_px,
+        edge_mode,
+        ..
+    } = operator.execution()
+    {
+        color.push_u8(match kernel {
+            GaussianKernelProfileV1::BinomialGaussianQ32V1 => {
+                release_tag::FIELD_GAUSSIAN_BINOMIAL_Q32_V1
+            }
+        })?;
+        color.push_u64(u64::from(css_radius_px))?;
+        color.push_u8(match edge_mode {
+            GaussianEdgeModeV1::ClampToEdgeV1 => release_tag::FIELD_GAUSSIAN_CLAMP_TO_EDGE_V1,
+        })?;
+    }
     Ok(color)
 }
 
@@ -780,6 +885,17 @@ fn presentation_target_vertex(
     Ok(vertex)
 }
 
+fn field_value_vertex(
+    inputs: &IdIndexV1<crate::field_effect::FieldInputPortIdV1>,
+    operators: &IdIndexV1<crate::field_effect::FieldOperatorInstanceIdV1>,
+    value: crate::field_effect::FieldValueRefV1,
+) -> Result<usize, ProgramCompileError> {
+    match value {
+        crate::field_effect::FieldValueRefV1::Input(input) => inputs.get(input),
+        crate::field_effect::FieldValueRefV1::Operator(operator) => operators.get(operator),
+    }
+}
+
 struct ConstraintGraphBindingContextV1<'a, Evaluation> {
     evaluator: &'a Evaluation,
     presentation_targets: &'a [(PointPresentationTargetV1, usize)],
@@ -931,6 +1047,8 @@ where
     let mut ports = IdIndexV1::new();
     let mut surfaces = IdIndexV1::new();
     let mut occurrences = IdIndexV1::new();
+    let mut field_inputs = IdIndexV1::new();
+    let mut field_operators = IdIndexV1::new();
     let mut presentation_roots = IdIndexV1::new();
     let mut presentation_targets = Vec::new();
     presentation_targets
@@ -988,6 +1106,15 @@ where
             graph.add_member(occurrence_color(*occurrence)?)?,
         )?;
     }
+    for input in program.field.inputs() {
+        field_inputs.insert(input.id(), graph.add_member(field_input_color(*input))?)?;
+    }
+    for operator in program.field.operators() {
+        field_operators.insert(
+            operator.id(),
+            graph.add_member(field_operator_color(*operator)?)?,
+        )?;
+    }
     for root in &program.presentation_roots {
         presentation_roots.insert(
             root.id(),
@@ -1014,6 +1141,8 @@ where
     ports.finish()?;
     surfaces.finish()?;
     occurrences.finish()?;
+    field_inputs.finish()?;
+    field_operators.finish()?;
     presentation_roots.finish()?;
 
     for target in &program.targets {
@@ -1062,6 +1191,67 @@ where
     }
     for port in &program.observation_group.surface_input_ports {
         graph.add_edge(group, ports.get(*port)?, EdgeRoleV1::ObservationGroupPort)?;
+    }
+    for input in program.field.inputs() {
+        graph.add_edge(
+            group,
+            field_inputs.get(input.id())?,
+            EdgeRoleV1::FieldInputObservationGroup,
+        )?;
+    }
+    for operator in program.field.operators() {
+        use crate::field_effect::FieldExecutionProfileV1;
+
+        let vertex = field_operators.get(operator.id())?;
+        match operator.execution() {
+            FieldExecutionProfileV1::GaussianBlur { source, .. } => graph.add_edge(
+                vertex,
+                field_value_vertex(&field_inputs, &field_operators, source)?,
+                EdgeRoleV1::FieldGaussianSource,
+            )?,
+            FieldExecutionProfileV1::PremultipliedSourceOver {
+                source,
+                destination,
+            } => {
+                graph.add_edge(
+                    vertex,
+                    field_value_vertex(&field_inputs, &field_operators, source)?,
+                    EdgeRoleV1::FieldSourceOverSource,
+                )?;
+                graph.add_edge(
+                    vertex,
+                    field_value_vertex(&field_inputs, &field_operators, destination)?,
+                    EdgeRoleV1::FieldSourceOverDestination,
+                )?;
+            }
+            FieldExecutionProfileV1::EncodedSrgb8ScreenOpaqueBackdrop { source, backdrop } => {
+                graph.add_edge(
+                    vertex,
+                    field_value_vertex(&field_inputs, &field_operators, source)?,
+                    EdgeRoleV1::FieldScreenSource,
+                )?;
+                graph.add_edge(
+                    vertex,
+                    field_value_vertex(&field_inputs, &field_operators, backdrop)?,
+                    EdgeRoleV1::FieldScreenBackdrop,
+                )?;
+            }
+            FieldExecutionProfileV1::PorterDuffLighter {
+                source,
+                destination,
+            } => {
+                graph.add_edge(
+                    vertex,
+                    field_value_vertex(&field_inputs, &field_operators, source)?,
+                    EdgeRoleV1::FieldLighterSource,
+                )?;
+                graph.add_edge(
+                    vertex,
+                    field_value_vertex(&field_inputs, &field_operators, destination)?,
+                    EdgeRoleV1::FieldLighterDestination,
+                )?;
+            }
+        }
     }
     for surface in &program.surfaces {
         match *surface {
@@ -1136,6 +1326,14 @@ where
     for output in &program.outputs {
         let vertex = graph.add_member(VertexColorV1::new(vertex_tag::OUTPUT))?;
         graph.add_edge(vertex, paints.get(output.paint())?, EdgeRoleV1::OutputPaint)?;
+    }
+    for output in &program.field_outputs {
+        let vertex = graph.add_member(VertexColorV1::new(vertex_tag::OUTPUT))?;
+        graph.add_edge(
+            vertex,
+            field_operators.get(output.operator())?,
+            EdgeRoleV1::FieldOutputOperator,
+        )?;
     }
 
     if let Some(selection) = &program.joint_selection {
@@ -1472,7 +1670,7 @@ fn serialize_leaf(
             .and_then(|value| value.checked_add(color.as_slice().len()))
             .ok_or(ProgramCompileError::ResourceExhausted)
     })?;
-    let capacity = DOMAIN_V8
+    let capacity = DOMAIN_V9
         .len()
         .checked_add(16)
         .and_then(|value| value.checked_add(color_bytes))
@@ -1482,7 +1680,7 @@ fn serialize_leaf(
     output
         .try_reserve_exact(capacity)
         .map_err(|_| ProgramCompileError::ResourceExhausted)?;
-    output.extend_from_slice(DOMAIN_V8);
+    output.extend_from_slice(DOMAIN_V9);
     push_u64_bytes(&mut output, usize_as_u64(graph.colors.len())?);
     push_u64_bytes(&mut output, usize_as_u64(graph.edge_count)?);
 
@@ -1816,9 +2014,9 @@ fn canonical_preimage(graph: &CanonicalGraphV1) -> Result<Vec<u8>, ProgramCompil
     canonical_search(graph).map(|(preimage, _)| preimage)
 }
 
-pub(super) fn compile_program_content_identity_v8<Evaluation>(
+pub(super) fn compile_program_content_identity_v9<Evaluation>(
     program: &Program<Evaluation>,
-) -> Result<ProgramContentIdentityV8, ProgramCompileError>
+) -> Result<ProgramContentIdentityV9, ProgramCompileError>
 where
     Evaluation: ProgramConstraintEvaluatorSetV1,
     ProgramConstraintInvocationOf<Evaluation>: Copy,
@@ -1826,7 +2024,7 @@ where
     let graph = build_graph(program)?;
     let preimage = canonical_preimage(&graph)?;
     let digest = crate::sha256::digest(&preimage);
-    Ok(ProgramContentIdentityV8(*digest.as_bytes()))
+    Ok(ProgramContentIdentityV9(*digest.as_bytes()))
 }
 
 #[cfg(test)]

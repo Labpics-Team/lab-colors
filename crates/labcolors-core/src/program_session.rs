@@ -57,6 +57,11 @@ use crate::family_artifact::{
     BoundFamilyArtifactBundleV2, FamilyArtifactBindErrorV2, FamilyArtifactBundleV2,
     FamilyArtifactContractErrorV2, FamilyExecutionBindingsV2,
 };
+use crate::field_effect::{
+    CompiledFieldProgramV1, FieldDeclarationsV1, FieldInputDeclarationV1,
+    FieldOperatorDeclarationV1, FieldOperatorInstanceIdV1, FieldProgramCompileErrorV1,
+    compile_field_program_v1,
+};
 use crate::joint::{
     AdmittedFiniteJointOrderV1, FiniteDomainOrdinalV1, FiniteJointOrderAdmissionErrorV1,
     FiniteJointOrderErrorV1, NonEmptyFiniteDomainCardinalitiesV1, admit_finite_joint_order_v1,
@@ -77,7 +82,7 @@ use crate::wcag22::Wcag22CriterionV1;
 
 #[path = "program_identity.rs"]
 mod identity;
-pub(crate) use identity::ProgramContentIdentityV8;
+pub(crate) use identity::ProgramContentIdentityV9;
 #[cfg(test)]
 pub(crate) use identity::edge_role_count_for_test as program_identity_edge_role_count_for_test;
 #[cfg(test)]
@@ -997,6 +1002,28 @@ pub struct OutputBinding {
     paint: PaintId,
 }
 
+/// One terminal field operator routed into the same opaque Program output
+/// namespace as point Paint outputs. A slot can have exactly one authority.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ProgramFieldOutputBindingV1 {
+    output: OutputSlotId,
+    operator: FieldOperatorInstanceIdV1,
+}
+
+impl ProgramFieldOutputBindingV1 {
+    pub(crate) const fn new(output: OutputSlotId, operator: FieldOperatorInstanceIdV1) -> Self {
+        Self { output, operator }
+    }
+
+    pub(crate) const fn output(self) -> OutputSlotId {
+        self.output
+    }
+
+    pub(crate) const fn operator(self) -> FieldOperatorInstanceIdV1 {
+        self.operator
+    }
+}
+
 impl OutputBinding {
     pub const fn new(output: OutputSlotId, paint: PaintId) -> Self {
         Self { output, paint }
@@ -1054,6 +1081,8 @@ where
     presentation_targets: Vec<PointPresentationTargetV1>,
     constraints: ConstraintSet<ProgramConstraintInvocationOf<Evaluation>>,
     outputs: Vec<OutputBinding>,
+    field: FieldDeclarationsV1,
+    field_outputs: Vec<ProgramFieldOutputBindingV1>,
     evaluator: Evaluation,
 }
 
@@ -1089,6 +1118,8 @@ where
             presentation_targets: Vec::new(),
             constraints,
             outputs,
+            field: FieldDeclarationsV1::new(),
+            field_outputs: Vec::new(),
             evaluator,
         }
     }
@@ -1135,6 +1166,16 @@ where
     ) -> Self {
         self.presentation_roots = roots;
         self.presentation_targets = targets;
+        self
+    }
+
+    pub(crate) fn with_field_declarations(
+        mut self,
+        field: FieldDeclarationsV1,
+        outputs: Vec<ProgramFieldOutputBindingV1>,
+    ) -> Self {
+        self.field = field;
+        self.field_outputs = outputs;
         self
     }
 
@@ -1235,6 +1276,30 @@ impl CoreProgramDraftV1 {
 
     pub(crate) fn push_point_presentation_target(&mut self, target: PointPresentationTargetV1) {
         self.program.presentation_targets.push(target);
+    }
+
+    #[expect(
+        dead_code,
+        reason = "V7 field capability staged infrastructure; consumed by the C7e field-effect lowering in the next slice"
+    )]
+    pub(crate) fn push_field_input(&mut self, input: FieldInputDeclarationV1) {
+        self.program.field.push_input(input);
+    }
+
+    #[expect(
+        dead_code,
+        reason = "V7 field capability staged infrastructure; consumed by the C7e field-effect lowering in the next slice"
+    )]
+    pub(crate) fn push_field_operator(&mut self, operator: FieldOperatorDeclarationV1) {
+        self.program.field.push_operator(operator);
+    }
+
+    #[expect(
+        dead_code,
+        reason = "V7 field capability staged infrastructure; consumed by the C7e field-effect lowering in the next slice"
+    )]
+    pub(crate) fn push_field_output(&mut self, output: ProgramFieldOutputBindingV1) {
+        self.program.field_outputs.push(output);
     }
 
     pub(crate) fn push_hard_constraint(
@@ -1603,6 +1668,7 @@ pub enum ProgramCompileError {
         output: OutputSlotId,
         paint: PaintId,
     },
+    Field(FieldProgramCompileErrorV1),
     ResourceExhausted,
     InternalInvariant,
 }
@@ -2053,7 +2119,7 @@ where
     Evaluation: ProgramConstraintEvaluatorSetV1,
     ProgramConstraintInvocationOf<Evaluation>: Copy,
 {
-    content_identity: ProgramContentIdentityV8,
+    content_identity: ProgramContentIdentityV9,
     evaluator: Evaluation,
     families: Box<[FamilyDeclarationV2]>,
     required_family_releases: Box<[crate::family::SemanticFamilyReleaseIdV2]>,
@@ -2065,6 +2131,16 @@ where
     constraint_phases: CompiledConstraintPhasesV1,
     point_presentations: CompiledPointPresentationsV1,
     outputs: Box<[CompiledOutputBinding]>,
+    #[expect(
+        dead_code,
+        reason = "V7 field capability staged infrastructure; consumed by the C7e field-effect lowering in the next slice"
+    )]
+    field: CompiledFieldProgramV1,
+    #[expect(
+        dead_code,
+        reason = "V7 field capability staged infrastructure; consumed by the C7e field-effect lowering in the next slice"
+    )]
+    field_outputs: Box<[ProgramFieldOutputBindingV1]>,
     target_selection: CompiledTargetSelectionV1,
 }
 
@@ -2102,7 +2178,7 @@ where
     /// Opaque ID и порядок неупорядоченных объявлений исключены; явный joint
     /// order входит в адрес. Адрес не подтверждает поколение владельца и не
     /// заменяет revision-bound evidence.
-    pub fn content_identity(&self) -> ProgramContentIdentityV8 {
+    pub fn content_identity(&self) -> ProgramContentIdentityV9 {
         self.owner_generation.content_identity
     }
 
@@ -2895,7 +2971,7 @@ pub(crate) enum ProgramPointCausalConsideredStateV1 {
 /// одного моделируемого terminal root. Оно ничего не утверждает о пикселе
 /// браузера, восприятии или качестве цвета.
 pub(crate) struct ProgramPointCausalEvidenceV1<'report, State> {
-    content_identity: ProgramContentIdentityV8,
+    content_identity: ProgramContentIdentityV9,
     observation: &'report RevisionBoundObservationV1,
     record: &'report ProgramPointCausalRecordV1,
     steps: &'report [PointOccurrenceAbsenceStepV1],
@@ -2916,7 +2992,7 @@ where
             .unwrap_or_else(|| unreachable!("тип replay span запрещает пустой пересчёт"))
     }
 
-    pub(crate) const fn content_identity(&self) -> ProgramContentIdentityV8 {
+    pub(crate) const fn content_identity(&self) -> ProgramContentIdentityV9 {
         self.content_identity
     }
 
@@ -2974,7 +3050,7 @@ pub struct ProgramReportV1<Evaluation>
 where
     Evaluation: ProgramConstraintEvaluatorSetV1,
 {
-    content_identity: ProgramContentIdentityV8,
+    content_identity: ProgramContentIdentityV9,
     selection_release_identity: Option<SelectionReleaseIdentityV1>,
     observation: RevisionBoundObservationV1,
     arena: ProgramEvaluationArenaLeaseV1<Evaluation>,
@@ -2986,7 +3062,7 @@ where
 {
     /// Адрес содержимого Program, по которому построен report; это не
     /// идентификатор поколения и не runtime-authority.
-    pub const fn content_identity(&self) -> ProgramContentIdentityV8 {
+    pub const fn content_identity(&self) -> ProgramContentIdentityV9 {
         self.content_identity
     }
 
@@ -5105,7 +5181,7 @@ where
     if program.constraints.is_empty() {
         return Err(ProgramCompileError::EmptyConstraintSet);
     }
-    if program.outputs.is_empty() {
+    if program.outputs.is_empty() && program.field_outputs.is_empty() {
         return Err(ProgramCompileError::EmptyOutputSet);
     }
     check_render_node_count(program.surfaces.len(), program.occurrences.len())?;
@@ -5173,7 +5249,14 @@ where
     let occurrence_contexts =
         compact_constraint_contexts(&all_occurrence_contexts, &mut constraints)?;
     let outputs = compile_outputs(&graph, &mut program.outputs)?;
-    let content_identity = identity::compile_program_content_identity_v8(&program)?;
+    let field_outputs = compile_field_outputs(&program.outputs, &mut program.field_outputs)?;
+    let terminal_operators = field_outputs
+        .iter()
+        .map(|output| output.operator())
+        .collect::<Vec<_>>();
+    let field = compile_field_program_v1(&mut program.field, &terminal_operators)
+        .map_err(ProgramCompileError::Field)?;
+    let content_identity = identity::compile_program_content_identity_v9(&program)?;
     let families = program.families.into_boxed_slice();
     Ok(ProgramEpochV1 {
         content_identity,
@@ -5191,6 +5274,8 @@ where
         constraint_phases,
         point_presentations,
         outputs,
+        field,
+        field_outputs,
         target_selection,
     })
 }
@@ -6586,6 +6671,31 @@ fn compile_outputs(
         });
     }
     Ok(compiled.into_boxed_slice())
+}
+
+fn compile_field_outputs(
+    point_outputs: &[OutputBinding],
+    authored: &mut [ProgramFieldOutputBindingV1],
+) -> Result<Box<[ProgramFieldOutputBindingV1]>, ProgramCompileError> {
+    authored.sort_unstable_by_key(|output| output.output());
+    if let Some(duplicate) = authored
+        .windows(2)
+        .find(|pair| pair[0].output() == pair[1].output())
+        .map(|pair| pair[0].output())
+    {
+        return Err(ProgramCompileError::DuplicateOutputSlot { output: duplicate });
+    }
+    for output in authored.iter().copied() {
+        if point_outputs
+            .binary_search_by_key(&output.output(), |point| point.output())
+            .is_ok()
+        {
+            return Err(ProgramCompileError::DuplicateOutputSlot {
+                output: output.output(),
+            });
+        }
+    }
+    Ok(authored.to_vec().into_boxed_slice())
 }
 
 pub(crate) fn check_render_node_count(
