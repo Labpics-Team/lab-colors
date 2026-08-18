@@ -307,6 +307,93 @@ fn glow_screen_physics_lives_only_in_field_effect() {
     );
 }
 
+/// ch12 t01: закрытый machine-checked lowering inventory recipe-дистпетчера.
+///
+/// Инвариант pre-cutover гейта: множество исполняемых recipe-армов в
+/// `resolve_spec_in` закрыто и перечислено ЗДЕСЬ. Каждый вариант RoleSpec
+/// принадлежит ровно одному классу:
+/// * compiled-invocation intercept (raw-арм — typed guard): Material (C7d),
+///   AlphaAnalog (#518), Glow (C7e);
+/// * surviving recipe-executed арм (осознанно доживает до C7c): Zero, Anchor,
+///   DecorativeDj, Decorative, Ladder.
+///
+/// Новый исполняемый арм или возврат guard-арма к исполнению меняет одно из
+/// пересчитываемых ниже множеств и валит гейт: bypass инвентаря невозможен
+/// без явной правки этого теста в том же ревью.
+#[test]
+fn recipe_dispatch_lowering_inventory_is_closed() {
+    let semantic = compact_production_syntax(SEMANTIC_SOURCE);
+
+    // Guard-армы: каждый lowered вариант обязан хранить typed-bypass литерал.
+    let semantic_code = normalized_production_code(SEMANTIC_SOURCE);
+    for guarded in [
+        "material recipe bypassed its compiled invocation",
+        "alpha-analog recipe bypassed its compiled invocation",
+        "glow recipe bypassed its compiled invocation",
+    ] {
+        assert!(
+            semantic_code.contains(guarded),
+            "lowered recipe arm lost its typed guard: `{guarded}`",
+        );
+    }
+
+    // Compiled invocations: ровно три типа, и все три участвуют в dispatch.
+    for invocation in [
+        "compiledmaterialinvocationv1",
+        "compiledpointrepresentationinvocationv1",
+        "compiledglowinvocationv1",
+    ] {
+        assert!(
+            semantic.to_ascii_lowercase().contains(invocation),
+            "compiled invocation type disappeared: `{invocation}`",
+        );
+    }
+
+    // Закрытое множество вариантов RoleSpec: появление нового варианта обязано
+    // пройти через этот инвентарь (иначе он молча получит recipe-исполнение).
+    // Первая строка `}` в нулевой колонке после старта закрывает сам enum —
+    // до любого impl-блока и соседних типов.
+    let spec_scope = source_scope(SEMANTIC_SOURCE, "pub enum RoleSpec {", "\n}\n");
+    let variants: Vec<&str> = [
+        "Zero",
+        "Anchor(",
+        "DecorativeDj {",
+        "Decorative {",
+        "Ladder {",
+        "Glow {",
+        "AlphaAnalog {",
+        "Material {",
+    ]
+    .into_iter()
+    .filter(|needle| !spec_scope.contains(needle))
+    .collect();
+    assert!(
+        variants.is_empty(),
+        "RoleSpec inventory drifted: missing declarations {variants:?}",
+    );
+    // Количество вариантов enum фиксировано: новый вариант меняет счётчик и
+    // требует явной классификации в этом гейте. Вариант распознаётся как строка
+    // объявления верхнего уровня: 4 пробела + заглавная буква идентификатора.
+    let declared = spec_scope
+        .lines()
+        .filter(|line| {
+            let Some(stripped) = line.strip_prefix("    ") else {
+                return false;
+            };
+            // Вложенные поля со своим отступом (8+) и doc-строки отсеяны.
+            !stripped.starts_with(' ')
+                && stripped
+                    .chars()
+                    .next()
+                    .is_some_and(|first| first.is_ascii_uppercase())
+        })
+        .count();
+    assert_eq!(
+        declared, 8,
+        "RoleSpec variant census changed — classify the new variant in this inventory gate",
+    );
+}
+
 const GENERIC_SOURCES: [(&str, &str); 14] = [
     ("appearance.rs", APPEARANCE_SOURCE),
     ("composition.rs", COMPOSITION_SOURCE),
