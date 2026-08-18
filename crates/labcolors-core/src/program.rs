@@ -31,6 +31,7 @@
 
 /// Транзакционный point-output attachment и его линейный sink-контракт.
 pub(crate) mod attachment;
+pub(crate) mod wire;
 
 use core::{fmt, iter::FusedIterator};
 
@@ -239,6 +240,12 @@ pub(crate) struct FamilySemanticReleaseV2(CoreSemanticFamilyReleaseIdV2);
 impl FamilySemanticReleaseV2 {
     pub(crate) const fn from_core(value: CoreSemanticFamilyReleaseIdV2) -> Self {
         Self(value)
+    }
+
+    /// Принимает 32-байтную identity с wire: байты — content address релиза,
+    /// подлинность обеспечивает вызывающий (см. family-сентинел в lib.rs).
+    pub(crate) const fn from_wire_bytes(bytes: [u8; 32]) -> Self {
+        Self(CoreSemanticFamilyReleaseIdV2::from_digest(bytes))
     }
 
     pub(crate) const fn into_core(self) -> CoreSemanticFamilyReleaseIdV2 {
