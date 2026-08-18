@@ -2185,103 +2185,13 @@ fn resolve_spec_in(
             return resolve_rgba_direct(tint.for_vc(vc), alpha, bg, vc);
         }
         RoleSpec::Glow { tint, step, mode } => {
-            // Свечение: halo = якорь источника по теме; core — пересвет;
-            // интенсивность решается под контрактную ступень на фоне резолва.
-            // Typed execution mode исполняется ПРЯМО из compiled spec:
-            // никакого plan lookup или string policy selection в hot path.
-            let halo_hex = crate::spaces::srgb::hex_from_srgb_encoded(tint.for_vc(vc));
-            let bg_hex =
-                crate::spaces::srgb::hex_from_srgb_encoded(quantise_encoded(bg.encoded_display()));
-            // Общая сборка полного Glow-результата из решённого состояния —
-            // одна для обоих атомарных законных исходов.
-            let assemble = |g: &crate::glow::GlowSolve,
-                            outcome: crate::glow::GlowDecisionOutcomeV1|
-             -> PendingResolution {
-                let (core_hex, halo_hex) = match crate::glow::glow_layers_from_source(&halo_hex, vc)
-                {
-                    Ok(pair) => pair,
-                    Err(e) => {
-                        return Err(SolveFailure::InternalInvariant(format!(
-                            "generated Glow layer recipe was rejected: {e}"
-                        )));
-                    }
-                };
-                let core_measurement = match crate::glow::measure_screen_layer_at_alpha(
-                    &core_hex,
-                    &bg_hex,
-                    g.alpha(),
-                    vc,
-                ) {
-                    Ok(measurement) => measurement,
-                    Err(e) => {
-                        return Err(SolveFailure::InternalInvariant(format!(
-                            "generated Glow core measurement was rejected: {e}"
-                        )));
-                    }
-                };
-                Ok(Resolved::Glow(GlowResolved {
-                    core_hex,
-                    halo_hex,
-                    alpha: g.alpha(),
-                    alpha_css: g.alpha_css().to_string(),
-                    target_dj: g.target_dj(),
-                    halo_composite_hex: g.composite_hex().to_string(),
-                    halo_achieved_dj: g.achieved_dj(),
-                    core_composite_hex: core_measurement.composite_hex,
-                    core_achieved_dj: core_measurement.achieved_dj,
-                    target_status: g.status(),
-                    layer_recipe_profile:
-                        crate::glow::GlowLayerRecipeProfileV1::Cam16JPrimeOklabCuspV1,
-                    appearance_diagnostic_profile:
-                        crate::glow::GlowDiagnosticProfileV1::Cam16UcsJPrimeLi2017V1,
-                    selection_diagnostic_profile: g.selection_diagnostic_profile(),
-                    decision_outcome: outcome,
-                    halo_composite_certificate: g.composite_certificate().clone(),
-                    core_composite_certificate: core_measurement.certificate,
-                }))
-            };
-            return match crate::glow::solve_screen_alpha_for_dj(
-                &halo_hex,
-                &bg_hex,
-                step.target_dj(),
-                mode,
-                vc,
-            ) {
-                Ok(crate::numerics::NumericalDecisionV1::Indeterminate { site_id, evidence }) => {
-                    Ok(Resolved::GlowIndeterminate(GlowIndeterminateResolved {
-                        source_hex: halo_hex,
-                        target_dj: step.target_dj(),
-                        decision_profile: crate::glow::GlowDecisionProfileV1::from_execution_mode(
-                            mode,
-                        ),
-                        site_id,
-                        evidence,
-                    }))
-                }
-                Ok(crate::numerics::NumericalDecisionV1::Determinate {
-                    value: g,
-                    evidence,
-                    ..
-                }) => assemble(
-                    &g,
-                    crate::glow::GlowDecisionOutcomeV1::StableExactNoop { evidence },
-                ),
-                Ok(crate::numerics::NumericalDecisionV1::Compatibility {
-                    value: g,
-                    release_id,
-                    provenance,
-                    ..
-                }) => assemble(
-                    &g,
-                    crate::glow::GlowDecisionOutcomeV1::Compatibility {
-                        release_id,
-                        provenance,
-                    },
-                ),
-                Err(e) => Err(SolveFailure::InternalInvariant(format!(
-                    "generated Glow solve request was rejected: {e}"
-                ))),
-            };
+            let _ = (tint, step, mode);
+            // Named runtime обязан перехватить этот ordinal скомпилированной
+            // invocation до recipe-dispatch (C7e, как Material в C7d).
+            // Исполнение raw variant здесь создало бы второй источник физики.
+            return Err(SolveFailure::InternalInvariant(
+                "glow recipe bypassed its compiled invocation".into(),
+            ));
         }
         RoleSpec::AlphaAnalog { of, alpha } => {
             let _ = (of, alpha);
@@ -3007,6 +2917,7 @@ pub struct NamedRoleTable {
     output_bindings: OutputBindingSet,
     point_representation_invocations: Box<[CompiledPointRepresentationInvocationV1]>,
     material_invocations: Box<[CompiledMaterialInvocationV1]>,
+    glow_invocations: Box<[CompiledGlowInvocationV1]>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -3029,6 +2940,20 @@ struct CompiledMaterialInvocationV1 {
     floor: Floor,
 }
 
+/// Скомпилированная invocation Glow-роли (C7e): tint/step/mode, проверенные при
+/// создании таблицы. Resolver исполняет Glow ТОЛЬКО через этот скомпилированный
+/// путь — raw `RoleSpec::Glow`-арм является typed guard (`InternalInvariant`),
+/// как у Material (C7d) и AlphaAnalog (#518). Screen-физика живёт в
+/// [`crate::field_effect`] (единственный SSOT закона), численный отбор —
+/// в reference-слое [`crate::glow`] поверх него.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct CompiledGlowInvocationV1 {
+    declaration_ordinal: usize,
+    tint: LadderTint,
+    step: crate::glow::GlowStep,
+    mode: crate::numerical_plan::NumericalExecutionModeV1,
+}
+
 #[cfg(test)]
 thread_local! {
     static POINT_REPRESENTATION_PLAN_COMPILATIONS: std::cell::Cell<usize> = const {
@@ -3049,6 +2974,106 @@ fn point_representation_plan_compilation_count() -> usize {
 impl CompiledPointRepresentationInvocationV1 {
     fn resolve(self, bg: &BgInput, vc: &ViewingConditions) -> PendingResolution {
         resolve_rgba_inverted_admitted(self.target.for_vc(vc), self.opacity_domain, bg, vc)
+    }
+}
+
+impl CompiledGlowInvocationV1 {
+    /// Резолв скомпилированной Glow-роли — ЕДИНСТВЕННЫЙ исполняемый путь (C7e,
+    /// как Material в C7d). Raw `RoleSpec::Glow`-арм возвращает
+    /// [`SolveFailure::InternalInvariant`], поэтому второй источник физики
+    /// отсутствует. Screen-закон живёт в [`crate::field_effect`]; численный
+    /// отбор интенсивности — reference-слой [`crate::glow`] поверх него.
+    fn resolve(self, bg: &BgInput, vc: &ViewingConditions) -> PendingResolution {
+        // Свечение: halo = якорь источника по теме; core — пересвет;
+        // интенсивность решается под контрактную ступень на фоне резолва.
+        // Typed execution mode исполняется ПРЯМО из compiled invocation:
+        // никакого plan lookup или string policy selection в hot path.
+        let halo_hex = crate::spaces::srgb::hex_from_srgb_encoded(self.tint.for_vc(vc));
+        let bg_hex =
+            crate::spaces::srgb::hex_from_srgb_encoded(quantise_encoded(bg.encoded_display()));
+        // Общая сборка полного Glow-результата из решённого состояния —
+        // одна для обоих атомарных законных исходов.
+        let assemble = |g: &crate::glow::GlowSolve,
+                        outcome: crate::glow::GlowDecisionOutcomeV1|
+         -> PendingResolution {
+            let (core_hex, halo_hex) = match crate::glow::glow_layers_from_source(&halo_hex, vc) {
+                Ok(pair) => pair,
+                Err(e) => {
+                    return Err(SolveFailure::InternalInvariant(format!(
+                        "generated Glow layer recipe was rejected: {e}"
+                    )));
+                }
+            };
+            let core_measurement =
+                match crate::glow::measure_screen_layer_at_alpha(&core_hex, &bg_hex, g.alpha(), vc)
+                {
+                    Ok(measurement) => measurement,
+                    Err(e) => {
+                        return Err(SolveFailure::InternalInvariant(format!(
+                            "generated Glow core measurement was rejected: {e}"
+                        )));
+                    }
+                };
+            Ok(Resolved::Glow(GlowResolved {
+                core_hex,
+                halo_hex,
+                alpha: g.alpha(),
+                alpha_css: g.alpha_css().to_string(),
+                target_dj: g.target_dj(),
+                halo_composite_hex: g.composite_hex().to_string(),
+                halo_achieved_dj: g.achieved_dj(),
+                core_composite_hex: core_measurement.composite_hex,
+                core_achieved_dj: core_measurement.achieved_dj,
+                target_status: g.status(),
+                layer_recipe_profile: crate::glow::GlowLayerRecipeProfileV1::Cam16JPrimeOklabCuspV1,
+                appearance_diagnostic_profile:
+                    crate::glow::GlowDiagnosticProfileV1::Cam16UcsJPrimeLi2017V1,
+                selection_diagnostic_profile: g.selection_diagnostic_profile(),
+                decision_outcome: outcome,
+                halo_composite_certificate: g.composite_certificate().clone(),
+                core_composite_certificate: core_measurement.certificate,
+            }))
+        };
+        match crate::glow::solve_screen_alpha_for_dj(
+            &halo_hex,
+            &bg_hex,
+            self.step.target_dj(),
+            self.mode,
+            vc,
+        ) {
+            Ok(crate::numerics::NumericalDecisionV1::Indeterminate { site_id, evidence }) => {
+                Ok(Resolved::GlowIndeterminate(GlowIndeterminateResolved {
+                    source_hex: halo_hex,
+                    target_dj: self.step.target_dj(),
+                    decision_profile: crate::glow::GlowDecisionProfileV1::from_execution_mode(
+                        self.mode,
+                    ),
+                    site_id,
+                    evidence,
+                }))
+            }
+            Ok(crate::numerics::NumericalDecisionV1::Determinate {
+                value: g, evidence, ..
+            }) => assemble(
+                &g,
+                crate::glow::GlowDecisionOutcomeV1::StableExactNoop { evidence },
+            ),
+            Ok(crate::numerics::NumericalDecisionV1::Compatibility {
+                value: g,
+                release_id,
+                provenance,
+                ..
+            }) => assemble(
+                &g,
+                crate::glow::GlowDecisionOutcomeV1::Compatibility {
+                    release_id,
+                    provenance,
+                },
+            ),
+            Err(e) => Err(SolveFailure::InternalInvariant(format!(
+                "generated Glow solve request was rejected: {e}"
+            ))),
+        }
     }
 }
 
@@ -3361,6 +3386,7 @@ impl NamedRoleTable {
                     entries[error.declaration_ordinal].0
                 ))
             })?;
+        let glow_invocations = Self::compile_glow_invocations(&entries);
         let output_bindings = Self::compile_output_bindings(&entries, &aliases)
             .map_err(|error| SolveFailure::InvalidInput(error.to_string()))?;
         Ok(Self::from_compiled_parts(
@@ -3370,6 +3396,7 @@ impl NamedRoleTable {
             output_bindings,
             point_representation_invocations,
             material_invocations,
+            glow_invocations,
         ))
     }
 
@@ -3388,6 +3415,7 @@ impl NamedRoleTable {
                 .map_err(NamedRoleTableCompileError::AlphaAnalog)?;
         let material_invocations = Self::compile_material_invocations(&entries)
             .map_err(NamedRoleTableCompileError::Material)?;
+        let glow_invocations = Self::compile_glow_invocations(&entries);
         Ok(Self::from_compiled_parts(
             entries,
             aliases,
@@ -3395,6 +3423,7 @@ impl NamedRoleTable {
             output_bindings,
             point_representation_invocations,
             material_invocations,
+            glow_invocations,
         ))
     }
 
@@ -3419,6 +3448,7 @@ impl NamedRoleTable {
         output_bindings: OutputBindingSet,
         point_representation_invocations: Box<[CompiledPointRepresentationInvocationV1]>,
         material_invocations: Box<[CompiledMaterialInvocationV1]>,
+        glow_invocations: Box<[CompiledGlowInvocationV1]>,
     ) -> Self {
         Self {
             entries,
@@ -3427,7 +3457,40 @@ impl NamedRoleTable {
             output_bindings,
             point_representation_invocations,
             material_invocations,
+            glow_invocations,
         }
+    }
+
+    /// Скомпилировать каждую Glow-роль в приватный compiled invocation (C7e).
+    ///
+    /// Исполнение Glow идёт ТОЛЬКО через этот slice (см. [`resolve_named_set`]);
+    /// raw `RoleSpec::Glow`-арм возвращает [`SolveFailure::InternalInvariant`].
+    /// Все поля уже typed и проверены на конфиг-границе, поэтому компиляция не
+    /// имеет отказного домена, а порядок ordinals возрастает по построению.
+    fn compile_glow_invocations(entries: &[(String, RoleSpec)]) -> Box<[CompiledGlowInvocationV1]> {
+        let mut invocations = Vec::new();
+        for (declaration_ordinal, (_, spec)) in entries.iter().enumerate() {
+            let RoleSpec::Glow { tint, step, mode } = *spec else {
+                continue;
+            };
+            invocations.push(CompiledGlowInvocationV1 {
+                declaration_ordinal,
+                tint,
+                step,
+                mode,
+            });
+        }
+        debug_assert!(
+            invocations
+                .windows(2)
+                .all(|pair| pair[0].declaration_ordinal < pair[1].declaration_ordinal)
+        );
+        debug_assert!(
+            invocations
+                .iter()
+                .all(|invocation| invocation.declaration_ordinal < entries.len())
+        );
+        invocations.into_boxed_slice()
     }
 
     /// Скомпилировать каждую Material-роль в приватный compiled invocation.
@@ -3597,6 +3660,7 @@ pub fn resolve_named_set(
         .copied()
         .peekable();
     let mut material_invocations = table.material_invocations.iter().copied().peekable();
+    let mut glow_invocations = table.glow_invocations.iter().copied().peekable();
     for (declaration_ordinal, (name, spec)) in table.entries.iter().enumerate() {
         // Material intercept происходит ДО recipe-dispatch: скомпилированная
         // invocation исполняется напрямую, raw `RoleSpec::Material`-арм для
@@ -3627,13 +3691,29 @@ pub fn resolve_named_set(
                     point_invocations.next();
                     invocation.resolve(bg, vc)
                 }
-                _ => resolve_spec_in(bg, spec, table.chroma, vc, &ctx),
+                _ => match glow_invocations.peek().copied() {
+                    Some(invocation) if invocation.declaration_ordinal < declaration_ordinal => {
+                        return Err(ResolveSetError {
+                            state: ResolveSetErrorState::Internal(SolveFailure::InternalInvariant(
+                                "compiled glow invocation order drifted behind declarations".into(),
+                            )),
+                        });
+                    }
+                    Some(invocation) if invocation.declaration_ordinal == declaration_ordinal => {
+                        glow_invocations.next();
+                        invocation.resolve(bg, vc)
+                    }
+                    _ => resolve_spec_in(bg, spec, table.chroma, vc, &ctx),
+                },
             },
         };
         let resolved = admit_resolution(pending)?;
         set.push((name.clone(), resolved));
     }
-    if point_invocations.next().is_some() || material_invocations.next().is_some() {
+    if point_invocations.next().is_some()
+        || material_invocations.next().is_some()
+        || glow_invocations.next().is_some()
+    {
         return Err(ResolveSetError {
             state: ResolveSetErrorState::Internal(SolveFailure::InternalInvariant(
                 "compiled invocation points outside declarations".into(),
@@ -4445,6 +4525,54 @@ mod tests {
             "derived execution state is outside public equality"
         );
         assert_eq!(format!("{missing:?}"), format!("{table:?}"));
+        let error = resolve_named_set(
+            &BgInput::solid("#FFFFFF").unwrap(),
+            &missing,
+            &ViewingConditions::srgb(),
+        )
+        .expect_err("missing compiled invocation must not fall back to recipe execution");
+        assert_eq!(error.kind(), ResolveSetErrorKind::Internal);
+        assert!(matches!(error.reason(), SolveFailure::InternalInvariant(_)));
+    }
+
+    #[test]
+    fn named_glow_uses_only_its_compiled_invocation_and_guards_plan_drift() {
+        let tint = crate::spaces::srgb::srgb_encoded_from_hex("#8AB4F8").unwrap();
+        let table = NamedRoleTable::new(
+            vec![
+                ("plain".into(), RoleSpec::Zero),
+                (
+                    "glow".into(),
+                    RoleSpec::Glow {
+                        tint: LadderTint::new([tint; 4]).unwrap(),
+                        step: crate::glow::GlowStep::Base,
+                        mode: crate::numerical_plan::NumericalExecutionModeV1::StableOnly,
+                    },
+                ),
+            ],
+            Vec::new(),
+            RoleChroma::Neutral,
+        )
+        .unwrap();
+        assert_eq!(table.glow_invocations.len(), 1);
+        assert_eq!(table.glow_invocations[0].declaration_ordinal, 1);
+
+        let set = resolve_named_set(
+            &BgInput::solid("#FFFFFF").unwrap(),
+            &table,
+            &ViewingConditions::srgb(),
+        )
+        .expect("compiled invocation must intercept the raw recipe arm");
+        assert!(
+            matches!(
+                &set[1].1,
+                Resolved::Glow(_) | Resolved::GlowIndeterminate(_)
+            ),
+            "compiled Glow invocation must resolve to a Glow outcome"
+        );
+
+        let mut missing = table.clone();
+        missing.glow_invocations = Box::default();
         let error = resolve_named_set(
             &BgInput::solid("#FFFFFF").unwrap(),
             &missing,

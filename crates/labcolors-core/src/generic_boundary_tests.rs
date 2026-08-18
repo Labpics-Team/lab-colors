@@ -254,6 +254,34 @@ fn material_physics_lives_only_in_the_generic_corridor_module() {
     );
 }
 
+/// C7e: recipe-слой больше не исполняет Glow-физику. Dispatch идёт через
+/// compiled invocation по ordinal (как Material в C7d и AlphaAnalog в #518);
+/// raw `RoleSpec::Glow`-арм — typed guard. Возврат исполняемого арма создал бы
+/// второй источник физики, который hard cut закрыл.
+#[test]
+fn glow_execution_lives_only_in_the_compiled_invocation() {
+    let semantic = compact_production_syntax(SEMANTIC_SOURCE).to_ascii_lowercase();
+    assert!(
+        semantic.contains("compiledglowinvocationv1"),
+        "semantic must own the compiled Glow invocation type",
+    );
+    // Единственный вызов численного отбора — внутри compiled invocation.
+    // Смэтч-арм по count: solve_screen_alpha_for_dj должен встречаться в
+    // production-коде semantic ровно один раз (в CompiledGlowInvocationV1::resolve).
+    let calls = semantic.matches("solve_screen_alpha_for_dj(").count();
+    assert_eq!(
+        calls, 1,
+        "glow numerical selection must have exactly one semantic call site (compiled invocation), got {calls}",
+    );
+    // Guard-сообщение raw-арма — внутри строкового литерала, проверяется по
+    // production-code (литералы не маскируются), как у Material.
+    let semantic_code = normalized_production_code(SEMANTIC_SOURCE);
+    assert!(
+        semantic_code.contains("glow recipe bypassed its compiled invocation"),
+        "raw RoleSpec::Glow arm must be a typed InternalInvariant guard",
+    );
+}
+
 /// C7e: screen-физика encoded-sRGB8 (закон `bg + α·tint·(255−bg)/255`) живёт
 /// ТОЛЬКО в field_effect. Glow-слой обязан делегировать канал туда — вторая
 /// локальная реализация формулы была вторым SSOT физики, который hard cut
