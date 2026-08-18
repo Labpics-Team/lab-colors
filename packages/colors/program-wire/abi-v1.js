@@ -82,6 +82,40 @@ function byteValue(value, what) {
   return value;
 }
 
+function f64Value(value, what) {
+  if (typeof value !== "number" || Number.isNaN(value)) {
+    invalid(`${what} must be a non-NaN number, got ${value}`);
+  }
+  return value;
+}
+
+function memberValue(value, allowed, what) {
+  if (!allowed.includes(value)) {
+    invalid(`${what} must be one of ${allowed.join(", ")}, got ${value}`);
+  }
+  return value;
+}
+
+const SURROUND_VALUES_V1 = Object.freeze([
+  SURROUND_AVERAGE_V1,
+  SURROUND_DIM_V1,
+  SURROUND_DARK_V1,
+]);
+
+const WCAG22_CRITERIA_V1 = Object.freeze([
+  WCAG22_SC143_TEXT_DEFAULT_V1,
+  WCAG22_SC143_TEXT_LARGE_SCALE_V1,
+  WCAG22_SC1411_UI_COMPONENT_OR_STATE_V1,
+  WCAG22_SC1411_GRAPHICAL_OBJECT_V1,
+]);
+
+function candidateList(candidates, what) {
+  if (!Array.isArray(candidates) || candidates.length === 0) {
+    invalid(`${what} must be a non-empty array`);
+  }
+  return candidates;
+}
+
 function rgbBytes(rgb, what) {
   if (!Array.isArray(rgb) || rgb.length !== 3) {
     invalid(`${what} must be an [r, g, b] triple`);
@@ -167,16 +201,21 @@ export class ProgramWireBuilderV1 {
   }
 
   finiteTarget(id, candidates) {
+    const checkedId = u32Value(id, "target id");
+    const checked = candidateList(candidates, "finite target candidates").map(
+      (candidate, index) => ({
+        id: u32Value(candidate.id, "candidate[" + index + "] id"),
+        rgb: rgbBytes(candidate.rgb, "candidate[" + index + "] rgb"),
+        opacity: f64Value(candidate.opacity, "candidate[" + index + "] opacity"),
+      }),
+    );
     const sink = this.entry("targets");
-    sink.u32(u32Value(id, "target id"));
+    sink.u32(checkedId);
     sink.u8(2);
-    if (!Array.isArray(candidates) || candidates.length === 0) {
-      invalid("finite target requires candidates");
-    }
-    sink.u32(candidates.length);
-    for (const candidate of candidates) {
-      sink.u32(u32Value(candidate.id, "candidate id"));
-      sink.rgb(rgbBytes(candidate.rgb, "candidate rgb"));
+    sink.u32(checked.length);
+    for (const candidate of checked) {
+      sink.u32(candidate.id);
+      sink.rgb(candidate.rgb);
       sink.f64Bits(candidate.opacity);
     }
     return this;
@@ -200,9 +239,11 @@ export class ProgramWireBuilderV1 {
   }
 
   opacityInput(id, value) {
+    const checkedId = u32Value(id, "opacity input id");
+    const checkedValue = f64Value(value, "opacity input value");
     const sink = this.entry("opacityInputs");
-    sink.u32(u32Value(id, "opacity input id"));
-    sink.f64Bits(value);
+    sink.u32(checkedId);
+    sink.f64Bits(checkedValue);
     return this;
   }
 
@@ -240,13 +281,19 @@ export class ProgramWireBuilderV1 {
   }
 
   sourceOverOccurrence(id, subject, against, adaptingLuminance, backgroundRatio, surround) {
+    const checkedId = u32Value(id, "occurrence id");
+    const checkedSubject = u32Value(subject, "occurrence subject");
+    const checkedAgainst = u32Value(against, "occurrence surface");
+    const checkedLuminance = f64Value(adaptingLuminance, "occurrence adapting luminance");
+    const checkedRatio = f64Value(backgroundRatio, "occurrence background ratio");
+    const checkedSurround = memberValue(surround, SURROUND_VALUES_V1, "occurrence surround");
     const sink = this.entry("occurrences");
-    sink.u32(u32Value(id, "occurrence id"));
-    sink.u32(u32Value(subject, "occurrence subject"));
-    sink.u32(u32Value(against, "occurrence surface"));
-    sink.f64Bits(adaptingLuminance);
-    sink.f64Bits(backgroundRatio);
-    sink.u8(byteValue(surround, "occurrence surround"));
+    sink.u32(checkedId);
+    sink.u32(checkedSubject);
+    sink.u32(checkedAgainst);
+    sink.f64Bits(checkedLuminance);
+    sink.f64Bits(checkedRatio);
+    sink.u8(checkedSurround);
     return this;
   }
 
@@ -278,22 +325,30 @@ export class ProgramWireBuilderV1 {
   }
 
   wcag22VisibleUnary(hard, id, occurrence, criterion) {
+    const checkedId = u32Value(id, "constraint id");
+    const checkedOccurrence = u32Value(occurrence, "constraint occurrence");
+    const checkedCriterion = memberValue(criterion, WCAG22_CRITERIA_V1, "wcag22 criterion");
     const sink = this.constraintEntry(hard);
-    sink.u32(u32Value(id, "constraint id"));
+    sink.u32(checkedId);
     sink.u8(KIND_WCAG22_VISIBLE_UNARY);
-    sink.u32(u32Value(occurrence, "constraint occurrence"));
-    sink.u8(byteValue(criterion, "wcag22 criterion"));
+    sink.u32(checkedOccurrence);
+    sink.u8(checkedCriterion);
     return this;
   }
 
   exactIntrinsicRelationHard(id, reference, candidates) {
+    const checkedId = u32Value(id, "constraint id");
+    const checkedReference = u32Value(reference, "relation reference");
+    const checked = candidateList(candidates, "relation candidates").map(
+      (candidate, index) => u32Value(candidate, "relation candidate[" + index + "]"),
+    );
     const sink = this.constraintEntry(true);
-    sink.u32(u32Value(id, "constraint id"));
+    sink.u32(checkedId);
     sink.u8(KIND_EXACT_INTRINSIC_RELATION);
-    sink.u32(u32Value(reference, "relation reference"));
-    sink.u32(candidates.length);
-    for (const candidate of candidates) {
-      sink.u32(u32Value(candidate, "relation candidate"));
+    sink.u32(checkedReference);
+    sink.u32(checked.length);
+    for (const candidate of checked) {
+      sink.u32(candidate);
     }
     return this;
   }
@@ -322,7 +377,11 @@ export class ProgramWireBuilderV1 {
         );
       }
       body.u32(count);
-      body.bytes.push(...sink.bytes);
+      // Поэлементно: spread разворачивает массив в аргументы вызова и падает
+      // на больших секциях (лимит аргументов V8), а не по нашему typed-отказу.
+      for (const byte of sink.bytes) {
+        body.bytes.push(byte);
+      }
     }
 
     const total = header.bytes.length + body.bytes.length;

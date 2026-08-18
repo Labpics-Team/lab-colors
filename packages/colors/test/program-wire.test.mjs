@@ -64,17 +64,40 @@ test("oversized sections are refused with a typed code before emission", () => {
 });
 
 test("invalid declarations are typed refusals, not coerced bytes", () => {
+  const isTyped = (error) => error instanceof ProgramWireError;
+  const fresh = () => new ProgramWireBuilderV1();
+  assert.throws(() => fresh().source(-1, [0, 0, 0]), isTyped);
+  assert.throws(() => fresh().source(1, [0, 0]), isTyped);
+  assert.throws(() => fresh().source(1, [0, 0, 256]), isTyped);
+  // silent f64 coercion paths: NaN/undefined/string must refuse, not encode.
+  assert.throws(() => fresh().opacityInput(1, Number.NaN), isTyped);
+  assert.throws(() => fresh().opacityInput(1, undefined), isTyped);
+  assert.throws(
+    () => fresh().sourceOverOccurrence(1, 2, 3, "bright", 0.2, 1),
+    isTyped,
+  );
+  // enum domains: byte-range values outside the registered sets must refuse.
+  assert.throws(
+    () => fresh().sourceOverOccurrence(1, 2, 3, 64.0, 0.2, 7),
+    isTyped,
+  );
+  assert.throws(() => fresh().wcag22VisibleUnary(true, 1, 2, 9), isTyped);
+  // relation candidates: null/empty are typed refusals, never TypeError.
+  assert.throws(() => fresh().exactIntrinsicRelationHard(1, 2, null), isTyped);
+  assert.throws(() => fresh().exactIntrinsicRelationHard(1, 2, []), isTyped);
+});
+
+test("a refused declaration leaves the builder byte-stream untouched", () => {
   const builder = new ProgramWireBuilderV1();
+  builder.source(11, [0x14, 0x14, 0x14]);
+  const before = builder.finish();
+  const rebuilt = new ProgramWireBuilderV1();
+  rebuilt.source(11, [0x14, 0x14, 0x14]);
   assert.throws(
-    () => builder.source(-1, [0, 0, 0]),
+    () => rebuilt.finiteTarget(21, [{ id: 1, rgb: [0, 0, 0], opacity: Number.NaN }]),
     (error) => error instanceof ProgramWireError,
   );
-  assert.throws(
-    () => builder.source(1, [0, 0]),
-    (error) => error instanceof ProgramWireError,
-  );
-  assert.throws(
-    () => builder.source(1, [0, 0, 256]),
-    (error) => error instanceof ProgramWireError,
-  );
+  // After the refusal the emitted bytes equal the clean builder's bytes:
+  // no phantom section count, no partial record.
+  assert.deepEqual(rebuilt.finish(), before);
 });
