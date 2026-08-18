@@ -78,6 +78,7 @@ pub(crate) mod program;
     )
 )]
 pub(crate) mod program_session;
+pub mod program_wire;
 pub(crate) mod relation;
 #[cfg_attr(
     not(test),
@@ -446,6 +447,14 @@ pub struct NoPrematureScalarLpcApi;
 ///
 /// ```compile_fail
 /// use labcolors_core::DraftV1;
+/// ```
+///
+/// Единственный допущенный до C7c seam — проверка канонических wire-байтов
+/// (`program_wire`): она не выдаёт runtime-authority. Внутренности wire-модуля
+/// остаются закрытыми:
+///
+/// ```compile_fail
+/// use labcolors_core::program::wire::decode_program_wire_v1;
 /// ```
 #[cfg(doctest)]
 pub struct NoPrematureProgramApi;
