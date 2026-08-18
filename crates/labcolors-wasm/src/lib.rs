@@ -574,6 +574,35 @@ pub fn numerical_capability_manifest() -> Result<JsNumericalCapabilityManifestV2
     Ok(parsed.unchecked_into())
 }
 
+/// Проверяет канонические wire-байты Program и возвращает hex content
+/// identity. Публичная browser-проекция единственного pre-C7c Program seam:
+/// не выдаёт runtime authority, доказывает только канон + компилируемость.
+#[wasm_bindgen(js_name = checkProgramWire)]
+pub fn check_program_wire(bytes: &[u8]) -> Result<String, JsError> {
+    use labcolors_core::program_wire::{ProgramWireCheckErrorV1 as E, check_program_wire_v1};
+    let identity = check_program_wire_v1(bytes).map_err(|error| {
+        to_js_error(match error {
+            E::Wire { section, offset } => BindingError::InvalidConfig {
+                reason: format!("program wire canon violated at {section}+{offset}"),
+            },
+            E::Compile => BindingError::InvalidConfig {
+                reason: "program wire graph failed semantic compilation".to_string(),
+            },
+            // Публичный отказ non_exhaustive: неизвестный будущий вариант
+            // остаётся честным internal, не подгоняется под существующий класс.
+            _ => BindingError::Internal {
+                reason: "unclassified program wire refusal".to_string(),
+            },
+        })
+    })?;
+    let mut hex = String::with_capacity(64);
+    for byte in identity {
+        use core::fmt::Write;
+        let _ = write!(hex, "{byte:02x}");
+    }
+    Ok(hex)
+}
+
 /// Точная оценка WCAG 2.2 одной финальной пары sRGB8.
 #[wasm_bindgen(js_name = evaluateWcag22)]
 pub fn evaluate_wcag22(
