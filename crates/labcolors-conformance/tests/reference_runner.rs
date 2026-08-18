@@ -28,9 +28,9 @@
 use std::path::PathBuf;
 
 use labcolors_conformance::{
-    AlphaVector, ContrastVector, DRIFT_TOL, FAMILY_FILES, LadderVector, MANIFEST_FILE, Manifest,
-    Pack, SolveOutcome, SolveVector, Wcag22Vector, generate_alpha, generate_contrasts,
-    generate_ladders, generate_solve, generate_wcag22,
+    AlphaVector, ContrastVector, DRIFT_TOL, FAMILY_FILES, MANIFEST_FILE, Manifest, Pack,
+    SolveOutcome, SolveVector, Wcag22Vector, generate_alpha, generate_contrasts, generate_solve,
+    generate_wcag22,
 };
 use labcolors_core::fnv1a_32;
 
@@ -97,30 +97,6 @@ fn core_reproduces_committed_contrasts() {
 }
 
 #[test]
-fn core_reproduces_committed_ladders() {
-    let committed: Vec<LadderVector> = parse("ladders.json");
-    let fresh = generate_ladders();
-    assert_eq!(
-        committed.len(),
-        fresh.len(),
-        "ladders.json: изменился состав"
-    );
-    for (c, f) in committed.iter().zip(&fresh) {
-        assert_eq!(c.position, f.position, "ключ позиции");
-        approx(
-            c.alpha_light,
-            f.alpha_light,
-            &format!("ladder α_light {}", c.position),
-        );
-        approx(
-            c.alpha_dark,
-            f.alpha_dark,
-            &format!("ladder α_dark {}", c.position),
-        );
-    }
-}
-
-#[test]
 fn core_reproduces_committed_alpha() {
     let committed: Vec<AlphaVector> = parse("alpha.json");
     let fresh = generate_alpha();
@@ -156,17 +132,14 @@ fn core_reproduces_committed_solve() {
                     hex: ch,
                     lc: cl,
                     wcag_ratio: cw,
-                    floor_override: cf,
                 },
                 SolveOutcome::Solved {
                     hex: fh,
                     lc: fl,
                     wcag_ratio: fw,
-                    floor_override: ff,
                 },
             ) => {
                 assert_eq!(ch, fh, "solve hex на {}", c.bg);
-                assert_eq!(cf, ff, "floor_override на {}", c.bg);
                 approx(*cl, *fl, &format!("solve lc на {}", c.bg));
                 approx(*cw, *fw, &format!("solve wcag на {}", c.bg));
             }

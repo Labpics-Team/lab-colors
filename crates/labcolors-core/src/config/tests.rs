@@ -11,11 +11,10 @@
 use super::fixture::labui_reference;
 use super::test_support::resolved_repr as repr;
 use super::*;
-use crate::Floor;
 use crate::ladder::LadderPosition;
-use crate::{
-    BgInput, Resolved, Role, RoleTable, ViewingConditions, resolve_named_set, resolve_set,
-};
+use crate::semantic::Floor;
+use crate::semantic::{Resolved, resolve_named_set};
+use crate::{BgInput, Role, RoleTable, ViewingConditions, resolve_set};
 
 /// Грид golden: два VC-пресета × шесть фонов — тот же, что в
 /// `semantic::tests::resolve_set_golden_hex_is_byte_for_byte_stable` (240 точек).

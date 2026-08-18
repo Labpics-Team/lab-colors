@@ -45,10 +45,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let c = pack.counts();
     println!(
-        "готово: {} векторов (contrasts={}, ladders={}, alpha={}, solve={}, wcag22={}), дайджест={}",
+        "готово: {} векторов (contrasts={}, alpha={}, solve={}, wcag22={}), дайджест={}",
         c.total,
         c.contrasts,
-        c.ladders,
         c.alpha,
         c.solve,
         c.wcag22,

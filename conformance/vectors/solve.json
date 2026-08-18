@@ -10,8 +10,7 @@
       "kind": "solved",
       "hex": "#888888",
       "lc": 60.020902511155846,
-      "wcagRatio": 3.5448862152994005,
-      "floorOverride": false
+      "wcagRatio": 3.5448862152994005
     }
   },
   {
@@ -25,8 +24,7 @@
       "kind": "solved",
       "hex": "#A7A7A7",
       "lc": 44.99674271579012,
-      "wcagRatio": 2.405887226461303,
-      "floorOverride": false
+      "wcagRatio": 2.405887226461303
     }
   },
   {
@@ -41,8 +39,7 @@
       "kind": "solved",
       "hex": "#C4C4C4",
       "lc": 30.05152117087817,
-      "wcagRatio": 1.7441530133197485,
-      "floorOverride": false
+      "wcagRatio": 1.7441530133197485
     }
   },
   {
@@ -96,8 +93,7 @@
       "kind": "solved",
       "hex": "#373737",
       "lc": 19.836113111639015,
-      "wcagRatio": 2.334651446218021,
-      "floorOverride": false
+      "wcagRatio": 2.334651446218021
     }
   },
   {

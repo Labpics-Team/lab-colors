@@ -662,14 +662,10 @@ fn red_proof_definition_scanner_ignores_prefix_shared_production_types() {
 #[test]
 fn cfg_test_module_exclusion_covers_the_relocated_oracles() {
     let excluded = cfg_test_module_files();
-    for expected in [
-        "accent_golden_tests.rs",
-        "continuity_tests.rs",
-        "dim_tinted_tests.rs",
-        "config/preset.rs",
-        "config/fixture.rs",
-        "config/tests.rs",
-    ] {
+    // Retired recipe oracle modules were deleted by C7c. Only the nested
+    // cfg(test) config fixtures remain and must stay excluded from production
+    // cleanliness scans.
+    for expected in ["config/preset.rs", "config/fixture.rs", "config/tests.rs"] {
         let path = src_dir().join(expected);
         assert!(
             excluded.contains(&path),

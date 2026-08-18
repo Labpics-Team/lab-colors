@@ -470,10 +470,6 @@ pub enum RoleRecipe {
     Zero,
 }
 
-/// Compatibility path for existing Core and binding consumers. The manifest
-/// itself is owned by the independent output-domain module.
-pub use crate::output_bindings::OutputBindingSet;
-
 /// Источник тинта лестницы/альфа-аналога: откуда берётся якорный цвет.
 ///
 /// Тинт bg-независим (это якорь источника), только пер-темен. Для [`Family`](Self::Family)
