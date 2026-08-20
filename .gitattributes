@@ -50,3 +50,5 @@ crates/labcolors-core/Cargo.toml text eol=lf
 # Корневой LICENSE входит в legal-закрытие clean-set receipt по точным байтам:
 # CRLF-чекаут на Windows ломает byte-exact сверку на свежем клоне.
 LICENSE text eol=lf
+scripts/generate_wcag22_q55.py text eol=lf
+scripts/verify_wcag22_q55.py text eol=lf
