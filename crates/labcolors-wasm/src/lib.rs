@@ -11,19 +11,89 @@ use wasm_bindgen::prelude::*;
 
 use crate::error::BindingError;
 
+#[wasm_bindgen(typescript_custom_section)]
+const TERMINAL_CAPABILITY_TYPES: &str = r#"
+/** Proof-capable V2 site. Empty arrays explicitly mean no admitted evidence. */
+export interface NumericalCapabilitySiteV2 {
+  readonly siteId: string;
+  readonly stableOutcomes: ReadonlyArray<string>;
+  readonly compatibilityReleases: ReadonlyArray<string>;
+  readonly evidenceClasses: ReadonlyArray<string>;
+  readonly artifactIds: ReadonlyArray<string>;
+  readonly boundIds: ReadonlyArray<string>;
+  readonly proofIds: ReadonlyArray<string>;
+  readonly runtimeAttestations: ReadonlyArray<string>;
+}
+
+/** Proof-capable numerical capability manifest. */
+export interface NumericalCapabilityManifestV2 {
+  readonly schemaVersion: 2;
+  readonly coverage: string;
+  readonly sites: ReadonlyArray<NumericalCapabilitySiteV2>;
+  readonly checksum: string;
+}
+
+export type Wcag22CriterionV1 =
+  | "sc-1.4.3-text-default"
+  | "sc-1.4.3-text-large-scale"
+  | "sc-1.4.11-ui-component-or-state"
+  | "sc-1.4.11-graphical-object";
+export type Wcag22DecisionV1 = "pass" | "fail";
+export interface Wcag22Q55BoundsV1 {
+  /** Decimal u64 string: Q55 values exceed JavaScript's safe integer range. */
+  readonly lower: string;
+  readonly upper: string;
+}
+export interface Wcag22AssessmentV1 {
+  readonly kind: "evaluated";
+  readonly profileId: "wcag22-srgb8-contrast-v1";
+  readonly criterion: Wcag22CriterionV1;
+  readonly foreground: string;
+  readonly background: string;
+  readonly foregroundLuminanceQ55: Wcag22Q55BoundsV1;
+  readonly backgroundLuminanceQ55: Wcag22Q55BoundsV1;
+  readonly q55Scale: string;
+  readonly decision: Wcag22DecisionV1;
+  readonly evidence: {
+    readonly kind: "canonical-finite-bounded";
+    readonly artifactId: "wcag22-srgb8-luminance-q55-v1";
+    readonly artifactSha256: string;
+    readonly boundId: "wcag22-srgb8-outward-q55-v1";
+    readonly proofId: "wcag22-srgb8-full-domain-q55-v1";
+    readonly proofSha256: string;
+    readonly proofPayloadSha256: string;
+    readonly generatorSha256: string;
+    readonly verifierSha256: string;
+    readonly profileChecksum: string;
+    readonly profileSha256: string;
+  };
+}
+"#;
+
+#[wasm_bindgen]
+extern "C" {
+    #[wasm_bindgen(typescript_type = "NumericalCapabilityManifestV2")]
+    pub type JsNumericalCapabilityManifestV2;
+
+    #[wasm_bindgen(typescript_type = "Wcag22AssessmentV1")]
+    pub type JsWcag22AssessmentV1;
+}
+
 fn to_js_error(error: BindingError) -> JsError {
     JsError::new(&error.to_string())
 }
 
 /// Единственный публичный манифест численных возможностей.
 #[wasm_bindgen(js_name = numericalCapabilityManifest)]
-pub fn numerical_capability_manifest() -> Result<JsValue, JsError> {
+pub fn numerical_capability_manifest() -> Result<JsNumericalCapabilityManifestV2, JsError> {
     let json = terminal_projection::capability_manifest_json();
-    js_sys::JSON::parse(&json).map_err(|_| {
-        to_js_error(BindingError::Internal {
-            reason: "capability manifest не распарсился как JSON".to_string(),
+    js_sys::JSON::parse(&json)
+        .map(JsValue::unchecked_into)
+        .map_err(|_| {
+            to_js_error(BindingError::Internal {
+                reason: "capability manifest не распарсился как JSON".to_string(),
+            })
         })
-    })
 }
 
 /// Точная оценка WCAG 2.2 одной финальной пары sRGB8.
@@ -32,7 +102,7 @@ pub fn evaluate_wcag22(
     foreground_hex: &str,
     background_hex: &str,
     criterion: &str,
-) -> Result<JsValue, JsError> {
+) -> Result<JsWcag22AssessmentV1, JsError> {
     use labcolors_core::wcag22::Wcag22CriterionV1 as C;
     let criterion = C::parse(criterion).ok_or_else(|| {
         to_js_error(BindingError::UnknownWcag22Criterion {
@@ -53,11 +123,13 @@ pub fn evaluate_wcag22(
                 })
             })?;
     let json = terminal_projection::wcag22_json(&assessment).map_err(to_js_error)?;
-    js_sys::JSON::parse(&json).map_err(|_| {
-        to_js_error(BindingError::Internal {
-            reason: "WCAG22 projection не распарсился как JSON".to_string(),
+    js_sys::JSON::parse(&json)
+        .map(JsValue::unchecked_into)
+        .map_err(|_| {
+            to_js_error(BindingError::Internal {
+                reason: "WCAG22 projection не распарсился как JSON".to_string(),
+            })
         })
-    })
 }
 
 /// Публичный runtime одного скомпилированного Program.

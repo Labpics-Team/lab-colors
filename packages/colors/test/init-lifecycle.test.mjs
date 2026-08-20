@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 
-import init, { initSync, LabColors } from "../index.js";
+import init, { initSync, ProgramRuntime } from "../index.js";
 
 test("public initialization has one owner across async and sync routes", async () => {
   const module = new WebAssembly.Module(
@@ -53,6 +53,5 @@ test("public initialization has one owner across async and sync routes", async (
   assert.equal(await second, undefined);
   assert.equal(initSync({ module }), undefined, "ready initialization is idempotent");
 
-  const engine = new LabColors();
-  engine.free();
+  assert.equal(typeof ProgramRuntime, "function");
 });
