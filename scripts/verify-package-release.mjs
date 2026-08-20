@@ -949,7 +949,7 @@ export function validateSolveFamily(family) {
     if (outcome.kind === "solved") {
       exactKeys(
         outcome,
-        ["kind", "hex", "lc", "wcagRatio", "floorOverride"],
+        ["kind", "hex", "lc", "wcagRatio"],
         `solve[${index}].outcome`,
       );
       if (typeof outcome.hex !== "string" || !/^#[0-9A-F]{6}$/u.test(outcome.hex)) {
@@ -964,9 +964,6 @@ export function validateSolveFamily(family) {
         outcome.wcagRatio > 21
       ) {
         fail(`solve[${index}].outcome.wcagRatio must be finite and within [1, 21]`);
-      }
-      if (typeof outcome.floorOverride !== "boolean") {
-        fail(`solve[${index}].outcome.floorOverride must be boolean`);
       }
       solved += 1;
       continue;
