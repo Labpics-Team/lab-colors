@@ -118,7 +118,7 @@ final class ConformanceTests: XCTestCase {
 
     func testCoreVersionMatchesManifest() throws {
         let manifest = try load("manifest.json", as: Manifest.self)
-        XCTAssertEqual(manifest.packVersion, "10.0.0", "Swift fixture обязан исполнять pack v10")
+        XCTAssertEqual(manifest.packVersion, "11.0.0", "Swift fixture обязан исполнять terminal pack v11")
         XCTAssertFalse(coreVersion().isEmpty)
         XCTAssertEqual(
             coreVersion(), manifest.coreVersion,
@@ -255,7 +255,6 @@ final class ConformanceTests: XCTestCase {
                 XCTAssertEqual(
                     got.wcagRatio, v.outcome.wcagRatio!, accuracy: Self.driftTol,
                     "solve wcag \(v.bg)")
-                XCTAssertEqual(got.floorOverride, v.outcome.floorOverride!, "floor_override \(v.bg)")
             case "failure":
                 XCTAssertThrowsError(try solveContrast(bg: v.bg, contract: spec, theme: th)) { err in
                     guard case let ColorError.Failure(category, code) = err else {
@@ -391,7 +390,6 @@ struct OutcomeJSON: Codable {
     let hex: String?
     let lc: Double?
     let wcagRatio: Double?
-    let floorOverride: Bool?
     let category: String?
     let code: String?
 }

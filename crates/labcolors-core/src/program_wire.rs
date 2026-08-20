@@ -289,7 +289,7 @@ impl ProgramPaintOutputV1 {
         self.source
     }
 
-    /// Сертифицированная straight opacity в [0,1].
+    /// Сертифицированная straight opacity в `0..=1`.
     #[must_use]
     pub const fn opacity(self) -> f64 {
         self.opacity

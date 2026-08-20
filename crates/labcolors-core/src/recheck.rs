@@ -15,10 +15,10 @@ use crate::{Srgb8, ViewingConditions};
 /// pass their contract against a *changed* background, re-solving (and easing)
 /// only when they stably do not, instead of re-solving every frame.
 ///
-/// The returned `lc` is **signed** (its sign is the achieved polarity, matching
-/// [`Resolved::lc`]), and it is exactly what the solver's `finish` stage measures
-/// for the same pair. The ratio is the frozen boundary report projection from
-/// the same final bytes; it is not stored in or consumed by [`Solved`].
+/// The returned `lc` is **signed** (its sign is the achieved polarity) and is
+/// exactly what the solver's `finish` stage measures for the same pair. The
+/// ratio is the final-byte report projection; neither value participates in
+/// selection or stores legacy recipe state.
 pub fn measure_contrast(
     bg_linear: [f64; 3],
     fg_linear: [f64; 3],

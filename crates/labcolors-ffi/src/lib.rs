@@ -13,27 +13,18 @@
 //!
 //! # Срез API — «рантайм-контраст-ядро»
 //!
-//! Экспортируется минимальный ОСМЫСЛЕННЫЙ срез — ровно примитивы, которые зовёт
-//! реактивный рантайм, и ровно те, что покрывают семейства conformance-пака:
+//! Экспортируется минимальный срез, который покрывают терминальные семейства
+//! conformance-пака:
 //!
 //! | Экспорт | Семейство пака | Функция ядра |
 //! |---------|----------------|--------------|
 //! | [`contrast`] / [`recheck`] | `contrasts` | `recheck_against` |
 //! | [`solve_contrast`] | `solve` | `solve` |
-//! | [`ladder_alpha`] | `ladders` | `LadderPosition::alpha_pair` |
 //! | [`composite`] / [`min_alpha`] | `alpha` | `alpha::composite_hex` / `alpha::min_alpha_hex` |
 //! | [`evaluate_wcag22`] | `wcag22` | exact final-sRGB8 WCAG 2.2 evaluator |
 //! | [`core_version`] | `manifest` | версия ядра |
 //!
-//! [`solve_glow_point`] — отдельный low-level contract test нативной границы:
-//! stable-профиль переносит `Indeterminate` с site + typed evidence без fallback
-//! для non-trivial selection, а exact byte-no-op возвращает determinate без CAM16;
-//! legacy выбирается только явно. Его CAM16-диагностика не объявлена
-//! bit-exact между платформами; `bit-exact` относится лишь к certificate
-//! encoded-sRGB8 screen-композитора. Output — algebraic sum
-//! `StableExactNoop | LegacyReached | LegacyUnreachable | Indeterminate`, а не
-//! независимые provenance-поля с незаконными cross-product.
-//!
+
 //! Резолв полной темы из JSON-конфига (агностичный движок) СОЗНАТЕЛЬНО вне
 //! среза: он требует serde-границы конфига (живёт в WASM-крейте) — перенос её
 //! в нативный крейт либо дублировал бы её (риск дрейфа), либо тянул бы
