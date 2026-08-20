@@ -327,12 +327,6 @@ jobs:
             `${process.env.GITHUB_WORKSPACE}/scripts/point-support-release-contract.cjs`,
           );
 
-          const PRIVATE_PROGRAM_ROLE = "private-program-consumer";
-          const PRIVATE_PROGRAM_METADATA_PATH = "private-program/build-metadata.json";
-          const PRIVATE_PROGRAM_ABI_PATH = "private-program/abi-v2.js";
-          const PRIVATE_PROGRAM_CONSUMER_PATH = "private-program/consumer.js";
-          const PRIVATE_PROGRAM_WASM_PATH =
-            "private-program/labcolors_private_program.wasm";
           const TAR_INSPECTOR_SHA256 =
             "c838aac0b1f918113d55839a77b913d1d4225dda39063c57f80efeb9fc153022";
           const EXPECTED_PACKAGE_FILES = [
@@ -341,26 +335,10 @@ jobs:
             "index.js",
             "index.d.ts",
             "wcag22.d.ts",
-            "apply-theme.js",
-            "apply-theme.d.ts",
-            "snapshot.js",
-            "output-sink.js",
-            "output-bindings.js",
-            "sequence-identity-matches.js",
-            "watch-theme.js",
-            "watch-theme.d.ts",
-            "adapt-theme.js",
-            "adapt-theme.d.ts",
-            "background-observation.js",
-            "effective-bg.js",
             "evidence/wcag22-srgb8-v1.json",
             "evidence/wcag22-srgb8-q55-v1.bin",
             "evidence/wcag22-srgb8-q55-proof-v1.json",
             "evidence/point-support-reference-surplus-q55-bps-proof-v1.json",
-            PRIVATE_PROGRAM_CONSUMER_PATH,
-            PRIVATE_PROGRAM_ABI_PATH,
-            PRIVATE_PROGRAM_WASM_PATH,
-            PRIVATE_PROGRAM_METADATA_PATH,
             "pkg/labcolors.js",
             "pkg/labcolors.d.ts",
             "pkg/labcolors_bg.wasm",
@@ -368,18 +346,6 @@ jobs:
           ];
           const EXPECTED_PACKAGE_EXPORTS = {
             ".": { types: "./index.d.ts", default: "./index.js" },
-            "./apply-theme": {
-              types: "./apply-theme.d.ts",
-              default: "./apply-theme.js",
-            },
-            "./watch-theme": {
-              types: "./watch-theme.d.ts",
-              default: "./watch-theme.js",
-            },
-            "./adapt-theme": {
-              types: "./adapt-theme.d.ts",
-              default: "./adapt-theme.js",
-            },
             "./pkg/labcolors_bg.wasm": "./pkg/labcolors_bg.wasm",
             "./build-metadata.json": "./build-metadata.json",
             "./package.json": "./package.json",
@@ -397,11 +363,11 @@ jobs:
           }
 
           if (
-            EXPECTED_PACKAGE_FILES.length !== 29 ||
-            new Set(EXPECTED_PACKAGE_FILES).size !== 29 ||
+            EXPECTED_PACKAGE_FILES.length !== 13 ||
+            new Set(EXPECTED_PACKAGE_FILES).size !== 13 ||
             EXPECTED_PACKAGE_FILES.some((path) => path.includes("*")) ||
-            EXPECTED_TAR_INVENTORY.length !== 31 ||
-            new Set(EXPECTED_TAR_INVENTORY).size !== 31
+            EXPECTED_TAR_INVENTORY.length !== 15 ||
+            new Set(EXPECTED_TAR_INVENTORY).size !== 15
           ) {
             fail("worker package inventory allowlist is not canonical");
           }
@@ -748,11 +714,6 @@ jobs:
           if (!/^colors-v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/u.test(expectedTag)) {
             fail(`invalid release tag ${expectedTag}`);
           }
-          const {
-            PRIVATE_PROGRAM_CANONICAL_BUILD,
-            privateProgramCoreSourceDigest,
-          } = require(join(workspace, "scripts/build-private-program.mjs"));
-
           const files = walk(artifactDir);
           const manifests = files.filter((path) => basename(path) === "release-manifest.json");
           const tarballs = files.filter((path) => path.endsWith(".tgz"));
@@ -762,7 +723,7 @@ jobs:
 
           const manifest = JSON.parse(readFileSync(manifests[0], "utf8"));
           const expectedVersion = expectedTag.slice("colors-v".length);
-          if (manifest.schemaVersion !== 5) fail(`manifest schema ${manifest.schemaVersion}`);
+          if (manifest.schemaVersion !== 6) fail(`manifest schema ${manifest.schemaVersion}`);
           exactKeys(
             manifest,
             [
@@ -791,7 +752,7 @@ jobs:
           }
           exactOrderedKeys(
             manifest.artifacts,
-            ["tarball", "wasm", "buildMetadata", "privateProgramConsumer"],
+            ["tarball", "wasm", "buildMetadata"],
             "manifest artifacts",
           );
           exactOrderedKeys(
@@ -1161,14 +1122,11 @@ jobs:
             fail("numerical capabilities do not exactly bind the canonical evidence rows");
           }
           const expectedSupported = [
-            "exact-alpha-srgb8-v1",
-            "exact-screen-composite-srgb8-v1",
-            "typed-glow-indeterminate-v1",
+            "canonical-program-wire-v1",
+            "atomic-program-runtime-v1",
             wcag.profileId,
           ];
           const expectedUnsupported = [
-            "embedded-wire-schema-version",
-            "stable-cam16-glow-target-or-maximum-selection",
             "renderer-or-output-pipeline-equivalence",
             "spatial-glow-field",
           ];
@@ -1179,69 +1137,24 @@ jobs:
             fail("supported and unsupported claims are not the exact canonical disjoint sets");
           }
 
-          const expectedWasm = [
-            ["runtime", "pkg/labcolors_bg.wasm"],
-            [PRIVATE_PROGRAM_ROLE, PRIVATE_PROGRAM_WASM_PATH],
-          ];
+          const expectedWasm = [["runtime", "pkg/labcolors_bg.wasm"]];
           const wasmEvidence = manifest.artifacts?.wasm;
-          if (!Array.isArray(wasmEvidence) || wasmEvidence.length !== expectedWasm.length) {
-            fail("manifest must bind exactly the runtime and private Program WASM roles");
+          if (!Array.isArray(wasmEvidence) || wasmEvidence.length !== 1) {
+            fail("manifest must bind exactly the terminal runtime WASM");
           }
-          const packedWasmByRole = new Map();
-          for (let index = 0; index < expectedWasm.length; index += 1) {
-            const [role, path] = expectedWasm[index];
-            const record = wasmEvidence[index];
-            if (record.role !== role || record.path !== path) {
-              fail(`WASM role ${index} must be ${role} at ${path}`);
-            }
-            packedWasmByRole.set(
-              role,
-              packedArtifact(
-                tarball,
-                tarMembers,
-                record,
-                path,
-                `${role} WASM`,
-                ["role", "path", "bytes", "sha256"],
-              ),
-            );
+          const [runtimeRecord] = wasmEvidence;
+          const [runtimeRole, runtimePath] = expectedWasm[0];
+          if (runtimeRecord.role !== runtimeRole || runtimeRecord.path !== runtimePath) {
+            fail(`WASM role must be ${runtimeRole} at ${runtimePath}`);
           }
-
-          const privateProgram = manifest.artifacts.privateProgramConsumer;
-          exactOrderedKeys(privateProgram, ["role", "buildMetadata", "consumer"], "private Program");
-          if (privateProgram.role !== PRIVATE_PROGRAM_ROLE) {
-            fail(`private Program role ${privateProgram.role}`);
-          }
-          const privateWasmMatches = wasmEvidence.filter(
-            (record) => record?.role === privateProgram.role,
-          );
-          if (privateWasmMatches.length !== 1) {
-            fail("private Program role must join exactly one manifest WASM record");
-          }
-          const privateWasmEvidence = privateWasmMatches[0];
-          const privateWasmArtifact = {
-            path: privateWasmEvidence.path,
-            bytes: privateWasmEvidence.bytes,
-            sha256: privateWasmEvidence.sha256,
-          };
-          const privateMetadataBytes = packedArtifact(
+          packedArtifact(
             tarball,
             tarMembers,
-            privateProgram.buildMetadata,
-            PRIVATE_PROGRAM_METADATA_PATH,
-            "private Program build metadata",
+            runtimeRecord,
+            runtimePath,
+            "runtime WASM",
+            ["role", "path", "bytes", "sha256"],
           );
-          const privateConsumerBytes = packedArtifact(
-            tarball,
-            tarMembers,
-            privateProgram.consumer,
-            PRIVATE_PROGRAM_CONSUMER_PATH,
-            "private Program consumer",
-          );
-          const privateWasmBytes = packedWasmByRole.get(PRIVATE_PROGRAM_ROLE);
-          if (!Buffer.isBuffer(privateConsumerBytes) || !Buffer.isBuffer(privateWasmBytes)) {
-            fail("private Program packed byte extraction is incomplete");
-          }
 
           const metadataEvidence = manifest.artifacts.buildMetadata;
           const packedMetadata = packedArtifact(
@@ -1288,78 +1201,6 @@ jobs:
             fail("public metadata runtime WASM differs from the release manifest");
           }
 
-          const privateMetadata = JSON.parse(privateMetadataBytes.toString("utf8"));
-          exactOrderedKeys(
-            privateMetadata,
-            ["schemaVersion", "role", "package", "source", "build", "artifacts"],
-            "packed private Program metadata",
-          );
-          exactOrderedKeys(
-            privateMetadata.package,
-            ["name", "version"],
-            "packed private Program package",
-          );
-          exactOrderedKeys(
-            privateMetadata.source,
-            ["gitSha", "core"],
-            "packed private Program source",
-          );
-          exactOrderedKeys(
-            privateMetadata.source?.core,
-            ["crate", "version", "digest"],
-            "packed private Program Core source",
-          );
-          exactOrderedKeys(
-            privateMetadata.source?.core?.digest,
-            ["algorithm", "framing", "symlinks", "scope", "files", "sha256"],
-            "packed private Program Core digest",
-          );
-          exactOrderedKeys(
-            privateMetadata.artifacts,
-            ["consumer", "wasm"],
-            "packed private Program nested artifacts",
-          );
-          exactOrderedKeys(
-            privateMetadata.artifacts?.consumer,
-            ["path", "bytes", "sha256"],
-            "packed private Program nested consumer",
-          );
-          exactOrderedKeys(
-            privateMetadata.artifacts?.wasm,
-            ["path", "bytes", "sha256"],
-            "packed private Program nested WASM",
-          );
-          if (
-            privateMetadata.schemaVersion !== 1 ||
-            privateMetadata.role !== privateProgram.role ||
-            privateMetadata.package.name !== "@labpics/colors" ||
-            privateMetadata.package.version !== expectedVersion ||
-            privateMetadata.source.gitSha !== expectedSha ||
-            privateMetadata.source.core.crate !== "labcolors-core" ||
-            privateMetadata.source.core.version !== manifest.core
-          ) {
-            fail("packed private Program metadata identity is not canonical");
-          }
-          if (
-            JSON.stringify(privateMetadata.artifacts.consumer) !==
-              JSON.stringify(privateProgram.consumer) ||
-            JSON.stringify(privateMetadata.artifacts.wasm) !==
-              JSON.stringify(privateWasmArtifact)
-          ) {
-            fail("packed private Program metadata artifacts differ from manifest V5");
-          }
-          const expectedCoreDigest = await privateProgramCoreSourceDigest();
-          if (
-            JSON.stringify(privateMetadata.source.core.digest) !== JSON.stringify(expectedCoreDigest)
-          ) {
-            fail("packed private Program metadata Core digest differs from the exact tag source");
-          }
-          if (
-            JSON.stringify(privateMetadata.build) !== JSON.stringify(PRIVATE_PROGRAM_CANONICAL_BUILD)
-          ) {
-            fail("packed private Program metadata build descriptor is not canonical");
-          }
-
           const packedPackage = JSON.parse(
             packedMember(tarball, tarMembers, "package.json", "packed package").toString(
               "utf8",
@@ -1373,18 +1214,6 @@ jobs:
             JSON.stringify(packedPackage.files) !== JSON.stringify(EXPECTED_PACKAGE_FILES)
           ) {
             fail("packed package files declaration differs from the admitted inventory");
-          }
-          const packedPrivateAbi = packedMember(
-            tarball,
-            tarMembers,
-            PRIVATE_PROGRAM_ABI_PATH,
-            "packed private Program ABI",
-          );
-          const taggedPrivateAbi = readFileSync(
-            join(workspace, "packages/colors", PRIVATE_PROGRAM_ABI_PATH),
-          );
-          if (!packedPrivateAbi.equals(taggedPrivateAbi)) {
-            fail("packed private Program ABI differs from the exact tag source");
           }
           if (JSON.stringify(packedPackage.exports) !== JSON.stringify(EXPECTED_PACKAGE_EXPORTS)) {
             fail("packed package exports differ from the admitted public surface");

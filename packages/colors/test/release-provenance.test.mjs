@@ -28,7 +28,6 @@ function command(name, args, cwd) {
 const PREPACK_FIXTURE_SCRIPT_FILES = Object.freeze([
   "prepare-npm-package.mjs",
   "atomic-write.mjs",
-  "build-private-program.mjs",
   "cargo-workspace.mjs",
   "release-evidence.mjs",
 ]);
@@ -283,23 +282,28 @@ test("build metadata exact validator rejects one-field tampering", async () => {
   );
 });
 
-test("clean-consumer smoke закрепляет коррелированный Glow/Material wire", () => {
+test("clean-consumer smoke закрепляет terminal Program wire", () => {
   const verifier = readFileSync(
     join(root, "scripts", "verify-package-release.mjs"),
     "utf8",
   );
   for (const literal of [
+    "compileProgramWire",
+    "ProgramRuntime",
+    "ProgramSnapshot",
+    "canonical-program-wire-v1",
+    "atomic-program-runtime-v1",
+  ]) {
+    assert.match(verifier, new RegExp(literal, "u"), `missing ${literal}`);
+  }
+  for (const retired of [
     "layerRecipeProfile",
     "appearanceDiagnosticProfile",
     "selectionDiagnosticProfile",
     "exact-noop-unreachable",
     "legacy-reached",
     "legacy-unreachable",
-    "encoded-srgb-byte-scale-affine-platform-binary64-powf-v1",
   ]) {
-    assert.match(verifier, new RegExp(literal, "u"), `missing ${literal}`);
+    assert.doesNotMatch(verifier, new RegExp(retired, "u"), `retired ${retired}`);
   }
-  assert.doesNotMatch(verifier, /\bdiagnosticProfile\b/u);
-  assert.doesNotMatch(verifier, /targetStatus === "(?:reached|unreachable)"/u);
-  assert.doesNotMatch(verifier, /outward-interval-v1/u);
 });
