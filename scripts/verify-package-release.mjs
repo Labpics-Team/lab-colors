@@ -1027,14 +1027,14 @@ async function validateConformance(conformance) {
   if (conformance.counts?.total !== total) {
     fail(`conformance total=${conformance.counts?.total} differs from ${total}`);
   }
-  validateSolveFamily(families[3]);
-  const halfTie = families[2].find(
+  validateSolveFamily(families[2]);
+  const halfTie = families[1].find(
     (entry) => entry.tint === "#C0B2FA" && entry.bg === "#000000" && entry.alpha === 0.122,
   );
   if (halfTie?.composite !== "#17161F") {
     fail("conformance pack lacks the exact source-over half-tie #C0B2FA@0.122 -> #17161F");
   }
-  const antiEpsilon = families[4].find(
+  const antiEpsilon = families[3].find(
     (entry) =>
       entry.foreground === "#89BB09" &&
       entry.background === "#8212DB" &&
