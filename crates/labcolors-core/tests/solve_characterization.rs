@@ -31,6 +31,10 @@ const FIXTURE_LINUX_X64: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/contracts/solve-characterization-v1-linux-x64.json"
 );
+const FIXTURE_WINDOWS_X64: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/contracts/solve-characterization-v1-windows-x64.json"
+);
 
 /// Эталон текущей платформы. На незапиненной платформе — громкий отказ:
 /// характеризация без записанного эталона не «пропускается», её нужно записать.
@@ -39,6 +43,8 @@ fn fixture_path() -> &'static str {
         FIXTURE_MACOS_AARCH64
     } else if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
         FIXTURE_LINUX_X64
+    } else if cfg!(all(target_os = "windows", target_arch = "x86_64")) {
+        FIXTURE_WINDOWS_X64
     } else {
         panic!(
             "no recorded solve-characterization fixture for this platform; \

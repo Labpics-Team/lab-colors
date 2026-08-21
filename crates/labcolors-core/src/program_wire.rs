@@ -9,7 +9,9 @@
 //! нарушают канон формата; [`ProgramWireCheckErrorV1::Compile`] — байты канонны,
 //! но граф семантически невалиден. Ни один из слоёв не выражает другой.
 
+use crate::observation::{SchemaOrderedScenarioSourceV1, ScenarioId};
 use crate::program::wire::{ProgramWireErrorV1, decode_program_wire_v1};
+use crate::Srgb8;
 
 /// Имя wire-секции в публичной диагностике.
 ///
@@ -240,6 +242,7 @@ pub struct CompiledProgramV1 {
 pub struct ProgramSessionV1 {
     owner: crate::program::OwnerV1,
     session: crate::program::SessionV1,
+    outputs_scratch: Vec<ProgramPaintOutputV1>,
 }
 
 /// Один сценарий наблюдаемой среды: непрозрачный ID и значения surface inputs
@@ -359,6 +362,7 @@ impl CompiledProgramV1 {
         Ok(ProgramSessionV1 {
             owner: self.owner,
             session,
+            outputs_scratch: Vec::new(),
         })
     }
 }
@@ -374,22 +378,17 @@ impl ProgramSessionV1 {
         revision: u64,
         scenarios: &[ProgramScenarioV1],
     ) -> Result<ProgramSnapshotV1, ProgramRuntimeErrorV1> {
-        let admitted: Vec<crate::program::ScenarioV1<'_>> = scenarios
-            .iter()
-            .map(|scenario| crate::program::ScenarioV1::new(scenario.id, &scenario.surfaces))
-            .collect();
+        let source = ProgramScenarioSourceV1(scenarios);
         let transition = self
             .owner
-            .prepare_update(
+            .prepare_schema_ordered_update(
                 &mut self.session,
-                crate::program::UpdateV1::Observed {
-                    revision,
-                    scenarios: &admitted,
-                },
+                revision,
+                &source,
             )
             .map_err(|_| ProgramRuntimeErrorV1::Update)?;
         let evidence = transition.commit();
-        Ok(snapshot_from_evidence(evidence))
+        Ok(snapshot_from_evidence_into(evidence, &mut self.outputs_scratch))
     }
 
     /// Атомарно применяет Unknown update с непрозрачной причиной.
@@ -408,11 +407,34 @@ impl ProgramSessionV1 {
                 },
             )
             .map_err(|_| ProgramRuntimeErrorV1::Update)?;
-        Ok(snapshot_from_evidence(transition.commit()))
+        Ok(snapshot_from_evidence_into(transition.commit(), &mut self.outputs_scratch))
     }
 }
 
-fn snapshot_from_evidence(evidence: crate::program::EvidenceViewV1<'_>) -> ProgramSnapshotV1 {
+struct ProgramScenarioSourceV1<'a>(&'a [ProgramScenarioV1]);
+
+impl SchemaOrderedScenarioSourceV1 for ProgramScenarioSourceV1<'_> {
+    fn scenario_count(&self) -> usize {
+        self.0.len()
+    }
+
+    fn scenario_id(&self, scenario_index: usize) -> ScenarioId {
+        ScenarioId::new(self.0[scenario_index].id)
+    }
+
+    fn value_count(&self, scenario_index: usize) -> usize {
+        self.0[scenario_index].surfaces.len()
+    }
+
+    fn value(&self, scenario_index: usize, binding_index: usize) -> Srgb8 {
+        self.0[scenario_index].surfaces[binding_index]
+    }
+}
+
+fn snapshot_from_evidence_into(
+    evidence: crate::program::EvidenceViewV1<'_>,
+    outputs_scratch: &mut Vec<ProgramPaintOutputV1>,
+) -> ProgramSnapshotV1 {
     use crate::program::{CertificateV1, StateKindV1};
     let state = match evidence.kind() {
         StateKindV1::Waiting => ProgramSnapshotStateV1::Waiting,
@@ -420,23 +442,24 @@ fn snapshot_from_evidence(evidence: crate::program::EvidenceViewV1<'_>) -> Progr
         StateKindV1::Stale => ProgramSnapshotStateV1::Stale,
         StateKindV1::Failed => ProgramSnapshotStateV1::Failed,
     };
-    let outputs = evidence
+    outputs_scratch.clear();
+    if let Some(verified) = evidence
         .certificates()
         .find_map(|certificate| match certificate {
-            CertificateV1::Verified(verified) => Some(
-                verified
-                    .outputs()
-                    .map(|output| ProgramPaintOutputV1 {
-                        slot: output.output_slot().value(),
-                        source: output.source(),
-                        opacity: output.opacity(),
-                    })
-                    .collect(),
-            ),
+            CertificateV1::Verified(verified) => Some(verified),
             CertificateV1::Conflict(_) => None,
         })
-        .unwrap_or_default();
-    ProgramSnapshotV1 { state, outputs }
+    {
+        outputs_scratch.extend(verified.outputs().map(|output| ProgramPaintOutputV1 {
+            slot: output.output_slot().value(),
+            source: output.source(),
+            opacity: output.opacity(),
+        }));
+    }
+    ProgramSnapshotV1 {
+        state,
+        outputs: std::mem::take(outputs_scratch),
+    }
 }
 
 #[cfg(test)]

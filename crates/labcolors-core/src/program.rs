@@ -2010,6 +2010,27 @@ impl OwnerV1 {
         Ok(PreparedSessionTransitionV1 { transition })
     }
 
+    /// Schema-ordered observed update без промежуточной аллокации `Vec<ScenarioV1>`.
+    ///
+    /// Источник реализует `SchemaOrderedScenarioSourceV1` напрямую, поэтому
+    /// публичный runtime может передать клиентские сценарии без копирования.
+    /// Scratch для канонического порядка переиспользуется внутри Session.
+    pub(crate) fn prepare_schema_ordered_update<'session, Source>(
+        &self,
+        session: &'session mut SessionV1,
+        revision: u64,
+        source: &Source,
+    ) -> Result<PreparedSessionTransitionV1<'session>, UpdateErrorV1>
+    where
+        Source: SchemaOrderedScenarioSourceV1,
+    {
+        if !self.compiled.owns_session(&session.session) {
+            return Err(UpdateErrorV1::OwnerMismatch);
+        }
+        let transition = session.prepare_schema_ordered_observed(revision, source)?;
+        Ok(PreparedSessionTransitionV1 { transition })
+    }
+
     /// Создаёт Session, привязанную к одному непрозрачному stream ID.
     pub(crate) fn instantiate(&self, stream_id: u32) -> Result<SessionV1, InstantiateErrorV1> {
         let stream = ObservationStreamId::new(stream_id);
@@ -2152,6 +2173,30 @@ impl SessionV1 {
                 .prepare_unknown(Revision::new(revision), UnknownReasonId::new(reason_id))
                 .map_err(map_session_update_error),
         }
+    }
+
+    /// Schema-ordered observed update без промежуточной аллокации.
+    ///
+    /// Публичный runtime передаёт клиентские сценарии через
+    /// `SchemaOrderedScenarioSourceV1` напрямую; scratch для канонического
+    /// порядка переиспользуется внутри Session. Метод приватен: внешний
+    /// вызов проходит только через `OwnerV1::prepare_schema_ordered_update`,
+    /// который проверяет owner-match до admission.
+    fn prepare_schema_ordered_observed<Source>(
+        &mut self,
+        revision: u64,
+        source: &Source,
+    ) -> Result<CorePreparedSessionTransitionV1<'_>, UpdateErrorV1>
+    where
+        Source: SchemaOrderedScenarioSourceV1,
+    {
+        self.session
+            .prepare_schema_ordered(
+                Revision::new(revision),
+                source,
+                &mut self.scenario_order_scratch,
+            )
+            .map_err(map_session_update_error)
     }
 }
 
