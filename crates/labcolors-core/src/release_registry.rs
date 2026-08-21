@@ -352,6 +352,7 @@ impl ReleaseDependencyGraphV1 {
                 },
                 match graph.gamut_treatment {
                     OutputGamutTreatmentV1::NoExplicitProjectionGamutMapV1 => 1,
+                    OutputGamutTreatmentV1::HardClipWithOutOfGamutFlagV1 => 2,
                 },
             ],
         }
