@@ -53,7 +53,7 @@ use crate::numerical_plan::NumericalExecutionModeV1;
 use crate::numerics::{
     LegacyPlatformDependentV1, NumericalCompatibilityReleaseIdV1, NumericalDecisionEvidenceV1,
     NumericalDecisionV1, NumericalIndeterminacyV1, NumericalSiteIdV1, ReferenceProfileIdV1,
-    mint_bit_exact_evidence, registry_row,
+    mint_bit_exact_evidence,
 };
 use crate::spaces::oklab::oklab_to_srgb_linear;
 use crate::spaces::srgb::{
@@ -1000,6 +1000,7 @@ pub fn screen_point_is_exact_noop(glow_tint_hex: &str, bg_hex: &str) -> Result<b
 ///
 /// `Err` — невалидный hex или target либо нарушенное внутреннее постусловие
 /// legacy-пути.
+#[allow(clippy::only_used_in_recursion)]
 pub fn solve_screen_alpha_for_dj(
     glow_tint_hex: &str,
     bg_hex: &str,
@@ -1012,22 +1013,26 @@ pub fn solve_screen_alpha_for_dj(
     const SITE: NumericalSiteIdV1 = NumericalSiteIdV1::GlowTargetOrMaximumV1;
     match mode {
         NumericalExecutionModeV1::ExplicitCompatibility { release_id } => {
-            // Fail closed: release обязан быть зарегистрирован для site —
-            // незарегистрированный выбор является load-ошибкой, не fallback.
-            let row = registry_row(SITE)
-                .ok_or_else(|| format!("site {} отсутствует в registry V1", SITE.key()))?;
-            if !row.compatibility_releases.contains(&release_id) {
-                return Err(format!(
-                    "release {} не зарегистрирован для site {}",
-                    release_id.key(),
-                    SITE.key()
-                ));
+            // C7e hard-cut: legacy CAM16 search no longer executes at runtime.
+            // ExplicitCompatibility now maps to Indeterminate for any non-noop
+            // input, preserving wire/config schema compatibility without
+            // retaining the platform-dependent solver path.
+            let _ = release_id;
+            let ScreenPointInputs { slopes, .. } = screen_point_inputs(glow_tint_hex, bg_hex)?;
+            if slopes_are_exact_srgb8_noop(slopes) {
+                // Exact noop is identical regardless of profile; delegate to
+                // the stable branch by re-entering with StableOnly semantics.
+                return solve_screen_alpha_for_dj(
+                    glow_tint_hex,
+                    bg_hex,
+                    target_dj,
+                    NumericalExecutionModeV1::StableOnly,
+                    vc,
+                );
             }
-            Ok(NumericalDecisionV1::Compatibility {
+            Ok(NumericalDecisionV1::Indeterminate {
                 site_id: SITE,
-                release_id,
-                value: solve_screen_alpha_for_dj_legacy(glow_tint_hex, bg_hex, target_dj, vc)?,
-                provenance: LegacyPlatformDependentV1,
+                evidence: NumericalIndeterminacyV1::SoundBoundUnavailable,
             })
         }
         NumericalExecutionModeV1::StableOnly => {
@@ -1079,106 +1084,6 @@ pub fn solve_screen_alpha_for_dj(
             })
         }
     }
-}
-
-/// Явный зависящий от CAM16/libm legacy-путь target/max.
-///
-/// Канальные переходы screen находятся как first-passing binary64 границы того
-/// же operation order, который исполняет публичный compositor. Солвер проверяет
-/// все достижимые композиты в порядке α и потому не предполагает монотонность
-/// CAM16 J'. Если цель недостижима, возвращается глобальный максимум |ΔJ'| среди
-/// достижимых состояний; равные максимумы детерминированно разрешаются первым
-/// состоянием по alpha.
-///
-/// # Errors
-///
-/// `Err` — невалидный hex, неконечная или неположительная цель либо нечисловой
-/// результат переданных условий просмотра.
-fn solve_screen_alpha_for_dj_legacy(
-    glow_tint_hex: &str,
-    bg_hex: &str,
-    target_dj: f64,
-    vc: &ViewingConditions,
-) -> Result<GlowSolve, String> {
-    if !target_dj.is_finite() || target_dj <= 0.0 {
-        return Err(format!("целевой шаг вне домена: {target_dj}"));
-    }
-    validate_viewing_numerics(vc)?;
-    let glow = srgb_encoded_from_hex(glow_tint_hex)?;
-    let bg = srgb_encoded_from_hex(bg_hex)?;
-    let glow_bytes = encoded_bytes(glow);
-    let bg_bytes = encoded_bytes(bg);
-    let bg_jp = jp_from_srgb8(bg_bytes, vc)?;
-
-    let measured = |bytes: [u8; 3]| -> Result<f64, String> {
-        let jp = jp_from_srgb8(bytes, vc)?;
-        let dj = (jp - bg_jp).abs();
-        if !dj.is_finite() {
-            return Err(format!(
-                "условия просмотра дали неконечный ΔJ' для {}",
-                composite_hex(bytes)
-            ));
-        }
-        Ok(dj)
-    };
-
-    let mut states = QuantisedComposites::new(glow_bytes, bg_bytes);
-    let mut best: Option<(QuantisedComposite, f64)> = None;
-    let mut selected = None;
-
-    while let Some(state) = states.next_state()? {
-        let achieved_dj = measured(state.bytes)?;
-        if achieved_dj >= target_dj {
-            selected = Some((state, achieved_dj));
-            break;
-        }
-        if best
-            .as_ref()
-            .is_none_or(|(_, best_dj)| achieved_dj > *best_dj)
-        {
-            best = Some((state, achieved_dj));
-        }
-    }
-
-    let (state, achieved_dj, status) = if let Some(selected) = selected {
-        let (state, achieved_dj) = selected;
-        (state, achieved_dj, GlowTargetStatus::LegacyReached)
-    } else {
-        let (state, achieved_dj) =
-            best.ok_or_else(|| "конечное множество композитов оказалось пустым".to_string())?;
-        (state, achieved_dj, GlowTargetStatus::LegacyUnreachable)
-    };
-    let selected_hex = composite_hex(state.bytes);
-    let alpha = state.canonical_alpha();
-
-    // Канонический CSS-сериализатор хранит ту же binary64 alpha. Production-
-    // проверка повторно композитит исходное число; обратное чтение строки
-    // проверяют граничные и межъязыковые тесты, не затягивая dec2flt-парсер в WASM.
-    let alpha_css = crate::css_alpha_value(alpha)?;
-    let roundtrip_srgb8 = screen_layer_over_srgb8(glow_bytes, alpha, bg_bytes)?;
-    let roundtrip_hex = composite_hex(roundtrip_srgb8);
-    if roundtrip_hex != selected_hex {
-        return Err(format!(
-            "выбранная alpha не воспроизвела state: ожидался {selected_hex}, получен {roundtrip_hex}"
-        ));
-    }
-
-    Ok(GlowSolve {
-        alpha,
-        alpha_css: alpha_css.clone(),
-        target_dj,
-        achieved_dj,
-        composite_hex: selected_hex,
-        composite_certificate: composite_certificate(
-            glow_bytes,
-            bg_bytes,
-            alpha,
-            alpha_css,
-            roundtrip_srgb8,
-        ),
-        selection_diagnostic_profile: Some(GlowDiagnosticProfileV1::Cam16UcsJPrimeLi2017V1),
-        status,
-    })
 }
 
 /// Версионированный двухслойный recipe от источника: `(core_hex, halo_hex)`.
@@ -1261,29 +1166,6 @@ mod tests {
         );
     }
 
-    fn solve_legacy(
-        tint: &str,
-        background: &str,
-        target_dj: f64,
-        vc: &ViewingConditions,
-    ) -> Result<GlowSolve, String> {
-        match solve_screen_alpha_for_dj(
-            tint,
-            background,
-            target_dj,
-            GlowDecisionProfileV1::LegacyPlatformDependentV1.execution_mode(),
-            vc,
-        )? {
-            NumericalDecisionV1::Compatibility {
-                value,
-                release_id: NumericalCompatibilityReleaseIdV1::GlowCam16UcsJPrimeTargetOrMaxV1,
-                provenance: LegacyPlatformDependentV1,
-                ..
-            } => Ok(value),
-            other => Err(format!("explicit compatibility mode дал {other:?}")),
-        }
-    }
-
     #[test]
     fn stable_profile_returns_bound_unavailable_indeterminate() {
         let vc = ViewingConditions::srgb();
@@ -1325,16 +1207,24 @@ mod tests {
             }
         ));
 
-        assert!(
-            solve_screen_alpha_for_dj(
-                "#C0B2FA",
-                "#000000",
-                GLOW_BASE_DJ,
-                GlowDecisionProfileV1::LegacyPlatformDependentV1.execution_mode(),
-                &invalid_vc,
-            )
-            .is_err()
-        );
+        // C7e hard-cut: LegacyPlatformDependentV1 no longer executes CAM16 at
+        // runtime. Non-noop inputs now map to Indeterminate regardless of VC
+        // validity, so invalid VC must NOT produce an error here.
+        let legacy = solve_screen_alpha_for_dj(
+            "#C0B2FA",
+            "#000000",
+            GLOW_BASE_DJ,
+            GlowDecisionProfileV1::LegacyPlatformDependentV1.execution_mode(),
+            &invalid_vc,
+        )
+        .expect("legacy non-noop must return Indeterminate without consulting VC");
+        assert!(matches!(
+            legacy,
+            NumericalDecisionV1::Indeterminate {
+                site_id: NumericalSiteIdV1::GlowTargetOrMaximumV1,
+                evidence: NumericalIndeterminacyV1::SoundBoundUnavailable,
+            }
+        ));
     }
 
     #[test]
@@ -1660,15 +1550,27 @@ mod tests {
             assert!(states.last().unwrap().upper_inclusive);
         }
 
-        let solved = solve_legacy(
+        // C7e hard-cut: non-noop inputs are now Indeterminate under all
+        // profiles. The legacy unreachable-max assertion is replaced by a
+        // typed-indeterminacy check on the same input pair.
+        let decision = solve_screen_alpha_for_dj(
             "#FFFFFE",
             "#000101",
             101.0,
+            GlowDecisionProfileV1::StableV1.execution_mode(),
             &ViewingConditions::dim_surround(),
         )
-        .unwrap();
-        assert_eq!(solved.status(), GlowTargetStatus::LegacyUnreachable);
-        assert!(solved.achieved_dj() < 101.0);
+        .expect("valid request must produce a typed decision");
+        assert!(
+            matches!(
+                decision,
+                NumericalDecisionV1::Indeterminate {
+                    site_id: NumericalSiteIdV1::GlowTargetOrMaximumV1,
+                    evidence: NumericalIndeterminacyV1::SoundBoundUnavailable,
+                }
+            ),
+            "non-noop glow must be indeterminate after C7e: got {decision:?}"
+        );
     }
 
     /// Известная десятичная alpha проверяется независимой целочисленной
@@ -1808,136 +1710,29 @@ mod tests {
         }
     }
 
-    /// Солвер достигает контрактной цели на тёмном фоне (среда свечения).
+    /// C7e hard-cut: legacy solver removed. Non-noop inputs under any profile
+    /// now return Indeterminate. This test verifies the new contract replaces
+    /// the old progressive-stack and target-hitting assertions.
     #[test]
-    fn solver_hits_targets_on_dark() {
+    fn non_noop_inputs_are_indeterminate_under_all_profiles() {
         let vc = ViewingConditions::dim_surround();
-        for target in [GLOW_SUBTLE_DJ, GLOW_BASE_DJ, GLOW_BLOOM_DJ] {
-            let g = solve_legacy("#3E87FF", "#101012", target, &vc).unwrap();
-            assert_eq!(g.status(), GlowTargetStatus::LegacyReached);
-            assert_eq!(
-                g.selection_diagnostic_profile(),
-                Some(GlowDiagnosticProfileV1::Cam16UcsJPrimeLi2017V1)
-            );
-            // Первый достижимый sRGB8-композит обязан держать цель. Его
-            // минимальность независимо проверяется sweep-оракулом ниже.
-            assert!(
-                g.achieved_dj() >= target,
-                "цель {target}: достигнуто {:.4}",
-                g.achieved_dj()
-            );
-            assert!(g.alpha() > 0.0 && g.alpha() <= 1.0);
-        }
-    }
-
-    /// Регрессия реальной границы квантования: альфа, округлённая отдельно от
-    /// рассчитанного hex, не имеет права незаметно вернуть предыдущий байт.
-    #[test]
-    fn serialised_alpha_keeps_the_quantised_target() {
-        let vc = ViewingConditions::dim_surround();
-        let tint = encoded_bytes(srgb_encoded_from_hex("#4A8FFF").unwrap());
-        let bg = encoded_bytes(srgb_encoded_from_hex("#101012").unwrap());
-        let bg_jp = LcsColor::from_hex_with_vc("#101012", &vc).unwrap().jp();
-        let measured_at = |alpha: f64| {
-            let hex = composite_hex(screen_layer_over_srgb8(tint, alpha, bg).unwrap());
-            let jp = LcsColor::from_hex_with_vc(&hex, &vc).unwrap().jp();
-            ((jp - bg_jp).abs(), hex)
-        };
-
-        // Прежняя бисекция сходилась к рациональной стенке красного канала
-        // 1275/35372. Формат DTO с четырьмя знаками превращал её в 0.0360.
-        let legacy_boundary_alpha = 1_275.0 / 35_372.0;
-        let legacy_css = format!("{legacy_boundary_alpha:.4}");
-        assert_eq!(legacy_css, "0.0360");
-        let (rounded_dj, rounded_hex) = measured_at(legacy_css.parse().unwrap());
-        assert_eq!(rounded_hex, "#12151B");
-        assert!(
-            rounded_dj < GLOW_BASE_DJ,
-            "контрпример обязан лежать ниже цели: {rounded_dj}"
-        );
-
-        let solved = solve_legacy("#4A8FFF", "#101012", GLOW_BASE_DJ, &vc).unwrap();
-        let alpha_css = solved.alpha_css();
-        let serialised = alpha_css.parse::<f64>().unwrap();
-        assert_eq!(serialised.to_bits(), solved.alpha().to_bits());
-        let (serialised_dj, serialised_hex) = measured_at(serialised);
-        assert_eq!(serialised_hex, solved.composite_hex());
-        assert!(
-            serialised_dj >= GLOW_BASE_DJ,
-            "эмитируемая alpha={alpha_css} дала {serialised_hex} с ΔJ'={serialised_dj}, ниже цели {}",
-            GLOW_BASE_DJ
-        );
-    }
-
-    /// Матрица свойств сверяет минимальный успешный state и глобальный
-    /// максимум при деградации с независимым оракулом. В ней есть нулевой тинт,
-    /// белый фон и разные surround — ветви, где предположение `alpha=1` особенно
-    /// легко скрывает ошибку выбора.
-    #[test]
-    fn solver_matches_independent_finite_state_oracle() {
-        let vcs = [ViewingConditions::srgb(), ViewingConditions::dim_surround()];
-        for tint_hex in ["#000000", "#010200", "#4A8FFF", "#FF3B30", "#FFFFFF"] {
-            for bg_hex in ["#000000", "#018000", "#101012", "#808080", "#FFFFFF"] {
-                for vc in vcs {
-                    let oracle = oracle_states(tint_hex, bg_hex, &vc);
-                    assert!(!oracle.is_empty());
-                    let mut global_best = &oracle[0];
-                    for state in &oracle[1..] {
-                        if state.2 > global_best.2 {
-                            global_best = state;
+        for mode in [
+            GlowDecisionProfileV1::StableV1.execution_mode(),
+            GlowDecisionProfileV1::LegacyPlatformDependentV1.execution_mode(),
+        ] {
+            for target in [GLOW_SUBTLE_DJ, GLOW_BASE_DJ, GLOW_BLOOM_DJ] {
+                let decision = solve_screen_alpha_for_dj("#3E87FF", "#101012", target, mode, &vc)
+                    .expect("valid request must produce a typed decision");
+                assert!(
+                    matches!(
+                        decision,
+                        NumericalDecisionV1::Indeterminate {
+                            site_id: NumericalSiteIdV1::GlowTargetOrMaximumV1,
+                            evidence: NumericalIndeterminacyV1::SoundBoundUnavailable,
                         }
-                    }
-
-                    for target in [0.01, 0.32, 1.0, 10.0, global_best.2 + 1.0] {
-                        let solved = solve_legacy(tint_hex, bg_hex, target, &vc).unwrap();
-                        let expected = oracle.iter().find(|state| state.2 >= target);
-                        let (expected_state, expected_status) = match expected {
-                            Some(state) => (state, GlowTargetStatus::LegacyReached),
-                            None => (global_best, GlowTargetStatus::LegacyUnreachable),
-                        };
-                        assert_eq!(
-                            solved.composite_hex(),
-                            expected_state.1,
-                            "tint={tint_hex}, bg={bg_hex}, target={target}"
-                        );
-                        assert_eq!(solved.achieved_dj().to_bits(), expected_state.2.to_bits());
-                        assert_eq!(solved.status(), expected_status);
-
-                        let emitted_alpha = solved.alpha_css().parse::<f64>().unwrap();
-                        assert_eq!(
-                            emitted_alpha.to_bits(),
-                            solved.alpha().to_bits(),
-                            "CSS round-trip обязан сохранять binary64: tint={tint_hex}, bg={bg_hex}, target={target}"
-                        );
-                        let recomposed = composite_hex(
-                            screen_layer_over_srgb8(
-                                encoded_bytes(srgb_encoded_from_hex(tint_hex).unwrap()),
-                                emitted_alpha,
-                                encoded_bytes(srgb_encoded_from_hex(bg_hex).unwrap()),
-                            )
-                            .unwrap(),
-                        );
-                        assert_eq!(recomposed, solved.composite_hex());
-
-                        let certificate = solved.composite_certificate();
-                        assert_eq!(certificate.profile().key(), GLOW_COMPOSITE_PROFILE);
-                        assert_eq!(certificate.guarantee(), GlowCompositeGuaranteeV1::BitExact);
-                        assert_eq!(
-                            certificate.tint_srgb8(),
-                            encoded_bytes(srgb_encoded_from_hex(tint_hex).unwrap())
-                        );
-                        assert_eq!(
-                            certificate.background_srgb8(),
-                            encoded_bytes(srgb_encoded_from_hex(bg_hex).unwrap())
-                        );
-                        assert_eq!(certificate.alpha_bits(), emitted_alpha.to_bits());
-                        assert_eq!(certificate.alpha_css(), solved.alpha_css());
-                        assert_eq!(
-                            composite_hex(certificate.composite_srgb8()),
-                            solved.composite_hex()
-                        );
-                    }
-                }
+                    ),
+                    "non-noop glow must be indeterminate after C7e hard-cut: got {decision:?}"
+                );
             }
         }
     }
@@ -1945,8 +1740,8 @@ mod tests {
     #[test]
     fn solver_rejects_non_finite_and_non_positive_targets() {
         let vc = ViewingConditions::dim_surround();
+        // Stable profile validates target before dispatch and rejects invalid inputs.
         for target in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, -1.0, 0.0] {
-            assert!(solve_legacy("#4A8FFF", "#101012", target, &vc).is_err());
             assert!(
                 solve_screen_alpha_for_dj(
                     "#4A8FFF",
@@ -1959,43 +1754,31 @@ mod tests {
                 "stable profile accepted invalid target {target}"
             );
         }
-
-        let mut invalid_vc = vc;
-        invalid_vc.n = f64::NAN;
-        assert!(solve_legacy("#4A8FFF", "#101012", GLOW_BASE_DJ, &invalid_vc).is_err());
+        // C7e hard-cut: LegacyPlatformDependentV1 no longer executes the legacy
+        // solver. Invalid targets now flow through the stable noop gate which
+        // does not validate target (noop is target-independent), so legacy mode
+        // accepts these inputs without error. This is intentional post-hard-cut
+        // behavior — legacy mode is a passthrough to Indeterminate for non-noop.
     }
 
-    /// Ступени контракта строго возрастают и по цели, и по решённой α.
+    /// На белом фоне screen-слой является exact noop; stable path returns
+    /// Determinate with ExactNoopUnreachable status regardless of profile.
     #[test]
-    fn glow_stack_is_strictly_progressive() {
-        const { assert!(GLOW_SUBTLE_DJ < GLOW_BASE_DJ && GLOW_BASE_DJ < GLOW_BLOOM_DJ) };
-        let vc = ViewingConditions::dim_surround();
-        let mut prev = 0.0;
-        for target in [GLOW_SUBTLE_DJ, GLOW_BASE_DJ, GLOW_BLOOM_DJ] {
-            let g = solve_legacy("#FF3B30", "#101012", target, &vc).unwrap();
-            assert!(
-                g.alpha() > prev,
-                "α стека не прогрессивна: {} после {prev}",
-                g.alpha()
-            );
-            prev = g.alpha();
-        }
-    }
-
-    /// На белом фоне screen-слой является point-no-op по объявленной формуле;
-    /// недостижимость поэтому должна быть явной, а не замаскированной ошибкой.
-    #[test]
-    fn glow_on_white_degrades_honestly() {
+    fn glow_on_white_is_exact_noop_under_all_profiles() {
         let vc = ViewingConditions::srgb();
-        let g = solve_legacy("#3E87FF", "#FFFFFF", GLOW_BASE_DJ, &vc).unwrap();
-        assert_eq!(g.status(), GlowTargetStatus::LegacyUnreachable);
-        assert!(g.achieved_dj() < GLOW_BASE_DJ);
-        assert_eq!(g.composite_hex(), "#FFFFFF", "screen над белым — тождество");
-        assert_eq!(
-            g.alpha(),
-            0.5,
-            "единственный state канонизируется центром [0,1]"
-        );
+        for mode in [
+            GlowDecisionProfileV1::StableV1.execution_mode(),
+            GlowDecisionProfileV1::LegacyPlatformDependentV1.execution_mode(),
+        ] {
+            let decision = solve_screen_alpha_for_dj("#3E87FF", "#FFFFFF", GLOW_BASE_DJ, mode, &vc)
+                .expect("white background is exact noop");
+            let NumericalDecisionV1::Determinate { value, .. } = decision else {
+                panic!("exact noop must be determinate: got {decision:?}");
+            };
+            assert_eq!(value.status(), GlowTargetStatus::ExactNoopUnreachable);
+            assert_eq!(value.composite_hex(), "#FFFFFF");
+            assert_eq!(value.alpha(), 0.5);
+        }
     }
 
     /// Recipe v1: core светлее источника, использует его Oklab hue и
