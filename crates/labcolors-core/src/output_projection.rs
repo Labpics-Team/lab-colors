@@ -375,7 +375,7 @@ pub(crate) enum OutputProjectionErrorV1 {
 
 // ─── HDR Projection Types (O-08) ────────────────────────────────────────
 
-use crate::spaces::pq::{AbsoluteLuminanceV1, PqCodeValueV1, HdrNumericalErrorV1};
+use crate::spaces::pq::{AbsoluteLuminanceV1, HdrNumericalErrorV1, PqCodeValueV1};
 use crate::spaces::rec2020::LinearRec2020V1;
 
 /// Versioned tone-mapping operator identity.
@@ -415,12 +415,8 @@ pub(crate) fn tone_map(
     let l_in = input.value();
     let l_white = display_peak.value();
     let l_out = match operator {
-        ToneMapOperatorIdV1::ReinhardGlobalV1 => {
-            l_in / (1.0 + l_in / l_white)
-        }
-        ToneMapOperatorIdV1::LinearClampV1 => {
-            l_in.min(l_white)
-        }
+        ToneMapOperatorIdV1::ReinhardGlobalV1 => l_in / (1.0 + l_in / l_white),
+        ToneMapOperatorIdV1::LinearClampV1 => l_in.min(l_white),
     };
     let output = AbsoluteLuminanceV1::try_new(l_out)?;
     let ratio = if l_in > 0.0 { l_out / l_in } else { 1.0 };
@@ -445,12 +441,13 @@ pub(crate) fn encode_xyz_to_hdr_pq_rec2020(
     let [lr, lg, lb] = linear.channels();
 
     // 2. Compute luminance (Y component in XYZ is already luminance)
-    let source_lum = AbsoluteLuminanceV1::try_new(xyz[1])
-        .map_err(|_| HdrProjectionErrorV1::LuminanceOutOfRange {
+    let source_lum = AbsoluteLuminanceV1::try_new(xyz[1]).map_err(|_| {
+        HdrProjectionErrorV1::LuminanceOutOfRange {
             requested_value: xyz[1],
             valid_min: AbsoluteLuminanceV1::PQ_MIN,
             valid_max: AbsoluteLuminanceV1::PQ_MAX,
-        })?;
+        }
+    })?;
 
     // 3. Tone-map luminance
     let tm_result = tone_map(request.tone_map_operator, source_lum, request.peak_white)
@@ -470,15 +467,15 @@ pub(crate) fn encode_xyz_to_hdr_pq_rec2020(
     //    Each channel represents relative luminance; scale by display peak
     let pq_r = crate::spaces::pq::pq_inverse_eotf(
         AbsoluteLuminanceV1::try_new(scaled_r * request.peak_white.value())
-            .unwrap_or_else(|_| AbsoluteLuminanceV1::new_unchecked(AbsoluteLuminanceV1::PQ_MIN))
+            .unwrap_or_else(|_| AbsoluteLuminanceV1::new_unchecked(AbsoluteLuminanceV1::PQ_MIN)),
     );
     let pq_g = crate::spaces::pq::pq_inverse_eotf(
         AbsoluteLuminanceV1::try_new(scaled_g * request.peak_white.value())
-            .unwrap_or_else(|_| AbsoluteLuminanceV1::new_unchecked(AbsoluteLuminanceV1::PQ_MIN))
+            .unwrap_or_else(|_| AbsoluteLuminanceV1::new_unchecked(AbsoluteLuminanceV1::PQ_MIN)),
     );
     let pq_b = crate::spaces::pq::pq_inverse_eotf(
         AbsoluteLuminanceV1::try_new(scaled_b * request.peak_white.value())
-            .unwrap_or_else(|_| AbsoluteLuminanceV1::new_unchecked(AbsoluteLuminanceV1::PQ_MIN))
+            .unwrap_or_else(|_| AbsoluteLuminanceV1::new_unchecked(AbsoluteLuminanceV1::PQ_MIN)),
     );
 
     Ok(([pq_r, pq_g, pq_b], tm_result))
@@ -557,10 +554,7 @@ pub(crate) struct HdrConformanceDigestV1([u8; 32]);
 impl HdrConformanceDigestV1 {
     /// Compute digest from PQ values and luminance metadata.
     /// Dependency-free: uses FNV-1a over the canonical 56-byte input.
-    pub fn compute(
-        pq_values: &[PqCodeValueV1; 3],
-        metadata: &HdrLuminanceMetadataV1,
-    ) -> Self {
+    pub fn compute(pq_values: &[PqCodeValueV1; 3], metadata: &HdrLuminanceMetadataV1) -> Self {
         // Canonical byte sequence: 7 × f64 LE = 56 bytes, order-sensitive.
         let mut buf = [0u8; 56];
         let mut offset = 0usize;
@@ -874,24 +868,16 @@ fn project_css_color4_display_p3_from_modeled_xyz_d65_solid_v1(
     // 7. Encoded domain recheck against pre-encoding linear P3.
     //    We compare against the CLIPPED linear P3 because the serialized
     //    string represents the clipped value.
-    let recheck = verify_p3_encoded_roundtrip(
-        clipped_p3,
-        encoded_p3,
-        P3_ENCODED_RECHECK_TOLERANCE,
-    );
+    let recheck = verify_p3_encoded_roundtrip(clipped_p3, encoded_p3, P3_ENCODED_RECHECK_TOLERANCE);
     if !recheck.passed() {
-        return Err(OutputProjectionErrorV1::P3EncodedRecheckFailed {
-            release,
-            recheck,
-        });
+        return Err(OutputProjectionErrorV1::P3EncodedRecheckFailed { release, recheck });
     }
 
     // 8. Construct certificate with P3-specific fields.
     //    Oklab/Oklch views are not meaningful for P3 output but the
     //    certificate struct requires them. Use the same derivation as
     //    the sRGB path for structural consistency.
-    let oklab = derive_oklab_view_v1(xyz)
-        .map_err(OutputProjectionErrorV1::OklabView)?;
+    let oklab = derive_oklab_view_v1(xyz).map_err(OutputProjectionErrorV1::OklabView)?;
     let oklch_view = derive_oklch_view_v1([oklab.l(), oklab.a(), oklab.b()])
         .map_err(OutputProjectionErrorV1::OklchView)?;
 
@@ -935,10 +921,12 @@ pub(crate) fn project_output_v1(
         }
         OutputProjectionReleaseIdV1::CssColor4PqRec2020FromModeledXyzAbsoluteV1 => {
             // HDR path requires HdrProjectionRequestV1; use dedicated entry point.
-            return Err(OutputProjectionErrorV1::Hdr(HdrProjectionErrorV1::HostUnsupported {
-                capability: HostHdrCapabilityV1::Unsupported,
-                reason: "HDR projection requires project_hdr_output_v1 entry point".into(),
-            }));
+            return Err(OutputProjectionErrorV1::Hdr(
+                HdrProjectionErrorV1::HostUnsupported {
+                    capability: HostHdrCapabilityV1::Unsupported,
+                    reason: "HDR projection requires project_hdr_output_v1 entry point".into(),
+                },
+            ));
         }
     }
 }
@@ -963,8 +951,8 @@ pub(crate) fn project_hdr_output_v1(
     source.verify().map_err(OutputProjectionErrorV1::Source)?;
     let xyz = source.occurrence().sample().xyz();
 
-    let (pq_values, tm_result) = encode_xyz_to_hdr_pq_rec2020(xyz, &hdr_request)
-        .map_err(OutputProjectionErrorV1::Hdr)?;
+    let (pq_values, tm_result) =
+        encode_xyz_to_hdr_pq_rec2020(xyz, &hdr_request).map_err(OutputProjectionErrorV1::Hdr)?;
 
     let css_value = serialize_hdr_pq_rec2020(pq_values);
 
@@ -978,8 +966,7 @@ pub(crate) fn project_hdr_output_v1(
     let digest = HdrConformanceDigestV1::compute(&pq_values, &luminance_metadata);
 
     // Build base certificate (reuse existing fields where applicable)
-    let oklab = derive_oklab_view_v1(xyz)
-        .map_err(OutputProjectionErrorV1::OklabView)?;
+    let oklab = derive_oklab_view_v1(xyz).map_err(OutputProjectionErrorV1::OklabView)?;
     let oklch_view = derive_oklch_view_v1([oklab.l(), oklab.a(), oklab.b()])
         .map_err(OutputProjectionErrorV1::OklchView)?;
 
@@ -989,7 +976,8 @@ pub(crate) fn project_hdr_output_v1(
         oklab_release: OKLAB_VIEW_RELEASE_V1,
         oklch_release: oklch_view.release(),
         number_encoding: CssOklchNumberEncodingReleaseIdV1::LPercent5C6Hue3V1,
-        hue_serialization: CssOklchHueSerializationReleaseIdV1::ExactSourceGreyOrRectangularOriginToZeroV1,
+        hue_serialization:
+            CssOklchHueSerializationReleaseIdV1::ExactSourceGreyOrRectangularOriginToZeroV1,
         gamut_treatment: OutputGamutTreatmentV1::NoExplicitProjectionGamutMapV1,
         p3_encoded_recheck: None,
         out_of_gamut: false,
@@ -1062,6 +1050,9 @@ mod hdr_tests {
             capability: HostHdrCapabilityV1::Unsupported,
             reason: "test".into(),
         });
-        assert!(matches!(err, OutputProjectionErrorV1::Hdr(HdrProjectionErrorV1::HostUnsupported { .. })));
+        assert!(matches!(
+            err,
+            OutputProjectionErrorV1::Hdr(HdrProjectionErrorV1::HostUnsupported { .. })
+        ));
     }
 }
