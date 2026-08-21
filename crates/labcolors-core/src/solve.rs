@@ -1,3 +1,6 @@
+﻿// Solver curve uses deprecated LcsColor per F-01 design
+#![allow(deprecated)]
+
 //! Inverse candidate-contrast solver: `solve(bg, contract, …) → colour`.
 //!
 //! The forward path maps a colour to the WCAG relative luminance `Ys` of its

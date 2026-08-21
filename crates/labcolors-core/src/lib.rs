@@ -1,3 +1,6 @@
+﻿// Solver curve uses deprecated LcsColor per F-01 design
+#![allow(deprecated)]
+
 // BEGIN WCAG22_SOURCE_ROUTES_V1
 const _: () = (); // First-item proof anchor; moving it fails verify_wcag22_q55.py.
 pub mod numerics;
