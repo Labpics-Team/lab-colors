@@ -1,3 +1,6 @@
+﻿// Solver curve uses deprecated LcsColor per F-01 design
+#![allow(deprecated)]
+
 //! Воспроизводимый протокол замера dJ'-якорей декоративных ролей из живых
 //! значений Figma (файл 🧪Lab UI (v.1), коллекция «🔵 4.2 Semantic»).
 //!
