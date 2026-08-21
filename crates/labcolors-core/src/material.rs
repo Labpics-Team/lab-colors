@@ -53,9 +53,9 @@ use std::fmt;
 // Общие геометрические типы (короб фонов, полюс, каналы) определяются в
 // единственном источнике физики — `crate::corridor_representation` — и
 // переиспользуются здесь как публичный синтаксис pre-C7c без второго определения.
-pub use crate::corridor_representation::{
-    BackdropBoundV1, BackdropBox, BackdropBoxErrorV1, EncodedRgbErrorV1, Pole, RgbChannelV1,
-};
+#[cfg(test)]
+use crate::corridor_representation::{BackdropBoundV1, BackdropBoxErrorV1, RgbChannelV1};
+pub use crate::corridor_representation::{BackdropBox, EncodedRgbErrorV1, Pole};
 
 /// Класс численного профиля, в котором охарактеризована граница material-alpha.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

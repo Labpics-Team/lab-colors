@@ -4,7 +4,7 @@
 //! существует только под `cfg(test)`, чтобы golden/property тесты не стирали
 //! разные причины терминального отказа в один правдоподобный sentinel.
 
-use crate::RoleFailure;
+use crate::semantic::RoleFailure;
 
 use std::{
     alloc::{GlobalAlloc, Layout, System},

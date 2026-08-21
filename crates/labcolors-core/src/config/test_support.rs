@@ -3,7 +3,7 @@
 //! Модуль существует только под `cfg(test)`: строковая форма ниже — оракул
 //! characterization/golden-тестов, а не второй публичный формат эмиссии.
 
-use crate::Resolved;
+use crate::semantic::Resolved;
 
 /// Каноническая строковая форма решённой роли для in-crate golden-гейтов.
 pub(crate) fn resolved_repr(res: &Resolved) -> String {

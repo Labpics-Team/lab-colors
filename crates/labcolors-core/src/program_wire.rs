@@ -226,3 +226,307 @@ mod fixture_migration_tests {
         assert_eq!(identity, check_program_wire_v1(&bytes).unwrap());
     }
 }
+
+/// Полностью скомпилированный Program без runtime-authority.
+///
+/// Владеет immutable графом и content identity; Session появляется только
+/// через consuming [`Self::instantiate`], поэтому один runtime не может молча
+/// разделить владельца с другим.
+pub struct CompiledProgramV1 {
+    owner: crate::program::OwnerV1,
+}
+
+/// Единственный runtime-владелец одной Session публичного Program.
+pub struct ProgramSessionV1 {
+    owner: crate::program::OwnerV1,
+    session: crate::program::SessionV1,
+}
+
+/// Один сценарий наблюдаемой среды: непрозрачный ID и значения surface inputs
+/// в каноническом порядке, объявленном Program.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProgramScenarioV1 {
+    id: u32,
+    surfaces: Vec<crate::Srgb8>,
+}
+
+impl ProgramScenarioV1 {
+    /// Создаёт owned-сценарий; кардинальность сверяется с Program при update.
+    #[must_use]
+    pub fn new(id: u32, surfaces: Vec<crate::Srgb8>) -> Self {
+        Self { id, surfaces }
+    }
+}
+
+/// Lifecycle-класс одного опубликованного snapshot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ProgramSnapshotStateV1 {
+    Waiting,
+    Ready,
+    Stale,
+    Failed,
+}
+
+/// Один сертифицированный Paint output.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ProgramPaintOutputV1 {
+    slot: u32,
+    source: crate::Srgb8,
+    opacity: f64,
+}
+
+impl ProgramPaintOutputV1 {
+    /// Непрозрачный клиентский output slot.
+    #[must_use]
+    pub const fn slot(self) -> u32 {
+        self.slot
+    }
+
+    /// Сертифицированный encoded sRGB8 source.
+    #[must_use]
+    pub const fn source(self) -> crate::Srgb8 {
+        self.source
+    }
+
+    /// Сертифицированная straight opacity в `0..=1`.
+    #[must_use]
+    pub const fn opacity(self) -> f64 {
+        self.opacity
+    }
+}
+
+/// Owned snapshot Session после атомарного update.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProgramSnapshotV1 {
+    state: ProgramSnapshotStateV1,
+    outputs: Vec<ProgramPaintOutputV1>,
+}
+
+impl ProgramSnapshotV1 {
+    #[must_use]
+    pub const fn state(&self) -> ProgramSnapshotStateV1 {
+        self.state
+    }
+
+    #[must_use]
+    pub fn outputs(&self) -> &[ProgramPaintOutputV1] {
+        &self.outputs
+    }
+}
+
+/// Typed-отказ публичного runtime-сеама. Payload внутренних вариантов не
+/// раскрывается преждевременно; enum non_exhaustive для эволюции.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ProgramRuntimeErrorV1 {
+    Wire,
+    Compile,
+    FamilyArtifactsRequired,
+    Instantiate,
+    Update,
+}
+
+/// Компилирует канонические Program wire bytes в immutable owner.
+///
+/// Family-графы в первом публичном runtime-срезе отклоняются: доверие к family
+/// artifact обеспечивает вызывающий, а public trust-параметр будет отдельной
+/// версией seam, не silent assumption.
+pub fn compile_program_wire_v1(bytes: &[u8]) -> Result<CompiledProgramV1, ProgramRuntimeErrorV1> {
+    let draft = decode_program_wire_v1(bytes).map_err(|_| ProgramRuntimeErrorV1::Wire)?;
+    let owner = draft
+        .compile()
+        .map_err(|_| ProgramRuntimeErrorV1::Compile)?;
+    if owner.required_family_releases().next().is_some() {
+        return Err(ProgramRuntimeErrorV1::FamilyArtifactsRequired);
+    }
+    Ok(CompiledProgramV1 { owner })
+}
+
+impl CompiledProgramV1 {
+    /// Content identity immutable графа.
+    #[must_use]
+    pub fn content_identity(&self) -> [u8; 32] {
+        *self.owner.content_identity().as_bytes()
+    }
+
+    /// Consuming instantiate: owner и session переходят одному runtime.
+    pub fn instantiate(self, stream_id: u32) -> Result<ProgramSessionV1, ProgramRuntimeErrorV1> {
+        let session = self
+            .owner
+            .instantiate(stream_id)
+            .map_err(|_| ProgramRuntimeErrorV1::Instantiate)?;
+        Ok(ProgramSessionV1 {
+            owner: self.owner,
+            session,
+        })
+    }
+}
+
+impl ProgramSessionV1 {
+    /// Атомарно применяет observed update и возвращает owned snapshot.
+    ///
+    /// Подготовленный переход либо commit'ится целиком, либо при любом отказе
+    /// Session сохраняет предыдущие head/lifecycle/evidence — закон внутренней
+    /// `PreparedSessionTransitionV1` не ослабляется публичной обёрткой.
+    pub fn update_observed(
+        &mut self,
+        revision: u64,
+        scenarios: &[ProgramScenarioV1],
+    ) -> Result<ProgramSnapshotV1, ProgramRuntimeErrorV1> {
+        let admitted: Vec<crate::program::ScenarioV1<'_>> = scenarios
+            .iter()
+            .map(|scenario| crate::program::ScenarioV1::new(scenario.id, &scenario.surfaces))
+            .collect();
+        let transition = self
+            .owner
+            .prepare_update(
+                &mut self.session,
+                crate::program::UpdateV1::Observed {
+                    revision,
+                    scenarios: &admitted,
+                },
+            )
+            .map_err(|_| ProgramRuntimeErrorV1::Update)?;
+        let evidence = transition.commit();
+        Ok(snapshot_from_evidence(evidence))
+    }
+
+    /// Атомарно применяет Unknown update с непрозрачной причиной.
+    pub fn update_unknown(
+        &mut self,
+        revision: u64,
+        reason_id: u32,
+    ) -> Result<ProgramSnapshotV1, ProgramRuntimeErrorV1> {
+        let transition = self
+            .owner
+            .prepare_update(
+                &mut self.session,
+                crate::program::UpdateV1::Unknown {
+                    revision,
+                    reason_id,
+                },
+            )
+            .map_err(|_| ProgramRuntimeErrorV1::Update)?;
+        Ok(snapshot_from_evidence(transition.commit()))
+    }
+}
+
+fn snapshot_from_evidence(evidence: crate::program::EvidenceViewV1<'_>) -> ProgramSnapshotV1 {
+    use crate::program::{CertificateV1, StateKindV1};
+    let state = match evidence.kind() {
+        StateKindV1::Waiting => ProgramSnapshotStateV1::Waiting,
+        StateKindV1::Ready => ProgramSnapshotStateV1::Ready,
+        StateKindV1::Stale => ProgramSnapshotStateV1::Stale,
+        StateKindV1::Failed => ProgramSnapshotStateV1::Failed,
+    };
+    let outputs = evidence
+        .certificates()
+        .find_map(|certificate| match certificate {
+            CertificateV1::Verified(verified) => Some(
+                verified
+                    .outputs()
+                    .map(|output| ProgramPaintOutputV1 {
+                        slot: output.output_slot().value(),
+                        source: output.source(),
+                        opacity: output.opacity(),
+                    })
+                    .collect(),
+            ),
+            CertificateV1::Conflict(_) => None,
+        })
+        .unwrap_or_default();
+    ProgramSnapshotV1 { state, outputs }
+}
+
+#[cfg(test)]
+mod runtime_tests {
+    use super::*;
+    use crate::program::wire::ProgramWireBuilderV1;
+
+    fn runtime_wire(expected: crate::Srgb8) -> Vec<u8> {
+        let mut builder = ProgramWireBuilderV1::new();
+        builder
+            .source(1, crate::Srgb8::new([0x40, 0x40, 0x40]))
+            .fixed_target(2, 1)
+            .surface_input_port(6)
+            .opacity_input(5, 0.5)
+            .solid_paint(3, 2)
+            .opacity_paint(4, 3, 5)
+            .input_surface(7, 6)
+            .source_over_occurrence(8, 4, 7, 64.0, 0.2, 2)
+            .presentation_root(9, 8)
+            .presentation_target(9, 8)
+            .exact_visible_unary(true, 10, 8, expected)
+            .output(17, 4);
+        builder.finish().unwrap()
+    }
+
+    #[test]
+    fn wire_runtime_compiles_instantiates_updates_and_returns_certified_outputs() {
+        // source #404040 at 0.5 over backdrop #808080 -> encoded source-over #606060.
+        let compiled =
+            compile_program_wire_v1(&runtime_wire(crate::Srgb8::new([0x60, 0x60, 0x60]))).unwrap();
+        let identity = compiled.content_identity();
+        assert_ne!(identity, [0; 32]);
+        let mut session = compiled.instantiate(100).unwrap();
+        let snapshot = session
+            .update_observed(
+                1,
+                &[ProgramScenarioV1::new(
+                    7,
+                    vec![crate::Srgb8::new([0x80, 0x80, 0x80])],
+                )],
+            )
+            .unwrap();
+        assert_eq!(snapshot.state(), ProgramSnapshotStateV1::Ready);
+        assert_eq!(snapshot.outputs().len(), 1);
+        assert_eq!(snapshot.outputs()[0].slot(), 17);
+        assert_eq!(
+            snapshot.outputs()[0].source(),
+            crate::Srgb8::new([0x40, 0x40, 0x40])
+        );
+        assert_eq!(snapshot.outputs()[0].opacity().to_bits(), 0.5_f64.to_bits());
+    }
+
+    #[test]
+    fn update_failure_preserves_previous_ready_snapshot() {
+        let compiled =
+            compile_program_wire_v1(&runtime_wire(crate::Srgb8::new([0x60, 0x60, 0x60]))).unwrap();
+        let mut session = compiled.instantiate(100).unwrap();
+        let first = session
+            .update_observed(
+                1,
+                &[ProgramScenarioV1::new(
+                    7,
+                    vec![crate::Srgb8::new([0x80, 0x80, 0x80])],
+                )],
+            )
+            .unwrap();
+        assert_eq!(first.state(), ProgramSnapshotStateV1::Ready);
+        let refused = session.update_observed(2, &[]);
+        assert!(matches!(refused, Err(ProgramRuntimeErrorV1::Update)));
+        // Следующий валидный update должен продолжить ту же Session и снова Ready.
+        let second = session
+            .update_observed(
+                2,
+                &[ProgramScenarioV1::new(
+                    7,
+                    vec![crate::Srgb8::new([0x80, 0x80, 0x80])],
+                )],
+            )
+            .unwrap();
+        assert_eq!(second.state(), ProgramSnapshotStateV1::Ready);
+    }
+
+    #[test]
+    fn family_graphs_fail_closed_until_a_public_trust_parameter_exists() {
+        let mut builder = ProgramWireBuilderV1::new();
+        builder.family(1, [7; 32]);
+        let bytes = builder.finish().unwrap();
+        assert!(matches!(
+            compile_program_wire_v1(&bytes),
+            Err(ProgramRuntimeErrorV1::Compile | ProgramRuntimeErrorV1::FamilyArtifactsRequired)
+        ));
+    }
+}

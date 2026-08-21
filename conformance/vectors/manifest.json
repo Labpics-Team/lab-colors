@@ -1,14 +1,13 @@
 {
-  "packVersion": "10.0.0",
+  "packVersion": "11.0.0",
   "coreVersion": "0.3.0",
-  "packDigest": "00328112",
+  "packDigest": "f079effc",
   "counts": {
     "contrasts": 40,
-    "ladders": 25,
     "alpha": 7,
     "solve": 8,
     "wcag22": 6,
-    "total": 86
+    "total": 61
   },
   "numericalCapabilities": {
     "schemaVersion": 2,

@@ -118,7 +118,7 @@ final class ConformanceTests: XCTestCase {
 
     func testCoreVersionMatchesManifest() throws {
         let manifest = try load("manifest.json", as: Manifest.self)
-        XCTAssertEqual(manifest.packVersion, "10.0.0", "Swift fixture обязан исполнять pack v10")
+        XCTAssertEqual(manifest.packVersion, "11.0.0", "Swift fixture обязан исполнять terminal pack v11")
         XCTAssertFalse(coreVersion().isEmpty)
         XCTAssertEqual(
             coreVersion(), manifest.coreVersion,
@@ -223,19 +223,6 @@ final class ConformanceTests: XCTestCase {
         }
     }
 
-    // MARK: - Семейство: лестницы
-
-    func testLadders() throws {
-        let vectors = try load("ladders.json", as: [LadderVec].self)
-        XCTAssertFalse(vectors.isEmpty)
-        for v in vectors {
-            let light = try ladderAlpha(position: v.position, theme: .light)
-            let dark = try ladderAlpha(position: v.position, theme: .dark)
-            XCTAssertEqual(light, v.alphaLight, accuracy: Self.driftTol, "α_light \(v.position)")
-            XCTAssertEqual(dark, v.alphaDark, accuracy: Self.driftTol, "α_dark \(v.position)")
-        }
-    }
-
     // MARK: - Семейство: подложка → α
 
     func testAlpha() throws {
@@ -251,161 +238,6 @@ final class ConformanceTests: XCTestCase {
     }
 
     // MARK: - Low-level Glow decision contract
-
-    func testGeneratedGlowSurfaceContainsOnlyAtomicProvenanceVariants() throws {
-        var packageRoot = URL(fileURLWithPath: #filePath)
-        for _ in 0..<3 { packageRoot = packageRoot.deletingLastPathComponent() }
-        let generatedSource = packageRoot
-            .appendingPathComponent("Sources")
-            .appendingPathComponent("LabColors")
-            .appendingPathComponent("labcolors.swift")
-        let source = try String(contentsOf: generatedSource, encoding: .utf8)
-
-        // Positive cases делают negative API-проверки невакуумными: читается
-        // именно сгенерированная algebraic Glow surface, а не пустой/чужой файл.
-        XCTAssertTrue(source.contains("public enum GlowPointDecision"))
-        XCTAssertTrue(source.contains("case stableExactNoop("))
-        XCTAssertTrue(source.contains("case legacyReached("))
-        XCTAssertTrue(source.contains("case legacyUnreachable("))
-        XCTAssertTrue(source.contains("case indeterminate("))
-        XCTAssertTrue(source.contains("public enum GlowDecisionProfile"))
-        XCTAssertTrue(source.contains("case IncompatibleCoreContract("))
-        XCTAssertFalse(source.contains("case determinate("))
-        XCTAssertFalse(source.contains("public enum GlowDecisionGuarantee"))
-        XCTAssertFalse(source.contains("public enum GlowTargetStatus"))
-        XCTAssertFalse(source.contains("public enum GlowDiagnosticProfile"))
-    }
-
-    func testInvalidPublicGlowInputsKeepPublicInputErrorTaxonomy() {
-        let invalidInputs: [(String, String, Double)] = [
-            ("not-a-color", "#000000", 2.3006),
-            ("#C0B2FA", "not-a-color", 2.3006),
-            ("#C0B2FA", "#000000", 0.0),
-            ("#C0B2FA", "#000000", -1.0),
-            ("#C0B2FA", "#000000", .nan),
-            ("#C0B2FA", "#000000", .infinity),
-        ]
-        for (tint, background, targetDj) in invalidInputs {
-            XCTAssertThrowsError(try solveGlowPoint(
-                tint: tint,
-                background: background,
-                targetDj: targetDj,
-                theme: .light,
-                profile: .stableV1
-            )) { error in
-                guard case let ColorError.InvalidGlowRequest(reason) = error else {
-                    return XCTFail(
-                        "public input error не должен становиться adapter incompatibility: \(error)")
-                }
-                XCTAssertFalse(reason.isEmpty)
-            }
-        }
-    }
-
-    func testGlowInputProfilesRemainExplicitAndOutputProvenanceIsAtomic() throws {
-        let tint = "#C0B2FA"
-        let background = "#101012"
-        let targetDj = 2.3006
-
-        // Independent exact-rational anti-vacuum probe: at alpha 1/2 the two
-        // encoded operators differ by two bytes in R/G. Keeping this fixture
-        // independent from the solver-selected alpha prevents an accidental
-        // same-hex quantisation from weakening the oracle.
-        let screenProbe = screenComposite(tint: tint, alpha: 0.5, background: background)
-        let sourceOverProbe = try composite(tint: tint, alpha: 0.5, bg: background)
-        XCTAssertEqual(screenProbe, "#6A6386")
-        XCTAssertEqual(sourceOverProbe, "#686186")
-        XCTAssertNotEqual(screenProbe, sourceOverProbe)
-
-        let stable = try solveGlowPoint(
-            tint: tint,
-            background: background,
-            targetDj: targetDj,
-            theme: .light,
-            profile: .stableV1)
-        switch stable {
-        case let .indeterminate(siteId, evidence):
-            XCTAssertEqual(siteId, .glowTargetOrMaximumV1)
-            guard case .soundBoundUnavailable = evidence else {
-                return XCTFail("stable-v1 обязан вернуть typed unavailable-bound evidence")
-            }
-        case .stableExactNoop, .legacyReached, .legacyUnreachable:
-            XCTFail("stable-v1 не должен выбирать состояние без sound bound")
-        }
-
-        let legacy = try solveGlowPoint(
-            tint: tint,
-            background: background,
-            targetDj: targetDj,
-            theme: .light,
-            profile: .legacyPlatformDependentV1)
-        switch legacy {
-        case let .legacyReached(value):
-            XCTAssertEqual(value.compositeProfile, .encodedSrgb8ScreenV1)
-            XCTAssertEqual(value.compositeGuarantee, .bitExact)
-            XCTAssertEqual(value.targetDj, targetDj)
-            let recomposite = screenComposite(
-                tint: tint, alpha: value.alpha, background: background)
-            XCTAssertEqual(
-                recomposite,
-                value.compositeHex,
-                "bit-exact относится к композитору, не к CAM16 decision")
-        case .stableExactNoop, .legacyUnreachable, .indeterminate:
-            XCTFail("explicit legacy reached fixture обязан вернуть atomic legacyReached")
-        }
-
-        func assertStableNoop(tint: String, background: String, composite expected: String) throws {
-            let decision = try solveGlowPoint(
-                tint: tint,
-                background: background,
-                targetDj: targetDj,
-                theme: .light,
-                profile: .stableV1)
-            switch decision {
-            case let .stableExactNoop(value):
-                XCTAssertEqual(value.compositeProfile, .encodedSrgb8ScreenV1)
-                XCTAssertEqual(value.compositeGuarantee, .bitExact)
-                XCTAssertEqual(value.achievedDj, 0.0)
-                XCTAssertEqual(value.compositeHex, expected)
-            case .legacyReached, .legacyUnreachable, .indeterminate:
-                XCTFail("exact screen no-op обязан вернуть atomic stableExactNoop")
-            }
-        }
-
-        try assertStableNoop(tint: tint, background: "#FFFFFF", composite: "#FFFFFF")
-        try assertStableNoop(tint: "#010000", background: "#FE0000", composite: "#FE0000")
-
-        let legacyUnreachable = try solveGlowPoint(
-            tint: tint,
-            background: "#FFFFFF",
-            targetDj: targetDj,
-            theme: .light,
-            profile: .legacyPlatformDependentV1)
-        switch legacyUnreachable {
-        case let .legacyUnreachable(value):
-            XCTAssertEqual(value.compositeProfile, .encodedSrgb8ScreenV1)
-            XCTAssertEqual(value.compositeGuarantee, .bitExact)
-            XCTAssertEqual(value.compositeHex, "#FFFFFF")
-        case .stableExactNoop, .legacyReached, .indeterminate:
-            XCTFail("explicit legacy no-op обязан вернуть atomic legacyUnreachable")
-        }
-
-        let crossing = try solveGlowPoint(
-            tint: "#800000",
-            background: "#FE0000",
-            targetDj: targetDj,
-            theme: .light,
-            profile: .stableV1)
-        switch crossing {
-        case let .indeterminate(siteId, evidence):
-            XCTAssertEqual(siteId, .glowTargetOrMaximumV1)
-            guard case .soundBoundUnavailable = evidence else {
-                return XCTFail("first crossing обязан сохранить typed unavailable-bound evidence")
-            }
-        case .stableExactNoop, .legacyReached, .legacyUnreachable:
-            XCTFail("#800000 над #FE0000 пересекает первый half-LSB wall")
-        }
-    }
 
     // MARK: - Семейство: резолв (снапшоты токенов)
 
@@ -423,7 +255,6 @@ final class ConformanceTests: XCTestCase {
                 XCTAssertEqual(
                     got.wcagRatio, v.outcome.wcagRatio!, accuracy: Self.driftTol,
                     "solve wcag \(v.bg)")
-                XCTAssertEqual(got.floorOverride, v.outcome.floorOverride!, "floor_override \(v.bg)")
             case "failure":
                 XCTAssertThrowsError(try solveContrast(bg: v.bg, contract: spec, theme: th)) { err in
                     guard case let ColorError.Failure(category, code) = err else {
@@ -539,12 +370,6 @@ struct ContrastVec: Codable {
     let wcagRatio: Double
 }
 
-struct LadderVec: Codable {
-    let position: String
-    let alphaLight: Double
-    let alphaDark: Double
-}
-
 struct AlphaVec: Codable {
     let tint: String
     let alpha: Double
@@ -565,7 +390,6 @@ struct OutcomeJSON: Codable {
     let hex: String?
     let lc: Double?
     let wcagRatio: Double?
-    let floorOverride: Bool?
     let category: String?
     let code: String?
 }

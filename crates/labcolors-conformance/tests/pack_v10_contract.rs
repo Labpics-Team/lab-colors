@@ -1,40 +1,31 @@
-//! Pack-контракт: pack 10 не содержит удалённые legacy-семейства и закрепляет
-//! точные текущие байты пяти канонических семейств. WCAG-family несёт текущую
-//! proof lineage; это identity текущего pack, а не обещание byte-совместимости
-//! с pack 9.
-
-use std::collections::BTreeSet;
-use std::path::{Path, PathBuf};
+//! Pack 11 terminal C7c contract: recipe-ladder family and floorOverride
+//! projection are absent; four permanent canonical families remain byte-pinned.
 
 use labcolors_conformance::{FAMILY_FILES, MANIFEST_FILE, PACK_VERSION};
-
+use std::collections::BTreeSet;
+use std::path::{Path, PathBuf};
 #[allow(dead_code)]
 #[path = "../../labcolors-core/src/sha256.rs"]
 mod sha256;
 
-const CANONICAL_FAMILY_SHA256: [(&str, &str); 5] = [
-    (
-        "solve.json",
-        "1b34059c1d398e3dca04e13c0333fffe71fbd26061205450d845d95510755d77",
-    ),
+const CANONICAL_FAMILY_SHA256: [(&str, &str); 4] = [
     (
         "contrasts.json",
         "57d99bb3138edba769a185af5589651ab1cd3140f92e5cf493be2f998b2f1145",
-    ),
-    (
-        "ladders.json",
-        "496f562e55ad8110aeb8a07042b1964ec9ff4d0f1e8c09e362d1b2d14c513036",
     ),
     (
         "alpha.json",
         "b9c71e26c96c977c51cb2ffc98ff8f24a24705105c1962479e72e687b1b05bb1",
     ),
     (
+        "solve.json",
+        "09cb198d63cc079384a4fdc5d6ae236f510e32d12214c97a063ca7a5d2f7dcf9",
+    ),
+    (
         "wcag22.json",
         "836b7f90ab3807072155d8e38633cf6bab7ec6ad7a0ee436831acd8536df6db7",
     ),
 ];
-
 fn vectors_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("..")
@@ -42,58 +33,42 @@ fn vectors_dir() -> PathBuf {
         .join("conformance")
         .join("vectors")
 }
-
 fn read(path: impl AsRef<Path>) -> Vec<u8> {
     std::fs::read(path.as_ref())
-        .unwrap_or_else(|error| panic!("cannot read {}: {error}", path.as_ref().display()))
+        .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.as_ref().display()))
 }
 
 #[test]
-fn pack_v10_family_inventory_and_bytes_are_exact() {
-    assert_eq!(PACK_VERSION, "10.0.0");
+fn pack_v11_family_inventory_and_bytes_are_exact() {
+    assert_eq!(PACK_VERSION, "11.0.0");
     assert_eq!(
         FAMILY_FILES.as_slice(),
-        [
-            "contrasts.json",
-            "ladders.json",
-            "alpha.json",
-            "solve.json",
-            "wcag22.json",
-        ]
-        .as_slice()
+        ["contrasts.json", "alpha.json", "solve.json", "wcag22.json"].as_slice()
     );
-
     let dir = vectors_dir();
     for (name, expected) in CANONICAL_FAMILY_SHA256 {
         assert_eq!(
             sha256::digest(&read(dir.join(name))).to_hex(),
             expected,
-            "pack-10 canonical family bytes drifted without explicit regeneration: {name}"
+            "pack-11 bytes drifted: {name}"
         );
     }
-    assert!(
-        !dir.join("wcag22-explicit-selection.json").exists(),
-        "the explicit-selection family must be gone, not regenerated"
-    );
-    assert!(
-        !dir.join("wcag22-feasibility.json").exists(),
-        "the feasibility family must be gone, not regenerated"
-    );
-    assert!(
-        !dir.join("muddiness.json").exists(),
-        "the muddiness family must be gone, not regenerated"
-    );
-
+    for removed in [
+        "ladders.json",
+        "wcag22-explicit-selection.json",
+        "wcag22-feasibility.json",
+        "muddiness.json",
+    ] {
+        assert!(
+            !dir.join(removed).exists(),
+            "removed family returned: {removed}"
+        );
+    }
     let manifest: serde_json::Value =
-        serde_json::from_slice(&read(dir.join(MANIFEST_FILE))).expect("valid manifest JSON");
-    assert_eq!(manifest["packVersion"], "10.0.0");
-    assert!(
-        manifest["counts"].get("wcag22ExplicitSelection").is_none()
-            && manifest["counts"].get("wcag22Feasibility").is_none()
-            && manifest["counts"].get("muddiness").is_none(),
-        "manifest must not carry removed family counts"
-    );
-    assert_eq!(manifest["counts"]["total"], 86);
+        serde_json::from_slice(&read(dir.join(MANIFEST_FILE))).expect("valid manifest");
+    assert_eq!(manifest["packVersion"], "11.0.0");
+    assert_eq!(manifest["counts"]["total"], 61);
+    assert!(manifest["counts"].get("ladders").is_none());
 }
 
 #[test]

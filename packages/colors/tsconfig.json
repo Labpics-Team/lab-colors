@@ -9,11 +9,5 @@
     "skipLibCheck": false,
     "types": []
   },
-  "include": [
-    "index.d.ts",
-    "apply-theme.d.ts",
-    "watch-theme.d.ts",
-    "adapt-theme.d.ts",
-    "smoke.consumer.ts"
-  ]
+  "include": ["index.d.ts", "smoke.consumer.ts"]
 }

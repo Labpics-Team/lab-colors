@@ -1,8 +1,8 @@
 {
   "name": "@labpics/colors",
-  "version": "0.11.0",
+  "version": "1.0.0",
   "packageManager": "npm@11.9.0",
-  "description": "Runtime resolver for client-owned color-token contracts. WASM core, zero runtime dependencies.",
+  "description": "Canonical Program wire compiler and certified color runtime. WASM core, zero runtime dependencies.",
   "type": "module",
   "license": "MIT",
   "publishConfig": {
@@ -19,18 +19,6 @@
       "types": "./index.d.ts",
       "default": "./index.js"
     },
-    "./apply-theme": {
-      "types": "./apply-theme.d.ts",
-      "default": "./apply-theme.js"
-    },
-    "./watch-theme": {
-      "types": "./watch-theme.d.ts",
-      "default": "./watch-theme.js"
-    },
-    "./adapt-theme": {
-      "types": "./adapt-theme.d.ts",
-      "default": "./adapt-theme.js"
-    },
     "./pkg/labcolors_bg.wasm": "./pkg/labcolors_bg.wasm",
     "./build-metadata.json": "./build-metadata.json",
     "./package.json": "./package.json"
@@ -41,35 +29,19 @@
     "index.js",
     "index.d.ts",
     "wcag22.d.ts",
-    "apply-theme.js",
-    "apply-theme.d.ts",
-    "snapshot.js",
-    "output-sink.js",
-    "output-bindings.js",
-    "sequence-identity-matches.js",
-    "watch-theme.js",
-    "watch-theme.d.ts",
-    "adapt-theme.js",
-    "adapt-theme.d.ts",
-    "background-observation.js",
-    "effective-bg.js",
     "evidence/wcag22-srgb8-v1.json",
     "evidence/wcag22-srgb8-q55-v1.bin",
     "evidence/wcag22-srgb8-q55-proof-v1.json",
     "evidence/point-support-reference-surplus-q55-bps-proof-v1.json",
-    "private-program/consumer.js",
-    "private-program/abi-v2.js",
-    "private-program/labcolors_private_program.wasm",
-    "private-program/build-metadata.json",
     "pkg/labcolors.js",
     "pkg/labcolors.d.ts",
     "pkg/labcolors_bg.wasm",
     "pkg/labcolors_bg.wasm.d.ts"
   ],
   "scripts": {
-    "build": "wasm-pack build ../../crates/labcolors-wasm --release --target web --out-dir ../../packages/colors/pkg --out-name labcolors --locked && node ../../scripts/build-private-program.mjs",
+    "build": "wasm-pack build ../../crates/labcolors-wasm --release --target web --out-dir ../../packages/colors/pkg --out-name labcolors --locked",
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "test": "node ../../scripts/ensure-private-program-artifact.mjs && node --test",
+    "test": "node --test",
     "prepack": "npm run build && node ../../scripts/prepare-npm-package.mjs",
     "release:verify": "node ../../scripts/verify-package-release.mjs"
   },

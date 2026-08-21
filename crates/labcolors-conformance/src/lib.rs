@@ -24,7 +24,6 @@
 //! | Файл | Что фиксирует | Источник в ядре |
 //! |------|---------------|-----------------|
 //! | `contrasts.json` | (fg, bg, тема) → (Ys candidate score, WCAG) | `recheck_against` |
-//! | `ladders.json` | позиция лестницы → (α_light, α_dark) | `LadderPosition::alpha_pair` |
 //! | `alpha.json` | подложка→α: композит и α_min | `alpha::composite_hex` / `alpha::min_alpha_hex` |
 //! | `solve.json` | (bg, контракт, тема) → цвет или типизированный failure | `solve` |
 //! | `wcag22.json` | final sRGB8 pair + criterion → exact assessment | `wcag22::evaluate_wcag22_hex` |
@@ -42,13 +41,13 @@ use serde::{Deserialize, Serialize};
 
 use labcolors_core::alpha::{composite_hex, min_alpha_hex};
 use labcolors_core::{
-    BgInput, ChromaPolicy, Contract, Gamut, Hue, LadderPosition, ViewingConditions, fnv1a_32,
-    recheck_against, solve,
+    BgInput, ChromaPolicy, Contract, Gamut, Hue, ViewingConditions, fnv1a_32, recheck_against,
+    solve,
 };
 
 /// Семантическая версия conformance-пака. Меняется при изменении СХЕМЫ или
 /// состава векторов; значения векторов при этом диктует канон ядра.
-pub const PACK_VERSION: &str = "10.0.0";
+pub const PACK_VERSION: &str = "11.0.0";
 
 /// Версия ядра, к которой привязан пак. Все крейты воркспейса делят одну версию
 /// (`version.workspace = true`), поэтому собственная `CARGO_PKG_VERSION` этого
@@ -71,15 +70,13 @@ pub fn core_version() -> &'static str {
 /// Паникует на неизвестной теме — ключи в паке контролируются генератором,
 /// внешний вход сюда не попадает.
 fn vc_for_theme(theme_key: &str) -> ViewingConditions {
-    use labcolors_core::VcPreset;
-    let preset = match theme_key {
-        "light" => VcPreset::Srgb,
-        "dark" => VcPreset::Dim,
-        "light-ic" => VcPreset::SrgbIc,
-        "dark-ic" => VcPreset::DimIc,
+    match theme_key {
+        "light" => ViewingConditions::srgb(),
+        "dark" => ViewingConditions::dim_surround(),
+        "light-ic" => ViewingConditions::srgb_high_contrast(),
+        "dark-ic" => ViewingConditions::dim_surround_high_contrast(),
         other => panic!("ключ темы в паке всегда канонический, получено: {other}"),
-    };
-    preset.viewing_conditions()
+    }
 }
 
 /// Все четыре канонические темы в стабильном порядке.
@@ -145,38 +142,6 @@ pub fn generate_contrasts() -> Vec<ContrastVector> {
         }
     }
     out
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Семейство: лестницы
-// ─────────────────────────────────────────────────────────────────────────────
-
-/// Один вектор лестницы: стабильный ключ позиции и её пер-темная пара альф.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct LadderVector {
-    /// Kebab-ключ позиции (`label-primary`, `fill-secondary`, …).
-    pub position: String,
-    /// Альфа в светлых темах (light / light-ic).
-    pub alpha_light: f64,
-    /// Альфа в тёмных темах (dark / dark-ic).
-    pub alpha_dark: f64,
-}
-
-/// Дериватор лестниц: каждая каноническая позиция и её `(light, dark)`-альфы.
-#[must_use]
-pub fn generate_ladders() -> Vec<LadderVector> {
-    LadderPosition::ALL
-        .iter()
-        .map(|&p| {
-            let (light, dark) = p.alpha_pair();
-            LadderVector {
-                position: p.key().to_string(),
-                alpha_light: light,
-                alpha_dark: dark,
-            }
-        })
-        .collect()
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -292,10 +257,6 @@ pub enum SolveOutcome {
         lc: f64,
         /// WCAG-ratio на отданном hex.
         wcag_ratio: f64,
-        /// Frozen pre-cutover report that a caller-owned final-emission hard
-        /// predicate moved the analytic candidate. The generic `solve` vectors
-        /// declare no such predicate, so this remains `false` by construction.
-        floor_override: bool,
     },
     /// Resolver не вернул цвет; category отделяет доказанную недостижимость от
     /// unresolved и rejected исходов.
@@ -453,7 +414,6 @@ pub fn generate_solve() -> Result<Vec<SolveVector>, PackGenerationError> {
                             hex: s.hex().to_string(),
                             lc: s.lc(),
                             wcag_ratio: *wcag_ratio,
-                            floor_override: s.final_emission_adjusted(),
                         }
                     }
                     Err(error) => {
@@ -630,13 +590,7 @@ pub const MANIFEST_FILE: &str = "manifest.json";
 
 /// Имена файлов семейств в КАНОНИЧЕСКОМ порядке — единый источник порядка для
 /// генератора, дайджеста и раннера-референса (дайджест зависит от порядка).
-pub const FAMILY_FILES: [&str; 5] = [
-    "contrasts.json",
-    "ladders.json",
-    "alpha.json",
-    "solve.json",
-    "wcag22.json",
-];
+pub const FAMILY_FILES: [&str; 4] = ["contrasts.json", "alpha.json", "solve.json", "wcag22.json"];
 
 /// Каноническая толерантность сравнения f64 для conformance-
 /// пака. Эта константа — SSOT правила сравнения. Наблюдаемый libm-шум
@@ -655,8 +609,6 @@ pub const DRIFT_TOL: f64 = 1e-6;
 pub struct Counts {
     /// Контраст-векторы.
     pub contrasts: usize,
-    /// Векторы лестниц.
-    pub ladders: usize,
     /// Альфа-векторы.
     pub alpha: usize,
     /// Резолв-векторы.
@@ -775,8 +727,6 @@ pub struct Manifest {
 pub struct Pack {
     /// Контраст-векторы.
     pub contrasts: Vec<ContrastVector>,
-    /// Векторы лестниц.
-    pub ladders: Vec<LadderVector>,
     /// Альфа-векторы.
     pub alpha: Vec<AlphaVector>,
     /// Резолв-векторы.
@@ -790,7 +740,6 @@ impl Pack {
     pub fn generate() -> Result<Self, PackGenerationError> {
         Ok(Pack {
             contrasts: generate_contrasts(),
-            ladders: generate_ladders(),
             alpha: generate_alpha(),
             solve: generate_solve()?,
             wcag22: generate_wcag22()?,
@@ -801,17 +750,15 @@ impl Pack {
     #[must_use]
     pub fn counts(&self) -> Counts {
         let contrasts = self.contrasts.len();
-        let ladders = self.ladders.len();
         let alpha = self.alpha.len();
         let solve = self.solve.len();
         let wcag22 = self.wcag22.len();
         Counts {
             contrasts,
-            ladders,
             alpha,
             solve,
             wcag22,
-            total: contrasts + ladders + alpha + solve + wcag22,
+            total: contrasts + alpha + solve + wcag22,
         }
     }
 
@@ -846,10 +793,9 @@ impl Pack {
     pub fn families(&self) -> Vec<(&'static str, String)> {
         vec![
             (FAMILY_FILES[0], to_canonical_json(&self.contrasts)),
-            (FAMILY_FILES[1], to_canonical_json(&self.ladders)),
-            (FAMILY_FILES[2], to_canonical_json(&self.alpha)),
-            (FAMILY_FILES[3], to_canonical_json(&self.solve)),
-            (FAMILY_FILES[4], to_canonical_json(&self.wcag22)),
+            (FAMILY_FILES[1], to_canonical_json(&self.alpha)),
+            (FAMILY_FILES[2], to_canonical_json(&self.solve)),
+            (FAMILY_FILES[3], to_canonical_json(&self.wcag22)),
         ]
     }
 }
@@ -941,11 +887,10 @@ mod tests {
         assert!(c.total > 0, "пустой пак бессмыслен");
         assert_eq!(
             c.total,
-            c.contrasts + c.ladders + c.alpha + c.solve + c.wcag22,
+            c.contrasts + c.alpha + c.solve + c.wcag22,
             "итог не сходится с семействами"
         );
         // Лестниц ровно столько, сколько канонических позиций.
-        assert_eq!(c.ladders, LadderPosition::ALL.len());
     }
 
     #[test]
@@ -984,45 +929,24 @@ mod tests {
     }
 
     #[test]
-    fn pack_v10_removes_only_the_muddiness_family() {
-        // Объём этого лока: версия пака/ядра, счётчики семейств (total 86) и
-        // обязательный half-tie-вектор ADR-0004 (нормализованный
-        // `(byte/255) * alpha * 255` путь ошибочно отдавал соседний LSB —
-        // обязательство унаследовано с pack v2). Байт-в-байт неизменность
-        // остальных семейств доказывает `tests/pack_v10_contract.rs`
-        // (SHA-256-пины), не эта функция.
+    fn pack_v11_is_the_terminal_program_conformance_shape() {
         let pack = Pack::generate().expect("canonical pack generation");
         let manifest = pack.manifest();
-        assert_eq!(
-            PACK_VERSION, "10.0.0",
-            "вырезание muddiness-семейства обязано быть pack v10"
-        );
+        assert_eq!(PACK_VERSION, "11.0.0");
         assert_eq!(manifest.pack_version, PACK_VERSION);
-        assert_eq!(
-            manifest.core_version, "0.3.0",
-            "pack v10 остаётся привязан к core 0.3.0"
-        );
-        assert_eq!(
-            pack.alpha.len(),
-            7,
-            "alpha-family v2+ обязана иметь 7 векторов"
-        );
-        assert_eq!(manifest.counts.alpha, pack.alpha.len());
-        assert_eq!(
-            manifest.counts.total, 86,
-            "состав векторных семейств изменился"
-        );
+        assert_eq!(manifest.core_version, "0.3.0");
+        // Recipe-ladder family и floorOverride удалены атомарным C7c.
+        assert_eq!(manifest.counts.total, 61);
+        assert_eq!(manifest.counts.contrasts, 40);
+        assert_eq!(manifest.counts.alpha, 7);
+        assert_eq!(manifest.counts.solve, 8);
         assert_eq!(manifest.counts.wcag22, 6);
-
         let half_tie = pack
             .alpha
             .iter()
             .find(|v| v.tint == "#C0B2FA" && v.alpha == 0.122 && v.bg == "#000000")
             .expect("в паке нет обязательного half-tie из ADR-0004");
-        assert_eq!(
-            half_tie.composite, "#17161F",
-            "byte-reference round-half-up должен выбрать верхний LSB"
-        );
+        assert_eq!(half_tie.composite, "#17161F");
     }
 
     #[test]

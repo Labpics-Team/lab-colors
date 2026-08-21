@@ -1,8 +1,8 @@
-// Public entry for @labpics/colors.
+// Terminal C7c public entry for @labpics/colors.
 //
-// Curates the wasm-bindgen surface plus the vanilla DOM runtime helpers:
-// `applyTheme` (one-shot apply), `watchTheme` (reactive sync), and
-// `adaptTheme` (sample-driven adaptation).
+// One runtime root: canonical Program wire -> ProgramRuntime -> ProgramSnapshot.
+// Retired recipe engines and browser helper
+// roots are intentionally not exported.
 
 import initWasm, { initSync as initWasmSync } from "./pkg/labcolors.js";
 
@@ -10,9 +10,11 @@ let initState = "idle";
 let initFlight;
 
 export {
-  LabColors,
+  compileProgramWire,
   evaluateWcag22,
   numericalCapabilityManifest,
+  ProgramRuntime,
+  ProgramSnapshot,
 } from "./pkg/labcolors.js";
 
 // wasm-bindgen returns every raw export from its loaders. The public facade
@@ -37,8 +39,6 @@ export function init(input) {
   const flight = initFlight;
   initState = "starting";
 
-  // State is owned before wasm-bindgen reads caller-controlled input. A Proxy
-  // getter therefore cannot re-enter and start a second instance.
   let pending;
   try {
     pending = initWasm(input);
@@ -65,16 +65,9 @@ export function init(input) {
 
 export function initSync(input) {
   if (initState === "ready") return;
-  if (initState === "async") {
-    throw new Error("Lab Colors: asynchronous initialization is in progress");
-  }
-  if (initState === "starting") {
-    throw new Error("Lab Colors: initialization input admission is in progress");
-  }
-  if (initState === "sync") {
-    throw new Error("Lab Colors: synchronous initialization is in progress");
-  }
-
+  if (initState === "async") throw new Error("Lab Colors: asynchronous initialization is in progress");
+  if (initState === "starting") throw new Error("Lab Colors: initialization input admission is in progress");
+  if (initState === "sync") throw new Error("Lab Colors: synchronous initialization is in progress");
   initState = "sync";
   try {
     initWasmSync(input);
@@ -86,7 +79,3 @@ export function initSync(input) {
 }
 
 export default init;
-
-export { applyTheme } from "./apply-theme.js";
-export { watchTheme } from "./watch-theme.js";
-export { adaptTheme } from "./adapt-theme.js";

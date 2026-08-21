@@ -41,9 +41,6 @@ labcolors-conformance = { path = "../labcolors-conformance" }
 # text-only output; nothing in the repo consumes the HTML reports.
 criterion = { version = "0.5", default-features = false, features = ["cargo_bench_support"] }
 
-[[bench]]
-name = "resolve"
-harness = false
 
 # wasm-pack invokes wasm-opt with these flags. `-Oz` optimises hard for size;
 # the feature-enable flags match what modern Rust emits and 2023+ browsers run

@@ -28,14 +28,6 @@ import { isDeepStrictEqual } from "node:util";
 import { atomicWriteGeneratedFile } from "./atomic-write.mjs";
 import { workspaceVersion } from "./cargo-workspace.mjs";
 import {
-  PRIVATE_PROGRAM_CONSUMER_PATH,
-  PRIVATE_PROGRAM_METADATA_PATH,
-  PRIVATE_PROGRAM_ROLE,
-  PRIVATE_PROGRAM_SYMBOL_PREFIX,
-  PRIVATE_PROGRAM_WASM_PATH,
-} from "./build-private-program.mjs";
-import { runCanonicalPrivateProgramBuild } from "./run-canonical-private-program-build.mjs";
-import {
   PACKAGE_DIR,
   REPO_ROOT,
   prepareNpmPackage,
@@ -64,24 +56,14 @@ const RELEASE_MANIFEST = resolve(RELEASE_DIR, "release-manifest.json");
 const PACKAGE_JSON = resolve(PACKAGE_DIR, "package.json");
 const PACKAGE_LOCK = resolve(PACKAGE_DIR, "package-lock.json");
 const BUILD_METADATA = resolve(PACKAGE_DIR, "build-metadata.json");
-const PRIVATE_PROGRAM_METADATA = resolve(PACKAGE_DIR, PRIVATE_PROGRAM_METADATA_PATH);
-const PRIVATE_PROGRAM_CONSUMER = resolve(PACKAGE_DIR, PRIVATE_PROGRAM_CONSUMER_PATH);
-const PRIVATE_PROGRAM_WASM = resolve(PACKAGE_DIR, PRIVATE_PROGRAM_WASM_PATH);
 const NPM_TARBALL_INSPECTOR = resolve(REPO_ROOT, "scripts/inspect-npm-tarball.py");
 const VERIFIED_TARBALL_DIRECTORY_PREFIX = "labcolors-release-verified-";
 const ROOT_CARGO = resolve(REPO_ROOT, "Cargo.toml");
 const CONFORMANCE_DIR = resolve(REPO_ROOT, "conformance/vectors");
 const CONFORMANCE_MANIFEST = resolve(CONFORMANCE_DIR, "manifest.json");
 const NUMERICAL_CONTRACT_DIR = resolve(REPO_ROOT, "crates/labcolors-core/contracts");
-// Полный состав пака 10.0.0. Верификатор читает байты из репозитория (не из
-// тарболла) и пересчитывает packDigest над всеми пятью семействами.
-const CONFORMANCE_FAMILY_FILES = [
-  "contrasts.json",
-  "ladders.json",
-  "alpha.json",
-  "solve.json",
-  "wcag22.json",
-];
+// Терминальный pack 11 содержит только четыре публичные семейства.
+const CONFORMANCE_FAMILY_FILES = ["contrasts.json", "alpha.json", "solve.json", "wcag22.json"];
 const RUNTIME_WASM_PATH = resolve(PACKAGE_DIR, "pkg/labcolors_bg.wasm");
 
 const REQUIRED_PACK_FILES = ["package.json", "README.md", "LICENSE"];
@@ -537,43 +519,6 @@ export function validateBuildMetadata(
   }
 }
 
-export function validatePrivateProgramMetadata(
-  metadata,
-  { packageJson, source, coreVersion, privateProgramBuild, artifacts },
-) {
-  const expected = {
-    schemaVersion: 1,
-    role: PRIVATE_PROGRAM_ROLE,
-    package: { name: packageJson.name, version: packageJson.version },
-    source: {
-      gitSha: source,
-      core: {
-        crate: privateProgramBuild.build.crate,
-        version: coreVersion,
-        digest: privateProgramBuild.source,
-      },
-    },
-    build: privateProgramBuild.build,
-    artifacts,
-  };
-  if (!isDeepStrictEqual(metadata, expected)) {
-    fail(
-      "private Program metadata does not exactly bind its release inputs:\n" +
-        `expected ${JSON.stringify(expected)}\n` +
-        `actual   ${JSON.stringify(metadata)}`,
-    );
-  }
-}
-
-export function validateRuntimeWasmIsolation(bytes) {
-  if (bytes.includes(Buffer.from(PRIVATE_PROGRAM_SYMBOL_PREFIX, "utf8"))) {
-    fail(
-      `public runtime WASM contains private Program symbol prefix ` +
-        PRIVATE_PROGRAM_SYMBOL_PREFIX,
-    );
-  }
-}
-
 function normalisePackPath(path) {
   if (
     typeof path !== "string" ||
@@ -1004,7 +949,7 @@ export function validateSolveFamily(family) {
     if (outcome.kind === "solved") {
       exactKeys(
         outcome,
-        ["kind", "hex", "lc", "wcagRatio", "floorOverride"],
+        ["kind", "hex", "lc", "wcagRatio"],
         `solve[${index}].outcome`,
       );
       if (typeof outcome.hex !== "string" || !/^#[0-9A-F]{6}$/u.test(outcome.hex)) {
@@ -1019,9 +964,6 @@ export function validateSolveFamily(family) {
         outcome.wcagRatio > 21
       ) {
         fail(`solve[${index}].outcome.wcagRatio must be finite and within [1, 21]`);
-      }
-      if (typeof outcome.floorOverride !== "boolean") {
-        fail(`solve[${index}].outcome.floorOverride must be boolean`);
       }
       solved += 1;
       continue;
@@ -1039,8 +981,8 @@ export function validateSolveFamily(family) {
 }
 
 async function validateConformance(conformance) {
-  if (conformance.packVersion !== "10.0.0") {
-    fail(`release requires conformance pack 10.0.0, got ${conformance.packVersion}`);
+  if (conformance.packVersion !== "11.0.0") {
+    fail(`release requires conformance pack 11.0.0, got ${conformance.packVersion}`);
   }
   if (!/^[0-9a-f]{8}$/u.test(conformance.packDigest ?? "")) {
     fail(`invalid conformance packDigest: ${conformance.packDigest}`);
@@ -1070,7 +1012,7 @@ async function validateConformance(conformance) {
       fail(`${CONFORMANCE_FAMILY_FILES[index]} is not valid JSON: ${error.message}`);
     }
   });
-  const countKeys = ["contrasts", "ladders", "alpha", "solve", "wcag22"];
+  const countKeys = ["contrasts", "alpha", "solve", "wcag22"];
   let total = 0;
   for (const [index, key] of countKeys.entries()) {
     const actual = families[index].length;
@@ -1082,14 +1024,14 @@ async function validateConformance(conformance) {
   if (conformance.counts?.total !== total) {
     fail(`conformance total=${conformance.counts?.total} differs from ${total}`);
   }
-  validateSolveFamily(families[3]);
-  const halfTie = families[2].find(
+  validateSolveFamily(families[2]);
+  const halfTie = families[1].find(
     (entry) => entry.tint === "#C0B2FA" && entry.bg === "#000000" && entry.alpha === 0.122,
   );
   if (halfTie?.composite !== "#17161F") {
     fail("conformance pack lacks the exact source-over half-tie #C0B2FA@0.122 -> #17161F");
   }
-  const antiEpsilon = families[4].find(
+  const antiEpsilon = families[3].find(
     (entry) =>
       entry.foreground === "#89BB09" &&
       entry.background === "#8212DB" &&
@@ -1190,950 +1132,113 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 
-const runtimeElements = new WeakSet();
-const runtimeDocuments = new WeakSet();
-const runtimeShadowRoots = new WeakSet();
-const runtimeStates = new WeakMap();
-
-const runtimeDescriptor = (receiver, property) => {
-  let owner = receiver;
-  while (owner !== null) {
-    const descriptor = Object.getOwnPropertyDescriptor(owner, property);
-    if (descriptor !== undefined) return descriptor;
-    owner = Object.getPrototypeOf(owner);
-  }
-  return undefined;
-};
-const runtimeRead = (receiver, property) => {
-  const descriptor = runtimeDescriptor(receiver, property);
-  if (descriptor === undefined) throw new TypeError("missing runtime " + property);
-  if ("value" in descriptor) return descriptor.value;
-  if (typeof descriptor.get !== "function") throw new TypeError("unreadable runtime " + property);
-  return Reflect.apply(descriptor.get, receiver, []);
-};
-const runtimeWrite = (receiver, property, value) => {
-  const descriptor = runtimeDescriptor(receiver, property);
-  if (descriptor === undefined) throw new TypeError("missing runtime " + property);
-  if (typeof descriptor.set === "function") Reflect.apply(descriptor.set, receiver, [value]);
-  else if ("value" in descriptor && descriptor.writable) receiver[property] = value;
-  else throw new TypeError("readonly runtime " + property);
-};
-
-class RuntimeNode {
-  get nodeType() {
-    if (runtimeDocuments.has(this)) return 9;
-    if (runtimeShadowRoots.has(this)) return 11;
-    if (runtimeElements.has(this)) return 1;
-    throw new TypeError("invalid RuntimeNode receiver");
-  }
-  get ownerDocument() {
-    const state = runtimeStates.get(this);
-    if (state) return state.document ?? null;
-    if (runtimeDocuments.has(this)) return null;
-    return runtimeRead(this, "ownerDocument");
-  }
-  get isConnected() {
-    const state = runtimeStates.get(this);
-    return state ? state.connected === true : runtimeRead(this, "isConnected");
-  }
-  getRootNode() {
-    const state = runtimeStates.get(this);
-    if (state) return state.root ?? this;
-    const callable = runtimeRead(this, "getRootNode");
-    return Reflect.apply(callable, this, []);
-  }
+const colors = await import("@labpics/colors");
+assert.deepEqual(Object.keys(colors).sort(), [
+  "ProgramRuntime",
+  "ProgramSnapshot",
+  "compileProgramWire",
+  "default",
+  "evaluateWcag22",
+  "init",
+  "initSync",
+  "numericalCapabilityManifest",
+]);
+for (const retired of ["LabColors", "resolveTheme", "applyTheme", "watchTheme", "adaptTheme"]) {
+  assert.equal(retired in colors, false, retired + " must be absent from the terminal root");
 }
-class RuntimeStyleDeclaration {
-  get length() {
-    const state = runtimeStates.get(this);
-    return state ? state.names.length : runtimeRead(this, "length");
-  }
-  item(index) {
-    const state = runtimeStates.get(this);
-    if (state) return state.names[index] ?? "";
-    return Reflect.apply(runtimeRead(this, "item"), this, [index]);
-  }
-}
-class RuntimeElement extends RuntimeNode {
-  get shadowRoot() {
-    const state = runtimeStates.get(this);
-    if (state) return state.shadowRoot ?? null;
-    return runtimeDescriptor(this, "shadowRoot") === undefined
-      ? null
-      : runtimeRead(this, "shadowRoot");
-  }
-  get style() {
-    const state = runtimeStates.get(this);
-    return state ? state.style : runtimeRead(this, "style");
-  }
-  attachShadow(init) {
-    const state = runtimeStates.get(this);
-    if (!state || init?.mode !== "open" || state.shadowRoot) throw new TypeError("invalid attachShadow");
-    const root = new RuntimeShadowRoot();
-    runtimeShadowRoots.add(root);
-    runtimeStates.set(root, { adopted: [], document: state.document, host: this, mode: "open" });
-    state.shadowRoot = root;
-    return root;
-  }
-}
-class RuntimeDocument extends RuntimeNode {
-  get documentElement() {
-    const state = runtimeStates.get(this);
-    return state ? state.documentElement : runtimeRead(this, "documentElement");
-  }
-  get defaultView() {
-    const state = runtimeStates.get(this);
-    return state ? state.realm : runtimeRead(this, "defaultView");
-  }
-  createElement() {
-    const state = runtimeStates.get(this);
-    if (!state) throw new TypeError("invalid RuntimeDocument receiver");
-    const element = new RuntimeElement();
-    const style = new RuntimeStyleDeclaration();
-    runtimeElements.add(element);
-    runtimeStates.set(style, { names: [] });
-    runtimeStates.set(element, {
-      connected: false,
-      document: this,
-      root: this,
-      shadowRoot: null,
-      style,
-    });
-    return element;
-  }
-  get adoptedStyleSheets() {
-    const state = runtimeStates.get(this);
-    return state ? state.adopted : runtimeRead(this, "adoptedStyleSheets");
-  }
-  set adoptedStyleSheets(value) {
-    const state = runtimeStates.get(this);
-    if (state) state.adopted = Array.from(value);
-    else runtimeWrite(this, "adoptedStyleSheets", value);
-  }
-}
-class RuntimeShadowRoot extends RuntimeNode {
-  get host() {
-    const state = runtimeStates.get(this);
-    return state ? state.host : runtimeRead(this, "host");
-  }
-  get mode() {
-    const state = runtimeStates.get(this);
-    return state ? state.mode : runtimeRead(this, "mode");
-  }
-  get adoptedStyleSheets() {
-    const state = runtimeStates.get(this);
-    return state ? state.adopted : runtimeRead(this, "adoptedStyleSheets");
-  }
-  set adoptedStyleSheets(value) {
-    const state = runtimeStates.get(this);
-    if (state) state.adopted = Array.from(value);
-    else runtimeWrite(this, "adoptedStyleSheets", value);
-  }
-}
-
-const ambientDocument = new RuntimeDocument();
-const ambientElement = new RuntimeElement();
-const ambientStyle = new RuntimeStyleDeclaration();
-const ambientRealm = { CSSStyleSheet: class RuntimeCSSStyleSheet {} };
-runtimeDocuments.add(ambientDocument);
-runtimeElements.add(ambientElement);
-runtimeStates.set(ambientStyle, { names: [] });
-runtimeStates.set(ambientElement, {
-  connected: true,
-  document: ambientDocument,
-  root: ambientDocument,
-  shadowRoot: null,
-  style: ambientStyle,
-});
-runtimeStates.set(ambientDocument, {
-  adopted: [],
-  documentElement: ambientElement,
-  realm: ambientRealm,
-});
-Object.defineProperty(globalThis, "document", {
-  configurable: true,
-  value: ambientDocument,
-  writable: false,
-});
-
-const colorsApi = await import("@labpics/colors");
-const {
-  default: init,
-  LabColors,
-  adaptTheme,
-  applyTheme,
-  evaluateWcag22,
-  numericalCapabilityManifest,
-  watchTheme,
-} = colorsApi;
-const applyThemeApi = await import("@labpics/colors/apply-theme");
-const watchThemeApi = await import("@labpics/colors/watch-theme");
-const adaptThemeApi = await import("@labpics/colors/adapt-theme");
-const { applyTheme: applyThemeFromSubpath } = applyThemeApi;
-const { watchTheme: watchThemeFromSubpath } = watchThemeApi;
-const { adaptTheme: adaptThemeFromSubpath } = adaptThemeApi;
-assert.equal(applyThemeFromSubpath, applyTheme, "root and apply-theme share one function");
-assert.equal(watchThemeFromSubpath, watchTheme, "root and watch-theme share one function");
-assert.equal(adaptThemeFromSubpath, adaptTheme, "root and adapt-theme share one function");
-
-const require = createRequire(import.meta.url);
-for (const name of [
-  "effectiveBackground",
-  "parseCssColor",
-  "compositeOver",
-  "compositeStackToHex",
-  "toHex",
-  "oklabLerp",
-  "createOutputSink",
-  "sequenceIdentityMatches",
-]) {
-  assert.equal(name in colorsApi, false, name + " must not be a root export");
-}
-for (const [subpath, namespace] of [
-  ["apply-theme", applyThemeApi],
-  ["watch-theme", watchThemeApi],
-  ["adapt-theme", adaptThemeApi],
-]) {
-  assert.equal("createOutputSink" in namespace, false, subpath + " must not export a sink factory");
-}
-await assert.rejects(
-  import("@labpics/colors/effective-bg"),
-  (error) => error?.code === "ERR_PACKAGE_PATH_NOT_EXPORTED",
-);
-await assert.rejects(
-  import("@labpics/colors/output-sink"),
-  (error) => error?.code === "ERR_PACKAGE_PATH_NOT_EXPORTED",
-);
-await assert.rejects(
-  import("@labpics/colors/output-bindings"),
-  (error) => error?.code === "ERR_PACKAGE_PATH_NOT_EXPORTED",
-);
-await assert.rejects(
-  import("@labpics/colors/sequence-identity-matches"),
-  (error) => error?.code === "ERR_PACKAGE_PATH_NOT_EXPORTED",
-);
-for (const privateSubpath of [
-  "@labpics/colors/private-program/abi-v2.js",
-  "@labpics/colors/private-program/consumer.js",
-  "@labpics/colors/private-program/labcolors_private_program.wasm",
-  "@labpics/colors/private-program/build-metadata.json",
-]) {
+for (const retiredSubpath of ["apply-theme", "watch-theme", "adapt-theme", "private-program/consumer.js"]) {
   await assert.rejects(
-    import(privateSubpath),
+    import("@labpics/colors/" + retiredSubpath),
     (error) => error?.code === "ERR_PACKAGE_PATH_NOT_EXPORTED",
   );
 }
+
+const require = createRequire(import.meta.url);
 const wasmPath = require.resolve("@labpics/colors/pkg/labcolors_bg.wasm");
 const metadataPath = require.resolve("@labpics/colors/build-metadata.json");
 const packagePath = require.resolve("@labpics/colors/package.json");
-const metadata = JSON.parse(await readFile(metadataPath, "utf8"));
-const installedPackage = JSON.parse(await readFile(packagePath, "utf8"));
-assert.deepEqual(metadata.package, {
-  name: installedPackage.name,
-  version: installedPackage.version,
-});
+const [wasm, metadataSource, packageSource] = await Promise.all([
+  readFile(wasmPath),
+  readFile(metadataPath, "utf8"),
+  readFile(packagePath, "utf8"),
+]);
+const metadata = JSON.parse(metadataSource);
+const installedPackage = JSON.parse(packageSource);
+assert.deepEqual(metadata.package, { name: installedPackage.name, version: installedPackage.version });
 assert.match(metadata.sourceSha, /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/u);
-assert.match(metadata.coreVersion, /^\d+\.\d+\.\d+$/u);
 assert.deepEqual(metadata.wasm.map(({ role }) => role), ["runtime"]);
-const runtimeWasm = metadata.wasm.find(({ role }) => role === "runtime");
-assert.deepEqual(runtimeWasm.path, "pkg/labcolors_bg.wasm");
-assert.equal(runtimeWasm.bytes, (await readFile(wasmPath)).length);
-await init({ module_or_path: await readFile(wasmPath) });
+assert.equal(metadata.wasm[0].path, "pkg/labcolors_bg.wasm");
+assert.equal(metadata.wasm[0].bytes, wasm.length);
+await colors.init({ module_or_path: wasm });
 
-const capability = numericalCapabilityManifest();
+const capability = colors.numericalCapabilityManifest();
 assert.equal(capability.schemaVersion, 2);
 assert.ok(capability.sites.some((site) =>
   site.siteId === "wcag22-srgb8-contrast-v1" &&
   site.proofIds.includes("wcag22-srgb8-full-domain-q55-v1")
 ));
-assert.deepEqual(
-  capability.sites.find((site) =>
-    site.siteId === "point-support-retained-reference-surplus-v1"
-  ),
-  {
-    siteId: "point-support-retained-reference-surplus-v1",
-    stableOutcomes: ["canonical-finite-bounded"],
-    compatibilityReleases: [],
-    evidenceClasses: ["canonical-finite-bounded"],
-    artifactIds: ["wcag22-srgb8-luminance-q55-v1"],
-    boundIds: ["point-support-reference-surplus-q55-bps-v1"],
-    proofIds: ["point-support-reference-surplus-integer-v1"],
-    runtimeAttestations: [],
-  },
-);
-
-const exactWcag22 = evaluateWcag22(
+const wcag = colors.evaluateWcag22(
   "#898CB8",
   "#3E2217",
   "sc-1.4.3-text-default",
 );
-assert.equal(exactWcag22.decision, "fail");
-assert.equal(exactWcag22.evidence.profileChecksum, "152813fe");
-assert.match(exactWcag22.evidence.proofSha256, /^[0-9a-f]{64}$/u);
+assert.equal(wcag.decision, "fail");
+assert.match(wcag.evidence.proofSha256, /^[0-9a-f]{64}$/u);
 
-const config = {
-  brand: {
-    light: "#17161F",
-    dark: "#17161F",
-    light_ic: "#17161F",
-    dark_ic: "#17161F",
-  },
-  neutral: {
-    anchors: { light: "#FFFFFF", mid: "#7A7A82", dark: "#17171A" },
-    tint: { target_mp: 6.1, hue_stiffness: 9.0 },
-  },
-  palette: [{
-    key: "family-4d",
-    anchors: {
-      light: "#7C3AED",
-      dark: "#8B5CF6",
-      light_ic: "#5B21B6",
-      dark_ic: "#A78BFA",
-    },
-  }],
-  themes: [{ name: "light", preset: "srgb" }],
-  roles: [
-    {
-      name: "token-7f3a",
-      recipe: { kind: "alpha-analog", of: { kind: "brand" }, alpha: 0.122 },
-    },
-    {
-      name: "token-92be",
-      recipe: {
-        kind: "glow",
-        source: { kind: "family", key: "family-4d" },
-        step: "base",
-        decision_profile: "legacy-platform-dependent-v1",
-      },
-    },
-    {
-      name: "token-a11c",
-      recipe: {
-        kind: "material",
-        source: { kind: "brand" },
-        tone_light: 0.72,
-        tone_dark: 0.28,
-        floor: "aa-ui",
-      },
-    },
-  ],
-};
-
-const bytes = (hex) => [1, 3, 5].map((offset) => Number.parseInt(hex.slice(offset, offset + 2), 16));
-const hex = (channels) => "#" + channels.map((channel) => channel.toString(16).padStart(2, "0")).join("").toUpperCase();
-const sourceOver = (tintHex, alpha, bgHex) => {
-  const tint = bytes(tintHex);
-  const bg = bytes(bgHex);
-  return hex(bg.map((channel, index) => Math.round(channel + alpha * (tint[index] - channel))));
-};
-const screen = (glowHex, alpha, bgHex) => {
-  const glow = bytes(glowHex);
-  const bg = bytes(bgHex);
-  return hex(bg.map((channel, index) =>
-    Math.round(channel + alpha * glow[index] * (255 - channel) / 255)
-  ));
-};
-
-const engine = new LabColors();
-const fingerprint = engine.loadConfig(JSON.stringify(config));
-assert.match(fingerprint, /^[0-9a-f]{16}$/u);
-
-const background = "#000000";
-const resolved = engine.resolveTheme(background, "light");
-assert.deepEqual(Object.keys(resolved.roles).sort(), ["token-7f3a", "token-92be", "token-a11c"]);
-
-const runtimeDocument = () => {
-  class FakeStyleDeclaration {
-    constructor(entries = []) {
-      this.values = new Map(entries);
-    }
-
-    get length() { return this.values.size; }
-    item(index) { return [...this.values.keys()][index] ?? ""; }
-    getPropertyValue(name) { return this.values.get(name) ?? ""; }
-    setProperty(name, value) {
-      if (/^--[a-z0-9-]+$/u.test(name) && typeof value === "string" && value.length > 0) {
-        this.values.set(name, value);
-      }
-    }
-    removeProperty(name) {
-      const previous = this.getPropertyValue(name);
-      this.values.delete(name);
-      return previous;
-    }
-    get cssText() {
-      return [...this.values]
-        .map(([name, value]) => name + ": " + value + ";")
-        .join(" ");
-    }
-    entries() { return [...this.values]; }
-  }
-
-  class FakeRule {
-    constructor(selectorText, declarations = []) {
-      this.selectorText = selectorText;
-      this.style = new FakeStyleDeclaration(declarations);
-    }
-    get cssText() {
-      return this.style.cssText === ""
-        ? this.selectorText + " {}"
-        : this.selectorText + " { " + this.style.cssText + " }";
-    }
-  }
-
-  const parseSheet = (text) => {
-    if (text === "") return [];
-    const match = /^(:root|:host) \{(?: (.*))?\}$/u.exec(text);
-    if (!match) return [];
-    const declarations = [];
-    for (const part of (match[2] ?? "").split("; ")) {
-      const declaration = part.endsWith(";") ? part.slice(0, -1) : part;
-      if (declaration === "") continue;
-      const separator = declaration.indexOf(": ");
-      if (separator < 0) continue;
-      declarations.push([
-        declaration.slice(0, separator),
-        declaration.slice(separator + 2),
-      ]);
-    }
-    return [new FakeRule(match[1], declarations)];
-  };
-
-  const inlineStyle = new FakeStyleDeclaration();
-  const values = new Map();
-  let adoptedStyleSheets = [];
-  let documentElement = null;
-  let constructedSheetCount = 0;
-  let scratchReplaceCount = 0;
-  let liveReplaceCount = 0;
-
-  const document = {
-    nodeType: 9,
-    defaultView: null,
-    documentElement: null,
-  };
-
-  const selectorMatches = (selector) => selector === ":root";
-  const syncEffectiveValues = () => {
-    values.clear();
-    for (const sheet of adoptedStyleSheets) {
-      for (const rule of sheet.cssRules) {
-        if (!selectorMatches(rule.selectorText)) continue;
-        for (const [name, value] of rule.style.entries()) values.set(name, value);
-      }
-    }
-    for (const [name, value] of inlineStyle.entries()) values.set(name, value);
-  };
-
-  class FakeCSSStyleSheet {
-    constructor() {
-      constructedSheetCount++;
-      this.cssRules = [];
-    }
-    replaceSync(text) {
-      const live = adoptedStyleSheets.includes(this);
-      this.cssRules = parseSheet(text);
-      if (live) {
-        liveReplaceCount++;
-        syncEffectiveValues();
-      } else {
-        scratchReplaceCount++;
-      }
-    }
-  }
-
-  const realm = { CSSStyleSheet: FakeCSSStyleSheet, document };
-  document.defaultView = realm;
-  documentElement = {
-    nodeType: 1,
-    isConnected: true,
-    ownerDocument: document,
-    getRootNode: () => document,
-    style: inlineStyle,
-  };
-  runtimeDocuments.add(document);
-  runtimeElements.add(documentElement);
-  document.documentElement = documentElement;
-  Object.defineProperty(document, "adoptedStyleSheets", {
-    get() { return adoptedStyleSheets; },
-    set(next) {
-      adoptedStyleSheets = Array.from(next);
-      syncEffectiveValues();
-    },
-  });
-
-  return {
-    document,
-    target: documentElement,
-    values,
-    get constructedSheetCount() { return constructedSheetCount; },
-    get scratchReplaceCount() { return scratchReplaceCount; },
-    get liveReplaceCount() { return liveReplaceCount; },
-  };
-};
-
-const ownedVar = "--lab-token-7f3a";
-const assertPublished = (host, label) => {
-  assert.equal(host.document.documentElement, host.target, label + " root identity");
-  assert.equal(typeof host.values.get(ownedVar), "string", label + " effective value");
-  assert.equal(host.document.adoptedStyleSheets.length, 1, label + " live sheet");
-  assert.equal(host.liveReplaceCount, 1, label + " one live publication");
-  assert.ok(host.scratchReplaceCount > 0, label + " detached scratch validation");
-  assert.ok(host.constructedSheetCount > 1, label + " scratch stays distinct from live sheet");
-};
-const assertDisposed = (host, label) => {
-  assert.equal(host.values.has(ownedVar), false, label + " effective value revoked");
-  assert.equal(host.document.adoptedStyleSheets.length, 0, label + " no residual sheet");
-};
-
-const appliedHost = runtimeDocument();
-const appliedTarget = appliedHost.document.documentElement;
-const applied = applyTheme(appliedTarget, resolved);
-assertPublished(appliedHost, "applyTheme");
-assert.equal(applyTheme(appliedTarget, resolved), applied);
-assertPublished(appliedHost, "identical applyTheme");
-applied.dispose();
-assertDisposed(appliedHost, "applyTheme dispose");
-applied.dispose();
-assertDisposed(appliedHost, "applyTheme repeated dispose");
-
-const subpathAppliedHost = runtimeDocument();
-const subpathAppliedTarget = subpathAppliedHost.document.documentElement;
-const subpathApplied = applyThemeFromSubpath(subpathAppliedTarget, resolved);
-assertPublished(subpathAppliedHost, "applyTheme subpath");
-assert.equal(applyThemeFromSubpath(subpathAppliedTarget, resolved), subpathApplied);
-assertPublished(subpathAppliedHost, "identical applyTheme subpath");
-subpathApplied.dispose();
-assertDisposed(subpathAppliedHost, "applyTheme subpath dispose");
-subpathApplied.dispose();
-assertDisposed(subpathAppliedHost, "applyTheme subpath repeated dispose");
-
-const watchedHost = runtimeDocument();
-const watchedTarget = watchedHost.document.documentElement;
-const watcher = watchTheme(watchedTarget, {
-  colors: engine,
-  theme: "light",
-  background,
-  observe: false,
-  win: {},
-});
-assert.equal(watcher.background(), background);
-assertPublished(watchedHost, "watchTheme");
-watcher.refresh();
-assertPublished(watchedHost, "identical watchTheme refresh");
-watcher.dispose();
-assertDisposed(watchedHost, "watchTheme dispose");
-watcher.dispose();
-assertDisposed(watchedHost, "watchTheme repeated dispose");
-
-const subpathWatchedHost = runtimeDocument();
-const subpathWatchedTarget = subpathWatchedHost.document.documentElement;
-const subpathWatcher = watchThemeFromSubpath(subpathWatchedTarget, {
-  colors: engine,
-  theme: "light",
-  background,
-  observe: false,
-  win: {},
-});
-assert.equal(subpathWatcher.background(), background);
-assertPublished(subpathWatchedHost, "watchTheme subpath");
-subpathWatcher.refresh();
-assertPublished(subpathWatchedHost, "watchTheme subpath refresh");
-subpathWatcher.dispose();
-assertDisposed(subpathWatchedHost, "watchTheme subpath dispose");
-subpathWatcher.dispose();
-assertDisposed(subpathWatchedHost, "watchTheme subpath repeated dispose");
-
-const adaptedHost = runtimeDocument();
-const adaptedTarget = adaptedHost.document.documentElement;
-const adaptive = adaptTheme(adaptedTarget, {
-  colors: engine,
-  theme: "light",
-  background,
-  target: adaptedTarget,
-  now: () => 0,
-  win: {},
-});
-assertPublished(adaptedHost, "adaptTheme");
-adaptive.tick(0);
-assertPublished(adaptedHost, "identical adaptTheme tick");
-assert.equal(typeof adaptive.current()["--lab-token-7f3a"], "string");
-adaptive.dispose();
-assertDisposed(adaptedHost, "adaptTheme dispose");
-adaptive.dispose();
-assertDisposed(adaptedHost, "adaptTheme repeated dispose");
-
-const subpathAdaptedHost = runtimeDocument();
-const subpathAdaptedTarget = subpathAdaptedHost.document.documentElement;
-const subpathAdaptive = adaptThemeFromSubpath(subpathAdaptedTarget, {
-  colors: engine,
-  theme: "light",
-  background,
-  target: subpathAdaptedTarget,
-  now: () => 0,
-  win: {},
-});
-assertPublished(subpathAdaptedHost, "adaptTheme subpath");
-subpathAdaptive.tick(0);
-assertPublished(subpathAdaptedHost, "adaptTheme subpath tick");
-assert.equal(typeof subpathAdaptive.current()[ownedVar], "string");
-subpathAdaptive.dispose();
-assertDisposed(subpathAdaptedHost, "adaptTheme subpath dispose");
-subpathAdaptive.dispose();
-assertDisposed(subpathAdaptedHost, "adaptTheme subpath repeated dispose");
-
-const alpha = resolved.roles["token-7f3a"];
-assert.equal(alpha.kind, "translucent");
-assert.match(alpha.tintHex, /^#[0-9A-F]{6}$/u);
-assert.equal(alpha.alpha, 0.122);
-assert.equal(alpha.compositeHex, "#17161F");
-assert.equal(alpha.alphaCoerced, false);
-assert.equal(sourceOver(alpha.tintHex, alpha.alpha, background), alpha.compositeHex);
-assert.match(alpha.css, /^oklch\(.+ \/ 0\.122\)$/u);
-
-const material = resolved.roles["token-a11c"];
-assert.equal(material.kind, "material");
-assert.equal(
-  material.alphaGuarantee.numericalProfile,
-  "encoded-srgb-byte-scale-affine-platform-binary64-powf-v1",
-);
-if (material.alphaGuarantee.kind === "transparent-endpoint-characterized-v1") {
-  assert.equal(material.alpha, 0);
-  assert.equal(material.alphaStatus, "satisfied");
-} else if (material.alphaGuarantee.kind === "bisection-bracket-characterized-v1") {
-  assert.equal(material.alpha, material.alphaGuarantee.upperAlpha);
-  assert.equal(material.alphaStatus, "satisfied");
-} else {
-  assert.equal(material.alphaGuarantee.kind, "opaque-endpoint-characterized-v1");
-  assert.equal(material.alpha, 1);
-  assert.equal(material.alphaStatus, "degraded");
-}
-assert.equal(Object.hasOwn(material, "guaranteed"), false);
-assert.ok(Number.isFinite(material.floor));
-
-const glow = resolved.roles["token-92be"];
-assert.equal(glow.kind, "glow");
-assert.equal(glow.compositeProfile, "encoded-srgb8-screen-v1");
-assert.equal(glow.compositeGuarantee, "bit-exact");
-assert.equal(glow.layerRecipeProfile, "cam16-jprime-oklab-cusp-v1");
-assert.equal(glow.appearanceDiagnosticProfile, "cam16-ucs-jprime-li2017-v1");
-assert.equal(glow.selectionDiagnosticProfile, "cam16-ucs-jprime-li2017-v1");
-assert.equal(glow.decisionProfile, "legacy-platform-dependent-v1");
-assert.deepEqual(glow.decisionGuarantee, { kind: "legacy-platform-dependent-v1" });
-assert.equal(glow.constraintLayer, "halo");
-assert.ok(glow.targetStatus === "legacy-reached" || glow.targetStatus === "legacy-unreachable");
-assert.ok(Number.isFinite(glow.alpha) && glow.alpha > 0 && glow.alpha <= 1);
-assert.equal(Number(glow.alphaCss), glow.alpha);
-assert.equal(Object.hasOwn(glow, "achievedDj"), false);
-assert.equal(Object.hasOwn(glow, "degraded"), false);
-assert.equal(screen(glow.haloHex, glow.alpha, background), glow.haloCompositeHex);
-assert.equal(screen(glow.coreHex, glow.alpha, background), glow.coreCompositeHex);
-for (const value of [glow.targetDj, glow.haloAchievedDj, glow.coreAchievedDj]) {
-  assert.ok(Number.isFinite(value));
-}
-
-assert.equal(engine.isStableGlowPointNoop("#010000", "#FE0000"), true);
-assert.equal(engine.isStableGlowPointNoop("#800000", "#FE0000"), false);
-assert.equal(engine.isStableGlowPointNoop("#001", "fff"), true);
-
-config.roles[1].recipe.decision_profile = "stable-v1";
-engine.loadConfig(JSON.stringify(config));
-const stableDark = engine.resolveTheme("#101012", "light");
-const stableIndeterminate = stableDark.roles["token-92be"];
-assert.equal(stableIndeterminate.kind, "glow-indeterminate");
-assert.equal(stableIndeterminate.decisionProfile, "stable-v1");
-assert.equal(stableIndeterminate.reason, "sound-bound-unavailable");
-assert.deepEqual(stableIndeterminate.bounds, { kind: "unavailable" });
-for (const key of [
-  stableIndeterminate.cssVar,
-  stableIndeterminate.cssVar + "-core",
-  stableIndeterminate.cssVar + "-alpha",
-]) {
-  assert.equal(stableDark.vars[key], undefined);
-}
-
-const stableWhite = engine.resolveTheme("#FFFFFF", "light");
-const stableNoop = stableWhite.roles["token-92be"];
-assert.equal(stableNoop.kind, "glow");
-assert.equal(stableNoop.decisionProfile, "stable-v1");
-assert.deepEqual(stableNoop.decisionGuarantee, { kind: "bit-exact" });
-assert.equal(stableNoop.layerRecipeProfile, "cam16-jprime-oklab-cusp-v1");
-assert.equal(stableNoop.appearanceDiagnosticProfile, "cam16-ucs-jprime-li2017-v1");
-assert.equal(stableNoop.selectionDiagnosticProfile, null);
-assert.equal(stableNoop.targetStatus, "exact-noop-unreachable");
-assert.equal(Object.hasOwn(stableNoop, "degraded"), false);
-assert.equal(stableNoop.haloCompositeHex, "#FFFFFF");
-for (const key of [
-  stableNoop.cssVar,
-  stableNoop.cssVar + "-core",
-  stableNoop.cssVar + "-alpha",
-]) {
-  assert.equal(typeof stableWhite.vars[key], "string");
-}
+const wire = Uint8Array.from(Buffer.from(
+  "4c4350570100b3000000010000000b0000001414140100000015000000010b0000000000000000000000010000001f00000000000000010000002900000001150000000100000033000000011f000000010000003d000000290000003300000000000000000050409a9999999999c93f0101000000470000003d00000001000000470000003d0000000100000051000000093d000000030100000052000000013d000000141414010000005b00000029000000",
+  "hex",
+));
+const runtime = colors.compileProgramWire(wire, 1);
+const snapshot = runtime.updateObserved(1n, new Uint32Array([1]), new Uint8Array([255, 255, 255]), 1);
+assert.equal(snapshot.state, "ready");
+assert.equal(snapshot.outputCount(), 1);
+assert.equal(snapshot.outputSlot(0), 91);
+assert.deepEqual(Array.from(snapshot.outputRgb(0)), [20, 20, 20]);
+assert.equal(snapshot.outputOpacity(0), 1);
+snapshot.free();
+runtime.free();
 `;
 }
 
 export function typeSmokeSource() {
   return String.raw`
 import init, {
-  LabColors,
+  ProgramRuntime,
+  ProgramSnapshot,
+  compileProgramWire,
   evaluateWcag22,
   numericalCapabilityManifest,
-  type GlowDecisionGuaranteeV1,
-  type GlowDeterminateRole,
-  type GlowDeterminateRoleBase,
-  type GlowRole,
-  type GlowTargetStatusV1,
-  type LadderPositionV1,
-  type MaterialRole,
   type NumericalCapabilityManifestV2,
-  type NumericalIndeterminacyV1,
-  type AdaptController as RootAdaptController,
-  type ApplyThemeAttachment as RootApplyThemeAttachment,
-  type OutputBindingSet,
-  type ResolvedTheme,
-  type ThemeConfig,
-  type TranslucentRole,
-  type WatchController as RootWatchController,
   type Wcag22AssessmentV1,
   type Wcag22CriterionV1,
 } from "@labpics/colors";
-import {
-  applyTheme,
-  type ApplyThemeAttachment as SubpathApplyThemeAttachment,
-} from "@labpics/colors/apply-theme";
-import {
-  watchTheme,
-  type WatchController as SubpathWatchController,
-  type WatchThemeOptions,
-} from "@labpics/colors/watch-theme";
-import {
-  adaptTheme,
-  type AdaptController as SubpathAdaptController,
-  type AdaptThemeOptions,
-} from "@labpics/colors/adapt-theme";
 
-const initialise: typeof init = init;
-const apply: typeof applyTheme = applyTheme;
-const watch: typeof watchTheme = watchTheme;
-const adapt: typeof adaptTheme = adaptTheme;
-type PublicSubpathTypes =
-  | SubpathApplyThemeAttachment
-  | SubpathWatchController
-  | WatchThemeOptions
-  | SubpathAdaptController
-  | AdaptThemeOptions;
-declare const publicSubpathType: PublicSubpathTypes;
-void [apply, watch, adapt, publicSubpathType];
-declare const rootAttachment: RootApplyThemeAttachment;
-declare const subpathAttachment: SubpathApplyThemeAttachment;
-const attachmentFromRoot: SubpathApplyThemeAttachment = rootAttachment;
-const attachmentFromSubpath: RootApplyThemeAttachment = subpathAttachment;
-declare const rootWatchController: RootWatchController;
-declare const subpathWatchController: SubpathWatchController;
-const watchControllerFromRoot: SubpathWatchController = rootWatchController;
-const watchControllerFromSubpath: RootWatchController = subpathWatchController;
-declare const rootAdaptController: RootAdaptController;
-declare const subpathAdaptController: SubpathAdaptController;
-const adaptControllerFromRoot: SubpathAdaptController = rootAdaptController;
-const adaptControllerFromSubpath: RootAdaptController = subpathAdaptController;
-for (const disposable of [
-  attachmentFromRoot,
-  attachmentFromSubpath,
-  watchControllerFromRoot,
-  watchControllerFromSubpath,
-  adaptControllerFromRoot,
-  adaptControllerFromSubpath,
-]) {
-  disposable.dispose();
-  disposable[Symbol.dispose]?.();
+async function boot(module: WebAssembly.Module, wire: Uint8Array): Promise<ProgramRuntime> {
+  await init({ module_or_path: module });
+  const runtime = compileProgramWire(wire, 1);
+  const snapshot: ProgramSnapshot = runtime.updateObserved(
+    1n,
+    new Uint32Array([1]),
+    new Uint8Array([255, 255, 255]),
+    1,
+  );
+  snapshot.state;
+  snapshot.outputCount();
+  return runtime;
 }
-declare const rootApi: typeof import("@labpics/colors");
-// @ts-expect-error low-level browser-shell colour math is not public API.
-rootApi.parseCssColor;
-// @ts-expect-error the compatibility background estimate is package-internal.
-rootApi.effectiveBackground;
-const engine = new LabColors();
-const removedStrict: AdaptThemeOptions = {
-  colors: engine,
-  theme: "light",
-  // @ts-expect-error the unverified legacy transition clamp was removed.
-  strict: true,
-};
-void removedStrict;
-const fingerprint: string = engine.loadConfig("{}");
-const resolved: ResolvedTheme = engine.resolveTheme("#000000", "light");
-const outputBindings: OutputBindingSet = resolved.outputBindings;
-const firstOutputBinding: string | undefined = outputBindings[0];
-// @ts-expect-error OutputBindingSet is immutable at the consumer boundary.
-outputBindings.push("--lab-illegal");
-declare const documentElement: HTMLElement;
-const appliedAttachment: SubpathApplyThemeAttachment = applyTheme(documentElement, resolved);
-appliedAttachment.dispose();
-appliedAttachment[Symbol.dispose]?.();
+const criterion: Wcag22CriterionV1 = "sc-1.4.3-text-default";
+const assessment: Wcag22AssessmentV1 = evaluateWcag22("#000000", "#FFFFFF", criterion);
 const capability: NumericalCapabilityManifestV2 = numericalCapabilityManifest();
-const wcagCriterion: Wcag22CriterionV1 = "sc-1.4.3-text-default";
-const wcagAssessment: Wcag22AssessmentV1 = evaluateWcag22(
-  "#000000",
-  "#FFFFFF",
-  wcagCriterion,
-);
-// @ts-expect-error criterion is an explicit closed menu, not an opaque string.
-evaluateWcag22("#000000", "#FFFFFF", "danger");
-
-const borderPosition: LadderPositionV1 = "border-strong";
-const config: ThemeConfig = {
-  brand: {
-    light: "#17161F",
-    dark: "#17161F",
-    light_ic: "#17161F",
-    dark_ic: "#17161F",
-  },
-  neutral: {
-    anchors: { light: "#FFFFFF", mid: "#7A7A82", dark: "#17171A" },
-    tint: { target_mp: 6.1, hue_stiffness: 9.0 },
-  },
-  palette: [],
-  themes: [{ name: "light", preset: "srgb" }],
-  roles: [
-    {
-      name: "label-a1",
-      recipe: {
-        kind: "text-anchor",
-        fraction: 0.62,
-        floor: "aa-text",
-        hue: { kind: "brand" },
-      },
-    },
-    {
-      name: "border-b2",
-      recipe: {
-        kind: "ladder",
-        source: { kind: "brand" },
-        position: borderPosition,
-        floor: "aa-ui",
-      },
-    },
-    {
-      name: "glow-stable",
-      recipe: {
-        kind: "glow",
-        source: { kind: "brand" },
-        step: "base",
-        decision_profile: "stable-v1",
-      },
-    },
-    {
-      name: "glow-legacy",
-      recipe: {
-        kind: "glow",
-        source: { kind: "brand" },
-        step: "base",
-        decision_profile: "legacy-platform-dependent-v1",
-      },
-    },
-  ],
-};
-
-function alphaContract(role: TranslucentRole): readonly [string, number, string, boolean] {
-  return [role.tintHex, role.alpha, role.compositeHex, role.alphaCoerced] as const;
-}
-
-function glowContract(
-  role: GlowRole,
-): readonly ["indeterminate", "glow-target-or-maximum-v1"] | readonly [
-  "encoded-srgb8-screen-v1",
-  "halo",
-  GlowTargetStatusV1,
-  string,
-  number,
-] {
-  if (role.kind === "glow-indeterminate") {
-    return ["indeterminate", role.numericalSiteId] as const;
-  }
-  return [
-    role.compositeProfile,
-    role.constraintLayer,
-    role.targetStatus,
-    role.haloCompositeHex,
-    role.haloAchievedDj,
-  ] as const;
-}
-
-function decisionEvidence(guarantee: GlowDecisionGuaranteeV1): string {
-  return guarantee.kind;
-}
-
-function indeterminacyEvidence(evidence: NumericalIndeterminacyV1): number | string {
-  return evidence.reason === "interval-overlap"
-    ? evidence.bounds.upper - evidence.bounds.lower
-    : evidence.bounds.kind;
-}
-
-function determinateGlowEvidence(role: GlowDeterminateRole): string {
-  if (role.decisionProfile === "stable-v1") {
-    const status: "exact-noop-unreachable" = role.targetStatus;
-    const selection: null = role.selectionDiagnosticProfile;
-    void selection;
-    return status;
-  }
-  if (role.targetStatus === "legacy-reached") {
-    return role.targetStatus;
-  }
-  const status: "legacy-unreachable" = role.targetStatus;
-  return status;
-}
-
-function materialEvidence(role: MaterialRole): number | string {
-  if (role.alphaStatus === "degraded") {
-    const alpha: 1 = role.alpha;
-    void alpha;
-    return role.alphaStatus;
-  }
-  if (role.alphaGuarantee.kind === "bisection-bracket-characterized-v1") {
-    return role.alphaGuarantee.upperAlpha;
-  }
-  return role.alphaStatus;
-}
-
-declare const glowBase: GlowDeterminateRoleBase;
-// @ts-expect-error stable profile не может нести legacy status.
-const impossibleGlow: GlowDeterminateRole = {
-  ...glowBase,
-  decisionProfile: "stable-v1",
-  decisionGuarantee: { kind: "bit-exact" },
-  selectionDiagnosticProfile: null,
-  targetStatus: "legacy-reached",
-};
-
-declare const noAliasGlow: GlowDeterminateRole;
-// @ts-expect-error ambiguous measurement alias was removed.
-noAliasGlow.achievedDj;
-// @ts-expect-error boolean duplicate of targetStatus was removed.
-noAliasGlow.degraded;
-declare const noAliasMaterial: MaterialRole;
-// @ts-expect-error boolean duplicate of alphaStatus was removed.
-noAliasMaterial.guaranteed;
-
-void [
-  initialise,
-  fingerprint,
-  resolved,
-  firstOutputBinding,
-  appliedAttachment,
-  wcagAssessment,
-  capability,
-  config,
-  alphaContract,
-  glowContract,
-  decisionEvidence,
-  indeterminacyEvidence,
-  determinateGlowEvidence,
-  materialEvidence,
-  impossibleGlow,
-  noAliasGlow,
-  noAliasMaterial,
-];
+void boot;
+void assessment;
+void capability;
+// @ts-expect-error C7c removed the recipe engine.
+import { LabColors } from "@labpics/colors";
+// @ts-expect-error C7c removed recipe DTOs.
+import type { RoleRecipe } from "@labpics/colors";
+void LabColors;
+void (null as unknown as RoleRecipe);
 `;
 }
 
@@ -2142,8 +1247,6 @@ async function verifyCleanConsumer(
   packageJson,
   typescriptCompilers,
   expectedBuildMetadata,
-  expectedPrivateProgramMetadata,
-  expectedPrivateProgramArtifacts,
   expectedNumericalArtifacts,
 ) {
   const consumer = await mkdtemp(join(tmpdir(), "labcolors-release-consumer-"));
@@ -2219,22 +1322,6 @@ async function verifyCleanConsumer(
     if (!isDeepStrictEqual(installedBuildMetadata, expectedBuildMetadata)) {
       fail("clean-installed build metadata differs from the verified release inputs");
     }
-    const installedPrivateProgramMetadata = await readJson(
-      resolve(installed, PRIVATE_PROGRAM_METADATA_PATH),
-    );
-    if (!isDeepStrictEqual(installedPrivateProgramMetadata, expectedPrivateProgramMetadata)) {
-      fail("clean-installed private Program metadata differs from the verified release inputs");
-    }
-    for (const [name, expected] of Object.entries(expectedPrivateProgramArtifacts)) {
-      const installedBytes = await readFile(resolve(installed, expected.path));
-      if (
-        expected.bytes !== installedBytes.length ||
-        expected.sha256 !== sha256(installedBytes)
-      ) {
-        fail(`clean-installed private Program ${name} differs from the packed release input`);
-      }
-    }
-
     const runtimePath = resolve(consumer, "runtime-smoke.mjs");
     const typesPath = resolve(consumer, "smoke.ts");
     await writeFile(runtimePath, runtimeSmokeSource());
@@ -2309,13 +1396,9 @@ export async function smokePackedPackage(tarballPath) {
 
 export async function verifyPackageRelease() {
   const expectedSource = verifiedSourceSha();
-  // The canonical build runs in the shared hermetic child boundary so ambient
-  // caller-workflow executor overrides cannot influence it; the strict direct
-  // validator is unchanged and the child's failure propagates loudly.
-  runCanonicalPrivateProgramBuild();
-  const { sourceSha: source, privateProgramBuild } = await prepareNpmPackage();
+  const { sourceSha: source } = await prepareNpmPackage();
   if (source !== expectedSource) {
-    fail("release source HEAD changed while the private Program was built");
+    fail("release source HEAD changed while package inputs were prepared");
   }
   python(["scripts/verify_wcag22_q55.py"], REPO_ROOT);
   python(["scripts/verify_point_support_surplus.py"], REPO_ROOT);
@@ -2365,7 +1448,6 @@ export async function verifyPackageRelease() {
     if (bytes.length < 8 || !bytes.subarray(0, 4).equals(Buffer.from([0, 97, 115, 109]))) {
       fail(`${displayPath} is absent or has no WebAssembly magic header`);
     }
-    validateRuntimeWasmIsolation(bytes);
     wasm[role] = await hashedArtifact(path, displayPath);
   }
   const buildMetadataValue = await readJson(BUILD_METADATA);
@@ -2377,33 +1459,6 @@ export async function verifyPackageRelease() {
     wasm,
   });
   const buildMetadata = await hashedArtifact(BUILD_METADATA, "build-metadata.json");
-  const privateProgramWasmBytes = await readFile(PRIVATE_PROGRAM_WASM);
-  if (
-    privateProgramWasmBytes.length < 8 ||
-    !privateProgramWasmBytes.subarray(0, 4).equals(Buffer.from([0, 97, 115, 109]))
-  ) {
-    fail(`${PRIVATE_PROGRAM_WASM_PATH} is absent or has no WebAssembly magic header`);
-  }
-  const privateProgramArtifacts = {
-    consumer: await hashedArtifact(
-      PRIVATE_PROGRAM_CONSUMER,
-      PRIVATE_PROGRAM_CONSUMER_PATH,
-    ),
-    wasm: await hashedArtifact(PRIVATE_PROGRAM_WASM, PRIVATE_PROGRAM_WASM_PATH),
-  };
-  const privateProgramMetadataValue = await readJson(PRIVATE_PROGRAM_METADATA);
-  validatePrivateProgramMetadata(privateProgramMetadataValue, {
-    packageJson,
-    source,
-    coreVersion,
-    privateProgramBuild,
-    artifacts: privateProgramArtifacts,
-  });
-  const privateProgramBuildMetadata = await hashedArtifact(
-    PRIVATE_PROGRAM_METADATA,
-    PRIVATE_PROGRAM_METADATA_PATH,
-  );
-
   await rm(RELEASE_DIR, { recursive: true, force: true });
   await mkdir(RELEASE_DIR, { recursive: true });
 
@@ -2431,8 +1486,6 @@ export async function verifyPackageRelease() {
     packageJson,
     typescriptCompilers,
     buildMetadataValue,
-    privateProgramMetadataValue,
-    privateProgramArtifacts,
     numericalEvidenceArtifacts,
   );
 
@@ -2443,13 +1496,13 @@ export async function verifyPackageRelease() {
     sha256: verifiedTarball.sha256,
   };
   const manifest = {
-    // V5 joins every packed private Program byte to publish provenance without
-    // changing the public runtime build-metadata contract.
-    schemaVersion: 5,
+    // V6 binds the sole terminal Program runtime; pre-cutover private Program
+    // artifacts are intentionally absent from both tarball and provenance.
+    schemaVersion: 6,
     npm: packageJson.version,
     core: coreVersion,
     wire: {
-      identity: `resolved-theme@${packageJson.version}`,
+      identity: `program-wire-v1@${packageJson.version}`,
       embeddedInPayload: false,
       trackingIssue: 258,
     },
@@ -2483,30 +1536,19 @@ export async function verifyPackageRelease() {
       },
     },
     supported: [
-      "exact-alpha-srgb8-v1",
-      "exact-screen-composite-srgb8-v1",
-      "typed-glow-indeterminate-v1",
+      "canonical-program-wire-v1",
+      "atomic-program-runtime-v1",
       "wcag22-srgb8-contrast-v1",
     ],
     numericalCapabilities: conformance.numericalCapabilities,
     unsupported: [
-      "embedded-wire-schema-version",
-      "stable-cam16-glow-target-or-maximum-selection",
       "renderer-or-output-pipeline-equivalence",
       "spatial-glow-field",
     ],
     artifacts: {
       tarball,
-      wasm: [
-        { role: "runtime", ...wasm.runtime },
-        { role: PRIVATE_PROGRAM_ROLE, ...privateProgramArtifacts.wasm },
-      ],
+      wasm: [{ role: "runtime", ...wasm.runtime }],
       buildMetadata,
-      privateProgramConsumer: {
-        role: PRIVATE_PROGRAM_ROLE,
-        buildMetadata: privateProgramBuildMetadata,
-        consumer: privateProgramArtifacts.consumer,
-      },
     },
   };
   try {
