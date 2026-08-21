@@ -1,0 +1,51 @@
+{
+  "mission": "lab-colors C-20 (C7e Glow hard-cut): lower Glow physical branch into compiled field operator invocation using existing V7 EncodedSrgb8ScreenOpaqueBackdrop kernel; remove legacy solve_screen_alpha_for_dj runtime path from semantic resolver; preserve byte-identity of screen composite via encoded_srgb8_screen_channel SSOT; maintain GlowDecisionProfileV1/Stable/Legacy selection as compile-time wire config only. O-13 deferred to next wave. Branch: c7e/glow-hard-cut (already created from main f2c49a3). Gate: dual-isolated-review.",
+  "repos": [
+    {
+      "name": "lab-colors",
+      "path": "C:\\Users\\Daniel\\lab-colors",
+      "role": "build",
+      "gate": "dual-isolated-review"
+    }
+  ],
+  "autonomous": true,
+  "builder": "rust-systems",
+  "merge": true,
+  "pr": true,
+  "memoryGroup": "daniel-agent-local",
+  "epicDir": "lab-colors-c20-o13-wave",
+  "phase": "epic-complete",
+  "scopes": [
+    {
+      "id": "scope-1-remove-legacy-glow-solver",
+      "title": "Remove legacy Glow solver and lower to field operator",
+      "repo": "lab-colors",
+      "status": "pending",
+      "exitCriteria": [
+        "solve_screen_alpha_for_dj_legacy, QuantisedComposites, quantised_composites removed from glow.rs",
+        "GlowTargetStatus::LegacyReached and LegacyUnreachable removed",
+        "solve_screen_alpha_for_dj only executes stable exact noop logic; ExplicitCompatibility maps to Indeterminate if not noop",
+        "semantic.rs CompiledGlowInvocationV1::resolve no longer matches NumericalDecisionV1::Compatibility",
+        "Golden tests and boundary tests updated to reflect removal of legacy target-seeking",
+        "CI green, dual isolated review PASS"
+      ],
+      "dependencies": []
+    }
+  ],
+  "northInvariants": [
+    "Single screen-law SSOT: encoded_srgb8_screen_channel in field_effect.rs is the ONLY implementation",
+    "No legacy CAM16 target-seeking: solve_screen_alpha_for_dj_legacy and QuantisedComposites removed",
+    "Byte-identity preservation: stable exact noop produces bit-identical composite bytes",
+    "Wire config only: LegacyPlatformDependentV1 remains in schema but maps to StableOnly or Indeterminate at runtime",
+    "CI green gate: all checks pass before merge",
+    "Dual isolated review PASS: both verification-runner and arch-reviewer must PASS"
+  ],
+  "nonGoals": [
+    "O-13 reusable arenas — deferred to next wave",
+    "Public API expansion — no new exports",
+    "RecheckErrorV1, serde terminal_projection, BindingError::InvalidIndex — deferred post-C7c"
+  ],
+  "evidenceCutoff": "2026-08-21T08:00:00Z",
+  "createdAt": "2026-08-21T08:30:00Z",
+  "lastCheckpoint": null
+}
