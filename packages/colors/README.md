@@ -13,12 +13,17 @@ npm install @labpics/colors
 ## Первый маршрут
 
 ```ts
-import init, { compileProgramWire, ProgramWireBuilderV1 } from "@labpics/colors";
+import init, { compileProgramWire } from "@labpics/colors";
+import { ProgramWireBuilderV1 } from "@labpics/colors/program-wire/abi-v1.js";
 
 await init();
+// Canonical LCPW v1 bytes are produced by ProgramWireBuilderV1 or any
+// implementation-independent encoder of the same contract. The builder
+// lives on a sub-path: it is an authoring aid, not part of the runtime
+// facade that ships with every consumer bundle.
 const programBytes = new ProgramWireBuilderV1()
   .addSource(/* ... */)
-  .build(); // canonical LCPW v1 bytes
+  .build();
 const runtime = compileProgramWire(programBytes, 1);
 const snapshot = runtime.updateObserved(
   1n,
