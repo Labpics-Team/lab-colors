@@ -10,8 +10,6 @@ test("README describes the terminal Program runtime, not recipe roles", () => {
     "compileProgramWire", "ProgramRuntime", "ProgramSnapshot", "атомарно", "typed-отказы",
   ]) assert.match(readme, new RegExp(required, "u"), required);
   for (const retired of ["RoleRecipe", "ThemeConfig", "resolveTheme", "applyTheme"]) {
-    // RoleRecipe may occur only in the explicit removal statement.
-    if (retired === "RoleRecipe") continue;
     assert.doesNotMatch(readme, new RegExp(`\\b${retired}\\b`, "u"), retired);
   }
 });

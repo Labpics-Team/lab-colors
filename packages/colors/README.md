@@ -13,9 +13,12 @@ npm install @labpics/colors
 ## Первый маршрут
 
 ```ts
-import init, { compileProgramWire } from "@labpics/colors";
+import init, { compileProgramWire, ProgramWireBuilderV1 } from "@labpics/colors";
 
 await init();
+const programBytes = new ProgramWireBuilderV1()
+  .addSource(/* ... */)
+  .build(); // canonical LCPW v1 bytes
 const runtime = compileProgramWire(programBytes, 1);
 const snapshot = runtime.updateObserved(
   1n,

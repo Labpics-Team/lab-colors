@@ -54,4 +54,6 @@ test("public initialization has one owner across async and sync routes", async (
   assert.equal(initSync({ module }), undefined, "ready initialization is idempotent");
 
   assert.equal(typeof ProgramRuntime, "function");
+  assert.equal(typeof ProgramRuntime.prototype.free, "function", "ProgramRuntime must expose wasm-bindgen lifecycle free");
+  assert.equal(typeof ProgramRuntime.prototype.updateObserved, "function", "ProgramRuntime must expose updateObserved lifecycle method");
 });

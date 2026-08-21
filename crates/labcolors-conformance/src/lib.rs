@@ -609,7 +609,6 @@ pub const DRIFT_TOL: f64 = 1e-6;
 pub struct Counts {
     /// Контраст-векторы.
     pub contrasts: usize,
-    /// Векторы лестниц.
     /// Альфа-векторы.
     pub alpha: usize,
     /// Резолв-векторы.
@@ -728,7 +727,6 @@ pub struct Manifest {
 pub struct Pack {
     /// Контраст-векторы.
     pub contrasts: Vec<ContrastVector>,
-    /// Векторы лестниц.
     /// Альфа-векторы.
     pub alpha: Vec<AlphaVector>,
     /// Резолв-векторы.

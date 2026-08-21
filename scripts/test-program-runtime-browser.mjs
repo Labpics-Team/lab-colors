@@ -83,11 +83,14 @@ async function request(base, path, method, body, signal) {
   return payload.value;
 }
 
-async function waitForDriver(signal) {
+async function waitForDriver(signal, port, child) {
   const deadline = Date.now() + 20_000;
   while (Date.now() < deadline) {
+    if (child?.killed || child?.exitCode !== null) {
+      fail(`ChromeDriver exited prematurely with code ${child?.exitCode ?? "unknown"}`);
+    }
     try {
-      const response = await fetch("http://127.0.0.1:9515/status", { signal });
+      const response = await fetch(`http://127.0.0.1:${port}/status`, { signal });
       if (response.ok) return;
     } catch {}
     await new Promise((resolveDelay) => setTimeout(resolveDelay, 50));
@@ -105,7 +108,8 @@ async function main() {
 
   const root = await mkdtemp(join(tmpdir(), "labcolors-program-browser-"));
   let server;
-  const child = spawn(driver, ["--port=9515"], {
+  const driverPort = 9515;
+  const child = spawn(driver, [`--port=${driverPort}`], {
     env: process.env,
     stdio: "ignore",
     windowsHide: true,
@@ -142,8 +146,8 @@ async function main() {
     });
     const port = await listen(server);
     const origin = `http://${LOOPBACK}:${port}`;
-    await waitForDriver(controller.signal);
-    const session = await request("http://127.0.0.1:9515", "/session", "POST", {
+    await waitForDriver(controller.signal, driverPort, child);
+    const session = await request(`http://127.0.0.1:${driverPort}`, "/session", "POST", {
       capabilities: { alwaysMatch: { browserName: "chrome", "goog:chromeOptions": {
         binary: chrome,
         args: ["--headless=new", "--no-sandbox", "--disable-dev-shm-usage"],
@@ -175,7 +179,8 @@ async function main() {
   } finally {
     clearTimeout(timer);
     if (sessionId) {
-      try { await request(`http://127.0.0.1:9515/session/${sessionId}`, "", "DELETE"); } catch {}
+      const cleanupSignal = AbortSignal.timeout(5_000);
+      try { await request(`http://127.0.0.1:${driverPort}/session/${sessionId}`, "", "DELETE", undefined, cleanupSignal); } catch {}
     }
     child.kill();
     if (server) await new Promise((resolveClose) => server.close(resolveClose));
