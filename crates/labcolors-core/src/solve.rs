@@ -32,6 +32,9 @@
 //! module declares none of them. The scalar is a solver coordinate, not an
 //! LPC/readability verdict or certificate.
 
+// F-01: LcsColor is deprecated but retained for solver curve interpolation.
+// Migration to ModeledLcsOccurrenceV1 is tracked in the solver migration plan.
+#[allow(deprecated)]
 use crate::lcs::LcsColor;
 use crate::lpc::{
     self, CONTRAST_SCALE, EXP_BG_DARK, EXP_BG_LIGHT, EXP_FG_DARK, EXP_FG_LIGHT, LC_SCALE,
