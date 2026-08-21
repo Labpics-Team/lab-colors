@@ -7,6 +7,7 @@
 //! capability and exposes no public selector or CSS serializer.
 
 #[rustfmt::skip]
+#[allow(dead_code)]
 const XYZ_D65_TO_P3: [[f64; 3]; 3] = [
     [ 2.493_496_911_941_425,    -0.931_383_617_919_123_9,  -0.402_710_784_450_716_84 ],
     [-0.829_488_969_561_574_7,   1.762_664_060_318_346_3,   0.023_624_685_841_943_577],
@@ -14,6 +15,7 @@ const XYZ_D65_TO_P3: [[f64; 3]; 3] = [
 ];
 
 /// XYZ(D65, Y in `[0, 1]`) to linear Display P3.
+#[allow(dead_code)]
 pub(crate) fn xyz_to_p3_linear(xyz: [f64; 3]) -> [f64; 3] {
     [
         XYZ_D65_TO_P3[0][0] * xyz[0] + XYZ_D65_TO_P3[0][1] * xyz[1] + XYZ_D65_TO_P3[0][2] * xyz[2],

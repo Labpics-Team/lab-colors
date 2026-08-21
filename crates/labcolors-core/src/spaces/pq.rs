@@ -2,6 +2,12 @@
 //!
 //! Reference: SMPTE ST 2084:2014 Equations 4.1 (EOTF) and 5.1 (Inverse EOTF).
 //! Domain: absolute luminance [0.0001, 10000.0] cd/m².
+//!
+//! Staged infrastructure for O-07 HDR output projection. Not yet consumed by
+//! production code paths; dead-code warnings are expected until the HDR release
+//! lands.
+
+#![allow(dead_code, clippy::manual_range_contains)]
 
 /// Absolute luminance in cd/m². Valid PQ domain: [0.0001, 10000.0].
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]

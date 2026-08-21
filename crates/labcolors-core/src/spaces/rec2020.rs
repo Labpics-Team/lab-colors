@@ -1,6 +1,12 @@
 //! ITU-R BT.2020 (Rec.2020) color space primaries and XYZ conversion matrices.
 //!
 //! Reference: ITU-R BT.2020-2 Table 1 (primaries), D65 white point.
+//!
+//! Staged infrastructure for O-07 HDR output projection. Not yet consumed by
+//! production code paths; dead-code warnings are expected until the HDR release
+//! lands.
+
+#![allow(dead_code, clippy::needless_range_loop)]
 
 /// Rec.2020 primary chromaticities (CIE 1931 xy).
 pub const REC2020_RED_XY: [f64; 2] = [0.708, 0.292];
