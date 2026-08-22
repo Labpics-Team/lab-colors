@@ -34,7 +34,7 @@ enum PhysicalLocus {
 /// # Deprecation Notice (F-01)
 /// `LcsColor` is the legacy hybrid representation retained solely for
 /// solver curve interpolation. New code MUST use
-/// [`ModeledLcsOccurrenceV1`](crate::lcs_occurrence::ModeledLcsOccurrenceV1)
+/// `ModeledLcsOccurrenceV1`
 /// via the `AdmittedLcsIdentityV1` gate (see `lcs_freeze.rs`).
 #[deprecated(
     since = "0.0.0-f01",
