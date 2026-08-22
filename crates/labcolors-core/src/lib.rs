@@ -45,10 +45,13 @@ pub(crate) mod appearance;
 #[allow(dead_code)]
 pub(crate) mod config;
 pub(crate) mod constraints;
-#[allow(dead_code, reason = "R-02 PR-A: sentiment types staged before evaluator impl in PR-B")]
-pub(crate) mod evaluator_registry;
 #[allow(dead_code)]
 pub(crate) mod corridor_representation;
+#[allow(
+    dead_code,
+    reason = "R-02 PR-A: sentiment types staged before evaluator impl in PR-B"
+)]
+pub(crate) mod evaluator_registry;
 #[allow(dead_code)]
 pub(crate) mod glow;
 pub mod hash;

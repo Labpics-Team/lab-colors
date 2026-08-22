@@ -8,7 +8,10 @@
 
 mod assessment;
 
-#[allow(unused_imports, reason = "R-02 PR-A: re-exports staged for PR-B evaluator impl")]
+#[allow(
+    unused_imports,
+    reason = "R-02 PR-A: re-exports staged for PR-B evaluator impl"
+)]
 pub use assessment::{SentimentAssessmentError, SentimentAssessmentV1};
 
 use serde::{Deserialize, Serialize};

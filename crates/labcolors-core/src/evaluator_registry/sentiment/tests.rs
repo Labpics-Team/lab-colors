@@ -261,8 +261,8 @@ fn serde_round_trip_all_variants() {
         custom_profile(),
     ];
     for profile in profiles {
-        let assessment = SentimentAssessmentV1::new(profile, evidence(), 0.5, 0.5)
-            .expect("valid construction");
+        let assessment =
+            SentimentAssessmentV1::new(profile, evidence(), 0.5, 0.5).expect("valid construction");
         let bytes = rmp_serde::to_vec(&assessment).expect("serialize");
         let decoded: SentimentAssessmentV1 = rmp_serde::from_slice(&bytes).expect("deserialize");
         assert_eq!(assessment, decoded);
