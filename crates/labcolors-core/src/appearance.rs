@@ -1349,7 +1349,7 @@ pub(crate) struct SourceOverCertificateV1 {
 }
 
 impl SourceOverCertificateV1 {
-    fn compose(
+    pub(crate) fn compose(
         profile: CompositionProfileV1,
         subject_rgb: [u8; 3],
         subject_opacity: crate::composition::AdmittedOpacityV1,
