@@ -62,7 +62,7 @@ digest_type!(FieldCertificateDigestV1);
 digest_type!(FieldEvaluationLayoutDigestV1);
 
 impl FieldRequestDigestV1 {
-    const fn as_bytes(self) -> [u8; 32] {
+    pub(crate) const fn as_bytes(self) -> [u8; 32] {
         self.0
     }
 
@@ -73,7 +73,7 @@ impl FieldRequestDigestV1 {
 }
 
 impl FieldRasterDigestV1 {
-    const fn as_bytes(self) -> [u8; 32] {
+    pub(crate) const fn as_bytes(self) -> [u8; 32] {
         self.0
     }
 
@@ -84,8 +84,19 @@ impl FieldRasterDigestV1 {
 }
 
 impl FieldKernelDigestV1 {
-    const fn as_bytes(self) -> [u8; 32] {
+    pub(crate) const fn as_bytes(self) -> [u8; 32] {
         self.0
+    }
+}
+
+impl FieldCertificateDigestV1 {
+    pub(crate) const fn as_bytes(self) -> [u8; 32] {
+        self.0
+    }
+
+    #[cfg(test)]
+    pub(crate) const fn from_bytes_for_test(bytes: [u8; 32]) -> Self {
+        Self(bytes)
     }
 }
 
