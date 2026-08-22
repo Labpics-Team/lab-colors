@@ -24,8 +24,6 @@ mod family_definition_binding;
 pub(crate) mod field_effect;
 #[cfg(test)]
 mod field_effect_tests;
-#[allow(dead_code)]
-pub(crate) mod incremental_runtime;
 pub(crate) mod spaces;
 
 #[cfg_attr(
@@ -222,6 +220,15 @@ pub(crate) mod joint;
     )
 )]
 pub(crate) mod selection_release;
+
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "R-07 PR-A restorative-auto types are staged before upstream TQ substrates land"
+    )
+)]
+pub(crate) mod restorative_auto;
 
 #[cfg(test)]
 mod selection_release_tests;
