@@ -1,3 +1,4 @@
+#![allow(deprecated)]
 //! Заземление Backgrounds-лестниц labui: фактические dJ'-шаги
 //! HIG-фонов, замеренные движком (CAM16-UCS J' под VC темы).
 //!
