@@ -157,7 +157,10 @@ mod tests {
             let log_lum = AbsoluteLuminanceV1::PQ_MIN.ln()
                 + (AbsoluteLuminanceV1::PQ_MAX.ln() - AbsoluteLuminanceV1::PQ_MIN.ln())
                     * (i as f64 / 99.0);
-            let lum = AbsoluteLuminanceV1::try_new(log_lum.exp()).expect("valid luminance");
+            let raw = log_lum
+                .exp()
+                .clamp(AbsoluteLuminanceV1::PQ_MIN, AbsoluteLuminanceV1::PQ_MAX);
+            let lum = AbsoluteLuminanceV1::try_new(raw).expect("valid luminance");
             verify_pq_roundtrip(lum).expect("round-trip within tolerance");
         }
     }

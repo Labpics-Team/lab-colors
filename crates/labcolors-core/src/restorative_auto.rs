@@ -312,12 +312,9 @@ mod tests {
     fn outcome_rejects_action_not_in_scope() {
         let scope = RestorativeScopeV1::new(&[RestorativeActionV1::ColorShift]);
         let handle = TqDeltaHandleV1::from_bytes([0xCD; 32]);
-        let err = RestorativeOutcomeV1::new(
-            &scope,
-            RestorativeActionV1::BackdropSubstitution,
-            handle,
-        )
-        .unwrap_err();
+        let err =
+            RestorativeOutcomeV1::new(&scope, RestorativeActionV1::BackdropSubstitution, handle)
+                .unwrap_err();
         assert_eq!(err, RestorativeAutoErrorV1::ActionNotDeclared);
     }
 

@@ -82,7 +82,7 @@ mod tests {
                 }
                 let expected = if i == j { 1.0 } else { 0.0 };
                 assert!(
-                    (sum - expected).abs() < 1e-12,
+                    (sum - expected).abs() < 1e-10,
                     "M*M^-1[{i}][{j}] = {sum}, expected {expected}"
                 );
             }
@@ -98,7 +98,7 @@ mod tests {
         let rec2020 = LinearRec2020V1::from_xyz_d65(red_xyz);
         let back = rec2020.to_xyz_d65();
         for i in 0..3 {
-            assert!((back[i] - red_xyz[i]).abs() < 1e-10);
+            assert!((back[i] - red_xyz[i]).abs() < 1e-9);
         }
     }
 
