@@ -39,6 +39,9 @@ pub(crate) mod spaces;
 )]
 pub(crate) mod technical_quality;
 
+#[allow(dead_code)] // R-05 PR1/PR2: alpha cleanliness types staged before R-06 field lift consumer
+pub(crate) mod cleanliness;
+
 pub use srgb8::Srgb8;
 
 pub(crate) mod accent_balance;
