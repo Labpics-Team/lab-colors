@@ -305,6 +305,7 @@ mod arena {
     #[derive(Debug)]
     pub(crate) struct ObservationArenaPoolV1 {
         slots: [Rc<ObservationBackingV1>; OBSERVATION_ARENA_SLOT_COUNT_V1],
+        high_water_mark: usize,
     }
 
     impl ObservationArenaPoolV1 {
@@ -317,6 +318,7 @@ mod arena {
                         set: ObservedScenarioSet::empty(),
                     })
                 }),
+                high_water_mark: 0,
             }
         }
 
@@ -329,6 +331,18 @@ mod arena {
                     continue;
                 };
                 materialize(&mut backing.set)?;
+                // High-water mark tracks the peak number of simultaneously
+                // retained backings. The count includes the clone we are about
+                // to hand out plus any other live slots from prior calls.
+                let live_after = self
+                    .slots
+                    .iter()
+                    .filter(|s| Rc::strong_count(s) > 1)
+                    .count()
+                    + 1;
+                if live_after > self.high_water_mark {
+                    self.high_water_mark = live_after;
+                }
                 return Ok(Rc::clone(&self.slots[slot_index]));
             }
             Err(ObservationError::InternalInvariant)
@@ -341,6 +355,41 @@ mod arena {
             self.slots
                 .iter()
                 .all(|slot| slot.schema.shares_backing_with(schema))
+        }
+
+        /// Rebind the pool to a new schema without reallocating the backing
+        /// storage. All slots are reset to empty sets under the new schema;
+        /// existing Vec capacity inside each `ObservedScenarioSet` is preserved
+        /// via `clear()` so subsequent materializations reuse warmed buffers.
+        ///
+        /// The high-water mark resets because the previous watermark belongs
+        /// to the old schema's lifecycle and has no diagnostic meaning after
+        /// rebind.
+        pub(crate) fn rebind(&mut self, new_schema: &CanonicalObservationSchemaV1) {
+            for slot in &mut self.slots {
+                // SAFETY INVARIANT: `rebind` is only callable when the Session
+                // holds exclusive access to all arena slots (no outstanding
+                // `Rc` clones). This is enforced by the Session state machine:
+                // schema change transitions through a state that drops all
+                // live observation handles before calling rebind. If this
+                // invariant were violated, `Rc::get_mut` would return None
+                // and we would silently skip the slot -- but the Session
+                // contract guarantees exclusivity here.
+                if let Some(backing) = Rc::get_mut(slot) {
+                    backing.schema = new_schema.share_for_observation();
+                    backing.set.cases.clear();
+                    backing.set.values.clear();
+                    backing.set.provenance.clear();
+                }
+            }
+            self.high_water_mark = 0;
+        }
+
+        /// Maximum number of simultaneously retained backings observed since
+        /// construction or last `rebind`. Diagnostic gate value; the automaton
+        /// invariant guarantees this never exceeds `OBSERVATION_ARENA_SLOT_COUNT_V1`.
+        pub(crate) fn high_water_mark(&self) -> usize {
+            self.high_water_mark
         }
     }
 }

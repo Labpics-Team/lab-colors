@@ -1583,8 +1583,8 @@ fn shared_observation_ssot_has_one_backing_without_lifecycle_or_adapter_facades(
         OBSERVATION_SOURCE
             .matches("schema.share_for_observation()")
             .count(),
-        1,
-        "only the persistent arena-pool constructor may share a schema handle",
+        2,
+        "only the arena-pool constructor and rebind may share a schema handle",
     );
     assert!(
         !OBSERVATION_SOURCE.contains("schema: schema.clone()"),

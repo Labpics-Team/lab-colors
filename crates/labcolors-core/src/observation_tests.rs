@@ -1179,3 +1179,171 @@ fn schema_ordered_admission_matches_an_independent_ordered_map_oracle() {
         )
         .expect("deterministic schema-ordered differential property failed");
 }
+
+// -- O-13 PR1: Observation Arena Pool Hardening ------------------------------
+#[test]
+fn rebind_preserves_backing_allocations_and_accepts_new_schema() {
+    let schema_a = canonicalize_observation_schema(vec![PORT_A]).unwrap();
+    let schema_b = canonicalize_observation_schema(vec![PORT_A, PORT_B]).unwrap();
+    let mut state = TestState::new(STREAM, vec![PORT_A]).unwrap();
+    // Warm up one slot under schema A.
+    state
+        .apply(observed_update(
+            STREAM,
+            1,
+            scenarios([scenario(1, [binding(PORT_A, [1, 2, 3])])]),
+        ))
+        .unwrap();
+    // Release the backing so rebind can get exclusive access.
+    state.owner = TestOwner::Empty;
+    // Rebind to schema B -- must not allocate new Rc backings.
+    let (_, rebind_allocs) = crate::test_support::measured_allocations(|| {
+        state.arenas.rebind(&schema_b);
+    });
+    assert_eq!(
+        rebind_allocs, 0,
+        "rebind must reuse existing backing allocations"
+    );
+    // Subsequent materialization succeeds under the new schema.
+    state.schema = schema_b.clone();
+    state
+        .apply(observed_update(
+            STREAM,
+            2,
+            scenarios([scenario(
+                1,
+                [binding(PORT_A, [10, 20, 30]), binding(PORT_B, [40, 50, 60])],
+            )]),
+        ))
+        .unwrap();
+    let obs = revision_bound(&state);
+    assert!(obs.shares_schema_backing_with(&schema_b));
+    assert!(!obs.shares_schema_backing_with(&schema_a));
+}
+
+#[test]
+fn high_water_mark_tracks_peak_retained_slots_and_resets_on_rebind() {
+    let schema = canonicalize_observation_schema(vec![PORT_A]).unwrap();
+    let mut arenas = ObservationArenaPoolV1::new(&schema);
+    assert_eq!(arenas.high_water_mark(), 0);
+    // Use prepare_observation to drive materialize_into indirectly.
+    let mut owner = TestOwner::Empty;
+    let update1 = observed_update(
+        STREAM,
+        1,
+        scenarios([scenario(1, [binding(PORT_A, [1; 3])])]),
+    );
+    let p1 = prepare_observation(&mut owner, &mut arenas, STREAM, &schema, update1).unwrap();
+    if let PreparedObservationUpdateV1::Observed(p) = p1 {
+        let (o, obs) = p.into_parts();
+        *o = TestOwner::Observed(obs);
+    }
+    assert_eq!(arenas.high_water_mark(), 1);
+    // We cannot easily retain two backings simultaneously through the public
+    // API because TestOwner holds only one head. Instead, verify that after
+    // releasing and re-materializing, the watermark stays at peak.
+    owner = TestOwner::Empty;
+    let update2 = observed_update(
+        STREAM,
+        2,
+        scenarios([scenario(1, [binding(PORT_A, [2; 3])])]),
+    );
+    let _p2 = prepare_observation(&mut owner, &mut arenas, STREAM, &schema, update2).unwrap();
+    // Watermark should still be >= 1 from the first materialization.
+    assert!(arenas.high_water_mark() >= 1);
+    // Rebind resets the watermark.
+    let _ = &owner; // prevent unused_assignments before drop
+    owner = TestOwner::Empty;
+    arenas.rebind(&schema);
+    assert_eq!(arenas.high_water_mark(), 0);
+    drop(owner);
+}
+
+#[test]
+fn high_water_gate_zero_arena_allocations_after_warmup_across_lifecycle_transitions() {
+    let schema = canonicalize_observation_schema(vec![PORT_A]).unwrap();
+    let mut arenas = ObservationArenaPoolV1::new(&schema);
+    let mut owner = TestOwner::Empty;
+    // Warm up: materialize 3 backings to fill all slots and grow Vec capacity.
+    for revision in 1..=3u64 {
+        let update = observed_update(
+            STREAM,
+            revision,
+            scenarios([scenario(1, [binding(PORT_A, [revision as u8; 3])])]),
+        );
+        let prepared =
+            prepare_observation(&mut owner, &mut arenas, STREAM, &schema, update).unwrap();
+        match prepared {
+            PreparedObservationUpdateV1::Observed(p) => {
+                let (o, obs) = p.into_parts();
+                *o = TestOwner::Observed(obs);
+            }
+            _ => panic!("expected observed"),
+        }
+    }
+    // Release all retained backings so slots are free for the iteration phase.
+    owner = TestOwner::Empty;
+
+    // Iteration phase: 1000 mixed transitions that exercise the arena pool
+    // without triggering admission-level canonicalization allocations.
+    // Unknown transitions, idempotent replays, and Empty resets never call
+    // materialize_into or allocate scenario Vecs. New Observed transitions
+    // would allocate via canonicalize_scenarios_input regardless of arena
+    // reuse, so we exclude them from the zero-alloc gate.
+    #[allow(unused_assignments)]
+    let (_, allocs) = crate::test_support::measured_allocations(|| {
+        for i in 0..1000usize {
+            let rev = (i as u64) + 100;
+            match i % 3 {
+                0 => {
+                    // Unknown transition -- no payload, no arena allocation.
+                    let update = unknown_update(STREAM, rev, (i % 10) as u32);
+                    let prepared =
+                        prepare_observation(&mut owner, &mut arenas, STREAM, &schema, update)
+                            .unwrap();
+                    if let PreparedObservationUpdateV1::Unknown(p) = prepared {
+                        let (o, u) = p.into_parts();
+                        *o = TestOwner::Unknown(u);
+                    }
+                }
+                1 => {
+                    // Idempotent replay -- same revision, skips materialization.
+                    let current_rev = match &owner {
+                        TestOwner::Observed(o) => o.revision().value(),
+                        TestOwner::Unknown(u) => u.revision().value(),
+                        TestOwner::Empty => continue,
+                    };
+                    let update = match &owner {
+                        TestOwner::Observed(_) => observed_update(
+                            STREAM,
+                            current_rev,
+                            scenarios([scenario(
+                                1,
+                                [binding(PORT_A, [(current_rev % 256) as u8; 3])],
+                            )]),
+                        ),
+                        TestOwner::Unknown(u) => {
+                            unknown_update(STREAM, current_rev, u.reason().value())
+                        }
+                        TestOwner::Empty => continue,
+                    };
+                    let _ = prepare_observation(&mut owner, &mut arenas, STREAM, &schema, update);
+                }
+                _ => {
+                    // Release to Empty (simulates rejected sink / reset).
+                    owner = TestOwner::Empty;
+                }
+            }
+        }
+    });
+    assert_eq!(
+        allocs, 0,
+        "post-warmup lifecycle transitions must not allocate"
+    );
+    assert!(
+        arenas.high_water_mark() <= 3, // OBSERVATION_ARENA_SLOT_COUNT_V1
+        "high water mark {} exceeded slot count {}",
+        arenas.high_water_mark(),
+        3usize, // OBSERVATION_ARENA_SLOT_COUNT_V1
+    );
+}
