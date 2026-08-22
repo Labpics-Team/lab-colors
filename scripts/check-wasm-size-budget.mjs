@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+﻿#!/usr/bin/env node
 
 import { createHash } from "node:crypto";
 import { readFileSync, readdirSync } from "node:fs";
@@ -13,8 +13,7 @@ export const DEFAULT_BUDGET = resolve(
   REPO_ROOT,
   "packages/colors/bench/wasm.json",
 );
-export const WASM_BUDGET_FILE_SHA256 =
-  "dfd36995fd53c13bf88399dbf89b1f050daac8b5d38febe417ce5b9b85957ddb";
+export const WASM_BUDGET_FILE_SHA256 = "2060c088bb423196dedbb663575f367a274350268154b7c8d415f20e6cc47789";
 
 const SCHEMA_VERSION = 2;
 const CANONICAL_ARTIFACT = "packages/colors/pkg/labcolors_bg.wasm";
