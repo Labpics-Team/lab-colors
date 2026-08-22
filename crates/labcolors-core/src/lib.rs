@@ -26,6 +26,15 @@ pub(crate) mod field_effect;
 mod field_effect_tests;
 pub(crate) mod spaces;
 
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "the alpha/backdrop TQ substrate is staged before its R-10 field consumer"
+    )
+)]
+pub(crate) mod technical_quality;
+
 pub use srgb8::Srgb8;
 
 pub(crate) mod accent_balance;
