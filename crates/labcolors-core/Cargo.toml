@@ -10,6 +10,8 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+serde = { version = "1", features = ["derive"] }
+rmp-serde = "1"
 
 [features]
 # Direct core consumers receive the stable default capability set. A transport
