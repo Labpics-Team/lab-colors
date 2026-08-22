@@ -460,6 +460,9 @@ impl LcsProbeProgramEvaluatorV1 {
     pub(crate) fn program_constraint_content_v1(self) -> ProgramConstraintContentV1 {
         ProgramConstraintContentV1::ModeledLcsProbe {
             release: <Self as Evaluator<ProgramLcsPointTargetV1>>::release(&self),
+            applicability:
+                crate::evaluator_registry::metadata::EvaluatorApplicabilityV1::undeclared(),
+            uncertainty: crate::evaluator_registry::metadata::EvaluatorUncertaintyV1::None,
         }
     }
 }
@@ -502,52 +505,72 @@ impl<Evaluation> ProgramPointEvaluatorV1 for Evaluation where
 /// закрытого определения evaluator-а, которое связывает runtime evidence, и не
 /// могут разойтись с его identity, release или capability. Добавление либо
 /// изменение production evaluator-а остаётся явной сменой схемы.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) enum ProgramConstraintContentV1 {
     ExactSrgb8 {
         identity: ExactConstraintIdentityV1,
         release: ExactIdentityReleaseV1,
         capability: ExactIdentityCapabilityV1,
         expected: Srgb8,
+        applicability: crate::evaluator_registry::metadata::EvaluatorApplicabilityV1,
+        uncertainty: crate::evaluator_registry::metadata::EvaluatorUncertaintyV1,
     },
     Wcag22Srgb8 {
         identity: Wcag22Srgb8EvaluatorIdentityV1,
         release: Wcag22ProfileIdV1,
         capability: Wcag22Srgb8CapabilityV1,
         criterion: Wcag22CriterionV1,
+        applicability: crate::evaluator_registry::metadata::EvaluatorApplicabilityV1,
+        uncertainty: crate::evaluator_registry::metadata::EvaluatorUncertaintyV1,
     },
     ExactSrgb8IntrinsicUnary {
         identity: ExactSrgb8IntrinsicUnaryIdentityV1,
         release: ExactSrgb8IntrinsicUnaryReleaseV1,
         capability: ExactSrgb8IntrinsicUnaryCapabilityV1,
         expected: Srgb8,
+        applicability: crate::evaluator_registry::metadata::EvaluatorApplicabilityV1,
+        uncertainty: crate::evaluator_registry::metadata::EvaluatorUncertaintyV1,
     },
     FamilyMembership {
         identity: FamilyMembershipIdentityV1,
         release: FamilyMembershipReleaseV2,
         capability: FamilyMembershipCapabilityV1,
+        applicability: crate::evaluator_registry::metadata::EvaluatorApplicabilityV1,
+        uncertainty: crate::evaluator_registry::metadata::EvaluatorUncertaintyV1,
     },
     ExactSrgb8Relation {
         identity: ExactSrgb8RelationIdentityV1,
         release: ExactSrgb8RelationReleaseV1,
         capability: ExactSrgb8RelationCapabilityV1,
+        applicability: crate::evaluator_registry::metadata::EvaluatorApplicabilityV1,
+        uncertainty: crate::evaluator_registry::metadata::EvaluatorUncertaintyV1,
     },
     ExactSrgb8DistinctionRelation {
         identity: ExactSrgb8DistinctionIdentityV1,
         release: ExactSrgb8DistinctionReleaseV1,
         capability: ExactSrgb8DistinctionCapabilityV1,
+        applicability: crate::evaluator_registry::metadata::EvaluatorApplicabilityV1,
+        uncertainty: crate::evaluator_registry::metadata::EvaluatorUncertaintyV1,
     },
     FamilyCategoryRelation {
         identity: FamilyCategoryRelationIdentityV1,
         release: FamilyCategoryRelationReleaseV1,
         capability: FamilyCategoryRelationCapabilityV1,
+        applicability: crate::evaluator_registry::metadata::EvaluatorApplicabilityV1,
+        uncertainty: crate::evaluator_registry::metadata::EvaluatorUncertaintyV1,
     },
     #[cfg(test)]
     ModeledLcsProbe {
         release: ProgramLcsDependencyReleaseV1,
+        applicability: crate::evaluator_registry::metadata::EvaluatorApplicabilityV1,
+        uncertainty: crate::evaluator_registry::metadata::EvaluatorUncertaintyV1,
     },
     #[cfg(test)]
-    FinalRecheckMutantExactSrgb8 { expected: Srgb8 },
+    FinalRecheckMutantExactSrgb8 {
+        expected: Srgb8,
+        applicability: crate::evaluator_registry::metadata::EvaluatorApplicabilityV1,
+        uncertainty: crate::evaluator_registry::metadata::EvaluatorUncertaintyV1,
+    },
 }
 
 /// Внутрикрейтное описание generic test seam с одним evaluator-ом. Package
@@ -608,6 +631,9 @@ impl ProgramPointEvaluatorContentV1 for CountingProgramWcag22Srgb8V1 {
             release: self.release(),
             capability: self.capability(),
             criterion: invocation,
+            applicability:
+                crate::evaluator_registry::metadata::EvaluatorApplicabilityV1::undeclared(),
+            uncertainty: crate::evaluator_registry::metadata::EvaluatorUncertaintyV1::None,
         }
     }
 }
@@ -682,6 +708,9 @@ impl ProgramPointEvaluatorContentV1 for FinalRecheckMutantProgramEvaluatorV1 {
     ) -> ProgramConstraintContentV1 {
         ProgramConstraintContentV1::FinalRecheckMutantExactSrgb8 {
             expected: invocation,
+            applicability:
+                crate::evaluator_registry::metadata::EvaluatorApplicabilityV1::undeclared(),
+            uncertainty: crate::evaluator_registry::metadata::EvaluatorUncertaintyV1::None,
         }
     }
 }
