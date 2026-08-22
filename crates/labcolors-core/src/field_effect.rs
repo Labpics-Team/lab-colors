@@ -124,6 +124,9 @@ pub(crate) enum FieldEvaluationErrorV1 {
     UnsupportedQuantization,
     OutputCapabilityMismatch,
     ResourceExhausted,
+    ArenaExhausted {
+        slot_count: usize,
+    },
     ArithmeticOverflow,
     InternalInvariant,
     WeakEvidenceCannotProveWholeField {
