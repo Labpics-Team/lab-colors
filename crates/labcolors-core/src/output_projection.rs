@@ -234,7 +234,7 @@ pub(crate) enum CssOklchNumberEncodingReleaseIdV1 {
 ///
 /// Exact encoded greys and an exact rectangular Oklab origin serialize as the
 /// harmless numeric CSS convention `0`.  This never changes an appearance
-/// view's [`crate::lcs_occurrence::HueState`] to `Defined(0°)` and introduces no
+/// view's [`crate::lcs_occurrence::HueState`] to `Defined(0В°)` and introduces no
 /// tolerance or perceptual-achromaticity threshold.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) enum CssOklchHueSerializationReleaseIdV1 {
@@ -312,7 +312,7 @@ impl CssColor4DisplayP3SolidV1 {
 }
 
 /// Outcome of the P3-domain encoded recheck.
-/// Satisfies roadmap requirement: "final encoded recheck делается в P3 domain."
+/// Satisfies roadmap requirement: "final encoded recheck РґРµР»Р°РµС‚СЃСЏ РІ P3 domain."
 ///
 /// `max_channel_delta` is stored as IEEE 754 binary64 bits (`u64`) so that
 /// this type can derive `Eq`. Floating-point `f64` does not implement `Eq`
@@ -373,7 +373,7 @@ pub(crate) enum OutputProjectionErrorV1 {
     Hdr(HdrProjectionErrorV1),
 }
 
-// ─── HDR Projection Types (O-08) ────────────────────────────────────────
+// в”Ђв”Ђв”Ђ HDR Projection Types (O-08) в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 
 use crate::spaces::pq::{AbsoluteLuminanceV1, HdrNumericalErrorV1, PqCodeValueV1};
 use crate::spaces::rec2020::LinearRec2020V1;
@@ -384,7 +384,7 @@ use crate::spaces::rec2020::LinearRec2020V1;
 pub(crate) enum ToneMapOperatorIdV1 {
     /// Reinhard global: L_out = L / (1 + L/L_white).
     ReinhardGlobalV1,
-    /// Linear clamp: hard clip at display peak. Valid only when source ≤ display.
+    /// Linear clamp: hard clip at display peak. Valid only when source в‰¤ display.
     LinearClampV1,
 }
 
@@ -436,7 +436,7 @@ pub(crate) fn encode_xyz_to_hdr_pq_rec2020(
     xyz: [f64; 3],
     request: &HdrProjectionRequestV1,
 ) -> Result<([PqCodeValueV1; 3], ToneMapResultV1), HdrProjectionErrorV1> {
-    // 1. Convert XYZ → Linear Rec.2020
+    // 1. Convert XYZ в†’ Linear Rec.2020
     let linear = LinearRec2020V1::from_xyz_d65(xyz);
     let [lr, lg, lb] = linear.channels();
 
@@ -463,7 +463,7 @@ pub(crate) fn encode_xyz_to_hdr_pq_rec2020(
     let scaled_g = (lg * scale).clamp(0.0, 1.0);
     let scaled_b = (lb * scale).clamp(0.0, 1.0);
 
-    // 5. Convert scaled linear Rec.2020 → absolute luminance per channel → PQ
+    // 5. Convert scaled linear Rec.2020 в†’ absolute luminance per channel в†’ PQ
     //    Each channel represents relative luminance; scale by display peak
     let pq_r = crate::spaces::pq::pq_inverse_eotf(
         AbsoluteLuminanceV1::try_new(scaled_r * request.peak_white.value())
@@ -555,7 +555,7 @@ impl HdrConformanceDigestV1 {
     /// Compute digest from PQ values and luminance metadata.
     /// Dependency-free: uses FNV-1a over the canonical 56-byte input.
     pub fn compute(pq_values: &[PqCodeValueV1; 3], metadata: &HdrLuminanceMetadataV1) -> Self {
-        // Canonical byte sequence: 7 × f64 LE = 56 bytes, order-sensitive.
+        // Canonical byte sequence: 7 Г— f64 LE = 56 bytes, order-sensitive.
         let mut buf = [0u8; 56];
         let mut offset = 0usize;
         for pq in pq_values {
@@ -590,7 +590,13 @@ impl HdrConformanceDigestV1 {
     }
 
     pub fn to_hex(self) -> String {
-        self.0.iter().map(|b| format!("{:02x}", b)).collect()
+        self.0
+            .iter()
+            .fold(String::with_capacity(self.0.len() * 2), |mut s, b| {
+                use std::fmt::Write;
+                let _ = write!(s, "{b:02x}");
+                s
+            })
     }
 }
 
@@ -938,7 +944,7 @@ pub(crate) fn project_hdr_output_v1(
     hdr_request: HdrProjectionRequestV1,
     host_capability: HostHdrCapabilityV1,
 ) -> Result<OutputProjectionV1, OutputProjectionErrorV1> {
-    // Validate host capability upfront — no silent degradation
+    // Validate host capability upfront вЂ” no silent degradation
     if matches!(host_capability, HostHdrCapabilityV1::Unsupported) {
         return Err(OutputProjectionErrorV1::Hdr(
             HdrProjectionErrorV1::HostUnsupported {
