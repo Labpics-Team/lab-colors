@@ -281,6 +281,35 @@ pub(crate) fn assess_alpha_backdrop_tq_v1(
     })
 }
 
+/// Assesses technical quality directly from a replayable source-over certificate.
+///
+/// This is the PR2 wiring entry point: the appearance evaluator already holds
+/// a `SourceOverCertificateV1` for every resolved occurrence. Rather than
+/// re-executing composition or extracting raw inputs, this function derives
+/// the TQ assessment from the certificate's already-admitted values. The
+/// certificate is the single source of truth for what was composited; TQ
+/// evidence built from it cannot drift from the visible output.
+///
+/// # Guarantees
+/// - Never panics. All error paths return `TechnicalQualityV1::Violated`.
+/// - Pure function of the certificate and context bindings.
+/// - Content-addressed: identical certificate + bindings produce identical output.
+pub(crate) fn assess_alpha_backdrop_tq_from_certificate_v1(
+    certificate: SourceOverCertificateV1,
+    backdrop_domain: BackdropDomainV1,
+    owned_ref: OwnedCompositionReferenceV1,
+) -> TechnicalQualityV1 {
+    assess_alpha_backdrop_tq_v1(
+        certificate.profile(),
+        Srgb8::new(certificate.subject_rgb()),
+        certificate.subject_opacity(),
+        Srgb8::new(certificate.backdrop_rgb()),
+        backdrop_domain,
+        certificate,
+        owned_ref,
+    )
+}
+
 fn check_artifact_absence(_output: [u8; 3]) -> ArtifactAbsenceCertificateV1 {
     // u8 output from composite() is inherently finite and in-range.
     // NaN/Inf/subnormal checks apply to intermediate f64 arithmetic.
@@ -393,6 +422,34 @@ mod tests {
     fn output_deviation_ordering() {
         assert!(OutputDeviationV1::ZERO < OutputDeviationV1::MAX);
         assert_eq!(OutputDeviationV1::new(10).value(), 10);
+    }
+
+    #[test]
+    fn certificate_wiring_produces_same_result_as_raw_inputs() {
+        let profile = CompositionProfileV1::EncodedSrgb8SourceOverV1;
+        let tint = Srgb8::new([128, 64, 32]);
+        let alpha = AdmittedOpacityV1::new(0.5).expect("valid alpha");
+        let backdrop = Srgb8::new([200, 100, 50]);
+        let domain = BackdropDomainV1 {
+            lower: backdrop,
+            upper: backdrop,
+        };
+        let causal_ref = placeholder_causal_ref();
+        let owned_ref = placeholder_owned_ref();
+
+        let direct = assess_alpha_backdrop_tq_v1(
+            profile,
+            tint,
+            alpha,
+            backdrop,
+            domain,
+            causal_ref,
+            owned_ref.clone(),
+        );
+
+        let from_cert = assess_alpha_backdrop_tq_from_certificate_v1(causal_ref, domain, owned_ref);
+
+        assert_eq!(direct, from_cert);
     }
 }
 
