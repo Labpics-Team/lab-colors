@@ -419,6 +419,9 @@ impl CoreIntrinsicUnaryInvocationV1 {
                     release: profile.release(),
                     capability: profile.capability(),
                     expected,
+                    applicability:
+                        crate::evaluator_registry::metadata::EvaluatorApplicabilityV1::undeclared(),
+                    uncertainty: crate::evaluator_registry::metadata::EvaluatorUncertaintyV1::None,
                 }
             }
             Self::FamilyMembership { .. } => {
@@ -427,6 +430,9 @@ impl CoreIntrinsicUnaryInvocationV1 {
                     identity: profile.identity(),
                     release: profile.release(),
                     capability: profile.capability(),
+                    applicability:
+                        crate::evaluator_registry::metadata::EvaluatorApplicabilityV1::undeclared(),
+                    uncertainty: crate::evaluator_registry::metadata::EvaluatorUncertaintyV1::None,
                 }
             }
         }
@@ -553,6 +559,9 @@ impl CoreRelationInvocationV1 {
                     identity: profile.identity(),
                     release: profile.release(),
                     capability: profile.capability(),
+                    applicability:
+                        crate::evaluator_registry::metadata::EvaluatorApplicabilityV1::undeclared(),
+                    uncertainty: crate::evaluator_registry::metadata::EvaluatorUncertaintyV1::None,
                 }
             }
             Self::ExactSrgb8Distinction => {
@@ -561,6 +570,9 @@ impl CoreRelationInvocationV1 {
                     identity: profile.identity(),
                     release: profile.release(),
                     capability: profile.capability(),
+                    applicability:
+                        crate::evaluator_registry::metadata::EvaluatorApplicabilityV1::undeclared(),
+                    uncertainty: crate::evaluator_registry::metadata::EvaluatorUncertaintyV1::None,
                 }
             }
             Self::FamilyCategory { .. } => {
@@ -569,6 +581,9 @@ impl CoreRelationInvocationV1 {
                     identity: profile.identity(),
                     release: profile.release(),
                     capability: profile.capability(),
+                    applicability:
+                        crate::evaluator_registry::metadata::EvaluatorApplicabilityV1::undeclared(),
+                    uncertainty: crate::evaluator_registry::metadata::EvaluatorUncertaintyV1::None,
                 }
             }
         }

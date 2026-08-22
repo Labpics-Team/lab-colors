@@ -188,6 +188,9 @@ impl ProgramPointEvaluatorContentV1 for Wcag22Srgb8V1 {
             release: <Self as Evaluator<ProgramPointTargetV1>>::release(self),
             capability: <Self as Evaluator<ProgramPointTargetV1>>::capability(self),
             criterion: invocation,
+            applicability:
+                crate::evaluator_registry::metadata::EvaluatorApplicabilityV1::undeclared(),
+            uncertainty: crate::evaluator_registry::metadata::EvaluatorUncertaintyV1::None,
         }
     }
 }

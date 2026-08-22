@@ -1860,7 +1860,7 @@ class MutationTruthTest(unittest.TestCase):
         assert ci_worker_ref_match is not None
         admitted_ci_worker = (
             "uses: Labpics-Team/lab-colors/.github/workflows/ci-worker.yml@"
-+ ci_worker_ref_match.group(1)
+            + ci_worker_ref_match.group(1)
         )
         self.assertEqual(ci_caller.count("ci-worker.yml@"), 1)
         self.assertIn(admitted_ci_worker, ci_caller)

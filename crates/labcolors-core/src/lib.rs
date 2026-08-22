@@ -37,6 +37,8 @@ pub(crate) mod constraints;
 #[allow(dead_code)]
 pub(crate) mod corridor_representation;
 #[allow(dead_code)]
+pub(crate) mod evaluator_registry;
+#[allow(dead_code)]
 pub(crate) mod glow;
 pub mod hash;
 #[allow(dead_code)]
