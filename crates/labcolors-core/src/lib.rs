@@ -96,6 +96,11 @@ pub(crate) mod relation;
     )
 )]
 pub(crate) mod release_registry;
+#[expect(
+    dead_code,
+    reason = "R-07 PR-A restorative auto types are staged before runtime integration in PR-C"
+)]
+pub(crate) mod restorative_auto;
 pub mod scale;
 #[allow(dead_code)]
 pub(crate) mod semantic;
