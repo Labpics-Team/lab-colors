@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """Independent proof of the point-support Q55 retained-surplus law.
 
 The verifier deliberately does not import production Rust. It binds the exact
