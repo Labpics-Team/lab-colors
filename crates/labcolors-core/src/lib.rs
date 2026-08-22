@@ -184,6 +184,9 @@ pub(crate) mod observation;
 mod observation_tests;
 
 #[cfg(test)]
+mod observation_differential_oracle_tests;
+
+#[cfg(test)]
 mod point_support_tests;
 
 #[cfg_attr(
