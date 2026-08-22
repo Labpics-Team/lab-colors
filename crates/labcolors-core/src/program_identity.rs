@@ -643,6 +643,8 @@ fn constraint_color(
             release,
             capability,
             expected,
+            applicability: _,
+            uncertainty: _,
         } => {
             color.push_u8(release_tag::EXACT_SRGB8_FAMILY_V1)?;
             color.push_u8(match identity {
@@ -679,6 +681,8 @@ fn constraint_color(
             release,
             capability,
             criterion,
+            applicability: _,
+            uncertainty: _,
         } => {
             color.push_u8(release_tag::WCAG22_SRGB8_FAMILY_V1)?;
             color.push_u8(match identity {
@@ -703,6 +707,8 @@ fn constraint_color(
             release,
             capability,
             expected,
+            applicability: _,
+            uncertainty: _,
         } => {
             color.push_u8(release_tag::EXACT_SRGB8_INTRINSIC_UNARY_FAMILY_V1)?;
             color.push_u8(match identity {
@@ -726,6 +732,8 @@ fn constraint_color(
             identity,
             release,
             capability,
+            applicability: _,
+            uncertainty: _,
         } => {
             color.push_u8(release_tag::FAMILY_MEMBERSHIP_FAMILY_V1)?;
             color.push_u8(match identity {
@@ -748,6 +756,8 @@ fn constraint_color(
             identity,
             release,
             capability,
+            applicability: _,
+            uncertainty: _,
         } => {
             color.push_u8(release_tag::EXACT_SRGB8_RELATION_FAMILY_V1)?;
             color.push_u8(match identity {
@@ -770,6 +780,8 @@ fn constraint_color(
             identity,
             release,
             capability,
+            applicability: _,
+            uncertainty: _,
         } => {
             color.push_u8(release_tag::EXACT_SRGB8_DISTINCTION_RELATION_FAMILY_V1)?;
             color.push_u8(match identity {
@@ -792,6 +804,8 @@ fn constraint_color(
             identity,
             release,
             capability,
+            applicability: _,
+            uncertainty: _,
         } => {
             color.push_u8(release_tag::FAMILY_CATEGORY_RELATION_FAMILY_V1)?;
             color.push_u8(match identity {
@@ -811,7 +825,11 @@ fn constraint_color(
             })?;
         }
         #[cfg(test)]
-        ProgramConstraintContentV1::ModeledLcsProbe { release } => {
+        ProgramConstraintContentV1::ModeledLcsProbe {
+            release,
+            applicability: _,
+            uncertainty: _,
+        } => {
             color.push_u8(release_tag::MODELED_LCS_PROBE_FAMILY_V1)?;
             color.push_u8(match release.modeled_lcs_release() {
                 crate::lcs_occurrence::ModeledLcsOccurrenceReleaseId::V1 => {
@@ -828,7 +846,11 @@ fn constraint_color(
             })?;
         }
         #[cfg(test)]
-        ProgramConstraintContentV1::FinalRecheckMutantExactSrgb8 { expected } => {
+        ProgramConstraintContentV1::FinalRecheckMutantExactSrgb8 {
+            expected,
+            applicability: _,
+            uncertainty: _,
+        } => {
             for tag in [0xFE_u8, 1, 1, 1] {
                 color.push_u8(tag)?;
             }
@@ -2131,6 +2153,8 @@ mod tests {
             release,
             capability,
             expected: described_expected,
+            applicability,
+            uncertainty,
         } = content
         else {
             panic!("exact evaluator must describe its own exact invocation");
@@ -2162,18 +2186,24 @@ mod tests {
                 release,
                 capability,
                 expected,
+                applicability,
+                uncertainty,
             },
             ProgramConstraintContentV1::ExactSrgb8 {
                 identity,
                 release: crate::constraints::ExactIdentityReleaseV1::MutationSentinelV1,
                 capability,
                 expected,
+                applicability,
+                uncertainty,
             },
             ProgramConstraintContentV1::ExactSrgb8 {
                 identity,
                 release,
                 capability: crate::constraints::ExactIdentityCapabilityV1::MutationSentinelV1,
                 expected,
+                applicability,
+                uncertainty,
             },
         ] {
             assert_ne!(
@@ -2189,13 +2219,17 @@ mod tests {
             content: ProgramConstraintContentV1,
         ) -> ProgramConstraintContentV1 {
             match content {
-                ProgramConstraintContentV1::ModeledLcsProbe { release } => {
-                    ProgramConstraintContentV1::ModeledLcsProbe {
-                        release: release.with_modeled_lcs_release_for_test(
-                            crate::lcs_occurrence::ModeledLcsOccurrenceReleaseId::MutationSentinelV1,
-                        ),
-                    }
-                }
+                ProgramConstraintContentV1::ModeledLcsProbe {
+                    release,
+                    applicability,
+                    uncertainty,
+                } => ProgramConstraintContentV1::ModeledLcsProbe {
+                    release: release.with_modeled_lcs_release_for_test(
+                        crate::lcs_occurrence::ModeledLcsOccurrenceReleaseId::MutationSentinelV1,
+                    ),
+                    applicability,
+                    uncertainty,
+                },
                 encoded_only => encoded_only,
             }
         }
