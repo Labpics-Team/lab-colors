@@ -1,15 +1,15 @@
-//! Каноническая wire-грамматика авторского Draft-графа Program (v1).
+//! РљР°РЅРѕРЅРёС‡РµСЃРєР°СЏ wire-РіСЂР°РјРјР°С‚РёРєР° Р°РІС‚РѕСЂСЃРєРѕРіРѕ Draft-РіСЂР°С„Р° Program (v1).
 //!
-//! Слой 1 двухслойного публичного контракта: байты -> декларации. Семантику
-//! графа проверяет слой 2 — атомарный [`super::DraftV1::compile`]; декодер
-//! сознательно не умеет выражать семантические отказы, а компилятор — байтовые
-//! offset'ы. Формат — canonical binary: одна Program-декларация <=> одни байты,
-//! что напрямую стыкуется с content identity и exact-bytes дисциплиной репо.
+//! РЎР»РѕР№ 1 РґРІСѓС…СЃР»РѕР№РЅРѕРіРѕ РїСѓР±Р»РёС‡РЅРѕРіРѕ РєРѕРЅС‚СЂР°РєС‚Р°: Р±Р°Р№С‚С‹ -> РґРµРєР»Р°СЂР°С†РёРё. РЎРµРјР°РЅС‚РёРєСѓ
+//! РіСЂР°С„Р° РїСЂРѕРІРµСЂСЏРµС‚ СЃР»РѕР№ 2 вЂ” Р°С‚РѕРјР°СЂРЅС‹Р№ [`super::DraftV1::compile`]; РґРµРєРѕРґРµСЂ
+//! СЃРѕР·РЅР°С‚РµР»СЊРЅРѕ РЅРµ СѓРјРµРµС‚ РІС‹СЂР°Р¶Р°С‚СЊ СЃРµРјР°РЅС‚РёС‡РµСЃРєРёРµ РѕС‚РєР°Р·С‹, Р° РєРѕРјРїРёР»СЏС‚РѕСЂ вЂ” Р±Р°Р№С‚РѕРІС‹Рµ
+//! offset'С‹. Р¤РѕСЂРјР°С‚ вЂ” canonical binary: РѕРґРЅР° Program-РґРµРєР»Р°СЂР°С†РёСЏ <=> РѕРґРЅРё Р±Р°Р№С‚С‹,
+//! С‡С‚Рѕ РЅР°РїСЂСЏРјСѓСЋ СЃС‚С‹РєСѓРµС‚СЃСЏ СЃ content identity Рё exact-bytes РґРёСЃС†РёРїР»РёРЅРѕР№ СЂРµРїРѕ.
 //!
-//! Канон: header `LCPW` + u16 version + u32 total_len; секции строго в порядке
-//! полей `CoreProgramDraftV1`; каждая секция — `u32 count` + LE-записи в
-//! authored-порядке; непустой остаток после последней секции — typed отказ.
-//! Дубликаты ID ловит `compile()` — декодер не дублирует его закон.
+//! РљР°РЅРѕРЅ: header `LCPW` + u16 version + u32 total_len; СЃРµРєС†РёРё СЃС‚СЂРѕРіРѕ РІ РїРѕСЂСЏРґРєРµ
+//! РїРѕР»РµР№ `CoreProgramDraftV1`; РєР°Р¶РґР°СЏ СЃРµРєС†РёСЏ вЂ” `u32 count` + LE-Р·Р°РїРёСЃРё РІ
+//! authored-РїРѕСЂСЏРґРєРµ; РЅРµРїСѓСЃС‚РѕР№ РѕСЃС‚Р°С‚РѕРє РїРѕСЃР»Рµ РїРѕСЃР»РµРґРЅРµР№ СЃРµРєС†РёРё вЂ” typed РѕС‚РєР°Р·.
+//! Р”СѓР±Р»РёРєР°С‚С‹ ID Р»РѕРІРёС‚ `compile()` вЂ” РґРµРєРѕРґРµСЂ РЅРµ РґСѓР±Р»РёСЂСѓРµС‚ РµРіРѕ Р·Р°РєРѕРЅ.
 
 use crate::Srgb8;
 
@@ -23,18 +23,18 @@ use super::{
 use crate::relation::DirectedRelationErrorV1;
 use crate::wcag22::Wcag22CriterionV1;
 
-/// Magic-префикс формата: Lab Colors Program Wire.
+/// Magic-РїСЂРµС„РёРєСЃ С„РѕСЂРјР°С‚Р°: Lab Colors Program Wire.
 pub(crate) const PROGRAM_WIRE_MAGIC_V1: [u8; 4] = *b"LCPW";
-/// Единственная версия, которую понимает этот декодер. Field-секции (C7e
-/// stage 2) войдут НОВОЙ версией, а не форком формата.
+/// Р•РґРёРЅСЃС‚РІРµРЅРЅР°СЏ РІРµСЂСЃРёСЏ, РєРѕС‚РѕСЂСѓСЋ РїРѕРЅРёРјР°РµС‚ СЌС‚РѕС‚ РґРµРєРѕРґРµСЂ. Field-СЃРµРєС†РёРё (C7e
+/// stage 2) РІРѕР№РґСѓС‚ РќРћР’РћР™ РІРµСЂСЃРёРµР№, Р° РЅРµ С„РѕСЂРєРѕРј С„РѕСЂРјР°С‚Р°.
 pub(crate) const PROGRAM_WIRE_VERSION_V1: u16 = 1;
-/// Верхняя граница записей одной секции: fail-closed budget pin по образцу
-/// evidence-bounds. Значение намеренно щедрое для авторских графов и
-/// намеренно фатальное для hostile length-полей.
+/// Р’РµСЂС…РЅСЏСЏ РіСЂР°РЅРёС†Р° Р·Р°РїРёСЃРµР№ РѕРґРЅРѕР№ СЃРµРєС†РёРё: fail-closed budget pin РїРѕ РѕР±СЂР°Р·С†Сѓ
+/// evidence-bounds. Р—РЅР°С‡РµРЅРёРµ РЅР°РјРµСЂРµРЅРЅРѕ С‰РµРґСЂРѕРµ РґР»СЏ Р°РІС‚РѕСЂСЃРєРёС… РіСЂР°С„РѕРІ Рё
+/// РЅР°РјРµСЂРµРЅРЅРѕ С„Р°С‚Р°Р»СЊРЅРѕРµ РґР»СЏ hostile length-РїРѕР»РµР№.
 pub(crate) const MAX_SECTION_ENTRIES_V1: u32 = 4096;
 
-/// Секция, в которой декодер зафиксировал отказ. Нумерация — порядок секций
-/// формата; это wire-имя, а не runtime-структура.
+/// РЎРµРєС†РёСЏ, РІ РєРѕС‚РѕСЂРѕР№ РґРµРєРѕРґРµСЂ Р·Р°С„РёРєСЃРёСЂРѕРІР°Р» РѕС‚РєР°Р·. РќСѓРјРµСЂР°С†РёСЏ вЂ” РїРѕСЂСЏРґРѕРє СЃРµРєС†РёР№
+/// С„РѕСЂРјР°С‚Р°; СЌС‚Рѕ wire-РёРјСЏ, Р° РЅРµ runtime-СЃС‚СЂСѓРєС‚СѓСЂР°.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum WireSectionV1 {
     Header,
@@ -55,34 +55,34 @@ pub(crate) enum WireSectionV1 {
     Trailer,
 }
 
-/// Typed-отказ слоя 1 (байты -> декларации).
+/// Typed-РѕС‚РєР°Р· СЃР»РѕСЏ 1 (Р±Р°Р№С‚С‹ -> РґРµРєР»Р°СЂР°С†РёРё).
 ///
-/// Не выражает семантику графа: dangling/duplicate ссылки — территория
-/// [`super::CompileErrorV1`]. Каждый вариант несёт секцию и смещение начала
-/// записи, на которой канон нарушен, — этого достаточно для детерминированной
-/// диагностики без раскрытия внутренних структур.
+/// РќРµ РІС‹СЂР°Р¶Р°РµС‚ СЃРµРјР°РЅС‚РёРєСѓ РіСЂР°С„Р°: dangling/duplicate СЃСЃС‹Р»РєРё вЂ” С‚РµСЂСЂРёС‚РѕСЂРёСЏ
+/// [`super::CompileErrorV1`]. РљР°Р¶РґС‹Р№ РІР°СЂРёР°РЅС‚ РЅРµСЃС‘С‚ СЃРµРєС†РёСЋ Рё СЃРјРµС‰РµРЅРёРµ РЅР°С‡Р°Р»Р°
+/// Р·Р°РїРёСЃРё, РЅР° РєРѕС‚РѕСЂРѕР№ РєР°РЅРѕРЅ РЅР°СЂСѓС€РµРЅ, вЂ” СЌС‚РѕРіРѕ РґРѕСЃС‚Р°С‚РѕС‡РЅРѕ РґР»СЏ РґРµС‚РµСЂРјРёРЅРёСЂРѕРІР°РЅРЅРѕР№
+/// РґРёР°РіРЅРѕСЃС‚РёРєРё Р±РµР· СЂР°СЃРєСЂС‹С‚РёСЏ РІРЅСѓС‚СЂРµРЅРЅРёС… СЃС‚СЂСѓРєС‚СѓСЂ.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ProgramWireErrorV1 {
-    /// Первые четыре байта не `LCPW`.
+    /// РџРµСЂРІС‹Рµ С‡РµС‚С‹СЂРµ Р±Р°Р№С‚Р° РЅРµ `LCPW`.
     InvalidMagic,
-    /// Версию формата этот декодер не понимает.
+    /// Р’РµСЂСЃРёСЋ С„РѕСЂРјР°С‚Р° СЌС‚РѕС‚ РґРµРєРѕРґРµСЂ РЅРµ РїРѕРЅРёРјР°РµС‚.
     UnsupportedVersion { declared: u16 },
-    /// Буфер короче заявленной длины, длина не совпадает с фактической или
-    /// после последней секции остался непустой хвост.
+    /// Р‘СѓС„РµСЂ РєРѕСЂРѕС‡Рµ Р·Р°СЏРІР»РµРЅРЅРѕР№ РґР»РёРЅС‹, РґР»РёРЅР° РЅРµ СЃРѕРІРїР°РґР°РµС‚ СЃ С„Р°РєС‚РёС‡РµСЃРєРѕР№ РёР»Рё
+    /// РїРѕСЃР»Рµ РїРѕСЃР»РµРґРЅРµР№ СЃРµРєС†РёРё РѕСЃС‚Р°Р»СЃСЏ РЅРµРїСѓСЃС‚РѕР№ С…РІРѕСЃС‚.
     InvalidLength,
-    /// Запись нарушает канон представления: недопустимый discriminant,
-    /// значение вне домена или неканоничная форма.
+    /// Р—Р°РїРёСЃСЊ РЅР°СЂСѓС€Р°РµС‚ РєР°РЅРѕРЅ РїСЂРµРґСЃС‚Р°РІР»РµРЅРёСЏ: РЅРµРґРѕРїСѓСЃС‚РёРјС‹Р№ discriminant,
+    /// Р·РЅР°С‡РµРЅРёРµ РІРЅРµ РґРѕРјРµРЅР° РёР»Рё РЅРµРєР°РЅРѕРЅРёС‡РЅР°СЏ С„РѕСЂРјР°.
     InvalidDeclaration {
         section: WireSectionV1,
         offset: usize,
     },
-    /// Длина секции превышает объявленный wire-limit.
+    /// Р”Р»РёРЅР° СЃРµРєС†РёРё РїСЂРµРІС‹С€Р°РµС‚ РѕР±СЉСЏРІР»РµРЅРЅС‹Р№ wire-limit.
     ResourceExhausted { section: WireSectionV1 },
 }
 
-/// Позиционный reader: та же fail-closed дисциплина, что у private fixture
-/// (`finish()`-остаток, LE-скаляры, opacity как `f64::from_bits`), но с
-/// секционным контекстом ошибок вместо плоских кодов.
+/// РџРѕР·РёС†РёРѕРЅРЅС‹Р№ reader: С‚Р° Р¶Рµ fail-closed РґРёСЃС†РёРїР»РёРЅР°, С‡С‚Рѕ Сѓ private fixture
+/// (`finish()`-РѕСЃС‚Р°С‚РѕРє, LE-СЃРєР°Р»СЏСЂС‹, opacity РєР°Рє `f64::from_bits`), РЅРѕ СЃ
+/// СЃРµРєС†РёРѕРЅРЅС‹Рј РєРѕРЅС‚РµРєСЃС‚РѕРј РѕС€РёР±РѕРє РІРјРµСЃС‚Рѕ РїР»РѕСЃРєРёС… РєРѕРґРѕРІ.
 struct WireReader<'a> {
     bytes: &'a [u8],
     offset: usize,
@@ -168,16 +168,16 @@ impl<'a> WireReader<'a> {
     }
 }
 
-/// Декодирует канонические байты в авторский Draft-граф.
+/// Р”РµРєРѕРґРёСЂСѓРµС‚ РєР°РЅРѕРЅРёС‡РµСЃРєРёРµ Р±Р°Р№С‚С‹ РІ Р°РІС‚РѕСЂСЃРєРёР№ Draft-РіСЂР°С„.
 ///
-/// Возвращаемый [`DraftV1`] дальше проходит атомарный `compile()`; сам декодер
-/// гарантирует только байтовый канон и домены отдельных записей. Joint
-/// selection на wire v1 непредставим (0 записей обязательно): материализация
-/// порядка принадлежит `SelectionRelease`-допуску, не авторским байтам.
+/// Р’РѕР·РІСЂР°С‰Р°РµРјС‹Р№ [`DraftV1`] РґР°Р»СЊС€Рµ РїСЂРѕС…РѕРґРёС‚ Р°С‚РѕРјР°СЂРЅС‹Р№ `compile()`; СЃР°Рј РґРµРєРѕРґРµСЂ
+/// РіР°СЂР°РЅС‚РёСЂСѓРµС‚ С‚РѕР»СЊРєРѕ Р±Р°Р№С‚РѕРІС‹Р№ РєР°РЅРѕРЅ Рё РґРѕРјРµРЅС‹ РѕС‚РґРµР»СЊРЅС‹С… Р·Р°РїРёСЃРµР№. Joint
+/// selection РЅР° wire v1 РЅРµРїСЂРµРґСЃС‚Р°РІРёРј (0 Р·Р°РїРёСЃРµР№ РѕР±СЏР·Р°С‚РµР»СЊРЅРѕ): РјР°С‚РµСЂРёР°Р»РёР·Р°С†РёСЏ
+/// РїРѕСЂСЏРґРєР° РїСЂРёРЅР°РґР»РµР¶РёС‚ `SelectionRelease`-РґРѕРїСѓСЃРєСѓ, РЅРµ Р°РІС‚РѕСЂСЃРєРёРј Р±Р°Р№С‚Р°Рј.
 pub(crate) fn decode_program_wire_v1(bytes: &[u8]) -> Result<DraftV1, ProgramWireErrorV1> {
     let mut reader = WireReader::new(bytes);
 
-    // Header: magic + version + total_len (fail-closed до чтения секций).
+    // Header: magic + version + total_len (fail-closed РґРѕ С‡С‚РµРЅРёСЏ СЃРµРєС†РёР№).
     let magic = reader.read_bytes::<4>()?;
     if magic != PROGRAM_WIRE_MAGIC_V1 {
         return Err(ProgramWireErrorV1::InvalidMagic);
@@ -239,7 +239,7 @@ pub(crate) fn decode_program_wire_v1(bytes: &[u8]) -> Result<DraftV1, ProgramWir
         }
     }
 
-    // Families: id u32 + 32-байтный semantic release.
+    // Families: id u32 + 32-Р±Р°Р№С‚РЅС‹Р№ semantic release.
     reader.enter(WireSectionV1::Families);
     for _ in 0..reader.read_count()? {
         let id = reader.read_u32()?;
@@ -250,8 +250,8 @@ pub(crate) fn decode_program_wire_v1(bytes: &[u8]) -> Result<DraftV1, ProgramWir
         );
     }
 
-    // Joint selection: wire v1 требует ровно 0 записей — порядок выборки
-    // материализуется только допуском SelectionRelease, не авторскими байтами.
+    // Joint selection: wire v1 С‚СЂРµР±СѓРµС‚ СЂРѕРІРЅРѕ 0 Р·Р°РїРёСЃРµР№ вЂ” РїРѕСЂСЏРґРѕРє РІС‹Р±РѕСЂРєРё
+    // РјР°С‚РµСЂРёР°Р»РёР·СѓРµС‚СЃСЏ С‚РѕР»СЊРєРѕ РґРѕРїСѓСЃРєРѕРј SelectionRelease, РЅРµ Р°РІС‚РѕСЂСЃРєРёРјРё Р±Р°Р№С‚Р°РјРё.
     reader.enter(WireSectionV1::JointSelection);
     let joint_offset = reader.offset;
     if reader.read_count()? != 0 {
@@ -265,7 +265,7 @@ pub(crate) fn decode_program_wire_v1(bytes: &[u8]) -> Result<DraftV1, ProgramWir
         draft.push_surface_input_port(SurfaceInputPortIdV1::new(id));
     }
 
-    // Opacity inputs: id u32 + f64-bits (домен проверяет компиляция).
+    // Opacity inputs: id u32 + f64-bits (РґРѕРјРµРЅ РїСЂРѕРІРµСЂСЏРµС‚ РєРѕРјРїРёР»СЏС†РёСЏ).
     reader.enter(WireSectionV1::OpacityInputs);
     for _ in 0..reader.read_count()? {
         let id = reader.read_u32()?;
@@ -316,8 +316,8 @@ pub(crate) fn decode_program_wire_v1(bytes: &[u8]) -> Result<DraftV1, ProgramWir
     }
 
     // Occurrences: id + paint + surface + appearance (La f64, Yb/Yw f64,
-    // surround u8: 1=Average 2=Dim 3=Dark). Единственный composition profile
-    // v1 — encoded sRGB8 source-over, тег не нужен.
+    // surround u8: 1=Average 2=Dim 3=Dark). Р•РґРёРЅСЃС‚РІРµРЅРЅС‹Р№ composition profile
+    // v1 вЂ” encoded sRGB8 source-over, С‚РµРі РЅРµ РЅСѓР¶РµРЅ.
     reader.enter(WireSectionV1::Occurrences);
     for _ in 0..reader.read_count()? {
         let entry_offset = reader.offset;
@@ -368,8 +368,8 @@ pub(crate) fn decode_program_wire_v1(bytes: &[u8]) -> Result<DraftV1, ProgramWir
         );
     }
 
-    // Hard constraints, затем report constraints — одна грамматика записей,
-    // разный режим. Report-грамматика допускает только report-able виды.
+    // Hard constraints, Р·Р°С‚РµРј report constraints вЂ” РѕРґРЅР° РіСЂР°РјРјР°С‚РёРєР° Р·Р°РїРёСЃРµР№,
+    // СЂР°Р·РЅС‹Р№ СЂРµР¶РёРј. Report-РіСЂР°РјРјР°С‚РёРєР° РґРѕРїСѓСЃРєР°РµС‚ С‚РѕР»СЊРєРѕ report-able РІРёРґС‹.
     reader.enter(WireSectionV1::HardConstraints);
     for _ in 0..reader.read_count()? {
         decode_constraint(&mut reader, &mut draft, ConstraintModeV1::Hard)?;
@@ -398,8 +398,8 @@ enum ConstraintModeV1 {
     ReportOnly,
 }
 
-/// Виды констрейнтов wire v1. Дискриминанты — контракт формата: их сдвиг
-/// без новой версии молча переклассифицировал бы записи.
+/// Р’РёРґС‹ РєРѕРЅСЃС‚СЂРµР№РЅС‚РѕРІ wire v1. Р”РёСЃРєСЂРёРјРёРЅР°РЅС‚С‹ вЂ” РєРѕРЅС‚СЂР°РєС‚ С„РѕСЂРјР°С‚Р°: РёС… СЃРґРІРёРі
+/// Р±РµР· РЅРѕРІРѕР№ РІРµСЂСЃРёРё РјРѕР»С‡Р° РїРµСЂРµРєР»Р°СЃСЃРёС„РёС†РёСЂРѕРІР°Р» Р±С‹ Р·Р°РїРёСЃРё.
 const KIND_EXACT_VISIBLE_UNARY: u8 = 1;
 const KIND_EXACT_INTRINSIC_UNARY: u8 = 2;
 const KIND_FAMILY_MEMBERSHIP: u8 = 3;
@@ -494,10 +494,10 @@ fn decode_constraint(
     Ok(())
 }
 
-/// Читает directed relation: reference u32 + count + candidates u32.
-/// Канон topology (непустота, сортировка без повторов, reference вне
-/// candidates) доказывает `DirectedRelationV1::try_new` — decoder лишь
-/// проецирует его отказ в байтовый.
+/// Р§РёС‚Р°РµС‚ directed relation: reference u32 + count + candidates u32.
+/// РљР°РЅРѕРЅ topology (РЅРµРїСѓСЃС‚РѕС‚Р°, СЃРѕСЂС‚РёСЂРѕРІРєР° Р±РµР· РїРѕРІС‚РѕСЂРѕРІ, reference РІРЅРµ
+/// candidates) РґРѕРєР°Р·С‹РІР°РµС‚ `DirectedRelationV1::try_new` вЂ” decoder Р»РёС€СЊ
+/// РїСЂРѕРµС†РёСЂСѓРµС‚ РµРіРѕ РѕС‚РєР°Р· РІ Р±Р°Р№С‚РѕРІС‹Р№.
 fn decode_relation<T, F>(
     reader: &mut WireReader<'_>,
     entry_offset: usize,
@@ -568,7 +568,7 @@ mod tests {
         }
     }
 
-    /// Канонические байты нетривиального графа: source -> fixed target ->
+    /// РљР°РЅРѕРЅРёС‡РµСЃРєРёРµ Р±Р°Р№С‚С‹ РЅРµС‚СЂРёРІРёР°Р»СЊРЅРѕРіРѕ РіСЂР°С„Р°: source -> fixed target ->
     /// solid paint -> input surface -> occurrence -> presentation root +
     /// WCAG22 hard + exact visible report + output binding.
     fn reference_wire() -> Vec<u8> {
@@ -604,7 +604,7 @@ mod tests {
         wire.seal()
     }
 
-    /// Тот же граф, объявленный напрямую строителем DraftV1.
+    /// РўРѕС‚ Р¶Рµ РіСЂР°С„, РѕР±СЉСЏРІР»РµРЅРЅС‹Р№ РЅР°РїСЂСЏРјСѓСЋ СЃС‚СЂРѕРёС‚РµР»РµРј DraftV1.
     fn reference_draft() -> DraftV1 {
         let mut draft = DraftV1::new();
         draft.push_source(SourceIdV1::new(11), crate::Srgb8::new([0x14, 0x14, 0x14]));
@@ -635,21 +635,25 @@ mod tests {
         draft
     }
 
-    /// Печатает канонический reference hex для кросс-язычного JS-parity
-    /// теста (packages/colors/test/program-wire.test.mjs). ignored по
-    /// умолчанию: это генератор фикстуры, не проверка.
+    /// РџРµС‡Р°С‚Р°РµС‚ РєР°РЅРѕРЅРёС‡РµСЃРєРёР№ reference hex РґР»СЏ РєСЂРѕСЃСЃ-СЏР·С‹С‡РЅРѕРіРѕ JS-parity
+    /// С‚РµСЃС‚Р° (packages/colors/test/program-wire.test.mjs). ignored РїРѕ
+    /// СѓРјРѕР»С‡Р°РЅРёСЋ: СЌС‚Рѕ РіРµРЅРµСЂР°С‚РѕСЂ С„РёРєСЃС‚СѓСЂС‹, РЅРµ РїСЂРѕРІРµСЂРєР°.
     #[test]
     #[ignore = "fixture emitter: cargo test -p labcolors-core --lib wire::tests::_emit_reference_wire_hex -- --ignored --nocapture"]
     fn _emit_reference_wire_hex() {
-        let hex: String = reference_wire()
-            .iter()
-            .map(|b| format!("{b:02x}"))
-            .collect();
+        let hex: String = reference_wire().iter().fold(
+            String::with_capacity(reference_wire().len() * 2),
+            |mut s, b| {
+                use std::fmt::Write;
+                let _ = write!(s, "{b:02x}");
+                s
+            },
+        );
         println!("REFERENCE_WIRE_HEX={hex}");
     }
 
-    /// Builder эмитирует байт-в-байт те же канонические байты, что и ручная
-    /// сборка reference wire, — канон существует в одном экземпляре.
+    /// Builder СЌРјРёС‚РёСЂСѓРµС‚ Р±Р°Р№С‚-РІ-Р±Р°Р№С‚ С‚Рµ Р¶Рµ РєР°РЅРѕРЅРёС‡РµСЃРєРёРµ Р±Р°Р№С‚С‹, С‡С‚Рѕ Рё СЂСѓС‡РЅР°СЏ
+    /// СЃР±РѕСЂРєР° reference wire, вЂ” РєР°РЅРѕРЅ СЃСѓС‰РµСЃС‚РІСѓРµС‚ РІ РѕРґРЅРѕРј СЌРєР·РµРјРїР»СЏСЂРµ.
     #[test]
     fn builder_bytes_are_byte_identical_to_the_reference_wire() {
         let mut builder = ProgramWireBuilderV1::new();
@@ -669,8 +673,8 @@ mod tests {
         assert_eq!(bytes, reference_wire());
     }
 
-    /// Roundtrip: builder -> decode -> compile даёт ту же identity, что и
-    /// прямой draft; повторный encode тех же деклараций байт-идентичен.
+    /// Roundtrip: builder -> decode -> compile РґР°С‘С‚ С‚Сѓ Р¶Рµ identity, С‡С‚Рѕ Рё
+    /// РїСЂСЏРјРѕР№ draft; РїРѕРІС‚РѕСЂРЅС‹Р№ encode С‚РµС… Р¶Рµ РґРµРєР»Р°СЂР°С†РёР№ Р±Р°Р№С‚-РёРґРµРЅС‚РёС‡РµРЅ.
     #[test]
     fn builder_roundtrip_preserves_identity_and_bytes() {
         let build = || {
@@ -678,10 +682,10 @@ mod tests {
             builder
                 .source(11, crate::Srgb8::new([0x14, 0x14, 0x14]))
                 .source(12, crate::Srgb8::new([0x20, 0x20, 0x20]))
-                // finite target + joint selection непредставимы на wire v1:
-                // порядок выборки материализует SelectionRelease-допуск, а
-                // graph без selection не компилируется — поэтому roundtrip
-                // покрывает полный fixed-граф (см. joint_selection_on_wire_is_refused).
+                // finite target + joint selection РЅРµРїСЂРµРґСЃС‚Р°РІРёРјС‹ РЅР° wire v1:
+                // РїРѕСЂСЏРґРѕРє РІС‹Р±РѕСЂРєРё РјР°С‚РµСЂРёР°Р»РёР·СѓРµС‚ SelectionRelease-РґРѕРїСѓСЃРє, Р°
+                // graph Р±РµР· selection РЅРµ РєРѕРјРїРёР»РёСЂСѓРµС‚СЃСЏ вЂ” РїРѕСЌС‚РѕРјСѓ roundtrip
+                // РїРѕРєСЂС‹РІР°РµС‚ РїРѕР»РЅС‹Р№ fixed-РіСЂР°С„ (СЃРј. joint_selection_on_wire_is_refused).
                 .fixed_target(22, 12)
                 .fixed_target(21, 11)
                 .surface_input_port(31)
@@ -713,8 +717,8 @@ mod tests {
         );
     }
 
-    /// Wire-limit энкодера симметричен декодеру: слишком большая секция —
-    /// typed отказ, не молчаливое эмитирование неканоничного счётчика.
+    /// Wire-limit СЌРЅРєРѕРґРµСЂР° СЃРёРјРјРµС‚СЂРёС‡РµРЅ РґРµРєРѕРґРµСЂСѓ: СЃР»РёС€РєРѕРј Р±РѕР»СЊС€Р°СЏ СЃРµРєС†РёСЏ вЂ”
+    /// typed РѕС‚РєР°Р·, РЅРµ РјРѕР»С‡Р°Р»РёРІРѕРµ СЌРјРёС‚РёСЂРѕРІР°РЅРёРµ РЅРµРєР°РЅРѕРЅРёС‡РЅРѕРіРѕ СЃС‡С‘С‚С‡РёРєР°.
     #[test]
     fn builder_refuses_oversized_sections() {
         let mut builder = ProgramWireBuilderV1::new();
@@ -727,8 +731,8 @@ mod tests {
         ));
     }
 
-    /// Happy path: байты компилируются в ту же content identity, что и граф,
-    /// построенный напрямую, — wire не вносит и не теряет ни одного смысла.
+    /// Happy path: Р±Р°Р№С‚С‹ РєРѕРјРїРёР»РёСЂСѓСЋС‚СЃСЏ РІ С‚Сѓ Р¶Рµ content identity, С‡С‚Рѕ Рё РіСЂР°С„,
+    /// РїРѕСЃС‚СЂРѕРµРЅРЅС‹Р№ РЅР°РїСЂСЏРјСѓСЋ, вЂ” wire РЅРµ РІРЅРѕСЃРёС‚ Рё РЅРµ С‚РµСЂСЏРµС‚ РЅРё РѕРґРЅРѕРіРѕ СЃРјС‹СЃР»Р°.
     #[test]
     fn canonical_bytes_compile_to_the_directly_authored_identity() {
         let decoded = decode_program_wire_v1(&reference_wire()).unwrap();
@@ -737,7 +741,7 @@ mod tests {
         assert_eq!(from_wire, direct);
     }
 
-    /// Каждый header-дефект — свой typed отказ, не паника и не смещение чтения.
+    /// РљР°Р¶РґС‹Р№ header-РґРµС„РµРєС‚ вЂ” СЃРІРѕР№ typed РѕС‚РєР°Р·, РЅРµ РїР°РЅРёРєР° Рё РЅРµ СЃРјРµС‰РµРЅРёРµ С‡С‚РµРЅРёСЏ.
     #[test]
     fn header_defects_are_typed_refusals() {
         let reference = reference_wire();
@@ -777,10 +781,10 @@ mod tests {
         ));
     }
 
-    /// Недопустимый discriminant записи — typed InvalidDeclaration с секцией.
+    /// РќРµРґРѕРїСѓСЃС‚РёРјС‹Р№ discriminant Р·Р°РїРёСЃРё вЂ” typed InvalidDeclaration СЃ СЃРµРєС†РёРµР№.
     #[test]
     fn invalid_discriminants_name_their_section() {
-        // target tag 3 не существует.
+        // target tag 3 РЅРµ СЃСѓС‰РµСЃС‚РІСѓРµС‚.
         let mut wire = WireBuilder::new();
         wire.u32(0); // sources
         wire.u32(1).u32(21).u8(3); // targets: invalid tag
@@ -796,7 +800,7 @@ mod tests {
         }
     }
 
-    /// Wire v1 не умеет объявлять joint selection: ненулевой счётчик — отказ.
+    /// Wire v1 РЅРµ СѓРјРµРµС‚ РѕР±СЉСЏРІР»СЏС‚СЊ joint selection: РЅРµРЅСѓР»РµРІРѕР№ СЃС‡С‘С‚С‡РёРє вЂ” РѕС‚РєР°Р·.
     #[test]
     fn joint_selection_on_wire_is_refused() {
         let mut wire = WireBuilder::new();
@@ -814,7 +818,7 @@ mod tests {
         }
     }
 
-    /// Length-поле выше wire-limit — typed ResourceExhausted до аллокации.
+    /// Length-РїРѕР»Рµ РІС‹С€Рµ wire-limit вЂ” typed ResourceExhausted РґРѕ Р°Р»Р»РѕРєР°С†РёРё.
     #[test]
     fn hostile_section_count_is_resource_exhausted() {
         let mut wire = WireBuilder::new();
@@ -828,7 +832,7 @@ mod tests {
         ));
     }
 
-    /// Неканоничная opacity (NaN) в кандидате — байтовый отказ, не паника.
+    /// РќРµРєР°РЅРѕРЅРёС‡РЅР°СЏ opacity (NaN) РІ РєР°РЅРґРёРґР°С‚Рµ вЂ” Р±Р°Р№С‚РѕРІС‹Р№ РѕС‚РєР°Р·, РЅРµ РїР°РЅРёРєР°.
     #[test]
     fn non_finite_candidate_opacity_is_a_declaration_refusal() {
         let mut wire = WireBuilder::new();
@@ -850,7 +854,7 @@ mod tests {
         }
     }
 
-    /// Report-грамматика не принимает hard-only виды: relation в report — отказ.
+    /// Report-РіСЂР°РјРјР°С‚РёРєР° РЅРµ РїСЂРёРЅРёРјР°РµС‚ hard-only РІРёРґС‹: relation РІ report вЂ” РѕС‚РєР°Р·.
     #[test]
     fn hard_only_kinds_are_refused_in_the_report_section() {
         let mut wire = WireBuilder::new();
@@ -883,8 +887,8 @@ mod tests {
         }
     }
 
-    /// Семантический дефект (dangling ссылка) проходит декодер и отклоняется
-    /// компилятором: слои отказов не смешаны.
+    /// РЎРµРјР°РЅС‚РёС‡РµСЃРєРёР№ РґРµС„РµРєС‚ (dangling СЃСЃС‹Р»РєР°) РїСЂРѕС…РѕРґРёС‚ РґРµРєРѕРґРµСЂ Рё РѕС‚РєР»РѕРЅСЏРµС‚СЃСЏ
+    /// РєРѕРјРїРёР»СЏС‚РѕСЂРѕРј: СЃР»РѕРё РѕС‚РєР°Р·РѕРІ РЅРµ СЃРјРµС€Р°РЅС‹.
     #[test]
     fn semantic_defects_belong_to_the_compiler_layer() {
         let mut wire = WireBuilder::new();
@@ -911,24 +915,24 @@ mod tests {
     }
 }
 
-/// Typed-отказ канонического builder-а: декларация непредставима на wire v1.
+/// Typed-РѕС‚РєР°Р· РєР°РЅРѕРЅРёС‡РµСЃРєРѕРіРѕ builder-Р°: РґРµРєР»Р°СЂР°С†РёСЏ РЅРµРїСЂРµРґСЃС‚Р°РІРёРјР° РЅР° wire v1.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ProgramWireEncodeErrorV1 {
-    /// Секция перерастает wire-limit: граф может быть легален для компиляции,
-    /// но непредставим в этой версии формата.
+    /// РЎРµРєС†РёСЏ РїРµСЂРµСЂР°СЃС‚Р°РµС‚ wire-limit: РіСЂР°С„ РјРѕР¶РµС‚ Р±С‹С‚СЊ Р»РµРіР°Р»РµРЅ РґР»СЏ РєРѕРјРїРёР»СЏС†РёРё,
+    /// РЅРѕ РЅРµРїСЂРµРґСЃС‚Р°РІРёРј РІ СЌС‚РѕР№ РІРµСЂСЃРёРё С„РѕСЂРјР°С‚Р°.
     TooManyEntries,
 }
 
-/// Канонический builder байтов wire v1.
+/// РљР°РЅРѕРЅРёС‡РµСЃРєРёР№ builder Р±Р°Р№С‚РѕРІ wire v1.
 ///
-/// Двойник декодера с той же секционной грамматикой: клиент объявляет граф в
-/// порядке секций, builder эмитирует единственное каноническое представление.
-/// Никакого доступа к внутренностям Program: builder — генератор байтов, их
-/// смысл доказывают `decode_program_wire_v1` + `compile()`.
+/// Р”РІРѕР№РЅРёРє РґРµРєРѕРґРµСЂР° СЃ С‚РѕР№ Р¶Рµ СЃРµРєС†РёРѕРЅРЅРѕР№ РіСЂР°РјРјР°С‚РёРєРѕР№: РєР»РёРµРЅС‚ РѕР±СЉСЏРІР»СЏРµС‚ РіСЂР°С„ РІ
+/// РїРѕСЂСЏРґРєРµ СЃРµРєС†РёР№, builder СЌРјРёС‚РёСЂСѓРµС‚ РµРґРёРЅСЃС‚РІРµРЅРЅРѕРµ РєР°РЅРѕРЅРёС‡РµСЃРєРѕРµ РїСЂРµРґСЃС‚Р°РІР»РµРЅРёРµ.
+/// РќРёРєР°РєРѕРіРѕ РґРѕСЃС‚СѓРїР° Рє РІРЅСѓС‚СЂРµРЅРЅРѕСЃС‚СЏРј Program: builder вЂ” РіРµРЅРµСЂР°С‚РѕСЂ Р±Р°Р№С‚РѕРІ, РёС…
+/// СЃРјС‹СЃР» РґРѕРєР°Р·С‹РІР°СЋС‚ `decode_program_wire_v1` + `compile()`.
 ///
-/// Канон гарантируется конструкцией: секции пишутся в фиксированном порядке
-/// (нарушение порядка — панике здесь неоткуда взяться, порядок навязан
-/// поэтапными типами ниже), записи — в порядке вызовов, представление LE.
+/// РљР°РЅРѕРЅ РіР°СЂР°РЅС‚РёСЂСѓРµС‚СЃСЏ РєРѕРЅСЃС‚СЂСѓРєС†РёРµР№: СЃРµРєС†РёРё РїРёС€СѓС‚СЃСЏ РІ С„РёРєСЃРёСЂРѕРІР°РЅРЅРѕРј РїРѕСЂСЏРґРєРµ
+/// (РЅР°СЂСѓС€РµРЅРёРµ РїРѕСЂСЏРґРєР° вЂ” РїР°РЅРёРєРµ Р·РґРµСЃСЊ РЅРµРѕС‚РєСѓРґР° РІР·СЏС‚СЊСЃСЏ, РїРѕСЂСЏРґРѕРє РЅР°РІСЏР·Р°РЅ
+/// РїРѕСЌС‚Р°РїРЅС‹РјРё С‚РёРїР°РјРё РЅРёР¶Рµ), Р·Р°РїРёСЃРё вЂ” РІ РїРѕСЂСЏРґРєРµ РІС‹Р·РѕРІРѕРІ, РїСЂРµРґСЃС‚Р°РІР»РµРЅРёРµ LE.
 pub(crate) struct ProgramWireBuilderV1 {
     sources: Vec<u8>,
     sources_count: usize,
@@ -1013,7 +1017,7 @@ impl ProgramWireBuilderV1 {
         self
     }
 
-    /// Кандидаты — пары (id, rgb, opacity-bits) в authored-порядке.
+    /// РљР°РЅРґРёРґР°С‚С‹ вЂ” РїР°СЂС‹ (id, rgb, opacity-bits) РІ authored-РїРѕСЂСЏРґРєРµ.
     pub(crate) fn finite_target(&mut self, id: u32, candidates: &[(u32, Srgb8, f64)]) -> &mut Self {
         push_u32(&mut self.targets, id);
         self.targets.push(2);
@@ -1180,7 +1184,7 @@ impl ProgramWireBuilderV1 {
         self
     }
 
-    /// Эмитирует единственные канонические байты объявленного графа.
+    /// Р­РјРёС‚РёСЂСѓРµС‚ РµРґРёРЅСЃС‚РІРµРЅРЅС‹Рµ РєР°РЅРѕРЅРёС‡РµСЃРєРёРµ Р±Р°Р№С‚С‹ РѕР±СЉСЏРІР»РµРЅРЅРѕРіРѕ РіСЂР°С„Р°.
     pub(crate) fn finish(self) -> Result<Vec<u8>, ProgramWireEncodeErrorV1> {
         let mut bytes = Vec::new();
         bytes.extend_from_slice(&PROGRAM_WIRE_MAGIC_V1);
@@ -1191,7 +1195,7 @@ impl ProgramWireBuilderV1 {
             (self.sources_count, &self.sources),
             (self.targets_count, &self.targets),
             (self.families_count, &self.families),
-            (0, &[]), // joint selection: непредставим на wire v1 by design
+            (0, &[]), // joint selection: РЅРµРїСЂРµРґСЃС‚Р°РІРёРј РЅР° wire v1 by design
             (self.surface_input_ports_count, &self.surface_input_ports),
             (self.opacity_inputs_count, &self.opacity_inputs),
             (self.paints_count, &self.paints),
