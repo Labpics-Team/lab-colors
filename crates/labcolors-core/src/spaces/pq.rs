@@ -70,16 +70,24 @@ impl PqCodeValueV1 {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum HdrNumericalErrorV1 {
     NonFinite,
-    OutOfRange { value: f64, min: f64, max: f64 },
-    RoundTripExceededTolerance { expected: f64, actual: f64, tolerance: f64 },
+    OutOfRange {
+        value: f64,
+        min: f64,
+        max: f64,
+    },
+    RoundTripExceededTolerance {
+        expected: f64,
+        actual: f64,
+        tolerance: f64,
+    },
 }
 
 // PQ constants per SMPTE ST 2084
 const M1: f64 = 0.1593017578125; // 2610 / 16384
-const M2: f64 = 78.84375;        // 2523 / 32
-const C1: f64 = 0.8359375;       // 3424 / 4096
-const C2: f64 = 18.8515625;      // 2413 / 128
-const C3: f64 = 18.6875;         // 2392 / 128
+const M2: f64 = 78.84375; // 2523 / 32
+const C1: f64 = 0.8359375; // 3424 / 4096
+const C2: f64 = 18.8515625; // 2413 / 128
+const C3: f64 = 18.6875; // 2392 / 128
 
 /// PQ EOTF: PQ code value → absolute luminance (cd/m²).
 /// SMPTE ST 2084:2014 Equation 4.1.
@@ -89,7 +97,11 @@ pub fn pq_eotf(code: PqCodeValueV1) -> AbsoluteLuminanceV1 {
     let num = (nm2 - C1).max(0.0);
     let den = C2 - C3 * nm2;
     // Guard against division by zero at extreme codes
-    let y = if den.abs() < 1e-15 { 0.0 } else { (num / den).powf(1.0 / M1) };
+    let y = if den.abs() < 1e-15 {
+        0.0
+    } else {
+        (num / den).powf(1.0 / M1)
+    };
     // Scale: PQ reference peak is 10000 cd/m²
     AbsoluteLuminanceV1::new_unchecked(y * 10_000.0)
 }
@@ -110,7 +122,11 @@ pub fn verify_pq_roundtrip(luminance: AbsoluteLuminanceV1) -> Result<(), HdrNume
     let code = pq_inverse_eotf(luminance);
     let reconstructed = pq_eotf(code);
     let delta = (reconstructed.value() - luminance.value()).abs();
-    let tolerance = if luminance.value() < 1000.0 { 1e-4 } else { 1e-2 };
+    let tolerance = if luminance.value() < 1000.0 {
+        1e-4
+    } else {
+        1e-2
+    };
     if delta > tolerance {
         return Err(HdrNumericalErrorV1::RoundTripExceededTolerance {
             expected: luminance.value(),
@@ -129,7 +145,8 @@ mod tests {
     fn pq_roundtrip_log_spaced() {
         for i in 0..100 {
             let log_lum = AbsoluteLuminanceV1::PQ_MIN.ln()
-                + (AbsoluteLuminanceV1::PQ_MAX.ln() - AbsoluteLuminanceV1::PQ_MIN.ln()) * (i as f64 / 99.0);
+                + (AbsoluteLuminanceV1::PQ_MAX.ln() - AbsoluteLuminanceV1::PQ_MIN.ln())
+                    * (i as f64 / 99.0);
             let lum = AbsoluteLuminanceV1::try_new(log_lum.exp()).expect("valid luminance");
             verify_pq_roundtrip(lum).expect("round-trip within tolerance");
         }
