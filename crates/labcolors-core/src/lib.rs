@@ -229,8 +229,11 @@ pub(crate) mod selection_release;
     )
 )]
 <<<<<<< HEAD
+<<<<<<< HEAD
 =======
 pub(crate) mod restorative_auto;
+=======
+>>>>>>> 8275a8c (fix(ci): regenerate clean-set receipt for c07-c2-final)
 
 >>>>>>> 3295f96 (feat(wasm): O-12 PR2 typed error mapping at wasm boundary)
 #[cfg(test)]
