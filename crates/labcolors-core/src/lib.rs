@@ -24,6 +24,8 @@ mod family_definition_binding;
 pub(crate) mod field_effect;
 #[cfg(test)]
 mod field_effect_tests;
+#[allow(dead_code)]
+pub(crate) mod incremental_runtime;
 pub(crate) mod spaces;
 
 #[cfg_attr(
