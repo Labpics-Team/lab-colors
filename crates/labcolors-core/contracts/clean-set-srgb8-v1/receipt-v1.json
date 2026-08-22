@@ -48,18 +48,18 @@
       "sha256": "8bf5d5a1c0f00ce245a1ecb18b923aa1631483345962d72b633e466c242a8a1d"
     },
     {
-      "bytes": 114537,
+      "bytes": 114951,
       "license": "MIT",
       "path": "crates/labcolors-core/src/lib.rs",
       "role": "module_registration_source",
-      "sha256": "fd39e8fb9bd031fbc594b50ea193e3270c628e74f974a4de7c1109da27caff3a"
+      "sha256": "a9a708ac2b34c98e1b1dfde2227549f2bd32d87a06657e580737268001d1de1c"
     },
     {
-      "bytes": 39439,
+      "bytes": 42739,
       "license": "MIT",
       "path": "crates/labcolors-core/src/observation.rs",
       "role": "observation_runtime_source",
-      "sha256": "b0cfec5c9fe798abd5492260aac3caf87685f7e27f4f9628b01f386ef3f6ac7d"
+      "sha256": "e8ee30baa21ec0e3e5ad216c34a81257afa381664b322da52f7ee5eee591011c"
     },
     {
       "bytes": 7961,

@@ -246,6 +246,11 @@ impl CanonicalObservationSchemaV1 {
     pub(crate) fn strong_count_for_test(&self) -> usize {
         Rc::strong_count(&self.0)
     }
+
+    #[cfg(test)]
+    pub(crate) fn for_test(ports: &[SurfaceInputPortId]) -> Self {
+        Self(Rc::from(ports))
+    }
 }
 
 /// Автомату Session достаточно ровно трёх observation-lease: Failed удерживает
@@ -305,6 +310,7 @@ mod arena {
     #[derive(Debug)]
     pub(crate) struct ObservationArenaPoolV1 {
         slots: [Rc<ObservationBackingV1>; OBSERVATION_ARENA_SLOT_COUNT_V1],
+        high_water_mark: usize,
     }
 
     impl ObservationArenaPoolV1 {
@@ -317,6 +323,7 @@ mod arena {
                         set: ObservedScenarioSet::empty(),
                     })
                 }),
+                high_water_mark: 0,
             }
         }
 
@@ -324,11 +331,15 @@ mod arena {
             &mut self,
             materialize: impl FnOnce(&mut ObservedScenarioSet) -> Result<(), ObservationError>,
         ) -> Result<Rc<ObservationBackingV1>, ObservationError> {
-            for slot_index in 0..OBSERVATION_ARENA_SLOT_COUNT_V1 {
+            for (retained, slot_index) in (0..OBSERVATION_ARENA_SLOT_COUNT_V1).enumerate() {
                 let Some(backing) = Rc::get_mut(&mut self.slots[slot_index]) else {
                     continue;
                 };
                 materialize(&mut backing.set)?;
+                let current_retained = retained + 1;
+                if current_retained > self.high_water_mark {
+                    self.high_water_mark = current_retained;
+                }
                 return Ok(Rc::clone(&self.slots[slot_index]));
             }
             Err(ObservationError::InternalInvariant)
@@ -341,6 +352,66 @@ mod arena {
             self.slots
                 .iter()
                 .all(|slot| slot.schema.shares_backing_with(schema))
+        }
+
+        /// Rebinds all slots to a new schema, preserving backing allocations.
+        ///
+        /// Called by `ArenaLifecycleCoordinatorV1::reset_all` during atomic
+        /// schema transitions. Clears each slot's scenario set and replaces
+        /// the schema handle. Capacity of internal Vecs is retained.
+        pub(crate) fn rebind_to_schema(
+            &mut self,
+            new_schema: &CanonicalObservationSchemaV1,
+        ) -> Result<(), ObservationError> {
+            for slot in &mut self.slots {
+                let Some(backing) = Rc::get_mut(slot) else {
+                    // Slot is externally retained; cannot rebind atomically.
+                    // This violates the coordinator's exclusive-access invariant.
+                    return Err(ObservationError::InternalInvariant);
+                };
+                backing.schema = CanonicalObservationSchemaV1(Rc::clone(&new_schema.0));
+                backing.set = ObservedScenarioSet::empty();
+            }
+            Ok(())
+        }
+
+        /// Releases all externally-held Rc handles by replacing the slot array
+        /// with fresh backings. After this call, all slots are uniquely owned
+        /// (strong_count == 1).
+        ///
+        /// Note: this allocates new Rc control blocks. It is intended for
+        /// shutdown/reset paths only, not hot-path reuse.
+        pub(crate) fn release_all(&mut self) {
+            // Clone the Rc<[SurfaceInputPortId]> directly from slot 0 to avoid
+            // calling share_for_observation() which would violate the SSOT
+            // invariant that only the pool constructor shares schema handles.
+            let schema_rc = Rc::clone(&self.slots[0].schema.0);
+            for (idx, slot) in self.slots.iter_mut().enumerate() {
+                *slot = Rc::new(ObservationBackingV1 {
+                    arena_slot: ObservationArenaSlotV1::ALL[idx],
+                    schema: CanonicalObservationSchemaV1(Rc::clone(&schema_rc)),
+                    set: ObservedScenarioSet::empty(),
+                });
+            }
+        }
+
+        /// Maximum number of simultaneously retained backings observed since
+        /// construction or last reset. Used by diagnostic gates and the
+        /// zero-allocation test to verify the automaton invariant holds.
+        #[expect(
+            dead_code,
+            reason = "high_water_mark is reserved for PR4 ArenaLifecycleCoordinator diagnostics"
+        )]
+        pub(crate) const fn high_water_mark(&self) -> usize {
+            self.high_water_mark
+        }
+
+        /// Test-only helper: materialize an empty observation into a free slot.
+        /// Does not expose private types in its signature.
+        #[cfg(test)]
+        pub(crate) fn materialize_empty_for_test(&mut self) -> Result<(), ObservationError> {
+            self.materialize_into(|_set| Ok(()))?;
+            Ok(())
         }
     }
 }

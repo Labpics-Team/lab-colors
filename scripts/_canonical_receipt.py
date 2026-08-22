@@ -4,7 +4,7 @@ import json
 import os
 import sys
 
-ROOT = r"C:\temp\wave5-627"
+ROOT = r"C:\temp\o13pr4"
 RECEIPT = os.path.join(ROOT, "crates", "labcolors-core", "contracts", "clean-set-srgb8-v1", "receipt-v1.json")
 PIN = os.path.join(ROOT, "crates", "labcolors-core", "contracts", "clean-set-srgb8-v1", "receipt-v1.sha256")
 
