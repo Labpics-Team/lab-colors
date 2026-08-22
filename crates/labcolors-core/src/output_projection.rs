@@ -921,12 +921,12 @@ pub(crate) fn project_output_v1(
         }
         OutputProjectionReleaseIdV1::CssColor4PqRec2020FromModeledXyzAbsoluteV1 => {
             // HDR path requires HdrProjectionRequestV1; use dedicated entry point.
-            return Err(OutputProjectionErrorV1::Hdr(
+            Err(OutputProjectionErrorV1::Hdr(
                 HdrProjectionErrorV1::HostUnsupported {
                     capability: HostHdrCapabilityV1::Unsupported,
                     reason: "HDR projection requires project_hdr_output_v1 entry point".into(),
                 },
-            ));
+            ))
         }
     }
 }
