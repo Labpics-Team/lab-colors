@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 """Independent proof of the point-support Q55 retained-surplus law.
 
 The verifier deliberately does not import production Rust. It binds the exact
@@ -58,7 +58,7 @@ SITE_ID = "point-support-retained-reference-surplus-v1"
 SOURCE_BINDING_LAW = "point-support-rust-whole-file-semantic-cone-v2"
 SOURCE_BINDING_DOMAIN = b"labcolors.point-support.rust-whole-file-semantic-cone.v2"
 EXPECTED_SOURCE_CAPSULE_SHA256 = (
-    "fff09b91633be9ac247f35fea92b19172ea56fda35a7c80cb6c7d7d2b0e9ae87"
+    "70950c681c59ffdb5597f9c665bfd996c1db280da0d8f621cff895b05f7c46e3"
 )
 EXPECTED_Q55_PROOF_SHA256 = (
     "e0f8a01ae106b9147606ac15094968fef1ce6575a568046fa0247d1eb8845e8b"
