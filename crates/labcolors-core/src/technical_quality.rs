@@ -294,10 +294,6 @@ pub(crate) fn assess_alpha_backdrop_tq_v1(
 /// - Never panics. All error paths return `TechnicalQualityV1::Violated`.
 /// - Pure function of the certificate and context bindings.
 /// - Content-addressed: identical certificate + bindings produce identical output.
-#[expect(
-    dead_code,
-    reason = "PR2 wiring hook; consumed by R-10 field substrate and future occurrence-level TQ aggregation"
-)]
 pub(crate) fn assess_alpha_backdrop_tq_from_certificate_v1(
     certificate: SourceOverCertificateV1,
     backdrop_domain: BackdropDomainV1,
@@ -442,14 +438,16 @@ mod tests {
         let owned_ref = placeholder_owned_ref();
 
         let direct = assess_alpha_backdrop_tq_v1(
-            profile, tint, alpha, backdrop, domain, causal_ref, owned_ref.clone(),
+            profile,
+            tint,
+            alpha,
+            backdrop,
+            domain,
+            causal_ref,
+            owned_ref.clone(),
         );
 
-        let from_cert = assess_alpha_backdrop_tq_from_certificate_v1(
-            causal_ref,
-            domain,
-            owned_ref,
-        );
+        let from_cert = assess_alpha_backdrop_tq_from_certificate_v1(causal_ref, domain, owned_ref);
 
         assert_eq!(direct, from_cert);
     }
