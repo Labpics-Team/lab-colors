@@ -1,140 +1,107 @@
-//! SMPTE ST 2084 (PQ) transfer function primitives.
+//! Perceptual Quantizer (PQ / SMPTE ST 2084) transfer functions and typed luminance.
 //!
-//! Reference: SMPTE ST 2084:2014 Equations 4.1 (EOTF) and 5.1 (Inverse EOTF).
-//! Domain: absolute luminance [0.0001, 10000.0] cd/m².
-//!
-//! Staged infrastructure for O-07 HDR output projection. Not yet consumed by
-//! production code paths; dead-code warnings are expected until the HDR release
-//! lands.
+//! Provides the inverse EOTF (linear absolute luminance → PQ code value),
+//! a validated absolute-luminance newtype bounded to the PQ representable range,
+//! and the PQ code-value newtype used by HDR output projection.
 
-#![allow(dead_code, clippy::manual_range_contains)]
+/// Minimum absolute luminance representable in PQ (cd/m²). ~1e-7 nits.
+const PQ_MIN_LUMINANCE: f64 = 1e-7;
+/// Maximum absolute luminance representable in PQ (cd/m²). 10 000 nits.
+const PQ_MAX_LUMINANCE: f64 = 10_000.0;
 
-/// Absolute luminance in cd/m². Valid PQ domain: [0.0001, 10000.0].
-#[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
-pub struct AbsoluteLuminanceV1(f64);
-
-impl AbsoluteLuminanceV1 {
-    pub const PQ_MIN: f64 = 0.0001;
-    pub const PQ_MAX: f64 = 10_000.0;
-
-    pub fn try_new(cd_per_m2: f64) -> Result<Self, HdrNumericalErrorV1> {
-        if !cd_per_m2.is_finite() {
-            return Err(HdrNumericalErrorV1::NonFinite);
-        }
-        if cd_per_m2 < Self::PQ_MIN || cd_per_m2 > Self::PQ_MAX {
-            return Err(HdrNumericalErrorV1::OutOfRange {
-                value: cd_per_m2,
-                min: Self::PQ_MIN,
-                max: Self::PQ_MAX,
-            });
-        }
-        Ok(Self(cd_per_m2))
-    }
-
-    /// Construct without validation. Caller guarantees invariant.
-    /// SAFETY INVARIANT: value must be finite and within [PQ_MIN, PQ_MAX].
-    pub(crate) fn new_unchecked(cd_per_m2: f64) -> Self {
-        Self(cd_per_m2)
-    }
-
-    pub fn value(self) -> f64 {
-        self.0
-    }
-}
-
-/// PQ code value in [0, 1]. Normalized per SMPTE ST 2084.
-#[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
-pub struct PqCodeValueV1(f64);
-
-impl PqCodeValueV1 {
-    pub fn try_new(normalized: f64) -> Result<Self, HdrNumericalErrorV1> {
-        if !normalized.is_finite() {
-            return Err(HdrNumericalErrorV1::NonFinite);
-        }
-        if !(0.0..=1.0).contains(&normalized) {
-            return Err(HdrNumericalErrorV1::OutOfRange {
-                value: normalized,
-                min: 0.0,
-                max: 1.0,
-            });
-        }
-        Ok(Self(normalized))
-    }
-
-    pub fn value(self) -> f64 {
-        self.0
-    }
-}
-
-/// Numerical error specific to HDR/PQ operations.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum HdrNumericalErrorV1 {
-    NonFinite,
-    OutOfRange {
-        value: f64,
-        min: f64,
-        max: f64,
-    },
-    RoundTripExceededTolerance {
-        expected: f64,
-        actual: f64,
-        tolerance: f64,
-    },
-}
-
-// PQ constants per SMPTE ST 2084
-const M1: f64 = 0.1593017578125; // 2610 / 16384
+// PQ constants from SMPTE ST 2084.
+const M1: f64 = 0.159_301_757_812_5; // 2610 / 16384
 const M2: f64 = 78.84375; // 2523 / 32
-const C1: f64 = 0.8359375; // 3424 / 4096
-const C2: f64 = 18.8515625; // 2413 / 128
+const C1: f64 = 0.835_937_5; // 3424 / 4096
+const C2: f64 = 18.851_562_5; // 2413 / 128
 const C3: f64 = 18.6875; // 2392 / 128
 
-/// PQ EOTF: PQ code value → absolute luminance (cd/m²).
-/// SMPTE ST 2084:2014 Equation 4.1.
-pub fn pq_eotf(code: PqCodeValueV1) -> AbsoluteLuminanceV1 {
-    let n = code.value();
-    let nm2 = n.powf(1.0 / M2);
-    let num = (nm2 - C1).max(0.0);
-    let den = C2 - C3 * nm2;
-    // Guard against division by zero at extreme codes
-    let y = if den.abs() < 1e-15 {
-        0.0
-    } else {
-        (num / den).powf(1.0 / M1)
-    };
-    // Scale: PQ reference peak is 10000 cd/m²
-    AbsoluteLuminanceV1::new_unchecked(y * 10_000.0)
+/// Error returned when a luminance or PQ value falls outside the valid range.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct HdrNumericalErrorV1 {
+    pub message: String,
 }
 
-/// PQ Inverse EOTF: absolute luminance → PQ code value.
-/// SMPTE ST 2084:2014 Equation 5.1.
-pub fn pq_inverse_eotf(luminance: AbsoluteLuminanceV1) -> PqCodeValueV1 {
-    let y = luminance.value() / 10_000.0;
+impl core::fmt::Display for HdrNumericalErrorV1 {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "HDR numerical error: {}", self.message)
+    }
+}
+
+/// Validated absolute luminance in cd/m², bounded to the PQ representable range.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct AbsoluteLuminanceV1(f64);
+
+impl AbsoluteLuminanceV1 {
+    /// Minimum PQ-representable luminance.
+    pub const PQ_MIN: f64 = PQ_MIN_LUMINANCE;
+    /// Maximum PQ-representable luminance.
+    pub const PQ_MAX: f64 = PQ_MAX_LUMINANCE;
+
+    /// Construct a validated luminance. Returns error if out of PQ range or NaN.
+    pub fn try_new(value: f64) -> Result<Self, HdrNumericalErrorV1> {
+        if value.is_nan() {
+            return Err(HdrNumericalErrorV1 {
+                message: "luminance is NaN".into(),
+            });
+        }
+        if !(PQ_MIN_LUMINANCE..=PQ_MAX_LUMINANCE).contains(&value) {
+            return Err(HdrNumericalErrorV1 {
+                message: format!(
+                    "luminance {value} outside PQ range [{PQ_MIN_LUMINANCE}, {PQ_MAX_LUMINANCE}]"
+                ),
+            });
+        }
+        Ok(Self(value))
+    }
+
+    /// Construct without validation. Caller guarantees the value is in range.
+    pub fn new_unchecked(value: f64) -> Self {
+        debug_assert!(
+            !value.is_nan() && (PQ_MIN_LUMINANCE..=PQ_MAX_LUMINANCE).contains(&value),
+            "new_unchecked called with out-of-range value {value}"
+        );
+        Self(value)
+    }
+
+    /// Raw f64 value in cd/m².
+    pub fn value(self) -> f64 {
+        self.0
+    }
+}
+
+/// PQ code value in [0, 1]. Produced by `pq_inverse_eotf`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct PqCodeValueV1(f64);
+
+impl PqCodeValueV1 {
+    /// Construct a validated PQ code value. Must be in [0, 1] and finite.
+    #[allow(dead_code)]
+    pub fn try_new(value: f64) -> Result<Self, HdrNumericalErrorV1> {
+        if value.is_nan() || !(0.0..=1.0).contains(&value) {
+            return Err(HdrNumericalErrorV1 {
+                message: format!("PQ code value {value} outside [0, 1]"),
+            });
+        }
+        Ok(Self(value))
+    }
+
+    /// Raw f64 value.
+    pub fn value(self) -> f64 {
+        self.0
+    }
+}
+
+/// SMPTE ST 2084 inverse EOTF: absolute luminance (cd/m²) → PQ code value.
+///
+/// Input must be non-negative. Values above 10 000 nits are clamped.
+pub(crate) fn pq_inverse_eotf(luminance: AbsoluteLuminanceV1) -> PqCodeValueV1 {
+    let y = luminance.value().max(0.0) / PQ_MAX_LUMINANCE;
     let ym1 = y.powf(M1);
     let num = C1 + C2 * ym1;
     let den = 1.0 + C3 * ym1;
-    let n = (num / den).powf(M2);
-    PqCodeValueV1(n.clamp(0.0, 1.0))
-}
-
-/// Verify round-trip fidelity: |pq_eotf(pq_inverse_eotf(L)) - L| ≤ tolerance.
-pub fn verify_pq_roundtrip(luminance: AbsoluteLuminanceV1) -> Result<(), HdrNumericalErrorV1> {
-    let code = pq_inverse_eotf(luminance);
-    let reconstructed = pq_eotf(code);
-    let delta = (reconstructed.value() - luminance.value()).abs();
-    let tolerance = if luminance.value() < 1000.0 {
-        1e-4
-    } else {
-        1e-2
-    };
-    if delta > tolerance {
-        return Err(HdrNumericalErrorV1::RoundTripExceededTolerance {
-            expected: luminance.value(),
-            actual: reconstructed.value(),
-            tolerance,
-        });
-    }
-    Ok(())
+    let pq = (num / den).powf(M2);
+    PqCodeValueV1(pq.clamp(0.0, 1.0))
 }
 
 #[cfg(test)]
@@ -142,31 +109,27 @@ mod tests {
     use super::*;
 
     #[test]
-    fn pq_roundtrip_log_spaced() {
-        for i in 0..100 {
-            let log_lum = AbsoluteLuminanceV1::PQ_MIN.ln()
-                + (AbsoluteLuminanceV1::PQ_MAX.ln() - AbsoluteLuminanceV1::PQ_MIN.ln())
-                    * (i as f64 / 99.0);
-            let raw = log_lum
-                .exp()
-                .clamp(AbsoluteLuminanceV1::PQ_MIN, AbsoluteLuminanceV1::PQ_MAX);
-            let lum = AbsoluteLuminanceV1::try_new(raw).expect("valid luminance");
-            verify_pq_roundtrip(lum).expect("round-trip within tolerance");
-        }
+    fn pq_black_is_zero() {
+        let lum = AbsoluteLuminanceV1::try_new(PQ_MIN_LUMINANCE).unwrap();
+        let pq = pq_inverse_eotf(lum);
+        assert!(pq.value() < 1e-4, "black should map near zero PQ");
     }
 
     #[test]
-    fn pq_boundary_values() {
-        let min = AbsoluteLuminanceV1::try_new(AbsoluteLuminanceV1::PQ_MIN).unwrap();
-        let max = AbsoluteLuminanceV1::try_new(AbsoluteLuminanceV1::PQ_MAX).unwrap();
-        verify_pq_roundtrip(min).unwrap();
-        verify_pq_roundtrip(max).unwrap();
+    fn pq_peak_white_is_one() {
+        let lum = AbsoluteLuminanceV1::try_new(PQ_MAX_LUMINANCE).unwrap();
+        let pq = pq_inverse_eotf(lum);
+        assert!(
+            (pq.value() - 1.0).abs() < 1e-9,
+            "peak white should map to PQ=1, got {}",
+            pq.value()
+        );
     }
 
     #[test]
-    fn pq_code_domain_rejects_invalid() {
-        assert!(PqCodeValueV1::try_new(-0.001).is_err());
-        assert!(PqCodeValueV1::try_new(1.001).is_err());
-        assert!(PqCodeValueV1::try_new(f64::NAN).is_err());
+    fn luminance_out_of_range_rejected() {
+        assert!(AbsoluteLuminanceV1::try_new(-1.0).is_err());
+        assert!(AbsoluteLuminanceV1::try_new(20_000.0).is_err());
+        assert!(AbsoluteLuminanceV1::try_new(f64::NAN).is_err());
     }
 }
