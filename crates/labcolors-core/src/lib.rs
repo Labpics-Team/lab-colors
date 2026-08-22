@@ -26,7 +26,7 @@ pub(crate) mod field_effect;
 #[cfg(test)]
 mod field_effect_tests;
 #[allow(dead_code)]
-pub(crate) mod incremental_runtime;
+pub(crate) mod field_technical_quality;
 pub(crate) mod spaces;
 
 #[cfg_attr(
@@ -48,7 +48,6 @@ pub(crate) mod config;
 pub(crate) mod constraints;
 #[allow(dead_code)]
 pub(crate) mod corridor_representation;
-pub(crate) mod evaluator_registry;
 #[allow(dead_code)]
 pub(crate) mod glow;
 pub mod hash;
@@ -193,15 +192,6 @@ mod generic_boundary_tests;
 )]
 pub(crate) mod observation;
 
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "ReportArenaPoolV1 is staged V7 infrastructure before PR4 wires it into ProgramSession"
-    )
-)]
-pub(crate) mod report_arena;
-
 #[cfg(test)]
 mod observation_tests;
 
@@ -290,8 +280,6 @@ mod reference_vectors_deep;
 pub use alpha::composite_over_encoded;
 pub use curve::{ColorCurve, CurvePosition, CurvePositionError};
 pub use hash::fnv1a_32;
-// Solver curve uses deprecated LcsColor per F-01 design
-#[allow(deprecated)]
 pub use lcs::LcsColor;
 pub use numerical_plan::{
     CompiledInvocationIdV1, CompiledNumericalInvocationV1, CompiledNumericalPlanV1,
