@@ -1,4 +1,4 @@
-//! V-06 (V4 Variants/Scopes) type foundation.
+//! V-06 (V4 Variants/Scopes) type foundation and enforcement wiring.
 //!
 //! Resolution topology selectors for variant-aware token evaluation.
 //! Staged before C-18 atomic cutover merge; items carry per-item
@@ -97,6 +97,135 @@ impl EnvironmentSelector for DefaultEnvironmentV1 {
     }
 }
 
+// ---------------------------------------------------------------------------
+// PR2: Enforcement logic and session integration
+// ---------------------------------------------------------------------------
+
+/// Immutable binding of a validated variant key to a resolution scope.
+///
+/// A `SessionBindingV1` is constructed once at session instantiation and
+/// observed read-only throughout the session lifetime. It does not own or
+/// mutate any session state; it merely records the declared topology that
+/// enforcement predicates inspect.
+#[allow(dead_code)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SessionBindingV1 {
+    variant: VariantKeyV1,
+    scope: ResolutionScopeV1,
+}
+
+#[allow(dead_code)]
+impl SessionBindingV1 {
+    /// Creates a new binding after validating the variant key.
+    ///
+    /// # Errors
+    /// Returns [`VariantScopeErrorV1`] if the variant key is invalid.
+    pub(crate) fn new(variant: VariantKeyV1, scope: ResolutionScopeV1) -> Self {
+        Self { variant, scope }
+    }
+
+    /// Returns a reference to the bound variant key.
+    pub(crate) fn variant(&self) -> &VariantKeyV1 {
+        &self.variant
+    }
+
+    /// Returns the bound resolution scope.
+    pub(crate) fn scope(&self) -> ResolutionScopeV1 {
+        self.scope
+    }
+}
+
+/// Read-only observation handle for variant/scope enforcement within a
+/// `ProgramSession`.
+///
+/// This type provides enforcement predicates that validate consistency
+/// between a session's declared binding and its runtime observations.
+/// It never mutates session state; all checks are pure functions over
+/// borrowed references.
+#[allow(dead_code)]
+#[derive(Debug)]
+pub(crate) struct VariantEnforcementObserver<'a> {
+    binding: &'a SessionBindingV1,
+}
+
+#[allow(dead_code)]
+impl<'a> VariantEnforcementObserver<'a> {
+    /// Wraps an existing session binding for read-only enforcement queries.
+    pub(crate) fn new(binding: &'a SessionBindingV1) -> Self {
+        Self { binding }
+    }
+
+    /// Returns the observed binding.
+    pub(crate) fn binding(&self) -> &SessionBindingV1 {
+        self.binding
+    }
+
+    /// Validates that the given candidate scope matches the binding's
+    /// declared resolution scope.
+    ///
+    /// In `Program` scope, shared-token intersection requires joint
+    /// resolution; an `Attachment` candidate against a `Program` binding
+    /// is a hard consistency violation.
+    ///
+    /// # Errors
+    /// Returns [`VariantScopeErrorV1::ScopeMismatch`] when the candidate
+    /// scope contradicts the binding.
+    pub(crate) fn check_scope_consistency(
+        &self,
+        candidate_scope: ResolutionScopeV1,
+    ) -> Result<(), VariantScopeErrorV1> {
+        if self.binding.scope != candidate_scope {
+            return Err(VariantScopeErrorV1::ScopeMismatch {
+                expected: self.binding.scope,
+                actual: candidate_scope,
+            });
+        }
+        Ok(())
+    }
+
+    /// Validates that a shared-token declaration is permitted under the
+    /// current binding.
+    ///
+    /// Shared tokens are only meaningful in `Program` scope where joint
+    /// intersection applies. Declaring them under `Attachment` scope is
+    /// a configuration error because no cross-instance constraint exists
+    /// to enforce.
+    ///
+    /// # Errors
+    /// Returns [`VariantScopeErrorV1::SharedTokenInAttachmentScope`]
+    /// when the binding uses `Attachment` scope.
+    pub(crate) fn check_shared_token_permitted(&self) -> Result<(), VariantScopeErrorV1> {
+        match self.binding.scope {
+            ResolutionScopeV1::Program => Ok(()),
+            ResolutionScopeV1::Attachment => Err(VariantScopeErrorV1::SharedTokenInAttachmentScope),
+        }
+    }
+
+    /// Validates that two bindings targeting the same variant key agree
+    /// on resolution scope.
+    ///
+    /// Within a single program epoch, multiple sessions may observe the
+    /// same variant. If they disagree on scope, shared-token intersection
+    /// semantics become ambiguous and the configuration is rejected.
+    ///
+    /// # Errors
+    /// Returns [`VariantScopeErrorV1::ConflictingBindings`] when the
+    /// scopes diverge for the same variant key.
+    pub(crate) fn check_binding_compatible(
+        &self,
+        other: &SessionBindingV1,
+    ) -> Result<(), VariantScopeErrorV1> {
+        if self.binding.variant == other.variant && self.binding.scope != other.scope {
+            return Err(VariantScopeErrorV1::ConflictingBindings {
+                variant: self.binding.variant.clone(),
+                scope_a: self.binding.scope,
+                scope_b: other.scope,
+            });
+        }
+        Ok(())
+    }
+}
+
 /// Closed matchable error type for variant/scope validation failures.
 #[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -107,6 +236,20 @@ pub(crate) enum VariantScopeErrorV1 {
     ReservedPrefix(String),
     /// Generic invalid variant key (catch-all for future validation).
     InvalidVariantKey(String),
+    /// Candidate scope does not match the binding's declared scope.
+    ScopeMismatch {
+        expected: ResolutionScopeV1,
+        actual: ResolutionScopeV1,
+    },
+    /// Shared tokens declared under `Attachment` scope where no
+    /// cross-instance intersection exists.
+    SharedTokenInAttachmentScope,
+    /// Two bindings for the same variant key disagree on resolution scope.
+    ConflictingBindings {
+        variant: VariantKeyV1,
+        scope_a: ResolutionScopeV1,
+        scope_b: ResolutionScopeV1,
+    },
 }
 
 impl fmt::Display for VariantScopeErrorV1 {
@@ -118,6 +261,31 @@ impl fmt::Display for VariantScopeErrorV1 {
             }
             Self::InvalidVariantKey(key) => {
                 write!(f, "invalid variant key: '{key}'")
+            }
+            Self::ScopeMismatch { expected, actual } => {
+                write!(
+                    f,
+                    "resolution scope mismatch: expected {expected:?}, got {actual:?}"
+                )
+            }
+            Self::SharedTokenInAttachmentScope => {
+                write!(
+                    f,
+                    "shared tokens require Program scope; Attachment scope has no cross-instance intersection"
+                )
+            }
+            Self::ConflictingBindings {
+                variant,
+                scope_a,
+                scope_b,
+            } => {
+                write!(
+                    f,
+                    "conflicting bindings for variant '{}': {:?} vs {:?}",
+                    variant.as_str(),
+                    scope_a,
+                    scope_b
+                )
             }
         }
     }
@@ -259,6 +427,168 @@ mod tests {
         assert!(format!("{invalid}").contains("nope"));
     }
 
+    // --- PR2: SessionBindingV1 ---
+
+    #[test]
+    fn session_binding_stores_variant_and_scope() {
+        let key = VariantKeyV1::new("dark").unwrap();
+        let binding = SessionBindingV1::new(key.clone(), ResolutionScopeV1::Program);
+        assert_eq!(binding.variant(), &key);
+        assert_eq!(binding.scope(), ResolutionScopeV1::Program);
+    }
+
+    #[test]
+    fn session_binding_equality() {
+        let a = SessionBindingV1::new(
+            VariantKeyV1::new("dark").unwrap(),
+            ResolutionScopeV1::Attachment,
+        );
+        let b = SessionBindingV1::new(
+            VariantKeyV1::new("dark").unwrap(),
+            ResolutionScopeV1::Attachment,
+        );
+        let c = SessionBindingV1::new(
+            VariantKeyV1::new("dark").unwrap(),
+            ResolutionScopeV1::Program,
+        );
+        assert_eq!(a, b);
+        assert_ne!(a, c);
+    }
+
+    // --- PR2: VariantEnforcementObserver ---
+
+    #[test]
+    fn enforcement_check_scope_consistency_passes_on_match() {
+        let binding = SessionBindingV1::new(
+            VariantKeyV1::new("dark").unwrap(),
+            ResolutionScopeV1::Program,
+        );
+        let observer = VariantEnforcementObserver::new(&binding);
+        assert!(
+            observer
+                .check_scope_consistency(ResolutionScopeV1::Program)
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn enforcement_check_scope_consistency_fails_on_mismatch() {
+        let binding = SessionBindingV1::new(
+            VariantKeyV1::new("dark").unwrap(),
+            ResolutionScopeV1::Program,
+        );
+        let observer = VariantEnforcementObserver::new(&binding);
+        let err = observer
+            .check_scope_consistency(ResolutionScopeV1::Attachment)
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            VariantScopeErrorV1::ScopeMismatch {
+                expected: ResolutionScopeV1::Program,
+                actual: ResolutionScopeV1::Attachment,
+            }
+        ));
+    }
+
+    #[test]
+    fn enforcement_shared_token_permitted_in_program_scope() {
+        let binding = SessionBindingV1::new(
+            VariantKeyV1::new("print").unwrap(),
+            ResolutionScopeV1::Program,
+        );
+        let observer = VariantEnforcementObserver::new(&binding);
+        assert!(observer.check_shared_token_permitted().is_ok());
+    }
+
+    #[test]
+    fn enforcement_shared_token_rejected_in_attachment_scope() {
+        let binding = SessionBindingV1::new(
+            VariantKeyV1::new("dark").unwrap(),
+            ResolutionScopeV1::Attachment,
+        );
+        let observer = VariantEnforcementObserver::new(&binding);
+        let err = observer.check_shared_token_permitted().unwrap_err();
+        assert_eq!(err, VariantScopeErrorV1::SharedTokenInAttachmentScope);
+    }
+
+    #[test]
+    fn enforcement_compatible_bindings_same_variant_same_scope() {
+        let a = SessionBindingV1::new(
+            VariantKeyV1::new("dark").unwrap(),
+            ResolutionScopeV1::Program,
+        );
+        let b = SessionBindingV1::new(
+            VariantKeyV1::new("dark").unwrap(),
+            ResolutionScopeV1::Program,
+        );
+        let observer = VariantEnforcementObserver::new(&a);
+        assert!(observer.check_binding_compatible(&b).is_ok());
+    }
+
+    #[test]
+    fn enforcement_conflicting_bindings_same_variant_different_scope() {
+        let a = SessionBindingV1::new(
+            VariantKeyV1::new("dark").unwrap(),
+            ResolutionScopeV1::Program,
+        );
+        let b = SessionBindingV1::new(
+            VariantKeyV1::new("dark").unwrap(),
+            ResolutionScopeV1::Attachment,
+        );
+        let observer = VariantEnforcementObserver::new(&a);
+        let err = observer.check_binding_compatible(&b).unwrap_err();
+        assert!(matches!(
+            err,
+            VariantScopeErrorV1::ConflictingBindings { .. }
+        ));
+    }
+
+    #[test]
+    fn enforcement_different_variants_any_scope_is_compatible() {
+        let a = SessionBindingV1::new(
+            VariantKeyV1::new("dark").unwrap(),
+            ResolutionScopeV1::Program,
+        );
+        let b = SessionBindingV1::new(
+            VariantKeyV1::new("light").unwrap(),
+            ResolutionScopeV1::Attachment,
+        );
+        let observer = VariantEnforcementObserver::new(&a);
+        assert!(observer.check_binding_compatible(&b).is_ok());
+    }
+
+    #[test]
+    fn enforcement_error_display_scope_mismatch() {
+        let err = VariantScopeErrorV1::ScopeMismatch {
+            expected: ResolutionScopeV1::Program,
+            actual: ResolutionScopeV1::Attachment,
+        };
+        let msg = format!("{err}");
+        assert!(msg.contains("mismatch"));
+        assert!(msg.contains("Program"));
+        assert!(msg.contains("Attachment"));
+    }
+
+    #[test]
+    fn enforcement_error_display_shared_token() {
+        let err = VariantScopeErrorV1::SharedTokenInAttachmentScope;
+        let msg = format!("{err}");
+        assert!(msg.contains("shared"));
+        assert!(msg.contains("Attachment"));
+    }
+
+    #[test]
+    fn enforcement_error_display_conflicting_bindings() {
+        let err = VariantScopeErrorV1::ConflictingBindings {
+            variant: VariantKeyV1::new("dark").unwrap(),
+            scope_a: ResolutionScopeV1::Program,
+            scope_b: ResolutionScopeV1::Attachment,
+        };
+        let msg = format!("{err}");
+        assert!(msg.contains("dark"));
+        assert!(msg.contains("conflict"));
+    }
+
     // --- Property test (proptest) ---
 
     #[cfg(test)]
@@ -275,6 +605,43 @@ mod tests {
                 let result = VariantKeyV1::new(s);
                 prop_assert!(result.is_ok());
             }
+        }
+
+        proptest! {
+            #[test]
+            fn prop_scope_consistency_reflexive(
+                scope in prop_oneof![
+                    Just(ResolutionScopeV1::Attachment),
+                    Just(ResolutionScopeV1::Program),
+                ]
+            ) {
+                let binding = SessionBindingV1::new(
+                    VariantKeyV1::new("prop-test").unwrap(),
+                    scope,
+                );
+                let observer = VariantEnforcementObserver::new(&binding);
+                prop_assert!(observer.check_scope_consistency(scope).is_ok());
+            }
+        }
+
+        #[test]
+        fn prop_shared_token_always_permitted_in_program_scope() {
+            let binding = SessionBindingV1::new(
+                VariantKeyV1::new("prop-shared").unwrap(),
+                ResolutionScopeV1::Program,
+            );
+            let observer = VariantEnforcementObserver::new(&binding);
+            assert!(observer.check_shared_token_permitted().is_ok());
+        }
+
+        #[test]
+        fn prop_shared_token_always_rejected_in_attachment_scope() {
+            let binding = SessionBindingV1::new(
+                VariantKeyV1::new("prop-no-shared").unwrap(),
+                ResolutionScopeV1::Attachment,
+            );
+            let observer = VariantEnforcementObserver::new(&binding);
+            assert!(observer.check_shared_token_permitted().is_err());
         }
     }
 }

@@ -24,8 +24,8 @@ mod family_definition_binding;
 pub(crate) mod field_effect;
 #[cfg(test)]
 mod field_effect_tests;
-pub(crate) mod variant;
 pub(crate) mod spaces;
+pub(crate) mod variant;
 
 pub use srgb8::Srgb8;
 

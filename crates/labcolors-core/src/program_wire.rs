@@ -9,9 +9,9 @@
 //! нарушают канон формата; [`ProgramWireCheckErrorV1::Compile`] — байты канонны,
 //! но граф семантически невалиден. Ни один из слоёв не выражает другой.
 
-use crate::observation::{SchemaOrderedScenarioSourceV1, ScenarioId};
-use crate::program::wire::{ProgramWireErrorV1, decode_program_wire_v1};
 use crate::Srgb8;
+use crate::observation::{ScenarioId, SchemaOrderedScenarioSourceV1};
+use crate::program::wire::{ProgramWireErrorV1, decode_program_wire_v1};
 
 /// Имя wire-секции в публичной диагностике.
 ///
@@ -381,14 +381,13 @@ impl ProgramSessionV1 {
         let source = ProgramScenarioSourceV1(scenarios);
         let transition = self
             .owner
-            .prepare_schema_ordered_update(
-                &mut self.session,
-                revision,
-                &source,
-            )
+            .prepare_schema_ordered_update(&mut self.session, revision, &source)
             .map_err(|_| ProgramRuntimeErrorV1::Update)?;
         let evidence = transition.commit();
-        Ok(snapshot_from_evidence_into(evidence, &mut self.outputs_scratch))
+        Ok(snapshot_from_evidence_into(
+            evidence,
+            &mut self.outputs_scratch,
+        ))
     }
 
     /// Атомарно применяет Unknown update с непрозрачной причиной.
@@ -407,7 +406,10 @@ impl ProgramSessionV1 {
                 },
             )
             .map_err(|_| ProgramRuntimeErrorV1::Update)?;
-        Ok(snapshot_from_evidence_into(transition.commit(), &mut self.outputs_scratch))
+        Ok(snapshot_from_evidence_into(
+            transition.commit(),
+            &mut self.outputs_scratch,
+        ))
     }
 }
 
