@@ -14,6 +14,14 @@ use crate::lcs_occurrence::{
 use crate::wcag22::{Wcag22CriterionV1, Wcag22ProfileIdV1};
 use std::cell::OnceCell;
 
+mod clean_potential;
+#[allow(unused_imports)]
+pub(crate) use clean_potential::{
+    CleanPotentialAssessmentV1, CleanPotentialCapabilityV1, CleanPotentialErrorV1,
+    CleanPotentialEvaluatorV1, CleanPotentialEvidenceV1, CleanPotentialIdentityV1,
+    CleanPotentialInvocationV1, CleanPotentialReleaseV1,
+};
+
 mod exact;
 pub(crate) use exact::{
     ExactConstraintIdentityV1, ExactIdentityCapabilityV1, ExactIdentityReleaseV1,
