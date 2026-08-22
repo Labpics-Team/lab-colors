@@ -29,10 +29,10 @@
   "measurement": {
     "source": "github-actions-run-32186005935",
     "platform": "linux-x64",
-    "rawBytes": 376839
+    "rawBytes": 376848
   },
   "policy": {
-    "maxRawBytes": 376839,
+    "maxRawBytes": 376848,
     "basis": "c7c-terminal-program-runtime",
     "gzip": "diagnostic-only"
   }
