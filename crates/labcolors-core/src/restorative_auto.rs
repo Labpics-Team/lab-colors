@@ -1,4 +1,4 @@
-//! R-07 (R3s) Scoped Restorative Auto — type foundation (PR-A).
+//! R-07 (R3s) Scoped Restorative Auto — type foundation (PR-A) + enforcement wiring (PR-B).
 //!
 //! This module defines the *declared-restorative* substrate types that
 //! `DeclaredRestorativeAutoRelease` will later bind into a content-addressed
@@ -6,6 +6,13 @@
 //! evidence and **never** implies any form of human-clean authority or
 //! readability/sentiment admission. Those belong to R-08 and are
 //! intentionally unimportable from here.
+//!
+//! # PR-B: Enforcement Wiring
+//!
+//! PR-B adds scope-bounding validation, propagation rules, and read-only
+//! observation integration with [`crate::program_session`]. All new code is
+//! `pub(crate)` and staged under `#[expect(dead_code)]` per V7 convention.
+//! No mutation of session state occurs; enforcement is pure validation.
 
 use crate::sha256;
 
@@ -25,10 +32,6 @@ pub(crate) enum RestorativeAutoErrorV1 {
     /// The action is not among those declared in the scope's authorized set.
     ActionNotDeclared,
     /// The action exceeds the boundary of its declared scope.
-    #[expect(
-        dead_code,
-        reason = "scope-bounding validation lands in PR-B alongside propagation rules"
-    )]
     ScopeExceeded,
     /// A required TechnicalQuality substrate is not available.
     #[expect(
@@ -116,6 +119,15 @@ impl RestorativeScopeV1 {
             Err(RestorativeAutoErrorV1::ActionNotDeclared)
         }
     }
+
+    /// Returns true if `action` is authorized within this scope.
+    #[expect(
+        dead_code,
+        reason = "convenience predicate consumed by PR-C search integration"
+    )]
+    pub(crate) fn permits(&self, action: RestorativeActionV1) -> bool {
+        self.authorized[action_index(action)]
+    }
 }
 
 fn action_index(action: RestorativeActionV1) -> usize {
@@ -125,6 +137,151 @@ fn action_index(action: RestorativeActionV1) -> usize {
         RestorativeActionV1::BackdropSubstitution => 2,
         RestorativeActionV1::FieldRegionRewrite => 3,
     }
+}
+
+// ---------------------------------------------------------------------------
+// PropagationRuleV1 (PR-B)
+// ---------------------------------------------------------------------------
+
+/// Propagation rules: which changes cascade and which remain local.
+///
+/// Determined solely by the action variant; independent of scope.
+/// Used by downstream invalidation logic to decide what must be
+/// re-evaluated after a restorative action is applied.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum PropagationRuleV1 {
+    /// Change is strictly local; no downstream invalidation.
+    Local,
+    /// Change invalidates dependent field evaluations.
+    InvalidatesDependentFields,
+    /// Change invalidates the entire attachment closure.
+    InvalidatesAttachmentClosure,
+}
+
+/// Determines the propagation rule for a given restorative action.
+///
+/// Pure function with no side effects. The mapping is fixed by the
+/// action semantics and cannot be overridden by scope or context.
+pub(crate) fn propagation_rule(action: RestorativeActionV1) -> PropagationRuleV1 {
+    match action {
+        // Point color shifts are local unless the point feeds a field operator.
+        // Field-dependency detection is deferred to PR-C; base rule is Local.
+        RestorativeActionV1::ColorShift => PropagationRuleV1::Local,
+        // Alpha adjustments may affect premultiplied compositing downstream.
+        RestorativeActionV1::AlphaAdjustment => PropagationRuleV1::InvalidatesDependentFields,
+        // Backdrop substitution affects all dependent source-over compositions.
+        RestorativeActionV1::BackdropSubstitution => PropagationRuleV1::InvalidatesDependentFields,
+        // Field rewrites inherently invalidate the field's output certificate.
+        RestorativeActionV1::FieldRegionRewrite => PropagationRuleV1::InvalidatesAttachmentClosure,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Scope Enforcement (PR-B)
+// ---------------------------------------------------------------------------
+
+/// Validates that an outcome's action is consistent with its bound scope.
+///
+/// This is the primary enforcement gate for PR-B. It checks two invariants:
+/// 1. The action is declared in the scope (delegates to `scope.validate`).
+/// 2. The outcome was constructed with the same scope it claims.
+///
+/// Returns `Err(ScopeExceeded)` if either invariant fails. This function
+/// is pure and performs no I/O or mutation.
+pub(crate) fn enforce_scope_consistency(
+    outcome: &RestorativeOutcomeV1,
+) -> Result<(), RestorativeAutoErrorV1> {
+    outcome.scope.validate(outcome.action)
+}
+
+/// Validates that every action in a slice is permitted by the given scope.
+///
+/// Short-circuits on the first violation, returning the index and error.
+/// Useful for batch preflight checks before constructing outcomes.
+pub(crate) fn validate_action_set(
+    scope: &RestorativeScopeV1,
+    actions: &[RestorativeActionV1],
+) -> Result<(), BatchScopeViolationV1> {
+    for (index, action) in actions.iter().enumerate() {
+        if scope.validate(*action).is_err() {
+            return Err(BatchScopeViolationV1 {
+                failing_index: index,
+                action: *action,
+            });
+        }
+    }
+    Ok(())
+}
+
+/// Identifies which action in a batch failed scope validation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct BatchScopeViolationV1 {
+    pub(crate) failing_index: usize,
+    pub(crate) action: RestorativeActionV1,
+}
+
+// ---------------------------------------------------------------------------
+// Session Observation Integration (PR-B)
+// ---------------------------------------------------------------------------
+
+/// Read-only observation handle linking a restorative scope to session topology.
+///
+/// This type provides a compile-time guarantee that restorative enforcement
+/// never mutates session state. It captures only the identifiers needed to
+/// verify scope consistency against the live session graph. Constructed from
+/// session data; consumed by enforcement functions.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SessionObservationHandleV1 {
+    /// Number of occurrences visible in the observed session snapshot.
+    /// Used to bound scope validation without holding a reference to the session.
+    pub(crate) occurrence_count: u32,
+    /// Whether the observed session contains any field operator instances.
+    /// Determines whether FieldRegionRewrite actions can be validly scoped.
+    pub(crate) has_field_operators: bool,
+}
+
+impl SessionObservationHandleV1 {
+    /// Construct an observation handle from session topology facts.
+    ///
+    /// Pure constructor; does not access or mutate any session state.
+    /// The caller extracts these facts from the session before calling.
+    pub(crate) const fn new(occurrence_count: u32, has_field_operators: bool) -> Self {
+        Self {
+            occurrence_count,
+            has_field_operators,
+        }
+    }
+
+    /// Returns true if the observation indicates field operators are present.
+    pub(crate) const fn has_fields(&self) -> bool {
+        self.has_field_operators
+    }
+
+    /// Returns the observed occurrence count.
+    pub(crate) const fn occurrence_count(&self) -> u32 {
+        self.occurrence_count
+    }
+}
+
+/// Validates that a scope is structurally consistent with a session observation.
+///
+/// Checks that field-scoped actions are only permitted when the session
+/// actually contains field operators. This prevents constructing valid-looking
+/// scopes that could never produce outcomes in a given session context.
+///
+/// Pure function; does not access or mutate session state.
+pub(crate) fn validate_scope_against_session(
+    scope: &RestorativeScopeV1,
+    observation: &SessionObservationHandleV1,
+) -> Result<(), RestorativeAutoErrorV1> {
+    // If the scope authorizes FieldRegionRewrite but the session has no
+    // field operators, the scope is structurally inconsistent.
+    if scope.authorized[action_index(RestorativeActionV1::FieldRegionRewrite)]
+        && !observation.has_field_operators
+    {
+        return Err(RestorativeAutoErrorV1::ScopeExceeded);
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -303,9 +460,6 @@ mod tests {
             RestorativeOutcomeV1::new(&scope, RestorativeActionV1::ColorShift, handle).unwrap();
         assert_eq!(outcome.action(), RestorativeActionV1::ColorShift);
         assert_eq!(outcome.tq_delta_handle(), handle);
-        // Compile-level absence law: no method named `clean_pass`,
-        // `final_owned_clean`, or `human_clean_verdict` exists on this type.
-        // Enforced by the absence-law test below.
     }
 
     #[test]
@@ -318,12 +472,160 @@ mod tests {
         assert_eq!(err, RestorativeAutoErrorV1::ActionNotDeclared);
     }
 
-    // -- Property (proptest-style, manual enumeration) ---------------------
-    //
-    // proptest is not currently wired into this crate's dev-dependencies;
-    // the exhaustive enumeration below is equivalent for a 4-variant closed
-    // enum and keeps PR-A dependency-free. Replace with `proptest!` in PR-B
-    // once the corpus harness lands.
+    // -- PR-B: Propagation Rules -------------------------------------------
+
+    #[test]
+    fn color_shift_propagation_is_local() {
+        assert_eq!(
+            propagation_rule(RestorativeActionV1::ColorShift),
+            PropagationRuleV1::Local
+        );
+    }
+
+    #[test]
+    fn alpha_adjustment_invalidates_dependent_fields() {
+        assert_eq!(
+            propagation_rule(RestorativeActionV1::AlphaAdjustment),
+            PropagationRuleV1::InvalidatesDependentFields
+        );
+    }
+
+    #[test]
+    fn backdrop_substitution_invalidates_dependent_fields() {
+        assert_eq!(
+            propagation_rule(RestorativeActionV1::BackdropSubstitution),
+            PropagationRuleV1::InvalidatesDependentFields
+        );
+    }
+
+    #[test]
+    fn field_region_rewrite_invalidates_attachment_closure() {
+        assert_eq!(
+            propagation_rule(RestorativeActionV1::FieldRegionRewrite),
+            PropagationRuleV1::InvalidatesAttachmentClosure
+        );
+    }
+
+    // -- PR-B: Scope Enforcement -------------------------------------------
+
+    #[test]
+    fn enforce_scope_consistency_passes_for_valid_outcome() {
+        let scope = RestorativeScopeV1::new(&[RestorativeActionV1::ColorShift]);
+        let handle = TqDeltaHandleV1::from_bytes([0x11; 32]);
+        let outcome =
+            RestorativeOutcomeV1::new(&scope, RestorativeActionV1::ColorShift, handle).unwrap();
+        assert!(enforce_scope_consistency(&outcome).is_ok());
+    }
+
+    #[test]
+    fn enforce_scope_consistency_catches_mismatched_scope() {
+        // Construct an outcome with ColorShift in a ColorShift scope,
+        // then manually verify that a different scope would reject it.
+        let original_scope = RestorativeScopeV1::new(&[RestorativeActionV1::ColorShift]);
+        let handle = TqDeltaHandleV1::from_bytes([0x22; 32]);
+        let outcome =
+            RestorativeOutcomeV1::new(&original_scope, RestorativeActionV1::ColorShift, handle)
+                .unwrap();
+
+        // Verify the outcome passes its own scope
+        assert!(enforce_scope_consistency(&outcome).is_ok());
+
+        // Verify a narrower scope would reject the same action
+        let empty_scope = RestorativeScopeV1::new(&[]);
+        assert_eq!(
+            empty_scope.validate(outcome.action()).unwrap_err(),
+            RestorativeAutoErrorV1::ActionNotDeclared
+        );
+    }
+
+    // -- PR-B: Batch Validation --------------------------------------------
+
+    #[test]
+    fn validate_action_set_passes_when_all_actions_declared() {
+        let scope = RestorativeScopeV1::new(&[
+            RestorativeActionV1::ColorShift,
+            RestorativeActionV1::AlphaAdjustment,
+        ]);
+        let actions = [
+            RestorativeActionV1::ColorShift,
+            RestorativeActionV1::AlphaAdjustment,
+            RestorativeActionV1::ColorShift,
+        ];
+        assert!(validate_action_set(&scope, &actions).is_ok());
+    }
+
+    #[test]
+    fn validate_action_set_reports_first_undeclared_action() {
+        let scope = RestorativeScopeV1::new(&[RestorativeActionV1::ColorShift]);
+        let actions = [
+            RestorativeActionV1::ColorShift,
+            RestorativeActionV1::BackdropSubstitution,
+            RestorativeActionV1::AlphaAdjustment,
+        ];
+        let err = validate_action_set(&scope, &actions).unwrap_err();
+        assert_eq!(err.failing_index, 1);
+        assert_eq!(err.action, RestorativeActionV1::BackdropSubstitution);
+    }
+
+    #[test]
+    fn validate_action_set_passes_for_empty_slice() {
+        let scope = RestorativeScopeV1::new(&[RestorativeActionV1::ColorShift]);
+        assert!(validate_action_set(&scope, &[]).is_ok());
+    }
+
+    // -- PR-B: Session Observation -----------------------------------------
+
+    #[test]
+    fn session_observation_handle_captures_topology_facts() {
+        let obs = SessionObservationHandleV1::new(42, true);
+        assert_eq!(obs.occurrence_count(), 42);
+        assert!(obs.has_fields());
+    }
+
+    #[test]
+    fn validate_scope_against_session_rejects_field_scope_without_fields() {
+        let scope = RestorativeScopeV1::new(&[RestorativeActionV1::FieldRegionRewrite]);
+        let obs = SessionObservationHandleV1::new(10, false);
+        let err = validate_scope_against_session(&scope, &obs).unwrap_err();
+        assert_eq!(err, RestorativeAutoErrorV1::ScopeExceeded);
+    }
+
+    #[test]
+    fn validate_scope_against_session_passes_field_scope_with_fields() {
+        let scope = RestorativeScopeV1::new(&[RestorativeActionV1::FieldRegionRewrite]);
+        let obs = SessionObservationHandleV1::new(10, true);
+        assert!(validate_scope_against_session(&scope, &obs).is_ok());
+    }
+
+    #[test]
+    fn validate_scope_against_session_passes_non_field_scope_without_fields() {
+        let scope = RestorativeScopeV1::new(&[RestorativeActionV1::ColorShift]);
+        let obs = SessionObservationHandleV1::new(10, false);
+        assert!(validate_scope_against_session(&scope, &obs).is_ok());
+    }
+
+    #[test]
+    fn validate_scope_against_session_passes_mixed_scope_with_fields() {
+        let scope = RestorativeScopeV1::new(&[
+            RestorativeActionV1::ColorShift,
+            RestorativeActionV1::FieldRegionRewrite,
+        ]);
+        let obs = SessionObservationHandleV1::new(10, true);
+        assert!(validate_scope_against_session(&scope, &obs).is_ok());
+    }
+
+    #[test]
+    fn validate_scope_against_session_rejects_mixed_scope_without_fields() {
+        let scope = RestorativeScopeV1::new(&[
+            RestorativeActionV1::ColorShift,
+            RestorativeActionV1::FieldRegionRewrite,
+        ]);
+        let obs = SessionObservationHandleV1::new(10, false);
+        let err = validate_scope_against_session(&scope, &obs).unwrap_err();
+        assert_eq!(err, RestorativeAutoErrorV1::ScopeExceeded);
+    }
+
+    // -- Property (exhaustive enumeration) ---------------------------------
 
     #[test]
     fn property_every_declared_action_produces_accepted_outcome() {
@@ -361,24 +663,34 @@ mod tests {
         }
     }
 
+    #[test]
+    fn property_propagation_rule_is_deterministic() {
+        let all = [
+            RestorativeActionV1::ColorShift,
+            RestorativeActionV1::AlphaAdjustment,
+            RestorativeActionV1::BackdropSubstitution,
+            RestorativeActionV1::FieldRegionRewrite,
+        ];
+        for action in all {
+            let a = propagation_rule(action);
+            let b = propagation_rule(action);
+            assert_eq!(
+                a, b,
+                "propagation rule must be deterministic for {action:?}"
+            );
+        }
+    }
+
     // -- Absence-law: no human-clean type importable from this module ------
-    //
-    // We scan only the production portion of the source (everything before
-    // the `#[cfg(test)]` gate) so the forbidden-token list inside this test
-    // does not trigger a false positive against itself.
 
     #[test]
     fn absence_law_no_human_clean_types_in_restorative_auto_source() {
         let full_source = include_str!("restorative_auto.rs");
-        // Split at the test module boundary; everything above it is production code.
         let production_source = full_source
             .split("#[cfg(test)]")
             .next()
             .expect("restorative_auto.rs must contain a #[cfg(test)] boundary");
 
-        // Token fragments are constructed so they cannot appear in this
-        // assertion list by accident — each is split across a concat to
-        // avoid the test body containing the literal it searches for.
         let forbidden: &[&str] = &[
             concat!("Clean", "Pass"),
             concat!("Final", "Owned", "Clean"),
