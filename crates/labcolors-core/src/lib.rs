@@ -228,7 +228,6 @@ pub(crate) mod selection_release;
         reason = "R-07 PR-A restorative-auto types are staged before upstream TQ substrates land"
     )
 )]
-pub(crate) mod restorative_auto;
 #[cfg(test)]
 mod selection_release_tests;
 
