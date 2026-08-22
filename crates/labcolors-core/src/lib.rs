@@ -189,6 +189,15 @@ mod generic_boundary_tests;
 )]
 pub(crate) mod observation;
 
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "ReportArenaPoolV1 is staged V7 infrastructure before PR4 wires it into ProgramSession"
+    )
+)]
+pub(crate) mod report_arena;
+
 #[cfg(test)]
 mod observation_tests;
 
