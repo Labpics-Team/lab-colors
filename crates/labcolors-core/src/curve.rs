@@ -1,4 +1,5 @@
 use crate::Srgb8;
+#[allow(deprecated)]
 use crate::lcs::LcsColor;
 use crate::spaces::vc::ViewingConditions;
 
@@ -78,6 +79,7 @@ impl std::error::Error for CurvePositionError {}
 /// кривые через один контракт.
 pub trait ColorCurve {
     /// Цвет в проверенной нормированной позиции.
+    #[allow(deprecated)] // Solver curve uses deprecated LcsColor per F-01 design
     fn at(&self, position: CurvePosition) -> LcsColor;
 
     /// Условия просмотра, в которых построена кривая.
@@ -98,6 +100,7 @@ pub trait ColorCurve {
     /// `n` равноудалённых образцов вдоль кривой.
     ///
     /// Реализация по умолчанию делегирует [`at`](ColorCurve::at).
+    #[allow(deprecated)] // Solver curve uses deprecated LcsColor per F-01 design
     fn sample(&self, n: usize) -> Vec<LcsColor> {
         if n == 0 {
             return Vec::new();
