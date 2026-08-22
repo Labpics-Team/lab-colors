@@ -2503,7 +2503,9 @@ fn glow_roles_resolve_screen_layers() {
                 "screen над белым — тождество"
             );
         }
-        other => panic!("fx-glow-neutral должен быть Resolved::Glow (exact noop), получено {other:?}"),
+        other => {
+            panic!("fx-glow-neutral должен быть Resolved::Glow (exact noop), получено {other:?}")
+        }
     }
 }
 
