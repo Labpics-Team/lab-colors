@@ -24,6 +24,8 @@ mod family_definition_binding;
 pub(crate) mod field_effect;
 #[cfg(test)]
 mod field_effect_tests;
+#[allow(dead_code)]
+pub(crate) mod field_technical_quality;
 pub(crate) mod spaces;
 
 #[cfg_attr(
