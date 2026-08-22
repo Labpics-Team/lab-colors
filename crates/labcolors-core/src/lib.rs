@@ -1,7 +1,4 @@
-﻿// Solver curve uses deprecated LcsColor per F-01 design
-#![allow(deprecated)]
-
-// BEGIN WCAG22_SOURCE_ROUTES_V1
+﻿// BEGIN WCAG22_SOURCE_ROUTES_V1
 const _: () = (); // First-item proof anchor; moving it fails verify_wcag22_q55.py.
 pub mod numerics;
 pub(crate) mod srgb8;
@@ -291,6 +288,8 @@ mod reference_vectors_deep;
 pub use alpha::composite_over_encoded;
 pub use curve::{ColorCurve, CurvePosition, CurvePositionError};
 pub use hash::fnv1a_32;
+// Solver curve uses deprecated LcsColor per F-01 design
+#[allow(deprecated)]
 pub use lcs::LcsColor;
 pub use numerical_plan::{
     CompiledInvocationIdV1, CompiledNumericalInvocationV1, CompiledNumericalPlanV1,
