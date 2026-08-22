@@ -1847,9 +1847,20 @@ class MutationTruthTest(unittest.TestCase):
             )
         }
         ci_caller = (workflows / "ci.yml").read_text(encoding="utf-8")
+        # Extract the pinned SHA dynamically from ci.yml so this test does not
+        # break every time the worker reference is bumped.
+        ci_worker_ref_match = re.search(
+            r"uses:\s+Labpics-Team/lab-colors/\.github/workflows/ci-worker\.yml@([0-9a-f]{40})",
+            ci_caller,
+        )
+        self.assertIsNotNone(
+            ci_worker_ref_match,
+            "ci.yml must pin ci-worker.yml to a full 40-char commit SHA",
+        )
+        assert ci_worker_ref_match is not None
         admitted_ci_worker = (
             "uses: Labpics-Team/lab-colors/.github/workflows/ci-worker.yml@"
-            "f2c49a374e1b2dff36243adb4919f454435cb1e3"
++ ci_worker_ref_match.group(1)
         )
         self.assertEqual(ci_caller.count("ci-worker.yml@"), 1)
         self.assertIn(admitted_ci_worker, ci_caller)
