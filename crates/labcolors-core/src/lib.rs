@@ -228,14 +228,7 @@ pub(crate) mod selection_release;
         reason = "R-07 PR-A restorative-auto types are staged before upstream TQ substrates land"
     )
 )]
-<<<<<<< HEAD
-<<<<<<< HEAD
-=======
 pub(crate) mod restorative_auto;
-=======
->>>>>>> 8275a8c (fix(ci): regenerate clean-set receipt for c07-c2-final)
-
->>>>>>> 3295f96 (feat(wasm): O-12 PR2 typed error mapping at wasm boundary)
 #[cfg(test)]
 mod selection_release_tests;
 
