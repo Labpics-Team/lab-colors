@@ -1,4 +1,4 @@
-﻿// Solver curve uses deprecated LcsColor per F-01 design
+// Solver curve uses deprecated LcsColor per F-01 design
 #![allow(deprecated)]
 
 //! Внутренний max-chroma-at-lightness recipe старого Glow-пути.

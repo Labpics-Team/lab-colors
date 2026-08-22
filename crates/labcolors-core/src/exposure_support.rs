@@ -1,4 +1,4 @@
-﻿// Solver curve uses deprecated LcsColor per F-01 design
+// Solver curve uses deprecated LcsColor per F-01 design
 #![allow(deprecated)]
 
 //! Shared test-support for the constants EXPOSURE analysis (wave
