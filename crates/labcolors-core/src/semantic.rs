@@ -1,3 +1,6 @@
+// Solver curve uses deprecated LcsColor per F-01 design
+#![allow(deprecated)]
+
 //! Контекстный резолвер скомпилированных клиентских цветовых контрактов.
 //!
 //! # Текущий контракт

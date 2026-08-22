@@ -1,3 +1,6 @@
+// Solver curve uses deprecated LcsColor per F-01 design
+#![allow(deprecated)]
+
 //! Конечный точечный reference-примитив для screen-рецепта glow.
 //!
 //! Модуль рассчитывает encoded-композит двух слоёв. Он не моделирует физическое

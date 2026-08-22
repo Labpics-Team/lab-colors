@@ -1,3 +1,6 @@
+// Solver curve uses deprecated LcsColor per F-01 design
+#![allow(deprecated)]
+
 //! Внутренний max-chroma-at-lightness recipe старого Glow-пути.
 //!
 //! Он строит непрерывный Oklab-кандидат на стене sRGB-гамута для переданных

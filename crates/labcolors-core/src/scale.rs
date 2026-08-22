@@ -1,3 +1,6 @@
+// Solver curve uses deprecated LcsColor per F-01 design
+#![allow(deprecated)]
+
 use crate::curve::CurvePosition;
 use crate::lcs::LcsColor;
 use crate::neutral::NeutralCurve;

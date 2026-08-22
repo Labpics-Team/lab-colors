@@ -2388,6 +2388,7 @@ fn all_achromatic_material_is_lawful_under_a_neutral_table_policy() {
 /// тёмном вырождается физически (тинт ≈ фон — класс, признанный ladder.rs);
 /// glow-стека не существует (fx-glow-* — одиночные позиции @52).
 #[test]
+#[allow(deprecated)] // LcsColor needed for legacy solver delta comparison
 fn fx_shadow_stack_composition_is_strictly_progressive_on_light() {
     use crate::alpha::composite_over_encoded;
     use crate::lcs::LcsColor;

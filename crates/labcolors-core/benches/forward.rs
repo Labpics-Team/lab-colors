@@ -1,3 +1,6 @@
+﻿// Solver curve uses deprecated LcsColor per F-01 design
+#![allow(deprecated)]
+
 //! Бенчмарк прямого хода CIECAM16 / round-trip — пер-цветовой горячий путь.
 //!
 //! `LcsColor::from_hex_with_vc` прогоняет всю прямую цепочку

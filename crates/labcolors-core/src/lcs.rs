@@ -30,6 +30,17 @@ enum PhysicalLocus {
 /// let mut color = LcsColor::from_hex("#808080").unwrap();
 /// color.s = 1.0;
 /// ```
+///
+/// # Deprecation Notice (F-01)
+/// `LcsColor` is the legacy hybrid representation retained solely for
+/// solver curve interpolation. New code MUST use
+/// `ModeledLcsOccurrenceV1`
+/// via the `AdmittedLcsIdentityV1` gate (see `lcs_freeze.rs`).
+#[deprecated(
+    since = "0.0.0-f01",
+    note = "Use ModeledLcsOccurrenceV1 for all non-solver paths. \
+            See crates/labcolors-core/src/lcs_freeze.rs for the V1 gate."
+)]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct LcsColor {
     jp: f64,
@@ -44,6 +55,10 @@ pub struct LcsColor {
     locus: PhysicalLocus,
 }
 
+// F-01: LcsColor impl block is deprecated but retained for solver curve
+// interpolation and internal round-trip tests. Migration to
+// ModeledLcsOccurrenceV1 is tracked in the solver migration plan.
+#[allow(deprecated)]
 impl LcsColor {
     /// Координата CAM16-UCS `J′` в условиях просмотра построения.
     pub fn jp(&self) -> f64 {
@@ -264,7 +279,10 @@ fn srgb_gray_linear_at_jp(jp: f64, vc: &ViewingConditions) -> f64 {
     cam16::gray_y(j, vc)
 }
 
+// F-01: LcsColor tests exercise the deprecated solver-path type to verify
+// round-trip and coordinate stability. These are not new usage.
 #[cfg(test)]
+#[allow(deprecated)]
 mod tests {
     use super::*;
 

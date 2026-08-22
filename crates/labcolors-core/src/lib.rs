@@ -288,6 +288,8 @@ mod reference_vectors_deep;
 pub use alpha::composite_over_encoded;
 pub use curve::{ColorCurve, CurvePosition, CurvePositionError};
 pub use hash::fnv1a_32;
+// Solver curve uses deprecated LcsColor per F-01 design
+#[allow(deprecated)]
 pub use lcs::LcsColor;
 pub use numerical_plan::{
     CompiledInvocationIdV1, CompiledNumericalInvocationV1, CompiledNumericalPlanV1,
