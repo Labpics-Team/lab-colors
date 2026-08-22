@@ -88,8 +88,7 @@ impl SchemaOrderedScenarioSourceV1 for FlatSource {
 }
 
 fn test_schema() -> CanonicalObservationSchemaV1 {
-    canonicalize_observation_schema(vec![PORT_A, PORT_B])
-        .expect("test schema must be valid")
+    canonicalize_observation_schema(vec![PORT_A, PORT_B]).expect("test schema must be valid")
 }
 
 fn srgb(r: u8, g: u8, b: u8) -> Srgb8 {
@@ -178,10 +177,8 @@ fn permutation_invariance_canonical_output_is_identical() {
     ];
 
     for perm in &permutations {
-        let permuted: Vec<(u32, Vec<Srgb8>)> = perm
-            .iter()
-            .map(|&i| base_scenarios[i].clone())
-            .collect();
+        let permuted: Vec<(u32, Vec<Srgb8>)> =
+            perm.iter().map(|&i| base_scenarios[i].clone()).collect();
         let source = FlatSource::new(
             &permuted
                 .iter()
@@ -191,15 +188,9 @@ fn permutation_invariance_canonical_output_is_identical() {
         let mut arenas = ObservationArenaPoolV1::new(&schema);
         let mut owner = OracleOwner::Empty;
         let mut scratch = Vec::new();
-        let result = apply_schema_ordered(
-            &mut owner,
-            &mut arenas,
-            &schema,
-            1,
-            &source,
-            &mut scratch,
-        )
-        .expect("permuted admission must succeed");
+        let result =
+            apply_schema_ordered(&mut owner, &mut arenas, &schema, 1, &source, &mut scratch)
+                .expect("permuted admission must succeed");
 
         assert_eq!(
             result.physical_case_count(),
@@ -258,7 +249,10 @@ fn provenance_replay_maps_physical_cases_to_original_scenario_ids() {
     }
     all_provenance.sort();
 
-    let mut expected_ids: Vec<ScenarioId> = scenarios.iter().map(|(id, _)| ScenarioId::new(*id)).collect();
+    let mut expected_ids: Vec<ScenarioId> = scenarios
+        .iter()
+        .map(|(id, _)| ScenarioId::new(*id))
+        .collect();
     expected_ids.sort();
 
     assert_eq!(
@@ -273,11 +267,18 @@ fn provenance_replay_maps_physical_cases_to_original_scenario_ids() {
         if prov.len() == 2 {
             let mut ids: Vec<u32> = prov.iter().map(|s| s.value()).collect();
             ids.sort();
-            assert_eq!(ids, vec![3, 7], "merged case must contain scenario IDs 3 and 7");
+            assert_eq!(
+                ids,
+                vec![3, 7],
+                "merged case must contain scenario IDs 3 and 7"
+            );
             found_merged = true;
         }
     }
-    assert!(found_merged, "expected one physical case with two provenance entries for identical tuples");
+    assert!(
+        found_merged,
+        "expected one physical case with two provenance entries for identical tuples"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -291,10 +292,7 @@ fn replay_idempotency_same_revision_returns_idempotent_without_reallocation() {
     let schema = test_schema();
     let val_a = [srgb(10, 20, 30), srgb(40, 50, 60)];
     let val_b = [srgb(70, 80, 90), srgb(100, 110, 120)];
-    let scenarios: Vec<(u32, &[Srgb8])> = vec![
-        (2, &val_a),
-        (5, &val_b),
-    ];
+    let scenarios: Vec<(u32, &[Srgb8])> = vec![(2, &val_a), (5, &val_b)];
     let source = FlatSource::new(&scenarios);
     let mut arenas = ObservationArenaPoolV1::new(&schema);
     let mut owner = OracleOwner::Empty;
@@ -417,15 +415,8 @@ fn complexity_bound_scenario_id_reads_are_o_n_log_n() {
         let mut arenas = ObservationArenaPoolV1::new(&schema);
         let mut owner = OracleOwner::Empty;
         let mut scratch = Vec::new();
-        let _ = apply_schema_ordered(
-            &mut owner,
-            &mut arenas,
-            &schema,
-            1,
-            &source,
-            &mut scratch,
-        )
-        .expect("admission must succeed");
+        let _ = apply_schema_ordered(&mut owner, &mut arenas, &schema, 1, &source, &mut scratch)
+            .expect("admission must succeed");
 
         let reads = read_counter.get();
         // Upper bound: c * n * ceil(log2(n)) with c = 8. The admission path
@@ -502,12 +493,15 @@ fn arena_integration_admission_works_across_slot_reuse_cycles() {
     let mut scratch = Vec::new();
 
     let make_source = |base: u8| {
-        let v1 = [srgb(base, base + 1, base + 2), srgb(base + 3, base + 4, base + 5)];
-        let v2 = [srgb(base + 10, base + 11, base + 12), srgb(base + 13, base + 14, base + 15)];
-        FlatSource::new(&[
-            (1, &v1),
-            (2, &v2),
-        ])
+        let v1 = [
+            srgb(base, base + 1, base + 2),
+            srgb(base + 3, base + 4, base + 5),
+        ];
+        let v2 = [
+            srgb(base + 10, base + 11, base + 12),
+            srgb(base + 13, base + 14, base + 15),
+        ];
+        FlatSource::new(&[(1, &v1), (2, &v2)])
     };
 
     // Fill slot 0.
@@ -553,9 +547,15 @@ fn arena_integration_admission_works_across_slot_reuse_cycles() {
     .expect("slot 2 admission must succeed");
 
     // All three backings should be distinct allocations.
-    assert_ne!(obs1_clone.backing_ptr_for_test(), obs2.backing_ptr_for_test());
+    assert_ne!(
+        obs1_clone.backing_ptr_for_test(),
+        obs2.backing_ptr_for_test()
+    );
     assert_ne!(obs2.backing_ptr_for_test(), obs3.backing_ptr_for_test());
-    assert_ne!(obs1_clone.backing_ptr_for_test(), obs3.backing_ptr_for_test());
+    assert_ne!(
+        obs1_clone.backing_ptr_for_test(),
+        obs3.backing_ptr_for_test()
+    );
 
     // Now release everything and admit again — should reuse a freed slot.
     owner = OracleOwner::Empty;
@@ -579,5 +579,9 @@ fn arena_integration_admission_works_across_slot_reuse_cycles() {
     let prov1 = obs4.provenance(1).expect("case 1 must have provenance");
     let mut all_ids: Vec<u32> = prov0.iter().chain(prov1).map(|s| s.value()).collect();
     all_ids.sort();
-    assert_eq!(all_ids, vec![1, 2], "reused slot must contain correct provenance");
+    assert_eq!(
+        all_ids,
+        vec![1, 2],
+        "reused slot must contain correct provenance"
+    );
 }
