@@ -5152,6 +5152,10 @@ mod tests {
         );
         assert!(exact.selection_diagnostic_profile().is_none());
 
+        // C7e hard-cut: LegacyPlatformDependentV1 no longer executes CAM16 at
+        // runtime. Non-noop inputs now resolve as GlowIndeterminate regardless
+        // of profile, preserving wire schema compatibility without retaining
+        // the platform-dependent solver path.
         let legacy = resolve_named_set(
             &BgInput::solid("#101012").unwrap(),
             &one_glow_table(
@@ -5161,22 +5165,20 @@ mod tests {
             &vc,
         )
         .expect("valid legacy Glow fixture resolves atomically");
-        let Resolved::Glow(legacy) = &legacy[0].1 else {
-            panic!("explicit legacy selection must resolve as a full Glow result");
+        let Resolved::GlowIndeterminate(legacy) = &legacy[0].1 else {
+            panic!(
+                "explicit legacy selection must resolve as GlowIndeterminate after C7e hard-cut: got {:?}",
+                legacy[0].1
+            );
         };
         assert_eq!(
-            legacy.selection_diagnostic_profile(),
-            Some(crate::glow::GlowDiagnosticProfileV1::Cam16UcsJPrimeLi2017V1)
+            legacy.decision_profile,
+            crate::glow::GlowDecisionProfileV1::LegacyPlatformDependentV1
         );
         assert_eq!(
-            legacy.appearance_diagnostic_profile(),
-            crate::glow::GlowDiagnosticProfileV1::Cam16UcsJPrimeLi2017V1
+            legacy.evidence,
+            crate::numerics::NumericalIndeterminacyV1::SoundBoundUnavailable
         );
-        assert!(matches!(
-            legacy.target_status(),
-            crate::glow::GlowTargetStatus::LegacyReached
-                | crate::glow::GlowTargetStatus::LegacyUnreachable
-        ));
     }
 
     // ─────────────────────────────────────────────────────────────────────────

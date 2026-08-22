@@ -1236,11 +1236,11 @@ mod tests {
 mod red_292_tests {
     use super::*;
 
-    /// RED #292: legacy-результат — атомарный `Compatibility` с registered
-    /// release ID, НЕ determinate evidence; изготовить его как
-    /// `Determinate/BitExact` невозможно типами.
+    /// C7e hard-cut: legacy CAM16 solver removed at runtime. ExplicitCompatibility
+    /// with non-noop inputs now returns Indeterminate(SoundBoundUnavailable)
+    /// instead of Compatibility. Wire schema types remain for config compat.
     #[test]
-    fn legacy_result_is_compatibility_not_determinate_evidence() {
+    fn legacy_explicit_compatibility_is_indeterminate_after_hard_cut() {
         let vc = crate::spaces::vc::ViewingConditions::srgb();
         let decision = crate::glow::solve_screen_alpha_for_dj(
             "#FF6633",
@@ -1252,15 +1252,16 @@ mod red_292_tests {
             &vc,
         )
         .unwrap();
-        assert!(matches!(
-            decision,
-            NumericalDecisionV1::Compatibility {
-                site_id: NumericalSiteIdV1::GlowTargetOrMaximumV1,
-                release_id: NumericalCompatibilityReleaseIdV1::GlowCam16UcsJPrimeTargetOrMaxV1,
-                provenance: LegacyPlatformDependentV1,
-                ..
-            }
-        ));
+        assert!(
+            matches!(
+                decision,
+                NumericalDecisionV1::Indeterminate {
+                    site_id: NumericalSiteIdV1::GlowTargetOrMaximumV1,
+                    evidence: NumericalIndeterminacyV1::SoundBoundUnavailable,
+                }
+            ),
+            "legacy explicit-compat must be indeterminate after C7e: got {decision:?}"
+        );
     }
 
     /// RED #292: BitExact-evidence запечатан и registry-owned — минтится

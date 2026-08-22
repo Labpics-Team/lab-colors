@@ -2456,7 +2456,11 @@ fn glow_roles_resolve_screen_layers() {
         .compile_named_role_table()
         .expect("фикстура labui компилируется");
 
-    // (а) тёмная база: полноценное свечение бренда.
+    // C7e hard-cut: legacy CAM16 solver removed. Non-noop glow inputs now
+    // resolve as GlowIndeterminate under all profiles. Only exact noop
+    // (white-on-white) returns Determinate with ExactNoopUnreachable status.
+
+    // (а) тёмная база: non-noop glow is now Indeterminate.
     let bg_dark = BgInput::solid("#101012").unwrap();
     let vc_dark = ViewingConditions::dim_surround();
     let set = resolve_named_set(&bg_dark, &table, &vc_dark)
@@ -2465,33 +2469,20 @@ fn glow_roles_resolve_screen_layers() {
         .iter()
         .find(|(n, _)| n == "fx-glow-brand")
         .expect("fx-glow-brand в наборе");
-    let g = match res {
-        Resolved::Glow(g) => g,
-        other => panic!("fx-glow-brand должен быть Resolved::Glow, получено {other:?}"),
-    };
-    assert_eq!(
-        g.target_status(),
-        crate::glow::GlowTargetStatus::LegacyReached,
-        "бренд-свечение на тёмной базе достигает target"
-    );
-    assert_eq!(g.halo_hex(), "#4A8FFF", "halo = пер-темный якорь бренда");
-    assert!(g.alpha() > 0.0 && g.alpha() <= 1.0);
-    let target = crate::glow::GlowStep::Base.target_dj();
-    assert!(
-        g.halo_achieved_dj() >= target - 1e-9 && g.halo_achieved_dj() - target < 0.5,
-        "шаг ступени Base: достигнуто {:.4} (ожидалось [цель, цель+0.5))",
-        g.halo_achieved_dj()
-    );
-    // Анатомия: core светлее halo (пересвет).
-    let vc = &vc_dark;
-    let jp = |hex: &str| {
-        crate::lcs::LcsColor::from_hex_with_vc(hex, vc)
-            .unwrap()
-            .jp()
-    };
-    assert!(jp(g.core_hex()) > jp(g.halo_hex()), "core светлее halo");
+    match res {
+        Resolved::GlowIndeterminate(indet) => {
+            assert_eq!(
+                indet.evidence(),
+                crate::numerics::NumericalIndeterminacyV1::SoundBoundUnavailable,
+                "non-noop glow must be indeterminate after C7e hard-cut"
+            );
+        }
+        other => panic!(
+            "fx-glow-brand должен быть GlowIndeterminate после C7e hard-cut, получено {other:?}"
+        ),
+    }
 
-    // (б) белое свечение на белом — честная деградация.
+    // (б) белое свечение на белом — exact noop, remains Determinate.
     let bg_white = BgInput::solid("#FFFFFF").unwrap();
     let set = resolve_named_set(&bg_white, &table, &ViewingConditions::srgb())
         .expect("валидный Glow-контракт обязан резолвиться");
@@ -2503,15 +2494,18 @@ fn glow_roles_resolve_screen_layers() {
         Resolved::Glow(g) => {
             assert_eq!(
                 g.target_status(),
-                crate::glow::GlowTargetStatus::LegacyUnreachable,
-                "белое свечение на белом обязано сообщить недостижимость"
+                crate::glow::GlowTargetStatus::ExactNoopUnreachable,
+                "белое свечение на белом — exact noop"
             );
-            assert!(
-                g.halo_achieved_dj() < 0.5,
-                "screen над белым гаснет физически"
+            assert_eq!(
+                g.halo_composite_hex(),
+                "#FFFFFF",
+                "screen над белым — тождество"
             );
         }
-        other => panic!("fx-glow-neutral должен быть Resolved::Glow, получено {other:?}"),
+        other => {
+            panic!("fx-glow-neutral должен быть Resolved::Glow (exact noop), получено {other:?}")
+        }
     }
 }
 
