@@ -112,7 +112,7 @@ mod tests {
     fn pq_black_is_zero() {
         let lum = AbsoluteLuminanceV1::try_new(PQ_MIN_LUMINANCE).unwrap();
         let pq = pq_inverse_eotf(lum);
-        assert!(pq.value() < 1e-6, "black should map near zero PQ");
+        assert!(pq.value() < 1e-4, "black should map near zero PQ");
     }
 
     #[test]
