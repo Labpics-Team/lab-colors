@@ -1,39 +1,1445 @@
 {
-  "schemaVersion": 2,
-  "artifact": "packages/colors/pkg/labcolors_bg.wasm",
-  "toolchain": {
-    "rust": "1.96.0",
-    "rustcCommit": "ac68faa20",
-    "wasmPack": "0.13.1",
-    "wasmBindgen": "0.2.126",
-    "target": "wasm32-unknown-unknown",
-    "cargoProfile": "release",
-    "node": "24.14.0",
-    "binaryenRelease": "version_117",
-    "binaryenNodeArchiveSha256": "2d5a42f2d167a7cc2b4b6664c44c5ace1690d13db4f527324f052afbad461a07",
-    "wasmOptFlags": "-Oz --enable-bulk-memory --enable-nontrapping-float-to-int"
-  },
-  "recipe": {
-    "rustPathRemap": [
-      "GITHUB_WORKSPACE=/workspace/lab-colors",
-      "CARGO_HOME=/cargo-home"
-    ],
-    "commands": [
-      "wasm-pack build --no-opt --release --target web --out-dir ../../packages/colors/pkg --out-name labcolors crates/labcolors-wasm --locked",
-      "local wasm=packages/colors/pkg/labcolors_bg.wasm",
-      "local optimized=packages/colors/pkg/labcolors_bg.wasm-opt.wasm",
-      "node \"$BINARYEN_ROOT/wasm-opt.js\" \"$wasm\" -o \"$optimized\" -Oz --enable-bulk-memory --enable-nontrapping-float-to-int",
-      "mv -- \"$optimized\" \"$wasm\""
-    ]
-  },
-  "measurement": {
-    "source": "github-actions-run-32186005935",
-    "platform": "linux-x64",
-    "rawBytes": 376839
-  },
-  "policy": {
-    "maxRawBytes": 376839,
-    "basis": "c7c-terminal-program-runtime",
-    "gzip": "diagnostic-only"
-  }
+ '  ' * ({
+    "schemaVersion":  2,
+    "artifact":  "packages/colors/pkg/labcolors_bg.wasm",
+    "toolchain":  {
+                      "rust":  "1.96.0",
+                      "rustcCommit":  "ac68faa20",
+                      "wasmPack":  "0.13.1",
+                      "wasmBindgen":  "0.2.126",
+                      "target":  "wasm32-unknown-unknown",
+                      "cargoProfile":  "release",
+                      "node":  "24.14.0",
+                      "binaryenRelease":  "version_117",
+                      "binaryenNodeArchiveSha256":  "2d5a42f2d167a7cc2b4b6664c44c5ace1690d13db4f527324f052afbad461a07",
+                      "wasmOptFlags":  "-Oz --enable-bulk-memory --enable-nontrapping-float-to-int"
+                  },
+    "recipe":  {
+                   "rustPathRemap":  [
+                                         "GITHUB_WORKSPACE=/workspace/lab-colors",
+                                         "CARGO_HOME=/cargo-home"
+                                     ],
+                   "commands":  [
+                                    "wasm-pack build --no-opt --release --target web --out-dir ../../packages/colors/pkg --out-name labcolors crates/labcolors-wasm --locked",
+                                    "local wasm=packages/colors/pkg/labcolors_bg.wasm",
+                                    "local optimized=packages/colors/pkg/labcolors_bg.wasm-opt.wasm",
+                                    "node \"$BINARYEN_ROOT/wasm-opt.js\" \"$wasm\" -o \"$optimized\" -Oz --enable-bulk-memory --enable-nontrapping-float-to-int",
+                                    "mv -- \"$optimized\" \"$wasm\""
+                                ]
+               },
+    "measurement":  {
+                        "source":  "github-actions-run-32186005935",
+                        "platform":  "linux-x64",
+                        "rawBytes":  376839
+                    },
+    "policy":  {
+                   "maxRawBytes":  376839,
+                   "basis":  "c7c-terminal-program-runtime",
+                   "gzip":  "diagnostic-only"
+               }
+}.Value.Length / 4) "schemaVersion":  2,
+ '  ' * ({
+    "schemaVersion":  2,
+    "artifact":  "packages/colors/pkg/labcolors_bg.wasm",
+    "toolchain":  {
+                      "rust":  "1.96.0",
+                      "rustcCommit":  "ac68faa20",
+                      "wasmPack":  "0.13.1",
+                      "wasmBindgen":  "0.2.126",
+                      "target":  "wasm32-unknown-unknown",
+                      "cargoProfile":  "release",
+                      "node":  "24.14.0",
+                      "binaryenRelease":  "version_117",
+                      "binaryenNodeArchiveSha256":  "2d5a42f2d167a7cc2b4b6664c44c5ace1690d13db4f527324f052afbad461a07",
+                      "wasmOptFlags":  "-Oz --enable-bulk-memory --enable-nontrapping-float-to-int"
+                  },
+    "recipe":  {
+                   "rustPathRemap":  [
+                                         "GITHUB_WORKSPACE=/workspace/lab-colors",
+                                         "CARGO_HOME=/cargo-home"
+                                     ],
+                   "commands":  [
+                                    "wasm-pack build --no-opt --release --target web --out-dir ../../packages/colors/pkg --out-name labcolors crates/labcolors-wasm --locked",
+                                    "local wasm=packages/colors/pkg/labcolors_bg.wasm",
+                                    "local optimized=packages/colors/pkg/labcolors_bg.wasm-opt.wasm",
+                                    "node \"$BINARYEN_ROOT/wasm-opt.js\" \"$wasm\" -o \"$optimized\" -Oz --enable-bulk-memory --enable-nontrapping-float-to-int",
+                                    "mv -- \"$optimized\" \"$wasm\""
+                                ]
+               },
+    "measurement":  {
+                        "source":  "github-actions-run-32186005935",
+                        "platform":  "linux-x64",
+                        "rawBytes":  376839
+                    },
+    "policy":  {
+                   "maxRawBytes":  376839,
+                   "basis":  "c7c-terminal-program-runtime",
+                   "gzip":  "diagnostic-only"
+               }
+}.Value.Length / 4) "artifact":  "packages/colors/pkg/labcolors_bg.wasm",
+ '  ' * ({
+    "schemaVersion":  2,
+    "artifact":  "packages/colors/pkg/labcolors_bg.wasm",
+    "toolchain":  {
+                      "rust":  "1.96.0",
+                      "rustcCommit":  "ac68faa20",
+                      "wasmPack":  "0.13.1",
+                      "wasmBindgen":  "0.2.126",
+                      "target":  "wasm32-unknown-unknown",
+                      "cargoProfile":  "release",
+                      "node":  "24.14.0",
+                      "binaryenRelease":  "version_117",
+                      "binaryenNodeArchiveSha256":  "2d5a42f2d167a7cc2b4b6664c44c5ace1690d13db4f527324f052afbad461a07",
+                      "wasmOptFlags":  "-Oz --enable-bulk-memory --enable-nontrapping-float-to-int"
+                  },
+    "recipe":  {
+                   "rustPathRemap":  [
+                                         "GITHUB_WORKSPACE=/workspace/lab-colors",
+                                         "CARGO_HOME=/cargo-home"
+                                     ],
+                   "commands":  [
+                                    "wasm-pack build --no-opt --release --target web --out-dir ../../packages/colors/pkg --out-name labcolors crates/labcolors-wasm --locked",
+                                    "local wasm=packages/colors/pkg/labcolors_bg.wasm",
+                                    "local optimized=packages/colors/pkg/labcolors_bg.wasm-opt.wasm",
+                                    "node \"$BINARYEN_ROOT/wasm-opt.js\" \"$wasm\" -o \"$optimized\" -Oz --enable-bulk-memory --enable-nontrapping-float-to-int",
+                                    "mv -- \"$optimized\" \"$wasm\""
+                                ]
+               },
+    "measurement":  {
+                        "source":  "github-actions-run-32186005935",
+                        "platform":  "linux-x64",
+                        "rawBytes":  376839
+                    },
+    "policy":  {
+                   "maxRawBytes":  376839,
+                   "basis":  "c7c-terminal-program-runtime",
+                   "gzip":  "diagnostic-only"
+               }
+}.Value.Length / 4) "toolchain":  {
+ '  ' * ({
+    "schemaVersion":  2,
+    "artifact":  "packages/colors/pkg/labcolors_bg.wasm",
+    "toolchain":  {
+                      "rust":  "1.96.0",
+                      "rustcCommit":  "ac68faa20",
+                      "wasmPack":  "0.13.1",
+                      "wasmBindgen":  "0.2.126",
+                      "target":  "wasm32-unknown-unknown",
+                      "cargoProfile":  "release",
+                      "node":  "24.14.0",
+                      "binaryenRelease":  "version_117",
+                      "binaryenNodeArchiveSha256":  "2d5a42f2d167a7cc2b4b6664c44c5ace1690d13db4f527324f052afbad461a07",
+                      "wasmOptFlags":  "-Oz --enable-bulk-memory --enable-nontrapping-float-to-int"
+                  },
+    "recipe":  {
+                   "rustPathRemap":  [
+                                         "GITHUB_WORKSPACE=/workspace/lab-colors",
+                                         "CARGO_HOME=/cargo-home"
+                                     ],
+                   "commands":  [
+                                    "wasm-pack build --no-opt --release --target web --out-dir ../../packages/colors/pkg --out-name labcolors crates/labcolors-wasm --locked",
+                                    "local wasm=packages/colors/pkg/labcolors_bg.wasm",
+                                    "local optimized=packages/colors/pkg/labcolors_bg.wasm-opt.wasm",
+                                    "node \"$BINARYEN_ROOT/wasm-opt.js\" \"$wasm\" -o \"$optimized\" -Oz --enable-bulk-memory --enable-nontrapping-float-to-int",
+                                    "mv -- \"$optimized\" \"$wasm\""
+                                ]
+               },
+    "measurement":  {
+                        "source":  "github-actions-run-32186005935",
+                        "platform":  "linux-x64",
+                        "rawBytes":  376839
+                    },
+    "policy":  {
+                   "maxRawBytes":  376839,
+                   "basis":  "c7c-terminal-program-runtime",
+                   "gzip":  "diagnostic-only"
+               }
+}.Value.Length / 4)   "rust":  "1.96.0",
+ '  ' * ({
+    "schemaVersion":  2,
+    "artifact":  "packages/colors/pkg/labcolors_bg.wasm",
+    "toolchain":  {
+                      "rust":  "1.96.0",
+                      "rustcCommit":  "ac68faa20",
+                      "wasmPack":  "0.13.1",
+                      "wasmBindgen":  "0.2.126",
+                      "target":  "wasm32-unknown-unknown",
+                      "cargoProfile":  "release",
+                      "node":  "24.14.0",
+                      "binaryenRelease":  "version_117",
+                      "binaryenNodeArchiveSha256":  "2d5a42f2d167a7cc2b4b6664c44c5ace1690d13db4f527324f052afbad461a07",
+                      "wasmOptFlags":  "-Oz --enable-bulk-memory --enable-nontrapping-float-to-int"
+                  },
+    "recipe":  {
+                   "rustPathRemap":  [
+                                         "GITHUB_WORKSPACE=/workspace/lab-colors",
+                                         "CARGO_HOME=/cargo-home"
+                                     ],
+                   "commands":  [
+                                    "wasm-pack build --no-opt --release --target web --out-dir ../../packages/colors/pkg --out-name labcolors crates/labcolors-wasm --locked",
+                                    "local wasm=packages/colors/pkg/labcolors_bg.wasm",
+                                    "local optimized=packages/colors/pkg/labcolors_bg.wasm-opt.wasm",
+                                    "node \"$BINARYEN_ROOT/wasm-opt.js\" \"$wasm\" -o \"$optimized\" -Oz --enable-bulk-memory --enable-nontrapping-float-to-int",
+                                    "mv -- \"$optimized\" \"$wasm\""
+                                ]
+               },
+    "measurement":  {
+                        "source":  "github-actions-run-32186005935",
+                        "platform":  "linux-x64",
+                        "rawBytes":  376839
+                    },
+    "policy":  {
+                   "maxRawBytes":  376839,
+                   "basis":  "c7c-terminal-program-runtime",
+                   "gzip":  "diagnostic-only"
+               }
+}.Value.Length / 4)   "rustcCommit":  "ac68faa20",
+ '  ' * ({
+    "schemaVersion":  2,
+    "artifact":  "packages/colors/pkg/labcolors_bg.wasm",
+    "toolchain":  {
+                      "rust":  "1.96.0",
+                      "rustcCommit":  "ac68faa20",
+                      "wasmPack":  "0.13.1",
+                      "wasmBindgen":  "0.2.126",
+                      "target":  "wasm32-unknown-unknown",
+                      "cargoProfile":  "release",
+                      "node":  "24.14.0",
+                      "binaryenRelease":  "version_117",
+                      "binaryenNodeArchiveSha256":  "2d5a42f2d167a7cc2b4b6664c44c5ace1690d13db4f527324f052afbad461a07",
+                      "wasmOptFlags":  "-Oz --enable-bulk-memory --enable-nontrapping-float-to-int"
+                  },
+    "recipe":  {
+                   "rustPathRemap":  [
+                                         "GITHUB_WORKSPACE=/workspace/lab-colors",
+                                         "CARGO_HOME=/cargo-home"
+                                     ],
+                   "commands":  [
+                                    "wasm-pack build --no-opt --release --target web --out-dir ../../packages/colors/pkg --out-name labcolors crates/labcolors-wasm --locked",
+                                    "local wasm=packages/colors/pkg/labcolors_bg.wasm",
+                                    "local optimized=packages/colors/pkg/labcolors_bg.wasm-opt.wasm",
+                                    "node \"$BINARYEN_ROOT/wasm-opt.js\" \"$wasm\" -o \"$optimized\" -Oz --enable-bulk-memory --enable-nontrapping-float-to-int",
+                                    "mv -- \"$optimized\" \"$wasm\""
+                                ]
+               },
+    "measurement":  {
+                        "source":  "github-actions-run-32186005935",
+                        "platform":  "linux-x64",
+                        "rawBytes":  376839
+                    },
+    "policy":  {
+                   "maxRawBytes":  376839,
+                   "basis":  "c7c-terminal-program-runtime",
+                   "gzip":  "diagnostic-only"
+               }
+}.Value.Length / 4)   "wasmPack":  "0.13.1",
+ '  ' * ({
+    "schemaVersion":  2,
+    "artifact":  "packages/colors/pkg/labcolors_bg.wasm",
+    "toolchain":  {
+                      "rust":  "1.96.0",
+                      "rustcCommit":  "ac68faa20",
+                      "wasmPack":  "0.13.1",
+                      "wasmBindgen":  "0.2.126",
+                      "target":  "wasm32-unknown-unknown",
+                      "cargoProfile":  "release",
+                      "node":  "24.14.0",
+                      "binaryenRelease":  "version_117",
+                      "binaryenNodeArchiveSha256":  "2d5a42f2d167a7cc2b4b6664c44c5ace1690d13db4f527324f052afbad461a07",
+                      "wasmOptFlags":  "-Oz --enable-bulk-memory --enable-nontrapping-float-to-int"
+                  },
+    "recipe":  {
+                   "rustPathRemap":  [
+                                         "GITHUB_WORKSPACE=/workspace/lab-colors",
+                                         "CARGO_HOME=/cargo-home"
+                                     ],
+                   "commands":  [
+                                    "wasm-pack build --no-opt --release --target web --out-dir ../../packages/colors/pkg --out-name labcolors crates/labcolors-wasm --locked",
+                                    "local wasm=packages/colors/pkg/labcolors_bg.wasm",
+                                    "local optimized=packages/colors/pkg/labcolors_bg.wasm-opt.wasm",
+                                    "node \"$BINARYEN_ROOT/wasm-opt.js\" \"$wasm\" -o \"$optimized\" -Oz --enable-bulk-memory --enable-nontrapping-float-to-int",
+                                    "mv -- \"$optimized\" \"$wasm\""
+                                ]
+               },
+    "measurement":  {
+                        "source":  "github-actions-run-32186005935",
+                        "platform":  "linux-x64",
+                        "rawBytes":  376839
+                    },
+    "policy":  {
+                   "maxRawBytes":  376839,
+                   "basis":  "c7c-terminal-program-runtime",
+                   "gzip":  "diagnostic-only"
+               }
+}.Value.Length / 4)   "wasmBindgen":  "0.2.126",
+ '  ' * ({
+    "schemaVersion":  2,
+    "artifact":  "packages/colors/pkg/labcolors_bg.wasm",
+    "toolchain":  {
+                      "rust":  "1.96.0",
+                      "rustcCommit":  "ac68faa20",
+                      "wasmPack":  "0.13.1",
+                      "wasmBindgen":  "0.2.126",
+                      "target":  "wasm32-unknown-unknown",
+                      "cargoProfile":  "release",
+                      "node":  "24.14.0",
+                      "binaryenRelease":  "version_117",
+                      "binaryenNodeArchiveSha256":  "2d5a42f2d167a7cc2b4b6664c44c5ace1690d13db4f527324f052afbad461a07",
+                      "wasmOptFlags":  "-Oz --enable-bulk-memory --enable-nontrapping-float-to-int"
+                  },
+    "recipe":  {
+                   "rustPathRemap":  [
+                                         "GITHUB_WORKSPACE=/workspace/lab-colors",
+                                         "CARGO_HOME=/cargo-home"
+                                     ],
+                   "commands":  [
+                                    "wasm-pack build --no-opt --release --target web --out-dir ../../packages/colors/pkg --out-name labcolors crates/labcolors-wasm --locked",
+                                    "local wasm=packages/colors/pkg/labcolors_bg.wasm",
+                                    "local optimized=packages/colors/pkg/labcolors_bg.wasm-opt.wasm",
+                                    "node \"$BINARYEN_ROOT/wasm-opt.js\" \"$wasm\" -o \"$optimized\" -Oz --enable-bulk-memory --enable-nontrapping-float-to-int",
+                                    "mv -- \"$optimized\" \"$wasm\""
+                                ]
+               },
+    "measurement":  {
+                        "source":  "github-actions-run-32186005935",
+                        "platform":  "linux-x64",
+                        "rawBytes":  376839
+                    },
+    "policy":  {
+                   "maxRawBytes":  376839,
+                   "basis":  "c7c-terminal-program-runtime",
+                   "gzip":  "diagnostic-only"
+               }
+}.Value.Length / 4)   "target":  "wasm32-unknown-unknown",
+ '  ' * ({
+    "schemaVersion":  2,
+    "artifact":  "packages/colors/pkg/labcolors_bg.wasm",
+    "toolchain":  {
+                      "rust":  "1.96.0",
+                      "rustcCommit":  "ac68faa20",
+                      "wasmPack":  "0.13.1",
+                      "wasmBindgen":  "0.2.126",
+                      "target":  "wasm32-unknown-unknown",
+                      "cargoProfile":  "release",
+                      "node":  "24.14.0",
+                      "binaryenRelease":  "version_117",
+                      "binaryenNodeArchiveSha256":  "2d5a42f2d167a7cc2b4b6664c44c5ace1690d13db4f527324f052afbad461a07",
+                      "wasmOptFlags":  "-Oz --enable-bulk-memory --enable-nontrapping-float-to-int"
+                  },
+    "recipe":  {
+                   "rustPathRemap":  [
+                                         "GITHUB_WORKSPACE=/workspace/lab-colors",
+                                         "CARGO_HOME=/cargo-home"
+                                     ],
+                   "commands":  [
+                                    "wasm-pack build --no-opt --release --target web --out-dir ../../packages/colors/pkg --out-name labcolors crates/labcolors-wasm --locked",
+                                    "local wasm=packages/colors/pkg/labcolors_bg.wasm",
+                                    "local optimized=packages/colors/pkg/labcolors_bg.wasm-opt.wasm",
+                                    "node \"$BINARYEN_ROOT/wasm-opt.js\" \"$wasm\" -o \"$optimized\" -Oz --enable-bulk-memory --enable-nontrapping-float-to-int",
+                                    "mv -- \"$optimized\" \"$wasm\""
+                                ]
+               },
+    "measurement":  {
+                        "source":  "github-actions-run-32186005935",
+                        "platform":  "linux-x64",
+                        "rawBytes":  376839
+                    },
+    "policy":  {
+                   "maxRawBytes":  376839,
+                   "basis":  "c7c-terminal-program-runtime",
+                   "gzip":  "diagnostic-only"
+               }
+}.Value.Length / 4)   "cargoProfile":  "release",
+ '  ' * ({
+    "schemaVersion":  2,
+    "artifact":  "packages/colors/pkg/labcolors_bg.wasm",
+    "toolchain":  {
+                      "rust":  "1.96.0",
+                      "rustcCommit":  "ac68faa20",
+                      "wasmPack":  "0.13.1",
+                      "wasmBindgen":  "0.2.126",
+                      "target":  "wasm32-unknown-unknown",
+                      "cargoProfile":  "release",
+                      "node":  "24.14.0",
+                      "binaryenRelease":  "version_117",
+                      "binaryenNodeArchiveSha256":  "2d5a42f2d167a7cc2b4b6664c44c5ace1690d13db4f527324f052afbad461a07",
+                      "wasmOptFlags":  "-Oz --enable-bulk-memory --enable-nontrapping-float-to-int"
+                  },
+    "recipe":  {
+                   "rustPathRemap":  [
+                                         "GITHUB_WORKSPACE=/workspace/lab-colors",
+                                         "CARGO_HOME=/cargo-home"
+                                     ],
+                   "commands":  [
+                                    "wasm-pack build --no-opt --release --target web --out-dir ../../packages/colors/pkg --out-name labcolors crates/labcolors-wasm --locked",
+                                    "local wasm=packages/colors/pkg/labcolors_bg.wasm",
+                                    "local optimized=packages/colors/pkg/labcolors_bg.wasm-opt.wasm",
+                                    "node \"$BINARYEN_ROOT/wasm-opt.js\" \"$wasm\" -o \"$optimized\" -Oz --enable-bulk-memory --enable-nontrapping-float-to-int",
+                                    "mv -- \"$optimized\" \"$wasm\""
+                                ]
+               },
+    "measurement":  {
+                        "source":  "github-actions-run-32186005935",
+                        "platform":  "linux-x64",
+                        "rawBytes":  376839
+                    },
+    "policy":  {
+                   "maxRawBytes":  376839,
+                   "basis":  "c7c-terminal-program-runtime",
+                   "gzip":  "diagnostic-only"
+               }
+}.Value.Length / 4)   "node":  "24.14.0",
+ '  ' * ({
+    "schemaVersion":  2,
+    "artifact":  "packages/colors/pkg/labcolors_bg.wasm",
+    "toolchain":  {
+                      "rust":  "1.96.0",
+                      "rustcCommit":  "ac68faa20",
+                      "wasmPack":  "0.13.1",
+                      "wasmBindgen":  "0.2.126",
+                      "target":  "wasm32-unknown-unknown",
+                      "cargoProfile":  "release",
+                      "node":  "24.14.0",
+                      "binaryenRelease":  "version_117",
+                      "binaryenNodeArchiveSha256":  "2d5a42f2d167a7cc2b4b6664c44c5ace1690d13db4f527324f052afbad461a07",
+                      "wasmOptFlags":  "-Oz --enable-bulk-memory --enable-nontrapping-float-to-int"
+                  },
+    "recipe":  {
+                   "rustPathRemap":  [
+                                         "GITHUB_WORKSPACE=/workspace/lab-colors",
+                                         "CARGO_HOME=/cargo-home"
+                                     ],
+                   "commands":  [
+                                    "wasm-pack build --no-opt --release --target web --out-dir ../../packages/colors/pkg --out-name labcolors crates/labcolors-wasm --locked",
+                                    "local wasm=packages/colors/pkg/labcolors_bg.wasm",
+                                    "local optimized=packages/colors/pkg/labcolors_bg.wasm-opt.wasm",
+                                    "node \"$BINARYEN_ROOT/wasm-opt.js\" \"$wasm\" -o \"$optimized\" -Oz --enable-bulk-memory --enable-nontrapping-float-to-int",
+                                    "mv -- \"$optimized\" \"$wasm\""
+                                ]
+               },
+    "measurement":  {
+                        "source":  "github-actions-run-32186005935",
+                        "platform":  "linux-x64",
+                        "rawBytes":  376839
+                    },
+    "policy":  {
+                   "maxRawBytes":  376839,
+                   "basis":  "c7c-terminal-program-runtime",
+                   "gzip":  "diagnostic-only"
+               }
+}.Value.Length / 4)   "binaryenRelease":  "version_117",
+ '  ' * ({
+    "schemaVersion":  2,
+    "artifact":  "packages/colors/pkg/labcolors_bg.wasm",
+    "toolchain":  {
+                      "rust":  "1.96.0",
+                      "rustcCommit":  "ac68faa20",
+                      "wasmPack":  "0.13.1",
+                      "wasmBindgen":  "0.2.126",
+                      "target":  "wasm32-unknown-unknown",
+                      "cargoProfile":  "release",
+                      "node":  "24.14.0",
+                      "binaryenRelease":  "version_117",
+                      "binaryenNodeArchiveSha256":  "2d5a42f2d167a7cc2b4b6664c44c5ace1690d13db4f527324f052afbad461a07",
+                      "wasmOptFlags":  "-Oz --enable-bulk-memory --enable-nontrapping-float-to-int"
+                  },
+    "recipe":  {
+                   "rustPathRemap":  [
+                                         "GITHUB_WORKSPACE=/workspace/lab-colors",
+                                         "CARGO_HOME=/cargo-home"
+                                     ],
+                   "commands":  [
+                                    "wasm-pack build --no-opt --release --target web --out-dir ../../packages/colors/pkg --out-name labcolors crates/labcolors-wasm --locked",
+                                    "local wasm=packages/colors/pkg/labcolors_bg.wasm",
+                                    "local optimized=packages/colors/pkg/labcolors_bg.wasm-opt.wasm",
+                                    "node \"$BINARYEN_ROOT/wasm-opt.js\" \"$wasm\" -o \"$optimized\" -Oz --enable-bulk-memory --enable-nontrapping-float-to-int",
+                                    "mv -- \"$optimized\" \"$wasm\""
+                                ]
+               },
+    "measurement":  {
+                        "source":  "github-actions-run-32186005935",
+                        "platform":  "linux-x64",
+                        "rawBytes":  376839
+                    },
+    "policy":  {
+                   "maxRawBytes":  376839,
+                   "basis":  "c7c-terminal-program-runtime",
+                   "gzip":  "diagnostic-only"
+               }
+}.Value.Length / 4)   "binaryenNodeArchiveSha256":  "2d5a42f2d167a7cc2b4b6664c44c5ace1690d13db4f527324f052afbad461a07",
+ '  ' * ({
+    "schemaVersion":  2,
+    "artifact":  "packages/colors/pkg/labcolors_bg.wasm",
+    "toolchain":  {
+                      "rust":  "1.96.0",
+                      "rustcCommit":  "ac68faa20",
+                      "wasmPack":  "0.13.1",
+                      "wasmBindgen":  "0.2.126",
+                      "target":  "wasm32-unknown-unknown",
+                      "cargoProfile":  "release",
+                      "node":  "24.14.0",
+                      "binaryenRelease":  "version_117",
+                      "binaryenNodeArchiveSha256":  "2d5a42f2d167a7cc2b4b6664c44c5ace1690d13db4f527324f052afbad461a07",
+                      "wasmOptFlags":  "-Oz --enable-bulk-memory --enable-nontrapping-float-to-int"
+                  },
+    "recipe":  {
+                   "rustPathRemap":  [
+                                         "GITHUB_WORKSPACE=/workspace/lab-colors",
+                                         "CARGO_HOME=/cargo-home"
+                                     ],
+                   "commands":  [
+                                    "wasm-pack build --no-opt --release --target web --out-dir ../../packages/colors/pkg --out-name labcolors crates/labcolors-wasm --locked",
+                                    "local wasm=packages/colors/pkg/labcolors_bg.wasm",
+                                    "local optimized=packages/colors/pkg/labcolors_bg.wasm-opt.wasm",
+                                    "node \"$BINARYEN_ROOT/wasm-opt.js\" \"$wasm\" -o \"$optimized\" -Oz --enable-bulk-memory --enable-nontrapping-float-to-int",
+                                    "mv -- \"$optimized\" \"$wasm\""
+                                ]
+               },
+    "measurement":  {
+                        "source":  "github-actions-run-32186005935",
+                        "platform":  "linux-x64",
+                        "rawBytes":  376839
+                    },
+    "policy":  {
+                   "maxRawBytes":  376839,
+                   "basis":  "c7c-terminal-program-runtime",
+                   "gzip":  "diagnostic-only"
+               }
+}.Value.Length / 4)   "wasmOptFlags":  "-Oz --enable-bulk-memory --enable-nontrapping-float-to-int"
+ '  ' * ({
+    "schemaVersion":  2,
+    "artifact":  "packages/colors/pkg/labcolors_bg.wasm",
+    "toolchain":  {
+                      "rust":  "1.96.0",
+                      "rustcCommit":  "ac68faa20",
+                      "wasmPack":  "0.13.1",
+                      "wasmBindgen":  "0.2.126",
+                      "target":  "wasm32-unknown-unknown",
+                      "cargoProfile":  "release",
+                      "node":  "24.14.0",
+                      "binaryenRelease":  "version_117",
+                      "binaryenNodeArchiveSha256":  "2d5a42f2d167a7cc2b4b6664c44c5ace1690d13db4f527324f052afbad461a07",
+                      "wasmOptFlags":  "-Oz --enable-bulk-memory --enable-nontrapping-float-to-int"
+                  },
+    "recipe":  {
+                   "rustPathRemap":  [
+                                         "GITHUB_WORKSPACE=/workspace/lab-colors",
+                                         "CARGO_HOME=/cargo-home"
+                                     ],
+                   "commands":  [
+                                    "wasm-pack build --no-opt --release --target web --out-dir ../../packages/colors/pkg --out-name labcolors crates/labcolors-wasm --locked",
+                                    "local wasm=packages/colors/pkg/labcolors_bg.wasm",
+                                    "local optimized=packages/colors/pkg/labcolors_bg.wasm-opt.wasm",
+                                    "node \"$BINARYEN_ROOT/wasm-opt.js\" \"$wasm\" -o \"$optimized\" -Oz --enable-bulk-memory --enable-nontrapping-float-to-int",
+                                    "mv -- \"$optimized\" \"$wasm\""
+                                ]
+               },
+    "measurement":  {
+                        "source":  "github-actions-run-32186005935",
+                        "platform":  "linux-x64",
+                        "rawBytes":  376839
+                    },
+    "policy":  {
+                   "maxRawBytes":  376839,
+                   "basis":  "c7c-terminal-program-runtime",
+                   "gzip":  "diagnostic-only"
+               }
+}.Value.Length / 4)   },
+ '  ' * ({
+    "schemaVersion":  2,
+    "artifact":  "packages/colors/pkg/labcolors_bg.wasm",
+    "toolchain":  {
+                      "rust":  "1.96.0",
+                      "rustcCommit":  "ac68faa20",
+                      "wasmPack":  "0.13.1",
+                      "wasmBindgen":  "0.2.126",
+                      "target":  "wasm32-unknown-unknown",
+                      "cargoProfile":  "release",
+                      "node":  "24.14.0",
+                      "binaryenRelease":  "version_117",
+                      "binaryenNodeArchiveSha256":  "2d5a42f2d167a7cc2b4b6664c44c5ace1690d13db4f527324f052afbad461a07",
+                      "wasmOptFlags":  "-Oz --enable-bulk-memory --enable-nontrapping-float-to-int"
+                  },
+    "recipe":  {
+                   "rustPathRemap":  [
+                                         "GITHUB_WORKSPACE=/workspace/lab-colors",
+                                         "CARGO_HOME=/cargo-home"
+                                     ],
+                   "commands":  [
+                                    "wasm-pack build --no-opt --release --target web --out-dir ../../packages/colors/pkg --out-name labcolors crates/labcolors-wasm --locked",
+                                    "local wasm=packages/colors/pkg/labcolors_bg.wasm",
+                                    "local optimized=packages/colors/pkg/labcolors_bg.wasm-opt.wasm",
+                                    "node \"$BINARYEN_ROOT/wasm-opt.js\" \"$wasm\" -o \"$optimized\" -Oz --enable-bulk-memory --enable-nontrapping-float-to-int",
+                                    "mv -- \"$optimized\" \"$wasm\""
+                                ]
+               },
+    "measurement":  {
+                        "source":  "github-actions-run-32186005935",
+                        "platform":  "linux-x64",
+                        "rawBytes":  376839
+                    },
+    "policy":  {
+                   "maxRawBytes":  376839,
+                   "basis":  "c7c-terminal-program-runtime",
+                   "gzip":  "diagnostic-only"
+               }
+}.Value.Length / 4) "recipe":  {
+ '  ' * ({
+    "schemaVersion":  2,
+    "artifact":  "packages/colors/pkg/labcolors_bg.wasm",
+    "toolchain":  {
+                      "rust":  "1.96.0",
+                      "rustcCommit":  "ac68faa20",
+                      "wasmPack":  "0.13.1",
+                      "wasmBindgen":  "0.2.126",
+                      "target":  "wasm32-unknown-unknown",
+                      "cargoProfile":  "release",
+                      "node":  "24.14.0",
+                      "binaryenRelease":  "version_117",
+                      "binaryenNodeArchiveSha256":  "2d5a42f2d167a7cc2b4b6664c44c5ace1690d13db4f527324f052afbad461a07",
+                      "wasmOptFlags":  "-Oz --enable-bulk-memory --enable-nontrapping-float-to-int"
+                  },
+    "recipe":  {
+                   "rustPathRemap":  [
+                                         "GITHUB_WORKSPACE=/workspace/lab-colors",
+                                         "CARGO_HOME=/cargo-home"
+                                     ],
+                   "commands":  [
+                                    "wasm-pack build --no-opt --release --target web --out-dir ../../packages/colors/pkg --out-name labcolors crates/labcolors-wasm --locked",
+                                    "local wasm=packages/colors/pkg/labcolors_bg.wasm",
+                                    "local optimized=packages/colors/pkg/labcolors_bg.wasm-opt.wasm",
+                                    "node \"$BINARYEN_ROOT/wasm-opt.js\" \"$wasm\" -o \"$optimized\" -Oz --enable-bulk-memory --enable-nontrapping-float-to-int",
+                                    "mv -- \"$optimized\" \"$wasm\""
+                                ]
+               },
+    "measurement":  {
+                        "source":  "github-actions-run-32186005935",
+                        "platform":  "linux-x64",
+                        "rawBytes":  376839
+                    },
+    "policy":  {
+                   "maxRawBytes":  376839,
+                   "basis":  "c7c-terminal-program-runtime",
+                   "gzip":  "diagnostic-only"
+               }
+}.Value.Length / 4)    "rustPathRemap":  [
+ '  ' * ({
+    "schemaVersion":  2,
+    "artifact":  "packages/colors/pkg/labcolors_bg.wasm",
+    "toolchain":  {
+                      "rust":  "1.96.0",
+                      "rustcCommit":  "ac68faa20",
+                      "wasmPack":  "0.13.1",
+                      "wasmBindgen":  "0.2.126",
+                      "target":  "wasm32-unknown-unknown",
+                      "cargoProfile":  "release",
+                      "node":  "24.14.0",
+                      "binaryenRelease":  "version_117",
+                      "binaryenNodeArchiveSha256":  "2d5a42f2d167a7cc2b4b6664c44c5ace1690d13db4f527324f052afbad461a07",
+                      "wasmOptFlags":  "-Oz --enable-bulk-memory --enable-nontrapping-float-to-int"
+                  },
+    "recipe":  {
+                   "rustPathRemap":  [
+                                         "GITHUB_WORKSPACE=/workspace/lab-colors",
+                                         "CARGO_HOME=/cargo-home"
+                                     ],
+                   "commands":  [
+                                    "wasm-pack build --no-opt --release --target web --out-dir ../../packages/colors/pkg --out-name labcolors crates/labcolors-wasm --locked",
+                                    "local wasm=packages/colors/pkg/labcolors_bg.wasm",
+                                    "local optimized=packages/colors/pkg/labcolors_bg.wasm-opt.wasm",
+                                    "node \"$BINARYEN_ROOT/wasm-opt.js\" \"$wasm\" -o \"$optimized\" -Oz --enable-bulk-memory --enable-nontrapping-float-to-int",
+                                    "mv -- \"$optimized\" \"$wasm\""
+                                ]
+               },
+    "measurement":  {
+                        "source":  "github-actions-run-32186005935",
+                        "platform":  "linux-x64",
+                        "rawBytes":  376839
+                    },
+    "policy":  {
+                   "maxRawBytes":  376839,
+                   "basis":  "c7c-terminal-program-runtime",
+                   "gzip":  "diagnostic-only"
+               }
+}.Value.Length / 4)  "GITHUB_WORKSPACE=/workspace/lab-colors",
+ '  ' * ({
+    "schemaVersion":  2,
+    "artifact":  "packages/colors/pkg/labcolors_bg.wasm",
+    "toolchain":  {
+                      "rust":  "1.96.0",
+                      "rustcCommit":  "ac68faa20",
+                      "wasmPack":  "0.13.1",
+                      "wasmBindgen":  "0.2.126",
+                      "target":  "wasm32-unknown-unknown",
+                      "cargoProfile":  "release",
+                      "node":  "24.14.0",
+                      "binaryenRelease":  "version_117",
+                      "binaryenNodeArchiveSha256":  "2d5a42f2d167a7cc2b4b6664c44c5ace1690d13db4f527324f052afbad461a07",
+                      "wasmOptFlags":  "-Oz --enable-bulk-memory --enable-nontrapping-float-to-int"
+                  },
+    "recipe":  {
+                   "rustPathRemap":  [
+                                         "GITHUB_WORKSPACE=/workspace/lab-colors",
+                                         "CARGO_HOME=/cargo-home"
+                                     ],
+                   "commands":  [
+                                    "wasm-pack build --no-opt --release --target web --out-dir ../../packages/colors/pkg --out-name labcolors crates/labcolors-wasm --locked",
+                                    "local wasm=packages/colors/pkg/labcolors_bg.wasm",
+                                    "local optimized=packages/colors/pkg/labcolors_bg.wasm-opt.wasm",
+                                    "node \"$BINARYEN_ROOT/wasm-opt.js\" \"$wasm\" -o \"$optimized\" -Oz --enable-bulk-memory --enable-nontrapping-float-to-int",
+                                    "mv -- \"$optimized\" \"$wasm\""
+                                ]
+               },
+    "measurement":  {
+                        "source":  "github-actions-run-32186005935",
+                        "platform":  "linux-x64",
+                        "rawBytes":  376839
+                    },
+    "policy":  {
+                   "maxRawBytes":  376839,
+                   "basis":  "c7c-terminal-program-runtime",
+                   "gzip":  "diagnostic-only"
+               }
+}.Value.Length / 4)  "CARGO_HOME=/cargo-home"
+ '  ' * ({
+    "schemaVersion":  2,
+    "artifact":  "packages/colors/pkg/labcolors_bg.wasm",
+    "toolchain":  {
+                      "rust":  "1.96.0",
+                      "rustcCommit":  "ac68faa20",
+                      "wasmPack":  "0.13.1",
+                      "wasmBindgen":  "0.2.126",
+                      "target":  "wasm32-unknown-unknown",
+                      "cargoProfile":  "release",
+                      "node":  "24.14.0",
+                      "binaryenRelease":  "version_117",
+                      "binaryenNodeArchiveSha256":  "2d5a42f2d167a7cc2b4b6664c44c5ace1690d13db4f527324f052afbad461a07",
+                      "wasmOptFlags":  "-Oz --enable-bulk-memory --enable-nontrapping-float-to-int"
+                  },
+    "recipe":  {
+                   "rustPathRemap":  [
+                                         "GITHUB_WORKSPACE=/workspace/lab-colors",
+                                         "CARGO_HOME=/cargo-home"
+                                     ],
+                   "commands":  [
+                                    "wasm-pack build --no-opt --release --target web --out-dir ../../packages/colors/pkg --out-name labcolors crates/labcolors-wasm --locked",
+                                    "local wasm=packages/colors/pkg/labcolors_bg.wasm",
+                                    "local optimized=packages/colors/pkg/labcolors_bg.wasm-opt.wasm",
+                                    "node \"$BINARYEN_ROOT/wasm-opt.js\" \"$wasm\" -o \"$optimized\" -Oz --enable-bulk-memory --enable-nontrapping-float-to-int",
+                                    "mv -- \"$optimized\" \"$wasm\""
+                                ]
+               },
+    "measurement":  {
+                        "source":  "github-actions-run-32186005935",
+                        "platform":  "linux-x64",
+                        "rawBytes":  376839
+                    },
+    "policy":  {
+                   "maxRawBytes":  376839,
+                   "basis":  "c7c-terminal-program-runtime",
+                   "gzip":  "diagnostic-only"
+               }
+}.Value.Length / 4)  ],
+ '  ' * ({
+    "schemaVersion":  2,
+    "artifact":  "packages/colors/pkg/labcolors_bg.wasm",
+    "toolchain":  {
+                      "rust":  "1.96.0",
+                      "rustcCommit":  "ac68faa20",
+                      "wasmPack":  "0.13.1",
+                      "wasmBindgen":  "0.2.126",
+                      "target":  "wasm32-unknown-unknown",
+                      "cargoProfile":  "release",
+                      "node":  "24.14.0",
+                      "binaryenRelease":  "version_117",
+                      "binaryenNodeArchiveSha256":  "2d5a42f2d167a7cc2b4b6664c44c5ace1690d13db4f527324f052afbad461a07",
+                      "wasmOptFlags":  "-Oz --enable-bulk-memory --enable-nontrapping-float-to-int"
+                  },
+    "recipe":  {
+                   "rustPathRemap":  [
+                                         "GITHUB_WORKSPACE=/workspace/lab-colors",
+                                         "CARGO_HOME=/cargo-home"
+                                     ],
+                   "commands":  [
+                                    "wasm-pack build --no-opt --release --target web --out-dir ../../packages/colors/pkg --out-name labcolors crates/labcolors-wasm --locked",
+                                    "local wasm=packages/colors/pkg/labcolors_bg.wasm",
+                                    "local optimized=packages/colors/pkg/labcolors_bg.wasm-opt.wasm",
+                                    "node \"$BINARYEN_ROOT/wasm-opt.js\" \"$wasm\" -o \"$optimized\" -Oz --enable-bulk-memory --enable-nontrapping-float-to-int",
+                                    "mv -- \"$optimized\" \"$wasm\""
+                                ]
+               },
+    "measurement":  {
+                        "source":  "github-actions-run-32186005935",
+                        "platform":  "linux-x64",
+                        "rawBytes":  376839
+                    },
+    "policy":  {
+                   "maxRawBytes":  376839,
+                   "basis":  "c7c-terminal-program-runtime",
+                   "gzip":  "diagnostic-only"
+               }
+}.Value.Length / 4)    "commands":  [
+ '  ' * ({
+    "schemaVersion":  2,
+    "artifact":  "packages/colors/pkg/labcolors_bg.wasm",
+    "toolchain":  {
+                      "rust":  "1.96.0",
+                      "rustcCommit":  "ac68faa20",
+                      "wasmPack":  "0.13.1",
+                      "wasmBindgen":  "0.2.126",
+                      "target":  "wasm32-unknown-unknown",
+                      "cargoProfile":  "release",
+                      "node":  "24.14.0",
+                      "binaryenRelease":  "version_117",
+                      "binaryenNodeArchiveSha256":  "2d5a42f2d167a7cc2b4b6664c44c5ace1690d13db4f527324f052afbad461a07",
+                      "wasmOptFlags":  "-Oz --enable-bulk-memory --enable-nontrapping-float-to-int"
+                  },
+    "recipe":  {
+                   "rustPathRemap":  [
+                                         "GITHUB_WORKSPACE=/workspace/lab-colors",
+                                         "CARGO_HOME=/cargo-home"
+                                     ],
+                   "commands":  [
+                                    "wasm-pack build --no-opt --release --target web --out-dir ../../packages/colors/pkg --out-name labcolors crates/labcolors-wasm --locked",
+                                    "local wasm=packages/colors/pkg/labcolors_bg.wasm",
+                                    "local optimized=packages/colors/pkg/labcolors_bg.wasm-opt.wasm",
+                                    "node \"$BINARYEN_ROOT/wasm-opt.js\" \"$wasm\" -o \"$optimized\" -Oz --enable-bulk-memory --enable-nontrapping-float-to-int",
+                                    "mv -- \"$optimized\" \"$wasm\""
+                                ]
+               },
+    "measurement":  {
+                        "source":  "github-actions-run-32186005935",
+                        "platform":  "linux-x64",
+                        "rawBytes":  376839
+                    },
+    "policy":  {
+                   "maxRawBytes":  376839,
+                   "basis":  "c7c-terminal-program-runtime",
+                   "gzip":  "diagnostic-only"
+               }
+}.Value.Length / 4) "wasm-pack build --no-opt --release --target web --out-dir ../../packages/colors/pkg --out-name labcolors crates/labcolors-wasm --locked",
+ '  ' * ({
+    "schemaVersion":  2,
+    "artifact":  "packages/colors/pkg/labcolors_bg.wasm",
+    "toolchain":  {
+                      "rust":  "1.96.0",
+                      "rustcCommit":  "ac68faa20",
+                      "wasmPack":  "0.13.1",
+                      "wasmBindgen":  "0.2.126",
+                      "target":  "wasm32-unknown-unknown",
+                      "cargoProfile":  "release",
+                      "node":  "24.14.0",
+                      "binaryenRelease":  "version_117",
+                      "binaryenNodeArchiveSha256":  "2d5a42f2d167a7cc2b4b6664c44c5ace1690d13db4f527324f052afbad461a07",
+                      "wasmOptFlags":  "-Oz --enable-bulk-memory --enable-nontrapping-float-to-int"
+                  },
+    "recipe":  {
+                   "rustPathRemap":  [
+                                         "GITHUB_WORKSPACE=/workspace/lab-colors",
+                                         "CARGO_HOME=/cargo-home"
+                                     ],
+                   "commands":  [
+                                    "wasm-pack build --no-opt --release --target web --out-dir ../../packages/colors/pkg --out-name labcolors crates/labcolors-wasm --locked",
+                                    "local wasm=packages/colors/pkg/labcolors_bg.wasm",
+                                    "local optimized=packages/colors/pkg/labcolors_bg.wasm-opt.wasm",
+                                    "node \"$BINARYEN_ROOT/wasm-opt.js\" \"$wasm\" -o \"$optimized\" -Oz --enable-bulk-memory --enable-nontrapping-float-to-int",
+                                    "mv -- \"$optimized\" \"$wasm\""
+                                ]
+               },
+    "measurement":  {
+                        "source":  "github-actions-run-32186005935",
+                        "platform":  "linux-x64",
+                        "rawBytes":  376839
+                    },
+    "policy":  {
+                   "maxRawBytes":  376839,
+                   "basis":  "c7c-terminal-program-runtime",
+                   "gzip":  "diagnostic-only"
+               }
+}.Value.Length / 4) "local wasm=packages/colors/pkg/labcolors_bg.wasm",
+ '  ' * ({
+    "schemaVersion":  2,
+    "artifact":  "packages/colors/pkg/labcolors_bg.wasm",
+    "toolchain":  {
+                      "rust":  "1.96.0",
+                      "rustcCommit":  "ac68faa20",
+                      "wasmPack":  "0.13.1",
+                      "wasmBindgen":  "0.2.126",
+                      "target":  "wasm32-unknown-unknown",
+                      "cargoProfile":  "release",
+                      "node":  "24.14.0",
+                      "binaryenRelease":  "version_117",
+                      "binaryenNodeArchiveSha256":  "2d5a42f2d167a7cc2b4b6664c44c5ace1690d13db4f527324f052afbad461a07",
+                      "wasmOptFlags":  "-Oz --enable-bulk-memory --enable-nontrapping-float-to-int"
+                  },
+    "recipe":  {
+                   "rustPathRemap":  [
+                                         "GITHUB_WORKSPACE=/workspace/lab-colors",
+                                         "CARGO_HOME=/cargo-home"
+                                     ],
+                   "commands":  [
+                                    "wasm-pack build --no-opt --release --target web --out-dir ../../packages/colors/pkg --out-name labcolors crates/labcolors-wasm --locked",
+                                    "local wasm=packages/colors/pkg/labcolors_bg.wasm",
+                                    "local optimized=packages/colors/pkg/labcolors_bg.wasm-opt.wasm",
+                                    "node \"$BINARYEN_ROOT/wasm-opt.js\" \"$wasm\" -o \"$optimized\" -Oz --enable-bulk-memory --enable-nontrapping-float-to-int",
+                                    "mv -- \"$optimized\" \"$wasm\""
+                                ]
+               },
+    "measurement":  {
+                        "source":  "github-actions-run-32186005935",
+                        "platform":  "linux-x64",
+                        "rawBytes":  376839
+                    },
+    "policy":  {
+                   "maxRawBytes":  376839,
+                   "basis":  "c7c-terminal-program-runtime",
+                   "gzip":  "diagnostic-only"
+               }
+}.Value.Length / 4) "local optimized=packages/colors/pkg/labcolors_bg.wasm-opt.wasm",
+ '  ' * ({
+    "schemaVersion":  2,
+    "artifact":  "packages/colors/pkg/labcolors_bg.wasm",
+    "toolchain":  {
+                      "rust":  "1.96.0",
+                      "rustcCommit":  "ac68faa20",
+                      "wasmPack":  "0.13.1",
+                      "wasmBindgen":  "0.2.126",
+                      "target":  "wasm32-unknown-unknown",
+                      "cargoProfile":  "release",
+                      "node":  "24.14.0",
+                      "binaryenRelease":  "version_117",
+                      "binaryenNodeArchiveSha256":  "2d5a42f2d167a7cc2b4b6664c44c5ace1690d13db4f527324f052afbad461a07",
+                      "wasmOptFlags":  "-Oz --enable-bulk-memory --enable-nontrapping-float-to-int"
+                  },
+    "recipe":  {
+                   "rustPathRemap":  [
+                                         "GITHUB_WORKSPACE=/workspace/lab-colors",
+                                         "CARGO_HOME=/cargo-home"
+                                     ],
+                   "commands":  [
+                                    "wasm-pack build --no-opt --release --target web --out-dir ../../packages/colors/pkg --out-name labcolors crates/labcolors-wasm --locked",
+                                    "local wasm=packages/colors/pkg/labcolors_bg.wasm",
+                                    "local optimized=packages/colors/pkg/labcolors_bg.wasm-opt.wasm",
+                                    "node \"$BINARYEN_ROOT/wasm-opt.js\" \"$wasm\" -o \"$optimized\" -Oz --enable-bulk-memory --enable-nontrapping-float-to-int",
+                                    "mv -- \"$optimized\" \"$wasm\""
+                                ]
+               },
+    "measurement":  {
+                        "source":  "github-actions-run-32186005935",
+                        "platform":  "linux-x64",
+                        "rawBytes":  376839
+                    },
+    "policy":  {
+                   "maxRawBytes":  376839,
+                   "basis":  "c7c-terminal-program-runtime",
+                   "gzip":  "diagnostic-only"
+               }
+}.Value.Length / 4) "node \"$BINARYEN_ROOT/wasm-opt.js\" \"$wasm\" -o \"$optimized\" -Oz --enable-bulk-memory --enable-nontrapping-float-to-int",
+ '  ' * ({
+    "schemaVersion":  2,
+    "artifact":  "packages/colors/pkg/labcolors_bg.wasm",
+    "toolchain":  {
+                      "rust":  "1.96.0",
+                      "rustcCommit":  "ac68faa20",
+                      "wasmPack":  "0.13.1",
+                      "wasmBindgen":  "0.2.126",
+                      "target":  "wasm32-unknown-unknown",
+                      "cargoProfile":  "release",
+                      "node":  "24.14.0",
+                      "binaryenRelease":  "version_117",
+                      "binaryenNodeArchiveSha256":  "2d5a42f2d167a7cc2b4b6664c44c5ace1690d13db4f527324f052afbad461a07",
+                      "wasmOptFlags":  "-Oz --enable-bulk-memory --enable-nontrapping-float-to-int"
+                  },
+    "recipe":  {
+                   "rustPathRemap":  [
+                                         "GITHUB_WORKSPACE=/workspace/lab-colors",
+                                         "CARGO_HOME=/cargo-home"
+                                     ],
+                   "commands":  [
+                                    "wasm-pack build --no-opt --release --target web --out-dir ../../packages/colors/pkg --out-name labcolors crates/labcolors-wasm --locked",
+                                    "local wasm=packages/colors/pkg/labcolors_bg.wasm",
+                                    "local optimized=packages/colors/pkg/labcolors_bg.wasm-opt.wasm",
+                                    "node \"$BINARYEN_ROOT/wasm-opt.js\" \"$wasm\" -o \"$optimized\" -Oz --enable-bulk-memory --enable-nontrapping-float-to-int",
+                                    "mv -- \"$optimized\" \"$wasm\""
+                                ]
+               },
+    "measurement":  {
+                        "source":  "github-actions-run-32186005935",
+                        "platform":  "linux-x64",
+                        "rawBytes":  376839
+                    },
+    "policy":  {
+                   "maxRawBytes":  376839,
+                   "basis":  "c7c-terminal-program-runtime",
+                   "gzip":  "diagnostic-only"
+               }
+}.Value.Length / 4) "mv -- \"$optimized\" \"$wasm\""
+ '  ' * ({
+    "schemaVersion":  2,
+    "artifact":  "packages/colors/pkg/labcolors_bg.wasm",
+    "toolchain":  {
+                      "rust":  "1.96.0",
+                      "rustcCommit":  "ac68faa20",
+                      "wasmPack":  "0.13.1",
+                      "wasmBindgen":  "0.2.126",
+                      "target":  "wasm32-unknown-unknown",
+                      "cargoProfile":  "release",
+                      "node":  "24.14.0",
+                      "binaryenRelease":  "version_117",
+                      "binaryenNodeArchiveSha256":  "2d5a42f2d167a7cc2b4b6664c44c5ace1690d13db4f527324f052afbad461a07",
+                      "wasmOptFlags":  "-Oz --enable-bulk-memory --enable-nontrapping-float-to-int"
+                  },
+    "recipe":  {
+                   "rustPathRemap":  [
+                                         "GITHUB_WORKSPACE=/workspace/lab-colors",
+                                         "CARGO_HOME=/cargo-home"
+                                     ],
+                   "commands":  [
+                                    "wasm-pack build --no-opt --release --target web --out-dir ../../packages/colors/pkg --out-name labcolors crates/labcolors-wasm --locked",
+                                    "local wasm=packages/colors/pkg/labcolors_bg.wasm",
+                                    "local optimized=packages/colors/pkg/labcolors_bg.wasm-opt.wasm",
+                                    "node \"$BINARYEN_ROOT/wasm-opt.js\" \"$wasm\" -o \"$optimized\" -Oz --enable-bulk-memory --enable-nontrapping-float-to-int",
+                                    "mv -- \"$optimized\" \"$wasm\""
+                                ]
+               },
+    "measurement":  {
+                        "source":  "github-actions-run-32186005935",
+                        "platform":  "linux-x64",
+                        "rawBytes":  376839
+                    },
+    "policy":  {
+                   "maxRawBytes":  376839,
+                   "basis":  "c7c-terminal-program-runtime",
+                   "gzip":  "diagnostic-only"
+               }
+}.Value.Length / 4) ]
+ '  ' * ({
+    "schemaVersion":  2,
+    "artifact":  "packages/colors/pkg/labcolors_bg.wasm",
+    "toolchain":  {
+                      "rust":  "1.96.0",
+                      "rustcCommit":  "ac68faa20",
+                      "wasmPack":  "0.13.1",
+                      "wasmBindgen":  "0.2.126",
+                      "target":  "wasm32-unknown-unknown",
+                      "cargoProfile":  "release",
+                      "node":  "24.14.0",
+                      "binaryenRelease":  "version_117",
+                      "binaryenNodeArchiveSha256":  "2d5a42f2d167a7cc2b4b6664c44c5ace1690d13db4f527324f052afbad461a07",
+                      "wasmOptFlags":  "-Oz --enable-bulk-memory --enable-nontrapping-float-to-int"
+                  },
+    "recipe":  {
+                   "rustPathRemap":  [
+                                         "GITHUB_WORKSPACE=/workspace/lab-colors",
+                                         "CARGO_HOME=/cargo-home"
+                                     ],
+                   "commands":  [
+                                    "wasm-pack build --no-opt --release --target web --out-dir ../../packages/colors/pkg --out-name labcolors crates/labcolors-wasm --locked",
+                                    "local wasm=packages/colors/pkg/labcolors_bg.wasm",
+                                    "local optimized=packages/colors/pkg/labcolors_bg.wasm-opt.wasm",
+                                    "node \"$BINARYEN_ROOT/wasm-opt.js\" \"$wasm\" -o \"$optimized\" -Oz --enable-bulk-memory --enable-nontrapping-float-to-int",
+                                    "mv -- \"$optimized\" \"$wasm\""
+                                ]
+               },
+    "measurement":  {
+                        "source":  "github-actions-run-32186005935",
+                        "platform":  "linux-x64",
+                        "rawBytes":  376839
+                    },
+    "policy":  {
+                   "maxRawBytes":  376839,
+                   "basis":  "c7c-terminal-program-runtime",
+                   "gzip":  "diagnostic-only"
+               }
+}.Value.Length / 4)    },
+ '  ' * ({
+    "schemaVersion":  2,
+    "artifact":  "packages/colors/pkg/labcolors_bg.wasm",
+    "toolchain":  {
+                      "rust":  "1.96.0",
+                      "rustcCommit":  "ac68faa20",
+                      "wasmPack":  "0.13.1",
+                      "wasmBindgen":  "0.2.126",
+                      "target":  "wasm32-unknown-unknown",
+                      "cargoProfile":  "release",
+                      "node":  "24.14.0",
+                      "binaryenRelease":  "version_117",
+                      "binaryenNodeArchiveSha256":  "2d5a42f2d167a7cc2b4b6664c44c5ace1690d13db4f527324f052afbad461a07",
+                      "wasmOptFlags":  "-Oz --enable-bulk-memory --enable-nontrapping-float-to-int"
+                  },
+    "recipe":  {
+                   "rustPathRemap":  [
+                                         "GITHUB_WORKSPACE=/workspace/lab-colors",
+                                         "CARGO_HOME=/cargo-home"
+                                     ],
+                   "commands":  [
+                                    "wasm-pack build --no-opt --release --target web --out-dir ../../packages/colors/pkg --out-name labcolors crates/labcolors-wasm --locked",
+                                    "local wasm=packages/colors/pkg/labcolors_bg.wasm",
+                                    "local optimized=packages/colors/pkg/labcolors_bg.wasm-opt.wasm",
+                                    "node \"$BINARYEN_ROOT/wasm-opt.js\" \"$wasm\" -o \"$optimized\" -Oz --enable-bulk-memory --enable-nontrapping-float-to-int",
+                                    "mv -- \"$optimized\" \"$wasm\""
+                                ]
+               },
+    "measurement":  {
+                        "source":  "github-actions-run-32186005935",
+                        "platform":  "linux-x64",
+                        "rawBytes":  376839
+                    },
+    "policy":  {
+                   "maxRawBytes":  376839,
+                   "basis":  "c7c-terminal-program-runtime",
+                   "gzip":  "diagnostic-only"
+               }
+}.Value.Length / 4) "measurement":  {
+ '  ' * ({
+    "schemaVersion":  2,
+    "artifact":  "packages/colors/pkg/labcolors_bg.wasm",
+    "toolchain":  {
+                      "rust":  "1.96.0",
+                      "rustcCommit":  "ac68faa20",
+                      "wasmPack":  "0.13.1",
+                      "wasmBindgen":  "0.2.126",
+                      "target":  "wasm32-unknown-unknown",
+                      "cargoProfile":  "release",
+                      "node":  "24.14.0",
+                      "binaryenRelease":  "version_117",
+                      "binaryenNodeArchiveSha256":  "2d5a42f2d167a7cc2b4b6664c44c5ace1690d13db4f527324f052afbad461a07",
+                      "wasmOptFlags":  "-Oz --enable-bulk-memory --enable-nontrapping-float-to-int"
+                  },
+    "recipe":  {
+                   "rustPathRemap":  [
+                                         "GITHUB_WORKSPACE=/workspace/lab-colors",
+                                         "CARGO_HOME=/cargo-home"
+                                     ],
+                   "commands":  [
+                                    "wasm-pack build --no-opt --release --target web --out-dir ../../packages/colors/pkg --out-name labcolors crates/labcolors-wasm --locked",
+                                    "local wasm=packages/colors/pkg/labcolors_bg.wasm",
+                                    "local optimized=packages/colors/pkg/labcolors_bg.wasm-opt.wasm",
+                                    "node \"$BINARYEN_ROOT/wasm-opt.js\" \"$wasm\" -o \"$optimized\" -Oz --enable-bulk-memory --enable-nontrapping-float-to-int",
+                                    "mv -- \"$optimized\" \"$wasm\""
+                                ]
+               },
+    "measurement":  {
+                        "source":  "github-actions-run-32186005935",
+                        "platform":  "linux-x64",
+                        "rawBytes":  376839
+                    },
+    "policy":  {
+                   "maxRawBytes":  376839,
+                   "basis":  "c7c-terminal-program-runtime",
+                   "gzip":  "diagnostic-only"
+               }
+}.Value.Length / 4) "source":  "github-actions-run-32186005935",
+ '  ' * ({
+    "schemaVersion":  2,
+    "artifact":  "packages/colors/pkg/labcolors_bg.wasm",
+    "toolchain":  {
+                      "rust":  "1.96.0",
+                      "rustcCommit":  "ac68faa20",
+                      "wasmPack":  "0.13.1",
+                      "wasmBindgen":  "0.2.126",
+                      "target":  "wasm32-unknown-unknown",
+                      "cargoProfile":  "release",
+                      "node":  "24.14.0",
+                      "binaryenRelease":  "version_117",
+                      "binaryenNodeArchiveSha256":  "2d5a42f2d167a7cc2b4b6664c44c5ace1690d13db4f527324f052afbad461a07",
+                      "wasmOptFlags":  "-Oz --enable-bulk-memory --enable-nontrapping-float-to-int"
+                  },
+    "recipe":  {
+                   "rustPathRemap":  [
+                                         "GITHUB_WORKSPACE=/workspace/lab-colors",
+                                         "CARGO_HOME=/cargo-home"
+                                     ],
+                   "commands":  [
+                                    "wasm-pack build --no-opt --release --target web --out-dir ../../packages/colors/pkg --out-name labcolors crates/labcolors-wasm --locked",
+                                    "local wasm=packages/colors/pkg/labcolors_bg.wasm",
+                                    "local optimized=packages/colors/pkg/labcolors_bg.wasm-opt.wasm",
+                                    "node \"$BINARYEN_ROOT/wasm-opt.js\" \"$wasm\" -o \"$optimized\" -Oz --enable-bulk-memory --enable-nontrapping-float-to-int",
+                                    "mv -- \"$optimized\" \"$wasm\""
+                                ]
+               },
+    "measurement":  {
+                        "source":  "github-actions-run-32186005935",
+                        "platform":  "linux-x64",
+                        "rawBytes":  376839
+                    },
+    "policy":  {
+                   "maxRawBytes":  376839,
+                   "basis":  "c7c-terminal-program-runtime",
+                   "gzip":  "diagnostic-only"
+               }
+}.Value.Length / 4) "platform":  "linux-x64",
+ '  ' * ({
+    "schemaVersion":  2,
+    "artifact":  "packages/colors/pkg/labcolors_bg.wasm",
+    "toolchain":  {
+                      "rust":  "1.96.0",
+                      "rustcCommit":  "ac68faa20",
+                      "wasmPack":  "0.13.1",
+                      "wasmBindgen":  "0.2.126",
+                      "target":  "wasm32-unknown-unknown",
+                      "cargoProfile":  "release",
+                      "node":  "24.14.0",
+                      "binaryenRelease":  "version_117",
+                      "binaryenNodeArchiveSha256":  "2d5a42f2d167a7cc2b4b6664c44c5ace1690d13db4f527324f052afbad461a07",
+                      "wasmOptFlags":  "-Oz --enable-bulk-memory --enable-nontrapping-float-to-int"
+                  },
+    "recipe":  {
+                   "rustPathRemap":  [
+                                         "GITHUB_WORKSPACE=/workspace/lab-colors",
+                                         "CARGO_HOME=/cargo-home"
+                                     ],
+                   "commands":  [
+                                    "wasm-pack build --no-opt --release --target web --out-dir ../../packages/colors/pkg --out-name labcolors crates/labcolors-wasm --locked",
+                                    "local wasm=packages/colors/pkg/labcolors_bg.wasm",
+                                    "local optimized=packages/colors/pkg/labcolors_bg.wasm-opt.wasm",
+                                    "node \"$BINARYEN_ROOT/wasm-opt.js\" \"$wasm\" -o \"$optimized\" -Oz --enable-bulk-memory --enable-nontrapping-float-to-int",
+                                    "mv -- \"$optimized\" \"$wasm\""
+                                ]
+               },
+    "measurement":  {
+                        "source":  "github-actions-run-32186005935",
+                        "platform":  "linux-x64",
+                        "rawBytes":  376839
+                    },
+    "policy":  {
+                   "maxRawBytes":  376839,
+                   "basis":  "c7c-terminal-program-runtime",
+                   "gzip":  "diagnostic-only"
+               }
+}.Value.Length / 4) "rawBytes":  376839
+ '  ' * ({
+    "schemaVersion":  2,
+    "artifact":  "packages/colors/pkg/labcolors_bg.wasm",
+    "toolchain":  {
+                      "rust":  "1.96.0",
+                      "rustcCommit":  "ac68faa20",
+                      "wasmPack":  "0.13.1",
+                      "wasmBindgen":  "0.2.126",
+                      "target":  "wasm32-unknown-unknown",
+                      "cargoProfile":  "release",
+                      "node":  "24.14.0",
+                      "binaryenRelease":  "version_117",
+                      "binaryenNodeArchiveSha256":  "2d5a42f2d167a7cc2b4b6664c44c5ace1690d13db4f527324f052afbad461a07",
+                      "wasmOptFlags":  "-Oz --enable-bulk-memory --enable-nontrapping-float-to-int"
+                  },
+    "recipe":  {
+                   "rustPathRemap":  [
+                                         "GITHUB_WORKSPACE=/workspace/lab-colors",
+                                         "CARGO_HOME=/cargo-home"
+                                     ],
+                   "commands":  [
+                                    "wasm-pack build --no-opt --release --target web --out-dir ../../packages/colors/pkg --out-name labcolors crates/labcolors-wasm --locked",
+                                    "local wasm=packages/colors/pkg/labcolors_bg.wasm",
+                                    "local optimized=packages/colors/pkg/labcolors_bg.wasm-opt.wasm",
+                                    "node \"$BINARYEN_ROOT/wasm-opt.js\" \"$wasm\" -o \"$optimized\" -Oz --enable-bulk-memory --enable-nontrapping-float-to-int",
+                                    "mv -- \"$optimized\" \"$wasm\""
+                                ]
+               },
+    "measurement":  {
+                        "source":  "github-actions-run-32186005935",
+                        "platform":  "linux-x64",
+                        "rawBytes":  376839
+                    },
+    "policy":  {
+                   "maxRawBytes":  376839,
+                   "basis":  "c7c-terminal-program-runtime",
+                   "gzip":  "diagnostic-only"
+               }
+}.Value.Length / 4) },
+ '  ' * ({
+    "schemaVersion":  2,
+    "artifact":  "packages/colors/pkg/labcolors_bg.wasm",
+    "toolchain":  {
+                      "rust":  "1.96.0",
+                      "rustcCommit":  "ac68faa20",
+                      "wasmPack":  "0.13.1",
+                      "wasmBindgen":  "0.2.126",
+                      "target":  "wasm32-unknown-unknown",
+                      "cargoProfile":  "release",
+                      "node":  "24.14.0",
+                      "binaryenRelease":  "version_117",
+                      "binaryenNodeArchiveSha256":  "2d5a42f2d167a7cc2b4b6664c44c5ace1690d13db4f527324f052afbad461a07",
+                      "wasmOptFlags":  "-Oz --enable-bulk-memory --enable-nontrapping-float-to-int"
+                  },
+    "recipe":  {
+                   "rustPathRemap":  [
+                                         "GITHUB_WORKSPACE=/workspace/lab-colors",
+                                         "CARGO_HOME=/cargo-home"
+                                     ],
+                   "commands":  [
+                                    "wasm-pack build --no-opt --release --target web --out-dir ../../packages/colors/pkg --out-name labcolors crates/labcolors-wasm --locked",
+                                    "local wasm=packages/colors/pkg/labcolors_bg.wasm",
+                                    "local optimized=packages/colors/pkg/labcolors_bg.wasm-opt.wasm",
+                                    "node \"$BINARYEN_ROOT/wasm-opt.js\" \"$wasm\" -o \"$optimized\" -Oz --enable-bulk-memory --enable-nontrapping-float-to-int",
+                                    "mv -- \"$optimized\" \"$wasm\""
+                                ]
+               },
+    "measurement":  {
+                        "source":  "github-actions-run-32186005935",
+                        "platform":  "linux-x64",
+                        "rawBytes":  376839
+                    },
+    "policy":  {
+                   "maxRawBytes":  376839,
+                   "basis":  "c7c-terminal-program-runtime",
+                   "gzip":  "diagnostic-only"
+               }
+}.Value.Length / 4) "policy":  {
+ '  ' * ({
+    "schemaVersion":  2,
+    "artifact":  "packages/colors/pkg/labcolors_bg.wasm",
+    "toolchain":  {
+                      "rust":  "1.96.0",
+                      "rustcCommit":  "ac68faa20",
+                      "wasmPack":  "0.13.1",
+                      "wasmBindgen":  "0.2.126",
+                      "target":  "wasm32-unknown-unknown",
+                      "cargoProfile":  "release",
+                      "node":  "24.14.0",
+                      "binaryenRelease":  "version_117",
+                      "binaryenNodeArchiveSha256":  "2d5a42f2d167a7cc2b4b6664c44c5ace1690d13db4f527324f052afbad461a07",
+                      "wasmOptFlags":  "-Oz --enable-bulk-memory --enable-nontrapping-float-to-int"
+                  },
+    "recipe":  {
+                   "rustPathRemap":  [
+                                         "GITHUB_WORKSPACE=/workspace/lab-colors",
+                                         "CARGO_HOME=/cargo-home"
+                                     ],
+                   "commands":  [
+                                    "wasm-pack build --no-opt --release --target web --out-dir ../../packages/colors/pkg --out-name labcolors crates/labcolors-wasm --locked",
+                                    "local wasm=packages/colors/pkg/labcolors_bg.wasm",
+                                    "local optimized=packages/colors/pkg/labcolors_bg.wasm-opt.wasm",
+                                    "node \"$BINARYEN_ROOT/wasm-opt.js\" \"$wasm\" -o \"$optimized\" -Oz --enable-bulk-memory --enable-nontrapping-float-to-int",
+                                    "mv -- \"$optimized\" \"$wasm\""
+                                ]
+               },
+    "measurement":  {
+                        "source":  "github-actions-run-32186005935",
+                        "platform":  "linux-x64",
+                        "rawBytes":  376839
+                    },
+    "policy":  {
+                   "maxRawBytes":  376839,
+                   "basis":  "c7c-terminal-program-runtime",
+                   "gzip":  "diagnostic-only"
+               }
+}.Value.Length / 4)    "maxRawBytes":  376839,
+ '  ' * ({
+    "schemaVersion":  2,
+    "artifact":  "packages/colors/pkg/labcolors_bg.wasm",
+    "toolchain":  {
+                      "rust":  "1.96.0",
+                      "rustcCommit":  "ac68faa20",
+                      "wasmPack":  "0.13.1",
+                      "wasmBindgen":  "0.2.126",
+                      "target":  "wasm32-unknown-unknown",
+                      "cargoProfile":  "release",
+                      "node":  "24.14.0",
+                      "binaryenRelease":  "version_117",
+                      "binaryenNodeArchiveSha256":  "2d5a42f2d167a7cc2b4b6664c44c5ace1690d13db4f527324f052afbad461a07",
+                      "wasmOptFlags":  "-Oz --enable-bulk-memory --enable-nontrapping-float-to-int"
+                  },
+    "recipe":  {
+                   "rustPathRemap":  [
+                                         "GITHUB_WORKSPACE=/workspace/lab-colors",
+                                         "CARGO_HOME=/cargo-home"
+                                     ],
+                   "commands":  [
+                                    "wasm-pack build --no-opt --release --target web --out-dir ../../packages/colors/pkg --out-name labcolors crates/labcolors-wasm --locked",
+                                    "local wasm=packages/colors/pkg/labcolors_bg.wasm",
+                                    "local optimized=packages/colors/pkg/labcolors_bg.wasm-opt.wasm",
+                                    "node \"$BINARYEN_ROOT/wasm-opt.js\" \"$wasm\" -o \"$optimized\" -Oz --enable-bulk-memory --enable-nontrapping-float-to-int",
+                                    "mv -- \"$optimized\" \"$wasm\""
+                                ]
+               },
+    "measurement":  {
+                        "source":  "github-actions-run-32186005935",
+                        "platform":  "linux-x64",
+                        "rawBytes":  376839
+                    },
+    "policy":  {
+                   "maxRawBytes":  376839,
+                   "basis":  "c7c-terminal-program-runtime",
+                   "gzip":  "diagnostic-only"
+               }
+}.Value.Length / 4)    "basis":  "c7c-terminal-program-runtime",
+ '  ' * ({
+    "schemaVersion":  2,
+    "artifact":  "packages/colors/pkg/labcolors_bg.wasm",
+    "toolchain":  {
+                      "rust":  "1.96.0",
+                      "rustcCommit":  "ac68faa20",
+                      "wasmPack":  "0.13.1",
+                      "wasmBindgen":  "0.2.126",
+                      "target":  "wasm32-unknown-unknown",
+                      "cargoProfile":  "release",
+                      "node":  "24.14.0",
+                      "binaryenRelease":  "version_117",
+                      "binaryenNodeArchiveSha256":  "2d5a42f2d167a7cc2b4b6664c44c5ace1690d13db4f527324f052afbad461a07",
+                      "wasmOptFlags":  "-Oz --enable-bulk-memory --enable-nontrapping-float-to-int"
+                  },
+    "recipe":  {
+                   "rustPathRemap":  [
+                                         "GITHUB_WORKSPACE=/workspace/lab-colors",
+                                         "CARGO_HOME=/cargo-home"
+                                     ],
+                   "commands":  [
+                                    "wasm-pack build --no-opt --release --target web --out-dir ../../packages/colors/pkg --out-name labcolors crates/labcolors-wasm --locked",
+                                    "local wasm=packages/colors/pkg/labcolors_bg.wasm",
+                                    "local optimized=packages/colors/pkg/labcolors_bg.wasm-opt.wasm",
+                                    "node \"$BINARYEN_ROOT/wasm-opt.js\" \"$wasm\" -o \"$optimized\" -Oz --enable-bulk-memory --enable-nontrapping-float-to-int",
+                                    "mv -- \"$optimized\" \"$wasm\""
+                                ]
+               },
+    "measurement":  {
+                        "source":  "github-actions-run-32186005935",
+                        "platform":  "linux-x64",
+                        "rawBytes":  376839
+                    },
+    "policy":  {
+                   "maxRawBytes":  376839,
+                   "basis":  "c7c-terminal-program-runtime",
+                   "gzip":  "diagnostic-only"
+               }
+}.Value.Length / 4)    "gzip":  "diagnostic-only"
+ '  ' * ({
+    "schemaVersion":  2,
+    "artifact":  "packages/colors/pkg/labcolors_bg.wasm",
+    "toolchain":  {
+                      "rust":  "1.96.0",
+                      "rustcCommit":  "ac68faa20",
+                      "wasmPack":  "0.13.1",
+                      "wasmBindgen":  "0.2.126",
+                      "target":  "wasm32-unknown-unknown",
+                      "cargoProfile":  "release",
+                      "node":  "24.14.0",
+                      "binaryenRelease":  "version_117",
+                      "binaryenNodeArchiveSha256":  "2d5a42f2d167a7cc2b4b6664c44c5ace1690d13db4f527324f052afbad461a07",
+                      "wasmOptFlags":  "-Oz --enable-bulk-memory --enable-nontrapping-float-to-int"
+                  },
+    "recipe":  {
+                   "rustPathRemap":  [
+                                         "GITHUB_WORKSPACE=/workspace/lab-colors",
+                                         "CARGO_HOME=/cargo-home"
+                                     ],
+                   "commands":  [
+                                    "wasm-pack build --no-opt --release --target web --out-dir ../../packages/colors/pkg --out-name labcolors crates/labcolors-wasm --locked",
+                                    "local wasm=packages/colors/pkg/labcolors_bg.wasm",
+                                    "local optimized=packages/colors/pkg/labcolors_bg.wasm-opt.wasm",
+                                    "node \"$BINARYEN_ROOT/wasm-opt.js\" \"$wasm\" -o \"$optimized\" -Oz --enable-bulk-memory --enable-nontrapping-float-to-int",
+                                    "mv -- \"$optimized\" \"$wasm\""
+                                ]
+               },
+    "measurement":  {
+                        "source":  "github-actions-run-32186005935",
+                        "platform":  "linux-x64",
+                        "rawBytes":  376839
+                    },
+    "policy":  {
+                   "maxRawBytes":  376839,
+                   "basis":  "c7c-terminal-program-runtime",
+                   "gzip":  "diagnostic-only"
+               }
+}.Value.Length / 4)    }
 }
