@@ -787,7 +787,9 @@ mod absence_law {
                     let mut found = false;
                     for j in (0..i).rev() {
                         let prev = lines[j].trim();
-                        if prev.starts_with("#[allow(dead_code") || prev.starts_with("#[expect(dead_code") {
+                        if prev.starts_with("#[allow(dead_code")
+                            || prev.starts_with("#[expect(dead_code")
+                        {
                             found = true;
                             break;
                         }
