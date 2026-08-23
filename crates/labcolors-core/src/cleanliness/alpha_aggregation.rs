@@ -89,21 +89,21 @@ pub(crate) fn aggregate_alpha_clean_evidence(
         });
     }
 
-    let (weighted_average, aggregated_score) = if total_weight_fp > 0 {
-        // Fixed-point division: (weighted_sum_fp / total_weight_fp) gives
-        // the score in the same scale. Round to nearest u16.
-        let raw = weighted_sum_fp / total_weight_fp;
-        // Clamp to u16 range to handle any rounding edge cases.
-        let wavg = raw.min(u64::from(u16::MAX)) as u16;
-        let agg = match policy {
-            AlphaAggregationPolicyV1::WeightedAverageWithFloor => wavg.max(worst_score),
-        };
-        (wavg, agg)
-    } else {
-        // All layers fully transparent: no visible content to assess.
-        // Return zero, not a default-clean. Floor does not apply because
-        // no layer contributes any visible signal to mask.
-        (0, 0)
+    let (weighted_average, aggregated_score) = match weighted_sum_fp.checked_div(total_weight_fp) {
+        Some(raw) => {
+            // Clamp to u16 range to handle any rounding edge cases.
+            let wavg = raw.min(u64::from(u16::MAX)) as u16;
+            let agg = match policy {
+                AlphaAggregationPolicyV1::WeightedAverageWithFloor => wavg.max(worst_score),
+            };
+            (wavg, agg)
+        }
+        None => {
+            // All layers fully transparent: no visible content to assess.
+            // Return zero, not a default-clean. Floor does not apply because
+            // no layer contributes any visible signal to mask.
+            (0, 0)
+        }
     };
 
     Some(AggregatedAlphaCleanEvidenceV1 {
