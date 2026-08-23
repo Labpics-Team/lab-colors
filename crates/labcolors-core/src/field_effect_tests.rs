@@ -40,19 +40,19 @@ fn pixel(red: u8, green: u8, blue: u8, alpha: u8) -> PremultipliedRgba8V1 {
     PremultipliedRgba8V1::try_new([red, green, blue, alpha]).unwrap()
 }
 
-fn premultiplied_raster<'a>(
+fn premultiplied_raster(
     identity: u64,
     extent: FieldExtentV1,
-    pixels: &'a [PremultipliedRgba8V1],
-) -> FieldRasterViewV1<'a> {
+    pixels: &[PremultipliedRgba8V1],
+) -> FieldRasterViewV1<'_> {
     FieldRasterViewV1::try_new(FieldRasterIdentityV1::new(identity), extent, pixels).unwrap()
 }
 
-fn opaque_raster<'a>(
+fn opaque_raster(
     identity: u64,
     extent: FieldExtentV1,
-    pixels: &'a [Srgb8],
-) -> OpaqueSrgb8RasterViewV1<'a> {
+    pixels: &[Srgb8],
+) -> OpaqueSrgb8RasterViewV1<'_> {
     OpaqueSrgb8RasterViewV1::try_new(FieldRasterIdentityV1::new(identity), extent, pixels).unwrap()
 }
 
@@ -60,11 +60,11 @@ fn screen_pixel(tint: [u8; 3], alpha: f64) -> EncodedSrgb8AlphaV1 {
     EncodedSrgb8AlphaV1::new(Srgb8::new(tint), FieldOpacityV1::try_new(alpha).unwrap())
 }
 
-fn screen_raster<'a>(
+fn screen_raster(
     identity: u64,
     extent: FieldExtentV1,
-    pixels: &'a [EncodedSrgb8AlphaV1],
-) -> EncodedSrgb8AlphaRasterViewV1<'a> {
+    pixels: &[EncodedSrgb8AlphaV1],
+) -> EncodedSrgb8AlphaRasterViewV1<'_> {
     EncodedSrgb8AlphaRasterViewV1::try_new(FieldRasterIdentityV1::new(identity), extent, pixels)
         .unwrap()
 }
@@ -109,15 +109,15 @@ fn scene_on(stream: u32, revision: u64) -> FieldSceneRevisionV1 {
     FieldSceneRevisionV1::mint_for_test(ObservationStreamId::new(stream), Revision::new(revision))
 }
 
-fn request<'a>(
+fn request(
     request_id: u64,
     extent: FieldExtentV1,
     dpr: DevicePixelRatioV1,
     capability: FieldRenderCapabilityV1,
     revision: u64,
     carrier_intent: CarrierIntentV1,
-    operation: FieldOperationV1<'a>,
-) -> FieldEvaluationRequestV1<'a> {
+    operation: FieldOperationV1<'_>,
+) -> FieldEvaluationRequestV1<'_> {
     request_at_head(
         request_id,
         extent,
@@ -129,15 +129,15 @@ fn request<'a>(
     )
 }
 
-fn request_at_head<'a>(
+fn request_at_head(
     request_id: u64,
     extent: FieldExtentV1,
     dpr: DevicePixelRatioV1,
     capability: FieldRenderCapabilityV1,
     scene_revision: FieldSceneRevisionV1,
     carrier_intent: CarrierIntentV1,
-    operation: FieldOperationV1<'a>,
-) -> FieldEvaluationRequestV1<'a> {
+    operation: FieldOperationV1<'_>,
+) -> FieldEvaluationRequestV1<'_> {
     FieldEvaluationRequestV1::try_new(
         FieldRequestIdV1::new(request_id),
         FieldOperatorInstanceIdV1::new(50),
