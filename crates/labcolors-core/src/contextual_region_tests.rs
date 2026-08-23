@@ -807,36 +807,33 @@ fn tampered_knot_bit_produces_different_definition_digest() {
     ];
 
     // For each knot index, flip one bit in each of the four coordinates.
-    for knot_index in 0..knots.len() {
-        for tampered_knots in [
-            {
-                let mut k = knots;
-                k[knot_index].tone ^= 1;
-                k
-            },
-            {
-                let mut k = knots;
-                k[knot_index].center_a ^= 1;
-                k
-            },
-            {
-                let mut k = knots;
-                k[knot_index].center_b ^= 1;
-                k
-            },
-            {
-                let mut k = knots;
-                k[knot_index].radius_squared ^= 1;
-                k
-            },
-        ] {
+    // Fields are private and there are no accessors on TubeKnotBitsV1, so we
+    // reconstruct from the known raw bit constants used to build `knots`.
+    let raw_knots: [(u64, u64, u64, u64); 2] = [
+        (ONE, POSITIVE_ZERO, POSITIVE_ZERO, FOUR),
+        (TWO, POSITIVE_ZERO, POSITIVE_ZERO, FOUR),
+    ];
+    for knot_index in 0..raw_knots.len() {
+        let (t, ca, cb, rs) = raw_knots[knot_index];
+        let tampered_variants = [
+            TubeKnotBitsV1::new(t ^ 1, ca, cb, rs),
+            TubeKnotBitsV1::new(t, ca ^ 1, cb, rs),
+            TubeKnotBitsV1::new(t, ca, cb ^ 1, rs),
+            TubeKnotBitsV1::new(t, ca, cb, rs ^ 1),
+        ];
+        for tampered_knot in tampered_variants {
+            let mut tampered_knots = knots;
+            tampered_knots[knot_index] = tampered_knot;
             let tampered_region = PiecewiseLinearCartesianTubeV1::try_from_bits(
                 Shape2BitsV1::new(ONE, POSITIVE_ZERO, ONE),
                 &tampered_knots,
             )
             .unwrap();
             assert_ne!(
-                ContextualRegionFamilyProviderV1::definition_digest(base_pipeline, &tampered_region),
+                ContextualRegionFamilyProviderV1::definition_digest(
+                    base_pipeline,
+                    &tampered_region
+                ),
                 baseline_digest,
                 "single-bit knot tampering at index {knot_index} must change definition_digest",
             );
@@ -854,40 +851,50 @@ fn tampered_knot_bit_produces_different_definition_digest() {
 #[test]
 fn tampered_transcript_violating_invariants_fails_construction_gate() {
     // Non-finite shape coordinate → rejected.
-    assert!(PiecewiseLinearCartesianTubeV1::try_from_bits(
-        Shape2BitsV1::new(f64::NAN.to_bits(), POSITIVE_ZERO, ONE),
-        &[knot(ONE, POSITIVE_ZERO, POSITIVE_ZERO, FOUR)],
-    )
-    .is_err());
+    assert!(
+        PiecewiseLinearCartesianTubeV1::try_from_bits(
+            Shape2BitsV1::new(f64::NAN.to_bits(), POSITIVE_ZERO, ONE),
+            &[knot(ONE, POSITIVE_ZERO, POSITIVE_ZERO, FOUR)],
+        )
+        .is_err()
+    );
 
     // Negative zero tone → rejected.
-    assert!(PiecewiseLinearCartesianTubeV1::try_from_bits(
-        Shape2BitsV1::new(ONE, POSITIVE_ZERO, ONE),
-        &[knot(NEGATIVE_ZERO, POSITIVE_ZERO, POSITIVE_ZERO, FOUR)],
-    )
-    .is_err());
+    assert!(
+        PiecewiseLinearCartesianTubeV1::try_from_bits(
+            Shape2BitsV1::new(ONE, POSITIVE_ZERO, ONE),
+            &[knot(NEGATIVE_ZERO, POSITIVE_ZERO, POSITIVE_ZERO, FOUR)],
+        )
+        .is_err()
+    );
 
     // Non-strictly-increasing tone sequence → rejected.
-    assert!(PiecewiseLinearCartesianTubeV1::try_from_bits(
-        Shape2BitsV1::new(ONE, POSITIVE_ZERO, ONE),
-        &[
-            knot(TWO, POSITIVE_ZERO, POSITIVE_ZERO, FOUR),
-            knot(ONE, POSITIVE_ZERO, POSITIVE_ZERO, FOUR),
-        ],
-    )
-    .is_err());
+    assert!(
+        PiecewiseLinearCartesianTubeV1::try_from_bits(
+            Shape2BitsV1::new(ONE, POSITIVE_ZERO, ONE),
+            &[
+                knot(TWO, POSITIVE_ZERO, POSITIVE_ZERO, FOUR),
+                knot(ONE, POSITIVE_ZERO, POSITIVE_ZERO, FOUR),
+            ],
+        )
+        .is_err()
+    );
 
     // Negative radius_squared → rejected.
-    assert!(PiecewiseLinearCartesianTubeV1::try_from_bits(
-        Shape2BitsV1::new(ONE, POSITIVE_ZERO, ONE),
-        &[knot(ONE, POSITIVE_ZERO, POSITIVE_ZERO, NEGATIVE_ONE)],
-    )
-    .is_err());
+    assert!(
+        PiecewiseLinearCartesianTubeV1::try_from_bits(
+            Shape2BitsV1::new(ONE, POSITIVE_ZERO, ONE),
+            &[knot(ONE, POSITIVE_ZERO, POSITIVE_ZERO, NEGATIVE_ONE)],
+        )
+        .is_err()
+    );
 
     // Non-positive-definite shape (g00·g11 ≤ g01²) → rejected.
-    assert!(PiecewiseLinearCartesianTubeV1::try_from_bits(
-        Shape2BitsV1::new(ONE, TWO, ONE),
-        &[knot(ONE, POSITIVE_ZERO, POSITIVE_ZERO, FOUR)],
-    )
-    .is_err());
+    assert!(
+        PiecewiseLinearCartesianTubeV1::try_from_bits(
+            Shape2BitsV1::new(ONE, TWO, ONE),
+            &[knot(ONE, POSITIVE_ZERO, POSITIVE_ZERO, FOUR)],
+        )
+        .is_err()
+    );
 }
