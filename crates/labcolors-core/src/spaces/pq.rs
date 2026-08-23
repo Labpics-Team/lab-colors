@@ -56,6 +56,7 @@ impl AbsoluteLuminanceV1 {
     }
 
     /// Construct without validation. Caller guarantees the value is in range.
+    #[expect(dead_code)] // Reserved for PR4/PR5 hot-path construction where invariant is proven upstream
     pub fn new_unchecked(value: f64) -> Self {
         debug_assert!(
             !value.is_nan() && (PQ_MIN_LUMINANCE..=PQ_MAX_LUMINANCE).contains(&value),
