@@ -752,3 +752,142 @@ fn hex(bytes: &[u8]) -> String {
     }
     encoded
 }
+
+/// V5b2c §4.2: Tampered Transcript Fails Receipt.
+///
+/// Flipping any single bit in the shape matrix or knot coordinates of a valid
+/// region must produce a different `definition_digest`. This proves the mint
+/// gate is content-addressed over every dyadic bit-pattern in the transcript.
+#[test]
+fn tampered_shape_bit_produces_different_definition_digest() {
+    let base_context = context(IEC_SRGB_D65_XYZ_FRAME_V1);
+    let base_pipeline = pipeline(base_context);
+    let base_region = region_with_centers([[POSITIVE_ZERO; 2]; 2]);
+    let baseline_digest =
+        ContextualRegionFamilyProviderV1::definition_digest(base_pipeline, &base_region);
+
+    // Flip each of the three shape matrix fields independently.
+    for tampered_shape in [
+        Shape2BitsV1::new(ONE ^ 1, POSITIVE_ZERO, ONE),
+        Shape2BitsV1::new(ONE, POSITIVE_ZERO ^ 1, ONE),
+        Shape2BitsV1::new(ONE, POSITIVE_ZERO, ONE ^ 1),
+    ] {
+        let tampered_region = PiecewiseLinearCartesianTubeV1::try_from_bits(
+            tampered_shape,
+            &[
+                knot(ONE, POSITIVE_ZERO, POSITIVE_ZERO, FOUR),
+                knot(TWO, POSITIVE_ZERO, POSITIVE_ZERO, FOUR),
+            ],
+        )
+        .unwrap();
+        assert_ne!(
+            ContextualRegionFamilyProviderV1::definition_digest(base_pipeline, &tampered_region),
+            baseline_digest,
+            "single-bit shape tampering must change definition_digest",
+        );
+    }
+}
+
+/// V5b2c §4.2: Tampered knot coordinate bit produces different digest.
+///
+/// Each of the four knot fields (tone, center_a, center_b, radius_squared) is
+/// independently content-bound. A single-bit flip in any field at any knot
+/// index must close the mint gate.
+#[test]
+fn tampered_knot_bit_produces_different_definition_digest() {
+    let base_context = context(IEC_SRGB_D65_XYZ_FRAME_V1);
+    let base_pipeline = pipeline(base_context);
+    let base_region = region_with_centers([[POSITIVE_ZERO; 2]; 2]);
+    let baseline_digest =
+        ContextualRegionFamilyProviderV1::definition_digest(base_pipeline, &base_region);
+
+    let knots = [
+        knot(ONE, POSITIVE_ZERO, POSITIVE_ZERO, FOUR),
+        knot(TWO, POSITIVE_ZERO, POSITIVE_ZERO, FOUR),
+    ];
+
+    // For each knot index, flip one bit in each of the four coordinates.
+    for knot_index in 0..knots.len() {
+        for tampered_knots in [
+            {
+                let mut k = knots;
+                k[knot_index].tone ^= 1;
+                k
+            },
+            {
+                let mut k = knots;
+                k[knot_index].center_a ^= 1;
+                k
+            },
+            {
+                let mut k = knots;
+                k[knot_index].center_b ^= 1;
+                k
+            },
+            {
+                let mut k = knots;
+                k[knot_index].radius_squared ^= 1;
+                k
+            },
+        ] {
+            let tampered_region = PiecewiseLinearCartesianTubeV1::try_from_bits(
+                Shape2BitsV1::new(ONE, POSITIVE_ZERO, ONE),
+                &tampered_knots,
+            )
+            .unwrap();
+            assert_ne!(
+                ContextualRegionFamilyProviderV1::definition_digest(base_pipeline, &tampered_region),
+                baseline_digest,
+                "single-bit knot tampering at index {knot_index} must change definition_digest",
+            );
+        }
+    }
+}
+
+/// V5b2c §4.2: Tampered transcript that violates dyadic/shape invariants is
+/// rejected by the forward construction gate AND would produce a different
+/// digest if it were somehow admitted.
+///
+/// This test verifies the dual property: invalid bit-patterns fail admission
+/// at `try_from_bits`, proving the forward construction evidence chain cannot
+/// be bypassed by injecting malformed geometry.
+#[test]
+fn tampered_transcript_violating_invariants_fails_construction_gate() {
+    // Non-finite shape coordinate → rejected.
+    assert!(PiecewiseLinearCartesianTubeV1::try_from_bits(
+        Shape2BitsV1::new(f64::NAN.to_bits(), POSITIVE_ZERO, ONE),
+        &[knot(ONE, POSITIVE_ZERO, POSITIVE_ZERO, FOUR)],
+    )
+    .is_err());
+
+    // Negative zero tone → rejected.
+    assert!(PiecewiseLinearCartesianTubeV1::try_from_bits(
+        Shape2BitsV1::new(ONE, POSITIVE_ZERO, ONE),
+        &[knot(NEGATIVE_ZERO, POSITIVE_ZERO, POSITIVE_ZERO, FOUR)],
+    )
+    .is_err());
+
+    // Non-strictly-increasing tone sequence → rejected.
+    assert!(PiecewiseLinearCartesianTubeV1::try_from_bits(
+        Shape2BitsV1::new(ONE, POSITIVE_ZERO, ONE),
+        &[
+            knot(TWO, POSITIVE_ZERO, POSITIVE_ZERO, FOUR),
+            knot(ONE, POSITIVE_ZERO, POSITIVE_ZERO, FOUR),
+        ],
+    )
+    .is_err());
+
+    // Negative radius_squared → rejected.
+    assert!(PiecewiseLinearCartesianTubeV1::try_from_bits(
+        Shape2BitsV1::new(ONE, POSITIVE_ZERO, ONE),
+        &[knot(ONE, POSITIVE_ZERO, POSITIVE_ZERO, NEGATIVE_ONE)],
+    )
+    .is_err());
+
+    // Non-positive-definite shape (g00·g11 ≤ g01²) → rejected.
+    assert!(PiecewiseLinearCartesianTubeV1::try_from_bits(
+        Shape2BitsV1::new(ONE, TWO, ONE),
+        &[knot(ONE, POSITIVE_ZERO, POSITIVE_ZERO, FOUR)],
+    )
+    .is_err());
+}

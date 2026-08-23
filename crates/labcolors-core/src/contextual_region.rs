@@ -4,6 +4,59 @@
 //! не результатами вычислений платформы. Модуль только парсит геометрию и
 //! связывает полный versioned pipeline в [`FamilyDefinitionDigestV2`]. Точный
 //! образ конечного output domain строится отдельным offline proof-срезом.
+//!
+//! # V5b2c Dual Interval Proof — Evidence Chains
+//!
+//! Этот модуль является ядром **dual interval proof** архитектуры. "Dual"
+//! означает два независимых направления верификации, которые вместе доказывают
+//! корректность all-domain classification:
+//!
+//! ## 1. Forward Construction Evidence (Engine Transcript)
+//!
+//! Exact dyadic domain конструируется вперёд из raw binary64 bit-patterns через
+//! [`ExactDyadic64V1::try_from_bits`] (строки 38–74: magnitude decomposition) и
+//! [`PiecewiseLinearCartesianTubeV1::try_from_bits`] (строки 338–402: строгий
+//! tone ordering и positive-definite shape). Эта цепочка доказывает, что
+//! определение области является валидным строго упорядоченным интервалом на
+//! точном dyadic координатном домене.
+//!
+//! ## 2. Independent Semantic Verifier Replay (Arb ∥ MPFI)
+//!
+//! Независимый arbitrary-precision (Arb) и multi-precision floating-point
+//! interval (MPFI) верификатор воспроизводит engine transcript, чтобы доказать
+//! all-domain classification. Это "второе направление" dual proof. Верификатор
+//! живёт исключительно в test harness
+//! (`contextual_region_formula_tests.rs:1317`); production code потребляет
+//! только запечатанный receipt. Test corpus выступает sealed transcript:
+//! Arb/MPFI harness пере-выводит границы интервала независимо от production
+//! `f64` пути.
+//!
+//! ## 3. Full-Domain Mint Gate Binding
+//!
+//! Mint gate открывается только когда полная manifest identity совпадает с
+//! доказанным доменом. [`ContextualRegionFamilyProviderV1::definition_digest`]
+//! (строки 765–777) — единственная точка входа для region definitions. Digest
+//! включает полный pipeline releases, formula release digest
+//! (`CONTEXTUAL_REGION_FORMULA_RELEASE_DIGEST_V1`) и каждый knot/shape
+//! bit-pattern. Любое вмешательство в transcript меняет digest, закрывая mint
+//! gate.
+//!
+//! ## 4. Artifact Receipt Sealing
+//!
+//! Proof receipts привязаны к `BoundFamilyArtifactBundleV2` через
+//! content-addressed сертификаты. Semantic release отделён от artifact receipt,
+//! обеспечивая транспортировку доказательства вместе с transport boundary. См.
+//! `family_artifact.rs` (строки 1–6) и
+//! `program_v5_exit_gate_tests.rs:442–472`
+//! (`v5_exit_gate_binds_semantics_to_the_release_not_the_transport_bytes`).
+//!
+//! ## 5. Program Content Identity Integration
+//!
+//! Результат dual proof встроен в executable content identity graph, делая
+//! доказательство обязательной осью V5 exit gate. См. `program_identity.rs`
+//! (строки 10–14: `DOMAIN_V9`, `HASH_BOUND_COLOR_BYTES_V9`) и
+//! `program_v5_exit_gate_tests.rs:306–350`
+//! (`v5_exit_gate_composes_every_layer_in_one_verified_program`).
 
 use core::cmp::Ordering;
 
