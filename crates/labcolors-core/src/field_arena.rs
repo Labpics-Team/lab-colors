@@ -153,10 +153,6 @@ pub(crate) struct FieldRasterArenaSlotV1(u8);
 impl FieldRasterArenaSlotV1 {
     const ALL: [Self; FIELD_RASTER_ARENA_SLOT_COUNT_V1] = [Self(0), Self(1), Self(2)];
 
-    #[allow(
-        dead_code,
-        reason = "FieldRasterArenaSlotV1::index is reserved for PR4 ArenaLifecycleCoordinator diagnostics"
-    )]
     pub(crate) const fn index(self) -> usize {
         self.0 as usize
     }
@@ -174,26 +170,14 @@ pub(crate) struct FieldRasterBackingV1 {
 }
 
 impl FieldRasterBackingV1 {
-    #[allow(
-        dead_code,
-        reason = "FieldRasterBackingV1 accessors are reserved for downstream field evaluation consumers"
-    )]
     pub(crate) const fn arena_slot(&self) -> FieldRasterArenaSlotV1 {
         self.arena_slot
     }
 
-    #[allow(
-        dead_code,
-        reason = "FieldRasterBackingV1 accessors are reserved for downstream field evaluation consumers"
-    )]
     pub(crate) const fn extent(&self) -> FieldExtentV1 {
         self.extent
     }
 
-    #[allow(
-        dead_code,
-        reason = "FieldRasterBackingV1 accessors are reserved for downstream field evaluation consumers"
-    )]
     pub(crate) fn buffer(&self) -> &[PremultipliedRgba8V1] {
         &self.buffer
     }
@@ -206,14 +190,9 @@ impl FieldRasterBackingV1 {
 #[derive(Debug)]
 pub(crate) struct FieldRasterArenaPoolV1 {
     slots: [Rc<FieldRasterBackingV1>; FIELD_RASTER_ARENA_SLOT_COUNT_V1],
-    high_water_mark: usize,
 }
 
 impl FieldRasterArenaPoolV1 {
-    #[allow(
-        dead_code,
-        reason = "FieldRasterArenaPoolV1 is staged infrastructure before downstream field evaluation integration"
-    )]
     pub(crate) fn new(extent: FieldExtentV1) -> Self {
         let pixel_count = (extent.width() as usize) * (extent.height() as usize);
         Self {
@@ -224,7 +203,6 @@ impl FieldRasterArenaPoolV1 {
                     buffer: vec![PremultipliedRgba8V1::TRANSPARENT; pixel_count],
                 })
             }),
-            high_water_mark: 0,
         }
     }
 
@@ -235,65 +213,20 @@ impl FieldRasterArenaPoolV1 {
     ///
     /// Returns `FieldEvaluationErrorV1::ArenaExhausted` if all three slots
     /// are currently borrowed (Rc strong count > 1).
-    #[allow(
-        dead_code,
-        reason = "FieldRasterArenaPoolV1 is staged infrastructure before downstream field evaluation integration"
-    )]
     pub(crate) fn materialize_into(
         &mut self,
         materialize: impl FnOnce(&mut [PremultipliedRgba8V1]) -> Result<(), FieldEvaluationErrorV1>,
     ) -> Result<Rc<FieldRasterBackingV1>, FieldEvaluationErrorV1> {
-        for (retained, slot_index) in (0..FIELD_RASTER_ARENA_SLOT_COUNT_V1).enumerate() {
+        for slot_index in 0..FIELD_RASTER_ARENA_SLOT_COUNT_V1 {
             let Some(backing) = Rc::get_mut(&mut self.slots[slot_index]) else {
                 continue;
             };
             materialize(&mut backing.buffer)?;
-            let current_retained = retained + 1;
-            if current_retained > self.high_water_mark {
-                self.high_water_mark = current_retained;
-            }
             return Ok(Rc::clone(&self.slots[slot_index]));
         }
         Err(FieldEvaluationErrorV1::ArenaExhausted {
             slot_count: FIELD_RASTER_ARENA_SLOT_COUNT_V1,
         })
-    }
-
-    /// Resets the pool to a new extent, preserving slot allocations where possible.
-    ///
-    /// Called by `ArenaLifecycleCoordinatorV1::reset_all` during atomic
-    /// lifecycle transitions. If the extent matches the current extent,
-    /// buffers are cleared in place. If the extent changes, buffers are
-    /// reallocated to the new size.
-    pub(crate) fn reset_extent(&mut self, new_extent: FieldExtentV1) {
-        let new_pixel_count = (new_extent.width() as usize) * (new_extent.height() as usize);
-        for slot in &mut self.slots {
-            // We cannot use Rc::get_mut here because release_all may have
-            // already been called or slots may be uniquely owned.
-            // Instead, we replace the entire Rc with a fresh one.
-            // This is acceptable because reset_extent is only called during
-            // coordinator-managed transitions where exclusive access is guaranteed.
-            *slot = Rc::new(FieldRasterBackingV1 {
-                arena_slot: slot.arena_slot,
-                extent: new_extent,
-                buffer: vec![PremultipliedRgba8V1::TRANSPARENT; new_pixel_count],
-            });
-        }
-    }
-
-    /// Releases all externally-held Rc handles by replacing the slot array
-    /// with fresh backings at the current extent. After this call, all slots
-    /// are uniquely owned (strong_count == 1).
-    pub(crate) fn release_all(&mut self) {
-        let extent = self.slots[0].extent;
-        let pixel_count = (extent.width() as usize) * (extent.height() as usize);
-        for (idx, slot) in self.slots.iter_mut().enumerate() {
-            *slot = Rc::new(FieldRasterBackingV1 {
-                arena_slot: FieldRasterArenaSlotV1::ALL[idx],
-                extent,
-                buffer: vec![PremultipliedRgba8V1::TRANSPARENT; pixel_count],
-            });
-        }
     }
 }
 
@@ -358,6 +291,7 @@ mod tests {
         let pool = FieldRasterArenaPoolV1::new(extent);
         assert_eq!(pool.slots[0].buffer.len(), 3840 * 2160);
     }
+
     // -----------------------------------------------------------------------
     // O-13 PR2: FieldArenaPoolV1 tests
     // -----------------------------------------------------------------------

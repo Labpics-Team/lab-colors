@@ -193,23 +193,6 @@ mod generic_boundary_tests;
 )]
 pub(crate) mod observation;
 
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "ReportArenaPoolV1 is staged V7 infrastructure before PR4 wires it into ProgramSession"
-    )
-)]
-pub(crate) mod report_arena;
-
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "ArenaLifecycleCoordinatorV1 is staged V7 infrastructure before downstream Session integration"
-    )
-)]
-pub(crate) mod arena_lifecycle;
 #[cfg(test)]
 mod observation_tests;
 

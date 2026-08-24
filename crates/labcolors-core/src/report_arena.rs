@@ -124,35 +124,6 @@ impl ReportArenaPoolV1 {
     pub(crate) const fn high_water_mark(&self) -> usize {
         self.high_water_mark
     }
-
-    /// Clears all report outputs, retaining Vec capacity for zero-alloc reuse.
-    ///
-    /// Called by `ArenaLifecycleCoordinatorV1::reset_all` during atomic
-    /// lifecycle transitions. Unlike `release_all`, this does not replace
-    /// Rc handles — it clears payloads in place when slots are uniquely owned.
-    pub(crate) fn reset(&mut self) {
-        for slot in &mut self.slots {
-            if let Some(backing) = Rc::get_mut(slot) {
-                backing.outputs.clear();
-            }
-            // If a slot is externally retained, we skip it. The coordinator
-            // guarantees exclusive access during reset_all, so this branch
-            // should never execute in production. If it does, the generation
-            // counter still increments, making the stale handle detectable.
-        }
-    }
-
-    /// Releases all externally-held Rc handles by replacing the slot array
-    /// with fresh empty backings. After this call, all slots are uniquely
-    /// owned (strong_count == 1).
-    pub(crate) fn release_all(&mut self) {
-        for (idx, slot) in self.slots.iter_mut().enumerate() {
-            *slot = Rc::new(ReportBackingV1 {
-                arena_slot: ReportArenaSlotV1::ALL[idx],
-                outputs: Vec::new(),
-            });
-        }
-    }
 }
 
 #[cfg(test)]
