@@ -91,9 +91,13 @@ fn observed_white() -> ObservationUpdateInput {
 }
 
 fn observed_backdrops(backdrops: &[[u8; 3]]) -> ObservationUpdateInput {
+    observed_backdrops_at(1, backdrops)
+}
+
+fn observed_backdrops_at(revision: u64, backdrops: &[[u8; 3]]) -> ObservationUpdateInput {
     ObservationUpdateInput {
         stream: STREAM,
-        revision: Revision::new(1),
+        revision: Revision::new(revision),
         payload: ObservationPayloadInput::Scenarios(ObservedScenarioSetInput {
             scenarios: backdrops
                 .iter()
@@ -2462,6 +2466,63 @@ fn historical_evidence_identity_probe_rejects_recreated_equal_certificates() {
         historical_evidence_identities(recreated_projection),
         "the probe must reject value-equivalent evidence recreated in another Session",
     );
+}
+
+#[test]
+fn retired_production_slots_retain_high_water_capacity_without_reallocation() {
+    let compiled = finite_program([[0; 3], [0x80; 3]]);
+    let mut session = compiled.instantiate(STREAM).unwrap();
+    let ready_n = [[0xFF; 3], [0xFE; 3]];
+    let conflict_n = [[0xFF; 3], [0; 3]];
+    let ready_n_plus_one = [[0xFF; 3], [0xFE; 3], [0xFD; 3]];
+    let conflict_n_plus_one = [[0xFF; 3], [0; 3], [0x80; 3]];
+
+    session
+        .commit(observed_backdrops_at(1, &ready_n))
+        .expect("slot 0 warm-up must commit");
+    session
+        .commit(observed_backdrops_at(2, &conflict_n))
+        .expect("slot 1 warm-up must retain cause and previous");
+    session
+        .commit(observed_backdrops_at(3, &ready_n))
+        .expect("slot 2 warm-up must replace the failed state");
+
+    for (revision, shape) in [
+        (4, ready_n_plus_one.as_slice()),
+        (5, conflict_n_plus_one.as_slice()),
+        (6, ready_n_plus_one.as_slice()),
+    ] {
+        session
+            .commit(observed_backdrops_at(revision, shape))
+            .expect("the first N+1 pass may grow each retired slot");
+    }
+    let warmed_updates = [
+        observed_backdrops_at(7, &ready_n_plus_one),
+        observed_backdrops_at(8, &conflict_n_plus_one),
+        observed_backdrops_at(9, &ready_n_plus_one),
+    ];
+
+    let (reused_slots, allocations) = crate::test_support::measured_allocations(|| {
+        warmed_updates.map(|update| {
+            let state = session
+                .commit(update)
+                .expect("the second N+1 pass must reuse retained capacity");
+            match state {
+                SessionState::Ready { current } => {
+                    current.report().observation().arena_slot().index()
+                }
+                SessionState::Failed { cause, .. } => {
+                    cause.report().observation().arena_slot().index()
+                }
+                SessionState::Waiting | SessionState::Stale { .. } => {
+                    panic!("an observed update must retain its report")
+                }
+            }
+        })
+    });
+
+    assert_eq!(allocations, 0);
+    assert_eq!(reused_slots, [0, 1, 2]);
 }
 
 #[test]
