@@ -37,6 +37,68 @@ const WCAG22_CONSTRAINT_SOURCE: &str = include_str!("constraints/wcag22.rs");
 const GLOW_SOURCE: &str = include_str!("glow.rs");
 const FIELD_EFFECT_SOURCE: &str = include_str!("field_effect.rs");
 
+fn production_contains_retired_placeholder_owner(source: &str, owner: &str) -> bool {
+    let syntax = source_scanner::production_syntax_lines(source)
+        .into_iter()
+        .map(|(_, line)| line)
+        .collect::<Vec<_>>()
+        .join("\n");
+    let tokens = syntax.split_whitespace().collect::<Vec<_>>();
+    tokens.windows(2).any(|pair| {
+        let declared = pair[1].strip_prefix("r#").unwrap_or(pair[1]);
+        pair[0] == "struct"
+            && declared
+                .strip_prefix(owner)
+                .is_some_and(|suffix| suffix.is_empty() || suffix.starts_with(['<', '{', '(', ';']))
+    })
+}
+
+#[test]
+fn aud01_disconnected_placeholder_owners_are_absent() {
+    for retired_owner in [
+        "FieldArenaPoolV1",
+        "FieldRasterArenaPoolV1",
+        "ReportArenaPoolV1",
+    ] {
+        let definitions = rust_sources()
+            .into_iter()
+            .filter(|(_, source)| {
+                production_contains_retired_placeholder_owner(source, retired_owner)
+            })
+            .map(|(path, _)| path)
+            .collect::<Vec<_>>();
+        assert!(
+            definitions.is_empty(),
+            "AUD-01 retired placeholder owner `{retired_owner}` reappeared in {definitions:?}"
+        );
+    }
+}
+
+#[test]
+fn aud01_owner_guard_distinguishes_declarations_from_non_production_lookalikes() {
+    for declaration in [
+        ("struct FieldArenaPoolV1;", "FieldArenaPoolV1"),
+        ("struct r#FieldRasterArenaPoolV1;", "FieldRasterArenaPoolV1"),
+        ("struct r#ReportArenaPoolV1<T>(T);", "ReportArenaPoolV1"),
+    ] {
+        assert!(production_contains_retired_placeholder_owner(
+            declaration.0,
+            declaration.1
+        ));
+    }
+    for harmless in [
+        "// struct FieldArenaPoolV1;",
+        "const NOTE: &str = \"struct FieldArenaPoolV1;\";",
+        "#[cfg(test)]\nstruct FieldArenaPoolV1;",
+        "struct NewFieldArenaPoolV1Factory;",
+    ] {
+        assert!(!production_contains_retired_placeholder_owner(
+            harmless,
+            "FieldArenaPoolV1"
+        ));
+    }
+}
+
 #[test]
 fn w5_removes_legacy_wcag_authority_from_the_solver() {
     let solver = normalized_production_code(SOLVE_SOURCE);
@@ -578,7 +640,7 @@ fn compile_fail_scanner_rejects_live_code_between_document_fences() {
     );
 }
 
-fn production_rust_sources() -> Vec<(String, String)> {
+fn rust_sources() -> Vec<(String, String)> {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src");
     let mut pending = vec![root.clone()];
     let mut sources = Vec::new();
@@ -590,12 +652,7 @@ fn production_rust_sources() -> Vec<(String, String)> {
                 pending.push(path);
                 continue;
             }
-            let is_production_rust = path.extension() == Some(OsStr::new("rs"))
-                && !path
-                    .file_name()
-                    .and_then(OsStr::to_str)
-                    .is_some_and(|name| name.ends_with("_tests.rs"));
-            if !is_production_rust {
+            if path.extension() != Some(OsStr::new("rs")) {
                 continue;
             }
             let relative = path
@@ -610,6 +667,13 @@ fn production_rust_sources() -> Vec<(String, String)> {
     }
     sources.sort_unstable_by(|left, right| left.0.cmp(&right.0));
     sources
+}
+
+fn production_rust_sources() -> Vec<(String, String)> {
+    rust_sources()
+        .into_iter()
+        .filter(|(path, _)| !path.ends_with("_tests.rs"))
+        .collect()
 }
 
 #[test]

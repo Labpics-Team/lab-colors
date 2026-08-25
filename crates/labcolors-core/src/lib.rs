@@ -23,7 +23,6 @@ pub(crate) mod evaluator_registry;
 mod family;
 mod family_artifact;
 mod family_definition_binding;
-pub(crate) mod field_arena;
 pub(crate) mod field_effect;
 #[cfg(test)]
 mod field_effect_tests;
