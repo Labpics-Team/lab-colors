@@ -38,20 +38,21 @@ const GLOW_SOURCE: &str = include_str!("glow.rs");
 const FIELD_EFFECT_SOURCE: &str = include_str!("field_effect.rs");
 
 #[test]
-fn aud01_disconnected_placeholder_arenas_are_absent() {
-    let source_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src");
-    for retired_module in ["field_arena.rs", "report_arena.rs"] {
+fn aud01_disconnected_placeholder_owners_are_absent() {
+    let production_sources = production_rust_sources();
+    for retired_owner in [
+        "FieldArenaPoolV1",
+        "FieldRasterArenaPoolV1",
+        "ReportArenaPoolV1",
+    ] {
+        let definitions = production_sources
+            .iter()
+            .filter(|(_, source)| source.contains(retired_owner))
+            .map(|(path, _)| path.as_str())
+            .collect::<Vec<_>>();
         assert!(
-            !source_root.join(retired_module).exists(),
-            "AUD-01 must remove the disconnected placeholder arena `{retired_module}`"
-        );
-    }
-
-    let crate_root = normalized_production_code(LIB_SOURCE);
-    for retired_declaration in ["mod field_arena;", "mod report_arena;"] {
-        assert!(
-            !crate_root.contains(retired_declaration),
-            "AUD-01 must not let a placeholder arena masquerade as a production owner through `{retired_declaration}`"
+            definitions.is_empty(),
+            "AUD-01 retired placeholder owner `{retired_owner}` reappeared in {definitions:?}"
         );
     }
 }
