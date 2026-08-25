@@ -557,6 +557,32 @@ mod runtime_tests {
     }
 
     #[test]
+    fn detached_snapshots_remain_readable_after_later_reuse_and_session_drop() {
+        let compiled =
+            compile_program_wire_v1(&runtime_wire(crate::Srgb8::new([0x60, 0x60, 0x60]))).unwrap();
+        let mut session = compiled.instantiate(100).unwrap();
+        let backdrop =
+            |id, code| ProgramScenarioV1::new(id, vec![crate::Srgb8::new([code, code, code])]);
+
+        let first = session.update_observed(1, &[backdrop(1, 0x80)]).unwrap();
+        let second = session.update_observed(2, &[backdrop(2, 0x80)]).unwrap();
+        for revision in 3..=7 {
+            session
+                .update_observed(revision, &[backdrop(revision as u32, 0x80)])
+                .expect("later updates must reuse internal arena slots");
+        }
+        drop(session);
+
+        for snapshot in [&first, &second] {
+            assert_eq!(snapshot.state(), ProgramSnapshotStateV1::Ready);
+            assert_eq!(snapshot.outputs().len(), 1);
+            assert_eq!(snapshot.outputs()[0].slot(), 17);
+            assert_eq!(snapshot.outputs()[0].source(), crate::Srgb8::new([0x40; 3]));
+            assert_eq!(snapshot.outputs()[0].opacity().to_bits(), 0.5_f64.to_bits());
+        }
+    }
+
+    #[test]
     fn family_graphs_fail_closed_until_a_public_trust_parameter_exists() {
         let mut builder = ProgramWireBuilderV1::new();
         builder.family(1, [7; 32]);
