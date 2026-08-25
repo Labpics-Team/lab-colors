@@ -45,8 +45,9 @@ fn production_contains_retired_placeholder_owner(source: &str, owner: &str) -> b
         .join("\n");
     let tokens = syntax.split_whitespace().collect::<Vec<_>>();
     tokens.windows(2).any(|pair| {
+        let declared = pair[1].strip_prefix("r#").unwrap_or(pair[1]);
         pair[0] == "struct"
-            && pair[1]
+            && declared
                 .strip_prefix(owner)
                 .is_some_and(|suffix| suffix.is_empty() || suffix.starts_with(['<', '{', '(', ';']))
     })
@@ -75,10 +76,16 @@ fn aud01_disconnected_placeholder_owners_are_absent() {
 
 #[test]
 fn aud01_owner_guard_distinguishes_declarations_from_non_production_lookalikes() {
-    assert!(production_contains_retired_placeholder_owner(
-        "struct FieldArenaPoolV1;",
-        "FieldArenaPoolV1"
-    ));
+    for declaration in [
+        ("struct FieldArenaPoolV1;", "FieldArenaPoolV1"),
+        ("struct r#FieldRasterArenaPoolV1;", "FieldRasterArenaPoolV1"),
+        ("struct r#ReportArenaPoolV1<T>(T);", "ReportArenaPoolV1"),
+    ] {
+        assert!(production_contains_retired_placeholder_owner(
+            declaration.0,
+            declaration.1
+        ));
+    }
     for harmless in [
         "// struct FieldArenaPoolV1;",
         "const NOTE: &str = \"struct FieldArenaPoolV1;\";",
