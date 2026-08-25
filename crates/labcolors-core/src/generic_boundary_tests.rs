@@ -37,24 +37,41 @@ const WCAG22_CONSTRAINT_SOURCE: &str = include_str!("constraints/wcag22.rs");
 const GLOW_SOURCE: &str = include_str!("glow.rs");
 const FIELD_EFFECT_SOURCE: &str = include_str!("field_effect.rs");
 
+fn production_contains_rust_identifier(source: &str, identifier: &str) -> bool {
+    source_scanner::production_syntax_lines(source)
+        .into_iter()
+        .any(|(_, line)| contains_rust_identifier(&line, identifier))
+}
+
 #[test]
 fn aud01_disconnected_placeholder_owners_are_absent() {
-    let production_sources = production_rust_sources();
     for retired_owner in [
         "FieldArenaPoolV1",
         "FieldRasterArenaPoolV1",
         "ReportArenaPoolV1",
     ] {
-        let definitions = production_sources
-            .iter()
-            .filter(|(_, source)| source.contains(retired_owner))
-            .map(|(path, _)| path.as_str())
+        let definitions = production_rust_sources()
+            .into_iter()
+            .filter(|(_, source)| production_contains_rust_identifier(source, retired_owner))
+            .map(|(path, _)| path)
             .collect::<Vec<_>>();
         assert!(
             definitions.is_empty(),
             "AUD-01 retired placeholder owner `{retired_owner}` reappeared in {definitions:?}"
         );
     }
+}
+
+#[test]
+fn aud01_owner_guard_distinguishes_code_from_non_production_lookalikes() {
+    assert!(production_contains_rust_identifier(
+        "struct FieldArenaPoolV1;",
+        "FieldArenaPoolV1"
+    ));
+    assert!(!production_contains_rust_identifier(
+        "// FieldArenaPoolV1\nconst NOTE: &str = \"ReportArenaPoolV1\";\n#[cfg(test)]\nstruct FieldRasterArenaPoolV1;\nstruct NewFieldArenaPoolV1Factory;",
+        "FieldArenaPoolV1"
+    ));
 }
 
 #[test]
