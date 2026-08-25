@@ -38,9 +38,20 @@ const GLOW_SOURCE: &str = include_str!("glow.rs");
 const FIELD_EFFECT_SOURCE: &str = include_str!("field_effect.rs");
 
 fn production_contains_rust_identifier(source: &str, identifier: &str) -> bool {
+    fn is_identifier_continuation(character: char) -> bool {
+        character == '_' || character.is_ascii_alphanumeric() || !character.is_ascii()
+    }
+
     source_scanner::production_syntax_lines(source)
         .into_iter()
-        .any(|(_, line)| contains_rust_identifier(&line, identifier))
+        .any(|(_, line)| {
+            line.match_indices(identifier).any(|(start, _)| {
+                let before = line[..start].chars().next_back();
+                let after = line[start + identifier.len()..].chars().next();
+                !before.is_some_and(is_identifier_continuation)
+                    && !after.is_some_and(is_identifier_continuation)
+            })
+        })
 }
 
 #[test]
@@ -50,7 +61,7 @@ fn aud01_disconnected_placeholder_owners_are_absent() {
         "FieldRasterArenaPoolV1",
         "ReportArenaPoolV1",
     ] {
-        let definitions = production_rust_sources()
+        let definitions = rust_sources()
             .into_iter()
             .filter(|(_, source)| production_contains_rust_identifier(source, retired_owner))
             .map(|(path, _)| path)
@@ -69,7 +80,7 @@ fn aud01_owner_guard_distinguishes_code_from_non_production_lookalikes() {
         "FieldArenaPoolV1"
     ));
     assert!(!production_contains_rust_identifier(
-        "// FieldArenaPoolV1\nconst NOTE: &str = \"ReportArenaPoolV1\";\n#[cfg(test)]\nstruct FieldRasterArenaPoolV1;\nstruct NewFieldArenaPoolV1Factory;",
+        "// FieldArenaPoolV1\nconst NOTE: &str = \"ReportArenaPoolV1\";\n#[cfg(test)]\nstruct FieldRasterArenaPoolV1;\nstruct NewFieldArenaPoolV1Factory;\nstruct FieldArenaPoolV1é;",
         "FieldArenaPoolV1"
     ));
 }
@@ -615,7 +626,7 @@ fn compile_fail_scanner_rejects_live_code_between_document_fences() {
     );
 }
 
-fn production_rust_sources() -> Vec<(String, String)> {
+fn rust_sources() -> Vec<(String, String)> {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src");
     let mut pending = vec![root.clone()];
     let mut sources = Vec::new();
@@ -627,12 +638,7 @@ fn production_rust_sources() -> Vec<(String, String)> {
                 pending.push(path);
                 continue;
             }
-            let is_production_rust = path.extension() == Some(OsStr::new("rs"))
-                && !path
-                    .file_name()
-                    .and_then(OsStr::to_str)
-                    .is_some_and(|name| name.ends_with("_tests.rs"));
-            if !is_production_rust {
+            if path.extension() != Some(OsStr::new("rs")) {
                 continue;
             }
             let relative = path
@@ -647,6 +653,13 @@ fn production_rust_sources() -> Vec<(String, String)> {
     }
     sources.sort_unstable_by(|left, right| left.0.cmp(&right.0));
     sources
+}
+
+fn production_rust_sources() -> Vec<(String, String)> {
+    rust_sources()
+        .into_iter()
+        .filter(|(path, _)| !path.ends_with("_tests.rs"))
+        .collect()
 }
 
 #[test]
