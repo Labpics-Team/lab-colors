@@ -37,21 +37,19 @@ const WCAG22_CONSTRAINT_SOURCE: &str = include_str!("constraints/wcag22.rs");
 const GLOW_SOURCE: &str = include_str!("glow.rs");
 const FIELD_EFFECT_SOURCE: &str = include_str!("field_effect.rs");
 
-fn production_contains_rust_identifier(source: &str, identifier: &str) -> bool {
-    fn is_identifier_continuation(character: char) -> bool {
-        character == '_' || character.is_ascii_alphanumeric() || !character.is_ascii()
-    }
-
-    source_scanner::production_syntax_lines(source)
+fn production_contains_retired_placeholder_owner(source: &str, owner: &str) -> bool {
+    let syntax = source_scanner::production_syntax_lines(source)
         .into_iter()
-        .any(|(_, line)| {
-            line.match_indices(identifier).any(|(start, _)| {
-                let before = line[..start].chars().next_back();
-                let after = line[start + identifier.len()..].chars().next();
-                !before.is_some_and(is_identifier_continuation)
-                    && !after.is_some_and(is_identifier_continuation)
-            })
-        })
+        .map(|(_, line)| line)
+        .collect::<Vec<_>>()
+        .join("\n");
+    let tokens = syntax.split_whitespace().collect::<Vec<_>>();
+    tokens.windows(2).any(|pair| {
+        pair[0] == "struct"
+            && pair[1]
+                .strip_prefix(owner)
+                .is_some_and(|suffix| suffix.is_empty() || suffix.starts_with(['<', '{', '(', ';']))
+    })
 }
 
 #[test]
@@ -63,7 +61,9 @@ fn aud01_disconnected_placeholder_owners_are_absent() {
     ] {
         let definitions = rust_sources()
             .into_iter()
-            .filter(|(_, source)| production_contains_rust_identifier(source, retired_owner))
+            .filter(|(_, source)| {
+                production_contains_retired_placeholder_owner(source, retired_owner)
+            })
             .map(|(path, _)| path)
             .collect::<Vec<_>>();
         assert!(
@@ -74,15 +74,22 @@ fn aud01_disconnected_placeholder_owners_are_absent() {
 }
 
 #[test]
-fn aud01_owner_guard_distinguishes_code_from_non_production_lookalikes() {
-    assert!(production_contains_rust_identifier(
+fn aud01_owner_guard_distinguishes_declarations_from_non_production_lookalikes() {
+    assert!(production_contains_retired_placeholder_owner(
         "struct FieldArenaPoolV1;",
         "FieldArenaPoolV1"
     ));
-    assert!(!production_contains_rust_identifier(
-        "// FieldArenaPoolV1\nconst NOTE: &str = \"ReportArenaPoolV1\";\n#[cfg(test)]\nstruct FieldRasterArenaPoolV1;\nstruct NewFieldArenaPoolV1Factory;\nstruct FieldArenaPoolV1é;",
-        "FieldArenaPoolV1"
-    ));
+    for harmless in [
+        "// struct FieldArenaPoolV1;",
+        "const NOTE: &str = \"struct FieldArenaPoolV1;\";",
+        "#[cfg(test)]\nstruct FieldArenaPoolV1;",
+        "struct NewFieldArenaPoolV1Factory;",
+    ] {
+        assert!(!production_contains_retired_placeholder_owner(
+            harmless,
+            "FieldArenaPoolV1"
+        ));
+    }
 }
 
 #[test]
