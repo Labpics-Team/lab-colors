@@ -183,7 +183,11 @@ fn sabotage_byte_equality_stale_reuse_detected() {
     // Plan A: chain propagates through 1 to 0.
     assert_eq!(raw_a, vec![0, 1, 2], "plan A: full chain affected");
     // Plan B: only 0 depends on 2; node 1 is independent.
-    assert_eq!(raw_b, vec![0, 2], "plan B: only direct dependent 0 affected");
+    assert_eq!(
+        raw_b,
+        vec![0, 2],
+        "plan B: only direct dependent 0 affected"
+    );
 }
 
 /// MUTANT CLASS: making output depend on declaration order of nodes/edges.
