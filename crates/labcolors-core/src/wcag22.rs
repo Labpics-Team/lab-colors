@@ -24,7 +24,7 @@ const PROOF_SOURCE_JSON: &str = include_str!("../contracts/wcag22-srgb8-q55-proo
 const PROOF_SOURCE_SHA256: &str =
     "fd544b92e7b4cfa4734f0dd9d90aeb52491df6cf94c766ccf59ec716cbc78d12";
 const PROOF_PAYLOAD_SHA256: &str =
-    "a4864f59b98251c69dfd06cd5c57516f86989f22ad79223404b705497628e502";
+    "e0f7d6f57fa1ab547e8d0fa13844ca3b010f594fad79a8504ee5f2d81cba23f6";
 const VERIFIER_SHA256: &str = "5211396d3ebd928618afd54d80bf0970229e6e82f1ee9747f899b9e46e6e4167";
 
 /// Идентификатор immutable normative profile.
