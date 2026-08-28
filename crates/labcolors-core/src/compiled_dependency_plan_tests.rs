@@ -293,15 +293,37 @@ fn scratch_api_resets_visited_state_between_calls() {
     let mut stack: Vec<NodeIndexV1> = Vec::new();
 
     // First call: changing 0 affects all three nodes.
-    let a = plan.affected_nodes_with_scratch(&[NodeIndexV1::new(0)], &mut visited, &mut stack);
+    let a = plan
+        .affected_nodes_with_scratch(&[NodeIndexV1::new(0)], &mut visited, &mut stack)
+        .expect("scratch buffer is correctly sized");
     assert_eq!(a.len(), 3);
 
     // Second call: changing 2 (leaf) affects only itself.
     // Visited buffer must have been reset — stale bits from first call
     // would cause incorrect results.
-    let b = plan.affected_nodes_with_scratch(&[NodeIndexV1::new(2)], &mut visited, &mut stack);
+    let b = plan
+        .affected_nodes_with_scratch(&[NodeIndexV1::new(2)], &mut visited, &mut stack)
+        .expect("scratch buffer is correctly sized");
     assert_eq!(b.len(), 1);
     assert_eq!(b[0].raw(), 2);
+}
+
+/// Scratch buffer too small returns typed error instead of silent misbehavior.
+#[test]
+fn affected_nodes_with_scratch_rejects_undersized_buffer() {
+    let plan =
+        CompiledDependencyPlanV1::compile(&[0, 1, 2], &[(0, 1), (1, 2)]).expect("must compile");
+
+    // Buffer of size 1 is too small for a 3-node plan.
+    let mut visited = vec![false; 1];
+    let mut stack = Vec::new();
+    let err = plan
+        .affected_nodes_with_scratch(&[NodeIndexV1::new(0)], &mut visited, &mut stack)
+        .expect_err("must reject undersized scratch buffer");
+    assert_eq!(
+        err,
+        CompileErrorV1::ScratchBufferTooSmall { needed: 3, got: 1 }
+    );
 }
 
 /// Duplicate node IDs in input are rejected with DuplicateNode error.

@@ -39,6 +39,10 @@ pub enum CompileErrorV1 {
     OffsetOverflow,
     /// Duplicate node ID in input.
     DuplicateNode(u32),
+    /// Scratch buffer provided to `affected_nodes_with_scratch` is too small.
+    ScratchBufferTooSmall { needed: usize, got: usize },
+    /// Reverse edge index points outside the node array (data corruption).
+    CorruptReverseEdge { index: usize, node_count: usize },
 }
 
 /// Validate that node and edge counts are within safety bounds before allocation.
@@ -252,11 +256,16 @@ impl CompiledDependencyPlanV1 {
     ///
     /// Allocates internal scratch buffers. For hot-path reuse, see
     /// [`affected_nodes_with_scratch`](Self::affected_nodes_with_scratch).
+    ///
+    /// # Panics
+    /// Panics only if internal data is corrupt (reverse edge index out of range),
+    /// which indicates a bug in plan compilation.
     pub fn affected_nodes(&self, changed: &[NodeIndexV1]) -> Vec<NodeIndexV1> {
         let n = self.nodes.len();
         let mut visited = vec![false; n];
         let mut stack: Vec<NodeIndexV1> = Vec::new();
         self.affected_nodes_with_scratch(changed, &mut visited, &mut stack)
+            .expect("affected_nodes: scratch buffer allocated to exact size; corruption indicates a bug in plan compilation")
     }
 
     /// Return all nodes transitively affected when `changed` nodes are modified,
@@ -266,20 +275,24 @@ impl CompiledDependencyPlanV1 {
     /// bitset (values are reset internally before each call).
     /// `stack` is reused as the DFS work stack and cleared internally.
     ///
+    /// Returns `Err` if the scratch buffer is too small or if reverse edge data
+    /// is corrupt (index out of range). Both conditions indicate a caller error
+    /// or data corruption respectively — never silently ignored.
+    ///
     /// Callers can reuse both buffers across multiple calls.
     pub fn affected_nodes_with_scratch(
         &self,
         changed: &[NodeIndexV1],
         visited: &mut [bool],
         stack: &mut Vec<NodeIndexV1>,
-    ) -> Vec<NodeIndexV1> {
+    ) -> Result<Vec<NodeIndexV1>, CompileErrorV1> {
         let n = self.nodes.len();
-        debug_assert!(
-            visited.len() >= n,
-            "visited buffer too small: {} < {}",
-            visited.len(),
-            n
-        );
+        if visited.len() < n {
+            return Err(CompileErrorV1::ScratchBufferTooSmall {
+                needed: n,
+                got: visited.len(),
+            });
+        }
         // Reset visited bitset.
         for v in visited.iter_mut().take(n) {
             *v = false;
@@ -303,10 +316,11 @@ impl CompiledDependencyPlanV1 {
             for j in start..end {
                 let dep = self.reverse_edges[j];
                 let di = dep.raw() as usize;
-                // Defense-in-depth: guard against corrupted reverse edge data.
-                debug_assert!(di < n, "corrupt reverse edge: index {di} >= node count {n}");
                 if di >= n {
-                    continue;
+                    return Err(CompileErrorV1::CorruptReverseEdge {
+                        index: di,
+                        node_count: n,
+                    });
                 }
                 if !visited[di] {
                     visited[di] = true;
@@ -317,10 +331,10 @@ impl CompiledDependencyPlanV1 {
 
         // Sort by index for deterministic output.
         result_indices.sort_unstable();
-        result_indices
+        Ok(result_indices
             .into_iter()
             .map(|i| NodeIndexV1::new(i as u32))
-            .collect()
+            .collect())
     }
 
     /// Compute the diff between a full resolve and the current state.
