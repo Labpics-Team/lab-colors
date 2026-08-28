@@ -53,7 +53,7 @@ fn collect_rust_artifacts(root: &Path, dir: &Path, out: &mut Vec<RawArtifact>) {
                 continue;
             }
             collect_rust_artifacts(root, &path, out);
-        } else if path.extension().map_or(false, |ext| ext == "rs") {
+        } else if path.extension().is_some_and(|ext| ext == "rs") {
             let file_name = entry.file_name().to_string_lossy().to_string();
 
             // Исключаем build.rs
@@ -87,7 +87,7 @@ fn collect_rust_artifacts(root: &Path, dir: &Path, out: &mut Vec<RawArtifact>) {
 fn is_lib_rs(path: &Path) -> bool {
     path.parent()
         .and_then(|p| p.file_name())
-        .map_or(false, |name| name == "src")
+        .is_some_and(|name| name == "src")
 }
 
 fn collect_public_exports(lib_path: &Path, module: &str, out: &mut Vec<RawArtifact>) {
@@ -131,7 +131,7 @@ fn collect_ci_artifacts(root: &Path, workflows_dir: &Path, out: &mut Vec<RawArti
         if path.is_file()
             && path
                 .extension()
-                .map_or(false, |ext| ext == "yml" || ext == "yaml")
+                .is_some_and(|ext| ext == "yml" || ext == "yaml")
         {
             let rel = relative_path(root, &path);
             let file_name = entry.file_name().to_string_lossy().to_string();
