@@ -19,6 +19,11 @@ pub struct CompiledNodeV1 {
     pub dependency_count: u32,
 }
 
+/// Maximum number of nodes allowed in a single compiled plan.
+const MAX_NODES: usize = 1_000_000;
+/// Maximum number of edges allowed in a single compiled plan.
+const MAX_EDGES: usize = 10_000_000;
+
 /// Errors produced during compilation of a dependency plan.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CompileErrorV1 {
@@ -28,6 +33,10 @@ pub enum CompileErrorV1 {
     DuplicateEdge { from: u32, to: u32 },
     /// The graph contains at least one cycle.
     CycleDetected,
+    /// Input exceeds safety bounds (node or edge count).
+    InputTooLarge { nodes: usize, edges: usize },
+    /// Arithmetic overflow during offset computation.
+    OffsetOverflow,
 }
 
 /// Immutable compiled dependency plan with CSR forward edges and packed reverse cone.
@@ -85,6 +94,14 @@ impl CompiledDependencyPlanV1 {
     /// Rejects duplicate edges and cycles. Builds CSR forward adjacency
     /// and packed reverse adjacency for efficient cone traversal.
     pub fn compile(node_ids: &[u32], edges: &[(u32, u32)]) -> Result<Self, CompileErrorV1> {
+        // Defense-in-depth: reject oversized inputs before any allocation.
+        if node_ids.len() > MAX_NODES || edges.len() > MAX_EDGES {
+            return Err(CompileErrorV1::InputTooLarge {
+                nodes: node_ids.len(),
+                edges: edges.len(),
+            });
+        }
+
         // Canonical sort: unique, ascending by ID.
         let mut sorted_ids: Vec<u32> = node_ids.to_vec();
         sorted_ids.sort_unstable();
@@ -118,7 +135,9 @@ impl CompiledDependencyPlanV1 {
             fwd_offsets[fi + 1] += 1;
         }
         for i in 1..=n {
-            fwd_offsets[i] += fwd_offsets[i - 1];
+            fwd_offsets[i] = fwd_offsets[i]
+                .checked_add(fwd_offsets[i - 1])
+                .ok_or(CompileErrorV1::OffsetOverflow)?;
         }
         let mut forward_edges: Vec<NodeIndexV1> = vec![NodeIndexV1::new(0); edge_pairs.len()];
         let mut cursor = fwd_offsets.clone();
@@ -165,7 +184,9 @@ impl CompiledDependencyPlanV1 {
         }
         let mut reverse_offsets: Vec<usize> = vec![0; n + 1];
         for i in 0..n {
-            reverse_offsets[i + 1] = reverse_offsets[i] + rev_counts[i];
+            reverse_offsets[i + 1] = reverse_offsets[i]
+                .checked_add(rev_counts[i])
+                .ok_or(CompileErrorV1::OffsetOverflow)?;
         }
         let mut reverse_edges: Vec<NodeIndexV1> = vec![NodeIndexV1::new(0); edge_pairs.len()];
         let mut rev_cursor = reverse_offsets.clone();
@@ -267,6 +288,11 @@ impl CompiledDependencyPlanV1 {
             for j in start..end {
                 let dep = self.reverse_edges[j];
                 let di = dep.raw() as usize;
+                // Defense-in-depth: guard against corrupted reverse edge data.
+                debug_assert!(di < n, "corrupt reverse edge: index {di} >= node count {n}");
+                if di >= n {
+                    continue;
+                }
                 if !visited[di] {
                     visited[di] = true;
                     stack.push(dep);
@@ -295,6 +321,11 @@ impl CompiledDependencyPlanV1 {
             .copied()
             .filter(|&idx| self.is_terminal(idx))
             .collect();
+        debug_assert!(
+            total_outputs >= changed.len(),
+            "total_outputs ({total_outputs}) < changed terminal count ({})",
+            changed.len()
+        );
         let unchanged_count = total_outputs.saturating_sub(changed.len());
         ResolvedSnapshotDiffV1 {
             changed_outputs: changed.into_boxed_slice(),
@@ -332,5 +363,52 @@ impl ResolvedSnapshotDiffV1 {
     /// Empty by default — actual recheck logic belongs to Session/runtime.
     pub fn recheck_passed(&self) -> &[NodeIndexV1] {
         &self.recheck_passed
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn compile_rejects_oversized_node_input() {
+        // Create input that exceeds MAX_NODES without actually allocating
+        // millions of elements — we just need len() to exceed the bound.
+        // Use a small slice but lie about the check by testing the error path
+        // directly with a crafted input.
+        let over_max_nodes = MAX_NODES + 1;
+        let node_ids: Vec<u32> = (0..over_max_nodes as u32).collect();
+        let result = CompiledDependencyPlanV1::compile(&node_ids, &[]);
+        assert_eq!(
+            result,
+            Err(CompileErrorV1::InputTooLarge {
+                nodes: over_max_nodes,
+                edges: 0,
+            })
+        );
+    }
+
+    #[test]
+    fn compile_rejects_oversized_edge_input() {
+        let over_max_edges = MAX_EDGES + 1;
+        // Two nodes, but too many edges.
+        let node_ids = [0u32, 1u32];
+        let edges: Vec<(u32, u32)> = vec![(0, 1); over_max_edges];
+        let result = CompiledDependencyPlanV1::compile(&node_ids, &edges);
+        assert_eq!(
+            result,
+            Err(CompileErrorV1::InputTooLarge {
+                nodes: 2,
+                edges: over_max_edges,
+            })
+        );
+    }
+
+    #[test]
+    fn compile_accepts_valid_small_graph() {
+        let node_ids = [1u32, 2, 3];
+        let edges = [(1, 2), (2, 3)];
+        let plan = CompiledDependencyPlanV1::compile(&node_ids, &edges).unwrap();
+        assert_eq!(plan.node_count(), 3);
     }
 }
