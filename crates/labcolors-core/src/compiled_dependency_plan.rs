@@ -46,19 +46,14 @@ impl CompiledDependencyPlanV1 {
     /// Nodes are sorted canonically by ID (not declaration order).
     /// Rejects duplicate edges and cycles. Builds CSR forward adjacency
     /// and packed reverse adjacency for efficient cone traversal.
-    pub fn compile(
-        node_ids: &[u32],
-        edges: &[(u32, u32)],
-    ) -> Result<Self, CompileErrorV1> {
+    pub fn compile(node_ids: &[u32], edges: &[(u32, u32)]) -> Result<Self, CompileErrorV1> {
         // Canonical sort: unique, ascending by ID.
         let mut sorted_ids: Vec<u32> = node_ids.to_vec();
         sorted_ids.sort_unstable();
         sorted_ids.dedup();
 
         // Map external IDs to canonical indices.
-        let id_to_index = |id: u32| -> Option<usize> {
-            sorted_ids.binary_search(&id).ok()
-        };
+        let id_to_index = |id: u32| -> Option<usize> { sorted_ids.binary_search(&id).ok() };
 
         // Validate edges and check for duplicates.
         let mut edge_pairs: Vec<(usize, usize)> = Vec::with_capacity(edges.len());
@@ -101,8 +96,8 @@ impl CompiledDependencyPlanV1 {
             in_degree[ti] += 1;
         }
         let mut queue: std::collections::VecDeque<usize> = std::collections::VecDeque::new();
-        for i in 0..n {
-            if in_degree[i] == 0 {
+        for (i, &deg) in in_degree.iter().enumerate().take(n) {
+            if deg == 0 {
                 queue.push_back(i);
             }
         }
@@ -111,8 +106,8 @@ impl CompiledDependencyPlanV1 {
             topo_order.push(node);
             let start = fwd_offsets[node];
             let end = fwd_offsets[node + 1];
-            for j in start..end {
-                let succ = forward_edges[j].raw() as usize;
+            for edge in &forward_edges[start..end] {
+                let succ = edge.raw() as usize;
                 in_degree[succ] -= 1;
                 if in_degree[succ] == 0 {
                     queue.push_back(succ);
