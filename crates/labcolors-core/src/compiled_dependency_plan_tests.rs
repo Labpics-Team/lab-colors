@@ -1,4 +1,6 @@
-use crate::compiled_dependency_plan::{CompiledDependencyPlanV1, NodeIndexV1};
+use crate::compiled_dependency_plan::{
+    CompileErrorV1, CompiledDependencyPlanV1, NodeIndexV1, check_compile_bounds,
+};
 
 /// Two plans with identical edges but different declaration order must produce
 /// identical canonical node ordering. Declaration order is not a semantic input.
@@ -20,19 +22,16 @@ fn permutation_invariance_rejects_declaration_order_dependence() {
 #[test]
 fn cycle_rejection_before_execution() {
     let result = CompiledDependencyPlanV1::compile(&[0, 1, 2], &[(0, 1), (1, 2), (2, 0)]);
-    assert!(
-        result.is_err(),
-        "cyclic graph must be rejected at compile time"
-    );
+    assert_eq!(result, Err(CompileErrorV1::CycleDetected));
 }
 
 /// Duplicate edges indicate a specification defect and must be rejected.
 #[test]
 fn duplicate_edge_rejection() {
     let result = CompiledDependencyPlanV1::compile(&[0, 1], &[(0, 1), (0, 1)]);
-    assert!(
-        result.is_err(),
-        "duplicate edges must be rejected at compile time"
+    assert_eq!(
+        result,
+        Err(CompileErrorV1::DuplicateEdge { from: 0, to: 1 })
     );
 }
 
@@ -156,27 +155,35 @@ fn sabotage_semantic_name_branching_detected() {
     );
 }
 
-/// MUTANT CLASS: caching results by byte-equality of input slice without
-/// invalidation. Different changed sets must produce different results.
+/// MUTANT CLASS: caching results without invalidation.
+/// Same changed input on two DIFFERENT plans must produce results consistent
+/// with each plan's structure, not stale cached output from another plan.
 #[test]
 fn sabotage_byte_equality_stale_reuse_detected() {
-    let plan =
-        CompiledDependencyPlanV1::compile(&[0, 1, 2], &[(2, 1), (1, 0)]).expect("must compile");
+    // Plan A: chain 0→1→2 (0 depends on 1, 1 depends on 2).
+    // reverse_edges: [2]←{1}, [1]←{0}, [0]←{}.
+    // Changing node 2 affects {2, 1, 0} transitively.
+    let plan_a =
+        CompiledDependencyPlanV1::compile(&[0, 1, 2], &[(0, 1), (1, 2)]).expect("must compile");
 
-    // Changing 0 (root dependency): affected = {0, 1, 2}.
-    let a = plan.affected_nodes(&[NodeIndexV1::new(0)]);
-    // Changing 2 (leaf, no dependents): affected = {2}.
-    let b = plan.affected_nodes(&[NodeIndexV1::new(2)]);
+    // Plan B: star 0→1, 0→2 (0 depends on both 1 and 2; 1 and 2 are independent).
+    // reverse_edges: [1]←{0}, [2]←{0}, [0]←{}.
+    // Changing node 2 affects {2, 0} (not 1).
+    let plan_b =
+        CompiledDependencyPlanV1::compile(&[0, 1, 2], &[(0, 1), (0, 2)]).expect("must compile");
 
-    assert_ne!(
-        a.len(),
-        b.len(),
-        "different changed sets must produce different affected sets"
-    );
-    assert!(
-        a.len() > b.len(),
-        "changing root must affect more nodes than changing leaf"
-    );
+    // Change node 2 on both plans — different topologies yield different affected sets.
+    let changed = [NodeIndexV1::new(2)];
+    let affected_a = plan_a.affected_nodes(&changed);
+    let affected_b = plan_b.affected_nodes(&changed);
+
+    let raw_a: Vec<u32> = affected_a.iter().map(|n| n.raw()).collect();
+    let raw_b: Vec<u32> = affected_b.iter().map(|n| n.raw()).collect();
+
+    // Plan A: chain propagates through 1 to 0.
+    assert_eq!(raw_a, vec![0, 1, 2], "plan A: full chain affected");
+    // Plan B: only 0 depends on 2; node 1 is independent.
+    assert_eq!(raw_b, vec![0, 2], "plan B: only direct dependent 0 affected");
 }
 
 /// MUTANT CLASS: making output depend on declaration order of nodes/edges.
@@ -200,10 +207,7 @@ fn sabotage_declaration_order_dependence_detected() {
 #[test]
 fn sabotage_duplicate_ownership_detected() {
     let result = CompiledDependencyPlanV1::compile(&[0, 1], &[(0, 99)]);
-    assert!(
-        result.is_err(),
-        "edge to undeclared node must be rejected, preventing phantom ownership"
-    );
+    assert_eq!(result, Err(CompileErrorV1::UnknownNode(99)));
 }
 
 /// Snapshot diff reports exact changed and unchanged counts.
@@ -215,11 +219,9 @@ fn snapshot_diff_reports_exact_changed_and_unchanged_counts() {
     let plan = CompiledDependencyPlanV1::compile(&[0, 1, 2, 3], &[(0, 1), (0, 2), (1, 3), (2, 3)])
         .expect("diamond must compile");
 
-    let total_outputs = plan.terminal_outputs().len();
-
     // Change node 3 (deepest dependency) → all nodes affected, including terminal 0.
     let affected = plan.affected_nodes(&[NodeIndexV1::new(3)]);
-    let diff = plan.compute_snapshot_diff(&affected, total_outputs);
+    let diff = plan.compute_snapshot_diff(&affected);
 
     assert_eq!(
         diff.changed_outputs().len(),
@@ -239,16 +241,46 @@ fn snapshot_diff_reports_exact_changed_and_unchanged_counts() {
 
     // Change node 0 (terminal output itself, no dependents) → only 0 affected.
     let affected_leaf = plan.affected_nodes(&[NodeIndexV1::new(0)]);
-    let diff_leaf = plan.compute_snapshot_diff(&affected_leaf, total_outputs);
+    let diff_leaf = plan.compute_snapshot_diff(&affected_leaf);
 
     assert_eq!(diff_leaf.changed_outputs().len(), 1);
     assert_eq!(diff_leaf.changed_outputs()[0].raw(), 0);
     assert_eq!(diff_leaf.unchanged_count(), 0);
 }
 
-/// affected_nodes_with_scratch reuses caller-provided buffers.
+/// Snapshot diff with two independent terminal outputs.
+/// Graph: 0→1 and 2→3 (two disjoint chains).
+/// Terminals: 0 and 2 (nobody depends on them).
+/// Changing node 1 affects only output 0; output 2 remains unchanged.
 #[test]
-fn scratch_api_reuses_buffers_without_reallocation() {
+fn snapshot_diff_two_independent_terminals_partial_change() {
+    let plan = CompiledDependencyPlanV1::compile(&[0, 1, 2, 3], &[(0, 1), (2, 3)])
+        .expect("disjoint chains must compile");
+
+    // Verify two terminal outputs.
+    let terminals = plan.terminal_outputs();
+    assert_eq!(terminals.len(), 2);
+
+    // Change node 1 → affects {1, 0} (chain 0→1), not {2, 3}.
+    let affected = plan.affected_nodes(&[NodeIndexV1::new(1)]);
+    let diff = plan.compute_snapshot_diff(&affected);
+
+    assert_eq!(
+        diff.changed_outputs().len(),
+        1,
+        "only terminal 0 should change"
+    );
+    assert_eq!(diff.changed_outputs()[0].raw(), 0);
+    assert_eq!(
+        diff.unchanged_count(),
+        1,
+        "terminal 2 must remain unchanged"
+    );
+}
+
+/// affected_nodes_with_scratch resets visited state between calls.
+#[test]
+fn scratch_api_resets_visited_state_between_calls() {
     let plan = CompiledDependencyPlanV1::compile(&[0, 1, 2], &[(2, 1), (1, 0)])
         .expect("chain must compile");
 
@@ -256,12 +288,63 @@ fn scratch_api_reuses_buffers_without_reallocation() {
     let mut visited = vec![false; n];
     let mut stack: Vec<NodeIndexV1> = Vec::new();
 
-    // First call.
+    // First call: changing 0 affects all three nodes.
     let a = plan.affected_nodes_with_scratch(&[NodeIndexV1::new(0)], &mut visited, &mut stack);
     assert_eq!(a.len(), 3);
 
-    // Second call reuses same buffers.
+    // Second call: changing 2 (leaf) affects only itself.
+    // Visited buffer must have been reset — stale bits from first call
+    // would cause incorrect results.
     let b = plan.affected_nodes_with_scratch(&[NodeIndexV1::new(2)], &mut visited, &mut stack);
     assert_eq!(b.len(), 1);
     assert_eq!(b[0].raw(), 2);
+}
+
+/// Duplicate node IDs in input are rejected with DuplicateNode error.
+#[test]
+fn duplicate_node_rejection() {
+    let result = CompiledDependencyPlanV1::compile(&[0, 1, 1], &[(0, 1)]);
+    assert_eq!(result, Err(CompileErrorV1::DuplicateNode(1)));
+}
+
+/// Bounds check rejects oversized inputs without allocating.
+#[test]
+fn bounds_check_rejects_oversized_without_allocation() {
+    let over_max_nodes = 1_000_001;
+    assert_eq!(
+        check_compile_bounds(over_max_nodes, 0),
+        Err(CompileErrorV1::InputTooLarge {
+            nodes: over_max_nodes,
+            edges: 0,
+        })
+    );
+
+    let over_max_edges = 10_000_001;
+    assert_eq!(
+        check_compile_bounds(2, over_max_edges),
+        Err(CompileErrorV1::InputTooLarge {
+            nodes: 2,
+            edges: over_max_edges,
+        })
+    );
+}
+
+/// dependencies_of returns None for out-of-bounds index.
+#[test]
+fn dependencies_of_returns_none_for_invalid_index() {
+    let plan = CompiledDependencyPlanV1::compile(&[0, 1], &[(0, 1)]).expect("must compile");
+
+    assert!(plan.dependencies_of(NodeIndexV1::new(0)).is_some());
+    assert!(plan.dependencies_of(NodeIndexV1::new(1)).is_some());
+    assert!(plan.dependencies_of(NodeIndexV1::new(99)).is_none());
+}
+
+/// dependents_of returns None for out-of-bounds index.
+#[test]
+fn dependents_of_returns_none_for_invalid_index() {
+    let plan = CompiledDependencyPlanV1::compile(&[0, 1], &[(0, 1)]).expect("must compile");
+
+    assert!(plan.dependents_of(NodeIndexV1::new(0)).is_some());
+    assert!(plan.dependents_of(NodeIndexV1::new(1)).is_some());
+    assert!(plan.dependents_of(NodeIndexV1::new(99)).is_none());
 }

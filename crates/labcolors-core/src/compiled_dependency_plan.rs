@@ -15,7 +15,7 @@ impl NodeIndexV1 {
 /// A single node in the compiled dependency graph.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CompiledNodeV1 {
-    /// Number of direct dependencies (reverse cone size for this node).
+    /// Number of direct dependencies represented by the node's outgoing forward-CSR edges.
     pub dependency_count: u32,
 }
 
@@ -37,6 +37,19 @@ pub enum CompileErrorV1 {
     InputTooLarge { nodes: usize, edges: usize },
     /// Arithmetic overflow during offset computation.
     OffsetOverflow,
+    /// Duplicate node ID in input.
+    DuplicateNode(u32),
+}
+
+/// Validate that node and edge counts are within safety bounds before allocation.
+pub fn check_compile_bounds(node_count: usize, edge_count: usize) -> Result<(), CompileErrorV1> {
+    if node_count > MAX_NODES || edge_count > MAX_EDGES {
+        return Err(CompileErrorV1::InputTooLarge {
+            nodes: node_count,
+            edges: edge_count,
+        });
+    }
+    Ok(())
 }
 
 /// Immutable compiled dependency plan with CSR forward edges and packed reverse cone.
@@ -56,56 +69,58 @@ impl CompiledDependencyPlanV1 {
         self.nodes.len()
     }
 
-    /// Terminal output nodes (nodes with no dependents / no successors in forward CSR).
+    /// Terminal output nodes: nodes with zero in-degree (no dependents).
     pub fn terminal_outputs(&self) -> &[NodeIndexV1] {
         &self.terminal_outputs
     }
 
     /// Forward dependencies of a node (what it depends on).
-    pub fn dependencies_of(&self, node: NodeIndexV1) -> &[NodeIndexV1] {
+    /// Returns `None` for out-of-bounds index, `Some(slice)` for valid.
+    pub fn dependencies_of(&self, node: NodeIndexV1) -> Option<&[NodeIndexV1]> {
         let i = node.raw() as usize;
         if i + 1 >= self.forward_offsets.len() {
-            return &[];
+            return None;
         }
         let start = self.forward_offsets[i];
         let end = self.forward_offsets[i + 1];
-        &self.forward_edges[start..end]
+        Some(&self.forward_edges[start..end])
     }
 
     /// Reverse dependents of a node (what depends on it).
-    pub fn dependents_of(&self, node: NodeIndexV1) -> &[NodeIndexV1] {
+    /// Returns `None` for out-of-bounds index, `Some(slice)` for valid.
+    pub fn dependents_of(&self, node: NodeIndexV1) -> Option<&[NodeIndexV1]> {
         let i = node.raw() as usize;
         if i + 1 >= self.reverse_offsets.len() {
-            return &[];
+            return None;
         }
         let start = self.reverse_offsets[i];
         let end = self.reverse_offsets[i + 1];
-        &self.reverse_edges[start..end]
+        Some(&self.reverse_edges[start..end])
     }
 
     /// Check whether a node index is a terminal output.
     fn is_terminal(&self, idx: NodeIndexV1) -> bool {
-        self.terminal_outputs.contains(&idx)
+        self.terminal_outputs.binary_search(&idx).is_ok()
     }
 
     /// Compile a dependency graph from raw node IDs and directed edges.
     ///
     /// Nodes are sorted canonically by ID (not declaration order).
-    /// Rejects duplicate edges and cycles. Builds CSR forward adjacency
+    /// Rejects duplicate edges, duplicate nodes, and cycles. Builds CSR forward adjacency
     /// and packed reverse adjacency for efficient cone traversal.
     pub fn compile(node_ids: &[u32], edges: &[(u32, u32)]) -> Result<Self, CompileErrorV1> {
         // Defense-in-depth: reject oversized inputs before any allocation.
-        if node_ids.len() > MAX_NODES || edges.len() > MAX_EDGES {
-            return Err(CompileErrorV1::InputTooLarge {
-                nodes: node_ids.len(),
-                edges: edges.len(),
-            });
-        }
+        check_compile_bounds(node_ids.len(), edges.len())?;
 
-        // Canonical sort: unique, ascending by ID.
+        // Canonical sort: unique, ascending by ID. Detect duplicates.
         let mut sorted_ids: Vec<u32> = node_ids.to_vec();
         sorted_ids.sort_unstable();
-        sorted_ids.dedup();
+        // Check for duplicates before dedup.
+        for w in sorted_ids.windows(2) {
+            if w[0] == w[1] {
+                return Err(CompileErrorV1::DuplicateNode(w[0]));
+            }
+        }
 
         // Map external IDs to canonical indices.
         let id_to_index = |id: u32| -> Option<usize> { sorted_ids.binary_search(&id).ok() };
@@ -189,26 +204,21 @@ impl CompiledDependencyPlanV1 {
                 .ok_or(CompileErrorV1::OffsetOverflow)?;
         }
         let mut reverse_edges: Vec<NodeIndexV1> = vec![NodeIndexV1::new(0); edge_pairs.len()];
-        let mut rev_cursor = reverse_offsets.clone();
-        // Insert predecessors in topological order for determinism.
-        let mut pred_lists: Vec<Vec<usize>> = vec![Vec::new(); n];
-        for &(fi, ti) in &edge_pairs {
-            pred_lists[ti].push(fi);
-        }
-        // Sort each predecessor list by topological rank.
+
+        // Sort edge_pairs by (topo_rank[target], topo_rank[source]) for deterministic
+        // predecessor ordering without intermediate allocation.
         let mut topo_rank: Vec<usize> = vec![0; n];
         for (rank, &node) in topo_order.iter().enumerate() {
             topo_rank[node] = rank;
         }
-        for preds in &mut pred_lists {
-            preds.sort_unstable_by_key(|&p| topo_rank[p]);
-        }
-        for (ti, preds) in pred_lists.iter().enumerate() {
-            for &pi in preds {
-                let pos = rev_cursor[ti];
-                reverse_edges[pos] = NodeIndexV1::new(pi as u32);
-                rev_cursor[ti] += 1;
-            }
+        edge_pairs.sort_unstable_by_key(|&(fi, ti)| (topo_rank[ti], topo_rank[fi]));
+
+        // Populate reverse_edges in one pass from sorted edge_pairs.
+        let mut rev_cursor = reverse_offsets.clone();
+        for &(fi, ti) in &edge_pairs {
+            let pos = rev_cursor[ti];
+            reverse_edges[pos] = NodeIndexV1::new(fi as u32);
+            rev_cursor[ti] += 1;
         }
 
         // Terminal outputs: nodes with no dependents (nothing depends on them).
@@ -238,7 +248,7 @@ impl CompiledDependencyPlanV1 {
 
     /// Return all nodes transitively affected when `changed` nodes are modified.
     /// Uses precompiled reverse adjacency for O(V+E) traversal.
-    /// Result is in deterministic topological order (ascending index).
+    /// Result is in ascending canonical-index order.
     ///
     /// Allocates internal scratch buffers. For hot-path reuse, see
     /// [`affected_nodes_with_scratch`](Self::affected_nodes_with_scratch).
@@ -256,8 +266,7 @@ impl CompiledDependencyPlanV1 {
     /// bitset (values are reset internally before each call).
     /// `stack` is reused as the DFS work stack and cleared internally.
     ///
-    /// Callers can reuse both buffers across multiple calls for zero-alloc
-    /// hot-path traversal.
+    /// Callers can reuse both buffers across multiple calls.
     pub fn affected_nodes_with_scratch(
         &self,
         changed: &[NodeIndexV1],
@@ -265,6 +274,12 @@ impl CompiledDependencyPlanV1 {
         stack: &mut Vec<NodeIndexV1>,
     ) -> Vec<NodeIndexV1> {
         let n = self.nodes.len();
+        debug_assert!(
+            visited.len() >= n,
+            "visited buffer too small: {} < {}",
+            visited.len(),
+            n
+        );
         // Reset visited bitset.
         for v in visited.iter_mut().take(n) {
             *v = false;
@@ -300,7 +315,7 @@ impl CompiledDependencyPlanV1 {
             }
         }
 
-        // Sort by index for deterministic topological output.
+        // Sort by index for deterministic output.
         result_indices.sort_unstable();
         result_indices
             .into_iter()
@@ -309,13 +324,9 @@ impl CompiledDependencyPlanV1 {
     }
 
     /// Compute the diff between a full resolve and the current state.
-    /// `affected` is the output of `affected_nodes`. `total_outputs` is the
-    /// total number of terminal outputs in the plan.
-    pub fn compute_snapshot_diff(
-        &self,
-        affected: &[NodeIndexV1],
-        total_outputs: usize,
-    ) -> ResolvedSnapshotDiffV1 {
+    /// `affected` is the output of `affected_nodes`.
+    pub fn compute_snapshot_diff(&self, affected: &[NodeIndexV1]) -> ResolvedSnapshotDiffV1 {
+        let total_outputs = self.terminal_outputs.len();
         let changed: Vec<NodeIndexV1> = affected
             .iter()
             .copied()
@@ -372,15 +383,9 @@ mod tests {
 
     #[test]
     fn compile_rejects_oversized_node_input() {
-        // Create input that exceeds MAX_NODES without actually allocating
-        // millions of elements — we just need len() to exceed the bound.
-        // Use a small slice but lie about the check by testing the error path
-        // directly with a crafted input.
         let over_max_nodes = MAX_NODES + 1;
-        let node_ids: Vec<u32> = (0..over_max_nodes as u32).collect();
-        let result = CompiledDependencyPlanV1::compile(&node_ids, &[]);
         assert_eq!(
-            result,
+            check_compile_bounds(over_max_nodes, 0),
             Err(CompileErrorV1::InputTooLarge {
                 nodes: over_max_nodes,
                 edges: 0,
@@ -391,12 +396,8 @@ mod tests {
     #[test]
     fn compile_rejects_oversized_edge_input() {
         let over_max_edges = MAX_EDGES + 1;
-        // Two nodes, but too many edges.
-        let node_ids = [0u32, 1u32];
-        let edges: Vec<(u32, u32)> = vec![(0, 1); over_max_edges];
-        let result = CompiledDependencyPlanV1::compile(&node_ids, &edges);
         assert_eq!(
-            result,
+            check_compile_bounds(2, over_max_edges),
             Err(CompileErrorV1::InputTooLarge {
                 nodes: 2,
                 edges: over_max_edges,
