@@ -10,10 +10,10 @@ fn permutation_invariance_rejects_declaration_order_dependence() {
     let plan_b = CompiledDependencyPlanV1::compile(&[2, 1, 0], &[(1, 2), (0, 1)])
         .expect("plan B must compile");
 
-    assert_eq!(plan_a.nodes, plan_b.nodes);
-    assert_eq!(plan_a.forward_edges, plan_b.forward_edges);
-    assert_eq!(plan_a.reverse_offsets, plan_b.reverse_offsets);
-    assert_eq!(plan_a.reverse_edges, plan_b.reverse_edges);
+    assert_eq!(plan_a.node_count(), plan_b.node_count());
+    assert_eq!(plan_a.terminal_outputs(), plan_b.terminal_outputs());
+    // Structural equality: both plans must be fully equal via PartialEq.
+    assert_eq!(plan_a, plan_b);
 }
 
 /// A graph containing a cycle must fail compilation before any execution.
@@ -189,11 +189,9 @@ fn sabotage_declaration_order_dependence_detected() {
     let plan_b = CompiledDependencyPlanV1::compile(&[1, 2, 3, 4, 5], &[(4, 2), (3, 1), (5, 3)])
         .expect("plan B must compile");
 
-    assert_eq!(plan_a.nodes, plan_b.nodes);
-    assert_eq!(plan_a.forward_edges, plan_b.forward_edges);
-    assert_eq!(plan_a.reverse_offsets, plan_b.reverse_offsets);
-    assert_eq!(plan_a.reverse_edges, plan_b.reverse_edges);
-    assert_eq!(plan_a.terminal_outputs, plan_b.terminal_outputs);
+    assert_eq!(plan_a.node_count(), plan_b.node_count());
+    assert_eq!(plan_a.terminal_outputs(), plan_b.terminal_outputs());
+    assert_eq!(plan_a, plan_b);
 }
 
 /// MUTANT CLASS: allowing edges to reference undeclared nodes.
@@ -206,4 +204,63 @@ fn sabotage_duplicate_ownership_detected() {
         result.is_err(),
         "edge to undeclared node must be rejected, preventing phantom ownership"
     );
+}
+
+/// Snapshot diff reports exact changed and unchanged counts.
+/// Diamond graph: 0 depends on 1 and 2; 1 and 2 both depend on 3.
+/// Terminal outputs are nodes nobody depends on (reverse degree == 0).
+/// In this graph, node 0 is the only terminal output.
+#[test]
+fn snapshot_diff_reports_exact_changed_and_unchanged_counts() {
+    let plan = CompiledDependencyPlanV1::compile(&[0, 1, 2, 3], &[(0, 1), (0, 2), (1, 3), (2, 3)])
+        .expect("diamond must compile");
+
+    let total_outputs = plan.terminal_outputs().len();
+
+    // Change node 3 (deepest dependency) → all nodes affected, including terminal 0.
+    let affected = plan.affected_nodes(&[NodeIndexV1::new(3)]);
+    let diff = plan.compute_snapshot_diff(&affected, total_outputs);
+
+    assert_eq!(
+        diff.changed_outputs.len(),
+        1,
+        "exactly one terminal output (node 0) must be marked changed"
+    );
+    assert_eq!(diff.changed_outputs[0].raw(), 0);
+    assert_eq!(
+        diff.unchanged_count, 0,
+        "no outputs remain unchanged when root dependency changes"
+    );
+    assert!(
+        diff.recheck_passed.is_empty(),
+        "recheck_passed is a capability marker, empty by default"
+    );
+
+    // Change node 0 (terminal output itself, no dependents) → only 0 affected.
+    let affected_leaf = plan.affected_nodes(&[NodeIndexV1::new(0)]);
+    let diff_leaf = plan.compute_snapshot_diff(&affected_leaf, total_outputs);
+
+    assert_eq!(diff_leaf.changed_outputs.len(), 1);
+    assert_eq!(diff_leaf.changed_outputs[0].raw(), 0);
+    assert_eq!(diff_leaf.unchanged_count, 0);
+}
+
+/// affected_nodes_with_scratch reuses caller-provided buffers.
+#[test]
+fn scratch_api_reuses_buffers_without_reallocation() {
+    let plan = CompiledDependencyPlanV1::compile(&[0, 1, 2], &[(2, 1), (1, 0)])
+        .expect("chain must compile");
+
+    let n = plan.node_count();
+    let mut visited = vec![false; n];
+    let mut stack: Vec<NodeIndexV1> = Vec::new();
+
+    // First call.
+    let a = plan.affected_nodes_with_scratch(&[NodeIndexV1::new(0)], &mut visited, &mut stack);
+    assert_eq!(a.len(), 3);
+
+    // Second call reuses same buffers.
+    let b = plan.affected_nodes_with_scratch(&[NodeIndexV1::new(2)], &mut visited, &mut stack);
+    assert_eq!(b.len(), 1);
+    assert_eq!(b[0].raw(), 2);
 }

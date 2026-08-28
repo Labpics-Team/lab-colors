@@ -3,7 +3,7 @@
 pub struct NodeIndexV1(u32);
 
 impl NodeIndexV1 {
-    pub fn new(raw: u32) -> Self {
+    pub(crate) fn new(raw: u32) -> Self {
         Self(raw)
     }
 
@@ -33,14 +33,52 @@ pub enum CompileErrorV1 {
 /// Immutable compiled dependency plan with CSR forward edges and packed reverse cone.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CompiledDependencyPlanV1 {
-    pub nodes: Box<[CompiledNodeV1]>,
-    pub forward_edges: Box<[NodeIndexV1]>,
-    pub reverse_offsets: Box<[usize]>,
-    pub reverse_edges: Box<[NodeIndexV1]>,
-    pub terminal_outputs: Box<[NodeIndexV1]>,
+    nodes: Box<[CompiledNodeV1]>,
+    forward_offsets: Box<[usize]>,
+    forward_edges: Box<[NodeIndexV1]>,
+    reverse_offsets: Box<[usize]>,
+    reverse_edges: Box<[NodeIndexV1]>,
+    terminal_outputs: Box<[NodeIndexV1]>,
 }
 
 impl CompiledDependencyPlanV1 {
+    /// Total number of nodes in the plan.
+    pub fn node_count(&self) -> usize {
+        self.nodes.len()
+    }
+
+    /// Terminal output nodes (nodes with no dependents / no successors in forward CSR).
+    pub fn terminal_outputs(&self) -> &[NodeIndexV1] {
+        &self.terminal_outputs
+    }
+
+    /// Forward dependencies of a node (what it depends on).
+    pub fn dependencies_of(&self, node: NodeIndexV1) -> &[NodeIndexV1] {
+        let i = node.raw() as usize;
+        if i + 1 >= self.forward_offsets.len() {
+            return &[];
+        }
+        let start = self.forward_offsets[i];
+        let end = self.forward_offsets[i + 1];
+        &self.forward_edges[start..end]
+    }
+
+    /// Reverse dependents of a node (what depends on it).
+    pub fn dependents_of(&self, node: NodeIndexV1) -> &[NodeIndexV1] {
+        let i = node.raw() as usize;
+        if i + 1 >= self.reverse_offsets.len() {
+            return &[];
+        }
+        let start = self.reverse_offsets[i];
+        let end = self.reverse_offsets[i + 1];
+        &self.reverse_edges[start..end]
+    }
+
+    /// Check whether a node index is a terminal output.
+    fn is_terminal(&self, idx: NodeIndexV1) -> bool {
+        self.terminal_outputs.contains(&idx)
+    }
+
     /// Compile a dependency graph from raw node IDs and directed edges.
     ///
     /// Nodes are sorted canonically by ID (not declaration order).
@@ -74,7 +112,7 @@ impl CompiledDependencyPlanV1 {
 
         let n = sorted_ids.len();
 
-        // Build forward CSR: for each node, list of successors.
+        // Build forward CSR: for each node, list of dependencies (successors in edge direction).
         let mut fwd_offsets: Vec<usize> = vec![0; n + 1];
         for &(fi, _ti) in &edge_pairs {
             fwd_offsets[fi + 1] += 1;
@@ -152,21 +190,24 @@ impl CompiledDependencyPlanV1 {
             }
         }
 
-        // Terminal outputs: nodes with no successors (forward degree == 0).
+        // Terminal outputs: nodes with no dependents (nothing depends on them).
+        // In our edge convention (A,B) means A depends on B, so forward_edges[A] = [B].
+        // Terminal outputs are nodes that nobody depends on → reverse degree == 0.
         let terminal_outputs: Vec<NodeIndexV1> = (0..n)
-            .filter(|&i| fwd_offsets[i] == fwd_offsets[i + 1])
+            .filter(|&i| rev_counts[i] == 0)
             .map(|i| NodeIndexV1::new(i as u32))
             .collect();
 
-        // dependency_count = number of predecessors (reverse cone direct deps).
+        // dependency_count = number of direct dependencies (forward degree).
         let nodes: Vec<CompiledNodeV1> = (0..n)
             .map(|i| CompiledNodeV1 {
-                dependency_count: rev_counts[i] as u32,
+                dependency_count: (fwd_offsets[i + 1] - fwd_offsets[i]) as u32,
             })
             .collect();
 
         Ok(Self {
             nodes: nodes.into_boxed_slice(),
+            forward_offsets: fwd_offsets.into_boxed_slice(),
             forward_edges: forward_edges.into_boxed_slice(),
             reverse_offsets: reverse_offsets.into_boxed_slice(),
             reverse_edges: reverse_edges.into_boxed_slice(),
@@ -177,72 +218,57 @@ impl CompiledDependencyPlanV1 {
     /// Return all nodes transitively affected when `changed` nodes are modified.
     /// Uses precompiled reverse adjacency for O(V+E) traversal.
     /// Result is in deterministic topological order (ascending index).
+    ///
+    /// Allocates internal scratch buffers. For hot-path reuse, see
+    /// [`affected_nodes_with_scratch`](Self::affected_nodes_with_scratch).
     pub fn affected_nodes(&self, changed: &[NodeIndexV1]) -> Vec<NodeIndexV1> {
         let n = self.nodes.len();
         let mut visited = vec![false; n];
-        let mut stack: Vec<usize> = Vec::new();
+        let mut stack: Vec<NodeIndexV1> = Vec::new();
+        self.affected_nodes_with_scratch(changed, &mut visited, &mut stack)
+    }
+
+    /// Return all nodes transitively affected when `changed` nodes are modified,
+    /// using caller-provided scratch buffers to avoid repeated allocation.
+    ///
+    /// `visited` must have length >= `self.node_count()` and will be used as a
+    /// bitset (values are reset internally before each call).
+    /// `stack` is reused as the DFS work stack and cleared internally.
+    ///
+    /// Callers can reuse both buffers across multiple calls for zero-alloc
+    /// hot-path traversal.
+    pub fn affected_nodes_with_scratch(
+        &self,
+        changed: &[NodeIndexV1],
+        visited: &mut [bool],
+        stack: &mut Vec<NodeIndexV1>,
+    ) -> Vec<NodeIndexV1> {
+        let n = self.nodes.len();
+        // Reset visited bitset.
+        for v in visited.iter_mut().take(n) {
+            *v = false;
+        }
+        stack.clear();
 
         for &idx in changed {
             let i = idx.raw() as usize;
             if i < n && !visited[i] {
                 visited[i] = true;
-                stack.push(i);
+                stack.push(idx);
             }
         }
 
-        // BFS/DFS through reverse edges: find all transitive dependents.
-        // Reverse edges of node X = nodes that depend on X (predecessors in
-        // the "depends-on" direction are successors in "affected-by").
-        // Wait — our edges are (from, to) meaning "from depends on to"?
-        // No: edges are (dependency, dependent)? Let's clarify:
-        // In compile, edge (fi, ti) means fi -> ti in forward_edges.
-        // Forward = fi's successors. So fi depends on ti? Or fi feeds ti?
-        // Convention: edge (A, B) means "A must be computed before B",
-        // i.e., B depends on A. Forward edges of A include B.
-        // Reverse edges of B include A.
-        // If A changes, B is affected. So we traverse FORWARD from changed nodes.
-        // But the method says "reverse-cone traversal through precompiled reverse_edges".
-        // Re-reading: reverse_edges[X] = predecessors of X in the forward graph.
-        // If changed = {A}, affected = everything reachable via forward edges from A.
-        // That uses forward_edges, not reverse_edges.
-        //
-        // Actually the spec says "reverse-cone traversal" which typically means:
-        // given changed outputs, find all inputs that could have contributed.
-        // But for selective UPDATE, we want downstream dependents.
-        // Let me re-read: "affected_nodes" = nodes that need recomputation.
-        // If node X changed, everything that depends on X needs recomputation.
-        // "Depends on X" = X appears in their forward dependency list.
-        // Equivalently, they appear in X's... hmm.
-        //
-        // Edge (A, B): A -> B in forward. B depends on A.
-        // If A changed → B is affected → traverse forward from A.
-        // Forward CSR already gives us this efficiently.
-        //
-        // But the task says "reverse-cone traversal through precompiled reverse_edges".
-        // Maybe the convention is inverted: edge (A,B) means A depends on B.
-        // Then forward_edges[A] contains B (A's dependencies).
-        // If B changed, A is affected. We need "who depends on B" = reverse_edges[B].
-        // That matches "reverse-cone traversal through reverse_edges".
-        //
-        // Let's go with: edge (from, to) means "from depends on to".
-        // forward_edges[from] = [to, ...] = from's dependencies.
-        // reverse_edges[to] = [from, ...] = nodes that depend on to.
-        // If `changed` contains to, affected = transitive closure via reverse_edges.
-
-        // With this interpretation, the traversal is correct:
-        // Start from changed nodes, follow reverse_edges to find dependents.
-        // But wait — reverse_edges[to] = predecessors in forward graph = nodes whose
-        // forward_edges include to = nodes that depend on to. Yes, this is right.
-
         let mut result_indices: Vec<usize> = Vec::new();
         while let Some(node) = stack.pop() {
-            result_indices.push(node);
-            let start = self.reverse_offsets[node];
-            let end = self.reverse_offsets[node + 1];
+            let ni = node.raw() as usize;
+            result_indices.push(ni);
+            let start = self.reverse_offsets[ni];
+            let end = self.reverse_offsets[ni + 1];
             for j in start..end {
-                let dep = self.reverse_edges[j].raw() as usize;
-                if !visited[dep] {
-                    visited[dep] = true;
+                let dep = self.reverse_edges[j];
+                let di = dep.raw() as usize;
+                if !visited[di] {
+                    visited[di] = true;
                     stack.push(dep);
                 }
             }
@@ -255,4 +281,38 @@ impl CompiledDependencyPlanV1 {
             .map(|i| NodeIndexV1::new(i as u32))
             .collect()
     }
+
+    /// Compute the diff between a full resolve and the current state.
+    /// `affected` is the output of `affected_nodes`. `total_outputs` is the
+    /// total number of terminal outputs in the plan.
+    pub fn compute_snapshot_diff(
+        &self,
+        affected: &[NodeIndexV1],
+        total_outputs: usize,
+    ) -> ResolvedSnapshotDiffV1 {
+        let changed: Vec<NodeIndexV1> = affected
+            .iter()
+            .copied()
+            .filter(|&idx| self.is_terminal(idx))
+            .collect();
+        let unchanged_count = total_outputs.saturating_sub(changed.len());
+        ResolvedSnapshotDiffV1 {
+            changed_outputs: changed.into_boxed_slice(),
+            unchanged_count,
+            recheck_passed: Box::new([]),
+        }
+    }
+}
+
+/// Typed diff produced by selective update. Records which outputs changed
+/// and how many were unchanged, enabling proof-bound evidence reuse.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedSnapshotDiffV1 {
+    /// Indices of outputs whose values changed in this update.
+    pub changed_outputs: Box<[NodeIndexV1]>,
+    /// Count of outputs that remained unchanged and can reuse prior evidence.
+    pub unchanged_count: usize,
+    /// Outputs whose retained evidence passed cheap recheck and need no re-resolve.
+    /// Capability marker — actual recheck logic belongs to Session/runtime, not the plan.
+    pub recheck_passed: Box<[NodeIndexV1]>,
 }
