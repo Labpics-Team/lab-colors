@@ -27,7 +27,7 @@ class PointSupportSurplusSourceBindingTests(unittest.TestCase):
         cls.observation_path = cls.verifier["OBSERVATION_SOURCE"]
         cls.numerics_path = cls.verifier["NUMERICS_SOURCE"]
         cls.session_path = cls.verifier["SESSION_SOURCE"]
-        cls.proof = json.loads(PROOF.read_text(encoding="utf-8"))
+        cls.proof = json.loads(PROOF.read_text(encoding="utf-8-sig"))
 
     def test_committed_proof_is_canonical_and_replays(self) -> None:
         replayed = self.verifier["canonical_proof"]()

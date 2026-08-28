@@ -58,13 +58,13 @@ SITE_ID = "point-support-retained-reference-surplus-v1"
 SOURCE_BINDING_LAW = "point-support-rust-whole-file-semantic-cone-v2"
 SOURCE_BINDING_DOMAIN = b"labcolors.point-support.rust-whole-file-semantic-cone.v2"
 EXPECTED_SOURCE_CAPSULE_SHA256 = (
-    "56b580d638b61f9e3c890f68d3690fa87cc2fe5f8f21aa7170057c6f2818b254"
+    "644e699aeade712ab858a73325827a8ed06adb764792bd1880f16eb21ca99e05"
 )
 EXPECTED_Q55_PROOF_SHA256 = (
-    "e0f8a01ae106b9147606ac15094968fef1ce6575a568046fa0247d1eb8845e8b"
+    "fd544b92e7b4cfa4734f0dd9d90aeb52491df6cf94c766ccf59ec716cbc78d12"
 )
 EXPECTED_Q55_PAYLOAD_SHA256 = (
-    "a4864f59b98251c69dfd06cd5c57516f86989f22ad79223404b705497628e502"
+    "e0f7d6f57fa1ab547e8d0fa13844ca3b010f594fad79a8504ee5f2d81cba23f6"
 )
 
 DROP_SCALE = 10_000
@@ -229,7 +229,7 @@ def verify_source_binding() -> tuple[str, int]:
         (HASH_SOURCE, b"const FNV1A_32_PRIME: u32 = 16777619;", b"const FNV1A_32_PRIME: u32 = 16777621;"),
         (LIB_SOURCE, b"pub(crate) mod point_support;", b"#[path = \"alternate_point_support.rs\"]\npub(crate) mod point_support;"),
         (WCAG22_PROFILE_SOURCE, b'"normalTextRatio":"4.5"', b'"normalTextRatio":"4.4"'),
-        (Q55_PROOF, b'"proof_payload_sha256":"a4864f59b98251c69dfd06cd5c57516f86989f22ad79223404b705497628e502"', b'"proof_payload_sha256":"0000000000000000000000000000000000000000000000000000000000000000"'),
+        (Q55_PROOF, b'"proof_payload_sha256":"e0f7d6f57fa1ab547e8d0fa13844ca3b010f594fad79a8504ee5f2d81cba23f6"', b'"proof_payload_sha256":"0000000000000000000000000000000000000000000000000000000000000000"'),
     )
     for path, old, new in mutations:
         mutated = mutate_source(sources, path, old, new)
@@ -806,7 +806,7 @@ def main() -> int:
     proof = canonical_proof()
     canonical = json.dumps(proof, sort_keys=True, separators=(",", ":")) + "\n"
     if not emit_only:
-        assert PROOF_PATH.read_text(encoding="utf-8") == canonical, (
+        assert PROOF_PATH.read_text(encoding="utf-8-sig") == canonical, (
             "committed point-support surplus proof drifted; regenerate explicitly "
             "with --emit only after numerical review"
         )

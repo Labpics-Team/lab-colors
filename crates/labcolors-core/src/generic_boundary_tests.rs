@@ -1635,8 +1635,11 @@ fn shared_observation_ssot_has_one_backing_without_lifecycle_or_adapter_facades(
             .contains("pub(crate) struct CanonicalObservationSchemaV1(Rc<[SurfaceInputPortId]>);"),
         "compiled schema and observations must share the same Rc-backed schema",
     );
+    // Normalize CRLF→LF so the assertion is platform-independent: include_str!
+    // captures raw file bytes (CRLF on Windows), but concat! produces LF only.
+    let observation_lf = OBSERVATION_SOURCE.replace("\r\n", "\n");
     assert!(
-        OBSERVATION_SOURCE.contains(concat!(
+        observation_lf.contains(concat!(
             "#[derive(Debug, PartialEq, Eq)]\n",
             "#[cfg_attr(test, derive(Clone))]\n",
             "pub(crate) struct CanonicalObservationSchemaV1(Rc<[SurfaceInputPortId]>);",

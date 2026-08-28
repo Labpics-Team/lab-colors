@@ -123,7 +123,7 @@ def _object_without_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, An
 def read_json(path: Path) -> Any:
     try:
         return json.loads(
-            path.read_text(encoding="utf-8"),
+            path.read_text(encoding="utf-8-sig"),
             object_pairs_hook=_object_without_duplicate_keys,
             parse_constant=_reject_constant,
         )

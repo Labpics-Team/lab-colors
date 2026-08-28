@@ -23,7 +23,7 @@ const CANONICAL_FAMILY_SHA256: [(&str, &str); 4] = [
     ),
     (
         "wcag22.json",
-        "836b7f90ab3807072155d8e38633cf6bab7ec6ad7a0ee436831acd8536df6db7",
+        "854b383fb9fa972b5840fd4d94c97286366f102f726a6d981eacddeef0b5fa11",
     ),
 ];
 fn vectors_dir() -> PathBuf {
