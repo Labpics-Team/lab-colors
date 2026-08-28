@@ -21,7 +21,10 @@ const CANONICAL_FAMILY_SHA256: [(&str, &str); 4] = [
         "solve.json",
         "09cb198d63cc079384a4fdc5d6ae236f510e32d12214c97a063ca7a5d2f7dcf9",
     ),
-    ("wcag22.json", "1fb5aff4"),
+    (
+        "wcag22.json",
+        "854b383fb9fa972b5840fd4d94c97286366f102f726a6d981eacddeef0b5fa11",
+    ),
 ];
 fn vectors_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
