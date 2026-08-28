@@ -58,7 +58,7 @@ SITE_ID = "point-support-retained-reference-surplus-v1"
 SOURCE_BINDING_LAW = "point-support-rust-whole-file-semantic-cone-v2"
 SOURCE_BINDING_DOMAIN = b"labcolors.point-support.rust-whole-file-semantic-cone.v2"
 EXPECTED_SOURCE_CAPSULE_SHA256 = (
-    "51b8eb448a6fafb709c772a9ebeb981376ab408435aea03a686002382f416949"
+    "644e699aeade712ab858a73325827a8ed06adb764792bd1880f16eb21ca99e05"
 )
 EXPECTED_Q55_PROOF_SHA256 = (
     "fd544b92e7b4cfa4734f0dd9d90aeb52491df6cf94c766ccf59ec716cbc78d12"
