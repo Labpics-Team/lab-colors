@@ -22,7 +22,7 @@ pub use kernel::{evaluate_wcag22_hex, evaluate_wcag22_srgb8};
 const PROFILE_SOURCE_JSON: &str = include_str!("../contracts/wcag22-srgb8-v1.json");
 const PROOF_SOURCE_JSON: &str = include_str!("../contracts/wcag22-srgb8-q55-proof-v1.json");
 const PROOF_SOURCE_SHA256: &str =
-    "e0f8a01ae106b9147606ac15094968fef1ce6575a568046fa0247d1eb8845e8b";
+    "fd544b92e7b4cfa4734f0dd9d90aeb52491df6cf94c766ccf59ec716cbc78d12";
 const PROOF_PAYLOAD_SHA256: &str =
     "a4864f59b98251c69dfd06cd5c57516f86989f22ad79223404b705497628e502";
 const VERIFIER_SHA256: &str = "5211396d3ebd928618afd54d80bf0970229e6e82f1ee9747f899b9e46e6e4167";
