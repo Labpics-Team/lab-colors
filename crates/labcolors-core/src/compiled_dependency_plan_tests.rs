@@ -222,17 +222,17 @@ fn snapshot_diff_reports_exact_changed_and_unchanged_counts() {
     let diff = plan.compute_snapshot_diff(&affected, total_outputs);
 
     assert_eq!(
-        diff.changed_outputs.len(),
+        diff.changed_outputs().len(),
         1,
         "exactly one terminal output (node 0) must be marked changed"
     );
-    assert_eq!(diff.changed_outputs[0].raw(), 0);
+    assert_eq!(diff.changed_outputs()[0].raw(), 0);
     assert_eq!(
-        diff.unchanged_count, 0,
+        diff.unchanged_count(), 0,
         "no outputs remain unchanged when root dependency changes"
     );
     assert!(
-        diff.recheck_passed.is_empty(),
+        diff.recheck_passed().is_empty(),
         "recheck_passed is a capability marker, empty by default"
     );
 
@@ -240,9 +240,9 @@ fn snapshot_diff_reports_exact_changed_and_unchanged_counts() {
     let affected_leaf = plan.affected_nodes(&[NodeIndexV1::new(0)]);
     let diff_leaf = plan.compute_snapshot_diff(&affected_leaf, total_outputs);
 
-    assert_eq!(diff_leaf.changed_outputs.len(), 1);
-    assert_eq!(diff_leaf.changed_outputs[0].raw(), 0);
-    assert_eq!(diff_leaf.unchanged_count, 0);
+    assert_eq!(diff_leaf.changed_outputs().len(), 1);
+    assert_eq!(diff_leaf.changed_outputs()[0].raw(), 0);
+    assert_eq!(diff_leaf.unchanged_count(), 0);
 }
 
 /// affected_nodes_with_scratch reuses caller-provided buffers.

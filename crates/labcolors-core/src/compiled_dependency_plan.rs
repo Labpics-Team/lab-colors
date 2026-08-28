@@ -309,10 +309,28 @@ impl CompiledDependencyPlanV1 {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedSnapshotDiffV1 {
     /// Indices of outputs whose values changed in this update.
-    pub changed_outputs: Box<[NodeIndexV1]>,
+    changed_outputs: Box<[NodeIndexV1]>,
     /// Count of outputs that remained unchanged and can reuse prior evidence.
-    pub unchanged_count: usize,
+    unchanged_count: usize,
     /// Outputs whose retained evidence passed cheap recheck and need no re-resolve.
     /// Capability marker — actual recheck logic belongs to Session/runtime, not the plan.
-    pub recheck_passed: Box<[NodeIndexV1]>,
+    recheck_passed: Box<[NodeIndexV1]>,
+}
+
+impl ResolvedSnapshotDiffV1 {
+    /// Indices of terminal outputs whose values changed in this update.
+    pub fn changed_outputs(&self) -> &[NodeIndexV1] {
+        &self.changed_outputs
+    }
+
+    /// Count of terminal outputs that remained unchanged and can reuse prior evidence.
+    pub fn unchanged_count(&self) -> usize {
+        self.unchanged_count
+    }
+
+    /// Outputs whose retained evidence passed cheap recheck and need no re-resolve.
+    /// Empty by default — actual recheck logic belongs to Session/runtime.
+    pub fn recheck_passed(&self) -> &[NodeIndexV1] {
+        &self.recheck_passed
+    }
 }
