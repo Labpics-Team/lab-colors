@@ -229,7 +229,7 @@ def verify_source_binding() -> tuple[str, int]:
         (HASH_SOURCE, b"const FNV1A_32_PRIME: u32 = 16777619;", b"const FNV1A_32_PRIME: u32 = 16777621;"),
         (LIB_SOURCE, b"pub(crate) mod point_support;", b"#[path = \"alternate_point_support.rs\"]\npub(crate) mod point_support;"),
         (WCAG22_PROFILE_SOURCE, b'"normalTextRatio":"4.5"', b'"normalTextRatio":"4.4"'),
-        (Q55_PROOF, b'"proof_payload_sha256":"a4864f59b98251c69dfd06cd5c57516f86989f22ad79223404b705497628e502"', b'"proof_payload_sha256":"0000000000000000000000000000000000000000000000000000000000000000"'),
+        (Q55_PROOF, b'"proof_payload_sha256":"e0f7d6f57fa1ab547e8d0fa13844ca3b010f594fad79a8504ee5f2d81cba23f6"', b'"proof_payload_sha256":"0000000000000000000000000000000000000000000000000000000000000000"'),
     )
     for path, old, new in mutations:
         mutated = mutate_source(sources, path, old, new)
