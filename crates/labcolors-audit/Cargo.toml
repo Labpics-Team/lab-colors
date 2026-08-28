@@ -1,0 +1,21 @@
+[package]
+name = "labcolors-audit"
+description = "AUD-01 scanner: 3-stage pipeline (enumerate → dispose → gate) for production artifact conformance auditing."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+labcolors-core = { path = "../labcolors-core" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[[bin]]
+name = "scanner"
+path = "src/bin/scanner.rs"
+
+[dev-dependencies]
+pretty_assertions = "1.4"
