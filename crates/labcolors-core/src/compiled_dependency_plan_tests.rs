@@ -228,7 +228,8 @@ fn snapshot_diff_reports_exact_changed_and_unchanged_counts() {
     );
     assert_eq!(diff.changed_outputs()[0].raw(), 0);
     assert_eq!(
-        diff.unchanged_count(), 0,
+        diff.unchanged_count(),
+        0,
         "no outputs remain unchanged when root dependency changes"
     );
     assert!(
