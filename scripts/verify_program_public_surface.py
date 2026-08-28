@@ -71,7 +71,7 @@ class _LinkParser(HTMLParser):
 
 def _read(path: Path) -> str:
     try:
-        return path.read_text(encoding="utf-8")
+        return path.read_text(encoding="utf-8-sig")
     except (OSError, UnicodeError) as error:
         raise RustdocShapeError(f"cannot read {path}: {error}") from error
 

@@ -383,7 +383,7 @@ def integer_tightness_cross_check(
 def parse_committed_artifact(
     path: Path,
 ) -> tuple[dict[str, int | str], list[tuple[int, int]]]:
-    source = path.read_text(encoding="utf-8")
+    source = path.read_text(encoding="utf-8-sig")
     metadata_patterns = {
         "q55_scale": r"Q55_SCALE: u64 = (\d+);",
         "profile_checksum": r'PROFILE_CHECKSUM: &str =\s*"([0-9a-f]{8})";',
@@ -930,7 +930,7 @@ def verify_srgb8_parser() -> str:
 
 def verify_public_facade() -> str:
     """Bind the public symbols to the kernel without a digest self-cycle."""
-    source = FACADE_SOURCE.read_text(encoding="utf-8")
+    source = FACADE_SOURCE.read_text(encoding="utf-8-sig")
     normalized = source
     for name in (
         "PROOF_SOURCE_SHA256",
@@ -962,7 +962,7 @@ def verify_public_facade() -> str:
 def verify_evaluator_digest_bindings(
     proof_sha256: str, proof_payload_sha256: str, verifier_sha256: str
 ) -> None:
-    source = EVALUATOR_SOURCE.read_text(encoding="utf-8")
+    source = EVALUATOR_SOURCE.read_text(encoding="utf-8-sig")
     expected = {
         "PROOF_SOURCE_SHA256": proof_sha256,
         "PROOF_PAYLOAD_SHA256": proof_payload_sha256,
@@ -1520,7 +1520,7 @@ def main() -> int:
     }
     canonical_proof = json.dumps(proof, sort_keys=True, separators=(",", ":"))
     if not emit_only:
-        committed = PROOF_PATH.read_text(encoding="utf-8")
+        committed = PROOF_PATH.read_text(encoding="utf-8-sig")
         assert committed == canonical_proof + "\n", (
             "committed full-domain proof drifted; inspect and regenerate explicitly "
             "with --emit only after scientific/numerical review"

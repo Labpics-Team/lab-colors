@@ -131,7 +131,7 @@ def load_publish_worker() -> tuple[str, str]:
     repo = Path(__file__).resolve().parents[1]
     workflow = (
         repo / ".github" / "workflows" / "publish-worker.yml"
-    ).read_text(encoding="utf-8")
+    ).read_text(encoding="utf-8-sig")
     publish_job = workflow_job_blocks(workflow, "publish-worker.yml")["publish"]
     return workflow, publish_job
 
@@ -472,7 +472,7 @@ class MutationTruthTest(unittest.TestCase):
         manifest = self.make_manifest()
         parent, _ = self.record(manifest, 0)
         lock = parent / "mutants.out" / "lock.json"
-        data = json.loads(lock.read_text(encoding="utf-8"))
+        data = json.loads(lock.read_text(encoding="utf-8-sig"))
         data["cargo_mutants_version"] = "25.0.0"
         mutation.write_json(lock, data)
         with self.assertRaisesRegex(mutation.ContractError, "tool version"):
@@ -1143,7 +1143,7 @@ class MutationTruthTest(unittest.TestCase):
         parent = self.root / "mutation-shard-0"
         self.write_outcomes(parent, expected)
         outcomes_path = parent / "mutants.out" / "outcomes.json"
-        outcomes = json.loads(outcomes_path.read_text(encoding="utf-8"))
+        outcomes = json.loads(outcomes_path.read_text(encoding="utf-8-sig"))
         outcomes["outcomes"][1]["phase_results"] = [
             {
                 "phase": "Check",
@@ -1322,7 +1322,7 @@ class MutationTruthTest(unittest.TestCase):
         parent = self.root / "mutation-shard-0"
         self.write_outcomes(parent, expected)
         outcomes_path = parent / "mutants.out" / "outcomes.json"
-        outcomes = json.loads(outcomes_path.read_text(encoding="utf-8"))
+        outcomes = json.loads(outcomes_path.read_text(encoding="utf-8-sig"))
         outcomes["outcomes"][0]["phase_results"][0]["argv"] = [
             TEST_CARGO,
             "check",
@@ -1341,7 +1341,7 @@ class MutationTruthTest(unittest.TestCase):
                 exit_code=0,
             )
         self.write_outcomes(parent, expected)
-        outcomes = json.loads(outcomes_path.read_text(encoding="utf-8"))
+        outcomes = json.loads(outcomes_path.read_text(encoding="utf-8-sig"))
         outcomes["outcomes"][1]["phase_results"][0]["argv"][-1] = "--package=core@9.9.9"
         mutation.write_json(outcomes_path, outcomes)
         with self.assertRaisesRegex(mutation.ContractError, "command identity"):
@@ -1386,7 +1386,7 @@ class MutationTruthTest(unittest.TestCase):
             )
         self.write_outcomes(parent, expected)
         outcomes_path = parent / "mutants.out" / "outcomes.json"
-        outcomes = json.loads(outcomes_path.read_text(encoding="utf-8"))
+        outcomes = json.loads(outcomes_path.read_text(encoding="utf-8-sig"))
         outcomes["outcomes"][1]["summary"] = "Success"
         outcomes["caught"] -= 1
         outcomes["success"] += 1
@@ -1403,7 +1403,7 @@ class MutationTruthTest(unittest.TestCase):
                 exit_code=0,
             )
         self.write_outcomes(parent, expected)
-        outcomes = json.loads(outcomes_path.read_text(encoding="utf-8"))
+        outcomes = json.loads(outcomes_path.read_text(encoding="utf-8-sig"))
         outcomes["outcomes"][1]["log_path"] = "../foreign.log"
         mutation.write_json(outcomes_path, outcomes)
         with self.assertRaisesRegex(mutation.ContractError, "unsafe"):
@@ -1442,7 +1442,7 @@ class MutationTruthTest(unittest.TestCase):
             )
         backup.rename(missing)
         shard_json = shards / "mutation-shard-31" / "shard.json"
-        record = json.loads(shard_json.read_text(encoding="utf-8"))
+        record = json.loads(shard_json.read_text(encoding="utf-8-sig"))
         record["shard"]["index"] = 30
         record["record_sha256"] = mutation._digest_value(mutation._shard_payload(record))
         mutation.write_json(shard_json, record)
@@ -1728,9 +1728,9 @@ class MutationTruthTest(unittest.TestCase):
     ) -> None:
         repo = Path(__file__).resolve().parents[1]
         workflows = repo / ".github" / "workflows"
-        mutation_workflow = (workflows / "mutation.yml").read_text(encoding="utf-8")
-        ci_workflow = (workflows / "ci.yml").read_text(encoding="utf-8")
-        ci_worker = (workflows / "ci-worker.yml").read_text(encoding="utf-8")
+        mutation_workflow = (workflows / "mutation.yml").read_text(encoding="utf-8-sig")
+        ci_workflow = (workflows / "ci.yml").read_text(encoding="utf-8-sig")
+        ci_worker = (workflows / "ci-worker.yml").read_text(encoding="utf-8-sig")
         native_workflow = (workflows / "native-conformance.yml").read_text(
             encoding="utf-8"
         )
@@ -1838,7 +1838,7 @@ class MutationTruthTest(unittest.TestCase):
         workflows = repo / ".github" / "workflows"
 
         workers = {
-            name: (workflows / name).read_text(encoding="utf-8")
+            name: (workflows / name).read_text(encoding="utf-8-sig")
             for name in (
                 "ci-worker.yml",
                 "mutation-worker.yml",
@@ -1846,7 +1846,7 @@ class MutationTruthTest(unittest.TestCase):
                 "publish-worker.yml",
             )
         }
-        ci_caller = (workflows / "ci.yml").read_text(encoding="utf-8")
+        ci_caller = (workflows / "ci.yml").read_text(encoding="utf-8-sig")
         # Extract the pinned SHA dynamically from ci.yml so this test does not
         # break every time the worker reference is bumped.
         ci_worker_ref_match = re.search(
@@ -1968,7 +1968,7 @@ class MutationTruthTest(unittest.TestCase):
 
         swift_runner = (
             repo / "bindings" / "swift" / "ci" / "run-conformance.sh"
-        ).read_text(encoding="utf-8")
+        ).read_text(encoding="utf-8-sig")
         self.assertIn('expected_swift="Swift version ${SWIFT_TOOLCHAIN} ', swift_runner)
         self.assertIn('readonly source_root="${GITHUB_WORKSPACE:-/src}"', swift_runner)
         self.assertIn('readonly temp_root="${RUNNER_TEMP:-/work}"', swift_runner)
@@ -2379,8 +2379,8 @@ class MutationTruthTest(unittest.TestCase):
         repo = Path(__file__).resolve().parents[1]
         workflow = (
             repo / ".github" / "workflows" / "mutation-worker.yml"
-        ).read_text(encoding="utf-8")
-        config = (repo / ".cargo" / "mutants.toml").read_text(encoding="utf-8")
+        ).read_text(encoding="utf-8-sig")
+        config = (repo / ".cargo" / "mutants.toml").read_text(encoding="utf-8-sig")
         ci = (repo / ".github" / "workflows" / "ci-worker.yml").read_text(
             encoding="utf-8"
         )

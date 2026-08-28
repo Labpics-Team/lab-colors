@@ -115,7 +115,7 @@ class SourceBindingTests(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.root_source = CRATE_ROOT.read_bytes()
         cls.parser_parent_source = SRGB8_PARENT.read_bytes()
-        cls.proof = json.loads(PROOF.read_text(encoding="utf-8"))
+        cls.proof = json.loads(PROOF.read_text(encoding="utf-8-sig"))
 
     def test_committed_proof_binds_the_exact_live_capsules(self) -> None:
         self.assertEqual(self.proof["schema_version"], 2)
@@ -126,7 +126,7 @@ class SourceBindingTests(unittest.TestCase):
             live_route_digest(self.root_source, self.parser_parent_source),
         )
         self.assertNotIn("crate_lib_source_sha256", self.proof)
-        verifier = VERIFIER.read_text(encoding="utf-8")
+        verifier = VERIFIER.read_text(encoding="utf-8-sig")
         self.assertNotIn("CRATE_LIB_SOURCE", verifier)
         self.assertNotIn("crate_lib_source_sha256", verifier)
 
@@ -276,7 +276,7 @@ class SourceBindingTests(unittest.TestCase):
     def test_kernel_call_redirects_are_rejected_by_exact_leaf_binding(self) -> None:
         verifier = runpy.run_path(str(VERIFIER), run_name="wcag22_verifier_test")
         verify_kernel = verifier["verify_production_kernel"]
-        source = KERNEL.read_text(encoding="utf-8")
+        source = KERNEL.read_text(encoding="utf-8-sig")
         redirects = (
             source.replace(
                 "crate::srgb8::hex_bytes(value)",
