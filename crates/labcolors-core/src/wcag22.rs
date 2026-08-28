@@ -25,7 +25,7 @@ const PROOF_SOURCE_SHA256: &str =
     "fd544b92e7b4cfa4734f0dd9d90aeb52491df6cf94c766ccf59ec716cbc78d12";
 const PROOF_PAYLOAD_SHA256: &str =
     "e0f7d6f57fa1ab547e8d0fa13844ca3b010f594fad79a8504ee5f2d81cba23f6";
-const VERIFIER_SHA256: &str = "5211396d3ebd928618afd54d80bf0970229e6e82f1ee9747f899b9e46e6e4167";
+const VERIFIER_SHA256: &str = "fd91026d2a785f714cbca630231e8ab9908f3237d92fc65699035e9ffaeb1928";
 
 /// Идентификатор immutable normative profile.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
