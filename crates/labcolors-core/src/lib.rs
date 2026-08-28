@@ -261,6 +261,9 @@ mod contextual_region_formula_tests;
 pub mod compiled_dependency_plan;
 
 #[cfg(test)]
+mod compiled_dependency_plan_tests;
+
+#[cfg(test)]
 mod wcag22_tests;
 
 #[cfg(test)]
