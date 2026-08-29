@@ -175,8 +175,8 @@ pub fn extract_exports_metadata(workspace_root: &Path) -> Vec<CrateExportManifes
             .expect("package.name present")
             .to_string();
 
-        let version = resolve_workspace_string(pkg, &workspace_package, "version")
-            .expect("version resolved");
+        let version =
+            resolve_workspace_string(pkg, &workspace_package, "version").expect("version resolved");
         let description = resolve_workspace_string(pkg, &workspace_package, "description");
         let license = resolve_workspace_string(pkg, &workspace_package, "license");
 
@@ -218,7 +218,11 @@ fn resolve_workspace_string(
                 return Some(s.to_string());
             }
             if let Some(tbl) = v.as_table() {
-                if tbl.get("workspace").and_then(|w| w.as_bool()).unwrap_or(false) {
+                if tbl
+                    .get("workspace")
+                    .and_then(|w| w.as_bool())
+                    .unwrap_or(false)
+                {
                     return workspace_pkg
                         .get(key)
                         .and_then(|w| w.as_str())
@@ -582,7 +586,10 @@ mod tests {
     #[test]
     fn resolves_workspace_inherited_metadata() {
         let manifests = extract_exports_metadata(&workspace_root());
-        let audit = manifests.iter().find(|m| m.crate_name == "labcolors-audit").unwrap();
+        let audit = manifests
+            .iter()
+            .find(|m| m.crate_name == "labcolors-audit")
+            .unwrap();
         assert_eq!(audit.version, "0.3.0");
         assert_eq!(audit.license.as_deref(), Some("MIT"));
         assert!(audit.description.is_some());
@@ -591,7 +598,10 @@ mod tests {
     #[test]
     fn core_has_known_public_modules() {
         let manifests = extract_exports_metadata(&workspace_root());
-        let core = manifests.iter().find(|m| m.crate_name == "labcolors-core").unwrap();
+        let core = manifests
+            .iter()
+            .find(|m| m.crate_name == "labcolors-core")
+            .unwrap();
         let module_names: Vec<&str> = core
             .public_api
             .iter()
@@ -600,18 +610,30 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert!(module_names.contains(&"numerics"), "missing pub mod numerics");
+        assert!(
+            module_names.contains(&"numerics"),
+            "missing pub mod numerics"
+        );
         assert!(module_names.contains(&"wcag22"), "missing pub mod wcag22");
         assert!(module_names.contains(&"solve"), "missing pub mod solve");
-        assert!(module_names.contains(&"source_manifest"), "missing pub mod source_manifest");
+        assert!(
+            module_names.contains(&"source_manifest"),
+            "missing pub mod source_manifest"
+        );
     }
 
     #[test]
     fn feature_gated_private_fixture_is_tracked() {
         let manifests = extract_exports_metadata(&workspace_root());
-        let core = manifests.iter().find(|m| m.crate_name == "labcolors-core").unwrap();
+        let core = manifests
+            .iter()
+            .find(|m| m.crate_name == "labcolors-core")
+            .unwrap();
         let has_private_fixture_feature = core.features.iter().any(|f| f.name == "private-fixture");
-        assert!(has_private_fixture_feature, "private-fixture feature must be listed");
+        assert!(
+            has_private_fixture_feature,
+            "private-fixture feature must be listed"
+        );
     }
 
     #[test]
@@ -640,7 +662,10 @@ mod tests {
     #[test]
     fn reexports_include_solve_surface() {
         let manifests = extract_exports_metadata(&workspace_root());
-        let core = manifests.iter().find(|m| m.crate_name == "labcolors-core").unwrap();
+        let core = manifests
+            .iter()
+            .find(|m| m.crate_name == "labcolors-core")
+            .unwrap();
         let reexport_names: Vec<&str> = core
             .public_api
             .iter()
@@ -662,7 +687,10 @@ mod tests {
     #[test]
     fn pub_crate_items_excluded_from_surface() {
         let manifests = extract_exports_metadata(&workspace_root());
-        let core = manifests.iter().find(|m| m.crate_name == "labcolors-core").unwrap();
+        let core = manifests
+            .iter()
+            .find(|m| m.crate_name == "labcolors-core")
+            .unwrap();
         let module_names: Vec<&str> = core
             .public_api
             .iter()
