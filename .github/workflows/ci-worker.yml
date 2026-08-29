@@ -277,6 +277,14 @@ jobs:
         run: python3 scripts/test_mutation.py
       - name: cargo test
         run: cargo test --workspace --locked
+      # Floor baseline gate: test count must never regress below the declared
+      # minimum. The baseline is updated atomically with each merge that adds
+      # tests; a drop means either tests were silently dropped or a feature
+      # gate hid an entire module. This step runs AFTER cargo test so it can
+      # reuse the same compilation artifacts and add zero wall-clock cost.
+      - name: floor baseline gate
+        shell: pwsh
+        run: scripts/check-floor-baseline.ps1
       # The private-fixture lifecycle/dispose tests in private_fixture.rs are
       # feature-gated (`#[cfg(feature = "private-fixture")]`), so the default
       # `cargo test --workspace` step above never compiles them. They must run
