@@ -156,5 +156,3 @@ fn relative_path(root: &Path, path: &Path) -> String {
         .to_string_lossy()
         .replace('\\', "/")
 }
-
-// CI trigger: 2026-08-29T20:00:09.0821087+03:00
