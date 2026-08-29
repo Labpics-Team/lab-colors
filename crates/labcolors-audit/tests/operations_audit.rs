@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use labcolors_audit::extractors::{extract_operations, OperationEntry};
+use labcolors_audit::extractors::{OperationEntry, extract_operations};
 
 fn workspace_root() -> &'static Path {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -14,8 +14,14 @@ fn workspace_root() -> &'static Path {
 fn operations_includes_known_functions() {
     let ops = extract_operations(workspace_root());
     // enumerate_production_artifacts is a known pub fn in labcolors-audit
-    let found = ops.iter().any(|op| op.name == "enumerate_production_artifacts");
-    assert!(found, "expected enumerate_production_artifacts in operations list, got {} ops", ops.len());
+    let found = ops
+        .iter()
+        .any(|op| op.name == "enumerate_production_artifacts");
+    assert!(
+        found,
+        "expected enumerate_production_artifacts in operations list, got {} ops",
+        ops.len()
+    );
 }
 
 #[test]
@@ -43,7 +49,10 @@ fn operations_deterministic_order() {
     for (i, (x, y)) in a.iter().zip(b.iter()).enumerate() {
         assert_eq!(x.path, y.path, "path mismatch at index {i}");
         assert_eq!(x.name, y.name, "name mismatch at index {i}");
-        assert_eq!(x.signature_sha256, y.signature_sha256, "sha mismatch at index {i}");
+        assert_eq!(
+            x.signature_sha256, y.signature_sha256,
+            "sha mismatch at index {i}"
+        );
     }
 }
 
@@ -56,5 +65,8 @@ fn dropped_operation_detected() {
     // operations_includes_known_functions it proves real parsing.
     let ops = extract_operations(workspace_root());
     let found = ops.iter().any(|op| op.name == "audit_gate");
-    assert!(found, "audit_gate must be present; extractor may be broken or stubbed");
+    assert!(
+        found,
+        "audit_gate must be present; extractor may be broken or stubbed"
+    );
 }
