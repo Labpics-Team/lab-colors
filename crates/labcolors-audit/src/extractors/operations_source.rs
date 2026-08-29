@@ -129,7 +129,6 @@ fn is_pub_fn(f: &ItemFn) -> bool {
 }
 
 fn normalize_signature(sig: &syn::Signature) -> String {
-    // Убираем пробельные вариации: печатаем через quote, что даёт каноническую форму.
     let tokens = quote::quote!(#sig);
     tokens.to_string()
 }
@@ -144,7 +143,6 @@ fn hex_encode(bytes: &[u8]) -> String {
 }
 
 fn extract_crate_name(rel_path: &str) -> String {
-    // Ожидаемый формат: crates/<crate-name>/...
     rel_path
         .strip_prefix("crates/")
         .and_then(|rest| rest.split('/').next())
