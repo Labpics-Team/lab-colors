@@ -54,10 +54,7 @@ pub fn extract_public_api(workspace_root: &Path) -> Vec<ApiManifestEntry> {
             continue;
         }
 
-        for walk_entry in WalkDir::new(&src_dir)
-            .into_iter()
-            .filter_map(|e| e.ok())
-        {
+        for walk_entry in WalkDir::new(&src_dir).into_iter().filter_map(|e| e.ok()) {
             let file_path = walk_entry.path();
             if !file_path.is_file() {
                 continue;
@@ -115,12 +112,23 @@ fn extract_items_from_file(
             Item::Fn(f) if is_pub(&f.vis) => {
                 let sig = normalize_fn_signature(&f.sig);
                 let doc = extract_doc_summary(&f.attrs);
-                push_entry(out, path, crate_name, "fn", &f.sig.ident, &f.vis, &sig, &doc);
+                push_entry(
+                    out,
+                    path,
+                    crate_name,
+                    "fn",
+                    &f.sig.ident,
+                    &f.vis,
+                    &sig,
+                    &doc,
+                );
             }
             Item::Struct(s) if is_pub(&s.vis) => {
                 let sig = format!("struct {}", s.ident);
                 let doc = extract_doc_summary(&s.attrs);
-                push_entry(out, path, crate_name, "struct", &s.ident, &s.vis, &sig, &doc);
+                push_entry(
+                    out, path, crate_name, "struct", &s.ident, &s.vis, &sig, &doc,
+                );
             }
             Item::Enum(e) if is_pub(&e.vis) => {
                 let sig = format!("enum {}", e.ident);
@@ -169,10 +177,7 @@ fn is_cfg_test(item: &Item) -> bool {
         _ => return false,
     };
     attrs.iter().any(|attr| {
-        attr.path()
-            .segments
-            .iter()
-            .any(|seg| seg.ident == "cfg")
+        attr.path().segments.iter().any(|seg| seg.ident == "cfg")
             && attr.meta.to_token_stream().to_string().contains("test")
     })
 }

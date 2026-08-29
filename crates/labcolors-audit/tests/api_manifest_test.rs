@@ -1,4 +1,4 @@
-use labcolors_audit::extractors::{extract_public_api, ApiManifestEntry};
+use labcolors_audit::extractors::{ApiManifestEntry, extract_public_api};
 use std::path::Path;
 
 fn workspace_root() -> &'static Path {
@@ -13,9 +13,9 @@ fn workspace_root() -> &'static Path {
 fn api_manifest_includes_known_public_functions() {
     let entries = extract_public_api(workspace_root());
     // enumerate_production_artifacts is a known pub fn in labcolors-audit
-    let found = entries.iter().any(|e| {
-        e.kind == "fn" && e.name == "enumerate_production_artifacts"
-    });
+    let found = entries
+        .iter()
+        .any(|e| e.kind == "fn" && e.name == "enumerate_production_artifacts");
     assert!(
         found,
         "Expected to find pub fn enumerate_production_artifacts in manifest, got {} entries",
@@ -44,22 +44,48 @@ fn api_manifest_excludes_test_modules() {
 fn api_manifest_deterministic_order() {
     let first = extract_public_api(workspace_root());
     let second = extract_public_api(workspace_root());
-    assert_eq!(first.len(), second.len(), "Entry count differs between runs");
+    assert_eq!(
+        first.len(),
+        second.len(),
+        "Entry count differs between runs"
+    );
     for (a, b) in first.iter().zip(second.iter()) {
         assert_eq!(a.path, b.path, "Path order differs");
         assert_eq!(a.name, b.name, "Name order differs");
-        assert_eq!(a.signature_sha256, b.signature_sha256, "Hash differs for same item");
+        assert_eq!(
+            a.signature_sha256, b.signature_sha256,
+            "Hash differs for same item"
+        );
     }
 }
 
 #[test]
 fn api_manifest_entries_have_nonempty_signatures() {
     let entries = extract_public_api(workspace_root());
-    assert!(!entries.is_empty(), "Manifest should not be empty for this workspace");
+    assert!(
+        !entries.is_empty(),
+        "Manifest should not be empty for this workspace"
+    );
     for entry in &entries {
-        assert!(!entry.signature.is_empty(), "Empty signature for {}::{}", entry.path, entry.name);
-        assert!(!entry.signature_sha256.is_empty(), "Empty hash for {}::{}", entry.path, entry.name);
-        assert_eq!(entry.signature_sha256.len(), 64, "SHA-256 hex must be 64 chars for {}::{}", entry.path, entry.name);
+        assert!(
+            !entry.signature.is_empty(),
+            "Empty signature for {}::{}",
+            entry.path,
+            entry.name
+        );
+        assert!(
+            !entry.signature_sha256.is_empty(),
+            "Empty hash for {}::{}",
+            entry.path,
+            entry.name
+        );
+        assert_eq!(
+            entry.signature_sha256.len(),
+            64,
+            "SHA-256 hex must be 64 chars for {}::{}",
+            entry.path,
+            entry.name
+        );
     }
 }
 
@@ -80,6 +106,11 @@ fn dropped_item_detected() {
     );
     // If someone deletes enumerate_production_artifacts, this assertion will fail,
     // proving the extractor detects removals.
-    let has_enumerate = audit_fns.iter().any(|e| e.name == "enumerate_production_artifacts");
-    assert!(has_enumerate, "enumerate_production_artifacts missing — if intentional, update this test");
+    let has_enumerate = audit_fns
+        .iter()
+        .any(|e| e.name == "enumerate_production_artifacts");
+    assert!(
+        has_enumerate,
+        "enumerate_production_artifacts missing — if intentional, update this test"
+    );
 }
