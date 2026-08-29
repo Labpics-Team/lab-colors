@@ -118,11 +118,11 @@
       "sha256": "d7dcb85a0741e8b12e68d170dc4019269733d8784273e3bad625d1131637de28"
     },
     {
-      "bytes": 23074,
+      "bytes": 11370,
       "license": "CC-BY-4.0 AND CC-BY-SA-4.0",
       "path": "crates/labcolors-core/contracts/clean-set-srgb8-v1/point-clean-set-srgb8-column-rle-v1.bin",
       "role": "runtime_codec",
-      "sha256": "81d3445b13a2fe239cff8f86df619935e01f7809ae4cc7fac8ff4fec92017995"
+      "sha256": "aa6aa7c0b630437f1c1ba8c2ceafb0dadf6551c42331559504076a6cd44e6331"
     },
     {
       "bytes": 27422,
