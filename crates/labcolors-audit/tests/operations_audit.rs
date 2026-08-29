@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use labcolors_audit::extractors::{OperationEntry, extract_operations};
+use labcolors_audit::extractors::extract_operations;
 
 fn workspace_root() -> &'static Path {
     Path::new(env!("CARGO_MANIFEST_DIR"))
