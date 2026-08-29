@@ -1,4 +1,4 @@
-﻿use labcolors_audit::{
+use labcolors_audit::{
     ArtifactClass, Disposition, DispositionedArtifact, RawArtifact, assign_dispositions, audit_gate,
 };
 
@@ -118,7 +118,6 @@ fn not_assessed_passes_gate_with_warning_count() {
     assert_eq!(verdict.defective_count, 0);
 }
 
-
 /// EXT-07 floor test: WasmBoundary extractor finds >= 5 #[wasm_bindgen] sites.
 #[test]
 fn ext07_wasm_boundary_floor() {
@@ -128,7 +127,8 @@ fn ext07_wasm_boundary_floor() {
         .expect("audit crate has grandparent workspace root");
 
     let raw = labcolors_audit::enumerate_production_artifacts(source_root);
-    let wasm_count = raw.iter()
+    let wasm_count = raw
+        .iter()
         .filter(|a| a.class == ArtifactClass::WasmBoundary)
         .count();
 
@@ -148,7 +148,8 @@ fn ext07_native_boundary_floor() {
         .expect("audit crate has grandparent workspace root");
 
     let raw = labcolors_audit::enumerate_production_artifacts(source_root);
-    let native_count = raw.iter()
+    let native_count = raw
+        .iter()
         .filter(|a| a.class == ArtifactClass::NativeBoundary)
         .count();
 
@@ -168,7 +169,10 @@ fn ext07_wasm_boundary_no_phantom() {
         .expect("audit crate has grandparent workspace root");
 
     let raw = labcolors_audit::enumerate_production_artifacts(source_root);
-    for artifact in raw.iter().filter(|a| a.class == ArtifactClass::WasmBoundary) {
+    for artifact in raw
+        .iter()
+        .filter(|a| a.class == ArtifactClass::WasmBoundary)
+    {
         let full_path = source_root.join(&artifact.module);
         assert!(
             full_path.exists(),
@@ -187,7 +191,10 @@ fn ext07_native_boundary_no_phantom() {
         .expect("audit crate has grandparent workspace root");
 
     let raw = labcolors_audit::enumerate_production_artifacts(source_root);
-    for artifact in raw.iter().filter(|a| a.class == ArtifactClass::NativeBoundary) {
+    for artifact in raw
+        .iter()
+        .filter(|a| a.class == ArtifactClass::NativeBoundary)
+    {
         let full_path = source_root.join(&artifact.module);
         assert!(
             full_path.exists(),
@@ -196,5 +203,3 @@ fn ext07_native_boundary_no_phantom() {
         );
     }
 }
-
-

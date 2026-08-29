@@ -1,4 +1,4 @@
-﻿use std::fs;
+use std::fs;
 use std::path::Path;
 
 use crate::types::{ArtifactClass, RawArtifact};
@@ -25,7 +25,10 @@ pub fn enumerate_production_artifacts(source_root: &Path) -> Vec<RawArtifact> {
     }
 
     // 3. WasmBoundary из crates/labcolors-wasm/src/
-    let wasm_src = source_root.join("crates").join("labcolors-wasm").join("src");
+    let wasm_src = source_root
+        .join("crates")
+        .join("labcolors-wasm")
+        .join("src");
     if wasm_src.is_dir() {
         collect_wasm_boundaries(source_root, &wasm_src, &mut artifacts);
     }
@@ -185,7 +188,6 @@ fn class_discriminant(class: ArtifactClass) -> u8 {
     }
 }
 
-
 /// Извлечение WasmBoundary артефактов из crates/labcolors-wasm/src/.
 ///
 /// Сканирует все .rs файлы в wasm crate на наличие #[wasm_bindgen] атрибутов.
@@ -203,11 +205,13 @@ fn collect_wasm_boundaries(root: &Path, wasm_src: &Path, out: &mut Vec<RawArtifa
         while let Some((line_idx, line)) = lines.next() {
             let trimmed = line.trim();
             if trimmed == "#[wasm_bindgen]" {
-                let decl = lines.peek()
-                    .map(|(_, l)| l.trim())
-                    .unwrap_or("");
+                let decl = lines.peek().map(|(_, l)| l.trim()).unwrap_or("");
 
-                let signature = if decl.starts_with("pub fn ") || decl.starts_with("pub struct ") || decl.starts_with("impl ") || decl.starts_with("extern ") {
+                let signature = if decl.starts_with("pub fn ")
+                    || decl.starts_with("pub struct ")
+                    || decl.starts_with("impl ")
+                    || decl.starts_with("extern ")
+                {
                     decl.to_string()
                 } else {
                     format!("#[wasm_bindgen] at L{}", line_idx + 1)
@@ -224,7 +228,6 @@ fn collect_wasm_boundaries(root: &Path, wasm_src: &Path, out: &mut Vec<RawArtifa
         }
     }
 }
-
 
 /// Итеративный обход всех .rs файлов в директории (без рекурсии).
 fn collect_rs_files(dir: &Path) -> Vec<std::path::PathBuf> {
@@ -264,9 +267,7 @@ fn collect_native_boundaries(root: &Path, ffi_src: &Path, out: &mut Vec<RawArtif
         while let Some((line_idx, line)) = lines.next() {
             let trimmed = line.trim();
             if trimmed == "#[uniffi::export]" {
-                let decl = lines.peek()
-                    .map(|(_, l)| l.trim())
-                    .unwrap_or("");
+                let decl = lines.peek().map(|(_, l)| l.trim()).unwrap_or("");
 
                 let signature = if decl.starts_with("pub fn ") {
                     decl.to_string()
