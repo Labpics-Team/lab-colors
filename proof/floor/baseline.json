@@ -1,0 +1,7 @@
+{
+  "timestamp": "2026-08-29T18:30:00Z",
+  "commit": "1638836e0a46f09c07b921ee484b51d4d253730a",
+  "total_tests": 1366,
+  "minimum_floor": 1366,
+  "notes": "Baseline established after EXT-01..EXT-09 merge wave (excluding EXT-02). Worktree was on ext07-wasm-native-boundary branch during measurement; test count reflects merged main state via cargo test --workspace."
+}
