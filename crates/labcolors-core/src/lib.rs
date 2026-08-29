@@ -119,6 +119,7 @@ pub(crate) mod semantic;
 pub(crate) mod sha256;
 #[cfg_attr(test, allow(dead_code))]
 pub mod solve;
+pub mod source_manifest;
 
 pub mod curve;
 
