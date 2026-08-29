@@ -112,7 +112,10 @@ fn new_classes_dispose_to_not_assessed() {
         match artifact.raw.class {
             ArtifactClass::ParallelSsot => {
                 assert!(
-                    matches!(artifact.disposition, labcolors_audit::Disposition::NotAssessed { .. }),
+                    matches!(
+                        artifact.disposition,
+                        labcolors_audit::Disposition::NotAssessed { .. }
+                    ),
                     "ParallelSsot '{}' should be NotAssessed, got {:?}",
                     artifact.raw.raw_key,
                     artifact.disposition
@@ -120,7 +123,10 @@ fn new_classes_dispose_to_not_assessed() {
             }
             ArtifactClass::PublicClaim => {
                 assert!(
-                    matches!(artifact.disposition, labcolors_audit::Disposition::NotAssessed { .. }),
+                    matches!(
+                        artifact.disposition,
+                        labcolors_audit::Disposition::NotAssessed { .. }
+                    ),
                     "PublicClaim '{}' should be NotAssessed, got {:?}",
                     artifact.raw.raw_key,
                     artifact.disposition
