@@ -13,53 +13,53 @@
       "sha256": "912d03c716e961f8747a620bbcdf90dbd2fd3c3305e72321f18ab1f13d11bb5c"
     },
     {
-      "bytes": 6373,
+      "bytes": 6535,
       "license": "MIT",
       "path": "crates/labcolors-core/src/clean_set.rs",
       "role": "classifier_source",
-      "sha256": "584ede95e80aa1a4a66a1dc38b1441f661e6de6eac7513f4ab8945a21a39373e"
+      "sha256": "3d66833722adb6df5dc069f3e910f7353290b36a228e304147eeaca36b31cfc3"
     },
     {
-      "bytes": 3417,
+      "bytes": 3517,
       "license": "MIT",
       "path": "crates/labcolors-core/src/clean_set_tests.rs",
       "role": "classifier_tests",
-      "sha256": "30c7b3c5ce7b7f876c2cf475a2815b6ac8e53b9986e471864b03de1558978d99"
+      "sha256": "732b4965338c62ea5a7f8a9142132e430397ae9ea295dca6f02465346af0b0b6"
     },
     {
-      "bytes": 10672,
+      "bytes": 10932,
       "license": "MIT",
       "path": "crates/labcolors-core/src/composition.rs",
       "role": "composition_executor_source",
-      "sha256": "0afc3232dd0c3b5b94596813d0a5e8aef4a2dea74b09dbae05f41e64d4c8ca1b"
+      "sha256": "e8075ed825ce120a7f139d8229aff488e646bc3ebeda7ebbb84f127b9e8de348"
     },
     {
-      "bytes": 7419,
+      "bytes": 7662,
       "license": "MIT",
       "path": "crates/labcolors-core/src/sha256.rs",
       "role": "content_digest_source",
-      "sha256": "57f3eb04c91a3562d40523a601d435caf1181dd0a24df0d9162100c13a7c5262"
+      "sha256": "3b3e5822fcfa3ca9fd14148af6dc61f571ed89ff5bcd7eb32ba4918052ba001a"
     },
     {
-      "bytes": 7686,
+      "bytes": 7897,
       "license": "MIT",
       "path": "crates/labcolors-core/src/joint.rs",
       "role": "joint_selection_source",
-      "sha256": "8bf5d5a1c0f00ce245a1ecb18b923aa1631483345962d72b633e466c242a8a1d"
+      "sha256": "c622c65b45b69a120e6e96a24cfb62c209a596a5e89677533eeb902cef3e68bb"
     },
     {
-      "bytes": 114774,
+      "bytes": 114748,
       "license": "MIT",
       "path": "crates/labcolors-core/src/lib.rs",
       "role": "module_registration_source",
-      "sha256": "602c0f5160aeebb84ef4feaf7e4b800fee4044c6e8a2e6ba988ec820d20bb7ce"
+      "sha256": "a226e208e89dbf90880bccb5712451a0c6b9dc6ca3c94341e783e4c028c57352"
     },
     {
-      "bytes": 39439,
+      "bytes": 40609,
       "license": "MIT",
       "path": "crates/labcolors-core/src/observation.rs",
       "role": "observation_runtime_source",
-      "sha256": "b0cfec5c9fe798abd5492260aac3caf87685f7e27f4f9628b01f386ef3f6ac7d"
+      "sha256": "313b56806e222f7db287ef0a2c4c96e07d96c9fa09c08570373390773ae6cedf"
     },
     {
       "bytes": 7961,
@@ -132,18 +132,18 @@
       "sha256": "84c346035294ecea692f5d7ce0a70026f588178851843d42b6425feb984c504a"
     },
     {
-      "bytes": 34105,
+      "bytes": 35186,
       "license": "MIT",
       "path": "crates/labcolors-core/src/lcs_occurrence.rs",
       "role": "signal_transport_source",
-      "sha256": "78d37406e9bdc37f126b72987c9c92b452c13b3233c0aeb0a75ed25dadb83a68"
+      "sha256": "a1b90cdbcea1e222d0694db2056ced8e4d94b9305422c0aaa3fe776eeafde1da"
     },
     {
-      "bytes": 5154,
+      "bytes": 5282,
       "license": "MIT",
       "path": "crates/labcolors-core/src/srgb8.rs",
       "role": "srgb8_source",
-      "sha256": "6c95324eb05476f35f75375a9af0b2b4a41b8b2978c46e67d2ce1aea5adde342"
+      "sha256": "20e9d868a41a0b75551f0e6fbdaf6ccf6f00aef5a000bceaea0d76c561f4012b"
     },
     {
       "bytes": 39653,
@@ -189,16 +189,16 @@
         "sha256": "28a9529c7d0bb4dc51f4bf5c116a3d16ef247a052f7591466768ddf563fd1cf5"
       },
       {
-        "bytes": 1368,
+        "bytes": 1287,
         "path": "crates/labcolors-core/Cargo.toml",
         "role": "core_manifest",
-        "sha256": "cc22e6d1a4e6c8638eaac065f7b1e70a6e6f81e18e74ca7b4fa77716b8f2653e"
+        "sha256": "97dcd1027f943d6d99d1be199c22b75b7d36aedc563dd8237d62fb72ad355006"
       },
       {
-        "bytes": 1064,
+        "bytes": 1085,
         "path": "LICENSE",
         "role": "mit_text",
-        "sha256": "37ffb21a9e03804a978f4203134bf7a2088864b3dd3c0c5ee3809a3a99391c4b"
+        "sha256": "a2ab1daacd092da6c959cbff6805ea0b25e385b4cfb062c2727bcf8e6ea6a5da"
       }
     ],
     "receipt_spdx": "CC-BY-4.0 AND CC-BY-SA-4.0",
