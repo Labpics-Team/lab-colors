@@ -73,7 +73,12 @@ fn parse_cargo_toml(path: &Path) -> Option<Vec<DependencyEntry>> {
 
     let mut entries = Vec::new();
 
-    collect_section(&manifest.dependencies, &crate_name, "dependencies", &mut entries);
+    collect_section(
+        &manifest.dependencies,
+        &crate_name,
+        "dependencies",
+        &mut entries,
+    );
     collect_section(
         &manifest.dev_dependencies,
         &crate_name,
@@ -134,10 +139,7 @@ fn parse_dep_value(value: &toml::Value) -> (String, Vec<String>, bool, bool) {
                 })
                 .unwrap_or_default();
 
-            let optional = t
-                .get("optional")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false);
+            let optional = t.get("optional").and_then(|v| v.as_bool()).unwrap_or(false);
 
             let path_dep = t.get("path").is_some();
 

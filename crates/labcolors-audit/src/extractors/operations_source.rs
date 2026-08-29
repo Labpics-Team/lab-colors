@@ -34,10 +34,7 @@ pub fn extract_operations(workspace_root: &Path) -> Vec<OperationEntry> {
         return entries;
     }
 
-    for dir_entry in WalkDir::new(&crates_dir)
-        .into_iter()
-        .filter_map(|e| e.ok())
-    {
+    for dir_entry in WalkDir::new(&crates_dir).into_iter().filter_map(|e| e.ok()) {
         let path = dir_entry.path();
 
         let is_rs_file = path.is_file() && path.extension().is_some_and(|ext| ext == "rs");

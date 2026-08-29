@@ -1,4 +1,4 @@
-use labcolors_audit::extractors::{extract_dependencies, DependencyEntry};
+use labcolors_audit::extractors::{DependencyEntry, extract_dependencies};
 use std::path::Path;
 
 fn workspace_root() -> &'static Path {
@@ -13,9 +13,7 @@ fn workspace_root() -> &'static Path {
 fn dependencies_includes_syn_in_audit_crate() {
     let deps = extract_dependencies(workspace_root());
     let has_syn = deps.iter().any(|d| {
-        d.crate_name == "labcolors-audit"
-            && d.dep_name == "syn"
-            && d.section == "dependencies"
+        d.crate_name == "labcolors-audit" && d.dep_name == "syn" && d.section == "dependencies"
     });
     assert!(has_syn, "Expected syn in labcolors-audit dependencies");
 }
@@ -24,9 +22,7 @@ fn dependencies_includes_syn_in_audit_crate() {
 fn dependencies_includes_toml_in_audit_crate() {
     let deps = extract_dependencies(workspace_root());
     let has_toml = deps.iter().any(|d| {
-        d.crate_name == "labcolors-audit"
-            && d.dep_name == "toml"
-            && d.section == "dependencies"
+        d.crate_name == "labcolors-audit" && d.dep_name == "toml" && d.section == "dependencies"
     });
     assert!(has_toml, "Expected toml in labcolors-audit dependencies");
 }
