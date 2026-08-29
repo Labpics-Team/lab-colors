@@ -51,7 +51,6 @@ pub(crate) mod config;
 pub(crate) mod constraints;
 #[allow(dead_code)]
 pub(crate) mod corridor_representation;
-pub mod exports_manifest;
 #[allow(dead_code)]
 pub(crate) mod glow;
 pub mod hash;
