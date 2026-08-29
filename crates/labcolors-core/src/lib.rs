@@ -120,6 +120,8 @@ pub(crate) mod sha256;
 #[cfg_attr(test, allow(dead_code))]
 pub mod solve;
 pub mod source_manifest;
+pub mod exports_manifest;
+pub mod claims_manifest;
 
 pub mod curve;
 
@@ -260,6 +262,15 @@ mod contextual_region_tests;
 mod contextual_region_formula_tests;
 
 pub mod compiled_dependency_plan;
+
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "CI build manifest extraction is staged before its offline proof consumer"
+    )
+)]
+pub(crate) mod ci_build_manifest;
 
 #[cfg(test)]
 mod compiled_dependency_plan_tests;
