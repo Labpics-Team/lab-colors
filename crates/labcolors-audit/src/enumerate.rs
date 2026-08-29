@@ -90,7 +90,7 @@ fn collect_rust_artifacts(root: &Path, dir: &Path, out: &mut Vec<RawArtifact>) {
                 raw_value: None,
             });
 
-// PublicExport + PublicClaim: сканируем только src/lib.rs
+            // PublicExport + PublicClaim: сканируем только src/lib.rs
             if file_name == "lib.rs" && is_lib_rs(&path) {
                 collect_public_exports(&path, &rel, out);
                 collect_public_claims(&path, &rel, out);
