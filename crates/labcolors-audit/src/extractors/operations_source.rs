@@ -40,7 +40,8 @@ pub fn extract_operations(workspace_root: &Path) -> Vec<OperationEntry> {
     {
         let path = dir_entry.path();
 
-        if !path.is_file() || !path.extension().is_some_and(|ext| ext == "rs") {
+        let is_rs_file = path.is_file() && path.extension().is_some_and(|ext| ext == "rs");
+        if !is_rs_file {
             continue;
         }
 
@@ -96,7 +97,12 @@ pub fn extract_operations(workspace_root: &Path) -> Vec<OperationEntry> {
     entries
 }
 
-fn collect_impl_methods(imp: &ItemImpl, path: &str, crate_name: &str, out: &mut Vec<OperationEntry>) {
+fn collect_impl_methods(
+    imp: &ItemImpl,
+    path: &str,
+    crate_name: &str,
+    out: &mut Vec<OperationEntry>,
+) {
     for item in &imp.items {
         if let ImplItem::Fn(m) = item {
             if !matches!(m.vis, Visibility::Public(_)) {
@@ -104,7 +110,8 @@ fn collect_impl_methods(imp: &ItemImpl, path: &str, crate_name: &str, out: &mut 
             }
             let name = m.sig.ident.to_string();
             // Исключаем геттеры/сеттеры по соглашению
-            if name.starts_with("get_") || name.starts_with("set_") {
+            let is_accessor = name.starts_with("get_") || name.starts_with("set_");
+            if is_accessor {
                 continue;
             }
             let sig = normalize_signature(&m.sig);
