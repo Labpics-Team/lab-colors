@@ -90,10 +90,14 @@ fn collect_rust_artifacts(root: &Path, dir: &Path, out: &mut Vec<RawArtifact>) {
                 raw_value: None,
             });
 
-            // PublicExport: СЃРєР°РЅРёСЂСѓРµРј С‚РѕР»СЊРєРѕ src/lib.rs
+// PublicExport + PublicClaim: сканируем только src/lib.rs
             if file_name == "lib.rs" && is_lib_rs(&path) {
                 collect_public_exports(&path, &rel, out);
+                collect_public_claims(&path, &rel, out);
             }
+
+            // ParallelSsot: маркеры SSOT-TRACKED / GROUNDED в production-коде
+            collect_parallel_ssot(&path, &rel, out);
         }
     }
 }
@@ -168,7 +172,75 @@ fn relative_path(root: &Path, path: &Path) -> String {
         .replace('\\', "/")
 }
 
-/// Р§РёСЃР»РѕРІРѕР№ РґРёСЃРєСЂРёРјРёРЅР°РЅС‚ РґР»СЏ РґРµС‚РµСЂРјРёРЅРёСЂРѕРІР°РЅРЅРѕР№ СЃРѕСЂС‚РёСЂРѕРІРєРё РїРѕ РєР»Р°СЃСЃСѓ.
+/// Извлечение маркеров `// SSOT-TRACKED` и `// GROUNDED` из production-кода.
+///
+/// Каждый маркер — декларация параллельного SSOT: константа в коде
+/// синхронизирована с внешним источником (docs/empirical-inventory.md или
+/// опубликованный стандарт). raw_value содержит описание после тире.
+fn collect_parallel_ssot(file_path: &Path, module: &str, out: &mut Vec<RawArtifact>) {
+    let content = match fs::read_to_string(file_path) {
+        Ok(c) => c,
+        Err(_) => return,
+    };
+
+    for (line_idx, line) in content.lines().enumerate() {
+        let trimmed = line.trim();
+
+        if trimmed.starts_with("// SSOT-TRACKED") || trimmed.starts_with("// GROUNDED") {
+            let marker_type = if trimmed.contains("SSOT-TRACKED") {
+                "ssot-tracked"
+            } else {
+                "grounded"
+            };
+
+            // Описание после em-dash или " - "
+            let description = trimmed
+                .split_once('\u{2014}')
+                .or_else(|| trimmed.split_once(" - "))
+                .map(|(_, desc)| desc.trim())
+                .unwrap_or(trimmed);
+
+            out.push(RawArtifact {
+                class: ArtifactClass::ParallelSsot,
+                module: module.to_string(),
+                line: line_idx + 1,
+                raw_key: format!("{}:L{}", marker_type, line_idx + 1),
+                raw_value: Some(description.to_string()),
+            });
+        }
+    }
+}
+
+/// Извлечение публичных утверждений из модульных doc-комментариев `//! #`.
+///
+/// Секции `//! # Заголовок` в `lib.rs` крейтов декларируют архитектурные
+/// законы, контракты и инварианты — публичные утверждения о поведении,
+/// подлежащие верификации. raw_value содержит текст заголовка секции.
+fn collect_public_claims(lib_path: &Path, module: &str, out: &mut Vec<RawArtifact>) {
+    let content = match fs::read_to_string(lib_path) {
+        Ok(c) => c,
+        Err(_) => return,
+    };
+
+    for (line_idx, line) in content.lines().enumerate() {
+        let trimmed = line.trim();
+
+        if let Some(heading) = trimmed.strip_prefix("//! #") {
+            let heading = heading.trim();
+            if !heading.is_empty() {
+                out.push(RawArtifact {
+                    class: ArtifactClass::PublicClaim,
+                    module: module.to_string(),
+                    line: line_idx + 1,
+                    raw_key: format!("module-doc:{}", heading),
+                    raw_value: Some(heading.to_string()),
+                });
+            }
+        }
+    }
+}
+
+/// Числовой дискриминант для детерминированной сортировки по классу.
 fn class_discriminant(class: ArtifactClass) -> u8 {
     match class {
         ArtifactClass::ProductionSourceFile => 0,
