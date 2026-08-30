@@ -14,16 +14,16 @@
     "wasmOptFlags": "-Oz --enable-bulk-memory --enable-nontrapping-float-to-int"
   },
   "recipe": {
+    "rustPathRemap": [
+      "GITHUB_WORKSPACE=/workspace/lab-colors",
+      "CARGO_HOME=/cargo-home"
+    ],
     "commands": [
       "wasm-pack build --no-opt --release --target web --out-dir ../../packages/colors/pkg --out-name labcolors crates/labcolors-wasm --locked",
       "local wasm=packages/colors/pkg/labcolors_bg.wasm",
       "local optimized=packages/colors/pkg/labcolors_bg.wasm-opt.wasm",
       "node \"$BINARYEN_ROOT/wasm-opt.js\" \"$wasm\" -o \"$optimized\" -Oz --enable-bulk-memory --enable-nontrapping-float-to-int",
       "mv -- \"$optimized\" \"$wasm\""
-    ],
-    "rustPathRemap": [
-      "GITHUB_WORKSPACE=/workspace/lab-colors",
-      "CARGO_HOME=/cargo-home"
     ]
   },
   "measurement": {
