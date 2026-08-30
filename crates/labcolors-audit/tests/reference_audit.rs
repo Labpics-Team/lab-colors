@@ -2,11 +2,11 @@ use labcolors_audit::{
     ArtifactClass, Disposition, DispositionedArtifact, RawArtifact, assign_dispositions, audit_gate,
 };
 
-/// RED-proof С‚РµСЃС‚: СЃРёРЅС‚РµС‚РёС‡РµСЃРєРёР№ СЃРёСЂРѕС‚Р° РѕР±РЅР°СЂСѓР¶РёРІР°РµС‚СЃСЏ РіРµР№С‚РѕРј.
+/// RED-proof тест: синтетический сирота обнаруживается гейтом.
 ///
-/// РРЅРІР°СЂРёР°РЅС‚: РµСЃР»Рё Р°СЂС‚РµС„Р°РєС‚ РїРѕРјРµС‡РµРЅ РєР°Рє Orphaned, audit_gate РѕР±СЏР·Р°РЅ
-/// РІРµСЂРЅСѓС‚СЊ passed=false СЃ РЅРµРЅСѓР»РµРІС‹Рј orphaned_count. Р­С‚Рѕ Р±Р°Р·РѕРІС‹Р№ РєРѕРЅС‚СЂР°РєС‚
-/// РїР°Р№РїР»Р°Р№РЅР° вЂ” РЅР°СЂСѓС€РµРЅРёРµ РѕР·РЅР°С‡Р°РµС‚, С‡С‚Рѕ СЃС‚Р°РґРёСЏ gate РЅРµ РІС‹РїРѕР»РЅСЏРµС‚ СЃРІРѕСЋ С„СѓРЅРєС†РёСЋ.
+/// Инвариант: если артефакт помечен как Orphaned, audit_gate обязан
+/// вернуть passed=false с ненулевым orphaned_count. Это базовый контракт
+/// пайплайна — нарушение означает, что стадия gate не выполняет свою функцию.
 #[test]
 fn synthetic_orphan_is_detected_by_gate() {
     let orphan = RawArtifact {
@@ -38,12 +38,12 @@ fn synthetic_orphan_is_detected_by_gate() {
     assert_eq!(verdict.total_artifacts, 1);
 }
 
-/// Floor-С‚РµСЃС‚: СЂРµР°Р»СЊРЅРѕРµ РґРµСЂРµРІРѕ (stub-СЂРµР°Р»РёР·Р°С†РёСЏ) РЅРµ РїСЂРѕРёР·РІРѕРґРёС‚ СЃРёСЂРѕС‚.
+/// Floor-тест: реальное дерево (stub-реализация) не производит сирот.
 ///
-/// РќР° СЌС‚Р°РїРµ scaffold enumerate РІРѕР·РІСЂР°С‰Р°РµС‚ РїСѓСЃС‚РѕР№ РІРµРєС‚РѕСЂ, РїРѕСЌС‚РѕРјСѓ
-/// РІРµСЂРґРёРєС‚ РґРѕР»Р¶РµРЅ Р±С‹С‚СЊ pass СЃ РЅСѓР»СЏРјРё РїРѕ РІСЃРµРј СЃС‡С‘С‚С‡РёРєР°Рј. РљРѕРіРґР° enumerate
-/// РЅР°С‡РЅС‘С‚ РёР·РІР»РµРєР°С‚СЊ СЂРµР°Р»СЊРЅС‹Рµ Р°СЂС‚РµС„Р°РєС‚С‹, СЌС‚РѕС‚ С‚РµСЃС‚ СЃС‚Р°РЅРµС‚ floor:
-/// РєРѕР»РёС‡РµСЃС‚РІРѕ Orphaned РЅРµ РґРѕР»Р¶РЅРѕ РїСЂРµРІС‹С€Р°С‚СЊ РґРѕРєСѓРјРµРЅС‚РёСЂРѕРІР°РЅРЅС‹Р№ baseline.
+/// На этапе scaffold enumerate возвращает пустой вектор, поэтому
+/// вердикт должен быть pass с нулями по всем счётчикам. Когда enumerate
+/// начнёт извлекать реальные артефакты, этот тест станет floor:
+/// количество Orphaned не должно превышать документированный baseline.
 #[test]
 fn real_tree_stub_produces_zero_orphans() {
     let source_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -54,7 +54,7 @@ fn real_tree_stub_produces_zero_orphans() {
     let dispositioned = assign_dispositions(&raw);
     let verdict = audit_gate(&dispositioned);
 
-    // Scaffold invariant: stub enumerate returns empty в†’ zero everything.
+    // Scaffold invariant: stub enumerate returns empty → zero everything.
     // When real extraction lands, this assertion becomes a floor check
     // against documented NotAssessed rows, not a hard zero.
     assert_eq!(
@@ -69,7 +69,7 @@ fn real_tree_stub_produces_zero_orphans() {
     assert!(verdict.passed, "empty scan must pass the gate");
 }
 
-/// РљРѕРЅС‚СЂРѕР»СЊ РєРѕРЅС‚СЂР°РєС‚Р°: Defective С‚РѕР¶Рµ Р»РѕРјР°РµС‚ РіРµР№С‚.
+/// Контроль контракта: Defective тоже ломает гейт.
 #[test]
 fn defective_artifact_fails_gate() {
     let dispositioned = vec![DispositionedArtifact {
@@ -92,7 +92,7 @@ fn defective_artifact_fails_gate() {
     assert_eq!(verdict.defective_count, 1);
 }
 
-/// NotAssessed alone does NOT fail the gate вЂ” but is counted separately.
+/// NotAssessed alone does NOT fail the gate — but is counted separately.
 #[test]
 fn not_assessed_passes_gate_with_warning_count() {
     let dispositioned = vec![DispositionedArtifact {

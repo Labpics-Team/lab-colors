@@ -37,20 +37,6 @@ pub fn assign_dispositions(artifacts: &[RawArtifact]) -> Vec<DispositionedArtifa
                         }
                     }
                 }
-                ArtifactClass::ParallelSsot => Disposition::NotAssessed {
-                    reason: format!(
-                        "parallel SSOT marker '{}' requires cross-reference with docs/empirical-inventory.md",
-                        raw.raw_key
-                    ),
-                    replan_trigger: "AUD-01 EXT-09 ssot-registry integration".into(),
-                },
-                ArtifactClass::PublicClaim => Disposition::NotAssessed {
-                    reason: format!(
-                        "public claim '{}' requires verification against test evidence or formal proof",
-                        raw.raw_key
-                    ),
-                    replan_trigger: "AUD-01 EXT-09 claims-registry integration".into(),
-                },
                 _ => Disposition::NotAssessed {
                     reason: format!(
                         "dispose stage: {} matching not yet implemented",
