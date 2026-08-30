@@ -13,7 +13,7 @@ export const DEFAULT_BUDGET = resolve(
   REPO_ROOT,
   "packages/colors/bench/wasm.json",
 );
-export const WASM_BUDGET_FILE_SHA256 = "9c68b5f4380c71efc5b582e6387035e31212f07bef6d1a6598a85d91e77ae4e2";
+export const WASM_BUDGET_FILE_SHA256 = "9d0678aa9cf253d6e79caad31ae07f93b2cd7ef70e963abd6d7ec4818205a495";
 
 const SCHEMA_VERSION = 2;
 const CANONICAL_ARTIFACT = "packages/colors/pkg/labcolors_bg.wasm";
@@ -220,26 +220,47 @@ function formatResult(result, artifact) {
   return (
     `WASM size budget ${result.status} role=runtime raw=${result.rawBytes}B ` +
     `ceiling=${result.maxRawBytes}B delta=${delta}B gzip=${result.gzipBytes}B ` +
-    `sha256=${result.artifactSha256} platform=${result.currentPlatform} ` +
-    `artifact=${relative(REPO_ROOT, artifact)}`
+    `diagnostic-only platform=${result.currentPlatform} artifact=${artifact} ` +
+    `artifact-sha256=${result.artifactSha256}`
   );
 }
 
-function detectPlatform() {
-  if (process.platform !== "linux" || process.arch !== "x64") {
-    return `${process.platform}-${process.arch}`;
+function pathsFromArgs(args) {
+  const paths = {
+    budget: DEFAULT_BUDGET,
+    runtime: undefined,
+  };
+  for (let index = 0; index < args.length; index += 2) {
+    const flag = args[index];
+    const value = args[index + 1];
+    if (value === undefined) fail(`${flag ?? "argument"} requires a path`);
+    if (flag === "--budget") paths.budget = resolve(value);
+    else if (flag === "--runtime-wasm") paths.runtime = resolve(value);
+    else fail(`unknown argument ${flag}`);
   }
-  return CANONICAL_PLATFORM;
+  return paths;
 }
 
-function main() {
-  const budgetPath = process.argv[2] || DEFAULT_BUDGET;
-  const wasmPath = process.argv[3] || resolve(REPO_ROOT, CANONICAL_ARTIFACT);
-  const budget = readBudget(budgetPath);
+function main(args) {
   rejectNumberedBudgetSiblings();
-  const wasm = readFileSync(wasmPath);
-  const result = evaluateWasmBudget(budget, wasm, detectPlatform());
-  console.log(formatResult(result, wasmPath));
+  const paths = pathsFromArgs(args);
+  const budget = readBudget(paths.budget);
+  const runtimePath = paths.runtime ?? resolve(REPO_ROOT, budget.artifact);
+  let wasm;
+  try {
+    wasm = readFileSync(runtimePath);
+  } catch (error) {
+    fail(`cannot read runtime artifact ${runtimePath}: ${error.message}`);
+  }
+  const result = evaluateWasmBudget(
+    budget,
+    wasm,
+    `${process.platform}-${process.arch}`,
+  );
+  const artifact = relative(REPO_ROOT, runtimePath).replaceAll("\\", "/");
+  console.log(formatResult(result, artifact));
 }
 
-main();
+if (process.argv[1] !== undefined && resolve(process.argv[1]) === SCRIPT_PATH) {
+  main(process.argv.slice(2));
+}

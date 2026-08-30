@@ -1,3 +1,850 @@
 name: CI worker
 
-# Неизменяемый w
+# Неизменяемый worker для эфемерных GitHub-hosted раннеров (репо публичное).
+# Caller (ci.yml) закрепляет этот файл полным commit SHA: caller выбирает
+# revision для checkout, но не может изменить ни job graph, ни пины экшенов.
+# Своих inputs у worker нет by design — input стал бы каналом от недоверенного
+# caller к закреплённому определению.
+
+on:
+  workflow_call:
+
+# Least privilege: CI only reads the repo. Override per-job if a job needs more.
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  # Deterministic toolchain. Bump in lockstep with the team's supported Rust.
+  # To update: pick the new stable from https://forge.rust-lang.org/ and change
+  # this single value — every job below consumes it via the `toolchain` input.
+  RUST_TOOLCHAIN: 1.96.0
+  # Public minimum, tested independently from the development toolchain.
+  MSRV_TOOLCHAIN: 1.85.0
+  # Pins npm 11.9.0 as part of the official Node distribution. npm tar format
+  # is release input, so a floating runner-provided npm is not reproducible.
+  NODE_TOOLCHAIN: 24.14.0
+  # Минимальный consumer runtime проверяется отдельно от release packer.
+  # Node 22 остаётся поддерживаемой upstream LTS-веткой.
+  NODE_CONSUMER_FLOOR: 22.11.0
+  # Offline proof codecs are executable release tooling too. The image is pinned
+  # to the linux/amd64 manifest because setup-python does not publish Debian 13
+  # builds and образ ячейки не должен задавать семантику интерпретатора.
+  # Декларированный минимум интерпретатора для proof-кода — Python 3.11:
+  # stdlib-only пакеты используют StrEnum и datetime.UTC; пин образа ниже
+  # обязан оставаться не ниже этого флора.
+  PYTHON_PROOF_IMAGE: python:3.14.6-slim@sha256:d4fea6e20c09820028eea3f5c17f5b8ebd2ecb9c2bf28e561681a74a96090e4f
+  # Browser parity is release evidence too: pin both CfT archives byte-for-byte.
+  CHROME_FOR_TESTING_VERSION: 150.0.7871.115
+  CHROME_FOR_TESTING_SHA256: 1be2db033133c5e2dd1a4e8664bf67b19a61bcf6ed28d2b00f433b3f0b4f9585
+  CHROMEDRIVER_FOR_TESTING_SHA256: 6ac3919edd107ca13d08cccc118dc83821877e504014233f171bbd94cb01a80e
+
+jobs:
+  # Единый envelope: при переходе с DE-02 на GitHub-hosted раннеры старый
+  # 25-минутный конверт (двойной худший successful job из 20 main-прогонов)
+  # поднят до 40 минут — history-replay на новом железе ещё невозможен, запас
+  # берётся сверху. Перекалибровать по фактическим main-прогонам, а не под один
+  # медленный прогон.
+  node-consumer-floor:
+    name: Node 22 consumer floor
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    needs: wasm
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          # Одноразовый слот: GitHub-кэш не нужен. У setup-node вход `cache` — это
+          # перечисление пакетных менеджеров, поэтому кэш выключается ОТСУТСТВИЕМ
+          # `cache` плюс явным гашением автокэша npm (`cache: false` там падает).
+          package-manager-cache: false
+          node-version: ${{ env.NODE_CONSUMER_FLOOR }}
+      - name: download exact artifact built by the canonical WASM job
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: colors-release-${{ github.sha }}-attempt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/node-floor-artifact
+      - name: packed public entrypoints on declared Node floor
+        env:
+          ARTIFACT_DIR: ${{ runner.temp }}/node-floor-artifact
+        run: |
+          mapfile -t tarballs < <(find "$ARTIFACT_DIR" -type f -name '*.tgz' -print)
+          test "${#tarballs[@]}" -eq 1
+          node scripts/verify-package-release.mjs --package-smoke "${tarballs[0]}"
+
+  msrv:
+    name: MSRV workspace check
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          # Receipt pins exact source bytes at PR head; ephemeral merge commits
+          # can alter files via main-side changes, breaking the integrity seal.
+          ref: ${{ github.event.pull_request.head.sha }}
+      - name: verify exact clean-set product receipt
+        run: python3 scripts/verify_clean_set_receipt.py product --product-root "$GITHUB_WORKSPACE"
+      - name: clean-set receipt verifier hostile tests
+        run: python3 scripts/test_verify_clean_set_receipt.py
+      - name: toolchain env (runner.temp)
+        run: |
+          {
+            echo "RUSTUP_HOME=$RUNNER_TEMP/rustup-$GITHUB_JOB"
+            echo "CARGO_HOME=$RUNNER_TEMP/cargo-$GITHUB_JOB"
+            echo "TMPDIR=$RUNNER_TEMP/tmp-$GITHUB_JOB"
+          } >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/tmp-$GITHUB_JOB"
+      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master @ 2026-03-27
+        with:
+          toolchain: ${{ env.MSRV_TOOLCHAIN }}
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+      - name: cargo check on declared MSRV
+        run: cargo check --workspace --all-targets --locked
+
+  lint:
+    name: clippy + rustfmt
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    # Isolate RUSTUP_HOME/CARGO_HOME per job under runner.temp. Эфемерная VM
+    # одноразовая, поэтому прежний класс гонок за общий $HOME закрыт по
+    # построению; изоляция оставлена инвариантом и стоит ноль. На DE-02 /tmp
+    # был 8ГБ tmpfs и per-run toolchain'ы (~600 МБ каждый) выедали его за ~12
+    # job'ов (ENOSPC-каскад, 2026-07-03) — rustup/cargo остаются в runner.temp.
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # dtolnay/rust-toolchain has no semver tags — pinned by commit SHA.
+      # The toolchain VERSION is pinned via the explicit input below, not @stable,
+      # so a new stable release cannot silently change CI behavior.
+      - name: toolchain env (runner.temp)
+        # runner-контекст недоступен в job-level env — только в шагах; поэтому
+        # RUSTUP_HOME/CARGO_HOME назначаются здесь через GITHUB_ENV. Смысл тот
+        # же: изоляция per job под runner.temp, который раннер вайпит между
+        # джобами (класс утечки /tmp закрыт, см. историю #143).
+        run: |
+          {
+            echo "RUSTUP_HOME=$RUNNER_TEMP/rustup-$GITHUB_JOB"
+            echo "CARGO_HOME=$RUNNER_TEMP/cargo-$GITHUB_JOB"
+            # TMPDIR тоже изолирован под runner.temp: /tmp на de-02 — 8ГБ tmpfs;
+            # при исчерпании места (4КБ свободно) все
+            # джобы умирали «abnormal exit»/cc без stderr, 2026-07-03 18:34Z.
+            echo "TMPDIR=$RUNNER_TEMP/tmp-$GITHUB_JOB"
+          } >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/tmp-$GITHUB_JOB"
+      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master @ 2026-03-27
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+      - name: cargo fmt --check
+        run: cargo fmt --all --check
+      - name: cargo clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+  docs:
+    name: cargo doc (intra-doc links)
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: toolchain env (runner.temp)
+        # runner-контекст недоступен в job-level env — только в шагах; поэтому
+        # RUSTUP_HOME/CARGO_HOME назначаются здесь через GITHUB_ENV. Смысл тот
+        # же: изоляция per job под runner.temp, который раннер вайпит между
+        # джобами (класс утечки /tmp закрыт, см. историю #143).
+        run: |
+          {
+            echo "RUSTUP_HOME=$RUNNER_TEMP/rustup-$GITHUB_JOB"
+            echo "CARGO_HOME=$RUNNER_TEMP/cargo-$GITHUB_JOB"
+            # TMPDIR тоже изолирован под runner.temp: /tmp на de-02 — 8ГБ tmpfs;
+            # при исчерпании места (4КБ свободно) все
+            # джобы умирали «abnormal exit»/cc без stderr, 2026-07-03 18:34Z.
+            echo "TMPDIR=$RUNNER_TEMP/tmp-$GITHUB_JOB"
+          } >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/tmp-$GITHUB_JOB"
+      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master @ 2026-03-27
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+      - name: cargo doc
+        # Intra-doc links are a hard gate: a broken [`link`] in any doc comment
+        # (link to a private/renamed/removed item, or bare brackets rustdoc reads
+        # as a link) fails the build. RUSTDOCFLAGS="-D warnings" promotes every
+        # rustdoc warning — including broken_intra_doc_links — to an error;
+        # --no-deps keeps the gate on our own crates only. This stops a stale doc
+        # reference from merging silently (main was green with ~81 broken links
+        # because cargo doc was never gated — #26).
+        run: RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --locked
+      - name: staged Program is absent from the resolved public API
+        run: |
+          python3 scripts/test_program_public_surface.py
+          python3 scripts/verify_program_public_surface.py target/doc/labcolors_core
+      - name: package labcolors-core and run extracted package doctests
+        run: |
+          set -euo pipefail
+          test -L crates/labcolors-core/LICENSE
+          test "$(readlink crates/labcolors-core/LICENSE)" = "../../LICENSE"
+          cmp LICENSE crates/labcolors-core/LICENSE
+          cargo package -p labcolors-core --locked
+          crate_version="$(cargo pkgid -p labcolors-core | sed 's/.*#//')"
+          package_root="$RUNNER_TEMP/labcolors-core-package-$GITHUB_RUN_ID"
+          mkdir "$package_root"
+          tar -xzf "target/package/labcolors-core-${crate_version}.crate" -C "$package_root"
+          crate_dir="$package_root/labcolors-core-${crate_version}"
+          test -f "$crate_dir/README.md"
+          python3 scripts/verify_clean_set_receipt.py core-package \
+            --source-root "$GITHUB_WORKSPACE" \
+            --package-root "$crate_dir"
+          cargo test --doc --manifest-path "$crate_dir/Cargo.toml" --locked
+
+  test:
+    name: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: canonical region-proof protocol
+        shell: bash
+        run: |
+          set -euo pipefail
+          formula_path='crates/labcolors-core/contracts/contextual-region-formula-v1.lcir'
+          test "$(git check-attr text -- "$formula_path")" = "$formula_path: text: unset"
+          test "$(git check-attr eol -- "$formula_path")" = "$formula_path: eol: unspecified"
+          proof_tmp="$RUNNER_TEMP/region-proof-$GITHUB_JOB"
+          mkdir -p "$proof_tmp"
+          docker run --rm --pull always \
+            --read-only \
+            --network none \
+            --cap-drop ALL \
+            --security-opt no-new-privileges \
+            --user "$(id -u):$(id -g)" \
+            --mount "type=bind,src=$GITHUB_WORKSPACE,dst=/workspace,readonly" \
+            --mount "type=bind,src=$proof_tmp,dst=/tmp" \
+            --workdir /workspace \
+            --env PYTHONDONTWRITEBYTECODE=1 \
+            --env PYTHONHASHSEED=0 \
+            "$PYTHON_PROOF_IMAGE" \
+            sh -euc '
+              python -c '\''import sys; expected = (3, 14, 6); actual = sys.version_info[:3]; assert actual == expected, (actual, expected)'\''
+              test -f proof/region/v1/tests/test_provenance.py
+              python -m unittest proof/region/v1/tests/test_provenance.py -v
+              python -c '\''import unittest; suite = unittest.defaultTestLoader.discover("proof/region/v1/tests", pattern="test_*.py"); count = suite.countTestCases(); minimum = 25; assert count >= minimum, f"region-proof anti-vacuum floor failed: {count} < {minimum}"; print(f"region-proof discovered tests: {count}")'\''
+              python -m unittest discover -s proof/region/v1/tests -p "test_*.py" -v
+              PYTHONOPTIMIZE=2 python -m unittest discover -s proof/region/v1/tests -p "test_*.py" -v
+              # Both fast gates carry their own expected inventory, and until
+              # now nothing ran them before a merge: `arb.yml` is privileged —
+              # sudo, Docker, a delegated cgroup — so it refuses a
+              # `pull_request` trigger by contract, and a wrong
+              # EXPECTED_TEST_INVENTORY_SHA256 went green on the pull request
+              # and broke `main` on push.  The discovery above cannot stand in
+              # for them: `tests/test_build.py` deliberately does not read the
+              # gate constants, and that independence is the point.  They need
+              # no build — the exact skip manifest is what makes them fast.
+              python proof/region/v1/arb/tests/gate.py
+              PYTHONOPTIMIZE=2 python proof/region/v1/arb/tests/gate.py
+              python proof/region/v1/mpfi/tests/gate.py
+              PYTHONOPTIMIZE=2 python proof/region/v1/mpfi/tests/gate.py
+              python proof/region/v1/controller.py verify-fixtures --repo-root /workspace
+            '
+      - name: toolchain env (runner.temp)
+        # runner-контекст недоступен в job-level env — только в шагах; поэтому
+        # RUSTUP_HOME/CARGO_HOME назначаются здесь через GITHUB_ENV. Смысл тот
+        # же: изоляция per job под runner.temp, который раннер вайпит между
+        # джобами (класс утечки /tmp закрыт, см. историю #143).
+        run: |
+          {
+            echo "RUSTUP_HOME=$RUNNER_TEMP/rustup-$GITHUB_JOB"
+            echo "CARGO_HOME=$RUNNER_TEMP/cargo-$GITHUB_JOB"
+            # TMPDIR тоже изолирован под runner.temp: /tmp на de-02 — 8ГБ tmpfs;
+            # при исчерпании места (4КБ свободно) все
+            # джобы умирали «abnormal exit»/cc без stderr, 2026-07-03 18:34Z.
+            echo "TMPDIR=$RUNNER_TEMP/tmp-$GITHUB_JOB"
+          } >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/tmp-$GITHUB_JOB"
+      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master @ 2026-03-27
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+      - name: mutation evidence verifier hostile tests
+        run: python3 scripts/test_mutation.py
+      - name: cargo test
+        run: cargo test --workspace --locked
+      # Floor baseline gate: test count must never regress below the declared
+      # minimum. The baseline is updated atomically with each merge that adds
+      # tests; a drop means either tests were silently dropped or a feature
+      # gate hid an entire module. This step runs AFTER cargo test so it can
+      # reuse the same compilation artifacts and add zero wall-clock cost.
+      - name: floor baseline gate
+        shell: pwsh
+        run: scripts/check-floor-baseline.ps1
+      # The private-fixture lifecycle/dispose tests in private_fixture.rs are
+      # feature-gated (`#[cfg(feature = "private-fixture")]`), so the default
+      # `cargo test --workspace` step above never compiles them. They must run
+      # on their own required step or CI silently drops the resource-ownership
+      # and two-phase-dispose proofs. `--locked` keeps the same lockfile
+      # contract as every other cargo command in this workflow.
+      - name: cargo test private-fixture feature
+        run: cargo test -p labcolors-core --lib --features private-fixture --locked
+      - name: exhaustive 24-bit family membership oracle
+        shell: bash
+        run: |
+          set -euo pipefail
+          test_name='family_artifact_tests::axis_membership_matches_the_full_srgb8_cube_oracle'
+          cargo test -p labcolors-core --lib --locked -- --ignored --list --format terse |
+            awk -v expected="${test_name}: test" '
+              $0 == expected { matches += 1 }
+              END { exit(matches == 1 ? 0 : 1) }
+            '
+          cargo test -p labcolors-core --lib "${test_name}" --locked -- --ignored --exact
+      - name: prove core capability projection boundary
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json
+          import subprocess
+
+          metadata = json.loads(subprocess.check_output(
+              ["cargo", "metadata", "--format-version", "1", "--no-deps"],
+              text=True,
+          ))
+          packages = {package["name"]: package for package in metadata["packages"]}
+          direct_core_consumers = (
+              "labcolors-wasm",
+              "labcolors-ffi",
+              "labcolors-conformance",
+          )
+          core = packages["labcolors-core"]
+          if core["features"].get("default") != []:
+              raise SystemExit("labcolors-core default capability set drifted")
+          # Diagnostic: log all labcolors-core dependencies for debugging
+          for dep in core["dependencies"]:
+              if dep["kind"] is None:
+                  print(f"  core dep: {dep['name']} optional={dep.get('optional', 'MISSING')} kind={dep['kind']}", file=sys.stderr)
+
+          # Known optional deps gated behind feature flags; excluded from zero-runtime check
+          # even if cargo metadata omits the optional flag due to toolchain differences.
+          _OPTIONAL_FEATURE_GATED = frozenset({"serde", "serde_yaml", "toml"})
+          runtime_dependencies = [
+              dependency
+              for dependency in core["dependencies"]
+              if dependency["kind"] is None
+              and not dependency.get("optional", False)
+              and dependency["name"] not in _OPTIONAL_FEATURE_GATED
+          ]
+          if runtime_dependencies:
+              names = sorted(dependency["name"] for dependency in runtime_dependencies)
+              raise SystemExit(f"labcolors-core must have zero runtime dependencies: {names}")
+          # Оффлайн protocol/compiler линия вырезана целиком: анти-воскрешение —
+          # самих крейтов больше не существует в воркспейсе.
+          for erased in ("labcolors-protocol", "labcolors-compiler"):
+              if erased in packages:
+                  raise SystemExit(f"deleted crate resurfaced in the workspace: {erased}")
+
+          for consumer in direct_core_consumers:
+              core_dependencies = [
+                  dependency
+                  for dependency in packages[consumer]["dependencies"]
+                  if dependency["name"] == "labcolors-core" and dependency["kind"] is None
+              ]
+              if len(core_dependencies) != 1:
+                  raise SystemExit(f"{consumer} must have one normal labcolors-core edge")
+              core_dependency = core_dependencies[0]
+              if core_dependency["uses_default_features"]:
+                  raise SystemExit(f"{consumer} must disable Core default capabilities")
+              if core_dependency["features"]:
+                  raise SystemExit(
+                      f"{consumer} direct Core edge must own no optional capability, got "
+                      f"{core_dependency['features']}"
+                  )
+              feature_tree = subprocess.check_output(
+                  ["cargo", "tree", "-p", consumer, "--edges", "normal", "-e", "features"],
+                  text=True,
+              )
+              # Вырезанные вертикали: сами фичи больше не существуют,
+              # потребительские деревья обязаны быть чисты.
+              for forbidden in ("wcag22-feasibility", "wcag22-explicit", "labcolors-protocol"):
+                  if forbidden in feature_tree:
+                      raise SystemExit(f"{consumer} resolved a deleted capability: {forbidden}")
+
+          runtime_tree = subprocess.check_output(
+              [
+                  "cargo", "tree", "-p", "labcolors-wasm",
+                  "--target", "wasm32-unknown-unknown",
+                  "--edges", "normal", "-e", "features",
+              ],
+              text=True,
+          )
+          for forbidden in (
+              "labcolors-protocol",
+              "wcag22-feasibility",
+              "wcag22-explicit",
+          ):
+              if forbidden in runtime_tree:
+                  raise SystemExit(f"runtime role resolved forbidden capability: {forbidden}")
+
+          print("core capability projection: PASS")
+          PY
+      - name: reject WCAG22 source-route redirects and proof vacuums
+        run: python3 scripts/test_wcag22_source_binding.py
+      - name: prove WCAG22 sRGB8 Q55 artifact over the full finite domain
+        run: python3 scripts/verify_wcag22_q55.py
+      - name: independently recompute WCAG22 neutral-axis fixtures
+        run: python3 scripts/verify_wcag22_neutral_axis.py
+      - name: reject point-support source-binding vacuums
+        run: python3 scripts/test_point_support_surplus_source_binding.py
+      - name: prove point-support retained reference surplus over Q55 bounds
+        run: python3 scripts/verify_point_support_surplus.py
+
+  audit:
+    name: cargo audit (rustsec)
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: toolchain env (runner.temp)
+        # runner-контекст недоступен в job-level env — только в шагах; поэтому
+        # RUSTUP_HOME/CARGO_HOME назначаются здесь через GITHUB_ENV. Смысл тот
+        # же: изоляция per job под runner.temp, который раннер вайпит между
+        # джобами (класс утечки /tmp закрыт, см. историю #143).
+        run: |
+          {
+            echo "RUSTUP_HOME=$RUNNER_TEMP/rustup-$GITHUB_JOB"
+            echo "CARGO_HOME=$RUNNER_TEMP/cargo-$GITHUB_JOB"
+            # TMPDIR тоже изолирован под runner.temp: /tmp на de-02 — 8ГБ tmpfs;
+            # при исчерпании места (4КБ свободно) все
+            # джобы умирали «abnormal exit»/cc без stderr, 2026-07-03 18:34Z.
+            echo "TMPDIR=$RUNNER_TEMP/tmp-$GITHUB_JOB"
+          } >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/tmp-$GITHUB_JOB"
+      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master @ 2026-03-27
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+      - name: install cargo-audit
+        # Version pinned for reproducibility; --locked respects the tool's own lockfile.
+        # Must be >=0.22 — older versions cannot parse RUSTSEC entries that use
+        # CVSS v4.0 and fail to load the advisory database entirely.
+        # $CARGO_HOME/bin → PATH explicitly: with a custom CARGO_HOME the
+        # toolchain action does not add it, and standalone `cargo install`
+        # binaries become unreachable (`wasm-pack` died with exit 127 on de-02;
+        # `cargo audit` only survived by resolving as a cargo subcommand).
+        run: |
+          cargo install cargo-audit --version 0.22.2 --locked
+          echo "$CARGO_HOME/bin" >> "$GITHUB_PATH"
+      # Hard-fail on actively-exploitable advisories AND on yanked crates.
+      # Rationale: a known-vulnerable or yanked dependency is a supply-chain
+      # liability we will not knowingly merge. cargo-audit exits non-zero on any
+      # advisory; --deny warnings additionally promotes yanked/unmaintained
+      # warnings to failures. continue-on-error is intentionally absent (false)
+      # so the gate actually blocks. If a finding is a false positive or accepted
+      # risk, ignore it explicitly per-advisory via `--ignore RUSTSEC-XXXX-NNNN`
+      # with a comment — never by disabling the whole gate.
+      - name: cargo audit
+        run: cargo audit --deny warnings
+
+  wasm:
+    name: wasm build + headless test + size
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    # Native Binaryen 117 не завершил wasm-opt внутри systrap до bounded timeout
+    # (run 30773180841). Официальный Node transport того же release дал byte-exact
+    # результат native oracle на post-bindgen input в exact production cell.
+    # Менять release/transport только новым differential receipt.
+    env:
+      BINARYEN_RELEASE: version_117
+      BINARYEN_NODE_SHA256: "2d5a42f2d167a7cc2b4b6664c44c5ace1690d13db4f527324f052afbad461a07"
+      WASM_BINDGEN_CLI_SHA256: "064948d58e2d6c0a745216477a639ba696216d6309aaa902939d1b865b1d869d"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: toolchain env (runner.temp)
+        # runner-контекст недоступен в job-level env — только в шагах; поэтому
+        # RUSTUP_HOME/CARGO_HOME назначаются здесь через GITHUB_ENV. Смысл тот
+        # же: изоляция per job под runner.temp, который раннер вайпит между
+        # джобами (класс утечки /tmp закрыт, см. историю #143).
+        run: |
+          {
+            echo "RUSTUP_HOME=$RUNNER_TEMP/rustup-$GITHUB_JOB"
+            echo "CARGO_HOME=$RUNNER_TEMP/cargo-$GITHUB_JOB"
+            echo "WASM_PACK_CACHE=$RUNNER_TEMP/wasm-pack-$GITHUB_JOB"
+            # TMPDIR тоже изолирован под runner.temp: /tmp на de-02 — 8ГБ tmpfs;
+            # при исчерпании места (4КБ свободно) все
+            # джобы умирали «abnormal exit»/cc без stderr, 2026-07-03 18:34Z.
+            echo "TMPDIR=$RUNNER_TEMP/tmp-$GITHUB_JOB"
+          } >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/tmp-$GITHUB_JOB" "$RUNNER_TEMP/wasm-pack-$GITHUB_JOB"
+      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master @ 2026-03-27
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          # The WASM compile target; the bindings are built and tested against it.
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          # Одноразовый слот: GitHub-кэш не нужен. У setup-node вход `cache` — это
+          # перечисление пакетных менеджеров, поэтому кэш выключается ОТСУТСТВИЕМ
+          # `cache` плюс явным гашением автокэша npm (`cache: false` там падает).
+          package-manager-cache: false
+          node-version: ${{ env.NODE_TOOLCHAIN }}
+      - name: install wasm-pack
+        # Pinned for reproducibility; --locked respects the tool's own lockfile.
+        # Build uses --no-opt below: Binaryen is installed and verified separately,
+        # while wasm-pack still owns cargo/wasm-bindgen and the browser harness.
+        # $CARGO_HOME/bin → PATH explicitly: with a custom CARGO_HOME the
+        # toolchain action does not add it, so the installed `wasm-pack` binary
+        # was unreachable (exit 127 "command not found" на прежнем пуле de-02).
+        run: |
+          cargo install wasm-pack --version 0.13.1 --locked
+          echo "$CARGO_HOME/bin" >> "$GITHUB_PATH"
+      - name: install byte-bound wasm-bindgen CLI
+        # wasm-pack's fallback install is dependency- and host-toolchain-sensitive.
+        # Materialize the release binary in its completed non-dot cache layout so
+        # both the fallback and its disposable dot-prefixed staging are bypassed.
+        run: |
+          set -euo pipefail
+          version=0.2.126
+          archive="$RUNNER_TEMP/wasm-bindgen-$version.tar.gz"
+          install_root="$WASM_PACK_CACHE/.unpacked-wasm-bindgen-cli-$version"
+          materialized_root="$WASM_PACK_CACHE/.materialized-wasm-bindgen-cargo-install-$version"
+          final_root="$WASM_PACK_CACHE/wasm-bindgen-cargo-install-$version"
+          rm -rf "$install_root" "$materialized_root" "$final_root"
+          curl --fail-with-body --silent --show-error --location \
+            --retry 3 --retry-all-errors \
+            "https://github.com/wasm-bindgen/wasm-bindgen/releases/download/$version/wasm-bindgen-$version-x86_64-unknown-linux-musl.tar.gz" \
+            -o "$archive"
+          printf '%s  %s\n' "$WASM_BINDGEN_CLI_SHA256" "$archive" \
+            | sha256sum --check --strict
+          mkdir -p "$install_root" "$materialized_root"
+          tar --extract --gzip --strip-components=1 --file="$archive" --directory="$install_root"
+          mv -- "$install_root/wasm-bindgen" "$materialized_root/wasm-bindgen"
+          mv -- "$install_root/wasm-bindgen-test-runner" "$materialized_root/wasm-bindgen-test-runner"
+          mv -- "$materialized_root" "$final_root"
+          echo "$final_root" >> "$GITHUB_PATH"
+          rm -rf "$install_root" "$archive"
+      - name: install byte-bound Binaryen Node transport
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/binaryen-$GITHUB_JOB.tar.gz"
+          root="$RUNNER_TEMP/binaryen-$GITHUB_JOB"
+          curl --fail-with-body --silent --show-error --location \
+            --retry 3 --retry-all-errors \
+            "https://github.com/WebAssembly/binaryen/releases/download/${BINARYEN_RELEASE}/binaryen-${BINARYEN_RELEASE}-node.tar.gz" \
+            -o "$archive"
+          printf '%s  %s\n' "$BINARYEN_NODE_SHA256" "$archive" \
+            | sha256sum --check --strict
+          mkdir -p "$root"
+          tar --extract --gzip --file "$archive" --directory "$root"
+          binaryen="$root/binaryen-${BINARYEN_RELEASE}"
+          test -f "$binaryen/wasm-opt.js"
+          test -f "$binaryen/wasm-opt.wasm"
+          test -f "$binaryen/wasm-opt.worker.js"
+          echo "BINARYEN_ROOT=$binaryen" >> "$GITHUB_ENV"
+      - name: repeat runtime WASM build in one toolchain-pinned CI job
+        # Rust error locations otherwise embed the slot's mutable
+        # workspace/CARGO_HOME roots and make identical source hash differently.
+        # The second build follows `cargo clean`; equality checks repeatability
+        # for this source inside this toolchain-pinned job, not cross-run or
+        # cross-host identity.
+        run: |
+          set -euo pipefail
+          export CARGO_ENCODED_RUSTFLAGS="--remap-path-prefix=$GITHUB_WORKSPACE=/workspace/lab-colors"$'\x1f'"--remap-path-prefix=$CARGO_HOME=/cargo-home"
+          build_runtime() {
+            wasm-pack build --no-opt --release --target web \
+              --out-dir ../../packages/colors/pkg --out-name labcolors \
+              crates/labcolors-wasm --locked
+            local wasm=packages/colors/pkg/labcolors_bg.wasm
+            local optimized=packages/colors/pkg/labcolors_bg.wasm-opt.wasm
+            node "$BINARYEN_ROOT/wasm-opt.js" "$wasm" -o "$optimized" \
+              -Oz --enable-bulk-memory --enable-nontrapping-float-to-int
+            mv -- "$optimized" "$wasm"
+          }
+
+          rm -rf packages/colors/pkg
+          build_runtime
+
+          first="$RUNNER_TEMP/wasm-first-$GITHUB_JOB"
+          rm -rf "$first"
+          mkdir -p "$first"
+          cp -a packages/colors/pkg "$first/pkg"
+
+          cargo clean
+          rm -rf packages/colors/pkg
+          build_runtime
+
+          if ! diff --no-dereference --recursive "$first/pkg" packages/colors/pkg; then
+            echo "runtime WASM output changed between builds" >&2
+            exit 1
+          fi
+
+          wasm=packages/colors/pkg/labcolors_bg.wasm
+          for root in "$GITHUB_WORKSPACE" "$CARGO_HOME" "$RUSTUP_HOME"; do
+            if LC_ALL=C grep -a -F -q -- "$root/" "$wasm"; then
+              echo "unmapped build path $root in $wasm" >&2
+              exit 1
+            fi
+          done
+          sha256sum packages/colors/pkg/labcolors_bg.wasm
+      - name: enforce measured WASM runtime budget
+        # Exact Linux x64 zero-headroom ratchet. gzip remains transport
+        # diagnostics only.
+        run: node scripts/check-wasm-size-budget.mjs
+      - name: "@labpics/colors: typecheck + runtime tests"
+        # pkg/ уже собран выше, поэтому TypeScript видит реальные wasm-bindgen
+        # declarations; node --test покрывает builder, init и публичный контракт.
+        # Браузерный terminal Program-путь проверяется wasm-pack test ниже.
+        working-directory: packages/colors
+        run: |
+          npm ci
+          npm run typecheck
+          npm test
+      - name: verify byte-exact npm release artifact
+        id: verified-release
+        working-directory: packages/colors
+        run: npm run release:verify
+      - name: bind verified npm tarball SHA-256
+        id: verified-release-identity
+        env:
+          VERIFIED_TARBALL: ${{ steps.verified-release.outputs.tarball }}
+        run: |
+          set -euo pipefail
+          test -f "$VERIFIED_TARBALL"
+          tarball_sha256="$(sha256sum --binary -- "$VERIFIED_TARBALL" | cut --delimiter=' ' --fields=1)"
+          if [[ ! "$tarball_sha256" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "verified tarball digest is not lowercase SHA-256" >&2
+            exit 1
+          fi
+          printf 'sha256=%s\n' "$tarball_sha256" >> "$GITHUB_OUTPUT"
+      # Upload the already verified release input before the pinned browser
+      # dependency is fetched. A Chrome outage therefore cannot destroy the
+      # evidence, while this `wasm` job still has to finish successfully before
+      # publish.yml will accept its canonical workflow run.
+      - name: upload verified npm tarball and manifest
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: colors-release-${{ github.sha }}-attempt-${{ github.run_attempt }}
+          path: |
+            ${{ steps.verified-release.outputs.tarball }}
+            ${{ steps.verified-release.outputs.manifest }}
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 90
+      - name: install Chrome + dependencies (Chrome for Testing + apt-get download)
+        # GitHub-hosted образ не содержит нужный CfT-браузер; установка целиком
+        # userspace (sudo на раннере доступен, но не используется — гейт остаётся
+        # герметичным и не трогает системное состояние образа).
+        # Strategy:
+        #  1. Download exact CfT chrome + chromedriver archives and verify SHA-256.
+        #     wasm-pack reads CHROME_PATH for the browser but ignores a CHROMEDRIVER
+        #     variable, so the matching driver is passed through --chromedriver.
+        #  2. Extract required shared libs (.so) from the runner's configured
+        #     Debian/Ubuntu repository without sudo. Refresh package metadata in
+        #     runner.temp first: образ ячейки может нести устаревшие списки,
+        #     чьи package URL уже отдают 404. The root set below owns every
+        #     direct DT_NEEDED name of the pinned Chrome and ChromeDriver ELF
+        #     files; APT resolves its transitive closure and `dpkg --extract`
+        #     unpacks it without root. `ldd` then rejects an incomplete closure
+        #     before wasm-pack can misreport it as a driver timeout.
+        run: |
+          set -euo pipefail
+          # -- CfT chrome + chromedriver --
+          BASE_URL="https://storage.googleapis.com/chrome-for-testing-public/${CHROME_FOR_TESTING_VERSION}/linux64"
+          CHROME_ROOT="$RUNNER_TEMP/chrome-$GITHUB_JOB"
+          mkdir -p "$CHROME_ROOT"
+          curl --fail-with-body --silent --show-error --location \
+            "${BASE_URL}/chrome-linux64.zip" -o "$CHROME_ROOT/chrome-linux64.zip"
+          curl --fail-with-body --silent --show-error --location \
+            "${BASE_URL}/chromedriver-linux64.zip" -o "$CHROME_ROOT/chromedriver-linux64.zip"
+          printf '%s  %s\n' "$CHROME_FOR_TESTING_SHA256" "$CHROME_ROOT/chrome-linux64.zip" \
+            | sha256sum --check --strict
+          printf '%s  %s\n' "$CHROMEDRIVER_FOR_TESTING_SHA256" "$CHROME_ROOT/chromedriver-linux64.zip" \
+            | sha256sum --check --strict
+          unzip -q -o "$CHROME_ROOT/chrome-linux64.zip" -d "$CHROME_ROOT"
+          unzip -q -o "$CHROME_ROOT/chromedriver-linux64.zip" -d "$CHROME_ROOT"
+          CHROME_BIN="$CHROME_ROOT/chrome-linux64/chrome"
+          CHROMEDRIVER_BIN="$CHROME_ROOT/chromedriver-linux64/chromedriver"
+          chmod +x "$CHROME_BIN" "$CHROMEDRIVER_BIN"
+          echo "CHROME_PATH=$CHROME_BIN" >> "$GITHUB_ENV"
+          echo "CHROMEDRIVER_PATH=$CHROMEDRIVER_BIN" >> "$GITHUB_ENV"
+          echo "Chrome for Testing $CHROME_FOR_TESTING_VERSION installed"
+
+          # -- Extract Chrome shared-lib dependencies from distro .deb (no sudo needed) --
+          DEPS_DIR="$RUNNER_TEMP/chrome-deps-$GITHUB_JOB"
+          APT_LISTS="$DEPS_DIR/apt-lists"
+          APT_CACHE="$DEPS_DIR/apt-cache"
+          readonly APT_SOURCES="$DEPS_DIR/apt-sources"
+          mkdir -p \
+            "$APT_LISTS/partial" \
+            "$APT_CACHE/archives/partial" \
+            "$APT_SOURCES/sources.list.d"
+          # Общие sources раннера содержат посторонние vendor-репозитории.
+          # Недоступный vendor не должен отменять browser-gate, которому нужны
+          # только пакеты дистрибутива, поэтому зависимость объявлена явно.
+          source /etc/os-release
+          : "${ID:?missing distro ID}"
+          : "${VERSION_CODENAME:?missing distro codename}"
+          # Debian 12 / Ubuntu 22.04 predate the time64 package rename; Debian
+          # 13 / Ubuntu 24.04 use the t64 ABI name. Unknown images fail closed
+          # instead of guessing a package from mutable ambient APT metadata.
+          case "$ID:$VERSION_CODENAME" in
+            debian:bookworm|ubuntu:jammy)
+              ALSA_PACKAGE=libasound2
+              ATK_PACKAGE=libatk1.0-0
+              ATK_BRIDGE_PACKAGE=libatk-bridge2.0-0
+              ATSPI_PACKAGE=libatspi2.0-0
+              CUPS_PACKAGE=libcups2
+              GLIB_PACKAGE=libglib2.0-0
+              ;;
+            debian:trixie|ubuntu:noble)
+              ALSA_PACKAGE=libasound2t64
+              ATK_PACKAGE=libatk1.0-0t64
+              ATK_BRIDGE_PACKAGE=libatk-bridge2.0-0t64
+              ATSPI_PACKAGE=libatspi2.0-0t64
+              CUPS_PACKAGE=libcups2t64
+              GLIB_PACKAGE=libglib2.0-0t64
+              ;;
+            *)
+              echo "unsupported Chrome dependency release: $ID:$VERSION_CODENAME" >&2
+              exit 1
+              ;;
+          esac
+          readonly ALSA_PACKAGE ATK_PACKAGE ATK_BRIDGE_PACKAGE ATSPI_PACKAGE CUPS_PACKAGE GLIB_PACKAGE
+          CHROME_RUNTIME_PACKAGES=(
+            "$ALSA_PACKAGE"
+            "$ATK_BRIDGE_PACKAGE"
+            "$ATK_PACKAGE"
+            "$ATSPI_PACKAGE"
+            "$CUPS_PACKAGE"
+            "$GLIB_PACKAGE"
+            libcairo2
+            libdbus-1-3
+            libexpat1
+            libgbm1
+            libnspr4
+            libnss3
+            libpango-1.0-0
+            libudev1
+            libx11-6
+            libxcb1
+            libxcomposite1
+            libxdamage1
+            libxext6
+            libxfixes3
+            libxkbcommon0
+            libxrandr2
+          )
+          readonly CHROME_RUNTIME_PACKAGES
+          case "$ID" in
+            debian)
+              DISTRO_KEYRING=/usr/share/keyrings/debian-archive-keyring.gpg
+              test -r "$DISTRO_KEYRING"
+              printf '%s\n' \
+                "deb [signed-by=$DISTRO_KEYRING] https://deb.debian.org/debian $VERSION_CODENAME main" \
+                "deb [signed-by=$DISTRO_KEYRING] https://deb.debian.org/debian $VERSION_CODENAME-updates main" \
+                "deb [signed-by=$DISTRO_KEYRING] https://security.debian.org/debian-security $VERSION_CODENAME-security main" \
+                > "$APT_SOURCES/sources.list"
+              ;;
+            ubuntu)
+              DISTRO_KEYRING=/usr/share/keyrings/ubuntu-archive-keyring.gpg
+              test -r "$DISTRO_KEYRING"
+              printf '%s\n' \
+                "deb [signed-by=$DISTRO_KEYRING] https://archive.ubuntu.com/ubuntu $VERSION_CODENAME main" \
+                "deb [signed-by=$DISTRO_KEYRING] https://archive.ubuntu.com/ubuntu $VERSION_CODENAME-updates main" \
+                "deb [signed-by=$DISTRO_KEYRING] https://security.ubuntu.com/ubuntu $VERSION_CODENAME-security main" \
+                > "$APT_SOURCES/sources.list"
+              ;;
+            *)
+              echo "unsupported Chrome dependency distro: $ID" >&2
+              exit 1
+              ;;
+          esac
+          readonly DISTRO_KEYRING
+          # Все изменяемые пути APT и полный inventory sources принадлежат job;
+          # keyring и dpkg status остаются read-only входами.
+          APT_OPTIONS=(
+            -o "Dir::Etc::sourcelist=$APT_SOURCES/sources.list"
+            -o "Dir::Etc::sourceparts=$APT_SOURCES/sources.list.d"
+            -o "Dir::State::lists=$APT_LISTS"
+            -o "Dir::State::status=/var/lib/dpkg/status"
+            -o "Dir::Cache=$APT_CACHE"
+            -o "Dir::Cache::archives=$APT_CACHE/archives"
+            -o "Debug::NoLocking=1"
+            -o "Acquire::Retries=3"
+          )
+          readonly APT_OPTIONS
+          apt-get "${APT_OPTIONS[@]}" update
+          # --reinstall materialises every direct root even when the immutable
+          # image already owns it; APT adds only transitive roots absent from
+          # that image. --download-only keeps system package state read-only.
+          apt-get "${APT_OPTIONS[@]}" install \
+            --download-only \
+            --reinstall \
+            --no-install-recommends \
+            --yes \
+            "${CHROME_RUNTIME_PACKAGES[@]}"
+          shopt -s nullglob
+          deb_packages=("$APT_CACHE/archives"/*.deb)
+          ((${#deb_packages[@]} > 0)) || {
+            echo "Chrome dependency resolver produced no package closure" >&2
+            exit 1
+          }
+          readonly deb_packages
+          for deb in "${deb_packages[@]}"; do
+            dpkg --extract "$deb" "$DEPS_DIR"
+          done
+          DEPS_LIB="$(find "$DEPS_DIR/usr/lib" -maxdepth 2 -type d | tr '\n' ':' | sed 's/:$//')"
+          echo "LD_LIBRARY_PATH=${DEPS_LIB}:${LD_LIBRARY_PATH:-}" >> "$GITHUB_ENV"
+          echo "Chrome deps: $DEPS_LIB"
+          assert_elf_closure() {
+            local executable="$1"
+            local missing
+            missing="$(
+              LD_LIBRARY_PATH="${DEPS_LIB}:${LD_LIBRARY_PATH:-}" ldd "$executable" \
+                | awk '/=> not found$/ { print $1 }'
+            )"
+            [[ -z "$missing" ]] || {
+              printf 'unresolved Chrome runtime closure for %s:\n%s\n' "$executable" "$missing" >&2
+              exit 1
+            }
+          }
+          assert_elf_closure "$CHROME_BIN"
+          assert_elf_closure "$CHROMEDRIVER_BIN"
+          LD_LIBRARY_PATH="${DEPS_LIB}:${LD_LIBRARY_PATH:-}" "$CHROME_BIN" --version
+          LD_LIBRARY_PATH="${DEPS_LIB}:${LD_LIBRARY_PATH:-}" "$CHROMEDRIVER_BIN" --version
+
+          # -- Make Chrome discoverable by chromedriver without explicit binary path --
+          # chromedriver searches PATH for: google-chrome, google-chrome-stable, chromium
+          # When CHROME_PATH/binary is not passed by wasm-bindgen-test-runner, chromedriver
+          # needs to find Chrome in PATH. Add an isolated runner.temp bin directory
+          # with Chrome aliases; wasm-pack receives the driver path explicitly.
+          CHROME_BIN_DIR="$RUNNER_TEMP/chrome-bin-$GITHUB_JOB"
+          mkdir -p "$CHROME_BIN_DIR"
+          ln -sf "$CHROME_BIN" "$CHROME_BIN_DIR/google-chrome"
+          ln -sf "$CHROME_BIN" "$CHROME_BIN_DIR/google-chrome-stable"
+          # Use GITHUB_PATH (step-scoped prepend) rather than PATH in GITHUB_ENV
+          # (which leaks the full expanded PATH across jobs on shared self-hosted runners).
+          echo "$CHROME_BIN_DIR" >> "$GITHUB_PATH"
+          echo "Linked CfT Chrome under runner.temp"
+      - name: terminal Program in real browser
+        # Сначала проверяет crate-boundary, затем устанавливает exact verified
+        # tarball и исполняет тот же Program path через публичный package root.
+        env:
+          LAB_COLORS_BROWSER_PROOF_TIMEOUT_MS: "60000"
+          VERIFIED_TARBALL: ${{ steps.verified-release.outputs.tarball }}
+          VERIFIED_TARBALL_SHA256: ${{ steps.verified-release-identity.outputs.sha256 }}
+        run: |
+          set -euo pipefail
+          wasm-pack test --headless --chrome --chromedriver "$CHROMEDRIVER_PATH" crates/labcolors-wasm --locked
+          node scripts/test-program-runtime-browser.mjs "$VERIFIED_TARBALL" "$VERIFIED_TARBALL_SHA256"
+
+# ci-trigger: force new merge-ref for runs-on fix validation 20260830233307

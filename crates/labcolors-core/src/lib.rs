@@ -46,11 +46,14 @@ pub use srgb8::Srgb8;
 pub(crate) mod accent_balance;
 pub mod alpha;
 pub(crate) mod appearance;
+pub mod claims_manifest;
 #[allow(dead_code)]
 pub(crate) mod config;
 pub(crate) mod constraints;
 #[allow(dead_code)]
 pub(crate) mod corridor_representation;
+#[cfg(feature = "ext09-extractor")]
+pub mod exports_manifest;
 #[allow(dead_code)]
 pub(crate) mod glow;
 pub mod hash;
@@ -260,6 +263,13 @@ mod contextual_region_tests;
 mod contextual_region_formula_tests;
 
 pub mod compiled_dependency_plan;
+
+#[cfg(feature = "ext09-extractor")]
+#[expect(
+    dead_code,
+    reason = "CI build manifest extraction is staged before its offline proof consumer"
+)]
+pub(crate) mod ci_build_manifest;
 
 #[cfg(test)]
 mod compiled_dependency_plan_tests;
