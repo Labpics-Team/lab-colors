@@ -12,7 +12,7 @@ use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
 
-use labcolors_core::claims_manifest::{extract_claims, ClaimEntry, ClaimKind};
+use labcolors_core::claims_manifest::{ClaimEntry, ClaimKind, extract_claims};
 
 fn workspace_root() -> &'static Path {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -52,8 +52,8 @@ fn every_claim_line_matches_source() {
     let claims = extract_claims(root);
     for claim in &claims {
         let abs = root.join(&claim.path);
-        let contents = fs::read_to_string(&abs)
-            .unwrap_or_else(|e| panic!("read {}: {}", claim.path, e));
+        let contents =
+            fs::read_to_string(&abs).unwrap_or_else(|e| panic!("read {}: {}", claim.path, e));
         let line_text = contents
             .lines()
             .nth(claim.line as usize - 1)
@@ -103,8 +103,8 @@ fn claim_kinds_match_source_patterns() {
     let claims = extract_claims(root);
     for claim in &claims {
         let abs = root.join(&claim.path);
-        let contents = fs::read_to_string(&abs)
-            .unwrap_or_else(|e| panic!("read {}: {}", claim.path, e));
+        let contents =
+            fs::read_to_string(&abs).unwrap_or_else(|e| panic!("read {}: {}", claim.path, e));
         let line_text = contents
             .lines()
             .nth(claim.line as usize - 1)
@@ -256,4 +256,3 @@ fn is_doc_contract_header(line: &str) -> bool {
         || trimmed.starts_with("# Safety")
         || trimmed.starts_with("# Invariants")
 }
-
