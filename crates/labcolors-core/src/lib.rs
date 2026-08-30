@@ -52,6 +52,7 @@ pub(crate) mod config;
 pub(crate) mod constraints;
 #[allow(dead_code)]
 pub(crate) mod corridor_representation;
+#[cfg(feature = "ext09-extractor")]
 pub mod exports_manifest;
 #[allow(dead_code)]
 pub(crate) mod glow;
@@ -263,6 +264,7 @@ mod contextual_region_formula_tests;
 
 pub mod compiled_dependency_plan;
 
+#[cfg(feature = "ext09-extractor")]
 #[expect(
     dead_code,
     reason = "CI build manifest extraction is staged before its offline proof consumer"

@@ -10,14 +10,18 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-serde = { version = "1", features = ["derive"] }
-serde_yaml = "0.9"
-toml = "0.8"
+serde = { version = "1", features = ["derive"], optional = true }
+serde_yaml = { version = "0.9", optional = true }
+toml = { version = "0.8", optional = true }
 
 [features]
 # Direct core consumers receive the stable default capability set. A transport
 # adapter may disable defaults and then enable only capabilities it projects.
 default = []
+# EXT-09 extractor modules (exports_manifest, ci_build_manifest) require
+# serde/toml/serde_yaml. Gated to preserve the zero-runtime-dependency
+# invariant for default and private-fixture builds.
+ext09-extractor = ["dep:serde", "dep:serde_yaml", "dep:toml"]
 # Один закрытый package-private consumer исполняет staged Program, не превращая
 # Program во второй публичный authoring root. Публичный runtime feature не включает.
 private-fixture = []
