@@ -29,13 +29,13 @@ const snapshot = runtime.update(observed);
 - **Cross-language parity**: JS builder emits byte-identical output to Rust reference
 - **Fail-closed security**: Family graphs require explicit trust parameters
 
-## Р—Р°РІРёСЃРёРјРѕСЃС‚Рё
+## Зависимости
 
-labcolors-core РёРјРµРµС‚ РЅРѕР»СЊ СЂР°РЅС‚Р°Р№Рј-Р·Р°РІРёСЃРёРјРѕСЃС‚РµР№. РџСЂРѕРІРµСЂСЏРµРјС‹Р№ РєРѕРЅС‚СЂР°РєС‚:
+labcolors-core имеет ноль рантайм-зависимостей. Проверяемый контракт:
 
-`ash
+```bash
 cargo tree -p labcolors-core --edges=no-dev
-`
+```
 
 ## Development
 
