@@ -693,9 +693,10 @@ class CorePackageLicenseTests(unittest.TestCase):
     def test_mit_only_package_metadata_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             source, package = self._package_fixture(Path(temporary))
-            (package / "Cargo.toml").write_text(
-                '[package]\nname = "labcolors-core"\nlicense = "MIT"\n',
-                encoding="utf-8",
+            # write_bytes avoids Windows CRLF translation that triggers the LF
+            # line-ending guard before the license check can run.
+            (package / "Cargo.toml").write_bytes(
+                b'[package]\nname = "labcolors-core"\nlicense = "MIT"\n',
             )
             with self.assertRaisesRegex(VerificationError, "package license"):
                 verify_core_package(source, package)
@@ -703,13 +704,14 @@ class CorePackageLicenseTests(unittest.TestCase):
     def test_array_table_cannot_supply_the_package_license(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             source, package = self._package_fixture(Path(temporary))
-            (package / "Cargo.toml").write_text(
+            # write_bytes avoids Windows CRLF translation that triggers the LF
+            # line-ending guard before the license check can run.
+            (package / "Cargo.toml").write_bytes(
                 (
                     '[package]\nname = "labcolors-core"\n\n'
                     '[[bin]]\nname = "fixture"\npath = "src/main.rs"\n'
                     f'license = "{CORE_LICENSE_EXPRESSION}"\n'
-                ),
-                encoding="utf-8",
+                ).encode("utf-8"),
             )
             with self.assertRaisesRegex(VerificationError, "package license"):
                 verify_core_package(source, package)
@@ -722,13 +724,14 @@ class CorePackageLicenseTests(unittest.TestCase):
                 "[dependencies] # package table has ended",
             ):
                 with self.subTest(table_header=table_header):
-                    (package / "Cargo.toml").write_text(
+                    # write_bytes avoids Windows CRLF translation that triggers
+                    # the LF line-ending guard before the license check can run.
+                    (package / "Cargo.toml").write_bytes(
                         (
                             '[package]\nname = "labcolors-core"\n\n'
                             f"{table_header}\n"
                             f'license = "{CORE_LICENSE_EXPRESSION}"\n'
-                        ),
-                        encoding="utf-8",
+                        ).encode("utf-8"),
                     )
                     with self.assertRaisesRegex(VerificationError, "package license"):
                         verify_core_package(source, package)
