@@ -385,8 +385,41 @@ fn parse_public_api(path: &Path) -> Vec<ExportItem> {
             (trimmed, None)
         };
 
-        if let Some(item) = parse_pub_line(line_to_parse, gate) {
+        // Multi-line grouped imports: `pub use path::{\n    A, B,\n};`
+        // Accumulate lines until the closing `}` is found, then parse as one.
+        let is_pub_use = line_to_parse.starts_with("pub use") || line_to_parse.starts_with("pub\tuse");
+        if is_pub_use && line_to_parse.contains('{') && !line_to_parse.contains('}') {
+            let mut accumulated = line_to_parse.to_string();
+            let start_j = if feature_gate.is_some() { i + 2 } else { i + 1 };
+            let mut j = start_j;
+            while j < lines.len() {
+                let next = lines[j].trim();
+                accumulated.push(' ');
+                accumulated.push_str(next);
+                j += 1;
+                if next.contains('}') {
+                    break;
+                }
+            }
+            if let Some(item) = parse_pub_line(&accumulated, gate.clone()) {
+                out.push(item);
+            }
+            for extra in parse_pub_use_grouped(&accumulated) {
+                out.push(extra);
+            }
+            // Skip all consumed lines (start_j..j) plus the current line.
+            i = j;
+            continue;
+        }
+
+        if let Some(item) = parse_pub_line(line_to_parse, gate.clone()) {
             out.push(item);
+        }
+        // Single-line grouped imports still need full extraction.
+        if is_pub_use {
+            for extra in parse_pub_use_grouped(line_to_parse) {
+                out.push(extra);
+            }
         }
 
         if feature_gate.is_some() {
@@ -487,14 +520,18 @@ fn parse_pub_use(use_rest: &str) -> Option<ExportItem> {
     let cleaned = use_rest.trim().trim_end_matches(';').trim();
 
     // Handle grouped imports: `path::{A, B as C}` → emit one ReExport per name.
-    // For simplicity in this extractor we flatten only the first name; the test
-    // contract asserts specific known re-exports by name, not exhaustive coverage
-    // of every grouped import (that belongs to EXT-02/syn-based parsing).
+    // We flatten ALL names from the brace group so that downstream tests can
+    // assert on any individual re-export, not just the first.
     if let Some(brace_start) = cleaned.find('{') {
         let prefix = cleaned[..brace_start].trim_end_matches(':').trim();
         let brace_end = cleaned.find('}')?;
         let inner = &cleaned[brace_start + 1..brace_end];
+        // Return the first non-empty item; remaining items are emitted via
+        // parse_pub_use_grouped called by the parent loop.
         let first = inner.split(',').next()?.trim();
+        if first.is_empty() {
+            return None;
+        }
         let name = if let Some(as_pos) = first.find(" as ") {
             first[as_pos + 4..].trim().to_string()
         } else {
@@ -502,7 +539,11 @@ fn parse_pub_use(use_rest: &str) -> Option<ExportItem> {
         };
         return Some(ExportItem::ReExport {
             name,
-            source_path: format!("{}::{}", prefix, first.split(" as ").next().unwrap_or(first).trim()),
+            source_path: format!(
+                "{}::{}",
+                prefix,
+                first.split(" as ").next().unwrap_or(first).trim()
+            ),
         });
     }
 
@@ -516,6 +557,40 @@ fn parse_pub_use(use_rest: &str) -> Option<ExportItem> {
         name,
         source_path: cleaned.to_string(),
     })
+}
+
+/// Extract ALL re-exports from a grouped `pub use path::{A, B as C, D};` line.
+/// Returns an empty vec for non-grouped imports (handled by `parse_pub_use`).
+fn parse_pub_use_grouped(use_rest: &str) -> Vec<ExportItem> {
+    let cleaned = use_rest.trim().trim_end_matches(';').trim();
+    let Some(brace_start) = cleaned.find('{') else {
+        return Vec::new();
+    };
+    let prefix = cleaned[..brace_start].trim_end_matches(':').trim();
+    let Some(brace_end) = cleaned.find('}') else {
+        return Vec::new();
+    };
+    let inner = &cleaned[brace_start + 1..brace_end];
+    inner
+        .split(',')
+        .map(|part| part.trim())
+        .filter(|part| !part.is_empty())
+        .map(|part| {
+            let name = if let Some(as_pos) = part.find(" as ") {
+                part[as_pos + 4..].trim().to_string()
+            } else {
+                part.split("::").last().unwrap_or(part).to_string()
+            };
+            ExportItem::ReExport {
+                name,
+                source_path: format!(
+                    "{}::{}",
+                    prefix,
+                    part.split(" as ").next().unwrap_or(part).trim()
+                ),
+            }
+        })
+        .collect()
 }
 
 #[cfg(test)]
