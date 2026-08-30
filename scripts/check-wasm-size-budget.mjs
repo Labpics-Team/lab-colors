@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env node
+#!/usr/bin/env node
 
 import { createHash } from "node:crypto";
 import { readFileSync, readdirSync } from "node:fs";

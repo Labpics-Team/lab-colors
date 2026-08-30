@@ -391,7 +391,8 @@ fn parse_public_api(path: &Path) -> Vec<ExportItem> {
 
         // Multi-line grouped imports: `pub use path::{\n    A, B,\n};`
         // Accumulate lines until the closing `}` is found, then parse as one.
-        let is_pub_use = line_to_parse.starts_with("pub use") || line_to_parse.starts_with("pub\tuse");
+        let is_pub_use =
+            line_to_parse.starts_with("pub use") || line_to_parse.starts_with("pub\tuse");
         if is_pub_use && line_to_parse.contains('{') && !line_to_parse.contains('}') {
             let mut accumulated = line_to_parse.to_string();
             let start_j = if feature_gate.is_some() { i + 2 } else { i + 1 };
