@@ -263,12 +263,9 @@ mod contextual_region_formula_tests;
 
 pub mod compiled_dependency_plan;
 
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "CI build manifest extraction is staged before its offline proof consumer"
-    )
+#[expect(
+    dead_code,
+    reason = "CI build manifest extraction is staged before its offline proof consumer"
 )]
 pub(crate) mod ci_build_manifest;
 
