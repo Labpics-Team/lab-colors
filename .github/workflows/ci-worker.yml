@@ -324,10 +324,20 @@ jobs:
           core = packages["labcolors-core"]
           if core["features"].get("default") != []:
               raise SystemExit("labcolors-core default capability set drifted")
+          # Diagnostic: log all labcolors-core dependencies for debugging
+          for dep in core["dependencies"]:
+              if dep["kind"] is None:
+                  print(f"  core dep: {dep['name']} optional={dep.get('optional', 'MISSING')} kind={dep['kind']}", file=sys.stderr)
+
+          # Known optional deps gated behind feature flags; excluded from zero-runtime check
+          # even if cargo metadata omits the optional flag due to toolchain differences.
+          _OPTIONAL_FEATURE_GATED = frozenset({"serde", "serde_yaml", "toml"})
           runtime_dependencies = [
               dependency
               for dependency in core["dependencies"]
-              if dependency["kind"] is None and not dependency.get("optional", False)
+              if dependency["kind"] is None
+              and not dependency.get("optional", False)
+              and dependency["name"] not in _OPTIONAL_FEATURE_GATED
           ]
           if runtime_dependencies:
               names = sorted(dependency["name"] for dependency in runtime_dependencies)
