@@ -18,7 +18,7 @@ jobs:
     # 2^24 RUN is one continuous native execution; the 480-minute envelope
     # mirrors the Arb build/runtime gate and must be recalibrated from the
     # actual run duration.
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     timeout-minutes: 480
     env:
       PYTHONDONTWRITEBYTECODE: "1"
@@ -221,7 +221,7 @@ jobs:
     name: one source-bound full-domain MPFI BUILD to RUN receipt
     # Symmetric MPFI lane: same envelope and containment contract as the Arb
     # job above, under the MPFI engine's own source closure and comparator.
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     timeout-minutes: 480
     env:
       PYTHONDONTWRITEBYTECODE: "1"

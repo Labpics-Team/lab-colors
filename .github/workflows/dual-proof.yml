@@ -28,7 +28,7 @@ jobs:
     # these fresh receipts because a lane binds the comparator's *source*
     # identity, which reproduces across runners; the full identity folds build
     # observation and does not.
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     timeout-minutes: 330
     env:
       PYTHONDONTWRITEBYTECODE: "1"

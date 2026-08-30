@@ -38,7 +38,7 @@ permissions:
 
 jobs:
   publish:
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     # Environment secrets are resolved for this job. Keep the trust boundary
     # intrinsic to the immutable worker so PR/workflow_call/wrong-repository
     # invocations are skipped before `npm-publish` can expose NPM_TOKEN.

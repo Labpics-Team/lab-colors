@@ -43,7 +43,7 @@ jobs:
   # «self-hosted Linux» — контракт с publish-гейтом, а не описание раннера.
   swift-conformance-linux:
     name: swift conformance (self-hosted Linux, pinned toolchain)
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     # 120 = запас сверху при переходе с DE-02 на GitHub-hosted раннеры (старый
     # 65-минутный конверт удвоен: history-replay на новом железе ещё невозможен);
     # перекалибровать по фактическим main-прогонам.

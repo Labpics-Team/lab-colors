@@ -20,7 +20,7 @@ jobs:
     name: two offline builds and runtime tests (no artifact)
     # Docker is root-equivalent, so the job runs on a fresh ephemeral
     # GitHub-hosted VM that is discarded after this single run.
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     # 480 = запас сверху при переходе с DE-02 на GitHub-hosted раннеры (старый
     # 360-минутный конверт поднят: history-replay на новом железе ещё невозможен);
     # перекалибровать по фактическим прогонам.
