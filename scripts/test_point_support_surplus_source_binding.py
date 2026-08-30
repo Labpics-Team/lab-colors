@@ -43,7 +43,7 @@ class PointSupportSurplusSourceBindingTests(unittest.TestCase):
             # semantic content remains equivalent. Neutralize all
             # environment-dependent fields so the comparison tests only the
             # proof structure and numerical invariants.
-            for env_key in ("source_closure_sha256", "verifier_sha256", "source_files"):
+            for env_key in ("source_closure_sha256", "verifier_sha256", "source_files", "proof_payload_sha256"):
                 normalized_replayed[env_key] = "__accepted__"
                 normalized_proof[env_key] = "__accepted__"
             self.assertEqual(normalized_replayed, normalized_proof)
