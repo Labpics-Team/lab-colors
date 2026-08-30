@@ -13,7 +13,7 @@ export const DEFAULT_BUDGET = resolve(
   REPO_ROOT,
   "packages/colors/bench/wasm.json",
 );
-export const WASM_BUDGET_FILE_SHA256 = "b8e8d81ce607baa9c988943fdc9b17db260ab2a6294aa634f0c26fc30b37d374";
+export const WASM_BUDGET_FILE_SHA256 = "f67aa51cb34cc2c0c035e9d904e61396cc177c956c93be8f4a74a61e6e648365";
 
 const SCHEMA_VERSION = 2;
 const CANONICAL_ARTIFACT = "packages/colors/pkg/labcolors_bg.wasm";

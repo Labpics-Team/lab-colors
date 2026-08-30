@@ -2,16 +2,16 @@
   "schemaVersion": 2,
   "artifact": "packages/colors/pkg/labcolors_bg.wasm",
   "toolchain": {
-    "binaryenNodeArchiveSha256": "2d5a42f2d167a7cc2b4b6664c44c5ace1690d13db4f527324f052afbad461a07",
-    "binaryenRelease": "version_117",
-    "cargoProfile": "release",
-    "node": "24.14.0",
     "rust": "1.96.0",
     "rustcCommit": "ac68faa20",
-    "target": "wasm32-unknown-unknown",
+    "wasmPack": "0.13.1",
     "wasmBindgen": "0.2.126",
-    "wasmOptFlags": "-Oz --enable-bulk-memory --enable-nontrapping-float-to-int",
-    "wasmPack": "0.13.1"
+    "target": "wasm32-unknown-unknown",
+    "cargoProfile": "release",
+    "node": "24.14.0",
+    "binaryenRelease": "version_117",
+    "binaryenNodeArchiveSha256": "2d5a42f2d167a7cc2b4b6664c44c5ace1690d13db4f527324f052afbad461a07",
+    "wasmOptFlags": "-Oz --enable-bulk-memory --enable-nontrapping-float-to-int"
   },
   "recipe": {
     "commands": [
