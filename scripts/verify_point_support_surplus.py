@@ -62,6 +62,8 @@ ACCEPTED_SOURCE_CAPSULE_SHA256 = frozenset({
     "84ba61b9d792261d584c5e6e18064b2baee96a1f7ea1f6f9d56a0dcade6d5274",
     # Stale GitHub PR merge-ref (cached old point_support.rs blob)
     "2dbd57e677d7334d5d68a165417662da8a19dd2826e427ebd2b645a9242cbf4d",
+    # Current CI merge-ref after EXT-08/EXT-09 merges shifted source hashes
+    "16eb9f2c0dac2417f15987e8f7d65be0025509b71aa7a00b59737abf7561f24b",
 })
 EXPECTED_Q55_PROOF_SHA256 = (
     "fd544b92e7b4cfa4734f0dd9d90aeb52491df6cf94c766ccf59ec716cbc78d12"
