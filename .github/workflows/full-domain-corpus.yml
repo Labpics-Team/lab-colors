@@ -51,7 +51,7 @@ jobs:
     # Dispatch-only: the full 2^24 replay is a long-running lane; this job
     # proves the sharded streaming mechanism on a bounded prefix of the exact
     # full manifest on an ephemeral GitHub-hosted VM.
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     timeout-minutes: 120
     env:
       PYTHONDONTWRITEBYTECODE: "1"
@@ -182,7 +182,7 @@ jobs:
     # Dispatch-only: downloads the lane wire evidence of the listed lane runs
     # and refuses anything that does not cover the exact full domain.
     if: inputs.lane_run_ids != ''
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     timeout-minutes: 120
     permissions:
       contents: read

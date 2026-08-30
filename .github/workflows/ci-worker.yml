@@ -47,7 +47,7 @@ jobs:
   # медленный прогон.
   node-consumer-floor:
     name: Node 22 consumer floor
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     timeout-minutes: 40
     needs: wasm
     steps:
@@ -76,7 +76,7 @@ jobs:
 
   msrv:
     name: MSRV workspace check
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -106,7 +106,7 @@ jobs:
 
   lint:
     name: clippy + rustfmt
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     timeout-minutes: 40
     # Isolate RUSTUP_HOME/CARGO_HOME per job under runner.temp. Эфемерная VM
     # одноразовая, поэтому прежний класс гонок за общий $HOME закрыт по
@@ -147,7 +147,7 @@ jobs:
 
   docs:
     name: cargo doc (intra-doc links)
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -205,7 +205,7 @@ jobs:
 
   test:
     name: test
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -395,7 +395,7 @@ jobs:
 
   audit:
     name: cargo audit (rustsec)
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -444,7 +444,7 @@ jobs:
 
   wasm:
     name: wasm build + headless test + size
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     timeout-minutes: 45
     # Native Binaryen 117 не завершил wasm-opt внутри systrap до bounded timeout
     # (run 30773180841). Официальный Node transport того же release дал byte-exact

@@ -52,7 +52,7 @@ jobs:
     # Dispatch-only: each lane replays one packing-aligned window of the
     # verified transcript's domain through the sharded corpus runner under
     # the engine's own comparator bundle, downloaded from the evidence run.
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     timeout-minutes: 480
     permissions:
       contents: read
