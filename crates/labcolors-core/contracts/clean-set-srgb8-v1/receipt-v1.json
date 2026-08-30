@@ -48,11 +48,11 @@
       "sha256": "8bf5d5a1c0f00ce245a1ecb18b923aa1631483345962d72b633e466c242a8a1d"
     },
     {
-      "bytes": 230603,
+      "bytes": 230600,
       "license": "MIT",
       "path": "crates/labcolors-core/src/lib.rs",
       "role": "module_registration_source",
-      "sha256": "fe72950bd21099a58e5d543d7fd5fc970897192c9e9fc20acb3dc3eedae9ae3e"
+      "sha256": "7dc71e5e7f7436c480a55cc437886df890797f2069fbbb34b7e4e103ea146d06"
     },
     {
       "bytes": 39439,

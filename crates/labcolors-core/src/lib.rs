@@ -1,4 +1,4 @@
-﻿// BEGIN WCAG22_SOURCE_ROUTES_V1
+// BEGIN WCAG22_SOURCE_ROUTES_V1
 const _: () = (); // First-item proof anchor; moving it fails verify_wcag22_q55.py.
 pub mod numerics;
 pub(crate) mod srgb8;
@@ -46,11 +46,13 @@ pub use srgb8::Srgb8;
 pub(crate) mod accent_balance;
 pub mod alpha;
 pub(crate) mod appearance;
+pub mod claims_manifest;
 #[allow(dead_code)]
 pub(crate) mod config;
 pub(crate) mod constraints;
 #[allow(dead_code)]
 pub(crate) mod corridor_representation;
+pub mod exports_manifest;
 #[allow(dead_code)]
 pub(crate) mod glow;
 pub mod hash;
@@ -120,8 +122,6 @@ pub(crate) mod sha256;
 #[cfg_attr(test, allow(dead_code))]
 pub mod solve;
 pub mod source_manifest;
-pub mod exports_manifest;
-pub mod claims_manifest;
 
 pub mod curve;
 

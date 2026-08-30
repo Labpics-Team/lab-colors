@@ -97,12 +97,7 @@ pub fn extract_claims(workspace_root: &Path) -> Vec<ClaimEntry> {
     entries
 }
 
-fn collect_claims(
-    dir: &Path,
-    workspace_root: &Path,
-    crate_name: &str,
-    out: &mut Vec<ClaimEntry>,
-) {
+fn collect_claims(dir: &Path, workspace_root: &Path, crate_name: &str, out: &mut Vec<ClaimEntry>) {
     let iter = match fs::read_dir(dir) {
         Ok(iter) => iter,
         Err(_) => return,

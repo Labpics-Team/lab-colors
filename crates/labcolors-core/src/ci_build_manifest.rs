@@ -175,8 +175,8 @@ fn extract_jobs(doc: &serde_yaml::Value) -> Vec<JobEntry> {
         // A job is a required check if it has no `if:` condition that could skip it
         // and is not gated by `continue-on-error`. Simplified heuristic: jobs with
         // `uses:` (reusable workflow calls) are always required.
-        let is_required_check = mapping.get("uses").is_some()
-            || mapping.get("continue-on-error").is_none();
+        let is_required_check =
+            mapping.get("uses").is_some() || mapping.get("continue-on-error").is_none();
 
         let steps = extract_steps(mapping);
         let matrix = extract_matrix(mapping);
@@ -206,8 +206,14 @@ fn extract_steps(job: &serde_yaml::Mapping) -> Vec<StepEntry> {
         .filter_map(|step| {
             let m = step.as_mapping()?;
             Some(StepEntry {
-                name: m.get("name").and_then(|v| v.as_str()).map(|s| s.to_string()),
-                uses: m.get("uses").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                name: m
+                    .get("name")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string()),
+                uses: m
+                    .get("uses")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string()),
                 run: m.get("run").and_then(|v| v.as_str()).map(|s| s.to_string()),
             })
         })
@@ -293,10 +299,7 @@ fn extract_workspace_members(repo_root: &Path) -> Result<Vec<String>, String> {
                             if let Some(name) = entry.file_name().to_str() {
                                 let relative = format!(
                                     "{}/{}",
-                                    parent
-                                        .strip_prefix(repo_root)
-                                        .unwrap_or(parent)
-                                        .display(),
+                                    parent.strip_prefix(repo_root).unwrap_or(parent).display(),
                                     name
                                 );
                                 expanded.push(relative.replace('\\', "/"));
