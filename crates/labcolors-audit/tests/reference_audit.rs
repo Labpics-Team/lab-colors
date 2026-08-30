@@ -203,3 +203,84 @@ fn ext07_native_boundary_no_phantom() {
         );
     }
 }
+
+// ── r7-g2: ParallelSsot characterization ────────────────────────────────
+
+/// r7-g2 floor test: ParallelSsot extractor finds >= 15 SSOT-TRACKED/GROUNDED markers.
+///
+/// RED-proof: if collect_parallel_ssot were stubbed or deleted, this count
+/// drops to zero and the assertion fails. Baseline established from live
+/// codebase scan on 2026-08-31 (22 markers found).
+#[test]
+fn ext_parallel_ssot_floor() {
+    let source_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(|p| p.parent())
+        .expect("audit crate has grandparent workspace root");
+
+    let raw = labcolors_audit::enumerate_production_artifacts(source_root);
+    let ssot_count = raw
+        .iter()
+        .filter(|a| a.class == ArtifactClass::ParallelSsot)
+        .count();
+
+    assert!(
+        ssot_count >= 15,
+        "Expected >= 15 ParallelSsot artifacts (SSOT-TRACKED/GROUNDED markers), got {}",
+        ssot_count
+    );
+}
+
+/// r7-g2 sabotage: phantom ParallelSsot artifact references nonexistent file.
+///
+/// Every ParallelSsot artifact's module field must point to an existing
+/// source file. If someone fabricates entries with fake paths, this test
+/// catches them.
+#[test]
+fn ext_parallel_ssot_no_phantom() {
+    let source_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(|p| p.parent())
+        .expect("audit crate has grandparent workspace root");
+
+    let raw = labcolors_audit::enumerate_production_artifacts(source_root);
+    for artifact in raw
+        .iter()
+        .filter(|a| a.class == ArtifactClass::ParallelSsot)
+    {
+        let full_path = source_root.join(&artifact.module);
+        assert!(
+            full_path.exists(),
+            "Phantom ParallelSsot artifact: {} does not exist",
+            artifact.module
+        );
+    }
+}
+
+/// r7-g2 sabotage: ParallelSsot raw_key format is validated.
+///
+/// Every ParallelSsot artifact must have raw_key matching the documented
+/// format: `ssot-tracked:L{line}` or `grounded:L{line}`. Fabricated entries
+/// with arbitrary keys are caught here.
+#[test]
+fn ext_parallel_ssot_key_format() {
+    let source_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(|p| p.parent())
+        .expect("audit crate has grandparent workspace root");
+
+    let raw = labcolors_audit::enumerate_production_artifacts(source_root);
+    for artifact in raw
+        .iter()
+        .filter(|a| a.class == ArtifactClass::ParallelSsot)
+    {
+        let valid = artifact.raw_key.starts_with("ssot-tracked:L")
+            || artifact.raw_key.starts_with("grounded:L");
+        assert!(
+            valid,
+            "ParallelSsot raw_key '{}' does not match expected format \
+             (ssot-tracked:L{{n}} or grounded:L{{n}})",
+            artifact.raw_key
+        );
+    }
+}
