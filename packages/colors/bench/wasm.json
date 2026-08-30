@@ -1,16 +1,18 @@
 {
+  "schemaVersion": 2,
   "artifact": "packages/colors/pkg/labcolors_bg.wasm",
-  "measurement": {
-    "platform": "linux-x64",
-    "rawBytes": 380081,
-    "source": "github-actions-run-33172103186"
+  "toolchain": {
+    "binaryenNodeArchiveSha256": "2d5a42f2d167a7cc2b4b6664c44c5ace1690d13db4f527324f052afbad461a07",
+    "binaryenRelease": "version_117",
+    "cargoProfile": "release",
+    "node": "24.14.0",
+    "rust": "1.96.0",
+    "rustcCommit": "ac68faa20",
+    "target": "wasm32-unknown-unknown",
+    "wasmBindgen": "0.2.126",
+    "wasmOptFlags": "-Oz --enable-bulk-memory --enable-nontrapping-float-to-int",
+    "wasmPack": "0.13.1"
   },
-  "policy": {
-    "basis": "c7c-terminal-program-runtime",
-    "gzip": "diagnostic-only",
-    "maxRawBytes": 377013
-  },
-  "rawBytes": 377013,
   "recipe": {
     "commands": [
       "wasm-pack build --no-opt --release --target web --out-dir ../../packages/colors/pkg --out-name labcolors crates/labcolors-wasm --locked",
@@ -24,17 +26,14 @@
       "CARGO_HOME=/cargo-home"
     ]
   },
-  "schemaVersion": 2,
-  "toolchain": {
-    "binaryenNodeArchiveSha256": "2d5a42f2d167a7cc2b4b6664c44c5ace1690d13db4f527324f052afbad461a07",
-    "binaryenRelease": "version_117",
-    "cargoProfile": "release",
-    "node": "24.14.0",
-    "rust": "1.96.0",
-    "rustcCommit": "ac68faa20",
-    "target": "wasm32-unknown-unknown",
-    "wasmBindgen": "0.2.126",
-    "wasmOptFlags": "-Oz --enable-bulk-memory --enable-nontrapping-float-to-int",
-    "wasmPack": "0.13.1"
+  "measurement": {
+    "platform": "linux-x64",
+    "rawBytes": 380081,
+    "source": "github-actions-run-33172103186"
+  },
+  "policy": {
+    "basis": "c7c-terminal-program-runtime",
+    "gzip": "diagnostic-only",
+    "maxRawBytes": 380081
   }
 }
