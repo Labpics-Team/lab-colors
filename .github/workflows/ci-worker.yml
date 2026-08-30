@@ -846,3 +846,5 @@ jobs:
           set -euo pipefail
           wasm-pack test --headless --chrome --chromedriver "$CHROMEDRIVER_PATH" crates/labcolors-wasm --locked
           node scripts/test-program-runtime-browser.mjs "$VERIFIED_TARBALL" "$VERIFIED_TARBALL_SHA256"
+
+# ci-trigger: force new merge-ref for runs-on fix validation 20260830233307
