@@ -1,7 +1,7 @@
 {
-    "total_tests":  1391,
-    "timestamp":  "2026-08-30T15:27:06.8845386+03:00",
-    "commit":  "751100b22b80924b5139cd703a12e7f34754e516",
-    "minimum_floor":  1391,
-    "notes":  "Baseline updated after EXT-03 PR #649 merge. Includes oracle fixture hash fix for wcag22_neutral_axis_replay. Test count reflects main state at 751100b22b80924b5139cd703a12e7f34754e516 with all extractor tests included."
+  "total_tests": 1360,
+  "timestamp": "2026-08-30T22:21:44.463Z",
+  "commit": "17fef5137442c5b3a54594229d93304fd75ad21a",
+  "minimum_floor": 1360,
+  "notes": "Baseline updated after wave 3 completion + oracle fixture hash fix #662. All 10 AUD-01-EXT nodes complete."
 }
