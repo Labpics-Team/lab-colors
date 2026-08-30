@@ -1,4 +1,4 @@
-﻿// Solver curve uses deprecated LcsColor per F-01 design
+// Solver curve uses deprecated LcsColor per F-01 design
 #![allow(deprecated)]
 
 //! Заземление Backgrounds-лестниц labui: фактические dJ'-шаги
