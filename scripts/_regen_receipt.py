@@ -2,9 +2,9 @@
 
 CI checks out the merge of PR branch + origin/main. The receipt must pin
 the exact bytes that exist in that merge commit, not the local branch tip.
-This script reads each artifact from FETCH_HEAD via git show, updates
-bytes/sha256 in receipt-v1.json, rewrites the canonical JSON, and updates
-the .sha256 pin file.
+This script reads each artifact from FETCH_HEAD via git cat-file blob
+(with autocrlf disabled), updates bytes/sha256 in receipt-v1.json, rewrites
+the canonical JSON, and updates the .sha256 pin file.
 """
 import hashlib
 import json
@@ -21,11 +21,17 @@ def canonical_json(value):
     return json.dumps(value, allow_nan=False, ensure_ascii=True, indent=2, sort_keys=True) + "\n"
 
 
-def git_show(path):
-    return subprocess.check_output(
-        ["git", "-C", str(ROOT), "show", f"FETCH_HEAD:{path}"],
-        stderr=subprocess.STDOUT,
+def git_blob_raw(path):
+    """Read raw blob bytes from FETCH_HEAD:path with autocrlf disabled."""
+    result = subprocess.run(
+        ["git", "-C", str(ROOT), "-c", "core.autocrlf=false",
+         "show", f"FETCH_HEAD:{path}"],
+        capture_output=True,
     )
+    if result.returncode != 0:
+        print(f"ERROR: git show FETCH_HEAD:{path} failed: {result.stderr.decode()}", file=sys.stderr)
+        sys.exit(1)
+    return result.stdout
 
 
 def sha256hex(data):
@@ -38,7 +44,7 @@ receipt = json.loads(RECEIPT_PATH.read_bytes())
 changed_artifacts = 0
 for entry in receipt["artifacts"]:
     p = entry["path"]
-    data = git_show(p)
+    data = git_blob_raw(p)
     new_bytes = len(data)
     new_sha = sha256hex(data)
     if entry["bytes"] != new_bytes or entry["sha256"] != new_sha:
@@ -51,7 +57,7 @@ for entry in receipt["artifacts"]:
 changed_legal = 0
 for entry in receipt.get("license_scope", {}).get("legal_files", []):
     p = entry["path"]
-    data = git_show(p)
+    data = git_blob_raw(p)
     new_bytes = len(data)
     new_sha = sha256hex(data)
     if entry["bytes"] != new_bytes or entry["sha256"] != new_sha:
@@ -61,7 +67,7 @@ for entry in receipt.get("license_scope", {}).get("legal_files", []):
         changed_legal += 1
 
 if changed_artifacts == 0 and changed_legal == 0:
-    print("No changes needed — receipt already matches merge-ref.")
+    print("No changes needed - receipt already matches merge-ref.")
     sys.exit(0)
 
 # Write canonical receipt
