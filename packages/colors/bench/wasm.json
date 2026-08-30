@@ -32,8 +32,8 @@
     "rawBytes": 380081
   },
   "policy": {
+    "maxRawBytes": 380081,
     "basis": "c7c-terminal-program-runtime",
-    "gzip": "diagnostic-only",
-    "maxRawBytes": 380081
+    "gzip": "diagnostic-only"
   }
 }
