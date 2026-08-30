@@ -52,3 +52,4 @@ crates/labcolors-core/Cargo.toml text eol=lf
 LICENSE text eol=lf
 scripts/generate_wcag22_q55.py text eol=lf
 scripts/verify_wcag22_q55.py text eol=lf
+packages/colors/bench/wasm.json text eol=lf
