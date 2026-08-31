@@ -64,7 +64,10 @@ fn compile_error(draft: DraftV1) -> CompileErrorV1 {
     }
 }
 
-#[allow(dead_code)]
+#[expect(
+    dead_code,
+    reason = "R-07 G4: boundary test helper retained for WASM instantiation contract verification"
+)]
 fn wasm_can_use_only_the_concrete_owner_and_session(
     owner: &OwnerV1,
     session: &mut SessionV1,
