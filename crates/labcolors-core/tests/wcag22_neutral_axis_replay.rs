@@ -17,16 +17,24 @@ use labcolors_core::wcag22::{
     Wcag22ApplicableDecisionV1, Wcag22AssessmentV1, Wcag22CriterionV1, evaluate_wcag22_srgb8,
 };
 
-// Runtime read instead of include_str! to avoid platform-specific compile-time
-// embedding divergence observed on CI Linux runners (af56e71f vs f0fe2810).
+// Canonical LF bytes from git index. Working-tree reads diverge on Windows
+// (core.autocrlf rewrites LF→CRLF after checkout), producing a different hash
+// than CI Linux which checks out raw LF. Reading via `git show` guarantees the
+// normalised blob regardless of platform or .gitattributes timing.
 static ORACLE_FIXTURE: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
-    let manifest_dir = env!("CARGO_MANIFEST_DIR");
-    let path = std::path::Path::new(manifest_dir)
-        .join("contracts")
-        .join("wcag22-neutral-axis-oracle-v1.json");
-    let bytes = std::fs::read(&path)
-        .unwrap_or_else(|e| panic!("oracle fixture must be readable at {}: {e}", path.display()));
-    String::from_utf8(bytes).expect("oracle fixture must be valid UTF-8")
+    let output = std::process::Command::new("git")
+        .args([
+            "show",
+            "HEAD:crates/labcolors-core/contracts/wcag22-neutral-axis-oracle-v1.json",
+        ])
+        .output()
+        .expect("git must be available to read canonical oracle fixture");
+    assert!(
+        output.status.success(),
+        "git show oracle fixture failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout).expect("oracle fixture must be valid UTF-8")
 });
 
 /// Один сценарий оракула. Поля зеркалят fixture-объект артефакта; порядок
