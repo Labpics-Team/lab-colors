@@ -27,7 +27,10 @@ const STREAM: crate::observation::ObservationStreamId =
 
 /// Minimal owner that tracks only the current head view.
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[allow(dead_code)]
+#[expect(
+    dead_code,
+    reason = "Test-only ObservationOwnerV1 impl; constructed exclusively within this test module"
+)]
 enum OracleOwner {
     Empty,
     Unknown(RevisionBoundUnknownV1),
