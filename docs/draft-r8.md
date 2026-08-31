@@ -6,135 +6,150 @@ owns:
   - "Labpics-Team/lab-colors:**"
   - "Labpics-Team/agents-config:plans/lab-colors/reference/**"
 created: 2026-08-31
-status: DRAFT
 ---
 
-# R8 Plan: WASM-01 Completion и Technical Debt Closure
+# R8 Plan: Technical Debt Closure и WASM-01 Contract Finalization
 
-**Evidence cutoff:** 2026-08-31T00:00:00Z (lab-colors main HEAD 70ac4e2, FLOOR=1410).
+## Delta (r7 → r8)
 
-## R7 Completion Summary
-
-r7 выполнен в полном объёме. Все goals wave 1 (Goals 1–4) и wave 2 (Goal 5 WASM-01 first slice) завершены и слиты в main.
-
-| Goal | Статус | Результат |
+| Факт r7 | Свежее доказательство | Решение в r8 |
 |---|---|---|
-| G1: Python proof test failures | ✅ COMPLETE | Классифицированы как out-of-scope для Rust track; заведены Issues с RCA |
-| G2: Artifact class characterization (4/14) | ✅ COMPLETE | 14/14 классов охарактеризованы; ParallelSsot → FiniteManifest (floor test добавлен); ResourceDimension → NotApplicable; GraphArtifactTest → EmptyClass; расхождение 4→3 устранено |
-| G3: WASM-01 contract preconditions | ✅ COMPLETE | Input spec определён для 12/14 классов; boundary types mapped |
-| G4: #[non_exhaustive] gate | ✅ COMPLETE | Applied to restorative_auto.rs; TODO удалён; тесты зелёные |
-| G5: WASM-01 first slice | ✅ COMPLETE | program_wire.rs + labcolors-wasm boundary реализованы |
+| FLOOR = 1360 | CI gate на main HEAD 1630042: FLOOR = 1410 (+50 тестов из r7 G2+G5) | Базовая линия r8 = 1410; регрессия недопустима |
+| 14 ArtifactClass variants, 4 uncovered | r7-artifact-class-characterization.md: все 14 охарактеризованы; GraphArtifactTest = EmptyClass, ResourceDimension = NotApplicable | DC-03 удаляет GraphArtifactTest; dependencies_source.rs удаляется в DC-01 |
+| 30 `#[allow(dead_code)]` suppressions | r7-tech-debt-audit.md: большинство — staged types с R-XX комментариями | DC-01: sweep до ≤10 обоснованных suppressions |
+| 47 unmerged remote branches | r8-branch-audit.md (PR #678): классификация завершена, cleanup выполнен | BH-01 = DONE; exit evidence = r8-branch-audit.md |
+| WASM-01 first slice (program_wire.rs + labcolors-wasm) | r7 G5 merged; boundary types mapped для 12/14 классов | WC-01: финализация контракта + round-trip harness |
+| #[non_exhaustive] applied to restorative_auto.rs | r7 G4 merged; compile-time catch для enum evolution | Инвариант INV-02 опирается на этот gate |
+| REVIEW-01-r7: PASS по обеим осям | docs/review-01-r7-validation.md | r8 план проходит independent review (RV-01) перед ACTIVE switch |
 
-**FLOOR baseline:** обновлён с 1360 до 1410 (+50 тестов из G2 ParallelSsot floor + G5 WASM boundary tests).
+## Objective
 
-**REVIEW-01-r7:** PASS по обеим осям (plan-contract, future-axis).
+Закрыть технический долг, выявленный в r7 audit (dead code, enum cleanup), и финализировать WASM-01 контракт с integration test harness, обеспечив стабильную основу для эволюции ArtifactClass enum через WASM boundary.
 
-## R8 Goals
+### Acceptance Criteria
 
-Приоритезация основана на r7-tech-debt-audit.md и follow-up actions из r7-artifact-class-characterization.md.
+1. Количество `#[allow(dead_code)]` в crates/ ≤ 10, каждое с RETAINED disposition comment (DC-01)
+2. `ArtifactClass::GraphArtifactTest` удалён; компиляция и тесты зелёные (DC-03)
+3. WASM-01 input spec document финализирован; round-trip property test покрывает 12 consumed классов (WC-01)
+4. FLOOR ≥ 1410 после каждого merged PR (INV-01)
+5. Независимый ревью плана возвращает PASS по обеим осям (RV-01)
 
-### Goal 1: Dead Code Sweep — Staged Type Activations and Pruning
+## Facts
 
-**Objective:** Оценить 30 `#[allow(dead_code)]` suppressions в crates/; активировать типы, чья ревизия наступила (R-07/R-08), удалить типы, чья ревизия была отменена или superseded. Уменьшить количество suppressions до ≤10 обоснованных.
-
-**Acceptance criteria:**
-- Каждый из 30 suppressions имеет disposition: ACTIVATED (тип включён в использование + тесты), PRUNED (удалён), или RETAINED (с обновлённым комментарием и обоснованием)
-- Количество `#[allow(dead_code)]` в crates/ ≤ 10 после sweep
-- CI зелёный после каждого атомарного PR
-- FLOOR не регрессирует
-
-**Effort:** 6–10h
-**Dependencies:** None
-**Source:** r7-tech-debt-audit.md §Dead Code Suppressions; r7-artifact-class-characterization.md §Follow-up Actions item 1 (dependencies_source.rs removal)
-
-### Goal 2: Branch Hygiene — Audit and Clean 47 Unmerged Branches
-
-**Objective:** Классифицировать 47 unmerged remote branches на ACTIVE / ABANDONED / MERGED-VIA-OTHER. Удалить abandoned и merged-via-other ветки. Для active веток подтвердить владельца и актуальность.
-
-**Acceptance criteria:**
-- Каждая из 47 веток имеет классификацию в docs/r8-branch-audit.md (или аналогичном артефакте)
-- Abandoned ветки удалены из remote
-- Merged-via-other ветки удалены из remote
-- Active ветки имеют подтверждённого владельца и linked Issue/Plan node
-- EXT series (9 веток) полностью разобраны: ext09 standalone claims extractor оценён на необходимость мержа или удаления
-
-**Effort:** 4–6h
-**Dependencies:** None
-**Source:** r7-tech-debt-audit.md §Unmerged Branches; review-01-r6-validation.md Note 2 (EXT-06 standalone)
-
-### Goal 3: Enum Cleanup — Remove GraphArtifactTest Variant
-
-**Objective:** Удалить enum variant `ArtifactClass::GraphArtifactTest` (EmptyClass per r7 characterization) из types.rs, dispose.rs, enumerate.rs и всех match sites. Подтвердить отсутствие потребителей через компиляцию и тесты.
-
-**Acceptance criteria:**
-- `ArtifactClass::GraphArtifactTest` удалён из enum definition
-- Все match arms обновлены (компиляция без ошибок благодаря #[non_exhaustive] из r7 G4)
-- Тесты зелёные; FLOOR не регрессирует
-- dispose.rs::as_str() и enumerate.rs::class_discriminant() не содержат упоминаний
-
-**Effort:** 2–3h
-**Dependencies:** Goal 1 (dead code sweep может выявить дополнительные references)
-**Source:** r7-artifact-class-characterization.md §GraphArtifactTest → EmptyClass; Follow-up Actions item 2
-
-### Goal 4: WASM-01 Contract Finalization и Integration Test Harness
-
-**Objective:** Завершить WASM-01 контракт на основе r7 G3 preconditions + r7 G5 first slice. Создать integration test harness, проверяющий round-trip: native audit → WASM boundary serialization → deserialization → projection equality.
-
-**Acceptance criteria:**
-- WASM-01 input spec document финализирован в docs/wasm01-contract.md (или plans/lab-colors/reference/)
-- Integration test harness покрывает все 12 consumed artifact classes
-- Round-trip property test: serialize(deserialize(x)) == x для каждого класса
-- Sabotage controls: corrupted boundary data вызывает детерминированную ошибку, не silent corruption
-- FLOOR обновлён если добавлены тесты
-
-**Effort:** 8–12h
-**Dependencies:** Goal 3 (enum cleanup упрощает serialization matrix)
-**Source:** r7-artifact-class-characterization.md §Impact on WASM-01 Contract; wasm01-preconditions.md (не существует на main — контент интегрирован в r7 G3 output)
-
-### Goal 5: Independent Review of r8 Plan
-
-**Objective:** Пройти plan-contract и future-axis review на этом draft перед ACTIVE switch.
-
-**Acceptance criteria:**
-- Обе оси ревью возвращают PASS
-- Все findings resolved или explicitly accepted с rationale
-- REVIEW-01-r8 документ создан
-
-**Effort:** 2–3h
-**Dependencies:** Goals 1–4 scoped
-
-## Dependencies
-
-| Входной артефакт | Источник | Использование в r8 |
-|---|---|---|
-| r7-tech-debt-audit.md | main docs/ | Приоритезация G1 (dead code), G2 (branches) |
-| r7-artifact-class-characterization.md | main docs/ | G3 (enum cleanup), G4 (WASM scope = 12/14 classes), Follow-up Actions |
-| review-01-r6-validation.md | main docs/ | G2 (EXT-06 standalone оценка) |
-| draft-r7.md | main docs/ | Контекст delta, DAG структура, rollback protocol |
-| wasm01-preconditions.md | main docs/ (HEAD 70ac4e2) | G4: input spec, gap analysis (§3), recommended scope (§4), acceptance targets (§4.3) |
-| r7 G5 WASM-01 first slice (program_wire.rs + labcolors-wasm) | main HEAD 70ac4e2 | G4 базовая реализация |
-| FLOOR baseline = 1410 | CI gate | Regression floor для всех goals |
-
-## Risks
-
-| Risk | Likelihood | Impact | Mitigation |
+| ID | Факт | Evidence | Вывод |
 |---|---|---|---|
-| Dead code sweep активирует тип с скрытыми зависимостями, ломающий downstream | Medium | Medium | Атомарные PR per type group; CI gate на каждый PR; rollback = revert single commit |
-| Branch hygiene удаляет ветку, которая оказалась active без linked Issue | Low | High | Классификация требует подтверждения владельца перед удалением; 7-day grace period для contested branches |
-| GraphArtifactTest removal ломает external consumer (если есть) | Low | Medium | #[non_exhaustive] из r7 G4 гарантирует compile-time catch; grep по Labpics-Team org перед удалением |
-| WASM-01 round-trip test выявляет lossy serialization в существующем first slice | Medium | High | Это expected discovery; fix входит в G4 scope, не блокирует plan |
-| EXT-06 standalone extractor на ext09 содержит coverage, отсутствующую в bundled версии | Low | Medium | G2 включает diff analysis ext09 vs main; если gap найден — отдельный PR merge, не scope creep |
+| F-01 | FLOOR baseline = 1410 | CI gate on main HEAD 1630042 | Нижняя граница тестов; регрессия = блокёр merge |
+| F-02 | 30 `#[allow(dead_code)]` в 16 файлах crates/ | r7-tech-debt-audit.md §Dead Code Suppressions | Целевой sweep: ≤10 после DC-01 |
+| F-03 | GraphArtifactTest: 0 instances, 0 extractors, 0 references beyond enum decl | r7-artifact-class-characterization.md §GraphArtifactTest | EmptyClass; безопасен к удалению |
+| F-04 | ResourceDimension: dependencies_source.rs unwired dead code | r7-artifact-class-characterization.md §ResourceDimension | NotApplicable; модуль к удалению в DC-01 |
+| F-05 | 47 unmerged branches классифицированы и очищены | r8-branch-audit.md (PR #678) | BH-01 = DONE |
+| F-06 | 12/14 ArtifactClass consumed by WASM-01 boundary | r7-artifact-class-characterization.md §Impact on WASM-01 | WC-01 scope = 12 классов |
+| F-07 | #[non_exhaustive] на ArtifactClass enum | r7 G4 merged (restorative_auto.rs) | Compile-time catch для внешних потребителей |
+| F-08 | PR #675 removed 8 unfulfilled expects | G1 partial sweep | Остаток sweep: ~22 suppressions к обработке |
+| F-09 | PR #676 enum cleanup (GraphArtifactTest) | G3 DONE | DC-03 = DONE |
+| F-10 | PR #677 WASM-01 harness | G4 DONE | WC-01 = DONE |
+
+## Assumptions
+
+| ID | Assumption | Основание | Риск при нарушении |
+|---|---|---|---|
+| ASM-01 | Нет external consumers ArtifactClass enum вне Labpics-Team/lab-colors | #[non_exhaustive] + grep по org; нет published crate | Удаление GraphArtifactTest ломает downstream; mitigation: compile error у внешнего потребителя |
+| ASM-02 | WASM boundary discriminant mapping соответствует Rust enum ordinals после удаления GraphArtifactTest | program_wire.rs использует positional mapping; #[non_exhaustive] не защищает cross-language | Silent misalignment в WASM deserialization; mitigation: round-trip test (WC-01) |
+| ASM-03 | Все 30 dead_code suppressions имеют explicit R-XX staging comments enabling mechanical disposition | r7-tech-debt-audit.md: "majority are explicitly commented" | Невозможность автоматической классификации; mitigation: manual review per suppression |
+| ASM-04 | Round-trip property test framework (proptest/quickcheck) доступен в workspace Cargo.toml | Стандартный dependency для Rust property testing | Ручное написание тестов вместо генерации; mitigation: добавить dependency в WC-01 |
+| ASM-05 | CI gate (FLOOR check) выполняется детерминированно и не подвержен flaky failures | Историческая стабильность CI; ignored tests intentional (r7-tech-debt-audit.md) | Ложные блокёры merge; mitigation: re-run + investigation per failure |
+
+## Invariants
+
+| ID | Invariant | Проверка | Владелец |
+|---|---|---|---|
+| INV-01 | FLOOR ≥ 1410 at all times | CI gate на каждый push/PR | lab-colors CI |
+| INV-02 | ArtifactClass discriminant mapping consistent between native and WASM boundary | Round-trip property test (WC-01) | WC-01 harness |
+| INV-03 | No `#[allow(dead_code)]` without RETAINED disposition comment | Lint / manual review в DC-01 PRs | DC-01 executor |
+| INV-04 | Каждый merged PR атомарен и revertable без нарушения других nodes | Git history + CI green per PR | All executors |
+
+## DAG
+
+```mermaid
+flowchart TD
+    DC01[DC-01: Dead Code Sweep] --> DC03[DC-03: Enum Cleanup]
+    DC03 --> WC01[WC-01: WASM-01 Contract Finalization]
+    BH01[BH-01: Branch Hygiene ✅ DONE]
+    RV01[RV-01: Independent Review] -.-> DC01
+    RV01 -.-> WC01
+    
+    style BH01 fill:#90EE90
+    style DC01 fill:#FFE4B5
+    style DC03 fill:#FFE4B5
+    style WC01 fill:#FFE4B5
+    style RV01 fill:#ADD8E6
+```
+
+### Node Status Table
+
+| Node ID | Description | Status | Dependencies | Exit Evidence |
+|---|---|---|---|---|
+| BH-01 | Branch Hygiene Audit & Cleanup | DONE | None | r8-branch-audit.md (PR #678) |
+| DC-01 | Dead Code Sweep (≤10 suppressions) | OPEN | None | PR(s) merged; `rg 'allow\(dead_code\)' crates/ \| wc -l` ≤ 10 |
+| DC-03 | Remove GraphArtifactTest variant | DONE | DC-01 (may reveal refs) | PR #676 merged; compile green |
+| WC-01 | WASM-01 Contract + Round-trip Harness | DONE | DC-03 | PR #677 merged; round-trip test green |
+| RV-01 | Independent Plan Review | OPEN | DC-01, WC-01 scoped | REVIEW-01-r8-validation.md PASS |
+
+> **Note:** DC-03 и WC-01 отмечены как DONE per G3/G4 completion (PRs #676, #677). DC-01 остаётся open: PR #675 removed 8 suppressions, full sweep from ~30 to ≤10 still needed.
+
+## Gates
+
+| Gate ID | Node | Criterion | Pass/Fail | Method |
+|---|---|---|---|---|
+| GT-01 | DC-01 | `#[allow(dead_code)]` count in crates/ ≤ 10 | PENDING | `rg -c 'allow\(dead_code\)' crates/ \| awk '{s+=$1}END{print s}'` |
+| GT-02 | DC-01 | Each remaining suppression has RETAINED comment with rationale | PENDING | Manual review в PR |
+| GT-03 | DC-01 | FLOOR ≥ 1410 after each PR | PENDING | CI gate |
+| GT-04 | DC-03 | `ArtifactClass::GraphArtifactTest` absent from types.rs, dispose.rs, enumerate.rs | PASS | PR #676 |
+| GT-05 | WC-01 | Round-trip test covers all 12 consumed artifact classes | PASS | PR #677 |
+| GT-06 | WC-01 | Sabotage control: corrupted boundary data → deterministic error | PASS | PR #677 |
+| GT-07 | RV-01 | Axis 1 (Plan-Contract) = PASS | FAIL→PENDING | REVIEW-01-r8-validation.md (current: FAIL; re-review after restructure) |
+| GT-08 | RV-01 | Axis 2 (Future-Axis) = PASS | PENDING | Re-review after restructure |
+| GT-09 | ALL | FLOOR ≥ 1410 on main after all merges | PENDING | CI gate on final merge |
 
 ## Rollback Protocol
 
-- **r8 plan before ACTIVE switch:** Закрыть plan PR; ACTIVE.md остаётся на r7.
-- **Individual goal:** Standard git revert per merged PR; FLOOR updated if test count affected.
-- **Full r8 rollback:** Revert in reverse merge order; verify FLOOR gate passes at each step.
-- **Branch hygiene rollback:** Deleted branches recoverable via reflog for 30 days; audit log сохраняется в docs/r8-branch-audit.md.
+| Scenario | Rollback Command | Preconditions | Verification |
+|---|---|---|---|
+| r8 plan before ACTIVE switch | Close plan PR; ACTIVE.md remains on r7 | Plan not yet merged | `git log --oneline -1 docs/draft-r8.md` shows no merge commit |
+| DC-01 individual PR | `git revert <commit-sha>` | Single atomic PR | CI green; FLOOR ≥ 1410 |
+| DC-03 (GraphArtifactTest removal) | `git revert <pr-676-sha>` | PR #676 merged | Compile green; enum variant restored |
+| WC-01 (WASM harness) | `git revert <pr-677-sha>` | PR #677 merged | CI green; FLOOR unchanged |
+| Full r8 rollback | Revert in reverse merge order | All PRs identified | FLOOR gate passes at each step |
+| Deleted branch recovery | `git reflog` + `git checkout <sha>` | Within 30-day reflog window | Branch restored; audit log in r8-branch-audit.md |
+
+## CAPA / Smells
+
+| Severity | Finding | CAPA | Owner | Status |
+|---|---|---|---|---|
+| Medium | Dead code sweep активирует тип со скрытыми зависимостями | Атомарные PR per type group; CI gate per PR; rollback = single revert | DC-01 executor | Open |
+| Low | GraphArtifactTest removal ломает external consumer | #[non_exhaustive] guarantees compile-time catch; grep org pre-removal | DC-03 | Closed (DONE) |
+| High | WASM boundary lacks wire format versioning | Deferred as known debt; every enum change = breaking change until versioned envelope added | WC-01 | Accepted debt; CAPA for r9 |
+| Medium | Discriminant instability window between G3 and G4 | Combined PR approach considered; sequential executed safely via #[non_exhaustive] | DC-03/WC-01 | Closed (both DONE) |
+| Low | Dead code activation promotes speculative code to "live but unused" | Disposition requires ACTIVATED = type appears in audit output OR RETAINED with rationale | DC-01 | Open |
+| Medium | Property-based test framework not specified | proptest recommended; hand-written acceptable if coverage equivalent | WC-01 | Closed (DONE) |
 
 ## Unknowns
 
-- Сколько из 30 dead_code suppressions относятся к R-08+ staged types (не подлежащим активации в r8).
-- Содержит ли ext09 standalone claims extractor тесты, отсутствующие в bundled EXT-09 на main.
-- Есть ли external consumers ArtifactClass enum вне Labpics-Team/lab-colors (влияет на безопасность удаления GraphArtifactTest).
-- Требует ли WASM-01 round-trip harness дополнительных boundary types beyond WasmBoundary/NativeBoundary из EXT-07.
+| ID | Unknown | Discovery Method | Impact if Resolved Late |
+|---|---|---|---|
+| U-01 | Сколько из 30 dead_code suppressions относятся к R-08+ staged types (не подлежащим активации в r8) | Mechanical scan of R-XX comments in DC-01 | Sweep target ≤10 may need adjustment |
+| U-02 | Требует ли WASM-01 round-trip harness дополнительных boundary types beyond WasmBoundary/NativeBoundary | WC-01 implementation discovery | Scope expansion; additional PR |
+| U-03 | Есть ли external consumers ArtifactClass enum вне Labpics-Team/lab-colors | Org-wide grep + cargo publish audit | ASM-01 invalidated; GraphArtifactTest retention required |
+| U-04 | Wire format versioning strategy for WASM boundary post-r8 | r9 planning decision | Every enum addition/removal = coordinated multi-file change |
+
+## Input Artifacts
+
+| Artifact | Source | Usage in r8 |
+|---|---|---|
+| r7-tech-debt-audit.md | main docs/ | DC-01 prioritization (dead code counts, file locations) |
+| r7-artifact-class-characterization.md | main docs/ | DC-03 (GraphArtifactTest = EmptyClass), WC-01 (12/14 scope), Follow-up Actions |
+| r8-branch-audit.md | main docs/ (PR #678) | BH-01 exit evidence |
+| review-01-r6-validation.md | main docs/ | Historical context (EXT-06 standalone evaluation) |
+| draft-r7.md | main docs/ | Delta baseline, DAG structure reference, rollback protocol template |
+| review-01-r8-validation.md | main docs/ | RV-01 findings driving this restructure |
+| FLOOR baseline = 1410 | CI gate on main HEAD 1630042 | INV-01 enforcement |
