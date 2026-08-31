@@ -7,30 +7,31 @@ created: 2026-08-31
 main_head: fbab4a8
 floor_baseline: 1410
 scope: R8 wave 1 Goals 1-4
+baseline_note: pre-restructure baseline; отражает состояние до реструктуризации draft-r8.md по SPEC §4
 ---
 
-# R8 Wave 1 — Independent Review Plan (Goal 5)
+# R8 Wave 1 — Независимый план ревью (Goal 5)
 
-## a. Scope
+## a. Область
 
 Проверяется корректность и полнота четырёх смержённых целей R8 wave 1:
 
-| Goal | PR | Содержание |
+| Цель | PR | Содержание |
 |------|-----|------------|
 | G1 Expect Sweep | #675 | Удаление устаревших `expect()` / замена на типизированные ошибки |
 | G2 Branch Hygiene | #678 | Аудит и очистка remote-веток (результат: чистое дерево, 0 stale) |
 | G3 EmptyClass Removal | #676 | Удаление пустых классов из AUD-01 матрицы после верификации отсутствия артефактов |
 | G4 WASM-01 Harness | #677 | Новый интеграционный тест `wasm01_contract.rs` для program_wire API |
 
-**Не входит в scope:**
+**Не входит в область:**
 - Pre-existing clippy warnings (dead_code) — документированы ниже как известные
 - MSRV receipt metadata mismatch — pre-existing
 - Python proof test failures — вне Rust-трека
 - Любые изменения кода, тестов или CI в рамках этого ревью
 
-## b. Review Axes
+## b. Оси ревью
 
-### Axis 1: Корректность wasm01_contract.rs (G4)
+### Ось 1: Корректность wasm01_contract.rs (G4)
 
 **Что проверяется:**
 - Тесты используют только публичное API (`program_wire::*`, `Srgb8`)
@@ -52,7 +53,7 @@ scope: R8 wave 1 Goals 1-4
 - [ ] CANONICAL_BYTES не захардкожен из приватного модуля (использует только pub API)
 - [ ] Error assertions используют matches! с конкретным вариантом, не просто is_err()
 
-### Axis 2: Полнота expect sweep (G1)
+### Ось 2: Полнота expect sweep (G1)
 
 **Что проверяется:**
 - Все `expect()` вызовы в crates/ имеют осмысленные сообщения
@@ -72,7 +73,7 @@ scope: R8 wave 1 Goals 1-4
 - [ ] FLOOR >= 1410 подтверждён прогоном
 - [ ] Ни одна замена не сломала error-type контракт downstream
 
-### Axis 3: Корректность EmptyClass removal (G3)
+### Ось 3: Корректность EmptyClass removal (G3)
 
 **Что проверяется:**
 - Удалённые классы действительно пусты (exhaustive search evidence в PR description или linked issue)
@@ -92,27 +93,27 @@ scope: R8 wave 1 Goals 1-4
 - [ ] Exit evidence присутствует для каждого удалённого класса
 - [ ] WASM-01 harness не зависит от удалённых классов
 
-## c. Pre-existing Issues (NOT in R8 scope)
+## c. Pre-existing Issues (НЕ в области R8)
 
 Следующие проблемы существуют на main HEAD fbab4a8 и НЕ являются регрессиями R8 wave 1:
 
-| Issue | Location | Severity | Notes |
+| Проблема | Расположение | Серьёзность | Примечания |
 |-------|----------|----------|-------|
-| Clippy dead_code: LadderPosition variants | ladder.rs | Low | Staged types, explicit #[allow] comments |
-| Clippy dead_code: ThemeAnchors::for_vc | theme_anchors.rs | Low | Forward-staged for future revision |
-| Clippy dead_code: BackdropBoundV1, BackdropBoxErrorV1 | backdrop_bound.rs | Low | R-09 staged types |
-| Clippy dead_code: RestorativeAutoErrorV1 variants | restorative_auto.rs | Low | R-07 staged, single TODO tracked |
-| Clippy dead_code: PropagationRuleV1, BatchScopeViolationV1 | propagation.rs | Low | Staged infrastructure |
-| MSRV receipt metadata mismatch | CI config | Medium | Pre-existing from r6; requires separate investigation |
-| Total clippy warnings | workspace | Info | 23 warnings in labcolors-core lib; all dead_code on staged types |
+| Clippy dead_code: варианты LadderPosition | ladder.rs | Низкая | Staged types, явные #[allow] комментарии |
+| Clippy dead_code: ThemeAnchors::for_vc | theme_anchors.rs | Низкая | Forward-staged для будущей ревизии |
+| Clippy dead_code: BackdropBoundV1, BackdropBoxErrorV1 | backdrop_bound.rs | Низкая | R-09 staged types |
+| Clippy dead_code: варианты RestorativeAutoErrorV1 | restorative_auto.rs | Низкая | R-07 staged, одиночный TODO отслеживается |
+| Clippy dead_code: PropagationRuleV1, BatchScopeViolationV1 | propagation.rs | Низкая | Staged infrastructure |
+| MSRV receipt metadata mismatch | CI config | Средняя | Pre-existing с r6; требует отдельного расследования |
+| Всего clippy warnings | workspace | Инфо | 23 warnings в labcolors-core lib; все dead_code на staged types |
 
-**Важно:** эти warnings блокируют clean CI signal, но не блокируют R8 wave 1 acceptance. Фикс требует отдельного goal (R8 wave 2 или R9).
+**Важно:** эти warnings блокируют clean CI signal, но не блокируют приёмку R8 wave 1. Фикс требует отдельной цели (R8 wave 2 или R9).
 
-## d. Acceptance Criteria
+## d. Критерии приёмки
 
-Бинарный вердикт: ALL YES = PASS, ANY NO = FAIL.
+Бинарный вердикт: ВСЕ ДА = PASS, ЛЮБОЙ НЕТ = FAIL.
 
-| # | Criterion | Gate |
+| № | Критерий | Гейт |
 |---|-----------|------|
 | AC-1 | wasm01_contract.rs: все 6 тестов проходят изолированно | `cargo test --test wasm01_contract` = 0 failures |
 | AC-2 | wasm01_contract.rs: нет unwrap/panic без message | grep + manual review = 0 violations |
@@ -123,19 +124,19 @@ scope: R8 wave 1 Goals 1-4
 | AC-7 | Branch hygiene: tree clean per G2 audit | git branch -r = only main + active PR branches |
 | AC-8 | No new regressions introduced by R8 wave 1 | diff against fbab4a8 shows only G1-G4 changes |
 
-## e. Recommended Next Steps
+## e. Рекомендуемые следующие шаги
 
-### При PASS (все AC = YES):
+### При PASS (все AC = ДА):
 1. Зафиксировать REVIEW-01-r8 с вердиктом PASS
 2. Переключить ACTIVE.md на R8
 3. Перейти к планированию R8 wave 2 или R9:
-   - **Приоритет A:** Fix pre-existing clippy dead_code warnings (отдельный goal, не смешивать с функциональными изменениями)
+   - **Приоритет A:** Fix pre-existing clippy dead_code warnings (отдельная цель, не смешивать с функциональными изменениями)
    - **Приоритет B:** MSRV receipt metadata mismatch investigation
    - **Приоритет C:** Продолжение WASM-01 contract implementation на основе validated harness
 
-### При FAIL (любой AC = NO):
+### При FAIL (любой AC = НЕТ):
 1. Задокументировать конкретный failed criterion с evidence
-2. Создать targeted fix PR (минимальный scope, один AC за раз)
+2. Создать targeted fix PR (минимальная область, один AC за раз)
 3. Повторить verification-runner на исправленном состоянии
 4. Не переходить к следующей волне до закрытия всех AC
 
