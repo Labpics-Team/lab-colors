@@ -60,7 +60,10 @@ pub(crate) enum GamutContainmentProofV1 {
     EncodedSrgb8Structural,
     /// Analytic bound for future parametric domains. Carries maximum deviation
     /// in ULPs from the declared gamut boundary.
-    #[allow(dead_code)]
+    #[expect(
+        dead_code,
+        reason = "R-07 G4: analytic bound variant staged before parametric domain consumer"
+    )]
     AnalyticBound { max_deviation_ulps: u32 },
 }
 

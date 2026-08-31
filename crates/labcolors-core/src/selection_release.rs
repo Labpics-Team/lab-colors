@@ -180,7 +180,13 @@ impl AdmittedSelectionReleaseV1 {
     }
 
     /// The release revision the identity is bound to.
-    #[allow(dead_code)]
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "R-07 G4: revision accessor retained for V5c-2 joint selection audit trail"
+        )
+    )]
     pub(crate) fn revision(&self) -> u64 {
         self.revision
     }
