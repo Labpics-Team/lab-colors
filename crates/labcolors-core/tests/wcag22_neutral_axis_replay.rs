@@ -17,7 +17,17 @@ use labcolors_core::wcag22::{
     Wcag22ApplicableDecisionV1, Wcag22AssessmentV1, Wcag22CriterionV1, evaluate_wcag22_srgb8,
 };
 
-const ORACLE_FIXTURE: &str = include_str!("../contracts/wcag22-neutral-axis-oracle-v1.json");
+// Runtime read instead of include_str! to avoid platform-specific compile-time
+// embedding divergence observed on CI Linux runners (af56e71f vs f0fe2810).
+static ORACLE_FIXTURE: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+    let manifest_dir = env!("CARGO_MANIFEST_DIR");
+    let path = std::path::Path::new(manifest_dir)
+        .join("contracts")
+        .join("wcag22-neutral-axis-oracle-v1.json");
+    let bytes = std::fs::read(&path)
+        .unwrap_or_else(|e| panic!("oracle fixture must be readable at {}: {e}", path.display()));
+    String::from_utf8(bytes).expect("oracle fixture must be valid UTF-8")
+});
 
 /// Один сценарий оракула. Поля зеркалят fixture-объект артефакта; порядок
 /// соседей и критериев — как в его canonical JSON.
