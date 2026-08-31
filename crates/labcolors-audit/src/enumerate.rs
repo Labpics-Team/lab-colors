@@ -256,7 +256,6 @@ fn class_discriminant(class: ArtifactClass) -> u8 {
         ArtifactClass::NativeBoundary => 10,
         ArtifactClass::CiBuildReleaseDeclaration => 11,
         ArtifactClass::ParallelSsot => 12,
-        ArtifactClass::GraphArtifactTest => 13,
     }
 }
 

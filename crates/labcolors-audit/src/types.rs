@@ -20,7 +20,6 @@ pub enum ArtifactClass {
     NativeBoundary,
     CiBuildReleaseDeclaration,
     ParallelSsot,
-    GraphArtifactTest,
 }
 
 /// Диспозиция артефакта после стадии dispose.
