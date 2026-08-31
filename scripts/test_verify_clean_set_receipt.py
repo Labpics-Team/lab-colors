@@ -711,7 +711,7 @@ class CorePackageLicenseTests(unittest.TestCase):
                     '[package]\nname = "labcolors-core"\n\n'
                     '[[bin]]\nname = "fixture"\npath = "src/main.rs"\n'
                     f'license = "{CORE_LICENSE_EXPRESSION}"\n'
-                ).encode("utf-8"),
+                ).encode(),
             )
             with self.assertRaisesRegex(VerificationError, "package license"):
                 verify_core_package(source, package)
@@ -731,7 +731,7 @@ class CorePackageLicenseTests(unittest.TestCase):
                             '[package]\nname = "labcolors-core"\n\n'
                             f"{table_header}\n"
                             f'license = "{CORE_LICENSE_EXPRESSION}"\n'
-                        ).encode("utf-8"),
+                        ).encode(),
                     )
                     with self.assertRaisesRegex(VerificationError, "package license"):
                         verify_core_package(source, package)
