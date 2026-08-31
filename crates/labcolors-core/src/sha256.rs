@@ -16,7 +16,7 @@ impl Digest {
 
     /// Каноническая hexadecimal-запись в нижнем регистре.
     #[cfg(test)]
-    #[expect(
+    #[allow(
         dead_code,
         reason = "Test-only hex formatting; consumed by cross-crate test harnesses (sha256.rs, pack_v10_contract.rs)"
     )]

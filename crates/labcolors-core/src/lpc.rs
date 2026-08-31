@@ -135,7 +135,7 @@ pub(crate) const LC_SCALE: f64 = 100.0;
 // SSOT-TRACKED — (a) DERIVED = (LO_CLIP − LO_BOW_OFFSET) × LC_SCALE (issue #44), см. docs/empirical-inventory.md.
 // Rust 1.85 не считает использованием обращение только из const-assert и тестов;
 // константа намеренно остаётся исполняемым provenance lock, не shipping knob.
-#[expect(
+#[allow(
     dead_code,
     reason = "SSOT provenance lock for APCA clip minimum; used only in const-asserts and tests"
 )]

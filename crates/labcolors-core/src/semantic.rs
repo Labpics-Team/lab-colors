@@ -124,7 +124,7 @@ pub(crate) const DECORATIVE_FLOOR_MIN: f64 = 7.5;
 // SSOT-TRACKED — квант-guard декоративного пола (issue #44), терминал (c) interval-insensitive, см. docs/empirical-inventory.md.
 // Rust 1.85 не считает использованием обращение только из const-assert и тестов;
 // это разложение provenance, а не отдельная production-политика.
-#[expect(
+#[allow(
     dead_code,
     reason = "SSOT provenance decomposition for decorative floor; used only in const-asserts and tests"
 )]

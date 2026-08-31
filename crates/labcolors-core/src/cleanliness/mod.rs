@@ -6,7 +6,7 @@
 /// Staged for R-09 alpha backdrop integration. Types are complete and tested;
 /// no production consumer exists yet — the field attachment pass (R-06) will
 /// wire these into the cleanliness audit pipeline.
-#[expect(
+#[allow(
     dead_code,
     reason = "Staged for R-09 alpha backdrop; consumer lands in R-06 field attachment"
 )]
@@ -14,7 +14,7 @@ pub(crate) mod alpha_assessment;
 
 /// Staged for R-09 alpha backdrop aggregation. Paired with alpha_assessment;
 /// both modules are adopted atomically when the field attachment pass lands.
-#[expect(
+#[allow(
     dead_code,
     reason = "Staged for R-09 alpha backdrop; consumer lands in R-06 field attachment"
 )]
