@@ -75,7 +75,11 @@ fn compiled_program_instantiates_and_updates() {
         "canonical program must produce exactly one output",
     );
     let output = &snapshot.outputs()[0];
-    assert_eq!(output.slot(), 91, "output slot must match canonical wire binding");
+    assert_eq!(
+        output.slot(),
+        91,
+        "output slot must match canonical wire binding"
+    );
     assert_eq!(
         output.source(),
         Srgb8::new([20, 20, 20]),
@@ -91,8 +95,8 @@ fn compiled_program_instantiates_and_updates() {
 fn check_returns_32_byte_identity_for_valid_bytes() {
     let identity = check_program_wire_v1(CANONICAL_BYTES).expect("valid bytes must pass check");
     const GOLDEN_IDENTITY: [u8; 32] = [
-        47, 72, 4, 222, 193, 177, 86, 197, 157, 173, 185, 8, 83, 214, 163, 22, 246,
-        136, 146, 44, 124, 198, 145, 252, 2, 124, 49, 217, 37, 221, 139, 199,
+        47, 72, 4, 222, 193, 177, 86, 197, 157, 173, 185, 8, 83, 214, 163, 22, 246, 136, 146, 44,
+        124, 198, 145, 252, 2, 124, 49, 217, 37, 221, 139, 199,
     ];
     assert_eq!(
         identity, GOLDEN_IDENTITY,
