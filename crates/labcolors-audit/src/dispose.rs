@@ -72,7 +72,6 @@ impl crate::types::ArtifactClass {
             Self::NativeBoundary => "NativeBoundary",
             Self::CiBuildReleaseDeclaration => "CiBuildReleaseDeclaration",
             Self::ParallelSsot => "ParallelSsot",
-            Self::GraphArtifactTest => "GraphArtifactTest",
         }
     }
 }
