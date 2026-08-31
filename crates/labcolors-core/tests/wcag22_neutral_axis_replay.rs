@@ -9,8 +9,13 @@
 
 // Включение по #[path] компилирует модуль заново в этом крейте: replay
 // использует только digest/to_hex, остальная поверхность здесь не нужна.
+// Cross-crate test path import: Rust does not count #[path] module imports
+// as runtime use, but sha256::digest and Digest::to_hex are consumed below.
 #[path = "../src/sha256.rs"]
-#[allow(dead_code)]
+#[expect(
+    dead_code,
+    reason = "Cross-crate test path import; sha256 types consumed by replay assertions below"
+)]
 mod fixture_sha256;
 
 use labcolors_core::wcag22::{

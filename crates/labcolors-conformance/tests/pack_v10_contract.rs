@@ -4,7 +4,12 @@
 use labcolors_conformance::{FAMILY_FILES, MANIFEST_FILE, PACK_VERSION};
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
-#[allow(dead_code)]
+// Cross-crate test path import: Rust does not count #[path] module imports
+// as runtime use, but sha256::digest and Digest::to_hex are consumed below.
+#[expect(
+    dead_code,
+    reason = "Cross-crate test path import; sha256 types consumed by contract assertions below"
+)]
 #[path = "../../labcolors-core/src/sha256.rs"]
 mod sha256;
 
