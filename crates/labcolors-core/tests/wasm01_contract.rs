@@ -69,17 +69,35 @@ fn compiled_program_instantiates_and_updates() {
         .update_observed(1, &scenarios)
         .expect("observed update");
 
+    assert_eq!(
+        snapshot.outputs().len(),
+        1,
+        "canonical program must produce exactly one output",
+    );
+    let output = &snapshot.outputs()[0];
+    assert_eq!(output.slot(), 91, "output slot must match canonical wire binding");
+    assert_eq!(
+        output.source(),
+        Srgb8::new([20, 20, 20]),
+        "output source must be the canonical sRGB8 value",
+    );
     assert!(
-        !snapshot.outputs().is_empty(),
-        "snapshot must contain at least one output after update",
+        (output.opacity() - 1.0).abs() < f64::EPSILON,
+        "output opacity must be exactly 1.0",
     );
 }
 
 #[test]
 fn check_returns_32_byte_identity_for_valid_bytes() {
     let identity = check_program_wire_v1(CANONICAL_BYTES).expect("valid bytes must pass check");
-    assert_eq!(identity.len(), 32);
-    assert_ne!(identity, [0u8; 32], "identity must be a real digest");
+    const GOLDEN_IDENTITY: [u8; 32] = [
+        47, 72, 4, 222, 193, 177, 86, 197, 157, 173, 185, 8, 83, 214, 163, 22, 246,
+        136, 146, 44, 124, 198, 145, 252, 2, 124, 49, 217, 37, 221, 139, 199,
+    ];
+    assert_eq!(
+        identity, GOLDEN_IDENTITY,
+        "identity must match the golden digest for CANONICAL_BYTES",
+    );
 }
 
 #[test]
