@@ -1,14 +1,13 @@
-﻿//! Integration test harness for WASM-01 round-trip verification.
+//! Integration test harness for WASM-01 round-trip verification.
 //!
 //! Covers the public `program_wire` API surface that the WASM binding consumes:
 //! compilation determinism, error classification, and session lifecycle.
 //! Uses only public API; canonical bytes are embedded from the in-crate fixture.
 
-use labcolors_core::program_wire::{
-    check_program_wire_v1, compile_program_wire_v1, ProgramScenarioV1,
-    ProgramWireCheckErrorV1,
-};
 use labcolors_core::Srgb8;
+use labcolors_core::program_wire::{
+    ProgramScenarioV1, ProgramWireCheckErrorV1, check_program_wire_v1, compile_program_wire_v1,
+};
 
 /// Canonical reference bytes extracted from the in-crate test fixture.
 /// Minimal valid program wire that passes both decode and compile.
@@ -62,7 +61,10 @@ fn compiled_program_instantiates_and_updates() {
     let program = compile_program_wire_v1(CANONICAL_BYTES).expect("compile");
     let mut session = program.instantiate(1).expect("instantiate");
 
-    let scenarios = [ProgramScenarioV1::new(1, vec![Srgb8::new([0xAA, 0xBB, 0xCC])])];
+    let scenarios = [ProgramScenarioV1::new(
+        1,
+        vec![Srgb8::new([0xAA, 0xBB, 0xCC])],
+    )];
     let snapshot = session
         .update_observed(1, &scenarios)
         .expect("observed update");
