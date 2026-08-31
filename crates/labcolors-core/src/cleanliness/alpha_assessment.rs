@@ -1,4 +1,3 @@
-#![allow(dead_code)] // V1 cleanliness alpha-assessment API staged for future consumers.
 //! Alpha cleanliness assessment types (R-05 PR1).
 //!
 //! Pure data types for alpha-weighted cleanliness evidence. No runtime

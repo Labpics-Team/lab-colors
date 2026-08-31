@@ -231,13 +231,6 @@ mod session_tests;
 
 pub(crate) mod joint;
 
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the authored selection release materialises the joint order from V5c-2"
-    )
-)]
 pub(crate) mod selection_release;
 
 #[cfg_attr(
