@@ -297,8 +297,7 @@ impl ProgramPaintOutputV1 {
     pub const fn opacity(self) -> f64 {
         self.opacity
     }
-
-    }
+}
 
 /// Owned snapshot Session РїРѕСЃР»Рµ Р°С‚РѕРјР°СЂРЅРѕРіРѕ update.
 #[derive(Debug, Clone, PartialEq)]
