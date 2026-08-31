@@ -144,17 +144,11 @@ fn replay_solution(adjacent: &[u8], criteria: &[Wcag22CriterionV1]) -> Vec<u8> {
 
 #[test]
 fn production_replay_is_bound_to_the_exact_independent_oracle_fixture() {
-    let bytes = ORACLE_FIXTURE.as_bytes();
-    let hash = fixture_sha256::digest(bytes).to_hex();
-    eprintln!(
-        "ORACLE_FIXTURE len={} first32={:?} hash={}",
-        bytes.len(),
-        &bytes[..32.min(bytes.len())],
-        hash
-    );
+    // Canonical LF hash from git index. The previous CRLF hash (f0fe2810) was
+    // a Windows working-tree artifact; the authoritative blob is LF-normalised.
     assert_eq!(
-        hash,
-        "f0fe2810cb5bb0986e60c25e8c118cd3df44ca703f6c22c90d059c08b85b6b59"
+        fixture_sha256::digest(ORACLE_FIXTURE.as_bytes()).to_hex(),
+        "af56e71febf2994a186a7d4b1e51d5297263220f4adbe482d8c7a7f3b155f8b2"
     );
 }
 
