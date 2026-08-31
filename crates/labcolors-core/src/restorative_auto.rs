@@ -34,10 +34,6 @@ pub(crate) enum RestorativeAutoErrorV1 {
     /// The action exceeds the boundary of its declared scope.
     ScopeExceeded,
     /// A required TechnicalQuality substrate is not available.
-    #[expect(
-        dead_code,
-        reason = "TQ substrate check lands in PR-C once upstream R-09/R-10 gates close"
-    )]
     TqSubstrateUnavailable,
 }
 

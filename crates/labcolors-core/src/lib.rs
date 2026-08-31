@@ -18,13 +18,6 @@ pub(crate) mod composition;
     )
 )]
 pub(crate) mod contextual_region;
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "R-07 G4: evaluator registry internals are projected only through typed Program evidence"
-    )
-)]
 pub(crate) mod evaluator_registry;
 mod family;
 mod family_artifact;
@@ -44,13 +37,6 @@ pub(crate) mod spaces;
 )]
 pub(crate) mod technical_quality;
 
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "R-05 PR1/PR2: alpha cleanliness types staged before R-06 field lift consumer"
-    )
-)]
 pub(crate) mod cleanliness;
 
 pub use srgb8::Srgb8;
@@ -65,10 +51,6 @@ pub mod claims_manifest;
 )]
 pub(crate) mod config;
 pub(crate) mod constraints;
-#[expect(
-    dead_code,
-    reason = "R-07 G4: corridor representation staged before field consumer"
-)]
 pub(crate) mod corridor_representation;
 #[cfg(feature = "ext09-extractor")]
 pub mod exports_manifest;
@@ -78,10 +60,6 @@ pub mod exports_manifest;
 )]
 pub(crate) mod glow;
 pub mod hash;
-#[expect(
-    dead_code,
-    reason = "R-07 G4: ladder module staged before field consumer wiring"
-)]
 pub(crate) mod ladder;
 pub mod lcs;
 #[expect(
@@ -144,10 +122,6 @@ pub(crate) mod relation;
     )
 )]
 pub(crate) mod release_registry;
-#[expect(
-    dead_code,
-    reason = "R-07 G4: restorative auto types staged before runtime integration in PR-C"
-)]
 pub(crate) mod restorative_auto;
 pub mod scale;
 #[expect(
@@ -156,13 +130,6 @@ pub mod scale;
 )]
 pub(crate) mod semantic;
 pub(crate) mod sha256;
-#[cfg_attr(
-    test,
-    expect(
-        dead_code,
-        reason = "R-07 G4: solve module items partially unused in test-only compilation units"
-    )
-)]
 pub mod solve;
 pub mod source_manifest;
 

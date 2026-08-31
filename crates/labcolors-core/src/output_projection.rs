@@ -461,12 +461,6 @@ pub(crate) enum HdrProjectionErrorV1 {
 }
 
 /// HDR luminance metadata carried in every HDR certificate.
-// Consumed by PR4 certificate construction; expect covers both
-// test and non-test builds without unfulfilled-expectation warnings.
-#[expect(
-    dead_code,
-    reason = "R-07 G4: HDR luminance metadata staged before PR4 certificate consumer wiring"
-)]
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct HdrLuminanceMetadataV1 {
     pub black_point: AbsoluteLuminanceV1,
@@ -554,12 +548,6 @@ pub(crate) fn encode_xyz_to_hdr_pq_rec2020(
 }
 
 /// CSS Color 4 HDR serialization: `color(rec2020-pq R G B)`.
-// Consumed by PR5 dispatch integration; expect covers both test and
-// non-test builds without unfulfilled-expectation warnings.
-#[expect(
-    dead_code,
-    reason = "R-07 G4: HDR PQ rec2020 serializer staged before PR5 dispatch consumer wiring"
-)]
 pub(crate) fn serialize_hdr_pq_rec2020(pq: [PqCodeValueV1; 3]) -> String {
     format!(
         "color(rec2020-pq {:.6} {:.6} {:.6})",
