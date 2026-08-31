@@ -17,24 +17,22 @@ use labcolors_core::wcag22::{
     Wcag22ApplicableDecisionV1, Wcag22AssessmentV1, Wcag22CriterionV1, evaluate_wcag22_srgb8,
 };
 
-// Canonical LF bytes from git index. Working-tree reads diverge on Windows
-// (core.autocrlf rewrites LF→CRLF after checkout), producing a different hash
-// than CI Linux which checks out raw LF. Reading via `git show` guarantees the
-// normalised blob regardless of platform or .gitattributes timing.
+// The oracle fixture is pinned to LF in .gitattributes (text eol=lf), but was
+// committed before that rule existed. Git stores LF in the index (i/lf), yet
+// core.autocrlf on Windows rewrites the working tree to CRLF (w/crlf). Reading
+// via include_str! or std::fs::read therefore yields different bytes on Windows
+// vs CI Linux. Normalising CR out at load time makes the hash deterministic
+// regardless of platform, without requiring git at runtime.
 static ORACLE_FIXTURE: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
-    let output = std::process::Command::new("git")
-        .args([
-            "show",
-            "HEAD:crates/labcolors-core/contracts/wcag22-neutral-axis-oracle-v1.json",
-        ])
-        .output()
-        .expect("git must be available to read canonical oracle fixture");
-    assert!(
-        output.status.success(),
-        "git show oracle fixture failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    String::from_utf8(output.stdout).expect("oracle fixture must be valid UTF-8")
+    let manifest_dir = env!("CARGO_MANIFEST_DIR");
+    let path = std::path::Path::new(manifest_dir)
+        .join("contracts")
+        .join("wcag22-neutral-axis-oracle-v1.json");
+    let raw = std::fs::read(&path)
+        .unwrap_or_else(|e| panic!("oracle fixture must be readable at {}: {e}", path.display()));
+    // Strip all \r bytes to normalise CRLF→LF, matching the canonical index blob.
+    let lf_bytes: Vec<u8> = raw.into_iter().filter(|&b| b != b'\r').collect();
+    String::from_utf8(lf_bytes).expect("oracle fixture must be valid UTF-8")
 });
 
 /// Один сценарий оракула. Поля зеркалят fixture-объект артефакта; порядок
