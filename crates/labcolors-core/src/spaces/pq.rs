@@ -77,7 +77,7 @@ pub(crate) struct PqCodeValueV1(f64);
 
 impl PqCodeValueV1 {
     /// Construct a validated PQ code value. Must be in [0, 1] and finite.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // R-07 G4: PQ constructor staged before HDR output-projection consumer wiring
     pub fn try_new(value: f64) -> Result<Self, HdrNumericalErrorV1> {
         if value.is_nan() || !(0.0..=1.0).contains(&value) {
             return Err(HdrNumericalErrorV1 {

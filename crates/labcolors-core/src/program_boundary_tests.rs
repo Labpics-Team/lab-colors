@@ -233,7 +233,7 @@ fn unknown_is_revision_bound_without_a_stream_or_generation_field(
     let _ = owner.commit(session, update);
 }
 
-#[allow(dead_code)]
+#[allow(dead_code)] // R-07 G4: boundary test helper retained for owner-mismatch contract verification
 fn owner_mismatch_is_a_closed_boundary_error(error: UpdateErrorV1) {
     assert_eq!(error.kind(), UpdateErrorKindV1::OwnerMismatch);
 }
