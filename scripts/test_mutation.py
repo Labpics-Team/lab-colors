@@ -1780,9 +1780,10 @@ class MutationTruthTest(unittest.TestCase):
                 f"  cancel-in-progress: {cancel_rule}\n",
                 workflow,
             )
-        # Эфемерные GitHub-hosted VM не несут ни секретов, ни состояния,
-        # поэтому fork-PR — штатный режим опенсорс-гейта: workers не держат
-        # fork-гейтов, а каждая job закреплена на одной одноразовой метке.
+        # Эфемерные раннеры (GitHub-hosted или self-hosted без секретов)
+        # не несят ни секретов, ни состояния, поэтому fork-PR — штатный
+        # режим опенсорс-гейта: workers не держат fork-гейтов, а каждая
+        # job закреплена на одной одноразовой метке.
         ci_ephemeral = {
             name: block
             for name, block in workflow_job_blocks(ci_worker, "ci-worker.yml").items()
@@ -1795,8 +1796,16 @@ class MutationTruthTest(unittest.TestCase):
         native_blocks = workflow_job_blocks(
             native_worker, "native-conformance-worker.yml"
         )
+        # Linux-конформанс мигрирован на self-hosted; инвариант теста —
+        # cancel-stale-PRs, не тип раннера.
+        linux_runner = next(
+            line.strip()
+            for line in native_blocks["swift-conformance-linux"].splitlines()
+            if line.strip().startswith("runs-on:")
+        )
         self.assertIn(
-            "runs-on: ubuntu-latest", native_blocks["swift-conformance-linux"]
+            linux_runner,
+            {"runs-on: ubuntu-latest", "runs-on: self-hosted"},
         )
         self.assertIn(
             "runs-on: macos-15", native_blocks["swift-conformance-macos-reference"]
