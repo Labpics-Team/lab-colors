@@ -224,23 +224,6 @@ fn assert_evidence_snapshot(view: EvidenceViewV1<'_>) {
     }
 }
 
-#[allow(dead_code)]
-fn unknown_is_revision_bound_without_a_stream_or_generation_field(
-    owner: &OwnerV1,
-    session: &mut SessionV1,
-) {
-    let update = UpdateV1::Unknown {
-        revision: 2,
-        reason_id: 7,
-    };
-    let _ = owner.commit(session, update);
-}
-
-#[allow(dead_code)]
-fn owner_mismatch_is_a_closed_boundary_error(error: UpdateErrorV1) {
-    assert_eq!(error.kind(), UpdateErrorKindV1::OwnerMismatch);
-}
-
 #[test]
 fn staged_boundary_uses_only_closed_concrete_types() {
     // Reaching this test means the concrete seam compiled without importing
