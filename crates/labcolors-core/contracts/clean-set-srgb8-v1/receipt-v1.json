@@ -48,11 +48,11 @@
       "sha256": "8bf5d5a1c0f00ce245a1ecb18b923aa1631483345962d72b633e466c242a8a1d"
     },
     {
-      "bytes": 115022,
+      "bytes": 115166,
       "license": "MIT",
       "path": "crates/labcolors-core/src/lib.rs",
       "role": "module_registration_source",
-      "sha256": "c87e14485280fbf1370ae1c0bcbde381207ce49abdd4bfc1504f41fbfc78ea23"
+      "sha256": "9ac43f803573b6a3efa12144488c640ef199f50f261c35ef9f1de95b74e3c051"
     },
     {
       "bytes": 39439,
@@ -153,11 +153,11 @@
       "sha256": "1fe3cb719f883b7968bf05bbf613353235445e55ad7942bb7f8a83145cb97b09"
     },
     {
-      "bytes": 32018,
+      "bytes": 32381,
       "license": "MIT",
       "path": "scripts/test_verify_clean_set_receipt.py",
       "role": "verifier_tests",
-      "sha256": "337fe7585aa44359c2a90655fafbd0b4fbbd4fdf8bd30a9735df6640010d9e29"
+      "sha256": "1bf245f1e4c626981eb2c7a357a1ce3132078d2161731b476493a560896a7ddf"
     }
   ],
   "excluded_claims": [
