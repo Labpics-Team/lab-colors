@@ -26,7 +26,7 @@ env:
 jobs:
   manifest:
     name: discover exact mutation population
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -96,7 +96,7 @@ jobs:
   shard:
     name: mutation shard ${{ matrix.shard }}/32
     needs: manifest
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     timeout-minutes: 240
     strategy:
       fail-fast: false
@@ -219,7 +219,7 @@ jobs:
     name: prove complete mutation population
     if: always()
     needs: [manifest, shard]
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
