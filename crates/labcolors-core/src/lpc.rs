@@ -132,10 +132,13 @@ pub(crate) const LC_SCALE: f64 = 100.0;
 /// решатель, целясь в декоративный контраст ниже 7.3, упирается в порог клипа и
 /// возвращает ноль, поэтому `DECORATIVE_FLOOR_MIN` держится строго выше него.
 /// Скан-инвариант — `no_pair_emits_contrast_below_model_floor`.
-// Rust 1.85 не считает использование только в const-assert/test runtime-use;
-// константа намеренно остаётся исполняемым provenance lock, не shipping knob.
-#[allow(dead_code)]
 // SSOT-TRACKED — (a) DERIVED = (LO_CLIP − LO_BOW_OFFSET) × LC_SCALE (issue #44), см. docs/empirical-inventory.md.
+// Rust 1.85 не считает использованием обращение только из const-assert и тестов;
+// константа намеренно остаётся исполняемым provenance lock, не shipping knob.
+#[expect(
+    dead_code,
+    reason = "SSOT provenance lock for APCA clip minimum; used only in const-asserts and tests"
+)]
 pub(crate) const MODEL_LC_FLOOR: f64 = 7.3;
 
 /// Soft black clamp: lifts luminance below [`SOFT_CLAMP_THRESHOLD`] so the
