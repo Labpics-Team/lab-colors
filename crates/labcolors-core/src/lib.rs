@@ -18,13 +18,7 @@ pub(crate) mod composition;
     )
 )]
 pub(crate) mod contextual_region;
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "R-07 G4: evaluator registry internals are projected only through typed Program evidence"
-    )
-)]
+#[allow(dead_code)] // R-07 G4: evaluator registry internals projected only through typed Program evidence
 pub(crate) mod evaluator_registry;
 mod family;
 mod family_artifact;
@@ -44,13 +38,7 @@ pub(crate) mod spaces;
 )]
 pub(crate) mod technical_quality;
 
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "R-05 PR1/PR2: alpha cleanliness types staged before R-06 field lift consumer"
-    )
-)]
+#[allow(dead_code)] // R-05 PR1/PR2: alpha cleanliness types staged before R-06 field lift consumer
 pub(crate) mod cleanliness;
 
 pub use srgb8::Srgb8;
@@ -59,29 +47,17 @@ pub(crate) mod accent_balance;
 pub mod alpha;
 pub(crate) mod appearance;
 pub mod claims_manifest;
-#[expect(
-    dead_code,
-    reason = "R-07 G4: config module staged before consumer wiring"
-)]
+#[allow(dead_code)] // R-07 G4: config module staged before consumer wiring
 pub(crate) mod config;
 pub(crate) mod constraints;
-#[expect(
-    dead_code,
-    reason = "R-07 G4: corridor representation staged before field consumer"
-)]
+#[allow(dead_code)]
 pub(crate) mod corridor_representation;
 #[cfg(feature = "ext09-extractor")]
 pub mod exports_manifest;
-#[expect(
-    dead_code,
-    reason = "R-07 G4: glow module staged before field presentation consumer"
-)]
+#[allow(dead_code)]
 pub(crate) mod glow;
 pub mod hash;
-#[expect(
-    dead_code,
-    reason = "R-07 G4: ladder module staged before field consumer wiring"
-)]
+#[allow(dead_code)]
 pub(crate) mod ladder;
 pub mod lcs;
 #[expect(
@@ -90,17 +66,11 @@ pub mod lcs;
 )]
 pub(crate) mod lcs_occurrence;
 pub(crate) mod lpc;
-#[expect(
-    dead_code,
-    reason = "R-07 G4: material module staged before field presentation consumer"
-)]
+#[allow(dead_code)]
 pub(crate) mod material;
 pub mod neutral;
 pub mod numerical_plan;
-#[expect(
-    dead_code,
-    reason = "R-07 G4: output bindings staged before consumer wiring"
-)]
+#[allow(dead_code)]
 mod output_bindings;
 #[expect(
     dead_code,
@@ -144,25 +114,13 @@ pub(crate) mod relation;
     )
 )]
 pub(crate) mod release_registry;
-#[expect(
-    dead_code,
-    reason = "R-07 G4: restorative auto types staged before runtime integration in PR-C"
-)]
+#[allow(dead_code)] // R-07 PR-A: restorative auto types staged before runtime integration in PR-C
 pub(crate) mod restorative_auto;
 pub mod scale;
-#[expect(
-    dead_code,
-    reason = "R-07 G4: semantic module staged; direct path used only through typed Program evidence"
-)]
+#[allow(dead_code)]
 pub(crate) mod semantic;
 pub(crate) mod sha256;
-#[cfg_attr(
-    test,
-    expect(
-        dead_code,
-        reason = "R-07 G4: solve module items partially unused in test-only compilation units"
-    )
-)]
+#[cfg_attr(test, allow(dead_code))]
 pub mod solve;
 pub mod source_manifest;
 
