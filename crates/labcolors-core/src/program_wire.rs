@@ -298,18 +298,7 @@ impl ProgramPaintOutputV1 {
         self.opacity
     }
 
-    /// Test-only constructor for arena unit tests. Never used in production
-    /// paths; gated behind cfg(test) to prevent accidental leakage.
-    #[cfg(test)]
-    #[allow(dead_code)] // used by field_technical_quality unit tests
-    pub(crate) const fn for_test(slot: u32) -> Self {
-        Self {
-            slot,
-            source: crate::Srgb8::new([0, 0, 0]),
-            opacity: 1.0,
-        }
     }
-}
 
 /// Owned snapshot Session РїРѕСЃР»Рµ Р°С‚РѕРјР°СЂРЅРѕРіРѕ update.
 #[derive(Debug, Clone, PartialEq)]
