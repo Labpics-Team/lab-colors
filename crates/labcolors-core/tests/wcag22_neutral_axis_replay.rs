@@ -12,7 +12,8 @@
 // Cross-crate test path import: Rust does not count #[path] module imports
 // as runtime use, but sha256::digest and Digest::to_hex are consumed below.
 #[path = "../src/sha256.rs"]
-#[allow(dead_code)] // #[expect] on #[path] module causes CI oracle hash divergence; allow is safe here.
+#[allow(dead_code)]
+// #[expect] on #[path] module causes CI oracle hash divergence; allow is safe here.
 mod fixture_sha256;
 
 use labcolors_core::wcag22::{
