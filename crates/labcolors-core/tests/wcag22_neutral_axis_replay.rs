@@ -17,7 +17,23 @@ use labcolors_core::wcag22::{
     Wcag22ApplicableDecisionV1, Wcag22AssessmentV1, Wcag22CriterionV1, evaluate_wcag22_srgb8,
 };
 
-const ORACLE_FIXTURE: &str = include_str!("../contracts/wcag22-neutral-axis-oracle-v1.json");
+// The oracle fixture is pinned to LF in .gitattributes (text eol=lf), but was
+// committed before that rule existed. Git stores LF in the index (i/lf), yet
+// core.autocrlf on Windows rewrites the working tree to CRLF (w/crlf). Reading
+// via include_str! therefore yields different bytes on Windows vs CI Linux.
+// Normalising CR out at load time makes the hash deterministic regardless of
+// platform, without requiring git at runtime.
+static ORACLE_FIXTURE: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+    let manifest_dir = env!("CARGO_MANIFEST_DIR");
+    let path = std::path::Path::new(manifest_dir)
+        .join("contracts")
+        .join("wcag22-neutral-axis-oracle-v1.json");
+    let raw = std::fs::read(&path)
+        .unwrap_or_else(|e| panic!("oracle fixture must be readable at {}: {e}", path.display()));
+    // Strip all \r bytes to normalise CRLF→LF, matching the canonical index blob.
+    let lf_bytes: Vec<u8> = raw.into_iter().filter(|&b| b != b'\r').collect();
+    String::from_utf8(lf_bytes).expect("oracle fixture must be valid UTF-8")
+});
 
 /// Один сценарий оракула. Поля зеркалят fixture-объект артефакта; порядок
 /// соседей и критериев — как в его canonical JSON.
@@ -128,7 +144,7 @@ fn replay_solution(adjacent: &[u8], criteria: &[Wcag22CriterionV1]) -> Vec<u8> {
 fn production_replay_is_bound_to_the_exact_independent_oracle_fixture() {
     assert_eq!(
         fixture_sha256::digest(ORACLE_FIXTURE.as_bytes()).to_hex(),
-        "f0fe2810cb5bb0986e60c25e8c118cd3df44ca703f6c22c90d059c08b85b6b59"
+        "af56e71febf2994a186a7d4b1e51d5297263220f4adbe482d8c7a7f3b155f8b2"
     );
 }
 
