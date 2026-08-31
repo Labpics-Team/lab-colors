@@ -1,3 +1,269 @@
 name: mutation worker
 
-# PR1 сертифиц
+# PR1 сертифицирует полноту измерения, но не mutation score. Missed, timeout,
+# unviable и unattributed failure остаются видимыми данными, пока полный
+# baseline не обоснует отдельный явный ratchet.
+#
+# Неизменяемый worker для эфемерных GitHub-hosted раннеров (репо публичное):
+# расписание живёт в тонком caller'е (mutation.yml), который закрепляет этот
+# файл полным commit SHA и не может изменить ни job graph, ни пины. Своих
+# inputs у worker нет by design.
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_INCREMENTAL: 0
+  CARGO_TERM_COLOR: always
+  MUTANTS_ARCHIVE_SHA256: be41e6f74b633452fb17ef3b6b6113e180130f7b5693863b400c58b39e476726
+  MUTANTS_ARCHIVE_URL: https://github.com/sourcefrog/cargo-mutants/releases/download/v25.3.1/cargo-mutants-x86_64-unknown-linux-gnu.tar.gz
+  MUTANTS_VERSION_OUTPUT: cargo-mutants 25.3.1
+  RUST_TOOLCHAIN: 1.96.0
+
+jobs:
+  manifest:
+    name: discover exact mutation population
+    runs-on: self-hosted
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: isolate tool homes
+        run: |
+          {
+            echo "RUSTUP_HOME=$RUNNER_TEMP/rustup-$GITHUB_JOB"
+            echo "CARGO_HOME=$RUNNER_TEMP/cargo-$GITHUB_JOB"
+            echo "TMPDIR=$RUNNER_TEMP/tmp-$GITHUB_JOB"
+          } >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/tmp-$GITHUB_JOB"
+      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master @ 2026-03-27
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+      - name: install verified cargo-mutants release asset
+        # Блок намеренно повторён в manifest и shard: локальный composite action
+        # пришёл бы из checkout недоверенной revision и обошёл immutable worker.
+        # Оба экземпляра меняются атомарно вместе с digest/version env выше.
+        run: |
+          mkdir -p "$RUNNER_TEMP/mutants-bin"
+          curl --fail --location --silent --show-error \
+            "$MUTANTS_ARCHIVE_URL" \
+            --output "$RUNNER_TEMP/cargo-mutants.tar.gz"
+          echo "$MUTANTS_ARCHIVE_SHA256  $RUNNER_TEMP/cargo-mutants.tar.gz" \
+            | sha256sum --check --strict
+          tar -xzf "$RUNNER_TEMP/cargo-mutants.tar.gz" -C "$RUNNER_TEMP/mutants-bin"
+          chmod 0755 "$RUNNER_TEMP/mutants-bin/cargo-mutants"
+          echo "$RUNNER_TEMP/mutants-bin" >> "$GITHUB_PATH"
+          # Direct release asset still expects Cargo's literal subcommand slot;
+          # exact v25.3.1 rejects a bare --version.
+          test "$("$RUNNER_TEMP/mutants-bin/cargo-mutants" mutants --version)" \
+            = "$MUTANTS_VERSION_OUTPUT"
+      - name: discover and bind exact population
+        run: |
+          source_root="$RUNNER_TEMP/mutation-source-$GITHUB_JOB"
+          mkdir -p "$RUNNER_TEMP/mutation-manifest"
+          python3 scripts/mutation.py materialize-source \
+            --repo-root "$GITHUB_WORKSPACE" \
+            --revision "$GITHUB_SHA" \
+            --source-root "$source_root"
+          (
+            cd "$source_root"
+            cargo mutants --gitignore=false --no-shuffle --list --json
+          ) > "$RUNNER_TEMP/population.json"
+          python3 "$source_root/scripts/mutation.py" manifest \
+            --population-json "$RUNNER_TEMP/population.json" \
+            --repo-root "$GITHUB_WORKSPACE" \
+            --source-root "$source_root" \
+            --config "$source_root/.cargo/mutants.toml" \
+            --repository "$GITHUB_REPOSITORY" \
+            --revision "$GITHUB_SHA" \
+            --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --tool-archive "$RUNNER_TEMP/cargo-mutants.tar.gz" \
+            --tool-version-output "$(cargo mutants --version)" \
+            --output "$RUNNER_TEMP/mutation-manifest/mutation-manifest.json"
+      - name: upload exact population manifest
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: mutation-manifest
+          path: ${{ runner.temp }}/mutation-manifest/mutation-manifest.json
+          if-no-files-found: error
+          retention-days: 30
+
+  shard:
+    name: mutation shard ${{ matrix.shard }}/32
+    needs: manifest
+    runs-on: self-hosted
+    timeout-minutes: 240
+    strategy:
+      fail-fast: false
+      # Fair-share: report-only работа берёт не более восьми слотов из двадцати
+      # одновременных jobs публичного репозитория, оставляя ёмкость release- и
+      # infra-CI. Остаток GitHub ставит в очередь, а не роняет.
+      max-parallel: 8
+      matrix:
+        shard:
+          - 0
+          - 1
+          - 2
+          - 3
+          - 4
+          - 5
+          - 6
+          - 7
+          - 8
+          - 9
+          - 10
+          - 11
+          - 12
+          - 13
+          - 14
+          - 15
+          - 16
+          - 17
+          - 18
+          - 19
+          - 20
+          - 21
+          - 22
+          - 23
+          - 24
+          - 25
+          - 26
+          - 27
+          - 28
+          - 29
+          - 30
+          - 31
+    env:
+      SHARD_INDEX: ${{ matrix.shard }}
+    steps:
+      - name: precreate failure evidence namespace
+        run: mkdir -p "$RUNNER_TEMP/mutation-shard-$SHARD_INDEX"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: isolate tool homes
+        run: |
+          {
+            echo "RUSTUP_HOME=$RUNNER_TEMP/rustup-$GITHUB_JOB-$SHARD_INDEX"
+            echo "CARGO_HOME=$RUNNER_TEMP/cargo-$GITHUB_JOB-$SHARD_INDEX"
+            echo "TMPDIR=$RUNNER_TEMP/tmp-$GITHUB_JOB-$SHARD_INDEX"
+          } >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/tmp-$GITHUB_JOB-$SHARD_INDEX"
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: mutation-manifest
+          path: ${{ runner.temp }}/mutation-manifest
+      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master @ 2026-03-27
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+      - name: install verified cargo-mutants release asset
+        run: |
+          mkdir -p "$RUNNER_TEMP/mutants-bin"
+          curl --fail --location --silent --show-error \
+            "$MUTANTS_ARCHIVE_URL" \
+            --output "$RUNNER_TEMP/cargo-mutants.tar.gz"
+          echo "$MUTANTS_ARCHIVE_SHA256  $RUNNER_TEMP/cargo-mutants.tar.gz" \
+            | sha256sum --check --strict
+          tar -xzf "$RUNNER_TEMP/cargo-mutants.tar.gz" -C "$RUNNER_TEMP/mutants-bin"
+          chmod 0755 "$RUNNER_TEMP/mutants-bin/cargo-mutants"
+          echo "$RUNNER_TEMP/mutants-bin" >> "$GITHUB_PATH"
+          # Direct release asset still expects Cargo's literal subcommand slot;
+          # exact v25.3.1 rejects a bare --version.
+          test "$("$RUNNER_TEMP/mutants-bin/cargo-mutants" mutants --version)" \
+            = "$MUTANTS_VERSION_OUTPUT"
+      - name: run isolated shard with its own baseline
+        run: |
+          source_root="$RUNNER_TEMP/mutation-source-$GITHUB_JOB-$SHARD_INDEX"
+          output_parent="$RUNNER_TEMP/mutation-shard-$SHARD_INDEX"
+          python3 scripts/mutation.py materialize-source \
+            --repo-root "$GITHUB_WORKSPACE" \
+            --revision "$GITHUB_SHA" \
+            --source-root "$source_root"
+          cd "$source_root"
+          set +e
+          cargo mutants \
+            --baseline=run \
+            --gitignore=false \
+            --no-shuffle \
+            --shard "$SHARD_INDEX/32" \
+            --output "$output_parent"
+          mutants_exit=$?
+          set -e
+          python3 "$source_root/scripts/mutation.py" record-shard \
+            --manifest "$RUNNER_TEMP/mutation-manifest/mutation-manifest.json" \
+            --repo-root "$GITHUB_WORKSPACE" \
+            --source-root "$source_root" \
+            --config "$source_root/.cargo/mutants.toml" \
+            --output-parent "$output_parent" \
+            --shard-index "$SHARD_INDEX" \
+            --observed-revision "$GITHUB_SHA" \
+            --tool-archive "$RUNNER_TEMP/cargo-mutants.tar.gz" \
+            --tool-version-output "$(cargo mutants --version)" \
+            --exit-code "$mutants_exit"
+      - name: upload immutable shard evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: mutation-shard-${{ matrix.shard }}
+          path: ${{ runner.temp }}/mutation-shard-${{ matrix.shard }}
+          if-no-files-found: error
+          retention-days: 30
+
+  aggregate:
+    name: prove complete mutation population
+    if: always()
+    needs: [manifest, shard]
+    runs-on: self-hosted
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: mutation-manifest
+          path: ${{ runner.temp }}/mutation-manifest
+      - name: download every shard without merging their namespaces
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: mutation-shard-*
+          path: ${{ runner.temp }}/mutation-shards
+          merge-multiple: false
+      - name: verify exact non-overlapping aggregate
+        run: |
+          set -euo pipefail
+          source_root="$RUNNER_TEMP/mutation-source-$GITHUB_JOB"
+          report_root="$RUNNER_TEMP/mutation-report"
+          mkdir -p "$report_root"
+          diagnostic="$report_root/aggregate.log"
+          : > "$diagnostic"
+          cp "$RUNNER_TEMP/mutation-manifest/mutation-manifest.json" \
+            "$report_root/mutation-manifest.json"
+          python3 scripts/mutation.py materialize-source \
+            --repo-root "$GITHUB_WORKSPACE" \
+            --revision "$GITHUB_SHA" \
+            --source-root "$source_root" \
+            2>&1 | tee -a "$diagnostic"
+          python3 "$source_root/scripts/mutation.py" aggregate \
+            --manifest "$RUNNER_TEMP/mutation-manifest/mutation-manifest.json" \
+            --repo-root "$GITHUB_WORKSPACE" \
+            --source-root "$source_root" \
+            --config "$source_root/.cargo/mutants.toml" \
+            --shards-root "$RUNNER_TEMP/mutation-shards" \
+            --observed-revision "$GITHUB_SHA" \
+            --output "$report_root/mutation-aggregate.json" \
+            2>&1 | tee -a "$diagnostic"
+      - name: upload report-only aggregate
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: mutation-report
+          path: ${{ runner.temp }}/mutation-report
+          if-no-files-found: error
+          retention-days: 30

@@ -1,3 +1,4 @@
+#![allow(dead_code)] // V1 selection-release API staged; revision field reserved for future cache invalidation.
 //! The sole authored selection release over the hard-feasible set (V5c-1).
 //!
 //! One versioned [`SelectionReleaseV1`] is the only authored selection input:
