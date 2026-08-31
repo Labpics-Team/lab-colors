@@ -1,3 +1,4 @@
+#![allow(dead_code)] // V1 restorative-auto substrate staged for R-07 enforcement wiring.
 //! R-07 (R3s) Scoped Restorative Auto — type foundation (PR-A) + enforcement wiring (PR-B).
 //!
 //! This module defines the *declared-restorative* substrate types that

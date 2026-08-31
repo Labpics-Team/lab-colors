@@ -1,3 +1,4 @@
+#![allow(dead_code)] // V1 corridor API staged for future field-presentation consumers.
 //! Точная corridor-композиция: выведенная плотность полупрозрачного слоя над
 //! осепараллельным коробом достижимых подложек.
 //!
