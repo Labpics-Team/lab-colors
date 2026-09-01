@@ -16,5 +16,10 @@ pub(crate) mod metadata;
 )]
 pub(crate) mod lpc_channel;
 
-#[allow(dead_code)]
+/// Staged for F-03 PR2–PR4 external profile admission. Types are complete and
+/// tested; the registry wiring into live evaluation paths is deferred.
+#[allow(
+    dead_code,
+    reason = "F-03 PR1 admission types are staged; consumers arrive in PR2-4"
+)]
 pub(crate) mod admission;

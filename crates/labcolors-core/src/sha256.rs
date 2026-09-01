@@ -16,7 +16,10 @@ impl Digest {
 
     /// Каноническая hexadecimal-запись в нижнем регистре.
     #[cfg(test)]
-    #[allow(dead_code)]
+    #[allow(
+        dead_code,
+        reason = "Test-only hex formatting; consumed by cross-crate test harnesses (sha256.rs, pack_v10_contract.rs)"
+    )]
     pub(crate) fn to_hex(self) -> String {
         const HEX: &[u8; 16] = b"0123456789abcdef";
         let mut out = String::with_capacity(64);
