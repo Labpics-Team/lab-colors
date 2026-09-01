@@ -5,10 +5,22 @@ Produces a finite manifest of resource dimension constants and cardinality
 bounds in production Rust source files. Extracts pub const declarations
 that define domain sizes, scale factors, iteration limits, and capacity bounds.
 
+RESOURCE_CONST_PATTERN is intentionally restricted to public Rust constants
+with uppercase identifiers, a simple type annotation, and a semicolon-terminated
+value expression. This invariant keeps manifest generation deterministic across
+filesystem enumeration orders and platforms. Intentionally excluded forms:
+non-public constants (pub(crate), pub(super)), lowercase or mixed-case names,
+complex expressions spanning multiple lines, function-like macros, and any
+declaration without an explicit semicolon terminator. These exclusions are by
+design — the manifest captures only stable, machine-verifiable resource bounds,
+not arbitrary constant definitions.
+
 Sabotage controls:
 - Fails if no crate source roots exist.
 - Fails if manifest_sha256 does not match recomputed canonical hash.
 - Fails if entry_count != actual entries.
+- Fails if any entry path escapes configured SRC_ROOTS.
+- Fails if any entry's source file content has drifted since extraction.
 
 Exit evidence: JSON manifest on stdout with schema:
 {
@@ -31,7 +43,8 @@ SRC_ROOTS = [
     REPO_ROOT / "crates" / "labcolors-conformance" / "src",
 ]
 
-# Matches pub const declarations with numeric or expression values
+# Matches pub const declarations with uppercase names, simple type, and
+# semicolon-terminated value. See module docstring for exclusion rationale.
 RESOURCE_CONST_PATTERN = re.compile(
     r'^\s*pub\s+const\s+([A-Z_][A-Z0-9_]*)\s*:\s*\w+\s*=\s*(.+?)\s*;',
     re.MULTILINE,
@@ -44,6 +57,15 @@ def sha256_file(path: Path) -> str:
         for chunk in iter(lambda: f.read(65536), b""):
             h.update(chunk)
     return h.hexdigest()
+
+
+def _is_within_src_roots(path: Path) -> bool:
+    """Check that path is under one of the configured SRC_ROOTS."""
+    try:
+        resolved = path.resolve()
+        return any(resolved.is_relative_to(root.resolve()) for root in SRC_ROOTS if root.exists())
+    except (OSError, ValueError):
+        return False
 
 
 def extract_entries() -> list[dict]:
@@ -93,17 +115,31 @@ def build_manifest(entries: list[dict]) -> dict:
 
 
 def verify_manifest(manifest: dict) -> None:
-    """Sabotage: verify manifest self-consistency."""
+    """Sabotage: verify manifest self-consistency, scope, and content integrity."""
     errors = []
+
+    # Schema validation
+    if not isinstance(manifest, dict):
+        print("SABOTAGE: manifest is not a JSON object", file=sys.stderr)
+        sys.exit(1)
+
     for field in ("class", "schema_version", "entry_count", "entries", "manifest_sha256"):
         if field not in manifest:
             errors.append(f"MISSING_FIELD: {field}")
+
+    if not isinstance(manifest.get("entries"), list):
+        errors.append("INVALID_TYPE: entries must be a list")
+
+    if not isinstance(manifest.get("entry_count"), int):
+        errors.append("INVALID_TYPE: entry_count must be an integer")
+
     if errors:
         print("SABOTAGE FAILURES:", file=sys.stderr)
         for e in errors:
             print(f"  - {e}", file=sys.stderr)
         sys.exit(1)
 
+    # Self-hash check
     payload = {k: v for k, v in manifest.items() if k != "manifest_sha256"}
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
     recomputed = hashlib.sha256(canonical).hexdigest()
@@ -111,16 +147,42 @@ def verify_manifest(manifest: dict) -> None:
         print("SABOTAGE: manifest_sha256 mismatch", file=sys.stderr)
         sys.exit(1)
 
+    # Count consistency
     if len(manifest["entries"]) != manifest["entry_count"]:
         print("SABOTAGE: entry_count mismatch", file=sys.stderr)
         sys.exit(1)
 
+    # Per-entry validation: scope, existence, and content integrity
     seen_files = set()
     for entry in manifest["entries"]:
-        fpath = REPO_ROOT / entry["path"]
-        seen_files.add(entry["path"])
+        if not isinstance(entry, dict):
+            errors.append(f"INVALID_TYPE: entry is not a dict")
+            continue
+
+        for field in ("path", "line", "name", "value", "source_sha256"):
+            if field not in entry:
+                errors.append(f"MISSING_ENTRY_FIELD: {field} in {entry.get('path', '<unknown>')}")
+
+        fpath = REPO_ROOT / entry.get("path", "")
+        seen_files.add(entry.get("path", ""))
+
+        # Scope check: path must be within SRC_ROOTS
+        if not _is_within_src_roots(fpath):
+            errors.append(f"SCOPE_VIOLATION: {entry['path']} outside configured SRC_ROOTS")
+            continue
+
         if not fpath.is_file():
             errors.append(f"SOURCE_MISSING: {entry['path']}")
+            continue
+
+        # Content integrity: SHA256 must match current file content
+        actual_hash = sha256_file(fpath)
+        if actual_hash != entry["source_sha256"]:
+            errors.append(
+                f"CONTENT_DRIFT: {entry['path']} expected={entry['source_sha256'][:16]}… "
+                f"actual={actual_hash[:16]}…"
+            )
+
     if errors:
         print("SABOTAGE FAILURES:", file=sys.stderr)
         for e in errors:
@@ -135,8 +197,19 @@ def main() -> None:
         manifest = build_manifest(entries)
         print(json.dumps(manifest, sort_keys=True, indent=2))
     elif mode == "verify":
-        raw = sys.stdin.buffer.read().decode("utf-8-sig")
-        manifest = json.loads(raw)
+        try:
+            raw = sys.stdin.buffer.read().decode("utf-8-sig")
+        except UnicodeDecodeError as exc:
+            print(f"SABOTAGE: invalid UTF-8 input: {exc}", file=sys.stderr)
+            sys.exit(65)
+        try:
+            manifest = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            print(f"SABOTAGE: malformed JSON input: {exc}", file=sys.stderr)
+            sys.exit(66)
+        if not isinstance(manifest, dict):
+            print("SABOTAGE: JSON root is not an object", file=sys.stderr)
+            sys.exit(67)
         verify_manifest(manifest)
         print(f"EXT-07 VERIFY OK: {manifest['entry_count']} entries", file=sys.stderr)
     else:

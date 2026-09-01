@@ -5,7 +5,9 @@ Verifies that the resource dimensions extractor:
 1. Produces a valid manifest with correct schema.
 2. Fails when manifest_sha256 is tampered (integrity sabotage).
 3. Fails when entry_count mismatches actual entries (consistency sabotage).
-4. Passes on the current production tree (GREEN proof).
+4. Fails when source file content drifts after extraction (content integrity).
+5. Fails on malformed JSON input (typed error, not traceback).
+6. Passes on the current production tree (GREEN proof).
 """
 import hashlib
 import json
@@ -78,6 +80,30 @@ class EXT07ResourcesTests(unittest.TestCase):
         verify = run_extractor("verify", stdin_data=tampered)
         self.assertNotEqual(verify.returncode, 0, "verify should fail on count mismatch")
         self.assertIn(b"entry_count mismatch", verify.stderr)
+
+    def test_sabotage_content_drift_detected(self):
+        """RED: verify fails when source file content changes after extraction."""
+        extract = run_extractor("extract")
+        manifest = json.loads(extract.stdout)
+        # Pick first entry and modify its source file
+        victim = manifest["entries"][0]
+        victim_path = REPO_ROOT / victim["path"]
+        backup = victim_path.read_bytes()
+        try:
+            victim_path.write_bytes(b"SABOTAGE_DRIFT_TEST_CONTENT\n")
+            verify = run_extractor("verify", stdin_data=extract.stdout)
+            self.assertNotEqual(verify.returncode, 0, "verify should fail on content drift")
+            self.assertIn(b"CONTENT_DRIFT", verify.stderr)
+        finally:
+            victim_path.write_bytes(backup)
+
+    def test_sabotage_malformed_json_exits_typed_error(self):
+        """RED: verify exits with typed error code on malformed JSON, not traceback."""
+        verify = run_extractor("verify", stdin_data=b"{invalid json")
+        self.assertNotEqual(verify.returncode, 0)
+        self.assertIn(verify.returncode, (65, 66, 67))
+        self.assertIn(b"SABOTAGE", verify.stderr)
+        self.assertNotIn(b"Traceback", verify.stderr)
 
     def test_manifest_sha256_self_consistent(self):
         """GREEN: manifest_sha256 matches recomputed canonical hash."""
