@@ -1,10 +1,10 @@
-name: CI worker
+﻿name: CI worker
 
-# Неизменяемый worker для эфемерных GitHub-hosted раннеров (репо публичное).
-# Caller (ci.yml) закрепляет этот файл полным commit SHA: caller выбирает
-# revision для checkout, но не может изменить ни job graph, ни пины экшенов.
-# Своих inputs у worker нет by design — input стал бы каналом от недоверенного
-# caller к закреплённому определению.
+# РќРµРёР·РјРµРЅСЏРµРјС‹Р№ worker РґР»СЏ СЌС„РµРјРµСЂРЅС‹С… GitHub-hosted СЂР°РЅРЅРµСЂРѕРІ (СЂРµРїРѕ РїСѓР±Р»РёС‡РЅРѕРµ).
+# Caller (ci.yml) Р·Р°РєСЂРµРїР»СЏРµС‚ СЌС‚РѕС‚ С„Р°Р№Р» РїРѕР»РЅС‹Рј commit SHA: caller РІС‹Р±РёСЂР°РµС‚
+# revision РґР»СЏ checkout, РЅРѕ РЅРµ РјРѕР¶РµС‚ РёР·РјРµРЅРёС‚СЊ РЅРё job graph, РЅРё РїРёРЅС‹ СЌРєС€РµРЅРѕРІ.
+# РЎРІРѕРёС… inputs Сѓ worker РЅРµС‚ by design вЂ” input СЃС‚Р°Р» Р±С‹ РєР°РЅР°Р»РѕРј РѕС‚ РЅРµРґРѕРІРµСЂРµРЅРЅРѕРіРѕ
+# caller Рє Р·Р°РєСЂРµРїР»С‘РЅРЅРѕРјСѓ РѕРїСЂРµРґРµР»РµРЅРёСЋ.
 
 on:
   workflow_call:
@@ -17,22 +17,22 @@ env:
   CARGO_TERM_COLOR: always
   # Deterministic toolchain. Bump in lockstep with the team's supported Rust.
   # To update: pick the new stable from https://forge.rust-lang.org/ and change
-  # this single value — every job below consumes it via the `toolchain` input.
+  # this single value вЂ” every job below consumes it via the `toolchain` input.
   RUST_TOOLCHAIN: 1.96.0
   # Public minimum, tested independently from the development toolchain.
   MSRV_TOOLCHAIN: 1.85.0
   # Pins npm 11.9.0 as part of the official Node distribution. npm tar format
   # is release input, so a floating runner-provided npm is not reproducible.
   NODE_TOOLCHAIN: 24.14.0
-  # Минимальный consumer runtime проверяется отдельно от release packer.
-  # Node 22 остаётся поддерживаемой upstream LTS-веткой.
+  # РњРёРЅРёРјР°Р»СЊРЅС‹Р№ consumer runtime РїСЂРѕРІРµСЂСЏРµС‚СЃСЏ РѕС‚РґРµР»СЊРЅРѕ РѕС‚ release packer.
+  # Node 22 РѕСЃС‚Р°С‘С‚СЃСЏ РїРѕРґРґРµСЂР¶РёРІР°РµРјРѕР№ upstream LTS-РІРµС‚РєРѕР№.
   NODE_CONSUMER_FLOOR: 22.11.0
   # Offline proof codecs are executable release tooling too. The image is pinned
   # to the linux/amd64 manifest because setup-python does not publish Debian 13
-  # builds and образ ячейки не должен задавать семантику интерпретатора.
-  # Декларированный минимум интерпретатора для proof-кода — Python 3.11:
-  # stdlib-only пакеты используют StrEnum и datetime.UTC; пин образа ниже
-  # обязан оставаться не ниже этого флора.
+  # builds and РѕР±СЂР°Р· СЏС‡РµР№РєРё РЅРµ РґРѕР»Р¶РµРЅ Р·Р°РґР°РІР°С‚СЊ СЃРµРјР°РЅС‚РёРєСѓ РёРЅС‚РµСЂРїСЂРµС‚Р°С‚РѕСЂР°.
+  # Р”РµРєР»Р°СЂРёСЂРѕРІР°РЅРЅС‹Р№ РјРёРЅРёРјСѓРј РёРЅС‚РµСЂРїСЂРµС‚Р°С‚РѕСЂР° РґР»СЏ proof-РєРѕРґР° вЂ” Python 3.11:
+  # stdlib-only РїР°РєРµС‚С‹ РёСЃРїРѕР»СЊР·СѓСЋС‚ StrEnum Рё datetime.UTC; РїРёРЅ РѕР±СЂР°Р·Р° РЅРёР¶Рµ
+  # РѕР±СЏР·Р°РЅ РѕСЃС‚Р°РІР°С‚СЊСЃСЏ РЅРµ РЅРёР¶Рµ СЌС‚РѕРіРѕ С„Р»РѕСЂР°.
   PYTHON_PROOF_IMAGE: python:3.14.6-slim@sha256:d4fea6e20c09820028eea3f5c17f5b8ebd2ecb9c2bf28e561681a74a96090e4f
   # Browser parity is release evidence too: pin both CfT archives byte-for-byte.
   CHROME_FOR_TESTING_VERSION: 150.0.7871.115
@@ -40,11 +40,11 @@ env:
   CHROMEDRIVER_FOR_TESTING_SHA256: 6ac3919edd107ca13d08cccc118dc83821877e504014233f171bbd94cb01a80e
 
 jobs:
-  # Единый envelope: при переходе с DE-02 на GitHub-hosted раннеры старый
-  # 25-минутный конверт (двойной худший successful job из 20 main-прогонов)
-  # поднят до 40 минут — history-replay на новом железе ещё невозможен, запас
-  # берётся сверху. Перекалибровать по фактическим main-прогонам, а не под один
-  # медленный прогон.
+  # Р•РґРёРЅС‹Р№ envelope: РїСЂРё РїРµСЂРµС…РѕРґРµ СЃ DE-02 РЅР° GitHub-hosted СЂР°РЅРЅРµСЂС‹ СЃС‚Р°СЂС‹Р№
+  # 25-РјРёРЅСѓС‚РЅС‹Р№ РєРѕРЅРІРµСЂС‚ (РґРІРѕР№РЅРѕР№ С…СѓРґС€РёР№ successful job РёР· 20 main-РїСЂРѕРіРѕРЅРѕРІ)
+  # РїРѕРґРЅСЏС‚ РґРѕ 40 РјРёРЅСѓС‚ вЂ” history-replay РЅР° РЅРѕРІРѕРј Р¶РµР»РµР·Рµ РµС‰С‘ РЅРµРІРѕР·РјРѕР¶РµРЅ, Р·Р°РїР°СЃ
+  # Р±РµСЂС‘С‚СЃСЏ СЃРІРµСЂС…Сѓ. РџРµСЂРµРєР°Р»РёР±СЂРѕРІР°С‚СЊ РїРѕ С„Р°РєС‚РёС‡РµСЃРєРёРј main-РїСЂРѕРіРѕРЅР°Рј, Р° РЅРµ РїРѕРґ РѕРґРёРЅ
+  # РјРµРґР»РµРЅРЅС‹Р№ РїСЂРѕРіРѕРЅ.
   node-consumer-floor:
     name: Node 22 consumer floor
     runs-on: ubuntu-latest
@@ -56,9 +56,9 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          # Одноразовый слот: GitHub-кэш не нужен. У setup-node вход `cache` — это
-          # перечисление пакетных менеджеров, поэтому кэш выключается ОТСУТСТВИЕМ
-          # `cache` плюс явным гашением автокэша npm (`cache: false` там падает).
+          # РћРґРЅРѕСЂР°Р·РѕРІС‹Р№ СЃР»РѕС‚: GitHub-РєСЌС€ РЅРµ РЅСѓР¶РµРЅ. РЈ setup-node РІС…РѕРґ `cache` вЂ” СЌС‚Рѕ
+          # РїРµСЂРµС‡РёСЃР»РµРЅРёРµ РїР°РєРµС‚РЅС‹С… РјРµРЅРµРґР¶РµСЂРѕРІ, РїРѕСЌС‚РѕРјСѓ РєСЌС€ РІС‹РєР»СЋС‡Р°РµС‚СЃСЏ РћРўРЎРЈРўРЎРўР’РР•Рњ
+          # `cache` РїР»СЋСЃ СЏРІРЅС‹Рј РіР°С€РµРЅРёРµРј Р°РІС‚РѕРєСЌС€Р° npm (`cache: false` С‚Р°Рј РїР°РґР°РµС‚).
           package-manager-cache: false
           node-version: ${{ env.NODE_CONSUMER_FLOOR }}
       - name: download exact artifact built by the canonical WASM job
@@ -108,30 +108,30 @@ jobs:
     name: clippy + rustfmt
     runs-on: ubuntu-latest
     timeout-minutes: 40
-    # Isolate RUSTUP_HOME/CARGO_HOME per job under runner.temp. Эфемерная VM
-    # одноразовая, поэтому прежний класс гонок за общий $HOME закрыт по
-    # построению; изоляция оставлена инвариантом и стоит ноль. На DE-02 /tmp
-    # был 8ГБ tmpfs и per-run toolchain'ы (~600 МБ каждый) выедали его за ~12
-    # job'ов (ENOSPC-каскад, 2026-07-03) — rustup/cargo остаются в runner.temp.
+    # Isolate RUSTUP_HOME/CARGO_HOME per job under runner.temp. Р­С„РµРјРµСЂРЅР°СЏ VM
+    # РѕРґРЅРѕСЂР°Р·РѕРІР°СЏ, РїРѕСЌС‚РѕРјСѓ РїСЂРµР¶РЅРёР№ РєР»Р°СЃСЃ РіРѕРЅРѕРє Р·Р° РѕР±С‰РёР№ $HOME Р·Р°РєСЂС‹С‚ РїРѕ
+    # РїРѕСЃС‚СЂРѕРµРЅРёСЋ; РёР·РѕР»СЏС†РёСЏ РѕСЃС‚Р°РІР»РµРЅР° РёРЅРІР°СЂРёР°РЅС‚РѕРј Рё СЃС‚РѕРёС‚ РЅРѕР»СЊ. РќР° DE-02 /tmp
+    # Р±С‹Р» 8Р“Р‘ tmpfs Рё per-run toolchain'С‹ (~600 РњР‘ РєР°Р¶РґС‹Р№) РІС‹РµРґР°Р»Рё РµРіРѕ Р·Р° ~12
+    # job'РѕРІ (ENOSPC-РєР°СЃРєР°Рґ, 2026-07-03) вЂ” rustup/cargo РѕСЃС‚Р°СЋС‚СЃСЏ РІ runner.temp.
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      # dtolnay/rust-toolchain has no semver tags — pinned by commit SHA.
+      # dtolnay/rust-toolchain has no semver tags вЂ” pinned by commit SHA.
       # The toolchain VERSION is pinned via the explicit input below, not @stable,
       # so a new stable release cannot silently change CI behavior.
       - name: toolchain env (runner.temp)
-        # runner-контекст недоступен в job-level env — только в шагах; поэтому
-        # RUSTUP_HOME/CARGO_HOME назначаются здесь через GITHUB_ENV. Смысл тот
-        # же: изоляция per job под runner.temp, который раннер вайпит между
-        # джобами (класс утечки /tmp закрыт, см. историю #143).
+        # runner-РєРѕРЅС‚РµРєСЃС‚ РЅРµРґРѕСЃС‚СѓРїРµРЅ РІ job-level env вЂ” С‚РѕР»СЊРєРѕ РІ С€Р°РіР°С…; РїРѕСЌС‚РѕРјСѓ
+        # RUSTUP_HOME/CARGO_HOME РЅР°Р·РЅР°С‡Р°СЋС‚СЃСЏ Р·РґРµСЃСЊ С‡РµСЂРµР· GITHUB_ENV. РЎРјС‹СЃР» С‚РѕС‚
+        # Р¶Рµ: РёР·РѕР»СЏС†РёСЏ per job РїРѕРґ runner.temp, РєРѕС‚РѕСЂС‹Р№ СЂР°РЅРЅРµСЂ РІР°Р№РїРёС‚ РјРµР¶РґСѓ
+        # РґР¶РѕР±Р°РјРё (РєР»Р°СЃСЃ СѓС‚РµС‡РєРё /tmp Р·Р°РєСЂС‹С‚, СЃРј. РёСЃС‚РѕСЂРёСЋ #143).
         run: |
           {
             echo "RUSTUP_HOME=$RUNNER_TEMP/rustup-$GITHUB_JOB"
             echo "CARGO_HOME=$RUNNER_TEMP/cargo-$GITHUB_JOB"
-            # TMPDIR тоже изолирован под runner.temp: /tmp на de-02 — 8ГБ tmpfs;
-            # при исчерпании места (4КБ свободно) все
-            # джобы умирали «abnormal exit»/cc без stderr, 2026-07-03 18:34Z.
+            # TMPDIR С‚РѕР¶Рµ РёР·РѕР»РёСЂРѕРІР°РЅ РїРѕРґ runner.temp: /tmp РЅР° de-02 вЂ” 8Р“Р‘ tmpfs;
+            # РїСЂРё РёСЃС‡РµСЂРїР°РЅРёРё РјРµСЃС‚Р° (4РљР‘ СЃРІРѕР±РѕРґРЅРѕ) РІСЃРµ
+            # РґР¶РѕР±С‹ СѓРјРёСЂР°Р»Рё В«abnormal exitВ»/cc Р±РµР· stderr, 2026-07-03 18:34Z.
             echo "TMPDIR=$RUNNER_TEMP/tmp-$GITHUB_JOB"
           } >> "$GITHUB_ENV"
           mkdir -p "$RUNNER_TEMP/tmp-$GITHUB_JOB"
@@ -154,17 +154,17 @@ jobs:
         with:
           persist-credentials: false
       - name: toolchain env (runner.temp)
-        # runner-контекст недоступен в job-level env — только в шагах; поэтому
-        # RUSTUP_HOME/CARGO_HOME назначаются здесь через GITHUB_ENV. Смысл тот
-        # же: изоляция per job под runner.temp, который раннер вайпит между
-        # джобами (класс утечки /tmp закрыт, см. историю #143).
+        # runner-РєРѕРЅС‚РµРєСЃС‚ РЅРµРґРѕСЃС‚СѓРїРµРЅ РІ job-level env вЂ” С‚РѕР»СЊРєРѕ РІ С€Р°РіР°С…; РїРѕСЌС‚РѕРјСѓ
+        # RUSTUP_HOME/CARGO_HOME РЅР°Р·РЅР°С‡Р°СЋС‚СЃСЏ Р·РґРµСЃСЊ С‡РµСЂРµР· GITHUB_ENV. РЎРјС‹СЃР» С‚РѕС‚
+        # Р¶Рµ: РёР·РѕР»СЏС†РёСЏ per job РїРѕРґ runner.temp, РєРѕС‚РѕСЂС‹Р№ СЂР°РЅРЅРµСЂ РІР°Р№РїРёС‚ РјРµР¶РґСѓ
+        # РґР¶РѕР±Р°РјРё (РєР»Р°СЃСЃ СѓС‚РµС‡РєРё /tmp Р·Р°РєСЂС‹С‚, СЃРј. РёСЃС‚РѕСЂРёСЋ #143).
         run: |
           {
             echo "RUSTUP_HOME=$RUNNER_TEMP/rustup-$GITHUB_JOB"
             echo "CARGO_HOME=$RUNNER_TEMP/cargo-$GITHUB_JOB"
-            # TMPDIR тоже изолирован под runner.temp: /tmp на de-02 — 8ГБ tmpfs;
-            # при исчерпании места (4КБ свободно) все
-            # джобы умирали «abnormal exit»/cc без stderr, 2026-07-03 18:34Z.
+            # TMPDIR С‚РѕР¶Рµ РёР·РѕР»РёСЂРѕРІР°РЅ РїРѕРґ runner.temp: /tmp РЅР° de-02 вЂ” 8Р“Р‘ tmpfs;
+            # РїСЂРё РёСЃС‡РµСЂРїР°РЅРёРё РјРµСЃС‚Р° (4РљР‘ СЃРІРѕР±РѕРґРЅРѕ) РІСЃРµ
+            # РґР¶РѕР±С‹ СѓРјРёСЂР°Р»Рё В«abnormal exitВ»/cc Р±РµР· stderr, 2026-07-03 18:34Z.
             echo "TMPDIR=$RUNNER_TEMP/tmp-$GITHUB_JOB"
           } >> "$GITHUB_ENV"
           mkdir -p "$RUNNER_TEMP/tmp-$GITHUB_JOB"
@@ -176,10 +176,10 @@ jobs:
         # Intra-doc links are a hard gate: a broken [`link`] in any doc comment
         # (link to a private/renamed/removed item, or bare brackets rustdoc reads
         # as a link) fails the build. RUSTDOCFLAGS="-D warnings" promotes every
-        # rustdoc warning — including broken_intra_doc_links — to an error;
+        # rustdoc warning вЂ” including broken_intra_doc_links вЂ” to an error;
         # --no-deps keeps the gate on our own crates only. This stops a stale doc
         # reference from merging silently (main was green with ~81 broken links
-        # because cargo doc was never gated — #26).
+        # because cargo doc was never gated вЂ” #26).
         run: RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --locked
       - name: staged Program is absent from the resolved public API
         run: |
@@ -240,14 +240,14 @@ jobs:
               python -m unittest discover -s proof/region/v1/tests -p "test_*.py" -v
               PYTHONOPTIMIZE=2 python -m unittest discover -s proof/region/v1/tests -p "test_*.py" -v
               # Both fast gates carry their own expected inventory, and until
-              # now nothing ran them before a merge: `arb.yml` is privileged —
-              # sudo, Docker, a delegated cgroup — so it refuses a
+              # now nothing ran them before a merge: `arb.yml` is privileged вЂ”
+              # sudo, Docker, a delegated cgroup вЂ” so it refuses a
               # `pull_request` trigger by contract, and a wrong
               # EXPECTED_TEST_INVENTORY_SHA256 went green on the pull request
               # and broke `main` on push.  The discovery above cannot stand in
               # for them: `tests/test_build.py` deliberately does not read the
               # gate constants, and that independence is the point.  They need
-              # no build — the exact skip manifest is what makes them fast.
+              # no build вЂ” the exact skip manifest is what makes them fast.
               python proof/region/v1/arb/tests/gate.py
               PYTHONOPTIMIZE=2 python proof/region/v1/arb/tests/gate.py
               python proof/region/v1/mpfi/tests/gate.py
@@ -255,17 +255,17 @@ jobs:
               python proof/region/v1/controller.py verify-fixtures --repo-root /workspace
             '
       - name: toolchain env (runner.temp)
-        # runner-контекст недоступен в job-level env — только в шагах; поэтому
-        # RUSTUP_HOME/CARGO_HOME назначаются здесь через GITHUB_ENV. Смысл тот
-        # же: изоляция per job под runner.temp, который раннер вайпит между
-        # джобами (класс утечки /tmp закрыт, см. историю #143).
+        # runner-РєРѕРЅС‚РµРєСЃС‚ РЅРµРґРѕСЃС‚СѓРїРµРЅ РІ job-level env вЂ” С‚РѕР»СЊРєРѕ РІ С€Р°РіР°С…; РїРѕСЌС‚РѕРјСѓ
+        # RUSTUP_HOME/CARGO_HOME РЅР°Р·РЅР°С‡Р°СЋС‚СЃСЏ Р·РґРµСЃСЊ С‡РµСЂРµР· GITHUB_ENV. РЎРјС‹СЃР» С‚РѕС‚
+        # Р¶Рµ: РёР·РѕР»СЏС†РёСЏ per job РїРѕРґ runner.temp, РєРѕС‚РѕСЂС‹Р№ СЂР°РЅРЅРµСЂ РІР°Р№РїРёС‚ РјРµР¶РґСѓ
+        # РґР¶РѕР±Р°РјРё (РєР»Р°СЃСЃ СѓС‚РµС‡РєРё /tmp Р·Р°РєСЂС‹С‚, СЃРј. РёСЃС‚РѕСЂРёСЋ #143).
         run: |
           {
             echo "RUSTUP_HOME=$RUNNER_TEMP/rustup-$GITHUB_JOB"
             echo "CARGO_HOME=$RUNNER_TEMP/cargo-$GITHUB_JOB"
-            # TMPDIR тоже изолирован под runner.temp: /tmp на de-02 — 8ГБ tmpfs;
-            # при исчерпании места (4КБ свободно) все
-            # джобы умирали «abnormal exit»/cc без stderr, 2026-07-03 18:34Z.
+            # TMPDIR С‚РѕР¶Рµ РёР·РѕР»РёСЂРѕРІР°РЅ РїРѕРґ runner.temp: /tmp РЅР° de-02 вЂ” 8Р“Р‘ tmpfs;
+            # РїСЂРё РёСЃС‡РµСЂРїР°РЅРёРё РјРµСЃС‚Р° (4РљР‘ СЃРІРѕР±РѕРґРЅРѕ) РІСЃРµ
+            # РґР¶РѕР±С‹ СѓРјРёСЂР°Р»Рё В«abnormal exitВ»/cc Р±РµР· stderr, 2026-07-03 18:34Z.
             echo "TMPDIR=$RUNNER_TEMP/tmp-$GITHUB_JOB"
           } >> "$GITHUB_ENV"
           mkdir -p "$RUNNER_TEMP/tmp-$GITHUB_JOB"
@@ -343,8 +343,8 @@ jobs:
           if runtime_dependencies:
               names = sorted(dependency["name"] for dependency in runtime_dependencies)
               raise SystemExit(f"labcolors-core must have zero runtime dependencies: {names}")
-          # Оффлайн protocol/compiler линия вырезана целиком: анти-воскрешение —
-          # самих крейтов больше не существует в воркспейсе.
+          # РћС„С„Р»Р°Р№РЅ protocol/compiler Р»РёРЅРёСЏ РІС‹СЂРµР·Р°РЅР° С†РµР»РёРєРѕРј: Р°РЅС‚Рё-РІРѕСЃРєСЂРµС€РµРЅРёРµ вЂ”
+          # СЃР°РјРёС… РєСЂРµР№С‚РѕРІ Р±РѕР»СЊС€Рµ РЅРµ СЃСѓС‰РµСЃС‚РІСѓРµС‚ РІ РІРѕСЂРєСЃРїРµР№СЃРµ.
           for erased in ("labcolors-protocol", "labcolors-compiler"):
               if erased in packages:
                   raise SystemExit(f"deleted crate resurfaced in the workspace: {erased}")
@@ -369,8 +369,8 @@ jobs:
                   ["cargo", "tree", "-p", consumer, "--edges", "normal", "-e", "features"],
                   text=True,
               )
-              # Вырезанные вертикали: сами фичи больше не существуют,
-              # потребительские деревья обязаны быть чисты.
+              # Р’С‹СЂРµР·Р°РЅРЅС‹Рµ РІРµСЂС‚РёРєР°Р»Рё: СЃР°РјРё С„РёС‡Рё Р±РѕР»СЊС€Рµ РЅРµ СЃСѓС‰РµСЃС‚РІСѓСЋС‚,
+              # РїРѕС‚СЂРµР±РёС‚РµР»СЊСЃРєРёРµ РґРµСЂРµРІСЊСЏ РѕР±СЏР·Р°РЅС‹ Р±С‹С‚СЊ С‡РёСЃС‚С‹.
               for forbidden in ("wcag22-feasibility", "wcag22-explicit", "labcolors-protocol"):
                   if forbidden in feature_tree:
                       raise SystemExit(f"{consumer} resolved a deleted capability: {forbidden}")
@@ -403,6 +403,21 @@ jobs:
         run: python3 scripts/test_point_support_surplus_source_binding.py
       - name: prove point-support retained reference surplus over Q55 bounds
         run: python3 scripts/verify_point_support_surplus.py
+      # EXT artifact class extractors — r6 AUD-01 extension sabotage gates
+      - name: verify EXT-01 source files manifest
+        run: python3 scripts/extract_source_files.py extract | python3 scripts/extract_source_files.py verify
+      - name: verify EXT-02 public API manifest
+        run: python3 scripts/extract_public_api.py extract | python3 scripts/extract_public_api.py verify
+      - name: verify EXT-03 exports metadata manifest
+        run: python3 scripts/extract_exports_metadata.py extract | python3 scripts/extract_exports_metadata.py verify
+      - name: verify EXT-04 operations manifest
+        run: python3 scripts/extract_operations.py extract | python3 scripts/extract_operations.py verify
+      - name: verify EXT-06 claims manifest
+        run: python3 scripts/extract_claims.py extract | python3 scripts/extract_claims.py verify
+      - name: verify EXT-08 decisions manifest
+        run: python3 scripts/extract_decisions.py extract | python3 scripts/extract_decisions.py verify
+      - name: verify EXT-09 CI/build manifest
+        run: python3 scripts/extract_ci_build.py extract | python3 scripts/extract_ci_build.py verify
 
   audit:
     name: cargo audit (rustsec)
@@ -413,17 +428,17 @@ jobs:
         with:
           persist-credentials: false
       - name: toolchain env (runner.temp)
-        # runner-контекст недоступен в job-level env — только в шагах; поэтому
-        # RUSTUP_HOME/CARGO_HOME назначаются здесь через GITHUB_ENV. Смысл тот
-        # же: изоляция per job под runner.temp, который раннер вайпит между
-        # джобами (класс утечки /tmp закрыт, см. историю #143).
+        # runner-РєРѕРЅС‚РµРєСЃС‚ РЅРµРґРѕСЃС‚СѓРїРµРЅ РІ job-level env вЂ” С‚РѕР»СЊРєРѕ РІ С€Р°РіР°С…; РїРѕСЌС‚РѕРјСѓ
+        # RUSTUP_HOME/CARGO_HOME РЅР°Р·РЅР°С‡Р°СЋС‚СЃСЏ Р·РґРµСЃСЊ С‡РµСЂРµР· GITHUB_ENV. РЎРјС‹СЃР» С‚РѕС‚
+        # Р¶Рµ: РёР·РѕР»СЏС†РёСЏ per job РїРѕРґ runner.temp, РєРѕС‚РѕСЂС‹Р№ СЂР°РЅРЅРµСЂ РІР°Р№РїРёС‚ РјРµР¶РґСѓ
+        # РґР¶РѕР±Р°РјРё (РєР»Р°СЃСЃ СѓС‚РµС‡РєРё /tmp Р·Р°РєСЂС‹С‚, СЃРј. РёСЃС‚РѕСЂРёСЋ #143).
         run: |
           {
             echo "RUSTUP_HOME=$RUNNER_TEMP/rustup-$GITHUB_JOB"
             echo "CARGO_HOME=$RUNNER_TEMP/cargo-$GITHUB_JOB"
-            # TMPDIR тоже изолирован под runner.temp: /tmp на de-02 — 8ГБ tmpfs;
-            # при исчерпании места (4КБ свободно) все
-            # джобы умирали «abnormal exit»/cc без stderr, 2026-07-03 18:34Z.
+            # TMPDIR С‚РѕР¶Рµ РёР·РѕР»РёСЂРѕРІР°РЅ РїРѕРґ runner.temp: /tmp РЅР° de-02 вЂ” 8Р“Р‘ tmpfs;
+            # РїСЂРё РёСЃС‡РµСЂРїР°РЅРёРё РјРµСЃС‚Р° (4РљР‘ СЃРІРѕР±РѕРґРЅРѕ) РІСЃРµ
+            # РґР¶РѕР±С‹ СѓРјРёСЂР°Р»Рё В«abnormal exitВ»/cc Р±РµР· stderr, 2026-07-03 18:34Z.
             echo "TMPDIR=$RUNNER_TEMP/tmp-$GITHUB_JOB"
           } >> "$GITHUB_ENV"
           mkdir -p "$RUNNER_TEMP/tmp-$GITHUB_JOB"
@@ -433,9 +448,9 @@ jobs:
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
       - name: install cargo-audit
         # Version pinned for reproducibility; --locked respects the tool's own lockfile.
-        # Must be >=0.22 — older versions cannot parse RUSTSEC entries that use
+        # Must be >=0.22 вЂ” older versions cannot parse RUSTSEC entries that use
         # CVSS v4.0 and fail to load the advisory database entirely.
-        # $CARGO_HOME/bin → PATH explicitly: with a custom CARGO_HOME the
+        # $CARGO_HOME/bin в†’ PATH explicitly: with a custom CARGO_HOME the
         # toolchain action does not add it, and standalone `cargo install`
         # binaries become unreachable (`wasm-pack` died with exit 127 on de-02;
         # `cargo audit` only survived by resolving as a cargo subcommand).
@@ -449,7 +464,7 @@ jobs:
       # warnings to failures. continue-on-error is intentionally absent (false)
       # so the gate actually blocks. If a finding is a false positive or accepted
       # risk, ignore it explicitly per-advisory via `--ignore RUSTSEC-XXXX-NNNN`
-      # with a comment — never by disabling the whole gate.
+      # with a comment вЂ” never by disabling the whole gate.
       - name: cargo audit
         run: cargo audit --deny warnings
 
@@ -457,10 +472,10 @@ jobs:
     name: wasm build + headless test + size
     runs-on: ubuntu-latest
     timeout-minutes: 45
-    # Native Binaryen 117 не завершил wasm-opt внутри systrap до bounded timeout
-    # (run 30773180841). Официальный Node transport того же release дал byte-exact
-    # результат native oracle на post-bindgen input в exact production cell.
-    # Менять release/transport только новым differential receipt.
+    # Native Binaryen 117 РЅРµ Р·Р°РІРµСЂС€РёР» wasm-opt РІРЅСѓС‚СЂРё systrap РґРѕ bounded timeout
+    # (run 30773180841). РћС„РёС†РёР°Р»СЊРЅС‹Р№ Node transport С‚РѕРіРѕ Р¶Рµ release РґР°Р» byte-exact
+    # СЂРµР·СѓР»СЊС‚Р°С‚ native oracle РЅР° post-bindgen input РІ exact production cell.
+    # РњРµРЅСЏС‚СЊ release/transport С‚РѕР»СЊРєРѕ РЅРѕРІС‹Рј differential receipt.
     env:
       BINARYEN_RELEASE: version_117
       BINARYEN_NODE_SHA256: "2d5a42f2d167a7cc2b4b6664c44c5ace1690d13db4f527324f052afbad461a07"
@@ -470,18 +485,18 @@ jobs:
         with:
           persist-credentials: false
       - name: toolchain env (runner.temp)
-        # runner-контекст недоступен в job-level env — только в шагах; поэтому
-        # RUSTUP_HOME/CARGO_HOME назначаются здесь через GITHUB_ENV. Смысл тот
-        # же: изоляция per job под runner.temp, который раннер вайпит между
-        # джобами (класс утечки /tmp закрыт, см. историю #143).
+        # runner-РєРѕРЅС‚РµРєСЃС‚ РЅРµРґРѕСЃС‚СѓРїРµРЅ РІ job-level env вЂ” С‚РѕР»СЊРєРѕ РІ С€Р°РіР°С…; РїРѕСЌС‚РѕРјСѓ
+        # RUSTUP_HOME/CARGO_HOME РЅР°Р·РЅР°С‡Р°СЋС‚СЃСЏ Р·РґРµСЃСЊ С‡РµСЂРµР· GITHUB_ENV. РЎРјС‹СЃР» С‚РѕС‚
+        # Р¶Рµ: РёР·РѕР»СЏС†РёСЏ per job РїРѕРґ runner.temp, РєРѕС‚РѕСЂС‹Р№ СЂР°РЅРЅРµСЂ РІР°Р№РїРёС‚ РјРµР¶РґСѓ
+        # РґР¶РѕР±Р°РјРё (РєР»Р°СЃСЃ СѓС‚РµС‡РєРё /tmp Р·Р°РєСЂС‹С‚, СЃРј. РёСЃС‚РѕСЂРёСЋ #143).
         run: |
           {
             echo "RUSTUP_HOME=$RUNNER_TEMP/rustup-$GITHUB_JOB"
             echo "CARGO_HOME=$RUNNER_TEMP/cargo-$GITHUB_JOB"
             echo "WASM_PACK_CACHE=$RUNNER_TEMP/wasm-pack-$GITHUB_JOB"
-            # TMPDIR тоже изолирован под runner.temp: /tmp на de-02 — 8ГБ tmpfs;
-            # при исчерпании места (4КБ свободно) все
-            # джобы умирали «abnormal exit»/cc без stderr, 2026-07-03 18:34Z.
+            # TMPDIR С‚РѕР¶Рµ РёР·РѕР»РёСЂРѕРІР°РЅ РїРѕРґ runner.temp: /tmp РЅР° de-02 вЂ” 8Р“Р‘ tmpfs;
+            # РїСЂРё РёСЃС‡РµСЂРїР°РЅРёРё РјРµСЃС‚Р° (4РљР‘ СЃРІРѕР±РѕРґРЅРѕ) РІСЃРµ
+            # РґР¶РѕР±С‹ СѓРјРёСЂР°Р»Рё В«abnormal exitВ»/cc Р±РµР· stderr, 2026-07-03 18:34Z.
             echo "TMPDIR=$RUNNER_TEMP/tmp-$GITHUB_JOB"
           } >> "$GITHUB_ENV"
           mkdir -p "$RUNNER_TEMP/tmp-$GITHUB_JOB" "$RUNNER_TEMP/wasm-pack-$GITHUB_JOB"
@@ -493,18 +508,18 @@ jobs:
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          # Одноразовый слот: GitHub-кэш не нужен. У setup-node вход `cache` — это
-          # перечисление пакетных менеджеров, поэтому кэш выключается ОТСУТСТВИЕМ
-          # `cache` плюс явным гашением автокэша npm (`cache: false` там падает).
+          # РћРґРЅРѕСЂР°Р·РѕРІС‹Р№ СЃР»РѕС‚: GitHub-РєСЌС€ РЅРµ РЅСѓР¶РµРЅ. РЈ setup-node РІС…РѕРґ `cache` вЂ” СЌС‚Рѕ
+          # РїРµСЂРµС‡РёСЃР»РµРЅРёРµ РїР°РєРµС‚РЅС‹С… РјРµРЅРµРґР¶РµСЂРѕРІ, РїРѕСЌС‚РѕРјСѓ РєСЌС€ РІС‹РєР»СЋС‡Р°РµС‚СЃСЏ РћРўРЎРЈРўРЎРўР’РР•Рњ
+          # `cache` РїР»СЋСЃ СЏРІРЅС‹Рј РіР°С€РµРЅРёРµРј Р°РІС‚РѕРєСЌС€Р° npm (`cache: false` С‚Р°Рј РїР°РґР°РµС‚).
           package-manager-cache: false
           node-version: ${{ env.NODE_TOOLCHAIN }}
       - name: install wasm-pack
         # Pinned for reproducibility; --locked respects the tool's own lockfile.
         # Build uses --no-opt below: Binaryen is installed and verified separately,
         # while wasm-pack still owns cargo/wasm-bindgen and the browser harness.
-        # $CARGO_HOME/bin → PATH explicitly: with a custom CARGO_HOME the
+        # $CARGO_HOME/bin в†’ PATH explicitly: with a custom CARGO_HOME the
         # toolchain action does not add it, so the installed `wasm-pack` binary
-        # was unreachable (exit 127 "command not found" на прежнем пуле de-02).
+        # was unreachable (exit 127 "command not found" РЅР° РїСЂРµР¶РЅРµРј РїСѓР»Рµ de-02).
         run: |
           cargo install wasm-pack --version 0.13.1 --locked
           echo "$CARGO_HOME/bin" >> "$GITHUB_PATH"
@@ -601,9 +616,9 @@ jobs:
         # diagnostics only.
         run: node scripts/check-wasm-size-budget.mjs
       - name: "@labpics/colors: typecheck + runtime tests"
-        # pkg/ уже собран выше, поэтому TypeScript видит реальные wasm-bindgen
-        # declarations; node --test покрывает builder, init и публичный контракт.
-        # Браузерный terminal Program-путь проверяется wasm-pack test ниже.
+        # pkg/ СѓР¶Рµ СЃРѕР±СЂР°РЅ РІС‹С€Рµ, РїРѕСЌС‚РѕРјСѓ TypeScript РІРёРґРёС‚ СЂРµР°Р»СЊРЅС‹Рµ wasm-bindgen
+        # declarations; node --test РїРѕРєСЂС‹РІР°РµС‚ builder, init Рё РїСѓР±Р»РёС‡РЅС‹Р№ РєРѕРЅС‚СЂР°РєС‚.
+        # Р‘СЂР°СѓР·РµСЂРЅС‹Р№ terminal Program-РїСѓС‚СЊ РїСЂРѕРІРµСЂСЏРµС‚СЃСЏ wasm-pack test РЅРёР¶Рµ.
         working-directory: packages/colors
         run: |
           npm ci
@@ -641,17 +656,17 @@ jobs:
           include-hidden-files: true
           retention-days: 90
       - name: install Chrome + dependencies (Chrome for Testing + apt-get download)
-        # GitHub-hosted образ не содержит нужный CfT-браузер; установка целиком
-        # userspace (sudo на раннере доступен, но не используется — гейт остаётся
-        # герметичным и не трогает системное состояние образа).
+        # GitHub-hosted РѕР±СЂР°Р· РЅРµ СЃРѕРґРµСЂР¶РёС‚ РЅСѓР¶РЅС‹Р№ CfT-Р±СЂР°СѓР·РµСЂ; СѓСЃС‚Р°РЅРѕРІРєР° С†РµР»РёРєРѕРј
+        # userspace (sudo РЅР° СЂР°РЅРЅРµСЂРµ РґРѕСЃС‚СѓРїРµРЅ, РЅРѕ РЅРµ РёСЃРїРѕР»СЊР·СѓРµС‚СЃСЏ вЂ” РіРµР№С‚ РѕСЃС‚Р°С‘С‚СЃСЏ
+        # РіРµСЂРјРµС‚РёС‡РЅС‹Рј Рё РЅРµ С‚СЂРѕРіР°РµС‚ СЃРёСЃС‚РµРјРЅРѕРµ СЃРѕСЃС‚РѕСЏРЅРёРµ РѕР±СЂР°Р·Р°).
         # Strategy:
         #  1. Download exact CfT chrome + chromedriver archives and verify SHA-256.
         #     wasm-pack reads CHROME_PATH for the browser but ignores a CHROMEDRIVER
         #     variable, so the matching driver is passed through --chromedriver.
         #  2. Extract required shared libs (.so) from the runner's configured
         #     Debian/Ubuntu repository without sudo. Refresh package metadata in
-        #     runner.temp first: образ ячейки может нести устаревшие списки,
-        #     чьи package URL уже отдают 404. The root set below owns every
+        #     runner.temp first: РѕР±СЂР°Р· СЏС‡РµР№РєРё РјРѕР¶РµС‚ РЅРµСЃС‚Рё СѓСЃС‚Р°СЂРµРІС€РёРµ СЃРїРёСЃРєРё,
+        #     С‡СЊРё package URL СѓР¶Рµ РѕС‚РґР°СЋС‚ 404. The root set below owns every
         #     direct DT_NEEDED name of the pinned Chrome and ChromeDriver ELF
         #     files; APT resolves its transitive closure and `dpkg --extract`
         #     unpacks it without root. `ldd` then rejects an incomplete closure
@@ -688,9 +703,9 @@ jobs:
             "$APT_LISTS/partial" \
             "$APT_CACHE/archives/partial" \
             "$APT_SOURCES/sources.list.d"
-          # Общие sources раннера содержат посторонние vendor-репозитории.
-          # Недоступный vendor не должен отменять browser-gate, которому нужны
-          # только пакеты дистрибутива, поэтому зависимость объявлена явно.
+          # РћР±С‰РёРµ sources СЂР°РЅРЅРµСЂР° СЃРѕРґРµСЂР¶Р°С‚ РїРѕСЃС‚РѕСЂРѕРЅРЅРёРµ vendor-СЂРµРїРѕР·РёС‚РѕСЂРёРё.
+          # РќРµРґРѕСЃС‚СѓРїРЅС‹Р№ vendor РЅРµ РґРѕР»Р¶РµРЅ РѕС‚РјРµРЅСЏС‚СЊ browser-gate, РєРѕС‚РѕСЂРѕРјСѓ РЅСѓР¶РЅС‹
+          # С‚РѕР»СЊРєРѕ РїР°РєРµС‚С‹ РґРёСЃС‚СЂРёР±СѓС‚РёРІР°, РїРѕСЌС‚РѕРјСѓ Р·Р°РІРёСЃРёРјРѕСЃС‚СЊ РѕР±СЉСЏРІР»РµРЅР° СЏРІРЅРѕ.
           source /etc/os-release
           : "${ID:?missing distro ID}"
           : "${VERSION_CODENAME:?missing distro codename}"
@@ -770,8 +785,8 @@ jobs:
               ;;
           esac
           readonly DISTRO_KEYRING
-          # Все изменяемые пути APT и полный inventory sources принадлежат job;
-          # keyring и dpkg status остаются read-only входами.
+          # Р’СЃРµ РёР·РјРµРЅСЏРµРјС‹Рµ РїСѓС‚Рё APT Рё РїРѕР»РЅС‹Р№ inventory sources РїСЂРёРЅР°РґР»РµР¶Р°С‚ job;
+          # keyring Рё dpkg status РѕСЃС‚Р°СЋС‚СЃСЏ read-only РІС…РѕРґР°РјРё.
           APT_OPTIONS=(
             -o "Dir::Etc::sourcelist=$APT_SOURCES/sources.list"
             -o "Dir::Etc::sourceparts=$APT_SOURCES/sources.list.d"
@@ -837,8 +852,8 @@ jobs:
           echo "$CHROME_BIN_DIR" >> "$GITHUB_PATH"
           echo "Linked CfT Chrome under runner.temp"
       - name: terminal Program in real browser
-        # Сначала проверяет crate-boundary, затем устанавливает exact verified
-        # tarball и исполняет тот же Program path через публичный package root.
+        # РЎРЅР°С‡Р°Р»Р° РїСЂРѕРІРµСЂСЏРµС‚ crate-boundary, Р·Р°С‚РµРј СѓСЃС‚Р°РЅР°РІР»РёРІР°РµС‚ exact verified
+        # tarball Рё РёСЃРїРѕР»РЅСЏРµС‚ С‚РѕС‚ Р¶Рµ Program path С‡РµСЂРµР· РїСѓР±Р»РёС‡РЅС‹Р№ package root.
         env:
           LAB_COLORS_BROWSER_PROOF_TIMEOUT_MS: "60000"
           VERIFIED_TARBALL: ${{ steps.verified-release.outputs.tarball }}
