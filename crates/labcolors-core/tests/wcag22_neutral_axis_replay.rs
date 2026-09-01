@@ -160,11 +160,11 @@ fn scenario_table_is_bound_to_the_oracle_fixture_bytes() {
             scenario.id,
         );
 
-        let head_at = ORACLE_FIXTURE
+        let head_at = oracle_fixture()
             .find(&head)
             .unwrap_or_else(|| panic!("{}: oracle fixture lacks fragment {head}", scenario.id));
         let between_at = head_at + head.len();
-        let tail_at = ORACLE_FIXTURE[between_at..]
+        let tail_at = oracle_fixture()[between_at..]
             .find(&tail)
             .map(|offset| between_at + offset)
             .unwrap_or_else(|| panic!("{}: oracle fixture lacks fragment {tail}", scenario.id));
