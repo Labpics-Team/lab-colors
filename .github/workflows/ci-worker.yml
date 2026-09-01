@@ -310,6 +310,7 @@ jobs:
           python3 - <<'PY'
           import json
           import subprocess
+          import sys
 
           metadata = json.loads(subprocess.check_output(
               ["cargo", "metadata", "--format-version", "1", "--no-deps"],
