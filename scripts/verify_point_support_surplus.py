@@ -64,6 +64,10 @@ ACCEPTED_SOURCE_CAPSULE_SHA256 = frozenset({
     "2dbd57e677d7334d5d68a165417662da8a19dd2826e427ebd2b645a9242cbf4d",
     # Current CI merge-ref after EXT-08/EXT-09 merges shifted source hashes
     "16eb9f2c0dac2417f15987e8f7d65be0025509b71aa7a00b59737abf7561f24b",
+    # PR #691: ci-worker pin update + oracle fixture fix shifted point_support.rs hash
+    "6758df8bf846a423adc27bec71035b0fa2e15db11aea1414beb4da923292cc11",
+    # PR #691: local recomputation after proof payload refresh
+    "62085a606a541329a898bb8de5a2e941de44c493c5a2e74d6ae0717804b48c3c",
 })
 EXPECTED_Q55_PROOF_SHA256 = (
     "fd544b92e7b4cfa4734f0dd9d90aeb52491df6cf94c766ccf59ec716cbc78d12"

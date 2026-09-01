@@ -76,7 +76,7 @@ jobs:
           curl --proto '=https' --tlsv1.2 -fsSL \
             https://static.rust-lang.org/rustup/dist/x86_64-unknown-linux-gnu/rustup-init \
             -o /tmp/rustup-init
-          echo "4acc9acc76d5079515b46346a485974457b5a79893cfb01112423c89aeb5aa10  /tmp/rustup-init" \
+          echo "dda7234360b7f578ca8b0ddcb80145646fa61a67c1720a5abc7051b35c9fcb71  /tmp/rustup-init" \
             | sha256sum -c -
           chmod +x /tmp/rustup-init
           /tmp/rustup-init -y --no-modify-path \
