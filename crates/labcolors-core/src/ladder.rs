@@ -138,10 +138,8 @@ impl LadderTint {
 
     /// Exact emitted sRGB8 source selected for these viewing conditions.
     pub(crate) fn srgb8_for_vc(&self, vc: &ViewingConditions) -> Srgb8 {
-        let bytes = self
-            .for_vc(vc)
-            .map(|channel| (channel * 255.0).round() as u8);
-        Srgb8::new(bytes)
+        Srgb8::try_from_encoded(self.for_vc(vc))
+            .expect("ladder quad values are always valid encoded sRGB")
     }
 
     /// Whether every declared context lies exactly on the encoded grey axis.
@@ -151,8 +149,9 @@ impl LadderTint {
     /// policy capable of carrying its authored direction.
     pub(crate) fn all_modes_achromatic(&self) -> bool {
         self.quad.iter().all(|encoded| {
-            let bytes = encoded.map(|channel| (channel * 255.0).round() as u8);
-            Srgb8::new(bytes).is_achromatic()
+            Srgb8::try_from_encoded(*encoded)
+                .expect("ladder quad values are always valid encoded sRGB")
+                .is_achromatic()
         })
     }
 }
