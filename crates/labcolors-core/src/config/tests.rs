@@ -3110,3 +3110,112 @@ fn material_chromatic_source_conflicts_are_typed_on_both_boundaries() {
         "конфликт обязан нести каноническую причину: {reason:?}"
     );
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// G-414-1: Error precedence oracle.
+// Фиксирует порядок ошибок compile_named_role_table при наличии нескольких
+// дефектов. Рефакторинг #414 НЕ ДОЛЖЕН менять этот порядок — иначе downstream
+// consumers получат другую ошибку на тот же битый конфиг.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Helper: минимальный валидный ThemeConfig для мутаций.
+///
+/// # Инвариант
+/// Fixture обязан компилироваться как минимальный валидный `ThemeConfig`.
+/// Каждый тест мутирует ровно один аспект конфига, чтобы изолированно
+/// проверять соответствующий дефект. Если baseline перестаёт компилироваться,
+/// все oracle-тесты G-414-1 теряют смысл и должны падать немедленно.
+fn minimal_valid_config() -> ThemeConfig {
+    let cfg = labui_reference();
+    assert!(
+        cfg.compile_named_role_table().is_ok(),
+        "baseline fixture must compile"
+    );
+    cfg
+}
+
+#[test]
+fn g414_1_error_precedence_empty_contract_before_empty_themes() {
+    let mut cfg = minimal_valid_config();
+    cfg.roles.clear();
+    cfg.aliases.clear();
+    cfg.themes.entries.clear();
+    let err = cfg.compile_named_role_table().unwrap_err();
+    assert!(
+        matches!(err, ConfigError::EmptyContract),
+        "expected EmptyContract, got {err:?}"
+    );
+}
+
+#[test]
+fn g414_1_error_precedence_syntactic_before_empty_contract() {
+    let mut cfg = minimal_valid_config();
+    cfg.roles.clear();
+    cfg.aliases.clear();
+    cfg.neutral.anchors.dark = "NOT_A_HEX".to_string();
+    let err = cfg.compile_named_role_table().unwrap_err();
+    assert!(
+        matches!(err, ConfigError::InvalidHex { .. }),
+        "expected InvalidHex (syntactic first), got {err:?}"
+    );
+}
+
+#[test]
+fn g414_1_error_precedence_compile_recipe_before_chroma_policy() {
+    let mut cfg = minimal_valid_config();
+    // Oracle invariant: UnknownFamily must be reported before any downstream
+    // error (e.g. IncompatibleRolePolicy). The fixture's baseline already
+    // contains chromatic roles that would surface IncompatibleRolePolicy if
+    // compiled against Neutral chroma; injecting an unknown family on a Ladder
+    // role guarantees the compiler hits UnknownFamily first regardless of
+    // table-wide chroma policy. This test locks that ordering.
+    let ladder_idx = cfg
+        .roles
+        .iter()
+        .position(|(_, recipe)| matches!(recipe, RoleRecipe::Ladder { .. }))
+        .expect("fixture must contain at least one Ladder role for this oracle test");
+    if let RoleRecipe::Ladder { source, .. } = &mut cfg.roles[ladder_idx].1 {
+        *source = LadderSource::Family("nonexistent-family".to_string());
+    }
+    let err = cfg.compile_named_role_table().unwrap_err();
+    assert!(
+        matches!(err, ConfigError::UnknownFamily { .. }),
+        "expected UnknownFamily before IncompatibleRolePolicy, got {err:?}"
+    );
+}
+
+#[test]
+fn g414_1_error_precedence_first_invalid_role_wins() {
+    let mut cfg = minimal_valid_config();
+    let mut broken_names: Vec<String> = Vec::new();
+    for (name, recipe) in cfg.roles.iter_mut() {
+        if let RoleRecipe::TextAnchor { fraction, .. } = recipe {
+            *fraction = -1.0;
+            broken_names.push(name.clone());
+            if broken_names.len() >= 2 {
+                break;
+            }
+        }
+    }
+    assert!(
+        broken_names.len() >= 2,
+        "fixture must contain at least 2 TextAnchor roles for this oracle test, found {}",
+        broken_names.len()
+    );
+    let err = cfg.compile_named_role_table().unwrap_err();
+    match &err {
+        ConfigError::OutOfBounds { handle, .. } => {
+            // Handle carries the full dotted path (e.g. "roles.label-primary.fraction"),
+            // not just the role name. Oracle captures this exact format so that any
+            // future change to error attribution is immediately detected.
+            let expected_prefix = format!("roles.{}", broken_names[0]);
+            assert!(
+                handle.starts_with(&expected_prefix),
+                "error handle must reference the first invalid role '{}', got '{}'",
+                broken_names[0],
+                handle
+            );
+        }
+        other => panic!("expected OutOfBounds from first broken role, got {other:?}"),
+    }
+}

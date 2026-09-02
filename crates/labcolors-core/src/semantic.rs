@@ -8726,12 +8726,8 @@ mod g414_9_named_role_table_shape_freeze {
     #[test]
     fn public_api_surface_is_frozen_for_415_input_contract() {
         // Конструируем минимальную валидную таблицу для проверки accessor-сигнатур.
-        let table = NamedRoleTable::new(
-            vec![],   // entries
-            vec![],   // aliases
-            RoleChroma::Neutral,
-        )
-        .expect("empty neutral table is valid");
+        let table = NamedRoleTable::new(vec![], vec![], RoleChroma::Neutral)
+            .expect("empty neutral table is valid");
 
         // --- Accessor signatures (return types pinned) ---
         let _aliases: &[(String, String)] = table.aliases();
