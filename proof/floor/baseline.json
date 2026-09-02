@@ -1,7 +1,7 @@
 {
-  "total_tests": 1410,
-  "timestamp": "2026-08-31T00:00:00.000Z",
-  "commit": "f722b60",
-  "minimum_floor": 1410,
-  "notes": "Baseline updated for r7-g2: +3 ParallelSsot floor/sabotage tests (ext_parallel_ssot_floor, ext_parallel_ssot_no_phantom, ext_parallel_ssot_key_format). Characterization of remaining artifact classes complete."
+  "total_tests": 1416,
+  "timestamp": "2026-09-02T00:00:00.000Z",
+  "commit": "fc4e755",
+  "minimum_floor": 1416,
+  "notes": "Baseline updated after r6 EXT wave completion (EXT-01..EXT-09 all merged). +6 tests from EXT extractor sabotage controls integrated into CI via PR #699. Previous baseline: 1410 (r7-g2)."
 }
