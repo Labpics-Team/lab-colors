@@ -88,9 +88,20 @@ impl Srgb8 {
     /// Linear-light inputs must use a separate linear→encoded conversion before
     /// calling this method.
     pub fn try_from_encoded(encoded: [f64; 3]) -> Result<Self, Srgb8EncodingError> {
-        // SABOTAGE: validation removed for TWO-SHA proof (G-411-5)
         let mut bytes = [0u8; 3];
         for (i, &channel) in encoded.iter().enumerate() {
+            if !channel.is_finite() {
+                return Err(Srgb8EncodingError {
+                    input: encoded,
+                    reason: "non-finite channel value",
+                });
+            }
+            if !(0.0..=1.0).contains(&channel) {
+                return Err(Srgb8EncodingError {
+                    input: encoded,
+                    reason: "channel outside [0,1] range",
+                });
+            }
             bytes[i] = (channel * 255.0).round() as u8;
         }
         Ok(Self::new(bytes))
