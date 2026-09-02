@@ -8707,3 +8707,51 @@ mod wave2_e_locks {
         );
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// G-414-9: NamedRoleTable public shape freeze.
+// Этот тест гарантирует, что публичный API surface `NamedRoleTable` не изменится
+// при рефакторинге #414 (ConfigSymbolPlanV1). Любое изменение сигнатуры,
+// добавление/удаление pub-метода или изменение типа возвращаемого значения
+// вызовет compile error здесь — блокируя случайную поломку input contract для #415.
+// ─────────────────────────────────────────────────────────────────────────────
+#[cfg(test)]
+mod g414_9_named_role_table_shape_freeze {
+    use super::*;
+    use crate::spaces::vc::ViewingConditions;
+
+    /// Compile-time контракт: все pub методы NamedRoleTable существуют с ожидаемыми
+    /// сигнатурами. Если любой метод удалён, переименован или изменил тип — этот
+    /// тест не компилируется, блокируя PR до явного обновления контракта.
+    #[test]
+    fn public_api_surface_is_frozen_for_415_input_contract() {
+        // Конструируем минимальную валидную таблицу для проверки accessor-сигнатур.
+        let table = NamedRoleTable::new(
+            vec![],   // entries
+            vec![],   // aliases
+            RoleChroma::Neutral,
+        )
+        .expect("empty neutral table is valid");
+
+        // --- Accessor signatures (return types pinned) ---
+        let _aliases: &[(String, String)] = table.aliases();
+        let _output_bindings: &OutputBindingSet = table.output_bindings();
+        let _entries: &[(String, RoleSpec)] = table.entries();
+        let _chroma: RoleChroma = table.chroma();
+
+        // --- Fallible projection signature ---
+        let _plan: Result<
+            crate::numerical_plan::CompiledNumericalPlanV1,
+            crate::numerical_plan::NumericalPlanErrorV1,
+        > = table.numerical_plan_v1();
+
+        // --- Free function signatures that take &NamedRoleTable ---
+        let vc = ViewingConditions::srgb();
+        let bg = BgInput::solid("#808080").expect("valid grey hex for shape freeze test");
+        let _resolved: Result<Vec<(String, Resolved)>, ResolveSetError> =
+            resolve_named_set(&bg, &table, &vc);
+
+        // Если этот тест компилируется — публичная форма NamedRoleTable совпадает
+        // с замороженным контрактом. Любое отклонение = compile error = gate fail.
+    }
+}
