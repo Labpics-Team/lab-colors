@@ -56,11 +56,9 @@ pub(crate) fn grid_size() -> usize {
 /// 8-битные каналы hex-якоря.
 pub(crate) fn enc_of(hex: &str) -> [u8; 3] {
     let s = srgb_encoded_from_hex(hex).expect("passport hex valid");
-    [
-        (s[0] * 255.0).round() as u8,
-        (s[1] * 255.0).round() as u8,
-        (s[2] * 255.0).round() as u8,
-    ]
+    crate::Srgb8::try_from_encoded(s)
+        .expect("passport hex always yields valid encoded sRGB")
+        .bytes()
 }
 
 /// Экспозиция ПОРОГОВОЙ константы: доля куба (%) с per-цвет величиной `q` в

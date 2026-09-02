@@ -655,7 +655,9 @@ impl QuantisedComposite {
 }
 
 fn encoded_bytes(rgb: [f64; 3]) -> [u8; 3] {
-    rgb.map(|channel| (channel * 255.0).round() as u8)
+    crate::Srgb8::try_from_encoded(rgb)
+        .expect("glow encoded_bytes input is always valid encoded sRGB")
+        .bytes()
 }
 
 fn composite_hex(bytes: [u8; 3]) -> String {

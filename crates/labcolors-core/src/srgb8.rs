@@ -55,6 +55,59 @@ impl Srgb8 {
     }
 }
 
+/// Error returned when encoded-f64 inputs fall outside the valid [0,1] range
+/// or contain non-finite values.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Srgb8EncodingError {
+    /// The invalid input triplet that caused the error.
+    pub input: [f64; 3],
+    /// Human-readable description of why the input is invalid.
+    pub reason: &'static str,
+}
+
+impl core::fmt::Display for Srgb8EncodingError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(
+            f,
+            "invalid encoded sRGB8 input {:?}: {}",
+            self.input, self.reason
+        )
+    }
+}
+
+impl Srgb8 {
+    /// Construct an `Srgb8` from gamma-compressed [0,1] encoded-f64 channels.
+    ///
+    /// This is the single owner of encoded-f64 → u8 quantisation for the entire
+    /// crate. All production call sites that previously used inline
+    /// `(channel * 255.0).round() as u8` MUST migrate to this constructor.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err` if any channel is NaN, infinite, or outside [0.0, 1.0].
+    /// Linear-light inputs must use a separate linear→encoded conversion before
+    /// calling this method.
+    pub fn try_from_encoded(encoded: [f64; 3]) -> Result<Self, Srgb8EncodingError> {
+        let mut bytes = [0u8; 3];
+        for (i, &channel) in encoded.iter().enumerate() {
+            if !channel.is_finite() {
+                return Err(Srgb8EncodingError {
+                    input: encoded,
+                    reason: "non-finite channel value",
+                });
+            }
+            if !(0.0..=1.0).contains(&channel) {
+                return Err(Srgb8EncodingError {
+                    input: encoded,
+                    reason: "channel outside [0,1] range",
+                });
+            }
+            bytes[i] = (channel * 255.0).round() as u8;
+        }
+        Ok(Self::new(bytes))
+    }
+}
+
 impl From<[u8; 3]> for Srgb8 {
     fn from(value: [u8; 3]) -> Self {
         Self::new(value)
@@ -123,6 +176,65 @@ mod tests {
                 Srgb8::new(bytes).encoded().map(f64::to_bits),
                 bytes.map(|channel| (f64::from(channel) / 255.0).to_bits()),
             );
+        }
+    }
+
+    // ── RED tests for try_from_encoded (G-411-1) ──────────────────────────
+
+    #[test]
+    fn try_from_encoded_accepts_valid_boundary_values() {
+        // Exact boundaries
+        assert_eq!(Srgb8::try_from_encoded([0.0, 0.0, 0.0]).unwrap(), Srgb8::new([0, 0, 0]));
+        assert_eq!(Srgb8::try_from_encoded([1.0, 1.0, 1.0]).unwrap(), Srgb8::new([255, 255, 255]));
+        // Mid-range
+        assert_eq!(Srgb8::try_from_encoded([0.5, 0.5, 0.5]).unwrap(), Srgb8::new([128, 128, 128]));
+        // Single-step boundaries
+        assert_eq!(Srgb8::try_from_encoded([1.0 / 255.0, 1.0 / 255.0, 1.0 / 255.0]).unwrap(), Srgb8::new([1, 1, 1]));
+        assert_eq!(Srgb8::try_from_encoded([254.0 / 255.0, 254.0 / 255.0, 254.0 / 255.0]).unwrap(), Srgb8::new([254, 254, 254]));
+    }
+
+    #[test]
+    fn try_from_encoded_rejects_nan() {
+        assert!(Srgb8::try_from_encoded([f64::NAN, 0.5, 0.5]).is_err());
+        assert!(Srgb8::try_from_encoded([0.5, f64::NAN, 0.5]).is_err());
+        assert!(Srgb8::try_from_encoded([0.5, 0.5, f64::NAN]).is_err());
+    }
+
+    #[test]
+    fn try_from_encoded_rejects_infinity() {
+        assert!(Srgb8::try_from_encoded([f64::INFINITY, 0.5, 0.5]).is_err());
+        assert!(Srgb8::try_from_encoded([f64::NEG_INFINITY, 0.5, 0.5]).is_err());
+        assert!(Srgb8::try_from_encoded([0.5, f64::INFINITY, 0.5]).is_err());
+    }
+
+    #[test]
+    fn try_from_encoded_rejects_out_of_range() {
+        assert!(Srgb8::try_from_encoded([-0.001, 0.5, 0.5]).is_err());
+        assert!(Srgb8::try_from_encoded([0.5, 1.001, 0.5]).is_err());
+        assert!(Srgb8::try_from_encoded([0.5, 0.5, -1.0]).is_err());
+        assert!(Srgb8::try_from_encoded([0.5, 0.5, 2.0]).is_err());
+    }
+
+    #[test]
+    fn try_from_encoded_bit_identity_with_inline_quantisation() {
+        // For every valid encoded value, try_from_encoded must produce the same
+        // bytes as the legacy inline `(channel * 255.0).round() as u8`.
+        for r in 0..=255u8 {
+            for g in [0u8, 1, 127, 128, 254, 255] {
+                for b in [0u8, 1, 127, 128, 254, 255] {
+                    let encoded = [
+                        f64::from(r) / 255.0,
+                        f64::from(g) / 255.0,
+                        f64::from(b) / 255.0,
+                    ];
+                    let expected = [r, g, b];
+                    assert_eq!(
+                        Srgb8::try_from_encoded(encoded).unwrap().bytes(),
+                        expected,
+                        "bit-identity drift at encoded={encoded:?}"
+                    );
+                }
+            }
         }
     }
 }

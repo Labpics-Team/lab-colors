@@ -99,10 +99,9 @@ pub fn composite_over_srgb8(tint: [u8; 3], alpha: f64, bg: [u8; 3]) -> Result<[u
 /// проверкой — тот же контракт, которым композитор готовит свои входы.
 /// `label` попадает в текст доменного отказа (`tint`/`bg` исторические).
 pub(crate) fn encoded_to_srgb8(rgb: [f64; 3], label: &str) -> Result<[u8; 3], String> {
-    if !is_encoded_rgb(rgb) {
-        return Err(format!("{label} вне конечного encoded-sRGB [0,1]: {rgb:?}"));
-    }
-    Ok(rgb.map(|channel| (channel * 255.0).round() as u8))
+    crate::Srgb8::try_from_encoded(rgb)
+        .map(|s| s.bytes())
+        .map_err(|e| format!("{label}: {e}"))
 }
 
 /// Форматирование эмитируемых sRGB8-байт в `#RRGGBB` — единая точка формата

@@ -356,8 +356,13 @@ pub(crate) fn hex_from_srgb(rgb: [f64; 3]) -> String {
 /// clamp and round operation, so string transport cannot define a second
 /// output boundary.
 pub(crate) fn srgb8_from_linear(rgb: [f64; 3]) -> crate::Srgb8 {
-    let q = |c: f64| (srgb_gamma(c).clamp(0.0, 1.0) * 255.0).round() as u8;
-    crate::Srgb8::new([q(rgb[0]), q(rgb[1]), q(rgb[2])])
+    let encoded = [
+        srgb_gamma(rgb[0]).clamp(0.0, 1.0),
+        srgb_gamma(rgb[1]).clamp(0.0, 1.0),
+        srgb_gamma(rgb[2]).clamp(0.0, 1.0),
+    ];
+    crate::Srgb8::try_from_encoded(encoded)
+        .expect("clamped gamma-encoded values are always valid encoded sRGB")
 }
 
 /// Разбор `#RRGGBB` → ГАММА-КОДИРОВАННЫЙ sRGB `[r, g, b]` в `[0, 1]`
@@ -376,8 +381,14 @@ pub fn srgb_encoded_from_hex(hex: &str) -> Result<[f64; 3], String> {
 /// существует, потому `NaN`/бесконечность не должны превращаться в цвет. На
 /// публичной границе exact-представление сериализуется через [`Srgb8::to_hex`].
 pub(crate) fn hex_from_srgb_encoded(rgb: [f64; 3]) -> String {
-    let q = |c: f64| (c.clamp(0.0, 1.0) * 255.0).round() as u8;
-    Srgb8::new([q(rgb[0]), q(rgb[1]), q(rgb[2])]).to_hex()
+    let clamped = [
+        rgb[0].clamp(0.0, 1.0),
+        rgb[1].clamp(0.0, 1.0),
+        rgb[2].clamp(0.0, 1.0),
+    ];
+    crate::Srgb8::try_from_encoded(clamped)
+        .expect("clamped encoded values are always valid encoded sRGB")
+        .to_hex()
 }
 
 /// Linear sRGB → CIE XYZ under D65.
