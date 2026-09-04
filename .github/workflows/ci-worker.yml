@@ -17,7 +17,7 @@ env:
   CARGO_TERM_COLOR: always
   # Deterministic toolchain. Bump in lockstep with the team's supported Rust.
   # To update: pick the new stable from https://forge.rust-lang.org/ and change
-  # this single value вЂ” every job below consumes it via the `toolchain` input.
+  # this single value — every job below consumes it via the `toolchain` input.
   RUST_TOOLCHAIN: 1.96.0
   # Public minimum, tested independently from the development toolchain.
   MSRV_TOOLCHAIN: 1.85.0
@@ -121,7 +121,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      # dtolnay/rust-toolchain has no semver tags вЂ” pinned by commit SHA.
+      # dtolnay/rust-toolchain has no semver tags — pinned by commit SHA.
       # The toolchain VERSION is pinned via the explicit input below, not @stable,
       # so a new stable release cannot silently change CI behavior.
       - name: toolchain env (runner.temp)
@@ -180,10 +180,10 @@ jobs:
         # Intra-doc links are a hard gate: a broken [`link`] in any doc comment
         # (link to a private/renamed/removed item, or bare brackets rustdoc reads
         # as a link) fails the build. RUSTDOCFLAGS="-D warnings" promotes every
-        # rustdoc warning вЂ” including broken_intra_doc_links вЂ” to an error;
+        # rustdoc warning — including broken_intra_doc_links — to an error;
         # --no-deps keeps the gate on our own crates only. This stops a stale doc
         # reference from merging silently (main was green with ~81 broken links
-        # because cargo doc was never gated вЂ” #26).
+        # because cargo doc was never gated — #26).
         run: RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --locked
       - name: staged Program is absent from the resolved public API
         run: |
@@ -245,14 +245,14 @@ jobs:
               python -m unittest discover -s proof/region/v1/tests -p "test_*.py" -v
               PYTHONOPTIMIZE=2 python -m unittest discover -s proof/region/v1/tests -p "test_*.py" -v
               # Both fast gates carry their own expected inventory, and until
-              # now nothing ran them before a merge: `arb.yml` is privileged вЂ”
-              # sudo, Docker, a delegated cgroup вЂ” so it refuses a
+              # now nothing ran them before a merge: `arb.yml` is privileged —
+              # sudo, Docker, a delegated cgroup — so it refuses a
               # `pull_request` trigger by contract, and a wrong
               # EXPECTED_TEST_INVENTORY_SHA256 went green on the pull request
               # and broke `main` on push.  The discovery above cannot stand in
               # for them: `tests/test_build.py` deliberately does not read the
               # gate constants, and that independence is the point.  They need
-              # no build вЂ” the exact skip manifest is what makes them fast.
+              # no build — the exact skip manifest is what makes them fast.
               python proof/region/v1/arb/tests/gate.py
               PYTHONOPTIMIZE=2 python proof/region/v1/arb/tests/gate.py
               python proof/region/v1/mpfi/tests/gate.py
@@ -455,9 +455,9 @@ jobs:
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
       - name: install cargo-audit
         # Version pinned for reproducibility; --locked respects the tool's own lockfile.
-        # Must be >=0.22 вЂ” older versions cannot parse RUSTSEC entries that use
+        # Must be >=0.22 — older versions cannot parse RUSTSEC entries that use
         # CVSS v4.0 and fail to load the advisory database entirely.
-        # $CARGO_HOME/bin в†’ PATH explicitly: with a custom CARGO_HOME the
+        # $CARGO_HOME/bin → PATH explicitly: with a custom CARGO_HOME the
         # toolchain action does not add it, and standalone `cargo install`
         # binaries become unreachable (`wasm-pack` died with exit 127 on de-02;
         # `cargo audit` only survived by resolving as a cargo subcommand).
@@ -471,7 +471,7 @@ jobs:
       # warnings to failures. continue-on-error is intentionally absent (false)
       # so the gate actually blocks. If a finding is a false positive or accepted
       # risk, ignore it explicitly per-advisory via `--ignore RUSTSEC-XXXX-NNNN`
-      # with a comment вЂ” never by disabling the whole gate.
+      # with a comment — never by disabling the whole gate.
       - name: cargo audit
         run: cargo audit --deny warnings
 
@@ -524,7 +524,7 @@ jobs:
         # Pinned for reproducibility; --locked respects the tool's own lockfile.
         # Build uses --no-opt below: Binaryen is installed and verified separately,
         # while wasm-pack still owns cargo/wasm-bindgen and the browser harness.
-        # $CARGO_HOME/bin в†’ PATH explicitly: with a custom CARGO_HOME the
+        # $CARGO_HOME/bin → PATH explicitly: with a custom CARGO_HOME the
         # toolchain action does not add it, so the installed `wasm-pack` binary
         # was unreachable (exit 127 "command not found" на прежнем пуле de-02).
         run: |

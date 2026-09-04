@@ -1845,6 +1845,8 @@ class MutationTruthTest(unittest.TestCase):
         worker = (
             repo / ".github" / "workflows" / "ci-worker.yml"
         ).read_text(encoding="utf-8-sig")
+        self.assertNotIn("\u0432\u0402", worker, "ci-worker.yml contains mojibake")
+        self.assertNotIn("\u0432\u2020", worker, "ci-worker.yml contains mojibake")
         worker_env = worker.split("\njobs:\n", 1)[0]
 
         def exact_env_value(name: str, pattern: str) -> str:
