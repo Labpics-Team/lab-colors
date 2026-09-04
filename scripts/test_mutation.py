@@ -1840,6 +1840,81 @@ class MutationTruthTest(unittest.TestCase):
             run_policy("pull_request", 2, 42, 42)[0],
         )
 
+    def test_wasm_pack_browser_protocol_is_pinned_below_chrome_150(self) -> None:
+        repo = Path(__file__).resolve().parents[1]
+        worker = (
+            repo / ".github" / "workflows" / "ci-worker.yml"
+        ).read_text(encoding="utf-8-sig")
+        worker_env = worker.split("\njobs:\n", 1)[0]
+
+        def exact_env_value(name: str, pattern: str) -> str:
+            matches = re.findall(
+                rf"(?m)^  {re.escape(name)}: ({pattern})$",
+                worker_env,
+            )
+            self.assertEqual(
+                len(matches),
+                1,
+                f"{name} must have exactly one unambiguous workflow pin",
+            )
+            return matches[0]
+
+        version = exact_env_value(
+            "CHROME_FOR_TESTING_VERSION",
+            r"[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+",
+        )
+        chrome_sha256 = exact_env_value(
+            "CHROME_FOR_TESTING_SHA256",
+            r"[0-9a-f]{64}",
+        )
+        chromedriver_sha256 = exact_env_value(
+            "CHROMEDRIVER_FOR_TESTING_SHA256",
+            r"[0-9a-f]{64}",
+        )
+
+        # This exact triple is the reviewed compatibility unit. Updating only
+        # a browser version or one archive digest must fail until all three
+        # downloaded bytes and the real-browser protocol are re-proven.
+        self.assertEqual(
+            (version, chrome_sha256, chromedriver_sha256),
+            (
+                "149.0.7827.55",
+                "13113b963ac22fffdad898a677591028e4397c46c1daa9e61811258eed6e35b5",
+                "8684a9cb079391352021e93e6ddb2f2afa66feb327526f7c3ed316b5b1028aaf",
+            ),
+        )
+        self.assertLess(
+            int(version.split(".", 1)[0]),
+            150,
+            "wasm-pack 0.13.1 has no proven Chrome >=150 driver protocol",
+        )
+
+        wasm = workflow_job_blocks(worker, "ci-worker.yml")["wasm"]
+        self.assertEqual(
+            wasm.count("cargo install wasm-pack --version 0.13.1 --locked"),
+            1,
+        )
+        self.assertEqual(
+            wasm.count(
+                "wasm-pack test --headless --chrome --chromedriver "
+                '"$CHROMEDRIVER_PATH" crates/labcolors-wasm --locked'
+            ),
+            1,
+        )
+        self.assertIn(
+            'chrome-for-testing-public/${CHROME_FOR_TESTING_VERSION}/linux64',
+            wasm,
+        )
+        self.assertIn(
+            '"$CHROME_FOR_TESTING_SHA256" "$CHROME_ROOT/chrome-linux64.zip"',
+            wasm,
+        )
+        self.assertIn(
+            '"$CHROMEDRIVER_FOR_TESTING_SHA256" '
+            '"$CHROME_ROOT/chromedriver-linux64.zip"',
+            wasm,
+        )
+
     def test_reusable_workers_bound_jobs_and_binaryen_transport(self) -> None:
         repo = Path(__file__).resolve().parents[1]
         workflows = repo / ".github" / "workflows"

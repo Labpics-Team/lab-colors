@@ -35,9 +35,13 @@ env:
   # обязан оставаться не ниже этого флора.
   PYTHON_PROOF_IMAGE: python:3.14.6-slim@sha256:d4fea6e20c09820028eea3f5c17f5b8ebd2ecb9c2bf28e561681a74a96090e4f
   # Browser parity is release evidence too: pin both CfT archives byte-for-byte.
-  CHROME_FOR_TESTING_VERSION: 150.0.7871.115
-  CHROME_FOR_TESTING_SHA256: 1be2db033133c5e2dd1a4e8664bf67b19a61bcf6ed28d2b00f433b3f0b4f9585
-  CHROMEDRIVER_FOR_TESTING_SHA256: 6ac3919edd107ca13d08cccc118dc83821877e504014233f171bbd94cb01a80e
+  # Chrome 150 is outside wasm-pack 0.13.1's proven driver protocol: upstream
+  # wasm-pack#1592 reproduces the same driver SIGKILL followed by HTTP 404.
+  # Stay on the last proven Chrome 149 pair until a newer harness passes this
+  # repository's real-browser gate; the static contract test rejects >=150.
+  CHROME_FOR_TESTING_VERSION: 149.0.7827.55
+  CHROME_FOR_TESTING_SHA256: 13113b963ac22fffdad898a677591028e4397c46c1daa9e61811258eed6e35b5
+  CHROMEDRIVER_FOR_TESTING_SHA256: 8684a9cb079391352021e93e6ddb2f2afa66feb327526f7c3ed316b5b1028aaf
 
 jobs:
   # Единый envelope: при переходе с DE-02 на GitHub-hosted раннеры старый
