@@ -1723,7 +1723,7 @@ class MutationTruthTest(unittest.TestCase):
         self.assertEqual(mutation.EXECUTION_COMMANDS["Build"][0], "test")
         self.assertEqual(second["commands"]["Build"][0], "test")
 
-    def test_shared_runner_workflows_cancel_stale_prs_without_canceling_evidence(
+    def test_shared_runner_workflows_cancel_stale_prs_without_canceling_running_evidence(
         self,
     ) -> None:
         repo = Path(__file__).resolve().parents[1]
@@ -1740,27 +1740,25 @@ class MutationTruthTest(unittest.TestCase):
 
         self.assertIn(
             "concurrency:\n"
-            "  group: mutation\n"
-            "  queue: max\n",
+            "  group: mutation\n",
             mutation_workflow,
         )
         mutation_concurrency = mutation_workflow.split("concurrency:\n", 1)[1].split(
             "\nenv:", 1
         )[0]
         self.assertNotIn("cancel-in-progress", mutation_concurrency)
+        self.assertNotIn("queue:", mutation_concurrency)
 
-        def enqueue_three(queue_mode: str) -> tuple[list[str], list[str]]:
+        def enqueue_latest_pending() -> tuple[list[str], list[str]]:
             pending: list[str] = []
             cancelled: list[str] = []
             for run in ("R2", "R3"):
-                if queue_mode == "single" and pending:
+                if pending:
                     cancelled.extend(pending)
-                    pending = []
-                pending.append(run)
+                pending = [run]
             return pending, cancelled
 
-        self.assertEqual(enqueue_three("max"), (["R2", "R3"], []))
-        self.assertEqual(enqueue_three("single"), (["R3"], ["R2"]))
+        self.assertEqual(enqueue_latest_pending(), (["R3"], ["R2"]))
 
         group_tail = (
             "${{ github.event_name == 'pull_request' && github.run_attempt == 1 "
