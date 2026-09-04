@@ -4,6 +4,7 @@ import { createServer } from "node:http";
 import test from "node:test";
 
 import {
+  assertExactProgramResult,
   launchDriver,
   stopDriver,
 } from "./test-program-runtime-browser.mjs";
@@ -167,5 +168,66 @@ test("bounded collision retries fail closed after exhaustion", async () => {
     assert.deepEqual(foreign.paths, []);
   } finally {
     await close(foreign.server);
+  }
+});
+
+test("program result proof ignores transport key order but rejects drift", () => {
+  const expected = {
+    ready: {
+      state: "ready",
+      count: 1,
+      slot: 91,
+      rgb: [20, 20, 20],
+      opacity: 1,
+    },
+    invalidRejected: true,
+    recovered: {
+      state: "ready",
+      count: 1,
+      slot: 91,
+      rgb: [20, 20, 20],
+      opacity: 1,
+    },
+  };
+  const reordered = {
+    invalidRejected: true,
+    recovered: {
+      opacity: 1,
+      rgb: [20, 20, 20],
+      slot: 91,
+      count: 1,
+      state: "ready",
+    },
+    ready: {
+      rgb: [20, 20, 20],
+      state: "ready",
+      opacity: 1,
+      slot: 91,
+      count: 1,
+    },
+  };
+  assertExactProgramResult(reordered, expected);
+
+  for (const [label, mutate] of [
+    ["missing field", (value) => {
+      const copy = structuredClone(value);
+      delete copy.recovered.opacity;
+      return copy;
+    }],
+    ["extra field", (value) => ({ ...value, unexpected: true })],
+    ["wrong scalar type", (value) => ({
+      ...value,
+      invalidRejected: 1,
+    })],
+    ["wrong array element", (value) => ({
+      ...value,
+      ready: { ...value.ready, rgb: [20, 20, 21] },
+    })],
+  ]) {
+    assert.throws(
+      () => assertExactProgramResult(mutate(expected), expected),
+      /terminal Program result drifted/u,
+      label,
+    );
   }
 });
