@@ -35,13 +35,11 @@ env:
   # обязан оставаться не ниже этого флора.
   PYTHON_PROOF_IMAGE: python:3.14.6-slim@sha256:d4fea6e20c09820028eea3f5c17f5b8ebd2ecb9c2bf28e561681a74a96090e4f
   # Browser parity is release evidence too: pin both CfT archives byte-for-byte.
-  # Chrome 150 is outside wasm-pack 0.13.1's proven driver protocol: upstream
-  # wasm-pack#1592 reproduces the same driver SIGKILL followed by HTTP 404.
-  # Stay on the last proven Chrome 149 pair until a newer harness passes this
-  # repository's real-browser gate; the static contract test rejects >=150.
-  CHROME_FOR_TESTING_VERSION: 149.0.7827.55
-  CHROME_FOR_TESTING_SHA256: 13113b963ac22fffdad898a677591028e4397c46c1daa9e61811258eed6e35b5
-  CHROMEDRIVER_FOR_TESTING_SHA256: 8684a9cb079391352021e93e6ddb2f2afa66feb327526f7c3ed316b5b1028aaf
+  # The package proof passes this exact browser path in WebDriver capabilities;
+  # neither PATH lookup nor the runner image's mutable system Chrome participates.
+  CHROME_FOR_TESTING_VERSION: 150.0.7871.115
+  CHROME_FOR_TESTING_SHA256: 1be2db033133c5e2dd1a4e8664bf67b19a61bcf6ed28d2b00f433b3f0b4f9585
+  CHROMEDRIVER_FOR_TESTING_SHA256: 6ac3919edd107ca13d08cccc118dc83821877e504014233f171bbd94cb01a80e
 
 jobs:
   # Единый envelope: при переходе с DE-02 на GitHub-hosted раннеры старый
@@ -625,7 +623,7 @@ jobs:
       - name: "@labpics/colors: typecheck + runtime tests"
         # pkg/ уже собран выше, поэтому TypeScript видит реальные wasm-bindgen
         # declarations; node --test покрывает builder, init и публичный контракт.
-        # Браузерный terminal Program-путь проверяется wasm-pack test ниже.
+        # Браузерный terminal Program-путь проверяется через собранный пакет ниже.
         working-directory: packages/colors
         run: |
           npm ci
@@ -668,8 +666,7 @@ jobs:
         # герметичным и не трогает системное состояние образа).
         # Strategy:
         #  1. Download exact CfT chrome + chromedriver archives and verify SHA-256.
-        #     wasm-pack reads CHROME_PATH for the browser but ignores a CHROMEDRIVER
-        #     variable, so the matching driver is passed through --chromedriver.
+        #     The terminal package harness passes both absolute paths explicitly.
         #  2. Extract required shared libs (.so) from the runner's configured
         #     Debian/Ubuntu repository without sudo. Refresh package metadata in
         #     runner.temp first: образ ячейки может нести устаревшие списки,
@@ -845,29 +842,16 @@ jobs:
           LD_LIBRARY_PATH="${DEPS_LIB}:${LD_LIBRARY_PATH:-}" "$CHROME_BIN" --version
           LD_LIBRARY_PATH="${DEPS_LIB}:${LD_LIBRARY_PATH:-}" "$CHROMEDRIVER_BIN" --version
 
-          # -- Make Chrome discoverable by chromedriver without explicit binary path --
-          # chromedriver searches PATH for: google-chrome, google-chrome-stable, chromium
-          # When CHROME_PATH/binary is not passed by wasm-bindgen-test-runner, chromedriver
-          # needs to find Chrome in PATH. Add an isolated runner.temp bin directory
-          # with Chrome aliases; wasm-pack receives the driver path explicitly.
-          CHROME_BIN_DIR="$RUNNER_TEMP/chrome-bin-$GITHUB_JOB"
-          mkdir -p "$CHROME_BIN_DIR"
-          ln -sf "$CHROME_BIN" "$CHROME_BIN_DIR/google-chrome"
-          ln -sf "$CHROME_BIN" "$CHROME_BIN_DIR/google-chrome-stable"
-          # Use GITHUB_PATH (step-scoped prepend) rather than PATH in GITHUB_ENV
-          # (which leaks the full expanded PATH across jobs on shared self-hosted runners).
-          echo "$CHROME_BIN_DIR" >> "$GITHUB_PATH"
-          echo "Linked CfT Chrome under runner.temp"
       - name: terminal Program in real browser
-        # Сначала проверяет crate-boundary, затем устанавливает exact verified
-        # tarball и исполняет тот же Program path через публичный package root.
+        # Устанавливает exact verified tarball и исполняет оба терминальных
+        # Program-контракта только через публичный package root.
         env:
           LAB_COLORS_BROWSER_PROOF_TIMEOUT_MS: "60000"
           VERIFIED_TARBALL: ${{ steps.verified-release.outputs.tarball }}
           VERIFIED_TARBALL_SHA256: ${{ steps.verified-release-identity.outputs.sha256 }}
         run: |
           set -euo pipefail
-          wasm-pack test --headless --chrome --chromedriver "$CHROMEDRIVER_PATH" crates/labcolors-wasm --locked
+          node --test scripts/test-program-runtime-browser-launcher.mjs
           node scripts/test-program-runtime-browser.mjs "$VERIFIED_TARBALL" "$VERIFIED_TARBALL_SHA256"
 
 # ci-trigger: force new merge-ref for runs-on fix validation 20260830233307

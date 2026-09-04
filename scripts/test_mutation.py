@@ -1840,11 +1840,24 @@ class MutationTruthTest(unittest.TestCase):
             run_policy("pull_request", 2, 42, 42)[0],
         )
 
-    def test_wasm_pack_browser_protocol_is_pinned_below_chrome_150(self) -> None:
+    def test_public_package_owns_the_exact_browser_proof(self) -> None:
         repo = Path(__file__).resolve().parents[1]
         worker = (
             repo / ".github" / "workflows" / "ci-worker.yml"
         ).read_text(encoding="utf-8-sig")
+        harness = (repo / "scripts" / "test-program-runtime-browser.mjs").read_text(
+            encoding="utf-8"
+        )
+        launcher_tests = (
+            repo / "scripts" / "test-program-runtime-browser-launcher.mjs"
+        ).read_text(encoding="utf-8")
+        wasm_manifest = (repo / "crates" / "labcolors-wasm" / "Cargo.toml").read_text(
+            encoding="utf-8"
+        )
+        wasm_source = (repo / "crates" / "labcolors-wasm" / "src" / "lib.rs").read_text(
+            encoding="utf-8"
+        )
+        cargo_lock = (repo / "Cargo.lock").read_text(encoding="utf-8")
         self.assertNotIn("\u0432\u0402", worker, "ci-worker.yml contains mojibake")
         self.assertNotIn("\u0432\u2020", worker, "ci-worker.yml contains mojibake")
         worker_env = worker.split("\njobs:\n", 1)[0]
@@ -1880,15 +1893,10 @@ class MutationTruthTest(unittest.TestCase):
         self.assertEqual(
             (version, chrome_sha256, chromedriver_sha256),
             (
-                "149.0.7827.55",
-                "13113b963ac22fffdad898a677591028e4397c46c1daa9e61811258eed6e35b5",
-                "8684a9cb079391352021e93e6ddb2f2afa66feb327526f7c3ed316b5b1028aaf",
+                "150.0.7871.115",
+                "1be2db033133c5e2dd1a4e8664bf67b19a61bcf6ed28d2b00f433b3f0b4f9585",
+                "6ac3919edd107ca13d08cccc118dc83821877e504014233f171bbd94cb01a80e",
             ),
-        )
-        self.assertLess(
-            int(version.split(".", 1)[0]),
-            150,
-            "wasm-pack 0.13.1 has no proven Chrome >=150 driver protocol",
         )
 
         wasm = workflow_job_blocks(worker, "ci-worker.yml")["wasm"]
@@ -1896,10 +1904,17 @@ class MutationTruthTest(unittest.TestCase):
             wasm.count("cargo install wasm-pack --version 0.13.1 --locked"),
             1,
         )
+        self.assertNotIn("wasm-pack test", wasm)
         self.assertEqual(
             wasm.count(
-                "wasm-pack test --headless --chrome --chromedriver "
-                '"$CHROMEDRIVER_PATH" crates/labcolors-wasm --locked'
+                "node --test scripts/test-program-runtime-browser-launcher.mjs"
+            ),
+            1,
+        )
+        self.assertEqual(
+            wasm.count(
+                "node scripts/test-program-runtime-browser.mjs "
+                '"$VERIFIED_TARBALL" "$VERIFIED_TARBALL_SHA256"'
             ),
             1,
         )
@@ -1916,6 +1931,69 @@ class MutationTruthTest(unittest.TestCase):
             '"$CHROME_ROOT/chromedriver-linux64.zip"',
             wasm,
         )
+        self.assertNotIn("CHROME_BIN_DIR", wasm)
+        self.assertNotIn("google-chrome-stable", wasm)
+
+        # The retired wasm-bindgen-test runner did not bind the downloaded
+        # Chrome binary and could select mutable system Chrome. Its two public
+        # contract cases now live together in the exact packed-consumer proof.
+        self.assertNotIn("wasm-bindgen-test", wasm_manifest)
+        self.assertNotIn('name = "wasm-bindgen-test"', cargo_lock)
+        self.assertNotIn("wasm_bindgen_test", wasm_source)
+        self.assertFalse(
+            (repo / "crates" / "labcolors-wasm" / "webdriver.json").exists()
+        )
+
+        self.assertNotIn("--port=0", harness)
+        self.assertNotIn("9515", harness)
+        self.assertNotIn("--allowed-ips", harness)
+        self.assertIn("DRIVER_START_ATTEMPTS = 4", harness)
+        self.assertIn("DRIVER_START_ATTEMPT_TIMEOUT_MS = 5_000", harness)
+        self.assertEqual(harness.count("reservation.listen(0, LOOPBACK"), 1)
+        self.assertEqual(harness.count("randomBytes(16).toString(\"hex\")"), 1)
+        self.assertEqual(harness.count("`--port=${port}`"), 1)
+        self.assertEqual(harness.count("`--url-base=${basePath}`"), 1)
+        self.assertIn("startedByThisChild", harness)
+        self.assertIn("observation.stdout.text()", harness)
+        self.assertIn("observation.stderr.text()", harness)
+        self.assertIn("child.exitCode === null", harness)
+        self.assertIn("ChromeDriver returned no session identity", harness)
+        self.assertEqual(harness.count("binary: chrome"), 1)
+        self.assertEqual(harness.count('"--headless=new"'), 1)
+        self.assertIn("DRIVER_LOG_LIMIT_BYTES = 64 * 1024", harness)
+        self.assertIn('stdio: ["ignore", "pipe", "pipe"]', harness)
+        self.assertIn("driverDiagnostics(observation)", harness)
+        self.assertEqual(harness.count("retryRuntime.updateObserved("), 2)
+        self.assertEqual(harness.count("new Uint8Array([255, 255]),"), 1)
+        self.assertIn("invalidRejected = true;", harness)
+        self.assertIn("invalidRejected: true,", harness)
+        self.assertIn("recovered: project(retrySnapshot)", harness)
+        # One call cleans every failed launch attempt; the other cleans the
+        # successful child after the browser contract completes.
+        self.assertEqual(harness.count("await stopDriver(child, observation);"), 2)
+        self.assertEqual(harness.count("await closeServer(server);"), 1)
+        self.assertEqual(harness.count("await rm(root, { recursive: true });"), 1)
+
+        # Behavioral launcher tests use real child processes and sockets. They
+        # prove collision retry, fail-closed exhaustion, stderr markers, and
+        # that a foreign ready responder is never queried without this child's
+        # exact start marker and per-attempt unguessable URL base.
+        self.assertEqual(launcher_tests.count("launchDriver("), 3)
+        self.assertIn(
+            "a bind collision is cleaned up and retried on a fresh port",
+            launcher_tests,
+        )
+        self.assertIn(
+            "a ready foreign listener cannot impersonate the spawned child",
+            launcher_tests,
+        )
+        self.assertIn(
+            "bounded collision retries fail closed after exhaustion",
+            launcher_tests,
+        )
+        self.assertIn('spawnDriver: fakeSpawner("stderr", children)', launcher_tests)
+        self.assertIn("assert.equal(arguments_.length, 2);", launcher_tests)
+        self.assertEqual(launcher_tests.count("assert.deepEqual(foreign.paths, []);"), 3)
 
     def test_reusable_workers_bound_jobs_and_binaryen_transport(self) -> None:
         repo = Path(__file__).resolve().parents[1]

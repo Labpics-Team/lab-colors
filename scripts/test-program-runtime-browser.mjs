@@ -1,11 +1,17 @@
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { execFileSync, spawn } from "node:child_process";
 import { access, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
+import { createServer as createTcpServer } from "node:net";
 import { tmpdir } from "node:os";
 import { extname, isAbsolute, join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 
 const LOOPBACK = "127.0.0.1";
+const DRIVER_LOG_LIMIT_BYTES = 64 * 1024;
+const DRIVER_START_ATTEMPTS = 4;
+const DRIVER_START_ATTEMPT_TIMEOUT_MS = 5_000;
+const DRIVER_STOP_TIMEOUT_MS = 5_000;
 const REFERENCE_WIRE_HEX =
   "4c4350570100b3000000010000000b0000001414140100000015000000010b0000000000" +
   "000000000000010000001f00000000000000010000002900000001150000000100000033" +
@@ -76,26 +82,236 @@ async function request(base, path, method, body, signal) {
     headers: body === undefined ? undefined : { "content-type": "application/json" },
     signal,
   });
-  const payload = await response.json();
+  const text = await response.text();
+  let payload;
+  try {
+    payload = JSON.parse(text);
+  } catch (error) {
+    fail(`WebDriver returned non-JSON for ${method} ${path}: HTTP ${response.status}`, {
+      cause: error,
+    });
+  }
   if (!response.ok || payload?.value?.error) {
     fail(`WebDriver rejected ${method} ${path}: ${payload?.value?.message ?? response.status}`);
   }
   return payload.value;
 }
 
-async function waitForDriver(signal, port, child) {
-  const deadline = Date.now() + 20_000;
+function captureBounded(stream) {
+  const chunks = [];
+  let keptBytes = 0;
+  let totalBytes = 0;
+  stream.on("data", (value) => {
+    const chunk = Buffer.isBuffer(value) ? value : Buffer.from(value);
+    totalBytes += chunk.length;
+    const remaining = DRIVER_LOG_LIMIT_BYTES - keptBytes;
+    if (remaining <= 0) return;
+    const kept = chunk.subarray(0, remaining);
+    chunks.push(kept);
+    keptBytes += kept.length;
+  });
+  return {
+    text() {
+      const captured = Buffer.concat(chunks, keptBytes).toString("utf8");
+      const omitted = totalBytes - keptBytes;
+      return omitted > 0 ? `${captured}\n...[${omitted} bytes omitted]` : captured;
+    },
+  };
+}
+
+function observeDriver(child) {
+  if (child.stdout === null || child.stderr === null) {
+    fail("ChromeDriver stdio was not captured");
+  }
+  let spawnError;
+  child.once("error", (error) => {
+    spawnError = error;
+  });
+  const closed = new Promise((resolveClose) => {
+    child.once("close", (code, signal) => resolveClose({ code, signal }));
+  });
+  return {
+    stdout: captureBounded(child.stdout),
+    stderr: captureBounded(child.stderr),
+    closed,
+    spawnError: () => spawnError,
+  };
+}
+
+function driverDiagnostics(observation) {
+  if (!observation) return "ChromeDriver was not started";
+  return [
+    "ChromeDriver stdout:",
+    observation.stdout.text() || "<empty>",
+    "ChromeDriver stderr:",
+    observation.stderr.text() || "<empty>",
+  ].join("\n");
+}
+
+async function reserveLoopbackPort() {
+  const reservation = createTcpServer();
+  await new Promise((resolveListen, rejectListen) => {
+    reservation.once("error", rejectListen);
+    reservation.listen(0, LOOPBACK, resolveListen);
+  });
+  const address = reservation.address();
+  if (address === null || typeof address === "string") {
+    reservation.close();
+    fail("ChromeDriver port reservation has no TCP address");
+  }
+  await new Promise((resolveClose, rejectClose) => {
+    reservation.close((error) => error ? rejectClose(error) : resolveClose());
+  });
+  return address.port;
+}
+
+async function waitForDriver(signal, child, observation, port, basePath, timeout) {
+  const deadline = Date.now() + timeout;
+  const startMarker = new RegExp(
+    `ChromeDriver was started successfully on port ${port}\\.?`,
+    "u",
+  );
   while (Date.now() < deadline) {
-    if (child?.killed || child?.exitCode !== null) {
-      fail(`ChromeDriver exited prematurely with code ${child?.exitCode ?? "unknown"}`);
+    if (signal.aborted) throw signal.reason;
+    if (observation.spawnError()) {
+      fail("ChromeDriver failed to spawn", { cause: observation.spawnError() });
     }
-    try {
-      const response = await fetch(`http://127.0.0.1:${port}/status`, { signal });
-      if (response.ok) return;
-    } catch {}
-    await new Promise((resolveDelay) => setTimeout(resolveDelay, 50));
+    if (child.exitCode !== null || child.signalCode !== null) {
+      fail(`ChromeDriver exited before readiness: code=${child.exitCode} signal=${child.signalCode}`);
+    }
+    const startedByThisChild = startMarker.test(observation.stdout.text())
+      || startMarker.test(observation.stderr.text());
+    if (startedByThisChild) {
+      try {
+        const probeSignal = AbortSignal.any([signal, AbortSignal.timeout(500)]);
+        const response = await fetch(`http://${LOOPBACK}:${port}${basePath}/status`, {
+          signal: probeSignal,
+        });
+        const payload = await response.json();
+        if (
+          response.ok
+          && payload?.value?.ready === true
+          && child.exitCode === null
+          && child.signalCode === null
+          && !observation.spawnError()
+        ) {
+          return;
+        }
+      } catch (error) {
+        if (signal.aborted) throw error;
+      }
+    }
+    await new Promise((resolveDelay) => setTimeout(resolveDelay, 25));
   }
   fail("ChromeDriver did not become ready");
+}
+
+function errorText(error) {
+  return error instanceof Error ? error.stack ?? error.message : String(error);
+}
+
+export async function launchDriver(driver, signal, dependencies = {}) {
+  const reservePort = dependencies.reservePort ?? reserveLoopbackPort;
+  const spawnDriver = dependencies.spawnDriver ?? spawn;
+  const randomToken = dependencies.randomToken
+    ?? (() => randomBytes(16).toString("hex"));
+  const attempts = dependencies.attempts ?? DRIVER_START_ATTEMPTS;
+  const attemptTimeout = dependencies.attemptTimeout
+    ?? DRIVER_START_ATTEMPT_TIMEOUT_MS;
+  if (!Number.isSafeInteger(attempts) || attempts < 1) {
+    fail("ChromeDriver start attempts must be a positive safe integer");
+  }
+  if (!Number.isSafeInteger(attemptTimeout) || attemptTimeout < 1) {
+    fail("ChromeDriver attempt timeout must be a positive safe integer");
+  }
+
+  const failures = [];
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    if (signal.aborted) throw signal.reason;
+    const port = await reservePort();
+    if (!Number.isSafeInteger(port) || port < 1 || port > 65_535) {
+      fail(`ChromeDriver port reservation returned invalid port ${port}`);
+    }
+    const token = randomToken();
+    if (!/^[0-9a-f]{32}$/u.test(token)) {
+      fail("ChromeDriver URL-base token must be 128-bit lowercase hex");
+    }
+    const basePath = `/labcolors-${token}`;
+    const child = spawnDriver(
+      driver,
+      [
+        `--port=${port}`,
+        `--url-base=${basePath}`,
+      ],
+      {
+        env: process.env,
+        stdio: ["ignore", "pipe", "pipe"],
+        windowsHide: true,
+      },
+    );
+    const observation = observeDriver(child);
+    try {
+      await waitForDriver(
+        signal,
+        child,
+        observation,
+        port,
+        basePath,
+        attemptTimeout,
+      );
+      return {
+        child,
+        observation,
+        origin: `http://${LOOPBACK}:${port}${basePath}`,
+      };
+    } catch (error) {
+      const attemptErrors = [error];
+      try {
+        await stopDriver(child, observation);
+      } catch (cleanupError) {
+        attemptErrors.push(cleanupError);
+      }
+      failures.push(
+        `attempt ${attempt}/${attempts} on port ${port}:\n`
+        + `${attemptErrors.map(errorText).join("\n")}\n`
+        + driverDiagnostics(observation),
+      );
+    }
+  }
+  fail(`ChromeDriver exhausted ${attempts} bounded start attempts:\n${failures.join("\n")}`);
+}
+
+async function settlesWithin(promise, timeout) {
+  const expired = Symbol("expired");
+  let timer;
+  try {
+    const outcome = await Promise.race([
+      promise,
+      new Promise((resolveTimeout) => {
+        timer = setTimeout(resolveTimeout, timeout, expired);
+      }),
+    ]);
+    return outcome !== expired;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+export async function stopDriver(child, observation) {
+  if (child.exitCode === null && child.signalCode === null) child.kill("SIGTERM");
+  if (await settlesWithin(observation.closed, DRIVER_STOP_TIMEOUT_MS)) return;
+  child.kill("SIGKILL");
+  if (!(await settlesWithin(observation.closed, DRIVER_STOP_TIMEOUT_MS))) {
+    fail("ChromeDriver did not exit after SIGKILL");
+  }
+}
+
+async function closeServer(server) {
+  if (!server?.listening) return;
+  await new Promise((resolveClose, rejectClose) => {
+    server.close((error) => error ? rejectClose(error) : resolveClose());
+    server.closeAllConnections();
+  });
 }
 
 async function main() {
@@ -108,15 +324,13 @@ async function main() {
 
   const root = await mkdtemp(join(tmpdir(), "labcolors-program-browser-"));
   let server;
-  const driverPort = 9515;
-  const child = spawn(driver, [`--port=${driverPort}`], {
-    env: process.env,
-    stdio: "ignore",
-    windowsHide: true,
-  });
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(new Error("browser proof timed out")), timeout);
+  let child;
+  let observation;
+  let controller;
+  let timer;
+  let driverOrigin;
   let sessionId;
+  let primaryError;
   try {
     await writeFile(join(root, "package.json"), '{"private":true,"type":"module"}\n');
     npmInstall(tarball, root, timeout);
@@ -136,7 +350,9 @@ async function main() {
       if (bytes) {
         res.writeHead(200, {
           "cache-control": "no-store",
-          "content-type": pathname.endsWith(".wasm") ? "application/wasm" : "text/javascript; charset=utf-8",
+          "content-type": pathname.endsWith(".wasm")
+            ? "application/wasm"
+            : "text/javascript; charset=utf-8",
           "x-content-type-options": "nosniff",
         });
         res.end(bytes);
@@ -146,49 +362,161 @@ async function main() {
     });
     const port = await listen(server);
     const origin = `http://${LOOPBACK}:${port}`;
-    await waitForDriver(controller.signal, driverPort, child);
-    const session = await request(`http://127.0.0.1:${driverPort}`, "/session", "POST", {
+
+    controller = new AbortController();
+    timer = setTimeout(
+      () => controller.abort(new Error("browser proof timed out")),
+      timeout,
+    );
+    ({ child, observation, origin: driverOrigin } = await launchDriver(
+      driver,
+      controller.signal,
+    ));
+    const session = await request(driverOrigin, "/session", "POST", {
       capabilities: { alwaysMatch: { browserName: "chrome", "goog:chromeOptions": {
         binary: chrome,
         args: ["--headless=new", "--no-sandbox", "--disable-dev-shm-usage"],
       } } },
     }, controller.signal);
+    if (typeof session?.sessionId !== "string" || session.sessionId.length === 0) {
+      fail("ChromeDriver returned no session identity");
+    }
     sessionId = session.sessionId;
-    const base = `http://127.0.0.1:9515/session/${sessionId}`;
+    const base = `${driverOrigin}/session/${sessionId}`;
     await request(base, "/url", "POST", { url: origin }, controller.signal);
-    const script = `const done=arguments[arguments.length-1];(async()=>{` +
-      `const api=await import(${JSON.stringify(`${origin}/index.js`)});` +
-      `await api.init({module_or_path:fetch(${JSON.stringify(`${origin}/pkg/labcolors_bg.wasm`)})});` +
-      `const wire=Uint8Array.from(${JSON.stringify(REFERENCE_WIRE_HEX)}.match(/../g),x=>parseInt(x,16));` +
-      `const runtime=api.compileProgramWire(wire,1);` +
-      `const snapshot=runtime.updateObserved(1n,new Uint32Array([1]),new Uint8Array([255,255,255]),1);` +
-      `const value={state:snapshot.state,count:snapshot.outputCount(),slot:snapshot.outputSlot(0),rgb:Array.from(snapshot.outputRgb(0)),opacity:snapshot.outputOpacity(0)};` +
-      `snapshot.free();runtime.free();done(value);})().catch(error=>done({error:String(error)}));`;
-    const result = await request(base, "/execute/async", "POST", { script, args: [] }, controller.signal);
-    if (
-      result?.error ||
-      result?.state !== "ready" ||
-      result?.count !== 1 ||
-      result?.slot !== 91 ||
-      JSON.stringify(result?.rgb) !== "[20,20,20]" ||
-      result?.opacity !== 1
-    ) fail(`terminal Program result drifted: ${JSON.stringify(result)}`);
-    console.log(`LAB_COLORS_PROGRAM_BROWSER_PASS sha256=${digest}`);
+    const script = `
+      const done = arguments[arguments.length - 1];
+      (async () => {
+        const api = await import(${JSON.stringify(`${origin}/index.js`)});
+        await api.init({ module_or_path: fetch(${JSON.stringify(`${origin}/pkg/labcolors_bg.wasm`)}) });
+        const wire = Uint8Array.from(
+          ${JSON.stringify(REFERENCE_WIRE_HEX)}.match(/../gu),
+          (octet) => Number.parseInt(octet, 16),
+        );
+        let readyRuntime;
+        let readySnapshot;
+        let retryRuntime;
+        let retrySnapshot;
+        try {
+          readyRuntime = api.compileProgramWire(wire, 1);
+          readySnapshot = readyRuntime.updateObserved(
+            1n,
+            new Uint32Array([1]),
+            new Uint8Array([255, 255, 255]),
+            1,
+          );
+
+          retryRuntime = api.compileProgramWire(wire, 7);
+          let invalidRejected = false;
+          try {
+            const invalidSnapshot = retryRuntime.updateObserved(
+              1n,
+              new Uint32Array([1]),
+              new Uint8Array([255, 255]),
+              1,
+            );
+            invalidSnapshot.free();
+          } catch {
+            invalidRejected = true;
+          }
+          retrySnapshot = retryRuntime.updateObserved(
+            1n,
+            new Uint32Array([1]),
+            new Uint8Array([255, 255, 255]),
+            1,
+          );
+          const project = (snapshot) => ({
+            state: snapshot.state,
+            count: snapshot.outputCount(),
+            slot: snapshot.outputSlot(0),
+            rgb: Array.from(snapshot.outputRgb(0)),
+            opacity: snapshot.outputOpacity(0),
+          });
+          return {
+            ready: project(readySnapshot),
+            invalidRejected,
+            recovered: project(retrySnapshot),
+          };
+        } finally {
+          retrySnapshot?.free();
+          retryRuntime?.free();
+          readySnapshot?.free();
+          readyRuntime?.free();
+        }
+      })().then(done, (error) => done({ browserError: String(error?.stack ?? error) }));`;
+    const result = await request(base, "/execute/async", "POST", {
+      script,
+      args: [],
+    }, controller.signal);
+    const expectedSnapshot = {
+      state: "ready",
+      count: 1,
+      slot: 91,
+      rgb: [20, 20, 20],
+      opacity: 1,
+    };
+    const expected = {
+      ready: expectedSnapshot,
+      invalidRejected: true,
+      recovered: expectedSnapshot,
+    };
+    if (JSON.stringify(result) !== JSON.stringify(expected)) {
+      fail(`terminal Program result drifted: ${JSON.stringify(result)}`);
+    }
     await request(base, "", "DELETE", undefined, controller.signal);
     sessionId = undefined;
+  } catch (error) {
+    primaryError = error;
   } finally {
     clearTimeout(timer);
-    if (sessionId) {
-      const cleanupSignal = AbortSignal.timeout(5_000);
-      try { await request(`http://127.0.0.1:${driverPort}/session/${sessionId}`, "", "DELETE", undefined, cleanupSignal); } catch {}
+    const cleanupErrors = [];
+    if (sessionId && driverOrigin) {
+      try {
+        await request(
+          `${driverOrigin}/session/${sessionId}`,
+          "",
+          "DELETE",
+          undefined,
+          AbortSignal.timeout(DRIVER_STOP_TIMEOUT_MS),
+        );
+      } catch (error) {
+        cleanupErrors.push(error);
+      }
     }
-    child.kill();
-    if (server) await new Promise((resolveClose) => server.close(resolveClose));
-    await rm(root, { recursive: true, force: true });
+    if (child && observation) {
+      try {
+        await stopDriver(child, observation);
+      } catch (error) {
+        cleanupErrors.push(error);
+      }
+    }
+    try {
+      await closeServer(server);
+    } catch (error) {
+      cleanupErrors.push(error);
+    }
+    try {
+      await rm(root, { recursive: true });
+    } catch (error) {
+      cleanupErrors.push(error);
+    }
+    if (primaryError || cleanupErrors.length > 0) {
+      const failures = [primaryError, ...cleanupErrors]
+        .filter(Boolean)
+        .map((error) => error instanceof Error ? error.stack : String(error));
+      fail(`${failures.join("\n")}\n${driverDiagnostics(observation)}`);
+    }
   }
+
+  console.log(`LAB_COLORS_PROGRAM_BROWSER_PASS sha256=${digest}`);
 }
 
-main().catch((error) => {
-  console.error(error instanceof Error ? error.stack : String(error));
-  process.exitCode = 1;
-});
+if (
+  process.argv[1]
+  && import.meta.url === pathToFileURL(resolve(process.argv[1])).href
+) {
+  main().catch((error) => {
+    console.error(error instanceof Error ? error.stack : String(error));
+    process.exitCode = 1;
+  });
+}
