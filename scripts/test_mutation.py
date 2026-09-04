@@ -1865,9 +1865,52 @@ class MutationTruthTest(unittest.TestCase):
             "ci.yml must pin ci-worker.yml to a full 40-char commit SHA",
         )
         assert ci_worker_ref_match is not None
+        pinned_ci_worker_sha = ci_worker_ref_match.group(1)
+        assert self.git_binary is not None
+        pin_is_reachable = subprocess.run(
+            [
+                self.git_binary,
+                "-C",
+                str(repo),
+                "merge-base",
+                "--is-ancestor",
+                pinned_ci_worker_sha,
+                "HEAD",
+            ],
+            check=False,
+            env=self.git_env,
+            capture_output=True,
+        )
+        self.assertEqual(
+            pin_is_reachable.returncode,
+            0,
+            "ci.yml must not pin an orphaned reusable-workflow commit",
+        )
+        pinned_ci_worker = subprocess.run(
+            [
+                self.git_binary,
+                "-C",
+                str(repo),
+                "show",
+                f"{pinned_ci_worker_sha}:.github/workflows/ci-worker.yml",
+            ],
+            check=False,
+            env=self.git_env,
+            capture_output=True,
+        )
+        self.assertEqual(
+            pinned_ci_worker.returncode,
+            0,
+            "the pinned ci-worker.yml must be readable from the pinned commit",
+        )
+        self.assertEqual(
+            pinned_ci_worker.stdout,
+            (workflows / "ci-worker.yml").read_bytes(),
+            "the pinned worker must be byte-identical to the reviewed worker",
+        )
         admitted_ci_worker = (
             "uses: Labpics-Team/lab-colors/.github/workflows/ci-worker.yml@"
-+ ci_worker_ref_match.group(1)
+            + pinned_ci_worker_sha
         )
         self.assertEqual(ci_caller.count("ci-worker.yml@"), 1)
         self.assertIn(admitted_ci_worker, ci_caller)
