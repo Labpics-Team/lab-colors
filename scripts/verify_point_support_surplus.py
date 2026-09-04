@@ -68,6 +68,8 @@ ACCEPTED_SOURCE_CAPSULE_SHA256 = frozenset({
     "6758df8bf846a423adc27bec71035b0fa2e15db11aea1414beb4da923292cc11",
     # PR #691: local recomputation after proof payload refresh
     "62085a606a541329a898bb8de5a2e941de44c493c5a2e74d6ae0717804b48c3c",
+    # PR #703: r7/411-srgb8-boundary rebase on main with merged #704 shifted source cone
+    "2d3a7a5652f863f38d56d24bf863d1f4953a3ad632daa920a869e4737c6f627c",
 })
 EXPECTED_Q55_PROOF_SHA256 = (
     "fd544b92e7b4cfa4734f0dd9d90aeb52491df6cf94c766ccf59ec716cbc78d12"
