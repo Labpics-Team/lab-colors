@@ -1723,7 +1723,7 @@ class MutationTruthTest(unittest.TestCase):
         self.assertEqual(mutation.EXECUTION_COMMANDS["Build"][0], "test")
         self.assertEqual(second["commands"]["Build"][0], "test")
 
-    def test_shared_runner_workflows_cancel_stale_prs_without_canceling_evidence(
+    def test_shared_runner_workflows_cancel_stale_prs_without_canceling_running_evidence(
         self,
     ) -> None:
         repo = Path(__file__).resolve().parents[1]
@@ -1740,27 +1740,25 @@ class MutationTruthTest(unittest.TestCase):
 
         self.assertIn(
             "concurrency:\n"
-            "  group: mutation\n"
-            "  queue: max\n",
+            "  group: mutation\n",
             mutation_workflow,
         )
         mutation_concurrency = mutation_workflow.split("concurrency:\n", 1)[1].split(
             "\nenv:", 1
         )[0]
         self.assertNotIn("cancel-in-progress", mutation_concurrency)
+        self.assertNotIn("queue:", mutation_concurrency)
 
-        def enqueue_three(queue_mode: str) -> tuple[list[str], list[str]]:
+        def enqueue_latest_pending() -> tuple[list[str], list[str]]:
             pending: list[str] = []
             cancelled: list[str] = []
             for run in ("R2", "R3"):
-                if queue_mode == "single" and pending:
+                if pending:
                     cancelled.extend(pending)
-                    pending = []
-                pending.append(run)
+                pending = [run]
             return pending, cancelled
 
-        self.assertEqual(enqueue_three("max"), (["R2", "R3"], []))
-        self.assertEqual(enqueue_three("single"), (["R3"], ["R2"]))
+        self.assertEqual(enqueue_latest_pending(), (["R3"], ["R2"]))
 
         group_tail = (
             "${{ github.event_name == 'pull_request' && github.run_attempt == 1 "
@@ -1867,9 +1865,52 @@ class MutationTruthTest(unittest.TestCase):
             "ci.yml must pin ci-worker.yml to a full 40-char commit SHA",
         )
         assert ci_worker_ref_match is not None
+        pinned_ci_worker_sha = ci_worker_ref_match.group(1)
+        assert self.git_binary is not None
+        pin_is_reachable = subprocess.run(
+            [
+                self.git_binary,
+                "-C",
+                str(repo),
+                "merge-base",
+                "--is-ancestor",
+                pinned_ci_worker_sha,
+                "HEAD",
+            ],
+            check=False,
+            env=self.git_env,
+            capture_output=True,
+        )
+        self.assertEqual(
+            pin_is_reachable.returncode,
+            0,
+            "ci.yml must not pin an orphaned reusable-workflow commit",
+        )
+        pinned_ci_worker = subprocess.run(
+            [
+                self.git_binary,
+                "-C",
+                str(repo),
+                "show",
+                f"{pinned_ci_worker_sha}:.github/workflows/ci-worker.yml",
+            ],
+            check=False,
+            env=self.git_env,
+            capture_output=True,
+        )
+        self.assertEqual(
+            pinned_ci_worker.returncode,
+            0,
+            "the pinned ci-worker.yml must be readable from the pinned commit",
+        )
+        self.assertEqual(
+            pinned_ci_worker.stdout,
+            (workflows / "ci-worker.yml").read_bytes(),
+            "the pinned worker must be byte-identical to the reviewed worker",
+        )
         admitted_ci_worker = (
             "uses: Labpics-Team/lab-colors/.github/workflows/ci-worker.yml@"
-+ ci_worker_ref_match.group(1)
+            + pinned_ci_worker_sha
         )
         self.assertEqual(ci_caller.count("ci-worker.yml@"), 1)
         self.assertIn(admitted_ci_worker, ci_caller)

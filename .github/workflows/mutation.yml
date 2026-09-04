@@ -13,11 +13,11 @@ on:
 permissions:
   contents: read
 
-# Report-only прогоны не отменяют выполняющийся запуск и не вытесняют уже
-# ожидающее evidence: `queue: max` — штатный FIFO-режим GitHub Actions.
+# Report-only прогоны не отменяют выполняющийся запуск. GitHub Actions держит
+# не более одного pending запуска в группе и заменяет его более новым; это
+# намеренная latest-pending семантика, а не несуществующий FIFO-параметр.
 concurrency:
   group: mutation
-  queue: max
 
 jobs:
   worker:
