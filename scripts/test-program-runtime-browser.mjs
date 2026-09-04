@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { createHash, randomBytes } from "node:crypto";
 import { execFileSync, spawn } from "node:child_process";
 import { access, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
@@ -21,6 +22,24 @@ const REFERENCE_WIRE_HEX =
 
 function fail(message, options) {
   throw new Error(`Program browser proof: ${message}`, options);
+}
+
+/**
+ * WebDriver serializes object properties in an implementation-defined order.
+ * Compare the decoded value structurally so that order is not mistaken for
+ * a semantic runtime result, while still rejecting every missing, extra, or
+ * type/value-drifted field.
+ */
+export function assertExactProgramResult(actual, expected) {
+  try {
+    assert.deepStrictEqual(actual, expected);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    fail(
+      `terminal Program result drifted: ${JSON.stringify(actual)}\n${detail}`,
+      { cause: error },
+    );
+  }
 }
 
 function positiveIntegerEnv(name) {
@@ -460,9 +479,7 @@ async function main() {
       invalidRejected: true,
       recovered: expectedSnapshot,
     };
-    if (JSON.stringify(result) !== JSON.stringify(expected)) {
-      fail(`terminal Program result drifted: ${JSON.stringify(result)}`);
-    }
+    assertExactProgramResult(result, expected);
     await request(base, "", "DELETE", undefined, controller.signal);
     sessionId = undefined;
   } catch (error) {
