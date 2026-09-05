@@ -79,6 +79,23 @@ extern "C" {
     pub type JsWcag22AssessmentV1;
 }
 
+#[wasm_bindgen(inline_js = r#"
+export function programError(message, code, operation) {
+  try {
+    const error = new Error(message);
+    error.code = code;
+    error.operation = operation;
+    return error;
+  } catch {
+    return new Error("Program error projection failed");
+  }
+}
+"#)]
+extern "C" {
+    #[wasm_bindgen(js_name = programError)]
+    fn program_error(message: &str, code: &str, operation: &str) -> js_sys::Error;
+}
+
 fn to_js_error(error: BindingError) -> JsError {
     JsError::new(&error.to_string())
 }
@@ -113,21 +130,7 @@ fn to_program_js_error(
         E::Update => "program_update",
         _ => "program_runtime",
     };
-    let error = js_sys::Error::new("Program runtime operation failed");
-    let code_set = js_sys::Reflect::set(
-        error.as_ref(),
-        &JsValue::from_str("code"),
-        &JsValue::from_str(code),
-    );
-    let operation_set = js_sys::Reflect::set(
-        error.as_ref(),
-        &JsValue::from_str("operation"),
-        &JsValue::from_str(operation.key()),
-    );
-    if !matches!(code_set, Ok(true)) || !matches!(operation_set, Ok(true)) {
-        return js_sys::Error::new("Program error projection failed").into();
-    }
-    error.into()
+    program_error("Program runtime operation failed", code, operation.key()).into()
 }
 
 /// Единственный публичный манифест численных возможностей.
