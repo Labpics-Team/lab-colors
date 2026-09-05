@@ -20,6 +20,22 @@ export {
 // wasm-bindgen returns every raw export from its loaders. The public facade
 // deliberately erases that value: initialization is an effect, not a second
 // uncurated ABI beside the typed package surface.
+const COMPILE_PROGRAM_ERROR_CODES = new Set([
+  "program_wire",
+  "program_compile",
+  "program_family_artifacts_required",
+  "program_instantiate",
+]);
+
+export function isProgramError(error) {
+  if (!(error instanceof Error)) return false;
+  if (error.operation === "compileProgramWire") return COMPILE_PROGRAM_ERROR_CODES.has(error.code);
+  if (error.operation === "updateObserved" || error.operation === "updateUnknown") {
+    return error.code === "program_update";
+  }
+  return false;
+}
+
 export function init(input) {
   if (initState === "ready") return Promise.resolve();
   if (initState === "async") return initFlight;

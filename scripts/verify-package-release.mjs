@@ -1149,6 +1149,7 @@ assert.deepEqual(Object.keys(colors).sort(), [
   "evaluateWcag22",
   "init",
   "initSync",
+  "isProgramError",
   "numericalCapabilityManifest",
 ]);
 for (const retired of ["LabColors", "resolveTheme", "applyTheme", "watchTheme", "adaptTheme"]) {
@@ -1197,6 +1198,16 @@ const wire = Uint8Array.from(Buffer.from(
   "4c4350570100b3000000010000000b0000001414140100000015000000010b0000000000000000000000010000001f00000000000000010000002900000001150000000100000033000000011f000000010000003d000000290000003300000000000000000050409a9999999999c93f0101000000470000003d00000001000000470000003d0000000100000051000000093d000000030100000052000000013d000000141414010000005b00000029000000",
   "hex",
 ));
+let typedFailure;
+try {
+  colors.compileProgramWire(new Uint8Array(), 1);
+} catch (error) {
+  assert.equal(colors.isProgramError(error), true);
+  typedFailure = error;
+}
+assert.equal(typedFailure.code, "program_wire");
+assert.equal(typedFailure.operation, "compileProgramWire");
+
 const runtime = colors.compileProgramWire(wire, 1);
 const snapshot = runtime.updateObserved(1n, new Uint32Array([1]), new Uint8Array([255, 255, 255]), 1);
 assert.equal(snapshot.state, "ready");
@@ -1216,8 +1227,11 @@ import init, {
   ProgramSnapshot,
   compileProgramWire,
   evaluateWcag22,
+  isProgramError,
   numericalCapabilityManifest,
   type NumericalCapabilityManifestV2,
+  type ProgramErrorCode,
+  type ProgramOperation,
   type Wcag22AssessmentV1,
   type Wcag22CriterionV1,
 } from "@labpics/colors";
@@ -1238,7 +1252,10 @@ async function boot(module: WebAssembly.Module, wire: Uint8Array): Promise<Progr
 const criterion: Wcag22CriterionV1 = "sc-1.4.3-text-default";
 const assessment: Wcag22AssessmentV1 = evaluateWcag22("#000000", "#FFFFFF", criterion);
 const capability: NumericalCapabilityManifestV2 = numericalCapabilityManifest();
+const programFailure = (error: unknown): readonly [ProgramErrorCode, ProgramOperation] | undefined =>
+  isProgramError(error) ? [error.code, error.operation] : undefined;
 void boot;
+void programFailure;
 void assessment;
 void capability;
 // @ts-expect-error C7c removed the recipe engine.
@@ -1359,6 +1376,8 @@ async function verifyCleanConsumer(
           "NodeNext",
           "--moduleResolution",
           "NodeNext",
+          "--typeRoots",
+          resolve(consumer, "node_modules", "@types"),
           typesPath,
         ],
         consumer,
@@ -1373,6 +1392,13 @@ async function verifyCleanConsumer(
 // Execute the same packed-package runtime smoke under the caller's Node binary.
 // CI uses this to prove the public consumer floor independently from the pinned
 // release packer.
+export function browserProofInvocation(tarballPath, sha256) {
+  if (!/^[0-9a-f]{64}$/u.test(sha256)) {
+    fail("browser proof tarball identity must be lowercase SHA-256");
+  }
+  return [resolve(REPO_ROOT, "scripts/test-program-runtime-browser.mjs"), resolve(tarballPath), sha256];
+}
+
 export async function smokePackedPackage(tarballPath) {
   const tarball = resolve(tarballPath);
   const consumer = await mkdtemp(join(tmpdir(), "labcolors-package-smoke-"));
@@ -1498,6 +1524,9 @@ export async function verifyPackageRelease() {
   );
 
   const verifiedTarball = await materializeVerifiedTarballSnapshot(canonicalPack);
+  if (process.env.CHROME_PATH && process.env.CHROMEDRIVER_PATH) {
+    command(process.execPath, browserProofInvocation(verifiedTarball.path, verifiedTarball.sha256));
+  }
   const tarball = {
     path: `.release/${basename(verifiedTarball.path)}`,
     bytes: verifiedTarball.bytes.length,

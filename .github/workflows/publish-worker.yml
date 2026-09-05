@@ -335,6 +335,8 @@ jobs:
             "index.js",
             "index.d.ts",
             "wcag22.d.ts",
+            "program-wire/abi-v1.js",
+            "program-wire/abi-v1.d.ts",
             "evidence/wcag22-srgb8-v1.json",
             "evidence/wcag22-srgb8-q55-v1.bin",
             "evidence/wcag22-srgb8-q55-proof-v1.json",
@@ -347,6 +349,10 @@ jobs:
           const EXPECTED_PACKAGE_EXPORTS = {
             ".": { types: "./index.d.ts", default: "./index.js" },
             "./pkg/labcolors_bg.wasm": "./pkg/labcolors_bg.wasm",
+            "./program-wire/abi-v1.js": {
+              types: "./program-wire/abi-v1.d.ts",
+              default: "./program-wire/abi-v1.js",
+            },
             "./build-metadata.json": "./build-metadata.json",
             "./package.json": "./package.json",
           };
@@ -363,11 +369,11 @@ jobs:
           }
 
           if (
-            EXPECTED_PACKAGE_FILES.length !== 13 ||
-            new Set(EXPECTED_PACKAGE_FILES).size !== 13 ||
+            EXPECTED_PACKAGE_FILES.length !== 15 ||
+            new Set(EXPECTED_PACKAGE_FILES).size !== 15 ||
             EXPECTED_PACKAGE_FILES.some((path) => path.includes("*")) ||
-            EXPECTED_TAR_INVENTORY.length !== 15 ||
-            new Set(EXPECTED_TAR_INVENTORY).size !== 15
+            EXPECTED_TAR_INVENTORY.length !== 17 ||
+            new Set(EXPECTED_TAR_INVENTORY).size !== 17
           ) {
             fail("worker package inventory allowlist is not canonical");
           }
