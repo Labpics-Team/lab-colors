@@ -144,17 +144,18 @@ async function request(base, path, method, body, signal) {
 }
 
 function browserScenario(origin) {
-  return `const done=arguments[arguments.length-1];(async()=>{const released=[];const browserCleanup=(primary,resources)=>{const failures=[];for(const resource of resources){try{resource.release()}catch(error){failures.push(resource.name)}}const outcome=primary===undefined?{}:{error:String(primary),code:primary?.code,operation:primary?.operation};if(failures.length)outcome.cleanupError={code:"BROWSER_PROOF_CLEANUP_FAILED",resources:failures};return outcome};let host,runtime,snapshot,result;try{` +
+  return `const done=arguments[arguments.length-1];(async()=>{const acquired=[],released=[];const browserCleanup=(primary,resources)=>{const failures=[];for(const resource of resources){try{resource.release()}catch(error){failures.push(resource.name)}}const outcome=primary===undefined?{}:{error:String(primary),code:primary?.code,operation:primary?.operation};if(failures.length)outcome.cleanupError={code:"BROWSER_PROOF_CLEANUP_FAILED",resources:failures};return outcome};let host,runtime,snapshot,result;try{` +
     `const api=await import(${JSON.stringify(`${origin}/index.js`)}),wire=await import(${JSON.stringify(`${origin}/program-wire/abi-v1.js`)});` +
     `await api.init({module_or_path:fetch(${JSON.stringify(`${origin}/pkg/labcolors_bg.wasm`)})});` +
     `const builder=new wire.ProgramWireBuilderV1();builder.source(11,[20,20,20]).fixedTarget(21,11).surfaceInputPort(31).solidPaint(41,21).inputSurface(51,31).sourceOverOccurrence(61,41,51,64,.2,wire.SURROUND_AVERAGE_V1).presentationRoot(71,61).presentationTarget(71,61).wcag22VisibleUnary(true,81,61,wire.WCAG22_SC1411_UI_COMPONENT_OR_STATE_V1).exactVisibleUnary(false,82,61,[20,20,20]).output(91,41);` +
-    `runtime=api.compileProgramWire(builder.finish(),1);snapshot=runtime.updateObserved(1n,new Uint32Array([1]),new Uint8Array([255,255,255]),1);` +
-    `const token="consumer.foreground",slots=new Map([[token,91]]),element=document.createElement("div");element.style.color="var(--consumer-color)";document.body.append(element);let hostDisposed=false;host={free(){if(hostDisposed)return;hostDisposed=true;element.style.removeProperty("--consumer-color");element.remove()}};` +
+    `runtime=api.compileProgramWire(builder.finish(),1);acquired.push({name:"runtime",release(){if(runtime)runtime.free();released.push("runtime")}});snapshot=runtime.updateObserved(1n,new Uint32Array([1]),new Uint8Array([255,255,255]),1);acquired.push({name:"snapshot",release(){if(snapshot)snapshot.free();released.push("snapshot")}});` +
+    `const token="consumer.foreground",slots=new Map([[token,91]]),element=document.createElement("div");element.style.color="var(--consumer-color)";document.body.append(element);let hostDisposed=false;host={free(){if(hostDisposed)return;hostDisposed=true;element.style.removeProperty("--consumer-color");element.remove()}};acquired.push({name:"host",release(){host.free();host.free();released.push("host")}});` +
     `const materialize=s=>{let found=-1;for(let i=0;i<s.outputCount();i+=1)if(s.outputSlot(i)===slots.get(token))found=i;if(found<0)throw new Error("opaque consumer token was not materialized");const [r,g,b]=s.outputRgb(found);element.style.setProperty("--consumer-color","rgb("+r+" "+g+" "+b+" / "+s.outputOpacity(found)+")")};` +
     `const rgba=value=>{const channels=value.match(/[\\d.]+/g)?.map(Number);if(!channels||channels.length<3)throw new Error("computed color was not RGB");return [channels[0],channels[1],channels[2],channels[3]??1]};materialize(snapshot);` +
     `const before=rgba(getComputedStyle(element).color);let rejected=false;try{runtime.updateObserved(2n,new Uint32Array([]),new Uint8Array([]),1)}catch(error){rejected=api.isProgramError(error)&&error.code==="program_update"&&error.operation==="updateObserved"}const after=rgba(getComputedStyle(element).color);` +
     `result={before,after,rejected,oracle:[20,20,20,1],slot:snapshot.outputSlot(0),state:snapshot.state};` +
-    `}catch(error){result=browserCleanup(error,[])}finally{result={...result,...browserCleanup(undefined,[{name:"host",release(){if(host){host.free();host.free()}released.push("host")}},{name:"snapshot",release(){if(snapshot)snapshot.free();released.push("snapshot")}},{name:"runtime",release(){if(runtime)runtime.free();released.push("runtime")}}])}}result.released=released;done(result)})()`;
+    // Host depends on snapshot, which depends on runtime; reverse acquisition is the only safe release order.
+    `}catch(error){result=browserCleanup(error,[])}finally{result={...result,...browserCleanup(undefined,acquired.toReversed())}}result.released=released;done(result)})()`;
 }
 
 async function main() {
@@ -178,7 +179,7 @@ async function main() {
     const childErrors = observeChildErrors(child);
     resources.push({
       name: "browser",
-      release: () => releaseChild(child, childErrors),
+      release: () => releaseChild(child, childErrors, 2_000),
     });
     const controller = new AbortController();
     timer = setTimeout(() => controller.abort(new Error("browser proof timed out")), timeout);

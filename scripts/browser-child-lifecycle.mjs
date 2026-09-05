@@ -131,8 +131,7 @@ export async function waitForDriver(signal, port, child, errors) {
     return new Error(`Program browser proof: ChromeDriver exited prematurely with code ${outcome}`);
   });
   const readiness = (async () => {
-    const deadline = Date.now() + 20_000;
-    while (Date.now() < deadline) {
+    while (!pollingSignal.aborted) {
       if (errors.exited) {
         const outcome = child.exitCode ?? child.signalCode ?? "unknown";
         fail(`ChromeDriver exited prematurely with code ${outcome}`);
@@ -145,7 +144,7 @@ export async function waitForDriver(signal, port, child, errors) {
       }
       await new Promise((accept) => setTimeout(accept, 50));
     }
-    fail("ChromeDriver did not become ready");
+    throw pollingSignal.reason;
   })();
   try {
     const outcome = await Promise.race([

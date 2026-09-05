@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { EventEmitter, once } from "node:events";
+import { readFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -61,6 +62,32 @@ test("browser cleanup preserves the primary and releases snapshot, runtime, then
   assert.equal(outcome.error, "Error: browser scenario failed");
   assert.equal(outcome.cleanupError.code, "BROWSER_PROOF_CLEANUP_FAILED");
   assert.deepEqual(outcome.cleanupError.resources, ["snapshot"]);
+});
+
+test("driver readiness is bounded only by the caller-owned signal", () => {
+  const source = readFileSync(
+    new URL("../../../scripts/browser-child-lifecycle.mjs", import.meta.url),
+    "utf8",
+  );
+  assert.doesNotMatch(source, /Date\.now\(\) \+ 20_000|did not become ready/u);
+});
+
+test("browser proof grants real-process termination a 2000 ms budget", () => {
+  const source = readFileSync(
+    new URL("../../../scripts/test-program-runtime-browser.mjs", import.meta.url),
+    "utf8",
+  );
+  assert.match(source, /releaseChild\(child, childErrors, 2_000\)/u);
+});
+
+test("browser scenario records acquisition and derives reverse release order", () => {
+  const source = readFileSync(
+    new URL("../../../scripts/test-program-runtime-browser.mjs", import.meta.url),
+    "utf8",
+  );
+  assert.match(source, /acquired\.push\(\{name:"runtime".*acquired\.push\(\{name:"snapshot".*acquired\.push\(\{name:"host"/su);
+  assert.match(source, /browserCleanup\(undefined,acquired\.toReversed\(\)\)/u);
+  assert.match(source, /\["host","snapshot","runtime"\]/u);
 });
 
 test("driver startup propagates the actual asynchronous child error", async () => {
