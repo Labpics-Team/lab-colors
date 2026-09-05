@@ -6,6 +6,8 @@ import { tmpdir } from "node:os";
 import { extname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { observeChildErrors, terminateChild, waitForDriver } from "./browser-child-lifecycle.mjs";
+
 const LOOPBACK = "127.0.0.1";
 const RESOURCE_ORDER = [
   "temp-install",
@@ -62,22 +64,6 @@ export function browserCleanup(primary, resources) {
     };
   }
   return outcome;
-}
-
-export async function terminateChild(child, timeoutMs = 5_000) {
-  if (child.exitCode !== null || child.signalCode !== null) return;
-  if (!child.kill()) fail("ChromeDriver rejected termination");
-  await new Promise((accept, reject) => {
-    const timer = setTimeout(() => {
-      child.removeListener("exit", onExit);
-      reject(new Error("ChromeDriver did not exit after termination"));
-    }, timeoutMs);
-    const onExit = () => {
-      clearTimeout(timer);
-      accept();
-    };
-    child.once("exit", onExit);
-  });
 }
 
 export async function verifyCleanupFaultMatrix() {
@@ -157,21 +143,6 @@ async function request(base, path, method, body, signal) {
   return payload.value;
 }
 
-async function waitForDriver(signal, port, child) {
-  const deadline = Date.now() + 20_000;
-  while (Date.now() < deadline) {
-    if (child.killed || child.exitCode !== null) fail(`ChromeDriver exited prematurely with code ${child.exitCode ?? "unknown"}`);
-    try {
-      const response = await fetch(`http://${LOOPBACK}:${port}/status`, { signal });
-      if (response.ok) return;
-    } catch (error) {
-      if (signal.aborted) throw error;
-    }
-    await new Promise((accept) => setTimeout(accept, 50));
-  }
-  fail("ChromeDriver did not become ready");
-}
-
 function browserScenario(origin) {
   return `const done=arguments[arguments.length-1];(async()=>{const released=[];const browserCleanup=(primary,resources)=>{const failures=[];for(const resource of resources){try{resource.release()}catch(error){failures.push(resource.name)}}const outcome=primary===undefined?{}:{error:String(primary),code:primary?.code,operation:primary?.operation};if(failures.length)outcome.cleanupError={code:"BROWSER_PROOF_CLEANUP_FAILED",resources:failures};return outcome};let host,runtime,snapshot,result;try{` +
     `const api=await import(${JSON.stringify(`${origin}/index.js`)}),wire=await import(${JSON.stringify(`${origin}/program-wire/abi-v1.js`)});` +
@@ -204,10 +175,20 @@ async function main() {
     npmInstall(tarball, root, timeout);
     const driverPort = 9515;
     const child = spawn(driver, [`--port=${driverPort}`], { env: process.env, stdio: "ignore", windowsHide: true });
-    resources.push({ name: "browser", release: () => terminateChild(child) });
+    const childErrors = observeChildErrors(child);
+    resources.push({
+      name: "browser",
+      release: async () => {
+        try {
+          if (childErrors.observed === undefined) await terminateChild(child);
+        } finally {
+          childErrors.release();
+        }
+      },
+    });
     const controller = new AbortController();
     timer = setTimeout(() => controller.abort(new Error("browser proof timed out")), timeout);
-    await waitForDriver(controller.signal, driverPort, child);
+    await waitForDriver(controller.signal, driverPort, child, childErrors);
     const session = await request(`http://${LOOPBACK}:${driverPort}`, "/session", "POST", { capabilities: { alwaysMatch: { browserName: "chrome", "goog:chromeOptions": { binary: chrome, args: ["--headless=new", "--no-sandbox", "--disable-dev-shm-usage"] } } } }, controller.signal);
     const base = `http://${LOOPBACK}:${driverPort}/session/${session.sessionId}`;
     resources.push({ name: "browser-session", release: () => request(base, "", "DELETE", undefined, AbortSignal.timeout(5_000)) });
