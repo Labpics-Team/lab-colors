@@ -40,6 +40,7 @@ import {
   WCAG22_EVIDENCE_FILES,
   assertPackageEvidenceInventory,
 } from "./release-evidence.mjs";
+import { runtimeSnippetPaths } from "./package-runtime-snippets.mjs";
 import pointSupportReleaseContract from "./point-support-release-contract.cjs";
 
 const {
@@ -557,10 +558,16 @@ function exportTargets(value, into = []) {
   return into;
 }
 
-function expectedPackedFiles(packageJson) {
+async function expectedPackedFiles(packageJson, runtimeSource) {
+  const declared = (packageJson.files ?? []).map(normalisePackPath);
+  const snippets = await runtimeSnippetPaths(runtimeSource);
+  if (snippets.length !== 1) {
+    fail(`canonical release requires exactly one generated runtime snippet, got ${snippets.length}`);
+  }
   const expected = new Set([
     ...REQUIRED_PACK_FILES,
-    ...(packageJson.files ?? []).map(normalisePackPath),
+    ...declared.filter((path) => path !== "pkg/snippets/labcolors-wasm-????????????????/inline0.js"),
+    ...snippets.map((path) => `pkg/${path}`),
   ]);
   for (const target of exportTargets(packageJson.exports)) expected.add(normalisePackPath(target));
   if (typeof packageJson.types === "string") {
@@ -573,7 +580,7 @@ function expectedPackedFiles(packageJson) {
   );
 }
 
-function validatePackedFiles(packageJson, packResult) {
+async function validatePackedFiles(packageJson, runtimeSource, packResult) {
   if (!Array.isArray(packResult.files) || packResult.files.length === 0) {
     fail("npm pack did not report a non-empty files inventory");
   }
@@ -587,7 +594,7 @@ function validatePackedFiles(packageJson, packResult) {
   const duplicates = actual.filter((path, index) => actual.indexOf(path) !== index);
   if (duplicates.length > 0) fail(`npm pack reported duplicate paths: ${duplicates.join(", ")}`);
 
-  const expected = expectedPackedFiles(packageJson);
+  const expected = await expectedPackedFiles(packageJson, runtimeSource);
   const expectedSet = new Set(expected);
 
   const actualSet = new Set(actual);
@@ -709,6 +716,7 @@ async function inspectNpmTarball(tarballPath, expected, packResult) {
 
 export async function packInto(destination, packageJson) {
   await mkdir(destination, { recursive: true });
+  const runtimeSource = await readFile(resolve(PACKAGE_DIR, "pkg/labcolors.js"), "utf8");
   const packedJson = npm(
     ["pack", "--ignore-scripts", "--json", `--pack-destination=${destination}`, PACKAGE_DIR],
     REPO_ROOT,
@@ -734,7 +742,7 @@ export async function packInto(destination, packageJson) {
   if (!tarballName.endsWith(".tgz") || tarballName !== packResult.filename) {
     fail(`npm pack returned an unsafe tarball filename: ${packResult.filename}`);
   }
-  const { expected } = validatePackedFiles(packageJson, packResult);
+  const { expected } = await validatePackedFiles(packageJson, runtimeSource, packResult);
   const path = resolve(destination, tarballName);
   const inspected = await inspectNpmTarball(path, expected, packResult);
 
