@@ -2,11 +2,13 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import {
   copyFileSync,
+  cpSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -30,7 +32,117 @@ const PREPACK_FIXTURE_SCRIPT_FILES = Object.freeze([
   "atomic-write.mjs",
   "cargo-workspace.mjs",
   "release-evidence.mjs",
+  "package-runtime-snippets.mjs",
 ]);
+
+test("generated runtime snippet closure is exact and rejects arbitrary paths", async () => {
+  const { retainImportedRuntimeSnippets, runtimeSnippetPaths } = await import(
+    pathToFileURL(join(root, "scripts", "package-runtime-snippets.mjs"))
+  );
+  assert.deepEqual(
+    await runtimeSnippetPaths('import { x } from "./snippets/labcolors-wasm-0123456789abcdef/inline0.js";'),
+    ["snippets/labcolors-wasm-0123456789abcdef/inline0.js"],
+  );
+  assert.deepEqual(await runtimeSnippetPaths("export const local = true;"), []);
+  for (const source of [
+    'import "./snippets/other/inline0.js";',
+    'import "./snippets/labcolors-wasm-0123456789abcdef/payload.js";',
+    'import("./snippets/labcolors-wasm-0123456789abcdef/inline0.js");',
+    'import "node:fs";',
+    'import "C:/absolute.js";',
+    'import "https://example.invalid/module.js";',
+  ]) {
+    await assert.rejects(
+      runtimeSnippetPaths(source),
+      /dynamic or non-literal import|unsupported relative module|non-relative module/u,
+    );
+  }
+  for (const spoof of [
+    '// import "./snippets/labcolors-wasm-0123456789abcdef/inline0.js";\nexport const local = true;',
+    'const text = `import "./snippets/labcolors-wasm-0123456789abcdef/inline0.js";`;',
+  ]) {
+    assert.deepEqual(await runtimeSnippetPaths(spoof), []);
+  }
+  await assert.rejects(
+    runtimeSnippetPaths([
+      'import "./snippets/labcolors-wasm-0123456789abcdef/inline0.js";',
+      'export { value } from "./snippets/labcolors-wasm-0123456789abcdef/inline1.js";',
+    ].join("\n")),
+    /more than one module/u,
+  );
+
+  const fixture = mkdtempSync(join(tmpdir(), "labcolors-runtime-snippets-"));
+  try {
+    const generated = join(fixture, "pkg", "snippets", "labcolors-wasm-0123456789abcdef");
+    mkdirSync(generated, { recursive: true });
+    writeFileSync(
+      join(generated, "inline0.js"),
+      'export { value } from "./nested.js";\n',
+    );
+    await assert.rejects(
+      retainImportedRuntimeSnippets(
+        fixture,
+        'import "./snippets/labcolors-wasm-0123456789abcdef/inline0.js";',
+      ),
+      /must not import or re-export another module/u,
+    );
+    writeFileSync(join(generated, "payload.js"), "export const arbitrary = true;\n");
+    await assert.rejects(
+      retainImportedRuntimeSnippets(
+        fixture,
+        'import "./snippets/labcolors-wasm-0123456789abcdef/inline0.js";',
+      ),
+      /unexpected generated snippet entry/u,
+    );
+  } finally {
+    rmSync(fixture, { recursive: true, force: true });
+  }
+});
+
+test("generated runtime snippet closure prunes orphan output when the runtime imports none", async () => {
+  const { retainImportedRuntimeSnippets } = await import(
+    pathToFileURL(join(root, "scripts", "package-runtime-snippets.mjs"))
+  );
+  const fixture = mkdtempSync(join(tmpdir(), "labcolors-runtime-orphan-"));
+  try {
+    const snippets = join(fixture, "pkg", "snippets");
+    const generated = join(snippets, "labcolors-wasm-0123456789abcdef");
+    mkdirSync(generated, { recursive: true });
+    writeFileSync(join(generated, "inline0.js"), "export const orphan = true;\n");
+    assert.deepEqual(await retainImportedRuntimeSnippets(fixture, "export const local = true;"), []);
+    assert.equal(existsSync(snippets), false);
+  } finally {
+    rmSync(fixture, { recursive: true, force: true });
+  }
+});
+
+test("generated runtime snippet closure rejects oversized and linked artifacts", async () => {
+  const { retainImportedRuntimeSnippets } = await import(
+    pathToFileURL(join(root, "scripts", "package-runtime-snippets.mjs"))
+  );
+  const runtime = 'import "./snippets/labcolors-wasm-0123456789abcdef/inline0.js";';
+  const fixture = mkdtempSync(join(tmpdir(), "labcolors-runtime-hostile-"));
+  try {
+    const generated = join(fixture, "pkg", "snippets", "labcolors-wasm-0123456789abcdef");
+    mkdirSync(generated, { recursive: true });
+    const snippet = join(generated, "inline0.js");
+    writeFileSync(snippet, "x".repeat(16 * 1024 + 1));
+    await assert.rejects(retainImportedRuntimeSnippets(fixture, runtime), /invalid byte size/u);
+
+    rmSync(snippet);
+    const target = join(fixture, "outside.js");
+    writeFileSync(target, "export const linked = true;\n");
+    try {
+      symlinkSync(target, snippet, "file");
+    } catch (error) {
+      if (error?.code === "EPERM") return;
+      throw error;
+    }
+    await assert.rejects(retainImportedRuntimeSnippets(fixture, runtime), /unexpected generated snippet entry|not a regular file/u);
+  } finally {
+    rmSync(fixture, { recursive: true, force: true });
+  }
+});
 
 test("the prepack fixture closure check distinguishes incompleteness from the guard regression", () => {
   // A positive fixture test would otherwise fail with the same
@@ -78,6 +190,13 @@ function copyPrepackFixture(fixture, { includeAtomicWriter = true } = {}) {
   copyFileSync(
     join(root, "packages", "colors", "bench", "wasm.json"),
     join(bench, "wasm.json"),
+  );
+  const fixtureModules = join(fixture, "packages", "colors", "node_modules");
+  mkdirSync(fixtureModules, { recursive: true });
+  cpSync(
+    join(root, "packages", "colors", "node_modules", "es-module-lexer"),
+    join(fixtureModules, "es-module-lexer"),
+    { recursive: true },
   );
   return scripts;
 }

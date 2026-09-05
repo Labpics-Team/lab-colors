@@ -10,6 +10,7 @@ import {
   NUMERICAL_EVIDENCE_FILES,
   assertPackageEvidenceInventory,
 } from "./release-evidence.mjs";
+import { retainImportedRuntimeSnippets } from "./package-runtime-snippets.mjs";
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 export const REPO_ROOT = resolve(SCRIPT_DIR, "..");
@@ -98,12 +99,14 @@ export async function prepareNpmPackage() {
     }
   }
 
-  const [cargoSource, conformanceSource, runtimeWasm, ...familyBytes] = await Promise.all([
+  const [cargoSource, conformanceSource, runtimeSource, runtimeWasm, ...familyBytes] = await Promise.all([
     readFile(resolve(REPO_ROOT, "Cargo.toml"), "utf8"),
     readFile(resolve(CONFORMANCE_DIR, "manifest.json"), "utf8"),
+    readFile(resolve(PACKAGE_DIR, "pkg/labcolors.js"), "utf8"),
     readFile(resolve(PACKAGE_DIR, "pkg/labcolors_bg.wasm")),
     ...CONFORMANCE_FILES.map((file) => readFile(resolve(CONFORMANCE_DIR, file))),
   ]);
+  await retainImportedRuntimeSnippets(PACKAGE_DIR, runtimeSource);
   if (
     runtimeWasm.length < 8 ||
     !runtimeWasm.subarray(0, 4).equals(Buffer.from([0, 97, 115, 109]))
