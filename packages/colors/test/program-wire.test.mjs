@@ -49,14 +49,48 @@ function toHex(bytes) {
   return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
+function npmInvocation({
+  platform = process.platform,
+  npmExecPath = process.env.npm_execpath,
+  node = process.execPath,
+} = {}) {
+  if (npmExecPath) return { command: node, argsPrefix: [npmExecPath], shell: false };
+  return {
+    command: platform === "win32" ? "npm.cmd" : "npm",
+    argsPrefix: [],
+    shell: platform === "win32",
+  };
+}
+
 function npm(args, cwd) {
-  const npmCli = join(dirname(process.execPath), "node_modules", "npm", "bin", "npm-cli.js");
-  return execFileSync(process.execPath, [npmCli, ...args], {
+  const { command, argsPrefix, shell } = npmInvocation();
+  return execFileSync(command, [...argsPrefix, ...args], {
     cwd,
     encoding: "utf8",
+    shell,
     stdio: ["ignore", "pipe", "pipe"],
   }).trim();
 }
+
+test("npm command selection honors the lifecycle entrypoint", () => {
+  assert.deepEqual(
+    npmInvocation({ platform: "linux", npmExecPath: "/npm/cli.js", node: "/node" }),
+    { command: "/node", argsPrefix: ["/npm/cli.js"], shell: false },
+  );
+});
+
+test("npm command selection falls back to the platform PATH shim", () => {
+  assert.deepEqual(npmInvocation({ platform: "win32", npmExecPath: undefined }), {
+    command: "npm.cmd",
+    argsPrefix: [],
+    shell: true,
+  });
+  assert.deepEqual(npmInvocation({ platform: "linux", npmExecPath: undefined }), {
+    command: "npm",
+    argsPrefix: [],
+    shell: false,
+  });
+});
 
 test("packed ProgramWire subpath resolves with runtime and declarations", () => {
   const fixture = mkdtempSync(join(tmpdir(), "labcolors-program-wire-pack-"));
