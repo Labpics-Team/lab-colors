@@ -43,6 +43,43 @@ export async function cleanupResources(resources, primary) {
   if (primary !== undefined) throw primary;
 }
 
+export function browserCleanup(primary, resources) {
+  const cleanupErrors = [];
+  for (const resource of resources) {
+    try {
+      resource.release();
+    } catch (error) {
+      cleanupErrors.push({ resource: resource.name, error });
+    }
+  }
+  const outcome = primary === undefined
+    ? {}
+    : { error: String(primary), code: primary?.code, operation: primary?.operation };
+  if (cleanupErrors.length > 0) {
+    outcome.cleanupError = {
+      code: "BROWSER_PROOF_CLEANUP_FAILED",
+      resources: cleanupErrors.map(({ resource }) => resource),
+    };
+  }
+  return outcome;
+}
+
+export async function terminateChild(child, timeoutMs = 5_000) {
+  if (child.exitCode !== null || child.signalCode !== null) return;
+  if (!child.kill()) fail("ChromeDriver rejected termination");
+  await new Promise((accept, reject) => {
+    const timer = setTimeout(() => {
+      child.removeListener("exit", onExit);
+      reject(new Error("ChromeDriver did not exit after termination"));
+    }, timeoutMs);
+    const onExit = () => {
+      clearTimeout(timer);
+      accept();
+    };
+    child.once("exit", onExit);
+  });
+}
+
 export async function verifyCleanupFaultMatrix() {
   for (let faultIndex = 0; faultIndex < RESOURCE_ORDER.length; faultIndex += 1) {
     const acquired = [];
@@ -136,7 +173,7 @@ async function waitForDriver(signal, port, child) {
 }
 
 function browserScenario(origin) {
-  return `const done=arguments[arguments.length-1];(async()=>{const released=[];let host,runtime,snapshot,result;try{` +
+  return `const done=arguments[arguments.length-1];(async()=>{const released=[];const browserCleanup=(primary,resources)=>{const failures=[];for(const resource of resources){try{resource.release()}catch(error){failures.push(resource.name)}}const outcome=primary===undefined?{}:{error:String(primary),code:primary?.code,operation:primary?.operation};if(failures.length)outcome.cleanupError={code:"BROWSER_PROOF_CLEANUP_FAILED",resources:failures};return outcome};let host,runtime,snapshot,result;try{` +
     `const api=await import(${JSON.stringify(`${origin}/index.js`)}),wire=await import(${JSON.stringify(`${origin}/program-wire/abi-v1.js`)});` +
     `await api.init({module_or_path:fetch(${JSON.stringify(`${origin}/pkg/labcolors_bg.wasm`)})});` +
     `const builder=new wire.ProgramWireBuilderV1();builder.source(11,[20,20,20]).fixedTarget(21,11).surfaceInputPort(31).solidPaint(41,21).inputSurface(51,31).sourceOverOccurrence(61,41,51,64,.2,wire.SURROUND_AVERAGE_V1).presentationRoot(71,61).presentationTarget(71,61).wcag22VisibleUnary(true,81,61,wire.WCAG22_SC1411_UI_COMPONENT_OR_STATE_V1).exactVisibleUnary(false,82,61,[20,20,20]).output(91,41);` +
@@ -146,7 +183,7 @@ function browserScenario(origin) {
     `const rgba=value=>{const channels=value.match(/[\\d.]+/g)?.map(Number);if(!channels||channels.length<3)throw new Error("computed color was not RGB");return [channels[0],channels[1],channels[2],channels[3]??1]};materialize(snapshot);` +
     `const before=rgba(getComputedStyle(element).color);let rejected=false;try{runtime.updateObserved(2n,new Uint32Array([]),new Uint8Array([]),1)}catch(error){rejected=error instanceof Error&&error.name==="Error"&&error.code==="program_update"&&error.operation==="updateObserved"}const after=rgba(getComputedStyle(element).color);` +
     `result={before,after,rejected,oracle:[20,20,20,1],slot:snapshot.outputSlot(0),state:snapshot.state};` +
-    `}catch(error){result={error:String(error),code:error?.code}}finally{if(host){host.free();host.free();released.push("host")}if(snapshot){snapshot.free();released.push("snapshot")}if(runtime){runtime.free();released.push("runtime")}}result.released=released;done(result)})()`;
+    `}catch(error){result=browserCleanup(error,[])}finally{result={...result,...browserCleanup(undefined,[{name:"host",release(){if(host){host.free();host.free()}released.push("host")}},{name:"snapshot",release(){if(snapshot)snapshot.free();released.push("snapshot")}},{name:"runtime",release(){if(runtime)runtime.free();released.push("runtime")}}])}}result.released=released;done(result)})()`;
 }
 
 async function main() {
@@ -167,18 +204,7 @@ async function main() {
     npmInstall(tarball, root, timeout);
     const driverPort = 9515;
     const child = spawn(driver, [`--port=${driverPort}`], { env: process.env, stdio: "ignore", windowsHide: true });
-    resources.push({
-      name: "browser",
-      release: async () => {
-        if (child.exitCode !== null) return;
-        const exited = new Promise((accept, reject) => {
-          child.once("exit", accept);
-          child.once("error", reject);
-        });
-        if (!child.kill()) fail("ChromeDriver rejected termination");
-        await exited;
-      },
-    });
+    resources.push({ name: "browser", release: () => terminateChild(child) });
     const controller = new AbortController();
     timer = setTimeout(() => controller.abort(new Error("browser proof timed out")), timeout);
     await waitForDriver(controller.signal, driverPort, child);
@@ -201,7 +227,7 @@ async function main() {
     await request(base, "/url", "POST", { url: origin }, controller.signal);
     const result = await request(base, "/execute/async", "POST", { script: browserScenario(origin), args: [] }, controller.signal);
     clearTimeout(timer);
-    if (result.error || result.state !== "ready" || result.slot !== 91 || !result.rejected || JSON.stringify(result.before) !== JSON.stringify(result.oracle) || JSON.stringify(result.after) !== JSON.stringify(result.oracle) || JSON.stringify(result.released) !== '["host","snapshot","runtime"]') fail(`browser consumer result drifted: ${JSON.stringify(result)}`);
+    if (result.error || result.cleanupError || result.state !== "ready" || result.slot !== 91 || !result.rejected || JSON.stringify(result.before) !== JSON.stringify(result.oracle) || JSON.stringify(result.after) !== JSON.stringify(result.oracle) || JSON.stringify(result.released) !== '["host","snapshot","runtime"]') fail(`browser consumer result drifted: ${JSON.stringify(result)}`);
     console.log(`LAB_COLORS_PROGRAM_BROWSER_PASS sha256=${digest}`);
   } catch (error) {
     primary = error;

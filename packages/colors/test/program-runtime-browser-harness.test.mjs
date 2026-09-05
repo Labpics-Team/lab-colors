@@ -3,7 +3,9 @@ import test from "node:test";
 
 import {
   BrowserProofCleanupError,
+  browserCleanup,
   cleanupResources,
+  terminateChild,
   verifyCleanupFaultMatrix,
 } from "../../../scripts/test-program-runtime-browser.mjs";
 import { browserProofInvocation } from "../../../scripts/verify-package-release.mjs";
@@ -35,6 +37,32 @@ test("cleanup failure preserves the primary failure and exposes typed cleanup er
     },
   );
   assert.deepEqual(events, ["server", "browser", "temp-install"]);
+});
+
+test("browser cleanup preserves the primary and releases snapshot, runtime, then host", () => {
+  const primary = new Error("browser scenario failed");
+  const events = [];
+  const outcome = browserCleanup(primary, [
+    { name: "snapshot", release: () => { events.push("snapshot"); throw new Error("snapshot free failed"); } },
+    { name: "runtime", release: () => events.push("runtime") },
+    { name: "host", release: () => events.push("host") },
+  ]);
+  assert.deepEqual(events, ["snapshot", "runtime", "host"]);
+  assert.equal(outcome.error, "Error: browser scenario failed");
+  assert.equal(outcome.cleanupError.code, "BROWSER_PROOF_CLEANUP_FAILED");
+  assert.deepEqual(outcome.cleanupError.resources, ["snapshot"]);
+});
+
+test("child termination waits for exit and refuses a process that stays alive", async () => {
+  const listeners = new Map();
+  const child = {
+    exitCode: null,
+    signalCode: null,
+    once: (event, listener) => listeners.set(event, listener),
+    removeListener: (event) => listeners.delete(event),
+    kill: () => true,
+  };
+  await assert.rejects(terminateChild(child, 1), /did not exit/u);
 });
 
 test("release verifier invokes the browser proof with the exact snapshot identity", () => {
