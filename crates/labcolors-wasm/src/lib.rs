@@ -83,6 +83,53 @@ fn to_js_error(error: BindingError) -> JsError {
     JsError::new(&error.to_string())
 }
 
+#[derive(Clone, Copy)]
+enum ProgramOperation {
+    CompileProgramWire,
+    UpdateObserved,
+    UpdateUnknown,
+}
+
+impl ProgramOperation {
+    const fn key(self) -> &'static str {
+        match self {
+            Self::CompileProgramWire => "compileProgramWire",
+            Self::UpdateObserved => "updateObserved",
+            Self::UpdateUnknown => "updateUnknown",
+        }
+    }
+}
+
+fn to_program_js_error(
+    error: labcolors_core::program_wire::ProgramRuntimeErrorV1,
+    operation: ProgramOperation,
+) -> JsValue {
+    use labcolors_core::program_wire::ProgramRuntimeErrorV1 as E;
+    let code = match error {
+        E::Wire => "program_wire",
+        E::Compile => "program_compile",
+        E::FamilyArtifactsRequired => "program_family_artifacts_required",
+        E::Instantiate => "program_instantiate",
+        E::Update => "program_update",
+        _ => "program_runtime",
+    };
+    let error = js_sys::Error::new("Program runtime operation failed");
+    let code_set = js_sys::Reflect::set(
+        error.as_ref(),
+        &JsValue::from_str("code"),
+        &JsValue::from_str(code),
+    );
+    let operation_set = js_sys::Reflect::set(
+        error.as_ref(),
+        &JsValue::from_str("operation"),
+        &JsValue::from_str(operation.key()),
+    );
+    if !matches!(code_set, Ok(true)) || !matches!(operation_set, Ok(true)) {
+        return js_sys::Error::new("Program error projection failed").into();
+    }
+    error.into()
+}
+
 /// Единственный публичный манифест численных возможностей.
 #[wasm_bindgen(js_name = numericalCapabilityManifest)]
 pub fn numerical_capability_manifest() -> Result<JsNumericalCapabilityManifestV2, JsError> {
@@ -207,17 +254,12 @@ impl ProgramSnapshot {
 
 /// Компилирует canonical Program wire bytes и создаёт одну runtime Session.
 #[wasm_bindgen(js_name = compileProgramWire)]
-pub fn compile_program_wire(bytes: &[u8], stream_id: u32) -> Result<ProgramRuntime, JsError> {
-    let compiled = labcolors_core::program_wire::compile_program_wire_v1(bytes).map_err(|_| {
-        to_js_error(BindingError::InvalidConfig {
-            reason: "program wire was rejected".to_string(),
-        })
-    })?;
-    let session = compiled.instantiate(stream_id).map_err(|_| {
-        to_js_error(BindingError::InvalidConfig {
-            reason: "program runtime instantiation was rejected".to_string(),
-        })
-    })?;
+pub fn compile_program_wire(bytes: &[u8], stream_id: u32) -> Result<ProgramRuntime, JsValue> {
+    let compiled = labcolors_core::program_wire::compile_program_wire_v1(bytes)
+        .map_err(|error| to_program_js_error(error, ProgramOperation::CompileProgramWire))?;
+    let session = compiled
+        .instantiate(stream_id)
+        .map_err(|error| to_program_js_error(error, ProgramOperation::CompileProgramWire))?;
     Ok(ProgramRuntime { inner: session })
 }
 
@@ -232,41 +274,31 @@ impl ProgramRuntime {
         scenario_ids: &[u32],
         surfaces: &[u8],
         surface_count: usize,
-    ) -> Result<ProgramSnapshot, JsError> {
-        let row_bytes = surface_count.checked_mul(3).ok_or_else(|| {
-            to_js_error(BindingError::InvalidConfig {
-                reason: "program surface row length overflow".to_string(),
-            })
-        })?;
-        let expected = scenario_ids.len().checked_mul(row_bytes).ok_or_else(|| {
-            to_js_error(BindingError::InvalidConfig {
-                reason: "program scenario matrix length overflow".to_string(),
-            })
-        })?;
+    ) -> Result<ProgramSnapshot, JsValue> {
+        use labcolors_core::program_wire::ProgramRuntimeErrorV1 as E;
+        let row_bytes = surface_count
+            .checked_mul(3)
+            .ok_or_else(|| to_program_js_error(E::Update, ProgramOperation::UpdateObserved))?;
+        let expected = scenario_ids
+            .len()
+            .checked_mul(row_bytes)
+            .ok_or_else(|| to_program_js_error(E::Update, ProgramOperation::UpdateObserved))?;
         if expected != surfaces.len() {
-            return Err(to_js_error(BindingError::InvalidConfig {
-                reason: format!(
-                    "program scenario matrix length mismatch: expected {expected}, got {}",
-                    surfaces.len()
-                ),
-            }));
+            return Err(to_program_js_error(
+                E::Update,
+                ProgramOperation::UpdateObserved,
+            ));
         }
         let mut scenarios = Vec::new();
         scenarios
             .try_reserve_exact(scenario_ids.len())
-            .map_err(|_| {
-                to_js_error(BindingError::Internal {
-                    reason: "program scenario allocation failed".to_string(),
-                })
-            })?;
+            .map_err(|_| to_program_js_error(E::Update, ProgramOperation::UpdateObserved))?;
         for (row, scenario_id) in scenario_ids.iter().copied().enumerate() {
             let start = row * row_bytes;
             let mut values = Vec::new();
-            values.try_reserve_exact(surface_count).map_err(|_| {
-                to_js_error(BindingError::Internal {
-                    reason: "program surface allocation failed".to_string(),
-                })
-            })?;
+            values
+                .try_reserve_exact(surface_count)
+                .map_err(|_| to_program_js_error(E::Update, ProgramOperation::UpdateObserved))?;
             for offset in 0..surface_count {
                 let byte = start + offset * 3;
                 values.push(labcolors_core::Srgb8::new([
@@ -283,11 +315,7 @@ impl ProgramRuntime {
         self.inner
             .update_observed(revision, &scenarios)
             .map(|inner| ProgramSnapshot { inner })
-            .map_err(|_| {
-                to_js_error(BindingError::InvalidConfig {
-                    reason: "program update was rejected".to_string(),
-                })
-            })
+            .map_err(|error| to_program_js_error(error, ProgramOperation::UpdateObserved))
     }
 
     #[wasm_bindgen(js_name = updateUnknown)]
@@ -295,15 +323,11 @@ impl ProgramRuntime {
         &mut self,
         revision: u64,
         reason_id: u32,
-    ) -> Result<ProgramSnapshot, JsError> {
+    ) -> Result<ProgramSnapshot, JsValue> {
         self.inner
             .update_unknown(revision, reason_id)
             .map(|inner| ProgramSnapshot { inner })
-            .map_err(|_| {
-                to_js_error(BindingError::InvalidConfig {
-                    reason: "program unknown update was rejected".to_string(),
-                })
-            })
+            .map_err(|error| to_program_js_error(error, ProgramOperation::UpdateUnknown))
     }
 }
 
@@ -331,6 +355,81 @@ mod browser_tests {
                 u8::from_str_radix(text, 16).expect("canonical hex")
             })
             .collect()
+    }
+
+    fn assert_program_error(error: JsValue, code: &str, operation: &str) {
+        assert!(error.is_instance_of::<js_sys::Error>());
+        assert_eq!(
+            js_sys::Reflect::get(&error, &JsValue::from_str("code"))
+                .expect("code property")
+                .as_string()
+                .as_deref(),
+            Some(code)
+        );
+        assert_eq!(
+            js_sys::Reflect::get(&error, &JsValue::from_str("operation"))
+                .expect("operation property")
+                .as_string()
+                .as_deref(),
+            Some(operation)
+        );
+    }
+
+    #[wasm_bindgen_test]
+    fn program_error_projection_distinguishes_every_runtime_failure_class() {
+        use labcolors_core::program_wire::ProgramRuntimeErrorV1 as E;
+
+        for (error, operation, code) in [
+            (
+                E::Wire,
+                ProgramOperation::CompileProgramWire,
+                "program_wire",
+            ),
+            (
+                E::Compile,
+                ProgramOperation::CompileProgramWire,
+                "program_compile",
+            ),
+            (
+                E::FamilyArtifactsRequired,
+                ProgramOperation::CompileProgramWire,
+                "program_family_artifacts_required",
+            ),
+            (
+                E::Instantiate,
+                ProgramOperation::CompileProgramWire,
+                "program_instantiate",
+            ),
+            (
+                E::Update,
+                ProgramOperation::UpdateObserved,
+                "program_update",
+            ),
+        ] {
+            assert_program_error(to_program_js_error(error, operation), code, operation.key());
+        }
+    }
+
+    #[wasm_bindgen_test]
+    fn terminal_program_wire_and_update_failures_keep_operation_context() {
+        let wire_error = match compile_program_wire(&[], 1) {
+            Ok(_) => panic!("empty wire must fail"),
+            Err(error) => error,
+        };
+        assert_program_error(wire_error, "program_wire", "compileProgramWire");
+
+        let mut runtime = compile_program_wire(&reference_wire(), 7).expect("canonical wire");
+        let update_error = match runtime.update_observed(1, &[], &[], 1) {
+            Ok(_) => panic!("empty scenario set must fail"),
+            Err(error) => error,
+        };
+        assert_program_error(update_error, "program_update", "updateObserved");
+
+        let shape_error = match runtime.update_observed(1, &[1], &[255, 255], 1) {
+            Ok(_) => panic!("incomplete surface matrix must fail"),
+            Err(error) => error,
+        };
+        assert_program_error(shape_error, "program_update", "updateObserved");
     }
 
     #[wasm_bindgen_test]
