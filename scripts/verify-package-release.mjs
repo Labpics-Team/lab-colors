@@ -1359,6 +1359,8 @@ async function verifyCleanConsumer(
           "NodeNext",
           "--moduleResolution",
           "NodeNext",
+          "--typeRoots",
+          resolve(consumer, "node_modules", "@types"),
           typesPath,
         ],
         consumer,
@@ -1373,6 +1375,13 @@ async function verifyCleanConsumer(
 // Execute the same packed-package runtime smoke under the caller's Node binary.
 // CI uses this to prove the public consumer floor independently from the pinned
 // release packer.
+export function browserProofInvocation(tarballPath, sha256) {
+  if (!/^[0-9a-f]{64}$/u.test(sha256)) {
+    fail("browser proof tarball identity must be lowercase SHA-256");
+  }
+  return [resolve(REPO_ROOT, "scripts/test-program-runtime-browser.mjs"), resolve(tarballPath), sha256];
+}
+
 export async function smokePackedPackage(tarballPath) {
   const tarball = resolve(tarballPath);
   const consumer = await mkdtemp(join(tmpdir(), "labcolors-package-smoke-"));
@@ -1498,6 +1507,9 @@ export async function verifyPackageRelease() {
   );
 
   const verifiedTarball = await materializeVerifiedTarballSnapshot(canonicalPack);
+  if (process.env.CHROME_PATH && process.env.CHROMEDRIVER_PATH) {
+    command(process.execPath, browserProofInvocation(verifiedTarball.path, verifiedTarball.sha256));
+  }
   const tarball = {
     path: `.release/${basename(verifiedTarball.path)}`,
     bytes: verifiedTarball.bytes.length,
