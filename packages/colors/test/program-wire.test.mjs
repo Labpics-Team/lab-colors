@@ -147,6 +147,9 @@ test("invalid declarations are typed refusals, not coerced bytes", () => {
     isTyped,
   );
   assert.throws(() => fresh().wcag22VisibleUnary(true, 1, 2, 9), isTyped);
+  // structured candidates: null/primitives are typed refusals, never TypeError.
+  assert.throws(() => fresh().finiteTarget(1, [null]), isTyped);
+  assert.throws(() => fresh().finiteTarget(1, [7]), isTyped);
   // relation candidates: null/empty are typed refusals, never TypeError.
   assert.throws(() => fresh().exactIntrinsicRelationHard(1, 2, null), isTyped);
   assert.throws(() => fresh().exactIntrinsicRelationHard(1, 2, []), isTyped);
@@ -158,6 +161,8 @@ test("every refused declaration leaves the builder byte-stream untouched", () =>
     (builder) => builder.source(1, [0, 0]),
     (builder) => builder.fixedTarget(1, -1),
     (builder) => builder.finiteTarget(1, [{ id: 1, rgb: [0, 0, 0], opacity: Number.NaN }]),
+    (builder) => builder.finiteTarget(1, [null]),
+    (builder) => builder.finiteTarget(1, [7]),
     (builder) => builder.family(1, Array(31).fill(0)),
     (builder) => builder.family(1, [...Array(31).fill(0), 256]),
     (builder) => builder.surfaceInputPort(-1),

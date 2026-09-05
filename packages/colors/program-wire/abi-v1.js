@@ -200,11 +200,16 @@ export class ProgramWireBuilderV1 {
   finiteTarget(id, candidates) {
     const checkedId = u32Value(id, "target id");
     const checked = candidateList(candidates, "finite target candidates").map(
-      (candidate, index) => ({
-        id: u32Value(candidate.id, "candidate[" + index + "] id"),
-        rgb: rgbBytes(candidate.rgb, "candidate[" + index + "] rgb"),
-        opacity: f64Value(candidate.opacity, "candidate[" + index + "] opacity"),
-      }),
+      (candidate, index) => {
+        if (candidate === null || typeof candidate !== "object") {
+          invalid(`candidate[${index}] must be an object`);
+        }
+        return {
+          id: u32Value(candidate.id, "candidate[" + index + "] id"),
+          rgb: rgbBytes(candidate.rgb, "candidate[" + index + "] rgb"),
+          opacity: f64Value(candidate.opacity, "candidate[" + index + "] opacity"),
+        };
+      },
     );
     const sink = this.entry("targets");
     sink.u32(checkedId);
