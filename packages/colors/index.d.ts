@@ -22,6 +22,20 @@ export type {
 } from "./pkg/labcolors.js";
 export type { Wcag22CriterionV1 } from "./wcag22.js";
 
+export type ProgramCompileErrorCode =
+  | "program_wire"
+  | "program_compile"
+  | "program_family_artifacts_required"
+  | "program_instantiate";
+export type ProgramUpdateOperation = "updateObserved" | "updateUnknown";
+export type ProgramError = Error & (
+  | Readonly<{ code: ProgramCompileErrorCode; operation: "compileProgramWire" }>
+  | Readonly<{ code: "program_update"; operation: ProgramUpdateOperation }>
+);
+export type ProgramErrorCode = ProgramError["code"];
+export type ProgramOperation = ProgramError["operation"];
+export declare function isProgramError(error: unknown): error is ProgramError;
+
 type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembly.Module;
 type SyncInitInput = BufferSource | WebAssembly.Module;
 

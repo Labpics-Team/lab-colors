@@ -3,8 +3,10 @@ import init, {
   ProgramSnapshot,
   compileProgramWire,
   evaluateWcag22,
+  isProgramError,
   numericalCapabilityManifest,
 } from "@labpics/colors";
+import type { ProgramErrorCode, ProgramOperation } from "@labpics/colors";
 import {
   PROGRAM_WIRE_INVALID_DECLARATION,
   ProgramWireBuilderV1,
@@ -39,10 +41,13 @@ const invalidDeclaration = new ProgramWireError(
   "invalid declaration",
 );
 const invalidCode: ProgramWireError["code"] = invalidDeclaration.code;
+const readProgramFailure = (error: unknown): readonly [ProgramErrorCode, ProgramOperation] | undefined =>
+  isProgramError(error) ? [error.code, error.operation] : undefined;
 
 void boot;
 void wire;
 void invalidCode;
+void readProgramFailure;
 void evaluateWcag22("#000000", "#FFFFFF", "sc-1.4.3-text-default");
 void numericalCapabilityManifest();
 
