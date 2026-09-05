@@ -14,7 +14,7 @@ test("terminal tar inventory is exact and excludes retired roots", () => {
     "evidence/wcag22-srgb8-q55-proof-v1.json",
     "evidence/point-support-reference-surplus-q55-bps-proof-v1.json",
     "pkg/labcolors.js", "pkg/labcolors.d.ts", "pkg/labcolors_bg.wasm",
-    "pkg/labcolors_bg.wasm.d.ts",
+    "pkg/labcolors_bg.wasm.d.ts", "pkg/snippets/labcolors-wasm-????????????????/inline0.js",
   ]);
   assert.deepEqual(new Set(pkg.files), required);
 });

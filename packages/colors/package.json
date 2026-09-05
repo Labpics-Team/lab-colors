@@ -42,7 +42,8 @@
     "pkg/labcolors.js",
     "pkg/labcolors.d.ts",
     "pkg/labcolors_bg.wasm",
-    "pkg/labcolors_bg.wasm.d.ts"
+    "pkg/labcolors_bg.wasm.d.ts",
+    "pkg/snippets/labcolors-wasm-????????????????/inline0.js"
   ],
   "scripts": {
     "build": "wasm-pack build ../../crates/labcolors-wasm --release --target web --out-dir ../../packages/colors/pkg --out-name labcolors --locked",
@@ -52,6 +53,7 @@
     "release:verify": "node ../../scripts/verify-package-release.mjs"
   },
   "devDependencies": {
+    "es-module-lexer": "1.7.0",
     "typescript": "^5.5.0",
     "typescript-floor": "npm:typescript@5.2.2"
   },
