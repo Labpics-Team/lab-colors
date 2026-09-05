@@ -51,9 +51,10 @@ function toHex(bytes) {
 
 function npmInvocation({
   platform = process.platform,
-  npmExecPath = process.env.npm_execpath,
+  environment = process.env,
   node = process.execPath,
 } = {}) {
+  const npmExecPath = environment.npm_execpath;
   if (npmExecPath) return { command: node, argsPrefix: [npmExecPath], shell: false };
   return {
     command: platform === "win32" ? "npm.cmd" : "npm",
@@ -74,18 +75,18 @@ function npm(args, cwd) {
 
 test("npm command selection honors the lifecycle entrypoint", () => {
   assert.deepEqual(
-    npmInvocation({ platform: "linux", npmExecPath: "/npm/cli.js", node: "/node" }),
+    npmInvocation({ platform: "linux", environment: { npm_execpath: "/npm/cli.js" }, node: "/node" }),
     { command: "/node", argsPrefix: ["/npm/cli.js"], shell: false },
   );
 });
 
 test("npm command selection falls back to the platform PATH shim", () => {
-  assert.deepEqual(npmInvocation({ platform: "win32", npmExecPath: undefined }), {
+  assert.deepEqual(npmInvocation({ platform: "win32", environment: {} }), {
     command: "npm.cmd",
     argsPrefix: [],
     shell: true,
   });
-  assert.deepEqual(npmInvocation({ platform: "linux", npmExecPath: undefined }), {
+  assert.deepEqual(npmInvocation({ platform: "linux", environment: {} }), {
     command: "npm",
     argsPrefix: [],
     shell: false,
