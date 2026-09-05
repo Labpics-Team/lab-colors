@@ -8,6 +8,9 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
+
+const PACKAGE_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 
 import {
   PROGRAM_WIRE_TOO_MANY_ENTRIES,
@@ -59,7 +62,7 @@ test("packed ProgramWire subpath resolves with runtime and declarations", () => 
   const fixture = mkdtempSync(join(tmpdir(), "labcolors-program-wire-pack-"));
   try {
     const [{ filename }] = JSON.parse(
-      npm(["pack", "--ignore-scripts", "--json", `--pack-destination=${fixture}`, process.cwd()], fixture),
+      npm(["pack", "--ignore-scripts", "--json", `--pack-destination=${fixture}`, PACKAGE_ROOT], fixture),
     );
     writeFileSync(
       join(fixture, "package.json"),
@@ -87,7 +90,7 @@ test("packed ProgramWire subpath resolves with runtime and declarations", () => 
     execFileSync(
       process.execPath,
       [
-        join(process.cwd(), "node_modules", "typescript", "lib", "tsc.js"),
+        join(PACKAGE_ROOT, "node_modules", "typescript", "lib", "tsc.js"),
         "--noEmit",
         "--strict",
         "--module",
