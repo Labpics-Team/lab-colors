@@ -867,6 +867,5 @@ jobs:
           # release:verify owns the same exact SHA-bound snapshot; this direct
           # call is the CI readback after Chrome becomes available.
           node scripts/test-program-runtime-browser.mjs "$VERIFIED_TARBALL" "$VERIFIED_TARBALL_SHA256"
-          node --test packages/colors/test/program-runtime-browser-harness.test.mjs
 
 # ci-trigger: force new merge-ref for runs-on fix validation 20260830233307

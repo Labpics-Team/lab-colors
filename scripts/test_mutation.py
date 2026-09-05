@@ -1952,6 +1952,12 @@ class MutationTruthTest(unittest.TestCase):
             ),
             1,
         )
+        self.assertIn("          npm test\n", wasm)
+        self.assertIn("node scripts/test-program-runtime-browser.mjs", wasm)
+        self.assertNotIn(
+            "node --test packages/colors/test/program-runtime-browser-harness.test.mjs",
+            wasm,
+        )
         self.assertNotIn(
             "wasm-pack build crates/labcolors-wasm --release",
             wasm,
