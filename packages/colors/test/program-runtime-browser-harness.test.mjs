@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { once } from "node:events";
+import { EventEmitter, once } from "node:events";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -8,6 +8,7 @@ import test from "node:test";
 
 import {
   observeChildErrors,
+  releaseChild,
   terminateChild,
   waitForDriver,
 } from "../../../scripts/browser-child-lifecycle.mjs";
@@ -67,81 +68,306 @@ test("driver startup propagates the actual asynchronous child error", async () =
   const child = spawn(missingExecutable, [], { stdio: "ignore" });
   const errors = observeChildErrors(child);
 
-  await assert.rejects(
-    waitForDriver(AbortSignal.timeout(1_000), 1, child, errors),
-    (error) => error?.code === "ENOENT" && error.path === missingExecutable,
-  );
-  errors.release();
+  try {
+    await assert.rejects(
+      waitForDriver(AbortSignal.timeout(1_000), 1, child, errors),
+      (error) => error?.code === "ENOENT" && error.path === missingExecutable,
+    );
+    await errors.close;
+  } finally {
+    errors.release();
+  }
 });
 
-test("child termination observes a synchronous exit emitted by kill", async () => {
-  const listeners = new Map();
-  const child = {
-    exitCode: null,
-    signalCode: null,
-    once: (event, listener) => listeners.set(event, listener),
-    removeListener: (event) => listeners.delete(event),
-    on: (event, listener) => listeners.set(event, listener),
-    kill: () => {
-      child.signalCode = "SIGTERM";
-      listeners.get("exit")?.(null, "SIGTERM");
+function fakeChild(kill) {
+  const child = new EventEmitter();
+  child.exitCode = null;
+  child.signalCode = null;
+  child.kill = (signal) => kill(child, signal);
+  return child;
+}
+
+test("browser release reaps a live child after a post-spawn operational error", { timeout: 10_000 }, async () => {
+  const child = spawn(
+    process.execPath,
+    ["-e", "process.send('ready'); setInterval(() => {}, 1000)"],
+    { stdio: ["ignore", "ignore", "ignore", "ipc"] },
+  );
+  await once(child, "message");
+  const errors = observeChildErrors(child);
+  const operationalFailure = new Error("post-spawn transport failure");
+
+  try {
+    child.emit("error", operationalFailure);
+    child.emit("error", new Error("later error must not replace the first"));
+    assert.equal(await errors.failure, operationalFailure);
+    assert.equal(errors.operationalError, operationalFailure);
+    assert.equal(errors.exited, false);
+    assert.doesNotThrow(() => process.kill(child.pid, 0));
+    const closed = errors.close;
+    await assert.rejects(
+      releaseChild(child, errors, 1_000),
+      (error) => error === operationalFailure,
+    );
+    await closed;
+
+    assert.equal(errors.closed, true);
+    assert.throws(() => process.kill(child.pid, 0), { code: "ESRCH" });
+    assert.equal(child.listenerCount("error"), 0);
+    assert.equal(child.listenerCount("exit"), 0);
+  } finally {
+    if (!errors.closed) child.kill("SIGKILL");
+    await errors.close;
+    errors.release();
+  }
+});
+
+test("child termination waits for close after exit", async () => {
+  let releaseClose;
+  const closeReleased = new Promise((resolve) => { releaseClose = resolve; });
+  const child = fakeChild((current, signal) => {
+    current.signalCode = signal;
+    current.emit("exit", null, signal);
+    closeReleased.then(() => current.emit("close", null, signal));
+    return true;
+  });
+
+  let settled = false;
+  const termination = terminateChild(child, 100).then(() => { settled = true; });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(settled, false);
+  releaseClose();
+  await termination;
+});
+
+test("TERM failure still escalates to SIGKILL", async () => {
+  const signals = [];
+  const termFailure = new Error("TERM failed");
+  const child = fakeChild((current, signal) => {
+    signals.push(signal);
+    if (signal === "SIGTERM") throw termFailure;
+    current.signalCode = signal;
+    current.emit("exit", null, signal);
+    current.emit("close", null, signal);
+    return true;
+  });
+
+  await assert.doesNotReject(terminateChild(child, 1));
+  assert.deepEqual(signals, ["SIGTERM", "SIGKILL"]);
+});
+
+test("rejected TERM escalates while rejected SIGKILL requires terminal close", async () => {
+  const liveSignals = [];
+  const liveChild = fakeChild((_current, signal) => {
+    liveSignals.push(signal);
+    return false;
+  });
+  await assert.rejects(terminateChild(liveChild, 1), /rejected SIGKILL/u);
+  assert.deepEqual(liveSignals, ["SIGTERM", "SIGKILL"]);
+
+  const terminalSignals = [];
+  const terminalChild = fakeChild((current, signal) => {
+    terminalSignals.push(signal);
+    if (signal === "SIGKILL") {
+      current.emit("exit", null, signal);
+      current.emit("close", null, signal);
+    }
+    return false;
+  });
+  await assert.doesNotReject(terminateChild(terminalChild, 1));
+  assert.deepEqual(terminalSignals, ["SIGTERM", "SIGKILL"]);
+});
+
+test("concurrent browser release is memoized and waits for close", async () => {
+  let releaseClose;
+  const closeReleased = new Promise((resolve) => { releaseClose = resolve; });
+  const signals = [];
+  const child = fakeChild((current, signal) => {
+    signals.push(signal);
+    current.signalCode = signal;
+    current.emit("exit", null, signal);
+    closeReleased.then(() => current.emit("close", null, signal));
+    return true;
+  });
+  const errors = observeChildErrors(child);
+
+  const first = releaseChild(child, errors, 100);
+  const second = releaseChild(child, errors, 100);
+  assert.equal(first, second);
+  releaseClose();
+  await Promise.all([first, second]);
+  assert.deepEqual(signals, ["SIGTERM"]);
+  assert.equal(releaseChild(child, errors, 100), first);
+});
+
+test("browser release rejects an unconsumed operational error after successful close", async () => {
+  const operationalFailure = new Error("unhandled driver transport failure");
+  const child = fakeChild((current, signal) => {
+    current.signalCode = signal;
+    current.emit("exit", null, signal);
+    current.emit("close", null, signal);
+    return true;
+  });
+  const errors = observeChildErrors(child);
+  child.emit("error", operationalFailure);
+
+  await assert.rejects(
+    releaseChild(child, errors, 100),
+    (error) => error === operationalFailure,
+  );
+});
+
+test("browser release preserves ordered distinct operational and cleanup errors", async () => {
+  const operationalFailure = new Error("driver transport failed");
+  const cleanupFailure = new Error("SIGKILL failed");
+  const child = fakeChild((_current, signal) => {
+    if (signal === "SIGTERM") return false;
+    throw cleanupFailure;
+  });
+  const errors = observeChildErrors(child);
+  child.emit("error", operationalFailure);
+
+  await assert.rejects(
+    releaseChild(child, errors, 1),
+    (error) => {
+      assert.ok(error instanceof AggregateError);
+      assert.equal(error.cause, operationalFailure);
+      assert.deepEqual(error.errors, [operationalFailure, cleanupFailure]);
       return true;
     },
-  };
-  await assert.doesNotReject(terminateChild(child, 100));
+  );
 });
 
-test("child termination force-kills and reaps a real graceful-signal survivor", async () => {
-  const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
-  await once(child, "spawn");
+test("child termination force-kills and reaps a real graceful-signal survivor", { timeout: 10_000 }, async () => {
+  const child = spawn(
+    process.execPath,
+    ["-e", "process.send('ready'); setInterval(() => {}, 1000)"],
+    { stdio: ["ignore", "ignore", "ignore", "ipc"] },
+  );
+  await once(child, "message");
   const nativeKill = child.kill.bind(child);
+  const closed = once(child, "close");
   const signals = [];
   child.kill = (signal) => {
     signals.push(signal);
     return signal === "SIGTERM" ? true : nativeKill(signal);
   };
 
-  await assert.doesNotReject(terminateChild(child, 20));
+  try {
+    await assert.doesNotReject(terminateChild(child, 1_000));
 
-  assert.deepEqual(signals, ["SIGTERM", "SIGKILL"]);
-  assert.notEqual(child.signalCode, null);
+    assert.deepEqual(signals, ["SIGTERM", "SIGKILL"]);
+    assert.notEqual(child.signalCode, null);
+  } finally {
+    if (child.exitCode === null && child.signalCode === null) nativeKill("SIGKILL");
+    await closed;
+  }
 });
 
 test("signaled child is rejected before readiness polling", async () => {
-  const child = { killed: false, exitCode: null, signalCode: "SIGTERM" };
-  const errors = { failure: new Promise(() => {}) };
-  await assert.rejects(
-    waitForDriver(AbortSignal.timeout(1_000), 1, child, errors),
-    /exited prematurely/u,
-  );
+  const child = fakeChild(() => true);
+  const errors = observeChildErrors(child);
+  child.signalCode = "SIGTERM";
+  child.emit("exit", null, "SIGTERM");
+  try {
+    await assert.rejects(
+      waitForDriver(AbortSignal.timeout(1_000), 1, child, errors),
+      /exited prematurely/u,
+    );
+  } finally {
+    errors.release();
+  }
 });
 
-test("real child exit cancels and joins an in-flight readiness poll", async () => {
-  const server = createServer(() => {});
+test("a handled driver error remains primary while cleanup succeeds", async () => {
+  const child = fakeChild((current, signal) => {
+    current.signalCode = signal;
+    current.emit("exit", null, signal);
+    current.emit("close", null, signal);
+    return true;
+  });
+  const errors = observeChildErrors(child);
+  const operationalFailure = new Error("handled driver transport failure");
+  child.emit("error", operationalFailure);
+
+  await assert.rejects(
+    waitForDriver(AbortSignal.timeout(1_000), 1, child, errors),
+    (error) => error === operationalFailure,
+  );
+  await assert.doesNotReject(releaseChild(child, errors, 100));
+});
+
+test("post-ready operational error fails the active driver wait", async () => {
+  const server = createServer((_request, response) => {
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end(JSON.stringify({ value: { ready: true } }));
+  });
   server.listen(0, "127.0.0.1");
   await once(server, "listening");
   const address = server.address();
   assert.notEqual(address, null);
   assert.equal(typeof address, "object");
-  const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
-  await once(child, "spawn");
+  const child = fakeChild(() => true);
   const errors = observeChildErrors(child);
-  const outer = new AbortController();
-  const waiting = waitForDriver(outer.signal, address.port, child, errors);
-  setTimeout(() => child.kill("SIGTERM"), 20);
+  const operationalFailure = new Error("driver transport failed after status response");
+  server.once("request", () => queueMicrotask(() => child.emit("error", operationalFailure)));
+
   try {
     await assert.rejects(
-      Promise.race([
-        waiting,
-        new Promise((_, reject) => setTimeout(() => reject(new Error("readiness poll was not cancelled")), 500)),
-      ]),
-      /exited prematurely/u,
+      waitForDriver(AbortSignal.timeout(1_000), address.port, child, errors),
+      (error) => error === operationalFailure,
     );
-    assert.equal(outer.signal.aborted, false);
-    assert.notEqual(child.signalCode, null);
   } finally {
     errors.release();
-    if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+    await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+  }
+});
+
+test("real child exit aborts an in-flight readiness poll and releases observers", async () => {
+  let requestAborted;
+  const requestWasAborted = new Promise((resolve) => { requestAborted = resolve; });
+  let child;
+  const server = createServer((_request, response) => {
+    response.once("close", () => requestAborted());
+    child.send("exit");
+  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  const address = server.address();
+  assert.notEqual(address, null);
+  assert.equal(typeof address, "object");
+  child = spawn(
+    process.execPath,
+    ["-e", "process.on('message', () => process.exit(23)); setInterval(() => {}, 1000)"],
+    { stdio: ["ignore", "ignore", "ignore", "ipc"] },
+  );
+  await once(child, "spawn");
+  const errors = observeChildErrors(child);
+  const baselineErrorListeners = child.listenerCount("error");
+  const baselineExitListeners = child.listenerCount("exit");
+  const unhandled = [];
+  const onUnhandled = (reason) => unhandled.push(reason);
+  process.on("unhandledRejection", onUnhandled);
+
+  try {
+    await assert.rejects(
+      waitForDriver(AbortSignal.timeout(2_000), address.port, child, errors),
+      { message: "Program browser proof: ChromeDriver exited prematurely with code 23" },
+    );
+    await requestWasAborted;
+    await new Promise((resolve) => setImmediate(resolve));
+
+    assert.equal(child.exitCode, 23);
+    assert.equal(child.killed, false);
+    assert.equal(child.listenerCount("error"), baselineErrorListeners);
+    assert.equal(child.listenerCount("exit"), baselineExitListeners);
+    assert.deepEqual(unhandled, []);
+  } finally {
+    process.removeListener("unhandledRejection", onUnhandled);
+    if (!errors.closed && child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+    await errors.close;
+    errors.release();
+    server.closeAllConnections();
     await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
   }
 });
@@ -156,27 +382,21 @@ test("HTTP status is accepted only when WebDriver reports ready", async () => {
   const address = server.address();
   assert.notEqual(address, null);
   assert.equal(typeof address, "object");
-  const child = { killed: false, exitCode: null, signalCode: null };
-  const errors = { failure: new Promise(() => {}) };
+  const child = fakeChild(() => true);
+  const errors = observeChildErrors(child);
   try {
     await assert.rejects(
       waitForDriver(AbortSignal.timeout(100), address.port, child, errors),
       /timeout|aborted/u,
     );
   } finally {
+    errors.release();
     await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
   }
 });
 
-test("child termination waits for exit and refuses a process that stays alive", async () => {
-  const listeners = new Map();
-  const child = {
-    exitCode: null,
-    signalCode: null,
-    once: (event, listener) => listeners.set(event, listener),
-    removeListener: (event) => listeners.delete(event),
-    kill: () => true,
-  };
+test("child termination waits for close and refuses a process that stays alive", async () => {
+  const child = fakeChild(() => true);
   await assert.rejects(terminateChild(child, 1), /survived forced termination/u);
 });
 

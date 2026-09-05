@@ -3,82 +3,145 @@ function fail(message) {
 }
 
 export function observeChildErrors(child) {
-  let observed;
-  let notify;
-  const failure = new Promise((accept) => { notify = accept; });
+  let operationalError;
+  let consumedOperationalError;
+  let exited = child.exitCode !== null || child.signalCode !== null;
+  let closed = false;
+  let resolveFailure;
+  let resolveExit;
+  let resolveClose;
+  const failure = new Promise((accept) => { resolveFailure = accept; });
+  const exit = new Promise((accept) => { resolveExit = accept; });
+  const close = new Promise((accept) => { resolveClose = accept; });
   const onError = (error) => {
-    observed = error;
-    notify(error);
+    if (operationalError === undefined) {
+      operationalError = error;
+      resolveFailure(error);
+    }
+  };
+  const onExit = () => {
+    exited = true;
+    resolveExit();
+  };
+  const onClose = () => {
+    exited = true;
+    closed = true;
+    resolveExit();
+    resolveClose();
   };
   child.on("error", onError);
+  child.on("exit", onExit);
+  child.on("close", onClose);
   return {
     failure,
-    get observed() { return observed; },
-    release: () => child.removeListener("error", onError),
+    exit,
+    close,
+    consumeOperationalError(error) {
+      if (operationalError === error) consumedOperationalError = error;
+    },
+    get cleanupOperationalError() {
+      return operationalError === consumedOperationalError ? undefined : operationalError;
+    },
+    get operationalError() { return operationalError; },
+    get exited() { return exited; },
+    get closed() { return closed; },
+    release: () => {
+      child.removeListener("error", onError);
+      child.removeListener("exit", onExit);
+      child.removeListener("close", onClose);
+    },
   };
 }
 
-async function signalAndWait(child, signal, timeoutMs) {
-  return new Promise((accept, reject) => {
-    const cleanup = () => {
-      clearTimeout(timer);
-      child.removeListener("error", onError);
-      child.removeListener("exit", onExit);
-    };
-    const onError = (error) => {
-      cleanup();
-      reject(error);
-    };
-    const onExit = () => {
-      cleanup();
-      accept(true);
-    };
-    const timer = setTimeout(() => {
-      cleanup();
-      accept(false);
-    }, timeoutMs);
-    child.once("error", onError);
-    child.once("exit", onExit);
+async function settlesWithin(promise, timeoutMs) {
+  let timer;
+  const timeout = new Promise((accept) => { timer = setTimeout(() => accept(false), timeoutMs); });
+  try {
+    return await Promise.race([promise.then(() => true), timeout]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function signalAndObserveClose(child, errors, signal, timeoutMs) {
+  let signalFailure;
+  try {
     if (!child.kill(signal)) {
-      cleanup();
-      reject(new Error(`Program browser proof: ChromeDriver rejected ${signal}`));
+      signalFailure = new Error(`Program browser proof: ChromeDriver rejected ${signal}`);
     }
-  });
+  } catch (error) {
+    signalFailure = error;
+  }
+  if (errors.closed || await settlesWithin(errors.close, timeoutMs)) return { closed: true };
+  return { closed: false, signalFailure };
+}
+
+async function terminateObservedChild(child, errors, timeoutMs) {
+  if (errors.closed) return;
+  if (errors.exited) {
+    if (await settlesWithin(errors.close, timeoutMs)) return;
+    throw new Error("Program browser proof: ChromeDriver exited without closing its process resources");
+  }
+
+  const term = await signalAndObserveClose(child, errors, "SIGTERM", timeoutMs);
+  if (term.closed) return;
+
+  const kill = await signalAndObserveClose(child, errors, "SIGKILL", timeoutMs);
+  if (kill.closed) return;
+  if (kill.signalFailure !== undefined) throw kill.signalFailure;
+  throw new Error("Program browser proof: ChromeDriver survived forced termination");
 }
 
 export async function terminateChild(child, timeoutMs = 5_000) {
-  if (child.exitCode !== null || child.signalCode !== null) return;
-  if (await signalAndWait(child, "SIGTERM", timeoutMs)) return;
-  if (child.exitCode !== null || child.signalCode !== null) return;
-  if (await signalAndWait(child, "SIGKILL", timeoutMs)) return;
-  throw new Error("ChromeDriver survived forced termination");
+  const errors = observeChildErrors(child);
+  try {
+    await terminateObservedChild(child, errors, timeoutMs);
+  } finally {
+    errors.release();
+  }
+}
+
+export function releaseChild(child, errors, timeoutMs = 5_000) {
+  if (errors.releasePromise !== undefined) return errors.releasePromise;
+  errors.releasePromise = (async () => {
+    try {
+      await terminateObservedChild(child, errors, timeoutMs);
+    } catch (cleanupError) {
+      const operationalError = errors.cleanupOperationalError;
+      if (operationalError === undefined || operationalError === cleanupError) throw cleanupError;
+      throw new AggregateError(
+        [operationalError, cleanupError],
+        "ChromeDriver failed before and during termination",
+        { cause: operationalError },
+      );
+    } finally {
+      errors.release();
+    }
+    const operationalError = errors.cleanupOperationalError;
+    if (operationalError !== undefined) throw operationalError;
+  })();
+  return errors.releasePromise;
 }
 
 export async function waitForDriver(signal, port, child, errors) {
   const polling = new AbortController();
-  const combinedSignal = AbortSignal.any([signal, polling.signal]);
-  let releaseExit = () => {};
-  const exited = new Promise((accept) => {
-    if (typeof child.once !== "function") return;
-    const onExit = (code, exitSignal) => accept({
-      kind: "failure",
-      error: new Error(`Program browser proof: ChromeDriver exited prematurely with code ${code ?? exitSignal ?? "unknown"}`),
-    });
-    child.once("exit", onExit);
-    releaseExit = () => child.removeListener("exit", onExit);
+  const pollingSignal = AbortSignal.any([signal, polling.signal]);
+  const terminal = errors.exit.then(() => {
+    const outcome = child.exitCode ?? child.signalCode ?? "unknown";
+    return new Error(`Program browser proof: ChromeDriver exited prematurely with code ${outcome}`);
   });
   const readiness = (async () => {
     const deadline = Date.now() + 20_000;
     while (Date.now() < deadline) {
-      if (child.killed || child.exitCode !== null || child.signalCode !== null) {
+      if (errors.exited) {
         const outcome = child.exitCode ?? child.signalCode ?? "unknown";
         fail(`ChromeDriver exited prematurely with code ${outcome}`);
       }
       try {
-        const response = await fetch(`http://127.0.0.1:${port}/status`, { signal: combinedSignal });
-        if (response.ok && (await response.json())?.value?.ready === true) return { kind: "ready" };
+        const response = await fetch(`http://127.0.0.1:${port}/status`, { signal: pollingSignal });
+        if (response.ok && (await response.json())?.value?.ready === true) return;
       } catch (error) {
-        if (combinedSignal.aborted) throw error;
+        if (pollingSignal.aborted) throw error;
       }
       await new Promise((accept) => setTimeout(accept, 50));
     }
@@ -86,14 +149,16 @@ export async function waitForDriver(signal, port, child, errors) {
   })();
   try {
     const outcome = await Promise.race([
-      readiness,
-      errors.failure.then((error) => ({ kind: "failure", error })),
-      exited,
+      readiness.then(() => new Promise((accept) => setImmediate(accept))),
+      errors.failure,
+      terminal,
     ]);
-    if (outcome.kind === "failure") throw outcome.error;
+    if (outcome instanceof Error) {
+      errors.consumeOperationalError(outcome);
+      throw outcome;
+    }
   } finally {
     polling.abort();
-    releaseExit();
     await readiness.catch(() => {});
   }
 }

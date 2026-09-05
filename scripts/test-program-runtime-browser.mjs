@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { extname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { observeChildErrors, terminateChild, waitForDriver } from "./browser-child-lifecycle.mjs";
+import { observeChildErrors, releaseChild, waitForDriver } from "./browser-child-lifecycle.mjs";
 
 const LOOPBACK = "127.0.0.1";
 const RESOURCE_ORDER = [
@@ -178,13 +178,7 @@ async function main() {
     const childErrors = observeChildErrors(child);
     resources.push({
       name: "browser",
-      release: async () => {
-        try {
-          if (childErrors.observed === undefined) await terminateChild(child);
-        } finally {
-          childErrors.release();
-        }
-      },
+      release: () => releaseChild(child, childErrors),
     });
     const controller = new AbortController();
     timer = setTimeout(() => controller.abort(new Error("browser proof timed out")), timeout);
