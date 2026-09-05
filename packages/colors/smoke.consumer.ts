@@ -4,7 +4,12 @@ import init, {
   compileProgramWire,
   evaluateWcag22,
   numericalCapabilityManifest,
-} from "./index.js";
+} from "@labpics/colors";
+import {
+  PROGRAM_WIRE_INVALID_DECLARATION,
+  ProgramWireBuilderV1,
+  ProgramWireError,
+} from "@labpics/colors/program-wire/abi-v1.js";
 
 async function boot(module: WebAssembly.Module, wire: Uint8Array): Promise<ProgramRuntime> {
   await init({ module_or_path: module });
@@ -25,19 +30,31 @@ async function boot(module: WebAssembly.Module, wire: Uint8Array): Promise<Progr
   return runtime;
 }
 
+const wire = new ProgramWireBuilderV1()
+  .source(1, [0, 0, 0])
+  .fixedTarget(2, 1)
+  .finish();
+const invalidDeclaration = new ProgramWireError(
+  PROGRAM_WIRE_INVALID_DECLARATION,
+  "invalid declaration",
+);
+const invalidCode: ProgramWireError["code"] = invalidDeclaration.code;
+
 void boot;
+void wire;
+void invalidCode;
 void evaluateWcag22("#000000", "#FFFFFF", "sc-1.4.3-text-default");
 void numericalCapabilityManifest();
 
 // Legacy recipe/browser roots are intentionally absent after atomic C7c.
 // @ts-expect-error removed: RoleRecipe
-import type { RoleRecipe } from "./index.js";
+import type { RoleRecipe } from "@labpics/colors";
 // @ts-expect-error removed: ThemeConfig
-import type { ThemeConfig } from "./index.js";
+import type { ThemeConfig } from "@labpics/colors";
 // @ts-expect-error removed: LabColors recipe engine
-import { LabColors } from "./index.js";
+import { LabColors } from "@labpics/colors";
 // @ts-expect-error removed: applyTheme browser root
-import { applyTheme } from "./index.js";
+import { applyTheme } from "@labpics/colors";
 void (null as unknown as RoleRecipe);
 void (null as unknown as ThemeConfig);
 void LabColors;

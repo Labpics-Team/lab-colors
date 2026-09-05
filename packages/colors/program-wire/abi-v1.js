@@ -7,11 +7,11 @@
 // проверяет Rust-компилятор Program; этот модуль не выражает семантических
 // отказов и не изобретает fallback.
 
-export const PROGRAM_WIRE_MAGIC_V1 = Object.freeze([0x4c, 0x43, 0x50, 0x57]); // LCPW
-export const PROGRAM_WIRE_VERSION_V1 = 1;
-export const MAX_SECTION_ENTRIES_V1 = 4096;
+const PROGRAM_WIRE_MAGIC_V1 = Object.freeze([0x4c, 0x43, 0x50, 0x57]); // LCPW
+const PROGRAM_WIRE_VERSION_V1 = 1;
+const MAX_SECTION_ENTRIES_V1 = 4096;
 
-export const SECTION_ORDER_V1 = Object.freeze([
+const SECTION_ORDER_V1 = Object.freeze([
   "sources",
   "targets",
   "families",
@@ -28,16 +28,9 @@ export const SECTION_ORDER_V1 = Object.freeze([
   "outputs",
 ]);
 
-export const KIND_EXACT_VISIBLE_UNARY = 1;
-export const KIND_EXACT_INTRINSIC_UNARY = 2;
-export const KIND_FAMILY_MEMBERSHIP = 3;
-export const KIND_EXACT_INTRINSIC_RELATION = 4;
-export const KIND_EXACT_VISIBLE_RELATION = 5;
-export const KIND_INTRINSIC_DISTINCTION = 6;
-export const KIND_VISIBLE_DISTINCTION = 7;
-export const KIND_FAMILY_CATEGORY_RELATION = 8;
-export const KIND_WCAG22_VISIBLE_UNARY = 9;
-export const KIND_CLEAN_SET = 10;
+const KIND_EXACT_VISIBLE_UNARY = 1;
+const KIND_EXACT_INTRINSIC_RELATION = 4;
+const KIND_WCAG22_VISIBLE_UNARY = 9;
 
 export const SURROUND_AVERAGE_V1 = 1;
 export const SURROUND_DIM_V1 = 2;
@@ -186,17 +179,21 @@ export class ProgramWireBuilderV1 {
   }
 
   source(id, rgb) {
+    const checkedId = u32Value(id, "source id");
+    const checkedRgb = rgbBytes(rgb, "source rgb");
     const sink = this.entry("sources");
-    sink.u32(u32Value(id, "source id"));
-    sink.rgb(rgbBytes(rgb, "source rgb"));
+    sink.u32(checkedId);
+    sink.rgb(checkedRgb);
     return this;
   }
 
   fixedTarget(id, source) {
+    const checkedId = u32Value(id, "target id");
+    const checkedSource = u32Value(source, "target source");
     const sink = this.entry("targets");
-    sink.u32(u32Value(id, "target id"));
+    sink.u32(checkedId);
     sink.u8(1);
-    sink.u32(u32Value(source, "target source"));
+    sink.u32(checkedSource);
     return this;
   }
 
@@ -222,19 +219,20 @@ export class ProgramWireBuilderV1 {
   }
 
   family(id, releaseBytes) {
-    const sink = this.entry("families");
-    sink.u32(u32Value(id, "family id"));
+    const checkedId = u32Value(id, "family id");
     if (!Array.isArray(releaseBytes) || releaseBytes.length !== 32) {
       invalid("family release must be 32 bytes");
     }
-    for (const byte of releaseBytes) {
-      sink.u8(byteValue(byte, "family release byte"));
-    }
+    const checkedRelease = releaseBytes.map((byte) => byteValue(byte, "family release byte"));
+    const sink = this.entry("families");
+    sink.u32(checkedId);
+    for (const byte of checkedRelease) sink.u8(byte);
     return this;
   }
 
   surfaceInputPort(id) {
-    this.entry("surfaceInputPorts").u32(u32Value(id, "surface input port id"));
+    const checkedId = u32Value(id, "surface input port id");
+    this.entry("surfaceInputPorts").u32(checkedId);
     return this;
   }
 
@@ -248,35 +246,44 @@ export class ProgramWireBuilderV1 {
   }
 
   solidPaint(id, target) {
+    const checkedId = u32Value(id, "paint id");
+    const checkedTarget = u32Value(target, "paint target");
     const sink = this.entry("paints");
-    sink.u32(u32Value(id, "paint id"));
+    sink.u32(checkedId);
     sink.u8(1);
-    sink.u32(u32Value(target, "paint target"));
+    sink.u32(checkedTarget);
     return this;
   }
 
   opacityPaint(id, source, opacity) {
+    const checkedId = u32Value(id, "paint id");
+    const checkedSource = u32Value(source, "paint source");
+    const checkedOpacity = u32Value(opacity, "paint opacity input");
     const sink = this.entry("paints");
-    sink.u32(u32Value(id, "paint id"));
+    sink.u32(checkedId);
     sink.u8(2);
-    sink.u32(u32Value(source, "paint source"));
-    sink.u32(u32Value(opacity, "paint opacity input"));
+    sink.u32(checkedSource);
+    sink.u32(checkedOpacity);
     return this;
   }
 
   inputSurface(id, input) {
+    const checkedId = u32Value(id, "surface id");
+    const checkedInput = u32Value(input, "surface input port");
     const sink = this.entry("surfaces");
-    sink.u32(u32Value(id, "surface id"));
+    sink.u32(checkedId);
     sink.u8(1);
-    sink.u32(u32Value(input, "surface input port"));
+    sink.u32(checkedInput);
     return this;
   }
 
   occurrenceSurface(id, occurrence) {
+    const checkedId = u32Value(id, "surface id");
+    const checkedOccurrence = u32Value(occurrence, "surface occurrence");
     const sink = this.entry("surfaces");
-    sink.u32(u32Value(id, "surface id"));
+    sink.u32(checkedId);
     sink.u8(2);
-    sink.u32(u32Value(occurrence, "surface occurrence"));
+    sink.u32(checkedOccurrence);
     return this;
   }
 
@@ -298,16 +305,20 @@ export class ProgramWireBuilderV1 {
   }
 
   presentationRoot(id, terminal) {
+    const checkedId = u32Value(id, "presentation root id");
+    const checkedTerminal = u32Value(terminal, "presentation terminal");
     const sink = this.entry("presentationRoots");
-    sink.u32(u32Value(id, "presentation root id"));
-    sink.u32(u32Value(terminal, "presentation terminal"));
+    sink.u32(checkedId);
+    sink.u32(checkedTerminal);
     return this;
   }
 
   presentationTarget(root, occurrence) {
+    const checkedRoot = u32Value(root, "presentation root");
+    const checkedOccurrence = u32Value(occurrence, "presentation occurrence");
     const sink = this.entry("presentationTargets");
-    sink.u32(u32Value(root, "presentation root"));
-    sink.u32(u32Value(occurrence, "presentation occurrence"));
+    sink.u32(checkedRoot);
+    sink.u32(checkedOccurrence);
     return this;
   }
 
@@ -316,11 +327,14 @@ export class ProgramWireBuilderV1 {
   }
 
   exactVisibleUnary(hard, id, occurrence, expectedRgb) {
+    const checkedId = u32Value(id, "constraint id");
+    const checkedOccurrence = u32Value(occurrence, "constraint occurrence");
+    const checkedRgb = rgbBytes(expectedRgb, "expected rgb");
     const sink = this.constraintEntry(hard);
-    sink.u32(u32Value(id, "constraint id"));
+    sink.u32(checkedId);
     sink.u8(KIND_EXACT_VISIBLE_UNARY);
-    sink.u32(u32Value(occurrence, "constraint occurrence"));
-    sink.rgb(rgbBytes(expectedRgb, "expected rgb"));
+    sink.u32(checkedOccurrence);
+    sink.rgb(checkedRgb);
     return this;
   }
 
@@ -354,9 +368,11 @@ export class ProgramWireBuilderV1 {
   }
 
   output(slot, paint) {
+    const checkedSlot = u32Value(slot, "output slot");
+    const checkedPaint = u32Value(paint, "output paint");
     const sink = this.entry("outputs");
-    sink.u32(u32Value(slot, "output slot"));
-    sink.u32(u32Value(paint, "output paint"));
+    sink.u32(checkedSlot);
+    sink.u32(checkedPaint);
     return this;
   }
 
