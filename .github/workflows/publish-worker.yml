@@ -136,8 +136,8 @@ jobs:
               file: "ci.yml",
               path: ".github/workflows/ci.yml",
               worker: {
-                path: "Labpics-Team/lab-colors/.github/workflows/ci-worker.yml@1461bc2ed60142aed3a8723e618b883be6418156",
-                sha: "1461bc2ed60142aed3a8723e618b883be6418156",
+                path: "Labpics-Team/lab-colors/.github/workflows/ci-worker.yml@6610a95ede5930c9b4fd914fa0616100f49e09ca",
+                sha: "6610a95ede5930c9b4fd914fa0616100f49e09ca",
               },
               requiredJobs: [
                 "Node 22 consumer floor",
@@ -154,8 +154,8 @@ jobs:
               file: "native-conformance.yml",
               path: ".github/workflows/native-conformance.yml",
               worker: {
-                path: "Labpics-Team/lab-colors/.github/workflows/native-conformance-worker.yml@1461bc2ed60142aed3a8723e618b883be6418156",
-                sha: "1461bc2ed60142aed3a8723e618b883be6418156",
+                path: "Labpics-Team/lab-colors/.github/workflows/native-conformance-worker.yml@1beda3770a990bb62d1b97e0188b1f2620e16c07",
+                sha: "1beda3770a990bb62d1b97e0188b1f2620e16c07",
               },
               requiredJobs: [
                 "swift conformance (self-hosted Linux, pinned toolchain)",
@@ -345,6 +345,7 @@ jobs:
             "pkg/labcolors.d.ts",
             "pkg/labcolors_bg.wasm",
             "pkg/labcolors_bg.wasm.d.ts",
+            "pkg/snippets/labcolors-wasm-????????????????/inline0.js",
           ];
           const EXPECTED_PACKAGE_EXPORTS = {
             ".": { types: "./index.d.ts", default: "./index.js" },
@@ -356,24 +357,38 @@ jobs:
             "./build-metadata.json": "./build-metadata.json",
             "./package.json": "./package.json",
           };
-          const EXPECTED_TAR_INVENTORY = [
-            ...EXPECTED_PACKAGE_FILES,
-            "README.md",
-            "package.json",
-          ].sort((left, right) =>
-            Buffer.compare(Buffer.from(left, "utf8"), Buffer.from(right, "utf8")),
-          );
+          const EXPECTED_SNIPPET_PATTERN =
+            /^pkg\/snippets\/labcolors-wasm-[0-9a-f]{16}\/inline0\.js$/u;
+
+          function expectedTarInventory(packageFiles, snippetFiles) {
+            if (
+              snippetFiles.length !== 1 ||
+              snippetFiles.some((path) => !EXPECTED_SNIPPET_PATTERN.test(path)) ||
+              new Set(snippetFiles).size !== snippetFiles.length
+            ) {
+              fail("worker generated snippet inventory is not canonical");
+            }
+            return [
+              ...packageFiles.filter(
+                (path) => path !== "pkg/snippets/labcolors-wasm-????????????????/inline0.js",
+              ),
+              ...snippetFiles,
+              "README.md",
+              "package.json",
+            ].sort((left, right) =>
+              Buffer.compare(Buffer.from(left, "utf8"), Buffer.from(right, "utf8")),
+            );
+          }
 
           function fail(message) {
             throw new Error(`release artifact rejected: ${message}`);
           }
 
           if (
-            EXPECTED_PACKAGE_FILES.length !== 15 ||
-            new Set(EXPECTED_PACKAGE_FILES).size !== 15 ||
-            EXPECTED_PACKAGE_FILES.some((path) => path.includes("*")) ||
-            EXPECTED_TAR_INVENTORY.length !== 17 ||
-            new Set(EXPECTED_TAR_INVENTORY).size !== 17
+            EXPECTED_PACKAGE_FILES.length !== 16 ||
+            new Set(EXPECTED_PACKAGE_FILES).size !== 16 ||
+            EXPECTED_PACKAGE_FILES.filter((path) => path.includes("?")).length !== 1 ||
+            EXPECTED_PACKAGE_FILES.some((path) => path.includes("*"))
           ) {
             fail("worker package inventory allowlist is not canonical");
           }
@@ -529,7 +544,7 @@ jobs:
             return path;
           }
 
-          function inspectCanonicalTarball(tarball, bytes, digest, workspace) {
+          function inspectCanonicalTarball(tarball, bytes, digest, workspace, expectedInventory) {
             const inspectorPath = join(workspace, "scripts/inspect-npm-tarball.py");
             const inspectorBytes = readFileSync(inspectorPath);
             if (sha256(inspectorBytes) !== TAR_INSPECTOR_SHA256) {
@@ -538,7 +553,7 @@ jobs:
 
             const inventoryPath = join(dirname(tarball), "declared-inventory.json");
             const inventoryBytes = Buffer.from(
-              `${JSON.stringify({ schemaVersion: 1, files: EXPECTED_TAR_INVENTORY })}\n`,
+              `${JSON.stringify({ schemaVersion: 1, files: expectedInventory })}\n`,
               "utf8",
             );
             writeExclusiveFsyncedFile(
@@ -586,17 +601,17 @@ jobs:
               inspection.verdict !== "canonical" ||
               inspection.tarball.bytes !== bytes.length ||
               inspection.tarball.sha256 !== digest ||
-              inspection.limits.maxMembers !== EXPECTED_TAR_INVENTORY.length ||
+              inspection.limits.maxMembers !== expectedInventory.length ||
               inspection.limits.maxTarballBytes !== 16 * 1024 * 1024 ||
               inspection.limits.maxTotalFileBytes !== 64 * 1024 * 1024 ||
               !Array.isArray(inspection.inventory.files) ||
               JSON.stringify(inspection.inventory.files) !==
-                JSON.stringify(EXPECTED_TAR_INVENTORY) ||
+                JSON.stringify(expectedInventory) ||
               !Number.isSafeInteger(inspection.inventory.totalFileBytes) ||
               inspection.inventory.totalFileBytes < 0 ||
               inspection.inventory.totalFileBytes > inspection.limits.maxTotalFileBytes ||
               !Array.isArray(inspection.members) ||
-              inspection.members.length !== EXPECTED_TAR_INVENTORY.length
+              inspection.members.length !== expectedInventory.length
             ) {
               fail("tar inspection does not bind the admitted archive and inventory");
             }
@@ -628,8 +643,8 @@ jobs:
               Buffer.compare(Buffer.from(left, "utf8"), Buffer.from(right, "utf8")),
             );
             if (
-              new Set(memberPaths).size !== EXPECTED_TAR_INVENTORY.length ||
-              JSON.stringify(memberPaths) !== JSON.stringify(EXPECTED_TAR_INVENTORY) ||
+              new Set(memberPaths).size !== expectedInventory.length ||
+              JSON.stringify(memberPaths) !== JSON.stringify(expectedInventory) ||
               totalFileBytes !== inspection.inventory.totalFileBytes
             ) {
               fail("tar inspection member records differ from the admitted inventory");
@@ -789,11 +804,20 @@ jobs:
             fail(`tarball sha256 ${digest} != manifest ${evidence.sha256}`);
           }
           const tarball = materializeVerifiedTarball(bytes, digest, runnerTemp);
+          const listedMembers = execFileSync("tar", ["-tzf", tarball], { encoding: "utf8" })
+            .split("\n")
+            .filter((path) => path.startsWith("package/pkg/snippets/"))
+            .map((path) => path.slice("package/".length));
+          const expectedInventory = expectedTarInventory(EXPECTED_PACKAGE_FILES, listedMembers);
+          if (expectedInventory.length !== 18) {
+            fail(`expected exactly 18 admitted tar members, got ${expectedInventory.length}`);
+          }
           const tarInspection = inspectCanonicalTarball(
             tarball,
             bytes,
             digest,
             workspace,
+            expectedInventory,
           );
           const tarMembers = tarInspection.members;
 

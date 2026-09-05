@@ -2054,12 +2054,12 @@ class MutationTruthTest(unittest.TestCase):
         self.assertNotIn("легаси", workflow.casefold())
         self.assertIn(
             'path: "Labpics-Team/lab-colors/.github/workflows/ci-worker.yml@'
-            '1461bc2ed60142aed3a8723e618b883be6418156"',
+            '6610a95ede5930c9b4fd914fa0616100f49e09ca"',
             workflow,
         )
         self.assertIn(
             'path: "Labpics-Team/lab-colors/.github/workflows/'
-            'native-conformance-worker.yml@1461bc2ed60142aed3a8723e618b883be6418156"',
+            'native-conformance-worker.yml@1beda3770a990bb62d1b97e0188b1f2620e16c07"',
             workflow,
         )
         self.assertIn("const references = run.referenced_workflows;", workflow)
