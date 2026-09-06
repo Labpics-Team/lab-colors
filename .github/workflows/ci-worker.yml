@@ -1,10 +1,10 @@
 name: CI worker
 
-# Неизменяемый worker для эфемерных GitHub-hosted раннеров (репо публичное).
-# Caller (ci.yml) закрепляет этот файл полным commit SHA: caller выбирает
-# revision для checkout, но не может изменить ни job graph, ни пины экшенов.
-# Своих inputs у worker нет by design — input стал бы каналом от недоверенного
-# caller к закреплённому определению.
+# Worker для эфемерных GitHub-hosted раннеров публичного репозитория.
+# Локальный uses в ci.yml выбирает определение из snapshot caller'а, не checkout.
+# Изменения графа и пинов проверяются в том же коммите; это не отдельный заранее
+# одобренный граф. Собственных inputs нет. Тесты связывают байты обоих файлов
+# с github.workflow_sha, который не следует подменять SHA исходников задания.
 
 on:
   workflow_call:
@@ -275,8 +275,12 @@ jobs:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
       - name: CI peer gate hostile tests
+        env:
+          CI_WORKFLOW_SHA: ${{ github.workflow_sha }}
         run: python3 scripts/test_ci_peer_gate.py
       - name: mutation evidence verifier hostile tests
+        env:
+          CI_WORKFLOW_SHA: ${{ github.workflow_sha }}
         run: python3 scripts/test_mutation.py
       - name: cargo test
         run: cargo test --workspace --locked

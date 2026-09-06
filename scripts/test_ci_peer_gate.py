@@ -8,7 +8,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
-import re
+from ci_workflow_binding import TestCiWorkflowBinding, verify_ci_binding
 import shutil
 import subprocess
 import sys
@@ -134,25 +134,8 @@ class PeerGateTest(unittest.TestCase):
     def test_unsupported_event_fails_closed(self) -> None:
         self.assertEqual(self.evaluate([], event="workflow_dispatch").state, "fail")
 
-    def test_ci_caller_pin_contains_the_checked_in_worker_bytes(self) -> None:
-        caller = (REPO / ".github/workflows/ci.yml").read_text(encoding="utf-8")
-        matches = re.findall(
-            r"Labpics-Team/lab-colors/\.github/workflows/ci-worker\.yml@([0-9a-f]{40})",
-            caller,
-        )
-        self.assertEqual(len(matches), 1, "CI caller must have one immutable worker pin")
-        committed = subprocess.run(
-            ["git", "show", f"{matches[0]}:.github/workflows/ci-worker.yml"],
-            cwd=REPO,
-            check=True,
-            capture_output=True,
-        ).stdout
-        current = (REPO / ".github/workflows/ci-worker.yml").read_bytes()
-        self.assertEqual(
-            committed,
-            current,
-            "CI caller pin does not execute the reviewed worker in this checkout",
-        )
+    def test_ci_caller_selects_the_worker_from_its_own_snapshot(self) -> None:
+        verify_ci_binding(REPO, os.environ)
 
 
 def browser_script() -> str:
