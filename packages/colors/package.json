@@ -43,7 +43,7 @@
     "pkg/labcolors.d.ts",
     "pkg/labcolors_bg.wasm",
     "pkg/labcolors_bg.wasm.d.ts",
-    "pkg/snippets/labcolors-wasm-????????????????/inline0.js"
+    "pkg/snippets/labcolors-wasm-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]/inline0.js"
   ],
   "scripts": {
     "build": "wasm-pack build ../../crates/labcolors-wasm --release --target web --out-dir ../../packages/colors/pkg --out-name labcolors --locked",

@@ -558,7 +558,7 @@ function exportTargets(value, into = []) {
   return into;
 }
 
-async function expectedPackedFiles(packageJson, runtimeSource) {
+export async function expectedPackedFiles(packageJson, runtimeSource) {
   const declared = (packageJson.files ?? []).map(normalisePackPath);
   const snippets = await runtimeSnippetPaths(runtimeSource);
   if (snippets.length !== 1) {
@@ -566,7 +566,7 @@ async function expectedPackedFiles(packageJson, runtimeSource) {
   }
   const expected = new Set([
     ...REQUIRED_PACK_FILES,
-    ...declared.filter((path) => path !== "pkg/snippets/labcolors-wasm-????????????????/inline0.js"),
+    ...declared.filter((path) => path !== "pkg/snippets/labcolors-wasm-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]/inline0.js"),
     ...snippets.map((path) => `pkg/${path}`),
   ]);
   for (const target of exportTargets(packageJson.exports)) expected.add(normalisePackPath(target));

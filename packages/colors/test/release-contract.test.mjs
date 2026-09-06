@@ -14,9 +14,13 @@ test("terminal tar inventory is exact and excludes retired roots", () => {
     "evidence/wcag22-srgb8-q55-proof-v1.json",
     "evidence/point-support-reference-surplus-q55-bps-proof-v1.json",
     "pkg/labcolors.js", "pkg/labcolors.d.ts", "pkg/labcolors_bg.wasm",
-    "pkg/labcolors_bg.wasm.d.ts", "pkg/snippets/labcolors-wasm-????????????????/inline0.js",
+    "pkg/labcolors_bg.wasm.d.ts", "pkg/snippets/labcolors-wasm-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]/inline0.js",
   ]);
   assert.deepEqual(new Set(pkg.files), required);
+  const selector = "pkg/snippets/labcolors-wasm-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]/inline0.js";
+  assert.equal(pkg.files.filter((path) => path === selector).length, 1);
+  assert.equal(pkg.files.filter((path) => path.includes("[0-9a-f]")).length, 1);
+  assert.equal(pkg.files.some((path) => path.includes("?") || path.includes("*")), false);
 });
 
 test("terminal package has one root and no legacy subpath", () => {
