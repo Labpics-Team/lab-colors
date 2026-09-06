@@ -54,7 +54,12 @@ class WorkflowAdmissionTests(unittest.TestCase):
                 stub = root / "python3"
                 stub.write_text('#!/bin/sh\nprintf "%s\\0" "$@" > "$CAPTURE"\n')
                 stub.chmod(0o700)
-                coordinates = {key: "'; printf injected > marker; #" for key in ("POINTS", "SHARD_POINTS", "WINDOW_START", "WINDOW_POINTS")}
+                coordinates = {
+                    "POINTS": "'; printf points > marker; #",
+                    "SHARD_POINTS": "'; printf shard > marker; #",
+                    "WINDOW_START": "'; printf start > marker; #",
+                    "WINDOW_POINTS": "'; printf window > marker; #",
+                }
                 result = subprocess.run(
                     ("bash", "-c", script), cwd=root, capture_output=True,
                     env={**os.environ, **coordinates, "PATH": str(root) + os.pathsep + os.environ["PATH"], "CAPTURE": str(root / "args")},
@@ -62,7 +67,20 @@ class WorkflowAdmissionTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertFalse((root / "marker").exists())
                 args = (root / "args").read_bytes().split(b"\0")
-                self.assertIn(coordinates["SHARD_POINTS"].encode(), args)
+                expected = (
+                    ((b"--points", "POINTS"), (b"--shard-points", "SHARD_POINTS"))
+                    if name == "replay the bounded full-domain prefix through the shard runner"
+                    else (
+                        (b"--window-start", "WINDOW_START"),
+                        (b"--window-points", "WINDOW_POINTS"),
+                        (b"--shard-points", "SHARD_POINTS"),
+                    )
+                )
+                for flag, key in expected:
+                    self.assertIn(flag, args)
+                    index = args.index(flag)
+                    self.assertLess(index + 1, len(args))
+                    self.assertEqual(args[index + 1], coordinates[key].encode())
 
     def test_download_rejects_entire_invalid_list_before_gh(self) -> None:
         for workflow, name in (
