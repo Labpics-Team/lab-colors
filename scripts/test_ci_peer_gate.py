@@ -3,11 +3,16 @@
 
 from __future__ import annotations
 
+import copy
 import importlib.util
+import json
+import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import sys
+import tempfile
 import unittest
 
 
@@ -148,6 +153,135 @@ class PeerGateTest(unittest.TestCase):
             current,
             "CI caller pin does not execute the reviewed worker in this checkout",
         )
+
+
+def browser_script() -> str:
+    workflow = (REPO / ".github/workflows/ci-worker.yml").read_text(encoding="utf-8")
+    step = workflow.split("      - name: terminal Program in real browser\n", 1)[1]
+    body = step.split("        run: |\n", 1)[1].split("\n#", 1)[0]
+    return "\n".join(line[10:] for line in body.splitlines() if line.strip()) + "\n"
+
+
+class BrowserBinaryAdmissionTest(unittest.TestCase):
+    def exercise(self, *, script: str | None = None, wasm_exit: int = 0,
+                 missing_browser: bool = False, capabilities: dict | None = None) -> dict:
+        node = shutil.which("node")
+        bash = shutil.which("bash")
+        if node is None or bash is None:
+            self.fail("real Node and Bash are required")
+        original = capabilities if capabilities is not None else json.loads(
+            (REPO / "crates/labcolors-wasm/webdriver.json").read_text(encoding="utf-8"))
+        with tempfile.TemporaryDirectory(prefix="browser admission ") as directory:
+            root = Path(directory)
+            temp = root / 'temp " quoted'
+            bin_dir = root / "bin"
+            temp.mkdir()
+            bin_dir.mkdir()
+            webdriver = root / "crates/labcolors-wasm/webdriver.json"
+            webdriver.parent.mkdir(parents=True)
+            webdriver.write_text(json.dumps(original) + "\n")
+            before = webdriver.read_bytes()
+            browser = temp / 'verified " chrome'
+            driver = temp / "verified driver"
+            for executable in (browser, driver):
+                executable.write_text("#!/bin/sh\nexit 0\n")
+                executable.chmod(0o755)
+            if missing_browser:
+                browser.unlink()
+            inherited = temp / "foreign-webdriver.json"
+            inherited.write_text("foreign configuration\n")
+            captured = root / "captured.json"
+            product_marker = root / "product-called"
+            wasm_marker = root / "wasm-called"
+            wasm = bin_dir / "wasm-pack"
+            wasm.write_text(f"#!{sys.executable}\n" + r'''
+import json, os, pathlib, sys
+pathlib.Path(os.environ["WASM_MARKER"]).write_text("called\n")
+path = os.environ.get("WASM_BINDGEN_TEST_WEBDRIVER_JSON")
+if not path:
+    sys.exit(69)
+config = pathlib.Path(path)
+try:
+    value = json.loads(config.read_text())
+except (ValueError, OSError):
+    sys.exit(70)
+pathlib.Path(os.environ["CAPTURED"]).write_text(json.dumps({
+    "capabilities": value, "path": path, "mode": config.stat().st_mode & 0o777,
+    "args": sys.argv[1:]}))
+if value.get("goog:chromeOptions", {}).get("binary") != os.environ["CHROME_PATH"]:
+    sys.exit(73)
+sys.exit(int(os.environ["WASM_EXIT"]))
+''')
+            wasm.chmod(0o755)
+            node_wrapper = bin_dir / "node"
+            node_wrapper.write_text(f"#!{sys.executable}\n" + r'''
+import os, pathlib, sys
+if sys.argv[1:2] == ["scripts/test-program-runtime-browser.mjs"]:
+    pathlib.Path(os.environ["PRODUCT_MARKER"]).write_text("called\n")
+else:
+    os.execv(os.environ["REAL_NODE"], [os.environ["REAL_NODE"], *sys.argv[1:]])
+''')
+            node_wrapper.chmod(0o755)
+            result = subprocess.run([bash, "--noprofile", "--norc", "-c", script or browser_script()],
+                cwd=root, env={**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}",
+                    "REAL_NODE": node, "RUNNER_TEMP": str(temp), "GITHUB_JOB": "wasm",
+                    "CHROME_PATH": str(browser), "CHROMEDRIVER_PATH": str(driver),
+                    "WASM_BINDGEN_TEST_WEBDRIVER_JSON": str(inherited), "WASM_EXIT": str(wasm_exit),
+                    "CAPTURED": str(captured), "PRODUCT_MARKER": str(product_marker), "WASM_MARKER": str(wasm_marker),
+                    "VERIFIED_TARBALL": "/fixture/archive.tgz", "VERIFIED_TARBALL_SHA256": "a" * 64},
+                capture_output=True, text=True, timeout=15)
+            capture = json.loads(captured.read_text()) if captured.exists() else None
+            self.assertEqual(webdriver.read_bytes(), before, "source capabilities must not be rewritten")
+            self.assertEqual(inherited.read_text(), "foreign configuration\n")
+            if capture:
+                self.assertEqual(Path(capture["path"]).parent, temp)
+                self.assertFalse(Path(capture["path"]).exists(), "owned webdriver JSON must be removed on exit")
+            self.assertEqual(sorted(path.name for path in temp.iterdir()),
+                             sorted(["foreign-webdriver.json", "verified driver"] +
+                                    ([] if missing_browser else ['verified " chrome'])))
+            return {"code": result.returncode, "stderr": result.stderr, "capture": capture,
+                    "product_called": product_marker.exists(), "wasm_called": wasm_marker.exists(),
+                    "original": original, "browser": str(browser)}
+
+    def test_real_bash_binds_verified_browser_and_preserves_every_option(self) -> None:
+        result = self.exercise()
+        self.assertEqual(result["code"], 0, result)
+        expected = copy.deepcopy(result["original"])
+        expected["goog:chromeOptions"]["binary"] = result["browser"]
+        self.assertEqual(result["capture"]["capabilities"], expected)
+        self.assertEqual(result["capture"]["mode"], 0o600)
+        self.assertEqual(result["capture"]["args"], ["test", "--headless", "--chrome", "--chromedriver",
+                        str(Path(result["browser"]).with_name("verified driver")), "crates/labcolors-wasm", "--locked"])
+        self.assertTrue(result["product_called"])
+
+    def test_failed_wasm_run_cleans_temp_and_prevents_product_probe(self) -> None:
+        result = self.exercise(wasm_exit=42)
+        self.assertEqual(result["code"], 42, result)
+        self.assertFalse(result["product_called"])
+
+    def test_missing_executable_and_invalid_options_fail_before_wasm_pack(self) -> None:
+        cases = (self.exercise(missing_browser=True),
+                 self.exercise(capabilities={}),
+                 self.exercise(capabilities={"browserName": "chrome", "goog:chromeOptions": []}))
+        for result in cases:
+            self.assertNotEqual(result["code"], 0, result)
+            self.assertIsNone(result["capture"])
+            self.assertFalse(result["wasm_called"])
+            self.assertFalse(result["product_called"])
+
+    def test_removing_explicit_binary_reproduces_the_admission_failure(self) -> None:
+        script = browser_script()
+        binding = 'capabilities["goog:chromeOptions"].binary = process.env.CHROME_PATH;'
+        self.assertEqual(script.count(binding), 1)
+        result = self.exercise(script=script.replace(binding, ""))
+        self.assertEqual(result["code"], 73, result)
+        self.assertFalse(result["product_called"])
+
+    def test_browser_setup_does_not_rely_on_driver_discovery(self) -> None:
+        workflow = (REPO / ".github/workflows/ci-worker.yml").read_text(encoding="utf-8")
+        self.assertNotIn("CHROME_BIN_DIR", workflow)
+        self.assertNotIn('ln -sf "$CHROME_BIN"', workflow)
+        self.assertIn('wasm-pack test --headless --chrome --chromedriver "$CHROMEDRIVER_PATH"', browser_script())
 
 
 if __name__ == "__main__":
