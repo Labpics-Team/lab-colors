@@ -65,7 +65,15 @@ class WorkflowAdmissionTests(unittest.TestCase):
                 self.assertIn(coordinates["SHARD_POINTS"].encode(), args)
 
     def test_download_rejects_entire_invalid_list_before_gh(self) -> None:
-        script = step_script("full-domain-corpus.yml", "download the lane wire evidence")
+        for workflow, name in (
+            ("full-domain-corpus.yml", "download the lane wire evidence"),
+            ("dual-proof.yml", "download both engines' verification lane covers"),
+        ):
+            with self.subTest(workflow=workflow):
+                self._assert_invalid_run_list_refused(workflow, name)
+
+    def _assert_invalid_run_list_refused(self, workflow: str, name: str) -> None:
+        script = step_script(workflow, name)
         script = script.replace("${{ github.repository }}", "Labpics-Team/test")
         for value in ("-R", "../foreign", "0", "00123", "123,,456", "123,", "123, invalid", "123\n456"):
             with self.subTest(value=value), tempfile.TemporaryDirectory() as directory:
@@ -77,8 +85,8 @@ class WorkflowAdmissionTests(unittest.TestCase):
                     ("bash", "-c", script), cwd=root, capture_output=True,
                     env={**os.environ, "LANE_RUN_IDS": value, "PATH": str(root) + os.pathsep + os.environ["PATH"], "CAPTURE": str(root / "calls")},
                 )
-                self.assertEqual(result.returncode, 64, result.stderr)
                 self.assertFalse((root / "calls").exists())
+                self.assertEqual(result.returncode, 64, result.stderr)
 
     def test_cover_rejects_malformed_manifests_with_usage_status(self) -> None:
         shell = step_script("dual-proof.yml", "refuse an incomplete cover before anything expensive is built")
@@ -97,19 +105,43 @@ class WorkflowAdmissionTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 64, result.stderr)
 
     def test_download_preserves_valid_run_ids(self) -> None:
-        script = step_script("full-domain-corpus.yml", "download the lane wire evidence")
+        for workflow, name in (
+            ("full-domain-corpus.yml", "download the lane wire evidence"),
+            ("dual-proof.yml", "download both engines' verification lane covers"),
+        ):
+            with self.subTest(workflow=workflow):
+                self._assert_valid_run_list_downloaded(workflow, name)
+
+    def _assert_valid_run_list_downloaded(self, workflow: str, name: str) -> None:
+        script = step_script(workflow, name)
         script = script.replace("${{ github.repository }}", "Labpics-Team/test")
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             stub = root / "gh"
-            stub.write_text('#!/bin/sh\nprintf "%s\\n" "$3" >> "$CAPTURE"\n')
+            stub.write_text('''#!/bin/sh
+run="$3"
+printf "%s\\n" "$run" >> "$CAPTURE"
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "--dir" ]; then
+    destination="$2/verification-lane-$run"
+    mkdir -p "$destination"
+    printf "%s" "$run" > "$destination/payload"
+    exit 0
+  fi
+  shift
+done
+exit 65
+''')
             stub.chmod(0o700)
             result = subprocess.run(
                 ("bash", "-c", script), cwd=root, capture_output=True,
-                env={**os.environ, "LANE_RUN_IDS": " 123, 456 ", "PATH": str(root) + os.pathsep + os.environ["PATH"], "CAPTURE": str(root / "calls")},
+                env={**os.environ, "LANE_RUN_IDS": " 123, 456 ", "PATH": str(root) + os.pathsep + os.environ["PATH"], "CAPTURE": str(root / "calls"), "GITHUB_WORKSPACE": str(root), "GITHUB_ENV": str(root / "github-env")},
             )
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual((root / "calls").read_text().splitlines(), ["123", "456"])
+            if workflow == "dual-proof.yml":
+                for run in ("123", "456"):
+                    self.assertEqual((root / "lanes-in" / f"verification-lane-{run}" / "payload").read_text(), run)
 
     def test_cover_accepts_two_complete_engines(self) -> None:
         shell = step_script("dual-proof.yml", "refuse an incomplete cover before anything expensive is built")
