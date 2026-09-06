@@ -109,8 +109,9 @@ export async function prepareNpmPackage() {
   ]);
   await retainImportedRuntimeSnippets(PACKAGE_DIR, runtimeSource);
   // wasm-pack пишет pkg/.gitignore с «*». npm применяет его к glob из files;
-  // отдельный .npmignore сохраняет Git-ignore, не расширяя package allowlist.
-  await atomicWriteGeneratedFile(PACKED_NPM_IGNORE, "");
+  // отдельный .npmignore сохраняет Git-ignore, не расширяя package allowlist;
+  // вложенные обязательные npm-метаданные wasm-pack остаются вне корневого пакета.
+  await atomicWriteGeneratedFile(PACKED_NPM_IGNORE, "LICENSE\npackage.json\n");
   if (
     runtimeWasm.length < 8 ||
     !runtimeWasm.subarray(0, 4).equals(Buffer.from([0, 97, 115, 109]))

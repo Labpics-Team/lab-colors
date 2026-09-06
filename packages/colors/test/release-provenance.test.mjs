@@ -695,6 +695,8 @@ test("prepack includes the generated snippet despite wasm-pack gitignore without
     writeFileSync(join(generated, "labcolors.js"), `import "./${snippet.slice("pkg/".length)}";\n`);
     writeFileSync(join(generated, "labcolors_bg.wasm"), Buffer.from([0, 97, 115, 109, 1, 0, 0, 0]));
     writeFileSync(join(generated, ".gitignore"), "*\n");
+    writeFileSync(join(generated, "LICENSE"), "nested licence must not ship\n");
+    writeFileSync(join(generated, "package.json"), "{}\n");
     writeFileSync(join(generated, "unexpected.js"), "must not ship\n");
     writeFileSync(join(fixture, ".gitignore"), "node_modules/\npackages/colors/pkg/\npackages/colors/evidence/\npackages/colors/LICENSE\npackages/colors/build-metadata.json\n");
     command("git", ["init", "--quiet"], fixture);
