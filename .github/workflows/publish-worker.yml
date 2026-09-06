@@ -12,9 +12,8 @@ name: publish worker
 # Publish ничего не собирает и не перепаковывает. Он принимает только immutable
 # attempt-scoped artifact `colors-release-$GITHUB_SHA-attempt-$RUN_ATTEMPT` из
 # canonical successful push-run `.github/workflows/ci.yml` для exact tag SHA.
-# Оба immutable worker и их обязательный CI проверяются внутри одной попытки
-# выбранного run ID, поэтому чужой check-run с таким
-# же display name не может удовлетворить gate.
+# Точный Git blob caller фиксирует граф и происхождение задач из двух immutable
+# worker. Полные имена и результаты проверяются в одной попытке выбранного run ID.
 #
 # Provenance-аттестация отключена (package.json publishConfig.provenance:false):
 # npm выдаёт sigstore provenance только публичным репозиториям. При открытии
@@ -132,6 +131,7 @@ jobs:
           const spec = {
             file: "ci.yml",
             path: ".github/workflows/ci.yml",
+            sourceBlob: "dff45a088e0935ad20c0996e23b9347369df7fa9",
             workers: [
               {
                 path: "Labpics-Team/lab-colors/.github/workflows/ci-worker.yml@f65c3717ede52341c160d5dd56b6c3b65c8c8fed",
@@ -143,14 +143,14 @@ jobs:
               },
             ],
             requiredJobs: [
-              "Node 22 consumer floor",
-              "MSRV workspace check",
-              "clippy + rustfmt",
-              "cargo doc (intra-doc links)",
-              "test",
-              "cargo audit (rustsec)",
-              "wasm build + headless test + size",
-              "swift conformance (self-hosted Linux, pinned toolchain)",
+              "CI / Node 22 consumer floor",
+              "CI / MSRV workspace check",
+              "CI / clippy + rustfmt",
+              "CI / cargo doc (intra-doc links)",
+              "CI / test",
+              "CI / cargo audit (rustsec)",
+              "CI / wasm build + headless test + size",
+              "Native conformance (Swift) / swift conformance (self-hosted Linux, pinned toolchain)",
               "CI",
             ],
           };
@@ -181,6 +181,15 @@ jobs:
               if (payload[field].length < 100) return values;
             }
             throw new Error(`GitHub API pagination exceeded 1000 ${field} records for ${path}`);
+          }
+
+          async function requireCanonicalSource(spec) {
+            // Имя job не доказывает его происхождение. Blob caller на exact SHA
+            // связывает API-результаты с проверенным графом immutable worker.
+            const caller = await api(`/contents/${spec.path}?ref=${encodeURIComponent(expectedSha)}`);
+            if (caller?.type !== "file" || caller.path !== spec.path || caller.sha !== spec.sourceBlob) {
+              throw new Error(`${spec.path}: source differs from the admitted CI graph`);
+            }
           }
 
           async function canonicalRun(spec) {
@@ -236,13 +245,7 @@ jobs:
             );
             const failures = [];
             for (const name of spec.requiredJobs) {
-              // GitHub добавляет слева имена каждого reusable-caller. Последний
-              // сегмент — каноничное имя worker-job независимо от глубины вызова;
-              // run path, run_id и ровно одно совпадение замыкают его identity.
-              const matches = jobs.filter((job) => {
-                const workerName = job.name.split(" / ").at(-1);
-                return workerName === name && job.run_id === run.id;
-              });
+              const matches = jobs.filter((job) => job.name === name && job.run_id === run.id);
               if (matches.length !== 1) {
                 failures.push(`${name}: expected one job in run ${run.id}, got ${matches.length}`);
                 continue;
@@ -258,6 +261,7 @@ jobs:
           }
 
           (async () => {
+            await requireCanonicalSource(spec);
             const run = await canonicalRun(spec);
             await requireSuccessfulJobs(spec, run);
             // До выдачи outputs сверяем, что запуск и попытка ещё актуальны.

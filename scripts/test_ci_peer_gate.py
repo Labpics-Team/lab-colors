@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -21,10 +22,10 @@ CI_PIN = "f65c3717ede52341c160d5dd56b6c3b65c8c8fed"
 NATIVE_PIN = "1beda3770a990bb62d1b97e0188b1f2620e16c07"
 SHA = "a" * 40
 REQUIRED_JOBS = (
-    "Node 22 consumer floor", "MSRV workspace check", "clippy + rustfmt",
-    "cargo doc (intra-doc links)", "test", "cargo audit (rustsec)",
-    "wasm build + headless test + size",
-    "swift conformance (self-hosted Linux, pinned toolchain)", "CI",
+    "CI / Node 22 consumer floor", "CI / MSRV workspace check", "CI / clippy + rustfmt",
+    "CI / cargo doc (intra-doc links)", "CI / test", "CI / cargo audit (rustsec)",
+    "CI / wasm build + headless test + size",
+    "Native conformance (Swift) / swift conformance (self-hosted Linux, pinned toolchain)", "CI",
 )
 GATE_SCRIPT = 'set -euo pipefail\n[[ "$RESULTS" == "success,success" ]]\n'
 EXPECTED_CI_JOBS = f"""jobs:
@@ -96,12 +97,15 @@ def references() -> list[dict]:
 
 
 def evidence() -> dict:
+    caller = source("ci.yml").encode("utf-8")
+    blob = hashlib.sha1(f"blob {len(caller)}\0".encode() + caller).hexdigest()
     return {
+        "caller": {"type": "file", "path": ".github/workflows/ci.yml", "sha": blob},
         "runs": [{"id": 101, "run_attempt": 2, "path": ".github/workflows/ci.yml",
                   "head_sha": SHA, "head_branch": "main", "event": "push",
                   "status": "completed", "conclusion": "success",
                   "referenced_workflows": references()}],
-        "jobs": [{"name": f"outer / {name}" if name != "CI" else name,
+        "jobs": [{"name": name,
                   "run_id": 101, "status": "completed", "conclusion": "success"}
                  for name in REQUIRED_JOBS],
     }
@@ -137,7 +141,10 @@ const context = {
     if (url.origin !== 'https://api.example.invalid') throw new Error('unexpected API origin');
     const base = '/repos/Labpics-Team/lab-colors/actions';
     let payload;
-    if (url.pathname === `${base}/workflows/ci.yml/runs`) {
+    if (url.pathname === '/repos/Labpics-Team/lab-colors/contents/.github/workflows/ci.yml') {
+      if (url.searchParams.get('ref') !== 'a'.repeat(40)) throw new Error('unbound caller source');
+      payload = fixture.caller;
+    } else if (url.pathname === `${base}/workflows/ci.yml/runs`) {
       if (url.searchParams.get('branch') !== 'main' || url.searchParams.get('event') !== 'push' ||
           url.searchParams.get('head_sha') !== 'a'.repeat(40)) throw new Error('unbound run query');
       listings++;
@@ -244,12 +251,45 @@ class PublishAdmissionTest(unittest.TestCase):
         result = self.run_guard(evidence())
         self.assertEqual(result["code"], 0, result)
         self.assertEqual(result["output"], "ci_run_id=101\nci_run_attempt=2\n")
-        self.assertEqual(len(result["calls"]), 3)
-        self.assertIn("/runs/101/attempts/2/jobs?", result["calls"][1])
+        self.assertEqual(len(result["calls"]), 4)
+        self.assertIn("/contents/.github/workflows/ci.yml?ref=" + SHA, result["calls"][0])
+        self.assertIn("/runs/101/attempts/2/jobs?", result["calls"][2])
         self.assertFalse(any("native-conformance.yml" in call for call in result["calls"]))
         reversed_refs = evidence()
         reversed_refs["runs"][0]["referenced_workflows"].reverse()
         self.assertEqual(self.run_guard(reversed_refs)["code"], 0)
+
+    def test_caller_source_is_bound_before_accepting_names_or_references(self) -> None:
+        for field, value in (("sha", "b" * 40), ("sha", None), ("type", "symlink"),
+                             ("type", "dir"), ("path", ".github/workflows/forged.yml")):
+            with self.subTest(field=field, value=value):
+                fixture = evidence()
+                fixture["caller"][field] = value
+                self.reject(fixture)
+        for caller in (None, {}, []):
+            fixture = evidence()
+            fixture["caller"] = caller
+            self.reject(fixture)
+
+    def test_matching_worker_references_cannot_admit_forged_job_names(self) -> None:
+        fixture = evidence()
+        for job in fixture["jobs"]:
+            job["name"] = "forged-direct / " + job["name"].split(" / ")[-1]
+        self.reject(fixture)
+        for index in range(len(REQUIRED_JOBS)):
+            fixture = evidence()
+            fixture["jobs"][index]["name"] = "outer / " + fixture["jobs"][index]["name"]
+            self.reject(fixture)
+
+    def test_mutated_caller_cannot_supply_exact_named_receipts(self) -> None:
+        fixture = evidence()
+        caller = source("ci.yml").replace("  worker:\n", "  worker:\n    if: false\n").encode()
+        fixture["caller"]["sha"] = hashlib.sha1(f"blob {len(caller)}\0".encode() + caller).hexdigest()
+        self.reject(fixture)
+        script = publish_script()
+        admission = "            await requireCanonicalSource(spec);\n".lstrip()
+        self.assertEqual(script.count(admission), 1)
+        self.assertEqual(self.run_guard(fixture, script.replace(admission, ""))["code"], 0)
 
     def test_missing_or_foreign_worker_reference_cannot_pass(self) -> None:
         for wrong in (None, [], references()[:1], references() * 2,
@@ -313,7 +353,7 @@ class PublishAdmissionTest(unittest.TestCase):
 
     def test_negative_fixture_detects_removal_of_the_swift_requirement(self) -> None:
         script = publish_script()
-        line = '"swift conformance (self-hosted Linux, pinned toolchain)",'
+        line = '"Native conformance (Swift) / swift conformance (self-hosted Linux, pinned toolchain)",'
         self.assertEqual(script.count(line), 1)
         fixture = evidence()
         fixture["jobs"].pop(7)
