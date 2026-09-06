@@ -81,11 +81,18 @@ class WorkflowAdmissionTests(unittest.TestCase):
                 stub = root / "gh"
                 stub.write_text('#!/bin/sh\nprintf called >> "$CAPTURE"\n')
                 stub.chmod(0o700)
+                initial_files = {"gh": stub.read_bytes()}
                 result = subprocess.run(
                     ("bash", "-c", script), cwd=root, capture_output=True,
                     env={**os.environ, "LANE_RUN_IDS": value, "PATH": str(root) + os.pathsep + os.environ["PATH"], "CAPTURE": str(root / "calls")},
                 )
                 self.assertFalse((root / "calls").exists())
+                self.assertEqual(
+                    {str(path.relative_to(root)): path.read_bytes() if path.is_file() else None
+                     for path in root.rglob("*")},
+                    initial_files,
+                    "invalid input changed files before rejection",
+                )
                 self.assertEqual(result.returncode, 64, result.stderr)
 
     def test_cover_rejects_malformed_manifests_with_usage_status(self) -> None:
