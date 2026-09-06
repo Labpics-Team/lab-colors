@@ -2048,18 +2048,33 @@ class MutationTruthTest(unittest.TestCase):
         self.assertNotIn("легаси", workflow.casefold())
         self.assertIn(
             'path: "Labpics-Team/lab-colors/.github/workflows/ci-worker.yml@'
-            '1461bc2ed60142aed3a8723e618b883be6418156"',
+            '5d55d7ad1c701669e9a436ae976a89a3960f847d"',
             workflow,
         )
+        self.assertIn('sha: "5d55d7ad1c701669e9a436ae976a89a3960f847d"', workflow)
         self.assertIn(
             'path: "Labpics-Team/lab-colors/.github/workflows/'
-            'native-conformance-worker.yml@1461bc2ed60142aed3a8723e618b883be6418156"',
+            'native-conformance-worker.yml@1beda3770a990bb62d1b97e0188b1f2620e16c07"',
             workflow,
         )
+        self.assertIn('sha: "1beda3770a990bb62d1b97e0188b1f2620e16c07"', workflow)
         self.assertIn("const references = run.referenced_workflows;", workflow)
         self.assertIn("references.length !== 1", workflow)
         self.assertIn("reference?.path !== spec.worker.path", workflow)
         self.assertIn("reference?.sha !== spec.worker.sha", workflow)
+        self.assertIn('"program-wire/abi-v1.js",', workflow)
+        self.assertIn('"program-wire/abi-v1.d.ts",', workflow)
+        self.assertIn(
+            '"pkg/snippets/labcolors-wasm-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]/inline0.js",',
+            workflow,
+        )
+        self.assertIn(
+            "/^pkg\\/snippets\\/labcolors-wasm-[0-9a-f]{16}\\/inline0\\.js$/u;",
+            workflow,
+        )
+        self.assertIn("snippetFiles.length !== 1", workflow)
+        self.assertIn("EXPECTED_PACKAGE_FILES.length !== 16", workflow)
+        self.assertIn("expected exactly 18 admitted tar members", workflow)
 
         def canonical_worker_name(display_name: str) -> str:
             return display_name.rsplit(" / ", 1)[-1]
