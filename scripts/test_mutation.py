@@ -2040,11 +2040,10 @@ class MutationTruthTest(unittest.TestCase):
 
     def test_publish_worker_receipt_identity_is_fail_closed(self) -> None:
         workflow, _ = load_publish_worker()
-        self.assertIn(
-            'const workerName = job.name.split(" / ").at(-1);',
-            workflow,
-        )
-        self.assertIn("workerName === name", workflow)
+        self.assertIn("await requireCanonicalSource(spec);", workflow)
+        self.assertIn("caller.sha !== spec.sourceBlob", workflow)
+        self.assertIn("job.name === name && job.run_id === run.id", workflow)
+        self.assertNotIn('job.name.split(" / ")', workflow)
         self.assertNotIn("callerJob:", workflow)
         self.assertNotIn("job.name === name || job.name.endsWith", workflow)
         self.assertNotIn("легаси", workflow.casefold())
@@ -2063,14 +2062,6 @@ class MutationTruthTest(unittest.TestCase):
         self.assertIn("!remaining.has(reference.path)", workflow)
         self.assertIn("remaining.get(reference.path) !== reference.sha", workflow)
         self.assertIn("remaining.delete(reference.path)", workflow)
-
-        def canonical_worker_name(display_name: str) -> str:
-            return display_name.rsplit(" / ", 1)[-1]
-
-        self.assertEqual(canonical_worker_name("test"), "test")
-        self.assertEqual(canonical_worker_name("CI / test"), "test")
-        self.assertEqual(canonical_worker_name("outer / CI / test"), "test")
-        self.assertNotEqual(canonical_worker_name("CI / other"), "test")
 
     def test_publish_worker_secret_context_is_fail_closed(self) -> None:
         _, publish_job = load_publish_worker()
