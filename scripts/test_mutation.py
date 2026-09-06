@@ -2394,7 +2394,7 @@ class MutationTruthTest(unittest.TestCase):
         )
         expected = (
             "uses: Labpics-Team/lab-colors/.github/workflows/publish-worker.yml@"
-            "38fccc3b45855dad87cac316cf37bea2d1f1db06"
+            "503490bc080da51abada51bf81525a221ea4d9b5"
         )
         self.assertEqual(caller.count("publish-worker.yml@"), 1)
         self.assertIn(expected, caller)
