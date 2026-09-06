@@ -613,6 +613,10 @@ test("npm 11.9.0 selector includes lowercase hex and excludes same-length hostil
       join(fixture, "package.json"),
       `${JSON.stringify({ name: "selector-fixture", version: "1.0.0", files: [selector] })}\n`,
     );
+    const generatedPackage = join(fixture, "pkg");
+    mkdirSync(generatedPackage, { recursive: true });
+    writeFileSync(join(generatedPackage, ".gitignore"), "*\n");
+    writeFileSync(join(generatedPackage, ".npmignore"), "");
     for (const directory of [
       "labcolors-wasm-0123456789abcdef",
       "labcolors-wasm-0123456789abcdeF",
@@ -651,6 +655,67 @@ test("npm 11.9.0 selector includes lowercase hex and excludes same-length hostil
       false,
     );
   } finally {
+    rmSync(fixture, { recursive: true, force: true });
+  }
+});
+
+test("prepack includes the generated snippet despite wasm-pack gitignore without widening the archive", async () => {
+  const fixture = mkdtempSync(join(tmpdir(), "labcolors-prepack-ignore-"));
+  const previousSha = process.env.GITHUB_SHA;
+  try {
+    const scripts = copyPrepackFixture(fixture);
+    const packageDirectory = join(fixture, "packages", "colors");
+    const generated = join(packageDirectory, "pkg");
+    const snippet = "pkg/snippets/labcolors-wasm-0123456789abcdef/inline0.js";
+    const packageJson = JSON.parse(readFileSync(join(root, "packages", "colors", "package.json"), "utf8"));
+    packageJson.scripts = {};
+    writeFileSync(join(packageDirectory, "package.json"), JSON.stringify(packageJson));
+    for (const name of ["LICENSE", "Cargo.toml"]) {
+      copyFileSync(join(root, name), join(fixture, name));
+    }
+    const contracts = join(fixture, "crates", "labcolors-core", "contracts");
+    mkdirSync(contracts, { recursive: true });
+    for (const file of packageJson.files.filter((file) => file.startsWith("evidence/"))) {
+      const name = file.slice("evidence/".length);
+      copyFileSync(join(root, "crates", "labcolors-core", "contracts", name), join(contracts, name));
+    }
+    const conformance = join(fixture, "conformance", "vectors");
+    mkdirSync(conformance, { recursive: true });
+    for (const name of ["manifest.json", "contrasts.json", "alpha.json", "solve.json", "wcag22.json"]) {
+      copyFileSync(join(root, "conformance", "vectors", name), join(conformance, name));
+    }
+    for (const file of packageJson.files.filter((file) => !file.includes("[0-9a-f]") && !file.startsWith("evidence/"))) {
+      const destination = join(packageDirectory, file);
+      mkdirSync(dirname(destination), { recursive: true });
+      writeFileSync(destination, "fixture\n");
+    }
+    writeFileSync(join(packageDirectory, "README.md"), "fixture\n");
+    mkdirSync(dirname(join(packageDirectory, snippet)), { recursive: true });
+    writeFileSync(join(packageDirectory, snippet), "export const fixture = true;\n");
+    writeFileSync(join(generated, "labcolors.js"), `import "./${snippet.slice("pkg/".length)}";\n`);
+    writeFileSync(join(generated, "labcolors_bg.wasm"), Buffer.from([0, 97, 115, 109, 1, 0, 0, 0]));
+    writeFileSync(join(generated, ".gitignore"), "*\n");
+    writeFileSync(join(generated, "unexpected.js"), "must not ship\n");
+    writeFileSync(join(fixture, ".gitignore"), "node_modules/\npackages/colors/pkg/\npackages/colors/evidence/\npackages/colors/LICENSE\npackages/colors/build-metadata.json\n");
+    command("git", ["init", "--quiet"], fixture);
+    command("git", ["add", "."], fixture);
+    command("git", ["-c", "user.name=Lab Colors release test", "-c", "user.email=release-test@example.invalid", "commit", "--quiet", "-m", "fixture"], fixture);
+    delete process.env.GITHUB_SHA;
+    const { prepareNpmPackage } = await import(pathToFileURL(join(scripts, "prepare-npm-package.mjs")));
+    await prepareNpmPackage();
+    assert.equal(readFileSync(join(generated, ".gitignore"), "utf8"), "*\n");
+    const npx = process.platform === "win32"
+      ? { command: process.env.ComSpec ?? "cmd.exe", prefix: ["/d", "/s", "/c", "npx.cmd"] }
+      : { command: "npx", prefix: [] };
+    const [pack] = JSON.parse(command(npx.command, [...npx.prefix, "--yes", "npm@11.9.0", "pack", "--dry-run", "--json", "--ignore-scripts"], packageDirectory));
+    const packedPaths = pack.files.map(({ path }) => path).sort();
+    assert.deepEqual(packedPaths, [
+      ...packageJson.files.filter((file) => !file.includes("[0-9a-f]")),
+      snippet, "README.md", "package.json",
+    ].sort());
+  } finally {
+    if (previousSha === undefined) delete process.env.GITHUB_SHA;
+    else process.env.GITHUB_SHA = previousSha;
     rmSync(fixture, { recursive: true, force: true });
   }
 });

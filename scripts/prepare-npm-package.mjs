@@ -18,6 +18,7 @@ export const PACKAGE_DIR = resolve(REPO_ROOT, "packages/colors");
 
 const SOURCE_LICENSE = resolve(REPO_ROOT, "LICENSE");
 const PACKED_LICENSE = resolve(PACKAGE_DIR, "LICENSE");
+const PACKED_NPM_IGNORE = resolve(PACKAGE_DIR, "pkg/.npmignore");
 const BUILD_METADATA = resolve(PACKAGE_DIR, "build-metadata.json");
 const NUMERICAL_CONTRACT_DIR = resolve(REPO_ROOT, "crates/labcolors-core/contracts");
 const PACKED_NUMERICAL_EVIDENCE_DIR = resolve(PACKAGE_DIR, "evidence");
@@ -107,6 +108,9 @@ export async function prepareNpmPackage() {
     ...CONFORMANCE_FILES.map((file) => readFile(resolve(CONFORMANCE_DIR, file))),
   ]);
   await retainImportedRuntimeSnippets(PACKAGE_DIR, runtimeSource);
+  // wasm-pack пишет pkg/.gitignore с «*». npm применяет его к glob из files;
+  // отдельный .npmignore сохраняет Git-ignore, не расширяя package allowlist.
+  await atomicWriteGeneratedFile(PACKED_NPM_IGNORE, "");
   if (
     runtimeWasm.length < 8 ||
     !runtimeWasm.subarray(0, 4).equals(Buffer.from([0, 97, 115, 109]))
