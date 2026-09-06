@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { EventEmitter, once } from "node:events";
-import { readFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import test from "node:test";
 
 import {
@@ -17,9 +17,31 @@ import {
   BrowserProofCleanupError,
   browserCleanup,
   cleanupResources,
+  packedBrowserFiles,
   verifyCleanupFaultMatrix,
 } from "../../../scripts/test-program-runtime-browser.mjs";
 import { browserProofInvocation } from "../../../scripts/verify-package-release.mjs";
+
+test("packed browser files include only the runtime's exact generated snippet", async () => {
+  const installed = mkdtempSync(join(tmpdir(), "labcolors-browser-files-"));
+  try {
+    const snippet = "snippets/labcolors-wasm-0123456789abcdef/inline0.js";
+    for (const file of ["index.js", "program-wire/abi-v1.js", "pkg/labcolors_bg.wasm", `pkg/${snippet}`]) {
+      const destination = join(installed, file);
+      mkdirSync(dirname(destination), { recursive: true });
+      writeFileSync(destination, "fixture\n");
+    }
+    writeFileSync(join(installed, "pkg", "labcolors.js"), `import "./${snippet}";\n`);
+    writeFileSync(join(installed, "pkg", "unexpected.js"), "must not be served\n");
+    const files = await packedBrowserFiles(installed);
+    assert.deepEqual([...files.keys()].sort(), [
+      "/index.js", "/pkg/labcolors.js", "/pkg/labcolors_bg.wasm",
+      `/pkg/${snippet}`, "/program-wire/abi-v1.js",
+    ].sort());
+  } finally {
+    rmSync(installed, { recursive: true, force: true });
+  }
+});
 
 test("cleanup fault matrix releases each acquired browser-proof resource in reverse order", async () => {
   await assert.doesNotReject(verifyCleanupFaultMatrix);

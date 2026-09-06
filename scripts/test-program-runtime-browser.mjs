@@ -7,6 +7,7 @@ import { extname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { observeChildErrors, releaseChild, waitForDriver } from "./browser-child-lifecycle.mjs";
+import { retainImportedRuntimeSnippets } from "./package-runtime-snippets.mjs";
 
 const LOOPBACK = "127.0.0.1";
 const RESOURCE_ORDER = [
@@ -143,6 +144,15 @@ async function request(base, path, method, body, signal) {
   return payload.value;
 }
 
+export async function packedBrowserFiles(installed) {
+  const paths = ["index.js", "program-wire/abi-v1.js", "pkg/labcolors.js", "pkg/labcolors_bg.wasm"];
+  const runtimeSource = await readFile(join(installed, "pkg/labcolors.js"), "utf8");
+  paths.push(...await retainImportedRuntimeSnippets(installed, runtimeSource));
+  return new Map(await Promise.all(
+    paths.map(async (path) => [`/${path}`, await readFile(join(installed, path))]),
+  ));
+}
+
 function browserScenario(origin) {
   return `const done=arguments[arguments.length-1];(async()=>{const acquired=[],released=[];const browserCleanup=(primary,resources)=>{const failures=[];for(const resource of resources){try{resource.release()}catch(error){failures.push(resource.name)}}const outcome=primary===undefined?{}:{error:String(primary),code:primary?.code,operation:primary?.operation};if(failures.length)outcome.cleanupError={code:"BROWSER_PROOF_CLEANUP_FAILED",resources:failures};return outcome};let host,runtime,snapshot,result;try{` +
     `const api=await import(${JSON.stringify(`${origin}/index.js`)}),wire=await import(${JSON.stringify(`${origin}/program-wire/abi-v1.js`)});` +
@@ -188,8 +198,7 @@ async function main() {
     const base = `http://${LOOPBACK}:${driverPort}/session/${session.sessionId}`;
     resources.push({ name: "browser-session", release: () => request(base, "", "DELETE", undefined, AbortSignal.timeout(5_000)) });
     const installed = join(root, "node_modules", "@labpics", "colors");
-    const files = new Map();
-    for (const path of ["index.js", "program-wire/abi-v1.js", "pkg/labcolors.js", "pkg/labcolors_bg.wasm"]) files.set(`/${path}`, await readFile(join(installed, path)));
+    const files = await packedBrowserFiles(installed);
     const server = createServer((req, res) => {
       const pathname = new URL(req.url ?? "/", `http://${LOOPBACK}`).pathname;
       if (pathname === "/") { res.writeHead(200, { "content-type": "text/html; charset=utf-8" }); res.end("<!doctype html><style>#proof{color:var(--consumer-color)}</style><div id=proof></div>"); return; }
