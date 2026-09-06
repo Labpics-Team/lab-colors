@@ -1768,16 +1768,18 @@ class MutationTruthTest(unittest.TestCase):
         cancel_rule = (
             "${{ github.event_name == 'pull_request' && github.run_attempt == 1 }}"
         )
-        for workflow_name, workflow in (
-            ("ci", ci_workflow),
-            ("native-conformance", native_workflow),
-        ):
-            self.assertIn(
-                "concurrency:\n"
-                f"  group: {workflow_name}-{group_tail}\n"
-                f"  cancel-in-progress: {cancel_rule}\n",
-                workflow,
-            )
+        self.assertIn(
+            "concurrency:\n"
+            f"  group: ci-{group_tail}\n"
+            f"  cancel-in-progress: {cancel_rule}\n",
+            ci_workflow,
+        )
+        self.assertIn(
+            "concurrency:\n"
+            "  group: native-conformance-${{ github.run_id }}\n"
+            "  cancel-in-progress: false\n",
+            native_workflow,
+        )
         # Эфемерные раннеры (GitHub-hosted или self-hosted без секретов)
         # не несят ни секретов, ни состояния, поэтому fork-PR — штатный
         # режим опенсорс-гейта: workers не держат fork-гейтов, а каждая
@@ -2038,36 +2040,28 @@ class MutationTruthTest(unittest.TestCase):
 
     def test_publish_worker_receipt_identity_is_fail_closed(self) -> None:
         workflow, _ = load_publish_worker()
-        self.assertIn(
-            'const workerName = job.name.split(" / ").at(-1);',
-            workflow,
-        )
-        self.assertIn("workerName === name", workflow)
+        self.assertIn("await requireCanonicalSource(spec);", workflow)
+        self.assertIn("caller.sha !== spec.sourceBlob", workflow)
+        self.assertIn("job.name === name && job.run_id === run.id", workflow)
+        self.assertNotIn('job.name.split(" / ")', workflow)
         self.assertNotIn("callerJob:", workflow)
         self.assertNotIn("job.name === name || job.name.endsWith", workflow)
         self.assertNotIn("легаси", workflow.casefold())
         self.assertIn(
             'path: "Labpics-Team/lab-colors/.github/workflows/ci-worker.yml@'
-            '1461bc2ed60142aed3a8723e618b883be6418156"',
+            'f65c3717ede52341c160d5dd56b6c3b65c8c8fed"',
             workflow,
         )
         self.assertIn(
             'path: "Labpics-Team/lab-colors/.github/workflows/'
-            'native-conformance-worker.yml@1461bc2ed60142aed3a8723e618b883be6418156"',
+            'native-conformance-worker.yml@1beda3770a990bb62d1b97e0188b1f2620e16c07"',
             workflow,
         )
         self.assertIn("const references = run.referenced_workflows;", workflow)
-        self.assertIn("references.length !== 1", workflow)
-        self.assertIn("reference?.path !== spec.worker.path", workflow)
-        self.assertIn("reference?.sha !== spec.worker.sha", workflow)
-
-        def canonical_worker_name(display_name: str) -> str:
-            return display_name.rsplit(" / ", 1)[-1]
-
-        self.assertEqual(canonical_worker_name("test"), "test")
-        self.assertEqual(canonical_worker_name("CI / test"), "test")
-        self.assertEqual(canonical_worker_name("outer / CI / test"), "test")
-        self.assertNotEqual(canonical_worker_name("CI / other"), "test")
+        self.assertIn("references.length !== spec.workers.length", workflow)
+        self.assertIn("!remaining.has(reference.path)", workflow)
+        self.assertIn("remaining.get(reference.path) !== reference.sha", workflow)
+        self.assertIn("remaining.delete(reference.path)", workflow)
 
     def test_publish_worker_secret_context_is_fail_closed(self) -> None:
         _, publish_job = load_publish_worker()
@@ -2377,12 +2371,19 @@ class MutationTruthTest(unittest.TestCase):
         caller = (repo / ".github" / "workflows" / "publish.yml").read_text(
             encoding="utf-8"
         )
-        expected = (
-            "uses: Labpics-Team/lab-colors/.github/workflows/publish-worker.yml@"
-            "1461bc2ed60142aed3a8723e618b883be6418156"
-        )
         self.assertEqual(caller.count("publish-worker.yml@"), 1)
-        self.assertIn(expected, caller)
+        pin = re.search(
+            r"(?m)^    uses: Labpics-Team/lab-colors/\.github/workflows/publish-worker\.yml@([0-9a-f]{40})$",
+            caller,
+        )
+        self.assertIsNotNone(pin, "publisher must have one full immutable worker pin")
+        assert pin is not None
+        revision = pin.group(1)
+        subprocess.run(["git", "merge-base", "--is-ancestor", revision, "HEAD"],
+                       cwd=repo, check=True)
+        committed = subprocess.check_output(
+            ["git", "show", f"{revision}:.github/workflows/publish-worker.yml"], cwd=repo)
+        self.assertEqual(committed, (repo / ".github/workflows/publish-worker.yml").read_bytes())
 
     def test_swift_conformance_does_not_mutate_temp_root(self) -> None:
         repo = Path(__file__).resolve().parents[1]

@@ -1,32 +1,19 @@
 name: Native conformance (Swift)
 
-# Тонкий caller: только триггеры, concurrency и права. Job graph, пины и env-пины
-# (Rust 1.96.0, swift-контейнер по digest) закреплены в immutable
-# native-conformance-worker.yml на полном commit SHA — каждый job исполняется на
-# одноразовой эфемерной GitHub-hosted VM без секретов и общего состояния.
-# Своих inputs у worker нет by design.
+# Ручная сверка Linux Swift с настоящим macOS reference. Обязательная Linux-
+# проверка входит в ci.yml; этот запуск не служит допуском публикации.
 
 on:
-  push:
-    branches: [main]
-  pull_request:
-  merge_group:
   workflow_dispatch:
 
-# Первый запуск PR делит типизированную pr-группу. Re-run получает собственную
-# run-группу, выполняет conformance и не отменяет новый SHA. Push evidence и
-# ручной reference остаются независимыми exact-run.
 concurrency:
-  group: native-conformance-${{ github.event_name == 'pull_request' && github.run_attempt == 1 && format('pr-{0}', github.event.pull_request.number) || format('run-{0}', github.run_id) }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' && github.run_attempt == 1 }}
+  group: native-conformance-${{ github.run_id }}
+  cancel-in-progress: false
 
 permissions:
   contents: read
 
 jobs:
-  # ИМЯ JOB'А НЕ МЕНЯТЬ БЕЗ ПРАВКИ publish.yml: GitHub публикует job'ы reusable-
-  # воркфлоу как «<имя этого job'а> / <имя job'а worker'а>», а publish-гейт сверяет
-  # эти имена буквально.
   worker:
     name: Native conformance (Swift)
     permissions:

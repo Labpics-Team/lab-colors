@@ -1,9 +1,7 @@
 name: CI
 
-# Тонкий caller: только триггеры, concurrency и права. Job graph, пины экшенов,
-# env-пины тулчейнов и раскладка по раннерам закреплены в immutable ci-worker.yml
-# на полном commit SHA — каждый job исполняется на одноразовой эфемерной
-# GitHub-hosted VM без секретов и общего состояния. Своих inputs у worker нет by design.
+# Оба immutable worker исполняются в одном запуске. Обязательный CI принимает
+# только успех обеих ветвей; API-поиск соседнего запуска ему не нужен.
 
 on:
   push:
@@ -18,18 +16,33 @@ concurrency:
   group: ci-${{ github.event_name == 'pull_request' && github.run_attempt == 1 && format('pr-{0}', github.event.pull_request.number) || format('run-{0}', github.run_id) }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' && github.run_attempt == 1 }}
 
-# Least privilege: CI only reads the repo.
+# Проверки читают репозиторий без секретов и прав записи.
 permissions:
   contents: read
 
 jobs:
-  # ИМЯ JOB'А НЕ МЕНЯТЬ БЕЗ ПРАВКИ publish.yml: GitHub публикует job'ы reusable-
-  # воркфлоу как «<имя этого job'а> / <имя job'а worker'а>», а publish-гейт сверяет
-  # эти имена буквально.
   worker:
     name: CI
     permissions:
       contents: read
-    # Caller выбирает revision, который чекаутит worker, включая код PR. Сам код
-    # считается недоверенным и исполняется только внутри одноразовой ячейки.
-    uses: Labpics-Team/lab-colors/.github/workflows/ci-worker.yml@5d55d7ad1c701669e9a436ae976a89a3960f847d
+    uses: Labpics-Team/lab-colors/.github/workflows/ci-worker.yml@f65c3717ede52341c160d5dd56b6c3b65c8c8fed
+  native:
+    name: Native conformance (Swift)
+    permissions:
+      contents: read
+    uses: Labpics-Team/lab-colors/.github/workflows/native-conformance-worker.yml@1beda3770a990bb62d1b97e0188b1f2620e16c07
+  ci:
+    name: CI
+    if: ${{ always() }}
+    needs: [worker, native]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Require every native verification branch
+        shell: bash
+        env:
+          RESULTS: ${{ join(needs.*.result, ',') }}
+        run: |
+          set -euo pipefail
+          [[ "$RESULTS" == "success,success" ]]
