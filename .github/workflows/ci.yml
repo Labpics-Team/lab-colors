@@ -25,7 +25,7 @@ jobs:
     name: CI
     permissions:
       contents: read
-    uses: Labpics-Team/lab-colors/.github/workflows/ci-worker.yml@5d55d7ad1c701669e9a436ae976a89a3960f847d
+    uses: Labpics-Team/lab-colors/.github/workflows/ci-worker.yml@f65c3717ede52341c160d5dd56b6c3b65c8c8fed
   native:
     name: Native conformance (Swift)
     permissions:

@@ -17,7 +17,7 @@ import unittest
 REPO = Path(__file__).resolve().parents[1]
 WORKFLOWS = REPO / ".github/workflows"
 REPOSITORY = "Labpics-Team/lab-colors"
-CI_PIN = "5d55d7ad1c701669e9a436ae976a89a3960f847d"
+CI_PIN = "f65c3717ede52341c160d5dd56b6c3b65c8c8fed"
 NATIVE_PIN = "1beda3770a990bb62d1b97e0188b1f2620e16c07"
 SHA = "a" * 40
 REQUIRED_JOBS = (
