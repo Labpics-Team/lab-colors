@@ -2066,6 +2066,15 @@ class MutationTruthTest(unittest.TestCase):
         self.assertIn("references.length !== 1", workflow)
         self.assertIn("reference?.path !== spec.worker.path", workflow)
         self.assertIn("reference?.sha !== spec.worker.sha", workflow)
+        self.assertIn(
+            '"pkg/snippets/labcolors-wasm-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]/inline0.js",',
+            workflow,
+        )
+        self.assertIn(
+            "/^pkg\\/snippets\\/labcolors-wasm-[0-9a-f]{16}\\/inline0\\.js$/u;",
+            workflow,
+        )
+        self.assertIn("expected exactly 18 admitted tar members", workflow)
 
         def canonical_worker_name(display_name: str) -> str:
             return display_name.rsplit(" / ", 1)[-1]

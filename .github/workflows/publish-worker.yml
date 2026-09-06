@@ -345,7 +345,7 @@ jobs:
             "pkg/labcolors.d.ts",
             "pkg/labcolors_bg.wasm",
             "pkg/labcolors_bg.wasm.d.ts",
-            "pkg/snippets/labcolors-wasm-????????????????/inline0.js",
+            "pkg/snippets/labcolors-wasm-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]/inline0.js",
           ];
           const EXPECTED_PACKAGE_EXPORTS = {
             ".": { types: "./index.d.ts", default: "./index.js" },
@@ -370,7 +370,7 @@ jobs:
             }
             return [
               ...packageFiles.filter(
-                (path) => path !== "pkg/snippets/labcolors-wasm-????????????????/inline0.js",
+                (path) => path !== "pkg/snippets/labcolors-wasm-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]/inline0.js",
               ),
               ...snippetFiles,
               "README.md",
@@ -387,8 +387,8 @@ jobs:
           if (
             EXPECTED_PACKAGE_FILES.length !== 16 ||
             new Set(EXPECTED_PACKAGE_FILES).size !== 16 ||
-            EXPECTED_PACKAGE_FILES.filter((path) => path.includes("?")).length !== 1 ||
-            EXPECTED_PACKAGE_FILES.some((path) => path.includes("*"))
+              EXPECTED_PACKAGE_FILES.filter((path) => path.includes("[0-9a-f]")).length !== 1 ||
+              EXPECTED_PACKAGE_FILES.some((path) => path.includes("?") || path.includes("*"))
           ) {
             fail("worker package inventory allowlist is not canonical");
           }
