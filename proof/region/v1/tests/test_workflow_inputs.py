@@ -297,7 +297,7 @@ class LaneCampaignContractTests(unittest.TestCase):
     ) -> int:
         bash = shutil.which("bash")
         if bash is None:
-            self.skipTest("the lane guard is shell and needs a shell to run")
+            self.fail("bash is required to execute the lane guard contract tests")
         completed = subprocess.run(
             (bash, "-c", self._guard_script_v1()),
             capture_output=True,

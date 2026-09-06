@@ -68,6 +68,8 @@ jobs:
           WINDOW_START: ${{ inputs.window_start }}
           WINDOW_POINTS: ${{ inputs.window_points }}
           EXPECT_LANES: ${{ inputs.expect_lanes }}
+          POINTS: ${{ inputs.points }}
+          SHARD_POINTS: ${{ inputs.shard_points }}
         run: |
           set -euo pipefail
           # Arithmetic, not a token: a lane is admissible only if its own
@@ -75,6 +77,17 @@ jobs:
           # dispatcher claims.  An older coordinator cannot satisfy this by
           # accident, and nothing here needs the repository to be read.
           domain=16777216
+          # Отклонение до checkout исключает запуск с чужими shell-координатами.
+          for coordinate in POINTS SHARD_POINTS; do
+            case "${!coordinate}" in
+              ''|*[!0-9]*|0*) echo "${coordinate} must be a positive canonical decimal" >&2; exit 64;;
+            esac
+            value="${!coordinate}"
+            if [ "${#value}" -gt 8 ] || [ "${value}" -gt "${domain}" ]; then
+              echo "${coordinate} exceeds the full domain" >&2
+              exit 64
+            fi
+          done
           # `case` compares raw bytes.  `[ -eq ]` and Python's `int()` both
           # accept surrounding whitespace, so either would admit a
           # coordinate carrying the carriage return a Windows shell leaves
@@ -152,21 +165,28 @@ jobs:
       - name: replay the bounded full-domain prefix through the shard runner
         if: inputs.window_points == ''
         shell: bash
+        env:
+          POINTS: ${{ inputs.points }}
+          SHARD_POINTS: ${{ inputs.shard_points }}
         run: |
           set -euo pipefail
           python3 proof/region/v1/corpus_probe.py \
-            --points '${{ github.event.inputs.points }}' \
-            --shard-points '${{ github.event.inputs.shard_points }}'
+            --points "${POINTS}" \
+            --shard-points "${SHARD_POINTS}"
 
       - name: replay one full-domain window lane
         if: inputs.window_points != ''
         shell: bash
+        env:
+          WINDOW_START: ${{ inputs.window_start }}
+          WINDOW_POINTS: ${{ inputs.window_points }}
+          SHARD_POINTS: ${{ inputs.shard_points }}
         run: |
           set -euo pipefail
           python3 proof/region/v1/corpus_lane.py \
-            --window-start '${{ github.event.inputs.window_start }}' \
-            --window-points '${{ github.event.inputs.window_points }}' \
-            --shard-points '${{ github.event.inputs.shard_points }}' \
+            --window-start "${WINDOW_START}" \
+            --window-points "${WINDOW_POINTS}" \
+            --shard-points "${SHARD_POINTS}" \
             --out lane-out
 
       - name: upload the lane wire evidence
@@ -203,6 +223,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # Вся строка проверяется до первого обращения к API.
+          if [[ ! "$LANE_RUN_IDS" =~ ^[[:blank:]]*[1-9][0-9]*[[:blank:]]*(,[[:blank:]]*[1-9][0-9]*[[:blank:]]*)*$ ]]; then
+            echo "lane run ids must be positive canonical decimals" >&2
+            exit 64
+          fi
           mkdir -p lanes
           IFS=',' read -r -a RUNS <<< "${LANE_RUN_IDS}"
           for run in "${RUNS[@]}"; do

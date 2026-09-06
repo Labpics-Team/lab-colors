@@ -176,6 +176,10 @@ jobs:
           LANE_RUN_IDS: ${{ inputs.lane_run_ids }}
         run: |
           set -euo pipefail
+          if [[ ! "$LANE_RUN_IDS" =~ ^[[:blank:]]*[1-9][0-9]*[[:blank:]]*(,[[:blank:]]*[1-9][0-9]*[[:blank:]]*)*$ ]]; then
+            echo "lane run ids must be positive canonical decimals" >&2
+            exit 64
+          fi
           mkdir -p lanes-in staged
           IFS=',' read -r -a RUNS <<< "${LANE_RUN_IDS}"
           for run in "${RUNS[@]}"; do
@@ -223,10 +227,20 @@ jobs:
               if not manifest_path.is_file():
                   print(f"not a lane directory: {lane}", file=sys.stderr)
                   raise SystemExit(64)
-              manifest = json.loads(manifest_path.read_text("ascii"))
-              windows[manifest["comparator_source_identity"]].append(
-                  (manifest["window_start"], manifest["window_points"])
-              )
+              try:
+                  manifest = json.loads(manifest_path.read_text("ascii"))
+                  identity = manifest["comparator_source_identity"]
+                  start, points = manifest["window_start"], manifest["window_points"]
+                  if (type(identity) is not str or len(identity) != 64
+                          or any(char not in "0123456789abcdef" for char in identity)
+                          or type(start) is not int or type(points) is not int
+                          or not 0 <= start < domain_points
+                          or not 0 < points <= domain_points - start):
+                      raise ValueError("invalid lane coordinates")
+              except (OSError, UnicodeError, ValueError, KeyError, TypeError) as error:
+                  print(f"lane manifest rejected: {lane} ({error})", file=sys.stderr)
+                  raise SystemExit(64) from None
+              windows[identity].append((start, points))
           if len(windows) != 2:
               print(f"expected two engines, found {len(windows)}", file=sys.stderr)
               raise SystemExit(64)
