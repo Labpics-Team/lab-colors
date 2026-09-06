@@ -1,5 +1,5 @@
 import { constants } from "node:fs";
-import { lstat, open, opendir, realpath, rm, rmdir } from "node:fs/promises";
+import { lstat, open, opendir, realpath } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { posix, relative, resolve, sep } from "node:path";
 
@@ -12,7 +12,7 @@ export const MAX_SNIPPET_FILES = 8;
 export const MAX_SNIPPET_BYTES = 16 * 1024;
 export const MAX_TOTAL_SNIPPET_BYTES = 32 * 1024;
 
-const DEFAULT_IO = Object.freeze({ lstat, open, opendir, realpath, rm, rmdir });
+const DEFAULT_IO = Object.freeze({ lstat, open, opendir, realpath });
 
 function containedPath(parent, candidate, label) {
   const path = relative(parent, candidate);
@@ -22,7 +22,13 @@ function containedPath(parent, candidate, label) {
 }
 
 function sameFile(left, right) {
-  return left.dev === right.dev && left.ino === right.ino && left.size === right.size;
+  return (
+    left.dev === right.dev &&
+    left.ino === right.ino &&
+    left.size === right.size &&
+    left.mtimeMs === right.mtimeMs &&
+    left.ctimeMs === right.ctimeMs
+  );
 }
 
 async function moduleSpecifiers(source) {
@@ -33,11 +39,12 @@ async function moduleSpecifiers(source) {
   } catch (error) {
     throw new Error("generated module is not valid ECMAScript", { cause: error });
   }
-  return imports.map((record) => {
+  return imports.flatMap((record) => {
+    if (record.d === -2 && record.n === undefined) return [];
     if (record.d !== -1 || record.n === undefined) {
       throw new Error("generated module contains a dynamic or non-literal import");
     }
-    return record.n;
+    return [record.n];
   });
 }
 
@@ -138,8 +145,9 @@ async function generatedSnippetFiles(packageDirectory, io) {
 
 async function readStableSnippet(file, directory, io) {
   const noFollow = typeof constants.O_NOFOLLOW === "number" ? constants.O_NOFOLLOW : 0;
-  const handle = await io.open(file.path, constants.O_RDONLY | noFollow);
+  let handle;
   try {
+    handle = await io.open(file.path, constants.O_RDONLY | noFollow);
     const opened = await handle.stat();
     if (!opened.isFile() || !sameFile(opened, file.metadata)) {
       throw new Error(`generated snippet identity changed before read: ${file.relativePath}`);
@@ -166,7 +174,7 @@ async function readStableSnippet(file, directory, io) {
     }
     return new TextDecoder("utf-8", { fatal: true }).decode(bytes.subarray(0, bytesRead));
   } finally {
-    await handle.close();
+    if (handle !== undefined) await handle.close();
   }
 }
 
@@ -175,8 +183,11 @@ export async function retainImportedRuntimeSnippets(packageDirectory, runtimeSou
   const { files, snippetsPath } = await generatedSnippetFiles(packageDirectory, io);
   const importedPath = imported[0];
   const importedFile = files.find(({ relativePath }) => relativePath === importedPath);
-  if (importedPath !== undefined && importedFile === undefined) {
-    throw new Error(`generated runtime snippet is missing: pkg/${importedPath}`);
+  if (
+    files.length !== imported.length ||
+    (importedPath !== undefined && importedFile === undefined)
+  ) {
+    throw new Error("generated snippet inventory does not exactly match runtime imports");
   }
 
   if (importedFile !== undefined) {
@@ -187,21 +198,5 @@ export async function retainImportedRuntimeSnippets(packageDirectory, runtimeSou
     }
   }
 
-  for (const file of files) {
-    if (file.relativePath !== importedPath) await io.rm(file.path);
-  }
-  for (const file of files) {
-    const directory = resolve(snippetsPath, file.relativePath.split("/")[1]);
-    try {
-      await io.rmdir(directory);
-    } catch (error) {
-      if (error?.code !== "ENOTEMPTY" && error?.code !== "ENOENT") throw error;
-    }
-  }
-  try {
-    await io.rmdir(snippetsPath);
-  } catch (error) {
-    if (error?.code !== "ENOTEMPTY" && error?.code !== "ENOENT") throw error;
-  }
   return imported.map((path) => `pkg/${path}`);
 }

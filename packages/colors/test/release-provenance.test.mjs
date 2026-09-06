@@ -7,10 +7,12 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  renameSync,
   rmSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
+import * as fsPromises from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { test } from "node:test";
@@ -44,13 +46,16 @@ test("generated runtime snippet closure is exact and rejects arbitrary paths", a
     ["snippets/labcolors-wasm-0123456789abcdef/inline0.js"],
   );
   assert.deepEqual(await runtimeSnippetPaths("export const local = true;"), []);
+  assert.deepEqual(await runtimeSnippetPaths("export const url = import.meta.url;"), []);
   for (const source of [
     'import "./snippets/other/inline0.js";',
     'import "./snippets/labcolors-wasm-0123456789abcdef/payload.js";',
     'import("./snippets/labcolors-wasm-0123456789abcdef/inline0.js");',
-    'import "node:fs";',
+    'import "bare-package";',
+    'import "/absolute.js";',
     'import "C:/absolute.js";',
     'import "https://example.invalid/module.js";',
+    'export { value } from "bare-package";',
   ]) {
     await assert.rejects(
       runtimeSnippetPaths(source),
@@ -75,17 +80,23 @@ test("generated runtime snippet closure is exact and rejects arbitrary paths", a
   try {
     const generated = join(fixture, "pkg", "snippets", "labcolors-wasm-0123456789abcdef");
     mkdirSync(generated, { recursive: true });
-    writeFileSync(
-      join(generated, "inline0.js"),
+    const snippet = join(generated, "inline0.js");
+    for (const source of [
+      'import "bare-package";\n',
+      'import "/absolute.js";\n',
+      'import "https://example.invalid/module.js";\n',
       'export { value } from "./nested.js";\n',
-    );
-    await assert.rejects(
-      retainImportedRuntimeSnippets(
-        fixture,
-        'import "./snippets/labcolors-wasm-0123456789abcdef/inline0.js";',
-      ),
-      /must not import or re-export another module/u,
-    );
+      'await import("./nested.js");\n',
+    ]) {
+      writeFileSync(snippet, source);
+      await assert.rejects(
+        retainImportedRuntimeSnippets(
+          fixture,
+          'import "./snippets/labcolors-wasm-0123456789abcdef/inline0.js";',
+        ),
+        /dynamic or non-literal import|must not import or re-export another module/u,
+      );
+    }
     writeFileSync(join(generated, "payload.js"), "export const arbitrary = true;\n");
     await assert.rejects(
       retainImportedRuntimeSnippets(
@@ -99,20 +110,281 @@ test("generated runtime snippet closure is exact and rejects arbitrary paths", a
   }
 });
 
-test("generated runtime snippet closure prunes orphan output when the runtime imports none", async () => {
+test("generated runtime snippet closure rejects an orphan when the runtime imports none without deleting it", async () => {
   const { retainImportedRuntimeSnippets } = await import(
     pathToFileURL(join(root, "scripts", "package-runtime-snippets.mjs"))
   );
   const fixture = mkdtempSync(join(tmpdir(), "labcolors-runtime-orphan-"));
   try {
     const snippets = join(fixture, "pkg", "snippets");
-    const generated = join(snippets, "labcolors-wasm-0123456789abcdef");
-    mkdirSync(generated, { recursive: true });
-    writeFileSync(join(generated, "inline0.js"), "export const orphan = true;\n");
-    assert.deepEqual(await retainImportedRuntimeSnippets(fixture, "export const local = true;"), []);
-    assert.equal(existsSync(snippets), false);
+    const orphan = join(snippets, "labcolors-wasm-0123456789abcdef", "inline0.js");
+    mkdirSync(dirname(orphan), { recursive: true });
+    writeFileSync(orphan, "export const orphan = true;\n");
+
+    await assert.rejects(
+      retainImportedRuntimeSnippets(fixture, "export const local = true;"),
+      /generated snippet inventory does not exactly match runtime imports/u,
+    );
+    assert.equal(readFileSync(orphan, "utf8"), "export const orphan = true;\n");
   } finally {
     rmSync(fixture, { recursive: true, force: true });
+  }
+});
+
+test("generated runtime snippet closure rejects a valid-shaped extra without deleting imported or orphan files", async () => {
+  const { retainImportedRuntimeSnippets } = await import(
+    pathToFileURL(join(root, "scripts", "package-runtime-snippets.mjs"))
+  );
+  const fixture = mkdtempSync(join(tmpdir(), "labcolors-runtime-retain-"));
+  try {
+    const snippets = join(fixture, "pkg", "snippets");
+    const imported = join(snippets, "labcolors-wasm-0123456789abcdef", "inline0.js");
+    const orphan = join(snippets, "labcolors-wasm-fedcba9876543210", "inline0.js");
+    mkdirSync(dirname(imported), { recursive: true });
+    mkdirSync(dirname(orphan), { recursive: true });
+    writeFileSync(imported, "export const retained = true;\n");
+    writeFileSync(orphan, "export const orphan = true;\n");
+
+    await assert.rejects(
+      retainImportedRuntimeSnippets(
+        fixture,
+        'import "./snippets/labcolors-wasm-0123456789abcdef/inline0.js";',
+      ),
+      /generated snippet inventory does not exactly match runtime imports/u,
+    );
+    assert.equal(readFileSync(imported, "utf8"), "export const retained = true;\n");
+    assert.equal(readFileSync(orphan, "utf8"), "export const orphan = true;\n");
+  } finally {
+    rmSync(fixture, { recursive: true, force: true });
+  }
+});
+
+test("generated runtime snippet closure rejects directory junctions or records privilege skip", async (context) => {
+  if (process.platform !== "win32") {
+    context.skip("Windows junction/reparse behavior is platform-specific");
+    return;
+  }
+  const { retainImportedRuntimeSnippets } = await import(
+    pathToFileURL(join(root, "scripts", "package-runtime-snippets.mjs"))
+  );
+  const fixture = mkdtempSync(join(tmpdir(), "labcolors-runtime-junction-"));
+  try {
+    const snippets = join(fixture, "pkg", "snippets");
+    const target = join(fixture, "junction-target");
+    mkdirSync(snippets, { recursive: true });
+    mkdirSync(target);
+    writeFileSync(join(target, "inline0.js"), "export const linked = true;\n");
+    const junction = join(snippets, "labcolors-wasm-0123456789abcdef");
+    try {
+      symlinkSync(target, junction, "junction");
+    } catch (error) {
+      if (error?.code === "EPERM") {
+        context.skip("Windows privilege prevents creating a junction fixture");
+        return;
+      }
+      throw error;
+    }
+    await assert.rejects(
+      retainImportedRuntimeSnippets(
+        fixture,
+        'import "./snippets/labcolors-wasm-0123456789abcdef/inline0.js";',
+      ),
+      /unexpected generated snippet entry|not a canonical directory/u,
+    );
+  } finally {
+    rmSync(fixture, { recursive: true, force: true });
+  }
+});
+
+test("generated runtime snippet closure leaves an external victim untouched after a junction swap", async (context) => {
+  if (process.platform !== "win32") {
+    context.skip("Windows junction/reparse behavior is platform-specific");
+    return;
+  }
+  const { retainImportedRuntimeSnippets } = await import(
+    pathToFileURL(join(root, "scripts", "package-runtime-snippets.mjs"))
+  );
+  const fixture = mkdtempSync(join(tmpdir(), "labcolors-runtime-junction-swap-"));
+  try {
+    const snippets = join(fixture, "pkg", "snippets");
+    const generated = join(snippets, "labcolors-wasm-0123456789abcdef");
+    const displaced = join(fixture, "displaced");
+    const external = join(fixture, "external");
+    const victim = join(external, "inline0.js");
+    mkdirSync(generated, { recursive: true });
+    mkdirSync(external);
+    writeFileSync(join(generated, "inline0.js"), "export const orphan = true;\n");
+    writeFileSync(victim, "export const victim = true;\n");
+    let swapped = false;
+    const io = {
+      lstat: fsPromises.lstat,
+      open: fsPromises.open,
+      opendir: async (path) => {
+        if (!swapped && path === generated) {
+          swapped = true;
+          renameSync(generated, displaced);
+          symlinkSync(external, generated, "junction");
+        }
+        return fsPromises.opendir(path);
+      },
+      realpath: fsPromises.realpath,
+    };
+
+    await assert.rejects(
+      retainImportedRuntimeSnippets(fixture, "export const local = true;", io),
+      /not a canonical directory|canonical path differs|exactly match runtime imports/u,
+    );
+    assert.equal(swapped, true, "anti-vacuum: the junction swap was not injected");
+    assert.equal(readFileSync(victim, "utf8"), "export const victim = true;\n");
+    assert.equal(readFileSync(join(displaced, "inline0.js"), "utf8"), "export const orphan = true;\n");
+  } finally {
+    rmSync(fixture, { recursive: true, force: true });
+  }
+});
+
+test("generated runtime snippet closure tolerates a supported import.meta expression", async () => {
+  const { retainImportedRuntimeSnippets } = await import(
+    pathToFileURL(join(root, "scripts", "package-runtime-snippets.mjs"))
+  );
+  const fixture = mkdtempSync(join(tmpdir(), "labcolors-runtime-import-meta-"));
+  try {
+    const generated = join(fixture, "pkg", "snippets", "labcolors-wasm-0123456789abcdef");
+    mkdirSync(generated, { recursive: true });
+    writeFileSync(join(generated, "inline0.js"), "export const url = import.meta.url;\n");
+    assert.deepEqual(
+      await retainImportedRuntimeSnippets(
+        fixture,
+        'import "./snippets/labcolors-wasm-0123456789abcdef/inline0.js";',
+      ),
+      ["pkg/snippets/labcolors-wasm-0123456789abcdef/inline0.js"],
+    );
+  } finally {
+    rmSync(fixture, { recursive: true, force: true });
+  }
+});
+
+test("generated runtime snippet closure rejects injected descriptor and path identity mismatch", async () => {
+  const { retainImportedRuntimeSnippets } = await import(
+    pathToFileURL(join(root, "scripts", "package-runtime-snippets.mjs"))
+  );
+  const fixture = mkdtempSync(join(tmpdir(), "labcolors-runtime-identity-"));
+  try {
+    const generated = join(fixture, "pkg", "snippets", "labcolors-wasm-0123456789abcdef");
+    mkdirSync(generated, { recursive: true });
+    const snippet = join(generated, "inline0.js");
+    const replacement = join(fixture, "replacement.js");
+    writeFileSync(snippet, "export const original = true;\n");
+    writeFileSync(replacement, "export const replacement = true;\n");
+    let swapped = false;
+    const io = {
+      lstat: fsPromises.lstat,
+      open: async (path, flags) => {
+        const handle = await fsPromises.open(path, flags);
+        if (!swapped && path === snippet) {
+          swapped = true;
+          rmSync(snippet);
+          copyFileSync(replacement, snippet);
+        }
+        return handle;
+      },
+      opendir: fsPromises.opendir,
+      realpath: fsPromises.realpath,
+    };
+    await assert.rejects(
+      retainImportedRuntimeSnippets(
+        fixture,
+        'import "./snippets/labcolors-wasm-0123456789abcdef/inline0.js";',
+        io,
+      ),
+      /identity changed during read/u,
+    );
+    assert.equal(swapped, true, "anti-vacuum: the identity swap was not injected");
+  } finally {
+    rmSync(fixture, { recursive: true, force: true });
+  }
+});
+
+test("generated runtime snippet closure enforces entry-count and total-byte caps", async () => {
+  const {
+    MAX_SNIPPET_DIRECTORIES,
+    MAX_SNIPPET_FILES,
+    MAX_TOTAL_SNIPPET_BYTES,
+    retainImportedRuntimeSnippets,
+  } = await import(pathToFileURL(join(root, "scripts", "package-runtime-snippets.mjs")));
+  const runtime = 'import "./snippets/labcolors-wasm-0000000000000000/inline0.js";';
+
+  const entriesFixture = mkdtempSync(join(tmpdir(), "labcolors-runtime-entries-"));
+  try {
+    for (let index = 0; index <= MAX_SNIPPET_DIRECTORIES; index += 1) {
+      const directory = join(
+        entriesFixture,
+        "pkg",
+        "snippets",
+        `labcolors-wasm-${index.toString(16).padStart(16, "0")}`,
+      );
+      mkdirSync(directory, { recursive: true });
+      writeFileSync(join(directory, "inline0.js"), "export const value = true;\n");
+    }
+    await assert.rejects(
+      retainImportedRuntimeSnippets(entriesFixture, runtime),
+      /directory count exceeds/u,
+    );
+  } finally {
+    rmSync(entriesFixture, { recursive: true, force: true });
+  }
+
+  const filesFixture = mkdtempSync(join(tmpdir(), "labcolors-runtime-files-"));
+  try {
+    const directory = join(filesFixture, "pkg", "snippets", "labcolors-wasm-0000000000000000");
+    mkdirSync(directory, { recursive: true });
+    writeFileSync(join(directory, "inline0.js"), "export const value = true;\n");
+    const realOpendir = fsPromises.opendir;
+    const io = {
+      lstat: fsPromises.lstat,
+      open: fsPromises.open,
+      opendir: async (path) => {
+        if (path === directory) {
+          async function* entries() {
+            for (let index = 0; index <= MAX_SNIPPET_FILES; index += 1) {
+              yield {
+                isFile: () => true,
+                name: "inline0.js",
+              };
+            }
+          }
+          return entries();
+        }
+        return realOpendir(path);
+      },
+      realpath: fsPromises.realpath,
+    };
+    await assert.rejects(
+      retainImportedRuntimeSnippets(filesFixture, runtime, io),
+      /file count exceeds/u,
+    );
+  } finally {
+    rmSync(filesFixture, { recursive: true, force: true });
+  }
+
+  const bytesFixture = mkdtempSync(join(tmpdir(), "labcolors-runtime-total-bytes-"));
+  try {
+    const bytesPerFile = Math.floor(MAX_TOTAL_SNIPPET_BYTES / 3) + 1;
+    for (let index = 0; index < 3; index += 1) {
+      const directory = join(
+        bytesFixture,
+        "pkg",
+        "snippets",
+        `labcolors-wasm-${index.toString(16).padStart(16, "0")}`,
+      );
+      mkdirSync(directory, { recursive: true });
+      writeFileSync(join(directory, "inline0.js"), "x".repeat(bytesPerFile));
+    }
+    await assert.rejects(
+      retainImportedRuntimeSnippets(bytesFixture, runtime),
+      /snippet bytes exceed/u,
+    );
+  } finally {
+    rmSync(bytesFixture, { recursive: true, force: true });
   }
 });
 
@@ -327,6 +599,90 @@ edition = "2024"
 version = "7.7.7"
 `),
     /\[workspace\.package\]\.version is absent/u,
+  );
+});
+
+test("npm 11.9.0 selector includes lowercase hex and excludes same-length hostile paths", () => {
+  const packageJson = JSON.parse(readFileSync(join(root, "packages", "colors", "package.json"), "utf8"));
+  const selector = packageJson.files.find((path) => path.startsWith("pkg/snippets/"));
+  assert.equal(typeof selector, "string");
+
+  const fixture = mkdtempSync(join(tmpdir(), "labcolors-npm-selector-"));
+  try {
+    writeFileSync(
+      join(fixture, "package.json"),
+      `${JSON.stringify({ name: "selector-fixture", version: "1.0.0", files: [selector] })}\n`,
+    );
+    for (const directory of [
+      "labcolors-wasm-0123456789abcdef",
+      "labcolors-wasm-0123456789abcdeF",
+      "labcolors-wasm-0123456789abcdeg",
+    ]) {
+      const snippet = join(fixture, "pkg", "snippets", directory);
+      mkdirSync(snippet, { recursive: true });
+      writeFileSync(join(snippet, "inline0.js"), `export const fixture = ${JSON.stringify(directory)};\n`);
+    }
+
+    const npx = process.platform === "win32"
+      ? { command: process.env.ComSpec ?? "cmd.exe", prefix: ["/d", "/s", "/c", "npx.cmd"] }
+      : { command: "npx", prefix: [] };
+    assert.equal(
+      command(npx.command, [...npx.prefix, "--yes", "npm@11.9.0", "--version"], fixture),
+      "11.9.0",
+    );
+    const pack = JSON.parse(
+      command(
+        npx.command,
+        [...npx.prefix, "--yes", "npm@11.9.0", "pack", "--dry-run", "--json"],
+        fixture,
+      ),
+    );
+    const packedPaths = pack[0].files.map(({ path }) => path);
+    assert.equal(
+      packedPaths.includes("pkg/snippets/labcolors-wasm-0123456789abcdef/inline0.js"),
+      true,
+    );
+    assert.equal(
+      packedPaths.includes("pkg/snippets/labcolors-wasm-0123456789abcdeF/inline0.js"),
+      false,
+    );
+    assert.equal(
+      packedPaths.includes("pkg/snippets/labcolors-wasm-0123456789abcdeg/inline0.js"),
+      false,
+    );
+  } finally {
+    rmSync(fixture, { recursive: true, force: true });
+  }
+});
+
+test("canonical package inventory requires one exact snippet and has 18 members", async () => {
+  const { expectedPackedFiles } = await import(
+    pathToFileURL(join(root, "scripts", "verify-package-release.mjs"))
+  );
+  const packageJson = JSON.parse(readFileSync(join(root, "packages", "colors", "package.json"), "utf8"));
+  const selector = "pkg/snippets/labcolors-wasm-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]/inline0.js";
+  assert.equal(packageJson.files.filter((path) => path === selector).length, 1);
+  assert.equal(packageJson.files.filter((path) => path.includes("[0-9a-f]")).length, 1);
+  assert.equal(packageJson.files.some((path) => path.includes("?") || path.includes("*")), false);
+
+  const zeroSnippetRuntime = "export const diagnosticOnly = true;";
+  assert.deepEqual(
+    await (await import(pathToFileURL(join(root, "scripts", "package-runtime-snippets.mjs"))))
+      .runtimeSnippetPaths(zeroSnippetRuntime),
+    [],
+  );
+  await assert.rejects(
+    expectedPackedFiles(packageJson, zeroSnippetRuntime),
+    /requires exactly one generated runtime snippet, got 0/u,
+  );
+  const inventory = await expectedPackedFiles(
+    packageJson,
+    'import "./snippets/labcolors-wasm-0123456789abcdef/inline0.js";',
+  );
+  assert.equal(inventory.length, 18);
+  assert.deepEqual(
+    inventory.filter((path) => path.startsWith("pkg/snippets/")),
+    ["pkg/snippets/labcolors-wasm-0123456789abcdef/inline0.js"],
   );
 });
 
