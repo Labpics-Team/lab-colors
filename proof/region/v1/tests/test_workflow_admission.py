@@ -77,7 +77,7 @@ class WorkflowAdmissionTests(unittest.TestCase):
                     )
                 )
                 for flag, key in expected:
-                    self.assertIn(flag, args)
+                    self.assertEqual(args.count(flag), 1)
                     index = args.index(flag)
                     self.assertLess(index + 1, len(args))
                     self.assertEqual(args[index + 1], coordinates[key].encode())
