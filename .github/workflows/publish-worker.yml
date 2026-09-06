@@ -11,10 +11,9 @@ name: publish worker
 #
 # Publish ничего не собирает и не перепаковывает. Он принимает только immutable
 # attempt-scoped artifact `colors-release-$GITHUB_SHA-attempt-$RUN_ATTEMPT` из
-# canonical successful push-run
-# `.github/workflows/ci.yml` для exact tag SHA. Отдельно требуется canonical
-# successful push-run `.github/workflows/native-conformance.yml`. Имена jobs
-# проверяются только внутри выбранных run IDs, поэтому чужой check-run с таким
+# canonical successful push-run `.github/workflows/ci.yml` для exact tag SHA.
+# Оба immutable worker и их обязательный CI проверяются внутри одной попытки
+# выбранного run ID, поэтому чужой check-run с таким
 # же display name не может удовлетворить gate.
 #
 # Provenance-аттестация отключена (package.json publishConfig.provenance:false):
@@ -130,38 +129,31 @@ jobs:
             throw new Error("canonical-run guard is missing required GitHub environment");
           }
 
-          const workflows = [
-            {
-              key: "ci",
-              file: "ci.yml",
-              path: ".github/workflows/ci.yml",
-              worker: {
-                path: "Labpics-Team/lab-colors/.github/workflows/ci-worker.yml@1461bc2ed60142aed3a8723e618b883be6418156",
-                sha: "1461bc2ed60142aed3a8723e618b883be6418156",
+          const spec = {
+            file: "ci.yml",
+            path: ".github/workflows/ci.yml",
+            workers: [
+              {
+                path: "Labpics-Team/lab-colors/.github/workflows/ci-worker.yml@5d55d7ad1c701669e9a436ae976a89a3960f847d",
+                sha: "5d55d7ad1c701669e9a436ae976a89a3960f847d",
               },
-              requiredJobs: [
-                "Node 22 consumer floor",
-                "MSRV workspace check",
-                "clippy + rustfmt",
-                "cargo doc (intra-doc links)",
-                "test",
-                "cargo audit (rustsec)",
-                "wasm build + headless test + size",
-              ],
-            },
-            {
-              key: "native",
-              file: "native-conformance.yml",
-              path: ".github/workflows/native-conformance.yml",
-              worker: {
-                path: "Labpics-Team/lab-colors/.github/workflows/native-conformance-worker.yml@1461bc2ed60142aed3a8723e618b883be6418156",
-                sha: "1461bc2ed60142aed3a8723e618b883be6418156",
+              {
+                path: "Labpics-Team/lab-colors/.github/workflows/native-conformance-worker.yml@1beda3770a990bb62d1b97e0188b1f2620e16c07",
+                sha: "1beda3770a990bb62d1b97e0188b1f2620e16c07",
               },
-              requiredJobs: [
-                "swift conformance (self-hosted Linux, pinned toolchain)",
-              ],
-            },
-          ];
+            ],
+            requiredJobs: [
+              "Node 22 consumer floor",
+              "MSRV workspace check",
+              "clippy + rustfmt",
+              "cargo doc (intra-doc links)",
+              "test",
+              "cargo audit (rustsec)",
+              "wasm build + headless test + size",
+              "swift conformance (self-hosted Linux, pinned toolchain)",
+              "CI",
+            ],
+          };
 
           async function api(path) {
             const response = await fetch(`${apiRoot}/repos/${repository}${path}`, {
@@ -210,27 +202,36 @@ jobs:
               .sort((left, right) => Number(right.id) - Number(left.id));
             const run = candidates[0];
             if (!run) throw new Error(`${spec.path}: no canonical push run for ${expectedSha}`);
+            if (!Number.isSafeInteger(run.id) || run.id < 1 ||
+                !Number.isSafeInteger(run.run_attempt) || run.run_attempt < 1) {
+              throw new Error(`${spec.path}: invalid run identity or attempt`);
+            }
             if (!(run.status === "completed" && run.conclusion === "success")) {
               throw new Error(`${spec.path} run ${run.id}: ${run.status}/${run.conclusion ?? "none"}`);
             }
             const references = run.referenced_workflows;
-            if (!Array.isArray(references) || references.length !== 1) {
+            if (!Array.isArray(references) || references.length !== spec.workers.length) {
               throw new Error(
-                `${spec.path} run ${run.id}: expected exactly one immutable worker reference`,
+                `${spec.path} run ${run.id}: expected exactly two immutable worker references`,
               );
             }
-            const [reference] = references;
-            if (reference?.path !== spec.worker.path || reference?.sha !== spec.worker.sha) {
-              throw new Error(
-                `${spec.path} run ${run.id}: worker reference does not match the admitted worker`,
-              );
+            const remaining = new Map(spec.workers.map((worker) => [worker.path, worker.sha]));
+            for (const reference of references) {
+              if (typeof reference?.path !== "string" || typeof reference?.sha !== "string" ||
+                  !remaining.has(reference.path) || remaining.get(reference.path) !== reference.sha) {
+                throw new Error(`${spec.path} run ${run.id}: unexpected or duplicate worker reference`);
+              }
+              remaining.delete(reference.path);
+            }
+            if (remaining.size !== 0) {
+              throw new Error(`${spec.path} run ${run.id}: missing admitted worker reference`);
             }
             return run;
           }
 
           async function requireSuccessfulJobs(spec, run) {
             const jobs = await paginated(
-              `/actions/runs/${run.id}/jobs?filter=latest`,
+              `/actions/runs/${run.id}/attempts/${run.run_attempt}/jobs`,
               "jobs",
             );
             const failures = [];
@@ -240,7 +241,7 @@ jobs:
               // run path, run_id и ровно одно совпадение замыкают его identity.
               const matches = jobs.filter((job) => {
                 const workerName = job.name.split(" / ").at(-1);
-                return workerName === name && Number(job.run_id) === Number(run.id);
+                return workerName === name && job.run_id === run.id;
               });
               if (matches.length !== 1) {
                 failures.push(`${name}: expected one job in run ${run.id}, got ${matches.length}`);
@@ -257,20 +258,15 @@ jobs:
           }
 
           (async () => {
-            const outputs = [];
-            for (const spec of workflows) {
-              const run = await canonicalRun(spec);
-              await requireSuccessfulJobs(spec, run);
-              outputs.push(`${spec.key}_run_id=${run.id}`);
-              if (spec.key === "ci") {
-                if (!Number.isSafeInteger(run.run_attempt) || run.run_attempt < 1) {
-                  throw new Error(`${spec.path} run ${run.id}: invalid run_attempt`);
-                }
-                outputs.push(`ci_run_attempt=${run.run_attempt}`);
-              }
-              console.log(`${spec.path}: canonical successful push run ${run.id}`);
+            const run = await canonicalRun(spec);
+            await requireSuccessfulJobs(spec, run);
+            // До выдачи outputs сверяем, что запуск и попытка ещё актуальны.
+            const current = await canonicalRun(spec);
+            if (current.id !== run.id || current.run_attempt !== run.run_attempt) {
+              throw new Error(`${spec.path}: canonical run or attempt changed during admission`);
             }
-            appendFileSync(output, `${outputs.join("\n")}\n`, "utf8");
+            appendFileSync(output, `ci_run_id=${run.id}\nci_run_attempt=${run.run_attempt}\n`, "utf8");
+            console.log(`${spec.path}: canonical successful push run ${run.id} attempt ${run.run_attempt}`);
           })().catch((error) => {
             console.error(error instanceof Error ? error.stack : String(error));
             process.exitCode = 1;
