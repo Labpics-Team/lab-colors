@@ -664,8 +664,8 @@ jobs:
         # герметичным и не трогает системное состояние образа).
         # Strategy:
         #  1. Download exact CfT chrome + chromedriver archives and verify SHA-256.
-        #     Путь браузера передаётся явно в WebDriver capabilities тестового
-        #     шага; соответствующий driver — через --chromedriver.
+        #     Тест обязан использовать только проверенную пару CfT, а не Chrome
+        #     или ChromeDriver из изменяемого окружения раннера.
         #  2. Extract required shared libs (.so) from the runner's configured
         #     Debian/Ubuntu repository without sudo. Refresh package metadata in
         #     runner.temp first: образ ячейки может нести устаревшие списки,
