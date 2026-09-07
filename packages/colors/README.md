@@ -14,32 +14,48 @@ npm install @labpics/colors
 
 ```ts
 import init, { compileProgramWire } from "@labpics/colors";
-import { ProgramWireBuilderV1 } from "@labpics/colors/program-wire/abi-v1.js";
+import {
+  ProgramWireBuilderV1,
+  SURROUND_AVERAGE_V1,
+  WCAG22_SC1411_UI_COMPONENT_OR_STATE_V1,
+} from "@labpics/colors/program-wire/abi-v1.js";
 
 await init();
-// Canonical LCPW v1 bytes are produced by ProgramWireBuilderV1 or any
-// implementation-independent encoder of the same contract. The builder
-// lives on a sub-path: it is an authoring aid, not part of the runtime
-// facade that ships with every consumer bundle.
 const programBytes = new ProgramWireBuilderV1()
-  .addSource(/* ... */)
-  .build();
+  .source(11, [20, 20, 20])
+  .fixedTarget(21, 11)
+  .surfaceInputPort(31)
+  .solidPaint(41, 21)
+  .inputSurface(51, 31)
+  .sourceOverOccurrence(61, 41, 51, 64, 0.2, SURROUND_AVERAGE_V1)
+  .presentationRoot(71, 61)
+  .presentationTarget(71, 61)
+  .wcag22VisibleUnary(true, 81, 61, WCAG22_SC1411_UI_COMPONENT_OR_STATE_V1)
+  .output(91, 41)
+  .finish();
 const runtime = compileProgramWire(programBytes, 1);
-const snapshot = runtime.updateObserved(
-  1n,
-  new Uint32Array([1]),
-  new Uint8Array([255, 255, 255]),
-  1,
-);
-
-if (snapshot.state === "ready") {
-  for (let index = 0; index < snapshot.outputCount(); index += 1) {
-    console.log(
-      snapshot.outputSlot(index),
-      snapshot.outputRgb(index),
-      snapshot.outputOpacity(index),
-    );
+try {
+  const snapshot = runtime.updateObserved(
+    1n,
+    new Uint32Array([1]),
+    new Uint8Array([255, 255, 255]),
+    1,
+  );
+  try {
+    if (snapshot.state === "ready") {
+      for (let index = 0; index < snapshot.outputCount(); index += 1) {
+        console.log(
+          snapshot.outputSlot(index),
+          snapshot.outputRgb(index),
+          snapshot.outputOpacity(index),
+        );
+      }
+    }
+  } finally {
+    snapshot.free();
   }
+} finally {
+  runtime.free();
 }
 ```
 
@@ -49,7 +65,7 @@ if (snapshot.state === "ready") {
 
 - Один публичный runtime-root: `compileProgramWire` → `ProgramRuntime` → `ProgramSnapshot`.
 - Обновление атомарно: отказ не публикует частичный state.
-- Output появляется только вместе с сертификатом полного hard-support.
+- Output появляется только вместе с сертификатом полного hard-support. Это внутренняя проверка в рамках Session, а не публичный переносимый сертификат или гарантия конечного видимого результата приложения.
 - Канонические байты имеют одну `ContentIdentity`.
 - Невалидные wire-байты, графы, observation и resource bounds возвращают typed-отказы; fallback отсутствует.
 - DOM и CSS не входят в ядро. Применение output принадлежит приложению.

@@ -40,6 +40,7 @@ import {
   WCAG22_EVIDENCE_FILES,
   assertPackageEvidenceInventory,
 } from "./release-evidence.mjs";
+import { runtimeSnippetPaths } from "./package-runtime-snippets.mjs";
 import pointSupportReleaseContract from "./point-support-release-contract.cjs";
 
 const {
@@ -557,10 +558,16 @@ function exportTargets(value, into = []) {
   return into;
 }
 
-function expectedPackedFiles(packageJson) {
+export async function expectedPackedFiles(packageJson, runtimeSource) {
+  const declared = (packageJson.files ?? []).map(normalisePackPath);
+  const snippets = await runtimeSnippetPaths(runtimeSource);
+  if (snippets.length !== 1) {
+    fail(`canonical release requires exactly one generated runtime snippet, got ${snippets.length}`);
+  }
   const expected = new Set([
     ...REQUIRED_PACK_FILES,
-    ...(packageJson.files ?? []).map(normalisePackPath),
+    ...declared.filter((path) => path !== "pkg/snippets/labcolors-wasm-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]/inline0.js"),
+    ...snippets.map((path) => `pkg/${path}`),
   ]);
   for (const target of exportTargets(packageJson.exports)) expected.add(normalisePackPath(target));
   if (typeof packageJson.types === "string") {
@@ -573,7 +580,7 @@ function expectedPackedFiles(packageJson) {
   );
 }
 
-function validatePackedFiles(packageJson, packResult) {
+async function validatePackedFiles(packageJson, runtimeSource, packResult) {
   if (!Array.isArray(packResult.files) || packResult.files.length === 0) {
     fail("npm pack did not report a non-empty files inventory");
   }
@@ -587,7 +594,7 @@ function validatePackedFiles(packageJson, packResult) {
   const duplicates = actual.filter((path, index) => actual.indexOf(path) !== index);
   if (duplicates.length > 0) fail(`npm pack reported duplicate paths: ${duplicates.join(", ")}`);
 
-  const expected = expectedPackedFiles(packageJson);
+  const expected = await expectedPackedFiles(packageJson, runtimeSource);
   const expectedSet = new Set(expected);
 
   const actualSet = new Set(actual);
@@ -709,6 +716,7 @@ async function inspectNpmTarball(tarballPath, expected, packResult) {
 
 export async function packInto(destination, packageJson) {
   await mkdir(destination, { recursive: true });
+  const runtimeSource = await readFile(resolve(PACKAGE_DIR, "pkg/labcolors.js"), "utf8");
   const packedJson = npm(
     ["pack", "--ignore-scripts", "--json", `--pack-destination=${destination}`, PACKAGE_DIR],
     REPO_ROOT,
@@ -734,7 +742,7 @@ export async function packInto(destination, packageJson) {
   if (!tarballName.endsWith(".tgz") || tarballName !== packResult.filename) {
     fail(`npm pack returned an unsafe tarball filename: ${packResult.filename}`);
   }
-  const { expected } = validatePackedFiles(packageJson, packResult);
+  const { expected } = await validatePackedFiles(packageJson, runtimeSource, packResult);
   const path = resolve(destination, tarballName);
   const inspected = await inspectNpmTarball(path, expected, packResult);
 
@@ -1149,6 +1157,7 @@ assert.deepEqual(Object.keys(colors).sort(), [
   "evaluateWcag22",
   "init",
   "initSync",
+  "isProgramError",
   "numericalCapabilityManifest",
 ]);
 for (const retired of ["LabColors", "resolveTheme", "applyTheme", "watchTheme", "adaptTheme"]) {
@@ -1197,6 +1206,16 @@ const wire = Uint8Array.from(Buffer.from(
   "4c4350570100b3000000010000000b0000001414140100000015000000010b0000000000000000000000010000001f00000000000000010000002900000001150000000100000033000000011f000000010000003d000000290000003300000000000000000050409a9999999999c93f0101000000470000003d00000001000000470000003d0000000100000051000000093d000000030100000052000000013d000000141414010000005b00000029000000",
   "hex",
 ));
+let typedFailure;
+try {
+  colors.compileProgramWire(new Uint8Array(), 1);
+} catch (error) {
+  assert.equal(colors.isProgramError(error), true);
+  typedFailure = error;
+}
+assert.equal(typedFailure.code, "program_wire");
+assert.equal(typedFailure.operation, "compileProgramWire");
+
 const runtime = colors.compileProgramWire(wire, 1);
 const snapshot = runtime.updateObserved(1n, new Uint32Array([1]), new Uint8Array([255, 255, 255]), 1);
 assert.equal(snapshot.state, "ready");
@@ -1216,8 +1235,11 @@ import init, {
   ProgramSnapshot,
   compileProgramWire,
   evaluateWcag22,
+  isProgramError,
   numericalCapabilityManifest,
   type NumericalCapabilityManifestV2,
+  type ProgramErrorCode,
+  type ProgramOperation,
   type Wcag22AssessmentV1,
   type Wcag22CriterionV1,
 } from "@labpics/colors";
@@ -1238,7 +1260,10 @@ async function boot(module: WebAssembly.Module, wire: Uint8Array): Promise<Progr
 const criterion: Wcag22CriterionV1 = "sc-1.4.3-text-default";
 const assessment: Wcag22AssessmentV1 = evaluateWcag22("#000000", "#FFFFFF", criterion);
 const capability: NumericalCapabilityManifestV2 = numericalCapabilityManifest();
+const programFailure = (error: unknown): readonly [ProgramErrorCode, ProgramOperation] | undefined =>
+  isProgramError(error) ? [error.code, error.operation] : undefined;
 void boot;
+void programFailure;
 void assessment;
 void capability;
 // @ts-expect-error C7c removed the recipe engine.
@@ -1359,6 +1384,8 @@ async function verifyCleanConsumer(
           "NodeNext",
           "--moduleResolution",
           "NodeNext",
+          "--typeRoots",
+          resolve(consumer, "node_modules", "@types"),
           typesPath,
         ],
         consumer,
@@ -1373,6 +1400,13 @@ async function verifyCleanConsumer(
 // Execute the same packed-package runtime smoke under the caller's Node binary.
 // CI uses this to prove the public consumer floor independently from the pinned
 // release packer.
+export function browserProofInvocation(tarballPath, sha256) {
+  if (!/^[0-9a-f]{64}$/u.test(sha256)) {
+    fail("browser proof tarball identity must be lowercase SHA-256");
+  }
+  return [resolve(REPO_ROOT, "scripts/test-program-runtime-browser.mjs"), resolve(tarballPath), sha256];
+}
+
 export async function smokePackedPackage(tarballPath) {
   const tarball = resolve(tarballPath);
   const consumer = await mkdtemp(join(tmpdir(), "labcolors-package-smoke-"));
@@ -1498,6 +1532,9 @@ export async function verifyPackageRelease() {
   );
 
   const verifiedTarball = await materializeVerifiedTarballSnapshot(canonicalPack);
+  if (process.env.CHROME_PATH && process.env.CHROMEDRIVER_PATH) {
+    command(process.execPath, browserProofInvocation(verifiedTarball.path, verifiedTarball.sha256));
+  }
   const tarball = {
     path: `.release/${basename(verifiedTarball.path)}`,
     bytes: verifiedTarball.bytes.length,

@@ -3,11 +3,18 @@
 // wire::tests::_emit_reference_wire_hex из того же графа; дрейф любой стороны
 // формата ломает сравнение.
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
+
+const PACKAGE_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 
 import {
-  MAX_SECTION_ENTRIES_V1,
   PROGRAM_WIRE_TOO_MANY_ENTRIES,
+  PROGRAM_WIRE_INVALID_DECLARATION,
   ProgramWireBuilderV1,
   ProgramWireError,
   SURROUND_AVERAGE_V1,
@@ -43,6 +50,100 @@ function toHex(bytes) {
   return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
+function npmInvocation({
+  platform = process.platform,
+  environment = process.env,
+  node = process.execPath,
+} = {}) {
+  const npmExecPath = environment.npm_execpath;
+  if (npmExecPath) return { command: node, argsPrefix: [npmExecPath], shell: false };
+  return {
+    command: platform === "win32" ? "npm.cmd" : "npm",
+    argsPrefix: [],
+    shell: platform === "win32",
+  };
+}
+
+function npm(args, cwd) {
+  const { command, argsPrefix, shell } = npmInvocation();
+  return execFileSync(command, [...argsPrefix, ...args], {
+    cwd,
+    encoding: "utf8",
+    shell,
+    stdio: ["ignore", "pipe", "pipe"],
+  }).trim();
+}
+
+test("npm command selection honors the lifecycle entrypoint", () => {
+  assert.deepEqual(
+    npmInvocation({ platform: "linux", environment: { npm_execpath: "/npm/cli.js" }, node: "/node" }),
+    { command: "/node", argsPrefix: ["/npm/cli.js"], shell: false },
+  );
+});
+
+test("npm command selection falls back to the platform PATH shim", () => {
+  assert.deepEqual(npmInvocation({ platform: "win32", environment: {} }), {
+    command: "npm.cmd",
+    argsPrefix: [],
+    shell: true,
+  });
+  assert.deepEqual(npmInvocation({ platform: "linux", environment: {} }), {
+    command: "npm",
+    argsPrefix: [],
+    shell: false,
+  });
+});
+
+test("packed ProgramWire subpath resolves with runtime and declarations", () => {
+  const fixture = mkdtempSync(join(tmpdir(), "labcolors-program-wire-pack-"));
+  try {
+    const [{ filename }] = JSON.parse(
+      npm(["pack", "--ignore-scripts", "--json", `--pack-destination=${fixture}`, PACKAGE_ROOT], fixture),
+    );
+    writeFileSync(
+      join(fixture, "package.json"),
+      `${JSON.stringify({ private: true, type: "module" })}\n`,
+    );
+    npm(
+      ["install", "--ignore-scripts", "--no-audit", "--no-fund", join(fixture, filename)],
+      fixture,
+    );
+    const output = execFileSync(
+      process.execPath,
+      [
+        "--input-type=module",
+        "--eval",
+        'import { ProgramWireBuilderV1 } from "@labpics/colors/program-wire/abi-v1.js"; console.log(new ProgramWireBuilderV1().finish().length)',
+      ],
+      { cwd: fixture, encoding: "utf8" },
+    ).trim();
+    assert.equal(output, "66");
+
+    writeFileSync(
+      join(fixture, "smoke.ts"),
+      'import { ProgramWireBuilderV1 } from "@labpics/colors/program-wire/abi-v1.js";\nnew ProgramWireBuilderV1().source(1, [0, 0, 0]).finish();\n',
+    );
+    execFileSync(
+      process.execPath,
+      [
+        join(PACKAGE_ROOT, "node_modules", "typescript", "lib", "tsc.js"),
+        "--noEmit",
+        "--strict",
+        "--module",
+        "NodeNext",
+        "--moduleResolution",
+        "NodeNext",
+        "--target",
+        "ES2022",
+        join(fixture, "smoke.ts"),
+      ],
+      { cwd: fixture, stdio: ["ignore", "pipe", "pipe"] },
+    );
+  } finally {
+    rmSync(fixture, { recursive: true, force: true });
+  }
+});
+
 test("JS builder bytes are byte-identical to the Rust reference wire", () => {
   assert.equal(toHex(referenceBuilder().finish()), REFERENCE_WIRE_HEX);
 });
@@ -53,7 +154,7 @@ test("canonical bytes are deterministic across rebuilds", () => {
 
 test("oversized sections are refused with a typed code before emission", () => {
   const builder = new ProgramWireBuilderV1();
-  for (let id = 0; id <= MAX_SECTION_ENTRIES_V1; id += 1) {
+  for (let id = 0; id <= 4096; id += 1) {
     builder.surfaceInputPort(id);
   }
   assert.throws(
@@ -82,22 +183,74 @@ test("invalid declarations are typed refusals, not coerced bytes", () => {
     isTyped,
   );
   assert.throws(() => fresh().wcag22VisibleUnary(true, 1, 2, 9), isTyped);
+  // structured candidates: null/primitives are typed refusals, never TypeError.
+  assert.throws(() => fresh().finiteTarget(1, [null]), isTyped);
+  assert.throws(() => fresh().finiteTarget(1, [7]), isTyped);
   // relation candidates: null/empty are typed refusals, never TypeError.
   assert.throws(() => fresh().exactIntrinsicRelationHard(1, 2, null), isTyped);
   assert.throws(() => fresh().exactIntrinsicRelationHard(1, 2, []), isTyped);
 });
 
-test("a refused declaration leaves the builder byte-stream untouched", () => {
-  const builder = new ProgramWireBuilderV1();
-  builder.source(11, [0x14, 0x14, 0x14]);
-  const before = builder.finish();
-  const rebuilt = new ProgramWireBuilderV1();
-  rebuilt.source(11, [0x14, 0x14, 0x14]);
-  assert.throws(
-    () => rebuilt.finiteTarget(21, [{ id: 1, rgb: [0, 0, 0], opacity: Number.NaN }]),
-    (error) => error instanceof ProgramWireError,
-  );
-  // After the refusal the emitted bytes equal the clean builder's bytes:
-  // no phantom section count, no partial record.
-  assert.deepEqual(rebuilt.finish(), before);
+test("every refused declaration leaves the builder byte-stream untouched", () => {
+  const sparseVariants = (values) => [
+    Array(values.length),
+    ...values.map((_, index) => {
+      const sparse = [...values];
+      delete sparse[index];
+      return sparse;
+    }),
+  ];
+  const invalidDeclarations = [
+    ...sparseVariants([0, 0, 0]).flatMap((rgb) => [
+      (builder) => builder.source(1, rgb),
+      (builder) => builder.finiteTarget(1, [{ id: 1, rgb, opacity: 1 }]),
+      (builder) => builder.exactVisibleUnary(true, 1, 2, rgb),
+    ]),
+    ...sparseVariants([
+      { id: 1, rgb: [0, 0, 0], opacity: 1 },
+      { id: 2, rgb: [1, 2, 3], opacity: 0.5 },
+    ]).map((candidates) => (builder) => builder.finiteTarget(1, candidates)),
+    ...sparseVariants(Array(32).fill(0)).map(
+      (release) => (builder) => builder.family(1, release),
+    ),
+    ...sparseVariants([1, 2]).map(
+      (candidates) => (builder) => builder.exactIntrinsicRelationHard(1, 2, candidates),
+    ),
+    ...[undefined, 0, "", null, 1, "false", Number.NaN, {}, [], Object.create(null), Symbol("hard")]
+      .flatMap((hard) => [
+        (builder) => builder.exactVisibleUnary(hard, 1, 2, [0, 0, 0]),
+        (builder) => builder.wcag22VisibleUnary(hard, 1, 2, 1),
+      ]),
+    (builder) => builder.source(-1, [0, 0, 0]),
+    (builder) => builder.source(1, [0, 0]),
+    (builder) => builder.fixedTarget(1, -1),
+    (builder) => builder.finiteTarget(1, [{ id: 1, rgb: [0, 0, 0], opacity: Number.NaN }]),
+    (builder) => builder.finiteTarget(1, [null]),
+    (builder) => builder.finiteTarget(1, [7]),
+    (builder) => builder.family(1, Array(31).fill(0)),
+    (builder) => builder.family(1, [...Array(31).fill(0), 256]),
+    (builder) => builder.surfaceInputPort(-1),
+    (builder) => builder.opacityInput(1, Number.NaN),
+    (builder) => builder.solidPaint(1, -1),
+    (builder) => builder.opacityPaint(1, 2, -1),
+    (builder) => builder.inputSurface(1, -1),
+    (builder) => builder.occurrenceSurface(1, -1),
+    (builder) => builder.sourceOverOccurrence(1, 2, 3, Number.NaN, 0.2, 1),
+    (builder) => builder.presentationRoot(1, -1),
+    (builder) => builder.presentationTarget(1, -1),
+    (builder) => builder.exactVisibleUnary(true, 1, 2, [0, 0]),
+    (builder) => builder.wcag22VisibleUnary(true, 1, 2, 9),
+    (builder) => builder.exactIntrinsicRelationHard(1, 2, []),
+    (builder) => builder.output(1, -1),
+  ];
+  const expected = new ProgramWireBuilderV1().source(11, [0x14, 0x14, 0x14]).finish();
+
+  for (const declare of invalidDeclarations) {
+    const builder = new ProgramWireBuilderV1().source(11, [0x14, 0x14, 0x14]);
+    assert.throws(
+      () => declare(builder),
+      (error) => error instanceof ProgramWireError && error.code === PROGRAM_WIRE_INVALID_DECLARATION,
+    );
+    assert.deepEqual(builder.finish(), expected);
+  }
 });
