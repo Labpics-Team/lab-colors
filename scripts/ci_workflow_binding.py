@@ -19,6 +19,8 @@ WORKFLOW_PATHS: Final = (
 )
 LOCAL_WORKER: Final = "./.github/workflows/ci-worker.yml"
 SHA_PATTERN: Final = re.compile(r"[0-9a-f]{40}")
+# Пробелы после ':' не превращают специальные YAML-префиксы в plain scalar.
+NONPLAIN_PREFIXES: Final = ("|", ">", "&", "*", "!", "'", '"')
 
 
 class BindingError(AssertionError):
@@ -45,7 +47,11 @@ def _parse_caller(source: str) -> None:
         raw_value = match[3]
         if raw_value == "":
             value = None
-        elif raw_value.startswith(" ") and raw_value[1:] and not raw_value[1:].startswith(("|", ">", "&", "*", "!", "'", '"')):
+        elif (
+            raw_value.startswith(" ")
+            and (scalar := raw_value.lstrip(" "))
+            and not scalar.startswith(NONPLAIN_PREFIXES)
+        ):
             value = raw_value[1:]
         else:
             raise BindingError(f"ci.yml line {line_number} uses unsupported YAML syntax")
@@ -73,7 +79,12 @@ def _parse_caller(source: str) -> None:
 
 def verify_ci_binding(repo: Path, environment: Mapping[str, str]) -> str:
     """Сопоставить байты caller'а и worker'а с реальным snapshot workflow."""
-    _parse_caller((repo / WORKFLOW_PATHS[0]).read_text(encoding="utf-8"))
+    try:
+        local_workflows = {path: (repo / path).read_bytes() for path in WORKFLOW_PATHS}
+        caller = local_workflows[WORKFLOW_PATHS[0]].decode("utf-8")
+    except (OSError, UnicodeDecodeError) as error:
+        raise BindingError("cannot read local workflow files as a valid CI binding") from error
+    _parse_caller(caller)
     if "GITHUB_ACTIONS" in environment:
         if environment["GITHUB_ACTIONS"] != "true":
             raise BindingError("GITHUB_ACTIONS must be exactly true in GitHub context")
@@ -102,7 +113,7 @@ def verify_ci_binding(repo: Path, environment: Mapping[str, str]) -> str:
         raise BindingError(f"workflow snapshot {revision} is not a commit")
     observed = git(("rev-parse", revision)).decode("ascii").strip()
     for path in WORKFLOW_PATHS:
-        if git(("show", f"{observed}:{path}")) != (repo / path).read_bytes():
+        if git(("show", f"{observed}:{path}")) != local_workflows[path]:
             raise BindingError(f"{path} bytes differ from workflow snapshot {observed}")
     return observed
 
@@ -197,6 +208,19 @@ class TestCiWorkflowBinding(unittest.TestCase):
                 with self.assertRaises(BindingError):
                     _parse_caller(updated)
 
+    def test_rejects_nonplain_prefixes_after_scalar_whitespace(self) -> None:
+        for spaces in (" ", "  ", "        ", " \t"):
+            for prefix in ("|", ">", "&hidden", "*hidden", "!tag", "'", '"'):
+                with self.subTest(spaces=spaces, prefix=prefix):
+                    source = (
+                        f"name:{spaces}{prefix}\n"
+                        "jobs:\n  worker:\n    name: CI\n    permissions:\n"
+                        "      contents: read\n    uses: ./.github/workflows/ci-worker.yml\n"
+                        f"# {prefix}\n"
+                    )
+                    with self.assertRaises(BindingError):
+                        _parse_caller(source)
+
     def test_rejects_missing_and_malformed_github_context(self) -> None:
         cases = {
             "missing": {**self.git_env, "GITHUB_ACTIONS": "true"},
@@ -227,6 +251,24 @@ class TestCiWorkflowBinding(unittest.TestCase):
                     )
                 (self.root / path).write_bytes(original)
 
+    def test_reports_missing_workflow_files_as_binding_errors(self) -> None:
+        for path in WORKFLOW_PATHS:
+            workflow = self.root / path
+            original = workflow.read_bytes()
+            with self.subTest(path=path):
+                workflow.unlink()
+                try:
+                    with self.assertRaises(BindingError):
+                        verify_ci_binding(self.root, self.git_env)
+                finally:
+                    workflow.write_bytes(original)
+
+    def test_reports_invalid_utf8_caller_as_binding_error(self) -> None:
+        (self.root / WORKFLOW_PATHS[0]).write_bytes(b"\xff")
+
+        with self.assertRaises(BindingError):
+            verify_ci_binding(self.root, self.git_env)
+
     def test_checkout_sha_may_differ_from_workflow_sha(self) -> None:
         tree = self._git_text(("rev-parse", f"{self.candidate}^{{tree}}"))
         merge = self._git_text(("commit-tree", tree, "-p", self.base, "-p", self.candidate, "-m", "merge"))
@@ -247,8 +289,8 @@ class TestCiWorkflowBinding(unittest.TestCase):
         tree = self._git_text(("rev-parse", f"{self.candidate}^{{tree}}"))
         squash = self._git_text(("commit-tree", tree, "-p", self.base, "-m", "squash"))
         self._git(("branch", "squashed", squash))
-        clone = self.root.with_name(f"{self.root.name}-clone")
-        try:
+        with tempfile.TemporaryDirectory(prefix="ci-binding-clone-") as clone_name:
+            clone = Path(clone_name)
             subprocess.run(
                 [
                     "git", "clone", "--quiet", "--no-local", "--single-branch",
@@ -268,6 +310,3 @@ class TestCiWorkflowBinding(unittest.TestCase):
             self.assertNotEqual(producer_lookup.returncode, 0)
             observed = verify_ci_binding(clone, self.git_env)
             self.assertEqual(observed, squash)
-        finally:
-            if clone.exists():
-                shutil.rmtree(clone)
