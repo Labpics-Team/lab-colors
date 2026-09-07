@@ -14,6 +14,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 
 REPO = Path(__file__).resolve().parents[1]
@@ -140,7 +141,10 @@ class PeerGateTest(unittest.TestCase):
 
 def browser_script(workflow: str | None = None) -> str:
     if workflow is None:
-        workflow = (REPO / ".github/workflows/ci-worker.yml").read_text(encoding="utf-8")
+        try:
+            workflow = (REPO / ".github/workflows/ci-worker.yml").read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as error:
+            raise AssertionError("cannot read browser workflow as UTF-8") from error
     anchor = "      - name: terminal Program in real browser\n"
     if workflow.count(anchor) != 1:
         raise AssertionError("browser step anchor must be unique")
@@ -159,6 +163,14 @@ def browser_script(workflow: str | None = None) -> str:
 
 
 class BrowserBinaryAdmissionTest(unittest.TestCase):
+    def test_script_read_errors_remain_assertions(self) -> None:
+        for error in (OSError("unreadable workflow"),
+                      UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid")):
+            with self.subTest(error=error), mock.patch.object(Path, "read_text", side_effect=error):
+                with self.assertRaises(AssertionError) as failure:
+                    browser_script()
+                self.assertIs(failure.exception.__cause__, error)
+
     def test_script_extraction_preserves_body_and_stops_at_next_step(self) -> None:
         source = ("      - name: terminal Program in real browser\n"
                   "        run: |\n          echo first\n\n          echo second\n"
