@@ -170,7 +170,7 @@ async function executeScenario(fault, mutate = (source) => source) {
   const snapshot = () => {
     const value = {
       __wbg_ptr: 1, state: "ready", outputCount: () => 1, outputSlot: () => 91,
-      outputRgb: () => [20, 20, 20], outputOpacity: () => 1,
+      outputRgb: () => [12, 34, 56], outputOpacity: () => 0.875,
       free() { this.__wbg_ptr = 0; events.push("snapshot"); },
     };
     handles.push(value);
@@ -256,7 +256,7 @@ test("serialized normal browser path keeps the computed-color and rejection proo
   // WebDriver может менять порядок ключей JSON-объектов, но не их значения.
   const webdriver = structuredClone(report);
   for (const key of ["snapshotBefore", "snapshotAfter", "snapshotAfterStale"]) {
-    webdriver[key] = { outputs: [{ opacity: 1, rgb: [20, 20, 20], slot: 91 }], state: "ready" };
+    webdriver[key] = { outputs: [{ opacity: 0.875, rgb: [12, 34, 56], slot: 91 }], state: "ready" };
   }
   assert.doesNotThrow(() => verifyBrowserConsumer(webdriver));
   assert.deepEqual(updates, [
@@ -273,6 +273,8 @@ for (const [name, before, after] of [
   ["typed error code loss", "code: error.code", "code: undefined"],
   ["typed error operation loss", "operation: error.operation", "operation: undefined"],
   ["error narrowing loss", "rejected: api.isProgramError(error)", "rejected: false"],
+  ["constant RGB substitution", "s.outputRgb(found)", "[20, 20, 20]"],
+  ["constant opacity substitution", "s.outputOpacity(found)", "1"],
   ["CSS RGB drift", "rgb(${r} ${g} ${b}", "rgb(${r + 1} ${g} ${b}"],
   ["CSS opacity drift", "${s.outputOpacity(found)}", "${s.outputOpacity(found) / 2}"],
   ["prior CSS materialization loss", "const afterStale =", 'element.style.removeProperty("--consumer-color"); const afterStale ='],

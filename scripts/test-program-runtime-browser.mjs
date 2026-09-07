@@ -205,12 +205,13 @@ async function browserConsumer(origin, fault) {
     const wire = await import(`${origin}/program-wire/abi-v1.js`);
     await api.init({ module_or_path: fetch(`${origin}/pkg/labcolors_bg.wasm`) });
     const builder = new wire.ProgramWireBuilderV1();
-    builder.source(11, [20, 20, 20]).fixedTarget(21, 11).surfaceInputPort(31)
-      .solidPaint(41, 21).inputSurface(51, 31)
-      .sourceOverOccurrence(61, 41, 51, 64, .2, wire.SURROUND_AVERAGE_V1)
+    // Неравные RGB-каналы и неединичная opacity отличают чтение snapshot от прежних констант.
+    builder.source(11, [12, 34, 56]).fixedTarget(21, 11).surfaceInputPort(31).opacityInput(32, 0.875)
+      .solidPaint(41, 21).opacityPaint(42, 41, 32).inputSurface(51, 31)
+      .sourceOverOccurrence(61, 42, 51, 64, .2, wire.SURROUND_AVERAGE_V1)
       .presentationRoot(71, 61).presentationTarget(71, 61)
       .wcag22VisibleUnary(true, 81, 61, wire.WCAG22_SC1411_UI_COMPONENT_OR_STATE_V1)
-      .exactVisibleUnary(false, 82, 61, [20, 20, 20]).output(91, 41);
+      .exactVisibleUnary(false, 82, 61, [20, 20, 20]).output(91, 42);
     runtime = api.compileProgramWire(builder.finish(), 1);
     resources.push({ name: "runtime", release() { runtime.free(); released(evidence, "runtime", fault); } });
     acquisition(evidence, "runtime", fault);
@@ -391,11 +392,11 @@ export async function runBrowserProof({ tarball, timeout, chrome, driver }, faul
 
 export function verifyBrowserConsumer(result) {
   const equal = isDeepStrictEqual;
-  const expectedSnapshot = { state: "ready", outputs: [{ slot: 91, rgb: [20, 20, 20], opacity: 1 }] };
+  const expectedSnapshot = { state: "ready", outputs: [{ slot: 91, rgb: [12, 34, 56], opacity: 0.875 }] };
   if (result.error || result.cleanupError
     || ![result.malformed, result.stale].every((error) => error?.rejected === true
       && error.code === "program_update" && error.operation === "updateObserved")
-    || ![result.before, result.after, result.afterStale].every((color) => equal(color, [20, 20, 20, 1]))
+    || ![result.before, result.after, result.afterStale].every((color) => equal(color, [12, 34, 56, 0.875]))
     || ![result.snapshotBefore, result.snapshotAfter, result.snapshotAfterStale].every((value) => equal(value, expectedSnapshot))
     || typeof result.cssBefore !== "string" || result.cssBefore === ""
     || result.cssAfter !== result.cssBefore || result.cssAfterStale !== result.cssBefore) {
