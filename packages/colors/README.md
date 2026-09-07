@@ -22,8 +22,9 @@ await init();
 // lives on a sub-path: it is an authoring aid, not part of the runtime
 // facade that ships with every consumer bundle.
 const programBytes = new ProgramWireBuilderV1()
-  .addSource(/* ... */)
-  .build();
+  .source(1, [20, 20, 20])
+  .fixedTarget(2, 1)
+  .finish();
 const runtime = compileProgramWire(programBytes, 1);
 const snapshot = runtime.updateObserved(
   1n,
