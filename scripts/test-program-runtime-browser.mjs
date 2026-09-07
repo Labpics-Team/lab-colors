@@ -5,6 +5,7 @@ import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { extname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { isDeepStrictEqual } from "node:util";
 
 import { observeChildErrors, releaseChild, waitForDriver } from "./browser-child-lifecycle.mjs";
 import { retainImportedRuntimeSnippets } from "./package-runtime-snippets.mjs";
@@ -157,6 +158,13 @@ async function listen(server) {
   return address.port;
 }
 
+export async function reserveEphemeralPort() {
+  const reservation = createServer();
+  const port = await listen(reservation);
+  await new Promise((accept, reject) => reservation.close((error) => error ? reject(error) : accept()));
+  return port;
+}
+
 async function request(base, path, method, body, signal) {
   const response = await fetch(`${base}${path}`, {
     method, body: body === undefined ? undefined : JSON.stringify(body),
@@ -206,7 +214,7 @@ async function browserConsumer(origin, fault) {
     runtime = api.compileProgramWire(builder.finish(), 1);
     resources.push({ name: "runtime", release() { runtime.free(); released(evidence, "runtime", fault); } });
     acquisition(evidence, "runtime", fault);
-    snapshot = runtime.updateObserved(1n, new Uint32Array([1]), new Uint8Array([255, 255, 255]), 1);
+    snapshot = runtime.updateObserved(2n, new Uint32Array([1]), new Uint8Array([255, 255, 255]), 1);
     resources.push({ name: "snapshot", release() { snapshot.free(); released(evidence, "snapshot", fault); } });
     acquisition(evidence, "snapshot", fault);
     const token = "consumer.foreground", slots = new Map([[token, 91]]);
@@ -234,17 +242,36 @@ async function browserConsumer(origin, fault) {
       if (!channels || channels.length < 3) throw new Error("computed color was not RGB");
       return [channels[0], channels[1], channels[2], channels[3] ?? 1];
     };
+    const readSnapshot = () => ({
+      state: snapshot.state,
+      outputs: Array.from({ length: snapshot.outputCount() }, (_, i) => ({
+        slot: snapshot.outputSlot(i), rgb: Array.from(snapshot.outputRgb(i)), opacity: snapshot.outputOpacity(i),
+      })),
+    });
+    const rejectUpdate = (revision, ids, surfaces) => {
+      try {
+        const unexpected = runtime.updateObserved(revision, ids, surfaces, 1);
+        unexpected.free();
+        return { rejected: false };
+      } catch (error) {
+        return { rejected: api.isProgramError(error), code: error.code, operation: error.operation };
+      }
+    };
     materialize(snapshot);
     const before = rgba(getComputedStyle(element).color);
-    let rejected = false;
-    try {
-      const unexpected = runtime.updateObserved(2n, new Uint32Array([]), new Uint8Array([]), 1);
-      unexpected.free();
-    } catch (error) {
-      rejected = api.isProgramError(error) && error.code === "program_update" && error.operation === "updateObserved";
-    }
+    const cssBefore = element.style.getPropertyValue("--consumer-color");
+    const snapshotBefore = readSnapshot();
+    const malformed = rejectUpdate(2n, new Uint32Array([]), new Uint8Array([]));
     const after = rgba(getComputedStyle(element).color);
-    result = { before, after, rejected, oracle: [20, 20, 20, 1], slot: snapshot.outputSlot(0), state: snapshot.state };
+    const cssAfter = element.style.getPropertyValue("--consumer-color");
+    const snapshotAfter = readSnapshot();
+    // Revision ниже принятой при валидном observation проверяет stale, не malformed input.
+    const stale = rejectUpdate(1n, new Uint32Array([1]), new Uint8Array([255, 255, 255]));
+    const afterStale = rgba(getComputedStyle(element).color);
+    const cssAfterStale = element.style.getPropertyValue("--consumer-color");
+    const snapshotAfterStale = readSnapshot();
+    result = { before, after, afterStale, cssBefore, cssAfter, cssAfterStale,
+      snapshotBefore, snapshotAfter, snapshotAfterStale, malformed, stale };
   } catch (error) {
     primary = error;
   }
@@ -270,7 +297,7 @@ export async function runBrowserProof({ tarball, timeout, chrome, driver }, faul
     acquisition(evidence, "temp-install", fault);
     await writeFile(join(root, "package.json"), '{"private":true,"type":"module"}\n');
     npmInstall(tarball, root, timeout);
-    const driverPort = 9515;
+    const driverPort = await reserveEphemeralPort();
     child = spawn(driver, [`--port=${driverPort}`], { env: process.env, stdio: "ignore", windowsHide: true });
     childErrors = observeChildErrors(child);
     resources.push({
@@ -362,6 +389,20 @@ export async function runBrowserProof({ tarball, timeout, chrome, driver }, faul
   return { ...result, ...outcome, ...evidence };
 }
 
+export function verifyBrowserConsumer(result) {
+  const equal = isDeepStrictEqual;
+  const expectedSnapshot = { state: "ready", outputs: [{ slot: 91, rgb: [20, 20, 20], opacity: 1 }] };
+  if (result.error || result.cleanupError
+    || ![result.malformed, result.stale].every((error) => error?.rejected === true
+      && error.code === "program_update" && error.operation === "updateObserved")
+    || ![result.before, result.after, result.afterStale].every((color) => equal(color, [20, 20, 20, 1]))
+    || ![result.snapshotBefore, result.snapshotAfter, result.snapshotAfterStale].every((value) => equal(value, expectedSnapshot))
+    || typeof result.cssBefore !== "string" || result.cssBefore === ""
+    || result.cssAfter !== result.cssBefore || result.cssAfterStale !== result.cssBefore) {
+    fail(`browser consumer result drifted: ${JSON.stringify(result)}`);
+  }
+}
+
 async function main() {
   const { tarball, digest } = parseArgs();
   const timeout = positiveIntegerEnv("LAB_COLORS_BROWSER_PROOF_TIMEOUT_MS");
@@ -370,14 +411,13 @@ async function main() {
   if (actualDigest !== digest) fail(`tarball digest mismatch: ${actualDigest}`);
   const run = (fault) => runBrowserProof({ tarball, timeout, chrome, driver }, fault);
   const result = await run();
-  if (result.error || result.cleanupError || result.state !== "ready" || result.slot !== 91 || !result.rejected
-    || JSON.stringify(result.before) !== JSON.stringify(result.oracle)
-    || JSON.stringify(result.after) !== JSON.stringify(result.oracle)
-    || JSON.stringify(result.acquired) !== JSON.stringify(RESOURCE_ORDER)
+  verifyBrowserConsumer(result);
+  if (JSON.stringify(result.acquired) !== JSON.stringify(RESOURCE_ORDER)
     || JSON.stringify(result.released) !== JSON.stringify(RESOURCE_ORDER.toReversed())
     || RESOURCE_ORDER.some((name) => result.readback[name] !== true)) {
     fail(`browser consumer result drifted: ${JSON.stringify(result)}`);
   }
+  console.log(`LAB_COLORS_PROGRAM_BROWSER_RESULT ${JSON.stringify(result)}`);
   const reports = await verifyCleanupFaultMatrix(run);
   for (const report of reports) console.log(`LAB_COLORS_PROGRAM_BROWSER_FAULT ${JSON.stringify(report)}`);
   console.log(`LAB_COLORS_PROGRAM_BROWSER_PASS sha256=${digest}`);

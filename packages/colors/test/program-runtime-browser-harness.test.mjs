@@ -20,6 +20,8 @@ import {
   cleanupResources,
   packedBrowserFiles,
   runBrowserProof,
+  reserveEphemeralPort,
+  verifyBrowserConsumer,
   verifyCleanupFaultMatrix,
 } from "../../../scripts/test-program-runtime-browser.mjs";
 import { browserProofInvocation } from "../../../scripts/verify-package-release.mjs";
@@ -129,6 +131,32 @@ test("driver readiness is bounded only by the caller-owned signal", () => {
   assert.doesNotMatch(source, /Date\.now\(\) \+ 20_000|did not become ready/u);
 });
 
+test("driver reservation avoids occupied 9515 and releases its port before spawn", async () => {
+  const occupied = createServer();
+  await new Promise((resolve, reject) => {
+    occupied.once("error", reject);
+    occupied.listen(9515, "127.0.0.1", resolve);
+  }).catch((error) => {
+    if (error.code !== "EADDRINUSE") throw error;
+  });
+  const ownsListener = occupied.listening;
+  const probe = createServer();
+  try {
+    const port = await reserveEphemeralPort();
+    assert.notEqual(port, 9515);
+    await new Promise((resolve, reject) => {
+      probe.once("error", reject);
+      probe.listen(port, "127.0.0.1", resolve);
+    });
+    assert.equal(occupied.listening, ownsListener);
+    const source = readFileSync(new URL("../../../scripts/test-program-runtime-browser.mjs", import.meta.url), "utf8");
+    assert.match(source, /const driverPort = await reserveEphemeralPort\(\)/u);
+  } finally {
+    await Promise.all([occupied, probe].filter((server) => server.listening).map((server) =>
+      new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()))));
+  }
+});
+
 test("browser proof grants real-process termination a 2000 ms budget", () => {
   const source = readFileSync(
     new URL("../../../scripts/test-program-runtime-browser.mjs", import.meta.url),
@@ -138,7 +166,7 @@ test("browser proof grants real-process termination a 2000 ms budget", () => {
 });
 
 async function executeScenario(fault, mutate = (source) => source) {
-  const events = [], handles = [], elements = [];
+  const events = [], handles = [], elements = [], updates = [];
   const snapshot = () => {
     const value = {
       __wbg_ptr: 1, state: "ready", outputCount: () => 1, outputSlot: () => 91,
@@ -151,10 +179,15 @@ async function executeScenario(fault, mutate = (source) => source) {
   const api = {
     init: async () => {}, isProgramError: (error) => error.code === "program_update",
     compileProgramWire() {
+      let head = 0n;
       const value = {
         __wbg_ptr: 1,
-        updateObserved(revision) {
-          if (revision === 2n) throw Object.assign(new Error("rejected"), { code: "program_update", operation: "updateObserved" });
+        updateObserved(revision, ids, surfaces, surfaceCount) {
+          updates.push({ revision, ids: Array.from(ids), surfaces: Array.from(surfaces), surfaceCount });
+          if (revision < head || ids.length !== 1 || surfaces.length !== 3 || surfaceCount !== 1) {
+            throw Object.assign(new Error("rejected"), { code: "program_update", operation: "updateObserved" });
+          }
+          head = revision;
           return snapshot();
         },
         free() { this.__wbg_ptr = 0; events.push("runtime"); },
@@ -188,7 +221,7 @@ async function executeScenario(fault, mutate = (source) => source) {
   const envelope = await new Promise((done) => execute(load, document,
     (element) => ({ color: element.style.getPropertyValue("--consumer-color") }), () => undefined, done));
   assert.equal(envelope.error, undefined, "proof errors must not collide with WebDriver value.error");
-  return { report: envelope.proof, events, handles, elements };
+  return { report: envelope.proof, events, handles, elements, updates };
 }
 
 function assertScenario({ report, events, handles, elements }, after, cleanup) {
@@ -218,16 +251,47 @@ for (const after of ["runtime", "snapshot", "host"]) {
 }
 
 test("serialized normal browser path keeps the computed-color and rejection proof", async () => {
-  const { report, events } = await executeScenario();
-  assert.equal(report.error, undefined);
-  assert.equal(report.cleanupError, undefined);
-  assert.equal(report.state, "ready");
-  assert.equal(report.slot, 91);
-  assert.equal(report.rejected, true);
-  assert.deepEqual(report.before, [20, 20, 20, 1]);
-  assert.deepEqual(report.after, report.before);
+  const { report, events, updates } = await executeScenario();
+  assert.doesNotThrow(() => verifyBrowserConsumer(report));
+  // WebDriver может менять порядок ключей JSON-объектов, но не их значения.
+  const webdriver = structuredClone(report);
+  for (const key of ["snapshotBefore", "snapshotAfter", "snapshotAfterStale"]) {
+    webdriver[key] = { outputs: [{ opacity: 1, rgb: [20, 20, 20], slot: 91 }], state: "ready" };
+  }
+  assert.doesNotThrow(() => verifyBrowserConsumer(webdriver));
+  assert.deepEqual(updates, [
+    { revision: 2n, ids: [1], surfaces: [255, 255, 255], surfaceCount: 1 },
+    { revision: 2n, ids: [], surfaces: [], surfaceCount: 1 },
+    { revision: 1n, ids: [1], surfaces: [255, 255, 255], surfaceCount: 1 },
+  ]);
   assert.deepEqual(events, ["host", "snapshot", "runtime"]);
 });
+
+for (const [name, before, after] of [
+  ["wrong token slot", "new Map([[token, 91]])", "new Map([[token, 92]])"],
+  ["stale revision bypass", "rejectUpdate(1n,", "rejectUpdate(3n,"],
+  ["typed error code loss", "code: error.code", "code: undefined"],
+  ["typed error operation loss", "operation: error.operation", "operation: undefined"],
+  ["error narrowing loss", "rejected: api.isProgramError(error)", "rejected: false"],
+  ["CSS RGB drift", "rgb(${r} ${g} ${b}", "rgb(${r + 1} ${g} ${b}"],
+  ["CSS opacity drift", "${s.outputOpacity(found)}", "${s.outputOpacity(found) / 2}"],
+  ["prior CSS materialization loss", "const afterStale =", 'element.style.removeProperty("--consumer-color"); const afterStale ='],
+  ...[
+    ["state", 'snapshot.state = "stale";'],
+    ["slot", "snapshot.outputSlot = () => 92;"],
+    ["RGB", "snapshot.outputRgb = () => [21, 20, 20];"],
+    ["opacity", "snapshot.outputOpacity = () => 0.5;"],
+    ["count", "snapshot.outputCount = () => 0;"],
+  ].map(([field, damage]) => [`prior snapshot ${field} drift`, "const snapshotAfterStale =", `${damage} const snapshotAfterStale =`]),
+]) {
+  test(`production consumer oracle kills ${name} sabotage`, async () => {
+    const { report } = await executeScenario(undefined, (source) => {
+      assert.ok(source.includes(before), "sabotage must reach the serialized execution path");
+      return source.replace(before, after);
+    });
+    assert.throws(() => verifyBrowserConsumer(report), /browser consumer result drifted/u);
+  });
+}
 
 for (const [name, before, after] of [
   ["missing release", "snapshot.free();", "void snapshot;"],
