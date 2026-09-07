@@ -1904,6 +1904,12 @@ class MutationTruthTest(unittest.TestCase):
             ),
             1,
         )
+        self.assertIn("          npm test\n", wasm)
+        self.assertIn("node scripts/test-program-runtime-browser.mjs", wasm)
+        self.assertNotIn(
+            "node --test packages/colors/test/program-runtime-browser-harness.test.mjs",
+            wasm,
+        )
         self.assertNotIn(
             "wasm-pack build crates/labcolors-wasm --release",
             wasm,
@@ -2012,6 +2018,15 @@ class MutationTruthTest(unittest.TestCase):
         self.assertIn("references.length !== 1", workflow)
         self.assertIn("reference?.path !== spec.worker.path", workflow)
         self.assertIn("reference?.sha !== spec.worker.sha", workflow)
+        self.assertIn(
+            '"pkg/snippets/labcolors-wasm-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]/inline0.js",',
+            workflow,
+        )
+        self.assertIn(
+            "/^pkg\\/snippets\\/labcolors-wasm-[0-9a-f]{16}\\/inline0\\.js$/u;",
+            workflow,
+        )
+        self.assertIn("expected exactly 18 admitted tar members", workflow)
 
         def canonical_worker_name(display_name: str) -> str:
             return display_name.rsplit(" / ", 1)[-1]
