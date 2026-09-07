@@ -106,14 +106,14 @@ function candidateList(candidates, what) {
   if (!Array.isArray(candidates) || candidates.length === 0) {
     invalid(`${what} must be a non-empty array`);
   }
-  return candidates;
+  return Array.from(candidates);
 }
 
 function rgbBytes(rgb, what) {
   if (!Array.isArray(rgb) || rgb.length !== 3) {
     invalid(`${what} must be an [r, g, b] triple`);
   }
-  return rgb.map((channel, index) => byteValue(channel, `${what}[${index}]`));
+  return Array.from(rgb, (channel, index) => byteValue(channel, `${what}[${index}]`));
 }
 
 /** Растущий LE-байтовый буфер: те же представления, что у Rust-стороны. */
@@ -228,7 +228,7 @@ export class ProgramWireBuilderV1 {
     if (!Array.isArray(releaseBytes) || releaseBytes.length !== 32) {
       invalid("family release must be 32 bytes");
     }
-    const checkedRelease = releaseBytes.map((byte) => byteValue(byte, "family release byte"));
+    const checkedRelease = Array.from(releaseBytes, (byte) => byteValue(byte, "family release byte"));
     const sink = this.entry("families");
     sink.u32(checkedId);
     for (const byte of checkedRelease) sink.u8(byte);
@@ -328,6 +328,7 @@ export class ProgramWireBuilderV1 {
   }
 
   constraintEntry(hard) {
+    if (typeof hard !== "boolean") invalid("constraint hard flag must be a boolean");
     return this.entry(hard ? "hardConstraints" : "reportConstraints");
   }
 

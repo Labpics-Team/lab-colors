@@ -14,6 +14,7 @@ const PACKAGE_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 
 import {
   PROGRAM_WIRE_TOO_MANY_ENTRIES,
+  PROGRAM_WIRE_INVALID_DECLARATION,
   ProgramWireBuilderV1,
   ProgramWireError,
   SURROUND_AVERAGE_V1,
@@ -191,7 +192,35 @@ test("invalid declarations are typed refusals, not coerced bytes", () => {
 });
 
 test("every refused declaration leaves the builder byte-stream untouched", () => {
+  const sparseVariants = (values) => [
+    Array(values.length),
+    ...values.map((_, index) => {
+      const sparse = [...values];
+      delete sparse[index];
+      return sparse;
+    }),
+  ];
   const invalidDeclarations = [
+    ...sparseVariants([0, 0, 0]).flatMap((rgb) => [
+      (builder) => builder.source(1, rgb),
+      (builder) => builder.finiteTarget(1, [{ id: 1, rgb, opacity: 1 }]),
+      (builder) => builder.exactVisibleUnary(true, 1, 2, rgb),
+    ]),
+    ...sparseVariants([
+      { id: 1, rgb: [0, 0, 0], opacity: 1 },
+      { id: 2, rgb: [1, 2, 3], opacity: 0.5 },
+    ]).map((candidates) => (builder) => builder.finiteTarget(1, candidates)),
+    ...sparseVariants(Array(32).fill(0)).map(
+      (release) => (builder) => builder.family(1, release),
+    ),
+    ...sparseVariants([1, 2]).map(
+      (candidates) => (builder) => builder.exactIntrinsicRelationHard(1, 2, candidates),
+    ),
+    ...[undefined, 0, "", null, 1, "false", Number.NaN, {}, [], Object.create(null), Symbol("hard")]
+      .flatMap((hard) => [
+        (builder) => builder.exactVisibleUnary(hard, 1, 2, [0, 0, 0]),
+        (builder) => builder.wcag22VisibleUnary(hard, 1, 2, 1),
+      ]),
     (builder) => builder.source(-1, [0, 0, 0]),
     (builder) => builder.source(1, [0, 0]),
     (builder) => builder.fixedTarget(1, -1),
@@ -218,7 +247,10 @@ test("every refused declaration leaves the builder byte-stream untouched", () =>
 
   for (const declare of invalidDeclarations) {
     const builder = new ProgramWireBuilderV1().source(11, [0x14, 0x14, 0x14]);
-    assert.throws(() => declare(builder), (error) => error instanceof ProgramWireError);
+    assert.throws(
+      () => declare(builder),
+      (error) => error instanceof ProgramWireError && error.code === PROGRAM_WIRE_INVALID_DECLARATION,
+    );
     assert.deepEqual(builder.finish(), expected);
   }
 });
