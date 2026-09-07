@@ -602,7 +602,10 @@ version = "7.7.7"
   );
 });
 
-test("npm 11.9.0 selector includes lowercase hex and excludes same-length hostile paths", () => {
+test("npm 11.9.0 packs canonical hex while the release guard rejects hostile snippet paths", async () => {
+  const { retainImportedRuntimeSnippets, runtimeSnippetPaths } = await import(
+    pathToFileURL(join(root, "scripts", "package-runtime-snippets.mjs"))
+  );
   const packageJson = JSON.parse(readFileSync(join(root, "packages", "colors", "package.json"), "utf8"));
   const selector = packageJson.files.find((path) => path.startsWith("pkg/snippets/"));
   assert.equal(typeof selector, "string");
@@ -647,13 +650,25 @@ test("npm 11.9.0 selector includes lowercase hex and excludes same-length hostil
       true,
     );
     assert.equal(
-      packedPaths.includes("pkg/snippets/labcolors-wasm-0123456789abcdeF/inline0.js"),
-      false,
-    );
-    assert.equal(
       packedPaths.includes("pkg/snippets/labcolors-wasm-0123456789abcdeg/inline0.js"),
       false,
     );
+    // npm glob не гарантирует регистр; импорт и содержимое каталога проверяет release guard.
+    const canonicalImport = 'import "./snippets/labcolors-wasm-0123456789abcdef/inline0.js";';
+    for (const directory of ["labcolors-wasm-0123456789abcdeF", "labcolors-wasm-0123456789abcdeg"]) {
+      await assert.rejects(
+        runtimeSnippetPaths(`import "./snippets/${directory}/inline0.js";`),
+        /unsupported relative module specifier/u,
+      );
+      rmSync(join(generatedPackage, "snippets"), { recursive: true });
+      const snippet = join(generatedPackage, "snippets", directory);
+      mkdirSync(snippet, { recursive: true });
+      writeFileSync(join(snippet, "inline0.js"), "export const fixture = true;\n");
+      await assert.rejects(
+        retainImportedRuntimeSnippets(fixture, canonicalImport),
+        /unexpected generated snippet entry/u,
+      );
+    }
   } finally {
     rmSync(fixture, { recursive: true, force: true });
   }
