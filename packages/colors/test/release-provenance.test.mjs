@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import {
   copyFileSync,
   cpSync,
@@ -38,6 +38,61 @@ const PREPACK_FIXTURE_SCRIPT_FILES = Object.freeze([
   "release-evidence.mjs",
   "package-runtime-snippets.mjs",
 ]);
+
+test("package-smoke reaches tarball installation without dev dependencies while snippet parsing fails closed", () => {
+  const fixture = mkdtempSync(join(tmpdir(), "labcolors-smoke-no-devdeps-"));
+  try {
+    const scripts = join(fixture, "scripts");
+    mkdirSync(scripts);
+    const scriptFiles = [
+      ...PREPACK_FIXTURE_SCRIPT_FILES,
+      "verify-package-release.mjs",
+      "point-support-release-contract.cjs",
+    ];
+    assertPrepackFixtureScriptClosure(scriptFiles);
+    for (const file of scriptFiles) {
+      copyFileSync(join(root, "scripts", file), join(scripts, file));
+    }
+    assert.equal(existsSync(join(fixture, "node_modules")), false);
+    assert.equal(existsSync(join(fixture, "packages", "colors", "node_modules")), false);
+    const options = {
+      cwd: fixture,
+      encoding: "utf8",
+      timeout: 30_000,
+      env: { ...process.env, NODE_PATH: "", NODE_OPTIONS: "" },
+    };
+    // Отдельный процесс исключает кеш импортов и глобальные пути зависимостей.
+    const witness = spawnSync(process.execPath, ["--no-global-search-paths", "--input-type=module", "-e", `
+      import assert from "node:assert/strict";
+      import { createRequire } from "node:module";
+      const require = createRequire(new URL("./packages/colors/package.json", import.meta.url));
+      assert.throws(() => require.resolve("es-module-lexer"), { code: "MODULE_NOT_FOUND" });
+      const { runtimeSnippetPaths } = await import("./scripts/package-runtime-snippets.mjs");
+      await assert.rejects(runtimeSnippetPaths("export const local = true;"), {
+        code: "MODULE_NOT_FOUND",
+        message: /es-module-lexer/u,
+      });
+    `], options);
+    assert.equal(witness.error, undefined);
+    assert.equal(witness.status, 0, witness.stderr);
+
+    const smoke = spawnSync(process.execPath, [
+      "--no-global-search-paths",
+      join(scripts, "verify-package-release.mjs"),
+      "--package-smoke",
+      join(fixture, "missing-package.tgz"),
+    ], options);
+    assert.equal(smoke.error, undefined);
+    assert.equal(smoke.status, 1);
+    assert.doesNotMatch(smoke.stderr, /es-module-lexer/u);
+    // Несуществующий tarball доказывает вход в реальный smoke, не только import.
+    assert.match(smoke.stderr, /install --offline --ignore-scripts/u);
+    assert.match(smoke.stderr, /ENOENT/u);
+    assert.match(smoke.stderr, /missing-package\.tgz/u);
+  } finally {
+    rmSync(fixture, { recursive: true, force: true });
+  }
+});
 
 test("generated runtime snippet closure is exact and rejects arbitrary paths", async () => {
   const { retainImportedRuntimeSnippets, runtimeSnippetPaths } = await import(

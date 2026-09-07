@@ -4,7 +4,6 @@ import { createRequire } from "node:module";
 import { basename, dirname, posix, relative, resolve, sep } from "node:path";
 
 const packageRequire = createRequire(new URL("../packages/colors/package.json", import.meta.url));
-const { init, parse } = packageRequire("es-module-lexer");
 
 const SNIPPET_PATH_PATTERN = /^snippets\/labcolors-wasm-[0-9a-f]{16}\/inline0\.js$/u;
 export const MAX_SNIPPET_DIRECTORIES = 4;
@@ -34,6 +33,7 @@ function sameFile(left, right) {
 }
 
 async function moduleSpecifiers(source) {
+  const { init, parse } = packageRequire("es-module-lexer");
   await init;
   let imports;
   try {
