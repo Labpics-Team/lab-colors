@@ -15,7 +15,7 @@ test("README describes the terminal Program runtime, not recipe roles", () => {
   }
 });
 
-test("README first route emits the certified output through the public entrypoints", () => {
+test("README first route emits the session-verified output through the public entrypoints", () => {
   const example = read("README.md").match(/```ts\r?\n([\s\S]*?)\r?\n```/u)?.[1];
   assert.equal(typeof example, "string");
   const result = execFileSync(process.execPath, ["--input-type=module"], {
