@@ -138,14 +138,38 @@ class PeerGateTest(unittest.TestCase):
         verify_ci_binding(REPO, os.environ)
 
 
-def browser_script() -> str:
-    workflow = (REPO / ".github/workflows/ci-worker.yml").read_text(encoding="utf-8")
-    step = workflow.split("      - name: terminal Program in real browser\n", 1)[1]
-    body = step.split("        run: |\n", 1)[1].split("\n#", 1)[0]
-    return "\n".join(line[10:] for line in body.splitlines() if line.strip()) + "\n"
+def browser_script(workflow: str | None = None) -> str:
+    if workflow is None:
+        workflow = (REPO / ".github/workflows/ci-worker.yml").read_text(encoding="utf-8")
+    anchor = "      - name: terminal Program in real browser\n"
+    if workflow.count(anchor) != 1:
+        raise AssertionError("browser step anchor must be unique")
+    step = workflow.split(anchor, 1)[1].split("\n      - ", 1)[0]
+    run = "        run: |\n"
+    if step.count(run) != 1:
+        raise AssertionError("browser step must have one literal run block")
+    lines: list[str] = []
+    for line in step.split(run, 1)[1].splitlines():
+        if line.strip() and not line.startswith(" " * 10):
+            break
+        lines.append(line[10:])
+    while lines and not lines[-1]:
+        lines.pop()
+    return "\n".join(lines) + "\n"
 
 
 class BrowserBinaryAdmissionTest(unittest.TestCase):
+    def test_script_extraction_preserves_body_and_stops_at_next_step(self) -> None:
+        source = ("      - name: terminal Program in real browser\n"
+                  "        run: |\n          echo first\n\n          echo second\n"
+                  "      - name: next\n        run: |\n          echo foreign\n")
+        self.assertEqual(browser_script(source), "echo first\n\necho second\n")
+        for mutant in (source.replace("terminal Program in real browser", "renamed"),
+                       source.replace("        run: |\n", "        run: >\n", 1),
+                       source + source):
+            with self.subTest(mutant=mutant), self.assertRaises(AssertionError):
+                browser_script(mutant)
+
     def exercise(self, *, script: str | None = None, wasm_exit: int = 0,
                  missing_browser: bool = False, capabilities: dict | None = None) -> dict:
         node = shutil.which("node")
