@@ -4,9 +4,11 @@ import {
   copyFileSync,
   cpSync,
   existsSync,
+  linkSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   renameSync,
   rmSync,
   symlinkSync,
@@ -263,30 +265,85 @@ test("generated runtime snippet closure tolerates a supported import.meta expres
   }
 });
 
-test("generated runtime snippet closure rejects injected descriptor and path identity mismatch", async () => {
+test("generated runtime snippet closure distinguishes identity changes before and during read", async () => {
   const { retainImportedRuntimeSnippets } = await import(
     pathToFileURL(join(root, "scripts", "package-runtime-snippets.mjs"))
   );
-  const fixture = mkdtempSync(join(tmpdir(), "labcolors-runtime-identity-"));
+  const runtime = 'import "./snippets/labcolors-wasm-0123456789abcdef/inline0.js";';
+
+  for (const phase of ["before", "during"]) {
+    const fixture = realpathSync(mkdtempSync(join(tmpdir(), `labcolors-runtime-identity-${phase}-`)));
+    try {
+      const generated = join(fixture, "pkg", "snippets", "labcolors-wasm-0123456789abcdef");
+      mkdirSync(generated, { recursive: true });
+      const snippet = join(generated, "inline0.js");
+      const replacement = join(fixture, "replacement.js");
+      writeFileSync(snippet, "export const original = true;\n");
+      writeFileSync(replacement, "export const replacement = true;\n");
+      let swapped = false;
+      const io = {
+        lstat: fsPromises.lstat,
+        open: async (path, flags) => {
+          const handle = await fsPromises.open(path, flags);
+          const swap = () => {
+            if (swapped || path !== snippet) return;
+            swapped = true;
+            rmSync(snippet);
+            copyFileSync(replacement, snippet);
+          };
+          if (phase === "before") swap();
+          return phase === "during"
+            ? {
+                close: handle.close.bind(handle),
+                read: async (...args) => {
+                  const result = await handle.read(...args);
+                  swap();
+                  return result;
+                },
+                stat: handle.stat.bind(handle),
+              }
+            : handle;
+        },
+        opendir: fsPromises.opendir,
+        realpath: fsPromises.realpath,
+      };
+      await assert.rejects(
+        retainImportedRuntimeSnippets(fixture, runtime, io),
+        new RegExp(`identity changed ${phase} read`, "u"),
+      );
+      assert.equal(swapped, true, `anti-vacuum: the ${phase}-read identity swap was not injected`);
+    } finally {
+      rmSync(fixture, { recursive: true, force: true });
+    }
+  }
+});
+
+test("generated runtime snippet identity compares native nanosecond timestamps", async () => {
+  const { retainImportedRuntimeSnippets } = await import(
+    pathToFileURL(join(root, "scripts", "package-runtime-snippets.mjs"))
+  );
+  const fixture = realpathSync(mkdtempSync(join(tmpdir(), "labcolors-runtime-nanoseconds-")));
   try {
     const generated = join(fixture, "pkg", "snippets", "labcolors-wasm-0123456789abcdef");
     mkdirSync(generated, { recursive: true });
     const snippet = join(generated, "inline0.js");
-    const replacement = join(fixture, "replacement.js");
     writeFileSync(snippet, "export const original = true;\n");
-    writeFileSync(replacement, "export const replacement = true;\n");
-    let swapped = false;
+    let snippetStats = 0;
+    let injected = false;
     const io = {
-      lstat: fsPromises.lstat,
-      open: async (path, flags) => {
-        const handle = await fsPromises.open(path, flags);
-        if (!swapped && path === snippet) {
-          swapped = true;
-          rmSync(snippet);
-          copyFileSync(replacement, snippet);
-        }
-        return handle;
+      lstat: async (path, options) => {
+        const metadata = await fsPromises.lstat(path, options);
+        if (path !== snippet || ++snippetStats === 1) return metadata;
+        injected = true;
+        return new Proxy(metadata, {
+          get(target, property) {
+            if (property === "ctimeNs") return target.ctimeNs + 1n;
+            const value = Reflect.get(target, property);
+            return typeof value === "function" ? value.bind(target) : value;
+          },
+        });
       },
+      open: fsPromises.open,
       opendir: fsPromises.opendir,
       realpath: fsPromises.realpath,
     };
@@ -298,7 +355,59 @@ test("generated runtime snippet closure rejects injected descriptor and path ide
       ),
       /identity changed during read/u,
     );
-    assert.equal(swapped, true, "anti-vacuum: the identity swap was not injected");
+    assert.equal(injected, true, "anti-vacuum: the nanosecond-only change was not injected");
+  } finally {
+    rmSync(fixture, { recursive: true, force: true });
+  }
+});
+
+test("generated runtime snippet closure accepts symlinked package parents", async (context) => {
+  if (process.platform === "win32") {
+    context.skip("directory symlink setup is privilege-dependent on Windows");
+    return;
+  }
+  const { retainImportedRuntimeSnippets } = await import(
+    pathToFileURL(join(root, "scripts", "package-runtime-snippets.mjs"))
+  );
+  const fixture = mkdtempSync(join(tmpdir(), "labcolors-runtime-parent-link-"));
+  try {
+    const canonicalParent = join(fixture, "canonical");
+    const linkedParent = join(fixture, "linked");
+    const packageDirectory = join(canonicalParent, "package");
+    const generated = join(packageDirectory, "pkg", "snippets", "labcolors-wasm-0123456789abcdef");
+    mkdirSync(generated, { recursive: true });
+    writeFileSync(join(generated, "inline0.js"), "export const original = true;\n");
+    symlinkSync(canonicalParent, linkedParent, "dir");
+
+    assert.deepEqual(
+      await retainImportedRuntimeSnippets(
+        join(linkedParent, "package"),
+        'import "./snippets/labcolors-wasm-0123456789abcdef/inline0.js";',
+      ),
+      ["pkg/snippets/labcolors-wasm-0123456789abcdef/inline0.js"],
+    );
+    for (const [directory, expected] of [
+      [packageDirectory, /package directory is not canonical/u],
+      [join(packageDirectory, "pkg"), /pkg is not a canonical directory/u],
+      [join(packageDirectory, "pkg", "snippets"), /snippets root is not a canonical directory/u],
+      [generated, /unexpected generated snippet entry/u],
+    ]) {
+      const displaced = join(fixture, "displaced");
+      renameSync(directory, displaced);
+      try {
+        symlinkSync(displaced, directory, "dir");
+        await assert.rejects(
+          retainImportedRuntimeSnippets(
+            join(linkedParent, "package"),
+            'import "./snippets/labcolors-wasm-0123456789abcdef/inline0.js";',
+          ),
+          expected,
+        );
+      } finally {
+        rmSync(directory);
+        renameSync(displaced, directory);
+      }
+    }
   } finally {
     rmSync(fixture, { recursive: true, force: true });
   }
@@ -333,7 +442,7 @@ test("generated runtime snippet closure enforces entry-count and total-byte caps
     rmSync(entriesFixture, { recursive: true, force: true });
   }
 
-  const filesFixture = mkdtempSync(join(tmpdir(), "labcolors-runtime-files-"));
+  const filesFixture = realpathSync(mkdtempSync(join(tmpdir(), "labcolors-runtime-files-")));
   try {
     const directory = join(filesFixture, "pkg", "snippets", "labcolors-wasm-0000000000000000");
     mkdirSync(directory, { recursive: true });
@@ -404,6 +513,10 @@ test("generated runtime snippet closure rejects oversized and linked artifacts",
     rmSync(snippet);
     const target = join(fixture, "outside.js");
     writeFileSync(target, "export const linked = true;\n");
+    linkSync(target, snippet);
+    await assert.rejects(retainImportedRuntimeSnippets(fixture, runtime), /identity changed before read/u);
+    assert.equal(readFileSync(target, "utf8"), "export const linked = true;\n");
+    rmSync(snippet);
     try {
       symlinkSync(target, snippet, "file");
     } catch (error) {

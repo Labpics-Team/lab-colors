@@ -1,7 +1,7 @@
 import { constants } from "node:fs";
 import { lstat, open, opendir, realpath } from "node:fs/promises";
 import { createRequire } from "node:module";
-import { posix, relative, resolve, sep } from "node:path";
+import { basename, dirname, posix, relative, resolve, sep } from "node:path";
 
 const packageRequire = createRequire(new URL("../packages/colors/package.json", import.meta.url));
 const { init, parse } = packageRequire("es-module-lexer");
@@ -25,9 +25,11 @@ function sameFile(left, right) {
   return (
     left.dev === right.dev &&
     left.ino === right.ino &&
+    left.nlink === 1n &&
+    right.nlink === 1n &&
     left.size === right.size &&
-    left.mtimeMs === right.mtimeMs &&
-    left.ctimeMs === right.ctimeMs
+    left.mtimeNs === right.mtimeNs &&
+    left.ctimeNs === right.ctimeNs
   );
 }
 
@@ -62,7 +64,7 @@ export async function runtimeSnippetPaths(runtimeSource) {
 }
 
 async function canonicalDirectory(path, parent, label, io) {
-  const metadata = await io.lstat(path);
+  const metadata = await io.lstat(path, { bigint: true });
   if (!metadata.isDirectory() || metadata.isSymbolicLink()) {
     throw new Error(`${label} is not a canonical directory`);
   }
@@ -75,8 +77,10 @@ async function canonicalDirectory(path, parent, label, io) {
 }
 
 async function generatedSnippetFiles(packageDirectory, io) {
-  const packagePath = resolve(packageDirectory);
-  const packageMetadata = await io.lstat(packagePath);
+  const lexicalPackage = resolve(packageDirectory);
+  // Родитель может быть системным alias (/var на macOS), но сам пакет — не ссылкой.
+  const packagePath = resolve(await io.realpath(dirname(lexicalPackage)), basename(lexicalPackage));
+  const packageMetadata = await io.lstat(packagePath, { bigint: true });
   if (!packageMetadata.isDirectory() || packageMetadata.isSymbolicLink()) {
     throw new Error("package directory is not canonical");
   }
@@ -84,7 +88,7 @@ async function generatedSnippetFiles(packageDirectory, io) {
   if (resolve(canonicalPackage) !== packagePath) {
     throw new Error("package directory canonical path differs from its lexical path");
   }
-  const pkgPath = resolve(packagePath, "pkg");
+  const pkgPath = resolve(canonicalPackage, "pkg");
   const canonicalPkg = await canonicalDirectory(pkgPath, canonicalPackage, "pkg", io);
   const snippetsPath = resolve(pkgPath, "snippets");
   let snippetsMetadata;
@@ -102,7 +106,7 @@ async function generatedSnippetFiles(packageDirectory, io) {
 
   const files = [];
   let directories = 0;
-  let totalBytes = 0;
+  let totalBytes = 0n;
   const snippets = await io.opendir(snippetsPath);
   for await (const directoryEntry of snippets) {
     directories += 1;
@@ -124,17 +128,17 @@ async function generatedSnippetFiles(packageDirectory, io) {
         throw new Error(`unexpected generated snippet entry: ${relativePath}`);
       }
       const path = resolve(directory, fileEntry.name);
-      const metadata = await io.lstat(path);
+      const metadata = await io.lstat(path, { bigint: true });
       if (!metadata.isFile() || metadata.isSymbolicLink()) {
         throw new Error(`generated snippet is not a regular file: ${relativePath}`);
       }
       const canonicalFile = await io.realpath(path);
       containedPath(await io.realpath(directory), canonicalFile, relativePath);
-      if (metadata.size === 0 || metadata.size > MAX_SNIPPET_BYTES) {
+      if (metadata.size === 0n || metadata.size > BigInt(MAX_SNIPPET_BYTES)) {
         throw new Error(`generated snippet has invalid byte size: ${relativePath}`);
       }
       totalBytes += metadata.size;
-      if (totalBytes > MAX_TOTAL_SNIPPET_BYTES) {
+      if (totalBytes > BigInt(MAX_TOTAL_SNIPPET_BYTES)) {
         throw new Error(`generated snippet bytes exceed ${MAX_TOTAL_SNIPPET_BYTES}`);
       }
       files.push({ relativePath, path, metadata, canonicalFile });
@@ -148,17 +152,17 @@ async function readStableSnippet(file, directory, io) {
   let handle;
   try {
     handle = await io.open(file.path, constants.O_RDONLY | noFollow);
-    const opened = await handle.stat();
+    const opened = await handle.stat({ bigint: true });
     if (!opened.isFile() || !sameFile(opened, file.metadata)) {
       throw new Error(`generated snippet identity changed before read: ${file.relativePath}`);
     }
     const bytes = Buffer.alloc(MAX_SNIPPET_BYTES + 1);
     const { bytesRead } = await handle.read(bytes, 0, bytes.length, 0);
-    if (bytesRead !== opened.size || bytesRead > MAX_SNIPPET_BYTES) {
+    if (BigInt(bytesRead) !== opened.size || bytesRead > MAX_SNIPPET_BYTES) {
       throw new Error(`generated snippet size changed during read: ${file.relativePath}`);
     }
     const [after, canonicalAfter, canonicalDirectoryPath] = await Promise.all([
-      io.lstat(file.path),
+      io.lstat(file.path, { bigint: true }),
       io.realpath(file.path),
       io.realpath(directory),
     ]);
